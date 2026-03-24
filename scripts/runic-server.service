@@ -1,0 +1,39 @@
+[Unit]
+Description=Runic Firewall Control Plane
+Documentation=https://github.com/runic/runic
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=runic
+Group=runic
+WorkingDirectory=/opt/runic
+ExecStart=/opt/runic/runic-server
+Restart=on-failure
+RestartSec=10s
+
+# Environment variables for secrets
+Environment=RUNIC_HMAC_KEY=%HMAC_KEY%
+Environment=RUNIC_AGENT_JWT_SECRET=%AGENT_JWT_SECRET%
+Environment=RUNIC_JWT_SECRET=%JWT_SECRET%
+
+# Security hardening
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/opt/runic/data
+ReadOnlyPaths=/etc/ssl/certs
+
+# Resource limits
+LimitNOFILE=65536
+MemoryMax=512M
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=runic-server
+
+[Install]
+WantedBy=multi-user.target

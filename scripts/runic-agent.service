@@ -1,0 +1,26 @@
+[Unit]
+Description=Runic Firewall Agent
+After=network-online.target
+Wants=network-online.target
+# Start after iptables/netfilter-persistent if present
+After=netfilter-persistent.service
+After=iptables.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/runic-agent --config /etc/runic-agent/config.json
+Restart=on-failure
+RestartSec=10s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=runic-agent
+
+# Security hardening
+NoNewPrivileges=false
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/etc/runic-agent /var/log
+
+[Install]
+WantedBy=multi-user.target
