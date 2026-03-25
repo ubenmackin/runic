@@ -341,6 +341,8 @@ install_dependencies() {
 		apt-get install -y -qq nodejs >> "$LOG_FILE" 2>&1
 
 	# Install Go 1.23+ from official source
+	# Remove Ubuntu system golang-go package to avoid PATH conflicts
+	apt-get remove -y golang-go >> "$LOG_FILE" 2>&1
 	GO_VERSION="1.23.7"
 		GO_TAR="go${GO_VERSION}.linux-amd64.tar.gz"
 		GO_URL="https://go.dev/dl/${GO_TAR}"
@@ -349,13 +351,20 @@ install_dependencies() {
 		rm -rf /usr/local/go # Remove any existing Go
 		tar -C /usr/local -xzf "/tmp/${GO_TAR}" || { log ERROR "Failed to extract Go"; exit 1; }
 		rm "/tmp/${GO_TAR}"
-		# Add Go to PATH if not already there
+		# Add Go to PATH if not already there (prepend to take precedence over system Go)
 		if ! grep -q '/usr/local/go/bin' /etc/profile; then
-			echo 'export PATH=$PATH:/usr/local/go/bin' >> /etc/profile
+			echo 'export PATH=/usr/local/go/bin:$PATH' >> /etc/profile
 		fi
-		export PATH=$PATH:/usr/local/go/bin
+		export PATH=/usr/local/go/bin:$PATH
 		# Verify Go installation
 		go version || { log ERROR "Go installation failed"; exit 1; }
+		# Verify Go version is 1.23.x
+		INSTALLED_GO_VERSION=$(go version | awk '{print $3}')
+		if [[ "$INSTALLED_GO_VERSION" != go1.23* ]]; then
+			log ERROR "Go version mismatch: expected go1.23.x, got $INSTALLED_GO_VERSION"
+			exit 1
+		fi
+		log INFO "Verified Go version: $INSTALLED_GO_VERSION"
 
 	elif [ "$OS_FAMILY" = "suse" ]; then
 		log INFO "Installing dependencies for openSUSE..."
@@ -385,9 +394,9 @@ install_dependencies() {
 		rm "/tmp/${GO_TAR}"
 		# Add Go to PATH if not already there
 		if ! grep -q '/usr/local/go/bin' /etc/profile; then
-			echo 'export PATH=$PATH:/usr/local/go/bin' >> /etc/profile
+			echo 'export PATH=/usr/local/go/bin:$PATH' >> /etc/profile
 		fi
-		export PATH=$PATH:/usr/local/go/bin
+		export PATH=/usr/local/go/bin:$PATH
 		# Verify Go installation
 		go version || { log ERROR "Go installation failed"; exit 1; }
 
@@ -528,7 +537,7 @@ build_binary() {
 	fi
 
 	# Build the web frontend if not already built
-	if [ ! -d "web/dist" ]; then
+	if [ ! -d "internal/api/web/dist" ]; then
 		log INFO "Building web frontend..."
 		# Check if npm is installed
 		if ! command -v npm &> /dev/null; then
