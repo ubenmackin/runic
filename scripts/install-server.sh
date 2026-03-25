@@ -634,14 +634,14 @@ initialize_database() {
     export RUNIC_HMAC_KEY="$HMAC_KEY"
     export RUNIC_JWT_SECRET="$JWT_SECRET"
     export RUNIC_AGENT_JWT_SECRET="$AGENT_JWT_SECRET"
+    export RUNIC_DB_PATH="$DATA_DIR/runic.db"
     
     # Create database (the server will create it on startup)
     # Run briefly and check if database is created
     timeout 5 ./dist/$BINARY_NAME 2>&1 || true
     
-    # Move database to data directory
-    if [ -f "runic.db" ]; then
-        mv runic.db "$DATA_DIR/runic.db"
+    # Verify database was created
+    if [ -f "$DATA_DIR/runic.db" ]; then
         chown runic:runic "$DATA_DIR/runic.db"
         log SUCCESS "Database initialized at $DATA_DIR/runic.db"
     else
