@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -63,6 +65,33 @@ func main() {
 	protected.Use(auth.Middleware)
 	apiInstance := api.NewAPI(compiler)
 	api.RegisterRoutes(protected, apiInstance)
+
+	// Serve embedded web frontend (SPA)
+	// Strip the "web/dist" prefix so http.FS can find files in the embedded FS
+	subFS, err := fs.Sub(api.WebDist, "web/dist")
+	if err != nil {
+		log.Fatalf("Failed to create sub filesystem: %v", err)
+	}
+	fileServer := http.FileServer(http.FS(subFS))
+
+	// For any route not matched above, serve the SPA
+	// If the file exists, serve it; otherwise serve index.html (for client-side routing)
+	r.PathPrefix("/").HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		// Try to open the requested file
+		path := req.URL.Path
+		if path == "/" {
+			path = "/index.html"
+		}
+		// Remove leading slash for fs.FS lookup
+		path = strings.TrimPrefix(path, "/")
+		if _, err := subFS.Open(path); err == nil {
+			fileServer.ServeHTTP(w, req)
+		} else {
+			// File not found — serve index.html for SPA client-side routing
+			req.URL.Path = "/index.html"
+			fileServer.ServeHTTP(w, req)
+		}
+	})
 
 	// Start offline detector goroutine
 	go startOfflineDetector()
