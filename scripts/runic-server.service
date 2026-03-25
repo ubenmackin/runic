@@ -1,6 +1,6 @@
 [Unit]
 Description=Runic Firewall Control Plane
-Documentation=https://github.com/runic/runic
+Documentation=https://github.com/ubenmackin/runic
 After=network-online.target
 Wants=network-online.target
 

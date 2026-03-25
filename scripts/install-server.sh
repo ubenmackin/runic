@@ -43,7 +43,7 @@ SERVICE_NAME="runic-server"
 
 # Defaults
 DEFAULT_CONTROL_PLANE="localhost:8080"
-REPO_URL="https://github.com/runic/runic.git"
+REPO_URL="https://github.com/ubenmackin/runic.git"
 REPO_BRANCH="main"
 
 # Flags
@@ -405,7 +405,7 @@ clone_repository() {
             # Alternative: Download source
             local tmpfile
             tmpfile=$(mktemp)
-            curl -sL "https://github.com/runic/runic/archive/refs/heads/$REPO_BRANCH.tar.gz" -o "$tmpfile"
+            curl -sL "https://github.com/ubenmackin/runic/archive/refs/heads/$REPO_BRANCH.tar.gz" -o "$tmpfile"
             
             if [ -f "$tmpfile" ]; then
                 tar -xzf "$tmpfile" -C /opt
@@ -561,7 +561,7 @@ install_systemd_service() {
     cat > "/tmp/$SERVICE_NAME.service" << EOF
 [Unit]
 Description=Runic Firewall Control Plane
-Documentation=https://github.com/runic/runic
+Documentation=https://github.com/ubenmackin/runic
 After=network-online.target
 Wants=network-online.target
 
