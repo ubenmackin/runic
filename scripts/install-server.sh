@@ -693,6 +693,7 @@ Environment=RUNIC_HMAC_KEY=$HMAC_KEY
 Environment=RUNIC_AGENT_JWT_SECRET=$AGENT_JWT_SECRET
 Environment=RUNIC_JWT_SECRET=$JWT_SECRET
 Environment=RUNIC_CONTROL_PLANE=$CONTROL_PLANE_URL
+Environment=RUNIC_DB_PATH=$DATA_DIR/runic.db
 
 # Security hardening
 NoNewPrivileges=yes

@@ -18,7 +18,11 @@ import (
 )
 
 func main() {
-	db.InitDB("./runic.db")
+	dbPath := os.Getenv("RUNIC_DB_PATH")
+	if dbPath == "" {
+		dbPath = "./runic.db"
+	}
+	db.InitDB(dbPath)
 
 	hmacKey := os.Getenv("RUNIC_HMAC_KEY")
 	if hmacKey == "" {

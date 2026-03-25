@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	_ "embed"
 	"log"
+	"os"
 
 	_ "github.com/mattn/go-sqlite3"
 
@@ -42,6 +43,12 @@ func (d *Database) UnderlyingDB() *sql.DB {
 var DB *Database
 
 func InitDB(dataSourceName string) {
+	// Check for environment variable override
+	if dbPath := os.Getenv("RUNIC_DB_PATH"); dbPath != "" {
+		dataSourceName = dbPath
+		log.Printf("Using database path from RUNIC_DB_PATH: %s", dataSourceName)
+	}
+
 	var err error
 	sqlDB, err := sql.Open("sqlite3", dataSourceName)
 	if err != nil {
