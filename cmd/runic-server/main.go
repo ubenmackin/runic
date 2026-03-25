@@ -14,7 +14,6 @@ import (
 	"github.com/gorilla/mux"
 
 	"runic/internal/api"
-	authhandlers "runic/internal/api/auth"
 	"runic/internal/auth"
 	"runic/internal/db"
 	"runic/internal/engine"
@@ -43,24 +42,16 @@ func main() {
 
 	r := mux.NewRouter()
 
-	// Public auth routes (no authentication required)
-	r.HandleFunc("/api/v1/setup", authhandlers.HandleSetupGET).Methods("GET")
-	r.HandleFunc("/api/v1/setup", authhandlers.HandleSetupPOST).Methods("POST")
-	r.HandleFunc("/api/v1/auth/login", authhandlers.HandleLoginPOST).Methods("POST")
-
-	// Logout route (requires valid token)
-	r.HandleFunc("/logout", auth.LogoutHandler).Methods("POST")
+	// Public routes are now registered in internal/api/api.go
 
 	// Health and Metrics endpoints (no authentication required)
 	r.HandleFunc("/health", api.HealthHandler).Methods("GET")
 	r.HandleFunc("/ready", api.ReadyHandler).Methods("GET")
 	r.Handle("/metrics", api.MetricsHandler()).Methods("GET")
 
-	// Protected routes
-	protected := r.PathPrefix("/api").Subrouter()
-	protected.Use(auth.Middleware)
+	// Register all API routes (public routes like setup and protected routes are all handled in api.go)
 	apiInstance := api.NewAPI(compiler)
-	api.RegisterRoutes(protected, apiInstance)
+	api.RegisterRoutes(r, apiInstance)
 
 	// Serve embedded web frontend (SPA)
 	// Strip the "web/dist" prefix so http.FS can find files in the embedded FS

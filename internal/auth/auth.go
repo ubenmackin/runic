@@ -175,32 +175,6 @@ func Middleware(next http.Handler) http.Handler {
 	})
 }
 
-// LogoutHandler handles POST /logout by revoking the caller's current token.
-func LogoutHandler(w http.ResponseWriter, r *http.Request) {
-	authHeader := r.Header.Get("Authorization")
-	if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
-	}
-
-	tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
-	claims, err := ValidateToken(tokenStr)
-	if err != nil || claims == nil {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
-	}
-
-	expiresAt := claims.ExpiresAt.Time
-	if err := RevokeToken(r.Context(), claims.UniqueID, expiresAt); err != nil {
-		http.Error(w, "Failed to revoke token", http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(`{"status":"logged_out"}`))
-}
-
 // UsernameFromContext extracts the authenticated username from the request context.
 func UsernameFromContext(ctx context.Context) string {
 	if v, ok := ctx.Value(ctxKeyUsername).(string); ok {

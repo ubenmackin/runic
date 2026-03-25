@@ -73,7 +73,7 @@ func generateAgentKey() string {
 
 // getHostIDFromContext safely extracts and validates host_id from request context.
 func getHostIDFromContext(w http.ResponseWriter, r *http.Request) (string, int, bool) {
-	hostIDVal := r.Context().Value("host_id")
+	hostIDVal := r.Context().Value(hostIDKey)
 	if hostIDVal == nil {
 		http.Error(w, `{"error": "host_id not found in context"}`, http.StatusUnauthorized)
 		return "", 0, false

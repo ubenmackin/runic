@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/mattn/go-sqlite3"
@@ -28,11 +29,29 @@ type loginRequest struct {
 	Password string `json:"password"`
 }
 
+// HandleSetup handles both GET and POST /api/v1/setup requests
+func HandleSetup(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		HandleSetupGET(w, r)
+	case http.MethodPost:
+		HandleSetupPOST(w, r)
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
 // HandleSetupGET checks whether any users exist in the database.
 // Returns {"needs_setup": true} if no users exist, false otherwise.
 func HandleSetupGET(w http.ResponseWriter, r *http.Request) {
 	if db.DB == nil {
 		common.RespondError(w, http.StatusInternalServerError, "database not initialized")
+		return
+	}
+
+	// Rate limit check based on IP to prevent enumeration
+	if err := CheckSetupRateLimit(r.RemoteAddr); err != nil {
+		common.RespondError(w, http.StatusTooManyRequests, err.Error())
 		return
 	}
 
@@ -54,6 +73,12 @@ func HandleSetupGET(w http.ResponseWriter, r *http.Request) {
 func HandleSetupPOST(w http.ResponseWriter, r *http.Request) {
 	if db.DB == nil {
 		common.RespondError(w, http.StatusInternalServerError, "database not initialized")
+		return
+	}
+
+	// Rate limit check based on IP to prevent enumeration/abuse
+	if err := CheckSetupRateLimit(r.RemoteAddr); err != nil {
+		common.RespondError(w, http.StatusTooManyRequests, err.Error())
 		return
 	}
 
@@ -205,4 +230,28 @@ func HandleLoginPOST(w http.ResponseWriter, r *http.Request) {
 		"refresh_token": refreshToken,
 		"username":      body.Username,
 	})
+}
+
+// HandleLogoutPOST handles POST /api/v1/auth/logout by revoking the caller's current token.
+func HandleLogoutPOST(w http.ResponseWriter, r *http.Request) {
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
+		common.RespondError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
+	claims, err := auth.ValidateToken(tokenStr)
+	if err != nil || claims == nil {
+		common.RespondError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	expiresAt := claims.ExpiresAt.Time
+	if err := auth.RevokeToken(r.Context(), claims.UniqueID, expiresAt); err != nil {
+		common.RespondError(w, http.StatusInternalServerError, "Failed to revoke token")
+		return
+	}
+
+	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "logged_out"})
 }

@@ -3,9 +3,11 @@ import { useNavigate } from 'react-router-dom'
 import { useMutation } from '@tanstack/react-query'
 import { api } from '../api/client'
 import { useAuthStore } from '../store'
+import { useSetup } from '../contexts/SetupContext'
 import InlineError from '../components/InlineError'
 
 export default function Login({ mode }) {
+  const { needsSetup, loading } = useSetup()
   const [isSetup, setIsSetup] = useState(mode === 'setup')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
@@ -15,25 +17,17 @@ export default function Login({ mode }) {
   const navigate = useNavigate()
 
   useEffect(() => {
-    // Always check setup status to handle edge cases:
+    if (loading) return // Wait for context state
+
+    // Handle edge cases:
     // - If mode="setup" but setup is already done, redirect to /login
-    // - If mode is undefined but setup is needed, already handled by isSetup state
-    api.get('/setup')
-      .then(data => {
-        if (mode === 'setup' && !data.needs_setup) {
-          // Setup already completed, redirect to login
-          navigate('/login', { replace: true })
-        } else if (mode === undefined) {
-          setIsSetup(data.needs_setup)
-        }
-      })
-      .catch(() => {
-        // If the check fails and mode is undefined, show login form
-        if (mode === undefined) {
-          setIsSetup(false)
-        }
-      })
-  }, [mode, navigate])
+    // - If mode is undefined but setup is needed, update state
+    if (mode === 'setup' && !needsSetup) {
+      navigate('/login', { replace: true })
+    } else if (mode === undefined && needsSetup !== null) {
+      setIsSetup(needsSetup)
+    }
+  }, [mode, needsSetup, loading, navigate])
 
   const loginMutation = useMutation({
     mutationFn: () => api.post('/auth/login', { username, password }),

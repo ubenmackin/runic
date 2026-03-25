@@ -27,8 +27,11 @@ type LogBroadcaster interface {
 
 type contextKey string
 
-const sseHubKey contextKey = "sse_hub"
-const logHubKey contextKey = "log_hub"
+const (
+	sseHubKey contextKey = "sse_hub"
+	logHubKey contextKey = "log_hub"
+	hostIDKey contextKey = "host_id"
+)
 
 // SSEHubFromContext returns the SSEHub from context (set by API middleware)
 func SSEHubFromContext(ctx context.Context) SSEBroadcaster {
@@ -103,8 +106,8 @@ func AgentAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		// Context key is a string "host_id" as expected by getHostIDFromContext
-		ctx := context.WithValue(r.Context(), "host_id", sub)
+		// Use typed context key to prevent collisions
+		ctx := context.WithValue(r.Context(), hostIDKey, sub)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	}
 }

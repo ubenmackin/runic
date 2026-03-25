@@ -917,6 +917,12 @@ initialize_database() {
                 log ERROR "Failed to remove existing database"
                 exit 1
             fi
+            # Ensure DATA_DIR still exists after database removal
+            if [ ! -d "$DATA_DIR" ]; then
+                log INFO "Recreating DATA_DIR: $DATA_DIR"
+                mkdir -p "$DATA_DIR"
+                chown runic:runic "$DATA_DIR" 2>/dev/null || true
+            fi
         else
             log INFO "Using existing database"
             return 0
@@ -934,7 +940,19 @@ initialize_database() {
     
     # Create database (the server will create it on startup)
     # Run briefly and check if database is created
-    timeout 5 ./dist/$BINARY_NAME 2>&1 || true
+    log DEBUG "Starting server to initialize database..."
+    if ! RUNIC_DB_PATH="$DATA_DIR/runic.db" \
+        RUNIC_HMAC_KEY="$HMAC_KEY" \
+        RUNIC_JWT_SECRET="$JWT_SECRET" \
+        RUNIC_AGENT_JWT_SECRET="$AGENT_JWT_SECRET" \
+        timeout 5 ./dist/$BINARY_NAME 2>&1 | grep -q "Server started"; then
+        log ERROR "Failed to initialize database"
+        log ERROR "Server failed to start properly. Check logs above."
+        log ERROR "Database path: $DATA_DIR/runic.db"
+        log ERROR "DATA_DIR exists: $(test -d "$DATA_DIR" && echo "yes" || echo "no")"
+        log ERROR "DATA_DIR writable: $(test -w "$DATA_DIR" && echo "yes" || echo "no")"
+        exit 1
+    fi
     
     # Verify database was created
     if [ -f "$DATA_DIR/runic.db" ]; then
@@ -945,7 +963,9 @@ initialize_database() {
         chown -f runic:runic "$DATA_DIR"/runic.db-* 2>/dev/null || true
         log SUCCESS "Database initialized at $DATA_DIR/runic.db"
     else
-        log WARN "Database may not have been created. Will be created on first start."
+        log ERROR "Database was not created despite server starting successfully"
+        log ERROR "Database path: $DATA_DIR/runic.db"
+        exit 1
     fi
 }
 
