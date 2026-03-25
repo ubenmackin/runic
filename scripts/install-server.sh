@@ -961,12 +961,12 @@ install_systemd_service() {
     # Check if service already exists
     if [ -f "/etc/systemd/system/$SERVICE_NAME.service" ]; then
         local response
+        systemctl stop "$SERVICE_NAME" 2>/dev/null || true
         response=$(prompt_yes_no "Service already exists. Replace?" "no")
         if [ "$response" = "yes" ]; then
-            systemctl stop "$SERVICE_NAME" 2>/dev/null || true
             systemctl disable "$SERVICE_NAME" 2>/dev/null || true
         else
-            log INFO "Keeping existing service"
+            log INFO "Keeping existing service file, starting new binary"
             return 0
         fi
     fi
