@@ -500,7 +500,7 @@ build_binary() {
     mkdir -p "$INSTALL_DIR/dist"
 
     # Build with CGO for SQLite support
-    CGO_ENABLED=1 go build -o "$INSTALL_DIR/dist/$BINARY_NAME" . >> "$LOG_FILE" 2>&1
+    CGO_ENABLED=1 go build -o "$INSTALL_DIR/dist/$BINARY_NAME" ./cmd/runic-server >> "$LOG_FILE" 2>&1
 
     if [ $? -ne 0 ]; then
         log ERROR "Build failed. Check $LOG_FILE for details."
@@ -699,7 +699,7 @@ show_status() {
     log_section "Installation Complete!"
     
     echo -e "${GREEN}╔════════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${GREEN}║           Runic Firewall Management System Installed              ║${NC}"
+    echo -e "${GREEN}║           Runic Firewall Management System Installed           ║${NC}"
     echo -e "${GREEN}╚════════════════════════════════════════════════════════════════╝${NC}"
     echo ""
     
