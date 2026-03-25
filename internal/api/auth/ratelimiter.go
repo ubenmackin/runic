@@ -1,0 +1,87 @@
+package auth
+
+import (
+	"fmt"
+	"log"
+	"sync"
+	"time"
+)
+
+// rateLimitEntry tracks failed login attempts and lockout state for a user.
+type rateLimitEntry struct {
+	failedAttempts int
+	lockedUntil    time.Time
+}
+
+const (
+	maxFailedAttempts = 5
+	lockoutDuration   = 15 * time.Minute
+)
+
+var (
+	rateLimitStore map[string]*rateLimitEntry
+	rateLimitMutex sync.Mutex
+)
+
+func init() {
+	rateLimitStore = make(map[string]*rateLimitEntry)
+
+	// Start periodic cleanup
+	go func() {
+		ticker := time.NewTicker(1 * time.Hour)
+		defer ticker.Stop()
+		for range ticker.C {
+			CleanupStaleEntries()
+		}
+	}()
+}
+
+// CheckAndRecordFailure records a failed login attempt and returns an error
+// if the account is currently locked out.
+func CheckAndRecordFailure(username string, remoteAddr string) error {
+	rateLimitMutex.Lock()
+	defer rateLimitMutex.Unlock()
+
+	entry, exists := rateLimitStore[username]
+	if !exists {
+		entry = &rateLimitEntry{}
+		rateLimitStore[username] = entry
+	}
+
+	if entry.lockedUntil.After(time.Now()) {
+		return fmt.Errorf("account locked, try again later")
+	}
+
+	entry.failedAttempts++
+
+	if entry.failedAttempts >= maxFailedAttempts {
+		entry.lockedUntil = time.Now().Add(lockoutDuration)
+		log.Printf("AUTH LOCKOUT: %s (IP: %s) locked for %v after %d failed attempts",
+			username, remoteAddr, lockoutDuration, entry.failedAttempts)
+	}
+
+	return nil
+}
+
+// RecordSuccess clears the rate limit entry for a user on successful login.
+func RecordSuccess(username string) {
+	rateLimitMutex.Lock()
+	defer rateLimitMutex.Unlock()
+
+	delete(rateLimitStore, username)
+}
+
+// CleanupStaleEntries removes rate limit entries whose lockout has expired.
+func CleanupStaleEntries() {
+	rateLimitMutex.Lock()
+	defer rateLimitMutex.Unlock()
+
+	now := time.Now()
+	for username, entry := range rateLimitStore {
+		// Only remove entries with an expired lockout (non-zero lockedUntil that's past).
+		// Entries with zero lockedUntil (no lockout) are kept.
+		if !entry.lockedUntil.IsZero() && entry.lockedUntil.Before(now) {
+			delete(rateLimitStore, username)
+		}
+	}
+}

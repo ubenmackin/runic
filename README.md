@@ -40,7 +40,7 @@ Server runs on `http://localhost:8080` by default.
 Run on each host:
 
 ```bash
-curl -sL https://raw.githubusercontent.com/ubenmackin/runic/main/scripts/install-agent.sh | sudo bash -s -- https://your-runic-server:8080
+curl -sL https://raw.githubusercontent.com/ubenmackin/runic/main/scripts/install-agent.sh | sudo bash -s -- http://your-runic-server:8080
 ```
 
 ## How it works (short version)

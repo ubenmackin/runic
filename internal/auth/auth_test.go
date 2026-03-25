@@ -39,7 +39,7 @@ func TestGenerateToken(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			token, err := GenerateToken(tt.username)
+			token, err := GenerateToken(tt.username, 1*time.Hour)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("GenerateToken() error = %v, wantErr %v", err, tt.wantErr)
 			}
@@ -98,7 +98,7 @@ func TestValidateToken(t *testing.T) {
 			if tt.token == "" && tt.username != "" {
 				// Generate a valid token
 				var err error
-				token, err = GenerateToken(tt.username)
+				token, err = GenerateToken(tt.username, 1*time.Hour)
 				if err != nil {
 					t.Fatalf("failed to generate token: %v", err)
 				}
@@ -130,7 +130,7 @@ func TestTokenExpiration(t *testing.T) {
 	// For now, we'll test the structure of the expiration claim
 
 	username := "testuser"
-	token, err := GenerateToken(username)
+	token, err := GenerateToken(username, 24*time.Hour)
 	if err != nil {
 		t.Fatalf("failed to generate token: %v", err)
 	}
@@ -315,8 +315,8 @@ func TestTokenConsistency(t *testing.T) {
 	username := "testuser"
 
 	// Generate two tokens for the same username
-	token1, err1 := GenerateToken(username)
-	token2, err2 := GenerateToken(username)
+	token1, err1 := GenerateToken(username, 1*time.Hour)
+	token2, err2 := GenerateToken(username, 1*time.Hour)
 
 	if err1 != nil || err2 != nil {
 		t.Fatalf("failed to generate tokens: %v, %v", err1, err2)
@@ -343,7 +343,7 @@ func TestTokenConsistency(t *testing.T) {
 // TestClaimsStructure tests JWT claims structure
 func TestClaimsStructure(t *testing.T) {
 	username := "testuser"
-	token, err := GenerateToken(username)
+	token, err := GenerateToken(username, 1*time.Hour)
 	if err != nil {
 		t.Fatalf("failed to generate token: %v", err)
 	}
@@ -410,7 +410,7 @@ func TestTokenWithSpecialUsernames(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			token, err := GenerateToken(tt.username)
+			token, err := GenerateToken(tt.username, 1*time.Hour)
 			if err != nil {
 				t.Fatalf("failed to generate token for username %q: %v", tt.username, err)
 			}
@@ -450,7 +450,7 @@ func TestGenerateAndValidateIntegration(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Generate token
-			token, err := GenerateToken(tt.username)
+			token, err := GenerateToken(tt.username, 1*time.Hour)
 			if err != nil {
 				t.Fatalf("GenerateToken() error = %v", err)
 			}
@@ -558,7 +558,7 @@ func TestConcurrentTokenGeneration(t *testing.T) {
 	// Generate tokens concurrently
 	for i := 0; i < 10; i++ {
 		go func() {
-			token, err := GenerateToken(username)
+			token, err := GenerateToken(username, 1*time.Hour)
 			if err != nil {
 				t.Errorf("failed to generate token: %v", err)
 				return
@@ -597,7 +597,7 @@ func TestConcurrentTokenGeneration(t *testing.T) {
 // TestSignedClaims tests that claims are properly signed
 func TestSignedClaims(t *testing.T) {
 	username := "testuser"
-	token, err := GenerateToken(username)
+	token, err := GenerateToken(username, 1*time.Hour)
 	if err != nil {
 		t.Fatalf("failed to generate token: %v", err)
 	}
@@ -629,7 +629,7 @@ func TestSignedClaims(t *testing.T) {
 
 // Helper function to generate a valid authorization header
 func generateValidAuthHeader(t *testing.T, username string) string {
-	token, err := GenerateToken(username)
+	token, err := GenerateToken(username, 1*time.Hour)
 	if err != nil {
 		t.Fatalf("failed to generate token: %v", err)
 	}

@@ -50,13 +50,15 @@ type Claims struct {
 	jwt.RegisteredClaims
 }
 
-func GenerateToken(username string) (string, error) {
+func GenerateToken(username string, duration time.Duration) (string, error) {
 	now := time.Now()
-	expirationTime := now.Add(24 * time.Hour)
+	expirationTime := now.Add(duration)
 
 	// Generate a unique ID to ensure each token is different
 	uniqueBytes := make([]byte, 8)
-	rand.Read(uniqueBytes)
+	if _, err := rand.Read(uniqueBytes); err != nil {
+		return "", fmt.Errorf("failed to generate unique ID: %w", err)
+	}
 	uniqueID := hex.EncodeToString(uniqueBytes)
 
 	claims := &Claims{
@@ -214,4 +216,3 @@ func UniqueIDFromContext(ctx context.Context) string {
 	}
 	return ""
 }
-

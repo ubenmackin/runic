@@ -14,6 +14,7 @@ import (
 	"github.com/gorilla/mux"
 
 	"runic/internal/api"
+	authhandlers "runic/internal/api/auth"
 	"runic/internal/auth"
 	"runic/internal/db"
 	"runic/internal/engine"
@@ -42,15 +43,10 @@ func main() {
 
 	r := mux.NewRouter()
 
-	// Public routes
-	r.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
-		token, err := auth.GenerateToken("admin")
-		if err != nil {
-			http.Error(w, "Error generating token", http.StatusInternalServerError)
-			return
-		}
-		w.Write([]byte(token))
-	}).Methods("POST")
+	// Public auth routes (no authentication required)
+	r.HandleFunc("/api/v1/setup", authhandlers.HandleSetupGET).Methods("GET")
+	r.HandleFunc("/api/v1/setup", authhandlers.HandleSetupPOST).Methods("POST")
+	r.HandleFunc("/api/v1/auth/login", authhandlers.HandleLoginPOST).Methods("POST")
 
 	// Logout route (requires valid token)
 	r.HandleFunc("/logout", auth.LogoutHandler).Methods("POST")
