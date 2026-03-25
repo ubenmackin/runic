@@ -11,10 +11,10 @@
 *.dll
 *.so
 *.dylib
-runic
-runic-agent
-runic-agent-linux-*
-runic-server
+/runic
+/runic-agent
+/runic-agent-linux-*
+/runic-server
 bin/
 *.test
 *.out
