@@ -319,59 +319,97 @@ EOF
 # ============================================================================
 
 install_dependencies() {
-    log_section "Installing System Dependencies"
-    
-    local packages=("git" "build-essential" "sqlite3" "golang" "curl")
-    
-    if [ "$OS_FAMILY" = "debian" ]; then
-        log INFO "Installing dependencies for Debian/Ubuntu..."
-        
-        # Update package list
-        apt-get update -qq
-        
-        # Install packages
-        apt-get install -y -qq "${packages[@]}" >> "$LOG_FILE" 2>&1
-        
-        # Install SQLite development files for CGO
-        apt-get install -y -qq libsqlite3-dev >> "$LOG_FILE" 2>&1
-        
-    elif [ "$OS_FAMILY" = "suse" ]; then
-        log INFO "Installing dependencies for openSUSE..."
-        
-        # Add Go repository if needed
-        zypper --quiet --non-interactive refresh
-        
-        # Install packages
-        zypper --quiet --non-interactive install -y \
-            git \
-            gcc \
-            gcc-c++ \
-            make \
-            sqlite3 \
-            sqlite3-devel \
-            go \
-            go-doc \
-            go-lang >> "$LOG_FILE" 2>&1
-        
-    else
-        log WARN "Unsupported OS family: $OS_FAMILY"
-        log INFO "Please install the following packages manually: ${packages[*]}"
-    fi
-    
-    # Verify installations
-    local missing=()
-    for cmd in git gcc make go sqlite3; do
-        if ! check_command "$cmd"; then
-            missing+=("$cmd")
-        fi
-    done
-    
-    if [ ${#missing[@]} -eq 0 ]; then
-        log SUCCESS "All dependencies installed successfully"
-    else
-        log ERROR "Missing dependencies: ${missing[*]}"
-        exit 1
-    fi
+	log_section "Installing System Dependencies"
+
+	local packages=("git" "build-essential" "sqlite3" "curl")
+
+	if [ "$OS_FAMILY" = "debian" ]; then
+		log INFO "Installing dependencies for Debian/Ubuntu..."
+
+		# Update package list
+		apt-get update -qq
+
+		# Install packages
+		apt-get install -y -qq "${packages[@]}" >> "$LOG_FILE" 2>&1
+
+		# Install SQLite development files for CGO
+		apt-get install -y -qq libsqlite3-dev >> "$LOG_FILE" 2>&1
+
+		# Install Node.js 20.x from NodeSource (for frontend builds)
+		log INFO "Installing Node.js 20.x from NodeSource..."
+		curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+		apt-get install -y -qq nodejs >> "$LOG_FILE" 2>&1
+
+	# Install Go 1.23+ from official source
+	GO_VERSION="1.23.7"
+		GO_TAR="go${GO_VERSION}.linux-amd64.tar.gz"
+		GO_URL="https://go.dev/dl/${GO_TAR}"
+		log INFO "Installing Go ${GO_VERSION} from official source..."
+		curl -sL "$GO_URL" -o "/tmp/${GO_TAR}" || { log ERROR "Failed to download Go"; exit 1; }
+		rm -rf /usr/local/go # Remove any existing Go
+		tar -C /usr/local -xzf "/tmp/${GO_TAR}" || { log ERROR "Failed to extract Go"; exit 1; }
+		rm "/tmp/${GO_TAR}"
+		# Add Go to PATH if not already there
+		if ! grep -q '/usr/local/go/bin' /etc/profile; then
+			echo 'export PATH=$PATH:/usr/local/go/bin' >> /etc/profile
+		fi
+		export PATH=$PATH:/usr/local/go/bin
+		# Verify Go installation
+		go version || { log ERROR "Go installation failed"; exit 1; }
+
+	elif [ "$OS_FAMILY" = "suse" ]; then
+		log INFO "Installing dependencies for openSUSE..."
+
+		# Refresh repositories
+		zypper --quiet --non-interactive refresh
+
+		# Install packages (excluding system go - we'll install from official source)
+		zypper --quiet --non-interactive install -y \
+			git \
+			gcc \
+			gcc-c++ \
+			make \
+			sqlite3 \
+			sqlite3-devel \
+			nodejs20 \
+			npm20 >> "$LOG_FILE" 2>&1
+
+		# Install Go 1.23+ from official source (same as Debian section)
+		GO_VERSION="1.23.7"
+		GO_TAR="go${GO_VERSION}.linux-amd64.tar.gz"
+		GO_URL="https://go.dev/dl/${GO_TAR}"
+		log INFO "Installing Go ${GO_VERSION} from official source..."
+		curl -sL "$GO_URL" -o "/tmp/${GO_TAR}" || { log ERROR "Failed to download Go"; exit 1; }
+		rm -rf /usr/local/go # Remove any existing Go
+		tar -C /usr/local -xzf "/tmp/${GO_TAR}" || { log ERROR "Failed to extract Go"; exit 1; }
+		rm "/tmp/${GO_TAR}"
+		# Add Go to PATH if not already there
+		if ! grep -q '/usr/local/go/bin' /etc/profile; then
+			echo 'export PATH=$PATH:/usr/local/go/bin' >> /etc/profile
+		fi
+		export PATH=$PATH:/usr/local/go/bin
+		# Verify Go installation
+		go version || { log ERROR "Go installation failed"; exit 1; }
+
+	else
+		log WARN "Unsupported OS family: $OS_FAMILY"
+		log INFO "Please install the following packages manually: ${packages[*]}"
+	fi
+
+	# Verify installations
+	local missing=()
+	for cmd in git gcc make go sqlite3 npm; do
+		if ! check_command "$cmd"; then
+			missing+=("$cmd")
+		fi
+	done
+
+	if [ ${#missing[@]} -eq 0 ]; then
+		log SUCCESS "All dependencies installed successfully"
+	else
+		log ERROR "Missing dependencies: ${missing[*]}"
+		exit 1
+	fi
 }
 
 collect_configuration() {
@@ -483,15 +521,30 @@ build_binary() {
 
     cd "$SOURCE_DIR" || { log ERROR "Source directory not found"; exit 1; }
 
-    # Check if Go modules are available
-    if [ ! -f "go.mod" ]; then
-        log ERROR "go.mod not found. Cannot build."
-        exit 1
-    fi
+	# Check if Go modules are available
+	if [ ! -f "go.mod" ]; then
+		log ERROR "go.mod not found. Cannot build."
+		exit 1
+	fi
 
-    # Download Go dependencies
-    log INFO "Downloading Go dependencies..."
-    go mod download >> "$LOG_FILE" 2>&1
+	# Build the web frontend if not already built
+	if [ ! -d "web/dist" ]; then
+		log INFO "Building web frontend..."
+		# Check if npm is installed
+		if ! command -v npm &> /dev/null; then
+			log ERROR "npm is not installed. Cannot build web frontend."
+			exit 1
+		fi
+		cd web || { log ERROR "web directory not found"; exit 1; }
+		npm install || { log ERROR "npm install failed"; exit 1; }
+		npm run build || { log ERROR "npm run build failed"; exit 1; }
+		cd .. || exit 1
+		log SUCCESS "Web frontend built successfully"
+	fi
+
+	# Download Go dependencies
+	log INFO "Downloading Go dependencies..."
+	go mod download >> "$LOG_FILE" 2>&1
 
     # Build the server binary
     log INFO "Building runic-server with CGO enabled..."
