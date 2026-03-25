@@ -5,8 +5,8 @@ import { api } from '../api/client'
 import { useAuthStore } from '../store'
 import InlineError from '../components/InlineError'
 
-export default function Login() {
-  const [isSetup, setIsSetup] = useState(false)
+export default function Login({ mode }) {
+  const [isSetup, setIsSetup] = useState(mode === 'setup')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
@@ -15,9 +15,25 @@ export default function Login() {
   const navigate = useNavigate()
 
   useEffect(() => {
-    // Check if setup is needed
-    api.get('/setup').then(() => setIsSetup(true)).catch(() => setIsSetup(false))
-  }, [])
+    // Always check setup status to handle edge cases:
+    // - If mode="setup" but setup is already done, redirect to /login
+    // - If mode is undefined but setup is needed, already handled by isSetup state
+    api.get('/setup')
+      .then(data => {
+        if (mode === 'setup' && !data.needs_setup) {
+          // Setup already completed, redirect to login
+          navigate('/login', { replace: true })
+        } else if (mode === undefined) {
+          setIsSetup(data.needs_setup)
+        }
+      })
+      .catch(() => {
+        // If the check fails and mode is undefined, show login form
+        if (mode === undefined) {
+          setIsSetup(false)
+        }
+      })
+  }, [mode, navigate])
 
   const loginMutation = useMutation({
     mutationFn: () => api.post('/auth/login', { username, password }),
@@ -37,7 +53,14 @@ export default function Login() {
       login(data.access_token, data.refresh_token)
       navigate('/')
     },
-    onError: (err) => setError(err.message),
+    onError: (err) => {
+      setError(err.message)
+      // If setup is already completed (403 error), redirect to login
+      if (err.message.includes('Setup already completed')) {
+        // Reset setup mode and let the user log in
+        setIsSetup(false)
+      }
+    },
   })
 
   const handleSubmit = (e) => {

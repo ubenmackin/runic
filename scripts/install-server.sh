@@ -157,9 +157,9 @@ prompt_yes_no() {
     
     while true; do
         if [ "$default" = "yes" ]; then
-            read -p "$prompt [Y/n]: " response
+            read -p "$prompt [Y/n]: " response < /dev/tty
         else
-            read -p "$prompt [y/N]: " response
+            read -p "$prompt [y/N]: " response < /dev/tty
         fi
         
         case "$response" in
@@ -191,7 +191,7 @@ prompt_with_default() {
         return 0
     fi
     
-    read -p "$prompt [$default]: " response
+    read -p "$prompt [$default]: " response < /dev/tty
     if [ -z "$response" ]; then
         echo "$default"
     else
