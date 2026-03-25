@@ -409,9 +409,27 @@ clone_repository() {
             
 		if [ -f "$tmpfile" ]; then
 			tar -xzf "$tmpfile" -C /opt
-			# Remove existing INSTALL_DIR first; otherwise mv puts files inside it as a subdirectory
-			rm -rf "$INSTALL_DIR"
-			mv "/opt/runic-$REPO_BRANCH" "$INSTALL_DIR"
+# Remove existing INSTALL_DIR first; otherwise mv puts files inside it as a subdirectory
+		# Safety check: validate INSTALL_DIR before removing
+		if [[ -z "$INSTALL_DIR" ]]; then
+			log ERROR "INSTALL_DIR is empty, aborting"
+			exit 1
+		fi
+		if [[ ! -d "$INSTALL_DIR" ]]; then
+			log INFO "Directory $INSTALL_DIR does not exist, skipping removal"
+		else
+			# Additional safety: ensure it matches expected pattern
+			case "$INSTALL_DIR" in
+				/opt/runic)
+					rm -rf "$INSTALL_DIR"
+					;;
+				*)
+					log ERROR "INSTALL_DIR does not match expected pattern /opt/runic"
+					exit 1
+					;;
+			esac
+		fi
+		mv "/opt/runic-$REPO_BRANCH" "$INSTALL_DIR" || { log ERROR "Failed to move extracted directory"; exit 1; }
 			rm -f "$tmpfile"
             else
                 log ERROR "Failed to download source"
