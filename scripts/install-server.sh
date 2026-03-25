@@ -54,6 +54,9 @@ PROVIDED_CONTROL_PLANE=""
 PROVIDED_JWT_SECRET=""
 PROVIDED_HMAC_KEY=""
 
+# Temporary directories for cleanup
+TEMP_DIRS=()
+
 # ============================================================================
 # Utility Functions
 # ============================================================================
@@ -63,10 +66,10 @@ log() {
     local message="$2"
     local timestamp
     timestamp=$(date '+%Y-%m-%d %H:%M:%S')
-    
+
     # Log to file
     echo "[$timestamp] [$level] $message" >> "$LOG_FILE"
-    
+
     # Output to console with colors
     case "$level" in
         "INFO")
@@ -86,6 +89,48 @@ log() {
             ;;
     esac
 }
+
+# Safe removal function with path validation
+# Usage: safe_rm <path> [expected_pattern]
+# Example: safe_rm "$SOURCE_DIR" "/opt/runic/*"
+safe_rm() {
+    local path="$1"
+    local pattern="${2:-/opt/runic/*}"  # Default pattern
+
+    # Validate path is not empty
+    if [[ -z "$path" ]]; then
+        log ERROR "safe_rm: path is empty, refusing to remove"
+        return 1
+    fi
+
+    # Validate path exists
+    if [[ ! -e "$path" ]]; then
+        log INFO "safe_rm: path does not exist, nothing to remove: $path"
+        return 0
+    fi
+
+    # Validate path matches expected pattern
+    # Using case for glob-style matching
+    case "$path" in
+        $pattern)
+            log INFO "Removing: $path"
+            rm -rf "$path"
+            return $?
+            ;;
+        *)
+            log ERROR "safe_rm: path does not match expected pattern '$pattern': $path"
+            return 1
+            ;;
+    esac
+}
+
+# Cleanup function for temporary directories
+cleanup() {
+    for dir in "${TEMP_DIRS[@]}"; do
+        safe_rm "$dir"
+    done
+}
+trap cleanup EXIT
 
 log_section() {
     echo ""
@@ -375,7 +420,7 @@ setup_directories() {
         response=$(prompt_yes_no "Directory $INSTALL_DIR exists. Remove and recreate?" "no")
         if [ "$response" = "yes" ]; then
             log WARN "Removing existing installation at $INSTALL_DIR"
-            rm -rf "$INSTALL_DIR"
+            safe_rm "$INSTALL_DIR"
         fi
     fi
     
@@ -407,16 +452,17 @@ clone_repository() {
             log INFO "Trying alternative: downloading source archive..."
 
             # Alternative: Download source
-            local tmpfile
-            tmpfile=$(mktemp)
+            local tmpdir tmpfile
+            tmpdir=$(mktemp -d) || { log ERROR "Failed to create temp directory"; exit 1; }
+            TEMP_DIRS+=("$tmpdir")
+            tmpfile="$tmpdir/runic-${REPO_BRANCH}.tar.gz"
             curl -sL "https://github.com/ubenmackin/runic/archive/refs/heads/$REPO_BRANCH.tar.gz" -o "$tmpfile"
 
             if [ -f "$tmpfile" ]; then
                 # Remove existing SOURCE_DIR contents if any
-                rm -rf "$SOURCE_DIR"
-                tar -xzf "$tmpfile" -C /tmp
-                mv "/tmp/runic-$REPO_BRANCH" "$SOURCE_DIR" || { log ERROR "Failed to move extracted directory"; exit 1; }
-                rm -f "$tmpfile"
+                safe_rm "$SOURCE_DIR"
+                tar -xzf "$tmpfile" -C "$tmpdir"
+                mv "$tmpdir/runic-$REPO_BRANCH" "$SOURCE_DIR" || { log ERROR "Failed to move extracted directory"; exit 1; }
             else
                 log ERROR "Failed to download source"
                 exit 1
