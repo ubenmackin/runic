@@ -200,7 +200,306 @@ prompt_with_default() {
 }
 
 generate_secret() {
-    openssl rand -hex 32
+    # Check if openssl is available
+    command -v openssl >/dev/null 2>&1 || { log ERROR "openssl is required but not installed"; exit 1; }
+    
+    local secret
+    secret=$(openssl rand -hex 32)
+    
+    # Validate secret length (should be 64 hex characters)
+    if [ ${#secret} -ne 64 ]; then
+        log ERROR "Generated secret is not 64 characters: ${#secret}"
+        exit 1
+    fi
+    
+    echo "$secret"
+}
+
+migrate_secrets_from_service_file() {
+    local service_file="/etc/systemd/system/$SERVICE_NAME.service"
+    local env_file="$INSTALL_DIR/.env"
+    
+    log INFO "Checking for existing service file at $service_file"
+    
+    # Check if service file exists
+    if [ ! -f "$service_file" ]; then
+        log INFO "No existing service file found, no migration needed"
+        return 0
+    fi
+    
+    log INFO "Found existing service file, attempting to migrate secrets..."
+    
+    # Extract secrets from service file
+    local jwt_secret hmac_key agent_jwt_secret
+    jwt_secret=$(grep -E "^Environment=RUNIC_JWT_SECRET=" "$service_file" 2>/dev/null | sed 's/^Environment=RUNIC_JWT_SECRET=//')
+    hmac_key=$(grep -E "^Environment=RUNIC_HMAC_KEY=" "$service_file" 2>/dev/null | sed 's/^Environment=RUNIC_HMAC_KEY=//')
+    agent_jwt_secret=$(grep -E "^Environment=RUNIC_AGENT_JWT_SECRET=" "$service_file" 2>/dev/null | sed 's/^Environment=RUNIC_AGENT_JWT_SECRET=//')
+    
+    # Check if we found any secrets
+    if [ -z "$jwt_secret" ] && [ -z "$hmac_key" ] && [ -z "$agent_jwt_secret" ]; then
+        log INFO "No secrets found in service file, no migration needed"
+        return 0
+    fi
+    
+    log INFO "Found secrets in service file, creating .env file..."
+    
+    # Create .env file with migrated secrets
+    cat > "$env_file" << EOF
+# Runic Firewall Management System - Secrets Configuration
+# This file contains sensitive information and should only be readable by root
+# Migrated from systemd service file on $(date '+%Y-%m-%d %H:%M:%S')
+
+EOF
+    
+    # Add found secrets to .env file
+    if [ -n "$jwt_secret" ]; then
+        echo "RUNIC_JWT_SECRET=$jwt_secret" >> "$env_file"
+        log INFO "Migrated JWT_SECRET"
+    fi
+    
+    if [ -n "$hmac_key" ]; then
+        echo "RUNIC_HMAC_KEY=$hmac_key" >> "$env_file"
+        log INFO "Migrated HMAC_KEY"
+    fi
+    
+    if [ -n "$agent_jwt_secret" ]; then
+        echo "RUNIC_AGENT_JWT_SECRET=$agent_jwt_secret" >> "$env_file"
+        log INFO "Migrated AGENT_JWT_SECRET"
+    fi
+    
+    # Set restrictive permissions
+    chmod 600 "$env_file" || { log ERROR "Failed to set permissions on $env_file"; exit 1; }
+    chown root:root "$env_file" || { log ERROR "Failed to set ownership on $env_file"; exit 1; }
+    
+    log SUCCESS "Successfully migrated secrets from service file to $env_file"
+    return 0
+}
+
+validate_env_file() {
+    local env_file="$1"
+    
+    log INFO "Validating .env file structure..."
+    
+    # Check if file exists
+    if [ ! -f "$env_file" ]; then
+        log ERROR "Environment file not found: $env_file"
+        return 1
+    fi
+    
+    # Check if file contains expected variable names (just checking they're mentioned, not values)
+    local has_jwt_secret has_hmac_key has_agent_jwt_secret
+    has_jwt_secret=$(grep -c "^RUNIC_JWT_SECRET=" "$env_file" 2>/dev/null || echo "0")
+    has_hmac_key=$(grep -c "^RUNIC_HMAC_KEY=" "$env_file" 2>/dev/null || echo "0")
+    has_agent_jwt_secret=$(grep -c "^RUNIC_AGENT_JWT_SECRET=" "$env_file" 2>/dev/null || echo "0")
+    
+    # Validate file structure
+    if [ "$has_jwt_secret" -eq "0" ]; then
+        log WARN "Environment file missing RUNIC_JWT_SECRET variable"
+        return 1
+    fi
+    
+    if [ "$has_hmac_key" -eq "0" ]; then
+        log WARN "Environment file missing RUNIC_HMAC_KEY variable"
+        return 1
+    fi
+    
+    if [ "$has_agent_jwt_secret" -eq "0" ]; then
+        log WARN "Environment file missing RUNIC_AGENT_JWT_SECRET variable"
+        return 1
+    fi
+    
+    log INFO "Environment file structure validated successfully"
+    return 0
+}
+
+validate_secret() {
+    local secret_name="$1"
+    local secret_value="$2"
+    
+    # Check if secret is empty
+    if [ -z "$secret_value" ]; then
+        log ERROR "Secret $secret_name is empty"
+        return 1
+    fi
+    
+    # Check minimum length (at least 32 characters)
+    if [ ${#secret_value} -lt 32 ]; then
+        log ERROR "Secret $secret_name is too short (minimum 32 characters, got ${#secret_value})"
+        return 1
+    fi
+    
+    return 0
+}
+
+load_or_create_secrets() {
+    local env_file="$INSTALL_DIR/.env"
+    
+    log_section "Loading or Creating Secrets"
+    
+    # Check if .env file exists
+    if [ -f "$env_file" ]; then
+        log INFO "Found existing secrets file at $env_file"
+        
+        # Validate .env file structure before sourcing
+        if ! validate_env_file "$env_file"; then
+            log WARN "Environment file validation failed, regenerating secrets..."
+            create_new_secrets_file "$env_file"
+            return $?
+        fi
+        
+        # Source the file to extract secrets (safe after validation)
+        . "$env_file" || { log ERROR "Failed to source $env_file"; exit 1; }
+        
+        # Validate all secrets are present and valid
+        if ! validate_secret "RUNIC_JWT_SECRET" "$RUNIC_JWT_SECRET"; then
+            log WARN "RUNIC_JWT_SECRET validation failed, regenerating secrets..."
+            create_new_secrets_file "$env_file"
+            return $?
+        fi
+        
+        if ! validate_secret "RUNIC_HMAC_KEY" "$RUNIC_HMAC_KEY"; then
+            log WARN "RUNIC_HMAC_KEY validation failed, regenerating secrets..."
+            create_new_secrets_file "$env_file"
+            return $?
+        fi
+        
+        if ! validate_secret "RUNIC_AGENT_JWT_SECRET" "$RUNIC_AGENT_JWT_SECRET"; then
+            log WARN "RUNIC_AGENT_JWT_SECRET validation failed, regenerating secrets..."
+            create_new_secrets_file "$env_file"
+            return $?
+        fi
+        
+        log INFO "Successfully loaded existing secrets from $env_file"
+        JWT_SECRET="$RUNIC_JWT_SECRET"
+        HMAC_KEY="$RUNIC_HMAC_KEY"
+        AGENT_JWT_SECRET="$RUNIC_AGENT_JWT_SECRET"
+    else
+        log INFO "No existing secrets file found, checking for migration..."
+        
+        # Try to migrate secrets from existing service file
+        migrate_secrets_from_service_file
+        
+        # Check if migration created the .env file
+        if [ -f "$env_file" ]; then
+            log INFO "Migration successful, loading secrets from migrated file..."
+            . "$env_file" || { log ERROR "Failed to source migrated $env_file"; exit 1; }
+            
+            # Validate migrated secrets
+            if ! validate_secret "RUNIC_JWT_SECRET" "$RUNIC_JWT_SECRET"; then
+                log WARN "Migrated RUNIC_JWT_SECRET validation failed, regenerating..."
+                create_new_secrets_file "$env_file"
+                return $?
+            fi
+            
+            if ! validate_secret "RUNIC_HMAC_KEY" "$RUNIC_HMAC_KEY"; then
+                log WARN "Migrated RUNIC_HMAC_KEY validation failed, regenerating..."
+                create_new_secrets_file "$env_file"
+                return $?
+            fi
+            
+            if ! validate_secret "RUNIC_AGENT_JWT_SECRET" "$RUNIC_AGENT_JWT_SECRET"; then
+                log WARN "Migrated RUNIC_AGENT_JWT_SECRET validation failed, regenerating..."
+                create_new_secrets_file "$env_file"
+                return $?
+            fi
+            
+            log INFO "Successfully loaded migrated secrets"
+            JWT_SECRET="$RUNIC_JWT_SECRET"
+            HMAC_KEY="$RUNIC_HMAC_KEY"
+            AGENT_JWT_SECRET="$RUNIC_AGENT_JWT_SECRET"
+        else
+            log INFO "No secrets file found and no migration possible, creating new one..."
+            create_new_secrets_file "$env_file"
+        fi
+    fi
+}
+
+create_new_secrets_file() {
+    local env_file="$1"
+    
+    # Generate new secrets (use provided secrets if available)
+    local jwt_secret hmac_key agent_jwt_secret
+    
+    # Handle JWT secret
+    if [ -n "$PROVIDED_JWT_SECRET" ]; then
+        # Validate provided secret
+        if ! validate_secret "PROVIDED_JWT_SECRET" "$PROVIDED_JWT_SECRET"; then
+            log ERROR "Provided JWT secret is invalid"
+            exit 1
+        fi
+        jwt_secret="$PROVIDED_JWT_SECRET"
+    else
+        jwt_secret=$(generate_secret) || { log ERROR "Failed to generate JWT secret"; exit 1; }
+    fi
+    
+    # Handle HMAC key
+    if [ -n "$PROVIDED_HMAC_KEY" ]; then
+        # Validate provided secret
+        if ! validate_secret "PROVIDED_HMAC_KEY" "$PROVIDED_HMAC_KEY"; then
+            log ERROR "Provided HMAC key is invalid"
+            exit 1
+        fi
+        hmac_key="$PROVIDED_HMAC_KEY"
+    else
+        hmac_key=$(generate_secret) || { log ERROR "Failed to generate HMAC key"; exit 1; }
+    fi
+    
+    # Handle agent JWT secret - preserve existing if .env file exists
+    if [ -f "$env_file" ]; then
+        # Try to preserve existing agent JWT secret
+        local existing_agent_secret
+        existing_agent_secret=$(grep "^RUNIC_AGENT_JWT_SECRET=" "$env_file" 2>/dev/null | sed 's/^RUNIC_AGENT_JWT_SECRET=//')
+        
+        if [ -n "$existing_agent_secret" ] && validate_secret "existing RUNIC_AGENT_JWT_SECRET" "$existing_agent_secret"; then
+            log INFO "Preserving existing RUNIC_AGENT_JWT_SECRET"
+            agent_jwt_secret="$existing_agent_secret"
+        else
+            log INFO "Generating new RUNIC_AGENT_JWT_SECRET (existing secret invalid or not found)"
+            agent_jwt_secret=$(generate_secret) || { log ERROR "Failed to generate agent JWT secret"; exit 1; }
+        fi
+    else
+        # Generate new agent JWT secret
+        agent_jwt_secret=$(generate_secret) || { log ERROR "Failed to generate agent JWT secret"; exit 1; }
+    fi
+    
+    # Write secrets to .env file with error handling
+    if ! cat > "$env_file" << EOF
+# Runic Firewall Management System - Secrets Configuration
+# This file contains sensitive information and should only be readable by root
+# Created: $(date '+%Y-%m-%d %H:%M:%S')
+
+RUNIC_JWT_SECRET=$jwt_secret
+RUNIC_HMAC_KEY=$hmac_key
+RUNIC_AGENT_JWT_SECRET=$agent_jwt_secret
+EOF
+    then
+        log ERROR "Failed to write secrets to $env_file"
+        exit 1
+    fi
+    
+    # Set restrictive permissions with error handling
+    if ! chmod 600 "$env_file"; then
+        log ERROR "Failed to set permissions on $env_file"
+        exit 1
+    fi
+    
+    if ! chown root:root "$env_file"; then
+        log ERROR "Failed to set ownership on $env_file"
+        exit 1
+    fi
+    
+    # Verify .env file was created successfully
+    if [ ! -f "$env_file" ]; then
+        log ERROR "Failed to create .env file at $env_file"
+        exit 1
+    fi
+    
+    log INFO "Created new secrets file at $env_file with permissions 600 (root:root)"
+    
+    # Set variables for use in script
+    JWT_SECRET="$jwt_secret"
+    HMAC_KEY="$hmac_key"
+    AGENT_JWT_SECRET="$agent_jwt_secret"
 }
 
 check_command() {
@@ -424,6 +723,9 @@ install_dependencies() {
 collect_configuration() {
     log_section "Collecting Configuration"
     
+    # Load or create secrets (this sets JWT_SECRET, HMAC_KEY, AGENT_JWT_SECRET)
+    load_or_create_secrets
+    
     # Control Plane URL
     if [ -n "$PROVIDED_CONTROL_PLANE" ]; then
         CONTROL_PLANE_URL="$PROVIDED_CONTROL_PLANE"
@@ -431,29 +733,6 @@ collect_configuration() {
         CONTROL_PLANE_URL=$(prompt_with_default "Control Plane URL (API server address)" "$DEFAULT_CONTROL_PLANE")
     fi
     log INFO "Control Plane URL: $CONTROL_PLANE_URL"
-    
-    # JWT Secret
-    if [ -n "$PROVIDED_JWT_SECRET" ]; then
-        JWT_SECRET="$PROVIDED_JWT_SECRET"
-    else
-        log INFO "JWT Secret: Using auto-generated secret"
-        JWT_SECRET=$(generate_secret)
-    fi
-    
-    # HMAC Key
-    if [ -n "$PROVIDED_HMAC_KEY" ]; then
-        HMAC_KEY="$PROVIDED_HMAC_KEY"
-    else
-        log INFO "HMAC Key: Using auto-generated key"
-        HMAC_KEY=$(generate_secret)
-    fi
-    
-    # Agent JWT Secret (for agent-server communication)
-    if [ -n "$PROVIDED_JWT_SECRET" ]; then
-        AGENT_JWT_SECRET="$PROVIDED_JWT_SECRET"
-    else
-        AGENT_JWT_SECRET=$(generate_secret)
-    fi
     
     log SUCCESS "Configuration collected"
 }
@@ -471,10 +750,21 @@ setup_directories() {
         fi
     fi
     
-    # Create directories
-    mkdir -p "$INSTALL_DIR"
-    mkdir -p "$DATA_DIR"
-    mkdir -p "$INSTALL_DIR/dist"
+    # Create directories with error handling
+    if ! mkdir -p "$INSTALL_DIR"; then
+        log ERROR "Failed to create installation directory: $INSTALL_DIR"
+        exit 1
+    fi
+    
+    if ! mkdir -p "$DATA_DIR"; then
+        log ERROR "Failed to create data directory: $DATA_DIR"
+        exit 1
+    fi
+    
+    if ! mkdir -p "$INSTALL_DIR/dist"; then
+        log ERROR "Failed to create dist directory: $INSTALL_DIR/dist"
+        exit 1
+    fi
     
     log SUCCESS "Directories created at $INSTALL_DIR"
 }
@@ -488,6 +778,10 @@ clone_repository() {
     # Check if repo already exists
     if [ -d "$SOURCE_DIR/.git" ]; then
         log INFO "Repository already exists, updating..."
+    # Fix git ownership error by marking the directory as safe
+    git config --global --add safe.directory "$SOURCE_DIR" 2>/dev/null || true
+    
+
         cd "$SOURCE_DIR"
         git pull origin "$REPO_BRANCH" >> "$LOG_FILE" 2>&1
     else
@@ -562,7 +856,7 @@ build_binary() {
     mkdir -p "$INSTALL_DIR/dist"
 
     # Build with CGO for SQLite support
-    CGO_ENABLED=1 go build -o "$INSTALL_DIR/dist/$BINARY_NAME" ./cmd/runic-server >> "$LOG_FILE" 2>&1
+    CGO_ENABLED=1 go build -buildvcs=false -o "$INSTALL_DIR/dist/$BINARY_NAME" ./cmd/runic-server >> "$LOG_FILE" 2>&1
 
     if [ $? -ne 0 ]; then
         log ERROR "Build failed. Check $LOG_FILE for details."
@@ -590,37 +884,39 @@ create_system_user() {
         log INFO "Creating user 'runic'..."
         
         if [ "$OS_FAMILY" = "debian" ]; then
-            useradd --system --no-create-home --shell /usr/sbin/nologin runic 2>> "$LOG_FILE"
+            useradd --system --no-create-home --shell /usr/sbin/nologin runic 2>> "$LOG_FILE" || { log ERROR "Failed to create user 'runic'"; exit 1; }
         elif [ "$OS_FAMILY" = "suse" ]; then
-            useradd --system --no-create-home --shell /sbin/nologin runic 2>> "$LOG_FILE"
+            useradd --system --no-create-home --shell /sbin/nologin runic 2>> "$LOG_FILE" || { log ERROR "Failed to create user 'runic'"; exit 1; }
         else
-            useradd --system --no-create-home runic 2>> "$LOG_FILE"
+            useradd --system --no-create-home runic 2>> "$LOG_FILE" || { log ERROR "Failed to create user 'runic'"; exit 1; }
         fi
         
-        if [ $? -eq 0 ]; then
-            log SUCCESS "User 'runic' created"
-        else
-            log ERROR "Failed to create user"
-            exit 1
-        fi
+        log SUCCESS "User 'runic' created"
     fi
     
-    # Set ownership
-    chown -R runic:runic "$INSTALL_DIR" 2>> "$LOG_FILE"
+    # Set ownership with error handling
+    if ! chown -R runic:runic "$INSTALL_DIR" 2>> "$LOG_FILE"; then
+        log ERROR "Failed to set ownership on $INSTALL_DIR"
+        exit 1
+    fi
+    
     log SUCCESS "Ownership set to runic:runic"
 }
 
 initialize_database() {
     log_section "Initializing Database"
     
-    cd "$INSTALL_DIR"
+    cd "$INSTALL_DIR" || { log ERROR "Failed to change to installation directory"; exit 1; }
     
     # Check if database already exists
     if [ -f "$DATA_DIR/runic.db" ]; then
         local response
         response=$(prompt_yes_no "Database already exists. Recreate?" "no")
         if [ "$response" = "yes" ]; then
-            rm -f "$DATA_DIR/runic.db"
+            if ! rm -f "$DATA_DIR/runic.db"; then
+                log ERROR "Failed to remove existing database"
+                exit 1
+            fi
         else
             log INFO "Using existing database"
             return 0
@@ -642,7 +938,10 @@ initialize_database() {
     
     # Verify database was created
     if [ -f "$DATA_DIR/runic.db" ]; then
-        chown runic:runic "$DATA_DIR/runic.db"
+        if ! chown runic:runic "$DATA_DIR/runic.db"; then
+            log ERROR "Failed to set ownership on database"
+            exit 1
+        fi
         chown -f runic:runic "$DATA_DIR"/runic.db-* 2>/dev/null || true
         log SUCCESS "Database initialized at $DATA_DIR/runic.db"
     else
@@ -672,8 +971,8 @@ install_systemd_service() {
         fi
     fi
     
-    # Create service file
-    cat > "/tmp/$SERVICE_NAME.service" << EOF
+    # Create service file with error handling
+    if ! cat > "/tmp/$SERVICE_NAME.service" << EOF
 [Unit]
 Description=Runic Firewall Control Plane
 Documentation=https://github.com/ubenmackin/runic
@@ -689,10 +988,10 @@ ExecStart=$INSTALL_DIR/dist/$BINARY_NAME
 Restart=on-failure
 RestartSec=10s
 
-# Environment variables for secrets
-Environment=RUNIC_HMAC_KEY=$HMAC_KEY
-Environment=RUNIC_AGENT_JWT_SECRET=$AGENT_JWT_SECRET
-Environment=RUNIC_JWT_SECRET=$JWT_SECRET
+# Load secrets from environment file
+EnvironmentFile=$INSTALL_DIR/.env
+
+# Environment variables for non-secret configuration
 Environment=RUNIC_CONTROL_PLANE=$CONTROL_PLANE_URL
 Environment=RUNIC_DB_PATH=$DATA_DIR/runic.db
 
@@ -716,16 +1015,33 @@ SyslogIdentifier=runic-server
 [Install]
 WantedBy=multi-user.target
 EOF
+    then
+        log ERROR "Failed to create service file"
+        exit 1
+    fi
     
-    # Install service file
-    cp "/tmp/$SERVICE_NAME.service" "/etc/systemd/system/$SERVICE_NAME.service"
-    chmod 644 "/etc/systemd/system/$SERVICE_NAME.service"
+    # Install service file with error handling
+    if ! cp "/tmp/$SERVICE_NAME.service" "/etc/systemd/system/$SERVICE_NAME.service"; then
+        log ERROR "Failed to copy service file to systemd directory"
+        exit 1
+    fi
+    
+    if ! chmod 644 "/etc/systemd/system/$SERVICE_NAME.service"; then
+        log ERROR "Failed to set permissions on service file"
+        exit 1
+    fi
     
     # Reload systemd
-    systemctl daemon-reload
+    if ! systemctl daemon-reload; then
+        log ERROR "Failed to reload systemd"
+        exit 1
+    fi
     
     # Enable service
-    systemctl enable "$SERVICE_NAME"
+    if ! systemctl enable "$SERVICE_NAME"; then
+        log ERROR "Failed to enable service"
+        exit 1
+    fi
     
     log SUCCESS "Systemd service installed"
 }
@@ -793,11 +1109,9 @@ show_status() {
     echo "  • Check status:  sudo systemctl status $SERVICE_NAME"
     echo ""
     
-    echo -e "${YELLOW}IMPORTANT: Save your secrets!${NC}"
-    echo "  • JWT Secret:    $JWT_SECRET"
-    echo "  • HMAC Key:      $HMAC_KEY"
-    echo ""
-    echo -e "${RED}Warning: Store these in a secure location!${NC}"
+    echo -e "${GREEN}✓ Secrets: Configured${NC}"
+    echo -e "${YELLOW}  Secrets are stored in: $INSTALL_DIR/.env${NC}"
+    echo -e "${YELLOW}  Keep this file secure and backed up!${NC}"
     echo ""
     
     log SUCCESS "Installation completed successfully"
