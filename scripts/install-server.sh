@@ -37,6 +37,7 @@ NC='\033[0m' # No Color
 # Installation paths
 INSTALL_DIR="/opt/runic"
 DATA_DIR="/opt/runic/data"
+SOURCE_DIR="/opt/runic/src"
 LOG_FILE="/var/log/runic-install.log"
 BINARY_NAME="runic-server"
 SERVICE_NAME="runic-server"
@@ -388,56 +389,41 @@ setup_directories() {
 
 clone_repository() {
     log_section "Cloning Repository"
-    
+
+    # Ensure source directory exists
+    mkdir -p "$SOURCE_DIR"
+
     # Check if repo already exists
-    if [ -d "$INSTALL_DIR/.git" ]; then
+    if [ -d "$SOURCE_DIR/.git" ]; then
         log INFO "Repository already exists, updating..."
-        cd "$INSTALL_DIR"
+        cd "$SOURCE_DIR"
         git pull origin "$REPO_BRANCH" >> "$LOG_FILE" 2>&1
     else
         log INFO "Cloning repository from $REPO_URL..."
-        git clone --depth 1 --branch "$REPO_BRANCH" "$REPO_URL" "$INSTALL_DIR" >> "$LOG_FILE" 2>&1
-        
+        git clone --depth 1 --branch "$REPO_BRANCH" "$REPO_URL" "$SOURCE_DIR" >> "$LOG_FILE" 2>&1
+
         if [ $? -ne 0 ]; then
             log ERROR "Failed to clone repository"
             log INFO "Trying alternative: downloading source archive..."
-            
+
             # Alternative: Download source
             local tmpfile
             tmpfile=$(mktemp)
             curl -sL "https://github.com/ubenmackin/runic/archive/refs/heads/$REPO_BRANCH.tar.gz" -o "$tmpfile"
-            
-		if [ -f "$tmpfile" ]; then
-			tar -xzf "$tmpfile" -C /opt
-# Remove existing INSTALL_DIR first; otherwise mv puts files inside it as a subdirectory
-		# Safety check: validate INSTALL_DIR before removing
-		if [[ -z "$INSTALL_DIR" ]]; then
-			log ERROR "INSTALL_DIR is empty, aborting"
-			exit 1
-		fi
-		if [[ ! -d "$INSTALL_DIR" ]]; then
-			log INFO "Directory $INSTALL_DIR does not exist, skipping removal"
-		else
-			# Additional safety: ensure it matches expected pattern
-			case "$INSTALL_DIR" in
-				/opt/runic)
-					rm -rf "$INSTALL_DIR"
-					;;
-				*)
-					log ERROR "INSTALL_DIR does not match expected pattern /opt/runic"
-					exit 1
-					;;
-			esac
-		fi
-		mv "/opt/runic-$REPO_BRANCH" "$INSTALL_DIR" || { log ERROR "Failed to move extracted directory"; exit 1; }
-			rm -f "$tmpfile"
+
+            if [ -f "$tmpfile" ]; then
+                # Remove existing SOURCE_DIR contents if any
+                rm -rf "$SOURCE_DIR"
+                tar -xzf "$tmpfile" -C /tmp
+                mv "/tmp/runic-$REPO_BRANCH" "$SOURCE_DIR" || { log ERROR "Failed to move extracted directory"; exit 1; }
+                rm -f "$tmpfile"
             else
                 log ERROR "Failed to download source"
                 exit 1
             fi
         fi
     fi
-    
+
     log SUCCESS "Repository cloned/updated"
 }
 
@@ -446,39 +432,39 @@ build_binary() {
         log INFO "Skipping build (--skip-build flag)"
         return 0
     fi
-    
+
     log_section "Building Runic Server"
-    
-    cd "$INSTALL_DIR"
-    
+
+    cd "$SOURCE_DIR" || { log ERROR "Source directory not found"; exit 1; }
+
     # Check if Go modules are available
     if [ ! -f "go.mod" ]; then
         log ERROR "go.mod not found. Cannot build."
         exit 1
     fi
-    
+
     # Download Go dependencies
     log INFO "Downloading Go dependencies..."
     go mod download >> "$LOG_FILE" 2>&1
-    
+
     # Build the server binary
     log INFO "Building runic-server with CGO enabled..."
-    
-    # Create dist directory
-    mkdir -p dist
-    
+
+    # Create dist directory in INSTALL_DIR
+    mkdir -p "$INSTALL_DIR/dist"
+
     # Build with CGO for SQLite support
-    CGO_ENABLED=1 go build -o "dist/$BINARY_NAME" ./cmd/runic-server >> "$LOG_FILE" 2>&1
-    
+    CGO_ENABLED=1 go build -o "$INSTALL_DIR/dist/$BINARY_NAME" . >> "$LOG_FILE" 2>&1
+
     if [ $? -ne 0 ]; then
         log ERROR "Build failed. Check $LOG_FILE for details."
         exit 1
     fi
-    
+
     # Verify binary
-    if [ -f "dist/$BINARY_NAME" ]; then
+    if [ -f "$INSTALL_DIR/dist/$BINARY_NAME" ]; then
         local size
-        size=$(du -h "dist/$BINARY_NAME" | cut -f1)
+        size=$(du -h "$INSTALL_DIR/dist/$BINARY_NAME" | cut -f1)
         log SUCCESS "Binary built successfully ($size)"
     else
         log ERROR "Binary not found after build"
@@ -667,7 +653,7 @@ show_status() {
     log_section "Installation Complete!"
     
     echo -e "${GREEN}╔════════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${GREEN}║           Runic Firewall Management System Installed            ║${NC}"
+    echo -e "${GREEN}║           Runic Firewall Management System Installed              ║${NC}"
     echo -e "${GREEN}╚════════════════════════════════════════════════════════════════╝${NC}"
     echo ""
     
