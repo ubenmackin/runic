@@ -70,26 +70,20 @@ func main() {
 	// Start token revocation cleanup goroutine (prunes expired entries hourly)
 	go startTokenCleanup()
 
-	// Graceful shutdown on SIGINT/SIGTERM
-	shutdownCtx, shutdownCancel := context.WithCancel(context.Background())
-	defer shutdownCancel()
-
+	// Wait for SIGINT/SIGTERM to shut down
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
+	log.Println("Starting Runic server on :8080")
 	go func() {
-		<-sigCh
-		log.Println("Received shutdown signal...")
-		shutdownCancel()
+		if err := http.ListenAndServe(":8080", r); err != nil {
+			log.Fatalf("Server failed: %v", err)
+		}
 	}()
 
-	log.Println("Starting Runic server on :8080")
-	if err := http.ListenAndServe(":8080", r); err != nil {
-		log.Fatalf("Server failed: %v", err)
-	}
-
-	// Keep main goroutine alive until shutdown
-	<-shutdownCtx.Done()
+	<-sigCh
+	log.Println("Received shutdown signal...")
+	os.Exit(0)
 }
 
 // startOfflineDetector marks servers as offline if they haven't sent a heartbeat in 90 seconds.
