@@ -9,7 +9,7 @@ Type=simple
 User=runic
 Group=runic
 WorkingDirectory=/opt/runic
-ExecStart=/opt/runic/runic-server
+ExecStart=/opt/runic/dist/runic-server
 Restart=on-failure
 RestartSec=10s
 
@@ -17,7 +17,7 @@ RestartSec=10s
 Environment=RUNIC_HMAC_KEY=%HMAC_KEY%
 Environment=RUNIC_AGENT_JWT_SECRET=%AGENT_JWT_SECRET%
 Environment=RUNIC_JWT_SECRET=%JWT_SECRET%
-Environment=RUNIC_DB_PATH=/opt/runic/data/runic.db
+Environment=RUNIC_DB_PATH=%DATA_DIR%/runic.db
 
 # Security hardening
 NoNewPrivileges=yes
