@@ -1141,12 +1141,12 @@ main() {
     
     # Install dependencies
     install_dependencies
-    
-    # Get configuration
-    collect_configuration
-    
+
     # Setup directories
     setup_directories
+
+    # Get configuration
+    collect_configuration
     
     # Clone repository
     clone_repository
