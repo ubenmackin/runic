@@ -407,10 +407,12 @@ clone_repository() {
             tmpfile=$(mktemp)
             curl -sL "https://github.com/ubenmackin/runic/archive/refs/heads/$REPO_BRANCH.tar.gz" -o "$tmpfile"
             
-            if [ -f "$tmpfile" ]; then
-                tar -xzf "$tmpfile" -C /opt
-                mv "/opt/runic-$REPO_BRANCH" "$INSTALL_DIR"
-                rm -f "$tmpfile"
+		if [ -f "$tmpfile" ]; then
+			tar -xzf "$tmpfile" -C /opt
+			# Remove existing INSTALL_DIR first; otherwise mv puts files inside it as a subdirectory
+			rm -rf "$INSTALL_DIR"
+			mv "/opt/runic-$REPO_BRANCH" "$INSTALL_DIR"
+			rm -f "$tmpfile"
             else
                 log ERROR "Failed to download source"
                 exit 1
