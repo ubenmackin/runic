@@ -643,6 +643,7 @@ initialize_database() {
     # Verify database was created
     if [ -f "$DATA_DIR/runic.db" ]; then
         chown runic:runic "$DATA_DIR/runic.db"
+        chown -f runic:runic "$DATA_DIR"/runic.db-* 2>/dev/null || true
         log SUCCESS "Database initialized at $DATA_DIR/runic.db"
     else
         log WARN "Database may not have been created. Will be created on first start."

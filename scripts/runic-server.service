@@ -17,6 +17,7 @@ RestartSec=10s
 Environment=RUNIC_HMAC_KEY=%HMAC_KEY%
 Environment=RUNIC_AGENT_JWT_SECRET=%AGENT_JWT_SECRET%
 Environment=RUNIC_JWT_SECRET=%JWT_SECRET%
+Environment=RUNIC_DB_PATH=/opt/runic/data/runic.db
 
 # Security hardening
 NoNewPrivileges=yes
