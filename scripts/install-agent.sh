@@ -16,7 +16,7 @@ if [ -z "$CONTROL_PLANE_URL" ]; then
     exit 1
 fi
 
-BINARY_URL="${CONTROL_PLANE_URL}/downloads/runic-agent-linux-${AGENT_ARCH}"
+BINARY_URL="${CONTROL_PLANE_URL}/downloads/runic-agent-${AGENT_ARCH}"
 
 echo "Downloading runic-agent for ${AGENT_ARCH}..."
 curl -fsSL -o /usr/local/bin/runic-agent "$BINARY_URL"

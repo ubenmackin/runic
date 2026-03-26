@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { 
   LayoutDashboard, Server, Users as UsersIcon, Briefcase, Shield, FileText, 
@@ -50,9 +50,14 @@ export default function Layout() {
     localStorage.getItem('theme') === 'dark' ||
     (!localStorage.getItem('theme') && window.matchMedia('(prefers-color-scheme: dark)').matches)
   )
-  const [expandedItems, setExpandedItems] = useState({})
-  const logout = useAuthStore(s => s.logout)
-  const navigate = useNavigate()
+const [expandedItems, setExpandedItems] = useState({})
+const logout = useAuthStore(s => s.logout)
+const navigate = useNavigate()
+
+  // Apply dark class on mount and when darkMode changes
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', darkMode)
+  }, [darkMode])
 
   const toggleDark = () => {
     const next = !darkMode

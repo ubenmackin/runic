@@ -919,20 +919,18 @@ build_binary() {
 		exit 1
 	fi
 
-	# Build the web frontend if not already built
-	if [ ! -d "internal/api/web/dist" ]; then
-		log INFO "Building web frontend..."
-		# Check if npm is installed
-		if ! command -v npm &> /dev/null; then
-			log ERROR "npm is not installed. Cannot build web frontend."
-			exit 1
-		fi
-		cd web || { log ERROR "web directory not found"; exit 1; }
-		npm install || { log ERROR "npm install failed"; exit 1; }
-		npm run build || { log ERROR "npm run build failed"; exit 1; }
-		cd .. || exit 1
-		log SUCCESS "Web frontend built successfully"
-	fi
+# Build the web frontend (always rebuild to pick up changes)
+log INFO "Building web frontend..."
+# Check if npm is installed
+if ! command -v npm &> /dev/null; then
+	log ERROR "npm is not installed. Cannot build web frontend."
+	exit 1
+fi
+cd web || { log ERROR "web directory not found"; exit 1; }
+npm install || { log ERROR "npm install failed"; exit 1; }
+npm run build || { log ERROR "npm run build failed"; exit 1; }
+cd .. || exit 1
+log SUCCESS "Web frontend built successfully"
 
 	# Download Go dependencies
 	log INFO "Downloading Go dependencies..."
