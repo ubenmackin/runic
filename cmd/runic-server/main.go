@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -73,6 +74,37 @@ func validateCertificate(certFile, keyFile string) error {
 	log.Printf("Certificate validated successfully (Subject: %s, Expires: %s)", cert.Subject.CommonName, cert.NotAfter.Format(time.RFC3339))
 
 	return nil
+}
+
+// setCacheHeaders sets appropriate Cache-Control headers based on file type.
+// - HTML files: no-cache (must revalidate to get latest version)
+// - Assets with content hashes (*.js, *.css in assets/): 1 year cache (immutable)
+// - Other static files: 1 hour cache
+func setCacheHeaders(w http.ResponseWriter, path string) {
+	ext := filepath.Ext(path)
+	fileName := filepath.Base(path)
+
+	// HTML files should never be cached (always fetch latest)
+	if ext == ".html" {
+		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+		w.Header().Set("Pragma", "no-cache")
+		w.Header().Set("Expires", "0")
+		return
+	}
+
+	// Assets with content hashes (Vite generates files like index-Abc123.js)
+	// These are immutable - the hash changes when content changes
+	if strings.HasPrefix(path, "assets/") && (ext == ".js" || ext == ".css") {
+		// Check if filename contains a hash pattern (hyphen followed by alphanumeric)
+		// Vite pattern: name-hash.ext
+		if strings.Contains(fileName, "-") {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+			return
+		}
+	}
+
+	// Other static assets (images, fonts, etc.) - cache for 1 hour
+	w.Header().Set("Cache-Control", "public, max-age=3600")
 }
 
 func main() {
@@ -154,9 +186,15 @@ func main() {
 		// Remove leading slash for fs.FS lookup
 		path = strings.TrimPrefix(path, "/")
 		if _, err := subFS.Open(path); err == nil {
+			// Set cache headers based on file type
+			setCacheHeaders(w, path)
 			fileServer.ServeHTTP(w, req)
 		} else {
 			// File not found — serve index.html for SPA client-side routing
+			// index.html should never be cached
+			w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+			w.Header().Set("Pragma", "no-cache")
+			w.Header().Set("Expires", "0")
 			req.URL.Path = "/index.html"
 			fileServer.ServeHTTP(w, req)
 		}

@@ -36,27 +36,49 @@ export default function Peers() {
   const openEdit = (s) => { setEditPeer(s); setFormForEdit(s); setFormErrors({}); setModalOpen(true) }
 
   const { data: peers, isLoading } = useQuery({
-    queryKey: QUERY_KEYS.peers,
+    queryKey: QUERY_KEYS.peers(),
     queryFn: () => api.get('/peers'),
-    refetchInterval: 5000,
+    refetchInterval: 30000, // 30 seconds - less aggressive for management page
+    refetchIntervalInBackground: false, // Don't poll when tab is hidden
+    refetchOnReconnect: true, // Refetch when network reconnects
+    refetchOnWindowFocus: true, // Refetch when user returns to tab
+    staleTime: 15000, // Consider data fresh for 15 seconds
   })
 
   const createMutation = useMutation({
     mutationFn: (data) => api.post('/peers', data),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: QUERY_KEYS.peers }); closeModal() },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: QUERY_KEYS.peers() }); closeModal() },
     onError: (err) => setFormErrors({ _general: err.message }),
   })
 
   const updateMutation = useMutation({
     mutationFn: (data) => api.put(`/peers/${editPeer.id}`, data),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: QUERY_KEYS.peers }); closeModal() },
-    onError: (err) => setFormErrors({ _general: err.message }),
+    onMutate: async (newData) => {
+      await qc.cancelQueries({ queryKey: QUERY_KEYS.peers() })
+      const previousPeers = qc.getQueryData(QUERY_KEYS.peers())
+      qc.setQueryData(QUERY_KEYS.peers(), old => old?.map(p => p.id === editPeer.id ? { ...p, ...newData } : p) || [])
+      return { previousPeers }
+    },
+    onError: (err, newData, context) => {
+      qc.setQueryData(QUERY_KEYS.peers(), context.previousPeers)
+      setFormErrors({ _general: err.message })
+    },
+    onSettled: () => { qc.invalidateQueries({ queryKey: QUERY_KEYS.peers() }); closeModal() },
   })
 
   const deleteMutation = useMutation({
     mutationFn: (id) => api.delete(`/peers/${id}`),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: QUERY_KEYS.peers }); setDeleteTarget(null) },
-    onError: (err) => showToast(err.message, 'error'),
+    onMutate: async (id) => {
+      await qc.cancelQueries({ queryKey: QUERY_KEYS.peers() })
+      const previousPeers = qc.getQueryData(QUERY_KEYS.peers())
+      qc.setQueryData(QUERY_KEYS.peers(), old => old?.filter(p => p.id !== id) || [])
+      return { previousPeers }
+    },
+    onError: (err, id, context) => {
+      qc.setQueryData(QUERY_KEYS.peers(), context.previousPeers)
+      showToast(err.message, 'error')
+    },
+    onSettled: () => { setDeleteTarget(null) },
   })
 
   const pushMutation = useMutation({
@@ -67,7 +89,7 @@ export default function Peers() {
     onSuccess: (data, peer) => {
       setPushStatus(prev => ({ ...prev, [peer.id]: `Pushed v${data.bundle_version}` }))
       setTimeout(() => setPushStatus(prev => ({ ...prev, [peer.id]: null })), 5000)
-      qc.invalidateQueries({ queryKey: QUERY_KEYS.peers })
+      qc.invalidateQueries({ queryKey: QUERY_KEYS.peers() })
     },
     onError: (err, peer) => {
       setPushStatus(prev => ({ ...prev, [peer.id]: `Error: ${err.message}` }))

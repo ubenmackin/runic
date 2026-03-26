@@ -42,11 +42,11 @@ export default function Logs() {
     refetchInterval: mode === 'historical' ? false : false,
   })
 
-// Peers for filter dropdown
-const { data: peers } = useQuery({
-  queryKey: QUERY_KEYS.peers,
-  queryFn: () => api.get('/peers'),
-})
+  // Peers for filter dropdown
+  const { data: peers } = useQuery({
+    queryKey: QUERY_KEYS.peers(),
+    queryFn: () => api.get('/peers'),
+  })
 
   // WebSocket connection for live mode
   useEffect(() => {

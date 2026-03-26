@@ -2,22 +2,44 @@ import { BrowserRouter, Routes, Route, Navigate, useNavigate } from 'react-route
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { SetupProvider, useSetup } from './contexts/SetupContext'
 import Layout from './components/Layout'
-import Login from './pages/Login'
-import Dashboard from './pages/Dashboard'
-import Peers from './pages/Peers'
-import Groups from './pages/Groups'
-import Services from './pages/Services'
-import Policies from './pages/Policies'
-import Logs from './pages/Logs'
-import SetupKeys from './pages/SetupKeys'
-import Users from './pages/Users'
-import Settings from './pages/Settings'
 import { useAuthStore } from './store'
 import { ToastProvider } from './hooks/ToastContext'
-import ErrorBoundary from './components/ErrorBoundary'
-import { useEffect } from 'react'
+import ErrorBoundary, { RouteErrorBoundary } from './components/ErrorBoundary'
+import { useEffect, Suspense, lazy } from 'react'
 
-const qc = new QueryClient()
+// Lazy load page components for code splitting
+const Login = lazy(() => import('./pages/Login'))
+const Dashboard = lazy(() => import('./pages/Dashboard'))
+const Peers = lazy(() => import('./pages/Peers'))
+const Groups = lazy(() => import('./pages/Groups'))
+const Services = lazy(() => import('./pages/Services'))
+const Policies = lazy(() => import('./pages/Policies'))
+const Logs = lazy(() => import('./pages/Logs'))
+const SetupKeys = lazy(() => import('./pages/SetupKeys'))
+const Users = lazy(() => import('./pages/Users'))
+const Settings = lazy(() => import('./pages/Settings'))
+
+// Loading fallback component for suspense boundaries
+function PageLoader() {
+  return (
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
+      <div className="text-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-runic-600 dark:border-runic-400 mx-auto mb-4"></div>
+        <p className="text-gray-600 dark:text-gray-400 text-lg">Loading...</p>
+      </div>
+    </div>
+  )
+}
+
+const qc = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 30000, // 30 seconds - data stays fresh
+      gcTime: 300000, // 5 minutes - unused data garbage collected
+      refetchOnWindowFocus: false, // Disable auto-refetch on window focus
+    },
+  },
+})
 
 function PrivateRoute({ children }) {
   const auth = useAuthStore(s => s.isAuthenticated)
@@ -65,18 +87,18 @@ export default function App() {
           <SetupProvider>
             <BrowserRouter>
               <Routes>
-                <Route path="/login" element={<Login />} />
-                <Route path="/setup" element={<Login mode="setup" />} />
+                <Route path="/login" element={<RouteErrorBoundary><Suspense fallback={<PageLoader />}><Login /></Suspense></RouteErrorBoundary>} />
+                <Route path="/setup" element={<RouteErrorBoundary><Suspense fallback={<PageLoader />}><Login mode="setup" /></Suspense></RouteErrorBoundary>} />
                 <Route path="/" element={<PrivateRoute><Layout /></PrivateRoute>}>
-                  <Route index element={<Dashboard />} />
-                  <Route path="peers" element={<Peers />} />
-                  <Route path="groups"    element={<Groups />} />
-                  <Route path="services"  element={<Services />} />
-                  <Route path="policies"  element={<Policies />} />
-                  <Route path="logs"      element={<Logs />} />
-                  <Route path="setup-keys" element={<SetupKeys />} />
-                  <Route path="users"     element={<Users />} />
-                  <Route path="settings"  element={<Settings />} />
+                  <Route index element={<RouteErrorBoundary><Suspense fallback={<PageLoader />}><Dashboard /></Suspense></RouteErrorBoundary>} />
+                  <Route path="peers" element={<RouteErrorBoundary><Suspense fallback={<PageLoader />}><Peers /></Suspense></RouteErrorBoundary>} />
+                  <Route path="groups" element={<RouteErrorBoundary><Suspense fallback={<PageLoader />}><Groups /></Suspense></RouteErrorBoundary>} />
+                  <Route path="services" element={<RouteErrorBoundary><Suspense fallback={<PageLoader />}><Services /></Suspense></RouteErrorBoundary>} />
+                  <Route path="policies" element={<RouteErrorBoundary><Suspense fallback={<PageLoader />}><Policies /></Suspense></RouteErrorBoundary>} />
+                  <Route path="logs" element={<RouteErrorBoundary><Suspense fallback={<PageLoader />}><Logs /></Suspense></RouteErrorBoundary>} />
+                  <Route path="setup-keys" element={<RouteErrorBoundary><Suspense fallback={<PageLoader />}><SetupKeys /></Suspense></RouteErrorBoundary>} />
+                  <Route path="users" element={<RouteErrorBoundary><Suspense fallback={<PageLoader />}><Users /></Suspense></RouteErrorBoundary>} />
+                  <Route path="settings" element={<RouteErrorBoundary><Suspense fallback={<PageLoader />}><Settings /></Suspense></RouteErrorBoundary>} />
                 </Route>
               </Routes>
             </BrowserRouter>

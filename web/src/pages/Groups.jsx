@@ -26,7 +26,7 @@ export default function Groups() {
   const closeModal = () => { handleCancel() }
 
   const { data: groups, isLoading } = useQuery({
-    queryKey: QUERY_KEYS.groups,
+    queryKey: QUERY_KEYS.groups(),
     queryFn: () => api.get('/groups'),
   })
 
@@ -41,32 +41,69 @@ export default function Groups() {
 
   const createMutation = useMutation({
     mutationFn: (data) => api.post('/groups', data),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: QUERY_KEYS.groups }); closeModal() },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: QUERY_KEYS.groups() }); closeModal() },
     onError: (err) => setFormErrors({ _general: err.message }),
   })
 
   const updateMutation = useMutation({
     mutationFn: ({ id, data }) => api.put(`/groups/${id}`, data),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: QUERY_KEYS.groups }); closeModal() },
-    onError: (err) => setFormErrors({ _general: err.message }),
+    onMutate: async ({ id, data }) => {
+      await qc.cancelQueries({ queryKey: QUERY_KEYS.groups() })
+      const previousGroups = qc.getQueryData(QUERY_KEYS.groups())
+      qc.setQueryData(QUERY_KEYS.groups(), old => old?.map(g => g.id === id ? { ...g, ...data } : g) || [])
+      return { previousGroups }
+    },
+    onError: (err, vars, context) => {
+      qc.setQueryData(QUERY_KEYS.groups(), context.previousGroups)
+      setFormErrors({ _general: err.message })
+    },
+    onSettled: () => { qc.invalidateQueries({ queryKey: QUERY_KEYS.groups() }); closeModal() },
   })
 
   const deleteMutation = useMutation({
     mutationFn: (id) => api.delete(`/groups/${id}`),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: QUERY_KEYS.groups }); setDeleteTarget(null) },
-    onError: (err) => showToast(err.message, 'error'),
+    onMutate: async (id) => {
+      await qc.cancelQueries({ queryKey: QUERY_KEYS.groups() })
+      const previousGroups = qc.getQueryData(QUERY_KEYS.groups())
+      qc.setQueryData(QUERY_KEYS.groups(), old => old?.filter(g => g.id !== id) || [])
+      return { previousGroups }
+    },
+    onError: (err, id, context) => {
+      qc.setQueryData(QUERY_KEYS.groups(), context.previousGroups)
+      showToast(err.message, 'error')
+    },
+    onSettled: () => { setDeleteTarget(null) },
   })
 
   const addMemberMutation = useMutation({
     mutationFn: ({ groupId, member }) => api.post(`/groups/${groupId}/members`, member),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: QUERY_KEYS.members(editGroup.id) }) },
-    onError: (err) => setFormErrors({ _general: err.message }),
+    onMutate: async ({ groupId, member }) => {
+      await qc.cancelQueries({ queryKey: QUERY_KEYS.members(groupId) })
+      const previousMembers = qc.getQueryData(QUERY_KEYS.members(groupId))
+      // Optimistically add member with temp ID
+      qc.setQueryData(QUERY_KEYS.members(groupId), old => [...(old || []), { ...member, id: `temp-${Date.now()}` }])
+      return { previousMembers }
+    },
+    onError: (err, vars, context) => {
+      qc.setQueryData(QUERY_KEYS.members(vars.groupId), context.previousMembers)
+      setFormErrors({ _general: err.message })
+    },
+    onSettled: (data, err, vars) => { qc.invalidateQueries({ queryKey: QUERY_KEYS.members(vars.groupId) }) },
   })
 
   const deleteMemberMutation = useMutation({
     mutationFn: ({ groupId, memberId }) => api.delete(`/groups/${groupId}/members/${memberId}`),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: QUERY_KEYS.members(editGroup.id) }) },
-    onError: (err) => showToast(err.message, 'error'),
+    onMutate: async ({ groupId, memberId }) => {
+      await qc.cancelQueries({ queryKey: QUERY_KEYS.members(groupId) })
+      const previousMembers = qc.getQueryData(QUERY_KEYS.members(groupId))
+      qc.setQueryData(QUERY_KEYS.members(groupId), old => old?.filter(m => m.id !== memberId) || [])
+      return { previousMembers }
+    },
+    onError: (err, vars, context) => {
+      qc.setQueryData(QUERY_KEYS.members(vars.groupId), context.previousMembers)
+      showToast(err.message, 'error')
+    },
+    onSettled: (data, err, vars) => { qc.invalidateQueries({ queryKey: QUERY_KEYS.members(vars.groupId) }) },
   })
 
   const handleSubmit = (e) => {

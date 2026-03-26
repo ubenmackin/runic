@@ -27,22 +27,22 @@ export default function Policies() {
   const closeModal = () => { handleCancel(); setPreview(null) }
 
   const { data: policies, isLoading } = useQuery({
-    queryKey: QUERY_KEYS.policies,
+    queryKey: QUERY_KEYS.policies(),
     queryFn: () => api.get('/policies'),
   })
 
-const { data: peers } = useQuery({
-  queryKey: QUERY_KEYS.peers,
-  queryFn: () => api.get('/peers'),
-})
+  const { data: peers } = useQuery({
+    queryKey: QUERY_KEYS.peers(),
+    queryFn: () => api.get('/peers'),
+  })
 
   const { data: groups } = useQuery({
-    queryKey: QUERY_KEYS.groups,
+    queryKey: QUERY_KEYS.groups(),
     queryFn: () => api.get('/groups'),
   })
 
   const { data: services } = useQuery({
-    queryKey: QUERY_KEYS.services,
+    queryKey: QUERY_KEYS.services(),
     queryFn: () => api.get('/services'),
   })
 
@@ -52,31 +52,49 @@ const { data: peers } = useQuery({
 
   const createMutation = useMutation({
     mutationFn: (data) => api.post('/policies', data),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: QUERY_KEYS.policies }); closeModal() },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: QUERY_KEYS.policies() }); closeModal() },
     onError: (err) => setFormErrors({ _general: err.message }),
   })
 
   const updateMutation = useMutation({
     mutationFn: (data) => api.put(`/policies/${editPolicy.id}`, data),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: QUERY_KEYS.policies }); closeModal() },
-    onError: (err) => setFormErrors({ _general: err.message }),
+    onMutate: async (newData) => {
+      await qc.cancelQueries({ queryKey: QUERY_KEYS.policies() })
+      const previousPolicies = qc.getQueryData(QUERY_KEYS.policies())
+      qc.setQueryData(QUERY_KEYS.policies(), old => old?.map(p => p.id === editPolicy.id ? { ...p, ...newData } : p) || [])
+      return { previousPolicies }
+    },
+    onError: (err, newData, context) => {
+      qc.setQueryData(QUERY_KEYS.policies(), context.previousPolicies)
+      setFormErrors({ _general: err.message })
+    },
+    onSettled: () => { qc.invalidateQueries({ queryKey: QUERY_KEYS.policies() }); closeModal() },
   })
 
   const deleteMutation = useMutation({
     mutationFn: (id) => api.delete(`/policies/${id}`),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: QUERY_KEYS.policies }); setDeleteTarget(null) },
-    onError: (err) => showToast(err.message, 'error'),
+    onMutate: async (id) => {
+      await qc.cancelQueries({ queryKey: QUERY_KEYS.policies() })
+      const previousPolicies = qc.getQueryData(QUERY_KEYS.policies())
+      qc.setQueryData(QUERY_KEYS.policies(), old => old?.filter(p => p.id !== id) || [])
+      return { previousPolicies }
+    },
+    onError: (err, id, context) => {
+      qc.setQueryData(QUERY_KEYS.policies(), context.previousPolicies)
+      showToast(err.message, 'error')
+    },
+    onSettled: () => { setDeleteTarget(null) },
   })
 
   const toggleMutation = useMutation({
     mutationFn: ({ id, enabled }) => api.patch(`/policies/${id}`, { enabled }),
     onMutate: async ({ id, enabled }) => {
-      await qc.cancelQueries({ queryKey: QUERY_KEYS.policies })
-      const prev = qc.getQueryData(QUERY_KEYS.policies)
-      qc.setQueryData(QUERY_KEYS.policies, old => old?.map(p => p.id === id ? { ...p, enabled } : p))
+      await qc.cancelQueries({ queryKey: QUERY_KEYS.policies() })
+      const prev = qc.getQueryData(QUERY_KEYS.policies())
+      qc.setQueryData(QUERY_KEYS.policies(), old => old?.map(p => p.id === id ? { ...p, enabled } : p))
       return { prev }
     },
-    onError: (err, vars, ctx) => qc.setQueryData(QUERY_KEYS.policies, ctx.prev),
+    onError: (err, vars, ctx) => qc.setQueryData(QUERY_KEYS.policies(), ctx.prev),
   })
 
   const handleSubmit = (e) => {

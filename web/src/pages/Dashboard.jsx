@@ -9,25 +9,43 @@ import { Link } from 'react-router-dom'
 
 export default function Dashboard() {
   const qc = useQueryClient()
-  const { data, isLoading } = useQuery({
-    queryKey: QUERY_KEYS.dashboard,
-    queryFn: () => api.get('/dashboard'),
+
+  // Combined initial query for dashboard stats and peers (parallel fetch)
+  const { data: combinedData, isLoading } = useQuery({
+    queryKey: ['dashboard-initial'],
+    queryFn: async () => {
+      const [dashboard, peers] = await Promise.all([
+        api.get('/dashboard'),
+        api.get('/peers'),
+      ])
+      return { dashboard, peers }
+    },
+    staleTime: 30000, // Cache for 30 seconds
   })
 
-const peersQuery = useQuery({
-  queryKey: QUERY_KEYS.peers,
-  queryFn: () => api.get('/peers'),
-  refetchInterval: 5000,
-})
+  const data = combinedData?.dashboard
+  const peersFromCombined = combinedData?.peers
 
-const pushAllMutation = useMutation({
-  mutationFn: async (peerId) => {
-    await api.post(`/peers/${peerId}/push`)
-  },
-  onSuccess: () => {
-    qc.invalidateQueries({ queryKey: QUERY_KEYS.peers })
-  },
-})
+  // Separate query for peers with auto-refresh (for real-time status updates)
+  const peersQuery = useQuery({
+    queryKey: QUERY_KEYS.peers(),
+    queryFn: () => api.get('/peers'),
+    initialData: peersFromCombined, // Use data from combined query as initial value
+    refetchInterval: 15000, // 15 seconds - balance between freshness and network efficiency
+    refetchIntervalInBackground: false, // Don't poll when tab is hidden
+    refetchOnReconnect: true, // Refetch when network reconnects
+    refetchOnWindowFocus: true, // Refetch when user returns to tab
+    staleTime: 10000, // Consider data fresh for 10 seconds
+  })
+
+  const pushAllMutation = useMutation({
+    mutationFn: async (peerId) => {
+      await api.post(`/peers/${peerId}/push`)
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: QUERY_KEYS.peers() })
+    },
+  })
 
 const handlePushAll = async () => {
   if (!peersQuery.data) return
@@ -36,13 +54,15 @@ const handlePushAll = async () => {
 
   // Logs query for chart
   const { data: blockedLogs } = useQuery({
-    queryKey: QUERY_KEYS.blockedLogs24h,
+    queryKey: QUERY_KEYS.blockedLogs24h(),
     queryFn: async () => {
       const to = new Date()
       const from = new Date(to.getTime() - 24 * 60 * 60 * 1000)
       return api.get(`/logs?limit=1000&action=DROP&from=${from.toISOString()}&to=${to.toISOString()}`)
     },
-    refetchInterval: 60000, // Refresh every minute
+    refetchInterval: 60000, // Refresh every minute - appropriate for historical chart data
+    refetchIntervalInBackground: false, // Don't poll when tab is hidden
+    staleTime: 30000, // Consider data fresh for 30 seconds
   })
 
   if (isLoading) return <TableSkeleton rows={4} columns={5} />

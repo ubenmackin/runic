@@ -21,26 +21,44 @@ export default function Services() {
   const openEdit = (s) => { setEditService(s); setFormForEdit(s); setFormErrors({}); setModalOpen(true) }
 
   const { data: services, isLoading } = useQuery({
-    queryKey: QUERY_KEYS.services,
+    queryKey: QUERY_KEYS.services(),
     queryFn: () => api.get('/services'),
   })
 
   const createMutation = useMutation({
     mutationFn: (data) => api.post('/services', data),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: QUERY_KEYS.services }); closeModal() },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: QUERY_KEYS.services() }); closeModal() },
     onError: (err) => setFormErrors({ _general: err.message }),
   })
 
   const updateMutation = useMutation({
     mutationFn: (data) => api.put(`/services/${editService.id}`, data),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: QUERY_KEYS.services }); closeModal() },
-    onError: (err) => setFormErrors({ _general: err.message }),
+    onMutate: async (newData) => {
+      await qc.cancelQueries({ queryKey: QUERY_KEYS.services() })
+      const previousServices = qc.getQueryData(QUERY_KEYS.services())
+      qc.setQueryData(QUERY_KEYS.services(), old => old?.map(s => s.id === editService.id ? { ...s, ...newData } : s) || [])
+      return { previousServices }
+    },
+    onError: (err, newData, context) => {
+      qc.setQueryData(QUERY_KEYS.services(), context.previousServices)
+      setFormErrors({ _general: err.message })
+    },
+    onSettled: () => { qc.invalidateQueries({ queryKey: QUERY_KEYS.services() }); closeModal() },
   })
 
   const deleteMutation = useMutation({
     mutationFn: (id) => api.delete(`/services/${id}`),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: QUERY_KEYS.services }); setDeleteTarget(null) },
-    onError: (err) => showToast(err.message, 'error'),
+    onMutate: async (id) => {
+      await qc.cancelQueries({ queryKey: QUERY_KEYS.services() })
+      const previousServices = qc.getQueryData(QUERY_KEYS.services())
+      qc.setQueryData(QUERY_KEYS.services(), old => old?.filter(s => s.id !== id) || [])
+      return { previousServices }
+    },
+    onError: (err, id, context) => {
+      qc.setQueryData(QUERY_KEYS.services(), context.previousServices)
+      showToast(err.message, 'error')
+    },
+    onSettled: () => { setDeleteTarget(null) },
   })
 
   const handleSubmit = (e) => {

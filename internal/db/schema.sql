@@ -79,3 +79,29 @@ CREATE TABLE IF NOT EXISTS revoked_tokens (
     expires_at DATETIME NOT NULL,
     revoked_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS firewall_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    server_id INTEGER NOT NULL,
+    timestamp DATETIME NOT NULL,
+    direction TEXT,
+    src_ip TEXT NOT NULL,
+    dst_ip TEXT NOT NULL,
+    protocol TEXT NOT NULL,
+    src_port INTEGER,
+    dst_port INTEGER,
+    action TEXT NOT NULL,
+    raw_line TEXT,
+    FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE CASCADE
+);
+
+-- Indexes for frequently queried columns
+CREATE INDEX IF NOT EXISTS idx_servers_last_heartbeat ON servers(last_heartbeat);
+CREATE INDEX IF NOT EXISTS idx_firewall_logs_timestamp ON firewall_logs(timestamp);
+CREATE INDEX IF NOT EXISTS idx_firewall_logs_server_id ON firewall_logs(server_id);
+
+-- Composite indexes for common query patterns
+-- Efficient for log queries filtering by server_id AND ordering by timestamp DESC
+CREATE INDEX IF NOT EXISTS idx_firewall_logs_server_timestamp ON firewall_logs(server_id, timestamp DESC);
+-- Efficient for finding offline servers by status AND last_heartbeat
+CREATE INDEX IF NOT EXISTS idx_servers_status_heartbeat ON servers(status, last_heartbeat);
