@@ -15,6 +15,7 @@ import (
 	"runic/internal/api/events"
 	"runic/internal/api/groups"
 	"runic/internal/api/logs"
+	"runic/internal/api/middleware"
 	"runic/internal/api/policies"
 	"runic/internal/api/servers"
 	"runic/internal/api/services"
@@ -140,7 +141,10 @@ func RegisterRoutes(r *mux.Router, a *API, downloadsDir string) {
 
 	// Downloads route (public - for agent binary downloads)
 	// Must be registered before SPA catch-all handler (in main.go)
-	r.HandleFunc("/downloads/{filename}", downloads.Handler(downloadsDir)).Methods("GET")
+	// Rate limited to 10 requests per minute to prevent abuse
+	downloadRateLimiter := middleware.NewRateLimiter(10, time.Minute)
+	downloadsHandler := downloadRateLimiter.Middleware(http.HandlerFunc(downloads.Handler(downloadsDir)))
+	r.Handle("/downloads/{filename}", downloadsHandler).Methods("GET")
 }
 
 // HealthHandler returns the health status of the service

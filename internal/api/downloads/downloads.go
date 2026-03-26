@@ -7,6 +7,20 @@ import (
 	"strings"
 )
 
+// allowedFiles is a whitelist of filenames that can be served by this handler.
+// Any filename not in this list will be rejected with a 404 Not Found.
+var allowedFiles = map[string]bool{
+	"runic-agent-amd64":   true,
+	"runic-agent-arm":     true,
+	"runic-agent-arm64":   true,
+	"runic-agent.service": true,
+}
+
+// isAllowedFile checks if the given filename is in the allowed files whitelist.
+func isAllowedFile(filename string) bool {
+	return allowedFiles[filename]
+}
+
 // Handler returns an http.HandlerFunc that serves static files from the downloads directory.
 // It extracts the filename from the URL path /downloads/{filename} and serves the file
 // with appropriate security checks to prevent directory traversal attacks.
@@ -32,6 +46,13 @@ func Handler(downloadsDir string) http.HandlerFunc {
 		// Reject any filename containing ".." or "/"
 		if strings.Contains(filename, "..") || strings.Contains(filename, "/") {
 			http.Error(w, "invalid filename", http.StatusBadRequest)
+			return
+		}
+
+		// Security: whitelist-based file validation
+		// Only serve files that are explicitly allowed
+		if !isAllowedFile(filename) {
+			http.Error(w, "file not found", http.StatusNotFound)
 			return
 		}
 
