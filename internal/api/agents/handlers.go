@@ -159,15 +159,14 @@ func RegisterAgent(w http.ResponseWriter, r *http.Request) {
 		}
 		agentKey := generateAgentKey()
 
-		result, err := db.DB.ExecContext(ctx, `INSERT INTO servers (hostname, ip_address, os_type, arch, has_docker, agent_key, agent_token, hmac_key, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'online')`, input.Hostname, input.IP, input.OSType, input.Arch, input.HasDocker, agentKey, agentToken, hmacKey)
+		_, err = db.DB.ExecContext(ctx, `INSERT INTO servers (hostname, ip_address, os_type, arch, has_docker, agent_key, agent_token, hmac_key, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'online')`, input.Hostname, input.IP, input.OSType, input.Arch, input.HasDocker, agentKey, agentToken, hmacKey)
 		if err != nil {
 			runiclog.Error("Failed to create server error", "error", err)
 			http.Error(w, `{"error": "failed to create server"}`, http.StatusInternalServerError)
 			return
 		}
 
-		id, _ := result.LastInsertId()
-		hostID := fmt.Sprintf("host-%d", id)
+		hostID := fmt.Sprintf("host-%s", input.Hostname)
 
 		respondJSON(w, http.StatusCreated, map[string]interface{}{
 			"host_id":                hostID,
@@ -184,7 +183,7 @@ func RegisterAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Existing server — re-issue token (agent reinstall scenario)
-	hostID := fmt.Sprintf("host-%d", existingID)
+	hostID := fmt.Sprintf("host-%s", input.Hostname)
 	if existingToken.Valid && existingToken.String != "" {
 		// Token exists, return it along with existing server info
 		var bundleVersion sql.NullString

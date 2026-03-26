@@ -35,6 +35,10 @@ cat > /etc/runic-agent/config.json << EOF
 EOF
 chmod 600 /etc/runic-agent/config.json
 
+# Create log directory
+mkdir -p /var/log/firewall
+chmod 755 /var/log/firewall
+
 curl -fsSL -o /etc/systemd/system/runic-agent.service \
     "${CONTROL_PLANE_URL}/downloads/runic-agent.service"
 

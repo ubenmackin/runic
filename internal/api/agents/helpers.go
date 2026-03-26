@@ -12,6 +12,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 
 	runiclog "runic/internal/common/log"
+	"runic/internal/db"
 )
 
 // getEnv gets an environment variable or returns a default.
@@ -71,7 +72,8 @@ func generateAgentKey() string {
 	return "agent-key-" + hex.EncodeToString(b)
 }
 
-// getHostIDFromContext safely extracts and validates host_id from request context.
+// getHostIDFromContext safely extracts host_id from request context and looks up the server.
+// The host_id in context comes from the JWT subject claim, which is in format "host-{hostname}".
 func getHostIDFromContext(w http.ResponseWriter, r *http.Request) (string, int, bool) {
 	hostIDVal := r.Context().Value(hostIDKey)
 	if hostIDVal == nil {
@@ -83,10 +85,21 @@ func getHostIDFromContext(w http.ResponseWriter, r *http.Request) (string, int, 
 		http.Error(w, `{"error": "invalid host_id type"}`, http.StatusBadRequest)
 		return "", 0, false
 	}
-	var serverID int
-	if _, err := fmt.Sscanf(hostID, "host-%d", &serverID); err != nil {
+
+	// Extract hostname from host-{hostname} format
+	var hostname string
+	if _, err := fmt.Sscanf(hostID, "host-%s", &hostname); err != nil {
 		http.Error(w, `{"error": "invalid host_id format"}`, http.StatusBadRequest)
 		return "", 0, false
 	}
+
+	// Look up server by hostname to get the numeric ID
+	var serverID int
+	err := db.DB.QueryRowContext(r.Context(), "SELECT id FROM servers WHERE hostname = ?", hostname).Scan(&serverID)
+	if err != nil {
+		http.Error(w, `{"error": "server not found"}`, http.StatusNotFound)
+		return "", 0, false
+	}
+
 	return hostID, serverID, true
 }
