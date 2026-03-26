@@ -59,12 +59,11 @@ const navigate = useNavigate()
     document.documentElement.classList.toggle('dark', darkMode)
   }, [darkMode])
 
-  const toggleDark = () => {
-    const next = !darkMode
-    setDarkMode(next)
-    localStorage.setItem('theme', next ? 'dark' : 'light')
-    document.documentElement.classList.toggle('dark', next)
-  }
+const toggleDark = () => {
+	const next = !darkMode
+	setDarkMode(next)
+	localStorage.setItem('theme', next ? 'dark' : 'light')
+}
 
   const handleLogout = () => {
     logout()

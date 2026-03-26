@@ -58,8 +58,8 @@ func setupTestAPI(t *testing.T) (*API, *sql.DB, func()) {
 	return api, database, cleanup
 }
 
-// TestGetServers tests the GET /servers endpoint
-func TestGetServers(t *testing.T) {
+// TestGetPeers tests the GET /servers endpoint
+func TestGetPeers(t *testing.T) {
 	_, database, cleanup := setupTestAPI(t)
 	defer cleanup()
 
@@ -72,7 +72,7 @@ func TestGetServers(t *testing.T) {
 	req := httptest.NewRequest("GET", "/api/v1/servers", nil)
 	w := httptest.NewRecorder()
 
-	servers.GetServers(w, req)
+	servers.GetPeers(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Errorf("expected status %d, got %d", http.StatusOK, w.Code)
@@ -96,8 +96,8 @@ func TestGetServers(t *testing.T) {
 	}
 }
 
-// TestCreateServer tests the POST /servers endpoint
-func TestCreateServer(t *testing.T) {
+// TestCreatePeer tests the POST /servers endpoint
+func TestCreatePeer(t *testing.T) {
 	tests := []struct {
 		name           string
 		body           string
@@ -165,7 +165,7 @@ func TestCreateServer(t *testing.T) {
 			ctx := context.WithValue(req.Context(), apiContextKey, api)
 			req = req.WithContext(ctx)
 
-			handler := http.HandlerFunc(servers.CreateServer)
+			handler := http.HandlerFunc(servers.CreatePeer)
 			handler(w, req)
 
 			if w.Code != tt.wantCode {
@@ -230,7 +230,7 @@ func TestCompileServer(t *testing.T) {
 			name:     "invalid server ID",
 			serverID: "invalid",
 			wantCode: http.StatusBadRequest,
-			wantErr:  "invalid server ID",
+			wantErr:  "invalid peer ID",
 		},
 	}
 
@@ -246,7 +246,7 @@ func TestCompileServer(t *testing.T) {
 			ctx := context.WithValue(req.Context(), apiContextKey, api)
 			req = req.WithContext(ctx)
 
-			handler := servers.MakeCompileServerHandler(api.Compiler)
+			handler := servers.MakeCompilePeerHandler(api.Compiler)
 			handler(w, req)
 
 			if w.Code != tt.wantCode {
@@ -1037,7 +1037,7 @@ func TestJSONDecoding(t *testing.T) {
 			ctx := context.WithValue(req.Context(), apiContextKey, api)
 			req = req.WithContext(ctx)
 
-			servers.CreateServer(w, req)
+			servers.CreatePeer(w, req)
 
 			if w.Code != tt.wantCode {
 				t.Errorf("expected status %d, got %d", tt.wantCode, w.Code)
@@ -1072,7 +1072,7 @@ func TestConcurrentRequests(t *testing.T) {
 		go func() {
 			req := httptest.NewRequest("GET", "/api/v1/servers", nil)
 			w := httptest.NewRecorder()
-			servers.GetServers(w, req)
+			servers.GetPeers(w, req)
 			done <- true
 		}()
 	}
@@ -1091,7 +1091,7 @@ func TestResponseHeaders(t *testing.T) {
 	req := httptest.NewRequest("GET", "/api/v1/servers", nil)
 	w := httptest.NewRecorder()
 
-	servers.GetServers(w, req)
+	servers.GetPeers(w, req)
 
 	if w.Header().Get("Content-Type") != "application/json" {
 		t.Errorf("expected Content-Type application/json, got %s", w.Header().Get("Content-Type"))
