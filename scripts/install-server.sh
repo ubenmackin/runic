@@ -1033,7 +1033,7 @@ initialize_database() {
         RUNIC_AGENT_JWT_SECRET="$AGENT_JWT_SECRET" \
         RUNIC_CERT_FILE="$CERT_DIR/cert.pem" \
         RUNIC_KEY_FILE="$CERT_DIR/key.pem" \
-        { timeout 5 ./dist/$BINARY_NAME 2>&1 || true; } | grep -q "Starting Runic HTTPS server"; then
+        ( timeout 5 ./dist/$BINARY_NAME 2>&1 || true ) | grep -q "Starting Runic HTTPS server"; then
         log ERROR "Failed to initialize database"
         log ERROR "Server failed to start properly. Check logs above."
         log ERROR "Database path: $DATA_DIR/runic.db"
