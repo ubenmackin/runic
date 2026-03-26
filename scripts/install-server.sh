@@ -1295,11 +1295,11 @@ main() {
     # Create system user
     create_system_user
 
-    # Initialize database
-    initialize_database
-
     # Generate TLS certificate
     generate_self_signed_cert
+
+    # Initialize database
+    initialize_database
 
     # Install systemd service
     install_systemd_service
