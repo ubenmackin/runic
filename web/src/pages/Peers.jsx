@@ -25,60 +25,60 @@ const ARCH_OPTIONS = [
   { value: 'arm', label: 'arm' },
 ]
 
-export default function Servers() {
+export default function Peers() {
   const qc = useQueryClient()
   const showToast = useToastContext()
-  const { modalOpen, setModalOpen, editItem: editServer, setEditItem: setEditServer, form: formData, setForm: setFormData, setFormForEdit, handleOpenAdd, handleCancel: closeModal } = useCrudModal({ hostname: '', ip: '', os: 'ubuntu', arch: 'amd64', has_docker: false, description: '' })
+  const { modalOpen, setModalOpen, editItem: editPeer, setEditItem: setEditPeer, form: formData, setForm: setFormData, setFormForEdit, handleOpenAdd, handleCancel: closeModal } = useCrudModal({ hostname: '', ip: '', os: 'ubuntu', arch: 'amd64', has_docker: false, description: '' })
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [pushStatus, setPushStatus] = useState({})
   const [formErrors, setFormErrors] = useState({})
   const openAdd = () => { setFormErrors({}); handleOpenAdd() }
-  const openEdit = (s) => { setEditServer(s); setFormForEdit(s); setFormErrors({}); setModalOpen(true) }
+  const openEdit = (s) => { setEditPeer(s); setFormForEdit(s); setFormErrors({}); setModalOpen(true) }
 
-  const { data: servers, isLoading } = useQuery({
-    queryKey: QUERY_KEYS.servers,
-    queryFn: () => api.get('/servers'),
+  const { data: peers, isLoading } = useQuery({
+    queryKey: QUERY_KEYS.peers,
+    queryFn: () => api.get('/peers'),
     refetchInterval: 5000,
   })
 
   const createMutation = useMutation({
-    mutationFn: (data) => api.post('/servers', data),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: QUERY_KEYS.servers }); closeModal() },
+    mutationFn: (data) => api.post('/peers', data),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: QUERY_KEYS.peers }); closeModal() },
     onError: (err) => setFormErrors({ _general: err.message }),
   })
 
   const updateMutation = useMutation({
-    mutationFn: (data) => api.put(`/servers/${editServer.id}`, data),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: QUERY_KEYS.servers }); closeModal() },
+    mutationFn: (data) => api.put(`/peers/${editPeer.id}`, data),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: QUERY_KEYS.peers }); closeModal() },
     onError: (err) => setFormErrors({ _general: err.message }),
   })
 
   const deleteMutation = useMutation({
-    mutationFn: (id) => api.delete(`/servers/${id}`),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: QUERY_KEYS.servers }); setDeleteTarget(null) },
+    mutationFn: (id) => api.delete(`/peers/${id}`),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: QUERY_KEYS.peers }); setDeleteTarget(null) },
     onError: (err) => showToast(err.message, 'error'),
   })
 
   const pushMutation = useMutation({
-    mutationFn: async (server) => {
-      setPushStatus(prev => ({ ...prev, [server.id]: 'pushing' }))
-      await api.post(`/servers/${server.id}/push`)
+    mutationFn: async (peer) => {
+      setPushStatus(prev => ({ ...prev, [peer.id]: 'pushing' }))
+      await api.post(`/peers/${peer.id}/push`)
     },
-    onSuccess: (data, server) => {
-      setPushStatus(prev => ({ ...prev, [server.id]: `Pushed v${data.bundle_version}` }))
-      setTimeout(() => setPushStatus(prev => ({ ...prev, [server.id]: null })), 5000)
-      qc.invalidateQueries({ queryKey: QUERY_KEYS.servers })
+    onSuccess: (data, peer) => {
+      setPushStatus(prev => ({ ...prev, [peer.id]: `Pushed v${data.bundle_version}` }))
+      setTimeout(() => setPushStatus(prev => ({ ...prev, [peer.id]: null })), 5000)
+      qc.invalidateQueries({ queryKey: QUERY_KEYS.peers })
     },
-    onError: (err, server) => {
-      setPushStatus(prev => ({ ...prev, [server.id]: `Error: ${err.message}` }))
+    onError: (err, peer) => {
+      setPushStatus(prev => ({ ...prev, [peer.id]: `Error: ${err.message}` }))
       // Auto-clear error after 10 seconds
-      setTimeout(() => setPushStatus(prev => ({ ...prev, [server.id]: null })), 10000)
+      setTimeout(() => setPushStatus(prev => ({ ...prev, [peer.id]: null })), 10000)
     },
-})
+  })
 
   const handleSubmit = (e) => {
     e.preventDefault()
-    if (editServer) updateMutation.mutate(formData)
+    if (editPeer) updateMutation.mutate(formData)
     else createMutation.mutate(formData)
   }
 
@@ -87,14 +87,14 @@ export default function Servers() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Servers</h1>
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Peers</h1>
         <button onClick={openAdd} className="flex items-center gap-2 px-4 py-2 bg-runic-600 hover:bg-runic-700 text-white text-sm font-medium rounded-lg">
-          <Plus className="w-4 h-4" /> Add Server
+          <Plus className="w-4 h-4" /> Add Peer
         </button>
       </div>
 
-{!servers?.length ? (
-      <EmptyState icon={Server} title="No servers yet" message="Add your first server to start managing firewall rules." action="Add Server" onAction={openAdd} />
+    {!peers?.length ? (
+      <EmptyState icon={Server} title="No peers yet" message="Add your first peer to start managing firewall rules." action="Add Peer" onAction={openAdd} />
       ) : (
         <DataTable columns={[
           { key: 'hostname', label: 'Hostname', render: (s) => <span className="font-medium text-gray-900 dark:text-white">{s.hostname}</span> },
@@ -116,7 +116,7 @@ export default function Servers() {
               )}
             </>
           )},
-        ]} data={servers} />
+        ]} data={peers} />
       )}
 
       {/* Add/Edit Modal */}
@@ -124,7 +124,7 @@ export default function Servers() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
           <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl w-full max-w-lg mx-4">
             <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700">
-              <h3 className="text-lg font-semibold text-gray-900 dark:text-white">{editServer ? 'Edit Server' : 'Add Server'}</h3>
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-white">{editPeer ? 'Edit Peer' : 'Add Peer'}</h3>
             </div>
             <form onSubmit={handleSubmit} className="p-6 space-y-4">
               <div>
@@ -156,7 +156,7 @@ export default function Servers() {
               <InlineError message={formErrors._general} />
               <div className="flex justify-end gap-3 pt-2">
                 <button type="button" onClick={closeModal} className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg">Cancel</button>
-                <button type="submit" className="px-4 py-2 text-sm font-medium text-white bg-runic-600 hover:bg-runic-700 rounded-lg">{editServer ? 'Save Changes' : 'Add Server'}</button>
+                <button type="submit" className="px-4 py-2 text-sm font-medium text-white bg-runic-600 hover:bg-runic-700 rounded-lg">{editPeer ? 'Save Changes' : 'Add Peer'}</button>
               </div>
             </form>
           </div>
@@ -165,8 +165,8 @@ export default function Servers() {
 
       {deleteTarget && (
         <ConfirmModal
-          title="Delete Server"
-          message={`Delete server "${deleteTarget.hostname}"? This will also remove all rule bundles.`}
+          title="Delete Peer"
+          message={`Delete peer "${deleteTarget.hostname}"? This will also remove all rule bundles.`}
           onConfirm={() => deleteMutation.mutate(deleteTarget.id)}
           onCancel={() => setDeleteTarget(null)}
           danger

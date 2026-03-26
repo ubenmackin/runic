@@ -1,26 +1,56 @@
-import { useState } from 'react'
+import React, { useState } from 'react'
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { 
-  LayoutDashboard, Server, Users, Briefcase, Shield, FileText, 
-  Menu, X, LogOut, Moon, Sun 
+  LayoutDashboard, Server, Users as UsersIcon, Briefcase, Shield, FileText, 
+  Menu, X, LogOut, Moon, Sun, Key, Settings, User, ChevronDown, ChevronRight
 } from 'lucide-react'
 import { useAuthStore } from '../store'
 
+const NavItem = React.memo(({ to, icon: Icon, label, onClick, isChild = false }) => (
+  <NavLink
+    to={to}
+    end={to === '/'}
+    className={({ isActive }) =>
+      `flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
+        isActive
+          ? 'bg-runic-100 text-runic-700 dark:bg-runic-900 dark:text-runic-100'
+          : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'
+      } ${isChild ? 'ml-8' : ''}`
+    }
+    onClick={onClick}
+  >
+    <Icon className="w-5 h-5" />
+    <span>{label}</span>
+  </NavLink>
+))
+
+NavItem.displayName = 'NavItem'
+
 const navItems = [
-  { to: '/',         icon: LayoutDashboard, label: 'Dashboard' },
-  { to: '/servers',  icon: Server,          label: 'Servers' },
-  { to: '/groups',   icon: Users,           label: 'Groups' },
-  { to: '/services', icon: Briefcase,        label: 'Services' },
-  { to: '/policies', icon: Shield,           label: 'Policies' },
-  { to: '/logs',     icon: FileText,         label: 'Logs' },
+  { to: '/',              icon: LayoutDashboard, label: 'Dashboard' },
+  { to: '/logs',          icon: FileText,         label: 'Logs' },
+  { to: '/setup-keys',    icon: Key,              label: 'Setup Keys' },
+  {
+    label: 'Access Control',
+    icon: Shield,
+    children: [
+      { to: '/peers',     icon: Server,           label: 'Peers' },
+      { to: '/groups',    icon: UsersIcon,        label: 'Groups' },
+      { to: '/services',  icon: Briefcase,        label: 'Services' },
+      { to: '/policies',  icon: Shield,           label: 'Policies' },
+    ]
+  },
+  { to: '/users',         icon: User,             label: 'Users' },
+  { to: '/settings',      icon: Settings,         label: 'Settings' },
 ]
 
 export default function Layout() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
-  const [darkMode, setDarkMode] = useState(() => 
-    localStorage.getItem('theme') === 'dark' || 
+  const [darkMode, setDarkMode] = useState(() =>
+    localStorage.getItem('theme') === 'dark' ||
     (!localStorage.getItem('theme') && window.matchMedia('(prefers-color-scheme: dark)').matches)
   )
+  const [expandedItems, setExpandedItems] = useState({})
   const logout = useAuthStore(s => s.logout)
   const navigate = useNavigate()
 
@@ -34,6 +64,13 @@ export default function Layout() {
   const handleLogout = () => {
     logout()
     navigate('/login')
+  }
+
+  const toggleExpanded = (label) => {
+    setExpandedItems(prev => ({
+      ...prev,
+      [label]: !prev[label]
+    }))
   }
 
   return (
@@ -59,24 +96,58 @@ export default function Layout() {
           </button>
         </div>
         <nav className="mt-4 px-2 space-y-1">
-          {navItems.map(({ to, icon: Icon, label }) => (
-            <NavLink
-              key={to}
-              to={to}
-              end={to === '/'}
-              className={({ isActive }) =>
-                `flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
-                  isActive
-                    ? 'bg-runic-100 text-runic-700 dark:bg-runic-900 dark:text-runic-100'
-                    : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'
-                }`
-              }
-              onClick={() => setSidebarOpen(false)}
-            >
-              <Icon className="w-5 h-5" />
-              <span>{label}</span>
-            </NavLink>
-          ))}
+          {navItems.map((item) => {
+            if (item.children) {
+              // Expandable menu item
+              const isExpanded = expandedItems[item.label] || false
+              return (
+                <div key={item.label}>
+                  <button
+                    onClick={() => toggleExpanded(item.label)}
+                    className={`w-full flex items-center justify-between gap-3 px-4 py-3 rounded-lg transition-colors ${
+                      'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <item.icon className="w-5 h-5" />
+                      <span>{item.label}</span>
+                    </div>
+                    {isExpanded ? (
+                      <ChevronDown className="w-4 h-4" />
+                    ) : (
+                      <ChevronRight className="w-4 h-4" />
+                    )}
+                  </button>
+                  {isExpanded && (
+                    <div className="ml-4 mt-1 space-y-1">
+                      {item.children.map((child) => (
+                        <NavItem
+                          key={child.to}
+                          to={child.to}
+                          icon={child.icon}
+                          label={child.label}
+                          onClick={() => setSidebarOpen(false)}
+                          isChild
+                        />
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )
+            }
+
+            // Regular menu item
+            return (
+              <NavItem
+                key={item.to}
+                to={item.to}
+                icon={item.icon}
+                label={item.label}
+                onClick={() => setSidebarOpen(false)}
+                isChild={false}
+              />
+            )
+          })}
         </nav>
       </aside>
 

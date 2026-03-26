@@ -14,25 +14,25 @@ export default function Dashboard() {
     queryFn: () => api.get('/dashboard'),
   })
 
-  const serversQuery = useQuery({
-    queryKey: QUERY_KEYS.servers,
-    queryFn: () => api.get('/servers'),
-    refetchInterval: 5000,
-  })
+const peersQuery = useQuery({
+  queryKey: QUERY_KEYS.peers,
+  queryFn: () => api.get('/peers'),
+  refetchInterval: 5000,
+})
 
-  const pushAllMutation = useMutation({
-    mutationFn: async (serverId) => {
-      await api.post(`/servers/${serverId}/push`)
-    },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: QUERY_KEYS.servers })
-    },
-  })
+const pushAllMutation = useMutation({
+  mutationFn: async (peerId) => {
+    await api.post(`/peers/${peerId}/push`)
+  },
+  onSuccess: () => {
+    qc.invalidateQueries({ queryKey: QUERY_KEYS.peers })
+  },
+})
 
-  const handlePushAll = async () => {
-    if (!serversQuery.data) return
-    await Promise.all(serversQuery.data.map(server => pushAllMutation.mutateAsync(server.id)))
-  }
+const handlePushAll = async () => {
+  if (!peersQuery.data) return
+  await Promise.all(peersQuery.data.map(peer => pushAllMutation.mutateAsync(peer.id)))
+}
 
   // Logs query for chart
   const { data: blockedLogs } = useQuery({
@@ -62,7 +62,7 @@ export default function Dashboard() {
           </Link>
           <button
             onClick={handlePushAll}
-            disabled={pushAllMutation.isPending || !serversQuery.data?.length}
+            disabled={pushAllMutation.isPending || !peersQuery.data?.length}
             className="px-4 py-2 bg-runic-600 hover:bg-runic-700 text-white text-sm font-medium rounded-lg disabled:opacity-50"
           >
             {pushAllMutation.isPending ? 'Pushing...' : 'Push All Rules'}
@@ -108,19 +108,19 @@ export default function Dashboard() {
                 <th className="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">Bundle</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-              {serversQuery.data?.map(server => (
-                <tr key={server.id} className="hover:bg-gray-50 dark:hover:bg-gray-700">
-                  <td className="px-4 py-3 text-gray-900 dark:text-white font-medium">{server.hostname}</td>
-                  <td className="px-4 py-3 text-gray-500 dark:text-gray-400">{server.ip_address}</td>
-                  <td className="px-4 py-3"><StatusBadge status={server.status} /></td>
-                  <td className="px-4 py-3 text-gray-500 dark:text-gray-400">
-                    {formatRelativeTime(server.last_heartbeat)}
-                  </td>
-                  <td className="px-4 py-3 text-gray-500 dark:text-gray-400">v{server.bundle_version || 0}</td>
-                </tr>
-              ))}
-              {!serversQuery.data?.length && (
+<tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+          {peersQuery.data?.map(peer => (
+            <tr key={peer.id} className="hover:bg-gray-50 dark:hover:bg-gray-700">
+              <td className="px-4 py-3 text-gray-900 dark:text-white font-medium">{peer.hostname}</td>
+              <td className="px-4 py-3 text-gray-500 dark:text-gray-400">{peer.ip_address}</td>
+              <td className="px-4 py-3"><StatusBadge status={peer.status} /></td>
+              <td className="px-4 py-3 text-gray-500 dark:text-gray-400">
+                {formatRelativeTime(peer.last_heartbeat)}
+              </td>
+              <td className="px-4 py-3 text-gray-500 dark:text-gray-400">v{peer.bundle_version || 0}</td>
+            </tr>
+          ))}
+          {!peersQuery.data?.length && (
                 <tr>
                   <td colSpan={5} className="px-4 py-8 text-center text-gray-500">
                     <div className="flex flex-col items-center gap-2">

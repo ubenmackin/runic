@@ -31,10 +31,10 @@ export default function Policies() {
     queryFn: () => api.get('/policies'),
   })
 
-  const { data: servers } = useQuery({
-    queryKey: QUERY_KEYS.servers,
-    queryFn: () => api.get('/servers'),
-  })
+const { data: peers } = useQuery({
+  queryKey: QUERY_KEYS.peers,
+  queryFn: () => api.get('/peers'),
+})
 
   const { data: groups } = useQuery({
     queryKey: QUERY_KEYS.groups,
@@ -46,7 +46,7 @@ export default function Policies() {
     queryFn: () => api.get('/services'),
   })
 
-  const serverOptions = (servers || []).map(s => ({ value: s.id, label: s.hostname }))
+  const serverOptions = (peers || []).map(s => ({ value: s.id, label: s.hostname }))
   const groupOptions = (groups || []).map(g => ({ value: g.id, label: g.name }))
   const serviceOptions = (services || []).map(s => ({ value: s.id, label: s.name }))
 
@@ -108,7 +108,7 @@ export default function Policies() {
     return true
   }).sort((a, b) => a.priority - b.priority)
 
-  const getServerHostname = (id) => servers?.find(s => s.id === id)?.hostname || id
+  const getServerHostname = (id) => peers?.find(s => s.id === id)?.hostname || id
   const getGroupName = (id) => groups?.find(g => g.id === id)?.name || id
   const getServiceName = (id) => services?.find(s => s.id === id)?.name || id
 

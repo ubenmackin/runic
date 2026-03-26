@@ -4,11 +4,14 @@ import { SetupProvider, useSetup } from './contexts/SetupContext'
 import Layout from './components/Layout'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
-import Servers from './pages/Servers'
+import Peers from './pages/Peers'
 import Groups from './pages/Groups'
 import Services from './pages/Services'
 import Policies from './pages/Policies'
 import Logs from './pages/Logs'
+import SetupKeys from './pages/SetupKeys'
+import Users from './pages/Users'
+import Settings from './pages/Settings'
 import { useAuthStore } from './store'
 import { ToastProvider } from './hooks/ToastContext'
 import ErrorBoundary from './components/ErrorBoundary'
@@ -66,11 +69,14 @@ export default function App() {
                 <Route path="/setup" element={<Login mode="setup" />} />
                 <Route path="/" element={<PrivateRoute><Layout /></PrivateRoute>}>
                   <Route index element={<Dashboard />} />
-                  <Route path="servers"  element={<Servers />} />
-                  <Route path="groups"   element={<Groups />} />
-                  <Route path="services" element={<Services />} />
-                  <Route path="policies" element={<Policies />} />
-                  <Route path="logs"     element={<Logs />} />
+                  <Route path="peers" element={<Peers />} />
+                  <Route path="groups"    element={<Groups />} />
+                  <Route path="services"  element={<Services />} />
+                  <Route path="policies"  element={<Policies />} />
+                  <Route path="logs"      element={<Logs />} />
+                  <Route path="setup-keys" element={<SetupKeys />} />
+                  <Route path="users"     element={<Users />} />
+                  <Route path="settings"  element={<Settings />} />
                 </Route>
               </Routes>
             </BrowserRouter>

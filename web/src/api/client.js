@@ -96,14 +96,14 @@ export const api = {
 }
 
 export const QUERY_KEYS = {
-  servers:  ['servers'],
-  server:   (id) => ['servers', id],
-  groups:   ['groups'],
-  group:    (id) => ['groups', id],
-  members:  (id) => ['groups', id, 'members'],
+  peers: ['peers'],
+  peer: (id) => ['peers', id],
+  groups: ['groups'],
+  group: (id) => ['groups', id],
+  members: (id) => ['groups', id, 'members'],
   services: ['services'],
   policies: ['policies'],
-  logs:     (params) => ['logs', params],
+  logs: (params) => ['logs', params],
   dashboard:['dashboard'],
   blockedLogs24h: ['blocked-logs-24h'],
 }

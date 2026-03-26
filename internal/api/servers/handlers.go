@@ -19,7 +19,7 @@ type Server struct {
 	HasDocker bool   `json:"has_docker"`
 }
 
-func GetServers(w http.ResponseWriter, r *http.Request) {
+func GetPeers(w http.ResponseWriter, r *http.Request) {
 	if db.DB == nil {
 		common.RespondError(w, http.StatusInternalServerError, "database not initialized")
 		return
@@ -47,7 +47,7 @@ func GetServers(w http.ResponseWriter, r *http.Request) {
 	common.RespondJSON(w, http.StatusOK, servers)
 }
 
-func CreateServer(w http.ResponseWriter, r *http.Request) {
+func CreatePeer(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		Hostname  string `json:"hostname"`
 		IPAddress string `json:"ip_address"`
@@ -78,12 +78,12 @@ func CreateServer(w http.ResponseWriter, r *http.Request) {
 	common.RespondJSON(w, http.StatusCreated, map[string]int64{"id": id})
 }
 
-// MakeCompileServerHandler injects the Compiler dependency for server rule compilation.
-func MakeCompileServerHandler(compiler *engine.Compiler) http.HandlerFunc {
+// MakeCompilePeerHandler injects the Compiler dependency for peer rule compilation.
+func MakeCompilePeerHandler(compiler *engine.Compiler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, err := common.ParseIDParam(r, "id")
 		if err != nil {
-			common.RespondError(w, http.StatusBadRequest, "invalid server ID")
+			common.RespondError(w, http.StatusBadRequest, "invalid peer ID")
 			return
 		}
 

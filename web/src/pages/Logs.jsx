@@ -42,11 +42,11 @@ export default function Logs() {
     refetchInterval: mode === 'historical' ? false : false,
   })
 
-  // Servers for filter dropdown
-  const { data: servers } = useQuery({
-    queryKey: QUERY_KEYS.servers,
-    queryFn: () => api.get('/servers'),
-  })
+// Peers for filter dropdown
+const { data: peers } = useQuery({
+  queryKey: QUERY_KEYS.peers,
+  queryFn: () => api.get('/peers'),
+})
 
   // WebSocket connection for live mode
   useEffect(() => {
@@ -203,7 +203,7 @@ export default function Logs() {
               className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm min-w-[150px]"
             >
               <option value="">All servers</option>
-              {servers?.map(s => (
+              {peers?.map(s => (
                 <option key={s.id} value={s.id}>{s.hostname}</option>
               ))}
             </select>
