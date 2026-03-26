@@ -12,7 +12,7 @@ esac
 CONTROL_PLANE_URL="${1:-}"
 if [ -z "$CONTROL_PLANE_URL" ]; then
     echo "Usage: install-agent.sh <control-plane-url>"
-    echo "Example: install-agent.sh https://runic.home.lan:8080"
+    echo "Example: install-agent.sh https://runic.home.lan:60443"
     exit 1
 fi
 

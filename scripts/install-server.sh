@@ -44,7 +44,7 @@ BINARY_NAME="runic-server"
 SERVICE_NAME="runic-server"
 
 # Defaults
-DEFAULT_CONTROL_PLANE="localhost:8080"
+DEFAULT_CONTROL_PLANE="localhost:60443"
 RUNIC_PORT="${RUNIC_PORT:-60443}"
 REPO_URL="https://github.com/ubenmackin/runic.git"
 REPO_BRANCH="main"
@@ -679,7 +679,7 @@ Usage:
 Options:
   --skip-build           Skip building, assume binaries already exist
   --non-interactive      Run without prompts (use defaults)
-  --control-plane URL    Control plane URL (default: localhost:8080)
+  --control-plane URL    Control plane URL (default: localhost:60443)
   --jwt-secret SECRET    JWT secret (auto-generated if not provided)
   --hmac-key KEY         HMAC key for policy signing (auto-generated if not provided)
   -h, --help             Show this help message
@@ -689,7 +689,7 @@ Examples:
   sudo $0
 
   # Non-interactive with custom values
-  sudo $0 --non-interactive --control-plane 192.168.1.100:8080
+  sudo $0 --non-interactive --control-plane 192.168.1.100:60443
 
   # Skip build (for development)
   sudo $0 --skip-build
