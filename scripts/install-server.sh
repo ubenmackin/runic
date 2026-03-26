@@ -1021,6 +1021,8 @@ initialize_database() {
     export RUNIC_JWT_SECRET="$JWT_SECRET"
     export RUNIC_AGENT_JWT_SECRET="$AGENT_JWT_SECRET"
     export RUNIC_DB_PATH="$DATA_DIR/runic.db"
+    export RUNIC_CERT_FILE="$CERT_DIR/cert.pem"
+    export RUNIC_KEY_FILE="$CERT_DIR/key.pem"
     
     # Create database (the server will create it on startup)
     # Run briefly and check if database is created
@@ -1029,7 +1031,9 @@ initialize_database() {
         RUNIC_HMAC_KEY="$HMAC_KEY" \
         RUNIC_JWT_SECRET="$JWT_SECRET" \
         RUNIC_AGENT_JWT_SECRET="$AGENT_JWT_SECRET" \
-        timeout 5 ./dist/$BINARY_NAME 2>&1 | grep -q "Server started"; then
+        RUNIC_CERT_FILE="$CERT_DIR/cert.pem" \
+        RUNIC_KEY_FILE="$CERT_DIR/key.pem" \
+        timeout 5 ./dist/$BINARY_NAME 2>&1 | grep -q "Starting Runic HTTPS server"; then
         log ERROR "Failed to initialize database"
         log ERROR "Server failed to start properly. Check logs above."
         log ERROR "Database path: $DATA_DIR/runic.db"
