@@ -1024,17 +1024,64 @@ initialize_database() {
     export RUNIC_CERT_FILE="$CERT_DIR/cert.pem"
     export RUNIC_KEY_FILE="$CERT_DIR/key.pem"
     
+    # === DEBUG: Log diagnostic information before running server ===
+    log DEBUG "=== Server Startup Diagnostics ==="
+    log DEBUG "Working directory: $(pwd)"
+    log DEBUG "Binary path: $INSTALL_DIR/dist/$BINARY_NAME"
+    log DEBUG "Binary exists: $(test -f "./dist/$BINARY_NAME" && echo "YES" || echo "NO")"
+    log DEBUG "Binary executable: $(test -x "./dist/$BINARY_NAME" && echo "YES" || echo "NO")"
+    log DEBUG "Binary owner: $(ls -la ./dist/$BINARY_NAME 2>/dev/null | awk '{print $3":"$4}' || echo "N/A")"
+    log DEBUG "DATA_DIR: $DATA_DIR"
+    log DEBUG "DATA_DIR exists: $(test -d "$DATA_DIR" && echo "YES" || echo "NO")"
+    log DEBUG "DATA_DIR writable: $(test -w "$DATA_DIR" && echo "YES" || echo "NO")"
+    log DEBUG "DB path: $DATA_DIR/runic.db"
+    log DEBUG "DB exists: $(test -f "$DATA_DIR/runic.db" && echo "YES" || echo "NO")"
+    log DEBUG "CERT_FILE: $CERT_DIR/cert.pem"
+    log DEBUG "CERT_FILE exists: $(test -f "$CERT_DIR/cert.pem" && echo "YES" || echo "NO")"
+    log DEBUG "KEY_FILE: $CERT_DIR/key.pem"
+    log DEBUG "KEY_FILE exists: $(test -f "$CERT_DIR/key.pem" && echo "YES" || echo "NO")"
+    log DEBUG "RUNIC_HMAC_KEY set: $(test -n "$RUNIC_HMAC_KEY" && echo "YES (${#RUNIC_HMAC_KEY} chars)" || echo "NO")"
+    log DEBUG "RUNIC_JWT_SECRET set: $(test -n "$RUNIC_JWT_SECRET" && echo "YES (${#RUNIC_JWT_SECRET} chars)" || echo "NO")"
+    log DEBUG "RUNIC_AGENT_JWT_SECRET set: $(test -n "$RUNIC_AGENT_JWT_SECRET" && echo "YES (${#RUNIC_AGENT_JWT_SECRET} chars)" || echo "NO")"
+    log DEBUG "User context: $(whoami)"
+    log DEBUG "=== End Diagnostics ==="
+    
     # Create database (the server will create it on startup)
     # Run briefly and check if database is created
+    # Capture full output to temp file for debugging
+    local server_output_file
+    server_output_file=$(mktemp)
+    trap "rm -f '$server_output_file'" RETURN
+    
     log DEBUG "Starting server to initialize database..."
-if ! timeout 5 ./dist/$BINARY_NAME 2>&1 | grep -q "Starting Runic HTTPS server"; then
+    log DEBUG "Command: timeout 5 ./dist/$BINARY_NAME"
+    log DEBUG "--- Server Output Start ---"
+    
+    # Run server and capture ALL output
+    local server_exit_code=0
+    timeout 5 ./dist/$BINARY_NAME 2>&1 | tee "$server_output_file" || server_exit_code=$?
+    
+    log DEBUG "--- Server Output End ---"
+    log DEBUG "Server exit code: $server_exit_code"
+    
+    # Check if the success message appeared
+    if grep -q "Starting Runic HTTPS server" "$server_output_file"; then
+        log DEBUG "SUCCESS: Found 'Starting Runic HTTPS server' in output"
+    else
         log ERROR "Failed to initialize database"
-        log ERROR "Server failed to start properly. Check logs above."
+        log ERROR "Server exit code: $server_exit_code"
+        log ERROR "Full server output:"
+        while IFS= read -r line; do
+            log ERROR "  $line"
+        done < "$server_output_file"
         log ERROR "Database path: $DATA_DIR/runic.db"
         log ERROR "DATA_DIR exists: $(test -d "$DATA_DIR" && echo "yes" || echo "no")"
         log ERROR "DATA_DIR writable: $(test -w "$DATA_DIR" && echo "yes" || echo "no")"
+        rm -f "$server_output_file"
         exit 1
     fi
+    
+    rm -f "$server_output_file"
     
     # Verify database was created
     if [ -f "$DATA_DIR/runic.db" ]; then
