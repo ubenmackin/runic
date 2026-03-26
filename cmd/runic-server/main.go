@@ -2,6 +2,10 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/pem"
+	"fmt"
 	"io/fs"
 	"log"
 	"net/http"
@@ -19,7 +23,80 @@ import (
 	"runic/internal/engine"
 )
 
+// validateCertificate reads and validates certificate and key files in PEM format
+func validateCertificate(certFile, keyFile string) error {
+	// Check if files exist
+	if _, err := os.Stat(certFile); os.IsNotExist(err) {
+		return fmt.Errorf("certificate file not found: %s", certFile)
+	}
+	if _, err := os.Stat(keyFile); os.IsNotExist(err) {
+		return fmt.Errorf("key file not found: %s", keyFile)
+	}
+
+	// Read certificate file
+	certPEM, err := os.ReadFile(certFile)
+	if err != nil {
+		return fmt.Errorf("failed to read certificate file: %w", err)
+	}
+
+	// Read key file
+	keyPEM, err := os.ReadFile(keyFile)
+	if err != nil {
+		return fmt.Errorf("failed to read key file: %w", err)
+	}
+
+	// Validate certificate PEM format
+	certBlock, _ := pem.Decode(certPEM)
+	if certBlock == nil {
+		return fmt.Errorf("failed to decode certificate PEM block from %s", certFile)
+	}
+	if certBlock.Type != "CERTIFICATE" {
+		return fmt.Errorf("invalid PEM block type in certificate file: expected CERTIFICATE, got %s", certBlock.Type)
+	}
+
+	// Validate key PEM format
+	keyBlock, _ := pem.Decode(keyPEM)
+	if keyBlock == nil {
+		return fmt.Errorf("failed to decode key PEM block from %s", keyFile)
+	}
+	if keyBlock.Type != "PRIVATE KEY" && !strings.HasPrefix(keyBlock.Type, "EC PRIVATE KEY") &&
+		!strings.HasPrefix(keyBlock.Type, "RSA PRIVATE KEY") {
+		return fmt.Errorf("invalid key PEM block type: expected PRIVATE key type, got %s", keyBlock.Type)
+	}
+
+	// Parse certificate to ensure it's valid
+	cert, err := x509.ParseCertificate(certBlock.Bytes)
+	if err != nil {
+		return fmt.Errorf("failed to parse certificate: %w", err)
+	}
+
+	log.Printf("Certificate validated successfully (Subject: %s, Expires: %s)", cert.Subject.CommonName, cert.NotAfter.Format(time.RFC3339))
+
+	return nil
+}
+
 func main() {
+	// Get TLS certificate paths from environment variables
+	certFile := os.Getenv("RUNIC_CERT_FILE")
+	keyFile := os.Getenv("RUNIC_KEY_FILE")
+
+	if certFile == "" || keyFile == "" {
+		log.Fatal("RUNIC_CERT_FILE and RUNIC_KEY_FILE must be set for HTTPS mode")
+	}
+
+	// Validate certificates before starting server
+	log.Printf("Validating TLS certificates (CERT: %s, KEY: %s)", certFile, keyFile)
+	if err := validateCertificate(certFile, keyFile); err != nil {
+		log.Fatalf("Certificate validation failed: %v", err)
+	}
+
+	// Get port from environment variable or use default
+	port := os.Getenv("RUNIC_PORT")
+	if port == "" {
+		port = "60443"
+	}
+	addr := ":" + port
+
 	dbPath := os.Getenv("RUNIC_DB_PATH")
 	if dbPath == "" {
 		dbPath = "./runic.db"
@@ -86,13 +163,36 @@ func main() {
 	// Start token revocation cleanup goroutine (prunes expired entries hourly)
 	go startTokenCleanup()
 
+	// Configure TLS with modern cipher suites and minimum version TLS 1.2
+	tlsConfig := &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		CipherSuites: []uint16{
+			tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+			tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305,
+			tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+			tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,
+			tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+			tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+			tls.TLS_AES_256_GCM_SHA384,       // TLS 1.3
+			tls.TLS_CHACHA20_POLY1305_SHA256, // TLS 1.3
+			tls.TLS_AES_128_GCM_SHA256,       // TLS 1.3
+		},
+		PreferServerCipherSuites: true,
+	}
+
+	srv := &http.Server{
+		Addr:      addr,
+		Handler:   r,
+		TLSConfig: tlsConfig,
+	}
+
 	// Wait for SIGINT/SIGTERM to shut down
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
-	log.Println("Starting Runic server on :8080")
+	log.Printf("Starting Runic HTTPS server on %s (CERT: %s, KEY: %s)", addr, certFile, keyFile)
 	go func() {
-		if err := http.ListenAndServe(":8080", r); err != nil {
+		if err := srv.ListenAndServeTLS(certFile, keyFile); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Server failed: %v", err)
 		}
 	}()

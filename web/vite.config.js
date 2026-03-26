@@ -5,7 +5,20 @@ export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
-      '/api': 'http://localhost:8080'
+      '/api': {
+        target: 'http://localhost:8080',
+        changeOrigin: true,
+      }
+    }
+  },
+  // Preview server configuration (for production build testing)
+  preview: {
+    proxy: {
+      '/api': {
+        target: 'https://localhost:60443',
+        changeOrigin: true,
+        secure: false, // Allow self-signed certificates
+      }
     }
   },
   build: {

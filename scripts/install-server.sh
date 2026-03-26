@@ -37,6 +37,7 @@ NC='\033[0m' # No Color
 # Installation paths
 INSTALL_DIR="/opt/runic"
 DATA_DIR="/opt/runic/data"
+CERT_DIR="${INSTALL_DIR}/cert"
 SOURCE_DIR="/opt/runic/src"
 LOG_FILE="/var/log/runic-install.log"
 BINARY_NAME="runic-server"
@@ -44,6 +45,7 @@ SERVICE_NAME="runic-server"
 
 # Defaults
 DEFAULT_CONTROL_PLANE="localhost:8080"
+RUNIC_PORT="${RUNIC_PORT:-60443}"
 REPO_URL="https://github.com/ubenmackin/runic.git"
 REPO_BRANCH="main"
 
@@ -202,17 +204,94 @@ prompt_with_default() {
 generate_secret() {
     # Check if openssl is available
     command -v openssl >/dev/null 2>&1 || { log ERROR "openssl is required but not installed"; exit 1; }
-    
+
     local secret
     secret=$(openssl rand -hex 32)
-    
+
     # Validate secret length (should be 64 hex characters)
     if [ ${#secret} -ne 64 ]; then
         log ERROR "Generated secret is not 64 characters: ${#secret}"
         exit 1
     fi
-    
+
     echo "$secret"
+}
+
+generate_self_signed_cert() {
+    log_section "Generating TLS Certificate"
+
+    # Check if openssl is available
+    command -v openssl >/dev/null 2>&1 || { log ERROR "openssl is required for certificate generation"; exit 1; }
+
+    # Check if certificates already exist
+    if [ -f "$CERT_DIR/key.pem" ] && [ -f "$CERT_DIR/cert.pem" ]; then
+        log INFO "TLS certificates already exist at $CERT_DIR"
+        local response
+        response=$(prompt_yes_no "Regenerate certificates?" "no")
+        if [ "$response" = "no" ]; then
+            log INFO "Using existing certificates"
+            return 0
+        fi
+        log WARN "Removing existing certificates..."
+        rm -f "$CERT_DIR/key.pem" "$CERT_DIR/cert.pem"
+    fi
+
+    # Create certificate directory with proper ownership
+    if [ ! -d "$CERT_DIR" ]; then
+        log INFO "Creating certificate directory: $CERT_DIR"
+        mkdir -p "$CERT_DIR" || { log ERROR "Failed to create certificate directory"; exit 1; }
+    fi
+
+    # Set ownership of certificate directory
+    if ! chown -R runic:runic "$CERT_DIR" 2>> "$LOG_FILE"; then
+        log ERROR "Failed to set ownership on certificate directory"
+        exit 1
+    fi
+
+    # Generate 4096-bit RSA private key
+    log INFO "Generating 4096-bit RSA private key..."
+    if ! openssl genrsa -out "$CERT_DIR/key.pem" 4096 2>> "$LOG_FILE"; then
+        log ERROR "Failed to generate private key"
+        exit 1
+    fi
+
+    # Set strict permissions on private key (640 - readable by owner and group)
+    if ! chmod 640 "$CERT_DIR/key.pem"; then
+        log ERROR "Failed to set permissions on private key"
+        exit 1
+    fi
+
+    # Generate self-signed certificate valid for 365 days
+    log INFO "Generating self-signed certificate valid for 365 days..."
+    if ! openssl req -new -x509 -key "$CERT_DIR/key.pem" -out "$CERT_DIR/cert.pem" \
+        -days 365 -subj "/CN=localhost/O=Runic/C=US" 2>> "$LOG_FILE"; then
+        log ERROR "Failed to generate certificate"
+        rm -f "$CERT_DIR/key.pem"
+        exit 1
+    fi
+
+    # Set permissions on certificate (644 - readable by all)
+    if ! chmod 644 "$CERT_DIR/cert.pem"; then
+        log ERROR "Failed to set permissions on certificate"
+        rm -f "$CERT_DIR/key.pem"
+        exit 1
+    fi
+
+    # Verify certificates were created
+    if [ ! -f "$CERT_DIR/key.pem" ] || [ ! -f "$CERT_DIR/cert.pem" ]; then
+        log ERROR "Certificates were not created successfully"
+        exit 1
+    fi
+
+    # Set ownership again to ensure runic group has access
+    chown runic:runic "$CERT_DIR/key.pem" "$CERT_DIR/cert.pem" 2>> "$LOG_FILE" || {
+        log ERROR "Failed to set ownership on certificate files"
+        exit 1
+    }
+
+    log SUCCESS "TLS certificates generated successfully:"
+    log SUCCESS "  • Private key:  $CERT_DIR/key.pem (640, runic:runic)"
+    log SUCCESS "  • Certificate:   $CERT_DIR/cert.pem (644, runic:runic)"
 }
 
 migrate_secrets_from_service_file() {
@@ -471,6 +550,11 @@ create_new_secrets_file() {
 RUNIC_JWT_SECRET=$jwt_secret
 RUNIC_HMAC_KEY=$hmac_key
 RUNIC_AGENT_JWT_SECRET=$agent_jwt_secret
+
+# TLS Configuration
+RUNIC_CERT_FILE=$CERT_DIR/cert.pem
+RUNIC_KEY_FILE=$CERT_DIR/key.pem
+RUNIC_PORT=$RUNIC_PORT
 EOF
     then
         log ERROR "Failed to write secrets to $env_file"
@@ -1014,13 +1098,16 @@ EnvironmentFile=$INSTALL_DIR/.env
 # Environment variables for non-secret configuration
 Environment=RUNIC_CONTROL_PLANE=$CONTROL_PLANE_URL
 Environment=RUNIC_DB_PATH=$DATA_DIR/runic.db
+Environment=RUNIC_CERT_FILE=$CERT_DIR/cert.pem
+Environment=RUNIC_KEY_FILE=$CERT_DIR/key.pem
+Environment=RUNIC_PORT=$RUNIC_PORT
 
 # Security hardening
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectHome=yes
 ProtectSystem=strict
-ReadWritePaths=$DATA_DIR
+ReadWritePaths=$DATA_DIR $CERT_DIR
 ReadOnlyPaths=/etc/ssl/certs
 
 # Resource limits
@@ -1097,43 +1184,72 @@ start_service() {
 
 show_status() {
     log_section "Installation Complete!"
-    
+
     echo -e "${GREEN}╔════════════════════════════════════════════════════════════════╗${NC}"
     echo -e "${GREEN}║           Runic Firewall Management System Installed           ║${NC}"
     echo -e "${GREEN}╚════════════════════════════════════════════════════════════════╝${NC}"
     echo ""
-    
+
     echo -e "${BOLD}Installation Details:${NC}"
     echo "  • Install Directory:  $INSTALL_DIR"
     echo "  • Data Directory:      $DATA_DIR"
+    echo "  • Cert Directory:     $CERT_DIR"
     echo "  • Control Plane URL:  $CONTROL_PLANE_URL"
+    echo "  • Server Port:        $RUNIC_PORT (HTTPS)"
     echo "  • Log File:           $LOG_FILE"
     echo ""
-    
+
     echo -e "${BOLD}Service Status:${NC}"
     if check_command systemctl; then
         systemctl status "$SERVICE_NAME" --no-pager -l || true
     fi
     echo ""
-    
+
     echo -e "${BOLD}Next Steps:${NC}"
-    echo "  1. Access the web interface:  http://$CONTROL_PLANE_URL"
+    echo "  1. Access the web interface:  https://$CONTROL_PLANE_URL:$RUNIC_PORT"
     echo "  2. Login with admin credentials"
     echo "  3. Register your first firewall agent"
     echo ""
-    
+
     echo -e "${BOLD}Useful Commands:${NC}"
     echo "  • View logs:     journalctl -u $SERVICE_NAME -f"
     echo "  • Restart:       sudo systemctl restart $SERVICE_NAME"
     echo "  • Stop:          sudo systemctl stop $SERVICE_NAME"
     echo "  • Check status:  sudo systemctl status $SERVICE_NAME"
     echo ""
-    
+
+    echo -e "${BOLD}TLS Certificate Information:${NC}"
+    echo "  • Certificate:   $CERT_DIR/cert.pem"
+    echo "  • Private Key:   $CERT_DIR/key.pem"
+    echo ""
+    echo -e "${YELLOW}⚠ Self-Signed Certificate Warning:${NC}"
+    echo -e "${YELLOW}  This installation uses a self-signed certificate. Your browser may show${NC}"
+    echo -e "${YELLOW}  a security warning. This is expected and safe for this deployment.${NC}"
+    echo ""
+    echo -e "${YELLOW}  To proceed in most browsers:${NC}"
+    echo -e "${YELLOW}  1. Click 'Advanced' or 'Show Details'${NC}"
+    echo -e "${YELLOW}  2. Click 'Proceed to ...' or 'Accept Risk'${NC}"
+    echo -e "${YELLOW}  3. You will only need to do this once (or until cert expires)${NC}"
+    echo ""
+
+    echo -e "${BOLD}Using Custom Certificates:${NC}"
+    echo "  To use your own TLS certificates instead of the self-signed ones:"
+    echo ""
+    echo "  1. Place your certificate at: $CERT_DIR/cert.pem"
+    echo "  2. Place your private key at:  $CERT_DIR/key.pem"
+    echo "  3. Set proper permissions:"
+    echo "     sudo chown runic:runic $CERT_DIR/*.pem"
+    echo "     sudo chmod 644 $CERT_DIR/cert.pem"
+    echo "     sudo chmod 640 $CERT_DIR/key.pem"
+    echo "  4. Restart the service:"
+    echo "     sudo systemctl restart $SERVICE_NAME"
+    echo ""
+
     echo -e "${GREEN}✓ Secrets: Configured${NC}"
     echo -e "${YELLOW}  Secrets are stored in: $INSTALL_DIR/.env${NC}"
     echo -e "${YELLOW}  Keep this file secure and backed up!${NC}"
     echo ""
-    
+
     log SUCCESS "Installation completed successfully"
 }
 
@@ -1178,10 +1294,13 @@ main() {
     
     # Create system user
     create_system_user
-    
+
     # Initialize database
     initialize_database
-    
+
+    # Generate TLS certificate
+    generate_self_signed_cert
+
     # Install systemd service
     install_systemd_service
     
