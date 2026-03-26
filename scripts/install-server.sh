@@ -845,12 +845,17 @@ setup_directories() {
         exit 1
     fi
     
-    if ! mkdir -p "$INSTALL_DIR/dist"; then
-        log ERROR "Failed to create dist directory: $INSTALL_DIR/dist"
-        exit 1
-    fi
-    
-    log SUCCESS "Directories created at $INSTALL_DIR"
+if ! mkdir -p "$INSTALL_DIR/dist"; then
+	log ERROR "Failed to create dist directory: $INSTALL_DIR/dist"
+	exit 1
+fi
+
+if ! mkdir -p "$INSTALL_DIR/downloads"; then
+	log ERROR "Failed to create downloads directory: $INSTALL_DIR/downloads"
+	exit 1
+fi
+
+log SUCCESS "Directories created at $INSTALL_DIR"
 }
 
 clone_repository() {
@@ -955,7 +960,61 @@ build_binary() {
     else
         log ERROR "Binary not found after build"
         exit 1
-    fi
+	fi
+}
+
+build_agent_binaries() {
+	if [ "$SKIP_BUILD" = true ]; then
+		log INFO "Skipping agent build (--skip-build flag)"
+		return 0
+	fi
+
+	log_section "Building Runic Agent Binaries"
+
+	cd "$SOURCE_DIR" || { log ERROR "Source directory not found"; exit 1; }
+
+	# Create downloads directory
+	mkdir -p "$INSTALL_DIR/downloads"
+
+	# Build for each architecture
+	local arches=("amd64" "arm" "arm64")
+	local built_count=0
+
+	for arch in "${arches[@]}"; do
+		log INFO "Building runic-agent for $arch..."
+
+		CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -buildvcs=false -o "$INSTALL_DIR/downloads/runic-agent-$arch" ./cmd/runic-agent >> "$LOG_FILE" 2>&1
+
+		if [ $? -ne 0 ]; then
+			log ERROR "Failed to build runic-agent for $arch. Check $LOG_FILE for details."
+			exit 1
+		fi
+
+		if [ -f "$INSTALL_DIR/downloads/runic-agent-$arch" ]; then
+			local size
+			size=$(du -h "$INSTALL_DIR/downloads/runic-agent-$arch" | cut -f1)
+			log SUCCESS "runic-agent-$arch built successfully ($size)"
+			((built_count++))
+		else
+			log ERROR "runic-agent-$arch not found after build"
+			exit 1
+		fi
+	done
+
+	# Copy service file
+	if [ -f "$SOURCE_DIR/scripts/runic-agent.service" ]; then
+		cp "$SOURCE_DIR/scripts/runic-agent.service" "$INSTALL_DIR/downloads/" || { log ERROR "Failed to copy runic-agent.service"; exit 1; }
+		log SUCCESS "runic-agent.service copied to downloads directory"
+	else
+		log ERROR "runic-agent.service not found at $SOURCE_DIR/scripts/runic-agent.service"
+		exit 1
+	fi
+
+	# Set permissions on binaries (755) and service file (644)
+	chmod 755 "$INSTALL_DIR/downloads/runic-agent-"* || { log ERROR "Failed to set permissions on agent binaries"; exit 1; }
+	chmod 644 "$INSTALL_DIR/downloads/runic-agent.service" || { log ERROR "Failed to set permissions on service file"; exit 1; }
+
+	log SUCCESS "All agent binaries built successfully ($built_count architectures)"
 }
 
 create_system_user() {
@@ -1146,13 +1205,14 @@ Environment=RUNIC_DB_PATH=$DATA_DIR/runic.db
 Environment=RUNIC_CERT_FILE=$CERT_DIR/cert.pem
 Environment=RUNIC_KEY_FILE=$CERT_DIR/key.pem
 Environment=RUNIC_PORT=$RUNIC_PORT
+Environment=RUNIC_DOWNLOADS_DIR=$INSTALL_DIR/downloads
 
 # Security hardening
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectHome=yes
 ProtectSystem=strict
-ReadWritePaths=$DATA_DIR $CERT_DIR
+ReadWritePaths=$DATA_DIR $CERT_DIR $INSTALL_DIR/downloads
 ReadOnlyPaths=/etc/ssl/certs
 
 # Resource limits
@@ -1332,10 +1392,11 @@ main() {
     # Clone repository
     clone_repository
     
-    # Build binary
-    if [ "$SKIP_BUILD" = false ]; then
-        build_binary
-    fi
+# Build binary
+if [ "$SKIP_BUILD" = false ]; then
+	build_binary
+	build_agent_binaries
+fi
     
     # Create system user
     create_system_user

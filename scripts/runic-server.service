@@ -17,14 +17,19 @@ RestartSec=10s
 EnvironmentFile=/opt/runic/.env
 
 # Environment variables for non-secret configuration
-Environment=RUNIC_DB_PATH=%DATA_DIR%/runic.db
+Environment=RUNIC_DB_PATH=/opt/runic/data/runic.db
+Environment=RUNIC_DOWNLOADS_DIR=/opt/runic/downloads
+Environment=RUNIC_CERT_FILE=/opt/runic/cert/cert.pem
+Environment=RUNIC_KEY_FILE=/opt/runic/cert/key.pem
+Environment=RUNIC_PORT=60443
+Environment=RUNIC_CONTROL_PLANE=localhost:60443
 
 # Security hardening
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectHome=yes
 ProtectSystem=strict
-ReadWritePaths=/opt/runic/data
+ReadWritePaths=/opt/runic/data /opt/runic/cert /opt/runic/downloads
 ReadOnlyPaths=/etc/ssl/certs
 
 # Resource limits

@@ -103,6 +103,11 @@ func main() {
 	}
 	db.InitDB(dbPath)
 
+	downloadsDir := os.Getenv("RUNIC_DOWNLOADS_DIR")
+	if downloadsDir == "" {
+		downloadsDir = "./downloads"
+	}
+
 	hmacKey := os.Getenv("RUNIC_HMAC_KEY")
 	if hmacKey == "" {
 		if os.Getenv("ENV") == "production" {
@@ -128,7 +133,7 @@ func main() {
 
 	// Register all API routes (public routes like setup and protected routes are all handled in api.go)
 	apiInstance := api.NewAPI(compiler)
-	api.RegisterRoutes(r, apiInstance)
+	api.RegisterRoutes(r, apiInstance, downloadsDir)
 
 	// Serve embedded web frontend (SPA)
 	// Strip the "web/dist" prefix so http.FS can find files in the embedded FS

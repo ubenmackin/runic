@@ -11,6 +11,7 @@ import (
 	"runic/internal/api/agents"
 	authhandlers "runic/internal/api/auth"
 	"runic/internal/api/dashboard"
+	"runic/internal/api/downloads"
 	"runic/internal/api/events"
 	"runic/internal/api/groups"
 	"runic/internal/api/logs"
@@ -63,7 +64,7 @@ func GetAPI(ctx context.Context) *API {
 }
 
 // RegisterRoutes registers all API routes. Accepts an API instance for rule compilation endpoints.
-func RegisterRoutes(r *mux.Router, a *API) {
+func RegisterRoutes(r *mux.Router, a *API, downloadsDir string) {
 
 	// Apply RequestID middleware to all routes
 	r.Use(RequestID())
@@ -91,10 +92,10 @@ func RegisterRoutes(r *mux.Router, a *API) {
 	// Logout
 	protected.HandleFunc("/auth/logout", authhandlers.HandleLogoutPOST).Methods("POST")
 
-	// Servers
-	protected.HandleFunc("/servers", servers.GetServers).Methods("GET")
-	protected.HandleFunc("/servers", servers.CreateServer).Methods("POST")
-	protected.HandleFunc("/servers/{id:[0-9]+}/compile", servers.MakeCompileServerHandler(a.Compiler)).Methods("POST")
+	// Peers
+	protected.HandleFunc("/peers", servers.GetPeers).Methods("GET")
+	protected.HandleFunc("/peers", servers.CreatePeer).Methods("POST")
+	protected.HandleFunc("/peers/{id:[0-9]+}/compile", servers.MakeCompilePeerHandler(a.Compiler)).Methods("POST")
 
 	// Groups
 	protected.HandleFunc("/groups", groups.ListGroups).Methods("GET")
@@ -136,6 +137,10 @@ func RegisterRoutes(r *mux.Router, a *API) {
 	apiRouter.HandleFunc("/agent/logs", agents.AgentAuthMiddleware(agents.SubmitLogs)).Methods("POST")
 	apiRouter.HandleFunc("/agent/bundle/{host_id}/applied", agents.AgentAuthMiddleware(agents.ConfirmBundleApplied)).Methods("POST")
 	apiRouter.HandleFunc("/agent/events/{host_id}", agents.AgentAuthMiddleware(agents.HandleSSEvents)).Methods("GET")
+
+	// Downloads route (public - for agent binary downloads)
+	// Must be registered before SPA catch-all handler (in main.go)
+	r.HandleFunc("/downloads/{filename}", downloads.Handler(downloadsDir)).Methods("GET")
 }
 
 // HealthHandler returns the health status of the service
