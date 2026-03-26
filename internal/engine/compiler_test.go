@@ -350,7 +350,7 @@ func TestPriorityOrdering(t *testing.T) {
 	groupID := insertGroup(t, database, "prio-group")
 	insertGroupMember(t, database, groupID, "10.0.0.1", "ip")
 
-	serviceHigh := insertService(t, database, "high-prio-svc", "8080", "tcp")
+	serviceHigh := insertService(t, database, "high-prio-svc", "60443", "tcp")
 	serviceLow := insertService(t, database, "low-prio-svc", "9090", "tcp")
 
 	// Insert low priority (200) first, high priority (50) second

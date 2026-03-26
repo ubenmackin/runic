@@ -800,7 +800,7 @@ func TestCreateService(t *testing.T) {
 	}{
 		{
 			name:     "valid service",
-			body:     `{"name": "test-service", "ports": "8080", "protocol": "tcp", "description": "test"}`,
+			body:     `{"name": "test-service", "ports": "60443", "protocol": "tcp", "description": "test"}`,
 			wantCode: http.StatusCreated,
 			validateResult: func(t *testing.T, r map[string]int64) {
 				if r["id"] == 0 {

@@ -30,17 +30,17 @@ For custom options:
 curl -sL https://raw.githubusercontent.com/ubenmackin/runic/main/scripts/install-server.sh | sudo bash -s -- --non-interactive
 
 # With custom control plane URL
-curl -sL https://raw.githubusercontent.com/ubenmackin/runic/main/scripts/install-server.sh | sudo bash -s -- --control-plane 192.168.1.100:8080
+curl -sL https://raw.githubusercontent.com/ubenmackin/runic/main/scripts/install-server.sh | sudo bash -s -- --control-plane 192.168.1.100:60443
 ```
 
-Server runs on `http://localhost:8080` by default.
+Server runs on `https://localhost:60443` by default.
 
 ### Install the agent
 
 Run on each host:
 
 ```bash
-curl -sL https://raw.githubusercontent.com/ubenmackin/runic/main/scripts/install-agent.sh | sudo bash -s -- http://your-runic-server:8080
+curl -sL https://raw.githubusercontent.com/ubenmackin/runic/main/scripts/install-agent.sh | sudo bash -s -- https://your-runic-server:60443
 ```
 
 ## How it works (short version)
@@ -71,7 +71,7 @@ Check `control_plane_url` in `/etc/runic-agent/config.json`.
 Trigger a compile manually:
 ```bash
 curl -X POST -H "Authorization: Bearer $TOKEN" \
-  https://runic-server:8080/api/v1/servers/<id>/compile
+  https://runic-server-host:60443/api/v1/servers/<id>/compile
 ```
 
 **SQLite locked**
