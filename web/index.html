@@ -4,15 +4,8 @@
 <meta charset="UTF-8" />
 <link rel="icon" type="image/svg+xml" href="/vite.svg" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss:; img-src 'self' data:; font-src 'self';" />
 <title>Runic - Firewall Policy Management</title>
-<script>
-  // Prevent dark mode flash by applying theme before React loads
-  if (localStorage.getItem('runic_theme') === 'dark' ||
-      (!localStorage.getItem('runic_theme') && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
-    document.documentElement.classList.add('dark')
-  }
-</script>
+<script src="/src/darkMode.js"></script>
 </head>
 <body>
 <div id="root"></div>

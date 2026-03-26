@@ -141,20 +141,20 @@ func GetLogs(w http.ResponseWriter, r *http.Request) {
 		whereClause = "WHERE " + strings.Join(conditions, " AND ")
 	}
 
-	// Always join with servers to get hostname
+	// LEFT JOIN with servers to get hostname (handles orphaned logs gracefully)
 	args = append(args, limit, offset)
 
 	query := `SELECT fl.id, fl.server_id, s.hostname, fl.timestamp, fl.direction,
-		fl.src_ip, fl.dst_ip, fl.protocol, fl.src_port, fl.dst_port, fl.action, fl.raw_line
-		FROM firewall_logs fl
-		JOIN servers s ON fl.server_id = s.id
-		` + whereClause + `
-		ORDER BY fl.timestamp DESC
-		LIMIT ? OFFSET ?`
+	fl.src_ip, fl.dst_ip, fl.protocol, fl.src_port, fl.dst_port, fl.action, fl.raw_line
+	FROM firewall_logs fl
+	LEFT JOIN servers s ON fl.server_id = s.id
+	` + whereClause + `
+	ORDER BY fl.timestamp DESC
+	LIMIT ? OFFSET ?`
 
 	rows, err := db.DB.QueryContext(ctx, query, args...)
 	if err != nil {
-		runiclog.ErrorContext(ctx, "Failed to query logs", "error", err)
+		runiclog.ErrorContext(ctx, "Failed to query logs", "error", err, "query", query)
 		respondError(w, http.StatusInternalServerError, "failed to query logs")
 		return
 	}
@@ -165,10 +165,11 @@ func GetLogs(w http.ResponseWriter, r *http.Request) {
 		var ev models.LogEvent
 		var direction sql.NullString
 		var rawLine sql.NullString
+		var hostname sql.NullString
 		var srcPort, dstPort sql.NullInt64
 
 		err := rows.Scan(
-			&ev.ID, &ev.ServerID, &ev.Hostname, &ev.Timestamp, &direction,
+			&ev.ID, &ev.ServerID, &hostname, &ev.Timestamp, &direction,
 			&ev.SrcIP, &ev.DstIP, &ev.Protocol, &srcPort, &dstPort, &ev.Action, &rawLine,
 		)
 		if err != nil {
@@ -177,6 +178,9 @@ func GetLogs(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Populate nullable fields from scanned values
+		if hostname.Valid {
+			ev.Hostname = hostname.String
+		}
 		if direction.Valid {
 			ev.Direction = direction.String
 		}
@@ -193,6 +197,11 @@ func GetLogs(w http.ResponseWriter, r *http.Request) {
 		logsData = append(logsData, ev)
 	}
 
+	// Check for row iteration errors
+	if err = rows.Err(); err != nil {
+		runiclog.ErrorContext(ctx, "Error iterating log rows", "error", err)
+	}
+
 	if logsData == nil {
 		logsData = []models.LogEvent{}
 	}
@@ -202,7 +211,9 @@ func GetLogs(w http.ResponseWriter, r *http.Request) {
 	countArgs := args[:len(args)-2] // Remove limit and offset
 	var total int
 	if err := db.DB.QueryRowContext(ctx, countQuery, countArgs...).Scan(&total); err != nil {
-		runiclog.ErrorContext(ctx, "Failed to get log count", "error", err)
+		runiclog.ErrorContext(ctx, "Failed to get log count", "error", err, "query", countQuery)
+		// Set total to 0 instead of leaving it uninitialized
+		total = 0
 	}
 
 	respondJSON(w, http.StatusOK, map[string]interface{}{

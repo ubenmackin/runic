@@ -70,10 +70,20 @@ func RegisterRoutes(r *mux.Router, a *API, downloadsDir string) {
 	// Apply RequestID middleware to all routes
 	r.Use(RequestID())
 
+	// Apply RequestLogger middleware for tracing requests
+	r.Use(RequestLogger())
+
+	// Apply CSP middleware for frontend routes (not API routes)
+	// API routes have their own stricter CSP
+	r.Use(CSP())
+
 	// Create /api/v1 subrouter with common middleware
 	apiRouter := r.PathPrefix("/api/v1").Subrouter()
+	apiRouter.Use(CORS()) // CORS must be first to handle preflight OPTIONS requests
 	apiRouter.Use(apiMiddleware(a))
 	apiRouter.Use(metricsMiddleware)
+	// API routes get stricter CSP (overwrites the general CSP)
+	apiRouter.Use(CSPForAPI())
 
 	// Public routes (no authentication required)
 	// Setup
@@ -82,6 +92,9 @@ func RegisterRoutes(r *mux.Router, a *API, downloadsDir string) {
 
 	// Login
 	apiRouter.HandleFunc("/auth/login", authhandlers.HandleLoginPOST).Methods("POST")
+
+	// Token refresh (public - uses refresh token, not access token)
+	apiRouter.HandleFunc("/auth/refresh", authhandlers.HandleRefreshPOST).Methods("POST")
 
 	// Agent registration (no auth needed)
 	apiRouter.HandleFunc("/agent/register", agents.RegisterAgent).Methods("POST")
@@ -138,6 +151,25 @@ func RegisterRoutes(r *mux.Router, a *API, downloadsDir string) {
 	apiRouter.HandleFunc("/agent/logs", agents.AgentAuthMiddleware(agents.SubmitLogs)).Methods("POST")
 	apiRouter.HandleFunc("/agent/bundle/{host_id}/applied", agents.AgentAuthMiddleware(agents.ConfirmBundleApplied)).Methods("POST")
 	apiRouter.HandleFunc("/agent/events/{host_id}", agents.AgentAuthMiddleware(agents.HandleSSEvents)).Methods("GET")
+
+	// Catch-all for unmatched API routes - returns 404 instead of falling through to SPA
+	// This must be registered last so it only catches truly unmatched routes
+	apiRouter.PathPrefix("/").HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]string{"error": "API endpoint not found"})
+	})
+
+	// Handle /api/v1 root path (not matched by PathPrefix)
+	// Returns API info instead of falling through to SPA
+	r.HandleFunc("/api/v1", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{
+			"status":  "ok",
+			"version": "v1",
+			"message": "Runic API",
+		})
+	}).Methods("GET")
 
 	// Downloads route (public - for agent binary downloads)
 	// Must be registered before SPA catch-all handler (in main.go)

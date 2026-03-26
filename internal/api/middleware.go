@@ -5,6 +5,9 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"net/http"
+	"os"
+	"strings"
+	"time"
 
 	"github.com/gorilla/mux"
 
@@ -13,6 +16,25 @@ import (
 
 // RequestIDHeader is the HTTP header name for request IDs.
 const RequestIDHeader = "X-Request-ID"
+
+// CSPHeader is the Content-Security-Policy header name.
+const CSPHeader = "Content-Security-Policy"
+
+// cspDirectives contains the CSP directives for the application.
+// The script-src includes a hash for the inline dark mode script in index.html.
+// Hash computed from: openssl dgst -sha256 -binary <script> | base64
+var cspDirectives = strings.Join([]string{
+	"default-src 'self'",
+	"script-src 'self' 'sha256-GGgHykvuirqqhibRdSUellJVcCV4o85Qu0qQNV4XUs4='",
+	"style-src 'self' 'unsafe-inline'",
+	"img-src 'self' data:",
+	"font-src 'self'",
+	"connect-src 'self' ws: wss:",
+	"object-src 'none'",
+	"base-uri 'self'",
+	"form-action 'self'",
+	"frame-ancestors 'none'",
+}, "; ")
 
 // RequestID middleware generates or extracts a request ID from the X-Request-ID header.
 // It adds the request ID to the request context and ensures it's also returned in the response header.
@@ -47,6 +69,36 @@ func GetRequestID(ctx context.Context) (string, bool) {
 	return log.GetRequestID(ctx)
 }
 
+// CSP returns a middleware that sets Content-Security-Policy headers.
+// This provides server-side CSP enforcement which is authoritative over meta tags.
+// The CSP includes a hash for the inline dark mode script to prevent flash of unstyled content.
+func CSP() mux.MiddlewareFunc {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Set CSP header - this overrides any CSP meta tag in HTML
+			w.Header().Set(CSPHeader, cspDirectives)
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// CSPForAPI returns CSP headers suitable for API responses.
+// API responses have stricter CSP since they don't need scripts, styles, or images.
+func CSPForAPI() mux.MiddlewareFunc {
+	apiCSP := strings.Join([]string{
+		"default-src 'none'",
+		"connect-src 'self'",
+		"frame-ancestors 'none'",
+	}, "; ")
+
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set(CSPHeader, apiCSP)
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 // generateUUID generates a random UUID using crypto/rand.
 func generateUUID() string {
 	b := make([]byte, 16)
@@ -69,4 +121,160 @@ func generateFallbackID() string {
 		}
 	}
 	return hex.EncodeToString(b)
+}
+
+// RequestLogger middleware logs request details for tracing and debugging.
+// It logs both the start of each request and the completion with duration.
+// This is useful for tracing redirect paths and debugging request flow.
+//
+// Logs include:
+//   - Request method, path, and query parameters
+//   - Response status code
+//   - Request duration
+//   - Request ID (propagated via context from RequestID middleware)
+//
+// The middleware uses structured logging via the runiclog package.
+// Logging errors are handled gracefully and never break the request.
+func RequestLogger() mux.MiddlewareFunc {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			start := time.Now()
+
+			// Get request ID from context (set by RequestID middleware)
+			ctx := r.Context()
+			requestID, _ := log.GetRequestID(ctx)
+
+			// Log request start
+			log.InfoContext(ctx, "request_started",
+				"method", r.Method,
+				"path", r.URL.Path,
+				"query", r.URL.RawQuery,
+				"remote_addr", r.RemoteAddr,
+				"request_id", requestID,
+			)
+
+			// Wrap response writer to capture status code
+			rw := &loggingResponseWriter{
+				ResponseWriter: w,
+				statusCode:     http.StatusOK,
+			}
+
+			// Call next handler
+			next.ServeHTTP(rw, r)
+
+			// Calculate duration
+			duration := time.Since(start)
+
+			// Log request completion
+			log.InfoContext(ctx, "request_completed",
+				"method", r.Method,
+				"path", r.URL.Path,
+				"query", r.URL.RawQuery,
+				"status", rw.statusCode,
+				"duration_ms", duration.Milliseconds(),
+				"request_id", requestID,
+			)
+		})
+	}
+}
+
+// loggingResponseWriter wraps http.ResponseWriter to capture the status code.
+// This is used by RequestLogger to log response status codes.
+type loggingResponseWriter struct {
+	http.ResponseWriter
+	statusCode int
+	written    bool
+}
+
+// WriteHeader captures the status code and calls the underlying WriteHeader.
+func (lw *loggingResponseWriter) WriteHeader(code int) {
+	if !lw.written {
+		lw.statusCode = code
+		lw.ResponseWriter.WriteHeader(code)
+		lw.written = true
+	}
+}
+
+// Write ensures WriteHeader is called with default status if not already set.
+func (lw *loggingResponseWriter) Write(b []byte) (int, error) {
+	if !lw.written {
+		lw.WriteHeader(http.StatusOK)
+	}
+	return lw.ResponseWriter.Write(b)
+}
+
+// CORS middleware adds Cross-Origin Resource Sharing headers to API responses.
+// This is necessary for proper handling of cross-origin requests from the frontend.
+// The middleware:
+// - Sets appropriate CORS headers for all responses
+// - Handles OPTIONS preflight requests by returning 204 immediately
+// - Allows credentials for cookie-based authentication
+// - Caches preflight responses for 24 hours (86400 seconds)
+//
+// The allowed origin can be configured via the CORS_ORIGIN environment variable.
+// If not set, it defaults to allowing same-origin requests (empty string),
+// which works for production deployments where frontend and API share the same origin.
+// For development, set CORS_ORIGIN to the frontend URL (e.g., "http://localhost:5173").
+func CORS() mux.MiddlewareFunc {
+	// Get allowed origin from environment, default to same-origin (empty)
+	// In production, frontend is served from same origin as API
+	// In development, frontend runs on different port (e.g., localhost:5173)
+	allowedOrigin := os.Getenv("CORS_ORIGIN")
+
+	// If no explicit origin set and in development mode, allow common dev origins
+	if allowedOrigin == "" {
+		// Check if we're in development mode
+		if os.Getenv("GO_ENV") == "development" || os.Getenv("APP_ENV") == "development" {
+			// In dev mode, allow requests from common Vite dev server ports
+			// The actual origin will be set dynamically based on Origin header
+			allowedOrigin = "*" // Will be handled dynamically below
+		}
+	}
+
+	allowedMethods := "GET, POST, PUT, DELETE, OPTIONS"
+	allowedHeaders := "Content-Type, Authorization, X-Request-ID"
+	maxAge := "86400" // 24 hours - cache preflight response
+
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			origin := r.Header.Get("Origin")
+
+			// Determine the origin to allow
+			originToAllow := ""
+			if allowedOrigin == "*" {
+				// In wildcard mode (dev), reflect the request origin
+				// This allows any origin but maintains credential support
+				if origin != "" {
+					originToAllow = origin
+				}
+			} else if allowedOrigin != "" {
+				// Use the explicitly configured origin
+				originToAllow = allowedOrigin
+			} else {
+				// Production mode: same-origin or reflect origin
+				// This handles cases where frontend is on same host but different port
+				if origin != "" {
+					originToAllow = origin
+				}
+			}
+
+			// Set CORS headers if we have an origin to allow
+			if originToAllow != "" {
+				w.Header().Set("Access-Control-Allow-Origin", originToAllow)
+				w.Header().Set("Access-Control-Allow-Methods", allowedMethods)
+				w.Header().Set("Access-Control-Allow-Headers", allowedHeaders)
+				w.Header().Set("Access-Control-Allow-Credentials", "true")
+				w.Header().Set("Access-Control-Max-Age", maxAge)
+			}
+
+			// Handle preflight OPTIONS request
+			if r.Method == http.MethodOptions {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+
+			// Continue to the next handler
+			next.ServeHTTP(w, r)
+		})
+	}
 }

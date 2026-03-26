@@ -255,3 +255,67 @@ func HandleLogoutPOST(w http.ResponseWriter, r *http.Request) {
 
 	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "logged_out"})
 }
+
+// refreshRequest is the request body for token refresh.
+type refreshRequest struct {
+	RefreshToken string `json:"refresh_token"`
+}
+
+// HandleRefreshPOST handles POST /api/v1/auth/refresh to refresh an access token.
+// It validates the refresh token and issues a new access token if valid.
+func HandleRefreshPOST(w http.ResponseWriter, r *http.Request) {
+	if db.DB == nil {
+		common.RespondError(w, http.StatusInternalServerError, "database not initialized")
+		return
+	}
+
+	var body refreshRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		common.RespondError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	if body.RefreshToken == "" {
+		common.RespondError(w, http.StatusBadRequest, "refresh_token is required")
+		return
+	}
+
+	// Validate the refresh token
+	claims, err := auth.ValidateToken(body.RefreshToken)
+	if err != nil || claims == nil {
+		common.RespondError(w, http.StatusUnauthorized, "Invalid refresh token")
+		return
+	}
+
+	// Check if the token has been revoked
+	if auth.IsRevoked(r.Context(), claims.UniqueID) {
+		common.RespondError(w, http.StatusUnauthorized, "Token has been revoked")
+		return
+	}
+
+	// Generate new access token
+	accessToken, err := auth.GenerateToken(claims.Username, time.Hour)
+	if err != nil {
+		common.RespondError(w, http.StatusInternalServerError, "failed to generate access token")
+		return
+	}
+
+	// Generate new refresh token (rotation for security)
+	newRefreshToken, err := auth.GenerateToken(claims.Username, 7*24*time.Hour)
+	if err != nil {
+		common.RespondError(w, http.StatusInternalServerError, "failed to generate refresh token")
+		return
+	}
+
+	// Revoke the old refresh token (rotation)
+	if err := auth.RevokeToken(r.Context(), claims.UniqueID, claims.ExpiresAt.Time); err != nil {
+		log.Printf("Warning: failed to revoke old refresh token: %v", err)
+		// Continue anyway - the new tokens are still valid
+	}
+
+	log.Printf("AUTH REFRESH: Token refreshed for user '%s'", claims.Username)
+
+	common.RespondJSON(w, http.StatusOK, map[string]string{
+		"access_token":  accessToken,
+		"refresh_token": newRefreshToken,
+	})
+}
