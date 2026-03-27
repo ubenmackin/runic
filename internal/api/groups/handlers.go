@@ -15,32 +15,43 @@ import (
 
 // --- Groups ---
 
+// GroupWithCounts represents a group with peer and policy counts
+type GroupWithCounts struct {
+	ID          int    `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	IsSystem    bool   `json:"is_system"`
+	PeerCount   int    `json:"peer_count"`
+	PolicyCount int    `json:"policy_count"`
+}
+
 func ListGroups(w http.ResponseWriter, r *http.Request) {
-	rows, err := db.DB.QueryContext(r.Context(),
-		"SELECT id, name, COALESCE(description, '') FROM groups")
+	query := `
+		SELECT g.id, g.name, COALESCE(g.description, ''), (g.name = 'any') as is_system,
+			COALESCE(p.peer_count, 0), COALESCE(pol.policy_count, 0)
+		FROM groups g
+		LEFT JOIN (SELECT group_id, COUNT(*) as peer_count FROM group_members GROUP BY group_id) p ON g.id = p.group_id
+		LEFT JOIN (SELECT source_group_id, COUNT(*) as policy_count FROM policies GROUP BY source_group_id) pol ON g.id = pol.source_group_id
+		ORDER BY g.name ASC`
+
+	rows, err := db.DB.QueryContext(r.Context(), query)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "failed to query groups")
 		return
 	}
 	defer rows.Close()
 
-	type groupResp struct {
-		ID          int    `json:"id"`
-		Name        string `json:"name"`
-		Description string `json:"description"`
-	}
-
-	var groupsData []groupResp
+	var groupsData []GroupWithCounts
 	for rows.Next() {
-		var g groupResp
-		if err := rows.Scan(&g.ID, &g.Name, &g.Description); err != nil {
+		var g GroupWithCounts
+		if err := rows.Scan(&g.ID, &g.Name, &g.Description, &g.IsSystem, &g.PeerCount, &g.PolicyCount); err != nil {
 			common.RespondError(w, http.StatusInternalServerError, "failed to scan group")
 			return
 		}
 		groupsData = append(groupsData, g)
 	}
 	if groupsData == nil {
-		groupsData = []groupResp{}
+		groupsData = []GroupWithCounts{}
 	}
 	common.RespondJSON(w, http.StatusOK, groupsData)
 }
@@ -119,6 +130,34 @@ func DeleteGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Query the group to get its name
+	var groupName string
+	err = db.DB.QueryRowContext(r.Context(), "SELECT name FROM groups WHERE id = ?", id).Scan(&groupName)
+	if err != nil {
+		common.RespondError(w, http.StatusNotFound, "group not found")
+		return
+	}
+
+	// Check if it's a system group (name == "any")
+	if groupName == "any" {
+		common.RespondError(w, http.StatusForbidden, "Cannot delete system group")
+		return
+	}
+
+	// Check if group is used by any policy
+	if err := common.CheckGroupDeleteConstraints(r.Context(), db.DB.DB, id); err != nil {
+		common.RespondError(w, http.StatusConflict, err.Error())
+		return
+	}
+
+	// Delete group_members first (due to foreign key)
+	_, err = db.DB.ExecContext(r.Context(), "DELETE FROM group_members WHERE group_id = ?", id)
+	if err != nil {
+		common.RespondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to delete group members: %v", err))
+		return
+	}
+
+	// Delete the group
 	_, err = db.DB.ExecContext(r.Context(), "DELETE FROM groups WHERE id = ?", id)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to delete group: %v", err))
@@ -130,6 +169,15 @@ func DeleteGroup(w http.ResponseWriter, r *http.Request) {
 
 // --- Group Members ---
 
+// PeerInGroup represents a peer that belongs to a group
+type PeerInGroup struct {
+	ID        int    `json:"id"`
+	Hostname  string `json:"hostname"`
+	IPAddress string `json:"ip_address"`
+	OSType    string `json:"os_type"`
+	IsManual  bool   `json:"is_manual"`
+}
+
 func ListGroupMembers(w http.ResponseWriter, r *http.Request) {
 	id, err := common.ParseIDParam(r, "id")
 	if err != nil {
@@ -137,13 +185,34 @@ func ListGroupMembers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	members, err := db.ListGroupMembers(r.Context(), db.DB.DB, id)
+	query := `
+		SELECT p.id, p.hostname, p.ip_address, p.os_type, p.is_manual
+		FROM peers p
+		JOIN group_members gm ON p.id = gm.peer_id
+		WHERE gm.group_id = ?
+		ORDER BY p.hostname ASC`
+
+	rows, err := db.DB.QueryContext(r.Context(), query, id)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "failed to query group members")
 		return
 	}
+	defer rows.Close()
 
-	common.RespondJSON(w, http.StatusOK, members)
+	var peers []PeerInGroup
+	for rows.Next() {
+		var p PeerInGroup
+		if err := rows.Scan(&p.ID, &p.Hostname, &p.IPAddress, &p.OSType, &p.IsManual); err != nil {
+			common.RespondError(w, http.StatusInternalServerError, "failed to scan peer")
+			return
+		}
+		peers = append(peers, p)
+	}
+	if peers == nil {
+		peers = []PeerInGroup{}
+	}
+
+	common.RespondJSON(w, http.StatusOK, peers)
 }
 
 func MakeAddGroupMemberHandler(compiler *engine.Compiler) http.HandlerFunc {
@@ -155,21 +224,20 @@ func MakeAddGroupMemberHandler(compiler *engine.Compiler) http.HandlerFunc {
 		}
 
 		var input struct {
-			Value string `json:"value"`
-			Type  string `json:"type"`
+			PeerID int `json:"peer_id"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 			common.RespondError(w, http.StatusBadRequest, "invalid JSON")
 			return
 		}
-		if input.Value == "" || input.Type == "" {
-			common.RespondError(w, http.StatusBadRequest, "value and type are required")
+		if input.PeerID == 0 {
+			common.RespondError(w, http.StatusBadRequest, "peer_id is required")
 			return
 		}
 
 		result, err := db.DB.ExecContext(r.Context(),
-			"INSERT INTO group_members (group_id, value, type) VALUES (?, ?, ?)",
-			groupID, input.Value, input.Type)
+			"INSERT OR IGNORE INTO group_members (group_id, peer_id) VALUES (?, ?)",
+			groupID, input.PeerID)
 		if err != nil {
 			common.RespondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to add member: %v", err))
 			return
@@ -201,16 +269,15 @@ func MakeDeleteGroupMemberHandler(compiler *engine.Compiler) http.HandlerFunc {
 			return
 		}
 
-		memberID, err := common.ParseIDParam(r, "memberId")
+		peerID, err := common.ParseIDParam(r, "peerId")
 		if err != nil {
-			common.RespondError(w, http.StatusBadRequest, "invalid member ID")
+			common.RespondError(w, http.StatusBadRequest, "invalid peer ID")
 			return
 		}
 
-		_, err = db.DB.ExecContext(r.Context(),
-			"DELETE FROM group_members WHERE id = ? AND group_id = ?", memberID, groupID)
+		_, err = db.DB.ExecContext(r.Context(), "DELETE FROM group_members WHERE group_id = ? AND peer_id = ?", groupID, peerID)
 		if err != nil {
-			common.RespondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to delete member: %v", err))
+			common.RespondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to remove peer from group: %v", err))
 			return
 		}
 

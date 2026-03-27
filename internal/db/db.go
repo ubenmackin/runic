@@ -88,9 +88,20 @@ func createSchema(database *sql.DB) error {
 
 // migrateSchema adds missing columns for schema upgrades on existing databases.
 func migrateSchema(database *sql.DB) error {
+	// Fresh database check: if no tables exist, skip all migrations
+	var tableCount int
+	err := database.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").Scan(&tableCount)
+	if err != nil {
+		return fmt.Errorf("failed to count tables: %w", err)
+	}
+	if tableCount == 0 {
+		log.Println("Migration: fresh database detected, skipping migrations")
+		return nil
+	}
+
 	// Check if users table exists (fresh install check)
 	var usersTableExists bool
-	err := database.QueryRow("SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='users'").Scan(&usersTableExists)
+	err = database.QueryRow("SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='users'").Scan(&usersTableExists)
 	if err != nil {
 		return fmt.Errorf("failed to check for users table: %w", err)
 	}

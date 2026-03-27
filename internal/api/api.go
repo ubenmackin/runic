@@ -125,7 +125,7 @@ func RegisterRoutes(r *mux.Router, a *API, downloadsDir string) {
 	// Group members
 	protected.HandleFunc("/groups/{id:[0-9]+}/members", groups.ListGroupMembers).Methods("GET")
 	protected.HandleFunc("/groups/{id:[0-9]+}/members", groups.MakeAddGroupMemberHandler(a.Compiler)).Methods("POST")
-	protected.HandleFunc("/groups/{groupId:[0-9]+}/members/{memberId:[0-9]+}", groups.MakeDeleteGroupMemberHandler(a.Compiler)).Methods("DELETE")
+	protected.HandleFunc("/groups/{groupId:[0-9]+}/members/{peerId:[0-9]+}", groups.MakeDeleteGroupMemberHandler(a.Compiler)).Methods("DELETE")
 
 	// Services
 	protected.HandleFunc("/services", services.ListServices).Methods("GET")

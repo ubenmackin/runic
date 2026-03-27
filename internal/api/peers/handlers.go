@@ -126,19 +126,17 @@ func DeletePeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// CONSTRAINT CHECK 1: Is peer referenced as target_peer_id in any policy?
-	var policyName string
-	err = db.DB.QueryRowContext(r.Context(),
-		`SELECT name FROM policies WHERE target_peer_id = ? LIMIT 1`, peerID,
-	).Scan(&policyName)
-	if err == nil {
-		// Peer is used in a policy - block deletion
-		common.RespondError(w, http.StatusConflict,
-			fmt.Sprintf("Cannot delete peer — it is used in policy '%s'", policyName))
+	// Check delete constraints (target_peer_id in policies, or in group used by policy)
+	err = common.CheckPeerDeleteConstraints(r.Context(), db.DB.DB, peerID)
+	if err != nil {
+		common.RespondError(w, http.StatusConflict, err.Error())
 		return
 	}
 
-	// Safe to delete - delete any rule bundles first (foreign key constraint)
+	// Delete from group_members first
+	db.DB.ExecContext(r.Context(), "DELETE FROM group_members WHERE peer_id = ?", peerID)
+
+	// Delete any rule bundles (foreign key constraint)
 	db.DB.ExecContext(r.Context(), "DELETE FROM rule_bundles WHERE peer_id = ?", peerID)
 
 	// Delete any firewall logs for this peer
