@@ -72,7 +72,7 @@ func generateAgentKey() string {
 	return "agent-key-" + hex.EncodeToString(b)
 }
 
-// getHostIDFromContext safely extracts host_id from request context and looks up the server.
+// getHostIDFromContext safely extracts host_id from request context and looks up the peer.
 // The host_id in context comes from the JWT subject claim, which is in format "host-{hostname}".
 func getHostIDFromContext(w http.ResponseWriter, r *http.Request) (string, int, bool) {
 	hostIDVal := r.Context().Value(hostIDKey)
@@ -93,13 +93,13 @@ func getHostIDFromContext(w http.ResponseWriter, r *http.Request) (string, int, 
 		return "", 0, false
 	}
 
-	// Look up server by hostname to get the numeric ID
-	var serverID int
-	err := db.DB.QueryRowContext(r.Context(), "SELECT id FROM servers WHERE hostname = ?", hostname).Scan(&serverID)
+	// Look up peer by hostname to get the numeric ID
+	var peerID int
+	err := db.DB.QueryRowContext(r.Context(), "SELECT id FROM peers WHERE hostname = ?", hostname).Scan(&peerID)
 	if err != nil {
-		http.Error(w, `{"error": "server not found"}`, http.StatusNotFound)
+		http.Error(w, `{"error": "peer not found"}`, http.StatusNotFound)
 		return "", 0, false
 	}
 
-	return hostID, serverID, true
+	return hostID, peerID, true
 }

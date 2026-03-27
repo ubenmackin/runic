@@ -28,14 +28,14 @@ func setupTestDB(t *testing.T) *sql.DB {
 	return database
 }
 
-// insertServer inserts a test server and returns its ID.
-func insertServer(t *testing.T, database *sql.DB, hostname, ip string, hasDocker bool) int {
+// insertPeer inserts a test peer and returns its ID.
+func insertPeer(t *testing.T, database *sql.DB, hostname, ip string, hasDocker bool) int {
 	t.Helper()
 	result, err := database.Exec(
-		`INSERT INTO servers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
+		`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
 		hostname, ip, "key-"+hostname, "test-hmac-key", hasDocker)
 	if err != nil {
-		t.Fatalf("insert server: %v", err)
+		t.Fatalf("insert peer: %v", err)
 	}
 	id, _ := result.LastInsertId()
 	return int(id)
@@ -77,16 +77,16 @@ func insertService(t *testing.T, database *sql.DB, name, ports, protocol string)
 }
 
 // insertPolicy inserts a test policy and returns its ID.
-func insertPolicy(t *testing.T, database *sql.DB, name string, groupID, serviceID, serverID int, action string, priority int, enabled bool) int {
+func insertPolicy(t *testing.T, database *sql.DB, name string, groupID, serviceID, peerID int, action string, priority int, enabled bool) int {
 	t.Helper()
 	enabledInt := 0
 	if enabled {
 		enabledInt = 1
 	}
 	result, err := database.Exec(
-		`INSERT INTO policies (name, source_group_id, service_id, target_server_id, action, priority, enabled)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		name, groupID, serviceID, serverID, action, priority, enabledInt)
+		`INSERT INTO policies (name, source_group_id, service_id, target_peer_id, action, priority, enabled)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		name, groupID, serviceID, peerID, action, priority, enabledInt)
 	if err != nil {
 		t.Fatalf("insert policy: %v", err)
 	}
@@ -96,14 +96,14 @@ func insertPolicy(t *testing.T, database *sql.DB, name string, groupID, serviceI
 
 func TestSingleIPSource(t *testing.T) {
 	database := setupTestDB(t)
-	serverID := insertServer(t, database, "web1", "192.168.1.10", false)
+	peerID := insertPeer(t, database, "web1", "192.168.1.10", false)
 	groupID := insertGroup(t, database, "office")
 	insertGroupMember(t, database, groupID, "10.0.1.1", "ip")
 	serviceID := insertService(t, database, "ssh", "22", "tcp")
-	insertPolicy(t, database, "allow-ssh", groupID, serviceID, serverID, "ACCEPT", 100, true)
+	insertPolicy(t, database, "allow-ssh", groupID, serviceID, peerID, "ACCEPT", 100, true)
 
 	c := NewCompiler(database, "test-key")
-	output, err := c.Compile(context.Background(), serverID)
+	output, err := c.Compile(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
 	}
@@ -118,14 +118,14 @@ func TestSingleIPSource(t *testing.T) {
 
 func TestCIDRSource(t *testing.T) {
 	database := setupTestDB(t)
-	serverID := insertServer(t, database, "web2", "192.168.1.11", false)
+	peerID := insertPeer(t, database, "web2", "192.168.1.11", false)
 	groupID := insertGroup(t, database, "subnet")
 	insertGroupMember(t, database, groupID, "10.0.1.0/24", "cidr")
 	serviceID := insertService(t, database, "https", "443", "tcp")
-	insertPolicy(t, database, "allow-https", groupID, serviceID, serverID, "ACCEPT", 100, true)
+	insertPolicy(t, database, "allow-https", groupID, serviceID, peerID, "ACCEPT", 100, true)
 
 	c := NewCompiler(database, "test-key")
-	output, err := c.Compile(context.Background(), serverID)
+	output, err := c.Compile(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
 	}
@@ -137,14 +137,14 @@ func TestCIDRSource(t *testing.T) {
 
 func TestMultiport(t *testing.T) {
 	database := setupTestDB(t)
-	serverID := insertServer(t, database, "web3", "192.168.1.12", false)
+	peerID := insertPeer(t, database, "web3", "192.168.1.12", false)
 	groupID := insertGroup(t, database, "any")
 	insertGroupMember(t, database, groupID, "0.0.0.0/0", "cidr")
 	serviceID := insertService(t, database, "web", "80,443", "tcp")
-	insertPolicy(t, database, "allow-web", groupID, serviceID, serverID, "ACCEPT", 100, true)
+	insertPolicy(t, database, "allow-web", groupID, serviceID, peerID, "ACCEPT", 100, true)
 
 	c := NewCompiler(database, "test-key")
-	output, err := c.Compile(context.Background(), serverID)
+	output, err := c.Compile(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
 	}
@@ -156,14 +156,14 @@ func TestMultiport(t *testing.T) {
 
 func TestPortRange(t *testing.T) {
 	database := setupTestDB(t)
-	serverID := insertServer(t, database, "web4", "192.168.1.13", false)
+	peerID := insertPeer(t, database, "web4", "192.168.1.13", false)
 	groupID := insertGroup(t, database, "any2")
 	insertGroupMember(t, database, groupID, "0.0.0.0/0", "cidr")
 	serviceID := insertService(t, database, "highports", "8000:9000", "tcp")
-	insertPolicy(t, database, "allow-highports", groupID, serviceID, serverID, "ACCEPT", 100, true)
+	insertPolicy(t, database, "allow-highports", groupID, serviceID, peerID, "ACCEPT", 100, true)
 
 	c := NewCompiler(database, "test-key")
-	output, err := c.Compile(context.Background(), serverID)
+	output, err := c.Compile(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
 	}
@@ -175,14 +175,14 @@ func TestPortRange(t *testing.T) {
 
 func TestProtocolBoth(t *testing.T) {
 	database := setupTestDB(t)
-	serverID := insertServer(t, database, "dns1", "192.168.1.14", false)
+	peerID := insertPeer(t, database, "dns1", "192.168.1.14", false)
 	groupID := insertGroup(t, database, "clients")
 	insertGroupMember(t, database, groupID, "10.0.0.0/8", "cidr")
 	serviceID := insertService(t, database, "dns", "53", "both")
-	insertPolicy(t, database, "allow-dns", groupID, serviceID, serverID, "ACCEPT", 100, true)
+	insertPolicy(t, database, "allow-dns", groupID, serviceID, peerID, "ACCEPT", 100, true)
 
 	c := NewCompiler(database, "test-key")
-	output, err := c.Compile(context.Background(), serverID)
+	output, err := c.Compile(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
 	}
@@ -197,14 +197,14 @@ func TestProtocolBoth(t *testing.T) {
 
 func TestICMPService(t *testing.T) {
 	database := setupTestDB(t)
-	serverID := insertServer(t, database, "mon1", "192.168.1.15", false)
+	peerID := insertPeer(t, database, "mon1", "192.168.1.15", false)
 	groupID := insertGroup(t, database, "monitors")
 	insertGroupMember(t, database, groupID, "10.0.5.0/24", "cidr")
 	serviceID := insertService(t, database, "ping", "", "icmp")
-	insertPolicy(t, database, "allow-ping", groupID, serviceID, serverID, "ACCEPT", 100, true)
+	insertPolicy(t, database, "allow-ping", groupID, serviceID, peerID, "ACCEPT", 100, true)
 
 	c := NewCompiler(database, "test-key")
-	output, err := c.Compile(context.Background(), serverID)
+	output, err := c.Compile(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
 	}
@@ -224,7 +224,7 @@ func TestICMPService(t *testing.T) {
 
 func TestGroupOfGroups(t *testing.T) {
 	database := setupTestDB(t)
-	serverID := insertServer(t, database, "app1", "192.168.1.16", false)
+	peerID := insertPeer(t, database, "app1", "192.168.1.16", false)
 
 	groupB := insertGroup(t, database, "inner")
 	insertGroupMember(t, database, groupB, "10.0.2.1", "ip")
@@ -233,10 +233,10 @@ func TestGroupOfGroups(t *testing.T) {
 	insertGroupMember(t, database, groupA, strconv.Itoa(groupB), "group_ref")
 
 	serviceID := insertService(t, database, "http", "80", "tcp")
-	insertPolicy(t, database, "nested-allow", groupA, serviceID, serverID, "ACCEPT", 100, true)
+	insertPolicy(t, database, "nested-allow", groupA, serviceID, peerID, "ACCEPT", 100, true)
 
 	c := NewCompiler(database, "test-key")
-	output, err := c.Compile(context.Background(), serverID)
+	output, err := c.Compile(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
 	}
@@ -248,7 +248,7 @@ func TestGroupOfGroups(t *testing.T) {
 
 func TestCircularGroupRef(t *testing.T) {
 	database := setupTestDB(t)
-	serverID := insertServer(t, database, "circ1", "192.168.1.17", false)
+	peerID := insertPeer(t, database, "circ1", "192.168.1.17", false)
 
 	groupA := insertGroup(t, database, "circA")
 	groupB := insertGroup(t, database, "circB")
@@ -258,10 +258,10 @@ func TestCircularGroupRef(t *testing.T) {
 	insertGroupMember(t, database, groupB, strconv.Itoa(groupA), "group_ref")
 
 	serviceID := insertService(t, database, "ssh2", "22", "tcp")
-	insertPolicy(t, database, "circ-policy", groupA, serviceID, serverID, "ACCEPT", 100, true)
+	insertPolicy(t, database, "circ-policy", groupA, serviceID, peerID, "ACCEPT", 100, true)
 
 	c := NewCompiler(database, "test-key")
-	_, err := c.Compile(context.Background(), serverID)
+	_, err := c.Compile(context.Background(), peerID)
 	if err == nil {
 		t.Fatal("expected error for circular group reference, got nil")
 	}
@@ -272,10 +272,10 @@ func TestCircularGroupRef(t *testing.T) {
 
 func TestNoPolicies(t *testing.T) {
 	database := setupTestDB(t)
-	serverID := insertServer(t, database, "empty1", "192.168.1.18", false)
+	peerID := insertPeer(t, database, "empty1", "192.168.1.18", false)
 
 	c := NewCompiler(database, "test-key")
-	output, err := c.Compile(context.Background(), serverID)
+	output, err := c.Compile(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
 	}
@@ -295,20 +295,20 @@ func TestNoPolicies(t *testing.T) {
 	}
 	// Should not have any policy-specific comments
 	if strings.Contains(output, "# --- Policy:") {
-		t.Error("expected no policy rules for server with no policies")
+		t.Error("expected no policy rules for peer with no policies")
 	}
 }
 
 func TestLogDropAction(t *testing.T) {
 	database := setupTestDB(t)
-	serverID := insertServer(t, database, "logdrop1", "192.168.1.19", false)
+	peerID := insertPeer(t, database, "logdrop1", "192.168.1.19", false)
 	groupID := insertGroup(t, database, "untrusted")
 	insertGroupMember(t, database, groupID, "172.16.0.0/12", "cidr")
 	serviceID := insertService(t, database, "telnet", "23", "tcp")
-	insertPolicy(t, database, "block-telnet", groupID, serviceID, serverID, "LOG_DROP", 100, true)
+	insertPolicy(t, database, "block-telnet", groupID, serviceID, peerID, "LOG_DROP", 100, true)
 
 	c := NewCompiler(database, "test-key")
-	output, err := c.Compile(context.Background(), serverID)
+	output, err := c.Compile(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
 	}
@@ -323,14 +323,14 @@ func TestLogDropAction(t *testing.T) {
 
 func TestDisabledPolicy(t *testing.T) {
 	database := setupTestDB(t)
-	serverID := insertServer(t, database, "disabled1", "192.168.1.20", false)
+	peerID := insertPeer(t, database, "disabled1", "192.168.1.20", false)
 	groupID := insertGroup(t, database, "office2")
 	insertGroupMember(t, database, groupID, "10.0.1.0/24", "cidr")
 	serviceID := insertService(t, database, "ftp", "21", "tcp")
-	insertPolicy(t, database, "disabled-ftp", groupID, serviceID, serverID, "ACCEPT", 100, false)
+	insertPolicy(t, database, "disabled-ftp", groupID, serviceID, peerID, "ACCEPT", 100, false)
 
 	c := NewCompiler(database, "test-key")
-	output, err := c.Compile(context.Background(), serverID)
+	output, err := c.Compile(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
 	}
@@ -345,7 +345,7 @@ func TestDisabledPolicy(t *testing.T) {
 
 func TestPriorityOrdering(t *testing.T) {
 	database := setupTestDB(t)
-	serverID := insertServer(t, database, "prio1", "192.168.1.21", false)
+	peerID := insertPeer(t, database, "prio1", "192.168.1.21", false)
 
 	groupID := insertGroup(t, database, "prio-group")
 	insertGroupMember(t, database, groupID, "10.0.0.1", "ip")
@@ -354,11 +354,11 @@ func TestPriorityOrdering(t *testing.T) {
 	serviceLow := insertService(t, database, "low-prio-svc", "9090", "tcp")
 
 	// Insert low priority (200) first, high priority (50) second
-	insertPolicy(t, database, "low-prio", groupID, serviceLow, serverID, "ACCEPT", 200, true)
-	insertPolicy(t, database, "high-prio", groupID, serviceHigh, serverID, "ACCEPT", 50, true)
+	insertPolicy(t, database, "low-prio", groupID, serviceLow, peerID, "ACCEPT", 200, true)
+	insertPolicy(t, database, "high-prio", groupID, serviceHigh, peerID, "ACCEPT", 50, true)
 
 	c := NewCompiler(database, "test-key")
-	output, err := c.Compile(context.Background(), serverID)
+	output, err := c.Compile(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
 	}
@@ -375,21 +375,21 @@ func TestPriorityOrdering(t *testing.T) {
 	}
 }
 
-func TestDockerServer(t *testing.T) {
+func TestDockerPeer(t *testing.T) {
 	database := setupTestDB(t)
-	serverID := insertServer(t, database, "docker1", "192.168.1.22", true)
+	peerID := insertPeer(t, database, "docker1", "192.168.1.22", true)
 
 	c := NewCompiler(database, "test-key")
-	output, err := c.Compile(context.Background(), serverID)
+	output, err := c.Compile(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
 	}
 
 	if !strings.Contains(output, ":DOCKER-USER - [0:0]") {
-		t.Error("expected DOCKER-USER chain declaration for docker server")
+		t.Error("expected DOCKER-USER chain declaration for docker peer")
 	}
 	if !strings.Contains(output, "-A DOCKER-USER -j RETURN") {
-		t.Error("expected DOCKER-USER RETURN rule for docker server")
+		t.Error("expected DOCKER-USER RETURN rule for docker peer")
 	}
 }
 
@@ -438,32 +438,32 @@ func TestPolicyParsingAndValidation(t *testing.T) {
 		{
 			name: "valid policy with all fields",
 			setup: func(t *testing.T, db *sql.DB) (int, error) {
-				serverID := insertServer(t, db, "test1", "10.0.0.1", false)
+				peerID := insertPeer(t, db, "test1", "10.0.0.1", false)
 				groupID := insertGroup(t, db, "test-group")
 				insertGroupMember(t, db, groupID, "192.168.1.0/24", "cidr")
 				serviceID := insertService(t, db, "test-service", "80", "tcp")
-				return insertPolicy(t, db, "test-policy", groupID, serviceID, serverID, "ACCEPT", 100, true), nil
+				return insertPolicy(t, db, "test-policy", groupID, serviceID, peerID, "ACCEPT", 100, true), nil
 			},
 			wantErr: false,
 		},
 		{
 			name: "policy with DROP action",
 			setup: func(t *testing.T, db *sql.DB) (int, error) {
-				serverID := insertServer(t, db, "test2", "10.0.0.2", false)
+				peerID := insertPeer(t, db, "test2", "10.0.0.2", false)
 				groupID := insertGroup(t, db, "blocked-group")
 				insertGroupMember(t, db, groupID, "10.0.2.0/24", "cidr")
 				serviceID := insertService(t, db, "blocked-service", "22", "tcp")
-				return insertPolicy(t, db, "block-policy", groupID, serviceID, serverID, "DROP", 200, true), nil
+				return insertPolicy(t, db, "block-policy", groupID, serviceID, peerID, "DROP", 200, true), nil
 			},
 			wantErr: false,
 		},
 		{
-			name: "policy with invalid server ID",
+			name: "policy with invalid peer ID",
 			setup: func(t *testing.T, db *sql.DB) (int, error) {
 				groupID := insertGroup(t, db, "test-group")
 				insertGroupMember(t, db, groupID, "192.168.1.0/24", "cidr")
 				serviceID := insertService(t, db, "test-service", "80", "tcp")
-				insertPolicy(t, db, "invalid-server-policy", groupID, serviceID, 99999, "ACCEPT", 100, true)
+				insertPolicy(t, db, "invalid-peer-policy", groupID, serviceID, 99999, "ACCEPT", 100, true)
 				return 99999, nil
 			},
 			wantErr:     true,
@@ -472,10 +472,10 @@ func TestPolicyParsingAndValidation(t *testing.T) {
 		{
 			name: "policy with invalid group ID",
 			setup: func(t *testing.T, db *sql.DB) (int, error) {
-				serverID := insertServer(t, db, "test3", "10.0.0.3", false)
+				peerID := insertPeer(t, db, "test3", "10.0.0.3", false)
 				serviceID := insertService(t, db, "test-service", "80", "tcp")
-				insertPolicy(t, db, "invalid-group-policy", 99999, serviceID, serverID, "ACCEPT", 100, true)
-				return serverID, nil
+				insertPolicy(t, db, "invalid-group-policy", 99999, serviceID, peerID, "ACCEPT", 100, true)
+				return peerID, nil
 			},
 			wantErr:     true,
 			errContains: "sql: no rows in result set",
@@ -483,11 +483,11 @@ func TestPolicyParsingAndValidation(t *testing.T) {
 		{
 			name: "policy with invalid service ID",
 			setup: func(t *testing.T, db *sql.DB) (int, error) {
-				serverID := insertServer(t, db, "test4", "10.0.0.4", false)
+				peerID := insertPeer(t, db, "test4", "10.0.0.4", false)
 				groupID := insertGroup(t, db, "test-group")
 				insertGroupMember(t, db, groupID, "192.168.1.0/24", "cidr")
-				insertPolicy(t, db, "invalid-service-policy", groupID, 99999, serverID, "ACCEPT", 100, true)
-				return serverID, nil
+				insertPolicy(t, db, "invalid-service-policy", groupID, 99999, peerID, "ACCEPT", 100, true)
+				return peerID, nil
 			},
 			wantErr:     true,
 			errContains: "sql: no rows in result set",
@@ -497,13 +497,13 @@ func TestPolicyParsingAndValidation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			database := setupTestDB(t)
-			serverID, err := tt.setup(t, database)
+			peerID, err := tt.setup(t, database)
 			if err != nil && !tt.wantErr {
 				t.Fatalf("setup failed: %v", err)
 			}
 
 			c := NewCompiler(database, "test-key")
-			_, err = c.Compile(context.Background(), serverID)
+			_, err = c.Compile(context.Background(), peerID)
 
 			if tt.wantErr {
 				if err == nil {
@@ -530,12 +530,12 @@ func TestRuleCompilationToIptablesFormat(t *testing.T) {
 		{
 			name: "single port TCP rule",
 			setup: func(t *testing.T, db *sql.DB) (int, error) {
-				serverID := insertServer(t, db, "web1", "10.0.0.1", false)
+				peerID := insertPeer(t, db, "web1", "10.0.0.1", false)
 				groupID := insertGroup(t, db, "office")
 				insertGroupMember(t, db, groupID, "192.168.1.100", "ip")
 				serviceID := insertService(t, db, "ssh", "22", "tcp")
-				insertPolicy(t, db, "allow-ssh", groupID, serviceID, serverID, "ACCEPT", 100, true)
-				return serverID, nil
+				insertPolicy(t, db, "allow-ssh", groupID, serviceID, peerID, "ACCEPT", 100, true)
+				return peerID, nil
 			},
 			expectedRules: []string{
 				"-s 192.168.1.100/32 -p tcp --dport 22 -m state --state NEW,ESTABLISHED -j ACCEPT",
@@ -545,12 +545,12 @@ func TestRuleCompilationToIptablesFormat(t *testing.T) {
 		{
 			name: "multiport rule",
 			setup: func(t *testing.T, db *sql.DB) (int, error) {
-				serverID := insertServer(t, db, "web2", "10.0.0.2", false)
+				peerID := insertPeer(t, db, "web2", "10.0.0.2", false)
 				groupID := insertGroup(t, db, "clients")
 				insertGroupMember(t, db, groupID, "10.0.1.0/24", "cidr")
 				serviceID := insertService(t, db, "web", "80,443", "tcp")
-				insertPolicy(t, db, "allow-web", groupID, serviceID, serverID, "ACCEPT", 100, true)
-				return serverID, nil
+				insertPolicy(t, db, "allow-web", groupID, serviceID, peerID, "ACCEPT", 100, true)
+				return peerID, nil
 			},
 			expectedRules: []string{
 				"-s 10.0.1.0/24 -p tcp -m multiport --dports 80,443 -m state --state NEW,ESTABLISHED -j ACCEPT",
@@ -559,12 +559,12 @@ func TestRuleCompilationToIptablesFormat(t *testing.T) {
 		{
 			name: "port range rule",
 			setup: func(t *testing.T, db *sql.DB) (int, error) {
-				serverID := insertServer(t, db, "web3", "10.0.0.3", false)
+				peerID := insertPeer(t, db, "web3", "10.0.0.3", false)
 				groupID := insertGroup(t, db, "clients2")
 				insertGroupMember(t, db, groupID, "10.0.2.0/24", "cidr")
 				serviceID := insertService(t, db, "highports", "8000:9000", "tcp")
-				insertPolicy(t, db, "allow-highports", groupID, serviceID, serverID, "ACCEPT", 100, true)
-				return serverID, nil
+				insertPolicy(t, db, "allow-highports", groupID, serviceID, peerID, "ACCEPT", 100, true)
+				return peerID, nil
 			},
 			expectedRules: []string{
 				"-s 10.0.2.0/24 -p tcp -m multiport --dports 8000:9000 -m state --state NEW,ESTABLISHED -j ACCEPT",
@@ -573,12 +573,12 @@ func TestRuleCompilationToIptablesFormat(t *testing.T) {
 		{
 			name: "UDP rule",
 			setup: func(t *testing.T, db *sql.DB) (int, error) {
-				serverID := insertServer(t, db, "dns1", "10.0.0.4", false)
+				peerID := insertPeer(t, db, "dns1", "10.0.0.4", false)
 				groupID := insertGroup(t, db, "dns-clients")
 				insertGroupMember(t, db, groupID, "10.0.3.0/24", "cidr")
 				serviceID := insertService(t, db, "dns", "53", "udp")
-				insertPolicy(t, db, "allow-dns-udp", groupID, serviceID, serverID, "ACCEPT", 100, true)
-				return serverID, nil
+				insertPolicy(t, db, "allow-dns-udp", groupID, serviceID, peerID, "ACCEPT", 100, true)
+				return peerID, nil
 			},
 			expectedRules: []string{
 				"-s 10.0.3.0/24 -p udp --dport 53 -m state --state NEW,ESTABLISHED -j ACCEPT",
@@ -587,12 +587,12 @@ func TestRuleCompilationToIptablesFormat(t *testing.T) {
 		{
 			name: "both TCP and UDP protocol",
 			setup: func(t *testing.T, db *sql.DB) (int, error) {
-				serverID := insertServer(t, db, "dns2", "10.0.0.5", false)
+				peerID := insertPeer(t, db, "dns2", "10.0.0.5", false)
 				groupID := insertGroup(t, db, "dns-clients2")
 				insertGroupMember(t, db, groupID, "10.0.4.0/24", "cidr")
 				serviceID := insertService(t, db, "dns", "53", "both")
-				insertPolicy(t, db, "allow-dns-both", groupID, serviceID, serverID, "ACCEPT", 100, true)
-				return serverID, nil
+				insertPolicy(t, db, "allow-dns-both", groupID, serviceID, peerID, "ACCEPT", 100, true)
+				return peerID, nil
 			},
 			expectedRules: []string{
 				"-p tcp --dport 53",
@@ -604,13 +604,13 @@ func TestRuleCompilationToIptablesFormat(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			database := setupTestDB(t)
-			serverID, err := tt.setup(t, database)
+			peerID, err := tt.setup(t, database)
 			if err != nil {
 				t.Fatalf("setup failed: %v", err)
 			}
 
 			c := NewCompiler(database, "test-key")
-			output, err := c.Compile(context.Background(), serverID)
+			output, err := c.Compile(context.Background(), peerID)
 			if err != nil {
 				t.Fatalf("compile failed: %v", err)
 			}
@@ -646,7 +646,7 @@ func TestInvalidPoliciesAndMalformedRules(t *testing.T) {
 		{
 			name: "invalid IP address in group",
 			setup: func(t *testing.T, db *sql.DB) (int, error) {
-				serverID := insertServer(t, db, "test1", "10.0.0.1", false)
+				peerID := insertPeer(t, db, "test1", "10.0.0.1", false)
 				groupID := insertGroup(t, db, "bad-ip")
 				_, err := db.Exec("INSERT INTO group_members (group_id, value, type) VALUES (?, ?, ?)",
 					groupID, "999.999.999.999", "ip")
@@ -654,8 +654,8 @@ func TestInvalidPoliciesAndMalformedRules(t *testing.T) {
 					return 0, err
 				}
 				serviceID := insertService(t, db, "test", "80", "tcp")
-				insertPolicy(t, db, "bad-ip-policy", groupID, serviceID, serverID, "ACCEPT", 100, true)
-				return serverID, nil
+				insertPolicy(t, db, "bad-ip-policy", groupID, serviceID, peerID, "ACCEPT", 100, true)
+				return peerID, nil
 			},
 			wantErr:     true,
 			errContains: "invalid IP",
@@ -663,7 +663,7 @@ func TestInvalidPoliciesAndMalformedRules(t *testing.T) {
 		{
 			name: "invalid CIDR in group",
 			setup: func(t *testing.T, db *sql.DB) (int, error) {
-				serverID := insertServer(t, db, "test2", "10.0.0.2", false)
+				peerID := insertPeer(t, db, "test2", "10.0.0.2", false)
 				groupID := insertGroup(t, db, "bad-cidr")
 				_, err := db.Exec("INSERT INTO group_members (group_id, value, type) VALUES (?, ?, ?)",
 					groupID, "10.0.0.0/33", "cidr")
@@ -671,8 +671,8 @@ func TestInvalidPoliciesAndMalformedRules(t *testing.T) {
 					return 0, err
 				}
 				serviceID := insertService(t, db, "test", "80", "tcp")
-				insertPolicy(t, db, "bad-cidr-policy", groupID, serviceID, serverID, "ACCEPT", 100, true)
-				return serverID, nil
+				insertPolicy(t, db, "bad-cidr-policy", groupID, serviceID, peerID, "ACCEPT", 100, true)
+				return peerID, nil
 			},
 			wantErr:     true,
 			errContains: "invalid CIDR",
@@ -680,7 +680,7 @@ func TestInvalidPoliciesAndMalformedRules(t *testing.T) {
 		{
 			name: "invalid group reference",
 			setup: func(t *testing.T, db *sql.DB) (int, error) {
-				serverID := insertServer(t, db, "test3", "10.0.0.3", false)
+				peerID := insertPeer(t, db, "test3", "10.0.0.3", false)
 				groupID := insertGroup(t, db, "bad-ref")
 				_, err := db.Exec("INSERT INTO group_members (group_id, value, type) VALUES (?, ?, ?)",
 					groupID, "not-a-number", "group_ref")
@@ -688,8 +688,8 @@ func TestInvalidPoliciesAndMalformedRules(t *testing.T) {
 					return 0, err
 				}
 				serviceID := insertService(t, db, "test", "80", "tcp")
-				insertPolicy(t, db, "bad-ref-policy", groupID, serviceID, serverID, "ACCEPT", 100, true)
-				return serverID, nil
+				insertPolicy(t, db, "bad-ref-policy", groupID, serviceID, peerID, "ACCEPT", 100, true)
+				return peerID, nil
 			},
 			wantErr:     true,
 			errContains: "invalid group_ref",
@@ -697,14 +697,14 @@ func TestInvalidPoliciesAndMalformedRules(t *testing.T) {
 		{
 			name: "unknown member type",
 			setup: func(t *testing.T, db *sql.DB) (int, error) {
-				serverID := insertServer(t, db, "test4", "10.0.0.4", false)
+				peerID := insertPeer(t, db, "test4", "10.0.0.4", false)
 				groupID := insertGroup(t, db, "bad-type")
 				// Note: "unknown" type violates CHECK constraint, so we insert a valid type instead
 				// and test that compilation handles it properly
 				insertGroupMember(t, db, groupID, "10.0.0.1", "ip")
 				serviceID := insertService(t, db, "test", "80", "tcp")
-				insertPolicy(t, db, "bad-type-policy", groupID, serviceID, serverID, "ACCEPT", 100, true)
-				return serverID, nil
+				insertPolicy(t, db, "bad-type-policy", groupID, serviceID, peerID, "ACCEPT", 100, true)
+				return peerID, nil
 			},
 			wantErr: false, // This test case doesn't actually trigger the error we wanted
 		},
@@ -713,13 +713,13 @@ func TestInvalidPoliciesAndMalformedRules(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			database := setupTestDB(t)
-			serverID, err := tt.setup(t, database)
+			peerID, err := tt.setup(t, database)
 			if err != nil && !tt.wantErr {
 				t.Fatalf("setup failed: %v", err)
 			}
 
 			c := NewCompiler(database, "test-key")
-			_, err = c.Compile(context.Background(), serverID)
+			_, err = c.Compile(context.Background(), peerID)
 
 			if tt.wantErr {
 				if err == nil {
@@ -745,13 +745,13 @@ func TestDockerIntegration(t *testing.T) {
 		expectReturn bool
 	}{
 		{
-			name:         "server with Docker",
+			name:         "peer with Docker",
 			hasDocker:    true,
 			expectDocker: true,
 			expectReturn: true,
 		},
 		{
-			name:         "server without Docker",
+			name:         "peer without Docker",
 			hasDocker:    false,
 			expectDocker: false,
 			expectReturn: false,
@@ -761,10 +761,10 @@ func TestDockerIntegration(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			database := setupTestDB(t)
-			serverID := insertServer(t, database, "docker-test", "10.0.0.1", tt.hasDocker)
+			peerID := insertPeer(t, database, "docker-test", "10.0.0.1", tt.hasDocker)
 
 			c := NewCompiler(database, "test-key")
-			output, err := c.Compile(context.Background(), serverID)
+			output, err := c.Compile(context.Background(), peerID)
 			if err != nil {
 				t.Fatalf("compile failed: %v", err)
 			}
@@ -788,14 +788,14 @@ func TestDockerIntegration(t *testing.T) {
 // Test CompileAndStore functionality
 func TestCompileAndStore(t *testing.T) {
 	database := setupTestDB(t)
-	serverID := insertServer(t, database, "store-test", "10.0.0.1", false)
+	peerID := insertPeer(t, database, "store-test", "10.0.0.1", false)
 	groupID := insertGroup(t, database, "test-group")
 	insertGroupMember(t, database, groupID, "192.168.1.0/24", "cidr")
 	serviceID := insertService(t, database, "test-service", "80", "tcp")
-	insertPolicy(t, database, "test-policy", groupID, serviceID, serverID, "ACCEPT", 100, true)
+	insertPolicy(t, database, "test-policy", groupID, serviceID, peerID, "ACCEPT", 100, true)
 
 	c := NewCompiler(database, "test-key")
-	bundle, err := c.CompileAndStore(context.Background(), serverID)
+	bundle, err := c.CompileAndStore(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("CompileAndStore failed: %v", err)
 	}
@@ -804,8 +804,8 @@ func TestCompileAndStore(t *testing.T) {
 	if bundle.ID == 0 {
 		t.Error("expected non-zero bundle ID")
 	}
-	if bundle.ServerID != serverID {
-		t.Errorf("expected server_id %d, got %d", serverID, bundle.ServerID)
+	if bundle.PeerID != peerID {
+		t.Errorf("expected peer_id %d, got %d", peerID, bundle.PeerID)
 	}
 	if bundle.Version == "" {
 		t.Error("expected non-empty version")
@@ -827,11 +827,11 @@ func TestCompileAndStore(t *testing.T) {
 		t.Errorf("expected 1 bundle, got %d", count)
 	}
 
-	// Verify server's bundle_version was updated
+	// Verify peer's bundle_version was updated
 	var bundleVersion string
-	err = database.QueryRow("SELECT bundle_version FROM servers WHERE id = ?", serverID).Scan(&bundleVersion)
+	err = database.QueryRow("SELECT bundle_version FROM peers WHERE id = ?", peerID).Scan(&bundleVersion)
 	if err != nil {
-		t.Fatalf("query server bundle version: %v", err)
+		t.Fatalf("query peer bundle version: %v", err)
 	}
 	if bundleVersion != bundle.Version {
 		t.Errorf("expected bundle_version %s, got %s", bundle.Version, bundleVersion)
@@ -843,13 +843,13 @@ func TestCompileAndStore(t *testing.T) {
 	}
 }
 
-// Test RecompileAffectedServers
-func TestRecompileAffectedServers(t *testing.T) {
+// Test RecompileAffectedPeers
+func TestRecompileAffectedPeers(t *testing.T) {
 	database := setupTestDB(t)
 
-	// Create two servers
-	server1 := insertServer(t, database, "srv1", "10.0.0.1", false)
-	server2 := insertServer(t, database, "srv2", "10.0.0.2", false)
+	// Create two peers
+	peer1 := insertPeer(t, database, "peer1", "10.0.0.1", false)
+	peer2 := insertPeer(t, database, "peer2", "10.0.0.2", false)
 
 	// Create groups and members
 	group1 := insertGroup(t, database, "group1")
@@ -857,48 +857,48 @@ func TestRecompileAffectedServers(t *testing.T) {
 	group2 := insertGroup(t, database, "group2")
 	insertGroupMember(t, database, group2, "192.168.2.0/24", "cidr")
 
-	// Create service and policies affecting both servers
+	// Create service and policies affecting both peers
 	serviceID := insertService(t, database, "test", "80", "tcp")
-	insertPolicy(t, database, "policy1", group1, serviceID, server1, "ACCEPT", 100, true)
-	insertPolicy(t, database, "policy2", group2, serviceID, server2, "ACCEPT", 100, true)
+	insertPolicy(t, database, "policy1", group1, serviceID, peer1, "ACCEPT", 100, true)
+	insertPolicy(t, database, "policy2", group2, serviceID, peer2, "ACCEPT", 100, true)
 
 	// Compile initial bundles
 	c := NewCompiler(database, "test-key")
-	_, err := c.CompileAndStore(context.Background(), server1)
+	_, err := c.CompileAndStore(context.Background(), peer1)
 	if err != nil {
-		t.Fatalf("compile server1: %v", err)
+		t.Fatalf("compile peer1: %v", err)
 	}
-	_, err = c.CompileAndStore(context.Background(), server2)
+	_, err = c.CompileAndStore(context.Background(), peer2)
 	if err != nil {
-		t.Fatalf("compile server2: %v", err)
+		t.Fatalf("compile peer2: %v", err)
 	}
 
 	// Get initial bundle versions
 	var v1, v2 string
-	database.QueryRow("SELECT bundle_version FROM servers WHERE id = ?", server1).Scan(&v1)
-	database.QueryRow("SELECT bundle_version FROM servers WHERE id = ?", server2).Scan(&v2)
+	database.QueryRow("SELECT bundle_version FROM peers WHERE id = ?", peer1).Scan(&v1)
+	database.QueryRow("SELECT bundle_version FROM peers WHERE id = ?", peer2).Scan(&v2)
 
-	// Add a new member to group1 (affects server1)
+	// Add a new member to group1 (affects peer1)
 	insertGroupMember(t, database, group1, "10.1.1.1", "ip")
 
-	// Recompile affected servers for group1
-	err = c.RecompileAffectedServers(context.Background(), group1)
+	// Recompile affected peers for group1
+	err = c.RecompileAffectedPeers(context.Background(), group1)
 	if err != nil {
 		t.Fatalf("recompile affected: %v", err)
 	}
 
-	// Verify server1 has new bundle version
+	// Verify peer1 has new bundle version
 	var newV1 string
-	database.QueryRow("SELECT bundle_version FROM servers WHERE id = ?", server1).Scan(&newV1)
+	database.QueryRow("SELECT bundle_version FROM peers WHERE id = ?", peer1).Scan(&newV1)
 	if newV1 == v1 {
-		t.Error("expected bundle version to change for server1")
+		t.Error("expected bundle version to change for peer1")
 	}
 
-	// Verify server2 bundle version is unchanged
+	// Verify peer2 bundle version is unchanged
 	var newV2 string
-	database.QueryRow("SELECT bundle_version FROM servers WHERE id = ?", server2).Scan(&newV2)
+	database.QueryRow("SELECT bundle_version FROM peers WHERE id = ?", peer2).Scan(&newV2)
 	if newV2 != v2 {
-		t.Error("expected bundle version to stay the same for server2")
+		t.Error("expected bundle version to stay the same for peer2")
 	}
 }
 
@@ -914,15 +914,15 @@ func TestEdgeCases(t *testing.T) {
 		{
 			name: "multiple policies with same priority",
 			setup: func(t *testing.T, db *sql.DB) (int, error) {
-				serverID := insertServer(t, db, "test1", "10.0.0.1", false)
+				peerID := insertPeer(t, db, "test1", "10.0.0.1", false)
 				group1 := insertGroup(t, db, "group1")
 				insertGroupMember(t, db, group1, "192.168.1.0/24", "cidr")
 				group2 := insertGroup(t, db, "group2")
 				insertGroupMember(t, db, group2, "192.168.2.0/24", "cidr")
 				serviceID := insertService(t, db, "test", "80", "tcp")
-				insertPolicy(t, db, "policy1", group1, serviceID, serverID, "ACCEPT", 100, true)
-				insertPolicy(t, db, "policy2", group2, serviceID, serverID, "ACCEPT", 100, true)
-				return serverID, nil
+				insertPolicy(t, db, "policy1", group1, serviceID, peerID, "ACCEPT", 100, true)
+				insertPolicy(t, db, "policy2", group2, serviceID, peerID, "ACCEPT", 100, true)
+				return peerID, nil
 			},
 			wantErr: false,
 			check: func(t *testing.T, output string) {
@@ -938,7 +938,7 @@ func TestEdgeCases(t *testing.T) {
 		{
 			name: "deeply nested group references",
 			setup: func(t *testing.T, db *sql.DB) (int, error) {
-				serverID := insertServer(t, db, "test2", "10.0.0.2", false)
+				peerID := insertPeer(t, db, "test2", "10.0.0.2", false)
 				groupA := insertGroup(t, db, "groupA")
 				groupB := insertGroup(t, db, "groupB")
 				groupC := insertGroup(t, db, "groupC")
@@ -946,8 +946,8 @@ func TestEdgeCases(t *testing.T) {
 				insertGroupMember(t, db, groupB, strconv.Itoa(groupC), "group_ref")
 				insertGroupMember(t, db, groupA, strconv.Itoa(groupB), "group_ref")
 				serviceID := insertService(t, db, "test", "80", "tcp")
-				insertPolicy(t, db, "nested-policy", groupA, serviceID, serverID, "ACCEPT", 100, true)
-				return serverID, nil
+				insertPolicy(t, db, "nested-policy", groupA, serviceID, peerID, "ACCEPT", 100, true)
+				return peerID, nil
 			},
 			wantErr: false,
 			check: func(t *testing.T, output string) {
@@ -959,15 +959,15 @@ func TestEdgeCases(t *testing.T) {
 		{
 			name: "duplicate IP in different groups",
 			setup: func(t *testing.T, db *sql.DB) (int, error) {
-				serverID := insertServer(t, db, "test3", "10.0.0.3", false)
+				peerID := insertPeer(t, db, "test3", "10.0.0.3", false)
 				group1 := insertGroup(t, db, "group1")
 				group2 := insertGroup(t, db, "group2")
 				insertGroupMember(t, db, group1, "192.168.1.100", "ip")
 				insertGroupMember(t, db, group2, "192.168.1.100", "ip")
 				serviceID := insertService(t, db, "test", "80", "tcp")
-				insertPolicy(t, db, "policy1", group1, serviceID, serverID, "ACCEPT", 100, true)
-				insertPolicy(t, db, "policy2", group2, serviceID, serverID, "ACCEPT", 200, true)
-				return serverID, nil
+				insertPolicy(t, db, "policy1", group1, serviceID, peerID, "ACCEPT", 100, true)
+				insertPolicy(t, db, "policy2", group2, serviceID, peerID, "ACCEPT", 200, true)
+				return peerID, nil
 			},
 			wantErr: false,
 			check: func(t *testing.T, output string) {
@@ -983,13 +983,13 @@ func TestEdgeCases(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			database := setupTestDB(t)
-			serverID, err := tt.setup(t, database)
+			peerID, err := tt.setup(t, database)
 			if err != nil && !tt.wantErr {
 				t.Fatalf("setup failed: %v", err)
 			}
 
 			c := NewCompiler(database, "test-key")
-			output, err := c.Compile(context.Background(), serverID)
+			output, err := c.Compile(context.Background(), peerID)
 
 			if tt.wantErr {
 				if err == nil {

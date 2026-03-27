@@ -4,7 +4,7 @@ import "time"
 
 type LogEvent struct {
 	ID              int       `json:"id"`
-	ServerID        string    `json:"server_id"`
+	PeerID          string    `json:"peer_id"`
 	Hostname        string    `json:"hostname,omitempty"`
 	Timestamp       time.Time `json:"timestamp"`
 	Direction       string    `json:"direction,omitempty"`

@@ -27,24 +27,24 @@ func NewCompiler(database *sql.DB, hmacKey string) *Compiler {
 	}
 }
 
-// Compile produces a complete iptables-restore payload for the given server.
-func (c *Compiler) Compile(ctx context.Context, serverID int) (string, error) {
-	// 1. Load server
+// Compile produces a complete iptables-restore payload for the given peer.
+func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
+	// 1. Load peer
 	var hostname, ipAddress string
 	var hasDocker bool
 	err := c.db.QueryRowContext(ctx,
-		"SELECT hostname, ip_address, has_docker FROM servers WHERE id = ?", serverID,
+		"SELECT hostname, ip_address, has_docker FROM peers WHERE id = ?", peerID,
 	).Scan(&hostname, &ipAddress, &hasDocker)
 	if err != nil {
-		return "", fmt.Errorf("load server %d: %w", serverID, err)
+		return "", fmt.Errorf("load peer %d: %w", peerID, err)
 	}
 
 	// 2. Load enabled policies ordered by priority ASC
 	rows, err := c.db.QueryContext(ctx,
 		`SELECT p.id, p.name, p.source_group_id, p.service_id, p.action, p.priority
-		 FROM policies p
-		 WHERE p.target_server_id = ? AND p.enabled = 1
-		 ORDER BY p.priority ASC`, serverID)
+		FROM policies p
+		WHERE p.target_peer_id = ? AND p.enabled = 1
+		ORDER BY p.priority ASC`, peerID)
 	if err != nil {
 		return "", fmt.Errorf("load policies: %w", err)
 	}
@@ -206,14 +206,14 @@ func (c *Compiler) Compile(ctx context.Context, serverID int) (string, error) {
 
 // PreviewCompile generates a preview of iptables rules for a specific policy without storing them.
 // This is used by the API preview endpoint to show users what rules would be generated.
-func (c *Compiler) PreviewCompile(ctx context.Context, serverID, sourceGroupID, serviceID int) ([]string, error) {
-	// Load server info
+func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceGroupID, serviceID int) ([]string, error) {
+	// Load peer info
 	var hostname, ipAddress string
 	err := c.db.QueryRowContext(ctx,
-		"SELECT hostname, ip_address FROM servers WHERE id = ?", serverID,
+		"SELECT hostname, ip_address FROM peers WHERE id = ?", peerID,
 	).Scan(&hostname, &ipAddress)
 	if err != nil {
-		return nil, fmt.Errorf("load server %d: %w", serverID, err)
+		return nil, fmt.Errorf("load peer %d: %w", peerID, err)
 	}
 
 	// Resolve source group
@@ -275,9 +275,9 @@ func (c *Compiler) PreviewCompile(ctx context.Context, serverID, sourceGroupID, 
 	return rules, nil
 }
 
-// CompileAndStore compiles the rules for a server, signs them, and stores the bundle.
-func (c *Compiler) CompileAndStore(ctx context.Context, serverID int) (models.RuleBundleRow, error) {
-	content, err := c.Compile(ctx, serverID)
+// CompileAndStore compiles the rules for a peer, signs them, and stores the bundle.
+func (c *Compiler) CompileAndStore(ctx context.Context, peerID int) (models.RuleBundleRow, error) {
+	content, err := c.Compile(ctx, peerID)
 	if err != nil {
 		return models.RuleBundleRow{}, fmt.Errorf("compile: %w", err)
 	}
@@ -287,7 +287,7 @@ func (c *Compiler) CompileAndStore(ctx context.Context, serverID int) (models.Ru
 
 	// Use db.SaveBundle to avoid duplicate transaction logic
 	params := models.CreateBundleParams{
-		ServerID:     serverID,
+		PeerID:       peerID,
 		Version:      version,
 		RulesContent: content,
 		HMAC:         signature,
@@ -301,30 +301,30 @@ func (c *Compiler) CompileAndStore(ctx context.Context, serverID int) (models.Ru
 	return bundle, nil
 }
 
-// RecompileAffectedServers finds all servers affected by a group change and recompiles their bundles.
-func (c *Compiler) RecompileAffectedServers(ctx context.Context, groupID int) error {
+// RecompileAffectedPeers finds all peers affected by a group change and recompiles their bundles.
+func (c *Compiler) RecompileAffectedPeers(ctx context.Context, groupID int) error {
 	rows, err := c.db.QueryContext(ctx,
-		`SELECT DISTINCT target_server_id FROM policies WHERE source_group_id = ? AND enabled = 1`, groupID)
+		`SELECT DISTINCT target_peer_id FROM policies WHERE source_group_id = ? AND enabled = 1`, groupID)
 	if err != nil {
-		return fmt.Errorf("find affected servers: %w", err)
+		return fmt.Errorf("find affected peers: %w", err)
 	}
 	defer rows.Close()
 
-	var serverIDs []int
+	var peerIDs []int
 	for rows.Next() {
-		var sid int
-		if err := rows.Scan(&sid); err != nil {
+		var pid int
+		if err := rows.Scan(&pid); err != nil {
 			return err
 		}
-		serverIDs = append(serverIDs, sid)
+		peerIDs = append(peerIDs, pid)
 	}
 	if err := rows.Err(); err != nil {
 		return err
 	}
 
-	for _, sid := range serverIDs {
-		if _, err := c.CompileAndStore(ctx, sid); err != nil {
-			return fmt.Errorf("recompile server %d: %w", sid, err)
+	for _, pid := range peerIDs {
+		if _, err := c.CompileAndStore(ctx, pid); err != nil {
+			return fmt.Errorf("recompile peer %d: %w", pid, err)
 		}
 	}
 	return nil

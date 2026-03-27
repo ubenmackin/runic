@@ -10,7 +10,7 @@ import LogLine from '../components/LogLine'
 export default function Logs() {
   const [mode, setMode] = useState('historical') // 'live' | 'historical'
   const [filter, setFilter] = useState({
-    server_id: '',
+    peer_id: '',
     action: '',
     src_ip: '',
     dst_port: '',
@@ -196,13 +196,13 @@ export default function Logs() {
       {mode === 'historical' && (
         <div className="flex flex-wrap gap-3 items-end bg-white dark:bg-gray-800 p-4 rounded-xl">
           <div className="space-y-1">
-            <label className="text-xs font-medium text-gray-500 dark:text-gray-400">Server</label>
-            <select
-              value={filter.server_id}
-              onChange={e => setFilter(f => ({ ...f, server_id: e.target.value, offset: 0 }))}
+<label className="text-xs font-medium text-gray-500 dark:text-gray-400">Peer</label>
+                <select
+                  value={filter.peer_id}
+                  onChange={e => setFilter(f => ({ ...f, peer_id: e.target.value, offset: 0 }))}
               className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm min-w-[150px]"
             >
-              <option value="">All servers</option>
+              <option value="">All peers</option>
               {peers?.map(s => (
                 <option key={s.id} value={s.id}>{s.hostname}</option>
               ))}

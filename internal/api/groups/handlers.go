@@ -177,13 +177,13 @@ func MakeAddGroupMemberHandler(compiler *engine.Compiler) http.HandlerFunc {
 
 		id, _ := result.LastInsertId()
 
-		// Trigger async recompilation for affected servers with timeout
+		// Trigger async recompilation for affected peers with timeout
 		go func() {
 			// Use background context so goroutine survives handler return
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 			defer cancel()
-			if err := compiler.RecompileAffectedServers(ctx, groupID); err != nil {
-				runiclog.ErrorContext(ctx, "async recompile affected servers failed",
+			if err := compiler.RecompileAffectedPeers(ctx, groupID); err != nil {
+				runiclog.ErrorContext(ctx, "async recompile affected peers failed",
 					"group_id", groupID,
 					"error", err)
 			}
@@ -219,8 +219,8 @@ func MakeDeleteGroupMemberHandler(compiler *engine.Compiler) http.HandlerFunc {
 			// Use background context so goroutine survives handler return
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 			defer cancel()
-			if err := compiler.RecompileAffectedServers(ctx, groupID); err != nil {
-				runiclog.ErrorContext(ctx, "async recompile affected servers failed",
+			if err := compiler.RecompileAffectedPeers(ctx, groupID); err != nil {
+				runiclog.ErrorContext(ctx, "async recompile affected peers failed",
 					"group_id", groupID,
 					"error", err)
 			}

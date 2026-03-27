@@ -42,10 +42,10 @@ type Client struct {
 }
 
 type LogFilter struct {
-	ServerID string
-	Action   string
-	SrcIP    string
-	DstPort  int
+	PeerID  string
+	Action  string
+	SrcIP   string
+	DstPort int
 }
 
 func NewHub() *Hub {
@@ -111,7 +111,7 @@ func (h *Hub) Broadcast(event models.LogEvent) {
 
 func (c *Client) matchesFilter(ev models.LogEvent) bool {
 	f := c.filter
-	if f.ServerID != "" && ev.ServerID != f.ServerID {
+	if f.PeerID != "" && ev.PeerID != f.PeerID {
 		return false
 	}
 	if f.Action != "" && ev.Action != f.Action {

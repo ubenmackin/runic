@@ -15,7 +15,7 @@ import TableSkeleton from '../components/TableSkeleton'
 export default function Policies() {
   const qc = useQueryClient()
   const showToast = useToastContext()
-  const { modalOpen, setModalOpen, editItem: editPolicy, setEditItem: setEditPolicy, form: formData, setForm: setFormData, setFormForEdit, handleOpenAdd, handleCancel } = useCrudModal({ name: '', description: '', source_group_id: '', service_id: '', target_server_id: '', action: 'accept', priority: 100, enabled: true })
+  const { modalOpen, setModalOpen, editItem: editPolicy, setEditItem: setEditPolicy, form: formData, setForm: setFormData, setFormForEdit, handleOpenAdd, handleCancel } = useCrudModal({ name: '', description: '', source_group_id: '', service_id: '', target_peer_id: '', action: 'accept', priority: 100, enabled: true })
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [filterServer, setFilterServer] = useState(null)
   const [showDisabled, setShowDisabled] = useState(false)
@@ -104,13 +104,13 @@ export default function Policies() {
   }
 
   const fetchPreview = async () => {
-    if (!formData.source_group_id || !formData.service_id || !formData.target_server_id) {
-      setFormErrors({ _general: 'Select source group, service, and target server to preview' })
+if (!formData.source_group_id || !formData.service_id || !formData.target_peer_id) {
+    setFormErrors({ _general: 'Select source group, service, and target peer to preview' })
       return
     }
     setPreviewLoading(true)
     try {
-      const data = await api.post('/policies/preview', { source_group_id: formData.source_group_id, service_id: formData.service_id, target_server_id: formData.target_server_id })
+      const data = await api.post('/policies/preview', { source_group_id: formData.source_group_id, service_id: formData.service_id, target_peer_id: formData.target_peer_id })
       setPreview(data)
       setFormErrors({})
     } catch (err) {
@@ -122,7 +122,7 @@ export default function Policies() {
 
   const filteredPolicies = (policies || []).filter(p => {
     if (!showDisabled && !p.enabled) return false
-    if (filterServer && p.target_server_id !== filterServer) return false
+    if (filterServer && p.target_peer_id !== filterServer) return false
     return true
   }).sort((a, b) => a.priority - b.priority)
 
@@ -144,7 +144,7 @@ export default function Policies() {
       {/* Filters */}
       <div className="flex flex-wrap gap-4 items-center bg-white dark:bg-gray-800 p-4 rounded-xl">
         <div className="w-48">
-          <SearchableSelect options={[{ value: '', label: 'All Servers' }, ...serverOptions]} value={filterServer || ''} onChange={v => setFilterServer(v || null)} placeholder="Filter by server" />
+          <SearchableSelect options={[{ value: '', label: 'All Peers' }, ...serverOptions]} value={filterServer || ''} onChange={v => setFilterServer(v || null)} placeholder="Filter by peer" />
         </div>
         <label className="flex items-center gap-2 cursor-pointer">
           <ToggleSwitch checked={showDisabled} onChange={setShowDisabled} />
@@ -160,7 +160,7 @@ export default function Policies() {
           { key: 'name', label: 'Name', render: (p) => <span className="font-medium text-gray-900 dark:text-white">{p.name}</span> },
           { key: 'source_group_id', label: 'Source', render: (p) => getGroupName(p.source_group_id) },
           { key: 'service_id', label: 'Service', render: (p) => getServiceName(p.service_id) },
-          { key: 'target_server_id', label: 'Target', render: (p) => getServerHostname(p.target_server_id) },
+          { key: 'target_peer_id', label: 'Target', render: (p) => getServerHostname(p.target_peer_id) },
           { key: 'action', label: 'Action', render: (p) => (
             <span className={`px-2 py-0.5 rounded text-xs font-medium ${p.action === 'accept' ? 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300' : 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300'}`}>
               {p.action.toUpperCase()}
@@ -207,8 +207,8 @@ export default function Policies() {
                   <SearchableSelect options={serviceOptions} value={formData.service_id} onChange={v => setFormData(d => ({ ...d, service_id: v }))} placeholder="Select service" />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Target Server</label>
-                  <SearchableSelect options={serverOptions} value={formData.target_server_id} onChange={v => setFormData(d => ({ ...d, target_server_id: v }))} placeholder="Select server" />
+<label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Target Peer</label>
+              <SearchableSelect options={serverOptions} value={formData.target_peer_id} onChange={v => setFormData(d => ({ ...d, target_peer_id: v }))} placeholder="Select peer" />
                 </div>
               </div>
               <div>
@@ -256,7 +256,7 @@ export default function Policies() {
       {deleteTarget && (
         <ConfirmModal
           title="Delete Policy"
-          message={`Delete policy "${deleteTarget.name}"? Rules will be removed from ${getServerHostname(deleteTarget.target_server_id)} on next push.`}
+          message={`Delete policy "${deleteTarget.name}"? Rules will be removed from ${getServerHostname(deleteTarget.target_peer_id)} on next push.`}
           onConfirm={() => deleteMutation.mutate(deleteTarget.id)}
           onCancel={() => setDeleteTarget(null)}
           danger

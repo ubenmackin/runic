@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-type ServerRow struct {
+type PeerRow struct {
 	ID            int
 	Hostname      string
 	IPAddress     string
@@ -15,6 +15,7 @@ type ServerRow struct {
 	AgentKey      string
 	AgentToken    sql.NullString
 	AgentVersion  sql.NullString
+	IsManual      bool
 	BundleVersion sql.NullString
 	LastHeartbeat sql.NullTime
 	Status        string
@@ -44,22 +45,22 @@ type ServiceRow struct {
 }
 
 type PolicyRow struct {
-	ID             int
-	Name           string
-	Description    string
-	SourceGroupID  int
-	ServiceID      int
-	TargetServerID int
-	Action         string
-	Priority       int
-	Enabled        bool
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	ID            int
+	Name          string
+	Description   string
+	SourceGroupID int
+	ServiceID     int
+	TargetPeerID  int
+	Action        string
+	Priority      int
+	Enabled       bool
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }
 
 type RuleBundleRow struct {
 	ID           int
-	ServerID     int
+	PeerID       int
 	Version      string
 	RulesContent string
 	HMAC         string
@@ -68,7 +69,7 @@ type RuleBundleRow struct {
 }
 
 type CreateBundleParams struct {
-	ServerID     int
+	PeerID       int
 	Version      string
 	RulesContent string
 	HMAC         string

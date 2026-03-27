@@ -120,20 +120,176 @@ func migrateSchema(database *sql.DB) error {
 		log.Println("Migration: added role column to users table")
 	}
 
+	// Migration: Rename servers → peers (for existing databases)
+	var hasServersTable bool
+	err = database.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='servers'").Scan(&hasServersTable)
+	if err != nil {
+		return fmt.Errorf("failed to check for servers table: %w", err)
+	}
+
+	if hasServersTable {
+		log.Println("Migration: renaming servers → peers")
+
+		tx, err := database.Begin()
+		if err != nil {
+			return fmt.Errorf("failed to begin migration transaction: %w", err)
+		}
+		defer tx.Rollback()
+
+		// 1. Rename servers table to peers
+		if _, err := tx.Exec("ALTER TABLE servers RENAME TO peers"); err != nil {
+			return fmt.Errorf("failed to rename servers to peers: %w", err)
+		}
+
+		// 2. Add is_manual column
+		if _, err := tx.Exec("ALTER TABLE peers ADD COLUMN is_manual BOOLEAN NOT NULL DEFAULT 0"); err != nil {
+			return fmt.Errorf("failed to add is_manual column: %w", err)
+		}
+
+		// 3. Recreate policies table with target_peer_id
+		if _, err := tx.Exec(`CREATE TABLE policies_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            description TEXT,
+            source_group_id INTEGER NOT NULL,
+            service_id INTEGER NOT NULL,
+            target_peer_id INTEGER NOT NULL,
+            action TEXT NOT NULL DEFAULT 'ACCEPT' CHECK(action IN ('ACCEPT', 'DROP', 'LOG_DROP')),
+            priority INTEGER NOT NULL DEFAULT 100,
+            enabled BOOLEAN NOT NULL DEFAULT 1,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(source_group_id) REFERENCES groups(id),
+            FOREIGN KEY(service_id) REFERENCES services(id),
+            FOREIGN KEY(target_peer_id) REFERENCES peers(id)
+        )`); err != nil {
+			return fmt.Errorf("failed to create policies_new: %w", err)
+		}
+		if _, err := tx.Exec(`INSERT INTO policies_new SELECT id, name, description, source_group_id, service_id, target_server_id, action, priority, enabled, created_at, updated_at FROM policies`); err != nil {
+			return fmt.Errorf("failed to copy policies: %w", err)
+		}
+		if _, err := tx.Exec("DROP TABLE policies"); err != nil {
+			return fmt.Errorf("failed to drop policies: %w", err)
+		}
+		if _, err := tx.Exec("ALTER TABLE policies_new RENAME TO policies"); err != nil {
+			return fmt.Errorf("failed to rename policies_new: %w", err)
+		}
+
+		// 4. Recreate rule_bundles table with peer_id
+		if _, err := tx.Exec(`CREATE TABLE rule_bundles_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            peer_id INTEGER NOT NULL,
+            version TEXT NOT NULL,
+            rules_content TEXT NOT NULL,
+            hmac TEXT NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            applied_at DATETIME,
+            FOREIGN KEY(peer_id) REFERENCES peers(id) ON DELETE CASCADE
+        )`); err != nil {
+			return fmt.Errorf("failed to create rule_bundles_new: %w", err)
+		}
+		if _, err := tx.Exec(`INSERT INTO rule_bundles_new SELECT id, server_id, version, rules_content, hmac, created_at, applied_at FROM rule_bundles`); err != nil {
+			return fmt.Errorf("failed to copy rule_bundles: %w", err)
+		}
+		if _, err := tx.Exec("DROP TABLE rule_bundles"); err != nil {
+			return fmt.Errorf("failed to drop rule_bundles: %w", err)
+		}
+		if _, err := tx.Exec("ALTER TABLE rule_bundles_new RENAME TO rule_bundles"); err != nil {
+			return fmt.Errorf("failed to rename rule_bundles_new: %w", err)
+		}
+
+		// 5. Recreate firewall_logs table with peer_id
+		if _, err := tx.Exec(`CREATE TABLE firewall_logs_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            peer_id INTEGER NOT NULL,
+            timestamp DATETIME NOT NULL,
+            direction TEXT,
+            src_ip TEXT NOT NULL,
+            dst_ip TEXT NOT NULL,
+            protocol TEXT NOT NULL,
+            src_port INTEGER,
+            dst_port INTEGER,
+            action TEXT NOT NULL,
+            raw_line TEXT,
+            FOREIGN KEY(peer_id) REFERENCES peers(id) ON DELETE CASCADE
+        )`); err != nil {
+			return fmt.Errorf("failed to create firewall_logs_new: %w", err)
+		}
+		if _, err := tx.Exec(`INSERT INTO firewall_logs_new SELECT id, server_id, timestamp, direction, src_ip, dst_ip, protocol, src_port, dst_port, action, raw_line FROM firewall_logs`); err != nil {
+			return fmt.Errorf("failed to copy firewall_logs: %w", err)
+		}
+		if _, err := tx.Exec("DROP TABLE firewall_logs"); err != nil {
+			return fmt.Errorf("failed to drop firewall_logs: %w", err)
+		}
+		if _, err := tx.Exec("ALTER TABLE firewall_logs_new RENAME TO firewall_logs"); err != nil {
+			return fmt.Errorf("failed to rename firewall_logs_new: %w", err)
+		}
+
+		// 6. Drop old indexes and create new ones
+		tx.Exec("DROP INDEX IF EXISTS idx_servers_last_heartbeat")
+		tx.Exec("DROP INDEX IF EXISTS idx_firewall_logs_server_id")
+		tx.Exec("DROP INDEX IF EXISTS idx_firewall_logs_server_timestamp")
+		tx.Exec("DROP INDEX IF EXISTS idx_servers_status_heartbeat")
+
+		if _, err := tx.Exec("CREATE INDEX idx_peers_last_heartbeat ON peers(last_heartbeat)"); err != nil {
+			return fmt.Errorf("failed to create idx_peers_last_heartbeat: %w", err)
+		}
+		if _, err := tx.Exec("CREATE INDEX idx_firewall_logs_peer_id ON firewall_logs(peer_id)"); err != nil {
+			return fmt.Errorf("failed to create idx_firewall_logs_peer_id: %w", err)
+		}
+		if _, err := tx.Exec("CREATE INDEX idx_firewall_logs_peer_timestamp ON firewall_logs(peer_id, timestamp DESC)"); err != nil {
+			return fmt.Errorf("failed to create idx_firewall_logs_peer_timestamp: %w", err)
+		}
+		if _, err := tx.Exec("CREATE INDEX idx_peers_status_heartbeat ON peers(status, last_heartbeat)"); err != nil {
+			return fmt.Errorf("failed to create idx_peers_status_heartbeat: %w", err)
+		}
+
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("failed to commit migration: %w", err)
+		}
+		log.Println("Migration: successfully renamed servers → peers")
+	}
+
+	// Check peers table columns for is_manual (handles both fresh installs and migrated DBs)
+	existingPeerColumns := make(map[string]bool)
+	peerRows, err := database.Query("PRAGMA table_info(peers)")
+	if err == nil {
+		defer peerRows.Close()
+		for peerRows.Next() {
+			var cid int
+			var name string
+			var typ string
+			var notnull int
+			var dflt sql.NullString
+			var pk int
+			if err := peerRows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+				return fmt.Errorf("failed to scan peer column info: %w", err)
+			}
+			existingPeerColumns[name] = true
+		}
+	}
+
+	if !existingPeerColumns["is_manual"] {
+		if _, err := database.Exec("ALTER TABLE peers ADD COLUMN is_manual BOOLEAN NOT NULL DEFAULT 0"); err != nil {
+			return fmt.Errorf("failed to add is_manual column: %w", err)
+		}
+		log.Println("Migration: added is_manual column to peers table")
+	}
+
 	return nil
 }
 
-// GetServer fetches a server by ID.
-func GetServer(ctx context.Context, database *sql.DB, serverID int) (models.ServerRow, error) {
-	var s models.ServerRow
+// GetPeer fetches a peer by ID.
+func GetPeer(ctx context.Context, database *sql.DB, peerID int) (models.PeerRow, error) {
+	var p models.PeerRow
 	err := database.QueryRowContext(ctx,
 		`SELECT id, hostname, ip_address, os_type, arch, has_docker, agent_key,
-		        agent_token, agent_version, bundle_version, last_heartbeat, status, created_at
-		 FROM servers WHERE id = ?`, serverID,
-	).Scan(&s.ID, &s.Hostname, &s.IPAddress, &s.OSType, &s.Arch, &s.HasDocker,
-		&s.AgentKey, &s.AgentToken, &s.AgentVersion, &s.BundleVersion,
-		&s.LastHeartbeat, &s.Status, &s.CreatedAt)
-	return s, err
+		        agent_token, agent_version, is_manual, bundle_version, last_heartbeat, status, created_at
+		 FROM peers WHERE id = ?`, peerID,
+	).Scan(&p.ID, &p.Hostname, &p.IPAddress, &p.OSType, &p.Arch, &p.HasDocker,
+		&p.AgentKey, &p.AgentToken, &p.AgentVersion, &p.IsManual, &p.BundleVersion,
+		&p.LastHeartbeat, &p.Status, &p.CreatedAt)
+	return p, err
 }
 
 // ListGroupMembers fetches all members of a group.
@@ -156,14 +312,14 @@ func ListGroupMembers(ctx context.Context, database *sql.DB, groupID int) ([]mod
 	return members, rows.Err()
 }
 
-// ListEnabledPolicies fetches enabled policies for a server, ordered by priority ASC.
-func ListEnabledPolicies(ctx context.Context, database *sql.DB, serverID int) ([]models.PolicyRow, error) {
+// ListEnabledPolicies fetches enabled policies for a peer, ordered by priority ASC.
+func ListEnabledPolicies(ctx context.Context, database *sql.DB, peerID int) ([]models.PolicyRow, error) {
 	rows, err := database.QueryContext(ctx,
-		`SELECT id, name, COALESCE(description, ''), source_group_id, service_id, target_server_id,
+		`SELECT id, name, COALESCE(description, ''), source_group_id, service_id, target_peer_id,
 		        action, priority, enabled, created_at, updated_at
 		 FROM policies
-		 WHERE target_server_id = ? AND enabled = 1
-		 ORDER BY priority ASC`, serverID)
+		 WHERE target_peer_id = ? AND enabled = 1
+		 ORDER BY priority ASC`, peerID)
 	if err != nil {
 		return nil, err
 	}
@@ -173,7 +329,7 @@ func ListEnabledPolicies(ctx context.Context, database *sql.DB, serverID int) ([
 	for rows.Next() {
 		var p models.PolicyRow
 		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.SourceGroupID, &p.ServiceID,
-			&p.TargetServerID, &p.Action, &p.Priority, &p.Enabled, &p.CreatedAt, &p.UpdatedAt); err != nil {
+			&p.TargetPeerID, &p.Action, &p.Priority, &p.Enabled, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			return nil, err
 		}
 		policies = append(policies, p)
@@ -200,7 +356,7 @@ func GetGroup(ctx context.Context, database *sql.DB, groupID int) (models.GroupR
 	return g, err
 }
 
-// SaveBundle inserts a new rule bundle and updates the server's bundle_version.
+// SaveBundle inserts a new rule bundle and updates the peer's bundle_version.
 func SaveBundle(ctx context.Context, database *sql.DB, params models.CreateBundleParams) (models.RuleBundleRow, error) {
 	tx, err := database.BeginTx(ctx, nil)
 	if err != nil {
@@ -209,8 +365,8 @@ func SaveBundle(ctx context.Context, database *sql.DB, params models.CreateBundl
 	defer tx.Rollback()
 
 	result, err := tx.ExecContext(ctx,
-		`INSERT INTO rule_bundles (server_id, version, rules_content, hmac) VALUES (?, ?, ?, ?)`,
-		params.ServerID, params.Version, params.RulesContent, params.HMAC)
+		`INSERT INTO rule_bundles (peer_id, version, rules_content, hmac) VALUES (?, ?, ?, ?)`,
+		params.PeerID, params.Version, params.RulesContent, params.HMAC)
 	if err != nil {
 		return models.RuleBundleRow{}, err
 	}
@@ -218,7 +374,7 @@ func SaveBundle(ctx context.Context, database *sql.DB, params models.CreateBundl
 	bundleID, _ := result.LastInsertId()
 
 	_, err = tx.ExecContext(ctx,
-		`UPDATE servers SET bundle_version = ? WHERE id = ?`, params.Version, params.ServerID)
+		`UPDATE peers SET bundle_version = ? WHERE id = ?`, params.Version, params.PeerID)
 	if err != nil {
 		return models.RuleBundleRow{}, err
 	}
@@ -229,7 +385,7 @@ func SaveBundle(ctx context.Context, database *sql.DB, params models.CreateBundl
 
 	return models.RuleBundleRow{
 		ID:           int(bundleID),
-		ServerID:     params.ServerID,
+		PeerID:       params.PeerID,
 		Version:      params.Version,
 		RulesContent: params.RulesContent,
 		HMAC:         params.HMAC,
@@ -239,7 +395,7 @@ func SaveBundle(ctx context.Context, database *sql.DB, params models.CreateBundl
 // FindPoliciesByGroupID finds policies by source_group_id.
 func FindPoliciesByGroupID(ctx context.Context, database *sql.DB, groupID int) ([]models.PolicyRow, error) {
 	rows, err := database.QueryContext(ctx,
-		`SELECT id, name, COALESCE(description, ''), source_group_id, service_id, target_server_id,
+		`SELECT id, name, COALESCE(description, ''), source_group_id, service_id, target_peer_id,
 		        action, priority, enabled, created_at, updated_at
 		 FROM policies
 		 WHERE source_group_id = ?`, groupID)
@@ -252,7 +408,7 @@ func FindPoliciesByGroupID(ctx context.Context, database *sql.DB, groupID int) (
 	for rows.Next() {
 		var p models.PolicyRow
 		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.SourceGroupID, &p.ServiceID,
-			&p.TargetServerID, &p.Action, &p.Priority, &p.Enabled, &p.CreatedAt, &p.UpdatedAt); err != nil {
+			&p.TargetPeerID, &p.Action, &p.Priority, &p.Enabled, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			return nil, err
 		}
 		policies = append(policies, p)

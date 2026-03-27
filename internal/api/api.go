@@ -17,8 +17,8 @@ import (
 	"runic/internal/api/keys"
 	"runic/internal/api/logs"
 	"runic/internal/api/middleware"
+	"runic/internal/api/peers"
 	"runic/internal/api/policies"
-	"runic/internal/api/servers"
 	"runic/internal/api/services"
 	"runic/internal/api/users"
 	"runic/internal/auth"
@@ -109,9 +109,11 @@ func RegisterRoutes(r *mux.Router, a *API, downloadsDir string) {
 	protected.HandleFunc("/auth/logout", authhandlers.HandleLogoutPOST).Methods("POST")
 
 	// Peers
-	protected.HandleFunc("/peers", servers.GetPeers).Methods("GET")
-	protected.HandleFunc("/peers", servers.CreatePeer).Methods("POST")
-	protected.HandleFunc("/peers/{id:[0-9]+}/compile", servers.MakeCompilePeerHandler(a.Compiler)).Methods("POST")
+	protected.HandleFunc("/peers", peers.GetPeers).Methods("GET")
+	protected.HandleFunc("/peers", peers.CreatePeer).Methods("POST")
+	protected.HandleFunc("/peers/{id:[0-9]+}", peers.DeletePeer).Methods("DELETE")
+	protected.HandleFunc("/peers/{id:[0-9]+}/groups", peers.GetPeerGroups).Methods("GET")
+	protected.HandleFunc("/peers/{id:[0-9]+}/compile", peers.MakeCompilePeerHandler(a.Compiler)).Methods("POST")
 
 	// Groups
 	protected.HandleFunc("/groups", groups.ListGroups).Methods("GET")

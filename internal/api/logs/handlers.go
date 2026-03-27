@@ -59,9 +59,9 @@ func MakeLogsStreamHandler(hub *Hub) http.HandlerFunc {
 			conn: conn,
 			send: make(chan []byte, 256),
 			filter: LogFilter{
-				ServerID: r.URL.Query().Get("server_id"),
-				Action:   r.URL.Query().Get("action"),
-				SrcIP:    r.URL.Query().Get("src_ip"),
+				PeerID: r.URL.Query().Get("peer_id"),
+				Action: r.URL.Query().Get("action"),
+				SrcIP:  r.URL.Query().Get("src_ip"),
 			},
 		}
 		if dstPort := r.URL.Query().Get("dst_port"); dstPort != "" {
@@ -83,7 +83,7 @@ func GetLogs(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	// Parse query parameters
-	serverID := r.URL.Query().Get("server_id")
+	peerID := r.URL.Query().Get("peer_id")
 	srcIP := r.URL.Query().Get("src_ip")
 	dstPort := r.URL.Query().Get("dst_port")
 	action := r.URL.Query().Get("action")
@@ -106,9 +106,9 @@ func GetLogs(w http.ResponseWriter, r *http.Request) {
 	var conditions []string
 	var args []interface{}
 
-	if serverID != "" {
-		conditions = append(conditions, "fl.server_id = ?")
-		args = append(args, serverID)
+	if peerID != "" {
+		conditions = append(conditions, "fl.peer_id = ?")
+		args = append(args, peerID)
 	}
 	if srcIP != "" {
 		conditions = append(conditions, "fl.src_ip LIKE ?")
@@ -141,16 +141,16 @@ func GetLogs(w http.ResponseWriter, r *http.Request) {
 		whereClause = "WHERE " + strings.Join(conditions, " AND ")
 	}
 
-	// LEFT JOIN with servers to get hostname (handles orphaned logs gracefully)
+	// LEFT JOIN with peers to get hostname (handles orphaned logs gracefully)
 	args = append(args, limit, offset)
 
-	query := `SELECT fl.id, fl.server_id, s.hostname, fl.timestamp, fl.direction,
-	fl.src_ip, fl.dst_ip, fl.protocol, fl.src_port, fl.dst_port, fl.action, fl.raw_line
-	FROM firewall_logs fl
-	LEFT JOIN servers s ON fl.server_id = s.id
-	` + whereClause + `
-	ORDER BY fl.timestamp DESC
-	LIMIT ? OFFSET ?`
+	query := `SELECT fl.id, fl.peer_id, p.hostname, fl.timestamp, fl.direction,
+		fl.src_ip, fl.dst_ip, fl.protocol, fl.src_port, fl.dst_port, fl.action, fl.raw_line
+		FROM firewall_logs fl
+		LEFT JOIN peers p ON fl.peer_id = p.id
+		` + whereClause + `
+		ORDER BY fl.timestamp DESC
+		LIMIT ? OFFSET ?`
 
 	rows, err := db.DB.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -169,7 +169,7 @@ func GetLogs(w http.ResponseWriter, r *http.Request) {
 		var srcPort, dstPort sql.NullInt64
 
 		err := rows.Scan(
-			&ev.ID, &ev.ServerID, &hostname, &ev.Timestamp, &direction,
+			&ev.ID, &ev.PeerID, &hostname, &ev.Timestamp, &direction,
 			&ev.SrcIP, &ev.DstIP, &ev.Protocol, &srcPort, &dstPort, &ev.Action, &rawLine,
 		)
 		if err != nil {

@@ -77,10 +77,12 @@ async function request(method, path, body, retry = true) {
     }
   }
 
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: { message: res.statusText } }))
-    throw new Error(err.error?.message || 'Request failed')
-  }
+	if (!res.ok) {
+		const err = await res.json().catch(() => ({ error: res.statusText }))
+		// Handle both { error: "message" } and { error: { message: "..." } } formats
+		const message = typeof err.error === 'string' ? err.error : err.error?.message
+		throw new Error(message || 'Request failed')
+	}
 
   if (res.status === 204) return null
   const json = await res.json()

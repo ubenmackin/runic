@@ -146,7 +146,7 @@ func RegisterAgent(w http.ResponseWriter, r *http.Request) {
 	// Check if hostname already exists
 	var existingID int
 	var existingToken sql.NullString
-	err := db.DB.QueryRowContext(ctx, "SELECT id, agent_token FROM servers WHERE hostname = ?", input.Hostname).Scan(&existingID, &existingToken)
+	err := db.DB.QueryRowContext(ctx, "SELECT id, agent_token FROM peers WHERE hostname = ?", input.Hostname).Scan(&existingID, &existingToken)
 
 	if err == sql.ErrNoRows {
 		// New server — create record
@@ -159,7 +159,7 @@ func RegisterAgent(w http.ResponseWriter, r *http.Request) {
 		}
 		agentKey := generateAgentKey()
 
-		_, err = db.DB.ExecContext(ctx, `INSERT INTO servers (hostname, ip_address, os_type, arch, has_docker, agent_key, agent_token, hmac_key, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'online')`, input.Hostname, input.IP, input.OSType, input.Arch, input.HasDocker, agentKey, agentToken, hmacKey)
+		_, err = db.DB.ExecContext(ctx, `INSERT INTO peers (hostname, ip_address, os_type, arch, has_docker, agent_key, agent_token, hmac_key, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'online')`, input.Hostname, input.IP, input.OSType, input.Arch, input.HasDocker, agentKey, agentToken, hmacKey)
 		if err != nil {
 			runiclog.Error("Failed to create server error", "error", err)
 			http.Error(w, `{"error": "failed to create server"}`, http.StatusInternalServerError)
@@ -188,7 +188,7 @@ func RegisterAgent(w http.ResponseWriter, r *http.Request) {
 		// Token exists, return it along with existing server info
 		var bundleVersion sql.NullString
 		var existingHMACKey string
-		db.DB.QueryRowContext(ctx, "SELECT bundle_version, hmac_key FROM servers WHERE id = ?", existingID).Scan(&bundleVersion, &existingHMACKey)
+		db.DB.QueryRowContext(ctx, "SELECT bundle_version, hmac_key FROM peers WHERE id = ?", existingID).Scan(&bundleVersion, &existingHMACKey)
 
 		respondJSON(w, http.StatusOK, map[string]interface{}{
 			"host_id":                hostID,
@@ -210,9 +210,9 @@ func RegisterAgent(w http.ResponseWriter, r *http.Request) {
 
 	// Fetch existing HMAC key (don't regenerate on reinstall)
 	var existingHMACKey string
-	db.DB.QueryRowContext(ctx, "SELECT hmac_key FROM servers WHERE id = ?", existingID).Scan(&existingHMACKey)
+	db.DB.QueryRowContext(ctx, "SELECT hmac_key FROM peers WHERE id = ?", existingID).Scan(&existingHMACKey)
 
-	db.DB.ExecContext(ctx, "UPDATE servers SET agent_token = ?, status = 'online' WHERE id = ?", newToken, existingID)
+	db.DB.ExecContext(ctx, "UPDATE peers SET agent_token = ?, status = 'online' WHERE id = ?", newToken, existingID)
 
 	respondJSON(w, http.StatusOK, map[string]interface{}{
 		"host_id":                hostID,
@@ -233,9 +233,9 @@ func GetBundle(w http.ResponseWriter, r *http.Request) {
 	// Check If-None-Match header
 	ifNoneMatch := r.Header.Get("If-None-Match")
 
-	// Get latest bundle for this server
+	// Get latest bundle for this peer
 	var bundle models.RuleBundleRow
-	err := db.DB.QueryRowContext(r.Context(), `SELECT id, server_id, version, rules_content, hmac, created_at FROM rule_bundles WHERE server_id = ? ORDER BY created_at DESC LIMIT 1`, serverID).Scan(&bundle.ID, &bundle.ServerID, &bundle.Version, &bundle.RulesContent, &bundle.HMAC, &bundle.CreatedAt)
+	err := db.DB.QueryRowContext(r.Context(), `SELECT id, peer_id, version, rules_content, hmac, created_at FROM rule_bundles WHERE peer_id = ? ORDER BY created_at DESC LIMIT 1`, serverID).Scan(&bundle.ID, &bundle.PeerID, &bundle.Version, &bundle.RulesContent, &bundle.HMAC, &bundle.CreatedAt)
 
 	if err == sql.ErrNoRows {
 		http.Error(w, `{"error": "no bundle found"}`, http.StatusNotFound)
@@ -279,8 +279,8 @@ func Heartbeat(w http.ResponseWriter, r *http.Request) {
 		// Continue anyway — agent_version and bundle_version may be empty
 	}
 
-	// Update server heartbeat and status
-	_, err := db.DB.ExecContext(r.Context(), `UPDATE servers SET last_heartbeat = CURRENT_TIMESTAMP, status = 'online', agent_version = ?, bundle_version = ? WHERE id = ?`, input.AgentVersion, input.BundleVersionApplied, serverID)
+	// Update peer heartbeat and status
+	_, err := db.DB.ExecContext(r.Context(), `UPDATE peers SET last_heartbeat = CURRENT_TIMESTAMP, status = 'online', agent_version = ?, bundle_version = ? WHERE id = ?`, input.AgentVersion, input.BundleVersionApplied, serverID)
 	if err != nil {
 		runiclog.Error("Failed to update heartbeat error", "error", err)
 	}
@@ -328,7 +328,7 @@ func SubmitLogs(w http.ResponseWriter, r *http.Request) {
 			dstPort = int(dpt)
 		}
 
-		_, err := db.DB.ExecContext(r.Context(), `INSERT INTO firewall_logs (server_id, timestamp, direction, src_ip, dst_ip, protocol, src_port, dst_port, action, raw_line) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, serverID, timestamp, direction, srcIP, dstIP, protocol, srcPort, dstPort, action, rawLine)
+		_, err := db.DB.ExecContext(r.Context(), `INSERT INTO firewall_logs (peer_id, timestamp, direction, src_ip, dst_ip, protocol, src_port, dst_port, action, raw_line) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, serverID, timestamp, direction, srcIP, dstIP, protocol, srcPort, dstPort, action, rawLine)
 		if err == nil {
 			eventCount++
 		}
@@ -344,8 +344,8 @@ func SubmitLogs(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		event := models.LogEvent{
-			ServerID: fmt.Sprintf("%d", serverID),
-			Action:   action,
+			PeerID: fmt.Sprintf("%d", serverID),
+			Action: action,
 		}
 		if v, ok := ev["src_ip"].(string); ok {
 			event.SrcIP = v
@@ -392,13 +392,13 @@ func ConfirmBundleApplied(w http.ResponseWriter, r *http.Request) {
 		appliedAt = time.Now().UTC().Format(time.RFC3339)
 	}
 
-	_, err := db.DB.ExecContext(r.Context(), `UPDATE rule_bundles SET applied_at = ? WHERE server_id = ? AND version = ?`, appliedAt, serverID, input.Version)
+	_, err := db.DB.ExecContext(r.Context(), `UPDATE rule_bundles SET applied_at = ? WHERE peer_id = ? AND version = ?`, appliedAt, serverID, input.Version)
 	if err != nil {
 		runiclog.Error("Failed to confirm bundle apply error", "error", err)
 	}
 
-	// Update server's bundle_version
-	db.DB.ExecContext(r.Context(), "UPDATE servers SET bundle_version = ? WHERE id = ?", input.Version, serverID)
+	// Update peer's bundle_version
+	db.DB.ExecContext(r.Context(), "UPDATE peers SET bundle_version = ? WHERE id = ?", input.Version, serverID)
 
 	respondJSON(w, http.StatusOK, map[string]string{"status": "confirmed"})
 }
