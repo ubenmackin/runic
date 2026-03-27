@@ -18,7 +18,7 @@ import (
 )
 
 // Version is the agent version, set at build time.
-var Version = "0.1.0"
+var Version = "0.2.0"
 
 // Agent is the main agent struct.
 type Agent struct {

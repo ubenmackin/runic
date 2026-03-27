@@ -11,6 +11,7 @@ import (
 	"syscall"
 
 	"runic/internal/agent"
+	"runic/internal/agent/core"
 )
 
 func main() {
@@ -18,7 +19,13 @@ func main() {
 	configPath := flag.String("config", "/etc/runic-agent/config.json", "Config file path")
 	uninstall := flag.Bool("uninstall", false, "Uninstall the agent from this system")
 	purge := flag.Bool("purge", false, "Also remove config files (use with --uninstall)")
+	version := flag.Bool("version", false, "Print version and exit")
 	flag.Parse()
+
+	if *version {
+		fmt.Printf("runic-agent version %s\n", core.Version)
+		return
+	}
 
 	if *uninstall {
 		if err := uninstallAgent(*purge); err != nil {
@@ -46,6 +53,8 @@ func main() {
 		log.Println("Received shutdown signal — stopping agent...")
 		cancel()
 	}()
+
+	log.Printf("Starting runic-agent version %s", core.Version)
 
 	if err := a.Run(ctx); err != nil {
 		log.Fatalf("agent error: %v", err)
