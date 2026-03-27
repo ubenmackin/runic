@@ -14,11 +14,13 @@ import (
 	"runic/internal/api/downloads"
 	"runic/internal/api/events"
 	"runic/internal/api/groups"
+	"runic/internal/api/keys"
 	"runic/internal/api/logs"
 	"runic/internal/api/middleware"
 	"runic/internal/api/policies"
 	"runic/internal/api/servers"
 	"runic/internal/api/services"
+	"runic/internal/api/users"
 	"runic/internal/auth"
 	"runic/internal/db"
 	"runic/internal/engine"
@@ -140,6 +142,16 @@ func RegisterRoutes(r *mux.Router, a *API, downloadsDir string) {
 
 	// Dashboard
 	protected.HandleFunc("/dashboard", dashboard.HandleDashboard).Methods("GET")
+
+	// Setup Keys
+	protected.HandleFunc("/setup-keys", keys.ListKeys).Methods("GET")
+	protected.HandleFunc("/setup-keys/{type}", keys.CreateKey).Methods("POST")
+	protected.HandleFunc("/setup-keys/{type}", keys.DeleteKey).Methods("DELETE")
+
+	// Users
+	protected.HandleFunc("/users", users.ListUsers).Methods("GET")
+	protected.HandleFunc("/users", users.CreateUser).Methods("POST")
+	protected.HandleFunc("/users/{id:[0-9]+}", users.DeleteUser).Methods("DELETE")
 
 	// Logs (Phase 5)
 	protected.HandleFunc("/logs", logs.GetLogs).Methods("GET")

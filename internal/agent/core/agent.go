@@ -45,7 +45,7 @@ func New(configPath, controlPlaneURL string) *Agent {
 	cfg := &identity.Config{
 		ControlPlaneURL: controlPlaneURL,
 		PullIntervalSec: 30,
-		LogPath:         "/var/log/firewall",
+		LogPath:         "/var/log/firewall/firewall.log",
 	}
 
 	agent := &Agent{

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Key, RefreshCw, Trash2, Plus } from 'lucide-react'
+import { Trash2, Plus } from 'lucide-react'
 import { api } from '../api/client'
 import { useToastContext } from '../hooks/ToastContext'
 import TableSkeleton from '../components/TableSkeleton'
@@ -8,23 +8,12 @@ import TableSkeleton from '../components/TableSkeleton'
 export default function SetupKeys() {
   const qc = useQueryClient()
   const showToast = useToastContext()
-  const [showRecycleModal, setShowRecycleModal] = useState(null)
   const [showDeleteModal, setShowDeleteModal] = useState(null)
   const [showCreateModal, setShowCreateModal] = useState(null)
 
   const { data: keys, isLoading } = useQuery({
     queryKey: ['setup-keys'],
     queryFn: () => api.get('/setup-keys'),
-  })
-
-  const recycleMutation = useMutation({
-    mutationFn: (keyType) => api.post(`/setup-keys/${keyType}/recycle`),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['setup-keys'] })
-      setShowRecycleModal(null)
-      showToast('Key recycled successfully', 'success')
-    },
-    onError: (err) => showToast(err.message, 'error'),
   })
 
   const deleteMutation = useMutation({
@@ -46,10 +35,6 @@ export default function SetupKeys() {
     },
     onError: (err) => showToast(err.message, 'error'),
   })
-
-  const handleRecycle = (keyType) => {
-    recycleMutation.mutate(keyType)
-  }
 
   const handleDelete = (keyType) => {
     deleteMutation.mutate(keyType)
@@ -79,13 +64,6 @@ export default function SetupKeys() {
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-lg font-semibold text-gray-900 dark:text-white">JWT Secret</h2>
             <div className="flex gap-2">
-              <button
-                onClick={() => setShowRecycleModal('jwt-secret')}
-                className="inline-flex items-center gap-2 px-3 py-2 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded-lg"
-              >
-                <RefreshCw className="w-4 h-4" />
-                Recycle
-              </button>
               <button
                 onClick={() => setShowDeleteModal('jwt-secret')}
                 className="inline-flex items-center gap-2 px-3 py-2 text-sm bg-red-600 hover:bg-red-700 text-white rounded-lg"
@@ -118,13 +96,6 @@ export default function SetupKeys() {
             <h2 className="text-lg font-semibold text-gray-900 dark:text-white">HMAC Key</h2>
             <div className="flex gap-2">
               <button
-                onClick={() => setShowRecycleModal('hmac-key')}
-                className="inline-flex items-center gap-2 px-3 py-2 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded-lg"
-              >
-                <RefreshCw className="w-4 h-4" />
-                Recycle
-              </button>
-              <button
                 onClick={() => setShowDeleteModal('hmac-key')}
                 className="inline-flex items-center gap-2 px-3 py-2 text-sm bg-red-600 hover:bg-red-700 text-white rounded-lg"
               >
@@ -156,13 +127,6 @@ export default function SetupKeys() {
             <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Agent JWT Secret</h2>
             <div className="flex gap-2">
               <button
-                onClick={() => setShowRecycleModal('agent-jwt-secret')}
-                className="inline-flex items-center gap-2 px-3 py-2 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded-lg"
-              >
-                <RefreshCw className="w-4 h-4" />
-                Recycle
-              </button>
-              <button
                 onClick={() => setShowDeleteModal('agent-jwt-secret')}
                 className="inline-flex items-center gap-2 px-3 py-2 text-sm bg-red-600 hover:bg-red-700 text-white rounded-lg"
               >
@@ -186,36 +150,6 @@ export default function SetupKeys() {
           </div>
         </div>
       </div>
-
-      {/* Recycle Confirmation Modal */}
-      {showRecycleModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white dark:bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4">
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
-              Recycle {showRecycleModal === 'jwt-secret' ? 'JWT Secret' :
-              showRecycleModal === 'hmac-key' ? 'HMAC Key' : 'Agent JWT Secret'}?
-            </h3>
-            <p className="text-gray-600 dark:text-gray-400 mb-6">
-              This will generate a new key while keeping the old one for backward compatibility.
-            </p>
-            <div className="flex gap-3">
-              <button
-                onClick={() => setShowRecycleModal(null)}
-                className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => handleRecycle(showRecycleModal)}
-                disabled={recycleMutation.isPending}
-                className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg disabled:opacity-50"
-              >
-                {recycleMutation.isPending ? 'Recycling...' : 'Recycle'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Delete Confirmation Modal */}
       {showDeleteModal && (

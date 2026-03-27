@@ -10,6 +10,10 @@ export default function Users() {
   const showToast = useToastContext()
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState(null)
+  const [formUsername, setFormUsername] = useState('')
+  const [formPassword, setFormPassword] = useState('')
+  const [formEmail, setFormEmail] = useState('')
+  const [formRole, setFormRole] = useState('user')
 
   const { data: users, isLoading } = useQuery({
     queryKey: ['users'],
@@ -21,6 +25,7 @@ export default function Users() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['users'] })
       setShowCreateModal(false)
+      resetForm()
       showToast('User created successfully', 'success')
     },
     onError: (err) => showToast(err.message, 'error'),
@@ -36,8 +41,21 @@ export default function Users() {
     onError: (err) => showToast(err.message, 'error'),
   })
 
-  const handleCreateUser = () => {
-    createMutation.mutate({})
+  const resetForm = () => {
+    setFormUsername('')
+    setFormPassword('')
+    setFormEmail('')
+    setFormRole('user')
+  }
+
+  const handleCreateUser = (e) => {
+    e.preventDefault()
+    createMutation.mutate({
+      username: formUsername,
+      password: formPassword,
+      email: formEmail || undefined,
+      role: formRole,
+    })
   }
 
   if (isLoading) return <TableSkeleton rows={3} columns={4} />
@@ -101,24 +119,84 @@ export default function Users() {
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-white dark:bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4">
             <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Create User</h3>
-            <p className="text-gray-600 dark:text-gray-400 mb-6">
-              User creation form will be implemented here.
-            </p>
-            <div className="flex gap-3">
-              <button
-                onClick={() => setShowCreateModal(false)}
-                className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleCreateUser}
-                disabled={createMutation.isPending}
-                className="flex-1 px-4 py-2 bg-runic-600 hover:bg-runic-700 text-white rounded-lg disabled:opacity-50"
-              >
-                {createMutation.isPending ? 'Creating...' : 'Create'}
-              </button>
-            </div>
+            <form onSubmit={handleCreateUser} className="space-y-4">
+              <div>
+                <label htmlFor="username" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Username <span className="text-red-500">*</span>
+                </label>
+                <input
+                  id="username"
+                  type="text"
+                  required
+                  value={formUsername}
+                  onChange={(e) => setFormUsername(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-runic-500 focus:border-transparent"
+                  placeholder="Enter username"
+                />
+              </div>
+              <div>
+                <label htmlFor="password" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Password <span className="text-red-500">*</span>
+                </label>
+                <input
+                  id="password"
+                  type="password"
+                  required
+                  minLength={8}
+                  value={formPassword}
+                  onChange={(e) => setFormPassword(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-runic-500 focus:border-transparent"
+                  placeholder="Enter password"
+                />
+                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Minimum 8 characters</p>
+              </div>
+              <div>
+                <label htmlFor="email" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Email
+                </label>
+                <input
+                  id="email"
+                  type="email"
+                  value={formEmail}
+                  onChange={(e) => setFormEmail(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-runic-500 focus:border-transparent"
+                  placeholder="Enter email (optional)"
+                />
+              </div>
+              <div>
+                <label htmlFor="role" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Role
+                </label>
+                <select
+                  id="role"
+                  value={formRole}
+                  onChange={(e) => setFormRole(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-runic-500 focus:border-transparent"
+                >
+                  <option value="user">user</option>
+                  <option value="admin">admin</option>
+                </select>
+              </div>
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowCreateModal(false)
+                    resetForm()
+                  }}
+                  className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={createMutation.isPending}
+                  className="flex-1 px-4 py-2 bg-runic-600 hover:bg-runic-700 text-white rounded-lg disabled:opacity-50"
+                >
+                  {createMutation.isPending ? 'Creating...' : 'Create'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

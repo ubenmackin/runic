@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	_ "embed"
+	"fmt"
 	"log"
 	"os"
 
@@ -69,12 +70,57 @@ func InitDB(dataSourceName string) {
 		log.Fatalf("Failed to create schema: %v", err)
 	}
 
+	if err := migrateSchema(DB.DB); err != nil {
+		log.Fatalf("Failed to migrate schema: %v", err)
+	}
+
 	log.Println("Database connection established")
 }
 
 func createSchema(database *sql.DB) error {
 	_, err := database.Exec(schemaSQL)
 	return err
+}
+
+// migrateSchema adds missing columns for schema upgrades on existing databases.
+func migrateSchema(database *sql.DB) error {
+	existingColumns := make(map[string]bool)
+	rows, err := database.Query("PRAGMA table_info(users)")
+	if err != nil {
+		return fmt.Errorf("failed to get table info: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name string
+		var typ string
+		var notnull int
+		var dflt sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+			return fmt.Errorf("failed to scan column info: %w", err)
+		}
+		existingColumns[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("error iterating column info: %w", err)
+	}
+
+	if !existingColumns["email"] {
+		if _, err := database.Exec("ALTER TABLE users ADD COLUMN email TEXT DEFAULT ''"); err != nil {
+			return fmt.Errorf("failed to add email column: %w", err)
+		}
+		log.Println("Migration: added email column to users table")
+	}
+
+	if !existingColumns["role"] {
+		if _, err := database.Exec("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'"); err != nil {
+			return fmt.Errorf("failed to add role column: %w", err)
+		}
+		log.Println("Migration: added role column to users table")
+	}
+
+	return nil
 }
 
 // GetServer fetches a server by ID.

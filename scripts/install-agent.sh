@@ -43,7 +43,7 @@ cat > /etc/runic-agent/config.json << EOF
 {
 "control_plane_url": "${CONTROL_PLANE_URL}",
 "pull_interval_seconds": 30,
-"log_path": "/var/log/firewall"
+"log_path": "/var/log/firewall/firewall.log"
 }
 EOF
 chmod 600 /etc/runic-agent/config.json
