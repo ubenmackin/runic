@@ -871,8 +871,9 @@ clone_repository() {
     git config --global --add safe.directory "$SOURCE_DIR" 2>/dev/null || true
     
 
-        cd "$SOURCE_DIR"
-        git pull origin "$REPO_BRANCH" >> "$LOG_FILE" 2>&1
+	cd "$SOURCE_DIR"
+	git reset --hard HEAD >> "$LOG_FILE" 2>&1
+	git pull origin "$REPO_BRANCH" >> "$LOG_FILE" 2>&1
     else
         log INFO "Cloning repository from $REPO_URL..."
         git clone --depth 1 --branch "$REPO_BRANCH" "$REPO_URL" "$SOURCE_DIR" >> "$LOG_FILE" 2>&1
@@ -981,7 +982,7 @@ build_agent_binaries() {
 	for arch in "${arches[@]}"; do
 		log INFO "Building runic-agent for $arch..."
 
-		CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -buildvcs=false -o "$INSTALL_DIR/downloads/runic-agent-$arch" ./cmd/runic-agent >> "$LOG_FILE" 2>&1
+		CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -a -buildvcs=false -o "$INSTALL_DIR/downloads/runic-agent-$arch" ./cmd/runic-agent >> "$LOG_FILE" 2>&1
 
 		if [ $? -ne 0 ]; then
 			log ERROR "Failed to build runic-agent for $arch. Check $LOG_FILE for details."
