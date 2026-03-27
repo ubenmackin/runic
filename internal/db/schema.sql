@@ -32,12 +32,15 @@ CREATE TABLE IF NOT EXISTS groups (
 );
 
 CREATE TABLE IF NOT EXISTS group_members (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    group_id INTEGER NOT NULL,
-    value TEXT NOT NULL,
-    type TEXT NOT NULL CHECK(type IN ('ip', 'cidr', 'group_ref')),
-    FOREIGN KEY(group_id) REFERENCES groups(id) ON DELETE CASCADE
+id INTEGER PRIMARY KEY AUTOINCREMENT,
+group_id INTEGER NOT NULL,
+peer_id INTEGER NOT NULL,
+added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+FOREIGN KEY(group_id) REFERENCES groups(id) ON DELETE CASCADE,
+FOREIGN KEY(peer_id) REFERENCES peers(id) ON DELETE CASCADE,
+UNIQUE(group_id, peer_id)
 );
+CREATE INDEX IF NOT EXISTS idx_group_members_peer_id ON group_members(peer_id);
 
 CREATE TABLE IF NOT EXISTS services (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

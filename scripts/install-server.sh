@@ -111,19 +111,25 @@ safe_rm() {
         return 0
     fi
 
-    # Validate path matches expected pattern
-    # Using case for glob-style matching
-    case "$path" in
-        $pattern)
-            log INFO "Removing: $path"
-            rm -rf "$path"
-            return $?
-            ;;
-        *)
-            log ERROR "safe_rm: path does not match expected pattern '$pattern': $path"
-            return 1
-            ;;
-    esac
+	# Validate path matches expected pattern OR is the base install directory
+	# Using case for glob-style matching
+	case "$path" in
+	$pattern)
+		log INFO "Removing: $path"
+		rm -rf "$path"
+		return $?
+		;;
+	$INSTALL_DIR)
+		# Allow removing the base install directory
+		log INFO "Removing: $path"
+		rm -rf "$path"
+		return $?
+		;;
+	*)
+		log ERROR "safe_rm: path does not match expected pattern '$pattern': $path"
+		return 1
+		;;
+	esac
 }
 
 # Cleanup function for temporary directories

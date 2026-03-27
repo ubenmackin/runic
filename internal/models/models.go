@@ -31,8 +31,7 @@ type GroupRow struct {
 type GroupMemberRow struct {
 	ID      int
 	GroupID int
-	Value   string
-	Type    string
+	PeerID  int
 }
 
 type ServiceRow struct {

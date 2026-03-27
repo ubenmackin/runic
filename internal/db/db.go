@@ -88,40 +88,49 @@ func createSchema(database *sql.DB) error {
 
 // migrateSchema adds missing columns for schema upgrades on existing databases.
 func migrateSchema(database *sql.DB) error {
-	existingColumns := make(map[string]bool)
-	rows, err := database.Query("PRAGMA table_info(users)")
+	// Check if users table exists (fresh install check)
+	var usersTableExists bool
+	err := database.QueryRow("SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='users'").Scan(&usersTableExists)
 	if err != nil {
-		return fmt.Errorf("failed to get table info: %w", err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var cid int
-		var name string
-		var typ string
-		var notnull int
-		var dflt sql.NullString
-		var pk int
-		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
-			return fmt.Errorf("failed to scan column info: %w", err)
-		}
-		existingColumns[name] = true
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("error iterating column info: %w", err)
+		return fmt.Errorf("failed to check for users table: %w", err)
 	}
 
-	if !existingColumns["email"] {
-		if _, err := database.Exec("ALTER TABLE users ADD COLUMN email TEXT DEFAULT ''"); err != nil {
-			return fmt.Errorf("failed to add email column: %w", err)
+	if usersTableExists {
+		existingColumns := make(map[string]bool)
+		rows, err := database.Query("PRAGMA table_info(users)")
+		if err != nil {
+			return fmt.Errorf("failed to get table info: %w", err)
 		}
-		log.Println("Migration: added email column to users table")
-	}
+		defer rows.Close()
+		for rows.Next() {
+			var cid int
+			var name string
+			var typ string
+			var notnull int
+			var dflt sql.NullString
+			var pk int
+			if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+				return fmt.Errorf("failed to scan column info: %w", err)
+			}
+			existingColumns[name] = true
+		}
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("error iterating column info: %w", err)
+		}
 
-	if !existingColumns["role"] {
-		if _, err := database.Exec("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'"); err != nil {
-			return fmt.Errorf("failed to add role column: %w", err)
+		if !existingColumns["email"] {
+			if _, err := database.Exec("ALTER TABLE users ADD COLUMN email TEXT DEFAULT ''"); err != nil {
+				return fmt.Errorf("failed to add email column: %w", err)
+			}
+			log.Println("Migration: added email column to users table")
 		}
-		log.Println("Migration: added role column to users table")
+
+		if !existingColumns["role"] {
+			if _, err := database.Exec("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'"); err != nil {
+				return fmt.Errorf("failed to add role column: %w", err)
+			}
+			log.Println("Migration: added role column to users table")
+		}
 	}
 
 	// Migration: Rename servers → peers (for existing databases)
@@ -280,6 +289,78 @@ func migrateSchema(database *sql.DB) error {
 		log.Println("Migration: added is_manual column to peers table")
 	}
 
+	// Migration: group_members table restructure (peer-based)
+	// Check if group_members has the old schema (value/type columns instead of peer_id)
+	var hasOldGroupMembersSchema bool
+	groupMembersRows, err := database.Query("PRAGMA table_info(group_members)")
+	if err == nil {
+		defer groupMembersRows.Close()
+		for groupMembersRows.Next() {
+			var cid int
+			var name string
+			var typ string
+			var notnull int
+			var dflt sql.NullString
+			var pk int
+			if err := groupMembersRows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+				return fmt.Errorf("failed to scan group_members column info: %w", err)
+			}
+			// Old schema has 'value' column, new schema has 'peer_id'
+			if name == "value" {
+				hasOldGroupMembersSchema = true
+				break
+			}
+		}
+	}
+
+	if hasOldGroupMembersSchema {
+		log.Println("Migration: restructuring group_members table to peer-based schema")
+
+		tx, err := database.Begin()
+		if err != nil {
+			return fmt.Errorf("failed to begin group_members migration transaction: %w", err)
+		}
+		defer tx.Rollback()
+
+		// 1. Drop existing group_members table
+		if _, err := tx.Exec("DROP TABLE group_members"); err != nil {
+			return fmt.Errorf("failed to drop group_members table: %w", err)
+		}
+
+		// 2. Create new group_members table with peer_id
+		if _, err := tx.Exec(`
+			CREATE TABLE group_members (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				group_id INTEGER NOT NULL,
+				peer_id INTEGER NOT NULL,
+				added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+				FOREIGN KEY(group_id) REFERENCES groups(id) ON DELETE CASCADE,
+				FOREIGN KEY(peer_id) REFERENCES peers(id) ON DELETE CASCADE,
+				UNIQUE(group_id, peer_id)
+			)
+		`); err != nil {
+			return fmt.Errorf("failed to create group_members table: %w", err)
+		}
+
+		// 3. Create index
+		if _, err := tx.Exec("CREATE INDEX idx_group_members_peer_id ON group_members(peer_id)"); err != nil {
+			return fmt.Errorf("failed to create group_members index: %w", err)
+		}
+
+		// 4. Delete existing "any" group and recreate fresh
+		if _, err := tx.Exec("DELETE FROM groups WHERE name = 'any'"); err != nil {
+			return fmt.Errorf("failed to delete existing any group: %w", err)
+		}
+		if _, err := tx.Exec("INSERT INTO groups (name, description) VALUES ('any', 'System group representing all peers')"); err != nil {
+			return fmt.Errorf("failed to create any group: %w", err)
+		}
+
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("failed to commit group_members migration: %w", err)
+		}
+		log.Println("Migration: successfully restructured group_members table")
+	}
+
 	return nil
 }
 
@@ -299,7 +380,7 @@ func GetPeer(ctx context.Context, database *sql.DB, peerID int) (models.PeerRow,
 // ListGroupMembers fetches all members of a group.
 func ListGroupMembers(ctx context.Context, database *sql.DB, groupID int) ([]models.GroupMemberRow, error) {
 	rows, err := database.QueryContext(ctx,
-		"SELECT id, group_id, value, type FROM group_members WHERE group_id = ?", groupID)
+		"SELECT id, group_id, peer_id FROM group_members WHERE group_id = ?", groupID)
 	if err != nil {
 		return nil, err
 	}
@@ -308,7 +389,7 @@ func ListGroupMembers(ctx context.Context, database *sql.DB, groupID int) ([]mod
 	var members []models.GroupMemberRow
 	for rows.Next() {
 		var m models.GroupMemberRow
-		if err := rows.Scan(&m.ID, &m.GroupID, &m.Value, &m.Type); err != nil {
+		if err := rows.Scan(&m.ID, &m.GroupID, &m.PeerID); err != nil {
 			return nil, err
 		}
 		members = append(members, m)
