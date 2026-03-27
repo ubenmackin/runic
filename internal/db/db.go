@@ -66,12 +66,16 @@ func InitDB(dataSourceName string) {
 
 	DB = New(sqlDB)
 
-	if err := createSchema(DB.DB); err != nil {
-		log.Fatalf("Failed to create schema: %v", err)
-	}
-
+	// Run migrations BEFORE schema creation to handle existing databases.
+	// For example, the servers → peers table rename must complete before
+	// schema.sql tries to create indexes on peer_id columns, which would
+	// fail on older databases that still have the "servers" table.
 	if err := migrateSchema(DB.DB); err != nil {
 		log.Fatalf("Failed to migrate schema: %v", err)
+	}
+
+	if err := createSchema(DB.DB); err != nil {
+		log.Fatalf("Failed to create schema: %v", err)
 	}
 
 	log.Println("Database connection established")
