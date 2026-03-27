@@ -404,6 +404,7 @@ func ConfirmBundleApplied(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandleSSEvents handles SSE connections for agents.
+// Deprecated: Use MakeHandleSSEventsHandler for explicit dependency injection.
 func HandleSSEvents(w http.ResponseWriter, r *http.Request) {
 	hostID, _, ok := getHostIDFromContext(w, r)
 	if !ok {
@@ -458,6 +459,68 @@ func HandleSSEvents(w http.ResponseWriter, r *http.Request) {
 		case <-r.Context().Done():
 			// Client disconnected
 			return
+		}
+	}
+}
+
+// MakeHandleSSEventsHandler creates an SSE handler with explicit SSE hub injection.
+// This is the preferred way to create the SSE handler as it avoids context propagation issues.
+func MakeHandleSSEventsHandler(hub SSEBroadcaster) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		hostID, _, ok := getHostIDFromContext(w, r)
+		if !ok {
+			runiclog.Error("HandleSSEvents: failed to get host_id from context")
+			return
+		}
+
+		// Set SSE headers
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		w.Header().Set("Transfer-Encoding", "chunked")
+
+		// Use the explicitly provided hub
+		if hub == nil {
+			http.Error(w, "SSE hub unavailable", http.StatusInternalServerError)
+			return
+		}
+		ch := hub.Register(hostID)
+		defer hub.Unregister(hostID)
+
+		// Ensure flush
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "SSE not supported", http.StatusInternalServerError)
+			return
+		}
+
+		// Send keepalive every 30 seconds
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+
+		// Notify client connected
+		fmt.Fprintf(w, ": agent connected\\n\\n")
+		flusher.Flush()
+
+		for {
+			select {
+			case msg, ok := <-ch:
+				if !ok {
+					// Channel closed
+					return
+				}
+				fmt.Fprintf(w, "%s\\n\\n", msg)
+				flusher.Flush()
+
+			case <-ticker.C:
+				// Keepalive
+				fmt.Fprintf(w, ": keepalive\\n\\n")
+				flusher.Flush()
+
+			case <-r.Context().Done():
+				// Client disconnected
+				return
+			}
 		}
 	}
 }

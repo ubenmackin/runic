@@ -163,7 +163,7 @@ func RegisterRoutes(r *mux.Router, a *API, downloadsDir string) {
 	apiRouter.HandleFunc("/agent/heartbeat", agents.AgentAuthMiddleware(agents.Heartbeat)).Methods("GET", "POST")
 	apiRouter.HandleFunc("/agent/logs", agents.AgentAuthMiddleware(agents.SubmitLogs)).Methods("POST")
 	apiRouter.HandleFunc("/agent/bundle/{host_id}/applied", agents.AgentAuthMiddleware(agents.ConfirmBundleApplied)).Methods("POST")
-	apiRouter.HandleFunc("/agent/events/{host_id}", agents.AgentAuthMiddleware(agents.HandleSSEvents)).Methods("GET")
+	apiRouter.HandleFunc("/agent/events/{host_id}", agents.AgentAuthMiddleware(agents.MakeHandleSSEventsHandler(a.SSEHub))).Methods("GET")
 
 	// Catch-all for unmatched API routes - returns 404 instead of falling through to SPA
 	// This must be registered last so it only catches truly unmatched routes
