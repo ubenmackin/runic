@@ -102,7 +102,7 @@ func RegisterRoutes(r *mux.Router, a *API, downloadsDir string) {
 	apiRouter.HandleFunc("/agent/register", agents.RegisterAgent).Methods("POST")
 
 	// Protected routes (require JWT authentication)
-	protected := apiRouter.PathPrefix("/").Subrouter()
+	protected := apiRouter.NewRoute().Subrouter()
 	protected.Use(auth.Middleware)
 
 	// Logout
@@ -173,7 +173,14 @@ func RegisterRoutes(r *mux.Router, a *API, downloadsDir string) {
 		json.NewEncoder(w).Encode(map[string]string{"error": "API endpoint not found"})
 	})
 
-	// Handle /api/v1 root path (not matched by PathPrefix)
+	// Downloads route (public - for agent binary downloads)
+	// Must be registered before SPA catch-all handler (in main.go)
+	// Rate limited to 10 requests per minute to prevent abuse
+	downloadRateLimiter := middleware.NewRateLimiter(10, time.Minute)
+	downloadsHandler := downloadRateLimiter.Middleware(http.HandlerFunc(downloads.Handler(downloadsDir)))
+	r.Handle("/downloads/{filename}", downloadsHandler).Methods("GET")
+
+	// Handle /api/v1 root path (not matched by PathPrefix subrouter)
 	// Returns API info instead of falling through to SPA
 	r.HandleFunc("/api/v1", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -183,13 +190,6 @@ func RegisterRoutes(r *mux.Router, a *API, downloadsDir string) {
 			"message": "Runic API",
 		})
 	}).Methods("GET")
-
-	// Downloads route (public - for agent binary downloads)
-	// Must be registered before SPA catch-all handler (in main.go)
-	// Rate limited to 10 requests per minute to prevent abuse
-	downloadRateLimiter := middleware.NewRateLimiter(10, time.Minute)
-	downloadsHandler := downloadRateLimiter.Middleware(http.HandlerFunc(downloads.Handler(downloadsDir)))
-	r.Handle("/downloads/{filename}", downloadsHandler).Methods("GET")
 }
 
 // HealthHandler returns the health status of the service

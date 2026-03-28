@@ -15,10 +15,30 @@ export default function Users() {
   const [formEmail, setFormEmail] = useState('')
   const [formRole, setFormRole] = useState('user')
 
-  const { data: users, isLoading } = useQuery({
+  const { data: users, isLoading, error } = useQuery({
     queryKey: ['users'],
     queryFn: () => api.get('/users'),
   })
+
+  // Show error state if query failed
+  if (error) {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Users</h1>
+            <p className="text-gray-600 dark:text-gray-400">Manage user accounts for the Runic control plane</p>
+          </div>
+        </div>
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow">
+          <div className="p-6 text-center">
+            <p className="text-red-500 dark:text-red-400 font-medium mb-2">Failed to load users</p>
+            <p className="text-gray-500 dark:text-gray-400 text-sm">{error.message}</p>
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   const createMutation = useMutation({
     mutationFn: (data) => api.post('/users', data),
