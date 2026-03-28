@@ -55,11 +55,6 @@ async function refreshTokenOnce() {
 }
 
 async function request(method, path, body, retry = true) {
-  // [API DEBUG] Log request entry
-  console.log('[API DEBUG] request() called with:', { method, path, body, retry })
-  console.log('[API DEBUG] BASE:', BASE)
-  console.log('[API DEBUG] Full URL:', BASE + path)
-
   const fetchOptions = {
     method,
     headers: {
@@ -68,17 +63,8 @@ async function request(method, path, body, retry = true) {
     },
     body: body ? JSON.stringify(body) : undefined,
   }
-  console.log('[API DEBUG] Fetch options:', fetchOptions)
 
   const res = await fetch(BASE + path, fetchOptions)
-
-  // [API DEBUG] Log response details
-  console.log('[API DEBUG] Response received:', {
-    status: res.status,
-    statusText: res.statusText,
-    url: res.url,
-    ok: res.ok
-  })
 
   if (res.status === 401 && retry && refreshToken) {
     const refreshed = await refreshTokenOnce()

@@ -17,12 +17,7 @@ export default function Users() {
 
   const { data: users, isLoading, error } = useQuery({
     queryKey: ['users'],
-    queryFn: () => {
-      console.log('[USERS DEBUG] queryFn called')
-      console.log('[USERS DEBUG] Path being passed to api.get:', '/users')
-      console.log('[USERS DEBUG] About to call api.get with path: /users')
-      return api.get('/users')
-    },
+    queryFn: () => api.get('/users'),
   })
 
   // Show error state if query failed
