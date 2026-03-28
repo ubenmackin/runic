@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api, QUERY_KEYS } from '../api/client'
+import { REFETCH_INTERVALS } from '../constants'
 import StatusBadge from '../components/StatusBadge'
 import StatCard from '../components/StatCard'
 import BlockedEventsChart from '../components/BlockedEventsChart'
@@ -31,7 +32,7 @@ export default function Dashboard() {
     queryKey: QUERY_KEYS.peers(),
     queryFn: () => api.get('/peers'),
     initialData: peersFromCombined, // Use data from combined query as initial value
-    refetchInterval: 15000, // 15 seconds - balance between freshness and network efficiency
+    refetchInterval: REFETCH_INTERVALS.DASHBOARD_PEERS, // 15 seconds - balance between freshness and network efficiency
     refetchIntervalInBackground: false, // Don't poll when tab is hidden
     refetchOnReconnect: true, // Refetch when network reconnects
     refetchOnWindowFocus: true, // Refetch when user returns to tab
@@ -60,7 +61,7 @@ const handlePushAll = async () => {
       const from = new Date(to.getTime() - 24 * 60 * 60 * 1000)
       return api.get(`/logs?limit=1000&action=DROP&from=${from.toISOString()}&to=${to.toISOString()}`)
     },
-    refetchInterval: 60000, // Refresh every minute - appropriate for historical chart data
+    refetchInterval: REFETCH_INTERVALS.DASHBOARD_LOGS, // Refresh every minute - appropriate for historical chart data
     refetchIntervalInBackground: false, // Don't poll when tab is hidden
     staleTime: 30000, // Consider data fresh for 30 seconds
   })

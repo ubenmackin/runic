@@ -20,6 +20,7 @@ import (
 
 	"runic/internal/api"
 	"runic/internal/auth"
+	"runic/internal/common/constants"
 	"runic/internal/db"
 	"runic/internal/engine"
 )
@@ -247,7 +248,7 @@ func main() {
 
 // startOfflineDetector marks servers as offline if they haven't sent a heartbeat in 90 seconds.
 func startOfflineDetector() {
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(constants.OfflineDetectorInterval)
 	defer ticker.Stop()
 
 	for {
@@ -255,9 +256,9 @@ func startOfflineDetector() {
 		case <-ticker.C:
 			ctx := context.Background()
 			_, err := db.DB.ExecContext(ctx,
-				`UPDATE servers SET status = 'offline'
-				 WHERE status = 'online'
-				 AND last_heartbeat < datetime('now', '-90 seconds')`,
+				fmt.Sprintf(`UPDATE servers SET status = 'offline'
+				WHERE status = 'online'
+				AND last_heartbeat < datetime('now', '-%d seconds')`, constants.OfflineThresholdSeconds),
 			)
 			if err != nil {
 				log.Printf("Offline detector error: %v", err)
@@ -268,7 +269,7 @@ func startOfflineDetector() {
 
 // startTokenCleanup periodically removes expired entries from the revoked_tokens table.
 func startTokenCleanup() {
-	ticker := time.NewTicker(1 * time.Hour)
+	ticker := time.NewTicker(constants.OfflineCleanupInterval)
 	defer ticker.Stop()
 
 	for {

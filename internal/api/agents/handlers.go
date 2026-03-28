@@ -10,6 +10,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 
+	"runic/internal/common/constants"
 	runiclog "runic/internal/common/log"
 	"runic/internal/db"
 	"runic/internal/models"
@@ -433,8 +434,8 @@ func HandleSSEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Send keepalive every 30 seconds
-	ticker := time.NewTicker(30 * time.Second)
+	// Send keepalive periodically
+	ticker := time.NewTicker(constants.SSEKeepaliveInterval)
 	defer ticker.Stop()
 
 	// Notify client connected
@@ -494,8 +495,8 @@ func MakeHandleSSEventsHandler(hub SSEBroadcaster) http.HandlerFunc {
 			return
 		}
 
-		// Send keepalive every 30 seconds
-		ticker := time.NewTicker(30 * time.Second)
+		// Send keepalive periodically
+		ticker := time.NewTicker(constants.SSEKeepaliveInterval)
 		defer ticker.Stop()
 
 		// Notify client connected

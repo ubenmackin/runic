@@ -17,6 +17,7 @@ import (
 	"runic/internal/agent/identity"
 	"runic/internal/agent/metrics"
 	"runic/internal/agent/transport"
+	"runic/internal/common/constants"
 	"runic/internal/common/log"
 	"runic/internal/models"
 )
@@ -38,7 +39,7 @@ type Agent struct {
 func New(configPath, controlPlaneURL string) *Agent {
 	// Create HTTP client with timeouts and retry logic
 	httpClient := &http.Client{
-		Timeout: 30 * time.Second,
+		Timeout: constants.HTTPClientTimeout,
 	}
 
 	// SSE client has no timeout (long-lived connection)
@@ -312,7 +313,7 @@ func (a *Agent) register(ctx context.Context) error {
 // isControlPlaneReachable checks if the control plane is reachable via a quick HTTP request.
 func (a *Agent) isControlPlaneReachable(ctx context.Context) bool {
 	client := &http.Client{
-		Timeout: 5 * time.Second,
+		Timeout: constants.ReachabilityTimeout,
 	}
 	url := fmt.Sprintf("%s/api/v1/agent/heartbeat", a.config.ControlPlaneURL)
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)

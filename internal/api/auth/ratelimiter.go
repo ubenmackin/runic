@@ -5,6 +5,8 @@ import (
 	"log"
 	"sync"
 	"time"
+
+	"runic/internal/common/constants"
 )
 
 // rateLimitEntry tracks failed login attempts and lockout state for a user.
@@ -28,7 +30,7 @@ func init() {
 
 	// Start periodic cleanup
 	go func() {
-		ticker := time.NewTicker(1 * time.Hour)
+		ticker := time.NewTicker(constants.AuthRateLimitCleanupInterval)
 		defer ticker.Stop()
 		for range ticker.C {
 			CleanupStaleEntries()

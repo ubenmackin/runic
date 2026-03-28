@@ -9,6 +9,7 @@ import (
 
 	"runic/internal/api/agents"
 	"runic/internal/api/common"
+	"runic/internal/common/constants"
 	"runic/internal/db"
 	"runic/internal/engine"
 )
@@ -36,11 +37,11 @@ func GetPeers(w http.ResponseWriter, r *http.Request) {
 		SELECT p.id, p.hostname, p.ip_address, p.os_type, p.is_manual, 
 		       COALESCE(p.agent_version, '') as agent_version,
 		       COALESCE(p.last_heartbeat, '') as last_heartbeat,
-		       CASE 
-		           WHEN p.last_heartbeat IS NULL THEN 'pending'
-		           WHEN p.last_heartbeat < datetime('now', '-2 minutes') THEN 'offline'
-		           ELSE COALESCE(p.status, 'online')
-		       END as status,
+		CASE
+			WHEN p.last_heartbeat IS NULL THEN 'pending'
+			WHEN p.last_heartbeat < `+fmt.Sprintf("datetime('now', '-%d minutes')", constants.PeerOfflineThresholdMinutes)+` THEN 'offline'
+			ELSE COALESCE(p.status, 'online')
+		END as status,
 		       COALESCE(p.bundle_version, '') as bundle_version,
 		       COALESCE(GROUP_CONCAT(g.name, ','), '') as groups
 		FROM peers p

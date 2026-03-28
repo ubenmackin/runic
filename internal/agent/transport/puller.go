@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"runic/internal/common"
+	"runic/internal/common/constants"
 	"runic/internal/common/log"
 	"runic/internal/models"
 )
@@ -103,7 +104,7 @@ func ListenSSE(ctx context.Context, client common.HTTPClient, controlPlaneURL, h
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(15 * time.Second):
+			case <-time.After(constants.SSEReconnectDelay):
 				// Continue to reconnect
 			}
 		}

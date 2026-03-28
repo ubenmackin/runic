@@ -2,6 +2,7 @@ import { useState, useMemo, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Plus, Pencil, Trash2, Server, Copy, Check, RefreshCw, ArrowUp, ArrowDown, ArrowUpDown } from 'lucide-react'
 import { api, QUERY_KEYS } from '../api/client'
+import { REFETCH_INTERVALS } from '../constants'
 import { useCrudModal } from '../hooks/useCrudModal'
 import { useToastContext } from '../hooks/ToastContext'
 import ConfirmModal from '../components/ConfirmModal'
@@ -145,7 +146,7 @@ export default function Peers() {
   const { data: peers, isLoading, refetch } = useQuery({
     queryKey: QUERY_KEYS.peers(),
     queryFn: () => api.get('/peers'),
-    refetchInterval: 30000, // 30 seconds auto-refresh
+    refetchInterval: REFETCH_INTERVALS.PEERS_PAGE,
     refetchIntervalInBackground: false,
     refetchOnReconnect: true,
     refetchOnWindowFocus: true,

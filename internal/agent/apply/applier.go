@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"runic/internal/common/constants"
 	"runic/internal/common/log"
 	"runic/internal/engine"
 	"runic/internal/models"
@@ -38,7 +39,7 @@ func ApplyBundle(ctx context.Context, bundle models.BundleResponse, hmacKey, con
 	}
 
 	// 4. Schedule auto-revert watchdog (90 seconds)
-	revertCancel := scheduleRevert(backup, 90*time.Second, controlPlaneURL, token, version)
+	revertCancel := scheduleRevert(backup, constants.AutoRevertDelay, controlPlaneURL, token, version)
 
 	// 5. Write new rules to temp file
 	tmpFile, err := os.CreateTemp("", "runic-bundle-*.rules")
@@ -238,7 +239,7 @@ func validateRules(content string) error {
 func smokeTest(ctx context.Context, controlPlaneURL, token, version string) error {
 	// Create a client with a 10 second timeout
 	client := &http.Client{
-		Timeout: 10 * time.Second,
+		Timeout: constants.SmokeTestTimeout,
 	}
 
 	url := fmt.Sprintf("%s/api/v1/agent/heartbeat", controlPlaneURL)

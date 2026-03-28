@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"runic/internal/common/constants"
 	"runic/internal/common/log"
 )
 
@@ -56,7 +57,7 @@ func (s *Shipper) Run(ctx context.Context) {
 
 	// Process lines and batch ship
 	var batch []LogEvent
-	ticker := time.NewTicker(10 * time.Second)
+	ticker := time.NewTicker(constants.LogShipperBatchInterval)
 	defer ticker.Stop()
 
 	for {
@@ -145,7 +146,7 @@ func (s *Shipper) tail(ctx context.Context, path string) <-chan string {
 						scanner = bufio.NewScanner(f)
 					}
 				}
-				time.Sleep(500 * time.Millisecond)
+				time.Sleep(constants.LogTailSleepInterval)
 				continue
 			}
 

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"runic/internal/common/constants"
 	runiclog "runic/internal/common/log"
 	"runic/internal/models"
 )
@@ -143,7 +144,7 @@ func (c *Client) readPump() {
 }
 
 func (c *Client) writePump() {
-	ticker := time.NewTicker(54 * time.Second)
+	ticker := time.NewTicker(constants.WebSocketPingInterval)
 	defer func() {
 		ticker.Stop()
 		c.conn.Close()

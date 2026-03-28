@@ -1,9 +1,11 @@
 package dashboard
 
 import (
+	"fmt"
 	"net/http"
 
 	"runic/internal/api/common"
+	"runic/internal/common/constants"
 	"runic/internal/common/log"
 	"runic/internal/db"
 )
@@ -32,7 +34,7 @@ func HandleDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Count online peers (status = 'online')
-	rows2, err := db.DB.QueryContext(r.Context(), `SELECT COUNT(*) FROM peers WHERE last_heartbeat > datetime('now', '-90 seconds')`)
+	rows2, err := db.DB.QueryContext(r.Context(), fmt.Sprintf("SELECT COUNT(*) FROM peers WHERE last_heartbeat > datetime('now', '-%d seconds')", constants.OfflineThresholdSeconds))
 	if err == nil {
 		defer rows2.Close()
 		if rows2.Next() {

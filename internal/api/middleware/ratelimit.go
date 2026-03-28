@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"runic/internal/common/constants"
 )
 
 // RateLimiter implements a configurable in-memory rate limiter using a sliding window algorithm.
@@ -133,7 +135,7 @@ func (rl *RateLimiter) getIP(r *http.Request) string {
 // startCleanup starts a goroutine that periodically cleans up stale entries.
 func (rl *RateLimiter) startCleanup() {
 	go func() {
-		ticker := time.NewTicker(5 * time.Minute)
+		ticker := time.NewTicker(constants.RateLimitCleanupInterval)
 		defer ticker.Stop()
 		for {
 			select {
