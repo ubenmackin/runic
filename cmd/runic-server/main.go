@@ -246,7 +246,7 @@ func main() {
 	os.Exit(0)
 }
 
-// startOfflineDetector marks servers as offline if they haven't sent a heartbeat in 90 seconds.
+// startOfflineDetector marks peers as offline if they haven't sent a heartbeat in 90 seconds.
 func startOfflineDetector() {
 	ticker := time.NewTicker(constants.OfflineDetectorInterval)
 	defer ticker.Stop()
@@ -256,7 +256,7 @@ func startOfflineDetector() {
 		case <-ticker.C:
 			ctx := context.Background()
 			_, err := db.DB.ExecContext(ctx,
-				fmt.Sprintf(`UPDATE servers SET status = 'offline'
+				fmt.Sprintf(`UPDATE peers SET status = 'offline'
 				WHERE status = 'online'
 				AND last_heartbeat < datetime('now', '-%d seconds')`, constants.OfflineThresholdSeconds),
 			)
