@@ -36,6 +36,20 @@ chmod 700 /etc/runic-agent
 mkdir -p /var/log/firewall
 chmod 755 /var/log/firewall
 
+# Install rsyslog config for firewall logs
+if [ -d /etc/rsyslog.d ]; then
+    cat > /etc/rsyslog.d/30-runic-firewall.conf << 'EOF'
+# Runic Firewall - Route firewall log messages to dedicated file
+# This filters kernel messages with [RUNIC- prefix (from iptables LOG target)
+if $programname == 'kernel' and $msg contains '[RUNIC-' then {
+    action(type="omfile" file="/var/log/firewall/firewall.log")
+    stop
+}
+EOF
+    chmod 644 /etc/rsyslog.d/30-runic-firewall.conf
+    systemctl restart rsyslog 2>/dev/null || true
+fi
+
 # Only write config if it doesn't exist (preserve existing credentials)
 if [ ! -f /etc/runic-agent/config.json ]; then
 echo "Creating initial config..."

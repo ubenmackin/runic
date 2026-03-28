@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -90,7 +91,31 @@ func ApplyBundle(ctx context.Context, bundle models.BundleResponse, hmacKey, con
 		}
 	}
 
+	// Cache bundle for apply-on-boot
+	if err := CacheBundle(bundle.Rules); err != nil {
+		log.Warn("Failed to cache bundle", "error", err)
+	}
+
 	log.Info("Applied bundle successfully", "version", bundle.Version)
+	return nil
+}
+
+// CacheBundle saves the bundle rules to disk for apply-on-boot.
+func CacheBundle(rules string) error {
+	const cachePath = "/etc/runic-agent/cached-bundle.rules"
+
+	// Create directory
+	dir := filepath.Dir(cachePath)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return fmt.Errorf("create cache dir: %w", err)
+	}
+
+	// Write to cache file
+	if err := os.WriteFile(cachePath, []byte(rules), 0600); err != nil {
+		return fmt.Errorf("write cache: %w", err)
+	}
+
+	log.Info("Bundle cached for apply-on-boot", "path", cachePath)
 	return nil
 }
 

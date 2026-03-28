@@ -16,6 +16,7 @@ type Config struct {
 	LogPath          string `json:"log_path"`
 	CurrentBundleVer string `json:"current_bundle_version"`
 	HMACKey          string `json:"hmac_key"`
+	ApplyOnBoot      bool   `json:"apply_on_boot"`
 }
 
 // DefaultConfig returns a config with sensible defaults.

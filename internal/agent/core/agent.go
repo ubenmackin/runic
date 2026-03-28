@@ -7,6 +7,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"runic/internal/agent/apply"
@@ -82,10 +86,27 @@ func (a *Agent) Run(ctx context.Context) error {
 		}
 	}
 
-	// 3. Initialize shipper
+	// 3. Backup iptables on first install (before any rule changes)
+	if err := a.backupIptables(); err != nil {
+		log.Warn("Failed to backup iptables", "error", err)
+	}
+
+	// 4. Apply cached bundle on startup if control plane is unreachable
+	if a.config.ApplyOnBoot {
+		if !a.isControlPlaneReachable(ctx) {
+			log.Info("Control plane unreachable, applying cached bundle")
+			if err := a.applyCachedBundle(ctx); err != nil {
+				log.Warn("Failed to apply cached bundle on startup", "error", err)
+			}
+		} else {
+			log.Info("Control plane reachable, will fetch latest bundle")
+		}
+	}
+
+	// 5. Initialize shipper
 	a.shipper = transport.NewShipper(a.httpClient, a.config.ControlPlaneURL, a.config.Token, a.config.HostID, a.config.LogPath)
 
-	// 4. Start background goroutines
+	// 6. Start background goroutines
 	bgCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -101,10 +122,41 @@ func (a *Agent) Run(ctx context.Context) error {
 	// SSE listener
 	go a.listenSSE(bgCtx)
 
-	// 5. Block on context
+	// 7. Block on context
 	log.Info("Agent running. Press Ctrl+C to stop.")
 	<-ctx.Done()
 	log.Info("Agent shutting down")
+	return nil
+}
+
+// backupIptables saves the current iptables rules on first install.
+func (a *Agent) backupIptables() error {
+	const backupPath = "/etc/runic-agent/iptables-backup.rules"
+
+	// Check if backup already exists
+	if _, err := os.Stat(backupPath); err == nil {
+		log.Info("iptables backup already exists, skipping")
+		return nil
+	}
+
+	// Create directory
+	dir := filepath.Dir(backupPath)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return fmt.Errorf("create backup dir: %w", err)
+	}
+
+	// Dump current rules
+	out, err := exec.Command("iptables-save").Output()
+	if err != nil {
+		return fmt.Errorf("iptables-save: %w", err)
+	}
+
+	// Write to backup file
+	if err := os.WriteFile(backupPath, out, 0600); err != nil {
+		return fmt.Errorf("write backup: %w", err)
+	}
+
+	log.Info("iptables rules backed up", "path", backupPath)
 	return nil
 }
 
@@ -255,6 +307,74 @@ func (a *Agent) confirmApply(ctx context.Context, version string) error {
 // register performs initial registration with the control plane.
 func (a *Agent) register(ctx context.Context) error {
 	return identity.Register(ctx, a.httpClient, a.config, a.version, a.saveConfig)
+}
+
+// isControlPlaneReachable checks if the control plane is reachable via a quick HTTP request.
+func (a *Agent) isControlPlaneReachable(ctx context.Context) bool {
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+	}
+	url := fmt.Sprintf("%s/api/v1/agent/heartbeat", a.config.ControlPlaneURL)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return false
+	}
+	req.Header.Set("Authorization", "Bearer "+a.config.Token)
+	req.Header.Set("User-Agent", "runic-agent/"+a.version)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode == http.StatusOK
+}
+
+// applyCachedBundle applies the cached bundle from disk on startup.
+func (a *Agent) applyCachedBundle(ctx context.Context) error {
+	const cachePath = "/etc/runic-agent/cached-bundle.rules"
+
+	// Read cached bundle
+	data, err := os.ReadFile(cachePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			log.Info("No cached bundle found, skipping apply-on-boot")
+			return nil
+		}
+		return fmt.Errorf("read cached bundle: %w", err)
+	}
+
+	rules := string(data)
+
+	// Validate the rules
+	if strings.TrimSpace(rules) == "" {
+		return fmt.Errorf("cached bundle is empty")
+	}
+
+	// Apply via iptables-restore
+	tmpFile, err := os.CreateTemp("", "runic-cached-*.rules")
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+	defer os.Remove(tmpPath)
+
+	if _, err := tmpFile.WriteString(rules); err != nil {
+		tmpFile.Close()
+		return fmt.Errorf("write cached bundle to temp file: %w", err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		return fmt.Errorf("close temp file: %w", err)
+	}
+
+	cmd := exec.CommandContext(ctx, "iptables-restore", "--noflush", tmpPath)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("iptables-restore failed: %s: %w", string(output), err)
+	}
+
+	log.Info("Applied cached bundle on startup", "path", cachePath)
+	return nil
 }
 
 // listenSSE maintains a persistent SSE connection to receive push notifications.

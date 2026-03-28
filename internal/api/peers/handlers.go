@@ -22,7 +22,9 @@ type Peer struct {
 	IsManual      bool   `json:"is_manual"`
 	AgentVersion  string `json:"agent_version"`
 	LastHeartbeat string `json:"last_heartbeat"`
-	Groups        string `json:"groups"` // Comma-separated group names
+	Groups        string `json:"groups"`         // Comma-separated group names
+	Status        string `json:"status"`         // ADD THIS
+	BundleVersion string `json:"bundle_version"` // ADD THIS
 }
 
 func GetPeers(w http.ResponseWriter, r *http.Request) {
@@ -33,7 +35,9 @@ func GetPeers(w http.ResponseWriter, r *http.Request) {
 	rows, err := db.DB.QueryContext(r.Context(), `
 		SELECT id, hostname, ip_address, os_type, is_manual, 
 		       COALESCE(agent_version, '') as agent_version,
-		       COALESCE(last_heartbeat, '') as last_heartbeat
+		       COALESCE(last_heartbeat, '') as last_heartbeat,
+		       COALESCE(status, 'pending') as status,
+		       COALESCE(bundle_version, '') as bundle_version
 		FROM peers
 		ORDER BY hostname ASC
 	`)
@@ -47,7 +51,7 @@ func GetPeers(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var p Peer
 		var agentVersion, lastHeartbeat sql.NullString
-		if err := rows.Scan(&p.ID, &p.Hostname, &p.IPAddress, &p.OSType, &p.IsManual, &agentVersion, &lastHeartbeat); err != nil {
+		if err := rows.Scan(&p.ID, &p.Hostname, &p.IPAddress, &p.OSType, &p.IsManual, &agentVersion, &lastHeartbeat, &p.Status, &p.BundleVersion); err != nil {
 			common.RespondError(w, http.StatusInternalServerError, "failed to scan peer")
 			return
 		}
