@@ -182,7 +182,7 @@ export default function Peers() {
         const hostname = (peer.hostname || '').toLowerCase()
         const ip = (peer.ip_address || '').toLowerCase()
         const os = (peer.os_type || peer.os || '').toLowerCase()
-        const groups = (peer.groups || []).join(' ').toLowerCase()
+        const groups = (peer.groups || '').toLowerCase()
         const agent = peer.is_manual ? 'manual' : (peer.agent_version || '').toLowerCase()
 
         return hostname.includes(term) || ip.includes(term) || os.includes(term) || groups.includes(term) || agent.includes(term)
@@ -368,7 +368,7 @@ export default function Peers() {
               </thead>
               <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
                 {processedPeers.map((peer) => (
-                  <tr key={peer.id} className="hover:bg-gray-50 dark:hover:bg-gray-700">
+                  <tr key={peer.id} className="">
                 <td className="px-4 py-3">
                   <div className="flex items-center gap-2">
                     <span className={`w-2 h-2 rounded-full ${

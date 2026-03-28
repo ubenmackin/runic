@@ -131,7 +131,7 @@ const handlePushAll = async () => {
             </thead>
 <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
           {peersQuery.data?.map(peer => (
-            <tr key={peer.id} className="hover:bg-gray-50 dark:hover:bg-gray-700">
+            <tr key={peer.id} className="">
                 <td className="px-4 py-3">
                   <div className="flex items-center gap-2">
                     <span className={`w-2 h-2 rounded-full ${
