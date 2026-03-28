@@ -254,12 +254,12 @@ func TestNoPolicies(t *testing.T) {
 	if !strings.Contains(output, ":INPUT DROP [0:0]") {
 		t.Error("expected :INPUT DROP chain policy")
 	}
-	// Check for loopback rule - use the actual rule string
-	if !strings.Contains(output, "-A INPUT -i lo -j ACCEPT") {
+	// Check for loopback rule - compiler outputs two spaces after INPUT
+	if !strings.Contains(output, "-A INPUT  -i lo -j ACCEPT") {
 		t.Errorf("expected loopback rule, output: %q", output)
 	}
-	// Check for default deny - use the actual rule string
-	if !strings.Contains(output, "-A INPUT -j DROP") {
+	// Check for default deny - compiler outputs two spaces after INPUT
+	if !strings.Contains(output, "-A INPUT  -j DROP") {
 		t.Errorf("expected default deny rule, output: %q", output)
 	}
 	if !strings.Contains(output, "COMMIT") {
