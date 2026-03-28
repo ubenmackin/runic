@@ -82,6 +82,7 @@ func CreatePeer(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		Hostname  string `json:"hostname"`
 		IPAddress string `json:"ip_address"`
+		OSType    string `json:"os_type"`
 		AgentKey  string `json:"agent_key"`
 		HasDocker bool   `json:"has_docker"`
 		IsManual  bool   `json:"is_manual"`
@@ -112,8 +113,8 @@ func CreatePeer(w http.ResponseWriter, r *http.Request) {
 	hmacKey := agents.GenerateHMACKey()
 
 	result, err := db.DB.ExecContext(r.Context(),
-		`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, is_manual) VALUES (?, ?, ?, ?, ?, ?)`,
-		input.Hostname, input.IPAddress, agentKey, hmacKey, input.HasDocker, input.IsManual)
+		`INSERT INTO peers (hostname, ip_address, os_type, agent_key, hmac_key, has_docker, is_manual) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		input.Hostname, input.IPAddress, input.OSType, agentKey, hmacKey, input.HasDocker, input.IsManual)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create peer: %v", err))
 		return
@@ -121,6 +122,50 @@ func CreatePeer(w http.ResponseWriter, r *http.Request) {
 
 	id, _ := result.LastInsertId()
 	common.RespondJSON(w, http.StatusCreated, map[string]int64{"id": id})
+}
+
+// UpdatePeer updates a manual peer's hostname, IP, and OS type.
+func UpdatePeer(w http.ResponseWriter, r *http.Request) {
+	id, err := common.ParseIDParam(r, "id")
+	if err != nil {
+		common.RespondError(w, http.StatusBadRequest, "invalid peer ID")
+		return
+	}
+
+	var input struct {
+		Hostname  string `json:"hostname"`
+		IPAddress string `json:"ip_address"`
+		OSType    string `json:"os_type"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		common.RespondError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+
+	// Validate this is a manual peer (only manual peers can be edited)
+	var isManual bool
+	err = db.DB.QueryRowContext(r.Context(), "SELECT is_manual FROM peers WHERE id = ?", id).Scan(&isManual)
+	if err == sql.ErrNoRows {
+		common.RespondError(w, http.StatusNotFound, "peer not found")
+		return
+	}
+	if err != nil {
+		common.RespondError(w, http.StatusInternalServerError, "failed to query peer")
+		return
+	}
+	if !isManual {
+		common.RespondError(w, http.StatusBadRequest, "can only edit manual peers")
+		return
+	}
+
+	// Update the peer
+	_, err = db.DB.ExecContext(r.Context(), "UPDATE peers SET hostname = ?, ip_address = ?, os_type = ? WHERE id = ?", input.Hostname, input.IPAddress, input.OSType, id)
+	if err != nil {
+		common.RespondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to update peer: %v", err))
+		return
+	}
+
+	common.RespondJSON(w, http.StatusOK, map[string]string{"message": "peer updated"})
 }
 
 // MakeCompilePeerHandler injects the Compiler dependency for peer rule compilation.

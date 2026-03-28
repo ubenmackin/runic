@@ -16,6 +16,13 @@ const OS_OPTIONS = [
   { value: 'opensuse', label: 'openSUSE' },
   { value: 'raspbian', label: 'Raspbian' },
   { value: 'armbian', label: 'Armbian' },
+  { value: 'ios', label: 'iOS' },
+  { value: 'ipados', label: 'iPadOS' },
+  { value: 'macos', label: 'macOS' },
+  { value: 'tvos', label: 'tvOS' },
+  { value: 'windows', label: 'Windows' },
+  { value: 'linux', label: 'Generic Linux' },
+  { value: 'other', label: 'Other' },
 ]
 
 const ARCH_OPTIONS = [
@@ -54,14 +61,14 @@ function parseHeartbeatForSort(timestamp) {
 export default function Peers() {
   const qc = useQueryClient()
   const showToast = useToastContext()
-  const { modalOpen, setModalOpen, editItem: editPeer, setEditItem: setEditPeer, form: formData, setForm: setFormData, setFormForEdit, handleOpenAdd, handleCancel: closeModal } = useCrudModal({ hostname: '', ip: '', os: 'ubuntu', arch: 'amd64', has_docker: false, description: '' })
+  const { modalOpen, setModalOpen, editItem: editPeer, setEditItem: setEditPeer, form: formData, setForm: setFormData, setFormForEdit, handleOpenAdd, handleCancel: closeModal } = useCrudModal({ hostname: '', ip_address: '', os: 'ubuntu', arch: 'amd64', has_docker: false, description: '' })
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [formErrors, setFormErrors] = useState({})
 
   // Add Peer modal state
   const [addModalOpen, setAddModalOpen] = useState(false)
   const [activeTab, setActiveTab] = useState('agent') // 'agent' or 'manual'
-  const [manualForm, setManualForm] = useState({ hostname: '', ip_address: '' })
+  const [manualForm, setManualForm] = useState({ hostname: '', ip_address: '', os_type: 'other' })
   const [manualErrors, setManualErrors] = useState({})
   const [copied, setCopied] = useState(false)
 
@@ -77,20 +84,20 @@ export default function Peers() {
   const openAdd = () => { setFormErrors({}); handleOpenAdd() }
   const openEdit = (s) => { setEditPeer(s); setFormForEdit(s); setFormErrors({}); setModalOpen(true) }
 
-  const openAddModal = () => {
-    setAddModalOpen(true)
-    setActiveTab('agent')
-    setManualForm({ hostname: '', ip_address: '' })
-    setManualErrors({})
-    setCopied(false)
-  }
+const openAddModal = () => {
+  setAddModalOpen(true)
+  setActiveTab('agent')
+  setManualForm({ hostname: '', ip_address: '', os_type: 'other' })
+  setManualErrors({})
+  setCopied(false)
+}
 
-  const closeAddModal = () => {
-    setAddModalOpen(false)
-    setManualForm({ hostname: '', ip_address: '' })
-    setManualErrors({})
-    setCopied(false)
-  }
+const closeAddModal = () => {
+  setAddModalOpen(false)
+  setManualForm({ hostname: '', ip_address: '', os_type: 'other' })
+  setManualErrors({})
+  setCopied(false)
+}
 
   // Generate agent install command
   const controlPlaneUrl = window.location.origin
@@ -106,24 +113,27 @@ export default function Peers() {
     }
   }
 
-  const validateManualForm = () => {
-    const errors = {}
-    if (!manualForm.hostname.trim()) {
-      errors.hostname = 'Name is required'
-    }
-    if (!manualForm.ip_address.trim()) {
-      errors.ip_address = 'IP Address or CIDR is required'
-    } else {
-      // Basic format check - IP or CIDR
-      const ipOrCidr = manualForm.ip_address.trim()
-      const ipRegex = /^(\d{1,3}\.){3}\d{1,3}(\/\d{1,2})?$/
-      if (!ipRegex.test(ipOrCidr)) {
-        errors.ip_address = 'Invalid IP address or CIDR format (e.g., 192.168.1.50 or 10.0.0.0/8)'
-      }
-    }
-    setManualErrors(errors)
-    return Object.keys(errors).length === 0
+const validateManualForm = () => {
+  const errors = {}
+  if (!manualForm.hostname.trim()) {
+    errors.hostname = 'Name is required'
   }
+  if (!manualForm.ip_address.trim()) {
+    errors.ip_address = 'IP Address or CIDR is required'
+  } else {
+    // Basic format check - IP or CIDR
+    const ipOrCidr = manualForm.ip_address.trim()
+    const ipRegex = /^(\d{1,3}\.){3}\d{1,3}(\/\d{1,2})?$/
+    if (!ipRegex.test(ipOrCidr)) {
+      errors.ip_address = 'Invalid IP address or CIDR format (e.g., 192.168.1.50 or 10.0.0.0/8)'
+    }
+  }
+  if (!manualForm.os_type) {
+    errors.os_type = 'Operating System is required'
+  }
+  setManualErrors(errors)
+  return Object.keys(errors).length === 0
+}
 
   const handleManualSubmit = async (e) => {
     e.preventDefault()
@@ -133,6 +143,7 @@ export default function Peers() {
       await api.post('/peers', {
         hostname: manualForm.hostname.trim(),
         ip_address: manualForm.ip_address.trim(),
+        os_type: manualForm.os_type || null,
         is_manual: true
       })
       showToast('Manual peer added successfully', 'success')
@@ -369,28 +380,62 @@ export default function Peers() {
               <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
                 {processedPeers.map((peer) => (
                   <tr key={peer.id} className="">
-                <td className="px-4 py-3">
-                  <div className="flex items-center gap-2">
-                    <span className={`w-2 h-2 rounded-full ${
-                      peer.status === 'online' ? 'bg-green-500' :
-                      peer.status === 'offline' ? 'bg-red-500' :
-                      'bg-amber-500' // pending
-                    }`} />
-                    <span className="font-medium text-gray-900 dark:text-white">{peer.hostname}</span>
-                  </div>
-                </td>
+                        <td className="px-4 py-3">
+                            <div className="flex items-center gap-2">
+                                {!peer.is_manual && (
+                                    <span className={`w-2 h-2 rounded-full ${
+                                        peer.status === 'online' ? 'bg-green-500' :
+                                        peer.status === 'offline' ? 'bg-red-500' :
+                                        'bg-amber-500' // pending
+                                    }`} />
+                                )}
+                                <span className="font-medium text-gray-900 dark:text-white">{peer.hostname}</span>
+                            </div>
+                        </td>
                     <td className="px-4 py-3 text-gray-600 dark:text-gray-300">
                       {peer.ip_address}
                     </td>
                     <td className="px-4 py-3 text-gray-600 dark:text-gray-300">
                       {peer.os_type || peer.os || '—'}
                     </td>
-                    <td className="px-4 py-3 text-gray-600 dark:text-gray-300">
-                      {formatRelativeTime(peer.last_heartbeat)}
-                    </td>
-<td className="px-4 py-3 text-gray-600 dark:text-gray-300">
-          {peer.groups ? peer.groups : '—'}
-        </td>
+                        <td className="px-4 py-3 text-gray-600 dark:text-gray-300">
+                            {peer.is_manual ? 'N/A' : formatRelativeTime(peer.last_heartbeat)}
+                        </td>
+                  <td className="px-4 py-3">
+                    {peer.groups ? (
+                      <div className="flex flex-wrap items-center gap-1.5 max-w-xs">
+                        {(() => {
+                          const groups = peer.groups.split(',').map(g => g.trim()).filter(Boolean)
+                          const maxVisible = 2
+                          const visibleGroups = groups.slice(0, maxVisible)
+                          const remainingCount = groups.length - maxVisible
+
+                          return (
+                            <>
+                              {visibleGroups.map((group, idx) => (
+                                <span
+                                  key={idx}
+                                  className="px-2 py-0.5 text-xs font-medium rounded-full bg-runic-100 dark:bg-runic-900/30 text-runic-700 dark:text-runic-300 whitespace-nowrap"
+                                >
+                                  {group}
+                                </span>
+                              ))}
+                              {remainingCount > 0 && (
+                                <span
+                                  className="px-2 py-0.5 text-xs font-medium rounded-full bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 whitespace-nowrap"
+                                  title={groups.slice(maxVisible).join(', ')}
+                                >
+                                  +{remainingCount}
+                                </span>
+                              )}
+                            </>
+                          )
+                        })()}
+                      </div>
+                    ) : (
+                      <span className="text-gray-400">—</span>
+                    )}
+                  </td>
                     <td className="px-4 py-3">
                       {peer.is_manual ? (
                         <span className="px-2 py-1 text-xs font-medium rounded-full bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300">
@@ -404,24 +449,26 @@ export default function Peers() {
                         <span className="text-gray-400">—</span>
                       )}
                     </td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={() => openEdit(peer)}
-                          className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded"
-                          title="Edit"
-                        >
-                          <Pencil className="w-4 h-4 text-gray-500" />
-                        </button>
-                        <button
-                          onClick={() => setDeleteTarget(peer)}
-                          className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded"
-                          title="Delete"
-                        >
-                          <Trash2 className="w-4 h-4 text-red-500" />
-                        </button>
-                      </div>
-                    </td>
+                                <td className="px-4 py-3">
+                                    <div className="flex items-center gap-2">
+                                        {peer.is_manual && (
+                                            <button
+                                                onClick={() => openEdit(peer)}
+                                                className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded"
+                                                title="Edit"
+                                            >
+                                                <Pencil className="w-4 h-4 text-gray-500" />
+                                            </button>
+                                        )}
+                                        <button
+                                            onClick={() => setDeleteTarget(peer)}
+                                            className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded"
+                                            title="Delete"
+                                        >
+                                            <Trash2 className="w-4 h-4 text-red-500" />
+                                        </button>
+                                    </div>
+                                </td>
                   </tr>
                 ))}
               </tbody>
@@ -442,10 +489,10 @@ export default function Peers() {
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Hostname</label>
                 <input type="text" value={formData.hostname} onChange={e => setFormData(d => ({ ...d, hostname: e.target.value }))} required className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white" />
               </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">IP Address</label>
-                <input type="text" value={formData.ip} onChange={e => setFormData(d => ({ ...d, ip: e.target.value }))} required className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white" />
-              </div>
+					<div>
+						<label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">IP Address</label>
+						<input type="text" value={formData.ip_address} onChange={e => setFormData(d => ({ ...d, ip_address: e.target.value }))} required className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white" />
+					</div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">OS</label>
@@ -583,23 +630,38 @@ export default function Peers() {
                     )}
                   </div>
 
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                      IP Address or CIDR <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      value={manualForm.ip_address}
-                      onChange={(e) => setManualForm(f => ({ ...f, ip_address: e.target.value }))}
-                      placeholder="e.g., 10.0.0.0/8, 192.168.1.50"
-                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-runic-500 focus:border-transparent"
-                    />
-                    {manualErrors.ip_address && (
-                      <p className="text-sm text-red-500 mt-1">{manualErrors.ip_address}</p>
-                    )}
-                  </div>
+<div>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            IP Address or CIDR <span className="text-red-500">*</span>
+          </label>
+          <input
+            type="text"
+            value={manualForm.ip_address}
+            onChange={(e) => setManualForm(f => ({ ...f, ip_address: e.target.value }))}
+            placeholder="e.g., 10.0.0.0/8, 192.168.1.50"
+            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-runic-500 focus:border-transparent"
+          />
+          {manualErrors.ip_address && (
+            <p className="text-sm text-red-500 mt-1">{manualErrors.ip_address}</p>
+          )}
+        </div>
 
-                  {manualErrors._general && (
+<div>
+  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+    Operating System <span className="text-red-500">*</span>
+  </label>
+  <SearchableSelect
+    options={OS_OPTIONS}
+    value={manualForm.os_type}
+    onChange={(v) => setManualForm(f => ({ ...f, os_type: v }))}
+    placeholder="Select OS"
+  />
+  {manualErrors.os_type && (
+    <p className="text-sm text-red-500 mt-1">{manualErrors.os_type}</p>
+  )}
+</div>
+
+        {manualErrors._general && (
                     <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-3">
                       <p className="text-sm text-red-700 dark:text-red-300">{manualErrors._general}</p>
                     </div>

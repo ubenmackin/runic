@@ -17,7 +17,7 @@ const (
 // Offline detection
 const (
 	OfflineThresholdSeconds     = 90 // seconds without heartbeat = offline
-	PeerOfflineThresholdMinutes = 2  // minutes without heartbeat = offline
+	PeerOfflineThresholdMinutes = 2  // minutes without heartbeat = offline (for SQL datetime calculations)
 )
 
 // Cleanup intervals

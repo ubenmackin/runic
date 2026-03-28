@@ -111,6 +111,7 @@ func RegisterRoutes(r *mux.Router, a *API, downloadsDir string) {
 	// Peers
 	protected.HandleFunc("/peers", peers.GetPeers).Methods("GET")
 	protected.HandleFunc("/peers", peers.CreatePeer).Methods("POST")
+	protected.HandleFunc("/peers/{id:[0-9]+}", peers.UpdatePeer).Methods("PUT")
 	protected.HandleFunc("/peers/{id:[0-9]+}", peers.DeletePeer).Methods("DELETE")
 	protected.HandleFunc("/peers/{id:[0-9]+}/compile", peers.MakeCompilePeerHandler(a.Compiler)).Methods("POST")
 
