@@ -156,7 +156,12 @@ const validateManualForm = () => {
 
   const { data: peers, isLoading, refetch } = useQuery({
     queryKey: QUERY_KEYS.peers(),
-    queryFn: () => api.get('/peers'),
+    queryFn: () => {
+      console.log('[PEERS DEBUG] queryFn called')
+      console.log('[PEERS DEBUG] Path being passed to api.get:', '/peers')
+      console.log('[PEERS DEBUG] About to call api.get with path: /peers')
+      return api.get('/peers')
+    },
     refetchInterval: REFETCH_INTERVALS.PEERS_PAGE,
     refetchIntervalInBackground: false,
     refetchOnReconnect: true,
