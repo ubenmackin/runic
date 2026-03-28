@@ -1,6 +1,6 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Trash2, Lock, Users, Shield, Search, ArrowUp, ArrowDown, ArrowUpDown, X } from 'lucide-react'
+import { Plus, Trash2, Lock, Users, Shield, Search, ArrowUp, ArrowDown, ArrowUpDown, X, RefreshCw } from 'lucide-react'
 import { api, QUERY_KEYS } from '../api/client'
 import { useCrudModal } from '../hooks/useCrudModal'
 import { useToastContext } from '../hooks/ToastContext'
@@ -27,6 +27,7 @@ export default function Groups() {
   
   // Selected peer for adding to group
   const [selectedPeerId, setSelectedPeerId] = useState(null)
+  const [isManualRefreshing, setIsManualRefreshing] = useState(false)
 
   // Modal ref for focus trap
   const modalRef = useRef(null)
@@ -75,10 +76,17 @@ export default function Groups() {
     return () => modal.removeEventListener('keydown', handleKeyDown)
   }, [modalOpen])
 
-  const { data: groups, isLoading } = useQuery({
+  const { data: groups, isLoading, refetch } = useQuery({
     queryKey: QUERY_KEYS.groups(),
     queryFn: () => api.get('/groups'),
   })
+
+  // Manual refresh handler
+  const handleManualRefresh = useCallback(async () => {
+    setIsManualRefreshing(true)
+    await refetch()
+    setIsManualRefreshing(false)
+  }, [refetch])
 
   const { data: membersData, isLoading: membersLoading } = useQuery({
     queryKey: QUERY_KEYS.members(editGroup?.id),
@@ -256,9 +264,19 @@ export default function Groups() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Groups</h1>
-        <button onClick={openAdd} className="flex items-center gap-2 px-4 py-2 bg-runic-600 hover:bg-runic-700 text-white text-sm font-medium rounded-lg">
-          <Plus className="w-4 h-4" /> New Group
-        </button>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={handleManualRefresh}
+            disabled={isManualRefreshing}
+            className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
+          >
+            <RefreshCw className={`w-4 h-4 ${isManualRefreshing ? 'animate-spin' : ''}`} />
+            Refresh
+          </button>
+          <button onClick={openAdd} className="flex items-center gap-2 px-4 py-2 bg-runic-600 hover:bg-runic-700 text-white text-sm font-medium rounded-lg">
+            <Plus className="w-4 h-4" /> New Group
+          </button>
+        </div>
       </div>
 
       {/* Search Bar */}
