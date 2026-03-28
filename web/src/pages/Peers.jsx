@@ -108,7 +108,7 @@ export default function Peers() {
   const validateManualForm = () => {
     const errors = {}
     if (!manualForm.hostname.trim()) {
-      errors.hostname = 'Hostname is required'
+      errors.hostname = 'Name is required'
     }
     if (!manualForm.ip_address.trim()) {
       errors.ip_address = 'IP Address or CIDR is required'
@@ -368,9 +368,16 @@ export default function Peers() {
               <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
                 {processedPeers.map((peer) => (
                   <tr key={peer.id} className="hover:bg-gray-50 dark:hover:bg-gray-700">
-                    <td className="px-4 py-3">
-                      <span className="font-medium text-gray-900 dark:text-white">{peer.hostname}</span>
-                    </td>
+                <td className="px-4 py-3">
+                  <div className="flex items-center gap-2">
+                    <span className={`w-2 h-2 rounded-full ${
+                      peer.status === 'online' ? 'bg-green-500' :
+                      peer.status === 'offline' ? 'bg-red-500' :
+                      'bg-amber-500' // pending
+                    }`} />
+                    <span className="font-medium text-gray-900 dark:text-white">{peer.hostname}</span>
+                  </div>
+                </td>
                     <td className="px-4 py-3 text-gray-600 dark:text-gray-300">
                       {peer.ip_address}
                     </td>
@@ -563,7 +570,7 @@ export default function Peers() {
                 <form onSubmit={handleManualSubmit} className="space-y-4">
                   <div>
                     <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                      Hostname <span className="text-red-500">*</span>
+                      Name <span className="text-red-500">*</span>
                     </label>
                     <input
                       type="text"

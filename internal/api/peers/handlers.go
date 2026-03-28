@@ -33,13 +33,21 @@ func GetPeers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows, err := db.DB.QueryContext(r.Context(), `
-		SELECT id, hostname, ip_address, os_type, is_manual, 
-		       COALESCE(agent_version, '') as agent_version,
-		       COALESCE(last_heartbeat, '') as last_heartbeat,
-		       COALESCE(status, 'pending') as status,
-		       COALESCE(bundle_version, '') as bundle_version
-		FROM peers
-		ORDER BY hostname ASC
+		SELECT p.id, p.hostname, p.ip_address, p.os_type, p.is_manual, 
+		       COALESCE(p.agent_version, '') as agent_version,
+		       COALESCE(p.last_heartbeat, '') as last_heartbeat,
+		       CASE 
+		           WHEN p.last_heartbeat IS NULL THEN 'pending'
+		           WHEN p.last_heartbeat < datetime('now', '-2 minutes') THEN 'offline'
+		           ELSE COALESCE(p.status, 'online')
+		       END as status,
+		       COALESCE(p.bundle_version, '') as bundle_version,
+		       COALESCE(GROUP_CONCAT(g.name, ','), '') as groups
+		FROM peers p
+		LEFT JOIN group_members gm ON p.id = gm.peer_id
+		LEFT JOIN groups g ON gm.group_id = g.id
+		GROUP BY p.id
+		ORDER BY p.hostname ASC
 	`)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "failed to query peers")
@@ -51,7 +59,7 @@ func GetPeers(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var p Peer
 		var agentVersion, lastHeartbeat sql.NullString
-		if err := rows.Scan(&p.ID, &p.Hostname, &p.IPAddress, &p.OSType, &p.IsManual, &agentVersion, &lastHeartbeat, &p.Status, &p.BundleVersion); err != nil {
+		if err := rows.Scan(&p.ID, &p.Hostname, &p.IPAddress, &p.OSType, &p.IsManual, &agentVersion, &lastHeartbeat, &p.Status, &p.BundleVersion, &p.Groups); err != nil {
 			common.RespondError(w, http.StatusInternalServerError, "failed to scan peer")
 			return
 		}
@@ -75,22 +83,36 @@ func CreatePeer(w http.ResponseWriter, r *http.Request) {
 		IPAddress string `json:"ip_address"`
 		AgentKey  string `json:"agent_key"`
 		HasDocker bool   `json:"has_docker"`
+		IsManual  bool   `json:"is_manual"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		common.RespondError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
-	if input.Hostname == "" || input.IPAddress == "" || input.AgentKey == "" {
-		common.RespondError(w, http.StatusBadRequest, "hostname, ip_address, and agent_key are required")
+
+	// For manual peers, hostname and IP are required but agent_key is optional
+	// For agent peers, hostname, IP, and agent_key are all required
+	if input.Hostname == "" || input.IPAddress == "" {
+		common.RespondError(w, http.StatusBadRequest, "hostname and ip_address are required")
 		return
+	}
+	if !input.IsManual && input.AgentKey == "" {
+		common.RespondError(w, http.StatusBadRequest, "agent_key is required for agent peers")
+		return
+	}
+
+	// For manual peers, generate a placeholder agent_key if not provided
+	agentKey := input.AgentKey
+	if input.IsManual && agentKey == "" {
+		agentKey = "manual-" + input.Hostname + "-" + input.IPAddress
 	}
 
 	// Generate HMAC key for the peer
 	hmacKey := agents.GenerateHMACKey()
 
 	result, err := db.DB.ExecContext(r.Context(),
-		`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
-		input.Hostname, input.IPAddress, input.AgentKey, hmacKey, input.HasDocker)
+		`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, is_manual) VALUES (?, ?, ?, ?, ?, ?)`,
+		input.Hostname, input.IPAddress, agentKey, hmacKey, input.HasDocker, input.IsManual)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create peer: %v", err))
 		return

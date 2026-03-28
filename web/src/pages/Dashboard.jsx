@@ -131,7 +131,16 @@ const handlePushAll = async () => {
 <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
           {peersQuery.data?.map(peer => (
             <tr key={peer.id} className="hover:bg-gray-50 dark:hover:bg-gray-700">
-              <td className="px-4 py-3 text-gray-900 dark:text-white font-medium">{peer.hostname}</td>
+                <td className="px-4 py-3">
+                  <div className="flex items-center gap-2">
+                    <span className={`w-2 h-2 rounded-full ${
+                      peer.status === 'online' ? 'bg-green-500' :
+                      peer.status === 'offline' ? 'bg-red-500' :
+                      'bg-amber-500' // pending
+                    }`} />
+                    <span className="text-gray-900 dark:text-white font-medium">{peer.hostname}</span>
+                  </div>
+                </td>
               <td className="px-4 py-3 text-gray-500 dark:text-gray-400">{peer.ip_address}</td>
               <td className="px-4 py-3"><StatusBadge status={peer.status} /></td>
               <td className="px-4 py-3 text-gray-500 dark:text-gray-400">
