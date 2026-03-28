@@ -153,6 +153,7 @@ func RegisterRoutes(r *mux.Router, a *API, downloadsDir string) {
 	// Users
 	protected.HandleFunc("/users", users.ListUsers).Methods("GET")
 	protected.HandleFunc("/users", users.CreateUser).Methods("POST")
+	protected.HandleFunc("/users/{id:[0-9]+}", users.UpdateUser).Methods("PUT")
 	protected.HandleFunc("/users/{id:[0-9]+}", users.DeleteUser).Methods("DELETE")
 
 	// Logs (Phase 5)

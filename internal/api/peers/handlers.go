@@ -26,6 +26,7 @@ type Peer struct {
 	Groups        string `json:"groups"`         // Comma-separated group names
 	Status        string `json:"status"`         // ADD THIS
 	BundleVersion string `json:"bundle_version"` // ADD THIS
+	Description   string `json:"description"`
 }
 
 func GetPeers(w http.ResponseWriter, r *http.Request) {
@@ -124,7 +125,7 @@ func CreatePeer(w http.ResponseWriter, r *http.Request) {
 	common.RespondJSON(w, http.StatusCreated, map[string]int64{"id": id})
 }
 
-// UpdatePeer updates a manual peer's hostname, IP, and OS type.
+// UpdatePeer updates a manual peer's hostname, IP, OS type, arch, has_docker, and description.
 func UpdatePeer(w http.ResponseWriter, r *http.Request) {
 	id, err := common.ParseIDParam(r, "id")
 	if err != nil {
@@ -133,9 +134,12 @@ func UpdatePeer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var input struct {
-		Hostname  string `json:"hostname"`
-		IPAddress string `json:"ip_address"`
-		OSType    string `json:"os_type"`
+		Hostname    string `json:"hostname"`
+		IPAddress   string `json:"ip_address"`
+		OSType      string `json:"os_type"`
+		Arch        string `json:"arch"`
+		HasDocker   bool   `json:"has_docker"`
+		Description string `json:"description"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		common.RespondError(w, http.StatusBadRequest, "invalid JSON")
@@ -158,8 +162,8 @@ func UpdatePeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Update the peer
-	_, err = db.DB.ExecContext(r.Context(), "UPDATE peers SET hostname = ?, ip_address = ?, os_type = ? WHERE id = ?", input.Hostname, input.IPAddress, input.OSType, id)
+	// Update the peer (hostname, ip_address, os_type, arch, has_docker, and description are all editable)
+	_, err = db.DB.ExecContext(r.Context(), "UPDATE peers SET hostname = ?, ip_address = ?, os_type = ?, arch = ?, has_docker = ?, description = ? WHERE id = ?", input.Hostname, input.IPAddress, input.OSType, input.Arch, input.HasDocker, input.Description, id)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to update peer: %v", err))
 		return

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { UserPlus, Trash2 } from 'lucide-react'
+import { UserPlus, Trash2, Pencil } from 'lucide-react'
 import { api } from '../api/client'
 import { useToastContext } from '../hooks/ToastContext'
 import TableSkeleton from '../components/TableSkeleton'
@@ -12,8 +12,15 @@ export default function Users() {
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [formUsername, setFormUsername] = useState('')
   const [formPassword, setFormPassword] = useState('')
+  const [formConfirmPassword, setFormConfirmPassword] = useState('')
   const [formEmail, setFormEmail] = useState('')
   const [formRole, setFormRole] = useState('user')
+  const [showEditModal, setShowEditModal] = useState(false)
+  const [editTarget, setEditTarget] = useState(null)
+const [formEditEmail, setFormEditEmail] = useState('')
+const [formEditRole, setFormEditRole] = useState('user')
+const [formEditPassword, setFormEditPassword] = useState('')
+const [formEditConfirmPassword, setFormEditConfirmPassword] = useState('')
 
   const { data: users, isLoading, error } = useQuery({
     queryKey: ['users'],
@@ -61,15 +68,31 @@ export default function Users() {
     onError: (err) => showToast(err.message, 'error'),
   })
 
+  const updateMutation = useMutation({
+    mutationFn: ({ id, data }) => api.put(`/users/${id}`, data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['users'] })
+      setShowEditModal(false)
+      setEditTarget(null)
+      showToast('User updated successfully', 'success')
+    },
+    onError: (err) => showToast(err.message, 'error'),
+  })
+
   const resetForm = () => {
     setFormUsername('')
     setFormPassword('')
+    setFormConfirmPassword('')
     setFormEmail('')
     setFormRole('user')
   }
 
   const handleCreateUser = (e) => {
     e.preventDefault()
+    if (formPassword !== formConfirmPassword) {
+      showToast('Passwords do not match', 'error')
+      return
+    }
     createMutation.mutate({
       username: formUsername,
       password: formPassword,
@@ -121,6 +144,19 @@ export default function Users() {
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">{user.role || 'user'}</td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm">
                     <button
+                      onClick={() => {
+setEditTarget(user)
+setFormEditEmail(user.email || '')
+setFormEditRole(user.role || 'user')
+setFormEditPassword('')
+setFormEditConfirmPassword('')
+setShowEditModal(true)
+                      }}
+                      className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded mr-1"
+                    >
+                      <Pencil className="w-4 h-4 text-gray-500 dark:text-gray-400" />
+                    </button>
+                    <button
                       onClick={() => setDeleteTarget(user)}
                       className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded"
                     >
@@ -169,6 +205,21 @@ export default function Users() {
                   placeholder="Enter password"
                 />
                 <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Minimum 8 characters</p>
+              </div>
+              <div>
+                <label htmlFor="confirmPassword" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Confirm Password <span className="text-red-500">*</span>
+                </label>
+                <input
+                  id="confirmPassword"
+                  type="password"
+                  required
+                  minLength={8}
+                  value={formConfirmPassword}
+                  onChange={(e) => setFormConfirmPassword(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-runic-500 focus:border-transparent"
+                  placeholder="Confirm password"
+                />
               </div>
               <div>
                 <label htmlFor="email" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
@@ -244,6 +295,120 @@ export default function Users() {
                 {deleteMutation.isPending ? 'Deleting...' : 'Delete'}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit user modal */}
+      {showEditModal && editTarget && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white dark:bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Edit User</h3>
+<form
+onSubmit={(e) => {
+e.preventDefault()
+// Email format validation
+const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+if (formEditEmail && !emailRegex.test(formEditEmail)) {
+showToast('Please enter a valid email address', 'error')
+return
+}
+// Password confirmation validation
+if (formEditPassword && formEditPassword !== formEditConfirmPassword) {
+showToast('Passwords do not match', 'error')
+return
+}
+updateMutation.mutate({
+id: editTarget.id,
+data: {
+email: formEditEmail || undefined,
+role: formEditRole,
+password: formEditPassword || undefined,
+},
+})
+}}
+className="space-y-4"
+>
+              <div>
+                <label htmlFor="editEmail" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Email
+                </label>
+                <input
+                  id="editEmail"
+                  type="email"
+                  value={formEditEmail}
+                  onChange={(e) => setFormEditEmail(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-runic-500 focus:border-transparent"
+                  placeholder="Enter email (optional)"
+                />
+              </div>
+              <div>
+                <label htmlFor="editRole" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Role
+                </label>
+                <select
+                  id="editRole"
+                  value={formEditRole}
+                  onChange={(e) => setFormEditRole(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-runic-500 focus:border-transparent"
+                >
+                  <option value="user">user</option>
+                  <option value="admin">admin</option>
+                </select>
+              </div>
+              <div>
+                <label htmlFor="editPassword" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  New Password
+                </label>
+                <input
+                  id="editPassword"
+                  type="password"
+                  minLength={8}
+                  value={formEditPassword}
+                  onChange={(e) => setFormEditPassword(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-runic-500 focus:border-transparent"
+                  placeholder="Leave blank to keep current password"
+                />
+<p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Minimum 8 characters. Leave blank to keep current password.</p>
+</div>
+<div>
+<label htmlFor="editConfirmPassword" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+Confirm New Password
+</label>
+<input
+id="editConfirmPassword"
+type="password"
+minLength={8}
+value={formEditConfirmPassword}
+onChange={(e) => setFormEditConfirmPassword(e.target.value)}
+className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-runic-500 focus:border-transparent"
+placeholder="Confirm new password"
+/>
+</div>
+<div className="flex gap-3 pt-2">
+                <button
+type="button"
+onClick={() => {
+setShowEditModal(false)
+setEditTarget(null)
+setFormEditEmail('')
+setFormEditRole('user')
+setFormEditPassword('')
+setFormEditConfirmPassword('')
+}}
+className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={updateMutation.isPending}
+                  className="flex-1 px-4 py-2 bg-runic-600 hover:bg-runic-700 text-white rounded-lg disabled:opacity-50"
+                >
+                  {updateMutation.isPending ? 'Updating...' : 'Update'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

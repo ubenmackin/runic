@@ -22,7 +22,8 @@ CREATE TABLE IF NOT EXISTS peers (
     hmac_key TEXT NOT NULL,
     last_heartbeat DATETIME,
     status TEXT NOT NULL DEFAULT 'pending',
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    description TEXT DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS groups (

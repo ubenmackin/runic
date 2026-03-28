@@ -52,6 +52,7 @@ export default function Layout() {
   )
 const [expandedItems, setExpandedItems] = useState({})
 const logout = useAuthStore(s => s.logout)
+const username = useAuthStore(s => s.username)
 const navigate = useNavigate()
 
   // Apply dark class on mount and when darkMode changes
@@ -171,8 +172,14 @@ const toggleDark = () => {
               onClick={toggleDark}
               className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700"
             >
-              {darkMode ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
+              {darkMode ? <Sun className="w-5 h-5 text-gray-700 dark:text-gray-300" /> : <Moon className="w-5 h-5 text-gray-700 dark:text-gray-300" />}
             </button>
+            {username && (
+              <div className="flex items-center gap-2 px-3 py-2 text-sm text-gray-700 dark:text-gray-300">
+                <User className="h-4 w-4" />
+                <span>{username}</span>
+              </div>
+            )}
             <button
               onClick={handleLogout}
               className="flex items-center gap-2 px-3 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg"

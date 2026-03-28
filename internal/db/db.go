@@ -300,6 +300,13 @@ func migrateSchema(database *sql.DB) error {
 		log.Println("Migration: added is_manual column to peers table")
 	}
 
+	if !existingPeerColumns["description"] {
+		if _, err := database.Exec("ALTER TABLE peers ADD COLUMN description TEXT DEFAULT ''"); err != nil {
+			return fmt.Errorf("failed to add description column: %w", err)
+		}
+		log.Println("Migration: added description column to peers table")
+	}
+
 	// Migration: group_members table restructure (peer-based)
 	// Check if group_members has the old schema (value/type columns instead of peer_id)
 	var hasOldGroupMembersSchema bool
