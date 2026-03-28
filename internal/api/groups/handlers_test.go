@@ -230,65 +230,30 @@ func TestListGroups_EmptyResult(t *testing.T) {
 // =============================================================================
 
 func TestDeleteGroup_SystemGroup(t *testing.T) {
-	_, cleanup := setupTestDB(t)
+	database, cleanup := setupTestDB(t)
 	defer cleanup()
 
 	// Insert the "any" system group
-	database, _ := sql.Open("sqlite3", "file:testdb_delete_system?mode=memory&cache=shared")
-	defer database.Close()
-	database.Exec(db.Schema())
-	db.DB = db.New(database)
+	database.Exec(`INSERT INTO groups (name, description) VALUES (?, ?)`, "any", "System group")
 
-	db.DB.Exec(`INSERT INTO groups (name, description) VALUES (?, ?)`, "any", "System group")
+	req := httptest.NewRequest("DELETE", "/api/v1/groups/1", nil)
+	w := httptest.NewRecorder()
 
-	tests := []struct {
-		name     string
-		groupID  string
-		wantCode int
-		wantErr  string
-		setup    func()
-	}{
-		{
-			name:     "delete any system group returns 403",
-			groupID:  "1",
-			wantCode: http.StatusForbidden,
-			wantErr:  "Cannot delete system group",
-			setup: func() {
-				db.DB.Exec(`INSERT INTO groups (name, description) VALUES (?, ?)`, "any", "System group")
-			},
-		},
+	// Mock gorilla/mux vars
+	req = muxVars(req, map[string]string{"id": "1"})
+
+	DeleteGroup(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Errorf("expected status %d, got %d: %s", http.StatusForbidden, w.Code, w.Body.String())
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			database, cleanup := setupTestDB(t)
-			defer cleanup()
-
-			// Insert the "any" system group
-			database.Exec(`INSERT INTO groups (name, description) VALUES (?, ?)`, "any", "System group")
-
-			req := httptest.NewRequest("DELETE", "/api/v1/groups/"+tt.groupID, nil)
-			w := httptest.NewRecorder()
-
-			// Mock gorilla/mux vars
-			req = muxVars(req, map[string]string{"id": tt.groupID})
-
-			DeleteGroup(w, req)
-
-			if w.Code != tt.wantCode {
-				t.Errorf("expected status %d, got %d: %s", tt.wantCode, w.Code, w.Body.String())
-			}
-
-			if tt.wantErr != "" {
-				var resp map[string]string
-				if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
-					t.Fatalf("failed to decode error response: %v", err)
-				}
-				if !strings.Contains(resp["error"], tt.wantErr) {
-					t.Errorf("expected error containing %q, got %q", tt.wantErr, resp["error"])
-				}
-			}
-		})
+	var resp map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode error response: %v", err)
+	}
+	if !strings.Contains(resp["error"], "Cannot delete system group") {
+		t.Errorf("expected error containing %q, got %q", "Cannot delete system group", resp["error"])
 	}
 }
 

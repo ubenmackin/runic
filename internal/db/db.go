@@ -391,7 +391,7 @@ func GetPeer(ctx context.Context, database *sql.DB, peerID int) (models.PeerRow,
 // ListGroupMembers fetches all members of a group.
 func ListGroupMembers(ctx context.Context, database *sql.DB, groupID int) ([]models.GroupMemberRow, error) {
 	rows, err := database.QueryContext(ctx,
-		"SELECT id, group_id, peer_id FROM group_members WHERE group_id = ?", groupID)
+		"SELECT id, group_id, peer_id, added_at FROM group_members WHERE group_id = ?", groupID)
 	if err != nil {
 		return nil, err
 	}
@@ -400,7 +400,7 @@ func ListGroupMembers(ctx context.Context, database *sql.DB, groupID int) ([]mod
 	var members []models.GroupMemberRow
 	for rows.Next() {
 		var m models.GroupMemberRow
-		if err := rows.Scan(&m.ID, &m.GroupID, &m.PeerID); err != nil {
+		if err := rows.Scan(&m.ID, &m.GroupID, &m.PeerID, &m.AddedAt); err != nil {
 			return nil, err
 		}
 		members = append(members, m)

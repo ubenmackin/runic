@@ -32,6 +32,7 @@ type GroupMemberRow struct {
 	ID      int
 	GroupID int
 	PeerID  int
+	AddedAt sql.NullTime
 }
 
 type ServiceRow struct {

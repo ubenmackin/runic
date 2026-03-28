@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 
 	"runic/internal/api/agents"
@@ -134,7 +135,9 @@ func DeletePeer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Delete from group_members first
-	db.DB.ExecContext(r.Context(), "DELETE FROM group_members WHERE peer_id = ?", peerID)
+	if _, err := db.DB.ExecContext(r.Context(), "DELETE FROM group_members WHERE peer_id = ?", peerID); err != nil {
+		log.Printf("WARN: Failed to cleanup group_members for peer %d: %v", peerID, err)
+	}
 
 	// Delete any rule bundles (foreign key constraint)
 	db.DB.ExecContext(r.Context(), "DELETE FROM rule_bundles WHERE peer_id = ?", peerID)
