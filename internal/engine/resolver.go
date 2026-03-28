@@ -20,84 +20,63 @@ type PortClause struct {
 	PortMatch string // e.g. "--dport 22" or "-m multiport --dports 80,443"
 }
 
-// ResolveGroup returns a deduplicated flat list of CIDRs for the given group,
-// recursively expanding group_ref members. Circular references detected via visited set.
+// ResolveGroup returns a deduplicated flat list of CIDRs for the given group.
+// In the new schema, groups contain only peers. We look up each peer's IP address.
 func (r *Resolver) ResolveGroup(ctx context.Context, groupID int, visited map[int]bool) ([]string, error) {
-	if visited[groupID] {
-		return nil, fmt.Errorf("circular group reference detected at group %d", groupID)
-	}
-	visited[groupID] = true
+	// Note: visited is kept for API compatibility but not used since we no longer have nested groups
 
-	rows, err := r.db.QueryContext(ctx,
-		"SELECT id, group_id, value, type FROM group_members WHERE group_id = ?", groupID)
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT p.id, p.ip_address, p.is_manual
+		FROM group_members gm
+		JOIN peers p ON gm.peer_id = p.id
+		WHERE gm.group_id = ?`, groupID)
 	if err != nil {
 		return nil, fmt.Errorf("query group members: %w", err)
 	}
 	defer rows.Close()
 
-	type member struct {
-		ID      int
-		GroupID int
-		Value   string
-		Type    string
-	}
+	seen := map[string]bool{}
+	var results []string
 
-	var members []member
 	for rows.Next() {
-		var m member
-		if err := rows.Scan(&m.ID, &m.GroupID, &m.Value, &m.Type); err != nil {
+		var peerID int
+		var ipAddress string
+		var isManual bool
+		if err := rows.Scan(&peerID, &ipAddress, &isManual); err != nil {
 			return nil, fmt.Errorf("scan group member: %w", err)
 		}
-		members = append(members, m)
+
+		// The peer's ip_address is either a single IP or a CIDR notation
+		// Validate and normalize it
+		if strings.Contains(ipAddress, "/") {
+			// CIDR notation
+			if _, _, err := net.ParseCIDR(ipAddress); err != nil {
+				return nil, fmt.Errorf("invalid CIDR in peer %d: %s", peerID, ipAddress)
+			}
+			if !seen[ipAddress] {
+				seen[ipAddress] = true
+				results = append(results, ipAddress)
+			}
+		} else {
+			// Single IP - convert to /32 CIDR
+			if net.ParseIP(ipAddress) == nil {
+				return nil, fmt.Errorf("invalid IP in peer %d: %s", peerID, ipAddress)
+			}
+			cidr := ipAddress + "/32"
+			if !seen[cidr] {
+				seen[cidr] = true
+				results = append(results, cidr)
+			}
+		}
 	}
+
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 
-	seen := map[string]bool{}
-	var results []string
-
-	for _, m := range members {
-		switch m.Type {
-		case "ip":
-			if net.ParseIP(m.Value) == nil {
-				return nil, fmt.Errorf("invalid IP in group member: %s", m.Value)
-			}
-			key := m.Value + "/32"
-			if !seen[key] {
-				seen[key] = true
-				results = append(results, key)
-			}
-		case "cidr":
-			if _, _, err := net.ParseCIDR(m.Value); err != nil {
-				return nil, fmt.Errorf("invalid CIDR in group member: %s", m.Value)
-			}
-			if !seen[m.Value] {
-				seen[m.Value] = true
-				results = append(results, m.Value)
-			}
-		case "group_ref":
-			var refGroupID int
-			if _, err := fmt.Sscanf(m.Value, "%d", &refGroupID); err != nil {
-				return nil, fmt.Errorf("invalid group_ref value: %s", m.Value)
-			}
-			nested, err := r.ResolveGroup(ctx, refGroupID, visited)
-			if err != nil {
-				return nil, err
-			}
-			for _, addr := range nested {
-				if !seen[addr] {
-					seen[addr] = true
-					results = append(results, addr)
-				}
-			}
-		default:
-			return nil, fmt.Errorf("unknown member type: %s", m.Type)
-		}
-	}
-
 	return results, nil
 }
+
 // validPortsRe matches comma/colon-separated port numbers (e.g. "22", "80,443", "8000:9000").
 var validPortsRe = regexp.MustCompile(`^\d+([,:]\d+)*$`)
 
@@ -138,4 +117,3 @@ func expandPortsSingle(ports string, protocol string) []PortClause {
 	}
 	return []PortClause{{Protocol: protocol, PortMatch: fmt.Sprintf("--dport %s", ports)}}
 }
-

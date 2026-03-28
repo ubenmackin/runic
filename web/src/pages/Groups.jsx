@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Trash2, Lock } from 'lucide-react'
+import { Plus, Trash2, Lock, Users, Shield, Search, ArrowUp, ArrowDown, ArrowUpDown, X } from 'lucide-react'
 import { api, QUERY_KEYS } from '../api/client'
 import { useCrudModal } from '../hooks/useCrudModal'
 import { useToastContext } from '../hooks/ToastContext'
@@ -16,28 +16,147 @@ export default function Groups() {
   const showToast = useToastContext()
   const { modalOpen, editItem: editGroup, setEditItem: setEditGroup, form: formData, setForm: setFormData, setFormForEdit, handleOpenAdd, handleCancel, setModalOpen } = useCrudModal({ name: '', description: '' })
   const [deleteTarget, setDeleteTarget] = useState(null)
-  const [newMember, setNewMember] = useState({ type: 'ip', value: '', label: '' })
-  const [memberType, setMemberType] = useState('ip')
   const [formErrors, setFormErrors] = useState({})
+  
+  // Sorting state
+  const [sortKey, setSortKey] = useState('name')
+  const [sortDirection, setSortDirection] = useState('asc')
+  
+  // Search state
+  const [searchQuery, setSearchQuery] = useState('')
+  
+  // Selected peer for adding to group
+  const [selectedPeerId, setSelectedPeerId] = useState(null)
+
+  // Modal ref for focus trap
+  const modalRef = useRef(null)
+
   const openAdd = () => { setFormErrors({}); handleOpenAdd() }
   const openEdit = (g) => {
-    setEditGroup(g); setFormForEdit(g); setFormErrors({}); setModalOpen(true)
+    setEditGroup(g)
+    setFormForEdit(g)
+    setFormErrors({})
+    setSelectedPeerId(null)
+    setModalOpen(true)
   }
-  const closeModal = () => { handleCancel() }
+  const closeModal = () => {
+    handleCancel()
+    setSelectedPeerId(null)
+  }
+
+  // Focus trap for modal accessibility
+  useEffect(() => {
+    if (!modalOpen) return
+    const modal = modalRef.current
+    if (!modal) return
+
+    const focusableElements = modal.querySelectorAll(
+      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+    )
+    const firstElement = focusableElements[0]
+    const lastElement = focusableElements[focusableElements.length - 1]
+
+    // Focus first element on open
+    firstElement?.focus()
+
+    const handleKeyDown = (e) => {
+      if (e.key === 'Tab') {
+        if (e.shiftKey && document.activeElement === firstElement) {
+          e.preventDefault()
+          lastElement?.focus()
+        } else if (!e.shiftKey && document.activeElement === lastElement) {
+          e.preventDefault()
+          firstElement?.focus()
+        }
+      }
+    }
+
+    modal.addEventListener('keydown', handleKeyDown)
+    return () => modal.removeEventListener('keydown', handleKeyDown)
+  }, [modalOpen])
 
   const { data: groups, isLoading } = useQuery({
     queryKey: QUERY_KEYS.groups(),
     queryFn: () => api.get('/groups'),
   })
 
-  const { data: membersData } = useQuery({
+  const { data: membersData, isLoading: membersLoading } = useQuery({
     queryKey: QUERY_KEYS.members(editGroup?.id),
     queryFn: () => api.get(`/groups/${editGroup.id}/members`),
     enabled: !!editGroup?.id,
   })
   const members = membersData || []
 
-  const groupOptions = (groups || []).filter(g => g.name !== 'any' && g.name !== 'localhost').map(g => ({ value: g.id, label: g.name }))
+  // Fetch all peers for the "Add Peer" dropdown
+  const { data: allPeers } = useQuery({
+    queryKey: QUERY_KEYS.peers(),
+    queryFn: () => api.get('/peers'),
+    enabled: modalOpen && !!editGroup,
+  })
+
+  // Filter out peers already in the group for the dropdown
+  const availablePeers = (allPeers || []).filter(
+    peer => !members.some(m => m.id === peer.id)
+  )
+  const peerOptions = availablePeers.map(p => ({
+    value: p.id,
+    label: p.hostname || p.ip_address,
+  }))
+
+  // Sort groups based on sortKey and sortDirection
+  const sortedGroups = [...(groups || [])].sort((a, b) => {
+    let aVal, bVal
+    switch (sortKey) {
+      case 'name':
+        aVal = a.name.toLowerCase()
+        bVal = b.name.toLowerCase()
+        break
+      case 'peers':
+        aVal = a.peer_count || 0
+        bVal = b.peer_count || 0
+        break
+      case 'policies':
+        aVal = a.policy_count || 0
+        bVal = b.policy_count || 0
+        break
+      default:
+        return 0
+    }
+    if (aVal < bVal) return sortDirection === 'asc' ? -1 : 1
+    if (aVal > bVal) return sortDirection === 'asc' ? 1 : -1
+    return 0
+  })
+
+  // Filter groups based on search query
+  const filteredGroups = sortedGroups.filter(g => {
+    if (!searchQuery) return true
+    const query = searchQuery.toLowerCase()
+    return (
+      g.name.toLowerCase().includes(query) ||
+      String(g.peer_count || 0).includes(query) ||
+      String(g.policy_count || 0).includes(query)
+    )
+  })
+
+  // Handle sort column click
+  const handleSort = (key) => {
+    if (sortKey === key) {
+      setSortDirection(d => d === 'asc' ? 'desc' : 'asc')
+    } else {
+      setSortKey(key)
+      setSortDirection('asc')
+    }
+  }
+
+  // Render sort indicator
+  const SortIndicator = ({ columnKey }) => {
+    if (sortKey !== columnKey) {
+      return <ArrowUpDown className="w-4 h-4 text-gray-400 ml-1" />
+    }
+    return sortDirection === 'asc' 
+      ? <ArrowUp className="w-4 h-4 text-runic-500 ml-1" />
+      : <ArrowDown className="w-4 h-4 text-runic-500 ml-1" />
+  }
 
   const createMutation = useMutation({
     mutationFn: (data) => api.post('/groups', data),
@@ -76,34 +195,43 @@ export default function Groups() {
   })
 
   const addMemberMutation = useMutation({
-    mutationFn: ({ groupId, member }) => api.post(`/groups/${groupId}/members`, member),
-    onMutate: async ({ groupId, member }) => {
+    mutationFn: ({ groupId, peerId }) => api.post(`/groups/${groupId}/members`, { peer_id: peerId }),
+    onMutate: async ({ groupId, peerId }) => {
       await qc.cancelQueries({ queryKey: QUERY_KEYS.members(groupId) })
       const previousMembers = qc.getQueryData(QUERY_KEYS.members(groupId))
-      // Optimistically add member with temp ID
-      qc.setQueryData(QUERY_KEYS.members(groupId), old => [...(old || []), { ...member, id: `temp-${Date.now()}` }])
+      // Find peer details for optimistic update
+      const peer = allPeers?.find(p => p.id === peerId)
+      if (peer) {
+        qc.setQueryData(QUERY_KEYS.members(groupId), old => [...(old || []), peer])
+      }
       return { previousMembers }
     },
     onError: (err, vars, context) => {
       qc.setQueryData(QUERY_KEYS.members(vars.groupId), context.previousMembers)
       setFormErrors({ _general: err.message })
     },
-    onSettled: (data, err, vars) => { qc.invalidateQueries({ queryKey: QUERY_KEYS.members(vars.groupId) }) },
+    onSettled: (data, err, vars) => { 
+      qc.invalidateQueries({ queryKey: QUERY_KEYS.members(vars.groupId) })
+      qc.invalidateQueries({ queryKey: QUERY_KEYS.groups() })
+    },
   })
 
   const deleteMemberMutation = useMutation({
-    mutationFn: ({ groupId, memberId }) => api.delete(`/groups/${groupId}/members/${memberId}`),
-    onMutate: async ({ groupId, memberId }) => {
+    mutationFn: ({ groupId, peerId }) => api.delete(`/groups/${groupId}/members/${peerId}`),
+    onMutate: async ({ groupId, peerId }) => {
       await qc.cancelQueries({ queryKey: QUERY_KEYS.members(groupId) })
       const previousMembers = qc.getQueryData(QUERY_KEYS.members(groupId))
-      qc.setQueryData(QUERY_KEYS.members(groupId), old => old?.filter(m => m.id !== memberId) || [])
+      qc.setQueryData(QUERY_KEYS.members(groupId), old => old?.filter(m => m.id !== peerId) || [])
       return { previousMembers }
     },
     onError: (err, vars, context) => {
       qc.setQueryData(QUERY_KEYS.members(vars.groupId), context.previousMembers)
       showToast(err.message, 'error')
     },
-    onSettled: (data, err, vars) => { qc.invalidateQueries({ queryKey: QUERY_KEYS.members(vars.groupId) }) },
+    onSettled: (data, err, vars) => { 
+      qc.invalidateQueries({ queryKey: QUERY_KEYS.members(vars.groupId) })
+      qc.invalidateQueries({ queryKey: QUERY_KEYS.groups() })
+    },
   })
 
   const handleSubmit = (e) => {
@@ -112,14 +240,14 @@ export default function Groups() {
     else createMutation.mutate(formData)
   }
 
-  const handleAddMember = () => {
-    if (!newMember.value) return
-    if (memberType === 'group' && newMember.value === editGroup?.id) {
-      setFormErrors({ _general: 'Cannot add group as member of itself' })
-      return
-    }
-    addMemberMutation.mutate({ groupId: editGroup.id, member: { type: memberType, value: newMember.value, label: newMember.label } })
-    setNewMember({ type: memberType, value: '', label: '' })
+  const handleAddPeer = () => {
+    if (!selectedPeerId) return
+    addMemberMutation.mutate({ groupId: editGroup.id, peerId: selectedPeerId })
+    setSelectedPeerId(null)
+  }
+
+  const handleRemovePeer = (peerId) => {
+    deleteMemberMutation.mutate({ groupId: editGroup.id, peerId })
   }
 
   if (isLoading) return <TableSkeleton rows={3} columns={4} />
@@ -133,96 +261,224 @@ export default function Groups() {
         </button>
       </div>
 
-      {!groups?.length ? (
-        <EmptyState title="No groups yet" message="Create groups to organize IPs, CIDRs, and nested groups." action="New Group" onAction={openAdd} />
-      ) : (
-        <DataTable columns={[
-          { key: 'name', label: 'Name', render: (g) => (
-            <div className="flex items-center gap-2">
-              {['any', 'localhost'].includes(g.name) && <Lock className="w-4 h-4 text-gray-400" />}
-              <span className="font-medium text-gray-900 dark:text-white">{g.name}</span>
-            </div>
-          )},
-          { key: 'description', label: 'Description', render: (g) => g.description || '—' },
-          { key: 'member_count', label: 'Members', render: (g) => g.member_count || 0 },
-          { key: 'actions', label: 'Actions', render: (g) => (
-            <div className="flex items-center gap-2">
-              <button onClick={(e) => { e.stopPropagation(); openEdit(g) }} className="px-3 py-1 text-xs font-medium text-runic-600 hover:bg-runic-50 dark:hover:bg-runic-900 rounded">Edit</button>
-              {!['any', 'localhost'].includes(g.name) && (
-                <button onClick={(e) => { e.stopPropagation(); setDeleteTarget(g) }} className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded"><Trash2 className="w-4 h-4 text-red-500" /></button>
-              )}
-            </div>
-          )},
-        ]} data={groups} />
+      {/* Search Bar */}
+      {groups?.length > 0 && (
+        <div className="flex items-center gap-2">
+          <div className="relative flex-1 max-w-md">
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              placeholder="Search groups..."
+              className="w-full pl-9 pr-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400"
+            />
+          </div>
+        </div>
       )}
 
-      {/* Add/Edit Modal */}
-      {modalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl w-full max-w-2xl mx-4 max-h-[90vh] overflow-y-auto">
-            <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700">
-              <h3 className="text-lg font-semibold text-gray-900 dark:text-white">{editGroup ? 'Edit Group' : 'New Group'}</h3>
+      {!groups?.length ? (
+        <EmptyState title="No groups yet" message="Create groups to organize peers for policy targeting." action="New Group" onAction={openAdd} />
+      ) : !filteredGroups.length ? (
+        <EmptyState title="No matching groups" message="Try a different search term." />
+      ) : (
+        <DataTable columns={[
+          { 
+            key: 'name', 
+            label: (
+              <button 
+                type="button"
+                onClick={() => handleSort('name')}
+                className="flex items-center hover:text-runic-600 dark:hover:text-runic-400"
+              >
+                Name
+                <SortIndicator columnKey="name" />
+              </button>
+            ), 
+            render: (g) => (
+              <div className="flex items-center gap-2">
+                {g.is_system && <Lock className="w-4 h-4 text-gray-400" />}
+                <span className="font-medium text-gray-900 dark:text-white">{g.name}</span>
+              </div>
+            )
+          },
+          { 
+            key: 'peers', 
+            label: (
+              <button 
+                type="button"
+                onClick={() => handleSort('peers')}
+                className="flex items-center hover:text-runic-600 dark:hover:text-runic-400"
+              >
+                Peers
+                <SortIndicator columnKey="peers" />
+              </button>
+            ),
+            render: (g) => (
+              <div className="flex items-center gap-1.5 px-2 py-1 bg-gray-100 dark:bg-gray-700 rounded text-sm">
+                <Users className="w-4 h-4 text-gray-500" />
+                <span className="text-gray-900 dark:text-white">{g.peer_count || 0}</span>
+              </div>
+            )
+          },
+          { 
+            key: 'policies', 
+            label: (
+              <button 
+                type="button"
+                onClick={() => handleSort('policies')}
+                className="flex items-center hover:text-runic-600 dark:hover:text-runic-400"
+              >
+                Policies
+                <SortIndicator columnKey="policies" />
+              </button>
+            ),
+            render: (g) => (
+              <div className="flex items-center gap-1.5 px-2 py-1 bg-gray-100 dark:bg-gray-700 rounded text-sm">
+                <Shield className="w-4 h-4 text-gray-500" />
+                <span className="text-gray-900 dark:text-white">{g.policy_count || 0}</span>
+              </div>
+            )
+          },
+          { 
+            key: 'actions', 
+            label: 'Actions', 
+            render: (g) => (
+              <div className="flex items-center gap-2">
+                <button 
+                  onClick={(e) => { e.stopPropagation(); openEdit(g) }} 
+                  className={`px-3 py-1 text-xs font-medium rounded ${g.is_system ? 'text-gray-400 cursor-not-allowed' : 'text-runic-600 hover:bg-runic-50 dark:hover:bg-runic-900'}`}
+                  disabled={g.is_system}
+                >
+                  Edit
+                </button>
+                {!g.is_system && (
+                  <button onClick={(e) => { e.stopPropagation(); setDeleteTarget(g) }} className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded">
+                    <Trash2 className="w-4 h-4 text-red-500" />
+                  </button>
+                )}
+              </div>
+            )
+          },
+        ]} data={filteredGroups} />
+      )}
+
+  {/* Add/Edit Modal */}
+  {modalOpen && (
+  <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="modal-title"
+        className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') {
+            closeModal()
+          }
+        }}
+      >
+    <div ref={modalRef} className="bg-white dark:bg-gray-800 rounded-xl shadow-xl w-full max-w-2xl mx-4 max-h-[90vh] overflow-y-auto">
+            <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
+              <h3 id="modal-title" className="text-lg font-semibold text-gray-900 dark:text-white">
+                {editGroup ? `Edit Group: ${editGroup.name}` : 'New Group'}
+              </h3>
+              <button onClick={closeModal} className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded">
+                <X className="w-5 h-5 text-gray-500" />
+              </button>
             </div>
             <form onSubmit={handleSubmit} className="p-6 space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Name</label>
-                <input type="text" value={formData.name} onChange={e => setFormData(d => ({ ...d, name: e.target.value }))} required disabled={editGroup && ['any', 'localhost'].includes(editGroup.name)} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:opacity-50" />
+                <input 
+                  type="text" 
+                  value={formData.name} 
+                  onChange={e => setFormData(d => ({ ...d, name: e.target.value }))} 
+                  required 
+                  disabled={editGroup?.is_system} 
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:opacity-50 disabled:cursor-not-allowed" 
+                />
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Description</label>
-                <textarea value={formData.description} onChange={e => setFormData(d => ({ ...d, description: e.target.value }))} rows={2} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white" />
+                <textarea 
+                  value={formData.description} 
+                  onChange={e => setFormData(d => ({ ...d, description: e.target.value }))} 
+                  rows={2} 
+                  disabled={editGroup?.is_system}
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:opacity-50 disabled:cursor-not-allowed" 
+                />
               </div>
 
-              {editGroup && !['any', 'localhost'].includes(editGroup.name) && (
-                <>
-                  <div className="border-t border-gray-200 dark:border-gray-700 pt-4">
-                    <h4 className="text-sm font-medium text-gray-900 dark:text-white mb-3">Members</h4>
-                    {members.length > 0 && (
-                      <table className="w-full text-sm mb-3">
-                        <thead className="bg-gray-50 dark:bg-gray-900">
-                          <tr>
-                            <th className="text-left px-3 py-2 font-medium text-gray-500">Type</th>
-                            <th className="text-left px-3 py-2 font-medium text-gray-500">Value</th>
-                            <th className="text-left px-3 py-2 font-medium text-gray-500">Label</th>
-                            <th className="text-left px-3 py-2 font-medium text-gray-500"></th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-                          {members.map(m => (
-                            <tr key={m.id}>
-                              <td className="px-3 py-2 text-gray-500">{m.type}</td>
-                              <td className="px-3 py-2 text-gray-900 dark:text-white">{m.value}</td>
-                              <td className="px-3 py-2 text-gray-500">{m.label || '—'}</td>
-                              <td className="px-3 py-2"><button type="button" onClick={() => deleteMemberMutation.mutate({ groupId: editGroup.id, memberId: m.id })} className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded"><Trash2 className="w-4 h-4 text-red-500" /></button></td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    )}
-                    <div className="flex gap-2 items-end">
-                      <div className="w-24">
-                        <label className="block text-xs text-gray-500 mb-1">Type</label>
-                        <select value={memberType} onChange={e => setMemberType(e.target.value)} className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white">
-                          <option value="ip">IP</option>
-                          <option value="cidr">CIDR</option>
-                          <option value="group">Group</option>
-                        </select>
-                      </div>
-                      <div className="flex-1">
-                        <label className="block text-xs text-gray-500 mb-1">Value</label>
-                        <input type="text" value={memberType === 'group' ? '' : newMember.value} onChange={e => setNewMember(d => ({ ...d, value: e.target.value }))} placeholder={memberType === 'cidr' ? '10.0.0.0/8' : '10.0.1.50'} className="w-full px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white" />
-                        {memberType === 'group' && (
-                          <SearchableSelect options={groupOptions.filter(o => o.value !== editGroup?.id)} value={newMember.value} onChange={v => setNewMember(d => ({ ...d, value: v }))} placeholder="Select group" />
+              {/* Tag-based Member Management */}
+              {editGroup && (
+                <div className="border-t border-gray-200 dark:border-gray-700 pt-4">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Members</label>
+                  
+{membersLoading ? (
+              <div className="flex flex-wrap gap-2">
+                {[1, 2, 3].map((i) => (
+                  <div key={i} className="animate-pulse bg-gray-200 dark:bg-gray-700 h-8 w-24 rounded-full" />
+                ))}
+              </div>
+            ) : (
+                    <div className="space-y-3">
+                      {/* Member Tags */}
+                      <div className="flex flex-wrap gap-2 min-h-[40px] p-3 border border-gray-300 dark:border-gray-600 rounded-lg bg-gray-50 dark:bg-gray-900">
+                        {members.length === 0 ? (
+                          <span className="text-sm text-gray-500 italic">No members in this group</span>
+                        ) : (
+                          members.map(m => (
+                            <span 
+                              key={m.id}
+                              className="px-3 py-1 bg-gray-100 dark:bg-gray-700 rounded-full text-sm flex items-center gap-2"
+                            >
+                              <span className="text-gray-900 dark:text-white">{m.hostname || m.ip_address}</span>
+                              {!editGroup?.is_system && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemovePeer(m.id)}
+                                  className="hover:bg-gray-200 dark:hover:bg-gray-600 rounded-full p-0.5"
+                                  disabled={deleteMemberMutation.isPending}
+                                >
+                                  <X className="w-3 h-3 text-gray-500 hover:text-red-500" />
+                                </button>
+                              )}
+                            </span>
+                          ))
                         )}
                       </div>
-                      <div className="w-32">
-                        <label className="block text-xs text-gray-500 mb-1">Label</label>
-                        <input type="text" value={newMember.label} onChange={e => setNewMember(d => ({ ...d, label: e.target.value }))} placeholder="Optional" className="w-full px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white" />
+
+{/* Add Peer Dropdown */}
+                {!editGroup?.is_system && (
+                  <div className="flex items-end gap-2">
+                    {peerOptions.length === 0 ? (
+                      <div className="flex-1 text-sm text-gray-500 italic text-center py-2">
+                        All peers are already in this group.
                       </div>
-                      <button type="button" onClick={handleAddMember} className="px-3 py-1.5 text-sm bg-runic-600 hover:bg-runic-700 text-white rounded-lg">Add</button>
-                    </div>
+                    ) : (
+                      <>
+                        <div className="flex-1">
+                          <SearchableSelect
+                            options={peerOptions}
+                            value={selectedPeerId}
+                            onChange={setSelectedPeerId}
+                            placeholder="Add Peer to group..."
+                          />
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleAddPeer}
+                          disabled={!selectedPeerId || addMemberMutation.isPending}
+                          className="px-3 py-2 text-sm font-medium text-white bg-runic-600 hover:bg-runic-700 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          Add
+                        </button>
+                      </>
+                    )}
                   </div>
-                </>
+                )}
+                    </div>
+                  )}
+                </div>
               )}
 
               <InlineError message={formErrors._general} />

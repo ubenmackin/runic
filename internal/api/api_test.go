@@ -202,8 +202,10 @@ func TestCompilePeer(t *testing.T) {
 	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
 		"test-peer", "10.0.0.1", "test-key", "test-hmac-key", true)
 	database.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group")
-	database.Exec(`INSERT INTO group_members (group_id, value, type) VALUES (?, ?, ?)`,
-		1, "192.168.1.0/24", "cidr")
+	// Insert manual peer for group member (new schema: groups contain peers, not IP/CIDR)
+	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, is_manual) VALUES (?, ?, ?, ?, 1)`,
+		"manual-peer", "192.168.1.0/24", "manual-key", "manual-hmac")
+	database.Exec(`INSERT INTO group_members (group_id, peer_id) VALUES (?, ?)`, 1, 2)
 	database.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`,
 		"ssh", "22", "tcp")
 	database.Exec(`INSERT INTO policies (name, source_group_id, service_id, target_peer_id, action, priority, enabled) VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -864,66 +866,49 @@ func TestGroupMembers(t *testing.T) {
 	// Insert test group
 	database.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group")
 
-	// Test adding members
-	tests := []struct {
-		name     string
-		groupID  string
-		body     string
-		wantCode int
-		method   string
-	}{
-		{
-			name:     "add IP member",
-			groupID:  "1",
-			body:     `{"value": "192.168.1.100", "type": "ip"}`,
-			wantCode: http.StatusCreated,
-			method:   "POST",
-		},
-		{
-			name:     "add CIDR member",
-			groupID:  "1",
-			body:     `{"value": "10.0.0.0/24", "type": "cidr"}`,
-			wantCode: http.StatusCreated,
-			method:   "POST",
-		},
+	// Insert test peers to add to group
+	// Note: SQLite auto-increment starts at 1, so these will be IDs 1 and 2
+	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, is_manual) VALUES (?, ?, ?, ?, 1)`,
+		"peer1", "192.168.1.100", "key1", "hmac1")
+	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, is_manual) VALUES (?, ?, ?, ?, 1)`,
+		"peer2", "10.0.0.0/24", "key2", "hmac2")
+
+	// Add peer 1 to group 1
+	req1 := httptest.NewRequest("POST", "/api/v1/groups/1/members", strings.NewReader(`{"peer_id": 1}`))
+	req1.Header.Set("Content-Type", "application/json")
+	w1 := httptest.NewRecorder()
+	req1 = muxVars(req1, map[string]string{"id": "1"})
+	groups.MakeAddGroupMemberHandler(api.Compiler)(w1, req1)
+	if w1.Code != http.StatusCreated {
+		t.Errorf("expected status %d, got %d: %s", http.StatusCreated, w1.Code, w1.Body.String())
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if tt.method == "POST" {
-				req := httptest.NewRequest("POST", "/api/v1/groups/"+tt.groupID+"/members", strings.NewReader(tt.body))
-				req.Header.Set("Content-Type", "application/json")
-				w := httptest.NewRecorder()
-
-				// Mock gorilla/mux vars
-				req = muxVars(req, map[string]string{"id": tt.groupID})
-
-				groups.MakeAddGroupMemberHandler(api.Compiler)(w, req)
-
-				if w.Code != tt.wantCode {
-					t.Errorf("expected status %d, got %d: %s", tt.wantCode, w.Code, w.Body.String())
-				}
-			}
-		})
+	// Add peer 2 to group 1
+	req2 := httptest.NewRequest("POST", "/api/v1/groups/1/members", strings.NewReader(`{"peer_id": 2}`))
+	req2.Header.Set("Content-Type", "application/json")
+	w2 := httptest.NewRecorder()
+	req2 = muxVars(req2, map[string]string{"id": "1"})
+	groups.MakeAddGroupMemberHandler(api.Compiler)(w2, req2)
+	if w2.Code != http.StatusCreated {
+		t.Errorf("expected status %d, got %d: %s", http.StatusCreated, w2.Code, w2.Body.String())
 	}
 
 	// Test listing members
 	req := httptest.NewRequest("GET", "/api/v1/groups/1/members", nil)
 	w := httptest.NewRecorder()
-
 	req = muxVars(req, map[string]string{"id": "1"})
-
 	groups.ListGroupMembers(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Errorf("expected status %d, got %d", http.StatusOK, w.Code)
 	}
 
+	// New schema returns peer objects, not member objects
 	var members []struct {
-		ID      int    `json:"id"`
-		GroupID int    `json:"group_id"`
-		Value   string `json:"value"`
-		Type    string `json:"type"`
+		ID        int    `json:"id"`
+		Hostname  string `json:"hostname"`
+		IPAddress string `json:"ip_address"`
+		IsManual  bool   `json:"is_manual"`
 	}
 	if err := json.NewDecoder(w.Body).Decode(&members); err != nil {
 		t.Fatalf("failed to decode response: %v", err)

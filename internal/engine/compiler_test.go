@@ -3,7 +3,6 @@ package engine
 import (
 	"context"
 	"database/sql"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -52,15 +51,28 @@ func insertGroup(t *testing.T, database *sql.DB, name string) int {
 	return int(id)
 }
 
-// insertGroupMember inserts a group member.
-func insertGroupMember(t *testing.T, database *sql.DB, groupID int, value, memberType string) {
+// insertGroupMember inserts a peer into a group.
+func insertGroupMember(t *testing.T, database *sql.DB, groupID, peerID int) {
 	t.Helper()
 	_, err := database.Exec(
-		"INSERT INTO group_members (group_id, value, type) VALUES (?, ?, ?)",
-		groupID, value, memberType)
+		"INSERT INTO group_members (group_id, peer_id) VALUES (?, ?)",
+		groupID, peerID)
 	if err != nil {
 		t.Fatalf("insert group member: %v", err)
 	}
+}
+
+// insertManualPeer inserts a manual peer with IP/CIDR and returns its ID.
+func insertManualPeer(t *testing.T, database *sql.DB, ipOrCIDR string) int {
+	t.Helper()
+	result, err := database.Exec(
+		`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, is_manual) VALUES (?, ?, ?, ?, 1)`,
+		ipOrCIDR, ipOrCIDR, "key-"+ipOrCIDR, "hmac-"+ipOrCIDR)
+	if err != nil {
+		t.Fatalf("insert manual peer: %v", err)
+	}
+	id, _ := result.LastInsertId()
+	return int(id)
 }
 
 // insertService inserts a test service and returns its ID.
@@ -98,7 +110,8 @@ func TestSingleIPSource(t *testing.T) {
 	database := setupTestDB(t)
 	peerID := insertPeer(t, database, "web1", "192.168.1.10", false)
 	groupID := insertGroup(t, database, "office")
-	insertGroupMember(t, database, groupID, "10.0.1.1", "ip")
+	manualPeerID := insertManualPeer(t, database, "10.0.1.1")
+	insertGroupMember(t, database, groupID, manualPeerID)
 	serviceID := insertService(t, database, "ssh", "22", "tcp")
 	insertPolicy(t, database, "allow-ssh", groupID, serviceID, peerID, "ACCEPT", 100, true)
 
@@ -120,7 +133,8 @@ func TestCIDRSource(t *testing.T) {
 	database := setupTestDB(t)
 	peerID := insertPeer(t, database, "web2", "192.168.1.11", false)
 	groupID := insertGroup(t, database, "subnet")
-	insertGroupMember(t, database, groupID, "10.0.1.0/24", "cidr")
+	manualPeerID := insertManualPeer(t, database, "10.0.1.0/24")
+	insertGroupMember(t, database, groupID, manualPeerID)
 	serviceID := insertService(t, database, "https", "443", "tcp")
 	insertPolicy(t, database, "allow-https", groupID, serviceID, peerID, "ACCEPT", 100, true)
 
@@ -139,7 +153,8 @@ func TestMultiport(t *testing.T) {
 	database := setupTestDB(t)
 	peerID := insertPeer(t, database, "web3", "192.168.1.12", false)
 	groupID := insertGroup(t, database, "any")
-	insertGroupMember(t, database, groupID, "0.0.0.0/0", "cidr")
+	manualPeerID := insertManualPeer(t, database, "0.0.0.0/0")
+	insertGroupMember(t, database, groupID, manualPeerID)
 	serviceID := insertService(t, database, "web", "80,443", "tcp")
 	insertPolicy(t, database, "allow-web", groupID, serviceID, peerID, "ACCEPT", 100, true)
 
@@ -158,7 +173,8 @@ func TestPortRange(t *testing.T) {
 	database := setupTestDB(t)
 	peerID := insertPeer(t, database, "web4", "192.168.1.13", false)
 	groupID := insertGroup(t, database, "any2")
-	insertGroupMember(t, database, groupID, "0.0.0.0/0", "cidr")
+	manualPeerID := insertManualPeer(t, database, "0.0.0.0/0")
+	insertGroupMember(t, database, groupID, manualPeerID)
 	serviceID := insertService(t, database, "highports", "8000:9000", "tcp")
 	insertPolicy(t, database, "allow-highports", groupID, serviceID, peerID, "ACCEPT", 100, true)
 
@@ -177,7 +193,8 @@ func TestProtocolBoth(t *testing.T) {
 	database := setupTestDB(t)
 	peerID := insertPeer(t, database, "dns1", "192.168.1.14", false)
 	groupID := insertGroup(t, database, "clients")
-	insertGroupMember(t, database, groupID, "10.0.0.0/8", "cidr")
+	manualPeerID := insertManualPeer(t, database, "10.0.0.0/8")
+	insertGroupMember(t, database, groupID, manualPeerID)
 	serviceID := insertService(t, database, "dns", "53", "both")
 	insertPolicy(t, database, "allow-dns", groupID, serviceID, peerID, "ACCEPT", 100, true)
 
@@ -199,7 +216,8 @@ func TestICMPService(t *testing.T) {
 	database := setupTestDB(t)
 	peerID := insertPeer(t, database, "mon1", "192.168.1.15", false)
 	groupID := insertGroup(t, database, "monitors")
-	insertGroupMember(t, database, groupID, "10.0.5.0/24", "cidr")
+	manualPeerID := insertManualPeer(t, database, "10.0.5.0/24")
+	insertGroupMember(t, database, groupID, manualPeerID)
 	serviceID := insertService(t, database, "ping", "", "icmp")
 	insertPolicy(t, database, "allow-ping", groupID, serviceID, peerID, "ACCEPT", 100, true)
 
@@ -222,54 +240,6 @@ func TestICMPService(t *testing.T) {
 	}
 }
 
-func TestGroupOfGroups(t *testing.T) {
-	database := setupTestDB(t)
-	peerID := insertPeer(t, database, "app1", "192.168.1.16", false)
-
-	groupB := insertGroup(t, database, "inner")
-	insertGroupMember(t, database, groupB, "10.0.2.1", "ip")
-
-	groupA := insertGroup(t, database, "outer")
-	insertGroupMember(t, database, groupA, strconv.Itoa(groupB), "group_ref")
-
-	serviceID := insertService(t, database, "http", "80", "tcp")
-	insertPolicy(t, database, "nested-allow", groupA, serviceID, peerID, "ACCEPT", 100, true)
-
-	c := NewCompiler(database, "test-key")
-	output, err := c.Compile(context.Background(), peerID)
-	if err != nil {
-		t.Fatalf("compile error: %v", err)
-	}
-
-	if !strings.Contains(output, "10.0.2.1/32") {
-		t.Errorf("expected 10.0.2.1/32 from nested group, got:\n%s", output)
-	}
-}
-
-func TestCircularGroupRef(t *testing.T) {
-	database := setupTestDB(t)
-	peerID := insertPeer(t, database, "circ1", "192.168.1.17", false)
-
-	groupA := insertGroup(t, database, "circA")
-	groupB := insertGroup(t, database, "circB")
-
-	// A -> B -> A (circular)
-	insertGroupMember(t, database, groupA, strconv.Itoa(groupB), "group_ref")
-	insertGroupMember(t, database, groupB, strconv.Itoa(groupA), "group_ref")
-
-	serviceID := insertService(t, database, "ssh2", "22", "tcp")
-	insertPolicy(t, database, "circ-policy", groupA, serviceID, peerID, "ACCEPT", 100, true)
-
-	c := NewCompiler(database, "test-key")
-	_, err := c.Compile(context.Background(), peerID)
-	if err == nil {
-		t.Fatal("expected error for circular group reference, got nil")
-	}
-	if !strings.Contains(err.Error(), "circular") {
-		t.Errorf("expected error to mention 'circular', got: %v", err)
-	}
-}
-
 func TestNoPolicies(t *testing.T) {
 	database := setupTestDB(t)
 	peerID := insertPeer(t, database, "empty1", "192.168.1.18", false)
@@ -284,11 +254,13 @@ func TestNoPolicies(t *testing.T) {
 	if !strings.Contains(output, ":INPUT DROP [0:0]") {
 		t.Error("expected :INPUT DROP chain policy")
 	}
-	if !strings.Contains(output, "-A INPUT  -i lo -j ACCEPT") {
-		t.Error("expected loopback rule")
+	// Check for loopback rule - use the actual rule string
+	if !strings.Contains(output, "-A INPUT -i lo -j ACCEPT") {
+		t.Errorf("expected loopback rule, output: %q", output)
 	}
-	if !strings.Contains(output, "-A INPUT  -j DROP") {
-		t.Error("expected default deny rule")
+	// Check for default deny - use the actual rule string
+	if !strings.Contains(output, "-A INPUT -j DROP") {
+		t.Errorf("expected default deny rule, output: %q", output)
 	}
 	if !strings.Contains(output, "COMMIT") {
 		t.Error("expected COMMIT")
@@ -303,7 +275,8 @@ func TestLogDropAction(t *testing.T) {
 	database := setupTestDB(t)
 	peerID := insertPeer(t, database, "logdrop1", "192.168.1.19", false)
 	groupID := insertGroup(t, database, "untrusted")
-	insertGroupMember(t, database, groupID, "172.16.0.0/12", "cidr")
+	manualPeerID := insertManualPeer(t, database, "172.16.0.0/12")
+	insertGroupMember(t, database, groupID, manualPeerID)
 	serviceID := insertService(t, database, "telnet", "23", "tcp")
 	insertPolicy(t, database, "block-telnet", groupID, serviceID, peerID, "LOG_DROP", 100, true)
 
@@ -325,7 +298,8 @@ func TestDisabledPolicy(t *testing.T) {
 	database := setupTestDB(t)
 	peerID := insertPeer(t, database, "disabled1", "192.168.1.20", false)
 	groupID := insertGroup(t, database, "office2")
-	insertGroupMember(t, database, groupID, "10.0.1.0/24", "cidr")
+	manualPeerID := insertManualPeer(t, database, "10.0.1.0/24")
+	insertGroupMember(t, database, groupID, manualPeerID)
 	serviceID := insertService(t, database, "ftp", "21", "tcp")
 	insertPolicy(t, database, "disabled-ftp", groupID, serviceID, peerID, "ACCEPT", 100, false)
 
@@ -348,7 +322,8 @@ func TestPriorityOrdering(t *testing.T) {
 	peerID := insertPeer(t, database, "prio1", "192.168.1.21", false)
 
 	groupID := insertGroup(t, database, "prio-group")
-	insertGroupMember(t, database, groupID, "10.0.0.1", "ip")
+	manualPeerID := insertManualPeer(t, database, "10.0.0.1")
+	insertGroupMember(t, database, groupID, manualPeerID)
 
 	serviceHigh := insertService(t, database, "high-prio-svc", "60443", "tcp")
 	serviceLow := insertService(t, database, "low-prio-svc", "9090", "tcp")
@@ -440,7 +415,8 @@ func TestPolicyParsingAndValidation(t *testing.T) {
 			setup: func(t *testing.T, db *sql.DB) (int, error) {
 				peerID := insertPeer(t, db, "test1", "10.0.0.1", false)
 				groupID := insertGroup(t, db, "test-group")
-				insertGroupMember(t, db, groupID, "192.168.1.0/24", "cidr")
+				manualPeerID := insertManualPeer(t, db, "192.168.1.0/24")
+				insertGroupMember(t, db, groupID, manualPeerID)
 				serviceID := insertService(t, db, "test-service", "80", "tcp")
 				return insertPolicy(t, db, "test-policy", groupID, serviceID, peerID, "ACCEPT", 100, true), nil
 			},
@@ -451,7 +427,8 @@ func TestPolicyParsingAndValidation(t *testing.T) {
 			setup: func(t *testing.T, db *sql.DB) (int, error) {
 				peerID := insertPeer(t, db, "test2", "10.0.0.2", false)
 				groupID := insertGroup(t, db, "blocked-group")
-				insertGroupMember(t, db, groupID, "10.0.2.0/24", "cidr")
+				manualPeerID := insertManualPeer(t, db, "10.0.2.0/24")
+				insertGroupMember(t, db, groupID, manualPeerID)
 				serviceID := insertService(t, db, "blocked-service", "22", "tcp")
 				return insertPolicy(t, db, "block-policy", groupID, serviceID, peerID, "DROP", 200, true), nil
 			},
@@ -461,7 +438,8 @@ func TestPolicyParsingAndValidation(t *testing.T) {
 			name: "policy with invalid peer ID",
 			setup: func(t *testing.T, db *sql.DB) (int, error) {
 				groupID := insertGroup(t, db, "test-group")
-				insertGroupMember(t, db, groupID, "192.168.1.0/24", "cidr")
+				manualPeerID := insertManualPeer(t, db, "192.168.1.0/24")
+				insertGroupMember(t, db, groupID, manualPeerID)
 				serviceID := insertService(t, db, "test-service", "80", "tcp")
 				insertPolicy(t, db, "invalid-peer-policy", groupID, serviceID, 99999, "ACCEPT", 100, true)
 				return 99999, nil
@@ -485,7 +463,8 @@ func TestPolicyParsingAndValidation(t *testing.T) {
 			setup: func(t *testing.T, db *sql.DB) (int, error) {
 				peerID := insertPeer(t, db, "test4", "10.0.0.4", false)
 				groupID := insertGroup(t, db, "test-group")
-				insertGroupMember(t, db, groupID, "192.168.1.0/24", "cidr")
+				manualPeerID := insertManualPeer(t, db, "192.168.1.0/24")
+				insertGroupMember(t, db, groupID, manualPeerID)
 				insertPolicy(t, db, "invalid-service-policy", groupID, 99999, peerID, "ACCEPT", 100, true)
 				return peerID, nil
 			},
@@ -532,7 +511,8 @@ func TestRuleCompilationToIptablesFormat(t *testing.T) {
 			setup: func(t *testing.T, db *sql.DB) (int, error) {
 				peerID := insertPeer(t, db, "web1", "10.0.0.1", false)
 				groupID := insertGroup(t, db, "office")
-				insertGroupMember(t, db, groupID, "192.168.1.100", "ip")
+				manualPeerID := insertManualPeer(t, db, "192.168.1.100")
+				insertGroupMember(t, db, groupID, manualPeerID)
 				serviceID := insertService(t, db, "ssh", "22", "tcp")
 				insertPolicy(t, db, "allow-ssh", groupID, serviceID, peerID, "ACCEPT", 100, true)
 				return peerID, nil
@@ -547,7 +527,8 @@ func TestRuleCompilationToIptablesFormat(t *testing.T) {
 			setup: func(t *testing.T, db *sql.DB) (int, error) {
 				peerID := insertPeer(t, db, "web2", "10.0.0.2", false)
 				groupID := insertGroup(t, db, "clients")
-				insertGroupMember(t, db, groupID, "10.0.1.0/24", "cidr")
+				manualPeerID := insertManualPeer(t, db, "10.0.1.0/24")
+				insertGroupMember(t, db, groupID, manualPeerID)
 				serviceID := insertService(t, db, "web", "80,443", "tcp")
 				insertPolicy(t, db, "allow-web", groupID, serviceID, peerID, "ACCEPT", 100, true)
 				return peerID, nil
@@ -561,7 +542,8 @@ func TestRuleCompilationToIptablesFormat(t *testing.T) {
 			setup: func(t *testing.T, db *sql.DB) (int, error) {
 				peerID := insertPeer(t, db, "web3", "10.0.0.3", false)
 				groupID := insertGroup(t, db, "clients2")
-				insertGroupMember(t, db, groupID, "10.0.2.0/24", "cidr")
+				manualPeerID := insertManualPeer(t, db, "10.0.2.0/24")
+				insertGroupMember(t, db, groupID, manualPeerID)
 				serviceID := insertService(t, db, "highports", "8000:9000", "tcp")
 				insertPolicy(t, db, "allow-highports", groupID, serviceID, peerID, "ACCEPT", 100, true)
 				return peerID, nil
@@ -575,7 +557,8 @@ func TestRuleCompilationToIptablesFormat(t *testing.T) {
 			setup: func(t *testing.T, db *sql.DB) (int, error) {
 				peerID := insertPeer(t, db, "dns1", "10.0.0.4", false)
 				groupID := insertGroup(t, db, "dns-clients")
-				insertGroupMember(t, db, groupID, "10.0.3.0/24", "cidr")
+				manualPeerID := insertManualPeer(t, db, "10.0.3.0/24")
+				insertGroupMember(t, db, groupID, manualPeerID)
 				serviceID := insertService(t, db, "dns", "53", "udp")
 				insertPolicy(t, db, "allow-dns-udp", groupID, serviceID, peerID, "ACCEPT", 100, true)
 				return peerID, nil
@@ -589,7 +572,8 @@ func TestRuleCompilationToIptablesFormat(t *testing.T) {
 			setup: func(t *testing.T, db *sql.DB) (int, error) {
 				peerID := insertPeer(t, db, "dns2", "10.0.0.5", false)
 				groupID := insertGroup(t, db, "dns-clients2")
-				insertGroupMember(t, db, groupID, "10.0.4.0/24", "cidr")
+				manualPeerID := insertManualPeer(t, db, "10.0.4.0/24")
+				insertGroupMember(t, db, groupID, manualPeerID)
 				serviceID := insertService(t, db, "dns", "53", "both")
 				insertPolicy(t, db, "allow-dns-both", groupID, serviceID, peerID, "ACCEPT", 100, true)
 				return peerID, nil
@@ -644,12 +628,17 @@ func TestInvalidPoliciesAndMalformedRules(t *testing.T) {
 		errContains string
 	}{
 		{
-			name: "invalid IP address in group",
+			name: "invalid IP in peer",
 			setup: func(t *testing.T, db *sql.DB) (int, error) {
 				peerID := insertPeer(t, db, "test1", "10.0.0.1", false)
 				groupID := insertGroup(t, db, "bad-ip")
-				_, err := db.Exec("INSERT INTO group_members (group_id, value, type) VALUES (?, ?, ?)",
-					groupID, "999.999.999.999", "ip")
+				// Insert a peer with invalid IP directly (bypassing validation)
+				_, err := db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, is_manual) VALUES (?, ?, ?, ?, 1)`,
+					"bad-ip-peer", "999.999.999.999", "key", "hmac")
+				if err != nil {
+					return 0, err
+				}
+				_, err = db.Exec("INSERT INTO group_members (group_id, peer_id) VALUES (?, ?)", groupID, 2)
 				if err != nil {
 					return 0, err
 				}
@@ -661,12 +650,17 @@ func TestInvalidPoliciesAndMalformedRules(t *testing.T) {
 			errContains: "invalid IP",
 		},
 		{
-			name: "invalid CIDR in group",
+			name: "invalid CIDR in peer",
 			setup: func(t *testing.T, db *sql.DB) (int, error) {
 				peerID := insertPeer(t, db, "test2", "10.0.0.2", false)
 				groupID := insertGroup(t, db, "bad-cidr")
-				_, err := db.Exec("INSERT INTO group_members (group_id, value, type) VALUES (?, ?, ?)",
-					groupID, "10.0.0.0/33", "cidr")
+				// Insert a peer with invalid CIDR directly
+				_, err := db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, is_manual) VALUES (?, ?, ?, ?, 1)`,
+					"bad-cidr-peer", "10.0.0.0/33", "key", "hmac")
+				if err != nil {
+					return 0, err
+				}
+				_, err = db.Exec("INSERT INTO group_members (group_id, peer_id) VALUES (?, ?)", groupID, 2)
 				if err != nil {
 					return 0, err
 				}
@@ -676,37 +670,6 @@ func TestInvalidPoliciesAndMalformedRules(t *testing.T) {
 			},
 			wantErr:     true,
 			errContains: "invalid CIDR",
-		},
-		{
-			name: "invalid group reference",
-			setup: func(t *testing.T, db *sql.DB) (int, error) {
-				peerID := insertPeer(t, db, "test3", "10.0.0.3", false)
-				groupID := insertGroup(t, db, "bad-ref")
-				_, err := db.Exec("INSERT INTO group_members (group_id, value, type) VALUES (?, ?, ?)",
-					groupID, "not-a-number", "group_ref")
-				if err != nil {
-					return 0, err
-				}
-				serviceID := insertService(t, db, "test", "80", "tcp")
-				insertPolicy(t, db, "bad-ref-policy", groupID, serviceID, peerID, "ACCEPT", 100, true)
-				return peerID, nil
-			},
-			wantErr:     true,
-			errContains: "invalid group_ref",
-		},
-		{
-			name: "unknown member type",
-			setup: func(t *testing.T, db *sql.DB) (int, error) {
-				peerID := insertPeer(t, db, "test4", "10.0.0.4", false)
-				groupID := insertGroup(t, db, "bad-type")
-				// Note: "unknown" type violates CHECK constraint, so we insert a valid type instead
-				// and test that compilation handles it properly
-				insertGroupMember(t, db, groupID, "10.0.0.1", "ip")
-				serviceID := insertService(t, db, "test", "80", "tcp")
-				insertPolicy(t, db, "bad-type-policy", groupID, serviceID, peerID, "ACCEPT", 100, true)
-				return peerID, nil
-			},
-			wantErr: false, // This test case doesn't actually trigger the error we wanted
 		},
 	}
 
@@ -790,7 +753,8 @@ func TestCompileAndStore(t *testing.T) {
 	database := setupTestDB(t)
 	peerID := insertPeer(t, database, "store-test", "10.0.0.1", false)
 	groupID := insertGroup(t, database, "test-group")
-	insertGroupMember(t, database, groupID, "192.168.1.0/24", "cidr")
+	manualPeerID := insertManualPeer(t, database, "192.168.1.0/24")
+	insertGroupMember(t, database, groupID, manualPeerID)
 	serviceID := insertService(t, database, "test-service", "80", "tcp")
 	insertPolicy(t, database, "test-policy", groupID, serviceID, peerID, "ACCEPT", 100, true)
 
@@ -853,9 +817,12 @@ func TestRecompileAffectedPeers(t *testing.T) {
 
 	// Create groups and members
 	group1 := insertGroup(t, database, "group1")
-	insertGroupMember(t, database, group1, "192.168.1.0/24", "cidr")
+	manualPeer1 := insertManualPeer(t, database, "192.168.1.0/24")
+	insertGroupMember(t, database, group1, manualPeer1)
+
 	group2 := insertGroup(t, database, "group2")
-	insertGroupMember(t, database, group2, "192.168.2.0/24", "cidr")
+	manualPeer2 := insertManualPeer(t, database, "192.168.2.0/24")
+	insertGroupMember(t, database, group2, manualPeer2)
 
 	// Create service and policies affecting both peers
 	serviceID := insertService(t, database, "test", "80", "tcp")
@@ -879,7 +846,8 @@ func TestRecompileAffectedPeers(t *testing.T) {
 	database.QueryRow("SELECT bundle_version FROM peers WHERE id = ?", peer2).Scan(&v2)
 
 	// Add a new member to group1 (affects peer1)
-	insertGroupMember(t, database, group1, "10.1.1.1", "ip")
+	newManualPeer := insertManualPeer(t, database, "10.1.1.1")
+	insertGroupMember(t, database, group1, newManualPeer)
 
 	// Recompile affected peers for group1
 	err = c.RecompileAffectedPeers(context.Background(), group1)
@@ -916,9 +884,11 @@ func TestEdgeCases(t *testing.T) {
 			setup: func(t *testing.T, db *sql.DB) (int, error) {
 				peerID := insertPeer(t, db, "test1", "10.0.0.1", false)
 				group1 := insertGroup(t, db, "group1")
-				insertGroupMember(t, db, group1, "192.168.1.0/24", "cidr")
+				manualPeer1 := insertManualPeer(t, db, "192.168.1.0/24")
+				insertGroupMember(t, db, group1, manualPeer1)
 				group2 := insertGroup(t, db, "group2")
-				insertGroupMember(t, db, group2, "192.168.2.0/24", "cidr")
+				manualPeer2 := insertManualPeer(t, db, "192.168.2.0/24")
+				insertGroupMember(t, db, group2, manualPeer2)
 				serviceID := insertService(t, db, "test", "80", "tcp")
 				insertPolicy(t, db, "policy1", group1, serviceID, peerID, "ACCEPT", 100, true)
 				insertPolicy(t, db, "policy2", group2, serviceID, peerID, "ACCEPT", 100, true)
@@ -936,34 +906,15 @@ func TestEdgeCases(t *testing.T) {
 			},
 		},
 		{
-			name: "deeply nested group references",
-			setup: func(t *testing.T, db *sql.DB) (int, error) {
-				peerID := insertPeer(t, db, "test2", "10.0.0.2", false)
-				groupA := insertGroup(t, db, "groupA")
-				groupB := insertGroup(t, db, "groupB")
-				groupC := insertGroup(t, db, "groupC")
-				insertGroupMember(t, db, groupC, "10.3.0.1", "ip")
-				insertGroupMember(t, db, groupB, strconv.Itoa(groupC), "group_ref")
-				insertGroupMember(t, db, groupA, strconv.Itoa(groupB), "group_ref")
-				serviceID := insertService(t, db, "test", "80", "tcp")
-				insertPolicy(t, db, "nested-policy", groupA, serviceID, peerID, "ACCEPT", 100, true)
-				return peerID, nil
-			},
-			wantErr: false,
-			check: func(t *testing.T, output string) {
-				if !strings.Contains(output, "10.3.0.1/32") {
-					t.Error("expected deeply nested IP in output")
-				}
-			},
-		},
-		{
 			name: "duplicate IP in different groups",
 			setup: func(t *testing.T, db *sql.DB) (int, error) {
 				peerID := insertPeer(t, db, "test3", "10.0.0.3", false)
 				group1 := insertGroup(t, db, "group1")
 				group2 := insertGroup(t, db, "group2")
-				insertGroupMember(t, db, group1, "192.168.1.100", "ip")
-				insertGroupMember(t, db, group2, "192.168.1.100", "ip")
+				// Same manual peer added to both groups
+				manualPeerID := insertManualPeer(t, db, "192.168.1.100")
+				insertGroupMember(t, db, group1, manualPeerID)
+				insertGroupMember(t, db, group2, manualPeerID)
 				serviceID := insertService(t, db, "test", "80", "tcp")
 				insertPolicy(t, db, "policy1", group1, serviceID, peerID, "ACCEPT", 100, true)
 				insertPolicy(t, db, "policy2", group2, serviceID, peerID, "ACCEPT", 200, true)
