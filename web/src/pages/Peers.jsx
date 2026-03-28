@@ -388,11 +388,9 @@ export default function Peers() {
                     <td className="px-4 py-3 text-gray-600 dark:text-gray-300">
                       {formatRelativeTime(peer.last_heartbeat)}
                     </td>
-                    <td className="px-4 py-3 text-gray-600 dark:text-gray-300">
-                      {peer.groups && peer.groups.length > 0
-                        ? peer.groups.join(', ')
-                        : '—'}
-                    </td>
+<td className="px-4 py-3 text-gray-600 dark:text-gray-300">
+          {peer.groups ? peer.groups : '—'}
+        </td>
                     <td className="px-4 py-3">
                       {peer.is_manual ? (
                         <span className="px-2 py-1 text-xs font-medium rounded-full bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300">
