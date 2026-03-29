@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Trash2, Lock, Users, Shield, Search, ArrowUp, ArrowDown, ArrowUpDown, X, RefreshCw } from 'lucide-react'
+import { Plus, Trash2, Lock, Users, Shield, Search, ArrowUp, ArrowDown, ArrowUpDown, X, RefreshCw, Pencil } from 'lucide-react'
 import { api, QUERY_KEYS } from '../api/client'
 import { useCrudModal } from '../hooks/useCrudModal'
 import { useTableSort } from '../hooks/useTableSort'
@@ -353,12 +353,13 @@ export default function Groups() {
             label: 'Actions', 
             render: (g) => (
               <div className="flex items-center gap-2">
-                <button 
-                  onClick={(e) => { e.stopPropagation(); openEdit(g) }} 
-                  className={`px-3 py-1 text-xs font-medium rounded ${g.is_system ? 'text-gray-400 cursor-not-allowed' : 'text-runic-600 hover:bg-runic-50 dark:hover:bg-runic-900'}`}
+<button
+                  onClick={(e) => { e.stopPropagation(); openEdit(g) }}
+                  className={`p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded ${g.is_system ? 'text-gray-400 cursor-not-allowed' : ''}`}
                   disabled={g.is_system}
+                  title="Edit"
                 >
-                  Edit
+                  <Pencil className="w-4 h-4 text-gray-500" />
                 </button>
                 {!g.is_system && (
                   <button onClick={(e) => { e.stopPropagation(); setDeleteTarget(g) }} className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded">
