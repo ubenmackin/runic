@@ -492,7 +492,7 @@ className="hover:bg-gray-200 dark:hover:bg-charcoal-dark rounded-full p-0.5"
 
               <InlineError message={formErrors._general} />
               <div className="flex justify-end gap-3 pt-2">
-<button type="button" onClick={closeModal} className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-amber-primary bg-white dark:bg-charcoal-darkest border border-gray-300 dark:border-gray-border rounded-lg">Cancel</button>
+<button type="button" onClick={closeModal} className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-light-neutral bg-white dark:bg-charcoal-dark border border-gray-300 dark:border-gray-border rounded-lg hover:bg-gray-50 dark:hover:bg-charcoal-darkest">Cancel</button>
 <button type="submit" className="px-4 py-2 text-sm font-medium text-white bg-purple-active hover:bg-purple-700 rounded-lg">{editGroup ? 'Save Changes' : 'Create Group'}</button>
               </div>
             </form>

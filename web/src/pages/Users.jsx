@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { UserPlus, Trash2, Pencil } from 'lucide-react'
+import { UserPlus, Trash2, Pencil, X } from 'lucide-react'
 import { api } from '../api/client'
 import { useToastContext } from '../hooks/ToastContext'
 import TableSkeleton from '../components/TableSkeleton'
@@ -174,11 +174,19 @@ const [formEditConfirmPassword, setFormEditConfirmPassword] = useState('')
       </div>
     )}
 
-      {/* Create user modal */}
+{/* Create user modal */}
 {showCreateModal && (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-white dark:bg-charcoal-dark rounded-lg p-6 max-w-md w-full mx-4">
-        <h3 className="text-lg font-semibold text-gray-900 dark:text-light-neutral mb-4">Create User</h3>
+  <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" tabIndex="-1" autoFocus onKeyDown={(e) => { if (e.key === 'Escape') { setShowCreateModal(false) } }}>
+    <div className="bg-white dark:bg-charcoal-dark rounded-lg p-6 max-w-md w-full mx-4">
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-lg font-semibold text-gray-900 dark:text-light-neutral">Create User</h3>
+        <button
+          onClick={() => setShowCreateModal(false)}
+          className="p-1 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded"
+        >
+          <X className="w-5 h-5 text-gray-500" />
+        </button>
+      </div>
         <form onSubmit={handleCreateUser} className="space-y-4">
           <div>
             <label htmlFor="username" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
@@ -303,11 +311,19 @@ const [formEditConfirmPassword, setFormEditConfirmPassword] = useState('')
     </div>
   )}
 
-      {/* Edit user modal */}
+{/* Edit user modal */}
 {showEditModal && editTarget && (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-white dark:bg-charcoal-dark rounded-lg p-6 max-w-md w-full mx-4">
-        <h3 className="text-lg font-semibold text-gray-900 dark:text-light-neutral mb-4">Edit User</h3>
+  <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" tabIndex="-1" autoFocus onKeyDown={(e) => { if (e.key === 'Escape') { setShowEditModal(false) } }}>
+    <div className="bg-white dark:bg-charcoal-dark rounded-lg p-6 max-w-md w-full mx-4">
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-lg font-semibold text-gray-900 dark:text-light-neutral">Edit User</h3>
+        <button
+          onClick={() => setShowEditModal(false)}
+          className="p-1 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded"
+        >
+          <X className="w-5 h-5 text-gray-500" />
+        </button>
+      </div>
         <form
           onSubmit={(e) => {
             e.preventDefault()

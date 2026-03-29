@@ -14,7 +14,7 @@ const NavItem = React.memo(({ to, icon: Icon, label, onClick, isChild = false })
       `flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
         isActive
 ? 'bg-runic-100 text-runic-700 dark:bg-purple-active/20 dark:text-light-neutral'
-: 'text-gray-700 dark:text-amber-primary hover:bg-gray-100 dark:hover:bg-charcoal-darkest'
+: 'text-gray-700 dark:text-light-neutral hover:bg-gray-100 dark:hover:bg-charcoal-darkest'
       } ${isChild ? 'ml-8' : ''}`
     }
     onClick={onClick}
@@ -115,7 +115,7 @@ const toggleDark = () => {
                   <button
                     onClick={() => toggleExpanded(item.label)}
 className={`w-full flex items-center justify-between gap-3 px-4 py-3 rounded-lg transition-colors ${
-'text-gray-700 dark:text-amber-primary hover:bg-gray-100 dark:hover:bg-charcoal-darkest'
+'text-gray-700 dark:text-light-neutral hover:bg-gray-100 dark:hover:bg-charcoal-darkest'
 }`}
                   >
                     <div className="flex items-center gap-3">
@@ -177,17 +177,17 @@ className={`w-full flex items-center justify-between gap-3 px-4 py-3 rounded-lg 
               onClick={toggleDark}
               className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-charcoal-darkest"
             >
-              {darkMode ? <Sun className="w-5 h-5 text-gray-700 dark:text-amber-primary" /> : <Moon className="w-5 h-5 text-gray-700 dark:text-amber-primary" />}
+              {darkMode ? <Sun className="w-5 h-5 text-gray-700 dark:text-light-neutral" /> : <Moon className="w-5 h-5 text-gray-700 dark:text-light-neutral" />}
             </button>
             {username && (
-              <div className="flex items-center gap-2 px-3 py-2 text-sm text-gray-700 dark:text-amber-primary">
+              <div className="flex items-center gap-2 px-3 py-2 text-sm text-gray-700 dark:text-light-neutral">
                 <User className="h-4 w-4" />
                 <span>{username}</span>
               </div>
             )}
             <button
               onClick={handleLogout}
-              className="flex items-center gap-2 px-3 py-2 text-sm text-gray-700 dark:text-amber-primary hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-lg"
+              className="flex items-center gap-2 px-3 py-2 text-sm text-gray-700 dark:text-light-neutral hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-lg"
             >
               <LogOut className="w-4 h-4" />
               Logout

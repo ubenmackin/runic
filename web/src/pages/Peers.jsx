@@ -305,7 +305,7 @@ await api.post('/peers', {
       </div>
 
       {/* Search Bar */}
-      <div className="relative">
+      <div className="relative max-w-md">
         <input
           type="text"
           placeholder="Search peers by hostname, IP, OS, groups, or agent..."
@@ -410,7 +410,7 @@ await api.post('/peers', {
                               {visibleGroups.map((group, idx) => (
                                 <span
                                   key={idx}
-                                  className="px-2 py-0.5 text-xs font-medium rounded-full bg-runic-100 dark:bg-gold-highlight text-runic-700 dark:text-purple-active whitespace-nowrap"
+                                  className="px-2 py-0.5 text-xs font-medium rounded-full bg-purple-active/20 dark:bg-purple-active text-white whitespace-nowrap"
                                 >
                                   {group}
                                 </span>
@@ -474,7 +474,7 @@ await api.post('/peers', {
 
       {/* Add/Edit Modal (Legacy) */}
       {modalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onKeyDown={(e) => { if (e.key === 'Escape') { closeModal() } }}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" tabIndex="-1" autoFocus onKeyDown={(e) => { if (e.key === 'Escape') { closeModal() } }}>
 <div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-xl w-full max-w-lg mx-4">
         <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-border flex items-center justify-between">
           <h3 className="text-lg font-semibold text-gray-900 dark:text-light-neutral">{editPeer ? 'Edit Peer' : 'Add Peer'}</h3>
@@ -511,7 +511,7 @@ await api.post('/peers', {
         </div>
               <InlineError message={formErrors._general} />
               <div className="flex justify-end gap-3 pt-2">
-<button type="button" onClick={closeModal} className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-amber-primary bg-white dark:bg-charcoal-darkest border border-gray-300 dark:border-gray-border rounded-lg">Cancel</button>
+<button type="button" onClick={closeModal} className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-amber-primary bg-white dark:bg-charcoal-dark border border-gray-300 dark:border-gray-border rounded-lg hover:bg-gray-50 dark:hover:bg-charcoal-darkest">Cancel</button>
         <button type="submit" className="px-4 py-2 text-sm font-medium text-white bg-purple-active hover:bg-purple-active/80 rounded-lg">{editPeer ? 'Save Changes' : 'Add Peer'}</button>
               </div>
             </form>
@@ -531,7 +531,7 @@ await api.post('/peers', {
 
       {/* Add Peer Modal with Tabs */}
       {addModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onKeyDown={(e) => { if (e.key === 'Escape') { closeAddModal() } }}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" tabIndex="-1" autoFocus onKeyDown={(e) => { if (e.key === 'Escape') { closeAddModal() } }}>
 <div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-xl w-full max-w-lg mx-4">
         {/* Header */}
         <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-border flex items-center justify-between">
@@ -679,7 +679,7 @@ await api.post('/peers', {
             <button
               type="button"
               onClick={closeAddModal}
-              className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-amber-primary bg-white dark:bg-charcoal-darkest border border-gray-300 dark:border-gray-border rounded-lg hover:bg-gray-50 dark:hover:bg-charcoal-dark"
+              className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-amber-primary bg-white dark:bg-charcoal-dark border border-gray-300 dark:border-gray-border rounded-lg hover:bg-gray-50 dark:hover:bg-charcoal-darkest"
             >
               Cancel
             </button>

@@ -71,10 +71,10 @@ export default function SetupKeys() {
                 <Trash2 className="w-4 h-4" />
                 Delete
               </button>
-              <button
-                onClick={() => setShowCreateModal('jwt-secret')}
-                className="inline-flex items-center gap-2 px-3 py-2 text-sm bg-green-600 hover:bg-green-700 text-white rounded-lg"
-              >
+      <button
+        onClick={() => setShowCreateModal('jwt-secret')}
+        className="inline-flex items-center gap-2 px-3 py-2 text-sm bg-purple-active hover:bg-purple-active/80 text-white rounded-lg"
+      >
                 <Plus className="w-4 h-4" />
                 Create New
               </button>
@@ -102,10 +102,10 @@ export default function SetupKeys() {
                 <Trash2 className="w-4 h-4" />
                 Delete
               </button>
-              <button
-                onClick={() => setShowCreateModal('hmac-key')}
-                className="inline-flex items-center gap-2 px-3 py-2 text-sm bg-green-600 hover:bg-green-700 text-white rounded-lg"
-              >
+      <button
+        onClick={() => setShowCreateModal('hmac-key')}
+        className="inline-flex items-center gap-2 px-3 py-2 text-sm bg-purple-active hover:bg-purple-active/80 text-white rounded-lg"
+      >
                 <Plus className="w-4 h-4" />
                 Create New
               </button>
@@ -133,10 +133,10 @@ export default function SetupKeys() {
                 <Trash2 className="w-4 h-4" />
                 Delete
               </button>
-              <button
-                onClick={() => setShowCreateModal('agent-jwt-secret')}
-                className="inline-flex items-center gap-2 px-3 py-2 text-sm bg-green-600 hover:bg-green-700 text-white rounded-lg"
-              >
+      <button
+        onClick={() => setShowCreateModal('agent-jwt-secret')}
+        className="inline-flex items-center gap-2 px-3 py-2 text-sm bg-purple-active hover:bg-purple-active/80 text-white rounded-lg"
+      >
                 <Plus className="w-4 h-4" />
                 Create New
               </button>
@@ -202,7 +202,7 @@ export default function SetupKeys() {
               <button
                 onClick={() => handleCreate(showCreateModal)}
                 disabled={createMutation.isPending}
-                className="flex-1 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg disabled:opacity-50"
+                className="flex-1 px-4 py-2 bg-purple-active hover:bg-purple-active/80 text-white rounded-lg disabled:opacity-50"
               >
                 {createMutation.isPending ? 'Creating...' : 'Create'}
               </button>
