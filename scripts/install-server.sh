@@ -877,9 +877,11 @@ clone_repository() {
     git config --global --add safe.directory "$SOURCE_DIR" 2>/dev/null || true
     
 
-	cd "$SOURCE_DIR"
-	git reset --hard HEAD >> "$LOG_FILE" 2>&1
-	git pull origin "$REPO_BRANCH" >> "$LOG_FILE" 2>&1
+cd "$SOURCE_DIR"
+# Fetch latest changes and hard reset to origin branch
+# This avoids divergent branch issues with git pull
+git fetch origin "$REPO_BRANCH" >> "$LOG_FILE" 2>&1 || { log ERROR "Failed to fetch from origin"; exit 1; }
+git reset --hard "origin/$REPO_BRANCH" >> "$LOG_FILE" 2>&1 || { log ERROR "Failed to reset to origin/$REPO_BRANCH"; exit 1; }
     else
         log INFO "Cloning repository from $REPO_URL..."
         git clone --depth 1 --branch "$REPO_BRANCH" "$REPO_URL" "$SOURCE_DIR" >> "$LOG_FILE" 2>&1
