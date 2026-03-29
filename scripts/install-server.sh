@@ -729,10 +729,10 @@ install_dependencies() {
 		curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
 		apt-get install -y -qq nodejs >> "$LOG_FILE" 2>&1
 
-	# Install Go 1.23+ from official source
+	# Install Go 1.25+ from official source
 	# Remove Ubuntu system golang-go package to avoid PATH conflicts
 	apt-get remove -y golang-go >> "$LOG_FILE" 2>&1
-	GO_VERSION="1.23.7"
+	GO_VERSION="1.25.0"
 		GO_TAR="go${GO_VERSION}.linux-amd64.tar.gz"
 		GO_URL="https://go.dev/dl/${GO_TAR}"
 		log INFO "Installing Go ${GO_VERSION} from official source..."
@@ -747,10 +747,10 @@ install_dependencies() {
 		export PATH=/usr/local/go/bin:$PATH
 		# Verify Go installation
 		go version || { log ERROR "Go installation failed"; exit 1; }
-		# Verify Go version is 1.23.x
+		# Verify Go version is 1.25.x
 		INSTALLED_GO_VERSION=$(go version | awk '{print $3}')
-		if [[ "$INSTALLED_GO_VERSION" != go1.23* ]]; then
-			log ERROR "Go version mismatch: expected go1.23.x, got $INSTALLED_GO_VERSION"
+		if [[ "$INSTALLED_GO_VERSION" != go1.25* ]]; then
+			log ERROR "Go version mismatch: expected go1.25.x, got $INSTALLED_GO_VERSION"
 			exit 1
 		fi
 		log INFO "Verified Go version: $INSTALLED_GO_VERSION"
@@ -772,8 +772,8 @@ install_dependencies() {
 			nodejs20 \
 			npm20 >> "$LOG_FILE" 2>&1
 
-		# Install Go 1.23+ from official source (same as Debian section)
-		GO_VERSION="1.23.7"
+		# Install Go 1.25+ from official source (same as Debian section)
+		GO_VERSION="1.25.0"
 		GO_TAR="go${GO_VERSION}.linux-amd64.tar.gz"
 		GO_URL="https://go.dev/dl/${GO_TAR}"
 		log INFO "Installing Go ${GO_VERSION} from official source..."

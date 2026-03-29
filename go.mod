@@ -1,6 +1,6 @@
 module runic
 
-go 1.23.0
+go 1.25.0
 
 toolchain go1.26.1
 
@@ -14,7 +14,7 @@ require github.com/gorilla/mux v1.8.1
 require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/prometheus/client_golang v1.23.0
-	golang.org/x/crypto v0.39.0
+	golang.org/x/crypto v0.49.0
 )
 
 require (
@@ -24,6 +24,6 @@ require (
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.65.0 // indirect
 	github.com/prometheus/procfs v0.16.1 // indirect
-	golang.org/x/sys v0.33.0 // indirect
+	golang.org/x/sys v0.42.0 // indirect
 	google.golang.org/protobuf v1.36.8 // indirect
 )
