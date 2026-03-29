@@ -2,9 +2,9 @@ import Skeleton from './Skeleton'
 
 export default function TableSkeleton({ rows = 5, columns = 4 }) {
   return (
-    <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm overflow-hidden">
+    <div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-sm overflow-hidden">
       <table className="w-full">
-        <thead className="bg-gray-50 dark:bg-gray-900">
+        <thead className="bg-gray-50 dark:bg-charcoal-darkest">
           <tr>
             {Array.from({ length: columns }).map((_, i) => (
               <th key={i} className="text-left px-4 py-3">
@@ -13,7 +13,7 @@ export default function TableSkeleton({ rows = 5, columns = 4 }) {
             ))}
           </tr>
         </thead>
-        <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+        <tbody className="divide-y divide-gray-200 dark:divide-gray-border">
           {Array.from({ length: rows }).map((_, i) => (
             <tr key={i}>
               {Array.from({ length: columns }).map((_, j) => (

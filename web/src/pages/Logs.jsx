@@ -128,41 +128,41 @@ export default function Logs() {
     <div className="space-y-4">
       {/* Header */}
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Logs</h1>
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-light-neutral">Logs</h1>
         <div className="flex items-center gap-3">
           {/* Mode toggle */}
-          <div className="flex rounded-lg border border-gray-300 dark:border-gray-600 overflow-hidden">
-            <button
-              onClick={() => setMode('historical')}
-              className={`px-3 py-1.5 text-sm font-medium ${
-                mode === 'historical'
-                  ? 'bg-runic-600 text-white'
-                  : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
-              }`}
-            >
-              Historical
-            </button>
-            <button
-              onClick={() => setMode('live')}
-              className={`px-3 py-1.5 text-sm font-medium flex items-center gap-1.5 ${
-                mode === 'live'
-                  ? 'bg-runic-600 text-white'
-                  : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
-              }`}
-            >
-              {isConnected ? (
-                <Wifi className="w-3.5 h-3.5" />
-              ) : (
-                <WifiOff className="w-3.5 h-3.5" />
-              )}
-              Live
-            </button>
+          <div className="flex rounded-lg border border-gray-300 dark:border-gray-border overflow-hidden">
+<button
+onClick={() => setMode('historical')}
+className={`px-3 py-1.5 text-sm font-medium ${
+mode === 'historical'
+? 'bg-purple-active text-white'
+: 'bg-white dark:bg-charcoal-dark text-gray-700 dark:text-amber-primary hover:bg-gray-50 dark:hover:bg-charcoal-darkest'
+}`}
+>
+Historical
+</button>
+<button
+onClick={() => setMode('live')}
+className={`px-3 py-1.5 text-sm font-medium flex items-center gap-1.5 ${
+mode === 'live'
+? 'bg-purple-active text-white'
+: 'bg-white dark:bg-charcoal-dark text-gray-700 dark:text-amber-primary hover:bg-gray-50 dark:hover:bg-charcoal-darkest'
+}`}
+>
+{isConnected ? (
+<Wifi className="w-3.5 h-3.5" />
+) : (
+<WifiOff className="w-3.5 h-3.5" />
+)}
+Live
+</button>
           </div>
 
           {mode === 'historical' && (
             <button
               onClick={() => refetch()}
-              className="flex items-center gap-2 px-3 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg"
+              className="flex items-center gap-2 px-3 py-2 text-sm text-gray-700 dark:text-amber-primary hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-lg"
             >
               <RefreshCw className="w-4 h-4" /> Refresh
             </button>
@@ -175,7 +175,7 @@ export default function Logs() {
                 className={`flex items-center gap-2 px-3 py-2 text-sm rounded-lg ${
                   isPaused
                     ? 'bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300'
-                    : 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300'
+                    : 'bg-gray-100 text-gray-700 dark:bg-charcoal-darkest dark:text-amber-primary'
                 }`}
               >
                 {isPaused ? <Play className="w-4 h-4" /> : <Pause className="w-4 h-4" />}
@@ -194,13 +194,13 @@ export default function Logs() {
 
       {/* Filter panel (historical mode) */}
       {mode === 'historical' && (
-        <div className="flex flex-wrap gap-3 items-end bg-white dark:bg-gray-800 p-4 rounded-xl">
+        <div className="flex flex-wrap gap-3 items-end bg-white dark:bg-charcoal-dark p-4 rounded-xl">
           <div className="space-y-1">
-<label className="text-xs font-medium text-gray-500 dark:text-gray-400">Peer</label>
+<label className="text-xs font-medium text-gray-500 dark:text-amber-muted">Peer</label>
                 <select
                   value={filter.peer_id}
                   onChange={e => setFilter(f => ({ ...f, peer_id: e.target.value, offset: 0 }))}
-              className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm min-w-[150px]"
+              className="px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white text-sm min-w-[150px]"
             >
               <option value="">All peers</option>
               {peers?.map(s => (
@@ -210,13 +210,13 @@ export default function Logs() {
           </div>
 
           <div className="space-y-1">
-            <label className="text-xs font-medium text-gray-500 dark:text-gray-400">Action</label>
+            <label className="text-xs font-medium text-gray-500 dark:text-amber-muted">Action</label>
             <select
               value={filter.action}
               onChange={e => setFilter(f => ({ ...f, action: e.target.value, offset: 0 }))}
-              className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
-            >
-              <option value="">All</option>
+className="px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white text-sm"
+          >
+            <option value="">All</option>
               <option value="ACCEPT">ACCEPT</option>
               <option value="DROP">DROP</option>
               <option value="BLOCK">BLOCK</option>
@@ -224,33 +224,33 @@ export default function Logs() {
           </div>
 
           <div className="space-y-1">
-            <label className="text-xs font-medium text-gray-500 dark:text-gray-400">Source IP</label>
+            <label className="text-xs font-medium text-gray-500 dark:text-amber-muted">Source IP</label>
             <input
               type="text"
               placeholder="e.g. 192.168.1"
               value={filter.src_ip}
               onChange={e => setFilter(f => ({ ...f, src_ip: e.target.value, offset: 0 }))}
-              className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm w-32"
+              className="px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white text-sm w-32"
             />
           </div>
 
           <div className="space-y-1">
-            <label className="text-xs font-medium text-gray-500 dark:text-gray-400">Dest Port</label>
+            <label className="text-xs font-medium text-gray-500 dark:text-amber-muted">Dest Port</label>
             <input
               type="text"
               placeholder="e.g. 443"
               value={filter.dst_port}
               onChange={e => setFilter(f => ({ ...f, dst_port: e.target.value, offset: 0 }))}
-              className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm w-24"
+              className="px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white text-sm w-24"
             />
           </div>
 
           <div className="space-y-1">
-            <label className="text-xs font-medium text-gray-500 dark:text-gray-400">Limit</label>
+            <label className="text-xs font-medium text-gray-500 dark:text-amber-muted">Limit</label>
             <select
               value={filter.limit}
               onChange={e => setFilter(f => ({ ...f, limit: parseInt(e.target.value), offset: 0 }))}
-              className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
+              className="px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white text-sm"
             >
               <option value={50}>50 rows</option>
               <option value={100}>100 rows</option>
@@ -259,12 +259,12 @@ export default function Logs() {
             </select>
           </div>
 
-          <button
-            onClick={() => refetch()}
-            className="px-4 py-2 bg-runic-600 hover:bg-runic-700 text-white text-sm font-medium rounded-lg"
-          >
-            Query
-          </button>
+<button
+onClick={() => refetch()}
+className="px-4 py-2 bg-purple-active hover:bg-purple-active/80 text-white text-sm font-medium rounded-lg"
+>
+Query
+</button>
         </div>
       )}
 
@@ -272,7 +272,7 @@ export default function Logs() {
       {mode === 'live' && (
         <div className="flex items-center gap-2 text-sm">
           <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
-          <span className="text-gray-600 dark:text-gray-400">
+          <span className="text-gray-600 dark:text-amber-muted">
             {isConnected ? `Connected — ${liveLogs.length} logs` : 'Disconnected'}
           </span>
         </div>
@@ -292,31 +292,31 @@ export default function Logs() {
               message="Try adjusting your filters or wait for agents to ship firewall events."
             />
           ) : (
-            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm overflow-hidden">
-              <div className="overflow-y-auto max-h-[600px]">
-                {data.logs.map((log, i) => (
+<div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-sm overflow-hidden">
+          <div className="overflow-y-auto max-h-[600px]">
+            {data.logs.map((log, i) => (
                   <LogLine key={log.id || i} log={log} />
                 ))}
               </div>
               {/* Pagination */}
-              <div className="flex items-center justify-between px-4 py-3 bg-gray-50 dark:bg-gray-900 border-t border-gray-200 dark:border-gray-700">
-                <span className="text-sm text-gray-500 dark:text-gray-400">
-                  Showing {filter.offset + 1} - {filter.offset + data.logs.length} of {data.total}
+              <div className="flex items-center justify-between px-4 py-3 bg-gray-50 dark:bg-charcoal-darkest border-t border-gray-200 dark:border-gray-border">
+<span className="text-sm text-gray-500 dark:text-amber-muted">
+                Showing {filter.offset + 1} - {filter.offset + data.logs.length} of {data.total}
                 </span>
                 <div className="flex gap-2">
                   <button
                     onClick={handlePrevPage}
                     disabled={filter.offset === 0}
-                    className="px-3 py-1.5 text-sm bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg disabled:opacity-50"
-                  >
-                    Previous
+className="px-3 py-1.5 text-sm bg-white dark:bg-charcoal-dark border border-gray-300 dark:border-gray-border rounded-lg disabled:opacity-50"
+            >
+              Previous
                   </button>
                   <button
                     onClick={handleNextPage}
                     disabled={data.logs?.length < filter.limit}
-                    className="px-3 py-1.5 text-sm bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg disabled:opacity-50"
-                  >
-                    Next
+className="px-3 py-1.5 text-sm bg-white dark:bg-charcoal-dark border border-gray-300 dark:border-gray-border rounded-lg disabled:opacity-50"
+            >
+              Next
                   </button>
                 </div>
               </div>
@@ -326,10 +326,10 @@ export default function Logs() {
       )}
 
       {mode === 'live' && (
-        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm overflow-hidden">
+        <div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-sm overflow-hidden">
           <div className="overflow-y-auto max-h-[600px]">
             {!liveLogs.length ? (
-              <div className="p-8 text-center text-gray-500 dark:text-gray-400">
+              <div className="p-8 text-center text-gray-500 dark:text-amber-muted">
                 {isConnected ? 'Waiting for logs...' : 'Connecting...'}
               </div>
             ) : (

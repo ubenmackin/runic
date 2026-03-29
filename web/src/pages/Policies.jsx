@@ -135,20 +135,20 @@ if (!formData.source_group_id || !formData.service_id || !formData.target_peer_i
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Policies</h1>
-        <button onClick={openAdd} className="flex items-center gap-2 px-4 py-2 bg-runic-600 hover:bg-runic-700 text-white text-sm font-medium rounded-lg">
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-light-neutral">Policies</h1>
+        <button onClick={openAdd} className="flex items-center gap-2 px-4 py-2 bg-purple-active hover:bg-purple-active/80 text-white text-sm font-medium rounded-lg">
           <Plus className="w-4 h-4" /> New Policy
         </button>
       </div>
 
       {/* Filters */}
-      <div className="flex flex-wrap gap-4 items-center bg-white dark:bg-gray-800 p-4 rounded-xl">
+      <div className="flex flex-wrap gap-4 items-center bg-white dark:bg-charcoal-dark p-4 rounded-xl">
         <div className="w-48">
           <SearchableSelect options={[{ value: '', label: 'All Peers' }, ...serverOptions]} value={filterServer || ''} onChange={v => setFilterServer(v || null)} placeholder="Filter by peer" />
         </div>
         <label className="flex items-center gap-2 cursor-pointer">
           <ToggleSwitch checked={showDisabled} onChange={setShowDisabled} />
-          <span className="text-sm text-gray-700 dark:text-gray-300">Show disabled</span>
+          <span className="text-sm text-gray-700 dark:text-amber-primary">Show disabled</span>
         </label>
       </div>
 
@@ -157,7 +157,7 @@ if (!formData.source_group_id || !formData.service_id || !formData.target_peer_i
       ) : (
         <DataTable columns={[
           { key: 'enabled', label: 'Enabled', render: (p) => <ToggleSwitch checked={p.enabled} onChange={(v) => toggleMutation.mutate({ id: p.id, enabled: v })} /> },
-          { key: 'name', label: 'Name', render: (p) => <span className="font-medium text-gray-900 dark:text-white">{p.name}</span> },
+          { key: 'name', label: 'Name', render: (p) => <span className="font-medium text-gray-900 dark:text-light-neutral">{p.name}</span> },
           { key: 'source_group_id', label: 'Source', render: (p) => getGroupName(p.source_group_id) },
           { key: 'service_id', label: 'Service', render: (p) => getServiceName(p.service_id) },
           { key: 'target_peer_id', label: 'Target', render: (p) => getServerHostname(p.target_peer_id) },
@@ -169,8 +169,8 @@ if (!formData.source_group_id || !formData.service_id || !formData.target_peer_i
           { key: 'priority', label: 'Priority' },
           { key: 'actions', label: 'Actions', render: (p) => (
             <div className="flex items-center gap-2">
-              <button onClick={(e) => { e.stopPropagation(); openEdit(p) }} className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded"><Pencil className="w-4 h-4 text-gray-500" /></button>
-              <button onClick={(e) => { e.stopPropagation(); setDeleteTarget(p) }} className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded"><Trash2 className="w-4 h-4 text-red-500" /></button>
+<button onClick={(e) => { e.stopPropagation(); openEdit(p) }} className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded"><Pencil className="w-4 h-4 text-gray-500" /></button>
+<button onClick={(e) => { e.stopPropagation(); setDeleteTarget(p) }} className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded"><Trash2 className="w-4 h-4 text-red-500" /></button>
             </div>
           )},
         ]} data={filteredPolicies} />
@@ -178,41 +178,41 @@ if (!formData.source_group_id || !formData.service_id || !formData.target_peer_i
 
       {modalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl w-full max-w-2xl mx-4 max-h-[90vh] overflow-y-auto">
-            <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700">
-              <h3 className="text-lg font-semibold text-gray-900 dark:text-white">{editPolicy ? 'Edit Policy' : 'New Policy'}</h3>
+          <div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-xl w-full max-w-2xl mx-4 max-h-[90vh] overflow-y-auto">
+            <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-border">
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-light-neutral">{editPolicy ? 'Edit Policy' : 'New Policy'}</h3>
             </div>
             <form onSubmit={handleSubmit} className="p-6 space-y-4">
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Name</label>
-                  <input type="text" value={formData.name} onChange={e => setFormData(d => ({ ...d, name: e.target.value }))} required className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white" />
+<label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Name</label>
+<input type="text" value={formData.name} onChange={e => setFormData(d => ({ ...d, name: e.target.value }))} required className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white" />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Priority</label>
-                  <input type="number" value={formData.priority} onChange={e => setFormData(d => ({ ...d, priority: parseInt(e.target.value) || 100 }))} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white" />
+<label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Priority</label>
+<input type="number" value={formData.priority} onChange={e => setFormData(d => ({ ...d, priority: parseInt(e.target.value) || 100 }))} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white" />
                 </div>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Description</label>
-                <textarea value={formData.description} onChange={e => setFormData(d => ({ ...d, description: e.target.value }))} rows={2} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white" />
+<label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Description</label>
+<textarea value={formData.description} onChange={e => setFormData(d => ({ ...d, description: e.target.value }))} rows={2} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white" />
               </div>
               <div className="grid grid-cols-3 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Source Group</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Source Group</label>
                   <SearchableSelect options={groupOptions} value={formData.source_group_id} onChange={v => setFormData(d => ({ ...d, source_group_id: v }))} placeholder="Select group" />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Service</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Service</label>
                   <SearchableSelect options={serviceOptions} value={formData.service_id} onChange={v => setFormData(d => ({ ...d, service_id: v }))} placeholder="Select service" />
                 </div>
                 <div>
-<label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Target Peer</label>
+<label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Target Peer</label>
               <SearchableSelect options={serverOptions} value={formData.target_peer_id} onChange={v => setFormData(d => ({ ...d, target_peer_id: v }))} placeholder="Select peer" />
                 </div>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Action</label>
+                <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Action</label>
                 <div className="flex gap-4">
                   <label className="flex items-center gap-2 cursor-pointer">
                     <input type="radio" name="action" value="accept" checked={formData.action === 'accept'} onChange={e => setFormData(d => ({ ...d, action: e.target.value }))} className="text-runic-600" />
@@ -226,11 +226,11 @@ if (!formData.source_group_id || !formData.service_id || !formData.target_peer_i
               </div>
               <div className="flex items-center gap-2">
                 <input type="checkbox" id="enabled" checked={formData.enabled} onChange={e => setFormData(d => ({ ...d, enabled: e.target.checked }))} className="w-4 h-4 rounded border-gray-300" />
-                <label htmlFor="enabled" className="text-sm text-gray-700 dark:text-gray-300">Enabled</label>
+                <label htmlFor="enabled" className="text-sm text-gray-700 dark:text-amber-primary">Enabled</label>
               </div>
 
               {/* Preview */}
-              <div className="border-t border-gray-200 dark:border-gray-700 pt-4">
+              <div className="border-t border-gray-200 dark:border-gray-border pt-4">
                 <button type="button" onClick={fetchPreview} disabled={previewLoading} className="flex items-center gap-2 text-sm text-runic-600 hover:text-runic-700 mb-2">
                   <Eye className="w-4 h-4" /> {previewLoading ? 'Loading...' : 'Preview Rules'}
                 </button>
@@ -245,8 +245,8 @@ if (!formData.source_group_id || !formData.service_id || !formData.target_peer_i
 
               <InlineError message={formErrors._general} />
               <div className="flex justify-end gap-3 pt-2">
-                <button type="button" onClick={closeModal} className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg">Cancel</button>
-                <button type="submit" className="px-4 py-2 text-sm font-medium text-white bg-runic-600 hover:bg-runic-700 rounded-lg">{editPolicy ? 'Save Changes' : 'Create Policy'}</button>
+                <button type="button" onClick={closeModal} className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-amber-primary bg-white dark:bg-charcoal-darkest border border-gray-300 dark:border-gray-border rounded-lg">Cancel</button>
+                <button type="submit" className="px-4 py-2 text-sm font-medium text-white bg-purple-active hover:bg-purple-active/80 rounded-lg">{editPolicy ? 'Save Changes' : 'Create Policy'}</button>
               </div>
             </form>
           </div>

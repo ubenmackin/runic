@@ -253,17 +253,17 @@ export default function Groups() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Groups</h1>
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-light-neutral">Groups</h1>
         <div className="flex items-center gap-3">
           <button
             onClick={handleManualRefresh}
             disabled={isManualRefreshing}
-            className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
+            className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 dark:text-amber-primary bg-white dark:bg-charcoal-dark border border-gray-300 dark:border-gray-border rounded-lg hover:bg-gray-50 dark:hover:bg-charcoal-darkest disabled:opacity-50"
           >
             <RefreshCw className={`w-4 h-4 ${isManualRefreshing ? 'animate-spin' : ''}`} />
             Refresh
           </button>
-          <button onClick={openAdd} className="flex items-center gap-2 px-4 py-2 bg-runic-600 hover:bg-runic-700 text-white text-sm font-medium rounded-lg">
+          <button onClick={openAdd} className="flex items-center gap-2 px-4 py-2 bg-purple-active hover:bg-purple-700 text-white text-sm font-medium rounded-lg">
             <Plus className="w-4 h-4" /> New Group
           </button>
         </div>
@@ -279,7 +279,7 @@ export default function Groups() {
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
               placeholder="Search groups..."
-              className="w-full pl-9 pr-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400"
+              className="w-full pl-9 pr-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-dark text-gray-900 dark:text-light-neutral placeholder-gray-400"
             />
           </div>
         </div>
@@ -297,16 +297,16 @@ export default function Groups() {
               <button 
                 type="button"
                 onClick={() => handleSort('name')}
-                className="flex items-center hover:text-runic-600 dark:hover:text-runic-400"
-              >
-                Name
+className="flex items-center hover:text-runic-600 dark:hover:text-purple-active"
+>
+Name
                 <SortIndicator columnKey="name" />
               </button>
             ), 
             render: (g) => (
               <div className="flex items-center gap-2">
                 {g.is_system && <Lock className="w-4 h-4 text-gray-400" />}
-                <span className="font-medium text-gray-900 dark:text-white">{g.name}</span>
+                <span className="font-medium text-gray-900 dark:text-light-neutral">{g.name}</span>
               </div>
             )
           },
@@ -316,17 +316,17 @@ export default function Groups() {
               <button 
                 type="button"
                 onClick={() => handleSort('peers')}
-                className="flex items-center hover:text-runic-600 dark:hover:text-runic-400"
-              >
-                Peers
+className="flex items-center hover:text-runic-600 dark:hover:text-purple-active"
+>
+Peers
                 <SortIndicator columnKey="peers" />
               </button>
             ),
             render: (g) => (
-              <div className="flex items-center gap-1.5 px-2 py-1 bg-gray-100 dark:bg-gray-700 rounded text-sm">
-                <Users className="w-4 h-4 text-gray-500" />
-                <span className="text-gray-900 dark:text-white">{g.peer_count || 0}</span>
-              </div>
+<div className="flex items-center gap-1.5 px-2 py-1 bg-gray-100 dark:bg-charcoal-darkest rounded text-sm">
+<Users className="w-4 h-4 text-gray-500" />
+<span className="text-gray-900 dark:text-light-neutral">{g.peer_count || 0}</span>
+</div>
             )
           },
           { 
@@ -335,17 +335,17 @@ export default function Groups() {
               <button 
                 type="button"
                 onClick={() => handleSort('policies')}
-                className="flex items-center hover:text-runic-600 dark:hover:text-runic-400"
-              >
-                Policies
+className="flex items-center hover:text-runic-600 dark:hover:text-purple-active"
+>
+Policies
                 <SortIndicator columnKey="policies" />
               </button>
             ),
             render: (g) => (
-              <div className="flex items-center gap-1.5 px-2 py-1 bg-gray-100 dark:bg-gray-700 rounded text-sm">
-                <Shield className="w-4 h-4 text-gray-500" />
-                <span className="text-gray-900 dark:text-white">{g.policy_count || 0}</span>
-              </div>
+<div className="flex items-center gap-1.5 px-2 py-1 bg-gray-100 dark:bg-charcoal-darkest rounded text-sm">
+<Shield className="w-4 h-4 text-gray-500" />
+<span className="text-gray-900 dark:text-light-neutral">{g.policy_count || 0}</span>
+</div>
             )
           },
           { 
@@ -355,14 +355,14 @@ export default function Groups() {
               <div className="flex items-center gap-2">
 <button
                   onClick={(e) => { e.stopPropagation(); openEdit(g) }}
-                  className={`p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded ${g.is_system ? 'text-gray-400 cursor-not-allowed' : ''}`}
+                  className={`p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded ${g.is_system ? 'text-gray-400 cursor-not-allowed' : ''}`}
                   disabled={g.is_system}
                   title="Edit"
                 >
                   <Pencil className="w-4 h-4 text-gray-500" />
                 </button>
                 {!g.is_system && (
-                  <button onClick={(e) => { e.stopPropagation(); setDeleteTarget(g) }} className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded">
+                  <button onClick={(e) => { e.stopPropagation(); setDeleteTarget(g) }} className="p-1 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded">
                     <Trash2 className="w-4 h-4 text-red-500" />
                   </button>
                 )}
@@ -385,67 +385,67 @@ export default function Groups() {
           }
         }}
       >
-    <div ref={modalRef} className="bg-white dark:bg-gray-800 rounded-xl shadow-xl w-full max-w-2xl mx-4 max-h-[90vh] overflow-y-auto">
-            <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
-              <h3 id="modal-title" className="text-lg font-semibold text-gray-900 dark:text-white">
+<div ref={modalRef} className="bg-white dark:bg-charcoal-dark rounded-xl shadow-xl w-full max-w-2xl mx-4 max-h-[90vh] overflow-y-auto">
+<div className="px-6 py-4 border-b border-gray-200 dark:border-gray-border flex items-center justify-between">
+<h3 id="modal-title" className="text-lg font-semibold text-gray-900 dark:text-light-neutral">
                 {editGroup ? `Edit Group: ${editGroup.name}` : 'New Group'}
               </h3>
-              <button onClick={closeModal} className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded">
+              <button onClick={closeModal} className="p-1 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded">
                 <X className="w-5 h-5 text-gray-500" />
               </button>
             </div>
             <form onSubmit={handleSubmit} className="p-6 space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Name</label>
-                <input 
-                  type="text" 
-                  value={formData.name} 
-                  onChange={e => setFormData(d => ({ ...d, name: e.target.value }))} 
-                  required 
-                  disabled={editGroup?.is_system} 
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:opacity-50 disabled:cursor-not-allowed" 
-                />
+<label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Name</label>
+<input
+type="text"
+value={formData.name}
+onChange={e => setFormData(d => ({ ...d, name: e.target.value }))}
+required
+disabled={editGroup?.is_system}
+className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral disabled:opacity-50 disabled:cursor-not-allowed"
+/>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Description</label>
-                <textarea 
-                  value={formData.description} 
-                  onChange={e => setFormData(d => ({ ...d, description: e.target.value }))} 
-                  rows={2} 
-                  disabled={editGroup?.is_system}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:opacity-50 disabled:cursor-not-allowed" 
-                />
+<label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Description</label>
+<textarea
+value={formData.description}
+onChange={e => setFormData(d => ({ ...d, description: e.target.value }))}
+rows={2}
+disabled={editGroup?.is_system}
+className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral disabled:opacity-50 disabled:cursor-not-allowed"
+/>
               </div>
 
               {/* Tag-based Member Management */}
               {editGroup && (
-                <div className="border-t border-gray-200 dark:border-gray-700 pt-4">
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Members</label>
+<div className="border-t border-gray-200 dark:border-gray-border pt-4">
+<label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-2">Members</label>
                   
 {membersLoading ? (
               <div className="flex flex-wrap gap-2">
                 {[1, 2, 3].map((i) => (
-                  <div key={i} className="animate-pulse bg-gray-200 dark:bg-gray-700 h-8 w-24 rounded-full" />
+                  <div key={i} className="animate-pulse bg-gray-200 dark:bg-charcoal-darkest h-8 w-24 rounded-full" />
                 ))}
               </div>
             ) : (
                     <div className="space-y-3">
                       {/* Member Tags */}
-                      <div className="flex flex-wrap gap-2 min-h-[40px] p-3 border border-gray-300 dark:border-gray-600 rounded-lg bg-gray-50 dark:bg-gray-900">
+                      <div className="flex flex-wrap gap-2 min-h-[40px] p-3 border border-gray-300 dark:border-gray-border rounded-lg bg-gray-50 dark:bg-charcoal-darkest">
                         {members.length === 0 ? (
                           <span className="text-sm text-gray-500 italic">No members in this group</span>
                         ) : (
                           members.map(m => (
-                            <span 
-                              key={m.id}
-                              className="px-3 py-1 bg-gray-100 dark:bg-gray-700 rounded-full text-sm flex items-center gap-2"
-                            >
-                              <span className="text-gray-900 dark:text-white">{m.hostname || m.ip_address}</span>
-                              {!editGroup?.is_system && (
-                                <button
-                                  type="button"
-                                  onClick={() => handleRemovePeer(m.id)}
-                                  className="hover:bg-gray-200 dark:hover:bg-gray-600 rounded-full p-0.5"
+<span
+key={m.id}
+className="px-3 py-1 bg-gray-100 dark:bg-charcoal-darkest rounded-full text-sm flex items-center gap-2"
+>
+<span className="text-gray-900 dark:text-light-neutral">{m.hostname || m.ip_address}</span>
+{!editGroup?.is_system && (
+<button
+type="button"
+onClick={() => handleRemovePeer(m.id)}
+className="hover:bg-gray-200 dark:hover:bg-charcoal-dark rounded-full p-0.5"
                                   disabled={deleteMemberMutation.isPending}
                                 >
                                   <X className="w-3 h-3 text-gray-500 hover:text-red-500" />
@@ -477,7 +477,7 @@ export default function Groups() {
                           type="button"
                           onClick={handleAddPeer}
                           disabled={!selectedPeerId || addMemberMutation.isPending}
-                          className="px-3 py-2 text-sm font-medium text-white bg-runic-600 hover:bg-runic-700 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
+                          className="px-3 py-2 text-sm font-medium text-white bg-purple-active hover:bg-purple-700 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                           Add
                         </button>
@@ -492,8 +492,8 @@ export default function Groups() {
 
               <InlineError message={formErrors._general} />
               <div className="flex justify-end gap-3 pt-2">
-                <button type="button" onClick={closeModal} className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg">Cancel</button>
-                <button type="submit" className="px-4 py-2 text-sm font-medium text-white bg-runic-600 hover:bg-runic-700 rounded-lg">{editGroup ? 'Save Changes' : 'Create Group'}</button>
+<button type="button" onClick={closeModal} className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-amber-primary bg-white dark:bg-charcoal-darkest border border-gray-300 dark:border-gray-border rounded-lg">Cancel</button>
+<button type="submit" className="px-4 py-2 text-sm font-medium text-white bg-purple-active hover:bg-purple-700 rounded-lg">{editGroup ? 'Save Changes' : 'Create Group'}</button>
               </div>
             </form>
           </div>

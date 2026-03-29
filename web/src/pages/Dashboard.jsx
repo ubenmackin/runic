@@ -35,10 +35,10 @@ export default function Dashboard() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Dashboard</h1>
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-light-neutral">Dashboard</h1>
         <Link
           to="/logs"
-          className="flex items-center gap-2 px-4 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 text-sm font-medium rounded-lg"
+          className="flex items-center gap-2 px-4 py-2 bg-gray-100 dark:bg-charcoal-darkest hover:bg-gray-200 dark:hover:bg-charcoal-dark text-gray-700 dark:text-amber-primary text-sm font-medium rounded-lg"
         >
           <FileText className="w-4 h-4" /> View Logs
         </Link>
@@ -56,8 +56,8 @@ export default function Dashboard() {
       </div>
 
       {/* Blocked events chart */}
-      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-4">
-        <h2 className="font-semibold text-gray-900 dark:text-white mb-4">Blocked Events (Last 24 Hours)</h2>
+      <div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-sm p-4">
+        <h2 className="font-semibold text-gray-900 dark:text-light-neutral mb-4">Blocked Events (Last 24 Hours)</h2>
         <BlockedEventsChart logs={blockedLogs?.logs || []} />
       </div>
 
@@ -65,40 +65,40 @@ export default function Dashboard() {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <Link
           to="/policies"
-          className="flex items-center gap-3 p-4 bg-white dark:bg-gray-800 rounded-xl shadow-sm hover:shadow-md transition-shadow"
+          className="flex items-center gap-3 p-4 bg-white dark:bg-charcoal-dark rounded-xl shadow-sm hover:shadow-md transition-shadow"
         >
-          <div className="p-2 bg-runic-100 dark:bg-runic-900 rounded-lg">
-            <Shield className="w-5 h-5 text-runic-600 dark:text-runic-400" />
+          <div className="p-2 bg-runic-100 dark:bg-purple-active/20 rounded-lg">
+            <Shield className="w-5 h-5 text-runic-600 dark:text-purple-active" />
           </div>
           <div>
-            <div className="font-medium text-gray-900 dark:text-white">Manage Policies</div>
-            <div className="text-sm text-gray-500 dark:text-gray-400">Create and edit firewall rules</div>
+            <div className="font-medium text-gray-900 dark:text-light-neutral">Manage Policies</div>
+            <div className="text-sm text-gray-500 dark:text-amber-muted">Create and edit firewall rules</div>
           </div>
         </Link>
 
         <Link
           to="/peers"
-          className="flex items-center gap-3 p-4 bg-white dark:bg-gray-800 rounded-xl shadow-sm hover:shadow-md transition-shadow"
+          className="flex items-center gap-3 p-4 bg-white dark:bg-charcoal-dark rounded-xl shadow-sm hover:shadow-md transition-shadow"
         >
-          <div className="p-2 bg-runic-100 dark:bg-runic-900 rounded-lg">
-            <Server className="w-5 h-5 text-runic-600 dark:text-runic-400" />
+          <div className="p-2 bg-runic-100 dark:bg-purple-active/20 rounded-lg">
+            <Server className="w-5 h-5 text-runic-600 dark:text-purple-active" />
           </div>
           <div>
-            <div className="font-medium text-gray-900 dark:text-white">Manage Peers</div>
-            <div className="text-sm text-gray-500 dark:text-gray-400">Add or configure agents</div>
+            <div className="font-medium text-gray-900 dark:text-light-neutral">Manage Peers</div>
+            <div className="text-sm text-gray-500 dark:text-amber-muted">Add or configure agents</div>
           </div>
         </Link>
 
         <Link
           to="/logs"
-          className="flex items-center gap-3 p-4 bg-white dark:bg-gray-800 rounded-xl shadow-sm hover:shadow-md transition-shadow"
+          className="flex items-center gap-3 p-4 bg-white dark:bg-charcoal-dark rounded-xl shadow-sm hover:shadow-md transition-shadow"
         >
-          <div className="p-2 bg-runic-100 dark:bg-runic-900 rounded-lg">
-            <FileText className="w-5 h-5 text-runic-600 dark:text-runic-400" />
+          <div className="p-2 bg-runic-100 dark:bg-purple-active/20 rounded-lg">
+            <FileText className="w-5 h-5 text-runic-600 dark:text-purple-active" />
           </div>
           <div>
-            <div className="font-medium text-gray-900 dark:text-white">View Logs</div>
-            <div className="text-sm text-gray-500 dark:text-gray-400">Monitor firewall events in real-time</div>
+            <div className="font-medium text-gray-900 dark:text-light-neutral">View Logs</div>
+            <div className="text-sm text-gray-500 dark:text-amber-muted">Monitor firewall events in real-time</div>
           </div>
         </Link>
       </div>

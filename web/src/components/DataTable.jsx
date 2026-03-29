@@ -4,19 +4,19 @@ export default function DataTable({ columns, data, emptyMessage, onRowClick }) {
   }
 
   return (
-    <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm overflow-hidden">
+    <div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-sm overflow-hidden">
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
-          <thead className="bg-gray-50 dark:bg-gray-900">
+          <thead className="bg-gray-50 dark:bg-charcoal-darkest">
             <tr>
               {columns.map(col => (
-                <th key={col.key} className={`text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400 ${col.className || ''}`}>
+                <th key={col.key} className={`text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted ${col.className || ''}`}>
                   {col.label}
                 </th>
               ))}
             </tr>
           </thead>
-          <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+          <tbody className="divide-y divide-gray-200 dark:divide-gray-border">
             {data.map((item, idx) => (
               <tr 
                 key={item.id ?? idx}

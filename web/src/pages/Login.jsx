@@ -68,59 +68,59 @@ export default function Login({ mode }) {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center px-4">
+    <div className="min-h-screen bg-gray-50 dark:bg-charcoal-darkest flex items-center justify-center px-4">
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-runic-600 dark:text-runic-400">Runic</h1>
-          <p className="text-gray-500 dark:text-gray-400 mt-1">
+          <h1 className="text-3xl font-bold text-runic-600 dark:text-purple-active">Runic</h1>
+          <p className="text-gray-500 dark:text-amber-muted mt-1">
             {isSetup ? 'Welcome — Set up your admin account' : 'Firewall Policy Management'}
           </p>
         </div>
-        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-8">
+        <div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-lg p-8">
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                Username
-              </label>
+<label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+				Username
+			</label>
               <input
                 type="text"
                 value={username}
                 onChange={e => setUsername(e.target.value)}
                 required
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-runic-500"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                Password
+className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-runic-500"
+				/>
+			</div>
+			<div>
+				<label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+				Password
               </label>
               <input
                 type="password"
                 value={password}
                 onChange={e => setPassword(e.target.value)}
                 required
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-runic-500"
-              />
-            </div>
-            {isSetup && (
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                  Confirm Password
+className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-runic-500"
+				/>
+			</div>
+			{isSetup && (
+				<div>
+				<label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+				Confirm Password
                 </label>
                 <input
                   type="password"
                   value={confirmPassword}
                   onChange={e => setConfirmPassword(e.target.value)}
                   required
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-runic-500"
-                />
+className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-runic-500"
+				/>
               </div>
             )}
             <InlineError message={error} />
             <button
               type="submit"
               disabled={loginMutation.isPending || setupMutation.isPending}
-              className="w-full py-2.5 bg-runic-600 hover:bg-runic-700 text-white font-medium rounded-lg disabled:opacity-50"
+              className="w-full py-2.5 bg-purple-active hover:bg-purple-active/80 text-white font-medium rounded-lg disabled:opacity-50"
             >
               {loginMutation.isPending || setupMutation.isPending ? 'Please wait...' : (isSetup ? 'Create Account' : 'Sign In')}
             </button>

@@ -61,7 +61,7 @@ export default function ApiErrorDisplay({
         {onRetry && recoverable !== false && (
           <button
             onClick={onRetry}
-            className="ml-auto text-runic-600 hover:text-runic-700 dark:text-runic-400 font-medium flex items-center gap-1"
+            className="ml-auto text-runic-600 hover:text-runic-700 dark:text-purple-active font-medium flex items-center gap-1"
           >
             <RefreshCw className="w-3.5 h-3.5" /> Retry
           </button>
@@ -92,11 +92,11 @@ export default function ApiErrorDisplay({
              type === ErrorTypes.SERVER ? 'Server Error' :
              'Error'}
           </h3>
-          <p className="text-gray-600 dark:text-gray-400 text-sm">
+          <p className="text-gray-600 dark:text-amber-muted text-sm">
             {message}
           </p>
           {suggestedAction && (
-            <p className="text-gray-500 dark:text-gray-500 text-xs">
+            <p className="text-gray-500 dark:text-amber-muted text-xs">
               {suggestedAction}
             </p>
           )}
@@ -107,7 +107,7 @@ export default function ApiErrorDisplay({
           {onRetry && recoverable !== false && (
             <button
               onClick={onRetry}
-              className="flex items-center gap-2 px-4 py-2 bg-runic-600 hover:bg-runic-700 text-white text-sm font-medium rounded-lg transition-colors"
+              className="flex items-center gap-2 px-4 py-2 bg-purple-active hover:bg-purple-active/80 text-white text-sm font-medium rounded-lg transition-colors"
             >
               <RefreshCw className="w-4 h-4" /> Try Again
             </button>
@@ -115,7 +115,7 @@ export default function ApiErrorDisplay({
           {type === ErrorTypes.AUTH && (
             <a
               href="/login"
-              className="px-4 py-2 bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 text-sm font-medium rounded-lg transition-colors"
+              className="px-4 py-2 bg-gray-200 dark:bg-charcoal-darkest hover:bg-gray-300 dark:hover:bg-charcoal-dark text-gray-700 dark:text-amber-primary text-sm font-medium rounded-lg transition-colors"
             >
               Log In
             </a>
@@ -160,7 +160,7 @@ export function ApiErrorCard({ title, error, onRetry }) {
     : { message: typeof error === 'string' ? error : 'An error occurred' }
 
   return (
-    <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-6">
+    <div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-sm p-6">
       {title && (
         <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">{title}</h3>
       )}

@@ -13,8 +13,8 @@ const NavItem = React.memo(({ to, icon: Icon, label, onClick, isChild = false })
     className={({ isActive }) =>
       `flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
         isActive
-          ? 'bg-runic-100 text-runic-700 dark:bg-runic-900 dark:text-runic-100'
-          : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'
+? 'bg-runic-100 text-runic-700 dark:bg-purple-active/20 dark:text-light-neutral'
+: 'text-gray-700 dark:text-amber-primary hover:bg-gray-100 dark:hover:bg-charcoal-darkest'
       } ${isChild ? 'ml-8' : ''}`
     }
     onClick={onClick}
@@ -79,7 +79,7 @@ const toggleDark = () => {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex">
+    <div className="min-h-screen bg-gray-50 dark:bg-charcoal-darkest flex">
       {/* Mobile sidebar backdrop */}
       {sidebarOpen && (
         <div 
@@ -90,16 +90,16 @@ const toggleDark = () => {
 
       {/* Sidebar */}
       <aside className={`
-        fixed md:static inset-y-0 left-0 z-50 w-60 bg-white dark:bg-gray-800 shadow-lg
+        fixed md:static inset-y-0 left-0 z-50 w-60 bg-white dark:bg-charcoal-dark shadow-lg
         transform transition-transform duration-200 ease-in-out
         ${sidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
       `}>
-        <div className="flex items-center justify-between h-16 px-4 border-b border-gray-200 dark:border-gray-700">
+        <div className="flex items-center justify-between h-16 px-4 border-b border-gray-200 dark:border-gray-border">
           <div className="flex items-center gap-2">
-              <Flame className="w-6 h-6 text-runic-600 dark:text-runic-400" />
-              <span className="text-xl font-bold text-runic-600 dark:text-runic-400">RUNIC</span>
-              <span className="hidden sm:inline text-gray-400 dark:text-gray-500">|</span>
-              <span className="hidden sm:inline text-sm font-normal text-gray-500 dark:text-gray-400 whitespace-nowrap">IPTables Management</span>
+<Flame className="w-6 h-6 text-runic-600 dark:text-purple-active" />
+<span className="text-xl font-bold text-runic-600 dark:text-purple-active">RUNIC</span>
+<span className="hidden sm:inline text-gray-400 dark:text-amber-muted">|</span>
+<span className="hidden sm:inline text-sm font-normal text-gray-500 dark:text-amber-muted whitespace-nowrap">IPTables Management</span>
             </div>
           <button className="md:hidden p-2" onClick={() => setSidebarOpen(false)}>
             <X className="w-5 h-5" />
@@ -114,9 +114,9 @@ const toggleDark = () => {
                 <div key={item.label}>
                   <button
                     onClick={() => toggleExpanded(item.label)}
-                    className={`w-full flex items-center justify-between gap-3 px-4 py-3 rounded-lg transition-colors ${
-                      'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'
-                    }`}
+className={`w-full flex items-center justify-between gap-3 px-4 py-3 rounded-lg transition-colors ${
+'text-gray-700 dark:text-amber-primary hover:bg-gray-100 dark:hover:bg-charcoal-darkest'
+}`}
                   >
                     <div className="flex items-center gap-3">
                       <item.icon className="w-5 h-5" />
@@ -164,7 +164,7 @@ const toggleDark = () => {
       {/* Main content */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Top bar */}
-        <header className="h-16 bg-white dark:bg-gray-800 shadow-sm border-b border-gray-200 dark:border-gray-700 flex items-center justify-between px-4">
+        <header className="h-16 bg-white dark:bg-charcoal-dark shadow-sm border-b border-gray-200 dark:border-gray-border flex items-center justify-between px-4">
           <button 
             className="md:hidden p-2"
             onClick={() => setSidebarOpen(true)}
@@ -175,19 +175,19 @@ const toggleDark = () => {
           <div className="flex items-center gap-4">
             <button
               onClick={toggleDark}
-              className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700"
+              className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-charcoal-darkest"
             >
-              {darkMode ? <Sun className="w-5 h-5 text-gray-700 dark:text-gray-300" /> : <Moon className="w-5 h-5 text-gray-700 dark:text-gray-300" />}
+              {darkMode ? <Sun className="w-5 h-5 text-gray-700 dark:text-amber-primary" /> : <Moon className="w-5 h-5 text-gray-700 dark:text-amber-primary" />}
             </button>
             {username && (
-              <div className="flex items-center gap-2 px-3 py-2 text-sm text-gray-700 dark:text-gray-300">
+              <div className="flex items-center gap-2 px-3 py-2 text-sm text-gray-700 dark:text-amber-primary">
                 <User className="h-4 w-4" />
                 <span>{username}</span>
               </div>
             )}
             <button
               onClick={handleLogout}
-              className="flex items-center gap-2 px-3 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg"
+              className="flex items-center gap-2 px-3 py-2 text-sm text-gray-700 dark:text-amber-primary hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-lg"
             >
               <LogOut className="w-4 h-4" />
               Logout

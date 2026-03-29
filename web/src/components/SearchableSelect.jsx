@@ -25,16 +25,16 @@ export default function SearchableSelect({ options = [], value, onChange, placeh
       <button
         type="button"
         onClick={() => setOpen(!open)}
-        className="w-full flex items-center justify-between px-3 py-2 text-left bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg hover:border-runic-500 focus:outline-none focus:ring-2 focus:ring-runic-500"
+        className="w-full flex items-center justify-between px-3 py-2 text-left bg-white dark:bg-charcoal-dark border border-gray-300 dark:border-gray-border rounded-lg hover:border-purple-active focus:outline-none focus:ring-2 focus:ring-purple-active"
       >
-        <span className={selected ? 'text-gray-900 dark:text-white' : 'text-gray-500'}>
+        <span className={selected ? 'text-gray-900 dark:text-light-neutral' : 'text-gray-500'}>
           {selected?.label || placeholder}
         </span>
         <ChevronDown className="w-4 h-4 text-gray-400" />
       </button>
       {open && (
-        <div className="absolute z-10 mt-1 w-full bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg">
-          <div className="p-2 border-b border-gray-200 dark:border-gray-700">
+        <div className="absolute z-10 mt-1 w-full bg-white dark:bg-charcoal-dark border border-gray-200 dark:border-gray-border rounded-lg shadow-lg">
+          <div className="p-2 border-b border-gray-200 dark:border-gray-border">
             <div className="flex items-center gap-2 px-2">
               <Search className="w-4 h-4 text-gray-400" />
               <input
@@ -42,7 +42,7 @@ export default function SearchableSelect({ options = [], value, onChange, placeh
                 value={search}
                 onChange={e => setSearch(e.target.value)}
                 placeholder="Search..."
-                className="flex-1 text-sm bg-transparent border-none outline-none text-gray-900 dark:text-white placeholder-gray-400"
+                className="flex-1 text-sm bg-transparent border-none outline-none text-gray-900 dark:text-light-neutral placeholder-gray-400"
                 autoFocus
               />
             </div>
@@ -55,10 +55,10 @@ export default function SearchableSelect({ options = [], value, onChange, placeh
                 <button
                   key={opt.value}
                   onClick={() => { onChange(opt.value); setOpen(false); setSearch('') }}
-                  className="w-full flex items-center justify-between px-3 py-2 text-left hover:bg-gray-100 dark:hover:bg-gray-700"
+                  className="w-full flex items-center justify-between px-3 py-2 text-left hover:bg-gray-100 dark:hover:bg-charcoal-darkest"
                 >
-                  <span className="text-sm text-gray-900 dark:text-white">{opt.label}</span>
-                  {opt.value === value && <Check className="w-4 h-4 text-runic-500" />}
+                  <span className="text-sm text-gray-900 dark:text-light-neutral">{opt.label}</span>
+                  {opt.value === value && <Check className="w-4 h-4 text-purple-active" />}
                 </button>
               ))
             )}

@@ -54,15 +54,15 @@ export default function SetupKeys() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Setup Keys</h1>
-        <p className="text-gray-600 dark:text-gray-400">Manage HMAC and JWT keys for securing your Runic installation</p>
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-light-neutral">Setup Keys</h1>
+        <p className="text-gray-600 dark:text-amber-muted">Manage HMAC and JWT keys for securing your Runic installation</p>
       </div>
 
       {/* JWT Secret Section */}
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow">
+      <div className="bg-white dark:bg-charcoal-dark rounded-lg shadow">
         <div className="p-6">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-semibold text-gray-900 dark:text-white">JWT Secret</h2>
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-light-neutral">JWT Secret</h2>
             <div className="flex gap-2">
               <button
                 onClick={() => setShowDeleteModal('jwt-secret')}
@@ -80,20 +80,20 @@ export default function SetupKeys() {
               </button>
             </div>
           </div>
-          <p className="text-gray-600 dark:text-gray-400 text-sm">
+          <p className="text-gray-600 dark:text-amber-muted text-sm">
             JWT secret used for user authentication tokens. Changing this will invalidate all user sessions.
           </p>
-          <div className="mt-4 p-3 bg-gray-100 dark:bg-gray-900 rounded font-mono text-sm text-gray-700 dark:text-gray-300">
+          <div className="mt-4 p-3 bg-gray-100 dark:bg-charcoal-darkest rounded font-mono text-sm text-gray-700 dark:text-amber-primary">
             {getKeyData('jwt-secret') ? '•••••••••••••••••••••••••••••••••••••••••' : 'No key configured'}
           </div>
         </div>
       </div>
 
       {/* HMAC Key Section */}
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow">
+      <div className="bg-white dark:bg-charcoal-dark rounded-lg shadow">
         <div className="p-6">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-semibold text-gray-900 dark:text-white">HMAC Key</h2>
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-light-neutral">HMAC Key</h2>
             <div className="flex gap-2">
               <button
                 onClick={() => setShowDeleteModal('hmac-key')}
@@ -111,20 +111,20 @@ export default function SetupKeys() {
               </button>
             </div>
           </div>
-          <p className="text-gray-600 dark:text-gray-400 text-sm">
+          <p className="text-gray-600 dark:text-amber-muted text-sm">
             HMAC key for policy signing. Changing this will require all agents to be re-registered.
           </p>
-          <div className="mt-4 p-3 bg-gray-100 dark:bg-gray-900 rounded font-mono text-sm text-gray-700 dark:text-gray-300">
+          <div className="mt-4 p-3 bg-gray-100 dark:bg-charcoal-darkest rounded font-mono text-sm text-gray-700 dark:text-amber-primary">
             {getKeyData('hmac-key') ? '•••••••••••••••••••••••••••••••••••••••••' : 'No key configured'}
           </div>
         </div>
       </div>
 
       {/* Agent JWT Secret Section */}
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow">
+      <div className="bg-white dark:bg-charcoal-dark rounded-lg shadow">
         <div className="p-6">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Agent JWT Secret</h2>
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-light-neutral">Agent JWT Secret</h2>
             <div className="flex gap-2">
               <button
                 onClick={() => setShowDeleteModal('agent-jwt-secret')}
@@ -142,10 +142,10 @@ export default function SetupKeys() {
               </button>
             </div>
           </div>
-          <p className="text-gray-600 dark:text-gray-400 text-sm">
+          <p className="text-gray-600 dark:text-amber-muted text-sm">
             JWT secret for agent authentication. Changing this will invalidate all agent connections.
           </p>
-          <div className="mt-4 p-3 bg-gray-100 dark:bg-gray-900 rounded font-mono text-sm text-gray-700 dark:text-gray-300">
+          <div className="mt-4 p-3 bg-gray-100 dark:bg-charcoal-darkest rounded font-mono text-sm text-gray-700 dark:text-amber-primary">
             {getKeyData('agent-jwt-secret') ? '•••••••••••••••••••••••••••••••••••••••••' : 'No key configured'}
           </div>
         </div>
@@ -154,18 +154,18 @@ export default function SetupKeys() {
       {/* Delete Confirmation Modal */}
       {showDeleteModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white dark:bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4">
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
-              Delete {showDeleteModal === 'jwt-secret' ? 'JWT Secret' :
+<div className="bg-white dark:bg-charcoal-dark rounded-lg p-6 max-w-md w-full mx-4">
+      <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
+        Delete {showDeleteModal === 'jwt-secret' ? 'JWT Secret' :
               showDeleteModal === 'hmac-key' ? 'HMAC Key' : 'Agent JWT Secret'}?
             </h3>
-            <p className="text-gray-600 dark:text-gray-400 mb-6">
+            <p className="text-gray-600 dark:text-amber-muted mb-6">
               This action cannot be undone and will break all active sessions.
             </p>
             <div className="flex gap-3">
               <button
                 onClick={() => setShowDeleteModal(null)}
-                className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700"
+                className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-border rounded-lg text-gray-700 dark:text-amber-primary hover:bg-gray-50 dark:hover:bg-charcoal-darkest"
               >
                 Cancel
               </button>
@@ -184,18 +184,18 @@ export default function SetupKeys() {
       {/* Create New Confirmation Modal */}
       {showCreateModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white dark:bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4">
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
-              Create New {showCreateModal === 'jwt-secret' ? 'JWT Secret' :
+<div className="bg-white dark:bg-charcoal-dark rounded-lg p-6 max-w-md w-full mx-4">
+      <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
+        Create New {showCreateModal === 'jwt-secret' ? 'JWT Secret' :
               showCreateModal === 'hmac-key' ? 'HMAC Key' : 'Agent JWT Secret'}?
             </h3>
-            <p className="text-gray-600 dark:text-gray-400 mb-6">
+            <p className="text-gray-600 dark:text-amber-muted mb-6">
               This will generate a new key. The current key will still be available but may not be used.
             </p>
             <div className="flex gap-3">
               <button
                 onClick={() => setShowCreateModal(null)}
-                className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700"
+                className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-border rounded-lg text-gray-700 dark:text-amber-primary hover:bg-gray-50 dark:hover:bg-charcoal-darkest"
               >
                 Cancel
               </button>

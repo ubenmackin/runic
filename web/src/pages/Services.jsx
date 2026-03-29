@@ -88,8 +88,8 @@ export default function Services() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Services</h1>
-        <button onClick={openAdd} className="flex items-center gap-2 px-4 py-2 bg-runic-600 hover:bg-runic-700 text-white text-sm font-medium rounded-lg">
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-light-neutral">Services</h1>
+        <button onClick={openAdd} className="flex items-center gap-2 px-4 py-2 bg-purple-active hover:bg-purple-active/80 text-white text-sm font-medium rounded-lg">
           <Plus className="w-4 h-4" /> New Service
         </button>
       </div>
@@ -98,14 +98,14 @@ export default function Services() {
         <EmptyState title="No services yet" message="Create services to define port bundles for your policies." action="New Service" onAction={openAdd} />
       ) : (
         <DataTable columns={[
-          { key: 'name', label: 'Name', render: (s) => <span className="font-medium text-gray-900 dark:text-white">{s.name}</span> },
+          { key: 'name', label: 'Name', render: (s) => <span className="font-medium text-gray-900 dark:text-light-neutral">{s.name}</span> },
           { key: 'protocol', label: 'Protocol', render: (s) => protocolLabel(s.protocol) },
           { key: 'ports', label: 'Ports', render: (s) => <span className="font-mono text-xs">{s.ports || '—'}</span> },
           { key: 'description', label: 'Description', render: (s) => s.description || '—' },
           { key: 'actions', label: 'Actions', render: (s) => (
             <div className="flex items-center gap-2">
-              <button onClick={(e) => { e.stopPropagation(); openEdit(s) }} className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded"><Pencil className="w-4 h-4 text-gray-500" /></button>
-              <button onClick={(e) => { e.stopPropagation(); setDeleteTarget(s) }} className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded"><Trash2 className="w-4 h-4 text-red-500" /></button>
+<button onClick={(e) => { e.stopPropagation(); openEdit(s) }} className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded"><Pencil className="w-4 h-4 text-gray-500" /></button>
+<button onClick={(e) => { e.stopPropagation(); setDeleteTarget(s) }} className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded"><Trash2 className="w-4 h-4 text-red-500" /></button>
             </div>
           )},
         ]} data={services} />
@@ -113,45 +113,45 @@ export default function Services() {
 
       {modalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl w-full max-w-md mx-4">
-            <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700">
-              <h3 className="text-lg font-semibold text-gray-900 dark:text-white">{editService ? 'Edit Service' : 'New Service'}</h3>
+<div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-xl w-full max-w-md mx-4">
+<div className="px-6 py-4 border-b border-gray-200 dark:border-gray-border">
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-light-neutral">{editService ? 'Edit Service' : 'New Service'}</h3>
             </div>
             <form onSubmit={handleSubmit} className="p-6 space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Name</label>
-                <input type="text" value={formData.name} onChange={e => setFormData(d => ({ ...d, name: e.target.value }))} required className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white" />
+<label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Name</label>
+<input type="text" value={formData.name} onChange={e => setFormData(d => ({ ...d, name: e.target.value }))} required className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white" />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Protocol</label>
+                <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Protocol</label>
                 <div className="flex gap-4">
                   {PROTOCOLS.map(p => (
                     <label key={p} className="flex items-center gap-2 cursor-pointer">
                       <input type="radio" name="protocol" value={p} checked={formData.protocol === p} onChange={e => setFormData(d => ({ ...d, protocol: e.target.value }))} className="text-runic-600" />
-                      <span className="text-sm text-gray-700 dark:text-gray-300">{protocolLabel(p)}</span>
+                      <span className="text-sm text-gray-700 dark:text-amber-primary">{protocolLabel(p)}</span>
                     </label>
                   ))}
                 </div>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Ports</label>
-                <input type="text" value={formData.ports} onChange={e => setFormData(d => ({ ...d, ports: e.target.value }))} disabled={formData.protocol === 'icmp'} placeholder={formData.protocol === 'icmp' ? 'N/A for ICMP' : '22 or 80,443 or 8000:9000'} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:opacity-50" />
+<label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Ports</label>
+<input type="text" value={formData.ports} onChange={e => setFormData(d => ({ ...d, ports: e.target.value }))} disabled={formData.protocol === 'icmp'} placeholder={formData.protocol === 'icmp' ? 'N/A for ICMP' : '22 or 80,443 or 8000:9000'} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white disabled:opacity-50" />
                 {portHint()}
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Description</label>
-                <textarea value={formData.description} onChange={e => setFormData(d => ({ ...d, description: e.target.value }))} rows={2} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white" />
+<label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Description</label>
+<textarea value={formData.description} onChange={e => setFormData(d => ({ ...d, description: e.target.value }))} rows={2} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white" />
               </div>
               {formData.ports && formData.protocol !== 'icmp' && (
-                <div className="p-3 bg-gray-50 dark:bg-gray-900 rounded-lg">
+                <div className="p-3 bg-gray-50 dark:bg-charcoal-darkest rounded-lg">
                   <p className="text-xs text-gray-500 mb-1">Rule preview:</p>
                   <code className="text-sm text-runic-600">{previewRule()}</code>
                 </div>
               )}
               <InlineError message={formErrors._general} />
               <div className="flex justify-end gap-3 pt-2">
-                <button type="button" onClick={closeModal} className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg">Cancel</button>
-                <button type="submit" className="px-4 py-2 text-sm font-medium text-white bg-runic-600 hover:bg-runic-700 rounded-lg">{editService ? 'Save Changes' : 'Create Service'}</button>
+                <button type="button" onClick={closeModal} className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-amber-primary bg-white dark:bg-charcoal-darkest border border-gray-300 dark:border-gray-border rounded-lg">Cancel</button>
+                <button type="submit" className="px-4 py-2 text-sm font-medium text-white bg-purple-active hover:bg-purple-active/80 rounded-lg">{editService ? 'Save Changes' : 'Create Service'}</button>
               </div>
             </form>
           </div>

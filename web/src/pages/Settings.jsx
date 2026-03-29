@@ -8,10 +8,10 @@ export default function Settings() {
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Settings</h1>
-        <p className="text-gray-600 dark:text-gray-400">Configure your Runic installation</p>
+        <p className="text-gray-600 dark:text-amber-muted">Configure your Runic installation</p>
       </div>
 
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 text-center text-gray-500 dark:text-gray-400">
+      <div className="bg-white dark:bg-charcoal-dark rounded-lg shadow p-6 text-center text-gray-500 dark:text-amber-muted">
         <SettingsIcon className="w-12 h-12 mx-auto mb-4 opacity-50" />
         <p>Settings configuration will be implemented here.</p>
         <p className="text-sm mt-2">This page is a placeholder for future settings options.</p>
