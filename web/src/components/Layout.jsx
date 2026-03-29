@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react'
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
-import { 
-  LayoutDashboard, Server, Users as UsersIcon, Briefcase, Shield, FileText, 
-  Menu, X, LogOut, Moon, Sun, Key, Settings, User, ChevronDown, ChevronRight
+import {
+  LayoutDashboard, Server, Users as UsersIcon, Briefcase, Shield, FileText,
+  Menu, X, LogOut, Moon, Sun, Key, Settings, User, ChevronDown, ChevronRight, Flame
 } from 'lucide-react'
 import { useAuthStore } from '../store'
 
@@ -96,10 +96,10 @@ const toggleDark = () => {
       `}>
         <div className="flex items-center justify-between h-16 px-4 border-b border-gray-200 dark:border-gray-700">
           <div className="flex items-center gap-2">
-              <Shield className="w-6 h-6 text-runic-600 dark:text-runic-400" />
+              <Flame className="w-6 h-6 text-runic-600 dark:text-runic-400" />
               <span className="text-xl font-bold text-runic-600 dark:text-runic-400">RUNIC</span>
               <span className="hidden sm:inline text-gray-400 dark:text-gray-500">|</span>
-              <span className="hidden sm:inline text-sm font-normal text-gray-500 dark:text-gray-400">IPTables Management</span>
+              <span className="hidden sm:inline text-sm font-normal text-gray-500 dark:text-gray-400 whitespace-nowrap">IPTables Management</span>
             </div>
           <button className="md:hidden p-2" onClick={() => setSidebarOpen(false)}>
             <X className="w-5 h-5" />

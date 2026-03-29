@@ -20,6 +20,8 @@ type Peer struct {
 	Hostname      string `json:"hostname"`
 	IPAddress     string `json:"ip_address"`
 	OSType        string `json:"os_type"`
+	Arch          string `json:"arch"`
+	HasDocker     bool   `json:"has_docker"`
 	IsManual      bool   `json:"is_manual"`
 	AgentVersion  string `json:"agent_version"`
 	LastHeartbeat string `json:"last_heartbeat"`
@@ -35,21 +37,22 @@ func GetPeers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows, err := db.DB.QueryContext(r.Context(), `
-		SELECT p.id, p.hostname, p.ip_address, p.os_type, p.is_manual, 
-		       COALESCE(p.agent_version, '') as agent_version,
-		       COALESCE(p.last_heartbeat, '') as last_heartbeat,
-		CASE
-			WHEN p.last_heartbeat IS NULL THEN 'pending'
-			WHEN p.last_heartbeat < `+fmt.Sprintf("datetime('now', '-%d minutes')", constants.PeerOfflineThresholdMinutes)+` THEN 'offline'
-			ELSE COALESCE(p.status, 'online')
-		END as status,
-		       COALESCE(p.bundle_version, '') as bundle_version,
-		       COALESCE(GROUP_CONCAT(g.name, ','), '') as groups
-		FROM peers p
-		LEFT JOIN group_members gm ON p.id = gm.peer_id
-		LEFT JOIN groups g ON gm.group_id = g.id
-		GROUP BY p.id
-		ORDER BY p.hostname ASC
+	SELECT p.id, p.hostname, p.ip_address, p.os_type, p.arch, p.has_docker, p.is_manual,
+	COALESCE(p.agent_version, '') as agent_version,
+	COALESCE(p.last_heartbeat, '') as last_heartbeat,
+	CASE
+		WHEN p.last_heartbeat IS NULL THEN 'pending'
+		WHEN p.last_heartbeat < `+fmt.Sprintf("datetime('now', '-%d minutes')", constants.PeerOfflineThresholdMinutes)+` THEN 'offline'
+		ELSE COALESCE(p.status, 'online')
+	END as status,
+	COALESCE(p.bundle_version, '') as bundle_version,
+	COALESCE(GROUP_CONCAT(g.name, ','), '') as groups,
+	COALESCE(p.description, '') as description
+	FROM peers p
+	LEFT JOIN group_members gm ON p.id = gm.peer_id
+	LEFT JOIN groups g ON gm.group_id = g.id
+	GROUP BY p.id
+	ORDER BY p.hostname ASC
 	`)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "failed to query peers")
@@ -60,8 +63,8 @@ func GetPeers(w http.ResponseWriter, r *http.Request) {
 	var peers []Peer
 	for rows.Next() {
 		var p Peer
-		var agentVersion, lastHeartbeat sql.NullString
-		if err := rows.Scan(&p.ID, &p.Hostname, &p.IPAddress, &p.OSType, &p.IsManual, &agentVersion, &lastHeartbeat, &p.Status, &p.BundleVersion, &p.Groups); err != nil {
+		var agentVersion, lastHeartbeat, description sql.NullString
+		if err := rows.Scan(&p.ID, &p.Hostname, &p.IPAddress, &p.OSType, &p.Arch, &p.HasDocker, &p.IsManual, &agentVersion, &lastHeartbeat, &p.Status, &p.BundleVersion, &p.Groups, &description); err != nil {
 			common.RespondError(w, http.StatusInternalServerError, "failed to scan peer")
 			return
 		}
@@ -70,6 +73,9 @@ func GetPeers(w http.ResponseWriter, r *http.Request) {
 		}
 		if lastHeartbeat.Valid {
 			p.LastHeartbeat = lastHeartbeat.String
+		}
+		if description.Valid {
+			p.Description = description.String
 		}
 		peers = append(peers, p)
 	}
