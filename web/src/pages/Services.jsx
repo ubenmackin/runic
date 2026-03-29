@@ -151,24 +151,31 @@ export default function Services() {
   const validatePortEntry = (entry) => {
     const trimmed = entry.trim()
     if (!trimmed) return false
-    
-    // Check for range format (e.g., 8000:9000)
-    if (trimmed.includes(':')) {
-      const parts = trimmed.split(':')
-      if (parts.length !== 2) return false
-      const start = parseInt(parts[0])
-      const end = parseInt(parts[1])
-      if (isNaN(start) || isNaN(end)) return false
-      if (start < 1 || start > 65535) return false
-      if (end < 1 || end > 65535) return false
-      if (start > end) return false
-      return true
+
+    // Must match backend regex: only digits, commas, and colons
+    // Pattern: ^\d+([,:]\d+)*$
+    if (!/^\d+([,:]\d+)*$/.test(trimmed)) {
+      return false
     }
-    
-    // Single port
-    const port = parseInt(trimmed)
-    if (isNaN(port)) return false
-    if (port < 1 || port > 65535) return false
+
+    // Validate each port number is in valid range
+    const parts = trimmed.split(/[,:]/)
+    for (const part of parts) {
+      const port = parseInt(part)
+      if (isNaN(port) || port < 1 || port > 65535) {
+        return false
+      }
+    }
+
+    // Validate ranges (colon-separated pairs) have start <= end
+    const rangeMatch = trimmed.match(/(\d+):(\d+)/g)
+    if (rangeMatch) {
+      for (const range of rangeMatch) {
+        const [start, end] = range.split(':').map(Number)
+        if (start > end) return false
+      }
+    }
+
     return true
   }
 
@@ -185,7 +192,7 @@ export default function Services() {
     const invalidEntries = entries.filter(e => !validatePortEntry(e))
     
     if (invalidEntries.length > 0) {
-      setPortInputError(`Invalid port(s): ${invalidEntries.join(', ')}. Use 1-65535 or range like 8000:9000`)
+      setPortInputError(`Invalid port(s): ${invalidEntries.join(', ')}. Only digits, commas, and colons allowed. Port range: 1-65535`)
       return
     }
 
@@ -227,8 +234,16 @@ export default function Services() {
   const previewRule = () => {
     const portsValue = portChips.join(',')
     if (formData.protocol === 'icmp') return `icmp`
-    if (!portsValue) return `tcp dport ?`
-    return `tcp dport ${portsValue}`
+    if (!portsValue) return `${formData.protocol} dport ?`
+
+    // Determine if multiport is needed
+    const needsMultiport = portsValue.includes(',') || portsValue.includes(':')
+    const portMatch = needsMultiport ? `-m multiport --dports ${portsValue}` : `--dport ${portsValue}`
+
+    if (formData.protocol === 'both') {
+      return `tcp ${portMatch}\nudp ${portMatch}`
+    }
+    return `${formData.protocol} ${portMatch}`
   }
 
   // Sort indicator component
@@ -480,12 +495,12 @@ export default function Services() {
                 <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Description</label>
                 <textarea value={formData.description} onChange={e => setFormData(d => ({ ...d, description: e.target.value }))} rows={2} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white" />
               </div>
-{portChips.length > 0 && formData.protocol !== 'icmp' && (
-                    <div className="p-3 bg-gray-50 dark:bg-charcoal-darkest rounded-lg">
-                      <p className="text-xs text-gray-500 mb-1">Rule preview:</p>
-                      <code className="text-sm text-runic-600">{previewRule()}</code>
-                    </div>
-                  )}
+              {portChips.length > 0 && formData.protocol !== 'icmp' && (
+                <div className="p-3 bg-gray-50 dark:bg-charcoal-darkest rounded-lg">
+                  <p className="text-xs text-gray-500 mb-1">Rule preview:</p>
+                  <code className="text-sm text-runic-600 whitespace-pre-line">{previewRule()}</code>
+                </div>
+              )}
               <InlineError message={formErrors._general} />
               <div className="flex justify-end gap-3 pt-2">
                 <button type="button" onClick={closeModal} className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-amber-primary bg-white dark:bg-charcoal-dark border border-gray-300 dark:border-gray-border rounded-lg hover:bg-gray-50 dark:hover:bg-charcoal-darkest">Cancel</button>
