@@ -1,7 +1,7 @@
-import { useState, useMemo, useCallback } from 'react'
+import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
 import { useTableSort } from '../hooks/useTableSort'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Pencil, Trash2, Server, Copy, Check, RefreshCw, ArrowUp, ArrowDown, ArrowUpDown, X } from 'lucide-react'
+import { Plus, Pencil, Trash2, Server, Copy, Check, RefreshCw, ArrowUp, ArrowDown, ArrowUpDown, X, Search } from 'lucide-react'
 import { api, QUERY_KEYS } from '../api/client'
 import { REFETCH_INTERVALS } from '../constants'
 import { useCrudModal } from '../hooks/useCrudModal'
@@ -73,6 +73,72 @@ export default function Peers() {
   const [manualForm, setManualForm] = useState({ hostname: '', ip_address: '', os_type: 'other', arch: 'other' })
   const [manualErrors, setManualErrors] = useState({})
   const [copied, setCopied] = useState(false)
+
+  // Modal ref for focus trap
+  const editModalRef = useRef(null)
+  const addModalRef = useRef(null)
+
+  // Focus trap for edit modal
+  useEffect(() => {
+    if (!modalOpen) return
+    const modal = editModalRef.current
+    if (!modal) return
+
+    const focusableElements = modal.querySelectorAll(
+      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+    )
+    const firstElement = focusableElements[0]
+    const lastElement = focusableElements[focusableElements.length - 1]
+
+    // Focus first element on open
+    firstElement?.focus()
+
+    const handleKeyDown = (e) => {
+      if (e.key === 'Tab') {
+        if (e.shiftKey && document.activeElement === firstElement) {
+          e.preventDefault()
+          lastElement?.focus()
+        } else if (!e.shiftKey && document.activeElement === lastElement) {
+          e.preventDefault()
+          firstElement?.focus()
+        }
+      }
+    }
+
+    modal.addEventListener('keydown', handleKeyDown)
+    return () => modal.removeEventListener('keydown', handleKeyDown)
+  }, [modalOpen])
+
+  // Focus trap for add modal
+  useEffect(() => {
+    if (!addModalOpen) return
+    const modal = addModalRef.current
+    if (!modal) return
+
+    const focusableElements = modal.querySelectorAll(
+      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+    )
+    const firstElement = focusableElements[0]
+    const lastElement = focusableElements[focusableElements.length - 1]
+
+    // Focus first element on open
+    firstElement?.focus()
+
+    const handleKeyDown = (e) => {
+      if (e.key === 'Tab') {
+        if (e.shiftKey && document.activeElement === firstElement) {
+          e.preventDefault()
+          lastElement?.focus()
+        } else if (!e.shiftKey && document.activeElement === lastElement) {
+          e.preventDefault()
+          firstElement?.focus()
+        }
+      }
+    }
+
+    modal.addEventListener('keydown', handleKeyDown)
+    return () => modal.removeEventListener('keydown', handleKeyDown)
+  }, [addModalOpen, activeTab])
 
 // Sorting state (persisted per-user)
 	const { sortConfig, handleSort } = useTableSort('peers', { key: 'hostname', direction: 'asc' })
@@ -288,7 +354,10 @@ await api.post('/peers', {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-light-neutral">Peers</h1>
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-light-neutral">Peers</h1>
+          <p className="text-gray-600 dark:text-amber-muted">Register and manage devices and endpoints in your network</p>
+        </div>
         <div className="flex items-center gap-3">
           <button
             onClick={handleManualRefresh}
@@ -306,17 +375,18 @@ await api.post('/peers', {
 
       {/* Search Bar */}
       <div className="relative max-w-md">
+        <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
         <input
           type="text"
           placeholder="Search peers by hostname, IP, OS, groups, or agent..."
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
-          className="w-full px-4 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-dark text-gray-900 dark:text-light-neutral placeholder-gray-500 dark:placeholder-amber-muted focus:ring-2 focus:ring-purple-active focus:border-purple-active"
+          className="w-full pl-9 pr-10 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-dark text-gray-900 dark:text-light-neutral placeholder-gray-400 focus:ring-2 focus:ring-purple-active focus:border-purple-active"
         />
         {searchTerm && (
           <button
             onClick={() => setSearchTerm('')}
-            className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-amber-primary"
+            className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-light-neutral"
           >
             ×
           </button>
@@ -474,8 +544,8 @@ await api.post('/peers', {
 
       {/* Add/Edit Modal (Legacy) */}
       {modalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" tabIndex="-1" autoFocus onKeyDown={(e) => { if (e.key === 'Escape') { closeModal() } }}>
-<div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-xl w-full max-w-lg mx-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" tabIndex="-1" onKeyDown={(e) => { if (e.key === 'Escape') { closeModal() } }}>
+          <div ref={editModalRef} className="bg-white dark:bg-charcoal-dark rounded-xl shadow-xl w-full max-w-lg mx-4">
         <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-border flex items-center justify-between">
           <h3 className="text-lg font-semibold text-gray-900 dark:text-light-neutral">{editPeer ? 'Edit Peer' : 'Add Peer'}</h3>
           <button onClick={closeModal} className="p-1 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded">
@@ -531,8 +601,8 @@ await api.post('/peers', {
 
       {/* Add Peer Modal with Tabs */}
       {addModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" tabIndex="-1" autoFocus onKeyDown={(e) => { if (e.key === 'Escape') { closeAddModal() } }}>
-<div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-xl w-full max-w-lg mx-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" tabIndex="-1" onKeyDown={(e) => { if (e.key === 'Escape') { closeAddModal() } }}>
+          <div ref={addModalRef} className="bg-white dark:bg-charcoal-dark rounded-xl shadow-xl w-full max-w-lg mx-4">
         {/* Header */}
         <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-border flex items-center justify-between">
           <h3 className="text-lg font-semibold text-gray-900 dark:text-light-neutral">Add Peer</h3>

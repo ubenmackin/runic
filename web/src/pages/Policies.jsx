@@ -1,7 +1,7 @@
 import { useState, useMemo, useCallback } from 'react'
 import { useTableSort } from '../hooks/useTableSort'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Pencil, Trash2, Eye, RefreshCw, ArrowUp, ArrowDown, ArrowUpDown, X, ChevronDown, ChevronUp, Info } from 'lucide-react'
+import { Plus, Pencil, Trash2, Eye, RefreshCw, ArrowUp, ArrowDown, ArrowUpDown, X, ChevronDown, ChevronUp, Info, Search } from 'lucide-react'
 import { api, QUERY_KEYS } from '../api/client'
 import { useCrudModal } from '../hooks/useCrudModal'
 import { useToastContext } from '../hooks/ToastContext'
@@ -216,7 +216,10 @@ if (!formData.source_group_id || !formData.service_id || !formData.target_peer_i
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-light-neutral">Policies</h1>
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-light-neutral">Policies</h1>
+          <p className="text-gray-600 dark:text-amber-muted">Create firewall rules to control network traffic between groups and peers</p>
+        </div>
         <div className="flex items-center gap-3">
           <button
             onClick={handleManualRefresh}
@@ -287,19 +290,20 @@ if (!formData.source_group_id || !formData.service_id || !formData.target_peer_i
 </div>
 
 {/* Filters */}
-<div className="flex flex-wrap gap-4 items-center bg-white dark:bg-charcoal-dark p-4 rounded-xl">
+<div className="flex flex-wrap gap-4 items-center">
   <div className="relative max-w-md flex-1">
+    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
     <input
       type="text"
       placeholder="Search policies by name, source, service, or target..."
       value={searchTerm}
       onChange={(e) => setSearchTerm(e.target.value)}
-      className="w-full px-4 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral placeholder-gray-500 dark:text-amber-muted focus:ring-2 focus:ring-purple-active focus:border-purple-active"
+      className="w-full pl-9 pr-10 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-dark text-gray-900 dark:text-light-neutral placeholder-gray-400 focus:ring-2 focus:ring-purple-active focus:border-purple-active"
     />
     {searchTerm && (
       <button
         onClick={() => setSearchTerm('')}
-        className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-amber-primary"
+        className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-light-neutral"
       >
         ×
       </button>

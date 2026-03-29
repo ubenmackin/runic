@@ -253,7 +253,10 @@ export default function Groups() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-light-neutral">Groups</h1>
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-light-neutral">Groups</h1>
+          <p className="text-gray-600 dark:text-amber-muted">Organize peers into logical groups for policy targeting</p>
+        </div>
         <div className="flex items-center gap-3">
           <button
             onClick={handleManualRefresh}
