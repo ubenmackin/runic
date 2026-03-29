@@ -577,14 +577,14 @@ await api.post('/peers', {
             {/* Tab Content */}
             <div className="p-6">
               {activeTab === 'agent' && (
-                <div className="space-y-4">
+<div className="space-y-6">
                   <p className="text-sm text-gray-600 dark:text-gray-400">
                     Run this command on the target machine to install the agent:
                   </p>
 
                   {/* Command Block with Copy Button */}
                   <div className="relative">
-                    <pre className="bg-gray-900 text-gray-100 p-4 rounded-lg text-sm overflow-x-auto pr-12">
+                    <pre className="bg-gray-900 text-gray-100 p-4 rounded-lg text-sm overflow-x-hidden whitespace-pre-wrap break-all pr-12">
                       <code>{agentInstallCommand}</code>
                     </pre>
                     <button
