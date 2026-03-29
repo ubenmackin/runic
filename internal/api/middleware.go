@@ -203,6 +203,13 @@ func (lw *loggingResponseWriter) Write(b []byte) (int, error) {
 	return lw.ResponseWriter.Write(b)
 }
 
+// Flush implements http.Flusher to support SSE streaming.
+func (lw *loggingResponseWriter) Flush() {
+	if f, ok := lw.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
 // CORS middleware adds Cross-Origin Resource Sharing headers to API responses.
 // This is necessary for proper handling of cross-origin requests from the frontend.
 // The middleware:
