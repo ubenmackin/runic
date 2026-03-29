@@ -398,11 +398,14 @@ export default function Services() {
       )}
 
       {modalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" tabIndex="-1" autoFocus onKeyDown={(e) => { if (e.key === 'Escape') { closeModal() } }}>
           <div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-xl w-full max-w-md mx-4">
-            <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-border">
-              <h3 className="text-lg font-semibold text-gray-900 dark:text-light-neutral">{editService ? 'Edit Service' : 'New Service'}</h3>
-            </div>
+<div className="px-6 py-4 border-b border-gray-200 dark:border-gray-border flex items-center justify-between">
+        <h3 className="text-lg font-semibold text-gray-900 dark:text-light-neutral">{editService ? 'Edit Service' : 'New Service'}</h3>
+        <button onClick={closeModal} className="p-1 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded">
+          <X className="w-5 h-5 text-gray-500" />
+        </button>
+      </div>
             <form onSubmit={handleSubmit} className="p-6 space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Name</label>
@@ -428,7 +431,7 @@ export default function Services() {
                           {portChips.map((port, idx) => (
                             <span
                               key={idx}
-                              className="px-2 py-1 bg-gray-100 dark:bg-charcoal-darkest rounded-md text-sm flex items-center gap-1"
+                              className="px-2 py-1 bg-gray-100 dark:bg-charcoal-darkest rounded-md text-sm flex items-center gap-1 text-gray-900 dark:text-white"
                             >
                               {port}
                               <X
@@ -485,7 +488,7 @@ export default function Services() {
                   )}
               <InlineError message={formErrors._general} />
               <div className="flex justify-end gap-3 pt-2">
-                <button type="button" onClick={closeModal} className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-amber-primary bg-white dark:bg-charcoal-darkest border border-gray-300 dark:border-gray-border rounded-lg">Cancel</button>
+                <button type="button" onClick={closeModal} className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-amber-primary bg-white dark:bg-charcoal-dark border border-gray-300 dark:border-gray-border rounded-lg hover:bg-gray-50 dark:hover:bg-charcoal-darkest">Cancel</button>
                 <button type="submit" className="px-4 py-2 text-sm font-medium text-white bg-purple-active hover:bg-purple-active/80 rounded-lg">{editService ? 'Save Changes' : 'Create Service'}</button>
               </div>
             </form>
