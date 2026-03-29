@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Plus, Trash2, Lock, Users, Shield, Search, ArrowUp, ArrowDown, ArrowUpDown, X, RefreshCw } from 'lucide-react'
 import { api, QUERY_KEYS } from '../api/client'
 import { useCrudModal } from '../hooks/useCrudModal'
+import { useTableSort } from '../hooks/useTableSort'
 import { useToastContext } from '../hooks/ToastContext'
 import ConfirmModal from '../components/ConfirmModal'
 import SearchableSelect from '../components/SearchableSelect'
@@ -19,8 +20,7 @@ export default function Groups() {
   const [formErrors, setFormErrors] = useState({})
   
   // Sorting state
-  const [sortKey, setSortKey] = useState('name')
-  const [sortDirection, setSortDirection] = useState('asc')
+  const { sortConfig, handleSort } = useTableSort('groups', { key: 'name', direction: 'asc' })
   
   // Search state
   const [searchQuery, setSearchQuery] = useState('')
@@ -111,10 +111,10 @@ export default function Groups() {
     label: p.hostname || p.ip_address,
   }))
 
-  // Sort groups based on sortKey and sortDirection
+  // Sort groups based on sortConfig
   const sortedGroups = [...(groups || [])].sort((a, b) => {
     let aVal, bVal
-    switch (sortKey) {
+    switch (sortConfig.key) {
       case 'name':
         aVal = a.name.toLowerCase()
         bVal = b.name.toLowerCase()
@@ -130,8 +130,8 @@ export default function Groups() {
       default:
         return 0
     }
-    if (aVal < bVal) return sortDirection === 'asc' ? -1 : 1
-    if (aVal > bVal) return sortDirection === 'asc' ? 1 : -1
+    if (aVal < bVal) return sortConfig.direction === 'asc' ? -1 : 1
+    if (aVal > bVal) return sortConfig.direction === 'asc' ? 1 : -1
     return 0
   })
 
@@ -146,22 +146,12 @@ export default function Groups() {
     )
   })
 
-  // Handle sort column click
-  const handleSort = (key) => {
-    if (sortKey === key) {
-      setSortDirection(d => d === 'asc' ? 'desc' : 'asc')
-    } else {
-      setSortKey(key)
-      setSortDirection('asc')
-    }
-  }
-
   // Render sort indicator
   const SortIndicator = ({ columnKey }) => {
-    if (sortKey !== columnKey) {
+    if (sortConfig.key !== columnKey) {
       return <ArrowUpDown className="w-4 h-4 text-gray-400 ml-1" />
     }
-    return sortDirection === 'asc' 
+    return sortConfig.direction === 'asc'
       ? <ArrowUp className="w-4 h-4 text-runic-500 ml-1" />
       : <ArrowDown className="w-4 h-4 text-runic-500 ml-1" />
   }

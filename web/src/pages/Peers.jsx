@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback } from 'react'
+import { useTableSort } from '../hooks/useTableSort'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Plus, Pencil, Trash2, Server, Copy, Check, RefreshCw, ArrowUp, ArrowDown, ArrowUpDown } from 'lucide-react'
 import { api, QUERY_KEYS } from '../api/client'
@@ -73,8 +74,8 @@ export default function Peers() {
   const [manualErrors, setManualErrors] = useState({})
   const [copied, setCopied] = useState(false)
 
-  // Sorting state
-  const [sortConfig, setSortConfig] = useState({ key: 'hostname', direction: 'asc' })
+// Sorting state (persisted per-user)
+	const { sortConfig, handleSort } = useTableSort('peers', { key: 'hostname', direction: 'asc' })
 
   // Search state
   const [searchTerm, setSearchTerm] = useState('')
@@ -173,15 +174,7 @@ await api.post('/peers', {
     setIsManualRefreshing(false)
   }, [refetch])
 
-  // Handle sort click
-  const handleSort = useCallback((key) => {
-    setSortConfig(prev => {
-      if (prev.key === key) {
-        return { key, direction: prev.direction === 'asc' ? 'desc' : 'asc' }
-      }
-      return { key, direction: 'asc' }
-    })
-  }, [])
+
 
   // Filtered and sorted data
   const processedPeers = useMemo(() => {
