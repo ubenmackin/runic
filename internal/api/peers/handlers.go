@@ -242,3 +242,27 @@ func DeletePeer(w http.ResponseWriter, r *http.Request) {
 
 	common.RespondJSON(w, http.StatusOK, map[string]string{"message": "Peer deleted"})
 }
+// GetPeerBundle fetches the latest rule bundle content for a peer.
+func GetPeerBundle(w http.ResponseWriter, r *http.Request) {
+	id, err := common.ParseIDParam(r, "id")
+	if err != nil {
+		common.RespondError(w, http.StatusBadRequest, "invalid peer ID")
+		return
+	}
+
+	var content string
+	err = db.DB.QueryRowContext(r.Context(),
+		"SELECT rules_content FROM rule_bundles WHERE peer_id = ? ORDER BY created_at DESC LIMIT 1",
+		id).Scan(&content)
+
+	if err == sql.ErrNoRows {
+		common.RespondError(w, http.StatusNotFound, "no rule bundle found for this peer")
+		return
+	}
+	if err != nil {
+		common.RespondError(w, http.StatusInternalServerError, "failed to fetch rule bundle")
+		return
+	}
+
+	common.RespondJSON(w, http.StatusOK, map[string]string{"content": content})
+}

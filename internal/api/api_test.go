@@ -208,7 +208,7 @@ func TestCompilePeer(t *testing.T) {
 	database.Exec(`INSERT INTO group_members (group_id, peer_id) VALUES (?, ?)`, 1, 2)
 	database.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`,
 		"ssh", "22", "tcp")
-	database.Exec(`INSERT INTO policies (name, source_group_id, service_id, target_peer_id, action, priority, enabled) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+	database.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, "group", ?, ?, "peer", ?, ?, ?)`,
 		"test-policy", 1, 1, 1, "ACCEPT", 100, 1)
 
 	tests := []struct {
@@ -295,9 +295,9 @@ func TestListPolicies(t *testing.T) {
 	database.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group")
 	database.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`,
 		"ssh", "22", "tcp")
-	database.Exec(`INSERT INTO policies (name, description, source_group_id, service_id, target_peer_id, action, priority, enabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+	database.Exec(`INSERT INTO policies (name, description, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, ?, 'group', ?, ?, 'peer', ?, ?, ?)`,
 		"policy1", "test policy 1", 1, 1, 1, "ACCEPT", 100, 1)
-	database.Exec(`INSERT INTO policies (name, description, source_group_id, service_id, target_peer_id, action, priority, enabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+	database.Exec(`INSERT INTO policies (name, description, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, ?, 'group', ?, ?, 'peer', ?, ?, ?)`,
 		"policy2", "test policy 2", 1, 1, 1, "DROP", 200, 0)
 
 	req := httptest.NewRequest("GET", "/api/v1/policies", nil)
@@ -313,9 +313,11 @@ func TestListPolicies(t *testing.T) {
 		ID            int    `json:"id"`
 		Name          string `json:"name"`
 		Description   string `json:"description"`
-		SourceGroupID int    `json:"source_group_id"`
+		SourceID int `json:"source_id"`
+		SourceType string `json:"source_type"`
 		ServiceID     int    `json:"service_id"`
-		TargetPeerID  int    `json:"target_peer_id"`
+		TargetID int `json:"target_id"`
+		TargetType string `json:"target_type"`
 		Action        string `json:"action"`
 		Priority      int    `json:"priority"`
 		Enabled       bool   `json:"enabled"`
@@ -363,7 +365,7 @@ func TestCreatePolicy(t *testing.T) {
 				db.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`,
 					"ssh", "22", "tcp")
 			},
-			body:     `{"name": "new-policy", "description": "test", "source_group_id": 1, "service_id": 1, "target_peer_id": 1, "action": "ACCEPT", "priority": 100, "enabled": true}`,
+			body:     `{"name": "new-policy", "description": "test", "source_id": 1, "source_type": "group", "service_id": 1, "target_id": 1, "target_type": "peer", "action": "ACCEPT", "priority": 100, "enabled": true}`,
 			wantCode: http.StatusCreated,
 			validateResult: func(t *testing.T, r map[string]int64) {
 				if r["id"] == 0 {
@@ -375,7 +377,7 @@ func TestCreatePolicy(t *testing.T) {
 			name:     "missing required fields",
 			body:     `{"name": "test"}`,
 			wantCode: http.StatusBadRequest,
-			wantErr:  "source_group_id",
+			wantErr:  "source_id",
 			setup: func(t *testing.T, db *sql.DB) {
 				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
 					"test-peer", "10.0.0.1", "test-key", false)
@@ -390,7 +392,7 @@ func TestCreatePolicy(t *testing.T) {
 				db.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`,
 					"ssh", "22", "tcp")
 			},
-			body:     `{"name": "default-policy", "source_group_id": 1, "service_id": 1, "target_peer_id": 1}`,
+			body:     `{"name": "default-policy", "source_id": 1, "source_type": "group", "service_id": 1, "target_id": 1, "target_type": "peer"}`,
 			wantCode: http.StatusCreated,
 		},
 		{
@@ -458,7 +460,7 @@ func TestGetPolicy(t *testing.T) {
 	database.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group")
 	database.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`,
 		"ssh", "22", "tcp")
-	database.Exec(`INSERT INTO policies (name, description, source_group_id, service_id, target_peer_id, action, priority, enabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+	database.Exec(`INSERT INTO policies (name, description, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, ?, 'group', ?, ?, 'peer', ?, ?, ?)`,
 		"test-policy", "test description", 1, 1, 1, "ACCEPT", 100, 1)
 
 	tests := []struct {
@@ -515,9 +517,11 @@ func TestGetPolicy(t *testing.T) {
 					ID            int    `json:"id"`
 					Name          string `json:"name"`
 					Description   string `json:"description"`
-					SourceGroupID int    `json:"source_group_id"`
+					SourceID int `json:"source_id"`
+		SourceType string `json:"source_type"`
 					ServiceID     int    `json:"service_id"`
-					TargetPeerID  int    `json:"target_peer_id"`
+					TargetID int `json:"target_id"`
+		TargetType string `json:"target_type"`
 					Action        string `json:"action"`
 					Priority      int    `json:"priority"`
 					Enabled       bool   `json:"enabled"`
@@ -547,7 +551,7 @@ func TestUpdatePolicy(t *testing.T) {
 	database.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group")
 	database.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`,
 		"ssh", "22", "tcp")
-	database.Exec(`INSERT INTO policies (name, source_group_id, service_id, target_peer_id, action, priority, enabled) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+	database.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, 'group', ?, ?, 'peer', ?, ?, ?)`,
 		"test-policy", 1, 1, 1, "ACCEPT", 100, 1)
 
 	tests := []struct {
@@ -612,7 +616,7 @@ func TestDeletePolicy(t *testing.T) {
 	database.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group")
 	database.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`,
 		"ssh", "22", "tcp")
-	database.Exec(`INSERT INTO policies (name, source_group_id, service_id, target_peer_id, action, priority, enabled) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+	database.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, 'group', ?, ?, 'peer', ?, ?, ?)`,
 		"test-policy", 1, 1, 1, "ACCEPT", 100, 1)
 
 	tests := []struct {

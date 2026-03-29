@@ -72,11 +72,11 @@ func TestDeletePeer(t *testing.T) {
 				// Insert service (required for policy)
 				database.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`, "ssh", "22", "tcp")
 				// Insert policy with peer as target_peer_id
-				database.Exec(`INSERT INTO policies (name, source_group_id, service_id, target_peer_id, action, priority, enabled) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+				database.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, "group", ?, ?, "peer", ?, ?, ?)`,
 					"test-policy", 1, 1, 1, "ACCEPT", 100, 1)
 			},
 			wantCode: http.StatusConflict,
-			wantErr:  "Cannot delete peer — it is the target of policy 'test-policy'",
+			wantErr:  "Cannot delete peer — it is explicitly targeted in policy 'test-policy'",
 		},
 		{
 			name:   "delete peer that is in group used by policy",
@@ -94,8 +94,8 @@ func TestDeletePeer(t *testing.T) {
 				// Insert another peer as target_peer_id (peer 1 is in source group)
 				database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
 					"target-peer", "10.0.0.2", "target-key", "target-hmac", 0)
-				// Insert policy using group 1 as source_group_id
-				database.Exec(`INSERT INTO policies (name, source_group_id, service_id, target_peer_id, action, priority, enabled) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+				// Insert policy using group 1 as source_id
+				database.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, "group", ?, ?, "peer", ?, ?, ?)`,
 					"test-policy", 1, 1, 2, "ACCEPT", 100, 1)
 			},
 			wantCode: http.StatusConflict,

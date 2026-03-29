@@ -467,6 +467,56 @@ func migrateSchema(database *sql.DB) error {
 		log.Println("Migration: successfully restructured group_members table")
 	}
 
+	// Migration: Upgrading policies to polymorphic sources and targets
+	var hasPolymorphic bool
+	err = database.QueryRow("SELECT COUNT(*) > 0 FROM pragma_table_info('policies') WHERE name='source_type'").Scan(&hasPolymorphic)
+	if err == nil && !hasPolymorphic {
+		log.Println("Migration: upgrading policies to polymorphic sources and targets")
+		tx, err := database.Begin()
+		if err != nil {
+			return fmt.Errorf("begin polymorphic migration: %w", err)
+		}
+		defer tx.Rollback()
+
+		if _, err := tx.Exec(`CREATE TABLE policies_poly (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT NOT NULL,
+			description TEXT,
+			source_id INTEGER NOT NULL,
+			source_type TEXT NOT NULL,
+			service_id INTEGER NOT NULL,
+			target_id INTEGER NOT NULL,
+			target_type TEXT NOT NULL,
+			action TEXT NOT NULL DEFAULT 'ACCEPT' CHECK(action IN ('ACCEPT', 'DROP', 'LOG_DROP')),
+			priority INTEGER NOT NULL DEFAULT 100,
+			enabled BOOLEAN NOT NULL DEFAULT 1,
+			docker_only BOOLEAN NOT NULL DEFAULT 0,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY(service_id) REFERENCES services(id)
+		)`); err != nil {
+			return fmt.Errorf("create policies_poly: %w", err)
+		}
+
+		if _, err := tx.Exec(`INSERT INTO policies_poly 
+			SELECT id, name, description, source_group_id, 'group', service_id, target_peer_id, 'peer', 
+			action, priority, enabled, docker_only, created_at, updated_at FROM policies`); err != nil {
+			return fmt.Errorf("copy policies: %w", err)
+		}
+
+		if _, err := tx.Exec("DROP TABLE policies"); err != nil {
+			return fmt.Errorf("drop old policies: %w", err)
+		}
+		if _, err := tx.Exec("ALTER TABLE policies_poly RENAME TO policies"); err != nil {
+			return fmt.Errorf("rename policies_poly: %w", err)
+		}
+
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit polymorphic migration: %w", err)
+		}
+		log.Println("Migration: successfully upgraded policies to polymorphic")
+	}
+
 	return nil
 }
 
@@ -503,14 +553,20 @@ func ListGroupMembers(ctx context.Context, database *sql.DB, groupID int) ([]mod
 	return members, rows.Err()
 }
 
-// ListEnabledPolicies fetches enabled policies for a peer, ordered by priority ASC.
+// ListEnabledPolicies fetches enabled policies for a target peer (direct or group member), ordered by priority ASC.
 func ListEnabledPolicies(ctx context.Context, database *sql.DB, peerID int) ([]models.PolicyRow, error) {
+	// A policy applies to a peer if the target is exactly the peer (target_type='peer' AND target_id=peerID)
+	// OR if the target is a group containing the peer (target_type='group' AND target_id IN group_members where peer_id=peerID).
 	rows, err := database.QueryContext(ctx,
-		`SELECT id, name, COALESCE(description, \'\'), source_group_id, service_id, target_peer_id, 
-	action, priority, enabled, docker_only, created_at, updated_at 
-	FROM policies 
-	WHERE target_peer_id = ? AND enabled = 1 
-	ORDER BY priority ASC`, peerID)
+		`SELECT DISTINCT p.id, p.name, COALESCE(p.description, ''), p.source_id, p.source_type, p.service_id, p.target_id, p.target_type, 
+	p.action, p.priority, p.enabled, p.docker_only, p.created_at, p.updated_at 
+	FROM policies p
+	LEFT JOIN group_members gm ON p.target_type = 'group' AND p.target_id = gm.group_id
+	WHERE p.enabled = 1 AND (
+		(p.target_type = 'peer' AND p.target_id = ?) OR
+		(p.target_type = 'group' AND gm.peer_id = ?)
+	)
+	ORDER BY p.priority ASC`, peerID, peerID)
 	if err != nil {
 		return nil, err
 	}
@@ -519,8 +575,8 @@ func ListEnabledPolicies(ctx context.Context, database *sql.DB, peerID int) ([]m
 	var policies []models.PolicyRow
 	for rows.Next() {
 		var p models.PolicyRow
-		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.SourceGroupID, &p.ServiceID,
-			&p.TargetPeerID, &p.Action, &p.Priority, &p.Enabled, &p.DockerOnly, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.SourceID, &p.SourceType, &p.ServiceID,
+			&p.TargetID, &p.TargetType, &p.Action, &p.Priority, &p.Enabled, &p.DockerOnly, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			return nil, err
 		}
 		policies = append(policies, p)
@@ -583,13 +639,13 @@ func SaveBundle(ctx context.Context, database *sql.DB, params models.CreateBundl
 	}, nil
 }
 
-// FindPoliciesByGroupID finds policies by source_group_id.
+// FindPoliciesByGroupID finds policies by source target group id.
 func FindPoliciesByGroupID(ctx context.Context, database *sql.DB, groupID int) ([]models.PolicyRow, error) {
 	rows, err := database.QueryContext(ctx,
-		`SELECT id, name, COALESCE(description, ''), source_group_id, service_id, target_peer_id,
-		action, priority, enabled, created_at, updated_at
+		`SELECT id, name, COALESCE(description, ''), source_id, source_type, service_id, target_id, target_type,
+		action, priority, enabled, docker_only, created_at, updated_at
 		FROM policies
-		WHERE source_group_id = ?`, groupID)
+		WHERE (source_type = 'group' AND source_id = ?) OR (target_type = 'group' AND target_id = ?)`, groupID, groupID)
 	if err != nil {
 		return nil, err
 	}
@@ -598,8 +654,8 @@ func FindPoliciesByGroupID(ctx context.Context, database *sql.DB, groupID int) (
 	var policies []models.PolicyRow
 	for rows.Next() {
 		var p models.PolicyRow
-		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.SourceGroupID, &p.ServiceID,
-			&p.TargetPeerID, &p.Action, &p.Priority, &p.Enabled, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.SourceID, &p.SourceType, &p.ServiceID,
+			&p.TargetID, &p.TargetType, &p.Action, &p.Priority, &p.Enabled, &p.DockerOnly, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			return nil, err
 		}
 		policies = append(policies, p)

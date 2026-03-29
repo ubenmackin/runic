@@ -58,18 +58,18 @@ CREATE TABLE IF NOT EXISTS policies (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
 	name TEXT NOT NULL,
 	description TEXT,
-	source_group_id INTEGER NOT NULL,
+	source_id INTEGER NOT NULL,
+	source_type TEXT NOT NULL,
 	service_id INTEGER NOT NULL,
-	target_peer_id INTEGER NOT NULL,
+	target_id INTEGER NOT NULL,
+	target_type TEXT NOT NULL,
 	action TEXT NOT NULL DEFAULT 'ACCEPT' CHECK(action IN ('ACCEPT', 'DROP', 'LOG_DROP')),
 	priority INTEGER NOT NULL DEFAULT 100,
 	enabled BOOLEAN NOT NULL DEFAULT 1,
 	docker_only BOOLEAN NOT NULL DEFAULT 0,
 	created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 	updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-	FOREIGN KEY(source_group_id) REFERENCES groups(id),
-	FOREIGN KEY(service_id) REFERENCES services(id),
-	FOREIGN KEY(target_peer_id) REFERENCES peers(id)
+	FOREIGN KEY(service_id) REFERENCES services(id)
 );
 
 CREATE TABLE IF NOT EXISTS rule_bundles (

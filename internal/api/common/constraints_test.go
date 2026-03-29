@@ -69,17 +69,17 @@ func setupTestDB(t *testing.T) (*sql.DB, func()) {
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		name TEXT NOT NULL,
 		description TEXT,
-		source_group_id INTEGER NOT NULL,
+		source_id INTEGER NOT NULL,
+		source_type TEXT NOT NULL DEFAULT 'peer',
 		service_id INTEGER NOT NULL,
-		target_peer_id INTEGER NOT NULL,
+		target_id INTEGER NOT NULL,
+		target_type TEXT NOT NULL DEFAULT 'peer',
 		action TEXT NOT NULL DEFAULT 'ACCEPT' CHECK(action IN ('ACCEPT', 'DROP', 'LOG_DROP')),
 		priority INTEGER NOT NULL DEFAULT 100,
 		enabled BOOLEAN NOT NULL DEFAULT 1,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-		FOREIGN KEY(source_group_id) REFERENCES groups(id),
-		FOREIGN KEY(service_id) REFERENCES services(id),
-		FOREIGN KEY(target_peer_id) REFERENCES peers(id)
+		FOREIGN KEY(service_id) REFERENCES services(id)
 	);
 	`
 
@@ -113,12 +113,12 @@ func TestCheckPeerDeleteConstraints(t *testing.T) {
 				// Insert service
 				db.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`, "ssh", "22", "tcp")
 				// Insert policy using peer as target_peer_id
-				db.Exec(`INSERT INTO policies (name, source_group_id, service_id, target_peer_id, action, priority, enabled) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+				db.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, 'group', ?, ?, 'peer', ?, ?, ?)`,
 					"test-policy", 1, 1, 1, "ACCEPT", 100, 1)
 			},
 			peerID:      1,
 			wantErr:     true,
-			wantErrPart: "Cannot delete peer — it is the target of policy 'test-policy'",
+			wantErrPart: "Cannot delete peer — it is explicitly targeted in policy 'test-policy'",
 		},
 		{
 			name: "peer is in a group used as source_group_id",
@@ -136,7 +136,7 @@ func TestCheckPeerDeleteConstraints(t *testing.T) {
 				// Insert service
 				db.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`, "ssh", "22", "tcp")
 				// Insert policy using group as source
-				db.Exec(`INSERT INTO policies (name, source_group_id, service_id, target_peer_id, action, priority, enabled) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+				db.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, 'group', ?, ?, 'peer', ?, ?, ?)`,
 					"group-policy", 1, 1, 2, "ACCEPT", 100, 1)
 			},
 			peerID:      1,
@@ -180,12 +180,12 @@ func TestCheckPeerDeleteConstraints(t *testing.T) {
 				// Insert service
 				db.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`, "ssh", "22", "tcp")
 				// Insert policy using peer as target_peer_id (should be checked first)
-				db.Exec(`INSERT INTO policies (name, source_group_id, service_id, target_peer_id, action, priority, enabled) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+				db.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, 'group', ?, ?, 'peer', ?, ?, ?)`,
 					"target-policy", 1, 1, 1, "ACCEPT", 100, 1)
 			},
 			peerID:      1,
 			wantErr:     true,
-			wantErrPart: "Cannot delete peer — it is the target of policy 'target-policy'",
+			wantErrPart: "Cannot delete peer — it is explicitly targeted in policy 'target-policy'",
 		},
 	}
 
@@ -236,7 +236,7 @@ func TestCheckGroupDeleteConstraints(t *testing.T) {
 				// Insert service
 				db.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`, "ssh", "22", "tcp")
 				// Insert policy using group as source
-				db.Exec(`INSERT INTO policies (name, source_group_id, service_id, target_peer_id, action, priority, enabled) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+				db.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, 'group', ?, ?, 'peer', ?, ?, ?)`,
 					"test-policy", 1, 1, 1, "ACCEPT", 100, 1)
 			},
 			groupID:     1,
@@ -277,9 +277,9 @@ func TestCheckGroupDeleteConstraints(t *testing.T) {
 				// Insert service
 				db.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`, "ssh", "22", "tcp")
 				// Insert multiple policies using the same group
-				db.Exec(`INSERT INTO policies (name, source_group_id, service_id, target_peer_id, action, priority, enabled) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+				db.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, 'group', ?, ?, 'peer', ?, ?, ?)`,
 					"first-policy", 1, 1, 1, "ACCEPT", 100, 1)
-				db.Exec(`INSERT INTO policies (name, source_group_id, service_id, target_peer_id, action, priority, enabled) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+				db.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, 'group', ?, ?, 'peer', ?, ?, ?)`,
 					"second-policy", 1, 1, 1, "DROP", 200, 1)
 			},
 			groupID: 1,

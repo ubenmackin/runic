@@ -22,6 +22,7 @@ import (
 	"runic/internal/api/services"
 	"runic/internal/api/users"
 	"runic/internal/auth"
+	"runic/internal/common/version"
 	"runic/internal/db"
 	"runic/internal/engine"
 	"runic/internal/metrics"
@@ -113,6 +114,7 @@ func RegisterRoutes(r *mux.Router, a *API, downloadsDir string) {
 	protected.HandleFunc("/peers", peers.CreatePeer).Methods("POST")
 	protected.HandleFunc("/peers/{id:[0-9]+}", peers.UpdatePeer).Methods("PUT")
 	protected.HandleFunc("/peers/{id:[0-9]+}", peers.DeletePeer).Methods("DELETE")
+	protected.HandleFunc("/peers/{id:[0-9]+}/bundle", peers.GetPeerBundle).Methods("GET")
 	protected.HandleFunc("/peers/{id:[0-9]+}/compile", peers.MakeCompilePeerHandler(a.Compiler)).Methods("POST")
 
 	// Groups
@@ -190,6 +192,16 @@ func RegisterRoutes(r *mux.Router, a *API, downloadsDir string) {
 			"status":  "ok",
 			"version": "v1",
 			"message": "Runic API",
+		})
+	}).Methods("GET")
+
+	// Version info endpoint
+	r.HandleFunc("/api/v1/info", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"version":  version.Version,
+			"commit":   version.Commit,
+			"built_at": version.BuiltAt,
 		})
 	}).Methods("GET")
 }

@@ -80,16 +80,16 @@ export default function Services() {
   }, [modalOpen])
 
   const openAdd = () => { setFormErrors({}); setPortChips([]); setPortInput(''); setPortInputError(''); handleOpenAdd() }
-  const openEdit = (s) => { 
-    setEditService(s); 
-    setFormForEdit(s); 
-    setFormErrors({}); 
+  const openEdit = (s) => {
+    setEditService(s);
+    setFormForEdit(s);
+    setFormErrors({});
     // Initialize port chips from existing ports
     const ports = s.ports ? s.ports.split(',').map(p => p.trim()).filter(Boolean) : []
     setPortChips(ports)
     setPortInput('')
     setPortInputError('')
-    setModalOpen(true) 
+    setModalOpen(true)
   }
 
   const { data: services, isLoading, refetch } = useQuery({
@@ -231,7 +231,7 @@ export default function Services() {
     // Split by comma and validate each
     const entries = input.split(',').map(e => e.trim()).filter(Boolean)
     const invalidEntries = entries.filter(e => !validatePortEntry(e))
-    
+
     if (invalidEntries.length > 0) {
       setPortInputError(`Invalid port(s): ${invalidEntries.join(', ')}. Only digits, commas, and colons allowed. Port range: 1-65535`)
       return
@@ -322,14 +322,14 @@ export default function Services() {
       </div>
 
       {/* Search Bar */}
-      <div className="relative max-w-md">
-        <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+      <div className="relative flex-1 max-w-md">
+        <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
         <input
           type="text"
           placeholder="Search services by name, protocol, ports, or description..."
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
-          className="w-full pl-9 pr-10 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-dark text-gray-900 dark:text-light-neutral placeholder-gray-400 focus:ring-2 focus:ring-purple-active focus:border-purple-active"
+          className="w-full pl-9 pr-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-dark text-gray-900 dark:text-light-neutral placeholder-gray-400 focus:ring-2 focus:ring-purple-active focus:border-purple-active"
         />
         {searchTerm && (
           <button
@@ -393,64 +393,65 @@ export default function Services() {
                     <td className="px-4 py-3 text-gray-600 dark:text-amber-primary">
                       {protocolLabel(service.protocol)}
                     </td>
-                      <td className="px-4 py-3">
-                        {service.ports ? (
-                          <div className="flex flex-wrap items-center gap-1.5 max-w-xs">
-                            {(() => {
-                              const ports = service.ports.split(',').map(p => p.trim()).filter(Boolean)
-                              const maxVisible = 2
-                              const visiblePorts = ports.slice(0, maxVisible)
-                              const remainingCount = ports.length - maxVisible
+                    <td className="px-4 py-3">
+                      {service.ports ? (
+                        <div className="flex flex-wrap items-center gap-1.5 max-w-xs">
+                          {(() => {
+                            const ports = service.ports.split(',').map(p => p.trim()).filter(Boolean)
+                            const maxVisible = 2
+                            const visiblePorts = ports.slice(0, maxVisible)
+                            const remainingCount = ports.length - maxVisible
 
-                              return (
-                                <>
-                                  {visiblePorts.map((port, idx) => (
-                                    <span
-                                      key={idx}
-                                      className="px-2 py-0.5 text-xs font-medium rounded-full bg-purple-active/20 dark:bg-purple-active text-white whitespace-nowrap"
-                                    >
-                                      {port}
-                                    </span>
-                                  ))}
-                                  {remainingCount > 0 && (
-                                    <span
-                                      className="px-2 py-0.5 text-xs font-medium rounded-full bg-gray-100 dark:bg-charcoal-darkest text-gray-600 dark:text-amber-muted whitespace-nowrap"
-                                      title={ports.slice(maxVisible).join(', ')}
-                                    >
-                                      +{remainingCount}
-                                    </span>
-                                  )}
-                                </>
-                              )
-                            })()}
-                          </div>
-                        ) : (
-                          <span className="text-gray-400">—</span>
-                        )}
-                      </td>
+                            return (
+                              <>
+                                {visiblePorts.map((port, idx) => (
+                                  <span
+                                    key={idx}
+                                    className="px-2 py-0.5 text-xs font-medium rounded-full bg-purple-active/20 dark:bg-purple-active text-white whitespace-nowrap"
+                                  >
+                                    {port}
+                                  </span>
+                                ))}
+                                {remainingCount > 0 && (
+                                  <span
+                                    className="px-2 py-0.5 text-xs font-medium rounded-full bg-gray-100 dark:bg-charcoal-darkest text-gray-600 dark:text-amber-muted whitespace-nowrap"
+                                    title={ports.slice(maxVisible).join(', ')}
+                                  >
+                                    +{remainingCount}
+                                  </span>
+                                )}
+                              </>
+                            )
+                          })()}
+                        </div>
+                      ) : (
+                        <span className="text-gray-400">—</span>
+                      )}
+                    </td>
                     <td className="px-4 py-3 text-gray-600 dark:text-amber-primary">
                       {service.description || '—'}
                     </td>
-<td className="px-4 py-3">
-		<div className="flex items-center gap-2">
-		  <button
-			onClick={(e) => { e.stopPropagation(); openEdit(service) }}
-			className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded"
-			title="Edit"
-		  >
-			<Pencil className="w-4 h-4 text-gray-500" />
-		  </button>
-		  {!service.is_system && (
-			<button
-			  onClick={(e) => { e.stopPropagation(); setDeleteTarget(service) }}
-			  className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded"
-			  title="Delete"
-			>
-			  <Trash2 className="w-4 h-4 text-red-500" />
-			</button>
-		  )}
-		</div>
-	  </td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); openEdit(service) }}
+                          className={`p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded ${service.is_system ? 'text-gray-400 cursor-not-allowed opacity-50' : ''}`}
+                          disabled={service.is_system}
+                          title={service.is_system ? "System services cannot be edited" : "Edit"}
+                        >
+                          <Pencil className="w-4 h-4" />
+                        </button>
+                        {!service.is_system && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); setDeleteTarget(service) }}
+                            className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded"
+                            title="Delete"
+                          >
+                            <Trash2 className="w-4 h-4 text-red-500" />
+                          </button>
+                        )}
+                      </div>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -461,83 +462,91 @@ export default function Services() {
 
       {modalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" tabIndex="-1" onKeyDown={(e) => { if (e.key === 'Escape') { closeModal() } }}>
-          <div ref={modalRef} className="bg-white dark:bg-charcoal-dark rounded-xl shadow-xl w-full max-w-md mx-4">
-<div className="px-6 py-4 border-b border-gray-200 dark:border-gray-border flex items-center justify-between">
-        <h3 className="text-lg font-semibold text-gray-900 dark:text-light-neutral">{editService ? 'Edit Service' : 'New Service'}</h3>
-        <button onClick={closeModal} className="p-1 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded">
-          <X className="w-5 h-5 text-gray-500" />
-        </button>
-      </div>
+          <div
+            ref={modalRef}
+            role="dialog"
+            aria-modal="true"
+            className="bg-white dark:bg-charcoal-dark rounded-xl shadow-xl w-full max-w-lg mx-4"
+            tabIndex="-1"
+          >
+            <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-border flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-light-neutral">{editService ? 'Edit Service' : 'New Service'}</h3>
+              <button onClick={closeModal} className="p-1 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded">
+                <X className="w-5 h-5 text-gray-500" />
+              </button>
+            </div>
             <form onSubmit={handleSubmit} className="p-6 space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Name</label>
                 <input type="text" value={formData.name} onChange={e => setFormData(d => ({ ...d, name: e.target.value }))} required className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white" />
               </div>
-                    <div>
-<label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Protocol</label>
-				<SearchableSelect
-				  options={editService?.is_system ? PROTOCOL_OPTIONS : USER_PROTOCOL_OPTIONS}
-				  value={formData.protocol}
-				  onChange={(val) => setFormData(d => ({ ...d, protocol: val }))}
-				  placeholder="Select protocol..."
-				/>
-                      <p className="text-xs text-gray-500 dark:text-amber-muted mt-1">Allow only specified network protocols.</p>
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Ports</label>
-                      <p className="text-xs text-gray-500 dark:text-amber-muted mb-2">Allow network traffic and access only to specified ports. Select ports or port ranges between 1 and 65535.</p>
-                      
-                      {/* Port chips display */}
-                      {portChips.length > 0 && (
-                        <div className="flex flex-wrap gap-2 mb-2">
-                          {portChips.map((port, idx) => (
-                            <span
-                              key={idx}
-                              className="px-2 py-1 bg-gray-100 dark:bg-charcoal-darkest rounded-md text-sm flex items-center gap-1 text-gray-900 dark:text-white"
-                            >
-                              {port}
-                              <X
-                                className="w-3 h-3 text-gray-500 hover:text-red-500 cursor-pointer"
-                                onClick={() => handleRemovePort(port)}
-                              />
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                      
-                      {/* Port input */}
-                      <div className="flex gap-2">
-                        <input
-                          type="text"
-                          value={portInput}
-                          onChange={e => { setPortInput(e.target.value); setPortInputError('') }}
-                          onKeyDown={handlePortInputKeyDown}
-                          disabled={formData.protocol === 'icmp'}
-                          placeholder={formData.protocol === 'icmp' ? 'N/A for ICMP' : '22 or 80,443 or 8000:9000'}
-                          className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white disabled:opacity-50"
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Protocol</label>
+                <SearchableSelect
+                  options={editService?.is_system ? PROTOCOL_OPTIONS : USER_PROTOCOL_OPTIONS}
+                  value={formData.protocol}
+                  onChange={(val) => setFormData(d => ({ ...d, protocol: val }))}
+                  placeholder="Select protocol..."
+                />
+                <p className="text-xs text-gray-500 dark:text-amber-muted mt-1">Allow only specified network protocols.</p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Ports</label>
+                <p className="text-xs text-gray-500 dark:text-amber-muted mb-2">Allow network traffic and access only to specified ports. Select ports or port ranges between 1 and 65535.</p>
+
+                {/* Port chips display */}
+                {portChips.length > 0 && (
+                  <div className="flex flex-wrap gap-2 mb-2">
+                    {portChips.map((port, idx) => (
+                      <span
+                        key={idx}
+                        className="px-2 py-1 bg-gray-100 dark:bg-charcoal-darkest rounded-md text-sm flex items-center gap-1 text-gray-900 dark:text-white"
+                      >
+                        {port}
+                        <X
+                          className="w-3 h-3 text-gray-500 hover:text-red-500 cursor-pointer"
+                          onClick={() => handleRemovePort(port)}
                         />
-                        <button
-                          type="button"
-                          onClick={handleAddPort}
-                          disabled={formData.protocol === 'icmp'}
-                          className="px-4 py-2 text-sm font-medium text-white bg-purple-active hover:bg-purple-active/80 rounded-lg disabled:opacity-50"
-                        >
-                          Add
-                        </button>
-                      </div>
-                      
-                      {/* Port input error */}
-                      {portInputError && (
-                        <p className="text-xs text-red-500 mt-1">{portInputError}</p>
-                      )}
-                      
-                      {/* Port format hint */}
-                      {formData.protocol !== 'icmp' && (
-                        <p className="text-xs text-gray-500 mt-4">
-                          Single: <code className="bg-gray-100 dark:bg-black dark:text-white px-1 rounded">22</code>, Multiple: <code className="bg-gray-100 dark:bg-black dark:text-white px-1 rounded">80,443</code>, Range: <code className="bg-gray-100 dark:bg-black dark:text-white px-1 rounded">8000:9000</code>
-                        </p>
-                      )}
-                    </div>
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+                {/* Port input */}
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={portInput}
+                    onChange={e => { setPortInput(e.target.value); setPortInputError('') }}
+                    onKeyDown={handlePortInputKeyDown}
+                    disabled={formData.protocol === 'icmp'}
+                    placeholder={formData.protocol === 'icmp' ? 'N/A for ICMP' : '22 or 80,443 or 8000:9000'}
+                    className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white disabled:opacity-50"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleAddPort}
+                    disabled={formData.protocol === 'icmp'}
+                    className="px-4 py-2 text-sm font-medium text-white bg-purple-active hover:bg-purple-active/80 rounded-lg disabled:opacity-50"
+                  >
+                    Add
+                  </button>
+                </div>
+
+                {/* Port input error */}
+                {portInputError && (
+                  <p className="text-xs text-red-500 mt-1">{portInputError}</p>
+                )}
+
+                {/* Port format hint */}
+                {formData.protocol !== 'icmp' && (
+                  <div className="mt-8 mb-2">
+                    <p className="text-xs text-gray-500">
+                      Single: <code className="bg-gray-200 text-gray-800 dark:bg-gray-800 dark:text-gray-200 px-1 rounded">22</code>, Multiple: <code className="bg-gray-200 text-gray-800 dark:bg-gray-800 dark:text-gray-200 px-1 rounded">80,443</code>, Range: <code className="bg-gray-200 text-gray-800 dark:bg-gray-800 dark:text-gray-200 px-1 rounded">8000:9000</code>
+                    </p>
+                  </div>
+                )}
+              </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Description</label>
                 <textarea value={formData.description} onChange={e => setFormData(d => ({ ...d, description: e.target.value }))} rows={2} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white" />

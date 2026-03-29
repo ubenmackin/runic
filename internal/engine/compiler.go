@@ -39,33 +39,52 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 		return "", fmt.Errorf("load peer %d: %w", peerID, err)
 	}
 
-	// 2. Load enabled policies ordered by priority ASC, including docker_only field
+	// 2. Load enabled policies where peer is either target or source, ordered by priority ASC
 	rows, err := c.db.QueryContext(ctx,
-		`SELECT p.id, p.name, p.source_group_id, p.service_id, p.action, p.priority, p.docker_only
+		`SELECT DISTINCT p.id, p.name, p.source_id, p.source_type, p.service_id, p.target_id, p.target_type, p.action, p.priority, p.docker_only,
+		CASE WHEN p.target_type = 'peer' AND p.target_id = ? THEN 1
+		     WHEN p.target_type = 'group' AND EXISTS (SELECT 1 FROM group_members WHERE group_id = p.target_id AND peer_id = ?) THEN 1
+		     ELSE 0 END as is_target,
+		CASE WHEN p.source_type = 'peer' AND p.source_id = ? THEN 1
+		     WHEN p.source_type = 'group' AND EXISTS (SELECT 1 FROM group_members WHERE group_id = p.source_id AND peer_id = ?) THEN 1
+		     ELSE 0 END as is_source
 		FROM policies p
-		WHERE p.target_peer_id = ? AND p.enabled = 1
-		ORDER BY p.priority ASC`, peerID)
+		WHERE p.enabled = 1 AND (
+			(p.target_type = 'peer' AND p.target_id = ?) OR
+			(p.target_type = 'group' AND EXISTS (SELECT 1 FROM group_members WHERE group_id = p.target_id AND peer_id = ?)) OR
+			(p.source_type = 'peer' AND p.source_id = ?) OR
+			(p.source_type = 'group' AND EXISTS (SELECT 1 FROM group_members WHERE group_id = p.source_id AND peer_id = ?))
+		)
+		ORDER BY p.priority ASC`, peerID, peerID, peerID, peerID, peerID, peerID, peerID, peerID)
 	if err != nil {
 		return "", fmt.Errorf("load policies: %w", err)
 	}
 	defer rows.Close()
 
 	type policyInfo struct {
-		ID            int
-		Name          string
-		SourceGroupID int
-		ServiceID     int
-		Action        string
-		Priority      int
-		DockerOnly    bool
+		ID         int
+		Name       string
+		SourceID   int
+		SourceType string
+		ServiceID  int
+		TargetID   int
+		TargetType string
+		Action     string
+		Priority   int
+		DockerOnly bool
+		IsTarget   bool
+		IsSource   bool
 	}
 
 	var policies []policyInfo
 	for rows.Next() {
 		var p policyInfo
-		if err := rows.Scan(&p.ID, &p.Name, &p.SourceGroupID, &p.ServiceID, &p.Action, &p.Priority, &p.DockerOnly); err != nil {
+		var isTargetInt, isSourceInt int
+		if err := rows.Scan(&p.ID, &p.Name, &p.SourceID, &p.SourceType, &p.ServiceID, &p.TargetID, &p.TargetType, &p.Action, &p.Priority, &p.DockerOnly, &isTargetInt, &isSourceInt); err != nil {
 			return "", fmt.Errorf("scan policy: %w", err)
 		}
+		p.IsTarget = isTargetInt == 1
+		p.IsSource = isSourceInt == 1
 		policies = append(policies, p)
 	}
 	if err := rows.Err(); err != nil {
@@ -101,11 +120,6 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 	buf.WriteString("-A OUTPUT -o lo -j ACCEPT\n")
 	buf.WriteString("\n")
 
-	// Standard rules: ICMP
-	buf.WriteString("# --- Standard: ICMP ---\n")
-	buf.WriteString("-A INPUT -p icmp -j ACCEPT\n")
-	buf.WriteString("-A OUTPUT -p icmp -j ACCEPT\n")
-	buf.WriteString("\n")
 
 	// Standard rules: established/related (using conntrack for better compatibility)
 	buf.WriteString("# --- Standard: established/related ---\n")
@@ -128,12 +142,6 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 
 	// Policy rules
 	for _, pol := range policies {
-		// Resolve source group
-		cidrs, err := c.resolver.ResolveGroup(ctx, pol.SourceGroupID, make(map[int]bool))
-		if err != nil {
-			return "", fmt.Errorf("resolve group %d for policy %s: %w", pol.SourceGroupID, pol.Name, err)
-		}
-
 		// Load service
 		var serviceName, ports, protocol string
 		err = c.db.QueryRowContext(ctx,
@@ -143,122 +151,98 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 			return "", fmt.Errorf("load service %d: %w", pol.ServiceID, err)
 		}
 
-		// Load group name for comment
-		var groupName string
-		err = c.db.QueryRowContext(ctx,
-			"SELECT name FROM groups WHERE id = ?", pol.SourceGroupID,
-		).Scan(&groupName)
-		if err != nil {
-			return "", fmt.Errorf("load group %d: %w", pol.SourceGroupID, err)
-		}
-
-		buf.WriteString(fmt.Sprintf("# --- Policy: %s | %s -> %s ---\n", pol.Name, groupName, serviceName))
-
-		// Special handling for Multicast service: use packet type match instead of source IP
-		if serviceName == "Multicast" {
-			switch pol.Action {
-			case "ACCEPT":
-				if !pol.DockerOnly {
-					buf.WriteString("-A INPUT -m pkttype --pkt-type multicast -j ACCEPT\n")
-				}
-				if hasDocker {
-					buf.WriteString("-A DOCKER-USER -m pkttype --pkt-type multicast -j ACCEPT\n")
-				}
-			case "DROP":
-				if !pol.DockerOnly {
-					buf.WriteString("-A INPUT -m pkttype --pkt-type multicast -j DROP\n")
-				}
-				if hasDocker {
-					buf.WriteString("-A DOCKER-USER -m pkttype --pkt-type multicast -j DROP\n")
-				}
-			case "LOG_DROP":
-				if !pol.DockerOnly {
-					buf.WriteString("-A INPUT -m pkttype --pkt-type multicast -j LOG --log-prefix \"[RUNIC-DROP] \" --log-level 4\n")
-					buf.WriteString("-A INPUT -m pkttype --pkt-type multicast -j DROP\n")
-				}
-				if hasDocker {
-					buf.WriteString("-A DOCKER-USER -m pkttype --pkt-type multicast -j LOG --log-prefix \"[RUNIC-DROP] \" --log-level 4\n")
-					buf.WriteString("-A DOCKER-USER -m pkttype --pkt-type multicast -j DROP\n")
-				}
-			}
-			buf.WriteString("\n")
-			continue
-		}
-
 		// Expand ports for non-multicast services
-		portClauses, err := ExpandPorts(ports, protocol)
-		if err != nil {
-			return "", fmt.Errorf("expand ports for policy %s: %w", pol.Name, err)
+		var portClauses []PortClause
+		if serviceName != "Multicast" {
+			portClauses, err = ExpandPorts(ports, protocol)
+			if err != nil {
+				return "", fmt.Errorf("expand ports for policy %s: %w", pol.Name, err)
+			}
 		}
 
-		for _, cidr := range cidrs {
-			for _, pc := range portClauses {
-				// Build port match strings for INPUT (--dport) and OUTPUT (--sport)
-				inputPortMatch := pc.PortMatch
-				outputPortMatch := strings.ReplaceAll(pc.PortMatch, "--dport", "--sport")
-				outputPortMatch = strings.ReplaceAll(outputPortMatch, "--dports", "--sports")
+		buf.WriteString(fmt.Sprintf("# --- Policy: %s ---\n", pol.Name))
 
-				switch pol.Action {
-				case "ACCEPT":
-					// For docker_only=false: apply to both INPUT and DOCKER-USER (if Docker peer)
-					// For docker_only=true: apply only to DOCKER-USER (if Docker peer)
-					if !pol.DockerOnly {
-						if inputPortMatch != "" {
+		// Process as TARGET (Ingress traffic)
+		if pol.IsTarget {
+			buf.WriteString(fmt.Sprintf("# As Target (Ingress from %s %d)\n", pol.SourceType, pol.SourceID))
+			cidrs, err := c.resolver.ResolveEntity(ctx, pol.SourceType, pol.SourceID)
+			if err != nil {
+				return "", fmt.Errorf("resolve source for policy %s: %w", pol.Name, err)
+			}
+			for _, cidr := range cidrs {
+				if serviceName == "Multicast" {
+					c.writeMulticastRule(&buf, pol.Action, pol.DockerOnly, hasDocker)
+					continue
+				}
+				for _, pc := range portClauses {
+					inputPortMatch := pc.PortMatch
+					outputPortMatch := strings.ReplaceAll(pc.PortMatch, "--dport", "--sport")
+					outputPortMatch = strings.ReplaceAll(outputPortMatch, "--dports", "--sports")
+
+					switch pol.Action {
+					case "ACCEPT":
+						if !pol.DockerOnly {
 							buf.WriteString(fmt.Sprintf("-A INPUT -s %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", cidr, pc.Protocol, inputPortMatch))
-						} else {
-							buf.WriteString(fmt.Sprintf("-A INPUT -s %s -p %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", cidr, pc.Protocol))
-						}
-						if outputPortMatch != "" {
 							buf.WriteString(fmt.Sprintf("-A OUTPUT -d %s -p %s %s -m conntrack --ctstate ESTABLISHED -j ACCEPT\n", cidr, pc.Protocol, outputPortMatch))
-						} else {
-							buf.WriteString(fmt.Sprintf("-A OUTPUT -d %s -p %s -m conntrack --ctstate ESTABLISHED -j ACCEPT\n", cidr, pc.Protocol))
 						}
-					}
-					// Apply to DOCKER-USER chain for Docker peers
-					if hasDocker {
-						if inputPortMatch != "" {
+						if hasDocker {
 							buf.WriteString(fmt.Sprintf("-A DOCKER-USER -s %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", cidr, pc.Protocol, inputPortMatch))
-						} else {
-							buf.WriteString(fmt.Sprintf("-A DOCKER-USER -s %s -p %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", cidr, pc.Protocol))
 						}
-					}
-				case "DROP":
-					if !pol.DockerOnly {
-						if inputPortMatch != "" {
+					case "DROP":
+						if !pol.DockerOnly {
 							buf.WriteString(fmt.Sprintf("-A INPUT -s %s -p %s %s -j DROP\n", cidr, pc.Protocol, inputPortMatch))
-						} else {
-							buf.WriteString(fmt.Sprintf("-A INPUT -s %s -p %s -j DROP\n", cidr, pc.Protocol))
 						}
-					}
-					if hasDocker {
-						if inputPortMatch != "" {
+						if hasDocker {
 							buf.WriteString(fmt.Sprintf("-A DOCKER-USER -s %s -p %s %s -j DROP\n", cidr, pc.Protocol, inputPortMatch))
-						} else {
-							buf.WriteString(fmt.Sprintf("-A DOCKER-USER -s %s -p %s -j DROP\n", cidr, pc.Protocol))
 						}
-					}
-				case "LOG_DROP":
-					if !pol.DockerOnly {
-						if inputPortMatch != "" {
+					case "LOG_DROP":
+						if !pol.DockerOnly {
 							buf.WriteString(fmt.Sprintf("-A INPUT -s %s -p %s %s -j LOG --log-prefix \"[RUNIC-DROP] \" --log-level 4\n", cidr, pc.Protocol, inputPortMatch))
 							buf.WriteString(fmt.Sprintf("-A INPUT -s %s -p %s %s -j DROP\n", cidr, pc.Protocol, inputPortMatch))
-						} else {
-							buf.WriteString(fmt.Sprintf("-A INPUT -s %s -p %s -j LOG --log-prefix \"[RUNIC-DROP] \" --log-level 4\n", cidr, pc.Protocol))
-							buf.WriteString(fmt.Sprintf("-A INPUT -s %s -p %s -j DROP\n", cidr, pc.Protocol))
 						}
-					}
-					if hasDocker {
-						if inputPortMatch != "" {
+						if hasDocker {
 							buf.WriteString(fmt.Sprintf("-A DOCKER-USER -s %s -p %s %s -j LOG --log-prefix \"[RUNIC-DROP] \" --log-level 4\n", cidr, pc.Protocol, inputPortMatch))
 							buf.WriteString(fmt.Sprintf("-A DOCKER-USER -s %s -p %s %s -j DROP\n", cidr, pc.Protocol, inputPortMatch))
-						} else {
-							buf.WriteString(fmt.Sprintf("-A DOCKER-USER -s %s -p %s -j LOG --log-prefix \"[RUNIC-DROP] \" --log-level 4\n", cidr, pc.Protocol))
-							buf.WriteString(fmt.Sprintf("-A DOCKER-USER -s %s -p %s -j DROP\n", cidr, pc.Protocol))
 						}
 					}
 				}
 			}
 		}
+
+		// Process as SOURCE (Egress traffic)
+		if pol.IsSource {
+			buf.WriteString(fmt.Sprintf("# As Source (Egress to %s %d)\n", pol.TargetType, pol.TargetID))
+			cidrs, err := c.resolver.ResolveEntity(ctx, pol.TargetType, pol.TargetID)
+			if err != nil {
+				return "", fmt.Errorf("resolve target for policy %s: %w", pol.Name, err)
+			}
+			for _, cidr := range cidrs {
+				if serviceName == "Multicast" {
+					// Source for multicast doesn't need strict port tracking, just let it output to multicast range 224.0.0.0/4
+					if pol.Action == "ACCEPT" {
+						buf.WriteString("-A OUTPUT -d 224.0.0.0/4 -m pkttype --pkt-type multicast -j ACCEPT\n")
+					}
+					continue
+				}
+				for _, pc := range portClauses {
+					outputPortMatch := pc.PortMatch
+					inputPortMatch := strings.ReplaceAll(pc.PortMatch, "--dport", "--sport")
+					inputPortMatch = strings.ReplaceAll(inputPortMatch, "--dports", "--sports")
+
+					switch pol.Action {
+					case "ACCEPT":
+						buf.WriteString(fmt.Sprintf("-A OUTPUT -d %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", cidr, pc.Protocol, outputPortMatch))
+						buf.WriteString(fmt.Sprintf("-A INPUT -s %s -p %s %s -m conntrack --ctstate ESTABLISHED -j ACCEPT\n", cidr, pc.Protocol, inputPortMatch))
+					case "DROP":
+						buf.WriteString(fmt.Sprintf("-A OUTPUT -d %s -p %s %s -j DROP\n", cidr, pc.Protocol, outputPortMatch))
+					case "LOG_DROP":
+						buf.WriteString(fmt.Sprintf("-A OUTPUT -d %s -p %s %s -j LOG --log-prefix \"[RUNIC-DROP] \" --log-level 4\n", cidr, pc.Protocol, outputPortMatch))
+						buf.WriteString(fmt.Sprintf("-A OUTPUT -d %s -p %s %s -j DROP\n", cidr, pc.Protocol, outputPortMatch))
+					}
+				}
+			}
+		}
+		
 		buf.WriteString("\n")
 	}
 
@@ -281,81 +265,135 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 	return buf.String(), nil
 }
 
+// writeMulticastRule generates multicast tracking
+func (c *Compiler) writeMulticastRule(buf *strings.Builder, action string, dockerOnly bool, hasDocker bool) {
+	switch action {
+	case "ACCEPT":
+		if !dockerOnly {
+			buf.WriteString("-A INPUT -m pkttype --pkt-type multicast -j ACCEPT\n")
+		}
+		if hasDocker {
+			buf.WriteString("-A DOCKER-USER -m pkttype --pkt-type multicast -j ACCEPT\n")
+		}
+	case "DROP":
+		if !dockerOnly {
+			buf.WriteString("-A INPUT -m pkttype --pkt-type multicast -j DROP\n")
+		}
+		if hasDocker {
+			buf.WriteString("-A DOCKER-USER -m pkttype --pkt-type multicast -j DROP\n")
+		}
+	case "LOG_DROP":
+		if !dockerOnly {
+			buf.WriteString("-A INPUT -m pkttype --pkt-type multicast -j LOG --log-prefix \"[RUNIC-DROP] \" --log-level 4\n")
+			buf.WriteString("-A INPUT -m pkttype --pkt-type multicast -j DROP\n")
+		}
+		if hasDocker {
+			buf.WriteString("-A DOCKER-USER -m pkttype --pkt-type multicast -j LOG --log-prefix \"[RUNIC-DROP] \" --log-level 4\n")
+			buf.WriteString("-A DOCKER-USER -m pkttype --pkt-type multicast -j DROP\n")
+		}
+	}
+	buf.WriteString("\n")
+}
+
 // PreviewCompile generates a preview of iptables rules for a specific policy without storing them.
 // This is used by the API preview endpoint to show users what rules would be generated.
-func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceGroupID, serviceID int) ([]string, error) {
+func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sourceType string, targetID int, targetType string, serviceID int) ([]string, error) {
 	// Load peer info
 	var hostname, ipAddress string
+	var hasDocker bool
 	err := c.db.QueryRowContext(ctx,
-		"SELECT hostname, ip_address FROM peers WHERE id = ?", peerID,
-	).Scan(&hostname, &ipAddress)
+		"SELECT hostname, ip_address, has_docker FROM peers WHERE id = ?", peerID,
+	).Scan(&hostname, &ipAddress, &hasDocker)
 	if err != nil {
 		return nil, fmt.Errorf("load peer %d: %w", peerID, err)
 	}
 
-	// Resolve source group
-	cidrs, err := c.resolver.ResolveGroup(ctx, sourceGroupID, make(map[int]bool))
-	if err != nil {
-		return nil, fmt.Errorf("resolve group %d: %w", sourceGroupID, err)
+	var buf strings.Builder
+	// Evaluate if peer is source or target in memory
+	isTarget := false
+	isSource := false
+
+	if targetType == "peer" && targetID == peerID {
+		isTarget = true
+	} else if targetType == "group" {
+		isTarget = c.isAdminPeerInGroup(ctx, peerID, targetID)
 	}
 
-	// Load service
+	if sourceType == "peer" && sourceID == peerID {
+		isSource = true
+	} else if sourceType == "group" {
+		isSource = c.isAdminPeerInGroup(ctx, peerID, sourceID)
+	}
+
+	buf.WriteString(fmt.Sprintf("# --- Preview Policy --- (Target=%v, Source=%v)\n", isTarget, isSource))
+
 	var serviceName, ports, protocol string
-	err = c.db.QueryRowContext(ctx,
-		"SELECT name, ports, protocol FROM services WHERE id = ?", serviceID,
-	).Scan(&serviceName, &ports, &protocol)
+	err = c.db.QueryRowContext(ctx, "SELECT name, ports, protocol FROM services WHERE id = ?", serviceID).Scan(&serviceName, &ports, &protocol)
 	if err != nil {
-		return nil, fmt.Errorf("load service %d: %w", serviceID, err)
+		return nil, fmt.Errorf("load service: %w", err)
 	}
 
-	// Load group name for comment
-	var groupName string
-	err = c.db.QueryRowContext(ctx,
-		"SELECT name FROM groups WHERE id = ?", sourceGroupID,
-	).Scan(&groupName)
-	if err != nil {
-		return nil, fmt.Errorf("load group %d: %w", sourceGroupID, err)
+	var portClauses []PortClause
+	if serviceName != "Multicast" {
+		portClauses, err = ExpandPorts(ports, protocol)
+		if err != nil {
+			return nil, fmt.Errorf("expand ports: %w", err)
+		}
 	}
 
-	// Expand ports
-	portClauses, err := ExpandPorts(ports, protocol)
-	if err != nil {
-		return nil, fmt.Errorf("expand ports for service %d: %w", serviceID, err)
-	}
-
-	// Generate rules
-	var rules []string
-
-	// Special handling for Multicast service
-	if serviceName == "Multicast" {
-		rules = append(rules, "-A INPUT -m pkttype --pkt-type multicast -j ACCEPT")
-		return rules, nil
-	}
-
-	for _, cidr := range cidrs {
-		for _, pc := range portClauses {
-			// Build port match strings for INPUT (--dport) and OUTPUT (--sport)
-			inputPortMatch := pc.PortMatch
-			outputPortMatch := strings.ReplaceAll(pc.PortMatch, "--dport", "--sport")
-			outputPortMatch = strings.ReplaceAll(outputPortMatch, "--dports", "--sports")
-
-			// Generate INPUT rule
-			if inputPortMatch != "" {
-				rules = append(rules, fmt.Sprintf("-A INPUT -s %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT", cidr, pc.Protocol, inputPortMatch))
-			} else {
-				rules = append(rules, fmt.Sprintf("-A INPUT -s %s -p %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT", cidr, pc.Protocol))
-			}
-
-			// Generate OUTPUT rule
-			if outputPortMatch != "" {
-				rules = append(rules, fmt.Sprintf("-A OUTPUT -d %s -p %s %s -m conntrack --ctstate ESTABLISHED -j ACCEPT", cidr, pc.Protocol, outputPortMatch))
-			} else {
-				rules = append(rules, fmt.Sprintf("-A OUTPUT -d %s -p %s -m conntrack --ctstate ESTABLISHED -j ACCEPT", cidr, pc.Protocol))
+	if isTarget {
+		cidrs, err := c.resolver.ResolveEntity(ctx, sourceType, sourceID)
+		if err == nil {
+			for _, cidr := range cidrs {
+				if serviceName == "Multicast" {
+					c.writeMulticastRule(&buf, "ACCEPT", false, hasDocker)
+					continue
+				}
+				for _, pc := range portClauses {
+					inputPortMatch := pc.PortMatch
+					outputPortMatch := strings.ReplaceAll(pc.PortMatch, "--dport", "--sport")
+					outputPortMatch = strings.ReplaceAll(outputPortMatch, "--dports", "--sports")
+					buf.WriteString(fmt.Sprintf("-A INPUT -s %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", cidr, pc.Protocol, inputPortMatch))
+					buf.WriteString(fmt.Sprintf("-A OUTPUT -d %s -p %s %s -m conntrack --ctstate ESTABLISHED -j ACCEPT\n", cidr, pc.Protocol, outputPortMatch))
+				}
 			}
 		}
 	}
 
-	return rules, nil
+	if isSource {
+		cidrs, err := c.resolver.ResolveEntity(ctx, targetType, targetID)
+		if err == nil {
+			for _, cidr := range cidrs {
+				if serviceName == "Multicast" {
+					buf.WriteString("-A OUTPUT -d 224.0.0.0/4 -m pkttype --pkt-type multicast -j ACCEPT\n")
+					continue
+				}
+				for _, pc := range portClauses {
+					outputPortMatch := pc.PortMatch
+					inputPortMatch := strings.ReplaceAll(pc.PortMatch, "--dport", "--sport")
+					inputPortMatch = strings.ReplaceAll(inputPortMatch, "--dports", "--sports")
+					buf.WriteString(fmt.Sprintf("-A OUTPUT -d %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", cidr, pc.Protocol, outputPortMatch))
+					buf.WriteString(fmt.Sprintf("-A INPUT -s %s -p %s %s -m conntrack --ctstate ESTABLISHED -j ACCEPT\n", cidr, pc.Protocol, inputPortMatch))
+				}
+			}
+		}
+	}
+
+	rules := strings.Split(buf.String(), "\n")
+	var finalRules []string
+	for _, line := range rules {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			finalRules = append(finalRules, line)
+		}
+	}
+	return finalRules, nil
+}
+
+func (c *Compiler) isAdminPeerInGroup(ctx context.Context, peerID, groupID int) bool {
+	var count int
+	c.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM group_members WHERE group_id = ? AND peer_id = ?", groupID, peerID).Scan(&count)
+	return count > 0
 }
 
 // CompileAndStore compiles the rules for a peer, signs them, and stores the bundle.
@@ -387,28 +425,81 @@ func (c *Compiler) CompileAndStore(ctx context.Context, peerID int) (models.Rule
 // RecompileAffectedPeers finds all peers affected by a group change and recompiles their bundles.
 func (c *Compiler) RecompileAffectedPeers(ctx context.Context, groupID int) error {
 	rows, err := c.db.QueryContext(ctx,
-		`SELECT DISTINCT target_peer_id FROM policies WHERE source_group_id = ? AND enabled = 1`, groupID)
+		`SELECT DISTINCT id FROM policies WHERE (source_type = 'group' AND source_id = ?) OR (target_type = 'group' AND target_id = ?) AND enabled = 1`, groupID, groupID)
 	if err != nil {
-		return fmt.Errorf("find affected peers: %w", err)
+		return fmt.Errorf("find affected policies: %w", err)
 	}
 	defer rows.Close()
 
-	var peerIDs []int
+	var policyIDs []int
 	for rows.Next() {
-		var pid int
-		if err := rows.Scan(&pid); err != nil {
+		var id int
+		if err := rows.Scan(&id); err != nil {
 			return err
 		}
-		peerIDs = append(peerIDs, pid)
+		policyIDs = append(policyIDs, id)
 	}
 	if err := rows.Err(); err != nil {
 		return err
 	}
 
-	for _, pid := range peerIDs {
-		if _, err := c.CompileAndStore(ctx, pid); err != nil {
-			return fmt.Errorf("recompile peer %d: %w", pid, err)
+	peerSet := make(map[int]bool)
+	for _, pid := range policyIDs {
+		affected, _ := c.GetAffectedPeersByPolicy(ctx, pid)
+		for _, peerID := range affected {
+			peerSet[peerID] = true
+		}
+	}
+
+	for peerID := range peerSet {
+		if _, err := c.CompileAndStore(ctx, peerID); err != nil {
+			return fmt.Errorf("recompile peer %d: %w", peerID, err)
 		}
 	}
 	return nil
+}
+
+// GetAffectedPeersByPolicy returns all peer IDs that need recompilation if a policy changes.
+// It finds any peer present in either the source or target of the policy.
+func (c *Compiler) GetAffectedPeersByPolicy(ctx context.Context, policyID int) ([]int, error) {
+	var srcType, tgtType string
+	var srcID, tgtID int
+	if err := c.db.QueryRowContext(ctx, "SELECT source_type, source_id, target_type, target_id FROM policies WHERE id = ?", policyID).Scan(&srcType, &srcID, &tgtType, &tgtID); err != nil {
+		return nil, fmt.Errorf("get policy abstract: %w", err)
+	}
+
+	peers := make(map[int]bool)
+	if srcType == "peer" {
+		peers[srcID] = true
+	} else if srcType == "group" {
+		rows, _ := c.db.QueryContext(ctx, "SELECT peer_id FROM group_members WHERE group_id = ?", srcID)
+		if rows != nil {
+			defer rows.Close()
+			for rows.Next() {
+				var p int
+				rows.Scan(&p)
+				peers[p] = true
+			}
+		}
+	}
+
+	if tgtType == "peer" {
+		peers[tgtID] = true
+	} else if tgtType == "group" {
+		rows, _ := c.db.QueryContext(ctx, "SELECT peer_id FROM group_members WHERE group_id = ?", tgtID)
+		if rows != nil {
+			defer rows.Close()
+			for rows.Next() {
+				var p int
+				rows.Scan(&p)
+				peers[p] = true
+			}
+		}
+	}
+
+	var peerList []int
+	for id := range peers {
+		peerList = append(peerList, id)
+	}
+	return peerList, nil
 }

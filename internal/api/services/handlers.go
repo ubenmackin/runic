@@ -156,6 +156,11 @@ func UpdateService(w http.ResponseWriter, r *http.Request) {
 		common.RespondError(w, http.StatusNotFound, "service not found")
 		return
 	}
+	
+	if isSystem {
+		common.RespondError(w, http.StatusForbidden, "Cannot edit system service")
+		return
+	}
 
 	var input struct {
 		Name          string `json:"name"`

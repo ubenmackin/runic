@@ -4,7 +4,9 @@ import {
   LayoutDashboard, Server, Users as UsersIcon, Briefcase, Shield, FileText,
   Menu, X, LogOut, Moon, Sun, Key, Settings, User, ChevronDown, ChevronRight, Flame
 } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
 import { useAuthStore } from '../store'
+import { getVersion } from '../api/client'
 
 const NavItem = React.memo(({ to, icon: Icon, label, onClick, isChild = false }) => (
   <NavLink
@@ -50,10 +52,17 @@ export default function Layout() {
     localStorage.getItem('theme') === 'dark' ||
     (!localStorage.getItem('theme') && window.matchMedia('(prefers-color-scheme: dark)').matches)
   )
-const [expandedItems, setExpandedItems] = useState({})
-const logout = useAuthStore(s => s.logout)
-const username = useAuthStore(s => s.username)
-const navigate = useNavigate()
+  const [expandedItems, setExpandedItems] = useState({})
+  const logout = useAuthStore(s => s.logout)
+  const username = useAuthStore(s => s.username)
+  const navigate = useNavigate()
+
+  // Fetch version info
+  const { data: versionInfo } = useQuery({
+    queryKey: ['version'],
+    queryFn: getVersion,
+    staleTime: Infinity, // Version doesn't change during session
+  })
 
   // Apply dark class on mount and when darkMode changes
   useEffect(() => {
@@ -195,11 +204,18 @@ className={`w-full flex items-center justify-between gap-3 px-4 py-3 rounded-lg 
           </div>
         </header>
 
-        {/* Page content */}
-        <main className="flex-1 p-4 md:p-6 overflow-auto">
-          <Outlet />
-        </main>
+          {/* Page content */}
+          <main className="flex-1 p-4 md:p-6 overflow-auto">
+            <Outlet />
+          </main>
+
+          {/* Footer */}
+          <footer className="h-10 bg-white dark:bg-charcoal-dark border-t border-gray-200 dark:border-gray-border flex items-center justify-center">
+            <p className="text-gray-400 dark:text-gray-500 text-sm">
+              Runic {versionInfo?.version || '...'}
+            </p>
+          </footer>
+        </div>
       </div>
-    </div>
   )
 }

@@ -31,7 +31,13 @@ func ListGroups(w http.ResponseWriter, r *http.Request) {
 	COALESCE(p.peer_count, 0), COALESCE(pol.policy_count, 0)
 	FROM groups g
 	LEFT JOIN (SELECT group_id, COUNT(*) as peer_count FROM group_members GROUP BY group_id) p ON g.id = p.group_id
-	LEFT JOIN (SELECT source_group_id, COUNT(*) as policy_count FROM policies GROUP BY source_group_id) pol ON g.id = pol.source_group_id
+	LEFT JOIN (
+		SELECT group_id, SUM(count) as policy_count FROM (
+			SELECT source_id as group_id, COUNT(*) as count FROM policies WHERE source_type='group' GROUP BY source_id
+			UNION ALL
+			SELECT target_id as group_id, COUNT(*) as count FROM policies WHERE target_type='group' GROUP BY target_id
+		) GROUP BY group_id
+	) pol ON g.id = pol.group_id
 	ORDER BY g.name ASC`
 
 	rows, err := db.DB.QueryContext(r.Context(), query)

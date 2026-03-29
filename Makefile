@@ -14,12 +14,19 @@ AGENT_DIR=./cmd/runic-agent
 GREEN=\033[0;32m
 NC=\033[0m # No Color
 
+# Version information (injected at build time)
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+BUILT_AT ?= $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+LD_FLAGS = -ldflags="-X runic/internal/common/version.Version=$(VERSION) -X runic/internal/common/version.Commit=$(COMMIT) -X runic/internal/common/version.BuiltAt=$(BUILT_AT)"
+
 all: web-build build
 
 # Development mode with live reload
 dev:
 	@echo "$(GREEN)Starting development server...$(NC)"
-	@go run . & 
+	@go run . &
 	@cd web && npm run dev
 
 # Build server with CGO for SQLite
@@ -28,7 +35,7 @@ build: $(BINARY_SERVER)
 $(BINARY_SERVER):
 	@mkdir -p dist
 	@echo "$(GREEN)Building runic-server (CGO enabled)...$(NC)"
-	CGO_ENABLED=1 $(GOBUILD) -o $(BINARY_SERVER) .
+	CGO_ENABLED=1 $(GOBUILD) $(LD_FLAGS) -o $(BINARY_SERVER) .
 
 # Build agent binaries for all platforms
 agents: agents-linux-amd64 agents-linux-arm64 agents-linux-arm
@@ -89,14 +96,14 @@ lint:
 help:
 	@echo "Runic Firewall Management System - Build Targets"
 	@echo ""
-	@echo "  make all          - Build everything (web + server)"
-	@echo "  make dev          - Start development server with live reload"
-	@echo "  make build        - Build server binary (CGO enabled)"
-	@echo "  make web-build    - Build web frontend only"
-	@echo "  make agents       - Build agent binaries for all platforms"
-	@echo "  make test         - Run tests"
-	@echo "  make clean        - Clean build artifacts"
-	@echo "  make install-deps - Install all dependencies"
-	@echo "  make fmt          - Format Go code"
-	@echo "  make lint         - Run linter"
+	@echo " make all - Build everything (web + server)"
+	@echo " make dev - Start development server with live reload"
+	@echo " make build - Build server binary (CGO enabled)"
+	@echo " make web-build - Build web frontend only"
+	@echo " make agents - Build agent binaries for all platforms"
+	@echo " make test - Run tests"
+	@echo " make clean - Clean build artifacts"
+	@echo " make install-deps - Install all dependencies"
+	@echo " make fmt - Format Go code"
+	@echo " make lint - Run linter"
 	@echo ""

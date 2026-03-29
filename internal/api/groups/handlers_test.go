@@ -72,7 +72,7 @@ func TestListGroups(t *testing.T) {
 
 	// Create a service and policy to test policy_count
 	database.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`, "ssh", "22", "tcp")
-	database.Exec(`INSERT INTO policies (name, source_group_id, service_id, target_peer_id, action, priority, enabled) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+	database.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, "group", ?, ?, "peer", ?, ?, ?)`,
 		"ssh-policy", 1, 1, 1, "ACCEPT", 100, 1)
 
 	tests := []struct {
@@ -266,7 +266,7 @@ func TestDeleteGroup_UsedByPolicy(t *testing.T) {
 	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)`,
 		"web-01", "10.0.0.1", "key1", "hmac1")
 	database.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`, "http", "80", "tcp")
-	database.Exec(`INSERT INTO policies (name, source_group_id, service_id, target_peer_id, action, priority, enabled) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+	database.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, "group", ?, ?, "peer", ?, ?, ?)`,
 		"allow-http", 1, 1, 1, "ACCEPT", 100, 1)
 
 	req := httptest.NewRequest("DELETE", "/api/v1/groups/1", nil)

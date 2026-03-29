@@ -114,3 +114,5 @@ export const QUERY_KEYS = {
   dashboardInitial: () => ['dashboard-initial'],
   blockedLogs24h: () => ['blocked-logs-24h'],
 }
+
+export const getVersion = () => api.get('/info')

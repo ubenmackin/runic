@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from 'react'
+import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
 import { useTableSort } from '../hooks/useTableSort'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Plus, Pencil, Trash2, Eye, RefreshCw, ArrowUp, ArrowDown, ArrowUpDown, X, ChevronDown, ChevronUp, Info, Search } from 'lucide-react'
@@ -15,9 +15,21 @@ import TableSkeleton from '../components/TableSkeleton'
 export default function Policies() {
   const qc = useQueryClient()
   const showToast = useToastContext()
-  const { modalOpen, setModalOpen, editItem: editPolicy, setEditItem: setEditPolicy, form: formData, setForm: setFormData, setFormForEdit, handleOpenAdd, handleCancel } = useCrudModal({ name: '', description: '', source_group_id: '', service_id: '', target_peer_id: '', action: 'accept', priority: 100, enabled: true, docker_only: false })
+  const { modalOpen, setModalOpen, editItem: editPolicy, setEditItem: setEditPolicy, form: formData, setForm: setFormData, setFormForEdit, handleOpenAdd, handleCancel } = useCrudModal({ 
+    name: '', 
+    description: '', 
+    source_id: '', 
+    source_type: 'group', 
+    service_id: '', 
+    target_id: '', 
+    target_type: 'peer', 
+    action: 'ACCEPT', 
+    priority: 100, 
+    enabled: true, 
+    docker_only: false 
+  })
   const [deleteTarget, setDeleteTarget] = useState(null)
-  const [filterServer, setFilterServer] = useState(null)
+  const [filterPeer, setFilterPeer] = useState(null)
   const [showDisabled, setShowDisabled] = useState(false)
   const [preview, setPreview] = useState(null)
   const [previewLoading, setPreviewLoading] = useState(false)
@@ -32,8 +44,49 @@ export default function Policies() {
 
   // Manual refresh state
   const [isManualRefreshing, setIsManualRefreshing] = useState(false)
+
+  // Modal ref for focus trap
+  const modalRef = useRef(null)
+
+  // Focus trap for modal accessibility
+  useEffect(() => {
+    if (!modalOpen) return
+    const modal = modalRef.current
+    if (!modal) return
+
+    const focusableElements = modal.querySelectorAll(
+      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+    )
+    const firstElement = focusableElements[0]
+    const lastElement = focusableElements[focusableElements.length - 1]
+
+    // Focus first element on open
+    firstElement?.focus()
+
+    const handleKeyDown = (e) => {
+      if (e.key === 'Tab') {
+        if (e.shiftKey && document.activeElement === firstElement) {
+          e.preventDefault()
+          lastElement?.focus()
+        } else if (!e.shiftKey && document.activeElement === lastElement) {
+          e.preventDefault()
+          firstElement?.focus()
+        }
+      }
+    }
+
+    modal.addEventListener('keydown', handleKeyDown)
+    return () => modal.removeEventListener('keydown', handleKeyDown)
+  }, [modalOpen])
+
   const openAdd = () => { setFormErrors({}); setPreview(null); handleOpenAdd() }
-  const openEdit = (p) => { setEditPolicy(p); setFormForEdit(p); setFormErrors({}); setPreview(null); setModalOpen(true) }
+  const openEdit = (p) => { 
+    setEditPolicy(p); 
+    setFormForEdit(p); 
+    setFormErrors({}); 
+    setPreview(null); 
+    setModalOpen(true) 
+  }
   const closeModal = () => { handleCancel(); setPreview(null) }
 
   const { data: policies, isLoading, refetch } = useQuery({
@@ -63,12 +116,15 @@ export default function Policies() {
     queryFn: () => api.get('/services'),
   })
 
-  const serverOptions = (peers || []).map(s => ({ value: s.id, label: s.hostname }))
-  const groupOptions = (groups || []).map(g => ({ value: g.id, label: g.name }))
+  const polymorphicOptions = [
+    ...(groups || []).map(g => ({ value: g.id, label: g.name, category: 'group' })),
+    ...(peers || []).map(p => ({ value: p.id, label: p.hostname, category: 'peer' }))
+  ]
+
   const serviceOptions = (services || []).map(s => ({ value: s.id, label: s.name }))
 
   // Check if the selected target peer has Docker
-  const selectedPeerHasDocker = formData.target_peer_id && peers?.find(p => p.id === formData.target_peer_id)?.has_docker
+  const selectedPeerHasDocker = formData.target_type === 'peer' && formData.target_id && peers?.find(p => p.id === formData.target_id)?.has_docker
 
   const createMutation = useMutation({
     mutationFn: (data) => api.post('/policies', data),
@@ -124,13 +180,19 @@ export default function Policies() {
   }
 
   const fetchPreview = async () => {
-if (!formData.source_group_id || !formData.service_id || !formData.target_peer_id) {
-    setFormErrors({ _general: 'Select source group, service, and target peer to preview' })
+    if (!formData.source_id || !formData.service_id || !formData.target_id) {
+      setFormErrors({ _general: 'Select source, service, and target to preview' })
       return
     }
     setPreviewLoading(true)
     try {
-      const data = await api.post('/policies/preview', { source_group_id: formData.source_group_id, service_id: formData.service_id, target_peer_id: formData.target_peer_id })
+      const data = await api.post('/policies/preview', { 
+        source_id: formData.source_id, 
+        source_type: formData.source_type,
+        service_id: formData.service_id, 
+        target_id: formData.target_id,
+        target_type: formData.target_type
+      })
       setPreview(data)
       setFormErrors({})
     } catch (err) {
@@ -140,8 +202,11 @@ if (!formData.source_group_id || !formData.service_id || !formData.target_peer_i
     }
   }
 
-  const getServerHostname = (id) => peers?.find(s => s.id === id)?.hostname || id
-  const getGroupName = (id) => groups?.find(g => g.id === id)?.name || id
+  const getEntityName = (type, id) => {
+    if (type === 'peer') return peers?.find(p => p.id === id)?.hostname || id
+    if (type === 'group') return groups?.find(g => g.id === id)?.name || id
+    return id
+  }
   const getServiceName = (id) => services?.find(s => s.id === id)?.name || id
 
   // Sort indicator component
@@ -158,10 +223,10 @@ if (!formData.source_group_id || !formData.service_id || !formData.target_peer_i
   const processedPolicies = useMemo(() => {
     if (!policies) return []
 
-    // Filter by enabled toggle and server filter
+    // Filter by enabled toggle and peer filter
     let filtered = policies.filter(p => {
       if (!showDisabled && !p.enabled) return false
-      if (filterServer && p.target_peer_id !== filterServer) return false
+      if (filterPeer && (p.target_type !== 'peer' || p.target_id !== filterPeer)) return false
       return true
     })
 
@@ -170,10 +235,10 @@ if (!formData.source_group_id || !formData.service_id || !formData.target_peer_i
       const term = searchTerm.toLowerCase()
       filtered = filtered.filter(p => {
         const name = (p.name || '').toLowerCase()
-        const sourceGroup = getGroupName(p.source_group_id).toLowerCase()
+        const source = getEntityName(p.source_type, p.source_id).toLowerCase()
         const service = getServiceName(p.service_id).toLowerCase()
-        const targetPeer = getServerHostname(p.target_peer_id).toLowerCase()
-        return name.includes(term) || sourceGroup.includes(term) || service.includes(term) || targetPeer.includes(term)
+        const target = getEntityName(p.target_type, p.target_id).toLowerCase()
+        return name.includes(term) || source.includes(term) || service.includes(term) || target.includes(term)
       })
     }
 
@@ -189,17 +254,17 @@ if (!formData.source_group_id || !formData.service_id || !formData.target_peer_i
           aVal = a.priority || 0
           bVal = b.priority || 0
           break
-        case 'source_group_id':
-          aVal = getGroupName(a.source_group_id).toLowerCase()
-          bVal = getGroupName(b.source_group_id).toLowerCase()
+        case 'source':
+          aVal = getEntityName(a.source_type, a.source_id).toLowerCase()
+          bVal = getEntityName(b.source_type, b.source_id).toLowerCase()
           break
-        case 'service_id':
+        case 'service':
           aVal = getServiceName(a.service_id).toLowerCase()
           bVal = getServiceName(b.service_id).toLowerCase()
           break
-        case 'target_peer_id':
-          aVal = getServerHostname(a.target_peer_id).toLowerCase()
-          bVal = getServerHostname(b.target_peer_id).toLowerCase()
+        case 'target':
+          aVal = getEntityName(a.target_type, a.target_id).toLowerCase()
+          bVal = getEntityName(b.target_type, b.target_id).toLowerCase()
           break
         default:
           return 0
@@ -209,7 +274,7 @@ if (!formData.source_group_id || !formData.service_id || !formData.target_peer_i
       return 0
     })
     return sorted
-  }, [policies, showDisabled, filterServer, searchTerm, sortConfig, getGroupName, getServiceName, getServerHostname])
+  }, [policies, showDisabled, filterPeer, searchTerm, sortConfig, getEntityName, getServiceName])
 
   if (isLoading) return <TableSkeleton rows={3} columns={7} />
 
@@ -270,20 +335,6 @@ if (!formData.source_group_id || !formData.service_id || !formData.target_peer_i
             <span className="text-gray-600 dark:text-amber-muted ml-1">Packets with invalid state are dropped.</span>
           </div>
         </div>
-        <div className="flex items-start gap-2">
-          <span className="text-blue-500 mt-0.5">◉</span>
-          <div>
-            <span className="font-medium text-gray-700 dark:text-amber-primary">ICMP:</span>
-            <span className="text-gray-600 dark:text-amber-muted ml-1">ICMP ping requests are accepted for connectivity testing.</span>
-          </div>
-        </div>
-        <div className="flex items-start gap-2">
-          <span className="text-purple-500 mt-0.5">◉</span>
-          <div>
-            <span className="font-medium text-gray-700 dark:text-amber-primary">Multicast:</span>
-            <span className="text-gray-600 dark:text-amber-muted ml-1">Multicast traffic is accepted for service discovery.</span>
-          </div>
-        </div>
       </div>
     </div>
   )}
@@ -305,12 +356,12 @@ if (!formData.source_group_id || !formData.service_id || !formData.target_peer_i
         onClick={() => setSearchTerm('')}
         className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-light-neutral"
       >
-        ×
+        <X className="w-4 h-4" />
       </button>
     )}
   </div>
   <div className="w-48">
-    <SearchableSelect options={[{ value: '', label: 'All Peers' }, ...serverOptions]} value={filterServer || ''} onChange={v => setFilterServer(v || null)} placeholder="Filter by peer" />
+    <SearchableSelect options={[{ value: '', label: 'All Peers', category: 'peer' }, ...polymorphicOptions.filter(o => o.category === 'peer')]} value={filterPeer || ''} onChange={v => setFilterPeer(v || null)} placeholder="Filter by peer" />
   </div>
   <label className="flex items-center gap-2 cursor-pointer">
     <ToggleSwitch checked={showDisabled} onChange={setShowDisabled} />
@@ -349,21 +400,21 @@ if (!formData.source_group_id || !formData.service_id || !formData.target_peer_i
                   </th>
                   <th
                     className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted cursor-pointer hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none"
-                    onClick={() => handleSort('source_group_id')}
+                    onClick={() => handleSort('source')}
                   >
-                    Source <SortIndicator columnKey="source_group_id" />
+                    Source <SortIndicator columnKey="source" />
                   </th>
                   <th
                     className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted cursor-pointer hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none"
-                    onClick={() => handleSort('service_id')}
+                    onClick={() => handleSort('service')}
                   >
-                    Service <SortIndicator columnKey="service_id" />
+                    Service <SortIndicator columnKey="service" />
                   </th>
                   <th
                     className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted cursor-pointer hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none"
-                    onClick={() => handleSort('target_peer_id')}
+                    onClick={() => handleSort('target')}
                   >
-                    Target <SortIndicator columnKey="target_peer_id" />
+                    Target <SortIndicator columnKey="target" />
                   </th>
                   <th className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted">
                     Action
@@ -386,13 +437,13 @@ if (!formData.source_group_id || !formData.service_id || !formData.target_peer_i
                       {p.priority}
                     </td>
                     <td className="px-4 py-3 text-gray-600 dark:text-amber-primary">
-                      {getGroupName(p.source_group_id)}
+                      {getEntityName(p.source_type, p.source_id)}
                     </td>
                     <td className="px-4 py-3 text-gray-600 dark:text-amber-primary">
                       {getServiceName(p.service_id)}
                     </td>
                     <td className="px-4 py-3 text-gray-600 dark:text-amber-primary">
-                      {getServerHostname(p.target_peer_id)}
+                      {getEntityName(p.target_type, p.target_id)}
                     </td>
                     <td className="px-4 py-3">
                       <span className={`px-2 py-0.5 rounded text-xs font-medium ${p.action === 'accept' ? 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300' : 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300'}`}>
@@ -418,85 +469,89 @@ if (!formData.source_group_id || !formData.service_id || !formData.target_peer_i
       )}
 
       {modalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-xl w-full max-w-2xl mx-4 max-h-[90vh] overflow-y-auto">
-            <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-border">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" tabIndex="-1" onKeyDown={(e) => { if (e.key === 'Escape') { closeModal() } }}>
+          <div ref={modalRef} className="bg-white dark:bg-charcoal-dark rounded-xl shadow-xl w-full max-w-2xl mx-4 max-h-[90vh] overflow-y-auto">
+            <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-border flex items-center justify-between">
               <h3 className="text-lg font-semibold text-gray-900 dark:text-light-neutral">{editPolicy ? 'Edit Policy' : 'New Policy'}</h3>
+              <button type="button" onClick={closeModal} className="p-1 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded">
+                <X className="w-5 h-5 text-gray-400" />
+              </button>
             </div>
             <form onSubmit={handleSubmit} className="p-6 space-y-4">
               <div className="grid grid-cols-2 gap-4">
-                <div>
-<label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Name</label>
-<input type="text" value={formData.name} onChange={e => setFormData(d => ({ ...d, name: e.target.value }))} required className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white" />
+                <div className="col-span-2 sm:col-span-1">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Name</label>
+                  <input autoFocus type="text" value={formData.name} onChange={e => setFormData(d => ({ ...d, name: e.target.value }))} required className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-active" />
                 </div>
-                <div>
-<label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Priority</label>
-<input type="number" value={formData.priority} onChange={e => setFormData(d => ({ ...d, priority: parseInt(e.target.value) || 100 }))} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white" />
+                <div className="col-span-2 sm:col-span-1">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Priority</label>
+                  <input type="number" value={formData.priority} onChange={e => setFormData(d => ({ ...d, priority: parseInt(e.target.value) || 100 }))} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-active" />
                 </div>
               </div>
               <div>
-<label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Description</label>
-<textarea value={formData.description} onChange={e => setFormData(d => ({ ...d, description: e.target.value }))} rows={2} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white" />
+                <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Description</label>
+                <textarea value={formData.description} onChange={e => setFormData(d => ({ ...d, description: e.target.value }))} rows={2} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-active" />
               </div>
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Source Group</label>
-                  <SearchableSelect options={groupOptions} value={formData.source_group_id} onChange={v => setFormData(d => ({ ...d, source_group_id: v }))} placeholder="Select group" />
+                  <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Source</label>
+                  <SearchableSelect options={polymorphicOptions} value={formData.source_id} onChange={(v, type) => setFormData(d => ({ ...d, source_id: v, source_type: type }))} placeholder="Select group or peer" />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Service</label>
                   <SearchableSelect options={serviceOptions} value={formData.service_id} onChange={v => setFormData(d => ({ ...d, service_id: v }))} placeholder="Select service" />
                 </div>
                 <div>
-<label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Target Peer</label>
-              <SearchableSelect options={serverOptions} value={formData.target_peer_id} onChange={v => setFormData(d => ({ ...d, target_peer_id: v }))} placeholder="Select peer" />
+                  <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Target</label>
+                  <SearchableSelect options={polymorphicOptions} value={formData.target_id} onChange={(v, type) => setFormData(d => ({ ...d, target_id: v, target_type: type }))} placeholder="Select group or peer" />
                 </div>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Action</label>
                 <div className="flex gap-4">
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input type="radio" name="action" value="accept" checked={formData.action === 'accept'} onChange={e => setFormData(d => ({ ...d, action: e.target.value }))} className="text-runic-600" />
-                    <span className="text-sm text-green-700 dark:text-green-400 font-medium">ACCEPT</span>
+                  <label className="flex items-center gap-2 cursor-pointer group">
+                    <input type="radio" name="action" value="ACCEPT" checked={formData.action === 'ACCEPT'} onChange={e => setFormData(d => ({ ...d, action: e.target.value }))} className="text-purple-active focus:ring-purple-active bg-white dark:bg-charcoal-dark border-gray-300 dark:border-gray-border" />
+                    <span className="text-sm text-green-700 dark:text-green-400 font-medium group-hover:opacity-80">ACCEPT</span>
                   </label>
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input type="radio" name="action" value="log_drop" checked={formData.action === 'log_drop'} onChange={e => setFormData(d => ({ ...d, action: e.target.value }))} className="text-runic-600" />
-                    <span className="text-sm text-red-700 dark:text-red-400 font-medium">LOG+DROP</span>
+                  <label className="flex items-center gap-2 cursor-pointer group">
+                    <input type="radio" name="action" value="LOG_DROP" checked={formData.action === 'LOG_DROP'} onChange={e => setFormData(d => ({ ...d, action: e.target.value }))} className="text-purple-active focus:ring-purple-active bg-white dark:bg-charcoal-dark border-gray-300 dark:border-gray-border" />
+                    <span className="text-sm text-red-700 dark:text-red-400 font-medium group-hover:opacity-80">LOG+DROP</span>
                   </label>
                 </div>
               </div>
-<div className="flex items-center gap-2">
-      <input type="checkbox" id="enabled" checked={formData.enabled} onChange={e => setFormData(d => ({ ...d, enabled: e.target.checked }))} className="w-4 h-4 rounded border-gray-300" />
-      <label htmlFor="enabled" className="text-sm text-gray-700 dark:text-amber-primary">Enabled</label>
-    </div>
+              <div className="flex items-center gap-3 py-1">
+                <ToggleSwitch checked={formData.enabled} onChange={v => setFormData(d => ({ ...d, enabled: v }))} />
+                <label className="text-sm text-gray-700 dark:text-amber-primary cursor-pointer">Policy enabled</label>
+              </div>
 
-    {/* Docker Only Toggle - Only shown when target peer has Docker */}
-    {selectedPeerHasDocker && (
-      <div className="flex items-center gap-2 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
-        <ToggleSwitch checked={formData.docker_only} onChange={v => setFormData(d => ({ ...d, docker_only: v }))} />
-        <label className="text-sm text-gray-700 dark:text-amber-primary">Docker containers only</label>
-        <span className="text-xs text-gray-500 dark:text-amber-muted ml-1">(Apply to DOCKER-USER chain only)</span>
-      </div>
-    )}
+              {/* Docker Only Toggle - Only shown when target is a peer and has Docker */}
+              {selectedPeerHasDocker && (
+                <div className="flex items-center gap-2 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
+                  <ToggleSwitch checked={formData.docker_only} onChange={v => setFormData(d => ({ ...d, docker_only: v }))} />
+                  <label className="text-sm text-gray-700 dark:text-amber-primary">Docker containers only</label>
+                  <span className="text-xs text-gray-500 dark:text-amber-muted ml-1">(Apply to DOCKER-USER chain only)</span>
+                </div>
+              )}
 
               {/* Preview */}
               <div className="border-t border-gray-200 dark:border-gray-border pt-4">
-                <button type="button" onClick={fetchPreview} disabled={previewLoading} className="flex items-center gap-2 text-sm text-runic-600 hover:text-runic-700 mb-2">
-                  <Eye className="w-4 h-4" /> {previewLoading ? 'Loading...' : 'Preview Rules'}
+                <button type="button" onClick={fetchPreview} disabled={previewLoading} className="flex items-center gap-2 text-sm text-purple-active hover:opacity-80 mb-2 font-medium">
+                  <Eye className="w-4 h-4" /> {previewLoading ? 'Generating preview...' : 'Preview Rules'}
                 </button>
                 {preview && (
-                  <div className="p-3 bg-gray-900 dark:bg-black rounded-lg text-xs font-mono">
+                  <div className="p-3 bg-gray-900 dark:bg-charcoal-darkest rounded-lg text-xs font-mono border border-gray-800">
                     {preview.rules?.map((rule, i) => (
                       <p key={i} className="text-green-400">{rule}</p>
                     ))}
+                    {!preview.rules?.length && <p className="text-gray-500 italic">No rules generated for this orientation.</p>}
                   </div>
                 )}
               </div>
 
               <InlineError message={formErrors._general} />
-              <div className="flex justify-end gap-3 pt-2">
-                <button type="button" onClick={closeModal} className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-amber-primary bg-white dark:bg-charcoal-darkest border border-gray-300 dark:border-gray-border rounded-lg">Cancel</button>
-                <button type="submit" className="px-4 py-2 text-sm font-medium text-white bg-purple-active hover:bg-purple-active/80 rounded-lg">{editPolicy ? 'Save Changes' : 'Create Policy'}</button>
+              <div className="flex justify-end gap-3 pt-6">
+                <button type="button" onClick={closeModal} className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-light-neutral bg-gray-100 dark:bg-charcoal-darkest rounded-lg hover:bg-black hover:text-white dark:hover:bg-black transition-colors">Cancel</button>
+                <button type="submit" className="px-4 py-2 text-sm font-medium text-white bg-purple-active hover:bg-purple-active/80 rounded-lg transition-colors">{editPolicy ? 'Save Changes' : 'Create Policy'}</button>
               </div>
             </form>
           </div>
@@ -506,7 +561,7 @@ if (!formData.source_group_id || !formData.service_id || !formData.target_peer_i
       {deleteTarget && (
         <ConfirmModal
           title="Delete Policy"
-          message={`Delete policy "${deleteTarget.name}"? Rules will be removed from ${getServerHostname(deleteTarget.target_peer_id)} on next push.`}
+          message={`Delete policy "${deleteTarget.name}"? Rules will be removed from ${getEntityName(deleteTarget.target_type, deleteTarget.target_id)} on next push.`}
           onConfirm={() => deleteMutation.mutate(deleteTarget.id)}
           onCancel={() => setDeleteTarget(null)}
           danger

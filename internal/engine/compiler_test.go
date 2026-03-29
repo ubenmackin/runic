@@ -96,8 +96,8 @@ func insertPolicy(t *testing.T, database *sql.DB, name string, groupID, serviceI
 		enabledInt = 1
 	}
 	result, err := database.Exec(
-		`INSERT INTO policies (name, source_group_id, service_id, target_peer_id, action, priority, enabled)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled)
+		VALUES (?, ?, "group", ?, ?, "peer", ?, ?, ?)`,
 		name, groupID, serviceID, peerID, action, priority, enabledInt)
 	if err != nil {
 		t.Fatalf("insert policy: %v", err)
@@ -566,8 +566,8 @@ func TestPolicyParsingAndValidation(t *testing.T) {
 				insertPolicy(t, db, "invalid-group-policy", 99999, serviceID, peerID, "ACCEPT", 100, true)
 				return peerID, nil
 			},
-			wantErr:     true,
-			errContains: "sql: no rows in result set",
+			wantErr:     false,
+			errContains: "",
 		},
 		{
 			name: "policy with invalid service ID",

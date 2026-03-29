@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
+	"flag"
 	"fmt"
 	"io/fs"
 	"log"
@@ -21,6 +22,7 @@ import (
 	"runic/internal/api"
 	"runic/internal/auth"
 	"runic/internal/common/constants"
+	"runic/internal/common/version"
 	"runic/internal/db"
 	"runic/internal/engine"
 )
@@ -109,6 +111,16 @@ func setCacheHeaders(w http.ResponseWriter, path string) {
 }
 
 func main() {
+	// Command-line flags
+	versionFlag := flag.Bool("version", false, "Print version and exit")
+	flag.Parse()
+
+	// Handle --version flag
+	if *versionFlag {
+		fmt.Printf("runic-server version %s\n", version.Version)
+		os.Exit(0)
+	}
+
 	// Get TLS certificate paths from environment variables
 	certFile := os.Getenv("RUNIC_CERT_FILE")
 	keyFile := os.Getenv("RUNIC_KEY_FILE")

@@ -1,7 +1,7 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
 import { useTableSort } from '../hooks/useTableSort'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Pencil, Trash2, Server, Copy, Check, RefreshCw, ArrowUp, ArrowDown, ArrowUpDown, X, Search } from 'lucide-react'
+import { Plus, Pencil, Trash2, Server, Copy, Check, RefreshCw, ArrowUp, ArrowDown, ArrowUpDown, X, Search, FileCode } from 'lucide-react'
 import { api, QUERY_KEYS } from '../api/client'
 import { REFETCH_INTERVALS } from '../constants'
 import { useCrudModal } from '../hooks/useCrudModal'
@@ -36,7 +36,7 @@ const ARCH_OPTIONS = [
 // Helper function to format relative time
 function formatRelativeTime(timestamp) {
   if (!timestamp) return 'Never'
-  
+
   const date = new Date(timestamp)
   const now = new Date()
   const diffMs = now - date
@@ -49,7 +49,7 @@ function formatRelativeTime(timestamp) {
   if (diffMinutes < 60) return `${diffMinutes} minute${diffMinutes !== 1 ? 's' : ''} ago`
   if (diffHours < 24) return `${diffHours} hour${diffHours !== 1 ? 's' : ''} ago`
   if (diffDays < 7) return `${diffDays} day${diffDays !== 1 ? 's' : ''} ago`
-  
+
   // For older dates, show the actual date
   return date.toLocaleDateString()
 }
@@ -73,6 +73,27 @@ export default function Peers() {
   const [manualForm, setManualForm] = useState({ hostname: '', ip_address: '', os_type: 'other', arch: 'other' })
   const [manualErrors, setManualErrors] = useState({})
   const [copied, setCopied] = useState(false)
+
+  // Rule Bundle state
+  const [bundleModalOpen, setBundleModalOpen] = useState(false)
+  const [bundleLoading, setBundleLoading] = useState(false)
+  const [bundleContent, setBundleContent] = useState('')
+  const [bundlePeer, setBundlePeer] = useState(null)
+
+  const fetchBundle = async (peer) => {
+    setBundlePeer(peer)
+    setBundleModalOpen(true)
+    setBundleLoading(true)
+    setBundleContent('')
+    try {
+      const data = await api.get(`/peers/${peer.id}/bundle`)
+      setBundleContent(data.content)
+    } catch (err) {
+      setBundleContent(`# Error: ${err.message}`)
+    } finally {
+      setBundleLoading(false)
+    }
+  }
 
   // Modal ref for focus trap
   const editModalRef = useRef(null)
@@ -140,8 +161,8 @@ export default function Peers() {
     return () => modal.removeEventListener('keydown', handleKeyDown)
   }, [addModalOpen, activeTab])
 
-// Sorting state (persisted per-user)
-	const { sortConfig, handleSort } = useTableSort('peers', { key: 'hostname', direction: 'asc' })
+  // Sorting state (persisted per-user)
+  const { sortConfig, handleSort } = useTableSort('peers', { key: 'hostname', direction: 'asc' })
 
   // Search state
   const [searchTerm, setSearchTerm] = useState('')
@@ -152,20 +173,20 @@ export default function Peers() {
   const openAdd = () => { setFormErrors({}); handleOpenAdd() }
   const openEdit = (s) => { setEditPeer(s); setFormForEdit(s); setFormErrors({}); setModalOpen(true) }
 
-const openAddModal = () => {
-  setAddModalOpen(true)
-  setActiveTab('agent')
-  setManualForm({ hostname: '', ip_address: '', os_type: 'other', arch: 'other' })
-  setManualErrors({})
-  setCopied(false)
-}
+  const openAddModal = () => {
+    setAddModalOpen(true)
+    setActiveTab('agent')
+    setManualForm({ hostname: '', ip_address: '', os_type: 'other', arch: 'other' })
+    setManualErrors({})
+    setCopied(false)
+  }
 
-const closeAddModal = () => {
-  setAddModalOpen(false)
-  setManualForm({ hostname: '', ip_address: '', os_type: 'other', arch: 'other' })
-  setManualErrors({})
-  setCopied(false)
-}
+  const closeAddModal = () => {
+    setAddModalOpen(false)
+    setManualForm({ hostname: '', ip_address: '', os_type: 'other', arch: 'other' })
+    setManualErrors({})
+    setCopied(false)
+  }
 
   // Generate agent install command
   const controlPlaneUrl = window.location.origin
@@ -181,40 +202,40 @@ const closeAddModal = () => {
     }
   }
 
-const validateManualForm = () => {
-  const errors = {}
-  if (!manualForm.hostname.trim()) {
-    errors.hostname = 'Name is required'
-  }
-  if (!manualForm.ip_address.trim()) {
-    errors.ip_address = 'IP Address or CIDR is required'
-  } else {
-    // Basic format check - IP or CIDR
-    const ipOrCidr = manualForm.ip_address.trim()
-    const ipRegex = /^(\d{1,3}\.){3}\d{1,3}(\/\d{1,2})?$/
-    if (!ipRegex.test(ipOrCidr)) {
-      errors.ip_address = 'Invalid IP address or CIDR format (e.g., 192.168.1.50 or 10.0.0.0/8)'
+  const validateManualForm = () => {
+    const errors = {}
+    if (!manualForm.hostname.trim()) {
+      errors.hostname = 'Name is required'
     }
+    if (!manualForm.ip_address.trim()) {
+      errors.ip_address = 'IP Address or CIDR is required'
+    } else {
+      // Basic format check - IP or CIDR
+      const ipOrCidr = manualForm.ip_address.trim()
+      const ipRegex = /^(\d{1,3}\.){3}\d{1,3}(\/\d{1,2})?$/
+      if (!ipRegex.test(ipOrCidr)) {
+        errors.ip_address = 'Invalid IP address or CIDR format (e.g., 192.168.1.50 or 10.0.0.0/8)'
+      }
+    }
+    if (!manualForm.os_type) {
+      errors.os_type = 'Operating System is required'
+    }
+    setManualErrors(errors)
+    return Object.keys(errors).length === 0
   }
-  if (!manualForm.os_type) {
-    errors.os_type = 'Operating System is required'
-  }
-  setManualErrors(errors)
-  return Object.keys(errors).length === 0
-}
 
   const handleManualSubmit = async (e) => {
     e.preventDefault()
     if (!validateManualForm()) return
 
     try {
-await api.post('/peers', {
-      hostname: manualForm.hostname.trim(),
-      ip_address: manualForm.ip_address.trim(),
-      os_type: manualForm.os_type || null,
-      arch: manualForm.arch || null,
-      is_manual: true
-    })
+      await api.post('/peers', {
+        hostname: manualForm.hostname.trim(),
+        ip_address: manualForm.ip_address.trim(),
+        os_type: manualForm.os_type || null,
+        arch: manualForm.arch || null,
+        is_manual: true
+      })
       showToast('Manual peer added successfully', 'success')
       qc.invalidateQueries({ queryKey: QUERY_KEYS.peers() })
       closeAddModal()
@@ -395,145 +416,151 @@ await api.post('/peers', {
 
       {!processedPeers?.length ? (
         searchTerm ? (
-<div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-sm p-8 text-center">
-      <p className="text-gray-500 dark:text-amber-muted">No peers match your search.</p>
-    </div>
+          <div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-sm p-8 text-center">
+            <p className="text-gray-500 dark:text-amber-muted">No peers match your search.</p>
+          </div>
         ) : (
           <EmptyState icon={Server} title="No peers yet" message="Add your first peer to start managing firewall rules." action="Add Peer" onAction={openAddModal} />
         )
       ) : (
-<div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-sm overflow-hidden">
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead className="bg-gray-50 dark:bg-charcoal-darkest">
+        <div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-sm overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 dark:bg-charcoal-darkest">
                 <tr>
-<th
-              className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted cursor-pointer hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none"
-              onClick={() => handleSort('hostname')}
-            >
-              Hostname <SortIndicator columnKey="hostname" />
-            </th>
-            <th
-              className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted cursor-pointer hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none"
-              onClick={() => handleSort('ip_address')}
-            >
-              IP Address <SortIndicator columnKey="ip_address" />
-            </th>
-            <th
-              className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted cursor-pointer hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none"
-              onClick={() => handleSort('os_type')}
-            >
-              OS <SortIndicator columnKey="os_type" />
-            </th>
-            <th
-              className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted cursor-pointer hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none"
-              onClick={() => handleSort('last_heartbeat')}
-            >
-              Last Heartbeat <SortIndicator columnKey="last_heartbeat" />
-            </th>
-            <th className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted">
-              Groups
-            </th>
-            <th className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted">
-              Agent
-            </th>
-            <th className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted">
-              Actions
-            </th>
+                  <th
+                    className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted cursor-pointer hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none"
+                    onClick={() => handleSort('hostname')}
+                  >
+                    Hostname <SortIndicator columnKey="hostname" />
+                  </th>
+                  <th
+                    className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted cursor-pointer hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none"
+                    onClick={() => handleSort('ip_address')}
+                  >
+                    IP Address <SortIndicator columnKey="ip_address" />
+                  </th>
+                  <th
+                    className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted cursor-pointer hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none"
+                    onClick={() => handleSort('os_type')}
+                  >
+                    OS <SortIndicator columnKey="os_type" />
+                  </th>
+                  <th
+                    className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted cursor-pointer hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none"
+                    onClick={() => handleSort('last_heartbeat')}
+                  >
+                    Last Heartbeat <SortIndicator columnKey="last_heartbeat" />
+                  </th>
+                  <th className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted">
+                    Groups
+                  </th>
+                  <th className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted">
+                    Agent
+                  </th>
+                  <th className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted">
+                    Actions
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200 dark:divide-gray-border">
                 {processedPeers.map((peer) => (
                   <tr key={peer.id} className="">
-                        <td className="px-4 py-3">
-                            <div className="flex items-center gap-2">
-                                {!peer.is_manual && (
-                                    <span className={`w-2 h-2 rounded-full ${
-                                        peer.status === 'online' ? 'bg-green-500' :
-                                        peer.status === 'offline' ? 'bg-red-500' :
-                                        'bg-amber-500' // pending
-                                    }`} />
-                                )}
-                                <span className="font-medium text-gray-900 dark:text-light-neutral">{peer.hostname}</span>
-                            </div>
-                        </td>
-<td className="px-4 py-3 text-gray-600 dark:text-amber-primary">
-        {peer.ip_address}
-      </td>
-      <td className="px-4 py-3 text-gray-600 dark:text-amber-primary">
-        {peer.os_type || peer.os || '—'}
-      </td>
-      <td className="px-4 py-3 text-gray-600 dark:text-amber-primary">
-        {peer.is_manual ? 'N/A' : formatRelativeTime(peer.last_heartbeat)}
-      </td>
-                  <td className="px-4 py-3">
-                    {peer.groups ? (
-                      <div className="flex flex-wrap items-center gap-1.5 max-w-xs">
-                        {(() => {
-                          const groups = peer.groups.split(',').map(g => g.trim()).filter(Boolean)
-                          const maxVisible = 2
-                          const visibleGroups = groups.slice(0, maxVisible)
-                          const remainingCount = groups.length - maxVisible
-
-                          return (
-                            <>
-                              {visibleGroups.map((group, idx) => (
-                                <span
-                                  key={idx}
-                                  className="px-2 py-0.5 text-xs font-medium rounded-full bg-purple-active/20 dark:bg-purple-active text-white whitespace-nowrap"
-                                >
-                                  {group}
-                                </span>
-                              ))}
-                              {remainingCount > 0 && (
-                                <span
-                                  className="px-2 py-0.5 text-xs font-medium rounded-full bg-gray-100 dark:bg-charcoal-darkest text-gray-600 dark:text-amber-muted whitespace-nowrap"
-                                  title={groups.slice(maxVisible).join(', ')}
-                                >
-                                  +{remainingCount}
-                                </span>
-                              )}
-                            </>
-                          )
-                        })()}
-                      </div>
-                    ) : (
-                      <span className="text-gray-400">—</span>
-                    )}
-                  </td>
                     <td className="px-4 py-3">
-                      {peer.is_manual ? (
-<span className="px-2 py-1 text-xs font-medium rounded-full bg-gray-100 dark:bg-charcoal-darkest text-gray-700 dark:text-amber-primary">
-              Manual
-            </span>
-                      ) : peer.agent_version ? (
-<span className="text-gray-600 dark:text-amber-primary">
-              v{peer.agent_version}
-            </span>
+                      <div className="flex items-center gap-2">
+                        {!peer.is_manual && (
+                          <span className={`w-2 h-2 rounded-full ${peer.status === 'online' ? 'bg-green-500' :
+                              peer.status === 'offline' ? 'bg-red-500' :
+                                'bg-amber-500' // pending
+                            }`} />
+                        )}
+                        <span className="font-medium text-gray-900 dark:text-light-neutral">{peer.hostname}</span>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-gray-600 dark:text-amber-primary">
+                      {peer.ip_address}
+                    </td>
+                    <td className="px-4 py-3 text-gray-600 dark:text-amber-primary">
+                      {peer.os_type || peer.os || '—'}
+                    </td>
+                    <td className="px-4 py-3 text-gray-600 dark:text-amber-primary">
+                      {peer.is_manual ? 'N/A' : formatRelativeTime(peer.last_heartbeat)}
+                    </td>
+                    <td className="px-4 py-3">
+                      {peer.groups ? (
+                        <div className="flex flex-wrap items-center gap-1.5 max-w-xs">
+                          {(() => {
+                            const groups = peer.groups.split(',').map(g => g.trim()).filter(Boolean)
+                            const maxVisible = 2
+                            const visibleGroups = groups.slice(0, maxVisible)
+                            const remainingCount = groups.length - maxVisible
+
+                            return (
+                              <>
+                                {visibleGroups.map((group, idx) => (
+                                  <span
+                                    key={idx}
+                                    className="px-2 py-0.5 text-xs font-medium rounded-full bg-purple-active/20 dark:bg-purple-active text-white whitespace-nowrap"
+                                  >
+                                    {group}
+                                  </span>
+                                ))}
+                                {remainingCount > 0 && (
+                                  <span
+                                    className="px-2 py-0.5 text-xs font-medium rounded-full bg-gray-100 dark:bg-charcoal-darkest text-gray-600 dark:text-amber-muted whitespace-nowrap"
+                                    title={groups.slice(maxVisible).join(', ')}
+                                  >
+                                    +{remainingCount}
+                                  </span>
+                                )}
+                              </>
+                            )
+                          })()}
+                        </div>
                       ) : (
-<span className="text-gray-400 dark:text-amber-muted">—</span>
+                        <span className="text-gray-400">—</span>
                       )}
                     </td>
-                                <td className="px-4 py-3">
-                                    <div className="flex items-center gap-2">
-                                        {peer.is_manual && (
-<button
-              onClick={() => openEdit(peer)}
-              className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded"
-              title="Edit"
-            >
-              <Pencil className="w-4 h-4 text-gray-500" />
-            </button>
-          )}
-          <button
-            onClick={() => setDeleteTarget(peer)}
-            className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded"
-            title="Delete"
-          >
-                                            <Trash2 className="w-4 h-4 text-red-500" />
-                                        </button>
-                                    </div>
-                                </td>
+                    <td className="px-4 py-3">
+                      {peer.is_manual ? (
+                        <span className="px-2 py-1 text-xs font-medium rounded-full bg-gray-100 dark:bg-charcoal-darkest text-gray-700 dark:text-amber-primary">
+                          Manual
+                        </span>
+                      ) : peer.agent_version ? (
+                        <span className="text-gray-600 dark:text-amber-primary">
+                          v{peer.agent_version}
+                        </span>
+                      ) : (
+                        <span className="text-gray-400 dark:text-amber-muted">—</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => fetchBundle(peer)}
+                          className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded"
+                          title="View Deployed Rules"
+                        >
+                          <FileCode className="w-4 h-4 text-purple-active" />
+                        </button>
+                        {peer.is_manual && (
+                          <button
+                            onClick={() => openEdit(peer)}
+                            className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded"
+                            title="Edit"
+                          >
+                            <Pencil className="w-4 h-4 text-gray-500" />
+                          </button>
+                        )}
+                        <button
+                          onClick={() => setDeleteTarget(peer)}
+                          className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded"
+                          title="Delete"
+                        >
+                          <Trash2 className="w-4 h-4 text-red-500" />
+                        </button>
+                      </div>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -546,43 +573,43 @@ await api.post('/peers', {
       {modalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" tabIndex="-1" onKeyDown={(e) => { if (e.key === 'Escape') { closeModal() } }}>
           <div ref={editModalRef} className="bg-white dark:bg-charcoal-dark rounded-xl shadow-xl w-full max-w-lg mx-4">
-        <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-border flex items-center justify-between">
-          <h3 className="text-lg font-semibold text-gray-900 dark:text-light-neutral">{editPeer ? 'Edit Peer' : 'Add Peer'}</h3>
-          <button onClick={closeModal} className="p-1 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded">
-            <X className="w-5 h-5 text-gray-500" />
-          </button>
-        </div>
+            <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-border flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-light-neutral">{editPeer ? 'Edit Peer' : 'Add Peer'}</h3>
+              <button onClick={closeModal} className="p-1 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded">
+                <X className="w-5 h-5 text-gray-500" />
+              </button>
+            </div>
             <form onSubmit={handleSubmit} className="p-6 space-y-4">
-<div>
-          <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Hostname</label>
-          <input type="text" value={formData.hostname} onChange={e => setFormData(d => ({ ...d, hostname: e.target.value }))} required className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral" />
-        </div>
-        <div>
-          <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">IP Address</label>
-          <input type="text" value={formData.ip_address} onChange={e => setFormData(d => ({ ...d, ip_address: e.target.value }))} required className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral" />
-        </div>
-<div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">OS</label>
-            <SearchableSelect options={OS_OPTIONS} value={formData.os_type} onChange={v => setFormData(d => ({ ...d, os_type: v }))} />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Arch</label>
-            <SearchableSelect options={ARCH_OPTIONS} value={formData.arch} onChange={v => setFormData(d => ({ ...d, arch: v }))} />
-          </div>
-        </div>
-        <div>
-          <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Description</label>
-          <textarea value={formData.description} onChange={e => setFormData(d => ({ ...d, description: e.target.value }))} rows={2} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral" />
-        </div>
-        <div className="flex items-center gap-2">
-          <input type="checkbox" id="has_docker" checked={formData.has_docker} onChange={e => setFormData(d => ({ ...d, has_docker: e.target.checked }))} className="w-4 h-4 rounded border-gray-300" />
-          <label htmlFor="has_docker" className="text-sm text-gray-700 dark:text-amber-primary">Has Docker</label>
-        </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Hostname</label>
+                <input type="text" value={formData.hostname} onChange={e => setFormData(d => ({ ...d, hostname: e.target.value }))} required className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">IP Address</label>
+                <input type="text" value={formData.ip_address} onChange={e => setFormData(d => ({ ...d, ip_address: e.target.value }))} required className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral" />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">OS</label>
+                  <SearchableSelect options={OS_OPTIONS} value={formData.os_type} onChange={v => setFormData(d => ({ ...d, os_type: v }))} />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Arch</label>
+                  <SearchableSelect options={ARCH_OPTIONS} value={formData.arch} onChange={v => setFormData(d => ({ ...d, arch: v }))} />
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Description</label>
+                <textarea value={formData.description} onChange={e => setFormData(d => ({ ...d, description: e.target.value }))} rows={2} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral" />
+              </div>
+              <div className="flex items-center gap-2">
+                <input type="checkbox" id="has_docker" checked={formData.has_docker} onChange={e => setFormData(d => ({ ...d, has_docker: e.target.checked }))} className="w-4 h-4 rounded border-gray-300" />
+                <label htmlFor="has_docker" className="text-sm text-gray-700 dark:text-amber-primary">Has Docker</label>
+              </div>
               <InlineError message={formErrors._general} />
               <div className="flex justify-end gap-3 pt-2">
-<button type="button" onClick={closeModal} className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-amber-primary bg-white dark:bg-charcoal-dark border border-gray-300 dark:border-gray-border rounded-lg hover:bg-gray-50 dark:hover:bg-charcoal-darkest">Cancel</button>
-        <button type="submit" className="px-4 py-2 text-sm font-medium text-white bg-purple-active hover:bg-purple-active/80 rounded-lg">{editPeer ? 'Save Changes' : 'Add Peer'}</button>
+                <button type="button" onClick={closeModal} className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-amber-primary bg-white dark:bg-charcoal-dark border border-gray-300 dark:border-gray-border rounded-lg hover:bg-gray-50 dark:hover:bg-charcoal-darkest">Cancel</button>
+                <button type="submit" className="px-4 py-2 text-sm font-medium text-white bg-purple-active hover:bg-purple-active/80 rounded-lg">{editPeer ? 'Save Changes' : 'Add Peer'}</button>
               </div>
             </form>
           </div>
@@ -599,52 +626,104 @@ await api.post('/peers', {
         />
       )}
 
+      {/* Rule Bundle Modal */}
+      {bundleModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" tabIndex="-1" onKeyDown={(e) => { if (e.key === 'Escape') { setBundleModalOpen(false) } }}>
+          <div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-xl w-full max-w-4xl mx-4 max-h-[90vh] flex flex-col">
+            <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-border flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-2">
+                <FileCode className="w-5 h-5 text-purple-active" />
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-light-neutral">Deployed Rules: {bundlePeer?.hostname}</h3>
+              </div>
+              <button 
+                onClick={() => setBundleModalOpen(false)} 
+                className="p-1 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded"
+              >
+                <X className="w-5 h-5 text-gray-500" />
+              </button>
+            </div>
+            <div className="p-6 overflow-y-auto flex-1">
+              {bundleLoading ? (
+                <div className="flex flex-col items-center justify-center py-12 space-y-4">
+                  <RefreshCw className="w-8 h-8 text-purple-active animate-spin" />
+                  <p className="text-sm text-gray-500 dark:text-amber-muted">Fetching latest bundle...</p>
+                </div>
+              ) : (
+                <div className="relative group">
+                  <pre className="bg-gray-900 dark:bg-black text-gray-100 p-6 rounded-lg text-sm font-mono overflow-auto whitespace-pre min-h-[200px] border border-gray-800">
+                    <code className="text-green-400">{bundleContent}</code>
+                  </pre>
+                  {bundleContent && (
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(bundleContent)
+                        showToast('Copied to clipboard', 'success')
+                      }}
+                      className="absolute top-4 right-4 p-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-gray-300 transition-colors"
+                      title="Copy Rules"
+                    >
+                      <Copy className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+            <div className="px-6 py-4 border-t border-gray-200 dark:border-gray-border flex justify-end shrink-0">
+              <button 
+                onClick={() => setBundleModalOpen(false)} 
+                className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-light-neutral bg-gray-100 dark:bg-charcoal-darkest rounded-lg hover:bg-gray-200 dark:hover:bg-charcoal-dark transition-colors"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Add Peer Modal with Tabs */}
       {addModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" tabIndex="-1" onKeyDown={(e) => { if (e.key === 'Escape') { closeAddModal() } }}>
           <div ref={addModalRef} className="bg-white dark:bg-charcoal-dark rounded-xl shadow-xl w-full max-w-lg mx-4">
-        {/* Header */}
-        <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-border flex items-center justify-between">
-          <h3 className="text-lg font-semibold text-gray-900 dark:text-light-neutral">Add Peer</h3>
-          <button
-            onClick={closeAddModal}
-            className="p-1 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded"
-          >
-            <X className="w-5 h-5 text-gray-500" />
-          </button>
-        </div>
+            {/* Header */}
+            <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-border flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-light-neutral">Add Peer</h3>
+              <button
+                onClick={closeAddModal}
+                className="p-1 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded"
+              >
+                <X className="w-5 h-5 text-gray-500" />
+              </button>
+            </div>
 
-        {/* Tab Navigation */}
-        <div className="flex border-b border-gray-200 dark:border-gray-border">
-          <button
-            onClick={() => setActiveTab('agent')}
-            className={`flex-1 px-4 py-3 text-sm font-medium text-center border-b-2 transition-colors ${
-              activeTab === 'agent'
-                ? 'border-purple-active text-purple-active dark:text-purple-active'
-                : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-amber-muted dark:hover:text-amber-primary'
-            }`}
-          >
-            Agent Install
-          </button>
-          <button
-            onClick={() => setActiveTab('manual')}
-            className={`flex-1 px-4 py-3 text-sm font-medium text-center border-b-2 transition-colors ${
-              activeTab === 'manual'
-                ? 'border-purple-active text-purple-active dark:text-purple-active'
-                : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-amber-muted dark:hover:text-amber-primary'
-            }`}
-          >
-            Manual Entry
-          </button>
-        </div>
+            {/* Tab Navigation */}
+            <div className="flex border-b border-gray-200 dark:border-gray-border">
+              <button
+                onClick={() => setActiveTab('agent')}
+                className={`flex-1 px-4 py-3 text-sm font-medium text-center border-b-2 transition-colors ${activeTab === 'agent'
+                    ? 'border-purple-active text-purple-active dark:text-purple-active'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-amber-muted dark:hover:text-amber-primary'
+                  }`}
+              >
+                Agent Install
+              </button>
+              <button
+                onClick={() => setActiveTab('manual')}
+                className={`flex-1 px-4 py-3 text-sm font-medium text-center border-b-2 transition-colors ${activeTab === 'manual'
+                    ? 'border-purple-active text-purple-active dark:text-purple-active'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-amber-muted dark:hover:text-amber-primary'
+                  }`}
+              >
+                Manual Entry
+              </button>
+            </div>
 
             {/* Tab Content */}
             <div className="p-6">
               {activeTab === 'agent' && (
-<div className="space-y-6">
-<p className="text-sm text-gray-600 dark:text-amber-muted">
-              Run this command on the target machine to install the agent:
-            </p>
+                <div className="space-y-6">
+                  <p className="text-sm text-gray-600 dark:text-amber-muted">
+                    Run this command on the target machine to install the agent:
+                  </p>
 
                   {/* Command Block with Copy Button */}
                   <div className="relative">
@@ -670,96 +749,96 @@ await api.post('/peers', {
                     </p>
                   )}
 
-<div className="bg-blue-50 dark:bg-purple-active/10 border border-blue-200 dark:border-purple-active/30 rounded-lg p-3">
-            <p className="text-sm text-blue-700 dark:text-purple-active">
-              The agent will auto-register with this control plane. No manual entry needed.
-            </p>
-          </div>
+                  <div className="bg-blue-50 dark:bg-purple-active/10 border border-blue-200 dark:border-purple-active/30 rounded-lg p-3">
+                    <p className="text-sm text-blue-700 dark:text-purple-active">
+                      The agent will auto-register with this control plane. No manual entry needed.
+                    </p>
+                  </div>
                 </div>
               )}
 
               {activeTab === 'manual' && (
                 <form onSubmit={handleManualSubmit} className="space-y-4">
-<div>
-          <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-              Name <span className="text-red-500">*</span>
-            </label>
-            <input
-              type="text"
-              value={manualForm.hostname}
-              onChange={(e) => setManualForm(f => ({ ...f, hostname: e.target.value }))}
-              placeholder="e.g., HP-Printer, NAS, Bens-iPhone"
-              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral focus:ring-2 focus:ring-purple-active focus:border-transparent"
-            />
-            {manualErrors.hostname && (
-              <p className="text-sm text-red-500 mt-1">{manualErrors.hostname}</p>
-            )}
-          </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+                      Name <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={manualForm.hostname}
+                      onChange={(e) => setManualForm(f => ({ ...f, hostname: e.target.value }))}
+                      placeholder="e.g., HP-Printer, NAS, Bens-iPhone"
+                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral focus:ring-2 focus:ring-purple-active focus:border-transparent"
+                    />
+                    {manualErrors.hostname && (
+                      <p className="text-sm text-red-500 mt-1">{manualErrors.hostname}</p>
+                    )}
+                  </div>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-              IP Address or CIDR <span className="text-red-500">*</span>
-            </label>
-            <input
-              type="text"
-              value={manualForm.ip_address}
-              onChange={(e) => setManualForm(f => ({ ...f, ip_address: e.target.value }))}
-              placeholder="e.g., 10.0.0.0/8, 192.168.1.50"
-              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral focus:ring-2 focus:ring-purple-active focus:border-transparent"
-            />
-            {manualErrors.ip_address && (
-              <p className="text-sm text-red-500 mt-1">{manualErrors.ip_address}</p>
-            )}
-          </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+                      IP Address or CIDR <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={manualForm.ip_address}
+                      onChange={(e) => setManualForm(f => ({ ...f, ip_address: e.target.value }))}
+                      placeholder="e.g., 10.0.0.0/8, 192.168.1.50"
+                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral focus:ring-2 focus:ring-purple-active focus:border-transparent"
+                    />
+                    {manualErrors.ip_address && (
+                      <p className="text-sm text-red-500 mt-1">{manualErrors.ip_address}</p>
+                    )}
+                  </div>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-              Operating System <span className="text-red-500">*</span>
-            </label>
-      <SearchableSelect
-        options={OS_OPTIONS}
-        value={manualForm.os_type}
-        onChange={(v) => setManualForm(f => ({ ...f, os_type: v }))}
-        placeholder="Select OS"
-      />
-      {manualErrors.os_type && (
-        <p className="text-sm text-red-500 mt-1">{manualErrors.os_type}</p>
-      )}
-    </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+                      Operating System <span className="text-red-500">*</span>
+                    </label>
+                    <SearchableSelect
+                      options={OS_OPTIONS}
+                      value={manualForm.os_type}
+                      onChange={(v) => setManualForm(f => ({ ...f, os_type: v }))}
+                      placeholder="Select OS"
+                    />
+                    {manualErrors.os_type && (
+                      <p className="text-sm text-red-500 mt-1">{manualErrors.os_type}</p>
+                    )}
+                  </div>
 
-<div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-              Architecture
-            </label>
-            <SearchableSelect
-              options={ARCH_OPTIONS}
-              value={manualForm.arch}
-              onChange={(v) => setManualForm(f => ({ ...f, arch: v }))}
-              placeholder="Select Architecture"
-            />
-          </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+                      Architecture
+                    </label>
+                    <SearchableSelect
+                      options={ARCH_OPTIONS}
+                      value={manualForm.arch}
+                      onChange={(v) => setManualForm(f => ({ ...f, arch: v }))}
+                      placeholder="Select Architecture"
+                    />
+                  </div>
 
-          {manualErrors._general && (
-            <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-3">
-              <p className="text-sm text-red-700 dark:text-red-300">{manualErrors._general}</p>
-            </div>
-          )}
+                  {manualErrors._general && (
+                    <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-3">
+                      <p className="text-sm text-red-700 dark:text-red-300">{manualErrors._general}</p>
+                    </div>
+                  )}
 
-          <div className="flex justify-end gap-3 pt-2">
-            <button
-              type="button"
-              onClick={closeAddModal}
-              className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-amber-primary bg-white dark:bg-charcoal-dark border border-gray-300 dark:border-gray-border rounded-lg hover:bg-gray-50 dark:hover:bg-charcoal-darkest"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              className="px-4 py-2 text-sm font-medium text-white bg-purple-active hover:bg-purple-active/80 rounded-lg"
-            >
-              Add Manual Peer
-            </button>
-          </div>
+                  <div className="flex justify-end gap-3 pt-2">
+                    <button
+                      type="button"
+                      onClick={closeAddModal}
+                      className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-amber-primary bg-white dark:bg-charcoal-dark border border-gray-300 dark:border-gray-border rounded-lg hover:bg-gray-50 dark:hover:bg-charcoal-darkest"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      className="px-4 py-2 text-sm font-medium text-white bg-purple-active hover:bg-purple-active/80 rounded-lg"
+                    >
+                      Add Manual Peer
+                    </button>
+                  </div>
                 </form>
               )}
             </div>

@@ -15,8 +15,8 @@ import (
 
 func ListPolicies(w http.ResponseWriter, r *http.Request) {
 	rows, err := db.DB.QueryContext(r.Context(),
-		`SELECT id, name, COALESCE(description, ''), source_group_id, service_id,
-		target_peer_id, action, priority, enabled, docker_only, created_at, updated_at
+		`SELECT id, name, COALESCE(description, ''), source_id, source_type, service_id,
+		target_id, target_type, action, priority, enabled, docker_only, created_at, updated_at
 		FROM policies ORDER BY priority ASC`)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "failed to query policies")
@@ -25,25 +25,27 @@ func ListPolicies(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 
 	type policyResp struct {
-		ID            int    `json:"id"`
-		Name          string `json:"name"`
-		Description   string `json:"description"`
-		SourceGroupID int    `json:"source_group_id"`
-		ServiceID     int    `json:"service_id"`
-		TargetPeerID  int    `json:"target_peer_id"`
-		Action        string `json:"action"`
-		Priority      int    `json:"priority"`
-		Enabled       bool   `json:"enabled"`
-		DockerOnly    bool   `json:"docker_only"`
-		CreatedAt     string `json:"created_at"`
-		UpdatedAt     string `json:"updated_at"`
+		ID         int    `json:"id"`
+		Name       string `json:"name"`
+		Description string `json:"description"`
+		SourceID   int    `json:"source_id"`
+		SourceType string `json:"source_type"`
+		ServiceID  int    `json:"service_id"`
+		TargetID   int    `json:"target_id"`
+		TargetType string `json:"target_type"`
+		Action      string `json:"action"`
+		Priority    int    `json:"priority"`
+		Enabled     bool   `json:"enabled"`
+		DockerOnly  bool   `json:"docker_only"`
+		CreatedAt   string `json:"created_at"`
+		UpdatedAt   string `json:"updated_at"`
 	}
 
 	var policiesData []policyResp
 	for rows.Next() {
 		var p policyResp
-		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.SourceGroupID, &p.ServiceID,
-			&p.TargetPeerID, &p.Action, &p.Priority, &p.Enabled, &p.DockerOnly, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.SourceID, &p.SourceType, &p.ServiceID,
+			&p.TargetID, &p.TargetType, &p.Action, &p.Priority, &p.Enabled, &p.DockerOnly, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			common.RespondError(w, http.StatusInternalServerError, "failed to scan policy")
 			return
 		}
@@ -58,22 +60,24 @@ func ListPolicies(w http.ResponseWriter, r *http.Request) {
 func MakeCreatePolicyHandler(compiler *engine.Compiler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var input struct {
-			Name          string `json:"name"`
-			Description   string `json:"description"`
-			SourceGroupID int    `json:"source_group_id"`
-			ServiceID     int    `json:"service_id"`
-			TargetPeerID  int    `json:"target_peer_id"`
-			Action        string `json:"action"`
-			Priority      int    `json:"priority"`
-			Enabled       *bool  `json:"enabled"`
-			DockerOnly    *bool  `json:"docker_only"`
+			Name        string `json:"name"`
+			Description string `json:"description"`
+			SourceID    int    `json:"source_id"`
+			SourceType  string `json:"source_type"`
+			ServiceID   int    `json:"service_id"`
+			TargetID    int    `json:"target_id"`
+			TargetType  string `json:"target_type"`
+			Action      string `json:"action"`
+			Priority    int    `json:"priority"`
+			Enabled     *bool  `json:"enabled"`
+			DockerOnly  *bool  `json:"docker_only"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 			common.RespondError(w, http.StatusBadRequest, "invalid JSON")
 			return
 		}
-		if input.Name == "" || input.SourceGroupID == 0 || input.ServiceID == 0 || input.TargetPeerID == 0 {
-			common.RespondError(w, http.StatusBadRequest, "name, source_group_id, service_id, and target_peer_id are required")
+		if input.Name == "" || input.SourceID == 0 || input.SourceType == "" || input.ServiceID == 0 || input.TargetID == 0 || input.TargetType == "" {
+			common.RespondError(w, http.StatusBadRequest, "name, source_id, source_type, service_id, target_id, and target_type are required")
 			return
 		}
 		if input.Action == "" {
@@ -92,10 +96,10 @@ func MakeCreatePolicyHandler(compiler *engine.Compiler) http.HandlerFunc {
 		}
 
 		result, err := db.DB.ExecContext(r.Context(),
-			`INSERT INTO policies (name, description, source_group_id, service_id, target_peer_id, action, priority, enabled, docker_only)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			input.Name, input.Description, input.SourceGroupID, input.ServiceID,
-			input.TargetPeerID, input.Action, input.Priority, enabled, dockerOnly)
+			`INSERT INTO policies (name, description, source_id, source_type, service_id, target_id, target_type, action, priority, enabled, docker_only)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			input.Name, input.Description, input.SourceID, input.SourceType, input.ServiceID,
+			input.TargetID, input.TargetType, input.Action, input.Priority, enabled, dockerOnly)
 		if err != nil {
 			common.RespondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create policy: %v", err))
 			return
@@ -103,15 +107,15 @@ func MakeCreatePolicyHandler(compiler *engine.Compiler) http.HandlerFunc {
 
 		id, _ := result.LastInsertId()
 
-		// Trigger async recompilation for the target peer with timeout
+		// Trigger async recompilation for all affected peers
 		go func() {
-			// Use background context so goroutine survives handler return
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 			defer cancel()
-			if _, err := compiler.CompileAndStore(ctx, input.TargetPeerID); err != nil {
-				runiclog.ErrorContext(ctx, "async compile and store failed",
-					"peer_id", input.TargetPeerID,
-					"error", err)
+			affectedPeers, _ := compiler.GetAffectedPeersByPolicy(ctx, int(id))
+			for _, pid := range affectedPeers {
+				if _, err := compiler.CompileAndStore(ctx, pid); err != nil {
+					runiclog.ErrorContext(ctx, "async compile and store failed", "peer_id", pid, "error", err)
+				}
 			}
 		}()
 
@@ -127,26 +131,28 @@ func GetPolicy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var p struct {
-		ID            int    `json:"id"`
-		Name          string `json:"name"`
-		Description   string `json:"description"`
-		SourceGroupID int    `json:"source_group_id"`
-		ServiceID     int    `json:"service_id"`
-		TargetPeerID  int    `json:"target_peer_id"`
-		Action        string `json:"action"`
-		Priority      int    `json:"priority"`
-		Enabled       bool   `json:"enabled"`
-		DockerOnly    bool   `json:"docker_only"`
-		CreatedAt     string `json:"created_at"`
-		UpdatedAt     string `json:"updated_at"`
+		ID         int    `json:"id"`
+		Name       string `json:"name"`
+		Description string `json:"description"`
+		SourceID   int    `json:"source_id"`
+		SourceType string `json:"source_type"`
+		ServiceID  int    `json:"service_id"`
+		TargetID   int    `json:"target_id"`
+		TargetType string `json:"target_type"`
+		Action      string `json:"action"`
+		Priority    int    `json:"priority"`
+		Enabled     bool   `json:"enabled"`
+		DockerOnly  bool   `json:"docker_only"`
+		CreatedAt   string `json:"created_at"`
+		UpdatedAt   string `json:"updated_at"`
 	}
 
 	err = db.DB.QueryRowContext(r.Context(),
-		`SELECT id, name, COALESCE(description, ''), source_group_id, service_id,
-		target_peer_id, action, priority, enabled, docker_only, created_at, updated_at
+		`SELECT id, name, COALESCE(description, ''), source_id, source_type, service_id,
+		target_id, target_type, action, priority, enabled, docker_only, created_at, updated_at
 		FROM policies WHERE id = ?`, id,
-	).Scan(&p.ID, &p.Name, &p.Description, &p.SourceGroupID, &p.ServiceID,
-		&p.TargetPeerID, &p.Action, &p.Priority, &p.Enabled, &p.DockerOnly, &p.CreatedAt, &p.UpdatedAt)
+	).Scan(&p.ID, &p.Name, &p.Description, &p.SourceID, &p.SourceType, &p.ServiceID,
+		&p.TargetID, &p.TargetType, &p.Action, &p.Priority, &p.Enabled, &p.DockerOnly, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		common.RespondError(w, http.StatusNotFound, "policy not found")
 		return
@@ -164,15 +170,17 @@ func MakeUpdatePolicyHandler(compiler *engine.Compiler) http.HandlerFunc {
 		}
 
 		var input struct {
-			Name          string `json:"name"`
-			Description   string `json:"description"`
-			SourceGroupID int    `json:"source_group_id"`
-			ServiceID     int    `json:"service_id"`
-			TargetPeerID  int    `json:"target_peer_id"`
-			Action        string `json:"action"`
-			Priority      int    `json:"priority"`
-			Enabled       *bool  `json:"enabled"`
-			DockerOnly    *bool  `json:"docker_only"`
+			Name        string `json:"name"`
+			Description string `json:"description"`
+			SourceID    int    `json:"source_id"`
+			SourceType  string `json:"source_type"`
+			ServiceID   int    `json:"service_id"`
+			TargetID    int    `json:"target_id"`
+			TargetType  string `json:"target_type"`
+			Action      string `json:"action"`
+			Priority    int    `json:"priority"`
+			Enabled     *bool  `json:"enabled"`
+			DockerOnly  *bool  `json:"docker_only"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 			common.RespondError(w, http.StatusBadRequest, "invalid JSON")
@@ -188,12 +196,15 @@ func MakeUpdatePolicyHandler(compiler *engine.Compiler) http.HandlerFunc {
 			dockerOnly = *input.DockerOnly
 		}
 
+		// Save old affected peers before update
+		oldPeers, _ := compiler.GetAffectedPeersByPolicy(r.Context(), id)
+
 		result, err := db.DB.ExecContext(r.Context(),
-			`UPDATE policies SET name = ?, description = ?, source_group_id = ?, service_id = ?,
-			target_peer_id = ?, action = ?, priority = ?, enabled = ?, docker_only = ?, updated_at = CURRENT_TIMESTAMP
+			`UPDATE policies SET name = ?, description = ?, source_id = ?, source_type = ?, service_id = ?,
+			target_id = ?, target_type = ?, action = ?, priority = ?, enabled = ?, docker_only = ?, updated_at = CURRENT_TIMESTAMP
 			WHERE id = ?`,
-			input.Name, input.Description, input.SourceGroupID, input.ServiceID,
-			input.TargetPeerID, input.Action, input.Priority, enabled, dockerOnly, id)
+			input.Name, input.Description, input.SourceID, input.SourceType, input.ServiceID,
+			input.TargetID, input.TargetType, input.Action, input.Priority, enabled, dockerOnly, id)
 		if err != nil {
 			common.RespondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to update policy: %v", err))
 			return
@@ -210,17 +221,20 @@ func MakeUpdatePolicyHandler(compiler *engine.Compiler) http.HandlerFunc {
 			return
 		}
 
-		// Trigger async recompilation for the target peer with timeout
+		// Trigger async recompilation for all affected peers (old and new)
 		go func() {
-			if input.TargetPeerID <= 0 {
-				return
-			}
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 			defer cancel()
-			if _, err := compiler.CompileAndStore(ctx, input.TargetPeerID); err != nil {
-				runiclog.ErrorContext(ctx, "async compile and store failed",
-					"peer_id", input.TargetPeerID,
-					"error", err)
+			newPeers, _ := compiler.GetAffectedPeersByPolicy(ctx, id)
+			
+			peerSet := make(map[int]bool)
+			for _, pid := range oldPeers { peerSet[pid] = true }
+			for _, pid := range newPeers { peerSet[pid] = true }
+			
+			for pid := range peerSet {
+				if _, err := compiler.CompileAndStore(ctx, pid); err != nil {
+					runiclog.ErrorContext(ctx, "async compile and store failed", "peer_id", pid, "error", err)
+				}
 			}
 		}()
 
@@ -236,28 +250,30 @@ func MakeDeletePolicyHandler(compiler *engine.Compiler) http.HandlerFunc {
 			return
 		}
 
-		// Get the target peer ID before deleting so we can recompile
-		var targetPeerID int
-		err = db.DB.QueryRowContext(r.Context(), "SELECT target_peer_id FROM policies WHERE id = ?", id).Scan(&targetPeerID)
-		if err != nil {
-			common.RespondError(w, http.StatusNotFound, "policy not found")
-			return
-		}
+		// Save old affected peers before update
+		oldPeers, _ := compiler.GetAffectedPeersByPolicy(r.Context(), id)
 
-		_, err = db.DB.ExecContext(r.Context(), "DELETE FROM policies WHERE id = ?", id)
+		// Delete the policy
+		res, err := db.DB.ExecContext(r.Context(), "DELETE FROM policies WHERE id = ?", id)
 		if err != nil {
 			common.RespondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to delete policy: %v", err))
 			return
 		}
+		
+		affected, _ := res.RowsAffected()
+		if affected == 0 {
+			common.RespondError(w, http.StatusNotFound, "policy not found")
+			return
+		}
 
-		// Trigger async recompilation for the target peer with timeout
+		// Trigger async recompilation for all old affected peers
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 			defer cancel()
-			if _, err := compiler.CompileAndStore(ctx, targetPeerID); err != nil {
-				runiclog.ErrorContext(ctx, "async compile and store failed",
-					"peer_id", targetPeerID,
-					"error", err)
+			for _, pid := range oldPeers {
+				if _, err := compiler.CompileAndStore(ctx, pid); err != nil {
+					runiclog.ErrorContext(ctx, "async compile and store failed", "peer_id", pid, "error", err)
+				}
 			}
 		}()
 
@@ -266,9 +282,12 @@ func MakeDeletePolicyHandler(compiler *engine.Compiler) http.HandlerFunc {
 }
 
 type PolicyPreviewRequest struct {
-	SourceGroupID int `json:"source_group_id"`
-	ServiceID     int `json:"service_id"`
-	TargetPeerID  int `json:"target_peer_id"`
+	SourceID   int    `json:"source_id"`
+	SourceType string `json:"source_type"`
+	TargetID   int    `json:"target_id"`
+	TargetType string `json:"target_type"`
+	ServiceID  int    `json:"service_id"`
+	PeerID     int    `json:"peer_id"` // the peer to base the preview on
 }
 
 func MakePolicyPreviewHandler(compiler *engine.Compiler) http.HandlerFunc {
@@ -280,7 +299,7 @@ func MakePolicyPreviewHandler(compiler *engine.Compiler) http.HandlerFunc {
 		}
 
 		// Generate rules using the engine's preview function
-		rules, err := compiler.PreviewCompile(r.Context(), req.TargetPeerID, req.SourceGroupID, req.ServiceID)
+		rules, err := compiler.PreviewCompile(r.Context(), req.PeerID, req.SourceID, req.SourceType, req.TargetID, req.TargetType, req.ServiceID)
 		if err != nil {
 			http.Error(w, "Failed to generate preview: "+err.Error(), http.StatusInternalServerError)
 			return

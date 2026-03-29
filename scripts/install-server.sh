@@ -941,18 +941,23 @@ npm run build || { log ERROR "npm run build failed"; exit 1; }
 cd .. || exit 1
 log SUCCESS "Web frontend built successfully"
 
-	# Download Go dependencies
-	log INFO "Downloading Go dependencies..."
-	go mod download >> "$LOG_FILE" 2>&1
+# Version info for build
+VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "dev")
+COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+BUILT_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-    # Build the server binary
-    log INFO "Building runic-server with CGO enabled..."
+# Download Go dependencies
+log INFO "Downloading Go dependencies..."
+go mod download >> "$LOG_FILE" 2>&1
 
-    # Create dist directory in INSTALL_DIR
-    mkdir -p "$INSTALL_DIR/dist"
+# Build the server binary
+log INFO "Building runic-server with CGO enabled..."
 
-    # Build with CGO for SQLite support
-    CGO_ENABLED=1 go build -buildvcs=false -o "$INSTALL_DIR/dist/$BINARY_NAME" ./cmd/runic-server >> "$LOG_FILE" 2>&1
+# Create dist directory in INSTALL_DIR
+mkdir -p "$INSTALL_DIR/dist"
+
+# Build with CGO for SQLite support and inject version info via ldflags
+CGO_ENABLED=1 go build -ldflags="-X runic/internal/common/version.Version=$VERSION -X runic/internal/common/version.Commit=$COMMIT -X runic/internal/common/version.BuiltAt=$BUILT_AT" -buildvcs=false -o "$INSTALL_DIR/dist/$BINARY_NAME" ./cmd/runic-server >> "$LOG_FILE" 2>&1
 
     if [ $? -ne 0 ]; then
         log ERROR "Build failed. Check $LOG_FILE for details."

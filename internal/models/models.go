@@ -47,18 +47,20 @@ type ServiceRow struct {
 }
 
 type PolicyRow struct {
-	ID            int
-	Name          string
-	Description   string
-	SourceGroupID int
-	ServiceID     int
-	TargetPeerID  int
-	Action        string
-	Priority      int
-	Enabled       bool
-	DockerOnly    bool
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	ID          int
+	Name        string
+	Description string
+	SourceID    int
+	SourceType  string
+	ServiceID   int
+	TargetID    int
+	TargetType  string
+	Action      string
+	Priority    int
+	Enabled     bool
+	DockerOnly  bool
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
 }
 
 type RuleBundleRow struct {

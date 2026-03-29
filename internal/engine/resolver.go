@@ -20,6 +20,28 @@ type PortClause struct {
 	PortMatch string // e.g. "--dport 22" or "-m multiport --dports 80,443"
 }
 
+// ResolveEntity returns a deduplicated flat list of CIDRs for the given entity (peer or group).
+func (r *Resolver) ResolveEntity(ctx context.Context, entityType string, entityID int) ([]string, error) {
+	if entityType == "peer" {
+		var ipAddress string
+		if err := r.db.QueryRowContext(ctx, "SELECT ip_address FROM peers WHERE id = ?", entityID).Scan(&ipAddress); err != nil {
+			return nil, fmt.Errorf("resolve peer %d: %w", entityID, err)
+		}
+		if strings.Contains(ipAddress, "/") {
+			if _, _, err := net.ParseCIDR(ipAddress); err != nil {
+				return nil, fmt.Errorf("invalid CIDR in peer %d: %s", entityID, ipAddress)
+			}
+			return []string{ipAddress}, nil
+		}
+		if net.ParseIP(ipAddress) == nil {
+			return nil, fmt.Errorf("invalid IP in peer %d: %s", entityID, ipAddress)
+		}
+		return []string{ipAddress + "/32"}, nil
+	}
+	
+	return r.ResolveGroup(ctx, entityID, nil)
+}
+
 // ResolveGroup returns a deduplicated flat list of CIDRs for the given group.
 // In the new schema, groups contain only peers. We look up each peer's IP address.
 func (r *Resolver) ResolveGroup(ctx context.Context, groupID int, visited map[int]bool) ([]string, error) {

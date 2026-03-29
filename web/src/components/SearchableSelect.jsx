@@ -51,16 +51,32 @@ export default function SearchableSelect({ options = [], value, onChange, placeh
             {filtered.length === 0 ? (
               <p className="px-3 py-2 text-sm text-gray-500">No options found</p>
             ) : (
-              filtered.map(opt => (
-                <button
-                  key={opt.value}
-                  onClick={() => { onChange(opt.value); setOpen(false); setSearch('') }}
-                  className="w-full flex items-center justify-between px-3 py-2 text-left hover:bg-gray-100 dark:hover:bg-charcoal-darkest"
-                >
-                  <span className="text-sm text-gray-900 dark:text-light-neutral">{opt.label}</span>
-                  {opt.value === value && <Check className="w-4 h-4 text-purple-active" />}
-                </button>
-              ))
+              (() => {
+                const groups = filtered.reduce((acc, opt) => {
+                  const cat = opt.category || 'Other'
+                  if (!acc[cat]) acc[cat] = []
+                  acc[cat].push(opt)
+                  return acc
+                }, {})
+
+                return Object.entries(groups).map(([cat, opts]) => (
+                  <div key={cat}>
+                    <div className="px-3 py-1 text-[11px] font-bold uppercase tracking-wider text-gray-400 bg-gray-50 dark:bg-charcoal-darkest border-y border-gray-200 dark:border-gray-border first:border-t-0">
+                      {cat}
+                    </div>
+                    {opts.map(opt => (
+                      <button
+                        key={opt.value}
+                        onClick={() => { onChange(opt.value, opt.category); setOpen(false); setSearch('') }}
+                        className="w-full flex items-center justify-between px-3 py-2 text-left hover:bg-gray-100 dark:hover:bg-charcoal-darkest"
+                      >
+                        <span className="text-sm text-gray-900 dark:text-light-neutral">{opt.label}</span>
+                        {opt.value === value && <Check className="w-4 h-4 text-purple-active" />}
+                      </button>
+                    ))}
+                  </div>
+                ))
+              })()
             )}
           </div>
         </div>
