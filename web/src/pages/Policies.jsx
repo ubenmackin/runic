@@ -1,7 +1,7 @@
 import { useState, useMemo, useCallback } from 'react'
 import { useTableSort } from '../hooks/useTableSort'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Pencil, Trash2, Eye, RefreshCw, ArrowUp, ArrowDown, ArrowUpDown, X } from 'lucide-react'
+import { Plus, Pencil, Trash2, Eye, RefreshCw, ArrowUp, ArrowDown, ArrowUpDown, X, ChevronDown, ChevronUp, Info } from 'lucide-react'
 import { api, QUERY_KEYS } from '../api/client'
 import { useCrudModal } from '../hooks/useCrudModal'
 import { useToastContext } from '../hooks/ToastContext'
@@ -15,13 +15,14 @@ import TableSkeleton from '../components/TableSkeleton'
 export default function Policies() {
   const qc = useQueryClient()
   const showToast = useToastContext()
-  const { modalOpen, setModalOpen, editItem: editPolicy, setEditItem: setEditPolicy, form: formData, setForm: setFormData, setFormForEdit, handleOpenAdd, handleCancel } = useCrudModal({ name: '', description: '', source_group_id: '', service_id: '', target_peer_id: '', action: 'accept', priority: 100, enabled: true })
+  const { modalOpen, setModalOpen, editItem: editPolicy, setEditItem: setEditPolicy, form: formData, setForm: setFormData, setFormForEdit, handleOpenAdd, handleCancel } = useCrudModal({ name: '', description: '', source_group_id: '', service_id: '', target_peer_id: '', action: 'accept', priority: 100, enabled: true, docker_only: false })
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [filterServer, setFilterServer] = useState(null)
   const [showDisabled, setShowDisabled] = useState(false)
   const [preview, setPreview] = useState(null)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [formErrors, setFormErrors] = useState({})
+  const [showSystemRules, setShowSystemRules] = useState(false)
 
   // Sorting state (persisted per-user)
   const { sortConfig, handleSort } = useTableSort('policies', { key: 'priority', direction: 'asc' })
@@ -65,6 +66,9 @@ export default function Policies() {
   const serverOptions = (peers || []).map(s => ({ value: s.id, label: s.hostname }))
   const groupOptions = (groups || []).map(g => ({ value: g.id, label: g.name }))
   const serviceOptions = (services || []).map(s => ({ value: s.id, label: s.name }))
+
+  // Check if the selected target peer has Docker
+  const selectedPeerHasDocker = formData.target_peer_id && peers?.find(p => p.id === formData.target_peer_id)?.has_docker
 
   const createMutation = useMutation({
     mutationFn: (data) => api.post('/policies', data),
@@ -226,37 +230,91 @@ if (!formData.source_group_id || !formData.service_id || !formData.target_peer_i
             <Plus className="w-4 h-4" /> New Policy
           </button>
         </div>
-      </div>
+</div>
 
-      {/* Filters */}
-      <div className="flex flex-wrap gap-4 items-center bg-white dark:bg-charcoal-dark p-4 rounded-xl">
-        <div className="relative max-w-md flex-1">
-          <input
-            type="text"
-            placeholder="Search policies by name, source, service, or target..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full px-4 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral placeholder-gray-500 dark:placeholder-amber-muted focus:ring-2 focus:ring-purple-active focus:border-purple-active"
-          />
-          {searchTerm && (
-            <button
-              onClick={() => setSearchTerm('')}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-amber-primary"
-            >
-              ×
-            </button>
-          )}
+{/* System Rules Info Panel */}
+<div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-sm overflow-hidden">
+  <button
+    type="button"
+    onClick={() => setShowSystemRules(!showSystemRules)}
+    className="w-full px-4 py-3 flex items-center justify-between text-left hover:bg-gray-50 dark:hover:bg-charcoal-darkest transition-colors"
+  >
+    <div className="flex items-center gap-2">
+      <Info className="w-5 h-5 text-blue-500" />
+      <span className="font-medium text-gray-900 dark:text-light-neutral">System Rules</span>
+      <span className="text-xs text-gray-500 dark:text-amber-muted">(Automatically applied)</span>
+    </div>
+    {showSystemRules ? (
+      <ChevronUp className="w-5 h-5 text-gray-500" />
+    ) : (
+      <ChevronDown className="w-5 h-5 text-gray-500" />
+    )}
+  </button>
+  {showSystemRules && (
+    <div className="px-4 pb-4 border-t border-gray-200 dark:border-gray-border">
+      <div className="mt-3 space-y-2 text-sm">
+        <div className="flex items-start gap-2">
+          <span className="text-green-500 mt-0.5">✓</span>
+          <div>
+            <span className="font-medium text-gray-700 dark:text-amber-primary">Established/Related:</span>
+            <span className="text-gray-600 dark:text-amber-muted ml-1">Traffic from established and related connections is always accepted.</span>
+          </div>
         </div>
-        <div className="w-48">
-          <SearchableSelect options={[{ value: '', label: 'All Peers' }, ...serverOptions]} value={filterServer || ''} onChange={v => setFilterServer(v || null)} placeholder="Filter by peer" />
+        <div className="flex items-start gap-2">
+          <span className="text-red-500 mt-0.5">✕</span>
+          <div>
+            <span className="font-medium text-gray-700 dark:text-amber-primary">Invalid Packets:</span>
+            <span className="text-gray-600 dark:text-amber-muted ml-1">Packets with invalid state are dropped.</span>
+          </div>
         </div>
-        <label className="flex items-center gap-2 cursor-pointer">
-          <ToggleSwitch checked={showDisabled} onChange={setShowDisabled} />
-          <span className="text-sm text-gray-700 dark:text-amber-primary">Show disabled</span>
-        </label>
+        <div className="flex items-start gap-2">
+          <span className="text-blue-500 mt-0.5">◉</span>
+          <div>
+            <span className="font-medium text-gray-700 dark:text-amber-primary">ICMP:</span>
+            <span className="text-gray-600 dark:text-amber-muted ml-1">ICMP ping requests are accepted for connectivity testing.</span>
+          </div>
+        </div>
+        <div className="flex items-start gap-2">
+          <span className="text-purple-500 mt-0.5">◉</span>
+          <div>
+            <span className="font-medium text-gray-700 dark:text-amber-primary">Multicast:</span>
+            <span className="text-gray-600 dark:text-amber-muted ml-1">Multicast traffic is accepted for service discovery.</span>
+          </div>
+        </div>
       </div>
+    </div>
+  )}
+</div>
 
-      {!processedPolicies.length ? (
+{/* Filters */}
+<div className="flex flex-wrap gap-4 items-center bg-white dark:bg-charcoal-dark p-4 rounded-xl">
+  <div className="relative max-w-md flex-1">
+    <input
+      type="text"
+      placeholder="Search policies by name, source, service, or target..."
+      value={searchTerm}
+      onChange={(e) => setSearchTerm(e.target.value)}
+      className="w-full px-4 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral placeholder-gray-500 dark:text-amber-muted focus:ring-2 focus:ring-purple-active focus:border-purple-active"
+    />
+    {searchTerm && (
+      <button
+        onClick={() => setSearchTerm('')}
+        className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-amber-primary"
+      >
+        ×
+      </button>
+    )}
+  </div>
+  <div className="w-48">
+    <SearchableSelect options={[{ value: '', label: 'All Peers' }, ...serverOptions]} value={filterServer || ''} onChange={v => setFilterServer(v || null)} placeholder="Filter by peer" />
+  </div>
+  <label className="flex items-center gap-2 cursor-pointer">
+    <ToggleSwitch checked={showDisabled} onChange={setShowDisabled} />
+    <span className="text-sm text-gray-700 dark:text-amber-primary">Show disabled</span>
+  </label>
+</div>
+
+{!processedPolicies.length ? (
         searchTerm ? (
           <div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-sm p-8 text-center">
             <p className="text-gray-500 dark:text-amber-muted">No policies match your search.</p>
@@ -403,10 +461,19 @@ if (!formData.source_group_id || !formData.service_id || !formData.target_peer_i
                   </label>
                 </div>
               </div>
-              <div className="flex items-center gap-2">
-                <input type="checkbox" id="enabled" checked={formData.enabled} onChange={e => setFormData(d => ({ ...d, enabled: e.target.checked }))} className="w-4 h-4 rounded border-gray-300" />
-                <label htmlFor="enabled" className="text-sm text-gray-700 dark:text-amber-primary">Enabled</label>
-              </div>
+<div className="flex items-center gap-2">
+      <input type="checkbox" id="enabled" checked={formData.enabled} onChange={e => setFormData(d => ({ ...d, enabled: e.target.checked }))} className="w-4 h-4 rounded border-gray-300" />
+      <label htmlFor="enabled" className="text-sm text-gray-700 dark:text-amber-primary">Enabled</label>
+    </div>
+
+    {/* Docker Only Toggle - Only shown when target peer has Docker */}
+    {selectedPeerHasDocker && (
+      <div className="flex items-center gap-2 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
+        <ToggleSwitch checked={formData.docker_only} onChange={v => setFormData(d => ({ ...d, docker_only: v }))} />
+        <label className="text-sm text-gray-700 dark:text-amber-primary">Docker containers only</label>
+        <span className="text-xs text-gray-500 dark:text-amber-muted ml-1">(Apply to DOCKER-USER chain only)</span>
+      </div>
+    )}
 
               {/* Preview */}
               <div className="border-t border-gray-200 dark:border-gray-border pt-4">

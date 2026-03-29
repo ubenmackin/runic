@@ -39,9 +39,9 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 		return "", fmt.Errorf("load peer %d: %w", peerID, err)
 	}
 
-	// 2. Load enabled policies ordered by priority ASC
+	// 2. Load enabled policies ordered by priority ASC, including docker_only field
 	rows, err := c.db.QueryContext(ctx,
-		`SELECT p.id, p.name, p.source_group_id, p.service_id, p.action, p.priority
+		`SELECT p.id, p.name, p.source_group_id, p.service_id, p.action, p.priority, p.docker_only
 		FROM policies p
 		WHERE p.target_peer_id = ? AND p.enabled = 1
 		ORDER BY p.priority ASC`, peerID)
@@ -57,12 +57,13 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 		ServiceID     int
 		Action        string
 		Priority      int
+		DockerOnly    bool
 	}
 
 	var policies []policyInfo
 	for rows.Next() {
 		var p policyInfo
-		if err := rows.Scan(&p.ID, &p.Name, &p.SourceGroupID, &p.ServiceID, &p.Action, &p.Priority); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.SourceGroupID, &p.ServiceID, &p.Action, &p.Priority, &p.DockerOnly); err != nil {
 			return "", fmt.Errorf("scan policy: %w", err)
 		}
 		policies = append(policies, p)
@@ -77,9 +78,9 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 
 	// Header comment
 	buf.WriteString("# Runic rule bundle\n")
-	buf.WriteString(fmt.Sprintf("# Host:      %s\n", hostname))
+	buf.WriteString(fmt.Sprintf("# Host: %s\n", hostname))
 	buf.WriteString(fmt.Sprintf("# Generated: %s\n", now))
-	buf.WriteString(fmt.Sprintf("# Policies:  %d\n", len(policies)))
+	buf.WriteString(fmt.Sprintf("# Policies: %d\n", len(policies)))
 
 	// Filter table and chain policies
 	buf.WriteString("*filter\n")
@@ -96,21 +97,34 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 
 	// Standard rules: loopback
 	buf.WriteString("# --- Standard: loopback ---\n")
-	buf.WriteString("-A INPUT  -i lo -j ACCEPT\n")
+	buf.WriteString("-A INPUT -i lo -j ACCEPT\n")
 	buf.WriteString("-A OUTPUT -o lo -j ACCEPT\n")
 	buf.WriteString("\n")
 
 	// Standard rules: ICMP
 	buf.WriteString("# --- Standard: ICMP ---\n")
-	buf.WriteString("-A INPUT  -p icmp -j ACCEPT\n")
+	buf.WriteString("-A INPUT -p icmp -j ACCEPT\n")
 	buf.WriteString("-A OUTPUT -p icmp -j ACCEPT\n")
 	buf.WriteString("\n")
 
-	// Standard rules: established/related
+	// Standard rules: established/related (using conntrack for better compatibility)
 	buf.WriteString("# --- Standard: established/related ---\n")
-	buf.WriteString("-A INPUT  -m state --state ESTABLISHED,RELATED -j ACCEPT\n")
-	buf.WriteString("-A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT\n")
+	buf.WriteString("-A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT\n")
+	buf.WriteString("-A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT\n")
 	buf.WriteString("\n")
+
+	// Standard rules: INVALID packet drop
+	buf.WriteString("# --- Standard: INVALID packet drop ---\n")
+	buf.WriteString("-A INPUT -m conntrack --ctstate INVALID -j DROP\n")
+	buf.WriteString("\n")
+
+	// Docker standard rules: Add established/related and INVALID to DOCKER-USER chain
+	if hasDocker {
+		buf.WriteString("# --- Docker: Standard rules for DOCKER-USER ---\n")
+		buf.WriteString("-A DOCKER-USER -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT\n")
+		buf.WriteString("-A DOCKER-USER -m conntrack --ctstate INVALID -j DROP\n")
+		buf.WriteString("\n")
+	}
 
 	// Policy rules
 	for _, pol := range policies {
@@ -138,13 +152,44 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 			return "", fmt.Errorf("load group %d: %w", pol.SourceGroupID, err)
 		}
 
-		// Expand ports
+		buf.WriteString(fmt.Sprintf("# --- Policy: %s | %s -> %s ---\n", pol.Name, groupName, serviceName))
+
+		// Special handling for Multicast service: use packet type match instead of source IP
+		if serviceName == "Multicast" {
+			switch pol.Action {
+			case "ACCEPT":
+				if !pol.DockerOnly {
+					buf.WriteString("-A INPUT -m pkttype --pkt-type multicast -j ACCEPT\n")
+				}
+				if hasDocker {
+					buf.WriteString("-A DOCKER-USER -m pkttype --pkt-type multicast -j ACCEPT\n")
+				}
+			case "DROP":
+				if !pol.DockerOnly {
+					buf.WriteString("-A INPUT -m pkttype --pkt-type multicast -j DROP\n")
+				}
+				if hasDocker {
+					buf.WriteString("-A DOCKER-USER -m pkttype --pkt-type multicast -j DROP\n")
+				}
+			case "LOG_DROP":
+				if !pol.DockerOnly {
+					buf.WriteString("-A INPUT -m pkttype --pkt-type multicast -j LOG --log-prefix \"[RUNIC-DROP] \" --log-level 4\n")
+					buf.WriteString("-A INPUT -m pkttype --pkt-type multicast -j DROP\n")
+				}
+				if hasDocker {
+					buf.WriteString("-A DOCKER-USER -m pkttype --pkt-type multicast -j LOG --log-prefix \"[RUNIC-DROP] \" --log-level 4\n")
+					buf.WriteString("-A DOCKER-USER -m pkttype --pkt-type multicast -j DROP\n")
+				}
+			}
+			buf.WriteString("\n")
+			continue
+		}
+
+		// Expand ports for non-multicast services
 		portClauses, err := ExpandPorts(ports, protocol)
 		if err != nil {
 			return "", fmt.Errorf("expand ports for policy %s: %w", pol.Name, err)
 		}
-
-		buf.WriteString(fmt.Sprintf("# --- Policy: %s | %s -> %s ---\n", pol.Name, groupName, serviceName))
 
 		for _, cidr := range cidrs {
 			for _, pc := range portClauses {
@@ -155,29 +200,61 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 
 				switch pol.Action {
 				case "ACCEPT":
-					if inputPortMatch != "" {
-						buf.WriteString(fmt.Sprintf("-A INPUT  -s %s -p %s %s -m state --state NEW,ESTABLISHED -j ACCEPT\n", cidr, pc.Protocol, inputPortMatch))
-					} else {
-						buf.WriteString(fmt.Sprintf("-A INPUT  -s %s -p %s -m state --state NEW,ESTABLISHED -j ACCEPT\n", cidr, pc.Protocol))
+					// For docker_only=false: apply to both INPUT and DOCKER-USER (if Docker peer)
+					// For docker_only=true: apply only to DOCKER-USER (if Docker peer)
+					if !pol.DockerOnly {
+						if inputPortMatch != "" {
+							buf.WriteString(fmt.Sprintf("-A INPUT -s %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", cidr, pc.Protocol, inputPortMatch))
+						} else {
+							buf.WriteString(fmt.Sprintf("-A INPUT -s %s -p %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", cidr, pc.Protocol))
+						}
+						if outputPortMatch != "" {
+							buf.WriteString(fmt.Sprintf("-A OUTPUT -d %s -p %s %s -m conntrack --ctstate ESTABLISHED -j ACCEPT\n", cidr, pc.Protocol, outputPortMatch))
+						} else {
+							buf.WriteString(fmt.Sprintf("-A OUTPUT -d %s -p %s -m conntrack --ctstate ESTABLISHED -j ACCEPT\n", cidr, pc.Protocol))
+						}
 					}
-					if outputPortMatch != "" {
-						buf.WriteString(fmt.Sprintf("-A OUTPUT -d %s -p %s %s -m state --state ESTABLISHED -j ACCEPT\n", cidr, pc.Protocol, outputPortMatch))
-					} else {
-						buf.WriteString(fmt.Sprintf("-A OUTPUT -d %s -p %s -m state --state ESTABLISHED -j ACCEPT\n", cidr, pc.Protocol))
+					// Apply to DOCKER-USER chain for Docker peers
+					if hasDocker {
+						if inputPortMatch != "" {
+							buf.WriteString(fmt.Sprintf("-A DOCKER-USER -s %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", cidr, pc.Protocol, inputPortMatch))
+						} else {
+							buf.WriteString(fmt.Sprintf("-A DOCKER-USER -s %s -p %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", cidr, pc.Protocol))
+						}
 					}
 				case "DROP":
-					if inputPortMatch != "" {
-						buf.WriteString(fmt.Sprintf("-A INPUT  -s %s -p %s %s -j DROP\n", cidr, pc.Protocol, inputPortMatch))
-					} else {
-						buf.WriteString(fmt.Sprintf("-A INPUT  -s %s -p %s -j DROP\n", cidr, pc.Protocol))
+					if !pol.DockerOnly {
+						if inputPortMatch != "" {
+							buf.WriteString(fmt.Sprintf("-A INPUT -s %s -p %s %s -j DROP\n", cidr, pc.Protocol, inputPortMatch))
+						} else {
+							buf.WriteString(fmt.Sprintf("-A INPUT -s %s -p %s -j DROP\n", cidr, pc.Protocol))
+						}
+					}
+					if hasDocker {
+						if inputPortMatch != "" {
+							buf.WriteString(fmt.Sprintf("-A DOCKER-USER -s %s -p %s %s -j DROP\n", cidr, pc.Protocol, inputPortMatch))
+						} else {
+							buf.WriteString(fmt.Sprintf("-A DOCKER-USER -s %s -p %s -j DROP\n", cidr, pc.Protocol))
+						}
 					}
 				case "LOG_DROP":
-					if inputPortMatch != "" {
-						buf.WriteString(fmt.Sprintf("-A INPUT  -s %s -p %s %s -j LOG --log-prefix \"[RUNIC-DROP] \" --log-level 4\n", cidr, pc.Protocol, inputPortMatch))
-						buf.WriteString(fmt.Sprintf("-A INPUT  -s %s -p %s %s -j DROP\n", cidr, pc.Protocol, inputPortMatch))
-					} else {
-						buf.WriteString(fmt.Sprintf("-A INPUT  -s %s -p %s -j LOG --log-prefix \"[RUNIC-DROP] \" --log-level 4\n", cidr, pc.Protocol))
-						buf.WriteString(fmt.Sprintf("-A INPUT  -s %s -p %s -j DROP\n", cidr, pc.Protocol))
+					if !pol.DockerOnly {
+						if inputPortMatch != "" {
+							buf.WriteString(fmt.Sprintf("-A INPUT -s %s -p %s %s -j LOG --log-prefix \"[RUNIC-DROP] \" --log-level 4\n", cidr, pc.Protocol, inputPortMatch))
+							buf.WriteString(fmt.Sprintf("-A INPUT -s %s -p %s %s -j DROP\n", cidr, pc.Protocol, inputPortMatch))
+						} else {
+							buf.WriteString(fmt.Sprintf("-A INPUT -s %s -p %s -j LOG --log-prefix \"[RUNIC-DROP] \" --log-level 4\n", cidr, pc.Protocol))
+							buf.WriteString(fmt.Sprintf("-A INPUT -s %s -p %s -j DROP\n", cidr, pc.Protocol))
+						}
+					}
+					if hasDocker {
+						if inputPortMatch != "" {
+							buf.WriteString(fmt.Sprintf("-A DOCKER-USER -s %s -p %s %s -j LOG --log-prefix \"[RUNIC-DROP] \" --log-level 4\n", cidr, pc.Protocol, inputPortMatch))
+							buf.WriteString(fmt.Sprintf("-A DOCKER-USER -s %s -p %s %s -j DROP\n", cidr, pc.Protocol, inputPortMatch))
+						} else {
+							buf.WriteString(fmt.Sprintf("-A DOCKER-USER -s %s -p %s -j LOG --log-prefix \"[RUNIC-DROP] \" --log-level 4\n", cidr, pc.Protocol))
+							buf.WriteString(fmt.Sprintf("-A DOCKER-USER -s %s -p %s -j DROP\n", cidr, pc.Protocol))
+						}
 					}
 				}
 			}
@@ -187,15 +264,15 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 
 	// Logging and default deny (always last)
 	buf.WriteString("# --- Logging and default deny ---\n")
-	buf.WriteString("-A INPUT  -j LOG --log-prefix \"[RUNIC-DROP] \" --log-level 4\n")
-	buf.WriteString("-A INPUT  -j DROP\n")
+	buf.WriteString("-A INPUT -j LOG --log-prefix \"[RUNIC-DROP] \" --log-level 4\n")
+	buf.WriteString("-A INPUT -j DROP\n")
 	buf.WriteString("-A OUTPUT -j LOG --log-prefix \"[RUNIC-DROP] \" --log-level 4\n")
 	buf.WriteString("-A OUTPUT -j DROP\n")
 
-	// Docker section
+	// Docker section: RETURN at the end of DOCKER-USER chain
 	if hasDocker {
 		buf.WriteString("\n")
-		buf.WriteString("# --- Docker: DOCKER-USER chain management ---\n")
+		buf.WriteString("# --- Docker: DOCKER-USER chain default ---\n")
 		buf.WriteString("-A DOCKER-USER -j RETURN\n")
 	}
 
@@ -249,6 +326,12 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceGroupID, se
 	// Generate rules
 	var rules []string
 
+	// Special handling for Multicast service
+	if serviceName == "Multicast" {
+		rules = append(rules, "-A INPUT -m pkttype --pkt-type multicast -j ACCEPT")
+		return rules, nil
+	}
+
 	for _, cidr := range cidrs {
 		for _, pc := range portClauses {
 			// Build port match strings for INPUT (--dport) and OUTPUT (--sport)
@@ -258,16 +341,16 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceGroupID, se
 
 			// Generate INPUT rule
 			if inputPortMatch != "" {
-				rules = append(rules, fmt.Sprintf("-A INPUT  -s %s -p %s %s -m state --state NEW,ESTABLISHED -j ACCEPT", cidr, pc.Protocol, inputPortMatch))
+				rules = append(rules, fmt.Sprintf("-A INPUT -s %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT", cidr, pc.Protocol, inputPortMatch))
 			} else {
-				rules = append(rules, fmt.Sprintf("-A INPUT  -s %s -p %s -m state --state NEW,ESTABLISHED -j ACCEPT", cidr, pc.Protocol))
+				rules = append(rules, fmt.Sprintf("-A INPUT -s %s -p %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT", cidr, pc.Protocol))
 			}
 
 			// Generate OUTPUT rule
 			if outputPortMatch != "" {
-				rules = append(rules, fmt.Sprintf("-A OUTPUT -d %s -p %s %s -m state --state ESTABLISHED -j ACCEPT", cidr, pc.Protocol, outputPortMatch))
+				rules = append(rules, fmt.Sprintf("-A OUTPUT -d %s -p %s %s -m conntrack --ctstate ESTABLISHED -j ACCEPT", cidr, pc.Protocol, outputPortMatch))
 			} else {
-				rules = append(rules, fmt.Sprintf("-A OUTPUT -d %s -p %s -m state --state ESTABLISHED -j ACCEPT", cidr, pc.Protocol))
+				rules = append(rules, fmt.Sprintf("-A OUTPUT -d %s -p %s -m conntrack --ctstate ESTABLISHED -j ACCEPT", cidr, pc.Protocol))
 			}
 		}
 	}

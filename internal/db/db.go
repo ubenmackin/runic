@@ -78,6 +78,16 @@ func InitDB(dataSourceName string) {
 		log.Fatalf("Failed to create schema: %v", err)
 	}
 
+	// Seed default system services
+	if err := seedSystemServices(DB.DB); err != nil {
+		log.Fatalf("Failed to seed system services: %v", err)
+	}
+
+	// Seed system groups
+	if err := seedSystemGroups(DB.DB); err != nil {
+		log.Fatalf("Failed to seed system groups: %v", err)
+	}
+
 	log.Println("Database connection established")
 }
 
@@ -307,6 +317,84 @@ func migrateSchema(database *sql.DB) error {
 		log.Println("Migration: added description column to peers table")
 	}
 
+	// Migration: Add is_system column to services table
+	existingServiceColumns := make(map[string]bool)
+	serviceRows, err := database.Query("PRAGMA table_info(services)")
+	if err == nil {
+		defer serviceRows.Close()
+		for serviceRows.Next() {
+			var cid int
+			var name string
+			var typ string
+			var notnull int
+			var dflt sql.NullString
+			var pk int
+			if err := serviceRows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+				return fmt.Errorf("failed to scan service column info: %w", err)
+			}
+			existingServiceColumns[name] = true
+		}
+	}
+
+	if !existingServiceColumns["is_system"] {
+		if _, err := database.Exec("ALTER TABLE services ADD COLUMN is_system BOOLEAN NOT NULL DEFAULT 0"); err != nil {
+			return fmt.Errorf("failed to add is_system column: %w", err)
+		}
+		log.Println("Migration: added is_system column to services table")
+	}
+
+	// Migration: Add is_system column to groups table
+	existingGroupColumns := make(map[string]bool)
+	groupRows, err := database.Query("PRAGMA table_info(groups)")
+	if err == nil {
+		defer groupRows.Close()
+		for groupRows.Next() {
+			var cid int
+			var name string
+			var typ string
+			var notnull int
+			var dflt sql.NullString
+			var pk int
+			if err := groupRows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+				return fmt.Errorf("failed to scan group column info: %w", err)
+			}
+			existingGroupColumns[name] = true
+		}
+	}
+
+	if !existingGroupColumns["is_system"] {
+		if _, err := database.Exec("ALTER TABLE groups ADD COLUMN is_system BOOLEAN NOT NULL DEFAULT 0"); err != nil {
+			return fmt.Errorf("failed to add is_system column to groups: %w", err)
+		}
+		log.Println("Migration: added is_system column to groups table")
+	}
+
+	// Migration: Add docker_only column to policies table
+	existingPolicyColumns := make(map[string]bool)
+	policyRows, err := database.Query("PRAGMA table_info(policies)")
+	if err == nil {
+		defer policyRows.Close()
+		for policyRows.Next() {
+			var cid int
+			var name string
+			var typ string
+			var notnull int
+			var dflt sql.NullString
+			var pk int
+			if err := policyRows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+				return fmt.Errorf("failed to scan policy column info: %w", err)
+			}
+			existingPolicyColumns[name] = true
+		}
+	}
+
+	if !existingPolicyColumns["docker_only"] {
+		if _, err := database.Exec("ALTER TABLE policies ADD COLUMN docker_only BOOLEAN NOT NULL DEFAULT 0"); err != nil {
+			return fmt.Errorf("failed to add docker_only column: %w", err)
+		}
+		log.Println("Migration: added docker_only column to policies table")
+	}
+
 	// Migration: group_members table restructure (peer-based)
 	// Check if group_members has the old schema (value/type columns instead of peer_id)
 	var hasOldGroupMembersSchema bool
@@ -418,11 +506,11 @@ func ListGroupMembers(ctx context.Context, database *sql.DB, groupID int) ([]mod
 // ListEnabledPolicies fetches enabled policies for a peer, ordered by priority ASC.
 func ListEnabledPolicies(ctx context.Context, database *sql.DB, peerID int) ([]models.PolicyRow, error) {
 	rows, err := database.QueryContext(ctx,
-		`SELECT id, name, COALESCE(description, ''), source_group_id, service_id, target_peer_id,
-		        action, priority, enabled, created_at, updated_at
-		 FROM policies
-		 WHERE target_peer_id = ? AND enabled = 1
-		 ORDER BY priority ASC`, peerID)
+		`SELECT id, name, COALESCE(description, \'\'), source_group_id, service_id, target_peer_id, 
+	action, priority, enabled, docker_only, created_at, updated_at 
+	FROM policies 
+	WHERE target_peer_id = ? AND enabled = 1 
+	ORDER BY priority ASC`, peerID)
 	if err != nil {
 		return nil, err
 	}
@@ -432,7 +520,7 @@ func ListEnabledPolicies(ctx context.Context, database *sql.DB, peerID int) ([]m
 	for rows.Next() {
 		var p models.PolicyRow
 		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.SourceGroupID, &p.ServiceID,
-			&p.TargetPeerID, &p.Action, &p.Priority, &p.Enabled, &p.CreatedAt, &p.UpdatedAt); err != nil {
+			&p.TargetPeerID, &p.Action, &p.Priority, &p.Enabled, &p.DockerOnly, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			return nil, err
 		}
 		policies = append(policies, p)
@@ -444,9 +532,9 @@ func ListEnabledPolicies(ctx context.Context, database *sql.DB, peerID int) ([]m
 func GetService(ctx context.Context, database *sql.DB, serviceID int) (models.ServiceRow, error) {
 	var s models.ServiceRow
 	err := database.QueryRowContext(ctx,
-		`SELECT id, name, ports, protocol, COALESCE(description, ''), direction_hint
-		 FROM services WHERE id = ?`, serviceID,
-	).Scan(&s.ID, &s.Name, &s.Ports, &s.Protocol, &s.Description, &s.DirectionHint)
+		`SELECT id, name, ports, protocol, COALESCE(description, ''), direction_hint, COALESCE(is_system, 0)
+		FROM services WHERE id = ?`, serviceID,
+	).Scan(&s.ID, &s.Name, &s.Ports, &s.Protocol, &s.Description, &s.DirectionHint, &s.IsSystem)
 	return s, err
 }
 
@@ -454,8 +542,8 @@ func GetService(ctx context.Context, database *sql.DB, serviceID int) (models.Se
 func GetGroup(ctx context.Context, database *sql.DB, groupID int) (models.GroupRow, error) {
 	var g models.GroupRow
 	err := database.QueryRowContext(ctx,
-		"SELECT id, name, COALESCE(description, '') FROM groups WHERE id = ?", groupID,
-	).Scan(&g.ID, &g.Name, &g.Description)
+		"SELECT id, name, COALESCE(description, ''), COALESCE(is_system, 0) FROM groups WHERE id = ?", groupID,
+	).Scan(&g.ID, &g.Name, &g.Description, &g.IsSystem)
 	return g, err
 }
 
@@ -499,9 +587,9 @@ func SaveBundle(ctx context.Context, database *sql.DB, params models.CreateBundl
 func FindPoliciesByGroupID(ctx context.Context, database *sql.DB, groupID int) ([]models.PolicyRow, error) {
 	rows, err := database.QueryContext(ctx,
 		`SELECT id, name, COALESCE(description, ''), source_group_id, service_id, target_peer_id,
-		        action, priority, enabled, created_at, updated_at
-		 FROM policies
-		 WHERE source_group_id = ?`, groupID)
+		action, priority, enabled, created_at, updated_at
+		FROM policies
+		WHERE source_group_id = ?`, groupID)
 	if err != nil {
 		return nil, err
 	}
@@ -517,4 +605,110 @@ func FindPoliciesByGroupID(ctx context.Context, database *sql.DB, groupID int) (
 		policies = append(policies, p)
 	}
 	return policies, rows.Err()
+}
+
+// seedSystemServices creates default system services if they don't exist.
+// System services are non-deletable and provide essential firewall functionality.
+func seedSystemServices(database *sql.DB) error {
+	// Define system services to seed
+	systemServices := []struct {
+		Name        string
+		Ports       string
+		Protocol    string
+		Description string
+	}{
+		{
+			Name:        "ICMP",
+			Ports:       "",
+			Protocol:    "icmp",
+			Description: "ICMP protocol for ping and network diagnostics (system service)",
+		},
+		{
+			Name:        "Multicast",
+			Ports:       "",
+			Protocol:    "udp",
+			Description: "Multicast traffic handling (system service)",
+		},
+	}
+
+	for _, svc := range systemServices {
+		// Check if service already exists
+		var count int
+		err := database.QueryRow("SELECT COUNT(*) FROM services WHERE name = ?", svc.Name).Scan(&count)
+		if err != nil {
+			return fmt.Errorf("failed to check for existing service %s: %w", svc.Name, err)
+		}
+
+		if count > 0 {
+			// Service exists, ensure it's marked as system service
+			_, err := database.Exec("UPDATE services SET is_system = 1 WHERE name = ?", svc.Name)
+			if err != nil {
+				return fmt.Errorf("failed to update system flag for service %s: %w", svc.Name, err)
+			}
+			log.Printf("Seeding: ensured %s service is marked as system service", svc.Name)
+			continue
+		}
+
+		// Insert new system service
+		_, err = database.Exec(
+			"INSERT INTO services (name, ports, protocol, description, is_system) VALUES (?, ?, ?, ?, 1)",
+			svc.Name, svc.Ports, svc.Protocol, svc.Description,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to create system service %s: %w", svc.Name, err)
+		}
+		log.Printf("Seeding: created %s system service", svc.Name)
+	}
+
+	return nil
+}
+
+// seedSystemGroups creates default system groups if they don't exist.
+// System groups are non-deletable and provide essential group functionality.
+func seedSystemGroups(database *sql.DB) error {
+	// Define system groups to seed
+	systemGroups := []struct {
+		Name        string
+		Description string
+	}{
+		{
+			Name:        "any",
+			Description: "System group representing all peers",
+		},
+		{
+			Name:        "localhost",
+			Description: "Virtual group for local traffic (127.0.0.1/8)",
+		},
+	}
+
+	for _, grp := range systemGroups {
+		// Check if group already exists
+		var count int
+		err := database.QueryRow("SELECT COUNT(*) FROM groups WHERE name = ?", grp.Name).Scan(&count)
+		if err != nil {
+			return fmt.Errorf("failed to check for existing group %s: %w", grp.Name, err)
+		}
+
+		if count > 0 {
+			// Group exists, ensure it's marked as system group
+			_, err := database.Exec("UPDATE groups SET is_system = 1 WHERE name = ?", grp.Name)
+			if err != nil {
+				return fmt.Errorf("failed to update system flag for group %s: %w", grp.Name, err)
+			}
+			log.Printf("Seeding: ensured %s group is marked as system group", grp.Name)
+			continue
+		}
+
+		// Insert new system group
+		_, err = database.Exec(
+			"INSERT INTO groups (name, description, is_system) VALUES (?, ?, 1)",
+			grp.Name, grp.Description,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to create system group %s: %w", grp.Name, err)
+		}
+		log.Printf("Seeding: created %s system group", grp.Name)
+	}
+
+	return nil
 }

@@ -27,12 +27,12 @@ type GroupWithCounts struct {
 
 func ListGroups(w http.ResponseWriter, r *http.Request) {
 	query := `
-		SELECT g.id, g.name, COALESCE(g.description, ''), (g.name = 'any') as is_system,
-			COALESCE(p.peer_count, 0), COALESCE(pol.policy_count, 0)
-		FROM groups g
-		LEFT JOIN (SELECT group_id, COUNT(*) as peer_count FROM group_members GROUP BY group_id) p ON g.id = p.group_id
-		LEFT JOIN (SELECT source_group_id, COUNT(*) as policy_count FROM policies GROUP BY source_group_id) pol ON g.id = pol.source_group_id
-		ORDER BY g.name ASC`
+	SELECT g.id, g.name, COALESCE(g.description, ''), COALESCE(g.is_system, 0),
+	COALESCE(p.peer_count, 0), COALESCE(pol.policy_count, 0)
+	FROM groups g
+	LEFT JOIN (SELECT group_id, COUNT(*) as peer_count FROM group_members GROUP BY group_id) p ON g.id = p.group_id
+	LEFT JOIN (SELECT source_group_id, COUNT(*) as policy_count FROM policies GROUP BY source_group_id) pol ON g.id = pol.source_group_id
+	ORDER BY g.name ASC`
 
 	rows, err := db.DB.QueryContext(r.Context(), query)
 	if err != nil {
@@ -130,16 +130,16 @@ func DeleteGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Query the group to get its name
-	var groupName string
-	err = db.DB.QueryRowContext(r.Context(), "SELECT name FROM groups WHERE id = ?", id).Scan(&groupName)
+	// Query the group to get its is_system flag
+	var isSystem bool
+	err = db.DB.QueryRowContext(r.Context(), "SELECT COALESCE(is_system, 0) FROM groups WHERE id = ?", id).Scan(&isSystem)
 	if err != nil {
 		common.RespondError(w, http.StatusNotFound, "group not found")
 		return
 	}
 
-	// Check if it's a system group (name == "any")
-	if groupName == "any" {
+	// Block deletion of system groups
+	if isSystem {
 		common.RespondError(w, http.StatusForbidden, "Cannot delete system group")
 		return
 	}

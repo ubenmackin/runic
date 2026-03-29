@@ -154,8 +154,8 @@ func TestListGroups_SystemGroup(t *testing.T) {
 	database, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	// Insert the "any" system group
-	database.Exec(`INSERT INTO groups (name, description) VALUES (?, ?)`, "any", "System group representing all peers")
+	// Insert the "any" system group with is_system=1
+	database.Exec(`INSERT INTO groups (name, description, is_system) VALUES (?, ?, 1)`, "any", "System group representing all peers")
 
 	// Insert a regular group for comparison
 	database.Exec(`INSERT INTO groups (name, description) VALUES (?, ?)`, "regular-group", "A regular group")
@@ -233,8 +233,8 @@ func TestDeleteGroup_SystemGroup(t *testing.T) {
 	database, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	// Insert the "any" system group
-	database.Exec(`INSERT INTO groups (name, description) VALUES (?, ?)`, "any", "System group")
+	// Insert the "any" system group with is_system=1
+	database.Exec(`INSERT INTO groups (name, description, is_system) VALUES (?, ?, 1)`, "any", "System group")
 
 	req := httptest.NewRequest("DELETE", "/api/v1/groups/1", nil)
 	w := httptest.NewRecorder()

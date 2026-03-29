@@ -19,6 +19,13 @@ const PROTOCOL_OPTIONS = [
   { value: 'icmp', label: 'ICMP' }
 ]
 
+// Protocol options for user-created services (excludes ICMP which is system-only)
+const USER_PROTOCOL_OPTIONS = [
+  { value: 'tcp', label: 'TCP' },
+  { value: 'udp', label: 'UDP' },
+  { value: 'both', label: 'TCP+UDP' },
+]
+
 export default function Services() {
   const qc = useQueryClient()
   const showToast = useToastContext()
@@ -386,24 +393,26 @@ export default function Services() {
                     <td className="px-4 py-3 text-gray-600 dark:text-amber-primary">
                       {service.description || '—'}
                     </td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={(e) => { e.stopPropagation(); openEdit(service) }}
-                          className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded"
-                          title="Edit"
-                        >
-                          <Pencil className="w-4 h-4 text-gray-500" />
-                        </button>
-                        <button
-                          onClick={(e) => { e.stopPropagation(); setDeleteTarget(service) }}
-                          className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded"
-                          title="Delete"
-                        >
-                          <Trash2 className="w-4 h-4 text-red-500" />
-                        </button>
-                      </div>
-                    </td>
+<td className="px-4 py-3">
+		<div className="flex items-center gap-2">
+		  <button
+			onClick={(e) => { e.stopPropagation(); openEdit(service) }}
+			className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded"
+			title="Edit"
+		  >
+			<Pencil className="w-4 h-4 text-gray-500" />
+		  </button>
+		  {!service.is_system && (
+			<button
+			  onClick={(e) => { e.stopPropagation(); setDeleteTarget(service) }}
+			  className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded"
+			  title="Delete"
+			>
+			  <Trash2 className="w-4 h-4 text-red-500" />
+			</button>
+		  )}
+		</div>
+	  </td>
                   </tr>
                 ))}
               </tbody>
@@ -427,13 +436,13 @@ export default function Services() {
                 <input type="text" value={formData.name} onChange={e => setFormData(d => ({ ...d, name: e.target.value }))} required className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white" />
               </div>
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Protocol</label>
-                      <SearchableSelect
-                        options={PROTOCOL_OPTIONS}
-                        value={formData.protocol}
-                        onChange={(val) => setFormData(d => ({ ...d, protocol: val }))}
-                        placeholder="Select protocol..."
-                      />
+<label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Protocol</label>
+				<SearchableSelect
+				  options={editService?.is_system ? PROTOCOL_OPTIONS : USER_PROTOCOL_OPTIONS}
+				  value={formData.protocol}
+				  onChange={(val) => setFormData(d => ({ ...d, protocol: val }))}
+				  placeholder="Select protocol..."
+				/>
                       <p className="text-xs text-gray-500 dark:text-amber-muted mt-1">Allow only specified network protocols.</p>
                     </div>
                     <div>
@@ -486,8 +495,8 @@ export default function Services() {
                       
                       {/* Port format hint */}
                       {formData.protocol !== 'icmp' && (
-                        <p className="text-xs text-gray-500 mt-1">
-                          Single: <code className="bg-gray-100 px-1 rounded">22</code>, Multiple: <code className="bg-gray-100 px-1 rounded">80,443</code>, Range: <code className="bg-gray-100 px-1 rounded">8000:9000</code>
+                        <p className="text-xs text-gray-500 mt-4">
+                          Single: <code className="bg-gray-100 dark:bg-black dark:text-white px-1 rounded">22</code>, Multiple: <code className="bg-gray-100 dark:bg-black dark:text-white px-1 rounded">80,443</code>, Range: <code className="bg-gray-100 dark:bg-black dark:text-white px-1 rounded">8000:9000</code>
                         </p>
                       )}
                     </div>

@@ -13,23 +13,32 @@ import (
 // validPortsRe matches comma/colon-separated port numbers (e.g. "22", "80,443", "8000:9000").
 var validPortsRe = regexp.MustCompile(`^\d+([,:]\d+)*$`)
 
-// validProtocols is the set of allowed protocol values.
+// validProtocols is the set of allowed protocol values for user-defined services.
+// Note: ICMP is only allowed for system services, not user-defined services.
 var validProtocols = map[string]bool{
 	"tcp":  true,
 	"udp":  true,
-	"icmp": true,
 	"both": true,
 }
 
 // validateService checks that ports and protocol are safe to compile into iptables rules.
-func validateService(ports, protocol string) error {
-	if !validProtocols[protocol] {
-		return fmt.Errorf("invalid protocol %q: must be tcp, udp, icmp, or both", protocol)
+// For user-defined services, ICMP protocol is blocked.
+func validateService(ports, protocol string, isSystem bool) error {
+	// ICMP is only allowed for system services
+	if protocol == "icmp" && !isSystem {
+		return fmt.Errorf("ICMP protocol is reserved for system services and cannot be used for user-defined services")
 	}
+
+	// For non-ICMP protocols, validate against allowed list
+	if protocol != "icmp" && !validProtocols[protocol] {
+		return fmt.Errorf("invalid protocol %q: must be tcp, udp, or both", protocol)
+	}
+
 	// ICMP doesn't use ports
 	if protocol == "icmp" {
 		return nil
 	}
+
 	if ports == "" {
 		return fmt.Errorf("ports are required for protocol %q", protocol)
 	}
@@ -43,7 +52,7 @@ func validateService(ports, protocol string) error {
 
 func ListServices(w http.ResponseWriter, r *http.Request) {
 	rows, err := db.DB.QueryContext(r.Context(),
-		"SELECT id, name, ports, protocol, COALESCE(description, ''), direction_hint FROM services")
+		"SELECT id, name, ports, protocol, COALESCE(description, ''), direction_hint, COALESCE(is_system, 0) FROM services")
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "failed to query services")
 		return
@@ -57,12 +66,13 @@ func ListServices(w http.ResponseWriter, r *http.Request) {
 		Protocol      string `json:"protocol"`
 		Description   string `json:"description"`
 		DirectionHint string `json:"direction_hint"`
+		IsSystem      bool   `json:"is_system"`
 	}
 
 	var servicesData []serviceResp
 	for rows.Next() {
 		var s serviceResp
-		if err := rows.Scan(&s.ID, &s.Name, &s.Ports, &s.Protocol, &s.Description, &s.DirectionHint); err != nil {
+		if err := rows.Scan(&s.ID, &s.Name, &s.Ports, &s.Protocol, &s.Description, &s.DirectionHint, &s.IsSystem); err != nil {
 			common.RespondError(w, http.StatusInternalServerError, "failed to scan service")
 			return
 		}
@@ -97,14 +107,15 @@ func CreateService(w http.ResponseWriter, r *http.Request) {
 		input.DirectionHint = "inbound"
 	}
 
-	if err := validateService(input.Ports, input.Protocol); err != nil {
+	// User-created services are never system services
+	if err := validateService(input.Ports, input.Protocol, false); err != nil {
 		common.RespondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	result, err := db.DB.ExecContext(r.Context(),
-		`INSERT INTO services (name, ports, protocol, description, direction_hint)
-		VALUES (?, ?, ?, ?, ?)`,
+		`INSERT INTO services (name, ports, protocol, description, direction_hint, is_system)
+		VALUES (?, ?, ?, ?, ?, 0)`,
 		input.Name, input.Ports, input.Protocol, input.Description, input.DirectionHint)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create service: %v", err))
@@ -138,6 +149,14 @@ func UpdateService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check if this is a system service
+	var isSystem bool
+	err = db.DB.QueryRowContext(r.Context(), "SELECT COALESCE(is_system, 0) FROM services WHERE id = ?", id).Scan(&isSystem)
+	if err != nil {
+		common.RespondError(w, http.StatusNotFound, "service not found")
+		return
+	}
+
 	var input struct {
 		Name          string `json:"name"`
 		Ports         string `json:"ports"`
@@ -153,7 +172,9 @@ func UpdateService(w http.ResponseWriter, r *http.Request) {
 	if input.Protocol == "" {
 		input.Protocol = "tcp"
 	}
-	if err := validateService(input.Ports, input.Protocol); err != nil {
+
+	// Pass isSystem flag to validation to allow ICMP for system services
+	if err := validateService(input.Ports, input.Protocol, isSystem); err != nil {
 		common.RespondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -174,6 +195,19 @@ func DeleteService(w http.ResponseWriter, r *http.Request) {
 	id, err := common.ParseIDParam(r, "id")
 	if err != nil {
 		common.RespondError(w, http.StatusBadRequest, "invalid service ID")
+		return
+	}
+
+	// Check if this is a system service
+	var isSystem bool
+	err = db.DB.QueryRowContext(r.Context(), "SELECT COALESCE(is_system, 0) FROM services WHERE id = ?", id).Scan(&isSystem)
+	if err != nil {
+		common.RespondError(w, http.StatusNotFound, "service not found")
+		return
+	}
+
+	if isSystem {
+		common.RespondError(w, http.StatusForbidden, "Cannot delete system service")
 		return
 	}
 

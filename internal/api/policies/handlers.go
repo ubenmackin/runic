@@ -16,7 +16,7 @@ import (
 func ListPolicies(w http.ResponseWriter, r *http.Request) {
 	rows, err := db.DB.QueryContext(r.Context(),
 		`SELECT id, name, COALESCE(description, ''), source_group_id, service_id,
-		 target_peer_id, action, priority, enabled, created_at, updated_at
+		target_peer_id, action, priority, enabled, docker_only, created_at, updated_at
 		FROM policies ORDER BY priority ASC`)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "failed to query policies")
@@ -34,6 +34,7 @@ func ListPolicies(w http.ResponseWriter, r *http.Request) {
 		Action        string `json:"action"`
 		Priority      int    `json:"priority"`
 		Enabled       bool   `json:"enabled"`
+		DockerOnly    bool   `json:"docker_only"`
 		CreatedAt     string `json:"created_at"`
 		UpdatedAt     string `json:"updated_at"`
 	}
@@ -42,7 +43,7 @@ func ListPolicies(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var p policyResp
 		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.SourceGroupID, &p.ServiceID,
-			&p.TargetPeerID, &p.Action, &p.Priority, &p.Enabled, &p.CreatedAt, &p.UpdatedAt); err != nil {
+			&p.TargetPeerID, &p.Action, &p.Priority, &p.Enabled, &p.DockerOnly, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			common.RespondError(w, http.StatusInternalServerError, "failed to scan policy")
 			return
 		}
@@ -65,6 +66,7 @@ func MakeCreatePolicyHandler(compiler *engine.Compiler) http.HandlerFunc {
 			Action        string `json:"action"`
 			Priority      int    `json:"priority"`
 			Enabled       *bool  `json:"enabled"`
+			DockerOnly    *bool  `json:"docker_only"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 			common.RespondError(w, http.StatusBadRequest, "invalid JSON")
@@ -84,12 +86,16 @@ func MakeCreatePolicyHandler(compiler *engine.Compiler) http.HandlerFunc {
 		if input.Enabled != nil {
 			enabled = *input.Enabled
 		}
+		dockerOnly := false
+		if input.DockerOnly != nil {
+			dockerOnly = *input.DockerOnly
+		}
 
 		result, err := db.DB.ExecContext(r.Context(),
-			`INSERT INTO policies (name, description, source_group_id, service_id, target_peer_id, action, priority, enabled)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			`INSERT INTO policies (name, description, source_group_id, service_id, target_peer_id, action, priority, enabled, docker_only)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			input.Name, input.Description, input.SourceGroupID, input.ServiceID,
-			input.TargetPeerID, input.Action, input.Priority, enabled)
+			input.TargetPeerID, input.Action, input.Priority, enabled, dockerOnly)
 		if err != nil {
 			common.RespondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create policy: %v", err))
 			return
@@ -130,16 +136,17 @@ func GetPolicy(w http.ResponseWriter, r *http.Request) {
 		Action        string `json:"action"`
 		Priority      int    `json:"priority"`
 		Enabled       bool   `json:"enabled"`
+		DockerOnly    bool   `json:"docker_only"`
 		CreatedAt     string `json:"created_at"`
 		UpdatedAt     string `json:"updated_at"`
 	}
 
 	err = db.DB.QueryRowContext(r.Context(),
 		`SELECT id, name, COALESCE(description, ''), source_group_id, service_id,
-		 target_peer_id, action, priority, enabled, created_at, updated_at
+		target_peer_id, action, priority, enabled, docker_only, created_at, updated_at
 		FROM policies WHERE id = ?`, id,
 	).Scan(&p.ID, &p.Name, &p.Description, &p.SourceGroupID, &p.ServiceID,
-		&p.TargetPeerID, &p.Action, &p.Priority, &p.Enabled, &p.CreatedAt, &p.UpdatedAt)
+		&p.TargetPeerID, &p.Action, &p.Priority, &p.Enabled, &p.DockerOnly, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		common.RespondError(w, http.StatusNotFound, "policy not found")
 		return
@@ -165,6 +172,7 @@ func MakeUpdatePolicyHandler(compiler *engine.Compiler) http.HandlerFunc {
 			Action        string `json:"action"`
 			Priority      int    `json:"priority"`
 			Enabled       *bool  `json:"enabled"`
+			DockerOnly    *bool  `json:"docker_only"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 			common.RespondError(w, http.StatusBadRequest, "invalid JSON")
@@ -175,13 +183,17 @@ func MakeUpdatePolicyHandler(compiler *engine.Compiler) http.HandlerFunc {
 		if input.Enabled != nil {
 			enabled = *input.Enabled
 		}
+		dockerOnly := false
+		if input.DockerOnly != nil {
+			dockerOnly = *input.DockerOnly
+		}
 
 		result, err := db.DB.ExecContext(r.Context(),
 			`UPDATE policies SET name = ?, description = ?, source_group_id = ?, service_id = ?,
-		 target_peer_id = ?, action = ?, priority = ?, enabled = ?, updated_at = CURRENT_TIMESTAMP
-		WHERE id = ?`,
+			target_peer_id = ?, action = ?, priority = ?, enabled = ?, docker_only = ?, updated_at = CURRENT_TIMESTAMP
+			WHERE id = ?`,
 			input.Name, input.Description, input.SourceGroupID, input.ServiceID,
-			input.TargetPeerID, input.Action, input.Priority, enabled, id)
+			input.TargetPeerID, input.Action, input.Priority, enabled, dockerOnly, id)
 		if err != nil {
 			common.RespondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to update policy: %v", err))
 			return

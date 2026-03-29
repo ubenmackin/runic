@@ -26,6 +26,7 @@ type GroupRow struct {
 	ID          int
 	Name        string
 	Description string
+	IsSystem    bool
 }
 
 type GroupMemberRow struct {
@@ -42,6 +43,7 @@ type ServiceRow struct {
 	Protocol      string
 	Description   string
 	DirectionHint string
+	IsSystem      bool
 }
 
 type PolicyRow struct {
@@ -54,6 +56,7 @@ type PolicyRow struct {
 	Action        string
 	Priority      int
 	Enabled       bool
+	DockerOnly    bool
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
 }

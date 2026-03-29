@@ -240,6 +240,69 @@ func TestICMPService(t *testing.T) {
 	}
 }
 
+func TestMulticastService(t *testing.T) {
+	database := setupTestDB(t)
+	peerID := insertPeer(t, database, "mcast1", "192.168.1.16", false)
+	groupID := insertGroup(t, database, "mcast-group")
+	manualPeerID := insertManualPeer(t, database, "10.0.6.0/24")
+	insertGroupMember(t, database, groupID, manualPeerID)
+	// Insert Multicast system service manually
+	result, err := database.Exec(
+		`INSERT INTO services (name, ports, protocol, description, is_system) VALUES (?, ?, ?, ?, 1)`,
+		"Multicast", "", "udp", "Multicast traffic handling (system service)")
+	if err != nil {
+		t.Fatalf("insert multicast service: %v", err)
+	}
+	serviceID, _ := result.LastInsertId()
+	insertPolicy(t, database, "allow-multicast", groupID, int(serviceID), peerID, "ACCEPT", 100, true)
+
+	c := NewCompiler(database, "test-key")
+	output, err := c.Compile(context.Background(), peerID)
+	if err != nil {
+		t.Fatalf("compile error: %v", err)
+	}
+
+	// Should have pkttype multicast rule, not source-based rule
+	if !strings.Contains(output, "-m pkttype --pkt-type multicast") {
+		t.Errorf("expected -m pkttype --pkt-type multicast in output, got:\n%s", output)
+	}
+	// Should NOT have source-based rule for multicast
+	if strings.Contains(output, "-s 10.0.6.0/24") && strings.Contains(output, "multicast") {
+		t.Errorf("multicast rule should not use source IP, got:\n%s", output)
+	}
+}
+
+func TestMulticastServiceWithDocker(t *testing.T) {
+	database := setupTestDB(t)
+	peerID := insertPeer(t, database, "mcast-docker", "192.168.1.17", true)
+	groupID := insertGroup(t, database, "mcast-docker-group")
+	manualPeerID := insertManualPeer(t, database, "10.0.7.0/24")
+	insertGroupMember(t, database, groupID, manualPeerID)
+	// Insert Multicast system service manually
+	result, err := database.Exec(
+		`INSERT INTO services (name, ports, protocol, description, is_system) VALUES (?, ?, ?, ?, 1)`,
+		"Multicast", "", "udp", "Multicast traffic handling (system service)")
+	if err != nil {
+		t.Fatalf("insert multicast service: %v", err)
+	}
+	serviceID, _ := result.LastInsertId()
+	insertPolicy(t, database, "allow-multicast-docker", groupID, int(serviceID), peerID, "ACCEPT", 100, true)
+
+	c := NewCompiler(database, "test-key")
+	output, err := c.Compile(context.Background(), peerID)
+	if err != nil {
+		t.Fatalf("compile error: %v", err)
+	}
+
+	// Should have pkttype multicast rule for both INPUT and DOCKER-USER
+	if !strings.Contains(output, "-A INPUT -m pkttype --pkt-type multicast -j ACCEPT") {
+		t.Errorf("expected INPUT multicast rule, got:\n%s", output)
+	}
+	if !strings.Contains(output, "-A DOCKER-USER -m pkttype --pkt-type multicast -j ACCEPT") {
+		t.Errorf("expected DOCKER-USER multicast rule, got:\n%s", output)
+	}
+}
+
 func TestNoPolicies(t *testing.T) {
 	database := setupTestDB(t)
 	peerID := insertPeer(t, database, "empty1", "192.168.1.18", false)
@@ -254,12 +317,12 @@ func TestNoPolicies(t *testing.T) {
 	if !strings.Contains(output, ":INPUT DROP [0:0]") {
 		t.Error("expected :INPUT DROP chain policy")
 	}
-	// Check for loopback rule - compiler outputs two spaces after INPUT
-	if !strings.Contains(output, "-A INPUT  -i lo -j ACCEPT") {
+	// Check for loopback rule
+	if !strings.Contains(output, "-A INPUT -i lo -j ACCEPT") {
 		t.Errorf("expected loopback rule, output: %q", output)
 	}
-	// Check for default deny - compiler outputs two spaces after INPUT
-	if !strings.Contains(output, "-A INPUT  -j DROP") {
+	// Check for default deny
+	if !strings.Contains(output, "-A INPUT -j DROP") {
 		t.Errorf("expected default deny rule, output: %q", output)
 	}
 	if !strings.Contains(output, "COMMIT") {
@@ -268,6 +331,54 @@ func TestNoPolicies(t *testing.T) {
 	// Should not have any policy-specific comments
 	if strings.Contains(output, "# --- Policy:") {
 		t.Error("expected no policy rules for peer with no policies")
+	}
+}
+
+func TestConntrackStandardRules(t *testing.T) {
+	database := setupTestDB(t)
+	peerID := insertPeer(t, database, "conntrack1", "192.168.1.25", false)
+
+	c := NewCompiler(database, "test-key")
+	output, err := c.Compile(context.Background(), peerID)
+	if err != nil {
+		t.Fatalf("compile error: %v", err)
+	}
+
+	// Should use conntrack instead of state for established/related
+	if !strings.Contains(output, "-A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT") {
+		t.Error("expected conntrack ESTABLISHED,RELATED rule for INPUT")
+	}
+	if !strings.Contains(output, "-A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT") {
+		t.Error("expected conntrack ESTABLISHED,RELATED rule for OUTPUT")
+	}
+
+	// Should have INVALID packet drop
+	if !strings.Contains(output, "-A INPUT -m conntrack --ctstate INVALID -j DROP") {
+		t.Error("expected conntrack INVALID drop rule for INPUT")
+	}
+
+	// Should NOT use old state module
+	if strings.Contains(output, "-m state --state") {
+		t.Error("should not use deprecated state module, should use conntrack")
+	}
+}
+
+func TestConntrackDockerRules(t *testing.T) {
+	database := setupTestDB(t)
+	peerID := insertPeer(t, database, "conntrack-docker", "192.168.1.26", true)
+
+	c := NewCompiler(database, "test-key")
+	output, err := c.Compile(context.Background(), peerID)
+	if err != nil {
+		t.Fatalf("compile error: %v", err)
+	}
+
+	// Should have conntrack rules in DOCKER-USER chain
+	if !strings.Contains(output, "-A DOCKER-USER -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT") {
+		t.Error("expected conntrack ESTABLISHED,RELATED rule for DOCKER-USER")
+	}
+	if !strings.Contains(output, "-A DOCKER-USER -m conntrack --ctstate INVALID -j DROP") {
+		t.Error("expected conntrack INVALID drop rule for DOCKER-USER")
 	}
 }
 
@@ -518,8 +629,8 @@ func TestRuleCompilationToIptablesFormat(t *testing.T) {
 				return peerID, nil
 			},
 			expectedRules: []string{
-				"-s 192.168.1.100/32 -p tcp --dport 22 -m state --state NEW,ESTABLISHED -j ACCEPT",
-				"-d 192.168.1.100/32 -p tcp --sport 22 -m state --state ESTABLISHED -j ACCEPT",
+				"-s 192.168.1.100/32 -p tcp --dport 22 -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT",
+				"-d 192.168.1.100/32 -p tcp --sport 22 -m conntrack --ctstate ESTABLISHED -j ACCEPT",
 			},
 		},
 		{
@@ -534,7 +645,7 @@ func TestRuleCompilationToIptablesFormat(t *testing.T) {
 				return peerID, nil
 			},
 			expectedRules: []string{
-				"-s 10.0.1.0/24 -p tcp -m multiport --dports 80,443 -m state --state NEW,ESTABLISHED -j ACCEPT",
+				"-s 10.0.1.0/24 -p tcp -m multiport --dports 80,443 -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT",
 			},
 		},
 		{
@@ -549,7 +660,7 @@ func TestRuleCompilationToIptablesFormat(t *testing.T) {
 				return peerID, nil
 			},
 			expectedRules: []string{
-				"-s 10.0.2.0/24 -p tcp -m multiport --dports 8000:9000 -m state --state NEW,ESTABLISHED -j ACCEPT",
+				"-s 10.0.2.0/24 -p tcp -m multiport --dports 8000:9000 -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT",
 			},
 		},
 		{
@@ -564,7 +675,7 @@ func TestRuleCompilationToIptablesFormat(t *testing.T) {
 				return peerID, nil
 			},
 			expectedRules: []string{
-				"-s 10.0.3.0/24 -p udp --dport 53 -m state --state NEW,ESTABLISHED -j ACCEPT",
+				"-s 10.0.3.0/24 -p udp --dport 53 -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT",
 			},
 		},
 		{
