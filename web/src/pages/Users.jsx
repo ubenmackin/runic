@@ -4,10 +4,12 @@ import { UserPlus, Trash2, Pencil } from 'lucide-react'
 import { api } from '../api/client'
 import { useToastContext } from '../hooks/ToastContext'
 import TableSkeleton from '../components/TableSkeleton'
+import { useAuthStore } from '../store'
 
 export default function Users() {
   const qc = useQueryClient()
   const showToast = useToastContext()
+  const currentUsername = useAuthStore(s => s.username)
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [formUsername, setFormUsername] = useState('')
@@ -143,25 +145,27 @@ const [formEditConfirmPassword, setFormEditConfirmPassword] = useState('')
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">{user.email || '—'}</td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">{user.role || 'user'}</td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm">
-                    <button
-                      onClick={() => {
-setEditTarget(user)
-setFormEditEmail(user.email || '')
-setFormEditRole(user.role || 'user')
-setFormEditPassword('')
-setFormEditConfirmPassword('')
-setShowEditModal(true)
-                      }}
-                      className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded mr-1"
-                    >
-                      <Pencil className="w-4 h-4 text-gray-500 dark:text-gray-400" />
-                    </button>
-                    <button
-                      onClick={() => setDeleteTarget(user)}
-                      className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded"
-                    >
-                      <Trash2 className="w-4 h-4 text-red-500" />
-                    </button>
+              <button
+                onClick={() => {
+                  setEditTarget(user)
+                  setFormEditEmail(user.email || '')
+                  setFormEditRole(user.role || 'user')
+                  setFormEditPassword('')
+                  setFormEditConfirmPassword('')
+                  setShowEditModal(true)
+                }}
+                className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded mr-1"
+              >
+                <Pencil className="w-4 h-4 text-gray-500 dark:text-gray-400" />
+              </button>
+              {user.username !== currentUsername && (
+                <button
+                  onClick={() => setDeleteTarget(user)}
+                  className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded"
+                >
+                  <Trash2 className="w-4 h-4 text-red-500" />
+                </button>
+              )}
                   </td>
                 </tr>
               ))}

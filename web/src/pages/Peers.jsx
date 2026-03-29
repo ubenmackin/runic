@@ -29,6 +29,7 @@ const ARCH_OPTIONS = [
   { value: 'amd64', label: 'amd64' },
   { value: 'arm64', label: 'arm64' },
   { value: 'arm', label: 'arm' },
+  { value: 'other', label: 'Other' },
 ]
 
 // Helper function to format relative time
@@ -61,14 +62,14 @@ function parseHeartbeatForSort(timestamp) {
 export default function Peers() {
   const qc = useQueryClient()
   const showToast = useToastContext()
-  const { modalOpen, setModalOpen, editItem: editPeer, setEditItem: setEditPeer, form: formData, setForm: setFormData, setFormForEdit, handleOpenAdd, handleCancel: closeModal } = useCrudModal({ hostname: '', ip_address: '', os: 'ubuntu', arch: 'amd64', has_docker: false, description: '' })
+  const { modalOpen, setModalOpen, editItem: editPeer, setEditItem: setEditPeer, form: formData, setForm: setFormData, setFormForEdit, handleOpenAdd, handleCancel: closeModal } = useCrudModal({ hostname: '', ip_address: '', os_type: 'ubuntu', arch: 'amd64', has_docker: false, description: '' })
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [formErrors, setFormErrors] = useState({})
 
   // Add Peer modal state
   const [addModalOpen, setAddModalOpen] = useState(false)
   const [activeTab, setActiveTab] = useState('agent') // 'agent' or 'manual'
-  const [manualForm, setManualForm] = useState({ hostname: '', ip_address: '', os_type: 'other' })
+  const [manualForm, setManualForm] = useState({ hostname: '', ip_address: '', os_type: 'other', arch: 'other' })
   const [manualErrors, setManualErrors] = useState({})
   const [copied, setCopied] = useState(false)
 
@@ -87,14 +88,14 @@ export default function Peers() {
 const openAddModal = () => {
   setAddModalOpen(true)
   setActiveTab('agent')
-  setManualForm({ hostname: '', ip_address: '', os_type: 'other' })
+  setManualForm({ hostname: '', ip_address: '', os_type: 'other', arch: 'other' })
   setManualErrors({})
   setCopied(false)
 }
 
 const closeAddModal = () => {
   setAddModalOpen(false)
-  setManualForm({ hostname: '', ip_address: '', os_type: 'other' })
+  setManualForm({ hostname: '', ip_address: '', os_type: 'other', arch: 'other' })
   setManualErrors({})
   setCopied(false)
 }
@@ -140,12 +141,13 @@ const validateManualForm = () => {
     if (!validateManualForm()) return
 
     try {
-      await api.post('/peers', {
-        hostname: manualForm.hostname.trim(),
-        ip_address: manualForm.ip_address.trim(),
-        os_type: manualForm.os_type || null,
-        is_manual: true
-      })
+await api.post('/peers', {
+      hostname: manualForm.hostname.trim(),
+      ip_address: manualForm.ip_address.trim(),
+      os_type: manualForm.os_type || null,
+      arch: manualForm.arch || null,
+      is_manual: true
+    })
       showToast('Manual peer added successfully', 'success')
       qc.invalidateQueries({ queryKey: QUERY_KEYS.peers() })
       closeAddModal()
@@ -496,7 +498,7 @@ const validateManualForm = () => {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">OS</label>
-                  <SearchableSelect options={OS_OPTIONS} value={formData.os} onChange={v => setFormData(d => ({ ...d, os: v }))} />
+                  <SearchableSelect options={OS_OPTIONS} value={formData.os_type} onChange={v => setFormData(d => ({ ...d, os_type: v }))} />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Arch</label>
@@ -647,21 +649,33 @@ const validateManualForm = () => {
         </div>
 
 <div>
-  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-    Operating System <span className="text-red-500">*</span>
-  </label>
-  <SearchableSelect
-    options={OS_OPTIONS}
-    value={manualForm.os_type}
-    onChange={(v) => setManualForm(f => ({ ...f, os_type: v }))}
-    placeholder="Select OS"
-  />
-  {manualErrors.os_type && (
-    <p className="text-sm text-red-500 mt-1">{manualErrors.os_type}</p>
-  )}
-</div>
+      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+        Operating System <span className="text-red-500">*</span>
+      </label>
+      <SearchableSelect
+        options={OS_OPTIONS}
+        value={manualForm.os_type}
+        onChange={(v) => setManualForm(f => ({ ...f, os_type: v }))}
+        placeholder="Select OS"
+      />
+      {manualErrors.os_type && (
+        <p className="text-sm text-red-500 mt-1">{manualErrors.os_type}</p>
+      )}
+    </div>
 
-        {manualErrors._general && (
+    <div>
+      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+        Architecture
+      </label>
+      <SearchableSelect
+        options={ARCH_OPTIONS}
+        value={manualForm.arch}
+        onChange={(v) => setManualForm(f => ({ ...f, arch: v }))}
+        placeholder="Select Architecture"
+      />
+    </div>
+
+    {manualErrors._general && (
                     <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-3">
                       <p className="text-sm text-red-700 dark:text-red-300">{manualErrors._general}</p>
                     </div>
