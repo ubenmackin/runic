@@ -153,16 +153,7 @@ func main() {
 		downloadsDir = "./downloads"
 	}
 
-	hmacKey := os.Getenv("RUNIC_HMAC_KEY")
-	if hmacKey == "" {
-		if os.Getenv("ENV") == "production" {
-			log.Fatal("RUNIC_HMAC_KEY must be set in production")
-		}
-		hmacKey = "default-hmac-key-change-in-production"
-		log.Println("WARNING: using default HMAC key in development mode")
-	}
-
-	compiler := engine.NewCompiler(db.DB.UnderlyingDB(), hmacKey)
+	compiler := engine.NewCompiler(db.DB.UnderlyingDB())
 
 	// Initialize auth with database for token revocation
 	auth.SetDB(db.DB.UnderlyingDB())

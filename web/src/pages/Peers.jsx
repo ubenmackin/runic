@@ -2,7 +2,7 @@ import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
 import { useTableSort } from '../hooks/useTableSort'
 import { usePagination } from '../hooks/usePagination'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Pencil, Trash2, Server, Copy, Check, RefreshCw, ArrowUp, ArrowDown, ArrowUpDown, X, Search, FileCode, ChevronLeft, ChevronRight } from 'lucide-react'
+import { Plus, Pencil, Trash2, Server, Copy, Check, RefreshCw, X, Search, FileCode, ChevronLeft, ChevronRight } from 'lucide-react'
 import { api, QUERY_KEYS } from '../api/client'
 import { REFETCH_INTERVALS } from '../constants'
 import { useCrudModal } from '../hooks/useCrudModal'
@@ -12,6 +12,7 @@ import SearchableSelect from '../components/SearchableSelect'
 import InlineError from '../components/InlineError'
 import EmptyState from '../components/EmptyState'
 import TableSkeleton from '../components/TableSkeleton'
+import SortIndicator from '../components/SortIndicator'
 
 const OS_OPTIONS = [
   { value: 'ubuntu', label: 'Ubuntu' },
@@ -397,16 +398,6 @@ export default function Peers() {
     else createMutation.mutate(formData)
   }
 
-  // Sort indicator component
-  const SortIndicator = ({ columnKey }) => {
-    if (sortConfig.key !== columnKey) {
-      return <ArrowUpDown className="w-4 h-4 text-gray-400 ml-1" />
-    }
-    return sortConfig.direction === 'asc'
-      ? <ArrowUp className="w-4 h-4 text-runic-500 ml-1" />
-      : <ArrowDown className="w-4 h-4 text-runic-500 ml-1" />
-  }
-
   if (isLoading) return <TableSkeleton rows={3} columns={6} />
 
   return (
@@ -503,29 +494,25 @@ export default function Peers() {
             <table className="w-full text-sm">
               <thead className="bg-gray-50 dark:bg-charcoal-darkest">
                 <tr>
-                  <th
-                    className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted cursor-pointer hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none"
-                    onClick={() => handleSort('hostname')}
-                  >
-                    Hostname <SortIndicator columnKey="hostname" />
+                  <th className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+            <button type="button" onClick={() => handleSort('hostname')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+              Hostname <SortIndicator columnKey="hostname" sortConfig={sortConfig} />
+            </button>
                   </th>
-                  <th
-                    className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted cursor-pointer hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none"
-                    onClick={() => handleSort('ip_address')}
-                  >
-                    IP Address <SortIndicator columnKey="ip_address" />
+                  <th className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+            <button type="button" onClick={() => handleSort('ip_address')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+              IP Address <SortIndicator columnKey="ip_address" sortConfig={sortConfig} />
+            </button>
                   </th>
-                  <th
-                    className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted cursor-pointer hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none"
-                    onClick={() => handleSort('os_type')}
-                  >
-                    OS <SortIndicator columnKey="os_type" />
+                  <th className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+            <button type="button" onClick={() => handleSort('os_type')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+              OS <SortIndicator columnKey="os_type" sortConfig={sortConfig} />
+            </button>
                   </th>
-                  <th
-                    className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted cursor-pointer hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none"
-                    onClick={() => handleSort('last_heartbeat')}
-                  >
-                    Last Heartbeat <SortIndicator columnKey="last_heartbeat" />
+                  <th className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+            <button type="button" onClick={() => handleSort('last_heartbeat')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+              Last Heartbeat <SortIndicator columnKey="last_heartbeat" sortConfig={sortConfig} />
+            </button>
                   </th>
                   <th className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted">
                     Groups

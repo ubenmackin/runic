@@ -242,27 +242,24 @@ func DeletePeer(w http.ResponseWriter, r *http.Request) {
 
 	common.RespondJSON(w, http.StatusOK, map[string]string{"message": "Peer deleted"})
 }
-// GetPeerBundle fetches the latest rule bundle content for a peer.
-func GetPeerBundle(w http.ResponseWriter, r *http.Request) {
-	id, err := common.ParseIDParam(r, "id")
-	if err != nil {
-		common.RespondError(w, http.StatusBadRequest, "invalid peer ID")
-		return
-	}
 
-	var content string
-	err = db.DB.QueryRowContext(r.Context(),
-		"SELECT rules_content FROM rule_bundles WHERE peer_id = ? ORDER BY created_at DESC LIMIT 1",
-		id).Scan(&content)
+// MakeGetPeerBundleHandler injects the Compiler dependency and returns the current effective rules.
+// This handler compiles fresh rules on each request to ensure no stale data is returned.
+func MakeGetPeerBundleHandler(compiler *engine.Compiler) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := common.ParseIDParam(r, "id")
+		if err != nil {
+			common.RespondError(w, http.StatusBadRequest, "invalid peer ID")
+			return
+		}
 
-	if err == sql.ErrNoRows {
-		common.RespondError(w, http.StatusNotFound, "no rule bundle found for this peer")
-		return
-	}
-	if err != nil {
-		common.RespondError(w, http.StatusInternalServerError, "failed to fetch rule bundle")
-		return
-	}
+		// Compile fresh rules for the peer to ensure current effective rules
+		bundle, err := compiler.CompileAndStore(r.Context(), id)
+		if err != nil {
+			common.RespondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to compile rules: %v", err))
+			return
+		}
 
-	common.RespondJSON(w, http.StatusOK, map[string]string{"content": content})
+		common.RespondJSON(w, http.StatusOK, map[string]string{"content": bundle.RulesContent})
+	}
 }

@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Trash2, Lock, Users, Shield, Search, ArrowUp, ArrowDown, ArrowUpDown, X, RefreshCw, Pencil, ChevronLeft, ChevronRight } from 'lucide-react'
+import { Plus, Trash2, Lock, Users, Shield, Search, X, RefreshCw, Pencil, ChevronLeft, ChevronRight } from 'lucide-react'
 import { api, QUERY_KEYS } from '../api/client'
 import { useCrudModal } from '../hooks/useCrudModal'
 import { useTableSort } from '../hooks/useTableSort'
@@ -12,6 +12,7 @@ import InlineError from '../components/InlineError'
 import EmptyState from '../components/EmptyState'
 import DataTable from '../components/DataTable'
 import TableSkeleton from '../components/TableSkeleton'
+import SortIndicator from '../components/SortIndicator'
 
 export default function Groups() {
   const qc = useQueryClient()
@@ -158,16 +159,6 @@ export default function Groups() {
     onRowsPerPageChange: setGroupsRowsPerPage,
     totalItems: groupsTotal
   } = usePagination(filteredGroups, 'groups')
-
-  // Render sort indicator
-  const SortIndicator = ({ columnKey }) => {
-    if (sortConfig.key !== columnKey) {
-      return <ArrowUpDown className="w-4 h-4 text-gray-400 ml-1" />
-    }
-    return sortConfig.direction === 'asc'
-      ? <ArrowUp className="w-4 h-4 text-runic-500 ml-1" />
-      : <ArrowDown className="w-4 h-4 text-runic-500 ml-1" />
-  }
 
   const createMutation = useMutation({
     mutationFn: (data) => api.post('/groups', data),
@@ -327,12 +318,12 @@ export default function Groups() {
             label: (
               <button 
                 type="button"
-                onClick={() => handleSort('name')}
-className="flex items-center hover:text-runic-600 dark:hover:text-purple-active"
->
-Name
-                <SortIndicator columnKey="name" />
-              </button>
+            onClick={() => handleSort('name')}
+            className="flex items-center hover:text-runic-600 dark:hover:text-purple-active"
+          >
+            Name
+            <SortIndicator columnKey="name" sortConfig={sortConfig} />
+          </button>
             ), 
             render: (g) => (
               <div className="flex items-center gap-2">
@@ -346,12 +337,12 @@ Name
             label: (
               <button 
                 type="button"
-                onClick={() => handleSort('peers')}
-className="flex items-center hover:text-runic-600 dark:hover:text-purple-active"
->
-Peers
-                <SortIndicator columnKey="peers" />
-              </button>
+            onClick={() => handleSort('peers')}
+            className="flex items-center hover:text-runic-600 dark:hover:text-purple-active"
+          >
+            Peers
+            <SortIndicator columnKey="peers" sortConfig={sortConfig} />
+          </button>
             ),
             render: (g) => (
 <div className="flex items-center gap-1.5 px-2 py-1 bg-gray-100 dark:bg-charcoal-darkest rounded text-sm">
@@ -365,12 +356,12 @@ Peers
             label: (
               <button 
                 type="button"
-                onClick={() => handleSort('policies')}
-className="flex items-center hover:text-runic-600 dark:hover:text-purple-active"
->
-Policies
-                <SortIndicator columnKey="policies" />
-              </button>
+            onClick={() => handleSort('policies')}
+            className="flex items-center hover:text-runic-600 dark:hover:text-purple-active"
+          >
+            Policies
+            <SortIndicator columnKey="policies" sortConfig={sortConfig} />
+          </button>
             ),
             render: (g) => (
 <div className="flex items-center gap-1.5 px-2 py-1 bg-gray-100 dark:bg-charcoal-darkest rounded text-sm">

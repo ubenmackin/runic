@@ -15,15 +15,13 @@ import (
 type Compiler struct {
 	db       *sql.DB
 	resolver *Resolver
-	hmacKey  string
 }
 
-// NewCompiler creates a new Compiler with the given database and HMAC key.
-func NewCompiler(database *sql.DB, hmacKey string) *Compiler {
+// NewCompiler creates a new Compiler with the given database.
+func NewCompiler(database *sql.DB) *Compiler {
 	return &Compiler{
 		db:       database,
 		resolver: &Resolver{db: database},
-		hmacKey:  hmacKey,
 	}
 }
 
@@ -444,8 +442,15 @@ func (c *Compiler) CompileAndStore(ctx context.Context, peerID int) (models.Rule
 		return models.RuleBundleRow{}, fmt.Errorf("compile: %w", err)
 	}
 
+	// Fetch the peer's HMAC key from the database
+	var hmacKey string
+	err = c.db.QueryRowContext(ctx, "SELECT hmac_key FROM peers WHERE id = ?", peerID).Scan(&hmacKey)
+	if err != nil {
+		return models.RuleBundleRow{}, fmt.Errorf("fetch peer HMAC key: %w", err)
+	}
+
 	version := Version(content)
-	signature := Sign(content, c.hmacKey)
+	signature := Sign(content, hmacKey)
 
 	// Use db.SaveBundle to avoid duplicate transaction logic
 	params := models.CreateBundleParams{

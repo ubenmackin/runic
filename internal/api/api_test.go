@@ -45,7 +45,7 @@ func setupTestAPI(t *testing.T) (*API, *sql.DB, func()) {
 	db.DB = db.New(database)
 
 	// Create compiler
-	compiler := engine.NewCompiler(database, "test-hmac-key")
+	compiler := engine.NewCompiler(database)
 
 	// Create API instance
 	api := NewAPI(compiler)
@@ -310,17 +310,17 @@ func TestListPolicies(t *testing.T) {
 	}
 
 	var policies []struct {
-		ID            int    `json:"id"`
-		Name          string `json:"name"`
-		Description   string `json:"description"`
-		SourceID int `json:"source_id"`
-		SourceType string `json:"source_type"`
-		ServiceID     int    `json:"service_id"`
-		TargetID int `json:"target_id"`
-		TargetType string `json:"target_type"`
-		Action        string `json:"action"`
-		Priority      int    `json:"priority"`
-		Enabled       bool   `json:"enabled"`
+		ID          int    `json:"id"`
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		SourceID    int    `json:"source_id"`
+		SourceType  string `json:"source_type"`
+		ServiceID   int    `json:"service_id"`
+		TargetID    int    `json:"target_id"`
+		TargetType  string `json:"target_type"`
+		Action      string `json:"action"`
+		Priority    int    `json:"priority"`
+		Enabled     bool   `json:"enabled"`
 	}
 	if err := json.NewDecoder(w.Body).Decode(&policies); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
@@ -514,17 +514,17 @@ func TestGetPolicy(t *testing.T) {
 
 			if tt.wantCode == http.StatusOK {
 				var policy struct {
-					ID            int    `json:"id"`
-					Name          string `json:"name"`
-					Description   string `json:"description"`
-					SourceID int `json:"source_id"`
-		SourceType string `json:"source_type"`
-					ServiceID     int    `json:"service_id"`
-					TargetID int `json:"target_id"`
-		TargetType string `json:"target_type"`
-					Action        string `json:"action"`
-					Priority      int    `json:"priority"`
-					Enabled       bool   `json:"enabled"`
+					ID          int    `json:"id"`
+					Name        string `json:"name"`
+					Description string `json:"description"`
+					SourceID    int    `json:"source_id"`
+					SourceType  string `json:"source_type"`
+					ServiceID   int    `json:"service_id"`
+					TargetID    int    `json:"target_id"`
+					TargetType  string `json:"target_type"`
+					Action      string `json:"action"`
+					Priority    int    `json:"priority"`
+					Enabled     bool   `json:"enabled"`
 				}
 				if err := json.NewDecoder(w.Body).Decode(&policy); err != nil {
 					t.Fatalf("failed to decode policy: %v", err)

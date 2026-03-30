@@ -2,7 +2,7 @@ import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
 import { useTableSort } from '../hooks/useTableSort'
 import { usePagination } from '../hooks/usePagination'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Pencil, Trash2, RefreshCw, ArrowUp, ArrowDown, ArrowUpDown, X, Search, ChevronLeft, ChevronRight } from 'lucide-react'
+import { Plus, Pencil, Trash2, RefreshCw, X, Search, ChevronLeft, ChevronRight } from 'lucide-react'
 import { api, QUERY_KEYS } from '../api/client'
 import { useCrudModal } from '../hooks/useCrudModal'
 import { useToastContext } from '../hooks/ToastContext'
@@ -11,6 +11,7 @@ import InlineError from '../components/InlineError'
 import EmptyState from '../components/EmptyState'
 import TableSkeleton from '../components/TableSkeleton'
 import SearchableSelect from '../components/SearchableSelect'
+import SortIndicator from '../components/SortIndicator'
 
 const PROTOCOLS = ['tcp', 'udp', 'both', 'icmp', 'igmp']
 const PROTOCOL_OPTIONS = [
@@ -380,16 +381,6 @@ const handleSourcePortInputKeyDown = (e) => {
     return `${formData.protocol} ${portMatch}`
   }
 
-  // Sort indicator component
-  const SortIndicator = ({ columnKey }) => {
-    if (sortConfig.key !== columnKey) {
-      return <ArrowUpDown className="w-4 h-4 text-gray-400 ml-1" />
-    }
-    return sortConfig.direction === 'asc'
-      ? <ArrowUp className="w-4 h-4 text-runic-500 ml-1" />
-      : <ArrowDown className="w-4 h-4 text-runic-500 ml-1" />
-  }
-
   if (isLoading) return <TableSkeleton rows={3} columns={5} />
 
   return (
@@ -464,29 +455,25 @@ const handleSourcePortInputKeyDown = (e) => {
             <table className="w-full text-sm">
               <thead className="bg-gray-50 dark:bg-charcoal-darkest">
                 <tr>
-                  <th
-                    className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted cursor-pointer hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none"
-                    onClick={() => handleSort('name')}
-                  >
-                    Name <SortIndicator columnKey="name" />
+                  <th className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+            <button type="button" onClick={() => handleSort('name')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+              Name <SortIndicator columnKey="name" sortConfig={sortConfig} />
+            </button>
                   </th>
-                  <th
-                    className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted cursor-pointer hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none"
-                    onClick={() => handleSort('protocol')}
-                  >
-                    Protocol <SortIndicator columnKey="protocol" />
+                  <th className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+            <button type="button" onClick={() => handleSort('protocol')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+              Protocol <SortIndicator columnKey="protocol" sortConfig={sortConfig} />
+            </button>
                   </th>
-          <th
-            className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted cursor-pointer hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none"
-            onClick={() => handleSort('ports')}
-          >
-            Dest Ports <SortIndicator columnKey="ports" />
-          </th>
-                  <th
-                    className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted cursor-pointer hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none"
-                    onClick={() => handleSort('description')}
-                  >
-                    Description <SortIndicator columnKey="description" />
+                  <th className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+            <button type="button" onClick={() => handleSort('ports')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+              Dest Ports <SortIndicator columnKey="ports" sortConfig={sortConfig} />
+            </button>
+                  </th>
+                  <th className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+            <button type="button" onClick={() => handleSort('description')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+              Description <SortIndicator columnKey="description" sortConfig={sortConfig} />
+            </button>
                   </th>
                   <th className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted">
                     Actions

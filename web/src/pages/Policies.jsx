@@ -3,7 +3,7 @@ import { useFilterPersistence } from '../hooks/useFilterPersistence'
 import { useTableSort } from '../hooks/useTableSort'
 import { usePagination } from '../hooks/usePagination'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Pencil, Trash2, Eye, RefreshCw, ArrowUp, ArrowDown, ArrowUpDown, X, ChevronDown, ChevronUp, Info, Search, ChevronLeft, ChevronRight } from 'lucide-react'
+import { Plus, Pencil, Trash2, Eye, RefreshCw, X, ChevronDown, ChevronUp, Info, Search, ChevronLeft, ChevronRight } from 'lucide-react'
 import { api, QUERY_KEYS } from '../api/client'
 import { useCrudModal } from '../hooks/useCrudModal'
 import { useToastContext } from '../hooks/ToastContext'
@@ -13,6 +13,7 @@ import ToggleSwitch from '../components/ToggleSwitch'
 import InlineError from '../components/InlineError'
 import EmptyState from '../components/EmptyState'
 import TableSkeleton from '../components/TableSkeleton'
+import SortIndicator from '../components/SortIndicator'
 
 // Special targets - predefined network addresses for broadcast/multicast
 const SPECIAL_TARGETS = {
@@ -226,16 +227,6 @@ const polymorphicOptions = [
   // Search state
   const [searchTerm, setSearchTerm] = useState('')
 
-  // Sort indicator component
-  const SortIndicator = ({ columnKey }) => {
-    if (sortConfig.key !== columnKey) {
-      return <ArrowUpDown className="w-4 h-4 text-gray-400 ml-1" />
-    }
-    return sortConfig.direction === 'asc'
-      ? <ArrowUp className="w-4 h-4 text-runic-500 ml-1" />
-      : <ArrowDown className="w-4 h-4 text-runic-500 ml-1" />
-  }
-
   // Processed policies: filter and sort
   const processedPolicies = useMemo(() => {
     if (!policies) return []
@@ -434,35 +425,30 @@ const polymorphicOptions = [
                   <th className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted">
                     Enabled
                   </th>
-                  <th
-                    className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted cursor-pointer hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none"
-                    onClick={() => handleSort('name')}
-                  >
-                    Name <SortIndicator columnKey="name" />
+                  <th className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+            <button type="button" onClick={() => handleSort('name')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+              Name <SortIndicator columnKey="name" sortConfig={sortConfig} />
+            </button>
                   </th>
-                  <th
-                    className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted cursor-pointer hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none"
-                    onClick={() => handleSort('priority')}
-                  >
-                    Priority <SortIndicator columnKey="priority" />
+                  <th className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+            <button type="button" onClick={() => handleSort('priority')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+              Priority <SortIndicator columnKey="priority" sortConfig={sortConfig} />
+            </button>
                   </th>
-                  <th
-                    className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted cursor-pointer hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none"
-                    onClick={() => handleSort('source')}
-                  >
-                    Source <SortIndicator columnKey="source" />
+                  <th className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+            <button type="button" onClick={() => handleSort('source')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+              Source <SortIndicator columnKey="source" sortConfig={sortConfig} />
+            </button>
                   </th>
-                  <th
-                    className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted cursor-pointer hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none"
-                    onClick={() => handleSort('service')}
-                  >
-                    Service <SortIndicator columnKey="service" />
+                  <th className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+            <button type="button" onClick={() => handleSort('service')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+              Service <SortIndicator columnKey="service" sortConfig={sortConfig} />
+            </button>
                   </th>
-                  <th
-                    className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted cursor-pointer hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none"
-                    onClick={() => handleSort('target')}
-                  >
-                    Target <SortIndicator columnKey="target" />
+                  <th className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+            <button type="button" onClick={() => handleSort('target')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+              Target <SortIndicator columnKey="target" sortConfig={sortConfig} />
+            </button>
                   </th>
                   <th className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted">
                     Action

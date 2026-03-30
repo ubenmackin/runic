@@ -115,7 +115,7 @@ func TestSingleIPSource(t *testing.T) {
 	serviceID := insertService(t, database, "ssh", "22", "tcp")
 	insertPolicy(t, database, "allow-ssh", groupID, serviceID, peerID, "ACCEPT", 100, true)
 
-	c := NewCompiler(database, "test-key")
+	c := NewCompiler(database)
 	output, err := c.Compile(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
@@ -138,7 +138,7 @@ func TestCIDRSource(t *testing.T) {
 	serviceID := insertService(t, database, "https", "443", "tcp")
 	insertPolicy(t, database, "allow-https", groupID, serviceID, peerID, "ACCEPT", 100, true)
 
-	c := NewCompiler(database, "test-key")
+	c := NewCompiler(database)
 	output, err := c.Compile(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
@@ -158,7 +158,7 @@ func TestMultiport(t *testing.T) {
 	serviceID := insertService(t, database, "web", "80,443", "tcp")
 	insertPolicy(t, database, "allow-web", groupID, serviceID, peerID, "ACCEPT", 100, true)
 
-	c := NewCompiler(database, "test-key")
+	c := NewCompiler(database)
 	output, err := c.Compile(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
@@ -178,7 +178,7 @@ func TestPortRange(t *testing.T) {
 	serviceID := insertService(t, database, "highports", "8000:9000", "tcp")
 	insertPolicy(t, database, "allow-highports", groupID, serviceID, peerID, "ACCEPT", 100, true)
 
-	c := NewCompiler(database, "test-key")
+	c := NewCompiler(database)
 	output, err := c.Compile(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
@@ -198,7 +198,7 @@ func TestProtocolBoth(t *testing.T) {
 	serviceID := insertService(t, database, "dns", "53", "both")
 	insertPolicy(t, database, "allow-dns", groupID, serviceID, peerID, "ACCEPT", 100, true)
 
-	c := NewCompiler(database, "test-key")
+	c := NewCompiler(database)
 	output, err := c.Compile(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
@@ -221,7 +221,7 @@ func TestICMPService(t *testing.T) {
 	serviceID := insertService(t, database, "ping", "", "icmp")
 	insertPolicy(t, database, "allow-ping", groupID, serviceID, peerID, "ACCEPT", 100, true)
 
-	c := NewCompiler(database, "test-key")
+	c := NewCompiler(database)
 	output, err := c.Compile(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
@@ -256,7 +256,7 @@ func TestMulticastService(t *testing.T) {
 	serviceID, _ := result.LastInsertId()
 	insertPolicy(t, database, "allow-multicast", groupID, int(serviceID), peerID, "ACCEPT", 100, true)
 
-	c := NewCompiler(database, "test-key")
+	c := NewCompiler(database)
 	output, err := c.Compile(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
@@ -288,7 +288,7 @@ func TestMulticastServiceWithDocker(t *testing.T) {
 	serviceID, _ := result.LastInsertId()
 	insertPolicy(t, database, "allow-multicast-docker", groupID, int(serviceID), peerID, "ACCEPT", 100, true)
 
-	c := NewCompiler(database, "test-key")
+	c := NewCompiler(database)
 	output, err := c.Compile(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
@@ -307,7 +307,7 @@ func TestNoPolicies(t *testing.T) {
 	database := setupTestDB(t)
 	peerID := insertPeer(t, database, "empty1", "192.168.1.18", false)
 
-	c := NewCompiler(database, "test-key")
+	c := NewCompiler(database)
 	output, err := c.Compile(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
@@ -338,7 +338,7 @@ func TestConntrackStandardRules(t *testing.T) {
 	database := setupTestDB(t)
 	peerID := insertPeer(t, database, "conntrack1", "192.168.1.25", false)
 
-	c := NewCompiler(database, "test-key")
+	c := NewCompiler(database)
 	output, err := c.Compile(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
@@ -367,7 +367,7 @@ func TestConntrackDockerRules(t *testing.T) {
 	database := setupTestDB(t)
 	peerID := insertPeer(t, database, "conntrack-docker", "192.168.1.26", true)
 
-	c := NewCompiler(database, "test-key")
+	c := NewCompiler(database)
 	output, err := c.Compile(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
@@ -391,7 +391,7 @@ func TestLogDropAction(t *testing.T) {
 	serviceID := insertService(t, database, "telnet", "23", "tcp")
 	insertPolicy(t, database, "block-telnet", groupID, serviceID, peerID, "LOG_DROP", 100, true)
 
-	c := NewCompiler(database, "test-key")
+	c := NewCompiler(database)
 	output, err := c.Compile(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
@@ -414,7 +414,7 @@ func TestDisabledPolicy(t *testing.T) {
 	serviceID := insertService(t, database, "ftp", "21", "tcp")
 	insertPolicy(t, database, "disabled-ftp", groupID, serviceID, peerID, "ACCEPT", 100, false)
 
-	c := NewCompiler(database, "test-key")
+	c := NewCompiler(database)
 	output, err := c.Compile(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
@@ -443,7 +443,7 @@ func TestPriorityOrdering(t *testing.T) {
 	insertPolicy(t, database, "low-prio", groupID, serviceLow, peerID, "ACCEPT", 200, true)
 	insertPolicy(t, database, "high-prio", groupID, serviceHigh, peerID, "ACCEPT", 50, true)
 
-	c := NewCompiler(database, "test-key")
+	c := NewCompiler(database)
 	output, err := c.Compile(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
@@ -465,7 +465,7 @@ func TestDockerPeer(t *testing.T) {
 	database := setupTestDB(t)
 	peerID := insertPeer(t, database, "docker1", "192.168.1.22", true)
 
-	c := NewCompiler(database, "test-key")
+	c := NewCompiler(database)
 	output, err := c.Compile(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
@@ -592,7 +592,7 @@ func TestPolicyParsingAndValidation(t *testing.T) {
 				t.Fatalf("setup failed: %v", err)
 			}
 
-			c := NewCompiler(database, "test-key")
+			c := NewCompiler(database)
 			_, err = c.Compile(context.Background(), peerID)
 
 			if tt.wantErr {
@@ -704,7 +704,7 @@ func TestRuleCompilationToIptablesFormat(t *testing.T) {
 				t.Fatalf("setup failed: %v", err)
 			}
 
-			c := NewCompiler(database, "test-key")
+			c := NewCompiler(database)
 			output, err := c.Compile(context.Background(), peerID)
 			if err != nil {
 				t.Fatalf("compile failed: %v", err)
@@ -792,7 +792,7 @@ func TestInvalidPoliciesAndMalformedRules(t *testing.T) {
 				t.Fatalf("setup failed: %v", err)
 			}
 
-			c := NewCompiler(database, "test-key")
+			c := NewCompiler(database)
 			_, err = c.Compile(context.Background(), peerID)
 
 			if tt.wantErr {
@@ -837,7 +837,7 @@ func TestDockerIntegration(t *testing.T) {
 			database := setupTestDB(t)
 			peerID := insertPeer(t, database, "docker-test", "10.0.0.1", tt.hasDocker)
 
-			c := NewCompiler(database, "test-key")
+			c := NewCompiler(database)
 			output, err := c.Compile(context.Background(), peerID)
 			if err != nil {
 				t.Fatalf("compile failed: %v", err)
@@ -869,7 +869,7 @@ func TestCompileAndStore(t *testing.T) {
 	serviceID := insertService(t, database, "test-service", "80", "tcp")
 	insertPolicy(t, database, "test-policy", groupID, serviceID, peerID, "ACCEPT", 100, true)
 
-	c := NewCompiler(database, "test-key")
+	c := NewCompiler(database)
 	bundle, err := c.CompileAndStore(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("CompileAndStore failed: %v", err)
@@ -941,7 +941,7 @@ func TestRecompileAffectedPeers(t *testing.T) {
 	insertPolicy(t, database, "policy2", group2, serviceID, peer2, "ACCEPT", 100, true)
 
 	// Compile initial bundles
-	c := NewCompiler(database, "test-key")
+	c := NewCompiler(database)
 	_, err := c.CompileAndStore(context.Background(), peer1)
 	if err != nil {
 		t.Fatalf("compile peer1: %v", err)
@@ -1050,7 +1050,7 @@ func TestEdgeCases(t *testing.T) {
 				t.Fatalf("setup failed: %v", err)
 			}
 
-			c := NewCompiler(database, "test-key")
+			c := NewCompiler(database)
 			output, err := c.Compile(context.Background(), peerID)
 
 			if tt.wantErr {
