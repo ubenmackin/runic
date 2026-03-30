@@ -362,7 +362,7 @@ Policies
                   disabled={g.is_system}
                   title="Edit"
                 >
-                  <Pencil className="w-4 h-4 text-gray-500" />
+                  <Pencil className={`w-4 h-4 ${g.is_system ? 'text-gray-400' : 'dark:text-white text-black'}`} />
                 </button>
                 {!g.is_system && (
                   <button onClick={(e) => { e.stopPropagation(); setDeleteTarget(g) }} className="p-1 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded">
@@ -405,16 +405,6 @@ type="text"
 value={formData.name}
 onChange={e => setFormData(d => ({ ...d, name: e.target.value }))}
 required
-disabled={editGroup?.is_system}
-className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral disabled:opacity-50 disabled:cursor-not-allowed"
-/>
-              </div>
-              <div>
-<label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Description</label>
-<textarea
-value={formData.description}
-onChange={e => setFormData(d => ({ ...d, description: e.target.value }))}
-rows={2}
 disabled={editGroup?.is_system}
 className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral disabled:opacity-50 disabled:cursor-not-allowed"
 />
@@ -492,6 +482,17 @@ className="hover:bg-gray-200 dark:hover:bg-charcoal-dark rounded-full p-0.5"
                   )}
                 </div>
               )}
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Description</label>
+                <textarea
+                  value={formData.description}
+                  onChange={e => setFormData(d => ({ ...d, description: e.target.value }))}
+                  rows={2}
+                  disabled={editGroup?.is_system}
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral disabled:opacity-50 disabled:cursor-not-allowed"
+                />
+              </div>
 
               <InlineError message={formErrors._general} />
               <div className="flex justify-end gap-3 pt-2">

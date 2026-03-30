@@ -495,7 +495,7 @@ export default function Policies() {
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Source</label>
-                  <SearchableSelect options={polymorphicOptions} value={formData.source_id} onChange={(v, type) => setFormData(d => ({ ...d, source_id: v, source_type: type }))} placeholder="Select group or peer" />
+                  <SearchableSelect options={polymorphicOptions} value={formData.source_id} category={formData.source_type} onChange={(v, type) => setFormData(d => ({ ...d, source_id: v, source_type: type }))} placeholder="Select group or peer" />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Service</label>
@@ -503,7 +503,7 @@ export default function Policies() {
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Target</label>
-                  <SearchableSelect options={polymorphicOptions} value={formData.target_id} onChange={(v, type) => setFormData(d => ({ ...d, target_id: v, target_type: type }))} placeholder="Select group or peer" />
+                  <SearchableSelect options={polymorphicOptions} value={formData.target_id} category={formData.target_type} onChange={(v, type) => setFormData(d => ({ ...d, target_id: v, target_type: type }))} placeholder="Select group or peer" />
                 </div>
               </div>
               <div>

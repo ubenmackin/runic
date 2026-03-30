@@ -439,7 +439,7 @@ export default function Services() {
                           disabled={service.is_system}
                           title={service.is_system ? "System services cannot be edited" : "Edit"}
                         >
-                          <Pencil className="w-4 h-4" />
+                          <Pencil className={`w-4 h-4 ${service.is_system ? 'text-gray-400' : 'dark:text-white text-black'}`} />
                         </button>
                         {!service.is_system && (
                           <button

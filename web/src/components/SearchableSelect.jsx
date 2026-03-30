@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { ChevronDown, Check, Search } from 'lucide-react'
 
-export default function SearchableSelect({ options = [], value, onChange, placeholder = 'Select...' }) {
+export default function SearchableSelect({ options = [], value, category, onChange, placeholder = 'Select...' }) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
   const ref = useRef(null)
@@ -18,7 +18,7 @@ export default function SearchableSelect({ options = [], value, onChange, placeh
     opt.label.toLowerCase().includes(search.toLowerCase())
   )
 
-  const selected = options.find(o => o.value === value)
+  const selected = options.find(o => o.value === value && (category ? o.category === category : true))
 
   return (
     <div className="relative" ref={ref}>

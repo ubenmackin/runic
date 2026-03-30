@@ -549,7 +549,7 @@ export default function Peers() {
                             className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded"
                             title="Edit"
                           >
-                            <Pencil className="w-4 h-4 text-gray-500" />
+                            <Pencil className="w-4 h-4 dark:text-white text-black" />
                           </button>
                         )}
                         <button
