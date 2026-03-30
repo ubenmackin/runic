@@ -573,6 +573,25 @@ func migrateSchema(database *sql.DB) error {
 		log.Println("Migration: created and seeded special_targets table")
 	}
 
+	// Migration: Add loopback special target
+	var hasLoopbackTarget bool
+	err = database.QueryRow("SELECT COUNT(*) > 0 FROM special_targets WHERE name = ?", "loopback").Scan(&hasLoopbackTarget)
+	if err != nil {
+		return fmt.Errorf("failed to check for loopback special target: %w", err)
+	}
+
+	if !hasLoopbackTarget {
+		log.Println("Migration: adding loopback special target")
+		_, err = database.Exec(
+			"INSERT INTO special_targets (name, display_name, description, address) VALUES (?, ?, ?, ?)",
+			"loopback", "Loopback", "Local loopback address (127.0.0.1)", "127.0.0.1",
+		)
+		if err != nil {
+			return fmt.Errorf("failed to add loopback special target: %w", err)
+		}
+		log.Println("Migration: added loopback special target")
+	}
+
 	return nil
 }
 
@@ -726,26 +745,37 @@ func seedSystemServices(database *sql.DB) error {
 	systemServices := []struct {
 		Name        string
 		Ports       string
+		SourcePorts string
 		Protocol    string
 		Description string
 	}{
 		{
 			Name:        "ICMP",
 			Ports:       "",
+			SourcePorts: "",
 			Protocol:    "icmp",
 			Description: "ICMP protocol for ping and network diagnostics (system service)",
 		},
 		{
 			Name:        "IGMP",
 			Ports:       "",
+			SourcePorts: "",
 			Protocol:    "igmp",
 			Description: "IGMP protocol for multicast group management (system service)",
 		},
 		{
 			Name:        "Multicast",
 			Ports:       "",
+			SourcePorts: "",
 			Protocol:    "udp",
 			Description: "Multicast traffic handling (system service)",
+		},
+		{
+			Name:        "mDNS",
+			Ports:       "5353",
+			SourcePorts: "5353",
+			Protocol:    "udp",
+			Description: "Multicast DNS for local network service discovery (system service)",
 		},
 	}
 
@@ -769,8 +799,8 @@ func seedSystemServices(database *sql.DB) error {
 
 		// Insert new system service
 		_, err = database.Exec(
-			"INSERT INTO services (name, ports, protocol, description, is_system) VALUES (?, ?, ?, ?, 1)",
-			svc.Name, svc.Ports, svc.Protocol, svc.Description,
+			"INSERT INTO services (name, ports, source_ports, protocol, description, is_system) VALUES (?, ?, ?, ?, ?, 1)",
+			svc.Name, svc.Ports, svc.SourcePorts, svc.Protocol, svc.Description,
 		)
 		if err != nil {
 			return fmt.Errorf("failed to create system service %s: %w", svc.Name, err)

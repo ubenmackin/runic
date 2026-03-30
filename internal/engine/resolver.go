@@ -64,6 +64,8 @@ func (r *Resolver) ResolveSpecialTarget(specialID int, peerIP string) ([]string,
 		return []string{"224.0.0.1/32"}, nil
 	case 4: // __mdns__
 		return []string{"224.0.0.251/32"}, nil
+	case 5: // __loopback__
+		return []string{"127.0.0.1/32"}, nil
 	default:
 		return nil, fmt.Errorf("unknown special target ID: %d", specialID)
 	}
