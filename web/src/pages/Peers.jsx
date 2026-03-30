@@ -400,11 +400,11 @@ export default function Peers() {
   // Sort indicator component
   const SortIndicator = ({ columnKey }) => {
     if (sortConfig.key !== columnKey) {
-      return <ArrowUpDown className="w-4 h-4 ml-1 opacity-40 inline-block" />
+      return <ArrowUpDown className="w-4 h-4 text-gray-400 ml-1" />
     }
     return sortConfig.direction === 'asc'
-      ? <ArrowUp className="w-4 h-4 ml-1 inline-block" />
-      : <ArrowDown className="w-4 h-4 ml-1 inline-block" />
+      ? <ArrowUp className="w-4 h-4 text-runic-500 ml-1" />
+      : <ArrowDown className="w-4 h-4 text-runic-500 ml-1" />
   }
 
   if (isLoading) return <TableSkeleton rows={3} columns={6} />

@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
+import { useFilterPersistence } from '../hooks/useFilterPersistence'
 import { useTableSort } from '../hooks/useTableSort'
 import { usePagination } from '../hooks/usePagination'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
@@ -39,7 +40,7 @@ export default function Policies() {
   })
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [filterPeer, setFilterPeer] = useState(null)
-  const [showDisabled, setShowDisabled] = useState(false)
+  const { value: showDisabled, setValue: setShowDisabled } = useFilterPersistence('policies', 'showDisabled', false)
   const [preview, setPreview] = useState(null)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [formErrors, setFormErrors] = useState({})
@@ -228,11 +229,11 @@ const polymorphicOptions = [
   // Sort indicator component
   const SortIndicator = ({ columnKey }) => {
     if (sortConfig.key !== columnKey) {
-      return <ArrowUpDown className="w-4 h-4 ml-1 opacity-40 inline-block" />
+      return <ArrowUpDown className="w-4 h-4 text-gray-400 ml-1" />
     }
     return sortConfig.direction === 'asc'
-      ? <ArrowUp className="w-4 h-4 ml-1 inline-block" />
-      : <ArrowDown className="w-4 h-4 ml-1 inline-block" />
+      ? <ArrowUp className="w-4 h-4 text-runic-500 ml-1" />
+      : <ArrowDown className="w-4 h-4 text-runic-500 ml-1" />
   }
 
   // Processed policies: filter and sort
