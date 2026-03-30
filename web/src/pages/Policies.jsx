@@ -13,6 +13,14 @@ import InlineError from '../components/InlineError'
 import EmptyState from '../components/EmptyState'
 import TableSkeleton from '../components/TableSkeleton'
 
+// Special targets - predefined network addresses for broadcast/multicast
+const SPECIAL_TARGETS = {
+  SUBNET_BROADCAST: { id: 1, name: '__subnet_broadcast__', label: 'Subnet Broadcast' },
+  LIMITED_BROADCAST: { id: 2, name: '__limited_broadcast__', label: 'Limited Broadcast' },
+  ALL_HOSTS: { id: 3, name: '__all_hosts__', label: 'All Hosts (IGMP)' },
+  MDNS: { id: 4, name: '__mdns__', label: 'mDNS' },
+}
+
 export default function Policies() {
   const qc = useQueryClient()
   const showToast = useToastContext()
@@ -109,15 +117,21 @@ export default function Policies() {
     queryFn: () => api.get('/groups'),
   })
 
-  const { data: services } = useQuery({
-    queryKey: QUERY_KEYS.services(),
-    queryFn: () => api.get('/services'),
-  })
+const { data: services } = useQuery({
+  queryKey: QUERY_KEYS.services(),
+  queryFn: () => api.get('/services'),
+})
 
-  const polymorphicOptions = [
-    ...(groups || []).map(g => ({ value: g.id, label: g.name, category: 'group' })),
-    ...(peers || []).map(p => ({ value: p.id, label: p.hostname, category: 'peer' }))
-  ]
+const { data: specialTargets } = useQuery({
+  queryKey: ['special-targets'],
+  queryFn: () => api.get('/policies/special-targets'),
+})
+
+const polymorphicOptions = [
+  ...(groups || []).map(g => ({ value: g.id, label: g.name, category: 'group' })),
+  ...(peers || []).map(p => ({ value: p.id, label: p.hostname, category: 'peer' })),
+  ...(specialTargets || []).map(s => ({ value: s.id, label: s.display_name, category: 'special' }))
+]
 
   const serviceOptions = (services || []).map(s => ({ value: s.id, label: s.name }))
 
@@ -203,6 +217,7 @@ export default function Policies() {
   const getEntityName = (type, id) => {
     if (type === 'peer') return peers?.find(p => p.id === id)?.hostname || id
     if (type === 'group') return groups?.find(g => g.id === id)?.name || id
+    if (type === 'special') return specialTargets?.find(s => s.id === id)?.display_name || id
     return id
   }
   const getServiceName = (id) => services?.find(s => s.id === id)?.name || id

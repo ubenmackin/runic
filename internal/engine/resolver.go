@@ -16,8 +16,9 @@ type Resolver struct {
 
 // PortClause represents a single iptables port match clause.
 type PortClause struct {
-	Protocol  string // tcp|udp|icmp
-	PortMatch string // e.g. "--dport 22" or "-m multiport --dports 80,443"
+	Protocol     string // tcp|udp|icmp
+	PortMatch    string // e.g. "--dport 22" or "-m multiport --dports 80,443"
+	SrcPortMatch string // e.g. "--sport 67" or "-m multiport --sports 5353"
 }
 
 // ResolveEntity returns a deduplicated flat list of CIDRs for the given entity (peer or group).
@@ -38,8 +39,34 @@ func (r *Resolver) ResolveEntity(ctx context.Context, entityType string, entityI
 		}
 		return []string{ipAddress + "/32"}, nil
 	}
-	
+
 	return r.ResolveGroup(ctx, entityID, nil)
+}
+
+// ResolveSpecialTarget returns the IP address for a special target.
+// Special targets are predefined network addresses like broadcast and multicast.
+// For subnet_broadcast (ID 1), the address is computed from the peer's IP.
+func (r *Resolver) ResolveSpecialTarget(specialID int, peerIP string) ([]string, error) {
+	switch specialID {
+	case 1: // __subnet_broadcast__ - compute from peer IP
+		// Extract subnet and replace last octet with 255
+		// E.g., 10.100.5.36 -> 10.100.5.255
+		parts := strings.Split(peerIP, ".")
+		if len(parts) != 4 {
+			return nil, fmt.Errorf("invalid IPv4 address for subnet broadcast: %s", peerIP)
+		}
+		parts[3] = "255"
+		broadcastAddr := strings.Join(parts, ".") + "/32"
+		return []string{broadcastAddr}, nil
+	case 2: // __limited_broadcast__
+		return []string{"255.255.255.255/32"}, nil
+	case 3: // __all_hosts__ (IGMP)
+		return []string{"224.0.0.1/32"}, nil
+	case 4: // __mdns__
+		return []string{"224.0.0.251/32"}, nil
+	default:
+		return nil, fmt.Errorf("unknown special target ID: %d", specialID)
+	}
 }
 
 // ResolveGroup returns a deduplicated flat list of CIDRs for the given group.
@@ -113,29 +140,62 @@ func ValidatePorts(ports string) error {
 	return nil
 }
 
-// ExpandPorts returns iptables port match clauses for the given ports string and protocol.
-// Returns an error if the ports string contains unsafe characters.
-func ExpandPorts(ports string, protocol string) ([]PortClause, error) {
-	if ports == "" || protocol == "icmp" {
-		return []PortClause{{Protocol: "icmp", PortMatch: ""}}, nil
+// ExpandPorts returns iptables port match clauses for the given destination and source ports strings and protocol.
+// Returns an error if the ports strings contain unsafe characters.
+func ExpandPorts(dstPorts string, srcPorts string, protocol string) ([]PortClause, error) {
+	// ICMP has no port concept
+	if protocol == "icmp" {
+		return []PortClause{{Protocol: "icmp", PortMatch: "", SrcPortMatch: ""}}, nil
 	}
 
-	if err := ValidatePorts(ports); err != nil {
-		return nil, err
+	// IGMP has no port concept
+	if protocol == "igmp" {
+		return []PortClause{{Protocol: "igmp", PortMatch: "", SrcPortMatch: ""}}, nil
+	}
+
+	// Validate both port strings
+	if err := ValidatePorts(dstPorts); err != nil {
+		return nil, fmt.Errorf("destination ports: %w", err)
+	}
+	if err := ValidatePorts(srcPorts); err != nil {
+		return nil, fmt.Errorf("source ports: %w", err)
+	}
+
+	// Handle empty ports - at least one should be specified for non-ICMP
+	if dstPorts == "" && srcPorts == "" {
+		return nil, fmt.Errorf("at least one port type (destination or source) required for protocol %s", protocol)
 	}
 
 	if protocol == "both" {
-		tcpClauses := expandPortsSingle(ports, "tcp")
-		udpClauses := expandPortsSingle(ports, "udp")
+		tcpClauses := expandPortsSingle(dstPorts, srcPorts, "tcp")
+		udpClauses := expandPortsSingle(dstPorts, srcPorts, "udp")
 		return append(tcpClauses, udpClauses...), nil
 	}
 
-	return expandPortsSingle(ports, protocol), nil
+	return expandPortsSingle(dstPorts, srcPorts, protocol), nil
 }
 
-func expandPortsSingle(ports string, protocol string) []PortClause {
-	if strings.Contains(ports, ",") || strings.Contains(ports, ":") {
-		return []PortClause{{Protocol: protocol, PortMatch: fmt.Sprintf("-m multiport --dports %s", ports)}}
+// expandPortsSingle generates port clauses for a single protocol.
+func expandPortsSingle(dstPorts string, srcPorts string, protocol string) []PortClause {
+	var dstMatch, srcMatch string
+
+	// Generate destination port match
+	if dstPorts != "" {
+		if strings.Contains(dstPorts, ",") || strings.Contains(dstPorts, ":") {
+			dstMatch = fmt.Sprintf("-m multiport --dports %s", dstPorts)
+		} else {
+			dstMatch = fmt.Sprintf("--dport %s", dstPorts)
+		}
 	}
-	return []PortClause{{Protocol: protocol, PortMatch: fmt.Sprintf("--dport %s", ports)}}
+
+	// Generate source port match
+	if srcPorts != "" {
+		if strings.Contains(srcPorts, ",") || strings.Contains(srcPorts, ":") {
+			srcMatch = fmt.Sprintf("-m multiport --sports %s", srcPorts)
+		} else {
+			srcMatch = fmt.Sprintf("--sport %s", srcPorts)
+		}
+	}
+
+	return []PortClause{{Protocol: protocol, PortMatch: dstMatch, SrcPortMatch: srcMatch}}
 }

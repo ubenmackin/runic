@@ -45,10 +45,11 @@ UNIQUE(group_id, peer_id)
 CREATE INDEX IF NOT EXISTS idx_group_members_peer_id ON group_members(peer_id);
 
 CREATE TABLE IF NOT EXISTS services (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT UNIQUE NOT NULL,
-  ports TEXT NOT NULL DEFAULT '',
-  protocol TEXT NOT NULL DEFAULT 'tcp',
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT UNIQUE NOT NULL,
+    ports TEXT NOT NULL DEFAULT '',
+    source_ports TEXT DEFAULT '',
+    protocol TEXT NOT NULL DEFAULT 'tcp',
   description TEXT,
   direction_hint TEXT NOT NULL DEFAULT 'inbound',
   is_system BOOLEAN NOT NULL DEFAULT 0
@@ -91,18 +92,26 @@ CREATE TABLE IF NOT EXISTS revoked_tokens (
 );
 
 CREATE TABLE IF NOT EXISTS firewall_logs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    peer_id INTEGER NOT NULL,
-    timestamp DATETIME NOT NULL,
-    direction TEXT,
-    src_ip TEXT NOT NULL,
-    dst_ip TEXT NOT NULL,
-    protocol TEXT NOT NULL,
-    src_port INTEGER,
-    dst_port INTEGER,
-    action TEXT NOT NULL,
-    raw_line TEXT,
-    FOREIGN KEY(peer_id) REFERENCES peers(id) ON DELETE CASCADE
+id INTEGER PRIMARY KEY AUTOINCREMENT,
+peer_id INTEGER NOT NULL,
+timestamp DATETIME NOT NULL,
+direction TEXT,
+src_ip TEXT NOT NULL,
+dst_ip TEXT NOT NULL,
+protocol TEXT NOT NULL,
+src_port INTEGER,
+dst_port INTEGER,
+action TEXT NOT NULL,
+raw_line TEXT,
+FOREIGN KEY(peer_id) REFERENCES peers(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS special_targets (
+id INTEGER PRIMARY KEY,
+name TEXT UNIQUE NOT NULL,
+display_name TEXT NOT NULL,
+description TEXT,
+address TEXT NOT NULL
 );
 
 -- Indexes for frequently queried columns

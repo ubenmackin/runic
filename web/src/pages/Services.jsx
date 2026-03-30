@@ -12,12 +12,13 @@ import EmptyState from '../components/EmptyState'
 import TableSkeleton from '../components/TableSkeleton'
 import SearchableSelect from '../components/SearchableSelect'
 
-const PROTOCOLS = ['tcp', 'udp', 'both', 'icmp']
+const PROTOCOLS = ['tcp', 'udp', 'both', 'icmp', 'igmp']
 const PROTOCOL_OPTIONS = [
   { value: 'tcp', label: 'TCP' },
   { value: 'udp', label: 'UDP' },
   { value: 'both', label: 'TCP+UDP' },
-  { value: 'icmp', label: 'ICMP' }
+  { value: 'icmp', label: 'ICMP' },
+  { value: 'igmp', label: 'IGMP' }
 ]
 
 // Protocol options for user-created services (excludes ICMP which is system-only)
@@ -30,12 +31,15 @@ const USER_PROTOCOL_OPTIONS = [
 export default function Services() {
   const qc = useQueryClient()
   const showToast = useToastContext()
-  const { modalOpen, setModalOpen, editItem: editService, setEditItem: setEditService, form: formData, setForm: setFormData, setFormForEdit, handleOpenAdd, handleCancel: closeModal } = useCrudModal({ name: '', protocol: 'tcp', ports: '', description: '' })
+  const { modalOpen, setModalOpen, editItem: editService, setEditItem: setEditService, form: formData, setForm: setFormData, setFormForEdit, handleOpenAdd, handleCancel: closeModal } = useCrudModal({ name: '', protocol: 'tcp', ports: '', source_ports: '', description: '' })
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [formErrors, setFormErrors] = useState({})
   const [portChips, setPortChips] = useState([])
   const [portInput, setPortInput] = useState('')
   const [portInputError, setPortInputError] = useState('')
+  const [sourcePortChips, setSourcePortChips] = useState([])
+  const [sourcePortInput, setSourcePortInput] = useState('')
+  const [sourcePortInputError, setSourcePortInputError] = useState('')
   const [searchTerm, setSearchTerm] = useState('')
 
   // Sorting state (persisted per-user)
@@ -78,7 +82,7 @@ export default function Services() {
     return () => modal.removeEventListener('keydown', handleKeyDown)
   }, [modalOpen])
 
-  const openAdd = () => { setFormErrors({}); setPortChips([]); setPortInput(''); setPortInputError(''); handleOpenAdd() }
+  const openAdd = () => { setFormErrors({}); setPortChips([]); setPortInput(''); setPortInputError(''); setSourcePortChips([]); setSourcePortInput(''); setSourcePortInputError(''); handleOpenAdd() }
   const openEdit = (s) => {
     setEditService(s);
     setFormForEdit(s);
@@ -88,6 +92,11 @@ export default function Services() {
     setPortChips(ports)
     setPortInput('')
     setPortInputError('')
+    // Initialize source port chips from existing source_ports
+    const sourcePorts = s.source_ports ? s.source_ports.split(',').map(p => p.trim()).filter(Boolean) : []
+    setSourcePortChips(sourcePorts)
+    setSourcePortInput('')
+    setSourcePortInputError('')
     setModalOpen(true)
   }
 
@@ -265,37 +274,105 @@ export default function Services() {
     setPortInputError('')
   }
 
-  // Remove port chip
-  const handleRemovePort = (port) => {
-    setPortChips(portChips.filter(p => p !== port))
+// Remove port chip
+const handleRemovePort = (port) => {
+  setPortChips(portChips.filter(p => p !== port))
+}
+
+// Handle Enter key in port input
+const handlePortInputKeyDown = (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault()
+    handleAddPort()
+  }
+}
+
+// Add source port chip
+const handleAddSourcePort = () => {
+  const input = sourcePortInput.trim()
+  if (!input) {
+    setSourcePortInputError('Please enter a port or range')
+    return
   }
 
-  // Handle Enter key in port input
-  const handlePortInputKeyDown = (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault()
-      handleAddPort()
-    }
+  // Split by comma and validate each
+  const entries = input.split(',').map(e => e.trim()).filter(Boolean)
+  const invalidEntries = entries.filter(e => !validatePortEntry(e))
+
+  if (invalidEntries.length > 0) {
+    setSourcePortInputError(`Invalid port(s): ${invalidEntries.join(', ')}. Only digits, commas, and colons allowed. Port range: 1-65535`)
+    return
   }
+
+  // Check for duplicates
+  const duplicates = entries.filter(e => sourcePortChips.includes(e))
+  if (duplicates.length > 0) {
+    setSourcePortInputError(`Already added: ${duplicates.join(', ')}`)
+    return
+  }
+
+  setSourcePortChips([...sourcePortChips, ...entries])
+  setSourcePortInput('')
+  setSourcePortInputError('')
+}
+
+// Remove source port chip
+const handleRemoveSourcePort = (port) => {
+  setSourcePortChips(sourcePortChips.filter(p => p !== port))
+}
+
+// Handle Enter key in source port input
+const handleSourcePortInputKeyDown = (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault()
+    handleAddSourcePort()
+  }
+}
 
   const handleSubmit = (e) => {
     e.preventDefault()
+
+    // Clear previous errors
+    setFormErrors({})
+
     // Join port chips into comma-separated string for API
     const portsValue = portChips.join(',')
-    const submitData = { ...formData, ports: portsValue }
+    const sourcePortsValue = sourcePortChips.join(',')
+
+    // Validate: non-ICMP/IGMP protocols require at least one port type
+    if (formData.protocol !== 'icmp' && formData.protocol !== 'igmp' && !portsValue && !sourcePortsValue) {
+      setFormErrors({ _general: 'At least one destination port or source port is required for TCP/UDP protocols' })
+      return
+    }
+
+    const submitData = { ...formData, ports: portsValue, source_ports: sourcePortsValue }
     if (editService) updateMutation.mutate(submitData)
     else createMutation.mutate(submitData)
   }
 
-  const protocolLabel = (p) => ({ tcp: 'TCP', udp: 'UDP', both: 'TCP+UDP', icmp: 'ICMP' }[p] || p)
+  const protocolLabel = (p) => ({ tcp: 'TCP', udp: 'UDP', both: 'TCP+UDP', icmp: 'ICMP', igmp: 'IGMP' }[p] || p)
   const previewRule = () => {
     const portsValue = portChips.join(',')
+    const sourcePortsValue = sourcePortChips.join(',')
     if (formData.protocol === 'icmp') return `icmp`
-    if (!portsValue) return `${formData.protocol} dport ?`
+    if (formData.protocol === 'igmp') return `igmp`
+    if (!portsValue && !sourcePortsValue) return `${formData.protocol} (no ports specified)`
 
-    // Determine if multiport is needed
-    const needsMultiport = portsValue.includes(',') || portsValue.includes(':')
-    const portMatch = needsMultiport ? `-m multiport --dports ${portsValue}` : `--dport ${portsValue}`
+    // Determine if multiport is needed for destination
+    const needsDstMultiport = portsValue.includes(',') || portsValue.includes(':')
+    const dstPortMatch = portsValue
+      ? (needsDstMultiport ? `-m multiport --dports ${portsValue}` : `--dport ${portsValue}`)
+      : ''
+
+    // Determine if multiport is needed for source
+    const needsSrcMultiport = sourcePortsValue.includes(',') || sourcePortsValue.includes(':')
+    const srcPortMatch = sourcePortsValue
+      ? (needsSrcMultiport ? `-m multiport --sports ${sourcePortsValue}` : `--sport ${sourcePortsValue}`)
+      : ''
+
+    // Combine port matches with --sport before --dport (iptables convention)
+    const portParts = [srcPortMatch, dstPortMatch].filter(Boolean)
+    const portMatch = portParts.join(' ')
 
     if (formData.protocol === 'both') {
       return `tcp ${portMatch}\nudp ${portMatch}`
@@ -399,12 +476,12 @@ export default function Services() {
                   >
                     Protocol <SortIndicator columnKey="protocol" />
                   </th>
-                  <th
-                    className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted cursor-pointer hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none"
-                    onClick={() => handleSort('ports')}
-                  >
-                    Ports <SortIndicator columnKey="ports" />
-                  </th>
+          <th
+            className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted cursor-pointer hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none"
+            onClick={() => handleSort('ports')}
+          >
+            Dest Ports <SortIndicator columnKey="ports" />
+          </th>
                   <th
                     className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted cursor-pointer hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none"
                     onClick={() => handleSort('description')}
@@ -552,73 +629,130 @@ export default function Services() {
                 />
                 <p className="text-xs text-gray-500 dark:text-amber-muted mt-1">Allow only specified network protocols.</p>
               </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Ports</label>
-                <p className="text-xs text-gray-500 dark:text-amber-muted mb-2">Allow network traffic and access only to specified ports. Select ports or port ranges between 1 and 65535.</p>
+        <div>
+          <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Destination Ports</label>
+          <p className="text-xs text-gray-500 dark:text-amber-muted mb-2">Allow network traffic and access only to specified ports. Select ports or port ranges between 1 and 65535.</p>
 
-                {/* Port chips display */}
-                {portChips.length > 0 && (
-                  <div className="flex flex-wrap gap-2 mb-2">
-                    {portChips.map((port, idx) => (
-                      <span
-                        key={idx}
-                        className="px-2 py-1 bg-gray-100 dark:bg-charcoal-darkest rounded-md text-sm flex items-center gap-1 text-gray-900 dark:text-white"
-                      >
-                        {port}
-                        <X
-                          className="w-3 h-3 text-gray-500 hover:text-red-500 cursor-pointer"
-                          onClick={() => handleRemovePort(port)}
-                        />
-                      </span>
-                    ))}
-                  </div>
-                )}
-
-                {/* Port input */}
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={portInput}
-                    onChange={e => { setPortInput(e.target.value); setPortInputError('') }}
-                    onKeyDown={handlePortInputKeyDown}
-                    disabled={formData.protocol === 'icmp'}
-                    placeholder={formData.protocol === 'icmp' ? 'N/A for ICMP' : '22 or 80,443 or 8000:9000'}
-                    className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white disabled:opacity-50"
+          {/* Destination port chips display */}
+          {portChips.length > 0 && (
+            <div className="flex flex-wrap gap-2 mb-2">
+              {portChips.map((port, idx) => (
+                <span
+                  key={idx}
+                  className="px-2 py-1 bg-gray-100 dark:bg-charcoal-darkest rounded-md text-sm flex items-center gap-1 text-gray-900 dark:text-white"
+                >
+                  {port}
+                  <X
+                    className="w-3 h-3 text-gray-500 hover:text-red-500 cursor-pointer"
+                    onClick={() => handleRemovePort(port)}
                   />
-                  <button
-                    type="button"
-                    onClick={handleAddPort}
-                    disabled={formData.protocol === 'icmp'}
-                    className="px-4 py-2 text-sm font-medium text-white bg-purple-active hover:bg-purple-active/80 rounded-lg disabled:opacity-50"
-                  >
-                    Add
-                  </button>
-                </div>
+                </span>
+              ))}
+            </div>
+          )}
 
-                {/* Port input error */}
-                {portInputError && (
-                  <p className="text-xs text-red-500 mt-1">{portInputError}</p>
-                )}
+          {/* Destination port input */}
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={portInput}
+              onChange={e => { setPortInput(e.target.value); setPortInputError('') }}
+              onKeyDown={handlePortInputKeyDown}
+              disabled={formData.protocol === 'icmp' || formData.protocol === 'igmp'}
+              placeholder={formData.protocol === 'icmp' ? 'N/A for ICMP' : formData.protocol === 'igmp' ? 'N/A for IGMP' : '22 or 80,443 or 8000:9000'}
+              className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white disabled:opacity-50"
+            />
+            <button
+              type="button"
+              onClick={handleAddPort}
+              disabled={formData.protocol === 'icmp' || formData.protocol === 'igmp'}
+              className="px-4 py-2 text-sm font-medium text-white bg-purple-active hover:bg-purple-active/80 rounded-lg disabled:opacity-50"
+            >
+              Add
+            </button>
+          </div>
 
-                {/* Port format hint */}
-                {formData.protocol !== 'icmp' && (
-                  <div className="mt-8 mb-2">
-                    <p className="text-xs text-gray-500">
-                      Single: <code className="bg-gray-200 text-gray-800 dark:bg-gray-800 dark:text-gray-200 px-1 rounded">22</code>, Multiple: <code className="bg-gray-200 text-gray-800 dark:bg-gray-800 dark:text-gray-200 px-1 rounded">80,443</code>, Range: <code className="bg-gray-200 text-gray-800 dark:bg-gray-800 dark:text-gray-200 px-1 rounded">8000:9000</code>
-                    </p>
-                  </div>
-                )}
-              </div>
+          {/* Destination port input error */}
+          {portInputError && (
+            <p className="text-xs text-red-500 mt-1">{portInputError}</p>
+          )}
+
+            {/* Destination port format hint */}
+            {formData.protocol !== 'icmp' && formData.protocol !== 'igmp' && (
+            <div className="mt-2">
+              <p className="text-xs text-gray-500">
+                Single: <code className="bg-gray-200 text-gray-800 dark:bg-gray-800 dark:text-gray-200 px-1 rounded">22</code>, Multiple: <code className="bg-gray-200 text-gray-800 dark:bg-gray-800 dark:text-gray-200 px-1 rounded">80,443</code>, Range: <code className="bg-gray-200 text-gray-800 dark:bg-gray-800 dark:text-gray-200 px-1 rounded">8000:9000</code>
+              </p>
+            </div>
+          )}
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Source Ports</label>
+          <p className="text-xs text-gray-500 dark:text-amber-muted mb-2">Optional. Match traffic from specific source ports.</p>
+
+          {/* Source port chips display */}
+          {sourcePortChips.length > 0 && (
+            <div className="flex flex-wrap gap-2 mb-2">
+              {sourcePortChips.map((port, idx) => (
+                <span
+                  key={idx}
+                  className="px-2 py-1 bg-gray-100 dark:bg-charcoal-darkest rounded-md text-sm flex items-center gap-1 text-gray-900 dark:text-white"
+                >
+                  {port}
+                  <X
+                    className="w-3 h-3 text-gray-500 hover:text-red-500 cursor-pointer"
+                    onClick={() => handleRemoveSourcePort(port)}
+                  />
+                </span>
+              ))}
+            </div>
+          )}
+
+          {/* Source port input */}
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={sourcePortInput}
+              onChange={e => { setSourcePortInput(e.target.value); setSourcePortInputError('') }}
+              onKeyDown={handleSourcePortInputKeyDown}
+              disabled={formData.protocol === 'icmp' || formData.protocol === 'igmp'}
+              placeholder={formData.protocol === 'icmp' ? 'N/A for ICMP' : formData.protocol === 'igmp' ? 'N/A for IGMP' : '67 or 53,5353'}
+              className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white disabled:opacity-50"
+            />
+            <button
+              type="button"
+              onClick={handleAddSourcePort}
+              disabled={formData.protocol === 'icmp' || formData.protocol === 'igmp'}
+              className="px-4 py-2 text-sm font-medium text-white bg-purple-active hover:bg-purple-active/80 rounded-lg disabled:opacity-50"
+            >
+              Add
+            </button>
+          </div>
+
+          {/* Source port input error */}
+          {sourcePortInputError && (
+            <p className="text-xs text-red-500 mt-1">{sourcePortInputError}</p>
+          )}
+
+            {/* Source port format hint */}
+            {formData.protocol !== 'icmp' && formData.protocol !== 'igmp' && (
+            <div className="mt-2">
+              <p className="text-xs text-gray-500">
+                Single: <code className="bg-gray-200 text-gray-800 dark:bg-gray-800 dark:text-gray-200 px-1 rounded">67</code>, Multiple: <code className="bg-gray-200 text-gray-800 dark:bg-gray-800 dark:text-gray-200 px-1 rounded">53,5353</code>, Range: <code className="bg-gray-200 text-gray-800 dark:bg-gray-800 dark:text-gray-200 px-1 rounded">60000:65535</code>
+              </p>
+            </div>
+          )}
+        </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Description</label>
                 <textarea value={formData.description} onChange={e => setFormData(d => ({ ...d, description: e.target.value }))} rows={2} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white" />
               </div>
-              {portChips.length > 0 && formData.protocol !== 'icmp' && (
-                <div className="p-3 bg-gray-50 dark:bg-charcoal-darkest rounded-lg">
-                  <p className="text-xs text-gray-500 mb-1">Rule preview:</p>
-                  <code className="text-sm text-runic-600 whitespace-pre-line">{previewRule()}</code>
-                </div>
-              )}
+          {(portChips.length > 0 || sourcePortChips.length > 0) && formData.protocol !== 'icmp' && formData.protocol !== 'igmp' && (
+          <div className="p-3 bg-gray-50 dark:bg-charcoal-darkest rounded-lg">
+            <p className="text-xs text-gray-500 mb-1">Rule preview:</p>
+            <code className="text-sm text-runic-600 whitespace-pre-line">{previewRule()}</code>
+          </div>
+        )}
               <InlineError message={formErrors._general} />
               <div className="flex justify-end gap-3 pt-2">
                 <button type="button" onClick={closeModal} className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-amber-primary bg-white dark:bg-charcoal-dark border border-gray-300 dark:border-gray-border rounded-lg hover:bg-gray-50 dark:hover:bg-charcoal-darkest">Cancel</button>

@@ -144,6 +144,7 @@ func RegisterRoutes(r *mux.Router, a *API, downloadsDir string) {
 	protected.HandleFunc("/policies/{id:[0-9]+}", policies.MakeUpdatePolicyHandler(a.Compiler)).Methods("PUT")
 	protected.HandleFunc("/policies/{id:[0-9]+}", policies.MakePatchPolicyHandler(a.Compiler)).Methods("PATCH")
 	protected.HandleFunc("/policies/{id:[0-9]+}", policies.MakeDeletePolicyHandler(a.Compiler)).Methods("DELETE")
+	protected.HandleFunc("/policies/special-targets", policies.ListSpecialTargets).Methods("GET")
 
 	// Dashboard
 	protected.HandleFunc("/dashboard", dashboard.HandleDashboard).Methods("GET")

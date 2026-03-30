@@ -40,6 +40,7 @@ type ServiceRow struct {
 	ID            int
 	Name          string
 	Ports         string
+	SourcePorts   string
 	Protocol      string
 	Description   string
 	DirectionHint string
@@ -78,4 +79,12 @@ type CreateBundleParams struct {
 	Version      string
 	RulesContent string
 	HMAC         string
+}
+
+type SpecialTargetRow struct {
+	ID          int
+	Name        string // internal name like "__subnet_broadcast__"
+	DisplayName string // user-friendly name like "Subnet Broadcast"
+	Description string // optional description
+	Address     string // IP address or "computed" for subnet_broadcast
 }

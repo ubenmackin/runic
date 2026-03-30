@@ -343,6 +343,13 @@ func migrateSchema(database *sql.DB) error {
 		log.Println("Migration: added is_system column to services table")
 	}
 
+	if !existingServiceColumns["source_ports"] {
+		if _, err := database.Exec("ALTER TABLE services ADD COLUMN source_ports TEXT DEFAULT ''"); err != nil {
+			return fmt.Errorf("failed to add source_ports column: %w", err)
+		}
+		log.Println("Migration: added source_ports column to services table")
+	}
+
 	// Migration: Add is_system column to groups table
 	existingGroupColumns := make(map[string]bool)
 	groupRows, err := database.Query("PRAGMA table_info(groups)")
@@ -517,6 +524,55 @@ func migrateSchema(database *sql.DB) error {
 		log.Println("Migration: successfully upgraded policies to polymorphic")
 	}
 
+	// Migration: Create special_targets table for broadcast/multicast addresses
+	var hasSpecialTargets bool
+	err = database.QueryRow("SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='special_targets'").Scan(&hasSpecialTargets)
+	if err != nil {
+		return fmt.Errorf("failed to check for special_targets table: %w", err)
+	}
+
+	if !hasSpecialTargets {
+		log.Println("Migration: creating special_targets table")
+
+		_, err = database.Exec(`
+			CREATE TABLE special_targets (
+				id INTEGER PRIMARY KEY,
+				name TEXT UNIQUE NOT NULL,
+				display_name TEXT NOT NULL,
+				description TEXT,
+				address TEXT NOT NULL
+			)
+		`)
+		if err != nil {
+			return fmt.Errorf("failed to create special_targets table: %w", err)
+		}
+
+		// Seed the special targets
+		specialTargets := []struct {
+			Name        string
+			DisplayName string
+			Description string
+			Address     string
+		}{
+			{"__subnet_broadcast__", "Subnet Broadcast", "The broadcast address for the peer's subnet (e.g., 10.100.5.255)", "computed"},
+			{"__limited_broadcast__", "Limited Broadcast", "The limited broadcast address (255.255.255.255)", "255.255.255.255"},
+			{"__all_hosts__", "All Hosts (IGMP)", "All hosts multicast address for IGMP (224.0.0.1)", "224.0.0.1"},
+			{"__mdns__", "mDNS", "mDNS multicast address (224.0.0.251)", "224.0.0.251"},
+		}
+
+		for _, st := range specialTargets {
+			_, err = database.Exec(
+				"INSERT INTO special_targets (name, display_name, description, address) VALUES (?, ?, ?, ?)",
+				st.Name, st.DisplayName, st.Description, st.Address,
+			)
+			if err != nil {
+				return fmt.Errorf("failed to seed special_target %s: %w", st.Name, err)
+			}
+		}
+
+		log.Println("Migration: created and seeded special_targets table")
+	}
+
 	return nil
 }
 
@@ -588,9 +644,9 @@ func ListEnabledPolicies(ctx context.Context, database *sql.DB, peerID int) ([]m
 func GetService(ctx context.Context, database *sql.DB, serviceID int) (models.ServiceRow, error) {
 	var s models.ServiceRow
 	err := database.QueryRowContext(ctx,
-		`SELECT id, name, ports, protocol, COALESCE(description, ''), direction_hint, COALESCE(is_system, 0)
+		`SELECT id, name, ports, COALESCE(source_ports, ''), protocol, COALESCE(description, ''), direction_hint, COALESCE(is_system, 0)
 		FROM services WHERE id = ?`, serviceID,
-	).Scan(&s.ID, &s.Name, &s.Ports, &s.Protocol, &s.Description, &s.DirectionHint, &s.IsSystem)
+	).Scan(&s.ID, &s.Name, &s.Ports, &s.SourcePorts, &s.Protocol, &s.Description, &s.DirectionHint, &s.IsSystem)
 	return s, err
 }
 
@@ -678,6 +734,12 @@ func seedSystemServices(database *sql.DB) error {
 			Ports:       "",
 			Protocol:    "icmp",
 			Description: "ICMP protocol for ping and network diagnostics (system service)",
+		},
+		{
+			Name:        "IGMP",
+			Ports:       "",
+			Protocol:    "igmp",
+			Description: "IGMP protocol for multicast group management (system service)",
 		},
 		{
 			Name:        "Multicast",

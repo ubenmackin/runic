@@ -13,6 +13,16 @@ import (
 	"runic/internal/engine"
 )
 
+// isValidSourceType validates that the source type is one of the allowed values.
+func isValidSourceType(value string) bool {
+	return value == "peer" || value == "group" || value == "special"
+}
+
+// isValidTargetType validates that the target type is one of the allowed values.
+func isValidTargetType(value string) bool {
+	return value == "peer" || value == "group" || value == "special"
+}
+
 func ListPolicies(w http.ResponseWriter, r *http.Request) {
 	rows, err := db.DB.QueryContext(r.Context(),
 		`SELECT id, name, COALESCE(description, ''), source_id, source_type, service_id,
@@ -78,6 +88,14 @@ func MakeCreatePolicyHandler(compiler *engine.Compiler) http.HandlerFunc {
 		}
 		if input.Name == "" || input.SourceID == 0 || input.SourceType == "" || input.ServiceID == 0 || input.TargetID == 0 || input.TargetType == "" {
 			common.RespondError(w, http.StatusBadRequest, "name, source_id, source_type, service_id, target_id, and target_type are required")
+			return
+		}
+		if !isValidSourceType(input.SourceType) {
+			common.RespondError(w, http.StatusBadRequest, "source_type must be one of: peer, group, special")
+			return
+		}
+		if !isValidTargetType(input.TargetType) {
+			common.RespondError(w, http.StatusBadRequest, "target_type must be one of: peer, group, special")
 			return
 		}
 		if input.Action == "" {
@@ -184,6 +202,14 @@ func MakeUpdatePolicyHandler(compiler *engine.Compiler) http.HandlerFunc {
 		}
 		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 			common.RespondError(w, http.StatusBadRequest, "invalid JSON")
+			return
+		}
+		if input.SourceType != "" && !isValidSourceType(input.SourceType) {
+			common.RespondError(w, http.StatusBadRequest, "source_type must be one of: peer, group, special")
+			return
+		}
+		if input.TargetType != "" && !isValidTargetType(input.TargetType) {
+			common.RespondError(w, http.StatusBadRequest, "target_type must be one of: peer, group, special")
 			return
 		}
 
@@ -364,4 +390,37 @@ func MakePatchPolicyHandler(compiler *engine.Compiler) http.HandlerFunc {
 		}()
 		common.RespondJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 	}
+}
+
+func ListSpecialTargets(w http.ResponseWriter, r *http.Request) {
+	rows, err := db.DB.QueryContext(r.Context(), "SELECT id, name, display_name, COALESCE(description, ''), address FROM special_targets ORDER BY id ASC")
+	if err != nil {
+		common.RespondError(w, http.StatusInternalServerError, "failed to query special targets")
+		return
+	}
+	defer rows.Close()
+
+	type specialTargetResp struct {
+		ID          int    `json:"id"`
+		Name        string `json:"name"`
+		DisplayName string `json:"display_name"`
+		Description string `json:"description"`
+		Address     string `json:"address"`
+	}
+
+	var targets []specialTargetResp
+	for rows.Next() {
+		var t specialTargetResp
+		if err := rows.Scan(&t.ID, &t.Name, &t.DisplayName, &t.Description, &t.Address); err != nil {
+			common.RespondError(w, http.StatusInternalServerError, "failed to scan special target")
+			return
+		}
+		targets = append(targets, t)
+	}
+
+	if targets == nil {
+		targets = []specialTargetResp{}
+	}
+
+	common.RespondJSON(w, http.StatusOK, targets)
 }

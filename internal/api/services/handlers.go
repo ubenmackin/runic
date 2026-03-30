@@ -14,37 +14,50 @@ import (
 var validPortsRe = regexp.MustCompile(`^\d+([,:]\d+)*$`)
 
 // validProtocols is the set of allowed protocol values for user-defined services.
-// Note: ICMP is only allowed for system services, not user-defined services.
+// Note: ICMP and IGMP are only allowed for system services, not user-defined services.
 var validProtocols = map[string]bool{
 	"tcp":  true,
 	"udp":  true,
 	"both": true,
 }
 
-// validateService checks that ports and protocol are safe to compile into iptables rules.
-// For user-defined services, ICMP protocol is blocked.
-func validateService(ports, protocol string, isSystem bool) error {
-	// ICMP is only allowed for system services
+// validateService checks that ports, source_ports, and protocol are safe to compile into iptables rules.
+// For user-defined services, ICMP and IGMP protocols are blocked.
+// For non-ICMP/IGMP protocols, at least one of ports or source_ports is required.
+func validateService(ports, sourcePorts, protocol string, isSystem bool) error {
+	// ICMP and IGMP are only allowed for system services
 	if protocol == "icmp" && !isSystem {
 		return fmt.Errorf("ICMP protocol is reserved for system services and cannot be used for user-defined services")
 	}
+	if protocol == "igmp" && !isSystem {
+		return fmt.Errorf("IGMP protocol is reserved for system services and cannot be used for user-defined services")
+	}
 
-	// For non-ICMP protocols, validate against allowed list
-	if protocol != "icmp" && !validProtocols[protocol] {
+	// For non-ICMP/IGMP protocols, validate against allowed list
+	if protocol != "icmp" && protocol != "igmp" && !validProtocols[protocol] {
 		return fmt.Errorf("invalid protocol %q: must be tcp, udp, or both", protocol)
 	}
 
-	// ICMP doesn't use ports
-	if protocol == "icmp" {
+	// ICMP and IGMP don't use ports
+	if protocol == "icmp" || protocol == "igmp" {
 		return nil
 	}
 
-	if ports == "" {
-		return fmt.Errorf("ports are required for protocol %q", protocol)
+	// For non-ICMP protocols, at least one port type is required
+	if ports == "" && sourcePorts == "" {
+		return fmt.Errorf("at least one port type (destination ports or source ports) is required for protocol %q", protocol)
 	}
-	if !validPortsRe.MatchString(ports) {
-		return fmt.Errorf("invalid ports %q: must be digits separated by commas or colons", ports)
+
+	// Validate destination ports format if provided
+	if ports != "" && !validPortsRe.MatchString(ports) {
+		return fmt.Errorf("invalid destination ports %q: must be digits separated by commas or colons", ports)
 	}
+
+	// Validate source ports format if provided
+	if sourcePorts != "" && !validPortsRe.MatchString(sourcePorts) {
+		return fmt.Errorf("invalid source ports %q: must be digits separated by commas or colons", sourcePorts)
+	}
+
 	return nil
 }
 
@@ -52,7 +65,7 @@ func validateService(ports, protocol string, isSystem bool) error {
 
 func ListServices(w http.ResponseWriter, r *http.Request) {
 	rows, err := db.DB.QueryContext(r.Context(),
-		"SELECT id, name, ports, protocol, COALESCE(description, ''), direction_hint, COALESCE(is_system, 0) FROM services")
+		"SELECT id, name, ports, COALESCE(source_ports, ''), protocol, COALESCE(description, ''), direction_hint, COALESCE(is_system, 0) FROM services")
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "failed to query services")
 		return
@@ -63,6 +76,7 @@ func ListServices(w http.ResponseWriter, r *http.Request) {
 		ID            int    `json:"id"`
 		Name          string `json:"name"`
 		Ports         string `json:"ports"`
+		SourcePorts   string `json:"source_ports"`
 		Protocol      string `json:"protocol"`
 		Description   string `json:"description"`
 		DirectionHint string `json:"direction_hint"`
@@ -72,7 +86,7 @@ func ListServices(w http.ResponseWriter, r *http.Request) {
 	var servicesData []serviceResp
 	for rows.Next() {
 		var s serviceResp
-		if err := rows.Scan(&s.ID, &s.Name, &s.Ports, &s.Protocol, &s.Description, &s.DirectionHint, &s.IsSystem); err != nil {
+		if err := rows.Scan(&s.ID, &s.Name, &s.Ports, &s.SourcePorts, &s.Protocol, &s.Description, &s.DirectionHint, &s.IsSystem); err != nil {
 			common.RespondError(w, http.StatusInternalServerError, "failed to scan service")
 			return
 		}
@@ -88,6 +102,7 @@ func CreateService(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		Name          string `json:"name"`
 		Ports         string `json:"ports"`
+		SourcePorts   string `json:"source_ports"`
 		Protocol      string `json:"protocol"`
 		Description   string `json:"description"`
 		DirectionHint string `json:"direction_hint"`
@@ -108,15 +123,15 @@ func CreateService(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// User-created services are never system services
-	if err := validateService(input.Ports, input.Protocol, false); err != nil {
+	if err := validateService(input.Ports, input.SourcePorts, input.Protocol, false); err != nil {
 		common.RespondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	result, err := db.DB.ExecContext(r.Context(),
-		`INSERT INTO services (name, ports, protocol, description, direction_hint, is_system)
-		VALUES (?, ?, ?, ?, ?, 0)`,
-		input.Name, input.Ports, input.Protocol, input.Description, input.DirectionHint)
+		`INSERT INTO services (name, ports, source_ports, protocol, description, direction_hint, is_system)
+		VALUES (?, ?, ?, ?, ?, ?, 0)`,
+		input.Name, input.Ports, input.SourcePorts, input.Protocol, input.Description, input.DirectionHint)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create service: %v", err))
 		return
@@ -156,7 +171,7 @@ func UpdateService(w http.ResponseWriter, r *http.Request) {
 		common.RespondError(w, http.StatusNotFound, "service not found")
 		return
 	}
-	
+
 	if isSystem {
 		common.RespondError(w, http.StatusForbidden, "Cannot edit system service")
 		return
@@ -165,6 +180,7 @@ func UpdateService(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		Name          string `json:"name"`
 		Ports         string `json:"ports"`
+		SourcePorts   string `json:"source_ports"`
 		Protocol      string `json:"protocol"`
 		Description   string `json:"description"`
 		DirectionHint string `json:"direction_hint"`
@@ -179,15 +195,14 @@ func UpdateService(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Pass isSystem flag to validation to allow ICMP for system services
-	if err := validateService(input.Ports, input.Protocol, isSystem); err != nil {
+	if err := validateService(input.Ports, input.SourcePorts, input.Protocol, isSystem); err != nil {
 		common.RespondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	_, err = db.DB.ExecContext(r.Context(),
-		`UPDATE services SET name = ?, ports = ?, protocol = ?, description = ?, direction_hint = ?
-		WHERE id = ?`,
-		input.Name, input.Ports, input.Protocol, input.Description, input.DirectionHint, id)
+		`UPDATE services SET name = ?, ports = ?, source_ports = ?, protocol = ?, description = ?, direction_hint = ?
+		WHERE id = ?`, input.Name, input.Ports, input.SourcePorts, input.Protocol, input.Description, input.DirectionHint, id)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to update service: %v", err))
 		return
