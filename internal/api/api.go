@@ -196,7 +196,7 @@ func RegisterRoutes(r *mux.Router, a *API, downloadsDir string) {
 	}).Methods("GET")
 
 	// Version info endpoint
-	r.HandleFunc("/api/v1/info", func(w http.ResponseWriter, r *http.Request) {
+	apiRouter.HandleFunc("/info", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"version":  version.Version,

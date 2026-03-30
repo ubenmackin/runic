@@ -6,6 +6,7 @@ case $ARCH in
 x86_64) AGENT_ARCH="amd64" ;;
 aarch64) AGENT_ARCH="arm64" ;;
 armv7l) AGENT_ARCH="arm" ;;
+armv6l) AGENT_ARCH="arm" ;;
 *) echo "Unsupported arch: $ARCH"; exit 1 ;;
 esac
 
@@ -46,6 +47,20 @@ EOF
     chmod 644 /etc/rsyslog.d/30-runic-firewall.conf
     systemctl restart rsyslog 2>/dev/null || true
 fi
+
+# Disable netfilter-persistent/iptables-persistent to prevent conflicts with runic's firewall management
+# These services restore saved iptables rules on boot, which would conflict with runic's rule management
+for service in netfilter-persistent iptables-persistent; do
+    if systemctl is-active --quiet "$service" 2>/dev/null || \
+       systemctl is-enabled --quiet "$service" 2>/dev/null; then
+        echo "Disabling $service service..."
+        echo "  -> Stopping and disabling to prevent conflicts with runic firewall management"
+        systemctl stop "$service" 2>/dev/null || true
+        systemctl disable "$service" 2>/dev/null || true
+        # Mask to prevent any other package from re-enabling it
+        systemctl mask "$service" 2>/dev/null || true
+    fi
+done
 
 # Only write config if it doesn't exist (preserve existing credentials)
 if [ ! -f /etc/runic-agent/config.json ]; then
