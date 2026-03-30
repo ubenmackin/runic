@@ -71,7 +71,7 @@ export default function SearchableSelect({ options = [], value, category, onChan
                         className="w-full flex items-center justify-between px-3 py-2 text-left hover:bg-gray-100 dark:hover:bg-charcoal-darkest"
                       >
                         <span className="text-sm text-gray-900 dark:text-light-neutral">{opt.label}</span>
-                        {opt.value === value && <Check className="w-4 h-4 text-purple-active" />}
+                        {opt.value === value && (!category || opt.category === category) && <Check className="w-4 h-4 text-purple-active" />}
                       </button>
                     ))}
                   </div>

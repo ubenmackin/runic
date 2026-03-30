@@ -362,7 +362,7 @@ Policies
                   disabled={g.is_system}
                   title="Edit"
                 >
-                  <Pencil className={`w-4 h-4 ${g.is_system ? 'text-gray-400' : 'dark:text-white text-black'}`} />
+                  <Pencil className={`w-4 h-4 ${g.is_system ? 'text-gray-400' : 'text-gray-900 dark:text-white'}`} />
                 </button>
                 {!g.is_system && (
                   <button onClick={(e) => { e.stopPropagation(); setDeleteTarget(g) }} className="p-1 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded">
@@ -494,10 +494,21 @@ className="hover:bg-gray-200 dark:hover:bg-charcoal-dark rounded-full p-0.5"
                 />
               </div>
 
-              <InlineError message={formErrors._general} />
-              <div className="flex justify-end gap-3 pt-2">
-<button type="button" onClick={closeModal} className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-light-neutral bg-white dark:bg-charcoal-dark border border-gray-300 dark:border-gray-border rounded-lg hover:bg-gray-50 dark:hover:bg-charcoal-darkest">Cancel</button>
-<button type="submit" className="px-4 py-2 text-sm font-medium text-white bg-purple-active hover:bg-purple-700 rounded-lg">{editGroup ? 'Save Changes' : 'Create Group'}</button>
+              <div className="flex justify-end gap-3 pt-4">
+                <button
+                  type="button"
+                  onClick={closeModal}
+                  className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-amber-primary bg-white dark:bg-charcoal-dark border border-gray-300 dark:border-gray-border rounded-lg hover:bg-gray-50 dark:hover:bg-charcoal-darkest"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={createMutation.isPending || updateMutation.isPending}
+                  className="px-4 py-2 text-sm font-medium text-white bg-purple-active hover:bg-purple-700 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {editGroup ? 'Update' : 'Create'}
+                </button>
               </div>
             </form>
           </div>
