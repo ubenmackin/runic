@@ -116,6 +116,7 @@ func RegisterRoutes(r *mux.Router, a *API, downloadsDir string) {
 	protected.HandleFunc("/peers/{id:[0-9]+}", peers.DeletePeer).Methods("DELETE")
 	protected.HandleFunc("/peers/{id:[0-9]+}/bundle", peers.MakeGetPeerBundleHandler(a.Compiler)).Methods("GET")
 	protected.HandleFunc("/peers/{id:[0-9]+}/compile", peers.MakeCompilePeerHandler(a.Compiler)).Methods("POST")
+	protected.HandleFunc("/peers/{id:[0-9]+}/rotate-key", peers.RotatePeerKey).Methods("POST")
 
 	// Groups
 	protected.HandleFunc("/groups", groups.ListGroups).Methods("GET")
@@ -170,6 +171,12 @@ func RegisterRoutes(r *mux.Router, a *API, downloadsDir string) {
 	apiRouter.HandleFunc("/agent/logs", agents.AgentAuthMiddleware(agents.SubmitLogs)).Methods("POST")
 	apiRouter.HandleFunc("/agent/bundle/{host_id}/applied", agents.AgentAuthMiddleware(agents.ConfirmBundleApplied)).Methods("POST")
 	apiRouter.HandleFunc("/agent/events/{host_id}", agents.AgentAuthMiddleware(agents.MakeHandleSSEventsHandler(a.SSEHub))).Methods("GET")
+	apiRouter.HandleFunc("/agent/test-key", agents.AgentAuthMiddleware(agents.AgentTestKey)).Methods("POST")
+
+	// Agent key rotation (public - authenticated via rotation token)
+	apiRouter.HandleFunc("/agent/check-rotation", agents.AgentCheckRotation).Methods("GET")
+	apiRouter.HandleFunc("/agent/rotate-key", peers.AgentRotateKey).Methods("POST")
+	apiRouter.HandleFunc("/agent/confirm-rotation", peers.AgentConfirmRotation).Methods("POST")
 
 	// Version info endpoint
 	apiRouter.HandleFunc("/info", func(w http.ResponseWriter, r *http.Request) {

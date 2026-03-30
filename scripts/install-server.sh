@@ -15,7 +15,6 @@
 #   --non-interactive Run without prompts (use defaults)
 #   --control-plane   Specify control plane URL
 #   --jwt-secret      Specify JWT secret
-#   --hmac-key        Specify HMAC key
 #
 # =========================================================
 
@@ -54,7 +53,6 @@ SKIP_BUILD=false
 NON_INTERACTIVE=false
 PROVIDED_CONTROL_PLANE=""
 PROVIDED_JWT_SECRET=""
-PROVIDED_HMAC_KEY=""
 
 # Temporary directories for cleanup
 TEMP_DIRS=()
@@ -315,13 +313,12 @@ migrate_secrets_from_service_file() {
     log INFO "Found existing service file, attempting to migrate secrets..."
     
     # Extract secrets from service file
-    local jwt_secret hmac_key agent_jwt_secret
+    local jwt_secret agent_jwt_secret
     jwt_secret=$(grep -E "^Environment=RUNIC_JWT_SECRET=" "$service_file" 2>/dev/null | sed 's/^Environment=RUNIC_JWT_SECRET=//')
-    hmac_key=$(grep -E "^Environment=RUNIC_HMAC_KEY=" "$service_file" 2>/dev/null | sed 's/^Environment=RUNIC_HMAC_KEY=//')
     agent_jwt_secret=$(grep -E "^Environment=RUNIC_AGENT_JWT_SECRET=" "$service_file" 2>/dev/null | sed 's/^Environment=RUNIC_AGENT_JWT_SECRET=//')
     
     # Check if we found any secrets
-    if [ -z "$jwt_secret" ] && [ -z "$hmac_key" ] && [ -z "$agent_jwt_secret" ]; then
+    if [ -z "$jwt_secret" ] && [ -z "$agent_jwt_secret" ]; then
         log INFO "No secrets found in service file, no migration needed"
         return 0
     fi
@@ -340,11 +337,6 @@ EOF
     if [ -n "$jwt_secret" ]; then
         echo "RUNIC_JWT_SECRET=$jwt_secret" >> "$env_file"
         log INFO "Migrated JWT_SECRET"
-    fi
-    
-    if [ -n "$hmac_key" ]; then
-        echo "RUNIC_HMAC_KEY=$hmac_key" >> "$env_file"
-        log INFO "Migrated HMAC_KEY"
     fi
     
     if [ -n "$agent_jwt_secret" ]; then
@@ -372,19 +364,13 @@ validate_env_file() {
     fi
     
     # Check if file contains expected variable names (just checking they're mentioned, not values)
-    local has_jwt_secret has_hmac_key has_agent_jwt_secret
+    local has_jwt_secret has_agent_jwt_secret
     has_jwt_secret=$(grep -c "^RUNIC_JWT_SECRET=" "$env_file" 2>/dev/null || echo "0")
-    has_hmac_key=$(grep -c "^RUNIC_HMAC_KEY=" "$env_file" 2>/dev/null || echo "0")
     has_agent_jwt_secret=$(grep -c "^RUNIC_AGENT_JWT_SECRET=" "$env_file" 2>/dev/null || echo "0")
     
     # Validate file structure
     if [ "$has_jwt_secret" -eq "0" ]; then
         log WARN "Environment file missing RUNIC_JWT_SECRET variable"
-        return 1
-    fi
-    
-    if [ "$has_hmac_key" -eq "0" ]; then
-        log WARN "Environment file missing RUNIC_HMAC_KEY variable"
         return 1
     fi
     
@@ -442,12 +428,6 @@ load_or_create_secrets() {
             return $?
         fi
         
-        if ! validate_secret "RUNIC_HMAC_KEY" "$RUNIC_HMAC_KEY"; then
-            log WARN "RUNIC_HMAC_KEY validation failed, regenerating secrets..."
-            create_new_secrets_file "$env_file"
-            return $?
-        fi
-        
         if ! validate_secret "RUNIC_AGENT_JWT_SECRET" "$RUNIC_AGENT_JWT_SECRET"; then
             log WARN "RUNIC_AGENT_JWT_SECRET validation failed, regenerating secrets..."
             create_new_secrets_file "$env_file"
@@ -456,7 +436,6 @@ load_or_create_secrets() {
         
         log INFO "Successfully loaded existing secrets from $env_file"
         JWT_SECRET="$RUNIC_JWT_SECRET"
-        HMAC_KEY="$RUNIC_HMAC_KEY"
         AGENT_JWT_SECRET="$RUNIC_AGENT_JWT_SECRET"
     else
         log INFO "No existing secrets file found, checking for migration..."
@@ -476,12 +455,6 @@ load_or_create_secrets() {
                 return $?
             fi
             
-            if ! validate_secret "RUNIC_HMAC_KEY" "$RUNIC_HMAC_KEY"; then
-                log WARN "Migrated RUNIC_HMAC_KEY validation failed, regenerating..."
-                create_new_secrets_file "$env_file"
-                return $?
-            fi
-            
             if ! validate_secret "RUNIC_AGENT_JWT_SECRET" "$RUNIC_AGENT_JWT_SECRET"; then
                 log WARN "Migrated RUNIC_AGENT_JWT_SECRET validation failed, regenerating..."
                 create_new_secrets_file "$env_file"
@@ -490,7 +463,6 @@ load_or_create_secrets() {
             
             log INFO "Successfully loaded migrated secrets"
             JWT_SECRET="$RUNIC_JWT_SECRET"
-            HMAC_KEY="$RUNIC_HMAC_KEY"
             AGENT_JWT_SECRET="$RUNIC_AGENT_JWT_SECRET"
         else
             log INFO "No secrets file found and no migration possible, creating new one..."
@@ -503,7 +475,7 @@ create_new_secrets_file() {
     local env_file="$1"
     
     # Generate new secrets (use provided secrets if available)
-    local jwt_secret hmac_key agent_jwt_secret
+    local jwt_secret agent_jwt_secret
     
     # Handle JWT secret
     if [ -n "$PROVIDED_JWT_SECRET" ]; then
@@ -515,18 +487,6 @@ create_new_secrets_file() {
         jwt_secret="$PROVIDED_JWT_SECRET"
     else
         jwt_secret=$(generate_secret) || { log ERROR "Failed to generate JWT secret"; exit 1; }
-    fi
-    
-    # Handle HMAC key
-    if [ -n "$PROVIDED_HMAC_KEY" ]; then
-        # Validate provided secret
-        if ! validate_secret "PROVIDED_HMAC_KEY" "$PROVIDED_HMAC_KEY"; then
-            log ERROR "Provided HMAC key is invalid"
-            exit 1
-        fi
-        hmac_key="$PROVIDED_HMAC_KEY"
-    else
-        hmac_key=$(generate_secret) || { log ERROR "Failed to generate HMAC key"; exit 1; }
     fi
     
     # Handle agent JWT secret - preserve existing if .env file exists
@@ -554,7 +514,6 @@ create_new_secrets_file() {
 # Created: $(date '+%Y-%m-%d %H:%M:%S')
 
 RUNIC_JWT_SECRET=$jwt_secret
-RUNIC_HMAC_KEY=$hmac_key
 RUNIC_AGENT_JWT_SECRET=$agent_jwt_secret
 
 # TLS Configuration
@@ -588,7 +547,6 @@ EOF
     
     # Set variables for use in script
     JWT_SECRET="$jwt_secret"
-    HMAC_KEY="$hmac_key"
     AGENT_JWT_SECRET="$agent_jwt_secret"
 }
 
@@ -657,10 +615,6 @@ parse_arguments() {
                 PROVIDED_JWT_SECRET="$2"
                 shift 2
                 ;;
-            --hmac-key)
-                PROVIDED_HMAC_KEY="$2"
-                shift 2
-                ;;
             -h|--help)
                 show_help
                 exit 0
@@ -687,7 +641,6 @@ Options:
   --non-interactive      Run without prompts (use defaults)
   --control-plane URL    Control plane URL (default: localhost:60443)
   --jwt-secret SECRET    JWT secret (auto-generated if not provided)
-  --hmac-key KEY         HMAC key for policy signing (auto-generated if not provided)
   -h, --help             Show this help message
 
 Examples:
@@ -813,7 +766,7 @@ install_dependencies() {
 collect_configuration() {
     log_section "Collecting Configuration"
     
-    # Load or create secrets (this sets JWT_SECRET, HMAC_KEY, AGENT_JWT_SECRET)
+    # Load or create secrets (this sets JWT_SECRET, AGENT_JWT_SECRET)
     load_or_create_secrets
     
     # Control Plane URL
@@ -1088,7 +1041,6 @@ initialize_database() {
     log INFO "Initializing SQLite database..."
     
     # Set environment variables for initial setup
-    export RUNIC_HMAC_KEY="$HMAC_KEY"
     export RUNIC_JWT_SECRET="$JWT_SECRET"
     export RUNIC_AGENT_JWT_SECRET="$AGENT_JWT_SECRET"
     export RUNIC_DB_PATH="$DATA_DIR/runic.db"
@@ -1111,7 +1063,6 @@ initialize_database() {
     log DEBUG "CERT_FILE exists: $(test -f "$CERT_DIR/cert.pem" && echo "YES" || echo "NO")"
     log DEBUG "KEY_FILE: $CERT_DIR/key.pem"
     log DEBUG "KEY_FILE exists: $(test -f "$CERT_DIR/key.pem" && echo "YES" || echo "NO")"
-    log DEBUG "RUNIC_HMAC_KEY set: $(test -n "$RUNIC_HMAC_KEY" && echo "YES (${#RUNIC_HMAC_KEY} chars)" || echo "NO")"
     log DEBUG "RUNIC_JWT_SECRET set: $(test -n "$RUNIC_JWT_SECRET" && echo "YES (${#RUNIC_JWT_SECRET} chars)" || echo "NO")"
     log DEBUG "RUNIC_AGENT_JWT_SECRET set: $(test -n "$RUNIC_AGENT_JWT_SECRET" && echo "YES (${#RUNIC_AGENT_JWT_SECRET} chars)" || echo "NO")"
     log DEBUG "User context: $(whoami)"

@@ -2,7 +2,10 @@ package agents
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -524,4 +527,90 @@ func MakeHandleSSEventsHandler(hub SSEBroadcaster) http.HandlerFunc {
 			}
 		}
 	}
+}
+
+// AgentCheckRotation checks if a rotation is pending for the agent.
+func AgentCheckRotation(w http.ResponseWriter, r *http.Request) {
+	hostID, serverID, ok := getHostIDFromContext(w, r)
+	if !ok {
+		return
+	}
+
+	// Check if there's a pending rotation token
+	var rotationToken sql.NullString
+	err := db.DB.QueryRowContext(r.Context(),
+		"SELECT hmac_key_rotation_token FROM peers WHERE id = ?",
+		serverID,
+	).Scan(&rotationToken)
+
+	if err == sql.ErrNoRows {
+		respondJSON(w, http.StatusNotFound, map[string]string{"error": "peer not found"})
+		return
+	}
+	if err != nil {
+		runiclog.Error("Failed to check rotation token error", "error", err)
+		respondJSON(w, http.StatusInternalServerError, map[string]string{"error": "database error"})
+		return
+	}
+
+	if !rotationToken.Valid || rotationToken.String == "" {
+		// No rotation pending
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]string{
+		"rotation_token": rotationToken.String,
+		"host_id":        hostID,
+	})
+}
+
+// AgentTestKey validates an HMAC signature using the peer's current key.
+// POST /api/v1/agent/test-key (requires agent JWT auth)
+func AgentTestKey(w http.ResponseWriter, r *http.Request) {
+	_, serverID, ok := getHostIDFromContext(w, r)
+	if !ok {
+		return
+	}
+
+	var input struct {
+		Message   string `json:"message"`
+		Signature string `json:"signature"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		respondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+		return
+	}
+
+	// Get peer's current HMAC key
+	var hmacKey string
+	err := db.DB.QueryRowContext(r.Context(),
+		"SELECT hmac_key FROM peers WHERE id = ?",
+		serverID,
+	).Scan(&hmacKey)
+
+	if err == sql.ErrNoRows {
+		respondJSON(w, http.StatusNotFound, map[string]string{"error": "peer not found"})
+		return
+	}
+	if err != nil {
+		runiclog.Error("Failed to get HMAC key error", "error", err)
+		respondJSON(w, http.StatusInternalServerError, map[string]string{"error": "database error"})
+		return
+	}
+
+	// Verify HMAC signature
+	mac := hmac.New(sha256.New, []byte(hmacKey))
+	mac.Write([]byte(input.Message))
+	expected := hex.EncodeToString(mac.Sum(nil))
+
+	if input.Signature != expected {
+		respondJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid signature"})
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]string{
+		"status": "ok",
+	})
 }

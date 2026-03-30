@@ -913,7 +913,7 @@ func TestCompileAndStore(t *testing.T) {
 	}
 
 	// Verify HMAC is valid
-	if !Verify(bundle.RulesContent, "test-key", bundle.HMAC) {
+	if !Verify(bundle.RulesContent, "test-hmac-key", bundle.HMAC) {
 		t.Error("HMAC verification failed")
 	}
 }

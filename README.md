@@ -56,7 +56,6 @@ Server is configured with env vars. Agents use a small JSON file.
 Required (server):
 - `RUNIC_JWT_SECRET` - Secret key for JWT authentication (required in production)
 - `RUNIC_AGENT_JWT_SECRET` - Secret key for agent JWT authentication (required in production)
-- `RUNIC_HMAC_KEY` - HMAC key for signing rule bundles (required in production, has default in development)
 
 ## Troubleshooting
 

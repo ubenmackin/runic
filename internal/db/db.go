@@ -592,6 +592,21 @@ func migrateSchema(database *sql.DB) error {
 		log.Println("Migration: added loopback special target")
 	}
 
+	// Migration: Add HMAC key rotation columns to peers table
+	if !existingPeerColumns["hmac_key_rotation_token"] {
+		if _, err := database.Exec("ALTER TABLE peers ADD COLUMN hmac_key_rotation_token TEXT"); err != nil {
+			return fmt.Errorf("failed to add hmac_key_rotation_token column: %w", err)
+		}
+		log.Println("Migration: added hmac_key_rotation_token column to peers table")
+	}
+
+	if !existingPeerColumns["hmac_key_last_rotated_at"] {
+		if _, err := database.Exec("ALTER TABLE peers ADD COLUMN hmac_key_last_rotated_at DATETIME"); err != nil {
+			return fmt.Errorf("failed to add hmac_key_last_rotated_at column: %w", err)
+		}
+		log.Println("Migration: added hmac_key_last_rotated_at column to peers table")
+	}
+
 	return nil
 }
 

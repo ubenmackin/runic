@@ -15,12 +15,11 @@ import (
 // Key types mapping: frontend type -> .env variable name
 var keyTypeToEnv = map[string]string{
 	"jwt-secret":       "RUNIC_JWT_SECRET",
-	"hmac-key":         "RUNIC_HMAC_KEY",
 	"agent-jwt-secret": "RUNIC_AGENT_JWT_SECRET",
 }
 
 // All key types in order
-var keyTypes = []string{"jwt-secret", "hmac-key", "agent-jwt-secret"}
+var keyTypes = []string{"jwt-secret", "agent-jwt-secret"}
 
 // getEnvPath returns the .env file path from env var or default
 func getEnvPath() string {

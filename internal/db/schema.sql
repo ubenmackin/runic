@@ -20,6 +20,8 @@ CREATE TABLE IF NOT EXISTS peers (
     is_manual BOOLEAN NOT NULL DEFAULT 0,
     bundle_version TEXT,
     hmac_key TEXT NOT NULL,
+    hmac_key_rotation_token TEXT,
+    hmac_key_last_rotated_at DATETIME,
     last_heartbeat DATETIME,
     status TEXT NOT NULL DEFAULT 'pending',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,

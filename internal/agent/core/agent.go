@@ -16,6 +16,7 @@ import (
 	"runic/internal/agent/apply"
 	"runic/internal/agent/identity"
 	"runic/internal/agent/metrics"
+	"runic/internal/agent/rotation"
 	"runic/internal/agent/transport"
 	"runic/internal/common/constants"
 	"runic/internal/common/log"
@@ -27,12 +28,13 @@ var Version = "0.3.0"
 
 // Agent is the main agent struct.
 type Agent struct {
-	config     *identity.Config
-	configPath string
-	httpClient *http.Client
-	sseClient  *http.Client
-	version    string
-	shipper    *transport.Shipper
+	config          *identity.Config
+	configPath      string
+	httpClient      *http.Client
+	sseClient       *http.Client
+	version         string
+	shipper         *transport.Shipper
+	rotationManager *rotation.Manager
 }
 
 // New creates a new Agent instance.
@@ -61,6 +63,9 @@ func New(configPath, controlPlaneURL string) *Agent {
 		version:    Version,
 	}
 
+	// Initialize rotation manager (hostID will be set after registration/load)
+	agent.rotationManager = rotation.NewManager(cfg, configPath, httpClient, cfg.ControlPlaneURL, "")
+
 	return agent
 }
 
@@ -86,6 +91,9 @@ func (a *Agent) Run(ctx context.Context) error {
 			return fmt.Errorf("registration failed: %w", err)
 		}
 	}
+
+	// Update rotation manager with host ID after registration/load
+	a.rotationManager = rotation.NewManager(a.config, a.configPath, a.httpClient, a.config.ControlPlaneURL, a.config.HostID)
 
 	// 3. Backup iptables on first install (before any rule changes)
 	if err := a.backupIptables(); err != nil {
@@ -122,6 +130,9 @@ func (a *Agent) Run(ctx context.Context) error {
 
 	// SSE listener
 	go a.listenSSE(bgCtx)
+
+	// Key rotation checker
+	go a.rotationCheckLoop(bgCtx)
 
 	// 7. Block on context
 	log.Info("Agent running. Press Ctrl+C to stop.")
@@ -385,4 +396,21 @@ func (a *Agent) listenSSE(ctx context.Context) {
 			log.Error("SSE-triggered bundle pull failed", "error", err)
 		}
 	})
+}
+
+// rotationCheckLoop periodically checks for pending key rotations.
+func (a *Agent) rotationCheckLoop(ctx context.Context) {
+	ticker := time.NewTicker(5 * time.Minute) // Check every 5 minutes
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := a.rotationManager.CheckAndRotate(); err != nil {
+				log.Warn("Key rotation check failed", "error", err)
+			}
+		}
+	}
 }

@@ -1,21 +1,185 @@
-import { Settings as SettingsIcon } from 'lucide-react'
+import { useState } from 'react'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { Trash2, Plus, Shield, Key } from 'lucide-react'
+import { api } from '../api/client'
+import { useToastContext } from '../hooks/ToastContext'
 
 export default function Settings() {
-  // TODO: Add loading state: const { isLoading, error, data } = useQuery(...)
-  // TODO: Handle error states with error message display
+  const qc = useQueryClient()
+  const showToast = useToastContext()
+  const [showDeleteModal, setShowDeleteModal] = useState(null)
+  const [showCreateModal, setShowCreateModal] = useState(null)
+
+  const { data: keys, isLoading } = useQuery({
+    queryKey: ['setup-keys'],
+    queryFn: () => api.get('/setup-keys'),
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: (keyType) => api.delete(`/setup-keys/${keyType}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['setup-keys'] })
+      setShowDeleteModal(null)
+      showToast('Key deleted successfully', 'success')
+    },
+    onError: (err) => showToast(err.message, 'error'),
+  })
+
+  const createMutation = useMutation({
+    mutationFn: (keyType) => api.post(`/setup-keys/${keyType}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['setup-keys'] })
+      setShowCreateModal(null)
+      showToast('Key created successfully', 'success')
+    },
+    onError: (err) => showToast(err.message, 'error'),
+  })
+
+  const handleDelete = (keyType) => {
+    deleteMutation.mutate(keyType)
+  }
+
+  const handleCreate = (keyType) => {
+    createMutation.mutate(keyType)
+  }
+
+  const getKeyData = (keyType) => {
+    if (!keys) return null
+    return keys.find(k => k.type === keyType)
+  }
 
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Settings</h1>
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-light-neutral">Settings</h1>
         <p className="text-gray-600 dark:text-amber-muted">Configure your Runic installation</p>
       </div>
 
-      <div className="bg-white dark:bg-charcoal-dark rounded-lg shadow p-6 text-center text-gray-500 dark:text-amber-muted">
-        <SettingsIcon className="w-12 h-12 mx-auto mb-4 opacity-50" />
-        <p>Settings configuration will be implemented here.</p>
-        <p className="text-sm mt-2">This page is a placeholder for future settings options.</p>
+      {/* JWT Secret Section */}
+      <div className="bg-white dark:bg-charcoal-dark rounded-lg shadow">
+        <div className="p-6">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-3">
+              <Shield className="w-5 h-5 text-blue-500" />
+              <h2 className="text-lg font-semibold text-gray-900 dark:text-light-neutral">JWT Secret</h2>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setShowDeleteModal('jwt-secret')}
+                className="inline-flex items-center gap-2 px-3 py-2 text-sm bg-red-600 hover:bg-red-700 text-white rounded-lg"
+              >
+                <Trash2 className="w-4 h-4" />
+                Delete
+              </button>
+              <button
+                onClick={() => setShowCreateModal('jwt-secret')}
+                className="inline-flex items-center gap-2 px-3 py-2 text-sm bg-purple-active hover:bg-purple-active/80 text-white rounded-lg"
+              >
+                <Plus className="w-4 h-4" />
+                Create New
+              </button>
+            </div>
+          </div>
+          <p className="text-gray-600 dark:text-amber-muted text-sm">
+            JWT Secret is used for user authentication tokens. Changing this will log out all users.
+          </p>
+          <div className="mt-4 p-3 bg-gray-100 dark:bg-charcoal-darkest rounded font-mono text-sm text-gray-700 dark:text-amber-primary">
+            {isLoading ? 'Loading...' : getKeyData('jwt-secret')?.exists ? '•••••••••••••••••••••••••••••••••••••••••' : 'No key configured'}
+          </div>
+        </div>
       </div>
+
+      {/* Agent JWT Secret Section */}
+      <div className="bg-white dark:bg-charcoal-dark rounded-lg shadow">
+        <div className="p-6">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-3">
+              <Key className="w-5 h-5 text-green-500" />
+              <h2 className="text-lg font-semibold text-gray-900 dark:text-light-neutral">Agent JWT Secret</h2>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setShowDeleteModal('agent-jwt-secret')}
+                className="inline-flex items-center gap-2 px-3 py-2 text-sm bg-red-600 hover:bg-red-700 text-white rounded-lg"
+              >
+                <Trash2 className="w-4 h-4" />
+                Delete
+              </button>
+              <button
+                onClick={() => setShowCreateModal('agent-jwt-secret')}
+                className="inline-flex items-center gap-2 px-3 py-2 text-sm bg-purple-active hover:bg-purple-active/80 text-white rounded-lg"
+              >
+                <Plus className="w-4 h-4" />
+                Create New
+              </button>
+            </div>
+          </div>
+          <p className="text-gray-600 dark:text-amber-muted text-sm">
+            Agent JWT Secret is used to authenticate agents with the control plane. Changing this will disconnect all agents.
+          </p>
+          <div className="mt-4 p-3 bg-gray-100 dark:bg-charcoal-darkest rounded font-mono text-sm text-gray-700 dark:text-amber-primary">
+            {isLoading ? 'Loading...' : getKeyData('agent-jwt-secret')?.exists ? '•••••••••••••••••••••••••••••••••••••••••' : 'No key configured'}
+          </div>
+        </div>
+      </div>
+
+      {/* Delete Confirmation Modal */}
+      {showDeleteModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white dark:bg-charcoal-dark rounded-lg p-6 max-w-md w-full mx-4">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
+              Delete {showDeleteModal === 'jwt-secret' ? 'JWT Secret' : 'Agent JWT Secret'}?
+            </h3>
+            <p className="text-gray-600 dark:text-amber-muted mb-6">
+              This action cannot be undone and will {showDeleteModal === 'jwt-secret' ? 'log out all users' : 'disconnect all agents'}.
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowDeleteModal(null)}
+                className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-border rounded-lg text-gray-700 dark:text-amber-primary hover:bg-gray-50 dark:hover:bg-charcoal-darkest"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => handleDelete(showDeleteModal)}
+                disabled={deleteMutation.isPending}
+                className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg disabled:opacity-50"
+              >
+                {deleteMutation.isPending ? 'Deleting...' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Create New Confirmation Modal */}
+      {showCreateModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white dark:bg-charcoal-dark rounded-lg p-6 max-w-md w-full mx-4">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
+              Create New {showCreateModal === 'jwt-secret' ? 'JWT Secret' : 'Agent JWT Secret'}?
+            </h3>
+            <p className="text-gray-600 dark:text-amber-muted mb-6">
+              This will generate a new key. {showCreateModal === 'jwt-secret' ? 'All users will be logged out.' : 'All agents will be disconnected.'}
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowCreateModal(null)}
+                className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-border rounded-lg text-gray-700 dark:text-amber-primary hover:bg-gray-50 dark:hover:bg-charcoal-darkest"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => handleCreate(showCreateModal)}
+                disabled={createMutation.isPending}
+                className="flex-1 px-4 py-2 bg-purple-active hover:bg-purple-active/80 text-white rounded-lg disabled:opacity-50"
+              >
+                {createMutation.isPending ? 'Creating...' : 'Create'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
