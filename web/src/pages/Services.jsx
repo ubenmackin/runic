@@ -36,29 +36,10 @@ export default function Services() {
   const [portChips, setPortChips] = useState([])
   const [portInput, setPortInput] = useState('')
   const [portInputError, setPortInputError] = useState('')
+  const [searchTerm, setSearchTerm] = useState('')
 
   // Sorting state (persisted per-user)
   const { sortConfig, handleSort } = useTableSort('services', { key: 'name', direction: 'asc' })
-
-  // Pagination state
-  const {
-    paginatedData: paginatedServices,
-    totalPages,
-    showingRange: servicesShowingRange,
-    page: servicesPage,
-    rowsPerPage: servicesRowsPerPage,
-    onPageChange: setServicesPage,
-    onRowsPerPageChange: setServicesRowsPerPage,
-    totalItems: servicesTotal
-  } = usePagination(processedServices, 'services')
-
-  // Search state
-  const [searchTerm, setSearchTerm] = useState('')
-
-  // Reset page to 1 when search term changes
-  useEffect(() => {
-    setServicesPage(1)
-  }, [searchTerm])
 
   // Manual refresh state
   const [isManualRefreshing, setIsManualRefreshing] = useState(false)
@@ -169,6 +150,23 @@ export default function Services() {
     })
     return sorted
   }, [services, searchTerm, sortConfig])
+
+  // Pagination state
+  const {
+    paginatedData: paginatedServices,
+    totalPages,
+    showingRange: servicesShowingRange,
+    page: servicesPage,
+    rowsPerPage: servicesRowsPerPage,
+    onPageChange: setServicesPage,
+    onRowsPerPageChange: setServicesRowsPerPage,
+    totalItems: servicesTotal
+  } = usePagination(processedServices, 'services')
+
+  // Reset page to 1 when search term changes
+  useEffect(() => {
+    setServicesPage(1)
+  }, [searchTerm])
 
   const createMutation = useMutation({
     mutationFn: (data) => api.post('/services', data),

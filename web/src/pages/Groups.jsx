@@ -23,18 +23,6 @@ export default function Groups() {
   // Sorting state
   const { sortConfig, handleSort } = useTableSort('groups', { key: 'name', direction: 'asc' })
 
-  // Pagination state
-  const {
-    paginatedData: paginatedGroups,
-    totalPages,
-    showingRange: groupsShowingRange,
-    page: groupsPage,
-    rowsPerPage: groupsRowsPerPage,
-    onPageChange: setGroupsPage,
-    onRowsPerPageChange: setGroupsRowsPerPage,
-    totalItems: groupsTotal
-  } = usePagination(filteredGroups, 'groups')
-  
   // Search state
   const [searchQuery, setSearchQuery] = useState('')
   
@@ -158,6 +146,18 @@ export default function Groups() {
       String(g.policy_count || 0).includes(query)
     )
   })
+
+  // Pagination state
+  const {
+    paginatedData: paginatedGroups,
+    totalPages,
+    showingRange: groupsShowingRange,
+    page: groupsPage,
+    rowsPerPage: groupsRowsPerPage,
+    onPageChange: setGroupsPage,
+    onRowsPerPageChange: setGroupsRowsPerPage,
+    totalItems: groupsTotal
+  } = usePagination(filteredGroups, 'groups')
 
   // Render sort indicator
   const SortIndicator = ({ columnKey }) => {

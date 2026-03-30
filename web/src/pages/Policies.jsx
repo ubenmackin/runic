@@ -40,26 +40,6 @@ export default function Policies() {
   // Sorting state (persisted per-user)
   const { sortConfig, handleSort } = useTableSort('policies', { key: 'priority', direction: 'asc' })
 
-  // Pagination state
-  const {
-    paginatedData: paginatedPolicies,
-    totalPages,
-    showingRange: policiesShowingRange,
-    page: policiesPage,
-    rowsPerPage: policiesRowsPerPage,
-    onPageChange: setPoliciesPage,
-    onRowsPerPageChange: setPoliciesRowsPerPage,
-    totalItems: policiesTotal
-  } = usePagination(processedPolicies, 'policies')
-
-  // Search state
-  const [searchTerm, setSearchTerm] = useState('')
-
-  // Reset page to 1 when search term changes
-  useEffect(() => {
-    setPoliciesPage(1)
-  }, [searchTerm])
-
   // Manual refresh state
   const [isManualRefreshing, setIsManualRefreshing] = useState(false)
 
@@ -227,6 +207,9 @@ export default function Policies() {
   }
   const getServiceName = (id) => services?.find(s => s.id === id)?.name || id
 
+  // Search state
+  const [searchTerm, setSearchTerm] = useState('')
+
   // Sort indicator component
   const SortIndicator = ({ columnKey }) => {
     if (sortConfig.key !== columnKey) {
@@ -293,6 +276,23 @@ export default function Policies() {
     })
     return sorted
   }, [policies, showDisabled, filterPeer, searchTerm, sortConfig, getEntityName, getServiceName])
+
+  // Pagination state
+  const {
+    paginatedData: paginatedPolicies,
+    totalPages,
+    showingRange: policiesShowingRange,
+    page: policiesPage,
+    rowsPerPage: policiesRowsPerPage,
+    onPageChange: setPoliciesPage,
+    onRowsPerPageChange: setPoliciesRowsPerPage,
+    totalItems: policiesTotal
+  } = usePagination(processedPolicies, 'policies')
+
+  // Reset page to 1 when search term changes
+  useEffect(() => {
+    setPoliciesPage(1)
+  }, [searchTerm])
 
   if (isLoading) return <TableSkeleton rows={3} columns={7} />
 
@@ -478,7 +478,7 @@ export default function Policies() {
                       {getEntityName(p.target_type, p.target_id)}
                     </td>
                     <td className="px-4 py-3">
-                      <span className={`px-2 py-0.5 rounded text-xs font-medium ${p.action === 'accept' ? 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300' : 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300'}`}>
+                      <span className={`px-2 py-0.5 rounded text-xs font-medium ${p.action === 'ACCEPT' ? 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300' : 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300'}`}>
                         {p.action.toUpperCase()}
                       </span>
                     </td>

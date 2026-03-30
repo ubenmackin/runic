@@ -322,3 +322,46 @@ func MakePolicyPreviewHandler(compiler *engine.Compiler) http.HandlerFunc {
 		json.NewEncoder(w).Encode(map[string]interface{}{"data": map[string]interface{}{"rules": rules}})
 	}
 }
+
+func MakePatchPolicyHandler(compiler *engine.Compiler) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := common.ParseIDParam(r, "id")
+		if err != nil {
+			common.RespondError(w, http.StatusBadRequest, "invalid policy ID")
+			return
+		}
+		var input struct {
+			Enabled *bool `json:"enabled"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			common.RespondError(w, http.StatusBadRequest, "invalid JSON")
+			return
+		}
+		if input.Enabled == nil {
+			common.RespondError(w, http.StatusBadRequest, "enabled field is required")
+			return
+		}
+		result, err := db.DB.ExecContext(r.Context(), "UPDATE policies SET enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", *input.Enabled, id)
+		if err != nil {
+			common.RespondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to update policy: %v", err))
+			return
+		}
+		rowsAffected, _ := result.RowsAffected()
+		if rowsAffected == 0 {
+			common.RespondError(w, http.StatusNotFound, "policy not found")
+			return
+		}
+		// Trigger async recompilation
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			defer cancel()
+			affectedPeers, _ := compiler.GetAffectedPeersByPolicy(ctx, id)
+			for _, pid := range affectedPeers {
+				if _, err := compiler.CompileAndStore(ctx, pid); err != nil {
+					runiclog.ErrorContext(ctx, "async compile and store failed", "peer_id", pid, "error", err)
+				}
+			}
+		}()
+		common.RespondJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+	}
+}

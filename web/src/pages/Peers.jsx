@@ -165,26 +165,6 @@ export default function Peers() {
   // Sorting state (persisted per-user)
   const { sortConfig, handleSort } = useTableSort('peers', { key: 'hostname', direction: 'asc' })
 
-  // Pagination state
-  const {
-    paginatedData: paginatedPeers,
-    totalPages,
-    showingRange: peersShowingRange,
-    page: peersPage,
-    rowsPerPage: peersRowsPerPage,
-    onPageChange: setPeersPage,
-    onRowsPerPageChange: setPeersRowsPerPage,
-    totalItems: peersTotal
-  } = usePagination(processedPeers, 'peers')
-
-  // Search state
-  const [searchTerm, setSearchTerm] = useState('')
-
-  // Reset page to 1 when search term changes
-  useEffect(() => {
-    setPeersPage(1)
-  }, [searchTerm])
-
   // Status filter state
   const [statusFilter, setStatusFilter] = useState('all')
 
@@ -284,6 +264,9 @@ export default function Peers() {
 
 
 
+  // Search state
+  const [searchTerm, setSearchTerm] = useState('')
+
   // Filtered and sorted data (includes status filter)
   const processedPeers = useMemo(() => {
     if (!peers) return []
@@ -351,6 +334,23 @@ export default function Peers() {
 
     return sorted
   }, [peers, statusFilter, searchTerm, sortConfig])
+
+  // Pagination state
+  const {
+    paginatedData: paginatedPeers,
+    totalPages,
+    showingRange: peersShowingRange,
+    page: peersPage,
+    rowsPerPage: peersRowsPerPage,
+    onPageChange: setPeersPage,
+    onRowsPerPageChange: setPeersRowsPerPage,
+    totalItems: peersTotal
+  } = usePagination(processedPeers, 'peers')
+
+  // Reset page to 1 when search term changes
+  useEffect(() => {
+    setPeersPage(1)
+  }, [searchTerm])
 
   const createMutation = useMutation({
     mutationFn: (data) => api.post('/peers', data),

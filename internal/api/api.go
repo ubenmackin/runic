@@ -142,6 +142,7 @@ func RegisterRoutes(r *mux.Router, a *API, downloadsDir string) {
 	protected.HandleFunc("/policies/preview", policies.MakePolicyPreviewHandler(a.Compiler)).Methods("POST")
 	protected.HandleFunc("/policies/{id:[0-9]+}", policies.GetPolicy).Methods("GET")
 	protected.HandleFunc("/policies/{id:[0-9]+}", policies.MakeUpdatePolicyHandler(a.Compiler)).Methods("PUT")
+	protected.HandleFunc("/policies/{id:[0-9]+}", policies.MakePatchPolicyHandler(a.Compiler)).Methods("PATCH")
 	protected.HandleFunc("/policies/{id:[0-9]+}", policies.MakeDeletePolicyHandler(a.Compiler)).Methods("DELETE")
 
 	// Dashboard
