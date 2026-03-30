@@ -25,14 +25,14 @@ func ListPolicies(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 
 	type policyResp struct {
-		ID         int    `json:"id"`
-		Name       string `json:"name"`
+		ID          int    `json:"id"`
+		Name        string `json:"name"`
 		Description string `json:"description"`
-		SourceID   int    `json:"source_id"`
-		SourceType string `json:"source_type"`
-		ServiceID  int    `json:"service_id"`
-		TargetID   int    `json:"target_id"`
-		TargetType string `json:"target_type"`
+		SourceID    int    `json:"source_id"`
+		SourceType  string `json:"source_type"`
+		ServiceID   int    `json:"service_id"`
+		TargetID    int    `json:"target_id"`
+		TargetType  string `json:"target_type"`
 		Action      string `json:"action"`
 		Priority    int    `json:"priority"`
 		Enabled     bool   `json:"enabled"`
@@ -131,14 +131,14 @@ func GetPolicy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var p struct {
-		ID         int    `json:"id"`
-		Name       string `json:"name"`
+		ID          int    `json:"id"`
+		Name        string `json:"name"`
 		Description string `json:"description"`
-		SourceID   int    `json:"source_id"`
-		SourceType string `json:"source_type"`
-		ServiceID  int    `json:"service_id"`
-		TargetID   int    `json:"target_id"`
-		TargetType string `json:"target_type"`
+		SourceID    int    `json:"source_id"`
+		SourceType  string `json:"source_type"`
+		ServiceID   int    `json:"service_id"`
+		TargetID    int    `json:"target_id"`
+		TargetType  string `json:"target_type"`
 		Action      string `json:"action"`
 		Priority    int    `json:"priority"`
 		Enabled     bool   `json:"enabled"`
@@ -226,11 +226,15 @@ func MakeUpdatePolicyHandler(compiler *engine.Compiler) http.HandlerFunc {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 			defer cancel()
 			newPeers, _ := compiler.GetAffectedPeersByPolicy(ctx, id)
-			
+
 			peerSet := make(map[int]bool)
-			for _, pid := range oldPeers { peerSet[pid] = true }
-			for _, pid := range newPeers { peerSet[pid] = true }
-			
+			for _, pid := range oldPeers {
+				peerSet[pid] = true
+			}
+			for _, pid := range newPeers {
+				peerSet[pid] = true
+			}
+
 			for pid := range peerSet {
 				if _, err := compiler.CompileAndStore(ctx, pid); err != nil {
 					runiclog.ErrorContext(ctx, "async compile and store failed", "peer_id", pid, "error", err)
@@ -259,7 +263,7 @@ func MakeDeletePolicyHandler(compiler *engine.Compiler) http.HandlerFunc {
 			common.RespondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to delete policy: %v", err))
 			return
 		}
-		
+
 		affected, _ := res.RowsAffected()
 		if affected == 0 {
 			common.RespondError(w, http.StatusNotFound, "policy not found")
@@ -296,6 +300,15 @@ func MakePolicyPreviewHandler(compiler *engine.Compiler) http.HandlerFunc {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
 			return
+		}
+
+		// Derive peer_id if not provided - needed to determine if peer is source or target
+		if req.PeerID == 0 {
+			if req.TargetType == "peer" {
+				req.PeerID = req.TargetID
+			} else if req.SourceType == "peer" {
+				req.PeerID = req.SourceID
+			}
 		}
 
 		// Generate rules using the engine's preview function

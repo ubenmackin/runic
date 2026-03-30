@@ -34,14 +34,14 @@ mkdir -p /etc/runic-agent
 chmod 700 /etc/runic-agent
 
 # Create log directory
-mkdir -p /var/log/firewall
-chmod 755 /var/log/firewall
+mkdir -p /var/log/runic
+chmod 755 /var/log/runic
 
 # Install rsyslog config for firewall logs
 if [ -d /etc/rsyslog.d ]; then
     cat > /etc/rsyslog.d/30-runic-firewall.conf << 'EOF'
 # Runic Firewall - Route firewall log messages to dedicated file
-:msg,contains,"[RUNIC " /var/log/firewall/firewall.log
+:msg,contains,"[RUNIC " /var/log/runic/firewall.log
 & stop
 EOF
     chmod 644 /etc/rsyslog.d/30-runic-firewall.conf
@@ -69,7 +69,7 @@ cat > /etc/runic-agent/config.json << EOF
 {
 "control_plane_url": "${CONTROL_PLANE_URL}",
 "pull_interval_seconds": 30,
-"log_path": "/var/log/firewall/firewall.log"
+"log_path": "/var/log/runic/firewall.log"
 }
 EOF
 chmod 600 /etc/runic-agent/config.json

@@ -169,6 +169,16 @@ func RegisterRoutes(r *mux.Router, a *API, downloadsDir string) {
 	apiRouter.HandleFunc("/agent/bundle/{host_id}/applied", agents.AgentAuthMiddleware(agents.ConfirmBundleApplied)).Methods("POST")
 	apiRouter.HandleFunc("/agent/events/{host_id}", agents.AgentAuthMiddleware(agents.MakeHandleSSEventsHandler(a.SSEHub))).Methods("GET")
 
+	// Version info endpoint
+	apiRouter.HandleFunc("/info", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"version":  version.Version,
+			"commit":   version.Commit,
+			"built_at": version.BuiltAt,
+		})
+	}).Methods("GET")
+
 	// Catch-all for unmatched API routes - returns 404 instead of falling through to SPA
 	// This must be registered last so it only catches truly unmatched routes
 	apiRouter.PathPrefix("/").HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -192,16 +202,6 @@ func RegisterRoutes(r *mux.Router, a *API, downloadsDir string) {
 			"status":  "ok",
 			"version": "v1",
 			"message": "Runic API",
-		})
-	}).Methods("GET")
-
-	// Version info endpoint
-	apiRouter.HandleFunc("/info", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"version":  version.Version,
-			"commit":   version.Commit,
-			"built_at": version.BuiltAt,
 		})
 	}).Methods("GET")
 }

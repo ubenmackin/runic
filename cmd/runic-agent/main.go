@@ -89,7 +89,7 @@ func uninstallAgent(purge bool) error {
 	if purge {
 		fmt.Println("Removing config files...")
 		os.RemoveAll("/etc/runic-agent")
-		os.RemoveAll("/var/log/firewall")
+		os.RemoveAll("/var/log/runic")
 	} else {
 		fmt.Println("Config files preserved. Use --purge to remove them.")
 	}

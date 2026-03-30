@@ -23,7 +23,7 @@ type Config struct {
 func DefaultConfig() *Config {
 	return &Config{
 		PullIntervalSec: 30,
-		LogPath:         "/var/log/firewall/firewall.log",
+		LogPath:         "/var/log/runic/firewall.log",
 	}
 }
 

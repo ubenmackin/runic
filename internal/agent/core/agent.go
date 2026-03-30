@@ -50,7 +50,7 @@ func New(configPath, controlPlaneURL string) *Agent {
 	cfg := &identity.Config{
 		ControlPlaneURL: controlPlaneURL,
 		PullIntervalSec: 30,
-		LogPath:         "/var/log/firewall/firewall.log",
+		LogPath:         "/var/log/runic/firewall.log",
 	}
 
 	agent := &Agent{
