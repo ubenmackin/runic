@@ -1,9 +1,10 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Trash2, Lock, Users, Shield, Search, ArrowUp, ArrowDown, ArrowUpDown, X, RefreshCw, Pencil } from 'lucide-react'
+import { Plus, Trash2, Lock, Users, Shield, Search, ArrowUp, ArrowDown, ArrowUpDown, X, RefreshCw, Pencil, ChevronLeft, ChevronRight } from 'lucide-react'
 import { api, QUERY_KEYS } from '../api/client'
 import { useCrudModal } from '../hooks/useCrudModal'
 import { useTableSort } from '../hooks/useTableSort'
+import { usePagination } from '../hooks/usePagination'
 import { useToastContext } from '../hooks/ToastContext'
 import ConfirmModal from '../components/ConfirmModal'
 import SearchableSelect from '../components/SearchableSelect'
@@ -21,6 +22,18 @@ export default function Groups() {
   
   // Sorting state
   const { sortConfig, handleSort } = useTableSort('groups', { key: 'name', direction: 'asc' })
+
+  // Pagination state
+  const {
+    paginatedData: paginatedGroups,
+    totalPages,
+    showingRange: groupsShowingRange,
+    page: groupsPage,
+    rowsPerPage: groupsRowsPerPage,
+    onPageChange: setGroupsPage,
+    onRowsPerPageChange: setGroupsRowsPerPage,
+    totalItems: groupsTotal
+  } = usePagination(filteredGroups, 'groups')
   
   // Search state
   const [searchQuery, setSearchQuery] = useState('')
@@ -272,9 +285,9 @@ export default function Groups() {
         </div>
       </div>
 
-      {/* Search Bar */}
+      {/* Search Bar and Rows per page */}
       {groups?.length > 0 && (
-        <div className="flex items-center gap-2">
+        <div className="flex items-center justify-between gap-4">
           <div className="relative flex-1 max-w-md">
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
             <input
@@ -285,6 +298,20 @@ export default function Groups() {
               className="w-full pl-9 pr-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-dark text-gray-900 dark:text-light-neutral placeholder-gray-400"
             />
           </div>
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-gray-500 dark:text-amber-muted">Rows:</span>
+            <select
+              value={groupsRowsPerPage}
+              onChange={(e) => setGroupsRowsPerPage(Number(e.target.value))}
+              className="text-sm border border-gray-300 dark:border-gray-border rounded px-2 py-2 bg-white dark:bg-charcoal-dark text-gray-900 dark:text-light-neutral focus:ring-2 focus:ring-purple-active focus:border-purple-active"
+            >
+              <option value={10}>10</option>
+              <option value={25}>25</option>
+              <option value={50}>50</option>
+              <option value={100}>100</option>
+              <option value={-1}>All</option>
+            </select>
+          </div>
         </div>
       )}
 
@@ -293,6 +320,7 @@ export default function Groups() {
       ) : !filteredGroups.length ? (
         <EmptyState title="No matching groups" message="Try a different search term." />
       ) : (
+        <>
         <DataTable columns={[
           { 
             key: 'name', 
@@ -372,7 +400,38 @@ Policies
               </div>
             )
           },
-        ]} data={filteredGroups} />
+        ]} data={paginatedGroups} />
+
+        {/* Pagination Controls */}
+        {groupsTotal > 0 && (
+          <div className="flex items-center justify-between px-4 py-3 border-t border-gray-200 dark:border-gray-border bg-gray-50 dark:bg-charcoal-darkest">
+            <span className="text-sm text-gray-500 dark:text-amber-muted">
+              {groupsShowingRange}
+            </span>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => setGroupsPage(groupsPage - 1)}
+                disabled={groupsPage <= 1}
+                className="p-1.5 rounded hover:bg-gray-200 dark:hover:bg-charcoal-dark disabled:opacity-40 disabled:cursor-not-allowed"
+                title="Previous page"
+              >
+                <ChevronLeft className="w-5 h-5 text-gray-600 dark:text-amber-primary" />
+              </button>
+              <span className="px-3 text-sm text-gray-600 dark:text-amber-primary">
+                Page {groupsPage} of {totalPages}
+              </span>
+              <button
+                onClick={() => setGroupsPage(groupsPage + 1)}
+                disabled={groupsPage >= totalPages}
+                className="p-1.5 rounded hover:bg-gray-200 dark:hover:bg-charcoal-dark disabled:opacity-40 disabled:cursor-not-allowed"
+                title="Next page"
+              >
+                <ChevronRight className="w-5 h-5 text-gray-600 dark:text-amber-primary" />
+              </button>
+            </div>
+          </div>
+        )}
+        </>
       )}
 
   {/* Add/Edit Modal */}

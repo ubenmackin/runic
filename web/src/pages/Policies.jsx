@@ -1,7 +1,8 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
 import { useTableSort } from '../hooks/useTableSort'
+import { usePagination } from '../hooks/usePagination'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Pencil, Trash2, Eye, RefreshCw, ArrowUp, ArrowDown, ArrowUpDown, X, ChevronDown, ChevronUp, Info, Search } from 'lucide-react'
+import { Plus, Pencil, Trash2, Eye, RefreshCw, ArrowUp, ArrowDown, ArrowUpDown, X, ChevronDown, ChevronUp, Info, Search, ChevronLeft, ChevronRight } from 'lucide-react'
 import { api, QUERY_KEYS } from '../api/client'
 import { useCrudModal } from '../hooks/useCrudModal'
 import { useToastContext } from '../hooks/ToastContext'
@@ -39,8 +40,25 @@ export default function Policies() {
   // Sorting state (persisted per-user)
   const { sortConfig, handleSort } = useTableSort('policies', { key: 'priority', direction: 'asc' })
 
+  // Pagination state
+  const {
+    paginatedData: paginatedPolicies,
+    totalPages,
+    showingRange: policiesShowingRange,
+    page: policiesPage,
+    rowsPerPage: policiesRowsPerPage,
+    onPageChange: setPoliciesPage,
+    onRowsPerPageChange: setPoliciesRowsPerPage,
+    totalItems: policiesTotal
+  } = usePagination(processedPolicies, 'policies')
+
   // Search state
   const [searchTerm, setSearchTerm] = useState('')
+
+  // Reset page to 1 when search term changes
+  useEffect(() => {
+    setPoliciesPage(1)
+  }, [searchTerm])
 
   // Manual refresh state
   const [isManualRefreshing, setIsManualRefreshing] = useState(false)
@@ -340,7 +358,7 @@ export default function Policies() {
   )}
 </div>
 
-{/* Filters */}
+ {/* Filters */}
 <div className="flex flex-wrap gap-4 items-center">
   <div className="relative max-w-md flex-1">
     <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
@@ -367,6 +385,20 @@ export default function Policies() {
     <ToggleSwitch checked={showDisabled} onChange={setShowDisabled} />
     <span className="text-sm text-gray-700 dark:text-amber-primary">Show disabled</span>
   </label>
+  <div className="flex items-center gap-2">
+    <span className="text-sm text-gray-500 dark:text-amber-muted">Rows:</span>
+    <select
+      value={policiesRowsPerPage}
+      onChange={(e) => setPoliciesRowsPerPage(Number(e.target.value))}
+      className="text-sm border border-gray-300 dark:border-gray-border rounded px-2 py-2 bg-white dark:bg-charcoal-dark text-gray-900 dark:text-light-neutral focus:ring-2 focus:ring-purple-active focus:border-purple-active"
+    >
+      <option value={10}>10</option>
+      <option value={25}>25</option>
+      <option value={50}>50</option>
+      <option value={100}>100</option>
+      <option value={-1}>All</option>
+    </select>
+  </div>
 </div>
 
 {!processedPolicies.length ? (
@@ -425,7 +457,7 @@ export default function Policies() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200 dark:divide-gray-border">
-                {processedPolicies.map((p) => (
+                {paginatedPolicies.map((p) => (
                   <tr key={p.id}>
                     <td className="px-4 py-3">
                       <ToggleSwitch checked={p.enabled} onChange={(v) => toggleMutation.mutate({ id: p.id, enabled: v })} />
@@ -465,6 +497,36 @@ export default function Policies() {
               </tbody>
             </table>
           </div>
+
+          {/* Pagination Controls */}
+          {policiesTotal > 0 && (
+            <div className="flex items-center justify-between px-4 py-3 border-t border-gray-200 dark:border-gray-border bg-gray-50 dark:bg-charcoal-darkest">
+              <span className="text-sm text-gray-500 dark:text-amber-muted">
+                {policiesShowingRange}
+              </span>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => setPoliciesPage(policiesPage - 1)}
+                  disabled={policiesPage <= 1}
+                  className="p-1.5 rounded hover:bg-gray-200 dark:hover:bg-charcoal-dark disabled:opacity-40 disabled:cursor-not-allowed"
+                  title="Previous page"
+                >
+                  <ChevronLeft className="w-5 h-5 text-gray-600 dark:text-amber-primary" />
+                </button>
+                <span className="px-3 text-sm text-gray-600 dark:text-amber-primary">
+                  Page {policiesPage} of {totalPages}
+                </span>
+                <button
+                  onClick={() => setPoliciesPage(policiesPage + 1)}
+                  disabled={policiesPage >= totalPages}
+                  className="p-1.5 rounded hover:bg-gray-200 dark:hover:bg-charcoal-dark disabled:opacity-40 disabled:cursor-not-allowed"
+                  title="Next page"
+                >
+                  <ChevronRight className="w-5 h-5 text-gray-600 dark:text-amber-primary" />
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

@@ -1,7 +1,8 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
 import { useTableSort } from '../hooks/useTableSort'
+import { usePagination } from '../hooks/usePagination'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Pencil, Trash2, Server, Copy, Check, RefreshCw, ArrowUp, ArrowDown, ArrowUpDown, X, Search, FileCode } from 'lucide-react'
+import { Plus, Pencil, Trash2, Server, Copy, Check, RefreshCw, ArrowUp, ArrowDown, ArrowUpDown, X, Search, FileCode, ChevronLeft, ChevronRight } from 'lucide-react'
 import { api, QUERY_KEYS } from '../api/client'
 import { REFETCH_INTERVALS } from '../constants'
 import { useCrudModal } from '../hooks/useCrudModal'
@@ -164,8 +165,28 @@ export default function Peers() {
   // Sorting state (persisted per-user)
   const { sortConfig, handleSort } = useTableSort('peers', { key: 'hostname', direction: 'asc' })
 
+  // Pagination state
+  const {
+    paginatedData: paginatedPeers,
+    totalPages,
+    showingRange: peersShowingRange,
+    page: peersPage,
+    rowsPerPage: peersRowsPerPage,
+    onPageChange: setPeersPage,
+    onRowsPerPageChange: setPeersRowsPerPage,
+    totalItems: peersTotal
+  } = usePagination(processedPeers, 'peers')
+
   // Search state
   const [searchTerm, setSearchTerm] = useState('')
+
+  // Reset page to 1 when search term changes
+  useEffect(() => {
+    setPeersPage(1)
+  }, [searchTerm])
+
+  // Status filter state
+  const [statusFilter, setStatusFilter] = useState('all')
 
   // Manual refresh state
   const [isManualRefreshing, setIsManualRefreshing] = useState(false)
@@ -263,15 +284,31 @@ export default function Peers() {
 
 
 
-  // Filtered and sorted data
+  // Filtered and sorted data (includes status filter)
   const processedPeers = useMemo(() => {
     if (!peers) return []
 
-    // Filter by search term
+    // Filter by status filter first
     let filtered = peers
+    if (statusFilter !== 'all') {
+      filtered = peers.filter(peer => {
+        switch (statusFilter) {
+          case 'online':
+            return peer.status === 'online' && !peer.is_manual
+          case 'offline':
+            return peer.status === 'offline' && !peer.is_manual
+          case 'manual':
+            return peer.is_manual === true
+          default:
+            return true
+        }
+      })
+    }
+
+    // Filter by search term
     if (searchTerm) {
       const term = searchTerm.toLowerCase()
-      filtered = peers.filter(peer => {
+      filtered = filtered.filter(peer => {
         const hostname = (peer.hostname || '').toLowerCase()
         const ip = (peer.ip_address || '').toLowerCase()
         const os = (peer.os_type || peer.os || '').toLowerCase()
@@ -313,7 +350,7 @@ export default function Peers() {
     })
 
     return sorted
-  }, [peers, searchTerm, sortConfig])
+  }, [peers, statusFilter, searchTerm, sortConfig])
 
   const createMutation = useMutation({
     mutationFn: (data) => api.post('/peers', data),
@@ -394,30 +431,68 @@ export default function Peers() {
         </div>
       </div>
 
-      {/* Search Bar */}
-      <div className="relative max-w-md">
-        <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
-        <input
-          type="text"
-          placeholder="Search peers by hostname, IP, OS, groups, or agent..."
-          value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
-          className="w-full pl-9 pr-10 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-dark text-gray-900 dark:text-light-neutral placeholder-gray-400 focus:ring-2 focus:ring-purple-active focus:border-purple-active"
-        />
-        {searchTerm && (
-          <button
-            onClick={() => setSearchTerm('')}
-            className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-light-neutral"
+      {/* Search Bar and Rows per page */}
+      <div className="flex items-center justify-between gap-4">
+        <div className="relative flex-1 max-w-md">
+          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+          <input
+            type="text"
+            placeholder="Search peers by hostname, IP, OS, groups, or agent..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="w-full pl-9 pr-10 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-dark text-gray-900 dark:text-light-neutral placeholder-gray-400 focus:ring-2 focus:ring-purple-active focus:border-purple-active"
+          />
+          {searchTerm && (
+            <button
+              onClick={() => setSearchTerm('')}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-light-neutral"
+            >
+              ×
+            </button>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-gray-500 dark:text-amber-muted">Rows:</span>
+          <select
+            value={peersRowsPerPage}
+            onChange={(e) => setPeersRowsPerPage(Number(e.target.value))}
+            className="text-sm border border-gray-300 dark:border-gray-border rounded px-2 py-2 bg-white dark:bg-charcoal-dark text-gray-900 dark:text-light-neutral focus:ring-2 focus:ring-purple-active focus:border-purple-active"
           >
-            ×
+            <option value={10}>10</option>
+            <option value={25}>25</option>
+            <option value={50}>50</option>
+            <option value={100}>100</option>
+            <option value={-1}>All</option>
+          </select>
+        </div>
+      </div>
+
+      {/* Status Filter Button Bar */}
+      <div className="flex gap-2">
+        {[
+          { value: 'all', label: 'All' },
+          { value: 'online', label: 'Online' },
+          { value: 'offline', label: 'Offline' },
+          { value: 'manual', label: 'Manual' },
+        ].map(opt => (
+          <button
+            key={opt.value}
+            onClick={() => setStatusFilter(opt.value)}
+            className={`px-3 py-1.5 text-sm font-medium rounded-lg transition-colors ${
+              statusFilter === opt.value
+                ? 'bg-purple-active text-white'
+                : 'bg-gray-100 dark:bg-charcoal-darkest text-gray-700 dark:text-amber-primary hover:bg-gray-200 dark:hover:bg-charcoal-dark'
+            }`}
+          >
+            {opt.label}
           </button>
-        )}
+        ))}
       </div>
 
       {!processedPeers?.length ? (
-        searchTerm ? (
+        searchTerm || statusFilter !== 'all' ? (
           <div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-sm p-8 text-center">
-            <p className="text-gray-500 dark:text-amber-muted">No peers match your search.</p>
+            <p className="text-gray-500 dark:text-amber-muted">No peers match your filters.</p>
           </div>
         ) : (
           <EmptyState icon={Server} title="No peers yet" message="Add your first peer to start managing firewall rules." action="Add Peer" onAction={openAddModal} />
@@ -464,7 +539,7 @@ export default function Peers() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200 dark:divide-gray-border">
-                {processedPeers.map((peer) => (
+                {paginatedPeers.map((peer) => (
                   <tr key={peer.id} className="">
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
@@ -566,6 +641,36 @@ export default function Peers() {
               </tbody>
             </table>
           </div>
+
+          {/* Pagination Controls */}
+          {peersTotal > 0 && (
+            <div className="flex items-center justify-between px-4 py-3 border-t border-gray-200 dark:border-gray-border bg-gray-50 dark:bg-charcoal-darkest">
+              <span className="text-sm text-gray-500 dark:text-amber-muted">
+                {peersShowingRange}
+              </span>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => setPeersPage(peersPage - 1)}
+                  disabled={peersPage <= 1}
+                  className="p-1.5 rounded hover:bg-gray-200 dark:hover:bg-charcoal-dark disabled:opacity-40 disabled:cursor-not-allowed"
+                  title="Previous page"
+                >
+                  <ChevronLeft className="w-5 h-5 text-gray-600 dark:text-amber-primary" />
+                </button>
+                <span className="px-3 text-sm text-gray-600 dark:text-amber-primary">
+                  Page {peersPage} of {totalPages}
+                </span>
+                <button
+                  onClick={() => setPeersPage(peersPage + 1)}
+                  disabled={peersPage >= totalPages}
+                  className="p-1.5 rounded hover:bg-gray-200 dark:hover:bg-charcoal-dark disabled:opacity-40 disabled:cursor-not-allowed"
+                  title="Next page"
+                >
+                  <ChevronRight className="w-5 h-5 text-gray-600 dark:text-amber-primary" />
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

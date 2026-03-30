@@ -1,7 +1,8 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
 import { useTableSort } from '../hooks/useTableSort'
+import { usePagination } from '../hooks/usePagination'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Pencil, Trash2, RefreshCw, ArrowUp, ArrowDown, ArrowUpDown, X, Search } from 'lucide-react'
+import { Plus, Pencil, Trash2, RefreshCw, ArrowUp, ArrowDown, ArrowUpDown, X, Search, ChevronLeft, ChevronRight } from 'lucide-react'
 import { api, QUERY_KEYS } from '../api/client'
 import { useCrudModal } from '../hooks/useCrudModal'
 import { useToastContext } from '../hooks/ToastContext'
@@ -39,8 +40,25 @@ export default function Services() {
   // Sorting state (persisted per-user)
   const { sortConfig, handleSort } = useTableSort('services', { key: 'name', direction: 'asc' })
 
+  // Pagination state
+  const {
+    paginatedData: paginatedServices,
+    totalPages,
+    showingRange: servicesShowingRange,
+    page: servicesPage,
+    rowsPerPage: servicesRowsPerPage,
+    onPageChange: setServicesPage,
+    onRowsPerPageChange: setServicesRowsPerPage,
+    totalItems: servicesTotal
+  } = usePagination(processedServices, 'services')
+
   // Search state
   const [searchTerm, setSearchTerm] = useState('')
+
+  // Reset page to 1 when search term changes
+  useEffect(() => {
+    setServicesPage(1)
+  }, [searchTerm])
 
   // Manual refresh state
   const [isManualRefreshing, setIsManualRefreshing] = useState(false)
@@ -321,24 +339,40 @@ export default function Services() {
         </div>
       </div>
 
-      {/* Search Bar */}
-      <div className="relative flex-1 max-w-md">
-        <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
-        <input
-          type="text"
-          placeholder="Search services by name, protocol, ports, or description..."
-          value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
-          className="w-full pl-9 pr-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-dark text-gray-900 dark:text-light-neutral placeholder-gray-400 focus:ring-2 focus:ring-purple-active focus:border-purple-active"
-        />
-        {searchTerm && (
-          <button
-            onClick={() => setSearchTerm('')}
-            className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-light-neutral"
+      {/* Search Bar and Rows per page */}
+      <div className="flex items-center justify-between gap-4">
+        <div className="relative flex-1 max-w-md">
+          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
+          <input
+            type="text"
+            placeholder="Search services by name, protocol, ports, or description..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="w-full pl-9 pr-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-dark text-gray-900 dark:text-light-neutral placeholder-gray-400 focus:ring-2 focus:ring-purple-active focus:border-purple-active"
+          />
+          {searchTerm && (
+            <button
+              onClick={() => setSearchTerm('')}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-light-neutral"
+            >
+              ×
+            </button>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-gray-500 dark:text-amber-muted">Rows:</span>
+          <select
+            value={servicesRowsPerPage}
+            onChange={(e) => setServicesRowsPerPage(Number(e.target.value))}
+            className="text-sm border border-gray-300 dark:border-gray-border rounded px-2 py-2 bg-white dark:bg-charcoal-dark text-gray-900 dark:text-light-neutral focus:ring-2 focus:ring-purple-active focus:border-purple-active"
           >
-            ×
-          </button>
-        )}
+            <option value={10}>10</option>
+            <option value={25}>25</option>
+            <option value={50}>50</option>
+            <option value={100}>100</option>
+            <option value={-1}>All</option>
+          </select>
+        </div>
       </div>
 
       {!processedServices?.length ? (
@@ -385,7 +419,7 @@ export default function Services() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200 dark:divide-gray-border">
-                {processedServices.map((service) => (
+                {paginatedServices.map((service) => (
                   <tr key={service.id} className="">
                     <td className="px-4 py-3">
                       <span className="font-medium text-gray-900 dark:text-light-neutral">{service.name}</span>
@@ -457,6 +491,36 @@ export default function Services() {
               </tbody>
             </table>
           </div>
+
+          {/* Pagination Controls */}
+          {servicesTotal > 0 && (
+            <div className="flex items-center justify-between px-4 py-3 border-t border-gray-200 dark:border-gray-border bg-gray-50 dark:bg-charcoal-darkest">
+              <span className="text-sm text-gray-500 dark:text-amber-muted">
+                {servicesShowingRange}
+              </span>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => setServicesPage(servicesPage - 1)}
+                  disabled={servicesPage <= 1}
+                  className="p-1.5 rounded hover:bg-gray-200 dark:hover:bg-charcoal-dark disabled:opacity-40 disabled:cursor-not-allowed"
+                  title="Previous page"
+                >
+                  <ChevronLeft className="w-5 h-5 text-gray-600 dark:text-amber-primary" />
+                </button>
+                <span className="px-3 text-sm text-gray-600 dark:text-amber-primary">
+                  Page {servicesPage} of {totalPages}
+                </span>
+                <button
+                  onClick={() => setServicesPage(servicesPage + 1)}
+                  disabled={servicesPage >= totalPages}
+                  className="p-1.5 rounded hover:bg-gray-200 dark:hover:bg-charcoal-dark disabled:opacity-40 disabled:cursor-not-allowed"
+                  title="Next page"
+                >
+                  <ChevronRight className="w-5 h-5 text-gray-600 dark:text-amber-primary" />
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
