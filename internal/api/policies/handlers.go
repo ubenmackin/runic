@@ -357,24 +357,43 @@ func MakePolicyPreviewHandler(compiler *engine.Compiler) http.HandlerFunc {
 			req.Direction = "both"
 		}
 
-		// Derive peer_id if not provided - needed to determine if peer is source or target
-		if req.PeerID == 0 {
-			if req.TargetType == "peer" {
-				req.PeerID = req.TargetID
-			} else if req.SourceType == "peer" {
-				req.PeerID = req.SourceID
+		// Preview from both source and target peer perspectives and merge results.
+		// A single peer may only be source or target, so previewing from one side
+		// misses rules that would appear on the other side (especially with directional policies).
+		var allRules []string
+		seen := make(map[string]bool)
+
+		// Collect peer IDs to preview from
+		var peerIDs []int
+		if req.SourceType == "peer" && req.SourceID != 0 {
+			peerIDs = append(peerIDs, req.SourceID)
+		}
+		if req.TargetType == "peer" && req.TargetID != 0 {
+			if req.SourceType != "peer" || req.SourceID != req.TargetID {
+				peerIDs = append(peerIDs, req.TargetID)
 			}
 		}
 
-		// Generate rules using the engine's preview function
-		rules, err := compiler.PreviewCompile(r.Context(), req.PeerID, req.SourceID, req.SourceType, req.TargetID, req.TargetType, req.ServiceID, req.Direction)
-		if err != nil {
-			http.Error(w, "Failed to generate preview: "+err.Error(), http.StatusInternalServerError)
-			return
+		// If neither is a peer (both are groups), try to find any member peer to preview from
+		if len(peerIDs) == 0 && req.PeerID != 0 {
+			peerIDs = append(peerIDs, req.PeerID)
+		}
+
+		for _, pid := range peerIDs {
+			rules, err := compiler.PreviewCompile(r.Context(), pid, req.SourceID, req.SourceType, req.TargetID, req.TargetType, req.ServiceID, req.Direction)
+			if err != nil {
+				continue // skip peers that fail (e.g. group-only previews)
+			}
+			for _, rule := range rules {
+				if !seen[rule] {
+					seen[rule] = true
+					allRules = append(allRules, rule)
+				}
+			}
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"data": map[string]interface{}{"rules": rules}})
+		json.NewEncoder(w).Encode(map[string]interface{}{"data": map[string]interface{}{"rules": allRules}})
 	}
 }
 

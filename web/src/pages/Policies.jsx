@@ -575,24 +575,24 @@ const polymorphicOptions = [
                 <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Description</label>
                 <textarea value={formData.description} onChange={e => setFormData(d => ({ ...d, description: e.target.value }))} rows={2} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-active" />
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto_1fr] gap-4 items-end">
+              <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto_1fr] gap-x-4 gap-y-4 items-end">
+                {/* Row 1: Source - Direction - Target */}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Source</label>
                   <SearchableSelect options={polymorphicOptions} value={formData.source_id} category={formData.source_type} onChange={(v, type) => setFormData(d => ({ ...d, source_id: v, source_type: type }))} placeholder="Select group or peer" />
                 </div>
-                <div className="flex flex-col items-center gap-1 pb-0.5">
-                  <label className="block text-xs font-medium text-gray-500 dark:text-amber-muted mb-1">Direction</label>
+                <div className="flex flex-col items-center justify-end gap-1 pb-0.5">
                   <div className="flex flex-col gap-1">
                     <button
                       type="button"
                       onClick={() => {
-                        if (formData.direction === 'forward') return // Can't disable both
+                        if (formData.direction === 'forward') return
                         setFormData(d => ({
                           ...d,
                           direction: d.direction === 'both' ? 'backward' : (d.direction === 'backward' ? 'both' : 'forward')
                         }))
                       }}
-                      className={`flex items-center justify-center w-10 h-7 rounded-full text-xs font-semibold transition-all duration-200 ${
+                      className={`flex items-center justify-center w-16 h-7 rounded-full text-xs font-semibold transition-all duration-200 ${
                         formData.direction === 'both' || formData.direction === 'forward'
                           ? 'bg-green-500 text-white shadow-sm shadow-green-500/30 hover:bg-green-600'
                           : 'bg-gray-200 dark:bg-gray-700 text-gray-400 dark:text-gray-500 hover:bg-gray-300 dark:hover:bg-gray-600'
@@ -604,13 +604,13 @@ const polymorphicOptions = [
                     <button
                       type="button"
                       onClick={() => {
-                        if (formData.direction === 'backward') return // Can't disable both
+                        if (formData.direction === 'backward') return
                         setFormData(d => ({
                           ...d,
                           direction: d.direction === 'both' ? 'forward' : (d.direction === 'forward' ? 'both' : 'backward')
                         }))
                       }}
-                      className={`flex items-center justify-center w-10 h-7 rounded-full text-xs font-semibold transition-all duration-200 ${
+                      className={`flex items-center justify-center w-16 h-7 rounded-full text-xs font-semibold transition-all duration-200 ${
                         formData.direction === 'both' || formData.direction === 'backward'
                           ? 'bg-green-500 text-white shadow-sm shadow-green-500/30 hover:bg-green-600'
                           : 'bg-gray-200 dark:bg-gray-700 text-gray-400 dark:text-gray-500 hover:bg-gray-300 dark:hover:bg-gray-600'
@@ -625,12 +625,13 @@ const polymorphicOptions = [
                   <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Target</label>
                   <SearchableSelect options={polymorphicOptions} value={formData.target_id} category={formData.target_type} onChange={(v, type) => setFormData(d => ({ ...d, target_id: v, target_type: type }))} placeholder="Select group or peer" />
                 </div>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+
+                {/* Row 2: Service - (empty) - Action */}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Service</label>
                   <SearchableSelect options={serviceOptions} value={formData.service_id} onChange={v => setFormData(d => ({ ...d, service_id: v }))} placeholder="Select service" />
                 </div>
+                <div>{/* spacer */}</div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Action</label>
                   <div className="flex gap-4 pt-2">
