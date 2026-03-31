@@ -128,3 +128,11 @@ CREATE INDEX IF NOT EXISTS idx_firewall_logs_peer_id ON firewall_logs(peer_id);
 CREATE INDEX IF NOT EXISTS idx_firewall_logs_peer_timestamp ON firewall_logs(peer_id, timestamp DESC);
 -- Efficient for finding offline peers by status AND last_heartbeat
 CREATE INDEX IF NOT EXISTS idx_peers_status_heartbeat ON peers(status, last_heartbeat);
+
+-- System configuration table for storing control plane settings
+CREATE TABLE IF NOT EXISTS system_config (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);

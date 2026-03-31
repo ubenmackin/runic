@@ -142,8 +142,8 @@ const [formEditConfirmPassword, setFormEditConfirmPassword] = useState('')
             {users.map((user) => (
               <tr key={user.id}>
                 <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 dark:text-light-neutral">{user.username}</td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-amber-muted">{user.email || '—'}</td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-amber-muted">{user.role || 'user'}</td>
+<td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-amber-primary">{user.email || '—'}</td>
+      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-amber-primary">{user.role || 'user'}</td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm">
                   <button
                     onClick={() => {

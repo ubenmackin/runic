@@ -215,6 +215,29 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 	buf.WriteString("-A INPUT -m conntrack --ctstate INVALID -j DROP\n")
 	buf.WriteString("\n")
 
+	// Standard rules: Control Plane Communication
+	// Read control plane port from system_config
+	var controlPlanePort string
+	err = c.db.QueryRowContext(ctx, "SELECT value FROM system_config WHERE key = 'control_plane_port'").Scan(&controlPlanePort)
+	if err == nil && controlPlanePort != "" {
+		buf.WriteString("# --- Standard: Control Plane Communication ---\n")
+		buf.WriteString(fmt.Sprintf("# Allows agent to communicate with control plane on port %s\n", controlPlanePort))
+		// Allow inbound from control plane (for push notifications/commands)
+		buf.WriteString(fmt.Sprintf("-A INPUT -p tcp --dport %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", controlPlanePort))
+		buf.WriteString(fmt.Sprintf("-A OUTPUT -p tcp --sport %s -m conntrack --ctstate ESTABLISHED -j ACCEPT\n", controlPlanePort))
+		// Allow outbound to control plane (for heartbeats, bundle pulls, key rotation)
+		buf.WriteString(fmt.Sprintf("-A OUTPUT -p tcp --dport %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", controlPlanePort))
+		buf.WriteString(fmt.Sprintf("-A INPUT -p tcp --sport %s -m conntrack --ctstate ESTABLISHED -j ACCEPT\n", controlPlanePort))
+		buf.WriteString("\n")
+	}
+
+	// Docker: Control Plane Communication
+	if hasDocker && err == nil && controlPlanePort != "" {
+		buf.WriteString("# --- Docker: Control Plane Communication ---\n")
+		buf.WriteString(fmt.Sprintf("-A DOCKER-USER -p tcp --dport %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", controlPlanePort))
+		buf.WriteString("\n")
+	}
+
 	// Docker standard rules: Add established/related and INVALID to DOCKER-USER chain
 	if hasDocker {
 		buf.WriteString("# --- Docker: Standard rules for DOCKER-USER ---\n")

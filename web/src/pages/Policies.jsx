@@ -355,14 +355,21 @@ const polymorphicOptions = [
             <span className="text-gray-600 dark:text-amber-muted ml-1">Traffic from established and related connections is always accepted.</span>
           </div>
         </div>
-        <div className="flex items-start gap-2">
-          <span className="text-red-500 mt-0.5">✕</span>
-          <div>
-            <span className="font-medium text-gray-700 dark:text-amber-primary">Invalid Packets:</span>
-            <span className="text-gray-600 dark:text-amber-muted ml-1">Packets with invalid state are dropped.</span>
-          </div>
-        </div>
-      </div>
+<div className="flex items-start gap-2">
+                                <span className="text-red-500 mt-0.5">✕</span>
+                                <div>
+                                    <span className="font-medium text-gray-700 dark:text-amber-primary">Invalid Packets:</span>
+                                    <span className="text-gray-600 dark:text-amber-muted ml-1">Packets with invalid state are dropped.</span>
+                                </div>
+                            </div>
+                            <div className="flex items-start gap-2">
+                                <span className="text-green-500 mt-0.5">✓</span>
+                                <div>
+                                    <span className="font-medium text-gray-700 dark:text-amber-primary">Control Plane Communication:</span>
+                                    <span className="text-gray-600 dark:text-amber-muted ml-1">Agents can always communicate with the control plane for heartbeats and rule updates.</span>
+                                </div>
+                            </div>
+                        </div>
     </div>
   )}
 </div>

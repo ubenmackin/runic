@@ -45,6 +45,7 @@ SERVICE_NAME="runic-server"
 # Defaults
 DEFAULT_CONTROL_PLANE="localhost:60443"
 RUNIC_PORT="${RUNIC_PORT:-60443}"
+
 REPO_URL="https://github.com/ubenmackin/runic.git"
 REPO_BRANCH="main"
 
@@ -384,22 +385,35 @@ validate_env_file() {
 }
 
 validate_secret() {
-    local secret_name="$1"
-    local secret_value="$2"
-    
-    # Check if secret is empty
-    if [ -z "$secret_value" ]; then
-        log ERROR "Secret $secret_name is empty"
-        return 1
-    fi
-    
-    # Check minimum length (at least 32 characters)
-    if [ ${#secret_value} -lt 32 ]; then
-        log ERROR "Secret $secret_name is too short (minimum 32 characters, got ${#secret_value})"
-        return 1
-    fi
-    
-    return 0
+	local secret_name="$1"
+	local secret_value="$2"
+
+	# Check if secret is empty
+	if [ -z "$secret_value" ]; then
+		log ERROR "Secret $secret_name is empty"
+		return 1
+	fi
+
+	# Check minimum length (at least 32 characters)
+	if [ ${#secret_value} -lt 32 ]; then
+		log ERROR "Secret $secret_name is too short (minimum 32 characters, got ${#secret_value})"
+		return 1
+	fi
+
+	return 0
+}
+
+validate_runic_port() {
+	# Validate RUNIC_PORT is numeric and in valid range (1-65535)
+	if ! [[ "$RUNIC_PORT" =~ ^[0-9]+$ ]]; then
+		log ERROR "RUNIC_PORT must be numeric, got: $RUNIC_PORT"
+		exit 1
+	fi
+	if [ "$RUNIC_PORT" -lt 1 ] || [ "$RUNIC_PORT" -gt 65535 ]; then
+		log ERROR "RUNIC_PORT must be between 1 and 65535, got: $RUNIC_PORT"
+		exit 1
+	fi
+	log INFO "Validated RUNIC_PORT: $RUNIC_PORT"
 }
 
 load_or_create_secrets() {
@@ -1118,8 +1132,16 @@ initialize_database() {
             exit 1
         fi
         chown -f runic:runic "$DATA_DIR"/runic.db-* 2>/dev/null || true
-        log SUCCESS "Database initialized at $DATA_DIR/runic.db"
-    else
+	log SUCCESS "Database initialized at $DATA_DIR/runic.db"
+
+	# Store control plane port in system_config
+	log INFO "Storing control plane port ($RUNIC_PORT) in system configuration..."
+	sqlite3 "$DATA_DIR/runic.db" "INSERT OR REPLACE INTO system_config (key, value) VALUES ('control_plane_port', '$RUNIC_PORT');" 2>> "$LOG_FILE" || {
+		log ERROR "Failed to store control plane port in system_config"
+		exit 1
+	}
+	log SUCCESS "Control plane port stored in system configuration"
+else
         log ERROR "Database was not created despite server starting successfully"
         log ERROR "Database path: $DATA_DIR/runic.db"
         exit 1
@@ -1335,10 +1357,13 @@ main() {
     # Initialize log file
     touch "$LOG_FILE" 2>/dev/null || true
     
-    # Parse arguments
-    parse_arguments "$@"
-    
-    # Welcome banner
+# Parse arguments
+	parse_arguments "$@"
+
+	# Validate RUNIC_PORT early (after log function is available)
+	validate_runic_port
+
+	# Welcome banner
     echo ""
     echo -e "${CYAN}╔════════════════════════════════════════════════════════════════╗${NC}"
     echo -e "${CYAN}║     Runic Firewall Management System - Installer             ║${NC}"

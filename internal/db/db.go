@@ -606,6 +606,28 @@ func migrateSchema(database *sql.DB) error {
 		log.Println("Migration: added loopback special target")
 	}
 
+	// Migration: Create system_config table
+	var hasSystemConfig bool
+	err = database.QueryRow("SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='system_config'").Scan(&hasSystemConfig)
+	if err != nil {
+		return fmt.Errorf("failed to check for system_config table: %w", err)
+	}
+	if !hasSystemConfig {
+		log.Println("Migration: creating system_config table")
+		_, err = database.Exec(`
+			CREATE TABLE system_config (
+				key TEXT PRIMARY KEY,
+				value TEXT NOT NULL,
+				created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+				updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+			)
+		`)
+		if err != nil {
+			return fmt.Errorf("failed to create system_config table: %w", err)
+		}
+		log.Println("Migration: created system_config table")
+	}
+
 	// Migration: Add HMAC key rotation columns to peers table
 	if !existingPeerColumns["hmac_key_rotation_token"] {
 		if _, err := database.Exec("ALTER TABLE peers ADD COLUMN hmac_key_rotation_token TEXT"); err != nil {
