@@ -17,13 +17,16 @@ type Config struct {
 	CurrentBundleVer string `json:"current_bundle_version"`
 	HMACKey          string `json:"hmac_key"`
 	ApplyOnBoot      bool   `json:"apply_on_boot"`
+	ApplyRulesBundle bool   `json:"apply_rules_bundle"`
 }
 
 // DefaultConfig returns a config with sensible defaults.
 func DefaultConfig() *Config {
 	return &Config{
-		PullIntervalSec: 30,
-		LogPath:         "/var/log/runic/firewall.log",
+		PullIntervalSec:  30,
+		LogPath:          "/var/log/runic/firewall.log",
+		ApplyOnBoot:      false,
+		ApplyRulesBundle: false,
 	}
 }
 

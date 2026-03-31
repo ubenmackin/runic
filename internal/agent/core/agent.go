@@ -24,7 +24,7 @@ import (
 )
 
 // Version is the agent version, set at build time.
-var Version = "0.4.0"
+var Version = "0.4.1"
 
 // Agent is the main agent struct.
 type Agent struct {
@@ -300,6 +300,11 @@ func (a *Agent) pullBundle(ctx context.Context) error {
 
 // applyBundle applies a new bundle with auto-revert protection.
 func (a *Agent) applyBundle(ctx context.Context, bundle models.BundleResponse) error {
+	// Check if bundle application is enabled
+	if !a.config.ApplyRulesBundle {
+		log.Info("Bundle application disabled (apply_rules_bundle=false), skipping", "version", bundle.Version)
+		return nil
+	}
 	err := apply.ApplyBundle(ctx, bundle, a.config.HMACKey, a.config.ControlPlaneURL, a.config.Token, a.version, a.confirmApply)
 	if err == nil {
 		// Update config with new bundle version

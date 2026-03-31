@@ -537,15 +537,14 @@ const handleSourcePortInputKeyDown = (e) => {
                         >
                           <Pencil className={`w-4 h-4 ${service.is_system ? 'text-gray-400' : 'text-gray-900 dark:text-white'}`} />
                         </button>
-                        {!service.is_system && (
-                          <button
-                            onClick={(e) => { e.stopPropagation(); setDeleteTarget(service) }}
-                            className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded"
-                            title="Delete"
-                          >
-                            <Trash2 className="w-4 h-4 text-red-500" />
-                          </button>
-                        )}
+<button
+                onClick={(e) => { e.stopPropagation(); !service.is_system && setDeleteTarget(service) }}
+                disabled={service.is_system}
+                className={`p-1.5 rounded ${service.is_system ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-100 dark:hover:bg-charcoal-darkest'}`}
+                title={service.is_system ? "System services cannot be deleted" : "Delete"}
+              >
+                <Trash2 className="w-4 h-4 text-red-500" />
+              </button>
                       </div>
                     </td>
                   </tr>

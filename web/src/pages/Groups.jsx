@@ -383,11 +383,14 @@ export default function Groups() {
                 >
                   <Pencil className={`w-4 h-4 ${g.is_system ? 'text-gray-400' : 'text-gray-900 dark:text-white'}`} />
                 </button>
-                {!g.is_system && (
-                  <button onClick={(e) => { e.stopPropagation(); setDeleteTarget(g) }} className="p-1 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded">
-                    <Trash2 className="w-4 h-4 text-red-500" />
-                  </button>
-                )}
+<button
+onClick={(e) => { e.stopPropagation(); !g.is_system && setDeleteTarget(g) }}
+disabled={g.is_system}
+className={`p-1 rounded ${g.is_system ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-100 dark:hover:bg-charcoal-darkest'}`}
+title={g.is_system ? "System groups cannot be deleted" : "Delete"}
+>
+<Trash2 className="w-4 h-4 text-red-500" />
+</button>
               </div>
             )
           },

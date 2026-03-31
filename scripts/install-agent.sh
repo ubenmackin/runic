@@ -80,17 +80,35 @@ done
 
 # Only write config if it doesn't exist (preserve existing credentials)
 if [ ! -f /etc/runic-agent/config.json ]; then
-echo "Creating initial config..."
-cat > /etc/runic-agent/config.json << EOF
+	echo "Creating initial config..."
+	cat > /etc/runic-agent/config.json << EOF
 {
-"control_plane_url": "${CONTROL_PLANE_URL}",
-"pull_interval_seconds": 30,
-"log_path": "/var/log/runic/firewall.log"
+	"control_plane_url": "${CONTROL_PLANE_URL}",
+	"pull_interval_seconds": 30,
+	"log_path": "/var/log/runic/firewall.log",
+	"apply_on_boot": false,
+	"apply_rules_bundle": false
 }
 EOF
-chmod 600 /etc/runic-agent/config.json
+	chmod 600 /etc/runic-agent/config.json
 else
-echo "Preserving existing config (credentials retained)"
+	echo "Preserving existing config (credentials retained)"
+	# Migrate: Add missing config options for existing installs
+	MIGRATED=0
+	if ! grep -q '"apply_on_boot"' /etc/runic-agent/config.json 2>/dev/null; then
+		echo "Adding apply_on_boot=false to existing config"
+		sed -i 's/}$/,\n\t"apply_on_boot": false\n}/' /etc/runic-agent/config.json
+		MIGRATED=1
+	fi
+	if ! grep -q '"apply_rules_bundle"' /etc/runic-agent/config.json 2>/dev/null; then
+		echo "Adding apply_rules_bundle=false to existing config"
+		# Check if we already added a field (need comma handling)
+		if [ "$MIGRATED" -eq 1 ]; then
+			sed -i 's/"apply_on_boot": false\n}/"apply_on_boot": false,\n\t"apply_rules_bundle": false\n}/' /etc/runic-agent/config.json
+		else
+			sed -i 's/}$/,\n\t"apply_rules_bundle": false\n}/' /etc/runic-agent/config.json
+		fi
+	fi
 fi
 
 # Download service file

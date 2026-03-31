@@ -597,15 +597,17 @@ export default function Peers() {
                       )}
                     </td>
                     <td className="px-4 py-3">
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={() => fetchBundle(peer)}
-                          className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded"
-                          title="View Deployed Rules"
-                        >
-                          <FileCode className="w-4 h-4 text-purple-active" />
-                        </button>
-                        {peer.is_manual && (
+<div className="flex items-center gap-2">
+                {!peer.is_manual && (
+                  <button
+                    onClick={() => fetchBundle(peer)}
+                    className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded"
+                    title="View Deployed Rules"
+                  >
+                    <FileCode className="w-4 h-4 text-purple-active" />
+                  </button>
+                )}
+                {peer.is_manual && (
                           <button
                             onClick={() => openEdit(peer)}
                             className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded"
