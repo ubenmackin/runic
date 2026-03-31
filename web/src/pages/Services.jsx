@@ -390,10 +390,10 @@ const handleSourcePortInputKeyDown = (e) => {
  return (
  <div className="space-y-4">
  <div className="flex items-center justify-between">
- <div className="flex items-center gap-2">
-    <h1 className="text-2xl font-bold text-gray-900 dark:text-light-neutral">Services</h1>
-          <p className="text-gray-600 dark:text-amber-muted">Define port and protocol bundles to simplify policy creation</p>
-        </div>
+      <div>
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-light-neutral">Services</h1>
+        <p className="text-gray-600 dark:text-amber-muted">Define port and protocol bundles to simplify policy creation</p>
+      </div>
         <div className="flex items-center gap-3">
           <button
             onClick={handleManualRefresh}
@@ -532,8 +532,8 @@ const handleSourcePortInputKeyDown = (e) => {
                       {service.description || '—'}
                     </td>
                     <td className="px-4 py-3">
-                      <div className="flex items-center gap-2">
-                        <button
+          <div className="flex items-center gap-2">
+            <button
                           onClick={(e) => { e.stopPropagation(); openEdit(service) }}
                           className={`p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded ${service.is_system ? 'text-gray-400 cursor-not-allowed opacity-50' : ''}`}
                           disabled={service.is_system}

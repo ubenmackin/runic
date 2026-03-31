@@ -46,6 +46,7 @@ export default function Policies() {
   const [preview, setPreview] = useState(null)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [formErrors, setFormErrors] = useState({})
+  const [activeTab, setActiveTab] = useState('setup')
   const [showSystemRules, setShowSystemRules] = useState(false)
 
   // Sorting state (persisted per-user)
@@ -88,13 +89,14 @@ export default function Policies() {
     return () => modal.removeEventListener('keydown', handleKeyDown)
   }, [modalOpen])
 
-  const openAdd = () => { setFormErrors({}); setPreview(null); handleOpenAdd() }
-  const openEdit = (p) => { 
-    setEditPolicy(p); 
-    setFormForEdit(p); 
-    setFormErrors({}); 
-    setPreview(null); 
-    setModalOpen(true) 
+  const openAdd = () => { setFormErrors({}); setPreview(null); setActiveTab('setup'); handleOpenAdd() }
+  const openEdit = (p) => {
+    setEditPolicy(p);
+    setFormForEdit(p);
+    setFormErrors({});
+    setPreview(null);
+    setActiveTab('setup');
+    setModalOpen(true)
   }
   const closeModal = () => { handleCancel(); setPreview(null) }
 
@@ -201,10 +203,10 @@ const polymorphicOptions = [
     }
     setPreviewLoading(true)
     try {
-      const data = await api.post('/policies/preview', { 
-        source_id: formData.source_id, 
+      const data = await api.post('/policies/preview', {
+        source_id: formData.source_id,
         source_type: formData.source_type,
-        service_id: formData.service_id, 
+        service_id: formData.service_id,
         target_id: formData.target_id,
         target_type: formData.target_type,
         direction: formData.direction
@@ -217,6 +219,13 @@ const polymorphicOptions = [
       setPreviewLoading(false)
     }
   }
+
+  // Auto-fetch preview when switching to Preview tab
+  useEffect(() => {
+    if (activeTab === 'preview' && !preview && !previewLoading) {
+      fetchPreview()
+    }
+  }, [activeTab])
 
   const getEntityName = (type, id) => {
     if (type === 'peer') return peers?.find(p => p.id === id)?.hostname || id
@@ -558,145 +567,179 @@ const polymorphicOptions = [
         </div>
       )}
 
-      {modalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" tabIndex="-1" onKeyDown={(e) => { if (e.key === 'Escape') { closeModal() } }}>
-          <div ref={modalRef} className="bg-white dark:bg-charcoal-dark rounded-xl shadow-xl w-full max-w-2xl mx-4 max-h-[90vh] overflow-y-auto">
-            <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-border flex items-center justify-between">
-              <h3 className="text-lg font-semibold text-gray-900 dark:text-light-neutral">{editPolicy ? 'Edit Policy' : 'New Policy'}</h3>
-              <button type="button" onClick={closeModal} className="p-1 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded">
-                <X className="w-5 h-5 text-gray-400" />
-              </button>
-            </div>
-            <form onSubmit={handleSubmit} className="p-6 space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="col-span-2 sm:col-span-1">
-                  <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Name</label>
-                  <input autoFocus type="text" value={formData.name} onChange={e => setFormData(d => ({ ...d, name: e.target.value }))} required className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-active" />
-                </div>
-                <div className="col-span-2 sm:col-span-1">
-                  <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Priority</label>
-                  <input type="number" value={formData.priority} onChange={e => setFormData(d => ({ ...d, priority: parseInt(e.target.value) || 100 }))} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-active" />
-                </div>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Description</label>
-                <textarea value={formData.description} onChange={e => setFormData(d => ({ ...d, description: e.target.value }))} rows={2} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-active" />
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto_1fr] gap-x-4 gap-y-4 items-end">
-                {/* Row 1: Source - Direction - Target */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Source</label>
-                  <SearchableSelect options={polymorphicOptions} value={formData.source_id} category={formData.source_type} onChange={(v, type) => setFormData(d => ({ ...d, source_id: v, source_type: type }))} placeholder="Select group or peer" />
-                </div>
-                <div className="flex flex-col items-center justify-end gap-1.5 pb-0.5">
-                  <div className="flex flex-col gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (formData.direction === 'forward') return
-                        setFormData(d => ({
-                          ...d,
-                          direction: d.direction === 'both' ? 'backward' : (d.direction === 'backward' ? 'both' : 'forward')
-                        }))
-                      }}
-                      className={`flex items-center justify-center w-28 h-8 rounded-xl border-2 transition-all duration-200 ${
-                        formData.direction === 'both' || formData.direction === 'forward'
-                          ? 'bg-emerald-900/80 border-emerald-500 text-emerald-400 hover:bg-emerald-800/80'
-                          : 'bg-gray-200 dark:bg-gray-800 border-gray-300 dark:border-gray-600 text-gray-400 dark:text-gray-500 hover:bg-gray-300 dark:hover:bg-gray-700'
-                      }`}
-                      title="Forward: Source → Target"
-                    >
-                      <svg viewBox="0 0 80 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="w-16 h-4">
-                        <line x1="8" y1="12" x2="66" y2="12" />
-                        <polyline points="58,6 66,12 58,18" />
-                      </svg>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (formData.direction === 'backward') return
-                        setFormData(d => ({
-                          ...d,
-                          direction: d.direction === 'both' ? 'forward' : (d.direction === 'forward' ? 'both' : 'backward')
-                        }))
-                      }}
-                      className={`flex items-center justify-center w-28 h-8 rounded-xl border-2 transition-all duration-200 ${
-                        formData.direction === 'both' || formData.direction === 'backward'
-                          ? 'bg-emerald-900/80 border-emerald-500 text-emerald-400 hover:bg-emerald-800/80'
-                          : 'bg-gray-200 dark:bg-gray-800 border-gray-300 dark:border-gray-600 text-gray-400 dark:text-gray-500 hover:bg-gray-300 dark:hover:bg-gray-700'
-                      }`}
-                      title="Backward: Target → Source"
-                    >
-                      <svg viewBox="0 0 80 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="w-16 h-4">
-                        <line x1="72" y1="12" x2="14" y2="12" />
-                        <polyline points="22,6 14,12 22,18" />
-                      </svg>
-                    </button>
+{modalOpen && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" tabIndex="-1" onKeyDown={(e) => { if (e.key === 'Escape') { closeModal() } }}>
+        <div ref={modalRef} className="bg-white dark:bg-charcoal-dark rounded-xl shadow-xl w-full max-w-2xl mx-4 flex flex-col max-h-[90vh]">
+          {/* Header */}
+          <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-border flex items-center justify-between shrink-0">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-light-neutral">{editPolicy ? 'Edit Policy' : 'New Policy'}</h3>
+            <button type="button" onClick={closeModal} className="p-1 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded">
+              <X className="w-5 h-5 text-gray-400" />
+            </button>
+          </div>
+          {/* Tabs */}
+          <div className="flex border-b border-gray-200 dark:border-gray-border shrink-0">
+            <button type="button" onClick={() => setActiveTab('setup')} className={`flex-1 px-4 py-3 text-sm font-medium transition-colors ${activeTab === 'setup' ? 'text-purple-active border-b-2 border-purple-active' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'}`}>Setup</button>
+            <button type="button" onClick={() => setActiveTab('preview')} className={`flex-1 px-4 py-3 text-sm font-medium transition-colors ${activeTab === 'preview' ? 'text-purple-active border-b-2 border-purple-active' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'}`}>Preview</button>
+          </div>
+          {/* Tab Content */}
+          <div className="flex-1 overflow-y-auto">
+            {activeTab === 'setup' && (
+              <form id="policy-form" onSubmit={handleSubmit} className="p-6 space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="col-span-2 sm:col-span-1">
+                    <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Name</label>
+                    <input autoFocus type="text" value={formData.name} onChange={e => setFormData(d => ({ ...d, name: e.target.value }))} required className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-active" />
+                  </div>
+                  <div className="col-span-2 sm:col-span-1">
+                    <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Priority</label>
+                    <input type="number" value={formData.priority} onChange={e => setFormData(d => ({ ...d, priority: parseInt(e.target.value) || 100 }))} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-active" />
                   </div>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Target</label>
-                  <SearchableSelect options={polymorphicOptions} value={formData.target_id} category={formData.target_type} onChange={(v, type) => setFormData(d => ({ ...d, target_id: v, target_type: type }))} placeholder="Select group or peer" />
+                  <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Description</label>
+                  <textarea value={formData.description} onChange={e => setFormData(d => ({ ...d, description: e.target.value }))} rows={2} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-active" />
                 </div>
+                <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto_1fr] gap-x-4 gap-y-4 items-end">
+                  {/* Row 1: Source - Direction - Target */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Source</label>
+                    <SearchableSelect options={polymorphicOptions} value={formData.source_id} category={formData.source_type} onChange={(v, type) => setFormData(d => ({ ...d, source_id: v, source_type: type }))} placeholder="Select group or peer" />
+                  </div>
+                  <div className="flex flex-col items-center justify-end gap-1.5 pb-0.5">
+                    <div className="flex flex-col gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (formData.direction === 'forward') return
+                          setFormData(d => ({
+                            ...d,
+                            direction: d.direction === 'both' ? 'backward' : (d.direction === 'backward' ? 'both' : 'forward')
+                          }))
+                        }}
+                        className={`flex items-center justify-center w-28 h-8 rounded-xl border-2 transition-all duration-200 ${
+                          formData.direction === 'both' || formData.direction === 'forward'
+                            ? 'bg-emerald-900/80 border-emerald-500 text-emerald-400 hover:bg-emerald-800/80'
+                            : 'bg-gray-200 dark:bg-gray-800 border-gray-300 dark:border-gray-600 text-gray-400 dark:text-gray-500 hover:bg-gray-300 dark:hover:bg-gray-700'
+                        }`}
+                        title="Forward: Source → Target"
+                      >
+                        <svg viewBox="0 0 80 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="w-16 h-4">
+                          <line x1="8" y1="12" x2="66" y2="12" />
+                          <polyline points="58,6 66,12 58,18" />
+                        </svg>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (formData.direction === 'backward') return
+                          setFormData(d => ({
+                            ...d,
+                            direction: d.direction === 'both' ? 'forward' : (d.direction === 'forward' ? 'both' : 'backward')
+                          }))
+                        }}
+                        className={`flex items-center justify-center w-28 h-8 rounded-xl border-2 transition-all duration-200 ${
+                          formData.direction === 'both' || formData.direction === 'backward'
+                            ? 'bg-emerald-900/80 border-emerald-500 text-emerald-400 hover:bg-emerald-800/80'
+                            : 'bg-gray-200 dark:bg-gray-800 border-gray-300 dark:border-gray-600 text-gray-400 dark:text-gray-500 hover:bg-gray-300 dark:hover:bg-gray-700'
+                        }`}
+                        title="Backward: Target → Source"
+                      >
+                        <svg viewBox="0 0 80 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="w-16 h-4">
+                          <line x1="72" y1="12" x2="14" y2="12" />
+                          <polyline points="22,6 14,12 22,18" />
+                        </svg>
+                      </button>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Target</label>
+                    <SearchableSelect options={polymorphicOptions} value={formData.target_id} category={formData.target_type} onChange={(v, type) => setFormData(d => ({ ...d, target_id: v, target_type: type }))} placeholder="Select group or peer" />
+                  </div>
 
-                {/* Row 2: Service - (empty) - Action */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Service</label>
-                  <SearchableSelect options={serviceOptions} value={formData.service_id} onChange={v => setFormData(d => ({ ...d, service_id: v }))} placeholder="Select service" />
-                </div>
-                <div>{/* spacer */}</div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Action</label>
-                  <div className="flex gap-4 pt-2">
-                    <label className="flex items-center gap-2 cursor-pointer group">
-                      <input type="radio" name="action" value="ACCEPT" checked={formData.action === 'ACCEPT'} onChange={e => setFormData(d => ({ ...d, action: e.target.value }))} className="text-purple-active focus:ring-purple-active bg-white dark:bg-charcoal-dark border-gray-300 dark:border-gray-border" />
-                      <span className="text-sm text-green-700 dark:text-green-400 font-medium group-hover:opacity-80">ACCEPT</span>
-                    </label>
-                    <label className="flex items-center gap-2 cursor-pointer group">
-                      <input type="radio" name="action" value="LOG_DROP" checked={formData.action === 'LOG_DROP'} onChange={e => setFormData(d => ({ ...d, action: e.target.value }))} className="text-purple-active focus:ring-purple-active bg-white dark:bg-charcoal-dark border-gray-300 dark:border-gray-border" />
-                      <span className="text-sm text-red-700 dark:text-red-400 font-medium group-hover:opacity-80">LOG+DROP</span>
-                    </label>
+                  {/* Row 2: Service - (empty) - Action */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Service</label>
+                    <SearchableSelect options={serviceOptions} value={formData.service_id} onChange={v => setFormData(d => ({ ...d, service_id: v }))} placeholder="Select service" />
+                  </div>
+                  <div>{/* spacer */}</div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Action</label>
+                    <div className="flex gap-4 pt-2">
+                      <label className="flex items-center gap-2 cursor-pointer group">
+                        <input type="radio" name="action" value="ACCEPT" checked={formData.action === 'ACCEPT'} onChange={e => setFormData(d => ({ ...d, action: e.target.value }))} className="text-purple-active focus:ring-purple-active bg-white dark:bg-charcoal-dark border-gray-300 dark:border-gray-border" />
+                        <span className="text-sm text-green-700 dark:text-green-400 font-medium group-hover:opacity-80">ACCEPT</span>
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer group">
+                        <input type="radio" name="action" value="LOG_DROP" checked={formData.action === 'LOG_DROP'} onChange={e => setFormData(d => ({ ...d, action: e.target.value }))} className="text-purple-active focus:ring-purple-active bg-white dark:bg-charcoal-dark border-gray-300 dark:border-gray-border" />
+                        <span className="text-sm text-red-700 dark:text-red-400 font-medium group-hover:opacity-80">LOG+DROP</span>
+                      </label>
+                    </div>
                   </div>
                 </div>
-              </div>
-              <div className="flex items-center gap-3 py-1">
-                <ToggleSwitch checked={formData.enabled} onChange={v => setFormData(d => ({ ...d, enabled: v }))} />
-                <label className="text-sm text-gray-700 dark:text-amber-primary cursor-pointer">Policy enabled</label>
-              </div>
-
-              {/* Docker Only Toggle - Only shown when target is a peer and has Docker */}
-              {selectedPeerHasDocker && (
-                <div className="flex items-center gap-2 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
-                  <ToggleSwitch checked={formData.docker_only} onChange={v => setFormData(d => ({ ...d, docker_only: v }))} />
-                  <label className="text-sm text-gray-700 dark:text-amber-primary">Docker containers only</label>
-                  <span className="text-xs text-gray-500 dark:text-amber-muted ml-1">(Apply to DOCKER-USER chain only)</span>
+                {/* Policy Enabled Section */}
+                <div className="p-4 bg-gray-50 dark:bg-charcoal-darkest border border-gray-200 dark:border-gray-border rounded-lg">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <label className="text-sm font-medium text-gray-900 dark:text-light-neutral">Policy enabled</label>
+                      <p className="text-xs text-gray-500 dark:text-amber-muted mt-0.5">When disabled, this policy will not generate any firewall rules until re-enabled.</p>
+                    </div>
+                    <ToggleSwitch checked={formData.enabled} onChange={v => setFormData(d => ({ ...d, enabled: v }))} />
+                  </div>
                 </div>
-              )}
 
-              {/* Preview */}
-              <div className="border-t border-gray-200 dark:border-gray-border pt-4">
-                <button type="button" onClick={fetchPreview} disabled={previewLoading} className="flex items-center gap-2 text-sm text-purple-active hover:opacity-80 mb-2 font-medium">
-                  <Eye className="w-4 h-4" /> {previewLoading ? 'Generating preview...' : 'Preview Rules'}
-                </button>
+                {/* Docker Only Toggle - Only shown when target is a peer and has Docker */}
+                {selectedPeerHasDocker && (
+                  <div className="flex items-center gap-2 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
+                    <ToggleSwitch checked={formData.docker_only} onChange={v => setFormData(d => ({ ...d, docker_only: v }))} />
+                    <label className="text-sm text-gray-700 dark:text-amber-primary">Docker containers only</label>
+                    <span className="text-xs text-gray-500 dark:text-amber-muted ml-1">(Apply to DOCKER-USER chain only)</span>
+                  </div>
+                )}
+
+                <InlineError message={formErrors._general} />
+              </form>
+            )}
+            {activeTab === 'preview' && (
+              <div className="p-6">
+                <div className="flex items-center justify-between mb-4">
+                  <h4 className="text-sm font-medium text-gray-700 dark:text-amber-primary">Generated Rules</h4>
+                  <button type="button" onClick={fetchPreview} disabled={previewLoading} className="flex items-center gap-2 text-sm text-purple-active hover:opacity-80">
+                    <RefreshCw className={`w-4 h-4 ${previewLoading ? 'animate-spin' : ''}`} />
+                    Refresh
+                  </button>
+                </div>
+                {previewLoading && !preview && (
+                  <div className="flex items-center justify-center py-8">
+                    <RefreshCw className="w-6 h-6 animate-spin text-purple-active" />
+                    <span className="ml-2 text-sm text-gray-500">Generating preview...</span>
+                  </div>
+                )}
                 {preview && (
-                  <div className="p-3 bg-gray-900 dark:bg-charcoal-darkest rounded-lg text-xs font-mono border border-gray-800">
+                  <div className="p-3 bg-gray-900 dark:bg-charcoal-darkest rounded-lg text-xs font-mono border border-gray-800 max-h-96 overflow-y-auto">
                     {preview.rules?.map((rule, i) => (
-                      <p key={i} className="text-green-400">{rule}</p>
+                      <p key={i} className="text-green-400 whitespace-pre-wrap">{rule}</p>
                     ))}
                     {!preview.rules?.length && <p className="text-gray-500 italic">No rules generated for this orientation.</p>}
                   </div>
                 )}
+                {!previewLoading && !preview && (
+                  <div className="text-center py-8 text-gray-500 dark:text-gray-400">
+                    <Eye className="w-8 h-8 mx-auto mb-2 opacity-50" />
+                    <p className="text-sm">Select source, service, and target to preview rules</p>
+                  </div>
+                )}
               </div>
-
-              <InlineError message={formErrors._general} />
-              <div className="flex justify-end gap-3 pt-6">
-                <button type="button" onClick={closeModal} className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-amber-primary bg-white dark:bg-charcoal-dark border border-gray-300 dark:border-gray-border rounded-lg hover:bg-gray-50 dark:hover:bg-charcoal-darkest">Cancel</button>
-                <button type="submit" className="px-4 py-2 text-sm font-medium text-white bg-purple-active hover:bg-purple-active/80 rounded-lg transition-colors">{editPolicy ? 'Save Changes' : 'Create Policy'}</button>
-              </div>
-            </form>
+            )}
+          </div>
+          {/* Footer */}
+          <div className="px-6 py-4 border-t border-gray-200 dark:border-gray-border flex justify-end gap-3 shrink-0 bg-white dark:bg-charcoal-dark rounded-b-xl">
+            <button type="button" onClick={closeModal} className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-amber-primary bg-white dark:bg-charcoal-dark border border-gray-300 dark:border-gray-border rounded-lg hover:bg-gray-50 dark:hover:bg-charcoal-darkest">Cancel</button>
+            <button type="submit" form="policy-form" disabled={activeTab !== 'setup'} className="px-4 py-2 text-sm font-medium text-white bg-purple-active hover:bg-purple-active/80 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed">{editPolicy ? 'Save Changes' : 'Create Policy'}</button>
           </div>
         </div>
-      )}
+      </div>
+    )}
 
       {deleteTarget && (
         <ConfirmModal
