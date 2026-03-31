@@ -492,17 +492,16 @@ func (c *Compiler) writeMulticastRule(buf *strings.Builder, action string, docke
 	buf.WriteString("\n")
 }
 
-// PreviewCompile generates a preview of iptables rules for a specific policy without storing them.
-// This is used by the API preview endpoint to show users what rules would be generated.
+// PreviewCompile generates a preview of iptables rules for a policy without storing them.
+// Unlike Compile(), this is policy-centric: it resolves both source and target entities
+// and generates rules based on direction, showing the complete picture across all hosts.
 func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sourceType string, targetID int, targetType string, serviceID int, direction string) ([]string, error) {
-	// Load peer info
-	var hostname, ipAddress string
-	var hasDocker bool
-	err := c.db.QueryRowContext(ctx,
-		"SELECT hostname, ip_address, has_docker FROM peers WHERE id = ?", peerID,
-	).Scan(&hostname, &ipAddress, &hasDocker)
-	if err != nil {
-		return nil, fmt.Errorf("load peer %d: %w", peerID, err)
+	// Load a peer IP for special target resolution (uses peerID as reference)
+	var ipAddress string
+	if peerID != 0 {
+		_ = c.db.QueryRowContext(ctx,
+			"SELECT ip_address FROM peers WHERE id = ?", peerID,
+		).Scan(&ipAddress)
 	}
 
 	// Default direction
@@ -511,26 +510,10 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 	}
 
 	var buf strings.Builder
-	// Evaluate if peer is source or target in memory
-	isTarget := false
-	isSource := false
 
-	if targetType == "peer" && targetID == peerID {
-		isTarget = true
-	} else if targetType == "group" {
-		isTarget = c.isAdminPeerInGroup(ctx, peerID, targetID)
-	}
-
-	if sourceType == "peer" && sourceID == peerID {
-		isSource = true
-	} else if sourceType == "group" {
-		isSource = c.isAdminPeerInGroup(ctx, peerID, sourceID)
-	}
-
-	buf.WriteString(fmt.Sprintf("# --- Preview Policy --- (Target=%v, Source=%v, Direction=%s)\n", isTarget, isSource, direction))
-
+	// Load service
 	var serviceName, ports, sourcePorts, protocol string
-	err = c.db.QueryRowContext(ctx, "SELECT name, ports, source_ports, protocol FROM services WHERE id = ?", serviceID).Scan(&serviceName, &ports, &sourcePorts, &protocol)
+	err := c.db.QueryRowContext(ctx, "SELECT name, ports, source_ports, protocol FROM services WHERE id = ?", serviceID).Scan(&serviceName, &ports, &sourcePorts, &protocol)
 	if err != nil {
 		return nil, fmt.Errorf("load service: %w", err)
 	}
@@ -543,62 +526,62 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 		}
 	}
 
-	// Only emit target (ingress) rules if direction is 'both' or 'backward'
-	if isTarget && (direction == "both" || direction == "backward") {
-		var cidrs []string
-		var err error
-		if sourceType == "special" {
-			cidrs, err = c.resolver.ResolveSpecialTarget(sourceID, ipAddress)
-		} else {
-			cidrs, err = c.resolver.ResolveEntity(ctx, sourceType, sourceID)
-		}
-		if err == nil {
-			for _, cidr := range cidrs {
-				if serviceName == "Multicast" {
-					c.writeMulticastRule(&buf, "ACCEPT", false, hasDocker)
-					continue
+	// Resolve source CIDRs
+	var sourceCIDRs []string
+	if sourceType == "special" {
+		sourceCIDRs, _ = c.resolver.ResolveSpecialTarget(sourceID, ipAddress)
+	} else {
+		sourceCIDRs, _ = c.resolver.ResolveEntity(ctx, sourceType, sourceID)
+	}
+
+	// Resolve target CIDRs
+	var targetCIDRs []string
+	if targetType == "special" {
+		targetCIDRs, _ = c.resolver.ResolveSpecialTarget(targetID, ipAddress)
+	} else {
+		targetCIDRs, _ = c.resolver.ResolveEntity(ctx, targetType, targetID)
+	}
+
+	// Forward: Source initiates connections TO Target
+	// Source hosts get: OUTPUT to target + INPUT established from target
+	// Target hosts get: INPUT from source + OUTPUT established to source
+	if direction == "both" || direction == "forward" {
+		buf.WriteString("# Forward (Source → Target)\n")
+		for _, targetCIDR := range targetCIDRs {
+			if serviceName == "Multicast" {
+				buf.WriteString("-A OUTPUT -d 224.0.0.0/4 -m pkttype --pkt-type multicast -j ACCEPT\n")
+				continue
+			}
+			for _, pc := range portClauses {
+				outputPortMatch := pc.PortMatch
+				if pc.SrcPortMatch != "" {
+					outputPortMatch = pc.SrcPortMatch + " " + outputPortMatch
 				}
-				for _, pc := range portClauses {
-					// For INPUT (ingress): use destination ports as --dport, source ports as --sport
-					inputPortMatch := pc.PortMatch
-					if pc.SrcPortMatch != "" {
-						inputPortMatch = pc.SrcPortMatch + " " + inputPortMatch
-					}
-					// For OUTPUT (egress): swap - destination ports become --sport, source ports become --dport
-					outputPortMatch := invertPortMatch(pc.PortMatch, pc.SrcPortMatch)
-					buf.WriteString(fmt.Sprintf("-A INPUT -s %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", cidr, pc.Protocol, inputPortMatch))
-					buf.WriteString(fmt.Sprintf("-A OUTPUT -d %s -p %s %s -m conntrack --ctstate ESTABLISHED -j ACCEPT\n", cidr, pc.Protocol, outputPortMatch))
-				}
+				inputPortMatch := invertPortMatch(pc.PortMatch, pc.SrcPortMatch)
+				buf.WriteString(fmt.Sprintf("-A OUTPUT -d %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", targetCIDR, pc.Protocol, outputPortMatch))
+				buf.WriteString(fmt.Sprintf("-A INPUT -s %s -p %s %s -m conntrack --ctstate ESTABLISHED -j ACCEPT\n", targetCIDR, pc.Protocol, inputPortMatch))
 			}
 		}
 	}
 
-	// Only emit source (egress) rules if direction is 'both' or 'forward'
-	if isSource && (direction == "both" || direction == "forward") {
-		var cidrs []string
-		var err error
-		if targetType == "special" {
-			cidrs, err = c.resolver.ResolveSpecialTarget(targetID, ipAddress)
-		} else {
-			cidrs, err = c.resolver.ResolveEntity(ctx, targetType, targetID)
-		}
-		if err == nil {
-			for _, cidr := range cidrs {
-				if serviceName == "Multicast" {
-					buf.WriteString("-A OUTPUT -d 224.0.0.0/4 -m pkttype --pkt-type multicast -j ACCEPT\n")
-					continue
+	// Backward: Target initiates connections TO Source
+	// Target hosts get: OUTPUT to source + INPUT established from source
+	// Source hosts get: INPUT from target + OUTPUT established to target
+	if direction == "both" || direction == "backward" {
+		buf.WriteString("# Backward (Target → Source)\n")
+		for _, sourceCIDR := range sourceCIDRs {
+			if serviceName == "Multicast" {
+				buf.WriteString("-A INPUT -m pkttype --pkt-type multicast -j ACCEPT\n")
+				continue
+			}
+			for _, pc := range portClauses {
+				inputPortMatch := pc.PortMatch
+				if pc.SrcPortMatch != "" {
+					inputPortMatch = pc.SrcPortMatch + " " + inputPortMatch
 				}
-				for _, pc := range portClauses {
-					// For OUTPUT (egress from source): use destination port directly (sending TO the server)
-					outputPortMatch := pc.PortMatch
-					if pc.SrcPortMatch != "" {
-						outputPortMatch = pc.SrcPortMatch + " " + outputPortMatch
-					}
-					// For INPUT (response): inverted — server responds from its port
-					inputPortMatch := invertPortMatch(pc.PortMatch, pc.SrcPortMatch)
-					buf.WriteString(fmt.Sprintf("-A OUTPUT -d %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", cidr, pc.Protocol, outputPortMatch))
-					buf.WriteString(fmt.Sprintf("-A INPUT -s %s -p %s %s -m conntrack --ctstate ESTABLISHED -j ACCEPT\n", cidr, pc.Protocol, inputPortMatch))
-				}
+				outputPortMatch := invertPortMatch(pc.PortMatch, pc.SrcPortMatch)
+				buf.WriteString(fmt.Sprintf("-A INPUT -s %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", sourceCIDR, pc.Protocol, inputPortMatch))
+				buf.WriteString(fmt.Sprintf("-A OUTPUT -d %s -p %s %s -m conntrack --ctstate ESTABLISHED -j ACCEPT\n", sourceCIDR, pc.Protocol, outputPortMatch))
 			}
 		}
 	}

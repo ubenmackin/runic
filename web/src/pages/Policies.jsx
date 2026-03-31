@@ -581,8 +581,8 @@ const polymorphicOptions = [
                   <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Source</label>
                   <SearchableSelect options={polymorphicOptions} value={formData.source_id} category={formData.source_type} onChange={(v, type) => setFormData(d => ({ ...d, source_id: v, source_type: type }))} placeholder="Select group or peer" />
                 </div>
-                <div className="flex flex-col items-center justify-end gap-1 pb-0.5">
-                  <div className="flex flex-col gap-1">
+                <div className="flex flex-col items-center justify-end gap-1.5 pb-0.5">
+                  <div className="flex flex-col gap-1.5">
                     <button
                       type="button"
                       onClick={() => {
@@ -592,14 +592,17 @@ const polymorphicOptions = [
                           direction: d.direction === 'both' ? 'backward' : (d.direction === 'backward' ? 'both' : 'forward')
                         }))
                       }}
-                      className={`flex items-center justify-center w-16 h-7 rounded-full text-xs font-semibold transition-all duration-200 ${
+                      className={`flex items-center justify-center w-28 h-8 rounded-xl border-2 transition-all duration-200 ${
                         formData.direction === 'both' || formData.direction === 'forward'
-                          ? 'bg-green-500 text-white shadow-sm shadow-green-500/30 hover:bg-green-600'
-                          : 'bg-gray-200 dark:bg-gray-700 text-gray-400 dark:text-gray-500 hover:bg-gray-300 dark:hover:bg-gray-600'
+                          ? 'bg-emerald-900/80 border-emerald-500 text-emerald-400 hover:bg-emerald-800/80'
+                          : 'bg-gray-200 dark:bg-gray-800 border-gray-300 dark:border-gray-600 text-gray-400 dark:text-gray-500 hover:bg-gray-300 dark:hover:bg-gray-700'
                       }`}
                       title="Forward: Source → Target"
                     >
-                      <ArrowRight className="w-4 h-4" />
+                      <svg viewBox="0 0 80 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="w-16 h-4">
+                        <line x1="8" y1="12" x2="66" y2="12" />
+                        <polyline points="58,6 66,12 58,18" />
+                      </svg>
                     </button>
                     <button
                       type="button"
@@ -610,14 +613,17 @@ const polymorphicOptions = [
                           direction: d.direction === 'both' ? 'forward' : (d.direction === 'forward' ? 'both' : 'backward')
                         }))
                       }}
-                      className={`flex items-center justify-center w-16 h-7 rounded-full text-xs font-semibold transition-all duration-200 ${
+                      className={`flex items-center justify-center w-28 h-8 rounded-xl border-2 transition-all duration-200 ${
                         formData.direction === 'both' || formData.direction === 'backward'
-                          ? 'bg-green-500 text-white shadow-sm shadow-green-500/30 hover:bg-green-600'
-                          : 'bg-gray-200 dark:bg-gray-700 text-gray-400 dark:text-gray-500 hover:bg-gray-300 dark:hover:bg-gray-600'
+                          ? 'bg-emerald-900/80 border-emerald-500 text-emerald-400 hover:bg-emerald-800/80'
+                          : 'bg-gray-200 dark:bg-gray-800 border-gray-300 dark:border-gray-600 text-gray-400 dark:text-gray-500 hover:bg-gray-300 dark:hover:bg-gray-700'
                       }`}
                       title="Backward: Target → Source"
                     >
-                      <ArrowLeft className="w-4 h-4" />
+                      <svg viewBox="0 0 80 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="w-16 h-4">
+                        <line x1="72" y1="12" x2="14" y2="12" />
+                        <polyline points="22,6 14,12 22,18" />
+                      </svg>
                     </button>
                   </div>
                 </div>
