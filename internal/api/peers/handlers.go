@@ -16,19 +16,20 @@ import (
 
 // Peer is the JSON representation of a peer for API responses.
 type Peer struct {
-	ID            int    `json:"id"`
-	Hostname      string `json:"hostname"`
-	IPAddress     string `json:"ip_address"`
-	OSType        string `json:"os_type"`
-	Arch          string `json:"arch"`
-	HasDocker     bool   `json:"has_docker"`
-	IsManual      bool   `json:"is_manual"`
-	AgentVersion  string `json:"agent_version"`
-	LastHeartbeat string `json:"last_heartbeat"`
-	Groups        string `json:"groups"`         // Comma-separated group names
-	Status        string `json:"status"`         // ADD THIS
-	BundleVersion string `json:"bundle_version"` // ADD THIS
-	Description   string `json:"description"`
+	ID                   int    `json:"id"`
+	Hostname             string `json:"hostname"`
+	IPAddress            string `json:"ip_address"`
+	OSType               string `json:"os_type"`
+	Arch                 string `json:"arch"`
+	HasDocker            bool   `json:"has_docker"`
+	IsManual             bool   `json:"is_manual"`
+	AgentVersion         string `json:"agent_version"`
+	LastHeartbeat        string `json:"last_heartbeat"`
+	Groups               string `json:"groups"` // Comma-separated group names
+	Status               string `json:"status"`
+	BundleVersion        string `json:"bundle_version"`
+	Description          string `json:"description"`
+	HMACKeyLastRotatedAt string `json:"hmac_key_last_rotated_at"`
 }
 
 func GetPeers(w http.ResponseWriter, r *http.Request) {
@@ -47,7 +48,8 @@ func GetPeers(w http.ResponseWriter, r *http.Request) {
 	END as status,
 	COALESCE(p.bundle_version, '') as bundle_version,
 	COALESCE(GROUP_CONCAT(g.name, ','), '') as groups,
-	COALESCE(p.description, '') as description
+	COALESCE(p.description, '') as description,
+	COALESCE(p.hmac_key_last_rotated_at, '') as hmac_key_last_rotated_at
 	FROM peers p
 	LEFT JOIN group_members gm ON p.id = gm.peer_id
 	LEFT JOIN groups g ON gm.group_id = g.id
@@ -63,8 +65,8 @@ func GetPeers(w http.ResponseWriter, r *http.Request) {
 	var peers []Peer
 	for rows.Next() {
 		var p Peer
-		var agentVersion, lastHeartbeat, description sql.NullString
-		if err := rows.Scan(&p.ID, &p.Hostname, &p.IPAddress, &p.OSType, &p.Arch, &p.HasDocker, &p.IsManual, &agentVersion, &lastHeartbeat, &p.Status, &p.BundleVersion, &p.Groups, &description); err != nil {
+		var agentVersion, lastHeartbeat, description, hmacKeyLastRotatedAt sql.NullString
+		if err := rows.Scan(&p.ID, &p.Hostname, &p.IPAddress, &p.OSType, &p.Arch, &p.HasDocker, &p.IsManual, &agentVersion, &lastHeartbeat, &p.Status, &p.BundleVersion, &p.Groups, &description, &hmacKeyLastRotatedAt); err != nil {
 			common.RespondError(w, http.StatusInternalServerError, "failed to scan peer")
 			return
 		}
@@ -76,6 +78,9 @@ func GetPeers(w http.ResponseWriter, r *http.Request) {
 		}
 		if description.Valid {
 			p.Description = description.String
+		}
+		if hmacKeyLastRotatedAt.Valid {
+			p.HMACKeyLastRotatedAt = hmacKeyLastRotatedAt.String
 		}
 		peers = append(peers, p)
 	}

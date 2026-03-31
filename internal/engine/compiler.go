@@ -204,10 +204,10 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 	buf.WriteString("-A OUTPUT -o lo -j ACCEPT\n")
 	buf.WriteString("\n")
 
-	// Standard rules: established/related (using conntrack for better compatibility)
-	buf.WriteString("# --- Standard: established/related ---\n")
-	buf.WriteString("-A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT\n")
-	buf.WriteString("-A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT\n")
+	// Standard rules: ICMP RELATED (error messages for allowed connections)
+	buf.WriteString("# --- Standard: ICMP RELATED ---\n")
+	buf.WriteString("-A INPUT -p icmp -m conntrack --ctstate RELATED -j ACCEPT\n")
+	buf.WriteString("-A OUTPUT -p icmp -m conntrack --ctstate RELATED -j ACCEPT\n")
 	buf.WriteString("\n")
 
 	// Standard rules: INVALID packet drop
@@ -238,10 +238,10 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 		buf.WriteString("\n")
 	}
 
-	// Docker standard rules: Add established/related and INVALID to DOCKER-USER chain
+	// Docker standard rules: Add ICMP RELATED and INVALID to DOCKER-USER chain
 	if hasDocker {
 		buf.WriteString("# --- Docker: Standard rules for DOCKER-USER ---\n")
-		buf.WriteString("-A DOCKER-USER -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT\n")
+		buf.WriteString("-A DOCKER-USER -p icmp -m conntrack --ctstate RELATED -j ACCEPT\n")
 		buf.WriteString("-A DOCKER-USER -m conntrack --ctstate INVALID -j DROP\n")
 		buf.WriteString("\n")
 	}
@@ -405,17 +405,18 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 							outputPortMatch = pc.SrcPortMatch + " " + outputPortMatch
 						}
 						inputPortMatch := invertPortMatch(pc.PortMatch, pc.SrcPortMatch)
-						ipsetMatch := fmt.Sprintf("-m set --match-set %s src", ipsetName)
+						ipsetMatchSrc := fmt.Sprintf("-m set --match-set %s src", ipsetName)
+						ipsetMatchDst := fmt.Sprintf("-m set --match-set %s dst", ipsetName)
 
 						switch pol.Action {
 						case "ACCEPT":
-							buf.WriteString(fmt.Sprintf("-A OUTPUT -p %s %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", pc.Protocol, ipsetMatch, outputPortMatch))
-							buf.WriteString(fmt.Sprintf("-A INPUT -p %s %s %s -m conntrack --ctstate ESTABLISHED -j ACCEPT\n", pc.Protocol, ipsetMatch, inputPortMatch))
+							buf.WriteString(fmt.Sprintf("-A OUTPUT -p %s %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", pc.Protocol, ipsetMatchDst, outputPortMatch))
+							buf.WriteString(fmt.Sprintf("-A INPUT -p %s %s %s -m conntrack --ctstate ESTABLISHED -j ACCEPT\n", pc.Protocol, ipsetMatchSrc, inputPortMatch))
 						case "DROP":
-							buf.WriteString(fmt.Sprintf("-A OUTPUT -p %s %s %s -j DROP\n", pc.Protocol, ipsetMatch, outputPortMatch))
+							buf.WriteString(fmt.Sprintf("-A OUTPUT -p %s %s %s -j DROP\n", pc.Protocol, ipsetMatchDst, outputPortMatch))
 						case "LOG_DROP":
-							buf.WriteString(fmt.Sprintf("-A OUTPUT -p %s %s %s -j LOG --log-prefix \"[RUNIC-DROP] \" --log-level 4\n", pc.Protocol, ipsetMatch, outputPortMatch))
-							buf.WriteString(fmt.Sprintf("-A OUTPUT -p %s %s %s -j DROP\n", pc.Protocol, ipsetMatch, outputPortMatch))
+							buf.WriteString(fmt.Sprintf("-A OUTPUT -p %s %s %s -j LOG --log-prefix \"[RUNIC-DROP] \" --log-level 4\n", pc.Protocol, ipsetMatchDst, outputPortMatch))
+							buf.WriteString(fmt.Sprintf("-A OUTPUT -p %s %s %s -j DROP\n", pc.Protocol, ipsetMatchDst, outputPortMatch))
 						}
 					}
 				}

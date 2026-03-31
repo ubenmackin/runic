@@ -351,8 +351,8 @@ const polymorphicOptions = [
         <div className="flex items-start gap-2">
           <span className="text-green-500 mt-0.5">✓</span>
           <div>
-            <span className="font-medium text-gray-700 dark:text-amber-primary">Established/Related:</span>
-            <span className="text-gray-600 dark:text-amber-muted ml-1">Traffic from established and related connections is always accepted.</span>
+							<span className="font-medium text-gray-700 dark:text-amber-primary">ICMP Error Messages:</span>
+							<span className="text-gray-600 dark:text-amber-muted ml-1">ICMP error messages (Destination Unreachable, Time Exceeded, etc.) for allowed connections are accepted.</span>
           </div>
         </div>
 <div className="flex items-start gap-2">

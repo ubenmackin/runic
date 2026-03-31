@@ -344,12 +344,12 @@ func TestConntrackStandardRules(t *testing.T) {
 		t.Fatalf("compile error: %v", err)
 	}
 
-	// Should use conntrack instead of state for established/related
-	if !strings.Contains(output, "-A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT") {
-		t.Error("expected conntrack ESTABLISHED,RELATED rule for INPUT")
+	// Should have ICMP RELATED rules for error messages
+	if !strings.Contains(output, "-A INPUT -p icmp -m conntrack --ctstate RELATED -j ACCEPT") {
+		t.Error("expected ICMP RELATED rule for INPUT")
 	}
-	if !strings.Contains(output, "-A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT") {
-		t.Error("expected conntrack ESTABLISHED,RELATED rule for OUTPUT")
+	if !strings.Contains(output, "-A OUTPUT -p icmp -m conntrack --ctstate RELATED -j ACCEPT") {
+		t.Error("expected ICMP RELATED rule for OUTPUT")
 	}
 
 	// Should have INVALID packet drop
@@ -373,9 +373,9 @@ func TestConntrackDockerRules(t *testing.T) {
 		t.Fatalf("compile error: %v", err)
 	}
 
-	// Should have conntrack rules in DOCKER-USER chain
-	if !strings.Contains(output, "-A DOCKER-USER -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT") {
-		t.Error("expected conntrack ESTABLISHED,RELATED rule for DOCKER-USER")
+	// Should have ICMP RELATED rule in DOCKER-USER chain
+	if !strings.Contains(output, "-A DOCKER-USER -p icmp -m conntrack --ctstate RELATED -j ACCEPT") {
+		t.Error("expected ICMP RELATED rule for DOCKER-USER")
 	}
 	if !strings.Contains(output, "-A DOCKER-USER -m conntrack --ctstate INVALID -j DROP") {
 		t.Error("expected conntrack INVALID drop rule for DOCKER-USER")
@@ -1096,7 +1096,7 @@ func TestEdgeCases(t *testing.T) {
 					t.Errorf("unexpected error: %v", err)
 				}
 				if tt.check != nil {
-				tt.check(t, output)
+					tt.check(t, output)
 				}
 			}
 		})
