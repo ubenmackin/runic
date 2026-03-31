@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -36,6 +37,76 @@ const (
 	logHubKey contextKey = "log_hub"
 	hostIDKey contextKey = "host_id"
 )
+
+// Simple rate limiter for agent endpoints
+type agentRateLimiter struct {
+	mu       sync.Mutex
+	requests map[string][]time.Time
+	limit    int
+	window   time.Duration
+}
+
+func newAgentRateLimiter(limit int, window time.Duration) *agentRateLimiter {
+	rl := &agentRateLimiter{
+		requests: make(map[string][]time.Time),
+		limit:    limit,
+		window:   window,
+	}
+	// Start periodic cleanup
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			rl.cleanup()
+		}
+	}()
+	return rl
+}
+
+func (rl *agentRateLimiter) Allow(key string) bool {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
+	now := time.Now()
+	cutoff := now.Add(-rl.window)
+
+	var recent []time.Time
+	for _, t := range rl.requests[key] {
+		if t.After(cutoff) {
+			recent = append(recent, t)
+		}
+	}
+
+	if len(recent) >= rl.limit {
+		rl.requests[key] = recent
+		return false
+	}
+
+	rl.requests[key] = append(recent, now)
+	return true
+}
+
+func (rl *agentRateLimiter) cleanup() {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
+	cutoff := time.Now().Add(-rl.window)
+	for key, times := range rl.requests {
+		var recent []time.Time
+		for _, t := range times {
+			if t.After(cutoff) {
+				recent = append(recent, t)
+			}
+		}
+		if len(recent) == 0 {
+			delete(rl.requests, key)
+		} else {
+			rl.requests[key] = recent
+		}
+	}
+}
+
+var checkRotationRateLimiter = newAgentRateLimiter(30, time.Minute) // 30 requests per minute per IP
 
 // SSEHubFromContext returns the SSEHub from context (set by API middleware)
 func SSEHubFromContext(ctx context.Context) SSEBroadcaster {
@@ -133,6 +204,7 @@ func RegisterAgent(w http.ResponseWriter, r *http.Request) {
 		Kernel       string `json:"kernel"`
 		AgentVersion string `json:"agent_version"`
 		HasDocker    bool   `json:"has_docker"`
+		HasIPSet     *bool  `json:"has_ipset"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
@@ -163,7 +235,7 @@ func RegisterAgent(w http.ResponseWriter, r *http.Request) {
 		}
 		agentKey := generateAgentKey()
 
-		_, err = db.DB.ExecContext(ctx, `INSERT INTO peers (hostname, ip_address, os_type, arch, has_docker, agent_key, agent_token, hmac_key, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'online')`, input.Hostname, input.IP, input.OSType, input.Arch, input.HasDocker, agentKey, agentToken, hmacKey)
+		_, err = db.DB.ExecContext(ctx, `INSERT INTO peers (hostname, ip_address, os_type, arch, has_docker, has_ipset, agent_key, agent_token, hmac_key, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'online')`, input.Hostname, input.IP, input.OSType, input.Arch, input.HasDocker, input.HasIPSet, agentKey, agentToken, hmacKey)
 		if err != nil {
 			runiclog.Error("Failed to create server error", "error", err)
 			http.Error(w, `{"error": "failed to create server"}`, http.StatusInternalServerError)
@@ -192,7 +264,11 @@ func RegisterAgent(w http.ResponseWriter, r *http.Request) {
 		// Token exists, return it along with existing server info
 		var bundleVersion sql.NullString
 		var existingHMACKey string
-		db.DB.QueryRowContext(ctx, "SELECT bundle_version, hmac_key FROM peers WHERE id = ?", existingID).Scan(&bundleVersion, &existingHMACKey)
+		if err := db.DB.QueryRowContext(ctx, "SELECT bundle_version, hmac_key FROM peers WHERE id = ?", existingID).Scan(&bundleVersion, &existingHMACKey); err != nil {
+			runiclog.Error("Failed to fetch existing peer data", "error", err, "peer_id", existingID)
+			http.Error(w, `{"error": "failed to fetch peer data"}`, http.StatusInternalServerError)
+			return
+		}
 
 		respondJSON(w, http.StatusOK, map[string]interface{}{
 			"host_id":                hostID,
@@ -214,9 +290,13 @@ func RegisterAgent(w http.ResponseWriter, r *http.Request) {
 
 	// Fetch existing HMAC key (don't regenerate on reinstall)
 	var existingHMACKey string
-	db.DB.QueryRowContext(ctx, "SELECT hmac_key FROM peers WHERE id = ?", existingID).Scan(&existingHMACKey)
+	if err := db.DB.QueryRowContext(ctx, "SELECT hmac_key FROM peers WHERE id = ?", existingID).Scan(&existingHMACKey); err != nil {
+		runiclog.Error("Failed to fetch existing HMAC key", "error", err, "peer_id", existingID)
+		http.Error(w, `{"error": "failed to fetch peer data"}`, http.StatusInternalServerError)
+		return
+	}
 
-	db.DB.ExecContext(ctx, "UPDATE peers SET agent_token = ?, status = 'online' WHERE id = ?", newToken, existingID)
+	db.DB.ExecContext(ctx, "UPDATE peers SET agent_token = ?, status = 'online', agent_version = ?, has_docker = ?, has_ipset = ? WHERE id = ?", newToken, input.AgentVersion, input.HasDocker, input.HasIPSet, existingID)
 
 	respondJSON(w, http.StatusOK, map[string]interface{}{
 		"host_id":                hostID,
@@ -276,6 +356,7 @@ func Heartbeat(w http.ResponseWriter, r *http.Request) {
 		UptimeSeconds        float64 `json:"uptime_seconds"`
 		Load1m               float64 `json:"load_1m"`
 		AgentVersion         string  `json:"agent_version"`
+		HasIPSet             *bool   `json:"has_ipset"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
@@ -284,7 +365,7 @@ func Heartbeat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Update peer heartbeat and status
-	_, err := db.DB.ExecContext(r.Context(), `UPDATE peers SET last_heartbeat = CURRENT_TIMESTAMP, status = 'online', agent_version = ?, bundle_version = ? WHERE id = ?`, input.AgentVersion, input.BundleVersionApplied, serverID)
+	_, err := db.DB.ExecContext(r.Context(), `UPDATE peers SET last_heartbeat = CURRENT_TIMESTAMP, status = 'online', agent_version = ?, bundle_version = ?, has_ipset = ? WHERE id = ?`, input.AgentVersion, input.BundleVersionApplied, input.HasIPSet, serverID)
 	if err != nil {
 		runiclog.Error("Failed to update heartbeat error", "error", err)
 	}
@@ -402,7 +483,9 @@ func ConfirmBundleApplied(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Update peer's bundle_version
-	db.DB.ExecContext(r.Context(), "UPDATE peers SET bundle_version = ? WHERE id = ?", input.Version, serverID)
+	if _, err := db.DB.ExecContext(r.Context(), "UPDATE peers SET bundle_version = ? WHERE id = ?", input.Version, serverID); err != nil {
+		runiclog.Error("Failed to update peer bundle version", "error", err)
+	}
 
 	respondJSON(w, http.StatusOK, map[string]string{"status": "confirmed"})
 }
@@ -503,7 +586,7 @@ func MakeHandleSSEventsHandler(hub SSEBroadcaster) http.HandlerFunc {
 		defer ticker.Stop()
 
 		// Notify client connected
-		fmt.Fprintf(w, ": agent connected\\n\\n")
+		fmt.Fprintf(w, ": agent connected\n\n")
 		flusher.Flush()
 
 		for {
@@ -513,12 +596,12 @@ func MakeHandleSSEventsHandler(hub SSEBroadcaster) http.HandlerFunc {
 					// Channel closed
 					return
 				}
-				fmt.Fprintf(w, "%s\\n\\n", msg)
+				fmt.Fprintf(w, "%s\n\n", msg)
 				flusher.Flush()
 
 			case <-ticker.C:
 				// Keepalive
-				fmt.Fprintf(w, ": keepalive\\n\\n")
+				fmt.Fprintf(w, ": keepalive\n\n")
 				flusher.Flush()
 
 			case <-r.Context().Done():
@@ -533,6 +616,12 @@ func MakeHandleSSEventsHandler(hub SSEBroadcaster) http.HandlerFunc {
 func AgentCheckRotation(w http.ResponseWriter, r *http.Request) {
 	hostID, serverID, ok := getHostIDFromContext(w, r)
 	if !ok {
+		return
+	}
+
+	// Rate limiting
+	if !checkRotationRateLimiter.Allow(r.RemoteAddr) {
+		respondJSON(w, http.StatusTooManyRequests, map[string]string{"error": "rate limit exceeded"})
 		return
 	}
 

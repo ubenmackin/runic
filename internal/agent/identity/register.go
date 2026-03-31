@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"runtime"
 	"strings"
 
@@ -29,6 +30,8 @@ func Register(ctx context.Context, client common.HTTPClient, cfg *Config, versio
 	hasDocker := detectDocker()
 	ip := detectLocalIP()
 
+	hasIPSet := detectIPSet()
+
 	body := models.AgentRegisterRequest{
 		Hostname:     hostname,
 		IP:           ip,
@@ -37,6 +40,7 @@ func Register(ctx context.Context, client common.HTTPClient, cfg *Config, versio
 		Kernel:       kernel,
 		AgentVersion: version,
 		HasDocker:    hasDocker,
+		HasIPSet:     &hasIPSet,
 	}
 
 	resp, err := doPost(ctx, client, cfg.ControlPlaneURL, "/api/v1/agent/register", body, cfg.Token)
@@ -150,6 +154,12 @@ func detectDocker() bool {
 		return false
 	}
 	return fi.Mode()&os.ModeSocket != 0
+}
+
+// detectIPSet returns true if the ipset binary is available on PATH.
+func detectIPSet() bool {
+	_, err := exec.LookPath("ipset")
+	return err == nil
 }
 
 // detectLocalIP returns the primary non-loopback IPv4 address.

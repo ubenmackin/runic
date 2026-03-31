@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS peers (
     os_type TEXT NOT NULL DEFAULT 'linux',
     arch TEXT NOT NULL DEFAULT 'amd64',
     has_docker BOOLEAN NOT NULL DEFAULT 0,
+    has_ipset BOOLEAN DEFAULT NULL,
     agent_key TEXT UNIQUE NOT NULL,
     agent_token TEXT,
     agent_version TEXT,

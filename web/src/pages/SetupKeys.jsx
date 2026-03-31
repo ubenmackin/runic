@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { RotateCw, CheckCircle, XCircle, Clock, AlertTriangle, RotateCcw } from 'lucide-react'
+import { RotateCw, CheckCircle, XCircle, Clock, AlertTriangle } from 'lucide-react'
 import { api } from '../api/client'
 import { useToastContext } from '../hooks/ToastContext'
 import TableSkeleton from '../components/TableSkeleton'
@@ -10,7 +10,6 @@ export default function SetupKeys() {
   const showToast = useToastContext()
   const [showRotateModal, setShowRotateModal] = useState(null) // peer ID or 'bulk'
   const [rotationResult, setRotationResult] = useState(null) // { peerId, newKey, token }
-  const [showAuditLog, setShowAuditLog] = useState(false)
 
   // Fetch peers with rotation info
   const { data: peers, isLoading: peersLoading } = useQuery({
@@ -94,37 +93,15 @@ export default function SetupKeys() {
           <h1 className="text-2xl font-bold text-gray-900 dark:text-light-neutral">Key Rotation</h1>
           <p className="text-gray-600 dark:text-amber-muted">Manage per-peer HMAC key rotation</p>
         </div>
-        <div className="flex gap-3">
-          <button
-            onClick={() => setShowAuditLog(!showAuditLog)}
-            className="inline-flex items-center gap-2 px-4 py-2 text-sm bg-gray-600 hover:bg-gray-700 text-white rounded-lg"
-          >
-            <RotateCcw className="w-4 h-4" />
-            Audit Log
-          </button>
-          <button
-            onClick={() => setShowRotateModal('bulk')}
-            disabled={bulkRotateMutation.isPending || !peers || peers.length === 0}
-            className="inline-flex items-center gap-2 px-4 py-2 text-sm bg-purple-active hover:bg-purple-active/80 text-white rounded-lg disabled:opacity-50"
-          >
-            <RotateCw className="w-4 h-4" />
-            Rotate All Keys
-          </button>
-        </div>
+        <button
+          onClick={() => setShowRotateModal('bulk')}
+          disabled={bulkRotateMutation.isPending || !peers || peers.length === 0}
+          className="inline-flex items-center gap-2 px-4 py-2 text-sm bg-purple-active hover:bg-purple-active/80 text-white rounded-lg disabled:opacity-50"
+        >
+          <RotateCw className="w-4 h-4" />
+          Rotate All Keys
+        </button>
       </div>
-
-      {/* Audit Log Section */}
-      {showAuditLog && (
-        <div className="bg-white dark:bg-charcoal-dark rounded-lg shadow">
-          <div className="p-6">
-            <h2 className="text-lg font-semibold text-gray-900 dark:text-light-neutral mb-4">Rotation Audit Log</h2>
-            <div className="text-gray-600 dark:text-amber-muted text-sm">
-              <p>Audit log functionality will be implemented in a future update.</p>
-              <p className="mt-2">Recent rotation events will be displayed here with timestamps, peer names, and status.</p>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Peers Rotation Table */}
       <div className="bg-white dark:bg-charcoal-dark rounded-lg shadow">

@@ -9,6 +9,7 @@ type AgentRegisterRequest struct {
 	Kernel       string `json:"kernel"`
 	AgentVersion string `json:"agent_version"`
 	HasDocker    bool   `json:"has_docker"`
+	HasIPSet     *bool  `json:"has_ipset"`
 }
 
 // AgentRegisterResponse is the payload returned after successful agent registration.
@@ -27,6 +28,7 @@ type HeartbeatRequest struct {
 	UptimeSeconds        float64 `json:"uptime_seconds"`
 	Load1m               float64 `json:"load_1m"`
 	AgentVersion         string  `json:"agent_version"`
+	HasIPSet             *bool   `json:"has_ipset"`
 }
 
 // BundleResponse is the response from the bundle endpoint.

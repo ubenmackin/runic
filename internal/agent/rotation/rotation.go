@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -207,7 +208,9 @@ func (m *Manager) retrieveNewKey(token string) (string, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+		// Read error body for debugging
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("unexpected status code: %d: %s", resp.StatusCode, string(body))
 	}
 
 	var result struct {
@@ -298,6 +301,13 @@ func (m *Manager) updateConfigKey(newKey string) error {
 		tmpFile.Close()
 		os.Remove(tmpPath)
 		return fmt.Errorf("write config: %w", err)
+	}
+
+	// Sync to disk before closing
+	if err := tmpFile.Sync(); err != nil {
+		tmpFile.Close()
+		os.Remove(tmpPath)
+		return fmt.Errorf("sync config: %w", err)
 	}
 
 	if err := tmpFile.Close(); err != nil {

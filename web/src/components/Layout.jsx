@@ -31,7 +31,7 @@ NavItem.displayName = 'NavItem'
 const navItems = [
   { to: '/',              icon: LayoutDashboard, label: 'Dashboard' },
   { to: '/logs',          icon: FileText,         label: 'Logs' },
-  { to: '/setup-keys',    icon: Key,              label: 'Key Rotation' },
+  { to: '/setup-keys',    icon: Key,              label: 'Setup Keys' },
   {
     label: 'Access Control',
     icon: Shield,

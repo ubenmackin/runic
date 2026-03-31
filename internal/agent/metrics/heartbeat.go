@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 
 	"runic/internal/common"
 	"runic/internal/models"
@@ -23,6 +24,7 @@ func SendHeartbeat(ctx context.Context, client common.HTTPClient, controlPlaneUR
 		UptimeSeconds:        uptime,
 		Load1m:               load,
 		AgentVersion:         version,
+		HasIPSet:             boolPtr(detectIPSet()),
 	}
 
 	data, err := json.Marshal(body)
@@ -87,4 +89,15 @@ func getLoad1m() float64 {
 		return 0
 	}
 	return load1
+}
+
+// detectIPSet checks if the ipset binary is available on the system.
+func detectIPSet() bool {
+	_, err := exec.LookPath("ipset")
+	return err == nil
+}
+
+// boolPtr returns a pointer to the given bool value.
+func boolPtr(b bool) *bool {
+	return &b
 }

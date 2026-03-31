@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -60,6 +61,56 @@ var (
 	rotateKeyRateLimiter       = newRateLimiter(10, time.Minute) // 10 requests per minute per IP
 	confirmRotationRateLimiter = newRateLimiter(20, time.Minute) // 20 requests per minute per IP
 )
+
+// getClientIP extracts the client IP from the request, considering proxy headers.
+func getClientIP(r *http.Request) string {
+	// Check X-Forwarded-For header first (set by reverse proxies)
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		// X-Forwarded-For can contain multiple IPs, take the first one
+		if idx := strings.Index(xff, ","); idx > 0 {
+			return strings.TrimSpace(xff[:idx])
+		}
+		return strings.TrimSpace(xff)
+	}
+	// Check X-Real-IP header (set by some proxies like nginx)
+	if xri := r.Header.Get("X-Real-IP"); xri != "" {
+		return strings.TrimSpace(xri)
+	}
+	// Fall back to RemoteAddr
+	return r.RemoteAddr
+}
+
+// cleanup removes stale entries from the rate limiter.
+func (rl *rateLimiter) cleanup() {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
+	cutoff := time.Now().Add(-rl.window)
+	for key, times := range rl.requests {
+		var recent []time.Time
+		for _, t := range times {
+			if t.After(cutoff) {
+				recent = append(recent, t)
+			}
+		}
+		if len(recent) == 0 {
+			delete(rl.requests, key)
+		} else {
+			rl.requests[key] = recent
+		}
+	}
+}
+
+func init() {
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			rotateKeyRateLimiter.cleanup()
+			confirmRotationRateLimiter.cleanup()
+		}
+	}()
+}
 
 // generateRotationToken generates a cryptographically secure rotation token.
 // The token is a 32-byte random value, hex-encoded (64 chars).
@@ -190,6 +241,30 @@ func RotatePeerKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check if rotation is already in progress
+	if rotationToken.Valid && rotationToken.String != "" {
+		// Check if existing token is still valid (not expired)
+		var lastRotatedAt sql.NullString
+		err = db.DB.QueryRowContext(r.Context(),
+			"SELECT hmac_key_last_rotated_at FROM peers WHERE id = ?",
+			peerID,
+		).Scan(&lastRotatedAt)
+
+		if err == nil && lastRotatedAt.Valid {
+			rotationTime, parseErr := time.Parse(time.RFC3339, lastRotatedAt.String)
+			if parseErr == nil && time.Since(rotationTime) < 5*time.Minute {
+				// Existing rotation still valid, return existing token
+				common.RespondJSON(w, http.StatusOK, map[string]interface{}{
+					"peer_id":        peerID,
+					"hostname":       hostname,
+					"rotation_token": rotationToken.String,
+					"message":        "Rotation already in progress. Use the existing rotation token.",
+				})
+				return
+			}
+		}
+	}
+
 	// Store new key and token in database
 	_, err = db.DB.ExecContext(r.Context(),
 		"UPDATE peers SET hmac_key = ?, hmac_key_rotation_token = ?, hmac_key_last_rotated_at = ? WHERE id = ?",
@@ -224,6 +299,9 @@ func RotatePeerKey(w http.ResponseWriter, r *http.Request) {
 // The token is consumed (set to NULL) atomically with key retrieval.
 // This endpoint is PUBLIC - authentication is via the rotation token itself.
 func AgentRotateKey(w http.ResponseWriter, r *http.Request) {
+	// Limit request body size to prevent slowloris attacks
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB limit
+
 	var input struct {
 		HostID        string `json:"host_id"`
 		RotationToken string `json:"rotation_token"`
@@ -235,7 +313,7 @@ func AgentRotateKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Rate limiting
-	if !rotateKeyRateLimiter.Allow(r.RemoteAddr) {
+	if !rotateKeyRateLimiter.Allow(getClientIP(r)) {
 		common.RespondError(w, http.StatusTooManyRequests, "rate limit exceeded")
 		return
 	}
@@ -248,7 +326,6 @@ func AgentRotateKey(w http.ResponseWriter, r *http.Request) {
 	hostname := parseHostID(input.HostID)
 
 	// Atomic operation: validate token AND retrieve key AND consume token
-	// Use a transaction to prevent TOCTOU race conditions
 	tx, err := db.DB.BeginTx(r.Context(), nil)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "failed to start transaction")
@@ -256,23 +333,34 @@ func AgentRotateKey(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 
-	// First, validate the token and get the key in a single query
+	// Get the peer's rotation token and timestamp
 	var peerID int
 	var newHMACKey string
+	var lastRotatedAt sql.NullString
 	err = tx.QueryRowContext(r.Context(), `
-		SELECT id, hmac_key FROM peers 
-		WHERE hostname = ? 
-		  AND hmac_key_rotation_token = ? 
-		  AND hmac_key_last_rotated_at > datetime('now', '-5 minutes')
-	`, hostname, input.RotationToken).Scan(&peerID, &newHMACKey)
+		SELECT id, hmac_key, hmac_key_last_rotated_at FROM peers 
+		WHERE hostname = ? AND hmac_key_rotation_token = ?
+	`, hostname, input.RotationToken).Scan(&peerID, &newHMACKey, &lastRotatedAt)
 
 	if err == sql.ErrNoRows {
-		common.RespondError(w, http.StatusUnauthorized, "invalid or expired rotation token")
+		common.RespondError(w, http.StatusUnauthorized, "invalid rotation token")
 		return
 	}
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "failed to process rotation")
 		return
+	}
+
+	// Check expiry in Go (avoids SQLite datetime format mismatch)
+	if lastRotatedAt.Valid {
+		rotationTime, err := time.Parse(time.RFC3339, lastRotatedAt.String)
+		if err != nil || time.Since(rotationTime) > 5*time.Minute {
+			// Token expired, clear it
+			tx.ExecContext(r.Context(), "UPDATE peers SET hmac_key_rotation_token = NULL WHERE id = ?", peerID)
+			tx.Commit()
+			common.RespondError(w, http.StatusUnauthorized, "expired rotation token")
+			return
+		}
 	}
 
 	// Consume the token immediately - makes it single-use
@@ -308,7 +396,7 @@ func AgentRotateKey(w http.ResponseWriter, r *http.Request) {
 func AgentConfirmRotation(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		HostID        string `json:"host_id"`
-		RotationToken string `json:"rotation_token"`
+		RotationToken string `json:"rotation_token"` // Required only if rotation token still exists (not yet consumed)
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
@@ -317,7 +405,7 @@ func AgentConfirmRotation(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Rate limiting
-	if !confirmRotationRateLimiter.Allow(r.RemoteAddr) {
+	if !confirmRotationRateLimiter.Allow(getClientIP(r)) {
 		common.RespondError(w, http.StatusTooManyRequests, "rate limit exceeded")
 		return
 	}
@@ -377,13 +465,20 @@ func AgentConfirmRotation(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Token should be NULL (consumed by AgentRotateKey), or match if agent is retrying
-	if currentToken.Valid && currentToken.String != "" && currentToken.String != input.RotationToken {
-		slog.Warn("Invalid rotation token provided to confirm-rotation",
-			"peer_id", peerID,
-			"hostname", hostname,
-		)
-		common.RespondError(w, http.StatusUnauthorized, "invalid rotation token")
-		return
+	if currentToken.Valid && currentToken.String != "" {
+		// Token still exists - agent hasn't called rotate-key yet, or is retrying
+		if input.RotationToken == "" {
+			common.RespondError(w, http.StatusBadRequest, "rotation_token is required")
+			return
+		}
+		if currentToken.String != input.RotationToken {
+			slog.Warn("Invalid rotation token provided to confirm-rotation",
+				"peer_id", peerID,
+				"hostname", hostname,
+			)
+			common.RespondError(w, http.StatusUnauthorized, "invalid rotation token")
+			return
+		}
 	}
 
 	// Update last rotation timestamp

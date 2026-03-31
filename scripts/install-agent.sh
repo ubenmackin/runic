@@ -10,6 +10,22 @@ armv6l) AGENT_ARCH="arm" ;;
 *) echo "Unsupported arch: $ARCH"; exit 1 ;;
 esac
 
+# Install ipset if available (non-fatal)
+if ! command -v ipset &>/dev/null; then
+    echo "Installing ipset..."
+    if command -v apt-get &>/dev/null; then
+        apt-get install -y ipset 2>/dev/null || echo "Warning: Failed to install ipset via apt-get"
+    elif command -v yum &>/dev/null; then
+        yum install -y ipset 2>/dev/null || echo "Warning: Failed to install ipset via yum"
+    elif command -v apk &>/dev/null; then
+        apk add ipset 2>/dev/null || echo "Warning: Failed to install ipset via apk"
+    else
+        echo "Warning: No supported package manager found for ipset installation"
+    fi
+else
+    echo "ipset already installed."
+fi
+
 CONTROL_PLANE_URL="${1:-}"
 if [ -z "$CONTROL_PLANE_URL" ]; then
 echo "Usage: install-agent.sh <control-plane-url>"

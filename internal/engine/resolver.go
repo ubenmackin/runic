@@ -201,3 +201,86 @@ func expandPortsSingle(dstPorts string, srcPorts string, protocol string) []Port
 
 	return []PortClause{{Protocol: protocol, PortMatch: dstMatch, SrcPortMatch: srcMatch}}
 }
+
+// sanitizeForIpset converts a group name into a valid ipset name component.
+// Rules: lowercase, replace all non-alphanumeric characters (except underscore) with underscore,
+// collapse multiple underscores into one, trim leading/trailing underscores.
+func sanitizeForIpset(name string) string {
+	name = strings.ToLower(name)
+	var b strings.Builder
+	prevUnderscore := false
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			prevUnderscore = false
+		} else {
+			if !prevUnderscore {
+				b.WriteRune('_')
+				prevUnderscore = true
+			}
+		}
+	}
+	result := b.String()
+	result = strings.Trim(result, "_")
+	return result
+}
+
+// IpsetMember represents a single member of an ipset.
+type IpsetMember struct {
+	Address string // IP or CIDR
+	IsCIDR  bool   // true if Address contains a network prefix
+}
+
+// resolveGroupForIpset returns the members of a group suitable for ipset generation.
+// It returns a slice of IpsetMember and a boolean indicating whether any member is a CIDR.
+// CIDR members require hash:net ipset type, while pure IP members use hash:ip.
+func (r *Resolver) resolveGroupForIpset(ctx context.Context, groupID int) ([]IpsetMember, bool, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT p.ip_address
+		FROM group_members gm
+		JOIN peers p ON gm.peer_id = p.id
+		WHERE gm.group_id = ?`, groupID)
+	if err != nil {
+		return nil, false, fmt.Errorf("query group members for ipset: %w", err)
+	}
+	defer rows.Close()
+
+	var members []IpsetMember
+	hasCIDR := false
+	seen := map[string]bool{}
+
+	for rows.Next() {
+		var ipAddress string
+		if err := rows.Scan(&ipAddress); err != nil {
+			return nil, false, fmt.Errorf("scan group member: %w", err)
+		}
+
+		if seen[ipAddress] {
+			continue
+		}
+		seen[ipAddress] = true
+
+		isCIDR := strings.Contains(ipAddress, "/")
+		if isCIDR {
+			if _, _, err := net.ParseCIDR(ipAddress); err != nil {
+				return nil, false, fmt.Errorf("invalid CIDR in peer %d: %s", groupID, ipAddress)
+			}
+			hasCIDR = true
+		} else {
+			if net.ParseIP(ipAddress) == nil {
+				return nil, false, fmt.Errorf("invalid IP in peer: %s", ipAddress)
+			}
+		}
+
+		members = append(members, IpsetMember{
+			Address: ipAddress,
+			IsCIDR:  isCIDR,
+		})
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+
+	return members, hasCIDR, nil
+}

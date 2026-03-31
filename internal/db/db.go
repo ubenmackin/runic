@@ -317,6 +317,13 @@ func migrateSchema(database *sql.DB) error {
 		log.Println("Migration: added description column to peers table")
 	}
 
+	if !existingPeerColumns["has_ipset"] {
+		if _, err := database.Exec("ALTER TABLE peers ADD COLUMN has_ipset BOOLEAN DEFAULT NULL"); err != nil {
+			return fmt.Errorf("failed to add has_ipset column: %w", err)
+		}
+		log.Println("Migration: added has_ipset column to peers table")
+	}
+
 	// Migration: Add is_system column to services table
 	existingServiceColumns := make(map[string]bool)
 	serviceRows, err := database.Query("PRAGMA table_info(services)")

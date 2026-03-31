@@ -29,10 +29,10 @@ func NewCompiler(database *sql.DB) *Compiler {
 func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 	// 1. Load peer
 	var hostname, ipAddress string
-	var hasDocker bool
+	var hasDocker, hasIPSet bool
 	err := c.db.QueryRowContext(ctx,
-		"SELECT hostname, ip_address, has_docker FROM peers WHERE id = ?", peerID,
-	).Scan(&hostname, &ipAddress, &hasDocker)
+		"SELECT hostname, ip_address, has_docker, COALESCE(has_ipset, false) FROM peers WHERE id = ?", peerID,
+	).Scan(&hostname, &ipAddress, &hasDocker, &hasIPSet)
 	if err != nil {
 		return "", fmt.Errorf("load peer %d: %w", peerID, err)
 	}
@@ -97,6 +97,68 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 		return "", err
 	}
 
+	// 2b. Collect unique group IDs used in policies (source or target) for ipset generation
+	type groupRef struct {
+		ID   int
+		Name string
+	}
+	groupIDToName := make(map[int]string)
+	var groupOrder []int // preserve insertion order
+	for _, pol := range policies {
+		if pol.SourceType == "group" {
+			if _, exists := groupIDToName[pol.SourceID]; !exists {
+				var groupName string
+				if err := c.db.QueryRowContext(ctx, "SELECT name FROM groups WHERE id = ?", pol.SourceID).Scan(&groupName); err == nil {
+					groupIDToName[pol.SourceID] = groupName
+					groupOrder = append(groupOrder, pol.SourceID)
+				}
+				// skip non-existent groups silently
+			}
+		}
+		if pol.TargetType == "group" {
+			if _, exists := groupIDToName[pol.TargetID]; !exists {
+				var groupName string
+				if err := c.db.QueryRowContext(ctx, "SELECT name FROM groups WHERE id = ?", pol.TargetID).Scan(&groupName); err == nil {
+					groupIDToName[pol.TargetID] = groupName
+					groupOrder = append(groupOrder, pol.TargetID)
+				}
+				// skip non-existent groups silently
+			}
+		}
+	}
+
+	// 2c. Resolve ipset data if peer supports it, and build group->ipset mapping simultaneously
+	type ipsetData struct {
+		Name    string // sanitized ipset name (e.g. runic_group_webservers)
+		SetType string // hash:ip or hash:net
+		Members []string
+	}
+	var ipsets []ipsetData
+	groupIDToIpsetName := make(map[int]string)
+	if hasIPSet && len(groupOrder) > 0 {
+		for _, gid := range groupOrder {
+			members, hasCIDR, err := c.resolver.resolveGroupForIpset(ctx, gid)
+			if err != nil {
+				return "", fmt.Errorf("resolve group %d for ipset: %w", gid, err)
+			}
+			setType := "hash:ip"
+			if hasCIDR {
+				setType = "hash:net"
+			}
+			sanitizedName := "runic_group_" + sanitizeForIpset(groupIDToName[gid])
+			var addrs []string
+			for _, m := range members {
+				addrs = append(addrs, m.Address)
+			}
+			ipsets = append(ipsets, ipsetData{
+				Name:    sanitizedName,
+				SetType: setType,
+				Members: addrs,
+			})
+			groupIDToIpsetName[gid] = sanitizedName
+		}
+	}
+
 	// 3. Build the iptables-restore output
 	var buf strings.Builder
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -106,6 +168,21 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 	buf.WriteString(fmt.Sprintf("# Host: %s\n", hostname))
 	buf.WriteString(fmt.Sprintf("# Generated: %s\n", now))
 	buf.WriteString(fmt.Sprintf("# Policies: %d\n", len(policies)))
+	if hasIPSet && len(ipsets) > 0 {
+		buf.WriteString(fmt.Sprintf("# Ipsets: %d\n", len(ipsets)))
+	}
+
+	// Ipset definitions (before *filter)
+	if hasIPSet && len(ipsets) > 0 {
+		buf.WriteString("\n# --- Ipset Definitions ---\n")
+		for _, is := range ipsets {
+			buf.WriteString(fmt.Sprintf("create %s %s family inet\n", is.Name, is.SetType))
+			for _, member := range is.Members {
+				buf.WriteString(fmt.Sprintf("add %s %s\n", is.Name, member))
+			}
+			buf.WriteString("\n")
+		}
+	}
 
 	// Filter table and chain policies
 	buf.WriteString("*filter\n")
@@ -170,54 +247,107 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 		// Process as TARGET (Ingress traffic)
 		if pol.IsTarget {
 			buf.WriteString(fmt.Sprintf("# As Target (Ingress from %s %d)\n", pol.SourceType, pol.SourceID))
-			var cidrs []string
-			var err error
-			if pol.SourceType == "special" {
-				cidrs, err = c.resolver.ResolveSpecialTarget(pol.SourceID, ipAddress)
-			} else {
-				cidrs, err = c.resolver.ResolveEntity(ctx, pol.SourceType, pol.SourceID)
+
+			// Check if we should use ipset for this source
+			useIpset := hasIPSet && pol.SourceType == "group"
+			var ipsetName string
+			if useIpset {
+				ipsetName = groupIDToIpsetName[pol.SourceID]
+				useIpset = ipsetName != ""
 			}
-			if err != nil {
-				return "", fmt.Errorf("resolve source for policy %s: %w", pol.Name, err)
-			}
-			for _, cidr := range cidrs {
+
+			if useIpset {
+				// Use ipset-based rules (single rule per port clause)
 				if serviceName == "Multicast" {
 					c.writeMulticastRule(&buf, pol.Action, pol.DockerOnly, hasDocker)
-					continue
-				}
-				for _, pc := range portClauses {
-					// For INPUT (ingress): use destination ports as --dport, source ports as --sport
-					inputPortMatch := pc.PortMatch
-					if pc.SrcPortMatch != "" {
-						inputPortMatch = pc.SrcPortMatch + " " + inputPortMatch
-					}
-					// For OUTPUT (egress): swap - destination ports become --sport, source ports become --dport
-					outputPortMatch := invertPortMatch(pc.PortMatch, pc.SrcPortMatch)
+				} else {
+					for _, pc := range portClauses {
+						inputPortMatch := pc.PortMatch
+						if pc.SrcPortMatch != "" {
+							inputPortMatch = pc.SrcPortMatch + " " + inputPortMatch
+						}
+						outputPortMatch := invertPortMatch(pc.PortMatch, pc.SrcPortMatch)
+						ipsetMatch := fmt.Sprintf("-m set --match-set %s src", ipsetName)
 
-					switch pol.Action {
-					case "ACCEPT":
-						if !pol.DockerOnly {
-							buf.WriteString(fmt.Sprintf("-A INPUT -s %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", cidr, pc.Protocol, inputPortMatch))
-							buf.WriteString(fmt.Sprintf("-A OUTPUT -d %s -p %s %s -m conntrack --ctstate ESTABLISHED -j ACCEPT\n", cidr, pc.Protocol, outputPortMatch))
+						switch pol.Action {
+						case "ACCEPT":
+							if !pol.DockerOnly {
+								buf.WriteString(fmt.Sprintf("-A INPUT -p %s %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", pc.Protocol, ipsetMatch, inputPortMatch))
+								buf.WriteString(fmt.Sprintf("-A OUTPUT -p %s %s %s -m conntrack --ctstate ESTABLISHED -j ACCEPT\n", pc.Protocol, ipsetMatch, outputPortMatch))
+							}
+							if hasDocker {
+								buf.WriteString(fmt.Sprintf("-A DOCKER-USER -p %s %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", pc.Protocol, ipsetMatch, inputPortMatch))
+							}
+						case "DROP":
+							if !pol.DockerOnly {
+								buf.WriteString(fmt.Sprintf("-A INPUT -p %s %s %s -j DROP\n", pc.Protocol, ipsetMatch, inputPortMatch))
+							}
+							if hasDocker {
+								buf.WriteString(fmt.Sprintf("-A DOCKER-USER -p %s %s %s -j DROP\n", pc.Protocol, ipsetMatch, inputPortMatch))
+							}
+						case "LOG_DROP":
+							if !pol.DockerOnly {
+								buf.WriteString(fmt.Sprintf("-A INPUT -p %s %s %s -j LOG --log-prefix \"[RUNIC-DROP] \" --log-level 4\n", pc.Protocol, ipsetMatch, inputPortMatch))
+								buf.WriteString(fmt.Sprintf("-A INPUT -p %s %s %s -j DROP\n", pc.Protocol, ipsetMatch, inputPortMatch))
+							}
+							if hasDocker {
+								buf.WriteString(fmt.Sprintf("-A DOCKER-USER -p %s %s %s -j LOG --log-prefix \"[RUNIC-DROP] \" --log-level 4\n", pc.Protocol, ipsetMatch, inputPortMatch))
+								buf.WriteString(fmt.Sprintf("-A DOCKER-USER -p %s %s %s -j DROP\n", pc.Protocol, ipsetMatch, inputPortMatch))
+							}
 						}
-						if hasDocker {
-							buf.WriteString(fmt.Sprintf("-A DOCKER-USER -s %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", cidr, pc.Protocol, inputPortMatch))
+					}
+				}
+			} else {
+				// Use individual rules (fallback for non-group or non-ipset peers)
+				var cidrs []string
+				var err error
+				if pol.SourceType == "special" {
+					cidrs, err = c.resolver.ResolveSpecialTarget(pol.SourceID, ipAddress)
+				} else {
+					cidrs, err = c.resolver.ResolveEntity(ctx, pol.SourceType, pol.SourceID)
+				}
+				if err != nil {
+					return "", fmt.Errorf("resolve source for policy %s: %w", pol.Name, err)
+				}
+				for _, cidr := range cidrs {
+					if serviceName == "Multicast" {
+						c.writeMulticastRule(&buf, pol.Action, pol.DockerOnly, hasDocker)
+						continue
+					}
+					for _, pc := range portClauses {
+						// For INPUT (ingress): use destination ports as --dport, source ports as --sport
+						inputPortMatch := pc.PortMatch
+						if pc.SrcPortMatch != "" {
+							inputPortMatch = pc.SrcPortMatch + " " + inputPortMatch
 						}
-					case "DROP":
-						if !pol.DockerOnly {
-							buf.WriteString(fmt.Sprintf("-A INPUT -s %s -p %s %s -j DROP\n", cidr, pc.Protocol, inputPortMatch))
-						}
-						if hasDocker {
-							buf.WriteString(fmt.Sprintf("-A DOCKER-USER -s %s -p %s %s -j DROP\n", cidr, pc.Protocol, inputPortMatch))
-						}
-					case "LOG_DROP":
-						if !pol.DockerOnly {
-							buf.WriteString(fmt.Sprintf("-A INPUT -s %s -p %s %s -j LOG --log-prefix \"[RUNIC-DROP] \" --log-level 4\n", cidr, pc.Protocol, inputPortMatch))
-							buf.WriteString(fmt.Sprintf("-A INPUT -s %s -p %s %s -j DROP\n", cidr, pc.Protocol, inputPortMatch))
-						}
-						if hasDocker {
-							buf.WriteString(fmt.Sprintf("-A DOCKER-USER -s %s -p %s %s -j LOG --log-prefix \"[RUNIC-DROP] \" --log-level 4\n", cidr, pc.Protocol, inputPortMatch))
-							buf.WriteString(fmt.Sprintf("-A DOCKER-USER -s %s -p %s %s -j DROP\n", cidr, pc.Protocol, inputPortMatch))
+						// For OUTPUT (egress): swap - destination ports become --sport, source ports become --dport
+						outputPortMatch := invertPortMatch(pc.PortMatch, pc.SrcPortMatch)
+
+						switch pol.Action {
+						case "ACCEPT":
+							if !pol.DockerOnly {
+								buf.WriteString(fmt.Sprintf("-A INPUT -s %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", cidr, pc.Protocol, inputPortMatch))
+								buf.WriteString(fmt.Sprintf("-A OUTPUT -d %s -p %s %s -m conntrack --ctstate ESTABLISHED -j ACCEPT\n", cidr, pc.Protocol, outputPortMatch))
+							}
+							if hasDocker {
+								buf.WriteString(fmt.Sprintf("-A DOCKER-USER -s %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", cidr, pc.Protocol, inputPortMatch))
+							}
+						case "DROP":
+							if !pol.DockerOnly {
+								buf.WriteString(fmt.Sprintf("-A INPUT -s %s -p %s %s -j DROP\n", cidr, pc.Protocol, inputPortMatch))
+							}
+							if hasDocker {
+								buf.WriteString(fmt.Sprintf("-A DOCKER-USER -s %s -p %s %s -j DROP\n", cidr, pc.Protocol, inputPortMatch))
+							}
+						case "LOG_DROP":
+							if !pol.DockerOnly {
+								buf.WriteString(fmt.Sprintf("-A INPUT -s %s -p %s %s -j LOG --log-prefix \"[RUNIC-DROP] \" --log-level 4\n", cidr, pc.Protocol, inputPortMatch))
+								buf.WriteString(fmt.Sprintf("-A INPUT -s %s -p %s %s -j DROP\n", cidr, pc.Protocol, inputPortMatch))
+							}
+							if hasDocker {
+								buf.WriteString(fmt.Sprintf("-A DOCKER-USER -s %s -p %s %s -j LOG --log-prefix \"[RUNIC-DROP] \" --log-level 4\n", cidr, pc.Protocol, inputPortMatch))
+								buf.WriteString(fmt.Sprintf("-A DOCKER-USER -s %s -p %s %s -j DROP\n", cidr, pc.Protocol, inputPortMatch))
+							}
 						}
 					}
 				}
@@ -227,39 +357,75 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 		// Process as SOURCE (Egress traffic)
 		if pol.IsSource {
 			buf.WriteString(fmt.Sprintf("# As Source (Egress to %s %d)\n", pol.TargetType, pol.TargetID))
-			var cidrs []string
-			var err error
-			if pol.TargetType == "special" {
-				cidrs, err = c.resolver.ResolveSpecialTarget(pol.TargetID, ipAddress)
-			} else {
-				cidrs, err = c.resolver.ResolveEntity(ctx, pol.TargetType, pol.TargetID)
+
+			// Check if we should use ipset for this target
+			useIpset := hasIPSet && pol.TargetType == "group"
+			var ipsetName string
+			if useIpset {
+				ipsetName = groupIDToIpsetName[pol.TargetID]
+				useIpset = ipsetName != ""
 			}
-			if err != nil {
-				return "", fmt.Errorf("resolve target for policy %s: %w", pol.Name, err)
-			}
-			for _, cidr := range cidrs {
+
+			if useIpset {
+				// Use ipset-based rules (single rule per port clause)
 				if serviceName == "Multicast" {
-					// Source for multicast doesn't need strict port tracking, just let it output to multicast range 224.0.0.0/4
 					if pol.Action == "ACCEPT" {
 						buf.WriteString("-A OUTPUT -d 224.0.0.0/4 -m pkttype --pkt-type multicast -j ACCEPT\n")
 					}
-					continue
-				}
-				for _, pc := range portClauses {
-					// For OUTPUT (egress from source): swap ports - destination becomes --sport, source becomes --dport
-					outputPortMatch := invertPortMatch(pc.PortMatch, pc.SrcPortMatch)
-					// For INPUT (response): reverse of output - use swapped ports
-					inputPortMatch := invertPortMatch(pc.SrcPortMatch, pc.PortMatch)
+				} else {
+					for _, pc := range portClauses {
+						outputPortMatch := invertPortMatch(pc.PortMatch, pc.SrcPortMatch)
+						inputPortMatch := invertPortMatch(pc.SrcPortMatch, pc.PortMatch)
+						ipsetMatch := fmt.Sprintf("-m set --match-set %s src", ipsetName)
 
-					switch pol.Action {
-					case "ACCEPT":
-						buf.WriteString(fmt.Sprintf("-A OUTPUT -d %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", cidr, pc.Protocol, outputPortMatch))
-						buf.WriteString(fmt.Sprintf("-A INPUT -s %s -p %s %s -m conntrack --ctstate ESTABLISHED -j ACCEPT\n", cidr, pc.Protocol, inputPortMatch))
-					case "DROP":
-						buf.WriteString(fmt.Sprintf("-A OUTPUT -d %s -p %s %s -j DROP\n", cidr, pc.Protocol, outputPortMatch))
-					case "LOG_DROP":
-						buf.WriteString(fmt.Sprintf("-A OUTPUT -d %s -p %s %s -j LOG --log-prefix \"[RUNIC-DROP] \" --log-level 4\n", cidr, pc.Protocol, outputPortMatch))
-						buf.WriteString(fmt.Sprintf("-A OUTPUT -d %s -p %s %s -j DROP\n", cidr, pc.Protocol, outputPortMatch))
+						switch pol.Action {
+						case "ACCEPT":
+							buf.WriteString(fmt.Sprintf("-A OUTPUT -p %s %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", pc.Protocol, ipsetMatch, outputPortMatch))
+							buf.WriteString(fmt.Sprintf("-A INPUT -p %s %s %s -m conntrack --ctstate ESTABLISHED -j ACCEPT\n", pc.Protocol, ipsetMatch, inputPortMatch))
+						case "DROP":
+							buf.WriteString(fmt.Sprintf("-A OUTPUT -p %s %s %s -j DROP\n", pc.Protocol, ipsetMatch, outputPortMatch))
+						case "LOG_DROP":
+							buf.WriteString(fmt.Sprintf("-A OUTPUT -p %s %s %s -j LOG --log-prefix \"[RUNIC-DROP] \" --log-level 4\n", pc.Protocol, ipsetMatch, outputPortMatch))
+							buf.WriteString(fmt.Sprintf("-A OUTPUT -p %s %s %s -j DROP\n", pc.Protocol, ipsetMatch, outputPortMatch))
+						}
+					}
+				}
+			} else {
+				// Use individual rules (fallback for non-group or non-ipset peers)
+				var cidrs []string
+				var err error
+				if pol.TargetType == "special" {
+					cidrs, err = c.resolver.ResolveSpecialTarget(pol.TargetID, ipAddress)
+				} else {
+					cidrs, err = c.resolver.ResolveEntity(ctx, pol.TargetType, pol.TargetID)
+				}
+				if err != nil {
+					return "", fmt.Errorf("resolve target for policy %s: %w", pol.Name, err)
+				}
+				for _, cidr := range cidrs {
+					if serviceName == "Multicast" {
+						// Source for multicast doesn't need strict port tracking, just let it output to multicast range 224.0.0.0/4
+						if pol.Action == "ACCEPT" {
+							buf.WriteString("-A OUTPUT -d 224.0.0.0/4 -m pkttype --pkt-type multicast -j ACCEPT\n")
+						}
+						continue
+					}
+					for _, pc := range portClauses {
+						// For OUTPUT (egress from source): swap ports - destination becomes --sport, source becomes --dport
+						outputPortMatch := invertPortMatch(pc.PortMatch, pc.SrcPortMatch)
+						// For INPUT (response): reverse of output - use swapped ports
+						inputPortMatch := invertPortMatch(pc.SrcPortMatch, pc.PortMatch)
+
+						switch pol.Action {
+						case "ACCEPT":
+							buf.WriteString(fmt.Sprintf("-A OUTPUT -d %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", cidr, pc.Protocol, outputPortMatch))
+							buf.WriteString(fmt.Sprintf("-A INPUT -s %s -p %s %s -m conntrack --ctstate ESTABLISHED -j ACCEPT\n", cidr, pc.Protocol, inputPortMatch))
+						case "DROP":
+							buf.WriteString(fmt.Sprintf("-A OUTPUT -d %s -p %s %s -j DROP\n", cidr, pc.Protocol, outputPortMatch))
+						case "LOG_DROP":
+							buf.WriteString(fmt.Sprintf("-A OUTPUT -d %s -p %s %s -j LOG --log-prefix \"[RUNIC-DROP] \" --log-level 4\n", cidr, pc.Protocol, outputPortMatch))
+							buf.WriteString(fmt.Sprintf("-A OUTPUT -d %s -p %s %s -j DROP\n", cidr, pc.Protocol, outputPortMatch))
+						}
 					}
 				}
 			}
@@ -518,7 +684,10 @@ func (c *Compiler) GetAffectedPeersByPolicy(ctx context.Context, policyID int) (
 	if srcType == "peer" {
 		peers[srcID] = true
 	} else if srcType == "group" {
-		rows, _ := c.db.QueryContext(ctx, "SELECT peer_id FROM group_members WHERE group_id = ?", srcID)
+		rows, err := c.db.QueryContext(ctx, "SELECT peer_id FROM group_members WHERE group_id = ?", srcID)
+		if err != nil {
+			return nil, fmt.Errorf("query source group members for policy %d: %w", policyID, err)
+		}
 		if rows != nil {
 			defer rows.Close()
 			for rows.Next() {
@@ -532,7 +701,10 @@ func (c *Compiler) GetAffectedPeersByPolicy(ctx context.Context, policyID int) (
 	if tgtType == "peer" {
 		peers[tgtID] = true
 	} else if tgtType == "group" {
-		rows, _ := c.db.QueryContext(ctx, "SELECT peer_id FROM group_members WHERE group_id = ?", tgtID)
+		rows, err := c.db.QueryContext(ctx, "SELECT peer_id FROM group_members WHERE group_id = ?", tgtID)
+		if err != nil {
+			return nil, fmt.Errorf("query target group members for policy %d: %w", policyID, err)
+		}
 		if rows != nil {
 			defer rows.Close()
 			for rows.Next() {

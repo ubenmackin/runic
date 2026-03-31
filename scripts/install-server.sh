@@ -418,8 +418,9 @@ load_or_create_secrets() {
             return $?
         fi
         
-        # Source the file to extract secrets (safe after validation)
-        . "$env_file" || { log ERROR "Failed to source $env_file"; exit 1; }
+        # Parse .env file safely instead of sourcing (prevents shell injection)
+        RUNIC_JWT_SECRET=$(grep -E "^RUNIC_JWT_SECRET=" "$env_file" | cut -d'=' -f2-)
+        RUNIC_AGENT_JWT_SECRET=$(grep -E "^RUNIC_AGENT_JWT_SECRET=" "$env_file" | cut -d'=' -f2-)
         
         # Validate all secrets are present and valid
         if ! validate_secret "RUNIC_JWT_SECRET" "$RUNIC_JWT_SECRET"; then
@@ -446,7 +447,9 @@ load_or_create_secrets() {
         # Check if migration created the .env file
         if [ -f "$env_file" ]; then
             log INFO "Migration successful, loading secrets from migrated file..."
-            . "$env_file" || { log ERROR "Failed to source migrated $env_file"; exit 1; }
+            # Parse .env file safely instead of sourcing (prevents shell injection)
+            RUNIC_JWT_SECRET=$(grep -E "^RUNIC_JWT_SECRET=" "$env_file" | cut -d'=' -f2-)
+            RUNIC_AGENT_JWT_SECRET=$(grep -E "^RUNIC_AGENT_JWT_SECRET=" "$env_file" | cut -d'=' -f2-)
             
             # Validate migrated secrets
             if ! validate_secret "RUNIC_JWT_SECRET" "$RUNIC_JWT_SECRET"; then
@@ -682,10 +685,10 @@ install_dependencies() {
 		curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
 		apt-get install -y -qq nodejs >> "$LOG_FILE" 2>&1
 
-	# Install Go 1.25+ from official source
-	# Remove Ubuntu system golang-go package to avoid PATH conflicts
-	apt-get remove -y golang-go >> "$LOG_FILE" 2>&1
-	GO_VERSION="1.25.0"
+		# Install Go 1.25+ from official source
+		# Remove Ubuntu system golang-go package to avoid PATH conflicts
+		apt-get remove -y golang-go >> "$LOG_FILE" 2>&1
+		GO_VERSION="1.25.0"
 		GO_TAR="go${GO_VERSION}.linux-amd64.tar.gz"
 		GO_URL="https://go.dev/dl/${GO_TAR}"
 		log INFO "Installing Go ${GO_VERSION} from official source..."
@@ -804,17 +807,17 @@ setup_directories() {
         exit 1
     fi
     
-if ! mkdir -p "$INSTALL_DIR/dist"; then
-	log ERROR "Failed to create dist directory: $INSTALL_DIR/dist"
-	exit 1
-fi
+    if ! mkdir -p "$INSTALL_DIR/dist"; then
+        log ERROR "Failed to create dist directory: $INSTALL_DIR/dist"
+        exit 1
+    fi
 
-if ! mkdir -p "$INSTALL_DIR/downloads"; then
-	log ERROR "Failed to create downloads directory: $INSTALL_DIR/downloads"
-	exit 1
-fi
+    if ! mkdir -p "$INSTALL_DIR/downloads"; then
+        log ERROR "Failed to create downloads directory: $INSTALL_DIR/downloads"
+        exit 1
+    fi
 
-log SUCCESS "Directories created at $INSTALL_DIR"
+    log SUCCESS "Directories created at $INSTALL_DIR"
 }
 
 clone_repository() {
@@ -826,15 +829,14 @@ clone_repository() {
     # Check if repo already exists
     if [ -d "$SOURCE_DIR/.git" ]; then
         log INFO "Repository already exists, updating..."
-    # Fix git ownership error by marking the directory as safe
-    git config --global --add safe.directory "$SOURCE_DIR" 2>/dev/null || true
-    
+        # Fix git ownership error by marking the directory as safe
+        git config --global --add safe.directory "$SOURCE_DIR" 2>/dev/null || true
 
-cd "$SOURCE_DIR"
-# Fetch latest changes and hard reset to origin branch
-# This avoids divergent branch issues with git pull
-git fetch origin "$REPO_BRANCH" >> "$LOG_FILE" 2>&1 || { log ERROR "Failed to fetch from origin"; exit 1; }
-git reset --hard "origin/$REPO_BRANCH" >> "$LOG_FILE" 2>&1 || { log ERROR "Failed to reset to origin/$REPO_BRANCH"; exit 1; }
+        cd "$SOURCE_DIR"
+        # Fetch latest changes and hard reset to origin branch
+        # This avoids divergent branch issues with git pull
+        git fetch origin "$REPO_BRANCH" >> "$LOG_FILE" 2>&1 || { log ERROR "Failed to fetch from origin"; exit 1; }
+        git reset --hard "origin/$REPO_BRANCH" >> "$LOG_FILE" 2>&1 || { log ERROR "Failed to reset to origin/$REPO_BRANCH"; exit 1; }
     else
         log INFO "Cloning repository from $REPO_URL..."
         git clone --depth 1 --branch "$REPO_BRANCH" "$REPO_URL" "$SOURCE_DIR" >> "$LOG_FILE" 2>&1
@@ -881,36 +883,36 @@ build_binary() {
 		exit 1
 	fi
 
-# Build the web frontend (always rebuild to pick up changes)
-log INFO "Building web frontend..."
-# Check if npm is installed
-if ! command -v npm &> /dev/null; then
-	log ERROR "npm is not installed. Cannot build web frontend."
-	exit 1
-fi
-cd web || { log ERROR "web directory not found"; exit 1; }
-npm install || { log ERROR "npm install failed"; exit 1; }
-npm run build || { log ERROR "npm run build failed"; exit 1; }
-cd .. || exit 1
-log SUCCESS "Web frontend built successfully"
+	# Build the web frontend (always rebuild to pick up changes)
+	log INFO "Building web frontend..."
+	# Check if npm is installed
+	if ! command -v npm &> /dev/null; then
+		log ERROR "npm is not installed. Cannot build web frontend."
+		exit 1
+	fi
+	cd web || { log ERROR "web directory not found"; exit 1; }
+	npm install || { log ERROR "npm install failed"; exit 1; }
+	npm run build || { log ERROR "npm run build failed"; exit 1; }
+	cd .. || exit 1
+	log SUCCESS "Web frontend built successfully"
 
-# Version info for build
-VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "dev")
-COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-BUILT_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+	# Version info for build
+	VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "dev")
+	COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+	BUILT_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-# Download Go dependencies
-log INFO "Downloading Go dependencies..."
-go mod download >> "$LOG_FILE" 2>&1
+	# Download Go dependencies
+	log INFO "Downloading Go dependencies..."
+	go mod download >> "$LOG_FILE" 2>&1
 
-# Build the server binary
-log INFO "Building runic-server with CGO enabled..."
+	# Build the server binary
+	log INFO "Building runic-server with CGO enabled..."
 
-# Create dist directory in INSTALL_DIR
-mkdir -p "$INSTALL_DIR/dist"
+	# Create dist directory in INSTALL_DIR
+	mkdir -p "$INSTALL_DIR/dist"
 
-# Build with CGO for SQLite support and inject version info via ldflags
-CGO_ENABLED=1 go build -ldflags="-X runic/internal/common/version.Version=$VERSION -X runic/internal/common/version.Commit=$COMMIT -X runic/internal/common/version.BuiltAt=$BUILT_AT" -buildvcs=false -o "$INSTALL_DIR/dist/$BINARY_NAME" ./cmd/runic-server >> "$LOG_FILE" 2>&1
+	# Build with CGO for SQLite support and inject version info via ldflags
+	CGO_ENABLED=1 go build -ldflags="-X runic/internal/common/version.Version=$VERSION -X runic/internal/common/version.Commit=$COMMIT -X runic/internal/common/version.BuiltAt=$BUILT_AT" -buildvcs=false -o "$INSTALL_DIR/dist/$BINARY_NAME" ./cmd/runic-server >> "$LOG_FILE" 2>&1
 
     if [ $? -ne 0 ]; then
         log ERROR "Build failed. Check $LOG_FILE for details."
@@ -1355,11 +1357,11 @@ main() {
     # Clone repository
     clone_repository
     
-# Build binary
-if [ "$SKIP_BUILD" = false ]; then
-	build_binary
-	build_agent_binaries
-fi
+    # Build binary
+    if [ "$SKIP_BUILD" = false ]; then
+        build_binary
+        build_agent_binaries
+    fi
     
     # Create system user
     create_system_user

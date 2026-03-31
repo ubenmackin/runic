@@ -62,6 +62,14 @@ func ApplyBundle(ctx context.Context, bundle models.BundleResponse, hmacKey, con
 		return fmt.Errorf("close temp file: %w", err)
 	}
 
+	// 5b. Apply ipset definitions if present (before iptables-restore)
+	if strings.Contains(bundle.Rules, "# --- Ipset Definitions ---") {
+		if err := applyIpsets(ctx, bundle.Rules); err != nil {
+			revertCancel()
+			return fmt.Errorf("ipset apply failed: %w", err)
+		}
+	}
+
 	// 6. Apply via iptables-restore
 	cmd := exec.CommandContext(ctx, "iptables-restore", "--noflush", tmpPath)
 	output, err := cmd.CombinedOutput()
@@ -261,5 +269,204 @@ func smokeTest(ctx context.Context, controlPlaneURL, token, version string) erro
 		return fmt.Errorf("smoke test returned status %d", resp.StatusCode)
 	}
 
+	return nil
+}
+
+// applyIpsets parses and applies ipset definitions from a bundle.
+// It flushes all existing runic_group_* ipsets, creates new ones, and populates them.
+func applyIpsets(ctx context.Context, rulesContent string) error {
+	// 1. Extract ipset section (between "# --- Ipset Definitions ---" and "*filter")
+	ipsetSection, err := extractIpsetSection(rulesContent)
+	if err != nil {
+		return fmt.Errorf("extract ipset section: %w", err)
+	}
+	if ipsetSection == "" {
+		return nil // No ipset definitions to apply
+	}
+
+	// 2. Parse create and add commands
+	ipsetDefs, err := parseIpsetDefs(ipsetSection)
+	if err != nil {
+		return fmt.Errorf("parse ipset definitions: %w", err)
+	}
+
+	if len(ipsetDefs) == 0 {
+		log.Info("No ipset definitions found in ipset section")
+		return nil
+	}
+
+	log.Info("Applying ipset definitions", "count", len(ipsetDefs))
+
+	// 3. Flush all existing runic_group_* ipsets
+	if err := flushRunicIpsets(ctx); err != nil {
+		return fmt.Errorf("flush runic ipsets: %w", err)
+	}
+
+	// 4. Create new ipsets and add members
+	for _, def := range ipsetDefs {
+		createCmd := fmt.Sprintf("ipset create %s %s family inet", def.Name, def.Type)
+		log.Info("Creating ipset", "name", def.Name, "type", def.Type, "command", createCmd)
+		if err := runIpset(ctx, def.Name, def.Type, "inet"); err != nil {
+			return fmt.Errorf("create ipset %s: %w", def.Name, err)
+		}
+
+		for _, member := range def.Members {
+			addCmd := fmt.Sprintf("ipset add %s %s", def.Name, member)
+			log.Debug("Adding to ipset", "name", def.Name, "member", member, "command", addCmd)
+			if err := addIpsetMember(ctx, def.Name, member); err != nil {
+				return fmt.Errorf("add member %s to ipset %s: %w", member, def.Name, err)
+			}
+		}
+	}
+
+	log.Info("Ipset definitions applied successfully", "count", len(ipsetDefs))
+	return nil
+}
+
+// ipsetDef represents a parsed ipset definition.
+type ipsetDef struct {
+	Name    string
+	Type    string
+	Members []string
+}
+
+// extractIpsetSection extracts the ipset definition section from bundle content.
+// Returns the text between "# --- Ipset Definitions ---" and "*filter".
+func extractIpsetSection(content string) (string, error) {
+	startMarker := "# --- Ipset Definitions ---"
+	startIdx := strings.Index(content, startMarker)
+	if startIdx == -1 {
+		return "", nil // No ipset section
+	}
+
+	// Find the *filter line after the start marker
+	filterIdx := strings.Index(content[startIdx:], "*filter")
+	if filterIdx == -1 {
+		return "", fmt.Errorf("ipset section found but no *filter marker after it")
+	}
+
+	// Extract section between start marker and *filter
+	section := content[startIdx : startIdx+filterIdx]
+	return strings.TrimSpace(section), nil
+}
+
+// parseIpsetDefs parses ipset create and add commands from the ipset section.
+func parseIpsetDefs(section string) ([]ipsetDef, error) {
+	lines := strings.Split(section, "\n")
+	defs := make(map[string]*ipsetDef)
+	var order []string
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+
+		fields := strings.Fields(trimmed)
+		if len(fields) < 2 {
+			continue
+		}
+
+		switch fields[0] {
+		case "create":
+			// Format: create <name> <type> [family inet]
+			if len(fields) < 3 {
+				return nil, fmt.Errorf("malformed create line: %s", trimmed)
+			}
+			name := fields[1]
+			ipsetType := fields[2]
+			defs[name] = &ipsetDef{
+				Name:    name,
+				Type:    ipsetType,
+				Members: []string{},
+			}
+			order = append(order, name)
+
+		case "add":
+			// Format: add <name> <ip/cidr>
+			if len(fields) < 3 {
+				return nil, fmt.Errorf("malformed add line: %s", trimmed)
+			}
+			name := fields[1]
+			member := fields[2]
+			if def, ok := defs[name]; ok {
+				def.Members = append(def.Members, member)
+			} else {
+				return nil, fmt.Errorf("add for unknown ipset %s: %s", name, trimmed)
+			}
+		}
+	}
+
+	// Convert to slice preserving order
+	result := make([]ipsetDef, 0, len(order))
+	for _, name := range order {
+		result = append(result, *defs[name])
+	}
+
+	return result, nil
+}
+
+// flushRunicIpsets destroys all ipsets with names starting with "runic_group_".
+func flushRunicIpsets(ctx context.Context) error {
+	// List all ipsets
+	cmd := exec.CommandContext(ctx, "ipset", "list", "-n")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		// ipset command might fail if no ipsets exist, which is fine
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() != 0 {
+			log.Info("ipset list returned non-zero, possibly no ipsets exist", "output", string(output))
+			return nil
+		}
+		return fmt.Errorf("ipset list: %w", err)
+	}
+
+	names := strings.Split(strings.TrimSpace(string(output)), "\n")
+	flushed := 0
+
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" || !strings.HasPrefix(name, "runic_group_") {
+			continue
+		}
+
+		// Flush the ipset
+		flushCmd := exec.CommandContext(ctx, "ipset", "flush", name)
+		if out, err := flushCmd.CombinedOutput(); err != nil {
+			log.Warn("Failed to flush ipset", "name", name, "output", string(out))
+		}
+
+		// Destroy the ipset
+		destroyCmd := exec.CommandContext(ctx, "ipset", "destroy", name)
+		if out, err := destroyCmd.CombinedOutput(); err != nil {
+			log.Warn("Failed to destroy ipset", "name", name, "output", string(out))
+		}
+
+		flushed++
+	}
+
+	if flushed > 0 {
+		log.Info("Flushed old runic ipsets", "count", flushed)
+	}
+
+	return nil
+}
+
+// runIpset creates a new ipset with the given name, type, and family.
+func runIpset(ctx context.Context, name, ipsetType, family string) error {
+	cmd := exec.CommandContext(ctx, "ipset", "create", name, ipsetType, "family", family)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("ipset create %s %s: %s: %w", name, ipsetType, string(output), err)
+	}
+	return nil
+}
+
+// addIpsetMember adds a member (IP or CIDR) to an ipset.
+func addIpsetMember(ctx context.Context, name, member string) error {
+	cmd := exec.CommandContext(ctx, "ipset", "add", name, member)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("ipset add %s %s: %s: %w", name, member, string(output), err)
+	}
 	return nil
 }
