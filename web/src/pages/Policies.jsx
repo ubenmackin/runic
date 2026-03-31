@@ -614,7 +614,7 @@ const polymorphicOptions = [
 
               <InlineError message={formErrors._general} />
               <div className="flex justify-end gap-3 pt-6">
-                <button type="button" onClick={closeModal} className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-light-neutral bg-gray-100 dark:bg-charcoal-darkest rounded-lg hover:bg-black hover:text-white dark:hover:bg-black transition-colors">Cancel</button>
+                <button type="button" onClick={closeModal} className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-amber-primary bg-white dark:bg-charcoal-dark border border-gray-300 dark:border-gray-border rounded-lg hover:bg-gray-50 dark:hover:bg-charcoal-darkest">Cancel</button>
                 <button type="submit" className="px-4 py-2 text-sm font-medium text-white bg-purple-active hover:bg-purple-active/80 rounded-lg transition-colors">{editPolicy ? 'Save Changes' : 'Create Policy'}</button>
               </div>
             </form>
