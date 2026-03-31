@@ -391,6 +391,45 @@ const handleSourcePortInputKeyDown = (e) => {
  <div className="space-y-4">
  <div className="flex items-center justify-between">
  <div className="flex items-center gap-2">
+    <h1 className="text-2xl font-bold text-gray-900 dark:text-light-neutral">Services</h1>
+          <p className="text-gray-600 dark:text-amber-muted">Define port and protocol bundles to simplify policy creation</p>
+        </div>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={handleManualRefresh}
+            disabled={isManualRefreshing}
+            className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 dark:text-amber-primary bg-white dark:bg-charcoal-dark border border-gray-300 dark:border-gray-border rounded-lg hover:bg-gray-50 dark:hover:bg-charcoal-darkest disabled:opacity-50"
+          >
+            <RefreshCw className={`w-4 h-4 ${isManualRefreshing ? 'animate-spin' : ''}`} />
+            Refresh
+          </button>
+          <button onClick={openAdd} className="flex items-center gap-2 px-4 py-2 bg-purple-active hover:bg-purple-active/80 text-white text-sm font-medium rounded-lg">
+            <Plus className="w-4 h-4" /> New Service
+          </button>
+        </div>
+      </div>
+
+      {/* Search Bar and Rows per page */}
+      <div className="flex items-center justify-between gap-4">
+        <div className="relative flex-1 max-w-md">
+          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
+          <input
+            type="text"
+            placeholder="Search services by name, protocol, ports, or description..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="w-full pl-9 pr-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-dark text-gray-900 dark:text-light-neutral placeholder-gray-400 focus:ring-2 focus:ring-purple-active focus:border-purple-active"
+          />
+          {searchTerm && (
+            <button
+              onClick={() => setSearchTerm('')}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-light-neutral"
+            >
+              ×
+            </button>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
           <span className="text-sm text-gray-500 dark:text-amber-muted">Rows:</span>
           <select
             value={servicesRowsPerPage}

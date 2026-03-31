@@ -408,27 +408,26 @@ export default function SetupKeys() {
             <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
               Key Rotation Successful
             </h3>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-amber-muted mb-1">
-                  New HMAC Key
-                </label>
-                <div className="p-3 bg-gray-100 dark:bg-charcoal-darkest rounded font-mono text-sm text-gray-700 dark:text-amber-primary break-all">
-                  {rotationResult.new_hmac_key}
-                </div>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-amber-muted mb-1">
-                  Rotation Token (provide to agent)
-                </label>
-                <div className="p-3 bg-gray-100 dark:bg-charcoal-darkest rounded font-mono text-sm text-gray-700 dark:text-amber-primary break-all">
-                  {rotationResult.rotation_token}
-                </div>
-              </div>
-              <p className="text-sm text-gray-600 dark:text-amber-muted">
-                The agent will use this token to retrieve the new key. The token expires in 5 minutes.
-              </p>
+        <div className="space-y-4">
+          <div className="flex items-center gap-3 text-green-600 dark:text-green-400">
+            <CheckCircle className="w-6 h-6" />
+            <span className="font-medium">Key rotation initiated successfully</span>
+          </div>
+          <p className="text-sm text-gray-600 dark:text-amber-muted">
+            The agent will automatically detect and apply the new key within 5 minutes. No manual action is required.
+          </p>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-amber-muted mb-1">
+              Rotation Reference ID
+            </label>
+            <div className="p-3 bg-gray-100 dark:bg-charcoal-darkest rounded font-mono text-sm text-gray-700 dark:text-amber-primary break-all">
+              {rotationResult.rotation_token}
             </div>
+          </div>
+          <p className="text-xs text-gray-500 dark:text-amber-muted">
+            The rotation will expire in 5 minutes if not picked up by the agent.
+          </p>
+        </div>
             <div className="mt-6">
               <button
                 onClick={() => setRotationResult(null)}

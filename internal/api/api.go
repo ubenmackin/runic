@@ -174,7 +174,7 @@ func RegisterRoutes(r *mux.Router, a *API, downloadsDir string) {
 	apiRouter.HandleFunc("/agent/test-key", agents.AgentAuthMiddleware(agents.AgentTestKey)).Methods("POST")
 
 	// Agent key rotation (public - authenticated via rotation token)
-	apiRouter.HandleFunc("/agent/check-rotation", agents.AgentCheckRotation).Methods("GET")
+	apiRouter.HandleFunc("/agent/check-rotation", agents.AgentAuthMiddleware(agents.AgentCheckRotation)).Methods("GET")
 	apiRouter.HandleFunc("/agent/rotate-key", peers.AgentRotateKey).Methods("POST")
 	apiRouter.HandleFunc("/agent/confirm-rotation", peers.AgentConfirmRotation).Methods("POST")
 
