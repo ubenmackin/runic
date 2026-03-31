@@ -1,7 +1,7 @@
 const BASE = '/api/v1'
 
-let accessToken = sessionStorage.getItem('runic_access_token')
-let refreshToken = sessionStorage.getItem('runic_refresh_token')
+let accessToken = localStorage.getItem('runic_access_token')
+let refreshToken = localStorage.getItem('runic_refresh_token')
 
 // Auth failure callback - registered by store to avoid circular imports
 let authFailureCallback = null
@@ -17,15 +17,15 @@ let refreshPromise = null
 export function setTokens(access, refresh) {
   accessToken = access
   refreshToken = refresh
-  sessionStorage.setItem('runic_access_token', access)
-  sessionStorage.setItem('runic_refresh_token', refresh)
+  localStorage.setItem('runic_access_token', access)
+  localStorage.setItem('runic_refresh_token', refresh)
 }
 
 export function clearTokens() {
   accessToken = null
   refreshToken = null
-  sessionStorage.removeItem('runic_access_token')
-  sessionStorage.removeItem('runic_refresh_token')
+  localStorage.removeItem('runic_access_token')
+  localStorage.removeItem('runic_refresh_token')
 }
 
 export function getAccessToken() {

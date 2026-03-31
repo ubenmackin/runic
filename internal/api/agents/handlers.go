@@ -258,29 +258,10 @@ func RegisterAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Existing server — re-issue token (agent reinstall scenario)
+	// Existing server — always generate fresh token (handles token expiration)
 	hostID := fmt.Sprintf("host-%s", input.Hostname)
-	if existingToken.Valid && existingToken.String != "" {
-		// Token exists, return it along with existing server info
-		var bundleVersion sql.NullString
-		var existingHMACKey string
-		if err := db.DB.QueryRowContext(ctx, "SELECT bundle_version, hmac_key FROM peers WHERE id = ?", existingID).Scan(&bundleVersion, &existingHMACKey); err != nil {
-			runiclog.Error("Failed to fetch existing peer data", "error", err, "peer_id", existingID)
-			http.Error(w, `{"error": "failed to fetch peer data"}`, http.StatusInternalServerError)
-			return
-		}
 
-		respondJSON(w, http.StatusOK, map[string]interface{}{
-			"host_id":                hostID,
-			"token":                  existingToken.String,
-			"pull_interval_seconds":  30,
-			"current_bundle_version": bundleVersion.String,
-			"hmac_key":               existingHMACKey,
-		})
-		return
-	}
-
-	// Generate new token for reinstall
+	// Always generate fresh token for re-registration
 	newToken, err := generateAgentToken(input.Hostname)
 	if err != nil {
 		runiclog.Error("Failed to generate agent token error", "error", err)

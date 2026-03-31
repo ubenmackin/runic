@@ -15,12 +15,12 @@ function decodeJwt(token) {
 }
 
 function getUsernameFromToken() {
-  const token = sessionStorage.getItem('runic_access_token')
+  const token = localStorage.getItem('runic_access_token')
   return token ? decodeJwt(token) : null
 }
 
 export const useAuthStore = create((set) => ({
-  isAuthenticated: !!sessionStorage.getItem('runic_access_token'),
+  isAuthenticated: !!localStorage.getItem('runic_access_token'),
   username: getUsernameFromToken(),
   login: (access, refresh) => {
     setTokens(access, refresh)

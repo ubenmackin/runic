@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -91,19 +92,24 @@ func ConfirmApply(ctx context.Context, client common.HTTPClient, controlPlaneURL
 }
 
 // ListenSSE maintains a persistent SSE connection to receive push notifications.
-func ListenSSE(ctx context.Context, client common.HTTPClient, controlPlaneURL, hostID, token, version string, onBundleUpdate func(context.Context)) {
+// Returns ErrUnauthorized if a 401 response is received, allowing the caller to trigger re-registration.
+func ListenSSE(ctx context.Context, client common.HTTPClient, controlPlaneURL, hostID, token, version string, onBundleUpdate func(context.Context)) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return ctx.Err()
 		default:
 		}
 
 		if err := connectSSE(ctx, client, controlPlaneURL, hostID, token, version, onBundleUpdate); err != nil {
 			log.Warn("SSE connection lost, reconnecting", "error", err, "delay", "15s")
+			if strings.Contains(err.Error(), "401") {
+				log.Warn("Received 401 on SSE connection, signaling for re-registration")
+				return errors.Join(err, common.ErrUnauthorized)
+			}
 			select {
 			case <-ctx.Done():
-				return
+				return ctx.Err()
 			case <-time.After(constants.SSEReconnectDelay):
 				// Continue to reconnect
 			}

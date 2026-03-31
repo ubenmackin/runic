@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"runic/internal/agent/apply"
@@ -18,6 +20,7 @@ import (
 	"runic/internal/agent/metrics"
 	"runic/internal/agent/rotation"
 	"runic/internal/agent/transport"
+	"runic/internal/common"
 	"runic/internal/common/constants"
 	"runic/internal/common/log"
 	"runic/internal/models"
@@ -35,6 +38,7 @@ type Agent struct {
 	version         string
 	shipper         *transport.Shipper
 	rotationManager *rotation.Manager
+	regMu           sync.Mutex // protects re-registration from concurrent calls
 }
 
 // New creates a new Agent instance.
@@ -263,6 +267,12 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 		case <-ticker.C:
 			if err := a.sendHeartbeat(ctx); err != nil {
 				log.Error("Heartbeat failed", "error", err)
+				if strings.Contains(err.Error(), "401") {
+					log.Warn("Received 401 on heartbeat, triggering re-registration")
+					if regErr := a.safeRegister(ctx); regErr != nil {
+						log.Error("Re-registration failed", "error", regErr)
+					}
+				}
 			}
 		}
 	}
@@ -288,6 +298,12 @@ func (a *Agent) pollLoop(ctx context.Context) {
 		case <-ticker.C:
 			if err := a.pullBundle(ctx); err != nil {
 				log.Error("Bundle poll failed", "error", err)
+				if strings.Contains(err.Error(), "401") {
+					log.Warn("Received 401 on bundle poll, triggering re-registration")
+					if regErr := a.safeRegister(ctx); regErr != nil {
+						log.Error("Re-registration failed", "error", regErr)
+					}
+				}
 			}
 		}
 	}
@@ -324,6 +340,15 @@ func (a *Agent) confirmApply(ctx context.Context, version string) error {
 // register performs initial registration with the control plane.
 func (a *Agent) register(ctx context.Context) error {
 	return identity.Register(ctx, a.httpClient, a.config, a.version, a.saveConfig)
+}
+
+// safeRegister performs re-registration with mutex protection to prevent
+// thundering herd when multiple loops detect 401 errors simultaneously.
+func (a *Agent) safeRegister(ctx context.Context) error {
+	a.regMu.Lock()
+	defer a.regMu.Unlock()
+	log.Info("Attempting re-registration (mutex acquired)")
+	return a.register(ctx)
 }
 
 // isControlPlaneReachable checks if the control plane is reachable via a quick HTTP request.
@@ -395,12 +420,38 @@ func (a *Agent) applyCachedBundle(ctx context.Context) error {
 }
 
 // listenSSE maintains a persistent SSE connection to receive push notifications.
+// It handles 401 Unauthorized responses by triggering re-registration.
 func (a *Agent) listenSSE(ctx context.Context) {
-	transport.ListenSSE(ctx, a.sseClient, a.config.ControlPlaneURL, a.config.HostID, a.config.Token, a.version, func(sseCtx context.Context) {
-		if err := a.pullBundle(sseCtx); err != nil {
-			log.Error("SSE-triggered bundle pull failed", "error", err)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
 		}
-	})
+
+		err := transport.ListenSSE(ctx, a.sseClient, a.config.ControlPlaneURL, a.config.HostID, a.config.Token, a.version, func(sseCtx context.Context) {
+			if pullErr := a.pullBundle(sseCtx); pullErr != nil {
+				log.Error("SSE-triggered bundle pull failed", "error", pullErr)
+			}
+		})
+
+		if err != nil {
+			if errors.Is(err, common.ErrUnauthorized) {
+				log.Warn("Received 401 on SSE connection, triggering re-registration")
+				if regErr := a.safeRegister(ctx); regErr != nil {
+					log.Error("Re-registration failed", "error", regErr)
+				}
+				// After re-registration, continue the loop to reconnect with new token
+				continue
+			}
+			// For other errors (context cancelled, etc.), check if we should continue
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return
+			}
+			// For unexpected errors, log and continue retrying
+			log.Error("SSE listener returned unexpected error, retrying", "error", err)
+		}
+	}
 }
 
 // rotationCheckLoop periodically checks for pending key rotations.
