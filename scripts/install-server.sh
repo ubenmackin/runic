@@ -944,13 +944,17 @@ build_agent_binaries() {
 	mkdir -p "$INSTALL_DIR/downloads"
 
 	# Build for each architecture
-	local arches=("amd64" "arm" "arm64")
+	local arches=("amd64" "arm" "armv6" "arm64")
 	local built_count=0
 
 	for arch in "${arches[@]}"; do
 		log INFO "Building runic-agent for $arch..."
 
-		CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -a -buildvcs=false -o "$INSTALL_DIR/downloads/runic-agent-$arch" ./cmd/runic-agent >> "$LOG_FILE" 2>&1
+		if [ "$arch" = "armv6" ]; then
+			CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=6 go build -a -buildvcs=false -o "$INSTALL_DIR/downloads/runic-agent-armv6" ./cmd/runic-agent >> "$LOG_FILE" 2>&1
+		else
+			CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -a -buildvcs=false -o "$INSTALL_DIR/downloads/runic-agent-$arch" ./cmd/runic-agent >> "$LOG_FILE" 2>&1
+		fi
 
 		if [ $? -ne 0 ]; then
 			log ERROR "Failed to build runic-agent for $arch. Check $LOG_FILE for details."
