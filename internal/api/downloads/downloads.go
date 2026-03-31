@@ -13,6 +13,7 @@ var allowedFiles = map[string]bool{
 	"runic-agent-amd64":   true,
 	"runic-agent-arm":     true,
 	"runic-agent-arm64":   true,
+	"runic-agent-armv6":   true,
 	"runic-agent.service": true,
 }
 
