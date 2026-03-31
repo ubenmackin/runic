@@ -100,6 +100,7 @@ export default function Peers() {
   // Modal ref for focus trap
   const editModalRef = useRef(null)
   const addModalRef = useRef(null)
+  const bundleModalRef = useRef(null)
 
   // Focus trap for edit modal
   useEffect(() => {
@@ -162,6 +163,37 @@ export default function Peers() {
     modal.addEventListener('keydown', handleKeyDown)
     return () => modal.removeEventListener('keydown', handleKeyDown)
   }, [addModalOpen, activeTab])
+
+  // Focus trap for bundle modal
+  useEffect(() => {
+    if (!bundleModalOpen) return
+    const modal = bundleModalRef.current
+    if (!modal) return
+
+    const focusableElements = modal.querySelectorAll(
+      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+    )
+    const firstElement = focusableElements[0]
+    const lastElement = focusableElements[focusableElements.length - 1]
+
+    // Focus first element on open
+    firstElement?.focus()
+
+    const handleKeyDown = (e) => {
+      if (e.key === 'Tab') {
+        if (e.shiftKey && document.activeElement === firstElement) {
+          e.preventDefault()
+          lastElement?.focus()
+        } else if (!e.shiftKey && document.activeElement === lastElement) {
+          e.preventDefault()
+          firstElement?.focus()
+        }
+      }
+    }
+
+    modal.addEventListener('keydown', handleKeyDown)
+    return () => modal.removeEventListener('keydown', handleKeyDown)
+  }, [bundleModalOpen])
 
   // Sorting state (persisted per-user)
   const { sortConfig, handleSort } = useTableSort('peers', { key: 'hostname', direction: 'asc' })
@@ -283,6 +315,8 @@ export default function Peers() {
             return peer.status === 'offline' && !peer.is_manual
           case 'manual':
             return peer.is_manual === true
+          case 'agent':
+            return !peer.is_manual
           default:
             return true
         }
@@ -465,6 +499,7 @@ export default function Peers() {
           { value: 'online', label: 'Online' },
           { value: 'offline', label: 'Offline' },
           { value: 'manual', label: 'Manual' },
+          { value: 'agent', label: 'Agent' },
         ].map(opt => (
           <button
             key={opt.value}
@@ -723,7 +758,7 @@ export default function Peers() {
       {/* Rule Bundle Modal */}
       {bundleModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" tabIndex="-1" onKeyDown={(e) => { if (e.key === 'Escape') { setBundleModalOpen(false) } }}>
-          <div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-xl w-full max-w-4xl mx-4 max-h-[90vh] flex flex-col">
+          <div ref={bundleModalRef} className="bg-white dark:bg-charcoal-dark rounded-xl shadow-xl w-full max-w-4xl mx-4 max-h-[90vh] flex flex-col">
             <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-border flex items-center justify-between shrink-0">
               <div className="flex items-center gap-2">
                 <FileCode className="w-5 h-5 text-purple-active" />
