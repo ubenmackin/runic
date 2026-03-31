@@ -71,6 +71,7 @@ CREATE TABLE IF NOT EXISTS policies (
 	priority INTEGER NOT NULL DEFAULT 100,
 	enabled BOOLEAN NOT NULL DEFAULT 1,
 	docker_only BOOLEAN NOT NULL DEFAULT 0,
+	direction TEXT NOT NULL DEFAULT 'both' CHECK(direction IN ('both', 'forward', 'backward')),
 	created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 	updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 	FOREIGN KEY(service_id) REFERENCES services(id)

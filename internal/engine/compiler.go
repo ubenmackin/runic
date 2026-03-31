@@ -38,7 +38,7 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 	}
 	// 2. Load enabled policies where peer is either target or source, ordered by priority ASC
 	rows, err := c.db.QueryContext(ctx,
-		`SELECT DISTINCT p.id, p.name, p.source_id, p.source_type, p.service_id, p.target_id, p.target_type, p.action, p.priority, p.docker_only,
+		`SELECT DISTINCT p.id, p.name, p.source_id, p.source_type, p.service_id, p.target_id, p.target_type, p.action, p.priority, p.docker_only, COALESCE(p.direction, 'both'),
 		CASE WHEN p.target_type = 'peer' AND p.target_id = ? THEN 1
 		     WHEN p.target_type = 'group' AND EXISTS (SELECT 1 FROM group_members WHERE group_id = p.target_id AND peer_id = ?) THEN 1
 		     WHEN p.target_type = 'special' AND p.source_type = 'group' AND EXISTS (SELECT 1 FROM group_members WHERE group_id = p.source_id AND peer_id = ?) THEN 1
@@ -78,6 +78,7 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 		Action     string
 		Priority   int
 		DockerOnly bool
+		Direction  string
 		IsTarget   bool
 		IsSource   bool
 	}
@@ -86,7 +87,7 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 	for rows.Next() {
 		var p policyInfo
 		var isTargetInt, isSourceInt int
-		if err := rows.Scan(&p.ID, &p.Name, &p.SourceID, &p.SourceType, &p.ServiceID, &p.TargetID, &p.TargetType, &p.Action, &p.Priority, &p.DockerOnly, &isTargetInt, &isSourceInt); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.SourceID, &p.SourceType, &p.ServiceID, &p.TargetID, &p.TargetType, &p.Action, &p.Priority, &p.DockerOnly, &p.Direction, &isTargetInt, &isSourceInt); err != nil {
 			return "", fmt.Errorf("scan policy: %w", err)
 		}
 		p.IsTarget = isTargetInt == 1
@@ -245,7 +246,8 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 		buf.WriteString(fmt.Sprintf("# --- Policy: %s ---\n", pol.Name))
 
 		// Process as TARGET (Ingress traffic)
-		if pol.IsTarget {
+		// Only emit if direction is 'both' or 'backward' (backward = target receives inbound from source)
+		if pol.IsTarget && (pol.Direction == "both" || pol.Direction == "backward") {
 			buf.WriteString(fmt.Sprintf("# As Target (Ingress from %s %d)\n", pol.SourceType, pol.SourceID))
 
 			// Check if we should use ipset for this source
@@ -355,7 +357,8 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 		}
 
 		// Process as SOURCE (Egress traffic)
-		if pol.IsSource {
+		// Only emit if direction is 'both' or 'forward' (forward = source sends outbound to target)
+		if pol.IsSource && (pol.Direction == "both" || pol.Direction == "forward") {
 			buf.WriteString(fmt.Sprintf("# As Source (Egress to %s %d)\n", pol.TargetType, pol.TargetID))
 
 			// Check if we should use ipset for this target
@@ -491,7 +494,7 @@ func (c *Compiler) writeMulticastRule(buf *strings.Builder, action string, docke
 
 // PreviewCompile generates a preview of iptables rules for a specific policy without storing them.
 // This is used by the API preview endpoint to show users what rules would be generated.
-func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sourceType string, targetID int, targetType string, serviceID int) ([]string, error) {
+func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sourceType string, targetID int, targetType string, serviceID int, direction string) ([]string, error) {
 	// Load peer info
 	var hostname, ipAddress string
 	var hasDocker bool
@@ -500,6 +503,11 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 	).Scan(&hostname, &ipAddress, &hasDocker)
 	if err != nil {
 		return nil, fmt.Errorf("load peer %d: %w", peerID, err)
+	}
+
+	// Default direction
+	if direction == "" {
+		direction = "both"
 	}
 
 	var buf strings.Builder
@@ -519,7 +527,7 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 		isSource = c.isAdminPeerInGroup(ctx, peerID, sourceID)
 	}
 
-	buf.WriteString(fmt.Sprintf("# --- Preview Policy --- (Target=%v, Source=%v)\n", isTarget, isSource))
+	buf.WriteString(fmt.Sprintf("# --- Preview Policy --- (Target=%v, Source=%v, Direction=%s)\n", isTarget, isSource, direction))
 
 	var serviceName, ports, sourcePorts, protocol string
 	err = c.db.QueryRowContext(ctx, "SELECT name, ports, source_ports, protocol FROM services WHERE id = ?", serviceID).Scan(&serviceName, &ports, &sourcePorts, &protocol)
@@ -535,7 +543,8 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 		}
 	}
 
-	if isTarget {
+	// Only emit target (ingress) rules if direction is 'both' or 'backward'
+	if isTarget && (direction == "both" || direction == "backward") {
 		var cidrs []string
 		var err error
 		if sourceType == "special" {
@@ -564,7 +573,8 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 		}
 	}
 
-	if isSource {
+	// Only emit source (egress) rules if direction is 'both' or 'forward'
+	if isSource && (direction == "both" || direction == "forward") {
 		var cidrs []string
 		var err error
 		if targetType == "special" {

@@ -3,7 +3,7 @@ import { useFilterPersistence } from '../hooks/useFilterPersistence'
 import { useTableSort } from '../hooks/useTableSort'
 import { usePagination } from '../hooks/usePagination'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Pencil, Trash2, Eye, RefreshCw, X, ChevronDown, ChevronUp, Info, Search, ChevronLeft, ChevronRight } from 'lucide-react'
+import { Plus, Pencil, Trash2, Eye, RefreshCw, X, ChevronDown, ChevronUp, Info, Search, ChevronLeft, ChevronRight, ArrowLeft, ArrowRight } from 'lucide-react'
 import { api, QUERY_KEYS } from '../api/client'
 import { useCrudModal } from '../hooks/useCrudModal'
 import { useToastContext } from '../hooks/ToastContext'
@@ -37,7 +37,8 @@ export default function Policies() {
     action: 'ACCEPT', 
     priority: 100, 
     enabled: true, 
-    docker_only: false 
+    docker_only: false,
+    direction: 'both'
   })
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [filterPeer, setFilterPeer] = useState(null)
@@ -205,7 +206,8 @@ const polymorphicOptions = [
         source_type: formData.source_type,
         service_id: formData.service_id, 
         target_id: formData.target_id,
-        target_type: formData.target_type
+        target_type: formData.target_type,
+        direction: formData.direction
       })
       setPreview(data)
       setFormErrors({})
@@ -454,6 +456,9 @@ const polymorphicOptions = [
                     Action
                   </th>
                   <th className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted">
+                    Direction
+                  </th>
+                  <th className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted">
                     Actions
                   </th>
                 </tr>
@@ -483,6 +488,20 @@ const polymorphicOptions = [
                       <span className={`px-2 py-0.5 rounded text-xs font-medium ${p.action === 'ACCEPT' ? 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300' : 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300'}`}>
                         {p.action.toUpperCase()}
                       </span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-1">
+                        {(p.direction === 'both' || p.direction === 'forward') && (
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400" title="Forward (Source → Target)">
+                            <ArrowRight className="w-3 h-3" />
+                          </span>
+                        )}
+                        {(p.direction === 'both' || p.direction === 'backward') && (
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400" title="Backward (Target → Source)">
+                            <ArrowLeft className="w-3 h-3" />
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
@@ -556,31 +575,74 @@ const polymorphicOptions = [
                 <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Description</label>
                 <textarea value={formData.description} onChange={e => setFormData(d => ({ ...d, description: e.target.value }))} rows={2} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-active" />
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto_1fr] gap-4 items-end">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Source</label>
                   <SearchableSelect options={polymorphicOptions} value={formData.source_id} category={formData.source_type} onChange={(v, type) => setFormData(d => ({ ...d, source_id: v, source_type: type }))} placeholder="Select group or peer" />
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Service</label>
-                  <SearchableSelect options={serviceOptions} value={formData.service_id} onChange={v => setFormData(d => ({ ...d, service_id: v }))} placeholder="Select service" />
+                <div className="flex flex-col items-center gap-1 pb-0.5">
+                  <label className="block text-xs font-medium text-gray-500 dark:text-amber-muted mb-1">Direction</label>
+                  <div className="flex flex-col gap-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (formData.direction === 'forward') return // Can't disable both
+                        setFormData(d => ({
+                          ...d,
+                          direction: d.direction === 'both' ? 'backward' : (d.direction === 'backward' ? 'both' : 'forward')
+                        }))
+                      }}
+                      className={`flex items-center justify-center w-10 h-7 rounded-full text-xs font-semibold transition-all duration-200 ${
+                        formData.direction === 'both' || formData.direction === 'forward'
+                          ? 'bg-green-500 text-white shadow-sm shadow-green-500/30 hover:bg-green-600'
+                          : 'bg-gray-200 dark:bg-gray-700 text-gray-400 dark:text-gray-500 hover:bg-gray-300 dark:hover:bg-gray-600'
+                      }`}
+                      title="Forward: Source → Target"
+                    >
+                      <ArrowRight className="w-4 h-4" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (formData.direction === 'backward') return // Can't disable both
+                        setFormData(d => ({
+                          ...d,
+                          direction: d.direction === 'both' ? 'forward' : (d.direction === 'forward' ? 'both' : 'backward')
+                        }))
+                      }}
+                      className={`flex items-center justify-center w-10 h-7 rounded-full text-xs font-semibold transition-all duration-200 ${
+                        formData.direction === 'both' || formData.direction === 'backward'
+                          ? 'bg-green-500 text-white shadow-sm shadow-green-500/30 hover:bg-green-600'
+                          : 'bg-gray-200 dark:bg-gray-700 text-gray-400 dark:text-gray-500 hover:bg-gray-300 dark:hover:bg-gray-600'
+                      }`}
+                      title="Backward: Target → Source"
+                    >
+                      <ArrowLeft className="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Target</label>
                   <SearchableSelect options={polymorphicOptions} value={formData.target_id} category={formData.target_type} onChange={(v, type) => setFormData(d => ({ ...d, target_id: v, target_type: type }))} placeholder="Select group or peer" />
                 </div>
               </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Action</label>
-                <div className="flex gap-4">
-                  <label className="flex items-center gap-2 cursor-pointer group">
-                    <input type="radio" name="action" value="ACCEPT" checked={formData.action === 'ACCEPT'} onChange={e => setFormData(d => ({ ...d, action: e.target.value }))} className="text-purple-active focus:ring-purple-active bg-white dark:bg-charcoal-dark border-gray-300 dark:border-gray-border" />
-                    <span className="text-sm text-green-700 dark:text-green-400 font-medium group-hover:opacity-80">ACCEPT</span>
-                  </label>
-                  <label className="flex items-center gap-2 cursor-pointer group">
-                    <input type="radio" name="action" value="LOG_DROP" checked={formData.action === 'LOG_DROP'} onChange={e => setFormData(d => ({ ...d, action: e.target.value }))} className="text-purple-active focus:ring-purple-active bg-white dark:bg-charcoal-dark border-gray-300 dark:border-gray-border" />
-                    <span className="text-sm text-red-700 dark:text-red-400 font-medium group-hover:opacity-80">LOG+DROP</span>
-                  </label>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Service</label>
+                  <SearchableSelect options={serviceOptions} value={formData.service_id} onChange={v => setFormData(d => ({ ...d, service_id: v }))} placeholder="Select service" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Action</label>
+                  <div className="flex gap-4 pt-2">
+                    <label className="flex items-center gap-2 cursor-pointer group">
+                      <input type="radio" name="action" value="ACCEPT" checked={formData.action === 'ACCEPT'} onChange={e => setFormData(d => ({ ...d, action: e.target.value }))} className="text-purple-active focus:ring-purple-active bg-white dark:bg-charcoal-dark border-gray-300 dark:border-gray-border" />
+                      <span className="text-sm text-green-700 dark:text-green-400 font-medium group-hover:opacity-80">ACCEPT</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer group">
+                      <input type="radio" name="action" value="LOG_DROP" checked={formData.action === 'LOG_DROP'} onChange={e => setFormData(d => ({ ...d, action: e.target.value }))} className="text-purple-active focus:ring-purple-active bg-white dark:bg-charcoal-dark border-gray-300 dark:border-gray-border" />
+                      <span className="text-sm text-red-700 dark:text-red-400 font-medium group-hover:opacity-80">LOG+DROP</span>
+                    </label>
+                  </div>
                 </div>
               </div>
               <div className="flex items-center gap-3 py-1">

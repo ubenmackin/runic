@@ -1096,9 +1096,152 @@ func TestEdgeCases(t *testing.T) {
 					t.Errorf("unexpected error: %v", err)
 				}
 				if tt.check != nil {
-					tt.check(t, output)
+				tt.check(t, output)
 				}
 			}
 		})
+	}
+}
+
+// insertPolicyWithDirection inserts a test policy with a direction field and returns its ID.
+func insertPolicyWithDirection(t *testing.T, database *sql.DB, name string, groupID, serviceID, peerID int, action string, priority int, enabled bool, direction string) int {
+	t.Helper()
+	enabledInt := 0
+	if enabled {
+		enabledInt = 1
+	}
+	result, err := database.Exec(
+		`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled, direction)
+		VALUES (?, ?, "group", ?, ?, "peer", ?, ?, ?, ?)`,
+		name, groupID, serviceID, peerID, action, priority, enabledInt, direction)
+	if err != nil {
+		t.Fatalf("insert policy with direction: %v", err)
+	}
+	id, _ := result.LastInsertId()
+	return int(id)
+}
+
+func TestForwardOnlyPolicy(t *testing.T) {
+	database := setupTestDB(t)
+	// Setup: jump-server is the SOURCE, target-server is the TARGET
+	jumpServer := insertPeer(t, database, "jump-server", "10.0.0.1", false)
+	targetServer := insertPeer(t, database, "target-server", "10.0.0.2", false)
+	groupID := insertGroup(t, database, "ssh-targets")
+	insertGroupMember(t, database, groupID, targetServer)
+	serviceID := insertService(t, database, "ssh", "22", "tcp")
+
+	// Insert policy: jump-server -> ssh-targets, forward only
+	// Source=jump-server (peer), Target=ssh-targets (group), Direction=forward
+	_, err := database.Exec(
+		`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled, direction)
+		VALUES (?, ?, 'peer', ?, ?, 'group', 'ACCEPT', 100, 1, 'forward')`,
+		"ssh-forward-only", jumpServer, serviceID, groupID)
+	if err != nil {
+		t.Fatalf("insert policy: %v", err)
+	}
+
+	c := NewCompiler(database)
+
+	// Compile for the jump-server (source): should have OUTPUT rules
+	outputJump, err := c.Compile(context.Background(), jumpServer)
+	if err != nil {
+		t.Fatalf("compile jump-server error: %v", err)
+	}
+
+	// Jump server should have OUTPUT rules (it's the source, direction=forward)
+	if !strings.Contains(outputJump, "-A OUTPUT -d 10.0.0.2/32 -p tcp --dport 22") {
+		t.Errorf("expected OUTPUT rule for jump-server, got:\n%s", outputJump)
+	}
+
+	// Jump server should NOT have INPUT rules for this policy (no backward direction)
+	lines := strings.Split(outputJump, "\\n")
+	for _, line := range lines {
+		if strings.Contains(line, "ssh-forward-only") || strings.Contains(line, "As Target") {
+			// Check that there are no "As Target" comment blocks for this policy
+			if strings.Contains(line, "As Target") {
+				t.Errorf("forward-only policy should not generate target/ingress rules on jump-server, found: %s", line)
+			}
+		}
+	}
+
+	// Compile for the target-server: should NOT have ingress rules (direction=forward, so backward is off)
+	outputTarget, err := c.Compile(context.Background(), targetServer)
+	if err != nil {
+		t.Fatalf("compile target-server error: %v", err)
+	}
+
+	// Target server should NOT have INPUT rules for this policy (backward is disabled)
+	if strings.Contains(outputTarget, "As Target (Ingress from peer") {
+		t.Errorf("forward-only policy should not generate ingress rules on target-server, got:\n%s", outputTarget)
+	}
+}
+
+func TestBackwardOnlyPolicy(t *testing.T) {
+	database := setupTestDB(t)
+	// Setup: client is the SOURCE, web-server is the TARGET
+	webServer := insertPeer(t, database, "web-server", "10.0.0.10", false)
+	clientPeer := insertPeer(t, database, "client-peer", "10.0.0.20", false)
+	groupID := insertGroup(t, database, "clients")
+	insertGroupMember(t, database, groupID, clientPeer)
+	serviceID := insertService(t, database, "http", "80", "tcp")
+
+	// Insert policy: clients -> web-server, backward only
+	// This means only the target (web-server) gets INPUT rules, source does NOT get OUTPUT rules
+	insertPolicyWithDirection(t, database, "http-backward-only", groupID, serviceID, webServer, "ACCEPT", 100, true, "backward")
+
+	c := NewCompiler(database)
+
+	// Compile for web-server (target): should have INPUT rules (backward = ingress allowed)
+	outputWeb, err := c.Compile(context.Background(), webServer)
+	if err != nil {
+		t.Fatalf("compile web-server error: %v", err)
+	}
+
+	if !strings.Contains(outputWeb, "-A INPUT -s 10.0.0.20/32 -p tcp --dport 80") {
+		t.Errorf("expected INPUT rule on web-server for backward-only policy, got:\n%s", outputWeb)
+	}
+
+	// Compile for client (source): should NOT have OUTPUT rules (forward is disabled)
+	outputClient, err := c.Compile(context.Background(), clientPeer)
+	if err != nil {
+		t.Fatalf("compile client error: %v", err)
+	}
+
+	if strings.Contains(outputClient, "As Source (Egress to") {
+		t.Errorf("backward-only policy should not generate egress rules on client, got:\n%s", outputClient)
+	}
+}
+
+func TestBidirectionalPolicy(t *testing.T) {
+	database := setupTestDB(t)
+	peerID := insertPeer(t, database, "bidir-server", "10.0.0.50", false)
+	clientPeer := insertPeer(t, database, "bidir-client", "10.0.0.51", false)
+	groupID := insertGroup(t, database, "bidir-group")
+	insertGroupMember(t, database, groupID, clientPeer)
+	serviceID := insertService(t, database, "ssh", "22", "tcp")
+
+	// Insert policy with direction='both' (default behavior)
+	insertPolicyWithDirection(t, database, "ssh-bidirectional", groupID, serviceID, peerID, "ACCEPT", 100, true, "both")
+
+	c := NewCompiler(database)
+
+	// Compile for server (target): should have INPUT rules
+	outputServer, err := c.Compile(context.Background(), peerID)
+	if err != nil {
+		t.Fatalf("compile server error: %v", err)
+	}
+
+	if !strings.Contains(outputServer, "-A INPUT -s 10.0.0.51/32 -p tcp --dport 22") {
+		t.Errorf("expected INPUT rule on server for bidirectional policy, got:\n%s", outputServer)
+	}
+
+	// Compile for client (source): should have OUTPUT rules
+	outputClient, err := c.Compile(context.Background(), clientPeer)
+	if err != nil {
+		t.Fatalf("compile client error: %v", err)
+	}
+
+	if !strings.Contains(outputClient, "-A OUTPUT -d 10.0.0.50/32 -p tcp --dport 22") {
+		t.Errorf("expected OUTPUT rule on client for bidirectional policy, got:\n%s", outputClient)
 	}
 }

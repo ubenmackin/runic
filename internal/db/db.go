@@ -409,6 +409,13 @@ func migrateSchema(database *sql.DB) error {
 		log.Println("Migration: added docker_only column to policies table")
 	}
 
+	if !existingPolicyColumns["direction"] {
+		if _, err := database.Exec("ALTER TABLE policies ADD COLUMN direction TEXT NOT NULL DEFAULT 'both'"); err != nil {
+			return fmt.Errorf("failed to add direction column: %w", err)
+		}
+		log.Println("Migration: added direction column to policies table")
+	}
+
 	// Migration: group_members table restructure (peer-based)
 	// Check if group_members has the old schema (value/type columns instead of peer_id)
 	var hasOldGroupMembersSchema bool
@@ -656,7 +663,7 @@ func ListEnabledPolicies(ctx context.Context, database *sql.DB, peerID int) ([]m
 	// OR if the target is a group containing the peer (target_type='group' AND target_id IN group_members where peer_id=peerID).
 	rows, err := database.QueryContext(ctx,
 		`SELECT DISTINCT p.id, p.name, COALESCE(p.description, ''), p.source_id, p.source_type, p.service_id, p.target_id, p.target_type, 
-	p.action, p.priority, p.enabled, p.docker_only, p.created_at, p.updated_at 
+	p.action, p.priority, p.enabled, p.docker_only, COALESCE(p.direction, 'both'), p.created_at, p.updated_at 
 	FROM policies p
 	LEFT JOIN group_members gm ON p.target_type = 'group' AND p.target_id = gm.group_id
 	WHERE p.enabled = 1 AND (
@@ -673,7 +680,7 @@ func ListEnabledPolicies(ctx context.Context, database *sql.DB, peerID int) ([]m
 	for rows.Next() {
 		var p models.PolicyRow
 		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.SourceID, &p.SourceType, &p.ServiceID,
-			&p.TargetID, &p.TargetType, &p.Action, &p.Priority, &p.Enabled, &p.DockerOnly, &p.CreatedAt, &p.UpdatedAt); err != nil {
+			&p.TargetID, &p.TargetType, &p.Action, &p.Priority, &p.Enabled, &p.DockerOnly, &p.Direction, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			return nil, err
 		}
 		policies = append(policies, p)
@@ -740,7 +747,7 @@ func SaveBundle(ctx context.Context, database *sql.DB, params models.CreateBundl
 func FindPoliciesByGroupID(ctx context.Context, database *sql.DB, groupID int) ([]models.PolicyRow, error) {
 	rows, err := database.QueryContext(ctx,
 		`SELECT id, name, COALESCE(description, ''), source_id, source_type, service_id, target_id, target_type,
-		action, priority, enabled, docker_only, created_at, updated_at
+		action, priority, enabled, docker_only, COALESCE(direction, 'both'), created_at, updated_at
 		FROM policies
 		WHERE (source_type = 'group' AND source_id = ?) OR (target_type = 'group' AND target_id = ?)`, groupID, groupID)
 	if err != nil {
@@ -752,7 +759,7 @@ func FindPoliciesByGroupID(ctx context.Context, database *sql.DB, groupID int) (
 	for rows.Next() {
 		var p models.PolicyRow
 		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.SourceID, &p.SourceType, &p.ServiceID,
-			&p.TargetID, &p.TargetType, &p.Action, &p.Priority, &p.Enabled, &p.DockerOnly, &p.CreatedAt, &p.UpdatedAt); err != nil {
+			&p.TargetID, &p.TargetType, &p.Action, &p.Priority, &p.Enabled, &p.DockerOnly, &p.Direction, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			return nil, err
 		}
 		policies = append(policies, p)

@@ -23,10 +23,15 @@ func isValidTargetType(value string) bool {
 	return value == "peer" || value == "group" || value == "special"
 }
 
+// isValidDirection validates that the direction is one of the allowed values.
+func isValidDirection(value string) bool {
+	return value == "both" || value == "forward" || value == "backward"
+}
+
 func ListPolicies(w http.ResponseWriter, r *http.Request) {
 	rows, err := db.DB.QueryContext(r.Context(),
 		`SELECT id, name, COALESCE(description, ''), source_id, source_type, service_id,
-		target_id, target_type, action, priority, enabled, docker_only, created_at, updated_at
+		target_id, target_type, action, priority, enabled, docker_only, COALESCE(direction, 'both'), created_at, updated_at
 		FROM policies ORDER BY priority ASC`)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "failed to query policies")
@@ -47,6 +52,7 @@ func ListPolicies(w http.ResponseWriter, r *http.Request) {
 		Priority    int    `json:"priority"`
 		Enabled     bool   `json:"enabled"`
 		DockerOnly  bool   `json:"docker_only"`
+		Direction   string `json:"direction"`
 		CreatedAt   string `json:"created_at"`
 		UpdatedAt   string `json:"updated_at"`
 	}
@@ -55,7 +61,7 @@ func ListPolicies(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var p policyResp
 		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.SourceID, &p.SourceType, &p.ServiceID,
-			&p.TargetID, &p.TargetType, &p.Action, &p.Priority, &p.Enabled, &p.DockerOnly, &p.CreatedAt, &p.UpdatedAt); err != nil {
+			&p.TargetID, &p.TargetType, &p.Action, &p.Priority, &p.Enabled, &p.DockerOnly, &p.Direction, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			common.RespondError(w, http.StatusInternalServerError, "failed to scan policy")
 			return
 		}
@@ -81,6 +87,7 @@ func MakeCreatePolicyHandler(compiler *engine.Compiler) http.HandlerFunc {
 			Priority    int    `json:"priority"`
 			Enabled     *bool  `json:"enabled"`
 			DockerOnly  *bool  `json:"docker_only"`
+			Direction   string `json:"direction"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 			common.RespondError(w, http.StatusBadRequest, "invalid JSON")
@@ -104,6 +111,13 @@ func MakeCreatePolicyHandler(compiler *engine.Compiler) http.HandlerFunc {
 		if input.Priority == 0 {
 			input.Priority = 100
 		}
+		if input.Direction == "" {
+			input.Direction = "both"
+		}
+		if !isValidDirection(input.Direction) {
+			common.RespondError(w, http.StatusBadRequest, "direction must be one of: both, forward, backward")
+			return
+		}
 		enabled := true
 		if input.Enabled != nil {
 			enabled = *input.Enabled
@@ -114,10 +128,10 @@ func MakeCreatePolicyHandler(compiler *engine.Compiler) http.HandlerFunc {
 		}
 
 		result, err := db.DB.ExecContext(r.Context(),
-			`INSERT INTO policies (name, description, source_id, source_type, service_id, target_id, target_type, action, priority, enabled, docker_only)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			`INSERT INTO policies (name, description, source_id, source_type, service_id, target_id, target_type, action, priority, enabled, docker_only, direction)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			input.Name, input.Description, input.SourceID, input.SourceType, input.ServiceID,
-			input.TargetID, input.TargetType, input.Action, input.Priority, enabled, dockerOnly)
+			input.TargetID, input.TargetType, input.Action, input.Priority, enabled, dockerOnly, input.Direction)
 		if err != nil {
 			common.RespondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create policy: %v", err))
 			return
@@ -161,16 +175,17 @@ func GetPolicy(w http.ResponseWriter, r *http.Request) {
 		Priority    int    `json:"priority"`
 		Enabled     bool   `json:"enabled"`
 		DockerOnly  bool   `json:"docker_only"`
+		Direction   string `json:"direction"`
 		CreatedAt   string `json:"created_at"`
 		UpdatedAt   string `json:"updated_at"`
 	}
 
 	err = db.DB.QueryRowContext(r.Context(),
 		`SELECT id, name, COALESCE(description, ''), source_id, source_type, service_id,
-		target_id, target_type, action, priority, enabled, docker_only, created_at, updated_at
+		target_id, target_type, action, priority, enabled, docker_only, COALESCE(direction, 'both'), created_at, updated_at
 		FROM policies WHERE id = ?`, id,
 	).Scan(&p.ID, &p.Name, &p.Description, &p.SourceID, &p.SourceType, &p.ServiceID,
-		&p.TargetID, &p.TargetType, &p.Action, &p.Priority, &p.Enabled, &p.DockerOnly, &p.CreatedAt, &p.UpdatedAt)
+		&p.TargetID, &p.TargetType, &p.Action, &p.Priority, &p.Enabled, &p.DockerOnly, &p.Direction, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		common.RespondError(w, http.StatusNotFound, "policy not found")
 		return
@@ -199,6 +214,7 @@ func MakeUpdatePolicyHandler(compiler *engine.Compiler) http.HandlerFunc {
 			Priority    int    `json:"priority"`
 			Enabled     *bool  `json:"enabled"`
 			DockerOnly  *bool  `json:"docker_only"`
+			Direction   string `json:"direction"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 			common.RespondError(w, http.StatusBadRequest, "invalid JSON")
@@ -210,6 +226,13 @@ func MakeUpdatePolicyHandler(compiler *engine.Compiler) http.HandlerFunc {
 		}
 		if input.TargetType != "" && !isValidTargetType(input.TargetType) {
 			common.RespondError(w, http.StatusBadRequest, "target_type must be one of: peer, group, special")
+			return
+		}
+		if input.Direction == "" {
+			input.Direction = "both"
+		}
+		if !isValidDirection(input.Direction) {
+			common.RespondError(w, http.StatusBadRequest, "direction must be one of: both, forward, backward")
 			return
 		}
 
@@ -227,10 +250,10 @@ func MakeUpdatePolicyHandler(compiler *engine.Compiler) http.HandlerFunc {
 
 		result, err := db.DB.ExecContext(r.Context(),
 			`UPDATE policies SET name = ?, description = ?, source_id = ?, source_type = ?, service_id = ?,
-			target_id = ?, target_type = ?, action = ?, priority = ?, enabled = ?, docker_only = ?, updated_at = CURRENT_TIMESTAMP
+			target_id = ?, target_type = ?, action = ?, priority = ?, enabled = ?, docker_only = ?, direction = ?, updated_at = CURRENT_TIMESTAMP
 			WHERE id = ?`,
 			input.Name, input.Description, input.SourceID, input.SourceType, input.ServiceID,
-			input.TargetID, input.TargetType, input.Action, input.Priority, enabled, dockerOnly, id)
+			input.TargetID, input.TargetType, input.Action, input.Priority, enabled, dockerOnly, input.Direction, id)
 		if err != nil {
 			common.RespondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to update policy: %v", err))
 			return
@@ -317,7 +340,8 @@ type PolicyPreviewRequest struct {
 	TargetID   int    `json:"target_id"`
 	TargetType string `json:"target_type"`
 	ServiceID  int    `json:"service_id"`
-	PeerID     int    `json:"peer_id"` // the peer to base the preview on
+	PeerID     int    `json:"peer_id"`    // the peer to base the preview on
+	Direction  string `json:"direction"` // forward, backward, or both
 }
 
 func MakePolicyPreviewHandler(compiler *engine.Compiler) http.HandlerFunc {
@@ -326,6 +350,11 @@ func MakePolicyPreviewHandler(compiler *engine.Compiler) http.HandlerFunc {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
 			return
+		}
+
+		// Default direction to both
+		if req.Direction == "" {
+			req.Direction = "both"
 		}
 
 		// Derive peer_id if not provided - needed to determine if peer is source or target
@@ -338,7 +367,7 @@ func MakePolicyPreviewHandler(compiler *engine.Compiler) http.HandlerFunc {
 		}
 
 		// Generate rules using the engine's preview function
-		rules, err := compiler.PreviewCompile(r.Context(), req.PeerID, req.SourceID, req.SourceType, req.TargetID, req.TargetType, req.ServiceID)
+		rules, err := compiler.PreviewCompile(r.Context(), req.PeerID, req.SourceID, req.SourceType, req.TargetID, req.TargetType, req.ServiceID, req.Direction)
 		if err != nil {
 			http.Error(w, "Failed to generate preview: "+err.Error(), http.StatusInternalServerError)
 			return
