@@ -374,8 +374,11 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 					}
 				} else {
 					for _, pc := range portClauses {
-						outputPortMatch := invertPortMatch(pc.PortMatch, pc.SrcPortMatch)
-						inputPortMatch := invertPortMatch(pc.SrcPortMatch, pc.PortMatch)
+						outputPortMatch := pc.PortMatch
+						if pc.SrcPortMatch != "" {
+							outputPortMatch = pc.SrcPortMatch + " " + outputPortMatch
+						}
+						inputPortMatch := invertPortMatch(pc.PortMatch, pc.SrcPortMatch)
 						ipsetMatch := fmt.Sprintf("-m set --match-set %s src", ipsetName)
 
 						switch pol.Action {
@@ -411,10 +414,13 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 						continue
 					}
 					for _, pc := range portClauses {
-						// For OUTPUT (egress from source): swap ports - destination becomes --sport, source becomes --dport
-						outputPortMatch := invertPortMatch(pc.PortMatch, pc.SrcPortMatch)
-						// For INPUT (response): reverse of output - use swapped ports
-						inputPortMatch := invertPortMatch(pc.SrcPortMatch, pc.PortMatch)
+						// For OUTPUT (egress from source): use destination port directly (sending TO the server port)
+						outputPortMatch := pc.PortMatch
+						if pc.SrcPortMatch != "" {
+							outputPortMatch = pc.SrcPortMatch + " " + outputPortMatch
+						}
+						// For INPUT (response): inverted — server responds from its port back to our ephemeral port
+						inputPortMatch := invertPortMatch(pc.PortMatch, pc.SrcPortMatch)
 
 						switch pol.Action {
 						case "ACCEPT":
@@ -573,10 +579,13 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 					continue
 				}
 				for _, pc := range portClauses {
-					// For OUTPUT (egress from source): swap ports
-					outputPortMatch := invertPortMatch(pc.PortMatch, pc.SrcPortMatch)
-					// For INPUT (response): reverse of output
-					inputPortMatch := invertPortMatch(pc.SrcPortMatch, pc.PortMatch)
+					// For OUTPUT (egress from source): use destination port directly (sending TO the server)
+					outputPortMatch := pc.PortMatch
+					if pc.SrcPortMatch != "" {
+						outputPortMatch = pc.SrcPortMatch + " " + outputPortMatch
+					}
+					// For INPUT (response): inverted — server responds from its port
+					inputPortMatch := invertPortMatch(pc.PortMatch, pc.SrcPortMatch)
 					buf.WriteString(fmt.Sprintf("-A OUTPUT -d %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", cidr, pc.Protocol, outputPortMatch))
 					buf.WriteString(fmt.Sprintf("-A INPUT -s %s -p %s %s -m conntrack --ctstate ESTABLISHED -j ACCEPT\n", cidr, pc.Protocol, inputPortMatch))
 				}

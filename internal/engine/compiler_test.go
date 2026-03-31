@@ -610,6 +610,38 @@ func TestPolicyParsingAndValidation(t *testing.T) {
 	}
 }
 
+func TestIsSourcePortDirection(t *testing.T) {
+	database := setupTestDB(t)
+	peerID := insertPeer(t, database, "client", "10.0.0.1", false)
+	groupID := insertGroup(t, database, "servers")
+	manualPeerID := insertManualPeer(t, database, "10.0.1.50")
+	insertGroupMember(t, database, groupID, manualPeerID)
+	serviceID := insertService(t, database, "dns", "53", "udp")
+
+	enabledInt := 1
+	result, err := database.Exec(
+		`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled)
+		VALUES (?, ?, "peer", ?, ?, "group", "ACCEPT", 100, ?)`,
+		"client-to-dns", peerID, serviceID, groupID, enabledInt)
+	if err != nil {
+		t.Fatalf("insert policy: %v", err)
+	}
+	_ = result
+
+	c := NewCompiler(database)
+	output, err := c.Compile(context.Background(), peerID)
+	if err != nil {
+		t.Fatalf("compile error: %v", err)
+	}
+
+	if !strings.Contains(output, "-A OUTPUT -d 10.0.1.50/32 -p udp --dport 53") {
+		t.Errorf("expected OUTPUT rule with --dport 53 (sending to DNS server), got:\n%s", output)
+	}
+	if !strings.Contains(output, "-A INPUT -s 10.0.1.50/32 -p udp --sport 53") {
+		t.Errorf("expected INPUT rule with --sport 53 (receiving from DNS server), got:\n%s", output)
+	}
+}
+
 // Test rule compilation to iptables format
 func TestRuleCompilationToIptablesFormat(t *testing.T) {
 	tests := []struct {
