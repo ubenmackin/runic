@@ -38,22 +38,27 @@ $(BINARY_SERVER):
 	CGO_ENABLED=1 $(GOBUILD) $(LD_FLAGS) -o $(BINARY_SERVER) .
 
 # Build agent binaries for all platforms
-agents: agents-linux-amd64 agents-linux-arm64 agents-linux-arm
+agents: agents-linux-amd64 agents-linux-arm64 agents-linux-arm agents-linux-armv6
 
 agents-linux-amd64:
 	@mkdir -p dist
 	@echo "$(GREEN)Building agent for linux/amd64...$(NC)"
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GOBUILD) -o dist/$(BINARY_AGENT)-linux-amd64 $(AGENT_DIR)
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GOBUILD) -o $(BINARY_AGENT)-linux-amd64 $(AGENT_DIR)
 
 agents-linux-arm64:
 	@mkdir -p dist
 	@echo "$(GREEN)Building agent for linux/arm64...$(NC)"
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GOBUILD) -o dist/$(BINARY_AGENT)-linux-arm64 $(AGENT_DIR)
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GOBUILD) -o $(BINARY_AGENT)-linux-arm64 $(AGENT_DIR)
 
 agents-linux-arm:
 	@mkdir -p dist
 	@echo "$(GREEN)Building agent for linux/arm...$(NC)"
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm $(GOBUILD) -o dist/$(BINARY_AGENT)-linux-arm $(AGENT_DIR)
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm $(GOBUILD) -o $(BINARY_AGENT)-linux-arm $(AGENT_DIR)
+
+agents-linux-armv6:
+	@mkdir -p dist
+	@echo "$(GREEN)Building agent for linux/armv6...$(NC)"
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=6 $(GOBUILD) -o $(BINARY_AGENT)-linux-armv6 $(AGENT_DIR)
 
 # Build web frontend
 web-build:

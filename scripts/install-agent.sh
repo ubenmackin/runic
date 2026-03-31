@@ -6,7 +6,7 @@ case $ARCH in
 x86_64) AGENT_ARCH="amd64" ;;
 aarch64) AGENT_ARCH="arm64" ;;
 armv7l) AGENT_ARCH="arm" ;;
-armv6l) AGENT_ARCH="arm" ;;
+armv6l) AGENT_ARCH="armv6" ;;
 *) echo "Unsupported arch: $ARCH"; exit 1 ;;
 esac
 
