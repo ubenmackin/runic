@@ -40,8 +40,10 @@ export default function Services() {
   const [portInputError, setPortInputError] = useState('')
   const [sourcePortChips, setSourcePortChips] = useState([])
   const [sourcePortInput, setSourcePortInput] = useState('')
-  const [sourcePortInputError, setSourcePortInputError] = useState('')
-  const [searchTerm, setSearchTerm] = useState('')
+const [sourcePortInputError, setSourcePortInputError] = useState('')
+const [showSourcePorts, setShowSourcePorts] = useState(false)
+const [showDescription, setShowDescription] = useState(false)
+const [searchTerm, setSearchTerm] = useState('')
 
   // Sorting state (persisted per-user)
   const { sortConfig, handleSort } = useTableSort('services', { key: 'name', direction: 'asc' })
@@ -83,23 +85,25 @@ export default function Services() {
     return () => modal.removeEventListener('keydown', handleKeyDown)
   }, [modalOpen])
 
-  const openAdd = () => { setFormErrors({}); setPortChips([]); setPortInput(''); setPortInputError(''); setSourcePortChips([]); setSourcePortInput(''); setSourcePortInputError(''); handleOpenAdd() }
-  const openEdit = (s) => {
-    setEditService(s);
-    setFormForEdit(s);
-    setFormErrors({});
-    // Initialize port chips from existing ports
-    const ports = s.ports ? s.ports.split(',').map(p => p.trim()).filter(Boolean) : []
-    setPortChips(ports)
-    setPortInput('')
-    setPortInputError('')
-    // Initialize source port chips from existing source_ports
-    const sourcePorts = s.source_ports ? s.source_ports.split(',').map(p => p.trim()).filter(Boolean) : []
-    setSourcePortChips(sourcePorts)
-    setSourcePortInput('')
-    setSourcePortInputError('')
-    setModalOpen(true)
-  }
+  const openAdd = () => { setFormErrors({}); setPortChips([]); setPortInput(''); setPortInputError(''); setSourcePortChips([]); setSourcePortInput(''); setSourcePortInputError(''); setShowSourcePorts(false); setShowDescription(false); handleOpenAdd() }
+const openEdit = (s) => {
+  setEditService(s);
+  setFormForEdit(s);
+  setFormErrors({});
+  // Initialize port chips from existing ports
+  const ports = s.ports ? s.ports.split(',').map(p => p.trim()).filter(Boolean) : []
+  setPortChips(ports)
+  setPortInput('')
+  setPortInputError('')
+  // Initialize source port chips from existing source_ports
+  const sourcePorts = s.source_ports ? s.source_ports.split(',').map(p => p.trim()).filter(Boolean) : []
+  setSourcePortChips(sourcePorts)
+  setSourcePortInput('')
+  setSourcePortInputError('')
+  setShowSourcePorts(sourcePorts.length > 0)
+  setShowDescription(!!s.description)
+  setModalOpen(true)
+}
 
   const { data: services, isLoading, refetch } = useQuery({
     queryKey: QUERY_KEYS.services(),
@@ -383,49 +387,10 @@ const handleSourcePortInputKeyDown = (e) => {
 
   if (isLoading) return <TableSkeleton rows={3} columns={5} />
 
-  return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-light-neutral">Services</h1>
-          <p className="text-gray-600 dark:text-amber-muted">Define port and protocol bundles to simplify policy creation</p>
-        </div>
-        <div className="flex items-center gap-3">
-          <button
-            onClick={handleManualRefresh}
-            disabled={isManualRefreshing}
-            className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 dark:text-amber-primary bg-white dark:bg-charcoal-dark border border-gray-300 dark:border-gray-border rounded-lg hover:bg-gray-50 dark:hover:bg-charcoal-darkest disabled:opacity-50"
-          >
-            <RefreshCw className={`w-4 h-4 ${isManualRefreshing ? 'animate-spin' : ''}`} />
-            Refresh
-          </button>
-          <button onClick={openAdd} className="flex items-center gap-2 px-4 py-2 bg-purple-active hover:bg-purple-active/80 text-white text-sm font-medium rounded-lg">
-            <Plus className="w-4 h-4" /> New Service
-          </button>
-        </div>
-      </div>
-
-      {/* Search Bar and Rows per page */}
-      <div className="flex items-center justify-between gap-4">
-        <div className="relative flex-1 max-w-md">
-          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
-          <input
-            type="text"
-            placeholder="Search services by name, protocol, ports, or description..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full pl-9 pr-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-dark text-gray-900 dark:text-light-neutral placeholder-gray-400 focus:ring-2 focus:ring-purple-active focus:border-purple-active"
-          />
-          {searchTerm && (
-            <button
-              onClick={() => setSearchTerm('')}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-light-neutral"
-            >
-              ×
-            </button>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
+ return (
+ <div className="space-y-4">
+ <div className="flex items-center justify-between">
+ <div className="flex items-center gap-2">
           <span className="text-sm text-gray-500 dark:text-amber-muted">Rows:</span>
           <select
             value={servicesRowsPerPage}
@@ -585,22 +550,24 @@ const handleSourcePortInputKeyDown = (e) => {
         </div>
       )}
 
-      {modalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" tabIndex="-1" onKeyDown={(e) => { if (e.key === 'Escape') { closeModal() } }}>
-          <div
-            ref={modalRef}
-            role="dialog"
-            aria-modal="true"
-            className="bg-white dark:bg-charcoal-dark rounded-xl shadow-xl w-full max-w-lg mx-4"
-            tabIndex="-1"
-          >
-            <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-border flex items-center justify-between">
-              <h3 className="text-lg font-semibold text-gray-900 dark:text-light-neutral">{editService ? 'Edit Service' : 'New Service'}</h3>
-              <button onClick={closeModal} className="p-1 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded">
-                <X className="w-5 h-5 text-gray-500" />
-              </button>
-            </div>
-            <form onSubmit={handleSubmit} className="p-6 space-y-4">
+{modalOpen && (
+<div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" tabIndex="-1" onKeyDown={(e) => { if (e.key === 'Escape') { closeModal() } }}>
+<div
+ref={modalRef}
+role="dialog"
+aria-modal="true"
+className="bg-white dark:bg-charcoal-dark rounded-xl shadow-xl w-full max-w-lg mx-4 flex flex-col max-h-[85vh]"
+tabIndex="-1"
+>
+{/* Fixed Header */}
+<div className="px-6 py-4 border-b border-gray-200 dark:border-gray-border flex items-center justify-between shrink-0">
+<h3 className="text-lg font-semibold text-gray-900 dark:text-light-neutral">{editService ? 'Edit Service' : 'New Service'}</h3>
+<button onClick={closeModal} className="p-1 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded">
+<X className="w-5 h-5 text-gray-500" />
+</button>
+</div>
+{/* Scrollable Form Content */}
+<form id="service-form" onSubmit={handleSubmit} className="p-6 space-y-4 overflow-y-auto flex-1">
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Name</label>
                 <input type="text" value={formData.name} onChange={e => setFormData(d => ({ ...d, name: e.target.value }))} required className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white" />
@@ -671,83 +638,78 @@ const handleSourcePortInputKeyDown = (e) => {
               </p>
             </div>
           )}
-        </div>
-        <div>
-          <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Source Ports</label>
-          <p className="text-xs text-gray-500 dark:text-amber-muted mb-2">Optional. Match traffic from specific source ports.</p>
-
-          {/* Source port chips display */}
-          {sourcePortChips.length > 0 && (
-            <div className="flex flex-wrap gap-2 mb-2">
-              {sourcePortChips.map((port, idx) => (
-                <span
-                  key={idx}
-                  className="px-2 py-1 bg-gray-100 dark:bg-charcoal-darkest rounded-md text-sm flex items-center gap-1 text-gray-900 dark:text-white"
-                >
-                  {port}
-                  <X
-                    className="w-3 h-3 text-gray-500 hover:text-red-500 cursor-pointer"
-                    onClick={() => handleRemoveSourcePort(port)}
-                  />
-                </span>
-              ))}
-            </div>
-          )}
-
-          {/* Source port input */}
-          <div className="flex gap-2">
-            <input
-              type="text"
-              value={sourcePortInput}
-              onChange={e => { setSourcePortInput(e.target.value); setSourcePortInputError('') }}
-              onKeyDown={handleSourcePortInputKeyDown}
-              disabled={formData.protocol === 'icmp' || formData.protocol === 'igmp'}
-              placeholder={formData.protocol === 'icmp' ? 'N/A for ICMP' : formData.protocol === 'igmp' ? 'N/A for IGMP' : '67 or 53,5353'}
-              className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white disabled:opacity-50"
-            />
-            <button
-              type="button"
-              onClick={handleAddSourcePort}
-              disabled={formData.protocol === 'icmp' || formData.protocol === 'igmp'}
-              className="px-4 py-2 text-sm font-medium text-white bg-purple-active hover:bg-purple-active/80 rounded-lg disabled:opacity-50"
-            >
-              Add
-            </button>
-          </div>
-
-          {/* Source port input error */}
-          {sourcePortInputError && (
-            <p className="text-xs text-red-500 mt-1">{sourcePortInputError}</p>
-          )}
-
-            {/* Source port format hint */}
-            {formData.protocol !== 'icmp' && formData.protocol !== 'igmp' && (
-            <div className="mt-2">
-              <p className="text-xs text-gray-500">
-                Single: <code className="bg-gray-200 text-gray-800 dark:bg-gray-800 dark:text-gray-200 px-1 rounded">67</code>, Multiple: <code className="bg-gray-200 text-gray-800 dark:bg-gray-800 dark:text-gray-200 px-1 rounded">53,5353</code>, Range: <code className="bg-gray-200 text-gray-800 dark:bg-gray-800 dark:text-gray-200 px-1 rounded">60000:65535</code>
-              </p>
-            </div>
-          )}
-        </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Description</label>
-                <textarea value={formData.description} onChange={e => setFormData(d => ({ ...d, description: e.target.value }))} rows={2} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white" />
-              </div>
-          {(portChips.length > 0 || sourcePortChips.length > 0) && formData.protocol !== 'icmp' && formData.protocol !== 'igmp' && (
-          <div className="p-3 bg-gray-50 dark:bg-charcoal-darkest rounded-lg">
-            <p className="text-xs text-gray-500 mb-1">Rule preview:</p>
-            <code className="text-sm text-runic-600 whitespace-pre-line">{previewRule()}</code>
-          </div>
-        )}
-              <InlineError message={formErrors._general} />
-              <div className="flex justify-end gap-3 pt-2">
-                <button type="button" onClick={closeModal} className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-amber-primary bg-white dark:bg-charcoal-dark border border-gray-300 dark:border-gray-border rounded-lg hover:bg-gray-50 dark:hover:bg-charcoal-darkest">Cancel</button>
-                <button type="submit" className="px-4 py-2 text-sm font-medium text-white bg-purple-active hover:bg-purple-active/80 rounded-lg">{editService ? 'Save Changes' : 'Create Service'}</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+</div>
+{/* Collapsible Source Ports Section */}
+<div className="border border-gray-200 dark:border-gray-border rounded-lg overflow-hidden">
+<button
+type="button"
+onClick={() => setShowSourcePorts(!showSourcePorts)}
+className="w-full px-4 py-3 flex items-center justify-between bg-gray-50 dark:bg-charcoal-darkest hover:bg-gray-100 dark:hover:bg-charcoal-dark transition-colors"
+>
+<span className="text-sm font-medium text-gray-700 dark:text-amber-primary">Source Ports (Optional)</span>
+<svg className={`w-4 h-4 text-gray-500 transition-transform duration-150 ${showSourcePorts ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+</svg>
+</button>
+<div className={`transition-all duration-150 ease-in-out ${showSourcePorts ? 'max-h-96 opacity-100' : 'max-h-0 opacity-0'} overflow-hidden`}>
+<div className="p-4 space-y-2">
+<p className="text-xs text-gray-500 dark:text-amber-muted">Optional. Match traffic from specific source ports.</p>
+{sourcePortChips.length > 0 && (
+<div className="flex flex-wrap gap-2 mb-2">
+{sourcePortChips.map((port, idx) => (
+<span key={idx} className="px-2 py-1 bg-gray-100 dark:bg-charcoal-darkest rounded-md text-sm flex items-center gap-1 text-gray-900 dark:text-white">
+{port}
+<X className="w-3 h-3 text-gray-500 hover:text-red-500 cursor-pointer" onClick={() => handleRemoveSourcePort(port)} />
+</span>
+))}
+</div>
+)}
+<div className="flex gap-2">
+<input type="text" value={sourcePortInput} onChange={e => { setSourcePortInput(e.target.value); setSourcePortInputError('') }}
+onKeyDown={handleSourcePortInputKeyDown} disabled={formData.protocol === 'icmp' || formData.protocol === 'igmp'}
+placeholder={formData.protocol === 'icmp' ? 'N/A for ICMP' : formData.protocol === 'igmp' ? 'N/A for IGMP' : '67 or 53,5353'}
+className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white disabled:opacity-50" />
+<button type="button" onClick={handleAddSourcePort} disabled={formData.protocol === 'icmp' || formData.protocol === 'igmp'}
+className="px-4 py-2 text-sm font-medium text-white bg-purple-active hover:bg-purple-active/80 rounded-lg disabled:opacity-50">Add</button>
+</div>
+{sourcePortInputError && <p className="text-xs text-red-500 mt-1">{sourcePortInputError}</p>}
+{formData.protocol !== 'icmp' && formData.protocol !== 'igmp' && (
+<div className="mt-2">
+<p className="text-xs text-gray-500">
+Single: <code className="bg-gray-200 text-gray-800 dark:bg-gray-800 dark:text-gray-200 px-1 rounded">67</code>, Multiple: <code className="bg-gray-200 text-gray-800 dark:bg-gray-800 dark:text-gray-200 px-1 rounded">53,5353</code>, Range: <code className="bg-gray-200 text-gray-800 dark:bg-gray-800 dark:text-gray-200 px-1 rounded">60000:65535</code>
+</p>
+</div>
+)}
+</div>
+</div>
+</div>
+{/* Collapsible Description Section */}
+<div className="border border-gray-200 dark:border-gray-border rounded-lg overflow-hidden">
+<button type="button" onClick={() => setShowDescription(!showDescription)}
+className="w-full px-4 py-3 flex items-center justify-between bg-gray-50 dark:bg-charcoal-darkest hover:bg-gray-100 dark:hover:bg-charcoal-dark transition-colors">
+<span className="text-sm font-medium text-gray-700 dark:text-amber-primary">Description (Optional)</span>
+<svg className={`w-4 h-4 text-gray-500 transition-transform duration-150 ${showDescription ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+</svg>
+</button>
+<div className={`transition-all duration-150 ease-in-out ${showDescription ? 'max-h-32 opacity-100' : 'max-h-0 opacity-0'} overflow-hidden`}>
+<div className="p-4">
+<textarea value={formData.description} onChange={e => setFormData(d => ({ ...d, description: e.target.value }))}
+rows={2} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white"
+placeholder="Add a description for this service..." />
+</div>
+</div>
+</div>
+<InlineError message={formErrors._general} />
+</form>
+{/* Fixed Footer */}
+<div className="px-6 py-4 border-t border-gray-200 dark:border-gray-border flex justify-end gap-3 shrink-0 bg-white dark:bg-charcoal-dark rounded-b-xl">
+<button type="button" onClick={closeModal} className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-amber-primary bg-white dark:bg-charcoal-dark border border-gray-300 dark:border-gray-border rounded-lg hover:bg-gray-50 dark:hover:bg-charcoal-darkest">Cancel</button>
+<button type="submit" form="service-form" className="px-4 py-2 text-sm font-medium text-white bg-purple-active hover:bg-purple-active/80 rounded-lg">{editService ? 'Save Changes' : 'Create Service'}</button>
+</div>
+</div>
+</div>
+)}
 
       {deleteTarget && (
         <ConfirmModal
