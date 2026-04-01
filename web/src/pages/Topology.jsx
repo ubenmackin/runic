@@ -35,8 +35,8 @@ const LIGHT_COLORS = {
   textMuted:  '#6b7280',
 }
 
-const LEVEL_SPACING = 260
-const SIBLING_SPACING = 85
+const LEVEL_SPACING = 280
+const SIBLING_SPACING = 110
 
 // ──────────────────────────────────────────────────────
 // Hook: resolve group members for all relevant groups
@@ -69,7 +69,7 @@ function useGroupMembers(groupIds) {
 // Build layout data: centered with left/right split
 // ──────────────────────────────────────────────────────
 
-function buildLayoutData(startPeerId, peers, groups, policies, services, groupMembersMap, expandedGroups) {
+function buildLayoutData(startPeerId, peers, groups, policies, services, groupMembersMap, expandedGroups, allPeers) {
   if (!startPeerId || !peers?.length || !policies?.length) return null
 
   const activePolicies = policies.filter(p => p.enabled && p.action === 'ACCEPT')
@@ -164,11 +164,13 @@ function buildLayoutData(startPeerId, peers, groups, policies, services, groupMe
       child.expanded = true
       for (const member of members) {
         if (member.id === startPeerId) continue
+        // Look up the full peer object for complete data (status, is_manual, etc.)
+        const fullPeer = peers.find(p => p.id === member.id) || member
         child.members.push({
           id: `member-${child.entityId}-peer-${member.id}`,
           type: 'peer', entityId: member.id,
-          label: member.hostname || member.ip_address,
-          data: member, isMember: true,
+          label: fullPeer.hostname || fullPeer.ip_address,
+          data: fullPeer, isMember: true,
         })
       }
     }
@@ -374,8 +376,8 @@ function TreeGraph({ layoutData, isDark, onNodeClick, onEdgeClick, onGroupClick,
           .attr('fill', color).attr('opacity', 0.9)
           .attr('transform', `translate(${ax},${ay}) rotate(${angle + flip})`)
 
-        // Service pills at ~40% along edge
-        const pillT = 0.40
+        // Service pills near the target node (~80% along edge)
+        const pillT = 0.80
         const px = bezierX(sx, midX, midX, tx, pillT)
         const py = bezierX(osy, osy, oty, oty, pillT)
 
@@ -450,7 +452,7 @@ function TreeGraph({ layoutData, isDark, onNodeClick, onEdgeClick, onGroupClick,
         el.append('text')
           .text(d.label.length > 14 ? d.label.slice(0, 12) + '…' : d.label)
           .attr('text-anchor', 'middle').attr('dominant-baseline', 'central').attr('y', -2)
-          .attr('fill', colors.text).attr('font-size', '12px').attr('font-weight', '700')
+          .attr('fill', colors.text).attr('font-size', '14px').attr('font-weight', '700')
           .attr('font-family', 'Inter, system-ui, sans-serif')
 
         el.append('text')
@@ -479,7 +481,7 @@ function TreeGraph({ layoutData, isDark, onNodeClick, onEdgeClick, onGroupClick,
         el.append('text')
           .text(d.label.length > 14 ? d.label.slice(0, 12) + '…' : d.label)
           .attr('text-anchor', 'middle').attr('y', 44).attr('fill', colors.text)
-          .attr('font-size', '11px').attr('font-weight', '500').attr('font-family', 'Inter, system-ui, sans-serif')
+          .attr('font-size', '13px').attr('font-weight', '500').attr('font-family', 'Inter, system-ui, sans-serif')
 
         el.append('text')
           .text(d.expanded ? '▼ GROUP' : '▶ GROUP')
@@ -492,7 +494,7 @@ function TreeGraph({ layoutData, isDark, onNodeClick, onEdgeClick, onGroupClick,
         const strokeColor = isManual ? '#8b5cf6' : (isOnline ? COLORS.peerOnline : COLORS.peerOffline)
 
         el.append('rect')
-          .attr('x', -40).attr('y', -22).attr('width', 80).attr('height', 44).attr('rx', 10)
+          .attr('x', -50).attr('y', -24).attr('width', 100).attr('height', 48).attr('rx', 10)
           .attr('fill', isDark ? DARK_COLORS.nodeFill : LIGHT_COLORS.nodeFill)
           .attr('stroke', strokeColor).attr('stroke-width', 2)
 
@@ -504,9 +506,9 @@ function TreeGraph({ layoutData, isDark, onNodeClick, onEdgeClick, onGroupClick,
         }
 
         el.append('text')
-          .text(d.label.length > 12 ? d.label.slice(0, 10) + '…' : d.label)
+          .text(d.label.length > 14 ? d.label.slice(0, 12) + '…' : d.label)
           .attr('text-anchor', 'middle').attr('dominant-baseline', 'central')
-          .attr('fill', colors.text).attr('font-size', '11px').attr('font-weight', '500')
+          .attr('fill', colors.text).attr('font-size', '13px').attr('font-weight', '500')
           .attr('font-family', 'Inter, system-ui, sans-serif')
 
         if (d.isMember) {
