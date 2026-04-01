@@ -57,7 +57,7 @@ chmod 755 /var/log/runic
 if [ -d /etc/rsyslog.d ]; then
     cat > /etc/rsyslog.d/30-runic-firewall.conf << 'EOF'
 # Runic Firewall - Route firewall log messages to dedicated file
-:msg,contains,"[RUNIC " /var/log/runic/firewall.log
+:msg,contains,"[RUNIC" /var/log/runic/firewall.log
 & stop
 EOF
     chmod 644 /etc/rsyslog.d/30-runic-firewall.conf

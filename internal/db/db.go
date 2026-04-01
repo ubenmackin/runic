@@ -474,12 +474,9 @@ func migrateSchema(database *sql.DB) error {
 			return fmt.Errorf("failed to create group_members index: %w", err)
 		}
 
-		// 4. Delete existing "any" group and recreate fresh
+		// 4. Delete existing "any" group (moved to separate migration with special targets)
 		if _, err := tx.Exec("DELETE FROM groups WHERE name = 'any'"); err != nil {
 			return fmt.Errorf("failed to delete existing any group: %w", err)
-		}
-		if _, err := tx.Exec("INSERT INTO groups (name, description) VALUES ('any', 'System group representing all peers')"); err != nil {
-			return fmt.Errorf("failed to create any group: %w", err)
 		}
 
 		if err := tx.Commit(); err != nil {
@@ -606,6 +603,56 @@ func migrateSchema(database *sql.DB) error {
 		log.Println("Migration: added loopback special target")
 	}
 
+	// Migration: Add __any_ip__ special target
+	var hasAnyIpTarget bool
+	err = database.QueryRow("SELECT COUNT(*) > 0 FROM special_targets WHERE name = ?", "__any_ip__").Scan(&hasAnyIpTarget)
+	if err != nil {
+		return fmt.Errorf("failed to check for __any_ip__ special target: %w", err)
+	}
+
+	if !hasAnyIpTarget {
+		log.Println("Migration: adding __any_ip__ special target")
+		_, err = database.Exec(
+			"INSERT INTO special_targets (id, name, display_name, description, address) VALUES (?, ?, ?, ?, ?)",
+			6, "__any_ip__", "Any IP (0.0.0.0/0)", "Any IP address on the internet (0.0.0.0/0)", "0.0.0.0/0",
+		)
+		if err != nil {
+			return fmt.Errorf("failed to add __any_ip__ special target: %w", err)
+		}
+		log.Println("Migration: added __any_ip__ special target")
+	}
+
+	// Migration: Add __all_peers__ special target
+	var hasAllPeersTarget bool
+	err = database.QueryRow("SELECT COUNT(*) > 0 FROM special_targets WHERE name = ?", "__all_peers__").Scan(&hasAllPeersTarget)
+	if err != nil {
+		return fmt.Errorf("failed to check for __all_peers__ special target: %w", err)
+	}
+
+	if !hasAllPeersTarget {
+		log.Println("Migration: adding __all_peers__ special target")
+		_, err = database.Exec(
+			"INSERT INTO special_targets (id, name, display_name, description, address) VALUES (?, ?, ?, ?, ?)",
+			7, "__all_peers__", "All Peers", "All registered peer IPs", "dynamic",
+		)
+		if err != nil {
+			return fmt.Errorf("failed to add __all_peers__ special target: %w", err)
+		}
+		log.Println("Migration: added __all_peers__ special target")
+	}
+
+	// Migration: Delete the broken "any" system group
+	log.Println("Migration: deleting broken 'any' system group")
+	_, err = database.Exec("DELETE FROM group_members WHERE group_id IN (SELECT id FROM groups WHERE name = 'any')")
+	if err != nil {
+		return fmt.Errorf("failed to delete group_members for 'any' group: %w", err)
+	}
+	_, err = database.Exec("DELETE FROM groups WHERE name = 'any'")
+	if err != nil {
+		return fmt.Errorf("failed to delete 'any' group: %w", err)
+	}
+	log.Println("Migration: deleted broken 'any' system group")
+
 	// Migration: Create system_config table
 	var hasSystemConfig bool
 	err = database.QueryRow("SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='system_config'").Scan(&hasSystemConfig)
@@ -641,6 +688,44 @@ func migrateSchema(database *sql.DB) error {
 			return fmt.Errorf("failed to add hmac_key_last_rotated_at column: %w", err)
 		}
 		log.Println("Migration: added hmac_key_last_rotated_at column to peers table")
+	}
+
+	// Migration: Add target_scope column to policies table
+	if !existingPolicyColumns["target_scope"] {
+		if _, err := database.Exec("ALTER TABLE policies ADD COLUMN target_scope TEXT NOT NULL DEFAULT 'both' CHECK(target_scope IN ('both', 'host', 'docker'))"); err != nil {
+			return fmt.Errorf("failed to add target_scope column: %w", err)
+		}
+		log.Println("Migration: added target_scope column to policies table")
+
+		if existingPolicyColumns["docker_only"] {
+			if _, err := database.Exec("UPDATE policies SET target_scope = 'docker' WHERE docker_only = 1"); err != nil {
+				log.Printf("Migration warning: failed to map docker_only to target_scope: %v", err)
+			}
+		}
+	}
+
+	// Try to drop docker_only column (requires SQLite 3.35.0+)
+	if existingPolicyColumns["docker_only"] {
+		if _, err := database.Exec("ALTER TABLE policies DROP COLUMN docker_only"); err != nil {
+			log.Printf("Migration info: skipped dropping docker_only column (may require SQLite 3.35.0+): %v", err)
+		} else {
+			log.Println("Migration: successfully dropped docker_only column from policies table")
+		}
+	}
+
+	// Migration: Create composite index on firewall_logs(action, timestamp DESC) for dashboard performance
+	// This index optimizes queries that filter by action and order by timestamp (e.g., blocked events)
+	var hasActionTimestampIdx bool
+	err = database.QueryRow("SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='index' AND name='idx_firewall_logs_action_timestamp'").Scan(&hasActionTimestampIdx)
+	if err != nil {
+		return fmt.Errorf("failed to check for idx_firewall_logs_action_timestamp: %w", err)
+	}
+	if !hasActionTimestampIdx {
+		log.Println("Migration: creating idx_firewall_logs_action_timestamp index")
+		if _, err := database.Exec("CREATE INDEX IF NOT EXISTS idx_firewall_logs_action_timestamp ON firewall_logs(action, timestamp DESC)"); err != nil {
+			return fmt.Errorf("failed to create idx_firewall_logs_action_timestamp: %w", err)
+		}
+		log.Println("Migration: created idx_firewall_logs_action_timestamp index")
 	}
 
 	return nil
@@ -685,7 +770,7 @@ func ListEnabledPolicies(ctx context.Context, database *sql.DB, peerID int) ([]m
 	// OR if the target is a group containing the peer (target_type='group' AND target_id IN group_members where peer_id=peerID).
 	rows, err := database.QueryContext(ctx,
 		`SELECT DISTINCT p.id, p.name, COALESCE(p.description, ''), p.source_id, p.source_type, p.service_id, p.target_id, p.target_type, 
-	p.action, p.priority, p.enabled, p.docker_only, COALESCE(p.direction, 'both'), p.created_at, p.updated_at 
+	p.action, p.priority, p.enabled, p.target_scope, COALESCE(p.direction, 'both'), p.created_at, p.updated_at 
 	FROM policies p
 	LEFT JOIN group_members gm ON p.target_type = 'group' AND p.target_id = gm.group_id
 	WHERE p.enabled = 1 AND (
@@ -702,7 +787,7 @@ func ListEnabledPolicies(ctx context.Context, database *sql.DB, peerID int) ([]m
 	for rows.Next() {
 		var p models.PolicyRow
 		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.SourceID, &p.SourceType, &p.ServiceID,
-			&p.TargetID, &p.TargetType, &p.Action, &p.Priority, &p.Enabled, &p.DockerOnly, &p.Direction, &p.CreatedAt, &p.UpdatedAt); err != nil {
+			&p.TargetID, &p.TargetType, &p.Action, &p.Priority, &p.Enabled, &p.TargetScope, &p.Direction, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			return nil, err
 		}
 		policies = append(policies, p)
@@ -769,7 +854,7 @@ func SaveBundle(ctx context.Context, database *sql.DB, params models.CreateBundl
 func FindPoliciesByGroupID(ctx context.Context, database *sql.DB, groupID int) ([]models.PolicyRow, error) {
 	rows, err := database.QueryContext(ctx,
 		`SELECT id, name, COALESCE(description, ''), source_id, source_type, service_id, target_id, target_type,
-		action, priority, enabled, docker_only, COALESCE(direction, 'both'), created_at, updated_at
+		action, priority, enabled, target_scope, COALESCE(direction, 'both'), created_at, updated_at
 		FROM policies
 		WHERE (source_type = 'group' AND source_id = ?) OR (target_type = 'group' AND target_id = ?)`, groupID, groupID)
 	if err != nil {
@@ -781,7 +866,7 @@ func FindPoliciesByGroupID(ctx context.Context, database *sql.DB, groupID int) (
 	for rows.Next() {
 		var p models.PolicyRow
 		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.SourceID, &p.SourceType, &p.ServiceID,
-			&p.TargetID, &p.TargetType, &p.Action, &p.Priority, &p.Enabled, &p.DockerOnly, &p.Direction, &p.CreatedAt, &p.UpdatedAt); err != nil {
+			&p.TargetID, &p.TargetType, &p.Action, &p.Priority, &p.Enabled, &p.TargetScope, &p.Direction, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			return nil, err
 		}
 		policies = append(policies, p)
@@ -870,10 +955,6 @@ func seedSystemGroups(database *sql.DB) error {
 		Name        string
 		Description string
 	}{
-		{
-			Name:        "any",
-			Description: "System group representing all peers",
-		},
 		{
 			Name:        "localhost",
 			Description: "Virtual group for local traffic (127.0.0.1/8)",

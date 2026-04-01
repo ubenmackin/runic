@@ -70,7 +70,7 @@ CREATE TABLE IF NOT EXISTS policies (
 	action TEXT NOT NULL DEFAULT 'ACCEPT' CHECK(action IN ('ACCEPT', 'DROP', 'LOG_DROP')),
 	priority INTEGER NOT NULL DEFAULT 100,
 	enabled BOOLEAN NOT NULL DEFAULT 1,
-	docker_only BOOLEAN NOT NULL DEFAULT 0,
+	target_scope TEXT NOT NULL DEFAULT 'both' CHECK(target_scope IN ('both', 'host', 'docker')),
 	direction TEXT NOT NULL DEFAULT 'both' CHECK(direction IN ('both', 'forward', 'backward')),
 	created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 	updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -111,12 +111,22 @@ FOREIGN KEY(peer_id) REFERENCES peers(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS special_targets (
-id INTEGER PRIMARY KEY,
-name TEXT UNIQUE NOT NULL,
-display_name TEXT NOT NULL,
-description TEXT,
-address TEXT NOT NULL
+  id INTEGER PRIMARY KEY,
+  name TEXT UNIQUE NOT NULL,
+  display_name TEXT NOT NULL,
+  description TEXT,
+  address TEXT NOT NULL
 );
+
+-- Special targets for policy resolution
+INSERT INTO special_targets (id, name, display_name, description, address) VALUES
+(1, '__subnet_broadcast__', 'Subnet Broadcast', 'The broadcast address for the peer''s subnet (e.g., 10.100.5.255)', 'computed'),
+(2, '__limited_broadcast__', 'Limited Broadcast', 'The limited broadcast address (255.255.255.255)', '255.255.255.255'),
+(3, '__all_hosts__', 'All Hosts (IGMP)', 'All hosts multicast address for IGMP (224.0.0.1)', '224.0.0.1'),
+(4, '__mdns__', 'mDNS', 'mDNS multicast address (224.0.0.251)', '224.0.0.251'),
+(5, 'loopback', 'Loopback', 'Local loopback address (127.0.0.1)', '127.0.0.1'),
+(6, '__any_ip__', 'Any IP (0.0.0.0/0)', 'Any IP address on the internet (0.0.0.0/0)', '0.0.0.0/0'),
+(7, '__all_peers__', 'All Peers', 'All registered peer IPs', 'dynamic');
 
 -- Indexes for frequently queried columns
 CREATE INDEX IF NOT EXISTS idx_peers_last_heartbeat ON peers(last_heartbeat);
@@ -128,6 +138,8 @@ CREATE INDEX IF NOT EXISTS idx_firewall_logs_peer_id ON firewall_logs(peer_id);
 CREATE INDEX IF NOT EXISTS idx_firewall_logs_peer_timestamp ON firewall_logs(peer_id, timestamp DESC);
 -- Efficient for finding offline peers by status AND last_heartbeat
 CREATE INDEX IF NOT EXISTS idx_peers_status_heartbeat ON peers(status, last_heartbeat);
+-- Efficient for dashboard queries filtering by action AND timestamp
+CREATE INDEX IF NOT EXISTS idx_firewall_logs_action_timestamp ON firewall_logs(action, timestamp DESC);
 
 -- System configuration table for storing control plane settings
 CREATE TABLE IF NOT EXISTS system_config (

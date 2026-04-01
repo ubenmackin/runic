@@ -21,6 +21,9 @@ const SPECIAL_TARGETS = {
   LIMITED_BROADCAST: { id: 2, name: '__limited_broadcast__', label: 'Limited Broadcast' },
   ALL_HOSTS: { id: 3, name: '__all_hosts__', label: 'All Hosts (IGMP)' },
   MDNS: { id: 4, name: '__mdns__', label: 'mDNS' },
+  LOOPBACK: { id: 5, name: '__loopback__', label: 'Loopback' },
+  ANY_IP: { id: 6, name: '__any_ip__', label: 'Any IP (0.0.0.0/0)' },
+  ALL_PEERS: { id: 7, name: '__all_peers__', label: 'All Peers' },
 }
 
 export default function Policies() {
@@ -37,7 +40,7 @@ export default function Policies() {
     action: 'ACCEPT', 
     priority: 100, 
     enabled: true, 
-    docker_only: false,
+    target_scope: 'both',
     direction: 'both'
   })
   const [deleteTarget, setDeleteTarget] = useState(null)
@@ -593,7 +596,7 @@ const polymorphicOptions = [
                   </div>
                   <div className="col-span-2 sm:col-span-1">
                     <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Priority</label>
-                    <input type="number" value={formData.priority} onChange={e => setFormData(d => ({ ...d, priority: parseInt(e.target.value) || 100 }))} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-active" />
+                    <input type="number" value={formData.priority} onChange={e => setFormData(d => ({ ...d, priority: e.target.value === '' ? '' : parseInt(e.target.value, 10) }))} required className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-active" />
                   </div>
                 </div>
                 <div>
@@ -688,12 +691,48 @@ const polymorphicOptions = [
                   </div>
                 </div>
 
-                {/* Docker Only Toggle - Only shown when target is a peer and has Docker */}
+                {/* Docker Integration Scope - Only shown when target is a peer and has Docker */}
                 {selectedPeerHasDocker && (
-                  <div className="flex items-center gap-2 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
-                    <ToggleSwitch checked={formData.docker_only} onChange={v => setFormData(d => ({ ...d, docker_only: v }))} />
-                    <label className="text-sm text-gray-700 dark:text-amber-primary">Docker containers only</label>
-                    <span className="text-xs text-gray-500 dark:text-amber-muted ml-1">(Apply to DOCKER-USER chain only)</span>
+                  <div>
+                    <div className="flex items-center gap-2 mb-1">
+                      <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary">Applies To</label>
+                      <span className="text-xs text-gray-500 dark:text-amber-muted">(Docker Integration)</span>
+                    </div>
+                    <div className="flex bg-gray-100 dark:bg-charcoal-darkest p-1 rounded-lg border border-gray-200 dark:border-gray-border">
+                      <button
+                        type="button"
+                        onClick={() => setFormData(d => ({ ...d, target_scope: 'both' }))}
+                        className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-all duration-200 ${
+                          formData.target_scope === 'both' || !formData.target_scope
+                            ? 'bg-white dark:bg-charcoal-dark text-gray-900 dark:text-white shadow-sm ring-1 ring-black/5 dark:ring-white/10'
+                            : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-white/50 dark:hover:bg-charcoal-dark/50'
+                        }`}
+                      >
+                        Host + Docker
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setFormData(d => ({ ...d, target_scope: 'host' }))}
+                        className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-all duration-200 ${
+                          formData.target_scope === 'host'
+                            ? 'bg-white dark:bg-charcoal-dark text-gray-900 dark:text-white shadow-sm ring-1 ring-black/5 dark:ring-white/10'
+                            : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-white/50 dark:hover:bg-charcoal-dark/50'
+                        }`}
+                      >
+                        Host Only
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setFormData(d => ({ ...d, target_scope: 'docker' }))}
+                        className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-all duration-200 ${
+                          formData.target_scope === 'docker'
+                            ? 'bg-white dark:bg-charcoal-dark text-gray-900 dark:text-white shadow-sm ring-1 ring-black/5 dark:ring-white/10'
+                            : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-white/50 dark:hover:bg-charcoal-dark/50'
+                        }`}
+                      >
+                        Docker Only
+                      </button>
+                    </div>
                   </div>
                 )}
 

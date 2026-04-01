@@ -184,12 +184,17 @@ func ParseLogLine(line string) (LogEvent, error) {
 		}
 	}
 
-	// Parse syslog timestamp: "Jan 1 12:00:00"
-	// Format: "Jan 1 12:00:00 hostname kernel: [RUNIC-DROP] ..."
+	// Parse timestamp (handles both syslog and ISO8601/RFC3339 formats)
+	// Syslog Format: "Jan 1 12:00:00 hostname kernel: [RUNIC-DROP] ..."
+	// ISO Format: "2026-03-31T15:48:14.402322-07:00 hostname kernel: [RUNIC-DROP] ..."
 	parts := strings.SplitN(line, " ", 5)
 	if len(parts) >= 4 {
-		// First 3 parts are timestamp (month, day, time)
-		ev.Timestamp = fmt.Sprintf("%s %s %s", parts[0], parts[1], parts[2])
+		if strings.Contains(parts[0], "T") && strings.Contains(parts[0], ":") {
+			ev.Timestamp = parts[0]
+		} else {
+			// First 3 parts are timestamp (month, day, time)
+			ev.Timestamp = fmt.Sprintf("%s %s %s", parts[0], parts[1], parts[2])
+		}
 	}
 
 	// Parse key=value fields after the kernel prefix

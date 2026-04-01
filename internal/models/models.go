@@ -59,7 +59,7 @@ type PolicyRow struct {
 	Action      string
 	Priority    int
 	Enabled     bool
-	DockerOnly  bool
+	TargetScope string
 	Direction   string
 	CreatedAt   time.Time
 	UpdatedAt   time.Time

@@ -4,8 +4,10 @@ import { REFETCH_INTERVALS } from '../constants'
 import StatCard from '../components/StatCard'
 import BlockedEventsChart from '../components/BlockedEventsChart'
 import TableSkeleton from '../components/TableSkeleton'
-import { Server, Shield, AlertTriangle, Clock, FileText, UserPlus } from 'lucide-react'
-import { Link } from 'react-router-dom'
+import RecentActivityFeed from '../components/RecentActivityFeed'
+import SystemHealth from '../components/SystemHealth'
+import TopBlockedSources from '../components/TopBlockedSources'
+import { Server, Shield, AlertTriangle, Clock, UserPlus } from 'lucide-react'
 
 export default function Dashboard() {
   // Fetch dashboard stats
@@ -30,19 +32,11 @@ export default function Dashboard() {
 
   if (isLoading) return <TableSkeleton rows={4} columns={5} />
 
-  const stats = data || { total_peers: 0, online_peers: 0, offline_peers: 0, manual_peers: 0, total_policies: 0, blocked_last_hour: 0, blocked_last_24h: 0 }
+  const stats = data || { total_peers: 0, online_peers: 0, offline_peers: 0, manual_peers: 0, total_policies: 0, blocked_last_hour: 0, blocked_last_24h: 0, recent_activity: [], peer_health: [], top_blocked_sources: [] }
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-light-neutral">Dashboard</h1>
-        <Link
-          to="/logs"
-          className="flex items-center gap-2 px-4 py-2 bg-gray-100 dark:bg-charcoal-darkest hover:bg-gray-200 dark:hover:bg-charcoal-dark text-gray-700 dark:text-amber-primary text-sm font-medium rounded-lg"
-        >
-          <FileText className="w-4 h-4" /> View Logs
-        </Link>
-      </div>
+      <h1 className="text-2xl font-bold text-gray-900 dark:text-light-neutral">Dashboard</h1>
 
       {/* Stat cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -61,46 +55,11 @@ export default function Dashboard() {
         <BlockedEventsChart logs={blockedLogs?.logs || []} />
       </div>
 
-      {/* Quick actions */}
+      {/* Dashboard Widgets */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <Link
-          to="/policies"
-          className="flex items-center gap-3 p-4 bg-white dark:bg-charcoal-dark rounded-xl shadow-sm hover:shadow-md transition-shadow"
-        >
-          <div className="p-2 bg-runic-100 dark:bg-purple-active/20 rounded-lg">
-            <Shield className="w-5 h-5 text-runic-600 dark:text-purple-active" />
-          </div>
-          <div>
-            <div className="font-medium text-gray-900 dark:text-light-neutral">Manage Policies</div>
-            <div className="text-sm text-gray-500 dark:text-amber-muted">Create and edit firewall rules</div>
-          </div>
-        </Link>
-
-        <Link
-          to="/peers"
-          className="flex items-center gap-3 p-4 bg-white dark:bg-charcoal-dark rounded-xl shadow-sm hover:shadow-md transition-shadow"
-        >
-          <div className="p-2 bg-runic-100 dark:bg-purple-active/20 rounded-lg">
-            <Server className="w-5 h-5 text-runic-600 dark:text-purple-active" />
-          </div>
-          <div>
-            <div className="font-medium text-gray-900 dark:text-light-neutral">Manage Peers</div>
-            <div className="text-sm text-gray-500 dark:text-amber-muted">Add or configure agents</div>
-          </div>
-        </Link>
-
-        <Link
-          to="/logs"
-          className="flex items-center gap-3 p-4 bg-white dark:bg-charcoal-dark rounded-xl shadow-sm hover:shadow-md transition-shadow"
-        >
-          <div className="p-2 bg-runic-100 dark:bg-purple-active/20 rounded-lg">
-            <FileText className="w-5 h-5 text-runic-600 dark:text-purple-active" />
-          </div>
-          <div>
-            <div className="font-medium text-gray-900 dark:text-light-neutral">View Logs</div>
-            <div className="text-sm text-gray-500 dark:text-amber-muted">Monitor firewall events in real-time</div>
-          </div>
-        </Link>
+        <RecentActivityFeed activity={stats.recent_activity || []} />
+        <SystemHealth peers={stats.peer_health || []} />
+        <TopBlockedSources sources={stats.top_blocked_sources || []} />
       </div>
     </div>
   )

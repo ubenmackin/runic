@@ -46,7 +46,7 @@ func (r *Resolver) ResolveEntity(ctx context.Context, entityType string, entityI
 // ResolveSpecialTarget returns the IP address for a special target.
 // Special targets are predefined network addresses like broadcast and multicast.
 // For subnet_broadcast (ID 1), the address is computed from the peer's IP.
-func (r *Resolver) ResolveSpecialTarget(specialID int, peerIP string) ([]string, error) {
+func (r *Resolver) ResolveSpecialTarget(ctx context.Context, specialID int, peerIP string) ([]string, error) {
 	switch specialID {
 	case 1: // __subnet_broadcast__ - compute from peer IP
 		// Extract subnet and replace last octet with 255
@@ -66,6 +66,26 @@ func (r *Resolver) ResolveSpecialTarget(specialID int, peerIP string) ([]string,
 		return []string{"224.0.0.251/32"}, nil
 	case 5: // __loopback__
 		return []string{"127.0.0.1/32"}, nil
+	case 6: // __any_ip__
+		return []string{"0.0.0.0/0"}, nil
+	case 7: // __all_peers__
+		rows, err := r.db.QueryContext(ctx, "SELECT ip_address FROM peers")
+		if err != nil {
+			return nil, fmt.Errorf("failed to query peers: %w", err)
+		}
+		defer rows.Close()
+		peers := make([]string, 0)
+		for rows.Next() {
+			var ip string
+			if err := rows.Scan(&ip); err != nil {
+				return nil, fmt.Errorf("failed to scan peer IP: %w", err)
+			}
+			peers = append(peers, ip)
+		}
+		if err := rows.Err(); err != nil {
+			return nil, fmt.Errorf("error iterating peers: %w", err)
+		}
+		return peers, nil
 	default:
 		return nil, fmt.Errorf("unknown special target ID: %d", specialID)
 	}

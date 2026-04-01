@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import {
   LayoutDashboard, Server, Users as UsersIcon, Briefcase, Shield, FileText,
-  Menu, X, LogOut, Moon, Sun, Key, Settings, User, ChevronDown, ChevronRight, Flame
+  Menu, X, LogOut, Moon, Sun, Key, Settings, User, ChevronDown, ChevronRight, Flame, Network
 } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 import { useAuthStore } from '../store'
@@ -30,6 +30,7 @@ NavItem.displayName = 'NavItem'
 
 const navItems = [
   { to: '/',              icon: LayoutDashboard, label: 'Dashboard' },
+  { to: '/topology',      icon: Network,          label: 'Topology' },
   { to: '/logs',          icon: FileText,         label: 'Logs' },
   { to: '/setup-keys',    icon: Key,              label: 'Setup Keys' },
   {

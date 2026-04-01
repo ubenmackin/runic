@@ -38,7 +38,7 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 	}
 	// 2. Load enabled policies where peer is either target or source, ordered by priority ASC
 	rows, err := c.db.QueryContext(ctx,
-		`SELECT DISTINCT p.id, p.name, p.source_id, p.source_type, p.service_id, p.target_id, p.target_type, p.action, p.priority, p.docker_only, COALESCE(p.direction, 'both'),
+		`SELECT DISTINCT p.id, p.name, p.source_id, p.source_type, p.service_id, p.target_id, p.target_type, p.action, p.priority, p.target_scope, COALESCE(p.direction, 'both'),
 		CASE WHEN p.target_type = 'peer' AND p.target_id = ? THEN 1
 		     WHEN p.target_type = 'group' AND EXISTS (SELECT 1 FROM group_members WHERE group_id = p.target_id AND peer_id = ?) THEN 1
 		     WHEN p.target_type = 'special' AND p.source_type = 'group' AND EXISTS (SELECT 1 FROM group_members WHERE group_id = p.source_id AND peer_id = ?) THEN 1
@@ -76,18 +76,18 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 		TargetID   int
 		TargetType string
 		Action     string
-		Priority   int
-		DockerOnly bool
-		Direction  string
-		IsTarget   bool
-		IsSource   bool
+		Priority    int
+		TargetScope string
+		Direction   string
+		IsTarget    bool
+		IsSource    bool
 	}
 
 	var policies []policyInfo
 	for rows.Next() {
 		var p policyInfo
 		var isTargetInt, isSourceInt int
-		if err := rows.Scan(&p.ID, &p.Name, &p.SourceID, &p.SourceType, &p.ServiceID, &p.TargetID, &p.TargetType, &p.Action, &p.Priority, &p.DockerOnly, &p.Direction, &isTargetInt, &isSourceInt); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.SourceID, &p.SourceType, &p.ServiceID, &p.TargetID, &p.TargetType, &p.Action, &p.Priority, &p.TargetScope, &p.Direction, &isTargetInt, &isSourceInt); err != nil {
 			return "", fmt.Errorf("scan policy: %w", err)
 		}
 		p.IsTarget = isTargetInt == 1
@@ -248,6 +248,9 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 
 	// Policy rules
 	for _, pol := range policies {
+		writeToHost := pol.TargetScope == "host" || pol.TargetScope == "both"
+		writeToDocker := hasDocker && (pol.TargetScope == "docker" || pol.TargetScope == "both")
+
 		// Load service
 		var serviceName, ports, sourcePorts, protocol string
 		err = c.db.QueryRowContext(ctx,
@@ -284,7 +287,7 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 			if useIpset {
 				// Use ipset-based rules (single rule per port clause)
 				if serviceName == "Multicast" {
-					c.writeMulticastRule(&buf, pol.Action, pol.DockerOnly, hasDocker)
+					c.writeMulticastRule(&buf, pol.Action, pol.TargetScope, hasDocker)
 				} else {
 					for _, pc := range portClauses {
 						inputPortMatch := pc.PortMatch
@@ -296,26 +299,26 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 
 						switch pol.Action {
 						case "ACCEPT":
-							if !pol.DockerOnly {
+							if writeToHost {
 								buf.WriteString(fmt.Sprintf("-A INPUT -p %s %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", pc.Protocol, ipsetMatch, inputPortMatch))
 								buf.WriteString(fmt.Sprintf("-A OUTPUT -p %s %s %s -m conntrack --ctstate ESTABLISHED -j ACCEPT\n", pc.Protocol, ipsetMatch, outputPortMatch))
 							}
-							if hasDocker {
+							if writeToDocker {
 								buf.WriteString(fmt.Sprintf("-A DOCKER-USER -p %s %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", pc.Protocol, ipsetMatch, inputPortMatch))
 							}
 						case "DROP":
-							if !pol.DockerOnly {
+							if writeToHost {
 								buf.WriteString(fmt.Sprintf("-A INPUT -p %s %s %s -j DROP\n", pc.Protocol, ipsetMatch, inputPortMatch))
 							}
-							if hasDocker {
+							if writeToDocker {
 								buf.WriteString(fmt.Sprintf("-A DOCKER-USER -p %s %s %s -j DROP\n", pc.Protocol, ipsetMatch, inputPortMatch))
 							}
 						case "LOG_DROP":
-							if !pol.DockerOnly {
+							if writeToHost {
 								buf.WriteString(fmt.Sprintf("-A INPUT -p %s %s %s -j LOG --log-prefix \"[RUNIC-DROP] \" --log-level 4\n", pc.Protocol, ipsetMatch, inputPortMatch))
 								buf.WriteString(fmt.Sprintf("-A INPUT -p %s %s %s -j DROP\n", pc.Protocol, ipsetMatch, inputPortMatch))
 							}
-							if hasDocker {
+							if writeToDocker {
 								buf.WriteString(fmt.Sprintf("-A DOCKER-USER -p %s %s %s -j LOG --log-prefix \"[RUNIC-DROP] \" --log-level 4\n", pc.Protocol, ipsetMatch, inputPortMatch))
 								buf.WriteString(fmt.Sprintf("-A DOCKER-USER -p %s %s %s -j DROP\n", pc.Protocol, ipsetMatch, inputPortMatch))
 							}
@@ -327,7 +330,7 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 				var cidrs []string
 				var err error
 				if pol.SourceType == "special" {
-					cidrs, err = c.resolver.ResolveSpecialTarget(pol.SourceID, ipAddress)
+					cidrs, err = c.resolver.ResolveSpecialTarget(ctx, pol.SourceID, ipAddress)
 				} else {
 					cidrs, err = c.resolver.ResolveEntity(ctx, pol.SourceType, pol.SourceID)
 				}
@@ -336,7 +339,7 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 				}
 				for _, cidr := range cidrs {
 					if serviceName == "Multicast" {
-						c.writeMulticastRule(&buf, pol.Action, pol.DockerOnly, hasDocker)
+						c.writeMulticastRule(&buf, pol.Action, pol.TargetScope, hasDocker)
 						continue
 					}
 					for _, pc := range portClauses {
@@ -350,26 +353,26 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 
 						switch pol.Action {
 						case "ACCEPT":
-							if !pol.DockerOnly {
+							if writeToHost {
 								buf.WriteString(fmt.Sprintf("-A INPUT -s %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", cidr, pc.Protocol, inputPortMatch))
 								buf.WriteString(fmt.Sprintf("-A OUTPUT -d %s -p %s %s -m conntrack --ctstate ESTABLISHED -j ACCEPT\n", cidr, pc.Protocol, outputPortMatch))
 							}
-							if hasDocker {
+							if writeToDocker {
 								buf.WriteString(fmt.Sprintf("-A DOCKER-USER -s %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", cidr, pc.Protocol, inputPortMatch))
 							}
 						case "DROP":
-							if !pol.DockerOnly {
+							if writeToHost {
 								buf.WriteString(fmt.Sprintf("-A INPUT -s %s -p %s %s -j DROP\n", cidr, pc.Protocol, inputPortMatch))
 							}
-							if hasDocker {
+							if writeToDocker {
 								buf.WriteString(fmt.Sprintf("-A DOCKER-USER -s %s -p %s %s -j DROP\n", cidr, pc.Protocol, inputPortMatch))
 							}
 						case "LOG_DROP":
-							if !pol.DockerOnly {
+							if writeToHost {
 								buf.WriteString(fmt.Sprintf("-A INPUT -s %s -p %s %s -j LOG --log-prefix \"[RUNIC-DROP] \" --log-level 4\n", cidr, pc.Protocol, inputPortMatch))
 								buf.WriteString(fmt.Sprintf("-A INPUT -s %s -p %s %s -j DROP\n", cidr, pc.Protocol, inputPortMatch))
 							}
-							if hasDocker {
+							if writeToDocker {
 								buf.WriteString(fmt.Sprintf("-A DOCKER-USER -s %s -p %s %s -j LOG --log-prefix \"[RUNIC-DROP] \" --log-level 4\n", cidr, pc.Protocol, inputPortMatch))
 								buf.WriteString(fmt.Sprintf("-A DOCKER-USER -s %s -p %s %s -j DROP\n", cidr, pc.Protocol, inputPortMatch))
 							}
@@ -425,7 +428,7 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 				var cidrs []string
 				var err error
 				if pol.TargetType == "special" {
-					cidrs, err = c.resolver.ResolveSpecialTarget(pol.TargetID, ipAddress)
+					cidrs, err = c.resolver.ResolveSpecialTarget(ctx, pol.TargetID, ipAddress)
 				} else {
 					cidrs, err = c.resolver.ResolveEntity(ctx, pol.TargetType, pol.TargetID)
 				}
@@ -487,28 +490,31 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 }
 
 // writeMulticastRule generates multicast tracking
-func (c *Compiler) writeMulticastRule(buf *strings.Builder, action string, dockerOnly bool, hasDocker bool) {
+func (c *Compiler) writeMulticastRule(buf *strings.Builder, action string, targetScope string, hasDocker bool) {
+	writeToHost := targetScope == "host" || targetScope == "both"
+	writeToDocker := hasDocker && (targetScope == "docker" || targetScope == "both")
+
 	switch action {
 	case "ACCEPT":
-		if !dockerOnly {
+		if writeToHost {
 			buf.WriteString("-A INPUT -m pkttype --pkt-type multicast -j ACCEPT\n")
 		}
-		if hasDocker {
+		if writeToDocker {
 			buf.WriteString("-A DOCKER-USER -m pkttype --pkt-type multicast -j ACCEPT\n")
 		}
 	case "DROP":
-		if !dockerOnly {
+		if writeToHost {
 			buf.WriteString("-A INPUT -m pkttype --pkt-type multicast -j DROP\n")
 		}
-		if hasDocker {
+		if writeToDocker {
 			buf.WriteString("-A DOCKER-USER -m pkttype --pkt-type multicast -j DROP\n")
 		}
 	case "LOG_DROP":
-		if !dockerOnly {
+		if writeToHost {
 			buf.WriteString("-A INPUT -m pkttype --pkt-type multicast -j LOG --log-prefix \"[RUNIC-DROP] \" --log-level 4\n")
 			buf.WriteString("-A INPUT -m pkttype --pkt-type multicast -j DROP\n")
 		}
-		if hasDocker {
+		if writeToDocker {
 			buf.WriteString("-A DOCKER-USER -m pkttype --pkt-type multicast -j LOG --log-prefix \"[RUNIC-DROP] \" --log-level 4\n")
 			buf.WriteString("-A DOCKER-USER -m pkttype --pkt-type multicast -j DROP\n")
 		}
@@ -553,7 +559,7 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 	// Resolve source CIDRs
 	var sourceCIDRs []string
 	if sourceType == "special" {
-		sourceCIDRs, _ = c.resolver.ResolveSpecialTarget(sourceID, ipAddress)
+		sourceCIDRs, _ = c.resolver.ResolveSpecialTarget(ctx, sourceID, ipAddress)
 	} else {
 		sourceCIDRs, _ = c.resolver.ResolveEntity(ctx, sourceType, sourceID)
 	}
@@ -561,7 +567,7 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 	// Resolve target CIDRs
 	var targetCIDRs []string
 	if targetType == "special" {
-		targetCIDRs, _ = c.resolver.ResolveSpecialTarget(targetID, ipAddress)
+		targetCIDRs, _ = c.resolver.ResolveSpecialTarget(ctx, targetID, ipAddress)
 	} else {
 		targetCIDRs, _ = c.resolver.ResolveEntity(ctx, targetType, targetID)
 	}

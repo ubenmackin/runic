@@ -1245,3 +1245,86 @@ func TestBidirectionalPolicy(t *testing.T) {
 		t.Errorf("expected OUTPUT rule on client for bidirectional policy, got:\n%s", outputClient)
 	}
 }
+
+// Test __any_ip__ special target (ID 6)
+func TestResolver_AnyIP(t *testing.T) {
+	database := setupTestDB(t)
+	r := &Resolver{db: database}
+
+	// Test that __any_ip__ returns 0.0.0.0/0
+	result, err := r.ResolveSpecialTarget(context.Background(), 6, "10.0.0.1")
+	if err != nil {
+		t.Fatalf("ResolveSpecialTarget failed: %v", err)
+	}
+
+	if len(result) != 1 {
+		t.Errorf("expected 1 result, got %d: %v", len(result), result)
+	}
+
+	if result[0] != "0.0.0.0/0" {
+		t.Errorf("expected 0.0.0.0/0, got %s", result[0])
+	}
+}
+
+// Test __all_peers__ special target (ID 7) with peers in database
+func TestResolver_AllPeers(t *testing.T) {
+	database := setupTestDB(t)
+
+	// Insert multiple peers
+	insertPeer(t, database, "peer1", "10.0.0.1", false)
+	insertPeer(t, database, "peer2", "10.0.0.2", false)
+	insertPeer(t, database, "peer3", "192.168.1.100", false)
+
+	r := &Resolver{db: database}
+
+	// Test that __all_peers__ returns all peer IPs
+	result, err := r.ResolveSpecialTarget(context.Background(), 7, "10.0.0.50")
+	if err != nil {
+		t.Fatalf("ResolveSpecialTarget failed: %v", err)
+	}
+
+	if len(result) != 3 {
+		t.Errorf("expected 3 peers, got %d: %v", len(result), result)
+	}
+
+	// Check that all expected IPs are present
+	expectedIPs := map[string]bool{
+		"10.0.0.1":      false,
+		"10.0.0.2":      false,
+		"192.168.1.100": false,
+	}
+
+	for _, ip := range result {
+		if _, ok := expectedIPs[ip]; !ok {
+			t.Errorf("unexpected IP in result: %s", ip)
+		} else {
+			expectedIPs[ip] = true
+		}
+	}
+
+	for ip, found := range expectedIPs {
+		if !found {
+			t.Errorf("expected IP not found: %s", ip)
+		}
+	}
+}
+
+// Test __all_peers__ special target (ID 7) with empty peer list
+func TestResolver_AllPeers_Empty(t *testing.T) {
+	database := setupTestDB(t)
+	r := &Resolver{db: database}
+
+	// Test that __all_peers__ returns empty slice when no peers exist
+	result, err := r.ResolveSpecialTarget(context.Background(), 7, "10.0.0.50")
+	if err != nil {
+		t.Fatalf("ResolveSpecialTarget failed: %v", err)
+	}
+
+	if len(result) != 0 {
+		t.Errorf("expected empty result, got %d items: %v", len(result), result)
+	}
+
+	if result == nil {
+		t.Error("expected non-nil empty slice, got nil")
+	}
+}

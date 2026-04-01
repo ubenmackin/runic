@@ -14,6 +14,7 @@ const Peers = lazy(() => import('./pages/Peers'))
 const Groups = lazy(() => import('./pages/Groups'))
 const Services = lazy(() => import('./pages/Services'))
 const Policies = lazy(() => import('./pages/Policies'))
+const Topology = lazy(() => import('./pages/Topology'))
 const Logs = lazy(() => import('./pages/Logs'))
 const SetupKeys = lazy(() => import('./pages/SetupKeys'))
 const Users = lazy(() => import('./pages/Users'))
@@ -91,6 +92,7 @@ export default function App() {
                 <Route path="/setup" element={<RouteErrorBoundary><Suspense fallback={<PageLoader />}><Login mode="setup" /></Suspense></RouteErrorBoundary>} />
                 <Route path="/" element={<PrivateRoute><Layout /></PrivateRoute>}>
                   <Route index element={<RouteErrorBoundary><Suspense fallback={<PageLoader />}><Dashboard /></Suspense></RouteErrorBoundary>} />
+                  <Route path="topology" element={<RouteErrorBoundary><Suspense fallback={<PageLoader />}><Topology /></Suspense></RouteErrorBoundary>} />
                   <Route path="peers" element={<RouteErrorBoundary><Suspense fallback={<PageLoader />}><Peers /></Suspense></RouteErrorBoundary>} />
                   <Route path="groups" element={<RouteErrorBoundary><Suspense fallback={<PageLoader />}><Groups /></Suspense></RouteErrorBoundary>} />
                   <Route path="services" element={<RouteErrorBoundary><Suspense fallback={<PageLoader />}><Services /></Suspense></RouteErrorBoundary>} />
