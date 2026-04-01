@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react'
 import { Heart } from 'lucide-react'
 
 function getLastSeen(heartbeat) {
@@ -14,9 +15,33 @@ function getLastSeen(heartbeat) {
 }
 
 export default function SystemHealth({ peers }) {
+  const [currentPage, setCurrentPage] = useState(1)
+  const itemsPerPage = 5
+
   const onlineCount = peers.filter(p => p.is_online && !p.is_manual).length
   const offlineCount = peers.filter(p => !p.is_online && !p.is_manual).length
   const manualCount = peers.filter(p => p.is_manual).length
+
+  // Filter out manual peers from the display list
+  const displayPeers = peers.filter(p => !p.is_manual)
+
+  // Sort: offline peers first (alphabetically), then online peers (alphabetically)
+  const sortedPeers = [...displayPeers].sort((a, b) => {
+    if (a.is_online !== b.is_online) return a.is_online ? 1 : -1 // offline first
+    return a.hostname.localeCompare(b.hostname) // then alphabetically
+  })
+
+  // Pagination
+  const totalPages = Math.ceil(sortedPeers.length / itemsPerPage)
+  const startIndex = (currentPage - 1) * itemsPerPage
+  const paginatedPeers = sortedPeers.slice(startIndex, startIndex + itemsPerPage)
+
+  // Reset to page 1 if current page exceeds total pages
+  useEffect(() => {
+    if (currentPage > totalPages && totalPages > 0) {
+      setCurrentPage(1)
+    }
+  }, [currentPage, totalPages])
 
   return (
     <div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-sm p-4">
@@ -38,48 +63,68 @@ export default function SystemHealth({ peers }) {
         </span>
       </div>
 
-      {peers.length === 0 ? (
+      {sortedPeers.length === 0 ? (
         <p className="text-sm text-gray-400 dark:text-amber-muted text-center py-4">
           No peers registered
         </p>
       ) : (
-        <div className="space-y-0">
-          {peers.map((peer, idx) => (
-            <div key={idx} className="flex items-center gap-2 py-2 border-b border-gray-100 dark:border-gray-border last:border-0">
-              {/* Status dot */}
-              <div className={`w-2 h-2 rounded-full shrink-0 ${peer.is_online ? 'bg-green-500' : 'bg-gray-400'}`} />
-              
-              {/* Hostname */}
-              <span className="font-medium text-gray-900 dark:text-light-neutral">
-                {peer.hostname}
-              </span>
+        <>
+          <div className="space-y-0">
+        {paginatedPeers.map((peer) => (
+          <div key={peer.hostname} className="flex items-center gap-2 py-2 border-b border-gray-100 dark:border-gray-border last:border-0">
+                {/* Status dot */}
+                <div className={`w-2 h-2 rounded-full shrink-0 ${peer.is_online ? 'bg-green-500' : 'bg-gray-400'}`} />
 
-              {/* Manual badge */}
-              {peer.is_manual && (
-                <span className="px-2 py-0.5 text-xs rounded bg-purple-100 dark:bg-purple-active/20 text-purple-700 dark:text-purple-active ml-auto">
-                  Manual
+                {/* Hostname */}
+                <span className="font-medium text-gray-900 dark:text-light-neutral">
+                  {peer.hostname}
                 </span>
-              )}
 
-              {/* IP and version info */}
-              <div className="flex flex-col">
-                <span className="text-xs text-gray-500 dark:text-amber-muted ml-4">
-                  {peer.ip_address}
-                </span>
-                {peer.is_online && !peer.is_manual && peer.agent_version && (
-                  <span className="text-xs text-gray-400 ml-4">
-                    v{peer.agent_version}
+                {/* IP and version info */}
+                <div className="flex flex-col">
+                  <span className="text-xs text-gray-500 dark:text-amber-muted ml-4">
+                    {peer.ip_address}
                   </span>
-                )}
-                {!peer.is_online && !peer.is_manual && (
-                  <span className="text-xs text-red-500 ml-4">
-                    last seen {getLastSeen(peer.last_heartbeat)}
-                  </span>
-                )}
+                  {peer.is_online && peer.agent_version && (
+                    <span className="text-xs text-gray-400 ml-4">
+                      v{peer.agent_version}
+                    </span>
+                  )}
+                  {!peer.is_online && (
+                    <span className="text-xs text-red-500 ml-4">
+                      last seen {getLastSeen(peer.last_heartbeat)}
+                    </span>
+                  )}
+                </div>
               </div>
+            ))}
+          </div>
+
+          {/* Pagination controls */}
+          {totalPages > 1 && (
+            <div className="flex justify-center gap-2 mt-3 pt-3 border-t border-gray-100 dark:border-gray-border">
+        <button
+          onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+          disabled={currentPage === 1}
+          aria-label="Previous page"
+          className="px-3 py-1 text-xs rounded bg-gray-100 dark:bg-gray-700 disabled:opacity-50"
+        >
+          Prev
+        </button>
+              <span className="text-xs text-gray-500 dark:text-amber-muted">
+                {currentPage} / {totalPages}
+              </span>
+        <button
+          onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+          disabled={currentPage === totalPages}
+          aria-label="Next page"
+          className="px-3 py-1 text-xs rounded bg-gray-100 dark:bg-gray-700 disabled:opacity-50"
+        >
+          Next
+        </button>
             </div>
-          ))}
-        </div>
+          )}
+        </>
       )}
     </div>
   )
