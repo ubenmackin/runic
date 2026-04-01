@@ -1,14 +1,11 @@
 package groups
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"time"
 
 	"runic/internal/api/common"
-	runiclog "runic/internal/common/log"
 	"runic/internal/db"
 	"runic/internal/engine"
 )
@@ -56,9 +53,7 @@ func ListGroups(w http.ResponseWriter, r *http.Request) {
 		}
 		groupsData = append(groupsData, g)
 	}
-	if groupsData == nil {
-		groupsData = []GroupWithCounts{}
-	}
+	groupsData = common.EnsureSlice(groupsData)
 	common.RespondJSON(w, http.StatusOK, groupsData)
 }
 
@@ -214,9 +209,7 @@ func ListGroupMembers(w http.ResponseWriter, r *http.Request) {
 		}
 		peers = append(peers, p)
 	}
-	if peers == nil {
-		peers = []PeerInGroup{}
-	}
+	peers = common.EnsureSlice(peers)
 
 	common.RespondJSON(w, http.StatusOK, peers)
 }
@@ -251,18 +244,9 @@ func MakeAddGroupMemberHandler(compiler *engine.Compiler) http.HandlerFunc {
 
 		id, _ := result.LastInsertId()
 
-		// Trigger async recompilation for affected peers with timeout (if compiler is available)
+		// Trigger async recompilation for affected peers (if compiler is available)
 		if compiler != nil {
-			go func() {
-				// Use background context so goroutine survives handler return
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-				defer cancel()
-				if err := compiler.RecompileAffectedPeers(ctx, groupID); err != nil {
-					runiclog.ErrorContext(ctx, "async recompile affected peers failed",
-						"group_id", groupID,
-						"error", err)
-				}
-			}()
+			common.AsyncRecompileGroup(compiler, groupID)
 		}
 
 		common.RespondJSON(w, http.StatusCreated, map[string]int64{"id": id})
@@ -289,18 +273,9 @@ func MakeDeleteGroupMemberHandler(compiler *engine.Compiler) http.HandlerFunc {
 			return
 		}
 
-		// Trigger async recompilation with timeout (if compiler is available)
+		// Trigger async recompilation (if compiler is available)
 		if compiler != nil {
-			go func() {
-				// Use background context so goroutine survives handler return
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-				defer cancel()
-				if err := compiler.RecompileAffectedPeers(ctx, groupID); err != nil {
-					runiclog.ErrorContext(ctx, "async recompile affected peers failed",
-						"group_id", groupID,
-						"error", err)
-				}
-			}()
+			common.AsyncRecompileGroup(compiler, groupID)
 		}
 
 		w.WriteHeader(http.StatusNoContent)

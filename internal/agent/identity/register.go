@@ -1,14 +1,11 @@
 package identity
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net"
-	"net/http"
 	"os"
-	"os/exec"
 	"runtime"
 	"strings"
 
@@ -30,7 +27,7 @@ func Register(ctx context.Context, client common.HTTPClient, cfg *Config, versio
 	hasDocker := detectDocker()
 	ip := detectLocalIP()
 
-	hasIPSet := detectIPSet()
+	hasIPSet := common.DetectIPSet()
 
 	body := models.AgentRegisterRequest{
 		Hostname:     hostname,
@@ -43,7 +40,8 @@ func Register(ctx context.Context, client common.HTTPClient, cfg *Config, versio
 		HasIPSet:     &hasIPSet,
 	}
 
-	resp, err := doPost(ctx, client, cfg.ControlPlaneURL, "/api/v1/agent/register", body, cfg.Token)
+	url := cfg.ControlPlaneURL + "/api/v1/agent/register"
+	resp, err := common.DoJSONRequest(ctx, client, "POST", url, body, cfg.Token, "runic-agent")
 	if err != nil {
 		return fmt.Errorf("registration request failed: %w", err)
 	}
@@ -71,28 +69,6 @@ func Register(ctx context.Context, client common.HTTPClient, cfg *Config, versio
 
 	log.Info("Registered with Runic control plane", "hostname", hostname, "host_id", regResp.HostID)
 	return nil
-}
-
-// doPost sends a POST request with authorization.
-func doPost(ctx context.Context, client common.HTTPClient, baseURL, path string, body interface{}, token string) (*http.Response, error) {
-	data, err := json.Marshal(body)
-	if err != nil {
-		return nil, fmt.Errorf("marshal request: %w", err)
-	}
-
-	url := baseURL + path
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(data))
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "runic-agent")
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
-
-	return client.Do(req)
 }
 
 // detectOSType reads /etc/os-release to determine the OS type.
@@ -154,12 +130,6 @@ func detectDocker() bool {
 		return false
 	}
 	return fi.Mode()&os.ModeSocket != 0
-}
-
-// detectIPSet returns true if the ipset binary is available on PATH.
-func detectIPSet() bool {
-	_, err := exec.LookPath("ipset")
-	return err == nil
 }
 
 // detectLocalIP returns the primary non-loopback IPv4 address.

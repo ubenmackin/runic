@@ -92,9 +92,7 @@ func ListServices(w http.ResponseWriter, r *http.Request) {
 		}
 		servicesData = append(servicesData, s)
 	}
-	if servicesData == nil {
-		servicesData = []serviceResp{}
-	}
+	servicesData = common.EnsureSlice(servicesData)
 	common.RespondJSON(w, http.StatusOK, servicesData)
 }
 

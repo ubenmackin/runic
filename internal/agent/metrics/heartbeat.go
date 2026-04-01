@@ -1,13 +1,11 @@
 package metrics
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
-	"os/exec"
 
 	"runic/internal/common"
 	"runic/internal/models"
@@ -24,27 +22,10 @@ func SendHeartbeat(ctx context.Context, client common.HTTPClient, controlPlaneUR
 		UptimeSeconds:        uptime,
 		Load1m:               load,
 		AgentVersion:         version,
-		HasIPSet:             boolPtr(detectIPSet()),
+		HasIPSet:             boolPtr(common.DetectIPSet()),
 	}
 
-	data, err := json.Marshal(body)
-	if err != nil {
-		return fmt.Errorf("marshal heartbeat: %w", err)
-	}
-
-	url := controlPlaneURL + "/api/v1/agent/heartbeat"
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(data))
-	if err != nil {
-		return fmt.Errorf("create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "runic-agent/"+version)
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
-
-	resp, err := client.Do(req)
+	resp, err := common.DoJSONRequest(ctx, client, "POST", controlPlaneURL+"/api/v1/agent/heartbeat", body, token, "runic-agent/"+version)
 	if err != nil {
 		return fmt.Errorf("heartbeat failed: %w", err)
 	}
@@ -89,12 +70,6 @@ func getLoad1m() float64 {
 		return 0
 	}
 	return load1
-}
-
-// detectIPSet checks if the ipset binary is available on the system.
-func detectIPSet() bool {
-	_, err := exec.LookPath("ipset")
-	return err == nil
 }
 
 // boolPtr returns a pointer to the given bool value.

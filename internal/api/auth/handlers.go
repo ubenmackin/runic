@@ -1,19 +1,18 @@
 package auth
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/mattn/go-sqlite3"
 	"golang.org/x/crypto/bcrypt"
 
 	"runic/internal/api/common"
 	"runic/internal/auth"
+	runiccommon "runic/internal/common"
 	"runic/internal/db"
 )
 
@@ -55,7 +54,7 @@ func HandleSetupGET(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	ctx, cancel := runiccommon.WithHandlerTimeout(r.Context())
 	defer cancel()
 
 	var count int
@@ -92,7 +91,7 @@ func HandleSetupPOST(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	ctx, cancel := runiccommon.WithHandlerTimeout(r.Context())
 	defer cancel()
 
 	// Begin transaction
@@ -146,22 +145,13 @@ func HandleSetupPOST(w http.ResponseWriter, r *http.Request) {
 	log.Printf("AUTH SETUP: User '%s' created (IP: %s)", body.Username, r.RemoteAddr)
 
 	// Generate tokens
-	accessToken, err := auth.GenerateToken(body.Username, time.Hour)
+	accessToken, refreshToken, err := GenerateTokenPair(body.Username)
 	if err != nil {
-		common.RespondError(w, http.StatusInternalServerError, "failed to generate access token")
-		return
-	}
-	refreshToken, err := auth.GenerateToken(body.Username, 7*24*time.Hour)
-	if err != nil {
-		common.RespondError(w, http.StatusInternalServerError, "failed to generate refresh token")
+		common.RespondError(w, http.StatusInternalServerError, "failed to generate tokens")
 		return
 	}
 
-	common.RespondJSON(w, http.StatusCreated, map[string]string{
-		"access_token":  accessToken,
-		"refresh_token": refreshToken,
-		"username":      body.Username,
-	})
+	RespondWithTokens(w, http.StatusCreated, accessToken, refreshToken, body.Username, true)
 }
 
 // HandleLoginPOST authenticates an existing user with username and password.
@@ -187,7 +177,7 @@ func HandleLoginPOST(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	ctx, cancel := runiccommon.WithHandlerTimeout(r.Context())
 	defer cancel()
 
 	// Look up user
@@ -214,22 +204,13 @@ func HandleLoginPOST(w http.ResponseWriter, r *http.Request) {
 	log.Printf("AUTH LOGIN: User '%s' authenticated (IP: %s)", body.Username, r.RemoteAddr)
 
 	// Generate tokens
-	accessToken, err := auth.GenerateToken(body.Username, time.Hour)
+	accessToken, refreshToken, err := GenerateTokenPair(body.Username)
 	if err != nil {
-		common.RespondError(w, http.StatusInternalServerError, "failed to generate access token")
-		return
-	}
-	refreshToken, err := auth.GenerateToken(body.Username, 7*24*time.Hour)
-	if err != nil {
-		common.RespondError(w, http.StatusInternalServerError, "failed to generate refresh token")
+		common.RespondError(w, http.StatusInternalServerError, "failed to generate tokens")
 		return
 	}
 
-	common.RespondJSON(w, http.StatusOK, map[string]string{
-		"access_token":  accessToken,
-		"refresh_token": refreshToken,
-		"username":      body.Username,
-	})
+	RespondWithTokens(w, http.StatusOK, accessToken, refreshToken, body.Username, true)
 }
 
 // HandleLogoutPOST handles POST /api/v1/auth/logout by revoking the caller's current token.
@@ -292,17 +273,10 @@ func HandleRefreshPOST(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Generate new access token
-	accessToken, err := auth.GenerateToken(claims.Username, time.Hour)
+	// Generate new tokens (rotation for security)
+	accessToken, refreshToken, err := GenerateTokenPair(claims.Username)
 	if err != nil {
-		common.RespondError(w, http.StatusInternalServerError, "failed to generate access token")
-		return
-	}
-
-	// Generate new refresh token (rotation for security)
-	newRefreshToken, err := auth.GenerateToken(claims.Username, 7*24*time.Hour)
-	if err != nil {
-		common.RespondError(w, http.StatusInternalServerError, "failed to generate refresh token")
+		common.RespondError(w, http.StatusInternalServerError, "failed to generate tokens")
 		return
 	}
 
@@ -314,8 +288,5 @@ func HandleRefreshPOST(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("AUTH REFRESH: Token refreshed for user '%s'", claims.Username)
 
-	common.RespondJSON(w, http.StatusOK, map[string]string{
-		"access_token":  accessToken,
-		"refresh_token": newRefreshToken,
-	})
+	RespondWithTokens(w, http.StatusOK, accessToken, refreshToken, "", false)
 }

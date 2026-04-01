@@ -3,7 +3,6 @@ package transport
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"runic/internal/common"
 	"runic/internal/common/constants"
 	"runic/internal/common/log"
 )
@@ -253,28 +253,12 @@ func (s *Shipper) ship(ctx context.Context, batch []LogEvent) {
 
 	url := s.controlPlaneURL + "/api/v1/agent/logs"
 
-	body, err := json.Marshal(map[string]interface{}{
+	reqBody := map[string]interface{}{
 		"host_id": s.hostID,
 		"events":  batch,
-	})
-	if err != nil {
-		log.Error("Failed to marshal batch", "error", err)
-		return
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", url, strings.NewReader(string(body)))
-	if err != nil {
-		log.Error("Failed to create request", "error", err)
-		return
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "runic-agent")
-	if s.token != "" {
-		req.Header.Set("Authorization", "Bearer "+s.token)
-	}
-
-	resp, err := s.client.Do(req)
+	resp, err := common.DoJSONRequest(ctx, s.client, "POST", url, reqBody, s.token, "runic-agent")
 	if err != nil {
 		log.Error("Failed to ship events", "count", len(batch), "error", err)
 		return

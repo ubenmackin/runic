@@ -8,109 +8,19 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"strings"
-	"sync"
 	"time"
 
 	"runic/internal/api/common"
+	"runic/internal/api/middleware"
+	runiccommon "runic/internal/common"
 	"runic/internal/db"
 )
 
-// Simple rate limiter for public rotation endpoints
-type rateLimiter struct {
-	mu       sync.Mutex
-	requests map[string][]time.Time
-	limit    int
-	window   time.Duration
-}
-
-func newRateLimiter(limit int, window time.Duration) *rateLimiter {
-	return &rateLimiter{
-		requests: make(map[string][]time.Time),
-		limit:    limit,
-		window:   window,
-	}
-}
-
-func (rl *rateLimiter) Allow(key string) bool {
-	rl.mu.Lock()
-	defer rl.mu.Unlock()
-
-	now := time.Now()
-	cutoff := now.Add(-rl.window)
-
-	// Filter old requests
-	var recent []time.Time
-	for _, t := range rl.requests[key] {
-		if t.After(cutoff) {
-			recent = append(recent, t)
-		}
-	}
-
-	if len(recent) >= rl.limit {
-		rl.requests[key] = recent
-		return false
-	}
-
-	rl.requests[key] = append(recent, now)
-	return true
-}
-
-// Global rate limiters for rotation endpoints
+// Rate limiters for rotation endpoints
 var (
-	rotateKeyRateLimiter       = newRateLimiter(10, time.Minute) // 10 requests per minute per IP
-	confirmRotationRateLimiter = newRateLimiter(20, time.Minute) // 20 requests per minute per IP
+	rotateKeyRateLimiter       = middleware.NewRateLimiter(10, time.Minute) // 10 requests per minute per IP
+	confirmRotationRateLimiter = middleware.NewRateLimiter(20, time.Minute) // 20 requests per minute per IP
 )
-
-// getClientIP extracts the client IP from the request, considering proxy headers.
-func getClientIP(r *http.Request) string {
-	// Check X-Forwarded-For header first (set by reverse proxies)
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		// X-Forwarded-For can contain multiple IPs, take the first one
-		if idx := strings.Index(xff, ","); idx > 0 {
-			return strings.TrimSpace(xff[:idx])
-		}
-		return strings.TrimSpace(xff)
-	}
-	// Check X-Real-IP header (set by some proxies like nginx)
-	if xri := r.Header.Get("X-Real-IP"); xri != "" {
-		return strings.TrimSpace(xri)
-	}
-	// Fall back to RemoteAddr
-	return r.RemoteAddr
-}
-
-// cleanup removes stale entries from the rate limiter.
-func (rl *rateLimiter) cleanup() {
-	rl.mu.Lock()
-	defer rl.mu.Unlock()
-
-	cutoff := time.Now().Add(-rl.window)
-	for key, times := range rl.requests {
-		var recent []time.Time
-		for _, t := range times {
-			if t.After(cutoff) {
-				recent = append(recent, t)
-			}
-		}
-		if len(recent) == 0 {
-			delete(rl.requests, key)
-		} else {
-			rl.requests[key] = recent
-		}
-	}
-}
-
-func init() {
-	go func() {
-		ticker := time.NewTicker(5 * time.Minute)
-		defer ticker.Stop()
-		for range ticker.C {
-			rotateKeyRateLimiter.cleanup()
-			confirmRotationRateLimiter.cleanup()
-		}
-	}()
-}
 
 // generateRotationToken generates a cryptographically secure rotation token.
 // The token is a 32-byte random value, hex-encoded (64 chars).
@@ -124,11 +34,7 @@ func generateRotationToken() (string, error) {
 
 // generateHMACKey generates a random 32-byte hex-encoded HMAC key.
 func generateHMACKey() (string, error) {
-	bytes := make([]byte, 32)
-	if _, err := rand.Read(bytes); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(bytes), nil
+	return runiccommon.GenerateHMACKey()
 }
 
 // parseHostID extracts the hostname from a host_id string.
@@ -313,7 +219,7 @@ func AgentRotateKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Rate limiting
-	if !rotateKeyRateLimiter.Allow(getClientIP(r)) {
+	if rotateKeyRateLimiter.Check(r.RemoteAddr) != nil {
 		common.RespondError(w, http.StatusTooManyRequests, "rate limit exceeded")
 		return
 	}
@@ -405,7 +311,7 @@ func AgentConfirmRotation(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Rate limiting
-	if !confirmRotationRateLimiter.Allow(getClientIP(r)) {
+	if confirmRotationRateLimiter.Check(r.RemoteAddr) != nil {
 		common.RespondError(w, http.StatusTooManyRequests, "rate limit exceeded")
 		return
 	}

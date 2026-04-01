@@ -10,15 +10,13 @@ import * as d3 from 'd3'
 // ──────────────────────────────────────────────────────
 
 const COLORS = {
-  forward:    '#22c55e',   // green-500
-  backward:   '#3b82f6',   // blue-500
-  forwardDim: '#16a34a99', // green with alpha
-  backwardDim:'#2563eb99', // blue with alpha
-  peerOnline: '#a855f7',   // purple-500 (matches runic accent)
-  peerOffline:'#6b7280',   // gray-500
-  group:      '#f59e0b',   // amber-500
-  startPeer:  '#a855f7',   // purple-500
-  highlight:  '#f59e0b',   // amber
+  forward:    '#22c55e',
+  backward:   '#3b82f6',
+  peerOnline: '#a855f7',
+  peerOffline:'#6b7280',
+  group:      '#f59e0b',
+  startPeer:  '#a855f7',
+  membership: '#6b728050',
 }
 
 const DARK_COLORS = {
@@ -27,8 +25,6 @@ const DARK_COLORS = {
   nodeStroke: '#4a4a6e',
   text:       '#e2e8f0',
   textMuted:  '#94a3b8',
-  panelBg:    '#1e1e3a',
-  panelBorder:'#3a3a5c',
 }
 
 const LIGHT_COLORS = {
@@ -37,17 +33,20 @@ const LIGHT_COLORS = {
   nodeStroke: '#d1d5db',
   text:       '#1f2937',
   textMuted:  '#6b7280',
-  panelBg:    '#ffffff',
-  panelBorder:'#e5e7eb',
 }
+
+// Layout constants
+const NODE_WIDTH = 160
+const NODE_HEIGHT = 80
+const LEVEL_SPACING = 280
+const SIBLING_SPACING = 90
 
 // ──────────────────────────────────────────────────────
 // Hook: resolve group members for all relevant groups
 // ──────────────────────────────────────────────────────
 
 function useGroupMembers(groupIds) {
-  // Fetch members for each group in parallel using individual queries
-  const queries = useQuery({
+  return useQuery({
     queryKey: ['topology-group-members', ...groupIds],
     queryFn: async () => {
       if (!groupIds.length) return {}
@@ -67,17 +66,15 @@ function useGroupMembers(groupIds) {
     enabled: groupIds.length > 0,
     staleTime: 30000,
   })
-  return queries
 }
 
 // ──────────────────────────────────────────────────────
-// Build topology graph data from APIs
+// Build hierarchy tree data from policies
 // ──────────────────────────────────────────────────────
 
-function buildGraph(startPeerId, peers, groups, policies, services, groupMembersMap) {
-  if (!startPeerId || !peers?.length || !policies?.length) return { nodes: [], edges: [] }
+function buildTreeData(startPeerId, peers, groups, policies, services, groupMembersMap, expandedGroups) {
+  if (!startPeerId || !peers?.length || !policies?.length) return null
 
-  // Only enabled ACCEPT policies
   const activePolicies = policies.filter(p => p.enabled && p.action === 'ACCEPT')
 
   // Find all groups the starting peer belongs to
@@ -90,195 +87,157 @@ function buildGraph(startPeerId, peers, groups, policies, services, groupMembers
 
   // Find policies involving the starting peer
   const relevantPolicies = activePolicies.filter(p => {
-    // Direct peer match
     if (p.source_type === 'peer' && p.source_id === startPeerId) return true
     if (p.target_type === 'peer' && p.target_id === startPeerId) return true
-    // Group match
     if (p.source_type === 'group' && myGroupIds.has(p.source_id)) return true
     if (p.target_type === 'group' && myGroupIds.has(p.target_id)) return true
     return false
   })
 
-  // Build nodes
-  const nodesMap = new Map()
+  if (!relevantPolicies.length) return null
 
-  // Always add starting peer
   const startPeer = peers.find(p => p.id === startPeerId)
-  if (!startPeer) return { nodes: [], edges: [] }
-  nodesMap.set(`peer-${startPeerId}`, {
+  if (!startPeer) return null
+
+  // Group policies by the "other" entity (the entity that isn't the starting peer)
+  const connectionMap = new Map() // entityKey -> { node info, edges[] }
+
+  for (const pol of relevantPolicies) {
+    const serviceName = services?.find(s => s.id === pol.service_id)?.name || 'Unknown'
+    const servicePorts = services?.find(s => s.id === pol.service_id)?.ports || ''
+
+    // Determine which end is the "other" entity
+    let otherType, otherId, isStartSource
+
+    // Check if start peer is source side
+    if (
+      (pol.source_type === 'peer' && pol.source_id === startPeerId) ||
+      (pol.source_type === 'group' && myGroupIds.has(pol.source_id))
+    ) {
+      // Starting peer is on the source side
+      otherType = pol.target_type
+      otherId = pol.target_id
+      isStartSource = true
+    } else {
+      // Starting peer is on the target side
+      otherType = pol.source_type
+      otherId = pol.source_id
+      isStartSource = false
+    }
+
+    // Skip special targets and self-connections
+    if (otherType === 'special') continue
+    if (otherType === 'peer' && otherId === startPeerId) continue
+
+    const entityKey = `${otherType}-${otherId}`
+
+    if (!connectionMap.has(entityKey)) {
+      let nodeData
+      if (otherType === 'peer') {
+        const peer = peers.find(p => p.id === otherId)
+        if (!peer) continue
+        nodeData = {
+          id: entityKey,
+          type: 'peer',
+          entityId: otherId,
+          label: peer.hostname || peer.ip_address,
+          data: peer,
+        }
+      } else if (otherType === 'group') {
+        const group = groups.find(g => g.id === otherId)
+        if (!group) continue
+        nodeData = {
+          id: entityKey,
+          type: 'group',
+          entityId: otherId,
+          label: group.name,
+          data: group,
+          peerCount: group.peer_count || 0,
+        }
+      }
+      if (nodeData) {
+        connectionMap.set(entityKey, { node: nodeData, edges: [] })
+      }
+    }
+
+    const conn = connectionMap.get(entityKey)
+    if (!conn) continue
+
+    // Determine edge directions relative to the tree (left→right = forward, right→left = backward)
+    if (pol.direction === 'forward' || pol.direction === 'both') {
+      // Policy forward means source→target
+      // If start is source, forward goes left→right (forward in tree)
+      // If start is target, forward goes right→left from tree perspective (backward in tree)
+      conn.edges.push({
+        id: `${pol.id}-fwd`,
+        direction: isStartSource ? 'forward' : 'backward',
+        policyId: pol.id,
+        policyName: pol.name,
+        serviceName,
+        servicePorts,
+      })
+    }
+    if (pol.direction === 'backward' || pol.direction === 'both') {
+      conn.edges.push({
+        id: `${pol.id}-bwd`,
+        direction: isStartSource ? 'backward' : 'forward',
+        policyId: pol.id,
+        policyName: pol.name,
+        serviceName,
+        servicePorts,
+      })
+    }
+  }
+
+  // Build tree hierarchy
+  const rootChildren = []
+  for (const [, conn] of connectionMap) {
+    const child = {
+      ...conn.node,
+      edges: conn.edges,
+      children: [],
+    }
+
+    // If this is an expanded group, add member peers as children
+    if (child.type === 'group' && expandedGroups.has(child.entityId)) {
+      const members = groupMembersMap?.[child.entityId] || []
+      for (const member of members) {
+        // Don't add the starting peer as a child of its own group
+        if (member.id === startPeerId) continue
+        child.children.push({
+          id: `member-${child.entityId}-peer-${member.id}`,
+          type: 'peer',
+          entityId: member.id,
+          label: member.hostname || member.ip_address,
+          data: member,
+          isMember: true,
+          edges: [], // membership edges don't carry policy info
+        })
+      }
+    }
+
+    rootChildren.push(child)
+  }
+
+  return {
     id: `peer-${startPeerId}`,
     type: 'peer',
     entityId: startPeerId,
     label: startPeer.hostname || startPeer.ip_address,
     data: startPeer,
     isStart: true,
-  })
-
-  // Add connected entities
-  for (const pol of relevantPolicies) {
-    // Add source
-    const srcKey = `${pol.source_type}-${pol.source_id}`
-    if (!nodesMap.has(srcKey)) {
-      if (pol.source_type === 'peer') {
-        const peer = peers.find(p => p.id === pol.source_id)
-        if (peer) {
-          nodesMap.set(srcKey, {
-            id: srcKey, type: 'peer', entityId: pol.source_id,
-            label: peer.hostname || peer.ip_address, data: peer, isStart: false,
-          })
-        }
-      } else if (pol.source_type === 'group') {
-        const group = groups.find(g => g.id === pol.source_id)
-        if (group) {
-          nodesMap.set(srcKey, {
-            id: srcKey, type: 'group', entityId: pol.source_id,
-            label: group.name, data: group, isStart: false,
-            peerCount: group.peer_count || 0,
-          })
-        }
-      }
-    }
-
-    // Add target
-    const tgtKey = `${pol.target_type}-${pol.target_id}`
-    if (!nodesMap.has(tgtKey)) {
-      if (pol.target_type === 'peer') {
-        const peer = peers.find(p => p.id === pol.target_id)
-        if (peer) {
-          nodesMap.set(tgtKey, {
-            id: tgtKey, type: 'peer', entityId: pol.target_id,
-            label: peer.hostname || peer.ip_address, data: peer, isStart: false,
-          })
-        }
-      } else if (pol.target_type === 'group') {
-        const group = groups.find(g => g.id === pol.target_id)
-        if (group) {
-          nodesMap.set(tgtKey, {
-            id: tgtKey, type: 'group', entityId: pol.target_id,
-            label: group.name, data: group, isStart: false,
-            peerCount: group.peer_count || 0,
-          })
-        }
-      } else if (pol.target_type === 'special') {
-        // Skip specials for now - not useful in topology
-      }
-    }
-  }
-
-  // Build edges for each policy
-  const edges = []
-  for (const pol of relevantPolicies) {
-    const srcKey = `${pol.source_type}-${pol.source_id}`
-    const tgtKey = `${pol.target_type}-${pol.target_id}`
-
-    // Skip edges where both nodes aren't in our graph
-    if (!nodesMap.has(srcKey) || !nodesMap.has(tgtKey)) continue
-
-    const serviceName = services?.find(s => s.id === pol.service_id)?.name || 'Unknown'
-    const servicePorts = services?.find(s => s.id === pol.service_id)?.ports || ''
-
-    if (pol.direction === 'both' || pol.direction === 'forward') {
-      edges.push({
-        id: `${pol.id}-fwd`,
-        source: srcKey,
-        target: tgtKey,
-        direction: 'forward',
-        policyId: pol.id,
-        policyName: pol.name,
-        serviceName,
-        servicePorts,
-        serviceId: pol.service_id,
-      })
-    }
-    if (pol.direction === 'both' || pol.direction === 'backward') {
-      edges.push({
-        id: `${pol.id}-bwd`,
-        source: tgtKey,
-        target: srcKey,
-        direction: 'backward',
-        policyId: pol.id,
-        policyName: pol.name,
-        serviceName,
-        servicePorts,
-        serviceId: pol.service_id,
-      })
-    }
-  }
-
-  return {
-    nodes: Array.from(nodesMap.values()),
-    edges,
+    edges: [],
+    children: rootChildren,
   }
 }
 
 // ──────────────────────────────────────────────────────
-// Group explosion: replace a group node with its peers
+// Tree Graph Renderer
 // ──────────────────────────────────────────────────────
 
-function explodeGroup(graph, groupNodeId, groupMembers, peers, expandedGroups) {
-  const groupNode = graph.nodes.find(n => n.id === groupNodeId)
-  if (!groupNode || groupNode.type !== 'group') return graph
-
-  const newNodes = graph.nodes.filter(n => n.id !== groupNodeId)
-  const memberPeerIds = (groupMembers || []).map(m => m.id)
-
-  // Add member peers as nodes (if not already present)
-  for (const memberId of memberPeerIds) {
-    const memberKey = `peer-${memberId}`
-    if (!newNodes.find(n => n.id === memberKey)) {
-      const peer = peers.find(p => p.id === memberId)
-      if (peer) {
-        newNodes.push({
-          id: memberKey,
-          type: 'peer',
-          entityId: memberId,
-          label: peer.hostname || peer.ip_address,
-          data: peer,
-          isStart: false,
-          fromGroup: groupNode.entityId,
-          // Position near where the group was
-          x: (groupNode.x || 0) + (Math.random() - 0.5) * 80,
-          y: (groupNode.y || 0) + (Math.random() - 0.5) * 80,
-        })
-      }
-    }
-  }
-
-  // Re-route edges: any edge pointing to/from the group now points to each member peer
-  const newEdges = []
-  for (const edge of graph.edges) {
-    if (edge.source === groupNodeId || (edge.source && edge.source.id === groupNodeId)) {
-      // Group was source → each member peer becomes source
-      for (const memberId of memberPeerIds) {
-        const memberKey = `peer-${memberId}`
-        if (newNodes.find(n => n.id === memberKey)) {
-          newEdges.push({ ...edge, id: `${edge.id}-exp-${memberId}`, source: memberKey })
-        }
-      }
-    } else if (edge.target === groupNodeId || (edge.target && edge.target.id === groupNodeId)) {
-      // Group was target → each member peer becomes target
-      for (const memberId of memberPeerIds) {
-        const memberKey = `peer-${memberId}`
-        if (newNodes.find(n => n.id === memberKey)) {
-          newEdges.push({ ...edge, id: `${edge.id}-exp-${memberId}`, target: memberKey })
-        }
-      }
-    } else {
-      newEdges.push(edge)
-    }
-  }
-
-  return { nodes: newNodes, edges: newEdges }
-}
-
-// ──────────────────────────────────────────────────────
-// D3 Force Graph Renderer
-// ──────────────────────────────────────────────────────
-
-function ForceGraph({ graph, isDark, onNodeClick, onEdgeClick, onGroupExpand }) {
+function TreeGraph({ treeData, isDark, onNodeClick, onEdgeClick, onGroupExpand }) {
   const svgRef = useRef(null)
   const containerRef = useRef(null)
-  const simulationRef = useRef(null)
   const zoomRef = useRef(null)
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 })
 
@@ -298,22 +257,21 @@ function ForceGraph({ graph, isDark, onNodeClick, onEdgeClick, onGroupExpand }) 
     return () => ro.disconnect()
   }, [])
 
-  // D3 force simulation
+  // Render tree with D3
   useEffect(() => {
-    if (!svgRef.current || !graph.nodes.length) return
+    if (!svgRef.current || !treeData) return
 
     const svg = d3.select(svgRef.current)
     const { width, height } = dimensions
 
-    // Clear previous
     svg.selectAll('*').remove()
 
-    // Defs for arrow markers and animations
+    // Defs
     const defs = svg.append('defs')
 
     // Glow filter for start node
-    const glow = defs.append('filter').attr('id', 'glow')
-    glow.append('feGaussianBlur').attr('stdDeviation', '4').attr('result', 'blur')
+    const glow = defs.append('filter').attr('id', 'glow').attr('x', '-50%').attr('y', '-50%').attr('width', '200%').attr('height', '200%')
+    glow.append('feGaussianBlur').attr('stdDeviation', '6').attr('result', 'blur')
     glow.append('feMerge').selectAll('feMergeNode')
       .data(['blur', 'SourceGraphic'])
       .join('feMergeNode')
@@ -331,160 +289,233 @@ function ForceGraph({ graph, isDark, onNodeClick, onEdgeClick, onGroupExpand }) 
     svg.call(zoom)
     zoomRef.current = zoom
 
-    // Prepare D3 node/link data (clone to avoid mutation)
-    const nodes = graph.nodes.map(n => ({ ...n }))
-    const links = graph.edges.map(e => ({
-      ...e,
-      source: typeof e.source === 'object' ? e.source.id : e.source,
-      target: typeof e.target === 'object' ? e.target.id : e.target,
-    }))
+    // Build D3 hierarchy
+    const root = d3.hierarchy(treeData, d => d.children)
 
-    // Group parallel edges by same source-target pair for offset
-    const edgePairCount = {}
-    const edgePairIndex = {}
-    for (const link of links) {
-      const pairKey = [link.source, link.target].sort().join('|')
-      edgePairCount[pairKey] = (edgePairCount[pairKey] || 0) + 1
-    }
-    for (const link of links) {
-      const pairKey = [link.source, link.target].sort().join('|')
-      if (!edgePairIndex[pairKey]) edgePairIndex[pairKey] = 0
-      link._pairIndex = edgePairIndex[pairKey]++
-      link._pairTotal = edgePairCount[pairKey]
-    }
+    // Count total leaves for height calculation
+    const leaves = root.leaves().length
+    const treeHeight = Math.max(leaves * SIBLING_SPACING, 300)
 
-    // Force simulation
-    const simulation = d3.forceSimulation(nodes)
-      .force('link', d3.forceLink(links).id(d => d.id).distance(200))
-      .force('charge', d3.forceManyBody().strength(-800))
-      .force('center', d3.forceCenter(width / 2, height / 2))
-      .force('collision', d3.forceCollide().radius(60))
+    // Create tree layout (horizontal: left to right)
+    const treeLayout = d3.tree()
+      .size([treeHeight, (root.height) * LEVEL_SPACING])
+      .separation((a, b) => (a.parent === b.parent ? 1 : 1.3))
 
-    simulationRef.current = simulation
+    treeLayout(root)
 
-    // Edge elements (drawn first so they're behind nodes)
+    // Offset so root isn't at x=0
+    const offsetX = 100
+    const offsetY = 60
+
+    // ── Draw edges ──
     const linkGroup = g.append('g').attr('class', 'links')
 
-    const linkElements = linkGroup.selectAll('g.link-group')
-      .data(links)
-      .join('g')
-      .attr('class', 'link-group')
-      .style('cursor', 'pointer')
-      .on('click', (event, d) => {
-        event.stopPropagation()
-        onEdgeClick?.(d)
-      })
+    root.links().forEach(link => {
+      const parentData = link.source.data
+      const childData = link.target.data
+      const edges = childData.edges || []
+      const isMembershipEdge = childData.isMember
 
-    // The actual animated path for each link
-    const linkPaths = linkElements.append('path')
-      .attr('fill', 'none')
-      .attr('stroke', d => d.direction === 'forward' ? COLORS.forward : COLORS.backward)
-      .attr('stroke-width', 2.5)
-      .attr('stroke-dasharray', '8 4')
-      .attr('opacity', 0.8)
+      // Source and target positions (swap x/y for horizontal tree)
+      const sx = link.source.y + offsetX
+      const sy = link.source.x + offsetY
+      const tx = link.target.y + offsetX
+      const ty = link.target.x + offsetY
 
-    // Invisible wider hitbox for easier clicking
-    const linkHitboxes = linkElements.append('path')
-      .attr('fill', 'none')
-      .attr('stroke', 'transparent')
-      .attr('stroke-width', 20)
+      if (isMembershipEdge) {
+        // Simple dashed line for group→member connections
+        linkGroup.append('path')
+          .attr('d', `M${sx},${sy} C${(sx + tx) / 2},${sy} ${(sx + tx) / 2},${ty} ${tx},${ty}`)
+          .attr('fill', 'none')
+          .attr('stroke', COLORS.membership)
+          .attr('stroke-width', 1.5)
+          .attr('stroke-dasharray', '6 4')
+        return
+      }
 
-    // Service pills on links
-    const pillGroups = linkElements.append('g').attr('class', 'pill')
+      // Deduplicate edges by direction (combine same-direction edges into one line)
+      const hasForward = edges.some(e => e.direction === 'forward')
+      const hasBackward = edges.some(e => e.direction === 'backward')
+      const forwardEdges = edges.filter(e => e.direction === 'forward')
+      const backwardEdges = edges.filter(e => e.direction === 'backward')
 
-    const pillRects = pillGroups.append('rect')
-      .attr('rx', 10)
-      .attr('ry', 10)
-      .attr('fill', isDark ? '#2d2d4e' : '#ffffff')
-      .attr('stroke', d => d.direction === 'forward' ? COLORS.forward : COLORS.backward)
-      .attr('stroke-width', 1.5)
-      .attr('opacity', 0.95)
+      const drawDirectionalEdge = (direction, edgeList, offset) => {
+        const color = direction === 'forward' ? COLORS.forward : COLORS.backward
 
-    const pillTexts = pillGroups.append('text')
-      .text(d => d.serviceName)
-      .attr('text-anchor', 'middle')
-      .attr('dominant-baseline', 'central')
-      .attr('fill', d => d.direction === 'forward' ? COLORS.forward : COLORS.backward)
-      .attr('font-size', '10px')
-      .attr('font-weight', '600')
-      .attr('font-family', 'Inter, system-ui, sans-serif')
+        // Offset the curve vertically for parallel lines
+        const osy = sy + offset
+        const oty = ty + offset
 
-    // Measure text widths and set rect widths
-    pillTexts.each(function(d) {
-      const bbox = this.getBBox()
-      d._pillWidth = bbox.width + 16
-      d._pillHeight = 20
+        const midX = (sx + tx) / 2
+        const pathD = `M${sx},${osy} C${midX},${osy} ${midX},${oty} ${tx},${oty}`
+
+        // Animated edge path
+        const edgePath = linkGroup.append('path')
+          .attr('d', pathD)
+          .attr('fill', 'none')
+          .attr('stroke', color)
+          .attr('stroke-width', 2.5)
+          .attr('stroke-dasharray', '8 4')
+          .attr('opacity', 0.85)
+          .attr('class', `edge-${direction}`)
+
+        // Wider hitbox for clicking
+        linkGroup.append('path')
+          .attr('d', pathD)
+          .attr('fill', 'none')
+          .attr('stroke', 'transparent')
+          .attr('stroke-width', 20)
+          .style('cursor', 'pointer')
+          .on('click', (event) => {
+            event.stopPropagation()
+            onEdgeClick?.(edgeList[0]) // Show first edge details on click
+          })
+
+        // Arrow at ~75% along path
+        const t = 0.75
+        const ax = (1-t)*(1-t)*(1-t)*sx + 3*(1-t)*(1-t)*t*midX + 3*(1-t)*t*t*midX + t*t*t*tx
+        const ay = (1-t)*(1-t)*(1-t)*osy + 3*(1-t)*(1-t)*t*osy + 3*(1-t)*t*t*oty + t*t*t*oty
+        // Tangent direction
+        const dt = 0.01
+        const t2 = t + dt
+        const ax2 = (1-t2)*(1-t2)*(1-t2)*sx + 3*(1-t2)*(1-t2)*t2*midX + 3*(1-t2)*t2*t2*midX + t2*t2*t2*tx
+        const ay2 = (1-t2)*(1-t2)*(1-t2)*osy + 3*(1-t2)*(1-t2)*t2*osy + 3*(1-t2)*t2*t2*oty + t2*t2*t2*oty
+        const angle = Math.atan2(ay2 - ay, ax2 - ax) * 180 / Math.PI
+        const flip = direction === 'backward' ? 180 : 0
+
+        linkGroup.append('polygon')
+          .attr('points', '0,-5 10,0 0,5')
+          .attr('fill', color)
+          .attr('opacity', 0.9)
+          .attr('transform', `translate(${ax},${ay}) rotate(${angle + flip})`)
+
+        // Service pills at midpoint
+        const pillMidT = 0.45
+        const pillX = (1-pillMidT)*(1-pillMidT)*(1-pillMidT)*sx + 3*(1-pillMidT)*(1-pillMidT)*pillMidT*midX + 3*(1-pillMidT)*pillMidT*pillMidT*midX + pillMidT*pillMidT*pillMidT*tx
+        const pillY = (1-pillMidT)*(1-pillMidT)*(1-pillMidT)*osy + 3*(1-pillMidT)*(1-pillMidT)*pillMidT*osy + 3*(1-pillMidT)*pillMidT*pillMidT*oty + pillMidT*pillMidT*pillMidT*oty
+
+        // Collect unique service names for this direction
+        const serviceNames = [...new Set(edgeList.map(e => e.serviceName))]
+
+        serviceNames.forEach((svc, i) => {
+          const pillG = linkGroup.append('g')
+            .attr('transform', `translate(${pillX}, ${pillY + (i - (serviceNames.length - 1) / 2) * 22})`)
+            .style('cursor', 'pointer')
+            .on('click', (event) => {
+              event.stopPropagation()
+              const edge = edgeList.find(e => e.serviceName === svc)
+              if (edge) onEdgeClick?.(edge)
+            })
+
+          const text = pillG.append('text')
+            .text(svc)
+            .attr('text-anchor', 'middle')
+            .attr('dominant-baseline', 'central')
+            .attr('fill', color)
+            .attr('font-size', '10px')
+            .attr('font-weight', '600')
+            .attr('font-family', 'Inter, system-ui, sans-serif')
+
+          const bbox = text.node().getBBox()
+          const pw = bbox.width + 14
+          const ph = 18
+
+          pillG.insert('rect', 'text')
+            .attr('x', -pw / 2)
+            .attr('y', -ph / 2)
+            .attr('width', pw)
+            .attr('height', ph)
+            .attr('rx', 9)
+            .attr('ry', 9)
+            .attr('fill', isDark ? '#2d2d4e' : '#ffffff')
+            .attr('stroke', color)
+            .attr('stroke-width', 1.5)
+            .attr('opacity', 0.95)
+        })
+      }
+
+      if (hasForward && hasBackward) {
+        // Two parallel lines offset vertically
+        drawDirectionalEdge('forward', forwardEdges, -10)
+        drawDirectionalEdge('backward', backwardEdges, 10)
+      } else if (hasForward) {
+        drawDirectionalEdge('forward', forwardEdges, 0)
+      } else if (hasBackward) {
+        drawDirectionalEdge('backward', backwardEdges, 0)
+      }
     })
-    pillRects
-      .attr('width', d => d._pillWidth || 50)
-      .attr('height', d => d._pillHeight || 20)
 
-    // Arrow indicators on paths
-    const arrowGroups = linkElements.append('g').attr('class', 'arrow')
-
-    arrowGroups.append('polygon')
-      .attr('points', '0,-5 10,0 0,5')
-      .attr('fill', d => d.direction === 'forward' ? COLORS.forward : COLORS.backward)
-      .attr('opacity', 0.9)
-
-    // Node elements
+    // ── Draw nodes ──
     const nodeGroup = g.append('g').attr('class', 'nodes')
 
     const nodeElements = nodeGroup.selectAll('g.node')
-      .data(nodes)
+      .data(root.descendants())
       .join('g')
       .attr('class', 'node')
+      .attr('transform', d => `translate(${d.y + offsetX},${d.x + offsetY})`)
       .style('cursor', 'pointer')
       .on('click', (event, d) => {
         event.stopPropagation()
-        if (d.type === 'group') {
-          onGroupExpand?.(d)
+        if (d.data.type === 'group' && !d.data.isMember) {
+          onGroupExpand?.(d.data)
         } else {
-          onNodeClick?.(d)
+          onNodeClick?.(d.data)
         }
       })
 
-    // Drag behavior
-    const drag = d3.drag()
-      .on('start', (event, d) => {
-        if (!event.active) simulation.alphaTarget(0.3).restart()
-        d.fx = d.x
-        d.fy = d.y
-      })
-      .on('drag', (event, d) => {
-        d.fx = event.x
-        d.fy = event.y
-      })
-      .on('end', (event, d) => {
-        if (!event.active) simulation.alphaTarget(0)
-        d.fx = null
-        d.fy = null
-      })
-
-    nodeElements.call(drag)
-
-    // Draw node shapes
     nodeElements.each(function(d) {
       const el = d3.select(this)
+      const nodeData = d.data
+      const isManual = nodeData.data?.is_manual
 
-      if (d.isStart) {
-        // Starting peer: larger circle with glow
-        el.append('circle')
-          .attr('r', 38)
-          .attr('fill', COLORS.startPeer + '20')
+      if (nodeData.isStart) {
+        // Starting peer: larger rounded rect with glow
+        el.append('rect')
+          .attr('x', -50)
+          .attr('y', -30)
+          .attr('width', 100)
+          .attr('height', 60)
+          .attr('rx', 16)
+          .attr('fill', COLORS.startPeer + '15')
           .attr('stroke', COLORS.startPeer)
           .attr('stroke-width', 3)
           .attr('filter', 'url(#glow)')
 
-        el.append('circle')
-          .attr('r', 32)
+        el.append('rect')
+          .attr('x', -44)
+          .attr('y', -24)
+          .attr('width', 88)
+          .attr('height', 48)
+          .attr('rx', 12)
           .attr('fill', isDark ? DARK_COLORS.nodeFill : LIGHT_COLORS.nodeFill)
           .attr('stroke', COLORS.startPeer)
           .attr('stroke-width', 2)
 
-      } else if (d.type === 'group') {
-        // Group: hexagon shape
-        const size = 35
+        // Label
+        el.append('text')
+          .text(nodeData.label.length > 14 ? nodeData.label.slice(0, 12) + '…' : nodeData.label)
+          .attr('text-anchor', 'middle')
+          .attr('dominant-baseline', 'central')
+          .attr('y', -2)
+          .attr('fill', colors.text)
+          .attr('font-size', '12px')
+          .attr('font-weight', '700')
+          .attr('font-family', 'Inter, system-ui, sans-serif')
+
+        // "START" badge
+        el.append('text')
+          .text('★ START')
+          .attr('text-anchor', 'middle')
+          .attr('y', 14)
+          .attr('fill', COLORS.startPeer)
+          .attr('font-size', '8px')
+          .attr('font-weight', '700')
+          .attr('letter-spacing', '0.5px')
+          .attr('font-family', 'Inter, system-ui, sans-serif')
+
+      } else if (nodeData.type === 'group') {
+        // Group: hexagon
+        const size = 30
         const hexPoints = Array.from({ length: 6 }, (_, i) => {
           const angle = (Math.PI / 3) * i - Math.PI / 6
           return `${Math.cos(angle) * size},${Math.sin(angle) * size}`
@@ -497,12 +528,10 @@ function ForceGraph({ graph, isDark, onNodeClick, onEdgeClick, onGroupExpand }) 
           .attr('stroke-width', 2.5)
 
         // Peer count badge
-        const badgeGroup = el.append('g').attr('transform', `translate(20, -25)`)
-        badgeGroup.append('circle')
-          .attr('r', 10)
-          .attr('fill', COLORS.group)
-        badgeGroup.append('text')
-          .text(d.peerCount || 0)
+        const badge = el.append('g').attr('transform', 'translate(18, -22)')
+        badge.append('circle').attr('r', 9).attr('fill', COLORS.group)
+        badge.append('text')
+          .text(nodeData.peerCount || 0)
           .attr('text-anchor', 'middle')
           .attr('dominant-baseline', 'central')
           .attr('fill', '#fff')
@@ -510,179 +539,126 @@ function ForceGraph({ graph, isDark, onNodeClick, onEdgeClick, onGroupExpand }) 
           .attr('font-weight', 'bold')
           .attr('font-family', 'Inter, system-ui, sans-serif')
 
-      } else {
-        // Regular peer: circle
-        const isOnline = d.data?.status === 'online'
-        el.append('circle')
-          .attr('r', 26)
-          .attr('fill', isDark ? DARK_COLORS.nodeFill : LIGHT_COLORS.nodeFill)
-          .attr('stroke', isOnline ? COLORS.peerOnline : COLORS.peerOffline)
-          .attr('stroke-width', 2)
+        // Label
+        el.append('text')
+          .text(nodeData.label.length > 14 ? nodeData.label.slice(0, 12) + '…' : nodeData.label)
+          .attr('text-anchor', 'middle')
+          .attr('y', 44)
+          .attr('fill', colors.text)
+          .attr('font-size', '11px')
+          .attr('font-weight', '500')
+          .attr('font-family', 'Inter, system-ui, sans-serif')
 
-        // Status dot
-        el.append('circle')
-          .attr('cx', 18)
-          .attr('cy', -18)
-          .attr('r', 5)
-          .attr('fill', isOnline ? '#22c55e' : '#ef4444')
-          .attr('stroke', isDark ? DARK_COLORS.nodeFill : LIGHT_COLORS.nodeFill)
-          .attr('stroke-width', 1.5)
-      }
-
-      // Label
-      const labelY = d.type === 'group' ? 48 : (d.isStart ? 50 : 40)
-      el.append('text')
-        .text(d.label.length > 16 ? d.label.slice(0, 14) + '…' : d.label)
-        .attr('text-anchor', 'middle')
-        .attr('y', labelY)
-        .attr('fill', colors.text)
-        .attr('font-size', d.isStart ? '13px' : '11px')
-        .attr('font-weight', d.isStart ? '700' : '500')
-        .attr('font-family', 'Inter, system-ui, sans-serif')
-
-      // Type badge below label
-      if (d.type === 'group') {
+        // "GROUP" type label
         el.append('text')
           .text('GROUP')
           .attr('text-anchor', 'middle')
-          .attr('y', labelY + 15)
+          .attr('y', 57)
           .attr('fill', COLORS.group)
           .attr('font-size', '8px')
           .attr('font-weight', '700')
           .attr('letter-spacing', '0.5px')
           .attr('font-family', 'Inter, system-ui, sans-serif')
+
+        // Expand hint if not already expanded
+        if (!nodeData.children?.length) {
+          el.append('text')
+            .text('click to expand')
+            .attr('text-anchor', 'middle')
+            .attr('y', 70)
+            .attr('fill', colors.textMuted)
+            .attr('font-size', '8px')
+            .attr('font-style', 'italic')
+            .attr('font-family', 'Inter, system-ui, sans-serif')
+        }
+
+      } else {
+        // Regular peer: rounded rect
+        const isOnline = nodeData.data?.status === 'online'
+        const strokeColor = isManual ? '#8b5cf6' : (isOnline ? COLORS.peerOnline : COLORS.peerOffline)
+
+        el.append('rect')
+          .attr('x', -40)
+          .attr('y', -22)
+          .attr('width', 80)
+          .attr('height', 44)
+          .attr('rx', 10)
+          .attr('fill', isDark ? DARK_COLORS.nodeFill : LIGHT_COLORS.nodeFill)
+          .attr('stroke', strokeColor)
+          .attr('stroke-width', 2)
+
+        // Status dot — only for non-manual peers
+        if (!isManual) {
+          el.append('circle')
+            .attr('cx', 32)
+            .attr('cy', -16)
+            .attr('r', 5)
+            .attr('fill', isOnline ? '#22c55e' : '#ef4444')
+            .attr('stroke', isDark ? DARK_COLORS.nodeFill : LIGHT_COLORS.nodeFill)
+            .attr('stroke-width', 1.5)
+        }
+
+        // Label
+        el.append('text')
+          .text(nodeData.label.length > 12 ? nodeData.label.slice(0, 10) + '…' : nodeData.label)
+          .attr('text-anchor', 'middle')
+          .attr('dominant-baseline', 'central')
+          .attr('fill', colors.text)
+          .attr('font-size', '11px')
+          .attr('font-weight', '500')
+          .attr('font-family', 'Inter, system-ui, sans-serif')
+
+        // If member of expanded group, show subtle "member" label
+        if (nodeData.isMember) {
+          el.append('text')
+            .text('member')
+            .attr('text-anchor', 'middle')
+            .attr('y', 34)
+            .attr('fill', colors.textMuted)
+            .attr('font-size', '8px')
+            .attr('font-style', 'italic')
+            .attr('font-family', 'Inter, system-ui, sans-serif')
+        }
       }
     })
 
-    // Animation: flowing dashes
+    // ── Animate edges ──
     let animFrame
     let animTime = 0
-    function animateLinks() {
+    function animate() {
       animTime += 0.5
-      linkPaths.attr('stroke-dashoffset', d => {
-        return d.direction === 'forward' ? -animTime : animTime
-      })
-      animFrame = requestAnimationFrame(animateLinks)
+      g.selectAll('.edge-forward').attr('stroke-dashoffset', -animTime)
+      g.selectAll('.edge-backward').attr('stroke-dashoffset', animTime)
+      animFrame = requestAnimationFrame(animate)
     }
-    animateLinks()
+    animate()
 
-    // Tick function for simulation
-    simulation.on('tick', () => {
-      // Update link paths (curved for parallel edges)
-      linkPaths.attr('d', d => {
-        const sx = d.source.x, sy = d.source.y
-        const tx = d.target.x, ty = d.target.y
-
-        if (d._pairTotal > 1) {
-          // Offset parallel lines with quadratic curves
-          const dx = tx - sx, dy = ty - sy
-          const len = Math.sqrt(dx * dx + dy * dy) || 1
-          const offset = (d._pairIndex - (d._pairTotal - 1) / 2) * 30
-          const mx = (sx + tx) / 2 + (-dy / len) * offset
-          const my = (sy + ty) / 2 + (dx / len) * offset
-          return `M${sx},${sy} Q${mx},${my} ${tx},${ty}`
-        }
-        return `M${sx},${sy} L${tx},${ty}`
-      })
-
-      linkHitboxes.attr('d', d => {
-        const sx = d.source.x, sy = d.source.y
-        const tx = d.target.x, ty = d.target.y
-        if (d._pairTotal > 1) {
-          const dx = tx - sx, dy = ty - sy
-          const len = Math.sqrt(dx * dx + dy * dy) || 1
-          const offset = (d._pairIndex - (d._pairTotal - 1) / 2) * 30
-          const mx = (sx + tx) / 2 + (-dy / len) * offset
-          const my = (sy + ty) / 2 + (dx / len) * offset
-          return `M${sx},${sy} Q${mx},${my} ${tx},${ty}`
-        }
-        return `M${sx},${sy} L${tx},${ty}`
-      })
-
-      // Position pills at midpoint of each link
-      pillGroups.attr('transform', d => {
-        const sx = d.source.x, sy = d.source.y
-        const tx = d.target.x, ty = d.target.y
-        let mx, my
-        if (d._pairTotal > 1) {
-          const dx = tx - sx, dy = ty - sy
-          const len = Math.sqrt(dx * dx + dy * dy) || 1
-          const offset = (d._pairIndex - (d._pairTotal - 1) / 2) * 30
-          // Midpoint of quadratic bezier: avg of start, control, end
-          const cx = (sx + tx) / 2 + (-dy / len) * offset
-          const cy = (sy + ty) / 2 + (dx / len) * offset
-          mx = (sx + 2 * cx + tx) / 4
-          my = (sy + 2 * cy + ty) / 4
-        } else {
-          mx = (sx + tx) / 2
-          my = (sy + ty) / 2
-        }
-        return `translate(${mx - (d._pillWidth || 50) / 2}, ${my - (d._pillHeight || 20) / 2})`
-      })
-
-      pillTexts.attr('x', d => (d._pillWidth || 50) / 2)
-               .attr('y', d => (d._pillHeight || 20) / 2)
-
-      // Position arrow at ~75% along the path
-      arrowGroups.attr('transform', d => {
-        const sx = d.source.x, sy = d.source.y
-        const tx = d.target.x, ty = d.target.y
-        let px, py, angle
-        if (d._pairTotal > 1) {
-          const dx = tx - sx, dy = ty - sy
-          const len = Math.sqrt(dx * dx + dy * dy) || 1
-          const offset = (d._pairIndex - (d._pairTotal - 1) / 2) * 30
-          const cx = (sx + tx) / 2 + (-dy / len) * offset
-          const cy = (sy + ty) / 2 + (dx / len) * offset
-          const t = 0.7
-          px = (1 - t) * (1 - t) * sx + 2 * (1 - t) * t * cx + t * t * tx
-          py = (1 - t) * (1 - t) * sy + 2 * (1 - t) * t * cy + t * t * ty
-          // Tangent at t
-          const tdx = 2 * (1 - t) * (cx - sx) + 2 * t * (tx - cx)
-          const tdy = 2 * (1 - t) * (cy - sy) + 2 * t * (ty - cy)
-          angle = Math.atan2(tdy, tdx) * 180 / Math.PI
-        } else {
-          px = sx + (tx - sx) * 0.7
-          py = sy + (ty - sy) * 0.7
-          angle = Math.atan2(ty - sy, tx - sx) * 180 / Math.PI
-        }
-        return `translate(${px},${py}) rotate(${angle})`
-      })
-
-      // Update node positions
-      nodeElements.attr('transform', d => `translate(${d.x},${d.y})`)
-    })
-
-    // Initial zoom to fit
+    // ── Auto-fit ──
     setTimeout(() => {
-      const bounds = g.node().getBBox()
-      if (bounds.width > 0 && bounds.height > 0) {
-        const padding = 80
-        const fullWidth = bounds.width + padding * 2
-        const fullHeight = bounds.height + padding * 2
-        const scale = Math.min(width / fullWidth, height / fullHeight, 1.5)
-        const tx = width / 2 - (bounds.x + bounds.width / 2) * scale
-        const ty = height / 2 - (bounds.y + bounds.height / 2) * scale
-        svg.transition().duration(750)
-          .call(zoom.transform, d3.zoomIdentity.translate(tx, ty).scale(scale))
-      }
-    }, 1500)
+      const bounds = g.node()?.getBBox()
+      if (!bounds || bounds.width === 0) return
+      const pad = 60
+      const fw = bounds.width + pad * 2
+      const fh = bounds.height + pad * 2
+      const scale = Math.min(width / fw, height / fh, 1.2)
+      const tx = width / 2 - (bounds.x + bounds.width / 2) * scale
+      const ty = height / 2 - (bounds.y + bounds.height / 2) * scale
+      svg.transition().duration(600)
+        .call(zoom.transform, d3.zoomIdentity.translate(tx, ty).scale(scale))
+    }, 100)
 
     return () => {
       cancelAnimationFrame(animFrame)
-      simulation.stop()
     }
-  }, [graph, dimensions, isDark])
+  }, [treeData, dimensions, isDark])
 
   // Zoom controls
   const handleZoomIn = useCallback(() => {
-    const svg = d3.select(svgRef.current)
-    svg.transition().duration(300).call(zoomRef.current.scaleBy, 1.3)
+    d3.select(svgRef.current).transition().duration(300).call(zoomRef.current.scaleBy, 1.3)
   }, [])
 
   const handleZoomOut = useCallback(() => {
-    const svg = d3.select(svgRef.current)
-    svg.transition().duration(300).call(zoomRef.current.scaleBy, 0.7)
+    d3.select(svgRef.current).transition().duration(300).call(zoomRef.current.scaleBy, 0.7)
   }, [])
 
   const handleRecenter = useCallback(() => {
@@ -691,10 +667,10 @@ function ForceGraph({ graph, isDark, onNodeClick, onEdgeClick, onGroupExpand }) 
     const bounds = g.node()?.getBBox()
     if (!bounds || bounds.width === 0) return
     const { width, height } = dimensions
-    const padding = 80
-    const fullWidth = bounds.width + padding * 2
-    const fullHeight = bounds.height + padding * 2
-    const scale = Math.min(width / fullWidth, height / fullHeight, 1.5)
+    const pad = 60
+    const fw = bounds.width + pad * 2
+    const fh = bounds.height + pad * 2
+    const scale = Math.min(width / fw, height / fh, 1.2)
     const tx = width / 2 - (bounds.x + bounds.width / 2) * scale
     const ty = height / 2 - (bounds.y + bounds.height / 2) * scale
     svg.transition().duration(500)
@@ -734,7 +710,7 @@ function ForceGraph({ graph, isDark, onNodeClick, onEdgeClick, onGroupExpand }) 
           <span className="text-gray-600 dark:text-gray-400">Backward (Target → Source)</span>
         </div>
         <div className="flex items-center gap-2">
-          <svg width="16" height="16" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke={COLORS.peerOnline} strokeWidth="2" /></svg>
+          <svg width="16" height="16" viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="10" rx="3" fill="none" stroke={COLORS.peerOnline} strokeWidth="1.5" /></svg>
           <span className="text-gray-600 dark:text-gray-400">Peer</span>
         </div>
         <div className="flex items-center gap-2">
@@ -742,6 +718,10 @@ function ForceGraph({ graph, isDark, onNodeClick, onEdgeClick, onGroupExpand }) 
             <polygon points="8,1 14.5,5 14.5,11 8,15 1.5,11 1.5,5" fill="none" stroke={COLORS.group} strokeWidth="1.5" />
           </svg>
           <span className="text-gray-600 dark:text-gray-400">Group (click to expand)</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="w-6 h-0.5 block border-t border-dashed" style={{ borderColor: COLORS.membership.replace('50', 'ff') }} />
+          <span className="text-gray-600 dark:text-gray-400">Group membership</span>
         </div>
       </div>
     </div>
@@ -759,7 +739,6 @@ function DetailPanel({ selection, onClose, onExpand, isDark }) {
 
   return (
     <div className="absolute top-0 right-0 h-full w-80 bg-white dark:bg-charcoal-dark border-l border-gray-200 dark:border-gray-border shadow-xl z-10 flex flex-col overflow-hidden animate-slide-in">
-      {/* Header */}
       <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-border flex items-center justify-between shrink-0">
         <h3 className="font-semibold text-gray-900 dark:text-light-neutral text-sm">
           {type === 'peer' ? 'Peer Details' : type === 'group' ? 'Group Details' : 'Connection Details'}
@@ -769,7 +748,6 @@ function DetailPanel({ selection, onClose, onExpand, isDark }) {
         </button>
       </div>
 
-      {/* Content */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {type === 'peer' && (
           <>
@@ -784,8 +762,17 @@ function DetailPanel({ selection, onClose, onExpand, isDark }) {
             <div>
               <div className="text-xs text-gray-500 dark:text-amber-muted uppercase tracking-wide mb-1">Status</div>
               <div className="flex items-center gap-2">
-                <span className={`w-2 h-2 rounded-full ${data.data?.status === 'online' ? 'bg-green-500' : 'bg-red-500'}`} />
-                <span className="text-sm text-gray-900 dark:text-light-neutral capitalize">{data.data?.status || 'unknown'}</span>
+                {data.data?.is_manual ? (
+                  <>
+                    <span className="w-2 h-2 rounded-full bg-violet-400" />
+                    <span className="text-sm text-gray-900 dark:text-light-neutral">Manual</span>
+                  </>
+                ) : (
+                  <>
+                    <span className={`w-2 h-2 rounded-full ${data.data?.status === 'online' ? 'bg-green-500' : 'bg-red-500'}`} />
+                    <span className="text-sm text-gray-900 dark:text-light-neutral capitalize">{data.data?.status || 'unknown'}</span>
+                  </>
+                )}
               </div>
             </div>
             {data.data?.os_type && (
@@ -882,64 +869,35 @@ export default function Topology() {
   }, [])
 
   // Fetch data
-  const { data: peers } = useQuery({
-    queryKey: QUERY_KEYS.peers(),
-    queryFn: () => api.get('/peers'),
-  })
-
-  const { data: groups } = useQuery({
-    queryKey: QUERY_KEYS.groups(),
-    queryFn: () => api.get('/groups'),
-  })
-
-  const { data: policies } = useQuery({
-    queryKey: QUERY_KEYS.policies(),
-    queryFn: () => api.get('/policies'),
-  })
-
-  const { data: services } = useQuery({
-    queryKey: QUERY_KEYS.services(),
-    queryFn: () => api.get('/services'),
-  })
+  const { data: peers } = useQuery({ queryKey: QUERY_KEYS.peers(), queryFn: () => api.get('/peers') })
+  const { data: groups } = useQuery({ queryKey: QUERY_KEYS.groups(), queryFn: () => api.get('/groups') })
+  const { data: policies } = useQuery({ queryKey: QUERY_KEYS.policies(), queryFn: () => api.get('/policies') })
+  const { data: services } = useQuery({ queryKey: QUERY_KEYS.services(), queryFn: () => api.get('/services') })
 
   // Determine which group IDs we need members for
   const relevantGroupIds = useMemo(() => {
     if (!policies || !groups) return []
-    const groupIds = new Set()
+    const ids = new Set()
     policies.forEach(p => {
       if (p.enabled && p.action === 'ACCEPT') {
-        if (p.source_type === 'group') groupIds.add(p.source_id)
-        if (p.target_type === 'group') groupIds.add(p.target_id)
+        if (p.source_type === 'group') ids.add(p.source_id)
+        if (p.target_type === 'group') ids.add(p.target_id)
       }
     })
-    return Array.from(groupIds)
+    return Array.from(ids)
   }, [policies, groups])
 
   const { data: groupMembersMap } = useGroupMembers(relevantGroupIds)
 
-  // Build graph
-  const baseGraph = useMemo(() =>
-    buildGraph(selectedPeerId, peers, groups, policies, services, groupMembersMap),
-    [selectedPeerId, peers, groups, policies, services, groupMembersMap]
+  // Build tree
+  const treeData = useMemo(() =>
+    buildTreeData(selectedPeerId, peers, groups, policies, services, groupMembersMap, expandedGroups),
+    [selectedPeerId, peers, groups, policies, services, groupMembersMap, expandedGroups]
   )
-
-  // Apply group expansions
-  const graph = useMemo(() => {
-    let g = baseGraph
-    for (const groupId of expandedGroups) {
-      const groupNodeId = `group-${groupId}`
-      const members = groupMembersMap?.[groupId] || []
-      g = explodeGroup(g, groupNodeId, members, peers || [], expandedGroups)
-    }
-    return g
-  }, [baseGraph, expandedGroups, groupMembersMap, peers])
 
   // Peer options for selector
   const peerOptions = useMemo(() =>
-    (peers || []).map(p => ({
-      value: p.id,
-      label: p.hostname || p.ip_address,
-    })),
+    (peers || []).map(p => ({ value: p.id, label: p.hostname || p.ip_address })),
     [peers]
   )
 
@@ -964,7 +922,6 @@ export default function Topology() {
   }, [])
 
   const handleGroupExpand = useCallback((groupNode) => {
-    // Show detail panel first
     setDetailSelection({ type: 'group', data: groupNode })
   }, [])
 
@@ -976,8 +933,6 @@ export default function Topology() {
     })
     setDetailSelection(null)
   }, [])
-
-  const hasGraph = graph.nodes.length > 0
 
   return (
     <div className="space-y-4 h-full flex flex-col">
@@ -1012,14 +967,15 @@ export default function Topology() {
               placeholder="Select a peer to explore…"
             />
           </div>
-          {selectedPeerId && !hasGraph && (
+          {selectedPeerId && !treeData && (
             <span className="text-sm text-gray-500 dark:text-amber-muted italic">
               No enabled ACCEPT policies involve this peer.
             </span>
           )}
-          {hasGraph && (
+          {treeData && (
             <span className="text-sm text-gray-500 dark:text-amber-muted">
-              {graph.nodes.length} nodes · {graph.edges.length} connections
+              {treeData.children.length} direct connections
+              {expandedGroups.size > 0 && ` · ${expandedGroups.size} group${expandedGroups.size > 1 ? 's' : ''} expanded`}
             </span>
           )}
         </div>
@@ -1030,12 +986,13 @@ export default function Topology() {
         {!selectedPeerId ? (
           <div className="flex flex-col items-center justify-center h-full text-center p-8">
             <svg className="w-24 h-24 mb-6 text-gray-300 dark:text-gray-600" viewBox="0 0 100 100" fill="none">
-              <circle cx="30" cy="30" r="10" stroke="currentColor" strokeWidth="2" />
-              <circle cx="70" cy="30" r="10" stroke="currentColor" strokeWidth="2" />
-              <circle cx="50" cy="70" r="10" stroke="currentColor" strokeWidth="2" />
-              <line x1="38" y1="34" x2="42" y2="62" stroke="currentColor" strokeWidth="1.5" strokeDasharray="4 3" />
-              <line x1="62" y1="34" x2="58" y2="62" stroke="currentColor" strokeWidth="1.5" strokeDasharray="4 3" />
-              <line x1="40" y1="30" x2="60" y2="30" stroke="currentColor" strokeWidth="1.5" strokeDasharray="4 3" />
+              <circle cx="20" cy="50" r="10" stroke="currentColor" strokeWidth="2" />
+              <rect x="55" y="20" rx="3" width="30" height="16" stroke="currentColor" strokeWidth="1.5" />
+              <rect x="55" y="42" rx="3" width="30" height="16" stroke="currentColor" strokeWidth="1.5" />
+              <rect x="55" y="64" rx="3" width="30" height="16" stroke="currentColor" strokeWidth="1.5" />
+              <line x1="30" y1="46" x2="55" y2="28" stroke="currentColor" strokeWidth="1.5" strokeDasharray="4 3" />
+              <line x1="30" y1="50" x2="55" y2="50" stroke="currentColor" strokeWidth="1.5" strokeDasharray="4 3" />
+              <line x1="30" y1="54" x2="55" y2="72" stroke="currentColor" strokeWidth="1.5" strokeDasharray="4 3" />
             </svg>
             <h3 className="text-lg font-semibold text-gray-700 dark:text-light-neutral mb-2">Select a Starting Peer</h3>
             <p className="text-sm text-gray-500 dark:text-amber-muted max-w-md">
@@ -1043,10 +1000,10 @@ export default function Topology() {
               it connects to via enabled policies, with animated lines showing traffic direction.
             </p>
           </div>
-        ) : hasGraph ? (
+        ) : treeData ? (
           <>
-            <ForceGraph
-              graph={graph}
+            <TreeGraph
+              treeData={treeData}
               isDark={isDark}
               onNodeClick={handleNodeClick}
               onEdgeClick={handleEdgeClick}
@@ -1076,7 +1033,6 @@ export default function Topology() {
         )}
       </div>
 
-      {/* CSS for slide-in animation */}
       <style>{`
         @keyframes slide-in {
           from { transform: translateX(100%); opacity: 0; }

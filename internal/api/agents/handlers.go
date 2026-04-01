@@ -9,11 +9,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 
+	"runic/internal/api/common"
+	"runic/internal/api/middleware"
 	"runic/internal/common/constants"
 	runiclog "runic/internal/common/log"
 	"runic/internal/db"
@@ -38,75 +39,8 @@ const (
 	hostIDKey contextKey = "host_id"
 )
 
-// Simple rate limiter for agent endpoints
-type agentRateLimiter struct {
-	mu       sync.Mutex
-	requests map[string][]time.Time
-	limit    int
-	window   time.Duration
-}
-
-func newAgentRateLimiter(limit int, window time.Duration) *agentRateLimiter {
-	rl := &agentRateLimiter{
-		requests: make(map[string][]time.Time),
-		limit:    limit,
-		window:   window,
-	}
-	// Start periodic cleanup
-	go func() {
-		ticker := time.NewTicker(5 * time.Minute)
-		defer ticker.Stop()
-		for range ticker.C {
-			rl.cleanup()
-		}
-	}()
-	return rl
-}
-
-func (rl *agentRateLimiter) Allow(key string) bool {
-	rl.mu.Lock()
-	defer rl.mu.Unlock()
-
-	now := time.Now()
-	cutoff := now.Add(-rl.window)
-
-	var recent []time.Time
-	for _, t := range rl.requests[key] {
-		if t.After(cutoff) {
-			recent = append(recent, t)
-		}
-	}
-
-	if len(recent) >= rl.limit {
-		rl.requests[key] = recent
-		return false
-	}
-
-	rl.requests[key] = append(recent, now)
-	return true
-}
-
-func (rl *agentRateLimiter) cleanup() {
-	rl.mu.Lock()
-	defer rl.mu.Unlock()
-
-	cutoff := time.Now().Add(-rl.window)
-	for key, times := range rl.requests {
-		var recent []time.Time
-		for _, t := range times {
-			if t.After(cutoff) {
-				recent = append(recent, t)
-			}
-		}
-		if len(recent) == 0 {
-			delete(rl.requests, key)
-		} else {
-			rl.requests[key] = recent
-		}
-	}
-}
-
-var checkRotationRateLimiter = newAgentRateLimiter(30, time.Minute) // 30 requests per minute per IP
+// Rate limiter for agent check-rotation endpoint
+var checkRotationRateLimiter = middleware.NewRateLimiter(30, time.Minute)
 
 // SSEHubFromContext returns the SSEHub from context (set by API middleware)
 func SSEHubFromContext(ctx context.Context) SSEBroadcaster {
@@ -187,13 +121,6 @@ func AgentAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// respondJSON is a helper for JSON responses.
-func respondJSON(w http.ResponseWriter, status int, data interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(data)
-}
-
 // RegisterAgent handles agent registration.
 func RegisterAgent(w http.ResponseWriter, r *http.Request) {
 	var input struct {
@@ -244,7 +171,7 @@ func RegisterAgent(w http.ResponseWriter, r *http.Request) {
 
 		hostID := fmt.Sprintf("host-%s", input.Hostname)
 
-		respondJSON(w, http.StatusCreated, map[string]interface{}{
+		common.RespondJSON(w, http.StatusCreated, map[string]interface{}{
 			"host_id":                hostID,
 			"token":                  agentToken,
 			"pull_interval_seconds":  30,
@@ -279,7 +206,7 @@ func RegisterAgent(w http.ResponseWriter, r *http.Request) {
 
 	db.DB.ExecContext(ctx, "UPDATE peers SET agent_token = ?, status = 'online', agent_version = ?, has_docker = ?, has_ipset = ? WHERE id = ?", newToken, input.AgentVersion, input.HasDocker, input.HasIPSet, existingID)
 
-	respondJSON(w, http.StatusOK, map[string]interface{}{
+	common.RespondJSON(w, http.StatusOK, map[string]interface{}{
 		"host_id":                hostID,
 		"token":                  newToken,
 		"pull_interval_seconds":  30,
@@ -318,7 +245,7 @@ func GetBundle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	respondJSON(w, http.StatusOK, map[string]interface{}{
+	common.RespondJSON(w, http.StatusOK, map[string]interface{}{
 		"version": bundle.Version,
 		"rules":   bundle.RulesContent,
 		"hmac":    bundle.HMAC,
@@ -351,7 +278,7 @@ func Heartbeat(w http.ResponseWriter, r *http.Request) {
 		runiclog.Error("Failed to update heartbeat error", "error", err)
 	}
 
-	respondJSON(w, http.StatusOK, map[string]string{
+	common.RespondJSON(w, http.StatusOK, map[string]string{
 		"status": "ok",
 	})
 }
@@ -430,7 +357,7 @@ func SubmitLogs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	respondJSON(w, http.StatusOK, map[string]interface{}{
+	common.RespondJSON(w, http.StatusOK, map[string]interface{}{
 		"accepted": eventCount,
 	})
 }
@@ -468,7 +395,7 @@ func ConfirmBundleApplied(w http.ResponseWriter, r *http.Request) {
 		runiclog.Error("Failed to update peer bundle version", "error", err)
 	}
 
-	respondJSON(w, http.StatusOK, map[string]string{"status": "confirmed"})
+	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "confirmed"})
 }
 
 // HandleSSEvents handles SSE connections for agents.
@@ -601,8 +528,8 @@ func AgentCheckRotation(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Rate limiting
-	if !checkRotationRateLimiter.Allow(r.RemoteAddr) {
-		respondJSON(w, http.StatusTooManyRequests, map[string]string{"error": "rate limit exceeded"})
+	if checkRotationRateLimiter.Check(r.RemoteAddr) != nil {
+		common.RespondJSON(w, http.StatusTooManyRequests, map[string]string{"error": "rate limit exceeded"})
 		return
 	}
 
@@ -614,12 +541,12 @@ func AgentCheckRotation(w http.ResponseWriter, r *http.Request) {
 	).Scan(&rotationToken)
 
 	if err == sql.ErrNoRows {
-		respondJSON(w, http.StatusNotFound, map[string]string{"error": "peer not found"})
+		common.RespondJSON(w, http.StatusNotFound, map[string]string{"error": "peer not found"})
 		return
 	}
 	if err != nil {
 		runiclog.Error("Failed to check rotation token error", "error", err)
-		respondJSON(w, http.StatusInternalServerError, map[string]string{"error": "database error"})
+		common.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": "database error"})
 		return
 	}
 
@@ -629,7 +556,7 @@ func AgentCheckRotation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	respondJSON(w, http.StatusOK, map[string]string{
+	common.RespondJSON(w, http.StatusOK, map[string]string{
 		"rotation_token": rotationToken.String,
 		"host_id":        hostID,
 	})
@@ -649,7 +576,7 @@ func AgentTestKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		respondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+		common.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
 		return
 	}
 
@@ -661,12 +588,12 @@ func AgentTestKey(w http.ResponseWriter, r *http.Request) {
 	).Scan(&hmacKey)
 
 	if err == sql.ErrNoRows {
-		respondJSON(w, http.StatusNotFound, map[string]string{"error": "peer not found"})
+		common.RespondJSON(w, http.StatusNotFound, map[string]string{"error": "peer not found"})
 		return
 	}
 	if err != nil {
 		runiclog.Error("Failed to get HMAC key error", "error", err)
-		respondJSON(w, http.StatusInternalServerError, map[string]string{"error": "database error"})
+		common.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": "database error"})
 		return
 	}
 
@@ -676,11 +603,11 @@ func AgentTestKey(w http.ResponseWriter, r *http.Request) {
 	expected := hex.EncodeToString(mac.Sum(nil))
 
 	if input.Signature != expected {
-		respondJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid signature"})
+		common.RespondJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid signature"})
 		return
 	}
 
-	respondJSON(w, http.StatusOK, map[string]string{
+	common.RespondJSON(w, http.StatusOK, map[string]string{
 		"status": "ok",
 	})
 }

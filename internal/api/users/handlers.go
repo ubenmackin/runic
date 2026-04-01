@@ -1,7 +1,6 @@
 package users
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json"
 	"log"
@@ -14,6 +13,7 @@ import (
 
 	"runic/internal/api/common"
 	"runic/internal/auth"
+	runiccommon "runic/internal/common"
 	"runic/internal/db"
 )
 
@@ -31,7 +31,7 @@ type UserResponse struct {
 
 // ListUsers handles GET /api/v1/users
 func ListUsers(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	ctx, cancel := runiccommon.WithHandlerTimeout(r.Context())
 	defer cancel()
 
 	rows, err := db.DB.QueryContext(ctx, "SELECT id, username, email, role, created_at FROM users ORDER BY id")
@@ -55,9 +55,7 @@ func ListUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if users == nil {
-		users = []UserResponse{}
-	}
+	users = common.EnsureSlice(users)
 
 	common.RespondJSON(w, http.StatusOK, users)
 }
@@ -72,7 +70,7 @@ type CreateUserRequest struct {
 
 // CreateUser handles POST /api/v1/users
 func CreateUser(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	ctx, cancel := runiccommon.WithHandlerTimeout(r.Context())
 	defer cancel()
 
 	var req CreateUserRequest
@@ -163,7 +161,7 @@ func DeleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	ctx, cancel := runiccommon.WithHandlerTimeout(r.Context())
 	defer cancel()
 
 	// Get authenticated username from context
@@ -214,7 +212,7 @@ func UpdateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	ctx, cancel := runiccommon.WithHandlerTimeout(r.Context())
 	defer cancel()
 
 	var req UpdateUserRequest

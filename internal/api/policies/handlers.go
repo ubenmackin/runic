@@ -1,14 +1,11 @@
 package policies
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"time"
 
 	"runic/internal/api/common"
-	runiclog "runic/internal/common/log"
 	"runic/internal/db"
 	"runic/internal/engine"
 )
@@ -67,9 +64,7 @@ func ListPolicies(w http.ResponseWriter, r *http.Request) {
 		}
 		policiesData = append(policiesData, p)
 	}
-	if policiesData == nil {
-		policiesData = []policyResp{}
-	}
+	policiesData = common.EnsureSlice(policiesData)
 	common.RespondJSON(w, http.StatusOK, policiesData)
 }
 
@@ -143,16 +138,8 @@ func MakeCreatePolicyHandler(compiler *engine.Compiler) http.HandlerFunc {
 		id, _ := result.LastInsertId()
 
 		// Trigger async recompilation for all affected peers
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-			defer cancel()
-			affectedPeers, _ := compiler.GetAffectedPeersByPolicy(ctx, int(id))
-			for _, pid := range affectedPeers {
-				if _, err := compiler.CompileAndStore(ctx, pid); err != nil {
-					runiclog.ErrorContext(ctx, "async compile and store failed", "peer_id", pid, "error", err)
-				}
-			}
-		}()
+		affectedPeers, _ := compiler.GetAffectedPeersByPolicy(r.Context(), int(id))
+		common.AsyncRecompilePeers(compiler, affectedPeers)
 
 		common.RespondJSON(w, http.StatusCreated, map[string]int64{"id": id})
 	}
@@ -277,25 +264,19 @@ func MakeUpdatePolicyHandler(compiler *engine.Compiler) http.HandlerFunc {
 		}
 
 		// Trigger async recompilation for all affected peers (old and new)
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-			defer cancel()
-			newPeers, _ := compiler.GetAffectedPeersByPolicy(ctx, id)
-
-			peerSet := make(map[int]bool)
-			for _, pid := range oldPeers {
-				peerSet[pid] = true
-			}
-			for _, pid := range newPeers {
-				peerSet[pid] = true
-			}
-
-			for pid := range peerSet {
-				if _, err := compiler.CompileAndStore(ctx, pid); err != nil {
-					runiclog.ErrorContext(ctx, "async compile and store failed", "peer_id", pid, "error", err)
-				}
-			}
-		}()
+		newPeers, _ := compiler.GetAffectedPeersByPolicy(r.Context(), id)
+		peerSet := make(map[int]bool)
+		for _, pid := range oldPeers {
+			peerSet[pid] = true
+		}
+		for _, pid := range newPeers {
+			peerSet[pid] = true
+		}
+		var allPeers []int
+		for pid := range peerSet {
+			allPeers = append(allPeers, pid)
+		}
+		common.AsyncRecompilePeers(compiler, allPeers)
 
 		common.RespondJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 	}
@@ -326,15 +307,7 @@ func MakeDeletePolicyHandler(compiler *engine.Compiler) http.HandlerFunc {
 		}
 
 		// Trigger async recompilation for all old affected peers
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-			defer cancel()
-			for _, pid := range oldPeers {
-				if _, err := compiler.CompileAndStore(ctx, pid); err != nil {
-					runiclog.ErrorContext(ctx, "async compile and store failed", "peer_id", pid, "error", err)
-				}
-			}
-		}()
+		common.AsyncRecompilePeers(compiler, oldPeers)
 
 		w.WriteHeader(http.StatusNoContent)
 	}
@@ -346,7 +319,7 @@ type PolicyPreviewRequest struct {
 	TargetID   int    `json:"target_id"`
 	TargetType string `json:"target_type"`
 	ServiceID  int    `json:"service_id"`
-	PeerID     int    `json:"peer_id"`    // the peer to base the preview on
+	PeerID     int    `json:"peer_id"`   // the peer to base the preview on
 	Direction  string `json:"direction"` // forward, backward, or both
 }
 
@@ -413,16 +386,8 @@ func MakePatchPolicyHandler(compiler *engine.Compiler) http.HandlerFunc {
 			return
 		}
 		// Trigger async recompilation
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-			defer cancel()
-			affectedPeers, _ := compiler.GetAffectedPeersByPolicy(ctx, id)
-			for _, pid := range affectedPeers {
-				if _, err := compiler.CompileAndStore(ctx, pid); err != nil {
-					runiclog.ErrorContext(ctx, "async compile and store failed", "peer_id", pid, "error", err)
-				}
-			}
-		}()
+		affectedPeers, _ := compiler.GetAffectedPeersByPolicy(r.Context(), id)
+		common.AsyncRecompilePeers(compiler, affectedPeers)
 		common.RespondJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 	}
 }
@@ -453,9 +418,7 @@ func ListSpecialTargets(w http.ResponseWriter, r *http.Request) {
 		targets = append(targets, t)
 	}
 
-	if targets == nil {
-		targets = []specialTargetResp{}
-	}
+	targets = common.EnsureSlice(targets)
 
 	common.RespondJSON(w, http.StatusOK, targets)
 }

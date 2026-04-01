@@ -2,29 +2,17 @@ package logs
 
 import (
 	"database/sql"
-	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"runic/internal/api/common"
 	"runic/internal/auth"
 	runiclog "runic/internal/common/log"
 	"runic/internal/db"
 	"runic/internal/models"
 )
-
-// respondJSON responds with JSON data
-func respondJSON(w http.ResponseWriter, status int, data interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(data)
-}
-
-// respondError responds with a JSON error
-func respondError(w http.ResponseWriter, status int, msg string) {
-	respondJSON(w, status, map[string]string{"error": msg})
-}
 
 // MakeLogsStreamHandler returns a handler that uses the given Hub
 func MakeLogsStreamHandler(hub *Hub) http.HandlerFunc {
@@ -155,7 +143,7 @@ func GetLogs(w http.ResponseWriter, r *http.Request) {
 	rows, err := db.DB.QueryContext(ctx, query, args...)
 	if err != nil {
 		runiclog.ErrorContext(ctx, "Failed to query logs", "error", err, "query", query)
-		respondError(w, http.StatusInternalServerError, "failed to query logs")
+		common.RespondError(w, http.StatusInternalServerError, "failed to query logs")
 		return
 	}
 	defer rows.Close()
@@ -202,9 +190,7 @@ func GetLogs(w http.ResponseWriter, r *http.Request) {
 		runiclog.ErrorContext(ctx, "Error iterating log rows", "error", err)
 	}
 
-	if logsData == nil {
-		logsData = []models.LogEvent{}
-	}
+	logsData = common.EnsureSlice(logsData)
 
 	// Get total count for pagination
 	countQuery := `SELECT COUNT(*) FROM firewall_logs fl ` + whereClause
@@ -216,7 +202,7 @@ func GetLogs(w http.ResponseWriter, r *http.Request) {
 		total = 0
 	}
 
-	respondJSON(w, http.StatusOK, map[string]interface{}{
+	common.RespondJSON(w, http.StatusOK, map[string]interface{}{
 		"logs":   logsData,
 		"total":  total,
 		"limit":  limit,

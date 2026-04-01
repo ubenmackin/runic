@@ -11,6 +11,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 
+	"runic/internal/common"
 	runiclog "runic/internal/common/log"
 	"runic/internal/db"
 )
@@ -33,13 +34,14 @@ func requireEnv(key string) ([]byte, error) {
 }
 
 // GenerateHMACKey generates a cryptographically secure random HMAC key.
+// Returns a fallback string on error for resilience.
 func GenerateHMACKey() string {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
+	key, err := common.GenerateHMACKey()
+	if err != nil {
 		runiclog.Error("Failed to generate HMAC key error", "error", err)
 		return "runic-hmac-key-change-me"
 	}
-	return hex.EncodeToString(b)
+	return key
 }
 
 // generateAgentToken generates a JWT-like token for an agent.
