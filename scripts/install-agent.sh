@@ -64,19 +64,82 @@ EOF
     systemctl restart rsyslog 2>/dev/null || true
 fi
 
-# Disable netfilter-persistent/iptables-persistent to prevent conflicts with runic's firewall management
-# These services restore saved iptables rules on boot, which would conflict with runic's rule management
-for service in netfilter-persistent iptables-persistent; do
-    if systemctl is-active --quiet "$service" 2>/dev/null || \
-       systemctl is-enabled --quiet "$service" 2>/dev/null; then
-        echo "Disabling $service service..."
-        echo "  -> Stopping and disabling to prevent conflicts with runic firewall management"
-        systemctl stop "$service" 2>/dev/null || true
-        systemctl disable "$service" 2>/dev/null || true
-        # Mask to prevent any other package from re-enabling it
-        systemctl mask "$service" 2>/dev/null || true
-    fi
-done
+# Detect OS type from /etc/os-release
+detect_os() {
+	if [ -f /etc/os-release ]; then
+		. /etc/os-release
+		echo "$ID"
+	else
+		echo "unknown"
+	fi
+}
+
+# Disable iptables persistence services to prevent conflicts with runic's firewall management
+# Different distributions use different services for iptables persistence
+OS_TYPE=$(detect_os)
+echo "Detected OS: $OS_TYPE"
+
+case "$OS_TYPE" in
+	ubuntu|debian|linuxmint|pop)
+		echo "Disabling Debian/Ubuntu iptables persistence services..."
+		for service in netfilter-persistent iptables-persistent; do
+			if systemctl is-active --quiet "$service" 2>/dev/null || \
+			systemctl is-enabled --quiet "$service" 2>/dev/null; then
+				echo " -> Stopping and disabling $service..."
+				systemctl stop "$service" 2>/dev/null || true
+				systemctl disable "$service" 2>/dev/null || true
+				systemctl mask "$service" 2>/dev/null || true
+			fi
+		done
+		;;
+	arch|archarm|manjaro|endeavouros)
+		echo "Disabling Arch Linux iptables services..."
+		for service in iptables ip6tables; do
+			if systemctl is-active --quiet "$service" 2>/dev/null || \
+			systemctl is-enabled --quiet "$service" 2>/dev/null; then
+				echo " -> Stopping and disabling $service.service..."
+				systemctl stop "$service" 2>/dev/null || true
+				systemctl disable "$service" 2>/dev/null || true
+				systemctl mask "$service" 2>/dev/null || true
+			fi
+		done
+		;;
+	opensuse*|suse|sled|sles)
+		echo "Disabling openSUSE/SUSE firewall services..."
+		# Modern openSUSE uses firewalld
+		for service in firewalld SuSEfirewall2; do
+			if systemctl is-active --quiet "$service" 2>/dev/null || \
+			systemctl is-enabled --quiet "$service" 2>/dev/null; then
+				echo " -> Stopping and disabling $service..."
+				systemctl stop "$service" 2>/dev/null || true
+				systemctl disable "$service" 2>/dev/null || true
+				systemctl mask "$service" 2>/dev/null || true
+			fi
+		done
+		;;
+	fedora|rhel|centos|rocky|almalinux|ol)
+		echo "Disabling RHEL/CentOS/Fedora firewall services..."
+		# firewalld is default; iptables-services on older systems
+		for service in firewalld iptables-services; do
+			if systemctl is-active --quiet "$service" 2>/dev/null || \
+			systemctl is-enabled --quiet "$service" 2>/dev/null; then
+				echo " -> Stopping and disabling $service..."
+				systemctl stop "$service" 2>/dev/null || true
+				systemctl disable "$service" 2>/dev/null || true
+				systemctl mask "$service" 2>/dev/null || true
+			fi
+		done
+		;;
+	*)
+		echo "Unknown OS: $OS_TYPE - attempting to disable common iptables persistence services..."
+		# Try to disable common services as a fallback
+		for service in netfilter-persistent iptables-persistent firewalld; do
+			systemctl stop "$service" 2>/dev/null || true
+			systemctl disable "$service" 2>/dev/null || true
+			systemctl mask "$service" 2>/dev/null || true
+		done
+		;;
+esac
 
 # Only write config if it doesn't exist (preserve existing credentials)
 if [ ! -f /etc/runic-agent/config.json ]; then
