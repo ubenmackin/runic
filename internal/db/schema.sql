@@ -119,7 +119,7 @@ CREATE TABLE IF NOT EXISTS special_targets (
 );
 
 -- Special targets for policy resolution
-INSERT INTO special_targets (id, name, display_name, description, address) VALUES
+INSERT OR IGNORE INTO special_targets (id, name, display_name, description, address) VALUES
 (1, '__subnet_broadcast__', 'Subnet Broadcast', 'The broadcast address for the peer''s subnet (e.g., 10.100.5.255)', 'computed'),
 (2, '__limited_broadcast__', 'Limited Broadcast', 'The limited broadcast address (255.255.255.255)', '255.255.255.255'),
 (3, '__all_hosts__', 'All Hosts (IGMP)', 'All hosts multicast address for IGMP (224.0.0.1)', '224.0.0.1'),
