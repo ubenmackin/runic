@@ -313,6 +313,8 @@ function TreeGraph({ layoutData, isDark, onNodeClick, onEdgeClick, onGroupClick,
 
     // ── Draw links ──
     const linkGroup = g.append('g').attr('class', 'links')
+    // Deferred pill data — pills will be rendered in a top layer after nodes
+    const deferredPills = []
 
     for (const link of links) {
       const sx = link.source.x + cx
@@ -381,30 +383,16 @@ function TreeGraph({ layoutData, isDark, onNodeClick, onEdgeClick, onGroupClick,
         const px = bezierX(sx, midX, midX, tx, pillT)
         const py = bezierX(osy, osy, oty, oty, pillT)
 
+        // Collect pill data for deferred rendering (on top of nodes)
         const serviceNames = [...new Set(edgeList.map(e => e.serviceName))]
         serviceNames.forEach((svc, i) => {
-          const pillG = linkGroup.append('g')
-            .attr('transform', `translate(${px}, ${py + (i - (serviceNames.length - 1) / 2) * 22})`)
-            .style('cursor', 'pointer')
-            .on('click', (event) => {
-              event.stopPropagation()
-              const edge = edgeList.find(e => e.serviceName === svc)
-              if (edge) onEdgeClick?.(edge)
-            })
-
-          const text = pillG.append('text')
-            .text(svc).attr('text-anchor', 'middle').attr('dominant-baseline', 'central')
-            .attr('fill', color).attr('font-size', '10px').attr('font-weight', '600')
-            .attr('font-family', 'Inter, system-ui, sans-serif')
-
-          const bbox = text.node().getBBox()
-          const pw = bbox.width + 14, ph = 18
-
-          pillG.insert('rect', 'text')
-            .attr('x', -pw / 2).attr('y', -ph / 2).attr('width', pw).attr('height', ph)
-            .attr('rx', 9).attr('ry', 9)
-            .attr('fill', isDark ? '#2d2d4e' : '#ffffff')
-            .attr('stroke', color).attr('stroke-width', 1.5).attr('opacity', 0.95)
+          deferredPills.push({
+            x: px,
+            y: py + (i - (serviceNames.length - 1) / 2) * 22,
+            serviceName: svc,
+            color,
+            edge: edgeList.find(e => e.serviceName === svc),
+          })
         })
       }
 
@@ -468,8 +456,8 @@ function TreeGraph({ layoutData, isDark, onNodeClick, onEdgeClick, onGroupClick,
         }).join(' ')
 
         el.append('polygon').attr('points', hexPoints)
-          .attr('fill', isDark ? DARK_COLORS.nodeFill : LIGHT_COLORS.nodeFill)
-          .attr('stroke', COLORS.group).attr('stroke-width', 2.5)
+          .attr('fill', d.expanded ? (COLORS.group + '30') : (isDark ? DARK_COLORS.nodeFill : LIGHT_COLORS.nodeFill))
+          .attr('stroke', COLORS.group).attr('stroke-width', d.expanded ? 3 : 2.5)
 
         const badge = el.append('g').attr('transform', 'translate(18, -22)')
         badge.append('circle').attr('r', 9).attr('fill', COLORS.group)
@@ -518,6 +506,32 @@ function TreeGraph({ layoutData, isDark, onNodeClick, onEdgeClick, onGroupClick,
         }
       }
     })
+
+    // ── Draw service pills on top of everything ──
+    const pillLayer = g.append('g').attr('class', 'pills')
+    for (const pill of deferredPills) {
+      const pillG = pillLayer.append('g')
+        .attr('transform', `translate(${pill.x}, ${pill.y})`)
+        .style('cursor', 'pointer')
+        .on('click', (event) => {
+          event.stopPropagation()
+          if (pill.edge) onEdgeClick?.(pill.edge)
+        })
+
+      const text = pillG.append('text')
+        .text(pill.serviceName).attr('text-anchor', 'middle').attr('dominant-baseline', 'central')
+        .attr('fill', pill.color).attr('font-size', '10px').attr('font-weight', '600')
+        .attr('font-family', 'Inter, system-ui, sans-serif')
+
+      const bbox = text.node().getBBox()
+      const pw = bbox.width + 14, ph = 18
+
+      pillG.insert('rect', 'text')
+        .attr('x', -pw / 2).attr('y', -ph / 2).attr('width', pw).attr('height', ph)
+        .attr('rx', 9).attr('ry', 9)
+        .attr('fill', isDark ? '#2d2d4e' : '#ffffff')
+        .attr('stroke', pill.color).attr('stroke-width', 1.5).attr('opacity', 0.95)
+    }
 
     // ── Animate edges ──
     let animFrame, animTime = 0
@@ -816,8 +830,7 @@ export default function Topology() {
       }
       return next
     })
-    // Also show detail panel
-    setDetailSelection({ type: 'group', data: groupNode })
+    // Just toggle — no detail panel for groups
   }, [])
 
   const handleExpand = useCallback((groupNode) => {
