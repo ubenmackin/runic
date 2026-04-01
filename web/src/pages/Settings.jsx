@@ -1,14 +1,20 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Trash2, Plus, Shield, Key } from 'lucide-react'
 import { api } from '../api/client'
 import { useToastContext } from '../hooks/ToastContext'
+import { useFocusTrap } from '../hooks/useFocusTrap'
+import PageHeader from '../components/PageHeader'
 
 export default function Settings() {
   const qc = useQueryClient()
   const showToast = useToastContext()
   const [showDeleteModal, setShowDeleteModal] = useState(null)
   const [showCreateModal, setShowCreateModal] = useState(null)
+  const deleteModalRef = useRef(null)
+  const createModalRef = useRef(null)
+  useFocusTrap(deleteModalRef, showDeleteModal !== null)
+  useFocusTrap(createModalRef, showCreateModal !== null)
 
   const { data: keys, isLoading } = useQuery({
     queryKey: ['setup-keys'],
@@ -50,10 +56,10 @@ export default function Settings() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-light-neutral">Settings</h1>
-        <p className="text-gray-600 dark:text-amber-muted">Configure your Runic installation</p>
-      </div>
+      <PageHeader
+        title="Settings"
+        description="Configure your Runic installation"
+      />
 
       {/* JWT Secret Section */}
       <div className="bg-white dark:bg-charcoal-dark rounded-lg shadow">
@@ -126,7 +132,7 @@ export default function Settings() {
       {/* Delete Confirmation Modal */}
       {showDeleteModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white dark:bg-charcoal-dark rounded-lg p-6 max-w-md w-full mx-4">
+          <div ref={deleteModalRef} className="bg-white dark:bg-charcoal-dark rounded-lg p-6 max-w-md w-full mx-4">
             <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
               Delete {showDeleteModal === 'jwt-secret' ? 'JWT Secret' : 'Agent JWT Secret'}?
             </h3>
@@ -155,7 +161,7 @@ export default function Settings() {
       {/* Create New Confirmation Modal */}
       {showCreateModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white dark:bg-charcoal-dark rounded-lg p-6 max-w-md w-full mx-4">
+          <div ref={createModalRef} className="bg-white dark:bg-charcoal-dark rounded-lg p-6 max-w-md w-full mx-4">
             <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
               Create New {showCreateModal === 'jwt-secret' ? 'JWT Secret' : 'Agent JWT Secret'}?
             </h3>

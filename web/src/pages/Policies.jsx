@@ -1,12 +1,15 @@
-import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
+import { useState, useCallback, useRef, useEffect } from 'react'
 import { useFilterPersistence } from '../hooks/useFilterPersistence'
 import { useTableSort } from '../hooks/useTableSort'
 import { usePagination } from '../hooks/usePagination'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Pencil, Trash2, Eye, RefreshCw, X, ChevronDown, ChevronUp, Info, Search, ChevronLeft, ChevronRight, ArrowLeft, ArrowRight } from 'lucide-react'
+import { Plus, Pencil, Trash2, Eye, RefreshCw, X, ChevronDown, ChevronUp, Info, ArrowLeft, ArrowRight } from 'lucide-react'
 import { api, QUERY_KEYS } from '../api/client'
 import { useCrudModal } from '../hooks/useCrudModal'
 import { useToastContext } from '../hooks/ToastContext'
+import { useFocusTrap } from '../hooks/useFocusTrap'
+import { useTableFilter } from '../hooks/useTableFilter'
+import { useCrudMutations } from '../hooks/useCrudMutations'
 import ConfirmModal from '../components/ConfirmModal'
 import SearchableSelect from '../components/SearchableSelect'
 import ToggleSwitch from '../components/ToggleSwitch'
@@ -14,6 +17,9 @@ import InlineError from '../components/InlineError'
 import EmptyState from '../components/EmptyState'
 import TableSkeleton from '../components/TableSkeleton'
 import SortIndicator from '../components/SortIndicator'
+import Pagination from '../components/Pagination'
+import TableToolbar from '../components/TableToolbar'
+import PageHeader from '../components/PageHeader'
 
 // Special targets - predefined network addresses for broadcast/multicast
 const SPECIAL_TARGETS = {
@@ -62,35 +68,7 @@ export default function Policies() {
   const modalRef = useRef(null)
 
   // Focus trap for modal accessibility
-  useEffect(() => {
-    if (!modalOpen) return
-    const modal = modalRef.current
-    if (!modal) return
-
-    const focusableElements = modal.querySelectorAll(
-      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
-    )
-    const firstElement = focusableElements[0]
-    const lastElement = focusableElements[focusableElements.length - 1]
-
-    // Focus first element on open
-    firstElement?.focus()
-
-    const handleKeyDown = (e) => {
-      if (e.key === 'Tab') {
-        if (e.shiftKey && document.activeElement === firstElement) {
-          e.preventDefault()
-          lastElement?.focus()
-        } else if (!e.shiftKey && document.activeElement === lastElement) {
-          e.preventDefault()
-          firstElement?.focus()
-        }
-      }
-    }
-
-    modal.addEventListener('keydown', handleKeyDown)
-    return () => modal.removeEventListener('keydown', handleKeyDown)
-  }, [modalOpen])
+  useFocusTrap(modalRef, modalOpen)
 
   const openAdd = () => { setFormErrors({}); setPreview(null); setActiveTab('setup'); handleOpenAdd() }
   const openEdit = (p) => {
@@ -146,40 +124,14 @@ const polymorphicOptions = [
   // Check if the selected target peer has Docker
   const selectedPeerHasDocker = formData.target_type === 'peer' && formData.target_id && peers?.find(p => p.id === formData.target_id)?.has_docker
 
-  const createMutation = useMutation({
-    mutationFn: (data) => api.post('/policies', data),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: QUERY_KEYS.policies() }); closeModal() },
-    onError: (err) => setFormErrors({ _general: err.message }),
-  })
-
-  const updateMutation = useMutation({
-    mutationFn: (data) => api.put(`/policies/${editPolicy.id}`, data),
-    onMutate: async (newData) => {
-      await qc.cancelQueries({ queryKey: QUERY_KEYS.policies() })
-      const previousPolicies = qc.getQueryData(QUERY_KEYS.policies())
-      qc.setQueryData(QUERY_KEYS.policies(), old => old?.map(p => p.id === editPolicy.id ? { ...p, ...newData } : p) || [])
-      return { previousPolicies }
-    },
-    onError: (err, newData, context) => {
-      qc.setQueryData(QUERY_KEYS.policies(), context.previousPolicies)
-      setFormErrors({ _general: err.message })
-    },
-    onSettled: () => { qc.invalidateQueries({ queryKey: QUERY_KEYS.policies() }); closeModal() },
-  })
-
-  const deleteMutation = useMutation({
-    mutationFn: (id) => api.delete(`/policies/${id}`),
-    onMutate: async (id) => {
-      await qc.cancelQueries({ queryKey: QUERY_KEYS.policies() })
-      const previousPolicies = qc.getQueryData(QUERY_KEYS.policies())
-      qc.setQueryData(QUERY_KEYS.policies(), old => old?.filter(p => p.id !== id) || [])
-      return { previousPolicies }
-    },
-    onError: (err, id, context) => {
-      qc.setQueryData(QUERY_KEYS.policies(), context.previousPolicies)
-      showToast(err.message, 'error')
-    },
-    onSettled: () => { setDeleteTarget(null) },
+  const { createMutation, updateMutation, deleteMutation } = useCrudMutations({
+    apiPath: '/policies',
+    queryKey: QUERY_KEYS.policies(),
+    onCreateSuccess: closeModal,
+    onUpdateSuccess: closeModal,
+    onDeleteSuccess: () => setDeleteTarget(null),
+    setFormErrors,
+    showToast,
   })
 
   const toggleMutation = useMutation({
@@ -230,73 +182,40 @@ const polymorphicOptions = [
     }
   }, [activeTab])
 
-  const getEntityName = (type, id) => {
+  const getEntityName = useCallback((type, id) => {
     if (type === 'peer') return peers?.find(p => p.id === id)?.hostname || id
     if (type === 'group') return groups?.find(g => g.id === id)?.name || id
     if (type === 'special') return specialTargets?.find(s => s.id === id)?.display_name || id
     return id
-  }
-  const getServiceName = (id) => services?.find(s => s.id === id)?.name || id
+  }, [peers, groups, specialTargets])
+  const getServiceName = useCallback((id) => services?.find(s => s.id === id)?.name || id, [services])
 
   // Search state
   const [searchTerm, setSearchTerm] = useState('')
 
+  // Pre-filter by enabled toggle and peer filter before search/sort
+  const preFilteredPolicies = policies?.filter(p => {
+    if (!showDisabled && !p.enabled) return false
+    if (filterPeer && (p.target_type !== 'peer' || p.target_id !== filterPeer)) return false
+    return true
+  })
+
   // Processed policies: filter and sort
-  const processedPolicies = useMemo(() => {
-    if (!policies) return []
-
-    // Filter by enabled toggle and peer filter
-    let filtered = policies.filter(p => {
-      if (!showDisabled && !p.enabled) return false
-      if (filterPeer && (p.target_type !== 'peer' || p.target_id !== filterPeer)) return false
-      return true
-    })
-
-    // Filter by search term
-    if (searchTerm) {
-      const term = searchTerm.toLowerCase()
-      filtered = filtered.filter(p => {
-        const name = (p.name || '').toLowerCase()
-        const source = getEntityName(p.source_type, p.source_id).toLowerCase()
-        const service = getServiceName(p.service_id).toLowerCase()
-        const target = getEntityName(p.target_type, p.target_id).toLowerCase()
-        return name.includes(term) || source.includes(term) || service.includes(term) || target.includes(term)
-      })
-    }
-
-    // Sort
-    const sorted = [...filtered].sort((a, b) => {
-      let aVal, bVal
-      switch (sortConfig.key) {
-        case 'name':
-          aVal = (a.name || '').toLowerCase()
-          bVal = (b.name || '').toLowerCase()
-          break
-        case 'priority':
-          aVal = a.priority || 0
-          bVal = b.priority || 0
-          break
-        case 'source':
-          aVal = getEntityName(a.source_type, a.source_id).toLowerCase()
-          bVal = getEntityName(b.source_type, b.source_id).toLowerCase()
-          break
-        case 'service':
-          aVal = getServiceName(a.service_id).toLowerCase()
-          bVal = getServiceName(b.service_id).toLowerCase()
-          break
-        case 'target':
-          aVal = getEntityName(a.target_type, a.target_id).toLowerCase()
-          bVal = getEntityName(b.target_type, b.target_id).toLowerCase()
-          break
-        default:
-          return 0
-      }
-      if (aVal < bVal) return sortConfig.direction === 'asc' ? -1 : 1
-      if (aVal > bVal) return sortConfig.direction === 'asc' ? 1 : -1
-      return 0
-    })
-    return sorted
-  }, [policies, showDisabled, filterPeer, searchTerm, sortConfig, getEntityName, getServiceName])
+  const processedPolicies = useTableFilter(preFilteredPolicies, searchTerm, sortConfig, {
+    filterFn: (p, term) => {
+      const name = (p.name || '').toLowerCase()
+      const source = getEntityName(p.source_type, p.source_id).toLowerCase()
+      const service = getServiceName(p.service_id).toLowerCase()
+      const target = getEntityName(p.target_type, p.target_id).toLowerCase()
+      return name.includes(term) || source.includes(term) || service.includes(term) || target.includes(term)
+    },
+    fieldMap: {
+      source: (p) => getEntityName(p.source_type, p.source_id).toLowerCase(),
+      service: (p) => getServiceName(p.service_id).toLowerCase(),
+      target: (p) => getEntityName(p.target_type, p.target_id).toLowerCase(),
+    },
+    extraDeps: [getEntityName, getServiceName]
+  })
 
   // Pagination state
   const {
@@ -319,25 +238,25 @@ const polymorphicOptions = [
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-light-neutral">Policies</h1>
-          <p className="text-gray-600 dark:text-amber-muted">Create firewall rules to control network traffic between groups and peers</p>
-        </div>
-        <div className="flex items-center gap-3">
-          <button
-            onClick={handleManualRefresh}
-            disabled={isManualRefreshing}
-            className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 dark:text-amber-primary bg-white dark:bg-charcoal-dark border border-gray-300 dark:border-gray-border rounded-lg hover:bg-gray-50 dark:hover:bg-charcoal-darkest disabled:opacity-50"
-          >
-            <RefreshCw className={`w-4 h-4 ${isManualRefreshing ? 'animate-spin' : ''}`} />
-            Refresh
-          </button>
-          <button onClick={openAdd} className="flex items-center gap-2 px-4 py-2 bg-purple-active hover:bg-purple-active/80 text-white text-sm font-medium rounded-lg">
-            <Plus className="w-4 h-4" /> New Policy
-          </button>
-        </div>
-</div>
+      <PageHeader
+        title="Policies"
+        description="Create firewall rules to control network traffic between groups and peers"
+        actions={
+          <>
+            <button
+              onClick={handleManualRefresh}
+              disabled={isManualRefreshing}
+              className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 dark:text-amber-primary bg-white dark:bg-charcoal-dark border border-gray-300 dark:border-gray-border rounded-lg hover:bg-gray-50 dark:hover:bg-charcoal-darkest disabled:opacity-50"
+            >
+              <RefreshCw className={`w-4 h-4 ${isManualRefreshing ? 'animate-spin' : ''}`} />
+              Refresh
+            </button>
+            <button onClick={openAdd} className="flex items-center gap-2 px-4 py-2 bg-purple-active hover:bg-purple-active/80 text-white text-sm font-medium rounded-lg">
+              <Plus className="w-4 h-4" /> New Policy
+            </button>
+          </>
+        }
+      />
 
 {/* System Rules Info Panel */}
 <div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-sm overflow-hidden">
@@ -386,26 +305,15 @@ const polymorphicOptions = [
   )}
 </div>
 
- {/* Filters */}
-<div className="flex flex-wrap gap-4 items-center">
-  <div className="relative max-w-md flex-1">
-    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
-    <input
-      type="text"
-      placeholder="Search policies by name, source, service, or target..."
-      value={searchTerm}
-      onChange={(e) => setSearchTerm(e.target.value)}
-      className="w-full pl-9 pr-10 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-dark text-gray-900 dark:text-light-neutral placeholder-gray-400 focus:ring-2 focus:ring-purple-active focus:border-purple-active"
-    />
-    {searchTerm && (
-      <button
-        onClick={() => setSearchTerm('')}
-        className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-light-neutral"
-      >
-        <X className="w-4 h-4" />
-      </button>
-    )}
-  </div>
+  {/* Filters */}
+<TableToolbar
+  searchTerm={searchTerm}
+  onSearchChange={(v) => setSearchTerm(v)}
+  onClearSearch={() => setSearchTerm('')}
+  placeholder="Search policies by name, source, service, or target..."
+  rowsPerPage={policiesRowsPerPage}
+  onRowsPerPageChange={setPoliciesRowsPerPage}
+>
   <div className="w-48">
     <SearchableSelect options={[{ value: '', label: 'All Peers', category: 'peer' }, ...polymorphicOptions.filter(o => o.category === 'peer')]} value={filterPeer || ''} onChange={v => setFilterPeer(v || null)} placeholder="Filter by peer" />
   </div>
@@ -413,21 +321,7 @@ const polymorphicOptions = [
     <ToggleSwitch checked={showDisabled} onChange={setShowDisabled} />
     <span className="text-sm text-gray-700 dark:text-amber-primary">Show disabled</span>
   </label>
-  <div className="flex items-center gap-2">
-    <span className="text-sm text-gray-500 dark:text-amber-muted">Rows:</span>
-    <select
-      value={policiesRowsPerPage}
-      onChange={(e) => setPoliciesRowsPerPage(Number(e.target.value))}
-      className="text-sm border border-gray-300 dark:border-gray-border rounded px-2 py-2 bg-white dark:bg-charcoal-dark text-gray-900 dark:text-light-neutral focus:ring-2 focus:ring-purple-active focus:border-purple-active"
-    >
-      <option value={10}>10</option>
-      <option value={25}>25</option>
-      <option value={50}>50</option>
-      <option value={100}>100</option>
-      <option value={-1}>All</option>
-    </select>
-  </div>
-</div>
+</TableToolbar>
 
 {!processedPolicies.length ? (
         searchTerm ? (
@@ -538,35 +432,7 @@ const polymorphicOptions = [
             </table>
           </div>
 
-          {/* Pagination Controls */}
-          {policiesTotal > 0 && (
-            <div className="flex items-center justify-between px-4 py-3 border-t border-gray-200 dark:border-gray-border bg-gray-50 dark:bg-charcoal-darkest">
-              <span className="text-sm text-gray-500 dark:text-amber-muted">
-                {policiesShowingRange}
-              </span>
-              <div className="flex items-center gap-1">
-                <button
-                  onClick={() => setPoliciesPage(policiesPage - 1)}
-                  disabled={policiesPage <= 1}
-                  className="p-1.5 rounded hover:bg-gray-200 dark:hover:bg-charcoal-dark disabled:opacity-40 disabled:cursor-not-allowed"
-                  title="Previous page"
-                >
-                  <ChevronLeft className="w-5 h-5 text-gray-600 dark:text-amber-primary" />
-                </button>
-                <span className="px-3 text-sm text-gray-600 dark:text-amber-primary">
-                  Page {policiesPage} of {totalPages}
-                </span>
-                <button
-                  onClick={() => setPoliciesPage(policiesPage + 1)}
-                  disabled={policiesPage >= totalPages}
-                  className="p-1.5 rounded hover:bg-gray-200 dark:hover:bg-charcoal-dark disabled:opacity-40 disabled:cursor-not-allowed"
-                  title="Next page"
-                >
-                  <ChevronRight className="w-5 h-5 text-gray-600 dark:text-amber-primary" />
-                </button>
-              </div>
-            </div>
-          )}
+          <Pagination showingRange={policiesShowingRange} page={policiesPage} totalPages={totalPages} onPageChange={setPoliciesPage} totalItems={policiesTotal} />
         </div>
       )}
 

@@ -1,11 +1,14 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Trash2, Lock, Users, Shield, Search, X, RefreshCw, Pencil, ChevronLeft, ChevronRight } from 'lucide-react'
+import { Plus, Trash2, Lock, Users, Shield, X, RefreshCw, Pencil } from 'lucide-react'
 import { api, QUERY_KEYS } from '../api/client'
 import { useCrudModal } from '../hooks/useCrudModal'
 import { useTableSort } from '../hooks/useTableSort'
 import { usePagination } from '../hooks/usePagination'
 import { useToastContext } from '../hooks/ToastContext'
+import { useFocusTrap } from '../hooks/useFocusTrap'
+import { useTableFilter } from '../hooks/useTableFilter'
+import { useCrudMutations } from '../hooks/useCrudMutations'
 import ConfirmModal from '../components/ConfirmModal'
 import SearchableSelect from '../components/SearchableSelect'
 import InlineError from '../components/InlineError'
@@ -13,6 +16,9 @@ import EmptyState from '../components/EmptyState'
 import DataTable from '../components/DataTable'
 import TableSkeleton from '../components/TableSkeleton'
 import SortIndicator from '../components/SortIndicator'
+import Pagination from '../components/Pagination'
+import TableToolbar from '../components/TableToolbar'
+import PageHeader from '../components/PageHeader'
 
 export default function Groups() {
   const qc = useQueryClient()
@@ -48,35 +54,7 @@ export default function Groups() {
   }
 
   // Focus trap for modal accessibility
-  useEffect(() => {
-    if (!modalOpen) return
-    const modal = modalRef.current
-    if (!modal) return
-
-    const focusableElements = modal.querySelectorAll(
-      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
-    )
-    const firstElement = focusableElements[0]
-    const lastElement = focusableElements[focusableElements.length - 1]
-
-    // Focus first element on open
-    firstElement?.focus()
-
-    const handleKeyDown = (e) => {
-      if (e.key === 'Tab') {
-        if (e.shiftKey && document.activeElement === firstElement) {
-          e.preventDefault()
-          lastElement?.focus()
-        } else if (!e.shiftKey && document.activeElement === lastElement) {
-          e.preventDefault()
-          firstElement?.focus()
-        }
-      }
-    }
-
-    modal.addEventListener('keydown', handleKeyDown)
-    return () => modal.removeEventListener('keydown', handleKeyDown)
-  }, [modalOpen])
+  useFocusTrap(modalRef, modalOpen)
 
   const { data: groups, isLoading, refetch } = useQuery({
     queryKey: QUERY_KEYS.groups(),
@@ -113,39 +91,15 @@ export default function Groups() {
     label: p.hostname || p.ip_address,
   }))
 
-  // Sort groups based on sortConfig
-  const sortedGroups = [...(groups || [])].sort((a, b) => {
-    let aVal, bVal
-    switch (sortConfig.key) {
-      case 'name':
-        aVal = a.name.toLowerCase()
-        bVal = b.name.toLowerCase()
-        break
-      case 'peers':
-        aVal = a.peer_count || 0
-        bVal = b.peer_count || 0
-        break
-      case 'policies':
-        aVal = a.policy_count || 0
-        bVal = b.policy_count || 0
-        break
-      default:
-        return 0
+  // Filter and sort groups
+  const filteredGroups = useTableFilter(groups, searchQuery, sortConfig, {
+    filterFn: (g, query) => {
+      return (
+        g.name.toLowerCase().includes(query) ||
+        String(g.peer_count || 0).includes(query) ||
+        String(g.policy_count || 0).includes(query)
+      )
     }
-    if (aVal < bVal) return sortConfig.direction === 'asc' ? -1 : 1
-    if (aVal > bVal) return sortConfig.direction === 'asc' ? 1 : -1
-    return 0
-  })
-
-  // Filter groups based on search query
-  const filteredGroups = sortedGroups.filter(g => {
-    if (!searchQuery) return true
-    const query = searchQuery.toLowerCase()
-    return (
-      g.name.toLowerCase().includes(query) ||
-      String(g.peer_count || 0).includes(query) ||
-      String(g.policy_count || 0).includes(query)
-    )
   })
 
   // Pagination state
@@ -160,40 +114,14 @@ export default function Groups() {
     totalItems: groupsTotal
   } = usePagination(filteredGroups, 'groups')
 
-  const createMutation = useMutation({
-    mutationFn: (data) => api.post('/groups', data),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: QUERY_KEYS.groups() }); closeModal() },
-    onError: (err) => setFormErrors({ _general: err.message }),
-  })
-
-  const updateMutation = useMutation({
-    mutationFn: ({ id, data }) => api.put(`/groups/${id}`, data),
-    onMutate: async ({ id, data }) => {
-      await qc.cancelQueries({ queryKey: QUERY_KEYS.groups() })
-      const previousGroups = qc.getQueryData(QUERY_KEYS.groups())
-      qc.setQueryData(QUERY_KEYS.groups(), old => old?.map(g => g.id === id ? { ...g, ...data } : g) || [])
-      return { previousGroups }
-    },
-    onError: (err, vars, context) => {
-      qc.setQueryData(QUERY_KEYS.groups(), context.previousGroups)
-      setFormErrors({ _general: err.message })
-    },
-    onSettled: () => { qc.invalidateQueries({ queryKey: QUERY_KEYS.groups() }); closeModal() },
-  })
-
-  const deleteMutation = useMutation({
-    mutationFn: (id) => api.delete(`/groups/${id}`),
-    onMutate: async (id) => {
-      await qc.cancelQueries({ queryKey: QUERY_KEYS.groups() })
-      const previousGroups = qc.getQueryData(QUERY_KEYS.groups())
-      qc.setQueryData(QUERY_KEYS.groups(), old => old?.filter(g => g.id !== id) || [])
-      return { previousGroups }
-    },
-    onError: (err, id, context) => {
-      qc.setQueryData(QUERY_KEYS.groups(), context.previousGroups)
-      showToast(err.message, 'error')
-    },
-    onSettled: () => { setDeleteTarget(null) },
+  const { createMutation, updateMutation, deleteMutation } = useCrudMutations({
+    apiPath: '/groups',
+    queryKey: QUERY_KEYS.groups(),
+    onCreateSuccess: closeModal,
+    onUpdateSuccess: closeModal,
+    onDeleteSuccess: () => setDeleteTarget(null),
+    setFormErrors,
+    showToast,
   })
 
   const addMemberMutation = useMutation({
@@ -256,54 +184,36 @@ export default function Groups() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-light-neutral">Groups</h1>
-          <p className="text-gray-600 dark:text-amber-muted">Organize peers into logical groups for policy targeting</p>
-        </div>
-        <div className="flex items-center gap-3">
-          <button
-            onClick={handleManualRefresh}
-            disabled={isManualRefreshing}
-            className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 dark:text-amber-primary bg-white dark:bg-charcoal-dark border border-gray-300 dark:border-gray-border rounded-lg hover:bg-gray-50 dark:hover:bg-charcoal-darkest disabled:opacity-50"
-          >
-            <RefreshCw className={`w-4 h-4 ${isManualRefreshing ? 'animate-spin' : ''}`} />
-            Refresh
-          </button>
-          <button onClick={openAdd} className="flex items-center gap-2 px-4 py-2 bg-purple-active hover:bg-purple-700 text-white text-sm font-medium rounded-lg">
-            <Plus className="w-4 h-4" /> New Group
-          </button>
-        </div>
-      </div>
+      <PageHeader
+        title="Groups"
+        description="Organize peers into logical groups for policy targeting"
+        actions={
+          <>
+            <button
+              onClick={handleManualRefresh}
+              disabled={isManualRefreshing}
+              className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 dark:text-amber-primary bg-white dark:bg-charcoal-dark border border-gray-300 dark:border-gray-border rounded-lg hover:bg-gray-50 dark:hover:bg-charcoal-darkest disabled:opacity-50"
+            >
+              <RefreshCw className={`w-4 h-4 ${isManualRefreshing ? 'animate-spin' : ''}`} />
+              Refresh
+            </button>
+            <button onClick={openAdd} className="flex items-center gap-2 px-4 py-2 bg-purple-active hover:bg-purple-700 text-white text-sm font-medium rounded-lg">
+              <Plus className="w-4 h-4" /> New Group
+            </button>
+          </>
+        }
+      />
 
       {/* Search Bar and Rows per page */}
       {groups?.length > 0 && (
-        <div className="flex items-center justify-between gap-4">
-          <div className="relative flex-1 max-w-md">
-            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={e => setSearchQuery(e.target.value)}
-              placeholder="Search groups..."
-              className="w-full pl-9 pr-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-dark text-gray-900 dark:text-light-neutral placeholder-gray-400"
-            />
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-gray-500 dark:text-amber-muted">Rows:</span>
-            <select
-              value={groupsRowsPerPage}
-              onChange={(e) => setGroupsRowsPerPage(Number(e.target.value))}
-              className="text-sm border border-gray-300 dark:border-gray-border rounded px-2 py-2 bg-white dark:bg-charcoal-dark text-gray-900 dark:text-light-neutral focus:ring-2 focus:ring-purple-active focus:border-purple-active"
-            >
-              <option value={10}>10</option>
-              <option value={25}>25</option>
-              <option value={50}>50</option>
-              <option value={100}>100</option>
-              <option value={-1}>All</option>
-            </select>
-          </div>
-        </div>
+        <TableToolbar
+          searchTerm={searchQuery}
+          onSearchChange={(v) => setSearchQuery(v)}
+          onClearSearch={() => setSearchQuery('')}
+          placeholder="Search groups..."
+          rowsPerPage={groupsRowsPerPage}
+          onRowsPerPageChange={setGroupsRowsPerPage}
+        />
       )}
 
       {!groups?.length ? (
@@ -396,35 +306,7 @@ title={g.is_system ? "System groups cannot be deleted" : "Delete"}
           },
         ]} data={paginatedGroups} />
 
-        {/* Pagination Controls */}
-        {groupsTotal > 0 && (
-          <div className="flex items-center justify-between px-4 py-3 border-t border-gray-200 dark:border-gray-border bg-gray-50 dark:bg-charcoal-darkest">
-            <span className="text-sm text-gray-500 dark:text-amber-muted">
-              {groupsShowingRange}
-            </span>
-            <div className="flex items-center gap-1">
-              <button
-                onClick={() => setGroupsPage(groupsPage - 1)}
-                disabled={groupsPage <= 1}
-                className="p-1.5 rounded hover:bg-gray-200 dark:hover:bg-charcoal-dark disabled:opacity-40 disabled:cursor-not-allowed"
-                title="Previous page"
-              >
-                <ChevronLeft className="w-5 h-5 text-gray-600 dark:text-amber-primary" />
-              </button>
-              <span className="px-3 text-sm text-gray-600 dark:text-amber-primary">
-                Page {groupsPage} of {totalPages}
-              </span>
-              <button
-                onClick={() => setGroupsPage(groupsPage + 1)}
-                disabled={groupsPage >= totalPages}
-                className="p-1.5 rounded hover:bg-gray-200 dark:hover:bg-charcoal-dark disabled:opacity-40 disabled:cursor-not-allowed"
-                title="Next page"
-              >
-                <ChevronRight className="w-5 h-5 text-gray-600 dark:text-amber-primary" />
-              </button>
-            </div>
-          </div>
-        )}
+        <Pagination showingRange={groupsShowingRange} page={groupsPage} totalPages={totalPages} onPageChange={setGroupsPage} totalItems={groupsTotal} />
         </>
       )}
 

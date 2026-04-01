@@ -1,17 +1,23 @@
-import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
+import { useState, useCallback, useRef, useEffect } from 'react'
 import { useTableSort } from '../hooks/useTableSort'
 import { usePagination } from '../hooks/usePagination'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Pencil, Trash2, RefreshCw, X, Search, ChevronLeft, ChevronRight } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
+import { Plus, Pencil, Trash2, RefreshCw, X } from 'lucide-react'
 import { api, QUERY_KEYS } from '../api/client'
 import { useCrudModal } from '../hooks/useCrudModal'
 import { useToastContext } from '../hooks/ToastContext'
+import { useFocusTrap } from '../hooks/useFocusTrap'
+import { useTableFilter } from '../hooks/useTableFilter'
+import { useCrudMutations } from '../hooks/useCrudMutations'
 import ConfirmModal from '../components/ConfirmModal'
 import InlineError from '../components/InlineError'
 import EmptyState from '../components/EmptyState'
 import TableSkeleton from '../components/TableSkeleton'
 import SearchableSelect from '../components/SearchableSelect'
 import SortIndicator from '../components/SortIndicator'
+import Pagination from '../components/Pagination'
+import TableToolbar from '../components/TableToolbar'
+import PageHeader from '../components/PageHeader'
 
 const PROTOCOLS = ['tcp', 'udp', 'both', 'icmp', 'igmp']
 const PROTOCOL_OPTIONS = [
@@ -30,7 +36,6 @@ const USER_PROTOCOL_OPTIONS = [
 ]
 
 export default function Services() {
-  const qc = useQueryClient()
   const showToast = useToastContext()
   const { modalOpen, setModalOpen, editItem: editService, setEditItem: setEditService, form: formData, setForm: setFormData, setFormForEdit, handleOpenAdd, handleCancel: closeModal } = useCrudModal({ name: '', protocol: 'tcp', ports: '', source_ports: '', description: '' })
   const [deleteTarget, setDeleteTarget] = useState(null)
@@ -40,10 +45,10 @@ export default function Services() {
   const [portInputError, setPortInputError] = useState('')
   const [sourcePortChips, setSourcePortChips] = useState([])
   const [sourcePortInput, setSourcePortInput] = useState('')
-const [sourcePortInputError, setSourcePortInputError] = useState('')
-const [showSourcePorts, setShowSourcePorts] = useState(false)
-const [showDescription, setShowDescription] = useState(false)
-const [searchTerm, setSearchTerm] = useState('')
+  const [sourcePortInputError, setSourcePortInputError] = useState('')
+  const [showSourcePorts, setShowSourcePorts] = useState(false)
+  const [showDescription, setShowDescription] = useState(false)
+  const [searchTerm, setSearchTerm] = useState('')
 
   // Sorting state (persisted per-user)
   const { sortConfig, handleSort } = useTableSort('services', { key: 'name', direction: 'asc' })
@@ -55,55 +60,27 @@ const [searchTerm, setSearchTerm] = useState('')
   const modalRef = useRef(null)
 
   // Focus trap for modal accessibility
-  useEffect(() => {
-    if (!modalOpen) return
-    const modal = modalRef.current
-    if (!modal) return
-
-    const focusableElements = modal.querySelectorAll(
-      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
-    )
-    const firstElement = focusableElements[0]
-    const lastElement = focusableElements[focusableElements.length - 1]
-
-    // Focus first element on open
-    firstElement?.focus()
-
-    const handleKeyDown = (e) => {
-      if (e.key === 'Tab') {
-        if (e.shiftKey && document.activeElement === firstElement) {
-          e.preventDefault()
-          lastElement?.focus()
-        } else if (!e.shiftKey && document.activeElement === lastElement) {
-          e.preventDefault()
-          firstElement?.focus()
-        }
-      }
-    }
-
-    modal.addEventListener('keydown', handleKeyDown)
-    return () => modal.removeEventListener('keydown', handleKeyDown)
-  }, [modalOpen])
+  useFocusTrap(modalRef, modalOpen)
 
   const openAdd = () => { setFormErrors({}); setPortChips([]); setPortInput(''); setPortInputError(''); setSourcePortChips([]); setSourcePortInput(''); setSourcePortInputError(''); setShowSourcePorts(false); setShowDescription(false); handleOpenAdd() }
-const openEdit = (s) => {
-  setEditService(s);
-  setFormForEdit(s);
-  setFormErrors({});
-  // Initialize port chips from existing ports
-  const ports = s.ports ? s.ports.split(',').map(p => p.trim()).filter(Boolean) : []
-  setPortChips(ports)
-  setPortInput('')
-  setPortInputError('')
-  // Initialize source port chips from existing source_ports
-  const sourcePorts = s.source_ports ? s.source_ports.split(',').map(p => p.trim()).filter(Boolean) : []
-  setSourcePortChips(sourcePorts)
-  setSourcePortInput('')
-  setSourcePortInputError('')
-  setShowSourcePorts(sourcePorts.length > 0)
-  setShowDescription(!!s.description)
-  setModalOpen(true)
-}
+  const openEdit = (s) => {
+    setEditService(s);
+    setFormForEdit(s);
+    setFormErrors({});
+    // Initialize port chips from existing ports
+    const ports = s.ports ? s.ports.split(',').map(p => p.trim()).filter(Boolean) : []
+    setPortChips(ports)
+    setPortInput('')
+    setPortInputError('')
+    // Initialize source port chips from existing source_ports
+    const sourcePorts = s.source_ports ? s.source_ports.split(',').map(p => p.trim()).filter(Boolean) : []
+    setSourcePortChips(sourcePorts)
+    setSourcePortInput('')
+    setSourcePortInputError('')
+    setShowSourcePorts(sourcePorts.length > 0)
+    setShowDescription(!!s.description)
+    setModalOpen(true)
+  }
 
   const { data: services, isLoading, refetch } = useQuery({
     queryKey: QUERY_KEYS.services(),
@@ -117,53 +94,18 @@ const openEdit = (s) => {
     setIsManualRefreshing(false)
   }, [refetch])
 
-  // Filtered and sorted data
-  const processedServices = useMemo(() => {
-    if (!services) return []
-
-    // Filter by search term
-    let filtered = services
-    if (searchTerm) {
-      const term = searchTerm.toLowerCase()
-      filtered = services.filter(s => {
-        const name = (s.name || '').toLowerCase()
-        const protocol = (s.protocol || '').toLowerCase()
-        const ports = (s.ports || '').toLowerCase()
-        const description = (s.description || '').toLowerCase()
-        return name.includes(term) || protocol.includes(term) || ports.includes(term) || description.includes(term)
-      })
+  const processedServices = useTableFilter(services, searchTerm, sortConfig, {
+    filterFn: (s, term) => {
+      const name = (s.name || '').toLowerCase()
+      const protocol = (s.protocol || '').toLowerCase()
+      const ports = (s.ports || '').toLowerCase()
+      const description = (s.description || '').toLowerCase()
+      return name.includes(term) || protocol.includes(term) || ports.includes(term) || description.includes(term)
+    },
+    fieldMap: {
+      ports: (s) => parseInt((s.ports || '0').split(',')[0].split(':')[0]) || 0,
     }
-
-    // Sort
-    const sorted = [...filtered].sort((a, b) => {
-      let aVal, bVal
-      switch (sortConfig.key) {
-        case 'name':
-          aVal = (a.name || '').toLowerCase()
-          bVal = (b.name || '').toLowerCase()
-          break
-        case 'protocol':
-          aVal = (a.protocol || '').toLowerCase()
-          bVal = (b.protocol || '').toLowerCase()
-          break
-        case 'ports':
-          // Numeric sort - extract first port number
-          aVal = parseInt((a.ports || '0').split(',')[0].split(':')[0]) || 0
-          bVal = parseInt((b.ports || '0').split(',')[0].split(':')[0]) || 0
-          break
-        case 'description':
-          aVal = (a.description || '').toLowerCase()
-          bVal = (b.description || '').toLowerCase()
-          break
-        default:
-          return 0
-      }
-      if (aVal < bVal) return sortConfig.direction === 'asc' ? -1 : 1
-      if (aVal > bVal) return sortConfig.direction === 'asc' ? 1 : -1
-      return 0
-    })
-    return sorted
-  }, [services, searchTerm, sortConfig])
+  })
 
   // Pagination state
   const {
@@ -182,40 +124,13 @@ const openEdit = (s) => {
     setServicesPage(1)
   }, [searchTerm])
 
-  const createMutation = useMutation({
-    mutationFn: (data) => api.post('/services', data),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: QUERY_KEYS.services() }); closeModal() },
-    onError: (err) => setFormErrors({ _general: err.message }),
-  })
-
-  const updateMutation = useMutation({
-    mutationFn: (data) => api.put(`/services/${editService.id}`, data),
-    onMutate: async (newData) => {
-      await qc.cancelQueries({ queryKey: QUERY_KEYS.services() })
-      const previousServices = qc.getQueryData(QUERY_KEYS.services())
-      qc.setQueryData(QUERY_KEYS.services(), old => old?.map(s => s.id === editService.id ? { ...s, ...newData } : s) || [])
-      return { previousServices }
-    },
-    onError: (err, newData, context) => {
-      qc.setQueryData(QUERY_KEYS.services(), context.previousServices)
-      setFormErrors({ _general: err.message })
-    },
-    onSettled: () => { qc.invalidateQueries({ queryKey: QUERY_KEYS.services() }); closeModal() },
-  })
-
-  const deleteMutation = useMutation({
-    mutationFn: (id) => api.delete(`/services/${id}`),
-    onMutate: async (id) => {
-      await qc.cancelQueries({ queryKey: QUERY_KEYS.services() })
-      const previousServices = qc.getQueryData(QUERY_KEYS.services())
-      qc.setQueryData(QUERY_KEYS.services(), old => old?.filter(s => s.id !== id) || [])
-      return { previousServices }
-    },
-    onError: (err, id, context) => {
-      qc.setQueryData(QUERY_KEYS.services(), context.previousServices)
-      showToast(err.message, 'error')
-    },
-    onSettled: () => { setDeleteTarget(null) },
+  const { createMutation, updateMutation, deleteMutation } = useCrudMutations({
+    apiPath: '/services',
+    queryKey: QUERY_KEYS.services(),
+    onCreateSuccess: closeModal,
+    onUpdateSuccess: closeModal,
+    setFormErrors,
+    showToast,
   })
 
   // Validate a single port or range
@@ -389,61 +304,35 @@ const handleSourcePortInputKeyDown = (e) => {
 
  return (
  <div className="space-y-4">
- <div className="flex items-center justify-between">
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-light-neutral">Services</h1>
-        <p className="text-gray-600 dark:text-amber-muted">Define port and protocol bundles to simplify policy creation</p>
-      </div>
-        <div className="flex items-center gap-3">
-          <button
-            onClick={handleManualRefresh}
-            disabled={isManualRefreshing}
-            className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 dark:text-amber-primary bg-white dark:bg-charcoal-dark border border-gray-300 dark:border-gray-border rounded-lg hover:bg-gray-50 dark:hover:bg-charcoal-darkest disabled:opacity-50"
-          >
-            <RefreshCw className={`w-4 h-4 ${isManualRefreshing ? 'animate-spin' : ''}`} />
-            Refresh
-          </button>
-          <button onClick={openAdd} className="flex items-center gap-2 px-4 py-2 bg-purple-active hover:bg-purple-active/80 text-white text-sm font-medium rounded-lg">
-            <Plus className="w-4 h-4" /> New Service
-          </button>
-        </div>
-      </div>
+      <PageHeader
+        title="Services"
+        description="Define port and protocol bundles to simplify policy creation"
+        actions={
+          <>
+            <button
+              onClick={handleManualRefresh}
+              disabled={isManualRefreshing}
+              className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 dark:text-amber-primary bg-white dark:bg-charcoal-dark border border-gray-300 dark:border-gray-border rounded-lg hover:bg-gray-50 dark:hover:bg-charcoal-darkest disabled:opacity-50"
+            >
+              <RefreshCw className={`w-4 h-4 ${isManualRefreshing ? 'animate-spin' : ''}`} />
+              Refresh
+            </button>
+            <button onClick={openAdd} className="flex items-center gap-2 px-4 py-2 bg-purple-active hover:bg-purple-active/80 text-white text-sm font-medium rounded-lg">
+              <Plus className="w-4 h-4" /> New Service
+            </button>
+          </>
+        }
+      />
 
       {/* Search Bar and Rows per page */}
-      <div className="flex items-center justify-between gap-4">
-        <div className="relative flex-1 max-w-md">
-          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
-          <input
-            type="text"
-            placeholder="Search services by name, protocol, ports, or description..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full pl-9 pr-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-dark text-gray-900 dark:text-light-neutral placeholder-gray-400 focus:ring-2 focus:ring-purple-active focus:border-purple-active"
-          />
-          {searchTerm && (
-            <button
-              onClick={() => setSearchTerm('')}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-light-neutral"
-            >
-              ×
-            </button>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="text-sm text-gray-500 dark:text-amber-muted">Rows:</span>
-          <select
-            value={servicesRowsPerPage}
-            onChange={(e) => setServicesRowsPerPage(Number(e.target.value))}
-            className="text-sm border border-gray-300 dark:border-gray-border rounded px-2 py-2 bg-white dark:bg-charcoal-dark text-gray-900 dark:text-light-neutral focus:ring-2 focus:ring-purple-active focus:border-purple-active"
-          >
-            <option value={10}>10</option>
-            <option value={25}>25</option>
-            <option value={50}>50</option>
-            <option value={100}>100</option>
-            <option value={-1}>All</option>
-          </select>
-        </div>
-      </div>
+      <TableToolbar
+        searchTerm={searchTerm}
+        onSearchChange={(v) => setSearchTerm(v)}
+        onClearSearch={() => setSearchTerm('')}
+        placeholder="Search services by name, protocol, ports, or description..."
+        rowsPerPage={servicesRowsPerPage}
+        onRowsPerPageChange={setServicesRowsPerPage}
+      />
 
       {!processedServices?.length ? (
         searchTerm ? (
@@ -557,35 +446,7 @@ const handleSourcePortInputKeyDown = (e) => {
             </table>
           </div>
 
-          {/* Pagination Controls */}
-          {servicesTotal > 0 && (
-            <div className="flex items-center justify-between px-4 py-3 border-t border-gray-200 dark:border-gray-border bg-gray-50 dark:bg-charcoal-darkest">
-              <span className="text-sm text-gray-500 dark:text-amber-muted">
-                {servicesShowingRange}
-              </span>
-              <div className="flex items-center gap-1">
-                <button
-                  onClick={() => setServicesPage(servicesPage - 1)}
-                  disabled={servicesPage <= 1}
-                  className="p-1.5 rounded hover:bg-gray-200 dark:hover:bg-charcoal-dark disabled:opacity-40 disabled:cursor-not-allowed"
-                  title="Previous page"
-                >
-                  <ChevronLeft className="w-5 h-5 text-gray-600 dark:text-amber-primary" />
-                </button>
-                <span className="px-3 text-sm text-gray-600 dark:text-amber-primary">
-                  Page {servicesPage} of {totalPages}
-                </span>
-                <button
-                  onClick={() => setServicesPage(servicesPage + 1)}
-                  disabled={servicesPage >= totalPages}
-                  className="p-1.5 rounded hover:bg-gray-200 dark:hover:bg-charcoal-dark disabled:opacity-40 disabled:cursor-not-allowed"
-                  title="Next page"
-                >
-                  <ChevronRight className="w-5 h-5 text-gray-600 dark:text-amber-primary" />
-                </button>
-              </div>
-            </div>
-          )}
+          <Pagination showingRange={servicesShowingRange} page={servicesPage} totalPages={totalPages} onPageChange={setServicesPage} totalItems={servicesTotal} />
         </div>
       )}
 

@@ -1,12 +1,18 @@
-import { useState, useEffect, useMemo, useRef } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { RotateCw, CheckCircle, Clock, AlertTriangle, Search, ChevronLeft, ChevronRight } from 'lucide-react'
+import { RotateCw, CheckCircle, Clock, AlertTriangle } from 'lucide-react'
 import { QUERY_KEYS, api } from '../api/client'
 import { useToastContext } from '../hooks/ToastContext'
 import { usePagination } from '../hooks/usePagination'
+import { useFocusTrap } from '../hooks/useFocusTrap'
 import TableSkeleton from '../components/TableSkeleton'
 import { useTableSort } from '../hooks/useTableSort'
 import SortIndicator from '../components/SortIndicator'
+import { formatRelativeTime } from '../utils/formatTime.js'
+import TableToolbar from '../components/TableToolbar'
+import PageHeader from '../components/PageHeader'
+import Pagination from '../components/Pagination'
+import { useTableFilter } from '../hooks/useTableFilter'
 
 export default function SetupKeys() {
   const qc = useQueryClient()
@@ -89,59 +95,20 @@ export default function SetupKeys() {
     }
   }
 
-  const formatLastRotation = (timestamp) => {
-    if (!timestamp) return 'Never'
-    const date = new Date(timestamp)
-    const now = new Date()
-    const diffMs = now - date
-    const diffHours = Math.floor(diffMs / (1000 * 60 * 60))
-    const diffDays = Math.floor(diffHours / 24)
-    
-    if (diffHours < 1) return `${Math.floor(diffMs / (1000 * 60))} minutes ago`
-    if (diffHours < 24) return `${diffHours} hours ago`
-    if (diffDays < 7) return `${diffDays} days ago`
-    return date.toLocaleDateString()
-  }
-
   // Filter out manual peers (they have no HMAC keys) and apply search
-  const agentPeers = useMemo(() => (peers || []).filter(p => !p.is_manual), [peers])
-  const filteredPeers = useMemo(() => {
-    let result = agentPeers
-    if (searchTerm) {
-      const term = searchTerm.toLowerCase()
-      result = agentPeers.filter(p =>
-        (p.hostname || '').toLowerCase().includes(term) ||
-        (p.ip_address || '').toLowerCase().includes(term)
-      )
+  const agentPeers = (peers || []).filter(p => !p.is_manual)
+  const filteredPeers = useTableFilter(agentPeers, searchTerm, sortConfig, {
+    filterFn: (p, term) => {
+      return (p.hostname || '').toLowerCase().includes(term) || (p.ip_address || '').toLowerCase().includes(term)
+    },
+    fieldMap: {
+      status: (p) => {
+        const statusOrder = { never: 0, old: 1, aging: 2, recent: 3, today: 4 }
+        return statusOrder[getRotationStatusString(p)] ?? 0
+      },
+      lastRotation: (p) => p.hmac_key_last_rotated_at ? new Date(p.hmac_key_last_rotated_at).getTime() : 0
     }
-
-    // Sort
-    const sorted = [...result].sort((a, b) => {
-      let aVal, bVal
-      switch (sortConfig.key) {
-        case 'hostname':
-          aVal = (a.hostname || '').toLowerCase()
-          bVal = (b.hostname || '').toLowerCase()
-          break
-        case 'status': {
-          const statusOrder = { never: 0, old: 1, aging: 2, recent: 3, today: 4 }
-          aVal = statusOrder[getRotationStatusString(a)] ?? 0
-          bVal = statusOrder[getRotationStatusString(b)] ?? 0
-          break
-        }
-        case 'lastRotation':
-          aVal = a.hmac_key_last_rotated_at ? new Date(a.hmac_key_last_rotated_at).getTime() : 0
-          bVal = b.hmac_key_last_rotated_at ? new Date(b.hmac_key_last_rotated_at).getTime() : 0
-          break
-        default:
-          return 0
-      }
-      if (aVal < bVal) return sortConfig.direction === 'asc' ? -1 : 1
-      if (aVal > bVal) return sortConfig.direction === 'asc' ? 1 : -1
-      return 0
-    })
-    return sorted
-  }, [agentPeers, searchTerm, sortConfig])
+  })
 
   const {
     paginatedData: paginatedPeers,
@@ -159,108 +126,38 @@ export default function SetupKeys() {
     setPeersPage(1)
   }, [searchTerm])
 
-  // Focus trap for rotation confirmation modal
-  useEffect(() => {
-    if (!showRotateModal) return
-    const modal = rotateConfirmModalRef.current
-    if (!modal) return
-    const focusable = modal.querySelectorAll(
-      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
-    )
-    if (focusable.length === 0) return
-    const first = focusable[0]
-    const last = focusable[focusable.length - 1]
-    first.focus()
-    const handleTab = (e) => {
-      if (e.key !== 'Tab') return
-      if (e.shiftKey) {
-        if (document.activeElement === first) { e.preventDefault(); last.focus() }
-      } else {
-        if (document.activeElement === last) { e.preventDefault(); first.focus() }
-      }
-    }
-    modal.addEventListener('keydown', handleTab)
-    return () => modal.removeEventListener('keydown', handleTab)
-  }, [showRotateModal])
-
-  // Focus trap for rotation result modal
-  useEffect(() => {
-    if (!rotationResult) return
-    const modal = rotateResultModalRef.current
-    if (!modal) return
-    const focusable = modal.querySelectorAll(
-      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
-    )
-    if (focusable.length === 0) return
-    const first = focusable[0]
-    const last = focusable[focusable.length - 1]
-    first.focus()
-    const handleTab = (e) => {
-      if (e.key !== 'Tab') return
-      if (e.shiftKey) {
-        if (document.activeElement === first) { e.preventDefault(); last.focus() }
-      } else {
-        if (document.activeElement === last) { e.preventDefault(); first.focus() }
-      }
-    }
-    modal.addEventListener('keydown', handleTab)
-    return () => modal.removeEventListener('keydown', handleTab)
-  }, [rotationResult])
+  // Focus traps for modals
+  useFocusTrap(rotateConfirmModalRef, !!showRotateModal)
+  useFocusTrap(rotateResultModalRef, !!rotationResult)
 
   if (peersLoading) return <TableSkeleton rows={5} columns={6} />
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-light-neutral">Setup Keys</h1>
-          <p className="text-gray-600 dark:text-amber-muted">Manage per-peer HMAC key rotation</p>
-        </div>
-        <button
-          onClick={() => setShowRotateModal('bulk')}
-          disabled={bulkRotateMutation.isPending || !agentPeers || agentPeers.length === 0}
-          className="inline-flex items-center gap-2 px-4 py-2 text-sm bg-purple-active hover:bg-purple-active/80 text-white rounded-lg disabled:opacity-50"
-        >
-          <RotateCw className="w-4 h-4" />
-          Rotate All Keys
-        </button>
-      </div>
+      <PageHeader
+        title="Setup Keys"
+        description="Manage per-peer HMAC key rotation"
+        actions={
+          <button
+            onClick={() => setShowRotateModal('bulk')}
+            disabled={bulkRotateMutation.isPending || !peers || peers.filter(p => !p.is_manual).length === 0}
+            className="inline-flex items-center gap-2 px-4 py-2 text-sm bg-purple-active hover:bg-purple-active/80 text-white rounded-lg disabled:opacity-50"
+          >
+            <RotateCw className="w-4 h-4" />
+            Rotate All Keys
+          </button>
+        }
+      />
 
       {/* Search Bar and Rows per page */}
-      <div className="flex items-center justify-between gap-4">
-        <div className="relative flex-1 max-w-md">
-          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
-          <input
-            type="text"
-            placeholder="Search by hostname or IP..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full pl-9 pr-10 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-dark text-gray-900 dark:text-light-neutral placeholder-gray-400 focus:ring-2 focus:ring-purple-active focus:border-purple-active"
-          />
-          {searchTerm && (
-            <button
-              onClick={() => setSearchTerm('')}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-light-neutral"
-            >
-              ×
-            </button>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="text-sm text-gray-500 dark:text-amber-muted">Rows:</span>
-          <select
-            value={peersRowsPerPage}
-            onChange={(e) => setPeersRowsPerPage(Number(e.target.value))}
-            className="text-sm border border-gray-300 dark:border-gray-border rounded px-2 py-2 bg-white dark:bg-charcoal-dark text-gray-900 dark:text-light-neutral focus:ring-2 focus:ring-purple-active focus:border-purple-active"
-          >
-            <option value={10}>10</option>
-            <option value={25}>25</option>
-            <option value={50}>50</option>
-            <option value={100}>100</option>
-            <option value={-1}>All</option>
-          </select>
-        </div>
-      </div>
+      <TableToolbar
+        searchTerm={searchTerm}
+        onSearchChange={(v) => setSearchTerm(v)}
+        onClearSearch={() => setSearchTerm('')}
+        placeholder="Search by hostname or IP..."
+        rowsPerPage={peersRowsPerPage}
+        onRowsPerPageChange={setPeersRowsPerPage}
+      />
 
       {/* Peers Rotation Table */}
       {filteredPeers.length === 0 ? (
@@ -315,7 +212,7 @@ export default function SetupKeys() {
                         </div>
                       </td>
                       <td className="px-4 py-3 text-gray-600 dark:text-amber-primary">
-                        {formatLastRotation(peer.hmac_key_last_rotated_at)}
+                        {formatRelativeTime(peer.hmac_key_last_rotated_at)}
                       </td>
                       <td className="px-4 py-3">
                         <button
@@ -335,34 +232,13 @@ export default function SetupKeys() {
           </div>
 
           {/* Pagination Controls */}
-          {peersTotal > 0 && (
-            <div className="flex items-center justify-between px-4 py-3 border-t border-gray-200 dark:border-gray-border bg-gray-50 dark:bg-charcoal-darkest">
-              <span className="text-sm text-gray-500 dark:text-amber-muted">
-                {peersShowingRange}
-              </span>
-              <div className="flex items-center gap-1">
-                <button
-                  onClick={() => setPeersPage(peersPage - 1)}
-                  disabled={peersPage <= 1}
-                  className="p-1.5 rounded hover:bg-gray-200 dark:hover:bg-charcoal-dark disabled:opacity-40 disabled:cursor-not-allowed"
-                  title="Previous page"
-                >
-                  <ChevronLeft className="w-5 h-5 text-gray-600 dark:text-amber-primary" />
-                </button>
-                <span className="px-3 text-sm text-gray-600 dark:text-amber-primary">
-                  Page {peersPage} of {totalPages}
-                </span>
-                <button
-                  onClick={() => setPeersPage(peersPage + 1)}
-                  disabled={peersPage >= totalPages}
-                  className="p-1.5 rounded hover:bg-gray-200 dark:hover:bg-charcoal-dark disabled:opacity-40 disabled:cursor-not-allowed"
-                  title="Next page"
-                >
-                  <ChevronRight className="w-5 h-5 text-gray-600 dark:text-amber-primary" />
-                </button>
-              </div>
-            </div>
-          )}
+          <Pagination
+            showingRange={peersShowingRange}
+            page={peersPage}
+            totalPages={totalPages}
+            onPageChange={setPeersPage}
+            totalItems={peersTotal}
+          />
         </div>
       )}
 

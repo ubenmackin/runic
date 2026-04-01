@@ -1,18 +1,25 @@
-import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
+import { useState, useCallback, useRef, useEffect } from 'react'
 import { useTableSort } from '../hooks/useTableSort'
 import { usePagination } from '../hooks/usePagination'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Pencil, Trash2, Server, Copy, Check, RefreshCw, X, Search, FileCode, ChevronLeft, ChevronRight } from 'lucide-react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { Plus, Pencil, Trash2, Server, Copy, Check, RefreshCw, X, FileCode } from 'lucide-react'
 import { api, QUERY_KEYS } from '../api/client'
 import { REFETCH_INTERVALS } from '../constants'
 import { useCrudModal } from '../hooks/useCrudModal'
 import { useToastContext } from '../hooks/ToastContext'
+import { formatRelativeTime } from '../utils/formatTime.js'
+import { useFocusTrap } from '../hooks/useFocusTrap'
+import { useTableFilter } from '../hooks/useTableFilter'
+import { useCrudMutations } from '../hooks/useCrudMutations'
 import ConfirmModal from '../components/ConfirmModal'
 import SearchableSelect from '../components/SearchableSelect'
 import InlineError from '../components/InlineError'
 import EmptyState from '../components/EmptyState'
 import TableSkeleton from '../components/TableSkeleton'
 import SortIndicator from '../components/SortIndicator'
+import Pagination from '../components/Pagination'
+import TableToolbar from '../components/TableToolbar'
+import PageHeader from '../components/PageHeader'
 
 const OS_OPTIONS = [
   { value: 'ubuntu', label: 'Ubuntu' },
@@ -34,27 +41,6 @@ const ARCH_OPTIONS = [
   { value: 'arm', label: 'arm' },
   { value: 'other', label: 'Other' },
 ]
-
-// Helper function to format relative time
-function formatRelativeTime(timestamp) {
-  if (!timestamp) return 'Never'
-
-  const date = new Date(timestamp)
-  const now = new Date()
-  const diffMs = now - date
-  const diffSeconds = Math.floor(diffMs / 1000)
-  const diffMinutes = Math.floor(diffSeconds / 60)
-  const diffHours = Math.floor(diffMinutes / 60)
-  const diffDays = Math.floor(diffHours / 24)
-
-  if (diffSeconds < 60) return 'Just now'
-  if (diffMinutes < 60) return `${diffMinutes} minute${diffMinutes !== 1 ? 's' : ''} ago`
-  if (diffHours < 24) return `${diffHours} hour${diffHours !== 1 ? 's' : ''} ago`
-  if (diffDays < 7) return `${diffDays} day${diffDays !== 1 ? 's' : ''} ago`
-
-  // For older dates, show the actual date
-  return date.toLocaleDateString()
-}
 
 // Helper function to parse heartbeat for sorting
 function parseHeartbeatForSort(timestamp) {
@@ -102,98 +88,10 @@ export default function Peers() {
   const addModalRef = useRef(null)
   const bundleModalRef = useRef(null)
 
-  // Focus trap for edit modal
-  useEffect(() => {
-    if (!modalOpen) return
-    const modal = editModalRef.current
-    if (!modal) return
-
-    const focusableElements = modal.querySelectorAll(
-      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
-    )
-    const firstElement = focusableElements[0]
-    const lastElement = focusableElements[focusableElements.length - 1]
-
-    // Focus first element on open
-    firstElement?.focus()
-
-    const handleKeyDown = (e) => {
-      if (e.key === 'Tab') {
-        if (e.shiftKey && document.activeElement === firstElement) {
-          e.preventDefault()
-          lastElement?.focus()
-        } else if (!e.shiftKey && document.activeElement === lastElement) {
-          e.preventDefault()
-          firstElement?.focus()
-        }
-      }
-    }
-
-    modal.addEventListener('keydown', handleKeyDown)
-    return () => modal.removeEventListener('keydown', handleKeyDown)
-  }, [modalOpen])
-
-  // Focus trap for add modal
-  useEffect(() => {
-    if (!addModalOpen) return
-    const modal = addModalRef.current
-    if (!modal) return
-
-    const focusableElements = modal.querySelectorAll(
-      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
-    )
-    const firstElement = focusableElements[0]
-    const lastElement = focusableElements[focusableElements.length - 1]
-
-    // Focus first element on open
-    firstElement?.focus()
-
-    const handleKeyDown = (e) => {
-      if (e.key === 'Tab') {
-        if (e.shiftKey && document.activeElement === firstElement) {
-          e.preventDefault()
-          lastElement?.focus()
-        } else if (!e.shiftKey && document.activeElement === lastElement) {
-          e.preventDefault()
-          firstElement?.focus()
-        }
-      }
-    }
-
-    modal.addEventListener('keydown', handleKeyDown)
-    return () => modal.removeEventListener('keydown', handleKeyDown)
-  }, [addModalOpen, activeTab])
-
-  // Focus trap for bundle modal
-  useEffect(() => {
-    if (!bundleModalOpen) return
-    const modal = bundleModalRef.current
-    if (!modal) return
-
-    const focusableElements = modal.querySelectorAll(
-      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
-    )
-    const firstElement = focusableElements[0]
-    const lastElement = focusableElements[focusableElements.length - 1]
-
-    // Focus first element on open
-    firstElement?.focus()
-
-    const handleKeyDown = (e) => {
-      if (e.key === 'Tab') {
-        if (e.shiftKey && document.activeElement === firstElement) {
-          e.preventDefault()
-          lastElement?.focus()
-        } else if (!e.shiftKey && document.activeElement === lastElement) {
-          e.preventDefault()
-          firstElement?.focus()
-        }
-      }
-    }
-
-    modal.addEventListener('keydown', handleKeyDown)
-    return () => modal.removeEventListener('keydown', handleKeyDown)
-  }, [bundleModalOpen])
+  // Focus traps for modals
+  useFocusTrap(editModalRef, modalOpen)
+  useFocusTrap(addModalRef, addModalOpen)
+  useFocusTrap(bundleModalRef, bundleModalOpen)
 
   // Sorting state (persisted per-user)
   const { sortConfig, handleSort } = useTableSort('peers', { key: 'hostname', direction: 'asc' })
@@ -295,80 +193,41 @@ export default function Peers() {
     setIsManualRefreshing(false)
   }, [refetch])
 
-
-
   // Search state
   const [searchTerm, setSearchTerm] = useState('')
 
+  // Pre-filter by status filter before search/sort
+  const preFilteredPeers = peers?.filter(peer => {
+    if (statusFilter === 'all') return true
+    switch (statusFilter) {
+      case 'online':
+        return peer.status === 'online' && !peer.is_manual
+      case 'offline':
+        return peer.status === 'offline' && !peer.is_manual
+      case 'manual':
+        return peer.is_manual === true
+      case 'agent':
+        return !peer.is_manual
+      default:
+        return true
+    }
+  })
+
   // Filtered and sorted data (includes status filter)
-  const processedPeers = useMemo(() => {
-    if (!peers) return []
-
-    // Filter by status filter first
-    let filtered = peers
-    if (statusFilter !== 'all') {
-      filtered = peers.filter(peer => {
-        switch (statusFilter) {
-          case 'online':
-            return peer.status === 'online' && !peer.is_manual
-          case 'offline':
-            return peer.status === 'offline' && !peer.is_manual
-          case 'manual':
-            return peer.is_manual === true
-          case 'agent':
-            return !peer.is_manual
-          default:
-            return true
-        }
-      })
-    }
-
-    // Filter by search term
-    if (searchTerm) {
-      const term = searchTerm.toLowerCase()
-      filtered = filtered.filter(peer => {
-        const hostname = (peer.hostname || '').toLowerCase()
-        const ip = (peer.ip_address || '').toLowerCase()
-        const os = (peer.os_type || peer.os || '').toLowerCase()
-        const groups = (peer.groups || '').toLowerCase()
-        const agent = peer.is_manual ? 'manual' : (peer.agent_version || '').toLowerCase()
-
-        return hostname.includes(term) || ip.includes(term) || os.includes(term) || groups.includes(term) || agent.includes(term)
-      })
-    }
-
-    // Sort
-    const sorted = [...filtered].sort((a, b) => {
-      let aVal, bVal
-
-      switch (sortConfig.key) {
-        case 'hostname':
-          aVal = (a.hostname || '').toLowerCase()
-          bVal = (b.hostname || '').toLowerCase()
-          break
-        case 'ip_address':
-          aVal = (a.ip_address || '').toLowerCase()
-          bVal = (b.ip_address || '').toLowerCase()
-          break
-        case 'os_type':
-          aVal = (a.os_type || a.os || '').toLowerCase()
-          bVal = (b.os_type || b.os || '').toLowerCase()
-          break
-        case 'last_heartbeat':
-          aVal = parseHeartbeatForSort(a.last_heartbeat)
-          bVal = parseHeartbeatForSort(b.last_heartbeat)
-          break
-        default:
-          return 0
-      }
-
-      if (aVal < bVal) return sortConfig.direction === 'asc' ? -1 : 1
-      if (aVal > bVal) return sortConfig.direction === 'asc' ? 1 : -1
-      return 0
-    })
-
-    return sorted
-  }, [peers, statusFilter, searchTerm, sortConfig])
+  const processedPeers = useTableFilter(preFilteredPeers, searchTerm, sortConfig, {
+    filterFn: (peer, term) => {
+      const hostname = (peer.hostname || '').toLowerCase()
+      const ip = (peer.ip_address || '').toLowerCase()
+      const os = (peer.os_type || peer.os || '').toLowerCase()
+      const groups = (peer.groups || '').toLowerCase()
+      const agent = peer.is_manual ? 'manual' : (peer.agent_version || '').toLowerCase()
+      return hostname.includes(term) || ip.includes(term) || os.includes(term) || groups.includes(term) || agent.includes(term)
+    },
+    fieldMap: {
+      os_type: (p) => (p.os_type || p.os || '').toLowerCase(),
+      last_heartbeat: (p) => parseHeartbeatForSort(p.last_heartbeat),
+    },
+  })
 
   // Pagination state
   const {
@@ -387,48 +246,19 @@ export default function Peers() {
     setPeersPage(1)
   }, [searchTerm])
 
-  const createMutation = useMutation({
-    mutationFn: (data) => api.post('/peers', data),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: QUERY_KEYS.peers() }); closeModal() },
-    onError: (err) => setFormErrors({ _general: err.message }),
-  })
-
-  const updateMutation = useMutation({
-    mutationFn: (data) => api.put(`/peers/${editPeer.id}`, data),
-    onMutate: async (newData) => {
-      await qc.cancelQueries({ queryKey: QUERY_KEYS.peers() })
-      const previousPeers = qc.getQueryData(QUERY_KEYS.peers())
-      qc.setQueryData(QUERY_KEYS.peers(), old => old?.map(p => p.id === editPeer.id ? { ...p, ...newData } : p) || [])
-      return { previousPeers }
-    },
-    onError: (err, newData, context) => {
-      qc.setQueryData(QUERY_KEYS.peers(), context.previousPeers)
-      setFormErrors({ _general: err.message })
-    },
-    onSettled: () => { qc.invalidateQueries({ queryKey: QUERY_KEYS.peers() }); closeModal() },
-  })
-
-  const deleteMutation = useMutation({
-    mutationFn: (id) => api.delete(`/peers/${id}`),
-    onMutate: async (id) => {
-      await qc.cancelQueries({ queryKey: QUERY_KEYS.peers() })
-      const previousPeers = qc.getQueryData(QUERY_KEYS.peers())
-      qc.setQueryData(QUERY_KEYS.peers(), old => old?.filter(p => p.id !== id) || [])
-      return { previousPeers }
-    },
-    onSuccess: () => {
-      showToast('Peer deleted successfully', 'success')
-    },
-    onError: (err, id, context) => {
-      qc.setQueryData(QUERY_KEYS.peers(), context.previousPeers)
-      showToast(err.message, 'error')
-    },
-    onSettled: () => { setDeleteTarget(null) },
+  const { createMutation, updateMutation, deleteMutation } = useCrudMutations({
+    apiPath: '/peers',
+    queryKey: QUERY_KEYS.peers(),
+    onCreateSuccess: closeModal,
+    onUpdateSuccess: closeModal,
+    onDeleteSuccess: () => { setDeleteTarget(null); showToast('Peer deleted successfully', 'success') },
+    setFormErrors,
+    showToast,
   })
 
   const handleSubmit = (e) => {
     e.preventDefault()
-    if (editPeer) updateMutation.mutate(formData)
+    if (editPeer) updateMutation.mutate({ id: editPeer.id, data: formData })
     else createMutation.mutate(formData)
   }
 
@@ -436,61 +266,35 @@ export default function Peers() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-light-neutral">Peers</h1>
-          <p className="text-gray-600 dark:text-amber-muted">Register and manage devices and endpoints in your network</p>
-        </div>
-        <div className="flex items-center gap-3">
-          <button
-            onClick={handleManualRefresh}
-            disabled={isManualRefreshing}
-            className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 dark:text-amber-primary bg-white dark:bg-charcoal-dark border border-gray-300 dark:border-gray-border rounded-lg hover:bg-gray-50 dark:hover:bg-charcoal-darkest disabled:opacity-50"
-          >
-            <RefreshCw className={`w-4 h-4 ${isManualRefreshing ? 'animate-spin' : ''}`} />
-            Refresh
-          </button>
-          <button onClick={openAddModal} className="flex items-center gap-2 px-4 py-2 bg-purple-active hover:bg-purple-active/80 text-white text-sm font-medium rounded-lg">
-            <Plus className="w-4 h-4" /> Add Peer
-          </button>
-        </div>
-      </div>
+      <PageHeader
+        title="Peers"
+        description="Register and manage devices and endpoints in your network"
+        actions={
+          <>
+            <button
+              onClick={handleManualRefresh}
+              disabled={isManualRefreshing}
+              className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 dark:text-amber-primary bg-white dark:bg-charcoal-dark border border-gray-300 dark:border-gray-border rounded-lg hover:bg-gray-50 dark:hover:bg-charcoal-darkest disabled:opacity-50"
+            >
+              <RefreshCw className={`w-4 h-4 ${isManualRefreshing ? 'animate-spin' : ''}`} />
+              Refresh
+            </button>
+            <button onClick={openAddModal} className="flex items-center gap-2 px-4 py-2 bg-purple-active hover:bg-purple-active/80 text-white text-sm font-medium rounded-lg">
+              <Plus className="w-4 h-4" /> Add Peer
+            </button>
+          </>
+        }
+      />
 
       {/* Search Bar and Rows per page */}
-      <div className="flex items-center justify-between gap-4">
-        <div className="relative flex-1 max-w-md">
-          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
-          <input
-            type="text"
-            placeholder="Search peers by hostname, IP, OS, groups, or agent..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full pl-9 pr-10 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-dark text-gray-900 dark:text-light-neutral placeholder-gray-400 focus:ring-2 focus:ring-purple-active focus:border-purple-active"
-          />
-          {searchTerm && (
-            <button
-              onClick={() => setSearchTerm('')}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-light-neutral"
-            >
-              ×
-            </button>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="text-sm text-gray-500 dark:text-amber-muted">Rows:</span>
-          <select
-            value={peersRowsPerPage}
-            onChange={(e) => setPeersRowsPerPage(Number(e.target.value))}
-            className="text-sm border border-gray-300 dark:border-gray-border rounded px-2 py-2 bg-white dark:bg-charcoal-dark text-gray-900 dark:text-light-neutral focus:ring-2 focus:ring-purple-active focus:border-purple-active"
-          >
-            <option value={10}>10</option>
-            <option value={25}>25</option>
-            <option value={50}>50</option>
-            <option value={100}>100</option>
-            <option value={-1}>All</option>
-          </select>
-        </div>
-      </div>
+      <TableToolbar
+        searchTerm={searchTerm}
+        onSearchChange={(v) => setSearchTerm(v)}
+        onClearSearch={() => setSearchTerm('')}
+        placeholder="Search peers by hostname, IP, OS, groups, or agent..."
+        rowsPerPage={peersRowsPerPage}
+        onRowsPerPageChange={setPeersRowsPerPage}
+      />
 
       {/* Status Filter Button Bar */}
       <div className="flex gap-2">
@@ -666,35 +470,7 @@ export default function Peers() {
             </table>
           </div>
 
-          {/* Pagination Controls */}
-          {peersTotal > 0 && (
-            <div className="flex items-center justify-between px-4 py-3 border-t border-gray-200 dark:border-gray-border bg-gray-50 dark:bg-charcoal-darkest">
-              <span className="text-sm text-gray-500 dark:text-amber-muted">
-                {peersShowingRange}
-              </span>
-              <div className="flex items-center gap-1">
-                <button
-                  onClick={() => setPeersPage(peersPage - 1)}
-                  disabled={peersPage <= 1}
-                  className="p-1.5 rounded hover:bg-gray-200 dark:hover:bg-charcoal-dark disabled:opacity-40 disabled:cursor-not-allowed"
-                  title="Previous page"
-                >
-                  <ChevronLeft className="w-5 h-5 text-gray-600 dark:text-amber-primary" />
-                </button>
-                <span className="px-3 text-sm text-gray-600 dark:text-amber-primary">
-                  Page {peersPage} of {totalPages}
-                </span>
-                <button
-                  onClick={() => setPeersPage(peersPage + 1)}
-                  disabled={peersPage >= totalPages}
-                  className="p-1.5 rounded hover:bg-gray-200 dark:hover:bg-charcoal-dark disabled:opacity-40 disabled:cursor-not-allowed"
-                  title="Next page"
-                >
-                  <ChevronRight className="w-5 h-5 text-gray-600 dark:text-amber-primary" />
-                </button>
-              </div>
-            </div>
-          )}
+          <Pagination showingRange={peersShowingRange} page={peersPage} totalPages={totalPages} onPageChange={setPeersPage} totalItems={peersTotal} />
         </div>
       )}
 
