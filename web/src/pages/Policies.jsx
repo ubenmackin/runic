@@ -214,7 +214,8 @@ const polymorphicOptions = [
       service: (p) => getServiceName(p.service_id).toLowerCase(),
       target: (p) => getEntityName(p.target_type, p.target_id).toLowerCase(),
     },
-    extraDeps: [getEntityName, getServiceName]
+    extraDeps: [getEntityName, getServiceName],
+    secondarySortKey: 'name',
   })
 
   // Pagination state

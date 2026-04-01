@@ -13,7 +13,7 @@ import { useMemo } from 'react'
  * @returns {Array} Filtered and sorted data
  */
 export function useTableFilter(data, searchTerm, sortConfig, options = {}) {
-  const { filterFn, fieldMap = {}, extraDeps = [] } = options
+  const { filterFn, fieldMap = {}, extraDeps = [], secondarySortKey } = options
 
   const getValue = (item, key) => {
     if (fieldMap[key]) return fieldMap[key](item)
@@ -39,20 +39,28 @@ export function useTableFilter(data, searchTerm, sortConfig, options = {}) {
       }
     }
 
-    // Sort
-    const sorted = [...filtered].sort((a, b) => {
-      let aVal = getValue(a, sortConfig.key)
-      let bVal = getValue(b, sortConfig.key)
+      // Sort
+      const sorted = [...filtered].sort((a, b) => {
+        let aVal = getValue(a, sortConfig.key)
+        let bVal = getValue(b, sortConfig.key)
 
-      // Handle null/undefined values consistently
-      if (aVal == null) aVal = ''
-      if (bVal == null) bVal = ''
+        // Handle null/undefined values consistently
+        if (aVal == null) aVal = ''
+        if (bVal == null) bVal = ''
 
-      if (aVal < bVal) return sortConfig.direction === 'asc' ? -1 : 1
-      if (aVal > bVal) return sortConfig.direction === 'asc' ? 1 : -1
-      return 0
-    })
+        if (aVal < bVal) return sortConfig.direction === 'asc' ? -1 : 1
+        if (aVal > bVal) return sortConfig.direction === 'asc' ? 1 : -1
+
+        // Secondary sort for consistent ordering when primary values are equal
+        if (secondarySortKey) {
+          const aSecondary = getValue(a, secondarySortKey)
+          const bSecondary = getValue(b, secondarySortKey)
+          return String(aSecondary).localeCompare(String(bSecondary))
+        }
+
+        return 0
+      })
 
     return sorted
-  }, [data, searchTerm, sortConfig, filterFn, fieldMap, ...extraDeps])
+  }, [data, searchTerm, sortConfig, filterFn, fieldMap, secondarySortKey, ...extraDeps])
 }

@@ -99,7 +99,8 @@ export default function Groups() {
         String(g.peer_count || 0).includes(query) ||
         String(g.policy_count || 0).includes(query)
       )
-    }
+    },
+    secondarySortKey: 'name',
   })
 
   // Pagination state

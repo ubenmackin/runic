@@ -227,6 +227,7 @@ export default function Peers() {
       os_type: (p) => (p.os_type || p.os || '').toLowerCase(),
       last_heartbeat: (p) => parseHeartbeatForSort(p.last_heartbeat),
     },
+    secondarySortKey: 'hostname',
   })
 
   // Pagination state

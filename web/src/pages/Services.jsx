@@ -104,7 +104,8 @@ export default function Services() {
     },
     fieldMap: {
       ports: (s) => parseInt((s.ports || '0').split(',')[0].split(':')[0]) || 0,
-    }
+    },
+    secondarySortKey: 'name',
   })
 
   // Pagination state

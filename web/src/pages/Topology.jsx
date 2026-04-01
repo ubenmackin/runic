@@ -35,7 +35,8 @@ const LIGHT_COLORS = {
   textMuted:  '#6b7280',
 }
 
-const LEVEL_SPACING = 280
+const FIRST_TIER_SPACING = 380
+const MEMBER_SPACING = 280
 const SIBLING_SPACING = 110
 
 // ──────────────────────────────────────────────────────
@@ -212,7 +213,7 @@ function computePositions(layoutData) {
   // Helper: position a side's children and their expanded members
   function positionSide(children, direction) {
     // direction: 1 = right, -1 = left
-    const xOffset = direction * LEVEL_SPACING
+    const xOffset = direction * FIRST_TIER_SPACING
 
     // Count total slots needed (children + any expanded members)
     let totalSlots = 0
@@ -236,7 +237,7 @@ function computePositions(layoutData) {
 
       // Position members at next level
       if (memberCount > 0) {
-        const memberXOffset = direction * LEVEL_SPACING * 2
+        const memberXOffset = direction * (FIRST_TIER_SPACING + MEMBER_SPACING)
         let memberY = currentY
         for (const member of child.members) {
           const memberNode = { ...member, x: memberXOffset, y: memberY, side: direction }
@@ -361,7 +362,7 @@ function TreeGraph({ layoutData, isDark, onNodeClick, onEdgeClick, onGroupClick,
         linkGroup.append('path')
           .attr('d', pathD).attr('fill', 'none').attr('stroke', 'transparent').attr('stroke-width', 20)
           .style('cursor', 'pointer')
-          .on('click', (event) => { event.stopPropagation(); onEdgeClick?.(edgeList[0]) })
+          .on('click', (event) => { event.stopPropagation(); onEdgeClick?.(edgeList) })
 
         // Arrow at 75%
         const t = 0.75
@@ -385,14 +386,14 @@ function TreeGraph({ layoutData, isDark, onNodeClick, onEdgeClick, onGroupClick,
 
         // Collect pill data for deferred rendering (on top of nodes)
         const serviceNames = [...new Set(edgeList.map(e => e.serviceName))]
-        serviceNames.forEach((svc, i) => {
-          deferredPills.push({
-            x: px,
-            y: py + (i - (serviceNames.length - 1) / 2) * 22,
-            serviceName: svc,
-            color,
-            edge: edgeList.find(e => e.serviceName === svc),
-          })
+        const pillText = serviceNames.length === 1 ? serviceNames[0] : `+${serviceNames.length}`
+
+        deferredPills.push({
+          x: px,
+          y: py,
+          serviceName: pillText,
+          color,
+          edgeList,
         })
       }
 
@@ -456,7 +457,7 @@ function TreeGraph({ layoutData, isDark, onNodeClick, onEdgeClick, onGroupClick,
         }).join(' ')
 
         el.append('polygon').attr('points', hexPoints)
-          .attr('fill', d.expanded ? (COLORS.group + '30') : (isDark ? DARK_COLORS.nodeFill : LIGHT_COLORS.nodeFill))
+          .attr('fill', d.expanded ? (isDark ? '#422f18' : '#fef0c7') : (isDark ? DARK_COLORS.nodeFill : LIGHT_COLORS.nodeFill))
           .attr('stroke', COLORS.group).attr('stroke-width', d.expanded ? 3 : 2.5)
 
         const badge = el.append('g').attr('transform', 'translate(18, -22)')
@@ -515,7 +516,7 @@ function TreeGraph({ layoutData, isDark, onNodeClick, onEdgeClick, onGroupClick,
         .style('cursor', 'pointer')
         .on('click', (event) => {
           event.stopPropagation()
-          if (pill.edge) onEdgeClick?.(pill.edge)
+          if (pill.edgeList) onEdgeClick?.(pill.edgeList)
         })
 
       const text = pillG.append('text')
@@ -721,33 +722,37 @@ function DetailPanel({ selection, onClose, onExpand, onCollapse, isDark }) {
         )}
 
         {type === 'edge' && (
-          <>
-            <div>
-              <div className="text-xs text-gray-500 dark:text-amber-muted uppercase tracking-wide mb-1">Policy</div>
-              <div className="text-sm font-medium text-gray-900 dark:text-light-neutral">{data.policyName}</div>
-            </div>
-            <div>
-              <div className="text-xs text-gray-500 dark:text-amber-muted uppercase tracking-wide mb-1">Direction</div>
-              <div className="flex items-center gap-2">
-                <span className="w-3 h-0.5 block" style={{ background: data.direction === 'forward' ? COLORS.forward : COLORS.backward }} />
-                <span className="text-sm text-gray-900 dark:text-light-neutral capitalize">{data.direction}</span>
-              </div>
-            </div>
-            <div>
-              <div className="text-xs text-gray-500 dark:text-amber-muted uppercase tracking-wide mb-1">Service</div>
-              <div className="text-sm text-gray-900 dark:text-light-neutral">{data.serviceName}</div>
-            </div>
-            {data.servicePorts && (
-              <div>
-                <div className="text-xs text-gray-500 dark:text-amber-muted uppercase tracking-wide mb-1">Ports</div>
-                <div className="flex flex-wrap gap-1.5">
-                  {data.servicePorts.split(',').map((p, i) => (
-                    <span key={i} className="px-2 py-0.5 text-xs font-mono rounded-full bg-gray-100 dark:bg-charcoal-darkest text-gray-700 dark:text-gray-300">{p.trim()}</span>
-                  ))}
+          <div className="space-y-6">
+            {(Array.isArray(data) ? data : [data]).map((edge, i) => (
+              <div key={i} className="space-y-4 pb-6 border-b border-gray-100 dark:border-charcoal-darkest last:border-0 last:pb-0">
+                <div>
+                  <div className="text-xs text-gray-500 dark:text-amber-muted uppercase tracking-wide mb-1">Policy</div>
+                  <div className="text-sm font-medium text-gray-900 dark:text-light-neutral">{edge.policyName}</div>
                 </div>
+                <div>
+                  <div className="text-xs text-gray-500 dark:text-amber-muted uppercase tracking-wide mb-1">Direction</div>
+                  <div className="flex items-center gap-2">
+                    <span className="w-3 h-0.5 block" style={{ background: edge.direction === 'forward' ? COLORS.forward : COLORS.backward }} />
+                    <span className="text-sm text-gray-900 dark:text-light-neutral capitalize">{edge.direction}</span>
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs text-gray-500 dark:text-amber-muted uppercase tracking-wide mb-1">Service</div>
+                  <div className="text-sm text-gray-900 dark:text-light-neutral">{edge.serviceName}</div>
+                </div>
+                {edge.servicePorts && (
+                  <div>
+                    <div className="text-xs text-gray-500 dark:text-amber-muted uppercase tracking-wide mb-1">Ports</div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {edge.servicePorts.split(',').map((p, j) => (
+                        <span key={j} className="px-2 py-0.5 text-xs font-mono rounded-full bg-gray-100 dark:bg-charcoal-darkest text-gray-700 dark:text-gray-300">{p.trim()}</span>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
-            )}
-          </>
+            ))}
+          </div>
         )}
       </div>
     </div>
