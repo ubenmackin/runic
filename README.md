@@ -67,6 +67,7 @@ journalctl -u runic-agent -f
 Check `control_plane_url` in `/etc/runic-agent/config.json`.
 
 **Rules not applying**
+
 Trigger a compile manually:
 ```bash
 curl -X POST -H "Authorization: Bearer $TOKEN" \
@@ -74,6 +75,7 @@ curl -X POST -H "Authorization: Bearer $TOKEN" \
 ```
 
 **SQLite locked**
+
 Stop the server, remove any `runic.db-*` lock files, start again.
 
 ## Contributing
