@@ -43,6 +43,7 @@ type Peer struct {
 	BundleVersion        string `json:"bundle_version"`
 	Description          string `json:"description"`
 	HMACKeyLastRotatedAt string `json:"hmac_key_last_rotated_at"`
+	PendingChangesCount  int    `json:"pending_changes_count"`
 }
 
 func GetPeers(w http.ResponseWriter, r *http.Request) {
@@ -51,23 +52,24 @@ func GetPeers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows, err := db.DB.QueryContext(r.Context(), `
-	SELECT p.id, p.hostname, p.ip_address, p.os_type, p.arch, p.has_docker, p.is_manual,
-	COALESCE(p.agent_version, '') as agent_version,
-	COALESCE(p.last_heartbeat, '') as last_heartbeat,
-	CASE
+		SELECT p.id, p.hostname, p.ip_address, p.os_type, p.arch, p.has_docker, p.is_manual,
+		COALESCE(p.agent_version, '') as agent_version,
+		COALESCE(p.last_heartbeat, '') as last_heartbeat,
+		CASE
 		WHEN p.last_heartbeat IS NULL THEN 'pending'
 		WHEN p.last_heartbeat < `+fmt.Sprintf("datetime('now', '-%d minutes')", constants.PeerOfflineThresholdMinutes)+` THEN 'offline'
 		ELSE COALESCE(p.status, 'online')
-	END as status,
-	COALESCE(p.bundle_version, '') as bundle_version,
-	COALESCE(GROUP_CONCAT(g.name, ','), '') as groups,
-	COALESCE(p.description, '') as description,
-	COALESCE(p.hmac_key_last_rotated_at, '') as hmac_key_last_rotated_at
-	FROM peers p
-	LEFT JOIN group_members gm ON p.id = gm.peer_id
-	LEFT JOIN groups g ON gm.group_id = g.id
-	GROUP BY p.id
-	ORDER BY p.hostname ASC
+		END as status,
+		COALESCE(p.bundle_version, '') as bundle_version,
+		COALESCE(GROUP_CONCAT(g.name, ','), '') as groups,
+		COALESCE(p.description, '') as description,
+		COALESCE(p.hmac_key_last_rotated_at, '') as hmac_key_last_rotated_at,
+		(SELECT COUNT(*) FROM pending_changes WHERE peer_id = p.id) as pending_changes_count
+		FROM peers p
+		LEFT JOIN group_members gm ON p.id = gm.peer_id
+		LEFT JOIN groups g ON gm.group_id = g.id
+		GROUP BY p.id
+		ORDER BY p.hostname ASC
 	`)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "failed to query peers")
@@ -79,7 +81,7 @@ func GetPeers(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var p Peer
 		var agentVersion, lastHeartbeat, description, hmacKeyLastRotatedAt sql.NullString
-		if err := rows.Scan(&p.ID, &p.Hostname, &p.IPAddress, &p.OSType, &p.Arch, &p.HasDocker, &p.IsManual, &agentVersion, &lastHeartbeat, &p.Status, &p.BundleVersion, &p.Groups, &description, &hmacKeyLastRotatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.Hostname, &p.IPAddress, &p.OSType, &p.Arch, &p.HasDocker, &p.IsManual, &agentVersion, &lastHeartbeat, &p.Status, &p.BundleVersion, &p.Groups, &description, &hmacKeyLastRotatedAt, &p.PendingChangesCount); err != nil {
 			common.RespondError(w, http.StatusInternalServerError, "failed to scan peer")
 			return
 		}

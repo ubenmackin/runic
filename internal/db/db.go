@@ -786,6 +786,59 @@ func migrateSchema(database *sql.DB) error {
 		log.Println("Migration: created idx_firewall_logs_action_timestamp index")
 	}
 
+	// Migration: Create pending_changes table for tracking queued changes per peer
+	var hasPendingChanges bool
+	err = database.QueryRow("SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='pending_changes'").Scan(&hasPendingChanges)
+	if err != nil {
+		return fmt.Errorf("failed to check for pending_changes table: %w", err)
+	}
+	if !hasPendingChanges {
+		log.Println("Migration: creating pending_changes table")
+		_, err = database.Exec(`
+			CREATE TABLE pending_changes (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				peer_id INTEGER NOT NULL REFERENCES peers(id),
+				change_type TEXT NOT NULL CHECK (change_type IN ('policy', 'group', 'service')),
+				change_id INTEGER NOT NULL,
+				change_action TEXT NOT NULL CHECK (change_action IN ('create', 'update', 'delete')),
+				change_summary TEXT NOT NULL,
+				created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+			)
+		`)
+		if err != nil {
+			return fmt.Errorf("failed to create pending_changes table: %w", err)
+		}
+		_, err = database.Exec("CREATE INDEX IF NOT EXISTS idx_pending_changes_peer ON pending_changes(peer_id)")
+		if err != nil {
+			return fmt.Errorf("failed to create idx_pending_changes_peer index: %w", err)
+		}
+		log.Println("Migration: created pending_changes table")
+	}
+
+	// Migration: Create pending_bundle_previews table for storing bundle previews
+	var hasPendingBundlePreviews bool
+	err = database.QueryRow("SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='pending_bundle_previews'").Scan(&hasPendingBundlePreviews)
+	if err != nil {
+		return fmt.Errorf("failed to check for pending_bundle_previews table: %w", err)
+	}
+	if !hasPendingBundlePreviews {
+		log.Println("Migration: creating pending_bundle_previews table")
+		_, err = database.Exec(`
+			CREATE TABLE pending_bundle_previews (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				peer_id INTEGER NOT NULL UNIQUE REFERENCES peers(id),
+				rules_content TEXT NOT NULL,
+				diff_content TEXT,
+				version_hash TEXT NOT NULL,
+				created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+			)
+		`)
+		if err != nil {
+			return fmt.Errorf("failed to create pending_bundle_previews table: %w", err)
+		}
+		log.Println("Migration: created pending_bundle_previews table")
+	}
+
 	return nil
 }
 

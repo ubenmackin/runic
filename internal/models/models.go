@@ -89,3 +89,24 @@ type SpecialTargetRow struct {
 	Description string // optional description
 	Address     string // IP address or "computed" for subnet_broadcast
 }
+
+// PendingChange represents a queued change that affects a peer's firewall rules.
+type PendingChange struct {
+	ID            int    `json:"id"`
+	PeerID        int    `json:"peer_id"`
+	ChangeType    string `json:"change_type"` // policy, group, service
+	ChangeID      int    `json:"change_id"`
+	ChangeAction  string `json:"change_action"` // create, update, delete
+	ChangeSummary string `json:"change_summary"`
+	CreatedAt     string `json:"created_at"`
+}
+
+// PendingBundlePreview represents a compiled bundle preview awaiting review.
+type PendingBundlePreview struct {
+	ID           int    `json:"id"`
+	PeerID       int    `json:"peer_id"`
+	RulesContent string `json:"rules_content"`
+	DiffContent  string `json:"diff_content"`
+	VersionHash  string `json:"version_hash"`
+	CreatedAt    string `json:"created_at"`
+}

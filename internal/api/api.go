@@ -18,6 +18,7 @@ import (
 	"runic/internal/api/logs"
 	"runic/internal/api/middleware"
 	"runic/internal/api/peers"
+	"runic/internal/api/pending"
 	"runic/internal/api/policies"
 	"runic/internal/api/services"
 	"runic/internal/api/users"
@@ -149,6 +150,10 @@ func RegisterRoutes(r *mux.Router, a *API, downloadsDir string) {
 	protected.HandleFunc("/policies/{id:[0-9]+}", policies.GetPolicy).Methods("GET")
 	protected.HandleFunc("/policies/special-targets", policies.ListSpecialTargets).Methods("GET")
 
+	// Pending changes (viewer routes — read-only)
+	protected.HandleFunc("/pending-changes", pending.ListPendingChanges).Methods("GET")
+	protected.HandleFunc("/pending-changes/{peerId:[0-9]+}", pending.GetPeerPendingChanges).Methods("GET")
+
 	// Version info endpoint (requires authentication)
 	protected.HandleFunc("/info", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -194,9 +199,9 @@ func RegisterRoutes(r *mux.Router, a *API, downloadsDir string) {
 	editor.HandleFunc("/groups/{id:[0-9]+}", groups.DeleteGroup).Methods("DELETE")
 
 	// Services (write operations)
-	editor.HandleFunc("/services", services.CreateService).Methods("POST")
-	editor.HandleFunc("/services/{id:[0-9]+}", services.UpdateService).Methods("PUT")
-	editor.HandleFunc("/services/{id:[0-9]+}", services.DeleteService).Methods("DELETE")
+	editor.HandleFunc("/services", services.MakeCreateServiceHandler(a.Compiler)).Methods("POST")
+	editor.HandleFunc("/services/{id:[0-9]+}", services.MakeUpdateServiceHandler(a.Compiler)).Methods("PUT")
+	editor.HandleFunc("/services/{id:[0-9]+}", services.MakeDeleteServiceHandler(a.Compiler)).Methods("DELETE")
 
 	// Policies (write operations)
 	editor.HandleFunc("/policies", policies.MakeCreatePolicyHandler(a.Compiler)).Methods("POST")
@@ -204,6 +209,11 @@ func RegisterRoutes(r *mux.Router, a *API, downloadsDir string) {
 	editor.HandleFunc("/policies/{id:[0-9]+}", policies.MakeUpdatePolicyHandler(a.Compiler)).Methods("PUT")
 	editor.HandleFunc("/policies/{id:[0-9]+}", policies.MakePatchPolicyHandler(a.Compiler)).Methods("PATCH")
 	editor.HandleFunc("/policies/{id:[0-9]+}", policies.MakeDeletePolicyHandler(a.Compiler)).Methods("DELETE")
+
+	// Pending changes (editor+ routes — preview and apply)
+	editor.HandleFunc("/pending-changes/{peerId:[0-9]+}/preview", pending.MakePreviewPeerPendingBundleHandler(a.Compiler)).Methods("POST")
+	editor.HandleFunc("/pending-changes/{peerId:[0-9]+}/apply", pending.MakeApplyPeerPendingBundleHandler(a.Compiler, a.SSEHub)).Methods("POST")
+	editor.HandleFunc("/pending-changes/apply-all", pending.MakeApplyAllPendingBundlesHandler(a.Compiler, a.SSEHub)).Methods("POST")
 
 	// Agent routes (require agent auth via JWT)
 	apiRouter.HandleFunc("/agent/bundle/{host_id}", agents.AgentAuthMiddleware(agents.GetBundle)).Methods("GET")

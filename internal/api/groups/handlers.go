@@ -251,7 +251,7 @@ func MakeAddGroupMemberHandler(compiler *engine.Compiler) http.HandlerFunc {
 
 		// Trigger async recompilation for affected peers (if compiler is available)
 		if compiler != nil {
-			common.AsyncRecompileGroup(compiler, groupID)
+			common.QueueGroupChanges(db.DB.DB, compiler, groupID, "update", "Peer added to group")
 		}
 
 		common.RespondJSON(w, http.StatusCreated, map[string]int64{"id": id})
@@ -281,7 +281,7 @@ func MakeDeleteGroupMemberHandler(compiler *engine.Compiler) http.HandlerFunc {
 
 		// Trigger async recompilation (if compiler is available)
 		if compiler != nil {
-			common.AsyncRecompileGroup(compiler, groupID)
+			common.QueueGroupChanges(db.DB.DB, compiler, groupID, "update", "Peer removed from group")
 		}
 
 		w.WriteHeader(http.StatusNoContent)

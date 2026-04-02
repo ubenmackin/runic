@@ -2,6 +2,7 @@ package policies
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 
@@ -144,7 +145,7 @@ func MakeCreatePolicyHandler(compiler *engine.Compiler) http.HandlerFunc {
 
 		// Trigger async recompilation for all affected peers
 		affectedPeers, _ := compiler.GetAffectedPeersByPolicy(r.Context(), int(id))
-		common.AsyncRecompilePeers(compiler, affectedPeers)
+		common.QueuePeerChanges(db.DB.DB, affectedPeers, "policy", "create", int(id), fmt.Sprintf("Policy '%s' created", input.Name))
 
 		common.RespondJSON(w, http.StatusCreated, map[string]int64{"id": id})
 	}
@@ -291,7 +292,7 @@ func MakeUpdatePolicyHandler(compiler *engine.Compiler) http.HandlerFunc {
 		for pid := range peerSet {
 			allPeers = append(allPeers, pid)
 		}
-		common.AsyncRecompilePeers(compiler, allPeers)
+		common.QueuePeerChanges(db.DB.DB, allPeers, "policy", "update", id, fmt.Sprintf("Policy '%s' updated", input.Name))
 
 		common.RespondJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 	}
@@ -323,7 +324,7 @@ func MakeDeletePolicyHandler(compiler *engine.Compiler) http.HandlerFunc {
 		}
 
 		// Trigger async recompilation for all old affected peers
-		common.AsyncRecompilePeers(compiler, oldPeers)
+		common.QueuePeerChanges(db.DB.DB, oldPeers, "policy", "delete", id, "Policy deleted")
 
 		w.WriteHeader(http.StatusNoContent)
 	}
@@ -411,7 +412,11 @@ func MakePatchPolicyHandler(compiler *engine.Compiler) http.HandlerFunc {
 		}
 		// Trigger async recompilation
 		affectedPeers, _ := compiler.GetAffectedPeersByPolicy(r.Context(), id)
-		common.AsyncRecompilePeers(compiler, affectedPeers)
+		enabledStr := "enabled"
+		if !*input.Enabled {
+			enabledStr = "disabled"
+		}
+		common.QueuePeerChanges(db.DB.DB, affectedPeers, "policy", "update", id, fmt.Sprintf("Policy %s", enabledStr))
 		common.RespondJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 	}
 }

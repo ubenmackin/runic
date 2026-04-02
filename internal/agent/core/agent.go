@@ -27,7 +27,7 @@ import (
 )
 
 // Version is the agent version, set at build time.
-var Version = "0.4.1"
+var Version = "0.5"
 
 // Agent is the main agent struct.
 type Agent struct {
@@ -55,7 +55,7 @@ func New(configPath, controlPlaneURL string) *Agent {
 
 	cfg := &identity.Config{
 		ControlPlaneURL: controlPlaneURL,
-		PullIntervalSec: 30,
+		PullIntervalSec: identity.DefaultPullIntervalSec, // 24 hours (SSE is primary)
 		LogPath:         "/var/log/runic/firewall.log",
 	}
 

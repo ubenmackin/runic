@@ -233,7 +233,7 @@ func RegisterAgent(w http.ResponseWriter, r *http.Request) {
 		common.RespondJSON(w, http.StatusCreated, map[string]interface{}{
 			"host_id":                hostID,
 			"token":                  agentToken,
-			"pull_interval_seconds":  30,
+			"pull_interval_seconds":  86400,
 			"current_bundle_version": "",
 			"hmac_key":               hmacKey,
 		})
@@ -269,7 +269,7 @@ func RegisterAgent(w http.ResponseWriter, r *http.Request) {
 	common.RespondJSON(w, http.StatusOK, map[string]interface{}{
 		"host_id":                hostID,
 		"token":                  newToken,
-		"pull_interval_seconds":  30,
+		"pull_interval_seconds":  86400,
 		"current_bundle_version": "",
 		"hmac_key":               existingHMACKey,
 	})

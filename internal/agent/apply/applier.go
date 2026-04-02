@@ -70,12 +70,20 @@ func ApplyBundle(ctx context.Context, bundle models.BundleResponse, hmacKey, con
 		}
 	}
 
-	// 6. Apply via iptables-restore
-	cmd := exec.CommandContext(ctx, "iptables-restore", "--noflush", tmpPath)
+	// 6. Apply via iptables-restore (flushes existing rules for clean slate)
+	cmd := exec.CommandContext(ctx, "iptables-restore", tmpPath)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		revertCancel()
 		return fmt.Errorf("iptables-restore failed: %s: %w", string(output), err)
+	}
+
+	// 6b. Restart Docker if running (resets DOCKER chains)
+	if hasDocker() {
+		log.Info("Restarting Docker to reset internal chains")
+		if err := restartDocker(ctx); err != nil {
+			log.Warn("Docker restart failed (rules still applied)", "error", err)
+		}
 	}
 
 	// 7. Verify apply worked (smoke test)
@@ -469,4 +477,20 @@ func addIpsetMember(ctx context.Context, name, member string) error {
 		return fmt.Errorf("ipset add %s %s: %s: %w", name, member, string(output), err)
 	}
 	return nil
+}
+
+// hasDocker checks if Docker is installed and running.
+func hasDocker() bool {
+	_, err := exec.LookPath("docker")
+	if err != nil {
+		return false
+	}
+	out, err := exec.Command("systemctl", "is-active", "docker").Output()
+	return err == nil && strings.TrimSpace(string(out)) == "active"
+}
+
+// restartDocker restarts the Docker service.
+func restartDocker(ctx context.Context) error {
+	cmd := exec.CommandContext(ctx, "systemctl", "restart", "docker")
+	return cmd.Run()
 }

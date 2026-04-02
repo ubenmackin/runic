@@ -1,6 +1,8 @@
 package services
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -8,7 +10,9 @@ import (
 	"regexp"
 
 	"runic/internal/api/common"
+	runiclog "runic/internal/common/log"
 	"runic/internal/db"
+	"runic/internal/engine"
 )
 
 // validPortsRe matches comma/colon-separated port numbers (e.g. "22", "80,443", "8000:9000").
@@ -97,48 +101,54 @@ func ListServices(w http.ResponseWriter, r *http.Request) {
 	common.RespondJSON(w, http.StatusOK, servicesData)
 }
 
-func CreateService(w http.ResponseWriter, r *http.Request) {
-	var input struct {
-		Name          string `json:"name"`
-		Ports         string `json:"ports"`
-		SourcePorts   string `json:"source_ports"`
-		Protocol      string `json:"protocol"`
-		Description   string `json:"description"`
-		DirectionHint string `json:"direction_hint"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		common.RespondError(w, http.StatusBadRequest, "invalid JSON")
-		return
-	}
-	if input.Name == "" {
-		common.RespondError(w, http.StatusBadRequest, "name is required")
-		return
-	}
-	if input.Protocol == "" {
-		input.Protocol = "tcp"
-	}
-	if input.DirectionHint == "" {
-		input.DirectionHint = "inbound"
-	}
+func MakeCreateServiceHandler(compiler *engine.Compiler) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var input struct {
+			Name          string `json:"name"`
+			Ports         string `json:"ports"`
+			SourcePorts   string `json:"source_ports"`
+			Protocol      string `json:"protocol"`
+			Description   string `json:"description"`
+			DirectionHint string `json:"direction_hint"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			common.RespondError(w, http.StatusBadRequest, "invalid JSON")
+			return
+		}
+		if input.Name == "" {
+			common.RespondError(w, http.StatusBadRequest, "name is required")
+			return
+		}
+		if input.Protocol == "" {
+			input.Protocol = "tcp"
+		}
+		if input.DirectionHint == "" {
+			input.DirectionHint = "inbound"
+		}
 
-	// User-created services are never system services
-	if err := validateService(input.Ports, input.SourcePorts, input.Protocol, false); err != nil {
-		common.RespondError(w, http.StatusBadRequest, err.Error())
-		return
-	}
+		// User-created services are never system services
+		if err := validateService(input.Ports, input.SourcePorts, input.Protocol, false); err != nil {
+			common.RespondError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 
-	result, err := db.DB.ExecContext(r.Context(),
-		`INSERT INTO services (name, ports, source_ports, protocol, description, direction_hint, is_system)
-		VALUES (?, ?, ?, ?, ?, ?, 0)`,
-		input.Name, input.Ports, input.SourcePorts, input.Protocol, input.Description, input.DirectionHint)
-	if err != nil {
-		log.Printf("ERROR: failed to create service: %v", err)
-		common.InternalError(w)
-		return
-	}
+		result, err := db.DB.ExecContext(r.Context(),
+			`INSERT INTO services (name, ports, source_ports, protocol, description, direction_hint, is_system)
+			VALUES (?, ?, ?, ?, ?, ?, 0)`,
+			input.Name, input.Ports, input.SourcePorts, input.Protocol, input.Description, input.DirectionHint)
+		if err != nil {
+			log.Printf("ERROR: failed to create service: %v", err)
+			common.InternalError(w)
+			return
+		}
 
-	id, _ := result.LastInsertId()
-	common.RespondJSON(w, http.StatusCreated, map[string]int64{"id": id})
+		id, _ := result.LastInsertId()
+
+		// Queue pending changes for affected peers
+		queueServiceChange(r.Context(), db.DB.DB, compiler, int(id), "create", fmt.Sprintf("Service '%s' created", input.Name))
+
+		common.RespondJSON(w, http.StatusCreated, map[string]int64{"id": id})
+	}
 }
 
 func GetService(w http.ResponseWriter, r *http.Request) {
@@ -157,87 +167,148 @@ func GetService(w http.ResponseWriter, r *http.Request) {
 	common.RespondJSON(w, http.StatusOK, s)
 }
 
-func UpdateService(w http.ResponseWriter, r *http.Request) {
-	id, err := common.ParseIDParam(r, "id")
-	if err != nil {
-		common.RespondError(w, http.StatusBadRequest, "invalid service ID")
-		return
-	}
+func MakeUpdateServiceHandler(compiler *engine.Compiler) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := common.ParseIDParam(r, "id")
+		if err != nil {
+			common.RespondError(w, http.StatusBadRequest, "invalid service ID")
+			return
+		}
 
-	// Check if this is a system service
-	var isSystem bool
-	err = db.DB.QueryRowContext(r.Context(), "SELECT COALESCE(is_system, 0) FROM services WHERE id = ?", id).Scan(&isSystem)
-	if err != nil {
-		common.RespondError(w, http.StatusNotFound, "service not found")
-		return
-	}
+		// Check if this is a system service
+		var isSystem bool
+		err = db.DB.QueryRowContext(r.Context(), "SELECT COALESCE(is_system, 0) FROM services WHERE id = ?", id).Scan(&isSystem)
+		if err != nil {
+			common.RespondError(w, http.StatusNotFound, "service not found")
+			return
+		}
 
-	if isSystem {
-		common.RespondError(w, http.StatusForbidden, "Cannot edit system service")
-		return
-	}
+		if isSystem {
+			common.RespondError(w, http.StatusForbidden, "Cannot edit system service")
+			return
+		}
 
-	var input struct {
-		Name          string `json:"name"`
-		Ports         string `json:"ports"`
-		SourcePorts   string `json:"source_ports"`
-		Protocol      string `json:"protocol"`
-		Description   string `json:"description"`
-		DirectionHint string `json:"direction_hint"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		common.RespondError(w, http.StatusBadRequest, "invalid JSON")
-		return
-	}
+		var input struct {
+			Name          string `json:"name"`
+			Ports         string `json:"ports"`
+			SourcePorts   string `json:"source_ports"`
+			Protocol      string `json:"protocol"`
+			Description   string `json:"description"`
+			DirectionHint string `json:"direction_hint"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			common.RespondError(w, http.StatusBadRequest, "invalid JSON")
+			return
+		}
 
-	if input.Protocol == "" {
-		input.Protocol = "tcp"
-	}
+		if input.Protocol == "" {
+			input.Protocol = "tcp"
+		}
 
-	// Pass isSystem flag to validation to allow ICMP for system services
-	if err := validateService(input.Ports, input.SourcePorts, input.Protocol, isSystem); err != nil {
-		common.RespondError(w, http.StatusBadRequest, err.Error())
-		return
-	}
+		// Pass isSystem flag to validation to allow ICMP for system services
+		if err := validateService(input.Ports, input.SourcePorts, input.Protocol, isSystem); err != nil {
+			common.RespondError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 
-	_, err = db.DB.ExecContext(r.Context(),
-		`UPDATE services SET name = ?, ports = ?, source_ports = ?, protocol = ?, description = ?, direction_hint = ?
-		WHERE id = ?`, input.Name, input.Ports, input.SourcePorts, input.Protocol, input.Description, input.DirectionHint, id)
-	if err != nil {
-		log.Printf("ERROR: failed to update service: %v", err)
-		common.InternalError(w)
-		return
-	}
+		_, err = db.DB.ExecContext(r.Context(),
+			`UPDATE services SET name = ?, ports = ?, source_ports = ?, protocol = ?, description = ?, direction_hint = ?
+			WHERE id = ?`, input.Name, input.Ports, input.SourcePorts, input.Protocol, input.Description, input.DirectionHint, id)
+		if err != nil {
+			log.Printf("ERROR: failed to update service: %v", err)
+			common.InternalError(w)
+			return
+		}
 
-	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+		// Queue pending changes for affected peers
+		queueServiceChange(r.Context(), db.DB.DB, compiler, id, "update", fmt.Sprintf("Service '%s' updated", input.Name))
+
+		common.RespondJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+	}
 }
 
-func DeleteService(w http.ResponseWriter, r *http.Request) {
-	id, err := common.ParseIDParam(r, "id")
-	if err != nil {
-		common.RespondError(w, http.StatusBadRequest, "invalid service ID")
-		return
-	}
+func MakeDeleteServiceHandler(compiler *engine.Compiler) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := common.ParseIDParam(r, "id")
+		if err != nil {
+			common.RespondError(w, http.StatusBadRequest, "invalid service ID")
+			return
+		}
 
-	// Check if this is a system service
-	var isSystem bool
-	err = db.DB.QueryRowContext(r.Context(), "SELECT COALESCE(is_system, 0) FROM services WHERE id = ?", id).Scan(&isSystem)
-	if err != nil {
-		common.RespondError(w, http.StatusNotFound, "service not found")
-		return
-	}
+		// Get service name before deletion for the summary
+		var serviceName string
+		err = db.DB.QueryRowContext(r.Context(), "SELECT name FROM services WHERE id = ?", id).Scan(&serviceName)
+		if err != nil {
+			common.RespondError(w, http.StatusNotFound, "service not found")
+			return
+		}
 
-	if isSystem {
-		common.RespondError(w, http.StatusForbidden, "Cannot delete system service")
-		return
-	}
+		// Check if this is a system service
+		var isSystem bool
+		err = db.DB.QueryRowContext(r.Context(), "SELECT COALESCE(is_system, 0) FROM services WHERE id = ?", id).Scan(&isSystem)
+		if err != nil {
+			common.RespondError(w, http.StatusNotFound, "service not found")
+			return
+		}
 
-	_, err = db.DB.ExecContext(r.Context(), "DELETE FROM services WHERE id = ?", id)
-	if err != nil {
-		log.Printf("ERROR: failed to delete service: %v", err)
-		common.InternalError(w)
-		return
-	}
+		if isSystem {
+			common.RespondError(w, http.StatusForbidden, "Cannot delete system service")
+			return
+		}
 
-	w.WriteHeader(http.StatusNoContent)
+		_, err = db.DB.ExecContext(r.Context(), "DELETE FROM services WHERE id = ?", id)
+		if err != nil {
+			log.Printf("ERROR: failed to delete service: %v", err)
+			common.InternalError(w)
+			return
+		}
+
+		// Queue pending changes for affected peers
+		queueServiceChange(r.Context(), db.DB.DB, compiler, id, "delete", fmt.Sprintf("Service '%s' deleted", serviceName))
+
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// queueServiceChange queues pending changes for all peers affected by policies using this service.
+func queueServiceChange(ctx context.Context, database *sql.DB, compiler *engine.Compiler, serviceID int, action, summary string) {
+	go func() {
+		ctx := context.Background()
+
+		// Find policies using this service
+		rows, err := database.QueryContext(ctx, `
+			SELECT DISTINCT id FROM policies
+			WHERE service_id = ? AND enabled = 1
+		`, serviceID)
+		if err != nil {
+			runiclog.Error("failed to find policies for service", "service_id", serviceID, "error", err)
+			return
+		}
+		defer rows.Close()
+
+		peerSet := make(map[int]bool)
+		for rows.Next() {
+			var policyID int
+			if err := rows.Scan(&policyID); err != nil {
+				continue
+			}
+			// Get affected peers for this policy
+			affectedPeers, _ := compiler.GetAffectedPeersByPolicy(ctx, policyID)
+			for _, peerID := range affectedPeers {
+				peerSet[peerID] = true
+			}
+		}
+
+		if err := rows.Err(); err != nil {
+			runiclog.Error("failed to iterate policies for service", "service_id", serviceID, "error", err)
+			return
+		}
+
+		// Queue change for each affected peer
+		for peerID := range peerSet {
+			if err := db.AddPendingChange(ctx, database, peerID, "service", action, serviceID, summary); err != nil {
+				runiclog.Error("failed to queue service change", "peer_id", peerID, "error", err)
+			}
+		}
+	}()
 }

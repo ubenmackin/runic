@@ -7,6 +7,10 @@ import (
 	"path/filepath"
 )
 
+// DefaultPullIntervalSec is the default polling interval (24 hours).
+// SSE is the primary notification mechanism; polling is a fallback.
+const DefaultPullIntervalSec = 86400 // 24 hours
+
 // Config holds the agent configuration.
 type Config struct {
 	ControlPlaneURL   string `json:"control_plane_url"`
@@ -24,7 +28,7 @@ type Config struct {
 // DefaultConfig returns a config with sensible defaults.
 func DefaultConfig() *Config {
 	return &Config{
-		PullIntervalSec:  30,
+		PullIntervalSec:  DefaultPullIntervalSec,
 		LogPath:          "/var/log/runic/firewall.log",
 		ApplyOnBoot:      false,
 		ApplyRulesBundle: false,

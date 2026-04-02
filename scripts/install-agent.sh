@@ -146,21 +146,21 @@ esac
 if [ ! -f /etc/runic-agent/config.json ]; then
 	echo "Creating initial config..."
 	if [ -n "$REGISTRATION_TOKEN" ]; then
-		cat > /etc/runic-agent/config.json << EOF
+	cat > /etc/runic-agent/config.json << EOF
 {
 	"control_plane_url": "${CONTROL_PLANE_URL}",
 	"registration_token": "${REGISTRATION_TOKEN}",
-	"pull_interval_seconds": 30,
+	"pull_interval_seconds": 86400,
 	"log_path": "/var/log/runic/firewall.log",
 	"apply_on_boot": false,
 	"apply_rules_bundle": false
 }
 EOF
 	else
-		cat > /etc/runic-agent/config.json << EOF
+	cat > /etc/runic-agent/config.json << EOF
 {
 	"control_plane_url": "${CONTROL_PLANE_URL}",
-	"pull_interval_seconds": 30,
+	"pull_interval_seconds": 86400,
 	"log_path": "/var/log/runic/firewall.log",
 	"apply_on_boot": false,
 	"apply_rules_bundle": false

@@ -21,6 +21,7 @@ import SortIndicator from '../components/SortIndicator'
 import Pagination from '../components/Pagination'
 import TableToolbar from '../components/TableToolbar'
 import PageHeader from '../components/PageHeader'
+import PendingChangesModal from '../components/PendingChangesModal'
 
 const OS_OPTIONS = [
   { value: 'ubuntu', label: 'Ubuntu' },
@@ -64,26 +65,37 @@ export default function Peers() {
   const [manualErrors, setManualErrors] = useState({})
   const [copied, setCopied] = useState(false)
 
-  // Rule Bundle state
-  const [bundleModalOpen, setBundleModalOpen] = useState(false)
-  const [bundleLoading, setBundleLoading] = useState(false)
-  const [bundleContent, setBundleContent] = useState('')
-  const [bundlePeer, setBundlePeer] = useState(null)
+	// Rule Bundle state
+	const [bundleModalOpen, setBundleModalOpen] = useState(false)
+	const [bundleLoading, setBundleLoading] = useState(false)
+	const [bundleContent, setBundleContent] = useState('')
+	const [bundlePeer, setBundlePeer] = useState(null)
+	const [bundleData, setBundleData] = useState(null)
 
-  const fetchBundle = async (peer) => {
-    setBundlePeer(peer)
-    setBundleModalOpen(true)
-    setBundleLoading(true)
-    setBundleContent('')
-    try {
-      const data = await api.get(`/peers/${peer.id}/bundle`)
-      setBundleContent(data.content)
-    } catch (err) {
-      setBundleContent(`# Error: ${err.message}`)
-    } finally {
-      setBundleLoading(false)
-    }
-  }
+	// Pending Changes Modal state
+	const [pendingModalPeer, setPendingModalPeer] = useState(null)
+	const [pendingModalOpen, setPendingModalOpen] = useState(false)
+
+	// Bulk Apply All state
+	const [applyAllLoading, setApplyAllLoading] = useState(false)
+
+	const fetchBundle = async (peer) => {
+		setBundlePeer(peer)
+		setBundleModalOpen(true)
+		setBundleLoading(true)
+		setBundleContent('')
+		setBundleData(null)
+		try {
+			const data = await api.get(`/peers/${peer.id}/bundle`)
+			setBundleContent(data.content)
+			setBundleData(data)
+		} catch (err) {
+			setBundleContent(`# Error: ${err.message}`)
+			setBundleData(null)
+		} finally {
+			setBundleLoading(false)
+		}
+	}
 
   // Modal ref for focus trap
   const editModalRef = useRef(null)
@@ -259,36 +271,71 @@ export default function Peers() {
     showToast,
   })
 
-  const handleSubmit = (e) => {
-    e.preventDefault()
-    if (editPeer) updateMutation.mutate({ id: editPeer.id, data: formData })
-    else createMutation.mutate(formData)
-  }
+	const handleSubmit = (e) => {
+		e.preventDefault()
+		if (editPeer) updateMutation.mutate({ id: editPeer.id, data: formData })
+		else createMutation.mutate(formData)
+	}
 
-  if (isLoading) return <TableSkeleton rows={3} columns={6} />
+	// Calculate peers with pending changes
+	const peersWithPendingChanges = peers?.filter(p => p.pending_changes_count > 0).length || 0
+
+	// Handle Apply All Pending
+	const handleApplyAll = async () => {
+		setApplyAllLoading(true)
+		try {
+			await api.post('/pending-changes/apply-all')
+			showToast('All pending changes applied successfully', 'success')
+			qc.invalidateQueries({ queryKey: QUERY_KEYS.peers() })
+		} catch (err) {
+			showToast(`Failed to apply all changes: ${err.message}`, 'error')
+		} finally {
+			setApplyAllLoading(false)
+		}
+	}
+
+	if (isLoading) return <TableSkeleton rows={3} columns={6} />
 
   return (
     <div className="space-y-4">
       <PageHeader
         title="Peers"
         description="Register and manage devices and endpoints in your network"
-        actions={
-          <>
-            <button
-              onClick={handleManualRefresh}
-              disabled={isManualRefreshing}
-              className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 dark:text-amber-primary bg-white dark:bg-charcoal-dark border border-gray-300 dark:border-gray-border rounded-lg hover:bg-gray-50 dark:hover:bg-charcoal-darkest disabled:opacity-50"
-            >
-              <RefreshCw className={`w-4 h-4 ${isManualRefreshing ? 'animate-spin' : ''}`} />
-              Refresh
-            </button>
-            {canEdit && (
-              <button onClick={openAddModal} className="flex items-center gap-2 px-4 py-2 bg-purple-active hover:bg-purple-active/80 text-white text-sm font-medium rounded-lg">
-                <Plus className="w-4 h-4" /> Add Peer
-              </button>
-            )}
-          </>
-        }
+	actions={
+	<>
+	{canEdit && peersWithPendingChanges > 0 && (
+	<button
+	onClick={handleApplyAll}
+	disabled={applyAllLoading}
+	className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-white bg-green-600 hover:bg-green-700 rounded-lg disabled:opacity-50"
+	>
+	{applyAllLoading ? (
+	<>
+	<RefreshCw className="w-4 h-4 animate-spin" />
+	Applying...
+	</>
+	) : (
+	<>
+	Apply All Pending ({peersWithPendingChanges})
+	</>
+	)}
+	</button>
+	)}
+	<button
+	onClick={handleManualRefresh}
+	disabled={isManualRefreshing}
+	className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 dark:text-amber-primary bg-white dark:bg-charcoal-dark border border-gray-300 dark:border-gray-border rounded-lg hover:bg-gray-50 dark:hover:bg-charcoal-darkest disabled:opacity-50"
+	>
+	<RefreshCw className={`w-4 h-4 ${isManualRefreshing ? 'animate-spin' : ''}`} />
+	Refresh
+	</button>
+	{canEdit && (
+	<button onClick={openAddModal} className="flex items-center gap-2 px-4 py-2 bg-purple-active hover:bg-purple-active/80 text-white text-sm font-medium rounded-lg">
+	<Plus className="w-4 h-4" /> Add Peer
+	</button>
+	)}
+	</>
+	}
       />
 
       {/* Search Bar and Rows per page */}
@@ -372,17 +419,22 @@ export default function Peers() {
               <tbody className="divide-y divide-gray-200 dark:divide-gray-border">
                 {paginatedPeers.map((peer) => (
                   <tr key={peer.id} className="">
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-2">
-                        {!peer.is_manual && (
-                          <span className={`w-2 h-2 rounded-full ${peer.status === 'online' ? 'bg-green-500' :
-                              peer.status === 'offline' ? 'bg-red-500' :
-                                'bg-amber-500' // pending
-                            }`} />
-                        )}
-                        <span className="font-medium text-gray-900 dark:text-light-neutral">{peer.hostname}</span>
-                      </div>
-                    </td>
+<td className="px-4 py-3">
+	<div className="flex items-center gap-2">
+	{!peer.is_manual && (
+	<span className={`w-2 h-2 rounded-full ${peer.status === 'online' ? 'bg-green-500' :
+	peer.status === 'offline' ? 'bg-red-500' :
+	'bg-amber-500' // pending
+	}`} />
+	)}
+	<span className="font-medium text-gray-900 dark:text-light-neutral">{peer.hostname}</span>
+	{peer.pending_changes_count > 0 && (
+	<span onClick={() => { setPendingModalPeer(peer); setPendingModalOpen(true) }} className="px-2 py-0.5 text-xs font-medium rounded-full bg-purple-100 dark:bg-purple-900/30 text-purple-800 dark:text-purple-300 cursor-pointer hover:bg-purple-200 dark:hover:bg-purple-900/50" title={`${peer.pending_changes_count} pending change${peer.pending_changes_count !== 1 ? 's' : ''}`}>
+	{peer.pending_changes_count} pending
+	</span>
+	)}
+	</div>
+</td>
                     <td className="px-4 py-3 text-gray-600 dark:text-amber-primary">
                       {peer.ip_address}
                     </td>
@@ -560,25 +612,38 @@ export default function Peers() {
                   <RefreshCw className="w-8 h-8 text-purple-active animate-spin" />
                   <p className="text-sm text-gray-500 dark:text-amber-muted">Fetching latest bundle...</p>
                 </div>
-              ) : (
-                <div className="relative group">
-                  <pre className="bg-gray-900 dark:bg-black text-gray-100 p-6 rounded-lg text-sm font-mono overflow-auto whitespace-pre min-h-[200px] border border-gray-800">
-                    <code className="text-green-400">{bundleContent}</code>
-                  </pre>
-                  {bundleContent && (
-                    <button
-                      onClick={() => {
-                        navigator.clipboard.writeText(bundleContent)
-                        showToast('Copied to clipboard', 'success')
-                      }}
-                      className="absolute top-4 right-4 p-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-gray-300 transition-colors"
-                      title="Copy Rules"
-                    >
-                      <Copy className="w-4 h-4" />
-                    </button>
-                  )}
-                </div>
-              )}
+	) : (
+	<>
+	<div className="mb-3">
+	<div className="mt-2 text-sm">
+	<span className="text-gray-500 dark:text-amber-muted">Bundle Version: </span>
+	<span className="font-mono font-medium text-gray-900 dark:text-light-neutral">{bundleData?.version || '—'}</span>
+	{bundleData?.is_different && (
+	<span className="ml-2 px-2 py-0.5 text-xs rounded-full bg-amber-100 dark:bg-amber-900/30 text-amber-800 dark:text-amber-300">
+	Pending Update
+	</span>
+	)}
+	</div>
+	</div>
+	<div className="relative group">
+	<pre className="bg-gray-900 dark:bg-black text-gray-100 p-6 rounded-lg text-sm font-mono overflow-auto whitespace-pre min-h-[200px] border border-gray-800">
+	<code className="text-green-400">{bundleContent}</code>
+	</pre>
+	{bundleContent && (
+	<button
+	onClick={() => {
+	navigator.clipboard.writeText(bundleContent)
+	showToast('Copied to clipboard', 'success')
+	}}
+	className="absolute top-4 right-4 p-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-gray-300 transition-colors"
+	title="Copy Rules"
+	>
+	<Copy className="w-4 h-4" />
+	</button>
+	)}
+	</div>
+	</>
+	)}
             </div>
             <div className="px-6 py-4 border-t border-gray-200 dark:border-gray-border flex justify-end shrink-0">
               <button 
@@ -752,11 +817,21 @@ export default function Peers() {
                     </button>
                   </div>
                 </form>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  )
-}
+	)}
+	</div>
+	</div>
+	</div>
+	)}
+
+	{/* Pending Changes Modal */}
+	{pendingModalOpen && pendingModalPeer && (
+	<PendingChangesModal
+	peerId={pendingModalPeer.id}
+	peerHostname={pendingModalPeer.hostname}
+	onClose={() => { setPendingModalOpen(false); setPendingModalPeer(null) }}
+	onApplied={() => qc.invalidateQueries({ queryKey: QUERY_KEYS.peers() })}
+	/>
+	)}
+	</div>
+	)
+	}

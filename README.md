@@ -49,6 +49,15 @@ You define a policy → Runic expands it into raw `iptables` rules → signs the
 
 If the agent stops talking to the server, the watchdog restores the previous rules.
 
+## Bundle Application Behavior
+
+When the agent applies a rule bundle from the control plane:
+1. Current iptables rules are flushed (ensures clean slate)
+2. New rules are applied (deny by default)
+3. If Docker is running, `systemctl restart docker` is executed
+
+**Note:** Restarting Docker will temporarily disrupt running containers (brief network interruption).
+
 ## Config
 
 Server is configured with env vars. Agents use a small JSON file.
