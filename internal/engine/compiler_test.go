@@ -1328,3 +1328,140 @@ func TestResolver_AllPeers_Empty(t *testing.T) {
 		t.Error("expected non-nil empty slice, got nil")
 	}
 }
+
+// Test PreviewCompile with target_scope = "docker"
+func TestPreviewCompile_DockerScope(t *testing.T) {
+	database := setupTestDB(t)
+
+	// Create source and target peers
+	sourcePeer := insertPeer(t, database, "source", "10.0.0.1", false)
+	targetPeer := insertPeer(t, database, "target", "10.0.0.2", false)
+
+	// Create service
+	serviceID := insertService(t, database, "web", "80", "tcp")
+
+	c := NewCompiler(database)
+
+	// Preview with target_scope = "docker"
+	rules, err := c.PreviewCompile(context.Background(), 0, sourcePeer, "peer", targetPeer, "peer", serviceID, "both", "docker")
+	if err != nil {
+		t.Fatalf("PreviewCompile failed: %v", err)
+	}
+
+	// Should generate DOCKER-USER rules (target_scope=docker adds Docker-specific rules)
+	hasDockerUserRules := false
+	for _, rule := range rules {
+		if strings.Contains(rule, "DOCKER-USER") {
+			hasDockerUserRules = true
+			break
+		}
+	}
+
+	if !hasDockerUserRules {
+		t.Errorf("expected DOCKER-USER rules for target_scope=docker, got: %v", rules)
+	}
+
+	// Verify the DOCKER-USER rules have the expected content
+	dockerRuleCount := 0
+	for _, rule := range rules {
+		if strings.Contains(rule, "DOCKER-USER") {
+			dockerRuleCount++
+		}
+	}
+
+	if dockerRuleCount == 0 {
+		t.Errorf("expected at least one DOCKER-USER rule, got: %v", rules)
+	}
+}
+
+// Test PreviewCompile with target_scope = "host"
+func TestPreviewCompile_HostScope(t *testing.T) {
+	database := setupTestDB(t)
+
+	// Create source and target peers
+	sourcePeer := insertPeer(t, database, "source", "10.0.0.1", false)
+	targetPeer := insertPeer(t, database, "target", "10.0.0.2", false)
+
+	// Create service
+	serviceID := insertService(t, database, "web", "80", "tcp")
+
+	c := NewCompiler(database)
+
+	// Preview with target_scope = "host"
+	rules, err := c.PreviewCompile(context.Background(), 0, sourcePeer, "peer", targetPeer, "peer", serviceID, "both", "host")
+	if err != nil {
+		t.Fatalf("PreviewCompile failed: %v", err)
+	}
+
+	// Should generate standard INPUT/OUTPUT rules
+	hasInputRule := false
+	hasOutputRule := false
+	for _, rule := range rules {
+		if strings.Contains(rule, "-A INPUT") {
+			hasInputRule = true
+		}
+		if strings.Contains(rule, "-A OUTPUT") {
+			hasOutputRule = true
+		}
+	}
+
+	if !hasInputRule {
+		t.Errorf("expected INPUT rule for target_scope=host, got: %v", rules)
+	}
+	if !hasOutputRule {
+		t.Errorf("expected OUTPUT rule for target_scope=host, got: %v", rules)
+	}
+
+	// Should NOT generate DOCKER-USER rules (target_scope=host means no Docker rules)
+	for _, rule := range rules {
+		if strings.Contains(rule, "DOCKER-USER") {
+			t.Errorf("unexpected DOCKER-USER rule for target_scope=host: %s", rule)
+		}
+	}
+}
+
+// Test PreviewCompile with target_scope = "both"
+func TestPreviewCompile_BothScope(t *testing.T) {
+	database := setupTestDB(t)
+
+	// Create source and target peers
+	sourcePeer := insertPeer(t, database, "source", "10.0.0.1", false)
+	targetPeer := insertPeer(t, database, "target", "10.0.0.2", false)
+
+	// Create service
+	serviceID := insertService(t, database, "web", "80", "tcp")
+
+	c := NewCompiler(database)
+
+	// Preview with target_scope = "both"
+	rules, err := c.PreviewCompile(context.Background(), 0, sourcePeer, "peer", targetPeer, "peer", serviceID, "both", "both")
+	if err != nil {
+		t.Fatalf("PreviewCompile failed: %v", err)
+	}
+
+	// Should generate both standard INPUT/OUTPUT rules AND DOCKER-USER rules
+	hasInputRule := false
+	hasOutputRule := false
+	hasDockerUserRules := false
+	for _, rule := range rules {
+		if strings.Contains(rule, "-A INPUT") && !strings.Contains(rule, "DOCKER-USER") {
+			hasInputRule = true
+		}
+		if strings.Contains(rule, "-A OUTPUT") && !strings.Contains(rule, "DOCKER-USER") {
+			hasOutputRule = true
+		}
+		if strings.Contains(rule, "DOCKER-USER") {
+			hasDockerUserRules = true
+		}
+	}
+
+	if !hasInputRule {
+		t.Errorf("expected INPUT rule for target_scope=both, got: %v", rules)
+	}
+	if !hasOutputRule {
+		t.Errorf("expected OUTPUT rule for target_scope=both, got: %v", rules)
+	}
+	if !hasDockerUserRules {
+		t.Errorf("expected DOCKER-USER rules for target_scope=both, got: %v", rules)
+	}
+}

@@ -71,17 +71,26 @@ export default function Policies() {
   // Focus trap for modal accessibility
   useFocusTrap(modalRef, modalOpen)
 
-  const openAdd = () => { setFormErrors({}); setPreview(null); setActiveTab('setup'); setShowDescription(false); handleOpenAdd() }
-const openEdit = (p) => {
-  setEditPolicy(p);
-  setFormForEdit(p);
-  setFormErrors({});
-  setPreview(null);
-  setActiveTab('setup');
-  setShowDescription(!!p.description);
-  setModalOpen(true)
-}
-  const closeModal = () => { handleCancel(); setPreview(null) }
+  const openAdd = () => {
+    setFormErrors({});
+    setPreview(null);
+    setActiveTab('setup');
+    setShowDescription(false);
+    handleOpenAdd()
+  }
+  const openEdit = (p) => {
+    setEditPolicy(p);
+    setFormForEdit(p);
+    setFormErrors({});
+    setPreview(null);
+    setActiveTab('setup');
+    setShowDescription(!!p.description);
+    setModalOpen(true)
+  }
+  const closeModal = () => {
+    handleCancel();
+    setPreview(null)
+  }
 
   const { data: policies, isLoading, refetch } = useQuery({
     queryKey: QUERY_KEYS.policies(),
