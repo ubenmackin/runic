@@ -314,13 +314,14 @@ func MakeDeletePolicyHandler(compiler *engine.Compiler) http.HandlerFunc {
 }
 
 type PolicyPreviewRequest struct {
-	SourceID   int    `json:"source_id"`
-	SourceType string `json:"source_type"`
-	TargetID   int    `json:"target_id"`
-	TargetType string `json:"target_type"`
-	ServiceID  int    `json:"service_id"`
-	PeerID     int    `json:"peer_id"`   // the peer to base the preview on
-	Direction  string `json:"direction"` // forward, backward, or both
+	SourceID    int    `json:"source_id"`
+	SourceType  string `json:"source_type"`
+	TargetID    int    `json:"target_id"`
+	TargetType  string `json:"target_type"`
+	ServiceID   int    `json:"service_id"`
+	PeerID      int    `json:"peer_id"`      // the peer to base the preview on
+	Direction   string `json:"direction"`    // forward, backward, or both
+	TargetScope string `json:"target_scope"` // host, docker, or both
 }
 
 func MakePolicyPreviewHandler(compiler *engine.Compiler) http.HandlerFunc {
@@ -336,6 +337,11 @@ func MakePolicyPreviewHandler(compiler *engine.Compiler) http.HandlerFunc {
 			req.Direction = "both"
 		}
 
+		// Default target_scope to both
+		if req.TargetScope == "" {
+			req.TargetScope = "both"
+		}
+
 		// Derive peer_id if not provided - used for special target resolution
 		if req.PeerID == 0 {
 			if req.SourceType == "peer" {
@@ -346,7 +352,7 @@ func MakePolicyPreviewHandler(compiler *engine.Compiler) http.HandlerFunc {
 		}
 
 		// Generate rules using the policy-centric preview function
-		rules, err := compiler.PreviewCompile(r.Context(), req.PeerID, req.SourceID, req.SourceType, req.TargetID, req.TargetType, req.ServiceID, req.Direction)
+		rules, err := compiler.PreviewCompile(r.Context(), req.PeerID, req.SourceID, req.SourceType, req.TargetID, req.TargetType, req.ServiceID, req.Direction, req.TargetScope)
 		if err != nil {
 			http.Error(w, "Failed to generate preview: "+err.Error(), http.StatusInternalServerError)
 			return

@@ -68,14 +68,14 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 	defer rows.Close()
 
 	type policyInfo struct {
-		ID         int
-		Name       string
-		SourceID   int
-		SourceType string
-		ServiceID  int
-		TargetID   int
-		TargetType string
-		Action     string
+		ID          int
+		Name        string
+		SourceID    int
+		SourceType  string
+		ServiceID   int
+		TargetID    int
+		TargetType  string
+		Action      string
 		Priority    int
 		TargetScope string
 		Direction   string
@@ -525,7 +525,7 @@ func (c *Compiler) writeMulticastRule(buf *strings.Builder, action string, targe
 // PreviewCompile generates a preview of iptables rules for a policy without storing them.
 // Unlike Compile(), this is policy-centric: it resolves both source and target entities
 // and generates rules based on direction, showing the complete picture across all hosts.
-func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sourceType string, targetID int, targetType string, serviceID int, direction string) ([]string, error) {
+func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sourceType string, targetID int, targetType string, serviceID int, direction string, targetScope string) ([]string, error) {
 	// Load a peer IP for special target resolution (uses peerID as reference)
 	var ipAddress string
 	if peerID != 0 {
@@ -537,6 +537,11 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 	// Default direction
 	if direction == "" {
 		direction = "both"
+	}
+
+	// Default target_scope
+	if targetScope == "" {
+		targetScope = "both"
 	}
 
 	var buf strings.Builder
@@ -612,6 +617,44 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 				outputPortMatch := invertPortMatch(pc.PortMatch, pc.SrcPortMatch)
 				buf.WriteString(fmt.Sprintf("-A INPUT -s %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", sourceCIDR, pc.Protocol, inputPortMatch))
 				buf.WriteString(fmt.Sprintf("-A OUTPUT -d %s -p %s %s -m conntrack --ctstate ESTABLISHED -j ACCEPT\n", sourceCIDR, pc.Protocol, outputPortMatch))
+			}
+		}
+	}
+
+	// Docker: DOCKER-USER chain rules (for Docker containers)
+	// Generated when targetScope is "docker" or "both"
+	if targetScope == "docker" || targetScope == "both" {
+		buf.WriteString("# Docker: DOCKER-USER chain rules\n")
+		// Forward direction: Source → Target (Docker)
+		if direction == "both" || direction == "forward" {
+			for _, targetCIDR := range targetCIDRs {
+				if serviceName == "Multicast" {
+					buf.WriteString("-A DOCKER-USER -d 224.0.0.0/4 -m pkttype --pkt-type multicast -j ACCEPT\n")
+					continue
+				}
+				for _, pc := range portClauses {
+					outputPortMatch := pc.PortMatch
+					if pc.SrcPortMatch != "" {
+						outputPortMatch = pc.SrcPortMatch + " " + outputPortMatch
+					}
+					buf.WriteString(fmt.Sprintf("-A DOCKER-USER -d %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", targetCIDR, pc.Protocol, outputPortMatch))
+				}
+			}
+		}
+		// Backward direction: Target (Docker) ← Source
+		if direction == "both" || direction == "backward" {
+			for _, sourceCIDR := range sourceCIDRs {
+				if serviceName == "Multicast" {
+					buf.WriteString("-A DOCKER-USER -m pkttype --pkt-type multicast -j ACCEPT\n")
+					continue
+				}
+				for _, pc := range portClauses {
+					inputPortMatch := pc.PortMatch
+					if pc.SrcPortMatch != "" {
+						inputPortMatch = pc.SrcPortMatch + " " + inputPortMatch
+					}
+					buf.WriteString(fmt.Sprintf("-A DOCKER-USER -s %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", sourceCIDR, pc.Protocol, inputPortMatch))
+				}
 			}
 		}
 	}

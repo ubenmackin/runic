@@ -57,6 +57,7 @@ export default function Policies() {
   const [formErrors, setFormErrors] = useState({})
   const [activeTab, setActiveTab] = useState('setup')
   const [showSystemRules, setShowSystemRules] = useState(false)
+  const [showDescription, setShowDescription] = useState(false)
 
   // Sorting state (persisted per-user)
   const { sortConfig, handleSort } = useTableSort('policies', { key: 'priority', direction: 'asc' })
@@ -70,15 +71,16 @@ export default function Policies() {
   // Focus trap for modal accessibility
   useFocusTrap(modalRef, modalOpen)
 
-  const openAdd = () => { setFormErrors({}); setPreview(null); setActiveTab('setup'); handleOpenAdd() }
-  const openEdit = (p) => {
-    setEditPolicy(p);
-    setFormForEdit(p);
-    setFormErrors({});
-    setPreview(null);
-    setActiveTab('setup');
-    setModalOpen(true)
-  }
+  const openAdd = () => { setFormErrors({}); setPreview(null); setActiveTab('setup'); setShowDescription(false); handleOpenAdd() }
+const openEdit = (p) => {
+  setEditPolicy(p);
+  setFormForEdit(p);
+  setFormErrors({});
+  setPreview(null);
+  setActiveTab('setup');
+  setShowDescription(!!p.description);
+  setModalOpen(true)
+}
   const closeModal = () => { handleCancel(); setPreview(null) }
 
   const { data: policies, isLoading, refetch } = useQuery({
@@ -158,14 +160,15 @@ const polymorphicOptions = [
     }
     setPreviewLoading(true)
     try {
-      const data = await api.post('/policies/preview', {
-        source_id: formData.source_id,
-        source_type: formData.source_type,
-        service_id: formData.service_id,
-        target_id: formData.target_id,
-        target_type: formData.target_type,
-        direction: formData.direction
-      })
+const data = await api.post('/policies/preview', {
+      source_id: formData.source_id,
+      source_type: formData.source_type,
+      service_id: formData.service_id,
+      target_id: formData.target_id,
+      target_type: formData.target_type,
+      direction: formData.direction,
+      target_scope: formData.target_scope
+    })
       setPreview(data)
       setFormErrors({})
     } catch (err) {
@@ -466,9 +469,29 @@ const polymorphicOptions = [
                     <input type="number" value={formData.priority} onChange={e => setFormData(d => ({ ...d, priority: e.target.value === '' ? '' : parseInt(e.target.value, 10) }))} required className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-active" />
                   </div>
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Description</label>
-                  <textarea value={formData.description} onChange={e => setFormData(d => ({ ...d, description: e.target.value }))} rows={2} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-active" />
+                {/* Collapsible Description Section */}
+                <div className="border border-gray-200 dark:border-gray-border rounded-lg overflow-hidden">
+                  <button
+                    type="button"
+                    onClick={() => setShowDescription(!showDescription)}
+                    className="w-full px-4 py-3 flex items-center justify-between bg-gray-50 dark:bg-charcoal-darkest hover:bg-gray-100 dark:hover:bg-charcoal-dark transition-colors"
+                  >
+                    <span className="text-sm font-medium text-gray-700 dark:text-amber-primary">Description (Optional)</span>
+                    <svg className={`w-4 h-4 text-gray-500 transition-transform duration-150 ${showDescription ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </button>
+                  <div className={`transition-all duration-150 ease-in-out ${showDescription ? 'max-h-32 opacity-100' : 'max-h-0 opacity-0'} overflow-hidden`}>
+                    <div className="p-4">
+                      <textarea
+                        value={formData.description}
+                        onChange={e => setFormData(d => ({ ...d, description: e.target.value }))}
+                        rows={2}
+                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white"
+                        placeholder="Add a description for this policy..."
+                      />
+                    </div>
+                  </div>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto_1fr] gap-x-4 gap-y-4 items-end">
                   {/* Row 1: Source - Direction - Target */}
@@ -547,61 +570,61 @@ const polymorphicOptions = [
                     </div>
                   </div>
                 </div>
-                {/* Policy Enabled Section */}
-                <div className="p-4 bg-gray-50 dark:bg-charcoal-darkest border border-gray-200 dark:border-gray-border rounded-lg">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <label className="text-sm font-medium text-gray-900 dark:text-light-neutral">Policy enabled</label>
-                      <p className="text-xs text-gray-500 dark:text-amber-muted mt-0.5">When disabled, this policy will not generate any firewall rules until re-enabled.</p>
-                    </div>
-                    <ToggleSwitch checked={formData.enabled} onChange={v => setFormData(d => ({ ...d, enabled: v }))} />
-                  </div>
-                </div>
+      {/* Docker Integration Scope - Only shown when target is a peer and has Docker */}
+      {selectedPeerHasDocker && (
+        <div>
+          <div className="flex items-center gap-2 mb-1">
+            <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary">Applies To</label>
+            <span className="text-xs text-gray-500 dark:text-amber-muted">(Docker Integration)</span>
+          </div>
+          <div className="flex bg-gray-100 dark:bg-charcoal-darkest p-1 rounded-lg border border-gray-200 dark:border-gray-border">
+            <button
+              type="button"
+              onClick={() => setFormData(d => ({ ...d, target_scope: 'both' }))}
+              className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-all duration-200 ${
+                formData.target_scope === 'both' || !formData.target_scope
+                  ? 'bg-white dark:bg-charcoal-dark text-gray-900 dark:text-white shadow-sm ring-1 ring-black/5 dark:ring-white/10'
+                  : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-white/50 dark:hover:bg-charcoal-dark/50'
+              }`}
+            >
+              Host + Docker
+            </button>
+            <button
+              type="button"
+              onClick={() => setFormData(d => ({ ...d, target_scope: 'host' }))}
+              className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-all duration-200 ${
+                formData.target_scope === 'host'
+                  ? 'bg-white dark:bg-charcoal-dark text-gray-900 dark:text-white shadow-sm ring-1 ring-black/5 dark:ring-white/10'
+                  : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-white/50 dark:hover:bg-charcoal-dark/50'
+              }`}
+            >
+              Host Only
+            </button>
+            <button
+              type="button"
+              onClick={() => setFormData(d => ({ ...d, target_scope: 'docker' }))}
+              className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-all duration-200 ${
+                formData.target_scope === 'docker'
+                  ? 'bg-white dark:bg-charcoal-dark text-gray-900 dark:text-white shadow-sm ring-1 ring-black/5 dark:ring-white/10'
+                  : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-white/50 dark:hover:bg-charcoal-dark/50'
+              }`}
+            >
+              Docker Only
+            </button>
+          </div>
+        </div>
+      )}
 
-                {/* Docker Integration Scope - Only shown when target is a peer and has Docker */}
-                {selectedPeerHasDocker && (
-                  <div>
-                    <div className="flex items-center gap-2 mb-1">
-                      <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary">Applies To</label>
-                      <span className="text-xs text-gray-500 dark:text-amber-muted">(Docker Integration)</span>
-                    </div>
-                    <div className="flex bg-gray-100 dark:bg-charcoal-darkest p-1 rounded-lg border border-gray-200 dark:border-gray-border">
-                      <button
-                        type="button"
-                        onClick={() => setFormData(d => ({ ...d, target_scope: 'both' }))}
-                        className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-all duration-200 ${
-                          formData.target_scope === 'both' || !formData.target_scope
-                            ? 'bg-white dark:bg-charcoal-dark text-gray-900 dark:text-white shadow-sm ring-1 ring-black/5 dark:ring-white/10'
-                            : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-white/50 dark:hover:bg-charcoal-dark/50'
-                        }`}
-                      >
-                        Host + Docker
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setFormData(d => ({ ...d, target_scope: 'host' }))}
-                        className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-all duration-200 ${
-                          formData.target_scope === 'host'
-                            ? 'bg-white dark:bg-charcoal-dark text-gray-900 dark:text-white shadow-sm ring-1 ring-black/5 dark:ring-white/10'
-                            : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-white/50 dark:hover:bg-charcoal-dark/50'
-                        }`}
-                      >
-                        Host Only
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setFormData(d => ({ ...d, target_scope: 'docker' }))}
-                        className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-all duration-200 ${
-                          formData.target_scope === 'docker'
-                            ? 'bg-white dark:bg-charcoal-dark text-gray-900 dark:text-white shadow-sm ring-1 ring-black/5 dark:ring-white/10'
-                            : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-white/50 dark:hover:bg-charcoal-dark/50'
-                        }`}
-                      >
-                        Docker Only
-                      </button>
-                    </div>
-                  </div>
-                )}
+      {/* Policy Enabled Section */}
+      <div className="p-4 bg-gray-50 dark:bg-charcoal-darkest border border-gray-200 dark:border-gray-border rounded-lg">
+        <div className="flex items-center justify-between">
+          <div>
+            <label className="text-sm font-medium text-gray-900 dark:text-light-neutral">Policy enabled</label>
+            <p className="text-xs text-gray-500 dark:text-amber-muted mt-0.5">When disabled, this policy will not generate any firewall rules until re-enabled.</p>
+          </div>
+          <ToggleSwitch checked={formData.enabled} onChange={v => setFormData(d => ({ ...d, enabled: v }))} />
+        </div>
+      </div>
 
                 <InlineError message={formErrors._general} />
               </form>
