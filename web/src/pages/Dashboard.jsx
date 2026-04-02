@@ -5,7 +5,7 @@ import StatCard from '../components/StatCard'
 import BlockedEventsChart from '../components/BlockedEventsChart'
 import TableSkeleton from '../components/TableSkeleton'
 import RecentActivityFeed from '../components/RecentActivityFeed'
-import SystemHealth from '../components/SystemHealth'
+import QuickActions from '../components/QuickActions'
 import TopBlockedSources from '../components/TopBlockedSources'
 import { Server, Shield, AlertTriangle, Clock, UserPlus } from 'lucide-react'
 
@@ -58,7 +58,7 @@ export default function Dashboard() {
       {/* Dashboard Widgets */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <RecentActivityFeed activity={stats.recent_activity || []} />
-        <SystemHealth peers={stats.peer_health || []} />
+        <QuickActions />
         <TopBlockedSources sources={stats.top_blocked_sources || []} />
       </div>
     </div>
