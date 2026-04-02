@@ -8,23 +8,28 @@ function decodeJwt(token) {
   try {
     const payload = token.split('.')[1]
     const decoded = JSON.parse(atob(payload))
-    return decoded.username || null
+    return {
+      username: decoded.username || null,
+      role: decoded.role || null,
+    }
   } catch {
-    return null
+    return { username: null, role: null }
   }
 }
 
-function getUsernameFromToken() {
+function getUserFromToken() {
   const token = localStorage.getItem('runic_access_token')
-  return token ? decodeJwt(token) : null
+  return token ? decodeJwt(token) : { username: null, role: null }
 }
 
 export const useAuthStore = create((set) => ({
   isAuthenticated: !!localStorage.getItem('runic_access_token'),
-  username: getUsernameFromToken(),
+  username: getUserFromToken().username,
+  role: getUserFromToken().role,
   login: (access, refresh) => {
     setTokens(access, refresh)
-    set({ isAuthenticated: true, username: decodeJwt(access) })
+    const { username, role } = decodeJwt(access)
+    set({ isAuthenticated: true, username, role })
   },
   logout: async () => {
     try {
@@ -34,7 +39,7 @@ export const useAuthStore = create((set) => ({
       console.warn('Logout API call failed:', err.message)
     } finally {
       clearTokens()
-      set({ isAuthenticated: false, username: null })
+      set({ isAuthenticated: false, username: null, role: null })
     }
   },
 }))

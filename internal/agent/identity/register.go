@@ -40,6 +40,11 @@ func Register(ctx context.Context, client common.HTTPClient, cfg *Config, versio
 		HasIPSet:     &hasIPSet,
 	}
 
+	// Include registration token if available (for new host registration)
+	if cfg.RegistrationToken != "" {
+		body.RegistrationToken = cfg.RegistrationToken
+	}
+
 	url := cfg.ControlPlaneURL + "/api/v1/agent/register"
 	resp, err := common.DoJSONRequest(ctx, client, "POST", url, body, cfg.Token, "runic-agent")
 	if err != nil {
@@ -62,6 +67,9 @@ func Register(ctx context.Context, client common.HTTPClient, cfg *Config, versio
 	cfg.PullIntervalSec = regResp.PullInterval
 	cfg.CurrentBundleVer = regResp.CurrentBundleVer
 	cfg.HMACKey = regResp.HMACKey
+
+	// Clear registration token so it is not persisted to disk (single-use)
+	cfg.RegistrationToken = ""
 
 	if err := saveFunc(); err != nil {
 		return fmt.Errorf("save config after registration: %w", err)

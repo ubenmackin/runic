@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -97,7 +98,9 @@ func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ip := rl.getIP(r)
 		if err := rl.Check(ip); err != nil {
-			http.Error(w, err.Error(), http.StatusTooManyRequests)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusTooManyRequests)
+			json.NewEncoder(w).Encode(map[string]string{"error": "rate limit exceeded"})
 			return
 		}
 		next.ServeHTTP(w, r)

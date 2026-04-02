@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
+	"regexp"
+	"slices"
 
 	"runic/internal/api/agents"
 	"runic/internal/api/common"
@@ -13,6 +16,16 @@ import (
 	"runic/internal/db"
 	"runic/internal/engine"
 )
+
+// hostnameRegex validates hostnames: 1-253 chars, alphanumeric with hyphens and dots,
+// must start and end with alphanumeric (single-char hostnames allowed).
+var hostnameRegex = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9.\-]*[a-zA-Z0-9])?$|^[a-zA-Z0-9]$`)
+
+// validOSTypes is the list of allowed OS types for peer creation.
+var validOSTypes = []string{"debian", "ubuntu", "rhel", "arch", "opensuse", "raspbian", "linux"}
+
+// validArchs is the list of allowed architectures for peer creation.
+var validArchs = []string{"amd64", "arm64", "arm", "armv6"}
 
 // Peer is the JSON representation of a peer for API responses.
 type Peer struct {
@@ -95,6 +108,7 @@ func CreatePeer(w http.ResponseWriter, r *http.Request) {
 		Hostname  string `json:"hostname"`
 		IPAddress string `json:"ip_address"`
 		OSType    string `json:"os_type"`
+		Arch      string `json:"arch"`
 		AgentKey  string `json:"agent_key"`
 		HasDocker bool   `json:"has_docker"`
 		IsManual  bool   `json:"is_manual"`
@@ -104,12 +118,32 @@ func CreatePeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// For manual peers, hostname and IP are required but agent_key is optional
-	// For agent peers, hostname, IP, and agent_key are all required
-	if input.Hostname == "" || input.IPAddress == "" {
-		common.RespondError(w, http.StatusBadRequest, "hostname and ip_address are required")
+	// Validate hostname: 1-253 chars, alphanumeric with hyphens and dots only
+	if input.Hostname == "" || len(input.Hostname) > 253 || !hostnameRegex.MatchString(input.Hostname) {
+		common.RespondError(w, http.StatusBadRequest, "hostname must be 1-253 characters, alphanumeric with hyphens and dots only")
 		return
 	}
+
+	// Validate IP address
+	if net.ParseIP(input.IPAddress) == nil {
+		common.RespondError(w, http.StatusBadRequest, "invalid IP address")
+		return
+	}
+
+	// Validate os_type if provided
+	if input.OSType != "" && !slices.Contains(validOSTypes, input.OSType) {
+		common.RespondError(w, http.StatusBadRequest, "os_type must be one of: debian, ubuntu, rhel, arch, opensuse, raspbian, linux")
+		return
+	}
+
+	// Validate arch if provided
+	if input.Arch != "" && !slices.Contains(validArchs, input.Arch) {
+		common.RespondError(w, http.StatusBadRequest, "arch must be one of: amd64, arm64, arm, armv6")
+		return
+	}
+
+	// For manual peers, hostname and IP are required but agent_key is optional
+	// For agent peers, hostname, IP, and agent_key are all required
 	if !input.IsManual && input.AgentKey == "" {
 		common.RespondError(w, http.StatusBadRequest, "agent_key is required for agent peers")
 		return
@@ -122,13 +156,18 @@ func CreatePeer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Generate HMAC key for the peer
-	hmacKey := agents.GenerateHMACKey()
+	hmacKey, err := agents.GenerateHMACKey()
+	if err != nil {
+		common.RespondError(w, http.StatusInternalServerError, "failed to generate HMAC key")
+		return
+	}
 
 	result, err := db.DB.ExecContext(r.Context(),
 		`INSERT INTO peers (hostname, ip_address, os_type, agent_key, hmac_key, has_docker, is_manual) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		input.Hostname, input.IPAddress, input.OSType, agentKey, hmacKey, input.HasDocker, input.IsManual)
 	if err != nil {
-		common.RespondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create peer: %v", err))
+		log.Printf("ERROR: failed to create peer: %v", err)
+		common.InternalError(w)
 		return
 	}
 
@@ -176,7 +215,8 @@ func UpdatePeer(w http.ResponseWriter, r *http.Request) {
 	// Update the peer (hostname, ip_address, os_type, arch, has_docker, and description are all editable)
 	_, err = db.DB.ExecContext(r.Context(), "UPDATE peers SET hostname = ?, ip_address = ?, os_type = ?, arch = ?, has_docker = ?, description = ? WHERE id = ?", input.Hostname, input.IPAddress, input.OSType, input.Arch, input.HasDocker, input.Description, id)
 	if err != nil {
-		common.RespondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to update peer: %v", err))
+		log.Printf("ERROR: failed to update peer: %v", err)
+		common.InternalError(w)
 		return
 	}
 
@@ -194,7 +234,8 @@ func MakeCompilePeerHandler(compiler *engine.Compiler) http.HandlerFunc {
 
 		bundle, err := compiler.CompileAndStore(r.Context(), id)
 		if err != nil {
-			common.RespondError(w, http.StatusInternalServerError, fmt.Sprintf("compilation failed: %v", err))
+			log.Printf("ERROR: compilation failed: %v", err)
+			common.InternalError(w)
 			return
 		}
 
@@ -261,7 +302,8 @@ func MakeGetPeerBundleHandler(compiler *engine.Compiler) http.HandlerFunc {
 		// Compile fresh rules for the peer to ensure current effective rules
 		bundle, err := compiler.CompileAndStore(r.Context(), id)
 		if err != nil {
-			common.RespondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to compile rules: %v", err))
+			log.Printf("ERROR: failed to compile rules: %v", err)
+			common.InternalError(w)
 			return
 		}
 

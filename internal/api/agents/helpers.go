@@ -12,7 +12,6 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 
 	"runic/internal/common"
-	runiclog "runic/internal/common/log"
 	"runic/internal/db"
 )
 
@@ -24,31 +23,20 @@ func getEnv(key, defaultVal string) string {
 	return defaultVal
 }
 
-// requireEnv gets an environment variable or returns an error.
-func requireEnv(key string) ([]byte, error) {
-	val := strings.TrimSpace(os.Getenv(key))
-	if val == "" {
-		return nil, fmt.Errorf("required environment variable %s is not set", key)
-	}
-	return []byte(val), nil
-}
-
 // GenerateHMACKey generates a cryptographically secure random HMAC key.
-// Returns a fallback string on error for resilience.
-func GenerateHMACKey() string {
+func GenerateHMACKey() (string, error) {
 	key, err := common.GenerateHMACKey()
 	if err != nil {
-		runiclog.Error("Failed to generate HMAC key error", "error", err)
-		return "runic-hmac-key-change-me"
+		return "", fmt.Errorf("generate HMAC key: %w", err)
 	}
-	return key
+	return key, nil
 }
 
 // generateAgentToken generates a JWT-like token for an agent.
 func generateAgentToken(hostname string) (string, error) {
-	hMACKey, err := requireEnv("RUNIC_AGENT_JWT_SECRET")
+	hMACKey, err := db.GetSecret("agent_jwt_secret")
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("agent JWT secret not configured: %w", err)
 	}
 	// In production, use proper JWT generation with expiration
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
@@ -57,7 +45,7 @@ func generateAgentToken(hostname string) (string, error) {
 		"iat":  time.Now().Unix(),
 		"exp":  time.Now().Add(72 * time.Hour).Unix(),
 	})
-	tokenStr, err := token.SignedString(hMACKey)
+	tokenStr, err := token.SignedString([]byte(hMACKey))
 	if err != nil {
 		return "", fmt.Errorf("sign token: %w", err)
 	}
@@ -65,13 +53,12 @@ func generateAgentToken(hostname string) (string, error) {
 }
 
 // generateAgentKey generates a cryptographically secure unique agent key.
-func generateAgentKey() string {
+func generateAgentKey() (string, error) {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
-		runiclog.Error("Failed to generate agent key error", "error", err)
-		return fmt.Sprintf("agent-key-%d", time.Now().UnixNano())
+		return "", fmt.Errorf("generate agent key: %w", err)
 	}
-	return "agent-key-" + hex.EncodeToString(b)
+	return "agent-key-" + hex.EncodeToString(b), nil
 }
 
 // getHostIDFromContext safely extracts host_id from request context and looks up the peer.

@@ -237,7 +237,12 @@ func AgentRotateKey(w http.ResponseWriter, r *http.Request) {
 		common.RespondError(w, http.StatusInternalServerError, "failed to start transaction")
 		return
 	}
-	defer tx.Rollback()
+	committed := false
+	defer func() {
+		if !committed {
+			tx.Rollback()
+		}
+	}()
 
 	// Get the peer's rotation token and timestamp
 	var peerID int
@@ -262,8 +267,13 @@ func AgentRotateKey(w http.ResponseWriter, r *http.Request) {
 		rotationTime, err := time.Parse(time.RFC3339, lastRotatedAt.String)
 		if err != nil || time.Since(rotationTime) > 5*time.Minute {
 			// Token expired, clear it
-			tx.ExecContext(r.Context(), "UPDATE peers SET hmac_key_rotation_token = NULL WHERE id = ?", peerID)
-			tx.Commit()
+			if _, err := tx.ExecContext(r.Context(), "UPDATE peers SET hmac_key_rotation_token = NULL WHERE id = ?", peerID); err != nil {
+				slog.Warn("failed to clear expired rotation token", "error", err)
+			}
+			if err := tx.Commit(); err != nil {
+				slog.Warn("failed to commit transaction after expired token", "error", err)
+			}
+			committed = true
 			common.RespondError(w, http.StatusUnauthorized, "expired rotation token")
 			return
 		}
@@ -283,6 +293,7 @@ func AgentRotateKey(w http.ResponseWriter, r *http.Request) {
 		common.RespondError(w, http.StatusInternalServerError, "failed to commit transaction")
 		return
 	}
+	committed = true
 
 	slog.Info("Agent retrieved new HMAC key",
 		"peer_id", peerID,

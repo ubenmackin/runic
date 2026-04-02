@@ -9,6 +9,7 @@ import { useToastContext } from '../hooks/ToastContext'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 import { useTableFilter } from '../hooks/useTableFilter'
 import { useCrudMutations } from '../hooks/useCrudMutations'
+import { useAuth } from '../hooks/useAuth'
 import ConfirmModal from '../components/ConfirmModal'
 import SearchableSelect from '../components/SearchableSelect'
 import InlineError from '../components/InlineError'
@@ -23,6 +24,7 @@ import PageHeader from '../components/PageHeader'
 export default function Groups() {
   const qc = useQueryClient()
   const showToast = useToastContext()
+  const { canEdit } = useAuth()
   const { modalOpen, editItem: editGroup, setEditItem: setEditGroup, form: formData, setForm: setFormData, setFormForEdit, handleOpenAdd, handleCancel, setModalOpen } = useCrudModal({ name: '', description: '' })
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [formErrors, setFormErrors] = useState({})
@@ -198,9 +200,11 @@ export default function Groups() {
               <RefreshCw className={`w-4 h-4 ${isManualRefreshing ? 'animate-spin' : ''}`} />
               Refresh
             </button>
-            <button onClick={openAdd} className="flex items-center gap-2 px-4 py-2 bg-purple-active hover:bg-purple-700 text-white text-sm font-medium rounded-lg">
-              <Plus className="w-4 h-4" /> New Group
-            </button>
+            {canEdit && (
+              <button onClick={openAdd} className="flex items-center gap-2 px-4 py-2 bg-purple-active hover:bg-purple-700 text-white text-sm font-medium rounded-lg">
+                <Plus className="w-4 h-4" /> New Group
+              </button>
+            )}
           </>
         }
       />
@@ -286,22 +290,26 @@ export default function Groups() {
             label: 'Actions', 
             render: (g) => (
               <div className="flex items-center gap-2">
-<button
-                  onClick={(e) => { e.stopPropagation(); openEdit(g) }}
-                  className={`p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded ${g.is_system ? 'text-gray-400 cursor-not-allowed' : ''}`}
-                  disabled={g.is_system}
-                  title="Edit"
-                >
-                  <Pencil className={`w-4 h-4 ${g.is_system ? 'text-gray-400' : 'text-gray-900 dark:text-white'}`} />
-                </button>
-<button
-onClick={(e) => { e.stopPropagation(); !g.is_system && setDeleteTarget(g) }}
-disabled={g.is_system}
-className={`p-1 rounded ${g.is_system ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-100 dark:hover:bg-charcoal-darkest'}`}
-title={g.is_system ? "System groups cannot be deleted" : "Delete"}
->
-<Trash2 className="w-4 h-4 text-red-500" />
-</button>
+                {canEdit && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); openEdit(g) }}
+                    className={`p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded ${g.is_system ? 'text-gray-400 cursor-not-allowed' : ''}`}
+                    disabled={g.is_system}
+                    title="Edit"
+                  >
+                    <Pencil className={`w-4 h-4 ${g.is_system ? 'text-gray-400' : 'text-gray-900 dark:text-white'}`} />
+                  </button>
+                )}
+                {canEdit && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); !g.is_system && setDeleteTarget(g) }}
+                    disabled={g.is_system}
+                    className={`p-1 rounded ${g.is_system ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-100 dark:hover:bg-charcoal-darkest'}`}
+                    title={g.is_system ? "System groups cannot be deleted" : "Delete"}
+                  >
+                    <Trash2 className="w-4 h-4 text-red-500" />
+                  </button>
+                )}
               </div>
             )
           },

@@ -9,15 +9,16 @@ import (
 
 // Config holds the agent configuration.
 type Config struct {
-	ControlPlaneURL  string `json:"control_plane_url"`
-	HostID           string `json:"host_id"`
-	Token            string `json:"token"`
-	PullIntervalSec  int    `json:"pull_interval_seconds"`
-	LogPath          string `json:"log_path"`
-	CurrentBundleVer string `json:"current_bundle_version"`
-	HMACKey          string `json:"hmac_key"`
-	ApplyOnBoot      bool   `json:"apply_on_boot"`
-	ApplyRulesBundle bool   `json:"apply_rules_bundle"`
+	ControlPlaneURL   string `json:"control_plane_url"`
+	HostID            string `json:"host_id"`
+	Token             string `json:"token"`
+	PullIntervalSec   int    `json:"pull_interval_seconds"`
+	LogPath           string `json:"log_path"`
+	CurrentBundleVer  string `json:"current_bundle_version"`
+	HMACKey           string `json:"hmac_key"`
+	ApplyOnBoot       bool   `json:"apply_on_boot"`
+	ApplyRulesBundle  bool   `json:"apply_rules_bundle"`
+	RegistrationToken string `json:"registration_token"`
 }
 
 // DefaultConfig returns a config with sensible defaults.

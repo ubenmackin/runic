@@ -5,6 +5,7 @@ import { api } from '../api/client'
 import { useToastContext } from '../hooks/ToastContext'
 import TableSkeleton from '../components/TableSkeleton'
 import { useAuthStore } from '../store'
+import { useAuth } from '../hooks/useAuth'
 import PageHeader from '../components/PageHeader'
 import { useCrudMutations } from '../hooks/useCrudMutations'
 import { useFocusTrap } from '../hooks/useFocusTrap'
@@ -12,17 +13,18 @@ import { useFocusTrap } from '../hooks/useFocusTrap'
 export default function Users() {
   const showToast = useToastContext()
   const currentUsername = useAuthStore(s => s.username)
+  const { isAdmin } = useAuth()
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [formUsername, setFormUsername] = useState('')
   const [formPassword, setFormPassword] = useState('')
   const [formConfirmPassword, setFormConfirmPassword] = useState('')
   const [formEmail, setFormEmail] = useState('')
-  const [formRole, setFormRole] = useState('user')
+  const [formRole, setFormRole] = useState('viewer')
   const [showEditModal, setShowEditModal] = useState(false)
   const [editTarget, setEditTarget] = useState(null)
   const [formEditEmail, setFormEditEmail] = useState('')
-  const [formEditRole, setFormEditRole] = useState('user')
+  const [formEditRole, setFormEditRole] = useState('viewer')
   const [formEditPassword, setFormEditPassword] = useState('')
   const [formEditConfirmPassword, setFormEditConfirmPassword] = useState('')
 
@@ -44,7 +46,7 @@ export default function Users() {
     setFormPassword('')
     setFormConfirmPassword('')
     setFormEmail('')
-    setFormRole('user')
+    setFormRole('viewer')
   }
 
   const { createMutation, updateMutation, deleteMutation } = useCrudMutations({
@@ -108,13 +110,15 @@ export default function Users() {
         title="Users"
         description="Manage user accounts for the Runic control plane"
         actions={
-          <button
-            onClick={() => setShowCreateModal(true)}
-            className="inline-flex items-center gap-2 px-4 py-2 bg-purple-active hover:bg-purple-700 text-white rounded-lg"
-          >
-            <UserPlus className="w-5 h-5" />
-            Create User
-          </button>
+          isAdmin && (
+            <button
+              onClick={() => setShowCreateModal(true)}
+              className="inline-flex items-center gap-2 px-4 py-2 bg-purple-active hover:bg-purple-700 text-white rounded-lg"
+            >
+              <UserPlus className="w-5 h-5" />
+              Create User
+            </button>
+          )
         }
       />
 
@@ -140,22 +144,24 @@ export default function Users() {
                 <tr key={user.id}>
                   <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 dark:text-light-neutral">{user.username}</td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-amber-primary">{user.email || '—'}</td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-amber-primary">{user.role || 'user'}</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-amber-primary">{user.role || 'viewer'}</td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm">
-                    <button
-                      onClick={() => {
-                        setEditTarget(user)
-                        setFormEditEmail(user.email || '')
-                        setFormEditRole(user.role || 'user')
-                        setFormEditPassword('')
-                        setFormEditConfirmPassword('')
-                        setShowEditModal(true)
-                      }}
-                      className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded mr-1"
-                    >
-                      <Pencil className="w-4 h-4 text-gray-500 dark:text-amber-muted" />
-                    </button>
-                    {user.username !== currentUsername && (
+                    {isAdmin && (
+                      <button
+                        onClick={() => {
+                          setEditTarget(user)
+                          setFormEditEmail(user.email || '')
+                          setFormEditRole(user.role || 'viewer')
+                          setFormEditPassword('')
+                          setFormEditConfirmPassword('')
+                          setShowEditModal(true)
+                        }}
+                        className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded mr-1"
+                      >
+                        <Pencil className="w-4 h-4 text-gray-500 dark:text-amber-muted" />
+                      </button>
+                    )}
+                    {isAdmin && user.username !== currentUsername && (
                       <button
                         onClick={() => setDeleteTarget(user)}
                         className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded"
@@ -253,7 +259,8 @@ export default function Users() {
                   onChange={(e) => setFormRole(e.target.value)}
                   className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral focus:outline-none focus:ring-2 focus:ring-purple-active focus:border-transparent"
                 >
-                  <option value="user">user</option>
+                  <option value="viewer">viewer</option>
+                  <option value="editor">editor</option>
                   <option value="admin">admin</option>
                 </select>
               </div>
@@ -367,7 +374,8 @@ export default function Users() {
                   onChange={(e) => setFormEditRole(e.target.value)}
                   className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral focus:outline-none focus:ring-2 focus:ring-purple-active focus:border-transparent"
                 >
-                  <option value="user">user</option>
+                  <option value="viewer">viewer</option>
+                  <option value="editor">editor</option>
                   <option value="admin">admin</option>
                 </select>
               </div>
@@ -407,7 +415,7 @@ export default function Users() {
                     setShowEditModal(false)
                     setEditTarget(null)
                     setFormEditEmail('')
-                    setFormEditRole('user')
+                    setFormEditRole('viewer')
                     setFormEditPassword('')
                     setFormEditConfirmPassword('')
                   }}

@@ -101,10 +101,17 @@ func CreateUser(w http.ResponseWriter, r *http.Request) {
 	// Validate role
 	req.Role = strings.TrimSpace(req.Role)
 	if req.Role == "" {
-		req.Role = "user"
+		req.Role = "viewer"
 	}
-	if req.Role != "admin" && req.Role != "user" {
-		common.RespondError(w, http.StatusBadRequest, "Role must be 'admin' or 'user'")
+	if req.Role != "admin" && req.Role != "editor" && req.Role != "viewer" {
+		common.RespondError(w, http.StatusBadRequest, "Role must be 'admin', 'editor', or 'viewer'")
+		return
+	}
+
+	// Only admins can create users with elevated roles
+	callerRole := auth.RoleFromContext(r.Context())
+	if callerRole != "admin" && (req.Role == "admin" || req.Role == "editor") {
+		common.RespondError(w, http.StatusForbidden, "Only admins can create admin or editor users")
 		return
 	}
 
@@ -121,7 +128,7 @@ func CreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Hash password
-	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), 12)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "Failed to hash password")
 		return
@@ -166,6 +173,13 @@ func DeleteUser(w http.ResponseWriter, r *http.Request) {
 
 	// Get authenticated username from context
 	authUsername := auth.UsernameFromContext(r.Context())
+
+	// Only admins can delete users
+	callerRole := auth.RoleFromContext(r.Context())
+	if callerRole != "admin" {
+		common.RespondError(w, http.StatusForbidden, "Only admins can delete users")
+		return
+	}
 
 	// Check if user exists and get username
 	var username string
@@ -230,8 +244,8 @@ func UpdateUser(w http.ResponseWriter, r *http.Request) {
 
 	// Validate role if provided
 	req.Role = strings.TrimSpace(req.Role)
-	if req.Role != "" && req.Role != "admin" && req.Role != "user" {
-		common.RespondError(w, http.StatusBadRequest, "Role must be 'admin' or 'user'")
+	if req.Role != "" && req.Role != "admin" && req.Role != "editor" && req.Role != "viewer" {
+		common.RespondError(w, http.StatusBadRequest, "Role must be 'admin', 'editor', or 'viewer'")
 		return
 	}
 
@@ -245,6 +259,15 @@ func UpdateUser(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "Database error")
 		return
+	}
+
+	// Only admins can change user roles
+	if req.Role != "" {
+		callerRole := auth.RoleFromContext(r.Context())
+		if callerRole != "admin" {
+			common.RespondError(w, http.StatusForbidden, "Only admins can change user roles")
+			return
+		}
 	}
 
 	// Build update query dynamically - only update fields that are provided
@@ -268,7 +291,7 @@ func UpdateUser(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+		hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), 12)
 		if err != nil {
 			common.RespondError(w, http.StatusInternalServerError, "Failed to hash password")
 			return

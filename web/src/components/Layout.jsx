@@ -6,6 +6,7 @@ import {
 } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 import { useAuthStore } from '../store'
+import { useAuth } from '../hooks/useAuth'
 import { getVersion } from '../api/client'
 
 const NavItem = React.memo(({ to, icon: Icon, label, onClick, isChild = false }) => (
@@ -47,6 +48,9 @@ const navItems = [
   { to: '/settings',      icon: Settings,         label: 'Settings' },
 ]
 
+// Admin-only nav routes — hidden from non-admin users
+const ADMIN_ONLY_ROUTES = new Set(['/users', '/setup-keys'])
+
 export default function Layout() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [darkMode, setDarkMode] = useState(() =>
@@ -56,6 +60,7 @@ export default function Layout() {
   const [expandedItems, setExpandedItems] = useState({})
   const logout = useAuthStore(s => s.logout)
   const username = useAuthStore(s => s.username)
+  const { isAdmin, role } = useAuth()
   const navigate = useNavigate()
 
   // Fetch version info
@@ -88,6 +93,15 @@ const toggleDark = () => {
     }))
   }
 
+  // Filter nav items based on role
+  const visibleNavItems = navItems.filter(item => {
+    // Check if this is a parent with children
+    if (item.children) return true
+    // Hide admin-only routes from non-admins
+    if (ADMIN_ONLY_ROUTES.has(item.to) && !isAdmin) return false
+    return true
+  })
+
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-charcoal-darkest flex">
       {/* Mobile sidebar backdrop */}
@@ -116,7 +130,7 @@ const toggleDark = () => {
           </button>
         </div>
         <nav className="mt-4 px-2 space-y-1">
-          {navItems.map((item) => {
+          {visibleNavItems.map((item) => {
             if (item.children) {
               // Expandable menu item
               const isExpanded = expandedItems[item.label] || false
@@ -193,6 +207,17 @@ className={`w-full flex items-center justify-between gap-3 px-4 py-3 rounded-lg 
               <div className="flex items-center gap-2 px-3 py-2 text-sm text-gray-700 dark:text-light-neutral">
                 <User className="h-4 w-4" />
                 <span>{username}</span>
+                {role && (
+                  <span className={`px-1.5 py-0.5 text-xs font-medium rounded-full ${
+                    role === 'admin'
+                      ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'
+                      : role === 'editor'
+                      ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
+                      : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400'
+                  }`}>
+                    {role}
+                  </span>
+                )}
               </div>
             )}
             <button

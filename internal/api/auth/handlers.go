@@ -100,7 +100,12 @@ func HandleSetupPOST(w http.ResponseWriter, r *http.Request) {
 		common.RespondError(w, http.StatusInternalServerError, "failed to start transaction")
 		return
 	}
-	defer tx.Rollback()
+	committed := false
+	defer func() {
+		if !committed {
+			tx.Rollback()
+		}
+	}()
 
 	// Check if any users already exist
 	var count int
@@ -115,7 +120,7 @@ func HandleSetupPOST(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Hash password
-	hash, err := bcrypt.GenerateFromPassword([]byte(body.Password), bcrypt.DefaultCost)
+	hash, err := bcrypt.GenerateFromPassword([]byte(body.Password), 12)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "failed to hash password")
 		return
@@ -123,7 +128,7 @@ func HandleSetupPOST(w http.ResponseWriter, r *http.Request) {
 
 	// Insert user
 	_, err = tx.ExecContext(ctx,
-		"INSERT INTO users (username, password_hash) VALUES (?, ?)",
+		"INSERT INTO users (username, password_hash, role) VALUES (?, ?, 'admin')",
 		body.Username, string(hash))
 	if err != nil {
 		var sqliteErr sqlite3.Error
@@ -140,6 +145,7 @@ func HandleSetupPOST(w http.ResponseWriter, r *http.Request) {
 		common.RespondError(w, http.StatusInternalServerError, "failed to commit transaction")
 		return
 	}
+	committed = true
 
 	// Log successful user creation
 	log.Printf("AUTH SETUP: User '%s' created (IP: %s)", body.Username, r.RemoteAddr)

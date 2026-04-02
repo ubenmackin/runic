@@ -8,18 +8,60 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 
 	"runic/internal/api/common"
-	"runic/internal/api/middleware"
 	"runic/internal/common/constants"
 	runiclog "runic/internal/common/log"
 	"runic/internal/db"
 	"runic/internal/models"
 )
+
+// LogEvent represents a validated firewall log event from an agent.
+type LogEvent struct {
+	Timestamp string `json:"timestamp"`
+	Direction string `json:"direction"`
+	SrcIP     string `json:"src_ip"`
+	DstIP     string `json:"dst_ip"`
+	Protocol  string `json:"protocol"`
+	Action    string `json:"action"`
+	SrcPort   int    `json:"src_port"`
+	DstPort   int    `json:"dst_port"`
+	RawLine   string `json:"raw_line"`
+}
+
+var validActions = []string{"ACCEPT", "DROP", "REJECT"}
+var validDirections = []string{"IN", "OUT"}
+
+// Validate checks that the LogEvent fields are well-formed.
+// Empty optional fields are allowed, but if present they must be valid.
+// Returns (true, "") if valid, or (false, reason) if invalid.
+func (e *LogEvent) Validate() (bool, string) {
+	if e.SrcIP != "" && net.ParseIP(e.SrcIP) == nil {
+		return false, fmt.Sprintf("invalid src_ip: %s", e.SrcIP)
+	}
+	if e.DstIP != "" && net.ParseIP(e.DstIP) == nil {
+		return false, fmt.Sprintf("invalid dst_ip: %s", e.DstIP)
+	}
+	if e.SrcPort < 0 || e.SrcPort > 65535 {
+		return false, fmt.Sprintf("src_port out of range: %d", e.SrcPort)
+	}
+	if e.DstPort < 0 || e.DstPort > 65535 {
+		return false, fmt.Sprintf("dst_port out of range: %d", e.DstPort)
+	}
+	if e.Action != "" && !slices.Contains(validActions, e.Action) {
+		return false, fmt.Sprintf("invalid action: %s", e.Action)
+	}
+	if e.Direction != "" && !slices.Contains(validDirections, e.Direction) {
+		return false, fmt.Sprintf("invalid direction: %s", e.Direction)
+	}
+	return true, ""
+}
 
 // Hub interfaces to avoid import cycles
 type SSEBroadcaster interface {
@@ -38,9 +80,6 @@ const (
 	logHubKey contextKey = "log_hub"
 	hostIDKey contextKey = "host_id"
 )
-
-// Rate limiter for agent check-rotation endpoint
-var checkRotationRateLimiter = middleware.NewRateLimiter(30, time.Minute)
 
 // SSEHubFromContext returns the SSEHub from context (set by API middleware)
 func SSEHubFromContext(ctx context.Context) SSEBroadcaster {
@@ -77,12 +116,13 @@ func AgentAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		tokenString := authHeader[7:]
 
 		// Parse token
-		secret, err := requireEnv("RUNIC_AGENT_JWT_SECRET")
+		secretStr, err := db.GetSecret("agent_jwt_secret")
 		if err != nil {
-			runiclog.Error("JWT secret not configured error", "error", err)
+			runiclog.Error("JWT secret not configured", "error", err)
 			http.Error(w, `{"error": "server misconfiguration"}`, http.StatusInternalServerError)
 			return
 		}
+		secret := []byte(secretStr)
 
 		token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
 			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
@@ -123,16 +163,7 @@ func AgentAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 
 // RegisterAgent handles agent registration.
 func RegisterAgent(w http.ResponseWriter, r *http.Request) {
-	var input struct {
-		Hostname     string `json:"hostname"`
-		IP           string `json:"ip"`
-		OSType       string `json:"os_type"`
-		Arch         string `json:"arch"`
-		Kernel       string `json:"kernel"`
-		AgentVersion string `json:"agent_version"`
-		HasDocker    bool   `json:"has_docker"`
-		HasIPSet     *bool  `json:"has_ipset"`
-	}
+	var input models.AgentRegisterRequest
 
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		http.Error(w, `{"error": "invalid JSON"}`, http.StatusBadRequest)
@@ -152,15 +183,43 @@ func RegisterAgent(w http.ResponseWriter, r *http.Request) {
 	err := db.DB.QueryRowContext(ctx, "SELECT id, agent_token FROM peers WHERE hostname = ?", input.Hostname).Scan(&existingID, &existingToken)
 
 	if err == sql.ErrNoRows {
-		// New server — create record
-		hmacKey := GenerateHMACKey()
+		// New server — require valid registration token
+		if input.RegistrationToken == "" {
+			http.Error(w, `{"error": "registration token required"}`, http.StatusUnauthorized)
+			return
+		}
+
+		// Atomic consume: validates AND consumes in single query
+		consumed, err := ConsumeRegistrationToken(input.RegistrationToken, input.Hostname)
+		if err != nil {
+			runiclog.Error("Failed to consume registration token", "error", err)
+			http.Error(w, `{"error": "internal server error"}`, http.StatusInternalServerError)
+			return
+		}
+		if !consumed {
+			http.Error(w, `{"error": "invalid registration token"}`, http.StatusUnauthorized)
+			return
+		}
+
+		// Token consumed — now create the peer
+		hmacKey, err := GenerateHMACKey()
+		if err != nil {
+			runiclog.Error("Failed to generate HMAC key", "error", err)
+			http.Error(w, `{"error": "failed to generate HMAC key"}`, http.StatusInternalServerError)
+			return
+		}
 		agentToken, err := generateAgentToken(input.Hostname)
 		if err != nil {
 			runiclog.Error("Failed to generate agent token error", "error", err)
 			http.Error(w, `{"error": "failed to generate agent token"}`, http.StatusInternalServerError)
 			return
 		}
-		agentKey := generateAgentKey()
+		agentKey, err := generateAgentKey()
+		if err != nil {
+			runiclog.Error("Failed to generate agent key", "error", err)
+			http.Error(w, `{"error": "failed to generate agent key"}`, http.StatusInternalServerError)
+			return
+		}
 
 		_, err = db.DB.ExecContext(ctx, `INSERT INTO peers (hostname, ip_address, os_type, arch, has_docker, has_ipset, agent_key, agent_token, hmac_key, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'online')`, input.Hostname, input.IP, input.OSType, input.Arch, input.HasDocker, input.HasIPSet, agentKey, agentToken, hmacKey)
 		if err != nil {
@@ -186,6 +245,7 @@ func RegisterAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Existing server — always generate fresh token (handles token expiration)
+	// Re-registration does NOT require a registration token
 	hostID := fmt.Sprintf("host-%s", input.Hostname)
 
 	// Always generate fresh token for re-registration
@@ -291,7 +351,7 @@ func SubmitLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var input struct {
-		Events []map[string]interface{} `json:"events"`
+		Events []LogEvent `json:"events"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
@@ -299,58 +359,31 @@ func SubmitLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Insert log events (simplified — in production would batch insert)
-	eventCount := 0
+	accepted := 0
+	skipped := 0
+
 	for _, ev := range input.Events {
-		// Extract fields
-		timestamp, _ := ev["timestamp"].(string)
-		direction, _ := ev["direction"].(string)
-		srcIP, _ := ev["src_ip"].(string)
-		dstIP, _ := ev["dst_ip"].(string)
-		protocol, _ := ev["protocol"].(string)
-		action, _ := ev["action"].(string)
-		rawLine, _ := ev["raw_line"].(string)
-
-		// Get port values if present
-		srcPort := 0
-		if spt, ok := ev["src_port"].(float64); ok {
-			srcPort = int(spt)
-		}
-		dstPort := 0
-		if dpt, ok := ev["dst_port"].(float64); ok {
-			dstPort = int(dpt)
-		}
-
-		_, err := db.DB.ExecContext(r.Context(), `INSERT INTO firewall_logs (peer_id, timestamp, direction, src_ip, dst_ip, protocol, src_port, dst_port, action, raw_line) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, serverID, timestamp, direction, srcIP, dstIP, protocol, srcPort, dstPort, action, rawLine)
-		if err == nil {
-			eventCount++
-		}
-	}
-
-	// Fan out to WebSocket clients
-	for _, ev := range input.Events {
-		if ev["action"] == nil {
+		if valid, reason := ev.Validate(); !valid {
+			runiclog.Warn("Skipping invalid log event", "reason", reason)
+			skipped++
 			continue
 		}
-		action, ok := ev["action"].(string)
-		if !ok {
+
+		_, err := db.DB.ExecContext(r.Context(), `INSERT INTO firewall_logs (peer_id, timestamp, direction, src_ip, dst_ip, protocol, src_port, dst_port, action, raw_line) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, serverID, ev.Timestamp, ev.Direction, ev.SrcIP, ev.DstIP, ev.Protocol, ev.SrcPort, ev.DstPort, ev.Action, ev.RawLine)
+		if err != nil {
+			runiclog.Error("Failed to insert log event", "error", err)
+			skipped++
 			continue
 		}
+		accepted++
+
+		// Fan out to WebSocket clients
 		event := models.LogEvent{
-			PeerID: fmt.Sprintf("%d", serverID),
-			Action: action,
-		}
-		if v, ok := ev["src_ip"].(string); ok {
-			event.SrcIP = v
-		}
-		if v, ok := ev["dst_ip"].(string); ok {
-			event.DstIP = v
-		}
-		if v, ok := ev["protocol"].(string); ok {
-			event.Protocol = v
-		}
-		if hostname, ok := ev["hostname"].(string); ok {
-			event.Hostname = hostname
+			PeerID:   fmt.Sprintf("%d", serverID),
+			Action:   ev.Action,
+			SrcIP:    ev.SrcIP,
+			DstIP:    ev.DstIP,
+			Protocol: ev.Protocol,
 		}
 		if hub := LogHubFromContext(r.Context()); hub != nil {
 			hub.Broadcast(event)
@@ -358,7 +391,8 @@ func SubmitLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	common.RespondJSON(w, http.StatusOK, map[string]interface{}{
-		"accepted": eventCount,
+		"accepted": accepted,
+		"skipped":  skipped,
 	})
 }
 
@@ -524,12 +558,6 @@ func MakeHandleSSEventsHandler(hub SSEBroadcaster) http.HandlerFunc {
 func AgentCheckRotation(w http.ResponseWriter, r *http.Request) {
 	hostID, serverID, ok := getHostIDFromContext(w, r)
 	if !ok {
-		return
-	}
-
-	// Rate limiting
-	if checkRotationRateLimiter.Check(r.RemoteAddr) != nil {
-		common.RespondJSON(w, http.StatusTooManyRequests, map[string]string{"error": "rate limit exceeded"})
 		return
 	}
 

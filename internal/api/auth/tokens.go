@@ -1,11 +1,13 @@
 package auth
 
 import (
+	"log"
 	"net/http"
 	"time"
 
 	"runic/internal/api/common"
 	"runic/internal/auth"
+	"runic/internal/db"
 )
 
 // Token TTL constants.
@@ -22,11 +24,19 @@ type TokenResponse struct {
 
 // GenerateTokenPair generates an access token (1h TTL) and refresh token (7d TTL).
 func GenerateTokenPair(username string) (accessToken string, refreshToken string, err error) {
-	accessToken, err = auth.GenerateToken(username, AccessTokenTTL)
+	// Look up user's role from database
+	var role string
+	err = db.DB.QueryRow("SELECT role FROM users WHERE username = ?", username).Scan(&role)
+	if err != nil {
+		log.Printf("WARNING: failed to look up role for %s, defaulting to viewer: %v", username, err)
+		role = "viewer"
+	}
+
+	accessToken, err = auth.GenerateToken(username, role, AccessTokenTTL)
 	if err != nil {
 		return "", "", err
 	}
-	refreshToken, err = auth.GenerateToken(username, RefreshTokenTTL)
+	refreshToken, err = auth.GenerateToken(username, role, RefreshTokenTTL)
 	if err != nil {
 		return "", "", err
 	}

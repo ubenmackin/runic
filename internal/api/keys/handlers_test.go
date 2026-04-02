@@ -1,36 +1,47 @@
 package keys
 
 import (
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/gorilla/mux"
+	_ "github.com/mattn/go-sqlite3"
+	"runic/internal/db"
 )
 
-func setupTestEnv(t *testing.T) (string, func()) {
+func setupTestDB(t *testing.T) func() {
 	t.Helper()
 
-	// Create temp directory for .env file
-	tempDir := t.TempDir()
-	envPath := filepath.Join(tempDir, ".env")
-
-	// Override the env path
-	original := os.Getenv("RUNIC_ENV_PATH")
-	os.Setenv("RUNIC_ENV_PATH", envPath)
-
-	cleanup := func() {
-		if original != "" {
-			os.Setenv("RUNIC_ENV_PATH", original)
-		} else {
-			os.Unsetenv("RUNIC_ENV_PATH")
-		}
+	// Create in-memory SQLite database
+	sqlDB, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("failed to open test database: %v", err)
 	}
 
-	return envPath, cleanup
+	// Create system_config table
+	_, err = sqlDB.Exec(`
+		CREATE TABLE system_config (
+			key TEXT PRIMARY KEY,
+			value TEXT NOT NULL,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)
+	`)
+	if err != nil {
+		t.Fatalf("failed to create system_config table: %v", err)
+	}
+
+	// Save original DB and replace with test DB
+	originalDB := db.DB
+	db.DB = db.New(sqlDB)
+
+	return func() {
+		db.DB = originalDB
+		sqlDB.Close()
+	}
 }
 
 func setupRouter() *mux.Router {
@@ -42,7 +53,7 @@ func setupRouter() *mux.Router {
 }
 
 func TestListKeys_Empty(t *testing.T) {
-	_, cleanup := setupTestEnv(t)
+	cleanup := setupTestDB(t)
 	defer cleanup()
 
 	router := setupRouter()
@@ -72,7 +83,7 @@ func TestListKeys_Empty(t *testing.T) {
 }
 
 func TestCreateKey_Success(t *testing.T) {
-	envPath, cleanup := setupTestEnv(t)
+	cleanup := setupTestDB(t)
 	defer cleanup()
 
 	router := setupRouter()
@@ -85,20 +96,28 @@ func TestCreateKey_Success(t *testing.T) {
 		t.Errorf("CreateKey() status = %d, want %d", rec.Code, http.StatusOK)
 	}
 
-	// Verify .env file was created
-	data, err := os.ReadFile(envPath)
-	if err != nil {
-		t.Fatalf("failed to read .env file: %v", err)
+	var resp map[string]interface{}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
 	}
 
-	content := string(data)
-	if len(content) == 0 {
-		t.Error(".env file is empty after creating key")
+	if exists, ok := resp["exists"].(bool); !ok || !exists {
+		t.Error("CreateKey() should return exists=true")
+	}
+
+	// Verify key is stored in system_config table
+	var value string
+	err := db.DB.QueryRow("SELECT value FROM system_config WHERE key = ?", "jwt_secret").Scan(&value)
+	if err != nil {
+		t.Fatalf("jwt_secret not found in system_config: %v", err)
+	}
+	if len(value) == 0 {
+		t.Error("jwt_secret value is empty")
 	}
 }
 
 func TestCreateKey_InvalidType(t *testing.T) {
-	_, cleanup := setupTestEnv(t)
+	cleanup := setupTestDB(t)
 	defer cleanup()
 
 	router := setupRouter()
@@ -113,7 +132,7 @@ func TestCreateKey_InvalidType(t *testing.T) {
 }
 
 func TestDeleteKey_Success(t *testing.T) {
-	envPath, cleanup := setupTestEnv(t)
+	cleanup := setupTestDB(t)
 	defer cleanup()
 
 	router := setupRouter()
@@ -127,6 +146,13 @@ func TestDeleteKey_Success(t *testing.T) {
 		t.Fatalf("CreateKey() failed: status = %d", createRec.Code)
 	}
 
+	// Verify key exists
+	var value string
+	err := db.DB.QueryRow("SELECT value FROM system_config WHERE key = ?", "jwt_secret").Scan(&value)
+	if err != nil {
+		t.Fatalf("jwt_secret not found in system_config after create: %v", err)
+	}
+
 	// Delete the key
 	deleteReq := httptest.NewRequest(http.MethodDelete, "/api/v1/setup-keys/jwt-secret", nil)
 	deleteRec := httptest.NewRecorder()
@@ -136,20 +162,15 @@ func TestDeleteKey_Success(t *testing.T) {
 		t.Errorf("DeleteKey() status = %d, want %d", deleteRec.Code, http.StatusOK)
 	}
 
-	// Verify key was removed from .env
-	data, err := os.ReadFile(envPath)
-	if err != nil {
-		t.Fatalf("failed to read .env file: %v", err)
-	}
-
-	content := string(data)
-	if len(content) > 0 {
-		t.Error(".env file should be empty after deleting key")
+	// Verify key was removed from system_config
+	err = db.DB.QueryRow("SELECT value FROM system_config WHERE key = ?", "jwt_secret").Scan(&value)
+	if err != sql.ErrNoRows {
+		t.Error("jwt_secret should have been removed from system_config")
 	}
 }
 
 func TestDeleteKey_NonExistent(t *testing.T) {
-	_, cleanup := setupTestEnv(t)
+	cleanup := setupTestDB(t)
 	defer cleanup()
 
 	router := setupRouter()
@@ -160,5 +181,42 @@ func TestDeleteKey_NonExistent(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("DeleteKey() status = %d, want %d", rec.Code, http.StatusOK)
+	}
+}
+
+func TestListKeys_AfterCreate(t *testing.T) {
+	cleanup := setupTestDB(t)
+	defer cleanup()
+
+	router := setupRouter()
+
+	// Create jwt-secret
+	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/setup-keys/jwt-secret", nil)
+	createRec := httptest.NewRecorder()
+	router.ServeHTTP(createRec, createReq)
+
+	if createRec.Code != http.StatusOK {
+		t.Fatalf("CreateKey() failed: status = %d", createRec.Code)
+	}
+
+	// List keys and verify jwt-secret shows exists=true
+	listReq := httptest.NewRequest(http.MethodGet, "/api/v1/setup-keys", nil)
+	listRec := httptest.NewRecorder()
+	router.ServeHTTP(listRec, listReq)
+
+	var keys []map[string]interface{}
+	if err := json.NewDecoder(listRec.Body).Decode(&keys); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	for _, k := range keys {
+		keyType := k["type"].(string)
+		exists := k["exists"].(bool)
+		if keyType == "jwt-secret" && !exists {
+			t.Error("jwt-secret should exist after creation")
+		}
+		if keyType == "agent-jwt-secret" && exists {
+			t.Error("agent-jwt-secret should not exist (was not created)")
+		}
 	}
 }

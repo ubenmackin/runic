@@ -8,11 +8,13 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+
+	"runic/internal/db"
 )
 
 // contextKey is an unexported type for context keys in this package,
@@ -22,35 +24,45 @@ type contextKey string
 const (
 	ctxKeyUsername contextKey = "username"
 	ctxKeyUniqueID contextKey = "unique_id"
+	ctxKeyRole     contextKey = "role"
 )
 
-var JwtKey []byte
+var (
+	JwtKey   []byte
+	JwtKeyMu sync.RWMutex
+)
 
-func init() {
-	envKey := os.Getenv("RUNIC_JWT_SECRET")
-	if envKey != "" {
-		JwtKey = []byte(envKey)
-	} else if os.Getenv("ENV") == "production" {
-		log.Fatal("RUNIC_JWT_SECRET must be set in production")
-	} else {
-		// Generate a random key for development instead of a hardcoded constant.
-		// This means tokens don't survive server restarts in dev mode, which is acceptable.
-		key := make([]byte, 32)
-		if _, err := rand.Read(key); err != nil {
-			log.Fatal("failed to generate random dev JWT key")
-		}
-		JwtKey = key
-		log.Println("WARNING: using random JWT key in development mode (tokens will not persist across restarts)")
+// InitJwtKey initializes the JWT key from the database or generates a random one.
+// Must be called after database initialization.
+func InitJwtKey() error {
+	secret, err := db.GetSecret("jwt_secret")
+	if err == nil && secret != "" {
+		JwtKeyMu.Lock()
+		JwtKey = []byte(secret)
+		JwtKeyMu.Unlock()
+		return nil
 	}
+
+	// Generate random key as fallback
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		return fmt.Errorf("failed to generate random JWT key: %w", err)
+	}
+	JwtKeyMu.Lock()
+	JwtKey = key
+	JwtKeyMu.Unlock()
+	log.Println("WARNING: using random JWT key (no jwt_secret found in database)")
+	return nil
 }
 
 type Claims struct {
 	Username string `json:"username"`
 	UniqueID string `json:"unique_id"`
+	Role     string `json:"role"`
 	jwt.RegisteredClaims
 }
 
-func GenerateToken(username string, duration time.Duration) (string, error) {
+func GenerateToken(username string, role string, duration time.Duration) (string, error) {
 	now := time.Now()
 	expirationTime := now.Add(duration)
 
@@ -64,6 +76,7 @@ func GenerateToken(username string, duration time.Duration) (string, error) {
 	claims := &Claims{
 		Username: username,
 		UniqueID: uniqueID,
+		Role:     role,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expirationTime),
 			IssuedAt:  jwt.NewNumericDate(now),
@@ -71,11 +84,15 @@ func GenerateToken(username string, duration time.Duration) (string, error) {
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	JwtKeyMu.RLock()
+	defer JwtKeyMu.RUnlock()
 	return token.SignedString(JwtKey)
 }
 
 func ValidateToken(tokenString string) (*Claims, error) {
 	claims := &Claims{}
+	JwtKeyMu.RLock()
+	defer JwtKeyMu.RUnlock()
 	token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
 		// Verify the signing algorithm to prevent algorithm confusion attacks.
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
@@ -171,6 +188,7 @@ func Middleware(next http.Handler) http.Handler {
 		// Add claims to context using typed keys to prevent collisions
 		ctx := context.WithValue(r.Context(), ctxKeyUsername, claims.Username)
 		ctx = context.WithValue(ctx, ctxKeyUniqueID, claims.UniqueID)
+		ctx = context.WithValue(ctx, ctxKeyRole, claims.Role)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
@@ -186,6 +204,14 @@ func UsernameFromContext(ctx context.Context) string {
 // UniqueIDFromContext extracts the token's unique ID from the request context.
 func UniqueIDFromContext(ctx context.Context) string {
 	if v, ok := ctx.Value(ctxKeyUniqueID).(string); ok {
+		return v
+	}
+	return ""
+}
+
+// RoleFromContext extracts the user's role from the request context.
+func RoleFromContext(ctx context.Context) string {
+	if v, ok := ctx.Value(ctxKeyRole).(string); ok {
 		return v
 	}
 	return ""

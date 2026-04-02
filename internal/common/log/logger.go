@@ -126,3 +126,13 @@ func WarnContext(ctx context.Context, msg string, args ...any) {
 func ErrorContext(ctx context.Context, msg string, args ...any) {
 	LCtx(ctx).Error(msg, args...)
 }
+
+// LevelFatal is a custom log level for fatal errors (above Error=8).
+const LevelFatal = slog.Level(12)
+
+// Fatal logs a message at FatalLevel with key-value pairs and then calls os.Exit(1).
+// Use only in main packages for truly unrecoverable errors.
+func Fatal(msg string, args ...any) {
+	L().Log(context.Background(), LevelFatal, msg, args...)
+	os.Exit(1)
+}

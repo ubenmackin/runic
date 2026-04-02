@@ -10,6 +10,7 @@ import { useToastContext } from '../hooks/ToastContext'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 import { useTableFilter } from '../hooks/useTableFilter'
 import { useCrudMutations } from '../hooks/useCrudMutations'
+import { useAuth } from '../hooks/useAuth'
 import ConfirmModal from '../components/ConfirmModal'
 import SearchableSelect from '../components/SearchableSelect'
 import ToggleSwitch from '../components/ToggleSwitch'
@@ -35,6 +36,7 @@ const SPECIAL_TARGETS = {
 export default function Policies() {
   const qc = useQueryClient()
   const showToast = useToastContext()
+  const { canEdit } = useAuth()
   const { modalOpen, setModalOpen, editItem: editPolicy, setEditItem: setEditPolicy, form: formData, setForm: setFormData, setFormForEdit, handleOpenAdd, handleCancel } = useCrudModal({ 
     name: '', 
     description: '', 
@@ -264,9 +266,11 @@ const data = await api.post('/policies/preview', {
               <RefreshCw className={`w-4 h-4 ${isManualRefreshing ? 'animate-spin' : ''}`} />
               Refresh
             </button>
-            <button onClick={openAdd} className="flex items-center gap-2 px-4 py-2 bg-purple-active hover:bg-purple-active/80 text-white text-sm font-medium rounded-lg">
-              <Plus className="w-4 h-4" /> New Policy
-            </button>
+            {canEdit && (
+              <button onClick={openAdd} className="flex items-center gap-2 px-4 py-2 bg-purple-active hover:bg-purple-active/80 text-white text-sm font-medium rounded-lg">
+                <Plus className="w-4 h-4" /> New Policy
+              </button>
+            )}
           </>
         }
       />
@@ -431,12 +435,16 @@ const data = await api.post('/policies/preview', {
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
-                        <button onClick={() => openEdit(p)} className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded" title="Edit">
-                          <Pencil className="w-4 h-4 text-gray-500" />
-                        </button>
-                        <button onClick={() => setDeleteTarget(p)} className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded" title="Delete">
-                          <Trash2 className="w-4 h-4 text-red-500" />
-                        </button>
+                        {canEdit && (
+                          <button onClick={() => openEdit(p)} className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded" title="Edit">
+                            <Pencil className="w-4 h-4 text-gray-500" />
+                          </button>
+                        )}
+                        {canEdit && (
+                          <button onClick={() => setDeleteTarget(p)} className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded" title="Delete">
+                            <Trash2 className="w-4 h-4 text-red-500" />
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>

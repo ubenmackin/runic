@@ -146,7 +146,9 @@ func main() {
 	if dbPath == "" {
 		dbPath = "./runic.db"
 	}
-	db.InitDB(dbPath)
+	if err := db.InitDB(dbPath); err != nil {
+		log.Fatalf("Failed to initialize database: %v", err)
+	}
 
 	downloadsDir := os.Getenv("RUNIC_DOWNLOADS_DIR")
 	if downloadsDir == "" {
@@ -204,11 +206,15 @@ func main() {
 		}
 	})
 
+	// Create root context for graceful shutdown
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	// Start offline detector goroutine
-	go startOfflineDetector()
+	go startOfflineDetector(ctx)
 
 	// Start token revocation cleanup goroutine (prunes expired entries hourly)
-	go startTokenCleanup()
+	go startTokenCleanup(ctx)
 
 	// Configure TLS with modern cipher suites and minimum version TLS 1.2
 	tlsConfig := &tls.Config{
@@ -246,16 +252,42 @@ func main() {
 
 	<-sigCh
 	log.Println("Received shutdown signal...")
-	os.Exit(0)
+
+	// Cancel context to signal background goroutines to stop
+	cancel()
+
+	// Create shutdown context with timeout
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer shutdownCancel()
+
+	// Gracefully shutdown HTTP server
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Printf("HTTP server shutdown error: %v", err)
+	}
+
+	// Stop rate limiter cleanup goroutines
+	apiInstance.Stop()
+
+	// Close database connection
+	if db.DB != nil {
+		if err := db.DB.Close(); err != nil {
+			log.Printf("Database close error: %v", err)
+		}
+	}
+
+	log.Println("Server shut down gracefully")
 }
 
 // startOfflineDetector marks peers as offline if they haven't sent a heartbeat in 90 seconds.
-func startOfflineDetector() {
+func startOfflineDetector(ctx context.Context) {
 	ticker := time.NewTicker(constants.OfflineDetectorInterval)
 	defer ticker.Stop()
 
 	for {
 		select {
+		case <-ctx.Done():
+			log.Println("Offline detector shutting down")
+			return
 		case <-ticker.C:
 			ctx := context.Background()
 			_, err := db.DB.ExecContext(ctx,
@@ -271,12 +303,15 @@ func startOfflineDetector() {
 }
 
 // startTokenCleanup periodically removes expired entries from the revoked_tokens table.
-func startTokenCleanup() {
+func startTokenCleanup(ctx context.Context) {
 	ticker := time.NewTicker(constants.OfflineCleanupInterval)
 	defer ticker.Stop()
 
 	for {
 		select {
+		case <-ctx.Done():
+			log.Println("Token cleanup shutting down")
+			return
 		case <-ticker.C:
 			ctx := context.Background()
 			if err := auth.CleanupExpiredTokens(ctx); err != nil {

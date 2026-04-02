@@ -1,14 +1,16 @@
 import { useState, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Trash2, Plus, Shield, Key } from 'lucide-react'
+import { Lock, Trash2, Plus, Shield, Key } from 'lucide-react'
 import { api } from '../api/client'
 import { useToastContext } from '../hooks/ToastContext'
 import { useFocusTrap } from '../hooks/useFocusTrap'
+import { useAuth } from '../hooks/useAuth'
 import PageHeader from '../components/PageHeader'
 
 export default function Settings() {
   const qc = useQueryClient()
   const showToast = useToastContext()
+  const { isAdmin } = useAuth()
   const [showDeleteModal, setShowDeleteModal] = useState(null)
   const [showCreateModal, setShowCreateModal] = useState(null)
   const deleteModalRef = useRef(null)
@@ -19,6 +21,7 @@ export default function Settings() {
   const { data: keys, isLoading } = useQuery({
     queryKey: ['setup-keys'],
     queryFn: () => api.get('/setup-keys'),
+    enabled: isAdmin,
   })
 
   const deleteMutation = useMutation({
@@ -60,6 +63,19 @@ export default function Settings() {
         title="Settings"
         description="Configure your Runic installation"
       />
+
+      {!isAdmin ? (
+        <div className="bg-white dark:bg-charcoal-dark rounded-lg shadow">
+          <div className="p-12 text-center">
+            <Lock className="w-12 h-12 text-gray-400 dark:text-gray-500 mx-auto mb-4" />
+            <h2 className="text-xl font-semibold text-gray-900 dark:text-light-neutral mb-2">Access Denied</h2>
+            <p className="text-gray-600 dark:text-amber-muted">
+              Only administrators can access Settings. Please contact an admin if you need to make changes.
+            </p>
+          </div>
+        </div>
+      ) : (
+        <>
 
       {/* JWT Secret Section */}
       <div className="bg-white dark:bg-charcoal-dark rounded-lg shadow">
@@ -185,6 +201,8 @@ export default function Settings() {
             </div>
           </div>
         </div>
+      )}
+        </>
       )}
     </div>
   )

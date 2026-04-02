@@ -9,6 +9,7 @@ import { useToastContext } from '../hooks/ToastContext'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 import { useTableFilter } from '../hooks/useTableFilter'
 import { useCrudMutations } from '../hooks/useCrudMutations'
+import { useAuth } from '../hooks/useAuth'
 import ConfirmModal from '../components/ConfirmModal'
 import InlineError from '../components/InlineError'
 import EmptyState from '../components/EmptyState'
@@ -37,6 +38,7 @@ const USER_PROTOCOL_OPTIONS = [
 
 export default function Services() {
   const showToast = useToastContext()
+  const { canEdit } = useAuth()
   const { modalOpen, setModalOpen, editItem: editService, setEditItem: setEditService, form: formData, setForm: setFormData, setFormForEdit, handleOpenAdd, handleCancel: closeModal } = useCrudModal({ name: '', protocol: 'tcp', ports: '', source_ports: '', description: '' })
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [formErrors, setFormErrors] = useState({})
@@ -318,9 +320,11 @@ const handleSourcePortInputKeyDown = (e) => {
               <RefreshCw className={`w-4 h-4 ${isManualRefreshing ? 'animate-spin' : ''}`} />
               Refresh
             </button>
-            <button onClick={openAdd} className="flex items-center gap-2 px-4 py-2 bg-purple-active hover:bg-purple-active/80 text-white text-sm font-medium rounded-lg">
-              <Plus className="w-4 h-4" /> New Service
-            </button>
+            {canEdit && (
+              <button onClick={openAdd} className="flex items-center gap-2 px-4 py-2 bg-purple-active hover:bg-purple-active/80 text-white text-sm font-medium rounded-lg">
+                <Plus className="w-4 h-4" /> New Service
+              </button>
+            )}
           </>
         }
       />
@@ -423,15 +427,18 @@ const handleSourcePortInputKeyDown = (e) => {
                     </td>
                     <td className="px-4 py-3">
           <div className="flex items-center gap-2">
-            <button
-                          onClick={(e) => { e.stopPropagation(); openEdit(service) }}
-                          className={`p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded ${service.is_system ? 'text-gray-400 cursor-not-allowed opacity-50' : ''}`}
-                          disabled={service.is_system}
-                          title={service.is_system ? "System services cannot be edited" : "Edit"}
-                        >
-                          <Pencil className={`w-4 h-4 ${service.is_system ? 'text-gray-400' : 'text-gray-900 dark:text-white'}`} />
-                        </button>
-<button
+            {canEdit && (
+              <button
+                onClick={(e) => { e.stopPropagation(); openEdit(service) }}
+                className={`p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded ${service.is_system ? 'text-gray-400 cursor-not-allowed opacity-50' : ''}`}
+                disabled={service.is_system}
+                title={service.is_system ? "System services cannot be edited" : "Edit"}
+              >
+                <Pencil className={`w-4 h-4 ${service.is_system ? 'text-gray-400' : 'text-gray-900 dark:text-white'}`} />
+              </button>
+            )}
+            {canEdit && (
+              <button
                 onClick={(e) => { e.stopPropagation(); !service.is_system && setDeleteTarget(service) }}
                 disabled={service.is_system}
                 className={`p-1.5 rounded ${service.is_system ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-100 dark:hover:bg-charcoal-darkest'}`}
@@ -439,7 +446,8 @@ const handleSourcePortInputKeyDown = (e) => {
               >
                 <Trash2 className="w-4 h-4 text-red-500" />
               </button>
-                      </div>
+            )}
+          </div>
                     </td>
                   </tr>
                 ))}

@@ -2,7 +2,7 @@ package policies
 
 import (
 	"encoding/json"
-	"fmt"
+	"log"
 	"net/http"
 
 	"runic/internal/api/common"
@@ -88,6 +88,10 @@ func MakeCreatePolicyHandler(compiler *engine.Compiler) http.HandlerFunc {
 			common.RespondError(w, http.StatusBadRequest, "invalid JSON")
 			return
 		}
+		if len(input.Name) > 255 {
+			common.RespondError(w, http.StatusBadRequest, "policy name must not exceed 255 characters")
+			return
+		}
 		if input.Name == "" || input.SourceID == 0 || input.SourceType == "" || input.ServiceID == 0 || input.TargetID == 0 || input.TargetType == "" {
 			common.RespondError(w, http.StatusBadRequest, "name, source_id, source_type, service_id, target_id, and target_type are required")
 			return
@@ -131,7 +135,8 @@ func MakeCreatePolicyHandler(compiler *engine.Compiler) http.HandlerFunc {
 			input.Name, input.Description, input.SourceID, input.SourceType, input.ServiceID,
 			input.TargetID, input.TargetType, input.Action, input.Priority, enabled, input.TargetScope, input.Direction)
 		if err != nil {
-			common.RespondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create policy: %v", err))
+			log.Printf("ERROR: failed to create policy: %v", err)
+			common.InternalError(w)
 			return
 		}
 
@@ -210,6 +215,14 @@ func MakeUpdatePolicyHandler(compiler *engine.Compiler) http.HandlerFunc {
 			common.RespondError(w, http.StatusBadRequest, "invalid JSON")
 			return
 		}
+		if len(input.Name) > 255 {
+			common.RespondError(w, http.StatusBadRequest, "policy name must not exceed 255 characters")
+			return
+		}
+		if input.Name == "" {
+			common.RespondError(w, http.StatusBadRequest, "name is required")
+			return
+		}
 		if input.SourceType != "" && !isValidSourceType(input.SourceType) {
 			common.RespondError(w, http.StatusBadRequest, "source_type must be one of: peer, group, special")
 			return
@@ -248,14 +261,16 @@ func MakeUpdatePolicyHandler(compiler *engine.Compiler) http.HandlerFunc {
 			input.Name, input.Description, input.SourceID, input.SourceType, input.ServiceID,
 			input.TargetID, input.TargetType, input.Action, input.Priority, enabled, input.TargetScope, input.Direction, id)
 		if err != nil {
-			common.RespondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to update policy: %v", err))
+			log.Printf("ERROR: failed to update policy: %v", err)
+			common.InternalError(w)
 			return
 		}
 
 		// Check if any rows were updated
 		rowsAffected, err := result.RowsAffected()
 		if err != nil {
-			common.RespondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to check update result: %v", err))
+			log.Printf("ERROR: failed to check update result: %v", err)
+			common.InternalError(w)
 			return
 		}
 		if rowsAffected == 0 {
@@ -296,7 +311,8 @@ func MakeDeletePolicyHandler(compiler *engine.Compiler) http.HandlerFunc {
 		// Delete the policy
 		res, err := db.DB.ExecContext(r.Context(), "DELETE FROM policies WHERE id = ?", id)
 		if err != nil {
-			common.RespondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to delete policy: %v", err))
+			log.Printf("ERROR: failed to delete policy: %v", err)
+			common.InternalError(w)
 			return
 		}
 
@@ -354,7 +370,8 @@ func MakePolicyPreviewHandler(compiler *engine.Compiler) http.HandlerFunc {
 		// Generate rules using the policy-centric preview function
 		rules, err := compiler.PreviewCompile(r.Context(), req.PeerID, req.SourceID, req.SourceType, req.TargetID, req.TargetType, req.ServiceID, req.Direction, req.TargetScope)
 		if err != nil {
-			http.Error(w, "Failed to generate preview: "+err.Error(), http.StatusInternalServerError)
+			log.Printf("ERROR: failed to generate preview: %v", err)
+			http.Error(w, `{"error": "failed to generate preview"}`, http.StatusInternalServerError)
 			return
 		}
 
@@ -383,7 +400,8 @@ func MakePatchPolicyHandler(compiler *engine.Compiler) http.HandlerFunc {
 		}
 		result, err := db.DB.ExecContext(r.Context(), "UPDATE policies SET enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", *input.Enabled, id)
 		if err != nil {
-			common.RespondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to update policy: %v", err))
+			log.Printf("ERROR: failed to update policy: %v", err)
+			common.InternalError(w)
 			return
 		}
 		rowsAffected, _ := result.RowsAffected()

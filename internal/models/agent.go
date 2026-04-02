@@ -2,14 +2,15 @@ package models
 
 // AgentRegisterRequest is the payload sent during agent registration.
 type AgentRegisterRequest struct {
-	Hostname     string `json:"hostname"`
-	IP           string `json:"ip"`
-	OSType       string `json:"os_type"`
-	Arch         string `json:"arch"`
-	Kernel       string `json:"kernel"`
-	AgentVersion string `json:"agent_version"`
-	HasDocker    bool   `json:"has_docker"`
-	HasIPSet     *bool  `json:"has_ipset"`
+	Hostname          string `json:"hostname"`
+	IP                string `json:"ip"`
+	OSType            string `json:"os_type"`
+	Arch              string `json:"arch"`
+	Kernel            string `json:"kernel"`
+	AgentVersion      string `json:"agent_version"`
+	HasDocker         bool   `json:"has_docker"`
+	HasIPSet          *bool  `json:"has_ipset"`
+	RegistrationToken string `json:"registration_token"`
 }
 
 // AgentRegisterResponse is the payload returned after successful agent registration.

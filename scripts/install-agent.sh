@@ -27,9 +27,10 @@ else
 fi
 
 CONTROL_PLANE_URL="${1:-}"
+REGISTRATION_TOKEN="${2:-}"
 if [ -z "$CONTROL_PLANE_URL" ]; then
-echo "Usage: install-agent.sh <control-plane-url>"
-echo "Example: install-agent.sh https://runic.home.lan:60443"
+echo "Usage: install-agent.sh <control-plane-url> <registration-token>"
+echo "Example: install-agent.sh https://runic.home.lan:60443 my-token-abc123"
 exit 1
 fi
 
@@ -144,7 +145,19 @@ esac
 # Only write config if it doesn't exist (preserve existing credentials)
 if [ ! -f /etc/runic-agent/config.json ]; then
 	echo "Creating initial config..."
-	cat > /etc/runic-agent/config.json << EOF
+	if [ -n "$REGISTRATION_TOKEN" ]; then
+		cat > /etc/runic-agent/config.json << EOF
+{
+	"control_plane_url": "${CONTROL_PLANE_URL}",
+	"registration_token": "${REGISTRATION_TOKEN}",
+	"pull_interval_seconds": 30,
+	"log_path": "/var/log/runic/firewall.log",
+	"apply_on_boot": false,
+	"apply_rules_bundle": false
+}
+EOF
+	else
+		cat > /etc/runic-agent/config.json << EOF
 {
 	"control_plane_url": "${CONTROL_PLANE_URL}",
 	"pull_interval_seconds": 30,
@@ -153,6 +166,7 @@ if [ ! -f /etc/runic-agent/config.json ]; then
 	"apply_rules_bundle": false
 }
 EOF
+	fi
 	chmod 600 /etc/runic-agent/config.json
 else
 	echo "Preserving existing config (credentials retained)"

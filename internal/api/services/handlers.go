@@ -3,6 +3,7 @@ package services
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"regexp"
 
@@ -131,7 +132,8 @@ func CreateService(w http.ResponseWriter, r *http.Request) {
 		VALUES (?, ?, ?, ?, ?, ?, 0)`,
 		input.Name, input.Ports, input.SourcePorts, input.Protocol, input.Description, input.DirectionHint)
 	if err != nil {
-		common.RespondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create service: %v", err))
+		log.Printf("ERROR: failed to create service: %v", err)
+		common.InternalError(w)
 		return
 	}
 
@@ -202,7 +204,8 @@ func UpdateService(w http.ResponseWriter, r *http.Request) {
 		`UPDATE services SET name = ?, ports = ?, source_ports = ?, protocol = ?, description = ?, direction_hint = ?
 		WHERE id = ?`, input.Name, input.Ports, input.SourcePorts, input.Protocol, input.Description, input.DirectionHint, id)
 	if err != nil {
-		common.RespondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to update service: %v", err))
+		log.Printf("ERROR: failed to update service: %v", err)
+		common.InternalError(w)
 		return
 	}
 
@@ -231,7 +234,8 @@ func DeleteService(w http.ResponseWriter, r *http.Request) {
 
 	_, err = db.DB.ExecContext(r.Context(), "DELETE FROM services WHERE id = ?", id)
 	if err != nil {
-		common.RespondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to delete service: %v", err))
+		log.Printf("ERROR: failed to delete service: %v", err)
+		common.InternalError(w)
 		return
 	}
 

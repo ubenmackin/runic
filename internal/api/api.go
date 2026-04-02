@@ -30,9 +30,13 @@ import (
 
 // API holds dependencies for the API handlers.
 type API struct {
-	Compiler *engine.Compiler
-	SSEHub   *events.SSEHub
-	LogHub   *logs.Hub
+	Compiler            *engine.Compiler
+	SSEHub              *events.SSEHub
+	LogHub              *logs.Hub
+	LoginRateLimiter    *middleware.RateLimiter
+	RegisterRateLimiter *middleware.RateLimiter
+	RefreshRateLimiter  *middleware.RateLimiter
+	DownloadRateLimiter *middleware.RateLimiter
 }
 
 // NewAPI creates a new API instance with the given compiler.
@@ -88,82 +92,118 @@ func RegisterRoutes(r *mux.Router, a *API, downloadsDir string) {
 	// API routes get stricter CSP (overwrites the general CSP)
 	apiRouter.Use(CSPForAPI())
 
+	// Per-endpoint rate limiters
+	a.LoginRateLimiter = middleware.NewRateLimiter(5, time.Minute)
+	a.RegisterRateLimiter = middleware.NewRateLimiter(10, time.Minute)
+	a.RefreshRateLimiter = middleware.NewRateLimiter(10, time.Minute)
+
 	// Public routes (no authentication required)
 	// Setup
 	apiRouter.HandleFunc("/setup", authhandlers.HandleSetup).Methods("GET")
 	apiRouter.HandleFunc("/setup", authhandlers.HandleSetup).Methods("POST")
 
 	// Login
-	apiRouter.HandleFunc("/auth/login", authhandlers.HandleLoginPOST).Methods("POST")
+	apiRouter.Handle("/auth/login", a.LoginRateLimiter.Middleware(http.HandlerFunc(authhandlers.HandleLoginPOST))).Methods("POST")
 
 	// Token refresh (public - uses refresh token, not access token)
-	apiRouter.HandleFunc("/auth/refresh", authhandlers.HandleRefreshPOST).Methods("POST")
+	apiRouter.Handle("/auth/refresh", a.RefreshRateLimiter.Middleware(http.HandlerFunc(authhandlers.HandleRefreshPOST))).Methods("POST")
 
 	// Agent registration (no auth needed)
-	apiRouter.HandleFunc("/agent/register", agents.RegisterAgent).Methods("POST")
+	apiRouter.Handle("/agent/register", a.RegisterRateLimiter.Middleware(http.HandlerFunc(agents.RegisterAgent))).Methods("POST")
 
 	// Protected routes (require JWT authentication)
 	protected := apiRouter.NewRoute().Subrouter()
 	protected.Use(auth.Middleware)
 
+	// --- Viewer routes (all authenticated users — no extra middleware) ---
+
 	// Logout
 	protected.HandleFunc("/auth/logout", authhandlers.HandleLogoutPOST).Methods("POST")
-
-	// Peers
-	protected.HandleFunc("/peers", peers.GetPeers).Methods("GET")
-	protected.HandleFunc("/peers", peers.CreatePeer).Methods("POST")
-	protected.HandleFunc("/peers/{id:[0-9]+}", peers.UpdatePeer).Methods("PUT")
-	protected.HandleFunc("/peers/{id:[0-9]+}", peers.DeletePeer).Methods("DELETE")
-	protected.HandleFunc("/peers/{id:[0-9]+}/bundle", peers.MakeGetPeerBundleHandler(a.Compiler)).Methods("GET")
-	protected.HandleFunc("/peers/{id:[0-9]+}/compile", peers.MakeCompilePeerHandler(a.Compiler)).Methods("POST")
-	protected.HandleFunc("/peers/{id:[0-9]+}/rotate-key", peers.RotatePeerKey).Methods("POST")
-
-	// Groups
-	protected.HandleFunc("/groups", groups.ListGroups).Methods("GET")
-	protected.HandleFunc("/groups", groups.CreateGroup).Methods("POST")
-	protected.HandleFunc("/groups/{id:[0-9]+}", groups.GetGroup).Methods("GET")
-	protected.HandleFunc("/groups/{id:[0-9]+}", groups.UpdateGroup).Methods("PUT")
-	protected.HandleFunc("/groups/{id:[0-9]+}", groups.DeleteGroup).Methods("DELETE")
-
-	// Group members
-	protected.HandleFunc("/groups/{id:[0-9]+}/members", groups.ListGroupMembers).Methods("GET")
-	protected.HandleFunc("/groups/{id:[0-9]+}/members", groups.MakeAddGroupMemberHandler(a.Compiler)).Methods("POST")
-	protected.HandleFunc("/groups/{groupId:[0-9]+}/members/{peerId:[0-9]+}", groups.MakeDeleteGroupMemberHandler(a.Compiler)).Methods("DELETE")
-
-	// Services
-	protected.HandleFunc("/services", services.ListServices).Methods("GET")
-	protected.HandleFunc("/services", services.CreateService).Methods("POST")
-	protected.HandleFunc("/services/{id:[0-9]+}", services.GetService).Methods("GET")
-	protected.HandleFunc("/services/{id:[0-9]+}", services.UpdateService).Methods("PUT")
-	protected.HandleFunc("/services/{id:[0-9]+}", services.DeleteService).Methods("DELETE")
-
-	// Policies
-	protected.HandleFunc("/policies", policies.ListPolicies).Methods("GET")
-	protected.HandleFunc("/policies", policies.MakeCreatePolicyHandler(a.Compiler)).Methods("POST")
-	protected.HandleFunc("/policies/preview", policies.MakePolicyPreviewHandler(a.Compiler)).Methods("POST")
-	protected.HandleFunc("/policies/{id:[0-9]+}", policies.GetPolicy).Methods("GET")
-	protected.HandleFunc("/policies/{id:[0-9]+}", policies.MakeUpdatePolicyHandler(a.Compiler)).Methods("PUT")
-	protected.HandleFunc("/policies/{id:[0-9]+}", policies.MakePatchPolicyHandler(a.Compiler)).Methods("PATCH")
-	protected.HandleFunc("/policies/{id:[0-9]+}", policies.MakeDeletePolicyHandler(a.Compiler)).Methods("DELETE")
-	protected.HandleFunc("/policies/special-targets", policies.ListSpecialTargets).Methods("GET")
 
 	// Dashboard
 	protected.HandleFunc("/dashboard", dashboard.HandleDashboard).Methods("GET")
 
-	// Setup Keys
-	protected.HandleFunc("/setup-keys", keys.ListKeys).Methods("GET")
-	protected.HandleFunc("/setup-keys/{type}", keys.CreateKey).Methods("POST")
-	protected.HandleFunc("/setup-keys/{type}", keys.DeleteKey).Methods("DELETE")
-
-	// Users
-	protected.HandleFunc("/users", users.ListUsers).Methods("GET")
-	protected.HandleFunc("/users", users.CreateUser).Methods("POST")
-	protected.HandleFunc("/users/{id:[0-9]+}", users.UpdateUser).Methods("PUT")
-	protected.HandleFunc("/users/{id:[0-9]+}", users.DeleteUser).Methods("DELETE")
-
-	// Logs (Phase 5)
+	// Logs (read)
 	protected.HandleFunc("/logs", logs.GetLogs).Methods("GET")
 	protected.HandleFunc("/logs/stream", logs.MakeLogsStreamHandler(a.LogHub)).Methods("GET")
+
+	// Peers (read-only + compile/rotate-key)
+	protected.HandleFunc("/peers", peers.GetPeers).Methods("GET")
+	protected.HandleFunc("/peers/{id:[0-9]+}/bundle", peers.MakeGetPeerBundleHandler(a.Compiler)).Methods("GET")
+	protected.HandleFunc("/peers/{id:[0-9]+}/compile", peers.MakeCompilePeerHandler(a.Compiler)).Methods("POST")
+	protected.HandleFunc("/peers/{id:[0-9]+}/rotate-key", peers.RotatePeerKey).Methods("POST")
+
+	// Groups (read-only + members management)
+	protected.HandleFunc("/groups", groups.ListGroups).Methods("GET")
+	protected.HandleFunc("/groups/{id:[0-9]+}", groups.GetGroup).Methods("GET")
+	protected.HandleFunc("/groups/{id:[0-9]+}/members", groups.ListGroupMembers).Methods("GET")
+	protected.HandleFunc("/groups/{id:[0-9]+}/members", groups.MakeAddGroupMemberHandler(a.Compiler)).Methods("POST")
+	protected.HandleFunc("/groups/{groupId:[0-9]+}/members/{peerId:[0-9]+}", groups.MakeDeleteGroupMemberHandler(a.Compiler)).Methods("DELETE")
+
+	// Services (read-only)
+	protected.HandleFunc("/services", services.ListServices).Methods("GET")
+	protected.HandleFunc("/services/{id:[0-9]+}", services.GetService).Methods("GET")
+
+	// Policies (read-only)
+	protected.HandleFunc("/policies", policies.ListPolicies).Methods("GET")
+	protected.HandleFunc("/policies/{id:[0-9]+}", policies.GetPolicy).Methods("GET")
+	protected.HandleFunc("/policies/special-targets", policies.ListSpecialTargets).Methods("GET")
+
+	// Version info endpoint (requires authentication)
+	protected.HandleFunc("/info", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"version":  version.Version,
+			"commit":   version.Commit,
+			"built_at": version.BuiltAt,
+		})
+	}).Methods("GET")
+
+	// --- Admin-only routes ---
+	admin := protected.PathPrefix("").Subrouter()
+	admin.Use(middleware.RequireRole("admin"))
+
+	// Users
+	admin.HandleFunc("/users", users.ListUsers).Methods("GET")
+	admin.HandleFunc("/users", users.CreateUser).Methods("POST")
+	admin.HandleFunc("/users/{id:[0-9]+}", users.UpdateUser).Methods("PUT")
+	admin.HandleFunc("/users/{id:[0-9]+}", users.DeleteUser).Methods("DELETE")
+
+	// Setup Keys
+	admin.HandleFunc("/setup-keys", keys.ListKeys).Methods("GET")
+	admin.HandleFunc("/setup-keys/{type}", keys.CreateKey).Methods("POST")
+	admin.HandleFunc("/setup-keys/{type}", keys.DeleteKey).Methods("DELETE")
+
+	// Registration Tokens
+	admin.HandleFunc("/registration-tokens", agents.ListRegistrationTokens).Methods("GET")
+	admin.HandleFunc("/registration-tokens", agents.GenerateRegistrationToken).Methods("POST")
+	admin.HandleFunc("/registration-tokens/{id:[0-9]+}", agents.RevokeRegistrationToken).Methods("DELETE")
+
+	// --- Editor+ routes (admin and editor) ---
+	editor := protected.PathPrefix("").Subrouter()
+	editor.Use(middleware.RequireRole("admin", "editor"))
+
+	// Peer management (write operations)
+	editor.HandleFunc("/peers", peers.CreatePeer).Methods("POST")
+	editor.HandleFunc("/peers/{id:[0-9]+}", peers.UpdatePeer).Methods("PUT")
+	editor.HandleFunc("/peers/{id:[0-9]+}", peers.DeletePeer).Methods("DELETE")
+
+	// Groups (write operations)
+	editor.HandleFunc("/groups", groups.CreateGroup).Methods("POST")
+	editor.HandleFunc("/groups/{id:[0-9]+}", groups.UpdateGroup).Methods("PUT")
+	editor.HandleFunc("/groups/{id:[0-9]+}", groups.DeleteGroup).Methods("DELETE")
+
+	// Services (write operations)
+	editor.HandleFunc("/services", services.CreateService).Methods("POST")
+	editor.HandleFunc("/services/{id:[0-9]+}", services.UpdateService).Methods("PUT")
+	editor.HandleFunc("/services/{id:[0-9]+}", services.DeleteService).Methods("DELETE")
+
+	// Policies (write operations)
+	editor.HandleFunc("/policies", policies.MakeCreatePolicyHandler(a.Compiler)).Methods("POST")
+	editor.HandleFunc("/policies/preview", policies.MakePolicyPreviewHandler(a.Compiler)).Methods("POST")
+	editor.HandleFunc("/policies/{id:[0-9]+}", policies.MakeUpdatePolicyHandler(a.Compiler)).Methods("PUT")
+	editor.HandleFunc("/policies/{id:[0-9]+}", policies.MakePatchPolicyHandler(a.Compiler)).Methods("PATCH")
+	editor.HandleFunc("/policies/{id:[0-9]+}", policies.MakeDeletePolicyHandler(a.Compiler)).Methods("DELETE")
 
 	// Agent routes (require agent auth via JWT)
 	apiRouter.HandleFunc("/agent/bundle/{host_id}", agents.AgentAuthMiddleware(agents.GetBundle)).Methods("GET")
@@ -178,16 +218,6 @@ func RegisterRoutes(r *mux.Router, a *API, downloadsDir string) {
 	apiRouter.HandleFunc("/agent/rotate-key", peers.AgentRotateKey).Methods("POST")
 	apiRouter.HandleFunc("/agent/confirm-rotation", peers.AgentConfirmRotation).Methods("POST")
 
-	// Version info endpoint
-	apiRouter.HandleFunc("/info", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"version":  version.Version,
-			"commit":   version.Commit,
-			"built_at": version.BuiltAt,
-		})
-	}).Methods("GET")
-
 	// Catch-all for unmatched API routes - returns 404 instead of falling through to SPA
 	// This must be registered last so it only catches truly unmatched routes
 	apiRouter.PathPrefix("/").HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -199,8 +229,8 @@ func RegisterRoutes(r *mux.Router, a *API, downloadsDir string) {
 	// Downloads route (public - for agent binary downloads)
 	// Must be registered before SPA catch-all handler (in main.go)
 	// Rate limited to 10 requests per minute to prevent abuse
-	downloadRateLimiter := middleware.NewRateLimiter(10, time.Minute)
-	downloadsHandler := downloadRateLimiter.Middleware(http.HandlerFunc(downloads.Handler(downloadsDir)))
+	a.DownloadRateLimiter = middleware.NewRateLimiter(10, time.Minute)
+	downloadsHandler := a.DownloadRateLimiter.Middleware(http.HandlerFunc(downloads.Handler(downloadsDir)))
 	r.Handle("/downloads/{filename}", downloadsHandler).Methods("GET")
 
 	// Handle /api/v1 root path (not matched by PathPrefix subrouter)
@@ -213,6 +243,22 @@ func RegisterRoutes(r *mux.Router, a *API, downloadsDir string) {
 			"message": "Runic API",
 		})
 	}).Methods("GET")
+}
+
+// Stop stops all rate limiter cleanup goroutines.
+func (a *API) Stop() {
+	if a.LoginRateLimiter != nil {
+		a.LoginRateLimiter.Stop()
+	}
+	if a.RegisterRateLimiter != nil {
+		a.RegisterRateLimiter.Stop()
+	}
+	if a.RefreshRateLimiter != nil {
+		a.RefreshRateLimiter.Stop()
+	}
+	if a.DownloadRateLimiter != nil {
+		a.DownloadRateLimiter.Stop()
+	}
 }
 
 // HealthHandler returns the health status of the service

@@ -61,8 +61,8 @@ export default function Logs() {
 
     const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const token = localStorage.getItem('runic_access_token')
-    const wsUrl = `${wsProto}//${window.location.host}/api/v1/logs/stream?token=${encodeURIComponent(token || '')}`
-    const ws = new WebSocket(wsUrl)
+    const wsUrl = `${wsProto}//${window.location.host}/api/v1/logs/stream`
+    const ws = new WebSocket(wsUrl, [token || ''])
 
     ws.onopen = () => {
       setIsConnected(true)

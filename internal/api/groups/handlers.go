@@ -2,7 +2,7 @@ package groups
 
 import (
 	"encoding/json"
-	"fmt"
+	"log"
 	"net/http"
 
 	"runic/internal/api/common"
@@ -74,7 +74,8 @@ func CreateGroup(w http.ResponseWriter, r *http.Request) {
 	result, err := db.DB.ExecContext(r.Context(),
 		"INSERT INTO groups (name, description) VALUES (?, ?)", input.Name, input.Description)
 	if err != nil {
-		common.RespondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create group: %v", err))
+		log.Printf("ERROR: failed to create group: %v", err)
+		common.InternalError(w)
 		return
 	}
 
@@ -117,7 +118,8 @@ func UpdateGroup(w http.ResponseWriter, r *http.Request) {
 	_, err = db.DB.ExecContext(r.Context(),
 		"UPDATE groups SET name = ?, description = ? WHERE id = ?", input.Name, input.Description, id)
 	if err != nil {
-		common.RespondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to update group: %v", err))
+		log.Printf("ERROR: failed to update group: %v", err)
+		common.InternalError(w)
 		return
 	}
 
@@ -154,14 +156,16 @@ func DeleteGroup(w http.ResponseWriter, r *http.Request) {
 	// Delete group_members first (due to foreign key)
 	_, err = db.DB.ExecContext(r.Context(), "DELETE FROM group_members WHERE group_id = ?", id)
 	if err != nil {
-		common.RespondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to delete group members: %v", err))
+		log.Printf("ERROR: failed to delete group members: %v", err)
+		common.InternalError(w)
 		return
 	}
 
 	// Delete the group
 	_, err = db.DB.ExecContext(r.Context(), "DELETE FROM groups WHERE id = ?", id)
 	if err != nil {
-		common.RespondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to delete group: %v", err))
+		log.Printf("ERROR: failed to delete group: %v", err)
+		common.InternalError(w)
 		return
 	}
 
@@ -238,7 +242,8 @@ func MakeAddGroupMemberHandler(compiler *engine.Compiler) http.HandlerFunc {
 			"INSERT OR IGNORE INTO group_members (group_id, peer_id) VALUES (?, ?)",
 			groupID, input.PeerID)
 		if err != nil {
-			common.RespondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to add member: %v", err))
+			log.Printf("ERROR: failed to add member: %v", err)
+			common.InternalError(w)
 			return
 		}
 
@@ -269,7 +274,8 @@ func MakeDeleteGroupMemberHandler(compiler *engine.Compiler) http.HandlerFunc {
 
 		_, err = db.DB.ExecContext(r.Context(), "DELETE FROM group_members WHERE group_id = ? AND peer_id = ?", groupID, peerID)
 		if err != nil {
-			common.RespondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to remove peer from group: %v", err))
+			log.Printf("ERROR: failed to remove peer from group: %v", err)
+			common.InternalError(w)
 			return
 		}
 

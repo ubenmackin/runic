@@ -3,13 +3,13 @@ CREATE TABLE IF NOT EXISTS users (
     username TEXT UNIQUE NOT NULL,
     password_hash TEXT NOT NULL,
     email TEXT DEFAULT '',
-    role TEXT NOT NULL DEFAULT 'user',
+    role TEXT NOT NULL DEFAULT 'viewer' CHECK(role IN ('admin', 'editor', 'viewer')),
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS peers (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    hostname TEXT UNIQUE NOT NULL,
+    hostname TEXT UNIQUE NOT NULL CHECK(hostname != ''),
     ip_address TEXT NOT NULL,
     os_type TEXT NOT NULL DEFAULT 'linux',
     arch TEXT NOT NULL DEFAULT 'amd64',
@@ -85,7 +85,8 @@ CREATE TABLE IF NOT EXISTS rule_bundles (
     hmac TEXT NOT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     applied_at DATETIME,
-    FOREIGN KEY(peer_id) REFERENCES peers(id) ON DELETE CASCADE
+    FOREIGN KEY(peer_id) REFERENCES peers(id) ON DELETE CASCADE,
+    UNIQUE(peer_id, version)
 );
 
 CREATE TABLE IF NOT EXISTS revoked_tokens (
@@ -140,6 +141,18 @@ CREATE INDEX IF NOT EXISTS idx_firewall_logs_peer_timestamp ON firewall_logs(pee
 CREATE INDEX IF NOT EXISTS idx_peers_status_heartbeat ON peers(status, last_heartbeat);
 -- Efficient for dashboard queries filtering by action AND timestamp
 CREATE INDEX IF NOT EXISTS idx_firewall_logs_action_timestamp ON firewall_logs(action, timestamp DESC);
+
+CREATE TABLE IF NOT EXISTS registration_tokens (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    token TEXT NOT NULL UNIQUE,
+    description TEXT,
+    created_by INTEGER REFERENCES users(id),
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    used_at DATETIME,
+    used_by_hostname TEXT,
+    is_revoked INTEGER DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_reg_tokens_active ON registration_tokens(used_at, is_revoked);
 
 -- System configuration table for storing control plane settings
 CREATE TABLE IF NOT EXISTS system_config (

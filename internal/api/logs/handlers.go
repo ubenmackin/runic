@@ -17,26 +17,32 @@ import (
 // MakeLogsStreamHandler returns a handler that uses the given Hub
 func MakeLogsStreamHandler(hub *Hub) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Authenticate WebSocket connection via token query parameter.
-		// The browser WebSocket API does not support custom headers,
-		// so the JWT is passed as ?token=...
-		tokenStr := r.URL.Query().Get("token")
+		// Authenticate WebSocket connection via Sec-WebSocket-Protocol header.
+		// The JWT is passed as the first subprotocol element.
+		subprotocols := r.Header.Values("Sec-WebSocket-Protocol")
+		var tokenStr string
+		if len(subprotocols) > 0 {
+			tokenStr = subprotocols[0]
+		}
 		if tokenStr == "" {
-			http.Error(w, "Unauthorized: missing token", http.StatusUnauthorized)
+			http.Error(w, `{"error": "unauthorized"}`, http.StatusUnauthorized)
 			return
 		}
 		claims, err := auth.ValidateToken(tokenStr)
 		if err != nil || claims == nil {
-			http.Error(w, "Unauthorized: invalid token", http.StatusUnauthorized)
+			http.Error(w, `{"error": "unauthorized"}`, http.StatusUnauthorized)
 			return
 		}
 		// Check revocation
 		if auth.IsRevoked(r.Context(), claims.UniqueID) {
-			http.Error(w, "Unauthorized: token revoked", http.StatusUnauthorized)
+			http.Error(w, `{"error": "unauthorized"}`, http.StatusUnauthorized)
 			return
 		}
 
-		conn, err := upgrader.Upgrade(w, r, nil)
+		// Set response header to echo back the subprotocol for WebSocket negotiation
+		responseHeader := http.Header{}
+		responseHeader.Set("Sec-WebSocket-Protocol", tokenStr)
+		conn, err := upgrader.Upgrade(w, r, responseHeader)
 		if err != nil {
 			runiclog.Error("WebSocket upgrade failed", "error", err)
 			return

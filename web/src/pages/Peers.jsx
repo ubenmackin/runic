@@ -11,6 +11,7 @@ import { formatRelativeTime } from '../utils/formatTime.js'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 import { useTableFilter } from '../hooks/useTableFilter'
 import { useCrudMutations } from '../hooks/useCrudMutations'
+import { useAuth } from '../hooks/useAuth'
 import ConfirmModal from '../components/ConfirmModal'
 import SearchableSelect from '../components/SearchableSelect'
 import InlineError from '../components/InlineError'
@@ -51,6 +52,7 @@ function parseHeartbeatForSort(timestamp) {
 export default function Peers() {
   const qc = useQueryClient()
   const showToast = useToastContext()
+  const { canEdit } = useAuth()
   const { modalOpen, setModalOpen, editItem: editPeer, setEditItem: setEditPeer, form: formData, setForm: setFormData, setFormForEdit, handleOpenAdd, handleCancel: closeModal } = useCrudModal({ hostname: '', ip_address: '', os_type: 'ubuntu', arch: 'amd64', has_docker: false, description: '' })
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [formErrors, setFormErrors] = useState({})
@@ -280,9 +282,11 @@ export default function Peers() {
               <RefreshCw className={`w-4 h-4 ${isManualRefreshing ? 'animate-spin' : ''}`} />
               Refresh
             </button>
-            <button onClick={openAddModal} className="flex items-center gap-2 px-4 py-2 bg-purple-active hover:bg-purple-active/80 text-white text-sm font-medium rounded-lg">
-              <Plus className="w-4 h-4" /> Add Peer
-            </button>
+            {canEdit && (
+              <button onClick={openAddModal} className="flex items-center gap-2 px-4 py-2 bg-purple-active hover:bg-purple-active/80 text-white text-sm font-medium rounded-lg">
+                <Plus className="w-4 h-4" /> Add Peer
+              </button>
+            )}
           </>
         }
       />
@@ -437,17 +441,17 @@ export default function Peers() {
                       )}
                     </td>
                     <td className="px-4 py-3">
-<div className="flex items-center gap-2">
-                {!peer.is_manual && (
-                  <button
-                    onClick={() => fetchBundle(peer)}
-                    className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded"
-                    title="View Deployed Rules"
-                  >
-                    <FileCode className="w-4 h-4 text-purple-active" />
-                  </button>
-                )}
-                {peer.is_manual && (
+                      <div className="flex items-center gap-2">
+                        {!peer.is_manual && (
+                          <button
+                            onClick={() => fetchBundle(peer)}
+                            className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded"
+                            title="View Deployed Rules"
+                          >
+                            <FileCode className="w-4 h-4 text-purple-active" />
+                          </button>
+                        )}
+                        {canEdit && peer.is_manual && (
                           <button
                             onClick={() => openEdit(peer)}
                             className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded"
@@ -456,13 +460,15 @@ export default function Peers() {
                             <Pencil className="w-4 h-4 text-gray-900 dark:text-white" />
                           </button>
                         )}
-                        <button
-                          onClick={() => setDeleteTarget(peer)}
-                          className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded"
-                          title="Delete"
-                        >
-                          <Trash2 className="w-4 h-4 text-red-500" />
-                        </button>
+                        {canEdit && (
+                          <button
+                            onClick={() => setDeleteTarget(peer)}
+                            className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded"
+                            title="Delete"
+                          >
+                            <Trash2 className="w-4 h-4 text-red-500" />
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>

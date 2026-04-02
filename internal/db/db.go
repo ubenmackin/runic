@@ -43,21 +43,20 @@ func (d *Database) UnderlyingDB() *sql.DB {
 // New code should prefer dependency injection.
 var DB *Database
 
-func InitDB(dataSourceName string) {
+func InitDB(dataSourceName string) error {
 	// Check for environment variable override
 	if dbPath := os.Getenv("RUNIC_DB_PATH"); dbPath != "" {
 		dataSourceName = dbPath
 		log.Printf("Using database path from RUNIC_DB_PATH: %s", dataSourceName)
 	}
 
-	var err error
 	sqlDB, err := sql.Open("sqlite3", dataSourceName)
 	if err != nil {
-		log.Fatalf("Failed to open database: %v", err)
+		return fmt.Errorf("failed to open database: %w", err)
 	}
 
 	if err = sqlDB.Ping(); err != nil {
-		log.Fatalf("Failed to ping database: %v", err)
+		return fmt.Errorf("failed to ping database: %w", err)
 	}
 
 	// Enable WAL mode and foreign keys
@@ -71,24 +70,35 @@ func InitDB(dataSourceName string) {
 	// schema.sql tries to create indexes on peer_id columns, which would
 	// fail on older databases that still have the "servers" table.
 	if err := migrateSchema(DB.DB); err != nil {
-		log.Fatalf("Failed to migrate schema: %v", err)
+		return fmt.Errorf("failed to migrate schema: %w", err)
 	}
 
 	if err := createSchema(DB.DB); err != nil {
-		log.Fatalf("Failed to create schema: %v", err)
+		return fmt.Errorf("failed to create schema: %w", err)
 	}
 
 	// Seed default system services
 	if err := seedSystemServices(DB.DB); err != nil {
-		log.Fatalf("Failed to seed system services: %v", err)
+		return fmt.Errorf("failed to seed system services: %w", err)
 	}
 
 	// Seed system groups
 	if err := seedSystemGroups(DB.DB); err != nil {
-		log.Fatalf("Failed to seed system groups: %v", err)
+		return fmt.Errorf("failed to seed system groups: %w", err)
+	}
+
+	// Migrate secrets from .env to database
+	if err := migrateEnvToDB(DB.DB); err != nil {
+		log.Printf("Warning: failed to migrate secrets from .env: %v", err)
+	}
+
+	// Add DB constraints (CHECK, UNIQUE) via table recreation
+	if err := addDBConstraints(DB.DB); err != nil {
+		log.Printf("Warning: failed to add DB constraints: %v", err)
 	}
 
 	log.Println("Database connection established")
+	return nil
 }
 
 func createSchema(database *sql.DB) error {
@@ -147,7 +157,7 @@ func migrateSchema(database *sql.DB) error {
 		}
 
 		if !existingColumns["role"] {
-			if _, err := database.Exec("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'"); err != nil {
+			if _, err := database.Exec("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'viewer'"); err != nil {
 				return fmt.Errorf("failed to add role column: %w", err)
 			}
 			log.Println("Migration: added role column to users table")
@@ -168,7 +178,12 @@ func migrateSchema(database *sql.DB) error {
 		if err != nil {
 			return fmt.Errorf("failed to begin migration transaction: %w", err)
 		}
-		defer tx.Rollback()
+		committed := false
+		defer func() {
+			if !committed {
+				tx.Rollback()
+			}
+		}()
 
 		// 1. Rename servers table to peers
 		if _, err := tx.Exec("ALTER TABLE servers RENAME TO peers"); err != nil {
@@ -281,6 +296,7 @@ func migrateSchema(database *sql.DB) error {
 		if err := tx.Commit(); err != nil {
 			return fmt.Errorf("failed to commit migration: %w", err)
 		}
+		committed = true
 		log.Println("Migration: successfully renamed servers → peers")
 	}
 
@@ -447,7 +463,12 @@ func migrateSchema(database *sql.DB) error {
 		if err != nil {
 			return fmt.Errorf("failed to begin group_members migration transaction: %w", err)
 		}
-		defer tx.Rollback()
+		committed := false
+		defer func() {
+			if !committed {
+				tx.Rollback()
+			}
+		}()
 
 		// 1. Drop existing group_members table
 		if _, err := tx.Exec("DROP TABLE group_members"); err != nil {
@@ -482,6 +503,7 @@ func migrateSchema(database *sql.DB) error {
 		if err := tx.Commit(); err != nil {
 			return fmt.Errorf("failed to commit group_members migration: %w", err)
 		}
+		committed = true
 		log.Println("Migration: successfully restructured group_members table")
 	}
 
@@ -494,7 +516,12 @@ func migrateSchema(database *sql.DB) error {
 		if err != nil {
 			return fmt.Errorf("begin polymorphic migration: %w", err)
 		}
-		defer tx.Rollback()
+		committed := false
+		defer func() {
+			if !committed {
+				tx.Rollback()
+			}
+		}()
 
 		if _, err := tx.Exec(`CREATE TABLE policies_poly (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -532,6 +559,7 @@ func migrateSchema(database *sql.DB) error {
 		if err := tx.Commit(); err != nil {
 			return fmt.Errorf("commit polymorphic migration: %w", err)
 		}
+		committed = true
 		log.Println("Migration: successfully upgraded policies to polymorphic")
 	}
 
@@ -713,6 +741,36 @@ func migrateSchema(database *sql.DB) error {
 		}
 	}
 
+	// Migration: Create registration_tokens table
+	var hasRegistrationTokens bool
+	err = database.QueryRow("SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='registration_tokens'").Scan(&hasRegistrationTokens)
+	if err != nil {
+		return fmt.Errorf("failed to check for registration_tokens table: %w", err)
+	}
+	if !hasRegistrationTokens {
+		log.Println("Migration: creating registration_tokens table")
+		_, err = database.Exec(`
+			CREATE TABLE registration_tokens (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				token TEXT NOT NULL UNIQUE,
+				description TEXT,
+				created_by INTEGER REFERENCES users(id),
+				created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+				used_at DATETIME,
+				used_by_hostname TEXT,
+				is_revoked INTEGER DEFAULT 0
+			)
+		`)
+		if err != nil {
+			return fmt.Errorf("failed to create registration_tokens table: %w", err)
+		}
+		_, err = database.Exec("CREATE INDEX IF NOT EXISTS idx_reg_tokens_active ON registration_tokens(used_at, is_revoked)")
+		if err != nil {
+			return fmt.Errorf("failed to create idx_reg_tokens_active index: %w", err)
+		}
+		log.Println("Migration: created registration_tokens table")
+	}
+
 	// Migration: Create composite index on firewall_logs(action, timestamp DESC) for dashboard performance
 	// This index optimizes queries that filter by action and order by timestamp (e.g., blocked events)
 	var hasActionTimestampIdx bool
@@ -820,7 +878,12 @@ func SaveBundle(ctx context.Context, database *sql.DB, params models.CreateBundl
 	if err != nil {
 		return models.RuleBundleRow{}, err
 	}
-	defer tx.Rollback()
+	committed := false
+	defer func() {
+		if !committed {
+			tx.Rollback()
+		}
+	}()
 
 	result, err := tx.ExecContext(ctx,
 		`INSERT INTO rule_bundles (peer_id, version, rules_content, hmac) VALUES (?, ?, ?, ?)`,
@@ -840,6 +903,7 @@ func SaveBundle(ctx context.Context, database *sql.DB, params models.CreateBundl
 	if err := tx.Commit(); err != nil {
 		return models.RuleBundleRow{}, err
 	}
+	committed = true
 
 	return models.RuleBundleRow{
 		ID:           int(bundleID),
