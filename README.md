@@ -52,11 +52,31 @@ When the agent applies a rule bundle from the control plane:
 
 ## Config
 
-Server is configured with env vars. Agents use a small JSON file.
+### Server
 
-Required (server):
-- `RUNIC_JWT_SECRET` - Secret key for JWT authentication (required in production)
-- `RUNIC_AGENT_JWT_SECRET` - Secret key for agent JWT authentication (required in production)
+Secrets (JWT keys) are stored in the `system_config` SQLite table and managed via the **Setup Keys** UI page. On first boot, the server migrates secrets from `/opt/runic/.env` into the database — after that, the `.env` file is irrelevant.
+
+Infrastructure env vars (optional, with defaults):
+- `RUNIC_PORT` — Listen port (default: `60443`)
+- `RUNIC_DB_PATH` — SQLite database path (default: `/opt/runic/runic.db`)
+- `RUNIC_CERT_FILE` / `RUNIC_KEY_FILE` — TLS certificate and key
+- `RUNIC_DOWNLOADS_DIR` — Agent binary download directory
+
+### Agent
+
+Agents use a small JSON config at `/etc/runic-agent/config.json`:
+```json
+{
+  "control_plane_url": "https://runic.home.lan:60443",
+  "registration_token": "single-use token for initial registration",
+  "pull_interval_seconds": 86400,
+  "log_path": "/var/log/runic/firewall.log",
+  "apply_on_boot": false,
+  "apply_rules_bundle": false
+}
+```
+
+The `registration_token` is consumed once during initial registration and cleared automatically. Re-installing the agent on an already-registered host preserves existing credentials — no new token needed.
 
 ## Troubleshooting
 

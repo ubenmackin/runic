@@ -269,7 +269,7 @@ const handleSourcePortInputKeyDown = (e) => {
     }
 
     const submitData = { ...formData, ports: portsValue, source_ports: sourcePortsValue }
-    if (editService) updateMutation.mutate(submitData)
+    if (editService) updateMutation.mutate({ id: editService.id, data: submitData })
     else createMutation.mutate(submitData)
   }
 

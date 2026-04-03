@@ -162,7 +162,7 @@ const polymorphicOptions = [
 
   const handleSubmit = (e) => {
     e.preventDefault()
-    if (editPolicy) updateMutation.mutate(formData)
+    if (editPolicy) updateMutation.mutate({ id: editPolicy.id, data: formData })
     else createMutation.mutate(formData)
   }
 
