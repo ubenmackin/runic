@@ -402,14 +402,14 @@ store_secrets_in_db() {
     
     # Store jwt_secret in database
     log INFO "Storing jwt_secret in system_config..."
-    sqlite3 "$db_path" "INSERT OR REPLACE INTO system_config (key, value) VALUES ('jwt_secret', ?);" "$JWT_SECRET" 2>> "$LOG_FILE" || {
+    sqlite3 "$db_path" "INSERT OR REPLACE INTO system_config (key, value) VALUES ('jwt_secret', '$JWT_SECRET');" 2>> "$LOG_FILE" || {
         log ERROR "Failed to store jwt_secret in system_config"
         exit 1
     }
     
     # Store agent_jwt_secret in database
     log INFO "Storing agent_jwt_secret in system_config..."
-    sqlite3 "$db_path" "INSERT OR REPLACE INTO system_config (key, value) VALUES ('agent_jwt_secret', ?);" "$AGENT_JWT_SECRET" 2>> "$LOG_FILE" || {
+    sqlite3 "$db_path" "INSERT OR REPLACE INTO system_config (key, value) VALUES ('agent_jwt_secret', '$AGENT_JWT_SECRET');" 2>> "$LOG_FILE" || {
         log ERROR "Failed to store agent_jwt_secret in system_config"
         exit 1
     }

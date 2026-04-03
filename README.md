@@ -54,7 +54,7 @@ When the agent applies a rule bundle from the control plane:
 
 ### Server
 
-Secrets (JWT keys) are stored in the `system_config` SQLite table and managed via the **Setup Keys** UI page. On first boot, the server migrates secrets from `/opt/runic/.env` into the database — after that, the `.env` file is irrelevant.
+Secrets (JWT keys) are stored in the `system_config` SQLite table and managed via the **Setup Keys** UI page.
 
 Infrastructure env vars (optional, with defaults):
 - `RUNIC_PORT` — Listen port (default: `60443`)
@@ -75,8 +75,6 @@ Agents use a small JSON config at `/etc/runic-agent/config.json`:
   "apply_rules_bundle": false
 }
 ```
-
-The `registration_token` is consumed once during initial registration and cleared automatically. Re-installing the agent on an already-registered host preserves existing credentials — no new token needed.
 
 ## Troubleshooting
 
