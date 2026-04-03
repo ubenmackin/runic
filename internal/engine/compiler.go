@@ -580,43 +580,45 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 	// Forward: Source initiates connections TO Target
 	// Source hosts get: OUTPUT to target + INPUT established from target
 	// Target hosts get: INPUT from source + OUTPUT established to source
-	if direction == "both" || direction == "forward" {
-		buf.WriteString("# Forward (Source → Target)\n")
-		for _, targetCIDR := range targetCIDRs {
-			if serviceName == "Multicast" {
-				buf.WriteString("-A OUTPUT -d 224.0.0.0/4 -m pkttype --pkt-type multicast -j ACCEPT\n")
-				continue
-			}
-			for _, pc := range portClauses {
-				outputPortMatch := pc.PortMatch
-				if pc.SrcPortMatch != "" {
-					outputPortMatch = pc.SrcPortMatch + " " + outputPortMatch
+	if targetScope == "host" || targetScope == "both" {
+		if direction == "both" || direction == "forward" {
+			buf.WriteString("# Forward (Source → Target)\n")
+			for _, targetCIDR := range targetCIDRs {
+				if serviceName == "Multicast" {
+					buf.WriteString("-A OUTPUT -d 224.0.0.0/4 -m pkttype --pkt-type multicast -j ACCEPT\n")
+					continue
 				}
-				inputPortMatch := invertPortMatch(pc.PortMatch, pc.SrcPortMatch)
-				buf.WriteString(fmt.Sprintf("-A OUTPUT -d %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", targetCIDR, pc.Protocol, outputPortMatch))
-				buf.WriteString(fmt.Sprintf("-A INPUT -s %s -p %s %s -m conntrack --ctstate ESTABLISHED -j ACCEPT\n", targetCIDR, pc.Protocol, inputPortMatch))
+				for _, pc := range portClauses {
+					outputPortMatch := pc.PortMatch
+					if pc.SrcPortMatch != "" {
+						outputPortMatch = pc.SrcPortMatch + " " + outputPortMatch
+					}
+					inputPortMatch := invertPortMatch(pc.PortMatch, pc.SrcPortMatch)
+					buf.WriteString(fmt.Sprintf("-A OUTPUT -d %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", targetCIDR, pc.Protocol, outputPortMatch))
+					buf.WriteString(fmt.Sprintf("-A INPUT -s %s -p %s %s -m conntrack --ctstate ESTABLISHED -j ACCEPT\n", targetCIDR, pc.Protocol, inputPortMatch))
+				}
 			}
 		}
-	}
 
-	// Backward: Target initiates connections TO Source
-	// Target hosts get: OUTPUT to source + INPUT established from source
-	// Source hosts get: INPUT from target + OUTPUT established to target
-	if direction == "both" || direction == "backward" {
-		buf.WriteString("# Backward (Target → Source)\n")
-		for _, sourceCIDR := range sourceCIDRs {
-			if serviceName == "Multicast" {
-				buf.WriteString("-A INPUT -m pkttype --pkt-type multicast -j ACCEPT\n")
-				continue
-			}
-			for _, pc := range portClauses {
-				inputPortMatch := pc.PortMatch
-				if pc.SrcPortMatch != "" {
-					inputPortMatch = pc.SrcPortMatch + " " + inputPortMatch
+		// Backward: Target initiates connections TO Source
+		// Target hosts get: OUTPUT to source + INPUT established from source
+		// Source hosts get: INPUT from target + OUTPUT established to target
+		if direction == "both" || direction == "backward" {
+			buf.WriteString("# Backward (Target → Source)\n")
+			for _, sourceCIDR := range sourceCIDRs {
+				if serviceName == "Multicast" {
+					buf.WriteString("-A INPUT -m pkttype --pkt-type multicast -j ACCEPT\n")
+					continue
 				}
-				outputPortMatch := invertPortMatch(pc.PortMatch, pc.SrcPortMatch)
-				buf.WriteString(fmt.Sprintf("-A INPUT -s %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", sourceCIDR, pc.Protocol, inputPortMatch))
-				buf.WriteString(fmt.Sprintf("-A OUTPUT -d %s -p %s %s -m conntrack --ctstate ESTABLISHED -j ACCEPT\n", sourceCIDR, pc.Protocol, outputPortMatch))
+				for _, pc := range portClauses {
+					inputPortMatch := pc.PortMatch
+					if pc.SrcPortMatch != "" {
+						inputPortMatch = pc.SrcPortMatch + " " + inputPortMatch
+					}
+					outputPortMatch := invertPortMatch(pc.PortMatch, pc.SrcPortMatch)
+					buf.WriteString(fmt.Sprintf("-A INPUT -s %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", sourceCIDR, pc.Protocol, inputPortMatch))
+					buf.WriteString(fmt.Sprintf("-A OUTPUT -d %s -p %s %s -m conntrack --ctstate ESTABLISHED -j ACCEPT\n", sourceCIDR, pc.Protocol, outputPortMatch))
+				}
 			}
 		}
 	}

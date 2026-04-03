@@ -57,6 +57,7 @@ export default function Policies() {
   const [filterPeer, setFilterPeer] = useState(null)
   const { value: showDisabled, setValue: setShowDisabled } = useFilterPersistence('policies', 'showDisabled', false)
   const [preview, setPreview] = useState(null)
+  const [previewStale, setPreviewStale] = useState(false)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [formErrors, setFormErrors] = useState({})
   const [activeTab, setActiveTab] = useState('setup')
@@ -78,6 +79,7 @@ export default function Policies() {
   const openAdd = useCallback(() => {
     setFormErrors({})
     setPreview(null)
+    setPreviewStale(false)
     setActiveTab('setup')
     setShowDescription(false)
     handleOpenAdd()
@@ -87,6 +89,7 @@ export default function Policies() {
     setFormForEdit(p);
     setFormErrors({});
     setPreview(null);
+    setPreviewStale(false);
     setActiveTab('setup');
     setShowDescription(!!p.description);
     setModalOpen(true)
@@ -166,37 +169,50 @@ const polymorphicOptions = [
     else createMutation.mutate(formData)
   }
 
-  const fetchPreview = async () => {
+  const fetchPreview = useCallback(async () => {
     if (!formData.source_id || !formData.service_id || !formData.target_id) {
       setFormErrors({ _general: 'Select source, service, and target to preview' })
       return
     }
     setPreviewLoading(true)
     try {
-const data = await api.post('/policies/preview', {
-      source_id: formData.source_id,
-      source_type: formData.source_type,
-      service_id: formData.service_id,
-      target_id: formData.target_id,
-      target_type: formData.target_type,
-      direction: formData.direction,
-      target_scope: formData.target_scope
-    })
+      const data = await api.post('/policies/preview', {
+        source_id: formData.source_id,
+        source_type: formData.source_type,
+        service_id: formData.service_id,
+        target_id: formData.target_id,
+        target_type: formData.target_type,
+        direction: formData.direction,
+        target_scope: formData.target_scope
+      })
       setPreview(data)
+      setPreviewStale(false)
       setFormErrors({})
     } catch (err) {
       setFormErrors({ _general: err.message })
+      setPreviewStale(false)
     } finally {
       setPreviewLoading(false)
     }
-  }
+  }, [formData])
+
+  const initialFormRender = useRef(true);
+
+  // Mark preview stale whenever form data changes
+  useEffect(() => {
+    if (initialFormRender.current) {
+      initialFormRender.current = false;
+      return;
+    }
+    setPreviewStale(true);
+  }, [formData]);
 
   // Auto-fetch preview when switching to Preview tab
   useEffect(() => {
-    if (activeTab === 'preview' && !preview && !previewLoading) {
+    if (activeTab === 'preview' && previewStale && !previewLoading) {
       fetchPreview()
     }
-  }, [activeTab])
+  }, [activeTab, previewStale, previewLoading, fetchPreview])
 
   const getEntityName = useCallback((type, id) => {
     if (type === 'peer') return peers?.find(p => p.id === id)?.hostname || id

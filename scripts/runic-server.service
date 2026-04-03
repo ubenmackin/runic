@@ -13,8 +13,7 @@ ExecStart=/opt/runic/dist/runic-server
 Restart=on-failure
 RestartSec=10s
 
-# Load secrets from environment file
-EnvironmentFile=/opt/runic/.env
+# Secrets are loaded from the database at runtime
 
 # Environment variables for non-secret configuration
 Environment=RUNIC_DB_PATH=/opt/runic/data/runic.db

@@ -300,91 +300,6 @@ generate_self_signed_cert() {
     log SUCCESS "  • Certificate:   $CERT_DIR/cert.pem (644, runic:runic)"
 }
 
-migrate_secrets_from_service_file() {
-    local service_file="/etc/systemd/system/$SERVICE_NAME.service"
-    local env_file="$INSTALL_DIR/.env"
-    
-    log INFO "Checking for existing service file at $service_file"
-    
-    # Check if service file exists
-    if [ ! -f "$service_file" ]; then
-        log INFO "No existing service file found, no migration needed"
-        return 0
-    fi
-    
-    log INFO "Found existing service file, attempting to migrate secrets..."
-    
-    # Extract secrets from service file
-    local jwt_secret agent_jwt_secret
-    jwt_secret=$(grep -E "^Environment=RUNIC_JWT_SECRET=" "$service_file" 2>/dev/null | sed 's/^Environment=RUNIC_JWT_SECRET=//')
-    agent_jwt_secret=$(grep -E "^Environment=RUNIC_AGENT_JWT_SECRET=" "$service_file" 2>/dev/null | sed 's/^Environment=RUNIC_AGENT_JWT_SECRET=//')
-    
-    # Check if we found any secrets
-    if [ -z "$jwt_secret" ] && [ -z "$agent_jwt_secret" ]; then
-        log INFO "No secrets found in service file, no migration needed"
-        return 0
-    fi
-    
-    log INFO "Found secrets in service file, creating .env file..."
-    
-    # Create .env file with migrated secrets
-    cat > "$env_file" << EOF
-# Runic Firewall Management System - Secrets Configuration
-# This file contains sensitive information and should only be readable by root
-# Migrated from systemd service file on $(date '+%Y-%m-%d %H:%M:%S')
-
-EOF
-    
-    # Add found secrets to .env file
-    if [ -n "$jwt_secret" ]; then
-        echo "RUNIC_JWT_SECRET=$jwt_secret" >> "$env_file"
-        log INFO "Migrated JWT_SECRET"
-    fi
-    
-    if [ -n "$agent_jwt_secret" ]; then
-        echo "RUNIC_AGENT_JWT_SECRET=$agent_jwt_secret" >> "$env_file"
-        log INFO "Migrated AGENT_JWT_SECRET"
-    fi
-    
-    # Set restrictive permissions
-    chmod 600 "$env_file" || { log ERROR "Failed to set permissions on $env_file"; exit 1; }
-    chown root:root "$env_file" || { log ERROR "Failed to set ownership on $env_file"; exit 1; }
-    
-    log SUCCESS "Successfully migrated secrets from service file to $env_file"
-    return 0
-}
-
-validate_env_file() {
-    local env_file="$1"
-    
-    log INFO "Validating .env file structure..."
-    
-    # Check if file exists
-    if [ ! -f "$env_file" ]; then
-        log ERROR "Environment file not found: $env_file"
-        return 1
-    fi
-    
-    # Check if file contains expected variable names (just checking they're mentioned, not values)
-    local has_jwt_secret has_agent_jwt_secret
-    has_jwt_secret=$(grep -c "^RUNIC_JWT_SECRET=" "$env_file" 2>/dev/null || echo "0")
-    has_agent_jwt_secret=$(grep -c "^RUNIC_AGENT_JWT_SECRET=" "$env_file" 2>/dev/null || echo "0")
-    
-    # Validate file structure
-    if [ "$has_jwt_secret" -eq "0" ]; then
-        log WARN "Environment file missing RUNIC_JWT_SECRET variable"
-        return 1
-    fi
-    
-    if [ "$has_agent_jwt_secret" -eq "0" ]; then
-        log WARN "Environment file missing RUNIC_AGENT_JWT_SECRET variable"
-        return 1
-    fi
-    
-    log INFO "Environment file structure validated successfully"
-    return 0
-}
-
 validate_secret() {
 	local secret_name="$1"
 	local secret_value="$2"
@@ -414,88 +329,19 @@ validate_runic_port() {
 		log ERROR "RUNIC_PORT must be between 1 and 65535, got: $RUNIC_PORT"
 		exit 1
 	fi
-	log INFO "Validated RUNIC_PORT: $RUNIC_PORT"
+    log INFO "Validated RUNIC_PORT: $RUNIC_PORT"
 }
 
-load_or_create_secrets() {
-    local env_file="$INSTALL_DIR/.env"
-    
-    log_section "Loading or Creating Secrets"
-    
-    # Check if .env file exists
-    if [ -f "$env_file" ]; then
-        log INFO "Found existing secrets file at $env_file"
-        
-        # Validate .env file structure before sourcing
-        if ! validate_env_file "$env_file"; then
-            log WARN "Environment file validation failed, regenerating secrets..."
-            create_new_secrets_file "$env_file"
-            return $?
-        fi
-        
-        # Parse .env file safely instead of sourcing (prevents shell injection)
-        RUNIC_JWT_SECRET=$(grep -E "^RUNIC_JWT_SECRET=" "$env_file" | cut -d'=' -f2-)
-        RUNIC_AGENT_JWT_SECRET=$(grep -E "^RUNIC_AGENT_JWT_SECRET=" "$env_file" | cut -d'=' -f2-)
-        
-        # Validate all secrets are present and valid
-        if ! validate_secret "RUNIC_JWT_SECRET" "$RUNIC_JWT_SECRET"; then
-            log WARN "RUNIC_JWT_SECRET validation failed, regenerating secrets..."
-            create_new_secrets_file "$env_file"
-            return $?
-        fi
-        
-        if ! validate_secret "RUNIC_AGENT_JWT_SECRET" "$RUNIC_AGENT_JWT_SECRET"; then
-            log WARN "RUNIC_AGENT_JWT_SECRET validation failed, regenerating secrets..."
-            create_new_secrets_file "$env_file"
-            return $?
-        fi
-        
-        log INFO "Successfully loaded existing secrets from $env_file"
-        JWT_SECRET="$RUNIC_JWT_SECRET"
-        AGENT_JWT_SECRET="$RUNIC_AGENT_JWT_SECRET"
-    else
-        log INFO "No existing secrets file found, checking for migration..."
-        
-        # Try to migrate secrets from existing service file
-        migrate_secrets_from_service_file
-        
-        # Check if migration created the .env file
-        if [ -f "$env_file" ]; then
-            log INFO "Migration successful, loading secrets from migrated file..."
-            # Parse .env file safely instead of sourcing (prevents shell injection)
-            RUNIC_JWT_SECRET=$(grep -E "^RUNIC_JWT_SECRET=" "$env_file" | cut -d'=' -f2-)
-            RUNIC_AGENT_JWT_SECRET=$(grep -E "^RUNIC_AGENT_JWT_SECRET=" "$env_file" | cut -d'=' -f2-)
-            
-            # Validate migrated secrets
-            if ! validate_secret "RUNIC_JWT_SECRET" "$RUNIC_JWT_SECRET"; then
-                log WARN "Migrated RUNIC_JWT_SECRET validation failed, regenerating..."
-                create_new_secrets_file "$env_file"
-                return $?
-            fi
-            
-            if ! validate_secret "RUNIC_AGENT_JWT_SECRET" "$RUNIC_AGENT_JWT_SECRET"; then
-                log WARN "Migrated RUNIC_AGENT_JWT_SECRET validation failed, regenerating..."
-                create_new_secrets_file "$env_file"
-                return $?
-            fi
-            
-            log INFO "Successfully loaded migrated secrets"
-            JWT_SECRET="$RUNIC_JWT_SECRET"
-            AGENT_JWT_SECRET="$RUNIC_AGENT_JWT_SECRET"
-        else
-            log INFO "No secrets file found and no migration possible, creating new one..."
-            create_new_secrets_file "$env_file"
-        fi
-    fi
-}
+# ============================================================================
+# Storing Secrets in Database
+# ============================================================================
 
-create_new_secrets_file() {
-    local env_file="$1"
+generate_secrets() {
+    log INFO "Generating secrets..."
     
-    # Generate new secrets (use provided secrets if available)
     local jwt_secret agent_jwt_secret
     
-    # Handle JWT secret
+    # Generate or use provided JWT secret
     if [ -n "$PROVIDED_JWT_SECRET" ]; then
         # Validate provided secret
         if ! validate_secret "PROVIDED_JWT_SECRET" "$PROVIDED_JWT_SECRET"; then
@@ -503,69 +349,72 @@ create_new_secrets_file() {
             exit 1
         fi
         jwt_secret="$PROVIDED_JWT_SECRET"
+        log INFO "Using provided JWT secret"
     else
         jwt_secret=$(generate_secret) || { log ERROR "Failed to generate JWT secret"; exit 1; }
+        log INFO "Generated new JWT secret"
     fi
     
-    # Handle agent JWT secret - preserve existing if .env file exists
-    if [ -f "$env_file" ]; then
-        # Try to preserve existing agent JWT secret
-        local existing_agent_secret
-        existing_agent_secret=$(grep "^RUNIC_AGENT_JWT_SECRET=" "$env_file" 2>/dev/null | sed 's/^RUNIC_AGENT_JWT_SECRET=//')
-        
-        if [ -n "$existing_agent_secret" ] && validate_secret "existing RUNIC_AGENT_JWT_SECRET" "$existing_agent_secret"; then
-            log INFO "Preserving existing RUNIC_AGENT_JWT_SECRET"
-            agent_jwt_secret="$existing_agent_secret"
-        else
-            log INFO "Generating new RUNIC_AGENT_JWT_SECRET (existing secret invalid or not found)"
-            agent_jwt_secret=$(generate_secret) || { log ERROR "Failed to generate agent JWT secret"; exit 1; }
-        fi
-    else
-        # Generate new agent JWT secret
-        agent_jwt_secret=$(generate_secret) || { log ERROR "Failed to generate agent JWT secret"; exit 1; }
-    fi
-    
-    # Write secrets to .env file with error handling
-    if ! cat > "$env_file" << EOF
-# Runic Firewall Management System - Secrets Configuration
-# This file contains sensitive information and should only be readable by root
-# Created: $(date '+%Y-%m-%d %H:%M:%S')
-
-RUNIC_JWT_SECRET=$jwt_secret
-RUNIC_AGENT_JWT_SECRET=$agent_jwt_secret
-
-# TLS Configuration
-RUNIC_CERT_FILE=$CERT_DIR/cert.pem
-RUNIC_KEY_FILE=$CERT_DIR/key.pem
-RUNIC_PORT=$RUNIC_PORT
-EOF
-    then
-        log ERROR "Failed to write secrets to $env_file"
-        exit 1
-    fi
-    
-    # Set restrictive permissions with error handling
-    if ! chmod 600 "$env_file"; then
-        log ERROR "Failed to set permissions on $env_file"
-        exit 1
-    fi
-    
-    if ! chown root:root "$env_file"; then
-        log ERROR "Failed to set ownership on $env_file"
-        exit 1
-    fi
-    
-    # Verify .env file was created successfully
-    if [ ! -f "$env_file" ]; then
-        log ERROR "Failed to create .env file at $env_file"
-        exit 1
-    fi
-    
-    log INFO "Created new secrets file at $env_file with permissions 600 (root:root)"
+    # Always generate new agent JWT secret (will preserve in DB if exists)
+    agent_jwt_secret=$(generate_secret) || { log ERROR "Failed to generate agent JWT secret"; exit 1; }
+    log INFO "Generated new RUNIC_AGENT_JWT_SECRET"
     
     # Set variables for use in script
     JWT_SECRET="$jwt_secret"
     AGENT_JWT_SECRET="$agent_jwt_secret"
+    
+    log SUCCESS "Secrets generated successfully"
+}
+
+store_secrets_in_db() {
+    log_section "Storing Secrets in Database"
+    
+    local db_path="$DATA_DIR/runic.db"
+    
+    # Check if jwt_secret already exists in database (preserve existing)
+    local existing_jwt_secret
+    existing_jwt_secret=$(sqlite3 "$db_path" "SELECT value FROM system_config WHERE key='jwt_secret';" 2>/dev/null || echo "")
+    
+    # Determine which jwt_secret to use (priority: provided > DB existing > newly generated)
+    if [ -n "$PROVIDED_JWT_SECRET" ]; then
+        # Provided secret takes precedence
+        log INFO "Using provided JWT secret"
+        JWT_SECRET="$PROVIDED_JWT_SECRET"
+    elif [ -n "$existing_jwt_secret" ] && validate_secret "existing jwt_secret" "$existing_jwt_secret"; then
+        # Preserve existing valid jwt_secret from database
+        log INFO "Preserving existing jwt_secret from database"
+        JWT_SECRET="$existing_jwt_secret"
+    else
+        # Use newly generated JWT_SECRET
+        log INFO "Using newly generated jwt_secret"
+    fi
+    
+    # Check if agent_jwt_secret already exists in database (preserve existing)
+    local existing_agent_secret
+    existing_agent_secret=$(sqlite3 "$db_path" "SELECT value FROM system_config WHERE key='agent_jwt_secret';" 2>/dev/null || echo "")
+    
+    if [ -n "$existing_agent_secret" ] && validate_secret "existing RUNIC_AGENT_JWT_SECRET" "$existing_agent_secret"; then
+        log INFO "Preserving existing RUNIC_AGENT_JWT_SECRET from database"
+        AGENT_JWT_SECRET="$existing_agent_secret"
+    else
+        log INFO "Using newly generated RUNIC_AGENT_JWT_SECRET"
+    fi
+    
+    # Store jwt_secret in database
+    log INFO "Storing jwt_secret in system_config..."
+    sqlite3 "$db_path" "INSERT OR REPLACE INTO system_config (key, value) VALUES ('jwt_secret', ?);" "$JWT_SECRET" 2>> "$LOG_FILE" || {
+        log ERROR "Failed to store jwt_secret in system_config"
+        exit 1
+    }
+    
+    # Store agent_jwt_secret in database
+    log INFO "Storing agent_jwt_secret in system_config..."
+    sqlite3 "$db_path" "INSERT OR REPLACE INTO system_config (key, value) VALUES ('agent_jwt_secret', ?);" "$AGENT_JWT_SECRET" 2>> "$LOG_FILE" || {
+        log ERROR "Failed to store agent_jwt_secret in system_config"
+        exit 1
+    }
+    
+    log SUCCESS "Secrets stored in database successfully"
 }
 
 check_command() {
@@ -791,9 +640,6 @@ install_dependencies() {
 
 collect_configuration() {
     log_section "Collecting Configuration"
-    
-    # Load or create secrets (this sets JWT_SECRET, AGENT_JWT_SECRET)
-    load_or_create_secrets
     
     # Control Plane URL
     if [ -n "$PROVIDED_CONTROL_PLANE" ]; then
@@ -1218,10 +1064,7 @@ ExecStart=$INSTALL_DIR/dist/$BINARY_NAME
 Restart=on-failure
 RestartSec=10s
 
-# Load secrets from environment file
-EnvironmentFile=$INSTALL_DIR/.env
-
-# Environment variables for non-secret configuration
+# Environment variables for configuration
 Environment=RUNIC_CONTROL_PLANE=$CONTROL_PLANE_URL
 Environment=RUNIC_DB_PATH=$DATA_DIR/runic.db
 Environment=RUNIC_CERT_FILE=$CERT_DIR/cert.pem
@@ -1373,8 +1216,8 @@ show_status() {
     echo ""
 
     echo -e "${GREEN}✓ Secrets: Configured${NC}"
-    echo -e "${YELLOW}  Secrets are stored in: $INSTALL_DIR/.env${NC}"
-    echo -e "${YELLOW}  Keep this file secure and backed up!${NC}"
+    echo -e "${YELLOW}  Secrets are stored in database at: $DATA_DIR/runic.db${NC}"
+    echo -e "${YELLOW}  Keep your database backed up!${NC}"
     echo ""
 
     log SUCCESS "Installation completed successfully"
@@ -1411,8 +1254,8 @@ main() {
     # Setup directories
     setup_directories
 
-    # Get configuration
-    collect_configuration
+    # Generate secrets (before database init, but after directories exist)
+    generate_secrets
     
     # Clone repository
     clone_repository
@@ -1431,6 +1274,9 @@ main() {
 
     # Initialize database
     initialize_database
+
+    # Store secrets in database (after database exists)
+    store_secrets_in_db
 
     # Install systemd service
     install_systemd_service
