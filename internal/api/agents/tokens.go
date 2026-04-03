@@ -97,6 +97,7 @@ func ListRegistrationTokens(w http.ResponseWriter, r *http.Request) {
 			"used_at":          usedAt.String,
 			"used_by_hostname": usedByHostname.String,
 			"status":           status,
+			"is_revoked":       isRevoked,
 		})
 	}
 

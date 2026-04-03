@@ -740,12 +740,8 @@ export default function Peers() {
             {/* Tab Content */}
             <div className="p-6">
               {activeTab === 'agent' && (
-                <div className="space-y-6">
-                  <p className="text-sm text-gray-600 dark:text-amber-muted">
-                    Run this command on the target machine to install the agent:
-                  </p>
-
-                  {/* Token Selection / Generation */}
+      <div className="space-y-6">
+            {/* Token Selection / Generation */}
                   {tokensLoading && !selectedToken ? (
                     <div className="flex items-center justify-center py-4">
                       <RefreshCw className="w-4 h-4 animate-spin text-purple-active mr-2" />
@@ -761,20 +757,28 @@ export default function Peers() {
                           A single-use token is required for new agent registration.
                         </p>
 
-                        {/* Show existing active tokens info */}
-                        {registrationTokens && registrationTokens.filter(t => !t.used_at && !t.is_revoked).length > 0 && (
-                          <div className="mb-3 p-3 bg-gray-50 dark:bg-charcoal-darkest rounded-lg">
-                            <p className="text-xs text-gray-600 dark:text-amber-muted mb-1">Existing active tokens:</p>
-                            {registrationTokens.filter(t => !t.used_at && !t.is_revoked).map(t => (
-                              <div key={t.id} className="text-xs text-gray-500 dark:text-amber-muted font-mono">
-                                • {t.description || 'No description'} — <span className="text-gray-400">{t.token}</span>
-                              </div>
-                            ))}
-                            <p className="text-xs text-gray-400 dark:text-amber-muted mt-1 italic">
-                              Existing tokens are masked. Generate a new token to get the full value.
-                            </p>
-                          </div>
-                        )}
+                                                                {/* Token selection dropdown */}
+                                                                {registrationTokens && registrationTokens.filter(t => !t.used_at && !t.is_revoked).length > 0 && (
+                                                                        <div className="mb-3">
+                                                                                <label className="block text-xs text-gray-600 dark:text-amber-muted mb-1">
+                                                                                        Or select an existing active token:
+                                                                                </label>
+                                                                                <SearchableSelect
+                                                                                        options={registrationTokens
+                                                                                                .filter(t => !t.used_at && !t.is_revoked)
+                                                                                                .map(t => ({
+                                                                                                        value: t.token,
+                                                                                                        label: t.description || t.token
+                                                                                                }))}
+                                                                                        value=""
+                                                                                        onChange={(tokenValue) => setSelectedToken(tokenValue)}
+                                                                                        placeholder="Select an existing token..."
+                                                                                />
+                                                                                <p className="text-xs text-gray-400 dark:text-amber-muted mt-1 italic">
+                                                                                        Note: Only the full token value can be used in install commands. Generate a new token if you don't have the full value.
+                                                                                </p>
+                                                                        </div>
+                                                                )}
 
                         {/* Token description input */}
                         <input
