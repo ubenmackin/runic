@@ -9,6 +9,13 @@ import { useAuth } from '../hooks/useAuth'
 import PageHeader from '../components/PageHeader'
 import { useCrudMutations } from '../hooks/useCrudMutations'
 import { useFocusTrap } from '../hooks/useFocusTrap'
+import SearchableSelect from '../components/SearchableSelect'
+
+const ROLE_OPTIONS = [
+  { value: 'viewer', label: 'Viewer' },
+  { value: 'editor', label: 'Editor' },
+  { value: 'admin', label: 'Admin' },
+]
 
 export default function Users() {
   const showToast = useToastContext()
@@ -249,21 +256,17 @@ export default function Users() {
                   placeholder="Enter email (optional)"
                 />
               </div>
-              <div>
-                <label htmlFor="role" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-                  Role
-                </label>
-                <select
-                  id="role"
-                  value={formRole}
-                  onChange={(e) => setFormRole(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral focus:outline-none focus:ring-2 focus:ring-purple-active focus:border-transparent"
-                >
-                  <option value="viewer">viewer</option>
-                  <option value="editor">editor</option>
-                  <option value="admin">admin</option>
-                </select>
-              </div>
+                <div>
+                  <label htmlFor="role" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+                    Role
+                  </label>
+                  <SearchableSelect
+                    options={ROLE_OPTIONS}
+                    value={formRole}
+                    onChange={(v) => setFormRole(v)}
+                    placeholder="Select role"
+                  />
+                </div>
               <div className="flex gap-3 pt-2">
                 <button
                   type="button"
@@ -368,16 +371,12 @@ export default function Users() {
                 <label htmlFor="editRole" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
                   Role
                 </label>
-                <select
-                  id="editRole"
+                <SearchableSelect
+                  options={ROLE_OPTIONS}
                   value={formEditRole}
-                  onChange={(e) => setFormEditRole(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral focus:outline-none focus:ring-2 focus:ring-purple-active focus:border-transparent"
-                >
-                  <option value="viewer">viewer</option>
-                  <option value="editor">editor</option>
-                  <option value="admin">admin</option>
-                </select>
+                  onChange={(v) => setFormEditRole(v)}
+                  placeholder="Select role"
+                />
               </div>
               <div>
                 <label htmlFor="editPassword" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">

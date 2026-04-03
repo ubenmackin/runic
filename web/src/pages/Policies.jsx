@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
+import { useLocation } from 'react-router-dom'
 import { useFilterPersistence } from '../hooks/useFilterPersistence'
 import { useTableSort } from '../hooks/useTableSort'
 import { usePagination } from '../hooks/usePagination'
@@ -37,6 +38,7 @@ export default function Policies() {
   const qc = useQueryClient()
   const showToast = useToastContext()
   const { canEdit } = useAuth()
+  const location = useLocation()
   const { modalOpen, setModalOpen, editItem: editPolicy, setEditItem: setEditPolicy, form: formData, setForm: setFormData, setFormForEdit, handleOpenAdd, handleCancel } = useCrudModal({ 
     name: '', 
     description: '', 
@@ -73,13 +75,13 @@ export default function Policies() {
   // Focus trap for modal accessibility
   useFocusTrap(modalRef, modalOpen)
 
-  const openAdd = () => {
-    setFormErrors({});
-    setPreview(null);
-    setActiveTab('setup');
-    setShowDescription(false);
+  const openAdd = useCallback(() => {
+    setFormErrors({})
+    setPreview(null)
+    setActiveTab('setup')
+    setShowDescription(false)
     handleOpenAdd()
-  }
+  }, [])
   const openEdit = (p) => {
     setEditPolicy(p);
     setFormForEdit(p);
@@ -248,6 +250,15 @@ const data = await api.post('/policies/preview', {
   useEffect(() => {
     setPoliciesPage(1)
   }, [searchTerm])
+
+  // Auto-open New Policy modal when navigating from Dashboard Quick Actions
+  useEffect(() => {
+    if (location.state?.openAddModal && canEdit) {
+      openAdd()
+      // Clear the navigation state to prevent re-opening on refresh
+      window.history.replaceState({}, document.title)
+    }
+  }, [location.state, canEdit, openAdd])
 
   if (isLoading) return <TableSkeleton rows={3} columns={7} />
 

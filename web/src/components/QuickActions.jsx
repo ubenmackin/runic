@@ -66,7 +66,7 @@ export default function QuickActions() {
         onClick={() => setShowConfirmModal(true)}
         disabled={pushRulesMutation.isPending || isLoading}
         aria-label="Push Rules to All"
-        className="w-full flex items-center gap-3 px-3 py-2.5 text-sm font-medium text-gray-700 dark:text-amber-primary bg-gray-50 dark:bg-charcoal-darkest hover:bg-gray-100 dark:hover:bg-charcoal-dark rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        className="w-full flex items-center gap-3 px-3 py-2.5 text-sm font-medium text-gray-700 dark:text-amber-primary bg-gray-50 dark:bg-charcoal-darkest border border-gray-200 dark:border-gray-border hover:bg-gray-200 dark:hover:bg-charcoal-light rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
       >
         {pushRulesMutation.isPending || isLoading ? (
           <Loader2 className="w-4 h-4 animate-spin text-purple-active" />
@@ -76,25 +76,25 @@ export default function QuickActions() {
         <span>{pushRulesMutation.isPending ? 'Pushing Rules...' : isLoading ? 'Loading...' : 'Push Rules to All'}</span>
       </button>
 
-      {/* Add Peer */}
-      <button
-        onClick={() => navigate('/peers')}
-        aria-label="Add Peer"
-        className="w-full flex items-center gap-3 px-3 py-2.5 text-sm font-medium text-gray-700 dark:text-amber-primary bg-gray-50 dark:bg-charcoal-darkest hover:bg-gray-100 dark:hover:bg-charcoal-dark rounded-lg transition-colors"
-      >
-        <UserPlus className="w-4 h-4 text-purple-active" />
-        <span>Add Peer</span>
-      </button>
+	{/* Add Peer */}
+	<button
+	onClick={() => navigate('/peers', { state: { openAddModal: true } })}
+	aria-label="Add Peer"
+	className="w-full flex items-center gap-3 px-3 py-2.5 text-sm font-medium text-gray-700 dark:text-amber-primary bg-gray-50 dark:bg-charcoal-darkest border border-gray-200 dark:border-gray-border hover:bg-gray-200 dark:hover:bg-charcoal-light rounded-lg transition-colors"
+	>
+	<UserPlus className="w-4 h-4 text-purple-active" />
+	<span>Add Peer</span>
+	</button>
 
-      {/* Create Policy */}
-      <button
-        onClick={() => navigate('/policies')}
-        aria-label="Create Policy"
-        className="w-full flex items-center gap-3 px-3 py-2.5 text-sm font-medium text-gray-700 dark:text-amber-primary bg-gray-50 dark:bg-charcoal-darkest hover:bg-gray-100 dark:hover:bg-charcoal-dark rounded-lg transition-colors"
-      >
-        <Shield className="w-4 h-4 text-purple-active" />
-        <span>Create Policy</span>
-      </button>
+	{/* Create Policy */}
+	<button
+	onClick={() => navigate('/policies', { state: { openAddModal: true } })}
+	aria-label="Create Policy"
+	className="w-full flex items-center gap-3 px-3 py-2.5 text-sm font-medium text-gray-700 dark:text-amber-primary bg-gray-50 dark:bg-charcoal-darkest border border-gray-200 dark:border-gray-border hover:bg-gray-200 dark:hover:bg-charcoal-light rounded-lg transition-colors"
+	>
+	<Shield className="w-4 h-4 text-purple-active" />
+	<span>Create Policy</span>
+	</button>
       </div>
 
       {/* Confirmation Modal for Push Rules */}

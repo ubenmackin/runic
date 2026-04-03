@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
+import { useLocation } from 'react-router-dom'
 import { useTableSort } from '../hooks/useTableSort'
 import { usePagination } from '../hooks/usePagination'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -54,6 +55,7 @@ export default function Peers() {
   const qc = useQueryClient()
   const showToast = useToastContext()
   const { canEdit } = useAuth()
+  const location = useLocation()
   const { modalOpen, setModalOpen, editItem: editPeer, setEditItem: setEditPeer, form: formData, setForm: setFormData, setFormForEdit, handleOpenAdd, handleCancel: closeModal } = useCrudModal({ hostname: '', ip_address: '', os_type: 'ubuntu', arch: 'amd64', has_docker: false, description: '' })
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [formErrors, setFormErrors] = useState({})
@@ -119,13 +121,13 @@ export default function Peers() {
   const openAdd = () => { setFormErrors({}); handleOpenAdd() }
   const openEdit = (s) => { setEditPeer(s); setFormForEdit(s); setFormErrors({}); setModalOpen(true) }
 
-  const openAddModal = () => {
+  const openAddModal = useCallback(() => {
     setAddModalOpen(true)
     setActiveTab('agent')
     setManualForm({ hostname: '', ip_address: '', os_type: 'other', arch: 'other' })
     setManualErrors({})
     setCopied(false)
-  }
+  }, [])
 
   const closeAddModal = () => {
     setAddModalOpen(false)
@@ -260,6 +262,15 @@ export default function Peers() {
   useEffect(() => {
     setPeersPage(1)
   }, [searchTerm])
+
+  // Auto-open Add Peer modal when navigating from Dashboard Quick Actions
+  useEffect(() => {
+    if (location.state?.openAddModal && canEdit) {
+      openAddModal()
+      // Clear the navigation state to prevent re-opening on refresh
+      window.history.replaceState({}, document.title)
+    }
+  }, [location.state, canEdit, openAddModal])
 
   const { createMutation, updateMutation, deleteMutation } = useCrudMutations({
     apiPath: '/peers',
