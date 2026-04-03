@@ -35,14 +35,6 @@ curl -sL https://raw.githubusercontent.com/ubenmackin/runic/main/scripts/install
 
 Server runs on `https://localhost:60443` by default.
 
-### Install the agent
-
-Run on each host:
-
-```bash
-curl -sL https://raw.githubusercontent.com/ubenmackin/runic/main/scripts/install-agent.sh | sudo bash -s -- https://your-runic-server:60443
-```
-
 ## How it works (short version)
 
 You define a policy → Runic expands it into raw `iptables` rules → signs the bundle → agent pulls it → verifies → applies it.

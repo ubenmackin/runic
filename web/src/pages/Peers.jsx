@@ -66,6 +66,9 @@ export default function Peers() {
   const [manualForm, setManualForm] = useState({ hostname: '', ip_address: '', os_type: 'other', arch: 'other' })
   const [manualErrors, setManualErrors] = useState({})
   const [copied, setCopied] = useState(false)
+  const [selectedToken, setSelectedToken] = useState('')
+  const [isGenerating, setIsGenerating] = useState(false)
+  const [tokenDescription, setTokenDescription] = useState('')
 
 	// Rule Bundle state
 	const [bundleModalOpen, setBundleModalOpen] = useState(false)
@@ -127,6 +130,9 @@ export default function Peers() {
     setManualForm({ hostname: '', ip_address: '', os_type: 'other', arch: 'other' })
     setManualErrors({})
     setCopied(false)
+    setSelectedToken('')
+    setIsGenerating(false)
+    setTokenDescription('')
   }, [])
 
   const closeAddModal = () => {
@@ -138,7 +144,9 @@ export default function Peers() {
 
   // Generate agent install command
   const controlPlaneUrl = window.location.origin
-  const agentInstallCommand = `curl -sL https://raw.githubusercontent.com/ubenmackin/runic/main/scripts/install-agent.sh | sudo bash -s -- ${controlPlaneUrl}`
+  const agentInstallCommand = selectedToken
+    ? `curl -sL https://raw.githubusercontent.com/ubenmackin/runic/main/scripts/install-agent.sh | sudo bash -s -- ${controlPlaneUrl} ${selectedToken}`
+    : `# Select or generate a registration token first`
 
   const copyToClipboard = async () => {
     try {
@@ -147,6 +155,24 @@ export default function Peers() {
       setTimeout(() => setCopied(false), 2000)
     } catch (err) {
       showToast('Failed to copy to clipboard', 'error')
+    }
+  }
+
+// NOTE: Using direct api.post instead of useMutation for simplicity.
+// This is a conscious choice — the token generation is a one-off action
+// within the Add Peer modal, not a shared mutation pattern.
+  const handleGenerateToken = async () => {
+    setIsGenerating(true)
+    try {
+      const data = await api.post('/registration-tokens', { description: tokenDescription || undefined })
+      const fullToken = data.full_token || data.token
+      setSelectedToken(fullToken)
+      showToast('Registration token generated', 'success')
+      qc.invalidateQueries({ queryKey: ['registration-tokens'] })
+    } catch (err) {
+      showToast(`Failed to generate token: ${err.message}`, 'error')
+    } finally {
+      setIsGenerating(false)
     }
   }
 
@@ -200,6 +226,12 @@ export default function Peers() {
     refetchOnReconnect: true,
     refetchOnWindowFocus: true,
     staleTime: 15000,
+  })
+
+  const { data: registrationTokens, isLoading: tokensLoading } = useQuery({
+    queryKey: ['registration-tokens'],
+    queryFn: () => api.get('/registration-tokens'),
+    enabled: addModalOpen,
   })
 
   // Manual refresh handler
@@ -713,33 +745,121 @@ export default function Peers() {
                     Run this command on the target machine to install the agent:
                   </p>
 
-                  {/* Command Block with Copy Button */}
-                  <div className="relative">
-                    <pre className="bg-gray-900 text-gray-100 p-4 rounded-lg text-sm overflow-x-hidden whitespace-pre-wrap break-all pr-12">
-                      <code>{agentInstallCommand}</code>
-                    </pre>
-                    <button
-                      onClick={copyToClipboard}
-                      className="absolute top-3 right-3 p-2 bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors"
-                      title="Copy to clipboard"
-                    >
-                      {copied ? (
-                        <Check className="w-4 h-4 text-green-400" />
-                      ) : (
-                        <Copy className="w-4 h-4 text-gray-300" />
-                      )}
-                    </button>
-                  </div>
+                  {/* Token Selection / Generation */}
+                  {tokensLoading && !selectedToken ? (
+                    <div className="flex items-center justify-center py-4">
+                      <RefreshCw className="w-4 h-4 animate-spin text-purple-active mr-2" />
+                      <span className="text-sm text-gray-500 dark:text-amber-muted">Loading tokens...</span>
+                    </div>
+                  ) : !selectedToken ? (
+                    <div className="space-y-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+                          Registration Token
+                        </label>
+                        <p className="text-xs text-gray-500 dark:text-amber-muted mb-2">
+                          A single-use token is required for new agent registration.
+                        </p>
 
-                  {copied && (
-                    <p className="text-sm text-green-600 dark:text-green-400">
-                      Copied!
-                    </p>
+                        {/* Show existing active tokens info */}
+                        {registrationTokens && registrationTokens.filter(t => !t.used_at && !t.is_revoked).length > 0 && (
+                          <div className="mb-3 p-3 bg-gray-50 dark:bg-charcoal-darkest rounded-lg">
+                            <p className="text-xs text-gray-600 dark:text-amber-muted mb-1">Existing active tokens:</p>
+                            {registrationTokens.filter(t => !t.used_at && !t.is_revoked).map(t => (
+                              <div key={t.id} className="text-xs text-gray-500 dark:text-amber-muted font-mono">
+                                • {t.description || 'No description'} — <span className="text-gray-400">{t.token}</span>
+                              </div>
+                            ))}
+                            <p className="text-xs text-gray-400 dark:text-amber-muted mt-1 italic">
+                              Existing tokens are masked. Generate a new token to get the full value.
+                            </p>
+                          </div>
+                        )}
+
+                        {/* Token description input */}
+                        <input
+                          type="text"
+                          value={tokenDescription}
+                          onChange={(e) => setTokenDescription(e.target.value)}
+                          placeholder="Description (optional, e.g., Production server #3)"
+                          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral placeholder-gray-400 dark:placeholder-amber-muted focus:ring-2 focus:ring-purple-active focus:border-transparent text-sm"
+                        />
+                      </div>
+
+                      <button
+                        onClick={handleGenerateToken}
+                        disabled={isGenerating}
+                        className="w-full px-4 py-2 text-sm font-medium text-white bg-purple-active hover:bg-purple-active/80 rounded-lg disabled:opacity-50 flex items-center justify-center gap-2"
+                      >
+                        {isGenerating ? (
+                          <>
+                            <RefreshCw className="w-4 h-4 animate-spin" />
+                            Generating...
+                          </>
+                        ) : (
+                          <>
+                            <Plus className="w-4 h-4" />
+                            Generate New Token
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary">
+                          Registration Token
+                        </label>
+                        <button
+                          onClick={() => { setSelectedToken(''); setTokenDescription(''); }}
+                          className="text-xs text-purple-active hover:text-purple-active/80 flex items-center gap-1"
+                        >
+                          <X className="w-3 h-3" />
+                          Use different token
+                        </button>
+                      </div>
+                      <div className="p-3 bg-gray-100 dark:bg-charcoal-darkest rounded-lg font-mono text-sm text-gray-700 dark:text-amber-primary break-all">
+                        {selectedToken}
+                      </div>
+                      <div className="p-2 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded">
+                        <p className="text-xs text-yellow-800 dark:text-yellow-300">
+                          ⚠️ This is a single-use token. Copy the install command below to register the agent.
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Command Block with Copy Button */}
+                  {selectedToken && (
+                    <>
+                      <div className="relative">
+                        <pre className="bg-gray-900 text-gray-100 p-4 rounded-lg text-sm overflow-x-hidden whitespace-pre-wrap break-all pr-12">
+                          <code>{`curl -sL https://raw.githubusercontent.com/ubenmackin/runic/main/scripts/install-agent.sh | sudo bash -s -- ${controlPlaneUrl} ${selectedToken}`}</code>
+                        </pre>
+                        <button
+                          onClick={copyToClipboard}
+                          className="absolute top-3 right-3 p-2 bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors"
+                          title="Copy to clipboard"
+                        >
+                          {copied ? (
+                            <Check className="w-4 h-4 text-green-400" />
+                          ) : (
+                            <Copy className="w-4 h-4 text-gray-300" />
+                          )}
+                        </button>
+                      </div>
+
+                      {copied && (
+                        <p className="text-sm text-green-600 dark:text-green-400">
+                          Copied!
+                        </p>
+                      )}
+                    </>
                   )}
 
                   <div className="bg-blue-50 dark:bg-purple-active/10 border border-blue-200 dark:border-purple-active/30 rounded-lg p-3">
                     <p className="text-sm text-blue-700 dark:text-purple-active">
-                      The agent will auto-register with this control plane. No manual entry needed.
+                      New agents require a registration token for secure registration. Existing agents will auto-re-register when upgrading — no token needed.
                     </p>
                   </div>
                 </div>

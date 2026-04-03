@@ -172,6 +172,19 @@ else
 	echo "Preserving existing config (credentials retained)"
 	# Migrate: Add missing config options for existing installs
 	MIGRATED=0
+	# Migrate: Update pull_interval_seconds to 86400 for existing installs
+	if ! grep -q '"pull_interval_seconds"' /etc/runic-agent/config.json 2>/dev/null; then
+		echo "Adding pull_interval_seconds=86400 to existing config"
+		sed -i 's/}$/,\n\t"pull_interval_seconds": 86400\n}/' /etc/runic-agent/config.json
+		MIGRATED=1
+	else
+		# Key exists - check if value needs updating (not already 86400)
+		CURRENT_INTERVAL=$(grep '"pull_interval_seconds"' /etc/runic-agent/config.json | grep -o '[0-9]\+')
+		if [ -n "$CURRENT_INTERVAL" ] && [ "$CURRENT_INTERVAL" -lt 86400 ]; then
+			echo "Updating pull_interval_seconds from ${CURRENT_INTERVAL} to 86400"
+			sed -i 's/"pull_interval_seconds": [0-9]*/"pull_interval_seconds": 86400/' /etc/runic-agent/config.json
+		fi
+	fi
 	if ! grep -q '"apply_on_boot"' /etc/runic-agent/config.json 2>/dev/null; then
 		echo "Adding apply_on_boot=false to existing config"
 		sed -i 's/}$/,\n\t"apply_on_boot": false\n}/' /etc/runic-agent/config.json

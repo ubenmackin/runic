@@ -22,7 +22,7 @@ type Config struct {
 	HMACKey           string `json:"hmac_key"`
 	ApplyOnBoot       bool   `json:"apply_on_boot"`
 	ApplyRulesBundle  bool   `json:"apply_rules_bundle"`
-	RegistrationToken string `json:"registration_token"`
+	RegistrationToken string `json:"registration_token,omitempty"`
 }
 
 // DefaultConfig returns a config with sensible defaults.
