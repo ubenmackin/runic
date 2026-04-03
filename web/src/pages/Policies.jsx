@@ -34,6 +34,14 @@ const SPECIAL_TARGETS = {
   ALL_PEERS: { id: 7, name: '__all_peers__', label: 'All Peers' },
 }
 
+const SYSTEM_RULES = [
+  { type: 'accept', title: 'Loopback', description: 'Local loopback interface (lo) traffic is always accepted (both INPUT and OUTPUT).' },
+  { type: 'accept', title: 'ICMP Error Messages', description: 'ICMP error messages (Destination Unreachable, Time Exceeded, etc.) for allowed connections are accepted.' },
+  { type: 'deny', title: 'Invalid Packets', description: 'Packets with invalid state are dropped.' },
+  { type: 'accept', title: 'Control Plane Communication', description: 'Agents can always communicate with the control plane for heartbeats and rule updates (requires control_plane_port configuration).' },
+  { type: 'deny', title: 'Default Deny + Logging', description: 'All unmatched INPUT and OUTPUT traffic is logged with prefix "[RUNIC-DROP] " and then dropped.' },
+]
+
 export default function Policies() {
   const qc = useQueryClient()
   const showToast = useToastContext()
@@ -302,52 +310,45 @@ const polymorphicOptions = [
         }
       />
 
-{/* System Rules Info Panel */}
-<div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-sm overflow-hidden">
-  <button
-    type="button"
-    onClick={() => setShowSystemRules(!showSystemRules)}
-    className="w-full px-4 py-3 flex items-center justify-between text-left hover:bg-gray-50 dark:hover:bg-charcoal-darkest transition-colors"
-  >
-    <div className="flex items-center gap-2">
-      <Info className="w-5 h-5 text-blue-500" />
-      <span className="font-medium text-gray-900 dark:text-light-neutral">System Rules</span>
-      <span className="text-xs text-gray-500 dark:text-amber-muted">(Automatically applied)</span>
-    </div>
-    {showSystemRules ? (
-      <ChevronUp className="w-5 h-5 text-gray-500" />
-    ) : (
-      <ChevronDown className="w-5 h-5 text-gray-500" />
-    )}
-  </button>
-  {showSystemRules && (
-    <div className="px-4 pb-4 border-t border-gray-200 dark:border-gray-border">
-      <div className="mt-3 space-y-2 text-sm">
-        <div className="flex items-start gap-2">
-          <span className="text-green-500 mt-0.5">✓</span>
-          <div>
-							<span className="font-medium text-gray-700 dark:text-amber-primary">ICMP Error Messages:</span>
-							<span className="text-gray-600 dark:text-amber-muted ml-1">ICMP error messages (Destination Unreachable, Time Exceeded, etc.) for allowed connections are accepted.</span>
+      {/* System Rules Info Panel */}
+      <div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-sm overflow-hidden">
+        <button
+          type="button"
+          onClick={() => setShowSystemRules(!showSystemRules)}
+          className="w-full px-4 py-3 flex items-center justify-between text-left hover:bg-gray-50 dark:hover:bg-charcoal-darkest transition-colors"
+        >
+          <div className="flex items-center gap-2">
+            <Info className="w-5 h-5 text-blue-500" />
+            <span className="font-medium text-gray-900 dark:text-light-neutral">System Rules</span>
+            <span className="text-xs text-gray-500 dark:text-amber-muted">(Automatically applied)</span>
           </div>
-        </div>
-<div className="flex items-start gap-2">
-                                <span className="text-red-500 mt-0.5">✕</span>
-                                <div>
-                                    <span className="font-medium text-gray-700 dark:text-amber-primary">Invalid Packets:</span>
-                                    <span className="text-gray-600 dark:text-amber-muted ml-1">Packets with invalid state are dropped.</span>
-                                </div>
-                            </div>
-                            <div className="flex items-start gap-2">
-                                <span className="text-green-500 mt-0.5">✓</span>
-                                <div>
-                                    <span className="font-medium text-gray-700 dark:text-amber-primary">Control Plane Communication:</span>
-                                    <span className="text-gray-600 dark:text-amber-muted ml-1">Agents can always communicate with the control plane for heartbeats and rule updates.</span>
-                                </div>
-                            </div>
-                        </div>
-    </div>
-  )}
-</div>
+          {showSystemRules ? (
+            <ChevronUp className="w-5 h-5 text-gray-500" />
+          ) : (
+            <ChevronDown className="w-5 h-5 text-gray-500" />
+          )}
+        </button>
+        {showSystemRules && (
+          <div className="px-4 pb-4 border-t border-gray-200 dark:border-gray-border">
+            <div className="mt-3 space-y-2 text-sm">
+              {SYSTEM_RULES.map((rule) => (
+                <div key={rule.title} className="flex items-start gap-2">
+                  <span
+                    className={rule.type === 'accept' ? 'text-green-500 mt-0.5' : 'text-red-500 mt-0.5'}
+                    aria-hidden="true"
+                  >
+                    {rule.type === 'accept' ? '✓' : '✕'}
+                  </span>
+                  <div>
+                    <span className="font-medium text-gray-700 dark:text-amber-primary">{rule.title}:</span>
+                    <span className="text-gray-600 dark:text-amber-muted ml-1">{rule.description}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
 
   {/* Filters */}
 <TableToolbar
