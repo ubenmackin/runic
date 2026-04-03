@@ -27,7 +27,7 @@ import (
 )
 
 // Version is the agent version, set at build time.
-var Version = "0.5"
+var Version = "0.5.1"
 
 // Agent is the main agent struct.
 type Agent struct {
@@ -252,9 +252,16 @@ func (a *Agent) doRequestWithRetry(ctx context.Context, method, path string, bod
 	return nil, fmt.Errorf("all retries exhausted for %s %s: %w", method, path, lastErr)
 }
 
-// heartbeatLoop sends heartbeats at the configured interval.
+// heartbeatLoop sends heartbeats at the configured heartbeat interval.
+// This is separate from bundle polling to ensure agents stay online even when PullIntervalSec is long.
 func (a *Agent) heartbeatLoop(ctx context.Context) {
-	ticker := time.NewTicker(time.Duration(a.config.PullIntervalSec) * time.Second)
+	// Use dedicated heartbeat interval, defaulting to 30s if not set
+	heartbeatInterval := a.config.HeartbeatIntervalSec
+	if heartbeatInterval <= 0 {
+		heartbeatInterval = identity.DefaultHeartbeatIntervalSec
+	}
+
+	ticker := time.NewTicker(time.Duration(heartbeatInterval) * time.Second)
 	defer ticker.Stop()
 
 	// Send first heartbeat immediately

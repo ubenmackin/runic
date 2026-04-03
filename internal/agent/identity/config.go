@@ -9,29 +9,35 @@ import (
 
 // DefaultPullIntervalSec is the default polling interval (24 hours).
 // SSE is the primary notification mechanism; polling is a fallback.
-const DefaultPullIntervalSec = 86400 // 24 hours
+const DefaultPullIntervalSec = 86400 // 24 hours (SSE is primary)
+
+// DefaultHeartbeatIntervalSec is the default heartbeat interval (30 seconds).
+// Must be less than OfflineThresholdSeconds (90s) to prevent false offline detection.
+const DefaultHeartbeatIntervalSec = 30
 
 // Config holds the agent configuration.
 type Config struct {
-	ControlPlaneURL   string `json:"control_plane_url"`
-	HostID            string `json:"host_id"`
-	Token             string `json:"token"`
-	PullIntervalSec   int    `json:"pull_interval_seconds"`
-	LogPath           string `json:"log_path"`
-	CurrentBundleVer  string `json:"current_bundle_version"`
-	HMACKey           string `json:"hmac_key"`
-	ApplyOnBoot       bool   `json:"apply_on_boot"`
-	ApplyRulesBundle  bool   `json:"apply_rules_bundle"`
-	RegistrationToken string `json:"registration_token,omitempty"`
+	ControlPlaneURL      string `json:"control_plane_url"`
+	HostID               string `json:"host_id"`
+	Token                string `json:"token"`
+	PullIntervalSec      int    `json:"pull_interval_seconds"`
+	HeartbeatIntervalSec int    `json:"heartbeat_interval_seconds"`
+	LogPath              string `json:"log_path"`
+	CurrentBundleVer     string `json:"current_bundle_version"`
+	HMACKey              string `json:"hmac_key"`
+	ApplyOnBoot          bool   `json:"apply_on_boot"`
+	ApplyRulesBundle     bool   `json:"apply_rules_bundle"`
+	RegistrationToken    string `json:"registration_token,omitempty"`
 }
 
 // DefaultConfig returns a config with sensible defaults.
 func DefaultConfig() *Config {
 	return &Config{
-		PullIntervalSec:  DefaultPullIntervalSec,
-		LogPath:          "/var/log/runic/firewall.log",
-		ApplyOnBoot:      false,
-		ApplyRulesBundle: false,
+		PullIntervalSec:      DefaultPullIntervalSec,
+		HeartbeatIntervalSec: DefaultHeartbeatIntervalSec,
+		LogPath:              "/var/log/runic/firewall.log",
+		ApplyOnBoot:          false,
+		ApplyRulesBundle:     false,
 	}
 }
 

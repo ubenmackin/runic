@@ -18,6 +18,7 @@ const (
 const (
 	OfflineThresholdSeconds     = 90 // seconds without heartbeat = offline
 	PeerOfflineThresholdMinutes = 2  // minutes without heartbeat = offline (for SQL datetime calculations)
+	HeartbeatIntervalSec        = 30 // default agent heartbeat interval, must be less than OfflineThresholdSeconds
 )
 
 // Cleanup intervals
