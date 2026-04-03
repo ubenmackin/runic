@@ -54,6 +54,7 @@ SKIP_BUILD=false
 NON_INTERACTIVE=false
 PROVIDED_CONTROL_PLANE=""
 PROVIDED_JWT_SECRET=""
+COMMIT_REF=""
 
 # Temporary directories for cleanup
 TEMP_DIRS=()
@@ -632,6 +633,10 @@ parse_arguments() {
                 PROVIDED_JWT_SECRET="$2"
                 shift 2
                 ;;
+            --commit)
+                COMMIT_REF="$2"
+                shift 2
+                ;;
             -h|--help)
                 show_help
                 exit 0
@@ -658,6 +663,7 @@ Options:
   --non-interactive      Run without prompts (use defaults)
   --control-plane URL    Control plane URL (default: localhost:60443)
   --jwt-secret SECRET    JWT secret (auto-generated if not provided)
+  --commit SHA           Install from a specific git commit SHA (e.g., e94c2e3)
   -h, --help             Show this help message
 
 Examples:
@@ -669,6 +675,9 @@ Examples:
 
   # Skip build (for development)
   sudo $0 --skip-build
+
+  # Install from a specific commit
+  sudo $0 --commit e94c2e3
 
 EOF
 }
@@ -847,33 +856,55 @@ clone_repository() {
         git config --global --add safe.directory "$SOURCE_DIR" 2>/dev/null || true
 
         cd "$SOURCE_DIR"
-        # Fetch latest changes and hard reset to origin branch
-        # This avoids divergent branch issues with git pull
-        git fetch origin "$REPO_BRANCH" >> "$LOG_FILE" 2>&1 || { log ERROR "Failed to fetch from origin"; exit 1; }
-        git reset --hard "origin/$REPO_BRANCH" >> "$LOG_FILE" 2>&1 || { log ERROR "Failed to reset to origin/$REPO_BRANCH"; exit 1; }
+        
+        if [ -n "$COMMIT_REF" ]; then
+            # Fetch and checkout specific commit
+            log INFO "Checking out commit: $COMMIT_REF"
+            git fetch origin >> "$LOG_FILE" 2>&1 || { log ERROR "Failed to fetch from origin"; exit 1; }
+            git checkout "$COMMIT_REF" >> "$LOG_FILE" 2>&1 || { log ERROR "Failed to checkout commit $COMMIT_REF"; exit 1; }
+        else
+            # Fetch latest changes and hard reset to origin branch
+            git fetch origin "$REPO_BRANCH" >> "$LOG_FILE" 2>&1 || { log ERROR "Failed to fetch from origin"; exit 1; }
+            git reset --hard "origin/$REPO_BRANCH" >> "$LOG_FILE" 2>&1 || { log ERROR "Failed to reset to origin/$REPO_BRANCH"; exit 1; }
+        fi
     else
-        log INFO "Cloning repository from $REPO_URL..."
-        git clone --depth 1 --branch "$REPO_BRANCH" "$REPO_URL" "$SOURCE_DIR" >> "$LOG_FILE" 2>&1
+        if [ -n "$COMMIT_REF" ]; then
+            # Full clone (no --depth 1) to access arbitrary commits
+            log INFO "Cloning repository from $REPO_URL for commit $COMMIT_REF..."
+            git clone "$REPO_URL" "$SOURCE_DIR" >> "$LOG_FILE" 2>&1
 
-        if [ $? -ne 0 ]; then
-            log ERROR "Failed to clone repository"
-            log INFO "Trying alternative: downloading source archive..."
-
-            # Alternative: Download source
-            local tmpdir tmpfile
-            tmpdir=$(mktemp -d) || { log ERROR "Failed to create temp directory"; exit 1; }
-            TEMP_DIRS+=("$tmpdir")
-            tmpfile="$tmpdir/runic-${REPO_BRANCH}.tar.gz"
-            curl -sL "https://github.com/ubenmackin/runic/archive/refs/heads/$REPO_BRANCH.tar.gz" -o "$tmpfile"
-
-            if [ -f "$tmpfile" ]; then
-                # Remove existing SOURCE_DIR contents if any
-                safe_rm "$SOURCE_DIR"
-                tar -xzf "$tmpfile" -C "$tmpdir"
-                mv "$tmpdir/runic-$REPO_BRANCH" "$SOURCE_DIR" || { log ERROR "Failed to move extracted directory"; exit 1; }
-            else
-                log ERROR "Failed to download source"
+            if [ $? -ne 0 ]; then
+                log ERROR "Failed to clone repository"
                 exit 1
+            fi
+
+            cd "$SOURCE_DIR"
+            log INFO "Checking out commit: $COMMIT_REF"
+            git checkout "$COMMIT_REF" >> "$LOG_FILE" 2>&1 || { log ERROR "Failed to checkout commit $COMMIT_REF"; exit 1; }
+        else
+            log INFO "Cloning repository from $REPO_URL..."
+            git clone --depth 1 --branch "$REPO_BRANCH" "$REPO_URL" "$SOURCE_DIR" >> "$LOG_FILE" 2>&1
+
+            if [ $? -ne 0 ]; then
+                log ERROR "Failed to clone repository"
+                log INFO "Trying alternative: downloading source archive..."
+
+                # Alternative: Download source
+                local tmpdir tmpfile
+                tmpdir=$(mktemp -d) || { log ERROR "Failed to create temp directory"; exit 1; }
+                TEMP_DIRS+=("$tmpdir")
+                tmpfile="$tmpdir/runic-${REPO_BRANCH}.tar.gz"
+                curl -sL "https://github.com/ubenmackin/runic/archive/refs/heads/$REPO_BRANCH.tar.gz" -o "$tmpfile"
+
+                if [ -f "$tmpfile" ]; then
+                    # Remove existing SOURCE_DIR contents if any
+                    safe_rm "$SOURCE_DIR"
+                    tar -xzf "$tmpfile" -C "$tmpdir"
+                    mv "$tmpdir/runic-$REPO_BRANCH" "$SOURCE_DIR" || { log ERROR "Failed to move extracted directory"; exit 1; }
+                else
+                    log ERROR "Failed to download source"
+                    exit 1
+                fi
             fi
         fi
     fi
