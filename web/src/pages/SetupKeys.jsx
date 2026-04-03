@@ -89,13 +89,7 @@ export default function SetupKeys() {
   // Registration tokens query
   const { data: tokens, isLoading: tokensLoading } = useQuery({
     queryKey: ['registration-tokens'],
-    queryFn: async () => {
-      const start = performance.now();
-      console.log('[DEBUG] /registration-tokens: fetching...');
-      const result = await api.get('/registration-tokens');
-      console.log(`[DEBUG] /registration-tokens: completed in ${Math.round(performance.now() - start)}ms`);
-      return result;
-    },
+    queryFn: () => api.get('/registration-tokens'),
     enabled: activeTab === 'tokens' && isAdmin,
   })
 

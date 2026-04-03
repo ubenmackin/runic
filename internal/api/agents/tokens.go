@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
-	"log"
 	"net/http"
 	"time"
 
@@ -56,22 +55,15 @@ func GenerateRegistrationToken(w http.ResponseWriter, r *http.Request) {
 // ListRegistrationTokens lists all registration tokens
 // GET /api/v1/registration-tokens
 func ListRegistrationTokens(w http.ResponseWriter, r *http.Request) {
-	start := time.Now()
-	log.Printf("[DEBUG] ListRegistrationTokens: starting query")
 	rows, err := db.DB.Query(
 		"SELECT id, token, description, created_at, used_at, used_by_hostname, is_revoked FROM registration_tokens ORDER BY created_at DESC",
 	)
-	queryElapsed := time.Since(start)
-	log.Printf("[DEBUG] ListRegistrationTokens: query completed in %v", queryElapsed)
 	if err != nil {
 		runiclog.Error("Failed to list tokens", "error", err)
 		http.Error(w, `{"error": "internal server error"}`, http.StatusInternalServerError)
 		return
 	}
 	defer rows.Close()
-
-	scanStart := time.Now()
-	count := 0
 
 	var tokens []map[string]interface{}
 	for rows.Next() {
@@ -86,8 +78,6 @@ func ListRegistrationTokens(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, `{"error": "internal server error"}`, http.StatusInternalServerError)
 			return
 		}
-
-		count++
 
 		status := "active"
 		if isRevoked == 1 {
@@ -109,12 +99,6 @@ func ListRegistrationTokens(w http.ResponseWriter, r *http.Request) {
 			"status":           status,
 		})
 	}
-
-	scanElapsed := time.Since(scanStart)
-	log.Printf("[DEBUG] ListRegistrationTokens: scanned %d tokens in %v", count, scanElapsed)
-
-	totalElapsed := time.Since(start)
-	log.Printf("[DEBUG] ListRegistrationTokens: responding with %d tokens in %v total", count, totalElapsed)
 
 	tokens = common.EnsureSlice(tokens)
 	common.RespondJSON(w, http.StatusOK, tokens)
