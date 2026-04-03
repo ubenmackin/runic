@@ -55,40 +55,50 @@ async function refreshTokenOnce() {
 }
 
 async function request(method, path, body, retry = true) {
-  const fetchOptions = {
-    method,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  }
-
-  const res = await fetch(BASE + path, fetchOptions)
-
-  if (res.status === 401 && retry && refreshToken) {
-    const refreshed = await refreshTokenOnce()
-    if (refreshed.ok) {
-      const data = await refreshed.json()
-      setTokens(data.access_token, data.refresh_token)
-      return request(method, path, body, false)
-    } else {
-      clearTokens()
-      if (authFailureCallback) authFailureCallback()
-      throw new Error('Session expired. Please log in again.')
+  try {
+    console.log(`[DEBUG] request(${method} ${path}): starting, accessToken=${!!accessToken}, refreshToken=${!!refreshToken}`)
+    const fetchOptions = {
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+      },
+      body: body ? JSON.stringify(body) : undefined,
     }
+
+    const res = await fetch(BASE + path, fetchOptions)
+    console.log(`[DEBUG] request(${method} ${path}): response status=${res.status}, ok=${res.ok}`)
+
+    if (res.status === 401 && retry && refreshToken) {
+      console.log(`[DEBUG] request(${method} ${path}): got 401, attempting refresh`)
+      const refreshed = await refreshTokenOnce()
+      if (refreshed.ok) {
+        const data = await refreshed.json()
+        setTokens(data.access_token, data.refresh_token)
+        return request(method, path, body, false)
+      } else {
+        clearTokens()
+        if (authFailureCallback) authFailureCallback()
+        throw new Error('Session expired. Please log in again.')
+      }
+    }
+
+    if (!res.ok) {
+      console.log(`[DEBUG] request(${method} ${path}): not ok, status=${res.status}`)
+      const err = await res.json().catch(() => ({ error: res.statusText }))
+      const message = typeof err.error === 'string' ? err.error : err.error?.message
+      throw new Error(message || 'Request failed')
+    }
+
+    if (res.status === 204) return null
+    console.log(`[DEBUG] request(${method} ${path}): parsing JSON response`)
+    const json = await res.json()
+    console.log(`[DEBUG] request(${method} ${path}): parsed, json.data=${!!json.data}, json type=${Array.isArray(json) ? 'array' : typeof json}`)
+    return json.data ?? json
+  } catch (err) {
+    console.error(`[DEBUG] request(${method} ${path}): ERROR: ${err.message}`, err)
+    throw err
   }
-
-	if (!res.ok) {
-		const err = await res.json().catch(() => ({ error: res.statusText }))
-		// Handle both { error: "message" } and { error: { message: "..." } } formats
-		const message = typeof err.error === 'string' ? err.error : err.error?.message
-		throw new Error(message || 'Request failed')
-	}
-
-  if (res.status === 204) return null
-  const json = await res.json()
-  return json.data ?? json
 }
 
 export const api = {

@@ -116,6 +116,7 @@ func ListRegistrationTokens(w http.ResponseWriter, r *http.Request) {
 	totalElapsed := time.Since(start)
 	log.Printf("[DEBUG] ListRegistrationTokens: responding with %d tokens in %v total", count, totalElapsed)
 
+	tokens = common.EnsureSlice(tokens)
 	common.RespondJSON(w, http.StatusOK, tokens)
 }
 
