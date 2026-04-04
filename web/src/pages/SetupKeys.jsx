@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { RotateCw, CheckCircle, Clock, AlertTriangle, Copy, Key, Trash2, Plus, Shield } from 'lucide-react'
+import { RotateCw, CheckCircle, Clock, AlertTriangle, Copy, Key, Trash2, Plus, Shield, XCircle } from 'lucide-react'
 import { QUERY_KEYS, api } from '../api/client'
 import { useToastContext } from '../hooks/ToastContext'
 import { usePagination } from '../hooks/usePagination'
@@ -161,9 +161,9 @@ export default function SetupKeys() {
     const now = new Date()
     const hoursSince = (now - lastRotated) / (1000 * 60 * 60)
 
-    if (hoursSince < 1) return 'recent'
-    if (hoursSince < 24) return 'today'
-    if (hoursSince < 72) return 'aging'
+    if (hoursSince < 24) return 'recent'
+    if (hoursSince < 360) return 'today'
+    if (hoursSince < 720) return 'aging'
     return 'old'
   }
 
@@ -174,7 +174,7 @@ export default function SetupKeys() {
       case 'recent':
       case 'today': return { status, icon: CheckCircle, color: 'text-green-500' }
       case 'aging': return { status, icon: Clock, color: 'text-yellow-500' }
-      default: return { status, icon: AlertTriangle, color: 'text-red-500' }
+      case 'old': return { status, icon: XCircle, color: 'text-red-500' }
     }
   }
 
