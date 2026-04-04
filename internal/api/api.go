@@ -219,6 +219,7 @@ func RegisterRoutes(r *mux.Router, a *API, downloadsDir string) {
 	editor.HandleFunc("/pending-changes/{peerId:[0-9]+}/preview", pending.MakePreviewPeerPendingBundleHandler(a.Compiler)).Methods("POST")
 	editor.HandleFunc("/pending-changes/{peerId:[0-9]+}/apply", pending.MakeApplyPeerPendingBundleHandler(a.Compiler, a.SSEHub)).Methods("POST")
 	editor.HandleFunc("/pending-changes/apply-all", pending.MakeApplyAllPendingBundlesHandler(a.Compiler, a.SSEHub)).Methods("POST")
+	editor.HandleFunc("/pending-changes/push-all", pending.MakePushAllRulesHandler(a.Compiler, a.SSEHub)).Methods("POST")
 
 	// Agent routes (require agent auth via JWT)
 	apiRouter.HandleFunc("/agent/bundle/{host_id}", agents.AgentAuthMiddleware(agents.GetBundle)).Methods("GET")

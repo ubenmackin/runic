@@ -253,7 +253,7 @@ func MakeApplyPeerPendingBundleHandler(compiler *engine.Compiler, sseHub *events
 		db.DeletePendingBundlePreview(ctx, database, peerID)
 
 		// Notify via SSE (use hostname as the host_id for SSE)
-		sseHub.NotifyBundleUpdated(hostname, bundle.Version)
+		sseHub.NotifyBundleUpdated("host-"+hostname, bundle.Version)
 
 		common.RespondJSON(w, http.StatusOK, map[string]interface{}{
 			"status":  "applied",
@@ -307,6 +307,80 @@ func MakeApplyAllPendingBundlesHandler(compiler *engine.Compiler, sseHub *events
 	}
 }
 
+// MakePushAllRulesHandler compiles and pushes rules to ALL peers in the database,
+// regardless of whether they have pending changes. This is used for the "Push Rules to All"
+// dashboard action.
+func MakePushAllRulesHandler(compiler *engine.Compiler, sseHub *events.SSEHub) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		database := db.DB.DB
+
+		// Get ALL peers from the database (not just those with pending changes)
+		rows, err := database.QueryContext(ctx, "SELECT id, hostname FROM peers ORDER BY hostname")
+		if err != nil {
+			log.Printf("ERROR: failed to query all peers: %v", err)
+			common.InternalError(w)
+			return
+		}
+		defer rows.Close()
+
+		type peerInfo struct {
+			id       int
+			hostname string
+		}
+
+		var allPeers []peerInfo
+		for rows.Next() {
+			var p peerInfo
+			if err := rows.Scan(&p.id, &p.hostname); err != nil {
+				log.Printf("WARN: failed to scan peer: %v", err)
+				continue
+			}
+			allPeers = append(allPeers, p)
+		}
+
+		if err := rows.Err(); err != nil {
+			log.Printf("ERROR: error iterating peers: %v", err)
+			common.InternalError(w)
+			return
+		}
+
+		if len(allPeers) == 0 {
+			common.RespondJSON(w, http.StatusOK, map[string]interface{}{
+				"status": "no_peers",
+				"pushed": 0,
+			})
+			return
+		}
+
+		pushed := 0
+		var errors []string
+		for _, p := range allPeers {
+			// Compile and store the bundle (similar to applyBundleForPeer but without clearing pending)
+			bundle, err := compiler.CompileAndStore(ctx, p.id)
+			if err != nil {
+				errors = append(errors, fmt.Sprintf("peer %d (%s): %v", p.id, p.hostname, err))
+				continue
+			}
+
+			// Notify via SSE
+			sseHub.NotifyBundleUpdated("host-"+p.hostname, bundle.Version)
+			pushed++
+		}
+
+		resp := map[string]interface{}{
+			"status": "completed",
+			"pushed": pushed,
+			"total":  len(allPeers),
+		}
+		if len(errors) > 0 {
+			resp["errors"] = errors
+		}
+
+		common.RespondJSON(w, http.StatusOK, resp)
+	}
+}
+
 // applyBundleForPeer compiles, stores, and clears pending for a single peer.
 func applyBundleForPeer(ctx context.Context, database *sql.DB, compiler *engine.Compiler, sseHub *events.SSEHub, peerID int) error {
 	// Get hostname for SSE
@@ -329,7 +403,7 @@ func applyBundleForPeer(ctx context.Context, database *sql.DB, compiler *engine.
 	db.DeletePendingBundlePreview(ctx, database, peerID)
 
 	// Notify via SSE
-	sseHub.NotifyBundleUpdated(hostname, bundle.Version)
+	sseHub.NotifyBundleUpdated("host-"+hostname, bundle.Version)
 
 	return nil
 }

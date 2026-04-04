@@ -44,7 +44,7 @@ export default function Dashboard() {
 
       {/* Stat cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatCard icon={AlertTriangle} label="Pending Changes" value={totalPendingCount} color="text-amber-600" />
+        <StatCard icon={AlertTriangle} label="Pending Changes" value={totalPendingCount} color={totalPendingCount > 0 ? "text-amber-600" : ""} />
         <StatCard icon={Server} label="Total Peers" value={stats.total_peers} />
         <StatCard icon={Server} label="Online" value={stats.online_peers} color="text-green-600" />
         <StatCard icon={Server} label="Offline" value={stats.offline_peers} color="text-red-600" />

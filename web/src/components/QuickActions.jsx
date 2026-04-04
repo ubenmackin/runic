@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Upload, UserPlus, Shield, Loader2 } from 'lucide-react'
 import { api, QUERY_KEYS } from '../api/client'
 import { useToastContext } from '../hooks/ToastContext'
@@ -11,46 +11,27 @@ export default function QuickActions() {
   const qc = useQueryClient()
   const showToast = useToastContext()
   const [showConfirmModal, setShowConfirmModal] = useState(false)
+  const [isPushing, setIsPushing] = useState(false)
 
-  // Fetch peers list
+  // Fetch peers list for confirmation modal
   const { data: peers, isLoading } = useQuery({
     queryKey: QUERY_KEYS.peers(),
     queryFn: () => api.get('/peers'),
     staleTime: 30000,
   })
 
-  // Mutation for pushing rules to a single peer
-  const pushRulesMutation = useMutation({
-    mutationFn: (peerId) => api.post(`/peers/${peerId}/compile`),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: QUERY_KEYS.peers() })
-    },
-  })
-
   // Handle push rules to all peers
   const handlePushRulesToAll = async () => {
-    if (!peers || peers.length === 0) {
-      showToast('No peers available to push rules to', 'error')
-      return
+    setIsPushing(true)
+    try {
+      await api.post('/pending-changes/push-all')
+      showToast('Successfully pushed rules to all peers', 'success')
+      qc.invalidateQueries({ queryKey: QUERY_KEYS.peers() })
+    } catch (err) {
+      showToast(`Failed to push rules: ${err.message}`, 'error')
     }
-
-  const results = await Promise.allSettled(
-    peers.map(peer => pushRulesMutation.mutateAsync(peer.id))
-  )
-
-  const success = results.filter(r => r.status === 'fulfilled').length
-  const failed = results.filter(r => r.status === 'rejected').length
-
-  // Show result notification
-  if (failed === 0) {
-    showToast(`Successfully pushed rules to all ${success} peer(s)`, 'success')
-  } else if (success === 0) {
-    showToast(`Failed to push rules to all ${failed} peer(s)`, 'error')
-  } else {
-    showToast(`Pushed rules to ${success} peer(s), ${failed} failed`, 'error')
-  }
-
     setShowConfirmModal(false)
+    setIsPushing(false)
   }
 
   return (
@@ -64,16 +45,16 @@ export default function QuickActions() {
       {/* Push Rules to All */}
       <button
         onClick={() => setShowConfirmModal(true)}
-        disabled={pushRulesMutation.isPending || isLoading}
+        disabled={isPushing || isLoading}
         aria-label="Push Rules to All"
         className="w-full flex items-center gap-3 px-3 py-2.5 text-sm font-medium text-gray-700 dark:text-amber-primary bg-gray-50 dark:bg-charcoal-darkest border border-gray-200 dark:border-gray-border hover:bg-gray-200 dark:hover:bg-charcoal-light rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
       >
-        {pushRulesMutation.isPending || isLoading ? (
+        {isPushing || isLoading ? (
           <Loader2 className="w-4 h-4 animate-spin text-purple-active" />
         ) : (
           <Upload className="w-4 h-4 text-purple-active" />
         )}
-        <span>{pushRulesMutation.isPending ? 'Pushing Rules...' : isLoading ? 'Loading...' : 'Push Rules to All'}</span>
+        <span>{isPushing ? 'Pushing Rules...' : isLoading ? 'Loading...' : 'Push Rules to All'}</span>
       </button>
 
 	{/* Add Peer */}
