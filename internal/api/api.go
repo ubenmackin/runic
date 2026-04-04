@@ -38,6 +38,7 @@ type API struct {
 	RegisterRateLimiter *middleware.RateLimiter
 	RefreshRateLimiter  *middleware.RateLimiter
 	DownloadRateLimiter *middleware.RateLimiter
+	LogoutRateLimiter   *middleware.RateLimiter
 }
 
 // NewAPI creates a new API instance with the given compiler.
@@ -97,6 +98,7 @@ func RegisterRoutes(r *mux.Router, a *API, downloadsDir string) {
 	a.LoginRateLimiter = middleware.NewRateLimiter(5, time.Minute)
 	a.RegisterRateLimiter = middleware.NewRateLimiter(10, time.Minute)
 	a.RefreshRateLimiter = middleware.NewRateLimiter(10, time.Minute)
+	a.LogoutRateLimiter = middleware.NewRateLimiter(10, time.Minute)
 
 	// Public routes (no authentication required)
 	// Setup
@@ -119,7 +121,10 @@ func RegisterRoutes(r *mux.Router, a *API, downloadsDir string) {
 	// --- Viewer routes (all authenticated users — no extra middleware) ---
 
 	// Logout
-	protected.HandleFunc("/auth/logout", authhandlers.HandleLogoutPOST).Methods("POST")
+	protected.Handle("/auth/logout", a.LogoutRateLimiter.Middleware(http.HandlerFunc(authhandlers.HandleLogoutPOST))).Methods("POST")
+
+	// Auth me endpoint
+	protected.HandleFunc("/auth/me", authhandlers.HandleGetMe).Methods("GET")
 
 	// Dashboard
 	protected.HandleFunc("/dashboard", dashboard.HandleDashboard).Methods("GET")
@@ -268,6 +273,9 @@ func (a *API) Stop() {
 	}
 	if a.DownloadRateLimiter != nil {
 		a.DownloadRateLimiter.Stop()
+	}
+	if a.LogoutRateLimiter != nil {
+		a.LogoutRateLimiter.Stop()
 	}
 }
 

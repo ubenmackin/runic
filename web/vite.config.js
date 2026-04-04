@@ -8,6 +8,8 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:8080',
         changeOrigin: true,
+        cookieDomainRewrite: 'localhost',
+        ws: true,
       }
     }
   },
@@ -17,6 +19,7 @@ export default defineConfig({
       '/api': {
         target: 'https://localhost:60443',
         changeOrigin: true,
+        cookieDomainRewrite: 'localhost',
         secure: false, // Allow self-signed certificates
       }
     }

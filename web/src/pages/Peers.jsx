@@ -11,6 +11,7 @@ import { useToastContext } from '../hooks/ToastContext'
 import { formatRelativeTime } from '../utils/formatTime.js'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 import { useTableFilter } from '../hooks/useTableFilter'
+import { useFilterPersistence } from '../hooks/useFilterPersistence'
 import { useCrudMutations } from '../hooks/useCrudMutations'
 import { useAuth } from '../hooks/useAuth'
 import ConfirmModal from '../components/ConfirmModal'
@@ -115,8 +116,8 @@ export default function Peers() {
   // Sorting state (persisted per-user)
   const { sortConfig, handleSort } = useTableSort('peers', { key: 'hostname', direction: 'asc' })
 
-  // Status filter state
-  const [statusFilter, setStatusFilter] = useState('all')
+  // Status filter state (persisted per-user)
+  const { value: statusFilter, setValue: setStatusFilter } = useFilterPersistence('peers', 'status', 'all')
 
   // Manual refresh state
   const [isManualRefreshing, setIsManualRefreshing] = useState(false)
@@ -244,22 +245,24 @@ export default function Peers() {
   // Search state
   const [searchTerm, setSearchTerm] = useState('')
 
-  // Pre-filter by status filter before search/sort
-  const preFilteredPeers = peers?.filter(peer => {
-    if (statusFilter === 'all') return true
-    switch (statusFilter) {
-      case 'online':
-        return peer.status === 'online' && !peer.is_manual
-      case 'offline':
-        return peer.status === 'offline' && !peer.is_manual
-      case 'manual':
-        return peer.is_manual === true
-      case 'agent':
-        return !peer.is_manual
-      default:
-        return true
-    }
-  })
+// Pre-filter by status filter before search/sort
+const preFilteredPeers = peers?.filter(peer => {
+  if (statusFilter === 'all') return true
+  switch (statusFilter) {
+    case 'online':
+      return peer.status === 'online' && !peer.is_manual
+    case 'offline':
+      return peer.status === 'offline' && !peer.is_manual
+    case 'manual':
+      return peer.is_manual === true
+    case 'agent':
+      return !peer.is_manual
+    case 'pending':
+      return peer.pending_changes_count > 0
+    default:
+      return true
+  }
+})
 
   // Filtered and sorted data (includes status filter)
   const processedPeers = useTableFilter(preFilteredPeers, searchTerm, sortConfig, {
@@ -399,6 +402,7 @@ export default function Peers() {
           { value: 'offline', label: 'Offline' },
           { value: 'manual', label: 'Manual' },
           { value: 'agent', label: 'Agent' },
+          { value: 'pending', label: 'Pending Changes' },
         ].map(opt => (
           <button
             key={opt.value}

@@ -31,9 +31,13 @@ export default function Login({ mode }) {
 
   const loginMutation = useMutation({
     mutationFn: () => api.post('/auth/login', { username, password }),
-    onSuccess: (data) => {
-      login(data.access_token, data.refresh_token)
-      navigate('/')
+    onSuccess: async () => {
+      await login()
+      if (useAuthStore.getState().isAuthenticated) {
+        navigate('/')
+      } else {
+        setError('Login succeeded but session verification failed. Please try again.')
+      }
     },
     onError: (err) => setError(err.message),
   })
@@ -43,9 +47,13 @@ export default function Login({ mode }) {
       if (password !== confirmPassword) throw new Error('Passwords do not match')
       return api.post('/setup', { username, password })
     },
-    onSuccess: (data) => {
-      login(data.access_token, data.refresh_token)
-      navigate('/')
+    onSuccess: async () => {
+      await login()
+      if (useAuthStore.getState().isAuthenticated) {
+        navigate('/')
+      } else {
+        setError('Setup succeeded but session verification failed. Please try again.')
+      }
     },
     onError: (err) => {
       setError(err.message)

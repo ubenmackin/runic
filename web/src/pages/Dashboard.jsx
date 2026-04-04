@@ -8,6 +8,7 @@ import RecentActivityFeed from '../components/RecentActivityFeed'
 import QuickActions from '../components/QuickActions'
 import TopBlockedSources from '../components/TopBlockedSources'
 import { Server, Shield, AlertTriangle, Clock, UserPlus } from 'lucide-react'
+import { usePendingChanges } from '../contexts/PendingChangesContext'
 
 export default function Dashboard() {
   // Fetch dashboard stats
@@ -30,6 +31,9 @@ export default function Dashboard() {
     staleTime: 30000, // Consider data fresh for 30 seconds
   })
 
+  // Get pending changes from context (shared with Layout)
+  const { totalPendingCount } = usePendingChanges()
+
   if (isLoading) return <TableSkeleton rows={4} columns={5} />
 
   const stats = data || { total_peers: 0, online_peers: 0, offline_peers: 0, manual_peers: 0, total_policies: 0, blocked_last_hour: 0, blocked_last_24h: 0, recent_activity: [], peer_health: [], top_blocked_sources: [] }
@@ -40,6 +44,7 @@ export default function Dashboard() {
 
       {/* Stat cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <StatCard icon={AlertTriangle} label="Pending Changes" value={totalPendingCount} color="text-amber-600" />
         <StatCard icon={Server} label="Total Peers" value={stats.total_peers} />
         <StatCard icon={Server} label="Online" value={stats.online_peers} color="text-green-600" />
         <StatCard icon={Server} label="Offline" value={stats.offline_peers} color="text-red-600" />

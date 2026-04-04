@@ -150,6 +150,12 @@ func main() {
 		log.Fatalf("Failed to initialize database: %v", err)
 	}
 
+	// Ensure control_plane_port is set in system_config for rule generation
+	if err := db.SetSecret("control_plane_port", port); err != nil {
+		log.Fatalf("Failed to set control_plane_port in system_config: %v", err)
+	}
+	log.Printf("Control plane port set to %s in system_config", port)
+
 	downloadsDir := os.Getenv("RUNIC_DOWNLOADS_DIR")
 	if downloadsDir == "" {
 		downloadsDir = "./downloads"
@@ -183,7 +189,7 @@ func main() {
 
 	// For any route not matched above, serve the SPA
 	// If the file exists, serve it; otherwise serve index.html (for client-side routing)
-	r.PathPrefix("/").HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+	r.PathPrefix("/").Handler(api.CSP()(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		// Try to open the requested file
 		path := req.URL.Path
 		if path == "/" {
@@ -204,7 +210,7 @@ func main() {
 			req.URL.Path = "/index.html"
 			fileServer.ServeHTTP(w, req)
 		}
-	})
+	})))
 
 	// Create root context for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
@@ -230,7 +236,6 @@ func main() {
 			tls.TLS_CHACHA20_POLY1305_SHA256, // TLS 1.3
 			tls.TLS_AES_128_GCM_SHA256,       // TLS 1.3
 		},
-		PreferServerCipherSuites: true,
 	}
 
 	srv := &http.Server{

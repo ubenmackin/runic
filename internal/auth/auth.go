@@ -127,13 +127,13 @@ func SetDB(database *sql.DB) {
 }
 
 // RevokeToken marks a token's unique ID as revoked in the database.
-func RevokeToken(ctx context.Context, uniqueID string, expiresAt time.Time) error {
+func RevokeToken(ctx context.Context, uniqueID string, expiresAt time.Time, tokenType string) error {
 	if authDB == nil {
 		return fmt.Errorf("auth database not initialized")
 	}
 	_, err := authDB.ExecContext(ctx,
-		`INSERT OR IGNORE INTO revoked_tokens (unique_id, expires_at) VALUES (?, ?)`,
-		uniqueID, expiresAt.UTC().Format(time.RFC3339))
+		`INSERT OR IGNORE INTO revoked_tokens (unique_id, expires_at, token_type) VALUES (?, ?, ?)`,
+		uniqueID, expiresAt.UTC().Format(time.RFC3339), tokenType)
 	return err
 }
 
@@ -166,21 +166,30 @@ func CleanupExpiredTokens(ctx context.Context) error {
 
 func Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		authHeader := r.Header.Get("Authorization")
-		if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return
+		var tokenStr string
+		// Try cookie first (web UI)
+		if c, err := r.Cookie("runic_access_token"); err == nil && c.Value != "" {
+			tokenStr = c.Value
+		} else {
+			// Fall back to Bearer header (agent)
+			authHeader := r.Header.Get("Authorization")
+			if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
+				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				return
+			}
+			tokenStr = strings.TrimPrefix(authHeader, "Bearer ")
 		}
 
-		tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
 		claims, err := ValidateToken(tokenStr)
 		if err != nil || claims == nil {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
 
-		// Check if the token has been revoked
-		if IsRevoked(r.Context(), claims.UniqueID) {
+		// Check if the token has been revoked (with timeout for DB safety)
+		revCtx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+		if IsRevoked(revCtx, claims.UniqueID) {
 			http.Error(w, "Unauthorized: token revoked", http.StatusUnauthorized)
 			return
 		}

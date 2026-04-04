@@ -2,12 +2,14 @@ import React, { useState, useEffect } from 'react'
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import {
   LayoutDashboard, Server, Users as UsersIcon, Briefcase, Shield, FileText,
-  Menu, X, LogOut, Moon, Sun, Key, Settings, User, ChevronDown, ChevronRight, Flame, Network
+  Menu, X, LogOut, Moon, Sun, Key, Settings, User, ChevronDown, ChevronRight, Flame, Network,
+  ShieldAlert
 } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 import { useAuthStore } from '../store'
 import { useAuth } from '../hooks/useAuth'
 import { getVersion } from '../api/client'
+import { usePendingChanges } from '../contexts/PendingChangesContext'
 
 const NavItem = React.memo(({ to, icon: Icon, label, onClick, isChild = false }) => (
   <NavLink
@@ -70,6 +72,9 @@ export default function Layout() {
     staleTime: Infinity, // Version doesn't change during session
   })
 
+  // Get pending changes from context (shared with Dashboard)
+  const { totalPendingCount } = usePendingChanges()
+
   // Apply dark class on mount and when darkMode changes
   useEffect(() => {
     document.documentElement.classList.toggle('dark', darkMode)
@@ -130,45 +135,49 @@ const toggleDark = () => {
           </button>
         </div>
         <nav className="mt-4 px-2 space-y-1">
-          {visibleNavItems.map((item) => {
-            if (item.children) {
-              // Expandable menu item
-              const isExpanded = expandedItems[item.label] || false
-              return (
-                <div key={item.label}>
-                  <button
-                    onClick={() => toggleExpanded(item.label)}
-className={`w-full flex items-center justify-between gap-3 px-4 py-3 rounded-lg transition-colors ${
-'text-gray-700 dark:text-light-neutral hover:bg-gray-100 dark:hover:bg-charcoal-darkest'
-}`}
-                  >
-                    <div className="flex items-center gap-3">
-                      <item.icon className="w-5 h-5" />
-                      <span>{item.label}</span>
-                    </div>
-                    {isExpanded ? (
-                      <ChevronDown className="w-4 h-4" />
-                    ) : (
-                      <ChevronRight className="w-4 h-4" />
-                    )}
-                  </button>
-                  {isExpanded && (
-                    <div className="ml-4 mt-1 space-y-1">
-                      {item.children.map((child) => (
-                        <NavItem
-                          key={child.to}
-                          to={child.to}
-                          icon={child.icon}
-                          label={child.label}
-                          onClick={() => setSidebarOpen(false)}
-                          isChild
-                        />
-                      ))}
-                    </div>
+        {visibleNavItems.map((item) => {
+          if (item.children) {
+            // Expandable menu item
+            const isExpanded = expandedItems[item.label] || false
+            // Use ShieldAlert for Access Control when there are pending changes
+            const IconComponent = item.label === 'Access Control' && totalPendingCount > 0
+              ? ShieldAlert
+              : item.icon
+            return (
+              <div key={item.label}>
+                <button
+                  onClick={() => toggleExpanded(item.label)}
+                  className={`w-full flex items-center justify-between gap-3 px-4 py-3 rounded-lg transition-colors ${
+                    'text-gray-700 dark:text-light-neutral hover:bg-gray-100 dark:hover:bg-charcoal-darkest'
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <IconComponent className={`w-5 h-5 ${item.label === 'Access Control' && totalPendingCount > 0 ? 'text-blue-500' : ''}`} />
+                    <span>{item.label}</span>
+                  </div>
+                  {isExpanded ? (
+                    <ChevronDown className="w-4 h-4" />
+                  ) : (
+                    <ChevronRight className="w-4 h-4" />
                   )}
-                </div>
-              )
-            }
+                </button>
+                {isExpanded && (
+                  <div className="ml-4 mt-1 space-y-1">
+                    {item.children.map((child) => (
+                      <NavItem
+                        key={child.to}
+                        to={child.to}
+                        icon={child.icon}
+                        label={child.label}
+                        onClick={() => setSidebarOpen(false)}
+                        isChild
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+            )
+          }
 
             // Regular menu item
             return (

@@ -201,8 +201,10 @@ func MakePreviewPeerPendingBundleHandler(compiler *engine.Compiler) http.Handler
 		common.RespondJSON(w, http.StatusOK, map[string]interface{}{
 			"version":         version,
 			"current_version": currentVersion,
+			"new_version":     version,
 			"is_different":    version != currentVersion,
 			"diff":            diffContent,
+			"rules_content":   content,
 		})
 	}
 }

@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate, useNavigate } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { SetupProvider, useSetup } from './contexts/SetupContext'
+import { PendingChangesProvider } from './contexts/PendingChangesContext'
 import Layout from './components/Layout'
 import { useAuthStore } from './store'
 import { ToastProvider } from './hooks/ToastContext'
@@ -42,8 +43,16 @@ const qc = new QueryClient({
   },
 })
 
+function AuthCheck() {
+  useEffect(() => {
+    useAuthStore.getState().checkAuth()
+  }, [])
+  return null
+}
+
 function PrivateRoute({ children }) {
   const auth = useAuthStore(s => s.isAuthenticated)
+  if (auth === null) return <PageLoader />  // still checking
   return auth ? children : <SmartRedirect />
 }
 
@@ -83,15 +92,22 @@ function SmartRedirect() {
 export default function App() {
   return (
     <ErrorBoundary>
+      <AuthCheck />
       <QueryClientProvider client={qc}>
         <ToastProvider>
           <SetupProvider>
             <BrowserRouter>
               <Routes>
                 <Route path="/login" element={<RouteErrorBoundary><Suspense fallback={<PageLoader />}><Login /></Suspense></RouteErrorBoundary>} />
-                <Route path="/setup" element={<RouteErrorBoundary><Suspense fallback={<PageLoader />}><Login mode="setup" /></Suspense></RouteErrorBoundary>} />
-                <Route path="/" element={<PrivateRoute><Layout /></PrivateRoute>}>
-                  <Route index element={<RouteErrorBoundary><Suspense fallback={<PageLoader />}><Dashboard /></Suspense></RouteErrorBoundary>} />
+        <Route path="/setup" element={<RouteErrorBoundary><Suspense fallback={<PageLoader />}><Login mode="setup" /></Suspense></RouteErrorBoundary>} />
+        <Route path="/" element={
+          <PrivateRoute>
+            <PendingChangesProvider>
+              <Layout />
+            </PendingChangesProvider>
+          </PrivateRoute>
+        }>
+          <Route index element={<RouteErrorBoundary><Suspense fallback={<PageLoader />}><Dashboard /></Suspense></RouteErrorBoundary>} />
                   <Route path="topology" element={<RouteErrorBoundary><Suspense fallback={<PageLoader />}><Topology /></Suspense></RouteErrorBoundary>} />
                   <Route path="peers" element={<RouteErrorBoundary><Suspense fallback={<PageLoader />}><Peers /></Suspense></RouteErrorBoundary>} />
                   <Route path="groups" element={<RouteErrorBoundary><Suspense fallback={<PageLoader />}><Groups /></Suspense></RouteErrorBoundary>} />

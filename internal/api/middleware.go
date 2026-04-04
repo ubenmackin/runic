@@ -25,7 +25,7 @@ const CSPHeader = "Content-Security-Policy"
 // Hash computed from: openssl dgst -sha256 -binary <script> | base64
 var cspDirectives = strings.Join([]string{
 	"default-src 'self'",
-	"script-src 'self' 'sha256-GGgHykvuirqqhibRdSUellJVcCV4o85Qu0qQNV4XUs4='",
+	"script-src 'self' 'sha256-bWmO0Su4nElv8RRute+EdRZcM9aoZ6K7R/rVKnR9UUw='",
 	"style-src 'self' 'unsafe-inline'",
 	"img-src 'self' data:",
 	"font-src 'self'",
@@ -69,6 +69,15 @@ func GetRequestID(ctx context.Context) (string, bool) {
 	return log.GetRequestID(ctx)
 }
 
+// setSecurityHeaders sets common security hardening headers on the response.
+func setSecurityHeaders(w http.ResponseWriter) {
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("X-Frame-Options", "DENY")
+	w.Header().Set("X-XSS-Protection", "0")
+	w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+	w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+}
+
 // CSP returns a middleware that sets Content-Security-Policy headers.
 // This provides server-side CSP enforcement which is authoritative over meta tags.
 // The CSP includes a hash for the inline dark mode script to prevent flash of unstyled content.
@@ -77,6 +86,10 @@ func CSP() mux.MiddlewareFunc {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Set CSP header - this overrides any CSP meta tag in HTML
 			w.Header().Set(CSPHeader, cspDirectives)
+
+			// Additional security hardening headers
+			setSecurityHeaders(w)
+
 			next.ServeHTTP(w, r)
 		})
 	}
@@ -94,6 +107,10 @@ func CSPForAPI() mux.MiddlewareFunc {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set(CSPHeader, apiCSP)
+
+			// Additional security hardening headers
+			setSecurityHeaders(w)
+
 			next.ServeHTTP(w, r)
 		})
 	}

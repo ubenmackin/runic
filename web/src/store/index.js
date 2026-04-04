@@ -1,44 +1,27 @@
 import { create } from 'zustand'
-import { setTokens, clearTokens, setAuthFailureHandler, api } from '../api/client'
-
-// decodeJwt decodes the JWT payload client-side for UI display purposes only.
-// NOTE: This is NOT for security validation. Actual token validation is performed
-// server-side by the auth middleware. The JWT signature is NOT verified here.
-function decodeJwt(token) {
-  try {
-    const payload = token.split('.')[1]
-    const decoded = JSON.parse(atob(payload))
-    return {
-      username: decoded.username || null,
-      role: decoded.role || null,
-    }
-  } catch {
-    return { username: null, role: null }
-  }
-}
-
-function getUserFromToken() {
-  const token = localStorage.getItem('runic_access_token')
-  return token ? decodeJwt(token) : { username: null, role: null }
-}
+import { setAuthFailureHandler, api } from '../api/client'
 
 export const useAuthStore = create((set) => ({
-  isAuthenticated: !!localStorage.getItem('runic_access_token'),
-  username: getUserFromToken().username,
-  role: getUserFromToken().role,
-  login: (access, refresh) => {
-    setTokens(access, refresh)
-    const { username, role } = decodeJwt(access)
-    set({ isAuthenticated: true, username, role })
+  isAuthenticated: null,  // null = checking, true/false = known
+  username: null,
+  role: null,
+  login: async () => {
+    try {
+      const user = await api.get('/auth/me')
+      set({ isAuthenticated: true, username: user.username, role: user.role })
+    } catch {
+      set({ isAuthenticated: false, username: null, role: null })
+    }
   },
   logout: async () => {
+    try { await api.post('/auth/logout', {}) } catch {}
+    set({ isAuthenticated: false, username: null, role: null })
+  },
+  checkAuth: async () => {
     try {
-      await api.post('/auth/logout', {})
-    } catch (err) {
-      // Ignore errors - we'll clear tokens regardless
-      console.warn('Logout API call failed:', err.message)
-    } finally {
-      clearTokens()
+      const user = await api.get('/auth/me')
+      set({ isAuthenticated: true, username: user.username, role: user.role })
+    } catch {
       set({ isAuthenticated: false, username: null, role: null })
     }
   },

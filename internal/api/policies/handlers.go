@@ -309,6 +309,14 @@ func MakeDeletePolicyHandler(compiler *engine.Compiler) http.HandlerFunc {
 		// Save old affected peers before update
 		oldPeers, _ := compiler.GetAffectedPeersByPolicy(r.Context(), id)
 
+		// Fetch policy name before deletion
+		var policyName string
+		err = db.DB.QueryRowContext(r.Context(), "SELECT name FROM policies WHERE id = ?", id).Scan(&policyName)
+		if err != nil {
+			common.RespondError(w, http.StatusNotFound, "policy not found")
+			return
+		}
+
 		// Delete the policy
 		res, err := db.DB.ExecContext(r.Context(), "DELETE FROM policies WHERE id = ?", id)
 		if err != nil {
@@ -324,7 +332,7 @@ func MakeDeletePolicyHandler(compiler *engine.Compiler) http.HandlerFunc {
 		}
 
 		// Trigger async recompilation for all old affected peers
-		common.QueuePeerChanges(db.DB.DB, oldPeers, "policy", "delete", id, "Policy deleted")
+		common.QueuePeerChanges(db.DB.DB, oldPeers, "policy", "delete", id, fmt.Sprintf("Policy '%s' deleted", policyName))
 
 		w.WriteHeader(http.StatusNoContent)
 	}
@@ -399,6 +407,15 @@ func MakePatchPolicyHandler(compiler *engine.Compiler) http.HandlerFunc {
 			common.RespondError(w, http.StatusBadRequest, "enabled field is required")
 			return
 		}
+
+		// Fetch policy name before update
+		var policyName string
+		err = db.DB.QueryRowContext(r.Context(), "SELECT name FROM policies WHERE id = ?", id).Scan(&policyName)
+		if err != nil {
+			common.RespondError(w, http.StatusNotFound, "policy not found")
+			return
+		}
+
 		result, err := db.DB.ExecContext(r.Context(), "UPDATE policies SET enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", *input.Enabled, id)
 		if err != nil {
 			log.Printf("ERROR: failed to update policy: %v", err)
@@ -416,7 +433,7 @@ func MakePatchPolicyHandler(compiler *engine.Compiler) http.HandlerFunc {
 		if !*input.Enabled {
 			enabledStr = "disabled"
 		}
-		common.QueuePeerChanges(db.DB.DB, affectedPeers, "policy", "update", id, fmt.Sprintf("Policy %s", enabledStr))
+		common.QueuePeerChanges(db.DB.DB, affectedPeers, "policy", "update", id, fmt.Sprintf("Policy '%s' %s", policyName, enabledStr))
 		common.RespondJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 	}
 }

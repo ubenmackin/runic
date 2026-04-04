@@ -5,7 +5,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
-	"strings"
+	"os"
 
 	"github.com/mattn/go-sqlite3"
 	"golang.org/x/crypto/bcrypt"
@@ -15,6 +15,56 @@ import (
 	runiccommon "runic/internal/common"
 	"runic/internal/db"
 )
+
+var isProduction bool
+
+func init() {
+	isProduction = os.Getenv("GO_ENV") != "development"
+}
+
+// setAuthCookies sets httpOnly cookies for access and refresh tokens.
+func setAuthCookies(w http.ResponseWriter, access, refresh string) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     "runic_access_token",
+		Value:    access,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   isProduction,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   900, // 15 minutes
+	})
+	http.SetCookie(w, &http.Cookie{
+		Name:     "runic_refresh_token",
+		Value:    refresh,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   isProduction,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   604800, // 7 days
+	})
+}
+
+// clearAuthCookies clears the auth cookies by setting them with MaxAge=-1.
+func clearAuthCookies(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     "runic_access_token",
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   isProduction,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   -1,
+	})
+	http.SetCookie(w, &http.Cookie{
+		Name:     "runic_refresh_token",
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   isProduction,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   -1,
+	})
+}
 
 // setupRequest is the request body for first-time setup.
 type setupRequest struct {
@@ -221,13 +271,13 @@ func HandleLoginPOST(w http.ResponseWriter, r *http.Request) {
 
 // HandleLogoutPOST handles POST /api/v1/auth/logout by revoking the caller's current token.
 func HandleLogoutPOST(w http.ResponseWriter, r *http.Request) {
-	authHeader := r.Header.Get("Authorization")
-	if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
+	cookie, err := r.Cookie("runic_access_token")
+	if err != nil || cookie.Value == "" {
 		common.RespondError(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
-	tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
+	tokenStr := cookie.Value
 	claims, err := auth.ValidateToken(tokenStr)
 	if err != nil || claims == nil {
 		common.RespondError(w, http.StatusUnauthorized, "Unauthorized")
@@ -235,39 +285,50 @@ func HandleLogoutPOST(w http.ResponseWriter, r *http.Request) {
 	}
 
 	expiresAt := claims.ExpiresAt.Time
-	if err := auth.RevokeToken(r.Context(), claims.UniqueID, expiresAt); err != nil {
+	if err := auth.RevokeToken(r.Context(), claims.UniqueID, expiresAt, "access"); err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "Failed to revoke token")
 		return
 	}
 
+	// Also revoke the refresh token if present
+	if refreshCookie, err := r.Cookie("runic_refresh_token"); err == nil && refreshCookie.Value != "" {
+		if refreshClaims, err := auth.ValidateToken(refreshCookie.Value); err == nil && refreshClaims != nil {
+			if err := auth.RevokeToken(r.Context(), refreshClaims.UniqueID, refreshClaims.ExpiresAt.Time, "refresh"); err != nil {
+				log.Printf("Warning: failed to revoke refresh token on logout: %v", err)
+			}
+		}
+	}
+
+	clearAuthCookies(w)
+
 	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "logged_out"})
 }
 
-// refreshRequest is the request body for token refresh.
-type refreshRequest struct {
-	RefreshToken string `json:"refresh_token"`
+// HandleGetMe returns the authenticated user's profile.
+func HandleGetMe(w http.ResponseWriter, r *http.Request) {
+	common.RespondJSON(w, http.StatusOK, map[string]string{
+		"username": auth.UsernameFromContext(r.Context()),
+		"role":     auth.RoleFromContext(r.Context()),
+	})
 }
 
 // HandleRefreshPOST handles POST /api/v1/auth/refresh to refresh an access token.
-// It validates the refresh token and issues a new access token if valid.
+// It validates the refresh token from cookie and issues a new access token if valid.
 func HandleRefreshPOST(w http.ResponseWriter, r *http.Request) {
 	if db.DB == nil {
 		common.RespondError(w, http.StatusInternalServerError, "database not initialized")
 		return
 	}
 
-	var body refreshRequest
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		common.RespondError(w, http.StatusBadRequest, "invalid JSON")
+	cookie, err := r.Cookie("runic_refresh_token")
+	if err != nil || cookie.Value == "" {
+		common.RespondError(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
-	if body.RefreshToken == "" {
-		common.RespondError(w, http.StatusBadRequest, "refresh_token is required")
-		return
-	}
+	refreshToken := cookie.Value
 
 	// Validate the refresh token
-	claims, err := auth.ValidateToken(body.RefreshToken)
+	claims, err := auth.ValidateToken(refreshToken)
 	if err != nil || claims == nil {
 		common.RespondError(w, http.StatusUnauthorized, "Invalid refresh token")
 		return
@@ -287,12 +348,13 @@ func HandleRefreshPOST(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Revoke the old refresh token (rotation)
-	if err := auth.RevokeToken(r.Context(), claims.UniqueID, claims.ExpiresAt.Time); err != nil {
+	if err := auth.RevokeToken(r.Context(), claims.UniqueID, claims.ExpiresAt.Time, "refresh"); err != nil {
 		log.Printf("Warning: failed to revoke old refresh token: %v", err)
 		// Continue anyway - the new tokens are still valid
 	}
 
 	log.Printf("AUTH REFRESH: Token refreshed for user '%s'", claims.Username)
 
-	RespondWithTokens(w, http.StatusOK, accessToken, refreshToken, "", false)
+	setAuthCookies(w, accessToken, refreshToken)
+	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }

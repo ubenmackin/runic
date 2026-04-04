@@ -17,12 +17,16 @@ import (
 // MakeLogsStreamHandler returns a handler that uses the given Hub
 func MakeLogsStreamHandler(hub *Hub) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Authenticate WebSocket connection via Sec-WebSocket-Protocol header.
-		// The JWT is passed as the first subprotocol element.
-		subprotocols := r.Header.Values("Sec-WebSocket-Protocol")
+		// Authenticate WebSocket connection: try cookie first (web UI),
+		// then fall back to Sec-WebSocket-Protocol header (legacy agent WS).
 		var tokenStr string
-		if len(subprotocols) > 0 {
-			tokenStr = subprotocols[0]
+		if c, err := r.Cookie("runic_access_token"); err == nil && c.Value != "" {
+			tokenStr = c.Value
+		} else {
+			subprotocols := r.Header.Values("Sec-WebSocket-Protocol")
+			if len(subprotocols) > 0 {
+				tokenStr = subprotocols[0]
+			}
 		}
 		if tokenStr == "" {
 			http.Error(w, `{"error": "unauthorized"}`, http.StatusUnauthorized)
@@ -39,10 +43,7 @@ func MakeLogsStreamHandler(hub *Hub) http.HandlerFunc {
 			return
 		}
 
-		// Set response header to echo back the subprotocol for WebSocket negotiation
-		responseHeader := http.Header{}
-		responseHeader.Set("Sec-WebSocket-Protocol", tokenStr)
-		conn, err := upgrader.Upgrade(w, r, responseHeader)
+		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
 			runiclog.Error("WebSocket upgrade failed", "error", err)
 			return

@@ -838,14 +838,14 @@ func TestCreateService(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, _, cleanup := setupTestAPI(t)
+			api, _, cleanup := setupTestAPI(t)
 			defer cleanup()
 
 			req := httptest.NewRequest("POST", "/api/v1/services", strings.NewReader(tt.body))
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
 
-			services.CreateService(w, req)
+			services.MakeCreateServiceHandler(api.Compiler)(w, req)
 
 			if w.Code != tt.wantCode {
 				t.Errorf("expected status %d, got %d: %s", tt.wantCode, w.Code, w.Body.String())

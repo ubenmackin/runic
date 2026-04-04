@@ -1,8 +1,5 @@
 const BASE = '/api/v1'
 
-let accessToken = localStorage.getItem('runic_access_token')
-let refreshToken = localStorage.getItem('runic_refresh_token')
-
 // Auth failure callback - registered by store to avoid circular imports
 let authFailureCallback = null
 
@@ -14,35 +11,17 @@ export function setAuthFailureHandler(fn) {
 let isRefreshing = false
 let refreshPromise = null
 
-export function setTokens(access, refresh) {
-  accessToken = access
-  refreshToken = refresh
-  localStorage.setItem('runic_access_token', access)
-  localStorage.setItem('runic_refresh_token', refresh)
-}
-
-export function clearTokens() {
-  accessToken = null
-  refreshToken = null
-  localStorage.removeItem('runic_access_token')
-  localStorage.removeItem('runic_refresh_token')
-}
-
-export function getAccessToken() {
-  return accessToken
-}
-
 async function refreshTokenOnce() {
   if (isRefreshing) {
     // Wait for the existing refresh to complete
     return refreshPromise
   }
-  
+
   isRefreshing = true
   refreshPromise = fetch(BASE + '/auth/refresh', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ refresh_token: refreshToken }),
+    body: JSON.stringify({}),
   }).then(res => {
     isRefreshing = false
     return res
@@ -50,30 +29,25 @@ async function refreshTokenOnce() {
     isRefreshing = false
     throw err
   })
-  
+
   return refreshPromise
 }
 
 async function request(method, path, body, retry = true) {
   const fetchOptions = {
     method,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
-    },
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
     body: body ? JSON.stringify(body) : undefined,
   }
 
   const res = await fetch(BASE + path, fetchOptions)
 
-  if (res.status === 401 && retry && refreshToken) {
+  if (res.status === 401 && retry) {
     const refreshed = await refreshTokenOnce()
     if (refreshed.ok) {
-      const data = await refreshed.json()
-      setTokens(data.access_token, data.refresh_token)
       return request(method, path, body, false)
     } else {
-      clearTokens()
       if (authFailureCallback) authFailureCallback()
       throw new Error('Session expired. Please log in again.')
     }

@@ -6,6 +6,9 @@ import { useDebounce } from '../hooks/useDebounce'
 import EmptyState from '../components/EmptyState'
 import TableSkeleton from '../components/TableSkeleton'
 import LogLine from '../components/LogLine'
+import { logger } from '../utils/logger'
+
+const MAX_RECONNECT_ATTEMPTS = 5
 
 export default function Logs() {
   const [mode, setMode] = useState('historical') // 'live' | 'historical'
@@ -26,11 +29,19 @@ export default function Logs() {
   // Live mode state
   const [liveLogs, setLiveLogs] = useState([])
   const [isConnected, setIsConnected] = useState(false)
+  const [isReconnecting, setIsReconnecting] = useState(false)
+  const [reconnectAttemptDisplay, setReconnectAttemptDisplay] = useState(0)
   const [isPaused, setIsPaused] = useState(false)
   const wsRef = useRef(null)
   const logsEndRef = useRef(null)
   const isPausedRef = useRef(false)
+  const reconnectAttempts = useRef(0)
+  const reconnectTimer = useRef(null)
   const MAX_LIVE_LOGS = 500
+
+  // Ref to track current mode in callbacks (avoid stale closures)
+  const modeRef = useRef(mode)
+  modeRef.current = mode
 
   // Historical query
   const { data, isLoading, refetch } = useQuery({
@@ -56,45 +67,89 @@ export default function Logs() {
         wsRef.current = null
       }
       setIsConnected(false)
+      setIsReconnecting(false)
+      setReconnectAttemptDisplay(0)
+      reconnectAttempts.current = 0
+      if (reconnectTimer.current) {
+        clearTimeout(reconnectTimer.current)
+        reconnectTimer.current = null
+      }
       return
     }
 
-    const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const token = localStorage.getItem('runic_access_token')
-    const wsUrl = `${wsProto}//${window.location.host}/api/v1/logs/stream`
-    const ws = new WebSocket(wsUrl, [token || ''])
+    // Reset reconnect attempts when entering live mode
+    reconnectAttempts.current = 0
+    setIsReconnecting(false)
 
-    ws.onopen = () => {
-      setIsConnected(true)
-      console.log('WebSocket connected')
-    }
-
-    ws.onmessage = (event) => {
-      if (isPausedRef.current) return
-      try {
-        const log = JSON.parse(event.data)
-        setLiveLogs(prev => {
-          const newLogs = [log, ...prev].slice(0, MAX_LIVE_LOGS)
-          return newLogs
-        })
-      } catch (e) {
-        console.error('Failed to parse log message:', e)
+    const connect = () => {
+      if (wsRef.current) {
+        wsRef.current.close()
+        wsRef.current = null
       }
+
+      const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+      const wsUrl = `${wsProto}//${window.location.host}/api/v1/logs/stream`
+      const ws = new WebSocket(wsUrl)
+
+      ws.onopen = () => {
+        setIsConnected(true)
+        reconnectAttempts.current = 0
+        setReconnectAttemptDisplay(0)
+        setIsReconnecting(false)
+        logger.log('WebSocket connected')
+      }
+
+      ws.onmessage = (event) => {
+        if (isPausedRef.current) return
+        try {
+          const log = JSON.parse(event.data)
+          setLiveLogs(prev => {
+            const newLogs = [log, ...prev].slice(0, MAX_LIVE_LOGS)
+            return newLogs
+          })
+        } catch (e) {
+          logger.error('Failed to parse log message:', e)
+        }
+      }
+
+      ws.onerror = (error) => {
+        logger.error('WebSocket error:', error)
+      }
+
+      ws.onclose = () => {
+        setIsConnected(false)
+        logger.log('WebSocket disconnected')
+
+        // Attempt reconnection if still in live mode
+        if (modeRef.current !== 'live') return
+        if (reconnectAttempts.current >= MAX_RECONNECT_ATTEMPTS) {
+          setIsReconnecting(false)
+          return
+        }
+        setIsReconnecting(true)
+        setReconnectAttemptDisplay(reconnectAttempts.current + 1)
+        const delay = Math.min(1000 * Math.pow(2, reconnectAttempts.current), 30000)
+        reconnectTimer.current = setTimeout(() => {
+          reconnectAttempts.current++
+          connect()
+        }, delay)
+      }
+
+      wsRef.current = ws
     }
 
-    ws.onerror = (error) => {
-      console.error('WebSocket error:', error)
-    }
-
-    ws.onclose = () => {
-      setIsConnected(false)
-      console.log('WebSocket disconnected')
-    }
-
-    wsRef.current = ws
+    connect()
 
     return () => {
-      ws.close()
+      if (wsRef.current) {
+        wsRef.current.close()
+        wsRef.current = null
+      }
+      if (reconnectTimer.current) {
+        clearTimeout(reconnectTimer.current)
+        reconnectTimer.current = null
+      }
+      setReconnectAttemptDisplay(0)
     }
   }, [mode])
 
@@ -271,9 +326,16 @@ Query
       {/* Live mode status */}
       {mode === 'live' && (
         <div className="flex items-center gap-2 text-sm">
-          <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
+          <div className={`w-2 h-2 rounded-full ${
+            isReconnecting ? 'bg-yellow-500 animate-pulse' :
+            isConnected ? 'bg-green-500 animate-pulse' : 'bg-red-500'
+          }`} />
           <span className="text-gray-600 dark:text-amber-muted">
-            {isConnected ? `Connected — ${liveLogs.length} logs` : 'Disconnected'}
+            {isReconnecting
+              ? `Reconnecting... (attempt ${reconnectAttemptDisplay}/${MAX_RECONNECT_ATTEMPTS})`
+              : isConnected
+                ? `Connected — ${liveLogs.length} logs`
+                : 'Disconnected'}
           </span>
         </div>
       )}
@@ -330,7 +392,9 @@ className="px-3 py-1.5 text-sm bg-white dark:bg-charcoal-dark border border-gray
           <div className="overflow-y-auto max-h-[600px]">
             {!liveLogs.length ? (
               <div className="p-8 text-center text-gray-500 dark:text-amber-muted">
-                {isConnected ? 'Waiting for logs...' : 'Connecting...'}
+                {isReconnecting ? 'Reconnecting...' :
+                 isConnected ? 'Waiting for logs...' :
+                 'Connecting...'}
               </div>
             ) : (
               liveLogs.map((log, i) => (

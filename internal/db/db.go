@@ -164,6 +164,26 @@ func migrateSchema(database *sql.DB) error {
 		}
 	}
 
+	// Migration: Add token_type column to revoked_tokens
+	var hasRevokedTokensTable bool
+	err = database.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='revoked_tokens'").Scan(&hasRevokedTokensTable)
+	if err != nil {
+		return fmt.Errorf("failed to check for revoked_tokens table: %w", err)
+	}
+	if hasRevokedTokensTable {
+		var hasTokenTypeColumn bool
+		err = database.QueryRow("SELECT COUNT(*) > 0 FROM pragma_table_info('revoked_tokens') WHERE name='token_type'").Scan(&hasTokenTypeColumn)
+		if err != nil {
+			return fmt.Errorf("failed to check for token_type column: %w", err)
+		}
+		if !hasTokenTypeColumn {
+			if _, err := database.Exec("ALTER TABLE revoked_tokens ADD COLUMN token_type TEXT NOT NULL DEFAULT 'unknown'"); err != nil {
+				return fmt.Errorf("failed to add token_type column to revoked_tokens: %w", err)
+			}
+			log.Println("Migration: added token_type column to revoked_tokens table")
+		}
+	}
+
 	// Migration: Rename servers → peers (for existing databases)
 	var hasServersTable bool
 	err = database.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='servers'").Scan(&hasServersTable)

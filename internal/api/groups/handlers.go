@@ -2,6 +2,7 @@ package groups
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 
@@ -238,9 +239,7 @@ func MakeAddGroupMemberHandler(compiler *engine.Compiler) http.HandlerFunc {
 			return
 		}
 
-		result, err := db.DB.ExecContext(r.Context(),
-			"INSERT OR IGNORE INTO group_members (group_id, peer_id) VALUES (?, ?)",
-			groupID, input.PeerID)
+		result, err := db.DB.ExecContext(r.Context(), "INSERT OR IGNORE INTO group_members (group_id, peer_id) VALUES (?, ?)", groupID, input.PeerID)
 		if err != nil {
 			log.Printf("ERROR: failed to add member: %v", err)
 			common.InternalError(w)
@@ -251,7 +250,18 @@ func MakeAddGroupMemberHandler(compiler *engine.Compiler) http.HandlerFunc {
 
 		// Trigger async recompilation for affected peers (if compiler is available)
 		if compiler != nil {
-			common.QueueGroupChanges(db.DB.DB, compiler, groupID, "update", "Peer added to group")
+			// Fetch peer and group details for enhanced summary
+			peer, peerErr := db.GetPeer(r.Context(), db.DB.DB, input.PeerID)
+			group, groupErr := db.GetGroup(r.Context(), db.DB.DB, groupID)
+
+			var summary string
+			if peerErr == nil && groupErr == nil {
+				summary = fmt.Sprintf("Peer '%s' added to group '%s'", peer.Hostname, group.Name)
+			} else {
+				summary = "Peer added to group"
+			}
+
+			common.QueueGroupChanges(db.DB.DB, compiler, groupID, "update", summary)
 		}
 
 		common.RespondJSON(w, http.StatusCreated, map[string]int64{"id": id})
@@ -281,7 +291,18 @@ func MakeDeleteGroupMemberHandler(compiler *engine.Compiler) http.HandlerFunc {
 
 		// Trigger async recompilation (if compiler is available)
 		if compiler != nil {
-			common.QueueGroupChanges(db.DB.DB, compiler, groupID, "update", "Peer removed from group")
+			// Fetch peer and group details for enhanced summary
+			peer, peerErr := db.GetPeer(r.Context(), db.DB.DB, peerID)
+			group, groupErr := db.GetGroup(r.Context(), db.DB.DB, groupID)
+
+			var summary string
+			if peerErr == nil && groupErr == nil {
+				summary = fmt.Sprintf("Peer '%s' removed from group '%s'", peer.Hostname, group.Name)
+			} else {
+				summary = "Peer removed from group"
+			}
+
+			common.QueueGroupChanges(db.DB.DB, compiler, groupID, "update", summary)
 		}
 
 		w.WriteHeader(http.StatusNoContent)
