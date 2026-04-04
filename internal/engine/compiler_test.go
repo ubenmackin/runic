@@ -917,6 +917,9 @@ func TestCompileAndStore(t *testing.T) {
 	if bundle.Version == "" {
 		t.Error("expected non-empty version")
 	}
+	if bundle.VersionNumber <= 0 {
+		t.Errorf("expected positive version_number, got %d", bundle.VersionNumber)
+	}
 	if len(bundle.RulesContent) == 0 {
 		t.Error("expected non-empty rules content")
 	}
@@ -947,6 +950,70 @@ func TestCompileAndStore(t *testing.T) {
 	// Verify HMAC is valid
 	if !Verify(bundle.RulesContent, "test-hmac-key", bundle.HMAC) {
 		t.Error("HMAC verification failed")
+	}
+}
+
+// TestCompileAndStore_VersionNumberIncrement verifies that version_number increments correctly.
+func TestCompileAndStore_VersionNumberIncrement(t *testing.T) {
+	database := setupTestDB(t)
+	peerID := insertPeer(t, database, "version-test", "10.0.0.1", false)
+	groupID := insertGroup(t, database, "test-group")
+	manualPeerID := insertManualPeer(t, database, "192.168.1.0/24")
+	insertGroupMember(t, database, groupID, manualPeerID)
+	serviceID := insertService(t, database, "test-service", "80", "tcp")
+	insertPolicy(t, database, "test-policy", groupID, serviceID, peerID, "ACCEPT", 100, true)
+
+	c := NewCompiler(database)
+
+	// First compile
+	bundle1, err := c.CompileAndStore(context.Background(), peerID)
+	if err != nil {
+		t.Fatalf("first CompileAndStore failed: %v", err)
+	}
+	if bundle1.VersionNumber != 1 {
+		t.Errorf("expected version_number 1, got %d", bundle1.VersionNumber)
+	}
+
+	// Add a second policy to change the compiled content (so the hash differs)
+	serviceID2 := insertService(t, database, "test-service-2", "443", "tcp")
+	insertPolicy(t, database, "test-policy-2", groupID, serviceID2, peerID, "ACCEPT", 200, true)
+
+	// Second compile for same peer (different content → different hash)
+	bundle2, err := c.CompileAndStore(context.Background(), peerID)
+	if err != nil {
+		t.Fatalf("second CompileAndStore failed: %v", err)
+	}
+	if bundle2.VersionNumber != 2 {
+		t.Errorf("expected version_number 2, got %d", bundle2.VersionNumber)
+	}
+
+	// Verify both bundles exist in DB
+	var count int
+	err = database.QueryRow("SELECT COUNT(*) FROM rule_bundles WHERE peer_id = ?", peerID).Scan(&count)
+	if err != nil {
+		t.Fatalf("query bundles: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("expected 2 bundles, got %d", count)
+	}
+
+	// Verify the versions are different
+	if bundle1.Version == bundle2.Version {
+		t.Error("expected different version hashes for different content")
+	}
+
+	// Verify version_numbers are sequential
+	var vn1, vn2 int
+	err = database.QueryRow("SELECT version_number FROM rule_bundles WHERE peer_id = ? ORDER BY id ASC LIMIT 1", peerID).Scan(&vn1)
+	if err != nil {
+		t.Fatalf("query first version_number: %v", err)
+	}
+	err = database.QueryRow("SELECT version_number FROM rule_bundles WHERE peer_id = ? ORDER BY id DESC LIMIT 1", peerID).Scan(&vn2)
+	if err != nil {
+		t.Fatalf("query second version_number: %v", err)
+	}
+	if vn1 != 1 || vn2 != 2 {
+		t.Errorf("expected sequential version_numbers 1 and 2, got %d and %d", vn1, vn2)
 	}
 }
 

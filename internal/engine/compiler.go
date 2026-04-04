@@ -695,12 +695,21 @@ func (c *Compiler) CompileAndStore(ctx context.Context, peerID int) (models.Rule
 	version := Version(content)
 	signature := Sign(content, hmacKey)
 
+	// Compute next version number for this peer
+	var versionNumber int
+	err = c.db.QueryRowContext(ctx,
+		"SELECT COALESCE(MAX(version_number), 0) + 1 FROM rule_bundles WHERE peer_id = ?", peerID).Scan(&versionNumber)
+	if err != nil {
+		return models.RuleBundleRow{}, fmt.Errorf("get next version number: %w", err)
+	}
+
 	// Use db.SaveBundle to avoid duplicate transaction logic
 	params := models.CreateBundleParams{
-		PeerID:       peerID,
-		Version:      version,
-		RulesContent: content,
-		HMAC:         signature,
+		PeerID:        peerID,
+		Version:       version,
+		VersionNumber: versionNumber,
+		RulesContent:  content,
+		HMAC:          signature,
 	}
 
 	bundle, err := db.SaveBundle(ctx, c.db, params)

@@ -81,6 +81,7 @@ CREATE TABLE IF NOT EXISTS rule_bundles (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     peer_id INTEGER NOT NULL,
     version TEXT NOT NULL,
+    version_number INTEGER NOT NULL DEFAULT 0,
     rules_content TEXT NOT NULL,
     hmac TEXT NOT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,

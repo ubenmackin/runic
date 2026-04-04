@@ -859,10 +859,66 @@ func migrateSchema(database *sql.DB) error {
 		log.Println("Migration: created pending_bundle_previews table")
 	}
 
+	// Migration: Add version_number column to rule_bundles
+	var hasVersionNumberColumn bool
+	err = database.QueryRow("SELECT COUNT(*) > 0 FROM pragma_table_info('rule_bundles') WHERE name='version_number'").Scan(&hasVersionNumberColumn)
+	if err != nil {
+		return fmt.Errorf("failed to check for version_number column: %w", err)
+	}
+	if !hasVersionNumberColumn {
+		log.Println("Migration: adding version_number column to rule_bundles")
+		tx, err := database.Begin()
+		if err != nil {
+			return fmt.Errorf("failed to begin version_number migration: %w", err)
+		}
+		committed := false
+		defer func() {
+			if !committed {
+				tx.Rollback()
+			}
+		}()
+
+		// Create new table with version_number
+		if _, err := tx.Exec(`CREATE TABLE rule_bundles_v2 (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			peer_id INTEGER NOT NULL,
+			version TEXT NOT NULL,
+			version_number INTEGER NOT NULL DEFAULT 0,
+			rules_content TEXT NOT NULL,
+			hmac TEXT NOT NULL,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			applied_at DATETIME,
+			FOREIGN KEY(peer_id) REFERENCES peers(id) ON DELETE CASCADE,
+			UNIQUE(peer_id, version)
+		)`); err != nil {
+			return fmt.Errorf("failed to create rule_bundles_v2: %w", err)
+		}
+
+		// Copy data and backfill version_number using ROW_NUMBER()
+		if _, err := tx.Exec(`INSERT INTO rule_bundles_v2 (id, peer_id, version, version_number, rules_content, hmac, created_at, applied_at)
+			SELECT id, peer_id, version,
+				ROW_NUMBER() OVER (PARTITION BY peer_id ORDER BY created_at),
+				rules_content, hmac, created_at, applied_at
+			FROM rule_bundles`); err != nil {
+			return fmt.Errorf("failed to copy rule_bundles: %w", err)
+		}
+
+		if _, err := tx.Exec("DROP TABLE rule_bundles"); err != nil {
+			return fmt.Errorf("failed to drop rule_bundles: %w", err)
+		}
+		if _, err := tx.Exec("ALTER TABLE rule_bundles_v2 RENAME TO rule_bundles"); err != nil {
+			return fmt.Errorf("failed to rename rule_bundles_v2: %w", err)
+		}
+
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("failed to commit version_number migration: %w", err)
+		}
+		committed = true
+		log.Println("Migration: added version_number column to rule_bundles")
+	}
+
 	return nil
 }
-
-// GetPeer fetches a peer by ID.
 func GetPeer(ctx context.Context, database *sql.DB, peerID int) (models.PeerRow, error) {
 	var p models.PeerRow
 	err := database.QueryRowContext(ctx,
@@ -959,8 +1015,8 @@ func SaveBundle(ctx context.Context, database *sql.DB, params models.CreateBundl
 	}()
 
 	result, err := tx.ExecContext(ctx,
-		`INSERT INTO rule_bundles (peer_id, version, rules_content, hmac) VALUES (?, ?, ?, ?)`,
-		params.PeerID, params.Version, params.RulesContent, params.HMAC)
+		`INSERT INTO rule_bundles (peer_id, version, version_number, rules_content, hmac) VALUES (?, ?, ?, ?, ?)`,
+		params.PeerID, params.Version, params.VersionNumber, params.RulesContent, params.HMAC)
 	if err != nil {
 		return models.RuleBundleRow{}, err
 	}
@@ -979,11 +1035,12 @@ func SaveBundle(ctx context.Context, database *sql.DB, params models.CreateBundl
 	committed = true
 
 	return models.RuleBundleRow{
-		ID:           int(bundleID),
-		PeerID:       params.PeerID,
-		Version:      params.Version,
-		RulesContent: params.RulesContent,
-		HMAC:         params.HMAC,
+		ID:            int(bundleID),
+		PeerID:        params.PeerID,
+		Version:       params.Version,
+		VersionNumber: params.VersionNumber,
+		RulesContent:  params.RulesContent,
+		HMAC:          params.HMAC,
 	}, nil
 }
 

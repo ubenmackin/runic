@@ -41,6 +41,7 @@ type Peer struct {
 	Groups               string `json:"groups"` // Comma-separated group names
 	Status               string `json:"status"`
 	BundleVersion        string `json:"bundle_version"`
+	BundleVersionNumber  int    `json:"bundle_version_number"`
 	Description          string `json:"description"`
 	HMACKeyLastRotatedAt string `json:"hmac_key_last_rotated_at"`
 	PendingChangesCount  int    `json:"pending_changes_count"`
@@ -61,6 +62,7 @@ func GetPeers(w http.ResponseWriter, r *http.Request) {
 		ELSE COALESCE(p.status, 'online')
 		END as status,
 		COALESCE(p.bundle_version, '') as bundle_version,
+		COALESCE((SELECT rb.version_number FROM rule_bundles rb WHERE rb.peer_id = p.id ORDER BY rb.created_at DESC LIMIT 1), 0) as bundle_version_number,
 		COALESCE(GROUP_CONCAT(g.name, ','), '') as groups,
 		COALESCE(p.description, '') as description,
 		COALESCE(p.hmac_key_last_rotated_at, '') as hmac_key_last_rotated_at,
@@ -81,7 +83,7 @@ func GetPeers(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var p Peer
 		var agentVersion, lastHeartbeat, description, hmacKeyLastRotatedAt sql.NullString
-		if err := rows.Scan(&p.ID, &p.Hostname, &p.IPAddress, &p.OSType, &p.Arch, &p.HasDocker, &p.IsManual, &agentVersion, &lastHeartbeat, &p.Status, &p.BundleVersion, &p.Groups, &description, &hmacKeyLastRotatedAt, &p.PendingChangesCount); err != nil {
+		if err := rows.Scan(&p.ID, &p.Hostname, &p.IPAddress, &p.OSType, &p.Arch, &p.HasDocker, &p.IsManual, &agentVersion, &lastHeartbeat, &p.Status, &p.BundleVersion, &p.BundleVersionNumber, &p.Groups, &description, &hmacKeyLastRotatedAt, &p.PendingChangesCount); err != nil {
 			common.RespondError(w, http.StatusInternalServerError, "failed to scan peer")
 			return
 		}

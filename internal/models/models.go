@@ -66,20 +66,22 @@ type PolicyRow struct {
 }
 
 type RuleBundleRow struct {
-	ID           int
-	PeerID       int
-	Version      string
-	RulesContent string
-	HMAC         string
-	CreatedAt    time.Time
-	AppliedAt    sql.NullTime
+	ID            int
+	PeerID        int
+	Version       string
+	VersionNumber int
+	RulesContent  string
+	HMAC          string
+	CreatedAt     time.Time
+	AppliedAt     sql.NullTime
 }
 
 type CreateBundleParams struct {
-	PeerID       int
-	Version      string
-	RulesContent string
-	HMAC         string
+	PeerID        int
+	Version       string
+	VersionNumber int
+	RulesContent  string
+	HMAC          string
 }
 
 type SpecialTargetRow struct {

@@ -279,8 +279,8 @@ func TestDeletePeer_WithRuleBundlesAndLogs(t *testing.T) {
 		"test-peer", "10.0.0.1", "test-key", "test-hmac", 0)
 
 	// Insert rule_bundle
-	database.Exec(`INSERT INTO rule_bundles (peer_id, version, rules_content, hmac) VALUES (?, ?, ?, ?)`,
-		1, "v1", "test-rules", "test-hmac")
+	database.Exec(`INSERT INTO rule_bundles (peer_id, version, version_number, rules_content, hmac) VALUES (?, ?, ?, ?, ?)`,
+		1, "v1", 1, "test-rules", "test-hmac")
 
 	// Insert firewall_logs
 	database.Exec(`INSERT INTO firewall_logs (peer_id, timestamp, direction, src_ip, dst_ip, protocol, action) VALUES (?, ?, ?, ?, ?, ?, ?)`,

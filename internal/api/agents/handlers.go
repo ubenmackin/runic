@@ -287,7 +287,7 @@ func GetBundle(w http.ResponseWriter, r *http.Request) {
 
 	// Get latest bundle for this peer
 	var bundle models.RuleBundleRow
-	err := db.DB.QueryRowContext(r.Context(), `SELECT id, peer_id, version, rules_content, hmac, created_at FROM rule_bundles WHERE peer_id = ? ORDER BY created_at DESC LIMIT 1`, serverID).Scan(&bundle.ID, &bundle.PeerID, &bundle.Version, &bundle.RulesContent, &bundle.HMAC, &bundle.CreatedAt)
+	err := db.DB.QueryRowContext(r.Context(), `SELECT id, peer_id, version, version_number, rules_content, hmac, created_at FROM rule_bundles WHERE peer_id = ? ORDER BY created_at DESC LIMIT 1`, serverID).Scan(&bundle.ID, &bundle.PeerID, &bundle.Version, &bundle.VersionNumber, &bundle.RulesContent, &bundle.HMAC, &bundle.CreatedAt)
 
 	if err == sql.ErrNoRows {
 		http.Error(w, `{"error": "no bundle found"}`, http.StatusNotFound)
@@ -306,9 +306,10 @@ func GetBundle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	common.RespondJSON(w, http.StatusOK, map[string]interface{}{
-		"version": bundle.Version,
-		"rules":   bundle.RulesContent,
-		"hmac":    bundle.HMAC,
+		"version":        bundle.Version,
+		"version_number": bundle.VersionNumber,
+		"rules":          bundle.RulesContent,
+		"hmac":           bundle.HMAC,
 	})
 }
 

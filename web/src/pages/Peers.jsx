@@ -664,7 +664,9 @@ const preFilteredPeers = peers?.filter(peer => {
 	<div className="mb-3">
 	<div className="mt-2 text-sm">
 	<span className="text-gray-500 dark:text-amber-muted">Bundle Version: </span>
-	<span className="font-mono font-medium text-gray-900 dark:text-light-neutral">{bundleData?.version || '—'}</span>
+	<span className="font-mono font-medium text-gray-900 dark:text-light-neutral" title={bundleData?.version || ''}>
+	  v{bundleData?.version_number || '—'}
+	</span>
 	{bundleData?.is_different && (
 	<span className="ml-2 px-2 py-0.5 text-xs rounded-full bg-amber-100 dark:bg-amber-900/30 text-amber-800 dark:text-amber-300">
 	Pending Update
