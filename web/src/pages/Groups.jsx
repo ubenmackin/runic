@@ -120,6 +120,7 @@ export default function Groups() {
   const { createMutation, updateMutation, deleteMutation } = useCrudMutations({
     apiPath: '/groups',
     queryKey: QUERY_KEYS.groups(),
+    additionalInvalidations: [['pending-changes']],
     onCreateSuccess: closeModal,
     onUpdateSuccess: closeModal,
     onDeleteSuccess: () => setDeleteTarget(null),
@@ -143,9 +144,10 @@ export default function Groups() {
       qc.setQueryData(QUERY_KEYS.members(vars.groupId), context.previousMembers)
       setFormErrors({ _general: err.message })
     },
-    onSettled: (data, err, vars) => { 
+    onSettled: (data, err, vars) => {
       qc.invalidateQueries({ queryKey: QUERY_KEYS.members(vars.groupId) })
       qc.invalidateQueries({ queryKey: QUERY_KEYS.groups() })
+      qc.invalidateQueries({ queryKey: ['pending-changes'] })
     },
   })
 
@@ -161,9 +163,10 @@ export default function Groups() {
       qc.setQueryData(QUERY_KEYS.members(vars.groupId), context.previousMembers)
       showToast(err.message, 'error')
     },
-    onSettled: (data, err, vars) => { 
+    onSettled: (data, err, vars) => {
       qc.invalidateQueries({ queryKey: QUERY_KEYS.members(vars.groupId) })
       qc.invalidateQueries({ queryKey: QUERY_KEYS.groups() })
+      qc.invalidateQueries({ queryKey: ['pending-changes'] })
     },
   })
 

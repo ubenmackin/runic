@@ -153,6 +153,7 @@ const polymorphicOptions = [
   const { createMutation, updateMutation, deleteMutation } = useCrudMutations({
     apiPath: '/policies',
     queryKey: QUERY_KEYS.policies(),
+    additionalInvalidations: [['pending-changes']],
     onCreateSuccess: closeModal,
     onUpdateSuccess: closeModal,
     onDeleteSuccess: () => setDeleteTarget(null),
@@ -169,6 +170,10 @@ const polymorphicOptions = [
       return { prev }
     },
     onError: (err, vars, ctx) => qc.setQueryData(QUERY_KEYS.policies(), ctx.prev),
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: QUERY_KEYS.policies() })
+      qc.invalidateQueries({ queryKey: ['pending-changes'] })
+    },
   })
 
   const handleSubmit = (e) => {

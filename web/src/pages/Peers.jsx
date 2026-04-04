@@ -213,6 +213,7 @@ export default function Peers() {
       })
       showToast('Manual peer added successfully', 'success')
       qc.invalidateQueries({ queryKey: QUERY_KEYS.peers() })
+      qc.invalidateQueries({ queryKey: ['pending-changes'] })
       closeAddModal()
     } catch (err) {
       setManualErrors({ _general: err.message })
@@ -310,6 +311,7 @@ const preFilteredPeers = peers?.filter(peer => {
   const { createMutation, updateMutation, deleteMutation } = useCrudMutations({
     apiPath: '/peers',
     queryKey: QUERY_KEYS.peers(),
+    additionalInvalidations: [['pending-changes']],
     onCreateSuccess: closeModal,
     onUpdateSuccess: closeModal,
     onDeleteSuccess: () => { setDeleteTarget(null); showToast('Peer deleted successfully', 'success') },
@@ -327,18 +329,19 @@ const preFilteredPeers = peers?.filter(peer => {
 	const peersWithPendingChanges = peers?.filter(p => p.pending_changes_count > 0).length || 0
 
 	// Handle Apply All Pending
-	const handleApplyAll = async () => {
-		setApplyAllLoading(true)
-		try {
-			await api.post('/pending-changes/apply-all')
-			showToast('All pending changes applied successfully', 'success')
-			qc.invalidateQueries({ queryKey: QUERY_KEYS.peers() })
-		} catch (err) {
-			showToast(`Failed to apply all changes: ${err.message}`, 'error')
-		} finally {
-			setApplyAllLoading(false)
-		}
-	}
+  const handleApplyAll = async () => {
+    setApplyAllLoading(true)
+    try {
+      await api.post('/pending-changes/apply-all')
+      showToast('All pending changes applied successfully', 'success')
+      qc.invalidateQueries({ queryKey: QUERY_KEYS.peers() })
+      qc.invalidateQueries({ queryKey: ['pending-changes'] })
+    } catch (err) {
+      showToast(`Failed to apply all changes: ${err.message}`, 'error')
+    } finally {
+      setApplyAllLoading(false)
+    }
+  }
 
 	if (isLoading) return <TableSkeleton rows={3} columns={6} />
 
@@ -964,15 +967,18 @@ const preFilteredPeers = peers?.filter(peer => {
 	</div>
 	)}
 
-	{/* Pending Changes Modal */}
-	{pendingModalOpen && pendingModalPeer && (
-	<PendingChangesModal
-	peerId={pendingModalPeer.id}
-	peerHostname={pendingModalPeer.hostname}
-	onClose={() => { setPendingModalOpen(false); setPendingModalPeer(null) }}
-	onApplied={() => qc.invalidateQueries({ queryKey: QUERY_KEYS.peers() })}
-	/>
-	)}
+  {/* Pending Changes Modal */}
+  {pendingModalOpen && pendingModalPeer && (
+    <PendingChangesModal
+      peerId={pendingModalPeer.id}
+      peerHostname={pendingModalPeer.hostname}
+      onClose={() => { setPendingModalOpen(false); setPendingModalPeer(null) }}
+      onApplied={() => {
+        qc.invalidateQueries({ queryKey: QUERY_KEYS.peers() })
+        qc.invalidateQueries({ queryKey: ['pending-changes'] })
+      }}
+    />
+  )}
 	</div>
 	)
 	}

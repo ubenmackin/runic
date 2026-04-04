@@ -3,10 +3,11 @@ import { api } from '../api/client'
 
 /**
  * Generic CRUD mutations with optimistic updates.
- * 
+ *
  * @param {Object} config
  * @param {string} config.apiPath - API endpoint (e.g., '/services')
  * @param {Array} config.queryKey - React Query key for the entity
+ * @param {Array} config.additionalInvalidations - Optional array of additional query keys to invalidate
  * @param {Function} config.onCreateSuccess - Optional callback on create success (e.g., close modal)
  * @param {Function} config.onUpdateSuccess - Optional callback on update success
  * @param {Function} config.onDeleteSuccess - Optional callback on delete success
@@ -18,6 +19,7 @@ import { api } from '../api/client'
 export function useCrudMutations({
   apiPath,
   queryKey,
+  additionalInvalidations = [],
   onCreateSuccess,
   onUpdateSuccess,
   onDeleteSuccess,
@@ -31,6 +33,7 @@ export function useCrudMutations({
     mutationFn: (data) => api.post(apiPath, data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey })
+      additionalInvalidations.forEach(key => qc.invalidateQueries({ queryKey: key }))
       onCreateSuccess?.()
     },
     onError: (err) => {
@@ -52,6 +55,7 @@ export function useCrudMutations({
     },
     onSettled: () => {
       qc.invalidateQueries({ queryKey })
+      additionalInvalidations.forEach(key => qc.invalidateQueries({ queryKey: key }))
       onUpdateSuccess?.()
     },
   })
@@ -69,6 +73,8 @@ export function useCrudMutations({
       showToast?.(err.message, 'error')
     },
     onSettled: () => {
+      qc.invalidateQueries({ queryKey })
+      additionalInvalidations.forEach(key => qc.invalidateQueries({ queryKey: key }))
       onDeleteSuccess?.()
     },
   })

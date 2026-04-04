@@ -130,6 +130,7 @@ export default function Services() {
   const { createMutation, updateMutation, deleteMutation } = useCrudMutations({
     apiPath: '/services',
     queryKey: QUERY_KEYS.services(),
+    additionalInvalidations: [['pending-changes']],
     onCreateSuccess: closeModal,
     onUpdateSuccess: closeModal,
     setFormErrors,
