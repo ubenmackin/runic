@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"regexp"
 
 	"github.com/gorilla/mux"
 
@@ -18,17 +17,15 @@ import (
 
 // Handler holds dependencies for service handlers.
 type Handler struct {
-	DB       *sql.DB
-	Compiler *engine.Compiler
+	DB           *sql.DB
+	Compiler     *engine.Compiler
+	ChangeWorker *common.ChangeWorker
 }
 
 // NewHandler creates a new services handler with dependencies.
-func NewHandler(db *sql.DB, compiler *engine.Compiler) *Handler {
-	return &Handler{DB: db, Compiler: compiler}
+func NewHandler(db *sql.DB, compiler *engine.Compiler, changeWorker *common.ChangeWorker) *Handler {
+	return &Handler{DB: db, Compiler: compiler, ChangeWorker: changeWorker}
 }
-
-// validPortsRe matches comma/colon-separated port numbers (e.g. "22", "80,443", "8000:9000").
-var validPortsRe = regexp.MustCompile(`^\d+([,:]\d+)*$`)
 
 // validProtocols is the set of allowed protocol values for user-defined services.
 // Note: ICMP and IGMP are only allowed for system services, not user-defined services.
@@ -66,12 +63,12 @@ func validateService(ports, sourcePorts, protocol string, isSystem bool) error {
 	}
 
 	// Validate destination ports format if provided
-	if ports != "" && !validPortsRe.MatchString(ports) {
+	if ports != "" && !engine.ValidPortsRe.MatchString(ports) {
 		return fmt.Errorf("invalid destination ports %q: must be digits separated by commas or colons", ports)
 	}
 
 	// Validate source ports format if provided
-	if sourcePorts != "" && !validPortsRe.MatchString(sourcePorts) {
+	if sourcePorts != "" && !engine.ValidPortsRe.MatchString(sourcePorts) {
 		return fmt.Errorf("invalid source ports %q: must be digits separated by commas or colons", sourcePorts)
 	}
 
@@ -330,10 +327,13 @@ func (h *Handler) queueServiceChange(ctx context.Context, serviceID int, action,
 		return
 	}
 
+	peerIDs := make([]int, 0, len(peerSet))
 	for peerID := range peerSet {
-		if err := db.AddPendingChange(ctx, h.DB, peerID, "service", action, serviceID, summary); err != nil {
-			log.ErrorContext(ctx, "failed to queue service change", "peer_id", peerID, "error", err)
-		}
+		peerIDs = append(peerIDs, peerID)
+	}
+
+	if len(peerIDs) > 0 && h.ChangeWorker != nil {
+		h.ChangeWorker.QueuePeerChange(ctx, h.DB, peerIDs, "service", action, serviceID, summary)
 	}
 }
 

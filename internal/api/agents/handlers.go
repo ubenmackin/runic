@@ -447,73 +447,13 @@ func (h *Handler) ConfirmBundleApplied(w http.ResponseWriter, r *http.Request) {
 	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "confirmed"})
 }
 
-// HandleSSEvents handles SSE connections for agents.
-// Deprecated: Use MakeHandleSSEventsHandler for explicit dependency injection.
-func (h *Handler) HandleSSEvents(w http.ResponseWriter, r *http.Request) {
-	hostID, _, ok := h.getHostIDFromContext(w, r)
-	if !ok {
-		return
-	}
-
-	// Set SSE headers
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("Transfer-Encoding", "chunked")
-
-	// Register with SSE hub
-	hub := SSEHubFromContext(r.Context())
-	if hub == nil {
-		http.Error(w, "SSE hub unavailable", http.StatusInternalServerError)
-		return
-	}
-	ch := hub.Register(hostID)
-	defer hub.Unregister(hostID)
-
-	// Ensure flush
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "SSE not supported", http.StatusInternalServerError)
-		return
-	}
-
-	// Send keepalive periodically
-	ticker := time.NewTicker(constants.SSEKeepaliveInterval)
-	defer ticker.Stop()
-
-	// Notify client connected
-	fmt.Fprintf(w, ": agent connected\n\n")
-	flusher.Flush()
-
-	for {
-		select {
-		case msg, ok := <-ch:
-			if !ok {
-				// Channel closed
-				return
-			}
-			fmt.Fprintf(w, "%s\n\n", msg)
-			flusher.Flush()
-
-		case <-ticker.C:
-			// Keepalive
-			fmt.Fprintf(w, ": keepalive\n\n")
-			flusher.Flush()
-
-		case <-r.Context().Done():
-			// Client disconnected
-			return
-		}
-	}
-}
-
 // MakeHandleSSEventsHandler creates an SSE handler with explicit SSE hub injection.
 // This is the preferred way to create the SSE handler as it avoids context propagation issues.
 func (h *Handler) MakeHandleSSEventsHandler(hub SSEBroadcaster) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		hostID, _, ok := h.getHostIDFromContext(w, r)
 		if !ok {
-			runiclog.Error("HandleSSEvents: failed to get host_id from context")
+			runiclog.Error("MakeHandleSSEventsHandler: failed to get host_id from context")
 			return
 		}
 

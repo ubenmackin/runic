@@ -23,21 +23,6 @@ func NewHandler(db *sql.DB, compiler *engine.Compiler, changeWorker *common.Chan
 	return &Handler{DB: db, Compiler: compiler, ChangeWorker: changeWorker}
 }
 
-// isValidSourceType validates that the source type is one of the allowed values.
-func isValidSourceType(value string) bool {
-	return value == "peer" || value == "group" || value == "special"
-}
-
-// isValidTargetType validates that the target type is one of the allowed values.
-func isValidTargetType(value string) bool {
-	return value == "peer" || value == "group" || value == "special"
-}
-
-// isValidDirection validates that the direction is one of the allowed values.
-func isValidDirection(value string) bool {
-	return value == "both" || value == "forward" || value == "backward"
-}
-
 func (h *Handler) ListPolicies(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.DB.QueryContext(r.Context(),
 		`SELECT id, name, COALESCE(description, ''), source_id, source_type, service_id,
@@ -116,11 +101,11 @@ func (h *Handler) CreatePolicy(w http.ResponseWriter, r *http.Request) {
 		common.RespondError(w, http.StatusBadRequest, "name, source_id, source_type, service_id, target_id, and target_type are required")
 		return
 	}
-	if !isValidSourceType(input.SourceType) {
+	if !common.IsValidSourceType(input.SourceType) {
 		common.RespondError(w, http.StatusBadRequest, "source_type must be one of: peer, group, special")
 		return
 	}
-	if !isValidTargetType(input.TargetType) {
+	if !common.IsValidTargetType(input.TargetType) {
 		common.RespondError(w, http.StatusBadRequest, "target_type must be one of: peer, group, special")
 		return
 	}
@@ -133,7 +118,7 @@ func (h *Handler) CreatePolicy(w http.ResponseWriter, r *http.Request) {
 	if input.Direction == "" {
 		input.Direction = "both"
 	}
-	if !isValidDirection(input.Direction) {
+	if !common.IsValidDirection(input.Direction) {
 		common.RespondError(w, http.StatusBadRequest, "direction must be one of: both, forward, backward")
 		return
 	}
@@ -258,18 +243,18 @@ func (h *Handler) UpdatePolicy(w http.ResponseWriter, r *http.Request) {
 		common.RespondError(w, http.StatusBadRequest, "name is required")
 		return
 	}
-	if input.SourceType != "" && !isValidSourceType(input.SourceType) {
+	if input.SourceType != "" && !common.IsValidSourceType(input.SourceType) {
 		common.RespondError(w, http.StatusBadRequest, "source_type must be one of: peer, group, special")
 		return
 	}
-	if input.TargetType != "" && !isValidTargetType(input.TargetType) {
+	if input.TargetType != "" && !common.IsValidTargetType(input.TargetType) {
 		common.RespondError(w, http.StatusBadRequest, "target_type must be one of: peer, group, special")
 		return
 	}
 	if input.Direction == "" {
 		input.Direction = "both"
 	}
-	if !isValidDirection(input.Direction) {
+	if !common.IsValidDirection(input.Direction) {
 		common.RespondError(w, http.StatusBadRequest, "direction must be one of: both, forward, backward")
 		return
 	}

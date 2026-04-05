@@ -148,15 +148,15 @@ func (r *Resolver) ResolveGroup(ctx context.Context, groupID int, visited map[in
 	return results, nil
 }
 
-// validPortsRe matches comma/colon-separated port numbers (e.g. "22", "80,443", "8000:9000").
-var validPortsRe = regexp.MustCompile(`^\d+([,:]\d+)*$`)
+// ValidPortsRe matches comma/colon-separated port numbers (e.g. "22", "80,443", "8000:9000").
+var ValidPortsRe = regexp.MustCompile(`^\d+([,:]\d+)*$`)
 
 // ValidatePorts checks that a ports string contains only digits and separators.
 func ValidatePorts(ports string) error {
 	if ports == "" {
 		return nil
 	}
-	if !validPortsRe.MatchString(ports) {
+	if !ValidPortsRe.MatchString(ports) {
 		return fmt.Errorf("invalid ports %q: must be digits separated by commas or colons", ports)
 	}
 	return nil
