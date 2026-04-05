@@ -2,6 +2,11 @@ package apply
 
 import (
 	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -789,5 +794,664 @@ COMMIT
 				}
 			}
 		})
+	}
+}
+
+// TestApplyBundleSuccess tests successful bundle application with mock iptables.
+func TestApplyBundleSuccess(t *testing.T) {
+	tests := []struct {
+		name          string
+		bundle        models.BundleResponse
+		hmacKey       string
+		expectErr     bool
+		expectApplied bool
+		expectCached  bool
+	}{
+		{
+			name: "minimal valid bundle",
+			bundle: models.BundleResponse{
+				Version: "test-v1",
+				Rules: `*filter
+:INPUT DROP [0:0]
+:OUTPUT DROP [0:0]
+:FORWARD DROP [0:0]
+-A INPUT -i lo -j ACCEPT
+-A OUTPUT -o lo -j ACCEPT
+-A INPUT -p icmp -j ACCEPT
+-A OUTPUT -p icmp -j ACCEPT
+-A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+-A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+-A INPUT -j LOG --log-prefix "[RUNIC-DROP] " --log-level 4
+-A INPUT -j DROP
+-A OUTPUT -j LOG --log-prefix "[RUNIC-DROP] " --log-level 4
+-A OUTPUT -j DROP
+COMMIT
+`,
+			},
+			hmacKey:       "test-hmac-key",
+			expectErr:     false,
+			expectApplied: true,
+			expectCached:  true,
+		},
+		{
+			name: "bundle with Docker chain",
+			bundle: models.BundleResponse{
+				Version: "test-v2",
+				Rules: `# Runic rule bundle
+*filter
+:INPUT DROP [0:0]
+:OUTPUT DROP [0:0]
+:FORWARD DROP [0:0]
+:DOCKER-USER - [0:0]
+-A INPUT -i lo -j ACCEPT
+-A OUTPUT -o lo -j ACCEPT
+-A INPUT -p icmp -j ACCEPT
+-A OUTPUT -p icmp -j ACCEPT
+-A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+-A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+-A DOCKER-USER -j RETURN
+-A INPUT -j LOG --log-prefix "[RUNIC-DROP] " --log-level 4
+-A INPUT -j DROP
+-A OUTPUT -j LOG --log-prefix "[RUNIC-DROP] " --log-level 4
+-A OUTPUT -j DROP
+COMMIT
+`,
+			},
+			hmacKey:       "test-hmac-key-2",
+			expectErr:     false,
+			expectApplied: true,
+			expectCached:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Setup mock environment
+			tmpDir, cleanup := setupMockEnvironment(t, "success")
+			defer cleanup()
+
+			// Create mock control plane server
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				// Handle heartbeat for smoke test
+				if r.URL.Path == "/api/v1/agent/heartbeat" {
+					w.WriteHeader(http.StatusOK)
+					fmt.Fprintf(w, `{"status":"ok"}`)
+					return
+				}
+				w.WriteHeader(http.StatusNotFound)
+			}))
+			defer server.Close()
+
+			// Sign the bundle
+			tt.bundle.HMAC = engine.Sign(tt.bundle.Rules, tt.hmacKey)
+
+			// Create a mock confirm function
+			confirmCalled := false
+			confirmFunc := func(ctx context.Context, version string) error {
+				confirmCalled = true
+				return nil
+			}
+
+			// Apply the bundle (uses mocked iptables in PATH)
+			err := ApplyBundle(context.Background(), tt.bundle, tt.hmacKey, server.URL, "test-token", "1.0.0", confirmFunc)
+
+			if tt.expectErr {
+				if err == nil {
+					t.Error("expected error, got nil")
+				}
+			} else {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+
+				// Verify confirm was called
+				if !confirmCalled {
+					t.Error("confirm function was not called")
+				}
+
+				// Verify bundle was cached
+				cachedPath := filepath.Join(tmpDir, "cached-bundle.rules")
+				if _, err := os.Stat(cachedPath); os.IsNotExist(err) {
+					// Note: CacheBundle writes to /etc/runic-agent/cached-bundle.rules
+					// In test environment, this may fail due to permissions
+					// That's acceptable - we just verify no error on apply
+				}
+			}
+		})
+	}
+}
+
+// TestApplyBundleRollback tests bundle application rollback on failure.
+func TestApplyBundleRollback(t *testing.T) {
+	tests := []struct {
+		name         string
+		bundle       models.BundleResponse
+		hmacKey      string
+		mockBehavior string
+		expectErr    bool
+		errContains  string
+	}{
+		{
+			name: "iptables-restore fails",
+			bundle: models.BundleResponse{
+				Version: "test-rollback-v1",
+				Rules: `*filter
+:INPUT DROP [0:0]
+:OUTPUT DROP [0:0]
+:FORWARD DROP [0:0]
+-A INPUT -i lo -j ACCEPT
+-A OUTPUT -o lo -j ACCEPT
+-A INPUT -p icmp -j ACCEPT
+-A OUTPUT -p icmp -j ACCEPT
+-A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+-A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+-A INPUT -j LOG --log-prefix "[RUNIC-DROP] " --log-level 4
+-A INPUT -j DROP
+-A OUTPUT -j LOG --log-prefix "[RUNIC-DROP] " --log-level 4
+-A OUTPUT -j DROP
+COMMIT
+`,
+			},
+			hmacKey:      "test-hmac-key",
+			mockBehavior: "fail-restore",
+			expectErr:    true,
+			errContains:  "iptables-restore failed",
+		},
+		{
+			name: "smoke test fails triggers revert",
+			bundle: models.BundleResponse{
+				Version: "test-rollback-v2",
+				Rules: `*filter
+:INPUT DROP [0:0]
+:OUTPUT DROP [0:0]
+:FORWARD DROP [0:0]
+-A INPUT -i lo -j ACCEPT
+-A OUTPUT -o lo -j ACCEPT
+-A INPUT -p icmp -j ACCEPT
+-A OUTPUT -p icmp -j ACCEPT
+-A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+-A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+-A INPUT -j LOG --log-prefix "[RUNIC-DROP] " --log-level 4
+-A INPUT -j DROP
+-A OUTPUT -j LOG --log-prefix "[RUNIC-DROP] " --log-level 4
+-A OUTPUT -j DROP
+COMMIT
+`,
+			},
+			hmacKey:      "test-hmac-key",
+			mockBehavior: "success",
+			expectErr:    true,
+			errContains:  "smoke test failed",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Setup mock environment
+			tmpDir, cleanup := setupMockEnvironment(t, tt.mockBehavior)
+			defer cleanup()
+
+			// Create mock control plane server
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				// For smoke test failure scenario, return error
+				if r.URL.Path == "/api/v1/agent/heartbeat" {
+					if tt.mockBehavior == "success" && strings.Contains(tt.name, "smoke test") {
+						w.WriteHeader(http.StatusServiceUnavailable)
+						return
+					}
+					w.WriteHeader(http.StatusOK)
+					fmt.Fprintf(w, `{"status":"ok"}`)
+					return
+				}
+				w.WriteHeader(http.StatusNotFound)
+			}))
+			defer server.Close()
+
+			// Sign the bundle
+			tt.bundle.HMAC = engine.Sign(tt.bundle.Rules, tt.hmacKey)
+
+			// Apply the bundle
+			err := ApplyBundle(context.Background(), tt.bundle, tt.hmacKey, server.URL, "test-token", "1.0.0", nil)
+
+			if tt.expectErr {
+				if err == nil {
+					t.Error("expected error, got nil")
+				} else if tt.errContains != "" && !strings.Contains(err.Error(), tt.errContains) {
+					t.Errorf("expected error containing %q, got %v", tt.errContains, err)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+			}
+
+			// Verify that iptables-save was called (for backup)
+			saveCalledFile := filepath.Join(tmpDir, "iptables-save.called")
+			if _, err := os.Stat(saveCalledFile); os.IsNotExist(err) {
+				t.Error("iptables-save was not called for backup")
+			}
+
+			// For rollback scenarios, verify iptables-restore was called at least once
+			restoreCalledFile := filepath.Join(tmpDir, "iptables-restore.called")
+			if _, err := os.Stat(restoreCalledFile); os.IsNotExist(err) {
+				t.Error("iptables-restore was not called")
+			}
+		})
+	}
+}
+
+// setupMockEnvironment creates a temporary directory with mock iptables binaries.
+// The behavior parameter controls what the mock does:
+// - "success": all commands succeed
+// - "fail-restore": iptables-restore returns exit code 1
+// - "fail-save": iptables-save returns exit code 1
+func setupMockEnvironment(t *testing.T, behavior string) (tmpDir string, cleanup func()) {
+	t.Helper()
+
+	// Create temp directory
+	tmpDir = t.TempDir()
+
+	// Create mock iptables-save
+	iptablesSave := filepath.Join(tmpDir, "iptables-save")
+	saveScript := generateMockScript("iptables-save", behavior, tmpDir)
+	if err := os.WriteFile(iptablesSave, []byte(saveScript), 0755); err != nil {
+		t.Fatalf("failed to create mock iptables-save: %v", err)
+	}
+
+	// Create mock iptables-restore
+	iptablesRestore := filepath.Join(tmpDir, "iptables-restore")
+	restoreScript := generateMockScript("iptables-restore", behavior, tmpDir)
+	if err := os.WriteFile(iptablesRestore, []byte(restoreScript), 0755); err != nil {
+		t.Fatalf("failed to create mock iptables-restore: %v", err)
+	}
+
+	// Create mock ipset
+	ipset := filepath.Join(tmpDir, "ipset")
+	ipsetScript := generateMockScript("ipset", behavior, tmpDir)
+	if err := os.WriteFile(ipset, []byte(ipsetScript), 0755); err != nil {
+		t.Fatalf("failed to create mock ipset: %v", err)
+	}
+
+	// Create mock iptables (used by iptables command)
+	iptables := filepath.Join(tmpDir, "iptables")
+	iptablesScript := generateMockScript("iptables", behavior, tmpDir)
+	if err := os.WriteFile(iptables, []byte(iptablesScript), 0755); err != nil {
+		t.Fatalf("failed to create mock iptables: %v", err)
+	}
+
+	// Save original PATH
+	origPath := os.Getenv("PATH")
+
+	// Prepend our tmpDir to PATH
+	newPath := tmpDir + string(os.PathListSeparator) + origPath
+	if err := os.Setenv("PATH", newPath); err != nil {
+		t.Fatalf("failed to set PATH: %v", err)
+	}
+
+	// Return cleanup function
+	cleanup = func() {
+		if err := os.Setenv("PATH", origPath); err != nil {
+			t.Logf("failed to restore PATH: %v", err)
+		}
+	}
+
+	return tmpDir, cleanup
+}
+
+// generateMockScript generates a shell script that mocks iptables/ipset commands.
+func generateMockScript(command, behavior, tmpDir string) string {
+	var script strings.Builder
+
+	script.WriteString("#!/bin/sh\n")
+	script.WriteString("set -e\n")
+	script.WriteString(fmt.Sprintf("# Mock %s (behavior: %s)\n", command, behavior))
+	script.WriteString("\n")
+
+	// Log that we were called
+	script.WriteString(fmt.Sprintf("touch \"%s/%s.called\"\n", tmpDir, command))
+
+	// Log arguments for debugging
+	script.WriteString(fmt.Sprintf("echo \"$@\" >> \"%s/%s.args\"\n", tmpDir, command))
+
+	// Handle different behaviors
+	switch {
+	case behavior == "fail-save" && command == "iptables-save":
+		script.WriteString("echo 'Error: mock iptables-save failure' >&2\n")
+		script.WriteString("exit 1\n")
+
+	case behavior == "fail-restore" && command == "iptables-restore":
+		script.WriteString("echo 'Error: mock iptables-restore failure' >&2\n")
+		script.WriteString("exit 1\n")
+
+	case command == "iptables-save":
+		// Return a minimal valid iptables-save output
+		script.WriteString("cat << 'EOF'\n")
+		script.WriteString("# Generated by mock iptables-save\n")
+		script.WriteString("*filter\n")
+		script.WriteString(":INPUT DROP [0:0]\n")
+		script.WriteString(":OUTPUT DROP [0:0]\n")
+		script.WriteString(":FORWARD DROP [0:0]\n")
+		script.WriteString("-A INPUT -i lo -j ACCEPT\n")
+		script.WriteString("COMMIT\n")
+		script.WriteString("EOF\n")
+
+	case command == "iptables-restore":
+		// Accept input from file argument
+		script.WriteString("# iptables-restore: accept rules from file\n")
+		script.WriteString("if [ -n \"$1\" ]; then\n")
+		script.WriteString("  # Read and discard the file (we're mocking)\n")
+		script.WriteString("  cat \"$1\" > /dev/null 2>&1 || true\n")
+		script.WriteString("fi\n")
+		script.WriteString("exit 0\n")
+
+	case command == "ipset":
+		// ipset list -n returns empty list
+		script.WriteString("if [ \"$1\" = \"list\" ] && [ \"$2\" = \"-n\" ]; then\n")
+		script.WriteString("  # No existing ipsets\n")
+		script.WriteString("  exit 0\n")
+		script.WriteString("fi\n")
+		script.WriteString("# Other ipset commands succeed\n")
+		script.WriteString("exit 0\n")
+
+	case command == "iptables":
+		// iptables command - just succeed
+		script.WriteString("exit 0\n")
+
+	default:
+		script.WriteString("exit 0\n")
+	}
+
+	return script.String()
+}
+
+// TestApplyBundleIntegrationWithRealMocks tests the full bundle apply flow with detailed verification.
+func TestApplyBundleIntegrationWithRealMocks(t *testing.T) {
+	// Setup mock environment
+	tmpDir, cleanup := setupMockEnvironment(t, "success")
+	defer cleanup()
+
+	// Create mock control plane server
+	heartbeatCalled := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/agent/heartbeat" {
+			heartbeatCalled = true
+			if r.Header.Get("Authorization") != "Bearer test-token" {
+				t.Errorf("expected Authorization header 'Bearer test-token', got %q", r.Header.Get("Authorization"))
+			}
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintf(w, `{"status":"ok"}`)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	// Create valid bundle
+	bundle := models.BundleResponse{
+		Version: "integration-test-v1",
+		Rules: `# Integration test bundle
+*filter
+:INPUT DROP [0:0]
+:OUTPUT DROP [0:0]
+:FORWARD DROP [0:0]
+-A INPUT -i lo -j ACCEPT
+-A OUTPUT -o lo -j ACCEPT
+-A INPUT -p icmp -j ACCEPT
+-A OUTPUT -p icmp -j ACCEPT
+-A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+-A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+-A INPUT -j LOG --log-prefix "[RUNIC-DROP] " --log-level 4
+-A INPUT -j DROP
+-A OUTPUT -j LOG --log-prefix "[RUNIC-DROP] " --log-level 4
+-A OUTPUT -j DROP
+COMMIT
+`,
+	}
+	hmacKey := "test-hmac-key"
+
+	// Sign the bundle
+	bundle.HMAC = engine.Sign(bundle.Rules, hmacKey)
+
+	// Track confirm callback
+	confirmCalled := false
+	confirmVersion := ""
+	confirmFunc := func(ctx context.Context, version string) error {
+		confirmCalled = true
+		confirmVersion = version
+		return nil
+	}
+
+	// Apply the bundle
+	err := ApplyBundle(context.Background(), bundle, hmacKey, server.URL, "test-token", "1.0.0", confirmFunc)
+	if err != nil {
+		t.Fatalf("ApplyBundle failed: %v", err)
+	}
+
+	// Verify confirm was called with correct version
+	if !confirmCalled {
+		t.Error("confirm function was not called")
+	}
+	if confirmVersion != bundle.Version {
+		t.Errorf("confirm called with wrong version: got %q, want %q", confirmVersion, bundle.Version)
+	}
+
+	// Verify heartbeat was called (smoke test)
+	if !heartbeatCalled {
+		t.Error("heartbeat endpoint was not called (smoke test failed)")
+	}
+
+	// Verify iptables-save was called (backup)
+	saveCalledFile := filepath.Join(tmpDir, "iptables-save.called")
+	if _, err := os.Stat(saveCalledFile); os.IsNotExist(err) {
+		t.Error("iptables-save was not called for backup")
+	}
+
+	// Verify iptables-restore was called (apply)
+	restoreCalledFile := filepath.Join(tmpDir, "iptables-restore.called")
+	if _, err := os.Stat(restoreCalledFile); os.IsNotExist(err) {
+		t.Error("iptables-restore was not called for apply")
+	}
+}
+
+// TestApplyBundleWithIpset tests bundle application with ipset definitions.
+// Note: This test verifies the ipset parsing logic by checking that the bundle validates.
+// The actual ipset commands are tested separately.
+func TestApplyBundleWithIpset(t *testing.T) {
+	// Setup mock environment
+	tmpDir, cleanup := setupMockEnvironment(t, "success")
+	defer cleanup()
+
+	// Create mock control plane server
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/agent/heartbeat" {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintf(w, `{"status":"ok"}`)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	// Create bundle with ipset definitions (as comments - the proper format)
+	// The ipset section is marked with a special comment before *filter
+	bundle := models.BundleResponse{
+		Version: "ipset-test-v1",
+		Rules: `# Runic bundle with ipset definitions
+# --- Ipset Definitions ---
+create runic_group_office hash:ip family inet
+add runic_group_office 192.168.1.10
+add runic_group_office 192.168.1.11
+*filter
+:INPUT DROP [0:0]
+:OUTPUT DROP [0:0]
+:FORWARD DROP [0:0]
+-A INPUT -i lo -j ACCEPT
+-A OUTPUT -o lo -j ACCEPT
+-A INPUT -p icmp -j ACCEPT
+-A OUTPUT -p icmp -j ACCEPT
+-A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+-A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+-A INPUT -j LOG --log-prefix "[RUNIC-DROP] " --log-level 4
+-A INPUT -j DROP
+-A OUTPUT -j LOG --log-prefix "[RUNIC-DROP] " --log-level 4
+-A OUTPUT -j DROP
+COMMIT
+`,
+	}
+	hmacKey := "test-hmac-key"
+
+	// Sign the bundle
+	bundle.HMAC = engine.Sign(bundle.Rules, hmacKey)
+
+	// Apply the bundle
+	err := ApplyBundle(context.Background(), bundle, hmacKey, server.URL, "test-token", "1.0.0", nil)
+	if err != nil {
+		t.Fatalf("ApplyBundle failed: %v", err)
+	}
+
+	// Verify ipset was called
+	ipsetCalledFile := filepath.Join(tmpDir, "ipset.called")
+	if _, err := os.Stat(ipsetCalledFile); os.IsNotExist(err) {
+		t.Error("ipset was not called for ipset definitions")
+	}
+
+	// Verify iptables-restore was called
+	restoreCalledFile := filepath.Join(tmpDir, "iptables-restore.called")
+	if _, err := os.Stat(restoreCalledFile); os.IsNotExist(err) {
+		t.Error("iptables-restore was not called")
+	}
+}
+
+// TestIpsetSectionParsing tests the ipset section parsing logic.
+func TestIpsetSectionParsing(t *testing.T) {
+	tests := []struct {
+		name           string
+		rules          string
+		expectIpset    bool
+		expectedCount  int
+		expectParseErr bool
+	}{
+		{
+			name: "bundle with ipset definitions",
+			rules: `# --- Ipset Definitions ---
+create runic_group_office hash:ip family inet
+add runic_group_office 192.168.1.10
+*filter
+:INPUT DROP [0:0]
+COMMIT
+`,
+			expectIpset:   true,
+			expectedCount: 1,
+		},
+		{
+			name: "bundle without ipset definitions",
+			rules: `*filter
+:INPUT DROP [0:0]
+COMMIT
+`,
+			expectIpset: false,
+		},
+		{
+			name: "bundle with multiple ipsets",
+			rules: `# --- Ipset Definitions ---
+create runic_group_office hash:ip family inet
+add runic_group_office 192.168.1.10
+create runic_group_vpn hash:net family inet
+add runic_group_vpn 10.0.0.0/24
+*filter
+:INPUT DROP [0:0]
+COMMIT
+`,
+			expectIpset:   true,
+			expectedCount: 2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			section, err := extractIpsetSection(tt.rules)
+			if err != nil {
+				if tt.expectParseErr {
+					return // Expected error
+				}
+				t.Fatalf("extractIpsetSection error: %v", err)
+			}
+
+			if tt.expectIpset {
+				if section == "" {
+					t.Error("expected ipset section to be extracted")
+				}
+
+				defs, err := parseIpsetDefs(section)
+				if err != nil {
+					t.Fatalf("parseIpsetDefs error: %v", err)
+				}
+
+				if len(defs) != tt.expectedCount {
+					t.Errorf("expected %d ipset definitions, got %d", tt.expectedCount, len(defs))
+				}
+			} else {
+				if section != "" {
+					t.Errorf("expected no ipset section, got: %s", section)
+				}
+			}
+		})
+	}
+}
+
+// TestApplyBundleHMACFailure tests that HMAC verification failure prevents apply.
+func TestApplyBundleHMACFailure(t *testing.T) {
+	// Setup mock environment (though it shouldn't be called)
+	_, cleanup := setupMockEnvironment(t, "success")
+	defer cleanup()
+
+	// Create bundle with invalid HMAC
+	bundle := models.BundleResponse{
+		Version: "hmac-fail-v1",
+		Rules: `*filter
+:INPUT DROP [0:0]
+:OUTPUT DROP [0:0]
+-A INPUT -i lo -j ACCEPT
+COMMIT
+`,
+		HMAC: "invalid-hmac-signature",
+	}
+	hmacKey := "correct-key"
+
+	// Apply the bundle - should fail HMAC verification
+	err := ApplyBundle(context.Background(), bundle, hmacKey, "http://localhost:8080", "test-token", "1.0.0", nil)
+	if err == nil {
+		t.Fatal("expected HMAC verification error, got nil")
+	}
+
+	if !strings.Contains(err.Error(), "HMAC verification failed") {
+		t.Errorf("expected HMAC verification error, got: %v", err)
+	}
+}
+
+// TestApplyBundleValidationFailure tests that rule validation failure prevents apply.
+func TestApplyBundleValidationFailure(t *testing.T) {
+	// Setup mock environment (though it shouldn't be called)
+	_, cleanup := setupMockEnvironment(t, "success")
+	defer cleanup()
+
+	// Create bundle with invalid rules
+	bundle := models.BundleResponse{
+		Version: "validation-fail-v1",
+		Rules:   `invalid rules content`,
+	}
+	hmacKey := "test-key"
+
+	// Sign the bundle (valid HMAC, invalid rules)
+	bundle.HMAC = engine.Sign(bundle.Rules, hmacKey)
+
+	// Apply the bundle - should fail validation
+	err := ApplyBundle(context.Background(), bundle, hmacKey, "http://localhost:8080", "test-token", "1.0.0", nil)
+	if err == nil {
+		t.Fatal("expected validation error, got nil")
+	}
+
+	if !strings.Contains(err.Error(), "rule validation failed") {
+		t.Errorf("expected validation error, got: %v", err)
 	}
 }

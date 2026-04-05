@@ -8,24 +8,8 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
-	"runic/internal/db"
+	"runic/internal/testutil"
 )
-
-// setupTestDB creates an in-memory SQLite database with the full schema and returns it.
-func setupTestDB(t *testing.T) *sql.DB {
-	t.Helper()
-	database, err := sql.Open("sqlite3", ":memory:")
-	if err != nil {
-		t.Fatalf("failed to open test db: %v", err)
-	}
-	// Disable foreign keys for tests that intentionally use invalid IDs
-	database.Exec("PRAGMA foreign_keys=OFF")
-	if _, err := database.Exec(db.Schema()); err != nil {
-		t.Fatalf("failed to create schema: %v", err)
-	}
-	t.Cleanup(func() { database.Close() })
-	return database
-}
 
 // insertPeer inserts a test peer and returns its ID.
 func insertPeer(t *testing.T, database *sql.DB, hostname, ip string, hasDocker bool) int {
@@ -107,7 +91,9 @@ func insertPolicy(t *testing.T, database *sql.DB, name string, groupID, serviceI
 }
 
 func TestSingleIPSource(t *testing.T) {
-	database := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
 	peerID := insertPeer(t, database, "web1", "192.168.1.10", false)
 	groupID := insertGroup(t, database, "office")
 	manualPeerID := insertManualPeer(t, database, "10.0.1.1")
@@ -130,7 +116,9 @@ func TestSingleIPSource(t *testing.T) {
 }
 
 func TestCIDRSource(t *testing.T) {
-	database := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
 	peerID := insertPeer(t, database, "web2", "192.168.1.11", false)
 	groupID := insertGroup(t, database, "subnet")
 	manualPeerID := insertManualPeer(t, database, "10.0.1.0/24")
@@ -150,7 +138,9 @@ func TestCIDRSource(t *testing.T) {
 }
 
 func TestMultiport(t *testing.T) {
-	database := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
 	peerID := insertPeer(t, database, "web3", "192.168.1.12", false)
 	groupID := insertGroup(t, database, "any")
 	manualPeerID := insertManualPeer(t, database, "0.0.0.0/0")
@@ -170,7 +160,9 @@ func TestMultiport(t *testing.T) {
 }
 
 func TestPortRange(t *testing.T) {
-	database := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
 	peerID := insertPeer(t, database, "web4", "192.168.1.13", false)
 	groupID := insertGroup(t, database, "any2")
 	manualPeerID := insertManualPeer(t, database, "0.0.0.0/0")
@@ -190,7 +182,9 @@ func TestPortRange(t *testing.T) {
 }
 
 func TestProtocolBoth(t *testing.T) {
-	database := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
 	peerID := insertPeer(t, database, "dns1", "192.168.1.14", false)
 	groupID := insertGroup(t, database, "clients")
 	manualPeerID := insertManualPeer(t, database, "10.0.0.0/8")
@@ -213,7 +207,9 @@ func TestProtocolBoth(t *testing.T) {
 }
 
 func TestICMPService(t *testing.T) {
-	database := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
 	peerID := insertPeer(t, database, "mon1", "192.168.1.15", false)
 	groupID := insertGroup(t, database, "monitors")
 	manualPeerID := insertManualPeer(t, database, "10.0.5.0/24")
@@ -241,7 +237,9 @@ func TestICMPService(t *testing.T) {
 }
 
 func TestMulticastService(t *testing.T) {
-	database := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
 	peerID := insertPeer(t, database, "mcast1", "192.168.1.16", false)
 	groupID := insertGroup(t, database, "mcast-group")
 	manualPeerID := insertManualPeer(t, database, "10.0.6.0/24")
@@ -273,7 +271,9 @@ func TestMulticastService(t *testing.T) {
 }
 
 func TestMulticastServiceWithDocker(t *testing.T) {
-	database := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
 	peerID := insertPeer(t, database, "mcast-docker", "192.168.1.17", true)
 	groupID := insertGroup(t, database, "mcast-docker-group")
 	manualPeerID := insertManualPeer(t, database, "10.0.7.0/24")
@@ -304,7 +304,9 @@ func TestMulticastServiceWithDocker(t *testing.T) {
 }
 
 func TestNoPolicies(t *testing.T) {
-	database := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
 	peerID := insertPeer(t, database, "empty1", "192.168.1.18", false)
 
 	c := NewCompiler(database)
@@ -335,7 +337,9 @@ func TestNoPolicies(t *testing.T) {
 }
 
 func TestConntrackStandardRules(t *testing.T) {
-	database := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
 	peerID := insertPeer(t, database, "conntrack1", "192.168.1.25", false)
 
 	c := NewCompiler(database)
@@ -364,7 +368,9 @@ func TestConntrackStandardRules(t *testing.T) {
 }
 
 func TestConntrackDockerRules(t *testing.T) {
-	database := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
 	peerID := insertPeer(t, database, "conntrack-docker", "192.168.1.26", true)
 
 	c := NewCompiler(database)
@@ -383,7 +389,9 @@ func TestConntrackDockerRules(t *testing.T) {
 }
 
 func TestLogDropAction(t *testing.T) {
-	database := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
 	peerID := insertPeer(t, database, "logdrop1", "192.168.1.19", false)
 	groupID := insertGroup(t, database, "untrusted")
 	manualPeerID := insertManualPeer(t, database, "172.16.0.0/12")
@@ -406,7 +414,9 @@ func TestLogDropAction(t *testing.T) {
 }
 
 func TestDisabledPolicy(t *testing.T) {
-	database := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
 	peerID := insertPeer(t, database, "disabled1", "192.168.1.20", false)
 	groupID := insertGroup(t, database, "office2")
 	manualPeerID := insertManualPeer(t, database, "10.0.1.0/24")
@@ -429,7 +439,9 @@ func TestDisabledPolicy(t *testing.T) {
 }
 
 func TestPriorityOrdering(t *testing.T) {
-	database := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
 	peerID := insertPeer(t, database, "prio1", "192.168.1.21", false)
 
 	groupID := insertGroup(t, database, "prio-group")
@@ -462,7 +474,9 @@ func TestPriorityOrdering(t *testing.T) {
 }
 
 func TestDockerPeer(t *testing.T) {
-	database := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
 	peerID := insertPeer(t, database, "docker1", "192.168.1.22", true)
 
 	c := NewCompiler(database)
@@ -586,7 +600,9 @@ func TestPolicyParsingAndValidation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			database := setupTestDB(t)
+			database, cleanup := testutil.SetupTestDB(t)
+			defer cleanup()
+			database.Exec("PRAGMA foreign_keys=OFF")
 			peerID, err := tt.setup(t, database)
 			if err != nil && !tt.wantErr {
 				t.Fatalf("setup failed: %v", err)
@@ -611,7 +627,9 @@ func TestPolicyParsingAndValidation(t *testing.T) {
 }
 
 func TestIsSourcePortDirection(t *testing.T) {
-	database := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
 	peerID := insertPeer(t, database, "client", "10.0.0.1", false)
 	groupID := insertGroup(t, database, "servers")
 	manualPeerID := insertManualPeer(t, database, "10.0.1.50")
@@ -730,7 +748,9 @@ func TestRuleCompilationToIptablesFormat(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			database := setupTestDB(t)
+			database, cleanup := testutil.SetupTestDB(t)
+			defer cleanup()
+			database.Exec("PRAGMA foreign_keys=OFF")
 			peerID, err := tt.setup(t, database)
 			if err != nil {
 				t.Fatalf("setup failed: %v", err)
@@ -818,7 +838,9 @@ func TestInvalidPoliciesAndMalformedRules(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			database := setupTestDB(t)
+			database, cleanup := testutil.SetupTestDB(t)
+			defer cleanup()
+			database.Exec("PRAGMA foreign_keys=OFF")
 			peerID, err := tt.setup(t, database)
 			if err != nil && !tt.wantErr {
 				t.Fatalf("setup failed: %v", err)
@@ -866,7 +888,9 @@ func TestDockerIntegration(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			database := setupTestDB(t)
+			database, cleanup := testutil.SetupTestDB(t)
+			defer cleanup()
+			database.Exec("PRAGMA foreign_keys=OFF")
 			peerID := insertPeer(t, database, "docker-test", "10.0.0.1", tt.hasDocker)
 
 			c := NewCompiler(database)
@@ -893,7 +917,9 @@ func TestDockerIntegration(t *testing.T) {
 
 // Test CompileAndStore functionality
 func TestCompileAndStore(t *testing.T) {
-	database := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
 	peerID := insertPeer(t, database, "store-test", "10.0.0.1", false)
 	groupID := insertGroup(t, database, "test-group")
 	manualPeerID := insertManualPeer(t, database, "192.168.1.0/24")
@@ -955,7 +981,9 @@ func TestCompileAndStore(t *testing.T) {
 
 // TestCompileAndStore_VersionNumberIncrement verifies that version_number increments correctly.
 func TestCompileAndStore_VersionNumberIncrement(t *testing.T) {
-	database := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
 	peerID := insertPeer(t, database, "version-test", "10.0.0.1", false)
 	groupID := insertGroup(t, database, "test-group")
 	manualPeerID := insertManualPeer(t, database, "192.168.1.0/24")
@@ -1019,7 +1047,9 @@ func TestCompileAndStore_VersionNumberIncrement(t *testing.T) {
 
 // Test RecompileAffectedPeers
 func TestRecompileAffectedPeers(t *testing.T) {
-	database := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
 
 	// Create two peers
 	peer1 := insertPeer(t, database, "peer1", "10.0.0.1", false)
@@ -1143,7 +1173,9 @@ func TestEdgeCases(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			database := setupTestDB(t)
+			database, cleanup := testutil.SetupTestDB(t)
+			defer cleanup()
+			database.Exec("PRAGMA foreign_keys=OFF")
 			peerID, err := tt.setup(t, database)
 			if err != nil && !tt.wantErr {
 				t.Fatalf("setup failed: %v", err)
@@ -1189,7 +1221,9 @@ func insertPolicyWithDirection(t *testing.T, database *sql.DB, name string, grou
 }
 
 func TestForwardOnlyPolicy(t *testing.T) {
-	database := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
 	// Setup: jump-server is the SOURCE, target-server is the TARGET
 	jumpServer := insertPeer(t, database, "jump-server", "10.0.0.1", false)
 	targetServer := insertPeer(t, database, "target-server", "10.0.0.2", false)
@@ -1244,7 +1278,9 @@ func TestForwardOnlyPolicy(t *testing.T) {
 }
 
 func TestBackwardOnlyPolicy(t *testing.T) {
-	database := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
 	// Setup: client is the SOURCE, web-server is the TARGET
 	webServer := insertPeer(t, database, "web-server", "10.0.0.10", false)
 	clientPeer := insertPeer(t, database, "client-peer", "10.0.0.20", false)
@@ -1280,7 +1316,9 @@ func TestBackwardOnlyPolicy(t *testing.T) {
 }
 
 func TestBidirectionalPolicy(t *testing.T) {
-	database := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
 	peerID := insertPeer(t, database, "bidir-server", "10.0.0.50", false)
 	clientPeer := insertPeer(t, database, "bidir-client", "10.0.0.51", false)
 	groupID := insertGroup(t, database, "bidir-group")
@@ -1315,7 +1353,9 @@ func TestBidirectionalPolicy(t *testing.T) {
 
 // Test __any_ip__ special target (ID 6)
 func TestResolver_AnyIP(t *testing.T) {
-	database := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
 	r := &Resolver{db: database}
 
 	// Test that __any_ip__ returns 0.0.0.0/0
@@ -1335,7 +1375,9 @@ func TestResolver_AnyIP(t *testing.T) {
 
 // Test __all_peers__ special target (ID 7) with peers in database
 func TestResolver_AllPeers(t *testing.T) {
-	database := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
 
 	// Insert multiple peers
 	insertPeer(t, database, "peer1", "10.0.0.1", false)
@@ -1378,7 +1420,9 @@ func TestResolver_AllPeers(t *testing.T) {
 
 // Test __all_peers__ special target (ID 7) with empty peer list
 func TestResolver_AllPeers_Empty(t *testing.T) {
-	database := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
 	r := &Resolver{db: database}
 
 	// Test that __all_peers__ returns empty slice when no peers exist
@@ -1398,7 +1442,9 @@ func TestResolver_AllPeers_Empty(t *testing.T) {
 
 // Test PreviewCompile with target_scope = "docker"
 func TestPreviewCompile_DockerScope(t *testing.T) {
-	database := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
 
 	// Create source and target peers
 	sourcePeer := insertPeer(t, database, "source", "10.0.0.1", false)
@@ -1443,7 +1489,9 @@ func TestPreviewCompile_DockerScope(t *testing.T) {
 
 // Test PreviewCompile with target_scope = "host"
 func TestPreviewCompile_HostScope(t *testing.T) {
-	database := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
 
 	// Create source and target peers
 	sourcePeer := insertPeer(t, database, "source", "10.0.0.1", false)
@@ -1489,7 +1537,9 @@ func TestPreviewCompile_HostScope(t *testing.T) {
 
 // Test PreviewCompile with target_scope = "both"
 func TestPreviewCompile_BothScope(t *testing.T) {
-	database := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
 
 	// Create source and target peers
 	sourcePeer := insertPeer(t, database, "source", "10.0.0.1", false)

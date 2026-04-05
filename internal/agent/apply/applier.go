@@ -231,11 +231,14 @@ func validateRules(content string) error {
 			continue
 		}
 		// Valid lines: -A (rule), : (chain definition), * (table), COMMIT
+		// Also valid: ipset commands (create, add) in ipset section
 		if strings.HasPrefix(trimmed, "-A") ||
 			strings.HasPrefix(trimmed, ":") ||
 			strings.HasPrefix(trimmed, "*") ||
 			strings.HasPrefix(trimmed, "COMMIT") ||
-			strings.HasPrefix(trimmed, "-") { // other iptables options like -X, -N, etc.
+			strings.HasPrefix(trimmed, "-") || // other iptables options like -X, -N, etc.
+			strings.HasPrefix(trimmed, "create ") || // ipset create command
+			strings.HasPrefix(trimmed, "add ") { // ipset add command
 			validLineCount++
 		} else if len(trimmed) > 0 {
 			// Contains obviously malformed line

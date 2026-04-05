@@ -8,42 +8,29 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/gorilla/mux"
 	_ "github.com/mattn/go-sqlite3"
 
 	"runic/internal/api/common"
 	"runic/internal/api/peers"
-	"runic/internal/db"
 	"runic/internal/engine"
+	"runic/internal/testutil"
 )
 
 // setupTestAPI creates a test API instance with an in-memory database
 func setupTestAPI(t *testing.T) (*API, *sql.DB, func()) {
 	t.Helper()
 
-	// Create in-memory database
-	dsn := fmt.Sprintf("file:testdb%d?mode=memory&cache=shared", time.Now().UnixNano())
-	database, err := sql.Open("sqlite3", dsn)
-	if err != nil {
-		t.Fatalf("failed to open test db: %v", err)
-	}
+	// Use testutil for database setup
+	database, dbCleanup := testutil.SetupTestDB(t)
 
-	// Initialize database schema
-	if _, err := database.Exec(db.Schema()); err != nil {
-		t.Fatalf("failed to create schema: %v", err)
-	}
-
-	// Run migrations that are not in schema.sql (e.g. pending_changes table).
-	// migrateSchema skips when tableCount == 0, but we already created tables
-	// via db.Schema() above, so we must create migration-only tables manually.
+	// Run migrations that are not in schema.sql (pending_changes table)
 	if _, err := database.Exec(`
 		CREATE TABLE IF NOT EXISTS pending_changes (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -66,7 +53,7 @@ func setupTestAPI(t *testing.T) (*API, *sql.DB, func()) {
 
 	// Cleanup function
 	cleanup := func() {
-		database.Close()
+		dbCleanup()
 	}
 
 	return api, database, cleanup
