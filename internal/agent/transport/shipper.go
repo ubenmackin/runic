@@ -67,8 +67,8 @@ func (s *Shipper) Run(ctx context.Context) {
 				// Tail ended, flush remaining
 				if len(batch) > 0 {
 					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-					defer cancel()
 					s.ship(ctx, batch)
+					cancel()
 				}
 				return
 			}
@@ -90,8 +90,8 @@ func (s *Shipper) Run(ctx context.Context) {
 			// Best-effort flush on shutdown
 			if len(batch) > 0 {
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer cancel()
 				s.ship(ctx, batch)
+				cancel()
 			}
 			return
 		}

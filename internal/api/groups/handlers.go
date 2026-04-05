@@ -16,13 +16,14 @@ import (
 
 // Handler provides HTTP handlers for group operations with dependency injection
 type Handler struct {
-	DB       *sql.DB
-	Compiler *engine.Compiler
+	DB           *sql.DB
+	Compiler     *engine.Compiler
+	ChangeWorker *common.ChangeWorker
 }
 
 // NewHandler creates a new groups handler with the given dependencies
-func NewHandler(db *sql.DB, compiler *engine.Compiler) *Handler {
-	return &Handler{DB: db, Compiler: compiler}
+func NewHandler(db *sql.DB, compiler *engine.Compiler, changeWorker *common.ChangeWorker) *Handler {
+	return &Handler{DB: db, Compiler: compiler, ChangeWorker: changeWorker}
 }
 
 // --- Groups ---
@@ -287,8 +288,8 @@ func (h *Handler) AddGroupMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Trigger async recompilation for affected peers (if compiler is available)
-	if h.Compiler != nil {
+	// Trigger async recompilation for affected peers (if ChangeWorker is available)
+	if h.ChangeWorker != nil {
 		// Fetch peer and group details for enhanced summary
 		peer, peerErr := db.GetPeer(r.Context(), h.DB, input.PeerID)
 		group, groupErr := db.GetGroup(r.Context(), h.DB, groupID)
@@ -300,7 +301,7 @@ func (h *Handler) AddGroupMember(w http.ResponseWriter, r *http.Request) {
 			summary = "Peer added to group"
 		}
 
-		common.QueueGroupChanges(r.Context(), h.DB, h.Compiler, groupID, "update", summary)
+		h.ChangeWorker.QueueGroupChange(r.Context(), h.DB, h.Compiler, groupID, "update", summary)
 	}
 
 	common.RespondJSON(w, http.StatusCreated, map[string]int64{"id": id})
@@ -326,8 +327,8 @@ func (h *Handler) DeleteGroupMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Trigger async recompilation (if compiler is available)
-	if h.Compiler != nil {
+	// Trigger async recompilation (if ChangeWorker is available)
+	if h.ChangeWorker != nil {
 		// Fetch peer and group details for enhanced summary
 		peer, peerErr := db.GetPeer(r.Context(), h.DB, peerID)
 		group, groupErr := db.GetGroup(r.Context(), h.DB, groupID)
@@ -339,7 +340,7 @@ func (h *Handler) DeleteGroupMember(w http.ResponseWriter, r *http.Request) {
 			summary = "Peer removed from group"
 		}
 
-		common.QueueGroupChanges(r.Context(), h.DB, h.Compiler, groupID, "update", summary)
+		h.ChangeWorker.QueueGroupChange(r.Context(), h.DB, h.Compiler, groupID, "update", summary)
 	}
 
 	w.WriteHeader(http.StatusNoContent)

@@ -841,6 +841,48 @@ func migrateSchema(database *sql.DB) error {
 		log.Info("Migration: added version_number column to rule_bundles")
 	}
 
+	// Migration: Add push_jobs and push_job_peers tables for async push-all-rules
+	var hasPushJobsTable bool
+	err = database.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='push_jobs'").Scan(&hasPushJobsTable)
+	if err != nil {
+		return fmt.Errorf("failed to check for push_jobs table: %w", err)
+	}
+	if !hasPushJobsTable {
+		if _, err := database.Exec(`CREATE TABLE push_jobs (
+			id TEXT PRIMARY KEY,
+			initiated_by TEXT,
+			total_peers INTEGER NOT NULL,
+			succeeded_count INTEGER DEFAULT 0,
+			failed_count INTEGER DEFAULT 0,
+			status TEXT NOT NULL DEFAULT 'running' CHECK(status IN ('pending', 'running', 'completed', 'completed_with_errors', 'failed', 'cancelled')),
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			completed_at DATETIME
+		)`); err != nil {
+			return fmt.Errorf("failed to create push_jobs table: %w", err)
+		}
+		if _, err := database.Exec(`CREATE TABLE push_job_peers (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			job_id TEXT NOT NULL REFERENCES push_jobs(id) ON DELETE CASCADE,
+			peer_id INTEGER NOT NULL REFERENCES peers(id),
+			peer_hostname TEXT NOT NULL,
+			status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'notified', 'applied', 'failed')),
+			error_message TEXT,
+			notified_at DATETIME,
+			applied_at DATETIME,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(job_id, peer_id)
+		)`); err != nil {
+			return fmt.Errorf("failed to create push_job_peers table: %w", err)
+		}
+		if _, err := database.Exec("CREATE INDEX idx_push_job_peers_job_id ON push_job_peers(job_id)"); err != nil {
+			return fmt.Errorf("failed to create idx_push_job_peers_job_id index: %w", err)
+		}
+		if _, err := database.Exec("CREATE INDEX idx_push_jobs_status ON push_jobs(status)"); err != nil {
+			return fmt.Errorf("failed to create idx_push_jobs_status index: %w", err)
+		}
+		log.Info("Migration: added push_jobs and push_job_peers tables")
+	}
+
 	return nil
 }
 func GetPeer(ctx context.Context, database *sql.DB, peerID int) (models.PeerRow, error) {

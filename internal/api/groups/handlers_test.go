@@ -127,7 +127,7 @@ func TestListGroups(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h := NewHandler(database, nil)
+			h := NewHandler(database, nil, nil)
 			req := httptest.NewRequest("GET", "/api/v1/groups", nil)
 			w := httptest.NewRecorder()
 
@@ -158,7 +158,7 @@ func TestListGroups_SystemGroup(t *testing.T) {
 	// Insert a regular group for comparison
 	database.Exec(`INSERT INTO groups (name, description) VALUES (?, ?)`, "regular-group", "A regular group")
 
-	h := NewHandler(database, nil)
+	h := NewHandler(database, nil, nil)
 	req := httptest.NewRequest("GET", "/api/v1/groups", nil)
 	w := httptest.NewRecorder()
 
@@ -201,7 +201,7 @@ func TestListGroups_EmptyResult(t *testing.T) {
 	database, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	h := NewHandler(database, nil)
+	h := NewHandler(database, nil, nil)
 	req := httptest.NewRequest("GET", "/api/v1/groups", nil)
 	w := httptest.NewRecorder()
 
@@ -242,7 +242,7 @@ func TestDeleteGroup_SystemGroup(t *testing.T) {
 	// Mock gorilla/mux vars
 	req = muxVars(req, map[string]string{"id": "1"})
 
-	h := NewHandler(database, nil)
+	h := NewHandler(database, nil, nil)
 	h.DeleteGroup(w, req)
 
 	if w.Code != http.StatusForbidden {
@@ -275,7 +275,7 @@ func TestDeleteGroup_UsedByPolicy(t *testing.T) {
 
 	req = muxVars(req, map[string]string{"id": "1"})
 
-	h := NewHandler(database, nil)
+	h := NewHandler(database, nil, nil)
 	h.DeleteGroup(w, req)
 
 	if w.Code != http.StatusConflict {
@@ -310,7 +310,7 @@ func TestDeleteGroup_Success(t *testing.T) {
 
 	req = muxVars(req, map[string]string{"id": "1"})
 
-	h := NewHandler(database, nil)
+	h := NewHandler(database, nil, nil)
 	h.DeleteGroup(w, req)
 
 	if w.Code != http.StatusNoContent {
@@ -346,7 +346,7 @@ func TestDeleteGroup_NotFound(t *testing.T) {
 
 	req = muxVars(req, map[string]string{"id": "999"})
 
-	h := NewHandler(database, nil)
+	h := NewHandler(database, nil, nil)
 	h.DeleteGroup(w, req)
 
 	if w.Code != http.StatusNotFound {
@@ -363,7 +363,7 @@ func TestDeleteGroup_InvalidID(t *testing.T) {
 
 	req = muxVars(req, map[string]string{"id": "invalid"})
 
-	h := NewHandler(database, nil)
+	h := NewHandler(database, nil, nil)
 	h.DeleteGroup(w, req)
 
 	if w.Code != http.StatusBadRequest {
@@ -440,7 +440,7 @@ func TestAddGroupMember(t *testing.T) {
 			req = muxVars(req, map[string]string{"id": tt.groupID})
 
 			// Pass nil for compiler since async recompile doesn't affect test result
-			h := NewHandler(database, nil)
+			h := NewHandler(database, nil, nil)
 			handler := http.HandlerFunc(h.AddGroupMember)
 			handler(w, req)
 
@@ -482,7 +482,7 @@ func TestAddGroupMember_Duplicate(t *testing.T) {
 
 	req = muxVars(req, map[string]string{"id": "1"})
 
-	h := NewHandler(database, nil)
+	h := NewHandler(database, nil, nil)
 	handler := http.HandlerFunc(h.AddGroupMember)
 	handler(w, req)
 
@@ -566,7 +566,7 @@ func TestRemoveGroupMember(t *testing.T) {
 			// Note: route uses groupId and peerId params (not id and memberId)
 			req = muxVars(req, map[string]string{"groupId": tt.groupID, "peerId": tt.peerID})
 
-			h := NewHandler(database, nil)
+			h := NewHandler(database, nil, nil)
 			handler := http.HandlerFunc(h.DeleteGroupMember)
 			handler(w, req)
 
@@ -615,7 +615,7 @@ func TestRemoveGroupMember_InvalidIDs(t *testing.T) {
 
 			req = muxVars(req, map[string]string{"groupId": tt.groupID, "peerId": tt.peerID})
 
-			h := NewHandler(database, nil)
+			h := NewHandler(database, nil, nil)
 			handler := http.HandlerFunc(h.DeleteGroupMember)
 			handler(w, req)
 
@@ -658,7 +658,7 @@ func TestGetGroupMembers(t *testing.T) {
 
 	req = muxVars(req, map[string]string{"id": "1"})
 
-	h := NewHandler(database, nil)
+	h := NewHandler(database, nil, nil)
 	h.ListGroupMembers(w, req)
 
 	if w.Code != http.StatusOK {
@@ -711,7 +711,7 @@ func TestGetGroupMembers_EmptyGroup(t *testing.T) {
 
 	req = muxVars(req, map[string]string{"id": "1"})
 
-	h := NewHandler(database, nil)
+	h := NewHandler(database, nil, nil)
 	h.ListGroupMembers(w, req)
 
 	if w.Code != http.StatusOK {
@@ -740,7 +740,7 @@ func TestGetGroupMembers_InvalidGroupID(t *testing.T) {
 
 	req = muxVars(req, map[string]string{"id": "invalid"})
 
-	h := NewHandler(database, nil)
+	h := NewHandler(database, nil, nil)
 	h.ListGroupMembers(w, req)
 
 	if w.Code != http.StatusBadRequest {
@@ -794,7 +794,7 @@ func TestCreateGroup(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h := NewHandler(database, nil)
+			h := NewHandler(database, nil, nil)
 			req := httptest.NewRequest("POST", "/api/v1/groups", strings.NewReader(tt.body))
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
@@ -864,7 +864,7 @@ func TestGetGroup(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h := NewHandler(database, nil)
+			h := NewHandler(database, nil, nil)
 			req := httptest.NewRequest("GET", "/api/v1/groups/"+tt.groupID, nil)
 			w := httptest.NewRecorder()
 
@@ -931,7 +931,7 @@ func TestUpdateGroup(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h := NewHandler(database, nil)
+			h := NewHandler(database, nil, nil)
 			req := httptest.NewRequest("PUT", "/api/v1/groups/"+tt.groupID, strings.NewReader(tt.body))
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()

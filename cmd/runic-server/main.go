@@ -218,6 +218,9 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// Start the ChangeWorker background goroutine
+	apiInstance.ChangeWorker.Start(ctx)
+
 	// Start offline detector goroutine
 	go startOfflineDetector(ctx, database)
 

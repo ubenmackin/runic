@@ -163,3 +163,29 @@ CREATE TABLE IF NOT EXISTS system_config (
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS push_jobs (
+    id TEXT PRIMARY KEY,
+    initiated_by TEXT,
+    total_peers INTEGER NOT NULL,
+    succeeded_count INTEGER DEFAULT 0,
+    failed_count INTEGER DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'running' CHECK(status IN ('pending', 'running', 'completed', 'completed_with_errors', 'failed', 'cancelled')),
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    completed_at DATETIME
+);
+
+CREATE TABLE IF NOT EXISTS push_job_peers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id TEXT NOT NULL REFERENCES push_jobs(id) ON DELETE CASCADE,
+    peer_id INTEGER NOT NULL REFERENCES peers(id),
+    peer_hostname TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'notified', 'applied', 'failed')),
+    error_message TEXT,
+    notified_at DATETIME,
+    applied_at DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(job_id, peer_id)
+);
+CREATE INDEX IF NOT EXISTS idx_push_job_peers_job_id ON push_job_peers(job_id);
+CREATE INDEX IF NOT EXISTS idx_push_jobs_status ON push_jobs(status);

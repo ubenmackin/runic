@@ -133,7 +133,11 @@ func (w *ChangeWorker) processGroupChange(work changeWork) {
 		if err := rows.Scan(&policyID); err != nil {
 			continue
 		}
-		affectedPeers, _ := work.compiler.GetAffectedPeersByPolicy(work.ctx, policyID)
+		affectedPeers, err := work.compiler.GetAffectedPeersByPolicy(work.ctx, policyID)
+		if err != nil {
+			runiclog.Warn("failed to get affected peers for policy", "policy_id", policyID, "error", err)
+			continue
+		}
 		for _, peerID := range affectedPeers {
 			peerSet[peerID] = true
 		}
@@ -150,17 +154,7 @@ func (w *ChangeWorker) processGroupChange(work changeWork) {
 	}
 }
 
-// QueuePeerChanges queues pending changes for affected peers.
-// Deprecated: Use ChangeWorker.QueuePeerChange instead.
-// This function now processes synchronously to avoid launching bare goroutines.
-func QueuePeerChanges(ctx context.Context, database *sql.DB, peerIDs []int, changeType, changeAction string, changeID int, summary string) {
-	for _, peerID := range peerIDs {
-		if err := queueChangeForPeer(ctx, database, peerID, changeType, changeAction, changeID, summary); err != nil {
-			runiclog.Error("failed to queue change", "peer_id", peerID, "error", err)
-		}
-	}
-}
-
+// queueChangeForPeer checks if a pending change already exists for a peer and adds it if not.
 func queueChangeForPeer(ctx context.Context, database *sql.DB, peerID int, changeType, changeAction string, changeID int, summary string) error {
 	// Check if this exact change is already queued (avoid duplicates)
 	var count int
@@ -177,43 +171,4 @@ func queueChangeForPeer(ctx context.Context, database *sql.DB, peerID int, chang
 	}
 
 	return db.AddPendingChange(ctx, database, peerID, changeType, changeAction, changeID, summary)
-}
-
-// QueueGroupChanges queues changes for all peers affected by a group change.
-// Deprecated: Use ChangeWorker.QueueGroupChange instead.
-// This function now processes synchronously to avoid launching bare goroutines.
-func QueueGroupChanges(ctx context.Context, database *sql.DB, compiler *engine.Compiler, groupID int, changeAction string, summary string) {
-	rows, err := database.QueryContext(ctx, `
-		SELECT DISTINCT id FROM policies
-		WHERE ((source_type = 'group' AND source_id = ?)
-		   OR (target_type = 'group' AND target_id = ?))
-		   AND enabled = 1
-	`, groupID, groupID)
-	if err != nil {
-		runiclog.Error("failed to find policies for group", "group_id", groupID, "error", err)
-		return
-	}
-	defer rows.Close()
-
-	peerSet := make(map[int]bool)
-	for rows.Next() {
-		var policyID int
-		if err := rows.Scan(&policyID); err != nil {
-			continue
-		}
-		affectedPeers, _ := compiler.GetAffectedPeersByPolicy(ctx, policyID)
-		for _, peerID := range affectedPeers {
-			peerSet[peerID] = true
-		}
-	}
-	if err := rows.Err(); err != nil {
-		runiclog.Error("failed to iterate policies for group", "group_id", groupID, "error", err)
-		return
-	}
-
-	for peerID := range peerSet {
-		if err := db.AddPendingChange(ctx, database, peerID, "group", changeAction, groupID, summary); err != nil {
-			runiclog.Error("failed to queue group change", "peer_id", peerID, "error", err)
-		}
-	}
 }

@@ -14,12 +14,13 @@ import (
 )
 
 type Handler struct {
-	DB       *sql.DB
-	Compiler *engine.Compiler
+	DB           *sql.DB
+	Compiler     *engine.Compiler
+	ChangeWorker *common.ChangeWorker
 }
 
-func NewHandler(db *sql.DB, compiler *engine.Compiler) *Handler {
-	return &Handler{DB: db, Compiler: compiler}
+func NewHandler(db *sql.DB, compiler *engine.Compiler, changeWorker *common.ChangeWorker) *Handler {
+	return &Handler{DB: db, Compiler: compiler, ChangeWorker: changeWorker}
 }
 
 // isValidSourceType validates that the source type is one of the allowed values.
@@ -168,7 +169,7 @@ func (h *Handler) CreatePolicy(w http.ResponseWriter, r *http.Request) {
 
 	// Trigger async recompilation for all affected peers
 	affectedPeers, _ := h.Compiler.GetAffectedPeersByPolicy(r.Context(), int(id))
-	common.QueuePeerChanges(r.Context(), h.DB, affectedPeers, "policy", "create", int(id), fmt.Sprintf("Policy '%s' created", input.Name))
+	h.ChangeWorker.QueuePeerChange(r.Context(), h.DB, affectedPeers, "policy", "create", int(id), fmt.Sprintf("Policy '%s' created", input.Name))
 
 	common.RespondJSON(w, http.StatusCreated, map[string]int64{"id": id})
 }
@@ -321,7 +322,7 @@ func (h *Handler) UpdatePolicy(w http.ResponseWriter, r *http.Request) {
 	for pid := range peerSet {
 		allPeers = append(allPeers, pid)
 	}
-	common.QueuePeerChanges(r.Context(), h.DB, allPeers, "policy", "update", id, fmt.Sprintf("Policy '%s' updated", input.Name))
+	h.ChangeWorker.QueuePeerChange(r.Context(), h.DB, allPeers, "policy", "update", id, fmt.Sprintf("Policy '%s' updated", input.Name))
 
 	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
@@ -359,7 +360,7 @@ func (h *Handler) DeletePolicy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Trigger async recompilation for all old affected peers
-	common.QueuePeerChanges(r.Context(), h.DB, oldPeers, "policy", "delete", id, fmt.Sprintf("Policy '%s' deleted", policyName))
+	h.ChangeWorker.QueuePeerChange(r.Context(), h.DB, oldPeers, "policy", "delete", id, fmt.Sprintf("Policy '%s' deleted", policyName))
 
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -456,7 +457,7 @@ func (h *Handler) PatchPolicy(w http.ResponseWriter, r *http.Request) {
 	if !*input.Enabled {
 		enabledStr = "disabled"
 	}
-	common.QueuePeerChanges(r.Context(), h.DB, affectedPeers, "policy", "update", id, fmt.Sprintf("Policy '%s' %s", policyName, enabledStr))
+	h.ChangeWorker.QueuePeerChange(r.Context(), h.DB, affectedPeers, "policy", "update", id, fmt.Sprintf("Policy '%s' %s", policyName, enabledStr))
 	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
 

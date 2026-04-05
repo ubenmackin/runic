@@ -3,26 +3,33 @@ package pending
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
+	"time"
 
 	"runic/internal/api/common"
 	"runic/internal/api/events"
+	"runic/internal/auth"
 	"runic/internal/common/log"
 	"runic/internal/db"
 	"runic/internal/engine"
+
+	"github.com/gorilla/mux"
 )
 
 // Handler holds dependencies for pending change handlers.
 type Handler struct {
-	DB       *sql.DB
-	Compiler *engine.Compiler
-	SSEHub   *events.SSEHub
+	DB         *sql.DB
+	Compiler   *engine.Compiler
+	SSEHub     *events.SSEHub
+	PushWorker *common.PushWorker
 }
 
 // NewHandler creates a new Handler with the given dependencies.
-func NewHandler(db *sql.DB, compiler *engine.Compiler, sseHub *events.SSEHub) *Handler {
-	return &Handler{DB: db, Compiler: compiler, SSEHub: sseHub}
+func NewHandler(database *sql.DB, compiler *engine.Compiler, sseHub *events.SSEHub, pushWorker *common.PushWorker) *Handler {
+	return &Handler{DB: database, Compiler: compiler, SSEHub: sseHub, PushWorker: pushWorker}
 }
 
 // peerChangeGroup represents a peer with its pending changes and hostname.
@@ -313,14 +320,13 @@ func (h *Handler) ApplyAllPendingBundles(w http.ResponseWriter, r *http.Request)
 	common.RespondJSON(w, http.StatusOK, resp)
 }
 
-// PushAllRules compiles and pushes rules to ALL peers in the database,
-// regardless of whether they have pending changes. This is used for the "Push Rules to All"
-// dashboard action.
+// PushAllRules creates an async push job and returns immediately with a job_id.
+// The PushWorker processes the job in the background.
 func (h *Handler) PushAllRules(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	database := h.DB
 
-	// Get ALL peers from the database (not just those with pending changes)
+	// Get ALL peers from the database
 	rows, err := database.QueryContext(ctx, "SELECT id, hostname FROM peers ORDER BY hostname")
 	if err != nil {
 		log.ErrorContext(ctx, "failed to query all peers", "error", err)
@@ -343,7 +349,6 @@ func (h *Handler) PushAllRules(w http.ResponseWriter, r *http.Request) {
 		}
 		allPeers = append(allPeers, p)
 	}
-
 	if err := rows.Err(); err != nil {
 		log.ErrorContext(ctx, "error iterating peers", "error", err)
 		common.InternalError(w)
@@ -358,31 +363,123 @@ func (h *Handler) PushAllRules(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pushed := 0
-	var errors []string
-	for _, p := range allPeers {
-		// Compile and store the bundle (similar to applyBundleForPeer but without clearing pending)
-		bundle, err := h.Compiler.CompileAndStore(ctx, p.id)
-		if err != nil {
-			errors = append(errors, fmt.Sprintf("peer %d (%s): %v", p.id, p.hostname, err))
-			continue
+	// Generate job ID
+	jobID := fmt.Sprintf("job_%d", time.Now().UnixNano())
+
+	// Create push job record
+	initiatedBy := auth.UsernameFromContext(r.Context())
+	if err := db.CreatePushJob(ctx, database, jobID, initiatedBy, len(allPeers)); err != nil {
+		log.ErrorContext(ctx, "failed to create push job", "error", err)
+		common.InternalError(w)
+		return
+	}
+
+	// Create push job peer records
+	peers := make([]struct {
+		ID       int
+		Hostname string
+	}, len(allPeers))
+	for i, p := range allPeers {
+		peers[i] = struct {
+			ID       int
+			Hostname string
+		}{ID: p.id, Hostname: p.hostname}
+	}
+	if err := db.CreatePushJobPeers(ctx, database, jobID, peers); err != nil {
+		log.ErrorContext(ctx, "failed to create push job peers", "error", err)
+		common.InternalError(w)
+		return
+	}
+
+	// Enqueue to worker
+	h.PushWorker.Enqueue(jobID)
+
+	log.InfoContext(ctx, "push job created", "job_id", jobID, "total_peers", len(allPeers))
+
+	common.RespondJSON(w, http.StatusAccepted, map[string]interface{}{
+		"job_id":      jobID,
+		"status":      "queued",
+		"total_peers": len(allPeers),
+	})
+}
+
+// HandlePushJobSSE streams real-time progress events for a push job via Server-Sent Events.
+func (h *Handler) HandlePushJobSSE(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	jobID := vars["job_id"]
+	if jobID == "" {
+		common.RespondError(w, http.StatusBadRequest, "missing job_id")
+		return
+	}
+
+	// Verify job exists
+	_, err := db.GetPushJob(r.Context(), h.DB, jobID)
+	if err == sql.ErrNoRows {
+		common.RespondError(w, http.StatusNotFound, "job not found")
+		return
+	}
+	if err != nil {
+		log.ErrorContext(r.Context(), "failed to get push job", "error", err)
+		common.InternalError(w)
+		return
+	}
+
+	// Set SSE headers
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		common.InternalError(w)
+		return
+	}
+
+	// Register for push job events
+	ch := h.SSEHub.RegisterPushJob(jobID)
+	defer h.SSEHub.UnregisterPushJob(jobID)
+
+	// Send initial state
+	job, peers, err := db.GetPushJobWithPeers(r.Context(), h.DB, jobID)
+	if err == nil {
+		initialData := map[string]interface{}{
+			"job_id":    job.ID,
+			"status":    job.Status,
+			"total":     job.TotalPeers,
+			"succeeded": job.Succeeded,
+			"failed":    job.Failed,
+			"peers":     peers,
 		}
-
-		// Notify via SSE
-		h.SSEHub.NotifyBundleUpdated("host-"+p.hostname, bundle.Version)
-		pushed++
+		data, err := json.Marshal(initialData)
+		if err != nil {
+			log.ErrorContext(r.Context(), "failed to marshal initial push job state", "error", err)
+			return
+		}
+		fmt.Fprintf(w, "event: init\ndata: %s\n\n", data)
+		flusher.Flush()
 	}
 
-	resp := map[string]interface{}{
-		"status": "completed",
-		"pushed": pushed,
-		"total":  len(allPeers),
-	}
-	if len(errors) > 0 {
-		resp["errors"] = errors
-	}
+	// Stream events until client disconnects or job completes
+	ctx := r.Context()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case event, ok := <-ch:
+			if !ok {
+				return
+			}
+			fmt.Fprint(w, event)
+			flusher.Flush()
 
-	common.RespondJSON(w, http.StatusOK, resp)
+			// Check if this was a completion event
+			if strings.Contains(event, "event: complete") {
+				return
+			}
+		}
+	}
 }
 
 // applyBundleForPeer compiles, stores, and clears pending for a single peer.

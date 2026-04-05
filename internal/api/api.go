@@ -32,10 +32,12 @@ import (
 
 // API holds dependencies for the API handlers.
 type API struct {
-	Compiler *engine.Compiler
-	DB       *sql.DB
-	SSEHub   *events.SSEHub
-	LogHub   *logs.Hub
+	Compiler     *engine.Compiler
+	DB           *sql.DB
+	SSEHub       *events.SSEHub
+	LogHub       *logs.Hub
+	ChangeWorker *common.ChangeWorker
+	PushWorker   *common.PushWorker
 
 	// Handler instances with dependency injection
 	Peers     *peers.Handler
@@ -60,22 +62,26 @@ type API struct {
 // NewAPI creates a new API instance with dependency injection.
 func NewAPI(db *sql.DB, compiler *engine.Compiler) *API {
 	sseHub := events.NewSSEHub()
+	changeWorker := common.NewChangeWorker()
+	pushWorker := common.NewPushWorker(db, compiler, sseHub)
 	return &API{
-		Compiler:  compiler,
-		DB:        db,
-		SSEHub:    sseHub,
-		LogHub:    logs.NewHub(),
-		Peers:     peers.NewHandler(db, compiler),
-		Agents:    agents.NewHandler(db),
-		Auth:      authhandlers.NewHandler(db),
-		Groups:    groups.NewHandler(db, compiler),
-		Policies:  policies.NewHandler(db, compiler),
-		Services:  services.NewHandler(db, compiler),
-		Logs:      logs.NewHandler(db),
-		Users:     users.NewHandler(db),
-		Keys:      keys.NewHandler(db),
-		Pending:   pending.NewHandler(db, compiler, sseHub),
-		Dashboard: dashboard.NewHandler(db),
+		Compiler:     compiler,
+		DB:           db,
+		SSEHub:       sseHub,
+		LogHub:       logs.NewHub(),
+		ChangeWorker: changeWorker,
+		PushWorker:   pushWorker,
+		Peers:        peers.NewHandler(db, compiler),
+		Agents:       agents.NewHandler(db),
+		Auth:         authhandlers.NewHandler(db),
+		Groups:       groups.NewHandler(db, compiler, changeWorker),
+		Policies:     policies.NewHandler(db, compiler, changeWorker),
+		Services:     services.NewHandler(db, compiler),
+		Logs:         logs.NewHandler(db),
+		Users:        users.NewHandler(db),
+		Keys:         keys.NewHandler(db),
+		Pending:      pending.NewHandler(db, compiler, sseHub, pushWorker),
+		Dashboard:    dashboard.NewHandler(db),
 	}
 }
 
@@ -104,6 +110,15 @@ func GetAPI(ctx context.Context) *API {
 
 // RegisterRoutes registers all API routes. Accepts an API instance for rule compilation endpoints.
 func (a *API) RegisterRoutes(r *mux.Router, downloadsDir string) {
+
+	// Start background workers
+	ctx := context.Background()
+	if a.PushWorker != nil {
+		a.PushWorker.Start(ctx)
+	}
+	if a.ChangeWorker != nil {
+		a.ChangeWorker.Start(ctx)
+	}
 
 	// Apply SecurityHeaders as the outermost middleware to ensure ALL responses include security headers
 	r.Use(SecurityHeaders)
@@ -242,6 +257,7 @@ func (a *API) RegisterRoutes(r *mux.Router, downloadsDir string) {
 	editor.HandleFunc("/pending-changes/{peerId:[0-9]+}/apply", a.Pending.ApplyPeerPendingBundle).Methods("POST")
 	editor.HandleFunc("/pending-changes/apply-all", a.Pending.ApplyAllPendingBundles).Methods("POST")
 	editor.HandleFunc("/pending-changes/push-all", a.Pending.PushAllRules).Methods("POST")
+	editor.HandleFunc("/push-jobs/{job_id}/events", a.Pending.HandlePushJobSSE).Methods("GET")
 
 	// Agent routes (require agent auth via JWT)
 	apiRouter.HandleFunc("/agent/bundle/{host_id}", a.Agents.AgentAuthMiddleware(a.Agents.GetBundle)).Methods("GET")
@@ -285,6 +301,12 @@ func (a *API) RegisterRoutes(r *mux.Router, downloadsDir string) {
 
 // Stop stops all rate limiter cleanup goroutines.
 func (a *API) Stop() {
+	if a.ChangeWorker != nil {
+		a.ChangeWorker.Stop()
+	}
+	if a.PushWorker != nil {
+		a.PushWorker.Stop()
+	}
 	if a.LoginRateLimiter != nil {
 		a.LoginRateLimiter.Stop()
 	}
