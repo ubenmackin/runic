@@ -6,8 +6,8 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
-	"log"
 	"net/http"
+	"runic/internal/common/log"
 	"strings"
 	"sync"
 	"time"
@@ -51,7 +51,7 @@ func InitJwtKey(ctx context.Context, database *sql.DB) error {
 	JwtKeyMu.Lock()
 	JwtKey = key
 	JwtKeyMu.Unlock()
-	log.Println("WARNING: using random JWT key (no jwt_secret found in database)")
+	log.Warn("Using random JWT key (no jwt_secret found in database)")
 	return nil
 }
 

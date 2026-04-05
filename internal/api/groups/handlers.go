@@ -4,12 +4,12 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 
 	"github.com/gorilla/mux"
 
 	"runic/internal/api/common"
+	"runic/internal/common/log"
 	"runic/internal/db"
 	"runic/internal/engine"
 )
@@ -97,14 +97,14 @@ func (h *Handler) CreateGroup(w http.ResponseWriter, r *http.Request) {
 	result, err := h.DB.ExecContext(r.Context(),
 		"INSERT INTO groups (name, description) VALUES (?, ?)", input.Name, input.Description)
 	if err != nil {
-		log.Printf("ERROR: failed to create group: %v", err)
+		log.ErrorContext(r.Context(), "failed to create group", "error", err)
 		common.InternalError(w)
 		return
 	}
 
 	id, err := result.LastInsertId()
 	if err != nil {
-		log.Printf("ERROR: failed to get insert ID: %v", err)
+		log.ErrorContext(r.Context(), "failed to get insert ID", "error", err)
 		common.InternalError(w)
 		return
 	}
@@ -154,7 +154,7 @@ func (h *Handler) UpdateGroup(w http.ResponseWriter, r *http.Request) {
 	_, err = h.DB.ExecContext(r.Context(),
 		"UPDATE groups SET name = ?, description = ? WHERE id = ?", input.Name, input.Description, id)
 	if err != nil {
-		log.Printf("ERROR: failed to update group: %v", err)
+		log.ErrorContext(r.Context(), "failed to update group", "error", err)
 		common.InternalError(w)
 		return
 	}
@@ -192,7 +192,7 @@ func (h *Handler) DeleteGroup(w http.ResponseWriter, r *http.Request) {
 	// Delete group_members first (due to foreign key)
 	_, err = h.DB.ExecContext(r.Context(), "DELETE FROM group_members WHERE group_id = ?", id)
 	if err != nil {
-		log.Printf("ERROR: failed to delete group members: %v", err)
+		log.ErrorContext(r.Context(), "failed to delete group members", "error", err)
 		common.InternalError(w)
 		return
 	}
@@ -200,7 +200,7 @@ func (h *Handler) DeleteGroup(w http.ResponseWriter, r *http.Request) {
 	// Delete the group
 	_, err = h.DB.ExecContext(r.Context(), "DELETE FROM groups WHERE id = ?", id)
 	if err != nil {
-		log.Printf("ERROR: failed to delete group: %v", err)
+		log.ErrorContext(r.Context(), "failed to delete group", "error", err)
 		common.InternalError(w)
 		return
 	}
@@ -275,14 +275,14 @@ func (h *Handler) AddGroupMember(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.DB.ExecContext(r.Context(), "INSERT OR IGNORE INTO group_members (group_id, peer_id) VALUES (?, ?)", groupID, input.PeerID)
 	if err != nil {
-		log.Printf("ERROR: failed to add member: %v", err)
+		log.ErrorContext(r.Context(), "failed to add member", "error", err)
 		common.InternalError(w)
 		return
 	}
 
 	id, err := result.LastInsertId()
 	if err != nil {
-		log.Printf("ERROR: failed to get insert ID: %v", err)
+		log.ErrorContext(r.Context(), "failed to get insert ID", "error", err)
 		common.InternalError(w)
 		return
 	}
@@ -321,7 +321,7 @@ func (h *Handler) DeleteGroupMember(w http.ResponseWriter, r *http.Request) {
 
 	_, err = h.DB.ExecContext(r.Context(), "DELETE FROM group_members WHERE group_id = ? AND peer_id = ?", groupID, peerID)
 	if err != nil {
-		log.Printf("ERROR: failed to remove peer from group: %v", err)
+		log.ErrorContext(r.Context(), "failed to remove peer from group", "error", err)
 		common.InternalError(w)
 		return
 	}

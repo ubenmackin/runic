@@ -4,12 +4,12 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 
 	"github.com/gorilla/mux"
 
 	"runic/internal/api/common"
+	"runic/internal/common/log"
 	"runic/internal/engine"
 )
 
@@ -154,14 +154,14 @@ func (h *Handler) CreatePolicy(w http.ResponseWriter, r *http.Request) {
 		input.Name, input.Description, input.SourceID, input.SourceType, input.ServiceID,
 		input.TargetID, input.TargetType, input.Action, input.Priority, enabled, input.TargetScope, input.Direction)
 	if err != nil {
-		log.Printf("ERROR: failed to create policy: %v", err)
+		log.ErrorContext(r.Context(), "failed to create policy", "error", err)
 		common.InternalError(w)
 		return
 	}
 
 	id, err := result.LastInsertId()
 	if err != nil {
-		log.Printf("ERROR: failed to get insert ID: %v", err)
+		log.ErrorContext(r.Context(), "failed to get insert ID", "error", err)
 		common.InternalError(w)
 		return
 	}
@@ -291,7 +291,7 @@ func (h *Handler) UpdatePolicy(w http.ResponseWriter, r *http.Request) {
 		input.Name, input.Description, input.SourceID, input.SourceType, input.ServiceID,
 		input.TargetID, input.TargetType, input.Action, input.Priority, enabled, input.TargetScope, input.Direction, id)
 	if err != nil {
-		log.Printf("ERROR: failed to update policy: %v", err)
+		log.ErrorContext(r.Context(), "failed to update policy", "error", err)
 		common.InternalError(w)
 		return
 	}
@@ -299,7 +299,7 @@ func (h *Handler) UpdatePolicy(w http.ResponseWriter, r *http.Request) {
 	// Check if any rows were updated
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
-		log.Printf("ERROR: failed to check update result: %v", err)
+		log.ErrorContext(r.Context(), "failed to check update result", "error", err)
 		common.InternalError(w)
 		return
 	}
@@ -347,7 +347,7 @@ func (h *Handler) DeletePolicy(w http.ResponseWriter, r *http.Request) {
 	// Delete the policy
 	res, err := h.DB.ExecContext(r.Context(), "DELETE FROM policies WHERE id = ?", id)
 	if err != nil {
-		log.Printf("ERROR: failed to delete policy: %v", err)
+		log.ErrorContext(r.Context(), "failed to delete policy", "error", err)
 		common.InternalError(w)
 		return
 	}
@@ -404,7 +404,7 @@ func (h *Handler) PolicyPreview(w http.ResponseWriter, r *http.Request) {
 	// Generate rules using the policy-centric preview function
 	rules, err := h.Compiler.PreviewCompile(r.Context(), req.PeerID, req.SourceID, req.SourceType, req.TargetID, req.TargetType, req.ServiceID, req.Direction, req.TargetScope)
 	if err != nil {
-		log.Printf("ERROR: failed to generate preview: %v", err)
+		log.ErrorContext(r.Context(), "failed to generate preview", "error", err)
 		http.Error(w, `{"error": "failed to generate preview"}`, http.StatusInternalServerError)
 		return
 	}
@@ -441,7 +441,7 @@ func (h *Handler) PatchPolicy(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.DB.ExecContext(r.Context(), "UPDATE policies SET enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", *input.Enabled, id)
 	if err != nil {
-		log.Printf("ERROR: failed to update policy: %v", err)
+		log.ErrorContext(r.Context(), "failed to update policy", "error", err)
 		common.InternalError(w)
 		return
 	}

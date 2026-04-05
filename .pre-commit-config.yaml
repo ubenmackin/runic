@@ -1,0 +1,28 @@
+# Pre-commit hook configuration for local development
+# Install: ln -s ../../.pre-commit-config.yaml .git/hooks/pre-commit
+# Or use: pre-commit install
+
+repos:
+  - repo: local
+    hooks:
+      - id: go-vet
+        name: go vet
+        entry: go vet ./...
+        language: system
+        types: [go]
+        pass_filenames: false
+
+      - id: go-test
+        name: go test
+        entry: go test -race ./...
+        language: system
+        types: [go]
+        pass_filenames: false
+
+      - id: go-fmt
+        name: go fmt
+        entry: go fmt
+        language: system
+        types: [go]
+        pass_filenames: false
+        pass_args: false

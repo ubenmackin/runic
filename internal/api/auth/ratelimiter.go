@@ -1,12 +1,13 @@
 package auth
 
 import (
+	"context"
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
 	"runic/internal/common/constants"
+	"runic/internal/common/log"
 )
 
 // rateLimitEntry tracks failed login attempts and lockout state for a user.
@@ -74,8 +75,8 @@ func CheckAndRecordFailure(username string, remoteAddr string) error {
 
 	if entry.failedAttempts >= maxFailedAttempts {
 		entry.lockedUntil = time.Now().Add(lockoutDuration)
-		log.Printf("AUTH LOCKOUT: %s (IP: %s) locked for %v after %d failed attempts",
-			username, remoteAddr, lockoutDuration, entry.failedAttempts)
+		log.WarnContext(context.Background(), "account locked due to failed login attempts",
+			"username", username, "remote_addr", remoteAddr, "duration", lockoutDuration, "failed_attempts", entry.failedAttempts)
 	}
 
 	return nil

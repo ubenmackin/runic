@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"log"
 	"net/http"
 	"os"
 
@@ -15,6 +14,7 @@ import (
 	"runic/internal/api/common"
 	"runic/internal/auth"
 	runiccommon "runic/internal/common"
+	"runic/internal/common/log"
 )
 
 // Handler provides HTTP handlers for auth endpoints with dependency injection.
@@ -209,7 +209,7 @@ func (h *Handler) HandleSetupPOST(w http.ResponseWriter, r *http.Request) {
 	committed = true
 
 	// Log successful user creation
-	log.Printf("AUTH SETUP: User '%s' created (IP: %s)", body.Username, r.RemoteAddr)
+	log.InfoContext(r.Context(), "user created", "username", body.Username, "remote_addr", r.RemoteAddr)
 
 	// Generate tokens
 	accessToken, refreshToken, err := h.GenerateTokenPair(body.Username)
@@ -254,21 +254,21 @@ func (h *Handler) HandleLoginPOST(w http.ResponseWriter, r *http.Request) {
 		"SELECT id, password_hash FROM users WHERE username = ?",
 		body.Username).Scan(&id, &storedHash)
 	if err != nil {
-		log.Printf("AUTH LOGIN FAIL: Unknown user '%s' (IP: %s)", body.Username, r.RemoteAddr)
+		log.WarnContext(r.Context(), "login failed - unknown user", "username", body.Username, "remote_addr", r.RemoteAddr)
 		common.RespondError(w, http.StatusUnauthorized, "Invalid credentials")
 		return
 	}
 
 	// Verify password
 	if err := bcrypt.CompareHashAndPassword([]byte(storedHash), []byte(body.Password)); err != nil {
-		log.Printf("AUTH LOGIN FAIL: Invalid password for user '%s' (IP: %s)", body.Username, r.RemoteAddr)
+		log.WarnContext(r.Context(), "login failed - invalid password", "username", body.Username, "remote_addr", r.RemoteAddr)
 		common.RespondError(w, http.StatusUnauthorized, "Invalid credentials")
 		return
 	}
 
 	// Record successful login
 	RecordSuccess(body.Username)
-	log.Printf("AUTH LOGIN: User '%s' authenticated (IP: %s)", body.Username, r.RemoteAddr)
+	log.InfoContext(r.Context(), "user authenticated", "username", body.Username, "remote_addr", r.RemoteAddr)
 
 	// Generate tokens
 	accessToken, refreshToken, err := h.GenerateTokenPair(body.Username)
@@ -305,7 +305,7 @@ func (h *Handler) HandleLogoutPOST(w http.ResponseWriter, r *http.Request) {
 	if refreshCookie, err := r.Cookie("runic_refresh_token"); err == nil && refreshCookie.Value != "" {
 		if refreshClaims, err := auth.ValidateToken(refreshCookie.Value); err == nil && refreshClaims != nil {
 			if err := auth.RevokeToken(r.Context(), refreshClaims.UniqueID, refreshClaims.ExpiresAt.Time, "refresh"); err != nil {
-				log.Printf("Warning: failed to revoke refresh token on logout: %v", err)
+				log.WarnContext(r.Context(), "failed to revoke refresh token on logout", "error", err)
 			}
 		}
 	}
@@ -360,11 +360,11 @@ func (h *Handler) HandleRefreshPOST(w http.ResponseWriter, r *http.Request) {
 
 	// Revoke the old refresh token (rotation)
 	if err := auth.RevokeToken(r.Context(), claims.UniqueID, claims.ExpiresAt.Time, "refresh"); err != nil {
-		log.Printf("Warning: failed to revoke old refresh token: %v", err)
+		log.WarnContext(r.Context(), "failed to revoke old refresh token", "error", err)
 		// Continue anyway - the new tokens are still valid
 	}
 
-	log.Printf("AUTH REFRESH: Token refreshed for user '%s'", claims.Username)
+	log.InfoContext(r.Context(), "token refreshed", "username", claims.Username)
 
 	setAuthCookies(w, accessToken, refreshToken)
 	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "ok"})

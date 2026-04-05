@@ -5,14 +5,13 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"regexp"
 
 	"github.com/gorilla/mux"
 
 	"runic/internal/api/common"
-	runiclog "runic/internal/common/log"
+	"runic/internal/common/log"
 	"runic/internal/db"
 	"runic/internal/engine"
 )
@@ -156,14 +155,14 @@ func (h *Handler) CreateService(w http.ResponseWriter, r *http.Request) {
 		`INSERT INTO services (name, ports, source_ports, protocol, description, direction_hint, is_system)
 		VALUES (?, ?, ?, ?, ?, ?, 0)`, input.Name, input.Ports, input.SourcePorts, input.Protocol, input.Description, input.DirectionHint)
 	if err != nil {
-		log.Printf("ERROR: failed to create service: %v", err)
+		log.ErrorContext(r.Context(), "failed to create service", "error", err)
 		common.InternalError(w)
 		return
 	}
 
 	id, err := result.LastInsertId()
 	if err != nil {
-		log.Printf("ERROR: failed to get insert ID: %v", err)
+		log.ErrorContext(r.Context(), "failed to get insert ID", "error", err)
 		common.InternalError(w)
 		return
 	}
@@ -245,7 +244,7 @@ func (h *Handler) UpdateService(w http.ResponseWriter, r *http.Request) {
 		`UPDATE services SET name = ?, ports = ?, source_ports = ?, protocol = ?, description = ?, direction_hint = ?
 		WHERE id = ?`, input.Name, input.Ports, input.SourcePorts, input.Protocol, input.Description, input.DirectionHint, id)
 	if err != nil {
-		log.Printf("ERROR: failed to update service: %v", err)
+		log.ErrorContext(r.Context(), "failed to update service", "error", err)
 		common.InternalError(w)
 		return
 	}
@@ -286,7 +285,7 @@ func (h *Handler) DeleteService(w http.ResponseWriter, r *http.Request) {
 
 	_, err = h.DB.ExecContext(r.Context(), "DELETE FROM services WHERE id = ?", id)
 	if err != nil {
-		log.Printf("ERROR: failed to delete service: %v", err)
+		log.ErrorContext(r.Context(), "failed to delete service", "error", err)
 		common.InternalError(w)
 		return
 	}
@@ -305,7 +304,7 @@ func (h *Handler) queueServiceChange(ctx context.Context, serviceID int, action,
 		WHERE service_id = ? AND enabled = 1
 	`, serviceID)
 	if err != nil {
-		runiclog.Error("failed to find policies for service", "service_id", serviceID, "error", err)
+		log.ErrorContext(ctx, "failed to find policies for service", "service_id", serviceID, "error", err)
 		return
 	}
 	defer rows.Close()
@@ -323,13 +322,13 @@ func (h *Handler) queueServiceChange(ctx context.Context, serviceID int, action,
 	}
 
 	if err := rows.Err(); err != nil {
-		runiclog.Error("failed to iterate policies for service", "service_id", serviceID, "error", err)
+		log.ErrorContext(ctx, "failed to iterate policies for service", "service_id", serviceID, "error", err)
 		return
 	}
 
 	for peerID := range peerSet {
 		if err := db.AddPendingChange(ctx, h.DB, peerID, "service", action, serviceID, summary); err != nil {
-			runiclog.Error("failed to queue service change", "peer_id", peerID, "error", err)
+			log.ErrorContext(ctx, "failed to queue service change", "peer_id", peerID, "error", err)
 		}
 	}
 }

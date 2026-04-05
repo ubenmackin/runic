@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net"
 	"net/http"
 	"regexp"
@@ -15,6 +14,7 @@ import (
 	"runic/internal/api/agents"
 	"runic/internal/api/common"
 	"runic/internal/common/constants"
+	"runic/internal/common/log"
 	"runic/internal/engine"
 )
 
@@ -178,14 +178,14 @@ func (h *Handler) CreatePeer(w http.ResponseWriter, r *http.Request) {
 		`INSERT INTO peers (hostname, ip_address, os_type, agent_key, hmac_key, has_docker, is_manual) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		input.Hostname, input.IPAddress, input.OSType, agentKey, hmacKey, input.HasDocker, input.IsManual)
 	if err != nil {
-		log.Printf("ERROR: failed to create peer: %v", err)
+		log.ErrorContext(r.Context(), "failed to create peer", "error", err)
 		common.InternalError(w)
 		return
 	}
 
 	id, err := result.LastInsertId()
 	if err != nil {
-		log.Printf("ERROR: failed to get insert ID: %v", err)
+		log.ErrorContext(r.Context(), "failed to get insert ID", "error", err)
 		common.InternalError(w)
 		return
 	}
@@ -248,7 +248,7 @@ func (h *Handler) UpdatePeer(w http.ResponseWriter, r *http.Request) {
 	// Update the peer (hostname, ip_address, os_type, arch, has_docker, and description are all editable)
 	_, err = h.DB.ExecContext(r.Context(), "UPDATE peers SET hostname = ?, ip_address = ?, os_type = ?, arch = ?, has_docker = ?, description = ? WHERE id = ?", input.Hostname, input.IPAddress, input.OSType, input.Arch, input.HasDocker, input.Description, id)
 	if err != nil {
-		log.Printf("ERROR: failed to update peer: %v", err)
+		log.ErrorContext(r.Context(), "failed to update peer", "error", err)
 		common.InternalError(w)
 		return
 	}
@@ -266,7 +266,7 @@ func (h *Handler) CompilePeer(w http.ResponseWriter, r *http.Request) {
 
 	bundle, err := h.Compiler.CompileAndStore(r.Context(), id)
 	if err != nil {
-		log.Printf("ERROR: compilation failed: %v", err)
+		log.ErrorContext(r.Context(), "compilation failed", "error", err)
 		common.InternalError(w)
 		return
 	}
@@ -295,17 +295,17 @@ func (h *Handler) DeletePeer(w http.ResponseWriter, r *http.Request) {
 
 	// Delete from group_members first
 	if _, err := h.DB.ExecContext(r.Context(), "DELETE FROM group_members WHERE peer_id = ?", peerID); err != nil {
-		log.Printf("WARN: Failed to cleanup group_members for peer %d: %v", peerID, err)
+		log.WarnContext(r.Context(), "failed to cleanup group_members for peer", "peer_id", peerID, "error", err)
 	}
 
 	// Delete any rule bundles (foreign key constraint)
 	if _, err := h.DB.ExecContext(r.Context(), "DELETE FROM rule_bundles WHERE peer_id = ?", peerID); err != nil {
-		log.Printf("WARN: Failed to cleanup rule_bundles for peer %d: %v", peerID, err)
+		log.WarnContext(r.Context(), "failed to cleanup rule_bundles for peer", "peer_id", peerID, "error", err)
 	}
 
 	// Delete any firewall logs for this peer
 	if _, err := h.DB.ExecContext(r.Context(), "DELETE FROM firewall_logs WHERE peer_id = ?", peerID); err != nil {
-		log.Printf("WARN: Failed to cleanup firewall_logs for peer %d: %v", peerID, err)
+		log.WarnContext(r.Context(), "failed to cleanup firewall_logs for peer", "peer_id", peerID, "error", err)
 	}
 
 	// Delete the peer
@@ -336,7 +336,7 @@ func (h *Handler) GetPeerBundle(w http.ResponseWriter, r *http.Request) {
 	// Compile fresh rules for the peer to ensure current effective rules
 	bundle, err := h.Compiler.CompileAndStore(r.Context(), id)
 	if err != nil {
-		log.Printf("ERROR: failed to compile rules: %v", err)
+		log.ErrorContext(r.Context(), "failed to compile rules", "error", err)
 		common.InternalError(w)
 		return
 	}

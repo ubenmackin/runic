@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"log"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -102,7 +101,7 @@ func (w *ChangeWorker) Stop() {
 		select {
 		case <-w.done:
 		case <-time.After(10 * time.Second):
-			log.Printf("ChangeWorker.Stop() timed out after 10s")
+			runiclog.Warn("ChangeWorker.Stop() timed out after 10s")
 		}
 	})
 }

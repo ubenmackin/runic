@@ -3,7 +3,6 @@ package users
 import (
 	"database/sql"
 	"encoding/json"
-	"log"
 	"net/http"
 	"regexp"
 	"strings"
@@ -14,6 +13,7 @@ import (
 	"runic/internal/api/common"
 	"runic/internal/auth"
 	runiccommon "runic/internal/common"
+	"runic/internal/common/log"
 )
 
 // Handler provides HTTP handlers for user management with dependency injection.
@@ -159,7 +159,7 @@ func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("USERS CREATE: User '%s' created (role: %s)", req.Username, req.Role)
+	log.InfoContext(r.Context(), "user created", "username", req.Username, "role", req.Role)
 
 	common.RespondJSON(w, http.StatusCreated, UserResponse{
 		ID:       int(id),
@@ -215,7 +215,7 @@ func (h *Handler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("USERS DELETE: User '%s' deleted by '%s'", username, authUsername)
+	log.InfoContext(r.Context(), "user deleted", "username", username, "deleted_by", authUsername)
 
 	common.RespondJSON(w, http.StatusOK, map[string]string{"message": "User deleted"})
 }
@@ -326,7 +326,7 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("USERS UPDATE: User '%s' (id=%d) updated by admin", username, id)
+	log.InfoContext(r.Context(), "user updated", "username", username, "user_id", id)
 
 	common.RespondJSON(w, http.StatusOK, map[string]string{"message": "User updated"})
 }

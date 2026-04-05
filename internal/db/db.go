@@ -5,8 +5,8 @@ import (
 	"database/sql"
 	_ "embed"
 	"fmt"
-	"log"
 	"os"
+	"runic/internal/common/log"
 
 	_ "github.com/mattn/go-sqlite3"
 
@@ -75,7 +75,7 @@ func addColumnIfMissing(database *sql.DB, table, column, definition string) erro
 		if _, err := database.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, definition)); err != nil {
 			return fmt.Errorf("add column %s.%s: %w", table, column, err)
 		}
-		log.Printf("Migration: added %s to %s", column, table)
+		log.Info("Migration: added column", "column", column, "table", table)
 	}
 	return nil
 }
@@ -101,7 +101,7 @@ func InitDB(dataSourceName string) (*sql.DB, error) {
 	// Check for environment variable override
 	if dbPath := os.Getenv("RUNIC_DB_PATH"); dbPath != "" {
 		dataSourceName = dbPath
-		log.Printf("Using database path from RUNIC_DB_PATH: %s", dataSourceName)
+		log.Info("Using database path from RUNIC_DB_PATH", "path", dataSourceName)
 	}
 
 	sqlDB, err := sql.Open("sqlite3", dataSourceName)
@@ -115,10 +115,10 @@ func InitDB(dataSourceName string) (*sql.DB, error) {
 
 	// Enable WAL mode and foreign keys
 	if _, err := sqlDB.Exec("PRAGMA journal_mode=WAL"); err != nil {
-		log.Printf("Warning: failed to set WAL mode: %v", err)
+		log.Warn("Failed to set WAL mode", "error", err)
 	}
 	if _, err := sqlDB.Exec("PRAGMA foreign_keys=ON"); err != nil {
-		log.Printf("Warning: failed to enable foreign keys: %v", err)
+		log.Warn("Failed to enable foreign keys", "error", err)
 	}
 
 	database := New(sqlDB)
@@ -147,15 +147,15 @@ func InitDB(dataSourceName string) (*sql.DB, error) {
 
 	// Migrate secrets from .env to database
 	if err := migrateEnvToDB(database.DB); err != nil {
-		log.Printf("Warning: failed to migrate secrets from .env: %v", err)
+		log.Warn("Failed to migrate secrets from .env", "error", err)
 	}
 
 	// Add DB constraints (CHECK, UNIQUE) via table recreation
 	if err := addDBConstraints(database.DB); err != nil {
-		log.Printf("Warning: failed to add DB constraints: %v", err)
+		log.Warn("Failed to add DB constraints", "error", err)
 	}
 
-	log.Println("Database connection established")
+	log.Info("Database connection established")
 	return database.DB, nil
 }
 
@@ -173,7 +173,7 @@ func migrateSchema(database *sql.DB) error {
 		return fmt.Errorf("failed to count tables: %w", err)
 	}
 	if tableCount == 0 {
-		log.Println("Migration: fresh database detected, skipping migrations")
+		log.Info("Migration: fresh database detected, skipping migrations")
 		return nil
 	}
 
@@ -211,7 +211,7 @@ func migrateSchema(database *sql.DB) error {
 	}
 
 	if hasServersTable {
-		log.Println("Migration: renaming servers → peers")
+		log.Info("Migration: renaming servers to peers")
 
 		tx, err := database.Begin()
 		if err != nil {
@@ -336,7 +336,7 @@ func migrateSchema(database *sql.DB) error {
 			return fmt.Errorf("failed to commit migration: %w", err)
 		}
 		committed = true
-		log.Println("Migration: successfully renamed servers → peers")
+		log.Info("Migration: successfully renamed servers to peers")
 	}
 
 	// Check peers table columns for missing columns (handles both fresh installs and migrated DBs)
@@ -396,7 +396,7 @@ func migrateSchema(database *sql.DB) error {
 	}
 
 	if hasOldGroupMembersSchema {
-		log.Println("Migration: restructuring group_members table to peer-based schema")
+		log.Info("Migration: restructuring group_members table to peer-based schema")
 
 		tx, err := database.Begin()
 		if err != nil {
@@ -443,14 +443,14 @@ func migrateSchema(database *sql.DB) error {
 			return fmt.Errorf("failed to commit group_members migration: %w", err)
 		}
 		committed = true
-		log.Println("Migration: successfully restructured group_members table")
+		log.Info("Migration: successfully restructured group_members table")
 	}
 
 	// Migration: Upgrading policies to polymorphic sources and targets
 	var hasPolymorphic bool
 	err = database.QueryRow("SELECT COUNT(*) > 0 FROM pragma_table_info('policies') WHERE name='source_type'").Scan(&hasPolymorphic)
 	if err == nil && !hasPolymorphic {
-		log.Println("Migration: upgrading policies to polymorphic sources and targets")
+		log.Info("Migration: upgrading policies to polymorphic sources and targets")
 		tx, err := database.Begin()
 		if err != nil {
 			return fmt.Errorf("begin polymorphic migration: %w", err)
@@ -499,7 +499,7 @@ func migrateSchema(database *sql.DB) error {
 			return fmt.Errorf("commit polymorphic migration: %w", err)
 		}
 		committed = true
-		log.Println("Migration: successfully upgraded policies to polymorphic")
+		log.Info("Migration: successfully upgraded policies to polymorphic")
 	}
 
 	// Migration: Create special_targets table for broadcast/multicast addresses
@@ -510,7 +510,7 @@ func migrateSchema(database *sql.DB) error {
 	}
 
 	if !hasSpecialTargets {
-		log.Println("Migration: creating special_targets table")
+		log.Info("Migration: creating special_targets table")
 
 		_, err = database.Exec(`
 			CREATE TABLE special_targets (
@@ -548,7 +548,7 @@ func migrateSchema(database *sql.DB) error {
 			}
 		}
 
-		log.Println("Migration: created and seeded special_targets table")
+		log.Info("Migration: created and seeded special_targets table")
 	}
 
 	// Migration: Add loopback special target
@@ -559,7 +559,7 @@ func migrateSchema(database *sql.DB) error {
 	}
 
 	if !hasLoopbackTarget {
-		log.Println("Migration: adding loopback special target")
+		log.Info("Migration: adding loopback special target")
 		_, err = database.Exec(
 			"INSERT INTO special_targets (name, display_name, description, address) VALUES (?, ?, ?, ?)",
 			"loopback", "Loopback", "Local loopback address (127.0.0.1)", "127.0.0.1",
@@ -567,7 +567,7 @@ func migrateSchema(database *sql.DB) error {
 		if err != nil {
 			return fmt.Errorf("failed to add loopback special target: %w", err)
 		}
-		log.Println("Migration: added loopback special target")
+		log.Info("Migration: added loopback special target")
 	}
 
 	// Migration: Add __any_ip__ special target
@@ -578,7 +578,7 @@ func migrateSchema(database *sql.DB) error {
 	}
 
 	if !hasAnyIpTarget {
-		log.Println("Migration: adding __any_ip__ special target")
+		log.Info("Migration: adding __any_ip__ special target")
 		_, err = database.Exec(
 			"INSERT INTO special_targets (id, name, display_name, description, address) VALUES (?, ?, ?, ?, ?)",
 			6, "__any_ip__", "Any IP (0.0.0.0/0)", "Any IP address on the internet (0.0.0.0/0)", "0.0.0.0/0",
@@ -586,7 +586,7 @@ func migrateSchema(database *sql.DB) error {
 		if err != nil {
 			return fmt.Errorf("failed to add __any_ip__ special target: %w", err)
 		}
-		log.Println("Migration: added __any_ip__ special target")
+		log.Info("Migration: added __any_ip__ special target")
 	}
 
 	// Migration: Add __all_peers__ special target
@@ -597,7 +597,7 @@ func migrateSchema(database *sql.DB) error {
 	}
 
 	if !hasAllPeersTarget {
-		log.Println("Migration: adding __all_peers__ special target")
+		log.Info("Migration: adding __all_peers__ special target")
 		_, err = database.Exec(
 			"INSERT INTO special_targets (id, name, display_name, description, address) VALUES (?, ?, ?, ?, ?)",
 			7, "__all_peers__", "All Peers", "All registered peer IPs", "dynamic",
@@ -605,11 +605,11 @@ func migrateSchema(database *sql.DB) error {
 		if err != nil {
 			return fmt.Errorf("failed to add __all_peers__ special target: %w", err)
 		}
-		log.Println("Migration: added __all_peers__ special target")
+		log.Info("Migration: added __all_peers__ special target")
 	}
 
 	// Migration: Delete the broken "any" system group
-	log.Println("Migration: deleting broken 'any' system group")
+	log.Info("Migration: deleting broken any system group")
 	_, err = database.Exec("DELETE FROM group_members WHERE group_id IN (SELECT id FROM groups WHERE name = 'any')")
 	if err != nil {
 		return fmt.Errorf("failed to delete group_members for 'any' group: %w", err)
@@ -618,7 +618,7 @@ func migrateSchema(database *sql.DB) error {
 	if err != nil {
 		return fmt.Errorf("failed to delete 'any' group: %w", err)
 	}
-	log.Println("Migration: deleted broken 'any' system group")
+	log.Info("Migration: deleted broken any system group")
 
 	// Migration: Create system_config table
 	var hasSystemConfig bool
@@ -627,7 +627,7 @@ func migrateSchema(database *sql.DB) error {
 		return fmt.Errorf("failed to check for system_config table: %w", err)
 	}
 	if !hasSystemConfig {
-		log.Println("Migration: creating system_config table")
+		log.Info("Migration: creating system_config table")
 		_, err = database.Exec(`
 			CREATE TABLE system_config (
 				key TEXT PRIMARY KEY,
@@ -639,7 +639,7 @@ func migrateSchema(database *sql.DB) error {
 		if err != nil {
 			return fmt.Errorf("failed to create system_config table: %w", err)
 		}
-		log.Println("Migration: created system_config table")
+		log.Info("Migration: created system_config table")
 	}
 
 	// Migration: Add HMAC key rotation columns to peers table
@@ -667,7 +667,7 @@ func migrateSchema(database *sql.DB) error {
 		}
 		if dockerOnlyExists {
 			if _, err := database.Exec("UPDATE policies SET target_scope = 'docker' WHERE docker_only = 1"); err != nil {
-				log.Printf("Migration warning: failed to map docker_only to target_scope: %v", err)
+				log.Warn("Failed to map docker_only to target_scope", "error", err)
 			}
 		}
 	}
@@ -679,9 +679,9 @@ func migrateSchema(database *sql.DB) error {
 	}
 	if dockerOnlyExists {
 		if _, err := database.Exec("ALTER TABLE policies DROP COLUMN docker_only"); err != nil {
-			log.Printf("Migration info: skipped dropping docker_only column (may require SQLite 3.35.0+): %v", err)
+			log.Warn("Skipped dropping docker_only column (SQLite 3.35.0+ required)", "error", err)
 		} else {
-			log.Println("Migration: successfully dropped docker_only column from policies table")
+			log.Info("Migration: successfully dropped docker_only column from policies table")
 		}
 	}
 
@@ -692,7 +692,7 @@ func migrateSchema(database *sql.DB) error {
 		return fmt.Errorf("failed to check for registration_tokens table: %w", err)
 	}
 	if !hasRegistrationTokens {
-		log.Println("Migration: creating registration_tokens table")
+		log.Info("Migration: creating registration_tokens table")
 		_, err = database.Exec(`
 			CREATE TABLE registration_tokens (
 				id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -712,7 +712,7 @@ func migrateSchema(database *sql.DB) error {
 		if err != nil {
 			return fmt.Errorf("failed to create idx_reg_tokens_active index: %w", err)
 		}
-		log.Println("Migration: created registration_tokens table")
+		log.Info("Migration: created registration_tokens table")
 	}
 
 	// Migration: Create composite index on firewall_logs(action, timestamp DESC) for dashboard performance
@@ -723,11 +723,11 @@ func migrateSchema(database *sql.DB) error {
 		return fmt.Errorf("failed to check for idx_firewall_logs_action_timestamp: %w", err)
 	}
 	if !hasActionTimestampIdx {
-		log.Println("Migration: creating idx_firewall_logs_action_timestamp index")
+		log.Info("Migration: creating idx-firewall-logs-action-timestamp index")
 		if _, err := database.Exec("CREATE INDEX IF NOT EXISTS idx_firewall_logs_action_timestamp ON firewall_logs(action, timestamp DESC)"); err != nil {
 			return fmt.Errorf("failed to create idx_firewall_logs_action_timestamp: %w", err)
 		}
-		log.Println("Migration: created idx_firewall_logs_action_timestamp index")
+		log.Info("Migration: created idx-firewall-logs-action-timestamp index")
 	}
 
 	// Migration: Create pending_changes table for tracking queued changes per peer
@@ -737,7 +737,7 @@ func migrateSchema(database *sql.DB) error {
 		return fmt.Errorf("failed to check for pending_changes table: %w", err)
 	}
 	if !hasPendingChanges {
-		log.Println("Migration: creating pending_changes table")
+		log.Info("Migration: creating pending_changes table")
 		_, err = database.Exec(`
 			CREATE TABLE pending_changes (
 				id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -756,7 +756,7 @@ func migrateSchema(database *sql.DB) error {
 		if err != nil {
 			return fmt.Errorf("failed to create idx_pending_changes_peer index: %w", err)
 		}
-		log.Println("Migration: created pending_changes table")
+		log.Info("Migration: created pending_changes table")
 	}
 
 	// Migration: Create pending_bundle_previews table for storing bundle previews
@@ -766,7 +766,7 @@ func migrateSchema(database *sql.DB) error {
 		return fmt.Errorf("failed to check for pending_bundle_previews table: %w", err)
 	}
 	if !hasPendingBundlePreviews {
-		log.Println("Migration: creating pending_bundle_previews table")
+		log.Info("Migration: creating pending_bundle_previews table")
 		_, err = database.Exec(`
 			CREATE TABLE pending_bundle_previews (
 				id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -780,7 +780,7 @@ func migrateSchema(database *sql.DB) error {
 		if err != nil {
 			return fmt.Errorf("failed to create pending_bundle_previews table: %w", err)
 		}
-		log.Println("Migration: created pending_bundle_previews table")
+		log.Info("Migration: created pending_bundle_previews table")
 	}
 
 	// Migration: Add version_number column to rule_bundles
@@ -790,7 +790,7 @@ func migrateSchema(database *sql.DB) error {
 		return fmt.Errorf("failed to check for version_number column: %w", err)
 	}
 	if !hasVersionNumberColumn {
-		log.Println("Migration: adding version_number column to rule_bundles")
+		log.Info("Migration: adding version_number column to rule_bundles")
 		tx, err := database.Begin()
 		if err != nil {
 			return fmt.Errorf("failed to begin version_number migration: %w", err)
@@ -838,7 +838,7 @@ func migrateSchema(database *sql.DB) error {
 			return fmt.Errorf("failed to commit version_number migration: %w", err)
 		}
 		committed = true
-		log.Println("Migration: added version_number column to rule_bundles")
+		log.Info("Migration: added version_number column to rule_bundles")
 	}
 
 	return nil
@@ -1050,7 +1050,7 @@ func seedSystemServices(database *sql.DB) error {
 			if err != nil {
 				return fmt.Errorf("failed to update system flag for service %s: %w", svc.Name, err)
 			}
-			log.Printf("Seeding: ensured %s service is marked as system service", svc.Name)
+			log.Info("Seeding: ensured system service", "service", svc.Name)
 			continue
 		}
 
@@ -1062,7 +1062,7 @@ func seedSystemServices(database *sql.DB) error {
 		if err != nil {
 			return fmt.Errorf("failed to create system service %s: %w", svc.Name, err)
 		}
-		log.Printf("Seeding: created %s system service", svc.Name)
+		log.Info("Seeding: created system service", "service", svc.Name)
 	}
 
 	return nil
@@ -1096,7 +1096,7 @@ func seedSystemGroups(database *sql.DB) error {
 			if err != nil {
 				return fmt.Errorf("failed to update system flag for group %s: %w", grp.Name, err)
 			}
-			log.Printf("Seeding: ensured %s group is marked as system group", grp.Name)
+			log.Info("Seeding: ensured system group", "group", grp.Name)
 			continue
 		}
 
@@ -1108,7 +1108,7 @@ func seedSystemGroups(database *sql.DB) error {
 		if err != nil {
 			return fmt.Errorf("failed to create system group %s: %w", grp.Name, err)
 		}
-		log.Printf("Seeding: created %s system group", grp.Name)
+		log.Info("Seeding: created system group", "group", grp.Name)
 	}
 
 	return nil

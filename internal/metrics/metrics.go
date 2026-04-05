@@ -50,6 +50,31 @@ var (
 		Name: "agents_disconnected",
 		Help: "Number of currently disconnected agents",
 	})
+
+	// runicPeersTotal tracks the total number of peers
+	runicPeersTotal = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "runic_peers_total",
+		Help: "Total number of peers in the system",
+	})
+
+	// runicPoliciesTotal tracks the total number of policies
+	runicPoliciesTotal = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "runic_policies_total",
+		Help: "Total number of policies in the system",
+	})
+
+	// runicBundleCompilationDurationSeconds tracks bundle compilation duration
+	runicBundleCompilationDurationSeconds = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "runic_bundle_compilation_duration_seconds",
+		Help:    "Bundle compilation duration in seconds",
+		Buckets: prometheus.DefBuckets,
+	})
+
+	// runicActiveConnections tracks the number of active SSE/WebSocket connections
+	runicActiveConnections = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "runic_active_connections",
+		Help: "Number of active SSE/WebSocket connections",
+	})
 )
 
 // RecordRequest increments the request counter and records request duration
@@ -69,6 +94,26 @@ func RecordError(endpoint string, errorType string, statusCode int) {
 func SetAgentCounters(connected, disconnected float64) {
 	agentsConnected.Set(connected)
 	agentsDisconnected.Set(disconnected)
+}
+
+// SetPeersTotal sets the total number of peers
+func SetPeersTotal(count float64) {
+	runicPeersTotal.Set(count)
+}
+
+// SetPoliciesTotal sets the total number of policies
+func SetPoliciesTotal(count float64) {
+	runicPoliciesTotal.Set(count)
+}
+
+// RecordBundleCompilationDuration records the duration of bundle compilation
+func RecordBundleCompilationDuration(duration time.Duration) {
+	runicBundleCompilationDurationSeconds.Observe(duration.Seconds())
+}
+
+// SetActiveConnections sets the number of active SSE/WebSocket connections
+func SetActiveConnections(count float64) {
+	runicActiveConnections.Set(count)
 }
 
 // Handler returns the Prometheus metrics HTTP handler

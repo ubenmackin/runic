@@ -4,11 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"log"
 	"net/http"
 
 	"runic/internal/api/common"
 	"runic/internal/api/events"
+	"runic/internal/common/log"
 	"runic/internal/db"
 	"runic/internal/engine"
 )
@@ -51,7 +51,7 @@ func (h *Handler) ListPendingChanges(w http.ResponseWriter, r *http.Request) {
 	// Get all peers with pending changes
 	peerIDs, err := db.GetPeersWithPendingChanges(ctx, database)
 	if err != nil {
-		log.Printf("ERROR: failed to get peers with pending changes: %v", err)
+		log.ErrorContext(ctx, "failed to get peers with pending changes", "error", err)
 		common.InternalError(w)
 		return
 	}
@@ -73,7 +73,7 @@ func (h *Handler) ListPendingChanges(w http.ResponseWriter, r *http.Request) {
 		// Get pending changes for this peer
 		changes, err := db.GetPendingChangesForPeer(ctx, database, peerID)
 		if err != nil {
-			log.Printf("ERROR: failed to get pending changes for peer %d: %v", peerID, err)
+			log.ErrorContext(ctx, "failed to get pending changes for peer", "peer_id", peerID, "error", err)
 			continue
 		}
 
@@ -120,14 +120,14 @@ func (h *Handler) GetPeerPendingChanges(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err != nil {
-		log.Printf("ERROR: failed to query peer: %v", err)
+		log.ErrorContext(ctx, "failed to query peer", "error", err)
 		common.InternalError(w)
 		return
 	}
 
 	changes, err := db.GetPendingChangesForPeer(ctx, database, peerID)
 	if err != nil {
-		log.Printf("ERROR: failed to get pending changes: %v", err)
+		log.ErrorContext(ctx, "failed to get pending changes", "error", err)
 		common.InternalError(w)
 		return
 	}
@@ -171,7 +171,7 @@ func (h *Handler) PreviewPeerPendingBundle(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if err != nil {
-		log.Printf("ERROR: failed to query peer: %v", err)
+		log.ErrorContext(ctx, "failed to query peer", "error", err)
 		common.InternalError(w)
 		return
 	}
@@ -179,7 +179,7 @@ func (h *Handler) PreviewPeerPendingBundle(w http.ResponseWriter, r *http.Reques
 	// Compile fresh bundle
 	content, err := h.Compiler.Compile(ctx, peerID)
 	if err != nil {
-		log.Printf("ERROR: failed to compile bundle for peer %d: %v", peerID, err)
+		log.ErrorContext(ctx, "failed to compile bundle for peer", "peer_id", peerID, "error", err)
 		common.InternalError(w)
 		return
 	}
@@ -195,7 +195,7 @@ func (h *Handler) PreviewPeerPendingBundle(w http.ResponseWriter, r *http.Reques
 		ORDER BY id DESC LIMIT 1
 	`, peerID).Scan(&currentContent, &currentVersion)
 	if err != nil && err != sql.ErrNoRows {
-		log.Printf("WARN: failed to get current bundle for diff: %v", err)
+		log.WarnContext(ctx, "failed to get current bundle for diff", "error", err)
 	}
 
 	// Generate diff
@@ -204,7 +204,7 @@ func (h *Handler) PreviewPeerPendingBundle(w http.ResponseWriter, r *http.Reques
 	// Save preview
 	err = db.SavePendingBundlePreview(ctx, database, peerID, content, diffContent, version)
 	if err != nil {
-		log.Printf("ERROR: failed to save bundle preview: %v", err)
+		log.ErrorContext(ctx, "failed to save bundle preview", "error", err)
 		common.InternalError(w)
 		return
 	}
@@ -238,7 +238,7 @@ func (h *Handler) ApplyPeerPendingBundle(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if err != nil {
-		log.Printf("ERROR: failed to query peer: %v", err)
+		log.ErrorContext(ctx, "failed to query peer", "error", err)
 		common.InternalError(w)
 		return
 	}
@@ -246,7 +246,7 @@ func (h *Handler) ApplyPeerPendingBundle(w http.ResponseWriter, r *http.Request)
 	// Compile and store the bundle
 	bundle, err := h.Compiler.CompileAndStore(ctx, peerID)
 	if err != nil {
-		log.Printf("ERROR: failed to compile and store bundle for peer %d: %v", peerID, err)
+		log.ErrorContext(ctx, "failed to compile and store bundle for peer", "peer_id", peerID, "error", err)
 		common.InternalError(w)
 		return
 	}
@@ -254,7 +254,7 @@ func (h *Handler) ApplyPeerPendingBundle(w http.ResponseWriter, r *http.Request)
 	// Clear pending changes for this peer
 	err = db.ClearPendingChangesForPeer(ctx, database, peerID)
 	if err != nil {
-		log.Printf("WARN: failed to clear pending changes for peer %d: %v", peerID, err)
+		log.WarnContext(ctx, "failed to clear pending changes for peer", "peer_id", peerID, "error", err)
 		// Don't fail the request — bundle was applied successfully
 	}
 
@@ -278,7 +278,7 @@ func (h *Handler) ApplyAllPendingBundles(w http.ResponseWriter, r *http.Request)
 	// Get all peers with pending changes
 	peerIDs, err := db.GetPeersWithPendingChanges(ctx, database)
 	if err != nil {
-		log.Printf("ERROR: failed to get peers with pending changes: %v", err)
+		log.ErrorContext(ctx, "failed to get peers with pending changes", "error", err)
 		common.InternalError(w)
 		return
 	}
@@ -323,7 +323,7 @@ func (h *Handler) PushAllRules(w http.ResponseWriter, r *http.Request) {
 	// Get ALL peers from the database (not just those with pending changes)
 	rows, err := database.QueryContext(ctx, "SELECT id, hostname FROM peers ORDER BY hostname")
 	if err != nil {
-		log.Printf("ERROR: failed to query all peers: %v", err)
+		log.ErrorContext(ctx, "failed to query all peers", "error", err)
 		common.InternalError(w)
 		return
 	}
@@ -338,14 +338,14 @@ func (h *Handler) PushAllRules(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var p peerInfo
 		if err := rows.Scan(&p.id, &p.hostname); err != nil {
-			log.Printf("WARN: failed to scan peer: %v", err)
+			log.WarnContext(ctx, "failed to scan peer", "error", err)
 			continue
 		}
 		allPeers = append(allPeers, p)
 	}
 
 	if err := rows.Err(); err != nil {
-		log.Printf("ERROR: error iterating peers: %v", err)
+		log.ErrorContext(ctx, "error iterating peers", "error", err)
 		common.InternalError(w)
 		return
 	}
@@ -402,7 +402,7 @@ func applyBundleForPeer(ctx context.Context, database *sql.DB, compiler *engine.
 
 	// Clear pending
 	if err := db.ClearPendingChangesForPeer(ctx, database, peerID); err != nil {
-		log.Printf("WARN: failed to clear pending changes for peer %d: %v", peerID, err)
+		log.WarnContext(ctx, "failed to clear pending changes for peer", "peer_id", peerID, "error", err)
 	}
 	db.DeletePendingBundlePreview(ctx, database, peerID)
 

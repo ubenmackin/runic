@@ -4,10 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"log"
 	"strings"
 	"time"
 
+	"runic/internal/common/log"
 	"runic/internal/db"
 	"runic/internal/models"
 )
@@ -551,7 +551,7 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 			"SELECT ip_address FROM peers WHERE id = ?", peerID,
 		).Scan(&ipAddress); err != nil && err != sql.ErrNoRows {
 			// Log but don't fail - IP is optional for preview
-			log.Printf("Warning: failed to load peer IP for preview: %v", err)
+			log.WarnContext(ctx, "Failed to load peer IP for preview", "error", err)
 		}
 	}
 

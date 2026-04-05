@@ -1,0 +1,63 @@
+# golangci-lint configuration
+# See: https://golangci-lint.readthedocs.io/
+
+run:
+  timeout: 10m
+  tests: false
+  modules-download-mode: readonly
+
+linters:
+  enable:
+    - govet
+    - errcheck
+    - staticcheck
+    - gosimple
+    - ineffassign
+    - unused
+    - gofmt
+    - goimports
+    - misspell
+    - unconvert
+    - gocritic
+
+linters-settings:
+  errcheck:
+    check-type-assertions: true
+    check-blank: true
+
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - performance
+
+  gofmt:
+    simplify: true
+
+  goimports:
+    local-prefixes: runic
+
+  misspell:
+    locale: US
+
+  staticcheck:
+    checks:
+      - all
+      - -SA1009
+
+issues:
+  exclude-rules:
+    # Exclude some linters from running on tests files
+    - path: _test\.go
+      linters:
+        - gocritic
+        - gosimple
+
+    # Exclude generated files
+    - path: _generated\.go
+      linters:
+        - all
+
+    # Exclude vendor directory
+    - path: vendor/
+      linters:
+        - all

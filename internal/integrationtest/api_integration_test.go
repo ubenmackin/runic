@@ -277,10 +277,38 @@ func TestPolicyCRUDIntegration(t *testing.T) {
 
 	// Test READ (single policy)
 	t.Run("ReadSingle", func(t *testing.T) {
-		if createdPolicyID == 0 {
-			t.Skip("policy creation failed, skipping read test")
+		// Create independent data for this test
+		sourceID, targetID, serviceID := createPrerequisites(t)
+
+		policyData := map[string]interface{}{
+			"name":         "test-policy-read-single",
+			"description":  "Test policy for read single test",
+			"source_id":    sourceID,
+			"source_type":  "peer",
+			"service_id":   serviceID,
+			"target_id":    targetID,
+			"target_type":  "peer",
+			"action":       "ACCEPT",
+			"priority":     100,
+			"enabled":      true,
+			"target_scope": "both",
+			"direction":    "both",
 		}
-		resp := JSONRequest(t, server, "GET", "/api/v1/policies/"+strconv.FormatInt(createdPolicyID, 10), nil, "admin", "admin")
+
+		createResp := JSONRequest(t, server, "POST", "/api/v1/policies", policyData, "admin", "admin")
+		defer createResp.Body.Close()
+
+		if createResp.StatusCode != http.StatusCreated {
+			t.Fatalf("failed to create policy for read test: %d", createResp.StatusCode)
+		}
+
+		var createResult map[string]int64
+		if err := json.NewDecoder(createResp.Body).Decode(&createResult); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+		policyID := createResult["id"]
+
+		resp := JSONRequest(t, server, "GET", "/api/v1/policies/"+strconv.FormatInt(policyID, 10), nil, "admin", "admin")
 		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
@@ -292,17 +320,43 @@ func TestPolicyCRUDIntegration(t *testing.T) {
 			t.Fatalf("failed to decode response: %v", err)
 		}
 
-		if policy["name"] != "test-policy-1" {
-			t.Errorf("expected policy name 'test-policy-1', got %v", policy["name"])
+		if policy["name"] != "test-policy-read-single" {
+			t.Errorf("expected policy name 'test-policy-read-single', got %v", policy["name"])
 		}
 	})
 
 	// Test UPDATE
 	t.Run("Update", func(t *testing.T) {
-		if createdPolicyID == 0 {
-			t.Skip("policy creation failed, skipping update test")
-		}
+		// Create independent data for this test
 		sourceID, targetID, serviceID := createPrerequisites(t)
+
+		policyData := map[string]interface{}{
+			"name":         "test-policy-update",
+			"description":  "Test policy for update test",
+			"source_id":    sourceID,
+			"source_type":  "peer",
+			"service_id":   serviceID,
+			"target_id":    targetID,
+			"target_type":  "peer",
+			"action":       "ACCEPT",
+			"priority":     100,
+			"enabled":      true,
+			"target_scope": "both",
+			"direction":    "both",
+		}
+
+		createResp := JSONRequest(t, server, "POST", "/api/v1/policies", policyData, "admin", "admin")
+		defer createResp.Body.Close()
+
+		if createResp.StatusCode != http.StatusCreated {
+			t.Fatalf("failed to create policy for update test: %d", createResp.StatusCode)
+		}
+
+		var createResult map[string]int64
+		if err := json.NewDecoder(createResp.Body).Decode(&createResult); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+		policyID := createResult["id"]
 
 		updateData := map[string]interface{}{
 			"name":        "test-policy-updated",
@@ -317,7 +371,7 @@ func TestPolicyCRUDIntegration(t *testing.T) {
 			"enabled":     true,
 		}
 
-		resp := JSONRequest(t, server, "PUT", "/api/v1/policies/"+strconv.FormatInt(createdPolicyID, 10), updateData, "admin", "admin")
+		resp := JSONRequest(t, server, "PUT", "/api/v1/policies/"+strconv.FormatInt(policyID, 10), updateData, "admin", "admin")
 		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
@@ -327,10 +381,38 @@ func TestPolicyCRUDIntegration(t *testing.T) {
 
 	// Test DELETE
 	t.Run("Delete", func(t *testing.T) {
-		if createdPolicyID == 0 {
-			t.Skip("policy creation failed, skipping delete test")
+		// Create independent data for this test
+		sourceID, targetID, serviceID := createPrerequisites(t)
+
+		policyData := map[string]interface{}{
+			"name":         "test-policy-delete",
+			"description":  "Test policy for delete test",
+			"source_id":    sourceID,
+			"source_type":  "peer",
+			"service_id":   serviceID,
+			"target_id":    targetID,
+			"target_type":  "peer",
+			"action":       "ACCEPT",
+			"priority":     100,
+			"enabled":      true,
+			"target_scope": "both",
+			"direction":    "both",
 		}
-		deleteResp := JSONRequest(t, server, "DELETE", "/api/v1/policies/"+strconv.FormatInt(createdPolicyID, 10), nil, "admin", "admin")
+
+		createResp := JSONRequest(t, server, "POST", "/api/v1/policies", policyData, "admin", "admin")
+		defer createResp.Body.Close()
+
+		if createResp.StatusCode != http.StatusCreated {
+			t.Fatalf("failed to create policy for delete test: %d", createResp.StatusCode)
+		}
+
+		var createResult map[string]int64
+		if err := json.NewDecoder(createResp.Body).Decode(&createResult); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+		policyID := createResult["id"]
+
+		deleteResp := JSONRequest(t, server, "DELETE", "/api/v1/policies/"+strconv.FormatInt(policyID, 10), nil, "admin", "admin")
 		defer deleteResp.Body.Close()
 
 		// API may return 204 No Content or 200 OK
@@ -339,7 +421,7 @@ func TestPolicyCRUDIntegration(t *testing.T) {
 		}
 
 		// Verify policy is gone - GET should return 404
-		getResp := JSONRequest(t, server, "GET", "/api/v1/policies/"+strconv.FormatInt(createdPolicyID, 10), nil, "admin", "admin")
+		getResp := JSONRequest(t, server, "GET", "/api/v1/policies/"+strconv.FormatInt(policyID, 10), nil, "admin", "admin")
 		defer getResp.Body.Close()
 
 		if getResp.StatusCode != http.StatusNotFound {
@@ -402,10 +484,26 @@ func TestGroupCRUDIntegration(t *testing.T) {
 
 	// Test READ (single group)
 	t.Run("ReadSingle", func(t *testing.T) {
-		if createdGroupID == 0 {
-			t.Skip("group creation failed, skipping read test")
+		// Create independent data for this test
+		groupData := map[string]interface{}{
+			"name":        "test-group-read-single-" + strconv.FormatInt(time.Now().UnixNano(), 10),
+			"description": "Test group for read single test",
 		}
-		resp := JSONRequest(t, server, "GET", "/api/v1/groups/"+strconv.FormatInt(createdGroupID, 10), nil, "admin", "admin")
+
+		createResp := JSONRequest(t, server, "POST", "/api/v1/groups", groupData, "admin", "admin")
+		defer createResp.Body.Close()
+
+		if createResp.StatusCode != http.StatusCreated {
+			t.Fatalf("failed to create group for read test: %d", createResp.StatusCode)
+		}
+
+		var createResult map[string]int64
+		if err := json.NewDecoder(createResp.Body).Decode(&createResult); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+		groupID := createResult["id"]
+
+		resp := JSONRequest(t, server, "GET", "/api/v1/groups/"+strconv.FormatInt(groupID, 10), nil, "admin", "admin")
 		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
@@ -427,15 +525,31 @@ func TestGroupCRUDIntegration(t *testing.T) {
 
 	// Test UPDATE
 	t.Run("Update", func(t *testing.T) {
-		if createdGroupID == 0 {
-			t.Skip("group creation failed, skipping update test")
+		// Create independent data for this test
+		groupData := map[string]interface{}{
+			"name":        "test-group-update-" + strconv.FormatInt(time.Now().UnixNano(), 10),
+			"description": "Test group for update test",
 		}
+
+		createResp := JSONRequest(t, server, "POST", "/api/v1/groups", groupData, "admin", "admin")
+		defer createResp.Body.Close()
+
+		if createResp.StatusCode != http.StatusCreated {
+			t.Fatalf("failed to create group for update test: %d", createResp.StatusCode)
+		}
+
+		var createResult map[string]int64
+		if err := json.NewDecoder(createResp.Body).Decode(&createResult); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+		groupID := createResult["id"]
+
 		updateData := map[string]interface{}{
 			"name":        "test-group-updated",
 			"description": "Updated group description",
 		}
 
-		resp := JSONRequest(t, server, "PUT", "/api/v1/groups/"+strconv.FormatInt(createdGroupID, 10), updateData, "admin", "admin")
+		resp := JSONRequest(t, server, "PUT", "/api/v1/groups/"+strconv.FormatInt(groupID, 10), updateData, "admin", "admin")
 		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
@@ -445,10 +559,26 @@ func TestGroupCRUDIntegration(t *testing.T) {
 
 	// Test DELETE
 	t.Run("Delete", func(t *testing.T) {
-		if createdGroupID == 0 {
-			t.Skip("group creation failed, skipping delete test")
+		// Create independent data for this test
+		groupData := map[string]interface{}{
+			"name":        "test-group-delete-" + strconv.FormatInt(time.Now().UnixNano(), 10),
+			"description": "Test group for delete test",
 		}
-		deleteResp := JSONRequest(t, server, "DELETE", "/api/v1/groups/"+strconv.FormatInt(createdGroupID, 10), nil, "admin", "admin")
+
+		createResp := JSONRequest(t, server, "POST", "/api/v1/groups", groupData, "admin", "admin")
+		defer createResp.Body.Close()
+
+		if createResp.StatusCode != http.StatusCreated {
+			t.Fatalf("failed to create group for delete test: %d", createResp.StatusCode)
+		}
+
+		var createResult map[string]int64
+		if err := json.NewDecoder(createResp.Body).Decode(&createResult); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+		groupID := createResult["id"]
+
+		deleteResp := JSONRequest(t, server, "DELETE", "/api/v1/groups/"+strconv.FormatInt(groupID, 10), nil, "admin", "admin")
 		defer deleteResp.Body.Close()
 
 		// API returns 204 No Content for successful deletion
@@ -457,7 +587,7 @@ func TestGroupCRUDIntegration(t *testing.T) {
 		}
 
 		// Verify group is gone - GET should return 404
-		getResp := JSONRequest(t, server, "GET", "/api/v1/groups/"+strconv.FormatInt(createdGroupID, 10), nil, "admin", "admin")
+		getResp := JSONRequest(t, server, "GET", "/api/v1/groups/"+strconv.FormatInt(groupID, 10), nil, "admin", "admin")
 		defer getResp.Body.Close()
 
 		if getResp.StatusCode != http.StatusNotFound {

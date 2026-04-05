@@ -1,12 +1,13 @@
 package auth
 
 import (
-	"log"
+	"context"
 	"net/http"
 	"time"
 
 	"runic/internal/api/common"
 	"runic/internal/auth"
+	"runic/internal/common/log"
 )
 
 // Token TTL constants.
@@ -27,7 +28,7 @@ func (h *Handler) GenerateTokenPair(username string) (accessToken string, refres
 	var role string
 	err = h.DB.QueryRow("SELECT role FROM users WHERE username = ?", username).Scan(&role)
 	if err != nil {
-		log.Printf("WARNING: failed to look up role for %s, defaulting to viewer: %v", username, err)
+		log.WarnContext(context.Background(), "failed to look up role, defaulting to viewer", "username", username, "error", err)
 		role = "viewer"
 	}
 
