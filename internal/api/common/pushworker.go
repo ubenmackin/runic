@@ -106,6 +106,12 @@ func (w *PushWorker) processJob(ctx context.Context, jobID string) {
 		return
 	}
 
+	// Transition status to 'running'
+	if err := db.UpdatePushJobStatus(jobCtx, w.db, jobID, "running"); err != nil {
+		runiclog.Error("PushWorker: failed to update job status to running", "job_id", jobID, "error", err)
+		// Continue processing - this is non-fatal
+	}
+
 	total := len(peers)
 	if total == 0 {
 		db.FinalizePushJob(jobCtx, w.db, jobID)
@@ -168,9 +174,8 @@ func (w *PushWorker) processJob(ctx context.Context, jobID string) {
 		})
 	}
 
-	// Update final counts
-	db.UpdatePushJobCounts(jobCtx, w.db, jobID, succeeded, failed)
-	db.FinalizePushJob(jobCtx, w.db, jobID)
+	// Finalize job with counts in a single atomic update
+	db.FinalizePushJobWithCounts(jobCtx, w.db, jobID, succeeded, failed)
 
 	finalStatus := "completed"
 	if failed > 0 {

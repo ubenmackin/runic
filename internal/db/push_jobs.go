@@ -172,6 +172,24 @@ func FinalizePushJob(ctx context.Context, database *sql.DB, jobID string) error 
 	return nil
 }
 
+// FinalizePushJobWithCounts atomically updates counts and finalizes the job.
+// This combines UpdatePushJobCounts and FinalizePushJob into a single UPDATE
+// to prevent stale counts if the process crashes between the two calls.
+func FinalizePushJobWithCounts(ctx context.Context, database *sql.DB, jobID string, succeeded, failed int) error {
+	_, err := database.ExecContext(ctx, `
+		UPDATE push_jobs
+		SET completed_at = CURRENT_TIMESTAMP,
+		    status = CASE WHEN ? > 0 THEN 'completed_with_errors' ELSE 'completed' END,
+		    succeeded_count = ?,
+		    failed_count = ?
+		WHERE id = ?
+	`, failed, succeeded, failed, jobID)
+	if err != nil {
+		return fmt.Errorf("finalize push job %s with counts: %w", jobID, err)
+	}
+	return nil
+}
+
 // ListPushJobs returns recent push jobs ordered by creation time descending.
 func ListPushJobs(ctx context.Context, database *sql.DB, limit int) ([]PushJob, error) {
 	rows, err := database.QueryContext(ctx, `

@@ -474,12 +474,25 @@ func (h *Handler) HandlePushJobSSE(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprint(w, event)
 			flusher.Flush()
 
-			// Check if this was a completion event
-			if strings.Contains(event, "event: complete") {
+			// Check if this was a completion event by parsing the event type explicitly
+			// SSE format: "event: {eventType}\ndata: {jsonPayload}\n\n"
+			eventType := parseSSEEventType(event)
+			if eventType == "complete" {
 				return
 			}
 		}
 	}
+}
+
+// parseSSEEventType extracts the event type from an SSE message.
+// Returns empty string if not found.
+func parseSSEEventType(event string) string {
+	for _, line := range strings.Split(event, "\n") {
+		if strings.HasPrefix(line, "event:") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+		}
+	}
+	return ""
 }
 
 // applyBundleForPeer compiles, stores, and clears pending for a single peer.
