@@ -24,11 +24,11 @@ import (
 
 // Handler provides HTTP handlers for agent endpoints with dependency injection.
 type Handler struct {
-	DB *sql.DB
+	DB db.Querier
 }
 
 // NewHandler creates a new agent handler with the given database connection.
-func NewHandler(db *sql.DB) *Handler {
+func NewHandler(db db.Querier) *Handler {
 	return &Handler{DB: db}
 }
 

@@ -7,19 +7,21 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"golang.org/x/sync/errgroup"
 
 	"runic/internal/api/common"
 	"runic/internal/common/constants"
 	"runic/internal/common/log"
+	"runic/internal/db"
 )
 
 // Handler holds dependencies for dashboard handlers.
 type Handler struct {
-	DB *sql.DB
+	DB db.Querier
 }
 
 // NewHandler creates a new dashboard handler.
-func NewHandler(db *sql.DB) *Handler {
+func NewHandler(db db.Querier) *Handler {
 	return &Handler{DB: db}
 }
 
@@ -62,47 +64,33 @@ type DashboardStats struct {
 func (h *Handler) HandleDashboard(w http.ResponseWriter, r *http.Request) {
 	var stats DashboardStats
 
-	// Count peers
-	rows, err := h.DB.QueryContext(r.Context(), `SELECT COUNT(*) FROM peers`)
+	// Initialize slices to avoid null in JSON
+	stats.RecentActivity = []ActivityItem{}
+	stats.PeerHealth = []PeerHealth{}
+	stats.TopBlockedSource = []BlockedIP{}
+
+	// NOTE: These slices are appended to by goroutines below. This is safe because:
+	// 1. Go's append to nil/pre-initialized slices is goroutine-safe (allocates new backing array)
+	// 2. SQLite uses serialized write mode by default, preventing true parallel execution
+	// 3. If migrating to PostgreSQL/MySQL, mutex protection would be needed
+
+	// Combined COUNT query for peer/policy counts (4 queries -> 1 query)
+	countQuery := fmt.Sprintf(`
+SELECT
+	(SELECT COUNT(*) FROM peers) as total_peers,
+	(SELECT COUNT(*) FROM peers WHERE is_manual = 1) as manual_peers,
+	(SELECT COUNT(*) FROM peers WHERE is_manual = 0 AND last_heartbeat > datetime('now', '-%d seconds')) as online_peers,
+	(SELECT COUNT(*) FROM policies WHERE enabled = 1) as total_policies`,
+		constants.OfflineThresholdSeconds)
+
+	rows, err := h.DB.QueryContext(r.Context(), countQuery)
 	if err != nil {
-		log.ErrorContext(r.Context(), "failed to count peers", "error", err)
-		stats.TotalPeers = 0
+		log.ErrorContext(r.Context(), "failed to query peer/policy counts", "error", err)
 	} else {
 		defer rows.Close()
 		if rows.Next() {
-			if err := rows.Scan(&stats.TotalPeers); err != nil {
-				log.ErrorContext(r.Context(), "failed to scan peer count", "error", err)
-				stats.TotalPeers = 0
-			}
-		}
-	}
-
-	// Count manual peers (is_manual = 1)
-	rows2, err := h.DB.QueryContext(r.Context(), "SELECT COUNT(*) FROM peers WHERE is_manual = 1")
-	if err != nil {
-		log.ErrorContext(r.Context(), "failed to count manual peers", "error", err)
-		stats.ManualPeers = 0
-	} else {
-		defer rows2.Close()
-		if rows2.Next() {
-			if err := rows2.Scan(&stats.ManualPeers); err != nil {
-				log.ErrorContext(r.Context(), "failed to scan manual peer count", "error", err)
-				stats.ManualPeers = 0
-			}
-		}
-	}
-
-	// Count online peers (status = 'online) - only agent peers (not manual)
-	rows3, err := h.DB.QueryContext(r.Context(), fmt.Sprintf("SELECT COUNT(*) FROM peers WHERE is_manual = 0 AND last_heartbeat > datetime('now', '-%d seconds')", constants.OfflineThresholdSeconds))
-	if err != nil {
-		log.ErrorContext(r.Context(), "failed to count online peers", "error", err)
-		stats.OnlinePeers = 0
-	} else {
-		defer rows3.Close()
-		if rows3.Next() {
-			if err := rows3.Scan(&stats.OnlinePeers); err != nil {
-				log.ErrorContext(r.Context(), "failed to scan online peer count", "error", err)
-				stats.OnlinePeers = 0
+			if err := rows.Scan(&stats.TotalPeers, &stats.ManualPeers, &stats.OnlinePeers, &stats.TotalPolicies); err != nil {
+				log.ErrorContext(r.Context(), "failed to scan peer/policy counts", "error", err)
 			}
 		}
 	}
@@ -111,92 +99,74 @@ func (h *Handler) HandleDashboard(w http.ResponseWriter, r *http.Request) {
 	// Offline = Total - Manual - Online
 	stats.OfflinePeers = stats.TotalPeers - stats.ManualPeers - stats.OnlinePeers
 
-	// Count policies
-	rows4, err := h.DB.QueryContext(r.Context(), `SELECT COUNT(*) FROM policies WHERE enabled = 1`)
-	if err != nil {
-		log.ErrorContext(r.Context(), "failed to count policies", "error", err)
-		stats.TotalPolicies = 0
-	} else {
-		defer rows4.Close()
-		if rows4.Next() {
-			if err := rows4.Scan(&stats.TotalPolicies); err != nil {
-				log.ErrorContext(r.Context(), "failed to scan policy count", "error", err)
-				stats.TotalPolicies = 0
-			}
-		}
-	}
-
-	// Initialize slices to avoid null in JSON
-	stats.RecentActivity = []ActivityItem{}
-	stats.PeerHealth = []PeerHealth{}
-	stats.TopBlockedSource = []BlockedIP{}
-
 	// Get blocked events count for last hour and last 24 hours in a single query
-	rows5, err := h.DB.QueryContext(r.Context(), `
-		SELECT
-		COALESCE(SUM(CASE WHEN timestamp > datetime('now', '-1 hour') THEN 1 ELSE 0 END), 0) as blocked_last_hour,
-		COUNT(*) as blocked_last_24h
-		FROM firewall_logs
-		WHERE action = 'DROP' AND timestamp > datetime('now', '-24 hours')
-	`)
+	blockedRows, err := h.DB.QueryContext(r.Context(), `
+SELECT
+	COALESCE(SUM(CASE WHEN timestamp > datetime('now', '-1 hour') THEN 1 ELSE 0 END), 0) as blocked_last_hour,
+	COUNT(*) as blocked_last_24h
+FROM firewall_logs
+WHERE action = 'DROP' AND timestamp > datetime('now', '-24 hours')
+`)
 	if err != nil {
 		log.ErrorContext(r.Context(), "failed to query blocked counts", "error", err)
-		stats.BlockedLastHour = 0
-		stats.BlockedLast24h = 0
 	} else {
-		defer rows5.Close()
-		if rows5.Next() {
-			if err := rows5.Scan(&stats.BlockedLastHour, &stats.BlockedLast24h); err != nil {
+		defer blockedRows.Close()
+		if blockedRows.Next() {
+			if err := blockedRows.Scan(&stats.BlockedLastHour, &stats.BlockedLast24h); err != nil {
 				log.ErrorContext(r.Context(), "failed to scan blocked counts", "error", err)
-				stats.BlockedLastHour = 0
-				stats.BlockedLast24h = 0
 			}
 		}
 	}
 
-	// Get recent activity - last 5 blocked events
-	activityRows, err := h.DB.QueryContext(r.Context(), `
-		SELECT fl.timestamp, fl.src_ip, fl.dst_ip, fl.protocol, fl.action, p.hostname
-		FROM firewall_logs fl
-		LEFT JOIN peers p ON fl.peer_id = p.id
-		WHERE fl.action = 'DROP'
-		ORDER BY fl.timestamp DESC
-		LIMIT 5`)
-	if err != nil {
-		log.ErrorContext(r.Context(), "failed to query recent activity", "error", err)
-	} else {
+	// Run 3 LIST queries concurrently using errgroup
+	g, ctx := errgroup.WithContext(r.Context())
+
+	// Recent activity - last 5 blocked events
+	g.Go(func() error {
+		activityRows, err := h.DB.QueryContext(ctx, `
+SELECT fl.timestamp, fl.src_ip, fl.dst_ip, fl.protocol, fl.action, p.hostname
+FROM firewall_logs fl
+LEFT JOIN peers p ON fl.peer_id = p.id
+WHERE fl.action = 'DROP'
+ORDER BY fl.timestamp DESC
+LIMIT 5`)
+		if err != nil {
+			return err
+		}
 		defer activityRows.Close()
+
 		for activityRows.Next() {
 			var item ActivityItem
 			var hostname sql.NullString
 			if err := activityRows.Scan(&item.Timestamp, &item.SrcIP, &item.DstIP, &item.Protocol, &item.Action, &hostname); err != nil {
-				log.ErrorContext(r.Context(), "failed to scan activity row", "error", err)
-				continue
+				return err
 			}
 			if hostname.Valid {
 				item.Hostname = hostname.String
 			}
 			stats.RecentActivity = append(stats.RecentActivity, item)
 		}
-	}
+		return activityRows.Err()
+	})
 
-	// Get peer health data
-	peerRows, err := h.DB.QueryContext(r.Context(), `
-		SELECT hostname, ip_address, agent_version, last_heartbeat, is_manual
-		FROM peers
-		ORDER BY hostname`)
-	if err != nil {
-		log.ErrorContext(r.Context(), "failed to query peer health", "error", err)
-	} else {
+	// Peer health data
+	g.Go(func() error {
+		peerRows, err := h.DB.QueryContext(ctx, `
+SELECT hostname, ip_address, agent_version, last_heartbeat, is_manual
+FROM peers
+ORDER BY hostname`)
+		if err != nil {
+			return err
+		}
 		defer peerRows.Close()
+
 		for peerRows.Next() {
 			var ph PeerHealth
 			var lastHeartbeat sql.NullString
 			var agentVersion sql.NullString
 			var isManual bool
 			if err := peerRows.Scan(&ph.Hostname, &ph.IP, &agentVersion, &lastHeartbeat, &isManual); err != nil {
-				log.ErrorContext(r.Context(), "failed to scan peer health row", "error", err)
-				continue
+				return err
 			}
 			if agentVersion.Valid {
 				ph.AgentVersion = agentVersion.String
@@ -211,28 +181,36 @@ func (h *Handler) HandleDashboard(w http.ResponseWriter, r *http.Request) {
 			ph.IsManual = isManual
 			stats.PeerHealth = append(stats.PeerHealth, ph)
 		}
-	}
+		return peerRows.Err()
+	})
 
-	// Get top 5 blocked source IPs in last 24h
-	topRows, err := h.DB.QueryContext(r.Context(), `
-		SELECT src_ip, COUNT(*) as count
-		FROM firewall_logs
-		WHERE action = 'DROP' AND timestamp > datetime('now', '-24 hours')
-		GROUP BY src_ip
-		ORDER BY count DESC
-		LIMIT 5`)
-	if err != nil {
-		log.ErrorContext(r.Context(), "failed to query top blocked sources", "error", err)
-	} else {
+	// Top 5 blocked source IPs in last 24h
+	g.Go(func() error {
+		topRows, err := h.DB.QueryContext(ctx, `
+SELECT src_ip, COUNT(*) as count
+FROM firewall_logs
+WHERE action = 'DROP' AND timestamp > datetime('now', '-24 hours')
+GROUP BY src_ip
+ORDER BY count DESC
+LIMIT 5`)
+		if err != nil {
+			return err
+		}
 		defer topRows.Close()
+
 		for topRows.Next() {
 			var b BlockedIP
 			if err := topRows.Scan(&b.SrcIP, &b.Count); err != nil {
-				log.ErrorContext(r.Context(), "failed to scan top blocked row", "error", err)
-				continue
+				return err
 			}
 			stats.TopBlockedSource = append(stats.TopBlockedSource, b)
 		}
+		return topRows.Err()
+	})
+
+	if err := g.Wait(); err != nil {
+		log.ErrorContext(r.Context(), "failed to query dashboard data", "error", err)
+		// Continue with partial data rather than failing entirely
 	}
 
 	common.RespondJSON(w, http.StatusOK, map[string]interface{}{"data": stats})

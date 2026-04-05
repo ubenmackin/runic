@@ -21,7 +21,8 @@ import (
 
 // Handler holds dependencies for pending change handlers.
 type Handler struct {
-	DB         *sql.DB
+	DB         db.Querier // For queries
+	DBBeginner db.DB      // For transactions and queries
 	Compiler   *engine.Compiler
 	SSEHub     *events.SSEHub
 	PushWorker *common.PushWorker
@@ -29,7 +30,7 @@ type Handler struct {
 
 // NewHandler creates a new Handler with the given dependencies.
 func NewHandler(database *sql.DB, compiler *engine.Compiler, sseHub *events.SSEHub, pushWorker *common.PushWorker) *Handler {
-	return &Handler{DB: database, Compiler: compiler, SSEHub: sseHub, PushWorker: pushWorker}
+	return &Handler{DB: database, DBBeginner: database, Compiler: compiler, SSEHub: sseHub, PushWorker: pushWorker}
 }
 
 // peerChangeGroup represents a peer with its pending changes and hostname.
@@ -314,7 +315,7 @@ func (h *Handler) ApplyAllPendingBundles(w http.ResponseWriter, r *http.Request)
 	applied := 0
 	var errors []string
 	for _, peerID := range peerIDs {
-		if err := applyBundleForPeer(ctx, database, h.Compiler, h.SSEHub, peerID); err != nil {
+		if err := applyBundleForPeer(ctx, h.DBBeginner, h.Compiler, h.SSEHub, peerID); err != nil {
 			errors = append(errors, fmt.Sprintf("peer %d: %v", peerID, err))
 		} else {
 			applied++
@@ -398,7 +399,7 @@ func (h *Handler) PushAllRules(w http.ResponseWriter, r *http.Request) {
 			Hostname string
 		}{ID: p.id, Hostname: p.hostname}
 	}
-	if err := db.CreatePushJobPeers(ctx, database, jobID, peers); err != nil {
+	if err := db.CreatePushJobPeersT(ctx, h.DBBeginner, jobID, peers); err != nil {
 		log.ErrorContext(ctx, "failed to create push job peers", "error", err)
 		common.InternalError(w)
 		return
@@ -509,7 +510,7 @@ func parseSSEEventType(event string) string {
 }
 
 // applyBundleForPeer compiles, stores, and clears pending for a single peer.
-func applyBundleForPeer(ctx context.Context, database *sql.DB, compiler *engine.Compiler, sseHub *events.SSEHub, peerID int) error {
+func applyBundleForPeer(ctx context.Context, database db.DB, compiler *engine.Compiler, sseHub *events.SSEHub, peerID int) error {
 	// Get hostname for SSE
 	var hostname string
 	err := database.QueryRowContext(ctx, "SELECT hostname FROM peers WHERE id = ?", peerID).Scan(&hostname)

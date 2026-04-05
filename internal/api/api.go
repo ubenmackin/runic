@@ -73,7 +73,7 @@ func NewAPI(db *sql.DB, compiler *engine.Compiler) *API {
 		PushWorker:   pushWorker,
 		Peers:        peers.NewHandler(db, compiler),
 		Agents:       agents.NewHandler(db),
-		Auth:         authhandlers.NewHandler(db),
+		Auth:         authhandlers.NewHandler(db, db),
 		Groups:       groups.NewHandler(db, compiler, changeWorker),
 		Policies:     policies.NewHandler(db, compiler, changeWorker),
 		Services:     services.NewHandler(db, compiler, changeWorker),

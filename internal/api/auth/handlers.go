@@ -1,7 +1,6 @@
 package auth
 
 import (
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -15,16 +14,18 @@ import (
 	"runic/internal/auth"
 	runiccommon "runic/internal/common"
 	"runic/internal/common/log"
+	"runic/internal/db"
 )
 
 // Handler provides HTTP handlers for auth endpoints with dependency injection.
 type Handler struct {
-	DB *sql.DB
+	DB         db.Querier
+	DBBeginner db.Beginner // For transaction support (same underlying *sql.DB in production)
 }
 
 // NewHandler creates a new auth handler with the given database connection.
-func NewHandler(db *sql.DB) *Handler {
-	return &Handler{DB: db}
+func NewHandler(db db.Querier, dbBeginner db.Beginner) *Handler {
+	return &Handler{DB: db, DBBeginner: dbBeginner}
 }
 
 var isProduction bool
@@ -156,7 +157,7 @@ func (h *Handler) HandleSetupPOST(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	// Begin transaction
-	tx, err := h.DB.BeginTx(ctx, nil)
+	tx, err := h.DBBeginner.BeginTx(ctx, nil)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "failed to start transaction")
 		return

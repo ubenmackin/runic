@@ -3,7 +3,6 @@ package agents
 import (
 	"context"
 	"crypto/rand"
-	"database/sql"
 	"encoding/hex"
 	"fmt"
 	"net/http"
@@ -35,7 +34,7 @@ func GenerateHMACKey() (string, error) {
 }
 
 // generateAgentToken generates a JWT-like token for an agent.
-func generateAgentToken(ctx context.Context, dbConn *sql.DB, hostname string) (string, error) {
+func generateAgentToken(ctx context.Context, dbConn db.Querier, hostname string) (string, error) {
 	hMACKey, err := db.GetSecret(ctx, dbConn, "agent_jwt_secret")
 	if err != nil {
 		return "", fmt.Errorf("agent JWT secret not configured: %w", err)

@@ -11,7 +11,7 @@ import (
 )
 
 // GetSecret retrieves a secret from the system_config table.
-func GetSecret(ctx context.Context, database *sql.DB, key string) (string, error) {
+func GetSecret(ctx context.Context, database Querier, key string) (string, error) {
 	if database == nil {
 		return "", fmt.Errorf("database not initialized")
 	}
@@ -24,13 +24,13 @@ func GetSecret(ctx context.Context, database *sql.DB, key string) (string, error
 }
 
 // SetSecret stores or updates a secret in the system_config table.
-func SetSecret(ctx context.Context, database *sql.DB, key, value string) error {
+func SetSecret(ctx context.Context, database Querier, key, value string) error {
 	if database == nil {
 		return fmt.Errorf("database not initialized")
 	}
 	_, err := database.ExecContext(ctx,
-		`INSERT INTO system_config (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP) 
-		 ON CONFLICT(key) DO UPDATE SET value = ?, updated_at = CURRENT_TIMESTAMP`,
+		`INSERT INTO system_config (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(key) DO UPDATE SET value = ?, updated_at = CURRENT_TIMESTAMP`,
 		key, value, value,
 	)
 	return err
@@ -77,7 +77,7 @@ func migrateEnvToDB(database *sql.DB) error {
 			if strings.HasPrefix(line, prefix) {
 				value := strings.TrimPrefix(line, prefix)
 				if value != "" {
-					_, err := database.Exec(
+					_, err := database.ExecContext(context.Background(),
 						"INSERT INTO system_config (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP) ON CONFLICT(key) DO UPDATE SET value = ?, updated_at = CURRENT_TIMESTAMP",
 						dbKey, value, value,
 					)

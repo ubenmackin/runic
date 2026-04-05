@@ -1,7 +1,6 @@
 package policies
 
 import (
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -10,16 +9,17 @@ import (
 
 	"runic/internal/api/common"
 	"runic/internal/common/log"
+	"runic/internal/db"
 	"runic/internal/engine"
 )
 
 type Handler struct {
-	DB           *sql.DB
+	DB           db.Querier
 	Compiler     *engine.Compiler
 	ChangeWorker *common.ChangeWorker
 }
 
-func NewHandler(db *sql.DB, compiler *engine.Compiler, changeWorker *common.ChangeWorker) *Handler {
+func NewHandler(db db.Querier, compiler *engine.Compiler, changeWorker *common.ChangeWorker) *Handler {
 	return &Handler{DB: db, Compiler: compiler, ChangeWorker: changeWorker}
 }
 

@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -17,13 +16,13 @@ import (
 
 // Handler holds dependencies for service handlers.
 type Handler struct {
-	DB           *sql.DB
+	DB           db.Querier
 	Compiler     *engine.Compiler
 	ChangeWorker *common.ChangeWorker
 }
 
 // NewHandler creates a new services handler with dependencies.
-func NewHandler(db *sql.DB, compiler *engine.Compiler, changeWorker *common.ChangeWorker) *Handler {
+func NewHandler(db db.Querier, compiler *engine.Compiler, changeWorker *common.ChangeWorker) *Handler {
 	return &Handler{DB: db, Compiler: compiler, ChangeWorker: changeWorker}
 }
 

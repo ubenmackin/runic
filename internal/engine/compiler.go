@@ -200,6 +200,46 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 		}
 	}
 
+	// 2a. Pre-load all services referenced by these policies (batch load)
+	serviceIDs := make(map[int]bool)
+	for _, p := range policies {
+		serviceIDs[p.ServiceID] = true
+	}
+	services := make(map[int]struct{ Name, Ports, SourcePorts, Protocol string })
+	if len(serviceIDs) > 0 {
+		// Build the IN clause
+		serviceIDList := make([]int, 0, len(serviceIDs))
+		for id := range serviceIDs {
+			serviceIDList = append(serviceIDList, id)
+		}
+
+		placeholders := make([]string, len(serviceIDList))
+		args := make([]interface{}, len(serviceIDList))
+		for i, id := range serviceIDList {
+			placeholders[i] = "?"
+			args[i] = id
+		}
+		query := "SELECT id, name, ports, COALESCE(source_ports,''), protocol FROM services WHERE id IN (" + strings.Join(placeholders, ",") + ")"
+
+		rows, err := c.db.QueryContext(ctx, query, args...)
+		if err != nil {
+			return "", fmt.Errorf("batch load services: %w", err)
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var sid int
+			var s struct{ Name, Ports, SourcePorts, Protocol string }
+			if err := rows.Scan(&sid, &s.Name, &s.Ports, &s.SourcePorts, &s.Protocol); err != nil {
+				return "", fmt.Errorf("scan service: %w", err)
+			}
+			services[sid] = s
+		}
+		if err := rows.Err(); err != nil {
+			return "", err
+		}
+	}
+
 	// 2c. Resolve ipset data if peer supports it, and build group->ipset mapping simultaneously
 	type ipsetData struct {
 		Name    string // sanitized ipset name (e.g. runic_group_webservers)
@@ -293,14 +333,15 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 		writeToHost := pol.TargetScope == "host" || pol.TargetScope == "both"
 		writeToDocker := hasDocker && (pol.TargetScope == "docker" || pol.TargetScope == "both")
 
-		// Load service
-		var serviceName, ports, sourcePorts, protocol string
-		err = c.db.QueryRowContext(ctx,
-			"SELECT name, ports, source_ports, protocol FROM services WHERE id = ?", pol.ServiceID,
-		).Scan(&serviceName, &ports, &sourcePorts, &protocol)
-		if err != nil {
-			return "", fmt.Errorf("load service %d: %w", pol.ServiceID, err)
+		// Get service from pre-loaded map
+		svc, ok := services[pol.ServiceID]
+		if !ok {
+			return "", fmt.Errorf("service %d not found", pol.ServiceID)
 		}
+		serviceName := svc.Name
+		ports := svc.Ports
+		sourcePorts := svc.SourcePorts
+		protocol := svc.Protocol
 
 		// Expand ports for non-multicast services
 		var portClauses []PortClause
