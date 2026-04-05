@@ -1,43 +1,16 @@
 package groups
 
 import (
-	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/gorilla/mux"
-	_ "github.com/mattn/go-sqlite3"
 
-	"runic/internal/db"
+	"runic/internal/testutil"
 )
-
-// setupTestDB creates an in-memory SQLite database for testing.
-func setupTestDB(t *testing.T) (*sql.DB, func()) {
-	t.Helper()
-
-	// Create in-memory database with unique name to avoid conflicts
-	dsn := "file:testdb_groups_" + time.Now().Format("20060102150405.999999999") + "?mode=memory&cache=shared"
-	database, err := sql.Open("sqlite3", dsn)
-	if err != nil {
-		t.Fatalf("failed to open test db: %v", err)
-	}
-
-	// Initialize database schema
-	if _, err := database.Exec(db.Schema()); err != nil {
-		t.Fatalf("failed to create schema: %v", err)
-	}
-
-	// Cleanup function
-	cleanup := func() {
-		database.Close()
-	}
-
-	return database, cleanup
-}
 
 // muxVars is a helper to mock gorilla/mux vars
 func muxVars(r *http.Request, vars map[string]string) *http.Request {
@@ -49,7 +22,7 @@ func muxVars(r *http.Request, vars map[string]string) *http.Request {
 // =============================================================================
 
 func TestListGroups(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
 	// Insert test groups
@@ -149,7 +122,7 @@ func TestListGroups(t *testing.T) {
 }
 
 func TestListGroups_SystemGroup(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
 	// Insert the "any" system group with is_system=1
@@ -198,7 +171,7 @@ func TestListGroups_SystemGroup(t *testing.T) {
 }
 
 func TestListGroups_EmptyResult(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
 	h := NewHandler(database, nil, nil)
@@ -230,7 +203,7 @@ func TestListGroups_EmptyResult(t *testing.T) {
 // =============================================================================
 
 func TestDeleteGroup_SystemGroup(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
 	// Insert the "any" system group with is_system=1
@@ -259,7 +232,7 @@ func TestDeleteGroup_SystemGroup(t *testing.T) {
 }
 
 func TestDeleteGroup_UsedByPolicy(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
 	// Insert test data
@@ -294,7 +267,7 @@ func TestDeleteGroup_UsedByPolicy(t *testing.T) {
 }
 
 func TestDeleteGroup_Success(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
 	// Insert a group without policies
@@ -338,7 +311,7 @@ func TestDeleteGroup_Success(t *testing.T) {
 }
 
 func TestDeleteGroup_NotFound(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
 	req := httptest.NewRequest("DELETE", "/api/v1/groups/999", nil)
@@ -355,7 +328,7 @@ func TestDeleteGroup_NotFound(t *testing.T) {
 }
 
 func TestDeleteGroup_InvalidID(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
 	req := httptest.NewRequest("DELETE", "/api/v1/groups/invalid", nil)
@@ -376,7 +349,7 @@ func TestDeleteGroup_InvalidID(t *testing.T) {
 // =============================================================================
 
 func TestAddGroupMember(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
 	// Insert test data
@@ -466,7 +439,7 @@ func TestAddGroupMember(t *testing.T) {
 }
 
 func TestAddGroupMember_Duplicate(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
 	// Insert test data
@@ -507,7 +480,7 @@ func TestAddGroupMember_Duplicate(t *testing.T) {
 // =============================================================================
 
 func TestRemoveGroupMember(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
 	// Insert test data
@@ -582,7 +555,7 @@ func TestRemoveGroupMember(t *testing.T) {
 }
 
 func TestRemoveGroupMember_InvalidIDs(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
 	tests := []struct {
@@ -641,7 +614,7 @@ func TestRemoveGroupMember_InvalidIDs(t *testing.T) {
 // =============================================================================
 
 func TestGetGroupMembers(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
 	// Insert test data
@@ -700,7 +673,7 @@ func TestGetGroupMembers(t *testing.T) {
 }
 
 func TestGetGroupMembers_EmptyGroup(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
 	// Insert an empty group
@@ -732,7 +705,7 @@ func TestGetGroupMembers_EmptyGroup(t *testing.T) {
 }
 
 func TestGetGroupMembers_InvalidGroupID(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
 	req := httptest.NewRequest("GET", "/api/v1/groups/invalid/members", nil)
@@ -753,7 +726,7 @@ func TestGetGroupMembers_InvalidGroupID(t *testing.T) {
 // =============================================================================
 
 func TestCreateGroup(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
 	tests := []struct {
@@ -831,7 +804,7 @@ func TestCreateGroup(t *testing.T) {
 // =============================================================================
 
 func TestGetGroup(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
 	// Insert test data
@@ -894,7 +867,7 @@ func TestGetGroup(t *testing.T) {
 // =============================================================================
 
 func TestUpdateGroup(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
 	// Insert test data

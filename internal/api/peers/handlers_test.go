@@ -3,42 +3,15 @@ package peers
 import (
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/gorilla/mux"
-	_ "github.com/mattn/go-sqlite3"
 
-	"runic/internal/db"
+	"runic/internal/testutil"
 )
-
-// setupTestDB creates an in-memory SQLite database for testing.
-func setupTestDB(t *testing.T) (*sql.DB, func()) {
-	t.Helper()
-
-	// Create in-memory database with unique name
-	dsn := fmt.Sprintf("file:testdb%d?mode=memory&cache=shared", time.Now().UnixNano())
-	database, err := sql.Open("sqlite3", dsn)
-	if err != nil {
-		t.Fatalf("failed to open test db: %v", err)
-	}
-
-	// Initialize database schema
-	if _, err := database.Exec(db.Schema()); err != nil {
-		t.Fatalf("failed to create schema: %v", err)
-	}
-
-	// Cleanup function
-	cleanup := func() {
-		database.Close()
-	}
-
-	return database, cleanup
-}
 
 // muxVars is a helper to mock gorilla/mux vars
 func muxVars(r *http.Request, vars map[string]string) *http.Request {
@@ -157,7 +130,7 @@ func TestDeletePeer(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			database, cleanup := setupTestDB(t)
+			database, cleanup := testutil.SetupTestDB(t)
 			defer cleanup()
 
 			if tt.setup != nil {
@@ -207,7 +180,7 @@ func TestDeletePeer(t *testing.T) {
 // TestDeletePeer_GroupMembersCleanup verifies that group_members entries are removed
 // when a peer is deleted, even if the peer was in multiple groups.
 func TestDeletePeer_GroupMembersCleanup(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
 	// Insert peer
@@ -269,7 +242,7 @@ func TestDeletePeer_GroupMembersCleanup(t *testing.T) {
 
 // TestDeletePeer_WithRuleBundlesAndLogs verifies that related data is cleaned up.
 func TestDeletePeer_WithRuleBundlesAndLogs(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
 	// Insert peer

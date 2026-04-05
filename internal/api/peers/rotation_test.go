@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"runic/internal/testutil"
 )
 
 // TestGenerateRotationToken verifies token generation produces valid tokens.
@@ -57,7 +59,7 @@ func TestGenerateHMACKey(t *testing.T) {
 
 // TestValidateRotationToken_Valid verifies a valid token passes validation.
 func TestValidateRotationToken_Valid(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
 	rotationTime := time.Now().UTC().Format(time.RFC3339)
@@ -81,7 +83,7 @@ func TestValidateRotationToken_Valid(t *testing.T) {
 
 // TestValidateRotationToken_Invalid verifies an incorrect token fails validation.
 func TestValidateRotationToken_Invalid(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
 	rotationTime := time.Now().UTC().Format(time.RFC3339)
@@ -107,7 +109,7 @@ func TestValidateRotationToken_Invalid(t *testing.T) {
 // NOTE: validateRotationToken is now a pure function - it does NOT clear expired tokens.
 // Use cleanupExpiredTokens() separately for that purpose.
 func TestValidateRotationToken_Expired(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
 	// Set rotation time to 10 minutes ago (expired)
@@ -143,7 +145,7 @@ func TestValidateRotationToken_Expired(t *testing.T) {
 
 // TestValidateRotationToken_NoToken verifies validation fails when no token is set.
 func TestValidateRotationToken_NoToken(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
 	_, err := database.Exec(`
@@ -166,7 +168,7 @@ func TestValidateRotationToken_NoToken(t *testing.T) {
 
 // TestValidateRotationToken_NonExistentPeer verifies validation fails for non-existent peer.
 func TestValidateRotationToken_NonExistentPeer(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
 	valid, err := validateRotationToken(database, 999, "any-token")
@@ -181,7 +183,7 @@ func TestValidateRotationToken_NonExistentPeer(t *testing.T) {
 
 // TestRotatePeerKey_Success verifies admin-initiated key rotation works correctly.
 func TestRotatePeerKey_Success(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
 	_, err := database.Exec(`
@@ -248,7 +250,7 @@ func TestRotatePeerKey_Success(t *testing.T) {
 
 // TestRotatePeerKey_NonExistentPeer verifies rotation fails for non-existent peer.
 func TestRotatePeerKey_NonExistentPeer(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
 	h := NewHandler(database, nil)
@@ -266,7 +268,7 @@ func TestRotatePeerKey_NonExistentPeer(t *testing.T) {
 
 // TestRotatePeerKey_InvalidID verifies rotation fails for invalid peer ID.
 func TestRotatePeerKey_InvalidID(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
 	h := NewHandler(database, nil)
@@ -284,7 +286,7 @@ func TestRotatePeerKey_InvalidID(t *testing.T) {
 
 // TestAgentRotateKey_Success verifies agent-initiated key rotation with valid token.
 func TestAgentRotateKey_Success(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
 	rotationTime := time.Now().UTC().Format(time.RFC3339)
@@ -336,7 +338,7 @@ func TestAgentRotateKey_Success(t *testing.T) {
 
 // TestAgentRotateKey_InvalidToken verifies rotation fails with wrong token.
 func TestAgentRotateKey_InvalidToken(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
 	rotationTime := time.Now().UTC().Format(time.RFC3339)
@@ -371,7 +373,7 @@ func TestAgentRotateKey_InvalidToken(t *testing.T) {
 // comparison which doesn't correctly handle RFC3339 timestamps (T vs space separator).
 // The validateRotationToken function handles this correctly with Go time.Parse.
 func TestAgentRotateKey_ExpiredToken(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
 	// Set rotation time to 10 minutes ago (expired)
@@ -408,7 +410,7 @@ func TestAgentRotateKey_ExpiredToken(t *testing.T) {
 
 // TestAgentRotateKey_NoToken verifies rotation fails when no token is set.
 func TestAgentRotateKey_NoToken(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
 	_, err := database.Exec(`
@@ -463,7 +465,7 @@ func TestAgentRotateKey_MissingFields(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			database, cleanup := setupTestDB(t)
+			database, cleanup := testutil.SetupTestDB(t)
 			defer cleanup()
 
 			h := NewHandler(database, nil)
@@ -484,7 +486,7 @@ func TestAgentRotateKey_MissingFields(t *testing.T) {
 
 // TestAgentRotateKey_InvalidJSON verifies rotation fails with malformed JSON.
 func TestAgentRotateKey_InvalidJSON(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
 	h := NewHandler(database, nil)
@@ -502,7 +504,7 @@ func TestAgentRotateKey_InvalidJSON(t *testing.T) {
 
 // TestAgentRotateKey_TokenIsSingleUse verifies token can only be used once.
 func TestAgentRotateKey_TokenIsSingleUse(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
 	rotationTime := time.Now().UTC().Format(time.RFC3339)
@@ -545,7 +547,7 @@ func TestAgentRotateKey_TokenIsSingleUse(t *testing.T) {
 
 // TestAgentConfirmRotation_Success verifies rotation confirmation works.
 func TestAgentConfirmRotation_Success(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
 	// Insert peer with consumed token (NULL after AgentRotateKey) and recent rotation timestamp
@@ -586,7 +588,7 @@ func TestAgentConfirmRotation_Success(t *testing.T) {
 
 // TestAgentConfirmRotation_PeerNotFound verifies confirmation fails for non-existent peer.
 func TestAgentConfirmRotation_PeerNotFound(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
 	h := NewHandler(database, nil)
@@ -609,7 +611,7 @@ func TestAgentConfirmRotation_PeerNotFound(t *testing.T) {
 
 // TestAgentConfirmRotation_MissingHostID verifies confirmation fails without host_id.
 func TestAgentConfirmRotation_MissingHostID(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
 	h := NewHandler(database, nil)
@@ -630,7 +632,7 @@ func TestAgentConfirmRotation_MissingHostID(t *testing.T) {
 
 // TestConcurrentRotation verifies atomic token consumption prevents race conditions.
 func TestConcurrentRotation(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
 	rotationTime := time.Now().UTC().Format(time.RFC3339)
@@ -692,7 +694,7 @@ func TestConcurrentRotation(t *testing.T) {
 
 // TestFullRotationWorkflow tests the complete rotation flow end-to-end.
 func TestFullRotationWorkflow(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
 	// Step 1: Insert peer with initial key

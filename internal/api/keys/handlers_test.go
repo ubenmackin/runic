@@ -9,34 +9,9 @@ import (
 
 	"github.com/gorilla/mux"
 	_ "github.com/mattn/go-sqlite3"
+
+	"runic/internal/testutil"
 )
-
-func setupTestDB(t *testing.T) (*sql.DB, func()) {
-	t.Helper()
-
-	// Create in-memory SQLite database
-	sqlDB, err := sql.Open("sqlite3", ":memory:")
-	if err != nil {
-		t.Fatalf("failed to open test database: %v", err)
-	}
-
-	// Create system_config table
-	_, err = sqlDB.Exec(`
-CREATE TABLE system_config (
-key TEXT PRIMARY KEY,
-value TEXT NOT NULL,
-created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-)
-`)
-	if err != nil {
-		t.Fatalf("failed to create system_config table: %v", err)
-	}
-
-	return sqlDB, func() {
-		sqlDB.Close()
-	}
-}
 
 func setupRouter(handler *Handler) *mux.Router {
 	router := mux.NewRouter()
@@ -47,7 +22,7 @@ func setupRouter(handler *Handler) *mux.Router {
 }
 
 func TestListKeys_Empty(t *testing.T) {
-	db, cleanup := setupTestDB(t)
+	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
 	handler := NewHandler(db)
@@ -78,7 +53,7 @@ func TestListKeys_Empty(t *testing.T) {
 }
 
 func TestCreateKey_Success(t *testing.T) {
-	testDB, cleanup := setupTestDB(t)
+	testDB, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
 	handler := NewHandler(testDB)
@@ -113,7 +88,7 @@ func TestCreateKey_Success(t *testing.T) {
 }
 
 func TestCreateKey_InvalidType(t *testing.T) {
-	testDB, cleanup := setupTestDB(t)
+	testDB, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
 	handler := NewHandler(testDB)
@@ -129,7 +104,7 @@ func TestCreateKey_InvalidType(t *testing.T) {
 }
 
 func TestDeleteKey_Success(t *testing.T) {
-	testDB, cleanup := setupTestDB(t)
+	testDB, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
 	handler := NewHandler(testDB)
@@ -168,7 +143,7 @@ func TestDeleteKey_Success(t *testing.T) {
 }
 
 func TestDeleteKey_NonExistent(t *testing.T) {
-	testDB, cleanup := setupTestDB(t)
+	testDB, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
 	handler := NewHandler(testDB)
@@ -184,7 +159,7 @@ func TestDeleteKey_NonExistent(t *testing.T) {
 }
 
 func TestListKeys_AfterCreate(t *testing.T) {
-	testDB, cleanup := setupTestDB(t)
+	testDB, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
 	handler := NewHandler(testDB)

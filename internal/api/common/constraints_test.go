@@ -3,95 +3,12 @@ package common
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"testing"
-	"time"
 
 	_ "github.com/mattn/go-sqlite3"
+
+	"runic/internal/testutil"
 )
-
-// setupTestDB creates an in-memory SQLite database for testing
-func setupTestDB(t *testing.T) (*sql.DB, func()) {
-	t.Helper()
-	dsn := fmt.Sprintf("file:testdb%d?mode=memory&cache=shared", time.Now().UnixNano())
-	db, err := sql.Open("sqlite3", dsn)
-	if err != nil {
-		t.Fatalf("failed to open test db: %v", err)
-	}
-
-	// Create schema
-	schema := `
-	CREATE TABLE IF NOT EXISTS peers (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		hostname TEXT UNIQUE NOT NULL,
-		ip_address TEXT NOT NULL,
-		os_type TEXT NOT NULL DEFAULT 'linux',
-		arch TEXT NOT NULL DEFAULT 'amd64',
-		has_docker BOOLEAN NOT NULL DEFAULT 0,
-		agent_key TEXT UNIQUE NOT NULL,
-		agent_token TEXT,
-		agent_version TEXT,
-		is_manual BOOLEAN NOT NULL DEFAULT 0,
-		bundle_version TEXT,
-		hmac_key TEXT NOT NULL,
-		last_heartbeat DATETIME,
-		status TEXT NOT NULL DEFAULT 'pending',
-		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-	);
-
-	CREATE TABLE IF NOT EXISTS groups (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		name TEXT UNIQUE NOT NULL,
-		description TEXT
-	);
-
-	CREATE TABLE IF NOT EXISTS group_members (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		group_id INTEGER NOT NULL,
-		peer_id INTEGER NOT NULL,
-		added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-		FOREIGN KEY(group_id) REFERENCES groups(id) ON DELETE CASCADE,
-		FOREIGN KEY(peer_id) REFERENCES peers(id) ON DELETE CASCADE,
-		UNIQUE(group_id, peer_id)
-	);
-	CREATE INDEX IF NOT EXISTS idx_group_members_peer_id ON group_members(peer_id);
-
-	CREATE TABLE IF NOT EXISTS services (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		name TEXT UNIQUE NOT NULL,
-		ports TEXT NOT NULL DEFAULT '',
-		protocol TEXT NOT NULL DEFAULT 'tcp',
-		description TEXT,
-		direction_hint TEXT NOT NULL DEFAULT 'inbound'
-	);
-
-	CREATE TABLE IF NOT EXISTS policies (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		name TEXT NOT NULL,
-		description TEXT,
-		source_id INTEGER NOT NULL,
-		source_type TEXT NOT NULL DEFAULT 'peer',
-		service_id INTEGER NOT NULL,
-		target_id INTEGER NOT NULL,
-		target_type TEXT NOT NULL DEFAULT 'peer',
-		action TEXT NOT NULL DEFAULT 'ACCEPT' CHECK(action IN ('ACCEPT', 'DROP', 'LOG_DROP')),
-		priority INTEGER NOT NULL DEFAULT 100,
-		enabled BOOLEAN NOT NULL DEFAULT 1,
-		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-		FOREIGN KEY(service_id) REFERENCES services(id)
-	);
-	`
-
-	if _, err := db.Exec(schema); err != nil {
-		t.Fatalf("failed to create schema: %v", err)
-	}
-
-	cleanup := func() {
-		db.Close()
-	}
-	return db, cleanup
-}
 
 // TestCheckPeerDeleteConstraints tests the peer delete constraint checker
 func TestCheckPeerDeleteConstraints(t *testing.T) {
@@ -191,7 +108,7 @@ func TestCheckPeerDeleteConstraints(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			db, cleanup := setupTestDB(t)
+			db, cleanup := testutil.SetupTestDB(t)
 			defer cleanup()
 
 			if tt.setup != nil {
@@ -292,7 +209,7 @@ func TestCheckGroupDeleteConstraints(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			db, cleanup := setupTestDB(t)
+			db, cleanup := testutil.SetupTestDB(t)
 			defer cleanup()
 
 			if tt.setup != nil {
@@ -327,7 +244,7 @@ func TestCheckGroupDeleteConstraints(t *testing.T) {
 
 // TestCheckPeerDeleteConstraintsNonExistentPeer tests behavior with non-existent peer
 func TestCheckPeerDeleteConstraintsNonExistentPeer(t *testing.T) {
-	db, cleanup := setupTestDB(t)
+	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -340,7 +257,7 @@ func TestCheckPeerDeleteConstraintsNonExistentPeer(t *testing.T) {
 
 // TestCheckGroupDeleteConstraintsNonExistentGroup tests behavior with non-existent group
 func TestCheckGroupDeleteConstraintsNonExistentGroup(t *testing.T) {
-	db, cleanup := setupTestDB(t)
+	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
 	ctx := context.Background()
