@@ -1,3 +1,4 @@
+version: "2"
 # golangci-lint configuration
 # See: https://golangci-lint.readthedocs.io/
 
@@ -11,16 +12,18 @@ linters:
     - govet
     - errcheck
     - staticcheck
-    - gosimple
     - ineffassign
     - unused
-    - gofmt
-    - goimports
     - misspell
     - unconvert
     - gocritic
 
-linters-settings:
+formatters:
+  enable:
+    - gofmt
+    - goimports
+
+linters.settings:
   errcheck:
     check-type-assertions: true
     check-blank: true
@@ -45,19 +48,10 @@ linters-settings:
       - -SA1009
 
 issues:
-  exclude-rules:
-    # Exclude some linters from running on tests files
-    - path: _test\.go
-      linters:
-        - gocritic
-        - gosimple
-
-    # Exclude generated files
-    - path: _generated\.go
-      linters:
-        - all
-
-    # Exclude vendor directory
-    - path: vendor/
-      linters:
-        - all
+  exclude:
+    - linters: [gocritic]
+      path: _test\.go
+    - linters: [all]
+      path: _generated\.go
+    - linters: [all]
+      path: vendor/
