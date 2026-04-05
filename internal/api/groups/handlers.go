@@ -7,6 +7,8 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/gorilla/mux"
+
 	"runic/internal/api/common"
 	"runic/internal/db"
 	"runic/internal/engine"
@@ -325,4 +327,16 @@ func (h *Handler) DeleteGroupMember(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// RegisterRoutes adds group routes to the given router.
+func (h *Handler) RegisterRoutes(r *mux.Router) {
+	r.HandleFunc("", h.ListGroups).Methods("GET")
+	r.HandleFunc("", h.CreateGroup).Methods("POST")
+	r.HandleFunc("/{id:[0-9]+}", h.GetGroup).Methods("GET")
+	r.HandleFunc("/{id:[0-9]+}", h.UpdateGroup).Methods("PUT")
+	r.HandleFunc("/{id:[0-9]+}", h.DeleteGroup).Methods("DELETE")
+	r.HandleFunc("/{id:[0-9]+}/members", h.ListGroupMembers).Methods("GET")
+	r.HandleFunc("/{id:[0-9]+}/members", h.AddGroupMember).Methods("POST")
+	r.HandleFunc("/{groupId:[0-9]+}/members/{peerId:[0-9]+}", h.DeleteGroupMember).Methods("DELETE")
 }

@@ -1,5 +1,10 @@
 package auth
 
+// TODO: Pending implementation of test infrastructure for the following:
+// - JWT key mocking (for TestTokenWithDifferentKeys)
+// - Time mocking (for TestTokenValidationAfterExpiration)
+// - Manual token crafting (for TestEmptyClaims)
+
 import (
 	"net/http"
 	"net/http/httptest"
@@ -372,18 +377,6 @@ func TestClaimsStructure(t *testing.T) {
 	}
 }
 
-// TestTokenWithDifferentKeys tests that tokens with different keys don't validate
-func TestTokenWithDifferentKeys(t *testing.T) {
-	// Note: This test is difficult to implement because the JWT key is a global variable
-	// In a real test, you would:
-	// 1. Mock the JwtKey variable
-	// 2. Generate a token with one key
-	// 3. Change the key
-	// 4. Try to validate with the new key
-	// For now, we'll skip this test
-	t.Skip("skipping - requires JWT key mocking")
-}
-
 // TestTokenWithSpecialUsernames tests tokens with special usernames
 func TestTokenWithSpecialUsernames(t *testing.T) {
 	tests := []struct {
@@ -530,24 +523,6 @@ func TestMiddlewareChain(t *testing.T) {
 	if w.Body.String() != "passed" {
 		t.Errorf("expected response %q, got %q", "passed", w.Body.String())
 	}
-}
-
-// TestTokenValidationAfterExpiration tests token validation after expiration
-func TestTokenValidationAfterExpiration(t *testing.T) {
-	// Note: This test would require mocking time or using very short expiration times
-	// For now, we'll test that expired tokens are rejected by using a manually crafted expired token
-	// In a real test, you would:
-	// 1. Generate a token with a very short expiration (e.g., 1ms)
-	// 2. Wait for expiration
-	// 3. Try to validate
-	t.Skip("skipping - requires time mocking")
-}
-
-// TestEmptyClaims tests handling of empty claims
-func TestEmptyClaims(t *testing.T) {
-	// Test with token that has no registered claims
-	// This is a conceptual test - in practice, our tokens always have expiration
-	t.Skip("skipping - requires manual token crafting for edge cases")
 }
 
 // TestConcurrentTokenGeneration tests concurrent token generation

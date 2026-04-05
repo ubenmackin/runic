@@ -10,8 +10,8 @@ import (
 	"runic/internal/models"
 )
 
-// TestApplyBundleSuccess tests successful bundle application
-func TestApplyBundleSuccess(t *testing.T) {
+// TestValidateRulesAndHMAC tests rule validation and HMAC signing/verification
+func TestValidateRulesAndHMAC(t *testing.T) {
 	tests := []struct {
 		name    string
 		bundle  models.BundleResponse
@@ -696,8 +696,8 @@ COMMIT
 	}
 }
 
-// TestSmokeTestValidation tests smoke test scenarios
-func TestSmokeTestValidation(t *testing.T) {
+// TestApplyBundleParameterValidation tests parameter validation for bundle application
+func TestApplyBundleParameterValidation(t *testing.T) {
 	// Note: This test is conceptual - the actual smokeTest function makes HTTP calls
 	// In a real test, you would mock the HTTP client
 
@@ -748,8 +748,8 @@ func TestSmokeTestValidation(t *testing.T) {
 	}
 }
 
-// TestRevertFunctionality tests the revert logic
-func TestRevertFunctionality(t *testing.T) {
+// TestValidateRulesOnBackupStrings tests validation of backup rule strings
+func TestValidateRulesOnBackupStrings(t *testing.T) {
 	backup := `*filter
 :INPUT DROP [0:0]
 :OUTPUT DROP [0:0]

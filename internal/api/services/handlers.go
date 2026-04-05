@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"regexp"
 
+	"github.com/gorilla/mux"
+
 	"runic/internal/api/common"
 	runiclog "runic/internal/common/log"
 	"runic/internal/db"
@@ -314,4 +316,13 @@ func (h *Handler) queueServiceChange(ctx context.Context, serviceID int, action,
 			runiclog.Error("failed to queue service change", "peer_id", peerID, "error", err)
 		}
 	}
+}
+
+// RegisterRoutes adds service routes to the given router.
+func (h *Handler) RegisterRoutes(r *mux.Router) {
+	r.HandleFunc("", h.ListServices).Methods("GET")
+	r.HandleFunc("", h.CreateService).Methods("POST")
+	r.HandleFunc("/{id:[0-9]+}", h.GetService).Methods("GET")
+	r.HandleFunc("/{id:[0-9]+}", h.UpdateService).Methods("PUT")
+	r.HandleFunc("/{id:[0-9]+}", h.DeleteService).Methods("DELETE")
 }

@@ -10,6 +10,8 @@ import (
 	"regexp"
 	"slices"
 
+	"github.com/gorilla/mux"
+
 	"runic/internal/api/agents"
 	"runic/internal/api/common"
 	"runic/internal/common/constants"
@@ -324,4 +326,16 @@ func (h *Handler) GetPeerBundle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	common.RespondJSON(w, http.StatusOK, map[string]string{"content": bundle.RulesContent})
+}
+
+// RegisterRoutes adds peer routes to the given router.
+func (h *Handler) RegisterRoutes(r *mux.Router) {
+	r.HandleFunc("", h.GetPeers).Methods("GET")
+	r.HandleFunc("", h.CreatePeer).Methods("POST")
+	r.HandleFunc("/{id:[0-9]+}", h.GetPeers).Methods("GET")
+	r.HandleFunc("/{id:[0-9]+}", h.UpdatePeer).Methods("PUT")
+	r.HandleFunc("/{id:[0-9]+}", h.DeletePeer).Methods("DELETE")
+	r.HandleFunc("/{id:[0-9]+}/bundle", h.GetPeerBundle).Methods("GET")
+	r.HandleFunc("/{id:[0-9]+}/compile", h.CompilePeer).Methods("POST")
+	r.HandleFunc("/{id:[0-9]+}/rotate-key", h.RotatePeerKey).Methods("POST")
 }

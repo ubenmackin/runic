@@ -152,37 +152,33 @@ func (a *API) RegisterRoutes(r *mux.Router, downloadsDir string) {
 	// Logout
 	protected.Handle("/auth/logout", a.LogoutRateLimiter.Middleware(http.HandlerFunc(a.Auth.HandleLogoutPOST))).Methods("POST")
 
-	// Auth me endpoint
-	protected.HandleFunc("/auth/me", a.Auth.HandleGetMe).Methods("GET")
+	// Auth - viewer routes - use RegisterRoutes
+	authViewer := protected.PathPrefix("/auth").Subrouter()
+	a.Auth.RegisterRoutes(authViewer)
 
-	// Dashboard
-	protected.HandleFunc("/dashboard", a.Dashboard.HandleDashboard).Methods("GET")
+	// Dashboard - viewer routes - use RegisterRoutes
+	dashboardViewer := protected.PathPrefix("/dashboard").Subrouter()
+	a.Dashboard.RegisterRoutes(dashboardViewer)
 
 	// Logs (read)
 	protected.HandleFunc("/logs", a.Logs.GetLogs).Methods("GET")
 	protected.HandleFunc("/logs/stream", logs.MakeLogsStreamHandler(a.LogHub)).Methods("GET")
 
-	// Peers (read-only + compile/rotate-key)
-	protected.HandleFunc("/peers", a.Peers.GetPeers).Methods("GET")
-	protected.HandleFunc("/peers/{id:[0-9]+}/bundle", a.Peers.GetPeerBundle).Methods("GET")
-	protected.HandleFunc("/peers/{id:[0-9]+}/compile", a.Peers.CompilePeer).Methods("POST")
-	protected.HandleFunc("/peers/{id:[0-9]+}/rotate-key", a.Peers.RotatePeerKey).Methods("POST")
+	// Peers (read-only + compile/rotate-key) - viewer routes
+	peersViewer := protected.PathPrefix("/peers").Subrouter()
+	a.Peers.RegisterRoutes(peersViewer)
 
-	// Groups (read-only + members management)
-	protected.HandleFunc("/groups", a.Groups.ListGroups).Methods("GET")
-	protected.HandleFunc("/groups/{id:[0-9]+}", a.Groups.GetGroup).Methods("GET")
-	protected.HandleFunc("/groups/{id:[0-9]+}/members", a.Groups.ListGroupMembers).Methods("GET")
-	protected.HandleFunc("/groups/{id:[0-9]+}/members", a.Groups.AddGroupMember).Methods("POST")
-	protected.HandleFunc("/groups/{groupId:[0-9]+}/members/{peerId:[0-9]+}", a.Groups.DeleteGroupMember).Methods("DELETE")
+	// Groups (read-only + members management) - viewer routes
+	groupsViewer := protected.PathPrefix("/groups").Subrouter()
+	a.Groups.RegisterRoutes(groupsViewer)
 
-	// Services (read-only)
-	protected.HandleFunc("/services", a.Services.ListServices).Methods("GET")
-	protected.HandleFunc("/services/{id:[0-9]+}", a.Services.GetService).Methods("GET")
+	// Services (read-only) - viewer routes
+	servicesViewer := protected.PathPrefix("/services").Subrouter()
+	a.Services.RegisterRoutes(servicesViewer)
 
-	// Policies (read-only)
-	protected.HandleFunc("/policies", a.Policies.ListPolicies).Methods("GET")
-	protected.HandleFunc("/policies/{id:[0-9]+}", a.Policies.GetPolicy).Methods("GET")
-	protected.HandleFunc("/policies/special-targets", a.Policies.ListSpecialTargets).Methods("GET")
+	// Policies (read-only) - viewer routes
+	policiesViewer := protected.PathPrefix("/policies").Subrouter()
+	a.Policies.RegisterRoutes(policiesViewer)
 
 	// Pending changes (viewer routes — read-only)
 	protected.HandleFunc("/pending-changes", a.Pending.ListPendingChanges).Methods("GET")
@@ -222,27 +218,21 @@ func (a *API) RegisterRoutes(r *mux.Router, downloadsDir string) {
 	editor := protected.PathPrefix("").Subrouter()
 	editor.Use(middleware.RequireRole("admin", "editor"))
 
-	// Peer management (write operations)
-	editor.HandleFunc("/peers", a.Peers.CreatePeer).Methods("POST")
-	editor.HandleFunc("/peers/{id:[0-9]+}", a.Peers.UpdatePeer).Methods("PUT")
-	editor.HandleFunc("/peers/{id:[0-9]+}", a.Peers.DeletePeer).Methods("DELETE")
+	// Peer management (write operations) - use RegisterRoutes
+	peersEditor := editor.PathPrefix("/peers").Subrouter()
+	a.Peers.RegisterRoutes(peersEditor)
 
-	// Groups (write operations)
-	editor.HandleFunc("/groups", a.Groups.CreateGroup).Methods("POST")
-	editor.HandleFunc("/groups/{id:[0-9]+}", a.Groups.UpdateGroup).Methods("PUT")
-	editor.HandleFunc("/groups/{id:[0-9]+}", a.Groups.DeleteGroup).Methods("DELETE")
+	// Groups (write operations) - use RegisterRoutes
+	groupsEditor := editor.PathPrefix("/groups").Subrouter()
+	a.Groups.RegisterRoutes(groupsEditor)
 
-	// Services (write operations)
-	editor.HandleFunc("/services", a.Services.CreateService).Methods("POST")
-	editor.HandleFunc("/services/{id:[0-9]+}", a.Services.UpdateService).Methods("PUT")
-	editor.HandleFunc("/services/{id:[0-9]+}", a.Services.DeleteService).Methods("DELETE")
+	// Services (write operations) - use RegisterRoutes
+	servicesEditor := editor.PathPrefix("/services").Subrouter()
+	a.Services.RegisterRoutes(servicesEditor)
 
-	// Policies (write operations)
-	editor.HandleFunc("/policies", a.Policies.CreatePolicy).Methods("POST")
-	editor.HandleFunc("/policies/preview", a.Policies.PolicyPreview).Methods("POST")
-	editor.HandleFunc("/policies/{id:[0-9]+}", a.Policies.UpdatePolicy).Methods("PUT")
-	editor.HandleFunc("/policies/{id:[0-9]+}", a.Policies.PatchPolicy).Methods("PATCH")
-	editor.HandleFunc("/policies/{id:[0-9]+}", a.Policies.DeletePolicy).Methods("DELETE")
+	// Policies (write operations) - use RegisterRoutes
+	policiesEditor := editor.PathPrefix("/policies").Subrouter()
+	a.Policies.RegisterRoutes(policiesEditor)
 
 	// Pending changes (editor+ routes — preview and apply)
 	editor.HandleFunc("/pending-changes/{peerId:[0-9]+}/preview", a.Pending.PreviewPeerPendingBundle).Methods("POST")

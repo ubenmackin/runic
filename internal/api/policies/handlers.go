@@ -7,6 +7,8 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/gorilla/mux"
+
 	"runic/internal/api/common"
 	"runic/internal/engine"
 )
@@ -471,4 +473,16 @@ func (h *Handler) ListSpecialTargets(w http.ResponseWriter, r *http.Request) {
 	targets = common.EnsureSlice(targets)
 
 	common.RespondJSON(w, http.StatusOK, targets)
+}
+
+// RegisterRoutes adds policy routes to the given router.
+func (h *Handler) RegisterRoutes(r *mux.Router) {
+	r.HandleFunc("", h.ListPolicies).Methods("GET")
+	r.HandleFunc("", h.CreatePolicy).Methods("POST")
+	r.HandleFunc("/preview", h.PolicyPreview).Methods("POST")
+	r.HandleFunc("/{id:[0-9]+}", h.GetPolicy).Methods("GET")
+	r.HandleFunc("/{id:[0-9]+}", h.UpdatePolicy).Methods("PUT")
+	r.HandleFunc("/{id:[0-9]+}", h.PatchPolicy).Methods("PATCH")
+	r.HandleFunc("/{id:[0-9]+}", h.DeletePolicy).Methods("DELETE")
+	r.HandleFunc("/special-targets", h.ListSpecialTargets).Methods("GET")
 }

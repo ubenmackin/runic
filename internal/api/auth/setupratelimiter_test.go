@@ -36,10 +36,6 @@ func TestCheckSetupRateLimit_LimitTests(t *testing.T) {
 
 // TestCheckSetupRateLimit_WindowReset tests that the limit resets after the time window
 func TestCheckSetupRateLimit_WindowReset(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping window reset test in short mode")
-	}
-
 	testIP := "192.168.1.101:12345"
 
 	// Create a new rate limiter for testing

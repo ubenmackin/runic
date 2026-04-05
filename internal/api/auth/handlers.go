@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/gorilla/mux"
 	"github.com/mattn/go-sqlite3"
 	"golang.org/x/crypto/bcrypt"
 
@@ -367,4 +368,9 @@ func (h *Handler) HandleRefreshPOST(w http.ResponseWriter, r *http.Request) {
 
 	setAuthCookies(w, accessToken, refreshToken)
 	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// RegisterRoutes adds auth routes to the given router.
+func (h *Handler) RegisterRoutes(r *mux.Router) {
+	r.HandleFunc("/me", h.HandleGetMe).Methods("GET")
 }

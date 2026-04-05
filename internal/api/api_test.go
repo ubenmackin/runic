@@ -1,5 +1,8 @@
 package api
 
+// TODO: Pending implementation of test infrastructure for mocking database connections.
+// Tests that require mock DB: TestDatabaseConnectionFailures
+
 import (
 	"bytes"
 	"context"
@@ -945,8 +948,8 @@ func TestCreateService(t *testing.T) {
 	}
 }
 
-// TestGroupMembers tests group member operations
-func TestGroupMembers(t *testing.T) {
+// TestAddAndListGroupMembers tests group member operations
+func TestAddAndListGroupMembers(t *testing.T) {
 	api, database, cleanup := setupTestAPI(t)
 	defer cleanup()
 
@@ -1120,15 +1123,6 @@ func TestJSONDecoding(t *testing.T) {
 			}
 		})
 	}
-}
-
-// TestDatabaseConnectionFailures tests database failure scenarios
-func TestDatabaseConnectionFailures(t *testing.T) {
-	// This test is conceptual - in a real test, you would:
-	// 1. Mock the database connection
-	// 2. Simulate connection errors
-	// 3. Verify proper error handling
-	t.Skip("skipping - requires database mocking")
 }
 
 // TestConcurrentRequests tests concurrent API requests

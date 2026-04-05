@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/gorilla/mux"
+
 	"runic/internal/api/common"
 	"runic/internal/common/constants"
 	"runic/internal/common/log"
@@ -206,4 +208,9 @@ func (h *Handler) HandleDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	common.RespondJSON(w, http.StatusOK, map[string]interface{}{"data": stats})
+}
+
+// RegisterRoutes adds dashboard routes to the given router.
+func (h *Handler) RegisterRoutes(r *mux.Router) {
+	r.HandleFunc("", h.HandleDashboard).Methods("GET")
 }

@@ -26,6 +26,23 @@ func NewCompiler(database *sql.DB) *Compiler {
 	}
 }
 
+// policyInfo holds the extracted policy fields needed for rule compilation.
+type policyInfo struct {
+	ID          int
+	Name        string
+	SourceID    int
+	SourceType  string
+	ServiceID   int
+	TargetID    int
+	TargetType  string
+	Action      string
+	Priority    int
+	TargetScope string
+	Direction   string
+	IsTarget    bool
+	IsSource    bool
+}
+
 // ruleWriter writes iptables rules for a specific action to a strings.Builder.
 // The match parameter contains everything between "-A CHAIN" and "-j ACTION".
 type ruleWriter struct{ buf *strings.Builder }
@@ -56,6 +73,44 @@ func (rw *ruleWriter) writeAction(action, chain, match string) {
 
 func (rw *ruleWriter) newline() {
 	rw.buf.WriteString("\n")
+}
+
+func (rw *ruleWriter) writeStandardRules(hasDocker bool, controlPlanePort string) {
+	// loopback
+	rw.buf.WriteString("# --- Standard: loopback ---\n")
+	rw.buf.WriteString("-A INPUT -i lo -j ACCEPT\n")
+	rw.buf.WriteString("-A OUTPUT -o lo -j ACCEPT\n")
+	rw.buf.WriteString("\n")
+
+	// ICMP RELATED
+	rw.buf.WriteString("# --- Standard: ICMP RELATED ---\n")
+	rw.buf.WriteString("-A INPUT -p icmp -m conntrack --ctstate RELATED -j ACCEPT\n")
+	rw.buf.WriteString("-A OUTPUT -p icmp -m conntrack --ctstate RELATED -j ACCEPT\n")
+	rw.buf.WriteString("\n")
+
+	// INVALID
+	rw.buf.WriteString("# --- Standard: INVALID packet drop ---\n")
+	rw.buf.WriteString("-A INPUT -m conntrack --ctstate INVALID -j DROP\n")
+	rw.buf.WriteString("\n")
+
+	// Control Plane Communication
+	if controlPlanePort != "" {
+		rw.buf.WriteString("# --- Standard: Control Plane Communication ---\n")
+		rw.buf.WriteString(fmt.Sprintf("# Allows agent to communicate with control plane on port %s\n", controlPlanePort))
+		rw.buf.WriteString(fmt.Sprintf("-A INPUT -p tcp --dport %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", controlPlanePort))
+		rw.buf.WriteString(fmt.Sprintf("-A OUTPUT -p tcp --sport %s -m conntrack --ctstate ESTABLISHED -j ACCEPT\n", controlPlanePort))
+		rw.buf.WriteString(fmt.Sprintf("-A OUTPUT -p tcp --dport %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", controlPlanePort))
+		rw.buf.WriteString(fmt.Sprintf("-A INPUT -p tcp --sport %s -m conntrack --ctstate ESTABLISHED -j ACCEPT\n", controlPlanePort))
+		rw.buf.WriteString("\n")
+	}
+
+	// Docker standard rules
+	if hasDocker {
+		rw.buf.WriteString("# --- Docker: Standard rules for DOCKER-USER ---\n")
+		rw.buf.WriteString("-A DOCKER-USER -p icmp -m conntrack --ctstate RELATED -j ACCEPT\n")
+		rw.buf.WriteString("-A DOCKER-USER -m conntrack --ctstate INVALID -j DROP\n")
+		rw.buf.WriteString("\n")
+	}
 }
 
 // Compile produces a complete iptables-restore payload for the given peer.
@@ -99,22 +154,6 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 		return "", fmt.Errorf("load policies: %w", err)
 	}
 	defer rows.Close()
-
-	type policyInfo struct {
-		ID          int
-		Name        string
-		SourceID    int
-		SourceType  string
-		ServiceID   int
-		TargetID    int
-		TargetType  string
-		Action      string
-		Priority    int
-		TargetScope string
-		Direction   string
-		IsTarget    bool
-		IsSource    bool
-	}
 
 	var policies []policyInfo
 	for rows.Next() {
@@ -232,51 +271,17 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 
 	buf.WriteString("\n")
 
-	// Standard rules: loopback
-	buf.WriteString("# --- Standard: loopback ---\n")
-	buf.WriteString("-A INPUT -i lo -j ACCEPT\n")
-	buf.WriteString("-A OUTPUT -o lo -j ACCEPT\n")
-	buf.WriteString("\n")
-
-	// Standard rules: ICMP RELATED (error messages for allowed connections)
-	buf.WriteString("# --- Standard: ICMP RELATED ---\n")
-	buf.WriteString("-A INPUT -p icmp -m conntrack --ctstate RELATED -j ACCEPT\n")
-	buf.WriteString("-A OUTPUT -p icmp -m conntrack --ctstate RELATED -j ACCEPT\n")
-	buf.WriteString("\n")
-
-	// Standard rules: INVALID packet drop
-	buf.WriteString("# --- Standard: INVALID packet drop ---\n")
-	buf.WriteString("-A INPUT -m conntrack --ctstate INVALID -j DROP\n")
-	buf.WriteString("\n")
-
-	// Standard rules: Control Plane Communication
-	// Read control plane port from system_config
+	// Query control plane port before calling writeStandardRules
 	var controlPlanePort string
-	err = c.db.QueryRowContext(ctx, "SELECT value FROM system_config WHERE key = 'control_plane_port'").Scan(&controlPlanePort)
-	if err == nil && controlPlanePort != "" {
-		buf.WriteString("# --- Standard: Control Plane Communication ---\n")
-		buf.WriteString(fmt.Sprintf("# Allows agent to communicate with control plane on port %s\n", controlPlanePort))
-		// Allow inbound from control plane (for push notifications/commands)
-		buf.WriteString(fmt.Sprintf("-A INPUT -p tcp --dport %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", controlPlanePort))
-		buf.WriteString(fmt.Sprintf("-A OUTPUT -p tcp --sport %s -m conntrack --ctstate ESTABLISHED -j ACCEPT\n", controlPlanePort))
-		// Allow outbound to control plane (for heartbeats, bundle pulls, key rotation)
-		buf.WriteString(fmt.Sprintf("-A OUTPUT -p tcp --dport %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", controlPlanePort))
-		buf.WriteString(fmt.Sprintf("-A INPUT -p tcp --sport %s -m conntrack --ctstate ESTABLISHED -j ACCEPT\n", controlPlanePort))
-		buf.WriteString("\n")
-	}
+	_ = c.db.QueryRowContext(ctx, "SELECT value FROM system_config WHERE key = 'control_plane_port'").Scan(&controlPlanePort)
+
+	// Standard rules (extracted to helper)
+	rw.writeStandardRules(hasDocker, controlPlanePort)
 
 	// Docker: Control Plane Communication
-	if hasDocker && err == nil && controlPlanePort != "" {
+	if hasDocker && controlPlanePort != "" {
 		buf.WriteString("# --- Docker: Control Plane Communication ---\n")
 		buf.WriteString(fmt.Sprintf("-A DOCKER-USER -p tcp --dport %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", controlPlanePort))
-		buf.WriteString("\n")
-	}
-
-	// Docker standard rules: Add ICMP RELATED and INVALID to DOCKER-USER chain
-	if hasDocker {
-		buf.WriteString("# --- Docker: Standard rules for DOCKER-USER ---\n")
-		buf.WriteString("-A DOCKER-USER -p icmp -m conntrack --ctstate RELATED -j ACCEPT\n")
-		buf.WriteString("-A DOCKER-USER -m conntrack --ctstate INVALID -j DROP\n")
 		buf.WriteString("\n")
 	}
 
@@ -323,31 +328,8 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 				if serviceName == "Multicast" {
 					c.writeMulticastRule(rw, pol.Action, pol.TargetScope, hasDocker)
 				} else {
-					for _, pc := range portClauses {
-						inputPortMatch := pc.PortMatch
-						if pc.SrcPortMatch != "" {
-							inputPortMatch = pc.SrcPortMatch + " " + inputPortMatch
-						}
-						outputPortMatch := invertPortMatch(pc.PortMatch, pc.SrcPortMatch)
-						ipsetMatch := fmt.Sprintf("-m set --match-set %s src", ipsetName)
-
-						if writeToHost {
-							if pol.Action == "ACCEPT" {
-								rw.writeAction(pol.Action, "INPUT", fmt.Sprintf("-p %s %s %s -m conntrack --ctstate NEW,ESTABLISHED", pc.Protocol, ipsetMatch, inputPortMatch))
-							} else {
-								rw.writeAction(pol.Action, "INPUT", fmt.Sprintf("-p %s %s %s", pc.Protocol, ipsetMatch, inputPortMatch))
-							}
-							if pol.Action == "ACCEPT" {
-								rw.accept("OUTPUT", fmt.Sprintf("-p %s %s %s -m conntrack --ctstate ESTABLISHED", pc.Protocol, ipsetMatch, outputPortMatch))
-							}
-						}
-						if writeToDocker {
-							if pol.Action == "ACCEPT" {
-								rw.writeAction(pol.Action, "DOCKER-USER", fmt.Sprintf("-p %s %s %s -m conntrack --ctstate NEW,ESTABLISHED", pc.Protocol, ipsetMatch, inputPortMatch))
-							} else {
-								rw.writeAction(pol.Action, "DOCKER-USER", fmt.Sprintf("-p %s %s %s", pc.Protocol, ipsetMatch, inputPortMatch))
-							}
-						}
+					if err := c.writeTargetRules(ctx, rw, pol, portClauses, true, ipsetName, nil, ipAddress, writeToHost, writeToDocker); err != nil {
+						return "", err
 					}
 				}
 			} else {
@@ -362,37 +344,11 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 				if err != nil {
 					return "", fmt.Errorf("resolve source for policy %s: %w", pol.Name, err)
 				}
-				for _, cidr := range cidrs {
-					if serviceName == "Multicast" {
-						c.writeMulticastRule(rw, pol.Action, pol.TargetScope, hasDocker)
-						continue
-					}
-					for _, pc := range portClauses {
-						// For INPUT (ingress): use destination ports as --dport, source ports as --sport
-						inputPortMatch := pc.PortMatch
-						if pc.SrcPortMatch != "" {
-							inputPortMatch = pc.SrcPortMatch + " " + inputPortMatch
-						}
-						// For OUTPUT (egress): swap - destination ports become --sport, source ports become --dport
-						outputPortMatch := invertPortMatch(pc.PortMatch, pc.SrcPortMatch)
-
-						if writeToHost {
-							if pol.Action == "ACCEPT" {
-								rw.writeAction(pol.Action, "INPUT", fmt.Sprintf("-s %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED", cidr, pc.Protocol, inputPortMatch))
-							} else {
-								rw.writeAction(pol.Action, "INPUT", fmt.Sprintf("-s %s -p %s %s", cidr, pc.Protocol, inputPortMatch))
-							}
-							if pol.Action == "ACCEPT" {
-								rw.accept("OUTPUT", fmt.Sprintf("-d %s -p %s %s -m conntrack --ctstate ESTABLISHED", cidr, pc.Protocol, outputPortMatch))
-							}
-						}
-						if writeToDocker {
-							if pol.Action == "ACCEPT" {
-								rw.writeAction(pol.Action, "DOCKER-USER", fmt.Sprintf("-s %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED", cidr, pc.Protocol, inputPortMatch))
-							} else {
-								rw.writeAction(pol.Action, "DOCKER-USER", fmt.Sprintf("-s %s -p %s %s", cidr, pc.Protocol, inputPortMatch))
-							}
-						}
+				if serviceName == "Multicast" {
+					c.writeMulticastRule(rw, pol.Action, pol.TargetScope, hasDocker)
+				} else {
+					if err := c.writeTargetRules(ctx, rw, pol, portClauses, false, "", cidrs, ipAddress, writeToHost, writeToDocker); err != nil {
+						return "", err
 					}
 				}
 			}
@@ -418,17 +374,8 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 						buf.WriteString("-A OUTPUT -d 224.0.0.0/4 -m pkttype --pkt-type multicast -j ACCEPT\n")
 					}
 				} else {
-					for _, pc := range portClauses {
-						outputPortMatch := pc.PortMatch
-						if pc.SrcPortMatch != "" {
-							outputPortMatch = pc.SrcPortMatch + " " + outputPortMatch
-						}
-						inputPortMatch := invertPortMatch(pc.PortMatch, pc.SrcPortMatch)
-						ipsetMatchSrc := fmt.Sprintf("-m set --match-set %s src", ipsetName)
-						ipsetMatchDst := fmt.Sprintf("-m set --match-set %s dst", ipsetName)
-
-						rw.writeAction(pol.Action, "OUTPUT", fmt.Sprintf("-p %s %s %s -m conntrack --ctstate NEW,ESTABLISHED", pc.Protocol, ipsetMatchDst, outputPortMatch))
-						rw.writeAction(pol.Action, "INPUT", fmt.Sprintf("-p %s %s %s -m conntrack --ctstate ESTABLISHED", pc.Protocol, ipsetMatchSrc, inputPortMatch))
+					if err := c.writeSourceRules(ctx, rw, pol, portClauses, true, ipsetName, nil, ipAddress, writeToHost, writeToDocker); err != nil {
+						return "", err
 					}
 				}
 			} else {
@@ -443,31 +390,14 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 				if err != nil {
 					return "", fmt.Errorf("resolve target for policy %s: %w", pol.Name, err)
 				}
-				for _, cidr := range cidrs {
-					if serviceName == "Multicast" {
-						// Source for multicast doesn't need strict port tracking, just let it output to multicast range 224.0.0.0/4
-						if pol.Action == "ACCEPT" {
-							buf.WriteString("-A OUTPUT -d 224.0.0.0/4 -m pkttype --pkt-type multicast -j ACCEPT\n")
-						}
-						continue
+				if serviceName == "Multicast" {
+					// Source for multicast doesn't need strict port tracking, just let it output to multicast range 224.0.0.0/4
+					if pol.Action == "ACCEPT" {
+						buf.WriteString("-A OUTPUT -d 224.0.0.0/4 -m pkttype --pkt-type multicast -j ACCEPT\n")
 					}
-					for _, pc := range portClauses {
-						// For OUTPUT (egress from source): use destination port directly (sending TO the server port)
-						outputPortMatch := pc.PortMatch
-						if pc.SrcPortMatch != "" {
-							outputPortMatch = pc.SrcPortMatch + " " + outputPortMatch
-						}
-						// For INPUT (response): inverted — server responds from its port back to our ephemeral port
-						inputPortMatch := invertPortMatch(pc.PortMatch, pc.SrcPortMatch)
-
-						if pol.Action == "ACCEPT" {
-							rw.writeAction(pol.Action, "OUTPUT", fmt.Sprintf("-d %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED", cidr, pc.Protocol, outputPortMatch))
-						} else {
-							rw.writeAction(pol.Action, "OUTPUT", fmt.Sprintf("-d %s -p %s %s", cidr, pc.Protocol, outputPortMatch))
-						}
-						if pol.Action == "ACCEPT" {
-							rw.accept("INPUT", fmt.Sprintf("-s %s -p %s %s -m conntrack --ctstate ESTABLISHED", cidr, pc.Protocol, inputPortMatch))
-						}
+				} else {
+					if err := c.writeSourceRules(ctx, rw, pol, portClauses, false, "", cidrs, ipAddress, writeToHost, writeToDocker); err != nil {
+						return "", err
 					}
 				}
 			}
@@ -507,6 +437,107 @@ func (c *Compiler) writeMulticastRule(rw *ruleWriter, action string, targetScope
 		rw.writeAction(action, "DOCKER-USER", "-m pkttype --pkt-type multicast")
 	}
 	rw.newline()
+}
+
+// writeTargetRules writes ingress (target) rules for a policy.
+// When useIpset is true, ipsetName contains the ipset to match against.
+// When useIpset is false, cidrs contains the individual CIDRs to generate rules for.
+func (c *Compiler) writeTargetRules(
+	ctx context.Context,
+	rw *ruleWriter,
+	pol policyInfo,
+	portClauses []PortClause,
+	useIpset bool,
+	ipsetName string,
+	cidrs []string,
+	ipAddress string,
+	writeToHost, writeToDocker bool,
+) error {
+	for _, pc := range portClauses {
+		inputPortMatch := pc.PortMatch
+		if pc.SrcPortMatch != "" {
+			inputPortMatch = pc.SrcPortMatch + " " + inputPortMatch
+		}
+		outputPortMatch := invertPortMatch(pc.PortMatch, pc.SrcPortMatch)
+
+		if useIpset {
+			ipsetMatch := fmt.Sprintf("-m set --match-set %s src", ipsetName)
+			if writeToHost {
+				if pol.Action == "ACCEPT" {
+					rw.writeAction(pol.Action, "INPUT", fmt.Sprintf("-p %s %s %s -m conntrack --ctstate NEW,ESTABLISHED", pc.Protocol, ipsetMatch, inputPortMatch))
+					rw.accept("OUTPUT", fmt.Sprintf("-p %s %s %s -m conntrack --ctstate ESTABLISHED", pc.Protocol, ipsetMatch, outputPortMatch))
+				} else {
+					rw.writeAction(pol.Action, "INPUT", fmt.Sprintf("-p %s %s %s", pc.Protocol, ipsetMatch, inputPortMatch))
+				}
+			}
+			if writeToDocker {
+				if pol.Action == "ACCEPT" {
+					rw.writeAction(pol.Action, "DOCKER-USER", fmt.Sprintf("-p %s %s %s -m conntrack --ctstate NEW,ESTABLISHED", pc.Protocol, ipsetMatch, inputPortMatch))
+				} else {
+					rw.writeAction(pol.Action, "DOCKER-USER", fmt.Sprintf("-p %s %s %s", pc.Protocol, ipsetMatch, inputPortMatch))
+				}
+			}
+		} else {
+			for _, cidr := range cidrs {
+				if writeToHost {
+					if pol.Action == "ACCEPT" {
+						rw.writeAction(pol.Action, "INPUT", fmt.Sprintf("-s %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED", cidr, pc.Protocol, inputPortMatch))
+						rw.accept("OUTPUT", fmt.Sprintf("-d %s -p %s %s -m conntrack --ctstate ESTABLISHED", cidr, pc.Protocol, outputPortMatch))
+					} else {
+						rw.writeAction(pol.Action, "INPUT", fmt.Sprintf("-s %s -p %s %s", cidr, pc.Protocol, inputPortMatch))
+					}
+				}
+				if writeToDocker {
+					if pol.Action == "ACCEPT" {
+						rw.writeAction(pol.Action, "DOCKER-USER", fmt.Sprintf("-s %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED", cidr, pc.Protocol, inputPortMatch))
+					} else {
+						rw.writeAction(pol.Action, "DOCKER-USER", fmt.Sprintf("-s %s -p %s %s", cidr, pc.Protocol, inputPortMatch))
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// writeSourceRules writes egress (source) rules for a policy.
+// When useIpset is true, ipsetName contains the ipset to match against.
+// When useIpset is false, cidrs contains the individual CIDRs to generate rules for.
+func (c *Compiler) writeSourceRules(
+	ctx context.Context,
+	rw *ruleWriter,
+	pol policyInfo,
+	portClauses []PortClause,
+	useIpset bool,
+	ipsetName string,
+	cidrs []string,
+	ipAddress string,
+	writeToHost, writeToDocker bool,
+) error {
+	for _, pc := range portClauses {
+		outputPortMatch := pc.PortMatch
+		if pc.SrcPortMatch != "" {
+			outputPortMatch = pc.SrcPortMatch + " " + outputPortMatch
+		}
+		inputPortMatch := invertPortMatch(pc.PortMatch, pc.SrcPortMatch)
+
+		if useIpset {
+			ipsetMatchSrc := fmt.Sprintf("-m set --match-set %s src", ipsetName)
+			ipsetMatchDst := fmt.Sprintf("-m set --match-set %s dst", ipsetName)
+			rw.writeAction(pol.Action, "OUTPUT", fmt.Sprintf("-p %s %s %s -m conntrack --ctstate NEW,ESTABLISHED", pc.Protocol, ipsetMatchDst, outputPortMatch))
+			rw.writeAction(pol.Action, "INPUT", fmt.Sprintf("-p %s %s %s -m conntrack --ctstate ESTABLISHED", pc.Protocol, ipsetMatchSrc, inputPortMatch))
+		} else {
+			for _, cidr := range cidrs {
+				if pol.Action == "ACCEPT" {
+					rw.writeAction(pol.Action, "OUTPUT", fmt.Sprintf("-d %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED", cidr, pc.Protocol, outputPortMatch))
+					rw.accept("INPUT", fmt.Sprintf("-s %s -p %s %s -m conntrack --ctstate ESTABLISHED", cidr, pc.Protocol, inputPortMatch))
+				} else {
+					rw.writeAction(pol.Action, "OUTPUT", fmt.Sprintf("-d %s -p %s %s", cidr, pc.Protocol, outputPortMatch))
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // PreviewCompile generates a preview of iptables rules for a policy without storing them.
