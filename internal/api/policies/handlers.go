@@ -99,6 +99,14 @@ func (h *Handler) CreatePolicy(w http.ResponseWriter, r *http.Request) {
 		common.RespondError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
+
+	// Validate name
+	if input.Name != "" {
+		if err := common.ValidateName(input.Name); err != nil {
+			common.RespondError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
 	if len(input.Name) > 255 {
 		common.RespondError(w, http.StatusBadRequest, "policy name must not exceed 255 characters")
 		return
@@ -228,6 +236,14 @@ func (h *Handler) UpdatePolicy(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		common.RespondError(w, http.StatusBadRequest, "invalid JSON")
 		return
+	}
+
+	// Validate name
+	if input.Name != "" {
+		if err := common.ValidateName(input.Name); err != nil {
+			common.RespondError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 	}
 	if len(input.Name) > 255 {
 		common.RespondError(w, http.StatusBadRequest, "policy name must not exceed 255 characters")

@@ -21,8 +21,35 @@ func Schema() string {
 	return schemaSQL
 }
 
+// Safelist of allowed tables for migrations.
+// This prevents SQL injection through malicious table/column names
+// in migration helper functions. Only hardcoded table names are permitted.
+var allowedTables = map[string]bool{
+	"users":                   true,
+	"peers":                   true,
+	"services":                true,
+	"groups":                  true,
+	"policies":                true,
+	"revoked_tokens":          true,
+	"rule_bundles":            true,
+	"firewall_logs":           true,
+	"group_members":           true,
+	"special_targets":         true,
+	"system_config":           true,
+	"registration_tokens":     true,
+	"pending_changes":         true,
+	"pending_bundle_previews": true,
+}
+
 // columnExists checks if a column exists in a table using pragma_table_info.
+// Note: table name is validated by allowedTables safelist in the caller (addColumnIfMissing).
+// We use fmt.Sprintf here because SQLite doesn't support parameterized identifiers.
 func columnExists(database *sql.DB, table, column string) (bool, error) {
+	// Validate table name against safelist to prevent SQL injection
+	if !allowedTables[table] {
+		return false, fmt.Errorf("table %q not in migration safelist", table)
+	}
+
 	var exists bool
 	err := database.QueryRow(
 		fmt.Sprintf("SELECT COUNT(*) > 0 FROM pragma_table_info('%s') WHERE name='%s'", table, column),
@@ -35,6 +62,11 @@ func columnExists(database *sql.DB, table, column string) (bool, error) {
 
 // addColumnIfMissing adds a column to a table if it doesn't already exist.
 func addColumnIfMissing(database *sql.DB, table, column, definition string) error {
+	// Validate table name against safelist to prevent SQL injection
+	if !allowedTables[table] {
+		return fmt.Errorf("table %q not in migration safelist", table)
+	}
+
 	exists, err := columnExists(database, table, column)
 	if err != nil {
 		return err

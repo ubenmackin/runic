@@ -1,5 +1,45 @@
 package api
 
+// =============================================================================
+// RATE LIMITING STRATEGY
+// =============================================================================
+//
+// This file implements rate limiting using a SLIDING WINDOW algorithm.
+// The implementation is in the 'ratelimit.go' file in this package.
+//
+// Algorithm: Sliding Window
+// ----------------
+// - Each client IP maintains a sliding window of request timestamps
+// - Requests are allowed if the count of requests within the window < limit
+// - Old timestamps are filtered out on each check (O(n) where n = requests in window)
+// - Background goroutine cleans up stale entries every 5 minutes to prevent memory leaks
+//
+// Configuration:
+// ----------------
+// Rate limiters are created in api.go with the following limits:
+//   - Login: 5 requests per minute (prevents brute force attacks)
+//   - Register: 10 requests per minute (prevents spam registration)
+//   - Refresh token: 10 requests per minute
+//   - Logout: 10 requests per minute
+//   - Downloads: 10 requests per minute (prevents bandwidth abuse)
+//
+// Covered Endpoints:
+// ----------------
+// All protected endpoints use rate limiting:
+//   - POST /api/v1/auth/login
+//   - POST /api/v1/auth/register
+//   - POST /api/v1/auth/refresh
+//   - POST /api/v1/auth/logout
+//   - GET /downloads/{filename}
+//
+// Future Improvements:
+// ----------------
+// - Consider token bucket algorithm for burst handling
+// - Consider Redis-backed rate limiter for multi-instance deployments
+// - Add rate limit headers (X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset)
+//
+// =============================================================================
+
 import (
 	"context"
 	"crypto/rand"
@@ -115,6 +155,19 @@ func CSPForAPI() mux.MiddlewareFunc {
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// SecurityHeaders returns a middleware that sets common security headers on all responses.
+// This middleware is applied as the outermost layer to ensure all responses include security headers.
+func SecurityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("X-XSS-Protection", "1; mode=block")
+		w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+		w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
+		next.ServeHTTP(w, r)
+	})
 }
 
 // generateUUID generates a random UUID using crypto/rand.

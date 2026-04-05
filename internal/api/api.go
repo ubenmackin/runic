@@ -105,6 +105,9 @@ func GetAPI(ctx context.Context) *API {
 // RegisterRoutes registers all API routes. Accepts an API instance for rule compilation endpoints.
 func (a *API) RegisterRoutes(r *mux.Router, downloadsDir string) {
 
+	// Apply SecurityHeaders as the outermost middleware to ensure ALL responses include security headers
+	r.Use(SecurityHeaders)
+
 	// Apply RequestID middleware to all routes
 	r.Use(RequestID())
 

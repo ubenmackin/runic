@@ -81,6 +81,14 @@ func (h *Handler) CreateGroup(w http.ResponseWriter, r *http.Request) {
 		common.RespondError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
+
+	// Validate name
+	if input.Name != "" {
+		if err := common.ValidateName(input.Name); err != nil {
+			common.RespondError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
 	if input.Name == "" {
 		common.RespondError(w, http.StatusBadRequest, "name is required")
 		return
@@ -133,6 +141,14 @@ func (h *Handler) UpdateGroup(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		common.RespondError(w, http.StatusBadRequest, "invalid JSON")
 		return
+	}
+
+	// Validate name
+	if input.Name != "" {
+		if err := common.ValidateName(input.Name); err != nil {
+			common.RespondError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 	}
 
 	_, err = h.DB.ExecContext(r.Context(),

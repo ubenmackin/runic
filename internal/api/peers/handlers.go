@@ -213,6 +213,22 @@ func (h *Handler) UpdatePeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validate hostname
+	if input.Hostname != "" {
+		if err := common.ValidateHostname(input.Hostname); err != nil {
+			common.RespondError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+
+	// Validate IP address
+	if input.IPAddress != "" {
+		if err := common.ValidateIPAddress(input.IPAddress); err != nil {
+			common.RespondError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+
 	// Validate this is a manual peer (only manual peers can be edited)
 	var isManual bool
 	err = h.DB.QueryRowContext(r.Context(), "SELECT is_manual FROM peers WHERE id = ?", id).Scan(&isManual)
