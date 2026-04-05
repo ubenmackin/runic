@@ -273,7 +273,10 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 
 	// Query control plane port before calling writeStandardRules
 	var controlPlanePort string
-	_ = c.db.QueryRowContext(ctx, "SELECT value FROM system_config WHERE key = 'control_plane_port'").Scan(&controlPlanePort)
+	if err := c.db.QueryRowContext(ctx, "SELECT value FROM system_config WHERE key = 'control_plane_port'").Scan(&controlPlanePort); err != nil {
+		log.WarnContext(ctx, "Failed to load control_plane_port, using default 8080", "error", err)
+		controlPlanePort = "8080"
+	}
 
 	// Standard rules (extracted to helper)
 	rw.writeStandardRules(hasDocker, controlPlanePort)
@@ -585,17 +588,33 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 	// Resolve source CIDRs
 	var sourceCIDRs []string
 	if sourceType == "special" {
-		sourceCIDRs, _ = c.resolver.ResolveSpecialTarget(ctx, sourceID, ipAddress)
+		var err error
+		sourceCIDRs, err = c.resolver.ResolveSpecialTarget(ctx, sourceID, ipAddress)
+		if err != nil {
+			return nil, fmt.Errorf("resolve source special target %d: %w", sourceID, err)
+		}
 	} else {
-		sourceCIDRs, _ = c.resolver.ResolveEntity(ctx, sourceType, sourceID)
+		var err error
+		sourceCIDRs, err = c.resolver.ResolveEntity(ctx, sourceType, sourceID)
+		if err != nil {
+			return nil, fmt.Errorf("resolve source entity %s/%d: %w", sourceType, sourceID, err)
+		}
 	}
 
 	// Resolve target CIDRs
 	var targetCIDRs []string
 	if targetType == "special" {
-		targetCIDRs, _ = c.resolver.ResolveSpecialTarget(ctx, targetID, ipAddress)
+		var err error
+		targetCIDRs, err = c.resolver.ResolveSpecialTarget(ctx, targetID, ipAddress)
+		if err != nil {
+			return nil, fmt.Errorf("resolve target special target %d: %w", targetID, err)
+		}
 	} else {
-		targetCIDRs, _ = c.resolver.ResolveEntity(ctx, targetType, targetID)
+		var err error
+		targetCIDRs, err = c.resolver.ResolveEntity(ctx, targetType, targetID)
+		if err != nil {
+			return nil, fmt.Errorf("resolve target entity %s/%d: %w", targetType, targetID, err)
+		}
 	}
 
 	// Forward: Source initiates connections TO Target
@@ -758,7 +777,11 @@ func (c *Compiler) RecompileAffectedPeers(ctx context.Context, groupID int) erro
 
 	peerSet := make(map[int]bool)
 	for _, pid := range policyIDs {
-		affected, _ := c.GetAffectedPeersByPolicy(ctx, pid)
+		affected, err := c.GetAffectedPeersByPolicy(ctx, pid)
+		if err != nil {
+			log.ErrorContext(ctx, "Failed to get affected peers for recompile", "policy_id", pid, "error", err)
+			continue
+		}
 		for _, peerID := range affected {
 			peerSet[peerID] = true
 		}

@@ -64,33 +64,45 @@ func (h *Handler) HandleDashboard(w http.ResponseWriter, r *http.Request) {
 
 	// Count peers
 	rows, err := h.DB.QueryContext(r.Context(), `SELECT COUNT(*) FROM peers`)
-	if err == nil {
+	if err != nil {
+		log.ErrorContext(r.Context(), "failed to count peers", "error", err)
+		stats.TotalPeers = 0
+	} else {
 		defer rows.Close()
 		if rows.Next() {
 			if err := rows.Scan(&stats.TotalPeers); err != nil {
-				log.Error("failed to scan peer count", "error", err)
+				log.ErrorContext(r.Context(), "failed to scan peer count", "error", err)
+				stats.TotalPeers = 0
 			}
 		}
 	}
 
 	// Count manual peers (is_manual = 1)
 	rows2, err := h.DB.QueryContext(r.Context(), "SELECT COUNT(*) FROM peers WHERE is_manual = 1")
-	if err == nil {
+	if err != nil {
+		log.ErrorContext(r.Context(), "failed to count manual peers", "error", err)
+		stats.ManualPeers = 0
+	} else {
 		defer rows2.Close()
 		if rows2.Next() {
 			if err := rows2.Scan(&stats.ManualPeers); err != nil {
-				log.Error("failed to scan manual peer count", "error", err)
+				log.ErrorContext(r.Context(), "failed to scan manual peer count", "error", err)
+				stats.ManualPeers = 0
 			}
 		}
 	}
 
 	// Count online peers (status = 'online) - only agent peers (not manual)
 	rows3, err := h.DB.QueryContext(r.Context(), fmt.Sprintf("SELECT COUNT(*) FROM peers WHERE is_manual = 0 AND last_heartbeat > datetime('now', '-%d seconds')", constants.OfflineThresholdSeconds))
-	if err == nil {
+	if err != nil {
+		log.ErrorContext(r.Context(), "failed to count online peers", "error", err)
+		stats.OnlinePeers = 0
+	} else {
 		defer rows3.Close()
 		if rows3.Next() {
 			if err := rows3.Scan(&stats.OnlinePeers); err != nil {
-				log.Error("failed to scan online peer count", "error", err)
+				log.ErrorContext(r.Context(), "failed to scan online peer count", "error", err)
+				stats.OnlinePeers = 0
 			}
 		}
 	}
@@ -101,11 +113,15 @@ func (h *Handler) HandleDashboard(w http.ResponseWriter, r *http.Request) {
 
 	// Count policies
 	rows4, err := h.DB.QueryContext(r.Context(), `SELECT COUNT(*) FROM policies WHERE enabled = 1`)
-	if err == nil {
+	if err != nil {
+		log.ErrorContext(r.Context(), "failed to count policies", "error", err)
+		stats.TotalPolicies = 0
+	} else {
 		defer rows4.Close()
 		if rows4.Next() {
 			if err := rows4.Scan(&stats.TotalPolicies); err != nil {
-				log.Error("failed to scan policy count", "error", err)
+				log.ErrorContext(r.Context(), "failed to scan policy count", "error", err)
+				stats.TotalPolicies = 0
 			}
 		}
 	}
@@ -123,11 +139,17 @@ func (h *Handler) HandleDashboard(w http.ResponseWriter, r *http.Request) {
 		FROM firewall_logs
 		WHERE action = 'DROP' AND timestamp > datetime('now', '-24 hours')
 	`)
-	if err == nil {
+	if err != nil {
+		log.ErrorContext(r.Context(), "failed to query blocked counts", "error", err)
+		stats.BlockedLastHour = 0
+		stats.BlockedLast24h = 0
+	} else {
 		defer rows5.Close()
 		if rows5.Next() {
 			if err := rows5.Scan(&stats.BlockedLastHour, &stats.BlockedLast24h); err != nil {
-				log.Error("failed to scan blocked counts", "error", err)
+				log.ErrorContext(r.Context(), "failed to scan blocked counts", "error", err)
+				stats.BlockedLastHour = 0
+				stats.BlockedLast24h = 0
 			}
 		}
 	}
@@ -140,13 +162,15 @@ func (h *Handler) HandleDashboard(w http.ResponseWriter, r *http.Request) {
 		WHERE fl.action = 'DROP'
 		ORDER BY fl.timestamp DESC
 		LIMIT 5`)
-	if err == nil {
+	if err != nil {
+		log.ErrorContext(r.Context(), "failed to query recent activity", "error", err)
+	} else {
 		defer activityRows.Close()
 		for activityRows.Next() {
 			var item ActivityItem
 			var hostname sql.NullString
 			if err := activityRows.Scan(&item.Timestamp, &item.SrcIP, &item.DstIP, &item.Protocol, &item.Action, &hostname); err != nil {
-				log.Error("failed to scan activity row", "error", err)
+				log.ErrorContext(r.Context(), "failed to scan activity row", "error", err)
 				continue
 			}
 			if hostname.Valid {
@@ -161,7 +185,9 @@ func (h *Handler) HandleDashboard(w http.ResponseWriter, r *http.Request) {
 		SELECT hostname, ip_address, agent_version, last_heartbeat, is_manual
 		FROM peers
 		ORDER BY hostname`)
-	if err == nil {
+	if err != nil {
+		log.ErrorContext(r.Context(), "failed to query peer health", "error", err)
+	} else {
 		defer peerRows.Close()
 		for peerRows.Next() {
 			var ph PeerHealth
@@ -169,7 +195,7 @@ func (h *Handler) HandleDashboard(w http.ResponseWriter, r *http.Request) {
 			var agentVersion sql.NullString
 			var isManual bool
 			if err := peerRows.Scan(&ph.Hostname, &ph.IP, &agentVersion, &lastHeartbeat, &isManual); err != nil {
-				log.Error("failed to scan peer health row", "error", err)
+				log.ErrorContext(r.Context(), "failed to scan peer health row", "error", err)
 				continue
 			}
 			if agentVersion.Valid {
@@ -195,12 +221,14 @@ func (h *Handler) HandleDashboard(w http.ResponseWriter, r *http.Request) {
 		GROUP BY src_ip
 		ORDER BY count DESC
 		LIMIT 5`)
-	if err == nil {
+	if err != nil {
+		log.ErrorContext(r.Context(), "failed to query top blocked sources", "error", err)
+	} else {
 		defer topRows.Close()
 		for topRows.Next() {
 			var b BlockedIP
 			if err := topRows.Scan(&b.SrcIP, &b.Count); err != nil {
-				log.Error("failed to scan top blocked row", "error", err)
+				log.ErrorContext(r.Context(), "failed to scan top blocked row", "error", err)
 				continue
 			}
 			stats.TopBlockedSource = append(stats.TopBlockedSource, b)

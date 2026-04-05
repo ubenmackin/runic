@@ -315,7 +315,12 @@ func (h *Handler) DeletePeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rowsAffected, _ := result.RowsAffected()
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		log.ErrorContext(r.Context(), "Failed to check delete result", "error", err)
+		common.InternalError(w)
+		return
+	}
 	if rowsAffected == 0 {
 		common.RespondError(w, http.StatusNotFound, "Peer not found")
 		return

@@ -168,7 +168,11 @@ func (h *Handler) CreatePolicy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Trigger async recompilation for all affected peers
-	affectedPeers, _ := h.Compiler.GetAffectedPeersByPolicy(r.Context(), int(id))
+	affectedPeers, err := h.Compiler.GetAffectedPeersByPolicy(r.Context(), int(id))
+	if err != nil {
+		log.ErrorContext(r.Context(), "Failed to get affected peers", "policy_id", id, "error", err)
+		// Policy created successfully - log the error but proceed
+	}
 	h.ChangeWorker.QueuePeerChange(r.Context(), h.DB, affectedPeers, "policy", "create", int(id), fmt.Sprintf("Policy '%s' created", input.Name))
 
 	common.RespondJSON(w, http.StatusCreated, map[string]int64{"id": id})
@@ -283,7 +287,12 @@ func (h *Handler) UpdatePolicy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Save old affected peers before update
-	oldPeers, _ := h.Compiler.GetAffectedPeersByPolicy(r.Context(), id)
+	oldPeers, err := h.Compiler.GetAffectedPeersByPolicy(r.Context(), id)
+	if err != nil {
+		log.ErrorContext(r.Context(), "Failed to get old affected peers for policy", "policy_id", id, "error", err)
+		// Continue with empty oldPeers - newPeers will be used for recompile
+		oldPeers = nil
+	}
 
 	result, err := h.DB.ExecContext(r.Context(),
 		`UPDATE policies SET name = ?, description = ?, source_id = ?, source_type = ?, service_id = ?,
@@ -310,7 +319,11 @@ func (h *Handler) UpdatePolicy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Trigger async recompilation for all affected peers (old and new)
-	newPeers, _ := h.Compiler.GetAffectedPeersByPolicy(r.Context(), id)
+	newPeers, err := h.Compiler.GetAffectedPeersByPolicy(r.Context(), id)
+	if err != nil {
+		log.ErrorContext(r.Context(), "Failed to get new affected peers for policy", "policy_id", id, "error", err)
+		newPeers = nil
+	}
 	peerSet := make(map[int]bool)
 	for _, pid := range oldPeers {
 		peerSet[pid] = true
@@ -335,7 +348,11 @@ func (h *Handler) DeletePolicy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Save old affected peers before update
-	oldPeers, _ := h.Compiler.GetAffectedPeersByPolicy(r.Context(), id)
+	oldPeers, err := h.Compiler.GetAffectedPeersByPolicy(r.Context(), id)
+	if err != nil {
+		log.ErrorContext(r.Context(), "Failed to get old affected peers for policy", "policy_id", id, "error", err)
+		oldPeers = nil
+	}
 
 	// Fetch policy name before deletion
 	var policyName string
@@ -353,7 +370,12 @@ func (h *Handler) DeletePolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	affected, _ := res.RowsAffected()
+	affected, err := res.RowsAffected()
+	if err != nil {
+		log.ErrorContext(r.Context(), "Failed to check result", "error", err)
+		common.InternalError(w)
+		return
+	}
 	if affected == 0 {
 		common.RespondError(w, http.StatusNotFound, "policy not found")
 		return
@@ -446,13 +468,22 @@ func (h *Handler) PatchPolicy(w http.ResponseWriter, r *http.Request) {
 		common.InternalError(w)
 		return
 	}
-	rowsAffected, _ := result.RowsAffected()
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		log.ErrorContext(r.Context(), "Failed to check result", "error", err)
+		common.InternalError(w)
+		return
+	}
 	if rowsAffected == 0 {
 		common.RespondError(w, http.StatusNotFound, "policy not found")
 		return
 	}
 	// Trigger async recompilation
-	affectedPeers, _ := h.Compiler.GetAffectedPeersByPolicy(r.Context(), id)
+	affectedPeers, err := h.Compiler.GetAffectedPeersByPolicy(r.Context(), id)
+	if err != nil {
+		log.ErrorContext(r.Context(), "Failed to get affected peers", "policy_id", id, "error", err)
+		// Continue with empty set - policy toggle still succeeded
+	}
 	enabledStr := "enabled"
 	if !*input.Enabled {
 		enabledStr = "disabled"

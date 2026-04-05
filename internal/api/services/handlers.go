@@ -315,7 +315,11 @@ func (h *Handler) queueServiceChange(ctx context.Context, serviceID int, action,
 		if err := rows.Scan(&policyID); err != nil {
 			continue
 		}
-		affectedPeers, _ := h.Compiler.GetAffectedPeersByPolicy(ctx, policyID)
+		affectedPeers, err := h.Compiler.GetAffectedPeersByPolicy(ctx, policyID)
+		if err != nil {
+			log.ErrorContext(ctx, "Failed to get affected peers for service change", "policy_id", policyID, "error", err)
+			continue
+		}
 		for _, peerID := range affectedPeers {
 			peerSet[peerID] = true
 		}
