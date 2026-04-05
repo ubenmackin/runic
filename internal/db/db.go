@@ -44,14 +44,14 @@ var allowedTables = map[string]bool{
 // columnExists checks if a column exists in a table using pragma_table_info.
 // Note: table name is validated by allowedTables safelist in the caller (addColumnIfMissing).
 // We use fmt.Sprintf here because SQLite doesn't support parameterized identifiers.
-func columnExists(database *sql.DB, table, column string) (bool, error) {
+func columnExists(ctx context.Context, database *sql.DB, table, column string) (bool, error) {
 	// Validate table name against safelist to prevent SQL injection
 	if !allowedTables[table] {
 		return false, fmt.Errorf("table %q not in migration safelist", table)
 	}
 
 	var exists bool
-	err := database.QueryRow(
+	err := database.QueryRowContext(ctx,
 		fmt.Sprintf("SELECT COUNT(*) > 0 FROM pragma_table_info('%s') WHERE name='%s'", table, column),
 	).Scan(&exists)
 	if err != nil {
@@ -61,18 +61,18 @@ func columnExists(database *sql.DB, table, column string) (bool, error) {
 }
 
 // addColumnIfMissing adds a column to a table if it doesn't already exist.
-func addColumnIfMissing(database *sql.DB, table, column, definition string) error {
+func addColumnIfMissing(ctx context.Context, database *sql.DB, table, column, definition string) error {
 	// Validate table name against safelist to prevent SQL injection
 	if !allowedTables[table] {
 		return fmt.Errorf("table %q not in migration safelist", table)
 	}
 
-	exists, err := columnExists(database, table, column)
+	exists, err := columnExists(ctx, database, table, column)
 	if err != nil {
 		return err
 	}
 	if !exists {
-		if _, err := database.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, definition)); err != nil {
+		if _, err := database.ExecContext(ctx, fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, definition)); err != nil {
 			return fmt.Errorf("add column %s.%s: %w", table, column, err)
 		}
 		log.Info("Migration: added column", "column", column, "table", table)
@@ -127,21 +127,21 @@ func InitDB(dataSourceName string) (*sql.DB, error) {
 	// For example, the servers → peers table rename must complete before
 	// schema.sql tries to create indexes on peer_id columns, which would
 	// fail on older databases that still have the "servers" table.
-	if err := migrateSchema(database.DB); err != nil {
+	if err := migrateSchema(context.Background(), database.DB); err != nil {
 		return nil, fmt.Errorf("failed to migrate schema: %w", err)
 	}
 
-	if err := createSchema(database.DB); err != nil {
+	if err := createSchema(context.Background(), database.DB); err != nil {
 		return nil, fmt.Errorf("failed to create schema: %w", err)
 	}
 
 	// Seed default system services
-	if err := seedSystemServices(database.DB); err != nil {
+	if err := seedSystemServices(context.Background(), database.DB); err != nil {
 		return nil, fmt.Errorf("failed to seed system services: %w", err)
 	}
 
 	// Seed system groups
-	if err := seedSystemGroups(database.DB); err != nil {
+	if err := seedSystemGroups(context.Background(), database.DB); err != nil {
 		return nil, fmt.Errorf("failed to seed system groups: %w", err)
 	}
 
@@ -159,16 +159,16 @@ func InitDB(dataSourceName string) (*sql.DB, error) {
 	return database.DB, nil
 }
 
-func createSchema(database *sql.DB) error {
-	_, err := database.Exec(schemaSQL)
+func createSchema(ctx context.Context, database *sql.DB) error {
+	_, err := database.ExecContext(ctx, schemaSQL)
 	return err
 }
 
 // migrateSchema adds missing columns for schema upgrades on existing databases.
-func migrateSchema(database *sql.DB) error {
+func migrateSchema(ctx context.Context, database *sql.DB) error {
 	// Fresh database check: if no tables exist, skip all migrations
 	var tableCount int
-	err := database.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").Scan(&tableCount)
+	err := database.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").Scan(&tableCount)
 	if err != nil {
 		return fmt.Errorf("failed to count tables: %w", err)
 	}
@@ -179,33 +179,33 @@ func migrateSchema(database *sql.DB) error {
 
 	// Check if users table exists (fresh install check)
 	var usersTableExists bool
-	err = database.QueryRow("SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='users'").Scan(&usersTableExists)
+	err = database.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='users'").Scan(&usersTableExists)
 	if err != nil {
 		return fmt.Errorf("failed to check for users table: %w", err)
 	}
 
-	if err := addColumnIfMissing(database, "users", "email", "TEXT DEFAULT ''"); err != nil {
+	if err := addColumnIfMissing(ctx, database, "users", "email", "TEXT DEFAULT ''"); err != nil {
 		return err
 	}
-	if err := addColumnIfMissing(database, "users", "role", "TEXT NOT NULL DEFAULT 'viewer'"); err != nil {
+	if err := addColumnIfMissing(ctx, database, "users", "role", "TEXT NOT NULL DEFAULT 'viewer'"); err != nil {
 		return err
 	}
 
 	// Migration: Add token_type column to revoked_tokens
 	var hasRevokedTokensTable bool
-	err = database.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='revoked_tokens'").Scan(&hasRevokedTokensTable)
+	err = database.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='revoked_tokens'").Scan(&hasRevokedTokensTable)
 	if err != nil {
 		return fmt.Errorf("failed to check for revoked_tokens table: %w", err)
 	}
 	if hasRevokedTokensTable {
-		if err := addColumnIfMissing(database, "revoked_tokens", "token_type", "TEXT NOT NULL DEFAULT 'unknown'"); err != nil {
+		if err := addColumnIfMissing(ctx, database, "revoked_tokens", "token_type", "TEXT NOT NULL DEFAULT 'unknown'"); err != nil {
 			return err
 		}
 	}
 
 	// Migration: Rename servers → peers (for existing databases)
 	var hasServersTable bool
-	err = database.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='servers'").Scan(&hasServersTable)
+	err = database.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='servers'").Scan(&hasServersTable)
 	if err != nil {
 		return fmt.Errorf("failed to check for servers table: %w", err)
 	}
@@ -213,7 +213,7 @@ func migrateSchema(database *sql.DB) error {
 	if hasServersTable {
 		log.Info("Migration: renaming servers to peers")
 
-		tx, err := database.Begin()
+		tx, err := database.BeginTx(ctx, nil)
 		if err != nil {
 			return fmt.Errorf("failed to begin migration transaction: %w", err)
 		}
@@ -225,17 +225,17 @@ func migrateSchema(database *sql.DB) error {
 		}()
 
 		// 1. Rename servers table to peers
-		if _, err := tx.Exec("ALTER TABLE servers RENAME TO peers"); err != nil {
+		if _, err := tx.ExecContext(ctx, "ALTER TABLE servers RENAME TO peers"); err != nil {
 			return fmt.Errorf("failed to rename servers to peers: %w", err)
 		}
 
 		// 2. Add is_manual column
-		if _, err := tx.Exec("ALTER TABLE peers ADD COLUMN is_manual BOOLEAN NOT NULL DEFAULT 0"); err != nil {
+		if _, err := tx.ExecContext(ctx, "ALTER TABLE peers ADD COLUMN is_manual BOOLEAN NOT NULL DEFAULT 0"); err != nil {
 			return fmt.Errorf("failed to add is_manual column: %w", err)
 		}
 
 		// 3. Recreate policies table with target_peer_id
-		if _, err := tx.Exec(`CREATE TABLE policies_new (
+		if _, err := tx.ExecContext(ctx, `CREATE TABLE policies_new (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
             description TEXT,
@@ -253,18 +253,18 @@ func migrateSchema(database *sql.DB) error {
         )`); err != nil {
 			return fmt.Errorf("failed to create policies_new: %w", err)
 		}
-		if _, err := tx.Exec(`INSERT INTO policies_new SELECT id, name, description, source_group_id, service_id, target_server_id, action, priority, enabled, created_at, updated_at FROM policies`); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO policies_new SELECT id, name, description, source_group_id, service_id, target_server_id, action, priority, enabled, created_at, updated_at FROM policies`); err != nil {
 			return fmt.Errorf("failed to copy policies: %w", err)
 		}
-		if _, err := tx.Exec("DROP TABLE policies"); err != nil {
+		if _, err := tx.ExecContext(ctx, "DROP TABLE policies"); err != nil {
 			return fmt.Errorf("failed to drop policies: %w", err)
 		}
-		if _, err := tx.Exec("ALTER TABLE policies_new RENAME TO policies"); err != nil {
+		if _, err := tx.ExecContext(ctx, "ALTER TABLE policies_new RENAME TO policies"); err != nil {
 			return fmt.Errorf("failed to rename policies_new: %w", err)
 		}
 
 		// 4. Recreate rule_bundles table with peer_id
-		if _, err := tx.Exec(`CREATE TABLE rule_bundles_new (
+		if _, err := tx.ExecContext(ctx, `CREATE TABLE rule_bundles_new (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             peer_id INTEGER NOT NULL,
             version TEXT NOT NULL,
@@ -276,18 +276,18 @@ func migrateSchema(database *sql.DB) error {
         )`); err != nil {
 			return fmt.Errorf("failed to create rule_bundles_new: %w", err)
 		}
-		if _, err := tx.Exec(`INSERT INTO rule_bundles_new SELECT id, server_id, version, rules_content, hmac, created_at, applied_at FROM rule_bundles`); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO rule_bundles_new SELECT id, server_id, version, rules_content, hmac, created_at, applied_at FROM rule_bundles`); err != nil {
 			return fmt.Errorf("failed to copy rule_bundles: %w", err)
 		}
-		if _, err := tx.Exec("DROP TABLE rule_bundles"); err != nil {
+		if _, err := tx.ExecContext(ctx, "DROP TABLE rule_bundles"); err != nil {
 			return fmt.Errorf("failed to drop rule_bundles: %w", err)
 		}
-		if _, err := tx.Exec("ALTER TABLE rule_bundles_new RENAME TO rule_bundles"); err != nil {
+		if _, err := tx.ExecContext(ctx, "ALTER TABLE rule_bundles_new RENAME TO rule_bundles"); err != nil {
 			return fmt.Errorf("failed to rename rule_bundles_new: %w", err)
 		}
 
 		// 5. Recreate firewall_logs table with peer_id
-		if _, err := tx.Exec(`CREATE TABLE firewall_logs_new (
+		if _, err := tx.ExecContext(ctx, `CREATE TABLE firewall_logs_new (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             peer_id INTEGER NOT NULL,
             timestamp DATETIME NOT NULL,
@@ -303,32 +303,32 @@ func migrateSchema(database *sql.DB) error {
         )`); err != nil {
 			return fmt.Errorf("failed to create firewall_logs_new: %w", err)
 		}
-		if _, err := tx.Exec(`INSERT INTO firewall_logs_new SELECT id, server_id, timestamp, direction, src_ip, dst_ip, protocol, src_port, dst_port, action, raw_line FROM firewall_logs`); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO firewall_logs_new SELECT id, server_id, timestamp, direction, src_ip, dst_ip, protocol, src_port, dst_port, action, raw_line FROM firewall_logs`); err != nil {
 			return fmt.Errorf("failed to copy firewall_logs: %w", err)
 		}
-		if _, err := tx.Exec("DROP TABLE firewall_logs"); err != nil {
+		if _, err := tx.ExecContext(ctx, "DROP TABLE firewall_logs"); err != nil {
 			return fmt.Errorf("failed to drop firewall_logs: %w", err)
 		}
-		if _, err := tx.Exec("ALTER TABLE firewall_logs_new RENAME TO firewall_logs"); err != nil {
+		if _, err := tx.ExecContext(ctx, "ALTER TABLE firewall_logs_new RENAME TO firewall_logs"); err != nil {
 			return fmt.Errorf("failed to rename firewall_logs_new: %w", err)
 		}
 
 		// 6. Drop old indexes and create new ones
-		tx.Exec("DROP INDEX IF EXISTS idx_servers_last_heartbeat")
-		tx.Exec("DROP INDEX IF EXISTS idx_firewall_logs_server_id")
-		tx.Exec("DROP INDEX IF EXISTS idx_firewall_logs_server_timestamp")
-		tx.Exec("DROP INDEX IF EXISTS idx_servers_status_heartbeat")
+		tx.ExecContext(ctx, "DROP INDEX IF EXISTS idx_servers_last_heartbeat")
+		tx.ExecContext(ctx, "DROP INDEX IF EXISTS idx_firewall_logs_server_id")
+		tx.ExecContext(ctx, "DROP INDEX IF EXISTS idx_firewall_logs_server_timestamp")
+		tx.ExecContext(ctx, "DROP INDEX IF EXISTS idx_servers_status_heartbeat")
 
-		if _, err := tx.Exec("CREATE INDEX idx_peers_last_heartbeat ON peers(last_heartbeat)"); err != nil {
+		if _, err := tx.ExecContext(ctx, "CREATE INDEX idx_peers_last_heartbeat ON peers(last_heartbeat)"); err != nil {
 			return fmt.Errorf("failed to create idx_peers_last_heartbeat: %w", err)
 		}
-		if _, err := tx.Exec("CREATE INDEX idx_firewall_logs_peer_id ON firewall_logs(peer_id)"); err != nil {
+		if _, err := tx.ExecContext(ctx, "CREATE INDEX idx_firewall_logs_peer_id ON firewall_logs(peer_id)"); err != nil {
 			return fmt.Errorf("failed to create idx_firewall_logs_peer_id: %w", err)
 		}
-		if _, err := tx.Exec("CREATE INDEX idx_firewall_logs_peer_timestamp ON firewall_logs(peer_id, timestamp DESC)"); err != nil {
+		if _, err := tx.ExecContext(ctx, "CREATE INDEX idx_firewall_logs_peer_timestamp ON firewall_logs(peer_id, timestamp DESC)"); err != nil {
 			return fmt.Errorf("failed to create idx_firewall_logs_peer_timestamp: %w", err)
 		}
-		if _, err := tx.Exec("CREATE INDEX idx_peers_status_heartbeat ON peers(status, last_heartbeat)"); err != nil {
+		if _, err := tx.ExecContext(ctx, "CREATE INDEX idx_peers_status_heartbeat ON peers(status, last_heartbeat)"); err != nil {
 			return fmt.Errorf("failed to create idx_peers_status_heartbeat: %w", err)
 		}
 
@@ -340,41 +340,41 @@ func migrateSchema(database *sql.DB) error {
 	}
 
 	// Check peers table columns for missing columns (handles both fresh installs and migrated DBs)
-	if err := addColumnIfMissing(database, "peers", "is_manual", "BOOLEAN NOT NULL DEFAULT 0"); err != nil {
+	if err := addColumnIfMissing(ctx, database, "peers", "is_manual", "BOOLEAN NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
-	if err := addColumnIfMissing(database, "peers", "description", "TEXT DEFAULT ''"); err != nil {
+	if err := addColumnIfMissing(ctx, database, "peers", "description", "TEXT DEFAULT ''"); err != nil {
 		return err
 	}
-	if err := addColumnIfMissing(database, "peers", "has_ipset", "BOOLEAN DEFAULT NULL"); err != nil {
+	if err := addColumnIfMissing(ctx, database, "peers", "has_ipset", "BOOLEAN DEFAULT NULL"); err != nil {
 		return err
 	}
 
 	// Migration: Add is_system and source_ports columns to services table
-	if err := addColumnIfMissing(database, "services", "is_system", "BOOLEAN NOT NULL DEFAULT 0"); err != nil {
+	if err := addColumnIfMissing(ctx, database, "services", "is_system", "BOOLEAN NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
-	if err := addColumnIfMissing(database, "services", "source_ports", "TEXT DEFAULT ''"); err != nil {
+	if err := addColumnIfMissing(ctx, database, "services", "source_ports", "TEXT DEFAULT ''"); err != nil {
 		return err
 	}
 
 	// Migration: Add is_system column to groups table
-	if err := addColumnIfMissing(database, "groups", "is_system", "BOOLEAN NOT NULL DEFAULT 0"); err != nil {
+	if err := addColumnIfMissing(ctx, database, "groups", "is_system", "BOOLEAN NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
 
 	// Migration: Add docker_only and direction columns to policies table
-	if err := addColumnIfMissing(database, "policies", "docker_only", "BOOLEAN NOT NULL DEFAULT 0"); err != nil {
+	if err := addColumnIfMissing(ctx, database, "policies", "docker_only", "BOOLEAN NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
-	if err := addColumnIfMissing(database, "policies", "direction", "TEXT NOT NULL DEFAULT 'both'"); err != nil {
+	if err := addColumnIfMissing(ctx, database, "policies", "direction", "TEXT NOT NULL DEFAULT 'both'"); err != nil {
 		return err
 	}
 
 	// Migration: group_members table restructure (peer-based)
 	// Check if group_members has the old schema (value/type columns instead of peer_id)
 	var hasOldGroupMembersSchema bool
-	groupMembersRows, err := database.Query("PRAGMA table_info(group_members)")
+	groupMembersRows, err := database.QueryContext(ctx, "PRAGMA table_info(group_members)")
 	if err == nil {
 		defer groupMembersRows.Close()
 		for groupMembersRows.Next() {
@@ -398,7 +398,7 @@ func migrateSchema(database *sql.DB) error {
 	if hasOldGroupMembersSchema {
 		log.Info("Migration: restructuring group_members table to peer-based schema")
 
-		tx, err := database.Begin()
+		tx, err := database.BeginTx(ctx, nil)
 		if err != nil {
 			return fmt.Errorf("failed to begin group_members migration transaction: %w", err)
 		}
@@ -410,12 +410,12 @@ func migrateSchema(database *sql.DB) error {
 		}()
 
 		// 1. Drop existing group_members table
-		if _, err := tx.Exec("DROP TABLE group_members"); err != nil {
+		if _, err := tx.ExecContext(ctx, "DROP TABLE group_members"); err != nil {
 			return fmt.Errorf("failed to drop group_members table: %w", err)
 		}
 
 		// 2. Create new group_members table with peer_id
-		if _, err := tx.Exec(`
+		if _, err := tx.ExecContext(ctx, `
 			CREATE TABLE group_members (
 				id INTEGER PRIMARY KEY AUTOINCREMENT,
 				group_id INTEGER NOT NULL,
@@ -430,12 +430,12 @@ func migrateSchema(database *sql.DB) error {
 		}
 
 		// 3. Create index
-		if _, err := tx.Exec("CREATE INDEX idx_group_members_peer_id ON group_members(peer_id)"); err != nil {
+		if _, err := tx.ExecContext(ctx, "CREATE INDEX idx_group_members_peer_id ON group_members(peer_id)"); err != nil {
 			return fmt.Errorf("failed to create group_members index: %w", err)
 		}
 
 		// 4. Delete existing "any" group (moved to separate migration with special targets)
-		if _, err := tx.Exec("DELETE FROM groups WHERE name = 'any'"); err != nil {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM groups WHERE name = 'any'"); err != nil {
 			return fmt.Errorf("failed to delete existing any group: %w", err)
 		}
 
@@ -448,10 +448,10 @@ func migrateSchema(database *sql.DB) error {
 
 	// Migration: Upgrading policies to polymorphic sources and targets
 	var hasPolymorphic bool
-	err = database.QueryRow("SELECT COUNT(*) > 0 FROM pragma_table_info('policies') WHERE name='source_type'").Scan(&hasPolymorphic)
+	err = database.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM pragma_table_info('policies') WHERE name='source_type'").Scan(&hasPolymorphic)
 	if err == nil && !hasPolymorphic {
 		log.Info("Migration: upgrading policies to polymorphic sources and targets")
-		tx, err := database.Begin()
+		tx, err := database.BeginTx(ctx, nil)
 		if err != nil {
 			return fmt.Errorf("begin polymorphic migration: %w", err)
 		}
@@ -462,7 +462,7 @@ func migrateSchema(database *sql.DB) error {
 			}
 		}()
 
-		if _, err := tx.Exec(`CREATE TABLE policies_poly (
+		if _, err := tx.ExecContext(ctx, `CREATE TABLE policies_poly (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			name TEXT NOT NULL,
 			description TEXT,
@@ -482,16 +482,16 @@ func migrateSchema(database *sql.DB) error {
 			return fmt.Errorf("create policies_poly: %w", err)
 		}
 
-		if _, err := tx.Exec(`INSERT INTO policies_poly 
+		if _, err := tx.ExecContext(ctx, `INSERT INTO policies_poly 
 			SELECT id, name, description, source_group_id, 'group', service_id, target_peer_id, 'peer', 
 			action, priority, enabled, docker_only, created_at, updated_at FROM policies`); err != nil {
 			return fmt.Errorf("copy policies: %w", err)
 		}
 
-		if _, err := tx.Exec("DROP TABLE policies"); err != nil {
+		if _, err := tx.ExecContext(ctx, "DROP TABLE policies"); err != nil {
 			return fmt.Errorf("drop old policies: %w", err)
 		}
-		if _, err := tx.Exec("ALTER TABLE policies_poly RENAME TO policies"); err != nil {
+		if _, err := tx.ExecContext(ctx, "ALTER TABLE policies_poly RENAME TO policies"); err != nil {
 			return fmt.Errorf("rename policies_poly: %w", err)
 		}
 
@@ -504,7 +504,7 @@ func migrateSchema(database *sql.DB) error {
 
 	// Migration: Create special_targets table for broadcast/multicast addresses
 	var hasSpecialTargets bool
-	err = database.QueryRow("SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='special_targets'").Scan(&hasSpecialTargets)
+	err = database.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='special_targets'").Scan(&hasSpecialTargets)
 	if err != nil {
 		return fmt.Errorf("failed to check for special_targets table: %w", err)
 	}
@@ -512,7 +512,7 @@ func migrateSchema(database *sql.DB) error {
 	if !hasSpecialTargets {
 		log.Info("Migration: creating special_targets table")
 
-		_, err = database.Exec(`
+		_, err = database.ExecContext(ctx, `
 			CREATE TABLE special_targets (
 				id INTEGER PRIMARY KEY,
 				name TEXT UNIQUE NOT NULL,
@@ -539,7 +539,7 @@ func migrateSchema(database *sql.DB) error {
 		}
 
 		for _, st := range specialTargets {
-			_, err = database.Exec(
+			_, err = database.ExecContext(ctx,
 				"INSERT INTO special_targets (name, display_name, description, address) VALUES (?, ?, ?, ?)",
 				st.Name, st.DisplayName, st.Description, st.Address,
 			)
@@ -553,14 +553,14 @@ func migrateSchema(database *sql.DB) error {
 
 	// Migration: Add loopback special target
 	var hasLoopbackTarget bool
-	err = database.QueryRow("SELECT COUNT(*) > 0 FROM special_targets WHERE name = ?", "loopback").Scan(&hasLoopbackTarget)
+	err = database.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM special_targets WHERE name = ?", "loopback").Scan(&hasLoopbackTarget)
 	if err != nil {
 		return fmt.Errorf("failed to check for loopback special target: %w", err)
 	}
 
 	if !hasLoopbackTarget {
 		log.Info("Migration: adding loopback special target")
-		_, err = database.Exec(
+		_, err = database.ExecContext(ctx,
 			"INSERT INTO special_targets (name, display_name, description, address) VALUES (?, ?, ?, ?)",
 			"loopback", "Loopback", "Local loopback address (127.0.0.1)", "127.0.0.1",
 		)
@@ -572,14 +572,14 @@ func migrateSchema(database *sql.DB) error {
 
 	// Migration: Add __any_ip__ special target
 	var hasAnyIpTarget bool
-	err = database.QueryRow("SELECT COUNT(*) > 0 FROM special_targets WHERE name = ?", "__any_ip__").Scan(&hasAnyIpTarget)
+	err = database.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM special_targets WHERE name = ?", "__any_ip__").Scan(&hasAnyIpTarget)
 	if err != nil {
 		return fmt.Errorf("failed to check for __any_ip__ special target: %w", err)
 	}
 
 	if !hasAnyIpTarget {
 		log.Info("Migration: adding __any_ip__ special target")
-		_, err = database.Exec(
+		_, err = database.ExecContext(ctx,
 			"INSERT INTO special_targets (id, name, display_name, description, address) VALUES (?, ?, ?, ?, ?)",
 			6, "__any_ip__", "Any IP (0.0.0.0/0)", "Any IP address on the internet (0.0.0.0/0)", "0.0.0.0/0",
 		)
@@ -591,14 +591,14 @@ func migrateSchema(database *sql.DB) error {
 
 	// Migration: Add __all_peers__ special target
 	var hasAllPeersTarget bool
-	err = database.QueryRow("SELECT COUNT(*) > 0 FROM special_targets WHERE name = ?", "__all_peers__").Scan(&hasAllPeersTarget)
+	err = database.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM special_targets WHERE name = ?", "__all_peers__").Scan(&hasAllPeersTarget)
 	if err != nil {
 		return fmt.Errorf("failed to check for __all_peers__ special target: %w", err)
 	}
 
 	if !hasAllPeersTarget {
 		log.Info("Migration: adding __all_peers__ special target")
-		_, err = database.Exec(
+		_, err = database.ExecContext(ctx,
 			"INSERT INTO special_targets (id, name, display_name, description, address) VALUES (?, ?, ?, ?, ?)",
 			7, "__all_peers__", "All Peers", "All registered peer IPs", "dynamic",
 		)
@@ -610,11 +610,11 @@ func migrateSchema(database *sql.DB) error {
 
 	// Migration: Delete the broken "any" system group
 	log.Info("Migration: deleting broken any system group")
-	_, err = database.Exec("DELETE FROM group_members WHERE group_id IN (SELECT id FROM groups WHERE name = 'any')")
+	_, err = database.ExecContext(ctx, "DELETE FROM group_members WHERE group_id IN (SELECT id FROM groups WHERE name = 'any')")
 	if err != nil {
 		return fmt.Errorf("failed to delete group_members for 'any' group: %w", err)
 	}
-	_, err = database.Exec("DELETE FROM groups WHERE name = 'any'")
+	_, err = database.ExecContext(ctx, "DELETE FROM groups WHERE name = 'any'")
 	if err != nil {
 		return fmt.Errorf("failed to delete 'any' group: %w", err)
 	}
@@ -622,13 +622,13 @@ func migrateSchema(database *sql.DB) error {
 
 	// Migration: Create system_config table
 	var hasSystemConfig bool
-	err = database.QueryRow("SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='system_config'").Scan(&hasSystemConfig)
+	err = database.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='system_config'").Scan(&hasSystemConfig)
 	if err != nil {
 		return fmt.Errorf("failed to check for system_config table: %w", err)
 	}
 	if !hasSystemConfig {
 		log.Info("Migration: creating system_config table")
-		_, err = database.Exec(`
+		_, err = database.ExecContext(ctx, `
 			CREATE TABLE system_config (
 				key TEXT PRIMARY KEY,
 				value TEXT NOT NULL,
@@ -643,42 +643,42 @@ func migrateSchema(database *sql.DB) error {
 	}
 
 	// Migration: Add HMAC key rotation columns to peers table
-	if err := addColumnIfMissing(database, "peers", "hmac_key_rotation_token", "TEXT"); err != nil {
+	if err := addColumnIfMissing(ctx, database, "peers", "hmac_key_rotation_token", "TEXT"); err != nil {
 		return err
 	}
-	if err := addColumnIfMissing(database, "peers", "hmac_key_last_rotated_at", "DATETIME"); err != nil {
+	if err := addColumnIfMissing(ctx, database, "peers", "hmac_key_last_rotated_at", "DATETIME"); err != nil {
 		return err
 	}
 
 	// Migration: Add target_scope column to policies table
-	targetScopeExists, err := columnExists(database, "policies", "target_scope")
+	targetScopeExists, err := columnExists(ctx, database, "policies", "target_scope")
 	if err != nil {
 		return err
 	}
 	if !targetScopeExists {
-		if err := addColumnIfMissing(database, "policies", "target_scope", "TEXT NOT NULL DEFAULT 'both' CHECK(target_scope IN ('both', 'host', 'docker'))"); err != nil {
+		if err := addColumnIfMissing(ctx, database, "policies", "target_scope", "TEXT NOT NULL DEFAULT 'both' CHECK(target_scope IN ('both', 'host', 'docker'))"); err != nil {
 			return err
 		}
 
 		// Migrate docker_only values to target_scope if docker_only column exists
-		dockerOnlyExists, err := columnExists(database, "policies", "docker_only")
+		dockerOnlyExists, err := columnExists(ctx, database, "policies", "docker_only")
 		if err != nil {
 			return err
 		}
 		if dockerOnlyExists {
-			if _, err := database.Exec("UPDATE policies SET target_scope = 'docker' WHERE docker_only = 1"); err != nil {
+			if _, err := database.ExecContext(ctx, "UPDATE policies SET target_scope = 'docker' WHERE docker_only = 1"); err != nil {
 				log.Warn("Failed to map docker_only to target_scope", "error", err)
 			}
 		}
 	}
 
 	// Try to drop docker_only column (requires SQLite 3.35.0+)
-	dockerOnlyExists, err := columnExists(database, "policies", "docker_only")
+	dockerOnlyExists, err := columnExists(ctx, database, "policies", "docker_only")
 	if err != nil {
 		return err
 	}
 	if dockerOnlyExists {
-		if _, err := database.Exec("ALTER TABLE policies DROP COLUMN docker_only"); err != nil {
+		if _, err := database.ExecContext(ctx, "ALTER TABLE policies DROP COLUMN docker_only"); err != nil {
 			log.Warn("Skipped dropping docker_only column (SQLite 3.35.0+ required)", "error", err)
 		} else {
 			log.Info("Migration: successfully dropped docker_only column from policies table")
@@ -687,13 +687,13 @@ func migrateSchema(database *sql.DB) error {
 
 	// Migration: Create registration_tokens table
 	var hasRegistrationTokens bool
-	err = database.QueryRow("SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='registration_tokens'").Scan(&hasRegistrationTokens)
+	err = database.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='registration_tokens'").Scan(&hasRegistrationTokens)
 	if err != nil {
 		return fmt.Errorf("failed to check for registration_tokens table: %w", err)
 	}
 	if !hasRegistrationTokens {
 		log.Info("Migration: creating registration_tokens table")
-		_, err = database.Exec(`
+		_, err = database.ExecContext(ctx, `
 			CREATE TABLE registration_tokens (
 				id INTEGER PRIMARY KEY AUTOINCREMENT,
 				token TEXT NOT NULL UNIQUE,
@@ -708,7 +708,7 @@ func migrateSchema(database *sql.DB) error {
 		if err != nil {
 			return fmt.Errorf("failed to create registration_tokens table: %w", err)
 		}
-		_, err = database.Exec("CREATE INDEX IF NOT EXISTS idx_reg_tokens_active ON registration_tokens(used_at, is_revoked)")
+		_, err = database.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_reg_tokens_active ON registration_tokens(used_at, is_revoked)")
 		if err != nil {
 			return fmt.Errorf("failed to create idx_reg_tokens_active index: %w", err)
 		}
@@ -718,13 +718,13 @@ func migrateSchema(database *sql.DB) error {
 	// Migration: Create composite index on firewall_logs(action, timestamp DESC) for dashboard performance
 	// This index optimizes queries that filter by action and order by timestamp (e.g., blocked events)
 	var hasActionTimestampIdx bool
-	err = database.QueryRow("SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='index' AND name='idx_firewall_logs_action_timestamp'").Scan(&hasActionTimestampIdx)
+	err = database.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='index' AND name='idx_firewall_logs_action_timestamp'").Scan(&hasActionTimestampIdx)
 	if err != nil {
 		return fmt.Errorf("failed to check for idx_firewall_logs_action_timestamp: %w", err)
 	}
 	if !hasActionTimestampIdx {
 		log.Info("Migration: creating idx-firewall-logs-action-timestamp index")
-		if _, err := database.Exec("CREATE INDEX IF NOT EXISTS idx_firewall_logs_action_timestamp ON firewall_logs(action, timestamp DESC)"); err != nil {
+		if _, err := database.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_firewall_logs_action_timestamp ON firewall_logs(action, timestamp DESC)"); err != nil {
 			return fmt.Errorf("failed to create idx_firewall_logs_action_timestamp: %w", err)
 		}
 		log.Info("Migration: created idx-firewall-logs-action-timestamp index")
@@ -732,13 +732,13 @@ func migrateSchema(database *sql.DB) error {
 
 	// Migration: Create pending_changes table for tracking queued changes per peer
 	var hasPendingChanges bool
-	err = database.QueryRow("SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='pending_changes'").Scan(&hasPendingChanges)
+	err = database.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='pending_changes'").Scan(&hasPendingChanges)
 	if err != nil {
 		return fmt.Errorf("failed to check for pending_changes table: %w", err)
 	}
 	if !hasPendingChanges {
 		log.Info("Migration: creating pending_changes table")
-		_, err = database.Exec(`
+		_, err = database.ExecContext(ctx, `
 			CREATE TABLE pending_changes (
 				id INTEGER PRIMARY KEY AUTOINCREMENT,
 				peer_id INTEGER NOT NULL REFERENCES peers(id),
@@ -752,7 +752,7 @@ func migrateSchema(database *sql.DB) error {
 		if err != nil {
 			return fmt.Errorf("failed to create pending_changes table: %w", err)
 		}
-		_, err = database.Exec("CREATE INDEX IF NOT EXISTS idx_pending_changes_peer ON pending_changes(peer_id)")
+		_, err = database.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_pending_changes_peer ON pending_changes(peer_id)")
 		if err != nil {
 			return fmt.Errorf("failed to create idx_pending_changes_peer index: %w", err)
 		}
@@ -761,13 +761,13 @@ func migrateSchema(database *sql.DB) error {
 
 	// Migration: Create pending_bundle_previews table for storing bundle previews
 	var hasPendingBundlePreviews bool
-	err = database.QueryRow("SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='pending_bundle_previews'").Scan(&hasPendingBundlePreviews)
+	err = database.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='pending_bundle_previews'").Scan(&hasPendingBundlePreviews)
 	if err != nil {
 		return fmt.Errorf("failed to check for pending_bundle_previews table: %w", err)
 	}
 	if !hasPendingBundlePreviews {
 		log.Info("Migration: creating pending_bundle_previews table")
-		_, err = database.Exec(`
+		_, err = database.ExecContext(ctx, `
 			CREATE TABLE pending_bundle_previews (
 				id INTEGER PRIMARY KEY AUTOINCREMENT,
 				peer_id INTEGER NOT NULL UNIQUE REFERENCES peers(id),
@@ -785,13 +785,13 @@ func migrateSchema(database *sql.DB) error {
 
 	// Migration: Add version_number column to rule_bundles
 	var hasVersionNumberColumn bool
-	err = database.QueryRow("SELECT COUNT(*) > 0 FROM pragma_table_info('rule_bundles') WHERE name='version_number'").Scan(&hasVersionNumberColumn)
+	err = database.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM pragma_table_info('rule_bundles') WHERE name='version_number'").Scan(&hasVersionNumberColumn)
 	if err != nil {
 		return fmt.Errorf("failed to check for version_number column: %w", err)
 	}
 	if !hasVersionNumberColumn {
 		log.Info("Migration: adding version_number column to rule_bundles")
-		tx, err := database.Begin()
+		tx, err := database.BeginTx(ctx, nil)
 		if err != nil {
 			return fmt.Errorf("failed to begin version_number migration: %w", err)
 		}
@@ -803,7 +803,7 @@ func migrateSchema(database *sql.DB) error {
 		}()
 
 		// Create new table with version_number
-		if _, err := tx.Exec(`CREATE TABLE rule_bundles_v2 (
+		if _, err := tx.ExecContext(ctx, `CREATE TABLE rule_bundles_v2 (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			peer_id INTEGER NOT NULL,
 			version TEXT NOT NULL,
@@ -819,7 +819,7 @@ func migrateSchema(database *sql.DB) error {
 		}
 
 		// Copy data and backfill version_number using ROW_NUMBER()
-		if _, err := tx.Exec(`INSERT INTO rule_bundles_v2 (id, peer_id, version, version_number, rules_content, hmac, created_at, applied_at)
+		if _, err := tx.ExecContext(ctx, `INSERT INTO rule_bundles_v2 (id, peer_id, version, version_number, rules_content, hmac, created_at, applied_at)
 			SELECT id, peer_id, version,
 				ROW_NUMBER() OVER (PARTITION BY peer_id ORDER BY created_at),
 				rules_content, hmac, created_at, applied_at
@@ -827,10 +827,10 @@ func migrateSchema(database *sql.DB) error {
 			return fmt.Errorf("failed to copy rule_bundles: %w", err)
 		}
 
-		if _, err := tx.Exec("DROP TABLE rule_bundles"); err != nil {
+		if _, err := tx.ExecContext(ctx, "DROP TABLE rule_bundles"); err != nil {
 			return fmt.Errorf("failed to drop rule_bundles: %w", err)
 		}
-		if _, err := tx.Exec("ALTER TABLE rule_bundles_v2 RENAME TO rule_bundles"); err != nil {
+		if _, err := tx.ExecContext(ctx, "ALTER TABLE rule_bundles_v2 RENAME TO rule_bundles"); err != nil {
 			return fmt.Errorf("failed to rename rule_bundles_v2: %w", err)
 		}
 
@@ -843,12 +843,12 @@ func migrateSchema(database *sql.DB) error {
 
 	// Migration: Add push_jobs and push_job_peers tables for async push-all-rules
 	var hasPushJobsTable bool
-	err = database.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='push_jobs'").Scan(&hasPushJobsTable)
+	err = database.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='push_jobs'").Scan(&hasPushJobsTable)
 	if err != nil {
 		return fmt.Errorf("failed to check for push_jobs table: %w", err)
 	}
 	if !hasPushJobsTable {
-		if _, err := database.Exec(`CREATE TABLE push_jobs (
+		if _, err := database.ExecContext(ctx, `CREATE TABLE push_jobs (
 			id TEXT PRIMARY KEY,
 			initiated_by TEXT,
 			total_peers INTEGER NOT NULL,
@@ -860,7 +860,7 @@ func migrateSchema(database *sql.DB) error {
 		)`); err != nil {
 			return fmt.Errorf("failed to create push_jobs table: %w", err)
 		}
-		if _, err := database.Exec(`CREATE TABLE push_job_peers (
+		if _, err := database.ExecContext(ctx, `CREATE TABLE push_job_peers (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			job_id TEXT NOT NULL REFERENCES push_jobs(id) ON DELETE CASCADE,
 			peer_id INTEGER NOT NULL REFERENCES peers(id),
@@ -874,10 +874,10 @@ func migrateSchema(database *sql.DB) error {
 		)`); err != nil {
 			return fmt.Errorf("failed to create push_job_peers table: %w", err)
 		}
-		if _, err := database.Exec("CREATE INDEX idx_push_job_peers_job_id ON push_job_peers(job_id)"); err != nil {
+		if _, err := database.ExecContext(ctx, "CREATE INDEX idx_push_job_peers_job_id ON push_job_peers(job_id)"); err != nil {
 			return fmt.Errorf("failed to create idx_push_job_peers_job_id index: %w", err)
 		}
-		if _, err := database.Exec("CREATE INDEX idx_push_jobs_status ON push_jobs(status)"); err != nil {
+		if _, err := database.ExecContext(ctx, "CREATE INDEX idx_push_jobs_status ON push_jobs(status)"); err != nil {
 			return fmt.Errorf("failed to create idx_push_jobs_status index: %w", err)
 		}
 		log.Info("Migration: added push_jobs and push_job_peers tables")
@@ -1039,7 +1039,7 @@ func FindPoliciesByGroupID(ctx context.Context, database *sql.DB, groupID int) (
 
 // seedSystemServices creates default system services if they don't exist.
 // System services are non-deletable and provide essential firewall functionality.
-func seedSystemServices(database *sql.DB) error {
+func seedSystemServices(ctx context.Context, database *sql.DB) error {
 	// Define system services to seed
 	systemServices := []struct {
 		Name        string
@@ -1081,14 +1081,14 @@ func seedSystemServices(database *sql.DB) error {
 	for _, svc := range systemServices {
 		// Check if service already exists
 		var count int
-		err := database.QueryRow("SELECT COUNT(*) FROM services WHERE name = ?", svc.Name).Scan(&count)
+		err := database.QueryRowContext(ctx, "SELECT COUNT(*) FROM services WHERE name = ?", svc.Name).Scan(&count)
 		if err != nil {
 			return fmt.Errorf("failed to check for existing service %s: %w", svc.Name, err)
 		}
 
 		if count > 0 {
 			// Service exists, ensure it's marked as system service
-			_, err := database.Exec("UPDATE services SET is_system = 1 WHERE name = ?", svc.Name)
+			_, err := database.ExecContext(ctx, "UPDATE services SET is_system = 1 WHERE name = ?", svc.Name)
 			if err != nil {
 				return fmt.Errorf("failed to update system flag for service %s: %w", svc.Name, err)
 			}
@@ -1097,7 +1097,7 @@ func seedSystemServices(database *sql.DB) error {
 		}
 
 		// Insert new system service
-		_, err = database.Exec(
+		_, err = database.ExecContext(ctx,
 			"INSERT INTO services (name, ports, source_ports, protocol, description, is_system) VALUES (?, ?, ?, ?, ?, 1)",
 			svc.Name, svc.Ports, svc.SourcePorts, svc.Protocol, svc.Description,
 		)
@@ -1112,7 +1112,7 @@ func seedSystemServices(database *sql.DB) error {
 
 // seedSystemGroups creates default system groups if they don't exist.
 // System groups are non-deletable and provide essential group functionality.
-func seedSystemGroups(database *sql.DB) error {
+func seedSystemGroups(ctx context.Context, database *sql.DB) error {
 	// Define system groups to seed
 	systemGroups := []struct {
 		Name        string
@@ -1127,14 +1127,14 @@ func seedSystemGroups(database *sql.DB) error {
 	for _, grp := range systemGroups {
 		// Check if group already exists
 		var count int
-		err := database.QueryRow("SELECT COUNT(*) FROM groups WHERE name = ?", grp.Name).Scan(&count)
+		err := database.QueryRowContext(ctx, "SELECT COUNT(*) FROM groups WHERE name = ?", grp.Name).Scan(&count)
 		if err != nil {
 			return fmt.Errorf("failed to check for existing group %s: %w", grp.Name, err)
 		}
 
 		if count > 0 {
 			// Group exists, ensure it's marked as system group
-			_, err := database.Exec("UPDATE groups SET is_system = 1 WHERE name = ?", grp.Name)
+			_, err := database.ExecContext(ctx, "UPDATE groups SET is_system = 1 WHERE name = ?", grp.Name)
 			if err != nil {
 				return fmt.Errorf("failed to update system flag for group %s: %w", grp.Name, err)
 			}
@@ -1143,7 +1143,7 @@ func seedSystemGroups(database *sql.DB) error {
 		}
 
 		// Insert new system group
-		_, err = database.Exec(
+		_, err = database.ExecContext(ctx,
 			"INSERT INTO groups (name, description, is_system) VALUES (?, ?, 1)",
 			grp.Name, grp.Description,
 		)
