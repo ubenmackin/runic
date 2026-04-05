@@ -15,18 +15,20 @@ import (
 	"runic/internal/api/common"
 	"runic/internal/common/constants"
 	"runic/internal/common/log"
+	"runic/internal/db"
 	"runic/internal/engine"
 )
 
 // Handler holds dependencies for peer handlers.
 type Handler struct {
-	DB       *sql.DB
-	Compiler *engine.Compiler
+	DB         db.Querier // For queries
+	DBBeginner db.DB      // For transactions and queries
+	Compiler   *engine.Compiler
 }
 
 // NewHandler creates a new peers handler.
 func NewHandler(db *sql.DB, compiler *engine.Compiler) *Handler {
-	return &Handler{DB: db, Compiler: compiler}
+	return &Handler{DB: db, DBBeginner: db, Compiler: compiler}
 }
 
 // hostnameRegex validates hostnames: 1-253 chars, alphanumeric with hyphens and dots,

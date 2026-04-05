@@ -10,14 +10,15 @@ import (
 	"runic/internal/api/common"
 	"runic/internal/auth"
 	runiclog "runic/internal/common/log"
+	"runic/internal/db"
 	"runic/internal/models"
 )
 
 type Handler struct {
-	DB *sql.DB
+	DB db.Querier
 }
 
-func NewHandler(db *sql.DB) *Handler {
+func NewHandler(db db.Querier) *Handler {
 	return &Handler{DB: db}
 }
 

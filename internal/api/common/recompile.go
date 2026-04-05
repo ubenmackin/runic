@@ -2,7 +2,6 @@ package common
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -24,7 +23,7 @@ type ChangeWorker struct {
 
 type changeWork struct {
 	ctx          context.Context
-	database     *sql.DB
+	database     db.Querier
 	peerIDs      []int
 	changeType   string
 	changeAction string
@@ -70,7 +69,7 @@ func (w *ChangeWorker) Start(ctx context.Context) {
 }
 
 // QueuePeerChange submits a peer change to the worker.
-func (w *ChangeWorker) QueuePeerChange(ctx context.Context, database *sql.DB, peerIDs []int, changeType, changeAction string, changeID int, summary string) {
+func (w *ChangeWorker) QueuePeerChange(ctx context.Context, database db.Querier, peerIDs []int, changeType, changeAction string, changeID int, summary string) {
 	select {
 	case w.workCh <- changeWork{
 		ctx: ctx, database: database, peerIDs: peerIDs,
@@ -81,7 +80,7 @@ func (w *ChangeWorker) QueuePeerChange(ctx context.Context, database *sql.DB, pe
 }
 
 // QueueGroupChange submits a group change to the worker.
-func (w *ChangeWorker) QueueGroupChange(ctx context.Context, database *sql.DB, compiler *engine.Compiler, groupID int, changeAction string, summary string) {
+func (w *ChangeWorker) QueueGroupChange(ctx context.Context, database db.Querier, compiler *engine.Compiler, groupID int, changeAction string, summary string) {
 	select {
 	case w.workCh <- changeWork{
 		ctx: ctx, database: database, compiler: compiler, groupID: groupID,
@@ -118,8 +117,8 @@ func (w *ChangeWorker) processGroupChange(work changeWork) {
 	rows, err := work.database.QueryContext(work.ctx, `
 		SELECT DISTINCT id FROM policies
 		WHERE ((source_type = 'group' AND source_id = ?)
-		   OR (target_type = 'group' AND target_id = ?))
-		   AND enabled = 1
+		OR (target_type = 'group' AND target_id = ?))
+		AND enabled = 1
 	`, work.groupID, work.groupID)
 	if err != nil {
 		runiclog.Error("failed to find policies for group", "group_id", work.groupID, "error", err)
@@ -155,7 +154,7 @@ func (w *ChangeWorker) processGroupChange(work changeWork) {
 }
 
 // queueChangeForPeer checks if a pending change already exists for a peer and adds it if not.
-func queueChangeForPeer(ctx context.Context, database *sql.DB, peerID int, changeType, changeAction string, changeID int, summary string) error {
+func queueChangeForPeer(ctx context.Context, database db.Querier, peerID int, changeType, changeAction string, changeID int, summary string) error {
 	// Check if this exact change is already queued (avoid duplicates)
 	var count int
 	err := database.QueryRowContext(ctx, `

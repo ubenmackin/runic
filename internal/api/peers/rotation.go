@@ -231,7 +231,7 @@ func (h *Handler) AgentRotateKey(w http.ResponseWriter, r *http.Request) {
 	hostname := parseHostID(input.HostID)
 
 	// Atomic operation: validate token AND retrieve key AND consume token
-	tx, err := h.DB.BeginTx(r.Context(), nil)
+	tx, err := h.DBBeginner.BeginTx(r.Context(), nil)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "failed to start transaction")
 		return

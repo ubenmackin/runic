@@ -14,15 +14,16 @@ import (
 	"runic/internal/auth"
 	runiccommon "runic/internal/common"
 	"runic/internal/common/log"
+	"runic/internal/db"
 )
 
 // Handler provides HTTP handlers for user management with dependency injection.
 type Handler struct {
-	DB *sql.DB
+	DB db.Querier
 }
 
 // NewHandler creates a new user handler with the given database connection.
-func NewHandler(db *sql.DB) *Handler {
+func NewHandler(db db.Querier) *Handler {
 	return &Handler{DB: db}
 }
 

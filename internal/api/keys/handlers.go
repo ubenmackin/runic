@@ -1,7 +1,6 @@
 package keys
 
 import (
-	"database/sql"
 	"encoding/json"
 	"net/http"
 
@@ -11,11 +10,11 @@ import (
 
 // Handler holds dependencies for keys handlers.
 type Handler struct {
-	DB *sql.DB
+	DB db.Querier
 }
 
 // NewHandler creates a new keys handler.
-func NewHandler(db *sql.DB) *Handler {
+func NewHandler(db db.Querier) *Handler {
 	return &Handler{DB: db}
 }
 

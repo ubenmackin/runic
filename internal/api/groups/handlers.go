@@ -1,7 +1,6 @@
 package groups
 
 import (
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -16,13 +15,13 @@ import (
 
 // Handler provides HTTP handlers for group operations with dependency injection
 type Handler struct {
-	DB           *sql.DB
+	DB           db.Querier
 	Compiler     *engine.Compiler
 	ChangeWorker *common.ChangeWorker
 }
 
 // NewHandler creates a new groups handler with the given dependencies
-func NewHandler(db *sql.DB, compiler *engine.Compiler, changeWorker *common.ChangeWorker) *Handler {
+func NewHandler(db db.Querier, compiler *engine.Compiler, changeWorker *common.ChangeWorker) *Handler {
 	return &Handler{DB: db, Compiler: compiler, ChangeWorker: changeWorker}
 }
 
