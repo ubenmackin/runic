@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"log"
@@ -13,8 +14,17 @@ import (
 	"runic/internal/api/common"
 	"runic/internal/auth"
 	runiccommon "runic/internal/common"
-	"runic/internal/db"
 )
+
+// Handler provides HTTP handlers for auth endpoints with dependency injection.
+type Handler struct {
+	DB *sql.DB
+}
+
+// NewHandler creates a new auth handler with the given database connection.
+func NewHandler(db *sql.DB) *Handler {
+	return &Handler{DB: db}
+}
 
 var isProduction bool
 
@@ -79,12 +89,12 @@ type loginRequest struct {
 }
 
 // HandleSetup handles both GET and POST /api/v1/setup requests
-func HandleSetup(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) HandleSetup(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		HandleSetupGET(w, r)
+		h.HandleSetupGET(w, r)
 	case http.MethodPost:
-		HandleSetupPOST(w, r)
+		h.HandleSetupPOST(w, r)
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
@@ -92,8 +102,8 @@ func HandleSetup(w http.ResponseWriter, r *http.Request) {
 
 // HandleSetupGET checks whether any users exist in the database.
 // Returns {"needs_setup": true} if no users exist, false otherwise.
-func HandleSetupGET(w http.ResponseWriter, r *http.Request) {
-	if db.DB == nil {
+func (h *Handler) HandleSetupGET(w http.ResponseWriter, r *http.Request) {
+	if h.DB == nil {
 		common.RespondError(w, http.StatusInternalServerError, "database not initialized")
 		return
 	}
@@ -108,7 +118,7 @@ func HandleSetupGET(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	var count int
-	err := db.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM users").Scan(&count)
+	err := h.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM users").Scan(&count)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "failed to check setup status")
 		return
@@ -119,8 +129,8 @@ func HandleSetupGET(w http.ResponseWriter, r *http.Request) {
 
 // HandleSetupPOST creates the first admin user during initial setup.
 // Returns 403 if users already exist.
-func HandleSetupPOST(w http.ResponseWriter, r *http.Request) {
-	if db.DB == nil {
+func (h *Handler) HandleSetupPOST(w http.ResponseWriter, r *http.Request) {
+	if h.DB == nil {
 		common.RespondError(w, http.StatusInternalServerError, "database not initialized")
 		return
 	}
@@ -145,7 +155,7 @@ func HandleSetupPOST(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	// Begin transaction
-	tx, err := db.DB.BeginTx(ctx, nil)
+	tx, err := h.DB.BeginTx(ctx, nil)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "failed to start transaction")
 		return
@@ -201,18 +211,18 @@ func HandleSetupPOST(w http.ResponseWriter, r *http.Request) {
 	log.Printf("AUTH SETUP: User '%s' created (IP: %s)", body.Username, r.RemoteAddr)
 
 	// Generate tokens
-	accessToken, refreshToken, err := GenerateTokenPair(body.Username)
+	accessToken, refreshToken, err := h.GenerateTokenPair(body.Username)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "failed to generate tokens")
 		return
 	}
 
-	RespondWithTokens(w, http.StatusCreated, accessToken, refreshToken, body.Username, true)
+	h.RespondWithTokens(w, http.StatusCreated, accessToken, refreshToken, body.Username, true)
 }
 
 // HandleLoginPOST authenticates an existing user with username and password.
-func HandleLoginPOST(w http.ResponseWriter, r *http.Request) {
-	if db.DB == nil {
+func (h *Handler) HandleLoginPOST(w http.ResponseWriter, r *http.Request) {
+	if h.DB == nil {
 		common.RespondError(w, http.StatusInternalServerError, "database not initialized")
 		return
 	}
@@ -239,7 +249,7 @@ func HandleLoginPOST(w http.ResponseWriter, r *http.Request) {
 	// Look up user
 	var id int
 	var storedHash string
-	err := db.DB.QueryRowContext(ctx,
+	err := h.DB.QueryRowContext(ctx,
 		"SELECT id, password_hash FROM users WHERE username = ?",
 		body.Username).Scan(&id, &storedHash)
 	if err != nil {
@@ -260,17 +270,17 @@ func HandleLoginPOST(w http.ResponseWriter, r *http.Request) {
 	log.Printf("AUTH LOGIN: User '%s' authenticated (IP: %s)", body.Username, r.RemoteAddr)
 
 	// Generate tokens
-	accessToken, refreshToken, err := GenerateTokenPair(body.Username)
+	accessToken, refreshToken, err := h.GenerateTokenPair(body.Username)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "failed to generate tokens")
 		return
 	}
 
-	RespondWithTokens(w, http.StatusOK, accessToken, refreshToken, body.Username, true)
+	h.RespondWithTokens(w, http.StatusOK, accessToken, refreshToken, body.Username, true)
 }
 
 // HandleLogoutPOST handles POST /api/v1/auth/logout by revoking the caller's current token.
-func HandleLogoutPOST(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) HandleLogoutPOST(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie("runic_access_token")
 	if err != nil || cookie.Value == "" {
 		common.RespondError(w, http.StatusUnauthorized, "Unauthorized")
@@ -305,7 +315,7 @@ func HandleLogoutPOST(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandleGetMe returns the authenticated user's profile.
-func HandleGetMe(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) HandleGetMe(w http.ResponseWriter, r *http.Request) {
 	common.RespondJSON(w, http.StatusOK, map[string]string{
 		"username": auth.UsernameFromContext(r.Context()),
 		"role":     auth.RoleFromContext(r.Context()),
@@ -314,8 +324,8 @@ func HandleGetMe(w http.ResponseWriter, r *http.Request) {
 
 // HandleRefreshPOST handles POST /api/v1/auth/refresh to refresh an access token.
 // It validates the refresh token from cookie and issues a new access token if valid.
-func HandleRefreshPOST(w http.ResponseWriter, r *http.Request) {
-	if db.DB == nil {
+func (h *Handler) HandleRefreshPOST(w http.ResponseWriter, r *http.Request) {
+	if h.DB == nil {
 		common.RespondError(w, http.StatusInternalServerError, "database not initialized")
 		return
 	}
@@ -341,7 +351,7 @@ func HandleRefreshPOST(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Generate new tokens (rotation for security)
-	accessToken, refreshToken, err := GenerateTokenPair(claims.Username)
+	accessToken, refreshToken, err := h.GenerateTokenPair(claims.Username)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "failed to generate tokens")
 		return

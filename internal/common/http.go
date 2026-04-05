@@ -40,5 +40,20 @@ func DoJSONRequest(ctx context.Context, client HTTPClient, method, url string, b
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
-	return client.Do(req)
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("execute request: %w", err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		resp.Body.Close()
+		httpErr := &HTTPStatusError{
+			StatusCode: resp.StatusCode,
+			Method:     method,
+			URL:        url,
+		}
+		return nil, fmt.Errorf("request failed: %w", httpErr)
+	}
+
+	return resp, nil
 }

@@ -21,21 +21,37 @@ const (
 )
 
 var (
-	rateLimitStore map[string]*rateLimitEntry
-	rateLimitMutex sync.Mutex
+	rateLimitStore  map[string]*rateLimitEntry
+	rateLimitMutex  sync.Mutex
+	stopCleanup     chan struct{}
+	stopCleanupOnce sync.Once
 )
 
 func init() {
 	rateLimitStore = make(map[string]*rateLimitEntry)
+	stopCleanup = make(chan struct{})
 
 	// Start periodic cleanup
 	go func() {
 		ticker := time.NewTicker(constants.AuthRateLimitCleanupInterval)
 		defer ticker.Stop()
-		for range ticker.C {
-			CleanupStaleEntries()
+		for {
+			select {
+			case <-ticker.C:
+				CleanupStaleEntries()
+			case <-stopCleanup:
+				return
+			}
 		}
 	}()
+}
+
+// StopCleanup stops the periodic rate limit cleanup goroutine.
+// Call during graceful shutdown.
+func StopCleanup() {
+	stopCleanupOnce.Do(func() {
+		close(stopCleanup)
+	})
 }
 
 // CheckAndRecordFailure records a failed login attempt and returns an error

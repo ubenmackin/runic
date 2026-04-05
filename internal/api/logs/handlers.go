@@ -10,9 +10,16 @@ import (
 	"runic/internal/api/common"
 	"runic/internal/auth"
 	runiclog "runic/internal/common/log"
-	"runic/internal/db"
 	"runic/internal/models"
 )
+
+type Handler struct {
+	DB *sql.DB
+}
+
+func NewHandler(db *sql.DB) *Handler {
+	return &Handler{DB: db}
+}
 
 // MakeLogsStreamHandler returns a handler that uses the given Hub
 func MakeLogsStreamHandler(hub *Hub) http.HandlerFunc {
@@ -74,7 +81,7 @@ func MakeLogsStreamHandler(hub *Hub) http.HandlerFunc {
 }
 
 // GetLogs handles GET /api/v1/logs for historical log queries.
-func GetLogs(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) GetLogs(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	// Parse query parameters
@@ -147,7 +154,7 @@ func GetLogs(w http.ResponseWriter, r *http.Request) {
 		ORDER BY fl.timestamp DESC
 		LIMIT ? OFFSET ?`
 
-	rows, err := db.DB.QueryContext(ctx, query, args...)
+	rows, err := h.DB.QueryContext(ctx, query, args...)
 	if err != nil {
 		runiclog.ErrorContext(ctx, "Failed to query logs", "error", err, "query", query)
 		common.RespondError(w, http.StatusInternalServerError, "failed to query logs")
@@ -203,7 +210,7 @@ func GetLogs(w http.ResponseWriter, r *http.Request) {
 	countQuery := `SELECT COUNT(*) FROM firewall_logs fl ` + whereClause
 	countArgs := args[:len(args)-2] // Remove limit and offset
 	var total int
-	if err := db.DB.QueryRowContext(ctx, countQuery, countArgs...).Scan(&total); err != nil {
+	if err := h.DB.QueryRowContext(ctx, countQuery, countArgs...).Scan(&total); err != nil {
 		runiclog.ErrorContext(ctx, "Failed to get log count", "error", err, "query", countQuery)
 		// Set total to 0 instead of leaving it uninitialized
 		total = 0

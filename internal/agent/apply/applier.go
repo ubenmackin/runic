@@ -39,7 +39,7 @@ func ApplyBundle(ctx context.Context, bundle models.BundleResponse, hmacKey, con
 	}
 
 	// 4. Schedule auto-revert watchdog (90 seconds)
-	revertCancel := scheduleRevert(backup, constants.AutoRevertDelay, controlPlaneURL, token, version)
+	revertCancel := scheduleRevert(ctx, backup, constants.AutoRevertDelay, controlPlaneURL, token, version)
 
 	// 5. Write new rules to temp file
 	tmpFile, err := os.CreateTemp("", "runic-bundle-*.rules")
@@ -137,24 +137,30 @@ func CacheBundle(rules string) error {
 }
 
 // scheduleRevert sets up a delayed revert that can be cancelled.
-func scheduleRevert(backup string, delay time.Duration, controlPlaneURL, token, version string) context.CancelFunc {
-	ctx, cancel := context.WithCancel(context.Background())
+// Uses time.AfterFunc to avoid launching a bare goroutine.
+func scheduleRevert(ctx context.Context, backup string, delay time.Duration, controlPlaneURL, token, version string) context.CancelFunc {
+	ctx, cancel := context.WithCancel(ctx)
 
-	go func() {
+	timer := time.AfterFunc(delay, func() {
 		select {
-		case <-time.After(delay):
+		case <-ctx.Done():
+			// Cancelled — apply was confirmed
+			return
+		default:
 			log.Warn("Auto-revert triggered, restoring previous rules", "delay", delay)
 			if err := revertRules(backup); err != nil {
 				log.Error("Auto-revert failed", "error", err)
 			} else {
 				log.Info("Rules reverted successfully")
 			}
-		case <-ctx.Done():
-			// Cancelled — apply was confirmed
 		}
-	}()
+	})
 
-	return cancel
+	// Return a cancel func that also stops the timer
+	return func() {
+		cancel()
+		timer.Stop()
+	}
 }
 
 // dumpCurrentRules saves the current iptables rules.

@@ -23,6 +23,7 @@ type RateLimiter struct {
 	useXFF         bool
 	trustedProxies map[string]bool
 	stopCleanup    chan struct{}
+	stopOnce       sync.Once
 }
 
 // RateLimiterOption is a functional option for configuring a RateLimiter.
@@ -176,5 +177,7 @@ func (rl *RateLimiter) cleanup() {
 
 // Stop stops the cleanup goroutine. Useful for testing or graceful shutdown.
 func (rl *RateLimiter) Stop() {
-	close(rl.stopCleanup)
+	rl.stopOnce.Do(func() {
+		close(rl.stopCleanup)
+	})
 }

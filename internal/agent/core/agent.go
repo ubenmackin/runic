@@ -15,6 +15,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/errgroup"
+
 	"runic/internal/agent/apply"
 	"runic/internal/agent/identity"
 	"runic/internal/agent/metrics"
@@ -119,30 +121,33 @@ func (a *Agent) Run(ctx context.Context) error {
 	// 5. Initialize shipper
 	a.shipper = transport.NewShipper(a.httpClient, a.config.ControlPlaneURL, a.config.Token, a.config.HostID, a.config.LogPath)
 
-	// 6. Start background goroutines
-	bgCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	// 6. Start background goroutines with coordinated lifecycle
+	g, gCtx := errgroup.WithContext(ctx)
 
-	// Heartbeat ticker
-	go a.heartbeatLoop(bgCtx)
+	g.Go(func() error {
+		a.heartbeatLoop(gCtx)
+		return nil
+	})
+	g.Go(func() error {
+		a.pollLoop(gCtx)
+		return nil
+	})
+	g.Go(func() error {
+		a.shipper.Run(gCtx)
+		return nil
+	})
+	g.Go(func() error {
+		a.listenSSE(gCtx)
+		return nil
+	})
+	g.Go(func() error {
+		a.rotationCheckLoop(gCtx)
+		return nil
+	})
 
-	// Bundle poller
-	go a.pollLoop(bgCtx)
-
-	// Log shipper
-	go a.shipper.Run(bgCtx)
-
-	// SSE listener
-	go a.listenSSE(bgCtx)
-
-	// Key rotation checker
-	go a.rotationCheckLoop(bgCtx)
-
-	// 7. Block on context
+	// 7. Wait for all goroutines to complete
 	log.Info("Agent running. Press Ctrl+C to stop.")
-	<-ctx.Done()
-	log.Info("Agent shutting down")
-	return nil
+	return g.Wait()
 }
 
 // backupIptables saves the current iptables rules on first install.
@@ -225,7 +230,12 @@ func (a *Agent) doRequestWithRetry(ctx context.Context, method, path string, bod
 		if attempt > 0 {
 			backoff := time.Duration(1<<uint(attempt)) * time.Second
 			log.Warn("Request failed, retrying", "attempt", attempt+1, "method", method, "path", path, "backoff", backoff)
-			time.Sleep(backoff)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(backoff):
+				// continue with retry
+			}
 		}
 
 		req, err := http.NewRequestWithContext(ctx, method, url, reqBody)
@@ -274,7 +284,7 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 		case <-ticker.C:
 			if err := a.sendHeartbeat(ctx); err != nil {
 				log.Error("Heartbeat failed", "error", err)
-				if strings.Contains(err.Error(), "401") {
+				if errors.Is(err, common.ErrUnauthorized) {
 					log.Warn("Received 401 on heartbeat, triggering re-registration")
 					if regErr := a.safeRegister(ctx); regErr != nil {
 						log.Error("Re-registration failed", "error", regErr)
@@ -305,7 +315,7 @@ func (a *Agent) pollLoop(ctx context.Context) {
 		case <-ticker.C:
 			if err := a.pullBundle(ctx); err != nil {
 				log.Error("Bundle poll failed", "error", err)
-				if strings.Contains(err.Error(), "401") {
+				if errors.Is(err, common.ErrUnauthorized) {
 					log.Warn("Received 401 on bundle poll, triggering re-registration")
 					if regErr := a.safeRegister(ctx); regErr != nil {
 						log.Error("Re-registration failed", "error", regErr)
@@ -471,7 +481,7 @@ func (a *Agent) rotationCheckLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := a.rotationManager.CheckAndRotate(); err != nil {
+			if err := a.rotationManager.CheckAndRotate(ctx); err != nil {
 				log.Warn("Key rotation check failed", "error", err)
 			}
 		}

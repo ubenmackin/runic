@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"database/sql"
 	"encoding/pem"
 	"flag"
 	"fmt"
@@ -146,12 +147,13 @@ func main() {
 	if dbPath == "" {
 		dbPath = "./runic.db"
 	}
-	if err := db.InitDB(dbPath); err != nil {
+	database, err := db.InitDB(dbPath)
+	if err != nil {
 		log.Fatalf("Failed to initialize database: %v", err)
 	}
 
 	// Ensure control_plane_port is set in system_config for rule generation
-	if err := db.SetSecret("control_plane_port", port); err != nil {
+	if err := db.SetSecret(context.Background(), database, "control_plane_port", port); err != nil {
 		log.Fatalf("Failed to set control_plane_port in system_config: %v", err)
 	}
 	log.Printf("Control plane port set to %s in system_config", port)
@@ -161,10 +163,10 @@ func main() {
 		downloadsDir = "./downloads"
 	}
 
-	compiler := engine.NewCompiler(db.DB.UnderlyingDB())
+	compiler := engine.NewCompiler(database)
 
 	// Initialize auth with database for token revocation
-	auth.SetDB(db.DB.UnderlyingDB())
+	auth.SetDB(database)
 
 	r := mux.NewRouter()
 
@@ -172,12 +174,12 @@ func main() {
 
 	// Health and Metrics endpoints (no authentication required)
 	r.HandleFunc("/health", api.HealthHandler).Methods("GET")
-	r.HandleFunc("/ready", api.ReadyHandler).Methods("GET")
+	r.HandleFunc("/ready", api.ReadyHandler(database)).Methods("GET")
 	r.Handle("/metrics", api.MetricsHandler()).Methods("GET")
 
 	// Register all API routes (public routes like setup and protected routes are all handled in api.go)
-	apiInstance := api.NewAPI(compiler)
-	api.RegisterRoutes(r, apiInstance, downloadsDir)
+	apiInstance := api.NewAPI(database, compiler)
+	apiInstance.RegisterRoutes(r, downloadsDir)
 
 	// Serve embedded web frontend (SPA)
 	// Strip the "web/dist" prefix so http.FS can find files in the embedded FS
@@ -217,7 +219,7 @@ func main() {
 	defer cancel()
 
 	// Start offline detector goroutine
-	go startOfflineDetector(ctx)
+	go startOfflineDetector(ctx, database)
 
 	// Start token revocation cleanup goroutine (prunes expired entries hourly)
 	go startTokenCleanup(ctx)
@@ -274,8 +276,8 @@ func main() {
 	apiInstance.Stop()
 
 	// Close database connection
-	if db.DB != nil {
-		if err := db.DB.Close(); err != nil {
+	if database != nil {
+		if err := database.Close(); err != nil {
 			log.Printf("Database close error: %v", err)
 		}
 	}
@@ -284,7 +286,7 @@ func main() {
 }
 
 // startOfflineDetector marks peers as offline if they haven't sent a heartbeat in 90 seconds.
-func startOfflineDetector(ctx context.Context) {
+func startOfflineDetector(ctx context.Context, database *sql.DB) {
 	ticker := time.NewTicker(constants.OfflineDetectorInterval)
 	defer ticker.Stop()
 
@@ -295,7 +297,7 @@ func startOfflineDetector(ctx context.Context) {
 			return
 		case <-ticker.C:
 			ctx := context.Background()
-			_, err := db.DB.ExecContext(ctx,
+			_, err := database.ExecContext(ctx,
 				fmt.Sprintf(`UPDATE peers SET status = 'offline'
 				WHERE status = 'online'
 				AND last_heartbeat < datetime('now', '-%d seconds')`, constants.OfflineThresholdSeconds),

@@ -12,12 +12,11 @@ import (
 
 	"runic/internal/api/common"
 	runiclog "runic/internal/common/log"
-	"runic/internal/db"
 )
 
 // GenerateRegistrationToken generates a new registration token
 // POST /api/v1/registration-tokens
-func GenerateRegistrationToken(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) GenerateRegistrationToken(w http.ResponseWriter, r *http.Request) {
 	// Parse optional description from request body
 	var input struct {
 		Description string `json:"description"`
@@ -35,7 +34,7 @@ func GenerateRegistrationToken(w http.ResponseWriter, r *http.Request) {
 	token := hex.EncodeToString(tokenBytes)
 
 	// Insert into database
-	_, err := db.DB.Exec(
+	_, err := h.DB.Exec(
 		"INSERT INTO registration_tokens (token, description) VALUES (?, ?)",
 		token, input.Description,
 	)
@@ -54,8 +53,8 @@ func GenerateRegistrationToken(w http.ResponseWriter, r *http.Request) {
 
 // ListRegistrationTokens lists all registration tokens
 // GET /api/v1/registration-tokens
-func ListRegistrationTokens(w http.ResponseWriter, r *http.Request) {
-	rows, err := db.DB.Query(
+func (h *Handler) ListRegistrationTokens(w http.ResponseWriter, r *http.Request) {
+	rows, err := h.DB.Query(
 		"SELECT id, token, description, created_at, used_at, used_by_hostname, is_revoked FROM registration_tokens ORDER BY created_at DESC",
 	)
 	if err != nil {
@@ -107,11 +106,11 @@ func ListRegistrationTokens(w http.ResponseWriter, r *http.Request) {
 
 // RevokeRegistrationToken revokes a registration token
 // DELETE /api/v1/registration-tokens/{id}
-func RevokeRegistrationToken(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) RevokeRegistrationToken(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	id := vars["id"]
 
-	result, err := db.DB.Exec(
+	result, err := h.DB.Exec(
 		"UPDATE registration_tokens SET is_revoked = 1 WHERE id = ? AND used_at IS NULL AND is_revoked = 0",
 		id,
 	)
@@ -134,8 +133,8 @@ func RevokeRegistrationToken(w http.ResponseWriter, r *http.Request) {
 // Returns (true, nil) if the token was successfully consumed,
 // (false, nil) if the token was already used/revoked/not found,
 // (false, err) on database error.
-func ConsumeRegistrationToken(token, hostname string) (bool, error) {
-	result, err := db.DB.Exec(
+func (h *Handler) ConsumeRegistrationToken(token, hostname string) (bool, error) {
+	result, err := h.DB.Exec(
 		"UPDATE registration_tokens SET used_at = CURRENT_TIMESTAMP, used_by_hostname = ? WHERE token = ? AND used_at IS NULL AND is_revoked = 0",
 		hostname, token,
 	)

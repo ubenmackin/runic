@@ -22,6 +22,16 @@ import (
 	"runic/internal/models"
 )
 
+// Handler provides HTTP handlers for agent endpoints with dependency injection.
+type Handler struct {
+	DB *sql.DB
+}
+
+// NewHandler creates a new agent handler with the given database connection.
+func NewHandler(db *sql.DB) *Handler {
+	return &Handler{DB: db}
+}
+
 // LogEvent represents a validated firewall log event from an agent.
 type LogEvent struct {
 	Timestamp string `json:"timestamp"`
@@ -105,7 +115,7 @@ func WithHubs(ctx context.Context, sseHub SSEBroadcaster, logHub LogBroadcaster)
 }
 
 // AgentAuthMiddleware handles authentication for agent endpoints.
-func AgentAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
+func (h *Handler) AgentAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		authHeader := r.Header.Get("Authorization")
 		if authHeader == "" || len(authHeader) <= 7 || authHeader[:7] != "Bearer " {
@@ -116,7 +126,7 @@ func AgentAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		tokenString := authHeader[7:]
 
 		// Parse token
-		secretStr, err := db.GetSecret("agent_jwt_secret")
+		secretStr, err := db.GetSecret(r.Context(), h.DB, "agent_jwt_secret")
 		if err != nil {
 			runiclog.Error("JWT secret not configured", "error", err)
 			http.Error(w, `{"error": "server misconfiguration"}`, http.StatusInternalServerError)
@@ -162,7 +172,7 @@ func AgentAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 }
 
 // RegisterAgent handles agent registration.
-func RegisterAgent(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 	var input models.AgentRegisterRequest
 
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
@@ -180,7 +190,7 @@ func RegisterAgent(w http.ResponseWriter, r *http.Request) {
 	// Check if hostname already exists
 	var existingID int
 	var existingToken sql.NullString
-	err := db.DB.QueryRowContext(ctx, "SELECT id, agent_token FROM peers WHERE hostname = ?", input.Hostname).Scan(&existingID, &existingToken)
+	err := h.DB.QueryRowContext(ctx, "SELECT id, agent_token FROM peers WHERE hostname = ?", input.Hostname).Scan(&existingID, &existingToken)
 
 	if err == sql.ErrNoRows {
 		// New server — require valid registration token
@@ -190,7 +200,7 @@ func RegisterAgent(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Atomic consume: validates AND consumes in single query
-		consumed, err := ConsumeRegistrationToken(input.RegistrationToken, input.Hostname)
+		consumed, err := h.ConsumeRegistrationToken(input.RegistrationToken, input.Hostname)
 		if err != nil {
 			runiclog.Error("Failed to consume registration token", "error", err)
 			http.Error(w, `{"error": "internal server error"}`, http.StatusInternalServerError)
@@ -208,7 +218,7 @@ func RegisterAgent(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, `{"error": "failed to generate HMAC key"}`, http.StatusInternalServerError)
 			return
 		}
-		agentToken, err := generateAgentToken(input.Hostname)
+		agentToken, err := generateAgentToken(ctx, h.DB, input.Hostname)
 		if err != nil {
 			runiclog.Error("Failed to generate agent token error", "error", err)
 			http.Error(w, `{"error": "failed to generate agent token"}`, http.StatusInternalServerError)
@@ -221,7 +231,7 @@ func RegisterAgent(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		_, err = db.DB.ExecContext(ctx, `INSERT INTO peers (hostname, ip_address, os_type, arch, has_docker, has_ipset, agent_key, agent_token, hmac_key, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'online')`, input.Hostname, input.IP, input.OSType, input.Arch, input.HasDocker, input.HasIPSet, agentKey, agentToken, hmacKey)
+		_, err = h.DB.ExecContext(ctx, `INSERT INTO peers (hostname, ip_address, os_type, arch, has_docker, has_ipset, agent_key, agent_token, hmac_key, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'online')`, input.Hostname, input.IP, input.OSType, input.Arch, input.HasDocker, input.HasIPSet, agentKey, agentToken, hmacKey)
 		if err != nil {
 			runiclog.Error("Failed to create server error", "error", err)
 			http.Error(w, `{"error": "failed to create server"}`, http.StatusInternalServerError)
@@ -249,7 +259,7 @@ func RegisterAgent(w http.ResponseWriter, r *http.Request) {
 	hostID := fmt.Sprintf("host-%s", input.Hostname)
 
 	// Always generate fresh token for re-registration
-	newToken, err := generateAgentToken(input.Hostname)
+	newToken, err := generateAgentToken(ctx, h.DB, input.Hostname)
 	if err != nil {
 		runiclog.Error("Failed to generate agent token error", "error", err)
 		http.Error(w, `{"error": "failed to generate agent token"}`, http.StatusInternalServerError)
@@ -258,13 +268,17 @@ func RegisterAgent(w http.ResponseWriter, r *http.Request) {
 
 	// Fetch existing HMAC key (don't regenerate on reinstall)
 	var existingHMACKey string
-	if err := db.DB.QueryRowContext(ctx, "SELECT hmac_key FROM peers WHERE id = ?", existingID).Scan(&existingHMACKey); err != nil {
+	if err := h.DB.QueryRowContext(ctx, "SELECT hmac_key FROM peers WHERE id = ?", existingID).Scan(&existingHMACKey); err != nil {
 		runiclog.Error("Failed to fetch existing HMAC key", "error", err, "peer_id", existingID)
 		http.Error(w, `{"error": "failed to fetch peer data"}`, http.StatusInternalServerError)
 		return
 	}
 
-	db.DB.ExecContext(ctx, "UPDATE peers SET agent_token = ?, status = 'online', agent_version = ?, has_docker = ?, has_ipset = ? WHERE id = ?", newToken, input.AgentVersion, input.HasDocker, input.HasIPSet, existingID)
+	if _, err := h.DB.ExecContext(ctx, "UPDATE peers SET agent_token = ?, status = 'online', agent_version = ?, has_docker = ?, has_ipset = ? WHERE id = ?", newToken, input.AgentVersion, input.HasDocker, input.HasIPSet, existingID); err != nil {
+		runiclog.Error("Failed to update peer token", "error", err, "peer_id", existingID)
+		http.Error(w, `{"error": "failed to update peer"}`, http.StatusInternalServerError)
+		return
+	}
 
 	common.RespondJSON(w, http.StatusOK, map[string]interface{}{
 		"host_id":                hostID,
@@ -276,8 +290,8 @@ func RegisterAgent(w http.ResponseWriter, r *http.Request) {
 }
 
 // GetBundle handles bundle download requests from agents.
-func GetBundle(w http.ResponseWriter, r *http.Request) {
-	_, serverID, ok := getHostIDFromContext(w, r)
+func (h *Handler) GetBundle(w http.ResponseWriter, r *http.Request) {
+	_, serverID, ok := h.getHostIDFromContext(w, r)
 	if !ok {
 		return
 	}
@@ -287,7 +301,7 @@ func GetBundle(w http.ResponseWriter, r *http.Request) {
 
 	// Get latest bundle for this peer
 	var bundle models.RuleBundleRow
-	err := db.DB.QueryRowContext(r.Context(), `SELECT id, peer_id, version, version_number, rules_content, hmac, created_at FROM rule_bundles WHERE peer_id = ? ORDER BY created_at DESC LIMIT 1`, serverID).Scan(&bundle.ID, &bundle.PeerID, &bundle.Version, &bundle.VersionNumber, &bundle.RulesContent, &bundle.HMAC, &bundle.CreatedAt)
+	err := h.DB.QueryRowContext(r.Context(), `SELECT id, peer_id, version, version_number, rules_content, hmac, created_at FROM rule_bundles WHERE peer_id = ? ORDER BY created_at DESC LIMIT 1`, serverID).Scan(&bundle.ID, &bundle.PeerID, &bundle.Version, &bundle.VersionNumber, &bundle.RulesContent, &bundle.HMAC, &bundle.CreatedAt)
 
 	if err == sql.ErrNoRows {
 		http.Error(w, `{"error": "no bundle found"}`, http.StatusNotFound)
@@ -314,8 +328,8 @@ func GetBundle(w http.ResponseWriter, r *http.Request) {
 }
 
 // Heartbeat handles agent heartbeat requests.
-func Heartbeat(w http.ResponseWriter, r *http.Request) {
-	_, serverID, ok := getHostIDFromContext(w, r)
+func (h *Handler) Heartbeat(w http.ResponseWriter, r *http.Request) {
+	_, serverID, ok := h.getHostIDFromContext(w, r)
 	if !ok {
 		return
 	}
@@ -334,7 +348,7 @@ func Heartbeat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Update peer heartbeat and status
-	_, err := db.DB.ExecContext(r.Context(), `UPDATE peers SET last_heartbeat = CURRENT_TIMESTAMP, status = 'online', agent_version = ?, bundle_version = ?, has_ipset = ? WHERE id = ?`, input.AgentVersion, input.BundleVersionApplied, input.HasIPSet, serverID)
+	_, err := h.DB.ExecContext(r.Context(), `UPDATE peers SET last_heartbeat = CURRENT_TIMESTAMP, status = 'online', agent_version = ?, bundle_version = ?, has_ipset = ? WHERE id = ?`, input.AgentVersion, input.BundleVersionApplied, input.HasIPSet, serverID)
 	if err != nil {
 		runiclog.Error("Failed to update heartbeat error", "error", err)
 	}
@@ -345,8 +359,8 @@ func Heartbeat(w http.ResponseWriter, r *http.Request) {
 }
 
 // SubmitLogs handles log submissions from agents.
-func SubmitLogs(w http.ResponseWriter, r *http.Request) {
-	_, serverID, ok := getHostIDFromContext(w, r)
+func (h *Handler) SubmitLogs(w http.ResponseWriter, r *http.Request) {
+	_, serverID, ok := h.getHostIDFromContext(w, r)
 	if !ok {
 		return
 	}
@@ -370,7 +384,7 @@ func SubmitLogs(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		_, err := db.DB.ExecContext(r.Context(), `INSERT INTO firewall_logs (peer_id, timestamp, direction, src_ip, dst_ip, protocol, src_port, dst_port, action, raw_line) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, serverID, ev.Timestamp, ev.Direction, ev.SrcIP, ev.DstIP, ev.Protocol, ev.SrcPort, ev.DstPort, ev.Action, ev.RawLine)
+		_, err := h.DB.ExecContext(r.Context(), `INSERT INTO firewall_logs (peer_id, timestamp, direction, src_ip, dst_ip, protocol, src_port, dst_port, action, raw_line) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, serverID, ev.Timestamp, ev.Direction, ev.SrcIP, ev.DstIP, ev.Protocol, ev.SrcPort, ev.DstPort, ev.Action, ev.RawLine)
 		if err != nil {
 			runiclog.Error("Failed to insert log event", "error", err)
 			skipped++
@@ -398,8 +412,8 @@ func SubmitLogs(w http.ResponseWriter, r *http.Request) {
 }
 
 // ConfirmBundleApplied handles confirmation that a bundle was applied.
-func ConfirmBundleApplied(w http.ResponseWriter, r *http.Request) {
-	_, serverID, ok := getHostIDFromContext(w, r)
+func (h *Handler) ConfirmBundleApplied(w http.ResponseWriter, r *http.Request) {
+	_, serverID, ok := h.getHostIDFromContext(w, r)
 	if !ok {
 		return
 	}
@@ -420,13 +434,13 @@ func ConfirmBundleApplied(w http.ResponseWriter, r *http.Request) {
 		appliedAt = time.Now().UTC().Format(time.RFC3339)
 	}
 
-	_, err := db.DB.ExecContext(r.Context(), `UPDATE rule_bundles SET applied_at = ? WHERE peer_id = ? AND version = ?`, appliedAt, serverID, input.Version)
+	_, err := h.DB.ExecContext(r.Context(), `UPDATE rule_bundles SET applied_at = ? WHERE peer_id = ? AND version = ?`, appliedAt, serverID, input.Version)
 	if err != nil {
 		runiclog.Error("Failed to confirm bundle apply error", "error", err)
 	}
 
 	// Update peer's bundle_version
-	if _, err := db.DB.ExecContext(r.Context(), "UPDATE peers SET bundle_version = ? WHERE id = ?", input.Version, serverID); err != nil {
+	if _, err := h.DB.ExecContext(r.Context(), "UPDATE peers SET bundle_version = ? WHERE id = ?", input.Version, serverID); err != nil {
 		runiclog.Error("Failed to update peer bundle version", "error", err)
 	}
 
@@ -435,8 +449,8 @@ func ConfirmBundleApplied(w http.ResponseWriter, r *http.Request) {
 
 // HandleSSEvents handles SSE connections for agents.
 // Deprecated: Use MakeHandleSSEventsHandler for explicit dependency injection.
-func HandleSSEvents(w http.ResponseWriter, r *http.Request) {
-	hostID, _, ok := getHostIDFromContext(w, r)
+func (h *Handler) HandleSSEvents(w http.ResponseWriter, r *http.Request) {
+	hostID, _, ok := h.getHostIDFromContext(w, r)
 	if !ok {
 		return
 	}
@@ -495,9 +509,9 @@ func HandleSSEvents(w http.ResponseWriter, r *http.Request) {
 
 // MakeHandleSSEventsHandler creates an SSE handler with explicit SSE hub injection.
 // This is the preferred way to create the SSE handler as it avoids context propagation issues.
-func MakeHandleSSEventsHandler(hub SSEBroadcaster) http.HandlerFunc {
+func (h *Handler) MakeHandleSSEventsHandler(hub SSEBroadcaster) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		hostID, _, ok := getHostIDFromContext(w, r)
+		hostID, _, ok := h.getHostIDFromContext(w, r)
 		if !ok {
 			runiclog.Error("HandleSSEvents: failed to get host_id from context")
 			return
@@ -556,15 +570,15 @@ func MakeHandleSSEventsHandler(hub SSEBroadcaster) http.HandlerFunc {
 }
 
 // AgentCheckRotation checks if a rotation is pending for the agent.
-func AgentCheckRotation(w http.ResponseWriter, r *http.Request) {
-	hostID, serverID, ok := getHostIDFromContext(w, r)
+func (h *Handler) AgentCheckRotation(w http.ResponseWriter, r *http.Request) {
+	hostID, serverID, ok := h.getHostIDFromContext(w, r)
 	if !ok {
 		return
 	}
 
 	// Check if there's a pending rotation token
 	var rotationToken sql.NullString
-	err := db.DB.QueryRowContext(r.Context(),
+	err := h.DB.QueryRowContext(r.Context(),
 		"SELECT hmac_key_rotation_token FROM peers WHERE id = ?",
 		serverID,
 	).Scan(&rotationToken)
@@ -593,8 +607,8 @@ func AgentCheckRotation(w http.ResponseWriter, r *http.Request) {
 
 // AgentTestKey validates an HMAC signature using the peer's current key.
 // POST /api/v1/agent/test-key (requires agent JWT auth)
-func AgentTestKey(w http.ResponseWriter, r *http.Request) {
-	_, serverID, ok := getHostIDFromContext(w, r)
+func (h *Handler) AgentTestKey(w http.ResponseWriter, r *http.Request) {
+	_, serverID, ok := h.getHostIDFromContext(w, r)
 	if !ok {
 		return
 	}
@@ -611,7 +625,7 @@ func AgentTestKey(w http.ResponseWriter, r *http.Request) {
 
 	// Get peer's current HMAC key
 	var hmacKey string
-	err := db.DB.QueryRowContext(r.Context(),
+	err := h.DB.QueryRowContext(r.Context(),
 		"SELECT hmac_key FROM peers WHERE id = ?",
 		serverID,
 	).Scan(&hmacKey)

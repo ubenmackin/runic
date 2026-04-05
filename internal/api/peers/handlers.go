@@ -13,9 +13,19 @@ import (
 	"runic/internal/api/agents"
 	"runic/internal/api/common"
 	"runic/internal/common/constants"
-	"runic/internal/db"
 	"runic/internal/engine"
 )
+
+// Handler holds dependencies for peer handlers.
+type Handler struct {
+	DB       *sql.DB
+	Compiler *engine.Compiler
+}
+
+// NewHandler creates a new peers handler.
+func NewHandler(db *sql.DB, compiler *engine.Compiler) *Handler {
+	return &Handler{DB: db, Compiler: compiler}
+}
 
 // hostnameRegex validates hostnames: 1-253 chars, alphanumeric with hyphens and dots,
 // must start and end with alphanumeric (single-char hostnames allowed).
@@ -47,12 +57,8 @@ type Peer struct {
 	PendingChangesCount  int    `json:"pending_changes_count"`
 }
 
-func GetPeers(w http.ResponseWriter, r *http.Request) {
-	if db.DB == nil {
-		common.RespondError(w, http.StatusInternalServerError, "database not initialized")
-		return
-	}
-	rows, err := db.DB.QueryContext(r.Context(), `
+func (h *Handler) GetPeers(w http.ResponseWriter, r *http.Request) {
+	rows, err := h.DB.QueryContext(r.Context(), `
 		SELECT p.id, p.hostname, p.ip_address, p.os_type, p.arch, p.has_docker, p.is_manual,
 		COALESCE(p.agent_version, '') as agent_version,
 		COALESCE(p.last_heartbeat, '') as last_heartbeat,
@@ -107,7 +113,7 @@ func GetPeers(w http.ResponseWriter, r *http.Request) {
 	common.RespondJSON(w, http.StatusOK, peers)
 }
 
-func CreatePeer(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) CreatePeer(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		Hostname  string `json:"hostname"`
 		IPAddress string `json:"ip_address"`
@@ -166,7 +172,7 @@ func CreatePeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := db.DB.ExecContext(r.Context(),
+	result, err := h.DB.ExecContext(r.Context(),
 		`INSERT INTO peers (hostname, ip_address, os_type, agent_key, hmac_key, has_docker, is_manual) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		input.Hostname, input.IPAddress, input.OSType, agentKey, hmacKey, input.HasDocker, input.IsManual)
 	if err != nil {
@@ -175,12 +181,17 @@ func CreatePeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id, _ := result.LastInsertId()
+	id, err := result.LastInsertId()
+	if err != nil {
+		log.Printf("ERROR: failed to get insert ID: %v", err)
+		common.InternalError(w)
+		return
+	}
 	common.RespondJSON(w, http.StatusCreated, map[string]int64{"id": id})
 }
 
 // UpdatePeer updates a manual peer's hostname, IP, OS type, arch, has_docker, and description.
-func UpdatePeer(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) UpdatePeer(w http.ResponseWriter, r *http.Request) {
 	id, err := common.ParseIDParam(r, "id")
 	if err != nil {
 		common.RespondError(w, http.StatusBadRequest, "invalid peer ID")
@@ -202,7 +213,7 @@ func UpdatePeer(w http.ResponseWriter, r *http.Request) {
 
 	// Validate this is a manual peer (only manual peers can be edited)
 	var isManual bool
-	err = db.DB.QueryRowContext(r.Context(), "SELECT is_manual FROM peers WHERE id = ?", id).Scan(&isManual)
+	err = h.DB.QueryRowContext(r.Context(), "SELECT is_manual FROM peers WHERE id = ?", id).Scan(&isManual)
 	if err == sql.ErrNoRows {
 		common.RespondError(w, http.StatusNotFound, "peer not found")
 		return
@@ -217,7 +228,7 @@ func UpdatePeer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Update the peer (hostname, ip_address, os_type, arch, has_docker, and description are all editable)
-	_, err = db.DB.ExecContext(r.Context(), "UPDATE peers SET hostname = ?, ip_address = ?, os_type = ?, arch = ?, has_docker = ?, description = ? WHERE id = ?", input.Hostname, input.IPAddress, input.OSType, input.Arch, input.HasDocker, input.Description, id)
+	_, err = h.DB.ExecContext(r.Context(), "UPDATE peers SET hostname = ?, ip_address = ?, os_type = ?, arch = ?, has_docker = ?, description = ? WHERE id = ?", input.Hostname, input.IPAddress, input.OSType, input.Arch, input.HasDocker, input.Description, id)
 	if err != nil {
 		log.Printf("ERROR: failed to update peer: %v", err)
 		common.InternalError(w)
@@ -227,32 +238,30 @@ func UpdatePeer(w http.ResponseWriter, r *http.Request) {
 	common.RespondJSON(w, http.StatusOK, map[string]string{"message": "peer updated"})
 }
 
-// MakeCompilePeerHandler injects the Compiler dependency for peer rule compilation.
-func MakeCompilePeerHandler(compiler *engine.Compiler) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := common.ParseIDParam(r, "id")
-		if err != nil {
-			common.RespondError(w, http.StatusBadRequest, "invalid peer ID")
-			return
-		}
-
-		bundle, err := compiler.CompileAndStore(r.Context(), id)
-		if err != nil {
-			log.Printf("ERROR: compilation failed: %v", err)
-			common.InternalError(w)
-			return
-		}
-
-		common.RespondJSON(w, http.StatusOK, map[string]interface{}{
-			"version": bundle.Version,
-			"hmac":    bundle.HMAC,
-			"size":    len(bundle.RulesContent),
-		})
+// CompilePeer compiles rules for a peer.
+func (h *Handler) CompilePeer(w http.ResponseWriter, r *http.Request) {
+	id, err := common.ParseIDParam(r, "id")
+	if err != nil {
+		common.RespondError(w, http.StatusBadRequest, "invalid peer ID")
+		return
 	}
+
+	bundle, err := h.Compiler.CompileAndStore(r.Context(), id)
+	if err != nil {
+		log.Printf("ERROR: compilation failed: %v", err)
+		common.InternalError(w)
+		return
+	}
+
+	common.RespondJSON(w, http.StatusOK, map[string]interface{}{
+		"version": bundle.Version,
+		"hmac":    bundle.HMAC,
+		"size":    len(bundle.RulesContent),
+	})
 }
 
 // DeletePeer deletes a peer after checking policy constraints.
-func DeletePeer(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) DeletePeer(w http.ResponseWriter, r *http.Request) {
 	peerID, err := common.ParseIDParam(r, "id")
 	if err != nil {
 		common.RespondError(w, http.StatusBadRequest, "invalid peer ID")
@@ -260,25 +269,29 @@ func DeletePeer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check delete constraints (target_peer_id in policies, or in group used by policy)
-	err = common.CheckPeerDeleteConstraints(r.Context(), db.DB.DB, peerID)
+	err = common.CheckPeerDeleteConstraints(r.Context(), h.DB, peerID)
 	if err != nil {
 		common.RespondError(w, http.StatusConflict, err.Error())
 		return
 	}
 
 	// Delete from group_members first
-	if _, err := db.DB.ExecContext(r.Context(), "DELETE FROM group_members WHERE peer_id = ?", peerID); err != nil {
+	if _, err := h.DB.ExecContext(r.Context(), "DELETE FROM group_members WHERE peer_id = ?", peerID); err != nil {
 		log.Printf("WARN: Failed to cleanup group_members for peer %d: %v", peerID, err)
 	}
 
 	// Delete any rule bundles (foreign key constraint)
-	db.DB.ExecContext(r.Context(), "DELETE FROM rule_bundles WHERE peer_id = ?", peerID)
+	if _, err := h.DB.ExecContext(r.Context(), "DELETE FROM rule_bundles WHERE peer_id = ?", peerID); err != nil {
+		log.Printf("WARN: Failed to cleanup rule_bundles for peer %d: %v", peerID, err)
+	}
 
 	// Delete any firewall logs for this peer
-	db.DB.ExecContext(r.Context(), "DELETE FROM firewall_logs WHERE peer_id = ?", peerID)
+	if _, err := h.DB.ExecContext(r.Context(), "DELETE FROM firewall_logs WHERE peer_id = ?", peerID); err != nil {
+		log.Printf("WARN: Failed to cleanup firewall_logs for peer %d: %v", peerID, err)
+	}
 
 	// Delete the peer
-	result, err := db.DB.ExecContext(r.Context(), "DELETE FROM peers WHERE id = ?", peerID)
+	result, err := h.DB.ExecContext(r.Context(), "DELETE FROM peers WHERE id = ?", peerID)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "Failed to delete peer")
 		return
@@ -293,24 +306,22 @@ func DeletePeer(w http.ResponseWriter, r *http.Request) {
 	common.RespondJSON(w, http.StatusOK, map[string]string{"message": "Peer deleted"})
 }
 
-// MakeGetPeerBundleHandler injects the Compiler dependency and returns the current effective rules.
+// GetPeerBundle returns the current effective rules for a peer.
 // This handler compiles fresh rules on each request to ensure no stale data is returned.
-func MakeGetPeerBundleHandler(compiler *engine.Compiler) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := common.ParseIDParam(r, "id")
-		if err != nil {
-			common.RespondError(w, http.StatusBadRequest, "invalid peer ID")
-			return
-		}
-
-		// Compile fresh rules for the peer to ensure current effective rules
-		bundle, err := compiler.CompileAndStore(r.Context(), id)
-		if err != nil {
-			log.Printf("ERROR: failed to compile rules: %v", err)
-			common.InternalError(w)
-			return
-		}
-
-		common.RespondJSON(w, http.StatusOK, map[string]string{"content": bundle.RulesContent})
+func (h *Handler) GetPeerBundle(w http.ResponseWriter, r *http.Request) {
+	id, err := common.ParseIDParam(r, "id")
+	if err != nil {
+		common.RespondError(w, http.StatusBadRequest, "invalid peer ID")
+		return
 	}
+
+	// Compile fresh rules for the peer to ensure current effective rules
+	bundle, err := h.Compiler.CompileAndStore(r.Context(), id)
+	if err != nil {
+		log.Printf("ERROR: failed to compile rules: %v", err)
+		common.InternalError(w)
+		return
+	}
+
+	common.RespondJSON(w, http.StatusOK, map[string]string{"content": bundle.RulesContent})
 }

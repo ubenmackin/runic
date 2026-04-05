@@ -1,7 +1,9 @@
 package agents
 
 import (
+	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
 	"fmt"
 	"net/http"
@@ -33,8 +35,8 @@ func GenerateHMACKey() (string, error) {
 }
 
 // generateAgentToken generates a JWT-like token for an agent.
-func generateAgentToken(hostname string) (string, error) {
-	hMACKey, err := db.GetSecret("agent_jwt_secret")
+func generateAgentToken(ctx context.Context, dbConn *sql.DB, hostname string) (string, error) {
+	hMACKey, err := db.GetSecret(ctx, dbConn, "agent_jwt_secret")
 	if err != nil {
 		return "", fmt.Errorf("agent JWT secret not configured: %w", err)
 	}
@@ -63,7 +65,7 @@ func generateAgentKey() (string, error) {
 
 // getHostIDFromContext safely extracts host_id from request context and looks up the peer.
 // The host_id in context comes from the JWT subject claim, which is in format "host-{hostname}".
-func getHostIDFromContext(w http.ResponseWriter, r *http.Request) (string, int, bool) {
+func (h *Handler) getHostIDFromContext(w http.ResponseWriter, r *http.Request) (string, int, bool) {
 	hostIDVal := r.Context().Value(hostIDKey)
 	if hostIDVal == nil {
 		http.Error(w, `{"error": "host_id not found in context"}`, http.StatusUnauthorized)
@@ -84,7 +86,7 @@ func getHostIDFromContext(w http.ResponseWriter, r *http.Request) (string, int, 
 
 	// Look up peer by hostname to get the numeric ID
 	var peerID int
-	err := db.DB.QueryRowContext(r.Context(), "SELECT id FROM peers WHERE hostname = ?", hostname).Scan(&peerID)
+	err := h.DB.QueryRowContext(r.Context(), "SELECT id FROM peers WHERE hostname = ?", hostname).Scan(&peerID)
 	if err != nil {
 		http.Error(w, `{"error": "peer not found"}`, http.StatusNotFound)
 		return "", 0, false

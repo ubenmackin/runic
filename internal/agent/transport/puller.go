@@ -45,7 +45,7 @@ func PullBundle(ctx context.Context, client common.HTTPClient, controlPlaneURL, 
 	case http.StatusOK:
 		// Continue to process bundle
 	default:
-		return fmt.Errorf("bundle fetch returned %d", resp.StatusCode)
+		return &common.HTTPStatusError{StatusCode: resp.StatusCode, Method: "GET", URL: url}
 	}
 
 	var bundle models.BundleResponse
@@ -85,7 +85,7 @@ func ConfirmApply(ctx context.Context, client common.HTTPClient, controlPlaneURL
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
-		return fmt.Errorf("confirm apply returned %d", resp.StatusCode)
+		return &common.HTTPStatusError{StatusCode: resp.StatusCode, Method: "POST", URL: url}
 	}
 
 	return nil
@@ -103,9 +103,9 @@ func ListenSSE(ctx context.Context, client common.HTTPClient, controlPlaneURL, h
 
 		if err := connectSSE(ctx, client, controlPlaneURL, hostID, token, version, onBundleUpdate); err != nil {
 			log.Warn("SSE connection lost, reconnecting", "error", err, "delay", "15s")
-			if strings.Contains(err.Error(), "401") {
+			if errors.Is(err, common.ErrUnauthorized) {
 				log.Warn("Received 401 on SSE connection, signaling for re-registration")
-				return errors.Join(err, common.ErrUnauthorized)
+				return err
 			}
 			select {
 			case <-ctx.Done():
@@ -138,7 +138,7 @@ func connectSSE(ctx context.Context, client common.HTTPClient, controlPlaneURL, 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("SSE returned status %d", resp.StatusCode)
+		return &common.HTTPStatusError{StatusCode: resp.StatusCode, Method: "GET", URL: url}
 	}
 
 	reader := resp.Body

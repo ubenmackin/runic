@@ -7,7 +7,6 @@ import (
 
 	"runic/internal/api/common"
 	"runic/internal/auth"
-	"runic/internal/db"
 )
 
 // Token TTL constants.
@@ -23,10 +22,10 @@ type TokenResponse struct {
 }
 
 // GenerateTokenPair generates an access token (1h TTL) and refresh token (7d TTL).
-func GenerateTokenPair(username string) (accessToken string, refreshToken string, err error) {
+func (h *Handler) GenerateTokenPair(username string) (accessToken string, refreshToken string, err error) {
 	// Look up user's role from database
 	var role string
-	err = db.DB.QueryRow("SELECT role FROM users WHERE username = ?", username).Scan(&role)
+	err = h.DB.QueryRow("SELECT role FROM users WHERE username = ?", username).Scan(&role)
 	if err != nil {
 		log.Printf("WARNING: failed to look up role for %s, defaulting to viewer: %v", username, err)
 		role = "viewer"
@@ -45,7 +44,7 @@ func GenerateTokenPair(username string) (accessToken string, refreshToken string
 
 // RespondWithTokens responds with the standard token response via httpOnly cookies.
 // Tokens are set as cookies; only username and is_setup are returned in JSON.
-func RespondWithTokens(w http.ResponseWriter, status int, accessToken, refreshToken, username string, isSetup bool) {
+func (h *Handler) RespondWithTokens(w http.ResponseWriter, status int, accessToken, refreshToken, username string, isSetup bool) {
 	setAuthCookies(w, accessToken, refreshToken)
 	common.RespondJSON(w, status, map[string]interface{}{
 		"username": username,

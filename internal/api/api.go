@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"time"
@@ -10,6 +11,7 @@ import (
 
 	"runic/internal/api/agents"
 	authhandlers "runic/internal/api/auth"
+	"runic/internal/api/common"
 	"runic/internal/api/dashboard"
 	"runic/internal/api/downloads"
 	"runic/internal/api/events"
@@ -24,16 +26,30 @@ import (
 	"runic/internal/api/users"
 	"runic/internal/auth"
 	"runic/internal/common/version"
-	"runic/internal/db"
 	"runic/internal/engine"
 	"runic/internal/metrics"
 )
 
 // API holds dependencies for the API handlers.
 type API struct {
-	Compiler            *engine.Compiler
-	SSEHub              *events.SSEHub
-	LogHub              *logs.Hub
+	Compiler *engine.Compiler
+	DB       *sql.DB
+	SSEHub   *events.SSEHub
+	LogHub   *logs.Hub
+
+	// Handler instances with dependency injection
+	Peers     *peers.Handler
+	Agents    *agents.Handler
+	Auth      *authhandlers.Handler
+	Groups    *groups.Handler
+	Policies  *policies.Handler
+	Services  *services.Handler
+	Logs      *logs.Handler
+	Users     *users.Handler
+	Keys      *keys.Handler
+	Pending   *pending.Handler
+	Dashboard *dashboard.Handler
+
 	LoginRateLimiter    *middleware.RateLimiter
 	RegisterRateLimiter *middleware.RateLimiter
 	RefreshRateLimiter  *middleware.RateLimiter
@@ -41,12 +57,25 @@ type API struct {
 	LogoutRateLimiter   *middleware.RateLimiter
 }
 
-// NewAPI creates a new API instance with the given compiler.
-func NewAPI(compiler *engine.Compiler) *API {
+// NewAPI creates a new API instance with dependency injection.
+func NewAPI(db *sql.DB, compiler *engine.Compiler) *API {
+	sseHub := events.NewSSEHub()
 	return &API{
-		Compiler: compiler,
-		SSEHub:   events.NewSSEHub(),
-		LogHub:   logs.NewHub(),
+		Compiler:  compiler,
+		DB:        db,
+		SSEHub:    sseHub,
+		LogHub:    logs.NewHub(),
+		Peers:     peers.NewHandler(db, compiler),
+		Agents:    agents.NewHandler(db),
+		Auth:      authhandlers.NewHandler(db),
+		Groups:    groups.NewHandler(db, compiler),
+		Policies:  policies.NewHandler(db, compiler),
+		Services:  services.NewHandler(db, compiler),
+		Logs:      logs.NewHandler(db),
+		Users:     users.NewHandler(db),
+		Keys:      keys.NewHandler(db),
+		Pending:   pending.NewHandler(db, compiler, sseHub),
+		Dashboard: dashboard.NewHandler(db),
 	}
 }
 
@@ -74,7 +103,7 @@ func GetAPI(ctx context.Context) *API {
 }
 
 // RegisterRoutes registers all API routes. Accepts an API instance for rule compilation endpoints.
-func RegisterRoutes(r *mux.Router, a *API, downloadsDir string) {
+func (a *API) RegisterRoutes(r *mux.Router, downloadsDir string) {
 
 	// Apply RequestID middleware to all routes
 	r.Use(RequestID())
@@ -102,17 +131,17 @@ func RegisterRoutes(r *mux.Router, a *API, downloadsDir string) {
 
 	// Public routes (no authentication required)
 	// Setup
-	apiRouter.HandleFunc("/setup", authhandlers.HandleSetup).Methods("GET")
-	apiRouter.HandleFunc("/setup", authhandlers.HandleSetup).Methods("POST")
+	apiRouter.HandleFunc("/setup", a.Auth.HandleSetup).Methods("GET")
+	apiRouter.HandleFunc("/setup", a.Auth.HandleSetup).Methods("POST")
 
 	// Login
-	apiRouter.Handle("/auth/login", a.LoginRateLimiter.Middleware(http.HandlerFunc(authhandlers.HandleLoginPOST))).Methods("POST")
+	apiRouter.Handle("/auth/login", a.LoginRateLimiter.Middleware(http.HandlerFunc(a.Auth.HandleLoginPOST))).Methods("POST")
 
 	// Token refresh (public - uses refresh token, not access token)
-	apiRouter.Handle("/auth/refresh", a.RefreshRateLimiter.Middleware(http.HandlerFunc(authhandlers.HandleRefreshPOST))).Methods("POST")
+	apiRouter.Handle("/auth/refresh", a.RefreshRateLimiter.Middleware(http.HandlerFunc(a.Auth.HandleRefreshPOST))).Methods("POST")
 
 	// Agent registration (no auth needed)
-	apiRouter.Handle("/agent/register", a.RegisterRateLimiter.Middleware(http.HandlerFunc(agents.RegisterAgent))).Methods("POST")
+	apiRouter.Handle("/agent/register", a.RegisterRateLimiter.Middleware(http.HandlerFunc(a.Agents.RegisterAgent))).Methods("POST")
 
 	// Protected routes (require JWT authentication)
 	protected := apiRouter.NewRoute().Subrouter()
@@ -121,43 +150,43 @@ func RegisterRoutes(r *mux.Router, a *API, downloadsDir string) {
 	// --- Viewer routes (all authenticated users — no extra middleware) ---
 
 	// Logout
-	protected.Handle("/auth/logout", a.LogoutRateLimiter.Middleware(http.HandlerFunc(authhandlers.HandleLogoutPOST))).Methods("POST")
+	protected.Handle("/auth/logout", a.LogoutRateLimiter.Middleware(http.HandlerFunc(a.Auth.HandleLogoutPOST))).Methods("POST")
 
 	// Auth me endpoint
-	protected.HandleFunc("/auth/me", authhandlers.HandleGetMe).Methods("GET")
+	protected.HandleFunc("/auth/me", a.Auth.HandleGetMe).Methods("GET")
 
 	// Dashboard
-	protected.HandleFunc("/dashboard", dashboard.HandleDashboard).Methods("GET")
+	protected.HandleFunc("/dashboard", a.Dashboard.HandleDashboard).Methods("GET")
 
 	// Logs (read)
-	protected.HandleFunc("/logs", logs.GetLogs).Methods("GET")
+	protected.HandleFunc("/logs", a.Logs.GetLogs).Methods("GET")
 	protected.HandleFunc("/logs/stream", logs.MakeLogsStreamHandler(a.LogHub)).Methods("GET")
 
 	// Peers (read-only + compile/rotate-key)
-	protected.HandleFunc("/peers", peers.GetPeers).Methods("GET")
-	protected.HandleFunc("/peers/{id:[0-9]+}/bundle", peers.MakeGetPeerBundleHandler(a.Compiler)).Methods("GET")
-	protected.HandleFunc("/peers/{id:[0-9]+}/compile", peers.MakeCompilePeerHandler(a.Compiler)).Methods("POST")
-	protected.HandleFunc("/peers/{id:[0-9]+}/rotate-key", peers.RotatePeerKey).Methods("POST")
+	protected.HandleFunc("/peers", a.Peers.GetPeers).Methods("GET")
+	protected.HandleFunc("/peers/{id:[0-9]+}/bundle", a.Peers.GetPeerBundle).Methods("GET")
+	protected.HandleFunc("/peers/{id:[0-9]+}/compile", a.Peers.CompilePeer).Methods("POST")
+	protected.HandleFunc("/peers/{id:[0-9]+}/rotate-key", a.Peers.RotatePeerKey).Methods("POST")
 
 	// Groups (read-only + members management)
-	protected.HandleFunc("/groups", groups.ListGroups).Methods("GET")
-	protected.HandleFunc("/groups/{id:[0-9]+}", groups.GetGroup).Methods("GET")
-	protected.HandleFunc("/groups/{id:[0-9]+}/members", groups.ListGroupMembers).Methods("GET")
-	protected.HandleFunc("/groups/{id:[0-9]+}/members", groups.MakeAddGroupMemberHandler(a.Compiler)).Methods("POST")
-	protected.HandleFunc("/groups/{groupId:[0-9]+}/members/{peerId:[0-9]+}", groups.MakeDeleteGroupMemberHandler(a.Compiler)).Methods("DELETE")
+	protected.HandleFunc("/groups", a.Groups.ListGroups).Methods("GET")
+	protected.HandleFunc("/groups/{id:[0-9]+}", a.Groups.GetGroup).Methods("GET")
+	protected.HandleFunc("/groups/{id:[0-9]+}/members", a.Groups.ListGroupMembers).Methods("GET")
+	protected.HandleFunc("/groups/{id:[0-9]+}/members", a.Groups.AddGroupMember).Methods("POST")
+	protected.HandleFunc("/groups/{groupId:[0-9]+}/members/{peerId:[0-9]+}", a.Groups.DeleteGroupMember).Methods("DELETE")
 
 	// Services (read-only)
-	protected.HandleFunc("/services", services.ListServices).Methods("GET")
-	protected.HandleFunc("/services/{id:[0-9]+}", services.GetService).Methods("GET")
+	protected.HandleFunc("/services", a.Services.ListServices).Methods("GET")
+	protected.HandleFunc("/services/{id:[0-9]+}", a.Services.GetService).Methods("GET")
 
 	// Policies (read-only)
-	protected.HandleFunc("/policies", policies.ListPolicies).Methods("GET")
-	protected.HandleFunc("/policies/{id:[0-9]+}", policies.GetPolicy).Methods("GET")
-	protected.HandleFunc("/policies/special-targets", policies.ListSpecialTargets).Methods("GET")
+	protected.HandleFunc("/policies", a.Policies.ListPolicies).Methods("GET")
+	protected.HandleFunc("/policies/{id:[0-9]+}", a.Policies.GetPolicy).Methods("GET")
+	protected.HandleFunc("/policies/special-targets", a.Policies.ListSpecialTargets).Methods("GET")
 
 	// Pending changes (viewer routes — read-only)
-	protected.HandleFunc("/pending-changes", pending.ListPendingChanges).Methods("GET")
-	protected.HandleFunc("/pending-changes/{peerId:[0-9]+}", pending.GetPeerPendingChanges).Methods("GET")
+	protected.HandleFunc("/pending-changes", a.Pending.ListPendingChanges).Methods("GET")
+	protected.HandleFunc("/pending-changes/{peerId:[0-9]+}", a.Pending.GetPeerPendingChanges).Methods("GET")
 
 	// Version info endpoint (requires authentication)
 	protected.HandleFunc("/info", func(w http.ResponseWriter, r *http.Request) {
@@ -174,65 +203,65 @@ func RegisterRoutes(r *mux.Router, a *API, downloadsDir string) {
 	admin.Use(middleware.RequireRole("admin"))
 
 	// Users
-	admin.HandleFunc("/users", users.ListUsers).Methods("GET")
-	admin.HandleFunc("/users", users.CreateUser).Methods("POST")
-	admin.HandleFunc("/users/{id:[0-9]+}", users.UpdateUser).Methods("PUT")
-	admin.HandleFunc("/users/{id:[0-9]+}", users.DeleteUser).Methods("DELETE")
+	admin.HandleFunc("/users", a.Users.ListUsers).Methods("GET")
+	admin.HandleFunc("/users", a.Users.CreateUser).Methods("POST")
+	admin.HandleFunc("/users/{id:[0-9]+}", a.Users.UpdateUser).Methods("PUT")
+	admin.HandleFunc("/users/{id:[0-9]+}", a.Users.DeleteUser).Methods("DELETE")
 
 	// Setup Keys
-	admin.HandleFunc("/setup-keys", keys.ListKeys).Methods("GET")
-	admin.HandleFunc("/setup-keys/{type}", keys.CreateKey).Methods("POST")
-	admin.HandleFunc("/setup-keys/{type}", keys.DeleteKey).Methods("DELETE")
+	admin.HandleFunc("/setup-keys", a.Keys.ListKeys).Methods("GET")
+	admin.HandleFunc("/setup-keys/{type}", a.Keys.CreateKey).Methods("POST")
+	admin.HandleFunc("/setup-keys/{type}", a.Keys.DeleteKey).Methods("DELETE")
 
 	// Registration Tokens
-	admin.HandleFunc("/registration-tokens", agents.ListRegistrationTokens).Methods("GET")
-	admin.HandleFunc("/registration-tokens", agents.GenerateRegistrationToken).Methods("POST")
-	admin.HandleFunc("/registration-tokens/{id:[0-9]+}", agents.RevokeRegistrationToken).Methods("DELETE")
+	admin.HandleFunc("/registration-tokens", a.Agents.ListRegistrationTokens).Methods("GET")
+	admin.HandleFunc("/registration-tokens", a.Agents.GenerateRegistrationToken).Methods("POST")
+	admin.HandleFunc("/registration-tokens/{id:[0-9]+}", a.Agents.RevokeRegistrationToken).Methods("DELETE")
 
 	// --- Editor+ routes (admin and editor) ---
 	editor := protected.PathPrefix("").Subrouter()
 	editor.Use(middleware.RequireRole("admin", "editor"))
 
 	// Peer management (write operations)
-	editor.HandleFunc("/peers", peers.CreatePeer).Methods("POST")
-	editor.HandleFunc("/peers/{id:[0-9]+}", peers.UpdatePeer).Methods("PUT")
-	editor.HandleFunc("/peers/{id:[0-9]+}", peers.DeletePeer).Methods("DELETE")
+	editor.HandleFunc("/peers", a.Peers.CreatePeer).Methods("POST")
+	editor.HandleFunc("/peers/{id:[0-9]+}", a.Peers.UpdatePeer).Methods("PUT")
+	editor.HandleFunc("/peers/{id:[0-9]+}", a.Peers.DeletePeer).Methods("DELETE")
 
 	// Groups (write operations)
-	editor.HandleFunc("/groups", groups.CreateGroup).Methods("POST")
-	editor.HandleFunc("/groups/{id:[0-9]+}", groups.UpdateGroup).Methods("PUT")
-	editor.HandleFunc("/groups/{id:[0-9]+}", groups.DeleteGroup).Methods("DELETE")
+	editor.HandleFunc("/groups", a.Groups.CreateGroup).Methods("POST")
+	editor.HandleFunc("/groups/{id:[0-9]+}", a.Groups.UpdateGroup).Methods("PUT")
+	editor.HandleFunc("/groups/{id:[0-9]+}", a.Groups.DeleteGroup).Methods("DELETE")
 
 	// Services (write operations)
-	editor.HandleFunc("/services", services.MakeCreateServiceHandler(a.Compiler)).Methods("POST")
-	editor.HandleFunc("/services/{id:[0-9]+}", services.MakeUpdateServiceHandler(a.Compiler)).Methods("PUT")
-	editor.HandleFunc("/services/{id:[0-9]+}", services.MakeDeleteServiceHandler(a.Compiler)).Methods("DELETE")
+	editor.HandleFunc("/services", a.Services.CreateService).Methods("POST")
+	editor.HandleFunc("/services/{id:[0-9]+}", a.Services.UpdateService).Methods("PUT")
+	editor.HandleFunc("/services/{id:[0-9]+}", a.Services.DeleteService).Methods("DELETE")
 
 	// Policies (write operations)
-	editor.HandleFunc("/policies", policies.MakeCreatePolicyHandler(a.Compiler)).Methods("POST")
-	editor.HandleFunc("/policies/preview", policies.MakePolicyPreviewHandler(a.Compiler)).Methods("POST")
-	editor.HandleFunc("/policies/{id:[0-9]+}", policies.MakeUpdatePolicyHandler(a.Compiler)).Methods("PUT")
-	editor.HandleFunc("/policies/{id:[0-9]+}", policies.MakePatchPolicyHandler(a.Compiler)).Methods("PATCH")
-	editor.HandleFunc("/policies/{id:[0-9]+}", policies.MakeDeletePolicyHandler(a.Compiler)).Methods("DELETE")
+	editor.HandleFunc("/policies", a.Policies.CreatePolicy).Methods("POST")
+	editor.HandleFunc("/policies/preview", a.Policies.PolicyPreview).Methods("POST")
+	editor.HandleFunc("/policies/{id:[0-9]+}", a.Policies.UpdatePolicy).Methods("PUT")
+	editor.HandleFunc("/policies/{id:[0-9]+}", a.Policies.PatchPolicy).Methods("PATCH")
+	editor.HandleFunc("/policies/{id:[0-9]+}", a.Policies.DeletePolicy).Methods("DELETE")
 
 	// Pending changes (editor+ routes — preview and apply)
-	editor.HandleFunc("/pending-changes/{peerId:[0-9]+}/preview", pending.MakePreviewPeerPendingBundleHandler(a.Compiler)).Methods("POST")
-	editor.HandleFunc("/pending-changes/{peerId:[0-9]+}/apply", pending.MakeApplyPeerPendingBundleHandler(a.Compiler, a.SSEHub)).Methods("POST")
-	editor.HandleFunc("/pending-changes/apply-all", pending.MakeApplyAllPendingBundlesHandler(a.Compiler, a.SSEHub)).Methods("POST")
-	editor.HandleFunc("/pending-changes/push-all", pending.MakePushAllRulesHandler(a.Compiler, a.SSEHub)).Methods("POST")
+	editor.HandleFunc("/pending-changes/{peerId:[0-9]+}/preview", a.Pending.PreviewPeerPendingBundle).Methods("POST")
+	editor.HandleFunc("/pending-changes/{peerId:[0-9]+}/apply", a.Pending.ApplyPeerPendingBundle).Methods("POST")
+	editor.HandleFunc("/pending-changes/apply-all", a.Pending.ApplyAllPendingBundles).Methods("POST")
+	editor.HandleFunc("/pending-changes/push-all", a.Pending.PushAllRules).Methods("POST")
 
 	// Agent routes (require agent auth via JWT)
-	apiRouter.HandleFunc("/agent/bundle/{host_id}", agents.AgentAuthMiddleware(agents.GetBundle)).Methods("GET")
-	apiRouter.HandleFunc("/agent/heartbeat", agents.AgentAuthMiddleware(agents.Heartbeat)).Methods("GET", "POST")
-	apiRouter.HandleFunc("/agent/logs", agents.AgentAuthMiddleware(agents.SubmitLogs)).Methods("POST")
-	apiRouter.HandleFunc("/agent/bundle/{host_id}/applied", agents.AgentAuthMiddleware(agents.ConfirmBundleApplied)).Methods("POST")
-	apiRouter.HandleFunc("/agent/events/{host_id}", agents.AgentAuthMiddleware(agents.MakeHandleSSEventsHandler(a.SSEHub))).Methods("GET")
-	apiRouter.HandleFunc("/agent/test-key", agents.AgentAuthMiddleware(agents.AgentTestKey)).Methods("POST")
+	apiRouter.HandleFunc("/agent/bundle/{host_id}", a.Agents.AgentAuthMiddleware(a.Agents.GetBundle)).Methods("GET")
+	apiRouter.HandleFunc("/agent/heartbeat", a.Agents.AgentAuthMiddleware(a.Agents.Heartbeat)).Methods("GET", "POST")
+	apiRouter.HandleFunc("/agent/logs", a.Agents.AgentAuthMiddleware(a.Agents.SubmitLogs)).Methods("POST")
+	apiRouter.HandleFunc("/agent/bundle/{host_id}/applied", a.Agents.AgentAuthMiddleware(a.Agents.ConfirmBundleApplied)).Methods("POST")
+	apiRouter.HandleFunc("/agent/events/{host_id}", a.Agents.AgentAuthMiddleware(a.Agents.MakeHandleSSEventsHandler(a.SSEHub))).Methods("GET")
+	apiRouter.HandleFunc("/agent/test-key", a.Agents.AgentAuthMiddleware(a.Agents.AgentTestKey)).Methods("POST")
 
 	// Agent key rotation (public - authenticated via rotation token)
-	apiRouter.HandleFunc("/agent/check-rotation", agents.AgentAuthMiddleware(agents.AgentCheckRotation)).Methods("GET")
-	apiRouter.HandleFunc("/agent/rotate-key", peers.AgentRotateKey).Methods("POST")
-	apiRouter.HandleFunc("/agent/confirm-rotation", peers.AgentConfirmRotation).Methods("POST")
+	apiRouter.HandleFunc("/agent/check-rotation", a.Agents.AgentAuthMiddleware(a.Agents.AgentCheckRotation)).Methods("GET")
+	apiRouter.HandleFunc("/agent/rotate-key", a.Peers.AgentRotateKey).Methods("POST")
+	apiRouter.HandleFunc("/agent/confirm-rotation", a.Peers.AgentConfirmRotation).Methods("POST")
 
 	// Catch-all for unmatched API routes - returns 404 instead of falling through to SPA
 	// This must be registered last so it only catches truly unmatched routes
@@ -278,6 +307,8 @@ func (a *API) Stop() {
 	if a.LogoutRateLimiter != nil {
 		a.LogoutRateLimiter.Stop()
 	}
+	// Stop the auth rate limit cleanup goroutine
+	authhandlers.StopCleanup()
 }
 
 // HealthHandler returns the health status of the service
@@ -287,19 +318,21 @@ func HealthHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // ReadyHandler returns the readiness status of the service
-func ReadyHandler(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
-	defer cancel()
+func ReadyHandler(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
 
-	// Check database connectivity
-	if err := db.DB.PingContext(ctx); err != nil {
-		w.WriteHeader(http.StatusServiceUnavailable)
-		json.NewEncoder(w).Encode(map[string]string{"status": "not_ready", "error": "database unavailable"})
-		return
+		// Check database connectivity
+		if err := db.PingContext(ctx); err != nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			json.NewEncoder(w).Encode(map[string]string{"status": "not_ready", "error": "database unavailable"})
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "ready"})
 	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "ready"})
 }
 
 // MetricsHandler returns the Prometheus metrics HTTP handler
@@ -313,7 +346,7 @@ func metricsMiddleware(next http.Handler) http.Handler {
 		start := time.Now()
 
 		// Use ResponseRecorder to capture status code
-		rw := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
+		rw := common.NewResponseRecorder(w)
 
 		next.ServeHTTP(rw, r)
 
@@ -336,43 +369,11 @@ func metricsMiddleware(next http.Handler) http.Handler {
 		duration := time.Since(start)
 
 		// Record metrics
-		metrics.RecordRequest(endpoint, r.Method, rw.statusCode, duration)
+		metrics.RecordRequest(endpoint, r.Method, rw.StatusCode(), duration)
 
 		// Record errors if status code is 5xx
-		if rw.statusCode >= 500 {
-			metrics.RecordError(endpoint, "server_error", rw.statusCode)
+		if rw.StatusCode() >= 500 {
+			metrics.RecordError(endpoint, "server_error", rw.StatusCode())
 		}
 	})
-}
-
-// responseWriter wraps http.ResponseWriter to capture status code
-type responseWriter struct {
-	http.ResponseWriter
-	statusCode    int
-	written       bool
-	contentLength int
-}
-
-func (rw *responseWriter) WriteHeader(code int) {
-	if !rw.written {
-		rw.statusCode = code
-		rw.ResponseWriter.WriteHeader(code)
-		rw.written = true
-	}
-}
-
-func (rw *responseWriter) Write(b []byte) (int, error) {
-	if !rw.written {
-		rw.WriteHeader(http.StatusOK) // Default to 200 if WriteHeader not called
-	}
-	n, err := rw.ResponseWriter.Write(b)
-	rw.contentLength += n
-	return n, err
-}
-
-// Flush implements http.Flusher to support SSE streaming.
-func (rw *responseWriter) Flush() {
-	if f, ok := rw.ResponseWriter.(http.Flusher); ok {
-		f.Flush()
-	}
 }

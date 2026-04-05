@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -23,6 +24,38 @@ func NewCompiler(database *sql.DB) *Compiler {
 		db:       database,
 		resolver: &Resolver{db: database},
 	}
+}
+
+// ruleWriter writes iptables rules for a specific action to a strings.Builder.
+// The match parameter contains everything between "-A CHAIN" and "-j ACTION".
+type ruleWriter struct{ buf *strings.Builder }
+
+func (rw *ruleWriter) accept(chain, match string) {
+	fmt.Fprintf(rw.buf, "-A %s %s -j ACCEPT\n", chain, match)
+}
+
+func (rw *ruleWriter) drop(chain, match string) {
+	fmt.Fprintf(rw.buf, "-A %s %s -j DROP\n", chain, match)
+}
+
+func (rw *ruleWriter) logDrop(chain, match string) {
+	fmt.Fprintf(rw.buf, "-A %s %s -j LOG --log-prefix \"[RUNIC-DROP] \" --log-level 4\n", chain, match)
+	rw.drop(chain, match)
+}
+
+func (rw *ruleWriter) writeAction(action, chain, match string) {
+	switch action {
+	case "ACCEPT":
+		rw.accept(chain, match)
+	case "DROP":
+		rw.drop(chain, match)
+	case "LOG_DROP":
+		rw.logDrop(chain, match)
+	}
+}
+
+func (rw *ruleWriter) newline() {
+	rw.buf.WriteString("\n")
 }
 
 // Compile produces a complete iptables-restore payload for the given peer.
@@ -162,6 +195,7 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 
 	// 3. Build the iptables-restore output
 	var buf strings.Builder
+	rw := &ruleWriter{buf: &buf}
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	// Header comment
@@ -287,7 +321,7 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 			if useIpset {
 				// Use ipset-based rules (single rule per port clause)
 				if serviceName == "Multicast" {
-					c.writeMulticastRule(&buf, pol.Action, pol.TargetScope, hasDocker)
+					c.writeMulticastRule(rw, pol.Action, pol.TargetScope, hasDocker)
 				} else {
 					for _, pc := range portClauses {
 						inputPortMatch := pc.PortMatch
@@ -297,30 +331,21 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 						outputPortMatch := invertPortMatch(pc.PortMatch, pc.SrcPortMatch)
 						ipsetMatch := fmt.Sprintf("-m set --match-set %s src", ipsetName)
 
-						switch pol.Action {
-						case "ACCEPT":
-							if writeToHost {
-								buf.WriteString(fmt.Sprintf("-A INPUT -p %s %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", pc.Protocol, ipsetMatch, inputPortMatch))
-								buf.WriteString(fmt.Sprintf("-A OUTPUT -p %s %s %s -m conntrack --ctstate ESTABLISHED -j ACCEPT\n", pc.Protocol, ipsetMatch, outputPortMatch))
+						if writeToHost {
+							if pol.Action == "ACCEPT" {
+								rw.writeAction(pol.Action, "INPUT", fmt.Sprintf("-p %s %s %s -m conntrack --ctstate NEW,ESTABLISHED", pc.Protocol, ipsetMatch, inputPortMatch))
+							} else {
+								rw.writeAction(pol.Action, "INPUT", fmt.Sprintf("-p %s %s %s", pc.Protocol, ipsetMatch, inputPortMatch))
 							}
-							if writeToDocker {
-								buf.WriteString(fmt.Sprintf("-A DOCKER-USER -p %s %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", pc.Protocol, ipsetMatch, inputPortMatch))
+							if pol.Action == "ACCEPT" {
+								rw.accept("OUTPUT", fmt.Sprintf("-p %s %s %s -m conntrack --ctstate ESTABLISHED", pc.Protocol, ipsetMatch, outputPortMatch))
 							}
-						case "DROP":
-							if writeToHost {
-								buf.WriteString(fmt.Sprintf("-A INPUT -p %s %s %s -j DROP\n", pc.Protocol, ipsetMatch, inputPortMatch))
-							}
-							if writeToDocker {
-								buf.WriteString(fmt.Sprintf("-A DOCKER-USER -p %s %s %s -j DROP\n", pc.Protocol, ipsetMatch, inputPortMatch))
-							}
-						case "LOG_DROP":
-							if writeToHost {
-								buf.WriteString(fmt.Sprintf("-A INPUT -p %s %s %s -j LOG --log-prefix \"[RUNIC-DROP] \" --log-level 4\n", pc.Protocol, ipsetMatch, inputPortMatch))
-								buf.WriteString(fmt.Sprintf("-A INPUT -p %s %s %s -j DROP\n", pc.Protocol, ipsetMatch, inputPortMatch))
-							}
-							if writeToDocker {
-								buf.WriteString(fmt.Sprintf("-A DOCKER-USER -p %s %s %s -j LOG --log-prefix \"[RUNIC-DROP] \" --log-level 4\n", pc.Protocol, ipsetMatch, inputPortMatch))
-								buf.WriteString(fmt.Sprintf("-A DOCKER-USER -p %s %s %s -j DROP\n", pc.Protocol, ipsetMatch, inputPortMatch))
+						}
+						if writeToDocker {
+							if pol.Action == "ACCEPT" {
+								rw.writeAction(pol.Action, "DOCKER-USER", fmt.Sprintf("-p %s %s %s -m conntrack --ctstate NEW,ESTABLISHED", pc.Protocol, ipsetMatch, inputPortMatch))
+							} else {
+								rw.writeAction(pol.Action, "DOCKER-USER", fmt.Sprintf("-p %s %s %s", pc.Protocol, ipsetMatch, inputPortMatch))
 							}
 						}
 					}
@@ -339,7 +364,7 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 				}
 				for _, cidr := range cidrs {
 					if serviceName == "Multicast" {
-						c.writeMulticastRule(&buf, pol.Action, pol.TargetScope, hasDocker)
+						c.writeMulticastRule(rw, pol.Action, pol.TargetScope, hasDocker)
 						continue
 					}
 					for _, pc := range portClauses {
@@ -351,30 +376,21 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 						// For OUTPUT (egress): swap - destination ports become --sport, source ports become --dport
 						outputPortMatch := invertPortMatch(pc.PortMatch, pc.SrcPortMatch)
 
-						switch pol.Action {
-						case "ACCEPT":
-							if writeToHost {
-								buf.WriteString(fmt.Sprintf("-A INPUT -s %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", cidr, pc.Protocol, inputPortMatch))
-								buf.WriteString(fmt.Sprintf("-A OUTPUT -d %s -p %s %s -m conntrack --ctstate ESTABLISHED -j ACCEPT\n", cidr, pc.Protocol, outputPortMatch))
+						if writeToHost {
+							if pol.Action == "ACCEPT" {
+								rw.writeAction(pol.Action, "INPUT", fmt.Sprintf("-s %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED", cidr, pc.Protocol, inputPortMatch))
+							} else {
+								rw.writeAction(pol.Action, "INPUT", fmt.Sprintf("-s %s -p %s %s", cidr, pc.Protocol, inputPortMatch))
 							}
-							if writeToDocker {
-								buf.WriteString(fmt.Sprintf("-A DOCKER-USER -s %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", cidr, pc.Protocol, inputPortMatch))
+							if pol.Action == "ACCEPT" {
+								rw.accept("OUTPUT", fmt.Sprintf("-d %s -p %s %s -m conntrack --ctstate ESTABLISHED", cidr, pc.Protocol, outputPortMatch))
 							}
-						case "DROP":
-							if writeToHost {
-								buf.WriteString(fmt.Sprintf("-A INPUT -s %s -p %s %s -j DROP\n", cidr, pc.Protocol, inputPortMatch))
-							}
-							if writeToDocker {
-								buf.WriteString(fmt.Sprintf("-A DOCKER-USER -s %s -p %s %s -j DROP\n", cidr, pc.Protocol, inputPortMatch))
-							}
-						case "LOG_DROP":
-							if writeToHost {
-								buf.WriteString(fmt.Sprintf("-A INPUT -s %s -p %s %s -j LOG --log-prefix \"[RUNIC-DROP] \" --log-level 4\n", cidr, pc.Protocol, inputPortMatch))
-								buf.WriteString(fmt.Sprintf("-A INPUT -s %s -p %s %s -j DROP\n", cidr, pc.Protocol, inputPortMatch))
-							}
-							if writeToDocker {
-								buf.WriteString(fmt.Sprintf("-A DOCKER-USER -s %s -p %s %s -j LOG --log-prefix \"[RUNIC-DROP] \" --log-level 4\n", cidr, pc.Protocol, inputPortMatch))
-								buf.WriteString(fmt.Sprintf("-A DOCKER-USER -s %s -p %s %s -j DROP\n", cidr, pc.Protocol, inputPortMatch))
+						}
+						if writeToDocker {
+							if pol.Action == "ACCEPT" {
+								rw.writeAction(pol.Action, "DOCKER-USER", fmt.Sprintf("-s %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED", cidr, pc.Protocol, inputPortMatch))
+							} else {
+								rw.writeAction(pol.Action, "DOCKER-USER", fmt.Sprintf("-s %s -p %s %s", cidr, pc.Protocol, inputPortMatch))
 							}
 						}
 					}
@@ -411,16 +427,8 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 						ipsetMatchSrc := fmt.Sprintf("-m set --match-set %s src", ipsetName)
 						ipsetMatchDst := fmt.Sprintf("-m set --match-set %s dst", ipsetName)
 
-						switch pol.Action {
-						case "ACCEPT":
-							buf.WriteString(fmt.Sprintf("-A OUTPUT -p %s %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", pc.Protocol, ipsetMatchDst, outputPortMatch))
-							buf.WriteString(fmt.Sprintf("-A INPUT -p %s %s %s -m conntrack --ctstate ESTABLISHED -j ACCEPT\n", pc.Protocol, ipsetMatchSrc, inputPortMatch))
-						case "DROP":
-							buf.WriteString(fmt.Sprintf("-A OUTPUT -p %s %s %s -j DROP\n", pc.Protocol, ipsetMatchDst, outputPortMatch))
-						case "LOG_DROP":
-							buf.WriteString(fmt.Sprintf("-A OUTPUT -p %s %s %s -j LOG --log-prefix \"[RUNIC-DROP] \" --log-level 4\n", pc.Protocol, ipsetMatchDst, outputPortMatch))
-							buf.WriteString(fmt.Sprintf("-A OUTPUT -p %s %s %s -j DROP\n", pc.Protocol, ipsetMatchDst, outputPortMatch))
-						}
+						rw.writeAction(pol.Action, "OUTPUT", fmt.Sprintf("-p %s %s %s -m conntrack --ctstate NEW,ESTABLISHED", pc.Protocol, ipsetMatchDst, outputPortMatch))
+						rw.writeAction(pol.Action, "INPUT", fmt.Sprintf("-p %s %s %s -m conntrack --ctstate ESTABLISHED", pc.Protocol, ipsetMatchSrc, inputPortMatch))
 					}
 				}
 			} else {
@@ -452,15 +460,13 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 						// For INPUT (response): inverted — server responds from its port back to our ephemeral port
 						inputPortMatch := invertPortMatch(pc.PortMatch, pc.SrcPortMatch)
 
-						switch pol.Action {
-						case "ACCEPT":
-							buf.WriteString(fmt.Sprintf("-A OUTPUT -d %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", cidr, pc.Protocol, outputPortMatch))
-							buf.WriteString(fmt.Sprintf("-A INPUT -s %s -p %s %s -m conntrack --ctstate ESTABLISHED -j ACCEPT\n", cidr, pc.Protocol, inputPortMatch))
-						case "DROP":
-							buf.WriteString(fmt.Sprintf("-A OUTPUT -d %s -p %s %s -j DROP\n", cidr, pc.Protocol, outputPortMatch))
-						case "LOG_DROP":
-							buf.WriteString(fmt.Sprintf("-A OUTPUT -d %s -p %s %s -j LOG --log-prefix \"[RUNIC-DROP] \" --log-level 4\n", cidr, pc.Protocol, outputPortMatch))
-							buf.WriteString(fmt.Sprintf("-A OUTPUT -d %s -p %s %s -j DROP\n", cidr, pc.Protocol, outputPortMatch))
+						if pol.Action == "ACCEPT" {
+							rw.writeAction(pol.Action, "OUTPUT", fmt.Sprintf("-d %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED", cidr, pc.Protocol, outputPortMatch))
+						} else {
+							rw.writeAction(pol.Action, "OUTPUT", fmt.Sprintf("-d %s -p %s %s", cidr, pc.Protocol, outputPortMatch))
+						}
+						if pol.Action == "ACCEPT" {
+							rw.accept("INPUT", fmt.Sprintf("-s %s -p %s %s -m conntrack --ctstate ESTABLISHED", cidr, pc.Protocol, inputPortMatch))
 						}
 					}
 				}
@@ -489,37 +495,18 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 	return buf.String(), nil
 }
 
-// writeMulticastRule generates multicast tracking
-func (c *Compiler) writeMulticastRule(buf *strings.Builder, action string, targetScope string, hasDocker bool) {
+// writeMulticastRule generates multicast tracking rules using a ruleWriter.
+func (c *Compiler) writeMulticastRule(rw *ruleWriter, action string, targetScope string, hasDocker bool) {
 	writeToHost := targetScope == "host" || targetScope == "both"
 	writeToDocker := hasDocker && (targetScope == "docker" || targetScope == "both")
 
-	switch action {
-	case "ACCEPT":
-		if writeToHost {
-			buf.WriteString("-A INPUT -m pkttype --pkt-type multicast -j ACCEPT\n")
-		}
-		if writeToDocker {
-			buf.WriteString("-A DOCKER-USER -m pkttype --pkt-type multicast -j ACCEPT\n")
-		}
-	case "DROP":
-		if writeToHost {
-			buf.WriteString("-A INPUT -m pkttype --pkt-type multicast -j DROP\n")
-		}
-		if writeToDocker {
-			buf.WriteString("-A DOCKER-USER -m pkttype --pkt-type multicast -j DROP\n")
-		}
-	case "LOG_DROP":
-		if writeToHost {
-			buf.WriteString("-A INPUT -m pkttype --pkt-type multicast -j LOG --log-prefix \"[RUNIC-DROP] \" --log-level 4\n")
-			buf.WriteString("-A INPUT -m pkttype --pkt-type multicast -j DROP\n")
-		}
-		if writeToDocker {
-			buf.WriteString("-A DOCKER-USER -m pkttype --pkt-type multicast -j LOG --log-prefix \"[RUNIC-DROP] \" --log-level 4\n")
-			buf.WriteString("-A DOCKER-USER -m pkttype --pkt-type multicast -j DROP\n")
-		}
+	if writeToHost {
+		rw.writeAction(action, "INPUT", "-m pkttype --pkt-type multicast")
 	}
-	buf.WriteString("\n")
+	if writeToDocker {
+		rw.writeAction(action, "DOCKER-USER", "-m pkttype --pkt-type multicast")
+	}
+	rw.newline()
 }
 
 // PreviewCompile generates a preview of iptables rules for a policy without storing them.
@@ -529,9 +516,12 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 	// Load a peer IP for special target resolution (uses peerID as reference)
 	var ipAddress string
 	if peerID != 0 {
-		_ = c.db.QueryRowContext(ctx,
+		if err := c.db.QueryRowContext(ctx,
 			"SELECT ip_address FROM peers WHERE id = ?", peerID,
-		).Scan(&ipAddress)
+		).Scan(&ipAddress); err != nil && err != sql.ErrNoRows {
+			// Log but don't fail - IP is optional for preview
+			log.Printf("Warning: failed to load peer IP for preview: %v", err)
+		}
 	}
 
 	// Default direction
@@ -670,12 +660,6 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 		}
 	}
 	return finalRules, nil
-}
-
-func (c *Compiler) isAdminPeerInGroup(ctx context.Context, peerID, groupID int) bool {
-	var count int
-	c.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM group_members WHERE group_id = ? AND peer_id = ?", groupID, peerID).Scan(&count)
-	return count > 0
 }
 
 // CompileAndStore compiles the rules for a peer, signs them, and stores the bundle.

@@ -32,12 +32,8 @@ func setupTestDB(t *testing.T) (*sql.DB, func()) {
 		t.Fatalf("failed to create schema: %v", err)
 	}
 
-	// Set global DB
-	db.DB = db.New(database)
-
 	// Cleanup function
 	cleanup := func() {
-		db.DB = nil
 		database.Close()
 	}
 
@@ -174,7 +170,8 @@ func TestDeletePeer(t *testing.T) {
 			// Mock gorilla/mux vars
 			req = muxVars(req, map[string]string{"id": tt.peerID})
 
-			DeletePeer(w, req)
+			handler := NewHandler(database, nil)
+			handler.DeletePeer(w, req)
 
 			if w.Code != tt.wantCode {
 				t.Errorf("expected status %d, got %d: %s", tt.wantCode, w.Code, w.Body.String())
@@ -242,7 +239,8 @@ func TestDeletePeer_GroupMembersCleanup(t *testing.T) {
 	w := httptest.NewRecorder()
 	req = muxVars(req, map[string]string{"id": "1"})
 
-	DeletePeer(w, req)
+	handler := NewHandler(database, nil)
+	handler.DeletePeer(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Errorf("expected status %d, got %d: %s", http.StatusOK, w.Code, w.Body.String())
@@ -299,7 +297,8 @@ func TestDeletePeer_WithRuleBundlesAndLogs(t *testing.T) {
 	w := httptest.NewRecorder()
 	req = muxVars(req, map[string]string{"id": "1"})
 
-	DeletePeer(w, req)
+	handler := NewHandler(database, nil)
+	handler.DeletePeer(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Errorf("expected status %d, got %d: %s", http.StatusOK, w.Code, w.Body.String())

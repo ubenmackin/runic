@@ -17,10 +17,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 
 	"runic/internal/api/common"
-	"runic/internal/api/groups"
 	"runic/internal/api/peers"
-	"runic/internal/api/policies"
-	"runic/internal/api/services"
 	"runic/internal/db"
 	"runic/internal/engine"
 )
@@ -41,14 +38,28 @@ func setupTestAPI(t *testing.T) (*API, *sql.DB, func()) {
 		t.Fatalf("failed to create schema: %v", err)
 	}
 
-	// Set global DB
-	db.DB = db.New(database)
+	// Run migrations that are not in schema.sql (e.g. pending_changes table).
+	// migrateSchema skips when tableCount == 0, but we already created tables
+	// via db.Schema() above, so we must create migration-only tables manually.
+	if _, err := database.Exec(`
+		CREATE TABLE IF NOT EXISTS pending_changes (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			peer_id INTEGER NOT NULL REFERENCES peers(id),
+			change_type TEXT NOT NULL CHECK (change_type IN ('policy', 'group', 'service')),
+			change_id INTEGER NOT NULL,
+			change_action TEXT NOT NULL CHECK (change_action IN ('create', 'update', 'delete')),
+			change_summary TEXT NOT NULL,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)
+	`); err != nil {
+		t.Fatalf("failed to create pending_changes table: %v", err)
+	}
 
 	// Create compiler
 	compiler := engine.NewCompiler(database)
 
 	// Create API instance
-	api := NewAPI(compiler)
+	api := NewAPI(database, compiler)
 
 	// Cleanup function
 	cleanup := func() {
@@ -60,19 +71,23 @@ func setupTestAPI(t *testing.T) (*API, *sql.DB, func()) {
 
 // TestGetPeers tests the GET /peers endpoint
 func TestGetPeers(t *testing.T) {
-	_, database, cleanup := setupTestAPI(t)
+	api, database, cleanup := setupTestAPI(t)
 	defer cleanup()
 
 	// Insert test peers (hmac_key is required in schema)
-	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
-		"peer1", "10.0.0.1", "key1", "test-hmac-1", true)
-	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
-		"peer2", "10.0.0.2", "key2", "test-hmac-2", false)
+	if _, err := database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
+		"peer1", "10.0.0.1", "key1", "test-hmac-1", true); err != nil {
+		t.Fatalf("failed to insert test peer: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
+		"peer2", "10.0.0.2", "key2", "test-hmac-2", false); err != nil {
+		t.Fatalf("failed to insert test peer: %v", err)
+	}
 
 	req := httptest.NewRequest("GET", "/api/v1/peers", nil)
 	w := httptest.NewRecorder()
 
-	peers.GetPeers(w, req)
+	api.Peers.GetPeers(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Errorf("expected status %d, got %d", http.StatusOK, w.Code)
@@ -130,7 +145,7 @@ func TestCreatePeer(t *testing.T) {
 			name:     "missing ip_address",
 			body:     `{"hostname": "test-peer", "agent_key": "test-key"}`,
 			wantCode: http.StatusBadRequest,
-			wantErr:  "ip_address",
+			wantErr:  "invalid IP address",
 		},
 		{
 			name:     "missing agent_key",
@@ -165,7 +180,7 @@ func TestCreatePeer(t *testing.T) {
 			ctx := context.WithValue(req.Context(), apiContextKey, api)
 			req = req.WithContext(ctx)
 
-			handler := http.HandlerFunc(peers.CreatePeer)
+			handler := http.HandlerFunc(api.Peers.CreatePeer)
 			handler(w, req)
 
 			if w.Code != tt.wantCode {
@@ -199,17 +214,29 @@ func TestCompilePeer(t *testing.T) {
 	defer cleanup()
 
 	// Insert test peer with required data
-	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
-		"test-peer", "10.0.0.1", "test-key", "test-hmac-key", true)
-	database.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group")
+	if _, err := database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
+		"test-peer", "10.0.0.1", "test-key", "test-hmac-key", true); err != nil {
+		t.Fatalf("failed to insert test data: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group"); err != nil {
+		t.Fatalf("failed to insert test data: %v", err)
+	}
 	// Insert manual peer for group member (new schema: groups contain peers, not IP/CIDR)
-	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, is_manual) VALUES (?, ?, ?, ?, 1)`,
-		"manual-peer", "192.168.1.0/24", "manual-key", "manual-hmac")
-	database.Exec(`INSERT INTO group_members (group_id, peer_id) VALUES (?, ?)`, 1, 2)
-	database.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`,
-		"ssh", "22", "tcp")
-	database.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, "group", ?, ?, "peer", ?, ?, ?)`,
-		"test-policy", 1, 1, 1, "ACCEPT", 100, 1)
+	if _, err := database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, is_manual) VALUES (?, ?, ?, ?, 1)`,
+		"manual-peer", "192.168.1.0/24", "manual-key", "manual-hmac"); err != nil {
+		t.Fatalf("failed to insert test data: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO group_members (group_id, peer_id) VALUES (?, ?)`, 1, 2); err != nil {
+		t.Fatalf("failed to insert test data: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`,
+		"ssh", "22", "tcp"); err != nil {
+		t.Fatalf("failed to insert test data: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, "group", ?, ?, "peer", ?, ?, ?)`,
+		"test-policy", 1, 1, 1, "ACCEPT", 100, 1); err != nil {
+		t.Fatalf("failed to insert test data: %v", err)
+	}
 
 	tests := []struct {
 		name     string
@@ -226,7 +253,7 @@ func TestCompilePeer(t *testing.T) {
 			name:     "non-existent peer",
 			peerID:   "999",
 			wantCode: http.StatusInternalServerError,
-			wantErr:  "compilation failed",
+			wantErr:  "internal server error",
 		},
 		{
 			name:     "invalid peer ID",
@@ -248,7 +275,7 @@ func TestCompilePeer(t *testing.T) {
 			ctx := context.WithValue(req.Context(), apiContextKey, api)
 			req = req.WithContext(ctx)
 
-			handler := peers.MakeCompilePeerHandler(api.Compiler)
+			handler := http.HandlerFunc(api.Peers.CompilePeer)
 			handler(w, req)
 
 			if w.Code != tt.wantCode {
@@ -286,24 +313,34 @@ func TestCompilePeer(t *testing.T) {
 
 // TestListPolicies tests the GET /policies endpoint
 func TestListPolicies(t *testing.T) {
-	_, database, cleanup := setupTestAPI(t)
+	api, database, cleanup := setupTestAPI(t)
 	defer cleanup()
 
 	// Insert test data
-	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
-		"test-peer", "10.0.0.1", "test-key", false)
-	database.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group")
-	database.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`,
-		"ssh", "22", "tcp")
-	database.Exec(`INSERT INTO policies (name, description, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, ?, 'group', ?, ?, 'peer', ?, ?, ?)`,
-		"policy1", "test policy 1", 1, 1, 1, "ACCEPT", 100, 1)
-	database.Exec(`INSERT INTO policies (name, description, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, ?, 'group', ?, ?, 'peer', ?, ?, ?)`,
-		"policy2", "test policy 2", 1, 1, 1, "DROP", 200, 0)
+	if _, err := database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
+		"test-peer", "10.0.0.1", "test-key", "test-hmac", false); err != nil {
+		t.Fatalf("failed to insert test data: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group"); err != nil {
+		t.Fatalf("failed to insert test data: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`,
+		"ssh", "22", "tcp"); err != nil {
+		t.Fatalf("failed to insert test data: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO policies (name, description, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, ?, 'group', ?, ?, 'peer', ?, ?, ?)`,
+		"policy1", "test policy 1", 1, 1, 1, "ACCEPT", 100, 1); err != nil {
+		t.Fatalf("failed to insert test data: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO policies (name, description, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, ?, 'group', ?, ?, 'peer', ?, ?, ?)`,
+		"policy2", "test policy 2", 1, 1, 1, "DROP", 200, 0); err != nil {
+		t.Fatalf("failed to insert test data: %v", err)
+	}
 
 	req := httptest.NewRequest("GET", "/api/v1/policies", nil)
 	w := httptest.NewRecorder()
 
-	policies.ListPolicies(w, req)
+	api.Policies.ListPolicies(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Errorf("expected status %d, got %d: %s", http.StatusOK, w.Code, w.Body.String())
@@ -359,11 +396,17 @@ func TestCreatePolicy(t *testing.T) {
 		{
 			name: "valid policy",
 			setup: func(t *testing.T, db *sql.DB) {
-				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
-					"test-peer", "10.0.0.1", "test-key", false)
-				db.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group")
-				db.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`,
-					"ssh", "22", "tcp")
+				if _, err := db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
+					"test-peer", "10.0.0.1", "test-key", "test-hmac", false); err != nil {
+					t.Fatalf("failed to insert seed peer: %v", err)
+				}
+				if _, err := db.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group"); err != nil {
+					t.Fatalf("failed to insert seed group: %v", err)
+				}
+				if _, err := db.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`,
+					"ssh", "22", "tcp"); err != nil {
+					t.Fatalf("failed to insert seed service: %v", err)
+				}
 			},
 			body:     `{"name": "new-policy", "description": "test", "source_id": 1, "source_type": "group", "service_id": 1, "target_id": 1, "target_type": "peer", "action": "ACCEPT", "priority": 100, "enabled": true}`,
 			wantCode: http.StatusCreated,
@@ -379,18 +422,26 @@ func TestCreatePolicy(t *testing.T) {
 			wantCode: http.StatusBadRequest,
 			wantErr:  "source_id",
 			setup: func(t *testing.T, db *sql.DB) {
-				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
-					"test-peer", "10.0.0.1", "test-key", false)
+				if _, err := db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
+					"test-peer", "10.0.0.1", "test-key", "test-hmac", false); err != nil {
+					t.Fatalf("failed to insert seed peer: %v", err)
+				}
 			},
 		},
 		{
 			name: "defaults applied",
 			setup: func(t *testing.T, db *sql.DB) {
-				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
-					"test-peer", "10.0.0.1", "test-key", false)
-				db.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group")
-				db.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`,
-					"ssh", "22", "tcp")
+				if _, err := db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
+					"test-peer", "10.0.0.1", "test-key", "test-hmac", false); err != nil {
+					t.Fatalf("failed to insert seed peer: %v", err)
+				}
+				if _, err := db.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group"); err != nil {
+					t.Fatalf("failed to insert seed group: %v", err)
+				}
+				if _, err := db.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`,
+					"ssh", "22", "tcp"); err != nil {
+					t.Fatalf("failed to insert seed service: %v", err)
+				}
 			},
 			body:     `{"name": "default-policy", "source_id": 1, "source_type": "group", "service_id": 1, "target_id": 1, "target_type": "peer"}`,
 			wantCode: http.StatusCreated,
@@ -421,7 +472,7 @@ func TestCreatePolicy(t *testing.T) {
 			ctx := context.WithValue(req.Context(), apiContextKey, api)
 			req = req.WithContext(ctx)
 
-			handler := policies.MakeCreatePolicyHandler(api.Compiler)
+			handler := http.HandlerFunc(api.Policies.CreatePolicy)
 			handler(w, req)
 
 			if w.Code != tt.wantCode {
@@ -451,17 +502,25 @@ func TestCreatePolicy(t *testing.T) {
 
 // TestGetPolicy tests the GET /policies/{id} endpoint
 func TestGetPolicy(t *testing.T) {
-	_, database, cleanup := setupTestAPI(t)
+	api, database, cleanup := setupTestAPI(t)
 	defer cleanup()
 
 	// Insert test data
-	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
-		"test-peer", "10.0.0.1", "test-key", false)
-	database.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group")
-	database.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`,
-		"ssh", "22", "tcp")
-	database.Exec(`INSERT INTO policies (name, description, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, ?, 'group', ?, ?, 'peer', ?, ?, ?)`,
-		"test-policy", "test description", 1, 1, 1, "ACCEPT", 100, 1)
+	if _, err := database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
+		"test-peer", "10.0.0.1", "test-key", "test-hmac", false); err != nil {
+		t.Fatalf("failed to insert seed peer: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group"); err != nil {
+		t.Fatalf("failed to insert seed group: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`,
+		"ssh", "22", "tcp"); err != nil {
+		t.Fatalf("failed to insert seed service: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO policies (name, description, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, ?, 'group', ?, ?, 'peer', ?, ?, ?)`,
+		"test-policy", "test description", 1, 1, 1, "ACCEPT", 100, 1); err != nil {
+		t.Fatalf("failed to insert seed policy: %v", err)
+	}
 
 	tests := []struct {
 		name     string
@@ -496,7 +555,7 @@ func TestGetPolicy(t *testing.T) {
 			// Mock gorilla/mux vars
 			req = muxVars(req, map[string]string{"id": tt.policyID})
 
-			policies.GetPolicy(w, req)
+			api.Policies.GetPolicy(w, req)
 
 			if w.Code != tt.wantCode {
 				t.Errorf("expected status %d, got %d: %s", tt.wantCode, w.Code, w.Body.String())
@@ -546,13 +605,21 @@ func TestUpdatePolicy(t *testing.T) {
 	defer cleanup()
 
 	// Insert test data
-	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
-		"test-peer", "10.0.0.1", "test-key", false)
-	database.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group")
-	database.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`,
-		"ssh", "22", "tcp")
-	database.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, 'group', ?, ?, 'peer', ?, ?, ?)`,
-		"test-policy", 1, 1, 1, "ACCEPT", 100, 1)
+	if _, err := database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
+		"test-peer", "10.0.0.1", "test-key", "test-hmac", false); err != nil {
+		t.Fatalf("failed to insert seed peer: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group"); err != nil {
+		t.Fatalf("failed to insert seed group: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`,
+		"ssh", "22", "tcp"); err != nil {
+		t.Fatalf("failed to insert seed service: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, 'group', ?, ?, 'peer', ?, ?, ?)`,
+		"test-policy", 1, 1, 1, "ACCEPT", 100, 1); err != nil {
+		t.Fatalf("failed to insert seed policy: %v", err)
+	}
 
 	tests := []struct {
 		name     string
@@ -595,7 +662,7 @@ func TestUpdatePolicy(t *testing.T) {
 			ctx := context.WithValue(req.Context(), apiContextKey, api)
 			req = req.WithContext(ctx)
 
-			handler := policies.MakeUpdatePolicyHandler(api.Compiler)
+			handler := http.HandlerFunc(api.Policies.UpdatePolicy)
 			handler(w, req)
 
 			if w.Code != tt.wantCode {
@@ -611,13 +678,21 @@ func TestDeletePolicy(t *testing.T) {
 	defer cleanup()
 
 	// Insert test data
-	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
-		"test-peer", "10.0.0.1", "test-key", false)
-	database.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group")
-	database.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`,
-		"ssh", "22", "tcp")
-	database.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, 'group', ?, ?, 'peer', ?, ?, ?)`,
-		"test-policy", 1, 1, 1, "ACCEPT", 100, 1)
+	if _, err := database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
+		"test-peer", "10.0.0.1", "test-key", "test-hmac", false); err != nil {
+		t.Fatalf("failed to insert seed peer: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group"); err != nil {
+		t.Fatalf("failed to insert seed group: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`,
+		"ssh", "22", "tcp"); err != nil {
+		t.Fatalf("failed to insert seed service: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, 'group', ?, ?, 'peer', ?, ?, ?)`,
+		"test-policy", 1, 1, 1, "ACCEPT", 100, 1); err != nil {
+		t.Fatalf("failed to insert seed policy: %v", err)
+	}
 
 	tests := []struct {
 		name     string
@@ -646,7 +721,7 @@ func TestDeletePolicy(t *testing.T) {
 			// Mock gorilla/mux vars
 			req = muxVars(req, map[string]string{"id": tt.policyID})
 
-			handler := policies.MakeDeletePolicyHandler(api.Compiler)
+			handler := http.HandlerFunc(api.Policies.DeletePolicy)
 			handler(w, req)
 
 			if w.Code != tt.wantCode {
@@ -670,17 +745,21 @@ func TestDeletePolicy(t *testing.T) {
 
 // TestListGroups tests the GET /groups endpoint
 func TestListGroups(t *testing.T) {
-	_, database, cleanup := setupTestAPI(t)
+	api, database, cleanup := setupTestAPI(t)
 	defer cleanup()
 
 	// Insert test groups
-	database.Exec(`INSERT INTO groups (name, description) VALUES (?, ?)`, "group1", "test group 1")
-	database.Exec(`INSERT INTO groups (name, description) VALUES (?, ?)`, "group2", "test group 2")
+	if _, err := database.Exec(`INSERT INTO groups (name, description) VALUES (?, ?)`, "group1", "test group 1"); err != nil {
+		t.Fatalf("failed to insert seed group: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO groups (name, description) VALUES (?, ?)`, "group2", "test group 2"); err != nil {
+		t.Fatalf("failed to insert seed group: %v", err)
+	}
 
 	req := httptest.NewRequest("GET", "/api/v1/groups", nil)
 	w := httptest.NewRecorder()
 
-	groups.ListGroups(w, req)
+	api.Groups.ListGroups(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Errorf("expected status %d, got %d", http.StatusOK, w.Code)
@@ -735,14 +814,14 @@ func TestCreateGroup(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, _, cleanup := setupTestAPI(t)
+			api, _, cleanup := setupTestAPI(t)
 			defer cleanup()
 
 			req := httptest.NewRequest("POST", "/api/v1/groups", strings.NewReader(tt.body))
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
 
-			groups.CreateGroup(w, req)
+			api.Groups.CreateGroup(w, req)
 
 			if w.Code != tt.wantCode {
 				t.Errorf("expected status %d, got %d: %s", tt.wantCode, w.Code, w.Body.String())
@@ -761,17 +840,21 @@ func TestCreateGroup(t *testing.T) {
 
 // TestListServices tests the GET /services endpoint
 func TestListServices(t *testing.T) {
-	_, database, cleanup := setupTestAPI(t)
+	api, database, cleanup := setupTestAPI(t)
 	defer cleanup()
 
 	// Insert test services
-	database.Exec(`INSERT INTO services (name, ports, protocol, description) VALUES (?, ?, ?, ?)`, "http", "80", "tcp", "HTTP web server")
-	database.Exec(`INSERT INTO services (name, ports, protocol, description) VALUES (?, ?, ?, ?)`, "ssh", "22", "tcp", "SSH access")
+	if _, err := database.Exec(`INSERT INTO services (name, ports, protocol, description) VALUES (?, ?, ?, ?)`, "http", "80", "tcp", "HTTP web server"); err != nil {
+		t.Fatalf("failed to insert seed service: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO services (name, ports, protocol, description) VALUES (?, ?, ?, ?)`, "ssh", "22", "tcp", "SSH access"); err != nil {
+		t.Fatalf("failed to insert seed service: %v", err)
+	}
 
 	req := httptest.NewRequest("GET", "/api/v1/services", nil)
 	w := httptest.NewRecorder()
 
-	services.ListServices(w, req)
+	api.Services.ListServices(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Errorf("expected status %d, got %d", http.StatusOK, w.Code)
@@ -845,7 +928,7 @@ func TestCreateService(t *testing.T) {
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
 
-			services.MakeCreateServiceHandler(api.Compiler)(w, req)
+			api.Services.CreateService(w, req)
 
 			if w.Code != tt.wantCode {
 				t.Errorf("expected status %d, got %d: %s", tt.wantCode, w.Code, w.Body.String())
@@ -868,21 +951,27 @@ func TestGroupMembers(t *testing.T) {
 	defer cleanup()
 
 	// Insert test group
-	database.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group")
+	if _, err := database.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group"); err != nil {
+		t.Fatalf("failed to insert test data: %v", err)
+	}
 
 	// Insert test peers to add to group
 	// Note: SQLite auto-increment starts at 1, so these will be IDs 1 and 2
-	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, is_manual) VALUES (?, ?, ?, ?, 1)`,
-		"peer1", "192.168.1.100", "key1", "hmac1")
-	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, is_manual) VALUES (?, ?, ?, ?, 1)`,
-		"peer2", "10.0.0.0/24", "key2", "hmac2")
+	if _, err := database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, is_manual) VALUES (?, ?, ?, ?, 1)`,
+		"peer1", "192.168.1.100", "key1", "hmac1"); err != nil {
+		t.Fatalf("failed to insert test data: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, is_manual) VALUES (?, ?, ?, ?, 1)`,
+		"peer2", "10.0.0.0/24", "key2", "hmac2"); err != nil {
+		t.Fatalf("failed to insert test data: %v", err)
+	}
 
 	// Add peer 1 to group 1
 	req1 := httptest.NewRequest("POST", "/api/v1/groups/1/members", strings.NewReader(`{"peer_id": 1}`))
 	req1.Header.Set("Content-Type", "application/json")
 	w1 := httptest.NewRecorder()
 	req1 = muxVars(req1, map[string]string{"id": "1"})
-	groups.MakeAddGroupMemberHandler(api.Compiler)(w1, req1)
+	api.Groups.AddGroupMember(w1, req1)
 	if w1.Code != http.StatusCreated {
 		t.Errorf("expected status %d, got %d: %s", http.StatusCreated, w1.Code, w1.Body.String())
 	}
@@ -892,7 +981,7 @@ func TestGroupMembers(t *testing.T) {
 	req2.Header.Set("Content-Type", "application/json")
 	w2 := httptest.NewRecorder()
 	req2 = muxVars(req2, map[string]string{"id": "1"})
-	groups.MakeAddGroupMemberHandler(api.Compiler)(w2, req2)
+	api.Groups.AddGroupMember(w2, req2)
 	if w2.Code != http.StatusCreated {
 		t.Errorf("expected status %d, got %d: %s", http.StatusCreated, w2.Code, w2.Body.String())
 	}
@@ -901,7 +990,7 @@ func TestGroupMembers(t *testing.T) {
 	req := httptest.NewRequest("GET", "/api/v1/groups/1/members", nil)
 	w := httptest.NewRecorder()
 	req = muxVars(req, map[string]string{"id": "1"})
-	groups.ListGroupMembers(w, req)
+	api.Groups.ListGroupMembers(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Errorf("expected status %d, got %d", http.StatusOK, w.Code)
@@ -1024,7 +1113,7 @@ func TestJSONDecoding(t *testing.T) {
 			ctx := context.WithValue(req.Context(), apiContextKey, api)
 			req = req.WithContext(ctx)
 
-			peers.CreatePeer(w, req)
+			api.Peers.CreatePeer(w, req)
 
 			if w.Code != tt.wantCode {
 				t.Errorf("expected status %d, got %d", tt.wantCode, w.Code)
@@ -1044,14 +1133,18 @@ func TestDatabaseConnectionFailures(t *testing.T) {
 
 // TestConcurrentRequests tests concurrent API requests
 func TestConcurrentRequests(t *testing.T) {
-	_, database, cleanup := setupTestAPI(t)
+	api, database, cleanup := setupTestAPI(t)
 	defer cleanup()
 
 	// Insert test data
-	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
-		"peer1", "10.0.0.1", "key1", "hmac1", true)
-	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
-		"peer2", "10.0.0.2", "key2", "hmac2", false)
+	if _, err := database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
+		"peer1", "10.0.0.1", "key1", "hmac1", true); err != nil {
+		t.Fatalf("failed to insert seed peer: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
+		"peer2", "10.0.0.2", "key2", "hmac2", false); err != nil {
+		t.Fatalf("failed to insert seed peer: %v", err)
+	}
 
 	// Make concurrent requests
 	done := make(chan bool)
@@ -1059,7 +1152,7 @@ func TestConcurrentRequests(t *testing.T) {
 		go func() {
 			req := httptest.NewRequest("GET", "/api/v1/peers", nil)
 			w := httptest.NewRecorder()
-			peers.GetPeers(w, req)
+			api.Peers.GetPeers(w, req)
 			done <- true
 		}()
 	}
@@ -1072,13 +1165,13 @@ func TestConcurrentRequests(t *testing.T) {
 
 // TestResponseHeaders tests response headers
 func TestResponseHeaders(t *testing.T) {
-	_, _, cleanup := setupTestAPI(t)
+	api, _, cleanup := setupTestAPI(t)
 	defer cleanup()
 
 	req := httptest.NewRequest("GET", "/api/v1/peers", nil)
 	w := httptest.NewRecorder()
 
-	peers.GetPeers(w, req)
+	api.Peers.GetPeers(w, req)
 
 	if w.Header().Get("Content-Type") != "application/json" {
 		t.Errorf("expected Content-Type application/json, got %s", w.Header().Get("Content-Type"))

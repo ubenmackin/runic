@@ -1,6 +1,7 @@
 package rotation
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -79,7 +80,7 @@ func TestCheckAndRotate_NoRotationPending(t *testing.T) {
 
 	manager := NewManager(cfg, configPath, server.Client(), server.URL, "host-test-peer")
 
-	err := manager.CheckAndRotate()
+	err := manager.CheckAndRotate(context.Background())
 	if err != nil {
 		t.Fatalf("CheckAndRotate() error = %v", err)
 	}
@@ -106,7 +107,7 @@ func TestCheckAndRotate_NoRotationPending_NotFound(t *testing.T) {
 
 	manager := NewManager(cfg, configPath, server.Client(), server.URL, "host-test-peer")
 
-	err := manager.CheckAndRotate()
+	err := manager.CheckAndRotate(context.Background())
 	if err != nil {
 		t.Fatalf("CheckAndRotate() error = %v", err)
 	}
@@ -161,7 +162,7 @@ func TestCheckAndRotate_RotationSuccess(t *testing.T) {
 
 	manager := NewManager(cfg, configPath, server.Client(), server.URL, "host-test-peer")
 
-	err := manager.CheckAndRotate()
+	err := manager.CheckAndRotate(context.Background())
 	if err != nil {
 		t.Fatalf("CheckAndRotate() error = %v", err)
 	}
@@ -224,7 +225,7 @@ func TestCheckAndRotate_TokenExpired(t *testing.T) {
 
 	manager := NewManager(cfg, configPath, server.Client(), server.URL, "host-test-peer")
 
-	err := manager.CheckAndRotate()
+	err := manager.CheckAndRotate(context.Background())
 	if err == nil {
 		t.Error("CheckAndRotate() should have failed with expired token")
 	}
@@ -270,7 +271,7 @@ func TestCheckAndRotate_KeyTestFails(t *testing.T) {
 
 	manager := NewManager(cfg, configPath, server.Client(), server.URL, "host-test-peer")
 
-	err := manager.CheckAndRotate()
+	err := manager.CheckAndRotate(context.Background())
 	if err == nil {
 		t.Error("CheckAndRotate() should have failed when key test fails")
 	}
@@ -320,7 +321,7 @@ func TestCheckAndRotate_ConfirmFailsNonFatal(t *testing.T) {
 	manager := NewManager(cfg, configPath, server.Client(), server.URL, "host-test-peer")
 
 	// Confirm-rotation failure should NOT cause an error (non-fatal)
-	err := manager.CheckAndRotate()
+	err := manager.CheckAndRotate(context.Background())
 	if err != nil {
 		t.Fatalf("CheckAndRotate() error = %v (confirm-rotation failure should be non-fatal)", err)
 	}
@@ -353,7 +354,7 @@ func TestCheckAndRotate_SkipsInProgress(t *testing.T) {
 	manager.state = StateRotating
 	manager.mu.Unlock()
 
-	err := manager.CheckAndRotate()
+	err := manager.CheckAndRotate(context.Background())
 	if err != nil {
 		t.Fatalf("CheckAndRotate() error = %v", err)
 	}
@@ -382,7 +383,7 @@ func TestCheckAndRotate_SkipsTesting(t *testing.T) {
 	manager.state = StateTesting
 	manager.mu.Unlock()
 
-	err := manager.CheckAndRotate()
+	err := manager.CheckAndRotate(context.Background())
 	if err != nil {
 		t.Fatalf("CheckAndRotate() error = %v", err)
 	}
@@ -420,7 +421,7 @@ func TestCheckAndRotate_EmptyKeyFromServer(t *testing.T) {
 
 	manager := NewManager(cfg, configPath, server.Client(), server.URL, "host-test-peer")
 
-	err := manager.CheckAndRotate()
+	err := manager.CheckAndRotate(context.Background())
 	if err == nil {
 		t.Error("CheckAndRotate() should have failed with empty key")
 	}
@@ -449,7 +450,7 @@ func TestCheckAndRotate_UnexpectedStatusCode(t *testing.T) {
 
 	manager := NewManager(cfg, configPath, server.Client(), server.URL, "host-test-peer")
 
-	err := manager.CheckAndRotate()
+	err := manager.CheckAndRotate(context.Background())
 	if err == nil {
 		t.Error("CheckAndRotate() should have failed with unexpected status code")
 	}
@@ -655,7 +656,7 @@ func TestCheckAndRotate_CheckRotationReturnsInvalidJSON(t *testing.T) {
 
 	manager := NewManager(cfg, configPath, server.Client(), server.URL, "host-test-peer")
 
-	err := manager.CheckAndRotate()
+	err := manager.CheckAndRotate(context.Background())
 	if err == nil {
 		t.Error("CheckAndRotate() should have failed with invalid JSON response")
 	}
@@ -687,7 +688,7 @@ func TestCheckAndRotate_RotateKeyReturnsInvalidJSON(t *testing.T) {
 
 	manager := NewManager(cfg, configPath, server.Client(), server.URL, "host-test-peer")
 
-	err := manager.CheckAndRotate()
+	err := manager.CheckAndRotate(context.Background())
 	if err == nil {
 		t.Error("CheckAndRotate() should have failed with invalid JSON from rotate-key")
 	}

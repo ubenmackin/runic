@@ -34,8 +34,8 @@ var (
 
 // InitJwtKey initializes the JWT key from the database or generates a random one.
 // Must be called after database initialization.
-func InitJwtKey() error {
-	secret, err := db.GetSecret("jwt_secret")
+func InitJwtKey(ctx context.Context, database *sql.DB) error {
+	secret, err := db.GetSecret(ctx, database, "jwt_secret")
 	if err == nil && secret != "" {
 		JwtKeyMu.Lock()
 		JwtKey = []byte(secret)

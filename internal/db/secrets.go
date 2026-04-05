@@ -1,22 +1,22 @@
 package db
 
 import (
+	"context"
+	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
 	"fmt"
 	"os"
 	"strings"
-
-	"crypto/rand"
 )
 
 // GetSecret retrieves a secret from the system_config table.
-func GetSecret(key string) (string, error) {
-	if DB == nil {
+func GetSecret(ctx context.Context, database *sql.DB, key string) (string, error) {
+	if database == nil {
 		return "", fmt.Errorf("database not initialized")
 	}
 	var value string
-	err := DB.QueryRow("SELECT value FROM system_config WHERE key = ?", key).Scan(&value)
+	err := database.QueryRowContext(ctx, "SELECT value FROM system_config WHERE key = ?", key).Scan(&value)
 	if err != nil {
 		return "", err
 	}
@@ -24,35 +24,16 @@ func GetSecret(key string) (string, error) {
 }
 
 // SetSecret stores or updates a secret in the system_config table.
-func SetSecret(key, value string) error {
-	if DB == nil {
+func SetSecret(ctx context.Context, database *sql.DB, key, value string) error {
+	if database == nil {
 		return fmt.Errorf("database not initialized")
 	}
-	_, err := DB.Exec(
+	_, err := database.ExecContext(ctx,
 		`INSERT INTO system_config (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP) 
 		 ON CONFLICT(key) DO UPDATE SET value = ?, updated_at = CURRENT_TIMESTAMP`,
 		key, value, value,
 	)
 	return err
-}
-
-// EnsureSecretExists reads a secret or generates one using the generator and stores it.
-func EnsureSecretExists(key string, generator func() (string, error)) (string, error) {
-	value, err := GetSecret(key)
-	if err == nil {
-		return value, nil
-	}
-	if err != sql.ErrNoRows {
-		return "", err
-	}
-	value, err = generator()
-	if err != nil {
-		return "", err
-	}
-	if err := SetSecret(key, value); err != nil {
-		return "", err
-	}
-	return value, nil
 }
 
 // GenerateSecureKey generates a 32-byte random hex key.

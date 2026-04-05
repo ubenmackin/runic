@@ -13,6 +13,18 @@ import (
 	"runic/internal/engine"
 )
 
+// Handler holds dependencies for pending change handlers.
+type Handler struct {
+	DB       *sql.DB
+	Compiler *engine.Compiler
+	SSEHub   *events.SSEHub
+}
+
+// NewHandler creates a new Handler with the given dependencies.
+func NewHandler(db *sql.DB, compiler *engine.Compiler, sseHub *events.SSEHub) *Handler {
+	return &Handler{DB: db, Compiler: compiler, SSEHub: sseHub}
+}
+
 // peerChangeGroup represents a peer with its pending changes and hostname.
 type peerChangeGroup struct {
 	PeerID       int                   `json:"peer_id"`
@@ -32,9 +44,9 @@ type pendingChangeDetail struct {
 }
 
 // ListPendingChanges returns all pending changes grouped by peer with hostnames.
-func ListPendingChanges(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) ListPendingChanges(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	database := db.DB.DB
+	database := h.DB
 
 	// Get all peers with pending changes
 	peerIDs, err := db.GetPeersWithPendingChanges(ctx, database)
@@ -90,7 +102,7 @@ func ListPendingChanges(w http.ResponseWriter, r *http.Request) {
 }
 
 // GetPeerPendingChanges returns pending changes for a specific peer.
-func GetPeerPendingChanges(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) GetPeerPendingChanges(w http.ResponseWriter, r *http.Request) {
 	peerID, err := common.ParseIDParam(r, "peerId")
 	if err != nil {
 		common.RespondError(w, http.StatusBadRequest, "invalid peer ID")
@@ -98,7 +110,7 @@ func GetPeerPendingChanges(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	database := db.DB.DB
+	database := h.DB
 
 	// Verify peer exists
 	var hostname, ipAddress string
@@ -140,245 +152,237 @@ func GetPeerPendingChanges(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// MakePreviewPeerPendingBundleHandler compiles a bundle for a peer, generates a diff against the current bundle, and stores the preview.
-func MakePreviewPeerPendingBundleHandler(compiler *engine.Compiler) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		peerID, err := common.ParseIDParam(r, "peerId")
-		if err != nil {
-			common.RespondError(w, http.StatusBadRequest, "invalid peer ID")
-			return
-		}
+// PreviewPeerPendingBundle compiles a bundle for a peer, generates a diff against the current bundle, and stores the preview.
+func (h *Handler) PreviewPeerPendingBundle(w http.ResponseWriter, r *http.Request) {
+	peerID, err := common.ParseIDParam(r, "peerId")
+	if err != nil {
+		common.RespondError(w, http.StatusBadRequest, "invalid peer ID")
+		return
+	}
 
-		ctx := r.Context()
-		database := db.DB.DB
+	ctx := r.Context()
+	database := h.DB
 
-		// Verify peer exists
-		var hostname string
-		err = database.QueryRowContext(ctx, "SELECT hostname FROM peers WHERE id = ?", peerID).Scan(&hostname)
-		if err == sql.ErrNoRows {
-			common.RespondError(w, http.StatusNotFound, "peer not found")
-			return
-		}
-		if err != nil {
-			log.Printf("ERROR: failed to query peer: %v", err)
-			common.InternalError(w)
-			return
-		}
+	// Verify peer exists
+	var hostname string
+	err = database.QueryRowContext(ctx, "SELECT hostname FROM peers WHERE id = ?", peerID).Scan(&hostname)
+	if err == sql.ErrNoRows {
+		common.RespondError(w, http.StatusNotFound, "peer not found")
+		return
+	}
+	if err != nil {
+		log.Printf("ERROR: failed to query peer: %v", err)
+		common.InternalError(w)
+		return
+	}
 
-		// Compile fresh bundle
-		content, err := compiler.Compile(ctx, peerID)
-		if err != nil {
-			log.Printf("ERROR: failed to compile bundle for peer %d: %v", peerID, err)
-			common.InternalError(w)
-			return
-		}
+	// Compile fresh bundle
+	content, err := h.Compiler.Compile(ctx, peerID)
+	if err != nil {
+		log.Printf("ERROR: failed to compile bundle for peer %d: %v", peerID, err)
+		common.InternalError(w)
+		return
+	}
 
-		version := engine.Version(content)
+	version := engine.Version(content)
 
-		// Get current bundle for diff
-		var currentContent string
-		var currentVersion string
-		err = database.QueryRowContext(ctx, `
-			SELECT rules_content, version FROM rule_bundles 
-			WHERE peer_id = ? 
-			ORDER BY id DESC LIMIT 1
-		`, peerID).Scan(&currentContent, &currentVersion)
-		if err != nil && err != sql.ErrNoRows {
-			log.Printf("WARN: failed to get current bundle for diff: %v", err)
-		}
+	// Get current bundle for diff
+	var currentContent string
+	var currentVersion string
+	err = database.QueryRowContext(ctx, `
+		SELECT rules_content, version FROM rule_bundles
+		WHERE peer_id = ?
+		ORDER BY id DESC LIMIT 1
+	`, peerID).Scan(&currentContent, &currentVersion)
+	if err != nil && err != sql.ErrNoRows {
+		log.Printf("WARN: failed to get current bundle for diff: %v", err)
+	}
 
-		// Generate diff
-		diffContent := generateDiff(currentContent, content, currentVersion, version)
+	// Generate diff
+	diffContent := generateDiff(currentContent, content, currentVersion, version)
 
-		// Save preview
-		err = db.SavePendingBundlePreview(ctx, database, peerID, content, diffContent, version)
-		if err != nil {
-			log.Printf("ERROR: failed to save bundle preview: %v", err)
-			common.InternalError(w)
-			return
-		}
+	// Save preview
+	err = db.SavePendingBundlePreview(ctx, database, peerID, content, diffContent, version)
+	if err != nil {
+		log.Printf("ERROR: failed to save bundle preview: %v", err)
+		common.InternalError(w)
+		return
+	}
 
+	common.RespondJSON(w, http.StatusOK, map[string]interface{}{
+		"version":         version,
+		"current_version": currentVersion,
+		"new_version":     version,
+		"is_different":    version != currentVersion,
+		"diff":            diffContent,
+		"rules_content":   content,
+	})
+}
+
+// ApplyPeerPendingBundle compiles and stores a bundle for a peer, clears pending changes, and triggers SSE notification.
+func (h *Handler) ApplyPeerPendingBundle(w http.ResponseWriter, r *http.Request) {
+	peerID, err := common.ParseIDParam(r, "peerId")
+	if err != nil {
+		common.RespondError(w, http.StatusBadRequest, "invalid peer ID")
+		return
+	}
+
+	ctx := r.Context()
+	database := h.DB
+
+	// Verify peer exists and get hostname
+	var hostname string
+	err = database.QueryRowContext(ctx, "SELECT hostname FROM peers WHERE id = ?", peerID).Scan(&hostname)
+	if err == sql.ErrNoRows {
+		common.RespondError(w, http.StatusNotFound, "peer not found")
+		return
+	}
+	if err != nil {
+		log.Printf("ERROR: failed to query peer: %v", err)
+		common.InternalError(w)
+		return
+	}
+
+	// Compile and store the bundle
+	bundle, err := h.Compiler.CompileAndStore(ctx, peerID)
+	if err != nil {
+		log.Printf("ERROR: failed to compile and store bundle for peer %d: %v", peerID, err)
+		common.InternalError(w)
+		return
+	}
+
+	// Clear pending changes for this peer
+	err = db.ClearPendingChangesForPeer(ctx, database, peerID)
+	if err != nil {
+		log.Printf("WARN: failed to clear pending changes for peer %d: %v", peerID, err)
+		// Don't fail the request — bundle was applied successfully
+	}
+
+	// Delete any pending preview
+	db.DeletePendingBundlePreview(ctx, database, peerID)
+
+	// Notify via SSE (use hostname as the host_id for SSE)
+	h.SSEHub.NotifyBundleUpdated("host-"+hostname, bundle.Version)
+
+	common.RespondJSON(w, http.StatusOK, map[string]interface{}{
+		"status":  "applied",
+		"version": bundle.Version,
+	})
+}
+
+// ApplyAllPendingBundles applies pending bundles for all peers with pending changes.
+func (h *Handler) ApplyAllPendingBundles(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	database := h.DB
+
+	// Get all peers with pending changes
+	peerIDs, err := db.GetPeersWithPendingChanges(ctx, database)
+	if err != nil {
+		log.Printf("ERROR: failed to get peers with pending changes: %v", err)
+		common.InternalError(w)
+		return
+	}
+
+	if len(peerIDs) == 0 {
 		common.RespondJSON(w, http.StatusOK, map[string]interface{}{
-			"version":         version,
-			"current_version": currentVersion,
-			"new_version":     version,
-			"is_different":    version != currentVersion,
-			"diff":            diffContent,
-			"rules_content":   content,
+			"status":  "no_pending_changes",
+			"applied": 0,
 		})
+		return
 	}
+
+	applied := 0
+	var errors []string
+	for _, peerID := range peerIDs {
+		if err := applyBundleForPeer(ctx, database, h.Compiler, h.SSEHub, peerID); err != nil {
+			errors = append(errors, fmt.Sprintf("peer %d: %v", peerID, err))
+		} else {
+			applied++
+		}
+	}
+
+	resp := map[string]interface{}{
+		"status":  "completed",
+		"applied": applied,
+		"total":   len(peerIDs),
+	}
+	if len(errors) > 0 {
+		resp["errors"] = errors
+	}
+
+	common.RespondJSON(w, http.StatusOK, resp)
 }
 
-// MakeApplyPeerPendingBundleHandler compiles and stores a bundle for a peer, clears pending changes, and triggers SSE notification.
-func MakeApplyPeerPendingBundleHandler(compiler *engine.Compiler, sseHub *events.SSEHub) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		peerID, err := common.ParseIDParam(r, "peerId")
-		if err != nil {
-			common.RespondError(w, http.StatusBadRequest, "invalid peer ID")
-			return
-		}
-
-		ctx := r.Context()
-		database := db.DB.DB
-
-		// Verify peer exists and get hostname
-		var hostname string
-		err = database.QueryRowContext(ctx, "SELECT hostname FROM peers WHERE id = ?", peerID).Scan(&hostname)
-		if err == sql.ErrNoRows {
-			common.RespondError(w, http.StatusNotFound, "peer not found")
-			return
-		}
-		if err != nil {
-			log.Printf("ERROR: failed to query peer: %v", err)
-			common.InternalError(w)
-			return
-		}
-
-		// Compile and store the bundle
-		bundle, err := compiler.CompileAndStore(ctx, peerID)
-		if err != nil {
-			log.Printf("ERROR: failed to compile and store bundle for peer %d: %v", peerID, err)
-			common.InternalError(w)
-			return
-		}
-
-		// Clear pending changes for this peer
-		err = db.ClearPendingChangesForPeer(ctx, database, peerID)
-		if err != nil {
-			log.Printf("WARN: failed to clear pending changes for peer %d: %v", peerID, err)
-			// Don't fail the request — bundle was applied successfully
-		}
-
-		// Delete any pending preview
-		db.DeletePendingBundlePreview(ctx, database, peerID)
-
-		// Notify via SSE (use hostname as the host_id for SSE)
-		sseHub.NotifyBundleUpdated("host-"+hostname, bundle.Version)
-
-		common.RespondJSON(w, http.StatusOK, map[string]interface{}{
-			"status":  "applied",
-			"version": bundle.Version,
-		})
-	}
-}
-
-// MakeApplyAllPendingBundlesHandler applies pending bundles for all peers with pending changes.
-func MakeApplyAllPendingBundlesHandler(compiler *engine.Compiler, sseHub *events.SSEHub) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		ctx := r.Context()
-		database := db.DB.DB
-
-		// Get all peers with pending changes
-		peerIDs, err := db.GetPeersWithPendingChanges(ctx, database)
-		if err != nil {
-			log.Printf("ERROR: failed to get peers with pending changes: %v", err)
-			common.InternalError(w)
-			return
-		}
-
-		if len(peerIDs) == 0 {
-			common.RespondJSON(w, http.StatusOK, map[string]interface{}{
-				"status":  "no_pending_changes",
-				"applied": 0,
-			})
-			return
-		}
-
-		applied := 0
-		var errors []string
-		for _, peerID := range peerIDs {
-			if err := applyBundleForPeer(ctx, database, compiler, sseHub, peerID); err != nil {
-				errors = append(errors, fmt.Sprintf("peer %d: %v", peerID, err))
-			} else {
-				applied++
-			}
-		}
-
-		resp := map[string]interface{}{
-			"status":  "completed",
-			"applied": applied,
-			"total":   len(peerIDs),
-		}
-		if len(errors) > 0 {
-			resp["errors"] = errors
-		}
-
-		common.RespondJSON(w, http.StatusOK, resp)
-	}
-}
-
-// MakePushAllRulesHandler compiles and pushes rules to ALL peers in the database,
+// PushAllRules compiles and pushes rules to ALL peers in the database,
 // regardless of whether they have pending changes. This is used for the "Push Rules to All"
 // dashboard action.
-func MakePushAllRulesHandler(compiler *engine.Compiler, sseHub *events.SSEHub) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		ctx := r.Context()
-		database := db.DB.DB
+func (h *Handler) PushAllRules(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	database := h.DB
 
-		// Get ALL peers from the database (not just those with pending changes)
-		rows, err := database.QueryContext(ctx, "SELECT id, hostname FROM peers ORDER BY hostname")
-		if err != nil {
-			log.Printf("ERROR: failed to query all peers: %v", err)
-			common.InternalError(w)
-			return
-		}
-		defer rows.Close()
-
-		type peerInfo struct {
-			id       int
-			hostname string
-		}
-
-		var allPeers []peerInfo
-		for rows.Next() {
-			var p peerInfo
-			if err := rows.Scan(&p.id, &p.hostname); err != nil {
-				log.Printf("WARN: failed to scan peer: %v", err)
-				continue
-			}
-			allPeers = append(allPeers, p)
-		}
-
-		if err := rows.Err(); err != nil {
-			log.Printf("ERROR: error iterating peers: %v", err)
-			common.InternalError(w)
-			return
-		}
-
-		if len(allPeers) == 0 {
-			common.RespondJSON(w, http.StatusOK, map[string]interface{}{
-				"status": "no_peers",
-				"pushed": 0,
-			})
-			return
-		}
-
-		pushed := 0
-		var errors []string
-		for _, p := range allPeers {
-			// Compile and store the bundle (similar to applyBundleForPeer but without clearing pending)
-			bundle, err := compiler.CompileAndStore(ctx, p.id)
-			if err != nil {
-				errors = append(errors, fmt.Sprintf("peer %d (%s): %v", p.id, p.hostname, err))
-				continue
-			}
-
-			// Notify via SSE
-			sseHub.NotifyBundleUpdated("host-"+p.hostname, bundle.Version)
-			pushed++
-		}
-
-		resp := map[string]interface{}{
-			"status": "completed",
-			"pushed": pushed,
-			"total":  len(allPeers),
-		}
-		if len(errors) > 0 {
-			resp["errors"] = errors
-		}
-
-		common.RespondJSON(w, http.StatusOK, resp)
+	// Get ALL peers from the database (not just those with pending changes)
+	rows, err := database.QueryContext(ctx, "SELECT id, hostname FROM peers ORDER BY hostname")
+	if err != nil {
+		log.Printf("ERROR: failed to query all peers: %v", err)
+		common.InternalError(w)
+		return
 	}
+	defer rows.Close()
+
+	type peerInfo struct {
+		id       int
+		hostname string
+	}
+
+	var allPeers []peerInfo
+	for rows.Next() {
+		var p peerInfo
+		if err := rows.Scan(&p.id, &p.hostname); err != nil {
+			log.Printf("WARN: failed to scan peer: %v", err)
+			continue
+		}
+		allPeers = append(allPeers, p)
+	}
+
+	if err := rows.Err(); err != nil {
+		log.Printf("ERROR: error iterating peers: %v", err)
+		common.InternalError(w)
+		return
+	}
+
+	if len(allPeers) == 0 {
+		common.RespondJSON(w, http.StatusOK, map[string]interface{}{
+			"status": "no_peers",
+			"pushed": 0,
+		})
+		return
+	}
+
+	pushed := 0
+	var errors []string
+	for _, p := range allPeers {
+		// Compile and store the bundle (similar to applyBundleForPeer but without clearing pending)
+		bundle, err := h.Compiler.CompileAndStore(ctx, p.id)
+		if err != nil {
+			errors = append(errors, fmt.Sprintf("peer %d (%s): %v", p.id, p.hostname, err))
+			continue
+		}
+
+		// Notify via SSE
+		h.SSEHub.NotifyBundleUpdated("host-"+p.hostname, bundle.Version)
+		pushed++
+	}
+
+	resp := map[string]interface{}{
+		"status": "completed",
+		"pushed": pushed,
+		"total":  len(allPeers),
+	}
+	if len(errors) > 0 {
+		resp["errors"] = errors
+	}
+
+	common.RespondJSON(w, http.StatusOK, resp)
 }
 
 // applyBundleForPeer compiles, stores, and clears pending for a single peer.

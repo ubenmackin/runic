@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
 
 	"runic/internal/common"
@@ -30,10 +29,6 @@ func SendHeartbeat(ctx context.Context, client common.HTTPClient, controlPlaneUR
 		return fmt.Errorf("heartbeat failed: %w", err)
 	}
 	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("heartbeat returned status %d", resp.StatusCode)
-	}
 
 	var result map[string]interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {

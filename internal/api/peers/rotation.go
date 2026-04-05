@@ -13,7 +13,6 @@ import (
 	"runic/internal/api/common"
 	"runic/internal/api/middleware"
 	runiccommon "runic/internal/common"
-	"runic/internal/db"
 )
 
 // Rate limiters for rotation endpoints
@@ -109,7 +108,7 @@ func cleanupExpiredTokens(database *sql.DB) (int64, error) {
 
 // RotatePeerKey handles admin-initiated key rotation.
 // POST /api/v1/peers/:id/rotate-key
-func RotatePeerKey(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) RotatePeerKey(w http.ResponseWriter, r *http.Request) {
 	peerID, err := common.ParseIDParam(r, "id")
 	if err != nil {
 		common.RespondError(w, http.StatusBadRequest, "invalid peer ID")
@@ -119,7 +118,7 @@ func RotatePeerKey(w http.ResponseWriter, r *http.Request) {
 	// Get current peer info
 	var hostname, currentHMACKey string
 	var rotationToken sql.NullString
-	err = db.DB.QueryRowContext(r.Context(),
+	err = h.DB.QueryRowContext(r.Context(),
 		"SELECT hostname, hmac_key, hmac_key_rotation_token FROM peers WHERE id = ?",
 		peerID,
 	).Scan(&hostname, &currentHMACKey, &rotationToken)
@@ -151,7 +150,7 @@ func RotatePeerKey(w http.ResponseWriter, r *http.Request) {
 	if rotationToken.Valid && rotationToken.String != "" {
 		// Check if existing token is still valid (not expired)
 		var lastRotatedAt sql.NullString
-		err = db.DB.QueryRowContext(r.Context(),
+		err = h.DB.QueryRowContext(r.Context(),
 			"SELECT hmac_key_last_rotated_at FROM peers WHERE id = ?",
 			peerID,
 		).Scan(&lastRotatedAt)
@@ -172,7 +171,7 @@ func RotatePeerKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Store new key and token in database
-	_, err = db.DB.ExecContext(r.Context(),
+	_, err = h.DB.ExecContext(r.Context(),
 		"UPDATE peers SET hmac_key = ?, hmac_key_rotation_token = ?, hmac_key_last_rotated_at = ? WHERE id = ?",
 		newHMACKey, token, time.Now().UTC().Format(time.RFC3339), peerID,
 	)
@@ -204,7 +203,7 @@ func RotatePeerKey(w http.ResponseWriter, r *http.Request) {
 // The agent sends its host_id and rotation token.
 // The token is consumed (set to NULL) atomically with key retrieval.
 // This endpoint is PUBLIC - authentication is via the rotation token itself.
-func AgentRotateKey(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) AgentRotateKey(w http.ResponseWriter, r *http.Request) {
 	// Limit request body size to prevent slowloris attacks
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB limit
 
@@ -232,7 +231,7 @@ func AgentRotateKey(w http.ResponseWriter, r *http.Request) {
 	hostname := parseHostID(input.HostID)
 
 	// Atomic operation: validate token AND retrieve key AND consume token
-	tx, err := db.DB.BeginTx(r.Context(), nil)
+	tx, err := h.DB.BeginTx(r.Context(), nil)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "failed to start transaction")
 		return
@@ -310,7 +309,7 @@ func AgentRotateKey(w http.ResponseWriter, r *http.Request) {
 // AgentConfirmRotation handles agent confirmation of key rotation.
 // POST /api/v1/agent/confirm-rotation
 // Requires the rotation token as proof of legitimate rotation.
-func AgentConfirmRotation(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) AgentConfirmRotation(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		HostID        string `json:"host_id"`
 		RotationToken string `json:"rotation_token"` // Required only if rotation token still exists (not yet consumed)
@@ -337,7 +336,7 @@ func AgentConfirmRotation(w http.ResponseWriter, r *http.Request) {
 	// Check if rotation was actually pending (token should already be NULL after AgentRotateKey)
 	var peerID int
 	var currentToken sql.NullString
-	err := db.DB.QueryRowContext(r.Context(),
+	err := h.DB.QueryRowContext(r.Context(),
 		"SELECT id, hmac_key_rotation_token FROM peers WHERE hostname = ?",
 		hostname,
 	).Scan(&peerID, &currentToken)
@@ -355,7 +354,7 @@ func AgentConfirmRotation(w http.ResponseWriter, r *http.Request) {
 	if !currentToken.Valid || currentToken.String == "" {
 		// Token already consumed - check if rotation was recent
 		var lastRotatedAt sql.NullString
-		err = db.DB.QueryRowContext(r.Context(),
+		err = h.DB.QueryRowContext(r.Context(),
 			"SELECT hmac_key_last_rotated_at FROM peers WHERE id = ?",
 			peerID,
 		).Scan(&lastRotatedAt)
@@ -399,7 +398,7 @@ func AgentConfirmRotation(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Update last rotation timestamp
-	_, err = db.DB.ExecContext(r.Context(),
+	_, err = h.DB.ExecContext(r.Context(),
 		"UPDATE peers SET hmac_key_last_rotated_at = ? WHERE id = ?",
 		time.Now().UTC().Format(time.RFC3339), peerID,
 	)

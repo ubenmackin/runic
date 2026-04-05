@@ -9,8 +9,17 @@ import (
 	"runic/internal/api/common"
 	"runic/internal/common/constants"
 	"runic/internal/common/log"
-	"runic/internal/db"
 )
+
+// Handler holds dependencies for dashboard handlers.
+type Handler struct {
+	DB *sql.DB
+}
+
+// NewHandler creates a new dashboard handler.
+func NewHandler(db *sql.DB) *Handler {
+	return &Handler{DB: db}
+}
 
 type ActivityItem struct {
 	Timestamp string `json:"timestamp"`
@@ -48,11 +57,11 @@ type DashboardStats struct {
 	TopBlockedSource []BlockedIP    `json:"top_blocked_sources"`
 }
 
-func HandleDashboard(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) HandleDashboard(w http.ResponseWriter, r *http.Request) {
 	var stats DashboardStats
 
 	// Count peers
-	rows, err := db.DB.QueryContext(r.Context(), `SELECT COUNT(*) FROM peers`)
+	rows, err := h.DB.QueryContext(r.Context(), `SELECT COUNT(*) FROM peers`)
 	if err == nil {
 		defer rows.Close()
 		if rows.Next() {
@@ -63,7 +72,7 @@ func HandleDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Count manual peers (is_manual = 1)
-	rows2, err := db.DB.QueryContext(r.Context(), "SELECT COUNT(*) FROM peers WHERE is_manual = 1")
+	rows2, err := h.DB.QueryContext(r.Context(), "SELECT COUNT(*) FROM peers WHERE is_manual = 1")
 	if err == nil {
 		defer rows2.Close()
 		if rows2.Next() {
@@ -74,7 +83,7 @@ func HandleDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Count online peers (status = 'online) - only agent peers (not manual)
-	rows3, err := db.DB.QueryContext(r.Context(), fmt.Sprintf("SELECT COUNT(*) FROM peers WHERE is_manual = 0 AND last_heartbeat > datetime('now', '-%d seconds')", constants.OfflineThresholdSeconds))
+	rows3, err := h.DB.QueryContext(r.Context(), fmt.Sprintf("SELECT COUNT(*) FROM peers WHERE is_manual = 0 AND last_heartbeat > datetime('now', '-%d seconds')", constants.OfflineThresholdSeconds))
 	if err == nil {
 		defer rows3.Close()
 		if rows3.Next() {
@@ -89,7 +98,7 @@ func HandleDashboard(w http.ResponseWriter, r *http.Request) {
 	stats.OfflinePeers = stats.TotalPeers - stats.ManualPeers - stats.OnlinePeers
 
 	// Count policies
-	rows4, err := db.DB.QueryContext(r.Context(), `SELECT COUNT(*) FROM policies WHERE enabled = 1`)
+	rows4, err := h.DB.QueryContext(r.Context(), `SELECT COUNT(*) FROM policies WHERE enabled = 1`)
 	if err == nil {
 		defer rows4.Close()
 		if rows4.Next() {
@@ -105,11 +114,11 @@ func HandleDashboard(w http.ResponseWriter, r *http.Request) {
 	stats.TopBlockedSource = []BlockedIP{}
 
 	// Get blocked events count for last hour and last 24 hours in a single query
-	rows5, err := db.DB.QueryContext(r.Context(), `
-		SELECT 
-			COALESCE(SUM(CASE WHEN timestamp > datetime('now', '-1 hour') THEN 1 ELSE 0 END), 0) as blocked_last_hour,
-			COUNT(*) as blocked_last_24h
-		FROM firewall_logs 
+	rows5, err := h.DB.QueryContext(r.Context(), `
+		SELECT
+		COALESCE(SUM(CASE WHEN timestamp > datetime('now', '-1 hour') THEN 1 ELSE 0 END), 0) as blocked_last_hour,
+		COUNT(*) as blocked_last_24h
+		FROM firewall_logs
 		WHERE action = 'DROP' AND timestamp > datetime('now', '-24 hours')
 	`)
 	if err == nil {
@@ -122,7 +131,7 @@ func HandleDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get recent activity - last 5 blocked events
-	activityRows, err := db.DB.QueryContext(r.Context(), `
+	activityRows, err := h.DB.QueryContext(r.Context(), `
 		SELECT fl.timestamp, fl.src_ip, fl.dst_ip, fl.protocol, fl.action, p.hostname
 		FROM firewall_logs fl
 		LEFT JOIN peers p ON fl.peer_id = p.id
@@ -146,7 +155,7 @@ func HandleDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get peer health data
-	peerRows, err := db.DB.QueryContext(r.Context(), `
+	peerRows, err := h.DB.QueryContext(r.Context(), `
 		SELECT hostname, ip_address, agent_version, last_heartbeat, is_manual
 		FROM peers
 		ORDER BY hostname`)
@@ -177,7 +186,7 @@ func HandleDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get top 5 blocked source IPs in last 24h
-	topRows, err := db.DB.QueryContext(r.Context(), `
+	topRows, err := h.DB.QueryContext(r.Context(), `
 		SELECT src_ip, COUNT(*) as count
 		FROM firewall_logs
 		WHERE action = 'DROP' AND timestamp > datetime('now', '-24 hours')

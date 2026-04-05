@@ -66,7 +66,9 @@ func (s *Shipper) Run(ctx context.Context) {
 			if !ok {
 				// Tail ended, flush remaining
 				if len(batch) > 0 {
-					s.ship(context.Background(), batch)
+					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer cancel()
+					s.ship(ctx, batch)
 				}
 				return
 			}
@@ -87,7 +89,9 @@ func (s *Shipper) Run(ctx context.Context) {
 		case <-ctx.Done():
 			// Best-effort flush on shutdown
 			if len(batch) > 0 {
-				s.ship(context.Background(), batch)
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				s.ship(ctx, batch)
 			}
 			return
 		}
@@ -98,6 +102,10 @@ func (s *Shipper) Run(ctx context.Context) {
 func (s *Shipper) tail(ctx context.Context, path string) <-chan string {
 	lines := make(chan string, 100)
 
+	// NOTE: This goroutine is intentionally fire-and-forget. It is tightly coupled
+	// to the `lines` channel lifecycle — it closes the channel on exit (defer close(lines))
+	// and respects ctx.Done() at multiple points. Integrating into errgroup would
+	// require restructuring the channel-based producer/consumer pattern.
 	go func() {
 		defer close(lines)
 
@@ -146,7 +154,12 @@ func (s *Shipper) tail(ctx context.Context, path string) <-chan string {
 						scanner = bufio.NewScanner(f)
 					}
 				}
-				time.Sleep(constants.LogTailSleepInterval)
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(constants.LogTailSleepInterval):
+					// continue
+				}
 				continue
 			}
 

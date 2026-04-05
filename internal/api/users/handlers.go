@@ -14,8 +14,17 @@ import (
 	"runic/internal/api/common"
 	"runic/internal/auth"
 	runiccommon "runic/internal/common"
-	"runic/internal/db"
 )
+
+// Handler provides HTTP handlers for user management with dependency injection.
+type Handler struct {
+	DB *sql.DB
+}
+
+// NewHandler creates a new user handler with the given database connection.
+func NewHandler(db *sql.DB) *Handler {
+	return &Handler{DB: db}
+}
 
 // emailRegex is a basic pattern for email validation
 var emailRegex = regexp.MustCompile(`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`)
@@ -30,11 +39,11 @@ type UserResponse struct {
 }
 
 // ListUsers handles GET /api/v1/users
-func ListUsers(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := runiccommon.WithHandlerTimeout(r.Context())
 	defer cancel()
 
-	rows, err := db.DB.QueryContext(ctx, "SELECT id, username, email, role, created_at FROM users ORDER BY id")
+	rows, err := h.DB.QueryContext(ctx, "SELECT id, username, email, role, created_at FROM users ORDER BY id")
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "Failed to query users")
 		return
@@ -69,7 +78,7 @@ type CreateUserRequest struct {
 }
 
 // CreateUser handles POST /api/v1/users
-func CreateUser(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := runiccommon.WithHandlerTimeout(r.Context())
 	defer cancel()
 
@@ -117,7 +126,7 @@ func CreateUser(w http.ResponseWriter, r *http.Request) {
 
 	// Check if username exists
 	var exists bool
-	err := db.DB.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM users WHERE username = ?)", req.Username).Scan(&exists)
+	err := h.DB.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM users WHERE username = ?)", req.Username).Scan(&exists)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "Database error")
 		return
@@ -135,7 +144,7 @@ func CreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Insert user
-	result, err := db.DB.ExecContext(ctx,
+	result, err := h.DB.ExecContext(ctx,
 		"INSERT INTO users (username, password_hash, email, role) VALUES (?, ?, ?, ?)",
 		req.Username, string(hash), req.Email, req.Role,
 	)
@@ -161,7 +170,7 @@ func CreateUser(w http.ResponseWriter, r *http.Request) {
 }
 
 // DeleteUser handles DELETE /api/v1/users/{id}
-func DeleteUser(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 	id, err := common.ParseIDParam(r, "id")
 	if err != nil {
 		common.RespondError(w, http.StatusBadRequest, "Invalid user ID")
@@ -183,7 +192,7 @@ func DeleteUser(w http.ResponseWriter, r *http.Request) {
 
 	// Check if user exists and get username
 	var username string
-	err = db.DB.QueryRowContext(ctx, "SELECT username FROM users WHERE id = ?", id).Scan(&username)
+	err = h.DB.QueryRowContext(ctx, "SELECT username FROM users WHERE id = ?", id).Scan(&username)
 	if err == sql.ErrNoRows {
 		common.RespondError(w, http.StatusNotFound, "User not found")
 		return
@@ -200,7 +209,7 @@ func DeleteUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Delete user
-	_, err = db.DB.ExecContext(ctx, "DELETE FROM users WHERE id = ?", id)
+	_, err = h.DB.ExecContext(ctx, "DELETE FROM users WHERE id = ?", id)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "Failed to delete user")
 		return
@@ -219,7 +228,7 @@ type UpdateUserRequest struct {
 }
 
 // UpdateUser handles PUT /api/v1/users/{id}
-func UpdateUser(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	id, err := common.ParseIDParam(r, "id")
 	if err != nil {
 		common.RespondError(w, http.StatusBadRequest, "Invalid user ID")
@@ -251,7 +260,7 @@ func UpdateUser(w http.ResponseWriter, r *http.Request) {
 
 	// Check if user exists
 	var username string
-	err = db.DB.QueryRowContext(ctx, "SELECT username FROM users WHERE id = ?", id).Scan(&username)
+	err = h.DB.QueryRowContext(ctx, "SELECT username FROM users WHERE id = ?", id).Scan(&username)
 	if err == sql.ErrNoRows {
 		common.RespondError(w, http.StatusNotFound, "User not found")
 		return
@@ -311,7 +320,7 @@ func UpdateUser(w http.ResponseWriter, r *http.Request) {
 	query := "UPDATE users SET " + strings.Join(setClauses, ", ") + " WHERE id = ?"
 	args = append(args, id)
 
-	_, err = db.DB.ExecContext(ctx, query, args...)
+	_, err = h.DB.ExecContext(ctx, query, args...)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "Failed to update user")
 		return

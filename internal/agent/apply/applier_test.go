@@ -1,6 +1,7 @@
 package apply
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -222,8 +223,8 @@ COMMIT
 			name: "no valid rules",
 			bundle: models.BundleResponse{
 				Version: "test-v7",
-				Rules: `# *filter COMMIT :INPUT DROP :OUTPUT DROP`,
-				HMAC: engine.Sign(`# *filter COMMIT :INPUT DROP :OUTPUT DROP`, "test-key"),
+				Rules:   `# *filter COMMIT :INPUT DROP :OUTPUT DROP`,
+				HMAC:    engine.Sign(`# *filter COMMIT :INPUT DROP :OUTPUT DROP`, "test-key"),
 			},
 			hmacKey:     "test-key",
 			wantErr:     true,
@@ -524,7 +525,7 @@ func TestScheduleRevert(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			backupRules := "*filter\n:INPUT DROP [0:0]\nCOMMIT\n"
 
-			cancel := scheduleRevert(backupRules, tt.delay, "http://test", "token", "1.0.0")
+			cancel := scheduleRevert(context.Background(), backupRules, tt.delay, "http://test", "token", "1.0.0")
 
 			if tt.cancelFast {
 				// Cancel immediately - revert should not execute

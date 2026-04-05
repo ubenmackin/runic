@@ -1,13 +1,13 @@
 package rotation
 
 import (
-	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"runic/internal/agent/identity"
+	"runic/internal/common"
 	"runic/internal/common/log"
 )
 
@@ -58,7 +59,7 @@ func NewManager(config *identity.Config, configPath string, httpClient *http.Cli
 
 // CheckAndRotate checks if a rotation is pending and performs it if so.
 // This method uses fine-grained locking to avoid holding the mutex during HTTP calls.
-func (m *Manager) CheckAndRotate() error {
+func (m *Manager) CheckAndRotate(ctx context.Context) error {
 	// Phase 1: Check if we should start a rotation (under lock)
 	m.mu.Lock()
 	if m.state == StateRotating || m.state == StateTesting {
@@ -71,7 +72,7 @@ func (m *Manager) CheckAndRotate() error {
 	m.mu.Unlock()
 
 	// Phase 2: Check for pending rotation (HTTP call - no lock held)
-	rotationToken, err := m.checkRotationPending()
+	rotationToken, err := m.checkRotationPending(ctx)
 	if err != nil {
 		m.mu.Lock()
 		m.state = StateFailed
@@ -90,7 +91,7 @@ func (m *Manager) CheckAndRotate() error {
 	log.Info("Key rotation detected, starting rotation process")
 
 	// Phase 3: Retrieve new key (HTTP call - no lock held)
-	newKey, err := m.retrieveNewKey(rotationToken)
+	newKey, err := m.retrieveNewKey(ctx, rotationToken)
 	if err != nil {
 		m.mu.Lock()
 		m.state = StateFailed
@@ -105,7 +106,7 @@ func (m *Manager) CheckAndRotate() error {
 	m.state = StateTesting
 	m.mu.Unlock()
 
-	if err := m.testNewKey(newKey); err != nil {
+	if err := m.testNewKey(ctx, newKey); err != nil {
 		m.mu.Lock()
 		m.state = StateFallback
 		m.mu.Unlock()
@@ -128,7 +129,7 @@ func (m *Manager) CheckAndRotate() error {
 	m.mu.Unlock()
 
 	// Phase 7: Confirm rotation (HTTP call - no lock held)
-	if err := m.confirmRotation(); err != nil {
+	if err := m.confirmRotation(ctx); err != nil {
 		log.Warn("Failed to confirm rotation with control plane", "error", err)
 		// Don't fail here - the key is already updated locally
 	}
@@ -144,29 +145,24 @@ func (m *Manager) CheckAndRotate() error {
 }
 
 // checkRotationPending checks if a rotation token is available.
-func (m *Manager) checkRotationPending() (string, error) {
+func (m *Manager) checkRotationPending(ctx context.Context) (string, error) {
 	url := fmt.Sprintf("%s/api/v1/agent/check-rotation", m.controlPlaneURL)
-	req, err := http.NewRequest("GET", url, nil)
+	resp, err := common.DoJSONRequest(ctx, m.httpClient, "GET", url, nil, m.config.Token, "runic-agent")
 	if err != nil {
-		return "", err
-	}
-
-	req.Header.Set("Authorization", "Bearer "+m.config.Token)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := m.httpClient.Do(req)
-	if err != nil {
+		// Non-2xx error — check if it's 404 (no rotation pending)
+		var httpErr *common.HTTPStatusError
+		if errors.As(err, &httpErr) {
+			if httpErr.StatusCode == http.StatusNotFound {
+				return "", nil
+			}
+		}
 		return "", err
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusNotFound {
-		// No rotation pending
+	// 204 No Content means no rotation pending
+	if resp.StatusCode == http.StatusNoContent {
 		return "", nil
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 
 	var result struct {
@@ -181,7 +177,7 @@ func (m *Manager) checkRotationPending() (string, error) {
 }
 
 // retrieveNewKey retrieves the new HMAC key using the rotation token.
-func (m *Manager) retrieveNewKey(token string) (string, error) {
+func (m *Manager) retrieveNewKey(ctx context.Context, token string) (string, error) {
 	url := fmt.Sprintf("%s/api/v1/agent/rotate-key", m.controlPlaneURL)
 
 	body := map[string]string{
@@ -189,29 +185,11 @@ func (m *Manager) retrieveNewKey(token string) (string, error) {
 		"rotation_token": token,
 	}
 
-	data, err := json.Marshal(body)
+	resp, err := common.DoJSONRequest(ctx, m.httpClient, "POST", url, body, "", "runic-agent")
 	if err != nil {
-		return "", err
-	}
-
-	req, err := http.NewRequest("POST", url, bytes.NewReader(data))
-	if err != nil {
-		return "", err
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := m.httpClient.Do(req)
-	if err != nil {
-		return "", err
+		return "", fmt.Errorf("retrieve new key: %w", err)
 	}
 	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		// Read error body for debugging
-		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("unexpected status code: %d: %s", resp.StatusCode, string(body))
-	}
 
 	var result struct {
 		NewHMACKey string `json:"new_hmac_key"`
@@ -229,7 +207,7 @@ func (m *Manager) retrieveNewKey(token string) (string, error) {
 }
 
 // testNewKey verifies the new key works by making a test request.
-func (m *Manager) testNewKey(key string) error {
+func (m *Manager) testNewKey(ctx context.Context, key string) error {
 	// Create a test message and sign it with the new key
 	testMessage := fmt.Sprintf("test-%d", time.Now().UnixNano())
 	mac := hmac.New(sha256.New, []byte(key))
@@ -245,28 +223,11 @@ func (m *Manager) testNewKey(key string) error {
 		"signature": signature,
 	}
 
-	data, err := json.Marshal(body)
+	resp, err := common.DoJSONRequest(ctx, m.httpClient, "POST", url, body, m.config.Token, "runic-agent")
 	if err != nil {
-		return err
-	}
-
-	req, err := http.NewRequest("POST", url, bytes.NewReader(data))
-	if err != nil {
-		return err
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+m.config.Token)
-
-	resp, err := m.httpClient.Do(req)
-	if err != nil {
-		return err
+		return fmt.Errorf("key test failed: %w", err)
 	}
 	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("key test failed with status: %d", resp.StatusCode)
-	}
 
 	return nil
 }
@@ -330,34 +291,18 @@ func (m *Manager) updateConfigKey(newKey string) error {
 }
 
 // confirmRotation notifies the control plane that rotation is complete.
-func (m *Manager) confirmRotation() error {
+func (m *Manager) confirmRotation(ctx context.Context) error {
 	url := fmt.Sprintf("%s/api/v1/agent/confirm-rotation", m.controlPlaneURL)
 
 	body := map[string]string{
 		"host_id": m.hostID,
 	}
 
-	data, err := json.Marshal(body)
+	resp, err := common.DoJSONRequest(ctx, m.httpClient, "POST", url, body, "", "runic-agent")
 	if err != nil {
-		return err
-	}
-
-	req, err := http.NewRequest("POST", url, bytes.NewReader(data))
-	if err != nil {
-		return err
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := m.httpClient.Do(req)
-	if err != nil {
-		return err
+		return fmt.Errorf("confirm rotation failed: %w", err)
 	}
 	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("confirm rotation failed with status: %d", resp.StatusCode)
-	}
 
 	return nil
 }

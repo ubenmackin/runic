@@ -1,6 +1,7 @@
 package groups
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -10,6 +11,17 @@ import (
 	"runic/internal/db"
 	"runic/internal/engine"
 )
+
+// Handler provides HTTP handlers for group operations with dependency injection
+type Handler struct {
+	DB       *sql.DB
+	Compiler *engine.Compiler
+}
+
+// NewHandler creates a new groups handler with the given dependencies
+func NewHandler(db *sql.DB, compiler *engine.Compiler) *Handler {
+	return &Handler{DB: db, Compiler: compiler}
+}
 
 // --- Groups ---
 
@@ -23,22 +35,22 @@ type GroupWithCounts struct {
 	PolicyCount int    `json:"policy_count"`
 }
 
-func ListGroups(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) ListGroups(w http.ResponseWriter, r *http.Request) {
 	query := `
 	SELECT g.id, g.name, COALESCE(g.description, ''), COALESCE(g.is_system, 0),
 	COALESCE(p.peer_count, 0), COALESCE(pol.policy_count, 0)
 	FROM groups g
 	LEFT JOIN (SELECT group_id, COUNT(*) as peer_count FROM group_members GROUP BY group_id) p ON g.id = p.group_id
 	LEFT JOIN (
-		SELECT group_id, SUM(count) as policy_count FROM (
-			SELECT source_id as group_id, COUNT(*) as count FROM policies WHERE source_type='group' GROUP BY source_id
-			UNION ALL
-			SELECT target_id as group_id, COUNT(*) as count FROM policies WHERE target_type='group' GROUP BY target_id
-		) GROUP BY group_id
+	SELECT group_id, SUM(count) as policy_count FROM (
+	SELECT source_id as group_id, COUNT(*) as count FROM policies WHERE source_type='group' GROUP BY source_id
+	UNION ALL
+	SELECT target_id as group_id, COUNT(*) as count FROM policies WHERE target_type='group' GROUP BY target_id
+	) GROUP BY group_id
 	) pol ON g.id = pol.group_id
 	ORDER BY g.name ASC`
 
-	rows, err := db.DB.QueryContext(r.Context(), query)
+	rows, err := h.DB.QueryContext(r.Context(), query)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "failed to query groups")
 		return
@@ -58,7 +70,7 @@ func ListGroups(w http.ResponseWriter, r *http.Request) {
 	common.RespondJSON(w, http.StatusOK, groupsData)
 }
 
-func CreateGroup(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) CreateGroup(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		Name        string `json:"name"`
 		Description string `json:"description"`
@@ -72,7 +84,7 @@ func CreateGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := db.DB.ExecContext(r.Context(),
+	result, err := h.DB.ExecContext(r.Context(),
 		"INSERT INTO groups (name, description) VALUES (?, ?)", input.Name, input.Description)
 	if err != nil {
 		log.Printf("ERROR: failed to create group: %v", err)
@@ -80,18 +92,23 @@ func CreateGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id, _ := result.LastInsertId()
+	id, err := result.LastInsertId()
+	if err != nil {
+		log.Printf("ERROR: failed to get insert ID: %v", err)
+		common.InternalError(w)
+		return
+	}
 	common.RespondJSON(w, http.StatusCreated, map[string]int64{"id": id})
 }
 
-func GetGroup(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) GetGroup(w http.ResponseWriter, r *http.Request) {
 	id, err := common.ParseIDParam(r, "id")
 	if err != nil {
 		common.RespondError(w, http.StatusBadRequest, "invalid group ID")
 		return
 	}
 
-	g, err := db.GetGroup(r.Context(), db.DB.DB, id)
+	g, err := db.GetGroup(r.Context(), h.DB, id)
 	if err != nil {
 		common.RespondError(w, http.StatusNotFound, "group not found")
 		return
@@ -100,7 +117,7 @@ func GetGroup(w http.ResponseWriter, r *http.Request) {
 	common.RespondJSON(w, http.StatusOK, g)
 }
 
-func UpdateGroup(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) UpdateGroup(w http.ResponseWriter, r *http.Request) {
 	id, err := common.ParseIDParam(r, "id")
 	if err != nil {
 		common.RespondError(w, http.StatusBadRequest, "invalid group ID")
@@ -116,7 +133,7 @@ func UpdateGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err = db.DB.ExecContext(r.Context(),
+	_, err = h.DB.ExecContext(r.Context(),
 		"UPDATE groups SET name = ?, description = ? WHERE id = ?", input.Name, input.Description, id)
 	if err != nil {
 		log.Printf("ERROR: failed to update group: %v", err)
@@ -127,7 +144,7 @@ func UpdateGroup(w http.ResponseWriter, r *http.Request) {
 	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
 
-func DeleteGroup(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) DeleteGroup(w http.ResponseWriter, r *http.Request) {
 	id, err := common.ParseIDParam(r, "id")
 	if err != nil {
 		common.RespondError(w, http.StatusBadRequest, "invalid group ID")
@@ -136,7 +153,7 @@ func DeleteGroup(w http.ResponseWriter, r *http.Request) {
 
 	// Query the group to get its is_system flag
 	var isSystem bool
-	err = db.DB.QueryRowContext(r.Context(), "SELECT COALESCE(is_system, 0) FROM groups WHERE id = ?", id).Scan(&isSystem)
+	err = h.DB.QueryRowContext(r.Context(), "SELECT COALESCE(is_system, 0) FROM groups WHERE id = ?", id).Scan(&isSystem)
 	if err != nil {
 		common.RespondError(w, http.StatusNotFound, "group not found")
 		return
@@ -149,13 +166,13 @@ func DeleteGroup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check if group is used by any policy
-	if err := common.CheckGroupDeleteConstraints(r.Context(), db.DB.DB, id); err != nil {
+	if err := common.CheckGroupDeleteConstraints(r.Context(), h.DB, id); err != nil {
 		common.RespondError(w, http.StatusConflict, err.Error())
 		return
 	}
 
 	// Delete group_members first (due to foreign key)
-	_, err = db.DB.ExecContext(r.Context(), "DELETE FROM group_members WHERE group_id = ?", id)
+	_, err = h.DB.ExecContext(r.Context(), "DELETE FROM group_members WHERE group_id = ?", id)
 	if err != nil {
 		log.Printf("ERROR: failed to delete group members: %v", err)
 		common.InternalError(w)
@@ -163,7 +180,7 @@ func DeleteGroup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Delete the group
-	_, err = db.DB.ExecContext(r.Context(), "DELETE FROM groups WHERE id = ?", id)
+	_, err = h.DB.ExecContext(r.Context(), "DELETE FROM groups WHERE id = ?", id)
 	if err != nil {
 		log.Printf("ERROR: failed to delete group: %v", err)
 		common.InternalError(w)
@@ -184,7 +201,7 @@ type PeerInGroup struct {
 	IsManual  bool   `json:"is_manual"`
 }
 
-func ListGroupMembers(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) ListGroupMembers(w http.ResponseWriter, r *http.Request) {
 	id, err := common.ParseIDParam(r, "id")
 	if err != nil {
 		common.RespondError(w, http.StatusBadRequest, "invalid group ID")
@@ -192,13 +209,13 @@ func ListGroupMembers(w http.ResponseWriter, r *http.Request) {
 	}
 
 	query := `
-		SELECT p.id, p.hostname, p.ip_address, p.os_type, p.is_manual
-		FROM peers p
-		JOIN group_members gm ON p.id = gm.peer_id
-		WHERE gm.group_id = ?
-		ORDER BY p.hostname ASC`
+	SELECT p.id, p.hostname, p.ip_address, p.os_type, p.is_manual
+	FROM peers p
+	JOIN group_members gm ON p.id = gm.peer_id
+	WHERE gm.group_id = ?
+	ORDER BY p.hostname ASC`
 
-	rows, err := db.DB.QueryContext(r.Context(), query, id)
+	rows, err := h.DB.QueryContext(r.Context(), query, id)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "failed to query group members")
 		return
@@ -219,92 +236,93 @@ func ListGroupMembers(w http.ResponseWriter, r *http.Request) {
 	common.RespondJSON(w, http.StatusOK, peers)
 }
 
-func MakeAddGroupMemberHandler(compiler *engine.Compiler) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		groupID, err := common.ParseIDParam(r, "id")
-		if err != nil {
-			common.RespondError(w, http.StatusBadRequest, "invalid group ID")
-			return
-		}
-
-		var input struct {
-			PeerID int `json:"peer_id"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-			common.RespondError(w, http.StatusBadRequest, "invalid JSON")
-			return
-		}
-		if input.PeerID == 0 {
-			common.RespondError(w, http.StatusBadRequest, "peer_id is required")
-			return
-		}
-
-		result, err := db.DB.ExecContext(r.Context(), "INSERT OR IGNORE INTO group_members (group_id, peer_id) VALUES (?, ?)", groupID, input.PeerID)
-		if err != nil {
-			log.Printf("ERROR: failed to add member: %v", err)
-			common.InternalError(w)
-			return
-		}
-
-		id, _ := result.LastInsertId()
-
-		// Trigger async recompilation for affected peers (if compiler is available)
-		if compiler != nil {
-			// Fetch peer and group details for enhanced summary
-			peer, peerErr := db.GetPeer(r.Context(), db.DB.DB, input.PeerID)
-			group, groupErr := db.GetGroup(r.Context(), db.DB.DB, groupID)
-
-			var summary string
-			if peerErr == nil && groupErr == nil {
-				summary = fmt.Sprintf("Peer '%s' added to group '%s'", peer.Hostname, group.Name)
-			} else {
-				summary = "Peer added to group"
-			}
-
-			common.QueueGroupChanges(db.DB.DB, compiler, groupID, "update", summary)
-		}
-
-		common.RespondJSON(w, http.StatusCreated, map[string]int64{"id": id})
+func (h *Handler) AddGroupMember(w http.ResponseWriter, r *http.Request) {
+	groupID, err := common.ParseIDParam(r, "id")
+	if err != nil {
+		common.RespondError(w, http.StatusBadRequest, "invalid group ID")
+		return
 	}
+
+	var input struct {
+		PeerID int `json:"peer_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		common.RespondError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	if input.PeerID == 0 {
+		common.RespondError(w, http.StatusBadRequest, "peer_id is required")
+		return
+	}
+
+	result, err := h.DB.ExecContext(r.Context(), "INSERT OR IGNORE INTO group_members (group_id, peer_id) VALUES (?, ?)", groupID, input.PeerID)
+	if err != nil {
+		log.Printf("ERROR: failed to add member: %v", err)
+		common.InternalError(w)
+		return
+	}
+
+	id, err := result.LastInsertId()
+	if err != nil {
+		log.Printf("ERROR: failed to get insert ID: %v", err)
+		common.InternalError(w)
+		return
+	}
+
+	// Trigger async recompilation for affected peers (if compiler is available)
+	if h.Compiler != nil {
+		// Fetch peer and group details for enhanced summary
+		peer, peerErr := db.GetPeer(r.Context(), h.DB, input.PeerID)
+		group, groupErr := db.GetGroup(r.Context(), h.DB, groupID)
+
+		var summary string
+		if peerErr == nil && groupErr == nil {
+			summary = fmt.Sprintf("Peer '%s' added to group '%s'", peer.Hostname, group.Name)
+		} else {
+			summary = "Peer added to group"
+		}
+
+		common.QueueGroupChanges(r.Context(), h.DB, h.Compiler, groupID, "update", summary)
+	}
+
+	common.RespondJSON(w, http.StatusCreated, map[string]int64{"id": id})
 }
 
-func MakeDeleteGroupMemberHandler(compiler *engine.Compiler) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		groupID, err := common.ParseIDParam(r, "groupId")
-		if err != nil {
-			common.RespondError(w, http.StatusBadRequest, "invalid group ID")
-			return
-		}
-
-		peerID, err := common.ParseIDParam(r, "peerId")
-		if err != nil {
-			common.RespondError(w, http.StatusBadRequest, "invalid peer ID")
-			return
-		}
-
-		_, err = db.DB.ExecContext(r.Context(), "DELETE FROM group_members WHERE group_id = ? AND peer_id = ?", groupID, peerID)
-		if err != nil {
-			log.Printf("ERROR: failed to remove peer from group: %v", err)
-			common.InternalError(w)
-			return
-		}
-
-		// Trigger async recompilation (if compiler is available)
-		if compiler != nil {
-			// Fetch peer and group details for enhanced summary
-			peer, peerErr := db.GetPeer(r.Context(), db.DB.DB, peerID)
-			group, groupErr := db.GetGroup(r.Context(), db.DB.DB, groupID)
-
-			var summary string
-			if peerErr == nil && groupErr == nil {
-				summary = fmt.Sprintf("Peer '%s' removed from group '%s'", peer.Hostname, group.Name)
-			} else {
-				summary = "Peer removed from group"
-			}
-
-			common.QueueGroupChanges(db.DB.DB, compiler, groupID, "update", summary)
-		}
-
-		w.WriteHeader(http.StatusNoContent)
+func (h *Handler) DeleteGroupMember(w http.ResponseWriter, r *http.Request) {
+	groupID, err := common.ParseIDParam(r, "groupId")
+	if err != nil {
+		common.RespondError(w, http.StatusBadRequest, "invalid group ID")
+		return
 	}
+
+	peerID, err := common.ParseIDParam(r, "peerId")
+	if err != nil {
+		common.RespondError(w, http.StatusBadRequest, "invalid peer ID")
+		return
+	}
+
+	_, err = h.DB.ExecContext(r.Context(), "DELETE FROM group_members WHERE group_id = ? AND peer_id = ?", groupID, peerID)
+	if err != nil {
+		log.Printf("ERROR: failed to remove peer from group: %v", err)
+		common.InternalError(w)
+		return
+	}
+
+	// Trigger async recompilation (if compiler is available)
+	if h.Compiler != nil {
+		// Fetch peer and group details for enhanced summary
+		peer, peerErr := db.GetPeer(r.Context(), h.DB, peerID)
+		group, groupErr := db.GetGroup(r.Context(), h.DB, groupID)
+
+		var summary string
+		if peerErr == nil && groupErr == nil {
+			summary = fmt.Sprintf("Peer '%s' removed from group '%s'", peer.Hostname, group.Name)
+		} else {
+			summary = "Peer removed from group"
+		}
+
+		common.QueueGroupChanges(r.Context(), h.DB, h.Compiler, groupID, "update", summary)
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }

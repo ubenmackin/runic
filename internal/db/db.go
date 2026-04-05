@@ -21,6 +21,33 @@ func Schema() string {
 	return schemaSQL
 }
 
+// columnExists checks if a column exists in a table using pragma_table_info.
+func columnExists(database *sql.DB, table, column string) (bool, error) {
+	var exists bool
+	err := database.QueryRow(
+		fmt.Sprintf("SELECT COUNT(*) > 0 FROM pragma_table_info('%s') WHERE name='%s'", table, column),
+	).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("check column %s.%s: %w", table, column, err)
+	}
+	return exists, nil
+}
+
+// addColumnIfMissing adds a column to a table if it doesn't already exist.
+func addColumnIfMissing(database *sql.DB, table, column, definition string) error {
+	exists, err := columnExists(database, table, column)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		if _, err := database.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, definition)); err != nil {
+			return fmt.Errorf("add column %s.%s: %w", table, column, err)
+		}
+		log.Printf("Migration: added %s to %s", column, table)
+	}
+	return nil
+}
+
 // Database wraps *sql.DB to allow dependency injection.
 // The global DB variable is kept for backward compatibility,
 // but new code should prefer passing *Database explicitly.
@@ -38,12 +65,7 @@ func (d *Database) UnderlyingDB() *sql.DB {
 	return d.DB
 }
 
-// DB is the global database connection.
-// For backward compatibility, code can use this directly.
-// New code should prefer dependency injection.
-var DB *Database
-
-func InitDB(dataSourceName string) error {
+func InitDB(dataSourceName string) (*sql.DB, error) {
 	// Check for environment variable override
 	if dbPath := os.Getenv("RUNIC_DB_PATH"); dbPath != "" {
 		dataSourceName = dbPath
@@ -52,53 +74,57 @@ func InitDB(dataSourceName string) error {
 
 	sqlDB, err := sql.Open("sqlite3", dataSourceName)
 	if err != nil {
-		return fmt.Errorf("failed to open database: %w", err)
+		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
 	if err = sqlDB.Ping(); err != nil {
-		return fmt.Errorf("failed to ping database: %w", err)
+		return nil, fmt.Errorf("failed to ping database: %w", err)
 	}
 
 	// Enable WAL mode and foreign keys
-	sqlDB.Exec("PRAGMA journal_mode=WAL")
-	sqlDB.Exec("PRAGMA foreign_keys=ON")
+	if _, err := sqlDB.Exec("PRAGMA journal_mode=WAL"); err != nil {
+		log.Printf("Warning: failed to set WAL mode: %v", err)
+	}
+	if _, err := sqlDB.Exec("PRAGMA foreign_keys=ON"); err != nil {
+		log.Printf("Warning: failed to enable foreign keys: %v", err)
+	}
 
-	DB = New(sqlDB)
+	database := New(sqlDB)
 
 	// Run migrations BEFORE schema creation to handle existing databases.
 	// For example, the servers → peers table rename must complete before
 	// schema.sql tries to create indexes on peer_id columns, which would
 	// fail on older databases that still have the "servers" table.
-	if err := migrateSchema(DB.DB); err != nil {
-		return fmt.Errorf("failed to migrate schema: %w", err)
+	if err := migrateSchema(database.DB); err != nil {
+		return nil, fmt.Errorf("failed to migrate schema: %w", err)
 	}
 
-	if err := createSchema(DB.DB); err != nil {
-		return fmt.Errorf("failed to create schema: %w", err)
+	if err := createSchema(database.DB); err != nil {
+		return nil, fmt.Errorf("failed to create schema: %w", err)
 	}
 
 	// Seed default system services
-	if err := seedSystemServices(DB.DB); err != nil {
-		return fmt.Errorf("failed to seed system services: %w", err)
+	if err := seedSystemServices(database.DB); err != nil {
+		return nil, fmt.Errorf("failed to seed system services: %w", err)
 	}
 
 	// Seed system groups
-	if err := seedSystemGroups(DB.DB); err != nil {
-		return fmt.Errorf("failed to seed system groups: %w", err)
+	if err := seedSystemGroups(database.DB); err != nil {
+		return nil, fmt.Errorf("failed to seed system groups: %w", err)
 	}
 
 	// Migrate secrets from .env to database
-	if err := migrateEnvToDB(DB.DB); err != nil {
+	if err := migrateEnvToDB(database.DB); err != nil {
 		log.Printf("Warning: failed to migrate secrets from .env: %v", err)
 	}
 
 	// Add DB constraints (CHECK, UNIQUE) via table recreation
-	if err := addDBConstraints(DB.DB); err != nil {
+	if err := addDBConstraints(database.DB); err != nil {
 		log.Printf("Warning: failed to add DB constraints: %v", err)
 	}
 
 	log.Println("Database connection established")
-	return nil
+	return database.DB, nil
 }
 
 func createSchema(database *sql.DB) error {
@@ -126,42 +152,11 @@ func migrateSchema(database *sql.DB) error {
 		return fmt.Errorf("failed to check for users table: %w", err)
 	}
 
-	if usersTableExists {
-		existingColumns := make(map[string]bool)
-		rows, err := database.Query("PRAGMA table_info(users)")
-		if err != nil {
-			return fmt.Errorf("failed to get table info: %w", err)
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var cid int
-			var name string
-			var typ string
-			var notnull int
-			var dflt sql.NullString
-			var pk int
-			if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
-				return fmt.Errorf("failed to scan column info: %w", err)
-			}
-			existingColumns[name] = true
-		}
-		if err := rows.Err(); err != nil {
-			return fmt.Errorf("error iterating column info: %w", err)
-		}
-
-		if !existingColumns["email"] {
-			if _, err := database.Exec("ALTER TABLE users ADD COLUMN email TEXT DEFAULT ''"); err != nil {
-				return fmt.Errorf("failed to add email column: %w", err)
-			}
-			log.Println("Migration: added email column to users table")
-		}
-
-		if !existingColumns["role"] {
-			if _, err := database.Exec("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'viewer'"); err != nil {
-				return fmt.Errorf("failed to add role column: %w", err)
-			}
-			log.Println("Migration: added role column to users table")
-		}
+	if err := addColumnIfMissing(database, "users", "email", "TEXT DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := addColumnIfMissing(database, "users", "role", "TEXT NOT NULL DEFAULT 'viewer'"); err != nil {
+		return err
 	}
 
 	// Migration: Add token_type column to revoked_tokens
@@ -171,16 +166,8 @@ func migrateSchema(database *sql.DB) error {
 		return fmt.Errorf("failed to check for revoked_tokens table: %w", err)
 	}
 	if hasRevokedTokensTable {
-		var hasTokenTypeColumn bool
-		err = database.QueryRow("SELECT COUNT(*) > 0 FROM pragma_table_info('revoked_tokens') WHERE name='token_type'").Scan(&hasTokenTypeColumn)
-		if err != nil {
-			return fmt.Errorf("failed to check for token_type column: %w", err)
-		}
-		if !hasTokenTypeColumn {
-			if _, err := database.Exec("ALTER TABLE revoked_tokens ADD COLUMN token_type TEXT NOT NULL DEFAULT 'unknown'"); err != nil {
-				return fmt.Errorf("failed to add token_type column to revoked_tokens: %w", err)
-			}
-			log.Println("Migration: added token_type column to revoked_tokens table")
+		if err := addColumnIfMissing(database, "revoked_tokens", "token_type", "TEXT NOT NULL DEFAULT 'unknown'"); err != nil {
+			return err
 		}
 	}
 
@@ -320,136 +307,36 @@ func migrateSchema(database *sql.DB) error {
 		log.Println("Migration: successfully renamed servers → peers")
 	}
 
-	// Check peers table columns for is_manual (handles both fresh installs and migrated DBs)
-	existingPeerColumns := make(map[string]bool)
-	peerRows, err := database.Query("PRAGMA table_info(peers)")
-	if err == nil {
-		defer peerRows.Close()
-		for peerRows.Next() {
-			var cid int
-			var name string
-			var typ string
-			var notnull int
-			var dflt sql.NullString
-			var pk int
-			if err := peerRows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
-				return fmt.Errorf("failed to scan peer column info: %w", err)
-			}
-			existingPeerColumns[name] = true
-		}
+	// Check peers table columns for missing columns (handles both fresh installs and migrated DBs)
+	if err := addColumnIfMissing(database, "peers", "is_manual", "BOOLEAN NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := addColumnIfMissing(database, "peers", "description", "TEXT DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := addColumnIfMissing(database, "peers", "has_ipset", "BOOLEAN DEFAULT NULL"); err != nil {
+		return err
 	}
 
-	if !existingPeerColumns["is_manual"] {
-		if _, err := database.Exec("ALTER TABLE peers ADD COLUMN is_manual BOOLEAN NOT NULL DEFAULT 0"); err != nil {
-			return fmt.Errorf("failed to add is_manual column: %w", err)
-		}
-		log.Println("Migration: added is_manual column to peers table")
+	// Migration: Add is_system and source_ports columns to services table
+	if err := addColumnIfMissing(database, "services", "is_system", "BOOLEAN NOT NULL DEFAULT 0"); err != nil {
+		return err
 	}
-
-	if !existingPeerColumns["description"] {
-		if _, err := database.Exec("ALTER TABLE peers ADD COLUMN description TEXT DEFAULT ''"); err != nil {
-			return fmt.Errorf("failed to add description column: %w", err)
-		}
-		log.Println("Migration: added description column to peers table")
-	}
-
-	if !existingPeerColumns["has_ipset"] {
-		if _, err := database.Exec("ALTER TABLE peers ADD COLUMN has_ipset BOOLEAN DEFAULT NULL"); err != nil {
-			return fmt.Errorf("failed to add has_ipset column: %w", err)
-		}
-		log.Println("Migration: added has_ipset column to peers table")
-	}
-
-	// Migration: Add is_system column to services table
-	existingServiceColumns := make(map[string]bool)
-	serviceRows, err := database.Query("PRAGMA table_info(services)")
-	if err == nil {
-		defer serviceRows.Close()
-		for serviceRows.Next() {
-			var cid int
-			var name string
-			var typ string
-			var notnull int
-			var dflt sql.NullString
-			var pk int
-			if err := serviceRows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
-				return fmt.Errorf("failed to scan service column info: %w", err)
-			}
-			existingServiceColumns[name] = true
-		}
-	}
-
-	if !existingServiceColumns["is_system"] {
-		if _, err := database.Exec("ALTER TABLE services ADD COLUMN is_system BOOLEAN NOT NULL DEFAULT 0"); err != nil {
-			return fmt.Errorf("failed to add is_system column: %w", err)
-		}
-		log.Println("Migration: added is_system column to services table")
-	}
-
-	if !existingServiceColumns["source_ports"] {
-		if _, err := database.Exec("ALTER TABLE services ADD COLUMN source_ports TEXT DEFAULT ''"); err != nil {
-			return fmt.Errorf("failed to add source_ports column: %w", err)
-		}
-		log.Println("Migration: added source_ports column to services table")
+	if err := addColumnIfMissing(database, "services", "source_ports", "TEXT DEFAULT ''"); err != nil {
+		return err
 	}
 
 	// Migration: Add is_system column to groups table
-	existingGroupColumns := make(map[string]bool)
-	groupRows, err := database.Query("PRAGMA table_info(groups)")
-	if err == nil {
-		defer groupRows.Close()
-		for groupRows.Next() {
-			var cid int
-			var name string
-			var typ string
-			var notnull int
-			var dflt sql.NullString
-			var pk int
-			if err := groupRows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
-				return fmt.Errorf("failed to scan group column info: %w", err)
-			}
-			existingGroupColumns[name] = true
-		}
+	if err := addColumnIfMissing(database, "groups", "is_system", "BOOLEAN NOT NULL DEFAULT 0"); err != nil {
+		return err
 	}
 
-	if !existingGroupColumns["is_system"] {
-		if _, err := database.Exec("ALTER TABLE groups ADD COLUMN is_system BOOLEAN NOT NULL DEFAULT 0"); err != nil {
-			return fmt.Errorf("failed to add is_system column to groups: %w", err)
-		}
-		log.Println("Migration: added is_system column to groups table")
+	// Migration: Add docker_only and direction columns to policies table
+	if err := addColumnIfMissing(database, "policies", "docker_only", "BOOLEAN NOT NULL DEFAULT 0"); err != nil {
+		return err
 	}
-
-	// Migration: Add docker_only column to policies table
-	existingPolicyColumns := make(map[string]bool)
-	policyRows, err := database.Query("PRAGMA table_info(policies)")
-	if err == nil {
-		defer policyRows.Close()
-		for policyRows.Next() {
-			var cid int
-			var name string
-			var typ string
-			var notnull int
-			var dflt sql.NullString
-			var pk int
-			if err := policyRows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
-				return fmt.Errorf("failed to scan policy column info: %w", err)
-			}
-			existingPolicyColumns[name] = true
-		}
-	}
-
-	if !existingPolicyColumns["docker_only"] {
-		if _, err := database.Exec("ALTER TABLE policies ADD COLUMN docker_only BOOLEAN NOT NULL DEFAULT 0"); err != nil {
-			return fmt.Errorf("failed to add docker_only column: %w", err)
-		}
-		log.Println("Migration: added docker_only column to policies table")
-	}
-
-	if !existingPolicyColumns["direction"] {
-		if _, err := database.Exec("ALTER TABLE policies ADD COLUMN direction TEXT NOT NULL DEFAULT 'both'"); err != nil {
-			return fmt.Errorf("failed to add direction column: %w", err)
-		}
-		log.Println("Migration: added direction column to policies table")
+	if err := addColumnIfMissing(database, "policies", "direction", "TEXT NOT NULL DEFAULT 'both'"); err != nil {
+		return err
 	}
 
 	// Migration: group_members table restructure (peer-based)
@@ -724,28 +611,29 @@ func migrateSchema(database *sql.DB) error {
 	}
 
 	// Migration: Add HMAC key rotation columns to peers table
-	if !existingPeerColumns["hmac_key_rotation_token"] {
-		if _, err := database.Exec("ALTER TABLE peers ADD COLUMN hmac_key_rotation_token TEXT"); err != nil {
-			return fmt.Errorf("failed to add hmac_key_rotation_token column: %w", err)
-		}
-		log.Println("Migration: added hmac_key_rotation_token column to peers table")
+	if err := addColumnIfMissing(database, "peers", "hmac_key_rotation_token", "TEXT"); err != nil {
+		return err
 	}
-
-	if !existingPeerColumns["hmac_key_last_rotated_at"] {
-		if _, err := database.Exec("ALTER TABLE peers ADD COLUMN hmac_key_last_rotated_at DATETIME"); err != nil {
-			return fmt.Errorf("failed to add hmac_key_last_rotated_at column: %w", err)
-		}
-		log.Println("Migration: added hmac_key_last_rotated_at column to peers table")
+	if err := addColumnIfMissing(database, "peers", "hmac_key_last_rotated_at", "DATETIME"); err != nil {
+		return err
 	}
 
 	// Migration: Add target_scope column to policies table
-	if !existingPolicyColumns["target_scope"] {
-		if _, err := database.Exec("ALTER TABLE policies ADD COLUMN target_scope TEXT NOT NULL DEFAULT 'both' CHECK(target_scope IN ('both', 'host', 'docker'))"); err != nil {
-			return fmt.Errorf("failed to add target_scope column: %w", err)
+	targetScopeExists, err := columnExists(database, "policies", "target_scope")
+	if err != nil {
+		return err
+	}
+	if !targetScopeExists {
+		if err := addColumnIfMissing(database, "policies", "target_scope", "TEXT NOT NULL DEFAULT 'both' CHECK(target_scope IN ('both', 'host', 'docker'))"); err != nil {
+			return err
 		}
-		log.Println("Migration: added target_scope column to policies table")
 
-		if existingPolicyColumns["docker_only"] {
+		// Migrate docker_only values to target_scope if docker_only column exists
+		dockerOnlyExists, err := columnExists(database, "policies", "docker_only")
+		if err != nil {
+			return err
+		}
+		if dockerOnlyExists {
 			if _, err := database.Exec("UPDATE policies SET target_scope = 'docker' WHERE docker_only = 1"); err != nil {
 				log.Printf("Migration warning: failed to map docker_only to target_scope: %v", err)
 			}
@@ -753,7 +641,11 @@ func migrateSchema(database *sql.DB) error {
 	}
 
 	// Try to drop docker_only column (requires SQLite 3.35.0+)
-	if existingPolicyColumns["docker_only"] {
+	dockerOnlyExists, err := columnExists(database, "policies", "docker_only")
+	if err != nil {
+		return err
+	}
+	if dockerOnlyExists {
 		if _, err := database.Exec("ALTER TABLE policies DROP COLUMN docker_only"); err != nil {
 			log.Printf("Migration info: skipped dropping docker_only column (may require SQLite 3.35.0+): %v", err)
 		} else {
@@ -1021,7 +913,10 @@ func SaveBundle(ctx context.Context, database *sql.DB, params models.CreateBundl
 		return models.RuleBundleRow{}, err
 	}
 
-	bundleID, _ := result.LastInsertId()
+	bundleID, err := result.LastInsertId()
+	if err != nil {
+		return models.RuleBundleRow{}, fmt.Errorf("get last insert id: %w", err)
+	}
 
 	_, err = tx.ExecContext(ctx,
 		`UPDATE peers SET bundle_version = ? WHERE id = ?`, params.Version, params.PeerID)

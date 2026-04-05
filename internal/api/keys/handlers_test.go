@@ -9,10 +9,9 @@ import (
 
 	"github.com/gorilla/mux"
 	_ "github.com/mattn/go-sqlite3"
-	"runic/internal/db"
 )
 
-func setupTestDB(t *testing.T) func() {
+func setupTestDB(t *testing.T) (*sql.DB, func()) {
 	t.Helper()
 
 	// Create in-memory SQLite database
@@ -23,40 +22,36 @@ func setupTestDB(t *testing.T) func() {
 
 	// Create system_config table
 	_, err = sqlDB.Exec(`
-		CREATE TABLE system_config (
-			key TEXT PRIMARY KEY,
-			value TEXT NOT NULL,
-			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-		)
-	`)
+CREATE TABLE system_config (
+key TEXT PRIMARY KEY,
+value TEXT NOT NULL,
+created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)
+`)
 	if err != nil {
 		t.Fatalf("failed to create system_config table: %v", err)
 	}
 
-	// Save original DB and replace with test DB
-	originalDB := db.DB
-	db.DB = db.New(sqlDB)
-
-	return func() {
-		db.DB = originalDB
+	return sqlDB, func() {
 		sqlDB.Close()
 	}
 }
 
-func setupRouter() *mux.Router {
+func setupRouter(handler *Handler) *mux.Router {
 	router := mux.NewRouter()
-	router.HandleFunc("/api/v1/setup-keys", ListKeys).Methods("GET")
-	router.HandleFunc("/api/v1/setup-keys/{type}", CreateKey).Methods("POST")
-	router.HandleFunc("/api/v1/setup-keys/{type}", DeleteKey).Methods("DELETE")
+	router.HandleFunc("/api/v1/setup-keys", handler.ListKeys).Methods("GET")
+	router.HandleFunc("/api/v1/setup-keys/{type}", handler.CreateKey).Methods("POST")
+	router.HandleFunc("/api/v1/setup-keys/{type}", handler.DeleteKey).Methods("DELETE")
 	return router
 }
 
 func TestListKeys_Empty(t *testing.T) {
-	cleanup := setupTestDB(t)
+	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	router := setupRouter()
+	handler := NewHandler(db)
+	router := setupRouter(handler)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/setup-keys", nil)
 	rec := httptest.NewRecorder()
 
@@ -83,10 +78,11 @@ func TestListKeys_Empty(t *testing.T) {
 }
 
 func TestCreateKey_Success(t *testing.T) {
-	cleanup := setupTestDB(t)
+	testDB, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	router := setupRouter()
+	handler := NewHandler(testDB)
+	router := setupRouter(handler)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/setup-keys/jwt-secret", nil)
 	rec := httptest.NewRecorder()
 
@@ -107,7 +103,7 @@ func TestCreateKey_Success(t *testing.T) {
 
 	// Verify key is stored in system_config table
 	var value string
-	err := db.DB.QueryRow("SELECT value FROM system_config WHERE key = ?", "jwt_secret").Scan(&value)
+	err := testDB.QueryRow("SELECT value FROM system_config WHERE key = ?", "jwt_secret").Scan(&value)
 	if err != nil {
 		t.Fatalf("jwt_secret not found in system_config: %v", err)
 	}
@@ -117,10 +113,11 @@ func TestCreateKey_Success(t *testing.T) {
 }
 
 func TestCreateKey_InvalidType(t *testing.T) {
-	cleanup := setupTestDB(t)
+	testDB, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	router := setupRouter()
+	handler := NewHandler(testDB)
+	router := setupRouter(handler)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/setup-keys/invalid-type", nil)
 	rec := httptest.NewRecorder()
 
@@ -132,10 +129,11 @@ func TestCreateKey_InvalidType(t *testing.T) {
 }
 
 func TestDeleteKey_Success(t *testing.T) {
-	cleanup := setupTestDB(t)
+	testDB, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	router := setupRouter()
+	handler := NewHandler(testDB)
+	router := setupRouter(handler)
 
 	// Create a key first
 	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/setup-keys/jwt-secret", nil)
@@ -148,7 +146,7 @@ func TestDeleteKey_Success(t *testing.T) {
 
 	// Verify key exists
 	var value string
-	err := db.DB.QueryRow("SELECT value FROM system_config WHERE key = ?", "jwt_secret").Scan(&value)
+	err := testDB.QueryRow("SELECT value FROM system_config WHERE key = ?", "jwt_secret").Scan(&value)
 	if err != nil {
 		t.Fatalf("jwt_secret not found in system_config after create: %v", err)
 	}
@@ -163,17 +161,18 @@ func TestDeleteKey_Success(t *testing.T) {
 	}
 
 	// Verify key was removed from system_config
-	err = db.DB.QueryRow("SELECT value FROM system_config WHERE key = ?", "jwt_secret").Scan(&value)
+	err = testDB.QueryRow("SELECT value FROM system_config WHERE key = ?", "jwt_secret").Scan(&value)
 	if err != sql.ErrNoRows {
 		t.Error("jwt_secret should have been removed from system_config")
 	}
 }
 
 func TestDeleteKey_NonExistent(t *testing.T) {
-	cleanup := setupTestDB(t)
+	testDB, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	router := setupRouter()
+	handler := NewHandler(testDB)
+	router := setupRouter(handler)
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/setup-keys/jwt-secret", nil)
 	rec := httptest.NewRecorder()
 
@@ -185,10 +184,11 @@ func TestDeleteKey_NonExistent(t *testing.T) {
 }
 
 func TestListKeys_AfterCreate(t *testing.T) {
-	cleanup := setupTestDB(t)
+	testDB, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	router := setupRouter()
+	handler := NewHandler(testDB)
+	router := setupRouter(handler)
 
 	// Create jwt-secret
 	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/setup-keys/jwt-secret", nil)

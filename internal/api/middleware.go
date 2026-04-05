@@ -11,6 +11,7 @@ import (
 
 	"github.com/gorilla/mux"
 
+	"runic/internal/api/common"
 	"runic/internal/common/log"
 )
 
@@ -171,10 +172,7 @@ func RequestLogger() mux.MiddlewareFunc {
 			)
 
 			// Wrap response writer to capture status code
-			rw := &loggingResponseWriter{
-				ResponseWriter: w,
-				statusCode:     http.StatusOK,
-			}
+			rw := common.NewResponseRecorder(w)
 
 			// Call next handler
 			next.ServeHTTP(rw, r)
@@ -187,43 +185,11 @@ func RequestLogger() mux.MiddlewareFunc {
 				"method", r.Method,
 				"path", r.URL.Path,
 				"query", r.URL.RawQuery,
-				"status", rw.statusCode,
+				"status", rw.StatusCode(),
 				"duration_ms", duration.Milliseconds(),
 				"request_id", requestID,
 			)
 		})
-	}
-}
-
-// loggingResponseWriter wraps http.ResponseWriter to capture the status code.
-// This is used by RequestLogger to log response status codes.
-type loggingResponseWriter struct {
-	http.ResponseWriter
-	statusCode int
-	written    bool
-}
-
-// WriteHeader captures the status code and calls the underlying WriteHeader.
-func (lw *loggingResponseWriter) WriteHeader(code int) {
-	if !lw.written {
-		lw.statusCode = code
-		lw.ResponseWriter.WriteHeader(code)
-		lw.written = true
-	}
-}
-
-// Write ensures WriteHeader is called with default status if not already set.
-func (lw *loggingResponseWriter) Write(b []byte) (int, error) {
-	if !lw.written {
-		lw.WriteHeader(http.StatusOK)
-	}
-	return lw.ResponseWriter.Write(b)
-}
-
-// Flush implements http.Flusher to support SSE streaming.
-func (lw *loggingResponseWriter) Flush() {
-	if f, ok := lw.ResponseWriter.(http.Flusher); ok {
-		f.Flush()
 	}
 }
 
