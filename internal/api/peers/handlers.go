@@ -341,7 +341,10 @@ func (h *Handler) GetPeerBundle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	common.RespondJSON(w, http.StatusOK, map[string]string{"content": bundle.RulesContent})
+	common.RespondJSON(w, http.StatusOK, map[string]interface{}{
+		"content":        bundle.RulesContent,
+		"version_number": bundle.VersionNumber,
+	})
 }
 
 // RegisterRoutes adds peer routes to the given router.

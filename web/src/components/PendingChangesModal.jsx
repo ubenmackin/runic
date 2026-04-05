@@ -150,11 +150,11 @@ export default function PendingChangesModal({ peerId, peerHostname, onClose, onA
                   <div className="flex items-center gap-4 text-sm">
                     <div>
                       <span className="text-gray-500 dark:text-amber-muted">Current Version: </span>
-                      <span className="font-mono font-medium text-gray-900 dark:text-light-neutral">{preview.current_version || '—'}</span>
+                      <span className="font-mono font-medium text-gray-900 dark:text-light-neutral">{preview.current_version_number ?? '—'}</span>
                     </div>
                     <div>
                       <span className="text-gray-500 dark:text-amber-muted">New Version: </span>
-                      <span className="font-mono font-medium text-gray-900 dark:text-light-neutral">{preview.new_version || '—'}</span>
+                      <span className="font-mono font-medium text-gray-900 dark:text-light-neutral">{preview.new_version_number ?? '—'}</span>
                     </div>
                   </div>
 

@@ -196,13 +196,24 @@ func (h *Handler) PreviewPeerPendingBundle(w http.ResponseWriter, r *http.Reques
 	// Get current bundle for diff
 	var currentContent string
 	var currentVersion string
+	var currentVersionNumber int
 	err = database.QueryRowContext(ctx, `
-		SELECT rules_content, version FROM rule_bundles
+		SELECT rules_content, version, version_number FROM rule_bundles
 		WHERE peer_id = ?
 		ORDER BY id DESC LIMIT 1
-	`, peerID).Scan(&currentContent, &currentVersion)
+	`, peerID).Scan(&currentContent, &currentVersion, &currentVersionNumber)
 	if err != nil && err != sql.ErrNoRows {
 		log.WarnContext(ctx, "failed to get current bundle for diff", "error", err)
+	}
+
+	// Compute new version number (same logic as compiler)
+	var versionNumber int
+	err = database.QueryRowContext(ctx, `
+		SELECT COALESCE(MAX(version_number), 0) + 1 FROM rule_bundles WHERE peer_id = ?
+	`, peerID).Scan(&versionNumber)
+	if err != nil {
+		log.WarnContext(ctx, "failed to compute version number", "error", err)
+		versionNumber = 0
 	}
 
 	// Generate diff
@@ -217,12 +228,14 @@ func (h *Handler) PreviewPeerPendingBundle(w http.ResponseWriter, r *http.Reques
 	}
 
 	common.RespondJSON(w, http.StatusOK, map[string]interface{}{
-		"version":         version,
-		"current_version": currentVersion,
-		"new_version":     version,
-		"is_different":    version != currentVersion,
-		"diff":            diffContent,
-		"rules_content":   content,
+		"version":                version,
+		"current_version":        currentVersion,
+		"new_version":            version,
+		"current_version_number": currentVersionNumber,
+		"new_version_number":     versionNumber,
+		"is_different":           version != currentVersion,
+		"diff":                   diffContent,
+		"rules_content":          content,
 	})
 }
 
