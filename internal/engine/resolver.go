@@ -90,6 +90,8 @@ func (r *Resolver) ResolveSpecialTarget(ctx context.Context, specialID int, peer
 			return nil, fmt.Errorf("error iterating peers: %w", err)
 		}
 		return peers, nil
+	case 8: // __igmpv3__
+		return []string{"224.0.0.22/32"}, nil
 	default:
 		return nil, fmt.Errorf("unknown special target ID: %d", specialID)
 	}

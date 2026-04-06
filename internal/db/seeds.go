@@ -18,6 +18,7 @@ func seedSystemServices(ctx context.Context, database *sql.DB) error {
 		SourcePorts string
 		Protocol    string
 		Description string
+		NoConntrack bool
 	}{
 		{
 			Name:        "ICMP",
@@ -25,6 +26,7 @@ func seedSystemServices(ctx context.Context, database *sql.DB) error {
 			SourcePorts: "",
 			Protocol:    "icmp",
 			Description: "ICMP protocol for ping and network diagnostics (system service)",
+			NoConntrack: false,
 		},
 		{
 			Name:        "IGMP",
@@ -32,6 +34,7 @@ func seedSystemServices(ctx context.Context, database *sql.DB) error {
 			SourcePorts: "",
 			Protocol:    "igmp",
 			Description: "IGMP protocol for multicast group management (system service)",
+			NoConntrack: true,
 		},
 		{
 			Name:        "Multicast",
@@ -39,6 +42,7 @@ func seedSystemServices(ctx context.Context, database *sql.DB) error {
 			SourcePorts: "",
 			Protocol:    "udp",
 			Description: "Multicast traffic handling (system service)",
+			NoConntrack: true,
 		},
 		{
 			Name:        "mDNS",
@@ -46,6 +50,7 @@ func seedSystemServices(ctx context.Context, database *sql.DB) error {
 			SourcePorts: "5353",
 			Protocol:    "udp",
 			Description: "Multicast DNS for local network service discovery (system service)",
+			NoConntrack: true,
 		},
 	}
 
@@ -58,8 +63,8 @@ func seedSystemServices(ctx context.Context, database *sql.DB) error {
 		}
 
 		if count > 0 {
-			// Service exists, ensure it's marked as system service
-			_, err := database.ExecContext(ctx, "UPDATE services SET is_system = 1 WHERE name = ?", svc.Name)
+			// Service exists, ensure it's marked as system service and update no_conntrack
+			_, err := database.ExecContext(ctx, "UPDATE services SET is_system = 1, no_conntrack = ? WHERE name = ?", svc.NoConntrack, svc.Name)
 			if err != nil {
 				return fmt.Errorf("failed to update system flag for service %s: %w", svc.Name, err)
 			}
@@ -69,8 +74,8 @@ func seedSystemServices(ctx context.Context, database *sql.DB) error {
 
 		// Insert new system service
 		_, err = database.ExecContext(ctx,
-			"INSERT INTO services (name, ports, source_ports, protocol, description, is_system) VALUES (?, ?, ?, ?, ?, 1)",
-			svc.Name, svc.Ports, svc.SourcePorts, svc.Protocol, svc.Description,
+			"INSERT INTO services (name, ports, source_ports, protocol, description, is_system, no_conntrack) VALUES (?, ?, ?, ?, ?, 1, ?)",
+			svc.Name, svc.Ports, svc.SourcePorts, svc.Protocol, svc.Description, svc.NoConntrack,
 		)
 		if err != nil {
 			return fmt.Errorf("failed to create system service %s: %w", svc.Name, err)

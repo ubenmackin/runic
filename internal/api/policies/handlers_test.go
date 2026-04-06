@@ -669,14 +669,14 @@ func TestListSpecialTargets(t *testing.T) {
 		{
 			name: "multiple targets returns all",
 			setupDB: func(t *testing.T, db *sql.DB) {
-				// Schema already inserts 7 default special targets
-				// Insert 3 more for a total of 10
+				// Schema now inserts 8 default special targets (added __igmpv3__)
+				// Insert 3 more for a total of 11
 				db.Exec("INSERT INTO special_targets (name, display_name, description, address) VALUES (?, ?, ?, ?)", "dns", "DNS", "DNS service", "8.8.8.8")
 				db.Exec("INSERT INTO special_targets (name, display_name, description, address) VALUES (?, ?, ?, ?)", "gateway", "Gateway", "Gateway service", "10.0.0.1")
 				db.Exec("INSERT INTO special_targets (name, display_name, description, address) VALUES (?, ?, ?, ?)", "mesh", "Mesh", "Mesh network", "10.0.0.2")
 			},
 			wantStatusCode: http.StatusOK,
-			wantCount:      10, // 7 default + 3 inserted
+			wantCount:      11, // 8 default + 3 inserted
 		},
 	}
 

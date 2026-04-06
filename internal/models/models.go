@@ -46,6 +46,7 @@ type ServiceRow struct {
 	Description   string
 	DirectionHint string
 	IsSystem      bool
+	NoConntrack   bool
 }
 
 type PolicyRow struct {

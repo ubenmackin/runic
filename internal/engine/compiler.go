@@ -207,7 +207,11 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 		p := &policies[i]
 		serviceIDs[p.ServiceID] = true
 	}
-	services := make(map[int]struct{ Name, Ports, SourcePorts, Protocol string })
+	// MC-006: Include no_conntrack column
+	services := make(map[int]struct {
+		Name, Ports, SourcePorts, Protocol string
+		NoConntrack                        bool
+	})
 	if len(serviceIDs) > 0 {
 		// Build the IN clause
 		serviceIDList := make([]int, 0, len(serviceIDs))
@@ -221,7 +225,8 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 			placeholders[i] = "?"
 			args[i] = id
 		}
-		query := "SELECT id, name, ports, COALESCE(source_ports,''), protocol FROM services WHERE id IN (" + strings.Join(placeholders, ",") + ")"
+		// MC-006: Updated query to include no_conntrack
+		query := "SELECT id, name, ports, COALESCE(source_ports,''), protocol, COALESCE(no_conntrack, 0) FROM services WHERE id IN (" + strings.Join(placeholders, ",") + ")"
 
 		rows, err := c.db.QueryContext(ctx, query, args...)
 		if err != nil {
@@ -235,8 +240,11 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 
 		for rows.Next() {
 			var sid int
-			var s struct{ Name, Ports, SourcePorts, Protocol string }
-			if err := rows.Scan(&sid, &s.Name, &s.Ports, &s.SourcePorts, &s.Protocol); err != nil {
+			var s struct {
+				Name, Ports, SourcePorts, Protocol string
+				NoConntrack                        bool
+			}
+			if err := rows.Scan(&sid, &s.Name, &s.Ports, &s.SourcePorts, &s.Protocol, &s.NoConntrack); err != nil {
 				return "", fmt.Errorf("scan service: %w", err)
 			}
 			services[sid] = s
@@ -349,6 +357,7 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 		ports := svc.Ports
 		sourcePorts := svc.SourcePorts
 		protocol := svc.Protocol
+		noConntrack := svc.NoConntrack
 
 		// Expand ports for non-multicast services
 		var portClauses []PortClause
@@ -366,40 +375,49 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 		if pol.IsTarget && (pol.Direction == "both" || pol.Direction == "backward") {
 			fmt.Fprintf(&buf, "# As Target (Ingress from %s %d)\n", pol.SourceType, pol.SourceID)
 
-			// Check if we should use ipset for this source
-			useIpset := hasIPSet && pol.SourceType == "group"
-			var ipsetName string
-			if useIpset {
-				ipsetName = groupIDToIpsetName[pol.SourceID]
-				useIpset = ipsetName != ""
-			}
-
-			if useIpset {
-				// Use ipset-based rules (single rule per port clause)
-				if serviceName == "Multicast" {
-					c.writeMulticastRule(rw, pol.Action, pol.TargetScope, hasDocker)
-				} else {
-					if err := c.writeTargetRules(ctx, rw, pol, portClauses, true, ipsetName, nil, ipAddress, writeToHost, writeToDocker); err != nil {
-						return "", err
-					}
-				}
+			// MC-009: Skip bogus "As Target" ingress for multicast special targets
+			// Multicast special targets (IDs 3=__all_hosts__, 4=__mdns__, 8=__igmpv3__) are destinations
+			// for outbound multicast, not sources for inbound traffic
+			isMulticastSource := pol.SourceType == "special" && (pol.SourceID == 3 || pol.SourceID == 4 || pol.SourceID == 8)
+			if isMulticastSource {
+				// Skip this section - multicast targets don't make sense as ingress sources
+				buf.WriteString("# (skipped - multicast special target as source)\n")
 			} else {
-				// Use individual rules (fallback for non-group or non-ipset peers)
-				var cidrs []string
-				var err error
-				if pol.SourceType == "special" {
-					cidrs, err = c.resolver.ResolveSpecialTarget(ctx, pol.SourceID, ipAddress)
-				} else {
-					cidrs, err = c.resolver.ResolveEntity(ctx, pol.SourceType, pol.SourceID)
+				// Check if we should use ipset for this source
+				useIpset := hasIPSet && pol.SourceType == "group"
+				var ipsetName string
+				if useIpset {
+					ipsetName = groupIDToIpsetName[pol.SourceID]
+					useIpset = ipsetName != ""
 				}
-				if err != nil {
-					return "", fmt.Errorf("resolve source for policy %s: %w", pol.Name, err)
-				}
-				if serviceName == "Multicast" {
-					c.writeMulticastRule(rw, pol.Action, pol.TargetScope, hasDocker)
+
+				if useIpset {
+					// Use ipset-based rules (single rule per port clause)
+					if serviceName == "Multicast" {
+						c.writeMulticastRule(rw, pol.Action, pol.TargetScope, hasDocker)
+					} else {
+						if err := c.writeTargetRules(ctx, rw, pol, portClauses, true, ipsetName, nil, ipAddress, writeToHost, writeToDocker, noConntrack); err != nil {
+							return "", err
+						}
+					}
 				} else {
-					if err := c.writeTargetRules(ctx, rw, pol, portClauses, false, "", cidrs, ipAddress, writeToHost, writeToDocker); err != nil {
-						return "", err
+					// Use individual rules (fallback for non-group or non-ipset peers)
+					var cidrs []string
+					var err error
+					if pol.SourceType == "special" {
+						cidrs, err = c.resolver.ResolveSpecialTarget(ctx, pol.SourceID, ipAddress)
+					} else {
+						cidrs, err = c.resolver.ResolveEntity(ctx, pol.SourceType, pol.SourceID)
+					}
+					if err != nil {
+						return "", fmt.Errorf("resolve source for policy %s: %w", pol.Name, err)
+					}
+					if serviceName == "Multicast" {
+						c.writeMulticastRule(rw, pol.Action, pol.TargetScope, hasDocker)
+					} else {
+						if err := c.writeTargetRules(ctx, rw, pol, portClauses, false, "", cidrs, ipAddress, writeToHost, writeToDocker, noConntrack); err != nil {
+							return "", err
+						}
 					}
 				}
 			}
@@ -425,7 +443,8 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 						buf.WriteString("-A OUTPUT -d 224.0.0.0/4 -m pkttype --pkt-type multicast -j ACCEPT\n")
 					}
 				} else {
-					if err := c.writeSourceRules(ctx, rw, pol, portClauses, true, ipsetName, nil, ipAddress, writeToHost, writeToDocker); err != nil {
+					isMulticastTarget := pol.TargetType == "special" && (pol.TargetID == 3 || pol.TargetID == 4 || pol.TargetID == 8)
+					if err := c.writeSourceRules(ctx, rw, pol, portClauses, true, ipsetName, nil, ipAddress, writeToHost, writeToDocker, noConntrack, isMulticastTarget); err != nil {
 						return "", err
 					}
 				}
@@ -447,7 +466,8 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 						buf.WriteString("-A OUTPUT -d 224.0.0.0/4 -m pkttype --pkt-type multicast -j ACCEPT\n")
 					}
 				} else {
-					if err := c.writeSourceRules(ctx, rw, pol, portClauses, false, "", cidrs, ipAddress, writeToHost, writeToDocker); err != nil {
+					isMulticastTarget := pol.TargetType == "special" && (pol.TargetID == 3 || pol.TargetID == 4 || pol.TargetID == 8)
+					if err := c.writeSourceRules(ctx, rw, pol, portClauses, false, "", cidrs, ipAddress, writeToHost, writeToDocker, noConntrack, isMulticastTarget); err != nil {
 						return "", err
 					}
 				}
@@ -493,6 +513,7 @@ func (c *Compiler) writeMulticastRule(rw *ruleWriter, action string, targetScope
 // writeTargetRules writes ingress (target) rules for a policy.
 // When useIpset is true, ipsetName contains the ipset to match against.
 // When useIpset is false, cidrs contains the individual CIDRs to generate rules for.
+// noConntrack when true skips conntrack marking for multicast protocols.
 func (c *Compiler) writeTargetRules(
 	ctx context.Context,
 	rw *ruleWriter,
@@ -503,6 +524,7 @@ func (c *Compiler) writeTargetRules(
 	cidrs []string,
 	ipAddress string,
 	writeToHost, writeToDocker bool,
+	noConntrack bool,
 ) error {
 	for _, pc := range portClauses {
 		inputPortMatch := pc.PortMatch
@@ -511,19 +533,29 @@ func (c *Compiler) writeTargetRules(
 		}
 		outputPortMatch := invertPortMatch(pc.PortMatch, pc.SrcPortMatch)
 
+		// Build conntrack part based on noConntrack flag
+		var conntrackNew, conntrackEstab string
+		if noConntrack {
+			conntrackNew = ""
+			conntrackEstab = ""
+		} else {
+			conntrackNew = "-m conntrack --ctstate NEW,ESTABLISHED"
+			conntrackEstab = "-m conntrack --ctstate ESTABLISHED"
+		}
+
 		if useIpset {
 			ipsetMatch := fmt.Sprintf("-m set --match-set %s src", ipsetName)
 			if writeToHost {
 				if pol.Action == "ACCEPT" {
-					rw.writeAction(pol.Action, "INPUT", fmt.Sprintf("-p %s %s %s -m conntrack --ctstate NEW,ESTABLISHED", pc.Protocol, ipsetMatch, inputPortMatch))
-					rw.accept("OUTPUT", fmt.Sprintf("-p %s %s %s -m conntrack --ctstate ESTABLISHED", pc.Protocol, ipsetMatch, outputPortMatch))
+					rw.writeAction(pol.Action, "INPUT", fmt.Sprintf("-p %s %s %s %s", pc.Protocol, ipsetMatch, inputPortMatch, conntrackNew))
+					rw.accept("OUTPUT", fmt.Sprintf("-p %s %s %s %s", pc.Protocol, ipsetMatch, outputPortMatch, conntrackEstab))
 				} else {
 					rw.writeAction(pol.Action, "INPUT", fmt.Sprintf("-p %s %s %s", pc.Protocol, ipsetMatch, inputPortMatch))
 				}
 			}
 			if writeToDocker {
 				if pol.Action == "ACCEPT" {
-					rw.writeAction(pol.Action, "DOCKER-USER", fmt.Sprintf("-p %s %s %s -m conntrack --ctstate NEW,ESTABLISHED", pc.Protocol, ipsetMatch, inputPortMatch))
+					rw.writeAction(pol.Action, "DOCKER-USER", fmt.Sprintf("-p %s %s %s %s", pc.Protocol, ipsetMatch, inputPortMatch, conntrackNew))
 				} else {
 					rw.writeAction(pol.Action, "DOCKER-USER", fmt.Sprintf("-p %s %s %s", pc.Protocol, ipsetMatch, inputPortMatch))
 				}
@@ -532,15 +564,15 @@ func (c *Compiler) writeTargetRules(
 			for _, cidr := range cidrs {
 				if writeToHost {
 					if pol.Action == "ACCEPT" {
-						rw.writeAction(pol.Action, "INPUT", fmt.Sprintf("-s %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED", cidr, pc.Protocol, inputPortMatch))
-						rw.accept("OUTPUT", fmt.Sprintf("-d %s -p %s %s -m conntrack --ctstate ESTABLISHED", cidr, pc.Protocol, outputPortMatch))
+						rw.writeAction(pol.Action, "INPUT", fmt.Sprintf("-s %s -p %s %s %s", cidr, pc.Protocol, inputPortMatch, conntrackNew))
+						rw.accept("OUTPUT", fmt.Sprintf("-d %s -p %s %s %s", cidr, pc.Protocol, outputPortMatch, conntrackEstab))
 					} else {
 						rw.writeAction(pol.Action, "INPUT", fmt.Sprintf("-s %s -p %s %s", cidr, pc.Protocol, inputPortMatch))
 					}
 				}
 				if writeToDocker {
 					if pol.Action == "ACCEPT" {
-						rw.writeAction(pol.Action, "DOCKER-USER", fmt.Sprintf("-s %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED", cidr, pc.Protocol, inputPortMatch))
+						rw.writeAction(pol.Action, "DOCKER-USER", fmt.Sprintf("-s %s -p %s %s %s", cidr, pc.Protocol, inputPortMatch, conntrackNew))
 					} else {
 						rw.writeAction(pol.Action, "DOCKER-USER", fmt.Sprintf("-s %s -p %s %s", cidr, pc.Protocol, inputPortMatch))
 					}
@@ -554,6 +586,8 @@ func (c *Compiler) writeTargetRules(
 // writeSourceRules writes egress (source) rules for a policy.
 // When useIpset is true, ipsetName contains the ipset to match against.
 // When useIpset is false, cidrs contains the individual CIDRs to generate rules for.
+// noConntrack when true skips conntrack marking for multicast protocols.
+// isMulticastTarget when true indicates the target is a multicast special target (3=__all_hosts__, 4=__mdns__, 8=__igmpv3__)
 func (c *Compiler) writeSourceRules(
 	ctx context.Context,
 	rw *ruleWriter,
@@ -564,6 +598,8 @@ func (c *Compiler) writeSourceRules(
 	cidrs []string,
 	ipAddress string,
 	writeToHost, writeToDocker bool,
+	noConntrack bool,
+	isMulticastTarget bool,
 ) error {
 	for _, pc := range portClauses {
 		outputPortMatch := pc.PortMatch
@@ -572,18 +608,42 @@ func (c *Compiler) writeSourceRules(
 		}
 		inputPortMatch := invertPortMatch(pc.PortMatch, pc.SrcPortMatch)
 
+		// Build conntrack part based on noConntrack flag
+		var conntrackNew, conntrackEstab string
+		if noConntrack {
+			conntrackNew = ""
+			conntrackEstab = ""
+		} else {
+			conntrackNew = "-m conntrack --ctstate NEW,ESTABLISHED"
+			conntrackEstab = "-m conntrack --ctstate ESTABLISHED"
+		}
+
+		// MC-010: For multicast targets, INPUT return rule should accept from any source (0.0.0.0/0)
+		// This is because mDNS/IGMP responses come from individual hosts, not from the multicast address
+		var returnCIDRs []string
+		if isMulticastTarget {
+			returnCIDRs = []string{"0.0.0.0/0"}
+		} else {
+			returnCIDRs = cidrs
+		}
+
 		if useIpset {
 			ipsetMatchSrc := fmt.Sprintf("-m set --match-set %s src", ipsetName)
 			ipsetMatchDst := fmt.Sprintf("-m set --match-set %s dst", ipsetName)
-			rw.writeAction(pol.Action, "OUTPUT", fmt.Sprintf("-p %s %s %s -m conntrack --ctstate NEW,ESTABLISHED", pc.Protocol, ipsetMatchDst, outputPortMatch))
-			rw.writeAction(pol.Action, "INPUT", fmt.Sprintf("-p %s %s %s -m conntrack --ctstate ESTABLISHED", pc.Protocol, ipsetMatchSrc, inputPortMatch))
+			rw.writeAction(pol.Action, "OUTPUT", fmt.Sprintf("-p %s %s %s %s", pc.Protocol, ipsetMatchDst, outputPortMatch, conntrackNew))
+			rw.writeAction(pol.Action, "INPUT", fmt.Sprintf("-p %s %s %s %s", pc.Protocol, ipsetMatchSrc, inputPortMatch, conntrackEstab))
 		} else {
 			for _, cidr := range cidrs {
 				if pol.Action == "ACCEPT" {
-					rw.writeAction(pol.Action, "OUTPUT", fmt.Sprintf("-d %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED", cidr, pc.Protocol, outputPortMatch))
-					rw.accept("INPUT", fmt.Sprintf("-s %s -p %s %s -m conntrack --ctstate ESTABLISHED", cidr, pc.Protocol, inputPortMatch))
+					rw.writeAction(pol.Action, "OUTPUT", fmt.Sprintf("-d %s -p %s %s %s", cidr, pc.Protocol, outputPortMatch, conntrackNew))
 				} else {
 					rw.writeAction(pol.Action, "OUTPUT", fmt.Sprintf("-d %s -p %s %s", cidr, pc.Protocol, outputPortMatch))
+				}
+			}
+			// Write INPUT rules from returnCIDRs (either specific CIDRs or 0.0.0.0/0 for multicast)
+			for _, returnCidr := range returnCIDRs {
+				if pol.Action == "ACCEPT" {
+					rw.accept("INPUT", fmt.Sprintf("-s %s -p %s %s %s", returnCidr, pc.Protocol, inputPortMatch, conntrackEstab))
 				}
 			}
 		}
@@ -618,9 +678,10 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 
 	var buf strings.Builder
 
-	// Load service
+	// Load service - MC-011: Include no_conntrack column
 	var serviceName, ports, sourcePorts, protocol string
-	err := c.db.QueryRowContext(ctx, "SELECT name, ports, source_ports, protocol FROM services WHERE id = ?", serviceID).Scan(&serviceName, &ports, &sourcePorts, &protocol)
+	var noConntrack bool
+	err := c.db.QueryRowContext(ctx, "SELECT name, ports, source_ports, protocol, COALESCE(no_conntrack, 0) FROM services WHERE id = ?", serviceID).Scan(&serviceName, &ports, &sourcePorts, &protocol, &noConntrack)
 	if err != nil {
 		return nil, fmt.Errorf("load service: %w", err)
 	}
@@ -682,8 +743,13 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 						outputPortMatch = pc.SrcPortMatch + " " + outputPortMatch
 					}
 					inputPortMatch := invertPortMatch(pc.PortMatch, pc.SrcPortMatch)
-					fmt.Fprintf(&buf, "-A OUTPUT -d %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", targetCIDR, pc.Protocol, outputPortMatch)
-					fmt.Fprintf(&buf, "-A INPUT -s %s -p %s %s -m conntrack --ctstate ESTABLISHED -j ACCEPT\n", targetCIDR, pc.Protocol, inputPortMatch)
+					// MC-011: Handle no_conntrack flag
+					if noConntrack {
+						fmt.Fprintf(&buf, "-A OUTPUT -d %s -p %s %s -j ACCEPT\n", targetCIDR, pc.Protocol, outputPortMatch)
+					} else {
+						fmt.Fprintf(&buf, "-A OUTPUT -d %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", targetCIDR, pc.Protocol, outputPortMatch)
+						fmt.Fprintf(&buf, "-A INPUT -s %s -p %s %s -m conntrack --ctstate ESTABLISHED -j ACCEPT\n", targetCIDR, pc.Protocol, inputPortMatch)
+					}
 				}
 			}
 		}
@@ -693,19 +759,30 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 		// Source hosts get: INPUT from target + OUTPUT established to target
 		if direction == "both" || direction == "backward" {
 			buf.WriteString("# Backward (Target → Source)\n")
-			for _, sourceCIDR := range sourceCIDRs {
-				if serviceName == "Multicast" {
-					buf.WriteString("-A INPUT -m pkttype --pkt-type multicast -j ACCEPT\n")
-					continue
-				}
-				for _, pc := range portClauses {
-					inputPortMatch := pc.PortMatch
-					if pc.SrcPortMatch != "" {
-						inputPortMatch = pc.SrcPortMatch + " " + inputPortMatch
+			// MC-009: Skip bogus "As Target" ingress for multicast special targets
+			isMulticastSource := sourceType == "special" && (sourceID == 3 || sourceID == 4 || sourceID == 8)
+			if isMulticastSource {
+				buf.WriteString("# (skipped - multicast special target as source)\n")
+			} else {
+				for _, sourceCIDR := range sourceCIDRs {
+					if serviceName == "Multicast" {
+						buf.WriteString("-A INPUT -m pkttype --pkt-type multicast -j ACCEPT\n")
+						continue
 					}
-					outputPortMatch := invertPortMatch(pc.PortMatch, pc.SrcPortMatch)
-					fmt.Fprintf(&buf, "-A INPUT -s %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", sourceCIDR, pc.Protocol, inputPortMatch)
-					fmt.Fprintf(&buf, "-A OUTPUT -d %s -p %s %s -m conntrack --ctstate ESTABLISHED -j ACCEPT\n", sourceCIDR, pc.Protocol, outputPortMatch)
+					for _, pc := range portClauses {
+						inputPortMatch := pc.PortMatch
+						if pc.SrcPortMatch != "" {
+							inputPortMatch = pc.SrcPortMatch + " " + inputPortMatch
+						}
+						outputPortMatch := invertPortMatch(pc.PortMatch, pc.SrcPortMatch)
+						// MC-011: Handle no_conntrack flag
+						if noConntrack {
+							fmt.Fprintf(&buf, "-A INPUT -s %s -p %s %s -j ACCEPT\n", sourceCIDR, pc.Protocol, inputPortMatch)
+						} else {
+							fmt.Fprintf(&buf, "-A INPUT -s %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", sourceCIDR, pc.Protocol, inputPortMatch)
+							fmt.Fprintf(&buf, "-A OUTPUT -d %s -p %s %s -m conntrack --ctstate ESTABLISHED -j ACCEPT\n", sourceCIDR, pc.Protocol, outputPortMatch)
+						}
+					}
 				}
 			}
 		}
@@ -727,23 +804,39 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 					if pc.SrcPortMatch != "" {
 						outputPortMatch = pc.SrcPortMatch + " " + outputPortMatch
 					}
-					fmt.Fprintf(&buf, "-A DOCKER-USER -d %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", targetCIDR, pc.Protocol, outputPortMatch)
+					// MC-011: Handle no_conntrack flag
+					if noConntrack {
+						fmt.Fprintf(&buf, "-A DOCKER-USER -d %s -p %s %s -j ACCEPT\n", targetCIDR, pc.Protocol, outputPortMatch)
+					} else {
+						fmt.Fprintf(&buf, "-A DOCKER-USER -d %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", targetCIDR, pc.Protocol, outputPortMatch)
+					}
 				}
 			}
 		}
 		// Backward direction: Target (Docker) ← Source
 		if direction == "both" || direction == "backward" {
-			for _, sourceCIDR := range sourceCIDRs {
-				if serviceName == "Multicast" {
-					buf.WriteString("-A DOCKER-USER -m pkttype --pkt-type multicast -j ACCEPT\n")
-					continue
-				}
-				for _, pc := range portClauses {
-					inputPortMatch := pc.PortMatch
-					if pc.SrcPortMatch != "" {
-						inputPortMatch = pc.SrcPortMatch + " " + inputPortMatch
+			// MC-009: Skip bogus "As Target" ingress for multicast special targets
+			isMulticastSource := sourceType == "special" && (sourceID == 3 || sourceID == 4 || sourceID == 8)
+			if isMulticastSource {
+				buf.WriteString("# (skipped - multicast special target as source)\n")
+			} else {
+				for _, sourceCIDR := range sourceCIDRs {
+					if serviceName == "Multicast" {
+						buf.WriteString("-A DOCKER-USER -m pkttype --pkt-type multicast -j ACCEPT\n")
+						continue
 					}
-					fmt.Fprintf(&buf, "-A DOCKER-USER -s %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", sourceCIDR, pc.Protocol, inputPortMatch)
+					for _, pc := range portClauses {
+						inputPortMatch := pc.PortMatch
+						if pc.SrcPortMatch != "" {
+							inputPortMatch = pc.SrcPortMatch + " " + inputPortMatch
+						}
+						// MC-011: Handle no_conntrack flag
+						if noConntrack {
+							fmt.Fprintf(&buf, "-A DOCKER-USER -s %s -p %s %s -j ACCEPT\n", sourceCIDR, pc.Protocol, inputPortMatch)
+						} else {
+							fmt.Fprintf(&buf, "-A DOCKER-USER -s %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", sourceCIDR, pc.Protocol, inputPortMatch)
+						}
+					}
 				}
 			}
 		}

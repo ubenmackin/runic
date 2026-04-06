@@ -53,9 +53,10 @@ CREATE TABLE IF NOT EXISTS services (
     ports TEXT NOT NULL DEFAULT '',
     source_ports TEXT DEFAULT '',
     protocol TEXT NOT NULL DEFAULT 'tcp',
-  description TEXT,
-  direction_hint TEXT NOT NULL DEFAULT 'inbound',
-  is_system BOOLEAN NOT NULL DEFAULT 0
+    description TEXT,
+    direction_hint TEXT NOT NULL DEFAULT 'inbound',
+    is_system BOOLEAN NOT NULL DEFAULT 0,
+    no_conntrack BOOLEAN NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS policies (
@@ -129,7 +130,8 @@ INSERT OR IGNORE INTO special_targets (id, name, display_name, description, addr
 (4, '__mdns__', 'mDNS', 'mDNS multicast address (224.0.0.251)', '224.0.0.251'),
 (5, 'loopback', 'Loopback', 'Local loopback address (127.0.0.1)', '127.0.0.1'),
 (6, '__any_ip__', 'Any IP (0.0.0.0/0)', 'Any IP address on the internet (0.0.0.0/0)', '0.0.0.0/0'),
-(7, '__all_peers__', 'All Peers', 'All registered peer IPs', 'dynamic');
+(7, '__all_peers__', 'All Peers', 'All registered peer IPs', 'dynamic'),
+(8, '__igmpv3__', 'IGMPv3', 'IGMPv3 multicast address (224.0.0.22)', '224.0.0.22');
 
 -- Indexes for frequently queried columns
 CREATE INDEX IF NOT EXISTS idx_peers_last_heartbeat ON peers(last_heartbeat);

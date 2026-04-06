@@ -255,6 +255,10 @@ func migrateSchema(ctx context.Context, database *sql.DB) error {
 	if err := addColumnIfMissing(ctx, database, "services", "source_ports", "TEXT DEFAULT ''"); err != nil {
 		return err
 	}
+	// MC-001: Add no_conntrack column to services table
+	if err := addColumnIfMissing(ctx, database, "services", "no_conntrack", "BOOLEAN NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
 
 	// Migration: Add is_system column to groups table
 	if err := addColumnIfMissing(ctx, database, "groups", "is_system", "BOOLEAN NOT NULL DEFAULT 0"); err != nil {
@@ -442,6 +446,7 @@ func migrateSchema(ctx context.Context, database *sql.DB) error {
 			{"__limited_broadcast__", "Limited Broadcast", "The limited broadcast address (255.255.255.255)", "255.255.255.255"},
 			{"__all_hosts__", "All Hosts (IGMP)", "All hosts multicast address for IGMP (224.0.0.1)", "224.0.0.1"},
 			{"__mdns__", "mDNS", "mDNS multicast address (224.0.0.251)", "224.0.0.251"},
+			{"__igmpv3__", "IGMPv3", "IGMPv3 multicast address (224.0.0.22)", "224.0.0.22"},
 		}
 
 		for _, st := range specialTargets {
@@ -512,6 +517,25 @@ func migrateSchema(ctx context.Context, database *sql.DB) error {
 			return fmt.Errorf("failed to add __all_peers__ special target: %w", err)
 		}
 		log.Info("Migration: added __all_peers__ special target")
+	}
+
+	// MC-002: Migration: Add __igmpv3__ special target for existing databases
+	var hasIGMPv3Target bool
+	err = database.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM special_targets WHERE name = ?", "__igmpv3__").Scan(&hasIGMPv3Target)
+	if err != nil {
+		return fmt.Errorf("failed to check for __igmpv3__ special target: %w", err)
+	}
+
+	if !hasIGMPv3Target {
+		log.Info("Migration: adding __igmpv3__ special target")
+		_, err = database.ExecContext(ctx,
+			"INSERT INTO special_targets (id, name, display_name, description, address) VALUES (?, ?, ?, ?, ?)",
+			8, "__igmpv3__", "IGMPv3", "IGMPv3 multicast address (224.0.0.22)", "224.0.0.22",
+		)
+		if err != nil {
+			return fmt.Errorf("failed to add __igmpv3__ special target: %w", err)
+		}
+		log.Info("Migration: added __igmpv3__ special target")
 	}
 
 	// Migration: Delete the broken "any" system group
