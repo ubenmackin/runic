@@ -30,9 +30,9 @@ func SetupTestDB(t *testing.T) (*sql.DB, func()) {
 		t.Fatal(err)
 	}
 
-	// Set connection pool settings to prevent issues during cleanup
-	database.SetMaxOpenConns(1)
-	database.SetMaxIdleConns(1)
+	// Allow multiple connections for concurrent query handling (errgroup, etc.)
+	database.SetMaxOpenConns(10)
+	database.SetMaxIdleConns(5)
 
 	if _, err := database.Exec(db.Schema()); err != nil {
 		if cErr := database.Close(); cErr != nil {

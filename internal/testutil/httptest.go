@@ -4,6 +4,7 @@ package testutil
 import (
 	"database/sql"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/gorilla/mux"
@@ -15,6 +16,12 @@ import (
 // This is commonly needed in handler tests that extract path parameters.
 func MuxVars(r *http.Request, vars map[string]string) *http.Request {
 	return mux.SetURLVars(r, vars)
+}
+
+// NewTestResponseRecorder returns a new httptest.ResponseRecorder.
+// This is a convenience helper to reduce boilerplate in test files.
+func NewTestResponseRecorder() *httptest.ResponseRecorder {
+	return httptest.NewRecorder()
 }
 
 // SetupTestDBWithSecret sets up a test database with the agent JWT secret configured.

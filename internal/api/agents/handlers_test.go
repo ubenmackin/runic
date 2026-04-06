@@ -20,11 +20,6 @@ import (
 	"runic/internal/testutil"
 )
 
-// Test helper to set up a test database with required secrets
-func setupTestDBWithSecret(t *testing.T) (*sql.DB, func()) {
-	return testutil.SetupTestDBWithSecret(t)
-}
-
 // generateValidAgentToken creates a valid JWT token for an agent
 func generateValidAgentToken(t *testing.T, db *sql.DB, hostname string) string {
 	secretStr := "test-secret-key-for-agent-jwt-256-bits!!"
@@ -144,7 +139,7 @@ func TestAgentAuthMiddleware(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			db, cleanup := setupTestDBWithSecret(t)
+			db, cleanup := testutil.SetupTestDBWithSecret(t)
 			defer cleanup()
 
 			if tt.setup != nil {
@@ -273,7 +268,7 @@ func TestRegisterAgent(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			db, cleanup := setupTestDBWithSecret(t)
+			db, cleanup := testutil.SetupTestDBWithSecret(t)
 			defer cleanup()
 
 			if tt.setup != nil {
@@ -359,7 +354,7 @@ func TestGetBundle(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			db, cleanup := setupTestDBWithSecret(t)
+			db, cleanup := testutil.SetupTestDBWithSecret(t)
 			defer cleanup()
 
 			if tt.setup != nil {
@@ -444,7 +439,7 @@ func TestHeartbeat(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			db, cleanup := setupTestDBWithSecret(t)
+			db, cleanup := testutil.SetupTestDBWithSecret(t)
 			defer cleanup()
 
 			if tt.setup != nil {
@@ -568,7 +563,7 @@ func TestSubmitLogs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			db, cleanup := setupTestDBWithSecret(t)
+			db, cleanup := testutil.SetupTestDBWithSecret(t)
 			defer cleanup()
 
 			if tt.setup != nil {
@@ -630,7 +625,7 @@ func TestConfirmBundleApplied(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			db, cleanup := setupTestDBWithSecret(t)
+			db, cleanup := testutil.SetupTestDBWithSecret(t)
 			defer cleanup()
 
 			if tt.setup != nil {
@@ -698,7 +693,7 @@ func TestAgentCheckRotation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			db, cleanup := setupTestDBWithSecret(t)
+			db, cleanup := testutil.SetupTestDBWithSecret(t)
 			defer cleanup()
 
 			if tt.setup != nil {
@@ -789,7 +784,7 @@ func TestAgentTestKey(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			db, cleanup := setupTestDBWithSecret(t)
+			db, cleanup := testutil.SetupTestDBWithSecret(t)
 			defer cleanup()
 
 			if tt.setup != nil {
@@ -868,7 +863,7 @@ func TestGenerateRegistrationToken(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			db, cleanup := setupTestDBWithSecret(t)
+			db, cleanup := testutil.SetupTestDBWithSecret(t)
 			defer cleanup()
 
 			req := httptest.NewRequest("POST", "/api/v1/registration-tokens", strings.NewReader(tt.reqBody))
@@ -944,7 +939,7 @@ func TestListRegistrationTokens(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			db, cleanup := setupTestDBWithSecret(t)
+			db, cleanup := testutil.SetupTestDBWithSecret(t)
 			defer cleanup()
 
 			if tt.setup != nil {
@@ -1007,7 +1002,7 @@ func TestRevokeRegistrationToken(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			db, cleanup := setupTestDBWithSecret(t)
+			db, cleanup := testutil.SetupTestDBWithSecret(t)
 			defer cleanup()
 
 			if tt.setup != nil {
@@ -1281,7 +1276,7 @@ func TestConsumeRegistrationToken(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			db, cleanup := setupTestDBWithSecret(t)
+			db, cleanup := testutil.SetupTestDBWithSecret(t)
 			defer cleanup()
 
 			if tt.setup != nil {

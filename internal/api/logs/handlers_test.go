@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"runic/internal/auth"
 	"runic/internal/testutil"
 )
 
@@ -416,5 +417,110 @@ func TestGetLogs_QueryError(t *testing.T) {
 	}
 	if resp["error"] == "" {
 		t.Error("expected error message in response")
+	}
+}
+
+// =============================================================================
+// MakeLogsStreamHandler Tests (WebSocket)
+// =============================================================================
+
+func TestMakeLogsStreamHandler_NoToken(t *testing.T) {
+	hub := NewHub()
+	handler := MakeLogsStreamHandler(hub)
+
+	req := httptest.NewRequest("GET", "/api/v1/logs/ws", nil)
+	w := httptest.NewRecorder()
+
+	handler(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("expected status %d, got %d: %s", http.StatusUnauthorized, w.Code, w.Body.String())
+	}
+
+	var resp map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp["error"] != "unauthorized" {
+		t.Errorf("expected error='unauthorized', got '%s'", resp["error"])
+	}
+}
+
+func TestMakeLogsStreamHandler_InvalidToken(t *testing.T) {
+	hub := NewHub()
+	handler := MakeLogsStreamHandler(hub)
+
+	req := httptest.NewRequest("GET", "/api/v1/logs/ws", nil)
+	req.Header.Set("Sec-WebSocket-Protocol", "invalid-token")
+	w := httptest.NewRecorder()
+
+	handler(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("expected status %d, got %d: %s", http.StatusUnauthorized, w.Code, w.Body.String())
+	}
+}
+
+func TestMakeLogsStreamHandler_ValidToken_WithFilters(t *testing.T) {
+	hub := NewHub()
+	handler := MakeLogsStreamHandler(hub)
+
+	// Create valid token - use same signature as auth.GenerateToken
+	token, err := auth.GenerateToken("test-user", "viewer", 24*time.Hour)
+	if err != nil {
+		t.Fatalf("failed to generate token: %v", err)
+	}
+
+	// Use cookie-based auth
+	req := httptest.NewRequest("GET", "/api/v1/logs/ws?peer_id=1&action=ACCEPT&dst_port=22", nil)
+	req.AddCookie(&http.Cookie{Name: "runic_access_token", Value: token})
+	w := httptest.NewRecorder()
+
+	handler(w, req)
+
+	// Should succeed in upgrade (or fail at upgrade, but not auth failure)
+	// The handler attempts WebSocket upgrade - may fail due to no actual WS connection
+	// but it should pass the auth check
+	if w.Code == http.StatusUnauthorized {
+		t.Error("should not return unauthorized for valid token")
+	}
+}
+
+func TestMakeLogsStreamHandler_ValidToken_HeaderAuth(t *testing.T) {
+	hub := NewHub()
+	handler := MakeLogsStreamHandler(hub)
+
+	// Create valid token and use header auth
+	token, err := auth.GenerateToken("test-user-header", "viewer", 24*time.Hour)
+	if err != nil {
+		t.Fatalf("failed to generate token: %v", err)
+	}
+
+	req := httptest.NewRequest("GET", "/api/v1/logs/ws", nil)
+	req.Header.Set("Sec-WebSocket-Protocol", token)
+	w := httptest.NewRecorder()
+
+	handler(w, req)
+
+	// Should pass auth check (upgrade may fail, but not auth)
+	if w.Code == http.StatusUnauthorized {
+		t.Error("should not return unauthorized for valid token in header")
+	}
+}
+
+func TestMakeLogsStreamHandler_CookieEmptyValue(t *testing.T) {
+	hub := NewHub()
+	handler := MakeLogsStreamHandler(hub)
+
+	// Create request with empty cookie value (but cookie exists)
+	req := httptest.NewRequest("GET", "/api/v1/logs/ws", nil)
+	req.AddCookie(&http.Cookie{Name: "runic_access_token", Value: ""})
+	w := httptest.NewRecorder()
+
+	handler(w, req)
+
+	// Should return unauthorized since cookie value is empty
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("expected status %d, got %d", http.StatusUnauthorized, w.Code)
 	}
 }
