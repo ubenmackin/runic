@@ -139,6 +139,9 @@ const { data: specialTargets } = useQuery({
   queryFn: () => api.get('/policies/special-targets'),
 })
 
+// Check if the selected service is IGMP
+const isIGMPService = formData.service_id && services?.find(s => s.id === formData.service_id)?.name?.toUpperCase() === 'IGMP'
+
 const polymorphicOptions = [
   ...(groups || []).map(g => ({ value: g.id, label: g.name, category: 'group' })),
   ...(peers || []).map(p => ({ value: p.id, label: p.hostname, category: 'peer' })),
@@ -183,8 +186,9 @@ const polymorphicOptions = [
   }
 
   const fetchPreview = useCallback(async () => {
-    if (!formData.source_id || !formData.service_id || !formData.target_id) {
-      setFormErrors({ _general: 'Select source, service, and target to preview' })
+    // IGMP doesn't require source_id
+    if (!formData.service_id || !formData.target_id || (!isIGMPService && !formData.source_id)) {
+      setFormErrors({ _general: isIGMPService ? 'Select service and target to preview' : 'Select source, service, and target to preview' })
       return
     }
     setPreviewLoading(true)
@@ -207,7 +211,7 @@ const polymorphicOptions = [
     } finally {
       setPreviewLoading(false)
     }
-  }, [formData])
+  }, [formData, isIGMPService])
 
   const initialFormRender = useRef(true);
 
@@ -547,24 +551,30 @@ const polymorphicOptions = [
                   {/* Row 1: Source - Direction - Target */}
                   <div>
                     <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Source</label>
-                    <SearchableSelect options={polymorphicOptions} value={formData.source_id} category={formData.source_type} onChange={(v, type) => setFormData(d => ({ ...d, source_id: v, source_type: type }))} placeholder="Select group or peer" />
+                    <div className={isIGMPService ? 'opacity-50' : ''}>
+                      <SearchableSelect options={polymorphicOptions} value={formData.source_id} category={formData.source_type} onChange={(v, type) => setFormData(d => ({ ...d, source_id: v, source_type: type }))} placeholder="Select group or peer" disabled={isIGMPService} />
+                    </div>
+                    {isIGMPService && (
+                      <p className="text-xs text-gray-500 dark:text-amber-muted mt-1">IGMP is a host-level protocol — source is not used</p>
+                    )}
                   </div>
                   <div className="flex flex-col items-center justify-end gap-1.5 pb-0.5">
                     <div className="flex flex-col gap-1.5">
                       <button
                         type="button"
                         onClick={() => {
-                          if (formData.direction === 'forward') return
+                          if (formData.direction === 'forward' || isIGMPService) return
                           setFormData(d => ({
                             ...d,
                             direction: d.direction === 'both' ? 'backward' : (d.direction === 'backward' ? 'both' : 'forward')
                           }))
                         }}
+                        disabled={isIGMPService}
                         className={`flex items-center justify-center w-28 h-8 rounded-xl border-2 transition-all duration-200 ${
                           formData.direction === 'both' || formData.direction === 'forward'
                             ? 'bg-emerald-900/80 border-emerald-500 text-emerald-400 hover:bg-emerald-800/80'
                             : 'bg-gray-200 dark:bg-gray-800 border-gray-300 dark:border-gray-600 text-gray-400 dark:text-gray-500 hover:bg-gray-300 dark:hover:bg-gray-700'
-                        }`}
+                        } ${isIGMPService ? 'opacity-50 cursor-not-allowed' : ''}`}
                         title="Forward: Source → Target"
                       >
                         <svg viewBox="0 0 80 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="w-16 h-4">
@@ -575,17 +585,18 @@ const polymorphicOptions = [
                       <button
                         type="button"
                         onClick={() => {
-                          if (formData.direction === 'backward') return
+                          if (formData.direction === 'backward' || isIGMPService) return
                           setFormData(d => ({
                             ...d,
                             direction: d.direction === 'both' ? 'forward' : (d.direction === 'forward' ? 'both' : 'backward')
                           }))
                         }}
+                        disabled={isIGMPService}
                         className={`flex items-center justify-center w-28 h-8 rounded-xl border-2 transition-all duration-200 ${
                           formData.direction === 'both' || formData.direction === 'backward'
                             ? 'bg-emerald-900/80 border-emerald-500 text-emerald-400 hover:bg-emerald-800/80'
                             : 'bg-gray-200 dark:bg-gray-800 border-gray-300 dark:border-gray-600 text-gray-400 dark:text-gray-500 hover:bg-gray-300 dark:hover:bg-gray-700'
-                        }`}
+                        } ${isIGMPService ? 'opacity-50 cursor-not-allowed' : ''}`}
                         title="Backward: Target → Source"
                       >
                         <svg viewBox="0 0 80 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="w-16 h-4">
@@ -594,6 +605,9 @@ const polymorphicOptions = [
                         </svg>
                       </button>
                     </div>
+                    {isIGMPService && (
+                      <p className="text-xs text-gray-500 dark:text-amber-muted text-center">IGMP generates both INPUT and OUTPUT automatically</p>
+                    )}
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Target</label>
@@ -626,6 +640,7 @@ const polymorphicOptions = [
           <div className="flex items-center gap-2 mb-1">
             <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary">Applies To</label>
             <span className="text-xs text-gray-500 dark:text-amber-muted">(Docker Integration)</span>
+            {isIGMPService && <span className="text-xs text-blue-600 dark:text-blue-400 ml-1">— "Host Only" is typical for IGMP</span>}
           </div>
           <div className="flex bg-gray-100 dark:bg-charcoal-darkest p-1 rounded-lg border border-gray-200 dark:border-gray-border">
             <button

@@ -335,13 +335,6 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 	// Standard rules (extracted to helper)
 	rw.writeStandardRules(hasDocker, controlPlanePort)
 
-	// Docker: Control Plane Communication
-	if hasDocker && controlPlanePort != "" {
-		buf.WriteString("# --- Docker: Control Plane Communication ---\n")
-		fmt.Fprintf(&buf, "-A DOCKER-USER -p tcp --dport %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", controlPlanePort)
-		buf.WriteString("\n")
-	}
-
 	// Policy rules
 	for i := range policies {
 		pol := &policies[i]
@@ -369,6 +362,18 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 		}
 
 		fmt.Fprintf(&buf, "# --- Policy: %s ---\n", pol.Name)
+
+		// IG-001: Special IGMP handling - skip normal source/target resolution
+		if strings.EqualFold(serviceName, "IGMP") {
+			if writeToHost {
+				c.writeIGMPRules(rw, pol.TargetScope, hasDocker)
+			}
+			if writeToDocker {
+				// DOCKER-USER rules already handled by writeIGMPRules
+			}
+			buf.WriteString("\n")
+			continue // Skip to next policy
+		}
 
 		// Process as TARGET (Ingress traffic)
 		// Only emit if direction is 'both' or 'backward' (backward = target receives inbound from source)
@@ -494,6 +499,24 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 	buf.WriteString("\nCOMMIT\n")
 
 	return buf.String(), nil
+}
+
+// writeIGMPRules generates fixed IGMP rules for all hosts communication.
+// IGMP is connectionless multicast, so no conntrack or return rules are needed.
+func (c *Compiler) writeIGMPRules(rw *ruleWriter, targetScope string, hasDocker bool) {
+	writeToHost := targetScope == "host" || targetScope == "both"
+	writeToDocker := hasDocker && (targetScope == "docker" || targetScope == "both")
+
+	if writeToHost {
+		// Accept IGMP queries (224.0.0.1 = All Hosts on this subnet)
+		rw.accept("INPUT", "-d 224.0.0.1/32 -p igmp")
+		// Send IGMPv3 reports (224.0.0.22 = IGMPv3 routers)
+		rw.accept("OUTPUT", "-d 224.0.0.22/32 -p igmp")
+	}
+	if writeToDocker {
+		rw.accept("DOCKER-USER", "-d 224.0.0.1/32 -p igmp")
+		rw.accept("DOCKER-USER", "-d 224.0.0.22/32 -p igmp")
+	}
 }
 
 // writeMulticastRule generates multicast tracking rules using a ruleWriter.
@@ -730,7 +753,11 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 	// Source hosts get: OUTPUT to target + INPUT established from target
 	// Target hosts get: INPUT from source + OUTPUT established to source
 	if targetScope == "host" || targetScope == "both" {
-		if direction == "both" || direction == "forward" {
+		// IG-002: Special IGMP handling - skip normal source/target resolution
+		if strings.EqualFold(serviceName, "IGMP") {
+			buf.WriteString("-A INPUT -d 224.0.0.1/32 -p igmp -j ACCEPT\n")
+			buf.WriteString("-A OUTPUT -d 224.0.0.22/32 -p igmp -j ACCEPT\n")
+		} else if direction == "both" || direction == "forward" {
 			buf.WriteString("# Forward (Source → Target)\n")
 			for _, targetCIDR := range targetCIDRs {
 				if serviceName == "Multicast" {
@@ -757,7 +784,8 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 		// Backward: Target initiates connections TO Source
 		// Target hosts get: OUTPUT to source + INPUT established from source
 		// Source hosts get: INPUT from target + OUTPUT established to target
-		if direction == "both" || direction == "backward" {
+		// IG-002: Skip backward for IGMP (already handled above)
+		if !strings.EqualFold(serviceName, "IGMP") && (direction == "both" || direction == "backward") {
 			buf.WriteString("# Backward (Target → Source)\n")
 			// MC-009: Skip bogus "As Target" ingress for multicast special targets
 			isMulticastSource := sourceType == "special" && (sourceID == 3 || sourceID == 4 || sourceID == 8)
@@ -791,50 +819,57 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 	// Docker: DOCKER-USER chain rules (for Docker containers)
 	// Generated when targetScope is "docker" or "both"
 	if targetScope == "docker" || targetScope == "both" {
-		buf.WriteString("# Docker: DOCKER-USER chain rules\n")
-		// Forward direction: Source → Target (Docker)
-		if direction == "both" || direction == "forward" {
-			for _, targetCIDR := range targetCIDRs {
-				if serviceName == "Multicast" {
-					buf.WriteString("-A DOCKER-USER -d 224.0.0.0/4 -m pkttype --pkt-type multicast -j ACCEPT\n")
-					continue
-				}
-				for _, pc := range portClauses {
-					outputPortMatch := pc.PortMatch
-					if pc.SrcPortMatch != "" {
-						outputPortMatch = pc.SrcPortMatch + " " + outputPortMatch
-					}
-					// MC-011: Handle no_conntrack flag
-					if noConntrack {
-						fmt.Fprintf(&buf, "-A DOCKER-USER -d %s -p %s %s -j ACCEPT\n", targetCIDR, pc.Protocol, outputPortMatch)
-					} else {
-						fmt.Fprintf(&buf, "-A DOCKER-USER -d %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", targetCIDR, pc.Protocol, outputPortMatch)
-					}
-				}
-			}
-		}
-		// Backward direction: Target (Docker) ← Source
-		if direction == "both" || direction == "backward" {
-			// MC-009: Skip bogus "As Target" ingress for multicast special targets
-			isMulticastSource := sourceType == "special" && (sourceID == 3 || sourceID == 4 || sourceID == 8)
-			if isMulticastSource {
-				buf.WriteString("# (skipped - multicast special target as source)\n")
-			} else {
-				for _, sourceCIDR := range sourceCIDRs {
+		// IG-002: Special IGMP handling for Docker
+		if strings.EqualFold(serviceName, "IGMP") {
+			buf.WriteString("-A DOCKER-USER -d 224.0.0.1/32 -p igmp -j ACCEPT\n")
+			buf.WriteString("-A DOCKER-USER -d 224.0.0.22/32 -p igmp -j ACCEPT\n")
+		} else {
+			buf.WriteString("# Docker: DOCKER-USER chain rules\n")
+			// Forward direction: Source → Target (Docker)
+			if direction == "both" || direction == "forward" {
+				for _, targetCIDR := range targetCIDRs {
 					if serviceName == "Multicast" {
-						buf.WriteString("-A DOCKER-USER -m pkttype --pkt-type multicast -j ACCEPT\n")
+						buf.WriteString("-A DOCKER-USER -d 224.0.0.0/4 -m pkttype --pkt-type multicast -j ACCEPT\n")
 						continue
 					}
 					for _, pc := range portClauses {
-						inputPortMatch := pc.PortMatch
+						outputPortMatch := pc.PortMatch
 						if pc.SrcPortMatch != "" {
-							inputPortMatch = pc.SrcPortMatch + " " + inputPortMatch
+							outputPortMatch = pc.SrcPortMatch + " " + outputPortMatch
 						}
 						// MC-011: Handle no_conntrack flag
 						if noConntrack {
-							fmt.Fprintf(&buf, "-A DOCKER-USER -s %s -p %s %s -j ACCEPT\n", sourceCIDR, pc.Protocol, inputPortMatch)
+							fmt.Fprintf(&buf, "-A DOCKER-USER -d %s -p %s %s -j ACCEPT\n", targetCIDR, pc.Protocol, outputPortMatch)
 						} else {
-							fmt.Fprintf(&buf, "-A DOCKER-USER -s %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", sourceCIDR, pc.Protocol, inputPortMatch)
+							fmt.Fprintf(&buf, "-A DOCKER-USER -d %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", targetCIDR, pc.Protocol, outputPortMatch)
+						}
+					}
+				}
+			}
+			// Backward direction: Target (Docker) ← Source
+			// IG-002: Skip backward for IGMP (already handled above)
+			if !strings.EqualFold(serviceName, "IGMP") && (direction == "both" || direction == "backward") {
+				// MC-009: Skip bogus "As Target" ingress for multicast special targets
+				isMulticastSource := sourceType == "special" && (sourceID == 3 || sourceID == 4 || sourceID == 8)
+				if isMulticastSource {
+					buf.WriteString("# (skipped - multicast special target as source)\n")
+				} else {
+					for _, sourceCIDR := range sourceCIDRs {
+						if serviceName == "Multicast" {
+							buf.WriteString("-A DOCKER-USER -m pkttype --pkt-type multicast -j ACCEPT\n")
+							continue
+						}
+						for _, pc := range portClauses {
+							inputPortMatch := pc.PortMatch
+							if pc.SrcPortMatch != "" {
+								inputPortMatch = pc.SrcPortMatch + " " + inputPortMatch
+							}
+							// MC-011: Handle no_conntrack flag
+							if noConntrack {
+								fmt.Fprintf(&buf, "-A DOCKER-USER -s %s -p %s %s -j ACCEPT\n", sourceCIDR, pc.Protocol, inputPortMatch)
+							} else {
+								fmt.Fprintf(&buf, "-A DOCKER-USER -s %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", sourceCIDR, pc.Protocol, inputPortMatch)
+							}
 						}
 					}
 				}

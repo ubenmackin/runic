@@ -1582,3 +1582,185 @@ func TestPreviewCompile_BothScope(t *testing.T) {
 		t.Errorf("expected DOCKER-USER rules for target_scope=both, got: %v", rules)
 	}
 }
+
+// TestIGMPService verifies that IGMP service generates fixed rules without conntrack
+func TestIGMPService(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+	peerID := insertPeer(t, database, "igmp1", "192.168.1.50", false)
+	groupID := insertGroup(t, database, "igmp-group")
+	manualPeerID := insertManualPeer(t, database, "10.0.8.0/24")
+	insertGroupMember(t, database, groupID, manualPeerID)
+	// Insert IGMP service
+	serviceID := insertService(t, database, "IGMP", "", "igmp")
+	insertPolicy(t, database, "allow-igmp", groupID, serviceID, peerID, "ACCEPT", 100, true)
+
+	c := NewCompiler(database)
+	output, err := c.Compile(context.Background(), peerID)
+	if err != nil {
+		t.Fatalf("compile error: %v", err)
+	}
+
+	// Should have fixed IGMP rules
+	if !strings.Contains(output, "-A INPUT -d 224.0.0.1/32 -p igmp -j ACCEPT") {
+		t.Errorf("expected INPUT rule for IGMP queries (224.0.0.1), got:\n%s", output)
+	}
+	if !strings.Contains(output, "-A OUTPUT -d 224.0.0.22/32 -p igmp -j ACCEPT") {
+		t.Errorf("expected OUTPUT rule for IGMPv3 reports (224.0.0.22), got:\n%s", output)
+	}
+}
+
+// TestIGMPService_NoConntrack verifies no conntrack rules are generated for IGMP
+func TestIGMPService_NoConntrack(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+	peerID := insertPeer(t, database, "igmp-nc", "192.168.1.51", false)
+	groupID := insertGroup(t, database, "igmp-nc-group")
+	manualPeerID := insertManualPeer(t, database, "10.0.9.0/24")
+	insertGroupMember(t, database, groupID, manualPeerID)
+	serviceID := insertService(t, database, "IGMP", "", "igmp")
+	insertPolicy(t, database, "allow-igmp-nc", groupID, serviceID, peerID, "ACCEPT", 100, true)
+
+	c := NewCompiler(database)
+	output, err := c.Compile(context.Background(), peerID)
+	if err != nil {
+		t.Fatalf("compile error: %v", err)
+	}
+
+	// Should NOT have conntrack on any IGMP rule (check per-line)
+	lines := strings.Split(output, "\n")
+	for _, line := range lines {
+		if strings.Contains(line, "igmp") && strings.Contains(line, "conntrack") {
+			t.Errorf("IGMP rule should not use conntrack: %s", line)
+		}
+	}
+}
+
+// TestIGMPService_NoReturnRules verifies no return rules are generated for IGMP
+func TestIGMPService_NoReturnRules(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+	peerID := insertPeer(t, database, "igmp-nr", "192.168.1.52", false)
+	groupID := insertGroup(t, database, "igmp-nr-group")
+	manualPeerID := insertManualPeer(t, database, "10.0.10.0/24")
+	insertGroupMember(t, database, groupID, manualPeerID)
+	serviceID := insertService(t, database, "IGMP", "", "igmp")
+	insertPolicy(t, database, "allow-igmp-nr", groupID, serviceID, peerID, "ACCEPT", 100, true)
+
+	c := NewCompiler(database)
+	output, err := c.Compile(context.Background(), peerID)
+	if err != nil {
+		t.Fatalf("compile error: %v", err)
+	}
+
+	// IGMP should only have the two fixed rules, no source-based rules
+	// Count IGMP-related rules - should be exactly 2 (INPUT + OUTPUT)
+	igmpRuleCount := 0
+	lines := strings.Split(output, "\n")
+	for _, line := range lines {
+		if strings.Contains(line, "-p igmp") && strings.Contains(line, "-A") {
+			igmpRuleCount++
+		}
+	}
+	if igmpRuleCount != 2 {
+		t.Errorf("expected exactly 2 IGMP rules (INPUT + OUTPUT), got %d:\n%s", igmpRuleCount, output)
+	}
+}
+
+// TestIGMPService_WithDocker verifies IGMP generates DOCKER-USER rules when Docker is enabled
+func TestIGMPService_WithDocker(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+	peerID := insertPeer(t, database, "igmp-docker", "192.168.1.53", true)
+	groupID := insertGroup(t, database, "igmp-docker-group")
+	manualPeerID := insertManualPeer(t, database, "10.0.11.0/24")
+	insertGroupMember(t, database, groupID, manualPeerID)
+	serviceID := insertService(t, database, "IGMP", "", "igmp")
+	insertPolicy(t, database, "allow-igmp-docker", groupID, serviceID, peerID, "ACCEPT", 100, true)
+
+	c := NewCompiler(database)
+	output, err := c.Compile(context.Background(), peerID)
+	if err != nil {
+		t.Fatalf("compile error: %v", err)
+	}
+
+	// Should have standard IGMP rules
+	if !strings.Contains(output, "-A INPUT -d 224.0.0.1/32 -p igmp -j ACCEPT") {
+		t.Errorf("expected INPUT rule for IGMP queries, got:\n%s", output)
+	}
+	if !strings.Contains(output, "-A OUTPUT -d 224.0.0.22/32 -p igmp -j ACCEPT") {
+		t.Errorf("expected OUTPUT rule for IGMPv3 reports, got:\n%s", output)
+	}
+
+	// Should have DOCKER-USER rules for IGMP
+	if !strings.Contains(output, "-A DOCKER-USER -d 224.0.0.1/32 -p igmp -j ACCEPT") {
+		t.Errorf("expected DOCKER-USER rule for IGMP queries (224.0.0.1), got:\n%s", output)
+	}
+	if !strings.Contains(output, "-A DOCKER-USER -d 224.0.0.22/32 -p igmp -j ACCEPT") {
+		t.Errorf("expected DOCKER-USER rule for IGMPv3 reports (224.0.0.22), got:\n%s", output)
+	}
+}
+
+// TestPreviewCompile_IGMP verifies PreviewCompile handles IGMP correctly
+func TestPreviewCompile_IGMP(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+
+	// Create source and target peers
+	sourcePeer := insertPeer(t, database, "igmp-source", "10.0.0.1", false)
+	targetPeer := insertPeer(t, database, "igmp-target", "10.0.0.2", false)
+
+	// Create IGMP service
+	serviceID := insertService(t, database, "IGMP", "", "igmp")
+
+	c := NewCompiler(database)
+
+	// Preview with IGMP service
+	rules, err := c.PreviewCompile(context.Background(), 0, sourcePeer, "peer", targetPeer, "peer", serviceID, "both", "both")
+	if err != nil {
+		t.Fatalf("PreviewCompile failed: %v", err)
+	}
+
+	// Should generate fixed IGMP rules
+	hasInputRule := false
+	hasOutputRule := false
+	for _, rule := range rules {
+		if strings.Contains(rule, "-A INPUT -d 224.0.0.1/32 -p igmp -j ACCEPT") {
+			hasInputRule = true
+		}
+		if strings.Contains(rule, "-A OUTPUT -d 224.0.0.22/32 -p igmp -j ACCEPT") {
+			hasOutputRule = true
+		}
+	}
+
+	if !hasInputRule {
+		t.Errorf("expected INPUT rule for IGMP in preview, got: %v", rules)
+	}
+	if !hasOutputRule {
+		t.Errorf("expected OUTPUT rule for IGMP in preview, got: %v", rules)
+	}
+
+	// Should NOT have conntrack rules for IGMP
+	for _, rule := range rules {
+		if strings.Contains(rule, "igmp") && strings.Contains(rule, "conntrack") {
+			t.Errorf("IGMP preview rules should not use conntrack: %s", rule)
+		}
+	}
+
+	// Should have DOCKER-USER rules for IGMP (target_scope=both)
+	hasDockerIGMP := false
+	for _, rule := range rules {
+		if strings.Contains(rule, "DOCKER-USER") && strings.Contains(rule, "igmp") {
+			hasDockerIGMP = true
+			break
+		}
+	}
+	if !hasDockerIGMP {
+		t.Errorf("expected DOCKER-USER rules for IGMP in preview (target_scope=both), got: %v", rules)
+	}
+}
