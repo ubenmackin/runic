@@ -159,7 +159,7 @@ func CleanupExpiredTokens(ctx context.Context) error {
 		return nil
 	}
 	_, err := authDB.ExecContext(ctx,
-		`DELETE FROM revoked_tokens WHERE expires_at < datetime('now')`)
+		`DELETE FROM revoked_tokens WHERE datetime(expires_at) < datetime('now')`)
 	return err
 }
 

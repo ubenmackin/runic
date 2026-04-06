@@ -14,7 +14,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gorilla/mux"
 	_ "github.com/mattn/go-sqlite3"
 
 	"runic/internal/api/common"
@@ -28,33 +27,13 @@ func setupTestAPI(t *testing.T) (*API, *sql.DB, func()) {
 	t.Helper()
 
 	// Use testutil for database setup
-	database, dbCleanup := testutil.SetupTestDB(t)
-
-	// Run migrations that are not in schema.sql (pending_changes table)
-	if _, err := database.Exec(`
-		CREATE TABLE IF NOT EXISTS pending_changes (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			peer_id INTEGER NOT NULL REFERENCES peers(id),
-			change_type TEXT NOT NULL CHECK (change_type IN ('policy', 'group', 'service')),
-			change_id INTEGER NOT NULL,
-			change_action TEXT NOT NULL CHECK (change_action IN ('create', 'update', 'delete')),
-			change_summary TEXT NOT NULL,
-			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-		)
-	`); err != nil {
-		t.Fatalf("failed to create pending_changes table: %v", err)
-	}
+	database, cleanup := testutil.SetupTestDB(t)
 
 	// Create compiler
 	compiler := engine.NewCompiler(database)
 
 	// Create API instance
 	api := NewAPI(database, compiler)
-
-	// Cleanup function
-	cleanup := func() {
-		dbCleanup()
-	}
 
 	return api, database, cleanup
 }
@@ -259,7 +238,7 @@ func TestCompilePeer(t *testing.T) {
 			w := httptest.NewRecorder()
 
 			// Mock gorilla/mux vars
-			req = muxVars(req, map[string]string{"id": tt.peerID})
+			req = testutil.MuxVars(req, map[string]string{"id": tt.peerID})
 
 			// Set up context with API instance
 			ctx := context.WithValue(req.Context(), apiContextKey, api)
@@ -543,7 +522,7 @@ func TestGetPolicy(t *testing.T) {
 			w := httptest.NewRecorder()
 
 			// Mock gorilla/mux vars
-			req = muxVars(req, map[string]string{"id": tt.policyID})
+			req = testutil.MuxVars(req, map[string]string{"id": tt.policyID})
 
 			api.Policies.GetPolicy(w, req)
 
@@ -646,7 +625,7 @@ func TestUpdatePolicy(t *testing.T) {
 			w := httptest.NewRecorder()
 
 			// Mock gorilla/mux vars
-			req = muxVars(req, map[string]string{"id": tt.policyID})
+			req = testutil.MuxVars(req, map[string]string{"id": tt.policyID})
 
 			// Set up context with API instance
 			ctx := context.WithValue(req.Context(), apiContextKey, api)
@@ -709,7 +688,7 @@ func TestDeletePolicy(t *testing.T) {
 			w := httptest.NewRecorder()
 
 			// Mock gorilla/mux vars
-			req = muxVars(req, map[string]string{"id": tt.policyID})
+			req = testutil.MuxVars(req, map[string]string{"id": tt.policyID})
 
 			handler := http.HandlerFunc(api.Policies.DeletePolicy)
 			handler(w, req)
@@ -960,7 +939,7 @@ func TestAddAndListGroupMembers(t *testing.T) {
 	req1 := httptest.NewRequest("POST", "/api/v1/groups/1/members", strings.NewReader(`{"peer_id": 1}`))
 	req1.Header.Set("Content-Type", "application/json")
 	w1 := httptest.NewRecorder()
-	req1 = muxVars(req1, map[string]string{"id": "1"})
+	req1 = testutil.MuxVars(req1, map[string]string{"id": "1"})
 	api.Groups.AddGroupMember(w1, req1)
 	if w1.Code != http.StatusCreated {
 		t.Errorf("expected status %d, got %d: %s", http.StatusCreated, w1.Code, w1.Body.String())
@@ -970,7 +949,7 @@ func TestAddAndListGroupMembers(t *testing.T) {
 	req2 := httptest.NewRequest("POST", "/api/v1/groups/1/members", strings.NewReader(`{"peer_id": 2}`))
 	req2.Header.Set("Content-Type", "application/json")
 	w2 := httptest.NewRecorder()
-	req2 = muxVars(req2, map[string]string{"id": "1"})
+	req2 = testutil.MuxVars(req2, map[string]string{"id": "1"})
 	api.Groups.AddGroupMember(w2, req2)
 	if w2.Code != http.StatusCreated {
 		t.Errorf("expected status %d, got %d: %s", http.StatusCreated, w2.Code, w2.Body.String())
@@ -979,7 +958,7 @@ func TestAddAndListGroupMembers(t *testing.T) {
 	// Test listing members
 	req := httptest.NewRequest("GET", "/api/v1/groups/1/members", nil)
 	w := httptest.NewRecorder()
-	req = muxVars(req, map[string]string{"id": "1"})
+	req = testutil.MuxVars(req, map[string]string{"id": "1"})
 	api.Groups.ListGroupMembers(w, req)
 
 	if w.Code != http.StatusOK {
@@ -1052,12 +1031,6 @@ func TestHelpers(t *testing.T) {
 		// This would require mocking gorilla/mux, so we'll skip it for now
 		// In a real test, you'd use gorilla/mux's NewRoute with vars
 	})
-}
-
-// muxVars is a helper to mock gorilla/mux vars
-func muxVars(r *http.Request, vars map[string]string) *http.Request {
-	// Use gorilla/mux's SetURLVars to properly set route variables
-	return mux.SetURLVars(r, vars)
 }
 
 // TestJSONDecoding tests JSON decoding edge cases

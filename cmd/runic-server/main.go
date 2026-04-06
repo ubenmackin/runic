@@ -172,12 +172,7 @@ func main() {
 
 	// Public routes are now registered in internal/api/api.go
 
-	// Health and Metrics endpoints (no authentication required)
-	r.HandleFunc("/health", api.HealthHandler).Methods("GET")
-	r.HandleFunc("/ready", api.ReadyHandler(database)).Methods("GET")
-	r.Handle("/metrics", api.MetricsHandler()).Methods("GET")
-
-	// Register all API routes (public routes like setup and protected routes are all handled in api.go)
+	// Register all API routes (public routes like setup, protected routes, and system endpoints like /health)
 	apiInstance := api.NewAPI(database, compiler)
 	apiInstance.RegisterRoutes(r, downloadsDir)
 

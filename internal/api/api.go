@@ -131,17 +131,22 @@ func (a *API) RegisterRoutes(r *mux.Router, downloadsDir string) {
 	// Apply RequestLogger middleware for tracing requests
 	r.Use(RequestLogger())
 
-	// Apply CSP middleware for frontend routes (not API routes)
-	// API routes have their own stricter CSP
-	r.Use(CSP())
-
+	// Health and Metrics endpoints (registered on root router for easy access)
+	r.HandleFunc("/health", HealthHandler).Methods("GET")
+	r.HandleFunc("/ready", ReadyHandler(a.DB)).Methods("GET")
+	r.Handle("/metrics", MetricsHandler()).Methods("GET")
 	// Create /api/v1 subrouter with common middleware
 	apiRouter := r.PathPrefix("/api/v1").Subrouter()
 	apiRouter.Use(CORS()) // CORS must be first to handle preflight OPTIONS requests
 	apiRouter.Use(apiMiddleware(a))
 	apiRouter.Use(metricsMiddleware)
-	// API routes get stricter CSP (overwrites the general CSP)
+	// API routes have their own stricter CSP
 	apiRouter.Use(CSPForAPI())
+
+	// Health, Readiness, and Metrics endpoints (no authentication required)
+	r.HandleFunc("/health", HealthHandler).Methods("GET")
+	r.HandleFunc("/ready", ReadyHandler(a.DB)).Methods("GET")
+	r.Handle("/metrics", MetricsHandler()).Methods("GET")
 
 	// Per-endpoint rate limiters
 	a.LoginRateLimiter = middleware.NewRateLimiter(5, time.Minute)

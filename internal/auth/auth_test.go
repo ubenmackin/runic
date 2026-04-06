@@ -6,8 +6,10 @@ package auth
 // - Manual token crafting (for TestEmptyClaims)
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
+	"runic/internal/testutil"
 	"strings"
 	"testing"
 	"time"
@@ -687,5 +689,161 @@ func TestMiddlewareResponseHeaders(t *testing.T) {
 
 	if w.Header().Get("X-Custom-Response") != "response-value" {
 		t.Error("expected custom response header to be preserved")
+	}
+}
+func TestInitJwtKey(t *testing.T) {
+	db, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	t.Run("random fallback", func(t *testing.T) {
+		err := InitJwtKey(ctx, db)
+		if err != nil {
+			t.Fatalf("InitJwtKey failed: %v", err)
+		}
+		JwtKeyMu.RLock()
+		defer JwtKeyMu.RUnlock()
+		if len(JwtKey) != 32 {
+			t.Errorf("expected 32 byte random key, got %d", len(JwtKey))
+		}
+	})
+
+	t.Run("from database", func(t *testing.T) {
+		expectedSecret := "dedicated-test-secret-123456789012"
+		_, err := db.Exec("INSERT INTO system_config (key, value) VALUES (?, ?)", "jwt_secret", expectedSecret)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		err = InitJwtKey(ctx, db)
+		if err != nil {
+			t.Fatalf("InitJwtKey failed: %v", err)
+		}
+		JwtKeyMu.RLock()
+		defer JwtKeyMu.RUnlock()
+		if string(JwtKey) != expectedSecret {
+			t.Errorf("expected secret %q, got %q", expectedSecret, string(JwtKey))
+		}
+	})
+}
+
+func TestTokenRevocation(t *testing.T) {
+	db, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	SetDB(db)
+	ctx := context.Background()
+
+	uniqueID := "test-revocation-id"
+	expiry := time.Now().Add(1 * time.Hour)
+
+	if IsRevoked(ctx, uniqueID) {
+		t.Error("expected token not to be revoked yet")
+	}
+
+	err := RevokeToken(ctx, uniqueID, expiry, "access")
+	if err != nil {
+		t.Fatalf("RevokeToken failed: %v", err)
+	}
+
+	if !IsRevoked(ctx, uniqueID) {
+		t.Error("expected token to be revoked")
+	}
+
+	t.Run("cleanup", func(t *testing.T) {
+		// Insert an already expired revoked token
+		past := time.Now().Add(-1 * time.Hour)
+		err := RevokeToken(ctx, "old-id", past, "access")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		err = CleanupExpiredTokens(ctx)
+		if err != nil {
+			t.Fatalf("CleanupExpiredTokens failed: %v", err)
+		}
+
+		if IsRevoked(ctx, "old-id") {
+			t.Error("expected old-id to be cleaned up")
+		}
+		if !IsRevoked(ctx, uniqueID) {
+			t.Error("expected uniqueID still to be revoked (not expired)")
+		}
+	})
+}
+
+func TestMiddlewareCookie(t *testing.T) {
+	db, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	SetDB(db)
+	
+	// Reset JWT key for consistent testing
+	JwtKeyMu.Lock()
+	JwtKey = []byte("test-key-123")
+	JwtKeyMu.Unlock()
+
+	username := "cookieuser"
+	token, err := GenerateToken(username, "admin", 1*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		u := UsernameFromContext(r.Context())
+		role := RoleFromContext(r.Context())
+		if u != username {
+			t.Errorf("expected username %q, got %q", username, u)
+		}
+		if role != "admin" {
+			t.Errorf("expected role admin, got %q", role)
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+
+	mw := Middleware(handler)
+
+	t.Run("valid cookie", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/", nil)
+		req.AddCookie(&http.Cookie{Name: "runic_access_token", Value: token})
+		w := httptest.NewRecorder()
+		mw.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Errorf("expected 200, got %d", w.Code)
+		}
+	})
+
+	t.Run("revoked token via cookie", func(t *testing.T) {
+		claims, _ := ValidateToken(token)
+		RevokeToken(context.Background(), claims.UniqueID, time.Now().Add(time.Hour), "access")
+
+		req := httptest.NewRequest("GET", "/", nil)
+		req.AddCookie(&http.Cookie{Name: "runic_access_token", Value: token})
+		w := httptest.NewRecorder()
+		mw.ServeHTTP(w, req)
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("expected 401 for revoked token, got %d", w.Code)
+		}
+	})
+}
+
+func TestContextHelpers(t *testing.T) {
+	ctx := context.Background()
+	
+	if UsernameFromContext(ctx) != "" {
+		t.Error("expected empty username for empty context")
+	}
+	
+	ctx = SetContextForTest(ctx, "editor", "alice")
+	if UsernameFromContext(ctx) != "alice" {
+		t.Errorf("expected alice, got %s", UsernameFromContext(ctx))
+	}
+	if RoleFromContext(ctx) != "editor" {
+		t.Errorf("expected editor, got %s", RoleFromContext(ctx))
+	}
+	
+	// Test UniqueIDFromContext indirectly via SetContextForTest (wait, SetContextForTest doesn't set ID)
+	ctx = context.WithValue(ctx, ctxKeyUniqueID, "uid-123")
+	if UniqueIDFromContext(ctx) != "uid-123" {
+		t.Errorf("expected uid-123, got %s", UniqueIDFromContext(ctx))
 	}
 }
