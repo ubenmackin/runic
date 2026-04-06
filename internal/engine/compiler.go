@@ -390,10 +390,11 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 				useIpset = ipsetName != ""
 			}
 
-			if isMulticastSource {
+			switch {
+			case isMulticastSource:
 				// Multicast source: use packet type matching for receiving multicast traffic
 				c.writeMulticastRule(rw, pol.Action, pol.TargetScope, hasDocker)
-			} else if useIpset {
+			case useIpset:
 				// Use ipset-based rules (single rule per port clause)
 				if serviceName == "Multicast" {
 					c.writeMulticastRule(rw, pol.Action, pol.TargetScope, hasDocker)
@@ -402,7 +403,7 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 						return "", err
 					}
 				}
-			} else {
+			default:
 				// Use individual rules (fallback for non-group or non-ipset peers)
 				var cidrs []string
 				var err error

@@ -214,5 +214,12 @@ func Handler() http.Handler {
 
 // HandlerFor returns an HTTP handler for a specific Metrics instance's registry.
 func (m *Metrics) HandlerFor() http.Handler {
-	return promhttp.HandlerFor(m.registry.(prometheus.Gatherer), promhttp.HandlerOpts{})
+	gatherer, ok := m.registry.(prometheus.Gatherer)
+	if !ok {
+		// Return a handler that returns an error
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "metrics registry does not implement Gatherer", http.StatusInternalServerError)
+		})
+	}
+	return promhttp.HandlerFor(gatherer, promhttp.HandlerOpts{})
 }
