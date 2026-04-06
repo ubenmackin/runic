@@ -13,6 +13,23 @@ import (
 	"runic/internal/models"
 )
 
+// Special target IDs for multicast groups
+const (
+	SpecialIDSubnetBroadcast  = 1 // __subnet_broadcast__
+	SpecialIDLimitedBroadcast = 2 // __limited_broadcast__
+	SpecialIDAllHosts         = 3 // __all_hosts__ (IGMP)
+	SpecialIDmDNS             = 4 // __mdns__
+	SpecialIDLoopback         = 5 // __loopback__
+	SpecialIDAnyIP            = 6 // __any_ip__
+	SpecialIDAllPeers         = 7 // __all_peers__
+	SpecialIDIGMPv3           = 8 // __igmpv3__
+)
+
+// isMulticastSpecialID returns true if the special target ID is a multicast group
+func isMulticastSpecialID(id int) bool {
+	return id == SpecialIDAllHosts || id == SpecialIDmDNS || id == SpecialIDIGMPv3
+}
+
 // Compiler compiles firewall policies into iptables-restore payloads.
 type Compiler struct {
 	db       *sql.DB
@@ -70,6 +87,54 @@ func (rw *ruleWriter) writeAction(action, chain, match string) {
 	case "LOG_DROP":
 		rw.logDrop(chain, match)
 	}
+}
+
+// formatEntityName returns a human-readable name for an entity (special, peer, or group).
+func (c *Compiler) formatEntityName(ctx context.Context, entityType string, entityID int) string {
+	switch entityType {
+	case "special":
+		return c.getSpecialDisplayName(entityID)
+	case "peer":
+		var hostname string
+		err := c.db.QueryRowContext(ctx, "SELECT hostname FROM peers WHERE id = ?", entityID).Scan(&hostname)
+		if err == sql.ErrNoRows {
+			return fmt.Sprintf("peer %d (not found)", entityID)
+		}
+		if err != nil {
+			return fmt.Sprintf("peer %d", entityID)
+		}
+		return hostname
+	case "group":
+		var name string
+		err := c.db.QueryRowContext(ctx, "SELECT name FROM groups WHERE id = ?", entityID).Scan(&name)
+		if err == sql.ErrNoRows {
+			return fmt.Sprintf("group %d (not found)", entityID)
+		}
+		if err != nil {
+			return fmt.Sprintf("group %d", entityID)
+		}
+		return name
+	default:
+		return fmt.Sprintf("%s %d", entityType, entityID)
+	}
+}
+
+// getSpecialDisplayName returns the human-readable name for a special target ID.
+func (c *Compiler) getSpecialDisplayName(specialID int) string {
+	names := map[int]string{
+		SpecialIDSubnetBroadcast:  "Subnet Broadcast",
+		SpecialIDLimitedBroadcast: "Limited Broadcast",
+		SpecialIDAllHosts:         "All Hosts (IGMP)",
+		SpecialIDmDNS:             "mDNS",
+		SpecialIDLoopback:         "Loopback",
+		SpecialIDAnyIP:            "Any IP",
+		SpecialIDAllPeers:         "All Peers",
+		SpecialIDIGMPv3:           "IGMPv3",
+	}
+	if name, ok := names[specialID]; ok {
+		return name
+	}
+	return fmt.Sprintf("special %d", specialID)
 }
 
 func (rw *ruleWriter) newline() {
@@ -131,12 +196,15 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 		CASE WHEN p.target_type = 'peer' AND p.target_id = ? THEN 1
 		     WHEN p.target_type = 'group' AND EXISTS (SELECT 1 FROM group_members WHERE group_id = p.target_id AND peer_id = ?) THEN 1
 		     WHEN p.target_type = 'special' AND p.source_type = 'group' AND EXISTS (SELECT 1 FROM group_members WHERE group_id = p.source_id AND peer_id = ?) THEN 1
-		     WHEN p.target_type = 'special' AND p.source_type = 'peer' AND p.source_id = ? THEN 1
-		     ELSE 0 END as is_target,
-		CASE WHEN p.source_type = 'peer' AND p.source_id = ? THEN 1
+WHEN p.target_type = 'special' AND p.source_type = 'peer' AND p.source_id = ? THEN 1
+ELSE 0 END as is_target,
+-- MC-EXCLUSION: Multicast special targets (3,4,8) are excluded from is_source
+-- because they represent destinations for outbound multicast, not sources.
+-- When Source is multicast special, the peer is the target (receiving multicast).
+CASE WHEN p.source_type = 'peer' AND p.source_id = ? THEN 1
 		     WHEN p.source_type = 'group' AND EXISTS (SELECT 1 FROM group_members WHERE group_id = p.source_id AND peer_id = ?) THEN 1
-		     WHEN p.source_type = 'special' AND p.target_type = 'group' AND EXISTS (SELECT 1 FROM group_members WHERE group_id = p.target_id AND peer_id = ?) THEN 1
-		     WHEN p.source_type = 'special' AND p.target_type = 'peer' AND p.target_id = ? THEN 1
+		WHEN p.source_type = 'special' AND p.target_type = 'group' AND p.source_id NOT IN (?, ?, ?) AND EXISTS (SELECT 1 FROM group_members WHERE group_id = p.target_id AND peer_id = ?) THEN 1
+			WHEN p.source_type = 'special' AND p.target_type = 'peer' AND p.source_id NOT IN (?, ?, ?) AND p.target_id = ? THEN 1
 		     ELSE 0 END as is_source
 		FROM policies p
 		WHERE p.enabled = 1 AND (
@@ -149,8 +217,8 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 			(p.source_type = 'special' AND p.target_type = 'group' AND EXISTS (SELECT 1 FROM group_members WHERE group_id = p.target_id AND peer_id = ?)) OR
 			(p.source_type = 'special' AND p.target_type = 'peer' AND p.target_id = ?)
 		)
-		ORDER BY p.priority ASC`,
-		peerID, peerID, peerID, peerID, peerID, peerID, peerID, peerID, peerID, peerID, peerID, peerID, peerID, peerID, peerID, peerID)
+ ORDER BY p.priority ASC`,
+		peerID, peerID, peerID, peerID, peerID, peerID, SpecialIDAllHosts, SpecialIDmDNS, SpecialIDIGMPv3, peerID, SpecialIDAllHosts, SpecialIDmDNS, SpecialIDIGMPv3, peerID, peerID, peerID, peerID, peerID, peerID, peerID, peerID, peerID)
 	if err != nil {
 		return "", fmt.Errorf("load policies: %w", err)
 	}
@@ -375,12 +443,13 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 		// Process as TARGET (Ingress traffic)
 		// Only emit if direction is 'both' or 'backward' (backward = target receives inbound from source)
 		if pol.IsTarget && (pol.Direction == "both" || pol.Direction == "backward") {
-			fmt.Fprintf(&buf, "# As Target (Ingress from %s %d)\n", pol.SourceType, pol.SourceID)
+			sourceName := c.formatEntityName(ctx, pol.SourceType, pol.SourceID)
+			fmt.Fprintf(&buf, "# As Target (Ingress from %s)\n", sourceName)
 
 			// MC-009: Multicast special targets as Source indicate the host receives multicast traffic
 			// When Source is a multicast special target (IDs 3=__all_hosts__, 4=__mdns__, 8=__igmpv3__),
 			// this means the host should receive multicast traffic from that group - GENERATE INPUT rules
-			isMulticastSource := pol.SourceType == "special" && (pol.SourceID == 3 || pol.SourceID == 4 || pol.SourceID == 8)
+			isMulticastSource := pol.SourceType == "special" && isMulticastSpecialID(pol.SourceID)
 
 			// Check if we should use ipset for this source
 			useIpset := hasIPSet && pol.SourceType == "group"
@@ -428,7 +497,8 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 		// Process as SOURCE (Egress traffic)
 		// Only emit if direction is 'both' or 'forward' (forward = source sends outbound to target)
 		if pol.IsSource && (pol.Direction == "both" || pol.Direction == "forward") {
-			fmt.Fprintf(&buf, "# As Source (Egress to %s %d)\n", pol.TargetType, pol.TargetID)
+			targetName := c.formatEntityName(ctx, pol.TargetType, pol.TargetID)
+			fmt.Fprintf(&buf, "# As Source (Egress to %s)\n", targetName)
 
 			// Check if we should use ipset for this target
 			useIpset := hasIPSet && pol.TargetType == "group"
@@ -441,11 +511,13 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 			if useIpset {
 				// Use ipset-based rules (single rule per port clause)
 				if serviceName == "Multicast" {
-					if pol.Action == "ACCEPT" {
+					// MC-012: Only generate OUTPUT multicast rule when Target is a multicast special target
+					isMulticastTarget := pol.TargetType == "special" && isMulticastSpecialID(pol.TargetID)
+					if isMulticastTarget && pol.Action == "ACCEPT" {
 						buf.WriteString("-A OUTPUT -d 224.0.0.0/4 -m pkttype --pkt-type multicast -j ACCEPT\n")
 					}
 				} else {
-					isMulticastTarget := pol.TargetType == "special" && (pol.TargetID == 3 || pol.TargetID == 4 || pol.TargetID == 8)
+					isMulticastTarget := pol.TargetType == "special" && isMulticastSpecialID(pol.TargetID)
 					if err := c.writeSourceRules(ctx, rw, pol, portClauses, true, ipsetName, nil, ipAddress, writeToHost, writeToDocker, noConntrack, isMulticastTarget); err != nil {
 						return "", err
 					}
@@ -463,12 +535,13 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 					return "", fmt.Errorf("resolve target for policy %s: %w", pol.Name, err)
 				}
 				if serviceName == "Multicast" {
-					// Source for multicast doesn't need strict port tracking, just let it output to multicast range 224.0.0.0/4
-					if pol.Action == "ACCEPT" {
+					// MC-012: Only generate OUTPUT multicast rule when Target is a multicast special target
+					isMulticastTarget := pol.TargetType == "special" && isMulticastSpecialID(pol.TargetID)
+					if isMulticastTarget && pol.Action == "ACCEPT" {
 						buf.WriteString("-A OUTPUT -d 224.0.0.0/4 -m pkttype --pkt-type multicast -j ACCEPT\n")
 					}
 				} else {
-					isMulticastTarget := pol.TargetType == "special" && (pol.TargetID == 3 || pol.TargetID == 4 || pol.TargetID == 8)
+					isMulticastTarget := pol.TargetType == "special" && isMulticastSpecialID(pol.TargetID)
 					if err := c.writeSourceRules(ctx, rw, pol, portClauses, false, "", cidrs, ipAddress, writeToHost, writeToDocker, noConntrack, isMulticastTarget); err != nil {
 						return "", err
 					}
@@ -758,7 +831,11 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 			buf.WriteString("# Forward (Source → Target)\n")
 			for _, targetCIDR := range targetCIDRs {
 				if serviceName == "Multicast" {
-					buf.WriteString("-A OUTPUT -d 224.0.0.0/4 -m pkttype --pkt-type multicast -j ACCEPT\n")
+					// MC-012: Only generate OUTPUT multicast rule when Target is a multicast special target
+					isMulticastTarget := targetType == "special" && isMulticastSpecialID(targetID)
+					if isMulticastTarget {
+						buf.WriteString("-A OUTPUT -d 224.0.0.0/4 -m pkttype --pkt-type multicast -j ACCEPT\n")
+					}
 					continue
 				}
 				for _, pc := range portClauses {
@@ -787,7 +864,7 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 			// MC-009: Multicast special targets as Source indicate receiving multicast traffic
 			// When Source is a multicast special target (IDs 3=__all_hosts__, 4=__mdns__, 8=__igmpv3__),
 			// this means the host should receive multicast traffic from that group - GENERATE INPUT rules
-			isMulticastSource := sourceType == "special" && (sourceID == 3 || sourceID == 4 || sourceID == 8)
+			isMulticastSource := sourceType == "special" && isMulticastSpecialID(sourceID)
 			if isMulticastSource {
 				// Multicast source: use packet type matching for receiving multicast traffic
 				if serviceName == "Multicast" {
@@ -868,7 +945,7 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 			// IG-002: Skip backward for IGMP (already handled above)
 			if !strings.EqualFold(serviceName, "IGMP") && (direction == "both" || direction == "backward") {
 				// MC-009: Multicast special targets as Source indicate receiving multicast traffic
-				isMulticastSource := sourceType == "special" && (sourceID == 3 || sourceID == 4 || sourceID == 8)
+				isMulticastSource := sourceType == "special" && isMulticastSpecialID(sourceID)
 				if isMulticastSource {
 					// Multicast source: use packet type matching for receiving multicast traffic
 					if serviceName == "Multicast" {

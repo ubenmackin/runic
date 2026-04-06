@@ -1836,7 +1836,7 @@ func TestMulticastPolicy_SourceIsMulticastSpecial_WithService(t *testing.T) {
 	}
 
 	// Verify that As Target section is present with multicast special source
-	if !strings.Contains(output, "# As Target (Ingress from special 4)") {
-		t.Errorf("expected 'As Target (Ingress from special 4)' comment, got:\n%s", output)
+	if !strings.Contains(output, "# As Target (Ingress from mDNS)") {
+		t.Errorf("expected 'As Target (Ingress from mDNS)' comment, got:\n%s", output)
 	}
 }
