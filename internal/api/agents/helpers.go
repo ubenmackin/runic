@@ -6,8 +6,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/http"
-	"os"
-	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -15,14 +13,6 @@ import (
 	"runic/internal/common"
 	"runic/internal/db"
 )
-
-// getEnv gets an environment variable or returns a default.
-func getEnv(key, defaultVal string) string {
-	if val := strings.TrimSpace(os.Getenv(key)); val != "" {
-		return val
-	}
-	return defaultVal
-}
 
 // GenerateHMACKey generates a cryptographically secure random HMAC key.
 func GenerateHMACKey() (string, error) {

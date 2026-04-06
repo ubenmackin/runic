@@ -1,3 +1,4 @@
+// Package apply provides the application applier.
 package apply
 
 import (
@@ -50,7 +51,9 @@ func ApplyBundle(ctx context.Context, bundle models.BundleResponse, hmacKey, con
 	tmpPath := tmpFile.Name()
 
 	defer func() {
-		os.Remove(tmpPath)
+		if err := os.Remove(tmpPath); err != nil {
+			log.Warn("remove err", "err", err)
+		}
 	}()
 
 	if _, err := tmpFile.WriteString(bundle.Rules); err != nil {
@@ -136,7 +139,7 @@ func CacheBundle(rules string) error {
 	return nil
 }
 
-// scheduleRevert sets up a delayed revert that can be cancelled.
+// scheduleRevert sets up a delayed revert that can be canceled.
 // Uses time.AfterFunc to avoid launching a bare goroutine.
 func scheduleRevert(ctx context.Context, backup string, delay time.Duration, controlPlaneURL, token, version string) context.CancelFunc {
 	ctx, cancel := context.WithCancel(ctx)
@@ -144,7 +147,7 @@ func scheduleRevert(ctx context.Context, backup string, delay time.Duration, con
 	timer := time.AfterFunc(delay, func() {
 		select {
 		case <-ctx.Done():
-			// Cancelled — apply was confirmed
+			// Canceled — apply was confirmed
 			return
 		default:
 			log.Warn("Auto-revert triggered, restoring previous rules", "delay", delay)
@@ -180,10 +183,16 @@ func revertRules(backup string) error {
 	}
 	tmpPath := tmp.Name()
 
-	defer os.Remove(tmpPath)
+	defer func() {
+		if err := os.Remove(tmpPath); err != nil {
+			log.Warn("remove err", "err", err)
+		}
+	}()
 
 	if _, err := tmp.WriteString(backup); err != nil {
-		tmp.Close()
+		if err := tmp.Close(); err != nil {
+			log.Warn("Failed to close temporary script file", "error", err)
+		}
 		return fmt.Errorf("write backup: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
@@ -225,6 +234,7 @@ func validateRules(content string) error {
 	// Total rule count is reasonable (>0 and <10000)
 	lines := strings.Split(content, "\n")
 	validLineCount := 0
+	malformedRegex := regexp.MustCompile(`^[A-Z].*`)
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
@@ -242,8 +252,7 @@ func validateRules(content string) error {
 			validLineCount++
 		} else if len(trimmed) > 0 {
 			// Contains obviously malformed line
-			matched, _ := regexp.MatchString(`^[A-Z].*`, trimmed)
-			if !matched {
+			if !malformedRegex.MatchString(trimmed) {
 				return fmt.Errorf("possibly malformed line: %s", trimmed[:min(50, len(trimmed))])
 			}
 			validLineCount++
@@ -280,7 +289,11 @@ func smokeTest(ctx context.Context, controlPlaneURL, token, version string) erro
 	if err != nil {
 		return fmt.Errorf("smoke test request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			log.Warn("close err", "err", err)
+		}
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("smoke test returned status %d", resp.StatusCode)

@@ -1,3 +1,4 @@
+// Package peers provides API peers handlers.
 package peers
 
 import (
@@ -87,7 +88,11 @@ func (h *Handler) GetPeers(w http.ResponseWriter, r *http.Request) {
 		common.RespondError(w, http.StatusInternalServerError, "failed to query peers")
 		return
 	}
-	defer rows.Close()
+	defer func() {
+		if cErr := rows.Close(); cErr != nil {
+			log.Warn("Failed to close rows", "error", cErr)
+		}
+	}()
 
 	var peers []Peer
 	for rows.Next() {

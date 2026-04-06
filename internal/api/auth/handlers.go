@@ -1,3 +1,4 @@
+// Package auth provides authentication handlers.
 package auth
 
 import (
@@ -165,7 +166,9 @@ func (h *Handler) HandleSetupPOST(w http.ResponseWriter, r *http.Request) {
 	committed := false
 	defer func() {
 		if !committed {
-			tx.Rollback()
+			if err := tx.Rollback(); err != nil {
+				log.Warn("rollback err", "err", err)
+			}
 		}
 	}()
 

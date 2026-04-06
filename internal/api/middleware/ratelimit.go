@@ -1,3 +1,4 @@
+// Package middleware provides API middlewares.
 package middleware
 
 import (
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"runic/internal/common/constants"
+	"runic/internal/common/log"
 )
 
 // RateLimiter implements a configurable in-memory rate limiter using a sliding window algorithm.
@@ -101,7 +103,9 @@ func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 		if err := rl.Check(ip); err != nil {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusTooManyRequests)
-			json.NewEncoder(w).Encode(map[string]string{"error": "rate limit exceeded"})
+			if err := json.NewEncoder(w).Encode(map[string]string{"error": "rate limit exceeded"}); err != nil {
+				log.Warn("Failed to encode rate limit error", "error", err)
+			}
 			return
 		}
 		next.ServeHTTP(w, r)

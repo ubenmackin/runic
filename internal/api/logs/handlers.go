@@ -1,3 +1,4 @@
+// Package logs provides API logs handlers.
 package logs
 
 import (
@@ -161,7 +162,11 @@ func (h *Handler) GetLogs(w http.ResponseWriter, r *http.Request) {
 		common.RespondError(w, http.StatusInternalServerError, "failed to query logs")
 		return
 	}
-	defer rows.Close()
+	defer func() {
+		if cErr := rows.Close(); cErr != nil {
+			runiclog.Warn("close err", "err", cErr)
+		}
+	}()
 
 	var logsData []models.LogEvent
 	for rows.Next() {

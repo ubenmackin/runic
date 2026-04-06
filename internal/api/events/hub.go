@@ -1,3 +1,4 @@
+// Package events provides events functionality.
 package events
 
 import (
@@ -41,7 +42,7 @@ func (h *SSEHub) NotifyBundleUpdated(hostID string, version string) {
 	h.mu.RUnlock()
 	if ok {
 		select {
-		case ch <- fmt.Sprintf("event: bundle_updated\ndata: {\"version\":\"%s\"}\n\n", version):
+		case ch <- fmt.Sprintf("event: bundle_updated\ndata: {\"version\":%q}\n\n", version):
 		default: // agent not listening, will pull on poll
 		}
 	}

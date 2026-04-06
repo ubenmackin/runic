@@ -1,3 +1,4 @@
+// Package integrationtest provides integration tests.
 package integrationtest
 
 import (
@@ -40,12 +41,16 @@ func NewTestAPIServer(t *testing.T) (*httptest.Server, func()) {
 		t.Fatal(err)
 	}
 	dbPath := f.Name()
-	f.Close()
+	if err := f.Close(); err != nil {
+		t.Log(err)
+	}
 
 	// Open the database
 	database, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
-		os.Remove(dbPath)
+		if rErr := os.Remove(dbPath); rErr != nil {
+			t.Log(rErr)
+		}
 		t.Fatal(err)
 	}
 
@@ -55,8 +60,12 @@ func NewTestAPIServer(t *testing.T) (*httptest.Server, func()) {
 
 	// Execute schema
 	if _, err := database.Exec(db.Schema()); err != nil {
-		database.Close()
-		os.Remove(dbPath)
+		if err := database.Close(); err != nil {
+			t.Log(err)
+		}
+		if rErr := os.Remove(dbPath); rErr != nil {
+			t.Log(rErr)
+		}
 		t.Fatal(err)
 	}
 
@@ -72,15 +81,23 @@ func NewTestAPIServer(t *testing.T) (*httptest.Server, func()) {
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		)
 	`); err != nil {
-		database.Close()
-		os.Remove(dbPath)
+		if err := database.Close(); err != nil {
+			t.Log(err)
+		}
+		if rErr := os.Remove(dbPath); rErr != nil {
+			t.Log(rErr)
+		}
 		t.Fatal(err)
 	}
 
 	// Create index for pending_changes
 	if _, err := database.Exec("CREATE INDEX IF NOT EXISTS idx_pending_changes_peer ON pending_changes(peer_id)"); err != nil {
-		database.Close()
-		os.Remove(dbPath)
+		if err := database.Close(); err != nil {
+			t.Log(err)
+		}
+		if rErr := os.Remove(dbPath); rErr != nil {
+			t.Log(rErr)
+		}
 		t.Fatal(err)
 	}
 
@@ -90,6 +107,7 @@ func NewTestAPIServer(t *testing.T) (*httptest.Server, func()) {
 	if err := auth.InitJwtKey(ctx, database); err != nil {
 		// If it fails, the package should have generated a random key anyway
 		// Continue - auth.InitJwtKey generates a fallback key on error
+		t.Logf("InitJwtKey fallback utilized: %v", err)
 	}
 
 	// Create compiler for rule compilation
@@ -106,8 +124,12 @@ func NewTestAPIServer(t *testing.T) (*httptest.Server, func()) {
 
 	// Cleanup function - NOTE: caller should call server.Close() FIRST
 	cleanup := func() {
-		database.Close()
-		os.Remove(dbPath)
+		if cErr := database.Close(); cErr != nil {
+			t.Log(cErr)
+		}
+		if rErr := os.Remove(dbPath); rErr != nil {
+			t.Log(rErr)
+		}
 	}
 
 	return server, cleanup

@@ -594,7 +594,7 @@ func TestPolicyParsingAndValidation(t *testing.T) {
 				return peerID, nil
 			},
 			wantErr:     true,
-			errContains: "sql: no rows in result set",
+			errContains: "service 99999 not found",
 		},
 	}
 

@@ -1,3 +1,4 @@
+// Package engine provides policy compilation and resolution.
 package engine
 
 import (
@@ -96,11 +97,11 @@ func (rw *ruleWriter) writeStandardRules(hasDocker bool, controlPlanePort string
 	// Control Plane Communication
 	if controlPlanePort != "" {
 		rw.buf.WriteString("# --- Standard: Control Plane Communication ---\n")
-		rw.buf.WriteString(fmt.Sprintf("# Allows agent to communicate with control plane on port %s\n", controlPlanePort))
-		rw.buf.WriteString(fmt.Sprintf("-A INPUT -p tcp --dport %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", controlPlanePort))
-		rw.buf.WriteString(fmt.Sprintf("-A OUTPUT -p tcp --sport %s -m conntrack --ctstate ESTABLISHED -j ACCEPT\n", controlPlanePort))
-		rw.buf.WriteString(fmt.Sprintf("-A OUTPUT -p tcp --dport %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", controlPlanePort))
-		rw.buf.WriteString(fmt.Sprintf("-A INPUT -p tcp --sport %s -m conntrack --ctstate ESTABLISHED -j ACCEPT\n", controlPlanePort))
+		fmt.Fprintf(rw.buf, "# Allows agent to communicate with control plane on port %s\n", controlPlanePort)
+		fmt.Fprintf(rw.buf, "-A INPUT -p tcp --dport %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", controlPlanePort)
+		fmt.Fprintf(rw.buf, "-A OUTPUT -p tcp --sport %s -m conntrack --ctstate ESTABLISHED -j ACCEPT\n", controlPlanePort)
+		fmt.Fprintf(rw.buf, "-A OUTPUT -p tcp --dport %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", controlPlanePort)
+		fmt.Fprintf(rw.buf, "-A INPUT -p tcp --sport %s -m conntrack --ctstate ESTABLISHED -j ACCEPT\n", controlPlanePort)
 		rw.buf.WriteString("\n")
 	}
 
@@ -153,7 +154,11 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("load policies: %w", err)
 	}
-	defer rows.Close()
+	defer func() {
+		if err := rows.Close(); err != nil {
+			log.Warn("close err", "err", err)
+		}
+	}()
 
 	var policies []policyInfo
 	for rows.Next() {
@@ -170,14 +175,10 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 		return "", err
 	}
 
-	// 2b. Collect unique group IDs used in policies (source or target) for ipset generation
-	type groupRef struct {
-		ID   int
-		Name string
-	}
 	groupIDToName := make(map[int]string)
 	var groupOrder []int // preserve insertion order
-	for _, pol := range policies {
+	for i := range policies {
+		pol := &policies[i]
 		if pol.SourceType == "group" {
 			if _, exists := groupIDToName[pol.SourceID]; !exists {
 				var groupName string
@@ -202,7 +203,8 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 
 	// 2a. Pre-load all services referenced by these policies (batch load)
 	serviceIDs := make(map[int]bool)
-	for _, p := range policies {
+	for i := range policies {
+		p := &policies[i]
 		serviceIDs[p.ServiceID] = true
 	}
 	services := make(map[int]struct{ Name, Ports, SourcePorts, Protocol string })
@@ -225,7 +227,11 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("batch load services: %w", err)
 		}
-		defer rows.Close()
+		defer func() {
+			if err := rows.Close(); err != nil {
+				log.Warn("close err", "err", err)
+			}
+		}()
 
 		for rows.Next() {
 			var sid int
@@ -279,20 +285,20 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 
 	// Header comment
 	buf.WriteString("# Runic rule bundle\n")
-	buf.WriteString(fmt.Sprintf("# Host: %s\n", hostname))
-	buf.WriteString(fmt.Sprintf("# Generated: %s\n", now))
-	buf.WriteString(fmt.Sprintf("# Policies: %d\n", len(policies)))
+	fmt.Fprintf(&buf, "# Host: %s\n", hostname)
+	fmt.Fprintf(&buf, "# Generated: %s\n", now)
+	fmt.Fprintf(&buf, "# Policies: %d\n", len(policies))
 	if hasIPSet && len(ipsets) > 0 {
-		buf.WriteString(fmt.Sprintf("# Ipsets: %d\n", len(ipsets)))
+		fmt.Fprintf(&buf, "# Ipsets: %d\n", len(ipsets))
 	}
 
 	// Ipset definitions (before *filter)
 	if hasIPSet && len(ipsets) > 0 {
 		buf.WriteString("\n# --- Ipset Definitions ---\n")
 		for _, is := range ipsets {
-			buf.WriteString(fmt.Sprintf("create %s %s family inet\n", is.Name, is.SetType))
+			fmt.Fprintf(&buf, "create %s %s family inet\n", is.Name, is.SetType)
 			for _, member := range is.Members {
-				buf.WriteString(fmt.Sprintf("add %s %s\n", is.Name, member))
+				fmt.Fprintf(&buf, "add %s %s\n", is.Name, member)
 			}
 			buf.WriteString("\n")
 		}
@@ -324,12 +330,13 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 	// Docker: Control Plane Communication
 	if hasDocker && controlPlanePort != "" {
 		buf.WriteString("# --- Docker: Control Plane Communication ---\n")
-		buf.WriteString(fmt.Sprintf("-A DOCKER-USER -p tcp --dport %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", controlPlanePort))
+		fmt.Fprintf(&buf, "-A DOCKER-USER -p tcp --dport %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", controlPlanePort)
 		buf.WriteString("\n")
 	}
 
 	// Policy rules
-	for _, pol := range policies {
+	for i := range policies {
+		pol := &policies[i]
 		writeToHost := pol.TargetScope == "host" || pol.TargetScope == "both"
 		writeToDocker := hasDocker && (pol.TargetScope == "docker" || pol.TargetScope == "both")
 
@@ -352,12 +359,12 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 			}
 		}
 
-		buf.WriteString(fmt.Sprintf("# --- Policy: %s ---\n", pol.Name))
+		fmt.Fprintf(&buf, "# --- Policy: %s ---\n", pol.Name)
 
 		// Process as TARGET (Ingress traffic)
 		// Only emit if direction is 'both' or 'backward' (backward = target receives inbound from source)
 		if pol.IsTarget && (pol.Direction == "both" || pol.Direction == "backward") {
-			buf.WriteString(fmt.Sprintf("# As Target (Ingress from %s %d)\n", pol.SourceType, pol.SourceID))
+			fmt.Fprintf(&buf, "# As Target (Ingress from %s %d)\n", pol.SourceType, pol.SourceID)
 
 			// Check if we should use ipset for this source
 			useIpset := hasIPSet && pol.SourceType == "group"
@@ -401,7 +408,7 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 		// Process as SOURCE (Egress traffic)
 		// Only emit if direction is 'both' or 'forward' (forward = source sends outbound to target)
 		if pol.IsSource && (pol.Direction == "both" || pol.Direction == "forward") {
-			buf.WriteString(fmt.Sprintf("# As Source (Egress to %s %d)\n", pol.TargetType, pol.TargetID))
+			fmt.Fprintf(&buf, "# As Source (Egress to %s %d)\n", pol.TargetType, pol.TargetID)
 
 			// Check if we should use ipset for this target
 			useIpset := hasIPSet && pol.TargetType == "group"
@@ -489,7 +496,7 @@ func (c *Compiler) writeMulticastRule(rw *ruleWriter, action string, targetScope
 func (c *Compiler) writeTargetRules(
 	ctx context.Context,
 	rw *ruleWriter,
-	pol policyInfo,
+	pol *policyInfo,
 	portClauses []PortClause,
 	useIpset bool,
 	ipsetName string,
@@ -550,7 +557,7 @@ func (c *Compiler) writeTargetRules(
 func (c *Compiler) writeSourceRules(
 	ctx context.Context,
 	rw *ruleWriter,
-	pol policyInfo,
+	pol *policyInfo,
 	portClauses []PortClause,
 	useIpset bool,
 	ipsetName string,
@@ -675,8 +682,8 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 						outputPortMatch = pc.SrcPortMatch + " " + outputPortMatch
 					}
 					inputPortMatch := invertPortMatch(pc.PortMatch, pc.SrcPortMatch)
-					buf.WriteString(fmt.Sprintf("-A OUTPUT -d %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", targetCIDR, pc.Protocol, outputPortMatch))
-					buf.WriteString(fmt.Sprintf("-A INPUT -s %s -p %s %s -m conntrack --ctstate ESTABLISHED -j ACCEPT\n", targetCIDR, pc.Protocol, inputPortMatch))
+					fmt.Fprintf(&buf, "-A OUTPUT -d %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", targetCIDR, pc.Protocol, outputPortMatch)
+					fmt.Fprintf(&buf, "-A INPUT -s %s -p %s %s -m conntrack --ctstate ESTABLISHED -j ACCEPT\n", targetCIDR, pc.Protocol, inputPortMatch)
 				}
 			}
 		}
@@ -697,8 +704,8 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 						inputPortMatch = pc.SrcPortMatch + " " + inputPortMatch
 					}
 					outputPortMatch := invertPortMatch(pc.PortMatch, pc.SrcPortMatch)
-					buf.WriteString(fmt.Sprintf("-A INPUT -s %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", sourceCIDR, pc.Protocol, inputPortMatch))
-					buf.WriteString(fmt.Sprintf("-A OUTPUT -d %s -p %s %s -m conntrack --ctstate ESTABLISHED -j ACCEPT\n", sourceCIDR, pc.Protocol, outputPortMatch))
+					fmt.Fprintf(&buf, "-A INPUT -s %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", sourceCIDR, pc.Protocol, inputPortMatch)
+					fmt.Fprintf(&buf, "-A OUTPUT -d %s -p %s %s -m conntrack --ctstate ESTABLISHED -j ACCEPT\n", sourceCIDR, pc.Protocol, outputPortMatch)
 				}
 			}
 		}
@@ -720,7 +727,7 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 					if pc.SrcPortMatch != "" {
 						outputPortMatch = pc.SrcPortMatch + " " + outputPortMatch
 					}
-					buf.WriteString(fmt.Sprintf("-A DOCKER-USER -d %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", targetCIDR, pc.Protocol, outputPortMatch))
+					fmt.Fprintf(&buf, "-A DOCKER-USER -d %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", targetCIDR, pc.Protocol, outputPortMatch)
 				}
 			}
 		}
@@ -736,7 +743,7 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 					if pc.SrcPortMatch != "" {
 						inputPortMatch = pc.SrcPortMatch + " " + inputPortMatch
 					}
-					buf.WriteString(fmt.Sprintf("-A DOCKER-USER -s %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", sourceCIDR, pc.Protocol, inputPortMatch))
+					fmt.Fprintf(&buf, "-A DOCKER-USER -s %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", sourceCIDR, pc.Protocol, inputPortMatch)
 				}
 			}
 		}
@@ -802,7 +809,11 @@ func (c *Compiler) RecompileAffectedPeers(ctx context.Context, groupID int) erro
 	if err != nil {
 		return fmt.Errorf("find affected policies: %w", err)
 	}
-	defer rows.Close()
+	defer func() {
+		if err := rows.Close(); err != nil {
+			log.Warn("close err", "err", err)
+		}
+	}()
 
 	var policyIDs []int
 	for rows.Next() {
@@ -846,36 +857,52 @@ func (c *Compiler) GetAffectedPeersByPolicy(ctx context.Context, policyID int) (
 	}
 
 	peers := make(map[int]bool)
-	if srcType == "peer" {
+	switch srcType {
+	case "peer":
 		peers[srcID] = true
-	} else if srcType == "group" {
+	case "group":
 		rows, err := c.db.QueryContext(ctx, "SELECT peer_id FROM group_members WHERE group_id = ?", srcID)
 		if err != nil {
 			return nil, fmt.Errorf("query source group members for policy %d: %w", policyID, err)
 		}
 		if rows != nil {
-			defer rows.Close()
+			defer func() {
+				if cErr := rows.Close(); cErr != nil {
+					log.Warn("close err", "err", cErr)
+				}
+			}()
 			for rows.Next() {
 				var p int
-				rows.Scan(&p)
-				peers[p] = true
+				if err := rows.Scan(&p); err == nil {
+					peers[p] = true
+				} else {
+					log.Warn("Failed to scan peer from group", "error", err)
+				}
 			}
 		}
 	}
 
-	if tgtType == "peer" {
+	switch tgtType {
+	case "peer":
 		peers[tgtID] = true
-	} else if tgtType == "group" {
+	case "group":
 		rows, err := c.db.QueryContext(ctx, "SELECT peer_id FROM group_members WHERE group_id = ?", tgtID)
 		if err != nil {
 			return nil, fmt.Errorf("query target group members for policy %d: %w", policyID, err)
 		}
 		if rows != nil {
-			defer rows.Close()
+			defer func() {
+				if cErr := rows.Close(); cErr != nil {
+					log.Warn("close err", "err", cErr)
+				}
+			}()
 			for rows.Next() {
 				var p int
-				rows.Scan(&p)
-				peers[p] = true
+				if err := rows.Scan(&p); err != nil {
+					log.Warn("Failed to scan peer from target group", "error", err)
+				} else {
+					peers[p] = true
+				}
 			}
 		}
 	}

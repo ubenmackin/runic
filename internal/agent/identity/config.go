@@ -1,3 +1,4 @@
+// Package identity handles agent authentication.
 package identity
 
 import (

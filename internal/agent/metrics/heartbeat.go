@@ -1,3 +1,4 @@
+// Package metrics handles agent telemetry.
 package metrics
 
 import (
@@ -28,7 +29,11 @@ func SendHeartbeat(ctx context.Context, client common.HTTPClient, controlPlaneUR
 	if err != nil {
 		return fmt.Errorf("heartbeat failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if cErr := resp.Body.Close(); cErr != nil {
+			fmt.Printf("Failed to close body: %v\n", cErr)
+		}
+	}()
 
 	var result map[string]interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {

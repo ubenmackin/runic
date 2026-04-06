@@ -1,3 +1,4 @@
+// Package pending provides API pending handlers.
 package pending
 
 import (
@@ -280,7 +281,9 @@ func (h *Handler) ApplyPeerPendingBundle(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Delete any pending preview
-	db.DeletePendingBundlePreview(ctx, database, peerID)
+	if err := db.DeletePendingBundlePreview(ctx, database, peerID); err != nil {
+		log.WarnContext(ctx, "Failed to delete pending bundle preview", "error", err)
+	}
 
 	// Notify via SSE (use hostname as the host_id for SSE)
 	h.SSEHub.NotifyBundleUpdated("host-"+hostname, bundle.Version)
@@ -347,7 +350,11 @@ func (h *Handler) PushAllRules(w http.ResponseWriter, r *http.Request) {
 		common.InternalError(w)
 		return
 	}
-	defer rows.Close()
+	defer func() {
+		if cErr := rows.Close(); cErr != nil {
+			log.Warn("Failed to close rows", "error", cErr)
+		}
+	}()
 
 	type peerInfo struct {
 		id       int
@@ -471,7 +478,9 @@ func (h *Handler) HandlePushJobSSE(w http.ResponseWriter, r *http.Request) {
 			log.ErrorContext(r.Context(), "failed to marshal initial push job state", "error", err)
 			return
 		}
-		fmt.Fprintf(w, "event: init\ndata: %s\n\n", data)
+		if _, err := fmt.Fprintf(w, "event: init\ndata: %s\n\n", data); err != nil {
+			log.WarnContext(r.Context(), "Failed to write SSE init", "error", err)
+		}
 		flusher.Flush()
 	}
 
@@ -485,7 +494,9 @@ func (h *Handler) HandlePushJobSSE(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return
 			}
-			fmt.Fprint(w, event)
+			if _, err := fmt.Fprint(w, event); err != nil {
+				log.WarnContext(r.Context(), "Failed to write SSE event", "error", err)
+			}
 			flusher.Flush()
 
 			// Check if this was a completion event by parsing the event type explicitly
@@ -528,7 +539,9 @@ func applyBundleForPeer(ctx context.Context, database db.DB, compiler *engine.Co
 	if err := db.ClearPendingChangesForPeer(ctx, database, peerID); err != nil {
 		log.WarnContext(ctx, "failed to clear pending changes for peer", "peer_id", peerID, "error", err)
 	}
-	db.DeletePendingBundlePreview(ctx, database, peerID)
+	if err := db.DeletePendingBundlePreview(ctx, database, peerID); err != nil {
+		log.WarnContext(ctx, "Failed to delete pending bundle preview", "error", err)
+	}
 
 	// Notify via SSE
 	sseHub.NotifyBundleUpdated("host-"+hostname, bundle.Version)

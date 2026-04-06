@@ -7,8 +7,9 @@ import (
 	"os"
 	"testing"
 
-	_ "github.com/mattn/go-sqlite3"
 	"runic/internal/db"
+
+	_ "github.com/mattn/go-sqlite3"
 )
 
 // BenchmarkCompileSmall tests compilation with ~5 peers and ~5 policies.

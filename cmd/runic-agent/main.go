@@ -57,7 +57,7 @@ func main() {
 	log.Printf("Starting runic-agent version %s", core.Version)
 
 	if err := a.Run(ctx); err != nil {
-		log.Fatalf("agent error: %v", err)
+		log.Printf("agent error: %v", err)
 	}
 }
 
@@ -69,15 +69,21 @@ func uninstallAgent(purge bool) error {
 
 	// Stop and disable service
 	fmt.Println("Stopping runic-agent service...")
-	exec.Command("systemctl", "stop", "runic-agent").Run()
-	exec.Command("systemctl", "disable", "runic-agent").Run()
+	if err := exec.Command("systemctl", "stop", "runic-agent").Run(); err != nil {
+		fmt.Printf("Warning: failed to stop service: %v\n", err)
+	}
+	if err := exec.Command("systemctl", "disable", "runic-agent").Run(); err != nil {
+		fmt.Printf("Warning: failed to disable service: %v\n", err)
+	}
 
 	// Remove service file
 	fmt.Println("Removing systemd service file...")
 	if err := os.Remove("/etc/systemd/system/runic-agent.service"); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to remove service file: %w", err)
 	}
-	exec.Command("systemctl", "daemon-reload").Run()
+	if err := exec.Command("systemctl", "daemon-reload").Run(); err != nil {
+		fmt.Printf("Warning: failed to daemon-reload: %v\n", err)
+	}
 
 	// Remove binary
 	fmt.Println("Removing runic-agent binary...")
@@ -88,8 +94,12 @@ func uninstallAgent(purge bool) error {
 	// Optionally remove config
 	if purge {
 		fmt.Println("Removing config files...")
-		os.RemoveAll("/etc/runic-agent")
-		os.RemoveAll("/var/log/runic")
+		if err := os.RemoveAll("/etc/runic-agent"); err != nil {
+			fmt.Printf("Warning: failed to remove /etc/runic-agent: %v\n", err)
+		}
+		if err := os.RemoveAll("/var/log/runic"); err != nil {
+			fmt.Printf("Warning: failed to remove /var/log/runic: %v\n", err)
+		}
 	} else {
 		fmt.Println("Config files preserved. Use --purge to remove them.")
 	}

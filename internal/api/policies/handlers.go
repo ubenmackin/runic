@@ -1,3 +1,4 @@
+// Package policies provides API policy handlers.
 package policies
 
 import (
@@ -32,7 +33,11 @@ func (h *Handler) ListPolicies(w http.ResponseWriter, r *http.Request) {
 		common.RespondError(w, http.StatusInternalServerError, "failed to query policies")
 		return
 	}
-	defer rows.Close()
+	defer func() {
+		if cErr := rows.Close(); cErr != nil {
+			log.Warn("Failed to close rows", "error", cErr)
+		}
+	}()
 
 	type policyResp struct {
 		ID          int    `json:"id"`
@@ -418,7 +423,9 @@ func (h *Handler) PolicyPreview(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"data": map[string]interface{}{"rules": rules}})
+	if err := json.NewEncoder(w).Encode(map[string]interface{}{"data": map[string]interface{}{"rules": rules}}); err != nil {
+		log.Warn("Failed to encode preview response", "error", err)
+	}
 }
 
 func (h *Handler) PatchPolicy(w http.ResponseWriter, r *http.Request) {
@@ -483,7 +490,11 @@ func (h *Handler) ListSpecialTargets(w http.ResponseWriter, r *http.Request) {
 		common.RespondError(w, http.StatusInternalServerError, "failed to query special targets")
 		return
 	}
-	defer rows.Close()
+	defer func() {
+		if cErr := rows.Close(); cErr != nil {
+			log.Warn("Failed to close rows", "error", cErr)
+		}
+	}()
 
 	type specialTargetResp struct {
 		ID          int    `json:"id"`

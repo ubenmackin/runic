@@ -1,3 +1,4 @@
+// Package common provides shared utilities and constants.
 package common
 
 import (
@@ -20,7 +21,7 @@ func CheckPeerDeleteConstraints(ctx context.Context, database db.Querier, peerID
 		ORDER BY id LIMIT 1`, peerID, peerID,
 	).Scan(&policyName)
 	if err == nil {
-		return fmt.Errorf("Cannot delete peer — it is explicitly targeted in policy '%s'", policyName)
+		return fmt.Errorf("cannot delete peer — it is explicitly targeted in policy '%s'", policyName)
 	}
 
 	// Check 2: Group Policy
@@ -30,7 +31,7 @@ func CheckPeerDeleteConstraints(ctx context.Context, database db.Querier, peerID
 		WHERE gm.peer_id = ? ORDER BY p.id LIMIT 1
 	`, peerID).Scan(&policyName)
 	if err == nil {
-		return fmt.Errorf("Cannot delete peer — it is in group used by policy '%s'", policyName)
+		return fmt.Errorf("cannot delete peer — it is in group used by policy '%s'", policyName)
 	}
 
 	return nil
@@ -46,7 +47,7 @@ func CheckGroupDeleteConstraints(ctx context.Context, database db.Querier, group
 		ORDER BY id LIMIT 1`, groupID, groupID,
 	).Scan(&policyName)
 	if err == nil {
-		return fmt.Errorf("Cannot delete group — it is used by policy '%s'", policyName)
+		return fmt.Errorf("cannot delete group — it is used by policy '%s'", policyName)
 	}
 
 	return nil

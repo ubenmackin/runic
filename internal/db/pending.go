@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 
+	"runic/internal/common/log"
 	"runic/internal/models"
 )
 
@@ -26,12 +27,18 @@ func GetPendingChangesForPeer(ctx context.Context, database Querier, peerID int)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		if cerr := rows.Close(); cerr != nil {
+			log.WarnContext(ctx, "failed to close rows", "error", cerr)
+		}
+	}()
 
 	var changes []models.PendingChange
 	for rows.Next() {
 		var c models.PendingChange
-		rows.Scan(&c.ID, &c.PeerID, &c.ChangeType, &c.ChangeID, &c.ChangeAction, &c.ChangeSummary, &c.CreatedAt)
+		if err := rows.Scan(&c.ID, &c.PeerID, &c.ChangeType, &c.ChangeID, &c.ChangeAction, &c.ChangeSummary, &c.CreatedAt); err != nil {
+			return nil, err
+		}
 		changes = append(changes, c)
 	}
 	return changes, rows.Err()
@@ -49,12 +56,18 @@ func GetPeersWithPendingChanges(ctx context.Context, database Querier) ([]int, e
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		if cerr := rows.Close(); cerr != nil {
+			log.WarnContext(ctx, "failed to close rows", "error", cerr)
+		}
+	}()
 
 	var ids []int
 	for rows.Next() {
 		var id int
-		rows.Scan(&id)
+		if err := rows.Scan(&id); err != nil {
+			log.WarnContext(ctx, "failed to scan peer ID", "error", err)
+		}
 		ids = append(ids, id)
 	}
 	return ids, rows.Err()
@@ -103,7 +116,9 @@ func SaveBundleTx(ctx context.Context, database *sql.DB, params models.CreateBun
 	committed := false
 	defer func() {
 		if !committed {
-			tx.Rollback()
+			if rErr := tx.Rollback(); rErr != nil {
+				fmt.Printf("rollback failed: %v", rErr)
+			}
 		}
 	}()
 

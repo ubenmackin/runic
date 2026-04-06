@@ -1,12 +1,10 @@
+// Package core provides the main agent loop.
 package core
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -203,65 +201,6 @@ func (a *Agent) saveConfig() error {
 	return identity.SaveConfig(a.configPath, a.config)
 }
 
-// post sends a JSON POST request with retry logic.
-func (a *Agent) post(ctx context.Context, path string, body interface{}) (*http.Response, error) {
-	return a.doRequestWithRetry(ctx, "POST", path, body)
-}
-
-// get sends a GET request with retry logic.
-func (a *Agent) get(ctx context.Context, path string) (*http.Response, error) {
-	return a.doRequestWithRetry(ctx, "GET", path, nil)
-}
-
-func (a *Agent) doRequestWithRetry(ctx context.Context, method, path string, body interface{}) (*http.Response, error) {
-	var reqBody io.Reader
-	if body != nil {
-		data, err := json.Marshal(body)
-		if err != nil {
-			return nil, fmt.Errorf("marshal request: %w", err)
-		}
-		reqBody = bytes.NewReader(data)
-	}
-
-	url := a.config.ControlPlaneURL + path
-	var lastErr error
-
-	for attempt := 0; attempt < 3; attempt++ {
-		if attempt > 0 {
-			backoff := time.Duration(1<<uint(attempt)) * time.Second
-			log.Warn("Request failed, retrying", "attempt", attempt+1, "method", method, "path", path, "backoff", backoff)
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-time.After(backoff):
-				// continue with retry
-			}
-		}
-
-		req, err := http.NewRequestWithContext(ctx, method, url, reqBody)
-		if err != nil {
-			lastErr = fmt.Errorf("create request: %w", err)
-			continue
-		}
-
-		req.Header.Set("User-Agent", "runic-agent/"+a.version)
-		req.Header.Set("Content-Type", "application/json")
-		if a.config.Token != "" {
-			req.Header.Set("Authorization", "Bearer "+a.config.Token)
-		}
-
-		resp, err := a.httpClient.Do(req)
-		if err != nil {
-			lastErr = fmt.Errorf("request failed: %w", err)
-			continue
-		}
-
-		return resp, nil
-	}
-
-	return nil, fmt.Errorf("all retries exhausted for %s %s: %w", method, path, lastErr)
-}
-
 // heartbeatLoop sends heartbeats at the configured heartbeat interval.
 // This is separate from bundle polling to ensure agents stay online even when PullIntervalSec is long.
 func (a *Agent) heartbeatLoop(ctx context.Context) {
@@ -275,7 +214,9 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 	defer ticker.Stop()
 
 	// Send first heartbeat immediately
-	a.sendHeartbeat(ctx)
+	if err := a.sendHeartbeat(ctx); err != nil {
+		log.Error("Initial heartbeat failed", "error", err)
+	}
 
 	for {
 		select {
@@ -306,7 +247,9 @@ func (a *Agent) pollLoop(ctx context.Context) {
 	defer ticker.Stop()
 
 	// Poll immediately on start
-	a.pullBundle(ctx)
+	if err := a.pullBundle(ctx); err != nil {
+		log.Error("Initial bundle pull failed", "error", err)
+	}
 
 	for {
 		select {
@@ -385,7 +328,11 @@ func (a *Agent) isControlPlaneReachable(ctx context.Context) bool {
 	if err != nil {
 		return false
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if cErr := resp.Body.Close(); cErr != nil {
+			log.Warn("close err", "err", cErr)
+		}
+	}()
 	return resp.StatusCode == http.StatusOK
 }
 
@@ -416,10 +363,16 @@ func (a *Agent) applyCachedBundle(ctx context.Context) error {
 		return fmt.Errorf("create temp file: %w", err)
 	}
 	tmpPath := tmpFile.Name()
-	defer os.Remove(tmpPath)
+	defer func() {
+		if err := os.Remove(tmpPath); err != nil {
+			log.Warn("remove err", "err", err)
+		}
+	}()
 
 	if _, err := tmpFile.WriteString(rules); err != nil {
-		tmpFile.Close()
+		if err := tmpFile.Close(); err != nil {
+			log.Warn("Failed to close download file", "error", err)
+		}
 		return fmt.Errorf("write cached bundle to temp file: %w", err)
 	}
 	if err := tmpFile.Close(); err != nil {
@@ -461,7 +414,7 @@ func (a *Agent) listenSSE(ctx context.Context) {
 				// After re-registration, continue the loop to reconnect with new token
 				continue
 			}
-			// For other errors (context cancelled, etc.), check if we should continue
+			// For other errors (context canceled, etc.), check if we should continue
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				return
 			}

@@ -46,7 +46,9 @@ func DoJSONRequest(ctx context.Context, client HTTPClient, method, url string, b
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		resp.Body.Close()
+		if cErr := resp.Body.Close(); cErr != nil {
+			fmt.Printf("close body failed: %v", cErr)
+		}
 		httpErr := &HTTPStatusError{
 			StatusCode: resp.StatusCode,
 			Method:     method,

@@ -1,3 +1,4 @@
+// Package rotation handles HMAC key rotation.
 package rotation
 
 import (
@@ -158,7 +159,11 @@ func (m *Manager) checkRotationPending(ctx context.Context) (string, error) {
 		}
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			log.Warn("Failed to close response body", "error", err)
+		}
+	}()
 
 	// 204 No Content means no rotation pending
 	if resp.StatusCode == http.StatusNoContent {
@@ -189,7 +194,11 @@ func (m *Manager) retrieveNewKey(ctx context.Context, token string) (string, err
 	if err != nil {
 		return "", fmt.Errorf("retrieve new key: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if cErr := resp.Body.Close(); cErr != nil {
+			fmt.Printf("close err: %v\n", cErr)
+		}
+	}()
 
 	var result struct {
 		NewHMACKey string `json:"new_hmac_key"`
@@ -227,7 +236,11 @@ func (m *Manager) testNewKey(ctx context.Context, key string) error {
 	if err != nil {
 		return fmt.Errorf("key test failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if cErr := resp.Body.Close(); cErr != nil {
+			fmt.Printf("close err: %v\n", cErr)
+		}
+	}()
 
 	return nil
 }
@@ -259,26 +272,38 @@ func (m *Manager) updateConfigKey(newKey string) error {
 	encoder := json.NewEncoder(tmpFile)
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(cfg); err != nil {
-		tmpFile.Close()
-		os.Remove(tmpPath)
+		if cErr := tmpFile.Close(); cErr != nil {
+			log.Warn("Failed to close file", "error", cErr)
+		}
+		if rErr := os.Remove(tmpPath); rErr != nil {
+			log.Warn("Failed to remove file", "error", rErr)
+		}
 		return fmt.Errorf("write config: %w", err)
 	}
 
 	// Sync to disk before closing
 	if err := tmpFile.Sync(); err != nil {
-		tmpFile.Close()
-		os.Remove(tmpPath)
+		if cErr := tmpFile.Close(); cErr != nil {
+			log.Warn("Failed to close file", "error", cErr)
+		}
+		if rErr := os.Remove(tmpPath); rErr != nil {
+			log.Warn("Failed to remove file", "error", rErr)
+		}
 		return fmt.Errorf("sync config: %w", err)
 	}
 
 	if err := tmpFile.Close(); err != nil {
-		os.Remove(tmpPath)
+		if rErr := os.Remove(tmpPath); rErr != nil {
+			log.Warn("Failed to remove file", "error", rErr)
+		}
 		return fmt.Errorf("close temp file: %w", err)
 	}
 
 	// Atomic rename
 	if err := os.Rename(tmpPath, m.configPath); err != nil {
-		os.Remove(tmpPath)
+		if rErr := os.Remove(tmpPath); rErr != nil {
+			log.Warn("Failed to remove file", "error", rErr)
+		}
 		return fmt.Errorf("rename config: %w", err)
 	}
 
@@ -302,7 +327,11 @@ func (m *Manager) confirmRotation(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("confirm rotation failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			log.Warn("Failed to close response body", "error", err)
+		}
+	}()
 
 	return nil
 }

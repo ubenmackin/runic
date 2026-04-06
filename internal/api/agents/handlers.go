@@ -1,3 +1,4 @@
+// Package agents provides agent api handlers.
 package agents
 
 import (
@@ -73,14 +74,14 @@ func (e *LogEvent) Validate() (bool, string) {
 	return true, ""
 }
 
-// Hub interfaces to avoid import cycles
+// SSEBroadcaster interfaces to avoid import cycles
 type SSEBroadcaster interface {
 	Register(hostID string) chan string
 	Unregister(hostID string)
 }
 
 type LogBroadcaster interface {
-	Broadcast(event models.LogEvent)
+	Broadcast(event *models.LogEvent)
 }
 
 type contextKey string
@@ -377,7 +378,8 @@ func (h *Handler) SubmitLogs(w http.ResponseWriter, r *http.Request) {
 	accepted := 0
 	skipped := 0
 
-	for _, ev := range input.Events {
+	for i := range input.Events {
+		ev := &input.Events[i]
 		if valid, reason := ev.Validate(); !valid {
 			runiclog.Warn("Skipping invalid log event", "reason", reason)
 			skipped++
@@ -401,7 +403,7 @@ func (h *Handler) SubmitLogs(w http.ResponseWriter, r *http.Request) {
 			Protocol: ev.Protocol,
 		}
 		if hub := LogHubFromContext(r.Context()); hub != nil {
-			hub.Broadcast(event)
+			hub.Broadcast(&event)
 		}
 	}
 
@@ -483,7 +485,9 @@ func (h *Handler) MakeHandleSSEventsHandler(hub SSEBroadcaster) http.HandlerFunc
 		defer ticker.Stop()
 
 		// Notify client connected
-		fmt.Fprintf(w, ": agent connected\n\n")
+		if _, err := fmt.Fprintf(w, ": agent connected\n\n"); err != nil {
+			return
+		}
 		flusher.Flush()
 
 		for {
@@ -493,12 +497,16 @@ func (h *Handler) MakeHandleSSEventsHandler(hub SSEBroadcaster) http.HandlerFunc
 					// Channel closed
 					return
 				}
-				fmt.Fprintf(w, "%s\n\n", msg)
+				if _, err := fmt.Fprintf(w, "%s\n\n", msg); err != nil {
+					return
+				}
 				flusher.Flush()
 
 			case <-ticker.C:
 				// Keepalive
-				fmt.Fprintf(w, ": keepalive\n\n")
+				if _, err := fmt.Fprintf(w, ": keepalive\n\n"); err != nil {
+					return
+				}
 				flusher.Flush()
 
 			case <-r.Context().Done():

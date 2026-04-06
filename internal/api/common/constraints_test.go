@@ -35,7 +35,7 @@ func TestCheckPeerDeleteConstraints(t *testing.T) {
 			},
 			peerID:      1,
 			wantErr:     true,
-			wantErrPart: "Cannot delete peer — it is explicitly targeted in policy 'test-policy'",
+			wantErrPart: "cannot delete peer — it is explicitly targeted in policy 'test-policy'",
 		},
 		{
 			name: "peer is in a group used as source_group_id",
@@ -58,7 +58,7 @@ func TestCheckPeerDeleteConstraints(t *testing.T) {
 			},
 			peerID:      1,
 			wantErr:     true,
-			wantErrPart: "Cannot delete peer — it is in group used by policy 'group-policy'",
+			wantErrPart: "cannot delete peer — it is in group used by policy 'group-policy'",
 		},
 		{
 			name: "peer is not used anywhere",
@@ -102,7 +102,7 @@ func TestCheckPeerDeleteConstraints(t *testing.T) {
 			},
 			peerID:      1,
 			wantErr:     true,
-			wantErrPart: "Cannot delete peer — it is explicitly targeted in policy 'target-policy'",
+			wantErrPart: "cannot delete peer — it is explicitly targeted in policy 'target-policy'",
 		},
 	}
 
@@ -158,7 +158,7 @@ func TestCheckGroupDeleteConstraints(t *testing.T) {
 			},
 			groupID:     1,
 			wantErr:     true,
-			wantErrPart: "Cannot delete group — it is used by policy 'test-policy'",
+			wantErrPart: "cannot delete group — it is used by policy 'test-policy'",
 		},
 		{
 			name: "group is not used anywhere",
@@ -203,7 +203,7 @@ func TestCheckGroupDeleteConstraints(t *testing.T) {
 			wantErr: true,
 			// The query uses LIMIT 1, so it returns the first found policy
 			// SQLite doesn't guarantee order without ORDER BY, so we just check it's an error
-			wantErrPart: "Cannot delete group — it is used by policy",
+			wantErrPart: "cannot delete group — it is used by policy",
 		},
 	}
 
@@ -225,8 +225,8 @@ func TestCheckGroupDeleteConstraints(t *testing.T) {
 				} else if tt.wantErrPart != "" && err.Error() != tt.wantErrPart {
 					// For cases where exact match isn't required, check prefix
 					if tt.name == "group used by multiple policies returns first policy name" {
-						if err.Error() != "Cannot delete group — it is used by policy 'first-policy'" &&
-							err.Error() != "Cannot delete group — it is used by policy 'second-policy'" {
+						if err.Error() != "cannot delete group — it is used by policy 'first-policy'" &&
+							err.Error() != "cannot delete group — it is used by policy 'second-policy'" {
 							t.Errorf("CheckGroupDeleteConstraints() error = %q, want containing policy name", err.Error())
 						}
 					} else {

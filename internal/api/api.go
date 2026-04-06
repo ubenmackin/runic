@@ -1,3 +1,4 @@
+// Package api provides HTTP REST handlers.
 package api
 
 import (
@@ -25,6 +26,7 @@ import (
 	"runic/internal/api/services"
 	"runic/internal/api/users"
 	"runic/internal/auth"
+	"runic/internal/common/log"
 	"runic/internal/common/version"
 	"runic/internal/engine"
 	"runic/internal/metrics"
@@ -205,11 +207,13 @@ func (a *API) RegisterRoutes(r *mux.Router, downloadsDir string) {
 	// Version info endpoint (requires authentication)
 	protected.HandleFunc("/info", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		if err := json.NewEncoder(w).Encode(map[string]interface{}{
 			"version":  version.Version,
 			"commit":   version.Commit,
 			"built_at": version.BuiltAt,
-		})
+		}); err != nil {
+			log.Warn("Failed to encode version info", "error", err)
+		}
 	}).Methods("GET")
 
 	// --- Admin-only routes ---
@@ -277,25 +281,29 @@ func (a *API) RegisterRoutes(r *mux.Router, downloadsDir string) {
 	apiRouter.PathPrefix("/").HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(map[string]string{"error": "API endpoint not found"})
+		if err := json.NewEncoder(w).Encode(map[string]string{"error": "API endpoint not found"}); err != nil {
+			log.Warn("Failed to encode error", "err", err)
+		}
 	})
 
 	// Downloads route (public - for agent binary downloads)
 	// Must be registered before SPA catch-all handler (in main.go)
 	// Rate limited to 10 requests per minute to prevent abuse
 	a.DownloadRateLimiter = middleware.NewRateLimiter(10, time.Minute)
-	downloadsHandler := a.DownloadRateLimiter.Middleware(http.HandlerFunc(downloads.Handler(downloadsDir)))
+	downloadsHandler := a.DownloadRateLimiter.Middleware(downloads.Handler(downloadsDir))
 	r.Handle("/downloads/{filename}", downloadsHandler).Methods("GET")
 
 	// Handle /api/v1 root path (not matched by PathPrefix subrouter)
 	// Returns API info instead of falling through to SPA
 	r.HandleFunc("/api/v1", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{
+		if err := json.NewEncoder(w).Encode(map[string]string{
 			"status":  "ok",
 			"version": "v1",
 			"message": "Runic API",
-		})
+		}); err != nil {
+			log.Warn("Failed to encode api info", "err", err)
+		}
 	}).Methods("GET")
 }
 
@@ -329,7 +337,9 @@ func (a *API) Stop() {
 // HealthHandler returns the health status of the service
 func HealthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "healthy"})
+	if err := json.NewEncoder(w).Encode(map[string]string{"status": "healthy"}); err != nil {
+		log.Warn("Failed to encode health", "err", err)
+	}
 }
 
 // ReadyHandler returns the readiness status of the service
@@ -341,12 +351,16 @@ func ReadyHandler(db *sql.DB) http.HandlerFunc {
 		// Check database connectivity
 		if err := db.PingContext(ctx); err != nil {
 			w.WriteHeader(http.StatusServiceUnavailable)
-			json.NewEncoder(w).Encode(map[string]string{"status": "not_ready", "error": "database unavailable"})
+			if encErr := json.NewEncoder(w).Encode(map[string]string{"status": "not_ready", "error": "database unavailable"}); encErr != nil {
+				log.Warn("Failed to encode not_ready", "error", encErr)
+			}
 			return
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"status": "ready"})
+		if err := json.NewEncoder(w).Encode(map[string]string{"status": "ready"}); err != nil {
+			log.Warn("Failed to encode ready", "error", err)
+		}
 	}
 }
 

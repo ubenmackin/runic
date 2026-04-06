@@ -46,7 +46,11 @@ func CreatePushJobPeersT(ctx context.Context, database DB, jobID string, peers [
 	if err != nil {
 		return fmt.Errorf("begin push job peers tx: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() {
+		if err := tx.Rollback(); err != nil {
+			fmt.Printf("rollback err: %v\n", err)
+		}
+	}()
 
 	stmt, err := tx.PrepareContext(ctx, `
 		INSERT INTO push_job_peers (job_id, peer_id, peer_hostname, status)
@@ -55,7 +59,11 @@ func CreatePushJobPeersT(ctx context.Context, database DB, jobID string, peers [
 	if err != nil {
 		return fmt.Errorf("prepare push job peers stmt: %w", err)
 	}
-	defer stmt.Close()
+	defer func() {
+		if cErr := stmt.Close(); cErr != nil {
+			fmt.Printf("close stmt failed: %v", cErr)
+		}
+	}()
 
 	for _, p := range peers {
 		if _, err := stmt.ExecContext(ctx, jobID, p.ID, p.Hostname); err != nil {
@@ -98,7 +106,11 @@ func GetPushJobWithPeers(ctx context.Context, database Querier, jobID string) (P
 	if err != nil {
 		return PushJob{}, nil, fmt.Errorf("query push job peers for %s: %w", jobID, err)
 	}
-	defer rows.Close()
+	defer func() {
+		if err := rows.Close(); err != nil {
+			fmt.Printf("close err: %v\n", err)
+		}
+	}()
 
 	var peers []PushJobPeer
 	for rows.Next() {
@@ -199,7 +211,11 @@ func ListPushJobs(ctx context.Context, database Querier, limit int) ([]PushJob, 
 	if err != nil {
 		return nil, fmt.Errorf("list push jobs: %w", err)
 	}
-	defer rows.Close()
+	defer func() {
+		if err := rows.Close(); err != nil {
+			fmt.Printf("close err: %v\n", err)
+		}
+	}()
 
 	var jobs []PushJob
 	for rows.Next() {

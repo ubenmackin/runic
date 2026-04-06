@@ -1,3 +1,4 @@
+// Package transport handles agent communication.
 package transport
 
 import (
@@ -36,7 +37,11 @@ func PullBundle(ctx context.Context, client common.HTTPClient, controlPlaneURL, 
 	if err != nil {
 		return fmt.Errorf("bundle fetch: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			log.Warn("Failed to close response body", "error", err)
+		}
+	}()
 
 	switch resp.StatusCode {
 	case http.StatusNotModified:
@@ -82,7 +87,11 @@ func ConfirmApply(ctx context.Context, client common.HTTPClient, controlPlaneURL
 	if err != nil {
 		return fmt.Errorf("confirm apply: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			log.Warn("Failed to close response body", "error", err)
+		}
+	}()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
 		return &common.HTTPStatusError{StatusCode: resp.StatusCode, Method: "POST", URL: url}
@@ -135,7 +144,11 @@ func connectSSE(ctx context.Context, client common.HTTPClient, controlPlaneURL, 
 	if err != nil {
 		return fmt.Errorf("SSE connection failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			log.Warn("Failed to close response body", "error", err)
+		}
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		return &common.HTTPStatusError{StatusCode: resp.StatusCode, Method: "GET", URL: url}
@@ -152,7 +165,7 @@ func connectSSE(ctx context.Context, client common.HTTPClient, controlPlaneURL, 
 	for scanner.Scan() {
 		line := scanner.Text()
 
-		// Check if context is cancelled
+		// Check if context is canceled
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -165,7 +178,7 @@ func connectSSE(ctx context.Context, client common.HTTPClient, controlPlaneURL, 
 		}
 
 		// Keepalive comments: ": keepalive" or similar
-		if strings.HasPrefix(line, ":") {
+		if len(line) > 0 && line[0] == ':' {
 			continue
 		}
 	}

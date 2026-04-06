@@ -1,7 +1,9 @@
+// Package common provides shared utilities and constants.
 package common
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -12,7 +14,9 @@ import (
 func RespondJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(data)
+	if err := json.NewEncoder(w).Encode(data); err != nil {
+		fmt.Printf("failed to encode json response: %v\n", err)
+	}
 }
 
 // RespondError responds with a JSON error.

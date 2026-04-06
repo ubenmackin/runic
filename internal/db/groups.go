@@ -1,7 +1,9 @@
+// Package db provides database interactions.
 package db
 
 import (
 	"context"
+	"fmt"
 
 	"runic/internal/models"
 )
@@ -22,7 +24,11 @@ func ListGroupMembers(ctx context.Context, database Querier, groupID int) ([]mod
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		if cErr := rows.Close(); cErr != nil {
+			fmt.Printf("failed to close rows: %v\n", cErr)
+		}
+	}()
 
 	var members []models.GroupMemberRow
 	for rows.Next() {
@@ -45,7 +51,11 @@ func FindPoliciesByGroupID(ctx context.Context, database Querier, groupID int) (
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		if cErr := rows.Close(); cErr != nil {
+			fmt.Printf("failed to close rows: %v\n", cErr)
+		}
+	}()
 
 	var policies []models.PolicyRow
 	for rows.Next() {

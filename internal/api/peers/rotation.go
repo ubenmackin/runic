@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
@@ -44,66 +43,6 @@ func parseHostID(hostID string) string {
 		hostname = hostname[5:]
 	}
 	return hostname
-}
-
-// validateRotationToken checks if a rotation token is valid and not expired.
-// This is a pure function - it does NOT mutate state.
-func validateRotationToken(database *sql.DB, peerID int, token string) (bool, error) {
-	var storedToken sql.NullString
-	var lastRotatedAt sql.NullString
-
-	err := database.QueryRow(
-		"SELECT hmac_key_rotation_token, hmac_key_last_rotated_at FROM peers WHERE id = ?",
-		peerID,
-	).Scan(&storedToken, &lastRotatedAt)
-
-	if err == sql.ErrNoRows {
-		return false, nil
-	}
-	if err != nil {
-		return false, fmt.Errorf("failed to query peer: %w", err)
-	}
-
-	if !storedToken.Valid || storedToken.String == "" {
-		return false, nil
-	}
-
-	// Check token matches
-	if storedToken.String != token {
-		return false, nil
-	}
-
-	// Check 5-minute TTL
-	if lastRotatedAt.Valid {
-		rotationTime, err := time.Parse(time.RFC3339, lastRotatedAt.String)
-		if err != nil {
-			// If we can't parse the timestamp, consider the token invalid
-			return false, nil
-		}
-		if time.Since(rotationTime) > 5*time.Minute {
-			// Token expired - but don't clear it here (side effect)
-			return false, nil
-		}
-	}
-
-	return true, nil
-}
-
-// cleanupExpiredTokens removes expired rotation tokens from the database.
-// This should be called periodically as a background job.
-func cleanupExpiredTokens(database *sql.DB) (int64, error) {
-	result, err := database.Exec(`
-		UPDATE peers 
-		SET hmac_key_rotation_token = NULL 
-		WHERE hmac_key_rotation_token IS NOT NULL 
-		  AND hmac_key_last_rotated_at < datetime('now', '-5 minutes')
-	`)
-	if err != nil {
-		return 0, fmt.Errorf("failed to cleanup expired tokens: %w", err)
-	}
-
-	affected, _ := result.RowsAffected()
-	return affected, nil
 }
 
 // RotatePeerKey handles admin-initiated key rotation.
@@ -239,7 +178,9 @@ func (h *Handler) AgentRotateKey(w http.ResponseWriter, r *http.Request) {
 	committed := false
 	defer func() {
 		if !committed {
-			tx.Rollback()
+			if err := tx.Rollback(); err != nil {
+				slog.Warn("rollback err", "err", err)
+			}
 		}
 	}()
 

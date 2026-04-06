@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -22,7 +23,9 @@ func (h *Handler) GenerateRegistrationToken(w http.ResponseWriter, r *http.Reque
 		Description string `json:"description"`
 	}
 	// Ignore decode errors — description is optional
-	json.NewDecoder(r.Body).Decode(&input)
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		runiclog.Debug("Failed to decode token description", "error", err)
+	}
 
 	// Generate random token (32 bytes = 64 hex chars)
 	tokenBytes := make([]byte, 32)
@@ -62,7 +65,11 @@ func (h *Handler) ListRegistrationTokens(w http.ResponseWriter, r *http.Request)
 		http.Error(w, `{"error": "internal server error"}`, http.StatusInternalServerError)
 		return
 	}
-	defer rows.Close()
+	defer func() {
+		if cErr := rows.Close(); cErr != nil {
+			runiclog.Warn("Failed to close rows", "error", cErr)
+		}
+	}()
 
 	var tokens []map[string]interface{}
 	for rows.Next() {
@@ -120,7 +127,12 @@ func (h *Handler) RevokeRegistrationToken(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	rowsAffected, _ := result.RowsAffected()
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		runiclog.Error("Failed to get rows affected", "error", err)
+		http.Error(w, `{"error": "internal server error"}`, http.StatusInternalServerError)
+		return
+	}
 	if rowsAffected == 0 {
 		http.Error(w, `{"error": "token not found or already used/revoked"}`, http.StatusNotFound)
 		return
@@ -141,7 +153,10 @@ func (h *Handler) ConsumeRegistrationToken(token, hostname string) (bool, error)
 	if err != nil {
 		return false, err
 	}
-	rowsAffected, _ := result.RowsAffected()
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("getting rows affected: %w", err)
+	}
 	return rowsAffected > 0, nil
 }
 

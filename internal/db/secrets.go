@@ -176,7 +176,6 @@ func addDBConstraints(database *sql.DB) error {
 		return fmt.Errorf("rename users_new: %w", err)
 	}
 
-	// rule_bundles: UNIQUE(peer_id, version)
 	if _, err := database.Exec(`
 		CREATE TABLE rule_bundles_new (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,

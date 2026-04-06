@@ -108,7 +108,9 @@ func migrateSchema(ctx context.Context, database *sql.DB) error {
 		committed := false
 		defer func() {
 			if !committed {
-				tx.Rollback()
+				if rErr := tx.Rollback(); rErr != nil {
+					fmt.Printf("rollback failed: %v", rErr)
+				}
 			}
 		}()
 
@@ -202,10 +204,18 @@ func migrateSchema(ctx context.Context, database *sql.DB) error {
 		}
 
 		// 6. Drop old indexes and create new ones
-		tx.ExecContext(ctx, "DROP INDEX IF EXISTS idx_servers_last_heartbeat")
-		tx.ExecContext(ctx, "DROP INDEX IF EXISTS idx_firewall_logs_server_id")
-		tx.ExecContext(ctx, "DROP INDEX IF EXISTS idx_firewall_logs_server_timestamp")
-		tx.ExecContext(ctx, "DROP INDEX IF EXISTS idx_servers_status_heartbeat")
+		if _, err := tx.ExecContext(ctx, "DROP INDEX IF EXISTS idx_servers_last_heartbeat"); err != nil {
+			log.Warn("Failed to drop old index idx_servers_last_heartbeat", "error", err)
+		}
+		if _, err := tx.ExecContext(ctx, "DROP INDEX IF EXISTS idx_firewall_logs_server_id"); err != nil {
+			log.Warn("Failed to drop old index idx_firewall_logs_server_id", "error", err)
+		}
+		if _, err := tx.ExecContext(ctx, "DROP INDEX IF EXISTS idx_firewall_logs_server_timestamp"); err != nil {
+			log.Warn("Failed to drop old index idx_firewall_logs_server_timestamp", "error", err)
+		}
+		if _, err := tx.ExecContext(ctx, "DROP INDEX IF EXISTS idx_servers_status_heartbeat"); err != nil {
+			log.Warn("Failed to drop old index idx_servers_status_heartbeat", "error", err)
+		}
 
 		if _, err := tx.ExecContext(ctx, "CREATE INDEX idx_peers_last_heartbeat ON peers(last_heartbeat)"); err != nil {
 			return fmt.Errorf("failed to create idx_peers_last_heartbeat: %w", err)
@@ -264,7 +274,11 @@ func migrateSchema(ctx context.Context, database *sql.DB) error {
 	var hasOldGroupMembersSchema bool
 	groupMembersRows, err := database.QueryContext(ctx, "PRAGMA table_info(group_members)")
 	if err == nil {
-		defer groupMembersRows.Close()
+		defer func() {
+			if cerr := groupMembersRows.Close(); cerr != nil {
+				log.Error("failed to close PRAGMA group_members rows", "error", cerr)
+			}
+		}()
 		for groupMembersRows.Next() {
 			var cid int
 			var name string
@@ -293,7 +307,9 @@ func migrateSchema(ctx context.Context, database *sql.DB) error {
 		committed := false
 		defer func() {
 			if !committed {
-				tx.Rollback()
+				if rErr := tx.Rollback(); rErr != nil {
+					log.Warn("Failed to rollback transaction", "error", rErr)
+				}
 			}
 		}()
 
@@ -346,7 +362,9 @@ func migrateSchema(ctx context.Context, database *sql.DB) error {
 		committed := false
 		defer func() {
 			if !committed {
-				tx.Rollback()
+				if rErr := tx.Rollback(); rErr != nil {
+					log.Warn("Failed to rollback transaction", "error", rErr)
+				}
 			}
 		}()
 
@@ -459,13 +477,13 @@ func migrateSchema(ctx context.Context, database *sql.DB) error {
 	}
 
 	// Migration: Add __any_ip__ special target
-	var hasAnyIpTarget bool
-	err = database.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM special_targets WHERE name = ?", "__any_ip__").Scan(&hasAnyIpTarget)
+	var hasAnyIPTarget bool
+	err = database.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM special_targets WHERE name = ?", "__any_ip__").Scan(&hasAnyIPTarget)
 	if err != nil {
 		return fmt.Errorf("failed to check for __any_ip__ special target: %w", err)
 	}
 
-	if !hasAnyIpTarget {
+	if !hasAnyIPTarget {
 		log.Info("Migration: adding __any_ip__ special target")
 		_, err = database.ExecContext(ctx,
 			"INSERT INTO special_targets (id, name, display_name, description, address) VALUES (?, ?, ?, ?, ?)",
@@ -686,7 +704,9 @@ func migrateSchema(ctx context.Context, database *sql.DB) error {
 		committed := false
 		defer func() {
 			if !committed {
-				tx.Rollback()
+				if rErr := tx.Rollback(); rErr != nil {
+					log.Warn("Failed to rollback transaction", "error", rErr)
+				}
 			}
 		}()
 

@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"fmt"
 
 	"runic/internal/models"
 )
@@ -23,7 +24,11 @@ func ListEnabledPolicies(ctx context.Context, database Querier, peerID int) ([]m
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		if cErr := rows.Close(); cErr != nil {
+			fmt.Printf("failed to close rows: %v\n", cErr)
+		}
+	}()
 
 	var policies []models.PolicyRow
 	for rows.Next() {

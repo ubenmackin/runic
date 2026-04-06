@@ -35,7 +35,7 @@ build: $(BINARY_SERVER)
 $(BINARY_SERVER):
 	@mkdir -p dist
 	@echo "$(GREEN)Building runic-server (CGO enabled)...$(NC)"
-	CGO_ENABLED=1 $(GOBUILD) $(LD_FLAGS) -o $(BINARY_SERVER) .
+	CGO_ENABLED=1 $(GOBUILD) $(LD_FLAGS) -o $(BINARY_SERVER) $(SERVER_DIR)
 
 # Build agent binaries for all platforms
 agents: agents-linux-amd64 agents-linux-arm64 agents-linux-arm agents-linux-armv6

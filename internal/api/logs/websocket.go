@@ -7,10 +7,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gorilla/websocket"
 	"runic/internal/common/constants"
 	runiclog "runic/internal/common/log"
 	"runic/internal/models"
+
+	"github.com/gorilla/websocket"
 )
 
 var upgrader = websocket.Upgrader{
@@ -92,7 +93,7 @@ func (h *Hub) Run(ctx context.Context) {
 	}
 }
 
-func (h *Hub) Broadcast(event models.LogEvent) {
+func (h *Hub) Broadcast(event *models.LogEvent) {
 	data, err := json.Marshal(event)
 	if err != nil {
 		runiclog.Error("Failed to marshal log event", "error", err)
@@ -110,7 +111,7 @@ func (h *Hub) Broadcast(event models.LogEvent) {
 	}
 }
 
-func (c *Client) matchesFilter(ev models.LogEvent) bool {
+func (c *Client) matchesFilter(ev *models.LogEvent) bool {
 	f := c.filter
 	if f.PeerID != "" && ev.PeerID != f.PeerID {
 		return false
@@ -130,11 +131,20 @@ func (c *Client) matchesFilter(ev models.LogEvent) bool {
 func (c *Client) readPump() {
 	defer func() {
 		c.hub.unregister <- c
-		c.conn.Close()
+		if err := c.conn.Close(); err != nil {
+			runiclog.Warn("close err", "err", err)
+		}
 	}()
 	c.conn.SetReadLimit(512)
-	c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
-	c.conn.SetPongHandler(func(string) error { c.conn.SetReadDeadline(time.Now().Add(60 * time.Second)); return nil })
+	if err := c.conn.SetReadDeadline(time.Now().Add(60 * time.Second)); err != nil {
+		runiclog.Warn("err", "err", err)
+	}
+	c.conn.SetPongHandler(func(string) error {
+		if err := c.conn.SetReadDeadline(time.Now().Add(60 * time.Second)); err != nil {
+			runiclog.Warn("err", "err", err)
+		}
+		return nil
+	})
 	for {
 		_, _, err := c.conn.ReadMessage()
 		if err != nil {
@@ -147,26 +157,36 @@ func (c *Client) writePump() {
 	ticker := time.NewTicker(constants.WebSocketPingInterval)
 	defer func() {
 		ticker.Stop()
-		c.conn.Close()
+		if err := c.conn.Close(); err != nil {
+			runiclog.Warn("close err", "err", err)
+		}
 	}()
 	for {
 		select {
 		case message, ok := <-c.send:
-			c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			if err := c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second)); err != nil {
+				runiclog.Warn("err", "err", err)
+			}
 			if !ok {
-				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
+				if err := c.conn.WriteMessage(websocket.CloseMessage, []byte{}); err != nil {
+					runiclog.Warn("err", "err", err)
+				}
 				return
 			}
 			w, err := c.conn.NextWriter(websocket.TextMessage)
 			if err != nil {
 				return
 			}
-			w.Write(message)
+			if _, err := w.Write(message); err != nil {
+				runiclog.Warn("err", "err", err)
+			}
 			if err := w.Close(); err != nil {
 				return
 			}
 		case <-ticker.C:
-			c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			if err := c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second)); err != nil {
+				runiclog.Warn("err", "err", err)
+			}
 			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 				return
 			}

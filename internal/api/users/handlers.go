@@ -1,3 +1,4 @@
+// Package users provides user handlers.
 package users
 
 import (
@@ -49,7 +50,11 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 		common.RespondError(w, http.StatusInternalServerError, "Failed to query users")
 		return
 	}
-	defer rows.Close()
+	defer func() {
+		if cErr := rows.Close(); cErr != nil {
+			log.Warn("Failed to close rows", "error", cErr)
+		}
+	}()
 
 	var users []UserResponse
 	for rows.Next() {

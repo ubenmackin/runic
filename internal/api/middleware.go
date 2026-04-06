@@ -284,21 +284,22 @@ func CORS() mux.MiddlewareFunc {
 
 			// Determine the origin to allow
 			originToAllow := ""
-			if allowedOrigin == "*" {
+			switch allowedOrigin {
+			case "*":
 				// In wildcard mode (dev), reflect the request origin
 				// This allows any origin but maintains credential support
 				if origin != "" {
 					originToAllow = origin
 				}
-			} else if allowedOrigin != "" {
-				// Use the explicitly configured origin
-				originToAllow = allowedOrigin
-			} else {
+			case "":
 				// Production mode: same-origin or reflect origin
 				// This handles cases where frontend is on same host but different port
 				if origin != "" {
 					originToAllow = origin
 				}
+			default:
+				// Use the explicitly configured origin
+				originToAllow = allowedOrigin
 			}
 
 			// Set CORS headers if we have an origin to allow

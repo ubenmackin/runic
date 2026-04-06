@@ -58,9 +58,9 @@ func (w *ChangeWorker) Start(ctx context.Context) {
 						return // channel closed, exit cleanly
 					}
 					if work.isGroup {
-						w.processGroupChange(work)
+						w.processGroupChange(&work)
 					} else {
-						w.processPeerChange(work)
+						w.processPeerChange(&work)
 					}
 				}
 			}
@@ -105,7 +105,7 @@ func (w *ChangeWorker) Stop() {
 	})
 }
 
-func (w *ChangeWorker) processPeerChange(work changeWork) {
+func (w *ChangeWorker) processPeerChange(work *changeWork) {
 	for _, peerID := range work.peerIDs {
 		if err := queueChangeForPeer(work.ctx, work.database, peerID, work.changeType, work.changeAction, work.changeID, work.summary); err != nil {
 			runiclog.Error("failed to queue change", "peer_id", peerID, "error", err)
@@ -113,7 +113,7 @@ func (w *ChangeWorker) processPeerChange(work changeWork) {
 	}
 }
 
-func (w *ChangeWorker) processGroupChange(work changeWork) {
+func (w *ChangeWorker) processGroupChange(work *changeWork) {
 	rows, err := work.database.QueryContext(work.ctx, `
 		SELECT DISTINCT id FROM policies
 		WHERE ((source_type = 'group' AND source_id = ?)
@@ -124,7 +124,11 @@ func (w *ChangeWorker) processGroupChange(work changeWork) {
 		runiclog.Error("failed to find policies for group", "group_id", work.groupID, "error", err)
 		return
 	}
-	defer rows.Close()
+	defer func() {
+		if err := rows.Close(); err != nil {
+			runiclog.Error("Failed to close rows", "error", err)
+		}
+	}()
 
 	peerSet := make(map[int]bool)
 	for rows.Next() {

@@ -1,3 +1,4 @@
+// Package services provides service handlers.
 package services
 
 import (
@@ -83,7 +84,11 @@ func (h *Handler) ListServices(w http.ResponseWriter, r *http.Request) {
 		common.RespondError(w, http.StatusInternalServerError, "failed to query services")
 		return
 	}
-	defer rows.Close()
+	defer func() {
+		if cErr := rows.Close(); cErr != nil {
+			log.Warn("Failed to close rows", "error", cErr)
+		}
+	}()
 
 	type serviceResp struct {
 		ID            int    `json:"id"`
@@ -303,7 +308,11 @@ func (h *Handler) queueServiceChange(ctx context.Context, serviceID int, action,
 		log.ErrorContext(ctx, "failed to find policies for service", "service_id", serviceID, "error", err)
 		return
 	}
-	defer rows.Close()
+	defer func() {
+		if cErr := rows.Close(); cErr != nil {
+			log.Warn("Failed to close rows", "error", cErr)
+		}
+	}()
 
 	peerSet := make(map[int]bool)
 	for rows.Next() {

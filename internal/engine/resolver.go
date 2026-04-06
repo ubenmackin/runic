@@ -73,7 +73,11 @@ func (r *Resolver) ResolveSpecialTarget(ctx context.Context, specialID int, peer
 		if err != nil {
 			return nil, fmt.Errorf("failed to query peers: %w", err)
 		}
-		defer rows.Close()
+		defer func() {
+			if cErr := rows.Close(); cErr != nil {
+				fmt.Printf("close err: %v\n", cErr)
+			}
+		}()
 		peers := make([]string, 0)
 		for rows.Next() {
 			var ip string
@@ -104,7 +108,11 @@ func (r *Resolver) ResolveGroup(ctx context.Context, groupID int, visited map[in
 	if err != nil {
 		return nil, fmt.Errorf("query group members: %w", err)
 	}
-	defer rows.Close()
+	defer func() {
+		if cErr := rows.Close(); cErr != nil {
+			fmt.Printf("close err: %v\n", cErr)
+		}
+	}()
 
 	seen := map[string]bool{}
 	var results []string
@@ -233,11 +241,9 @@ func sanitizeForIpset(name string) string {
 		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
 			b.WriteRune(r)
 			prevUnderscore = false
-		} else {
-			if !prevUnderscore {
-				b.WriteRune('_')
-				prevUnderscore = true
-			}
+		} else if !prevUnderscore {
+			b.WriteRune('_')
+			prevUnderscore = true
 		}
 	}
 	result := b.String()
@@ -263,7 +269,11 @@ func (r *Resolver) resolveGroupForIpset(ctx context.Context, groupID int) ([]Ips
 	if err != nil {
 		return nil, false, fmt.Errorf("query group members for ipset: %w", err)
 	}
-	defer rows.Close()
+	defer func() {
+		if cErr := rows.Close(); cErr != nil {
+			fmt.Printf("close err: %v\n", cErr)
+		}
+	}()
 
 	var members []IpsetMember
 	hasCIDR := false
@@ -286,10 +296,8 @@ func (r *Resolver) resolveGroupForIpset(ctx context.Context, groupID int) ([]Ips
 				return nil, false, fmt.Errorf("invalid CIDR in peer %d: %s", groupID, ipAddress)
 			}
 			hasCIDR = true
-		} else {
-			if net.ParseIP(ipAddress) == nil {
-				return nil, false, fmt.Errorf("invalid IP in peer: %s", ipAddress)
-			}
+		} else if net.ParseIP(ipAddress) == nil {
+			return nil, false, fmt.Errorf("invalid IP in peer: %s", ipAddress)
 		}
 
 		members = append(members, IpsetMember{

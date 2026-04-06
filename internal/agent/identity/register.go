@@ -50,7 +50,11 @@ func Register(ctx context.Context, client common.HTTPClient, cfg *Config, versio
 	if err != nil {
 		return fmt.Errorf("registration request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if cErr := resp.Body.Close(); cErr != nil {
+			log.Warn("Failed to close response body", "error", cErr)
+		}
+	}()
 
 	if resp.StatusCode != 200 && resp.StatusCode != 201 {
 		return fmt.Errorf("registration returned status %d", resp.StatusCode)

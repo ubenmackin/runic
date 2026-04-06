@@ -1,3 +1,4 @@
+// Package groups provides group management handlers.
 package groups
 
 import (
@@ -57,7 +58,11 @@ func (h *Handler) ListGroups(w http.ResponseWriter, r *http.Request) {
 		common.RespondError(w, http.StatusInternalServerError, "failed to query groups")
 		return
 	}
-	defer rows.Close()
+	defer func() {
+		if cerr := rows.Close(); cerr != nil {
+			log.ErrorContext(r.Context(), "failed to close rows", "error", cerr)
+		}
+	}()
 
 	var groupsData []GroupWithCounts
 	for rows.Next() {
@@ -238,7 +243,11 @@ func (h *Handler) ListGroupMembers(w http.ResponseWriter, r *http.Request) {
 		common.RespondError(w, http.StatusInternalServerError, "failed to query group members")
 		return
 	}
-	defer rows.Close()
+	defer func() {
+		if cerr := rows.Close(); cerr != nil {
+			log.ErrorContext(r.Context(), "failed to close rows", "error", cerr)
+		}
+	}()
 
 	var peers []PeerInGroup
 	for rows.Next() {

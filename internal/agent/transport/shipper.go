@@ -114,7 +114,11 @@ func (s *Shipper) tail(ctx context.Context, path string) <-chan string {
 			log.Error("Cannot open log file", "path", path, "error", err)
 			return
 		}
-		defer f.Close()
+		defer func() {
+			if err := f.Close(); err != nil {
+				log.Warn("Failed to close log file", "path", path, "error", err)
+			}
+		}()
 
 		// Seek to end of file to only read new lines
 		if _, err := f.Seek(0, io.SeekEnd); err != nil {
@@ -137,9 +141,14 @@ func (s *Shipper) tail(ctx context.Context, path string) <-chan string {
 				}
 				// Handle log rotation: if file shrunk, reopen
 				if stat, statErr := os.Stat(path); statErr == nil {
-					pos, _ := f.Seek(0, io.SeekCurrent)
+					pos, err := f.Seek(0, io.SeekCurrent)
+					if err != nil {
+						log.Warn("Failed to seek", "error", err)
+					}
 					if stat.Size() < pos {
-						f.Close()
+						if err := f.Close(); err != nil {
+							log.Warn("Failed to close file", "error", err)
+						}
 						newFile, err := os.Open(path)
 						if err != nil {
 							log.Error("Cannot reopen log file", "path", path, "error", err)
@@ -148,7 +157,9 @@ func (s *Shipper) tail(ctx context.Context, path string) <-chan string {
 						f = newFile
 						if _, err := f.Seek(0, io.SeekEnd); err != nil {
 							log.Error("Seek failed after reopen", "error", err)
-							f.Close()
+							if cErr := f.Close(); cErr != nil {
+								log.Warn("Failed to close file", "error", cErr)
+							}
 							return
 						}
 						scanner = bufio.NewScanner(f)
@@ -184,17 +195,15 @@ func ParseLogLine(line string) (LogEvent, error) {
 	}
 
 	// Detect action
-	if strings.Contains(line, "[RUNIC-DROP]") {
+	switch {
+	case strings.Contains(line, "[RUNIC-DROP]"):
 		ev.Action = "DROP"
-	} else if strings.Contains(line, "[RUNIC-ACCEPT]") {
+	case strings.Contains(line, "[RUNIC-ACCEPT]"):
 		ev.Action = "ACCEPT"
-	} else {
-		// Try to detect from log anyway
-		if strings.Contains(line, "DROP") {
-			ev.Action = "DROP"
-		} else if strings.Contains(line, "ACCEPT") {
-			ev.Action = "ACCEPT"
-		}
+	case strings.Contains(line, "DROP"):
+		ev.Action = "DROP"
+	case strings.Contains(line, "ACCEPT"):
+		ev.Action = "ACCEPT"
 	}
 
 	// Parse timestamp (handles both syslog and ISO8601/RFC3339 formats)
@@ -249,9 +258,13 @@ func ParseLogLine(line string) (LogEvent, error) {
 		case "PROTO":
 			ev.Protocol = strings.ToLower(value)
 		case "SPT":
-			fmt.Sscanf(value, "%d", &ev.SrcPort)
+			if _, err := fmt.Sscanf(value, "%d", &ev.SrcPort); err != nil {
+				log.Debug("Failed to parse source port", "value", value, "error", err)
+			}
 		case "DPT":
-			fmt.Sscanf(value, "%d", &ev.DstPort)
+			if _, err := fmt.Sscanf(value, "%d", &ev.DstPort); err != nil {
+				log.Debug("Failed to parse destination port", "value", value, "error", err)
+			}
 		}
 	}
 
@@ -276,7 +289,11 @@ func (s *Shipper) ship(ctx context.Context, batch []LogEvent) {
 		log.Error("Failed to ship events", "count", len(batch), "error", err)
 		return
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			log.Warn("Failed to close response body", "error", err)
+		}
+	}()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		log.Warn("Server returned error status", "status_code", resp.StatusCode, "count", len(batch))

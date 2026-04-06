@@ -1,3 +1,4 @@
+// Package agent provides core device functionality.
 package agent
 
 import (

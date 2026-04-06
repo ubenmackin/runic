@@ -1,3 +1,4 @@
+// Package downloads provides downloads functionality.
 package downloads
 
 import (

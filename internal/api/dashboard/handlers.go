@@ -1,3 +1,4 @@
+// Package dashboard provides API dashboard handlers.
 package dashboard
 
 import (
@@ -87,7 +88,11 @@ SELECT
 	if err != nil {
 		log.ErrorContext(r.Context(), "failed to query peer/policy counts", "error", err)
 	} else {
-		defer rows.Close()
+		defer func() {
+			if cerr := rows.Close(); cerr != nil {
+				log.ErrorContext(r.Context(), "failed to close rows", "error", cerr)
+			}
+		}()
 		if rows.Next() {
 			if err := rows.Scan(&stats.TotalPeers, &stats.ManualPeers, &stats.OnlinePeers, &stats.TotalPolicies); err != nil {
 				log.ErrorContext(r.Context(), "failed to scan peer/policy counts", "error", err)
@@ -110,7 +115,11 @@ WHERE action = 'DROP' AND timestamp > datetime('now', '-24 hours')
 	if err != nil {
 		log.ErrorContext(r.Context(), "failed to query blocked counts", "error", err)
 	} else {
-		defer blockedRows.Close()
+		defer func() {
+			if cerr := blockedRows.Close(); cerr != nil {
+				log.ErrorContext(r.Context(), "failed to close rows", "error", cerr)
+			}
+		}()
 		if blockedRows.Next() {
 			if err := blockedRows.Scan(&stats.BlockedLastHour, &stats.BlockedLast24h); err != nil {
 				log.ErrorContext(r.Context(), "failed to scan blocked counts", "error", err)
@@ -133,7 +142,11 @@ LIMIT 5`)
 		if err != nil {
 			return err
 		}
-		defer activityRows.Close()
+		defer func() {
+			if cerr := activityRows.Close(); cerr != nil {
+				log.Error("failed to close rows", "error", cerr)
+			}
+		}()
 
 		for activityRows.Next() {
 			var item ActivityItem
@@ -158,7 +171,11 @@ ORDER BY hostname`)
 		if err != nil {
 			return err
 		}
-		defer peerRows.Close()
+		defer func() {
+			if cerr := peerRows.Close(); cerr != nil {
+				log.Error("failed to close rows", "error", cerr)
+			}
+		}()
 
 		for peerRows.Next() {
 			var ph PeerHealth
@@ -196,7 +213,11 @@ LIMIT 5`)
 		if err != nil {
 			return err
 		}
-		defer topRows.Close()
+		defer func() {
+			if cerr := topRows.Close(); cerr != nil {
+				log.Error("failed to close top rows", "error", cerr)
+			}
+		}()
 
 		for topRows.Next() {
 			var b BlockedIP

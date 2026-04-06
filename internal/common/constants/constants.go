@@ -1,3 +1,4 @@
+// Package constants provides shared configuration values.
 package constants
 
 import "time"

@@ -1,11 +1,14 @@
+// Package keys provides API key management handlers.
 package keys
 
 import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/gorilla/mux"
+	runiclog "runic/internal/common/log"
 	"runic/internal/db"
+
+	"github.com/gorilla/mux"
 )
 
 // Handler holds dependencies for keys handlers.
@@ -41,7 +44,9 @@ func (h *Handler) ListKeys(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(result)
+	if err := json.NewEncoder(w).Encode(result); err != nil {
+		runiclog.Error("Failed to encode keys result", "error", err)
+	}
 }
 
 // CreateKey generates a new random key and stores it in the database
@@ -67,10 +72,12 @@ func (h *Handler) CreateKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	if err := json.NewEncoder(w).Encode(map[string]interface{}{
 		"type":   keyType,
 		"exists": true,
-	})
+	}); err != nil {
+		runiclog.Error("Failed to encode create key result", "error", err)
+	}
 }
 
 // DeleteKey removes a key from the database
@@ -91,8 +98,10 @@ func (h *Handler) DeleteKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	if err := json.NewEncoder(w).Encode(map[string]interface{}{
 		"type":   keyType,
 		"exists": false,
-	})
+	}); err != nil {
+		runiclog.Error("Failed to encode delete key result", "error", err)
+	}
 }

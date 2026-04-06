@@ -30,7 +30,9 @@ func SaveBundle(ctx context.Context, database *sql.DB, params models.CreateBundl
 	committed := false
 	defer func() {
 		if !committed {
-			tx.Rollback()
+			if rErr := tx.Rollback(); rErr != nil {
+				fmt.Printf("rollback failed: %v", rErr)
+			}
 		}
 	}()
 

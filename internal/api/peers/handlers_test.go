@@ -45,7 +45,7 @@ func TestDeletePeer(t *testing.T) {
 					"test-policy", 1, 1, 1, "ACCEPT", 100, 1)
 			},
 			wantCode: http.StatusConflict,
-			wantErr:  "Cannot delete peer — it is explicitly targeted in policy 'test-policy'",
+			wantErr:  "cannot delete peer — it is explicitly targeted in policy 'test-policy'",
 		},
 		{
 			name:   "delete peer that is in group used by policy",
@@ -68,7 +68,7 @@ func TestDeletePeer(t *testing.T) {
 					"test-policy", 1, 1, 2, "ACCEPT", 100, 1)
 			},
 			wantCode: http.StatusConflict,
-			wantErr:  "Cannot delete peer — it is in group used by policy 'test-policy'",
+			wantErr:  "cannot delete peer — it is in group used by policy 'test-policy'",
 		},
 		{
 			name:   "successful delete - peer not used anywhere",

@@ -1,3 +1,4 @@
+// Package testutil provides test utilities.
 package testutil
 
 import (
@@ -5,8 +6,9 @@ import (
 	"os"
 	"testing"
 
-	_ "github.com/mattn/go-sqlite3"
 	"runic/internal/db"
+
+	_ "github.com/mattn/go-sqlite3"
 )
 
 func SetupTestDB(t *testing.T) (*sql.DB, func()) {
@@ -16,11 +18,15 @@ func SetupTestDB(t *testing.T) (*sql.DB, func()) {
 		t.Fatal(err)
 	}
 	dbPath := f.Name()
-	f.Close()
+	if cErr := f.Close(); cErr != nil {
+		t.Logf("Failed to close temp file: %v", cErr)
+	}
 
 	database, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
-		os.Remove(dbPath)
+		if rErr := os.Remove(dbPath); rErr != nil {
+			t.Logf("Failed to remove db: %v", rErr)
+		}
 		t.Fatal(err)
 	}
 
@@ -29,23 +35,35 @@ func SetupTestDB(t *testing.T) (*sql.DB, func()) {
 	database.SetMaxIdleConns(1)
 
 	if _, err := database.Exec(db.Schema()); err != nil {
-		database.Close()
-		os.Remove(dbPath)
+		if cErr := database.Close(); cErr != nil {
+			t.Logf("Failed to close database: %v", cErr)
+		}
+		if rErr := os.Remove(dbPath); rErr != nil {
+			t.Logf("Failed to remove db: %v", rErr)
+		}
 		t.Fatal(err)
 	}
 
 	// Pre-warm the connection to ensure it works
 	if err := database.Ping(); err != nil {
-		database.Close()
-		os.Remove(dbPath)
+		if cErr := database.Close(); cErr != nil {
+			t.Logf("Failed to close database: %v", cErr)
+		}
+		if rErr := os.Remove(dbPath); rErr != nil {
+			t.Logf("Failed to remove db: %v", rErr)
+		}
 		t.Fatal(err)
 	}
 
 	// Return cleanup function but DON'T register it here
 	// Caller is responsible for cleanup order
 	cleanup := func() {
-		database.Close()
-		os.Remove(dbPath)
+		if cErr := database.Close(); cErr != nil {
+			t.Logf("Failed to close database: %v", cErr)
+		}
+		if rErr := os.Remove(dbPath); rErr != nil {
+			t.Logf("Failed to remove db: %v", rErr)
+		}
 	}
 	return database, cleanup
 }

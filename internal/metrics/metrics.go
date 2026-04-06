@@ -1,3 +1,4 @@
+// Package metrics provides instrumentation and telemetry tools.
 package metrics
 
 import (

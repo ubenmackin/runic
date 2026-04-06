@@ -88,12 +88,6 @@ func (w *PushWorker) Stop() {
 	})
 }
 
-// pushJobPeer represents a peer associated with a push job.
-type pushJobPeer struct {
-	PeerID   int
-	Hostname string
-}
-
 func (w *PushWorker) processJob(ctx context.Context, jobID string) {
 	// Create a per-job context with timeout to prevent indefinite hangs
 	jobCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
@@ -114,7 +108,9 @@ func (w *PushWorker) processJob(ctx context.Context, jobID string) {
 
 	total := len(peers)
 	if total == 0 {
-		db.FinalizePushJob(jobCtx, w.db, jobID)
+		if err := db.FinalizePushJob(jobCtx, w.db, jobID); err != nil {
+			runiclog.Error("Failed to finalize push job on complete", "error", err)
+		}
 		w.notifyProgress(jobID, "complete", map[string]interface{}{
 			"status":  "completed",
 			"total":   0,
@@ -144,7 +140,9 @@ func (w *PushWorker) processJob(ctx context.Context, jobID string) {
 		bundle, err := w.compiler.CompileAndStore(jobCtx, peer.PeerID)
 		if err != nil {
 			failed++
-			db.UpdatePushJobPeerStatus(jobCtx, w.db, jobID, peer.PeerID, "failed", err.Error())
+			if err := db.UpdatePushJobPeerStatus(jobCtx, w.db, jobID, peer.PeerID, "failed", err.Error()); err != nil {
+				runiclog.Error("Failed to update push job peer status", "error", err)
+			}
 			runiclog.Error("PushWorker: failed to compile for peer", "peer_id", peer.PeerID, "hostname", peer.Hostname, "error", err)
 			w.notifyProgress(jobID, "peer_failed", map[string]interface{}{
 				"peer_id":   peer.PeerID,
@@ -161,7 +159,9 @@ func (w *PushWorker) processJob(ctx context.Context, jobID string) {
 		w.sseHub.NotifyBundleUpdated("host-"+peer.Hostname, bundle.Version)
 
 		// Update peer status
-		db.UpdatePushJobPeerStatus(jobCtx, w.db, jobID, peer.PeerID, "notified", "")
+		if err := db.UpdatePushJobPeerStatus(jobCtx, w.db, jobID, peer.PeerID, "notified", ""); err != nil {
+			runiclog.Error("Failed to update push job peer status", "error", err)
+		}
 
 		succeeded++
 		w.notifyProgress(jobID, "peer_success", map[string]interface{}{
@@ -175,7 +175,9 @@ func (w *PushWorker) processJob(ctx context.Context, jobID string) {
 	}
 
 	// Finalize job with counts in a single atomic update
-	db.FinalizePushJobWithCounts(jobCtx, w.db, jobID, succeeded, failed)
+	if err := db.FinalizePushJobWithCounts(jobCtx, w.db, jobID, succeeded, failed); err != nil {
+		runiclog.Error("Failed to finalize push job with counts", "error", err)
+	}
 
 	finalStatus := "completed"
 	if failed > 0 {

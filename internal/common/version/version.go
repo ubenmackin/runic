@@ -1,3 +1,4 @@
+// Package version provides version functionality.
 package version
 
 import (
@@ -15,6 +16,9 @@ var BuiltAt string
 
 // BuiltAtTime parses the BuiltAt string into a time.Time.
 func BuiltAtTime() time.Time {
-	t, _ := time.Parse(time.RFC3339, BuiltAt)
+	t, err := time.Parse(time.RFC3339, BuiltAt)
+	if err != nil {
+		return time.Time{}
+	}
 	return t
 }
