@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -379,63 +380,204 @@ func TestIsControlPlaneReachableFalse(t *testing.T) {
 	}
 }
 
-// TestApplyCachedBundleSkipsWhenMissing tests applyCachedBundle skips when cache doesn't exist
-func TestApplyCachedBundleSkipsWhenMissing(t *testing.T) {
+// mockCommandRunner implements CommandRunner for testing.
+type mockCommandRunner struct {
+	output []byte
+	err    error
+	calls  []mockCall
+}
+
+type mockCall struct {
+	name string
+	args []string
+}
+
+func (m *mockCommandRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	m.calls = append(m.calls, mockCall{name: name, args: args})
+	return m.output, m.err
+}
+
+// TestApplyCachedBundle_NoCacheFile tests applyCachedBundle returns nil when cache file doesn't exist.
+func TestApplyCachedBundle_NoCacheFile(t *testing.T) {
 	cfg := helperConfig()
 	configPath := helperConfigPath(t, cfg)
 
 	agent := New(configPath, "http://localhost:8080")
+	// Use a non-existent cache path in temp dir
+	agent.cachePath = filepath.Join(t.TempDir(), "nonexistent.rules")
+	agent.cmdRunner = &mockCommandRunner{}
 
-	// Try to apply cached bundle from non-existent path
-	// This uses the actual cache path from agent.go
 	err := agent.applyCachedBundle(context.Background())
 
-	// Should not error, just skip
 	if err != nil {
 		t.Errorf("applyCachedBundle() error = %v, want nil for missing cache", err)
 	}
 }
 
-// TestApplyCachedBundleEmptyRules tests applyCachedBundle validates non-empty rules
-func TestApplyCachedBundleEmptyRules(t *testing.T) {
-	// Test the validation logic directly
-	emptyRules := ""
-	if strings.TrimSpace(emptyRules) == "" {
-		// Validation should catch this
-		_ = "validation works for empty rules"
-	}
-
-	// Test whitespace-only rules
-	whitespaceRules := "   \n  \n  "
-	if strings.TrimSpace(whitespaceRules) == "" {
-		_ = "validation works for whitespace rules"
-	}
-}
-
-// TestApplyCachedBundleValidPath tests that applyCachedBundle attempts to read from valid path
-func TestApplyCachedBundleValidPath(t *testing.T) {
-	cfg := helperConfig()
-	configPath := helperConfigPath(t, cfg)
-
-	_ = configPath
-
-	// Test that applyCachedBundle method exists and is callable
-	// We verify by checking it uses the correct constant path
-	const expectedPath = "/etc/runic-agent/cached-bundle.rules"
-	_ = expectedPath
-}
-
-// TestApplyCachedBundleMethodExists tests that applyCachedBundle method exists
-func TestApplyCachedBundleMethodExists(t *testing.T) {
+// TestApplyCachedBundle_EmptyRules tests applyCachedBundle returns error for empty rules.
+func TestApplyCachedBundle_EmptyRules(t *testing.T) {
 	cfg := helperConfig()
 	configPath := helperConfigPath(t, cfg)
 
 	agent := New(configPath, "http://localhost:8080")
 
-	// Just verify method is callable without panic
+	// Create empty cache file
+	cacheDir := t.TempDir()
+	cachePath := filepath.Join(cacheDir, "cached-bundle.rules")
+	os.WriteFile(cachePath, []byte(""), 0600)
+	agent.cachePath = cachePath
+	agent.cmdRunner = &mockCommandRunner{}
+
 	err := agent.applyCachedBundle(context.Background())
-	// Either succeeds (no cache) or fails - but method exists
-	_ = err
+
+	if err == nil {
+		t.Error("applyCachedBundle() expected error for empty rules, got nil")
+	}
+	if err != nil && !strings.Contains(err.Error(), "empty") {
+		t.Errorf("applyCachedBundle() error = %v, want 'empty' error", err)
+	}
+}
+
+// TestApplyCachedBundle_WhitespaceOnlyRules tests applyCachedBundle returns error for whitespace-only rules.
+func TestApplyCachedBundle_WhitespaceOnlyRules(t *testing.T) {
+	cfg := helperConfig()
+	configPath := helperConfigPath(t, cfg)
+
+	agent := New(configPath, "http://localhost:8080")
+
+	cacheDir := t.TempDir()
+	cachePath := filepath.Join(cacheDir, "cached-bundle.rules")
+	os.WriteFile(cachePath, []byte("   \n  \n  "), 0600)
+	agent.cachePath = cachePath
+	agent.cmdRunner = &mockCommandRunner{}
+
+	err := agent.applyCachedBundle(context.Background())
+
+	if err == nil {
+		t.Error("applyCachedBundle() expected error for whitespace-only rules, got nil")
+	}
+}
+
+// TestApplyCachedBundle_ReadError tests applyCachedBundle returns error on read failure.
+func TestApplyCachedBundle_ReadError(t *testing.T) {
+	cfg := helperConfig()
+	configPath := helperConfigPath(t, cfg)
+
+	agent := New(configPath, "http://localhost:8080")
+
+	// Point to an unreadable path (directory instead of file)
+	cacheDir := t.TempDir()
+	agent.cachePath = cacheDir // This is a directory, not a file
+	agent.cmdRunner = &mockCommandRunner{}
+
+	err := agent.applyCachedBundle(context.Background())
+
+	if err == nil {
+		t.Error("applyCachedBundle() expected error for unreadable path, got nil")
+	}
+}
+
+// TestApplyCachedBundle_Success tests applyCachedBundle calls iptables-restore with valid rules.
+func TestApplyCachedBundle_Success(t *testing.T) {
+	cfg := helperConfig()
+	configPath := helperConfigPath(t, cfg)
+
+	agent := New(configPath, "http://localhost:8080")
+
+	cacheDir := t.TempDir()
+	cachePath := filepath.Join(cacheDir, "cached-bundle.rules")
+	validRules := "*filter\n:INPUT DROP [0:0]\nCOMMIT\n"
+	os.WriteFile(cachePath, []byte(validRules), 0600)
+	agent.cachePath = cachePath
+
+	mockCmd := &mockCommandRunner{}
+	agent.cmdRunner = mockCmd
+
+	err := agent.applyCachedBundle(context.Background())
+
+	if err != nil {
+		t.Errorf("applyCachedBundle() error = %v, want nil", err)
+	}
+
+	// Verify iptables-restore was called
+	if len(mockCmd.calls) != 1 {
+		t.Fatalf("expected 1 command call, got %d", len(mockCmd.calls))
+	}
+	if mockCmd.calls[0].name != "iptables-restore" {
+		t.Errorf("expected command 'iptables-restore', got '%s'", mockCmd.calls[0].name)
+	}
+}
+
+// TestBackupIptables_SkipsIfBackupExists tests backupIptables skips when backup already exists.
+func TestBackupIptables_SkipsIfBackupExists(t *testing.T) {
+	cfg := helperConfig()
+	configPath := helperConfigPath(t, cfg)
+
+	agent := New(configPath, "http://localhost:8080")
+
+	// Create a temp dir and set backupPath to a file that exists
+	backupDir := t.TempDir()
+	backupPath := filepath.Join(backupDir, "iptables-backup.rules")
+	os.WriteFile(backupPath, []byte("existing"), 0600)
+	agent.backupPath = backupPath
+	agent.cmdRunner = &mockCommandRunner{}
+
+	err := agent.backupIptables()
+
+	if err != nil {
+		t.Errorf("backupIptables() error = %v, want nil for existing backup", err)
+	}
+}
+
+// TestBackupIptables_IptablesSaveFails tests backupIptables returns error when iptables-save fails.
+func TestBackupIptables_IptablesSaveFails(t *testing.T) {
+	cfg := helperConfig()
+	configPath := helperConfigPath(t, cfg)
+
+	agent := New(configPath, "http://localhost:8080")
+
+	backupDir := t.TempDir()
+	// Don't create the backup file - it should try to create it
+	agent.backupPath = filepath.Join(backupDir, "iptables-backup.rules")
+	agent.cmdRunner = &mockCommandRunner{err: fmt.Errorf("iptables-save: command not found")}
+
+	err := agent.backupIptables()
+
+	if err == nil {
+		t.Error("backupIptables() expected error when iptables-save fails, got nil")
+	}
+}
+
+// TestBackupIptables_Success tests backupIptables saves rules when no backup exists.
+func TestBackupIptables_Success(t *testing.T) {
+	cfg := helperConfig()
+	configPath := helperConfigPath(t, cfg)
+
+	agent := New(configPath, "http://localhost:8080")
+
+	backupDir := t.TempDir()
+	agent.backupPath = filepath.Join(backupDir, "iptables-backup.rules")
+	agent.cmdRunner = &mockCommandRunner{output: []byte("*filter\n:INPUT ACCEPT [0:0]\nCOMMIT\n")}
+
+	err := agent.backupIptables()
+
+	if err != nil {
+		t.Errorf("backupIptables() error = %v, want nil", err)
+	}
+
+	// Verify backup file was created
+	if _, err := os.Stat(agent.backupPath); os.IsNotExist(err) {
+		t.Error("backupIptables() did not create backup file")
+	}
+
+	// Verify iptables-save was called
+	mockCmd := agent.cmdRunner.(*mockCommandRunner)
+	if len(mockCmd.calls) != 1 {
+		t.Fatalf("expected 1 command call, got %d", len(mockCmd.calls))
+	}
+	if mockCmd.calls[0].name != "iptables-save" {
+		t.Errorf("expected command 'iptables-save', got '%s'", mockCmd.calls[0].name)
+	}
 }
 
 // TestListenSSEHandlesReRegistration tests listenSSE handles re-registration on 401
@@ -472,11 +614,22 @@ func TestListenSSEHandlesReRegistration(t *testing.T) {
 	<-ctx.Done()
 }
 
-// TestBackupIptablesPathConstants tests backupIptables uses correct path
-func TestBackupIptablesPathConstants(t *testing.T) {
-	// Verify the backup path constant exists in the codebase
-	const expectedBackupPath = "/etc/runic-agent/iptables-backup.rules"
-	_ = expectedBackupPath
+// TestAgentDefaultPaths tests that Agent has correct default cache and backup paths.
+func TestAgentDefaultPaths(t *testing.T) {
+	cfg := helperConfig()
+	configPath := helperConfigPath(t, cfg)
+
+	agent := New(configPath, "http://localhost:8080")
+
+	if agent.cachePath != "/etc/runic-agent/cached-bundle.rules" {
+		t.Errorf("cachePath = %s, want /etc/runic-agent/cached-bundle.rules", agent.cachePath)
+	}
+	if agent.backupPath != "/etc/runic-agent/iptables-backup.rules" {
+		t.Errorf("backupPath = %s, want /etc/runic-agent/iptables-backup.rules", agent.backupPath)
+	}
+	if agent.cmdRunner == nil {
+		t.Error("cmdRunner is nil, expected RealCommandRunner")
+	}
 }
 
 // TestRunLoadsConfig tests Run loads config on startup

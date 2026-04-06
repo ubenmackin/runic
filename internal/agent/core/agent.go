@@ -29,6 +29,19 @@ import (
 // Version is the agent version, set at build time.
 var Version = "0.5.1"
 
+// CommandRunner abstracts exec.Command for testability.
+type CommandRunner interface {
+	Run(ctx context.Context, name string, args ...string) ([]byte, error)
+}
+
+// RealCommandRunner wraps exec.CommandContext for production use.
+type RealCommandRunner struct{}
+
+func (r *RealCommandRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	return cmd.CombinedOutput()
+}
+
 // Agent is the main agent struct.
 type Agent struct {
 	config          *identity.Config
@@ -39,6 +52,9 @@ type Agent struct {
 	shipper         *transport.Shipper
 	rotationManager *rotation.Manager
 	regMu           sync.Mutex // protects re-registration from concurrent calls
+	cmdRunner       CommandRunner
+	cachePath       string
+	backupPath      string
 }
 
 // New creates a new Agent instance.
@@ -66,6 +82,10 @@ func New(configPath, controlPlaneURL string) *Agent {
 		sseClient:  sseClient,
 		version:    Version,
 	}
+
+	agent.cmdRunner = &RealCommandRunner{}
+	agent.cachePath = "/etc/runic-agent/cached-bundle.rules"
+	agent.backupPath = "/etc/runic-agent/iptables-backup.rules"
 
 	// Initialize rotation manager (hostID will be set after registration/load)
 	agent.rotationManager = rotation.NewManager(cfg, configPath, httpClient, cfg.ControlPlaneURL, "")
@@ -150,32 +170,30 @@ func (a *Agent) Run(ctx context.Context) error {
 
 // backupIptables saves the current iptables rules on first install.
 func (a *Agent) backupIptables() error {
-	const backupPath = "/etc/runic-agent/iptables-backup.rules"
-
 	// Check if backup already exists
-	if _, err := os.Stat(backupPath); err == nil {
+	if _, err := os.Stat(a.backupPath); err == nil {
 		log.Info("iptables backup already exists, skipping")
 		return nil
 	}
 
 	// Create directory
-	dir := filepath.Dir(backupPath)
+	dir := filepath.Dir(a.backupPath)
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return fmt.Errorf("create backup dir: %w", err)
 	}
 
 	// Dump current rules
-	out, err := exec.Command("iptables-save").Output()
+	out, err := a.cmdRunner.Run(context.Background(), "iptables-save")
 	if err != nil {
 		return fmt.Errorf("iptables-save: %w", err)
 	}
 
 	// Write to backup file
-	if err := os.WriteFile(backupPath, out, 0600); err != nil {
+	if err := os.WriteFile(a.backupPath, out, 0600); err != nil {
 		return fmt.Errorf("write backup: %w", err)
 	}
 
-	log.Info("iptables rules backed up", "path", backupPath)
+	log.Info("iptables rules backed up", "path", a.backupPath)
 	return nil
 }
 
@@ -338,10 +356,8 @@ func (a *Agent) isControlPlaneReachable(ctx context.Context) bool {
 
 // applyCachedBundle applies the cached bundle from disk on startup.
 func (a *Agent) applyCachedBundle(ctx context.Context) error {
-	const cachePath = "/etc/runic-agent/cached-bundle.rules"
-
 	// Read cached bundle
-	data, err := os.ReadFile(cachePath)
+	data, err := os.ReadFile(a.cachePath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			log.Info("No cached bundle found, skipping apply-on-boot")
@@ -379,13 +395,12 @@ func (a *Agent) applyCachedBundle(ctx context.Context) error {
 		return fmt.Errorf("close temp file: %w", err)
 	}
 
-	cmd := exec.CommandContext(ctx, "iptables-restore", "--noflush", tmpPath)
-	output, err := cmd.CombinedOutput()
+	output, err := a.cmdRunner.Run(ctx, "iptables-restore", "--noflush", tmpPath)
 	if err != nil {
 		return fmt.Errorf("iptables-restore failed: %s: %w", string(output), err)
 	}
 
-	log.Info("Applied cached bundle on startup", "path", cachePath)
+	log.Info("Applied cached bundle on startup", "path", a.cachePath)
 	return nil
 }
 

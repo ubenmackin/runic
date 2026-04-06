@@ -12,16 +12,6 @@ import (
 	"runic/internal/models"
 )
 
-// mockHTTPClient creates a mock HTTP client for testing.
-type mockHTTPClient struct {
-	resp *http.Response
-	err  error
-}
-
-func (m *mockHTTPClient) Do(req *http.Request) (*http.Response, error) {
-	return m.resp, m.err
-}
-
 // TestRegisterSuccessfulRegistration tests successful agent registration.
 func TestRegisterSuccessfulRegistration(t *testing.T) {
 	// Create mock server

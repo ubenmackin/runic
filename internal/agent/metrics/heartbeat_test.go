@@ -12,17 +12,8 @@ import (
 	"testing"
 
 	"runic/internal/models"
+	"runic/internal/testutil"
 )
-
-// mockHTTPClient creates a mock HTTP client for testing
-type mockHTTPClient struct {
-	resp *http.Response
-	err  error
-}
-
-func (m *mockHTTPClient) Do(req *http.Request) (*http.Response, error) {
-	return m.resp, m.err
-}
 
 // TestSendHeartbeat_SendsCorrectJSONPayload tests that SendHeartbeat sends the correct JSON payload
 func TestSendHeartbeat_SendsCorrectJSONPayload(t *testing.T) {
@@ -110,12 +101,12 @@ func TestSendHeartbeat_HandlesNon200Response(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	client := &mockHTTPClient{
-		resp: &http.Response{
+	client := &testutil.MockHTTPClient{
+		Resp: &http.Response{
 			StatusCode: http.StatusInternalServerError,
 			Body:       io.NopCloser(bytes.NewReader([]byte("Internal Server Error"))),
 		},
-		err: nil,
+		Err: nil,
 	}
 
 	err := SendHeartbeat(context.Background(), client, ts.URL, "host123", "v1.0.0", "token", "1.0.0")
@@ -134,12 +125,12 @@ func TestSendHeartbeat_HandlesJSONDecodeErrorGracefully(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	client := &mockHTTPClient{
-		resp: &http.Response{
+	client := &testutil.MockHTTPClient{
+		Resp: &http.Response{
 			StatusCode: http.StatusOK,
 			Body:       io.NopCloser(bytes.NewReader([]byte("not valid json {{{"))),
 		},
-		err: nil,
+		Err: nil,
 	}
 
 	// This should NOT return an error - non-JSON responses are handled gracefully
@@ -241,9 +232,9 @@ func TestBoolPtr_ReturnsCorrectPointer(t *testing.T) {
 
 // TestSendHeartbeat_ClientError tests that SendHeartbeat handles client errors
 func TestSendHeartbeat_ClientError(t *testing.T) {
-	client := &mockHTTPClient{
-		resp: nil,
-		err:  fmt.Errorf("network error: connection refused"),
+	client := &testutil.MockHTTPClient{
+		Resp: nil,
+		Err:  fmt.Errorf("network error: connection refused"),
 	}
 
 	err := SendHeartbeat(context.Background(), client, "http://localhost:8080", "host123", "v1.0.0", "token", "1.0.0")
@@ -324,12 +315,12 @@ func TestSendHeartbeat_EmptyResponse(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	client := &mockHTTPClient{
-		resp: &http.Response{
+	client := &testutil.MockHTTPClient{
+		Resp: &http.Response{
 			StatusCode: http.StatusOK,
 			Body:       io.NopCloser(bytes.NewReader([]byte(""))),
 		},
-		err: nil,
+		Err: nil,
 	}
 
 	// Empty response should be handled gracefully
@@ -347,12 +338,12 @@ func TestSendHeartbeat_ValidJSONResponse(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	client := &mockHTTPClient{
-		resp: &http.Response{
+	client := &testutil.MockHTTPClient{
+		Resp: &http.Response{
 			StatusCode: http.StatusOK,
 			Body:       io.NopCloser(bytes.NewReader([]byte(`{"status":"healthy","timestamp":"2024-01-01T00:00:00Z"}`))),
 		},
-		err: nil,
+		Err: nil,
 	}
 
 	err := SendHeartbeat(context.Background(), client, ts.URL, "host123", "v1.0.0", "token", "1.0.0")
@@ -369,12 +360,12 @@ func TestSendHeartbeat_Unauthorized(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	client := &mockHTTPClient{
-		resp: &http.Response{
+	client := &testutil.MockHTTPClient{
+		Resp: &http.Response{
 			StatusCode: http.StatusUnauthorized,
 			Body:       io.NopCloser(bytes.NewReader([]byte(`{"error":"unauthorized"}`))),
 		},
-		err: nil,
+		Err: nil,
 	}
 
 	err := SendHeartbeat(context.Background(), client, ts.URL, "host123", "v1.0.0", "token", "1.0.0")
