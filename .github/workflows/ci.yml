@@ -105,12 +105,12 @@ jobs:
           cache: 'npm'
           cache-dependency-path: web/package-lock.json
 
-      - name: Build Go binary
-        run: |
-          CGO_ENABLED=1 go build -ldflags="-X runic/internal/common/version.Version=$(git describe --tags --always --dirty 2>/dev/null || echo 'dev')" -o runic ./cmd/runic-server
-
       - name: Build frontend
         run: |
           cd web
           npm ci
           npm run build
+
+      - name: Build Go binary
+        run: |
+          CGO_ENABLED=1 go build -ldflags="-X runic/internal/common/version.Version=$(git describe --tags --always --dirty 2>/dev/null || echo 'dev')" -o runic ./cmd/runic-server
