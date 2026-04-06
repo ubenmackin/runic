@@ -163,7 +163,9 @@ func (h *Handler) CreatePolicy(w http.ResponseWriter, r *http.Request) {
 		log.ErrorContext(r.Context(), "Failed to get affected peers", "policy_id", id, "error", err)
 		// Policy created successfully - log the error but proceed
 	}
-	h.ChangeWorker.QueuePeerChange(r.Context(), h.DB, affectedPeers, "policy", "create", int(id), fmt.Sprintf("Policy '%s' created", input.Name))
+	if h.ChangeWorker != nil {
+		h.ChangeWorker.QueuePeerChange(r.Context(), h.DB, affectedPeers, "policy", "create", int(id), fmt.Sprintf("Policy '%s' created", input.Name))
+	}
 
 	common.RespondJSON(w, http.StatusCreated, map[string]int64{"id": id})
 }
@@ -325,7 +327,9 @@ func (h *Handler) UpdatePolicy(w http.ResponseWriter, r *http.Request) {
 	for pid := range peerSet {
 		allPeers = append(allPeers, pid)
 	}
-	h.ChangeWorker.QueuePeerChange(r.Context(), h.DB, allPeers, "policy", "update", id, fmt.Sprintf("Policy '%s' updated", input.Name))
+	if h.ChangeWorker != nil {
+		h.ChangeWorker.QueuePeerChange(r.Context(), h.DB, allPeers, "policy", "update", id, fmt.Sprintf("Policy '%s' updated", input.Name))
+	}
 
 	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
@@ -372,7 +376,9 @@ func (h *Handler) DeletePolicy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Trigger async recompilation for all old affected peers
-	h.ChangeWorker.QueuePeerChange(r.Context(), h.DB, oldPeers, "policy", "delete", id, fmt.Sprintf("Policy '%s' deleted", policyName))
+	if h.ChangeWorker != nil {
+		h.ChangeWorker.QueuePeerChange(r.Context(), h.DB, oldPeers, "policy", "delete", id, fmt.Sprintf("Policy '%s' deleted", policyName))
+	}
 
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -480,7 +486,9 @@ func (h *Handler) PatchPolicy(w http.ResponseWriter, r *http.Request) {
 	if !*input.Enabled {
 		enabledStr = "disabled"
 	}
-	h.ChangeWorker.QueuePeerChange(r.Context(), h.DB, affectedPeers, "policy", "update", id, fmt.Sprintf("Policy '%s' %s", policyName, enabledStr))
+	if h.ChangeWorker != nil {
+		h.ChangeWorker.QueuePeerChange(r.Context(), h.DB, affectedPeers, "policy", "update", id, fmt.Sprintf("Policy '%s' %s", policyName, enabledStr))
+	}
 	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
 

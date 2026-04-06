@@ -113,6 +113,22 @@ func (h *Handler) CreateGroup(w http.ResponseWriter, r *http.Request) {
 		common.InternalError(w)
 		return
 	}
+
+	// Trigger async recompilation for affected peers (if ChangeWorker is available)
+	if h.ChangeWorker != nil {
+		// Fetch group details for summary
+		group, groupErr := db.GetGroup(r.Context(), h.DB, int(id))
+
+		var summary string
+		if groupErr == nil {
+			summary = fmt.Sprintf("Group '%s' created", group.Name)
+		} else {
+			summary = "Group created"
+		}
+
+		h.ChangeWorker.QueueGroupChange(r.Context(), h.DB, h.Compiler, int(id), "create", summary)
+	}
+
 	common.RespondJSON(w, http.StatusCreated, map[string]int64{"id": id})
 }
 
@@ -164,6 +180,21 @@ func (h *Handler) UpdateGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Trigger async recompilation for affected peers (if ChangeWorker is available)
+	if h.ChangeWorker != nil {
+		// Fetch group details for summary
+		group, groupErr := db.GetGroup(r.Context(), h.DB, id)
+
+		var summary string
+		if groupErr == nil {
+			summary = fmt.Sprintf("Group '%s' updated", group.Name)
+		} else {
+			summary = "Group updated"
+		}
+
+		h.ChangeWorker.QueueGroupChange(r.Context(), h.DB, h.Compiler, id, "update", summary)
+	}
+
 	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
 
@@ -208,6 +239,12 @@ func (h *Handler) DeleteGroup(w http.ResponseWriter, r *http.Request) {
 		log.ErrorContext(r.Context(), "failed to delete group", "error", err)
 		common.InternalError(w)
 		return
+	}
+
+	// Trigger async recompilation for affected peers (if ChangeWorker is available)
+	if h.ChangeWorker != nil {
+		summary := "Group deleted"
+		h.ChangeWorker.QueueGroupChange(r.Context(), h.DB, h.Compiler, id, "delete", summary)
 	}
 
 	w.WriteHeader(http.StatusNoContent)

@@ -368,9 +368,6 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 			if writeToHost {
 				c.writeIGMPRules(rw, pol.TargetScope, hasDocker)
 			}
-			if writeToDocker {
-				// DOCKER-USER rules already handled by writeIGMPRules
-			}
 			buf.WriteString("\n")
 			continue // Skip to next policy
 		}
@@ -985,60 +982,62 @@ func (c *Compiler) GetAffectedPeersByPolicy(ctx context.Context, policyID int) (
 	}
 
 	peers := make(map[int]bool)
-	switch srcType {
-	case "peer":
-		peers[srcID] = true
-	case "group":
-		rows, err := c.db.QueryContext(ctx, "SELECT peer_id FROM group_members WHERE group_id = ?", srcID)
-		if err != nil {
-			return nil, fmt.Errorf("query source group members for policy %d: %w", policyID, err)
-		}
-		if rows != nil {
-			defer func() {
-				if cErr := rows.Close(); cErr != nil {
-					log.Warn("close err", "err", cErr)
-				}
-			}()
-			for rows.Next() {
-				var p int
-				if err := rows.Scan(&p); err == nil {
-					peers[p] = true
-				} else {
-					log.Warn("Failed to scan peer from group", "error", err)
+
+	// Process source if not a special type
+	if srcType != "special" {
+		switch srcType {
+		case "peer":
+			peers[srcID] = true
+		case "group":
+			rows, err := c.db.QueryContext(ctx, "SELECT peer_id FROM group_members WHERE group_id = ?", srcID)
+			if err != nil {
+				return nil, fmt.Errorf("query source group members for policy %d: %w", policyID, err)
+			}
+			if rows != nil {
+				defer func() {
+					if cErr := rows.Close(); cErr != nil {
+						log.Warn("close err", "err", cErr)
+					}
+				}()
+				for rows.Next() {
+					var p int
+					if err := rows.Scan(&p); err == nil {
+						peers[p] = true
+					} else {
+						log.Warn("Failed to scan peer from group", "error", err)
+					}
 				}
 			}
 		}
 	}
 
-	switch tgtType {
-	case "peer":
-		peers[tgtID] = true
-	case "group":
-		rows, err := c.db.QueryContext(ctx, "SELECT peer_id FROM group_members WHERE group_id = ?", tgtID)
-		if err != nil {
-			return nil, fmt.Errorf("query target group members for policy %d: %w", policyID, err)
-		}
-		if rows != nil {
-			defer func() {
-				if cErr := rows.Close(); cErr != nil {
-					log.Warn("close err", "err", cErr)
-				}
-			}()
-			for rows.Next() {
-				var p int
-				if err := rows.Scan(&p); err != nil {
-					log.Warn("Failed to scan peer from target group", "error", err)
-				} else {
-					peers[p] = true
+	// Process target if not a special type
+	if tgtType != "special" {
+		switch tgtType {
+		case "peer":
+			peers[tgtID] = true
+		case "group":
+			rows, err := c.db.QueryContext(ctx, "SELECT peer_id FROM group_members WHERE group_id = ?", tgtID)
+			if err != nil {
+				return nil, fmt.Errorf("query target group members for policy %d: %w", policyID, err)
+			}
+			if rows != nil {
+				defer func() {
+					if cErr := rows.Close(); cErr != nil {
+						log.Warn("close err", "err", cErr)
+					}
+				}()
+				for rows.Next() {
+					var p int
+					if err := rows.Scan(&p); err != nil {
+						log.Warn("Failed to scan peer from target group", "error", err)
+					} else {
+						peers[p] = true
+					}
 				}
 			}
 		}
 	}
-	// Note: "special" source/target types don't add any peers to the affected list.
-	// Special types (e.g., __loopback__, __subnet_broadcast__, __all_hosts__) represent
-	// fixed addresses rather than dynamic peer entities. They resolve to specific IPs
-	// at compile time and don't require recompilation when peers are added/removed.
-	// The policy assignment determines which peers need the rules, not the special target itself.
 
 	var peerList []int
 	for id := range peers {
