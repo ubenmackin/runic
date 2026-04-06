@@ -8,15 +8,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gorilla/mux"
-
 	"runic/internal/testutil"
 )
 
 // muxVars is a helper to mock gorilla/mux vars
-func muxVars(r *http.Request, vars map[string]string) *http.Request {
-	return mux.SetURLVars(r, vars)
-}
+var muxVars = testutil.MuxVars
 
 // TestDeletePeer tests the DELETE /peers/{id} endpoint with constraint checks.
 func TestDeletePeer(t *testing.T) {

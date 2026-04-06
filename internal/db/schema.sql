@@ -189,3 +189,28 @@ CREATE TABLE IF NOT EXISTS push_job_peers (
 );
 CREATE INDEX IF NOT EXISTS idx_push_job_peers_job_id ON push_job_peers(job_id);
 CREATE INDEX IF NOT EXISTS idx_push_jobs_status ON push_jobs(status);
+
+-- Pending changes tracking for peer configurations
+CREATE TABLE IF NOT EXISTS pending_changes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    peer_id INTEGER NOT NULL,
+    change_type TEXT NOT NULL,
+    change_id INTEGER NOT NULL,
+    change_action TEXT NOT NULL,
+    change_summary TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(peer_id) REFERENCES peers(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_pending_changes_peer ON pending_changes(peer_id);
+
+-- Pending bundle previews for peer configuration previews
+CREATE TABLE IF NOT EXISTS pending_bundle_previews (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    peer_id INTEGER NOT NULL UNIQUE,
+    rules_content TEXT NOT NULL,
+    diff_content TEXT,
+    version_hash TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(peer_id) REFERENCES peers(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_pending_bundle_previews_peer ON pending_bundle_previews(peer_id);

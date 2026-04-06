@@ -929,3 +929,366 @@ func TestUpdateGroup(t *testing.T) {
 		})
 	}
 }
+
+// =============================================================================
+// Additional Error Path Tests
+// =============================================================================
+
+func TestListGroups_DBError(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	// Close the database to trigger a query error
+	database.Close()
+
+	h := NewHandler(database, nil, nil)
+	req := httptest.NewRequest("GET", "/api/v1/groups", nil)
+	w := httptest.NewRecorder()
+
+	h.ListGroups(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("expected status %d, got %d: %s", http.StatusInternalServerError, w.Code, w.Body.String())
+	}
+
+	var resp map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode error response: %v", err)
+	}
+	if !strings.Contains(resp["error"], "failed to query") {
+		t.Errorf("expected error containing 'failed to query', got %q", resp["error"])
+	}
+}
+
+func TestCreateGroup_DBError(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	// Close the database to trigger an insert error
+	database.Close()
+
+	h := NewHandler(database, nil, nil)
+	req := httptest.NewRequest("POST", "/api/v1/groups", strings.NewReader(`{"name": "test"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	h.CreateGroup(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("expected status %d, got %d: %s", http.StatusInternalServerError, w.Code, w.Body.String())
+	}
+}
+
+func TestGetGroup_DBError(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	// Insert a group
+	database.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group")
+
+	// Close DB to trigger error on GetGroup
+	database.Close()
+
+	req := httptest.NewRequest("GET", "/api/v1/groups/1", nil)
+	w := httptest.NewRecorder()
+
+	req = muxVars(req, map[string]string{"id": "1"})
+
+	h := NewHandler(database, nil, nil)
+	h.GetGroup(w, req)
+
+	// After DB close, query may return not found or error
+	if w.Code != http.StatusInternalServerError && w.Code != http.StatusNotFound {
+		t.Errorf("expected status %d or %d, got %d: %s", http.StatusInternalServerError, http.StatusNotFound, w.Code, w.Body.String())
+	}
+}
+
+func TestUpdateGroup_DBError(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	// Insert a group
+	database.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group")
+
+	// Close DB to trigger error on UpdateGroup
+	database.Close()
+
+	h := NewHandler(database, nil, nil)
+	req := httptest.NewRequest("PUT", "/api/v1/groups/1", strings.NewReader(`{"name": "updated"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	req = muxVars(req, map[string]string{"id": "1"})
+
+	h.UpdateGroup(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("expected status %d, got %d: %s", http.StatusInternalServerError, w.Code, w.Body.String())
+	}
+}
+
+func TestDeleteGroup_DBError(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	// Insert a group without policies
+	database.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group")
+
+	// Close DB to trigger error on DeleteGroup
+	database.Close()
+
+	req := httptest.NewRequest("DELETE", "/api/v1/groups/1", nil)
+	w := httptest.NewRecorder()
+
+	req = muxVars(req, map[string]string{"id": "1"})
+
+	h := NewHandler(database, nil, nil)
+	h.DeleteGroup(w, req)
+
+	// After DB close, query may return not found or error
+	if w.Code != http.StatusInternalServerError && w.Code != http.StatusNotFound {
+		t.Errorf("expected status %d or %d, got %d: %s", http.StatusInternalServerError, http.StatusNotFound, w.Code, w.Body.String())
+	}
+}
+
+func TestDeleteGroup_UsedAsTarget(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	// Insert test data - group used as TARGET in policy
+	database.Exec(`INSERT INTO groups (name, description) VALUES (?, ?)`, "target-group", "Group used as target")
+	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)`,
+		"peer1", "10.0.0.1", "key1", "hmac1")
+	database.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`, "http", "80", "tcp")
+	database.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, "peer", ?, ?, "group", ?, ?, ?)`,
+		"allow-to-group", 1, 1, 1, "ACCEPT", 100, 1)
+
+	req := httptest.NewRequest("DELETE", "/api/v1/groups/1", nil)
+	w := httptest.NewRecorder()
+
+	req = muxVars(req, map[string]string{"id": "1"})
+
+	h := NewHandler(database, nil, nil)
+	h.DeleteGroup(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Errorf("expected status %d, got %d: %s", http.StatusConflict, w.Code, w.Body.String())
+	}
+
+	var resp map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode error response: %v", err)
+	}
+	if !strings.Contains(resp["error"], "allow-to-group") {
+		t.Errorf("expected error to contain policy name 'allow-to-group', got %q", resp["error"])
+	}
+}
+
+func TestListGroupMembers_DBError(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	// Insert test data
+	database.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group")
+
+	// Close DB
+	database.Close()
+
+	req := httptest.NewRequest("GET", "/api/v1/groups/1/members", nil)
+	w := httptest.NewRecorder()
+
+	req = muxVars(req, map[string]string{"id": "1"})
+
+	h := NewHandler(database, nil, nil)
+	h.ListGroupMembers(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("expected status %d, got %d: %s", http.StatusInternalServerError, w.Code, w.Body.String())
+	}
+}
+
+func TestAddGroupMember_DBError(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	// Insert test data
+	database.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group")
+
+	// Close DB
+	database.Close()
+
+	req := httptest.NewRequest("POST", "/api/v1/groups/1/members", strings.NewReader(`{"peer_id": 1}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	req = muxVars(req, map[string]string{"id": "1"})
+
+	h := NewHandler(database, nil, nil)
+	handler := http.HandlerFunc(h.AddGroupMember)
+	handler(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("expected status %d, got %d: %s", http.StatusInternalServerError, w.Code, w.Body.String())
+	}
+}
+
+func TestDeleteGroupMember_DBError(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	// Insert test data
+	database.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group")
+
+	// Close DB
+	database.Close()
+
+	req := httptest.NewRequest("DELETE", "/api/v1/groups/1/members/1", nil)
+	w := httptest.NewRecorder()
+
+	req = muxVars(req, map[string]string{"groupId": "1", "peerId": "1"})
+
+	h := NewHandler(database, nil, nil)
+	handler := http.HandlerFunc(h.DeleteGroupMember)
+	handler(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("expected status %d, got %d: %s", http.StatusInternalServerError, w.Code, w.Body.String())
+	}
+}
+
+func TestCreateGroup_InvalidName(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	tests := []struct {
+		name     string
+		body     string
+		wantCode int
+		wantErr  string
+	}{
+		{
+			name:     "name too long",
+			body:     `{"name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`,
+			wantCode: http.StatusBadRequest,
+			wantErr:  "name must be",
+		},
+		{
+			name:     "invalid characters in name",
+			body:     `{"name": "test@group"}`,
+			wantCode: http.StatusBadRequest,
+			wantErr:  "name must be",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := NewHandler(database, nil, nil)
+			req := httptest.NewRequest("POST", "/api/v1/groups", strings.NewReader(tt.body))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+
+			h.CreateGroup(w, req)
+
+			if w.Code != tt.wantCode {
+				t.Errorf("expected status %d, got %d: %s", tt.wantCode, w.Code, w.Body.String())
+			}
+
+			if tt.wantErr != "" {
+				var resp map[string]string
+				if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+					t.Fatalf("failed to decode error response: %v", err)
+				}
+				if !strings.Contains(resp["error"], tt.wantErr) {
+					t.Errorf("expected error containing %q, got %q", tt.wantErr, resp["error"])
+				}
+			}
+		})
+	}
+}
+
+func TestUpdateGroup_InvalidName(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	// Insert test data
+	database.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group")
+
+	tests := []struct {
+		name     string
+		body     string
+		wantCode int
+		wantErr  string
+	}{
+		{
+			name:     "name too long",
+			body:     `{"name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`,
+			wantCode: http.StatusBadRequest,
+			wantErr:  "name must be",
+		},
+		{
+			name:     "invalid characters in name",
+			body:     `{"name": "bad@name"}`,
+			wantCode: http.StatusBadRequest,
+			wantErr:  "name must be",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := NewHandler(database, nil, nil)
+			req := httptest.NewRequest("PUT", "/api/v1/groups/1", strings.NewReader(tt.body))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+
+			req = muxVars(req, map[string]string{"id": "1"})
+
+			h.UpdateGroup(w, req)
+
+			if w.Code != tt.wantCode {
+				t.Errorf("expected status %d, got %d: %s", tt.wantCode, w.Code, w.Body.String())
+			}
+
+			if tt.wantErr != "" {
+				var resp map[string]string
+				if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+					t.Fatalf("failed to decode error response: %v", err)
+				}
+				if !strings.Contains(resp["error"], tt.wantErr) {
+					t.Errorf("expected error containing %q, got %q", tt.wantErr, resp["error"])
+				}
+			}
+		})
+	}
+}
+
+func TestUpdateGroup_EmptyName(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	// Insert test data
+	database.Exec(`INSERT INTO groups (name, description) VALUES (?, ?)`, "test-group", "original")
+
+	h := NewHandler(database, nil, nil)
+	req := httptest.NewRequest("PUT", "/api/v1/groups/1", strings.NewReader(`{"name": "", "description": "updated"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	req = muxVars(req, map[string]string{"id": "1"})
+
+	h.UpdateGroup(w, req)
+
+	// Should succeed with empty name (no validation for update)
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d: %s", http.StatusOK, w.Code, w.Body.String())
+	}
+
+	// Verify description was updated
+	var desc string
+	err := database.QueryRow("SELECT description FROM groups WHERE id = 1").Scan(&desc)
+	if err != nil {
+		t.Fatalf("failed to query group: %v", err)
+	}
+	if desc != "updated" {
+		t.Errorf("expected description 'updated', got %q", desc)
+	}
+}

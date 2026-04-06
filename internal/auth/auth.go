@@ -226,3 +226,12 @@ func RoleFromContext(ctx context.Context) string {
 	}
 	return ""
 }
+
+// SetContextForTest sets role and username in context for testing purposes.
+// This is needed because the context keys are unexported and can't be directly
+// accessed from other packages.
+func SetContextForTest(ctx context.Context, role, username string) context.Context {
+	ctx = context.WithValue(ctx, ctxKeyRole, role)
+	ctx = context.WithValue(ctx, ctxKeyUsername, username)
+	return ctx
+}
