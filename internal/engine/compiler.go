@@ -377,49 +377,48 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 		if pol.IsTarget && (pol.Direction == "both" || pol.Direction == "backward") {
 			fmt.Fprintf(&buf, "# As Target (Ingress from %s %d)\n", pol.SourceType, pol.SourceID)
 
-			// MC-009: Skip bogus "As Target" ingress for multicast special targets
-			// Multicast special targets (IDs 3=__all_hosts__, 4=__mdns__, 8=__igmpv3__) are destinations
-			// for outbound multicast, not sources for inbound traffic
+			// MC-009: Multicast special targets as Source indicate the host receives multicast traffic
+			// When Source is a multicast special target (IDs 3=__all_hosts__, 4=__mdns__, 8=__igmpv3__),
+			// this means the host should receive multicast traffic from that group - GENERATE INPUT rules
 			isMulticastSource := pol.SourceType == "special" && (pol.SourceID == 3 || pol.SourceID == 4 || pol.SourceID == 8)
-			if isMulticastSource {
-				// Skip this section - multicast targets don't make sense as ingress sources
-				buf.WriteString("# (skipped - multicast special target as source)\n")
-			} else {
-				// Check if we should use ipset for this source
-				useIpset := hasIPSet && pol.SourceType == "group"
-				var ipsetName string
-				if useIpset {
-					ipsetName = groupIDToIpsetName[pol.SourceID]
-					useIpset = ipsetName != ""
-				}
 
-				if useIpset {
-					// Use ipset-based rules (single rule per port clause)
-					if serviceName == "Multicast" {
-						c.writeMulticastRule(rw, pol.Action, pol.TargetScope, hasDocker)
-					} else {
-						if err := c.writeTargetRules(ctx, rw, pol, portClauses, true, ipsetName, nil, ipAddress, writeToHost, writeToDocker, noConntrack); err != nil {
-							return "", err
-						}
-					}
+			// Check if we should use ipset for this source
+			useIpset := hasIPSet && pol.SourceType == "group"
+			var ipsetName string
+			if useIpset {
+				ipsetName = groupIDToIpsetName[pol.SourceID]
+				useIpset = ipsetName != ""
+			}
+
+			if isMulticastSource {
+				// Multicast source: use packet type matching for receiving multicast traffic
+				c.writeMulticastRule(rw, pol.Action, pol.TargetScope, hasDocker)
+			} else if useIpset {
+				// Use ipset-based rules (single rule per port clause)
+				if serviceName == "Multicast" {
+					c.writeMulticastRule(rw, pol.Action, pol.TargetScope, hasDocker)
 				} else {
-					// Use individual rules (fallback for non-group or non-ipset peers)
-					var cidrs []string
-					var err error
-					if pol.SourceType == "special" {
-						cidrs, err = c.resolver.ResolveSpecialTarget(ctx, pol.SourceID, ipAddress)
-					} else {
-						cidrs, err = c.resolver.ResolveEntity(ctx, pol.SourceType, pol.SourceID)
+					if err := c.writeTargetRules(ctx, rw, pol, portClauses, true, ipsetName, nil, ipAddress, writeToHost, writeToDocker, noConntrack); err != nil {
+						return "", err
 					}
-					if err != nil {
-						return "", fmt.Errorf("resolve source for policy %s: %w", pol.Name, err)
-					}
-					if serviceName == "Multicast" {
-						c.writeMulticastRule(rw, pol.Action, pol.TargetScope, hasDocker)
-					} else {
-						if err := c.writeTargetRules(ctx, rw, pol, portClauses, false, "", cidrs, ipAddress, writeToHost, writeToDocker, noConntrack); err != nil {
-							return "", err
-						}
+				}
+			} else {
+				// Use individual rules (fallback for non-group or non-ipset peers)
+				var cidrs []string
+				var err error
+				if pol.SourceType == "special" {
+					cidrs, err = c.resolver.ResolveSpecialTarget(ctx, pol.SourceID, ipAddress)
+				} else {
+					cidrs, err = c.resolver.ResolveEntity(ctx, pol.SourceType, pol.SourceID)
+				}
+				if err != nil {
+					return "", fmt.Errorf("resolve source for policy %s: %w", pol.Name, err)
+				}
+				if serviceName == "Multicast" {
+					c.writeMulticastRule(rw, pol.Action, pol.TargetScope, hasDocker)
+				} else {
+					if err := c.writeTargetRules(ctx, rw, pol, portClauses, false, "", cidrs, ipAddress, writeToHost, writeToDocker, noConntrack); err != nil {
+						return "", err
 					}
 				}
 			}
@@ -784,10 +783,31 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 		// IG-002: Skip backward for IGMP (already handled above)
 		if !strings.EqualFold(serviceName, "IGMP") && (direction == "both" || direction == "backward") {
 			buf.WriteString("# Backward (Target → Source)\n")
-			// MC-009: Skip bogus "As Target" ingress for multicast special targets
+			// MC-009: Multicast special targets as Source indicate receiving multicast traffic
+			// When Source is a multicast special target (IDs 3=__all_hosts__, 4=__mdns__, 8=__igmpv3__),
+			// this means the host should receive multicast traffic from that group - GENERATE INPUT rules
 			isMulticastSource := sourceType == "special" && (sourceID == 3 || sourceID == 4 || sourceID == 8)
 			if isMulticastSource {
-				buf.WriteString("# (skipped - multicast special target as source)\n")
+				// Multicast source: use packet type matching for receiving multicast traffic
+				if serviceName == "Multicast" {
+					buf.WriteString("-A INPUT -m pkttype --pkt-type multicast -j ACCEPT\n")
+				} else {
+					// For non-Multicast services with multicast special source, generate INPUT rules
+					for _, pc := range portClauses {
+						inputPortMatch := pc.PortMatch
+						if pc.SrcPortMatch != "" {
+							inputPortMatch = pc.SrcPortMatch + " " + inputPortMatch
+						}
+						outputPortMatch := invertPortMatch(pc.PortMatch, pc.SrcPortMatch)
+						// MC-011: Handle no_conntrack flag
+						if noConntrack {
+							fmt.Fprintf(&buf, "-A INPUT -m pkttype --pkt-type multicast -p %s %s -j ACCEPT\n", pc.Protocol, inputPortMatch)
+						} else {
+							fmt.Fprintf(&buf, "-A INPUT -m pkttype --pkt-type multicast -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", pc.Protocol, inputPortMatch)
+							fmt.Fprintf(&buf, "-A OUTPUT -p %s %s -m conntrack --ctstate ESTABLISHED -j ACCEPT\n", pc.Protocol, outputPortMatch)
+						}
+					}
+				}
 			} else {
 				for _, sourceCIDR := range sourceCIDRs {
 					if serviceName == "Multicast" {
@@ -846,10 +866,27 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 			// Backward direction: Target (Docker) ← Source
 			// IG-002: Skip backward for IGMP (already handled above)
 			if !strings.EqualFold(serviceName, "IGMP") && (direction == "both" || direction == "backward") {
-				// MC-009: Skip bogus "As Target" ingress for multicast special targets
+				// MC-009: Multicast special targets as Source indicate receiving multicast traffic
 				isMulticastSource := sourceType == "special" && (sourceID == 3 || sourceID == 4 || sourceID == 8)
 				if isMulticastSource {
-					buf.WriteString("# (skipped - multicast special target as source)\n")
+					// Multicast source: use packet type matching for receiving multicast traffic
+					if serviceName == "Multicast" {
+						buf.WriteString("-A DOCKER-USER -m pkttype --pkt-type multicast -j ACCEPT\n")
+					} else {
+						// For non-Multicast services with multicast special source, generate DOCKER-USER INPUT rules
+						for _, pc := range portClauses {
+							inputPortMatch := pc.PortMatch
+							if pc.SrcPortMatch != "" {
+								inputPortMatch = pc.SrcPortMatch + " " + inputPortMatch
+							}
+							// MC-011: Handle no_conntrack flag
+							if noConntrack {
+								fmt.Fprintf(&buf, "-A DOCKER-USER -m pkttype --pkt-type multicast -p %s %s -j ACCEPT\n", pc.Protocol, inputPortMatch)
+							} else {
+								fmt.Fprintf(&buf, "-A DOCKER-USER -m pkttype --pkt-type multicast -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", pc.Protocol, inputPortMatch)
+							}
+						}
+					}
 				} else {
 					for _, sourceCIDR := range sourceCIDRs {
 						if serviceName == "Multicast" {

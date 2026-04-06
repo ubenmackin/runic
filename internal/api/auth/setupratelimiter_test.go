@@ -7,9 +7,22 @@ import (
 	"runic/internal/api/middleware"
 )
 
+const (
+	// testSetupRateLimitWindow is a short window duration for testing window reset behavior.
+	// Using a short window allows tests to run in milliseconds instead of waiting 1 minute.
+	testSetupRateLimitWindow = 100 * time.Millisecond
+	testSetupMaxRequests     = 10 // Same as production
+)
+
 // newTestRateLimiter creates a rate limiter with the same configuration as the production one
 func newTestRateLimiter() *middleware.RateLimiter {
 	return middleware.NewRateLimiter(setupMaxRequests, setupRateLimitWindow)
+}
+
+// newTestRateLimiterWithWindow creates a rate limiter with a custom window duration.
+// This allows testing window reset behavior without waiting for the production 1-minute window.
+func newTestRateLimiterWithWindow(window time.Duration) *middleware.RateLimiter {
+	return middleware.NewRateLimiter(testSetupMaxRequests, window)
 }
 
 // TestCheckSetupRateLimit_LimitTests tests that the rate limit is enforced correctly
@@ -38,11 +51,11 @@ func TestCheckSetupRateLimit_LimitTests(t *testing.T) {
 func TestCheckSetupRateLimit_WindowReset(t *testing.T) {
 	testIP := "192.168.1.101:12345"
 
-	// Create a new rate limiter for testing
-	testLimiter := newTestRateLimiter()
+	// Create a rate limiter with a short window for testing
+	testLimiter := newTestRateLimiterWithWindow(testSetupRateLimitWindow)
 
 	// Make requests up to the limit
-	for i := 0; i < setupMaxRequests; i++ {
+	for i := 0; i < testSetupMaxRequests; i++ {
 		err := testLimiter.Check(testIP)
 		if err != nil {
 			t.Errorf("Request %d: expected success, got error: %v", i+1, err)
@@ -56,7 +69,7 @@ func TestCheckSetupRateLimit_WindowReset(t *testing.T) {
 	}
 
 	// Wait for the time window to expire (add a small buffer)
-	time.Sleep(setupRateLimitWindow + 100*time.Millisecond)
+	time.Sleep(testSetupRateLimitWindow + 50*time.Millisecond)
 
 	// Now the request should succeed
 	err = testLimiter.Check(testIP)

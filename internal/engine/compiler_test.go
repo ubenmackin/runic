@@ -1764,3 +1764,79 @@ func TestPreviewCompile_IGMP(t *testing.T) {
 		t.Errorf("expected DOCKER-USER rules for IGMP in preview (target_scope=both), got: %v", rules)
 	}
 }
+
+// TestMulticastPolicy_SourceIsMulticastSpecial verifies that when Source is a multicast special target,
+// the compiler generates INPUT rules for receiving multicast traffic
+func TestMulticastPolicy_SourceIsMulticastSpecial(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+
+	peerID := insertPeer(t, database, "mcast-receiver", "192.168.1.100", false)
+
+	// Insert Multicast service
+	result, _ := database.Exec(
+		`INSERT INTO services (name, ports, protocol, description, is_system) VALUES (?, ?, ?, ?, 1)`,
+		"Multicast", "", "udp", "Multicast traffic handling")
+	serviceID, _ := result.LastInsertId()
+
+	// Policy with Source = special 3 (All Hosts IGMP), Target = peer
+	// This means the peer receives multicast traffic from the All Hosts multicast group
+	_, err := database.Exec(
+		`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled, target_scope)
+		VALUES (?, 3, 'special', ?, ?, 'peer', 'ACCEPT', 100, 1, 'host')`,
+		"multicast-receive", serviceID, peerID)
+	if err != nil {
+		t.Fatalf("insert policy: %v", err)
+	}
+
+	c := NewCompiler(database)
+	output, err := c.Compile(context.Background(), peerID)
+	if err != nil {
+		t.Fatalf("compile error: %v", err)
+	}
+
+	// Should have INPUT rule for receiving multicast from the special source
+	if !strings.Contains(output, "-A INPUT -m pkttype --pkt-type multicast -j ACCEPT") {
+		t.Errorf("expected INPUT multicast rule for receiving multicast from special source, got:\n%s", output)
+	}
+}
+
+// TestMulticastPolicy_SourceIsMulticastSpecial_WithService verifies multicast special source with non-Multicast service
+func TestMulticastPolicy_SourceIsMulticastSpecial_WithService(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+
+	peerID := insertPeer(t, database, "mcast-service-receiver", "192.168.1.101", false)
+
+	// Create a service (e.g., mDNS on port 5353 UDP)
+	serviceID := insertService(t, database, "mdns", "5353", "udp")
+
+	// Policy with Source = special 4 (mDNS multicast address), Target = peer
+	// This means the peer receives mDNS multicast traffic
+	_, err := database.Exec(
+		`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled, target_scope)
+		VALUES (?, 4, 'special', ?, ?, 'peer', 'ACCEPT', 100, 1, 'host')`,
+		"mdns-receive", serviceID, peerID)
+	if err != nil {
+		t.Fatalf("insert policy: %v", err)
+	}
+
+	c := NewCompiler(database)
+	output, err := c.Compile(context.Background(), peerID)
+	if err != nil {
+		t.Fatalf("compile error: %v", err)
+	}
+
+	// Should have INPUT rule for receiving multicast traffic (packet type matching)
+	// The multicast special source generates packet type matching, not source IP matching
+	if !strings.Contains(output, "-A INPUT -m pkttype --pkt-type multicast -j ACCEPT") {
+		t.Errorf("expected INPUT multicast rule for mDNS service, got:\n%s", output)
+	}
+
+	// Verify that As Target section is present with multicast special source
+	if !strings.Contains(output, "# As Target (Ingress from special 4)") {
+		t.Errorf("expected 'As Target (Ingress from special 4)' comment, got:\n%s", output)
+	}
+}
