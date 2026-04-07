@@ -3,12 +3,14 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -19,34 +21,88 @@ import (
 	"runic/internal/agent/identity"
 )
 
+// configFlag tracks whether a config flag was explicitly set
+type configFlag struct {
+	set   bool
+	value string
+}
+
+func (cf *configFlag) Set(value string) error {
+	cf.value = value
+	cf.set = true
+	return nil
+}
+
+func (cf *configFlag) String() string {
+	return cf.value
+}
+
+func (cf *configFlag) IsBoolFlag() bool {
+	return false
+}
+
+// parseBoolFlag parses "true" or "false" string to boolean
+// Returns error for invalid values
+func parseBoolFlag(value string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "true", "1", "yes", "on":
+		return true, nil
+	case "false", "0", "no", "off":
+		return false, nil
+	default:
+		return false, fmt.Errorf("invalid boolean value: %q (expected true/false)", value)
+	}
+}
+
 func main() {
-	controlPlaneURL := flag.String("url", "", "Control plane URL (or RUNIC_CONTROL_PLANE_URL env)")
+	// Config file path (not a config-mode flag)
 	configPath := flag.String("config", "/etc/runic-agent/config.json", "Config file path")
+
+	// Action flags (not config-mode flags)
 	uninstall := flag.Bool("uninstall", false, "Uninstall the agent from this system")
 	purge := flag.Bool("purge", false, "Also remove config files (use with --uninstall)")
 	version := flag.Bool("version", false, "Print version and exit")
-	enableOnBoot := flag.Bool("enable-on-boot", false, "Enable applying rules on boot")
-	enableRulesBundle := flag.Bool("enable-rules-bundle", false, "Enable automatic bundle application")
-	pullInterval := flag.Int("pull-interval", 0, "Pull interval in seconds (0 = use default)")
-	logPath := flag.String("log-path", "", "Log file path")
-	disableSystemIPTables := flag.Bool("disable-system-iptables", false, "Disable system-managed iptables services")
 	setup := flag.Bool("setup", false, "Run interactive setup wizard")
+
+	// Config-mode flags (these trigger config-update mode when set)
+	// Boolean flags accept true/false arguments
+	var enableOnBoot, enableRulesBundle, disableSystemIPTables configFlag
+	flag.Var(&enableOnBoot, "enable-on-boot", "Enable applying rules on boot (true/false)\nExample: -enable-on-boot true")
+	flag.Var(&enableRulesBundle, "enable-rules-bundle", "Enable automatic bundle application (true/false)\nExample: -enable-rules-bundle true")
+	flag.Var(&disableSystemIPTables, "disable-system-iptables", "Disable system-managed iptables services (true/false)\nExample: -disable-system-iptables true")
+
+	// String flags (also config-mode)
+	var controlPlaneURL, logPath configFlag
+	flag.Var(&controlPlaneURL, "url", "Control plane URL\nExample: -url https://control.example.com")
+	flag.Var(&logPath, "log-path", "Log file path\nExample: -log-path /var/log/runic/firewall.log")
+
+	// Integer flags (also config-mode)
+	var pullInterval configFlag
+	flag.Var(&pullInterval, "pull-interval", "Pull interval in seconds (0 = use default)\nExample: -pull-interval 30")
+
 	flag.Parse()
+
+	// Handle version flag
+	if *version {
+		fmt.Printf("runic-agent version %s\n", core.Version)
+		return
+	}
 
 	// Handle interactive setup wizard
 	if *setup {
-		if err := runSetupWizard(*configPath, *controlPlaneURL); err != nil {
+		// Get default URL from flag or env
+		defaultURL := controlPlaneURL.String()
+		if defaultURL == "" {
+			defaultURL = os.Getenv("RUNIC_CONTROL_PLANE_URL")
+		}
+		if err := runSetupWizard(*configPath, defaultURL); err != nil {
 			log.Fatalf("setup failed: %v", err)
 		}
 		fmt.Println("Configuration saved. Run without -setup to start the agent.")
 		return
 	}
 
-	if *version {
-		fmt.Printf("runic-agent version %s\n", core.Version)
-		return
-	}
-
+	// Handle uninstall
 	if *uninstall {
 		if err := uninstallAgent(*purge); err != nil {
 			log.Fatalf("uninstall failed: %v", err)
@@ -55,16 +111,26 @@ func main() {
 		return
 	}
 
-	if *controlPlaneURL == "" {
-		*controlPlaneURL = os.Getenv("RUNIC_CONTROL_PLANE_URL")
+	// Check if any config flags were set - enter config-update mode
+	if isConfigMode(enableOnBoot, enableRulesBundle, disableSystemIPTables, controlPlaneURL, logPath, pullInterval) {
+		if err := handleConfigMode(*configPath, enableOnBoot, enableRulesBundle, disableSystemIPTables, controlPlaneURL, logPath, pullInterval); err != nil {
+			log.Fatalf("config update failed: %v", err)
+		}
+		return
 	}
 
-	a := agent.New(*configPath, *controlPlaneURL)
-
-	// Override config with CLI flags if provided
-	if err := applyCLIOverrides(*configPath, *enableOnBoot, *enableRulesBundle, *pullInterval, *logPath, *disableSystemIPTables); err != nil {
-		log.Printf("warning: failed to apply CLI overrides: %v", err)
+	// Normal agent startup
+	controlPlaneURLEnv := os.Getenv("RUNIC_CONTROL_PLANE_URL")
+	if controlPlaneURLEnv == "" && controlPlaneURL.String() == "" {
+		log.Fatal("Control plane URL required. Set -url flag or RUNIC_CONTROL_PLANE_URL environment variable")
 	}
+
+	urlToUse := controlPlaneURL.String()
+	if urlToUse == "" {
+		urlToUse = controlPlaneURLEnv
+	}
+
+	a := agent.New(*configPath, urlToUse)
 
 	// Context that cancels on SIGINT/SIGTERM
 	ctx, cancel := context.WithCancel(context.Background())
@@ -84,6 +150,180 @@ func main() {
 	if err := a.Run(ctx); err != nil {
 		log.Printf("agent error: %v", err)
 	}
+}
+
+// isConfigMode returns true if any config flag was explicitly set
+func isConfigMode(flags ...configFlag) bool {
+	for _, f := range flags {
+		if f.set {
+			return true
+		}
+	}
+	return false
+}
+
+// handleConfigMode processes config flags, updates config file, and prompts for service restart
+func handleConfigMode(configPath string, enableOnBoot, enableRulesBundle, disableSystemIPTables, controlPlaneURL, logPath, pullInterval configFlag) error {
+	// Load existing config
+	cfg, err := identity.LoadConfig(configPath)
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+
+	changes := []string{}
+
+	// Process boolean flags
+	if enableOnBoot.set {
+		val, err := parseBoolFlag(enableOnBoot.value)
+		if err != nil {
+			return fmt.Errorf("-enable-on-boot: %w", err)
+		}
+		cfg.ApplyOnBoot = val
+		changes = append(changes, fmt.Sprintf("enable-on-boot: %v", val))
+	}
+
+	if enableRulesBundle.set {
+		val, err := parseBoolFlag(enableRulesBundle.value)
+		if err != nil {
+			return fmt.Errorf("-enable-rules-bundle: %w", err)
+		}
+		cfg.ApplyRulesBundle = val
+		changes = append(changes, fmt.Sprintf("enable-rules-bundle: %v", val))
+	}
+
+	if disableSystemIPTables.set {
+		val, err := parseBoolFlag(disableSystemIPTables.value)
+		if err != nil {
+			return fmt.Errorf("-disable-system-iptables: %w", err)
+		}
+		cfg.DisableSystemManagedIPTables = val
+		changes = append(changes, fmt.Sprintf("disable-system-iptables: %v", val))
+	}
+
+	// Process string flags
+	if controlPlaneURL.set {
+		url := strings.TrimSpace(controlPlaneURL.value)
+		if url == "" {
+			return fmt.Errorf("-url cannot be empty")
+		}
+		cfg.ControlPlaneURL = url
+		changes = append(changes, fmt.Sprintf("url: %s", url))
+	}
+
+	if logPath.set {
+		path := strings.TrimSpace(logPath.value)
+		if path == "" {
+			return fmt.Errorf("-log-path cannot be empty")
+		}
+		cfg.LogPath = path
+		changes = append(changes, fmt.Sprintf("log-path: %s", path))
+	}
+
+	// Process integer flags
+	if pullInterval.set {
+		interval, err := strconv.Atoi(strings.TrimSpace(pullInterval.value))
+		if err != nil {
+			return fmt.Errorf("-pull-interval: invalid integer value %q", pullInterval.value)
+		}
+		if interval < 0 || interval > 31536000 {
+			return fmt.Errorf("-pull-interval: must be between 0 and 31536000 (1 year)")
+		}
+		cfg.PullIntervalSec = interval
+		changes = append(changes, fmt.Sprintf("pull-interval: %d", interval))
+	}
+
+	// Validate config before saving
+	if _, err := validateConfig(cfg); err != nil {
+		return fmt.Errorf("config validation failed: %w", err)
+	}
+
+	// Save config
+	if err := identity.SaveConfig(configPath, cfg); err != nil {
+		return fmt.Errorf("save config: %w", err)
+	}
+
+	fmt.Println("Configuration updated successfully:")
+	for _, change := range changes {
+		fmt.Printf("  - %s\n", change)
+	}
+	fmt.Printf("Config saved to: %s\n", configPath)
+
+	// Check if systemd service is installed and prompt for restart
+	if isSystemdServiceInstalled() {
+		fmt.Println("\nThe runic-agent systemd service is installed.")
+		fmt.Print("Would you like to restart the service now? [y/N]: ")
+
+		reader := bufio.NewReader(os.Stdin)
+		input, err := reader.ReadString('\n')
+		if err != nil {
+			fmt.Printf("\nNote: Could not read input. Restart manually with: sudo systemctl restart runic-agent\n")
+			return nil
+		}
+
+		input = strings.TrimSpace(strings.ToLower(input))
+		if input == "y" || input == "yes" {
+			if err := restartSystemdService(); err != nil {
+				fmt.Printf("Failed to restart service: %v\n", err)
+				fmt.Println("Restart manually with: sudo systemctl restart runic-agent")
+			} else {
+				fmt.Println("Service restarted successfully.")
+			}
+		} else {
+			fmt.Println("\nTo apply changes, restart the service with: sudo systemctl restart runic-agent")
+		}
+	} else {
+		fmt.Println("\nNote: runic-agent systemd service is not installed.")
+		fmt.Println("To apply changes, restart the agent manually.")
+	}
+
+	return nil
+}
+
+// validateConfig validates that the config JSON is valid
+func validateConfig(cfg *identity.Config) (bool, error) {
+	// Basic validation - ensure required fields have reasonable values
+	// This is a simple check; the JSON marshaling will fail if the struct is invalid
+
+	// Check if PullIntervalSec is valid
+	if cfg.PullIntervalSec < 0 {
+		return false, fmt.Errorf("pull_interval_seconds cannot be negative")
+	}
+
+	// Try to marshal to verify JSON is valid
+	_, err := json.Marshal(cfg)
+	if err != nil {
+		return false, fmt.Errorf("config is not valid JSON: %w", err)
+	}
+
+	return true, nil
+}
+
+// isSystemdServiceInstalled checks if runic-agent.service is installed
+func isSystemdServiceInstalled() bool {
+	// Check if systemd service file exists
+	if _, err := os.Stat("/etc/systemd/system/runic-agent.service"); err == nil {
+		return true
+	}
+	// Also check systemd directory
+	if _, err := os.Stat("/lib/systemd/system/runic-agent.service"); err == nil {
+		return true
+	}
+	return false
+}
+
+// restartSystemdService restarts the runic-agent service
+func restartSystemdService() error {
+	// Check if running as root
+	if os.Geteuid() != 0 {
+		return fmt.Errorf("must be run as root to restart service (use sudo)")
+	}
+
+	cmd := exec.Command("systemctl", "restart", "runic-agent")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%w: %s", err, string(output))
+	}
+	return nil
 }
 
 func uninstallAgent(purge bool) error {
@@ -229,54 +469,5 @@ func runSetupWizard(configPath string, defaultControlPlaneURL string) error {
 		return fmt.Errorf("save config: %w", err)
 	}
 
-	return nil
-}
-
-// applyCLIOverrides loads the config and overrides fields if CLI flags are set.
-func applyCLIOverrides(configPath string, enableOnBoot, enableRulesBundle bool, pullInterval int, logPath string, disableSystemIPTables bool) error {
-	cfg, err := identity.LoadConfig(configPath)
-	if err != nil {
-		return fmt.Errorf("load config: %w", err)
-	}
-
-	overridden := false
-
-	// Validate pullInterval if provided (must be 0 or between 1 and 31536000 seconds)
-	if pullInterval != 0 {
-		if pullInterval < 0 || pullInterval > 31536000 {
-			return fmt.Errorf("pull-interval must be between 0 and 31536000 (1 year)")
-		}
-		cfg.PullIntervalSec = pullInterval
-		overridden = true
-	}
-
-	// Validate logPath if provided (must not be empty after trimming)
-	if logPath != "" {
-		if strings.TrimSpace(logPath) == "" {
-			return fmt.Errorf("log-path cannot be empty")
-		}
-		cfg.LogPath = logPath
-		overridden = true
-	}
-
-	if enableOnBoot {
-		cfg.ApplyOnBoot = true
-		overridden = true
-	}
-	if enableRulesBundle {
-		cfg.ApplyRulesBundle = true
-		overridden = true
-	}
-	if disableSystemIPTables {
-		cfg.DisableSystemManagedIPTables = true
-		overridden = true
-	}
-
-	if overridden {
-		// Save config and return error if it fails (critical failure)
-		if err := identity.SaveConfig(configPath, cfg); err != nil {
-			return fmt.Errorf("failed to save config: %w", err)
-		}
-	}
 	return nil
 }
