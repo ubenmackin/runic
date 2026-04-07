@@ -237,18 +237,6 @@ export default function Groups() {
         }
       />
 
-      {/* Search Bar and Rows per page */}
-      {userGroups?.length > 0 && (
-        <TableToolbar
-          searchTerm={searchQuery}
-          onSearchChange={(v) => setSearchQuery(v)}
-          onClearSearch={() => setSearchQuery('')}
-          placeholder="Search groups..."
-          rowsPerPage={groupsRowsPerPage}
-          onRowsPerPageChange={setGroupsRowsPerPage}
-        />
-      )}
-
       {/* System Groups Panel */}
       {systemGroups.length > 0 && (
         <div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-sm overflow-hidden">
@@ -283,6 +271,18 @@ export default function Groups() {
             </div>
           )}
         </div>
+      )}
+
+      {/* Search Bar and Rows per page */}
+      {userGroups?.length > 0 && (
+        <TableToolbar
+          searchTerm={searchQuery}
+          onSearchChange={(v) => setSearchQuery(v)}
+          onClearSearch={() => setSearchQuery('')}
+          placeholder="Search groups..."
+          rowsPerPage={groupsRowsPerPage}
+          onRowsPerPageChange={setGroupsRowsPerPage}
+        />
       )}
 
       {!userGroups?.length ? (

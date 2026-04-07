@@ -404,21 +404,11 @@ const handleSubmit = (e) => {
 	</button>
 	{canEdit && (
 	<button onClick={openAddModal} className="flex items-center gap-2 px-4 py-2 bg-purple-active hover:bg-purple-active/80 text-white text-sm font-medium rounded-lg">
-	<Plus className="w-4 h-4" /> Add Peer
+	<Plus className="w-4 h-4" /> New Peer
 	</button>
 	)}
 	</>
 	}
-      />
-
-      {/* Search Bar and Rows per page */}
-      <TableToolbar
-        searchTerm={searchTerm}
-        onSearchChange={(v) => setSearchTerm(v)}
-        onClearSearch={() => setSearchTerm('')}
-        placeholder="Search peers by hostname, IP, OS, groups, or agent..."
-        rowsPerPage={peersRowsPerPage}
-        onRowsPerPageChange={setPeersRowsPerPage}
       />
 
       {/* Network Addresses Collapsible Panel */}
@@ -459,6 +449,16 @@ const handleSubmit = (e) => {
           )}
         </div>
       )}
+
+      {/* Search Bar and Rows per page */}
+      <TableToolbar
+        searchTerm={searchTerm}
+        onSearchChange={(v) => setSearchTerm(v)}
+        onClearSearch={() => setSearchTerm('')}
+        placeholder="Search peers by hostname, IP, OS, groups, or agent..."
+        rowsPerPage={peersRowsPerPage}
+        onRowsPerPageChange={setPeersRowsPerPage}
+      />
 
       {/* Status Filter Button Bar */}
       <div className="flex gap-2">

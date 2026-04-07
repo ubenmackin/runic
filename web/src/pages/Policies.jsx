@@ -369,22 +369,34 @@ const polymorphicOptions = [
       </div>
 
   {/* Filters */}
-<TableToolbar
-  searchTerm={searchTerm}
-  onSearchChange={(v) => setSearchTerm(v)}
-  onClearSearch={() => setSearchTerm('')}
-  placeholder="Search policies by name, source, service, or target..."
-  rowsPerPage={policiesRowsPerPage}
-  onRowsPerPageChange={setPoliciesRowsPerPage}
->
-  <div className="w-48">
-    <SearchableSelect options={[{ value: '', label: 'All Peers', category: 'peer' }, ...polymorphicOptions.filter(o => o.category === 'peer')]} value={filterPeer || ''} onChange={v => setFilterPeer(v || null)} placeholder="Filter by peer" />
+  <TableToolbar
+    searchTerm={searchTerm}
+    onSearchChange={(v) => setSearchTerm(v)}
+    onClearSearch={() => setSearchTerm('')}
+    placeholder="Search policies by name, source, service, or target..."
+    rowsPerPage={policiesRowsPerPage}
+    onRowsPerPageChange={setPoliciesRowsPerPage}
+  />
+
+  {/* Show Disabled Filter Chips */}
+  <div className="flex gap-2">
+    {[
+      { value: 'enabled', label: 'Enabled' },
+      { value: 'disabled', label: 'Disabled' },
+    ].map(opt => (
+      <button
+        key={opt.value}
+        onClick={() => setShowDisabled(opt.value === 'disabled')}
+        className={`px-3 py-1.5 text-sm font-medium rounded-lg transition-colors ${
+          showDisabled === (opt.value === 'disabled')
+            ? 'bg-purple-active text-white'
+            : 'bg-gray-100 dark:bg-charcoal-darkest text-gray-700 dark:text-amber-primary hover:bg-gray-200 dark:hover:bg-charcoal-dark'
+        }`}
+      >
+        {opt.label}
+      </button>
+    ))}
   </div>
-  <label className="flex items-center gap-2 cursor-pointer">
-    <ToggleSwitch checked={showDisabled} onChange={setShowDisabled} />
-    <span className="text-sm text-gray-700 dark:text-amber-primary">Show disabled</span>
-  </label>
-</TableToolbar>
 
 {!processedPolicies.length ? (
         searchTerm ? (
