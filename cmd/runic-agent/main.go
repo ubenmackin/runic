@@ -21,6 +21,11 @@ import (
 	"runic/internal/agent/identity"
 )
 
+const (
+	systemdServicePath    = "/etc/systemd/system/runic-agent.service"
+	systemdLibServicePath = "/lib/systemd/system/runic-agent.service"
+)
+
 // configFlag tracks whether a config flag was explicitly set
 type configFlag struct {
 	set   bool
@@ -120,17 +125,13 @@ func main() {
 	}
 
 	// Normal agent startup
-	controlPlaneURLEnv := os.Getenv("RUNIC_CONTROL_PLANE_URL")
-	if controlPlaneURLEnv == "" && controlPlaneURL.String() == "" {
-		log.Fatal("Control plane URL required. Set -url flag or RUNIC_CONTROL_PLANE_URL environment variable")
+	// Pass CLI-provided URL to agent (will be merged with config file URL in loadConfig)
+	// If no CLI URL, check environment variable
+	cliURL := controlPlaneURL.String()
+	if cliURL == "" {
+		cliURL = os.Getenv("RUNIC_CONTROL_PLANE_URL")
 	}
-
-	urlToUse := controlPlaneURL.String()
-	if urlToUse == "" {
-		urlToUse = controlPlaneURLEnv
-	}
-
-	a := agent.New(*configPath, urlToUse)
+	a := agent.New(*configPath, cliURL)
 
 	// Context that cancels on SIGINT/SIGTERM
 	ctx, cancel := context.WithCancel(context.Background())
@@ -251,11 +252,12 @@ func handleConfigMode(configPath string, enableOnBoot, enableRulesBundle, disabl
 	// Check if systemd service is installed and prompt for restart
 	if isSystemdServiceInstalled() {
 		fmt.Println("\nThe runic-agent systemd service is installed.")
-		fmt.Print("Would you like to restart the service now? [y/N]: ")
+		fmt.Print("Would you like to restart the service now? (sudo systemctl restart runic-agent) [y/N]: ")
 
 		reader := bufio.NewReader(os.Stdin)
 		input, err := reader.ReadString('\n')
 		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to read stdin: %v\n", err)
 			fmt.Printf("\nNote: Could not read input. Restart manually with: sudo systemctl restart runic-agent\n")
 			return nil
 		}
@@ -279,20 +281,18 @@ func handleConfigMode(configPath string, enableOnBoot, enableRulesBundle, disabl
 	return nil
 }
 
-// validateConfig validates that the config JSON is valid
+// validateConfig validates that the config is valid.
+// It performs both JSON marshaling check and field-level validation.
 func validateConfig(cfg *identity.Config) (bool, error) {
-	// Basic validation - ensure required fields have reasonable values
-	// This is a simple check; the JSON marshaling will fail if the struct is invalid
-
-	// Check if PullIntervalSec is valid
-	if cfg.PullIntervalSec < 0 {
-		return false, fmt.Errorf("pull_interval_seconds cannot be negative")
-	}
-
 	// Try to marshal to verify JSON is valid
 	_, err := json.Marshal(cfg)
 	if err != nil {
 		return false, fmt.Errorf("config is not valid JSON: %w", err)
+	}
+
+	// Perform field-level validation
+	if err := cfg.Validate(); err != nil {
+		return false, fmt.Errorf("config validation failed: %w", err)
 	}
 
 	return true, nil
@@ -301,17 +301,28 @@ func validateConfig(cfg *identity.Config) (bool, error) {
 // isSystemdServiceInstalled checks if runic-agent.service is installed
 func isSystemdServiceInstalled() bool {
 	// Check if systemd service file exists
-	if _, err := os.Stat("/etc/systemd/system/runic-agent.service"); err == nil {
+	if _, err := os.Stat(systemdServicePath); err == nil {
 		return true
 	}
 	// Also check systemd directory
-	if _, err := os.Stat("/lib/systemd/system/runic-agent.service"); err == nil {
+	if _, err := os.Stat(systemdLibServicePath); err == nil {
 		return true
 	}
 	return false
 }
 
-// restartSystemdService restarts the runic-agent service
+// restartSystemdService restarts the runic-agent service.
+//
+// Testing Note: This function is intentionally difficult to unit test because:
+//  1. It requires root privileges (os.Geteuid() check) - running as root in test environments
+//     is not recommended for security reasons
+//  2. It calls an external system command (systemctl) which requires systemd to be installed
+//     and the runic-agent service to be registered
+//  3. Integration tests in a real or containerized environment (with systemd) would be more
+//     appropriate for testing this functionality
+//
+// The root privilege check is tested via TestRestartSystemdServiceRequiresRoot.
+// Full integration tests should be run in a VM or container with systemd.
 func restartSystemdService() error {
 	// Check if running as root
 	if os.Geteuid() != 0 {
@@ -343,7 +354,7 @@ func uninstallAgent(purge bool) error {
 
 	// Remove service file
 	fmt.Println("Removing systemd service file...")
-	if err := os.Remove("/etc/systemd/system/runic-agent.service"); err != nil && !os.IsNotExist(err) {
+	if err := os.Remove(systemdServicePath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to remove service file: %w", err)
 	}
 	if err := exec.Command("systemctl", "daemon-reload").Run(); err != nil {
