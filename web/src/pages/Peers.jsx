@@ -3,7 +3,7 @@ import { useLocation } from 'react-router-dom'
 import { useTableSort } from '../hooks/useTableSort'
 import { usePagination } from '../hooks/usePagination'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Plus, Pencil, Trash2, Server, Copy, Check, RefreshCw, X, FileCode, AlertTriangle } from 'lucide-react'
+import { Plus, Pencil, Trash2, Server, Copy, Check, RefreshCw, X, FileCode, AlertTriangle, Globe, ChevronDown, ChevronUp } from 'lucide-react'
 import { api, QUERY_KEYS } from '../api/client'
 import { REFETCH_INTERVALS } from '../constants'
 import { useCrudModal } from '../hooks/useCrudModal'
@@ -61,6 +61,7 @@ export default function Peers() {
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [conflictError, setConflictError] = useState(null)
   const [formErrors, setFormErrors] = useState({})
+  const [showNetworkAddresses, setShowNetworkAddresses] = useState(false)
 
   // Add Peer modal state
   const [addModalOpen, setAddModalOpen] = useState(false)
@@ -235,6 +236,11 @@ export default function Peers() {
     queryKey: ['registration-tokens'],
     queryFn: () => api.get('/registration-tokens'),
     enabled: addModalOpen,
+  })
+
+  const { data: specialTargets } = useQuery({
+    queryKey: ['special-targets'],
+    queryFn: () => api.get('/policies/special-targets'),
   })
 
   // Manual refresh handler
@@ -414,6 +420,45 @@ const handleSubmit = (e) => {
         rowsPerPage={peersRowsPerPage}
         onRowsPerPageChange={setPeersRowsPerPage}
       />
+
+      {/* Network Addresses Collapsible Panel */}
+      {specialTargets && specialTargets.length > 0 && (
+        <div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-sm overflow-hidden">
+          <button
+            type="button"
+            onClick={() => setShowNetworkAddresses(!showNetworkAddresses)}
+            className="w-full px-4 py-3 flex items-center justify-between text-left hover:bg-gray-50 dark:hover:bg-charcoal-darkest transition-colors"
+          >
+            <div className="flex items-center gap-2">
+              <Globe className="w-5 h-5 text-blue-500" />
+              <span className="font-medium text-gray-900 dark:text-light-neutral">Network Addresses</span>
+              <span className="text-xs text-gray-500 dark:text-amber-muted">(Special policy targets)</span>
+            </div>
+            {showNetworkAddresses ? (
+              <ChevronUp className="w-5 h-5 text-gray-500" />
+            ) : (
+              <ChevronDown className="w-5 h-5 text-gray-500" />
+            )}
+          </button>
+          {showNetworkAddresses && (
+            <div className="px-4 pb-4 border-t border-gray-200 dark:border-gray-border">
+              <div className="mt-3 space-y-2 text-sm">
+                {specialTargets.map((target) => (
+                  <div key={target.id} className="p-2 border-b border-gray-100 dark:border-gray-border last:border-b-0">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium text-gray-900 dark:text-light-neutral">{target.display_name}</span>
+                      <span className="text-xs px-1.5 py-0.5 rounded bg-gray-100 dark:bg-charcoal-darkest text-gray-600 dark:text-amber-muted font-mono">
+                        {target.address}
+                      </span>
+                    </div>
+                    <p className="text-xs text-gray-600 dark:text-amber-muted mt-1">{target.description}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Status Filter Button Bar */}
       <div className="flex gap-2">

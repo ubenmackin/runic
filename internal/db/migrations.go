@@ -442,11 +442,11 @@ func migrateSchema(ctx context.Context, database *sql.DB) error {
 			Description string
 			Address     string
 		}{
-			{"__subnet_broadcast__", "Subnet Broadcast", "The broadcast address for the peer's subnet (e.g., 10.100.5.255)", "computed"},
-			{"__limited_broadcast__", "Limited Broadcast", "The limited broadcast address (255.255.255.255)", "255.255.255.255"},
-			{"__all_hosts__", "All Hosts (IGMP)", "All hosts multicast address for IGMP (224.0.0.1)", "224.0.0.1"},
-			{"__mdns__", "mDNS", "mDNS multicast address (224.0.0.251)", "224.0.0.251"},
-			{"__igmpv3__", "IGMPv3", "IGMPv3 multicast address (224.0.0.22)", "224.0.0.22"},
+			{"__subnet_broadcast__", "Subnet Broadcast", "The broadcast address for the peer's local subnet (e.g., 10.100.5.255 for 10.100.5.0/24). Computed dynamically from each peer's IP and CIDR. Used as a policy Source to accept incoming broadcast traffic, or as a Target to send broadcasts.", "computed"},
+			{"__limited_broadcast__", "Limited Broadcast", "The limited broadcast address 255.255.255.255. Reaches all hosts on the local network segment regardless of subnet configuration. Used as a Source to accept broadcast traffic.", "255.255.255.255"},
+			{"__all_hosts__", "All Hosts (IGMP)", "The all-hosts multicast address 224.0.0.1. Used by IGMP to reach every host on the local subnet. When used as a Source, accepts multicast traffic destined for all hosts.", "224.0.0.1"},
+			{"__mdns__", "mDNS", "The mDNS multicast address 224.0.0.251. Used for local network service discovery (.local hostnames). When used as a Target with the mDNS service, enables multicast DNS resolution.", "224.0.0.251"},
+			{"__igmpv3__", "IGMPv3", "The IGMPv3 routers multicast address 224.0.0.22. Used by hosts to report multicast group membership to routers. When used as a Target, enables IGMPv3 membership reporting.", "224.0.0.22"},
 		}
 
 		for _, st := range specialTargets {
@@ -473,7 +473,7 @@ func migrateSchema(ctx context.Context, database *sql.DB) error {
 		log.Info("Migration: adding loopback special target")
 		_, err = database.ExecContext(ctx,
 			"INSERT INTO special_targets (name, display_name, description, address) VALUES (?, ?, ?, ?)",
-			"loopback", "Loopback", "Local loopback address (127.0.0.1)", "127.0.0.1",
+			"loopback", "Loopback", "The local loopback address 127.0.0.1. Traffic sent to this address never leaves the host—it is routed back internally. Used as a Source or Target to allow or restrict local inter-process communication on the same machine.", "127.0.0.1",
 		)
 		if err != nil {
 			return fmt.Errorf("failed to add loopback special target: %w", err)
@@ -492,7 +492,7 @@ func migrateSchema(ctx context.Context, database *sql.DB) error {
 		log.Info("Migration: adding __any_ip__ special target")
 		_, err = database.ExecContext(ctx,
 			"INSERT INTO special_targets (id, name, display_name, description, address) VALUES (?, ?, ?, ?, ?)",
-			6, "__any_ip__", "Any IP (0.0.0.0/0)", "Any IP address on the internet (0.0.0.0/0)", "0.0.0.0/0",
+			6, "__any_ip__", "Any IP (0.0.0.0/0)", "Matches any IPv4 address (0.0.0.0/0). Used as a Source to accept traffic from anywhere on the network, or as a Target to allow outbound connections to any destination. This is the broadest possible address scope.", "0.0.0.0/0",
 		)
 		if err != nil {
 			return fmt.Errorf("failed to add __any_ip__ special target: %w", err)
@@ -511,7 +511,7 @@ func migrateSchema(ctx context.Context, database *sql.DB) error {
 		log.Info("Migration: adding __all_peers__ special target")
 		_, err = database.ExecContext(ctx,
 			"INSERT INTO special_targets (id, name, display_name, description, address) VALUES (?, ?, ?, ?, ?)",
-			7, "__all_peers__", "All Peers", "All registered peer IPs", "dynamic",
+			7, "__all_peers__", "All Peers", "Resolves to the IP addresses of all registered Runic peers in the mesh. When used as a Target, allows traffic to reach every peer in the network. When used as a Source, accepts traffic originating from any peer.", "dynamic",
 		)
 		if err != nil {
 			return fmt.Errorf("failed to add __all_peers__ special target: %w", err)
@@ -530,7 +530,7 @@ func migrateSchema(ctx context.Context, database *sql.DB) error {
 		log.Info("Migration: adding __igmpv3__ special target")
 		_, err = database.ExecContext(ctx,
 			"INSERT INTO special_targets (id, name, display_name, description, address) VALUES (?, ?, ?, ?, ?)",
-			8, "__igmpv3__", "IGMPv3", "IGMPv3 multicast address (224.0.0.22)", "224.0.0.22",
+			8, "__igmpv3__", "IGMPv3", "The IGMPv3 routers multicast address 224.0.0.22. Used by hosts to report multicast group membership to routers on the local subnet. When used as a Target with a matching service, enables IGMPv3 membership reporting for multicast routing.", "224.0.0.22",
 		)
 		if err != nil {
 			return fmt.Errorf("failed to add __igmpv3__ special target: %w", err)

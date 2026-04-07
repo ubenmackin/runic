@@ -25,7 +25,7 @@ func seedSystemServices(ctx context.Context, database *sql.DB) error {
 			Ports:       "",
 			SourcePorts: "",
 			Protocol:    "icmp",
-			Description: "ICMP protocol for ping and network diagnostics (system service)",
+			Description: "Internet Control Message Protocol. Used for ping, traceroute, and network error reporting. Generates both INPUT and OUTPUT rules with conntrack RELATED state matching for ICMP error messages. No port matching — ICMP operates at the network layer, not the transport layer.",
 			NoConntrack: false,
 		},
 		{
@@ -33,7 +33,7 @@ func seedSystemServices(ctx context.Context, database *sql.DB) error {
 			Ports:       "",
 			SourcePorts: "",
 			Protocol:    "igmp",
-			Description: "IGMP protocol for multicast group management (system service)",
+			Description: "Internet Group Management Protocol. Manages multicast group membership on the local network. Generates fixed rules: INPUT for 224.0.0.1 (All Hosts) and OUTPUT for 224.0.0.22 (IGMPv3 routers). No conntrack tracking — IGMP is connectionless. Both INPUT and OUTPUT rules are auto-generated regardless of policy direction.",
 			NoConntrack: true,
 		},
 		{
@@ -41,7 +41,7 @@ func seedSystemServices(ctx context.Context, database *sql.DB) error {
 			Ports:       "",
 			SourcePorts: "",
 			Protocol:    "udp",
-			Description: "Multicast traffic handling (system service)",
+			Description: "Handles multicast UDP traffic using packet type matching (-m pkttype --pkt-type multicast). Used with multicast special targets (All Hosts, mDNS, IGMPv3). No conntrack tracking — multicast is connectionless. Generates rules for both host and Docker chains.",
 			NoConntrack: true,
 		},
 		{
@@ -49,7 +49,7 @@ func seedSystemServices(ctx context.Context, database *sql.DB) error {
 			Ports:       "5353",
 			SourcePorts: "5353",
 			Protocol:    "udp",
-			Description: "Multicast DNS for local network service discovery (system service)",
+			Description: "Multicast DNS for local network service discovery (e.g., .local hostnames). Uses UDP port 5353 for both source and destination. Targets multicast address 224.0.0.251. No conntrack tracking. Generates both INPUT and OUTPUT rules with ipset-based multicast address matching.",
 			NoConntrack: true,
 		},
 		{
@@ -57,7 +57,7 @@ func seedSystemServices(ctx context.Context, database *sql.DB) error {
 			Ports:       "",
 			SourcePorts: "",
 			Protocol:    "udp",
-			Description: "Subnet broadcast traffic handling (system service)",
+			Description: "Handles subnet-directed broadcast traffic. The broadcast address is computed from each peer's subnet CIDR (e.g., 10.100.5.255 for a /24 subnet). No conntrack tracking — broadcast is connectionless. Generates INPUT-only rules to accept broadcast packets destined for the computed address.",
 			NoConntrack: true,
 		},
 		{
@@ -65,7 +65,7 @@ func seedSystemServices(ctx context.Context, database *sql.DB) error {
 			Ports:       "",
 			SourcePorts: "",
 			Protocol:    "udp",
-			Description: "Limited broadcast traffic handling (system service)",
+			Description: "Handles limited broadcast traffic to 255.255.255.255. This address reaches all hosts on the local network segment regardless of subnet. No conntrack tracking. Generates INPUT-only rules.",
 			NoConntrack: true,
 		},
 	}
@@ -112,7 +112,7 @@ func seedSystemGroups(ctx context.Context, database *sql.DB) error {
 	}{
 		{
 			Name:        "localhost",
-			Description: "Virtual group for local traffic (127.0.0.1/8)",
+			Description: "Virtual group representing local loopback traffic (127.0.0.1/8). Used as a policy target or source to control traffic on the loopback interface. Generates both INPUT and OUTPUT rules for the lo interface. Always present — cannot be edited or deleted.",
 		},
 	}
 

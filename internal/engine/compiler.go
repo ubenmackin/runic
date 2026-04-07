@@ -449,7 +449,14 @@ ELSE 0 END as is_source
 
 		// Process as TARGET (Ingress traffic)
 		// Only emit if direction is 'both' or 'backward' (backward = target receives inbound from source)
-		if pol.IsTarget && (pol.Direction == "both" || pol.Direction == "backward") {
+		// MD-001: Skip "As Target" when target is a multicast/broadcast special.
+		// When target is a multicast group (mDNS, All Hosts, IGMPv3) or broadcast address,
+		// the peer is the source of outbound traffic to that address. Generating "As Target"
+		// ingress rules would create self-referencing rules (INPUT from the peer's own IP)
+		// which are nonsensical. The useful rules are generated in the "As Source" block.
+		isSpecialMulticastOrBroadcastTarget := pol.TargetType == "special" &&
+			(isMulticastSpecialID(pol.TargetID) || isBroadcastSpecialID(pol.TargetID))
+		if pol.IsTarget && (pol.Direction == "both" || pol.Direction == "backward") && !isSpecialMulticastOrBroadcastTarget {
 			sourceName := c.formatEntityName(ctx, pol.SourceType, pol.SourceID)
 			fmt.Fprintf(&buf, "# As Target (Ingress from %s)\n", sourceName)
 
@@ -748,11 +755,20 @@ func (c *Compiler) writeSourceRules(
 			conntrackEstab = "-m conntrack --ctstate ESTABLISHED"
 		}
 
-		// MC-010: For multicast targets, INPUT return rule should accept from any source (0.0.0.0/0)
-		// This is because mDNS/IGMP responses come from individual hosts, not from the multicast address
+		// MC-010/MD-002: For multicast targets, determine INPUT return rule behavior.
+		// When noConntrack is true (e.g., mDNS), skip INPUT return rules entirely.
+		// mDNS responses arrive as multicast themselves, so a separate INPUT return
+		// rule is unnecessary and overly permissive (would accept from 0.0.0.0/0).
+		// When noConntrack is false, use 0.0.0.0/0 with conntrack ESTABLISHED state
+		// since responses come from individual hosts, not the multicast address.
 		var returnCIDRs []string
 		if isMulticastTarget {
-			returnCIDRs = []string{"0.0.0.0/0"}
+			if noConntrack {
+				// Skip INPUT return rules for no_conntrack multicast services
+				returnCIDRs = nil
+			} else {
+				returnCIDRs = []string{"0.0.0.0/0"}
+			}
 		} else {
 			returnCIDRs = cidrs
 		}

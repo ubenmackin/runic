@@ -2,7 +2,7 @@ import { useState, useCallback, useRef, useEffect } from 'react'
 import { useTableSort } from '../hooks/useTableSort'
 import { usePagination } from '../hooks/usePagination'
 import { useQuery } from '@tanstack/react-query'
-import { Plus, Pencil, Trash2, RefreshCw, X } from 'lucide-react'
+import { Plus, Pencil, Trash2, RefreshCw, X, Package, ChevronDown, ChevronUp } from 'lucide-react'
 import { api, QUERY_KEYS } from '../api/client'
 import { useCrudModal } from '../hooks/useCrudModal'
 import { useToastContext } from '../hooks/ToastContext'
@@ -52,6 +52,7 @@ export default function Services() {
   const [showSourcePorts, setShowSourcePorts] = useState(false)
   const [showDescription, setShowDescription] = useState(false)
   const [searchTerm, setSearchTerm] = useState('')
+  const [showSystemServices, setShowSystemServices] = useState(false)
 
   // Sorting state (persisted per-user)
   const { sortConfig, handleSort } = useTableSort('services', { key: 'name', direction: 'asc' })
@@ -97,7 +98,11 @@ export default function Services() {
     setIsManualRefreshing(false)
   }, [refetch])
 
-  const processedServices = useTableFilter(services, searchTerm, sortConfig, {
+  // Split services into system and user services
+  const systemServices = services?.filter(s => s.is_system) || []
+  const userServices = services?.filter(s => !s.is_system) || []
+
+  const processedServices = useTableFilter(userServices, searchTerm, sortConfig, {
     filterFn: (s, term) => {
       const name = (s.name || '').toLowerCase()
       const protocol = (s.protocol || '').toLowerCase()
@@ -349,6 +354,48 @@ const handleSourcePortInputKeyDown = (e) => {
         }
       />
 
+      {/* System Services Collapsible Panel */}
+      {systemServices.length > 0 && (
+        <div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-sm overflow-hidden">
+          <button
+            type="button"
+            onClick={() => setShowSystemServices(!showSystemServices)}
+            className="w-full px-4 py-3 flex items-center justify-between text-left hover:bg-gray-50 dark:hover:bg-charcoal-darkest transition-colors"
+          >
+            <div className="flex items-center gap-2">
+              <Package className="w-5 h-5 text-purple-active" />
+              <span className="font-medium text-gray-900 dark:text-light-neutral">System Services</span>
+              <span className="text-xs text-gray-500 dark:text-amber-muted">(Automatically managed)</span>
+            </div>
+            {showSystemServices ? (
+              <ChevronUp className="w-5 h-5 text-gray-500" />
+            ) : (
+              <ChevronDown className="w-5 h-5 text-gray-500" />
+            )}
+          </button>
+          {showSystemServices && (
+            <div className="px-4 pb-4 border-t border-gray-200 dark:border-gray-border">
+              <div className="mt-3 space-y-1 text-sm">
+                {systemServices.map((svc) => (
+                  <div key={svc.id} className="p-2 border-b border-gray-100 dark:border-gray-border last:border-b-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-medium text-gray-900 dark:text-light-neutral">{svc.name}</span>
+                      <span className="text-xs px-1.5 py-0.5 rounded bg-gray-100 dark:bg-charcoal-darkest text-gray-600 dark:text-amber-muted">
+                        {svc.protocol.toUpperCase()}{svc.ports ? ` :${svc.ports}` : ''}
+                      </span>
+                      {svc.no_conntrack && (
+                        <span className="text-xs text-gray-500 dark:text-amber-muted">No conntrack</span>
+                      )}
+                    </div>
+                    <p className="text-xs text-gray-600 dark:text-amber-muted mt-1">{svc.description}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Search Bar and Rows per page */}
       <TableToolbar
         searchTerm={searchTerm}
@@ -362,10 +409,10 @@ const handleSourcePortInputKeyDown = (e) => {
       {!processedServices?.length ? (
         searchTerm ? (
           <div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-sm p-8 text-center">
-            <p className="text-gray-500 dark:text-amber-muted">No services match your search.</p>
+            <p className="text-gray-500 dark:text-amber-muted">No user services match your search.</p>
           </div>
         ) : (
-          <EmptyState title="No services yet" message="Create services to define port bundles for your policies." action="New Service" onAction={openAdd} />
+          <EmptyState title="No user services yet" message="Create services to define port bundles for your policies." action="New Service" onAction={openAdd} />
         )
       ) : (
         <div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-sm overflow-hidden">

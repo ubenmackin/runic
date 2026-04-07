@@ -392,6 +392,7 @@ func TestBroadcastService_LimitedBroadcast(t *testing.T) {
 
 // TestBroadcastService_PeerToBroadcast tests policy with Target=Subnet Broadcast
 // BC-007: Verify correct handling when target is broadcast special
+// MD-001: Verify no self-referencing "As Target" rules are generated
 func TestBroadcastService_PeerToBroadcast(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
@@ -426,6 +427,77 @@ func TestBroadcastService_PeerToBroadcast(t *testing.T) {
 	// The peer is the source, so it should generate OUTPUT rules
 	if !strings.Contains(output, "-A OUTPUT") {
 		t.Errorf("expected OUTPUT rule for sending to broadcast, got:\n%s", output)
+	}
+
+	// MD-001: Should NOT have "As Target" section - target is broadcast special,
+	// generating ingress from self is nonsensical
+	if strings.Contains(output, "# As Target") {
+		t.Errorf("should not have 'As Target' section when target is broadcast special, got:\n%s", output)
+	}
+
+	// Should NOT have self-referencing INPUT rules from the peer's own IP
+	if strings.Contains(output, "-s 10.100.5.10/32") && strings.Contains(output, "-A INPUT") {
+		t.Errorf("should not have self-referencing INPUT rule from peer's own IP, got:\n%s", output)
+	}
+}
+
+// TestMdnsPolicy_PeerToMdns tests the user's exact scenario:
+// Source=peer, Target=mDNS (special), Service=mDNS (port 5353 UDP, no_conntrack)
+// MD-001: No self-referencing "As Target" rules
+// MD-002: No overly-permissive INPUT return rule with 0.0.0.0/0
+func TestMdnsPolicy_PeerToMdns(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+	peerID := insertPeer(t, database, "ansible", "10.100.5.36", false)
+
+	// Insert mDNS service with source_ports and no_conntrack
+	result, err := database.Exec(
+		`INSERT INTO services (name, ports, source_ports, protocol, description, is_system, no_conntrack) VALUES (?, ?, ?, ?, ?, 1, 1)`,
+		"mDNS", "5353", "5353", "udp", "Multicast DNS for local network service discovery")
+	if err != nil {
+		t.Fatalf("insert mDNS service: %v", err)
+	}
+	serviceID, _ := result.LastInsertId()
+
+	// Insert policy: Source=peer (ansible), Target=mDNS (special ID 4)
+	_, err = database.Exec(
+		`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled)
+		 VALUES (?, ?, 'peer', ?, 4, 'special', 'ACCEPT', 100, 1)`,
+		"mDNS", peerID, serviceID)
+	if err != nil {
+		t.Fatalf("insert policy: %v", err)
+	}
+
+	c := NewCompiler(database)
+	output, err := c.Compile(context.Background(), peerID)
+	if err != nil {
+		t.Fatalf("compile error: %v", err)
+	}
+
+	// Should have "As Source" section with OUTPUT rule to multicast address
+	if !strings.Contains(output, "# As Source (Egress to mDNS)") {
+		t.Errorf("expected 'As Source (Egress to mDNS)' comment, got:\n%s", output)
+	}
+
+	// Should have OUTPUT rule to 224.0.0.251 with port 5353
+	if !strings.Contains(output, "-A OUTPUT -d 224.0.0.251/32 -p udp --sport 5353 --dport 5353") {
+		t.Errorf("expected OUTPUT rule to mDNS multicast address, got:\n%s", output)
+	}
+
+	// MD-001: Should NOT have "As Target" section - target is mDNS (multicast special)
+	if strings.Contains(output, "# As Target") {
+		t.Errorf("should not have 'As Target' section when target is mDNS special, got:\n%s", output)
+	}
+
+	// MD-001: Should NOT have self-referencing INPUT rules from peer's own IP
+	if strings.Contains(output, "-s 10.100.5.36/32") {
+		t.Errorf("should not have self-referencing rules from peer's own IP, got:\n%s", output)
+	}
+
+	// MD-002: Should NOT have overly-permissive INPUT rule with 0.0.0.0/0
+	if strings.Contains(output, "-s 0.0.0.0/0") {
+		t.Errorf("should not have INPUT rule accepting from 0.0.0.0/0, got:\n%s", output)
 	}
 }
 

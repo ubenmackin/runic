@@ -148,10 +148,19 @@ const polymorphicOptions = [
   ...(specialTargets || []).map(s => ({ value: s.id, label: s.display_name, category: 'special' }))
 ]
 
-  const serviceOptions = (services || []).map(s => ({ value: s.id, label: s.name }))
+  const serviceOptions = (services || []).map(s => ({
+    value: s.id,
+    label: s.name,
+    category: s.is_system ? 'System Services' : 'User Services'
+  }))
 
-  // Check if the selected target peer has Docker
-  const selectedPeerHasDocker = formData.target_type === 'peer' && formData.target_id && peers?.find(p => p.id === formData.target_id)?.has_docker
+  // Check if any selected peer (source or target) has Docker
+  // MD-003: Show "Applies To" when either source or target is a peer with Docker,
+  // since target_scope affects DOCKER-USER rule generation for whichever peer the rules compile for
+  const selectedPeerHasDocker = (
+    (formData.target_type === 'peer' && formData.target_id && peers?.find(p => p.id === formData.target_id)?.has_docker) ||
+    (formData.source_type === 'peer' && formData.source_id && peers?.find(p => p.id === formData.source_id)?.has_docker)
+  )
 
   const { createMutation, updateMutation, deleteMutation } = useCrudMutations({
     apiPath: '/policies',

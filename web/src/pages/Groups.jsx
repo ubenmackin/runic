@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Trash2, Lock, Users, Shield, X, RefreshCw, Pencil, AlertTriangle } from 'lucide-react'
+import { Plus, Trash2, Users, Shield, X, RefreshCw, Pencil, AlertTriangle, Layers, ChevronDown, ChevronUp } from 'lucide-react'
 import { api, QUERY_KEYS } from '../api/client'
 import { useCrudModal } from '../hooks/useCrudModal'
 import { useTableSort } from '../hooks/useTableSort'
@@ -35,6 +35,9 @@ export default function Groups() {
 
   // Search state
   const [searchQuery, setSearchQuery] = useState('')
+  
+  // System groups panel state
+  const [showSystemGroups, setShowSystemGroups] = useState(false)
   
   // Selected peer for adding to group
   const [selectedPeerId, setSelectedPeerId] = useState(null)
@@ -94,8 +97,12 @@ export default function Groups() {
     label: p.hostname || p.ip_address,
   }))
 
-  // Filter and sort groups
-  const filteredGroups = useTableFilter(groups, searchQuery, sortConfig, {
+  // Split groups into system and user groups
+  const systemGroups = (groups || []).filter(g => g.is_system)
+  const userGroups = (groups || []).filter(g => !g.is_system)
+
+  // Filter and sort user groups only
+  const filteredGroups = useTableFilter(userGroups, searchQuery, sortConfig, {
     filterFn: (g, query) => {
       return (
         g.name.toLowerCase().includes(query) ||
@@ -231,7 +238,7 @@ export default function Groups() {
       />
 
       {/* Search Bar and Rows per page */}
-      {groups?.length > 0 && (
+      {userGroups?.length > 0 && (
         <TableToolbar
           searchTerm={searchQuery}
           onSearchChange={(v) => setSearchQuery(v)}
@@ -242,8 +249,44 @@ export default function Groups() {
         />
       )}
 
-      {!groups?.length ? (
-        <EmptyState title="No groups yet" message="Create groups to organize peers for policy targeting." action="New Group" onAction={openAdd} />
+      {/* System Groups Panel */}
+      {systemGroups.length > 0 && (
+        <div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-sm overflow-hidden">
+          <button
+            type="button"
+            onClick={() => setShowSystemGroups(!showSystemGroups)}
+            className="w-full px-4 py-3 flex items-center justify-between text-left hover:bg-gray-50 dark:hover:bg-charcoal-darkest transition-colors"
+          >
+            <div className="flex items-center gap-2">
+              <Layers className="w-5 h-5 text-blue-500" />
+              <span className="font-medium text-gray-900 dark:text-light-neutral">System Groups</span>
+              <span className="text-xs text-gray-500 dark:text-amber-muted">(Automatically managed)</span>
+            </div>
+            {showSystemGroups ? (
+              <ChevronUp className="w-5 h-5 text-gray-500" />
+            ) : (
+              <ChevronDown className="w-5 h-5 text-gray-500" />
+            )}
+          </button>
+          {showSystemGroups && (
+            <div className="px-4 pb-4 border-t border-gray-200 dark:border-gray-border">
+              <div className="mt-3 space-y-2 text-sm">
+                {systemGroups.map((g) => (
+                  <div key={g.id} className="flex items-start gap-2">
+                    <div>
+                      <span className="font-medium text-gray-700 dark:text-amber-primary">{g.name}:</span>
+                      <span className="text-gray-600 dark:text-amber-muted ml-1">{g.description}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {!userGroups?.length ? (
+        <EmptyState title="No user groups yet" message="Create groups to organize peers for policy targeting." action="New Group" onAction={openAdd} />
       ) : !filteredGroups.length ? (
         <EmptyState title="No matching groups" message="Try a different search term." />
       ) : (
@@ -262,10 +305,7 @@ export default function Groups() {
           </button>
             ), 
             render: (g) => (
-              <div className="flex items-center gap-2">
-                {g.is_system && <Lock className="w-4 h-4 text-gray-400" />}
-                <span className="font-medium text-gray-900 dark:text-light-neutral">{g.name}</span>
-              </div>
+              <span className="font-medium text-gray-900 dark:text-light-neutral">{g.name}</span>
             )
           },
           { 
