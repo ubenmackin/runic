@@ -557,8 +557,7 @@ func TestDeleteService_Valid(t *testing.T) {
 	defer cleanup()
 
 	// Create a user service
-	result, _ := database.Exec(`INSERT INTO services (name, ports, protocol, is_system) VALUES (?, ?, ?, 0)`,
-		"to-delete", "8080", "tcp")
+	result, _ := database.Exec(`INSERT INTO services (name, ports, protocol, is_system) VALUES (?, ?, ?, 0)`, "to-delete", "8080", "tcp")
 	serviceID, _ := result.LastInsertId()
 
 	h := NewHandler(database, nil, nil)
@@ -580,5 +579,188 @@ func TestDeleteService_Valid(t *testing.T) {
 	}
 	if count != 0 {
 		t.Errorf("expected service to be deleted, but it still exists")
+	}
+}
+
+func TestDeleteService_InUseByPolicy(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	// Create a user service
+	serviceResult, err := database.Exec(`INSERT INTO services (name, ports, protocol, is_system) VALUES (?, ?, ?, 0)`, "web-service", "80,443", "tcp")
+	if err != nil {
+		t.Fatalf("failed to create service: %v", err)
+	}
+	serviceID, _ := serviceResult.LastInsertId()
+
+	// Create a source group for policies
+	groupResult, err := database.Exec(`INSERT INTO groups (name, description, is_system) VALUES (?, ?, 0)`, "web-servers", "Web server group")
+	if err != nil {
+		t.Fatalf("failed to create group: %v", err)
+	}
+	groupID, _ := groupResult.LastInsertId()
+
+	// Create multiple policies that use this service
+	policyResult1, err := database.Exec(`
+		INSERT INTO policies (name, description, source_id, source_type, service_id, target_id, target_type, action, enabled)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"allow-https", "Allow HTTPS traffic", groupID, "group", serviceID, 1, "special", "ACCEPT", 1)
+	if err != nil {
+		t.Fatalf("failed to create policy 1: %v", err)
+	}
+	policyID1, _ := policyResult1.LastInsertId()
+
+	policyResult2, err := database.Exec(`
+		INSERT INTO policies (name, description, source_id, source_type, service_id, target_id, target_type, action, enabled)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"allow-http", "Allow HTTP traffic", groupID, "group", serviceID, 2, "special", "ACCEPT", 1)
+	if err != nil {
+		t.Fatalf("failed to create policy 2: %v", err)
+	}
+	policyID2, _ := policyResult2.LastInsertId()
+
+	// Try to delete the service
+	h := NewHandler(database, nil, nil)
+	req := httptest.NewRequest("DELETE", "/api/v1/services/"+strconv.Itoa(int(serviceID)), nil)
+	req = muxVars(req, map[string]string{"id": strconv.Itoa(int(serviceID))})
+	w := httptest.NewRecorder()
+
+	h.DeleteService(w, req)
+
+	// Should return 409 Conflict
+	if w.Code != http.StatusConflict {
+		t.Errorf("expected status %d, got %d: %s", http.StatusConflict, w.Code, w.Body.String())
+	}
+
+	// Parse response to verify it contains the list of policies
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+
+	// Verify error message
+	if errMsg, ok := resp["error"].(string); !ok || errMsg == "" {
+		t.Error("expected error message in response")
+	}
+
+	// Verify policies list
+	policiesRaw, ok := resp["policies"]
+	if !ok {
+		t.Fatal("expected policies field in response")
+	}
+
+	policies, ok := policiesRaw.([]interface{})
+	if !ok {
+		t.Fatal("expected policies to be an array")
+	}
+
+	if len(policies) != 2 {
+		t.Errorf("expected 2 policies in response, got %d", len(policies))
+	}
+
+	// Verify policy IDs and names are in the response
+	policyMap := make(map[int]string)
+	for _, p := range policies {
+		policy, ok := p.(map[string]interface{})
+		if !ok {
+			t.Fatal("expected policy to be an object")
+		}
+
+		idFloat, ok := policy["id"].(float64)
+		if !ok {
+			t.Fatal("expected policy id to be a number")
+		}
+		id := int(idFloat)
+
+		name, ok := policy["name"].(string)
+		if !ok {
+			t.Fatal("expected policy name to be a string")
+		}
+		policyMap[id] = name
+	}
+
+	// Check that both policies are present
+	if _, ok := policyMap[int(policyID1)]; !ok {
+		t.Errorf("policy %d not found in response", policyID1)
+	}
+	if _, ok := policyMap[int(policyID2)]; !ok {
+		t.Errorf("policy %d not found in response", policyID2)
+	}
+
+	// Verify the service was NOT deleted
+	var count int
+	err = database.QueryRow("SELECT COUNT(*) FROM services WHERE id = ?", serviceID).Scan(&count)
+	if err != nil {
+		t.Errorf("failed to query services: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected service to still exist, but count = %d", count)
+	}
+}
+
+func TestDeleteService_NotInUse_Success(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	// Create a user service
+	serviceResult, err := database.Exec(`INSERT INTO services (name, ports, protocol, is_system) VALUES (?, ?, ?, 0)`, "standalone-service", "9000", "tcp")
+	if err != nil {
+		t.Fatalf("failed to create service: %v", err)
+	}
+	serviceID, _ := serviceResult.LastInsertId()
+
+	// Create a different service that IS in use (to verify we're not blocking all deletions)
+	usedServiceResult, err := database.Exec(`INSERT INTO services (name, ports, protocol, is_system) VALUES (?, ?, ?, 0)`, "used-service", "8080", "tcp")
+	if err != nil {
+		t.Fatalf("failed to create used service: %v", err)
+	}
+	usedServiceID, _ := usedServiceResult.LastInsertId()
+
+	// Create a source group
+	groupResult, err := database.Exec(`INSERT INTO groups (name, description, is_system) VALUES (?, ?, 0)`, "test-group", "Test group")
+	if err != nil {
+		t.Fatalf("failed to create group: %v", err)
+	}
+	groupID, _ := groupResult.LastInsertId()
+
+	// Create a policy that uses the usedService (not the standalone-service)
+	_, err = database.Exec(`
+		INSERT INTO policies (name, description, source_id, source_type, service_id, target_id, target_type, action, enabled)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"test-policy", "Test policy", groupID, "group", usedServiceID, 1, "special", "ACCEPT", 1)
+	if err != nil {
+		t.Fatalf("failed to create policy: %v", err)
+	}
+
+	// Delete the standalone service (not in use)
+	h := NewHandler(database, nil, nil)
+	req := httptest.NewRequest("DELETE", "/api/v1/services/"+strconv.Itoa(int(serviceID)), nil)
+	req = muxVars(req, map[string]string{"id": strconv.Itoa(int(serviceID))})
+	w := httptest.NewRecorder()
+
+	h.DeleteService(w, req)
+
+	// Should return 204 No Content
+	if w.Code != http.StatusNoContent {
+		t.Errorf("expected status %d, got %d: %s", http.StatusNoContent, w.Code, w.Body.String())
+	}
+
+	// Verify the service was deleted
+	var count int
+	err = database.QueryRow("SELECT COUNT(*) FROM services WHERE id = ?", serviceID).Scan(&count)
+	if err != nil {
+		t.Errorf("failed to query services: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("expected service to be deleted, but it still exists")
+	}
+
+	// Verify the used service still exists (not affected)
+	err = database.QueryRow("SELECT COUNT(*) FROM services WHERE id = ?", usedServiceID).Scan(&count)
+	if err != nil {
+		t.Errorf("failed to query services: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected used service to still exist, but count = %d", count)
 	}
 }

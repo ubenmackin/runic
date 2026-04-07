@@ -41,6 +41,7 @@ export default function Services() {
   const { canEdit } = useAuth()
   const { modalOpen, setModalOpen, editItem: editService, setEditItem: setEditService, form: formData, setForm: setFormData, setFormForEdit, handleOpenAdd, handleCancel: closeModal } = useCrudModal({ name: '', protocol: 'tcp', ports: '', source_ports: '', description: '' })
   const [deleteTarget, setDeleteTarget] = useState(null)
+  const [conflictError, setConflictError] = useState(null)
   const [formErrors, setFormErrors] = useState({})
   const [portChips, setPortChips] = useState([])
   const [portInput, setPortInput] = useState('')
@@ -133,9 +134,27 @@ export default function Services() {
     additionalInvalidations: [['pending-changes']],
     onCreateSuccess: closeModal,
     onUpdateSuccess: closeModal,
+    onDeleteSuccess: () => setDeleteTarget(null),
     setFormErrors,
     showToast,
   })
+
+  // Custom delete handler to check for 409 Conflict errors
+  const handleDeleteConfirm = async () => {
+    try {
+      await deleteMutation.mutateAsync(deleteTarget.id)
+    } catch (err) {
+      // Check if it's a 409 Conflict error with policy list
+      if (err.status === 409 && err.data?.policies) {
+        setConflictError({
+          serviceName: deleteTarget.name,
+          policies: err.data.policies,
+        })
+        setDeleteTarget(null)
+      }
+      // Other errors are already handled by the mutation's onError
+    }
+  }
 
   // Validate a single port or range
   const validatePortEntry = (entry) => {
@@ -625,10 +644,52 @@ placeholder="Add a description for this service..." />
         <ConfirmModal
           title="Delete Service"
           message={`Delete service "${deleteTarget.name}"? Policies using this service will be affected.`}
-          onConfirm={() => deleteMutation.mutate(deleteTarget.id)}
+          onConfirm={handleDeleteConfirm}
           onCancel={() => setDeleteTarget(null)}
           danger
         />
+      )}
+
+      {/* Conflict Error Modal */}
+      {conflictError && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-xl w-full max-w-lg mx-4 p-6">
+            <div className="flex items-start gap-3">
+              <div className="flex-shrink-0 w-10 h-10 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center">
+                <svg className="w-6 h-6 text-red-600 dark:text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+              </div>
+              <div className="flex-1">
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-light-neutral mb-2">
+                  Cannot Delete Service
+                </h3>
+                <p className="text-sm text-gray-600 dark:text-amber-muted mb-3">
+                  The service <span className="font-medium text-gray-900 dark:text-white">"{conflictError.serviceName}"</span> cannot be deleted because it is used by the following policies:
+                </p>
+                <ul className="mb-4 space-y-1">
+                  {conflictError.policies.map((policy, idx) => (
+                    <li key={idx} className="text-sm text-gray-700 dark:text-amber-primary flex items-center gap-2">
+                      <span className="w-1.5 h-1.5 rounded-full bg-purple-active"></span>
+                      {policy}
+                    </li>
+                  ))}
+                </ul>
+                <p className="text-sm text-gray-500 dark:text-amber-muted">
+                  Remove this service from the policies above before deleting it.
+                </p>
+              </div>
+            </div>
+            <div className="mt-6 flex justify-end">
+              <button
+                onClick={() => setConflictError(null)}
+                className="px-4 py-2 text-sm font-medium text-white bg-purple-active hover:bg-purple-active/80 rounded-lg"
+              >
+                Got it
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

@@ -3,7 +3,7 @@ import { useLocation } from 'react-router-dom'
 import { useTableSort } from '../hooks/useTableSort'
 import { usePagination } from '../hooks/usePagination'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Plus, Pencil, Trash2, Server, Copy, Check, RefreshCw, X, FileCode } from 'lucide-react'
+import { Plus, Pencil, Trash2, Server, Copy, Check, RefreshCw, X, FileCode, AlertTriangle } from 'lucide-react'
 import { api, QUERY_KEYS } from '../api/client'
 import { REFETCH_INTERVALS } from '../constants'
 import { useCrudModal } from '../hooks/useCrudModal'
@@ -59,6 +59,7 @@ export default function Peers() {
   const location = useLocation()
   const { modalOpen, setModalOpen, editItem: editPeer, setEditItem: setEditPeer, form: formData, setForm: setFormData, setFormForEdit, handleOpenAdd, handleCancel: closeModal } = useCrudModal({ hostname: '', ip_address: '', os_type: 'ubuntu', arch: 'amd64', has_docker: false, description: '' })
   const [deleteTarget, setDeleteTarget] = useState(null)
+  const [conflictError, setConflictError] = useState(null)
   const [formErrors, setFormErrors] = useState({})
 
   // Add Peer modal state
@@ -308,18 +309,35 @@ const preFilteredPeers = peers?.filter(peer => {
     }
   }, [location.state, canEdit, openAddModal])
 
-  const { createMutation, updateMutation, deleteMutation } = useCrudMutations({
-    apiPath: '/peers',
-    queryKey: QUERY_KEYS.peers(),
-    additionalInvalidations: [['pending-changes']],
-    onCreateSuccess: closeModal,
-    onUpdateSuccess: closeModal,
-    onDeleteSuccess: () => { setDeleteTarget(null); showToast('Peer deleted successfully', 'success') },
-    setFormErrors,
-    showToast,
-  })
+const { createMutation, updateMutation, deleteMutation } = useCrudMutations({
+  apiPath: '/peers',
+  queryKey: QUERY_KEYS.peers(),
+  additionalInvalidations: [['pending-changes']],
+  onCreateSuccess: closeModal,
+  onUpdateSuccess: closeModal,
+  onDeleteSuccess: () => { setDeleteTarget(null); showToast('Peer deleted successfully', 'success') },
+  setFormErrors,
+  showToast,
+})
 
-	const handleSubmit = (e) => {
+// Custom delete handler to check for 409 Conflict errors
+const handleDeleteConfirm = async () => {
+  try {
+    await deleteMutation.mutateAsync(deleteTarget.id)
+  } catch (err) {
+    // Check if it's a 409 Conflict error with policy list
+    if (err.status === 409 && err.data?.policies) {
+      setConflictError({
+        peerName: deleteTarget.hostname,
+        policies: err.data.policies,
+      })
+      setDeleteTarget(null)
+    }
+    // Other errors are already handled by the mutation's onError
+  }
+}
+
+const handleSubmit = (e) => {
 		e.preventDefault()
 		if (editPeer) updateMutation.mutate({ id: editPeer.id, data: formData })
 		else createMutation.mutate(formData)
@@ -630,17 +648,48 @@ const preFilteredPeers = peers?.filter(peer => {
         </div>
       )}
 
-      {deleteTarget && (
-        <ConfirmModal
-          title="Delete Peer"
-          message={`Delete peer "${deleteTarget.hostname}"? This will also remove all rule bundles.`}
-          onConfirm={() => deleteMutation.mutate(deleteTarget.id)}
-          onCancel={() => setDeleteTarget(null)}
-          danger
-        />
-      )}
+{deleteTarget && (
+  <ConfirmModal
+    title="Delete Peer"
+    message={`Delete peer "${deleteTarget.hostname}"? This will also remove all rule bundles.`}
+    onConfirm={handleDeleteConfirm}
+    onCancel={() => setDeleteTarget(null)}
+    danger
+  />
+)}
 
-      {/* Rule Bundle Modal */}
+{/* Conflict Error Modal */}
+{conflictError && (
+  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+    <div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-xl w-full max-w-md mx-4">
+      <div className="p-6">
+        <div className="flex items-center gap-3 mb-4">
+          <AlertTriangle className="w-6 h-6 text-amber-500" />
+          <h3 className="text-lg font-semibold">Cannot Delete Peer</h3>
+        </div>
+        <p className="text-gray-600 dark:text-gray-400 mb-4">
+          The peer "{conflictError.peerName}" is used by the following policies:
+        </p>
+        <ul className="list-disc list-inside mb-4 text-gray-700 dark:text-gray-300">
+          {conflictError.policies.map(p => (
+            <li key={p.id}>{p.name}</li>
+          ))}
+        </ul>
+        <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+          Remove this peer from those policies before deleting it.
+        </p>
+        <button
+          onClick={() => setConflictError(null)}
+          className="w-full px-4 py-2 bg-gray-100 dark:bg-charcoal-darkest rounded-lg"
+        >
+          Got it
+        </button>
+      </div>
+    </div>
+  </div>
+)}
+
+{/* Rule Bundle Modal */}
       {bundleModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" tabIndex="-1" onKeyDown={(e) => { if (e.key === 'Escape') { setBundleModalOpen(false) } }}>
           <div ref={bundleModalRef} className="bg-white dark:bg-charcoal-dark rounded-xl shadow-xl w-full max-w-4xl mx-4 max-h-[90vh] flex flex-col">

@@ -637,7 +637,7 @@ func TestDeletePeer(t *testing.T) {
 					"test-policy", 1, 1, 1, "ACCEPT", 100, 1)
 			},
 			wantCode: http.StatusConflict,
-			wantErr:  "cannot delete peer — it is explicitly targeted in policy 'test-policy'",
+			wantErr:  "cannot delete peer — it is in use by one or more policies",
 		},
 		{
 			name:   "delete peer that is in group used by policy",
@@ -660,7 +660,7 @@ func TestDeletePeer(t *testing.T) {
 					"test-policy", 1, 1, 2, "ACCEPT", 100, 1)
 			},
 			wantCode: http.StatusConflict,
-			wantErr:  "cannot delete peer — it is in group used by policy 'test-policy'",
+			wantErr:  "cannot delete peer — it is in use by one or more policies",
 		},
 		{
 			name:   "successful delete - peer not used anywhere",
@@ -743,6 +743,19 @@ func TestDeletePeer(t *testing.T) {
 			}
 
 			if tt.wantErr != "" {
+				// Try to decode as map with policies (new format) or simple map (old format)
+				var respInterface map[string]interface{}
+				if decodeErr := json.NewDecoder(w.Body).Decode(&respInterface); decodeErr == nil {
+					// New format with policies
+					if errMsg, ok := respInterface["error"].(string); ok {
+						if strings.Contains(errMsg, tt.wantErr) {
+							// Success - error message contains expected string
+							return
+						}
+					}
+				}
+
+				// Fall back to trying simple string map
 				var resp map[string]string
 				if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 					t.Fatalf("failed to decode error response: %v", err)
@@ -879,5 +892,286 @@ func TestDeletePeer_WithRuleBundlesAndLogs(t *testing.T) {
 	database.QueryRow("SELECT COUNT(*) FROM firewall_logs WHERE peer_id = 1").Scan(&logCount)
 	if logCount != 0 {
 		t.Errorf("expected 0 firewall_logs after peer deletion, got %d", logCount)
+	}
+}
+
+// TestDeletePeer_InUseByMultiplePolicies tests that deleting a peer explicitly used by multiple policies
+// returns 409 Conflict with the list of all policies.
+func TestDeletePeer_InUseByMultiplePolicies(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	// Create a peer (ID will be 1)
+	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
+		"target-peer", "10.0.0.1", "test-key", "test-hmac", 0)
+
+	// Create another peer as source (ID will be 2)
+	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
+		"source-peer", "10.0.0.2", "source-key", "source-hmac", 0)
+
+	// Insert service (required for policies)
+	database.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`, "ssh", "22", "tcp")
+
+	// Create multiple policies that explicitly target the peer
+	// Policy 1: source_type='peer', source_id=1 (peer 1 is the SOURCE)
+	database.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES ('policy-1', 1, 'peer', 1, 2, 'peer', 'ACCEPT', 100, 1)`)
+
+	// Policy 2: target_type='peer', target_id=1 (peer 1 is the TARGET)
+	database.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES ('policy-2', 2, 'peer', 1, 1, 'peer', 'ACCEPT', 100, 1)`)
+
+	// Policy 3: source_type='peer', source_id=1 AND target_type='peer', target_id=2 (peer 1 is SOURCE, peer 2 is TARGET)
+	database.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES ('policy-3', 1, 'peer', 1, 2, 'peer', 'ACCEPT', 100, 1)`)
+
+	// Try to delete the peer
+	req := httptest.NewRequest("DELETE", "/api/v1/peers/1", nil)
+	w := httptest.NewRecorder()
+	req = muxVars(req, map[string]string{"id": "1"})
+
+	handler := NewHandler(database, nil)
+	handler.DeletePeer(w, req)
+
+	// Should return 409 Conflict
+	if w.Code != http.StatusConflict {
+		t.Errorf("expected status %d, got %d: %s", http.StatusConflict, w.Code, w.Body.String())
+	}
+
+	// Parse response to verify it contains the list of policies
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+
+	// Verify error message
+	if errMsg, ok := resp["error"].(string); !ok || errMsg == "" {
+		t.Error("expected error message in response")
+	}
+
+	// Verify policies list
+	policiesRaw, ok := resp["policies"]
+	if !ok {
+		t.Fatal("expected policies field in response")
+	}
+
+	policies, ok := policiesRaw.([]interface{})
+	if !ok {
+		t.Fatal("expected policies to be an array")
+	}
+
+	if len(policies) != 3 {
+		t.Errorf("expected 3 policies in response, got %d", len(policies))
+	}
+
+	// Verify policy names are in the response
+	policyNames := make(map[string]bool)
+	for _, p := range policies {
+		policy, ok := p.(map[string]interface{})
+		if !ok {
+			t.Fatal("expected policy to be an object")
+		}
+
+		name, ok := policy["name"].(string)
+		if !ok {
+			t.Fatal("expected policy name to be a string")
+		}
+		policyNames[name] = true
+	}
+
+	// Check that all three policies are present
+	if !policyNames["policy-1"] {
+		t.Error("policy-1 not found in response")
+	}
+	if !policyNames["policy-2"] {
+		t.Error("policy-2 not found in response")
+	}
+	if !policyNames["policy-3"] {
+		t.Error("policy-3 not found in response")
+	}
+
+	// Verify the peer was NOT deleted
+	var count int
+	database.QueryRow("SELECT COUNT(*) FROM peers WHERE id = 1").Scan(&count)
+	if count != 1 {
+		t.Errorf("expected peer to still exist, but count = %d", count)
+	}
+}
+
+// TestDeletePeer_InGroupUsedByMultiplePolicies tests that deleting a peer that is in a group
+// used by multiple policies returns 409 Conflict with the list of all policies.
+func TestDeletePeer_InGroupUsedByMultiplePolicies(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	// Create a peer (ID will be 1)
+	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
+		"test-peer", "10.0.0.1", "test-key", "test-hmac", 0)
+
+	// Create a group
+	database.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group")
+
+	// Add peer to group
+	database.Exec(`INSERT INTO group_members (group_id, peer_id) VALUES (?, ?)`, 1, 1)
+
+	// Insert service (required for policies)
+	database.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`, "ssh", "22", "tcp")
+
+	// Create another target peer for policies
+	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
+		"target-peer", "10.0.0.2", "target-key", "target-hmac", 0)
+
+	// Create multiple policies that use the group (group_id=1 as source)
+	// Policy 1: source_type='group', source_id=1
+	database.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, "group", ?, ?, "peer", ?, ?, ?)`,
+		"policy-1", 1, 1, 2, "ACCEPT", 100, 1)
+
+	// Policy 2: source_type='group', source_id=1
+	database.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, "group", ?, ?, "peer", ?, ?, ?)`,
+		"policy-2", 1, 1, 2, "ACCEPT", 100, 1)
+
+	// Policy 3: target_type='group', target_id=1
+	database.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, "peer", ?, ?, "group", ?, ?, ?)`,
+		"policy-3", 2, 1, 1, "ACCEPT", 100, 1)
+
+	// Try to delete the peer
+	req := httptest.NewRequest("DELETE", "/api/v1/peers/1", nil)
+	w := httptest.NewRecorder()
+	req = muxVars(req, map[string]string{"id": "1"})
+
+	handler := NewHandler(database, nil)
+	handler.DeletePeer(w, req)
+
+	// Should return 409 Conflict
+	if w.Code != http.StatusConflict {
+		t.Errorf("expected status %d, got %d: %s", http.StatusConflict, w.Code, w.Body.String())
+	}
+
+	// Parse response to verify it contains the list of policies
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+
+	// Verify error message
+	if errMsg, ok := resp["error"].(string); !ok || errMsg == "" {
+		t.Error("expected error message in response")
+	}
+
+	// Verify policies list
+	policiesRaw, ok := resp["policies"]
+	if !ok {
+		t.Fatal("expected policies field in response")
+	}
+
+	policies, ok := policiesRaw.([]interface{})
+	if !ok {
+		t.Fatal("expected policies to be an array")
+	}
+
+	if len(policies) != 3 {
+		t.Errorf("expected 3 policies in response, got %d", len(policies))
+	}
+
+	// Verify policy names are in the response
+	policyNames := make(map[string]bool)
+	for _, p := range policies {
+		policy, ok := p.(map[string]interface{})
+		if !ok {
+			t.Fatal("expected policy to be an object")
+		}
+
+		name, ok := policy["name"].(string)
+		if !ok {
+			t.Fatal("expected policy name to be a string")
+		}
+		policyNames[name] = true
+	}
+
+	// Check that all three policies are present
+	if !policyNames["policy-1"] {
+		t.Error("policy-1 not found in response")
+	}
+	if !policyNames["policy-2"] {
+		t.Error("policy-2 not found in response")
+	}
+	if !policyNames["policy-3"] {
+		t.Error("policy-3 not found in response")
+	}
+
+	// Verify the peer was NOT deleted
+	var count int
+	err := database.QueryRow("SELECT COUNT(*) FROM peers WHERE id = 1").Scan(&count)
+	if err != nil {
+		t.Errorf("failed to query peers: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected peer to still exist, but count = %d", count)
+	}
+}
+
+// TestDeletePeer_NotInUse_Success tests that successfully deleting a peer
+// returns 200 and actually deletes the peer from the database.
+func TestDeletePeer_NotInUse_Success(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	// Create a peer (ID will be 1)
+	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
+		"standalone-peer", "10.0.0.1", "test-key", "test-hmac", 0)
+
+	// Create a group (not used by any policies)
+	database.Exec(`INSERT INTO groups (name) VALUES (?)`, "unused-group")
+
+	// Add peer to the group (peer will be cleaned up on deletion)
+	database.Exec(`INSERT INTO group_members (group_id, peer_id) VALUES (?, ?)`, 1, 1)
+
+	// Create another peer that IS in use (to verify we're not blocking all deletions)
+	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
+		"used-peer", "10.0.0.2", "used-key", "used-hmac", 0)
+
+	// Insert service
+	database.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`, "ssh", "22", "tcp")
+
+	// Create a policy using the used-peer (not our test peer)
+	database.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, ?, ?, ?, "peer", ?, ?, ?)`,
+		"used-policy", 2, "peer", 1, 2, "ACCEPT", 100, 1)
+
+	// Delete the standalone peer (not in use)
+	req := httptest.NewRequest("DELETE", "/api/v1/peers/1", nil)
+	w := httptest.NewRecorder()
+	req = muxVars(req, map[string]string{"id": "1"})
+
+	handler := NewHandler(database, nil)
+	handler.DeletePeer(w, req)
+
+	// Should return 200 OK
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d: %s", http.StatusOK, w.Code, w.Body.String())
+	}
+
+	// Verify the peer was deleted
+	var count int
+	err := database.QueryRow("SELECT COUNT(*) FROM peers WHERE id = 1").Scan(&count)
+	if err != nil {
+		t.Errorf("failed to query peers: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("expected peer to be deleted, but it still exists")
+	}
+
+	// Verify group_members was cleaned up
+	err = database.QueryRow("SELECT COUNT(*) FROM group_members WHERE peer_id = 1").Scan(&count)
+	if err != nil {
+		t.Errorf("failed to query group_members: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("expected group_members to be cleaned up when peer is deleted")
+	}
+
+	// Verify the used peer still exists (not affected)
+	err = database.QueryRow("SELECT COUNT(*) FROM peers WHERE id = 2").Scan(&count)
+	if err != nil {
+		t.Errorf("failed to query peers: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected used peer to still exist, but count = %d", count)
 	}
 }

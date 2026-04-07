@@ -220,8 +220,9 @@ func (h *Handler) DeleteGroup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check if group is used by any policy
-	if err := common.CheckGroupDeleteConstraints(r.Context(), h.DB, id); err != nil {
-		common.RespondError(w, http.StatusConflict, err.Error())
+	constraintErr, ok := common.CheckGroupDeleteConstraints(r.Context(), h.DB, id).(*common.DeleteConstraintError)
+	if ok && constraintErr != nil {
+		common.RespondJSON(w, http.StatusConflict, constraintErr.ToResponse())
 		return
 	}
 

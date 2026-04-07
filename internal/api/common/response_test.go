@@ -145,7 +145,7 @@ func TestResponseRecorder_Write(t *testing.T) {
 		}
 
 		// Body should be written to underlying recorder
-		if string(rec.Body.Bytes()) != "test body" {
+		if rec.Body.String() != "test body" {
 			t.Errorf("Body = %q, want %q", rec.Body.String(), "test body")
 		}
 	})
@@ -158,7 +158,7 @@ func TestResponseRecorder_Write(t *testing.T) {
 		rr.WriteHeader(http.StatusNotFound)
 
 		// Now write body
-		rr.Write([]byte("error body"))
+		_, _ = rr.Write([]byte("error body"))
 
 		// Status should remain 404, not change to 200
 		if rr.StatusCode() != http.StatusNotFound {
@@ -215,7 +215,7 @@ func TestResponseRecorder_Integration(t *testing.T) {
 		// Simulate a handler that sets a specific status and writes body
 		handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNotFound)
-			w.Write([]byte("not found"))
+			_, _ = w.Write([]byte("not found"))
 		})
 
 		req := httptest.NewRequest(http.MethodGet, "/missing", nil)
@@ -238,7 +238,7 @@ func TestResponseRecorder_Integration(t *testing.T) {
 
 		// Handler that writes body but doesn't set status (implicitly 200)
 		handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Write([]byte("ok"))
+			_, _ = w.Write([]byte("ok"))
 		})
 
 		req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -260,7 +260,7 @@ func TestResponseRecorder_Integration(t *testing.T) {
 		rr := NewResponseRecorder(rec)
 
 		// First write sets status to 200
-		rr.Write([]byte("part1"))
+		_, _ = rr.Write([]byte("part1"))
 
 		// Status should now be locked to 200
 		if rr.StatusCode() != http.StatusOK {
@@ -268,7 +268,7 @@ func TestResponseRecorder_Integration(t *testing.T) {
 		}
 
 		// Second write should not change status
-		rr.Write([]byte("part2"))
+		_, _ = rr.Write([]byte("part2"))
 
 		if rr.StatusCode() != http.StatusOK {
 			t.Errorf("StatusCode() after second write = %d, want %d", rr.StatusCode(), http.StatusOK)

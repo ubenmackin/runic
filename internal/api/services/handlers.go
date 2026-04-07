@@ -284,6 +284,46 @@ func (h *Handler) DeleteService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check if service is in use by any policies
+	rows, err := h.DB.QueryContext(r.Context(), "SELECT id, name FROM policies WHERE service_id = ?", id)
+	if err != nil {
+		log.ErrorContext(r.Context(), "failed to check policy usage", "error", err)
+		common.InternalError(w)
+		return
+	}
+
+	type policyRef struct {
+		ID   int    `json:"id"`
+		Name string `json:"name"`
+	}
+	var policies []policyRef
+	for rows.Next() {
+		var p policyRef
+		if err := rows.Scan(&p.ID, &p.Name); err != nil {
+			if closeErr := rows.Close(); closeErr != nil {
+				log.ErrorContext(r.Context(), "failed to close rows", "error", closeErr)
+			}
+			log.ErrorContext(r.Context(), "failed to scan policy", "error", err)
+			common.InternalError(w)
+			return
+		}
+		policies = append(policies, p)
+	}
+	if closeErr := rows.Close(); closeErr != nil {
+		log.ErrorContext(r.Context(), "failed to close rows", "error", closeErr)
+		common.InternalError(w)
+		return
+	}
+
+	// If service is in use, return 409 Conflict with list of policies
+	if len(policies) > 0 {
+		common.RespondJSON(w, http.StatusConflict, map[string]interface{}{
+			"error":    "Cannot delete service: it is in use by policies",
+			"policies": policies,
+		})
+		return
+	}
+
 	_, err = h.DB.ExecContext(r.Context(), "DELETE FROM services WHERE id = ?", id)
 	if err != nil {
 		log.ErrorContext(r.Context(), "failed to delete service", "error", err)

@@ -906,7 +906,8 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 			// When Source is a broadcast special target (IDs 1=__subnet_broadcast__, 2=__limited_broadcast__),
 			// this means the host should receive broadcast traffic - GENERATE INPUT rules with -d (destination)
 			isBroadcastSource := sourceType == "special" && isBroadcastSpecialID(sourceID)
-			if isMulticastSource {
+			switch {
+			case isMulticastSource:
 				// Multicast source: use packet type matching for receiving multicast traffic
 				if serviceName == "Multicast" {
 					buf.WriteString("-A INPUT -m pkttype --pkt-type multicast -j ACCEPT\\n")
@@ -927,12 +928,12 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 						}
 					}
 				}
-			} else if isBroadcastSource {
+			case isBroadcastSource:
 				// Broadcast source: use -d (destination) matching since broadcast packets are sent TO the broadcast address
 				for _, sourceCIDR := range sourceCIDRs {
 					fmt.Fprintf(&buf, "-A INPUT -d %s -p udp -j ACCEPT\\n", sourceCIDR)
 				}
-			} else {
+			default:
 				for _, sourceCIDR := range sourceCIDRs {
 					if serviceName == "Multicast" {
 						buf.WriteString("-A INPUT -m pkttype --pkt-type multicast -j ACCEPT\\n")
@@ -994,7 +995,8 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 				isMulticastSource := sourceType == "special" && isMulticastSpecialID(sourceID)
 				// BC-003: Broadcast special targets as Source indicate receiving broadcast traffic
 				isBroadcastSource := sourceType == "special" && isBroadcastSpecialID(sourceID)
-				if isMulticastSource {
+				switch {
+				case isMulticastSource:
 					// Multicast source: use packet type matching for receiving multicast traffic
 					if serviceName == "Multicast" {
 						buf.WriteString("-A DOCKER-USER -m pkttype --pkt-type multicast -j ACCEPT\\n")
@@ -1013,12 +1015,12 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 							}
 						}
 					}
-				} else if isBroadcastSource {
+				case isBroadcastSource:
 					// Broadcast source: use -d (destination) matching for broadcast traffic
 					for _, sourceCIDR := range sourceCIDRs {
 						fmt.Fprintf(&buf, "-A DOCKER-USER -d %s -p udp -j ACCEPT\\n", sourceCIDR)
 					}
-				} else {
+				default:
 					for _, sourceCIDR := range sourceCIDRs {
 						if serviceName == "Multicast" {
 							buf.WriteString("-A DOCKER-USER -m pkttype --pkt-type multicast -j ACCEPT\\n")

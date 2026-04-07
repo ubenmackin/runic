@@ -23,14 +23,14 @@ func TestCheckPeerDeleteConstraints(t *testing.T) {
 			name: "peer is target_peer_id in a policy",
 			setup: func(t *testing.T, db *sql.DB) {
 				// Insert peer
-				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)`,
+				_, _ = db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)`,
 					"test-peer", "10.0.0.1", "agent-key-1", "hmac-key-1")
 				// Insert group
-				db.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group")
+				_, _ = db.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group")
 				// Insert service
-				db.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`, "ssh", "22", "tcp")
+				_, _ = db.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`, "ssh", "22", "tcp")
 				// Insert policy using peer as target_peer_id
-				db.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, 'group', ?, ?, 'peer', ?, ?, ?)`,
+				_, _ = db.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, 'group', ?, ?, 'peer', ?, ?, ?)`,
 					"test-policy", 1, 1, 1, "ACCEPT", 100, 1)
 			},
 			peerID:      1,
@@ -41,19 +41,19 @@ func TestCheckPeerDeleteConstraints(t *testing.T) {
 			name: "peer is in a group used as source_group_id",
 			setup: func(t *testing.T, db *sql.DB) {
 				// Insert peer
-				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)`,
+				_, _ = db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)`,
 					"test-peer", "10.0.0.1", "agent-key-1", "hmac-key-1")
 				// Insert another peer to be target
-				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)`,
+				_, _ = db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)`,
 					"target-peer", "10.0.0.2", "agent-key-2", "hmac-key-2")
 				// Insert group
-				db.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group")
+				_, _ = db.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group")
 				// Insert peer into group
-				db.Exec(`INSERT INTO group_members (group_id, peer_id) VALUES (?, ?)`, 1, 1)
+				_, _ = db.Exec(`INSERT INTO group_members (group_id, peer_id) VALUES (?, ?)`, 1, 1)
 				// Insert service
-				db.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`, "ssh", "22", "tcp")
+				_, _ = db.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`, "ssh", "22", "tcp")
 				// Insert policy using group as source
-				db.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, 'group', ?, ?, 'peer', ?, ?, ?)`,
+				_, _ = db.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, 'group', ?, ?, 'peer', ?, ?, ?)`,
 					"group-policy", 1, 1, 2, "ACCEPT", 100, 1)
 			},
 			peerID:      1,
@@ -64,7 +64,7 @@ func TestCheckPeerDeleteConstraints(t *testing.T) {
 			name: "peer is not used anywhere",
 			setup: func(t *testing.T, db *sql.DB) {
 				// Insert peer
-				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)`,
+				_, _ = db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)`,
 					"unused-peer", "10.0.0.1", "agent-key-1", "hmac-key-1")
 			},
 			peerID:  1,
@@ -74,12 +74,12 @@ func TestCheckPeerDeleteConstraints(t *testing.T) {
 			name: "peer is in a group but group is not used by any policy",
 			setup: func(t *testing.T, db *sql.DB) {
 				// Insert peer
-				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)`,
+				_, _ = db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)`,
 					"test-peer", "10.0.0.1", "agent-key-1", "hmac-key-1")
 				// Insert group
-				db.Exec(`INSERT INTO groups (name) VALUES (?)`, "unused-group")
+				_, _ = db.Exec(`INSERT INTO groups (name) VALUES (?)`, "unused-group")
 				// Insert peer into group
-				db.Exec(`INSERT INTO group_members (group_id, peer_id) VALUES (?, ?)`, 1, 1)
+				_, _ = db.Exec(`INSERT INTO group_members (group_id, peer_id) VALUES (?, ?)`, 1, 1)
 			},
 			peerID:  1,
 			wantErr: false,
@@ -88,16 +88,16 @@ func TestCheckPeerDeleteConstraints(t *testing.T) {
 			name: "peer is target_peer_id takes precedence over group membership",
 			setup: func(t *testing.T, db *sql.DB) {
 				// Insert peer
-				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)`,
+				_, _ = db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)`,
 					"test-peer", "10.0.0.1", "agent-key-1", "hmac-key-1")
 				// Insert group
-				db.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group")
+				_, _ = db.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group")
 				// Insert peer into group
-				db.Exec(`INSERT INTO group_members (group_id, peer_id) VALUES (?, ?)`, 1, 1)
+				_, _ = db.Exec(`INSERT INTO group_members (group_id, peer_id) VALUES (?, ?)`, 1, 1)
 				// Insert service
-				db.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`, "ssh", "22", "tcp")
+				_, _ = db.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`, "ssh", "22", "tcp")
 				// Insert policy using peer as target_peer_id (should be checked first)
-				db.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, 'group', ?, ?, 'peer', ?, ?, ?)`,
+				_, _ = db.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, 'group', ?, ?, 'peer', ?, ?, ?)`,
 					"target-policy", 1, 1, 1, "ACCEPT", 100, 1)
 			},
 			peerID:      1,
@@ -121,8 +121,19 @@ func TestCheckPeerDeleteConstraints(t *testing.T) {
 			if tt.wantErr {
 				if err == nil {
 					t.Errorf("CheckPeerDeleteConstraints() expected error, got nil")
-				} else if err.Error() != tt.wantErrPart {
-					t.Errorf("CheckPeerDeleteConstraints() error = %q, want %q", err.Error(), tt.wantErrPart)
+				} else {
+					// Check that it's a DeleteConstraintError with policies
+					if dcErr, ok := err.(*DeleteConstraintError); ok {
+						if len(dcErr.Policies) == 0 {
+							t.Errorf("CheckPeerDeleteConstraints() error has no policies")
+						}
+						// Verify the expected message format
+						if dcErr.Message != "cannot delete peer — it is in use by one or more policies" {
+							t.Errorf("CheckPeerDeleteConstraints() message = %q, want generic message", dcErr.Message)
+						}
+					} else {
+						t.Errorf("CheckPeerDeleteConstraints() expected DeleteConstraintError, got %T", err)
+					}
 				}
 			} else {
 				if err != nil {
@@ -146,14 +157,14 @@ func TestCheckGroupDeleteConstraints(t *testing.T) {
 			name: "group is used as source_group_id in a policy",
 			setup: func(t *testing.T, db *sql.DB) {
 				// Insert peer
-				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)`,
+				_, _ = db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)`,
 					"test-peer", "10.0.0.1", "agent-key-1", "hmac-key-1")
 				// Insert group
-				db.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group")
+				_, _ = db.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group")
 				// Insert service
-				db.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`, "ssh", "22", "tcp")
+				_, _ = db.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`, "ssh", "22", "tcp")
 				// Insert policy using group as source
-				db.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, 'group', ?, ?, 'peer', ?, ?, ?)`,
+				_, _ = db.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, 'group', ?, ?, 'peer', ?, ?, ?)`,
 					"test-policy", 1, 1, 1, "ACCEPT", 100, 1)
 			},
 			groupID:     1,
@@ -164,7 +175,7 @@ func TestCheckGroupDeleteConstraints(t *testing.T) {
 			name: "group is not used anywhere",
 			setup: func(t *testing.T, db *sql.DB) {
 				// Insert group
-				db.Exec(`INSERT INTO groups (name) VALUES (?)`, "unused-group")
+				_, _ = db.Exec(`INSERT INTO groups (name) VALUES (?)`, "unused-group")
 			},
 			groupID: 1,
 			wantErr: false,
@@ -173,12 +184,12 @@ func TestCheckGroupDeleteConstraints(t *testing.T) {
 			name: "group with members but not used in policy",
 			setup: func(t *testing.T, db *sql.DB) {
 				// Insert peer
-				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)`,
+				_, _ = db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)`,
 					"test-peer", "10.0.0.1", "agent-key-1", "hmac-key-1")
 				// Insert group
-				db.Exec(`INSERT INTO groups (name) VALUES (?)`, "group-with-members")
+				_, _ = db.Exec(`INSERT INTO groups (name) VALUES (?)`, "group-with-members")
 				// Insert peer into group
-				db.Exec(`INSERT INTO group_members (group_id, peer_id) VALUES (?, ?)`, 1, 1)
+				_, _ = db.Exec(`INSERT INTO group_members (group_id, peer_id) VALUES (?, ?)`, 1, 1)
 			},
 			groupID: 1,
 			wantErr: false,
@@ -187,16 +198,16 @@ func TestCheckGroupDeleteConstraints(t *testing.T) {
 			name: "group used by multiple policies returns first policy name",
 			setup: func(t *testing.T, db *sql.DB) {
 				// Insert peer
-				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)`,
+				_, _ = db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)`,
 					"test-peer", "10.0.0.1", "agent-key-1", "hmac-key-1")
 				// Insert group
-				db.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group")
+				_, _ = db.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group")
 				// Insert service
-				db.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`, "ssh", "22", "tcp")
+				_, _ = db.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`, "ssh", "22", "tcp")
 				// Insert multiple policies using the same group
-				db.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, 'group', ?, ?, 'peer', ?, ?, ?)`,
+				_, _ = db.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, 'group', ?, ?, 'peer', ?, ?, ?)`,
 					"first-policy", 1, 1, 1, "ACCEPT", 100, 1)
-				db.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, 'group', ?, ?, 'peer', ?, ?, ?)`,
+				_, _ = db.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, 'group', ?, ?, 'peer', ?, ?, ?)`,
 					"second-policy", 1, 1, 1, "DROP", 200, 1)
 			},
 			groupID: 1,
@@ -222,15 +233,18 @@ func TestCheckGroupDeleteConstraints(t *testing.T) {
 			if tt.wantErr {
 				if err == nil {
 					t.Errorf("CheckGroupDeleteConstraints() expected error, got nil")
-				} else if tt.wantErrPart != "" && err.Error() != tt.wantErrPart {
-					// For cases where exact match isn't required, check prefix
-					if tt.name == "group used by multiple policies returns first policy name" {
-						if err.Error() != "cannot delete group — it is used by policy 'first-policy'" &&
-							err.Error() != "cannot delete group — it is used by policy 'second-policy'" {
-							t.Errorf("CheckGroupDeleteConstraints() error = %q, want containing policy name", err.Error())
+				} else {
+					// Check that it's a DeleteConstraintError with policies
+					if dcErr, ok := err.(*DeleteConstraintError); ok {
+						if len(dcErr.Policies) == 0 {
+							t.Errorf("CheckGroupDeleteConstraints() error has no policies")
+						}
+						// Verify the expected message format
+						if dcErr.Message != "Cannot delete group: it is in use by policies" {
+							t.Errorf("CheckGroupDeleteConstraints() message = %q, want generic message", dcErr.Message)
 						}
 					} else {
-						t.Errorf("CheckGroupDeleteConstraints() error = %q, want %q", err.Error(), tt.wantErrPart)
+						t.Errorf("CheckGroupDeleteConstraints() expected DeleteConstraintError, got %T", err)
 					}
 				}
 			} else {

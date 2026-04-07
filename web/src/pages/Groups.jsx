@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Trash2, Lock, Users, Shield, X, RefreshCw, Pencil } from 'lucide-react'
+import { Plus, Trash2, Lock, Users, Shield, X, RefreshCw, Pencil, AlertTriangle } from 'lucide-react'
 import { api, QUERY_KEYS } from '../api/client'
 import { useCrudModal } from '../hooks/useCrudModal'
 import { useTableSort } from '../hooks/useTableSort'
@@ -27,6 +27,7 @@ export default function Groups() {
   const { canEdit } = useAuth()
   const { modalOpen, editItem: editGroup, setEditItem: setEditGroup, form: formData, setForm: setFormData, setFormForEdit, handleOpenAdd, handleCancel, setModalOpen } = useCrudModal({ name: '', description: '' })
   const [deleteTarget, setDeleteTarget] = useState(null)
+  const [conflictError, setConflictError] = useState(null)
   const [formErrors, setFormErrors] = useState({})
   
   // Sorting state
@@ -127,6 +128,23 @@ export default function Groups() {
     setFormErrors,
     showToast,
   })
+
+  // Custom delete handler to check for 409 Conflict errors
+  const handleDeleteConfirm = async () => {
+    try {
+      await deleteMutation.mutateAsync(deleteTarget.id)
+    } catch (err) {
+      // Check if it's a 409 Conflict error with policy list
+      if (err.status === 409 && err.data?.policies) {
+        setConflictError({
+          groupName: deleteTarget.name,
+          policies: err.data.policies,
+        })
+        setDeleteTarget(null)
+      }
+      // Other errors are already handled by the mutation's onError
+    }
+  }
 
   const addMemberMutation = useMutation({
     mutationFn: ({ groupId, peerId }) => api.post(`/groups/${groupId}/members`, { peer_id: peerId }),
@@ -462,15 +480,46 @@ className="hover:bg-gray-200 dark:hover:bg-charcoal-dark rounded-full p-0.5"
         </div>
       )}
 
-      {deleteTarget && (
-        <ConfirmModal
-          title="Delete Group"
-          message={`Delete group "${deleteTarget.name}"?`}
-          onConfirm={() => deleteMutation.mutate(deleteTarget.id)}
-          onCancel={() => setDeleteTarget(null)}
-          danger
-        />
-      )}
+{deleteTarget && (
+      <ConfirmModal
+        title="Delete Group"
+        message={`Delete group "${deleteTarget.name}"?`}
+        onConfirm={handleDeleteConfirm}
+        onCancel={() => setDeleteTarget(null)}
+        danger
+      />
+    )}
+
+    {/* Conflict Error Modal */}
+    {conflictError && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+        <div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-xl w-full max-w-md mx-4">
+          <div className="p-6">
+            <div className="flex items-center gap-3 mb-4">
+              <AlertTriangle className="w-6 h-6 text-amber-500" />
+              <h3 className="text-lg font-semibold">Cannot Delete Group</h3>
+            </div>
+            <p className="text-gray-600 dark:text-gray-400 mb-4">
+              The group "{conflictError.groupName}" is used by the following policies:
+            </p>
+            <ul className="list-disc list-inside mb-4 text-gray-700 dark:text-gray-300">
+              {conflictError.policies.map(p => (
+                <li key={p.id}>{p.name}</li>
+              ))}
+            </ul>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+              Remove this group from those policies before deleting it.
+            </p>
+            <button
+              onClick={() => setConflictError(null)}
+              className="w-full px-4 py-2 bg-gray-100 dark:bg-charcoal-darkest rounded-lg"
+            >
+              Got it
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
     </div>
   )
 }

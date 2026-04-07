@@ -56,7 +56,10 @@ async function request(method, path, body, retry = true) {
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }))
     const message = typeof err.error === 'string' ? err.error : err.error?.message
-    throw new Error(message || 'Request failed')
+    const error = new Error(message || 'Request failed')
+    error.status = res.status
+    error.data = err
+    throw error
   }
 
   if (res.status === 204) return null

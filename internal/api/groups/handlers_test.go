@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -237,11 +238,9 @@ func TestDeleteGroup_UsedByPolicy(t *testing.T) {
 
 	// Insert test data
 	database.Exec(`INSERT INTO groups (name, description) VALUES (?, ?)`, "web-servers", "Web server group")
-	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)`,
-		"web-01", "10.0.0.1", "key1", "hmac1")
+	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)`, "web-01", "10.0.0.1", "key1", "hmac1")
 	database.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`, "http", "80", "tcp")
-	database.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, "group", ?, ?, "peer", ?, ?, ?)`,
-		"allow-http", 1, 1, 1, "ACCEPT", 100, 1)
+	database.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, "group", ?, ?, "peer", ?, ?, ?)`, "allow-http", 1, 1, 1, "ACCEPT", 100, 1)
 
 	req := httptest.NewRequest("DELETE", "/api/v1/groups/1", nil)
 	w := httptest.NewRecorder()
@@ -255,14 +254,241 @@ func TestDeleteGroup_UsedByPolicy(t *testing.T) {
 		t.Errorf("expected status %d, got %d: %s", http.StatusConflict, w.Code, w.Body.String())
 	}
 
-	var resp map[string]string
+	var resp map[string]interface{}
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("failed to decode error response: %v", err)
 	}
 
-	// Should include policy name in error
-	if !strings.Contains(resp["error"], "allow-http") {
-		t.Errorf("expected error to contain policy name 'allow-http', got %q", resp["error"])
+	// Should include error message
+	errMsg, ok := resp["error"].(string)
+	if !ok || errMsg == "" {
+		t.Error("expected error message in response")
+	}
+
+	// Should include policies array
+	policiesRaw, ok := resp["policies"]
+	if !ok {
+		t.Fatal("expected policies field in response")
+	}
+
+	policies, ok := policiesRaw.([]interface{})
+	if !ok {
+		t.Fatal("expected policies to be an array")
+	}
+
+	if len(policies) != 1 {
+		t.Errorf("expected 1 policy in response, got %d", len(policies))
+	}
+
+	// Verify the policy name is "allow-http"
+	policy, ok := policies[0].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected policy to be an object")
+	}
+	name, ok := policy["name"].(string)
+	if !ok || name != "allow-http" {
+		t.Errorf("expected policy name 'allow-http', got %q", name)
+	}
+
+	// Verify the group was NOT deleted
+	var count int
+	err := database.QueryRow("SELECT COUNT(*) FROM groups WHERE id = 1").Scan(&count)
+	if err != nil {
+		t.Fatalf("failed to check group deletion: %v", err)
+	}
+	if count != 1 {
+		t.Error("expected group to still exist")
+	}
+}
+
+// TestDeleteGroup_InUseByMultiplePolicies tests that deleting a group used by
+// multiple policies returns ALL policies in the error response (not just one).
+func TestDeleteGroup_InUseByMultiplePolicies(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	// Insert test data - a group used by multiple policies
+	database.Exec(`INSERT INTO groups (name, description) VALUES (?, ?)`, "web-servers", "Web server group")
+	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)`, "web-01", "10.0.0.1", "key1", "hmac1")
+	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)`, "web-02", "10.0.0.2", "key2", "hmac2")
+	database.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`, "http", "80", "tcp")
+	database.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`, "https", "443", "tcp")
+
+	// Create multiple policies using the same group as SOURCE
+	policyResult1, err := database.Exec(`
+		INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled)
+		VALUES (?, ?, "group", ?, ?, "peer", ?, ?, ?)`,
+		"allow-http", 1, 1, 1, "ACCEPT", 100, 1)
+	if err != nil {
+		t.Fatalf("failed to create policy 1: %v", err)
+	}
+	policyID1, _ := policyResult1.LastInsertId()
+
+	policyResult2, err := database.Exec(`
+		INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled)
+		VALUES (?, ?, "group", ?, ?, "peer", ?, ?, ?)`,
+		"allow-https", 1, 2, 1, "ACCEPT", 200, 1)
+	if err != nil {
+		t.Fatalf("failed to create policy 2: %v", err)
+	}
+	policyID2, _ := policyResult2.LastInsertId()
+
+	// Create a third policy using the same group as TARGET
+	policyResult3, err := database.Exec(`
+		INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled)
+		VALUES (?, ?, "peer", ?, ?, "group", ?, ?, ?)`,
+		"target-web-servers", 1, 1, 1, "ACCEPT", 300, 1)
+	if err != nil {
+		t.Fatalf("failed to create policy 3: %v", err)
+	}
+	policyID3, _ := policyResult3.LastInsertId()
+
+	// Attempt to delete the group
+	req := httptest.NewRequest("DELETE", "/api/v1/groups/1", nil)
+	w := httptest.NewRecorder()
+	req = muxVars(req, map[string]string{"id": "1"})
+
+	h := NewHandler(database, nil, nil)
+	h.DeleteGroup(w, req)
+
+	// Verify HTTP 409 Conflict
+	if w.Code != http.StatusConflict {
+		t.Errorf("expected status %d, got %d: %s", http.StatusConflict, w.Code, w.Body.String())
+	}
+
+	// Parse response
+	var resp map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	// Verify error message exists
+	errMsg, ok := resp["error"].(string)
+	if !ok || errMsg == "" {
+		t.Error("expected error message in response")
+	}
+
+	// Verify policies list exists and contains ALL policies
+	policiesRaw, ok := resp["policies"]
+	if !ok {
+		t.Fatal("expected policies field in response")
+	}
+
+	policies, ok := policiesRaw.([]interface{})
+	if !ok {
+		t.Fatal("expected policies to be an array")
+	}
+
+	if len(policies) != 3 {
+		t.Errorf("expected 3 policies in response, got %d", len(policies))
+	}
+
+	// Verify policy IDs and names are in the response
+	policyMap := make(map[int]string)
+	for _, p := range policies {
+		policy, ok := p.(map[string]interface{})
+		if !ok {
+			t.Fatal("expected policy to be an object")
+		}
+
+		idFloat, ok := policy["id"].(float64)
+		if !ok {
+			t.Fatal("expected policy id to be a number")
+		}
+		id := int(idFloat)
+
+		name, ok := policy["name"].(string)
+		if !ok {
+			t.Fatal("expected policy name to be a string")
+		}
+		policyMap[id] = name
+	}
+
+	// Check that all three policies are present
+	if _, ok := policyMap[int(policyID1)]; !ok {
+		t.Errorf("policy %d (allow-http) not found in response", policyID1)
+	}
+	if _, ok := policyMap[int(policyID2)]; !ok {
+		t.Errorf("policy %d (allow-https) not found in response", policyID2)
+	}
+	if _, ok := policyMap[int(policyID3)]; !ok {
+		t.Errorf("policy %d (target-web-servers) not found in response", policyID3)
+	}
+
+	// Verify the group was NOT deleted
+	var count int
+	err = database.QueryRow("SELECT COUNT(*) FROM groups WHERE id = 1").Scan(&count)
+	if err != nil {
+		t.Fatalf("failed to query groups: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected group to still exist, but count = %d", count)
+	}
+}
+
+// TestDeleteGroup_NotInUse_Success tests that a group not used by any policy
+// can be deleted successfully.
+func TestDeleteGroup_NotInUse_Success(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	// Create a group that is not used by any policy
+	groupResult, err := database.Exec(`INSERT INTO groups (name, description) VALUES (?, ?)`, "unused-group", "Group not used by any policy")
+	if err != nil {
+		t.Fatalf("failed to create group: %v", err)
+	}
+	groupID, _ := groupResult.LastInsertId()
+
+	// Create a different group that IS used by a policy (to verify we're not blocking all deletions)
+	usedGroupResult, err := database.Exec(`INSERT INTO groups (name, description) VALUES (?, ?)`, "used-group", "Group used by a policy")
+	if err != nil {
+		t.Fatalf("failed to create used group: %v", err)
+	}
+	usedGroupID, _ := usedGroupResult.LastInsertId()
+
+	// Create peer and service for policies
+	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)`, "peer1", "10.0.0.1", "key1", "hmac1")
+	database.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`, "http", "80", "tcp")
+
+	// Create a policy that uses the usedGroup (not the unused-group)
+	_, err = database.Exec(`
+		INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled)
+		VALUES (?, ?, "group", ?, ?, "peer", ?, ?, ?)`,
+		"test-policy", usedGroupID, 1, 1, "ACCEPT", 100, 1)
+	if err != nil {
+		t.Fatalf("failed to create policy: %v", err)
+	}
+
+	// Delete the unused group
+	req := httptest.NewRequest("DELETE", "/api/v1/groups/"+strconv.Itoa(int(groupID)), nil)
+	w := httptest.NewRecorder()
+	req = muxVars(req, map[string]string{"id": strconv.Itoa(int(groupID))})
+
+	h := NewHandler(database, nil, nil)
+	h.DeleteGroup(w, req)
+
+	// Should return 204 No Content
+	if w.Code != http.StatusNoContent {
+		t.Errorf("expected status %d, got %d: %s", http.StatusNoContent, w.Code, w.Body.String())
+	}
+
+	// Verify the group was deleted
+	var count int
+	err = database.QueryRow("SELECT COUNT(*) FROM groups WHERE id = ?", groupID).Scan(&count)
+	if err != nil {
+		t.Fatalf("failed to query groups: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("expected group to be deleted, but it still exists")
+	}
+
+	// Verify the used group still exists (not affected)
+	err = database.QueryRow("SELECT COUNT(*) FROM groups WHERE id = ?", usedGroupID).Scan(&count)
+	if err != nil {
+		t.Fatalf("failed to query groups: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected used group to still exist, but count = %d", count)
 	}
 }
 
@@ -1075,12 +1301,40 @@ func TestDeleteGroup_UsedAsTarget(t *testing.T) {
 		t.Errorf("expected status %d, got %d: %s", http.StatusConflict, w.Code, w.Body.String())
 	}
 
-	var resp map[string]string
+	var resp map[string]interface{}
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("failed to decode error response: %v", err)
 	}
-	if !strings.Contains(resp["error"], "allow-to-group") {
-		t.Errorf("expected error to contain policy name 'allow-to-group', got %q", resp["error"])
+
+	// Should include error message
+	errMsg, ok := resp["error"].(string)
+	if !ok || errMsg == "" {
+		t.Error("expected error message in response")
+	}
+
+	// Should include policies array
+	policiesRaw, ok := resp["policies"]
+	if !ok {
+		t.Fatal("expected policies field in response")
+	}
+
+	policies, ok := policiesRaw.([]interface{})
+	if !ok {
+		t.Fatal("expected policies to be an array")
+	}
+
+	if len(policies) != 1 {
+		t.Errorf("expected 1 policy in response, got %d", len(policies))
+	}
+
+	// Verify the policy name is "allow-to-group"
+	policy, ok := policies[0].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected policy to be an object")
+	}
+	name, ok := policy["name"].(string)
+	if !ok || name != "allow-to-group" {
+		t.Errorf("expected policy name 'allow-to-group', got %q", name)
 	}
 }
 
