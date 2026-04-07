@@ -572,11 +572,9 @@ const polymorphicOptions = [
                   {/* Row 1: Source - Direction - Target */}
                   <div>
                     <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Source</label>
-                    <span title={isIGMPService ? "IGMP is a host-level protocol — source is not used" : undefined}>
-                    <div className={isIGMPService ? 'opacity-50' : ''}>
+                    <div title={isIGMPService ? "IGMP is a host-level protocol — source is not used" : undefined} className={isIGMPService ? 'opacity-50' : ''}>
                       <SearchableSelect options={polymorphicOptions} value={formData.source_id} category={formData.source_type} onChange={(v, type) => setFormData(d => ({ ...d, source_id: v, source_type: type }))} placeholder="Select group or peer" disabled={isIGMPService} />
                     </div>
-                    </span>
 
                   </div>
                   <div className="flex flex-col items-center justify-end gap-1.5 pb-0.5">
