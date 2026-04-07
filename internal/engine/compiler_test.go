@@ -1966,3 +1966,53 @@ func TestMulticastPolicy_SourceIsMulticastSpecial_WithService(t *testing.T) {
 		t.Errorf("expected 'As Target (Ingress from mDNS)' comment, got:\n%s", output)
 	}
 }
+
+// TestCommentNewlineFormat verifies that policy comments have proper newlines
+// and not literal backslash-n characters (CN-003)
+func TestCommentNewlineFormat(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+
+	// Create a peer and policy to generate a comment
+	peerID := insertPeer(t, database, "test-peer", "10.100.5.10", false)
+	groupID := insertGroup(t, database, "test-group")
+	manualPeerID := insertManualPeer(t, database, "10.0.1.100")
+	insertGroupMember(t, database, groupID, manualPeerID)
+	serviceID := insertService(t, database, "ssh", "22", "tcp")
+	insertPolicy(t, database, "test-policy", groupID, serviceID, peerID, "ACCEPT", 100, true)
+
+	c := NewCompiler(database)
+	output, err := c.Compile(context.Background(), peerID)
+	if err != nil {
+		t.Fatalf("compile error: %v", err)
+	}
+
+	// Verify that comments have actual newlines, not literal \n
+	// The "# As Target" comment should be followed by a real newline
+	if strings.Contains(output, "# As Target (Ingress from test-group)\\n") {
+		t.Errorf("found literal \\n in comment output - comments should have actual newlines, got:\n%s", output)
+	}
+
+	// Verify that the comment is followed by an actual newline
+	// This means the line should NOT end with literal backslash-n
+	lines := strings.Split(output, "\n")
+	for i, line := range lines {
+		if strings.Contains(line, "# As Target (Ingress from") {
+			// Check that the line does not end with backslash-n
+			if strings.HasSuffix(line, "\\n") {
+				t.Errorf("line %d ends with literal \\n: %s", i, line)
+			}
+			// Check that the next line exists and is not empty (it should be a rule)
+			if i+1 < len(lines) && lines[i+1] == "" {
+				t.Errorf("comment at line %d is not followed by a rule - comment may have malformed newline", i)
+			}
+		}
+	}
+
+	// Verify that iptables rules are present after the comment
+	// This confirms proper formatting with newlines
+	if !strings.Contains(output, "-A INPUT -s 10.0.1.100/32") {
+		t.Errorf("expected INPUT rule for policy source, got:\n%s", output)
+	}
+}

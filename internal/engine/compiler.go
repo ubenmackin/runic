@@ -451,7 +451,7 @@ ELSE 0 END as is_source
 		// Only emit if direction is 'both' or 'backward' (backward = target receives inbound from source)
 		if pol.IsTarget && (pol.Direction == "both" || pol.Direction == "backward") {
 			sourceName := c.formatEntityName(ctx, pol.SourceType, pol.SourceID)
-			fmt.Fprintf(&buf, "# As Target (Ingress from %s)\\n", sourceName)
+			fmt.Fprintf(&buf, "# As Target (Ingress from %s)\n", sourceName)
 
 			// MC-009: Multicast special targets as Source indicate the host receives multicast traffic
 			// When Source is a multicast special target (IDs 3=__all_hosts__, 4=__mdns__, 8=__igmpv3__),
