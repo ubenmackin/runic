@@ -72,8 +72,11 @@ func TestHandleSetupGET_UsersExist(t *testing.T) {
 	setupTestJWT(t, db)
 
 	// Insert a user
-	hash, _ := bcrypt.GenerateFromPassword([]byte("password123"), 12)
-	db.Exec("INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)",
+	hash, err := bcrypt.GenerateFromPassword([]byte("password123"), 12)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = db.Exec("INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)",
 		"existinguser", string(hash), "admin")
 
 	h := NewHandler(db, db)
@@ -148,7 +151,7 @@ func TestHandleSetupPOST_Success(t *testing.T) {
 
 	// Verify user was created
 	var count int
-	db.QueryRow("SELECT COUNT(*) FROM users WHERE username = ?", "admin").Scan(&count)
+	_ = db.QueryRow("SELECT COUNT(*) FROM users WHERE username = ?", "admin").Scan(&count)
 	if count != 1 {
 		t.Errorf("expected 1 user created, got %d", count)
 	}
@@ -180,8 +183,11 @@ func TestHandleSetupPOST_AlreadyCompleted(t *testing.T) {
 	setupTestJWT(t, db)
 
 	// Insert a user first
-	hash, _ := bcrypt.GenerateFromPassword([]byte("password123"), 12)
-	db.Exec("INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)",
+	hash, err := bcrypt.GenerateFromPassword([]byte("password123"), 12)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = db.Exec("INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)",
 		"existinguser", string(hash), "admin")
 
 	h := NewHandler(db, db)
@@ -257,8 +263,11 @@ func TestHandleSetupPOST_DuplicateUsername(t *testing.T) {
 	setupTestJWT(t, db)
 
 	// Insert a user first
-	hash, _ := bcrypt.GenerateFromPassword([]byte("password123"), 12)
-	db.Exec("INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)",
+	hash, err := bcrypt.GenerateFromPassword([]byte("password123"), 12)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = db.Exec("INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)",
 		"duplicate", string(hash), "admin")
 
 	h := NewHandler(db, db)

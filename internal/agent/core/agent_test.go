@@ -255,7 +255,7 @@ func TestApplyBundleSavesConfigOnSuccess(t *testing.T) {
 
 	// applyBundle will fail due to invalid HMAC, but that's ok for this test
 	// We're testing the config save path
-	agent.applyBundle(context.Background(), bundle)
+	_ = agent.applyBundle(context.Background(), bundle)
 
 	// Note: In real test we'd mock apply.ApplyBundle, but we can at least verify
 	// the method is callable without panic
@@ -424,7 +424,7 @@ func TestApplyCachedBundle_EmptyRules(t *testing.T) {
 	// Create empty cache file
 	cacheDir := t.TempDir()
 	cachePath := filepath.Join(cacheDir, "cached-bundle.rules")
-	os.WriteFile(cachePath, []byte(""), 0600)
+	_ = os.WriteFile(cachePath, []byte(""), 0600)
 	agent.cachePath = cachePath
 	agent.cmdRunner = &mockCommandRunner{}
 
@@ -447,7 +447,7 @@ func TestApplyCachedBundle_WhitespaceOnlyRules(t *testing.T) {
 
 	cacheDir := t.TempDir()
 	cachePath := filepath.Join(cacheDir, "cached-bundle.rules")
-	os.WriteFile(cachePath, []byte("   \n  \n  "), 0600)
+	_ = os.WriteFile(cachePath, []byte("   \n  \n  "), 0600)
 	agent.cachePath = cachePath
 	agent.cmdRunner = &mockCommandRunner{}
 
@@ -487,7 +487,7 @@ func TestApplyCachedBundle_Success(t *testing.T) {
 	cacheDir := t.TempDir()
 	cachePath := filepath.Join(cacheDir, "cached-bundle.rules")
 	validRules := "*filter\n:INPUT DROP [0:0]\nCOMMIT\n"
-	os.WriteFile(cachePath, []byte(validRules), 0600)
+	_ = os.WriteFile(cachePath, []byte(validRules), 0600)
 	agent.cachePath = cachePath
 
 	mockCmd := &mockCommandRunner{}
@@ -663,13 +663,18 @@ func TestRunFailsOnEmptyControlPlaneURL(t *testing.T) {
 	cfg.HostID = "test-host"
 	cfg.Token = "test-token"
 	// ControlPlaneURL is empty
-	data, _ := json.MarshalIndent(cfg, "", "  ")
-	os.WriteFile(configPath, data, 0600)
+	var data []byte
+	var err error
+	data, err = json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		t.Fatalf("failed to marshal config: %v", err)
+	}
+	_ = os.WriteFile(configPath, data, 0600)
 
 	agent := New(configPath, "") // Empty CLI URL too
 
 	ctx := context.Background()
-	err := agent.Run(ctx)
+	err = agent.Run(ctx)
 
 	if err == nil {
 		t.Error("Run() should fail when control plane URL is empty")

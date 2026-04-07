@@ -85,7 +85,7 @@ func TestCheckAndRecordFailure_LockedOut(t *testing.T) {
 
 	// Record 5 failures to trigger lockout
 	for i := 0; i < 5; i++ {
-		CheckAndRecordFailure(username, remoteAddr)
+		_ = CheckAndRecordFailure(username, remoteAddr)
 	}
 
 	// 6th attempt should return error
@@ -116,7 +116,7 @@ func TestRecordSuccess_ClearsEntry(t *testing.T) {
 
 	// Record 3 failures (below lockout threshold)
 	for i := 0; i < 3; i++ {
-		CheckAndRecordFailure(username, remoteAddr)
+		_ = CheckAndRecordFailure(username, remoteAddr)
 	}
 
 	// Verify entry exists
@@ -227,7 +227,7 @@ func TestConcurrentAccess(t *testing.T) {
 	for i := 0; i < goroutines; i++ {
 		go func(iteration int) {
 			defer wg.Done()
-			CheckAndRecordFailure(username, remoteAddr)
+			_ = CheckAndRecordFailure(username, remoteAddr)
 		}(i)
 	}
 	wg.Wait()

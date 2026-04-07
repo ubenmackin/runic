@@ -131,7 +131,7 @@ func TestCheckAndRotate_RotationSuccess(t *testing.T) {
 		switch r.URL.Path {
 		case "/api/v1/agent/check-rotation":
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]string{
+			_ = json.NewEncoder(w).Encode(map[string]string{
 				"rotation_token": "test-rotation-token-abc123",
 			})
 
@@ -203,7 +203,7 @@ func TestCheckAndRotate_TokenExpired(t *testing.T) {
 		switch r.URL.Path {
 		case "/api/v1/agent/check-rotation":
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]string{
+			_ = json.NewEncoder(w).Encode(map[string]string{
 				"rotation_token": "expired-token",
 			})
 
@@ -252,8 +252,8 @@ func TestCheckAndRotate_KeyTestFails(t *testing.T) {
 
 		case "/api/v1/agent/rotate-key":
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]string{
-				"new_hmac_key": "bad-key",
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"new_hmac_key": "new-hmac-key-abcdef123456789012345678901234",
 			})
 
 		case "/api/v1/agent/test-key":
@@ -642,7 +642,7 @@ func TestCheckAndRotate_CheckRotationReturnsInvalidJSON(t *testing.T) {
 		switch r.URL.Path {
 		case "/api/v1/agent/check-rotation":
 			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte("not-valid-json"))
+			_, _ = w.Write([]byte("not-valid-json"))
 
 		default:
 			http.NotFound(w, r)
@@ -674,7 +674,7 @@ func TestCheckAndRotate_RotateKeyReturnsInvalidJSON(t *testing.T) {
 
 		case "/api/v1/agent/rotate-key":
 			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte("not-valid-json"))
+			_, _ = w.Write([]byte("not-valid-json"))
 
 		default:
 			http.NotFound(w, r)

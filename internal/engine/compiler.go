@@ -1169,57 +1169,55 @@ func (c *Compiler) GetAffectedPeersByPolicy(ctx context.Context, policyID int) (
 
 	peers := make(map[int]bool)
 
-	// Process source if not a special type
-	if srcType != "special" {
-		switch srcType {
-		case "peer":
-			peers[srcID] = true
-		case "group":
-			rows, err := c.db.QueryContext(ctx, "SELECT peer_id FROM group_members WHERE group_id = ?", srcID)
-			if err != nil {
-				return nil, fmt.Errorf("query source group members for policy %d: %w", policyID, err)
-			}
-			if rows != nil {
-				defer func() {
-					if cErr := rows.Close(); cErr != nil {
-						log.Warn("close err", "err", cErr)
-					}
-				}()
-				for rows.Next() {
-					var p int
-					if err := rows.Scan(&p); err == nil {
-						peers[p] = true
-					} else {
-						log.Warn("Failed to scan peer from group", "error", err)
-					}
+	// Process source - handle peer, group, and special types
+	// Note: Even if source is special, we still check target for peer/group
+	switch srcType {
+	case "peer":
+		peers[srcID] = true
+	case "group":
+		rows, err := c.db.QueryContext(ctx, "SELECT peer_id FROM group_members WHERE group_id = ?", srcID)
+		if err != nil {
+			return nil, fmt.Errorf("query source group members for policy %d: %w", policyID, err)
+		}
+		if rows != nil {
+			defer func() {
+				if cErr := rows.Close(); cErr != nil {
+					log.Warn("close err", "err", cErr)
+				}
+			}()
+			for rows.Next() {
+				var p int
+				if err := rows.Scan(&p); err == nil {
+					peers[p] = true
+				} else {
+					log.Warn("Failed to scan peer from group", "error", err)
 				}
 			}
 		}
 	}
 
-	// Process target if not a special type
-	if tgtType != "special" {
-		switch tgtType {
-		case "peer":
-			peers[tgtID] = true
-		case "group":
-			rows, err := c.db.QueryContext(ctx, "SELECT peer_id FROM group_members WHERE group_id = ?", tgtID)
-			if err != nil {
-				return nil, fmt.Errorf("query target group members for policy %d: %w", policyID, err)
-			}
-			if rows != nil {
-				defer func() {
-					if cErr := rows.Close(); cErr != nil {
-						log.Warn("close err", "err", cErr)
-					}
-				}()
-				for rows.Next() {
-					var p int
-					if err := rows.Scan(&p); err != nil {
-						log.Warn("Failed to scan peer from target group", "error", err)
-					} else {
-						peers[p] = true
-					}
+	// Process target - handle peer, group, and special types
+	// Note: Even if target is special, we still check source for peer/group
+	switch tgtType {
+	case "peer":
+		peers[tgtID] = true
+	case "group":
+		rows, err := c.db.QueryContext(ctx, "SELECT peer_id FROM group_members WHERE group_id = ?", tgtID)
+		if err != nil {
+			return nil, fmt.Errorf("query target group members for policy %d: %w", policyID, err)
+		}
+		if rows != nil {
+			defer func() {
+				if cErr := rows.Close(); cErr != nil {
+					log.Warn("close err", "err", cErr)
+				}
+			}()
+			for rows.Next() {
+				var p int
+				if err := rows.Scan(&p); err != nil {
+					log.Warn("Failed to scan peer from target group", "error", err)
+				} else {
+					peers[p] = true
 				}
 			}
 		}

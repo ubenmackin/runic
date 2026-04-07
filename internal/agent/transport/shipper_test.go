@@ -284,7 +284,7 @@ func TestShipper_Ship_Success(t *testing.T) {
 	var receivedBody map[string]interface{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		decoder := json.NewDecoder(r.Body)
-		decoder.Decode(&receivedBody)
+		_ = decoder.Decode(&receivedBody)
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
@@ -537,7 +537,7 @@ Jan 15 12:00:01 hostname kernel: Another message`
 	}
 	runicLine := `\nJan 15 12:00:02 hostname kernel: [RUNIC-DROP] SRC=192.168.1.100 DST=192.168.1.1 PROTO=TCP`
 	if _, err := f.WriteString(runicLine); err != nil {
-		f.Close()
+		_ = f.Close()
 		t.Fatalf("failed to append to temp file: %v", err)
 	}
 	f.Close()

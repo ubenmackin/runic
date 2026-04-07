@@ -150,7 +150,10 @@ func runSetupWizard(configPath string, defaultControlPlaneURL string) error {
 	} else {
 		fmt.Print(": ")
 	}
-	input, _ := reader.ReadString('\n')
+	input, err := reader.ReadString('\n')
+	if err != nil {
+		log.Printf("Warning: failed to read control plane URL input: %v", err)
+	}
 	input = strings.TrimSpace(input)
 	if input != "" {
 		controlPlaneURL = input
@@ -161,29 +164,43 @@ func runSetupWizard(configPath string, defaultControlPlaneURL string) error {
 
 	// Enable apply on boot
 	fmt.Print("Enable apply on boot (y/n, default n): ")
-	input, _ = reader.ReadString('\n')
+	input, err = reader.ReadString('\n')
+	if err != nil {
+		log.Printf("Warning: failed to read apply on boot input: %v", err)
+	}
 	input = strings.TrimSpace(strings.ToLower(input))
 	applyOnBoot := input == "y"
 
 	// Enable rules bundle
 	fmt.Print("Enable automatic bundle application (y/n, default n): ")
-	input, _ = reader.ReadString('\n')
+	input, err = reader.ReadString('\n')
+	if err != nil {
+		log.Printf("Warning: failed to read rules bundle input: %v", err)
+	}
 	input = strings.TrimSpace(strings.ToLower(input))
 	applyRulesBundle := input == "y"
 
 	// Pull interval
 	pullInterval := 86400
 	fmt.Print("Pull interval in seconds (default 86400): ")
-	input, _ = reader.ReadString('\n')
+	input, err = reader.ReadString('\n')
+	if err != nil {
+		log.Printf("Warning: failed to read pull interval input: %v", err)
+	}
 	input = strings.TrimSpace(input)
 	if input != "" {
-		fmt.Sscanf(input, "%d", &pullInterval)
+		if _, err := fmt.Sscanf(input, "%d", &pullInterval); err != nil {
+			log.Printf("Warning: invalid pull interval format: %v", err)
+		}
 	}
 
 	// Log path
 	logPath := "/var/log/runic/firewall.log"
 	fmt.Printf("Log path (default %s): ", logPath)
-	input, _ = reader.ReadString('\n')
+	input, err = reader.ReadString('\n')
+	if err != nil {
+		log.Printf("Warning: failed to read log path input: %v", err)
+	}
 	input = strings.TrimSpace(input)
 	if input != "" {
 		logPath = input
@@ -191,7 +208,10 @@ func runSetupWizard(configPath string, defaultControlPlaneURL string) error {
 
 	// Disable system iptables
 	fmt.Print("Disable system-managed iptables services (y/n, default n): ")
-	input, _ = reader.ReadString('\n')
+	input, err = reader.ReadString('\n')
+	if err != nil {
+		log.Printf("Warning: failed to read disable system iptables input: %v", err)
+	}
 	input = strings.TrimSpace(strings.ToLower(input))
 	disableSystemIPTables := input == "y"
 

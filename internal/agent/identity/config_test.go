@@ -52,7 +52,7 @@ func TestLoadConfigValidFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp file: %v", err)
 	}
-	defer os.Remove(tmpFile.Name())
+	defer func() { _ = os.Remove(tmpFile.Name()) }()
 
 	testCfg := &Config{
 		ControlPlaneURL:      "https://control.example.com",
@@ -75,7 +75,7 @@ func TestLoadConfigValidFile(t *testing.T) {
 	if _, err := tmpFile.Write(data); err != nil {
 		t.Fatalf("failed to write to temp file: %v", err)
 	}
-	tmpFile.Close()
+	_ = tmpFile.Close()
 
 	cfg, err := LoadConfig(tmpFile.Name())
 	if err != nil {
@@ -108,12 +108,12 @@ func TestLoadConfigInvalidJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp file: %v", err)
 	}
-	defer os.Remove(tmpFile.Name())
+	defer func() { _ = os.Remove(tmpFile.Name()) }()
 
 	if _, err := tmpFile.WriteString("not valid json{{{"); err != nil {
 		t.Fatalf("failed to write to temp file: %v", err)
 	}
-	tmpFile.Close()
+	_ = tmpFile.Close()
 
 	_, err = LoadConfig(tmpFile.Name())
 	if err == nil {
@@ -137,7 +137,7 @@ func TestLoadConfigUnreadableFile(t *testing.T) {
 	if err := os.Chmod(tmpFile, 0000); err != nil {
 		t.Fatalf("failed to change permissions: %v", err)
 	}
-	defer os.Chmod(tmpFile, 0644)
+	defer func() { _ = os.Chmod(tmpFile, 0644) }()
 
 	_, err = LoadConfig(tmpFile)
 	if err == nil {
@@ -223,8 +223,8 @@ func TestSaveConfigInvalidPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp file: %v", err)
 	}
-	tmpFile.Close()
-	defer os.Remove(tmpFile.Name())
+	_ = tmpFile.Close()
+	defer func() { _ = os.Remove(tmpFile.Name()) }()
 
 	configPath := tmpFile.Name() + "/config.json"
 

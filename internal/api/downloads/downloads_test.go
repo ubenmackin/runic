@@ -85,9 +85,7 @@ func TestHandler(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tempDir)
-
-	handler := Handler(tempDir)
+	defer func() { _ = os.RemoveAll(tempDir) }()
 
 	tests := []struct {
 		name           string
@@ -157,8 +155,8 @@ func TestHandler(t *testing.T) {
 				if err != nil {
 					return err
 				}
-				f.WriteString("mock binary content")
-				f.Close()
+				_, _ = f.WriteString("mock binary content")
+				_ = f.Close()
 				return nil
 			},
 			wantStatusCode: http.StatusOK,
@@ -171,8 +169,8 @@ func TestHandler(t *testing.T) {
 				if err != nil {
 					return err
 				}
-				f.WriteString("[Unit]")
-				f.Close()
+				_, _ = f.WriteString("[Unit]")
+				_ = f.Close()
 				return nil
 			},
 			wantStatusCode: http.StatusOK,
@@ -186,6 +184,8 @@ func TestHandler(t *testing.T) {
 			wantStatusCode: http.StatusBadRequest,
 		},
 	}
+
+	handler := Handler(tempDir)
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -211,7 +211,7 @@ func TestHandler(t *testing.T) {
 				t.Logf("warning: failed to read temp dir: %v", err)
 			}
 			for _, f := range files {
-				os.RemoveAll(filepath.Join(tempDir, f.Name()))
+				_ = os.RemoveAll(filepath.Join(tempDir, f.Name()))
 			}
 		})
 	}
@@ -226,7 +226,7 @@ func TestHandlerAllAllowedFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer func() { _ = os.RemoveAll(tempDir) }()
 
 	// Create all allowed files
 	allowedFileNames := []string{
@@ -242,8 +242,8 @@ func TestHandlerAllAllowedFiles(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to create file %s: %v", name, err)
 		}
-		f.WriteString("test content")
-		f.Close()
+		_, _ = f.WriteString("test content")
+		_ = f.Close()
 	}
 
 	handler := Handler(tempDir)

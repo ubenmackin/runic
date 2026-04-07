@@ -56,7 +56,7 @@ func ApplyBundle(ctx context.Context, bundle models.BundleResponse, hmacKey, con
 		}
 	}()
 
-	if _, err := tmpFile.WriteString(bundle.Rules); err != nil {
+	if _, err := tmpFile.WriteString(stripIpsetSection(bundle.Rules)); err != nil {
 		revertCancel()
 		return fmt.Errorf("write bundle to temp file: %w", err)
 	}
@@ -378,6 +378,36 @@ func extractIpsetSection(content string) (string, error) {
 	// Extract section between start marker and *filter
 	section := content[startIdx : startIdx+filterIdx]
 	return strings.TrimSpace(section), nil
+}
+
+// stripIpsetSection removes the ipset definition section from bundle content.
+// It strips everything from "# --- Ipset Definitions ---" up to (but not including) "*filter".
+// If no ipset section is found, the original string is returned unchanged.
+// If an ipset section is found but no "*filter" follows it, the original string is returned (safe fallback).
+func stripIpsetSection(content string) string {
+	startMarker := "# --- Ipset Definitions ---"
+	startIdx := strings.Index(content, startMarker)
+	if startIdx == -1 {
+		return content // No ipset section found
+	}
+
+	// Find the *filter line after the start marker
+	filterIdx := strings.Index(content[startIdx:], "*filter")
+	if filterIdx == -1 {
+		return content // Safe fallback: no *filter after ipset section
+	}
+
+	// Return content before the ipset section + content from *filter onwards
+	before := content[:startIdx]
+	after := content[startIdx+filterIdx:]
+
+	// Clean up trailing whitespace/newlines from before section
+	before = strings.TrimRight(before, "\n")
+	if before != "" {
+		before += "\n"
+	}
+
+	return before + after
 }
 
 // parseIpsetDefs parses ipset create and add commands from the ipset section.

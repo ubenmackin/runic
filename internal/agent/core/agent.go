@@ -295,8 +295,8 @@ func (a *Agent) disableService(service string) error {
 	ctx := context.Background()
 
 	// Check if service is active or enabled
-	checkActive, _ := a.cmdRunner.Run(ctx, "systemctl", "is-active", service)
-	checkEnabled, _ := a.cmdRunner.Run(ctx, "systemctl", "is-enabled", service)
+	checkActive, _ := a.cmdRunner.Run(ctx, "systemctl", "is-active", service)   //nolint:errcheck // intentionally discarded - checking if service exists
+	checkEnabled, _ := a.cmdRunner.Run(ctx, "systemctl", "is-enabled", service) //nolint:errcheck // intentionally discarded - checking if service exists
 
 	isActive := strings.TrimSpace(string(checkActive)) == "active"
 	isEnabled := strings.TrimSpace(string(checkEnabled)) == "enabled"

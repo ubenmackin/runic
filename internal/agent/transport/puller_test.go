@@ -335,7 +335,7 @@ func TestConnectSSE(t *testing.T) {
 				w.WriteHeader(http.StatusOK)
 
 				// Send keepalive and close immediately - scanner will process
-				fmt.Fprintf(w, ": keepalive\n\n")
+				_, _ = fmt.Fprintf(w, ": keepalive\n\n")
 			},
 			wantErr:         false,
 			checkBundleCall: false,
@@ -347,7 +347,7 @@ func TestConnectSSE(t *testing.T) {
 				w.WriteHeader(http.StatusOK)
 
 				// Send bundle_updated event
-				fmt.Fprintf(w, "event: bundle_updated\ndata: {\"version\":\"v2.0.0\"}\n\n")
+				_, _ = fmt.Fprintf(w, "event: bundle_updated\ndata: {\"version\":\"v2.0.0\"}\n\n")
 			},
 			wantErr:         false,
 			checkBundleCall: true,
@@ -385,7 +385,7 @@ func TestConnectSSE(t *testing.T) {
 				w.WriteHeader(http.StatusOK)
 
 				// Send multiple events then close
-				fmt.Fprintf(w, ": keepalive\n\nevent: bundle_updated\ndata: {}\n\n: keepalive\n\n")
+				_, _ = fmt.Fprintf(w, ": keepalive\n\nevent: bundle_updated\ndata: {}\n\n: keepalive\n\n")
 			},
 			wantErr:         false,
 			checkBundleCall: true,
@@ -622,7 +622,7 @@ func TestConfirmApplyPayloadFormat(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		var payload map[string]string
-		json.Unmarshal(body, &payload)
+		_ = json.Unmarshal(body, &payload)
 
 		// Verify structure
 		if payload["version"] == "" {

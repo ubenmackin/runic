@@ -47,7 +47,7 @@ func TestRegisterSuccessfulRegistration(t *testing.T) {
 			HMACKey:          "hmac-secret-key",
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -146,7 +146,7 @@ func TestRegisterDecodesResponseCorrectly(t *testing.T) {
 			HMACKey:          "test-hmac-key",
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -187,7 +187,7 @@ func TestRegisterCallsSaveFuncOnSuccess(t *testing.T) {
 			CurrentBundleVer: "v1.0.0",
 			HMACKey:          "hmac",
 		}
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -215,7 +215,7 @@ func TestRegisterCallsSaveFuncOnSuccess(t *testing.T) {
 func TestRegisterClearsRegistrationTokenAfterUse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var reqBody models.AgentRegisterRequest
-		json.NewDecoder(r.Body).Decode(&reqBody)
+		_ = json.NewDecoder(r.Body).Decode(&reqBody)
 
 		// Verify registration token was included
 		if reqBody.RegistrationToken != "my-registration-token" {

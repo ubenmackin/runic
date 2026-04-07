@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -322,7 +321,7 @@ func TestDeleteGroup_InUseByMultiplePolicies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create policy 1: %v", err)
 	}
-	policyID1, _ := policyResult1.LastInsertId()
+	_, _ = policyResult1.LastInsertId()
 
 	policyResult2, err := database.Exec(`
 		INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled)
@@ -331,7 +330,7 @@ func TestDeleteGroup_InUseByMultiplePolicies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create policy 2: %v", err)
 	}
-	policyID2, _ := policyResult2.LastInsertId()
+	_, _ = policyResult2.LastInsertId()
 
 	// Create a third policy using the same group as TARGET
 	policyResult3, err := database.Exec(`
@@ -341,7 +340,7 @@ func TestDeleteGroup_InUseByMultiplePolicies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create policy 3: %v", err)
 	}
-	policyID3, _ := policyResult3.LastInsertId()
+	_, _ = policyResult3.LastInsertId()
 
 	// Attempt to delete the group
 	req := httptest.NewRequest("DELETE", "/api/v1/groups/1", nil)
@@ -405,14 +404,14 @@ func TestDeleteGroup_InUseByMultiplePolicies(t *testing.T) {
 	}
 
 	// Check that all three policies are present
-	if _, ok := policyMap[int(policyID1)]; !ok {
-		t.Errorf("policy %d (allow-http) not found in response", policyID1)
+	if _, ok := policyMap[1]; !ok {
+		t.Errorf("policy %d (allow-http) not found in response", 1)
 	}
-	if _, ok := policyMap[int(policyID2)]; !ok {
-		t.Errorf("policy %d (allow-https) not found in response", policyID2)
+	if _, ok := policyMap[2]; !ok {
+		t.Errorf("policy %d (allow-https) not found in response", 2)
 	}
-	if _, ok := policyMap[int(policyID3)]; !ok {
-		t.Errorf("policy %d (target-web-servers) not found in response", policyID3)
+	if _, ok := policyMap[3]; !ok {
+		t.Errorf("policy %d (target-web-servers) not found in response", 3)
 	}
 
 	// Verify the group was NOT deleted
@@ -437,14 +436,14 @@ func TestDeleteGroup_NotInUse_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create group: %v", err)
 	}
-	groupID, _ := groupResult.LastInsertId()
+	_, _ = groupResult.LastInsertId()
 
 	// Create a different group that IS used by a policy (to verify we're not blocking all deletions)
 	usedGroupResult, err := database.Exec(`INSERT INTO groups (name, description) VALUES (?, ?)`, "used-group", "Group used by a policy")
 	if err != nil {
 		t.Fatalf("failed to create used group: %v", err)
 	}
-	usedGroupID, _ := usedGroupResult.LastInsertId()
+	_, _ = usedGroupResult.LastInsertId()
 
 	// Create peer and service for policies
 	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)`, "peer1", "10.0.0.1", "key1", "hmac1")
@@ -452,17 +451,16 @@ func TestDeleteGroup_NotInUse_Success(t *testing.T) {
 
 	// Create a policy that uses the usedGroup (not the unused-group)
 	_, err = database.Exec(`
-		INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled)
-		VALUES (?, ?, "group", ?, ?, "peer", ?, ?, ?)`,
-		"test-policy", usedGroupID, 1, 1, "ACCEPT", 100, 1)
+	INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled)
+	VALUES (?, ?, "group", ?, ?, "peer", ?, ?, ?)`, "test-policy", 2, 1, 1, "ACCEPT", 100, 1)
 	if err != nil {
 		t.Fatalf("failed to create policy: %v", err)
 	}
 
 	// Delete the unused group
-	req := httptest.NewRequest("DELETE", "/api/v1/groups/"+strconv.Itoa(int(groupID)), nil)
+	req := httptest.NewRequest("DELETE", "/api/v1/groups/1", nil)
 	w := httptest.NewRecorder()
-	req = muxVars(req, map[string]string{"id": strconv.Itoa(int(groupID))})
+	req = muxVars(req, map[string]string{"id": "1"})
 
 	h := NewHandler(database, nil, nil)
 	h.DeleteGroup(w, req)
@@ -474,7 +472,7 @@ func TestDeleteGroup_NotInUse_Success(t *testing.T) {
 
 	// Verify the group was deleted
 	var count int
-	err = database.QueryRow("SELECT COUNT(*) FROM groups WHERE id = ?", groupID).Scan(&count)
+	err = database.QueryRow("SELECT COUNT(*) FROM groups WHERE id = ?", 1).Scan(&count)
 	if err != nil {
 		t.Fatalf("failed to query groups: %v", err)
 	}
@@ -483,7 +481,7 @@ func TestDeleteGroup_NotInUse_Success(t *testing.T) {
 	}
 
 	// Verify the used group still exists (not affected)
-	err = database.QueryRow("SELECT COUNT(*) FROM groups WHERE id = ?", usedGroupID).Scan(&count)
+	err = database.QueryRow("SELECT COUNT(*) FROM groups WHERE id = ?", 2).Scan(&count)
 	if err != nil {
 		t.Fatalf("failed to query groups: %v", err)
 	}
@@ -1165,7 +1163,7 @@ func TestListGroups_DBError(t *testing.T) {
 	defer cleanup()
 
 	// Close the database to trigger a query error
-	database.Close()
+	_ = database.Close()
 
 	h := NewHandler(database, nil, nil)
 	req := httptest.NewRequest("GET", "/api/v1/groups", nil)
@@ -1191,7 +1189,7 @@ func TestCreateGroup_DBError(t *testing.T) {
 	defer cleanup()
 
 	// Close the database to trigger an insert error
-	database.Close()
+	_ = database.Close()
 
 	h := NewHandler(database, nil, nil)
 	req := httptest.NewRequest("POST", "/api/v1/groups", strings.NewReader(`{"name": "test"}`))
@@ -1213,7 +1211,7 @@ func TestGetGroup_DBError(t *testing.T) {
 	database.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group")
 
 	// Close DB to trigger error on GetGroup
-	database.Close()
+	_ = database.Close()
 
 	req := httptest.NewRequest("GET", "/api/v1/groups/1", nil)
 	w := httptest.NewRecorder()
@@ -1237,7 +1235,7 @@ func TestUpdateGroup_DBError(t *testing.T) {
 	database.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group")
 
 	// Close DB to trigger error on UpdateGroup
-	database.Close()
+	_ = database.Close()
 
 	h := NewHandler(database, nil, nil)
 	req := httptest.NewRequest("PUT", "/api/v1/groups/1", strings.NewReader(`{"name": "updated"}`))
@@ -1261,7 +1259,7 @@ func TestDeleteGroup_DBError(t *testing.T) {
 	database.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group")
 
 	// Close DB to trigger error on DeleteGroup
-	database.Close()
+	_ = database.Close()
 
 	req := httptest.NewRequest("DELETE", "/api/v1/groups/1", nil)
 	w := httptest.NewRecorder()
@@ -1346,7 +1344,7 @@ func TestListGroupMembers_DBError(t *testing.T) {
 	database.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group")
 
 	// Close DB
-	database.Close()
+	_ = database.Close()
 
 	req := httptest.NewRequest("GET", "/api/v1/groups/1/members", nil)
 	w := httptest.NewRecorder()
@@ -1369,7 +1367,7 @@ func TestAddGroupMember_DBError(t *testing.T) {
 	database.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group")
 
 	// Close DB
-	database.Close()
+	_ = database.Close()
 
 	req := httptest.NewRequest("POST", "/api/v1/groups/1/members", strings.NewReader(`{"peer_id": 1}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -1394,7 +1392,7 @@ func TestDeleteGroupMember_DBError(t *testing.T) {
 	database.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group")
 
 	// Close DB
-	database.Close()
+	_ = database.Close()
 
 	req := httptest.NewRequest("DELETE", "/api/v1/groups/1/members/1", nil)
 	w := httptest.NewRecorder()

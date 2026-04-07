@@ -1399,6 +1399,118 @@ COMMIT
 	}
 }
 
+// TestStripIpsetSection tests the stripIpsetSection helper function.
+func TestStripIpsetSection(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name: "bundle with ipset section",
+			input: `# Runic bundle
+# --- Ipset Definitions ---
+create runic_group_office hash:ip family inet
+add runic_group_office 192.168.1.10
+*filter
+:INPUT DROP [0:0]
+:OUTPUT DROP [0:0]
+-A INPUT -i lo -j ACCEPT
+COMMIT
+`,
+			expected: `# Runic bundle
+*filter
+:INPUT DROP [0:0]
+:OUTPUT DROP [0:0]
+-A INPUT -i lo -j ACCEPT
+COMMIT
+`,
+		},
+		{
+			name: "bundle without ipset section",
+			input: `*filter
+:INPUT DROP [0:0]
+:OUTPUT DROP [0:0]
+-A INPUT -i lo -j ACCEPT
+COMMIT
+`,
+			expected: `*filter
+:INPUT DROP [0:0]
+:OUTPUT DROP [0:0]
+-A INPUT -i lo -j ACCEPT
+COMMIT
+`,
+		},
+		{
+			name: "bundle with ipset marker but no *filter",
+			input: `# --- Ipset Definitions ---
+create runic_group_office hash:ip family inet
+add runic_group_office 192.168.1.10
+`,
+			expected: `# --- Ipset Definitions ---
+create runic_group_office hash:ip family inet
+add runic_group_office 192.168.1.10
+`,
+		},
+		{
+			name:     "empty string",
+			input:    "",
+			expected: "",
+		},
+		{
+			name: "bundle with ipset section at the very beginning",
+			input: `# --- Ipset Definitions ---
+create runic_group_office hash:ip family inet
+add runic_group_office 192.168.1.10
+*filter
+:INPUT DROP [0:0]
+:OUTPUT DROP [0:0]
+-A INPUT -i lo -j ACCEPT
+COMMIT
+`,
+			expected: `*filter
+:INPUT DROP [0:0]
+:OUTPUT DROP [0:0]
+-A INPUT -i lo -j ACCEPT
+COMMIT
+`,
+		},
+		{
+			name: "bundle with content before ipset marker",
+			input: `# Runic rule bundle
+# Host: test-server
+# Generated: 2024-01-01T00:00:00Z
+# --- Ipset Definitions ---
+create runic_group_dns hash:net family inet
+add runic_group_dns 10.0.0.0/24
+*filter
+:INPUT DROP [0:0]
+:OUTPUT DROP [0:0]
+-A INPUT -i lo -j ACCEPT
+COMMIT
+`,
+			expected: `# Runic rule bundle
+# Host: test-server
+# Generated: 2024-01-01T00:00:00Z
+*filter
+:INPUT DROP [0:0]
+:OUTPUT DROP [0:0]
+-A INPUT -i lo -j ACCEPT
+COMMIT
+`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := stripIpsetSection(tt.input)
+			if result != tt.expected {
+				t.Errorf("stripIpsetSection() mismatch:\ngot:\n%q\nwant:\n%q", result, tt.expected)
+			}
+		})
+	}
+}
+
 // TestApplyBundleHMACFailure tests that HMAC verification failure prevents apply.
 func TestApplyBundleHMACFailure(t *testing.T) {
 	// Setup mock environment (though it shouldn't be called)

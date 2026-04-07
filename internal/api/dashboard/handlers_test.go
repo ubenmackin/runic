@@ -81,16 +81,16 @@ func TestDashboardQueries_WithPeers(t *testing.T) {
 	// Use a timestamp that is clearly within the threshold (10 seconds ago)
 	recentTime := time.Now().Add(-10 * time.Second).Format("2006-01-02 15:04:05")
 
-	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, os_type, is_manual, last_heartbeat) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+	_, _ = database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, os_type, is_manual, last_heartbeat) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		"online-peer", "10.0.0.1", "key1", "hmac1", "linux", 0, recentTime)
 
 	// Use a timestamp that is clearly outside the threshold (5 minutes ago)
 	oldTime := time.Now().Add(-5 * time.Minute).Format("2006-01-02 15:04:05")
-	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, os_type, is_manual, last_heartbeat) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+	_, _ = database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, os_type, is_manual, last_heartbeat) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		"offline-peer", "10.0.0.2", "key2", "hmac2", "linux", 0, oldTime)
 
 	// Manual peer (no heartbeat needed - is_manual = 1)
-	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, os_type, is_manual) VALUES (?, ?, ?, ?, ?, ?)`,
+	_, _ = database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, os_type, is_manual) VALUES (?, ?, ?, ?, ?, ?)`,
 		"manual-peer", "10.0.0.3", "key3", "hmac3", "windows", 1)
 
 	// Insert policies
@@ -138,7 +138,7 @@ func TestDashboardQueries_WithPeers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("peer health query failed: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	type PeerHealth struct {
 		Hostname      string
@@ -261,7 +261,7 @@ func TestDashboardQueries_WithBlockedEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("recent activity query failed: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var activities []string
 	for rows.Next() {
@@ -290,7 +290,7 @@ func TestDashboardQueries_WithBlockedEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("top blocked query failed: %v", err)
 	}
-	defer topRows.Close()
+	defer func() { _ = topRows.Close() }()
 
 	type BlockedIP struct {
 		SrcIP string
@@ -408,7 +408,7 @@ func TestDashboardQueries_ManyBlockedEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("recent activity query failed: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	count := 0
 	for rows.Next() {
@@ -430,7 +430,7 @@ func TestDashboardQueries_ManyBlockedEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("top blocked query failed: %v", err)
 	}
-	defer topRows.Close()
+	defer func() { _ = topRows.Close() }()
 
 	type BlockedIP struct {
 		SrcIP string
