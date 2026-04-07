@@ -572,12 +572,12 @@ const polymorphicOptions = [
                   {/* Row 1: Source - Direction - Target */}
                   <div>
                     <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Source</label>
+                    <span title={isIGMPService ? "IGMP is a host-level protocol — source is not used" : undefined}>
                     <div className={isIGMPService ? 'opacity-50' : ''}>
                       <SearchableSelect options={polymorphicOptions} value={formData.source_id} category={formData.source_type} onChange={(v, type) => setFormData(d => ({ ...d, source_id: v, source_type: type }))} placeholder="Select group or peer" disabled={isIGMPService} />
                     </div>
-                    {isIGMPService && (
-                      <p className="text-xs text-gray-500 dark:text-amber-muted mt-1">IGMP is a host-level protocol — source is not used</p>
-                    )}
+                    </span>
+
                   </div>
                   <div className="flex flex-col items-center justify-end gap-1.5 pb-0.5">
                     <div className="flex flex-col gap-1.5">
@@ -596,7 +596,7 @@ const polymorphicOptions = [
                             ? 'bg-emerald-900/80 border-emerald-500 text-emerald-400 hover:bg-emerald-800/80'
                             : 'bg-gray-200 dark:bg-gray-800 border-gray-300 dark:border-gray-600 text-gray-400 dark:text-gray-500 hover:bg-gray-300 dark:hover:bg-gray-700'
                         } ${isIGMPService ? 'opacity-50 cursor-not-allowed' : ''}`}
-                        title="Forward: Source → Target"
+                        title={isIGMPService ? "IGMP generates both INPUT and OUTPUT automatically — direction is fixed" : "Forward: Source → Target"}
                       >
                         <svg viewBox="0 0 80 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="w-16 h-4">
                           <line x1="8" y1="12" x2="66" y2="12" />
@@ -618,7 +618,7 @@ const polymorphicOptions = [
                             ? 'bg-emerald-900/80 border-emerald-500 text-emerald-400 hover:bg-emerald-800/80'
                             : 'bg-gray-200 dark:bg-gray-800 border-gray-300 dark:border-gray-600 text-gray-400 dark:text-gray-500 hover:bg-gray-300 dark:hover:bg-gray-700'
                         } ${isIGMPService ? 'opacity-50 cursor-not-allowed' : ''}`}
-                        title="Backward: Target → Source"
+                        title={isIGMPService ? "IGMP generates both INPUT and OUTPUT automatically — direction is fixed" : "Backward: Target → Source"}
                       >
                         <svg viewBox="0 0 80 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="w-16 h-4">
                           <line x1="72" y1="12" x2="14" y2="12" />
@@ -626,9 +626,7 @@ const polymorphicOptions = [
                         </svg>
                       </button>
                     </div>
-                    {isIGMPService && (
-                      <p className="text-xs text-gray-500 dark:text-amber-muted text-center">IGMP generates both INPUT and OUTPUT automatically</p>
-                    )}
+
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Target</label>
