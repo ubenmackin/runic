@@ -560,7 +560,7 @@ install_dependencies() {
 		# Install Go 1.25+ from official source
 		# Remove Ubuntu system golang-go package to avoid PATH conflicts
 		apt-get remove -y golang-go >> "$LOG_FILE" 2>&1
-		GO_VERSION="1.25.0"
+		GO_VERSION="1.25.8"
 		GO_TAR="go${GO_VERSION}.linux-amd64.tar.gz"
 		GO_URL="https://go.dev/dl/${GO_TAR}"
 		log INFO "Installing Go ${GO_VERSION} from official source..."
@@ -601,7 +601,7 @@ install_dependencies() {
 			npm20 >> "$LOG_FILE" 2>&1
 
 		# Install Go 1.25+ from official source (same as Debian section)
-		GO_VERSION="1.25.0"
+		GO_VERSION="1.25.8"
 		GO_TAR="go${GO_VERSION}.linux-amd64.tar.gz"
 		GO_URL="https://go.dev/dl/${GO_TAR}"
 		log INFO "Installing Go ${GO_VERSION} from official source..."
