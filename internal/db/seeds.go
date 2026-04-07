@@ -52,6 +52,22 @@ func seedSystemServices(ctx context.Context, database *sql.DB) error {
 			Description: "Multicast DNS for local network service discovery (system service)",
 			NoConntrack: true,
 		},
+		{
+			Name:        "Subnet Broadcast",
+			Ports:       "",
+			SourcePorts: "",
+			Protocol:    "udp",
+			Description: "Subnet broadcast traffic handling (system service)",
+			NoConntrack: true,
+		},
+		{
+			Name:        "Limited Broadcast",
+			Ports:       "",
+			SourcePorts: "",
+			Protocol:    "udp",
+			Description: "Limited broadcast traffic handling (system service)",
+			NoConntrack: true,
+		},
 	}
 
 	for _, svc := range systemServices {

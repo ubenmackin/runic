@@ -30,6 +30,11 @@ func isMulticastSpecialID(id int) bool {
 	return id == SpecialIDAllHosts || id == SpecialIDmDNS || id == SpecialIDIGMPv3
 }
 
+// isBroadcastSpecialID returns true if the special target ID is a broadcast address
+func isBroadcastSpecialID(id int) bool {
+	return id == SpecialIDSubnetBroadcast || id == SpecialIDLimitedBroadcast
+}
+
 // Compiler compiles firewall policies into iptables-restore payloads.
 type Compiler struct {
 	db       *sql.DB
@@ -200,12 +205,13 @@ WHEN p.target_type = 'special' AND p.source_type = 'peer' AND p.source_id = ? TH
 ELSE 0 END as is_target,
 -- MC-EXCLUSION: Multicast special targets (3,4,8) are excluded from is_source
 -- because they represent destinations for outbound multicast, not sources.
--- When Source is multicast special, the peer is the target (receiving multicast).
+-- BC-EXCLUSION: Broadcast special targets (1,2) are excluded for the same reason.
+-- When Source is broadcast special, the peer is the target (receiving broadcast).
 CASE WHEN p.source_type = 'peer' AND p.source_id = ? THEN 1
-		     WHEN p.source_type = 'group' AND EXISTS (SELECT 1 FROM group_members WHERE group_id = p.source_id AND peer_id = ?) THEN 1
-		WHEN p.source_type = 'special' AND p.target_type = 'group' AND p.source_id NOT IN (?, ?, ?) AND EXISTS (SELECT 1 FROM group_members WHERE group_id = p.target_id AND peer_id = ?) THEN 1
-			WHEN p.source_type = 'special' AND p.target_type = 'peer' AND p.source_id NOT IN (?, ?, ?) AND p.target_id = ? THEN 1
-		     ELSE 0 END as is_source
+WHEN p.source_type = 'group' AND EXISTS (SELECT 1 FROM group_members WHERE group_id = p.source_id AND peer_id = ?) THEN 1
+WHEN p.source_type = 'special' AND p.target_type = 'group' AND p.source_id NOT IN (?, ?, ?, ?, ?) AND EXISTS (SELECT 1 FROM group_members WHERE group_id = p.target_id AND peer_id = ?) THEN 1
+WHEN p.source_type = 'special' AND p.target_type = 'peer' AND p.source_id NOT IN (?, ?, ?, ?, ?) AND p.target_id = ? THEN 1
+ELSE 0 END as is_source
 		FROM policies p
 		WHERE p.enabled = 1 AND (
 			(p.target_type = 'peer' AND p.target_id = ?) OR
@@ -218,7 +224,7 @@ CASE WHEN p.source_type = 'peer' AND p.source_id = ? THEN 1
 			(p.source_type = 'special' AND p.target_type = 'peer' AND p.target_id = ?)
 		)
  ORDER BY p.priority ASC`,
-		peerID, peerID, peerID, peerID, peerID, peerID, SpecialIDAllHosts, SpecialIDmDNS, SpecialIDIGMPv3, peerID, SpecialIDAllHosts, SpecialIDmDNS, SpecialIDIGMPv3, peerID, peerID, peerID, peerID, peerID, peerID, peerID, peerID, peerID)
+		peerID, peerID, peerID, peerID, peerID, peerID, SpecialIDSubnetBroadcast, SpecialIDLimitedBroadcast, SpecialIDAllHosts, SpecialIDmDNS, SpecialIDIGMPv3, peerID, SpecialIDSubnetBroadcast, SpecialIDLimitedBroadcast, SpecialIDAllHosts, SpecialIDmDNS, SpecialIDIGMPv3, peerID, peerID, peerID, peerID, peerID, peerID, peerID, peerID, peerID)
 	if err != nil {
 		return "", fmt.Errorf("load policies: %w", err)
 	}
@@ -420,9 +426,10 @@ CASE WHEN p.source_type = 'peer' AND p.source_id = ? THEN 1
 		protocol := svc.Protocol
 		noConntrack := svc.NoConntrack
 
-		// Expand ports for non-multicast services
+		// Expand ports for non-multicast and non-broadcast services
 		var portClauses []PortClause
-		if serviceName != "Multicast" {
+		isBroadcastService := serviceName == "Subnet Broadcast" || serviceName == "Limited Broadcast"
+		if serviceName != "Multicast" && !isBroadcastService {
 			portClauses, err = ExpandPorts(ports, sourcePorts, protocol)
 			if err != nil {
 				return "", fmt.Errorf("expand ports for policy %s: %w", pol.Name, err)
@@ -444,12 +451,16 @@ CASE WHEN p.source_type = 'peer' AND p.source_id = ? THEN 1
 		// Only emit if direction is 'both' or 'backward' (backward = target receives inbound from source)
 		if pol.IsTarget && (pol.Direction == "both" || pol.Direction == "backward") {
 			sourceName := c.formatEntityName(ctx, pol.SourceType, pol.SourceID)
-			fmt.Fprintf(&buf, "# As Target (Ingress from %s)\n", sourceName)
+			fmt.Fprintf(&buf, "# As Target (Ingress from %s)\\n", sourceName)
 
 			// MC-009: Multicast special targets as Source indicate the host receives multicast traffic
 			// When Source is a multicast special target (IDs 3=__all_hosts__, 4=__mdns__, 8=__igmpv3__),
 			// this means the host should receive multicast traffic from that group - GENERATE INPUT rules
 			isMulticastSource := pol.SourceType == "special" && isMulticastSpecialID(pol.SourceID)
+			// BC-003: Broadcast special targets as Source indicate the host receives broadcast traffic
+			// When Source is a broadcast special target (IDs 1=__subnet_broadcast__, 2=__limited_broadcast__),
+			// this means the host should receive broadcast traffic - GENERATE INPUT rules with -d (destination)
+			isBroadcastSource := pol.SourceType == "special" && isBroadcastSpecialID(pol.SourceID)
 
 			// Check if we should use ipset for this source
 			useIpset := hasIPSet && pol.SourceType == "group"
@@ -463,6 +474,16 @@ CASE WHEN p.source_type = 'peer' AND p.source_id = ? THEN 1
 			case isMulticastSource:
 				// Multicast source: use packet type matching for receiving multicast traffic
 				c.writeMulticastRule(rw, pol.Action, pol.TargetScope, hasDocker)
+			case isBroadcastSource:
+				// Broadcast source: resolve the broadcast address and use -d (destination) matching
+				cidrs, err := c.resolver.ResolveSpecialTarget(ctx, pol.SourceID, ipAddress)
+				if err != nil {
+					return "", fmt.Errorf("resolve broadcast source for policy %s: %w", pol.Name, err)
+				}
+				// Generate broadcast rules for each resolved CIDR
+				for _, cidr := range cidrs {
+					c.writeBroadcastRule(rw, pol.Action, pol.TargetScope, hasDocker, cidr)
+				}
 			case useIpset:
 				// Use ipset-based rules (single rule per port clause)
 				if serviceName == "Multicast" {
@@ -601,6 +622,22 @@ func (c *Compiler) writeMulticastRule(rw *ruleWriter, action string, targetScope
 		rw.writeAction(action, "DOCKER-USER", "-m pkttype --pkt-type multicast")
 	}
 	rw.newline()
+}
+
+// writeBroadcastRule generates broadcast acceptance rules using a ruleWriter.
+// Broadcast traffic is connectionless, so no conntrack or return rules are needed.
+// For broadcast, we match on destination (-d) since broadcast packets are sent TO the broadcast address.
+func (c *Compiler) writeBroadcastRule(rw *ruleWriter, action string, targetScope string, hasDocker bool, broadcastAddr string) {
+	writeToHost := targetScope == "host" || targetScope == "both"
+	writeToDocker := hasDocker && (targetScope == "docker" || targetScope == "both")
+
+	if writeToHost {
+		// Accept broadcast traffic destined for the broadcast address
+		rw.accept("INPUT", fmt.Sprintf("-d %s -p udp", broadcastAddr))
+	}
+	if writeToDocker {
+		rw.accept("DOCKER-USER", fmt.Sprintf("-d %s -p udp", broadcastAddr))
+	}
 }
 
 // writeTargetRules writes ingress (target) rules for a policy.
@@ -860,15 +897,19 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 		// Source hosts get: INPUT from target + OUTPUT established to target
 		// IG-002: Skip backward for IGMP (already handled above)
 		if !strings.EqualFold(serviceName, "IGMP") && (direction == "both" || direction == "backward") {
-			buf.WriteString("# Backward (Target → Source)\n")
+			buf.WriteString("# Backward (Target → Source)\\n")
 			// MC-009: Multicast special targets as Source indicate receiving multicast traffic
 			// When Source is a multicast special target (IDs 3=__all_hosts__, 4=__mdns__, 8=__igmpv3__),
 			// this means the host should receive multicast traffic from that group - GENERATE INPUT rules
 			isMulticastSource := sourceType == "special" && isMulticastSpecialID(sourceID)
+			// BC-003: Broadcast special targets as Source indicate receiving broadcast traffic
+			// When Source is a broadcast special target (IDs 1=__subnet_broadcast__, 2=__limited_broadcast__),
+			// this means the host should receive broadcast traffic - GENERATE INPUT rules with -d (destination)
+			isBroadcastSource := sourceType == "special" && isBroadcastSpecialID(sourceID)
 			if isMulticastSource {
 				// Multicast source: use packet type matching for receiving multicast traffic
 				if serviceName == "Multicast" {
-					buf.WriteString("-A INPUT -m pkttype --pkt-type multicast -j ACCEPT\n")
+					buf.WriteString("-A INPUT -m pkttype --pkt-type multicast -j ACCEPT\\n")
 				} else {
 					// For non-Multicast services with multicast special source, generate INPUT rules
 					for _, pc := range portClauses {
@@ -879,17 +920,22 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 						outputPortMatch := invertPortMatch(pc.PortMatch, pc.SrcPortMatch)
 						// MC-011: Handle no_conntrack flag
 						if noConntrack {
-							fmt.Fprintf(&buf, "-A INPUT -m pkttype --pkt-type multicast -p %s %s -j ACCEPT\n", pc.Protocol, inputPortMatch)
+							fmt.Fprintf(&buf, "-A INPUT -m pkttype --pkt-type multicast -p %s %s -j ACCEPT\\n", pc.Protocol, inputPortMatch)
 						} else {
-							fmt.Fprintf(&buf, "-A INPUT -m pkttype --pkt-type multicast -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", pc.Protocol, inputPortMatch)
-							fmt.Fprintf(&buf, "-A OUTPUT -p %s %s -m conntrack --ctstate ESTABLISHED -j ACCEPT\n", pc.Protocol, outputPortMatch)
+							fmt.Fprintf(&buf, "-A INPUT -m pkttype --pkt-type multicast -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\\n", pc.Protocol, inputPortMatch)
+							fmt.Fprintf(&buf, "-A OUTPUT -p %s %s -m conntrack --ctstate ESTABLISHED -j ACCEPT\\n", pc.Protocol, outputPortMatch)
 						}
 					}
+				}
+			} else if isBroadcastSource {
+				// Broadcast source: use -d (destination) matching since broadcast packets are sent TO the broadcast address
+				for _, sourceCIDR := range sourceCIDRs {
+					fmt.Fprintf(&buf, "-A INPUT -d %s -p udp -j ACCEPT\\n", sourceCIDR)
 				}
 			} else {
 				for _, sourceCIDR := range sourceCIDRs {
 					if serviceName == "Multicast" {
-						buf.WriteString("-A INPUT -m pkttype --pkt-type multicast -j ACCEPT\n")
+						buf.WriteString("-A INPUT -m pkttype --pkt-type multicast -j ACCEPT\\n")
 						continue
 					}
 					for _, pc := range portClauses {
@@ -900,10 +946,10 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 						outputPortMatch := invertPortMatch(pc.PortMatch, pc.SrcPortMatch)
 						// MC-011: Handle no_conntrack flag
 						if noConntrack {
-							fmt.Fprintf(&buf, "-A INPUT -s %s -p %s %s -j ACCEPT\n", sourceCIDR, pc.Protocol, inputPortMatch)
+							fmt.Fprintf(&buf, "-A INPUT -s %s -p %s %s -j ACCEPT\\n", sourceCIDR, pc.Protocol, inputPortMatch)
 						} else {
-							fmt.Fprintf(&buf, "-A INPUT -s %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", sourceCIDR, pc.Protocol, inputPortMatch)
-							fmt.Fprintf(&buf, "-A OUTPUT -d %s -p %s %s -m conntrack --ctstate ESTABLISHED -j ACCEPT\n", sourceCIDR, pc.Protocol, outputPortMatch)
+							fmt.Fprintf(&buf, "-A INPUT -s %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\\n", sourceCIDR, pc.Protocol, inputPortMatch)
+							fmt.Fprintf(&buf, "-A OUTPUT -d %s -p %s %s -m conntrack --ctstate ESTABLISHED -j ACCEPT\\n", sourceCIDR, pc.Protocol, outputPortMatch)
 						}
 					}
 				}
@@ -946,10 +992,12 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 			if !strings.EqualFold(serviceName, "IGMP") && (direction == "both" || direction == "backward") {
 				// MC-009: Multicast special targets as Source indicate receiving multicast traffic
 				isMulticastSource := sourceType == "special" && isMulticastSpecialID(sourceID)
+				// BC-003: Broadcast special targets as Source indicate receiving broadcast traffic
+				isBroadcastSource := sourceType == "special" && isBroadcastSpecialID(sourceID)
 				if isMulticastSource {
 					// Multicast source: use packet type matching for receiving multicast traffic
 					if serviceName == "Multicast" {
-						buf.WriteString("-A DOCKER-USER -m pkttype --pkt-type multicast -j ACCEPT\n")
+						buf.WriteString("-A DOCKER-USER -m pkttype --pkt-type multicast -j ACCEPT\\n")
 					} else {
 						// For non-Multicast services with multicast special source, generate DOCKER-USER INPUT rules
 						for _, pc := range portClauses {
@@ -959,16 +1007,21 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 							}
 							// MC-011: Handle no_conntrack flag
 							if noConntrack {
-								fmt.Fprintf(&buf, "-A DOCKER-USER -m pkttype --pkt-type multicast -p %s %s -j ACCEPT\n", pc.Protocol, inputPortMatch)
+								fmt.Fprintf(&buf, "-A DOCKER-USER -m pkttype --pkt-type multicast -p %s %s -j ACCEPT\\n", pc.Protocol, inputPortMatch)
 							} else {
-								fmt.Fprintf(&buf, "-A DOCKER-USER -m pkttype --pkt-type multicast -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", pc.Protocol, inputPortMatch)
+								fmt.Fprintf(&buf, "-A DOCKER-USER -m pkttype --pkt-type multicast -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\\n", pc.Protocol, inputPortMatch)
 							}
 						}
+					}
+				} else if isBroadcastSource {
+					// Broadcast source: use -d (destination) matching for broadcast traffic
+					for _, sourceCIDR := range sourceCIDRs {
+						fmt.Fprintf(&buf, "-A DOCKER-USER -d %s -p udp -j ACCEPT\\n", sourceCIDR)
 					}
 				} else {
 					for _, sourceCIDR := range sourceCIDRs {
 						if serviceName == "Multicast" {
-							buf.WriteString("-A DOCKER-USER -m pkttype --pkt-type multicast -j ACCEPT\n")
+							buf.WriteString("-A DOCKER-USER -m pkttype --pkt-type multicast -j ACCEPT\\n")
 							continue
 						}
 						for _, pc := range portClauses {
@@ -978,9 +1031,9 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 							}
 							// MC-011: Handle no_conntrack flag
 							if noConntrack {
-								fmt.Fprintf(&buf, "-A DOCKER-USER -s %s -p %s %s -j ACCEPT\n", sourceCIDR, pc.Protocol, inputPortMatch)
+								fmt.Fprintf(&buf, "-A DOCKER-USER -s %s -p %s %s -j ACCEPT\\n", sourceCIDR, pc.Protocol, inputPortMatch)
 							} else {
-								fmt.Fprintf(&buf, "-A DOCKER-USER -s %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", sourceCIDR, pc.Protocol, inputPortMatch)
+								fmt.Fprintf(&buf, "-A DOCKER-USER -s %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\\n", sourceCIDR, pc.Protocol, inputPortMatch)
 							}
 						}
 					}

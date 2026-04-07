@@ -303,6 +303,132 @@ func TestMulticastServiceWithDocker(t *testing.T) {
 	}
 }
 
+// TestBroadcastService_SubnetBroadcast tests policy with Source=Subnet Broadcast (ID 1)
+// BC-007: Verify INPUT rules use -d (destination) for broadcast traffic
+func TestBroadcastService_SubnetBroadcast(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+	peerID := insertPeer(t, database, "bcast-peer", "10.100.5.10", false)
+
+	// Insert Subnet Broadcast service manually with no_conntrack=true
+	result, err := database.Exec(
+		`INSERT INTO services (name, ports, protocol, description, is_system, no_conntrack) VALUES (?, ?, ?, ?, 1, 1)`,
+		"Subnet Broadcast", "", "udp", "Subnet broadcast traffic handling (system service)", 1)
+	if err != nil {
+		t.Fatalf("insert broadcast service: %v", err)
+	}
+	serviceID, _ := result.LastInsertId()
+
+	// Insert policy: Source=Subnet Broadcast (special ID 1), Target=peer
+	_, err = database.Exec(
+		`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled)
+		 VALUES (?, 1, 'special', ?, ?, 'peer', 'ACCEPT', 100, 1)`,
+		"allow-subnet-broadcast", serviceID, peerID)
+	if err != nil {
+		t.Fatalf("insert policy: %v", err)
+	}
+
+	c := NewCompiler(database)
+	output, err := c.Compile(context.Background(), peerID)
+	if err != nil {
+		t.Fatalf("compile error: %v", err)
+	}
+
+	// BC-007: Should have INPUT rule with -d (destination) for broadcast address
+	// Subnet broadcast resolves to the peer's subnet broadcast address (e.g., 10.100.5.255)
+	if !strings.Contains(output, "-A INPUT -d 10.100.5.255/32 -p udp -j ACCEPT") {
+		t.Errorf("expected INPUT rule with -d for broadcast address, got:\n%s", output)
+	}
+
+	// Verify the broadcast rule line doesn't have conntrack
+	lines := strings.Split(output, "\n")
+	for _, line := range lines {
+		if strings.Contains(line, "10.100.5.255") && strings.Contains(line, "INPUT") {
+			if strings.Contains(line, "-m conntrack") {
+				t.Errorf("broadcast rule should not have conntrack, got: %s", line)
+			}
+		}
+	}
+}
+
+// TestBroadcastService_LimitedBroadcast tests policy with Source=Limited Broadcast (ID 2)
+// BC-007: Verify INPUT rules use -d (destination) for 255.255.255.255
+func TestBroadcastService_LimitedBroadcast(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+	peerID := insertPeer(t, database, "limited-bcast-peer", "10.100.5.10", false)
+
+	// Insert Limited Broadcast service manually with no_conntrack=true
+	result, err := database.Exec(
+		`INSERT INTO services (name, ports, protocol, description, is_system, no_conntrack) VALUES (?, ?, ?, ?, 1, 1)`,
+		"Limited Broadcast", "", "udp", "Limited broadcast traffic handling (system service)", 1)
+	if err != nil {
+		t.Fatalf("insert broadcast service: %v", err)
+	}
+	serviceID, _ := result.LastInsertId()
+
+	// Insert policy: Source=Limited Broadcast (special ID 2), Target=peer
+	_, err = database.Exec(
+		`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled)
+		 VALUES (?, 2, 'special', ?, ?, 'peer', 'ACCEPT', 100, 1)`,
+		"allow-limited-broadcast", serviceID, peerID)
+	if err != nil {
+		t.Fatalf("insert policy: %v", err)
+	}
+
+	c := NewCompiler(database)
+	output, err := c.Compile(context.Background(), peerID)
+	if err != nil {
+		t.Fatalf("compile error: %v", err)
+	}
+
+	// BC-007: Should have INPUT rule with -d 255.255.255.255 for limited broadcast
+	if !strings.Contains(output, "-A INPUT -d 255.255.255.255/32 -p udp -j ACCEPT") {
+		t.Errorf("expected INPUT rule with -d 255.255.255.255, got:\n%s", output)
+	}
+}
+
+// TestBroadcastService_PeerToBroadcast tests policy with Target=Subnet Broadcast
+// BC-007: Verify correct handling when target is broadcast special
+func TestBroadcastService_PeerToBroadcast(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+	peerID := insertPeer(t, database, "broadcast-sender", "10.100.5.10", false)
+
+	// Insert Subnet Broadcast service
+	result, err := database.Exec(
+		`INSERT INTO services (name, ports, protocol, description, is_system, no_conntrack) VALUES (?, ?, ?, ?, 1, 1)`,
+		"Subnet Broadcast", "", "udp", "Subnet broadcast traffic handling (system service)", 1)
+	if err != nil {
+		t.Fatalf("insert broadcast service: %v", err)
+	}
+	serviceID, _ := result.LastInsertId()
+
+	// Insert policy: Source=peer, Target=Subnet Broadcast (special ID 1)
+	_, err = database.Exec(
+		`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled)
+		 VALUES (?, ?, 'peer', ?, 1, 'special', 'ACCEPT', 100, 1)`,
+		"send-to-broadcast", peerID, serviceID)
+	if err != nil {
+		t.Fatalf("insert policy: %v", err)
+	}
+
+	c := NewCompiler(database)
+	output, err := c.Compile(context.Background(), peerID)
+	if err != nil {
+		t.Fatalf("compile error: %v", err)
+	}
+
+	// When sending TO broadcast, we need OUTPUT rules to the broadcast address
+	// The peer is the source, so it should generate OUTPUT rules
+	if !strings.Contains(output, "-A OUTPUT") {
+		t.Errorf("expected OUTPUT rule for sending to broadcast, got:\n%s", output)
+	}
+}
+
 func TestNoPolicies(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
