@@ -18,27 +18,29 @@ const DefaultHeartbeatIntervalSec = 30
 
 // Config holds the agent configuration.
 type Config struct {
-	ControlPlaneURL      string `json:"control_plane_url"`
-	HostID               string `json:"host_id"`
-	Token                string `json:"token"`
-	PullIntervalSec      int    `json:"pull_interval_seconds"`
-	HeartbeatIntervalSec int    `json:"heartbeat_interval_seconds"`
-	LogPath              string `json:"log_path"`
-	CurrentBundleVer     string `json:"current_bundle_version"`
-	HMACKey              string `json:"hmac_key"`
-	ApplyOnBoot          bool   `json:"apply_on_boot"`
-	ApplyRulesBundle     bool   `json:"apply_rules_bundle"`
-	RegistrationToken    string `json:"registration_token,omitempty"`
+	ControlPlaneURL              string `json:"control_plane_url"`
+	HostID                       string `json:"host_id"`
+	Token                        string `json:"token"`
+	PullIntervalSec              int    `json:"pull_interval_seconds"`
+	HeartbeatIntervalSec         int    `json:"heartbeat_interval_seconds"`
+	LogPath                      string `json:"log_path"`
+	CurrentBundleVer             string `json:"current_bundle_version"`
+	HMACKey                      string `json:"hmac_key"`
+	ApplyOnBoot                  bool   `json:"apply_on_boot"`
+	ApplyRulesBundle             bool   `json:"apply_rules_bundle"`
+	RegistrationToken            string `json:"registration_token,omitempty"`
+	DisableSystemManagedIPTables bool   `json:"disable_system_managed_iptables"`
 }
 
 // DefaultConfig returns a config with sensible defaults.
 func DefaultConfig() *Config {
 	return &Config{
-		PullIntervalSec:      DefaultPullIntervalSec,
-		HeartbeatIntervalSec: DefaultHeartbeatIntervalSec,
-		LogPath:              "/var/log/runic/firewall.log",
-		ApplyOnBoot:          false,
-		ApplyRulesBundle:     false,
+		PullIntervalSec:              DefaultPullIntervalSec,
+		HeartbeatIntervalSec:         DefaultHeartbeatIntervalSec,
+		LogPath:                      "/var/log/runic/firewall.log",
+		ApplyOnBoot:                  false,
+		ApplyRulesBundle:             false,
+		DisableSystemManagedIPTables: false,
 	}
 }
 

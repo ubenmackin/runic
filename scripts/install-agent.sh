@@ -69,7 +69,15 @@ fi
 detect_os() {
 	if [ -f /etc/os-release ]; then
 		. /etc/os-release
-		echo "$ID"
+		# Normalize OS ID for edge cases (e.g., opensuse-leap -> opensuse, opensuse-tumbleweed -> opensuse)
+		case "$ID" in
+			opensuse*|sle*)
+				echo "opensuse"
+				;;
+			*)
+				echo "$ID"
+				;;
+		esac
 	else
 		echo "unknown"
 	fi
@@ -77,70 +85,72 @@ detect_os() {
 
 # Disable iptables persistence services to prevent conflicts with runic's firewall management
 # Different distributions use different services for iptables persistence
-OS_TYPE=$(detect_os)
-echo "Detected OS: $OS_TYPE"
+disable_iptables_services() {
+	OS_TYPE=$(detect_os)
+	echo "Detected OS: $OS_TYPE"
 
-case "$OS_TYPE" in
-	ubuntu|debian|linuxmint|pop)
-		echo "Disabling Debian/Ubuntu iptables persistence services..."
-		for service in netfilter-persistent iptables-persistent; do
-			if systemctl is-active --quiet "$service" 2>/dev/null || \
-			systemctl is-enabled --quiet "$service" 2>/dev/null; then
-				echo " -> Stopping and disabling $service..."
+	case "$OS_TYPE" in
+		ubuntu|debian|linuxmint|pop)
+			echo "Disabling Debian/Ubuntu iptables persistence services..."
+			for service in netfilter-persistent iptables-persistent; do
+				if systemctl is-active --quiet "$service" 2>/dev/null || \
+				systemctl is-enabled --quiet "$service" 2>/dev/null; then
+					echo " -> Stopping and disabling $service..."
+					systemctl stop "$service" 2>/dev/null || true
+					systemctl disable "$service" 2>/dev/null || true
+					systemctl mask "$service" 2>/dev/null || true
+				fi
+			done
+			;;
+		arch|archarm|manjaro|endeavouros)
+			echo "Disabling Arch Linux iptables services..."
+			for service in iptables ip6tables; do
+				if systemctl is-active --quiet "$service" 2>/dev/null || \
+				systemctl is-enabled --quiet "$service" 2>/dev/null; then
+					echo " -> Stopping and disabling $service.service..."
+					systemctl stop "$service" 2>/dev/null || true
+					systemctl disable "$service" 2>/dev/null || true
+					systemctl mask "$service" 2>/dev/null || true
+				fi
+			done
+			;;
+		opensuse*|suse|sled|sles)
+			echo "Disabling openSUSE/SUSE firewall services..."
+			# Modern openSUSE uses firewalld
+			for service in firewalld SuSEfirewall2; do
+				if systemctl is-active --quiet "$service" 2>/dev/null || \
+				systemctl is-enabled --quiet "$service" 2>/dev/null; then
+					echo " -> Stopping and disabling $service..."
+					systemctl stop "$service" 2>/dev/null || true
+					systemctl disable "$service" 2>/dev/null || true
+					systemctl mask "$service" 2>/dev/null || true
+				fi
+			done
+			;;
+		fedora|rhel|centos|rocky|almalinux|ol)
+			echo "Disabling RHEL/CentOS/Fedora firewall services..."
+			# firewalld is default; iptables-services on older systems
+			for service in firewalld iptables-services; do
+				if systemctl is-active --quiet "$service" 2>/dev/null || \
+				systemctl is-enabled --quiet "$service" 2>/dev/null; then
+					echo " -> Stopping and disabling $service..."
+					systemctl stop "$service" 2>/dev/null || true
+					systemctl disable "$service" 2>/dev/null || true
+					systemctl mask "$service" 2>/dev/null || true
+				fi
+			done
+			;;
+		*)
+			echo "Unknown OS: $OS_TYPE - attempting to disable common iptables persistence services..."
+			# Try to disable common services as a fallback
+			for service in netfilter-persistent iptables-persistent firewalld; do
 				systemctl stop "$service" 2>/dev/null || true
 				systemctl disable "$service" 2>/dev/null || true
 				systemctl mask "$service" 2>/dev/null || true
-			fi
-		done
-		;;
-	arch|archarm|manjaro|endeavouros)
-		echo "Disabling Arch Linux iptables services..."
-		for service in iptables ip6tables; do
-			if systemctl is-active --quiet "$service" 2>/dev/null || \
-			systemctl is-enabled --quiet "$service" 2>/dev/null; then
-				echo " -> Stopping and disabling $service.service..."
-				systemctl stop "$service" 2>/dev/null || true
-				systemctl disable "$service" 2>/dev/null || true
-				systemctl mask "$service" 2>/dev/null || true
-			fi
-		done
-		;;
-	opensuse*|suse|sled|sles)
-		echo "Disabling openSUSE/SUSE firewall services..."
-		# Modern openSUSE uses firewalld
-		for service in firewalld SuSEfirewall2; do
-			if systemctl is-active --quiet "$service" 2>/dev/null || \
-			systemctl is-enabled --quiet "$service" 2>/dev/null; then
-				echo " -> Stopping and disabling $service..."
-				systemctl stop "$service" 2>/dev/null || true
-				systemctl disable "$service" 2>/dev/null || true
-				systemctl mask "$service" 2>/dev/null || true
-			fi
-		done
-		;;
-	fedora|rhel|centos|rocky|almalinux|ol)
-		echo "Disabling RHEL/CentOS/Fedora firewall services..."
-		# firewalld is default; iptables-services on older systems
-		for service in firewalld iptables-services; do
-			if systemctl is-active --quiet "$service" 2>/dev/null || \
-			systemctl is-enabled --quiet "$service" 2>/dev/null; then
-				echo " -> Stopping and disabling $service..."
-				systemctl stop "$service" 2>/dev/null || true
-				systemctl disable "$service" 2>/dev/null || true
-				systemctl mask "$service" 2>/dev/null || true
-			fi
-		done
-		;;
-	*)
-		echo "Unknown OS: $OS_TYPE - attempting to disable common iptables persistence services..."
-		# Try to disable common services as a fallback
-		for service in netfilter-persistent iptables-persistent firewalld; do
-			systemctl stop "$service" 2>/dev/null || true
-			systemctl disable "$service" 2>/dev/null || true
-			systemctl mask "$service" 2>/dev/null || true
-		done
-		;;
-esac
+			done
+			;;
+	esac
+}
 
 # Only write config if it doesn't exist (preserve existing credentials)
 if [ ! -f /etc/runic-agent/config.json ]; then
@@ -153,7 +163,8 @@ if [ ! -f /etc/runic-agent/config.json ]; then
 	"pull_interval_seconds": 86400,
 	"log_path": "/var/log/runic/firewall.log",
 	"apply_on_boot": false,
-	"apply_rules_bundle": false
+	"apply_rules_bundle": false,
+	"disable_system_managed_iptables": false
 }
 EOF
 	else
@@ -163,7 +174,8 @@ EOF
 	"pull_interval_seconds": 86400,
 	"log_path": "/var/log/runic/firewall.log",
 	"apply_on_boot": false,
-	"apply_rules_bundle": false
+	"apply_rules_bundle": false,
+	"disable_system_managed_iptables": false
 }
 EOF
 	fi
@@ -198,7 +210,27 @@ else
 		else
 			sed -i 's/}$/,\n\t"apply_rules_bundle": false\n}/' /etc/runic-agent/config.json
 		fi
+		MIGRATED=1
 	fi
+	# AG-004: Migrate disable_system_managed_iptables if not present
+	if ! grep -q '"disable_system_managed_iptables"' /etc/runic-agent/config.json 2>/dev/null; then
+		echo "Adding disable_system_managed_iptables=false to existing config"
+		# Check if we already added a field (need comma handling)
+		if [ "$MIGRATED" -eq 1 ]; then
+			sed -i 's/"apply_rules_bundle": false\n}/"apply_rules_bundle": false,\n\t"disable_system_managed_iptables": false\n}/' /etc/runic-agent/config.json
+		else
+			sed -i 's/}$/,\n\t"disable_system_managed_iptables": false\n}/' /etc/runic-agent/config.json
+		fi
+	fi
+fi
+
+# AG-005: Check config and conditionally disable iptables services
+if grep '"disable_system_managed_iptables"' /etc/runic-agent/config.json 2>/dev/null | grep -q 'true'; then
+	echo "Config: disable_system_managed_iptables=true - disabling system iptables services..."
+	disable_iptables_services
+else
+	echo "Config: disable_system_managed_iptables=false - skipping system iptables services disable"
+	echo "(Runic will manage iptables without disabling system services)"
 fi
 
 # Download service file

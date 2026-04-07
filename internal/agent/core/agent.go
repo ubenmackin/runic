@@ -27,7 +27,7 @@ import (
 )
 
 // Version is the agent version, set at build time.
-var Version = "0.5.1"
+var Version = "0.6.0"
 
 // CommandRunner abstracts exec.Command for testability.
 type CommandRunner interface {
@@ -107,6 +107,11 @@ func (a *Agent) Run(ctx context.Context) error {
 
 	log.Info("Runic agent starting", "version", a.version)
 	log.Info("Control plane URL", "url", a.config.ControlPlaneURL)
+
+	// Disable system-managed iptables services if configured
+	if err := a.DisableSystemIPTablesIfConfigured(); err != nil {
+		log.Warn("Failed to disable system iptables services", "error", err)
+	}
 
 	// 2. If no host_id/token, run registration
 	if a.config.NeedsRegistration() {
@@ -217,6 +222,106 @@ func (a *Agent) loadConfig() error {
 // saveConfig persists the current config.
 func (a *Agent) saveConfig() error {
 	return identity.SaveConfig(a.configPath, a.config)
+}
+
+// DisableSystemIPTablesIfConfigured disables system-managed iptables services
+// if the DisableSystemManagedIPTables config option is set to true.
+// This prevents conflicts between runic's firewall management and system services
+// like netfilter-persistent, iptables-persistent, firewalld, etc.
+func (a *Agent) DisableSystemIPTablesIfConfigured() error {
+	if !a.config.DisableSystemManagedIPTables {
+		return nil
+	}
+
+	log.Info("DisableSystemManagedIPTables is enabled, detecting OS and disabling services")
+
+	osType, err := detectOS()
+	if err != nil {
+		return fmt.Errorf("detect OS: %w", err)
+	}
+
+	log.Info("Detected OS type", "os", osType)
+
+	var services []string
+	switch osType {
+	case "ubuntu", "debian", "linuxmint", "pop":
+		services = []string{"netfilter-persistent", "iptables-persistent"}
+	case "arch", "archarm", "manjaro", "endeavouros":
+		services = []string{"iptables", "ip6tables"}
+	case "opensuse", "suse", "sled", "sles":
+		services = []string{"firewalld", "SuSEfirewall2"}
+	case "fedora", "rhel", "centos", "rocky", "almalinux", "ol":
+		services = []string{"firewalld", "iptables-services"}
+	default:
+		// Fallback: try common services
+		services = []string{"netfilter-persistent", "iptables-persistent", "firewalld"}
+	}
+
+	// Stop, disable, and mask each service
+	for _, svc := range services {
+		if err := a.disableService(svc); err != nil {
+			log.Warn("Failed to disable service", "service", svc, "error", err)
+			continue
+		}
+		log.Info("Disabled system iptables service", "service", svc)
+	}
+
+	return nil
+}
+
+// detectOS detects the Linux distribution by reading /etc/os-release.
+func detectOS() (string, error) {
+	data, err := os.ReadFile("/etc/os-release")
+	if err != nil {
+		return "", fmt.Errorf("read os-release: %w", err)
+	}
+
+	// Parse ID= from os-release
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "ID=") {
+			id := strings.TrimPrefix(line, "ID=")
+			// Remove quotes if present
+			id = strings.Trim(id, `"`)
+			return id, nil
+		}
+	}
+
+	return "", fmt.Errorf("could not detect OS from os-release")
+}
+
+// disableService stops, disables, and masks a systemd service.
+func (a *Agent) disableService(service string) error {
+	ctx := context.Background()
+
+	// Check if service is active or enabled
+	checkActive, _ := a.cmdRunner.Run(ctx, "systemctl", "is-active", service)
+	checkEnabled, _ := a.cmdRunner.Run(ctx, "systemctl", "is-enabled", service)
+
+	isActive := strings.TrimSpace(string(checkActive)) == "active"
+	isEnabled := strings.TrimSpace(string(checkEnabled)) == "enabled"
+
+	if !isActive && !isEnabled {
+		// Service is not running and not enabled, nothing to do
+		return nil
+	}
+
+	// Stop the service
+	if _, err := a.cmdRunner.Run(ctx, "systemctl", "stop", service); err != nil {
+		log.Warn("Failed to stop service", "service", service, "error", err)
+	}
+
+	// Disable the service
+	if _, err := a.cmdRunner.Run(ctx, "systemctl", "disable", service); err != nil {
+		log.Warn("Failed to disable service", "service", service, "error", err)
+	}
+
+	// Mask the service to prevent it from being started
+	if _, err := a.cmdRunner.Run(ctx, "systemctl", "mask", service); err != nil {
+		log.Warn("Failed to mask service", "service", service, "error", err)
+	}
+
+	return nil
 }
 
 // heartbeatLoop sends heartbeats at the configured heartbeat interval.

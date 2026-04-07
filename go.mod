@@ -15,6 +15,7 @@ require (
 	github.com/prometheus/client_model v0.6.2
 	golang.org/x/crypto v0.49.0
 	golang.org/x/sync v0.20.0
+	golang.org/x/term v0.41.0
 )
 
 require (

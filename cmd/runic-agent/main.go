@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"flag"
 	"fmt"
@@ -8,10 +9,14 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"strings"
 	"syscall"
+
+	"golang.org/x/term"
 
 	"runic/internal/agent"
 	"runic/internal/agent/core"
+	"runic/internal/agent/identity"
 )
 
 func main() {
@@ -20,7 +25,22 @@ func main() {
 	uninstall := flag.Bool("uninstall", false, "Uninstall the agent from this system")
 	purge := flag.Bool("purge", false, "Also remove config files (use with --uninstall)")
 	version := flag.Bool("version", false, "Print version and exit")
+	enableOnBoot := flag.Bool("enable-on-boot", false, "Enable applying rules on boot")
+	enableRulesBundle := flag.Bool("enable-rules-bundle", false, "Enable automatic bundle application")
+	pullInterval := flag.Int("pull-interval", 0, "Pull interval in seconds (0 = use default)")
+	logPath := flag.String("log-path", "", "Log file path")
+	disableSystemIPTables := flag.Bool("disable-system-iptables", false, "Disable system-managed iptables services")
+	setup := flag.Bool("setup", false, "Run interactive setup wizard")
 	flag.Parse()
+
+	// Handle interactive setup wizard
+	if *setup {
+		if err := runSetupWizard(*configPath, *controlPlaneURL); err != nil {
+			log.Fatalf("setup failed: %v", err)
+		}
+		fmt.Println("Configuration saved. Run without -setup to start the agent.")
+		return
+	}
 
 	if *version {
 		fmt.Printf("runic-agent version %s\n", core.Version)
@@ -40,6 +60,11 @@ func main() {
 	}
 
 	a := agent.New(*configPath, *controlPlaneURL)
+
+	// Override config with CLI flags if provided
+	if err := applyCLIOverrides(*configPath, *enableOnBoot, *enableRulesBundle, *pullInterval, *logPath, *disableSystemIPTables); err != nil {
+		log.Printf("warning: failed to apply CLI overrides: %v", err)
+	}
 
 	// Context that cancels on SIGINT/SIGTERM
 	ctx, cancel := context.WithCancel(context.Background())
@@ -104,5 +129,134 @@ func uninstallAgent(purge bool) error {
 		fmt.Println("Config files preserved. Use --purge to remove them.")
 	}
 
+	return nil
+}
+
+// runSetupWizard runs an interactive setup wizard to configure the agent.
+func runSetupWizard(configPath string, defaultControlPlaneURL string) error {
+	// Check if stdin is a terminal (not a pipe/file)
+	fd := int(os.Stdin.Fd())
+	if !term.IsTerminal(fd) {
+		return fmt.Errorf("setup wizard requires interactive terminal. Use -url flag or config file instead")
+	}
+
+	reader := bufio.NewReader(os.Stdin)
+
+	// Control plane URL
+	controlPlaneURL := defaultControlPlaneURL
+	fmt.Print("Control Plane URL: ")
+	if controlPlaneURL != "" {
+		fmt.Printf(" [%s]: ", controlPlaneURL)
+	} else {
+		fmt.Print(": ")
+	}
+	input, _ := reader.ReadString('\n')
+	input = strings.TrimSpace(input)
+	if input != "" {
+		controlPlaneURL = input
+	}
+	if controlPlaneURL == "" {
+		return fmt.Errorf("control plane URL is required")
+	}
+
+	// Enable apply on boot
+	fmt.Print("Enable apply on boot (y/n, default n): ")
+	input, _ = reader.ReadString('\n')
+	input = strings.TrimSpace(strings.ToLower(input))
+	applyOnBoot := input == "y"
+
+	// Enable rules bundle
+	fmt.Print("Enable automatic bundle application (y/n, default n): ")
+	input, _ = reader.ReadString('\n')
+	input = strings.TrimSpace(strings.ToLower(input))
+	applyRulesBundle := input == "y"
+
+	// Pull interval
+	pullInterval := 86400
+	fmt.Print("Pull interval in seconds (default 86400): ")
+	input, _ = reader.ReadString('\n')
+	input = strings.TrimSpace(input)
+	if input != "" {
+		fmt.Sscanf(input, "%d", &pullInterval)
+	}
+
+	// Log path
+	logPath := "/var/log/runic/firewall.log"
+	fmt.Printf("Log path (default %s): ", logPath)
+	input, _ = reader.ReadString('\n')
+	input = strings.TrimSpace(input)
+	if input != "" {
+		logPath = input
+	}
+
+	// Disable system iptables
+	fmt.Print("Disable system-managed iptables services (y/n, default n): ")
+	input, _ = reader.ReadString('\n')
+	input = strings.TrimSpace(strings.ToLower(input))
+	disableSystemIPTables := input == "y"
+
+	// Create config
+	cfg := identity.DefaultConfig()
+	cfg.ControlPlaneURL = controlPlaneURL
+	cfg.ApplyOnBoot = applyOnBoot
+	cfg.ApplyRulesBundle = applyRulesBundle
+	cfg.PullIntervalSec = pullInterval
+	cfg.LogPath = logPath
+	cfg.DisableSystemManagedIPTables = disableSystemIPTables
+
+	// Save config
+	if err := identity.SaveConfig(configPath, cfg); err != nil {
+		return fmt.Errorf("save config: %w", err)
+	}
+
+	return nil
+}
+
+// applyCLIOverrides loads the config and overrides fields if CLI flags are set.
+func applyCLIOverrides(configPath string, enableOnBoot, enableRulesBundle bool, pullInterval int, logPath string, disableSystemIPTables bool) error {
+	cfg, err := identity.LoadConfig(configPath)
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+
+	overridden := false
+
+	// Validate pullInterval if provided (must be 0 or between 1 and 31536000 seconds)
+	if pullInterval != 0 {
+		if pullInterval < 0 || pullInterval > 31536000 {
+			return fmt.Errorf("pull-interval must be between 0 and 31536000 (1 year)")
+		}
+		cfg.PullIntervalSec = pullInterval
+		overridden = true
+	}
+
+	// Validate logPath if provided (must not be empty after trimming)
+	if logPath != "" {
+		if strings.TrimSpace(logPath) == "" {
+			return fmt.Errorf("log-path cannot be empty")
+		}
+		cfg.LogPath = logPath
+		overridden = true
+	}
+
+	if enableOnBoot {
+		cfg.ApplyOnBoot = true
+		overridden = true
+	}
+	if enableRulesBundle {
+		cfg.ApplyRulesBundle = true
+		overridden = true
+	}
+	if disableSystemIPTables {
+		cfg.DisableSystemManagedIPTables = true
+		overridden = true
+	}
+
+	if overridden {
+		// Save config and return error if it fails (critical failure)
+		if err := identity.SaveConfig(configPath, cfg); err != nil {
+			return fmt.Errorf("failed to save config: %w", err)
+		}
+	}
 	return nil
 }
