@@ -7,14 +7,17 @@ detect_os() {
     if [ -f /etc/os-release ]; then
         . /etc/os-release
         # Normalize OS ID for edge cases (e.g., opensuse-leap -> opensuse, opensuse-tumbleweed -> opensuse)
-        case "$ID" in
-            opensuse*|sle*)
-                echo "opensuse"
-                ;;
-            *)
-                echo "$ID"
-                ;;
-        esac
+	case "$ID" in
+		opensuse*|sle*)
+			echo "opensuse"
+			;;
+		armbian|raspbian)
+			echo "raspbian"
+			;;
+		*)
+			echo "$ID"
+			;;
+	esac
     else
         echo "unknown"
     fi
@@ -78,18 +81,26 @@ chmod 755 /var/log/runic
 # rsyslog needs write access to create firewall.log
 OS_TYPE=$(detect_os)
 case "$OS_TYPE" in
-    debian|ubuntu|linuxmint|pop)
-        # Debian/Ubuntu: rsyslog runs as syslog:adm
-        chown syslog:adm /var/log/runic
-        ;;
-    rhel|centos|fedora|rocky|almalinux|ol)
-        # RHEL/CentOS/Fedora/Rocky/Alma/Oracle: rsyslog typically runs as root
-        # Keep root:root ownership (755 permissions allow rsyslog to write)
-        ;;
-    *)
-        # Default: try syslog:adm (common for most distributions)
-        chown syslog:adm /var/log/runic 2>/dev/null || true
-        ;;
+	debian|ubuntu|linuxmint|pop)
+		# Debian/Ubuntu: rsyslog runs as syslog:adm
+		chown syslog:adm /var/log/runic
+		;;
+	rhel|centos|fedora|rocky|almalinux|ol)
+		# RHEL/CentOS/Fedora/Rocky/Alma/Oracle: rsyslog typically runs as root
+		# Keep root:root ownership (755 permissions allow rsyslog to write)
+		;;
+	raspbian)
+		# Armbian/Raspbian: check if syslog user exists
+		if id syslog &>/dev/null; then
+			chown syslog:adm /var/log/runic
+		else
+			chown root:adm /var/log/runic
+		fi
+		;;
+	*)
+		# Default: try syslog:adm (common for most distributions)
+		chown syslog:adm /var/log/runic 2>/dev/null || true
+		;;
 esac
 
 # Install rsyslog config for firewall logs
