@@ -54,6 +54,20 @@ chmod 700 /etc/runic-agent
 mkdir -p /var/log/runic
 chmod 755 /var/log/runic
 
+# Set appropriate ownership for log directory (distro-aware)
+# rsyslog needs write access to create firewall.log
+if [ -f /etc/debian_version ]; then
+    # Debian/Ubuntu: rsyslog runs as syslog:adm
+    chown syslog:adm /var/log/runic
+elif [ -f /etc/redhat-release ] || [ -f /etc/centos-release ] || [ -f /etc/fedora-release ]; then
+    # RHEL/CentOS/Fedora: rsyslog typically runs as root, but some setups use syslog
+    # Keep root:root ownership (755 permissions allow rsyslog to write)
+    :
+else
+    # Default: try syslog:adm (common for most distributions)
+    chown syslog:adm /var/log/runic 2>/dev/null || true
+fi
+
 # Install rsyslog config for firewall logs
 if [ -d /etc/rsyslog.d ]; then
     cat > /etc/rsyslog.d/30-runic-firewall.conf << 'EOF'
