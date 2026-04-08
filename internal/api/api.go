@@ -130,6 +130,9 @@ func (a *API) RegisterRoutes(r *mux.Router, downloadsDir string) {
 	logCleanupWorker := logcleanup.NewWorker(a.DB)
 	logCleanupWorker.Start(ctx)
 
+	// Start LogHub for WebSocket log streaming
+	go a.LogHub.Run(ctx)
+
 	// Apply SecurityHeaders as the outermost middleware to ensure ALL responses include security headers
 	r.Use(SecurityHeaders)
 
