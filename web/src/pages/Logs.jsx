@@ -246,8 +246,9 @@ export default function Logs() {
 
       {/* Filter panel (historical mode) */}
       {mode === 'historical' && (
-        <div className="flex flex-wrap gap-3 items-end bg-white dark:bg-charcoal-dark p-4 rounded-xl">
-        <div className="space-y-1">
+         <div className="flex flex-wrap gap-3 items-end bg-white dark:bg-charcoal-dark p-4 rounded-xl">
+        {/* Added min-w class to ensure dropdown has sufficient width */}
+        <div className="space-y-1 min-w-[200px]">
           <label className="text-xs font-medium text-gray-500 dark:text-amber-muted">Peer</label>
           <SearchableSelect
             options={(peers || []).map(p => ({ value: p.id, label: p.hostname }))}

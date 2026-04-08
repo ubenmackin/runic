@@ -19,7 +19,11 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev
 COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 BUILT_AT ?= $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 
+# Agent version from .agent-version file
+AGENT_VERSION ?= $(shell cat .agent-version 2>/dev/null || echo "dev")
+
 LD_FLAGS = -ldflags="-X runic/internal/common/version.Version=$(VERSION) -X runic/internal/common/version.Commit=$(COMMIT) -X runic/internal/common/version.BuiltAt=$(BUILT_AT)"
+AGENT_LD_FLAGS = -ldflags="-X runic/internal/agent/core.Version=$(AGENT_VERSION)"
 
 all: web-build build
 
@@ -43,22 +47,22 @@ agents: agents-linux-amd64 agents-linux-arm64 agents-linux-arm agents-linux-armv
 agents-linux-amd64:
 	@mkdir -p dist
 	@echo "$(GREEN)Building agent for linux/amd64...$(NC)"
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GOBUILD) -o $(BINARY_AGENT)-linux-amd64 $(AGENT_DIR)
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GOBUILD) $(AGENT_LD_FLAGS) -o $(BINARY_AGENT)-linux-amd64 $(AGENT_DIR)
 
 agents-linux-arm64:
 	@mkdir -p dist
 	@echo "$(GREEN)Building agent for linux/arm64...$(NC)"
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GOBUILD) -o $(BINARY_AGENT)-linux-arm64 $(AGENT_DIR)
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GOBUILD) $(AGENT_LD_FLAGS) -o $(BINARY_AGENT)-linux-arm64 $(AGENT_DIR)
 
 agents-linux-arm:
 	@mkdir -p dist
 	@echo "$(GREEN)Building agent for linux/arm...$(NC)"
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm $(GOBUILD) -o $(BINARY_AGENT)-linux-arm $(AGENT_DIR)
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm $(GOBUILD) $(AGENT_LD_FLAGS) -o $(BINARY_AGENT)-linux-arm $(AGENT_DIR)
 
 agents-linux-armv6:
 	@mkdir -p dist
 	@echo "$(GREEN)Building agent for linux/armv6...$(NC)"
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=6 $(GOBUILD) -o $(BINARY_AGENT)-linux-armv6 $(AGENT_DIR)
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=6 $(GOBUILD) $(AGENT_LD_FLAGS) -o $(BINARY_AGENT)-linux-armv6 $(AGENT_DIR)
 
 # Build web frontend
 web-build:

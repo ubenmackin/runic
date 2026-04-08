@@ -834,9 +834,10 @@ cd "$SOURCE_DIR" || { log ERROR "Source directory not found"; exit 1; }
   # Capture version information before any build steps
   VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "dev")
   COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-  BUILT_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+BUILT_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+AGENT_VERSION=$(cat .agent-version 2>/dev/null || echo "dev")
 
-  # Create downloads directory
+# Create downloads directory
 	mkdir -p "$INSTALL_DIR/downloads"
 
 	# Build for each architecture
@@ -847,9 +848,9 @@ cd "$SOURCE_DIR" || { log ERROR "Source directory not found"; exit 1; }
 		log INFO "Building runic-agent for $arch..."
 
 if [ "$arch" = "armv6" ]; then
-      CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=6 go build -ldflags="-X runic/internal/agent/core.Version=0.6.1 -X runic/internal/common/version.Commit=$COMMIT -X runic/internal/common/version.BuiltAt=$BUILT_AT" -a -buildvcs=false -o "$INSTALL_DIR/downloads/runic-agent-armv6" ./cmd/runic-agent >> "$LOG_FILE" 2>&1
-else
-      CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -ldflags="-X runic/internal/agent/core.Version=0.6.1 -X runic/internal/common/version.Commit=$COMMIT -X runic/internal/common/version.BuiltAt=$BUILT_AT" -a -buildvcs=false -o "$INSTALL_DIR/downloads/runic-agent-$arch" ./cmd/runic-agent >> "$LOG_FILE" 2>&1
+CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=6 go build -ldflags="-X runic/internal/agent/core.Version=$AGENT_VERSION -X runic/internal/common/version.Commit=$COMMIT -X runic/internal/common/version.BuiltAt=$BUILT_AT" -a -buildvcs=false -o "$INSTALL_DIR/downloads/runic-agent-armv6" ./cmd/runic-agent >> "$LOG_FILE" 2>&1
+	else
+		CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -ldflags="-X runic/internal/agent/core.Version=$AGENT_VERSION -X runic/internal/common/version.Commit=$COMMIT -X runic/internal/common/version.BuiltAt=$BUILT_AT" -a -buildvcs=false -o "$INSTALL_DIR/downloads/runic-agent-$arch" ./cmd/runic-agent >> "$LOG_FILE" 2>&1
 		fi
 
 		if [ $? -ne 0 ]; then

@@ -26,8 +26,8 @@ import (
 	"runic/internal/models"
 )
 
-// Version is the agent version, set at build time.
-var Version = "0.6.2"
+// Version is the agent version, set at build time via ldflags.
+var Version = "dev"
 
 // CommandRunner abstracts exec.Command for testability.
 type CommandRunner interface {
