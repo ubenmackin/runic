@@ -75,17 +75,17 @@ func (s *Shipper) Run(ctx context.Context) {
 			}
 			if ev, err := ParseLogLine(line); err == nil {
 				batch = append(batch, ev)
-				log.Debug("Parsed log line", "action", ev.Action, "srcIP", ev.SrcIP, "batchSize", len(batch))
+				log.Info("Parsed log line", "action", ev.Action, "srcIP", ev.SrcIP, "batchSize", len(batch))
 				if len(batch) >= 100 {
 					s.ship(ctx, batch)
-					log.Debug("Batch full, shipping", "count", len(batch))
+					log.Info("Batch full, shipping", "count", len(batch))
 					batch = nil
 				}
 			}
 
 		case <-ticker.C:
 			if len(batch) > 0 {
-				log.Debug("Ticker triggered, shipping", "count", len(batch))
+				log.Info("Ticker triggered, shipping", "count", len(batch))
 				s.ship(ctx, batch)
 				batch = nil
 			}
@@ -264,11 +264,11 @@ func ParseLogLine(line string) (LogEvent, error) {
 			ev.Protocol = strings.ToLower(value)
 		case "SPT":
 			if _, err := fmt.Sscanf(value, "%d", &ev.SrcPort); err != nil {
-				log.Debug("Failed to parse source port", "value", value, "error", err)
+				log.Info("Failed to parse source port", "value", value, "error", err)
 			}
 		case "DPT":
 			if _, err := fmt.Sscanf(value, "%d", &ev.DstPort); err != nil {
-				log.Debug("Failed to parse destination port", "value", value, "error", err)
+				log.Info("Failed to parse destination port", "value", value, "error", err)
 			}
 		}
 	}
