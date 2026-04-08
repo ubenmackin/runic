@@ -72,7 +72,7 @@ func (w *ChangeWorker) Start(ctx context.Context) {
 func (w *ChangeWorker) QueuePeerChange(ctx context.Context, database db.Querier, peerIDs []int, changeType, changeAction string, changeID int, summary string) {
 	select {
 	case w.workCh <- changeWork{
-		ctx: ctx, database: database, peerIDs: peerIDs,
+		ctx: context.Background(), database: database, peerIDs: peerIDs,
 		changeType: changeType, changeAction: changeAction, changeID: changeID, summary: summary,
 	}:
 	case <-ctx.Done():
@@ -83,7 +83,7 @@ func (w *ChangeWorker) QueuePeerChange(ctx context.Context, database db.Querier,
 func (w *ChangeWorker) QueueGroupChange(ctx context.Context, database db.Querier, compiler *engine.Compiler, groupID int, changeAction string, summary string) {
 	select {
 	case w.workCh <- changeWork{
-		ctx: ctx, database: database, compiler: compiler, groupID: groupID,
+		ctx: context.Background(), database: database, compiler: compiler, groupID: groupID,
 		changeAction: changeAction, summary: summary, isGroup: true,
 	}:
 	case <-ctx.Done():
@@ -106,9 +106,21 @@ func (w *ChangeWorker) Stop() {
 }
 
 func (w *ChangeWorker) processPeerChange(work *changeWork) {
+	// Debug: Check if context is canceled
+	select {
+	case <-work.ctx.Done():
+		runiclog.Warn("DEBUG: context canceled before processing", "ctx_err", work.ctx.Err())
+		return
+	default:
+	}
+
+	runiclog.Info("DEBUG: processPeerChange starting", "peer_ids", work.peerIDs, "change_type", work.changeType, "change_action", work.changeAction)
+
 	for _, peerID := range work.peerIDs {
 		if err := queueChangeForPeer(work.ctx, work.database, peerID, work.changeType, work.changeAction, work.changeID, work.summary); err != nil {
 			runiclog.Error("failed to queue change", "peer_id", peerID, "error", err)
+		} else {
+			runiclog.Info("DEBUG: successfully queued change", "peer_id", peerID)
 		}
 	}
 }

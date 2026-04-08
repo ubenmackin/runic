@@ -27,7 +27,7 @@ import (
 )
 
 // Version is the agent version, set at build time.
-var Version = "0.6.0"
+var Version = "0.6.1"
 
 // CommandRunner abstracts exec.Command for testability.
 type CommandRunner interface {
@@ -129,7 +129,7 @@ func (a *Agent) Run(ctx context.Context) error {
 		log.Warn("Failed to backup iptables", "error", err)
 	}
 
-	// 4. Apply cached bundle on startup if control plane is unreachable
+	// 4. Apply bundle on startup
 	if a.config.ApplyOnBoot {
 		if !a.isControlPlaneReachable(ctx) {
 			log.Info("Control plane unreachable, applying cached bundle")
@@ -137,7 +137,13 @@ func (a *Agent) Run(ctx context.Context) error {
 				log.Warn("Failed to apply cached bundle on startup", "error", err)
 			}
 		} else {
-			log.Info("Control plane reachable, will fetch latest bundle")
+			log.Info("Control plane reachable, pulling and applying latest bundle")
+			if err := a.pullBundle(ctx); err != nil {
+				log.Warn("Failed to pull latest bundle, applying cached bundle", "error", err)
+				if err := a.applyCachedBundle(ctx); err != nil {
+					log.Warn("Failed to apply cached bundle on startup", "error", err)
+				}
+			}
 		}
 	}
 

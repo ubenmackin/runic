@@ -150,7 +150,10 @@ func (s *Shipper) tail(ctx context.Context, path string) <-chan string {
 					if err != nil {
 						log.Warn("Failed to seek", "error", err)
 					}
+					log.Info("Scanner EOF check", "position", pos, "fileSize", stat.Size())
 					if stat.Size() < pos {
+						// File shrunk (rotation) - reopen
+						log.Info("File shrunk, reopening (rotation)", "oldPos", pos, "newSize", stat.Size())
 						if err := f.Close(); err != nil {
 							log.Warn("Failed to close file", "error", err)
 						}
@@ -166,6 +169,13 @@ func (s *Shipper) tail(ctx context.Context, path string) <-chan string {
 								log.Warn("Failed to close file", "error", cErr)
 							}
 							return
+						}
+						scanner = bufio.NewScanner(f)
+					} else if stat.Size() > pos {
+						// File has grown - re-seek and recreate scanner to read new data
+						log.Info("File has grown, recreating scanner", "oldPos", pos, "newSize", stat.Size())
+						if _, err := f.Seek(pos, io.SeekStart); err != nil {
+							log.Warn("Failed to seek to last position", "error", err)
 						}
 						scanner = bufio.NewScanner(f)
 					}
