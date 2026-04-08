@@ -184,28 +184,60 @@ func main() {
 	}
 	fileServer := http.FileServer(http.FS(subFS))
 
-	// For any route not matched above, serve the SPA
+	// For any route not matched above, serve the SPA with CSP nonce injection
 	// If the file exists, serve it; otherwise serve index.html (for client-side routing)
 	r.PathPrefix("/").Handler(api.CSP()(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		// Get the nonce from context (set by CSP middleware)
+		nonce, ok := api.GetCSPNonce(req.Context())
+
 		// Try to open the requested file
 		path := req.URL.Path
 		if path == "/" {
 			path = "/index.html"
 		}
 		// Remove leading slash for fs.FS lookup
-		path = strings.TrimPrefix(path, "/")
-		if _, err := subFS.Open(path); err == nil {
-			// Set cache headers based on file type
-			setCacheHeaders(w, path)
-			fileServer.ServeHTTP(w, req)
+		fsPath := strings.TrimPrefix(path, "/")
+
+		if _, err := subFS.Open(fsPath); err == nil {
+			// File exists
+			// For HTML files, inject the nonce
+			if strings.HasSuffix(path, ".html") {
+				// index.html should never be cached
+				w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+				w.Header().Set("Pragma", "no-cache")
+				w.Header().Set("Expires", "0")
+
+				if ok {
+					// Serve HTML with nonce injection
+					if err := api.ServeHTMLWithNonce(w, req, subFS, fsPath, nonce); err != nil {
+						http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+					}
+				} else {
+					// Fallback: serve without nonce
+					fileServer.ServeHTTP(w, req)
+				}
+			} else {
+				// Set cache headers based on file type
+				setCacheHeaders(w, path)
+				fileServer.ServeHTTP(w, req)
+			}
 		} else {
 			// File not found — serve index.html for SPA client-side routing
 			// index.html should never be cached
 			w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 			w.Header().Set("Pragma", "no-cache")
 			w.Header().Set("Expires", "0")
-			req.URL.Path = "/index.html"
-			fileServer.ServeHTTP(w, req)
+
+			if ok {
+				// Serve HTML with nonce injection
+				if err := api.ServeHTMLWithNonce(w, req, subFS, "index.html", nonce); err != nil {
+					http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+				}
+			} else {
+				// Fallback: serve without nonce
+				req.URL.Path = "/index.html"
+				fileServer.ServeHTTP(w, req)
+			}
 		}
 	})))
 

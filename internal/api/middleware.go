@@ -43,7 +43,9 @@ package api
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
+	"fmt"
 	"net/http"
 	"os"
 	"strings"
@@ -61,21 +63,41 @@ const RequestIDHeader = "X-Request-ID"
 // CSPHeader is the Content-Security-Policy header name.
 const CSPHeader = "Content-Security-Policy"
 
-// cspDirectives contains the CSP directives for the application.
-// The script-src includes a hash for the inline dark mode script in index.html.
-// Hash computed from: openssl dgst -sha256 -binary <script> | base64
-var cspDirectives = strings.Join([]string{
-	"default-src 'self'",
-	"script-src 'self' 'sha256-n8xEmYjbZroMcGhAIqKuFd8sNx/rtDfflW/ZvbfCMAg='",
-	"style-src 'self' 'unsafe-inline'",
-	"img-src 'self' data:",
-	"font-src 'self'",
-	"connect-src 'self' ws: wss:",
-	"object-src 'none'",
-	"base-uri 'self'",
-	"form-action 'self'",
-	"frame-ancestors 'none'",
-}, "; ")
+// CSPNonceHeader is the header name for the CSP nonce value.
+// This can be used by frontend code to access the nonce if needed.
+const CSPNonceHeader = "X-CSP-Nonce"
+
+// CSPNonceKey is the context key for the CSP nonce value.
+const CSPNonceKey contextKey = "csp-nonce"
+
+// generateNonce generates a cryptographically secure random nonce.
+// The nonce is a base64-encoded random value suitable for CSP.
+func generateNonce() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		// Fallback to timestamp-based value if crypto/rand fails
+		return hex.EncodeToString([]byte(time.Now().Format("20060102150405")))
+	}
+	return base64.URLEncoding.EncodeToString(b)
+}
+
+// buildCSPDirectives builds CSP directives with the given nonce.
+// Using nonce-based CSP is more flexible than hash-based CSP as it doesn't
+// require updating hashes when scripts change.
+func buildCSPDirectives(nonce string) string {
+	return strings.Join([]string{
+		"default-src 'self'",
+		fmt.Sprintf("script-src 'self' 'nonce-%s'", nonce),
+		"style-src 'self' 'unsafe-inline'",
+		"img-src 'self' data:",
+		"font-src 'self'",
+		"connect-src 'self' ws: wss:",
+		"object-src 'none'",
+		"base-uri 'self'",
+		"form-action 'self'",
+		"frame-ancestors 'none'",
+	}, "; ")
+}
 
 // RequestID middleware generates or extracts a request ID from the X-Request-ID header.
 // It adds the request ID to the request context and ensures it's also returned in the response header.
@@ -110,6 +132,15 @@ func GetRequestID(ctx context.Context) (string, bool) {
 	return log.GetRequestID(ctx)
 }
 
+// GetCSPNonce extracts the CSP nonce from the request context.
+// Returns the nonce and true if found, otherwise returns empty string and false.
+func GetCSPNonce(ctx context.Context) (string, bool) {
+	if nonce, ok := ctx.Value(CSPNonceKey).(string); ok {
+		return nonce, true
+	}
+	return "", false
+}
+
 // setSecurityHeaders sets common security hardening headers on the response.
 func setSecurityHeaders(w http.ResponseWriter) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -119,19 +150,33 @@ func setSecurityHeaders(w http.ResponseWriter) {
 	w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
 }
 
-// CSP returns a middleware that sets Content-Security-Policy headers.
+// CSP returns a middleware that sets Content-Security-Policy headers with a nonce.
 // This provides server-side CSP enforcement which is authoritative over meta tags.
-// The CSP includes a hash for the inline dark mode script to prevent flash of unstyled content.
+// The nonce is generated per-request and added to the response header and context.
+// The frontend can use the nonce to authorize inline scripts.
 func CSP() mux.MiddlewareFunc {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Set CSP header - this overrides any CSP meta tag in HTML
+			// Generate a unique nonce for this request
+			nonce := generateNonce()
+
+			// Build CSP directives with the nonce
+			cspDirectives := buildCSPDirectives(nonce)
+
+			// Set CSP header with nonce
 			w.Header().Set(CSPHeader, cspDirectives)
+
+			// Set nonce in response header for frontend access
+			w.Header().Set(CSPNonceHeader, nonce)
+
+			// Add nonce to context for use in handlers
+			ctx := r.Context()
+			ctx = context.WithValue(ctx, CSPNonceKey, nonce)
 
 			// Additional security hardening headers
 			setSecurityHeaders(w)
 
-			next.ServeHTTP(w, r)
+			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
 }
