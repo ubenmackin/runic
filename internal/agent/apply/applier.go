@@ -4,6 +4,7 @@ package apply
 import (
 	"context"
 	"fmt"
+	"math"
 	"net/http"
 	"os"
 	"os/exec"
@@ -264,7 +265,7 @@ func validateRules(content string) error {
 		} else if len(trimmed) > 0 {
 			// Contains obviously malformed line
 			if !malformedRegex.MatchString(trimmed) {
-				return fmt.Errorf("possibly malformed line: %s", trimmed[:min(50, len(trimmed))])
+				return fmt.Errorf("possibly malformed line: %s", trimmed[:int(math.Min(50, float64(len(trimmed))))])
 			}
 			validLineCount++
 		}
@@ -477,7 +478,7 @@ func parseIpsetDefs(section string) ([]ipsetDef, error) {
 	return result, nil
 }
 
-// flushRunicIpsets destroys all ipsets with names starting with "runic_group_".
+// flushRunicIpsets destroys all ipsets with names starting with "runic_group_" and the "runic_private_ranges" ipset.
 func flushRunicIpsets(ctx context.Context) error {
 	// List all ipsets
 	cmd := exec.CommandContext(ctx, "ipset", "list", "-n")
@@ -496,7 +497,7 @@ func flushRunicIpsets(ctx context.Context) error {
 
 	for _, name := range names {
 		name = strings.TrimSpace(name)
-		if name == "" || !strings.HasPrefix(name, "runic_group_") {
+		if name == "" || (!strings.HasPrefix(name, "runic_group_") && name != "runic_private_ranges") {
 			continue
 		}
 
