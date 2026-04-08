@@ -53,6 +53,7 @@ func NewShipper(client *http.Client, controlPlaneURL, token, hostID, logPath str
 // Run starts the shipper's tail and batch loops.
 func (s *Shipper) Run(ctx context.Context) {
 	// Start tailing
+	log.Info("Starting log shipper", "logPath", s.logPath, "controlPlaneURL", s.controlPlaneURL, "hostID", s.hostID)
 	tailedLines := s.tail(ctx, s.logPath)
 
 	// Process lines and batch ship
@@ -74,14 +75,17 @@ func (s *Shipper) Run(ctx context.Context) {
 			}
 			if ev, err := ParseLogLine(line); err == nil {
 				batch = append(batch, ev)
+				log.Debug("Parsed log line", "action", ev.Action, "srcIP", ev.SrcIP, "batchSize", len(batch))
 				if len(batch) >= 100 {
 					s.ship(ctx, batch)
+					log.Debug("Batch full, shipping", "count", len(batch))
 					batch = nil
 				}
 			}
 
 		case <-ticker.C:
 			if len(batch) > 0 {
+				log.Debug("Ticker triggered, shipping", "count", len(batch))
 				s.ship(ctx, batch)
 				batch = nil
 			}
@@ -114,6 +118,7 @@ func (s *Shipper) tail(ctx context.Context, path string) <-chan string {
 			log.Error("Cannot open log file", "path", path, "error", err)
 			return
 		}
+		log.Info("Opened log file for tailing", "path", path)
 		defer func() {
 			if err := f.Close(); err != nil {
 				log.Warn("Failed to close log file", "path", path, "error", err)
@@ -298,6 +303,6 @@ func (s *Shipper) ship(ctx context.Context, batch []LogEvent) {
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		log.Warn("Server returned error status", "status_code", resp.StatusCode, "count", len(batch))
 	} else {
-		log.Info("Shipped log events", "count", len(batch))
+		log.Info("Shipped log events", "count", len(batch), "status", resp.StatusCode)
 	}
 }
