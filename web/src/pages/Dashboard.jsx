@@ -13,7 +13,7 @@ import { usePendingChanges } from '../contexts/PendingChangesContext'
 export default function Dashboard() {
   // Fetch dashboard stats
   const { data, isLoading } = useQuery({
-    queryKey: ['dashboard-stats'],
+    queryKey: QUERY_KEYS.dashboardStats(),
     queryFn: () => api.get('/dashboard'),
     staleTime: 30000, // Cache for 30 seconds
   })

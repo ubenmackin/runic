@@ -87,6 +87,7 @@ export const QUERY_KEYS = {
   policy: (id) => ['policies', id],
   logs: (params) => ['logs', params],
   dashboard: () => ['dashboard'],
+  dashboardStats: () => ['dashboard-stats'],
   dashboardInitial: () => ['dashboard-initial'],
   blockedLogs24h: () => ['blocked-logs-24h'],
 }

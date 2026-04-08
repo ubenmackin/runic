@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Lock, Trash2, Plus, Shield, Key, Database, HardDrive } from 'lucide-react'
-import { api } from '../api/client'
+import { api, QUERY_KEYS } from '../api/client'
 import { useToastContext } from '../hooks/ToastContext'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 import { useAuth } from '../hooks/useAuth'
@@ -74,6 +74,8 @@ export default function Settings() {
     mutationFn: () => api.delete('/logs'),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['log-settings'] })
+      qc.invalidateQueries({ queryKey: QUERY_KEYS.dashboardStats() })
+      qc.invalidateQueries({ queryKey: QUERY_KEYS.blockedLogs24h() })
       setShowClearLogsModal(false)
       showToast('All logs cleared', 'success')
     },
