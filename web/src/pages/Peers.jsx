@@ -3,7 +3,7 @@ import { useLocation } from 'react-router-dom'
 import { useTableSort } from '../hooks/useTableSort'
 import { usePagination } from '../hooks/usePagination'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Plus, Pencil, Trash2, Server, Copy, Check, RefreshCw, X, FileCode, AlertTriangle, Globe, ChevronDown, ChevronUp } from 'lucide-react'
+import { Plus, Pencil, Trash2, Server, Copy, Check, RefreshCw, X, FileCode, AlertTriangle, Globe, ChevronDown, ChevronUp, Send } from 'lucide-react'
 import { api, QUERY_KEYS } from '../api/client'
 import { REFETCH_INTERVALS } from '../constants'
 import { useCrudModal } from '../hooks/useCrudModal'
@@ -86,6 +86,10 @@ export default function Peers() {
 
 	// Bulk Apply All state
 	const [applyAllLoading, setApplyAllLoading] = useState(false)
+
+	// Push to peer state
+	const [pushTargetPeer, setPushTargetPeer] = useState(null)
+	const [pushLoading, setPushLoading] = useState(false)
 
 	const fetchBundle = async (peer) => {
 		setBundlePeer(peer)
@@ -367,6 +371,27 @@ const handleSubmit = (e) => {
     }
   }
 
+	// Handle Push to Peer
+	const handlePushToPeer = async (peer) => {
+		setPushTargetPeer(peer)
+	}
+
+	const handlePushConfirm = async () => {
+		if (!pushTargetPeer) return
+		setPushLoading(true)
+		try {
+			await api.post(`/pending-changes/push/${pushTargetPeer.id}`)
+			showToast(`Successfully pushed current rules to ${pushTargetPeer.hostname}`, 'success')
+			qc.invalidateQueries({ queryKey: QUERY_KEYS.peers() })
+			qc.invalidateQueries({ queryKey: ['pending-changes'] })
+			setPushTargetPeer(null)
+		} catch (err) {
+			showToast(`Failed to push rules: ${err.message}`, 'error')
+		} finally {
+			setPushLoading(false)
+		}
+	}
+
 	if (isLoading) return <TableSkeleton rows={3} columns={6} />
 
   return (
@@ -605,16 +630,25 @@ const handleSubmit = (e) => {
                         <span className="text-gray-400 dark:text-amber-muted">—</span>
                       )}
                     </td>
-                    <td className="px-4 py-3">
+                      <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
                         {!peer.is_manual && (
-                          <button
-                            onClick={() => fetchBundle(peer)}
-                            className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded"
-                            title="View Deployed Rules"
-                          >
-                            <FileCode className="w-4 h-4 text-purple-active" />
-                          </button>
+                          <>
+                            <button
+                              onClick={() => fetchBundle(peer)}
+                              className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded"
+                              title="View Deployed Rules"
+                            >
+                              <FileCode className="w-4 h-4 text-purple-active" />
+                            </button>
+                            <button
+                              onClick={() => handlePushToPeer(peer)}
+                              className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded"
+                              title="Push Current Rules"
+                            >
+                              <Send className="w-4 h-4 text-green-600" />
+                            </button>
+                          </>
                         )}
                         {canEdit && peer.is_manual && (
                           <button
@@ -700,6 +734,18 @@ const handleSubmit = (e) => {
     onConfirm={handleDeleteConfirm}
     onCancel={() => setDeleteTarget(null)}
     danger
+  />
+)}
+
+{/* Push to Peer Confirmation Modal */}
+{pushTargetPeer && (
+  <ConfirmModal
+    title="Push Current Rules"
+    message={`Are you sure you want to push current rules to "${pushTargetPeer.hostname}"? This will deploy all pending changes to this peer.`}
+    onConfirm={handlePushConfirm}
+    onCancel={() => setPushTargetPeer(null)}
+    confirmText="Push"
+    loading={pushLoading}
   />
 )}
 

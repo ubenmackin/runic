@@ -145,7 +145,7 @@ export default function PushJobModal({ jobId, onClose }) {
     }
   }
 
-  const peerList = Object.values(peers).sort((a, b) => a.hostname.localeCompare(b.hostname))
+  const peerList = Object.entries(peers).sort(([, a], [, b]) => (a.hostname || '').localeCompare(b.hostname || ''))
 
   const modalContent = (
     <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50">
@@ -212,15 +212,15 @@ export default function PushJobModal({ jobId, onClose }) {
               <h3 className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">
                 Peer Status
               </h3>
-              {peerList.map((peer, idx) => (
+              {peerList.map(([peerId, peer]) => (
                 <div
-                  key={peer.hostname}
+                  key={peerId}
                   className="flex items-center justify-between py-1.5 px-2 rounded-lg bg-gray-50 dark:bg-charcoal-darkest"
                 >
                   <div className="flex items-center gap-2 min-w-0">
                     {getStatusIcon(peer.status)}
                     <span className="text-sm text-gray-700 dark:text-gray-300 truncate">
-                      {peer.hostname}
+                      {peer.hostname || 'Unknown'}
                     </span>
                   </div>
                   {peer.error && (

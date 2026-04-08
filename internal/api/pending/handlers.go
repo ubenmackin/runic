@@ -424,6 +424,79 @@ func (h *Handler) PushAllRules(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// PushCurrentRules pushes the current rules to a specific peer.
+// The peer must be agent-based (has agent_version or is_manual = false).
+func (h *Handler) PushCurrentRules(w http.ResponseWriter, r *http.Request) {
+	peerID, err := common.ParseIDParam(r, "peerId")
+	if err != nil {
+		common.RespondError(w, http.StatusBadRequest, "invalid peer ID")
+		return
+	}
+
+	ctx := r.Context()
+	database := h.DB
+
+	// Verify peer exists and is agent-based
+	var hostname string
+	var agentVersion sql.NullString
+	var isManual bool
+	err = database.QueryRowContext(ctx, `
+		SELECT hostname, agent_version, is_manual FROM peers WHERE id = ?
+	`, peerID).Scan(&hostname, &agentVersion, &isManual)
+	if err == sql.ErrNoRows {
+		common.RespondError(w, http.StatusNotFound, "peer not found")
+		return
+	}
+	if err != nil {
+		log.ErrorContext(ctx, "failed to query peer", "error", err)
+		common.InternalError(w)
+		return
+	}
+
+	// Check if peer is agent-based: has agent_version OR is_manual = false
+	isAgentBased := agentVersion.Valid || !isManual
+	if !isAgentBased {
+		common.RespondError(w, http.StatusBadRequest, "peer is not agent-based (manual peer)")
+		return
+	}
+
+	// Use the PushWorker to compile and store bundle, then notify
+	// Create a single-peer job for consistency with push-all flow
+	jobID := fmt.Sprintf("job_%d", time.Now().UnixNano())
+
+	// Create push job record with single peer
+	initiatedBy := auth.UsernameFromContext(r.Context())
+	if err := db.CreatePushJob(ctx, database, jobID, initiatedBy, 1); err != nil {
+		log.ErrorContext(ctx, "failed to create push job", "error", err)
+		common.InternalError(w)
+		return
+	}
+
+	// Create push job peer record
+	peers := []struct {
+		ID       int
+		Hostname string
+	}{{ID: peerID, Hostname: hostname}}
+	if err := db.CreatePushJobPeersT(ctx, h.DBBeginner, jobID, peers); err != nil {
+		log.ErrorContext(ctx, "failed to create push job peers", "error", err)
+		common.InternalError(w)
+		return
+	}
+
+	// Enqueue to worker for processing
+	h.PushWorker.Enqueue(jobID)
+
+	log.InfoContext(ctx, "push current rules job created", "job_id", jobID, "peer_id", peerID, "hostname", hostname)
+
+	common.RespondJSON(w, http.StatusAccepted, map[string]interface{}{
+		"job_id":      jobID,
+		"status":      "queued",
+		"peer_id":     peerID,
+		"hostname":    hostname,
+		"total_peers": 1,
+	})
+}
+
 // HandlePushJobSSE streams real-time progress events for a push job via Server-Sent Events.
 func (h *Handler) HandlePushJobSSE(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)

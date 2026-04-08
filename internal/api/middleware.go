@@ -66,7 +66,7 @@ const CSPHeader = "Content-Security-Policy"
 // Hash computed from: openssl dgst -sha256 -binary <script> | base64
 var cspDirectives = strings.Join([]string{
 	"default-src 'self'",
-	"script-src 'self' 'sha256-bWmO0Su4nElv8RRute+EdRZcM9aoZ6K7R/rVKnR9UUw='",
+	"script-src 'self' 'sha256-n8xEmYjbZroMcGhAIqKuFd8sNx/rtDfflW/ZvbfCMAg='",
 	"style-src 'self' 'unsafe-inline'",
 	"img-src 'self' data:",
 	"font-src 'self'",

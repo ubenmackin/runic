@@ -42,6 +42,13 @@ func ApplyBundle(ctx context.Context, bundle models.BundleResponse, hmacKey, con
 	// 4. Schedule auto-revert watchdog (90 seconds)
 	revertCancel := scheduleRevert(ctx, backup, constants.AutoRevertDelay, controlPlaneURL, token, version)
 
+	// 4b. Flush iptables FIRST to release ipset references before destroying ipsets
+	// This prevents "ipset in use" errors during ipset recreate
+	if err := flushIPTables(ctx); err != nil {
+		revertCancel()
+		return fmt.Errorf("flush iptables: %w", err)
+	}
+
 	// 5. Write new rules to temp file
 	tmpFile, err := os.CreateTemp("", "runic-bundle-*.rules")
 	if err != nil {
@@ -65,10 +72,14 @@ func ApplyBundle(ctx context.Context, bundle models.BundleResponse, hmacKey, con
 		return fmt.Errorf("close temp file: %w", err)
 	}
 
-	// 5b. Apply ipset definitions if present (before iptables-restore)
+	// 5b. Apply ipset definitions if present (after iptables flushed - can now destroy safely)
 	if strings.Contains(bundle.Rules, "# --- Ipset Definitions ---") {
 		if err := applyIpsets(ctx, bundle.Rules); err != nil {
 			revertCancel()
+			// Try to restore from backup on failure
+			if revertErr := revertRules(backup); revertErr != nil {
+				log.Error("Revert failed", "error", revertErr)
+			}
 			return fmt.Errorf("ipset apply failed: %w", err)
 		}
 	}
@@ -545,4 +556,37 @@ func hasDocker() bool {
 func restartDocker(ctx context.Context) error {
 	cmd := exec.CommandContext(ctx, "systemctl", "restart", "docker")
 	return cmd.Run()
+}
+
+// flushIPTables flushes all iptables rules in the filter table.
+// This is done before destroying ipsets to release references to them.
+// The order is: flush rules (-F) first, then delete custom chains (-X).
+func flushIPTables(ctx context.Context) error {
+	// Flush all chains in the filter table
+	cmd := exec.CommandContext(ctx, "iptables", "-t", "filter", "-F")
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("flush iptables filter: %w", err)
+	}
+
+	// Delete custom user chains in filter table (now safe since rules are flushed)
+	delCmd := exec.CommandContext(ctx, "iptables", "-t", "filter", "-X")
+	if err := delCmd.Run(); err != nil {
+		log.Warn("Failed to delete custom filter chains, continuing", "error", err)
+	}
+
+	// Also flush NAT table if present (common for DNAT/SNAT rules)
+	natCmd := exec.CommandContext(ctx, "iptables", "-t", "nat", "-F")
+	if err := natCmd.Run(); err != nil {
+		// Don't fail on NAT flush error - filter table is more critical
+		log.Warn("Failed to flush NAT table, continuing", "error", err)
+	}
+
+	// Delete custom NAT chains (best-effort)
+	natDelCmd := exec.CommandContext(ctx, "iptables", "-t", "nat", "-X")
+	if err := natDelCmd.Run(); err != nil {
+		log.Warn("Failed to delete custom NAT chains, continuing", "error", err)
+	}
+
+	log.Info("Flushed iptables rules and deleted custom chains to release ipset references")
+	return nil
 }

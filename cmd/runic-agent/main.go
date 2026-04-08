@@ -103,7 +103,37 @@ func main() {
 		if err := runSetupWizard(*configPath, defaultURL); err != nil {
 			log.Fatalf("setup failed: %v", err)
 		}
-		fmt.Println("Configuration saved. Run without -setup to start the agent.")
+		fmt.Println("Configuration saved.")
+
+		// Check if systemd service is installed and prompt for restart
+		if isSystemdServiceInstalled() {
+			fmt.Println("\nThe runic-agent systemd service is installed.")
+			fmt.Print("Would you like to restart the service now? (sudo systemctl restart runic-agent) [y/N]: ")
+
+			reader := bufio.NewReader(os.Stdin)
+			input, err := reader.ReadString('\n')
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: failed to read stdin: %v\n", err)
+				fmt.Printf("\nNote: Could not read input. Restart manually with: sudo systemctl restart runic-agent\n")
+				return
+			}
+
+			input = strings.TrimSpace(strings.ToLower(input))
+			if input == "y" || input == "yes" {
+				if err := restartSystemdService(); err != nil {
+					fmt.Printf("Failed to restart service: %v\n", err)
+					fmt.Println("Restart manually with: sudo systemctl restart runic-agent")
+				} else {
+					fmt.Println("Service restarted successfully.")
+				}
+			} else {
+				fmt.Println("\nTo apply changes, restart the service with: sudo systemctl restart runic-agent")
+			}
+		} else {
+			fmt.Println("\nNote: runic-agent systemd service is not installed.")
+			fmt.Println("To apply changes, restart the agent manually.")
+		}
+		fmt.Println("\nRun without -setup to start the agent.")
 		return
 	}
 
@@ -393,9 +423,19 @@ func runSetupWizard(configPath string, defaultControlPlaneURL string) error {
 
 	reader := bufio.NewReader(os.Stdin)
 
-	// Control plane URL
+	// Load existing config at start to use its values as defaults
+	cfg, err := identity.LoadConfig(configPath)
+	if err != nil {
+		// Config file doesn't exist yet, create a new one
+		cfg = &identity.Config{}
+	}
+
+	// Control plane URL - use CLI/env default first, fall back to config value
 	controlPlaneURL := defaultControlPlaneURL
-	fmt.Print("Control Plane URL: ")
+	if controlPlaneURL == "" && cfg.ControlPlaneURL != "" {
+		controlPlaneURL = cfg.ControlPlaneURL
+	}
+	fmt.Print("Control Plane URL")
 	if controlPlaneURL != "" {
 		fmt.Printf(" [%s]: ", controlPlaneURL)
 	} else {
@@ -413,40 +453,80 @@ func runSetupWizard(configPath string, defaultControlPlaneURL string) error {
 		return fmt.Errorf("control plane URL is required")
 	}
 
-	// Enable apply on boot
-	fmt.Print("Enable apply on boot (y/n, default n): ")
+	// Enable apply on boot - use config value as default
+	fmt.Print("Enable apply on boot ")
+	if cfg.ApplyOnBoot {
+		fmt.Print("[Y/n]: ")
+	} else {
+		fmt.Print("[y/N]: ")
+	}
 	input, err = reader.ReadString('\n')
 	if err != nil {
 		log.Printf("Warning: failed to read apply on boot input: %v", err)
 	}
 	input = strings.TrimSpace(strings.ToLower(input))
-	applyOnBoot := input == "y"
+	applyOnBoot := cfg.ApplyOnBoot // default to current config value
+	switch input {
+	case "y":
+		applyOnBoot = true
+	case "n":
+		applyOnBoot = false
+	case "":
+		// Keep default
+	default:
+		// Invalid input, keep default
+		log.Printf("Warning: invalid input, using default value")
+	}
 
-	// Enable rules bundle
-	fmt.Print("Enable automatic bundle application (y/n, default n): ")
+	// Enable rules bundle - use config value as default
+	fmt.Print("Enable automatic bundle application ")
+	if cfg.ApplyRulesBundle {
+		fmt.Print("[Y/n]: ")
+	} else {
+		fmt.Print("[y/N]: ")
+	}
 	input, err = reader.ReadString('\n')
 	if err != nil {
 		log.Printf("Warning: failed to read rules bundle input: %v", err)
 	}
 	input = strings.TrimSpace(strings.ToLower(input))
-	applyRulesBundle := input == "y"
+	applyRulesBundle := cfg.ApplyRulesBundle // default to current config value
+	switch input {
+	case "y":
+		applyRulesBundle = true
+	case "n":
+		applyRulesBundle = false
+	case "":
+		// Keep default
+	default:
+		log.Printf("Warning: invalid input, using default value")
+	}
 
-	// Pull interval
-	pullInterval := 86400
-	fmt.Print("Pull interval in seconds (default 86400): ")
+	// Pull interval - use config value as default
+	pullInterval := cfg.PullIntervalSec
+	if pullInterval == 0 {
+		pullInterval = 86400 // default if not set in config
+	}
+	fmt.Printf("Pull interval in seconds (default %d): ", pullInterval)
 	input, err = reader.ReadString('\n')
 	if err != nil {
 		log.Printf("Warning: failed to read pull interval input: %v", err)
 	}
 	input = strings.TrimSpace(input)
 	if input != "" {
-		if _, err := fmt.Sscanf(input, "%d", &pullInterval); err != nil {
+		newVal := 0
+		if _, err := fmt.Sscanf(input, "%d", &newVal); err != nil {
 			log.Printf("Warning: invalid pull interval format: %v", err)
+		} else {
+			pullInterval = newVal
 		}
 	}
 
-	// Log path
-	logPath := "/var/log/runic/firewall.log"
+	// Log path - use config value as default
+	logPath := cfg.LogPath
+	if logPath == "" {
+		logPath = "/var/log/runic/firewall.log" // default if not set in config
+	}
 	fmt.Printf("Log path (default %s): ", logPath)
 	input, err = reader.ReadString('\n')
 	if err != nil {
@@ -457,17 +537,31 @@ func runSetupWizard(configPath string, defaultControlPlaneURL string) error {
 		logPath = input
 	}
 
-	// Disable system iptables
-	fmt.Print("Disable system-managed iptables services (y/n, default n): ")
+	// Disable system iptables - use config value as default
+	fmt.Print("Disable system-managed iptables services ")
+	if cfg.DisableSystemManagedIPTables {
+		fmt.Print("[Y/n]: ")
+	} else {
+		fmt.Print("[y/N]: ")
+	}
 	input, err = reader.ReadString('\n')
 	if err != nil {
 		log.Printf("Warning: failed to read disable system iptables input: %v", err)
 	}
 	input = strings.TrimSpace(strings.ToLower(input))
-	disableSystemIPTables := input == "y"
+	disableSystemIPTables := cfg.DisableSystemManagedIPTables // default to current config value
+	switch input {
+	case "y":
+		disableSystemIPTables = true
+	case "n":
+		disableSystemIPTables = false
+	case "":
+		// Keep default
+	default:
+		log.Printf("Warning: invalid input, using default value")
+	}
 
-	// Create config
-	cfg := identity.DefaultConfig()
+	// Preserve existing config values for host_id, token, hmac_key (already loaded)
 	cfg.ControlPlaneURL = controlPlaneURL
 	cfg.ApplyOnBoot = applyOnBoot
 	cfg.ApplyRulesBundle = applyRulesBundle
