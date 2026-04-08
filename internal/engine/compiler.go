@@ -854,10 +854,11 @@ func (c *Compiler) writeInternetRules(
 		}
 
 		// Use negation ipset match to exclude private ranges
+		privateIpsetMatchSrc := "-m set ! --match-set runic_private_ranges src"
 		if writeToHost {
 			if pol.Action == "ACCEPT" {
 				rw.writeAction(pol.Action, "OUTPUT", fmt.Sprintf("-p %s %s %s %s", pc.Protocol, privateIpsetMatch, outputPortMatch, conntrackNew))
-				rw.accept("INPUT", fmt.Sprintf("-p %s -s 0.0.0.0/0 %s %s", pc.Protocol, inputPortMatch, conntrackEstab))
+				rw.accept("INPUT", fmt.Sprintf("-p %s %s %s %s", pc.Protocol, privateIpsetMatchSrc, inputPortMatch, conntrackEstab))
 			} else {
 				rw.writeAction(pol.Action, "OUTPUT", fmt.Sprintf("-p %s %s %s", pc.Protocol, privateIpsetMatch, outputPortMatch))
 			}

@@ -346,7 +346,7 @@ func (h *Handler) GetPeerBundle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Compile fresh rules for the peer to ensure current effective rules
-	bundle, err := h.Compiler.CompileAndStore(r.Context(), id)
+	content, err := h.Compiler.Compile(r.Context(), id)
 	if err != nil {
 		log.ErrorContext(r.Context(), "failed to compile rules", "error", err)
 		common.InternalError(w)
@@ -354,8 +354,8 @@ func (h *Handler) GetPeerBundle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	common.RespondJSON(w, http.StatusOK, map[string]interface{}{
-		"content":        bundle.RulesContent,
-		"version_number": bundle.VersionNumber,
+		"content":        content,
+		"version_number": nil,
 	})
 }
 
