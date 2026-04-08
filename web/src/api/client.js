@@ -90,6 +90,8 @@ export const QUERY_KEYS = {
   dashboardStats: () => ['dashboard-stats'],
   dashboardInitial: () => ['dashboard-initial'],
   blockedLogs24h: () => ['blocked-logs-24h'],
+  setupKeys: () => ['setup-keys'],
+  logSettings: () => ['log-settings'],
 }
 
 export const getVersion = () => api.get('/info')

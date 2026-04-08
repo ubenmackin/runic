@@ -27,7 +27,7 @@ import (
 )
 
 // Version is the agent version, set at build time.
-var Version = "0.6.1"
+var Version = "0.6.2"
 
 // CommandRunner abstracts exec.Command for testability.
 type CommandRunner interface {

@@ -75,17 +75,14 @@ func (s *Shipper) Run(ctx context.Context) {
 			}
 			if ev, err := ParseLogLine(line); err == nil {
 				batch = append(batch, ev)
-				log.Info("Parsed log line", "action", ev.Action, "srcIP", ev.SrcIP, "batchSize", len(batch))
 				if len(batch) >= 100 {
 					s.ship(ctx, batch)
-					log.Info("Batch full, shipping", "count", len(batch))
 					batch = nil
 				}
 			}
 
 		case <-ticker.C:
 			if len(batch) > 0 {
-				log.Info("Ticker triggered, shipping", "count", len(batch))
 				s.ship(ctx, batch)
 				batch = nil
 			}
@@ -118,7 +115,6 @@ func (s *Shipper) tail(ctx context.Context, path string) <-chan string {
 			log.Error("Cannot open log file", "path", path, "error", err)
 			return
 		}
-		log.Info("Opened log file for tailing", "path", path)
 		defer func() {
 			if err := f.Close(); err != nil {
 				log.Warn("Failed to close log file", "path", path, "error", err)
@@ -150,10 +146,8 @@ func (s *Shipper) tail(ctx context.Context, path string) <-chan string {
 					if err != nil {
 						log.Warn("Failed to seek", "error", err)
 					}
-					log.Info("Scanner EOF check", "position", pos, "fileSize", stat.Size())
 					if stat.Size() < pos {
 						// File shrunk (rotation) - reopen
-						log.Info("File shrunk, reopening (rotation)", "oldPos", pos, "newSize", stat.Size())
 						if err := f.Close(); err != nil {
 							log.Warn("Failed to close file", "error", err)
 						}
@@ -173,7 +167,6 @@ func (s *Shipper) tail(ctx context.Context, path string) <-chan string {
 						scanner = bufio.NewScanner(f)
 					} else if stat.Size() > pos {
 						// File has grown - re-seek and recreate scanner to read new data
-						log.Info("File has grown, recreating scanner", "oldPos", pos, "newSize", stat.Size())
 						if _, err := f.Seek(pos, io.SeekStart); err != nil {
 							log.Warn("Failed to seek to last position", "error", err)
 						}
@@ -313,7 +306,5 @@ func (s *Shipper) ship(ctx context.Context, batch []LogEvent) {
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		log.Warn("Server returned error status", "status_code", resp.StatusCode, "count", len(batch))
-	} else {
-		log.Info("Shipped log events", "count", len(batch), "status", resp.StatusCode)
 	}
 }

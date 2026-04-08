@@ -23,13 +23,13 @@ export default function Settings() {
   useFocusTrap(createModalRef, showCreateModal !== null)
 
   const { data: keys, isLoading } = useQuery({
-    queryKey: ['setup-keys'],
+    queryKey: QUERY_KEYS.setupKeys(),
     queryFn: () => api.get('/setup-keys'),
     enabled: isAdmin,
   })
 
   const { data: logSettingsData, refetch: refetchLogSettings } = useQuery({
-    queryKey: ['log-settings'],
+    queryKey: QUERY_KEYS.logSettings(),
     queryFn: () => api.get('/settings/logs'),
     enabled: isAdmin,
   })
@@ -37,7 +37,7 @@ export default function Settings() {
   const deleteMutation = useMutation({
     mutationFn: (keyType) => api.delete(`/setup-keys/${keyType}`),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['setup-keys'] })
+      qc.invalidateQueries({ queryKey: QUERY_KEYS.setupKeys() })
       setShowDeleteModal(null)
       showToast('Key deleted successfully', 'success')
     },
@@ -47,7 +47,7 @@ export default function Settings() {
   const createMutation = useMutation({
     mutationFn: (keyType) => api.post(`/setup-keys/${keyType}`),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['setup-keys'] })
+      qc.invalidateQueries({ queryKey: QUERY_KEYS.setupKeys() })
       setShowCreateModal(null)
       showToast('Key created successfully', 'success')
     },
@@ -64,7 +64,7 @@ export default function Settings() {
   const updateLogSettingsMutation = useMutation({
     mutationFn: (days) => api.put('/settings/logs', { retention_days: days }),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['log-settings'] })
+      qc.invalidateQueries({ queryKey: QUERY_KEYS.logSettings() })
       showToast('Log retention updated', 'success')
     },
     onError: (err) => showToast(err.message, 'error'),
@@ -73,7 +73,7 @@ export default function Settings() {
   const clearLogsMutation = useMutation({
     mutationFn: () => api.delete('/logs'),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['log-settings'] })
+      qc.invalidateQueries({ queryKey: QUERY_KEYS.logSettings() })
       qc.invalidateQueries({ queryKey: QUERY_KEYS.dashboardStats() })
       qc.invalidateQueries({ queryKey: QUERY_KEYS.blockedLogs24h() })
       setShowClearLogsModal(false)
