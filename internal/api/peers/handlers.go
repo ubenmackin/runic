@@ -353,9 +353,17 @@ func (h *Handler) GetPeerBundle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Get the deployed version_number from the latest bundle
+	var versionNumber int
+	err = h.DB.QueryRowContext(r.Context(), "SELECT COALESCE(MAX(version_number), 0) FROM rule_bundles WHERE peer_id = ?", id).Scan(&versionNumber)
+	if err != nil {
+		log.WarnContext(r.Context(), "failed to get version_number", "error", err)
+		versionNumber = 0
+	}
+
 	common.RespondJSON(w, http.StatusOK, map[string]interface{}{
 		"content":        content,
-		"version_number": nil,
+		"version_number": versionNumber,
 	})
 }
 
