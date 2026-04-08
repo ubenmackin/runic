@@ -3,7 +3,9 @@ package logs
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 
@@ -20,11 +22,20 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
 		origin := r.Header.Get("Origin")
 		if origin == "" {
-			return true // Same-origin requests (no Origin header)
+			return true
 		}
-		// Allow same-origin only (both http and https)
-		return origin == "http://"+r.Host ||
-			origin == "https://"+r.Host
+		// Parse origin URL and compare hostname only (ignore port)
+		originURL, err := url.Parse(origin)
+		if err != nil {
+			return false
+		}
+		// Get host from request (may include port)
+		requestHost := r.Host
+		// Extract just the hostname if request host has port
+		if h, _, err := net.SplitHostPort(requestHost); err == nil {
+			requestHost = h
+		}
+		return originURL.Hostname() == requestHost || originURL.Host == r.Host // Also allow exact match for compatibility
 	},
 }
 

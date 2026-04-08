@@ -1,11 +1,14 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { FileText, RefreshCw, Play, Pause, Trash2, Wifi, WifiOff } from 'lucide-react'
+import { FileText, Play, Pause, Trash2, Wifi, WifiOff } from 'lucide-react'
 import { api, QUERY_KEYS } from '../api/client'
 import { useDebounce } from '../hooks/useDebounce'
 import EmptyState from '../components/EmptyState'
 import TableSkeleton from '../components/TableSkeleton'
 import LogLine from '../components/LogLine'
+import SearchableSelect from '../components/SearchableSelect'
+import PageHeader from '../components/PageHeader'
+import Pagination from '../components/Pagination'
 import { logger } from '../utils/logger'
 
 const MAX_RECONNECT_ATTEMPTS = 5
@@ -182,103 +185,79 @@ export default function Logs() {
   return (
     <div className="space-y-4">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-light-neutral">Logs</h1>
-        <div className="flex items-center gap-3">
-          {/* Mode toggle */}
-          <div className="flex rounded-lg border border-gray-300 dark:border-gray-border overflow-hidden">
-<button
-onClick={() => setMode('historical')}
-className={`px-3 py-1.5 text-sm font-medium ${
-mode === 'historical'
-? 'bg-purple-active text-white'
-: 'bg-white dark:bg-charcoal-dark text-gray-700 dark:text-amber-primary hover:bg-gray-50 dark:hover:bg-charcoal-darkest'
-}`}
->
-Historical
-</button>
-<button
-onClick={() => setMode('live')}
-className={`px-3 py-1.5 text-sm font-medium flex items-center gap-1.5 ${
-mode === 'live'
-? 'bg-purple-active text-white'
-: 'bg-white dark:bg-charcoal-dark text-gray-700 dark:text-amber-primary hover:bg-gray-50 dark:hover:bg-charcoal-darkest'
-}`}
->
-{isConnected ? (
-<Wifi className="w-3.5 h-3.5" />
-) : (
-<WifiOff className="w-3.5 h-3.5" />
-)}
-Live
-</button>
-          </div>
-
-          {mode === 'historical' && (
-            <button
-              onClick={() => refetch()}
-              className="flex items-center gap-2 px-3 py-2 text-sm text-gray-700 dark:text-amber-primary hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-lg"
-            >
-              <RefreshCw className="w-4 h-4" /> Refresh
-            </button>
-          )}
-
-          {mode === 'live' && (
-            <>
+      <PageHeader
+        title="Logs"
+        description="View firewall events and blocked traffic"
+        actions={
+          <div className="flex items-center gap-3">
+            {/* Mode toggle */}
+            <div className="flex rounded-lg border border-gray-300 dark:border-gray-border overflow-hidden">
               <button
-                onClick={() => setIsPaused(!isPaused)}
-                className={`flex items-center gap-2 px-3 py-2 text-sm rounded-lg ${
-                  isPaused
-                    ? 'bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300'
-                    : 'bg-gray-100 text-gray-700 dark:bg-charcoal-darkest dark:text-amber-primary'
+                onClick={() => setMode('historical')}
+                className={`px-3 py-1.5 text-sm font-medium ${
+                  mode === 'historical'
+                    ? 'bg-purple-active text-white'
+                    : 'bg-white dark:bg-charcoal-dark text-gray-700 dark:text-amber-primary hover:bg-gray-50 dark:hover:bg-charcoal-darkest'
                 }`}
               >
-                {isPaused ? <Play className="w-4 h-4" /> : <Pause className="w-4 h-4" />}
-                {isPaused ? 'Resume' : 'Pause'}
+                Historical
               </button>
               <button
-                onClick={clearLiveLogs}
-                className="flex items-center gap-2 px-3 py-2 text-sm text-red-700 dark:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg"
+                onClick={() => setMode('live')}
+                className={`px-3 py-1.5 text-sm font-medium flex items-center gap-1.5 ${
+                  mode === 'live'
+                    ? 'bg-purple-active text-white'
+                    : 'bg-white dark:bg-charcoal-dark text-gray-700 dark:text-amber-primary hover:bg-gray-50 dark:hover:bg-charcoal-darkest'
+                }`}
               >
-                <Trash2 className="w-4 h-4" /> Clear
+                {isConnected ? (
+                  <Wifi className="w-3.5 h-3.5" />
+                ) : (
+                  <WifiOff className="w-3.5 h-3.5" />
+                )}
+                Live
               </button>
-            </>
-          )}
-        </div>
-      </div>
+            </div>
+
+            {mode === 'live' && (
+              <>
+                <button
+                  onClick={() => setIsPaused(!isPaused)}
+                  className={`flex items-center gap-2 px-3 py-2 text-sm rounded-lg ${
+                    isPaused
+                      ? 'bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300'
+                      : 'bg-gray-100 text-gray-700 dark:bg-charcoal-darkest dark:text-amber-primary'
+                  }`}
+                >
+                  {isPaused ? <Play className="w-4 h-4" /> : <Pause className="w-4 h-4" />}
+                  {isPaused ? 'Resume' : 'Pause'}
+                </button>
+                <button
+                  onClick={clearLiveLogs}
+                  className="flex items-center gap-2 px-3 py-2 text-sm text-red-700 dark:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg"
+                >
+                  <Trash2 className="w-4 h-4" /> Clear
+                </button>
+              </>
+            )}
+          </div>
+        }
+      />
 
       {/* Filter panel (historical mode) */}
       {mode === 'historical' && (
         <div className="flex flex-wrap gap-3 items-end bg-white dark:bg-charcoal-dark p-4 rounded-xl">
-          <div className="space-y-1">
-<label className="text-xs font-medium text-gray-500 dark:text-amber-muted">Peer</label>
-                <select
-                  value={filter.peer_id}
-                  onChange={e => setFilter(f => ({ ...f, peer_id: e.target.value, offset: 0 }))}
-              className="px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white text-sm min-w-[150px]"
-            >
-              <option value="">All peers</option>
-              {peers?.map(s => (
-                <option key={s.id} value={s.id}>{s.hostname}</option>
-              ))}
-            </select>
-          </div>
+        <div className="space-y-1">
+          <label className="text-xs font-medium text-gray-500 dark:text-amber-muted">Peer</label>
+          <SearchableSelect
+            options={(peers || []).map(p => ({ value: p.id, label: p.hostname }))}
+            value={filter.peer_id}
+            onChange={v => setFilter(f => ({ ...f, peer_id: v, offset: 0 }))}
+            placeholder="All peers"
+          />
+        </div>
 
-          <div className="space-y-1">
-            <label className="text-xs font-medium text-gray-500 dark:text-amber-muted">Action</label>
-            <select
-              value={filter.action}
-              onChange={e => setFilter(f => ({ ...f, action: e.target.value, offset: 0 }))}
-className="px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white text-sm"
-          >
-            <option value="">All</option>
-              <option value="ACCEPT">ACCEPT</option>
-              <option value="DROP">DROP</option>
-              <option value="BLOCK">BLOCK</option>
-            </select>
-          </div>
-
-          <div className="space-y-1">
+        <div className="space-y-1">
             <label className="text-xs font-medium text-gray-500 dark:text-amber-muted">Source IP</label>
             <input
               type="text"
@@ -360,28 +339,14 @@ Query
                   <LogLine key={log.id || i} log={log} />
                 ))}
               </div>
-              {/* Pagination */}
-              <div className="flex items-center justify-between px-4 py-3 bg-gray-50 dark:bg-charcoal-darkest border-t border-gray-200 dark:border-gray-border">
-<span className="text-sm text-gray-500 dark:text-amber-muted">
-                Showing {filter.offset + 1} - {filter.offset + data.logs.length} of {data.total}
-                </span>
-                <div className="flex gap-2">
-                  <button
-                    onClick={handlePrevPage}
-                    disabled={filter.offset === 0}
-className="px-3 py-1.5 text-sm bg-white dark:bg-charcoal-dark border border-gray-300 dark:border-gray-border rounded-lg disabled:opacity-50"
-            >
-              Previous
-                  </button>
-                  <button
-                    onClick={handleNextPage}
-                    disabled={data.logs?.length < filter.limit}
-className="px-3 py-1.5 text-sm bg-white dark:bg-charcoal-dark border border-gray-300 dark:border-gray-border rounded-lg disabled:opacity-50"
-            >
-              Next
-                  </button>
-                </div>
-              </div>
+{/* Pagination */}
+<Pagination
+showingRange={`Showing ${filter.offset + 1} - ${filter.offset + data.logs.length} of ${data.total}`}
+page={Math.floor(filter.offset / filter.limit) + 1}
+totalPages={Math.ceil(data.total / filter.limit)}
+onPageChange={(newPage) => setFilter(f => ({ ...f, offset: (newPage - 1) * f.limit }))}
+totalItems={data.total}
+/>
             </div>
           )}
         </>

@@ -1,3 +1,8 @@
+function formatNumber(num) {
+  if (typeof num !== 'number') return num
+  return num.toLocaleString()
+}
+
 export default function StatCard({ icon: Icon, label, value, color = 'text-gray-900 dark:text-white' }) {
   return (
     <div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-sm p-4">
@@ -7,7 +12,7 @@ export default function StatCard({ icon: Icon, label, value, color = 'text-gray-
         </div>
         <span className="text-sm text-gray-500 dark:text-amber-muted">{label}</span>
       </div>
-      <p className={`text-2xl font-bold ${color}`}>{value}</p>
+      <p className={`text-2xl font-bold ${color}`}>{formatNumber(value)}</p>
     </div>
   )
 }
