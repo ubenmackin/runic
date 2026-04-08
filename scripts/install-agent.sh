@@ -1,6 +1,25 @@
 #!/bin/bash
 set -e
 
+# Detect OS type from /etc/os-release
+# Used throughout this script for distro-specific logic
+detect_os() {
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        # Normalize OS ID for edge cases (e.g., opensuse-leap -> opensuse, opensuse-tumbleweed -> opensuse)
+        case "$ID" in
+            opensuse*|sle*)
+                echo "opensuse"
+                ;;
+            *)
+                echo "$ID"
+                ;;
+        esac
+    else
+        echo "unknown"
+    fi
+}
+
 ARCH=$(uname -m)
 case $ARCH in
 x86_64) AGENT_ARCH="amd64" ;;
@@ -55,18 +74,23 @@ mkdir -p /var/log/runic
 chmod 755 /var/log/runic
 
 # Set appropriate ownership for log directory (distro-aware)
+# Uses detect_os() for consistency with the rest of the script
 # rsyslog needs write access to create firewall.log
-if [ -f /etc/debian_version ]; then
-    # Debian/Ubuntu: rsyslog runs as syslog:adm
-    chown syslog:adm /var/log/runic
-elif [ -f /etc/redhat-release ] || [ -f /etc/centos-release ] || [ -f /etc/fedora-release ]; then
-    # RHEL/CentOS/Fedora: rsyslog typically runs as root, but some setups use syslog
-    # Keep root:root ownership (755 permissions allow rsyslog to write)
-    :
-else
-    # Default: try syslog:adm (common for most distributions)
-    chown syslog:adm /var/log/runic 2>/dev/null || true
-fi
+OS_TYPE=$(detect_os)
+case "$OS_TYPE" in
+    debian|ubuntu|linuxmint|pop)
+        # Debian/Ubuntu: rsyslog runs as syslog:adm
+        chown syslog:adm /var/log/runic
+        ;;
+    rhel|centos|fedora|rocky|almalinux|ol)
+        # RHEL/CentOS/Fedora/Rocky/Alma/Oracle: rsyslog typically runs as root
+        # Keep root:root ownership (755 permissions allow rsyslog to write)
+        ;;
+    *)
+        # Default: try syslog:adm (common for most distributions)
+        chown syslog:adm /var/log/runic 2>/dev/null || true
+        ;;
+esac
 
 # Install rsyslog config for firewall logs
 if [ -d /etc/rsyslog.d ]; then
@@ -78,24 +102,6 @@ EOF
     chmod 644 /etc/rsyslog.d/30-runic-firewall.conf
     systemctl restart rsyslog 2>/dev/null || true
 fi
-
-# Detect OS type from /etc/os-release
-detect_os() {
-	if [ -f /etc/os-release ]; then
-		. /etc/os-release
-		# Normalize OS ID for edge cases (e.g., opensuse-leap -> opensuse, opensuse-tumbleweed -> opensuse)
-		case "$ID" in
-			opensuse*|sle*)
-				echo "opensuse"
-				;;
-			*)
-				echo "$ID"
-				;;
-		esac
-	else
-		echo "unknown"
-	fi
-}
 
 # Disable iptables persistence services to prevent conflicts with runic's firewall management
 # Different distributions use different services for iptables persistence
