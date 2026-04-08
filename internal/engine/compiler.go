@@ -681,20 +681,21 @@ func (c *Compiler) writeTargetRules(
 		}
 
 		if useIpset {
-			ipsetMatch := fmt.Sprintf("-m set --match-set %s src", ipsetName)
+			ipsetMatchSrc := fmt.Sprintf("-m set --match-set %s src", ipsetName)
+			ipsetMatchDst := fmt.Sprintf("-m set --match-set %s dst", ipsetName)
 			if writeToHost {
 				if pol.Action == "ACCEPT" {
-					rw.writeAction(pol.Action, "INPUT", fmt.Sprintf("-p %s %s %s %s", pc.Protocol, ipsetMatch, inputPortMatch, conntrackNew))
-					rw.accept("OUTPUT", fmt.Sprintf("-p %s %s %s %s", pc.Protocol, ipsetMatch, outputPortMatch, conntrackEstab))
+					rw.writeAction(pol.Action, "INPUT", fmt.Sprintf("-p %s %s %s %s", pc.Protocol, ipsetMatchSrc, inputPortMatch, conntrackNew))
+					rw.accept("OUTPUT", fmt.Sprintf("-p %s %s %s %s", pc.Protocol, ipsetMatchDst, outputPortMatch, conntrackEstab))
 				} else {
-					rw.writeAction(pol.Action, "INPUT", fmt.Sprintf("-p %s %s %s", pc.Protocol, ipsetMatch, inputPortMatch))
+					rw.writeAction(pol.Action, "INPUT", fmt.Sprintf("-p %s %s %s", pc.Protocol, ipsetMatchSrc, inputPortMatch))
 				}
 			}
 			if writeToDocker {
 				if pol.Action == "ACCEPT" {
-					rw.writeAction(pol.Action, "DOCKER-USER", fmt.Sprintf("-p %s %s %s %s", pc.Protocol, ipsetMatch, inputPortMatch, conntrackNew))
+					rw.writeAction(pol.Action, "DOCKER-USER", fmt.Sprintf("-p %s %s %s %s", pc.Protocol, ipsetMatchSrc, inputPortMatch, conntrackNew))
 				} else {
-					rw.writeAction(pol.Action, "DOCKER-USER", fmt.Sprintf("-p %s %s %s", pc.Protocol, ipsetMatch, inputPortMatch))
+					rw.writeAction(pol.Action, "DOCKER-USER", fmt.Sprintf("-p %s %s %s", pc.Protocol, ipsetMatchSrc, inputPortMatch))
 				}
 			}
 		} else {

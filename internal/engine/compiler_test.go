@@ -2085,6 +2085,70 @@ func TestCommentNewlineFormat(t *testing.T) {
 	// Verify that iptables rules are present after the comment
 	// This confirms proper formatting with newlines
 	if !strings.Contains(output, "-A INPUT -s 10.0.1.100/32") {
-		t.Errorf("expected INPUT rule for policy source, got:\n%s", output)
+		t.Errorf("expected INPUT rule for policy source, got:\\n%s", output)
+	}
+}
+
+// TestIPSetOutputRuleDirection verifies that when compiling a policy where the peer is the TARGET
+// and source is a GROUP with ipset enabled:
+// - INPUT rule uses `--match-set <ipset> src` (packets come FROM the ipset members)
+// - OUTPUT rule uses `--match-set <ipset> dst` (packets go TO the ipset members)
+func TestIPSetOutputRuleDirection(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+
+	// Create a target peer with has_ipset=1 (ipset support enabled)
+	result, err := database.Exec(
+		`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, has_ipset) VALUES (?, ?, ?, ?, 0, 1)`,
+		"target-peer", "192.168.1.10", "key-target", "test-hmac-key")
+	if err != nil {
+		t.Fatalf("insert target peer: %v", err)
+	}
+	targetPeerID, _ := result.LastInsertId()
+
+	// Create a source group with members
+	groupID := insertGroup(t, database, "management")
+	manualPeerID1 := insertManualPeer(t, database, "10.0.1.1")
+	manualPeerID2 := insertManualPeer(t, database, "10.0.2.0/24")
+	insertGroupMember(t, database, groupID, manualPeerID1)
+	insertGroupMember(t, database, groupID, manualPeerID2)
+
+	// Create SSH service
+	serviceID := insertService(t, database, "ssh", "22", "tcp")
+
+	// Create policy: management group -> target peer (peer is TARGET, source is GROUP with ipset)
+	insertPolicy(t, database, "allow-ssh-management", groupID, serviceID, int(targetPeerID), "ACCEPT", 100, true)
+
+	c := NewCompiler(database)
+	output, err := c.Compile(context.Background(), int(targetPeerID))
+	if err != nil {
+		t.Fatalf("compile error: %v", err)
+	}
+
+	// Verify ipset is created for the group
+	if !strings.Contains(output, "create runic_group_management") {
+		t.Errorf("expected ipset creation for management group, got:\\n%s", output)
+	}
+
+	// Verify INPUT rule uses `--match-set <ipset> src`
+	// When the peer is the TARGET, incoming packets come FROM the ipset members
+	inputMatchSrc := "--match-set runic_group_management src"
+	if !strings.Contains(output, "-A INPUT") || !strings.Contains(output, inputMatchSrc) {
+		t.Errorf("expected INPUT rule with --match-set runic_group_management src, got:\\n%s", output)
+	}
+
+	// Verify OUTPUT rule uses `--match-set <ipset> dst`
+	// When the peer is the TARGET, outgoing response packets go TO the ipset members
+	outputMatchDst := "--match-set runic_group_management dst"
+	if !strings.Contains(output, "-A OUTPUT") || !strings.Contains(output, outputMatchDst) {
+		t.Errorf("expected OUTPUT rule with --match-set runic_group_management dst, got:\\n%s", output)
+	}
+
+	// Verify that we do NOT have the buggy `--match-set runic_group_management src` in OUTPUT
+	// This is the critical check - OUTPUT should use dst, NOT src
+	buggyOutputMatchSrc := "-A OUTPUT -p tcp -m set --match-set runic_group_management src"
+	if strings.Contains(output, buggyOutputMatchSrc) {
+		t.Errorf("OUTPUT rule incorrectly uses 'src' match direction (should be 'dst'), got:\\n%s", output)
 	}
 }
