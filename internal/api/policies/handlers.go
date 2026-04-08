@@ -159,6 +159,7 @@ func (h *Handler) CreatePolicy(w http.ResponseWriter, r *http.Request) {
 
 	// Trigger async recompilation for all affected peers
 	affectedPeers, err := h.Compiler.GetAffectedPeersByPolicy(r.Context(), int(id))
+	log.InfoContext(r.Context(), "DEBUG: GetAffectedPeersByPolicy result", "policy_id", id, "affected_peers", affectedPeers, "error", err)
 	if err != nil {
 		log.ErrorContext(r.Context(), "Failed to get affected peers", "policy_id", id, "error", err)
 		// Policy created successfully - log the error but proceed
@@ -166,6 +167,7 @@ func (h *Handler) CreatePolicy(w http.ResponseWriter, r *http.Request) {
 	if h.ChangeWorker != nil {
 		h.ChangeWorker.QueuePeerChange(r.Context(), h.DB, affectedPeers, "policy", "create", int(id), fmt.Sprintf("Policy '%s' created", input.Name))
 	}
+	log.InfoContext(r.Context(), "DEBUG: QueuePeerChange", "changeWorker_nil", h.ChangeWorker == nil, "peer_count", len(affectedPeers))
 
 	common.RespondJSON(w, http.StatusCreated, map[string]int64{"id": id})
 }

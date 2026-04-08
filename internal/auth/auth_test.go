@@ -776,7 +776,7 @@ func TestMiddlewareCookie(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 	SetDB(db)
-	
+
 	// Reset JWT key for consistent testing
 	JwtKeyMu.Lock()
 	JwtKey = []byte("test-key-123")
@@ -828,11 +828,11 @@ func TestMiddlewareCookie(t *testing.T) {
 
 func TestContextHelpers(t *testing.T) {
 	ctx := context.Background()
-	
+
 	if UsernameFromContext(ctx) != "" {
 		t.Error("expected empty username for empty context")
 	}
-	
+
 	ctx = SetContextForTest(ctx, "editor", "alice")
 	if UsernameFromContext(ctx) != "alice" {
 		t.Errorf("expected alice, got %s", UsernameFromContext(ctx))
@@ -840,7 +840,7 @@ func TestContextHelpers(t *testing.T) {
 	if RoleFromContext(ctx) != "editor" {
 		t.Errorf("expected editor, got %s", RoleFromContext(ctx))
 	}
-	
+
 	// Test UniqueIDFromContext indirectly via SetContextForTest (wait, SetContextForTest doesn't set ID)
 	ctx = context.WithValue(ctx, ctxKeyUniqueID, "uid-123")
 	if UniqueIDFromContext(ctx) != "uid-123" {

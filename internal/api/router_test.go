@@ -21,13 +21,13 @@ func TestRouterIntegration(t *testing.T) {
 	// Create API and Router
 	a := NewAPI(db, compiler)
 	r := mux.NewRouter()
-	
+
 	tempDir, err := os.MkdirTemp("", "runic-downloads-*")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer os.RemoveAll(tempDir)
-	
+
 	a.RegisterRoutes(r, tempDir)
 
 	tests := []struct {
@@ -108,12 +108,12 @@ func TestSecurityMiddlewares(t *testing.T) {
 	r.ServeHTTP(w, req)
 
 	headers := w.Header()
-	
+
 	// Check SecurityHeaders (outer layer)
 	if headers.Get("Strict-Transport-Security") == "" {
 		t.Error("Strict-Transport-Security header missing")
 	}
-	
+
 	// Check RequestID middleware
 	if headers.Get("X-Request-ID") == "" {
 		t.Error("X-Request-ID header missing")
@@ -123,7 +123,7 @@ func TestSecurityMiddlewares(t *testing.T) {
 	req2 := httptest.NewRequest("GET", "/api/v1/setup", nil)
 	w2 := httptest.NewRecorder()
 	r.ServeHTTP(w2, req2)
-	
+
 	csp := w2.Header().Get("Content-Security-Policy")
 	if csp == "" {
 		t.Error("Content-Security-Policy header missing for /api/v1/setup")
@@ -146,7 +146,7 @@ func TestCORSMiddleware(t *testing.T) {
 	req := httptest.NewRequest("OPTIONS", "/api/v1/setup", nil)
 	req.Header.Set("Origin", "http://test.com")
 	req.Header.Set("Access-Control-Request-Method", "POST")
-	
+
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -169,13 +169,13 @@ func TestRateLimiters(t *testing.T) {
 	// LoginRateLimiter is set to 5 per minute in production.
 	// We'll fire 6 requests quickly.
 	clientIP := "1.2.3.4"
-	
+
 	for i := 0; i < 6; i++ {
 		req := httptest.NewRequest("POST", "/api/v1/auth/login", nil)
 		req.RemoteAddr = clientIP + ":1234"
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, req)
-		
+
 		if i < 5 {
 			// It should be 401 Unauthorized because we send no body, but NOT 429
 			if w.Code == http.StatusTooManyRequests {
@@ -188,7 +188,7 @@ func TestRateLimiters(t *testing.T) {
 			}
 		}
 	}
-	
+
 	// Stop the API to cleanup rate limiter goroutines
 	a.Stop()
 }
@@ -198,7 +198,7 @@ func TestRouterStop(t *testing.T) {
 	compiler := engine.NewCompiler(db)
 	a := NewAPI(db, compiler)
 	a.RegisterRoutes(mux.NewRouter(), "")
-	
+
 	// Ensure Stop doesn't panic
 	a.Stop()
 }
