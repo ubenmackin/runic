@@ -24,11 +24,13 @@ import (
 	"runic/internal/api/pending"
 	"runic/internal/api/policies"
 	"runic/internal/api/services"
+	"runic/internal/api/settings"
 	"runic/internal/api/users"
 	"runic/internal/auth"
 	"runic/internal/common/log"
 	"runic/internal/common/version"
 	"runic/internal/engine"
+	"runic/internal/logcleanup"
 	"runic/internal/metrics"
 )
 
@@ -53,6 +55,7 @@ type API struct {
 	Keys      *keys.Handler
 	Pending   *pending.Handler
 	Dashboard *dashboard.Handler
+	Settings  *settings.Handler
 
 	LoginRateLimiter    *middleware.RateLimiter
 	RegisterRateLimiter *middleware.RateLimiter
@@ -84,6 +87,7 @@ func NewAPI(db *sql.DB, compiler *engine.Compiler) *API {
 		Keys:         keys.NewHandler(db),
 		Pending:      pending.NewHandler(db, compiler, sseHub, pushWorker),
 		Dashboard:    dashboard.NewHandler(db),
+		Settings:     settings.NewHandler(db),
 	}
 }
 
@@ -121,6 +125,10 @@ func (a *API) RegisterRoutes(r *mux.Router, downloadsDir string) {
 	if a.ChangeWorker != nil {
 		a.ChangeWorker.Start(ctx)
 	}
+
+	// Start log cleanup worker
+	logCleanupWorker := logcleanup.NewWorker(a.DB)
+	logCleanupWorker.Start(ctx)
 
 	// Apply SecurityHeaders as the outermost middleware to ensure ALL responses include security headers
 	r.Use(SecurityHeaders)
@@ -240,6 +248,13 @@ func (a *API) RegisterRoutes(r *mux.Router, downloadsDir string) {
 	admin.HandleFunc("/registration-tokens", a.Agents.ListRegistrationTokens).Methods("GET")
 	admin.HandleFunc("/registration-tokens", a.Agents.GenerateRegistrationToken).Methods("POST")
 	admin.HandleFunc("/registration-tokens/{id:[0-9]+}", a.Agents.RevokeRegistrationToken).Methods("DELETE")
+
+	// Settings (log management)
+	settingsAdmin := admin.PathPrefix("/settings").Subrouter()
+	a.Settings.RegisterRoutes(settingsAdmin)
+
+	// Clear all logs (admin only)
+	admin.HandleFunc("/logs", a.Settings.ClearAllLogs).Methods("DELETE")
 
 	// --- Editor+ routes (admin and editor) ---
 	editor := protected.PathPrefix("").Subrouter()

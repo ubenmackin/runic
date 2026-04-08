@@ -834,5 +834,20 @@ func migrateSchema(ctx context.Context, database *sql.DB) error {
 		log.Info("Migration: added push_jobs and push_job_peers tables")
 	}
 
+	// Migration: Set default log retention days
+	var hasLogRetention int
+	err = database.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM system_config WHERE key = 'log_retention_days'").Scan(&hasLogRetention)
+	if err != nil {
+		return fmt.Errorf("failed to check for log_retention_days: %w", err)
+	}
+	if hasLogRetention == 0 {
+		log.Info("Migration: setting default log_retention_days")
+		_, err = database.ExecContext(ctx, "INSERT INTO system_config (key, value) VALUES ('log_retention_days', '30')")
+		if err != nil {
+			return fmt.Errorf("failed to set default log_retention_days: %w", err)
+		}
+		log.Info("Migration: set default log_retention_days to 30")
+	}
+
 	return nil
 }
