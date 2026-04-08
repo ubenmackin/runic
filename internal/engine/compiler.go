@@ -23,6 +23,7 @@ const (
 	SpecialIDAnyIP            = 6 // __any_ip__
 	SpecialIDAllPeers         = 7 // __all_peers__
 	SpecialIDIGMPv3           = 8 // __igmpv3__
+	SpecialIDInternet         = 9 // __internet__
 )
 
 // isMulticastSpecialID returns true if the special target ID is a multicast group
@@ -135,6 +136,7 @@ func (c *Compiler) getSpecialDisplayName(specialID int) string {
 		SpecialIDAnyIP:            "Any IP",
 		SpecialIDAllPeers:         "All Peers",
 		SpecialIDIGMPv3:           "IGMPv3",
+		SpecialIDInternet:         "Internet",
 	}
 	if name, ok := names[specialID]; ok {
 		return name
@@ -386,6 +388,17 @@ ELSE 0 END as is_source
 		}
 	}
 
+	// Add __internet__ private ranges ipset (used for negation to allow all non-private IPs)
+	privateCIDRs := []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8"}
+	if hasIPSet {
+		buf.WriteString("# --- Ipset: Private Ranges for __internet__ exclusion ---\n")
+		buf.WriteString("create runic_private_ranges hash:net family inet\n")
+		for _, cidr := range privateCIDRs {
+			fmt.Fprintf(&buf, "add runic_private_ranges %s\n", cidr)
+		}
+		buf.WriteString("\n")
+	}
+
 	// Filter table and chain policies
 	buf.WriteString("*filter\n")
 	buf.WriteString(":INPUT DROP [0:0]\n")
@@ -528,6 +541,10 @@ ELSE 0 END as is_source
 			targetName := c.formatEntityName(ctx, pol.TargetType, pol.TargetID)
 			fmt.Fprintf(&buf, "# As Source (Egress to %s)\n", targetName)
 
+			// Check if target is __internet__ special target - use ipset negation
+			isInternetTarget := pol.TargetType == "special" && pol.TargetID == SpecialIDInternet
+			useInternetIpset := hasIPSet && isInternetTarget
+
 			// Check if we should use ipset for this target
 			useIpset := hasIPSet && pol.TargetType == "group"
 			var ipsetName string
@@ -536,7 +553,8 @@ ELSE 0 END as is_source
 				useIpset = ipsetName != ""
 			}
 
-			if useIpset {
+			switch {
+			case useIpset:
 				// Use ipset-based rules (single rule per port clause)
 				if serviceName == "Multicast" {
 					// MC-012: Only generate OUTPUT multicast rule when Target is a multicast special target
@@ -550,7 +568,13 @@ ELSE 0 END as is_source
 						return "", err
 					}
 				}
-			} else {
+			case useInternetIpset:
+				// __internet__ special target: use ipset negation to exclude private ranges
+				isMulticastTarget := false
+				if err := c.writeInternetRules(ctx, rw, pol, portClauses, ipAddress, writeToHost, writeToDocker, noConntrack, isMulticastTarget); err != nil {
+					return "", err
+				}
+			default:
 				// Use individual rules (fallback for non-group or non-ipset peers)
 				var cidrs []string
 				var err error
@@ -792,6 +816,57 @@ func (c *Compiler) writeSourceRules(
 				if pol.Action == "ACCEPT" {
 					rw.accept("INPUT", fmt.Sprintf("-s %s -p %s %s %s", returnCidr, pc.Protocol, inputPortMatch, conntrackEstab))
 				}
+			}
+		}
+	}
+	return nil
+}
+
+// writeInternetRules generates rules for the __internet__ special target.
+// Uses ipset negation to match all IPs except private ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8).
+func (c *Compiler) writeInternetRules(
+	ctx context.Context,
+	rw *ruleWriter,
+	pol *policyInfo,
+	portClauses []PortClause,
+	ipAddress string,
+	writeToHost, writeToDocker bool,
+	noConntrack bool,
+	isMulticastTarget bool,
+) error {
+	privateIpsetMatch := "-m set ! --match-set runic_private_ranges dst"
+
+	for _, pc := range portClauses {
+		outputPortMatch := pc.PortMatch
+		if pc.SrcPortMatch != "" {
+			outputPortMatch = pc.SrcPortMatch + " " + outputPortMatch
+		}
+		inputPortMatch := invertPortMatch(pc.PortMatch, pc.SrcPortMatch)
+
+		// Build conntrack part based on noConntrack flag
+		var conntrackNew, conntrackEstab string
+		if noConntrack {
+			conntrackNew = ""
+			conntrackEstab = ""
+		} else {
+			conntrackNew = "-m conntrack --ctstate NEW,ESTABLISHED"
+			conntrackEstab = "-m conntrack --ctstate ESTABLISHED"
+		}
+
+		// Use negation ipset match to exclude private ranges
+		if writeToHost {
+			if pol.Action == "ACCEPT" {
+				rw.writeAction(pol.Action, "OUTPUT", fmt.Sprintf("-p %s %s %s %s", pc.Protocol, privateIpsetMatch, outputPortMatch, conntrackNew))
+				rw.accept("INPUT", fmt.Sprintf("-p %s -s 0.0.0.0/0 %s %s", pc.Protocol, inputPortMatch, conntrackEstab))
+			} else {
+				rw.writeAction(pol.Action, "OUTPUT", fmt.Sprintf("-p %s %s %s", pc.Protocol, privateIpsetMatch, outputPortMatch))
+			}
+		}
+		if writeToDocker {
+			if pol.Action == "ACCEPT" {
+				rw.writeAction(pol.Action, "DOCKER-USER", fmt.Sprintf("-p %s %s %s %s", pc.Protocol, privateIpsetMatch, outputPortMatch, conntrackNew))
+			} else {
+				rw.writeAction(pol.Action, "DOCKER-USER", fmt.Sprintf("-p %s %s %s", pc.Protocol, privateIpsetMatch, outputPortMatch))
 			}
 		}
 	}

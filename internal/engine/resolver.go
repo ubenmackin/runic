@@ -92,6 +92,8 @@ func (r *Resolver) ResolveSpecialTarget(ctx context.Context, specialID int, peer
 		return peers, nil
 	case 8: // __igmpv3__
 		return []string{"224.0.0.22/32"}, nil
+	case 9: // __internet__ - return marker for compiler to handle with ipset negation
+		return []string{"__internet__"}, nil
 	default:
 		return nil, fmt.Errorf("unknown special target ID: %d", specialID)
 	}

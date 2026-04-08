@@ -538,6 +538,25 @@ func migrateSchema(ctx context.Context, database *sql.DB) error {
 		log.Info("Migration: added __igmpv3__ special target")
 	}
 
+	// Migration: Add __internet__ special target
+	var hasInternetTarget bool
+	err = database.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM special_targets WHERE name = ?", "__internet__").Scan(&hasInternetTarget)
+	if err != nil {
+		return fmt.Errorf("failed to check for __internet__ special target: %w", err)
+	}
+
+	if !hasInternetTarget {
+		log.Info("Migration: adding __internet__ special target")
+		_, err = database.ExecContext(ctx,
+			"INSERT INTO special_targets (id, name, display_name, description, address) VALUES (?, ?, ?, ?, ?)",
+			9, "__internet__", "Internet", "All public IPs (excludes private ranges 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8)", "computed",
+		)
+		if err != nil {
+			return fmt.Errorf("failed to add __internet__ special target: %w", err)
+		}
+		log.Info("Migration: added __internet__ special target")
+	}
+
 	// Migration: Delete the broken "any" system group
 	log.Info("Migration: deleting broken any system group")
 	_, err = database.ExecContext(ctx, "DELETE FROM group_members WHERE group_id IN (SELECT id FROM groups WHERE name = 'any')")

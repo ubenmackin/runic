@@ -32,6 +32,8 @@ const SPECIAL_TARGETS = {
   LOOPBACK: { id: 5, name: '__loopback__', label: 'Loopback' },
   ANY_IP: { id: 6, name: '__any_ip__', label: 'Any IP (0.0.0.0/0)' },
   ALL_PEERS: { id: 7, name: '__all_peers__', label: 'All Peers' },
+  IGMPV3: { id: 8, name: '__igmpv3__', label: 'IGMPv3' },
+  INTERNET: { id: 9, name: '__internet__', label: 'Internet (all non-private)' },
 }
 
 const SYSTEM_RULES = [
