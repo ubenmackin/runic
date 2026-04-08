@@ -190,9 +190,7 @@ func (s *Shipper) tail(ctx context.Context, path string) <-chan string {
 			}
 
 			line := scanner.Text()
-			log.Info("Read line from file", "line", line)
 			isRunic := strings.Contains(line, "[RUNIC-DROP]") || strings.Contains(line, "[RUNIC-ACCEPT]")
-			log.Info("Filtering line", "isRunic", isRunic, "line", line)
 			if isRunic {
 				select {
 				case lines <- line:
