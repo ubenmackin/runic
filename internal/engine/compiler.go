@@ -831,6 +831,24 @@ func (c *Compiler) writeSourceRules(
 			returnCIDRs = cidrs
 		}
 
+		// Filter out self-referencing rules (peer connecting to itself)
+		filteredCidrs := make([]string, 0, len(cidrs))
+		for _, cidr := range cidrs {
+			if cidr != ipAddress+"/32" {
+				filteredCidrs = append(filteredCidrs, cidr)
+			}
+		}
+		cidrs = filteredCidrs
+
+		// Same for returnCIDRs
+		filteredReturnCidrs := make([]string, 0, len(returnCIDRs))
+		for _, cidr := range returnCIDRs {
+			if cidr != ipAddress+"/32" {
+				filteredReturnCidrs = append(filteredReturnCidrs, cidr)
+			}
+		}
+		returnCIDRs = filteredReturnCidrs
+
 		if useIpset {
 			ipsetMatchSrc := fmt.Sprintf("-m set --match-set %s src", ipsetName)
 			ipsetMatchDst := fmt.Sprintf("-m set --match-set %s dst", ipsetName)
