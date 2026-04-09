@@ -223,9 +223,7 @@ else
     # Migrate: Update pull_interval_seconds to 86400 for existing installs
     if ! grep -q '"pull_interval_seconds"' /etc/runic-agent/config.json 2>/dev/null; then
         echo "Adding pull_interval_seconds=86400 to existing config"
-        sed -i 's/}$/,
-	"pull_interval_seconds": 86400
-}/' /etc/runic-agent/config.json
+sed -i 's/}$/,\n\t"pull_interval_seconds": 86400\n}/' /etc/runic-agent/config.json
         MIGRATED=1
     else
         # Key exists - check if value needs updating (not already 86400)
@@ -235,42 +233,30 @@ else
             sed -i 's/"pull_interval_seconds": [0-9]*/"pull_interval_seconds": 86400/' /etc/runic-agent/config.json
         fi
     fi
-    if ! grep -q '"apply_on_boot"' /etc/runic-agent/config.json 2>/dev/null; then
-        echo "Adding apply_on_boot=false to existing config"
-        sed -i 's/}$/,
-	"apply_on_boot": false
-}/' /etc/runic-agent/config.json
-        MIGRATED=1
-    fi
+if ! grep -q '"apply_on_boot"' /etc/runic-agent/config.json 2>/dev/null; then
+    echo "Adding apply_on_boot=false to existing config"
+    sed -i 's/}$/,\n\t"apply_on_boot": false\n}/' /etc/runic-agent/config.json
+    MIGRATED=1
+fi
     if ! grep -q '"apply_rules_bundle"' /etc/runic-agent/config.json 2>/dev/null; then
         echo "Adding apply_rules_bundle=false to existing config"
         # Check if we already added a field (need comma handling)
-        if [ "$MIGRATED" -eq 1 ]; then
-            sed -i 's/"apply_on_boot": false
-}/"apply_on_boot": false,
-	"apply_rules_bundle": false
-}/' /etc/runic-agent/config.json
-        else
-            sed -i 's/}$/,
-	"apply_rules_bundle": false
-}/' /etc/runic-agent/config.json
-        fi
+if [ "$MIGRATED" -eq 1 ]; then
+        sed -i 's/"apply_on_boot": false\n}/"apply_on_boot": false,\n\t"apply_rules_bundle": false\n}/' /etc/runic-agent/config.json
+else
+        sed -i 's/}$/,\n\t"apply_rules_bundle": false\n}/' /etc/runic-agent/config.json
+    fi
         MIGRATED=1
     fi
     # AG-004: Migrate disable_system_managed_iptables if not present
     if ! grep -q '"disable_system_managed_iptables"' /etc/runic-agent/config.json 2>/dev/null; then
         echo "Adding disable_system_managed_iptables=false to existing config"
         # Check if we already added a field (need comma handling)
-        if [ "$MIGRATED" -eq 1 ]; then
-            sed -i 's/"apply_rules_bundle": false
-}/"apply_rules_bundle": false,
-	"disable_system_managed_iptables": false
-}/' /etc/runic-agent/config.json
-        else
-            sed -i 's/}$/,
-	"disable_system_managed_iptables": false
-}/' /etc/runic-agent/config.json
-        fi
+if [ "$MIGRATED" -eq 1 ]; then
+        sed -i 's/"apply_rules_bundle": false\n}/"apply_rules_bundle": false,\n\t"disable_system_managed_iptables": false\n}/' /etc/runic-agent/config.json
+else
+        sed -i 's/}$/,\n\t"disable_system_managed_iptables": false\n}/' /etc/runic-agent/config.json
+    fi
     fi
 fi
 
