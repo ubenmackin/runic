@@ -63,6 +63,10 @@ export default function Dashboard() {
 
       const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
       const wsUrl = `${wsProto}//${window.location.host}/api/v1/logs/stream?action=DROP`
+
+      // Authentication is handled via HttpOnly cookies (runic_access_token)
+      // which are automatically sent with the WebSocket upgrade request.
+      // The server checks cookies first before falling back to Sec-WebSocket-Protocol header.
       const ws = new WebSocket(wsUrl)
 
       ws.onopen = () => {
