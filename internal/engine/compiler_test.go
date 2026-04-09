@@ -878,7 +878,7 @@ func TestRuleCompilationToIptablesFormat(t *testing.T) {
 			},
 			expectedRules: []string{
 				"-s 192.168.1.100/32 -p tcp --dport 22 -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT",
-				"-d 192.168.1.100/32 -p tcp --sport 22 -m conntrack --ctstate ESTABLISHED -j ACCEPT",
+				"-d 192.168.1.100/32 -p tcp --sport 22 -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT",
 			},
 		},
 		{

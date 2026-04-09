@@ -695,13 +695,11 @@ func (c *Compiler) writeTargetRules(
 		outputPortMatch := invertPortMatch(pc.PortMatch, pc.SrcPortMatch)
 
 		// Build conntrack part based on noConntrack flag
-		var conntrackNew, conntrackEstab string
+		var conntrackFull string
 		if noConntrack {
-			conntrackNew = ""
-			conntrackEstab = ""
+			conntrackFull = ""
 		} else {
-			conntrackNew = "-m conntrack --ctstate NEW,ESTABLISHED"
-			conntrackEstab = "-m conntrack --ctstate ESTABLISHED"
+			conntrackFull = "-m conntrack --ctstate NEW,ESTABLISHED"
 		}
 
 		if useIpset {
@@ -709,15 +707,15 @@ func (c *Compiler) writeTargetRules(
 			ipsetMatchDst := fmt.Sprintf("-m set --match-set %s dst", ipsetName)
 			if writeToHost {
 				if pol.Action == "ACCEPT" {
-					rw.writeAction(pol.Action, "INPUT", fmt.Sprintf("-p %s %s %s %s", pc.Protocol, ipsetMatchSrc, inputPortMatch, conntrackNew))
-					rw.accept("OUTPUT", fmt.Sprintf("-p %s %s %s %s", pc.Protocol, ipsetMatchDst, outputPortMatch, conntrackEstab))
+					rw.writeAction(pol.Action, "INPUT", fmt.Sprintf("-p %s %s %s %s", pc.Protocol, ipsetMatchSrc, inputPortMatch, conntrackFull))
+					rw.accept("OUTPUT", fmt.Sprintf("-p %s %s %s %s", pc.Protocol, ipsetMatchDst, outputPortMatch, conntrackFull))
 				} else {
 					rw.writeAction(pol.Action, "INPUT", fmt.Sprintf("-p %s %s %s", pc.Protocol, ipsetMatchSrc, inputPortMatch))
 				}
 			}
 			if writeToDocker {
 				if pol.Action == "ACCEPT" {
-					rw.writeAction(pol.Action, "DOCKER-USER", fmt.Sprintf("-p %s %s %s %s", pc.Protocol, ipsetMatchSrc, inputPortMatch, conntrackNew))
+					rw.writeAction(pol.Action, "DOCKER-USER", fmt.Sprintf("-p %s %s %s %s", pc.Protocol, ipsetMatchSrc, inputPortMatch, conntrackFull))
 				} else {
 					rw.writeAction(pol.Action, "DOCKER-USER", fmt.Sprintf("-p %s %s %s", pc.Protocol, ipsetMatchSrc, inputPortMatch))
 				}
@@ -726,15 +724,15 @@ func (c *Compiler) writeTargetRules(
 			for _, cidr := range cidrs {
 				if writeToHost {
 					if pol.Action == "ACCEPT" {
-						rw.writeAction(pol.Action, "INPUT", fmt.Sprintf("-s %s -p %s %s %s", cidr, pc.Protocol, inputPortMatch, conntrackNew))
-						rw.accept("OUTPUT", fmt.Sprintf("-d %s -p %s %s %s", cidr, pc.Protocol, outputPortMatch, conntrackEstab))
+						rw.writeAction(pol.Action, "INPUT", fmt.Sprintf("-s %s -p %s %s %s", cidr, pc.Protocol, inputPortMatch, conntrackFull))
+						rw.accept("OUTPUT", fmt.Sprintf("-d %s -p %s %s %s", cidr, pc.Protocol, outputPortMatch, conntrackFull))
 					} else {
 						rw.writeAction(pol.Action, "INPUT", fmt.Sprintf("-s %s -p %s %s", cidr, pc.Protocol, inputPortMatch))
 					}
 				}
 				if writeToDocker {
 					if pol.Action == "ACCEPT" {
-						rw.writeAction(pol.Action, "DOCKER-USER", fmt.Sprintf("-s %s -p %s %s %s", cidr, pc.Protocol, inputPortMatch, conntrackNew))
+						rw.writeAction(pol.Action, "DOCKER-USER", fmt.Sprintf("-s %s -p %s %s %s", cidr, pc.Protocol, inputPortMatch, conntrackFull))
 					} else {
 						rw.writeAction(pol.Action, "DOCKER-USER", fmt.Sprintf("-s %s -p %s %s", cidr, pc.Protocol, inputPortMatch))
 					}
@@ -771,13 +769,12 @@ func (c *Compiler) writeSourceRules(
 		inputPortMatch := invertPortMatch(pc.PortMatch, pc.SrcPortMatch)
 
 		// Build conntrack part based on noConntrack flag
-		var conntrackNew, conntrackEstab string
+		// For bidirectional policies, we need NEW,ESTABLISHED for both outbound and return traffic
+		var conntrackFull string
 		if noConntrack {
-			conntrackNew = ""
-			conntrackEstab = ""
+			conntrackFull = ""
 		} else {
-			conntrackNew = "-m conntrack --ctstate NEW,ESTABLISHED"
-			conntrackEstab = "-m conntrack --ctstate ESTABLISHED"
+			conntrackFull = "-m conntrack --ctstate NEW,ESTABLISHED"
 		}
 
 		// MC-010/MD-002: For multicast targets, determine INPUT return rule behavior.
@@ -801,12 +798,12 @@ func (c *Compiler) writeSourceRules(
 		if useIpset {
 			ipsetMatchSrc := fmt.Sprintf("-m set --match-set %s src", ipsetName)
 			ipsetMatchDst := fmt.Sprintf("-m set --match-set %s dst", ipsetName)
-			rw.writeAction(pol.Action, "OUTPUT", fmt.Sprintf("-p %s %s %s %s", pc.Protocol, ipsetMatchDst, outputPortMatch, conntrackNew))
-			rw.writeAction(pol.Action, "INPUT", fmt.Sprintf("-p %s %s %s %s", pc.Protocol, ipsetMatchSrc, inputPortMatch, conntrackEstab))
+			rw.writeAction(pol.Action, "OUTPUT", fmt.Sprintf("-p %s %s %s %s", pc.Protocol, ipsetMatchDst, outputPortMatch, conntrackFull))
+			rw.writeAction(pol.Action, "INPUT", fmt.Sprintf("-p %s %s %s %s", pc.Protocol, ipsetMatchSrc, inputPortMatch, conntrackFull))
 		} else {
 			for _, cidr := range cidrs {
 				if pol.Action == "ACCEPT" {
-					rw.writeAction(pol.Action, "OUTPUT", fmt.Sprintf("-d %s -p %s %s %s", cidr, pc.Protocol, outputPortMatch, conntrackNew))
+					rw.writeAction(pol.Action, "OUTPUT", fmt.Sprintf("-d %s -p %s %s %s", cidr, pc.Protocol, outputPortMatch, conntrackFull))
 				} else {
 					rw.writeAction(pol.Action, "OUTPUT", fmt.Sprintf("-d %s -p %s %s", cidr, pc.Protocol, outputPortMatch))
 				}
@@ -814,7 +811,7 @@ func (c *Compiler) writeSourceRules(
 			// Write INPUT rules from returnCIDRs (either specific CIDRs or 0.0.0.0/0 for multicast)
 			for _, returnCidr := range returnCIDRs {
 				if pol.Action == "ACCEPT" {
-					rw.accept("INPUT", fmt.Sprintf("-s %s -p %s %s %s", returnCidr, pc.Protocol, inputPortMatch, conntrackEstab))
+					rw.accept("INPUT", fmt.Sprintf("-s %s -p %s %s %s", returnCidr, pc.Protocol, inputPortMatch, conntrackFull))
 				}
 			}
 		}
@@ -844,28 +841,26 @@ func (c *Compiler) writeInternetRules(
 		inputPortMatch := invertPortMatch(pc.PortMatch, pc.SrcPortMatch)
 
 		// Build conntrack part based on noConntrack flag
-		var conntrackNew, conntrackEstab string
+		var conntrackFull string
 		if noConntrack {
-			conntrackNew = ""
-			conntrackEstab = ""
+			conntrackFull = ""
 		} else {
-			conntrackNew = "-m conntrack --ctstate NEW,ESTABLISHED"
-			conntrackEstab = "-m conntrack --ctstate ESTABLISHED"
+			conntrackFull = "-m conntrack --ctstate NEW,ESTABLISHED"
 		}
 
 		// Use negation ipset match to exclude private ranges
 		privateIpsetMatchSrc := "-m set ! --match-set runic_private_ranges src"
 		if writeToHost {
 			if pol.Action == "ACCEPT" {
-				rw.writeAction(pol.Action, "OUTPUT", fmt.Sprintf("-p %s %s %s %s", pc.Protocol, privateIpsetMatch, outputPortMatch, conntrackNew))
-				rw.accept("INPUT", fmt.Sprintf("-p %s %s %s %s", pc.Protocol, privateIpsetMatchSrc, inputPortMatch, conntrackEstab))
+				rw.writeAction(pol.Action, "OUTPUT", fmt.Sprintf("-p %s %s %s %s", pc.Protocol, privateIpsetMatch, outputPortMatch, conntrackFull))
+				rw.accept("INPUT", fmt.Sprintf("-p %s %s %s %s", pc.Protocol, privateIpsetMatchSrc, inputPortMatch, conntrackFull))
 			} else {
 				rw.writeAction(pol.Action, "OUTPUT", fmt.Sprintf("-p %s %s %s", pc.Protocol, privateIpsetMatch, outputPortMatch))
 			}
 		}
 		if writeToDocker {
 			if pol.Action == "ACCEPT" {
-				rw.writeAction(pol.Action, "DOCKER-USER", fmt.Sprintf("-p %s %s %s %s", pc.Protocol, privateIpsetMatch, outputPortMatch, conntrackNew))
+				rw.writeAction(pol.Action, "DOCKER-USER", fmt.Sprintf("-p %s %s %s %s", pc.Protocol, privateIpsetMatch, outputPortMatch, conntrackFull))
 			} else {
 				rw.writeAction(pol.Action, "DOCKER-USER", fmt.Sprintf("-p %s %s %s", pc.Protocol, privateIpsetMatch, outputPortMatch))
 			}
@@ -1017,7 +1012,7 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 							fmt.Fprintf(&buf, "-A INPUT -m pkttype --pkt-type multicast -p %s %s -j ACCEPT\\n", pc.Protocol, inputPortMatch)
 						} else {
 							fmt.Fprintf(&buf, "-A INPUT -m pkttype --pkt-type multicast -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\\n", pc.Protocol, inputPortMatch)
-							fmt.Fprintf(&buf, "-A OUTPUT -p %s %s -m conntrack --ctstate ESTABLISHED -j ACCEPT\\n", pc.Protocol, outputPortMatch)
+							fmt.Fprintf(&buf, "-A OUTPUT -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\\n", pc.Protocol, outputPortMatch)
 						}
 					}
 				}
@@ -1043,7 +1038,7 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 							fmt.Fprintf(&buf, "-A INPUT -s %s -p %s %s -j ACCEPT\\n", sourceCIDR, pc.Protocol, inputPortMatch)
 						} else {
 							fmt.Fprintf(&buf, "-A INPUT -s %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\\n", sourceCIDR, pc.Protocol, inputPortMatch)
-							fmt.Fprintf(&buf, "-A OUTPUT -d %s -p %s %s -m conntrack --ctstate ESTABLISHED -j ACCEPT\\n", sourceCIDR, pc.Protocol, outputPortMatch)
+							fmt.Fprintf(&buf, "-A OUTPUT -d %s -p %s %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\\n", sourceCIDR, pc.Protocol, outputPortMatch)
 						}
 					}
 				}
