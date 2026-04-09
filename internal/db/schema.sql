@@ -33,7 +33,8 @@ CREATE TABLE IF NOT EXISTS groups (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT UNIQUE NOT NULL,
     description TEXT,
-    is_system BOOLEAN NOT NULL DEFAULT 0
+    is_system BOOLEAN NOT NULL DEFAULT 0,
+    is_pending_delete BOOLEAN NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS group_members (
@@ -56,7 +57,8 @@ CREATE TABLE IF NOT EXISTS services (
     description TEXT,
     direction_hint TEXT NOT NULL DEFAULT 'inbound',
     is_system BOOLEAN NOT NULL DEFAULT 0,
-    no_conntrack BOOLEAN NOT NULL DEFAULT 0
+    no_conntrack BOOLEAN NOT NULL DEFAULT 0,
+    is_pending_delete BOOLEAN NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS policies (
@@ -73,6 +75,7 @@ CREATE TABLE IF NOT EXISTS policies (
 	enabled BOOLEAN NOT NULL DEFAULT 1,
 	target_scope TEXT NOT NULL DEFAULT 'both' CHECK(target_scope IN ('both', 'host', 'docker')),
 	direction TEXT NOT NULL DEFAULT 'both' CHECK(direction IN ('both', 'forward', 'backward')),
+	is_pending_delete BOOLEAN NOT NULL DEFAULT 0,
 	created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 	updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 	FOREIGN KEY(service_id) REFERENCES services(id)
@@ -216,3 +219,13 @@ CREATE TABLE IF NOT EXISTS pending_bundle_previews (
     FOREIGN KEY(peer_id) REFERENCES peers(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_pending_bundle_previews_peer ON pending_bundle_previews(peer_id);
+
+CREATE TABLE IF NOT EXISTS change_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    entity_type TEXT NOT NULL CHECK (entity_type IN ('group', 'service', 'policy')),
+    entity_id INTEGER NOT NULL,
+    action TEXT NOT NULL CHECK (action IN ('create', 'update', 'delete')),
+    snapshot_data TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(entity_type, entity_id)
+);

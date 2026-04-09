@@ -86,6 +86,7 @@ export default function Peers() {
 
 	// Bulk Apply All state
 	const [applyAllLoading, setApplyAllLoading] = useState(false)
+	const [rollbackLoading, setRollbackLoading] = useState(false)
 
 	// Push to peer state
 	const [pushTargetPeer, setPushTargetPeer] = useState(null)
@@ -356,7 +357,6 @@ const handleSubmit = (e) => {
 	// Calculate peers with pending changes
 	const peersWithPendingChanges = peers?.filter(p => p.pending_changes_count > 0).length || 0
 
-	// Handle Apply All Pending
   const handleApplyAll = async () => {
     setApplyAllLoading(true)
     try {
@@ -364,10 +364,32 @@ const handleSubmit = (e) => {
       showToast('All pending changes applied successfully', 'success')
       qc.invalidateQueries({ queryKey: QUERY_KEYS.peers() })
       qc.invalidateQueries({ queryKey: ['pending-changes'] })
+			qc.invalidateQueries({ queryKey: QUERY_KEYS.groups() })
+			qc.invalidateQueries({ queryKey: QUERY_KEYS.services() })
+			qc.invalidateQueries({ queryKey: QUERY_KEYS.policies() })
     } catch (err) {
       showToast(`Failed to apply all changes: ${err.message}`, 'error')
     } finally {
       setApplyAllLoading(false)
+    }
+  }
+
+  // Handle Rollback All Pending
+  const handleRollback = async () => {
+    if (!window.confirm('Are you sure you want to discard all pending changes? This action cannot be undone.')) return
+    setRollbackLoading(true)
+    try {
+      await api.post('/pending-changes/rollback')
+      showToast('Pending changes discarded successfully', 'success')
+      qc.invalidateQueries({ queryKey: QUERY_KEYS.peers() })
+      qc.invalidateQueries({ queryKey: ['pending-changes'] })
+			qc.invalidateQueries({ queryKey: QUERY_KEYS.groups() })
+			qc.invalidateQueries({ queryKey: QUERY_KEYS.services() })
+			qc.invalidateQueries({ queryKey: QUERY_KEYS.policies() })
+    } catch (err) {
+      showToast(`Failed to rollback changes: ${err.message}`, 'error')
+    } finally {
+      setRollbackLoading(false)
     }
   }
 
@@ -402,9 +424,10 @@ const handleSubmit = (e) => {
 	actions={
 	<>
 	{canEdit && peersWithPendingChanges > 0 && (
+	<>
 	<button
 	onClick={handleApplyAll}
-	disabled={applyAllLoading}
+	disabled={applyAllLoading || rollbackLoading}
 	className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-white bg-green-600 hover:bg-green-700 rounded-lg disabled:opacity-50"
 	>
 	{applyAllLoading ? (
@@ -414,10 +437,28 @@ const handleSubmit = (e) => {
 	</>
 	) : (
 	<>
-	Apply All Pending ({peersWithPendingChanges})
+	Apply All ({peersWithPendingChanges})
 	</>
 	)}
 	</button>
+	<button
+	onClick={handleRollback}
+	disabled={applyAllLoading || rollbackLoading}
+	className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/40 rounded-lg disabled:opacity-50 transition-colors"
+	>
+	{rollbackLoading ? (
+	<>
+	<RefreshCw className="w-4 h-4 animate-spin" />
+	Discarding...
+	</>
+	) : (
+	<>
+	<Trash2 className="w-4 h-4" />
+	Discard ({peersWithPendingChanges})
+	</>
+	)}
+	</button>
+	</>
 	)}
 	<button
 	onClick={handleManualRefresh}

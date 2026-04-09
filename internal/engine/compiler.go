@@ -215,7 +215,7 @@ WHEN p.source_type = 'special' AND p.target_type = 'group' AND p.source_id NOT I
 WHEN p.source_type = 'special' AND p.target_type = 'peer' AND p.source_id NOT IN (?, ?, ?, ?, ?) AND p.target_id = ? THEN 1
 ELSE 0 END as is_source
 		FROM policies p
-		WHERE p.enabled = 1 AND (
+		WHERE p.enabled = 1 AND p.is_pending_delete = 0 AND (
 			(p.target_type = 'peer' AND p.target_id = ?) OR
 			(p.target_type = 'group' AND EXISTS (SELECT 1 FROM group_members WHERE group_id = p.target_id AND peer_id = ?)) OR
 			(p.source_type = 'peer' AND p.source_id = ?) OR
@@ -302,7 +302,7 @@ ELSE 0 END as is_source
 			args[i] = id
 		}
 		// MC-006: Updated query to include no_conntrack
-		query := "SELECT id, name, ports, COALESCE(source_ports,''), protocol, COALESCE(no_conntrack, 0) FROM services WHERE id IN (" + strings.Join(placeholders, ",") + ")"
+		query := "SELECT id, name, ports, COALESCE(source_ports,''), protocol, COALESCE(no_conntrack, 0) FROM services WHERE is_pending_delete = 0 AND id IN (" + strings.Join(placeholders, ",") + ")"
 
 		rows, err := c.db.QueryContext(ctx, query, args...)
 		if err != nil {
@@ -1246,7 +1246,7 @@ func (c *Compiler) CompileAndStore(ctx context.Context, peerID int) (models.Rule
 // RecompileAffectedPeers finds all peers affected by a group change and recompiles their bundles.
 func (c *Compiler) RecompileAffectedPeers(ctx context.Context, groupID int) error {
 	rows, err := c.db.QueryContext(ctx,
-		`SELECT DISTINCT id FROM policies WHERE (source_type = 'group' AND source_id = ?) OR (target_type = 'group' AND target_id = ?) AND enabled = 1`, groupID, groupID)
+		`SELECT DISTINCT id FROM policies WHERE is_pending_delete = 0 AND ((source_type = 'group' AND source_id = ?) OR (target_type = 'group' AND target_id = ?)) AND enabled = 1`, groupID, groupID)
 	if err != nil {
 		return fmt.Errorf("find affected policies: %w", err)
 	}
@@ -1293,7 +1293,7 @@ func (c *Compiler) RecompileAffectedPeers(ctx context.Context, groupID int) erro
 func (c *Compiler) GetAffectedPeersByPolicy(ctx context.Context, policyID int) ([]int, error) {
 	var srcType, tgtType string
 	var srcID, tgtID int
-	if err := c.db.QueryRowContext(ctx, "SELECT source_type, source_id, target_type, target_id FROM policies WHERE id = ?", policyID).Scan(&srcType, &srcID, &tgtType, &tgtID); err != nil {
+	if err := c.db.QueryRowContext(ctx, "SELECT source_type, source_id, target_type, target_id FROM policies WHERE id = ? AND is_pending_delete = 0", policyID).Scan(&srcType, &srcID, &tgtType, &tgtID); err != nil {
 		return nil, fmt.Errorf("get policy abstract: %w", err)
 	}
 

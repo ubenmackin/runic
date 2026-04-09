@@ -110,6 +110,23 @@ func (h *Handler) ListPendingChanges(w http.ResponseWriter, r *http.Request) {
 	common.RespondJSON(w, http.StatusOK, common.EnsureSlice(groups))
 }
 
+// RollbackPendingChanges restores groups, services, and policies to their state before any pending changes.
+func (h *Handler) RollbackPendingChanges(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	if err := db.RollbackSnapshots(ctx, h.DBBeginner); err != nil {
+		log.ErrorContext(ctx, "failed to rollback snapshots", "error", err)
+		common.InternalError(w)
+		return
+	}
+
+	if err := db.DeleteAllPendingBundlePreviews(ctx, h.DB); err != nil {
+		log.WarnContext(ctx, "Failed to delete old previews", "error", err)
+	}
+
+	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "rolled_back"})
+}
+
 // GetPeerPendingChanges returns pending changes for a specific peer.
 func (h *Handler) GetPeerPendingChanges(w http.ResponseWriter, r *http.Request) {
 	peerID, err := common.ParseIDParam(r, "peerId")
@@ -285,6 +302,11 @@ func (h *Handler) ApplyPeerPendingBundle(w http.ResponseWriter, r *http.Request)
 		log.WarnContext(ctx, "Failed to delete pending bundle preview", "error", err)
 	}
 
+	// Check if all pending changes are cleared, then cleanup snapshots
+	if err := db.CleanupIfComplete(ctx, h.DBBeginner); err != nil {
+		log.WarnContext(ctx, "Failed to cleanup after apply", "error", err)
+	}
+
 	// Notify via SSE (use hostname as the host_id for SSE)
 	h.SSEHub.NotifyBundleUpdated("host-"+hostname, bundle.Version)
 
@@ -323,6 +345,10 @@ func (h *Handler) ApplyAllPendingBundles(w http.ResponseWriter, r *http.Request)
 		} else {
 			applied++
 		}
+	}
+
+	if err := db.CleanupIfComplete(ctx, h.DBBeginner); err != nil {
+		log.WarnContext(ctx, "Failed to cleanup after apply all", "error", err)
 	}
 
 	resp := map[string]interface{}{

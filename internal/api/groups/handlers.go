@@ -2,6 +2,7 @@
 package groups
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"runic/internal/common/log"
 	"runic/internal/db"
 	"runic/internal/engine"
+	"runic/internal/models"
 )
 
 // Handler provides HTTP handlers for group operations with dependency injection
@@ -51,6 +53,7 @@ func (h *Handler) ListGroups(w http.ResponseWriter, r *http.Request) {
 	SELECT target_id as group_id, COUNT(*) as count FROM policies WHERE target_type='group' GROUP BY target_id
 	) GROUP BY group_id
 	) pol ON g.id = pol.group_id
+	WHERE COALESCE(g.is_pending_delete, 0) = 0
 	ORDER BY g.name ASC`
 
 	rows, err := h.DB.QueryContext(r.Context(), query)
@@ -114,6 +117,10 @@ func (h *Handler) CreateGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := h.snapshotGroup(r.Context(), "create", int(id)); err != nil {
+		log.ErrorContext(r.Context(), "failed to create snapshot", "error", err)
+	}
+
 	// Trigger async recompilation for affected peers (if ChangeWorker is available)
 	if h.ChangeWorker != nil {
 		// Fetch group details for summary
@@ -172,6 +179,10 @@ func (h *Handler) UpdateGroup(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if err := h.snapshotGroup(r.Context(), "update", id); err != nil {
+		log.ErrorContext(r.Context(), "failed to create snapshot", "error", err)
+	}
+
 	_, err = h.DB.ExecContext(r.Context(),
 		"UPDATE groups SET name = ?, description = ? WHERE id = ?", input.Name, input.Description, id)
 	if err != nil {
@@ -205,9 +216,9 @@ func (h *Handler) DeleteGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Query the group to get its is_system flag
+	// Query the group to check if group exists and get its is_system flag
 	var isSystem bool
-	err = h.DB.QueryRowContext(r.Context(), "SELECT COALESCE(is_system, 0) FROM groups WHERE id = ?", id).Scan(&isSystem)
+	err = h.DB.QueryRowContext(r.Context(), "SELECT COALESCE(is_system, 0) FROM groups WHERE id = ? AND COALESCE(is_pending_delete, 0) = 0", id).Scan(&isSystem)
 	if err != nil {
 		common.RespondError(w, http.StatusNotFound, "group not found")
 		return
@@ -226,18 +237,14 @@ func (h *Handler) DeleteGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Delete group_members first (due to foreign key)
-	_, err = h.DB.ExecContext(r.Context(), "DELETE FROM group_members WHERE group_id = ?", id)
-	if err != nil {
-		log.ErrorContext(r.Context(), "failed to delete group members", "error", err)
-		common.InternalError(w)
-		return
+	if err := h.snapshotGroup(r.Context(), "delete", id); err != nil {
+		log.ErrorContext(r.Context(), "failed to create snapshot", "error", err)
 	}
 
-	// Delete the group
-	_, err = h.DB.ExecContext(r.Context(), "DELETE FROM groups WHERE id = ?", id)
+	// Soft delete the group
+	_, err = h.DB.ExecContext(r.Context(), "UPDATE groups SET is_pending_delete = 1 WHERE id = ?", id)
 	if err != nil {
-		log.ErrorContext(r.Context(), "failed to delete group", "error", err)
+		log.ErrorContext(r.Context(), "failed to soft delete group", "error", err)
 		common.InternalError(w)
 		return
 	}
@@ -320,6 +327,10 @@ func (h *Handler) AddGroupMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := h.snapshotGroup(r.Context(), "update", groupID); err != nil {
+		log.ErrorContext(r.Context(), "failed to create snapshot", "error", err)
+	}
+
 	result, err := h.DB.ExecContext(r.Context(), "INSERT OR IGNORE INTO group_members (group_id, peer_id) VALUES (?, ?)", groupID, input.PeerID)
 	if err != nil {
 		log.ErrorContext(r.Context(), "failed to add member", "error", err)
@@ -366,6 +377,10 @@ func (h *Handler) DeleteGroupMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := h.snapshotGroup(r.Context(), "update", groupID); err != nil {
+		log.ErrorContext(r.Context(), "failed to create snapshot", "error", err)
+	}
+
 	_, err = h.DB.ExecContext(r.Context(), "DELETE FROM group_members WHERE group_id = ? AND peer_id = ?", groupID, peerID)
 	if err != nil {
 		log.ErrorContext(r.Context(), "failed to remove peer from group", "error", err)
@@ -402,4 +417,52 @@ func (h *Handler) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/{id:[0-9]+}/members", h.ListGroupMembers).Methods("GET")
 	r.HandleFunc("/{id:[0-9]+}/members", h.AddGroupMember).Methods("POST")
 	r.HandleFunc("/{groupId:[0-9]+}/members/{peerId:[0-9]+}", h.DeleteGroupMember).Methods("DELETE")
+}
+
+// GroupSnapshotData represents the payload of a group snapshot.
+type GroupSnapshotData struct {
+	Group   *models.GroupRow        `json:"group"`
+	Members []models.GroupMemberRow `json:"members"`
+}
+
+func (h *Handler) snapshotGroup(ctx context.Context, action string, groupID int) error {
+	if action == "create" {
+		return db.CreateSnapshot(ctx, h.DB, "group", groupID, action, "")
+	}
+
+	grp, err := db.GetGroup(ctx, h.DB, groupID)
+	if err != nil {
+		return fmt.Errorf("get group: %w", err)
+	}
+
+	rows, err := h.DB.QueryContext(ctx, "SELECT id, group_id, peer_id, added_at FROM group_members WHERE group_id = ?", groupID)
+	if err != nil {
+		return fmt.Errorf("query members: %w", err)
+	}
+	defer func() {
+		_ = rows.Close() //nolint:errcheck
+	}()
+
+	var members []models.GroupMemberRow
+	for rows.Next() {
+		var m models.GroupMemberRow
+		if err := rows.Scan(&m.ID, &m.GroupID, &m.PeerID, &m.AddedAt); err != nil {
+			return fmt.Errorf("scan member: %w", err)
+		}
+		members = append(members, m)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	data := GroupSnapshotData{
+		Group:   &grp,
+		Members: members,
+	}
+	bytes, err := json.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("marshal snapshot: %w", err)
+	}
+
+	return db.CreateSnapshot(ctx, h.DB, "group", groupID, action, string(bytes))
 }

@@ -45,7 +45,7 @@ func CheckPeerDeleteConstraints(ctx context.Context, database db.Querier, peerID
 	// Check 1: Explicit Peer Policy (peer as source or target)
 	rows, err := database.QueryContext(ctx,
 		`SELECT id, name FROM policies
-		WHERE (target_type='peer' AND target_id=?) OR (source_type='peer' AND source_id=?)`,
+		WHERE ((target_type='peer' AND target_id=?) OR (source_type='peer' AND source_id=?)) AND is_pending_delete = 0`,
 		peerID, peerID,
 	)
 	if err != nil {
@@ -65,7 +65,7 @@ func CheckPeerDeleteConstraints(ctx context.Context, database db.Querier, peerID
 	rows, err = database.QueryContext(ctx, `
 		SELECT DISTINCT p.id, p.name FROM policies p
 		JOIN group_members gm ON (gm.group_id = p.source_id AND p.source_type='group') OR (gm.group_id = p.target_id AND p.target_type='group')
-		WHERE gm.peer_id = ?
+		WHERE gm.peer_id = ? AND p.is_pending_delete = 0
 	`, peerID)
 	if err != nil {
 		return fmt.Errorf("failed to query group policies: %w", err)
@@ -97,7 +97,7 @@ func CheckGroupDeleteConstraints(ctx context.Context, database db.Querier, group
 	// Query ALL policies that use the group (as source or target)
 	rows, err := database.QueryContext(ctx,
 		`SELECT id, name FROM policies
-		WHERE (source_type='group' AND source_id=?) OR (target_type='group' AND target_id=?)`,
+		WHERE ((source_type='group' AND source_id=?) OR (target_type='group' AND target_id=?)) AND is_pending_delete = 0`,
 		groupID, groupID,
 	)
 	if err != nil {

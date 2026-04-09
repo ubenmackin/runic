@@ -12,7 +12,7 @@ import (
 func GetGroup(ctx context.Context, database Querier, groupID int) (models.GroupRow, error) {
 	var g models.GroupRow
 	err := database.QueryRowContext(ctx,
-		"SELECT id, name, COALESCE(description, ''), COALESCE(is_system, 0) FROM groups WHERE id = ?", groupID,
+		"SELECT id, name, COALESCE(description, ''), COALESCE(is_system, 0) FROM groups WHERE id = ? AND COALESCE(is_pending_delete, 0) = 0", groupID,
 	).Scan(&g.ID, &g.Name, &g.Description, &g.IsSystem)
 	return g, err
 }
@@ -47,7 +47,8 @@ func FindPoliciesByGroupID(ctx context.Context, database Querier, groupID int) (
 		`SELECT id, name, COALESCE(description, ''), source_id, source_type, service_id, target_id, target_type,
 		action, priority, enabled, target_scope, COALESCE(direction, 'both'), created_at, updated_at
 		FROM policies
-		WHERE (source_type = 'group' AND source_id = ?) OR (target_type = 'group' AND target_id = ?)`, groupID, groupID)
+		WHERE ((source_type = 'group' AND source_id = ?) OR (target_type = 'group' AND target_id = ?))
+		AND COALESCE(is_pending_delete, 0) = 0`, groupID, groupID)
 	if err != nil {
 		return nil, err
 	}

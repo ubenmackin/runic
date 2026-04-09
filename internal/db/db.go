@@ -39,6 +39,7 @@ var allowedTables = map[string]bool{
 	"registration_tokens":     true,
 	"pending_changes":         true,
 	"pending_bundle_previews": true,
+	"change_snapshots":        true,
 }
 
 // Database wraps *sql.DB to allow dependency injection.

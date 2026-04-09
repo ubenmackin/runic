@@ -24,10 +24,11 @@ type PeerRow struct {
 }
 
 type GroupRow struct {
-	ID          int
-	Name        string
-	Description string
-	IsSystem    bool
+	ID              int
+	Name            string
+	Description     string
+	IsSystem        bool
+	IsPendingDelete bool
 }
 
 type GroupMemberRow struct {
@@ -38,33 +39,35 @@ type GroupMemberRow struct {
 }
 
 type ServiceRow struct {
-	ID            int
-	Name          string
-	Ports         string
-	SourcePorts   string
-	Protocol      string
-	Description   string
-	DirectionHint string
-	IsSystem      bool
-	NoConntrack   bool
+	ID              int
+	Name            string
+	Ports           string
+	SourcePorts     string
+	Protocol        string
+	Description     string
+	DirectionHint   string
+	IsSystem        bool
+	NoConntrack     bool
+	IsPendingDelete bool
 }
 
 type PolicyRow struct {
-	ID          int
-	Name        string
-	Description string
-	SourceID    int
-	SourceType  string
-	ServiceID   int
-	TargetID    int
-	TargetType  string
-	Action      string
-	Priority    int
-	Enabled     bool
-	TargetScope string
-	Direction   string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	ID              int
+	Name            string
+	Description     string
+	SourceID        int
+	SourceType      string
+	ServiceID       int
+	TargetID        int
+	TargetType      string
+	Action          string
+	Priority        int
+	Enabled         bool
+	TargetScope     string
+	Direction       string
+	IsPendingDelete bool
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 type RuleBundleRow struct {
@@ -112,5 +115,15 @@ type PendingBundlePreview struct {
 	RulesContent string `json:"rules_content"`
 	DiffContent  string `json:"diff_content"`
 	VersionHash  string `json:"version_hash"`
+	CreatedAt    string `json:"created_at"`
+}
+
+// ChangeSnapshot stores the backup state of an entity before modification.
+type ChangeSnapshot struct {
+	ID           int    `json:"id"`
+	EntityType   string `json:"entity_type"`
+	EntityID     int    `json:"entity_id"`
+	Action       string `json:"action"`
+	SnapshotData string `json:"snapshot_data"`
 	CreatedAt    string `json:"created_at"`
 }

@@ -108,7 +108,8 @@ func (r *Resolver) ResolveGroup(ctx context.Context, groupID int, visited map[in
 		SELECT p.id, p.ip_address, p.is_manual
 		FROM group_members gm
 		JOIN peers p ON gm.peer_id = p.id
-		WHERE gm.group_id = ?`, groupID)
+		JOIN groups g ON gm.group_id = g.id
+		WHERE gm.group_id = ? AND g.is_pending_delete = 0`, groupID)
 	if err != nil {
 		return nil, fmt.Errorf("query group members: %w", err)
 	}
@@ -269,7 +270,8 @@ func (r *Resolver) resolveGroupForIpset(ctx context.Context, groupID int) ([]Ips
 		SELECT p.ip_address
 		FROM group_members gm
 		JOIN peers p ON gm.peer_id = p.id
-		WHERE gm.group_id = ?`, groupID)
+		JOIN groups g ON gm.group_id = g.id
+		WHERE gm.group_id = ? AND g.is_pending_delete = 0`, groupID)
 	if err != nil {
 		return nil, false, fmt.Errorf("query group members for ipset: %w", err)
 	}

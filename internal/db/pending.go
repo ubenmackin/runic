@@ -153,3 +153,12 @@ func SaveBundleTx(ctx context.Context, database *sql.DB, params models.CreateBun
 		HMAC:          params.HMAC,
 	}, nil
 }
+
+// DeleteAllPendingBundlePreviews removes all pending bundle previews.
+func DeleteAllPendingBundlePreviews(ctx context.Context, database Querier) error {
+	_, err := database.ExecContext(ctx, "DELETE FROM rule_bundles_pending")
+	if err != nil {
+		return fmt.Errorf("delete all pending bundle previews: %w", err)
+	}
+	return nil
+}

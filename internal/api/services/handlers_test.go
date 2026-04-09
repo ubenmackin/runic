@@ -571,14 +571,14 @@ func TestDeleteService_Valid(t *testing.T) {
 		t.Errorf("expected status %d, got %d", http.StatusNoContent, w.Code)
 	}
 
-	// Verify the service was deleted
-	var count int
-	err := database.QueryRow("SELECT COUNT(*) FROM services WHERE id = ?", serviceID).Scan(&count)
+	// Verify the service was soft deleted
+	var isPending bool
+	err := database.QueryRow("SELECT is_pending_delete FROM services WHERE id = ?", serviceID).Scan(&isPending)
 	if err != nil {
 		t.Errorf("failed to query services: %v", err)
 	}
-	if count != 0 {
-		t.Errorf("expected service to be deleted, but it still exists")
+	if !isPending {
+		t.Errorf("expected service to be soft deleted, but is_pending_delete %v", isPending)
 	}
 }
 
@@ -745,17 +745,18 @@ func TestDeleteService_NotInUse_Success(t *testing.T) {
 		t.Errorf("expected status %d, got %d: %s", http.StatusNoContent, w.Code, w.Body.String())
 	}
 
-	// Verify the service was deleted
-	var count int
-	err = database.QueryRow("SELECT COUNT(*) FROM services WHERE id = ?", serviceID).Scan(&count)
+	// Verify the service was soft deleted
+	var isPending bool
+	err = database.QueryRow("SELECT is_pending_delete FROM services WHERE id = ?", serviceID).Scan(&isPending)
 	if err != nil {
 		t.Errorf("failed to query services: %v", err)
 	}
-	if count != 0 {
-		t.Errorf("expected service to be deleted, but it still exists")
+	if !isPending {
+		t.Errorf("expected service to be soft deleted, but is_pending_delete %v", isPending)
 	}
 
 	// Verify the used service still exists (not affected)
+	var count int
 	err = database.QueryRow("SELECT COUNT(*) FROM services WHERE id = ?", usedServiceID).Scan(&count)
 	if err != nil {
 		t.Errorf("failed to query services: %v", err)

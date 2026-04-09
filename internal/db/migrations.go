@@ -849,5 +849,41 @@ func migrateSchema(ctx context.Context, database *sql.DB) error {
 		log.Info("Migration: set default log_retention_days to 30")
 	}
 
+	// Migration: Add is_pending_delete columns
+	if err := addColumnIfMissing(ctx, database, "groups", "is_pending_delete", "BOOLEAN NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := addColumnIfMissing(ctx, database, "services", "is_pending_delete", "BOOLEAN NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := addColumnIfMissing(ctx, database, "policies", "is_pending_delete", "BOOLEAN NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+
+	// Migration: Create change_snapshots table
+	var hasChangeSnapshots bool
+	err = database.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='change_snapshots'").Scan(&hasChangeSnapshots)
+	if err != nil {
+		return fmt.Errorf("failed to check for change_snapshots table: %w", err)
+	}
+	if !hasChangeSnapshots {
+		log.Info("Migration: creating change_snapshots table")
+		_, err = database.ExecContext(ctx, `
+			CREATE TABLE change_snapshots (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				entity_type TEXT NOT NULL CHECK (entity_type IN ('group', 'service', 'policy')),
+				entity_id INTEGER NOT NULL,
+				action TEXT NOT NULL CHECK (action IN ('create', 'update', 'delete')),
+				snapshot_data TEXT,
+				created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+				UNIQUE(entity_type, entity_id)
+			)
+		`)
+		if err != nil {
+			return fmt.Errorf("failed to create change_snapshots table: %w", err)
+		}
+		log.Info("Migration: created change_snapshots table")
+	}
+
 	return nil
 }

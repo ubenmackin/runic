@@ -79,7 +79,7 @@ func validateService(ports, sourcePorts, protocol string, isSystem bool) error {
 
 func (h *Handler) ListServices(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.DB.QueryContext(r.Context(),
-		"SELECT id, name, ports, COALESCE(source_ports, ''), protocol, COALESCE(description, ''), direction_hint, COALESCE(is_system, 0) FROM services")
+		"SELECT id, name, ports, COALESCE(source_ports, ''), protocol, COALESCE(description, ''), direction_hint, COALESCE(is_system, 0) FROM services WHERE COALESCE(is_pending_delete, 0) = 0")
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "failed to query services")
 		return
@@ -169,6 +169,9 @@ func (h *Handler) CreateService(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Queue pending changes for affected peers
+	if err := h.snapshotService(r.Context(), "create", int(id)); err != nil {
+		log.ErrorContext(r.Context(), "failed to create snapshot", "error", err)
+	}
 	h.queueServiceChange(r.Context(), int(id), "create", fmt.Sprintf("Service '%s' created", input.Name))
 
 	common.RespondJSON(w, http.StatusCreated, map[string]int64{"id": id})
@@ -241,6 +244,10 @@ func (h *Handler) UpdateService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := h.snapshotService(r.Context(), "update", id); err != nil {
+		log.ErrorContext(r.Context(), "failed to create snapshot", "error", err)
+	}
+
 	_, err = h.DB.ExecContext(r.Context(),
 		`UPDATE services SET name = ?, ports = ?, source_ports = ?, protocol = ?, description = ?, direction_hint = ?
 		WHERE id = ?`, input.Name, input.Ports, input.SourcePorts, input.Protocol, input.Description, input.DirectionHint, id)
@@ -285,7 +292,7 @@ func (h *Handler) DeleteService(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check if service is in use by any policies
-	rows, err := h.DB.QueryContext(r.Context(), "SELECT id, name FROM policies WHERE service_id = ?", id)
+	rows, err := h.DB.QueryContext(r.Context(), "SELECT id, name FROM policies WHERE service_id = ? AND is_pending_delete = 0", id)
 	if err != nil {
 		log.ErrorContext(r.Context(), "failed to check policy usage", "error", err)
 		common.InternalError(w)
@@ -324,7 +331,11 @@ func (h *Handler) DeleteService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err = h.DB.ExecContext(r.Context(), "DELETE FROM services WHERE id = ?", id)
+	if err := h.snapshotService(r.Context(), "delete", id); err != nil {
+		log.ErrorContext(r.Context(), "failed to create snapshot", "error", err)
+	}
+
+	_, err = h.DB.ExecContext(r.Context(), "UPDATE services SET is_pending_delete = 1 WHERE id = ?", id)
 	if err != nil {
 		log.ErrorContext(r.Context(), "failed to delete service", "error", err)
 		common.InternalError(w)
@@ -392,4 +403,22 @@ func (h *Handler) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/{id:[0-9]+}", h.GetService).Methods("GET")
 	r.HandleFunc("/{id:[0-9]+}", h.UpdateService).Methods("PUT")
 	r.HandleFunc("/{id:[0-9]+}", h.DeleteService).Methods("DELETE")
+}
+
+func (h *Handler) snapshotService(ctx context.Context, action string, serviceID int) error {
+	if action == "create" {
+		return db.CreateSnapshot(ctx, h.DB, "service", serviceID, action, "")
+	}
+
+	svc, err := db.GetService(ctx, h.DB, serviceID)
+	if err != nil {
+		return fmt.Errorf("get service: %w", err)
+	}
+
+	bytes, err := json.Marshal(svc)
+	if err != nil {
+		return fmt.Errorf("marshal snapshot: %w", err)
+	}
+
+	return db.CreateSnapshot(ctx, h.DB, "service", serviceID, action, string(bytes))
 }

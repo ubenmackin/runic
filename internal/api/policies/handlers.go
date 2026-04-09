@@ -2,6 +2,7 @@
 package policies
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -28,7 +29,7 @@ func (h *Handler) ListPolicies(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.DB.QueryContext(r.Context(),
 		`SELECT id, name, COALESCE(description, ''), source_id, source_type, service_id,
 		target_id, target_type, action, priority, enabled, target_scope, COALESCE(direction, 'both'), created_at, updated_at
-		FROM policies ORDER BY priority ASC`)
+		FROM policies WHERE COALESCE(is_pending_delete, 0) = 0 ORDER BY priority ASC`)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "failed to query policies")
 		return
@@ -157,6 +158,10 @@ func (h *Handler) CreatePolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := h.snapshotPolicy(r.Context(), "create", int(id)); err != nil {
+		log.ErrorContext(r.Context(), "failed to create snapshot", "error", err)
+	}
+
 	// Trigger async recompilation for all affected peers
 	affectedPeers, err := h.Compiler.GetAffectedPeersByPolicy(r.Context(), int(id))
 	log.InfoContext(r.Context(), "DEBUG: GetAffectedPeersByPolicy result", "policy_id", id, "affected_peers", affectedPeers, "error", err)
@@ -200,7 +205,7 @@ func (h *Handler) GetPolicy(w http.ResponseWriter, r *http.Request) {
 	err = h.DB.QueryRowContext(r.Context(),
 		`SELECT id, name, COALESCE(description, ''), source_id, source_type, service_id,
 		target_id, target_type, action, priority, enabled, target_scope, COALESCE(direction, 'both'), created_at, updated_at
-		FROM policies WHERE id = ?`, id,
+		FROM policies WHERE id = ? AND COALESCE(is_pending_delete, 0) = 0`, id,
 	).Scan(&p.ID, &p.Name, &p.Description, &p.SourceID, &p.SourceType, &p.ServiceID,
 		&p.TargetID, &p.TargetType, &p.Action, &p.Priority, &p.Enabled, &p.TargetScope, &p.Direction, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
@@ -280,6 +285,10 @@ func (h *Handler) UpdatePolicy(w http.ResponseWriter, r *http.Request) {
 		enabled = *input.Enabled
 	}
 
+	if err := h.snapshotPolicy(r.Context(), "update", id); err != nil {
+		log.ErrorContext(r.Context(), "failed to create snapshot", "error", err)
+	}
+
 	// Save old affected peers before update
 	oldPeers, err := h.Compiler.GetAffectedPeersByPolicy(r.Context(), id)
 	if err != nil {
@@ -291,7 +300,7 @@ func (h *Handler) UpdatePolicy(w http.ResponseWriter, r *http.Request) {
 	result, err := h.DB.ExecContext(r.Context(),
 		`UPDATE policies SET name = ?, description = ?, source_id = ?, source_type = ?, service_id = ?,
 			target_id = ?, target_type = ?, action = ?, priority = ?, enabled = ?, target_scope = ?, direction = ?, updated_at = CURRENT_TIMESTAMP
-			WHERE id = ?`,
+			WHERE id = ? AND COALESCE(is_pending_delete, 0) = 0`,
 		input.Name, input.Description, input.SourceID, input.SourceType, input.ServiceID,
 		input.TargetID, input.TargetType, input.Action, input.Priority, enabled, input.TargetScope, input.Direction, id)
 	if err != nil {
@@ -350,16 +359,20 @@ func (h *Handler) DeletePolicy(w http.ResponseWriter, r *http.Request) {
 		oldPeers = nil
 	}
 
-	// Fetch policy name before deletion
+	// Check if policy exists
 	var policyName string
-	err = h.DB.QueryRowContext(r.Context(), "SELECT name FROM policies WHERE id = ?", id).Scan(&policyName)
+	err = h.DB.QueryRowContext(r.Context(), "SELECT name FROM policies WHERE id = ? AND COALESCE(is_pending_delete, 0) = 0", id).Scan(&policyName)
 	if err != nil {
 		common.RespondError(w, http.StatusNotFound, "policy not found")
 		return
 	}
 
-	// Delete the policy
-	res, err := h.DB.ExecContext(r.Context(), "DELETE FROM policies WHERE id = ?", id)
+	if err := h.snapshotPolicy(r.Context(), "delete", id); err != nil {
+		log.ErrorContext(r.Context(), "failed to create snapshot", "error", err)
+	}
+
+	// Soft delete the policy
+	res, err := h.DB.ExecContext(r.Context(), "UPDATE policies SET is_pending_delete = 1 WHERE id = ?", id)
 	if err != nil {
 		log.ErrorContext(r.Context(), "failed to delete policy", "error", err)
 		common.InternalError(w)
@@ -454,6 +467,10 @@ func (h *Handler) PatchPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := h.snapshotPolicy(r.Context(), "update", id); err != nil {
+		log.ErrorContext(r.Context(), "failed to create snapshot", "error", err)
+	}
+
 	// Fetch policy name before update
 	var policyName string
 	err = h.DB.QueryRowContext(r.Context(), "SELECT name FROM policies WHERE id = ?", id).Scan(&policyName)
@@ -539,4 +556,45 @@ func (h *Handler) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/{id:[0-9]+}", h.PatchPolicy).Methods("PATCH")
 	r.HandleFunc("/{id:[0-9]+}", h.DeletePolicy).Methods("DELETE")
 	r.HandleFunc("/special-targets", h.ListSpecialTargets).Methods("GET")
+}
+
+func (h *Handler) snapshotPolicy(ctx context.Context, action string, policyID int) error {
+	if action == "create" {
+		return db.CreateSnapshot(ctx, h.DB, "policy", policyID, action, "")
+	}
+
+	var p struct {
+		ID          int    `json:"id"`
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		SourceID    int    `json:"source_id"`
+		SourceType  string `json:"source_type"`
+		ServiceID   int    `json:"service_id"`
+		TargetID    int    `json:"target_id"`
+		TargetType  string `json:"target_type"`
+		Action      string `json:"action"`
+		Priority    int    `json:"priority"`
+		Enabled     bool   `json:"enabled"`
+		TargetScope string `json:"target_scope"`
+		Direction   string `json:"direction"`
+		CreatedAt   string `json:"created_at"`
+		UpdatedAt   string `json:"updated_at"`
+	}
+
+	err := h.DB.QueryRowContext(ctx,
+		`SELECT id, name, COALESCE(description, ''), source_id, source_type, service_id,
+		target_id, target_type, action, priority, enabled, target_scope, COALESCE(direction, 'both'), created_at, updated_at
+		FROM policies WHERE id = ?`, policyID,
+	).Scan(&p.ID, &p.Name, &p.Description, &p.SourceID, &p.SourceType, &p.ServiceID,
+		&p.TargetID, &p.TargetType, &p.Action, &p.Priority, &p.Enabled, &p.TargetScope, &p.Direction, &p.CreatedAt, &p.UpdatedAt)
+	if err != nil {
+		return fmt.Errorf("get policy: %w", err)
+	}
+
+	bytes, err := json.Marshal(p)
+	if err != nil {
+		return fmt.Errorf("marshal snapshot: %w", err)
+	}
+
+	return db.CreateSnapshot(ctx, h.DB, "policy", policyID, action, string(bytes))
 }

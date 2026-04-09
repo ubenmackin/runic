@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { X, RefreshCw, Copy, Check, AlertCircle, FileCode } from 'lucide-react'
+import { X, RefreshCw, Copy, Check, AlertCircle, FileCode, Trash2 } from 'lucide-react'
 import { api } from '../api/client'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 import { useToastContext } from '../hooks/ToastContext'
@@ -13,6 +13,7 @@ export default function PendingChangesModal({ peerId, peerHostname, onClose, onA
   const [previewLoading, setPreviewLoading] = useState(false)
   const [preview, setPreview] = useState(null)
   const [applyLoading, setApplyLoading] = useState(false)
+  const [rollbackLoading, setRollbackLoading] = useState(false)
 
   useFocusTrap(modalRef, true)
 
@@ -57,6 +58,21 @@ export default function PendingChangesModal({ peerId, peerHostname, onClose, onA
       showToast(`Failed to apply changes: ${err.message}`, 'error')
     } finally {
       setApplyLoading(false)
+    }
+  }
+
+  const handleRollback = async () => {
+    if (!window.confirm('Are you sure you want to discard ALL pending changes across all peers? This action cannot be undone.')) return
+    setRollbackLoading(true)
+    try {
+      await api.post('/pending-changes/rollback')
+      showToast('All pending changes discarded successfully', 'success')
+      onApplied() // Triggers a refetch in the parent component
+      onClose()
+    } catch (err) {
+      showToast(`Failed to rollback changes: ${err.message}`, 'error')
+    } finally {
+      setRollbackLoading(false)
     }
   }
 
@@ -218,23 +234,43 @@ export default function PendingChangesModal({ peerId, peerHostname, onClose, onA
             Close
           </button>
           {changes.length > 0 && (
-            <button
-              onClick={handleApply}
-              disabled={applyLoading || !preview}
-              className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-green-600 hover:bg-green-700 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {applyLoading ? (
-                <>
-                  <RefreshCw className="w-4 h-4 animate-spin" />
-                  Applying...
-                </>
-              ) : (
-                <>
-                  <Check className="w-4 h-4" />
-                  Apply Changes
-                </>
-              )}
-            </button>
+            <div className="flex gap-2">
+              <button
+                onClick={handleRollback}
+                disabled={applyLoading || rollbackLoading}
+                className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/40 rounded-lg disabled:opacity-50 transition-colors"
+                title="Discard all pending changes across all peers"
+              >
+                {rollbackLoading ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    Discarding...
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-4 h-4" />
+                    Discard All
+                  </>
+                )}
+              </button>
+              <button
+                onClick={handleApply}
+                disabled={applyLoading || rollbackLoading || !preview}
+                className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-green-600 hover:bg-green-700 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {applyLoading ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    Applying...
+                  </>
+                ) : (
+                  <>
+                    <Check className="w-4 h-4" />
+                    Apply Changes
+                  </>
+                )}
+              </button>
+            </div>
           )}
         </div>
       </div>

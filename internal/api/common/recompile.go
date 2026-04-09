@@ -130,7 +130,7 @@ func (w *ChangeWorker) processGroupChange(work *changeWork) {
 		SELECT DISTINCT id FROM policies
 		WHERE ((source_type = 'group' AND source_id = ?)
 		OR (target_type = 'group' AND target_id = ?))
-		AND enabled = 1
+		AND enabled = 1 AND is_pending_delete = 0
 	`, work.groupID, work.groupID)
 	if err != nil {
 		runiclog.Error("failed to find policies for group", "group_id", work.groupID, "error", err)

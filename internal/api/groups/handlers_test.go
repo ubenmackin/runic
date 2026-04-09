@@ -470,23 +470,23 @@ func TestDeleteGroup_NotInUse_Success(t *testing.T) {
 		t.Errorf("expected status %d, got %d: %s", http.StatusNoContent, w.Code, w.Body.String())
 	}
 
-	// Verify the group was deleted
-	var count int
-	err = database.QueryRow("SELECT COUNT(*) FROM groups WHERE id = ?", 1).Scan(&count)
+	// Verify the group was soft deleted
+	var isPending bool
+	err = database.QueryRow("SELECT is_pending_delete FROM groups WHERE id = ?", 1).Scan(&isPending)
 	if err != nil {
 		t.Fatalf("failed to query groups: %v", err)
 	}
-	if count != 0 {
-		t.Errorf("expected group to be deleted, but it still exists")
+	if !isPending {
+		t.Errorf("expected group to be soft deleted (is_pending_delete=true), got %v", isPending)
 	}
 
 	// Verify the used group still exists (not affected)
-	err = database.QueryRow("SELECT COUNT(*) FROM groups WHERE id = ?", 2).Scan(&count)
+	err = database.QueryRow("SELECT is_pending_delete FROM groups WHERE id = ?", 2).Scan(&isPending)
 	if err != nil {
 		t.Fatalf("failed to query groups: %v", err)
 	}
-	if count != 1 {
-		t.Errorf("expected used group to still exist, but count = %d", count)
+	if isPending {
+		t.Errorf("expected used group to not be soft deleted, got %v", isPending)
 	}
 }
 
@@ -514,23 +514,25 @@ func TestDeleteGroup_Success(t *testing.T) {
 		t.Errorf("expected status %d, got %d: %s", http.StatusNoContent, w.Code, w.Body.String())
 	}
 
-	// Verify group was deleted
-	var count int
-	err := database.QueryRow("SELECT COUNT(*) FROM groups WHERE id = 1").Scan(&count)
+	// Verify group was soft deleted
+	var isPending bool
+	err := database.QueryRow("SELECT is_pending_delete FROM groups WHERE id = 1").Scan(&isPending)
 	if err != nil {
 		t.Fatalf("failed to check group deletion: %v", err)
 	}
-	if count != 0 {
-		t.Error("expected group to be deleted")
+	if !isPending {
+		t.Error("expected group to be soft deleted")
 	}
 
-	// Verify group_members were also deleted (cascade)
+	// Verify group_members are preserved
+	var count int
 	err = database.QueryRow("SELECT COUNT(*) FROM group_members WHERE group_id = 1").Scan(&count)
 	if err != nil {
 		t.Fatalf("failed to check group_members deletion: %v", err)
 	}
-	if count != 0 {
-		t.Error("expected group_members to be deleted")
+	// count should be 1, skip checking exact for now unless we want to, wait we expect 1
+	if count != 1 {
+		t.Error("expected group_members to be preserved")
 	}
 }
 
