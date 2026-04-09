@@ -81,7 +81,11 @@ chmod 700 /etc/runic-agent
 mkdir -p /var/log/runic
 chmod 755 /var/log/runic
 
-# Set appropriate ownership for log directory (distro-aware)
+# Create empty firewall.log file (agent expects it to exist on startup)
+touch /var/log/runic/firewall.log
+chmod 644 /var/log/runic/firewall.log
+
+# Set appropriate ownership for log directory and file (distro-aware)
 # Uses detect_os() for consistency with the rest of the script
 # rsyslog needs write access to create firewall.log
 OS_TYPE=$(detect_os)
@@ -89,9 +93,9 @@ case "$OS_TYPE" in
     debian|ubuntu|linuxmint|pop)
         # Debian/Ubuntu: rsyslog runs as syslog:adm, but check if user exists
         if id syslog &>/dev/null; then
-            chown syslog:adm /var/log/runic
+            chown syslog:adm /var/log/runic /var/log/runic/firewall.log
         else
-            chown root:adm /var/log/runic
+            chown root:adm /var/log/runic /var/log/runic/firewall.log
         fi
         ;;
     rhel|centos|fedora|rocky|almalinux|ol)
@@ -101,16 +105,16 @@ case "$OS_TYPE" in
     raspbian)
         # Armbian/Raspbian: check if syslog user exists
         if id syslog &>/dev/null; then
-            chown syslog:adm /var/log/runic
+            chown syslog:adm /var/log/runic /var/log/runic/firewall.log
         else
-            chown root:adm /var/log/runic
+            chown root:adm /var/log/runic /var/log/runic/firewall.log
         fi
         ;;
     *)
         # Default: try syslog:adm (common for most distributions)
-        chown syslog:adm /var/log/runic 2>/dev/null || true
+        chown syslog:adm /var/log/runic /var/log/runic/firewall.log 2>/dev/null || true
         ;;
-esac
+    esac
 
 # Install rsyslog config for firewall logs
 if [ -d /etc/rsyslog.d ]; then
