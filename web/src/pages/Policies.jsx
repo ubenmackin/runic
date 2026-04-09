@@ -244,6 +244,13 @@ const { createMutation, updateMutation, deleteMutation } = useCrudMutations({
     }
   }, [activeTab, previewStale, previewLoading, fetchPreview])
 
+  // Auto-set source to "Any IP" when IGMP/VRRP service is selected
+  useEffect(() => {
+    if (modalOpen && isSpecialService && !formData.source_id) {
+      setFormData(d => ({ ...d, source_id: SPECIAL_TARGETS.ANY_IP.id, source_type: 'special' }))
+    }
+  }, [modalOpen, isSpecialService, formData.source_id, setFormData])
+
   const getEntityName = useCallback((type, id) => {
     if (type === 'peer') return peers?.find(p => p.id === id)?.hostname || id
     if (type === 'group') return groups?.find(g => g.id === id)?.name || id
@@ -638,7 +645,19 @@ const { createMutation, updateMutation, deleteMutation } = useCrudMutations({
                   {/* Row 2: Service - (empty) - Action */}
                   <div>
                     <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Service</label>
-                    <SearchableSelect options={serviceOptions} value={formData.service_id} onChange={v => setFormData(d => ({ ...d, service_id: v }))} placeholder="Select service" />
+<SearchableSelect options={serviceOptions} value={formData.service_id} onChange={v => {
+          // Determine if this is a special service (IGMP/VRRP)
+          const serviceName = services?.find(s => s.id === v)?.name?.toUpperCase()
+          const isSpecialSvc = serviceName === 'IGMP' || serviceName === 'VRRP'
+          // Consolidate into single setFormData call to avoid race condition
+          setFormData(d => ({
+            ...d,
+            service_id: v,
+            // Auto-set source for IGMP/VRRP, reset for others
+            source_id: isSpecialSvc ? SPECIAL_TARGETS.ANY_IP.id : '',
+            source_type: isSpecialSvc ? 'special' : 'group'
+          }))
+        }} placeholder="Select service" />
                   </div>
                   <div>{/* spacer */}</div>
                   <div>
