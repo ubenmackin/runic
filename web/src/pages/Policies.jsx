@@ -164,17 +164,9 @@ const polymorphicOptions = [
     value: s.id,
     label: s.name,
     category: s.is_system ? 'System Services' : 'User Services'
-  }))
+}))
 
-  // Check if any selected peer (source or target) has Docker
-  // MD-003: Show "Applies To" when either source or target is a peer with Docker,
-  // since target_scope affects DOCKER-USER rule generation for whichever peer the rules compile for
-  const selectedPeerHasDocker = (
-    (formData.target_type === 'peer' && formData.target_id && peers?.find(p => p.id === formData.target_id)?.has_docker) ||
-    (formData.source_type === 'peer' && formData.source_id && peers?.find(p => p.id === formData.source_id)?.has_docker)
-  )
-
-  const { createMutation, updateMutation, deleteMutation } = useCrudMutations({
+const { createMutation, updateMutation, deleteMutation } = useCrudMutations({
     apiPath: '/policies',
     queryKey: QUERY_KEYS.policies(),
     additionalInvalidations: [['pending-changes']],
@@ -663,9 +655,8 @@ const polymorphicOptions = [
                     </div>
                   </div>
                 </div>
-      {/* Docker Integration Scope - Only shown when target is a peer and has Docker */}
-      {selectedPeerHasDocker && (
-        <div>
+{/* Docker Integration Scope - Always visible for policy configuration */}
+<div>
           <div className="flex items-center gap-2 mb-1">
             <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary">Applies To</label>
             <span className="text-xs text-gray-500 dark:text-amber-muted">(Docker Integration)</span>
@@ -704,13 +695,12 @@ const polymorphicOptions = [
                   : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-white/50 dark:hover:bg-charcoal-dark/50'
               }`}
             >
-              Docker Only
-            </button>
-          </div>
-        </div>
-      )}
+Docker Only
+</button>
+</div>
+</div>
 
-      {/* Policy Enabled Section */}
+{/* Policy Enabled Section */}
       <div className="p-4 bg-gray-50 dark:bg-charcoal-darkest border border-gray-200 dark:border-gray-border rounded-lg">
         <div className="flex items-center justify-between">
           <div>
