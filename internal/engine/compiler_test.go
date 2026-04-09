@@ -1963,6 +1963,187 @@ func TestPreviewCompile_IGMP(t *testing.T) {
 	}
 }
 
+// TestVRRPService verifies that VRRP service generates OUTPUT rule to 224.0.0.18
+func TestVRRPService(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+	peerID := insertPeer(t, database, "vrrp1", "192.168.1.60", false)
+	groupID := insertGroup(t, database, "vrrp-group")
+	manualPeerID := insertManualPeer(t, database, "10.0.20.0/24")
+	insertGroupMember(t, database, groupID, manualPeerID)
+	// Insert VRRP service
+	serviceID := insertService(t, database, "VRRP", "", "vrrp")
+	insertPolicy(t, database, "allow-vrrp", groupID, serviceID, peerID, "ACCEPT", 100, true)
+
+	c := NewCompiler(database)
+	output, err := c.Compile(context.Background(), peerID)
+	if err != nil {
+		t.Fatalf("compile error: %v", err)
+	}
+
+	// VRRP should have OUTPUT rule to 224.0.0.18
+	if !strings.Contains(output, "-A OUTPUT -d 224.0.0.18/32 -p vrrp -j ACCEPT") {
+		t.Errorf("expected OUTPUT rule for VRRP (224.0.0.18), got:\n%s", output)
+	}
+}
+
+// TestVRRPService_NoConntrack verifies no conntrack rules are generated for VRRP
+func TestVRRPService_NoConntrack(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+	peerID := insertPeer(t, database, "vrrp-nc", "192.168.1.61", false)
+	groupID := insertGroup(t, database, "vrrp-nc-group")
+	manualPeerID := insertManualPeer(t, database, "10.0.21.0/24")
+	insertGroupMember(t, database, groupID, manualPeerID)
+	serviceID := insertService(t, database, "VRRP", "", "vrrp")
+	insertPolicy(t, database, "allow-vrrp-nc", groupID, serviceID, peerID, "ACCEPT", 100, true)
+
+	c := NewCompiler(database)
+	output, err := c.Compile(context.Background(), peerID)
+	if err != nil {
+		t.Fatalf("compile error: %v", err)
+	}
+
+	// Should NOT have conntrack on any VRRP rule (check per-line)
+	lines := strings.Split(output, "\n")
+	for _, line := range lines {
+		if strings.Contains(line, "vrrp") && strings.Contains(line, "conntrack") {
+			t.Errorf("VRRP rule should not use conntrack: %s", line)
+		}
+	}
+}
+
+// TestVRRPService_NoReturnRules verifies VRRP only generates OUTPUT rules (no INPUT/return rules)
+// VRRP is special - it only generates OUTPUT to the VRRP multicast address 224.0.0.18
+func TestVRRPService_NoReturnRules(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+	peerID := insertPeer(t, database, "vrrp-nr", "192.168.1.62", false)
+	groupID := insertGroup(t, database, "vrrp-nr-group")
+	manualPeerID := insertManualPeer(t, database, "10.0.22.0/24")
+	insertGroupMember(t, database, groupID, manualPeerID)
+	serviceID := insertService(t, database, "VRRP", "", "vrrp")
+	insertPolicy(t, database, "allow-vrrp-nr", groupID, serviceID, peerID, "ACCEPT", 100, true)
+
+	c := NewCompiler(database)
+	output, err := c.Compile(context.Background(), peerID)
+	if err != nil {
+		t.Fatalf("compile error: %v", err)
+	}
+
+	// VRRP should only have OUTPUT rules, no INPUT rules
+	// Count VRRP-related rules - should be exactly 1 (OUTPUT only)
+	vrrpRuleCount := 0
+	lines := strings.Split(output, "\n")
+	for _, line := range lines {
+		if strings.Contains(line, "-p vrrp") && strings.Contains(line, "-A") {
+			vrrpRuleCount++
+		}
+	}
+	if vrrpRuleCount != 1 {
+		t.Errorf("expected exactly 1 VRRP rule (OUTPUT only), got %d:\n%s", vrrpRuleCount, output)
+	}
+
+	// Should NOT have INPUT rule specifically for VRRP (not other standard INPUT rules)
+	for _, line := range lines {
+		if strings.Contains(line, "-A INPUT") && strings.Contains(line, "-p vrrp") {
+			t.Errorf("VRRP should not have INPUT rule: %s", line)
+		}
+	}
+}
+
+// TestVRRPService_WithDocker verifies VRRP generates DOCKER-USER rules when Docker is enabled
+func TestVRRPService_WithDocker(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+	peerID := insertPeer(t, database, "vrrp-docker", "192.168.1.63", true)
+	groupID := insertGroup(t, database, "vrrp-docker-group")
+	manualPeerID := insertManualPeer(t, database, "10.0.23.0/24")
+	insertGroupMember(t, database, groupID, manualPeerID)
+	serviceID := insertService(t, database, "VRRP", "", "vrrp")
+	insertPolicy(t, database, "allow-vrrp-docker", groupID, serviceID, peerID, "ACCEPT", 100, true)
+
+	c := NewCompiler(database)
+	output, err := c.Compile(context.Background(), peerID)
+	if err != nil {
+		t.Fatalf("compile error: %v", err)
+	}
+
+	// Should have OUTPUT rule for VRRP
+	if !strings.Contains(output, "-A OUTPUT -d 224.0.0.18/32 -p vrrp -j ACCEPT") {
+		t.Errorf("expected OUTPUT rule for VRRP (224.0.0.18), got:\n%s", output)
+	}
+
+	// Should have DOCKER-USER rule for VRRP
+	if !strings.Contains(output, "-A DOCKER-USER -d 224.0.0.18/32 -p vrrp -j ACCEPT") {
+		t.Errorf("expected DOCKER-USER rule for VRRP (224.0.0.18), got:\n%s", output)
+	}
+}
+
+// TestPreviewCompile_VRRP verifies PreviewCompile handles VRRP correctly
+func TestPreviewCompile_VRRP(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+
+	// Create source and target peers
+	sourcePeer := insertPeer(t, database, "vrrp-source", "10.0.0.1", false)
+	targetPeer := insertPeer(t, database, "vrrp-target", "10.0.0.2", false)
+
+	// Create VRRP service
+	serviceID := insertService(t, database, "VRRP", "", "vrrp")
+
+	c := NewCompiler(database)
+
+	// Preview with VRRP service
+	rules, err := c.PreviewCompile(context.Background(), 0, sourcePeer, "peer", targetPeer, "peer", serviceID, "both", "both")
+	if err != nil {
+		t.Fatalf("PreviewCompile failed: %v", err)
+	}
+
+	// Should generate OUTPUT rule for VRRP
+	hasOutputRule := false
+	for _, rule := range rules {
+		if strings.Contains(rule, "-A OUTPUT -d 224.0.0.18/32 -p vrrp -j ACCEPT") {
+			hasOutputRule = true
+		}
+	}
+
+	if !hasOutputRule {
+		t.Errorf("expected OUTPUT rule for VRRP in preview, got: %v", rules)
+	}
+
+	// Should NOT have INPUT rule for VRRP
+	for _, rule := range rules {
+		if strings.Contains(rule, "-A INPUT") && strings.Contains(rule, "vrrp") {
+			t.Errorf("VRRP preview should not have INPUT rule: %s", rule)
+		}
+	}
+
+	// Should NOT have conntrack rules for VRRP
+	for _, rule := range rules {
+		if strings.Contains(rule, "vrrp") && strings.Contains(rule, "conntrack") {
+			t.Errorf("VRRP preview rules should not use conntrack: %s", rule)
+		}
+	}
+
+	// Should have DOCKER-USER rules for VRRP (target_scope=both)
+	hasDockerVRRP := false
+	for _, rule := range rules {
+		if strings.Contains(rule, "DOCKER-USER") && strings.Contains(rule, "vrrp") {
+			hasDockerVRRP = true
+			break
+		}
+	}
+	if !hasDockerVRRP {
+		t.Errorf("expected DOCKER-USER rules for VRRP in preview (target_scope=both), got: %v", rules)
+	}
+}
+
 // TestMulticastPolicy_SourceIsMulticastSpecial verifies that when Source is a multicast special target,
 // the compiler generates INPUT rules for receiving multicast traffic
 func TestMulticastPolicy_SourceIsMulticastSpecial(t *testing.T) {

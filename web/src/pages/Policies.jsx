@@ -144,6 +144,12 @@ const { data: specialTargets } = useQuery({
 // Check if the selected service is IGMP
 const isIGMPService = formData.service_id && services?.find(s => s.id === formData.service_id)?.name?.toUpperCase() === 'IGMP'
 
+// Check if the selected service is VRRP
+const isVRRPService = formData.service_id && services?.find(s => s.id === formData.service_id)?.name?.toUpperCase() === 'VRRP'
+
+// Combined check for special services (IGMP and VRRP)
+const isSpecialService = isIGMPService || isVRRPService
+
 const polymorphicOptions = [
   ...(groups || []).map(g => ({ value: g.id, label: g.name, category: 'group' })),
   ...(peers || []).map(p => ({ 
@@ -201,9 +207,9 @@ const polymorphicOptions = [
   }
 
   const fetchPreview = useCallback(async () => {
-    // IGMP doesn't require source_id
-    if (!formData.service_id || !formData.target_id || (!isIGMPService && !formData.source_id)) {
-      setFormErrors({ _general: isIGMPService ? 'Select service and target to preview' : 'Select source, service, and target to preview' })
+    // IGMP and VRRP don't require source_id
+    if (!formData.service_id || !formData.target_id || (!isSpecialService && !formData.source_id)) {
+      setFormErrors({ _general: isSpecialService ? 'Select service and target to preview' : 'Select source, service, and target to preview' })
       return
     }
     setPreviewLoading(true)
@@ -226,7 +232,7 @@ const polymorphicOptions = [
     } finally {
       setPreviewLoading(false)
     }
-  }, [formData, isIGMPService])
+  }, [formData, isSpecialService])
 
   const initialFormRender = useRef(true);
 
@@ -578,8 +584,8 @@ const polymorphicOptions = [
                   {/* Row 1: Source - Direction - Target */}
                   <div>
                     <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Source</label>
-                    <div title={isIGMPService ? "IGMP is a host-level protocol — source is not used" : undefined} className={isIGMPService ? 'opacity-50' : ''}>
-                      <SearchableSelect options={polymorphicOptions} value={formData.source_id} category={formData.source_type} onChange={(v, type) => setFormData(d => ({ ...d, source_id: v, source_type: type }))} placeholder="Select group or peer" disabled={isIGMPService} />
+                    <div title={isSpecialService ? "IGMP/VRRP are host-level protocols — source is not used" : undefined} className={isSpecialService ? 'opacity-50' : ''}>
+                      <SearchableSelect options={polymorphicOptions} value={formData.source_id} category={formData.source_type} onChange={(v, type) => setFormData(d => ({ ...d, source_id: v, source_type: type }))} placeholder="Select group or peer" disabled={isSpecialService} />
                     </div>
 
                   </div>
@@ -588,19 +594,19 @@ const polymorphicOptions = [
                       <button
                         type="button"
                         onClick={() => {
-                          if (formData.direction === 'forward' || isIGMPService) return
+                          if (formData.direction === 'forward' || isSpecialService) return
                           setFormData(d => ({
                             ...d,
                             direction: d.direction === 'both' ? 'backward' : (d.direction === 'backward' ? 'both' : 'forward')
                           }))
                         }}
-                        disabled={isIGMPService}
+                        disabled={isSpecialService}
                         className={`flex items-center justify-center w-28 h-8 rounded-xl border-2 transition-all duration-200 ${
                           formData.direction === 'both' || formData.direction === 'forward'
                             ? 'bg-emerald-900/80 border-emerald-500 text-emerald-400 hover:bg-emerald-800/80'
                             : 'bg-gray-200 dark:bg-gray-800 border-gray-300 dark:border-gray-600 text-gray-400 dark:text-gray-500 hover:bg-gray-300 dark:hover:bg-gray-700'
-                        } ${isIGMPService ? 'opacity-50 cursor-not-allowed' : ''}`}
-                        title={isIGMPService ? "IGMP generates both INPUT and OUTPUT automatically — direction is fixed" : "Forward: Source → Target"}
+                        } ${isSpecialService ? 'opacity-50 cursor-not-allowed' : ''}`}
+                        title={isSpecialService ? "IGMP/VRRP generate OUTPUT rules automatically — direction is fixed" : "Forward: Source → Target"}
                       >
                         <svg viewBox="0 0 80 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="w-16 h-4">
                           <line x1="8" y1="12" x2="66" y2="12" />
@@ -610,19 +616,19 @@ const polymorphicOptions = [
                       <button
                         type="button"
                         onClick={() => {
-                          if (formData.direction === 'backward' || isIGMPService) return
+                          if (formData.direction === 'backward' || isSpecialService) return
                           setFormData(d => ({
                             ...d,
                             direction: d.direction === 'both' ? 'forward' : (d.direction === 'forward' ? 'both' : 'backward')
                           }))
                         }}
-                        disabled={isIGMPService}
+                        disabled={isSpecialService}
                         className={`flex items-center justify-center w-28 h-8 rounded-xl border-2 transition-all duration-200 ${
                           formData.direction === 'both' || formData.direction === 'backward'
                             ? 'bg-emerald-900/80 border-emerald-500 text-emerald-400 hover:bg-emerald-800/80'
                             : 'bg-gray-200 dark:bg-gray-800 border-gray-300 dark:border-gray-600 text-gray-400 dark:text-gray-500 hover:bg-gray-300 dark:hover:bg-gray-700'
-                        } ${isIGMPService ? 'opacity-50 cursor-not-allowed' : ''}`}
-                        title={isIGMPService ? "IGMP generates both INPUT and OUTPUT automatically — direction is fixed" : "Backward: Target → Source"}
+                        } ${isSpecialService ? 'opacity-50 cursor-not-allowed' : ''}`}
+                        title={isSpecialService ? "IGMP/VRRP generate OUTPUT rules automatically — direction is fixed" : "Backward: Target → Source"}
                       >
                         <svg viewBox="0 0 80 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="w-16 h-4">
                           <line x1="72" y1="12" x2="14" y2="12" />
@@ -664,6 +670,7 @@ const polymorphicOptions = [
             <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary">Applies To</label>
             <span className="text-xs text-gray-500 dark:text-amber-muted">(Docker Integration)</span>
             {isIGMPService && <span className="text-xs text-blue-600 dark:text-blue-400 ml-1">— "Host Only" is typical for IGMP</span>}
+            {isVRRPService && <span className="text-xs text-blue-600 dark:text-blue-400 ml-1">— "Host Only" is typical for VRRP</span>}
           </div>
           <div className="flex bg-gray-100 dark:bg-charcoal-darkest p-1 rounded-lg border border-gray-200 dark:border-gray-border">
             <button

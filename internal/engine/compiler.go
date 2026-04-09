@@ -439,10 +439,11 @@ ELSE 0 END as is_source
 		protocol := svc.Protocol
 		noConntrack := svc.NoConntrack
 
-		// Expand ports for non-multicast and non-broadcast services
+		// Expand ports for non-multicast, non-broadcast, and non-IGMP/VRRP services
 		var portClauses []PortClause
 		isBroadcastService := serviceName == "Subnet Broadcast" || serviceName == "Limited Broadcast"
-		if serviceName != "Multicast" && !isBroadcastService {
+		isIGMPorVRRP := strings.EqualFold(serviceName, "IGMP") || strings.EqualFold(serviceName, "VRRP")
+		if serviceName != "Multicast" && !isBroadcastService && !isIGMPorVRRP {
 			portClauses, err = ExpandPorts(ports, sourcePorts, protocol)
 			if err != nil {
 				return "", fmt.Errorf("expand ports for policy %s: %w", pol.Name, err)
@@ -452,9 +453,14 @@ ELSE 0 END as is_source
 		fmt.Fprintf(&buf, "# --- Policy: %s ---\n", pol.Name)
 
 		// IG-001: Special IGMP handling - skip normal source/target resolution
-		if strings.EqualFold(serviceName, "IGMP") {
+		// VRRP-001: Special VRRP handling - skip normal source/target resolution
+		if strings.EqualFold(serviceName, "IGMP") || strings.EqualFold(serviceName, "VRRP") {
 			if writeToHost {
-				c.writeIGMPRules(rw, pol.TargetScope, hasDocker)
+				if strings.EqualFold(serviceName, "IGMP") {
+					c.writeIGMPRules(rw, pol.TargetScope, hasDocker)
+				} else if strings.EqualFold(serviceName, "VRRP") {
+					c.writeVRRPRules(rw, pol.TargetScope, hasDocker)
+				}
 			}
 			buf.WriteString("\n")
 			continue // Skip to next policy
@@ -658,6 +664,22 @@ func (c *Compiler) writeIGMPRules(rw *ruleWriter, targetScope string, hasDocker 
 	if writeToDocker {
 		rw.accept("DOCKER-USER", "-d 224.0.0.1/32 -p igmp")
 		rw.accept("DOCKER-USER", "-d 224.0.0.22/32 -p igmp")
+	}
+}
+
+// writeVRRPRules generates fixed VRRP rules for VRRP communication.
+// VRRP is a protocol for virtual router redundancy, using multicast 224.0.0.18.
+// No conntrack or return rules are needed.
+func (c *Compiler) writeVRRPRules(rw *ruleWriter, targetScope string, hasDocker bool) {
+	writeToHost := targetScope == "host" || targetScope == "both"
+	writeToDocker := hasDocker && (targetScope == "docker" || targetScope == "both")
+
+	if writeToHost {
+		// Accept VRRP advertisements (224.0.0.18 = VRRP multicast)
+		rw.accept("OUTPUT", "-d 224.0.0.18/32 -p vrrp")
+	}
+	if writeToDocker {
+		rw.accept("DOCKER-USER", "-d 224.0.0.18/32 -p vrrp")
 	}
 }
 
@@ -963,7 +985,9 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 	}
 
 	var portClauses []PortClause
-	if serviceName != "Multicast" {
+	// Skip port expansion for special services that don't use ports
+	isIGMPorVRRP := strings.EqualFold(serviceName, "IGMP") || strings.EqualFold(serviceName, "VRRP")
+	if serviceName != "Multicast" && !isIGMPorVRRP {
 		portClauses, err = ExpandPorts(ports, sourcePorts, protocol)
 		if err != nil {
 			return nil, fmt.Errorf("expand ports: %w", err)
@@ -1011,12 +1035,18 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 	// Target hosts get: INPUT from source + OUTPUT established to source
 	if targetScope == "host" || targetScope == "both" {
 		// IG-002: Special IGMP handling - skip normal source/target resolution
-		if strings.EqualFold(serviceName, "IGMP") {
+		// VRRP-002: Special VRRP handling - skip normal source/target resolution
+		switch {
+		case strings.EqualFold(serviceName, "IGMP"):
+			// IG-002: Special IGMP handling
 			rules = append(rules,
 				"-A INPUT -d 224.0.0.1/32 -p igmp -j ACCEPT",
 				"-A OUTPUT -d 224.0.0.22/32 -p igmp -j ACCEPT",
 			)
-		} else if direction == "both" || direction == "forward" {
+		case strings.EqualFold(serviceName, "VRRP"):
+			// VRRP-002: Special VRRP handling (advertisements are sent to 224.0.0.18)
+			rules = append(rules, "-A OUTPUT -d 224.0.0.18/32 -p vrrp -j ACCEPT")
+		case direction == "both" || direction == "forward":
 			rules = append(rules, "# Forward (Source → Target)")
 			for _, targetCIDR := range targetCIDRs {
 				if serviceName == "Multicast" {
@@ -1052,7 +1082,8 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 		// Target hosts get: OUTPUT to source + INPUT established from source
 		// Source hosts get: INPUT from target + OUTPUT established to target
 		// IG-002: Skip backward for IGMP (already handled above)
-		if !strings.EqualFold(serviceName, "IGMP") && (direction == "both" || direction == "backward") {
+		// VRRP-002: Skip backward for VRRP (already handled above)
+		if !strings.EqualFold(serviceName, "IGMP") && !strings.EqualFold(serviceName, "VRRP") && (direction == "both" || direction == "backward") {
 			rules = append(rules, "# Backward (Target → Source)")
 			// MC-009: Multicast special targets as Source indicate receiving multicast traffic
 			isMulticastSource := sourceType == "special" && isMulticastSpecialID(sourceID)
@@ -1091,12 +1122,18 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 	// Generated when targetScope is "docker" or "both"
 	if targetScope == "docker" || targetScope == "both" {
 		// IG-002: Special IGMP handling for Docker
-		if strings.EqualFold(serviceName, "IGMP") {
+		// VRRP-002: Special VRRP handling for Docker
+		switch {
+		case strings.EqualFold(serviceName, "IGMP"):
+			// IG-002: Special IGMP handling for Docker
 			rules = append(rules,
 				"-A DOCKER-USER -d 224.0.0.1/32 -p igmp -j ACCEPT",
 				"-A DOCKER-USER -d 224.0.0.22/32 -p igmp -j ACCEPT",
 			)
-		} else {
+		case strings.EqualFold(serviceName, "VRRP"):
+			// VRRP-002: Special VRRP handling (advertisements are sent to 224.0.0.18)
+			rules = append(rules, "-A DOCKER-USER -d 224.0.0.18/32 -p vrrp -j ACCEPT")
+		default:
 			rules = append(rules, "# Docker: DOCKER-USER chain rules")
 			// Forward direction: Source → Target (Docker)
 			if direction == "both" || direction == "forward" {
@@ -1125,7 +1162,8 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 			}
 			// Backward direction: Target (Docker) ← Source
 			// IG-002: Skip backward for IGMP (already handled above)
-			if !strings.EqualFold(serviceName, "IGMP") && (direction == "both" || direction == "backward") {
+			// VRRP-002: Skip backward for VRRP (already handled above)
+			if !strings.EqualFold(serviceName, "IGMP") && !strings.EqualFold(serviceName, "VRRP") && (direction == "both" || direction == "backward") {
 				// MC-009: Multicast special targets as Source indicate receiving multicast traffic
 				isMulticastSource := sourceType == "special" && isMulticastSpecialID(sourceID)
 				// BC-003: Broadcast special targets as Source indicate receiving broadcast traffic

@@ -68,6 +68,14 @@ func seedSystemServices(ctx context.Context, database *sql.DB) error {
 			Description: "Handles limited broadcast traffic to 255.255.255.255. This address reaches all hosts on the local network segment regardless of subnet. No conntrack tracking. Generates INPUT-only rules.",
 			NoConntrack: true,
 		},
+		{
+			Name:        "VRRP",
+			Ports:       "",
+			SourcePorts: "",
+			Protocol:    "vrrp",
+			Description: "Virtual Router Redundancy Protocol. Used for failover between routers on the same network. Generates OUTPUT rule to 224.0.0.18 (VRRP multicast). No conntrack tracking — VRRP is connectionless. Both OUTPUT rules are auto-generated regardless of policy direction.",
+			NoConntrack: true,
+		},
 	}
 
 	for _, svc := range systemServices {
