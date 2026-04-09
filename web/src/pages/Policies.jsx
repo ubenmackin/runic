@@ -146,7 +146,11 @@ const isIGMPService = formData.service_id && services?.find(s => s.id === formDa
 
 const polymorphicOptions = [
   ...(groups || []).map(g => ({ value: g.id, label: g.name, category: 'group' })),
-  ...(peers || []).map(p => ({ value: p.id, label: p.hostname, category: 'peer' })),
+  ...(peers || []).map(p => ({ 
+  value: p.id, 
+  label: p.hostname ? `${p.hostname} - ${p.ip_address}` : p.ip_address, 
+  category: 'peer' 
+})),
   ...(specialTargets || []).map(s => ({ value: s.id, label: s.display_name, category: 'special' }))
 ]
 

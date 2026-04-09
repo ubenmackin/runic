@@ -16,6 +16,7 @@ export default function Settings() {
   const [logSettings, setLogSettings] = useState(null)
   const [retentionDays, setRetentionDays] = useState(30)
   const [customDays, setCustomDays] = useState('')
+  const [useCustomRetention, setUseCustomRetention] = useState(false)
   const [showClearLogsModal, setShowClearLogsModal] = useState(false)
   const deleteModalRef = useRef(null)
   const createModalRef = useRef(null)
@@ -58,6 +59,16 @@ export default function Settings() {
     if (logSettingsData) {
       setLogSettings(logSettingsData)
       setRetentionDays(logSettingsData.retention_days)
+      // Define standard retention values
+      const standardValues = [0, 1, 14, 30, 90, 365, -1]
+      const isNonStandard = !standardValues.includes(logSettingsData.retention_days)
+      if (isNonStandard) {
+        // Initialize customDays and show input for non-standard values
+        setCustomDays(String(logSettingsData.retention_days))
+        setUseCustomRetention(true)
+      } else {
+        setUseCustomRetention(false)
+      }
     }
   }, [logSettingsData])
 
@@ -114,6 +125,98 @@ export default function Settings() {
         </div>
       ) : (
         <>
+          {/* Log Management Section */}
+          <div className="bg-white dark:bg-charcoal-dark rounded-lg shadow">
+            <div className="p-6">
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-3">
+                  <Database className="w-5 h-5 text-purple-500" />
+                  <h2 className="text-lg font-semibold text-gray-900 dark:text-light-neutral">Log Management</h2>
+                </div>
+                <button
+                  onClick={() => setShowClearLogsModal(true)}
+                  className="inline-flex items-center gap-2 px-3 py-2 text-sm bg-red-600 hover:bg-red-700 text-white rounded-lg"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  Clear All Logs
+                </button>
+              </div>
+              {/* Stats */}
+              <div className="flex gap-6 mb-4">
+                <div className="flex items-center gap-2">
+                  <HardDrive className="w-4 h-4 text-gray-400" />
+                  <span className="text-sm text-gray-600 dark:text-amber-muted">
+                    {logSettings?.log_count?.toLocaleString() || 0} logs
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-gray-600 dark:text-amber-muted">
+                    ~{logSettings?.estimated_size_mb?.toLocaleString() || 0} MB
+                  </span>
+                </div>
+              </div>
+              {/* Retention Setting */}
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-2">
+                  Retention Period
+                </label>
+                <div className="flex gap-2 items-center">
+                  <select
+                    value={useCustomRetention ? 'custom' : (retentionDays === -1 ? 'unlimited' : retentionDays === 0 ? '0' : retentionDays === 1 ? '1' : retentionDays === 14 ? '14' : retentionDays === 30 ? '30' : retentionDays === 90 ? '90' : retentionDays === 365 ? '365' : 'custom')}
+                    onChange={(e) => {
+                      const val = e.target.value
+                      if (val === 'custom') {
+                        setUseCustomRetention(true)
+                      } else {
+                        setUseCustomRetention(false)
+                        if (val === 'unlimited') {
+                          setRetentionDays(-1)
+                          updateLogSettingsMutation.mutate(-1)
+                        } else {
+                          const days = parseInt(val)
+                          setRetentionDays(days)
+                          updateLogSettingsMutation.mutate(days)
+                        }
+                      }
+                    }}
+                    className="px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+                  >
+                    <option value="0">Disabled (no logging)</option>
+                    <option value="1">1 Day</option>
+                    <option value="14">14 Days</option>
+                    <option value="30">30 Days</option>
+                    <option value="90">90 Days</option>
+                    <option value="365">365 Days</option>
+                    <option value="unlimited">Unlimited</option>
+                    <option value="custom">Custom...</option>
+                  </select>
+                  {(useCustomRetention || (retentionDays > 0 && ![0, 1, 14, 30, 90, 365].includes(retentionDays))) && (
+                    <input
+                      type="number"
+                      min="1"
+                      max="9999"
+                      value={customDays}
+                      onChange={(e) => {
+                        const val = parseInt(e.target.value) || 1
+                        setCustomDays(String(val))
+                        setRetentionDays(Math.min(9999, Math.max(1, val)))
+                      }}
+                      onBlur={() => updateLogSettingsMutation.mutate(retentionDays)}
+                      className="w-24 px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+                    />
+                  )}
+                </div>
+                <p className="text-xs text-gray-500 dark:text-amber-muted mt-1">
+                  {retentionDays === -1
+                    ? 'Logs will never be automatically deleted.'
+                    : retentionDays === 0
+                    ? 'Agents will not send logs to the control plane.'
+                    : `Logs older than ${retentionDays} day${retentionDays !== 1 ? 's' : ''} will be automatically deleted.`}
+                </p>
+              </div>
+            </div>
+          </div>
+
           {/* JWT Secret Section */}
           <div className="bg-white dark:bg-charcoal-dark rounded-lg shadow">
             <div className="p-6">
@@ -178,94 +281,6 @@ export default function Settings() {
               </p>
               <div className="mt-4 p-3 bg-gray-100 dark:bg-charcoal-darkest rounded font-mono text-sm text-gray-700 dark:text-amber-primary">
                 {isLoading ? 'Loading...' : getKeyData('agent-jwt-secret')?.exists ? '•••••••••••••••••••••••••••••••••••••••••' : 'No key configured'}
-              </div>
-            </div>
-          </div>
-
-          {/* Log Management Section */}
-          <div className="bg-white dark:bg-charcoal-dark rounded-lg shadow">
-            <div className="p-6">
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center gap-3">
-                  <Database className="w-5 h-5 text-purple-500" />
-                  <h2 className="text-lg font-semibold text-gray-900 dark:text-light-neutral">Log Management</h2>
-                </div>
-                <button
-                  onClick={() => setShowClearLogsModal(true)}
-                  className="inline-flex items-center gap-2 px-3 py-2 text-sm bg-red-600 hover:bg-red-700 text-white rounded-lg"
-                >
-                  <Trash2 className="w-4 h-4" />
-                  Clear All Logs
-                </button>
-              </div>
-              {/* Stats */}
-              <div className="flex gap-6 mb-4">
-                <div className="flex items-center gap-2">
-                  <HardDrive className="w-4 h-4 text-gray-400" />
-                  <span className="text-sm text-gray-600 dark:text-amber-muted">
-                    {logSettings?.log_count?.toLocaleString() || 0} logs
-                  </span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-sm text-gray-600 dark:text-amber-muted">
-                    ~{logSettings?.estimated_size_mb?.toLocaleString() || 0} MB
-                  </span>
-                </div>
-              </div>
-              {/* Retention Setting */}
-              <div className="mb-4">
-                <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-2">
-                  Retention Period
-                </label>
-                <div className="flex gap-2 items-center">
-                  <select
-                    value={retentionDays === -1 ? 'unlimited' : retentionDays === 0 ? '0' : retentionDays === 1 ? '1' : retentionDays === 14 ? '14' : retentionDays === 30 ? '30' : retentionDays === 90 ? '90' : retentionDays === 365 ? '365' : 'custom'}
-                    onChange={(e) => {
-                      const val = e.target.value
-                      if (val === 'custom') {
-                        setRetentionDays(parseInt(customDays) || 30)
-                      } else if (val === 'unlimited') {
-                        setRetentionDays(-1)
-                        updateLogSettingsMutation.mutate(-1)
-                      } else {
-                        const days = parseInt(val)
-                        setRetentionDays(days)
-                        updateLogSettingsMutation.mutate(days)
-                      }
-                    }}
-                    className="px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-                  >
-                    <option value="0">Disabled (no logging)</option>
-                    <option value="1">1 Day</option>
-                    <option value="14">14 Days</option>
-                    <option value="30">30 Days</option>
-                    <option value="90">90 Days</option>
-                    <option value="365">365 Days</option>
-                    <option value="unlimited">Unlimited</option>
-                    <option value="custom">Custom...</option>
-                  </select>
-                  {retentionDays > 0 && retentionDays !== 1 && retentionDays !== 14 && retentionDays !== 30 && retentionDays !== 90 && retentionDays !== 365 && retentionDays !== -1 && (
-                    <input
-                      type="number"
-                      min="1"
-                      max="9999"
-                      value={retentionDays}
-                      onChange={(e) => {
-                        const val = parseInt(e.target.value) || 1
-                        setRetentionDays(Math.min(9999, Math.max(1, val)))
-                      }}
-                      onBlur={() => updateLogSettingsMutation.mutate(retentionDays)}
-                      className="w-24 px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-                    />
-                  )}
-                </div>
-                <p className="text-xs text-gray-500 dark:text-amber-muted mt-1">
-                  {retentionDays === -1
-                    ? 'Logs will never be automatically deleted.'
-                    : retentionDays === 0
-                    ? 'Agents will not send logs to the control plane.'
-                    : `Logs older than ${retentionDays} day${retentionDays !== 1 ? 's' : ''} will be automatically deleted.`}
-                </p>
               </div>
             </div>
           </div>

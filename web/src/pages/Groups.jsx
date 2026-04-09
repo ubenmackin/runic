@@ -92,10 +92,10 @@ export default function Groups() {
   const availablePeers = (allPeers || []).filter(
     peer => !members.some(m => m.id === peer.id)
   )
-  const peerOptions = availablePeers.map(p => ({
-    value: p.id,
-    label: p.hostname || p.ip_address,
-  }))
+const peerOptions = availablePeers.map(p => ({
+  value: p.id,
+  label: p.hostname ? `${p.hostname} - ${p.ip_address}` : p.ip_address,
+}))
 
   // Split groups into system and user groups
   const systemGroups = (groups || []).filter(g => g.is_system)
