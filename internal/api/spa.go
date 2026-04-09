@@ -21,7 +21,7 @@ func InjectNonceIntoHTML(subFS fs.FS, path string, nonce string) ([]byte, error)
 	// Inject nonce into inline script tags
 	// Replace <script> with <script nonce="...">
 	// We need to be careful not to modify external script tags
-	html = strings.Replace(html, "<script>", `<script nonce="`+nonce+`">`, -1)
+	html = strings.ReplaceAll(html, "<script>", `<script nonce="`+nonce+`">`)
 
 	return []byte(html), nil
 }
@@ -59,29 +59,4 @@ func HTMLWithNonceHandler(subFS fs.FS, path string) http.HandlerFunc {
 			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		}
 	}
-}
-
-// NewSPAFileServer creates a custom file server that injects nonce into HTML files.
-// For non-HTML files, it serves them normally.
-func NewSPAFileServer(subFS fs.FS, nonce string) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		path := r.URL.Path
-
-		// Check if this is an HTML file request
-		if strings.HasSuffix(path, ".html") || path == "/" || path == "" {
-			if path == "/" || path == "" {
-				path = "index.html"
-			}
-			path = strings.TrimPrefix(path, "/")
-
-			// Inject nonce and serve
-			if err := ServeHTMLWithNonce(w, r, subFS, path, nonce); err != nil {
-				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-			}
-			return
-		}
-
-		// For non-HTML files, serve normally
-		http.ServeFileFS(w, r, subFS, strings.TrimPrefix(path, "/"))
-	})
 }

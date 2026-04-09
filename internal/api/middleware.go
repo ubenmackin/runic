@@ -76,6 +76,8 @@ func generateNonce() string {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
 		// Fallback to timestamp-based value if crypto/rand fails
+		// This should be extremely rare but we log it for security monitoring
+		log.Warn("crypto/rand failed in generateNonce, using timestamp fallback", "error", err)
 		return hex.EncodeToString([]byte(time.Now().Format("20060102150405")))
 	}
 	return base64.URLEncoding.EncodeToString(b)
@@ -220,6 +222,8 @@ func generateUUID() string {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
 		// Fallback to timestamp-based fallback if crypto/rand fails
+		// This should be extremely rare but we log it for security monitoring
+		log.Warn("crypto/rand failed in generateUUID, using fallback ID", "error", err)
 		return "req-" + generateFallbackID()
 	}
 	return hex.EncodeToString(b)
