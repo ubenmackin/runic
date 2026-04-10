@@ -666,17 +666,25 @@ func migrateSchema(ctx context.Context, database *sql.DB) error {
 
 	// Migration: Create composite index on firewall_logs(action, timestamp DESC) for dashboard performance
 	// This index optimizes queries that filter by action and order by timestamp (e.g., blocked events)
-	var hasActionTimestampIdx bool
-	err = database.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='index' AND name='idx_firewall_logs_action_timestamp'").Scan(&hasActionTimestampIdx)
+	// First check if firewall_logs table exists (may not exist on fresh install before migration)
+	var hasFirewallLogsTable bool
+	err = database.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='firewall_logs'").Scan(&hasFirewallLogsTable)
 	if err != nil {
-		return fmt.Errorf("failed to check for idx_firewall_logs_action_timestamp: %w", err)
+		return fmt.Errorf("failed to check for firewall_logs table: %w", err)
 	}
-	if !hasActionTimestampIdx {
-		log.Info("Migration: creating idx-firewall-logs-action-timestamp index")
-		if _, err := database.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_firewall_logs_action_timestamp ON firewall_logs(action, timestamp DESC)"); err != nil {
-			return fmt.Errorf("failed to create idx_firewall_logs_action_timestamp: %w", err)
+	if hasFirewallLogsTable {
+		var hasActionTimestampIdx bool
+		err = database.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='index' AND name='idx_firewall_logs_action_timestamp'").Scan(&hasActionTimestampIdx)
+		if err != nil {
+			return fmt.Errorf("failed to check for idx_firewall_logs_action_timestamp: %w", err)
 		}
-		log.Info("Migration: created idx-firewall-logs-action-timestamp index")
+		if !hasActionTimestampIdx {
+			log.Info("Migration: creating idx-firewall-logs-action-timestamp index")
+			if _, err := database.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_firewall_logs_action_timestamp ON firewall_logs(action, timestamp DESC)"); err != nil {
+				return fmt.Errorf("failed to create idx_firewall_logs_action_timestamp: %w", err)
+			}
+			log.Info("Migration: created idx-firewall-logs-action-timestamp index")
+		}
 	}
 
 	// Migration: Create pending_changes table for tracking queued changes per peer
