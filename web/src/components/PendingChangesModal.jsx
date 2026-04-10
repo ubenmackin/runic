@@ -14,6 +14,7 @@ export default function PendingChangesModal({ peerId, peerHostname, onClose, onA
   const [preview, setPreview] = useState(null)
   const [applyLoading, setApplyLoading] = useState(false)
   const [rollbackLoading, setRollbackLoading] = useState(false)
+  const [applyEntityLoading, setApplyEntityLoading] = useState(false)
 
   useFocusTrap(modalRef, true)
 
@@ -144,6 +145,25 @@ const handleEntityRollback = async (entityType, entityId) => {
   }
 }
 
+const handleEntityApply = async (entityType, entityId) => {
+    const confirmed = window.confirm(`Apply changes for ${entityType}?`)
+    if (!confirmed) return
+
+    setApplyEntityLoading(true)
+    try {
+      await api.post(`/pending-changes/${peerId}/apply-entity`, { entity_type: entityType, entity_id: entityId })
+      showToast('Changes applied successfully', 'success')
+      onApplied() // Call parent's callback to refresh peers list
+      // Refresh the changes list
+      const data = await api.get(`/pending-changes/${peerId}`)
+      setChanges(data.changes || [])
+    } catch (err) {
+      showToast(`Failed to apply: ${err.message}`, 'error')
+    } finally {
+      setApplyEntityLoading(false)
+    }
+  }
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" tabIndex="-1" onKeyDown={(e) => { if (e.key === 'Escape') onClose() }}>
       <div ref={modalRef} className="bg-white dark:bg-charcoal-dark rounded-xl shadow-xl w-full max-w-4xl mx-4 max-h-[90vh] flex flex-col">
@@ -215,14 +235,21 @@ const handleEntityRollback = async (entityType, entityId) => {
                                 ))}
                               </div>
                             </td>
-                            <td className="py-3 px-3 text-right">
-                              <button
-                                onClick={() => handleEntityRollback(group.entityType, group.entityId)}
-                                className="text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 font-medium text-sm px-3 py-1 rounded hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors"
-                              >
-                                ↩ Rollback
-                              </button>
-                            </td>
+                              <td className="py-3 px-3 text-right">
+<button
+                  onClick={() => handleEntityApply(group.entityType, group.entityId)}
+                  disabled={applyEntityLoading}
+                  className="text-green-600 hover:text-green-800 dark:text-green-400 font-medium text-sm px-3 py-1 rounded hover:bg-green-50 dark:hover:bg-green-900/20 disabled:opacity-50"
+                >
+                  {applyEntityLoading ? 'Applying...' : '✓ Apply'}
+                </button>
+                                <button
+                                  onClick={() => handleEntityRollback(group.entityType, group.entityId)}
+                                  className="text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 font-medium text-sm px-3 py-1 rounded hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors"
+                                >
+                                  ↩ Rollback
+                                </button>
+                              </td>
                           </tr>
                         ))}
                       </tbody>

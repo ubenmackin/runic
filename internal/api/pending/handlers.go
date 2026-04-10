@@ -129,6 +129,12 @@ type RollbackRequest struct {
 	EntityID   int    `json:"entity_id"`   // Optional: 0 = bulk rollback
 }
 
+// ApplyEntityRequest represents the request body for applying a single entity's pending changes.
+type ApplyEntityRequest struct {
+	EntityType string `json:"entity_type"` // "group", "policy", or "service"
+	EntityID   int    `json:"entity_id"`
+}
+
 // RollbackPendingChanges restores groups, services, and policies to their state before any pending changes.
 // Supports both bulk rollback (empty body) and single-entity rollback (with entity_type and entity_id).
 func (h *Handler) RollbackPendingChanges(w http.ResponseWriter, r *http.Request) {
@@ -448,6 +454,132 @@ func (h *Handler) ApplyAllPendingBundles(w http.ResponseWriter, r *http.Request)
 	}
 
 	common.RespondJSON(w, http.StatusOK, resp)
+}
+
+// ApplyEntityPendingChanges applies pending changes for a single entity for a specific peer.
+// It removes the pending change record and snapshot, then regenerates the bundle preview if needed.
+func (h *Handler) ApplyEntityPendingChanges(w http.ResponseWriter, r *http.Request) {
+	peerID, err := common.ParseIDParam(r, "peerId")
+	if err != nil {
+		common.RespondError(w, http.StatusBadRequest, "invalid peer ID")
+		return
+	}
+
+	var req ApplyEntityRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		common.RespondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	// Validate entity type
+	if req.EntityType != "group" && req.EntityType != "policy" && req.EntityType != "service" {
+		common.RespondError(w, http.StatusBadRequest, "invalid entity_type: must be 'group', 'policy', or 'service'")
+		return
+	}
+
+	if req.EntityID <= 0 {
+		common.RespondError(w, http.StatusBadRequest, "invalid entity_id")
+		return
+	}
+
+	ctx := r.Context()
+	database := h.DB
+
+	// Verify the pending change exists for this peer
+	var exists int
+	err = database.QueryRowContext(ctx,
+		"SELECT 1 FROM pending_changes WHERE peer_id = ? AND change_type = ? AND change_id = ?",
+		peerID, req.EntityType, req.EntityID,
+	).Scan(&exists)
+	if err == sql.ErrNoRows {
+		common.RespondError(w, http.StatusNotFound, "pending change not found for this peer and entity")
+		return
+	}
+	if err != nil {
+		log.ErrorContext(ctx, "failed to verify pending change", "error", err)
+		common.InternalError(w)
+		return
+	}
+
+	// Begin transaction for atomic operations
+	tx, err := h.DBBeginner.BeginTx(ctx, nil)
+	if err != nil {
+		log.ErrorContext(ctx, "failed to begin transaction", "error", err)
+		common.InternalError(w)
+		return
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Delete the snapshot for this entity
+	if err := db.DeleteSnapshot(ctx, tx, req.EntityType, req.EntityID); err != nil {
+		log.ErrorContext(ctx, "failed to delete snapshot", "error", err)
+		common.InternalError(w)
+		return
+	}
+
+	// Delete the pending_changes rows for this peer/entity
+	_, err = tx.ExecContext(ctx,
+		"DELETE FROM pending_changes WHERE peer_id = ? AND change_type = ? AND change_id = ?",
+		peerID, req.EntityType, req.EntityID,
+	)
+	if err != nil {
+		log.ErrorContext(ctx, "failed to delete pending changes", "error", err)
+		common.InternalError(w)
+		return
+	}
+
+	// Check if other pending changes remain for this peer
+	var remainingCount int
+	err = tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM pending_changes WHERE peer_id = ?", peerID).Scan(&remainingCount)
+	if err != nil {
+		log.ErrorContext(ctx, "failed to count remaining pending changes", "error", err)
+		common.InternalError(w)
+		return
+	}
+
+	// If other changes remain, regenerate the bundle preview
+	if remainingCount > 0 {
+		// Compile fresh bundle with remaining pending changes
+		content, err := h.Compiler.Compile(ctx, peerID)
+		if err != nil {
+			log.WarnContext(ctx, "failed to compile bundle preview for remaining changes", "error", err)
+			// Don't fail - just skip preview generation
+		} else {
+			version := engine.Version(content)
+
+			// Get current bundle for diff
+			var currentContent, currentVersion string
+			_ = database.QueryRowContext(ctx, `
+				SELECT rules_content, version FROM rule_bundles
+				WHERE peer_id = ?
+				ORDER BY id DESC LIMIT 1
+			`, peerID).Scan(&currentContent, &currentVersion)
+
+			// Generate diff and save preview
+			diffContent := generateDiff(currentContent, content, currentVersion, version)
+			if err := db.SavePendingBundlePreview(ctx, tx, peerID, content, diffContent, version); err != nil {
+				log.WarnContext(ctx, "failed to save bundle preview", "error", err)
+			}
+		}
+	} else {
+		// No more pending changes, delete the preview
+		_ = db.DeletePendingBundlePreview(ctx, tx, peerID)
+	}
+
+	// Commit transaction
+	if err := tx.Commit(); err != nil {
+		log.ErrorContext(ctx, "failed to commit transaction", "error", err)
+		common.InternalError(w)
+		return
+	}
+
+	common.RespondJSON(w, http.StatusOK, map[string]interface{}{
+		"status":            "applied",
+		"peer_id":           peerID,
+		"entity_type":       req.EntityType,
+		"entity_id":         req.EntityID,
+		"remaining_changes": remainingCount,
+	})
 }
 
 // PushAllRules creates an async push job and returns immediately with a job_id.

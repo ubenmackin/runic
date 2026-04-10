@@ -297,6 +297,7 @@ func (a *API) RegisterRoutes(r *mux.Router, downloadsDir string) {
 	// Pending changes (editor+ routes — preview and apply)
 	editor.HandleFunc("/pending-changes/{peerId:[0-9]+}/preview", a.Pending.PreviewPeerPendingBundle).Methods("POST")
 	editor.HandleFunc("/pending-changes/{peerId:[0-9]+}/apply", a.Pending.ApplyPeerPendingBundle).Methods("POST")
+	editor.HandleFunc("/pending-changes/{peerId:[0-9]+}/apply-entity", a.Pending.ApplyEntityPendingChanges).Methods("POST")
 	editor.HandleFunc("/pending-changes/rollback", a.Pending.RollbackPendingChanges).Methods("POST")
 	editor.HandleFunc("/pending-changes/apply-all", a.Pending.ApplyAllPendingBundles).Methods("POST")
 	editor.HandleFunc("/pending-changes/push-all", a.Pending.PushAllRules).Methods("POST")

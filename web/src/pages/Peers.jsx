@@ -383,9 +383,9 @@ const handleSubmit = (e) => {
       showToast('Pending changes discarded successfully', 'success')
       qc.invalidateQueries({ queryKey: QUERY_KEYS.peers() })
       qc.invalidateQueries({ queryKey: ['pending-changes'] })
-			qc.invalidateQueries({ queryKey: QUERY_KEYS.groups() })
-			qc.invalidateQueries({ queryKey: QUERY_KEYS.services() })
-			qc.invalidateQueries({ queryKey: QUERY_KEYS.policies() })
+      qc.invalidateQueries({ queryKey: QUERY_KEYS.groups() })
+      qc.invalidateQueries({ queryKey: QUERY_KEYS.services() })
+      qc.invalidateQueries({ queryKey: QUERY_KEYS.policies() })
     } catch (err) {
       showToast(`Failed to rollback changes: ${err.message}`, 'error')
     } finally {
@@ -393,7 +393,19 @@ const handleSubmit = (e) => {
     }
   }
 
-	// Handle Push to Peer
+  // Handle Sync Status badge click
+  const handleSyncStatusClick = (peer) => {
+    if (peer.sync_status === 'pending') {
+      // Open Pending Changes modal
+      setPendingModalPeer(peer)
+      setPendingModalOpen(true)
+    } else if (peer.sync_status === 'pending_sync' || peer.sync_status === 'synced') {
+      // Open Deployed Rules modal (fetchBundle)
+      fetchBundle(peer)
+    }
+  }
+
+  // Handle Push to Peer
 	const handlePushToPeer = async (peer) => {
 		setPushTargetPeer(peer)
 	}
@@ -606,12 +618,30 @@ const handleSubmit = (e) => {
 	'bg-amber-500' // pending
 	}`} />
 	)}
-	<span className="font-medium text-gray-900 dark:text-light-neutral">{peer.hostname}</span>
-	{peer.pending_changes_count > 0 && (
-	<span onClick={() => { setPendingModalPeer(peer); setPendingModalOpen(true) }} className="px-2 py-0.5 text-xs font-medium rounded-full bg-purple-100 dark:bg-purple-900/30 text-purple-800 dark:text-purple-300 cursor-pointer hover:bg-purple-200 dark:hover:bg-purple-900/50" title={`${peer.pending_changes_count} pending change${peer.pending_changes_count !== 1 ? 's' : ''}`}>
-	{peer.pending_changes_count} pending
-	</span>
-	)}
+                <span className="font-medium text-gray-900 dark:text-light-neutral">{peer.hostname}</span>
+                {peer.sync_status && (
+                  <button
+                    onClick={() => handleSyncStatusClick(peer)}
+                    title={`Click to ${peer.sync_status === 'pending' ? 'review pending changes' : 'view deployed rules'}`}
+                    className={`px-2 py-0.5 text-xs font-medium rounded-full cursor-pointer ${
+                      peer.sync_status === 'pending'
+                        ? 'bg-orange-100 dark:bg-orange-900/30 text-orange-800 dark:text-orange-300 hover:bg-orange-200 dark:hover:bg-orange-900/50'
+                        : peer.sync_status === 'pending_sync'
+                        ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-800 dark:text-blue-300 hover:bg-blue-200 dark:hover:bg-blue-900/50'
+                        : peer.sync_status === 'synced'
+                        ? 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300 hover:bg-green-200 dark:hover:bg-green-900/50'
+                        : 'bg-gray-100 dark:bg-gray-900/30 text-gray-800 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-900/50'
+                    }`}
+                  >
+                    {peer.sync_status === 'pending'
+                      ? 'Pending'
+                      : peer.sync_status === 'pending_sync'
+                      ? 'Pending Sync'
+                      : peer.sync_status === 'synced'
+                      ? 'Synced'
+                      : peer.sync_status}
+                  </button>
+                )}
 	</div>
 </td>
                     <td className="px-4 py-3 text-gray-600 dark:text-amber-primary">

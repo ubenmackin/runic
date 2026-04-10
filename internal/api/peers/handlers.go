@@ -60,30 +60,37 @@ type Peer struct {
 	Description          string `json:"description"`
 	HMACKeyLastRotatedAt string `json:"hmac_key_last_rotated_at"`
 	PendingChangesCount  int    `json:"pending_changes_count"`
+	SyncStatus           string `json:"sync_status"`
 }
 
 func (h *Handler) GetPeers(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.DB.QueryContext(r.Context(), `
-		SELECT p.id, p.hostname, p.ip_address, p.os_type, p.arch, p.has_docker, p.is_manual,
-		COALESCE(p.agent_version, '') as agent_version,
-		COALESCE(p.last_heartbeat, '') as last_heartbeat,
-		CASE
-		WHEN p.last_heartbeat IS NULL THEN 'pending'
-		WHEN p.last_heartbeat < `+fmt.Sprintf("datetime('now', '-%d minutes')", constants.PeerOfflineThresholdMinutes)+` THEN 'offline'
-		ELSE COALESCE(p.status, 'online')
-		END as status,
-		COALESCE(p.bundle_version, '') as bundle_version,
-		COALESCE((SELECT rb.version_number FROM rule_bundles rb WHERE rb.peer_id = p.id ORDER BY rb.created_at DESC LIMIT 1), 0) as bundle_version_number,
-		COALESCE(GROUP_CONCAT(g.name, ','), '') as groups,
-		COALESCE(p.description, '') as description,
-		COALESCE(p.hmac_key_last_rotated_at, '') as hmac_key_last_rotated_at,
-		(SELECT COUNT(*) FROM pending_changes pc JOIN peers p2 ON pc.peer_id = p2.id WHERE pc.peer_id = p.id AND p2.is_manual = 0) as pending_changes_count
-		FROM peers p
-		LEFT JOIN group_members gm ON p.id = gm.peer_id
-		LEFT JOIN groups g ON gm.group_id = g.id
-		GROUP BY p.id
-		ORDER BY p.hostname ASC
-	`)
+SELECT p.id, p.hostname, p.ip_address, p.os_type, p.arch, p.has_docker, p.is_manual,
+COALESCE(p.agent_version, '') as agent_version,
+COALESCE(p.last_heartbeat, '') as last_heartbeat,
+CASE
+WHEN p.last_heartbeat IS NULL THEN 'pending'
+WHEN p.last_heartbeat < `+fmt.Sprintf("datetime('now', '-%d minutes')", constants.PeerOfflineThresholdMinutes)+` THEN 'offline'
+ELSE COALESCE(p.status, 'online')
+END as status,
+COALESCE(p.bundle_version, '') as bundle_version,
+COALESCE((SELECT rb.version_number FROM rule_bundles rb WHERE rb.peer_id = p.id ORDER BY rb.created_at DESC LIMIT 1), 0) as bundle_version_number,
+COALESCE(GROUP_CONCAT(g.name, ','), '') as groups,
+COALESCE(p.description, '') as description,
+COALESCE(p.hmac_key_last_rotated_at, '') as hmac_key_last_rotated_at,
+(SELECT COUNT(*) FROM pending_changes pc JOIN peers p2 ON pc.peer_id = p2.id WHERE pc.peer_id = p.id AND p2.is_manual = 0) as pending_changes_count,
+CASE
+WHEN (SELECT COUNT(*) FROM pending_changes pc JOIN peers p2 ON pc.peer_id = p2.id WHERE pc.peer_id = p.id AND p2.is_manual = 0) > 0 THEN 'pending'
+WHEN (SELECT rb.version FROM rule_bundles rb WHERE rb.peer_id = p.id ORDER BY rb.created_at DESC LIMIT 1) IS NOT NULL
+     AND (SELECT rb.version FROM rule_bundles rb WHERE rb.peer_id = p.id ORDER BY rb.created_at DESC LIMIT 1) != COALESCE(p.bundle_version, '') THEN 'pending_sync'
+ELSE 'synced'
+END as sync_status
+FROM peers p
+LEFT JOIN group_members gm ON p.id = gm.peer_id
+LEFT JOIN groups g ON gm.group_id = g.id
+GROUP BY p.id
+ORDER BY p.hostname ASC
+`)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "failed to query peers")
 		return
@@ -98,7 +105,7 @@ func (h *Handler) GetPeers(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var p Peer
 		var agentVersion, lastHeartbeat, description, hmacKeyLastRotatedAt sql.NullString
-		if err := rows.Scan(&p.ID, &p.Hostname, &p.IPAddress, &p.OSType, &p.Arch, &p.HasDocker, &p.IsManual, &agentVersion, &lastHeartbeat, &p.Status, &p.BundleVersion, &p.BundleVersionNumber, &p.Groups, &description, &hmacKeyLastRotatedAt, &p.PendingChangesCount); err != nil {
+		if err := rows.Scan(&p.ID, &p.Hostname, &p.IPAddress, &p.OSType, &p.Arch, &p.HasDocker, &p.IsManual, &agentVersion, &lastHeartbeat, &p.Status, &p.BundleVersion, &p.BundleVersionNumber, &p.Groups, &description, &hmacKeyLastRotatedAt, &p.PendingChangesCount, &p.SyncStatus); err != nil {
 			common.RespondError(w, http.StatusInternalServerError, "failed to scan peer")
 			return
 		}
