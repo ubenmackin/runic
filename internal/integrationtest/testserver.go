@@ -113,8 +113,8 @@ func NewTestAPIServer(t *testing.T) (*httptest.Server, func()) {
 	// Create compiler for rule compilation
 	compiler := engine.NewCompiler(database)
 
-	// Create API instance
-	testAPI := api.NewAPI(database, compiler)
+	// Create API instance with in-memory logs DB
+	testAPI := api.NewAPI(database, compiler, ":memory:")
 
 	// Create router and register routes
 	router := mux.NewRouter()

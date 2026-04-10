@@ -25,12 +25,14 @@ import (
 
 // Handler provides HTTP handlers for agent endpoints with dependency injection.
 type Handler struct {
-	DB db.Querier
+	DB     db.Querier
+	LogsDB db.Querier
 }
 
-// NewHandler creates a new agent handler with the given database connection.
-func NewHandler(db db.Querier) *Handler {
-	return &Handler{DB: db}
+// NewHandler creates a new agent handler with the given database connections.
+// db is the main database for peer queries, logsDB is the separate logs database.
+func NewHandler(db db.Querier, logsDB db.Querier) *Handler {
+	return &Handler{DB: db, LogsDB: logsDB}
 }
 
 // LogEvent represents a validated firewall log event from an agent.
@@ -375,6 +377,15 @@ func (h *Handler) SubmitLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Look up the peer hostname from main DB for denormalization
+	var peerHostname string
+	err := h.DB.QueryRowContext(r.Context(), "SELECT hostname FROM peers WHERE id = ?", serverID).Scan(&peerHostname)
+	if err != nil {
+		runiclog.Error("Failed to lookup peer hostname", "error", err, "peer_id", serverID)
+		// Continue with empty hostname - better to insert logs than fail completely
+		peerHostname = ""
+	}
+
 	accepted := 0
 	skipped := 0
 
@@ -386,7 +397,12 @@ func (h *Handler) SubmitLogs(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		_, err := h.DB.ExecContext(r.Context(), `INSERT INTO firewall_logs (peer_id, timestamp, direction, src_ip, dst_ip, protocol, src_port, dst_port, action, raw_line) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, serverID, ev.Timestamp, ev.Direction, ev.SrcIP, ev.DstIP, ev.Protocol, ev.SrcPort, ev.DstPort, ev.Action, ev.RawLine)
+		// Insert into logs database with denormalized peer_hostname
+		// Note: Logs DB schema uses different column names than main DB
+		_, err := h.LogsDB.ExecContext(r.Context(),
+			`INSERT INTO firewall_logs (peer_id, peer_hostname, timestamp, event_type, source_ip, dest_ip, protocol, source_port, dest_port, action, details) 
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			fmt.Sprintf("%d", serverID), peerHostname, ev.Timestamp, ev.Direction, ev.SrcIP, ev.DstIP, ev.Protocol, ev.SrcPort, ev.DstPort, ev.Action, ev.RawLine)
 		if err != nil {
 			runiclog.Error("Failed to insert log event", "error", err)
 			skipped++

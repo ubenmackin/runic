@@ -639,17 +639,21 @@ install_dependencies() {
 }
 
 collect_configuration() {
-    log_section "Collecting Configuration"
-    
-    # Control Plane URL
-    if [ -n "$PROVIDED_CONTROL_PLANE" ]; then
-        CONTROL_PLANE_URL="$PROVIDED_CONTROL_PLANE"
-    else
-        CONTROL_PLANE_URL=$(prompt_with_default "Control Plane URL (API server address)" "$DEFAULT_CONTROL_PLANE")
-    fi
-    log INFO "Control Plane URL: $CONTROL_PLANE_URL"
-    
-    log SUCCESS "Configuration collected"
+	log_section "Collecting Configuration"
+
+	# Control Plane URL
+	if [ -n "$PROVIDED_CONTROL_PLANE" ]; then
+		CONTROL_PLANE_URL="$PROVIDED_CONTROL_PLANE"
+	else
+		CONTROL_PLANE_URL=$(prompt_with_default "Control Plane URL (API server address)" "$DEFAULT_CONTROL_PLANE")
+	fi
+	log INFO "Control Plane URL: $CONTROL_PLANE_URL"
+
+	# Logs database path
+	LOGS_DB_PATH=$(prompt_with_default "Enter logs database path" "$DATA_DIR/logs.db")
+	log INFO "Logs database path: $LOGS_DB_PATH"
+
+	log SUCCESS "Configuration collected"
 }
 
 setup_directories() {
@@ -1073,6 +1077,7 @@ RestartSec=10s
 # Environment variables for configuration
 Environment=RUNIC_CONTROL_PLANE=$CONTROL_PLANE_URL
 Environment=RUNIC_DB_PATH=$DATA_DIR/runic.db
+Environment=RUNIC_LOGS_DB_PATH=$LOGS_DB_PATH
 Environment=RUNIC_CERT_FILE=$CERT_DIR/cert.pem
 Environment=RUNIC_KEY_FILE=$CERT_DIR/key.pem
 Environment=RUNIC_PORT=$RUNIC_PORT

@@ -11,13 +11,15 @@ import (
 
 type Worker struct {
 	db       *sql.DB
+	logsDB   *sql.DB
 	interval time.Duration
 	stopCh   chan struct{}
 }
 
-func NewWorker(db *sql.DB) *Worker {
+func NewWorker(db *sql.DB, logsDB *sql.DB) *Worker {
 	return &Worker{
 		db:       db,
+		logsDB:   logsDB,
 		interval: 24 * time.Hour, // Run once per day
 		stopCh:   make(chan struct{}),
 	}
@@ -62,6 +64,12 @@ func (w *Worker) runCleanup(ctx context.Context) {
 		return
 	}
 
+	// Check if logsDB is available
+	if w.logsDB == nil {
+		log.ErrorContext(ctx, "LogsDB not initialized for cleanup")
+		return
+	}
+
 	// Delete logs older than retention days
 	cutoff := time.Now().AddDate(0, 0, -retentionDays).Format("2006-01-02 15:04:05")
 
@@ -70,7 +78,7 @@ func (w *Worker) runCleanup(ctx context.Context) {
 	batchSize := 1000
 
 	for {
-		result, err := w.db.ExecContext(ctx,
+		result, err := w.logsDB.ExecContext(ctx,
 			"DELETE FROM firewall_logs WHERE id IN (SELECT id FROM firewall_logs WHERE timestamp < ? LIMIT ?)",
 			cutoff, batchSize,
 		)

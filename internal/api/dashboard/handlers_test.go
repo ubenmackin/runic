@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -22,17 +23,17 @@ import (
 // =============================================================================
 
 func TestDashboardQueries_EmptyDatabase(t *testing.T) {
-	database, cleanup := testutil.SetupTestDB(t)
+	database, logsDB, cleanup := testutil.SetupTestDBWithSecretAndLogs(t)
 	defer cleanup()
 
 	// Run the queries that HandleDashboard uses
 	var totalPeers, manualPeers, onlinePeers, totalPolicies int
 	err := database.QueryRow(`
-		SELECT
-			(SELECT COUNT(*) FROM peers) as total_peers,
-			(SELECT COUNT(*) FROM peers WHERE is_manual = 1) as manual_peers,
-			(SELECT COUNT(*) FROM peers WHERE is_manual = 0 AND last_heartbeat > datetime('now', '-90 seconds')) as online_peers,
-			(SELECT COUNT(*) FROM policies WHERE enabled = 1) as total_policies
+		SELECT 
+		(SELECT COUNT(*) FROM peers) as total_peers,
+		(SELECT COUNT(*) FROM peers WHERE is_manual = 1) as manual_peers,
+		(SELECT COUNT(*) FROM peers WHERE is_manual = 0 AND last_heartbeat > datetime('now', '-90 seconds')) as online_peers,
+		(SELECT COUNT(*) FROM policies WHERE enabled = 1) as total_policies
 	`).Scan(&totalPeers, &manualPeers, &onlinePeers, &totalPolicies)
 	if err != nil {
 		t.Fatalf("count query failed: %v", err)
@@ -52,12 +53,12 @@ func TestDashboardQueries_EmptyDatabase(t *testing.T) {
 		t.Errorf("expected total_policies to be 0, got %d", totalPolicies)
 	}
 
-	// Verify blocked counts query
+	// Verify blocked counts query (using logs DB)
 	var blockedLastHour, blockedLast24h int
-	err = database.QueryRow(`
+	err = logsDB.QueryRow(`
 		SELECT
-			COALESCE(SUM(CASE WHEN timestamp > datetime('now', '-1 hour') THEN 1 ELSE 0 END), 0) as blocked_last_hour,
-			COUNT(*) as blocked_last_24h
+		COALESCE(SUM(CASE WHEN timestamp > datetime('now', '-1 hour') THEN 1 ELSE 0 END), 0) as blocked_last_hour,
+		COUNT(*) as blocked_last_24h
 		FROM firewall_logs
 		WHERE action = 'DROP' AND timestamp > datetime('now', '-24 hours')
 	`).Scan(&blockedLastHour, &blockedLast24h)
@@ -183,7 +184,7 @@ func TestDashboardQueries_WithPeers(t *testing.T) {
 }
 
 func TestDashboardQueries_WithBlockedEvents(t *testing.T) {
-	database, cleanup := testutil.SetupTestDB(t)
+	database, logsDB, cleanup := testutil.SetupTestDBWithSecretAndLogs(t)
 	defer cleanup()
 
 	// Insert a peer for the firewall logs
@@ -204,36 +205,36 @@ func TestDashboardQueries_WithBlockedEvents(t *testing.T) {
 	// Very old - outside 24h (use 48 hours to be safe)
 	twoDaysAgo := now.Add(-48 * time.Hour).Format("2006-01-02 15:04:05")
 
-	// 2 blocks in last hour from same IP
-	database.Exec(`INSERT INTO firewall_logs (peer_id, timestamp, src_ip, dst_ip, protocol, action) VALUES (?, ?, ?, ?, ?, ?)`,
-		1, recent1, "192.168.1.100", "10.0.0.1", "tcp", "DROP")
-	database.Exec(`INSERT INTO firewall_logs (peer_id, timestamp, src_ip, dst_ip, protocol, action) VALUES (?, ?, ?, ?, ?, ?)`,
-		1, recent2, "192.168.1.100", "10.0.0.1", "udp", "DROP")
+	// 2 blocks in last hour from same IP (insert into logs DB with logs schema)
+	logsDB.Exec(`INSERT INTO firewall_logs (peer_id, peer_hostname, timestamp, source_ip, dest_ip, protocol, action) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		"1", "peer1", recent1, "192.168.1.100", "10.0.0.1", "tcp", "DROP")
+	logsDB.Exec(`INSERT INTO firewall_logs (peer_id, peer_hostname, timestamp, source_ip, dest_ip, protocol, action) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		"1", "peer1", recent2, "192.168.1.100", "10.0.0.1", "udp", "DROP")
 
 	// 1 block between 1-24 hours ago
-	database.Exec(`INSERT INTO firewall_logs (peer_id, timestamp, src_ip, dst_ip, protocol, action) VALUES (?, ?, ?, ?, ?, ?)`,
-		1, threeHoursAgo, "192.168.1.200", "10.0.0.1", "tcp", "DROP")
+	logsDB.Exec(`INSERT INTO firewall_logs (peer_id, peer_hostname, timestamp, source_ip, dest_ip, protocol, action) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		"1", "peer1", threeHoursAgo, "192.168.1.200", "10.0.0.1", "tcp", "DROP")
 
 	// 1 block between 1-24 hours (12 hours ago)
-	database.Exec(`INSERT INTO firewall_logs (peer_id, timestamp, src_ip, dst_ip, protocol, action) VALUES (?, ?, ?, ?, ?, ?)`,
-		1, twelveHoursAgo, "192.168.1.300", "10.0.0.1", "tcp", "DROP")
+	logsDB.Exec(`INSERT INTO firewall_logs (peer_id, peer_hostname, timestamp, source_ip, dest_ip, protocol, action) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		"1", "peer1", twelveHoursAgo, "192.168.1.300", "10.0.0.1", "tcp", "DROP")
 
 	// 1 block outside 24 hours (should not be counted)
-	database.Exec(`INSERT INTO firewall_logs (peer_id, timestamp, src_ip, dst_ip, protocol, action) VALUES (?, ?, ?, ?, ?, ?)`,
-		1, twoDaysAgo, "192.168.1.400", "10.0.0.1", "tcp", "DROP")
+	logsDB.Exec(`INSERT INTO firewall_logs (peer_id, peer_hostname, timestamp, source_ip, dest_ip, protocol, action) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		"1", "peer1", twoDaysAgo, "192.168.1.400", "10.0.0.1", "tcp", "DROP")
 
 	// Also add an ACCEPT action (should not be counted)
-	database.Exec(`INSERT INTO firewall_logs (peer_id, timestamp, src_ip, dst_ip, protocol, action) VALUES (?, ?, ?, ?, ?, ?)`,
-		1, recent1, "192.168.1.500", "10.0.0.1", "tcp", "ACCEPT")
+	logsDB.Exec(`INSERT INTO firewall_logs (peer_id, peer_hostname, timestamp, source_ip, dest_ip, protocol, action) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		"1", "peer1", recent1, "192.168.1.500", "10.0.0.1", "tcp", "ACCEPT")
 
 	// Run blocked counts query - wait a bit for time-based queries
 	time.Sleep(100 * time.Millisecond)
 
 	var blockedLastHour, blockedLast24h int
-	err := database.QueryRow(`
+	err := logsDB.QueryRow(`
 		SELECT
-			COALESCE(SUM(CASE WHEN timestamp > datetime('now', '-1 hour') THEN 1 ELSE 0 END), 0) as blocked_last_hour,
-			COUNT(*) as blocked_last_24h
+		COALESCE(SUM(CASE WHEN timestamp > datetime('now', '-1 hour') THEN 1 ELSE 0 END), 0) as blocked_last_hour,
+		COUNT(*) as blocked_last_24h
 		FROM firewall_logs
 		WHERE action = 'DROP' AND timestamp > datetime('now', '-24 hours')
 	`).Scan(&blockedLastHour, &blockedLast24h)
@@ -251,12 +252,11 @@ func TestDashboardQueries_WithBlockedEvents(t *testing.T) {
 
 	// Run recent activity query - this returns the last 5 DROP events regardless of age
 	// So we should expect 5 (since we have 5 DROP events total)
-	rows, err := database.Query(`
-		SELECT fl.timestamp, fl.src_ip, fl.dst_ip, fl.protocol, fl.action, p.hostname
-		FROM firewall_logs fl
-		LEFT JOIN peers p ON fl.peer_id = p.id
-		WHERE fl.action = 'DROP'
-		ORDER BY fl.timestamp DESC
+	rows, err := logsDB.Query(`
+		SELECT timestamp, source_ip, dest_ip, protocol, action, peer_hostname
+		FROM firewall_logs
+		WHERE action = 'DROP'
+		ORDER BY timestamp DESC
 		LIMIT 5`)
 	if err != nil {
 		t.Fatalf("recent activity query failed: %v", err)
@@ -266,7 +266,7 @@ func TestDashboardQueries_WithBlockedEvents(t *testing.T) {
 	var activities []string
 	for rows.Next() {
 		var timestamp, srcIP, dstIP, protocol, action string
-		var hostname *string
+		var hostname sql.NullString
 		if err := rows.Scan(&timestamp, &srcIP, &dstIP, &protocol, &action, &hostname); err != nil {
 			t.Fatalf("scan failed: %v", err)
 		}
@@ -280,11 +280,11 @@ func TestDashboardQueries_WithBlockedEvents(t *testing.T) {
 	}
 
 	// Run top blocked sources query
-	topRows, err := database.Query(`
-		SELECT src_ip, COUNT(*) as count
+	topRows, err := logsDB.Query(`
+		SELECT source_ip, COUNT(*) as count
 		FROM firewall_logs
 		WHERE action = 'DROP' AND timestamp > datetime('now', '-24 hours')
-		GROUP BY src_ip
+		GROUP BY source_ip
 		ORDER BY count DESC
 		LIMIT 5`)
 	if err != nil {
@@ -363,7 +363,7 @@ func TestDashboardQueries_OnlyManualPeers(t *testing.T) {
 }
 
 func TestDashboardQueries_ManyBlockedEvents(t *testing.T) {
-	database, cleanup := testutil.SetupTestDB(t)
+	database, logsDB, cleanup := testutil.SetupTestDBWithSecretAndLogs(t)
 	defer cleanup()
 
 	// Insert a peer
@@ -374,8 +374,8 @@ func TestDashboardQueries_ManyBlockedEvents(t *testing.T) {
 	now := time.Now()
 	for i := 0; i < 10; i++ {
 		ts := now.Add(-time.Duration(i) * time.Minute).Format("2006-01-02 15:04:05")
-		database.Exec(`INSERT INTO firewall_logs (peer_id, timestamp, src_ip, dst_ip, protocol, action) VALUES (?, ?, ?, ?, ?, ?)`,
-			1, ts, "192.168.1.1", "10.0.0.1", "tcp", "DROP")
+		logsDB.Exec(`INSERT INTO firewall_logs (peer_id, peer_hostname, timestamp, source_ip, dest_ip, protocol, action) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			"1", "peer1", ts, "192.168.1.1", "10.0.0.1", "tcp", "DROP")
 	}
 
 	// Wait for time-based queries
@@ -383,7 +383,7 @@ func TestDashboardQueries_ManyBlockedEvents(t *testing.T) {
 
 	// Verify blocked_last_24h count (should be 10)
 	var blockedLast24h int
-	err := database.QueryRow(`
+	err := logsDB.QueryRow(`
 		SELECT COUNT(*) as blocked_last_24h
 		FROM firewall_logs
 		WHERE action = 'DROP' AND timestamp > datetime('now', '-24 hours')
@@ -398,12 +398,11 @@ func TestDashboardQueries_ManyBlockedEvents(t *testing.T) {
 	}
 
 	// Verify recent activity limit (should always be 5)
-	rows, err := database.Query(`
-		SELECT fl.timestamp, fl.src_ip, fl.dst_ip, fl.protocol, fl.action, p.hostname
-		FROM firewall_logs fl
-		LEFT JOIN peers p ON fl.peer_id = p.id
-		WHERE fl.action = 'DROP'
-		ORDER BY fl.timestamp DESC
+	rows, err := logsDB.Query(`
+		SELECT timestamp, source_ip, dest_ip, protocol, action, peer_hostname
+		FROM firewall_logs
+		WHERE action = 'DROP'
+		ORDER BY timestamp DESC
 		LIMIT 5`)
 	if err != nil {
 		t.Fatalf("recent activity query failed: %v", err)
@@ -420,11 +419,11 @@ func TestDashboardQueries_ManyBlockedEvents(t *testing.T) {
 	}
 
 	// Verify top blocked sources
-	topRows, err := database.Query(`
-		SELECT src_ip, COUNT(*) as count
+	topRows, err := logsDB.Query(`
+		SELECT source_ip, COUNT(*) as count
 		FROM firewall_logs
 		WHERE action = 'DROP' AND timestamp > datetime('now', '-24 hours')
-		GROUP BY src_ip
+		GROUP BY source_ip
 		ORDER BY count DESC
 		LIMIT 5`)
 	if err != nil {
@@ -494,10 +493,10 @@ func TestDashboardQueries_OnlyPolicies(t *testing.T) {
 // =============================================================================
 
 func TestHandleDashboard_EmptyDatabase(t *testing.T) {
-	db, cleanup := testutil.SetupTestDB(t)
+	db, logsDB, cleanup := testutil.SetupTestDBWithSecretAndLogs(t)
 	defer cleanup()
 
-	handler := NewHandler(db)
+	handler := NewHandler(db, logsDB)
 
 	req := httptest.NewRequest("GET", "/dashboard", nil)
 	w := httptest.NewRecorder()
@@ -559,7 +558,7 @@ func TestHandleDashboard_EmptyDatabase(t *testing.T) {
 }
 
 func TestHandleDashboard_WithPeers(t *testing.T) {
-	db, cleanup := testutil.SetupTestDB(t)
+	db, logsDB, cleanup := testutil.SetupTestDBWithSecretAndLogs(t)
 	defer cleanup()
 
 	// Insert online peer (recent heartbeat)
@@ -579,7 +578,7 @@ func TestHandleDashboard_WithPeers(t *testing.T) {
 	// Wait to ensure threshold comparison works
 	time.Sleep(100 * time.Millisecond)
 
-	handler := NewHandler(db)
+	handler := NewHandler(db, logsDB)
 
 	req := httptest.NewRequest("GET", "/dashboard", nil)
 	w := httptest.NewRecorder()
@@ -624,7 +623,7 @@ func TestHandleDashboard_WithPeers(t *testing.T) {
 }
 
 func TestHandleDashboard_WithBlockedEvents(t *testing.T) {
-	db, cleanup := testutil.SetupTestDB(t)
+	db, logsDB, cleanup := testutil.SetupTestDBWithSecretAndLogs(t)
 	defer cleanup()
 
 	// Insert a peer for the firewall logs
@@ -641,22 +640,22 @@ func TestHandleDashboard_WithBlockedEvents(t *testing.T) {
 	threeHoursAgo := now.Add(-3 * time.Hour).Format("2006-01-02 15:04:05")
 	twelveHoursAgo := now.Add(-12 * time.Hour).Format("2006-01-02 15:04:05")
 
-	// 2 blocks in last hour from same IP
-	db.Exec(`INSERT INTO firewall_logs (peer_id, timestamp, src_ip, dst_ip, protocol, action) VALUES (?, ?, ?, ?, ?, ?)`,
-		1, recent1, "192.168.1.100", "10.0.0.1", "tcp", "DROP")
-	db.Exec(`INSERT INTO firewall_logs (peer_id, timestamp, src_ip, dst_ip, protocol, action) VALUES (?, ?, ?, ?, ?, ?)`,
-		1, recent2, "192.168.1.100", "10.0.0.1", "udp", "DROP")
+	// 2 blocks in last hour from same IP (insert into logs DB with logs schema)
+	logsDB.Exec(`INSERT INTO firewall_logs (peer_id, peer_hostname, timestamp, source_ip, dest_ip, protocol, action) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		"1", "peer1", recent1, "192.168.1.100", "10.0.0.1", "tcp", "DROP")
+	logsDB.Exec(`INSERT INTO firewall_logs (peer_id, peer_hostname, timestamp, source_ip, dest_ip, protocol, action) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		"1", "peer1", recent2, "192.168.1.100", "10.0.0.1", "udp", "DROP")
 
 	// 2 blocks between 1-24 hours ago
-	db.Exec(`INSERT INTO firewall_logs (peer_id, timestamp, src_ip, dst_ip, protocol, action) VALUES (?, ?, ?, ?, ?, ?)`,
-		1, threeHoursAgo, "192.168.1.200", "10.0.0.1", "tcp", "DROP")
-	db.Exec(`INSERT INTO firewall_logs (peer_id, timestamp, src_ip, dst_ip, protocol, action) VALUES (?, ?, ?, ?, ?, ?)`,
-		1, twelveHoursAgo, "192.168.1.300", "10.0.0.1", "tcp", "DROP")
+	logsDB.Exec(`INSERT INTO firewall_logs (peer_id, peer_hostname, timestamp, source_ip, dest_ip, protocol, action) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		"1", "peer1", threeHoursAgo, "192.168.1.200", "10.0.0.1", "tcp", "DROP")
+	logsDB.Exec(`INSERT INTO firewall_logs (peer_id, peer_hostname, timestamp, source_ip, dest_ip, protocol, action) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		"1", "peer1", twelveHoursAgo, "192.168.1.300", "10.0.0.1", "tcp", "DROP")
 
 	// Wait for time-based queries
 	time.Sleep(100 * time.Millisecond)
 
-	handler := NewHandler(db)
+	handler := NewHandler(db, logsDB)
 
 	req := httptest.NewRequest("GET", "/dashboard", nil)
 	w := httptest.NewRecorder()
@@ -712,7 +711,7 @@ func TestHandleDashboard_WithBlockedEvents(t *testing.T) {
 }
 
 func TestHandleDashboard_WithPolicies(t *testing.T) {
-	db, cleanup := testutil.SetupTestDB(t)
+	db, logsDB, cleanup := testutil.SetupTestDBWithSecretAndLogs(t)
 	defer cleanup()
 
 	// Insert services and policies
@@ -720,16 +719,13 @@ func TestHandleDashboard_WithPolicies(t *testing.T) {
 	db.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`, "http", "80", "tcp")
 
 	// Insert enabled policies
-	db.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, "peer", ?, ?, "peer", ?, ?, ?)`,
-		"ssh-policy", 1, 1, 1, "ACCEPT", 100, 1)
-	db.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, "peer", ?, ?, "peer", ?, ?, ?)`,
-		"http-policy", 1, 2, 1, "ACCEPT", 100, 1)
+	db.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, "peer", ?, ?, "peer", ?, ?, ?)`, "ssh-policy", 1, 1, 1, "ACCEPT", 100, 1)
+	db.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, "peer", ?, ?, "peer", ?, ?, ?)`, "http-policy", 1, 2, 1, "ACCEPT", 100, 1)
 
 	// Insert disabled policy
-	db.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, "peer", ?, ?, "peer", ?, ?, ?)`,
-		"disabled-policy", 1, 2, 1, "DROP", 100, 0)
+	db.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, "peer", ?, ?, "peer", ?, ?, ?)`, "disabled-policy", 1, 2, 1, "DROP", 100, 0)
 
-	handler := NewHandler(db)
+	handler := NewHandler(db, logsDB)
 
 	req := httptest.NewRequest("GET", "/dashboard", nil)
 	w := httptest.NewRecorder()
@@ -755,10 +751,10 @@ func TestHandleDashboard_WithPolicies(t *testing.T) {
 }
 
 func TestHandleDashboard_ContentType(t *testing.T) {
-	db, cleanup := testutil.SetupTestDB(t)
+	db, logsDB, cleanup := testutil.SetupTestDBWithSecretAndLogs(t)
 	defer cleanup()
 
-	handler := NewHandler(db)
+	handler := NewHandler(db, logsDB)
 
 	req := httptest.NewRequest("GET", "/dashboard", nil)
 	w := httptest.NewRecorder()

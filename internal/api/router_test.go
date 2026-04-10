@@ -19,7 +19,7 @@ func TestRouterIntegration(t *testing.T) {
 	compiler := engine.NewCompiler(db)
 
 	// Create API and Router
-	a := NewAPI(db, compiler)
+	a := NewAPI(db, compiler, ":memory:")
 	r := mux.NewRouter()
 
 	tempDir, err := os.MkdirTemp("", "runic-downloads-*")
@@ -99,7 +99,7 @@ func TestSecurityMiddlewares(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 	compiler := engine.NewCompiler(db)
-	a := NewAPI(db, compiler)
+	a := NewAPI(db, compiler, ":memory:")
 	r := mux.NewRouter()
 	a.RegisterRoutes(r, "")
 
@@ -139,7 +139,7 @@ func TestCORSMiddleware(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 	compiler := engine.NewCompiler(db)
-	a := NewAPI(db, compiler)
+	a := NewAPI(db, compiler, ":memory:")
 	r := mux.NewRouter()
 	a.RegisterRoutes(r, "")
 
@@ -162,7 +162,7 @@ func TestRateLimiters(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 	compiler := engine.NewCompiler(db)
-	a := NewAPI(db, compiler)
+	a := NewAPI(db, compiler, ":memory:")
 	r := mux.NewRouter()
 	a.RegisterRoutes(r, "")
 
@@ -196,7 +196,7 @@ func TestRouterStop(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 	compiler := engine.NewCompiler(db)
-	a := NewAPI(db, compiler)
+	a := NewAPI(db, compiler, ":memory:")
 	a.RegisterRoutes(mux.NewRouter(), "")
 
 	// Ensure Stop doesn't panic

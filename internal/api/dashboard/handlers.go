@@ -18,12 +18,13 @@ import (
 
 // Handler holds dependencies for dashboard handlers.
 type Handler struct {
-	DB db.Querier
+	DB     db.Querier // Main database for peers, policies, etc.
+	LogsDB db.Querier // Logs database for firewall_logs
 }
 
 // NewHandler creates a new dashboard handler.
-func NewHandler(db db.Querier) *Handler {
-	return &Handler{DB: db}
+func NewHandler(db db.Querier, logsDB db.Querier) *Handler {
+	return &Handler{DB: db, LogsDB: logsDB}
 }
 
 type ActivityItem struct {
@@ -105,13 +106,14 @@ SELECT
 	stats.OfflinePeers = stats.TotalPeers - stats.ManualPeers - stats.OnlinePeers
 
 	// Get blocked events count for last hour and last 24 hours in a single query
-	blockedRows, err := h.DB.QueryContext(r.Context(), `
-SELECT
-	COALESCE(SUM(CASE WHEN timestamp > datetime('now', '-1 hour') THEN 1 ELSE 0 END), 0) as blocked_last_hour,
-	COUNT(*) as blocked_last_24h
-FROM firewall_logs
-WHERE action = 'DROP' AND timestamp > datetime('now', '-24 hours')
-`)
+	// Uses logs DB - source_ip instead of src_ip
+	blockedRows, err := h.LogsDB.QueryContext(r.Context(), `
+		SELECT
+		COALESCE(SUM(CASE WHEN timestamp > datetime('now', '-1 hour') THEN 1 ELSE 0 END), 0) as blocked_last_hour,
+		COUNT(*) as blocked_last_24h
+		FROM firewall_logs
+		WHERE action = 'DROP' AND timestamp > datetime('now', '-24 hours')
+		`)
 	if err != nil {
 		log.ErrorContext(r.Context(), "failed to query blocked counts", "error", err)
 	} else {
@@ -131,14 +133,14 @@ WHERE action = 'DROP' AND timestamp > datetime('now', '-24 hours')
 	g, ctx := errgroup.WithContext(r.Context())
 
 	// Recent activity - last 5 blocked events
+	// Uses logs DB - peer_hostname is already in the log entry, no JOIN needed
 	g.Go(func() error {
-		activityRows, err := h.DB.QueryContext(ctx, `
-SELECT fl.timestamp, fl.src_ip, fl.dst_ip, fl.protocol, fl.action, p.hostname
-FROM firewall_logs fl
-LEFT JOIN peers p ON fl.peer_id = p.id
-WHERE fl.action = 'DROP'
-ORDER BY fl.timestamp DESC
-LIMIT 5`)
+		activityRows, err := h.LogsDB.QueryContext(ctx, `
+			SELECT timestamp, source_ip, dest_ip, protocol, action, peer_hostname
+			FROM firewall_logs
+			WHERE action = 'DROP'
+			ORDER BY timestamp DESC
+			LIMIT 5`)
 		if err != nil {
 			return err
 		}
@@ -202,14 +204,15 @@ ORDER BY hostname`)
 	})
 
 	// Top 5 blocked source IPs in last 24h
+	// Uses logs DB - source_ip instead of src_ip
 	g.Go(func() error {
-		topRows, err := h.DB.QueryContext(ctx, `
-SELECT src_ip, COUNT(*) as count
-FROM firewall_logs
-WHERE action = 'DROP' AND timestamp > datetime('now', '-24 hours')
-GROUP BY src_ip
-ORDER BY count DESC
-LIMIT 5`)
+		topRows, err := h.LogsDB.QueryContext(ctx, `
+			SELECT source_ip, COUNT(*) as count
+			FROM firewall_logs
+			WHERE action = 'DROP' AND timestamp > datetime('now', '-24 hours')
+			GROUP BY source_ip
+			ORDER BY count DESC
+			LIMIT 5`)
 		if err != nil {
 			return err
 		}

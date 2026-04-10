@@ -141,20 +141,31 @@ export default function Settings() {
                   Clear All Logs
                 </button>
               </div>
-              {/* Stats */}
-              <div className="flex gap-6 mb-4">
-                <div className="flex items-center gap-2">
-                  <HardDrive className="w-4 h-4 text-gray-400" />
-                  <span className="text-sm text-gray-600 dark:text-amber-muted">
-                    {logSettings?.log_count?.toLocaleString() || 0} logs
-                  </span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-sm text-gray-600 dark:text-amber-muted">
-                    ~{logSettings?.estimated_size_mb?.toLocaleString() || 0} MB
-                  </span>
-                </div>
-              </div>
+      {/* Stats */}
+      <div className="flex gap-6 mb-4">
+        <div className="flex items-center gap-2">
+          <HardDrive className="w-4 h-4 text-gray-400" />
+          <span className="text-sm text-gray-600 dark:text-amber-muted">
+            {logSettings?.log_count?.toLocaleString() || 0} logs
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-gray-600 dark:text-amber-muted">
+            ~{logSettings?.estimated_size_mb?.toLocaleString() || 0} MB
+          </span>
+        </div>
+      </div>
+      {/* Logs Database Path */}
+      {logSettings?.logs_db_path && (
+        <div className="mb-4">
+          <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+            Logs Database Path
+          </label>
+          <div className="p-2 bg-gray-100 dark:bg-charcoal-darkest rounded font-mono text-sm text-gray-700 dark:text-amber-muted">
+            {logSettings.logs_db_path}
+          </div>
+        </div>
+      )}
               {/* Retention Setting */}
               <div className="mb-4">
                 <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-2">

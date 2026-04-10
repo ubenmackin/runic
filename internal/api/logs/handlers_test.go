@@ -16,18 +16,18 @@ import (
 // =============================================================================
 
 func TestGetLogs(t *testing.T) {
-	database, cleanup := testutil.SetupTestDB(t)
+	database, logsDB, cleanup := testutil.SetupTestDBWithSecretAndLogs(t)
 	defer cleanup()
 
 	// Insert test peer
 	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, os_type, is_manual) VALUES (?, ?, ?, ?, ?, ?)`,
 		"peer1", "10.0.0.1", "key1", "hmac1", "linux", 0)
 
-	// Insert test log entries
-	database.Exec(`INSERT INTO firewall_logs (peer_id, timestamp, direction, src_ip, dst_ip, protocol, src_port, dst_port, action) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		"1", time.Now(), "inbound", "192.168.1.100", "10.0.0.1", "tcp", 54321, 22, "ACCEPT")
-	database.Exec(`INSERT INTO firewall_logs (peer_id, timestamp, direction, src_ip, dst_ip, protocol, src_port, dst_port, action) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		"1", time.Now(), "outbound", "10.0.0.1", "192.168.1.100", "tcp", 22, 54321, "ACCEPT")
+	// Insert test log entries (into logs DB with logs schema)
+	logsDB.Exec(`INSERT INTO firewall_logs (peer_id, peer_hostname, timestamp, event_type, source_ip, dest_ip, protocol, source_port, dest_port, action) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"1", "peer1", time.Now(), "inbound", "192.168.1.100", "10.0.0.1", "tcp", 54321, 22, "ACCEPT")
+	logsDB.Exec(`INSERT INTO firewall_logs (peer_id, peer_hostname, timestamp, event_type, source_ip, dest_ip, protocol, source_port, dest_port, action) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"1", "peer1", time.Now(), "outbound", "10.0.0.1", "192.168.1.100", "tcp", 22, 54321, "ACCEPT")
 
 	tests := []struct {
 		name           string
@@ -238,7 +238,7 @@ func TestGetLogs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h := NewHandler(database)
+			h := NewHandler(logsDB)
 			req := httptest.NewRequest("GET", "/api/v1/logs?"+tt.queryParams, nil)
 			w := httptest.NewRecorder()
 
@@ -260,14 +260,14 @@ func TestGetLogs(t *testing.T) {
 }
 
 func TestGetLogs_EmptyResult(t *testing.T) {
-	database, cleanup := testutil.SetupTestDB(t)
+	database, logsDB, cleanup := testutil.SetupTestDBWithSecretAndLogs(t)
 	defer cleanup()
 
 	// Insert test peer but no logs
 	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, os_type, is_manual) VALUES (?, ?, ?, ?, ?, ?)`,
 		"peer1", "10.0.0.1", "key1", "hmac1", "linux", 0)
 
-	h := NewHandler(database)
+	h := NewHandler(logsDB)
 	req := httptest.NewRequest("GET", "/api/v1/logs", nil)
 	w := httptest.NewRecorder()
 
@@ -305,18 +305,18 @@ func TestGetLogs_EmptyResult(t *testing.T) {
 }
 
 func TestGetLogs_WithHostname(t *testing.T) {
-	database, cleanup := testutil.SetupTestDB(t)
+	database, logsDB, cleanup := testutil.SetupTestDBWithSecretAndLogs(t)
 	defer cleanup()
 
 	// Insert test peer
 	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, os_type, is_manual) VALUES (?, ?, ?, ?, ?, ?)`,
 		"peer1", "10.0.0.1", "key1", "hmac1", "linux", 0)
 
-	// Insert test log
-	database.Exec(`INSERT INTO firewall_logs (peer_id, timestamp, direction, src_ip, dst_ip, protocol, src_port, dst_port, action) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		"1", time.Now(), "inbound", "192.168.1.100", "10.0.0.1", "tcp", 54321, 22, "ACCEPT")
+	// Insert test log (into logs DB with logs schema)
+	logsDB.Exec(`INSERT INTO firewall_logs (peer_id, peer_hostname, timestamp, event_type, source_ip, dest_ip, protocol, source_port, dest_port, action) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"1", "peer1", time.Now(), "inbound", "192.168.1.100", "10.0.0.1", "tcp", 54321, 22, "ACCEPT")
 
-	h := NewHandler(database)
+	h := NewHandler(logsDB)
 	req := httptest.NewRequest("GET", "/api/v1/logs", nil)
 	w := httptest.NewRecorder()
 
@@ -342,21 +342,21 @@ func TestGetLogs_WithHostname(t *testing.T) {
 		t.Fatal("expected log to be a map")
 	}
 
-	hostname, ok := logMap["hostname"].(string)
+	hostname, ok := logMap["peer_hostname"].(string)
 	if !ok || hostname != "peer1" {
-		t.Errorf("expected hostname='peer1', got '%v'", hostname)
+		t.Errorf("expected peer_hostname='peer1', got '%v'", hostname)
 	}
 }
 
 func TestGetLogs_OrphanedLogs(t *testing.T) {
-	database, cleanup := testutil.SetupTestDB(t)
+	_, logsDB, cleanup := testutil.SetupTestDBWithSecretAndLogs(t)
 	defer cleanup()
 
 	// Insert log with non-existent peer_id (orphaned log)
-	database.Exec(`INSERT INTO firewall_logs (peer_id, timestamp, direction, src_ip, dst_ip, protocol, src_port, dst_port, action) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		"999", time.Now(), "inbound", "192.168.1.100", "10.0.0.1", "tcp", 54321, 22, "ACCEPT")
+	logsDB.Exec(`INSERT INTO firewall_logs (peer_id, peer_hostname, timestamp, event_type, source_ip, dest_ip, protocol, source_port, dest_port, action) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"999", "", time.Now(), "inbound", "192.168.1.100", "10.0.0.1", "tcp", 54321, 22, "ACCEPT")
 
-	h := NewHandler(database)
+	h := NewHandler(logsDB)
 	req := httptest.NewRequest("GET", "/api/v1/logs", nil)
 	w := httptest.NewRecorder()
 
@@ -382,24 +382,24 @@ func TestGetLogs_OrphanedLogs(t *testing.T) {
 		t.Fatal("expected log to be a map")
 	}
 
-	hostname, ok := logMap["hostname"].(string)
+	hostname, ok := logMap["peer_hostname"].(string)
 	if hostname != "" {
-		t.Errorf("expected empty hostname for orphaned log, got '%s'", hostname)
+		t.Errorf("expected empty peer_hostname for orphaned log, got '%s'", hostname)
 	}
 }
 
 func TestGetLogs_QueryError(t *testing.T) {
-	database, cleanup := testutil.SetupTestDB(t)
+	database, logsDB, cleanup := testutil.SetupTestDBWithSecretAndLogs(t)
 	defer cleanup()
 
 	// Insert test data
 	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, os_type, is_manual) VALUES (?, ?, ?, ?, ?, ?)`,
 		"peer1", "10.0.0.1", "key1", "hmac1", "linux", 0)
 
-	h := NewHandler(database)
+	h := NewHandler(logsDB)
 
 	// Close database to cause query error
-	database.Close()
+	logsDB.Close()
 
 	req := httptest.NewRequest("GET", "/api/v1/logs", nil)
 	w := httptest.NewRecorder()

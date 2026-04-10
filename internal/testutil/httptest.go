@@ -43,6 +43,33 @@ func SetupTestDBWithSecret(t *testing.T) (*sql.DB, func()) {
 	return db, cleanup
 }
 
+// SetupTestDBWithSecretAndLogs sets up both a main database and a logs database
+// with the agent JWT secret configured. This is required for tests that need
+// both databases (e.g., agents, logs, dashboard handlers).
+func SetupTestDBWithSecretAndLogs(t *testing.T) (*sql.DB, *sql.DB, func()) {
+	// Call SetupTestDB (not SetupTestDBWithSecret) and insert secret manually
+	mainDB, mainCleanup := SetupTestDB(t)
+	logsDB, logsCleanup := SetupTestLogsDB(t)
+
+	// Insert the agent JWT secret (only once)
+	_, err := mainDB.Exec(
+		"INSERT INTO system_config (key, value) VALUES (?, ?)",
+		"agent_jwt_secret",
+		"test-secret-key-for-agent-jwt-256-bits!!",
+	)
+	if err != nil {
+		logsCleanup()
+		mainCleanup()
+		t.Fatalf("failed to insert agent_jwt_secret: %v", err)
+	}
+
+	cleanup := func() {
+		logsCleanup()
+		mainCleanup()
+	}
+	return mainDB, logsDB, cleanup
+}
+
 // SetupTestDBWithTestData sets up a test database with common test data:
 // - A test service
 // - A test peer

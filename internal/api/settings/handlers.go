@@ -14,11 +14,13 @@ import (
 )
 
 type Handler struct {
-	DB *sql.DB
+	DB         *sql.DB
+	LogsDB     *sql.DB
+	logsDBPath string
 }
 
-func NewHandler(db *sql.DB) *Handler {
-	return &Handler{DB: db}
+func NewHandler(db *sql.DB, logsDB *sql.DB, logsDBPath string) *Handler {
+	return &Handler{DB: db, LogsDB: logsDB, logsDBPath: logsDBPath}
 }
 
 type LogSettings struct {
@@ -26,6 +28,7 @@ type LogSettings struct {
 	RetentionLabel  string `json:"retention_label"`
 	LogCount        int    `json:"log_count"`
 	EstimatedSizeMB int    `json:"estimated_size_mb"`
+	LogsDBPath      string `json:"logs_db_path"`
 }
 
 // GetLogSettings returns current log retention settings and stats
@@ -42,11 +45,13 @@ func (h *Handler) GetLogSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get log count
+	// Get log count from logs database
 	var logCount int
-	err = h.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM firewall_logs").Scan(&logCount)
-	if err != nil {
-		logCount = 0
+	if h.LogsDB != nil {
+		err = h.LogsDB.QueryRowContext(ctx, "SELECT COUNT(*) FROM firewall_logs").Scan(&logCount)
+		if err != nil {
+			logCount = 0
+		}
 	}
 
 	// Estimate size (average ~500 bytes per log entry)
@@ -60,6 +65,7 @@ func (h *Handler) GetLogSettings(w http.ResponseWriter, r *http.Request) {
 		RetentionLabel:  retentionLabel,
 		LogCount:        logCount,
 		EstimatedSizeMB: estimatedSizeMB,
+		LogsDBPath:      h.logsDBPath,
 	})
 }
 
@@ -104,7 +110,13 @@ func (h *Handler) UpdateLogSettings(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) ClearAllLogs(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	result, err := h.DB.ExecContext(ctx, "DELETE FROM firewall_logs")
+	if h.LogsDB == nil {
+		log.ErrorContext(ctx, "LogsDB not initialized")
+		common.RespondError(w, http.StatusInternalServerError, "logs database not available")
+		return
+	}
+
+	result, err := h.LogsDB.ExecContext(ctx, "DELETE FROM firewall_logs")
 	if err != nil {
 		log.ErrorContext(ctx, "Failed to clear logs", "error", err)
 		common.RespondError(w, http.StatusInternalServerError, "failed to clear logs")

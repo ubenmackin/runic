@@ -29,6 +29,7 @@ import (
 	"runic/internal/auth"
 	"runic/internal/common/log"
 	"runic/internal/common/version"
+	dbpkg "runic/internal/db"
 	"runic/internal/engine"
 	"runic/internal/logcleanup"
 	"runic/internal/metrics"
@@ -38,6 +39,7 @@ import (
 type API struct {
 	Compiler     *engine.Compiler
 	DB           *sql.DB
+	LogsDB       *sql.DB // Separate database for firewall logs
 	SSEHub       *events.SSEHub
 	LogHub       *logs.Hub
 	ChangeWorker *common.ChangeWorker
@@ -65,29 +67,42 @@ type API struct {
 }
 
 // NewAPI creates a new API instance with dependency injection.
-func NewAPI(db *sql.DB, compiler *engine.Compiler) *API {
+// logsDBPath is the path to the logs database (separate from main DB).
+func NewAPI(db *sql.DB, compiler *engine.Compiler, logsDBPath string) *API {
+	// Initialize the logs database
+	logsDB, err := dbpkg.InitLogsDB(logsDBPath)
+	if err != nil {
+		log.Fatal("Failed to initialize logs database", "error", err)
+	}
+
+	// Migration: Copy existing firewall_logs to logs DB if needed
+	if _, err := dbpkg.MigrateLogsFromMainDB(db, logsDB); err != nil {
+		log.Warn("Log migration failed (existing logs will remain in main DB)", "error", err)
+	}
+
 	sseHub := events.NewSSEHub()
 	changeWorker := common.NewChangeWorker()
 	pushWorker := common.NewPushWorker(db, compiler, sseHub)
 	return &API{
 		Compiler:     compiler,
 		DB:           db,
+		LogsDB:       logsDB,
 		SSEHub:       sseHub,
 		LogHub:       logs.NewHub(),
 		ChangeWorker: changeWorker,
 		PushWorker:   pushWorker,
 		Peers:        peers.NewHandler(db, compiler),
-		Agents:       agents.NewHandler(db),
+		Agents:       agents.NewHandler(db, logsDB),
 		Auth:         authhandlers.NewHandler(db, db),
 		Groups:       groups.NewHandler(db, compiler, changeWorker),
 		Policies:     policies.NewHandler(db, compiler, changeWorker),
 		Services:     services.NewHandler(db, compiler, changeWorker),
-		Logs:         logs.NewHandler(db),
+		Logs:         logs.NewHandler(logsDB),
 		Users:        users.NewHandler(db),
 		Keys:         keys.NewHandler(db),
 		Pending:      pending.NewHandler(db, compiler, sseHub, pushWorker),
-		Dashboard:    dashboard.NewHandler(db),
-		Settings:     settings.NewHandler(db),
+		Dashboard:    dashboard.NewHandler(db, logsDB),
+		Settings:     settings.NewHandler(db, logsDB, logsDBPath),
 	}
 }
 
@@ -127,7 +142,7 @@ func (a *API) RegisterRoutes(r *mux.Router, downloadsDir string) {
 	}
 
 	// Start log cleanup worker
-	logCleanupWorker := logcleanup.NewWorker(a.DB)
+	logCleanupWorker := logcleanup.NewWorker(a.DB, a.LogsDB)
 	logCleanupWorker.Start(ctx)
 
 	// Start LogHub for WebSocket log streaming

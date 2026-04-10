@@ -152,6 +152,16 @@ func main() {
 		log.Fatalf("Failed to initialize database: %v", err)
 	}
 
+	// Get logs database path from environment variable
+	// Default to same directory as main DB with filename "logs.db"
+	logsDBPath := os.Getenv("RUNIC_LOGS_DB_PATH")
+	if logsDBPath == "" {
+		// Default to logs.db in the same directory as the main database
+		dbDir := filepath.Dir(dbPath)
+		logsDBPath = filepath.Join(dbDir, "logs.db")
+	}
+	log.Printf("Logs database path: %s", logsDBPath)
+
 	// Ensure control_plane_port is set in system_config for rule generation
 	if err := db.SetSecret(context.Background(), database, "control_plane_port", port); err != nil {
 		log.Fatalf("Failed to set control_plane_port in system_config: %v", err)
@@ -173,7 +183,7 @@ func main() {
 	// Public routes are now registered in internal/api/api.go
 
 	// Register all API routes (public routes like setup, protected routes, and system endpoints like /health)
-	apiInstance := api.NewAPI(database, compiler)
+	apiInstance := api.NewAPI(database, compiler, logsDBPath)
 	apiInstance.RegisterRoutes(r, downloadsDir)
 
 	// Serve embedded web frontend (SPA)

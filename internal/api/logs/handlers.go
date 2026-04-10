@@ -16,11 +16,11 @@ import (
 )
 
 type Handler struct {
-	DB db.Querier
+	LogsDB db.Querier
 }
 
-func NewHandler(db db.Querier) *Handler {
-	return &Handler{DB: db}
+func NewHandler(logsDB db.Querier) *Handler {
+	return &Handler{LogsDB: logsDB}
 }
 
 // MakeLogsStreamHandler returns a handler that uses the given Hub
@@ -59,13 +59,13 @@ func MakeLogsStreamHandler(hub *Hub) http.HandlerFunc {
 		}
 
 		client := &Client{
-			hub:  hub,
+			hub: hub,
 			conn: conn,
 			send: make(chan []byte, 256),
 			filter: LogFilter{
 				PeerID: r.URL.Query().Get("peer_id"),
 				Action: r.URL.Query().Get("action"),
-				SrcIP:  r.URL.Query().Get("src_ip"),
+				SrcIP: r.URL.Query().Get("src_ip"),
 			},
 		}
 		if dstPort := r.URL.Query().Get("dst_port"); dstPort != "" {
@@ -106,36 +106,36 @@ func (h *Handler) GetLogs(w http.ResponseWriter, r *http.Request) {
 		offset = o
 	}
 
-	// Build query
+	// Build query - logs DB uses different column names
 	var conditions []string
 	var args []interface{}
 
 	if peerID != "" {
-		conditions = append(conditions, "fl.peer_id = ?")
+		conditions = append(conditions, "peer_id = ?")
 		args = append(args, peerID)
 	}
 	if srcIP != "" {
-		conditions = append(conditions, "fl.src_ip LIKE ?")
+		conditions = append(conditions, "source_ip LIKE ?")
 		args = append(args, srcIP+"%")
 	}
 	if dstPort != "" {
-		conditions = append(conditions, "fl.dst_port = ?")
+		conditions = append(conditions, "dest_port = ?")
 		args = append(args, dstPort)
 	}
 	if action != "" {
 		action = strings.ToUpper(action)
-		conditions = append(conditions, "fl.action = ?")
+		conditions = append(conditions, "action = ?")
 		args = append(args, action)
 	}
 	if fromStr != "" {
 		if t, err := time.Parse(time.RFC3339, fromStr); err == nil {
-			conditions = append(conditions, "fl.timestamp >= ?")
+			conditions = append(conditions, "timestamp >= ?")
 			args = append(args, t.Format(time.RFC3339))
 		}
 	}
 	if toStr != "" {
 		if t, err := time.Parse(time.RFC3339, toStr); err == nil {
-			conditions = append(conditions, "fl.timestamp <= ?")
+			conditions = append(conditions, "timestamp <= ?")
 			args = append(args, t.Format(time.RFC3339))
 		}
 	}
@@ -145,18 +145,17 @@ func (h *Handler) GetLogs(w http.ResponseWriter, r *http.Request) {
 		whereClause = "WHERE " + strings.Join(conditions, " AND ")
 	}
 
-	// LEFT JOIN with peers to get hostname (handles orphaned logs gracefully)
+	// Query logs DB - peer_hostname is already stored in the log entry
 	args = append(args, limit, offset)
 
-	query := `SELECT fl.id, fl.peer_id, p.hostname, fl.timestamp, fl.direction,
-		fl.src_ip, fl.dst_ip, fl.protocol, fl.src_port, fl.dst_port, fl.action, fl.raw_line
-		FROM firewall_logs fl
-		LEFT JOIN peers p ON fl.peer_id = p.id
+	query := `SELECT id, peer_id, peer_hostname, timestamp, event_type,
+		source_ip, dest_ip, protocol, source_port, dest_port, action, details
+		FROM firewall_logs
 		` + whereClause + `
-		ORDER BY fl.timestamp DESC
+		ORDER BY timestamp DESC
 		LIMIT ? OFFSET ?`
 
-	rows, err := h.DB.QueryContext(ctx, query, args...)
+	rows, err := h.LogsDB.QueryContext(ctx, query, args...)
 	if err != nil {
 		runiclog.ErrorContext(ctx, "Failed to query logs", "error", err, "query", query)
 		common.RespondError(w, http.StatusInternalServerError, "failed to query logs")
@@ -171,14 +170,13 @@ func (h *Handler) GetLogs(w http.ResponseWriter, r *http.Request) {
 	var logsData []models.LogEvent
 	for rows.Next() {
 		var ev models.LogEvent
-		var direction sql.NullString
-		var rawLine sql.NullString
-		var hostname sql.NullString
+		var eventType, details sql.NullString
+		var peerHostname sql.NullString
 		var srcPort, dstPort sql.NullInt64
 
 		err := rows.Scan(
-			&ev.ID, &ev.PeerID, &hostname, &ev.Timestamp, &direction,
-			&ev.SrcIP, &ev.DstIP, &ev.Protocol, &srcPort, &dstPort, &ev.Action, &rawLine,
+			&ev.ID, &ev.PeerID, &peerHostname, &ev.Timestamp, &eventType,
+			&ev.SrcIP, &ev.DstIP, &ev.Protocol, &srcPort, &dstPort, &ev.Action, &details,
 		)
 		if err != nil {
 			runiclog.ErrorContext(ctx, "Failed to scan log row", "error", err)
@@ -186,14 +184,14 @@ func (h *Handler) GetLogs(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Populate nullable fields from scanned values
-		if hostname.Valid {
-			ev.Hostname = hostname.String
+		if peerHostname.Valid {
+			ev.PeerHostname = peerHostname.String
 		}
-		if direction.Valid {
-			ev.Direction = direction.String
+		if eventType.Valid {
+			ev.Direction = eventType.String
 		}
-		if rawLine.Valid {
-			ev.RawLine = rawLine.String
+		if details.Valid {
+			ev.RawLine = details.String
 		}
 		if srcPort.Valid {
 			ev.SrcPort = int(srcPort.Int64)
@@ -213,19 +211,19 @@ func (h *Handler) GetLogs(w http.ResponseWriter, r *http.Request) {
 	logsData = common.EnsureSlice(logsData)
 
 	// Get total count for pagination
-	countQuery := `SELECT COUNT(*) FROM firewall_logs fl ` + whereClause
+	countQuery := `SELECT COUNT(*) FROM firewall_logs ` + whereClause
 	countArgs := args[:len(args)-2] // Remove limit and offset
 	var total int
-	if err := h.DB.QueryRowContext(ctx, countQuery, countArgs...).Scan(&total); err != nil {
+	if err := h.LogsDB.QueryRowContext(ctx, countQuery, countArgs...).Scan(&total); err != nil {
 		runiclog.ErrorContext(ctx, "Failed to get log count", "error", err, "query", countQuery)
 		// Set total to 0 instead of leaving it uninitialized
 		total = 0
 	}
 
 	common.RespondJSON(w, http.StatusOK, map[string]interface{}{
-		"logs":   logsData,
-		"total":  total,
-		"limit":  limit,
+		"logs": logsData,
+		"total": total,
+		"limit": limit,
 		"offset": offset,
 	})
 }

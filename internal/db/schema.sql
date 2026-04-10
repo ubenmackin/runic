@@ -105,6 +105,7 @@ CREATE TABLE IF NOT EXISTS revoked_tokens (
 CREATE TABLE IF NOT EXISTS firewall_logs (
 id INTEGER PRIMARY KEY AUTOINCREMENT,
 peer_id INTEGER NOT NULL,
+peer_hostname TEXT,
 timestamp DATETIME NOT NULL,
 direction TEXT,
 src_ip TEXT NOT NULL,

@@ -32,8 +32,8 @@ func setupTestAPI(t *testing.T) (*API, *sql.DB, func()) {
 	// Create compiler
 	compiler := engine.NewCompiler(database)
 
-	// Create API instance
-	api := NewAPI(database, compiler)
+	// Create API instance with a temp logs DB path
+	api := NewAPI(database, compiler, ":memory:")
 
 	return api, database, cleanup
 }
