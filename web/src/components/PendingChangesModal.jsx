@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { X, RefreshCw, Copy, Check, AlertCircle, FileCode, Trash2 } from 'lucide-react'
 import { api } from '../api/client'
 import { useFocusTrap } from '../hooks/useFocusTrap'
@@ -61,7 +61,7 @@ export default function PendingChangesModal({ peerId, peerHostname, onClose, onA
     }
   }
 
-  const handleRollback = async () => {
+  const handleBulkRollback = async () => {
     if (!window.confirm('Are you sure you want to discard ALL pending changes across all peers? This action cannot be undone.')) return
     setRollbackLoading(true)
     try {
@@ -103,6 +103,52 @@ export default function PendingChangesModal({ peerId, peerHostname, onClose, onA
     }
   }
 
+  // Group changes by entity for per-entity rollback
+  const groupedChanges = useMemo(() => {
+    const groups = {}
+    changes.forEach(change => {
+      const key = `${change.change_type}-${change.change_id}`
+      if (!groups[key]) {
+        groups[key] = {
+          entityType: change.change_type,
+          entityId: change.change_id,
+          entityName: change.entity_name || `Unknown ${change.change_type}`,
+          changes: []
+        }
+      }
+      groups[key].changes.push(change)
+    })
+    return Object.values(groups)
+  }, [changes])
+
+  // Per-entity rollback handler
+  const handleEntityRollback = async (entityType, entityId) => {
+    const confirmed = window.confirm(`Are you sure you want to rollback ${entityType}?`)
+    if (!confirmed) return
+
+    try {
+      const res = await fetch('/api/pending-changes/rollback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ entity_type: entityType, entity_id: entityId })
+      })
+
+      if (res.status === 409) {
+        const data = await res.json()
+        showToast(data.error || 'Cannot rollback: referenced by policies', 'error')
+      } else if (!res.ok) {
+        showToast('Failed to rollback', 'error')
+      } else {
+        showToast('Rolled back successfully', 'success')
+        // Refresh the changes list
+        const data = await api.get(`/pending-changes/${peerId}`)
+        setChanges(data.changes || [])
+      }
+    } catch (err) {
+      showToast('Network error', 'error')
+    }
+  }
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" tabIndex="-1" onKeyDown={(e) => { if (e.key === 'Escape') onClose() }}>
       <div ref={modalRef} className="bg-white dark:bg-charcoal-dark rounded-xl shadow-xl w-full max-w-4xl mx-4 max-h-[90vh] flex flex-col">
@@ -134,28 +180,60 @@ export default function PendingChangesModal({ peerId, peerHostname, onClose, onA
             </div>
           ) : (
             <>
-              {/* Pending Changes List */}
-              <div className="mb-6">
-                <h4 className="text-sm font-medium text-gray-700 dark:text-amber-primary mb-3">Queued Changes ({changes.length})</h4>
-                <div className="space-y-2">
-                  {changes.map((change, idx) => (
-                    <div key={change.id || idx} className="flex items-center gap-3 p-3 bg-gray-50 dark:bg-charcoal-darkest rounded-lg">
-                      <span className={`px-2 py-0.5 text-xs font-medium rounded-full ${handleActionColor(change.change_action)}`}>
-                        {handleActionLabel(change.change_action)}
-                      </span>
-                      <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300">
-                        {handleChangeTypeLabel(change.change_type)}
-                      </span>
-                      <span className="text-sm text-gray-900 dark:text-light-neutral flex-1">
-                        {change.change_summary}
-                      </span>
-                      <span className="text-xs text-gray-500 dark:text-amber-muted">
-                        {new Date(change.created_at).toLocaleString()}
-                      </span>
-                    </div>
-                  ))}
+                {/* Pending Changes List */}
+                <div className="mb-6">
+                  <h4 className="text-sm font-medium text-gray-700 dark:text-amber-primary mb-3">Queued Changes ({changes.length})</h4>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-gray-200 dark:border-gray-border">
+                          <th className="text-left py-2 px-3 font-medium text-gray-600 dark:text-amber-muted">Entity</th>
+                          <th className="text-left py-2 px-3 font-medium text-gray-600 dark:text-amber-muted">Changes</th>
+                          <th className="text-right py-2 px-3 font-medium text-gray-600 dark:text-amber-muted">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {groupedChanges.map(group => (
+                          <tr key={`${group.entityType}-${group.entityId}`} className="border-b border-gray-100 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-charcoal-darkest">
+                            <td className="py-3 px-3">
+                              <div className="flex items-center gap-2">
+                                <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300">
+                                  {handleChangeTypeLabel(group.entityType)}
+                                </span>
+                                <span className="text-gray-900 dark:text-light-neutral font-medium">
+                                  {group.entityName}
+                                </span>
+                              </div>
+                            </td>
+                            <td className="py-3 px-3 text-gray-600 dark:text-amber-muted">
+                              {group.changes.length} change(s)
+                              <div className="mt-1 space-y-1">
+                                {group.changes.map((change, idx) => (
+                                  <div key={change.id || idx} className="flex items-center gap-2 text-xs">
+                                    <span className={`px-2 py-0.5 text-xs font-medium rounded-full ${handleActionColor(change.change_action)}`}>
+                                      {handleActionLabel(change.change_action)}
+                                    </span>
+                                    <span className="text-gray-500 dark:text-amber-muted">
+                                      {change.change_summary}
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
+                            </td>
+                            <td className="py-3 px-3 text-right">
+                              <button
+                                onClick={() => handleEntityRollback(group.entityType, group.entityId)}
+                                className="text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 font-medium text-sm px-3 py-1 rounded hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors"
+                              >
+                                ↩ Rollback
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
-              </div>
 
               {/* Preview Section */}
               {preview ? (
@@ -235,24 +313,24 @@ export default function PendingChangesModal({ peerId, peerHostname, onClose, onA
           </button>
           {changes.length > 0 && (
             <div className="flex gap-2">
-              <button
-                onClick={handleRollback}
-                disabled={applyLoading || rollbackLoading}
-                className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/40 rounded-lg disabled:opacity-50 transition-colors"
-                title="Discard all pending changes across all peers"
-              >
-                {rollbackLoading ? (
-                  <>
-                    <RefreshCw className="w-4 h-4 animate-spin" />
-                    Discarding...
-                  </>
-                ) : (
-                  <>
-                    <Trash2 className="w-4 h-4" />
-                    Discard All
-                  </>
-                )}
-              </button>
+                <button
+                  onClick={handleBulkRollback}
+                  disabled={applyLoading || rollbackLoading}
+                  className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/40 rounded-lg disabled:opacity-50 transition-colors"
+                  title="Discard all pending changes across all peers"
+                >
+                  {rollbackLoading ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      Discarding...
+                    </>
+                  ) : (
+                    <>
+                      <Trash2 className="w-4 h-4" />
+                      Discard All
+                    </>
+                  )}
+                </button>
               <button
                 onClick={handleApply}
                 disabled={applyLoading || rollbackLoading || !preview}

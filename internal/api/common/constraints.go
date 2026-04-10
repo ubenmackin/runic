@@ -128,3 +128,41 @@ func CheckGroupDeleteConstraints(ctx context.Context, database db.Querier, group
 
 	return nil
 }
+
+// CheckServiceDeleteConstraints returns an error if the service is in use by any policy.
+// It checks if the service is used in any policy (as service_id).
+// Returns a DeleteConstraintError with the full list of policies using the service.
+func CheckServiceDeleteConstraints(ctx context.Context, database db.Querier, serviceID int) error {
+	// Query ALL policies that use the service
+	rows, err := database.QueryContext(ctx,
+		`SELECT id, name FROM policies WHERE service_id = ? AND is_pending_delete = 0`,
+		serviceID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to check policy usage: %w", err)
+	}
+
+	var policies []PolicyRef
+	for rows.Next() {
+		var p PolicyRef
+		if err := rows.Scan(&p.ID, &p.Name); err != nil {
+			if closeErr := rows.Close(); closeErr != nil {
+				return fmt.Errorf("failed to scan policy: %v, close error: %w", err, closeErr)
+			}
+			return fmt.Errorf("failed to scan policy: %w", err)
+		}
+		policies = append(policies, p)
+	}
+	if closeErr := rows.Close(); closeErr != nil {
+		return fmt.Errorf("failed to close rows: %w", closeErr)
+	}
+
+	if len(policies) > 0 {
+		return &DeleteConstraintError{
+			Message:  "Cannot delete service: it is in use by policies",
+			Policies: policies,
+		}
+	}
+
+	return nil
+}

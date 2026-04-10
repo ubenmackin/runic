@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -110,10 +111,57 @@ func (h *Handler) ListPendingChanges(w http.ResponseWriter, r *http.Request) {
 	common.RespondJSON(w, http.StatusOK, common.EnsureSlice(groups))
 }
 
+// RollbackRequest represents the request body for rollback operations.
+type RollbackRequest struct {
+	EntityType string `json:"entity_type"` // Optional: empty = bulk rollback
+	EntityID   int    `json:"entity_id"`   // Optional: 0 = bulk rollback
+}
+
 // RollbackPendingChanges restores groups, services, and policies to their state before any pending changes.
+// Supports both bulk rollback (empty body) and single-entity rollback (with entity_type and entity_id).
 func (h *Handler) RollbackPendingChanges(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
+	var req RollbackRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		// Legacy bulk rollback (no body or invalid JSON)
+		if err := db.RollbackSnapshots(ctx, h.DBBeginner); err != nil {
+			log.ErrorContext(ctx, "failed to rollback snapshots", "error", err)
+			common.InternalError(w)
+			return
+		}
+
+		if err := db.DeleteAllPendingBundlePreviews(ctx, h.DB); err != nil {
+			log.WarnContext(ctx, "Failed to delete old previews", "error", err)
+		}
+
+		common.RespondJSON(w, http.StatusOK, map[string]string{"status": "rolled_back"})
+		return
+	}
+
+	// Single-entity rollback
+	if req.EntityType != "" && req.EntityID != 0 {
+		err := db.RollbackEntitySnapshot(ctx, h.DBBeginner, req.EntityType, req.EntityID)
+		if err != nil {
+			if errors.Is(err, db.ErrConstraintViolation) {
+				common.RespondJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+				return
+			}
+			log.ErrorContext(ctx, "failed to rollback entity", "entity_type", req.EntityType, "entity_id", req.EntityID, "error", err)
+			common.InternalError(w)
+			return
+		}
+
+		// Delete affected bundle previews for peers
+		if err := db.DeleteAllPendingBundlePreviews(ctx, h.DB); err != nil {
+			log.WarnContext(ctx, "Failed to delete old previews", "error", err)
+		}
+
+		common.RespondJSON(w, http.StatusOK, map[string]string{"status": "rolled_back"})
+		return
+	}
+
+	// Bulk rollback
 	if err := db.RollbackSnapshots(ctx, h.DBBeginner); err != nil {
 		log.ErrorContext(ctx, "failed to rollback snapshots", "error", err)
 		common.InternalError(w)
@@ -282,6 +330,15 @@ func (h *Handler) ApplyPeerPendingBundle(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// Begin transaction for atomic operations
+	tx, err := h.DBBeginner.BeginTx(ctx, nil)
+	if err != nil {
+		log.ErrorContext(ctx, "failed to begin transaction", "error", err)
+		common.InternalError(w)
+		return
+	}
+	defer func() { _ = tx.Rollback() }()
+
 	// Compile and store the bundle
 	bundle, err := h.Compiler.CompileAndStore(ctx, peerID)
 	if err != nil {
@@ -290,22 +347,29 @@ func (h *Handler) ApplyPeerPendingBundle(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Clear pending changes for this peer
-	err = db.ClearPendingChangesForPeer(ctx, database, peerID)
-	if err != nil {
-		log.WarnContext(ctx, "failed to clear pending changes for peer", "peer_id", peerID, "error", err)
-		// Don't fail the request — bundle was applied successfully
+	// Clear pending changes for this peer (MUST succeed)
+	if err := db.ClearPendingChangesForPeer(ctx, tx, peerID); err != nil {
+		log.ErrorContext(ctx, "failed to clear pending changes for peer", "peer_id", peerID, "error", err)
+		common.InternalError(w)
+		return
 	}
 
 	// Delete any pending preview
-	if err := db.DeletePendingBundlePreview(ctx, database, peerID); err != nil {
-		log.WarnContext(ctx, "Failed to delete pending bundle preview", "error", err)
+	if err := db.DeletePendingBundlePreview(ctx, tx, peerID); err != nil {
+		log.ErrorContext(ctx, "failed to delete pending bundle preview", "error", err)
+		common.InternalError(w)
+		return
 	}
 
-	// Check if all pending changes are cleared, then cleanup snapshots
-	if err := db.CleanupIfComplete(ctx, h.DBBeginner); err != nil {
-		log.WarnContext(ctx, "Failed to cleanup after apply", "error", err)
+	// Commit transaction
+	if err := tx.Commit(); err != nil {
+		log.ErrorContext(ctx, "failed to commit transaction", "error", err)
+		common.InternalError(w)
+		return
 	}
+
+	// Best-effort cleanup (outside transaction)
+	_ = db.CleanupIfComplete(ctx, h.DBBeginner) // best-effort cleanup
 
 	// Notify via SSE (use hostname as the host_id for SSE)
 	h.SSEHub.NotifyBundleUpdated("host-"+hostname, bundle.Version)
@@ -628,18 +692,32 @@ func applyBundleForPeer(ctx context.Context, database db.DB, compiler *engine.Co
 		return fmt.Errorf("peer not found: %w", err)
 	}
 
+	// Begin transaction for atomic operations
+	tx, err := database.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
 	// Compile and store
 	bundle, err := compiler.CompileAndStore(ctx, peerID)
 	if err != nil {
 		return fmt.Errorf("compile failed: %w", err)
 	}
 
-	// Clear pending
-	if err := db.ClearPendingChangesForPeer(ctx, database, peerID); err != nil {
-		log.WarnContext(ctx, "failed to clear pending changes for peer", "peer_id", peerID, "error", err)
+	// Clear pending changes (MUST succeed)
+	if err := db.ClearPendingChangesForPeer(ctx, tx, peerID); err != nil {
+		return fmt.Errorf("failed to clear pending changes: %w", err)
 	}
-	if err := db.DeletePendingBundlePreview(ctx, database, peerID); err != nil {
-		log.WarnContext(ctx, "Failed to delete pending bundle preview", "error", err)
+
+	// Delete pending preview (MUST succeed)
+	if err := db.DeletePendingBundlePreview(ctx, tx, peerID); err != nil {
+		return fmt.Errorf("failed to delete pending bundle preview: %w", err)
+	}
+
+	// Commit transaction
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
 	// Notify via SSE

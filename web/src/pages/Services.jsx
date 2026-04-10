@@ -54,6 +54,9 @@ export default function Services() {
   const [searchTerm, setSearchTerm] = useState('')
   const [showSystemServices, setShowSystemServices] = useState(false)
 
+  // Toggle for showing pending deletes
+  const [showPendingDeletes, setShowPendingDeletes] = useState(false)
+
   // Sorting state (persisted per-user)
   const { sortConfig, handleSort } = useTableSort('services', { key: 'name', direction: 'asc' })
 
@@ -102,7 +105,10 @@ export default function Services() {
   const systemServices = services?.filter(s => s.is_system) || []
   const userServices = services?.filter(s => !s.is_system) || []
 
-  const processedServices = useTableFilter(userServices, searchTerm, sortConfig, {
+  // Filter soft-deleted items based on toggle
+  const visibleServices = showPendingDeletes ? userServices : userServices.filter(s => !s.is_pending_delete)
+
+  const processedServices = useTableFilter(visibleServices, searchTerm, sortConfig, {
     filterFn: (s, term) => {
       const name = (s.name || '').toLowerCase()
       const protocol = (s.protocol || '').toLowerCase()
@@ -396,15 +402,31 @@ const handleSourcePortInputKeyDown = (e) => {
         </div>
       )}
 
-      {/* Search Bar and Rows per page */}
-      <TableToolbar
-        searchTerm={searchTerm}
-        onSearchChange={(v) => setSearchTerm(v)}
-        onClearSearch={() => setSearchTerm('')}
-        placeholder="Search services by name, protocol, ports, or description..."
-        rowsPerPage={servicesRowsPerPage}
-        onRowsPerPageChange={setServicesRowsPerPage}
-      />
+	{/* Search Bar and Rows per page */}
+	<TableToolbar
+		searchTerm={searchTerm}
+		onSearchChange={(v) => setSearchTerm(v)}
+		onClearSearch={() => setSearchTerm('')}
+		placeholder="Search services by name, protocol, ports, or description..."
+		rowsPerPage={servicesRowsPerPage}
+		onRowsPerPageChange={setServicesRowsPerPage}
+	/>
+
+	{/* Show Pending Deletes Toggle */}
+	{userServices?.some(s => s.is_pending_delete) && (
+		<div className="flex items-center gap-2 px-1">
+			<input
+				type="checkbox"
+				id="showPendingDeletes"
+				checked={showPendingDeletes}
+				onChange={(e) => setShowPendingDeletes(e.target.checked)}
+				className="w-4 h-4 text-purple-active bg-gray-100 border-gray-300 rounded focus:ring-purple-active dark:focus:ring-purple-active dark:ring-offset-gray-800 focus:ring-2 dark:bg-charcoal-darkest dark:border-gray-600"
+			/>
+			<label htmlFor="showPendingDeletes" className="text-sm text-gray-700 dark:text-amber-primary cursor-pointer">
+				Show Pending Deletes
+			</label>
+		</div>
+	)}
 
       {!processedServices?.length ? (
         searchTerm ? (
@@ -448,9 +470,16 @@ const handleSourcePortInputKeyDown = (e) => {
               <tbody className="divide-y divide-gray-200 dark:divide-gray-border">
                 {paginatedServices.map((service) => (
                   <tr key={service.id} className="">
-                    <td className="px-4 py-3">
-                      <span className="font-medium text-gray-900 dark:text-light-neutral">{service.name}</span>
-                    </td>
+				<td className="px-4 py-3">
+					<span className="font-medium text-gray-900 dark:text-light-neutral">
+						{service.name}
+						{service.is_pending_delete && (
+							<span className="ml-2 px-2 py-1 text-xs bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300 rounded">
+								Pending Delete
+							</span>
+						)}
+					</span>
+				</td>
                     <td className="px-4 py-3 text-gray-600 dark:text-amber-primary">
                       {protocolLabel(service.protocol)}
                     </td>
@@ -492,30 +521,30 @@ const handleSourcePortInputKeyDown = (e) => {
                     <td className="px-4 py-3 text-gray-600 dark:text-amber-primary">
                       {service.description || '—'}
                     </td>
-                    <td className="px-4 py-3">
-          <div className="flex items-center gap-2">
-            {canEdit && (
-              <button
-                onClick={(e) => { e.stopPropagation(); openEdit(service) }}
-                className={`p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded ${service.is_system ? 'text-gray-400 cursor-not-allowed opacity-50' : ''}`}
-                disabled={service.is_system}
-                title={service.is_system ? "System services cannot be edited" : "Edit"}
-              >
-                <Pencil className={`w-4 h-4 ${service.is_system ? 'text-gray-400' : 'text-gray-900 dark:text-white'}`} />
-              </button>
-            )}
-            {canEdit && (
-              <button
-                onClick={(e) => { e.stopPropagation(); !service.is_system && setDeleteTarget(service) }}
-                disabled={service.is_system}
-                className={`p-1.5 rounded ${service.is_system ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-100 dark:hover:bg-charcoal-darkest'}`}
-                title={service.is_system ? "System services cannot be deleted" : "Delete"}
-              >
-                <Trash2 className="w-4 h-4 text-red-500" />
-              </button>
-            )}
-          </div>
-                    </td>
+				<td className="px-4 py-3">
+					<div className="flex items-center gap-2">
+						{canEdit && (
+							<button
+								onClick={(e) => { e.stopPropagation(); openEdit(service) }}
+								className={`p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded ${(service.is_system || service.is_pending_delete) ? 'text-gray-400 cursor-not-allowed opacity-50' : ''}`}
+								disabled={service.is_system || service.is_pending_delete}
+								title={service.is_pending_delete ? "Cannot edit soft-deleted services" : service.is_system ? "System services cannot be edited" : "Edit"}
+							>
+								<Pencil className={`w-4 h-4 ${(service.is_system || service.is_pending_delete) ? 'text-gray-400' : 'text-gray-900 dark:text-white'}`} />
+							</button>
+						)}
+						{canEdit && (
+							<button
+								onClick={(e) => { e.stopPropagation(); !service.is_system && !service.is_pending_delete && setDeleteTarget(service) }}
+								disabled={service.is_system || service.is_pending_delete}
+								className={`p-1.5 rounded ${(service.is_system || service.is_pending_delete) ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-100 dark:hover:bg-charcoal-darkest'}`}
+								title={service.is_pending_delete ? "Cannot delete soft-deleted services" : service.is_system ? "System services cannot be deleted" : "Delete"}
+							>
+								<Trash2 className="w-4 h-4 text-red-500" />
+							</button>
+						)}
+					</div>
+				</td>
                   </tr>
                 ))}
               </tbody>

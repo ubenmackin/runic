@@ -28,8 +28,8 @@ func NewHandler(db db.Querier, compiler *engine.Compiler, changeWorker *common.C
 func (h *Handler) ListPolicies(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.DB.QueryContext(r.Context(),
 		`SELECT id, name, COALESCE(description, ''), source_id, source_type, service_id,
-		target_id, target_type, action, priority, enabled, target_scope, COALESCE(direction, 'both'), created_at, updated_at
-		FROM policies WHERE COALESCE(is_pending_delete, 0) = 0 ORDER BY priority ASC`)
+		target_id, target_type, action, priority, enabled, target_scope, COALESCE(direction, 'both'), created_at, updated_at, COALESCE(is_pending_delete, 0)
+		FROM policies ORDER BY priority ASC`)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "failed to query policies")
 		return
@@ -41,28 +41,29 @@ func (h *Handler) ListPolicies(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	type policyResp struct {
-		ID          int    `json:"id"`
-		Name        string `json:"name"`
-		Description string `json:"description"`
-		SourceID    int    `json:"source_id"`
-		SourceType  string `json:"source_type"`
-		ServiceID   int    `json:"service_id"`
-		TargetID    int    `json:"target_id"`
-		TargetType  string `json:"target_type"`
-		Action      string `json:"action"`
-		Priority    int    `json:"priority"`
-		Enabled     bool   `json:"enabled"`
-		TargetScope string `json:"target_scope"`
-		Direction   string `json:"direction"`
-		CreatedAt   string `json:"created_at"`
-		UpdatedAt   string `json:"updated_at"`
+		ID              int    `json:"id"`
+		Name            string `json:"name"`
+		Description     string `json:"description"`
+		SourceID        int    `json:"source_id"`
+		SourceType      string `json:"source_type"`
+		ServiceID       int    `json:"service_id"`
+		TargetID        int    `json:"target_id"`
+		TargetType      string `json:"target_type"`
+		Action          string `json:"action"`
+		Priority        int    `json:"priority"`
+		Enabled         bool   `json:"enabled"`
+		TargetScope     string `json:"target_scope"`
+		Direction       string `json:"direction"`
+		CreatedAt       string `json:"created_at"`
+		UpdatedAt       string `json:"updated_at"`
+		IsPendingDelete bool   `json:"is_pending_delete"`
 	}
 
 	var policiesData []policyResp
 	for rows.Next() {
 		var p policyResp
 		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.SourceID, &p.SourceType, &p.ServiceID,
-			&p.TargetID, &p.TargetType, &p.Action, &p.Priority, &p.Enabled, &p.TargetScope, &p.Direction, &p.CreatedAt, &p.UpdatedAt); err != nil {
+			&p.TargetID, &p.TargetType, &p.Action, &p.Priority, &p.Enabled, &p.TargetScope, &p.Direction, &p.CreatedAt, &p.UpdatedAt, &p.IsPendingDelete); err != nil {
 			common.RespondError(w, http.StatusInternalServerError, "failed to scan policy")
 			return
 		}

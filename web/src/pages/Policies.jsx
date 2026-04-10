@@ -74,6 +74,9 @@ export default function Policies() {
   const [showSystemRules, setShowSystemRules] = useState(false)
   const [showDescription, setShowDescription] = useState(false)
 
+  // Toggle for showing pending deletes
+  const [showPendingDeletes, setShowPendingDeletes] = useState(false)
+
   // Sorting state (persisted per-user)
   const { sortConfig, handleSort } = useTableSort('policies', { key: 'priority', direction: 'asc' })
 
@@ -263,9 +266,11 @@ const { createMutation, updateMutation, deleteMutation } = useCrudMutations({
   const [searchTerm, setSearchTerm] = useState('')
 
   // Pre-filter by enabled toggle and peer filter before search/sort
-  const preFilteredPolicies = policies?.filter(p => {
+  const preFilteredPolicies = (policies || []).filter(p => {
     if (!showDisabled && !p.enabled) return false
     if (filterPeer && (p.target_type !== 'peer' || p.target_id !== filterPeer)) return false
+    // Filter by pending delete status
+    if (!showPendingDeletes && p.is_pending_delete) return false
     return true
   })
 
@@ -379,37 +384,53 @@ const { createMutation, updateMutation, deleteMutation } = useCrudMutations({
         )}
       </div>
 
-  {/* Filters */}
-  <TableToolbar
-    searchTerm={searchTerm}
-    onSearchChange={(v) => setSearchTerm(v)}
-    onClearSearch={() => setSearchTerm('')}
-    placeholder="Search policies by name, source, service, or target..."
-    rowsPerPage={policiesRowsPerPage}
-    onRowsPerPageChange={setPoliciesRowsPerPage}
-  />
+	{/* Filters */}
+	<TableToolbar
+		searchTerm={searchTerm}
+		onSearchChange={(v) => setSearchTerm(v)}
+		onClearSearch={() => setSearchTerm('')}
+		placeholder="Search policies by name, source, service, or target..."
+		rowsPerPage={policiesRowsPerPage}
+		onRowsPerPageChange={setPoliciesRowsPerPage}
+	/>
 
-  {/* Show Disabled Filter Chips */}
-  <div className="flex gap-2">
-    {[
-      { value: 'enabled', label: 'Enabled' },
-      { value: 'disabled', label: 'Disabled' },
-    ].map(opt => (
-      <button
-        key={opt.value}
-        onClick={() => setShowDisabled(opt.value === 'disabled')}
-        className={`px-3 py-1.5 text-sm font-medium rounded-lg transition-colors ${
-          showDisabled === (opt.value === 'disabled')
-            ? 'bg-purple-active text-white'
-            : 'bg-gray-100 dark:bg-charcoal-darkest text-gray-700 dark:text-amber-primary hover:bg-gray-200 dark:hover:bg-charcoal-dark'
-        }`}
-      >
-        {opt.label}
-      </button>
-    ))}
-  </div>
+	{/* Show Disabled Filter Chips */}
+	<div className="flex gap-2">
+		{[
+			{ value: 'enabled', label: 'Enabled' },
+			{ value: 'disabled', label: 'Disabled' },
+		].map(opt => (
+			<button
+				key={opt.value}
+				onClick={() => setShowDisabled(opt.value === 'disabled')}
+				className={`px-3 py-1.5 text-sm font-medium rounded-lg transition-colors ${
+					showDisabled === (opt.value === 'disabled')
+					? 'bg-purple-active text-white'
+					: 'bg-gray-100 dark:bg-charcoal-darkest text-gray-700 dark:text-amber-primary hover:bg-gray-200 dark:hover:bg-charcoal-dark'
+				}`}
+			>
+			{opt.label}
+			</button>
+			))}
+		</div>
 
-{!processedPolicies.length ? (
+	{/* Show Pending Deletes Toggle */}
+	{policies?.some(p => p.is_pending_delete) && (
+		<div className="flex items-center gap-2 px-1">
+			<input
+				type="checkbox"
+				id="showPendingDeletes"
+				checked={showPendingDeletes}
+				onChange={(e) => setShowPendingDeletes(e.target.checked)}
+				className="w-4 h-4 text-purple-active bg-gray-100 border-gray-300 rounded focus:ring-purple-active dark:focus:ring-purple-active dark:ring-offset-gray-800 focus:ring-2 dark:bg-charcoal-darkest dark:border-gray-600"
+			/>
+			<label htmlFor="showPendingDeletes" className="text-sm text-gray-700 dark:text-amber-primary cursor-pointer">
+				Show Pending Deletes
+			</label>
+		</div>
+	)}
+
+	{!processedPolicies.length ? (
         searchTerm ? (
           <div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-sm p-8 text-center">
             <p className="text-gray-500 dark:text-amber-muted">No policies match your search.</p>
@@ -468,9 +489,16 @@ const { createMutation, updateMutation, deleteMutation } = useCrudMutations({
                     <td className="px-4 py-3">
                       <ToggleSwitch checked={p.enabled} onChange={(v) => toggleMutation.mutate({ id: p.id, enabled: v })} />
                     </td>
-                    <td className="px-4 py-3">
-                      <span className="font-medium text-gray-900 dark:text-light-neutral">{p.name}</span>
-                    </td>
+				<td className="px-4 py-3">
+					<span className="font-medium text-gray-900 dark:text-light-neutral">
+						{p.name}
+						{p.is_pending_delete && (
+							<span className="ml-2 px-2 py-1 text-xs bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300 rounded">
+								Pending Delete
+							</span>
+						)}
+					</span>
+				</td>
                     <td className="px-4 py-3 text-gray-600 dark:text-amber-primary">
                       {p.priority}
                     </td>
@@ -502,20 +530,30 @@ const { createMutation, updateMutation, deleteMutation } = useCrudMutations({
                         )}
                       </div>
                     </td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-2">
-                        {canEdit && (
-                          <button onClick={() => openEdit(p)} className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded" title="Edit">
-                            <Pencil className="w-4 h-4 text-gray-500" />
-                          </button>
-                        )}
-                        {canEdit && (
-                          <button onClick={() => setDeleteTarget(p)} className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded" title="Delete">
-                            <Trash2 className="w-4 h-4 text-red-500" />
-                          </button>
-                        )}
-                      </div>
-                    </td>
+				<td className="px-4 py-3">
+					<div className="flex items-center gap-2">
+						{canEdit && (
+							<button
+								onClick={() => openEdit(p)}
+								className={`p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded ${p.is_pending_delete ? 'text-gray-400 cursor-not-allowed opacity-50' : ''}`}
+								disabled={p.is_pending_delete}
+								title={p.is_pending_delete ? "Cannot edit soft-deleted policies" : "Edit"}
+							>
+								<Pencil className={`w-4 h-4 ${p.is_pending_delete ? 'text-gray-400' : 'text-gray-500'}`} />
+							</button>
+						)}
+						{canEdit && (
+							<button
+								onClick={() => !p.is_pending_delete && setDeleteTarget(p)}
+								disabled={p.is_pending_delete}
+								className={`p-1.5 rounded ${p.is_pending_delete ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-100 dark:hover:bg-charcoal-darkest'}`}
+								title={p.is_pending_delete ? "Cannot delete soft-deleted policies" : "Delete"}
+							>
+								<Trash2 className="w-4 h-4 text-red-500" />
+							</button>
+						)}
+					</div>
+				</td>
                   </tr>
                 ))}
               </tbody>

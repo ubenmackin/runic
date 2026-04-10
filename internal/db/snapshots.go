@@ -11,31 +11,19 @@ import (
 
 // CreateSnapshot creates a snapshot if one doesn't already exist for this entity.
 // It is idempotent to ensure all-or-nothing rollback (only the first change is snapshotted).
+// Uses INSERT OR IGNORE for atomic idempotency - if a snapshot already exists, the operation
+// silently succeeds without modifying the existing snapshot.
 func CreateSnapshot(ctx context.Context, database Querier, entityType string, entityID int, action, snapshotData string) error {
-	// Check if a snapshot already exists
-	var exists bool
-	err := database.QueryRowContext(ctx,
-		"SELECT COUNT(*) > 0 FROM change_snapshots WHERE entity_type = ? AND entity_id = ?",
-		entityType, entityID,
-	).Scan(&exists)
-	if err != nil {
-		return fmt.Errorf("check existing snapshot: %w", err)
-	}
-
-	if exists {
-		// Snapshot already exists, preserve the original state
-		return nil
-	}
-
-	// Insert new snapshot
 	var data sql.NullString
 	if snapshotData != "" {
 		data.String = snapshotData
 		data.Valid = true
 	}
 
-	_, err = database.ExecContext(ctx,
-		"INSERT INTO change_snapshots (entity_type, entity_id, action, snapshot_data) VALUES (?, ?, ?, ?)",
+	// Use INSERT OR IGNORE for atomic idempotency
+	// If a snapshot already exists for this entity, the insert is silently ignored
+	_, err := database.ExecContext(ctx,
+		"INSERT OR IGNORE INTO change_snapshots (entity_type, entity_id, action, snapshot_data) VALUES (?, ?, ?, ?)",
 		entityType, entityID, action, data,
 	)
 	if err != nil {

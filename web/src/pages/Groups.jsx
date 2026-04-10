@@ -38,6 +38,9 @@ export default function Groups() {
   
   // System groups panel state
   const [showSystemGroups, setShowSystemGroups] = useState(false)
+
+  // Toggle for showing pending deletes
+  const [showPendingDeletes, setShowPendingDeletes] = useState(false)
   
   // Selected peer for adding to group
   const [selectedPeerId, setSelectedPeerId] = useState(null)
@@ -101,8 +104,11 @@ const peerOptions = availablePeers.map(p => ({
   const systemGroups = (groups || []).filter(g => g.is_system)
   const userGroups = (groups || []).filter(g => !g.is_system)
 
+  // Filter soft-deleted items based on toggle
+  const visibleGroups = showPendingDeletes ? userGroups : userGroups.filter(g => !g.is_pending_delete)
+
   // Filter and sort user groups only
-  const filteredGroups = useTableFilter(userGroups, searchQuery, sortConfig, {
+  const filteredGroups = useTableFilter(visibleGroups, searchQuery, sortConfig, {
     filterFn: (g, query) => {
       return (
         g.name.toLowerCase().includes(query) ||
@@ -273,17 +279,33 @@ const peerOptions = availablePeers.map(p => ({
         </div>
       )}
 
-      {/* Search Bar and Rows per page */}
-      {userGroups?.length > 0 && (
-        <TableToolbar
-          searchTerm={searchQuery}
-          onSearchChange={(v) => setSearchQuery(v)}
-          onClearSearch={() => setSearchQuery('')}
-          placeholder="Search groups..."
-          rowsPerPage={groupsRowsPerPage}
-          onRowsPerPageChange={setGroupsRowsPerPage}
-        />
-      )}
+	{/* Search Bar and Rows per page */}
+	{userGroups?.length > 0 && (
+		<TableToolbar
+			searchTerm={searchQuery}
+			onSearchChange={(v) => setSearchQuery(v)}
+			onClearSearch={() => setSearchQuery('')}
+			placeholder="Search groups..."
+			rowsPerPage={groupsRowsPerPage}
+			onRowsPerPageChange={setGroupsRowsPerPage}
+		/>
+	)}
+
+	{/* Show Pending Deletes Toggle */}
+	{userGroups?.some(g => g.is_pending_delete) && (
+		<div className="flex items-center gap-2 px-1">
+			<input
+				type="checkbox"
+				id="showPendingDeletes"
+				checked={showPendingDeletes}
+				onChange={(e) => setShowPendingDeletes(e.target.checked)}
+				className="w-4 h-4 text-purple-active bg-gray-100 border-gray-300 rounded focus:ring-purple-active dark:focus:ring-purple-active dark:ring-offset-gray-800 focus:ring-2 dark:bg-charcoal-darkest dark:border-gray-600"
+			/>
+			<label htmlFor="showPendingDeletes" className="text-sm text-gray-700 dark:text-amber-primary cursor-pointer">
+				Show Pending Deletes
+			</label>
+		</div>
+	)}
 
       {!userGroups?.length ? (
         <EmptyState title="No user groups yet" message="Create groups to organize peers for policy targeting." action="New Group" onAction={openAdd} />
@@ -304,9 +326,16 @@ const peerOptions = availablePeers.map(p => ({
             <SortIndicator columnKey="name" sortConfig={sortConfig} />
           </button>
             ), 
-            render: (g) => (
-              <span className="font-medium text-gray-900 dark:text-light-neutral">{g.name}</span>
-            )
+				render: (g) => (
+					<span className="font-medium text-gray-900 dark:text-light-neutral">
+						{g.name}
+						{g.is_pending_delete && (
+							<span className="ml-2 px-2 py-1 text-xs bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300 rounded">
+								Pending Delete
+							</span>
+						)}
+					</span>
+				)
           },
           { 
             key: 'peers', 
@@ -347,32 +376,32 @@ const peerOptions = availablePeers.map(p => ({
             )
           },
           { 
-            key: 'actions', 
-            label: 'Actions', 
-            render: (g) => (
-              <div className="flex items-center gap-2">
-                {canEdit && (
-                  <button
-                    onClick={(e) => { e.stopPropagation(); openEdit(g) }}
-                    className={`p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded ${g.is_system ? 'text-gray-400 cursor-not-allowed' : ''}`}
-                    disabled={g.is_system}
-                    title="Edit"
-                  >
-                    <Pencil className={`w-4 h-4 ${g.is_system ? 'text-gray-400' : 'text-gray-900 dark:text-white'}`} />
-                  </button>
-                )}
-                {canEdit && (
-                  <button
-                    onClick={(e) => { e.stopPropagation(); !g.is_system && setDeleteTarget(g) }}
-                    disabled={g.is_system}
-                    className={`p-1 rounded ${g.is_system ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-100 dark:hover:bg-charcoal-darkest'}`}
-                    title={g.is_system ? "System groups cannot be deleted" : "Delete"}
-                  >
-                    <Trash2 className="w-4 h-4 text-red-500" />
-                  </button>
-                )}
-              </div>
-            )
+				key: 'actions',
+				label: 'Actions',
+				render: (g) => (
+					<div className="flex items-center gap-2">
+						{canEdit && (
+							<button
+								onClick={(e) => { e.stopPropagation(); openEdit(g) }}
+								className={`p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded ${(g.is_system || g.is_pending_delete) ? 'text-gray-400 cursor-not-allowed opacity-50' : ''}`}
+								disabled={g.is_system || g.is_pending_delete}
+								title={g.is_pending_delete ? "Cannot edit soft-deleted groups" : g.is_system ? "System groups cannot be edited" : "Edit"}
+							>
+								<Pencil className={`w-4 h-4 ${(g.is_system || g.is_pending_delete) ? 'text-gray-400' : 'text-gray-900 dark:text-white'}`} />
+							</button>
+						)}
+						{canEdit && (
+							<button
+								onClick={(e) => { e.stopPropagation(); !g.is_system && !g.is_pending_delete && setDeleteTarget(g) }}
+								disabled={g.is_system || g.is_pending_delete}
+								className={`p-1 rounded ${(g.is_system || g.is_pending_delete) ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-100 dark:hover:bg-charcoal-darkest'}`}
+								title={g.is_pending_delete ? "Cannot delete soft-deleted groups" : g.is_system ? "System groups cannot be deleted" : "Delete"}
+							>
+								<Trash2 className="w-4 h-4 text-red-500" />
+							</button>
+						)}
+					</div>
+				)
           },
         ]} data={paginatedGroups} />
 

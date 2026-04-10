@@ -79,7 +79,7 @@ func validateService(ports, sourcePorts, protocol string, isSystem bool) error {
 
 func (h *Handler) ListServices(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.DB.QueryContext(r.Context(),
-		"SELECT id, name, ports, COALESCE(source_ports, ''), protocol, COALESCE(description, ''), direction_hint, COALESCE(is_system, 0) FROM services WHERE COALESCE(is_pending_delete, 0) = 0")
+		"SELECT id, name, ports, COALESCE(source_ports, ''), protocol, COALESCE(description, ''), direction_hint, COALESCE(is_system, 0), COALESCE(is_pending_delete, 0) FROM services")
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "failed to query services")
 		return
@@ -91,20 +91,21 @@ func (h *Handler) ListServices(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	type serviceResp struct {
-		ID            int    `json:"id"`
-		Name          string `json:"name"`
-		Ports         string `json:"ports"`
-		SourcePorts   string `json:"source_ports"`
-		Protocol      string `json:"protocol"`
-		Description   string `json:"description"`
-		DirectionHint string `json:"direction_hint"`
-		IsSystem      bool   `json:"is_system"`
+		ID              int    `json:"id"`
+		Name            string `json:"name"`
+		Ports           string `json:"ports"`
+		SourcePorts     string `json:"source_ports"`
+		Protocol        string `json:"protocol"`
+		Description     string `json:"description"`
+		DirectionHint   string `json:"direction_hint"`
+		IsSystem        bool   `json:"is_system"`
+		IsPendingDelete bool   `json:"is_pending_delete"`
 	}
 
 	var servicesData []serviceResp
 	for rows.Next() {
 		var s serviceResp
-		if err := rows.Scan(&s.ID, &s.Name, &s.Ports, &s.SourcePorts, &s.Protocol, &s.Description, &s.DirectionHint, &s.IsSystem); err != nil {
+		if err := rows.Scan(&s.ID, &s.Name, &s.Ports, &s.SourcePorts, &s.Protocol, &s.Description, &s.DirectionHint, &s.IsSystem, &s.IsPendingDelete); err != nil {
 			common.RespondError(w, http.StatusInternalServerError, "failed to scan service")
 			return
 		}
@@ -292,42 +293,14 @@ func (h *Handler) DeleteService(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check if service is in use by any policies
-	rows, err := h.DB.QueryContext(r.Context(), "SELECT id, name FROM policies WHERE service_id = ? AND is_pending_delete = 0", id)
+	err = common.CheckServiceDeleteConstraints(r.Context(), h.DB, id)
 	if err != nil {
-		log.ErrorContext(r.Context(), "failed to check policy usage", "error", err)
-		common.InternalError(w)
-		return
-	}
-
-	type policyRef struct {
-		ID   int    `json:"id"`
-		Name string `json:"name"`
-	}
-	var policies []policyRef
-	for rows.Next() {
-		var p policyRef
-		if err := rows.Scan(&p.ID, &p.Name); err != nil {
-			if closeErr := rows.Close(); closeErr != nil {
-				log.ErrorContext(r.Context(), "failed to close rows", "error", closeErr)
-			}
-			log.ErrorContext(r.Context(), "failed to scan policy", "error", err)
-			common.InternalError(w)
+		constraintErr, ok := err.(*common.DeleteConstraintError)
+		if ok {
+			common.RespondJSON(w, http.StatusConflict, constraintErr.ToResponse())
 			return
 		}
-		policies = append(policies, p)
-	}
-	if closeErr := rows.Close(); closeErr != nil {
-		log.ErrorContext(r.Context(), "failed to close rows", "error", closeErr)
-		common.InternalError(w)
-		return
-	}
-
-	// If service is in use, return 409 Conflict with list of policies
-	if len(policies) > 0 {
-		common.RespondJSON(w, http.StatusConflict, map[string]interface{}{
-			"error":    "Cannot delete service: it is in use by policies",
-			"policies": policies,
-		})
+		common.RespondError(w, http.StatusInternalServerError, "failed to check constraints")
 		return
 	}
 

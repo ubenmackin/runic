@@ -294,9 +294,14 @@ func (h *Handler) DeletePeer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check delete constraints (target_peer_id in policies, or in group used by policy)
-	constraintErr, ok := common.CheckPeerDeleteConstraints(r.Context(), h.DB, peerID).(*common.DeleteConstraintError)
-	if ok && constraintErr != nil {
-		common.RespondJSON(w, http.StatusConflict, constraintErr.ToResponse())
+	err = common.CheckPeerDeleteConstraints(r.Context(), h.DB, peerID)
+	if err != nil {
+		constraintErr, ok := err.(*common.DeleteConstraintError)
+		if ok {
+			common.RespondJSON(w, http.StatusConflict, constraintErr.ToResponse())
+			return
+		}
+		common.RespondError(w, http.StatusInternalServerError, "failed to check constraints")
 		return
 	}
 

@@ -112,7 +112,7 @@ func (c *Compiler) formatEntityName(ctx context.Context, entityType string, enti
 		return hostname
 	case "group":
 		var name string
-		err := c.db.QueryRowContext(ctx, "SELECT name FROM groups WHERE id = ?", entityID).Scan(&name)
+		err := c.db.QueryRowContext(ctx, "SELECT name FROM groups WHERE id = ? AND is_pending_delete = 0", entityID).Scan(&name)
 		if err == sql.ErrNoRows {
 			return fmt.Sprintf("group %d (not found)", entityID)
 		}
@@ -201,31 +201,31 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 	rows, err := c.db.QueryContext(ctx,
 		`SELECT DISTINCT p.id, p.name, p.source_id, p.source_type, p.service_id, p.target_id, p.target_type, p.action, p.priority, p.target_scope, COALESCE(p.direction, 'both'),
 		CASE WHEN p.target_type = 'peer' AND p.target_id = ? THEN 1
-		     WHEN p.target_type = 'group' AND EXISTS (SELECT 1 FROM group_members WHERE group_id = p.target_id AND peer_id = ?) THEN 1
-		     WHEN p.target_type = 'special' AND p.source_type = 'group' AND EXISTS (SELECT 1 FROM group_members WHERE group_id = p.source_id AND peer_id = ?) THEN 1
-WHEN p.target_type = 'special' AND p.source_type = 'peer' AND p.source_id = ? THEN 1
-ELSE 0 END as is_target,
--- MC-EXCLUSION: Multicast special targets (3,4,8) are excluded from is_source
--- because they represent destinations for outbound multicast, not sources.
--- BC-EXCLUSION: Broadcast special targets (1,2) are excluded for the same reason.
--- When Source is broadcast special, the peer is the target (receiving broadcast).
-CASE WHEN p.source_type = 'peer' AND p.source_id = ? THEN 1
-WHEN p.source_type = 'group' AND EXISTS (SELECT 1 FROM group_members WHERE group_id = p.source_id AND peer_id = ?) THEN 1
-WHEN p.source_type = 'special' AND p.target_type = 'group' AND p.source_id NOT IN (?, ?, ?, ?, ?) AND EXISTS (SELECT 1 FROM group_members WHERE group_id = p.target_id AND peer_id = ?) THEN 1
-WHEN p.source_type = 'special' AND p.target_type = 'peer' AND p.source_id NOT IN (?, ?, ?, ?, ?) AND p.target_id = ? THEN 1
-ELSE 0 END as is_source
+		WHEN p.target_type = 'group' AND EXISTS (SELECT 1 FROM group_members gm JOIN groups g ON gm.group_id = g.id WHERE gm.group_id = p.target_id AND gm.peer_id = ? AND g.is_pending_delete = 0) THEN 1
+		WHEN p.target_type = 'special' AND p.source_type = 'group' AND EXISTS (SELECT 1 FROM group_members gm JOIN groups g ON gm.group_id = g.id WHERE gm.group_id = p.source_id AND gm.peer_id = ? AND g.is_pending_delete = 0) THEN 1
+		WHEN p.target_type = 'special' AND p.source_type = 'peer' AND p.source_id = ? THEN 1
+		ELSE 0 END as is_target,
+		-- MC-EXCLUSION: Multicast special targets (3,4,8) are excluded from is_source
+		-- because they represent destinations for outbound multicast, not sources.
+		-- BC-EXCLUSION: Broadcast special targets (1,2) are excluded for the same reason.
+		-- When Source is broadcast special, the peer is the target (receiving broadcast).
+		CASE WHEN p.source_type = 'peer' AND p.source_id = ? THEN 1
+		WHEN p.source_type = 'group' AND EXISTS (SELECT 1 FROM group_members gm JOIN groups g ON gm.group_id = g.id WHERE gm.group_id = p.source_id AND gm.peer_id = ? AND g.is_pending_delete = 0) THEN 1
+		WHEN p.source_type = 'special' AND p.target_type = 'group' AND p.source_id NOT IN (?, ?, ?, ?, ?) AND EXISTS (SELECT 1 FROM group_members gm JOIN groups g ON gm.group_id = g.id WHERE gm.group_id = p.target_id AND gm.peer_id = ? AND g.is_pending_delete = 0) THEN 1
+		WHEN p.source_type = 'special' AND p.target_type = 'peer' AND p.source_id NOT IN (?, ?, ?, ?, ?) AND p.target_id = ? THEN 1
+		ELSE 0 END as is_source
 		FROM policies p
 		WHERE p.enabled = 1 AND p.is_pending_delete = 0 AND (
-			(p.target_type = 'peer' AND p.target_id = ?) OR
-			(p.target_type = 'group' AND EXISTS (SELECT 1 FROM group_members WHERE group_id = p.target_id AND peer_id = ?)) OR
-			(p.source_type = 'peer' AND p.source_id = ?) OR
-			(p.source_type = 'group' AND EXISTS (SELECT 1 FROM group_members WHERE group_id = p.source_id AND peer_id = ?)) OR
-			(p.target_type = 'special' AND p.source_type = 'group' AND EXISTS (SELECT 1 FROM group_members WHERE group_id = p.source_id AND peer_id = ?)) OR
-			(p.target_type = 'special' AND p.source_type = 'peer' AND p.source_id = ?) OR
-			(p.source_type = 'special' AND p.target_type = 'group' AND EXISTS (SELECT 1 FROM group_members WHERE group_id = p.target_id AND peer_id = ?)) OR
-			(p.source_type = 'special' AND p.target_type = 'peer' AND p.target_id = ?)
+		(p.target_type = 'peer' AND p.target_id = ?) OR
+		(p.target_type = 'group' AND EXISTS (SELECT 1 FROM group_members gm JOIN groups g ON gm.group_id = g.id WHERE gm.group_id = p.target_id AND gm.peer_id = ? AND g.is_pending_delete = 0)) OR
+		(p.source_type = 'peer' AND p.source_id = ?) OR
+		(p.source_type = 'group' AND EXISTS (SELECT 1 FROM group_members gm JOIN groups g ON gm.group_id = g.id WHERE gm.group_id = p.source_id AND gm.peer_id = ? AND g.is_pending_delete = 0)) OR
+		(p.target_type = 'special' AND p.source_type = 'group' AND EXISTS (SELECT 1 FROM group_members gm JOIN groups g ON gm.group_id = g.id WHERE gm.group_id = p.source_id AND gm.peer_id = ? AND g.is_pending_delete = 0)) OR
+		(p.target_type = 'special' AND p.source_type = 'peer' AND p.source_id = ?) OR
+		(p.source_type = 'special' AND p.target_type = 'group' AND EXISTS (SELECT 1 FROM group_members gm JOIN groups g ON gm.group_id = g.id WHERE gm.group_id = p.target_id AND gm.peer_id = ? AND g.is_pending_delete = 0)) OR
+		(p.source_type = 'special' AND p.target_type = 'peer' AND p.target_id = ?)
 		)
- ORDER BY p.priority ASC`,
+		ORDER BY p.priority ASC`,
 		peerID, peerID, peerID, peerID, peerID, peerID, SpecialIDSubnetBroadcast, SpecialIDLimitedBroadcast, SpecialIDAllHosts, SpecialIDmDNS, SpecialIDIGMPv3, peerID, SpecialIDSubnetBroadcast, SpecialIDLimitedBroadcast, SpecialIDAllHosts, SpecialIDmDNS, SpecialIDIGMPv3, peerID, peerID, peerID, peerID, peerID, peerID, peerID, peerID, peerID)
 	if err != nil {
 		return "", fmt.Errorf("load policies: %w", err)
@@ -258,7 +258,7 @@ ELSE 0 END as is_source
 		if pol.SourceType == "group" {
 			if _, exists := groupIDToName[pol.SourceID]; !exists {
 				var groupName string
-				if err := c.db.QueryRowContext(ctx, "SELECT name FROM groups WHERE id = ?", pol.SourceID).Scan(&groupName); err == nil {
+				if err := c.db.QueryRowContext(ctx, "SELECT name FROM groups WHERE id = ? AND is_pending_delete = 0", pol.SourceID).Scan(&groupName); err == nil {
 					groupIDToName[pol.SourceID] = groupName
 					groupOrder = append(groupOrder, pol.SourceID)
 				}
@@ -268,7 +268,7 @@ ELSE 0 END as is_source
 		if pol.TargetType == "group" {
 			if _, exists := groupIDToName[pol.TargetID]; !exists {
 				var groupName string
-				if err := c.db.QueryRowContext(ctx, "SELECT name FROM groups WHERE id = ?", pol.TargetID).Scan(&groupName); err == nil {
+				if err := c.db.QueryRowContext(ctx, "SELECT name FROM groups WHERE id = ? AND is_pending_delete = 0", pol.TargetID).Scan(&groupName); err == nil {
 					groupIDToName[pol.TargetID] = groupName
 					groupOrder = append(groupOrder, pol.TargetID)
 				}
@@ -979,7 +979,10 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 	// Load service - MC-011: Include no_conntrack column
 	var serviceName, ports, sourcePorts, protocol string
 	var noConntrack bool
-	err := c.db.QueryRowContext(ctx, "SELECT name, ports, source_ports, protocol, COALESCE(no_conntrack, 0) FROM services WHERE id = ?", serviceID).Scan(&serviceName, &ports, &sourcePorts, &protocol, &noConntrack)
+	err := c.db.QueryRowContext(ctx, "SELECT name, ports, source_ports, protocol, COALESCE(no_conntrack, 0) FROM services WHERE id = ? AND is_pending_delete = 0", serviceID).Scan(&serviceName, &ports, &sourcePorts, &protocol, &noConntrack)
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("service %d is pending delete or does not exist", serviceID)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("load service: %w", err)
 	}
@@ -1305,7 +1308,12 @@ func (c *Compiler) GetAffectedPeersByPolicy(ctx context.Context, policyID int) (
 	case "peer":
 		peers[srcID] = true
 	case "group":
-		rows, err := c.db.QueryContext(ctx, "SELECT peer_id FROM group_members WHERE group_id = ?", srcID)
+		rows, err := c.db.QueryContext(ctx, `
+			SELECT DISTINCT gm.peer_id
+			FROM group_members gm
+			JOIN groups g ON gm.group_id = g.id
+			WHERE gm.group_id = ? AND g.is_pending_delete = 0
+		`, srcID)
 		if err != nil {
 			return nil, fmt.Errorf("query source group members for policy %d: %w", policyID, err)
 		}
@@ -1332,7 +1340,12 @@ func (c *Compiler) GetAffectedPeersByPolicy(ctx context.Context, policyID int) (
 	case "peer":
 		peers[tgtID] = true
 	case "group":
-		rows, err := c.db.QueryContext(ctx, "SELECT peer_id FROM group_members WHERE group_id = ?", tgtID)
+		rows, err := c.db.QueryContext(ctx, `
+			SELECT DISTINCT gm.peer_id
+			FROM group_members gm
+			JOIN groups g ON gm.group_id = g.id
+			WHERE gm.group_id = ? AND g.is_pending_delete = 0
+		`, tgtID)
 		if err != nil {
 			return nil, fmt.Errorf("query target group members for policy %d: %w", policyID, err)
 		}

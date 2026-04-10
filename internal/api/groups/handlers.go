@@ -32,28 +32,28 @@ func NewHandler(db db.Querier, compiler *engine.Compiler, changeWorker *common.C
 
 // GroupWithCounts represents a group with peer and policy counts
 type GroupWithCounts struct {
-	ID          int    `json:"id"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	IsSystem    bool   `json:"is_system"`
-	PeerCount   int    `json:"peer_count"`
-	PolicyCount int    `json:"policy_count"`
+	ID              int    `json:"id"`
+	Name            string `json:"name"`
+	Description     string `json:"description"`
+	IsSystem        bool   `json:"is_system"`
+	IsPendingDelete bool   `json:"is_pending_delete"`
+	PeerCount       int    `json:"peer_count"`
+	PolicyCount     int    `json:"policy_count"`
 }
 
 func (h *Handler) ListGroups(w http.ResponseWriter, r *http.Request) {
 	query := `
-	SELECT g.id, g.name, COALESCE(g.description, ''), COALESCE(g.is_system, 0),
+	SELECT g.id, g.name, COALESCE(g.description, ''), COALESCE(g.is_system, 0), COALESCE(g.is_pending_delete, 0),
 	COALESCE(p.peer_count, 0), COALESCE(pol.policy_count, 0)
 	FROM groups g
 	LEFT JOIN (SELECT group_id, COUNT(*) as peer_count FROM group_members GROUP BY group_id) p ON g.id = p.group_id
 	LEFT JOIN (
-	SELECT group_id, SUM(count) as policy_count FROM (
-	SELECT source_id as group_id, COUNT(*) as count FROM policies WHERE source_type='group' GROUP BY source_id
-	UNION ALL
-	SELECT target_id as group_id, COUNT(*) as count FROM policies WHERE target_type='group' GROUP BY target_id
-	) GROUP BY group_id
+		SELECT group_id, SUM(count) as policy_count FROM (
+			SELECT source_id as group_id, COUNT(*) as count FROM policies WHERE source_type='group' GROUP BY source_id
+			UNION ALL
+			SELECT target_id as group_id, COUNT(*) as count FROM policies WHERE target_type='group' GROUP BY target_id
+		) GROUP BY group_id
 	) pol ON g.id = pol.group_id
-	WHERE COALESCE(g.is_pending_delete, 0) = 0
 	ORDER BY g.name ASC`
 
 	rows, err := h.DB.QueryContext(r.Context(), query)
@@ -70,7 +70,7 @@ func (h *Handler) ListGroups(w http.ResponseWriter, r *http.Request) {
 	var groupsData []GroupWithCounts
 	for rows.Next() {
 		var g GroupWithCounts
-		if err := rows.Scan(&g.ID, &g.Name, &g.Description, &g.IsSystem, &g.PeerCount, &g.PolicyCount); err != nil {
+		if err := rows.Scan(&g.ID, &g.Name, &g.Description, &g.IsSystem, &g.IsPendingDelete, &g.PeerCount, &g.PolicyCount); err != nil {
 			common.RespondError(w, http.StatusInternalServerError, "failed to scan group")
 			return
 		}
@@ -231,9 +231,14 @@ func (h *Handler) DeleteGroup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check if group is used by any policy
-	constraintErr, ok := common.CheckGroupDeleteConstraints(r.Context(), h.DB, id).(*common.DeleteConstraintError)
-	if ok && constraintErr != nil {
-		common.RespondJSON(w, http.StatusConflict, constraintErr.ToResponse())
+	err = common.CheckGroupDeleteConstraints(r.Context(), h.DB, id)
+	if err != nil {
+		constraintErr, ok := err.(*common.DeleteConstraintError)
+		if ok {
+			common.RespondJSON(w, http.StatusConflict, constraintErr.ToResponse())
+			return
+		}
+		common.RespondError(w, http.StatusInternalServerError, "failed to check constraints")
 		return
 	}
 
@@ -440,7 +445,7 @@ func (h *Handler) snapshotGroup(ctx context.Context, action string, groupID int)
 		return fmt.Errorf("query members: %w", err)
 	}
 	defer func() {
-		_ = rows.Close() //nolint:errcheck
+		_ = rows.Close()
 	}()
 
 	var members []models.GroupMemberRow

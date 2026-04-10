@@ -698,14 +698,24 @@ func TestDeletePolicy(t *testing.T) {
 			}
 
 			if tt.wantCode == http.StatusNoContent {
-				// Verify policy was deleted
+				// Verify policy was soft-deleted (not active)
 				var count int
-				err := database.QueryRow("SELECT COUNT(*) FROM policies WHERE id = ?", tt.policyID).Scan(&count)
+				err := database.QueryRow("SELECT COUNT(*) FROM policies WHERE id = ? AND is_pending_delete = 0", tt.policyID).Scan(&count)
 				if err != nil {
 					t.Fatalf("failed to check policy deletion: %v", err)
 				}
 				if count != 0 {
-					t.Error("expected policy to be deleted")
+					t.Error("expected policy to be soft-deleted (not found with is_pending_delete = 0)")
+				}
+
+				// Verify policy was soft-deleted (is_pending_delete = true)
+				var isPendingDelete bool
+				err = database.QueryRow("SELECT is_pending_delete FROM policies WHERE id = ?", tt.policyID).Scan(&isPendingDelete)
+				if err != nil {
+					t.Fatalf("failed to check policy soft-delete flag: %v", err)
+				}
+				if !isPendingDelete {
+					t.Error("expected policy to be soft-deleted (is_pending_delete = true)")
 				}
 			}
 		})
