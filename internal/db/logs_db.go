@@ -297,7 +297,7 @@ func migrateLogsWithoutAttach(mainDB, logsDB *sql.DB) (int64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("failed to query firewall_logs: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	// Prepare insert statement
 	stmt, err := logsTx.Prepare(`
@@ -307,7 +307,7 @@ func migrateLogsWithoutAttach(mainDB, logsDB *sql.DB) (int64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("failed to prepare insert statement: %w", err)
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 
 	var count int64
 	for rows.Next() {

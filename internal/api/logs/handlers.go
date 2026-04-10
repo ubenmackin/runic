@@ -59,13 +59,13 @@ func MakeLogsStreamHandler(hub *Hub) http.HandlerFunc {
 		}
 
 		client := &Client{
-			hub: hub,
+			hub:  hub,
 			conn: conn,
 			send: make(chan []byte, 256),
 			filter: LogFilter{
 				PeerID: r.URL.Query().Get("peer_id"),
 				Action: r.URL.Query().Get("action"),
-				SrcIP: r.URL.Query().Get("src_ip"),
+				SrcIP:  r.URL.Query().Get("src_ip"),
 			},
 		}
 		if dstPort := r.URL.Query().Get("dst_port"); dstPort != "" {
@@ -221,9 +221,9 @@ func (h *Handler) GetLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	common.RespondJSON(w, http.StatusOK, map[string]interface{}{
-		"logs": logsData,
-		"total": total,
-		"limit": limit,
+		"logs":   logsData,
+		"total":  total,
+		"limit":  limit,
 		"offset": offset,
 	})
 }
