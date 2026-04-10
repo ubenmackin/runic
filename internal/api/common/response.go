@@ -1,6 +1,11 @@
 package common
 
-import "net/http"
+import (
+	"bufio"
+	"fmt"
+	"net"
+	"net/http"
+)
 
 // ResponseRecorder wraps http.ResponseWriter to capture the status code.
 // It implements http.ResponseWriter and http.Flusher for SSE streaming support.
@@ -45,4 +50,12 @@ func (rw *ResponseRecorder) Flush() {
 	if f, ok := rw.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
 	}
+}
+
+// Hijack implements http.Hijacker to support WebSocket upgrade.
+func (rw *ResponseRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if hj, ok := rw.ResponseWriter.(http.Hijacker); ok {
+		return hj.Hijack()
+	}
+	return nil, nil, fmt.Errorf("ResponseRecorder: underlying ResponseWriter does not implement http.Hijacker")
 }

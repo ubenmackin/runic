@@ -50,6 +50,7 @@ type pendingChangeDetail struct {
 	ChangeID      int    `json:"change_id"`
 	ChangeAction  string `json:"change_action"`
 	ChangeSummary string `json:"change_summary"`
+	EntityName    string `json:"entity_name"`
 	CreatedAt     string `json:"created_at"`
 }
 
@@ -97,6 +98,17 @@ func (h *Handler) ListPendingChanges(w http.ResponseWriter, r *http.Request) {
 				ChangeSummary: c.ChangeSummary,
 				CreatedAt:     c.CreatedAt,
 			}
+			// Lookup entity name based on change_type
+			var entityName string
+			switch c.ChangeType {
+			case "group":
+				_ = database.QueryRowContext(ctx, "SELECT name FROM groups WHERE id = ?", c.ChangeID).Scan(&entityName)
+			case "policy":
+				_ = database.QueryRowContext(ctx, "SELECT name FROM policies WHERE id = ?", c.ChangeID).Scan(&entityName)
+			case "service":
+				_ = database.QueryRowContext(ctx, "SELECT name FROM services WHERE id = ?", c.ChangeID).Scan(&entityName)
+			}
+			details[i].EntityName = entityName
 		}
 
 		groups = append(groups, peerChangeGroup{
@@ -216,6 +228,17 @@ func (h *Handler) GetPeerPendingChanges(w http.ResponseWriter, r *http.Request) 
 			ChangeSummary: c.ChangeSummary,
 			CreatedAt:     c.CreatedAt,
 		}
+		// Lookup entity name based on change_type
+		var entityName string
+		switch c.ChangeType {
+		case "group":
+			_ = database.QueryRowContext(ctx, "SELECT name FROM groups WHERE id = ?", c.ChangeID).Scan(&entityName)
+		case "policy":
+			_ = database.QueryRowContext(ctx, "SELECT name FROM policies WHERE id = ?", c.ChangeID).Scan(&entityName)
+		case "service":
+			_ = database.QueryRowContext(ctx, "SELECT name FROM services WHERE id = ?", c.ChangeID).Scan(&entityName)
+		}
+		details[i].EntityName = entityName
 	}
 
 	common.RespondJSON(w, http.StatusOK, map[string]interface{}{

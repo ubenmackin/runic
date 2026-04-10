@@ -51,8 +51,9 @@ func ClearPendingChangesForPeer(ctx context.Context, database Querier, peerID in
 }
 
 // GetPeersWithPendingChanges returns all peer IDs that have pending changes.
+// Excludes manual peers (is_manual = 1) since they cannot receive rule bundles.
 func GetPeersWithPendingChanges(ctx context.Context, database Querier) ([]int, error) {
-	rows, err := database.QueryContext(ctx, "SELECT DISTINCT peer_id FROM pending_changes")
+	rows, err := database.QueryContext(ctx, "SELECT DISTINCT pc.peer_id FROM pending_changes pc JOIN peers p ON pc.peer_id = p.id WHERE p.is_manual = 0")
 	if err != nil {
 		return nil, err
 	}
