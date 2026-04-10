@@ -3,7 +3,9 @@ package groups
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -18,13 +20,13 @@ import (
 
 // Handler provides HTTP handlers for group operations with dependency injection
 type Handler struct {
-	DB           db.Querier
+	DB           db.DB
 	Compiler     *engine.Compiler
 	ChangeWorker *common.ChangeWorker
 }
 
 // NewHandler creates a new groups handler with the given dependencies
-func NewHandler(db db.Querier, compiler *engine.Compiler, changeWorker *common.ChangeWorker) *Handler {
+func NewHandler(db db.DB, compiler *engine.Compiler, changeWorker *common.ChangeWorker) *Handler {
 	return &Handler{DB: db, Compiler: compiler, ChangeWorker: changeWorker}
 }
 
@@ -179,20 +181,59 @@ func (h *Handler) UpdateGroup(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := h.snapshotGroup(r.Context(), "update", id); err != nil {
-		log.ErrorContext(r.Context(), "failed to create snapshot", "error", err)
+	// Begin transaction to prevent TOCTOU race condition
+	tx, err := h.DB.BeginTx(r.Context(), nil)
+	if err != nil {
+		log.ErrorContext(r.Context(), "failed to begin transaction", "error", err)
+		common.InternalError(w)
+		return
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Get current group to check if values changed (use tx)
+	currentGroup, err := db.GetGroup(r.Context(), tx, id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			common.RespondError(w, http.StatusNotFound, "group not found")
+			return
+		}
+		log.ErrorContext(r.Context(), "failed to get group", "error", err)
+		common.InternalError(w)
+		return
 	}
 
-	_, err = h.DB.ExecContext(r.Context(),
-		"UPDATE groups SET name = ?, description = ? WHERE id = ?", input.Name, input.Description, id)
+	// Check if anything actually changed
+	nameChanged := input.Name != "" && input.Name != currentGroup.Name
+	descChanged := input.Description != currentGroup.Description
+	hasChanges := nameChanged || descChanged
+
+	if hasChanges {
+		if err := h.snapshotGroupTx(r.Context(), tx, "update", id); err != nil {
+			log.ErrorContext(r.Context(), "failed to create snapshot", "error", err)
+		}
+	}
+
+	// Use COALESCE to preserve current name if input.Name is empty
+	_, err = tx.ExecContext(r.Context(),
+		"UPDATE groups SET name = COALESCE(NULLIF(?, ''), name), description = ? WHERE id = ?",
+		input.Name, input.Description, id)
 	if err != nil {
 		log.ErrorContext(r.Context(), "failed to update group", "error", err)
 		common.InternalError(w)
 		return
 	}
 
+	// Commit transaction
+	if err := tx.Commit(); err != nil {
+		log.ErrorContext(r.Context(), "failed to commit transaction", "error", err)
+		common.InternalError(w)
+		return
+	}
+
 	// Trigger async recompilation for affected peers (if ChangeWorker is available)
-	if h.ChangeWorker != nil {
+	// Only trigger pending change if name or description changed
+	// Use h.DB after transaction is committed
+	if h.ChangeWorker != nil && hasChanges {
 		// Fetch group details for summary
 		group, groupErr := db.GetGroup(r.Context(), h.DB, id)
 
@@ -470,4 +511,47 @@ func (h *Handler) snapshotGroup(ctx context.Context, action string, groupID int)
 	}
 
 	return db.CreateSnapshot(ctx, h.DB, "group", groupID, action, string(bytes))
+}
+
+// snapshotGroupTx creates a snapshot using a transaction
+func (h *Handler) snapshotGroupTx(ctx context.Context, tx *sql.Tx, action string, groupID int) error {
+	if action == "create" {
+		return db.CreateSnapshot(ctx, tx, "group", groupID, action, "")
+	}
+
+	grp, err := db.GetGroup(ctx, tx, groupID)
+	if err != nil {
+		return fmt.Errorf("get group: %w", err)
+	}
+
+	rows, err := tx.QueryContext(ctx, "SELECT id, group_id, peer_id, added_at FROM group_members WHERE group_id = ?", groupID)
+	if err != nil {
+		return fmt.Errorf("query members: %w", err)
+	}
+	defer func() {
+		_ = rows.Close()
+	}()
+
+	var members []models.GroupMemberRow
+	for rows.Next() {
+		var m models.GroupMemberRow
+		if err := rows.Scan(&m.ID, &m.GroupID, &m.PeerID, &m.AddedAt); err != nil {
+			return fmt.Errorf("scan member: %w", err)
+		}
+		members = append(members, m)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	data := GroupSnapshotData{
+		Group:   &grp,
+		Members: members,
+	}
+	bytes, err := json.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("marshal snapshot: %w", err)
+	}
+
+	return db.CreateSnapshot(ctx, tx, "group", groupID, action, string(bytes))
 }

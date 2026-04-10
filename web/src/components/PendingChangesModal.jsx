@@ -121,33 +121,28 @@ export default function PendingChangesModal({ peerId, peerHostname, onClose, onA
     return Object.values(groups)
   }, [changes])
 
-  // Per-entity rollback handler
-  const handleEntityRollback = async (entityType, entityId) => {
-    const confirmed = window.confirm(`Are you sure you want to rollback ${entityType}?`)
-    if (!confirmed) return
+// Per-entity rollback handler
+const handleEntityRollback = async (entityType, entityId) => {
+  const confirmed = window.confirm(`Are you sure you want to rollback ${entityType}?`)
+  if (!confirmed) return
 
-    try {
-      const res = await fetch('/api/pending-changes/rollback', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ entity_type: entityType, entity_id: entityId })
-      })
-
-      if (res.status === 409) {
-        const data = await res.json()
-        showToast(data.error || 'Cannot rollback: referenced by policies', 'error')
-      } else if (!res.ok) {
-        showToast('Failed to rollback', 'error')
-      } else {
-        showToast('Rolled back successfully', 'success')
-        // Refresh the changes list
-        const data = await api.get(`/pending-changes/${peerId}`)
-        setChanges(data.changes || [])
-      }
-    } catch (err) {
-      showToast('Network error', 'error')
+  setRollbackLoading(true)
+  try {
+    await api.post('/pending-changes/rollback', { entity_type: entityType, entity_id: entityId })
+    showToast('Rolled back successfully', 'success')
+    // Refresh the changes list
+    const data = await api.get(`/pending-changes/${peerId}`)
+    setChanges(data.changes || [])
+  } catch (err) {
+    if (err.status === 409) {
+      showToast(err.message || 'Cannot rollback: referenced by policies', 'error')
+    } else {
+      showToast(err.message || 'Failed to rollback', 'error')
     }
+  } finally {
+    setRollbackLoading(false)
   }
+}
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" tabIndex="-1" onKeyDown={(e) => { if (e.key === 'Escape') onClose() }}>

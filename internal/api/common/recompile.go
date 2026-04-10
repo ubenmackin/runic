@@ -163,6 +163,16 @@ func (w *ChangeWorker) processGroupChange(work *changeWork) {
 	}
 
 	for peerID := range peerSet {
+		// Check if this exact change already exists
+		var count int
+		err := work.database.QueryRowContext(work.ctx, `SELECT COUNT(*) FROM pending_changes WHERE peer_id = ? AND change_type = ? AND change_id = ? AND change_action = ?`, peerID, "group", work.groupID, work.changeAction).Scan(&count)
+		if err != nil {
+			runiclog.Error("failed to check for duplicate", "error", err)
+			continue
+		}
+		if count > 0 {
+			continue // Already queued
+		}
 		if err := db.AddPendingChange(work.ctx, work.database, peerID, "group", work.changeAction, work.groupID, work.summary); err != nil {
 			runiclog.Error("failed to queue group change", "peer_id", peerID, "error", err)
 		}

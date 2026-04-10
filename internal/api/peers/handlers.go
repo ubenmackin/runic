@@ -77,7 +77,7 @@ func (h *Handler) GetPeers(w http.ResponseWriter, r *http.Request) {
 		COALESCE(GROUP_CONCAT(g.name, ','), '') as groups,
 		COALESCE(p.description, '') as description,
 		COALESCE(p.hmac_key_last_rotated_at, '') as hmac_key_last_rotated_at,
-		(SELECT COUNT(*) FROM pending_changes WHERE peer_id = p.id) as pending_changes_count
+		(SELECT COUNT(*) FROM pending_changes pc JOIN peers p2 ON pc.peer_id = p2.id WHERE pc.peer_id = p.id AND p2.is_manual = 0) as pending_changes_count
 		FROM peers p
 		LEFT JOIN group_members gm ON p.id = gm.peer_id
 		LEFT JOIN groups g ON gm.group_id = g.id
