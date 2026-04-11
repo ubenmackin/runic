@@ -131,6 +131,7 @@ const handleEntityRollback = async (entityType, entityId) => {
   try {
     await api.post('/pending-changes/rollback', { entity_type: entityType, entity_id: entityId })
     showToast('Rolled back successfully', 'success')
+    onApplied() // Call parent's callback to refresh peers list
     // Refresh the changes list
     const data = await api.get(`/pending-changes/${peerId}`)
     setChanges(data.changes || [])
@@ -243,11 +244,12 @@ const handleEntityApply = async (entityType, entityId) => {
                 >
                   {applyEntityLoading ? 'Applying...' : '✓ Apply'}
                 </button>
-                                <button
-                                  onClick={() => handleEntityRollback(group.entityType, group.entityId)}
-                                  className="text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 font-medium text-sm px-3 py-1 rounded hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors"
+<button
+                                    onClick={() => handleEntityRollback(group.entityType, group.entityId)}
+                                    disabled={rollbackLoading}
+                                    className="text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 font-medium text-sm px-3 py-1 rounded hover:bg-blue-50 dark:hover:bg-blue-900/20 disabled:opacity-50 transition-colors"
                                 >
-                                  ↩ Rollback
+                                    {rollbackLoading ? 'Rolling back...' : '↩ Rollback'}
                                 </button>
                               </td>
                           </tr>

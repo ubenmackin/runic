@@ -349,7 +349,9 @@ func (h *Handler) DeletePeer(w http.ResponseWriter, r *http.Request) {
 }
 
 // GetPeerBundle returns the current effective rules for a peer.
-// This handler compiles fresh rules on each request to ensure no stale data is returned.
+// Supports include_pending query parameter:
+// - include_pending=true: Returns the latest bundle (what's been compiled/applied but not necessarily synced)
+// - include_pending=false or not provided: Returns the deployed bundle matching peers.bundle_version
 func (h *Handler) GetPeerBundle(w http.ResponseWriter, r *http.Request) {
 	id, err := common.ParseIDParam(r, "id")
 	if err != nil {
@@ -357,25 +359,47 @@ func (h *Handler) GetPeerBundle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Compile fresh rules for the peer to ensure current effective rules
-	content, err := h.Compiler.Compile(r.Context(), id)
+	includePending := r.URL.Query().Get("include_pending") == "true"
+
+	var query string
+	var args []interface{}
+
+	if includePending {
+		// Get the latest bundle (what's been compiled/applied)
+		query = `SELECT version, version_number, rules_content, hmac FROM rule_bundles WHERE peer_id = ? ORDER BY created_at DESC LIMIT 1`
+		args = []interface{}{id}
+	} else {
+		// Get the deployed bundle matching peers.bundle_version
+		query = `SELECT rb.version, rb.version_number, rb.rules_content, rb.hmac 
+			FROM rule_bundles rb 
+			JOIN peers p ON p.id = ? 
+			WHERE rb.version = p.bundle_version AND rb.peer_id = p.id
+			ORDER BY rb.created_at DESC LIMIT 1`
+		args = []interface{}{id}
+	}
+
+	var version string
+	var versionNumber int
+	var rulesContent string
+	var hmac string
+
+	err = h.DB.QueryRowContext(r.Context(), query, args...).Scan(&version, &versionNumber, &rulesContent, &hmac)
 	if err != nil {
-		log.ErrorContext(r.Context(), "failed to compile rules", "error", err)
+		if err == sql.ErrNoRows {
+			log.WarnContext(r.Context(), "no bundle found", "peer_id", id, "include_pending", includePending)
+			common.RespondError(w, http.StatusNotFound, "bundle not found")
+			return
+		}
+		log.ErrorContext(r.Context(), "failed to get bundle", "error", err)
 		common.InternalError(w)
 		return
 	}
 
-	// Get the deployed version_number from the latest bundle
-	var versionNumber int
-	err = h.DB.QueryRowContext(r.Context(), "SELECT COALESCE(MAX(version_number), 0) FROM rule_bundles WHERE peer_id = ?", id).Scan(&versionNumber)
-	if err != nil {
-		log.WarnContext(r.Context(), "failed to get version_number", "error", err)
-		versionNumber = 0
-	}
-
 	common.RespondJSON(w, http.StatusOK, map[string]interface{}{
-		"content":        content,
+		"version":        version,
 		"version_number": versionNumber,
+		"rules":          rulesContent,
+		"hmac":           hmac,
 	})
 }
 

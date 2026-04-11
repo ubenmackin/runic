@@ -549,12 +549,15 @@ func TestCompilePeer(t *testing.T) {
 // TestGetPeerBundle tests the GET /peers/{id}/bundle endpoint.
 func TestGetPeerBundle(t *testing.T) {
 	tests := []struct {
-		name       string
-		peerID     string
-		setup      func(t *testing.T, db *sql.DB)
-		wantCode   int
-		wantErr    string
-		wantFields []string
+		name              string
+		peerID            string
+		queryParams       string
+		setup             func(t *testing.T, db *sql.DB)
+		wantCode          int
+		wantErr           string
+		wantFields        []string
+		wantVersion       string
+		wantVersionNumber int
 	}{
 		{
 			name:     "get peer bundle - invalid ID",
@@ -562,6 +565,94 @@ func TestGetPeerBundle(t *testing.T) {
 			setup:    nil,
 			wantCode: http.StatusBadRequest,
 			wantErr:  "invalid peer ID",
+		},
+		{
+			name:        "include_pending=true returns latest bundle",
+			peerID:      "1",
+			queryParams: "?include_pending=true",
+			setup: func(t *testing.T, db *sql.DB) {
+				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, bundle_version) VALUES (?, ?, ?, ?, ?, ?)`,
+					"peer1", "10.0.0.1", "key1", "hmac1", 0, "v1")
+				// Create multiple bundles with different versions and explicit timestamps
+				// v1 is oldest
+				db.Exec(`INSERT INTO rule_bundles (peer_id, version, version_number, rules_content, hmac, created_at) VALUES (?, ?, ?, ?, ?, datetime('now', '-2 seconds'))`,
+					1, "v1", 1, "rules-v1", "hmac-v1")
+				// v2 is middle
+				db.Exec(`INSERT INTO rule_bundles (peer_id, version, version_number, rules_content, hmac, created_at) VALUES (?, ?, ?, ?, ?, datetime('now', '-1 second'))`,
+					1, "v2", 2, "rules-v2", "hmac-v2")
+				// v3 is newest (should be returned as latest)
+				db.Exec(`INSERT INTO rule_bundles (peer_id, version, version_number, rules_content, hmac, created_at) VALUES (?, ?, ?, ?, ?, datetime('now'))`,
+					1, "v3", 3, "rules-v3", "hmac-v3")
+			},
+			wantCode:          http.StatusOK,
+			wantFields:        []string{"version", "version_number", "rules", "hmac"},
+			wantVersion:       "v3",
+			wantVersionNumber: 3,
+		},
+		{
+			name:        "include_pending=false returns deployed bundle",
+			peerID:      "1",
+			queryParams: "?include_pending=false",
+			setup: func(t *testing.T, db *sql.DB) {
+				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, bundle_version) VALUES (?, ?, ?, ?, ?, ?)`,
+					"peer1", "10.0.0.1", "key1", "hmac1", 0, "v2")
+				// Create multiple bundles
+				db.Exec(`INSERT INTO rule_bundles (peer_id, version, version_number, rules_content, hmac) VALUES (?, ?, ?, ?, ?)`,
+					1, "v1", 1, "rules-v1", "hmac-v1")
+				db.Exec(`INSERT INTO rule_bundles (peer_id, version, version_number, rules_content, hmac) VALUES (?, ?, ?, ?, ?)`,
+					1, "v2", 2, "rules-v2", "hmac-v2")
+				db.Exec(`INSERT INTO rule_bundles (peer_id, version, version_number, rules_content, hmac) VALUES (?, ?, ?, ?, ?)`,
+					1, "v3", 3, "rules-v3", "hmac-v3")
+			},
+			wantCode:          http.StatusOK,
+			wantFields:        []string{"version", "version_number", "rules", "hmac"},
+			wantVersion:       "v2",
+			wantVersionNumber: 2,
+		},
+		{
+			name:        "no query param defaults to deployed bundle",
+			peerID:      "1",
+			queryParams: "",
+			setup: func(t *testing.T, db *sql.DB) {
+				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, bundle_version) VALUES (?, ?, ?, ?, ?, ?)`,
+					"peer1", "10.0.0.1", "key1", "hmac1", 0, "v1")
+				// Create multiple bundles
+				db.Exec(`INSERT INTO rule_bundles (peer_id, version, version_number, rules_content, hmac) VALUES (?, ?, ?, ?, ?)`,
+					1, "v1", 1, "rules-v1", "hmac-v1")
+				db.Exec(`INSERT INTO rule_bundles (peer_id, version, version_number, rules_content, hmac) VALUES (?, ?, ?, ?, ?)`,
+					1, "v2", 2, "rules-v2", "hmac-v2")
+			},
+			wantCode:          http.StatusOK,
+			wantFields:        []string{"version", "version_number", "rules", "hmac"},
+			wantVersion:       "v1",
+			wantVersionNumber: 1,
+		},
+		{
+			name:        "missing bundle for pending request returns 404",
+			peerID:      "1",
+			queryParams: "?include_pending=true",
+			setup: func(t *testing.T, db *sql.DB) {
+				// Create peer without any rule bundles
+				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
+					"peer1", "10.0.0.1", "key1", "hmac1", 0)
+			},
+			wantCode: http.StatusNotFound,
+			wantErr:  "bundle not found",
+		},
+		{
+			name:        "missing bundle for deployed request returns 404",
+			peerID:      "1",
+			queryParams: "?include_pending=false",
+			setup: func(t *testing.T, db *sql.DB) {
+				// Create peer with bundle_version pointing to non-existent bundle
+				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, bundle_version) VALUES (?, ?, ?, ?, ?, ?)`,
+					"peer1", "10.0.0.1", "key1", "hmac1", 0, "v999")
+				// Create a bundle but with different version
+				db.Exec(`INSERT INTO rule_bundles (peer_id, version, version_number, rules_content, hmac) VALUES (?, ?, ?, ?, ?)`,
+					1, "v1", 1, "rules-v1", "hmac-v1")
+			},
+			wantCode: http.StatusNotFound,
+			wantErr:  "bundle not found",
 		},
 	}
 
@@ -574,7 +665,8 @@ func TestGetPeerBundle(t *testing.T) {
 				tt.setup(t, database)
 			}
 
-			req := httptest.NewRequest("GET", "/api/v1/peers/"+tt.peerID+"/bundle", nil)
+			url := "/api/v1/peers/" + tt.peerID + "/bundle" + tt.queryParams
+			req := httptest.NewRequest("GET", url, nil)
 			req = muxVars(req, map[string]string{"id": tt.peerID})
 			w := httptest.NewRecorder()
 
@@ -595,14 +687,28 @@ func TestGetPeerBundle(t *testing.T) {
 				}
 			}
 
-			if len(tt.wantFields) > 0 {
+			if len(tt.wantFields) > 0 || tt.wantVersion != "" {
 				var resp map[string]interface{}
-				if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+				if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 					t.Fatalf("failed to decode response: %v", err)
 				}
-				for _, field := range tt.wantFields {
-					if _, ok := resp[field]; !ok {
-						t.Errorf("expected field %s in response", field)
+
+				// Check fields
+				if len(tt.wantFields) > 0 {
+					for _, field := range tt.wantFields {
+						if _, ok := resp[field]; !ok {
+							t.Errorf("expected field %s in response", field)
+						}
+					}
+				}
+
+				// Check version
+				if tt.wantVersion != "" {
+					if resp["version"] != tt.wantVersion {
+						t.Errorf("expected version %q, got %v", tt.wantVersion, resp["version"])
+					}
+					if resp["version_number"].(float64) != float64(tt.wantVersionNumber) {
+						t.Errorf("expected version_number %d, got %v", tt.wantVersionNumber, resp["version_number"])
 					}
 				}
 			}

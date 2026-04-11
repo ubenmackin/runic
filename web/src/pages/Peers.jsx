@@ -78,9 +78,10 @@ export default function Peers() {
 	const [bundleLoading, setBundleLoading] = useState(false)
 	const [bundleContent, setBundleContent] = useState('')
 	const [bundlePeer, setBundlePeer] = useState(null)
-	const [bundleData, setBundleData] = useState(null)
+const [bundleData, setBundleData] = useState(null)
+  const [viewingPendingRules, setViewingPendingRules] = useState(false)
 
-	// Pending Changes Modal state
+  // Pending Changes Modal state
 	const [pendingModalPeer, setPendingModalPeer] = useState(null)
 	const [pendingModalOpen, setPendingModalOpen] = useState(false)
 
@@ -92,23 +93,24 @@ export default function Peers() {
 	const [pushTargetPeer, setPushTargetPeer] = useState(null)
 	const [pushLoading, setPushLoading] = useState(false)
 
-	const fetchBundle = async (peer) => {
-		setBundlePeer(peer)
-		setBundleModalOpen(true)
-		setBundleLoading(true)
-		setBundleContent('')
-		setBundleData(null)
-		try {
-			const data = await api.get(`/peers/${peer.id}/bundle`)
-			setBundleContent(data.content)
-			setBundleData(data)
-		} catch (err) {
-			setBundleContent(`# Error: ${err.message}`)
-			setBundleData(null)
-		} finally {
-			setBundleLoading(false)
-		}
-	}
+const fetchBundle = async (peer, showPending = false) => {
+    setBundlePeer(peer)
+    setBundleModalOpen(true)
+    setBundleLoading(true)
+    setBundleContent('')
+    setBundleData(null)
+    try {
+      const endpoint = showPending ? `/peers/${peer.id}/bundle?include_pending=true` : `/peers/${peer.id}/bundle`
+      const data = await api.get(endpoint)
+      setBundleContent(data.content)
+      setBundleData(data)
+    } catch (err) {
+      setBundleContent(`# Error: ${err.message}`)
+      setBundleData(null)
+    } finally {
+      setBundleLoading(false)
+    }
+  }
 
   // Modal ref for focus trap
   const editModalRef = useRef(null)
@@ -395,13 +397,19 @@ const handleSubmit = (e) => {
 
   // Handle Sync Status badge click
   const handleSyncStatusClick = (peer) => {
-    if (peer.sync_status === 'pending') {
-      // Open Pending Changes modal
-      setPendingModalPeer(peer)
-      setPendingModalOpen(true)
-    } else if (peer.sync_status === 'pending_sync' || peer.sync_status === 'synced') {
-      // Open Deployed Rules modal (fetchBundle)
-      fetchBundle(peer)
+    switch (peer.sync_status) {
+      case 'pending':
+        setPendingModalPeer(peer)
+        setPendingModalOpen(true)
+        break
+      case 'pending_sync':
+        setViewingPendingRules(true)
+        fetchBundle(peer, true) // Show pending bundle
+        break
+      case 'synced':
+        setViewingPendingRules(false)
+        fetchBundle(peer, false) // Show deployed bundle
+        break
     }
   }
 
@@ -576,12 +584,15 @@ const handleSubmit = (e) => {
             <table className="w-full text-sm">
               <thead className="bg-gray-50 dark:bg-charcoal-darkest">
                 <tr>
-                  <th className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
-            <button type="button" onClick={() => handleSort('hostname')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
-              Hostname <SortIndicator columnKey="hostname" sortConfig={sortConfig} />
-            </button>
-                  </th>
-                  <th className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+<th className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+          <button type="button" onClick={() => handleSort('hostname')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+            Hostname <SortIndicator columnKey="hostname" sortConfig={sortConfig} />
+          </button>
+        </th>
+        <th className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted">
+          Status
+        </th>
+        <th className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
             <button type="button" onClick={() => handleSort('ip_address')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
               IP Address <SortIndicator columnKey="ip_address" sortConfig={sortConfig} />
             </button>
@@ -611,40 +622,46 @@ const handleSubmit = (e) => {
                 {paginatedPeers.map((peer) => (
                   <tr key={peer.id} className="">
 <td className="px-4 py-3">
-	<div className="flex items-center gap-2">
-	{!peer.is_manual && (
-	<span className={`w-2 h-2 rounded-full ${peer.status === 'online' ? 'bg-green-500' :
-	peer.status === 'offline' ? 'bg-red-500' :
-	'bg-amber-500' // pending
-	}`} />
-	)}
-                <span className="font-medium text-gray-900 dark:text-light-neutral">{peer.hostname}</span>
-                {peer.sync_status && (
-                  <button
-                    onClick={() => handleSyncStatusClick(peer)}
-                    title={`Click to ${peer.sync_status === 'pending' ? 'review pending changes' : 'view deployed rules'}`}
-                    className={`px-2 py-0.5 text-xs font-medium rounded-full cursor-pointer ${
-                      peer.sync_status === 'pending'
-                        ? 'bg-orange-100 dark:bg-orange-900/30 text-orange-800 dark:text-orange-300 hover:bg-orange-200 dark:hover:bg-orange-900/50'
-                        : peer.sync_status === 'pending_sync'
-                        ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-800 dark:text-blue-300 hover:bg-blue-200 dark:hover:bg-blue-900/50'
-                        : peer.sync_status === 'synced'
-                        ? 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300 hover:bg-green-200 dark:hover:bg-green-900/50'
-                        : 'bg-gray-100 dark:bg-gray-900/30 text-gray-800 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-900/50'
-                    }`}
-                  >
-                    {peer.sync_status === 'pending'
-                      ? 'Pending'
-                      : peer.sync_status === 'pending_sync'
-                      ? 'Pending Sync'
-                      : peer.sync_status === 'synced'
-                      ? 'Synced'
-                      : peer.sync_status}
-                  </button>
+                <div className="flex items-center gap-2">
+                {!peer.is_manual && (
+                  <span className={`w-2 h-2 rounded-full ${peer.status === 'online' ? 'bg-green-500' :
+                  peer.status === 'offline' ? 'bg-red-500' :
+                  'bg-amber-500' // pending
+                }`} />
                 )}
-	</div>
+                <span className="font-medium text-gray-900 dark:text-light-neutral">{peer.hostname}</span>
+                </div>
+              </td>
+<td className="px-4 py-3">
+  {peer.is_manual ? (
+    <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-gray-100 dark:bg-charcoal-darkest text-gray-700 dark:text-amber-primary">
+      Manual
+    </span>
+  ) : peer.sync_status ? (
+    <button
+      onClick={() => handleSyncStatusClick(peer)}
+      title={`Click to ${peer.sync_status === 'pending' ? 'review pending changes' : 'view deployed rules'}`}
+      className={`px-2 py-0.5 text-xs font-medium rounded-full cursor-pointer ${
+        peer.sync_status === 'pending'
+          ? 'bg-orange-100 dark:bg-orange-900/30 text-orange-800 dark:text-orange-300 hover:bg-orange-200 dark:hover:bg-orange-900/50'
+          : peer.sync_status === 'pending_sync'
+          ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-800 dark:text-blue-300 hover:bg-blue-200 dark:hover:bg-blue-900/50'
+          : peer.sync_status === 'synced'
+          ? 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300 hover:bg-green-200 dark:hover:bg-green-900/50'
+          : 'bg-gray-100 dark:bg-gray-900/30 text-gray-800 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-900/50'
+      }`}
+    >
+      {peer.sync_status === 'pending'
+        ? 'Pending'
+        : peer.sync_status === 'pending_sync'
+        ? 'Pending Sync'
+        : peer.sync_status === 'synced'
+        ? 'Synced'
+        : peer.sync_status}
+    </button>
+  ) : null}
 </td>
-                    <td className="px-4 py-3 text-gray-600 dark:text-amber-primary">
+              <td className="px-4 py-3 text-gray-600 dark:text-amber-primary">
                       {peer.ip_address}
                     </td>
                     <td className="px-4 py-3 text-gray-600 dark:text-amber-primary">
@@ -705,11 +722,11 @@ const handleSubmit = (e) => {
                       <div className="flex items-center gap-2">
                         {!peer.is_manual && (
                           <>
-                            <button
-                              onClick={() => fetchBundle(peer)}
-                              className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded"
-                              title="View Deployed Rules"
-                            >
+<button
+                  onClick={() => fetchBundle(peer, false)}
+                  className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded"
+                  title="View Deployed Rules"
+                >
                               <FileCode className="w-4 h-4 text-purple-active" />
                             </button>
                             <button
@@ -858,7 +875,9 @@ const handleSubmit = (e) => {
             <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-border flex items-center justify-between shrink-0">
               <div className="flex items-center gap-2">
                 <FileCode className="w-5 h-5 text-purple-active" />
-                <h3 className="text-lg font-semibold text-gray-900 dark:text-light-neutral">Deployed Rules: {bundlePeer?.hostname}</h3>
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-light-neutral">
+                  {viewingPendingRules ? `Pending Rules: ${bundlePeer?.hostname}` : `Deployed Rules: ${bundlePeer?.hostname}`}
+                </h3>
               </div>
               <button 
                 onClick={() => setBundleModalOpen(false)} 
