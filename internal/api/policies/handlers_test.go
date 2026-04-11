@@ -34,7 +34,7 @@ func setupTestDBWithData(t *testing.T) (*sql.DB, func()) {
 // Helper to set up handler with real compiler (required for write operations)
 func setupHandlerWithCompiler(db *sql.DB) *Handler {
 	compiler := engine.NewCompiler(db)
-	changeWorker := common.NewChangeWorker()
+	changeWorker := common.NewChangeWorker(nil) // nil sseHub for tests
 	// Start the worker with a cancelled context so it doesn't process anything
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately

@@ -1307,7 +1307,7 @@ func TestUpdateGroup_DescriptionOnly(t *testing.T) {
 
 	// Set up handler with ChangeWorker
 	compiler := engine.NewCompiler(database)
-	changeWorker := common.NewChangeWorker()
+	changeWorker := common.NewChangeWorker(nil) // nil sseHub for tests
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	changeWorker.Start(ctx)

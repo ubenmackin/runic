@@ -457,7 +457,12 @@ func (h *Handler) ApplyAllPendingBundles(w http.ResponseWriter, r *http.Request)
 }
 
 // ApplyEntityPendingChanges applies pending changes for a single entity for a specific peer.
-// It removes the pending change record and snapshot, then regenerates the bundle preview if needed.
+// It:
+// 1. Deletes the pending change record and snapshot
+// 2. Commits the transaction
+// 3. Compiles and stores the new bundle with current state
+// 4. Notifies via SSE that bundle is updated
+// 5. If other pending changes remain, regenerates the bundle preview
 func (h *Handler) ApplyEntityPendingChanges(w http.ResponseWriter, r *http.Request) {
 	peerID, err := common.ParseIDParam(r, "peerId")
 	if err != nil {
@@ -549,11 +554,11 @@ func (h *Handler) ApplyEntityPendingChanges(w http.ResponseWriter, r *http.Reque
 
 			// Get current bundle for diff
 			var currentContent, currentVersion string
-			_ = database.QueryRowContext(ctx, `
-				SELECT rules_content, version FROM rule_bundles
-				WHERE peer_id = ?
-				ORDER BY id DESC LIMIT 1
-			`, peerID).Scan(&currentContent, &currentVersion)
+			_ = tx.QueryRowContext(ctx, `
+SELECT rules_content, version FROM rule_bundles
+WHERE peer_id = ?
+ORDER BY id DESC LIMIT 1
+`, peerID).Scan(&currentContent, &currentVersion)
 
 			// Generate diff and save preview
 			diffContent := generateDiff(currentContent, content, currentVersion, version)
@@ -573,13 +578,39 @@ func (h *Handler) ApplyEntityPendingChanges(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	common.RespondJSON(w, http.StatusOK, map[string]interface{}{
+	// Compile and store new bundle with current state
+	var bundleVersion string
+	bundle, err := h.Compiler.CompileAndStore(ctx, peerID)
+	if err != nil {
+		log.WarnContext(ctx, "failed to compile and store bundle", "error", err)
+		// Don't fail - the pending change is still cleared
+	} else {
+		bundleVersion = bundle.Version
+		// Notify via SSE
+		var hostname string
+		_ = database.QueryRowContext(ctx, "SELECT hostname FROM peers WHERE id = ?", peerID).Scan(&hostname)
+		if hostname != "" {
+			h.SSEHub.NotifyBundleUpdated("host-"+hostname, bundle.Version)
+		}
+	}
+
+	// If no pending changes remain for this peer, clean up snapshots
+	if remainingCount == 0 {
+		_ = db.CleanupIfComplete(ctx, h.DBBeginner)
+	}
+
+	response := map[string]interface{}{
 		"status":            "applied",
 		"peer_id":           peerID,
 		"entity_type":       req.EntityType,
 		"entity_id":         req.EntityID,
 		"remaining_changes": remainingCount,
-	})
+	}
+	if bundleVersion != "" {
+		response["version"] = bundleVersion
+	}
+
+	common.RespondJSON(w, http.StatusOK, response)
 }
 
 // PushAllRules creates an async push job and returns immediately with a job_id.
@@ -944,4 +975,52 @@ func splitLines(s string) []string {
 		lines = append(lines, s[start:])
 	}
 	return lines
+}
+
+// HandleFrontendSSE streams real-time events to frontend clients via Server-Sent Events.
+// This endpoint is used for notifications like pending_change_added events.
+func (h *Handler) HandleFrontendSSE(w http.ResponseWriter, r *http.Request) {
+	// Generate a unique client ID for this connection
+	clientID := fmt.Sprintf("frontend-%d", time.Now().UnixNano())
+
+	// Set SSE headers
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		common.InternalError(w)
+		return
+	}
+
+	// Register for frontend events
+	ch := h.SSEHub.RegisterFrontend(clientID)
+	defer h.SSEHub.UnregisterFrontend(clientID)
+
+	// Send initial connection event
+	if _, err := fmt.Fprint(w, "event: connected\ndata: {\"status\":\"connected\"}\n\n"); err != nil {
+		log.WarnContext(r.Context(), "Failed to write SSE connected event", "error", err)
+		return
+	}
+	flusher.Flush()
+
+	// Stream events until client disconnects
+	ctx := r.Context()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case event, ok := <-ch:
+			if !ok {
+				return
+			}
+			if _, err := fmt.Fprint(w, event); err != nil {
+				log.WarnContext(r.Context(), "Failed to write SSE event", "error", err)
+				return
+			}
+			flusher.Flush()
+		}
+	}
 }

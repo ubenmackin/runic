@@ -87,7 +87,7 @@ func NewAPI(db *sql.DB, compiler *engine.Compiler, logsDBPath string, alertServi
 	}
 
 	sseHub := events.NewSSEHub()
-	changeWorker := common.NewChangeWorker()
+	changeWorker := common.NewChangeWorker(sseHub)
 	pushWorker := common.NewPushWorker(db, compiler, alertService, sseHub)
 	return &API{
 		Compiler:     compiler,
@@ -324,6 +324,9 @@ func (a *API) RegisterRoutes(r *mux.Router, downloadsDir string) {
 	editor.HandleFunc("/pending-changes/push-all", a.Pending.PushAllRules).Methods("POST")
 	editor.HandleFunc("/pending-changes/push/{peerId:[0-9]+}", a.Pending.PushCurrentRules).Methods("POST")
 	editor.HandleFunc("/push-jobs/{job_id}/events", a.Pending.HandlePushJobSSE).Methods("GET")
+
+	// Frontend SSE endpoint for real-time notifications (authenticated users)
+	protected.HandleFunc("/events", a.Pending.HandleFrontendSSE).Methods("GET")
 
 	// Agent routes (require agent auth via JWT)
 	apiRouter.HandleFunc("/agent/bundle/{host_id}", a.Agents.AgentAuthMiddleware(a.Agents.GetBundle)).Methods("GET")

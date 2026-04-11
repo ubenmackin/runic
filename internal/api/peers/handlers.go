@@ -365,18 +365,70 @@ func (h *Handler) GetPeerBundle(w http.ResponseWriter, r *http.Request) {
 	var args []interface{}
 
 	if includePending {
-		// Get the latest bundle (what's been compiled/applied)
+		// Get the latest bundle (what's been compiled/applied but not synced)
 		query = `SELECT version, version_number, rules_content, hmac FROM rule_bundles WHERE peer_id = ? ORDER BY created_at DESC LIMIT 1`
 		args = []interface{}{id}
-	} else {
-		// Get the deployed bundle matching peers.bundle_version
-		query = `SELECT rb.version, rb.version_number, rb.rules_content, rb.hmac 
-			FROM rule_bundles rb 
-			JOIN peers p ON p.id = ? 
-			WHERE rb.version = p.bundle_version AND rb.peer_id = p.id
-			ORDER BY rb.created_at DESC LIMIT 1`
-		args = []interface{}{id}
+
+		var version string
+		var versionNumber int
+		var rulesContent string
+		var hmac string
+
+		err = h.DB.QueryRowContext(r.Context(), query, args...).Scan(&version, &versionNumber, &rulesContent, &hmac)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				log.WarnContext(r.Context(), "no pending bundle found", "peer_id", id)
+				common.RespondError(w, http.StatusNotFound, "bundle not found")
+				return
+			}
+			log.ErrorContext(r.Context(), "failed to get pending bundle", "error", err)
+			common.InternalError(w)
+			return
+		}
+
+		// Get the deployed bundle version for comparison
+		var deployedVersion sql.NullString
+		err = h.DB.QueryRowContext(r.Context(), "SELECT bundle_version FROM peers WHERE id = ?", id).Scan(&deployedVersion)
+		if err != nil && err != sql.ErrNoRows {
+			log.ErrorContext(r.Context(), "failed to get deployed version", "error", err)
+			common.InternalError(w)
+			return
+		}
+
+		response := map[string]interface{}{
+			"version":        version,
+			"version_number": versionNumber,
+			"rules":          rulesContent,
+			"hmac":           hmac,
+		}
+
+		// Get deployed bundle content for diff if there's a deployed version
+		if deployedVersion.Valid && deployedVersion.String != "" {
+			var deployedContent sql.NullString
+			err = h.DB.QueryRowContext(r.Context(),
+				"SELECT rules_content FROM rule_bundles WHERE peer_id = ? AND version = ?",
+				id, deployedVersion.String).Scan(&deployedContent)
+			if err != nil && err != sql.ErrNoRows {
+				log.ErrorContext(r.Context(), "failed to get deployed bundle", "error", err)
+				// Don't fail the request, just don't include deployed content
+			}
+			if deployedContent.Valid {
+				response["deployed_rules"] = deployedContent.String
+				response["deployed_version"] = deployedVersion.String
+			}
+		}
+
+		common.RespondJSON(w, http.StatusOK, response)
+		return
 	}
+
+	// Get the deployed bundle matching peers.bundle_version
+	query = `SELECT rb.version, rb.version_number, rb.rules_content, rb.hmac
+		FROM rule_bundles rb
+		JOIN peers p ON p.id = ?
+		WHERE rb.version = p.bundle_version AND rb.peer_id = p.id
+		ORDER BY rb.created_at DESC LIMIT 1`
+	args = []interface{}{id}
 
 	var version string
 	var versionNumber int

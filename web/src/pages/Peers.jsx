@@ -14,6 +14,7 @@ import { useTableFilter } from '../hooks/useTableFilter'
 import { useFilterPersistence } from '../hooks/useFilterPersistence'
 import { useCrudMutations } from '../hooks/useCrudMutations'
 import { useAuth } from '../hooks/useAuth'
+import { useSSE } from '../hooks/useSSE'
 import ConfirmModal from '../components/ConfirmModal'
 import SearchableSelect from '../components/SearchableSelect'
 import InlineError from '../components/InlineError'
@@ -76,10 +77,11 @@ export default function Peers() {
 	// Rule Bundle state
 	const [bundleModalOpen, setBundleModalOpen] = useState(false)
 	const [bundleLoading, setBundleLoading] = useState(false)
-	const [bundleContent, setBundleContent] = useState('')
-	const [bundlePeer, setBundlePeer] = useState(null)
-const [bundleData, setBundleData] = useState(null)
+const [bundleContent, setBundleContent] = useState('')
+  const [bundlePeer, setBundlePeer] = useState(null)
+  const [bundleData, setBundleData] = useState(null)
   const [viewingPendingRules, setViewingPendingRules] = useState(false)
+  const [showDiffView, setShowDiffView] = useState(true)
 
   // Pending Changes Modal state
 	const [pendingModalPeer, setPendingModalPeer] = useState(null)
@@ -89,16 +91,27 @@ const [bundleData, setBundleData] = useState(null)
 	const [applyAllLoading, setApplyAllLoading] = useState(false)
 	const [rollbackLoading, setRollbackLoading] = useState(false)
 
-	// Push to peer state
-	const [pushTargetPeer, setPushTargetPeer] = useState(null)
-	const [pushLoading, setPushLoading] = useState(false)
+// Push to peer state
+  const [pushTargetPeer, setPushTargetPeer] = useState(null)
+  const [pushLoading, setPushLoading] = useState(false)
 
-const fetchBundle = async (peer, showPending = false) => {
+  // Real-time SSE connection for pending change notifications
+  useSSE({
+    enabled: true,
+    onPendingChangeAdded: (peerId) => {
+      // Optional: Show toast notification when pending changes are added
+      // The hook automatically invalidates queries, so UI will refresh
+      console.log('Pending change added for peer:', peerId)
+    },
+  })
+
+  const fetchBundle = async (peer, showPending = false) => {
     setBundlePeer(peer)
     setBundleModalOpen(true)
     setBundleLoading(true)
     setBundleContent('')
     setBundleData(null)
+    setShowDiffView(true) // Default to showing diff view
     try {
       const endpoint = showPending ? `/peers/${peer.id}/bundle?include_pending=true` : `/peers/${peer.id}/bundle`
       const data = await api.get(endpoint)
@@ -110,6 +123,29 @@ const fetchBundle = async (peer, showPending = false) => {
     } finally {
       setBundleLoading(false)
     }
+  }
+
+  // Compute a simple line-by-line diff between old and new rules
+  const computeDiff = (oldRules, newRules) => {
+    const oldLines = (oldRules || '').split('\n')
+    const newLines = (newRules || '').split('\n')
+    const result = []
+    const maxLen = Math.max(oldLines.length, newLines.length)
+    for (let i = 0; i < maxLen; i++) {
+      const oldLine = oldLines[i] || ''
+      const newLine = newLines[i] || ''
+      if (oldLine === newLine) {
+        result.push(` ${newLine}`) // Unchanged line
+      } else if (!oldLine) {
+        result.push(`+ ${newLine}`) // New line added
+      } else if (!newLine) {
+        result.push(`- ${oldLine}`) // Line removed
+      } else {
+        result.push(`- ${oldLine}`) // Line changed (old)
+        result.push(`+ ${newLine}`) // Line changed (new)
+      }
+    }
+    return result.join('\n')
   }
 
   // Modal ref for focus trap
@@ -893,38 +929,71 @@ const handleSubmit = (e) => {
                   <p className="text-sm text-gray-500 dark:text-amber-muted">Fetching latest bundle...</p>
                 </div>
 	) : (
-	<>
-	<div className="mb-3">
-	<div className="mt-2 text-sm">
-	<span className="text-gray-500 dark:text-amber-muted">Bundle Version: </span>
-	<span className="font-mono font-medium text-gray-900 dark:text-light-neutral" title={bundleData?.version || ''}>
-	  v{bundleData?.version_number || '—'}
-	</span>
-	{bundleData?.is_different && (
-	<span className="ml-2 px-2 py-0.5 text-xs rounded-full bg-amber-100 dark:bg-amber-900/30 text-amber-800 dark:text-amber-300">
-	Pending Update
-	</span>
-	)}
-	</div>
-	</div>
-	<div className="relative group">
-	<pre className="bg-gray-900 dark:bg-black text-gray-100 p-6 rounded-lg text-sm font-mono overflow-auto whitespace-pre min-h-[200px] border border-gray-800">
-	<code className="text-green-400">{bundleContent}</code>
-	</pre>
-	{bundleContent && (
-	<button
-	onClick={() => {
-	navigator.clipboard.writeText(bundleContent)
-	showToast('Copied to clipboard', 'success')
-	}}
-	className="absolute top-4 right-4 p-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-gray-300 transition-colors"
-	title="Copy Rules"
-	>
-	<Copy className="w-4 h-4" />
-	</button>
-	)}
-	</div>
-	</>
+<>
+              <div className="mb-3">
+                <div className="mt-2 text-sm">
+                  <span className="text-gray-500 dark:text-amber-muted">Bundle Version: </span>
+                  <span className="font-mono font-medium text-gray-900 dark:text-light-neutral" title={bundleData?.version || ''}>
+                    v{bundleData?.version_number || '—'}
+                  </span>
+                  {viewingPendingRules && bundleData?.deployed_version && (
+                    <span className="ml-2 text-gray-500 dark:text-amber-muted">
+                      (was v{bundleData?.deployed_version?.split('-')[0] || '—'})
+                    </span>
+                  )}
+                </div>
+              </div>
+              {/* Toggle buttons for diff vs full view - only show when viewing pending rules with deployed_rules */}
+              {viewingPendingRules && bundleData?.deployed_rules !== undefined && (
+                <div className="flex gap-2 mb-3">
+                  <button
+                    onClick={() => setShowDiffView(true)}
+                    className={`px-3 py-1 rounded text-sm font-medium transition-colors ${
+                      showDiffView
+                        ? 'bg-purple-active text-white'
+                        : 'bg-gray-100 dark:bg-charcoal-darkest text-gray-700 dark:text-amber-primary hover:bg-gray-200 dark:hover:bg-charcoal-dark'
+                    }`}
+                  >
+                    Show Diff
+                  </button>
+                  <button
+                    onClick={() => setShowDiffView(false)}
+                    className={`px-3 py-1 rounded text-sm font-medium transition-colors ${
+                      !showDiffView
+                        ? 'bg-purple-active text-white'
+                        : 'bg-gray-100 dark:bg-charcoal-darkest text-gray-700 dark:text-amber-primary hover:bg-gray-200 dark:hover:bg-charcoal-dark'
+                    }`}
+                  >
+                    Show Full Rules
+                  </button>
+                </div>
+              )}
+              <div className="relative group">
+                <pre className="bg-gray-900 dark:bg-black text-gray-100 p-6 rounded-lg text-sm font-mono overflow-auto whitespace-pre min-h-[200px] border border-gray-800">
+                  <code>
+                    {viewingPendingRules && showDiffView && bundleData?.deployed_rules !== undefined
+                      ? computeDiff(bundleData.deployed_rules || '', bundleData.rules || '')
+                      : bundleContent}
+                  </code>
+                </pre>
+                {bundleContent && (
+                  <button
+                    onClick={() => {
+                      const contentToCopy =
+                        viewingPendingRules && showDiffView && bundleData?.deployed_rules !== undefined
+                          ? computeDiff(bundleData.deployed_rules || '', bundleData.rules || '')
+                          : bundleContent
+                      navigator.clipboard.writeText(contentToCopy)
+                      showToast('Copied to clipboard', 'success')
+                    }}
+                    className="absolute top-4 right-4 p-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-gray-300 transition-colors"
+                    title="Copy Rules"
+                  >
+                    <Copy className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+            </>
 	)}
             </div>
             <div className="px-6 py-4 border-t border-gray-200 dark:border-gray-border flex justify-end shrink-0">

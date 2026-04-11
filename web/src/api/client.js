@@ -111,6 +111,7 @@ export const QUERY_KEYS = {
   setupKeys: () => ['setup-keys'],
   logSettings: () => ['log-settings'],
   notificationPrefs: () => ['notification-preferences'],
+  pendingChanges: () => ['pending-changes'],
 }
 
 export const getVersion = () => api.get('/info')
