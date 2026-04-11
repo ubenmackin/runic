@@ -143,7 +143,11 @@ func (w *ChangeWorker) processPeerChange(work *changeWork) {
 		query := fmt.Sprintf("SELECT id, hostname FROM peers WHERE id IN (%s)", strings.Join(placeholders, ","))
 		rows, err := work.database.QueryContext(work.ctx, query, args...)
 		if err == nil {
-			defer rows.Close()
+			defer func() {
+				if err := rows.Close(); err != nil {
+					runiclog.Warn("Failed to close rows", "error", err)
+				}
+			}()
 			hostnameMap := make(map[int]string)
 			for rows.Next() {
 				var id int
@@ -239,7 +243,11 @@ func (w *ChangeWorker) processGroupChange(work *changeWork) {
 		query := fmt.Sprintf("SELECT id, hostname FROM peers WHERE id IN (%s)", strings.Join(placeholders, ","))
 		rows, err := work.database.QueryContext(work.ctx, query, args...)
 		if err == nil {
-			defer rows.Close()
+			defer func() {
+				if err := rows.Close(); err != nil {
+					runiclog.Warn("Failed to close rows", "error", err)
+				}
+			}()
 			hostnameMap := make(map[int]string)
 			for rows.Next() {
 				var id int

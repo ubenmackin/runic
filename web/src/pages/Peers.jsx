@@ -9,6 +9,7 @@ import { REFETCH_INTERVALS } from '../constants'
 import { useCrudModal } from '../hooks/useCrudModal'
 import { useToastContext } from '../hooks/ToastContext'
 import { formatRelativeTime } from '../utils/formatTime.js'
+import { computeDiff } from '../utils/diff.js'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 import { useTableFilter } from '../hooks/useTableFilter'
 import { useFilterPersistence } from '../hooks/useFilterPersistence'
@@ -123,29 +124,6 @@ const [bundleContent, setBundleContent] = useState('')
     } finally {
       setBundleLoading(false)
     }
-  }
-
-  // Compute a simple line-by-line diff between old and new rules
-  const computeDiff = (oldRules, newRules) => {
-    const oldLines = (oldRules || '').split('\n')
-    const newLines = (newRules || '').split('\n')
-    const result = []
-    const maxLen = Math.max(oldLines.length, newLines.length)
-    for (let i = 0; i < maxLen; i++) {
-      const oldLine = oldLines[i] || ''
-      const newLine = newLines[i] || ''
-      if (oldLine === newLine) {
-        result.push(` ${newLine}`) // Unchanged line
-      } else if (!oldLine) {
-        result.push(`+ ${newLine}`) // New line added
-      } else if (!newLine) {
-        result.push(`- ${oldLine}`) // Line removed
-      } else {
-        result.push(`- ${oldLine}`) // Line changed (old)
-        result.push(`+ ${newLine}`) // Line changed (new)
-      }
-    }
-    return result.join('\n')
   }
 
   // Modal ref for focus trap

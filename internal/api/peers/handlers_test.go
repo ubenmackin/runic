@@ -1281,3 +1281,56 @@ func TestDeletePeer_NotInUse_Success(t *testing.T) {
 		t.Errorf("expected used peer to still exist, but count = %d", count)
 	}
 }
+
+// TestGetPeerBundle_WithIncludePending tests that include_pending=true returns
+// both the latest (pending) bundle and the deployed bundle for diff comparison.
+func TestGetPeerBundle_WithIncludePending(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	// Create peer with deployed bundle version
+	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, bundle_version) VALUES (?, ?, ?, ?, ?, ?)`, "test-peer", "10.0.0.1", "key1", "hmac1", 0, "v1.0")
+
+	// Create deployed bundle (version 1)
+	database.Exec(`INSERT INTO rule_bundles (peer_id, version, version_number, rules_content, hmac, created_at) VALUES (?, ?, ?, ?, ?, datetime('now', '-2 seconds'))`, 1, "v1.0", 1, "rule1\nrule2", "hmac1")
+
+	// Create pending bundle (version 2, newer)
+	database.Exec(`INSERT INTO rule_bundles (peer_id, version, version_number, rules_content, hmac, created_at) VALUES (?, ?, ?, ?, ?, datetime('now'))`, 1, "v2.0", 2, "rule1\nrule2\nrule3", "hmac2")
+
+	// Request with include_pending=true
+	req := httptest.NewRequest("GET", "/api/v1/peers/1/bundle?include_pending=true", nil)
+	req = muxVars(req, map[string]string{"id": "1"})
+	w := httptest.NewRecorder()
+
+	handler := NewHandler(database, nil)
+	handler.GetPeerBundle(w, req)
+
+	// Verify response
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d: %s", http.StatusOK, w.Code, w.Body.String())
+	}
+
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	// Verify pending bundle fields
+	if resp["version"] != "v2.0" {
+		t.Errorf("expected version v2.0, got %v", resp["version"])
+	}
+	if resp["version_number"].(float64) != 2 {
+		t.Errorf("expected version_number 2, got %v", resp["version_number"])
+	}
+	if resp["rules"] != "rule1\nrule2\nrule3" {
+		t.Errorf("expected rules 'rule1\\nrule2\\nrule3', got %v", resp["rules"])
+	}
+
+	// Verify deployed bundle fields (for diff comparison)
+	if resp["deployed_version"] != "v1.0" {
+		t.Errorf("expected deployed_version v1.0, got %v", resp["deployed_version"])
+	}
+	if resp["deployed_rules"] != "rule1\nrule2" {
+		t.Errorf("expected deployed_rules 'rule1\\nrule2', got %v", resp["deployed_rules"])
+	}
+}
