@@ -102,7 +102,7 @@ const fetchBundle = async (peer, showPending = false) => {
     try {
       const endpoint = showPending ? `/peers/${peer.id}/bundle?include_pending=true` : `/peers/${peer.id}/bundle`
       const data = await api.get(endpoint)
-      setBundleContent(data.content)
+      setBundleContent(data.rules)
       setBundleData(data)
     } catch (err) {
       setBundleContent(`# Error: ${err.message}`)
