@@ -10,7 +10,9 @@ import (
 
 	"github.com/gorilla/mux"
 
+	"runic/internal/alerts"
 	"runic/internal/api/agents"
+	alerthandlers "runic/internal/api/alerts"
 	authhandlers "runic/internal/api/auth"
 	"runic/internal/api/common"
 	"runic/internal/api/dashboard"
@@ -29,6 +31,7 @@ import (
 	"runic/internal/auth"
 	"runic/internal/common/log"
 	"runic/internal/common/version"
+	"runic/internal/crypto"
 	dbpkg "runic/internal/db"
 	"runic/internal/engine"
 	"runic/internal/logcleanup"
@@ -40,6 +43,8 @@ type API struct {
 	Compiler     *engine.Compiler
 	DB           *sql.DB
 	LogsDB       *sql.DB // Separate database for firewall logs
+	AlertService *alerts.Service
+	Encryptor    *crypto.Encryptor
 	SSEHub       *events.SSEHub
 	LogHub       *logs.Hub
 	ChangeWorker *common.ChangeWorker
@@ -58,6 +63,7 @@ type API struct {
 	Pending   *pending.Handler
 	Dashboard *dashboard.Handler
 	Settings  *settings.Handler
+	Alerts    *alerthandlers.Handler
 
 	LoginRateLimiter    *middleware.RateLimiter
 	RegisterRateLimiter *middleware.RateLimiter
@@ -68,7 +74,7 @@ type API struct {
 
 // NewAPI creates a new API instance with dependency injection.
 // logsDBPath is the path to the logs database (separate from main DB).
-func NewAPI(db *sql.DB, compiler *engine.Compiler, logsDBPath string) *API {
+func NewAPI(db *sql.DB, compiler *engine.Compiler, logsDBPath string, alertService *alerts.Service, encryptor *crypto.Encryptor) *API {
 	// Initialize the logs database
 	logsDB, err := dbpkg.InitLogsDB(logsDBPath)
 	if err != nil {
@@ -82,17 +88,19 @@ func NewAPI(db *sql.DB, compiler *engine.Compiler, logsDBPath string) *API {
 
 	sseHub := events.NewSSEHub()
 	changeWorker := common.NewChangeWorker()
-	pushWorker := common.NewPushWorker(db, compiler, sseHub)
+	pushWorker := common.NewPushWorker(db, compiler, alertService, sseHub)
 	return &API{
 		Compiler:     compiler,
 		DB:           db,
 		LogsDB:       logsDB,
+		AlertService: alertService,
+		Encryptor:    encryptor,
 		SSEHub:       sseHub,
 		LogHub:       logs.NewHub(),
 		ChangeWorker: changeWorker,
 		PushWorker:   pushWorker,
 		Peers:        peers.NewHandler(db, compiler),
-		Agents:       agents.NewHandler(db, logsDB),
+		Agents:       agents.NewHandler(db, logsDB, alertService),
 		Auth:         authhandlers.NewHandler(db, db),
 		Groups:       groups.NewHandler(db, compiler, changeWorker),
 		Policies:     policies.NewHandler(db, compiler, changeWorker),
@@ -103,6 +111,7 @@ func NewAPI(db *sql.DB, compiler *engine.Compiler, logsDBPath string) *API {
 		Pending:      pending.NewHandler(db, compiler, sseHub, pushWorker),
 		Dashboard:    dashboard.NewHandler(db, logsDB),
 		Settings:     settings.NewHandler(db, logsDB, logsDBPath),
+		Alerts:       alerthandlers.NewHandler(db, alertService, encryptor),
 	}
 }
 
@@ -273,6 +282,18 @@ func (a *API) RegisterRoutes(r *mux.Router, downloadsDir string) {
 
 	// Clear all logs (admin only)
 	admin.HandleFunc("/logs", a.Settings.ClearAllLogs).Methods("DELETE")
+
+	// Alert routes (admin only)
+	if a.Alerts != nil {
+		alertsAdmin := admin.PathPrefix("").Subrouter()
+		a.Alerts.RegisterRoutes(alertsAdmin)
+	}
+
+	// User notification preferences (authenticated users)
+	if a.Alerts != nil {
+		userPrefs := protected.PathPrefix("").Subrouter()
+		a.Alerts.RegisterUserRoutes(userPrefs)
+	}
 
 	// --- Editor+ routes (admin and editor) ---
 	editor := protected.PathPrefix("").Subrouter()

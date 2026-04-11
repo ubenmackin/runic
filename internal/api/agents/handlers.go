@@ -16,6 +16,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 
+	"runic/internal/alerts"
 	"runic/internal/api/common"
 	"runic/internal/common/constants"
 	runiclog "runic/internal/common/log"
@@ -25,14 +26,16 @@ import (
 
 // Handler provides HTTP handlers for agent endpoints with dependency injection.
 type Handler struct {
-	DB     db.Querier
-	LogsDB db.Querier
+	DB           db.Querier
+	LogsDB       db.Querier
+	AlertService *alerts.Service
 }
 
 // NewHandler creates a new agent handler with the given database connections.
 // db is the main database for peer queries, logsDB is the separate logs database.
-func NewHandler(db db.Querier, logsDB db.Querier) *Handler {
-	return &Handler{DB: db, LogsDB: logsDB}
+// alertService is optional and can be nil.
+func NewHandler(db db.Querier, logsDB db.Querier, alertService *alerts.Service) *Handler {
+	return &Handler{DB: db, LogsDB: logsDB, AlertService: alertService}
 }
 
 // LogEvent represents a validated firewall log event from an agent.
@@ -250,6 +253,30 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 			"current_bundle_version": "",
 			"hmac_key":               hmacKey,
 		})
+
+		// Trigger new_peer alert for newly registered peer
+		if h.AlertService != nil {
+			// Get the ID of the newly inserted peer
+			var newPeerID int
+			if err := h.DB.QueryRowContext(ctx, "SELECT id FROM peers WHERE hostname = ?", input.Hostname).Scan(&newPeerID); err == nil {
+				if err := h.AlertService.TriggerAlert(ctx, &alerts.AlertEvent{
+					Type:     alerts.AlertTypeNewPeer,
+					PeerID:   newPeerID,
+					PeerName: input.Hostname,
+					Subject:  fmt.Sprintf("New Peer Registered: %s", input.Hostname),
+					Metadata: map[string]interface{}{
+						"hostname":      input.Hostname,
+						"ip_address":    input.IP,
+						"os_type":       input.OSType,
+						"agent_version": input.AgentVersion,
+						"registered_by": input.RegistrationToken,
+					},
+				}); err != nil {
+					runiclog.Error("failed to trigger new peer alert", "error", err, "hostname", input.Hostname)
+				}
+			}
+		}
+
 		return
 	} else if err != nil {
 		runiclog.Error("Database error checking hostname error", "error", err)

@@ -17,6 +17,7 @@ const Services = lazy(() => import('./pages/Services'))
 const Policies = lazy(() => import('./pages/Policies'))
 const Topology = lazy(() => import('./pages/Topology'))
 const Logs = lazy(() => import('./pages/Logs'))
+const Alerts = lazy(() => import('./pages/Alerts'))
 const SetupKeys = lazy(() => import('./pages/SetupKeys'))
 const Users = lazy(() => import('./pages/Users'))
 const Settings = lazy(() => import('./pages/Settings'))
@@ -114,6 +115,7 @@ export default function App() {
                   <Route path="services" element={<RouteErrorBoundary><Suspense fallback={<PageLoader />}><Services /></Suspense></RouteErrorBoundary>} />
                   <Route path="policies" element={<RouteErrorBoundary><Suspense fallback={<PageLoader />}><Policies /></Suspense></RouteErrorBoundary>} />
                   <Route path="logs" element={<RouteErrorBoundary><Suspense fallback={<PageLoader />}><Logs /></Suspense></RouteErrorBoundary>} />
+                  <Route path="alerts" element={<RouteErrorBoundary><Suspense fallback={<PageLoader />}><Alerts /></Suspense></RouteErrorBoundary>} />
                   <Route path="setup-keys" element={<RouteErrorBoundary><Suspense fallback={<PageLoader />}><SetupKeys /></Suspense></RouteErrorBoundary>} />
                   <Route path="users" element={<RouteErrorBoundary><Suspense fallback={<PageLoader />}><Users /></Suspense></RouteErrorBoundary>} />
                   <Route path="settings" element={<RouteErrorBoundary><Suspense fallback={<PageLoader />}><Settings /></Suspense></RouteErrorBoundary>} />

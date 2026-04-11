@@ -3,7 +3,7 @@ import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import {
   LayoutDashboard, Server, Users as UsersIcon, Briefcase, Shield, FileText,
   Menu, X, LogOut, Moon, Sun, Key, Settings, User, ChevronDown, ChevronRight, Flame, Network,
-  ShieldAlert
+  ShieldAlert, Bell
 } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 import { useAuthStore } from '../store'
@@ -46,12 +46,14 @@ const navItems = [
       { to: '/policies',  icon: Shield,           label: 'Policies' },
     ]
   },
+  { isDivider: true },
+  { to: '/alerts',        icon: Bell,            label: 'Alerts' },
   { to: '/users',         icon: User,             label: 'Users' },
   { to: '/settings',      icon: Settings,         label: 'Settings' },
 ]
 
 // Admin-only nav routes — hidden from non-admin users
-const ADMIN_ONLY_ROUTES = new Set(['/users', '/setup-keys'])
+const ADMIN_ONLY_ROUTES = new Set(['/users', '/setup-keys', '/alerts'])
 
 export default function Layout() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
@@ -100,10 +102,12 @@ const toggleDark = () => {
 
   // Filter nav items based on role
   const visibleNavItems = navItems.filter(item => {
+    // Always show dividers
+    if (item.isDivider) return true
     // Check if this is a parent with children
     if (item.children) return true
     // Hide admin-only routes from non-admins
-    if (ADMIN_ONLY_ROUTES.has(item.to) && !isAdmin) return false
+    if (item.to && ADMIN_ONLY_ROUTES.has(item.to) && !isAdmin) return false
     return true
   })
 
@@ -135,7 +139,17 @@ const toggleDark = () => {
           </button>
         </div>
         <nav className="mt-4 px-2 space-y-1">
-        {visibleNavItems.map((item) => {
+        {visibleNavItems.map((item, index) => {
+          // Render divider
+          if (item.isDivider) {
+            return (
+              <hr
+                key={`divider-${index}`}
+                className="my-2 border-t border-gray-200 dark:border-gray-border"
+              />
+            )
+          }
+
           if (item.children) {
             // Expandable menu item
             const isExpanded = expandedItems[item.label] || false

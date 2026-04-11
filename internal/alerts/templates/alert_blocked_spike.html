@@ -1,0 +1,35 @@
+{# Template: alert_blocked_spike.html #}
+{# Extends: base.html #}
+{# AlertType: blocked_spike #}
+{# Severity: warning #}
+
+{{define "alert_type"}}blocked_spike{{end}}
+{{define "severity"}}warning{{end}}
+
+{{define "DetailsHTML"}}
+<div class="detail-row">
+    <span class="detail-label">Blocked Count:</span>
+    <span class="detail-value">{{.BlockedCount}} (threshold: {{.Threshold}})</span>
+</div>
+{{if .WindowMinutes}}
+<div class="detail-row">
+    <span class="detail-label">Time Window:</span>
+    <span class="detail-value">{{.WindowMinutes}} minutes</span>
+</div>
+{{end}}
+{{if .TopSourceIPs}}
+<div class="detail-row">
+    <span class="detail-label">Top Blocked IPs:</span>
+    <span class="detail-value">{{.TopSourceIPs}}</span>
+</div>
+{{end}}
+{{if .AffectedPeers}}
+<div class="detail-row">
+    <span class="detail-label">Affected Peers:</span>
+    <span class="detail-value">{{.AffectedPeers}}</span>
+</div>
+{{end}}
+{{end}}
+
+{{define "Subject"}}Blocked Traffic Spike Detected{{end}}
+{{define "Message"}}A spike in blocked network traffic has been detected. {{.BlockedCount}} packets were blocked in the last {{.WindowMinutes}} minutes, exceeding the threshold of {{.Threshold}}. Review the firewall rules to identify potential issues.{{end}}

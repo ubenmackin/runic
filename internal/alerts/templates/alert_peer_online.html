@@ -1,0 +1,29 @@
+{# Template: alert_peer_online.html #}
+{# Extends: base.html #}
+{# AlertType: peer_online #}
+{# Severity: info #}
+
+{{define "alert_type"}}peer_online{{end}}
+{{define "severity"}}info{{end}}
+
+{{define "DetailsHTML"}}
+<div class="detail-row">
+    <span class="detail-label">Hostname:</span>
+    <span class="detail-value">{{.Hostname}}</span>
+</div>
+{{if .IPAddress}}
+<div class="detail-row">
+    <span class="detail-label">IP Address:</span>
+    <span class="detail-value">{{.IPAddress}}</span>
+</div>
+{{end}}
+{{if .WasOfflineFor}}
+<div class="detail-row">
+    <span class="detail-label">Was Offline For:</span>
+    <span class="detail-value">{{.WasOfflineFor}} minutes</span>
+</div>
+{{end}}
+{{end}}
+
+{{define "Subject"}}Peer Online: {{.Hostname}}{{end}}
+{{define "Message"}}The peer {{.Hostname}} is back online and responding to heartbeats.{{end}}

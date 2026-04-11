@@ -1,0 +1,35 @@
+{# Template: alert_bundle_failed.html #}
+{# Extends: base.html #}
+{# AlertType: bundle_failed #}
+{# Severity: critical #}
+
+{{define "alert_type"}}bundle_failed{{end}}
+{{define "severity"}}critical{{end}}
+
+{{define "DetailsHTML"}}
+<div class="detail-row">
+    <span class="detail-label">Hostname:</span>
+    <span class="detail-value">{{.Hostname}}</span>
+</div>
+{{if .ErrorMessage}}
+<div class="detail-row">
+    <span class="detail-label">Error:</span>
+    <span class="detail-value">{{.ErrorMessage}}</span>
+</div>
+{{end}}
+{{if .Version}}
+<div class="detail-row">
+    <span class="detail-label">Bundle Version:</span>
+    <span class="detail-value">{{.Version}}</span>
+</div>
+{{end}}
+{{if .JobID}}
+<div class="detail-row">
+    <span class="detail-label">Job ID:</span>
+    <span class="detail-value">{{.JobID}}</span>
+</div>
+{{end}}
+{{end}}
+
+{{define "Subject"}}Bundle Deployment Failed: {{.Hostname}}{{end}}
+{{define "Message"}}Failed to deploy rules bundle to peer {{.Hostname}}. Please review the error and try again.{{end}}

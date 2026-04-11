@@ -20,10 +20,12 @@ import (
 
 	"github.com/gorilla/mux"
 
+	"runic/internal/alerts"
 	"runic/internal/api"
 	"runic/internal/auth"
 	"runic/internal/common/constants"
 	"runic/internal/common/version"
+	"runic/internal/crypto"
 	"runic/internal/db"
 	"runic/internal/engine"
 )
@@ -175,6 +177,47 @@ func main() {
 
 	compiler := engine.NewCompiler(database)
 
+	// Initialize encryptor for sensitive data (SMTP passwords, etc.)
+	// The encryption_key is generated and stored in the database during migrations
+	var encryptor *crypto.Encryptor
+	var encryptionKey string
+	err = database.QueryRowContext(context.Background(),
+		"SELECT value FROM system_config WHERE key = 'encryption_key'").Scan(&encryptionKey)
+	if err == nil && encryptionKey != "" {
+		enc, err := crypto.NewEncryptor(encryptionKey)
+		if err != nil {
+			log.Printf("Warning: failed to create encryptor: %v", err)
+		} else {
+			encryptor = enc
+			log.Printf("Encryptor initialized for sensitive data encryption")
+		}
+	} else {
+		log.Printf("Warning: encryption_key not found in database, SMTP password encryption disabled")
+	}
+
+	// Initialize alert service for notifications
+	// Wrap *sql.DB in *db.Database for the alert service
+	runicDB := db.New(database)
+	alertService := alerts.NewService(runicDB)
+	alertService.SetEncryptor(encryptor)
+
+	// Initialize and start the alert service
+	var peerMonitor *alerts.PeerMonitor
+	var spikeDetector *alerts.SpikeDetector
+	if err := alertService.Initialize(); err != nil {
+		log.Printf("Warning: failed to initialize alert service: %v", err)
+	} else {
+		if err := alertService.Start(); err != nil {
+			log.Printf("Warning: failed to start alert service: %v", err)
+		} else {
+			// Start peer monitor and spike detector workers
+			peerMonitor = alerts.NewPeerMonitor(database, alertService)
+			peerMonitor.Start()
+			spikeDetector = alerts.NewSpikeDetector(database, alertService)
+			spikeDetector.Start()
+		}
+	}
+
 	// Initialize auth with database for token revocation
 	auth.SetDB(database)
 
@@ -183,7 +226,7 @@ func main() {
 	// Public routes are now registered in internal/api/api.go
 
 	// Register all API routes (public routes like setup, protected routes, and system endpoints like /health)
-	apiInstance := api.NewAPI(database, compiler, logsDBPath)
+	apiInstance := api.NewAPI(database, compiler, logsDBPath, alertService, encryptor)
 	apiInstance.RegisterRoutes(r, downloadsDir)
 
 	// Serve embedded web frontend (SPA)
@@ -314,6 +357,19 @@ func main() {
 
 	// Stop rate limiter cleanup goroutines
 	apiInstance.Stop()
+
+	// Stop alert service and workers
+	if peerMonitor != nil {
+		peerMonitor.Stop()
+	}
+	if spikeDetector != nil {
+		spikeDetector.Stop()
+	}
+	if alertService != nil {
+		if err := alertService.Stop(); err != nil {
+			log.Printf("Alert service shutdown error: %v", err)
+		}
+	}
 
 	// Close database connection
 	if database != nil {

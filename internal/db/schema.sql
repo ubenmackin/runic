@@ -222,11 +222,77 @@ CREATE TABLE IF NOT EXISTS pending_bundle_previews (
 CREATE INDEX IF NOT EXISTS idx_pending_bundle_previews_peer ON pending_bundle_previews(peer_id);
 
 CREATE TABLE IF NOT EXISTS change_snapshots (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    entity_type TEXT NOT NULL CHECK (entity_type IN ('group', 'service', 'policy')),
-    entity_id INTEGER NOT NULL,
-    action TEXT NOT NULL CHECK (action IN ('create', 'update', 'delete')),
-    snapshot_data TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(entity_type, entity_id)
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	entity_type TEXT NOT NULL CHECK (entity_type IN ('group', 'service', 'policy')),
+	entity_id INTEGER NOT NULL,
+	action TEXT NOT NULL CHECK (action IN ('create', 'update', 'delete')),
+	snapshot_data TEXT,
+	created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+	UNIQUE(entity_type, entity_id)
 );
+
+-- Alert system tables
+
+-- Alert rules: stores alert rule definitions
+CREATE TABLE IF NOT EXISTS alert_rules (
+id INTEGER PRIMARY KEY AUTOINCREMENT,
+name TEXT NOT NULL,
+alert_type TEXT NOT NULL CHECK(alert_type IN ('peer_offline', 'bundle_failed', 'blocked_spike', 'peer_online', 'new_peer', 'bundle_deployed')),
+enabled BOOLEAN NOT NULL DEFAULT 1,
+threshold_value INTEGER,
+threshold_window_minutes INTEGER,
+peer_id TEXT,
+throttle_minutes INTEGER NOT NULL DEFAULT 5,
+created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_alert_rules_type_enabled ON alert_rules(alert_type, enabled);
+CREATE INDEX IF NOT EXISTS idx_alert_rules_peer_id ON alert_rules(peer_id);
+
+-- Alert history: stores alert event history
+CREATE TABLE IF NOT EXISTS alert_history (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	rule_id INTEGER REFERENCES alert_rules(id),
+	alert_type TEXT NOT NULL,
+	peer_id TEXT,
+	severity TEXT NOT NULL CHECK(severity IN ('info', 'warning', 'critical')),
+	subject TEXT NOT NULL,
+	message TEXT NOT NULL,
+	metadata TEXT,
+	status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'sent', 'failed')),
+	sent_at DATETIME,
+	error_message TEXT,
+	created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_alert_history_rule_id ON alert_history(rule_id);
+CREATE INDEX IF NOT EXISTS idx_alert_history_status ON alert_history(status);
+CREATE INDEX IF NOT EXISTS idx_alert_history_created_at ON alert_history(created_at DESC);
+
+-- User notification preferences: stores per-user notification settings
+CREATE TABLE IF NOT EXISTS user_notification_preferences (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+	enabled_alerts TEXT DEFAULT '[]',
+	quiet_hours_start TEXT DEFAULT '22:00',
+	quiet_hours_end TEXT DEFAULT '07:00',
+	quiet_hours_timezone TEXT DEFAULT 'UTC',
+	digest_enabled BOOLEAN NOT NULL DEFAULT 0,
+	digest_time TEXT DEFAULT '08:00',
+	created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+	updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+	UNIQUE(user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_user_notification_prefs_user_id ON user_notification_preferences(user_id);
+
+-- Alert digests: stores daily digest history
+CREATE TABLE IF NOT EXISTS alert_digests (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+	digest_date DATE NOT NULL,
+	alert_count INTEGER NOT NULL DEFAULT 0,
+	summary TEXT,
+	sent_at DATETIME,
+	created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+	UNIQUE(user_id, digest_date)
+);
+CREATE INDEX IF NOT EXISTS idx_alert_digests_user_date ON alert_digests(user_id, digest_date DESC);

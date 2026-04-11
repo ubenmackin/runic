@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -11,13 +12,16 @@ import (
 	runiclog "runic/internal/common/log"
 	"runic/internal/db"
 	"runic/internal/engine"
+
+	"runic/internal/alerts"
 )
 
 // PushWorker processes push-all-rules jobs in a single background goroutine.
 type PushWorker struct {
-	db       *sql.DB
-	compiler *engine.Compiler
-	sseHub   interface {
+	db           *sql.DB
+	compiler     *engine.Compiler
+	alertService *alerts.Service
+	sseHub       interface {
 		NotifyBundleUpdated(hostID string, version string)
 		NotifyPushJobProgress(jobID string, eventType string, payload string)
 	}
@@ -29,16 +33,17 @@ type PushWorker struct {
 }
 
 // NewPushWorker creates a new PushWorker.
-func NewPushWorker(database *sql.DB, compiler *engine.Compiler, sseHub interface {
+func NewPushWorker(database *sql.DB, compiler *engine.Compiler, alertService *alerts.Service, sseHub interface {
 	NotifyBundleUpdated(hostID string, version string)
 	NotifyPushJobProgress(jobID string, eventType string, payload string)
 }) *PushWorker {
 	return &PushWorker{
-		db:       database,
-		compiler: compiler,
-		sseHub:   sseHub,
-		workCh:   make(chan string, 10),
-		done:     make(chan struct{}),
+		db:           database,
+		compiler:     compiler,
+		alertService: alertService,
+		sseHub:       sseHub,
+		workCh:       make(chan string, 10),
+		done:         make(chan struct{}),
 	}
 }
 
@@ -152,6 +157,25 @@ func (w *PushWorker) processJob(ctx context.Context, jobID string) {
 				"succeeded": succeeded,
 				"failed":    failed,
 			})
+
+			// Trigger bundle_failed alert
+			if w.alertService != nil {
+				if err := w.alertService.TriggerAlert(jobCtx, &alerts.AlertEvent{
+					Type:     alerts.AlertTypeBundleFailed,
+					PeerID:   peer.PeerID,
+					PeerName: peer.Hostname,
+					Subject:  fmt.Sprintf("Bundle deployment failed: %s", peer.Hostname),
+					Message:  err.Error(),
+					Metadata: map[string]interface{}{
+						"hostname": peer.Hostname,
+						"job_id":   jobID,
+						"error":    err.Error(),
+					},
+				}); err != nil {
+					runiclog.Warn("failed to trigger alert", "error", err, "alert_type", alerts.AlertTypeBundleFailed)
+				}
+			}
+
 			continue
 		}
 
@@ -172,6 +196,23 @@ func (w *PushWorker) processJob(ctx context.Context, jobID string) {
 			"succeeded": succeeded,
 			"failed":    failed,
 		})
+
+		// Trigger bundle_deployed alert
+		if w.alertService != nil {
+			if err := w.alertService.TriggerAlert(jobCtx, &alerts.AlertEvent{
+				Type:     alerts.AlertTypeBundleDeployed,
+				PeerID:   peer.PeerID,
+				PeerName: peer.Hostname,
+				Subject:  fmt.Sprintf("Bundle deployed: %s", peer.Hostname),
+				Metadata: map[string]interface{}{
+					"hostname": peer.Hostname,
+					"version":  bundle.Version,
+					"job_id":   jobID,
+				},
+			}); err != nil {
+				runiclog.Warn("failed to trigger alert", "error", err, "alert_type", alerts.AlertTypeBundleDeployed)
+			}
+		}
 	}
 
 	// Finalize job with counts in a single atomic update

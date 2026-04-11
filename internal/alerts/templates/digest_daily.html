@@ -1,0 +1,59 @@
+{# Template: digest_daily.html #}
+{# Extends: base.html #}
+{# AlertType: digest #}
+{# Severity: info #}
+
+{{define "alert_type"}}digest{{end}}
+{{define "severity"}}info{{end}}
+{{define "Subject"}}Runic Daily Alert Digest{{end}}
+
+{{define "Message"}}
+<div style="margin: 20px 0;">
+    <h2 style="font-size: 18px; margin-bottom: 16px;">Alert Summary for {{.Date}}</h2>
+    
+    {{if .Alerts}}
+    <table style="width: 100%; border-collapse: collapse;">
+        <thead>
+            <tr style="border-bottom: 2px solid #e5e7eb;">
+                <th style="text-align: left; padding: 8px;">Time</th>
+                <th style="text-align: left; padding: 8px;">Type</th>
+                <th style="text-align: left; padding: 8px;">Subject</th>
+                <th style="text-align: left; padding: 8px;">Severity</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{range .Alerts}}
+            <tr style="border-bottom: 1px solid #e5e7eb;">
+                <td style="padding: 8px;">{{.Time}}</td>
+                <td style="padding: 8px;">{{.Type}}</td>
+                <td style="padding: 8px;">{{.Subject}}</td>
+                <td style="padding: 8px;">
+                    <span class="alert-badge severity-{{.Severity}}">{{.Severity}}</span>
+                </td>
+            </tr>
+            {{end}}
+        </tbody>
+    </table>
+    {{else}}
+    <p style="color: #6b7280;">No alerts were triggered during this period.</p>
+    {{end}}
+</div>
+
+<div style="margin-top: 20px; padding: 16px; background: #f9fafb; border-radius: 6px;">
+    <h3 style="font-size: 14px; margin: 0 0 8px 0;">Quick Stats</h3>
+    <div style="display: flex; gap: 24px;">
+        <div>
+            <span style="font-weight: 600;">{{.TotalAlerts}}</span> Total Alerts
+        </div>
+        <div>
+            <span style="font-weight: 600;">{{.CriticalCount}}</span> Critical
+        </div>
+        <div>
+            <span style="font-weight: 600;">{{.WarningCount}}</span> Warning
+        </div>
+        <div>
+            <span style="font-weight: 600;">{{.InfoCount}}</span> Info
+        </div>
+    </div>
+</div>
+{{end}}

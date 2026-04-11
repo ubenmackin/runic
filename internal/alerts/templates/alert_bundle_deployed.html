@@ -1,0 +1,35 @@
+{# Template: alert_bundle_deployed.html #}
+{# Extends: base.html #}
+{# AlertType: bundle_deployed #}
+{# Severity: info #}
+
+{{define "alert_type"}}bundle_deployed{{end}}
+{{define "severity"}}info{{end}}
+
+{{define "DetailsHTML"}}
+<div class="detail-row">
+    <span class="detail-label">Hostname:</span>
+    <span class="detail-value">{{.Hostname}}</span>
+</div>
+{{if .Version}}
+<div class="detail-row">
+    <span class="detail-label">Bundle Version:</span>
+    <span class="detail-value">{{.Version}}</span>
+</div>
+{{end}}
+{{if .JobID}}
+<div class="detail-row">
+    <span class="detail-label">Job ID:</span>
+    <span class="detail-value">{{.JobID}}</span>
+</div>
+{{end}}
+{{if .InitiatedBy}}
+<div class="detail-row">
+    <span class="detail-label">Initiated By:</span>
+    <span class="detail-value">{{.InitiatedBy}}</span>
+</div>
+{{end}}
+{{end}}
+
+{{define "Subject"}}Bundle Deployed: {{.Hostname}}{{end}}
+{{define "Message"}}Successfully deployed rules bundle to peer {{.Hostname}}.{{end}}

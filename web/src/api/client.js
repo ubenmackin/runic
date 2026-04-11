@@ -75,6 +75,21 @@ export const api = {
   delete: (path)        => request('DELETE', path),
 }
 
+// Alert functions
+export const getAlerts = (params) => api.get(`/alerts?${new URLSearchParams(params)}`)
+export const getAlert = (id) => api.get(`/alerts/${id}`)
+export const getAlertRules = () => api.get('/alert-rules')
+export const updateAlertRule = (id, data) => api.put(`/alert-rules/${id}`, data)
+
+// SMTP functions
+export const getSMTPConfig = () => api.get('/settings/smtp')
+export const updateSMTPConfig = (data) => api.put('/settings/smtp', data)
+export const testSMTP = () => api.post('/settings/smtp/test')
+
+// User notification preferences
+export const getNotificationPrefs = () => api.get('/users/me/notification-preferences')
+export const updateNotificationPrefs = (data) => api.put('/users/me/notification-preferences', data)
+
 export const QUERY_KEYS = {
   peers: () => ['peers'],
   peer: (id) => ['peers', id],
@@ -86,12 +101,16 @@ export const QUERY_KEYS = {
   policies: () => ['policies'],
   policy: (id) => ['policies', id],
   logs: (params) => ['logs', params],
+  alerts: (params) => ['alerts', params],
+  alertRules: () => ['alert-rules'],
+  smtpConfig: () => ['smtp-config'],
   dashboard: () => ['dashboard'],
   dashboardStats: () => ['dashboard-stats'],
   dashboardInitial: () => ['dashboard-initial'],
   blockedLogs24h: () => ['blocked-logs-24h'],
   setupKeys: () => ['setup-keys'],
   logSettings: () => ['log-settings'],
+  notificationPrefs: () => ['notification-preferences'],
 }
 
 export const getVersion = () => api.get('/info')

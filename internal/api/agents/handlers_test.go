@@ -158,7 +158,7 @@ func TestAgentAuthMiddleware(t *testing.T) {
 			}
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(db, db)
+			handler := NewHandler(db, db, nil)
 
 			// Track if next handler was called
 			nextCalled := false
@@ -279,7 +279,7 @@ func TestRegisterAgent(t *testing.T) {
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(db, db)
+			handler := NewHandler(db, db, nil)
 			handler.RegisterAgent(w, req)
 
 			if w.Code != tt.wantCode {
@@ -372,7 +372,7 @@ func TestGetBundle(t *testing.T) {
 
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(db, db)
+			handler := NewHandler(db, db, nil)
 
 			handler.AgentAuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
 				handler.GetBundle(w, r)
@@ -454,7 +454,7 @@ func TestHeartbeat(t *testing.T) {
 			req := makeAuthRequest(t, db, "POST", "/api/v1/agents/heartbeat", tt.reqBody, peer)
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(db, db)
+			handler := NewHandler(db, db, nil)
 
 			handler.AgentAuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
 				handler.Heartbeat(w, r)
@@ -573,7 +573,7 @@ func TestSubmitLogs(t *testing.T) {
 			req := makeAuthRequest(t, db, "POST", "/api/v1/agents/logs", tt.reqBody, "test-agent")
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(db, logsDB)
+			handler := NewHandler(db, logsDB, nil)
 
 			handler.AgentAuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
 				handler.SubmitLogs(w, r)
@@ -635,7 +635,7 @@ func TestConfirmBundleApplied(t *testing.T) {
 			req := makeAuthRequest(t, db, "POST", "/api/v1/agents/confirm-bundle", tt.reqBody, "test-agent")
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(db, db)
+			handler := NewHandler(db, db, nil)
 
 			handler.AgentAuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
 				handler.ConfirmBundleApplied(w, r)
@@ -708,7 +708,7 @@ func TestAgentCheckRotation(t *testing.T) {
 			req := makeAuthRequest(t, db, "GET", "/api/v1/agents/check-rotation", "", peer)
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(db, db)
+			handler := NewHandler(db, db, nil)
 
 			handler.AgentAuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
 				handler.AgentCheckRotation(w, r)
@@ -799,7 +799,7 @@ func TestAgentTestKey(t *testing.T) {
 			req := makeAuthRequest(t, db, "POST", "/api/v1/agents/test-key", tt.reqBody, peer)
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(db, db)
+			handler := NewHandler(db, db, nil)
 
 			handler.AgentAuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
 				handler.AgentTestKey(w, r)
@@ -870,7 +870,7 @@ func TestGenerateRegistrationToken(t *testing.T) {
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(db, db)
+			handler := NewHandler(db, db, nil)
 			handler.GenerateRegistrationToken(w, req)
 
 			if w.Code != tt.wantCode {
@@ -949,7 +949,7 @@ func TestListRegistrationTokens(t *testing.T) {
 			req := httptest.NewRequest("GET", "/api/v1/registration-tokens", nil)
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(db, db)
+			handler := NewHandler(db, db, nil)
 			handler.ListRegistrationTokens(w, req)
 
 			if w.Code != tt.wantCode {
@@ -1013,7 +1013,7 @@ func TestRevokeRegistrationToken(t *testing.T) {
 			w := httptest.NewRecorder()
 			req = muxVars(req, map[string]string{"id": tt.tokenID})
 
-			handler := NewHandler(db, db)
+			handler := NewHandler(db, db, nil)
 			handler.RevokeRegistrationToken(w, req)
 
 			if w.Code != tt.wantCode {
@@ -1283,7 +1283,7 @@ func TestConsumeRegistrationToken(t *testing.T) {
 				tt.setup(t, db)
 			}
 
-			handler := NewHandler(db, db)
+			handler := NewHandler(db, db, nil)
 			consumed, err := handler.ConsumeRegistrationToken(tt.token, tt.hostname)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)

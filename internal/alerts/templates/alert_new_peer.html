@@ -1,0 +1,41 @@
+{# Template: alert_new_peer.html #}
+{# Extends: base.html #}
+{# AlertType: new_peer #}
+{# Severity: info #}
+
+{{define "alert_type"}}new_peer{{end}}
+{{define "severity"}}info{{end}}
+
+{{define "DetailsHTML"}}
+<div class="detail-row">
+    <span class="detail-label">Hostname:</span>
+    <span class="detail-value">{{.Hostname}}</span>
+</div>
+{{if .IPAddress}}
+<div class="detail-row">
+    <span class="detail-label">IP Address:</span>
+    <span class="detail-value">{{.IPAddress}}</span>
+</div>
+{{end}}
+{{if .OSType}}
+<div class="detail-row">
+    <span class="detail-label">OS Type:</span>
+    <span class="detail-value">{{.OSType}}</span>
+</div>
+{{end}}
+{{if .AgentVersion}}
+<div class="detail-row">
+    <span class="detail-label">Agent Version:</span>
+    <span class="detail-value">{{.AgentVersion}}</span>
+</div>
+{{end}}
+{{if .RegisteredBy}}
+<div class="detail-row">
+    <span class="detail-label">Registered By:</span>
+    <span class="detail-value">{{.RegisteredBy}}</span>
+</div>
+{{end}}
+{{end}}
+
+{{define "Subject"}}New Peer Registered: {{.Hostname}}{{end}}
+{{define "Message"}}A new peer {{.Hostname}} has registered with the Runic firewall management system. The peer is now online and ready to receive rules.{{end}}

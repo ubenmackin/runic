@@ -5,7 +5,9 @@ import (
 	"database/sql"
 	"fmt"
 
+	"runic/internal/common"
 	"runic/internal/common/log"
+	"runic/internal/crypto"
 )
 
 // columnExists checks if a column exists in a table using pragma_table_info.
@@ -891,6 +893,248 @@ func migrateSchema(ctx context.Context, database *sql.DB) error {
 			return fmt.Errorf("failed to create change_snapshots table: %w", err)
 		}
 		log.Info("Migration: created change_snapshots table")
+	}
+
+	// Migration: Add encryption_key to system_config for AES-256-GCM encryption
+	var hasEncryptionKey int
+	err = database.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM system_config WHERE key = 'encryption_key'").Scan(&hasEncryptionKey)
+	if err != nil {
+		return fmt.Errorf("failed to check for encryption_key: %w", err)
+	}
+	if hasEncryptionKey == 0 {
+		log.Info("Migration: generating and storing encryption_key")
+		// Generate a secure random 32-byte key (hex-encoded for storage)
+		encryptionKey, err := common.GenerateHMACKey()
+		if err != nil {
+			return fmt.Errorf("failed to generate encryption_key: %w", err)
+		}
+		_, err = database.ExecContext(ctx, "INSERT INTO system_config (key, value) VALUES ('encryption_key', ?)", encryptionKey)
+		if err != nil {
+			return fmt.Errorf("failed to store encryption_key: %w", err)
+		}
+		log.Info("Migration: stored encryption_key in system_config")
+	}
+
+	// Migration: Encrypt existing jwt_secret and agent_jwt_secret
+	// This migration encrypts any plaintext secrets that were stored before encryption was implemented
+	var secretsEncrypted int
+	err = database.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM system_config WHERE key = 'secrets_encrypted'").Scan(&secretsEncrypted)
+	if err != nil {
+		return fmt.Errorf("failed to check for secrets_encrypted marker: %w", err)
+	}
+	if secretsEncrypted == 0 {
+		log.Info("Migration: encrypting existing secrets (jwt_secret, agent_jwt_secret)")
+
+		// Get the encryption key
+		var encryptionKey string
+		err = database.QueryRowContext(ctx, "SELECT value FROM system_config WHERE key = 'encryption_key'").Scan(&encryptionKey)
+		if err != nil {
+			return fmt.Errorf("failed to get encryption_key: %w", err)
+		}
+
+		// List of secrets to encrypt
+		secretsToEncrypt := []string{"jwt_secret", "agent_jwt_secret"}
+
+		for _, secretKey := range secretsToEncrypt {
+			// Check if the secret exists
+			var secretValue string
+			err = database.QueryRowContext(ctx, "SELECT value FROM system_config WHERE key = ?", secretKey).Scan(&secretValue)
+			if err == sql.ErrNoRows {
+				// Secret doesn't exist, skip
+				continue
+			}
+			if err != nil {
+				return fmt.Errorf("failed to get %s: %w", secretKey, err)
+			}
+
+			// Check if already encrypted by trying to decrypt
+			// Encrypted values are base64-encoded and have a specific format (salt || nonce || ciphertext)
+			// We attempt to decrypt to verify. If it succeeds, it's already encrypted.
+			_, decryptErr := crypto.Decrypt(secretValue, encryptionKey)
+			if decryptErr == nil {
+				// Already encrypted, skip
+				log.Info("Migration: secret already encrypted", "key", secretKey)
+				continue
+			}
+
+			// Encrypt the plaintext value
+			encryptedValue, err := crypto.Encrypt(secretValue, encryptionKey)
+			if err != nil {
+				return fmt.Errorf("failed to encrypt %s: %w", secretKey, err)
+			}
+
+			// Update the secret with encrypted value
+			_, err = database.ExecContext(ctx, "UPDATE system_config SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = ?", encryptedValue, secretKey)
+			if err != nil {
+				return fmt.Errorf("failed to update encrypted %s: %w", secretKey, err)
+			}
+			log.Info("Migration: encrypted secret", "key", secretKey)
+		}
+
+		// Mark that secrets have been encrypted
+		_, err = database.ExecContext(ctx, "INSERT INTO system_config (key, value) VALUES ('secrets_encrypted', '1')")
+		if err != nil {
+			return fmt.Errorf("failed to mark secrets as encrypted: %w", err)
+		}
+		log.Info("Migration: completed encrypting existing secrets")
+	}
+
+	// Migration: Create alert system tables
+	// Table 1: alert_rules - stores alert rule definitions
+	var hasAlertRules bool
+	err = database.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='alert_rules'").Scan(&hasAlertRules)
+	if err != nil {
+		return fmt.Errorf("failed to check for alert_rules table: %w", err)
+	}
+	if !hasAlertRules {
+		log.Info("Migration: creating alert_rules table")
+		_, err = database.ExecContext(ctx, `
+CREATE TABLE alert_rules (
+id INTEGER PRIMARY KEY AUTOINCREMENT,
+name TEXT NOT NULL,
+alert_type TEXT NOT NULL CHECK(alert_type IN ('peer_offline', 'bundle_failed', 'blocked_spike', 'peer_online', 'new_peer', 'bundle_deployed')),
+enabled BOOLEAN NOT NULL DEFAULT 1,
+threshold_value INTEGER,
+threshold_window_minutes INTEGER,
+peer_id TEXT,
+throttle_minutes INTEGER NOT NULL DEFAULT 5,
+created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)
+`)
+		if err != nil {
+			return fmt.Errorf("failed to create alert_rules table: %w", err)
+		}
+		_, err = database.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_alert_rules_type_enabled ON alert_rules(alert_type, enabled)")
+		if err != nil {
+			return fmt.Errorf("failed to create idx_alert_rules_type_enabled index: %w", err)
+		}
+		_, err = database.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_alert_rules_peer_id ON alert_rules(peer_id)")
+		if err != nil {
+			return fmt.Errorf("failed to create idx_alert_rules_peer_id index: %w", err)
+		}
+		log.Info("Migration: created alert_rules table")
+
+		// Seed default alert rules
+		log.Info("Migration: seeding default alert rules")
+		_, err = database.ExecContext(ctx, `
+INSERT INTO alert_rules (name, alert_type, enabled, threshold_value, threshold_window_minutes, throttle_minutes) VALUES
+('Peer Offline', 'peer_offline', 1, 0, 5, 15),
+('Peer Online', 'peer_online', 1, 0, 5, 15),
+('Bundle Deployed', 'bundle_deployed', 1, 0, 5, 5),
+('Bundle Failed', 'bundle_failed', 1, 0, 5, 5),
+('Blocked Traffic Spike', 'blocked_spike', 1, 100, 5, 15),
+('New Peer', 'new_peer', 1, 0, 5, 30)
+`)
+		if err != nil {
+			return fmt.Errorf("failed to seed default alert rules: %w", err)
+		}
+		log.Info("Migration: seeded default alert rules")
+	}
+
+	// Table 2: alert_history - stores alert event history
+	var hasAlertHistory bool
+	err = database.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='alert_history'").Scan(&hasAlertHistory)
+	if err != nil {
+		return fmt.Errorf("failed to check for alert_history table: %w", err)
+	}
+	if !hasAlertHistory {
+		log.Info("Migration: creating alert_history table")
+		_, err = database.ExecContext(ctx, `
+			CREATE TABLE alert_history (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				rule_id INTEGER REFERENCES alert_rules(id),
+				alert_type TEXT NOT NULL,
+				peer_id TEXT,
+				severity TEXT NOT NULL CHECK(severity IN ('info', 'warning', 'critical')),
+				subject TEXT NOT NULL,
+				message TEXT NOT NULL,
+				metadata TEXT,
+				status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'sent', 'failed')),
+				sent_at DATETIME,
+				error_message TEXT,
+				created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+			)
+		`)
+		if err != nil {
+			return fmt.Errorf("failed to create alert_history table: %w", err)
+		}
+		_, err = database.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_alert_history_rule_id ON alert_history(rule_id)")
+		if err != nil {
+			return fmt.Errorf("failed to create idx_alert_history_rule_id index: %w", err)
+		}
+		_, err = database.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_alert_history_status ON alert_history(status)")
+		if err != nil {
+			return fmt.Errorf("failed to create idx_alert_history_status index: %w", err)
+		}
+		_, err = database.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_alert_history_created_at ON alert_history(created_at DESC)")
+		if err != nil {
+			return fmt.Errorf("failed to create idx_alert_history_created_at index: %w", err)
+		}
+		log.Info("Migration: created alert_history table")
+	}
+
+	// Table 3: user_notification_preferences - stores per-user notification settings
+	var hasUserNotificationPrefs bool
+	err = database.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='user_notification_preferences'").Scan(&hasUserNotificationPrefs)
+	if err != nil {
+		return fmt.Errorf("failed to check for user_notification_preferences table: %w", err)
+	}
+	if !hasUserNotificationPrefs {
+		log.Info("Migration: creating user_notification_preferences table")
+		_, err = database.ExecContext(ctx, `
+			CREATE TABLE user_notification_preferences (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+				enabled_alerts TEXT DEFAULT '[]',
+				quiet_hours_start TEXT DEFAULT '22:00',
+				quiet_hours_end TEXT DEFAULT '07:00',
+				quiet_hours_timezone TEXT DEFAULT 'UTC',
+				digest_enabled BOOLEAN NOT NULL DEFAULT 0,
+				digest_time TEXT DEFAULT '08:00',
+				created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+				updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+				UNIQUE(user_id)
+			)
+		`)
+		if err != nil {
+			return fmt.Errorf("failed to create user_notification_preferences table: %w", err)
+		}
+		_, err = database.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_user_notification_prefs_user_id ON user_notification_preferences(user_id)")
+		if err != nil {
+			return fmt.Errorf("failed to create idx_user_notification_prefs_user_id index: %w", err)
+		}
+		log.Info("Migration: created user_notification_preferences table")
+	}
+
+	// Table 4: alert_digests - stores daily digest history
+	var hasAlertDigests bool
+	err = database.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='alert_digests'").Scan(&hasAlertDigests)
+	if err != nil {
+		return fmt.Errorf("failed to check for alert_digests table: %w", err)
+	}
+	if !hasAlertDigests {
+		log.Info("Migration: creating alert_digests table")
+		_, err = database.ExecContext(ctx, `
+			CREATE TABLE alert_digests (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+				digest_date DATE NOT NULL,
+				alert_count INTEGER NOT NULL DEFAULT 0,
+				summary TEXT,
+				sent_at DATETIME,
+				created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+				UNIQUE(user_id, digest_date)
+			)
+		`)
+		if err != nil {
+			return fmt.Errorf("failed to create alert_digests table: %w", err)
+		}
+		_, err = database.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_alert_digests_user_date ON alert_digests(user_id, digest_date DESC)")
+		if err != nil {
+			return fmt.Errorf("failed to create idx_alert_digests_user_date index: %w", err)
+		}
+		log.Info("Migration: created alert_digests table")
 	}
 
 	return nil
