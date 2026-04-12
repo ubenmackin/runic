@@ -259,7 +259,7 @@ CREATE TABLE IF NOT EXISTS alert_history (
 	subject TEXT NOT NULL,
 	message TEXT NOT NULL,
 	metadata TEXT,
-	status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'sent', 'failed')),
+	status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'sent', 'failed', 'throttled')),
 	sent_at DATETIME,
 	error_message TEXT,
 	created_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -273,11 +273,14 @@ CREATE TABLE IF NOT EXISTS user_notification_preferences (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
 	user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
 	enabled_alerts TEXT DEFAULT '[]',
+	quiet_hours_enabled BOOLEAN NOT NULL DEFAULT 0,
 	quiet_hours_start TEXT DEFAULT '22:00',
 	quiet_hours_end TEXT DEFAULT '07:00',
 	quiet_hours_timezone TEXT DEFAULT 'UTC',
 	digest_enabled BOOLEAN NOT NULL DEFAULT 0,
+	digest_frequency TEXT DEFAULT 'daily',
 	digest_time TEXT DEFAULT '08:00',
+	digest_timezone TEXT DEFAULT 'UTC',
 	created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 	updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 	UNIQUE(user_id)

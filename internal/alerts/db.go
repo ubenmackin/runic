@@ -249,12 +249,12 @@ func GetUserNotificationPreferences(ctx context.Context, database db.Querier, us
 
 	err := database.QueryRowContext(ctx,
 		`SELECT id, user_id, enabled_alerts, quiet_hours_enabled, quiet_hours_start, quiet_hours_end,
-		 quiet_hours_timezone, digest_enabled, digest_frequency, digest_time, created_at, updated_at
-		 FROM user_notification_preferences WHERE user_id = ?`,
+		quiet_hours_timezone, digest_enabled, digest_frequency, digest_time, digest_timezone, created_at, updated_at
+		FROM user_notification_preferences WHERE user_id = ?`,
 		userID,
 	).Scan(&prefs.ID, &prefs.UserID, &prefs.EnabledAlerts, &prefs.QuietHoursEnabled, &prefs.QuietHoursStart,
 		&prefs.QuietHoursEnd, &prefs.QuietHoursTimezone, &prefs.DigestEnabled, &prefs.DigestFrequency,
-		&prefs.DigestTime, &prefs.CreatedAt, &prefs.UpdatedAt)
+		&prefs.DigestTime, &prefs.DigestTimezone, &prefs.CreatedAt, &prefs.UpdatedAt)
 
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -271,21 +271,22 @@ func UpsertUserNotificationPreferences(ctx context.Context, database db.Querier,
 	now := time.Now()
 
 	result, err := database.ExecContext(ctx,
-		`INSERT INTO user_notification_preferences (user_id, enabled_alerts, quiet_hours_enabled, quiet_hours_start, 
-		 quiet_hours_end, quiet_hours_timezone, digest_enabled, digest_frequency, digest_time, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		 ON CONFLICT(user_id) DO UPDATE SET
-		 enabled_alerts = excluded.enabled_alerts,
-		 quiet_hours_enabled = excluded.quiet_hours_enabled,
-		 quiet_hours_start = excluded.quiet_hours_start,
-		 quiet_hours_end = excluded.quiet_hours_end,
-		 quiet_hours_timezone = excluded.quiet_hours_timezone,
-		 digest_enabled = excluded.digest_enabled,
-		 digest_frequency = excluded.digest_frequency,
-		 digest_time = excluded.digest_time,
-		 updated_at = excluded.updated_at`,
+		`INSERT INTO user_notification_preferences (user_id, enabled_alerts, quiet_hours_enabled, quiet_hours_start,
+		quiet_hours_end, quiet_hours_timezone, digest_enabled, digest_frequency, digest_time, digest_timezone, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(user_id) DO UPDATE SET
+		enabled_alerts = excluded.enabled_alerts,
+		quiet_hours_enabled = excluded.quiet_hours_enabled,
+		quiet_hours_start = excluded.quiet_hours_start,
+		quiet_hours_end = excluded.quiet_hours_end,
+		quiet_hours_timezone = excluded.quiet_hours_timezone,
+		digest_enabled = excluded.digest_enabled,
+		digest_frequency = excluded.digest_frequency,
+		digest_time = excluded.digest_time,
+		digest_timezone = excluded.digest_timezone,
+		updated_at = excluded.updated_at`,
 		prefs.UserID, prefs.EnabledAlerts, prefs.QuietHoursEnabled, prefs.QuietHoursStart, prefs.QuietHoursEnd,
-		prefs.QuietHoursTimezone, prefs.DigestEnabled, prefs.DigestFrequency, prefs.DigestTime, now, now,
+		prefs.QuietHoursTimezone, prefs.DigestEnabled, prefs.DigestFrequency, prefs.DigestTime, prefs.DigestTimezone, now, now,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to upsert notification preferences: %w", err)

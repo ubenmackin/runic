@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestNewEncryptor_Success tests that NewEncryptor creates a valid encryptor
@@ -419,5 +420,75 @@ func TestEncryptorReuse(t *testing.T) {
 		if decrypted != plaintext {
 			t.Errorf("Decrypt() iteration %d returned %q, want %q", i, decrypted, plaintext)
 		}
+	}
+}
+
+// TestEncryptRestartPersistence tests that encryption persists across restarts
+func TestEncryptRestartPersistence(t *testing.T) {
+	// Create first Encryptor instance with passphrase
+	enc1, err := NewEncryptor("test-passphrase")
+	if err != nil {
+		t.Fatalf("NewEncryptor() returned unexpected error: %v", err)
+	}
+
+	// Encrypt a plaintext string
+	plaintext := "my-secret-password"
+	ciphertext, err := enc1.Encrypt(plaintext)
+	if err != nil {
+		t.Fatalf("Encrypt() returned unexpected error: %v", err)
+	}
+
+	// Get the salt from the first encryptor
+	salt := enc1.GetSalt()
+
+	// Create a second Encryptor instance using NewEncryptorWithSalt with the same passphrase and stored salt
+	enc2, err := NewEncryptorWithSalt("test-passphrase", salt)
+	if err != nil {
+		t.Fatalf("NewEncryptorWithSalt() returned unexpected error: %v", err)
+	}
+
+	// Decrypt the ciphertext with the second encryptor
+	decrypted, err := enc2.Decrypt(ciphertext)
+	if err != nil {
+		t.Fatalf("Decrypt() returned unexpected error: %v", err)
+	}
+
+	// Verify the decrypted text matches the original plaintext
+	if decrypted != plaintext {
+		t.Errorf("Decrypt() returned %q, want %q", decrypted, plaintext)
+	}
+}
+
+// TestEncryptLargeData tests encryption/decryption performance with large data
+func TestEncryptLargeData(t *testing.T) {
+	enc, err := NewEncryptor("test-passphrase")
+	if err != nil {
+		t.Fatalf("NewEncryptor() returned unexpected error: %v", err)
+	}
+
+	// Create a 1MB plaintext string
+	plaintext := strings.Repeat("x", 1024*1024)
+
+	// Measure encryption time
+	encryptStart := time.Now()
+	ciphertext, err := enc.Encrypt(plaintext)
+	encryptDuration := time.Since(encryptStart)
+	if err != nil {
+		t.Fatalf("Encrypt() returned unexpected error: %v", err)
+	}
+	t.Logf("Encryption of 1MB data took: %v", encryptDuration)
+
+	// Measure decryption time
+	decryptStart := time.Now()
+	decrypted, err := enc.Decrypt(ciphertext)
+	decryptDuration := time.Since(decryptStart)
+	if err != nil {
+		t.Fatalf("Decrypt() returned unexpected error: %v", err)
+	}
+	t.Logf("Decryption of 1MB data took: %v", decryptDuration)
+
+	// Verify the decrypted text matches the original
+	if decrypted != plaintext {
+		t.Error("Decrypt() failed to return original large plaintext")
 	}
 }

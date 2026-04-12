@@ -131,6 +131,13 @@ func (d *SpikeDetector) loadThreshold() {
 }
 
 func (d *SpikeDetector) checkForSpike() {
+	// Guard against nil database - the detector requires a valid database to function.
+	// If database is nil, log a warning and return early rather than panicking.
+	if d.database == nil {
+		d.logger.Warn("spike detector has nil database, skipping check")
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(d.ctx, 10*time.Second)
 	defer cancel()
 

@@ -263,14 +263,12 @@ func (s *Scheduler) isThrottled(ctx context.Context, rule *AlertRule) bool {
 	// Check for recent alerts for this rule
 	var count int
 	err := s.database.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM alert_history 
+		`SELECT COUNT(*) FROM alert_history
 		WHERE rule_id = ? AND created_at > ? AND status IN (?, ?)`,
-		rule.ID, cutoff.Format(time.RFC3339), AlertStatusSent, AlertStatusPending).
-		Scan(&count)
+		rule.ID, cutoff, AlertStatusSent, AlertStatusPending,
+	).Scan(&count)
 	if err != nil {
-		s.logger.Error("failed to check throttle status",
-			"rule_id", rule.ID,
-			"error", err)
+		s.logger.Error("failed to check throttle status", "rule_id", rule.ID, "error", err)
 		return false // On error, don't throttle
 	}
 
