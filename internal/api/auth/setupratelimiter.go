@@ -23,3 +23,9 @@ var (
 func CheckSetupRateLimit(remoteAddr string) error {
 	return setupRateLimiter.Check(remoteAddr)
 }
+
+// ResetSetupRateLimit clears the setup rate limiter state.
+// This is intended for testing to ensure test isolation.
+func ResetSetupRateLimit() {
+	setupRateLimiter.Reset()
+}

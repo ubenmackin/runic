@@ -78,6 +78,8 @@ export const api = {
 // Alert functions
 export const getAlerts = (params) => api.get(`/alerts?${new URLSearchParams(params)}`)
 export const getAlert = (id) => api.get(`/alerts/${id}`)
+export const deleteAlert = (id) => api.delete(`/alerts/${id}`)
+export const clearAllAlerts = () => api.delete('/alerts')
 export const getAlertRules = () => api.get('/alert-rules')
 export const updateAlertRule = (id, data) => api.put(`/alert-rules/${id}`, data)
 

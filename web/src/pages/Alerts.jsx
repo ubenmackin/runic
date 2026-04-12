@@ -1,8 +1,10 @@
-import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { Bell, Filter, ChevronDown, ChevronUp, Calendar, Search, X } from 'lucide-react'
-import { api, QUERY_KEYS } from '../api/client'
+import { useState, useRef } from 'react'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { Bell, Filter, ChevronDown, ChevronUp, Calendar, Search, X, Trash2 } from 'lucide-react'
+import { api, QUERY_KEYS, deleteAlert, clearAllAlerts } from '../api/client'
 import { useAuth } from '../hooks/useAuth'
+import { useToastContext } from '../hooks/ToastContext'
+import { useFocusTrap } from '../hooks/useFocusTrap'
 import PageHeader from '../components/PageHeader'
 import Pagination from '../components/Pagination'
 import EmptyState from '../components/EmptyState'
@@ -221,113 +223,127 @@ function FilterBar({ filter, setFilter, onClear }) {
 }
 
 // Alert row component
-function AlertRow({ alert, isExpanded, onToggle }) {
-  const alertTypeLabel = ALERT_TYPES.find(t => t.value === alert.alert_type)?.label || alert.alert_type
+function AlertRow({ alert, isExpanded, onToggle, onDelete }) {
+	const alertTypeLabel = ALERT_TYPES.find(t => t.value === alert.alert_type)?.label || alert.alert_type
 
-  return (
-    <>
-      <tr
-        onClick={onToggle}
-        className="cursor-pointer hover:bg-gray-50 dark:hover:bg-charcoal-darkest transition-colors"
-      >
-        {/* Timestamp */}
-        <td className="px-4 py-3 text-sm text-gray-600 dark:text-amber-muted whitespace-nowrap">
-          {formatTimestamp(alert.timestamp)}
-        </td>
+	return (
+		<>
+			<tr
+				onClick={onToggle}
+				className="cursor-pointer hover:bg-gray-50 dark:hover:bg-charcoal-darkest transition-colors"
+			>
+	{/* Timestamp */}
+			<td className="px-4 py-3 text-sm text-gray-600 dark:text-amber-muted whitespace-nowrap">
+				{formatTimestamp(alert.created_at)}
+			</td>
 
-        {/* Alert Type */}
-        <td className="px-4 py-3">
-          <span className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${getAlertTypeBadgeClass(alert.alert_type)}`}>
-            {alertTypeLabel}
-          </span>
-        </td>
+				{/* Alert Type */}
+				<td className="px-4 py-3">
+					<span className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${getAlertTypeBadgeClass(alert.alert_type)}`}>
+						{alertTypeLabel}
+					</span>
+				</td>
 
-        {/* Peer */}
-        <td className="px-4 py-3 text-sm text-gray-900 dark:text-light-neutral">
-          {alert.peer_hostname || '-'}
-        </td>
+				{/* Peer */}
+				<td className="px-4 py-3 text-sm text-gray-900 dark:text-light-neutral">
+					{alert.peer_hostname || '-'}
+				</td>
 
-        {/* Severity */}
-        <td className="px-4 py-3">
-          <span className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${getSeverityBadgeClass(alert.severity)}`}>
-            {alert.severity}
-          </span>
-        </td>
+				{/* Severity */}
+				<td className="px-4 py-3">
+					<span className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${getSeverityBadgeClass(alert.severity)}`}>
+						{alert.severity}
+					</span>
+				</td>
 
-        {/* Subject */}
-        <td className="px-4 py-3 text-sm text-gray-900 dark:text-light-neutral max-w-[200px] truncate">
-          {alert.subject}
-        </td>
+				{/* Subject */}
+				<td className="px-4 py-3 text-sm text-gray-900 dark:text-light-neutral max-w-[200px] truncate">
+					{alert.subject}
+				</td>
 
-        {/* Status */}
-        <td className="px-4 py-3">
-          <span className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${getStatusBadgeClass(alert.status)}`}>
-            {alert.status}
-          </span>
-        </td>
+				{/* Status */}
+				<td className="px-4 py-3">
+					<span className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${getStatusBadgeClass(alert.status)}`}>
+						{alert.status}
+					</span>
+				</td>
 
-        {/* Expand icon */}
-        <td className="px-4 py-3 text-center">
-          {isExpanded ? (
-            <ChevronUp className="w-4 h-4 text-gray-500 dark:text-amber-muted mx-auto" />
-          ) : (
-            <ChevronDown className="w-4 h-4 text-gray-500 dark:text-amber-muted mx-auto" />
-          )}
-        </td>
-      </tr>
+				{/* Expand icon */}
+				<td className="px-4 py-3 text-center">
+					{isExpanded ? (
+						<ChevronUp className="w-4 h-4 text-gray-500 dark:text-amber-muted mx-auto" />
+					) : (
+						<ChevronDown className="w-4 h-4 text-gray-500 dark:text-amber-muted mx-auto" />
+					)}
+				</td>
+			</tr>
 
-      {/* Expanded content */}
-      {isExpanded && (
-        <tr className="bg-gray-50 dark:bg-charcoal-darkest">
-          <td colSpan={7} className="px-4 py-4">
-            <div className="space-y-4">
-              {/* Full message */}
-              <div>
-                <h4 className="text-sm font-medium text-gray-900 dark:text-light-neutral mb-1">Message</h4>
-                <p className="text-sm text-gray-600 dark:text-amber-muted whitespace-pre-wrap">
-                  {alert.message}
-                </p>
-              </div>
+			{/* Expanded content */}
+			{isExpanded && (
+				<tr className="bg-gray-50 dark:bg-charcoal-darkest">
+					<td colSpan={7} className="px-4 py-4">
+						<div className="space-y-4">
+							{/* Full message */}
+							<div>
+								<h4 className="text-sm font-medium text-gray-900 dark:text-light-neutral mb-1">Message</h4>
+								<p className="text-sm text-gray-600 dark:text-amber-muted whitespace-pre-wrap">
+									{alert.message}
+								</p>
+							</div>
 
-              {/* Metadata JSON */}
-              {alert.metadata && (
-                <div>
-                  <h4 className="text-sm font-medium text-gray-900 dark:text-light-neutral mb-1">Metadata</h4>
-                  <pre className="text-xs bg-gray-900 dark:bg-black text-green-400 p-3 rounded-lg overflow-x-auto">
-                    {JSON.stringify(alert.metadata, null, 2)}
-                  </pre>
-                </div>
-              )}
+							{/* Metadata JSON */}
+							{alert.metadata && (
+								<div>
+									<h4 className="text-sm font-medium text-gray-900 dark:text-light-neutral mb-1">Metadata</h4>
+									<pre className="text-xs bg-gray-900 dark:bg-black text-green-400 p-3 rounded-lg overflow-x-auto">
+										{JSON.stringify(alert.metadata, null, 2)}
+									</pre>
+								</div>
+							)}
 
-              {/* Additional details */}
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-                <div>
-                  <span className="text-gray-500 dark:text-amber-muted">Alert ID:</span>
-                  <span className="ml-2 text-gray-900 dark:text-light-neutral">{alert.id}</span>
-                </div>
-                <div>
-                  <span className="text-gray-500 dark:text-amber-muted">Peer ID:</span>
-                  <span className="ml-2 text-gray-900 dark:text-light-neutral">{alert.peer_id || '-'}</span>
-                </div>
-                <div>
-                  <span className="text-gray-500 dark:text-amber-muted">Created:</span>
-                  <span className="ml-2 text-gray-900 dark:text-light-neutral">
-                    {new Date(alert.timestamp).toLocaleString()}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-gray-500 dark:text-amber-muted">Sent At:</span>
-                  <span className="ml-2 text-gray-900 dark:text-light-neutral">
-                    {alert.sent_at ? new Date(alert.sent_at).toLocaleString() : '-'}
-                  </span>
-                </div>
-              </div>
-            </div>
-          </td>
-        </tr>
-      )}
-    </>
-  )
+							{/* Additional details */}
+							<div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+								<div>
+									<span className="text-gray-500 dark:text-amber-muted">Alert ID:</span>
+									<span className="ml-2 text-gray-900 dark:text-light-neutral">{alert.id}</span>
+								</div>
+								<div>
+									<span className="text-gray-500 dark:text-amber-muted">Peer:</span>
+									<span className="ml-2 text-gray-900 dark:text-light-neutral">{alert.peer_hostname || alert.peer_id || '-'}</span>
+								</div>
+	<div>
+					<span className="text-gray-500 dark:text-amber-muted">Created:</span>
+					<span className="ml-2 text-gray-900 dark:text-light-neutral">
+						{new Date(alert.created_at).toLocaleString()}
+					</span>
+				</div>
+								<div>
+									<span className="text-gray-500 dark:text-amber-muted">Sent At:</span>
+									<span className="ml-2 text-gray-900 dark:text-light-neutral">
+										{alert.sent_at ? new Date(alert.sent_at).toLocaleString() : '-'}
+									</span>
+								</div>
+							</div>
+
+							{/* Delete button */}
+							<div className="pt-2 border-t border-gray-200 dark:border-gray-border">
+								<button
+									onClick={(e) => {
+										e.stopPropagation()
+										onDelete(alert.id)
+									}}
+									className="flex items-center gap-2 px-3 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
+								>
+									<Trash2 className="w-4 h-4" />
+									Delete Alert
+								</button>
+							</div>
+						</div>
+					</td>
+				</tr>
+			)}
+		</>
+	)
 }
 
 // Access denied component
@@ -348,158 +364,274 @@ function AccessDenied() {
 }
 
 export default function Alerts() {
-  const { isAdmin } = useAuth()
-  const [filter, setFilter] = useState({
-    alert_type: '',
-    severity: '',
-    status: '',
-    start_date: '',
-    end_date: '',
-    page: 1,
-    limit: 25,
-  })
-  const [expandedRow, setExpandedRow] = useState(null)
+	const { isAdmin } = useAuth()
+	const qc = useQueryClient()
+	const showToast = useToastContext()
+	const [filter, setFilter] = useState({
+		alert_type: '',
+		severity: '',
+		status: '',
+		start_date: '',
+		end_date: '',
+		page: 1,
+		limit: 25,
+	})
+	const [expandedRow, setExpandedRow] = useState(null)
+	const [showDeleteModal, setShowDeleteModal] = useState(null)
+	const [showClearAllModal, setShowClearAllModal] = useState(false)
+  const deleteModalRef = useRef(null)
+  useFocusTrap(deleteModalRef, showDeleteModal !== null)
 
-  // Build query params
-  const queryParams = new URLSearchParams()
-  if (filter.alert_type) queryParams.set('alert_type', filter.alert_type)
-  if (filter.severity) queryParams.set('severity', filter.severity)
-  if (filter.status) queryParams.set('status', filter.status)
-  if (filter.start_date) queryParams.set('start_date', filter.start_date)
-  if (filter.end_date) queryParams.set('end_date', filter.end_date)
-  queryParams.set('page', String(filter.page))
-  queryParams.set('limit', String(filter.limit))
+	// Build query params
+	const queryParams = new URLSearchParams()
+	if (filter.alert_type) queryParams.set('alert_type', filter.alert_type)
+	if (filter.severity) queryParams.set('severity', filter.severity)
+	if (filter.status) queryParams.set('status', filter.status)
+	if (filter.start_date) queryParams.set('start_date', filter.start_date)
+	if (filter.end_date) queryParams.set('end_date', filter.end_date)
+	queryParams.set('page', String(filter.page))
+	queryParams.set('limit', String(filter.limit))
 
-  // Fetch alerts
-  const { data, isLoading } = useQuery({
-    queryKey: QUERY_KEYS.alerts(filter),
-    queryFn: () => api.get(`/alerts?${queryParams.toString()}`),
-    enabled: isAdmin,
-  })
+	// Fetch alerts
+	const { data, isLoading } = useQuery({
+		queryKey: QUERY_KEYS.alerts(filter),
+		queryFn: () => api.get(`/alerts?${queryParams.toString()}`),
+		enabled: isAdmin,
+	})
 
-  const handleClearFilters = () => {
-    setFilter({
-      alert_type: '',
-      severity: '',
-      status: '',
-      start_date: '',
-      end_date: '',
-      page: 1,
-      limit: 25,
-    })
-  }
+	// Delete single alert mutation
+	const deleteMutation = useMutation({
+		mutationFn: deleteAlert,
+		onSuccess: () => {
+			qc.invalidateQueries({ queryKey: QUERY_KEYS.alerts(filter) })
+			showToast('Alert deleted', 'success')
+			setShowDeleteModal(null)
+			setExpandedRow(null)
+		},
+		onError: (err) => showToast(err.message, 'error'),
+	})
 
-  const handlePageChange = (newPage) => {
-    setFilter(f => ({ ...f, page: newPage }))
-  }
+	// Clear all alerts mutation
+	const clearAllMutation = useMutation({
+		mutationFn: clearAllAlerts,
+		onSuccess: () => {
+			qc.invalidateQueries({ queryKey: QUERY_KEYS.alerts(filter) })
+			showToast('All alerts cleared', 'success')
+			setShowClearAllModal(false)
+			setExpandedRow(null)
+		},
+		onError: (err) => showToast(err.message, 'error'),
+	})
 
-  const toggleRow = (id) => {
-    setExpandedRow(expandedRow === id ? null : id)
-  }
+	const handleClearFilters = () => {
+		setFilter({
+			alert_type: '',
+			severity: '',
+			status: '',
+			start_date: '',
+			end_date: '',
+			page: 1,
+			limit: 25,
+		})
+	}
 
-  // Check if admin
-  if (!isAdmin) {
-    return (
-      <div className="space-y-4">
-        <PageHeader
-          title="Alerts"
-          description="View and manage system alerts"
-        />
-        <AccessDenied />
-      </div>
-    )
-  }
+	const handlePageChange = (newPage) => {
+		setFilter(f => ({ ...f, page: newPage }))
+	}
 
-  return (
-    <div className="space-y-4">
-      {/* Header */}
-      <PageHeader
-        title="Alerts"
-        description="View alert history and notifications"
-      />
+	const toggleRow = (id) => {
+		setExpandedRow(expandedRow === id ? null : id)
+	}
 
-      {/* Filter bar */}
-      <FilterBar
-        filter={filter}
-        setFilter={setFilter}
-        onClear={handleClearFilters}
-      />
+	const handleDeleteAlert = (id) => {
+		setShowDeleteModal(id)
+	}
 
-      {/* Loading state */}
-      {isLoading && <TableSkeleton rows={5} columns={7} />}
+	const confirmDeleteAlert = () => {
+		if (showDeleteModal) {
+			deleteMutation.mutate(showDeleteModal)
+		}
+	}
 
-      {/* Alerts table */}
-      {!isLoading && data && (
-        <>
-          {!data.alerts?.length ? (
-            <EmptyState
-              icon={Bell}
-              title="No alerts"
-              message="No alerts match your current filters."
-            />
-          ) : (
-            <div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-sm overflow-hidden">
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead className="bg-gray-50 dark:bg-charcoal-darkest border-b border-gray-200 dark:border-gray-border">
-                    <tr>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider">
-                        Timestamp
-                      </th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider">
-                        Alert Type
-                      </th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider">
-                        Peer
-                      </th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider">
-                        Severity
-                      </th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider">
-                        Subject
-                      </th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider">
-                        Status
-                      </th>
-                      <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider w-12">
-                        Details
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-200 dark:divide-gray-border">
-                    {data.alerts.map((alert) => (
-                      <AlertRow
-                        key={alert.id}
-                        alert={alert}
-                        isExpanded={expandedRow === alert.id}
-                        onToggle={() => toggleRow(alert.id)}
-                      />
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+	const confirmClearAll = () => {
+		clearAllMutation.mutate()
+	}
 
-              {/* Pagination */}
-              <Pagination
-                showingRange={`Showing ${(filter.page - 1) * filter.limit + 1} - ${Math.min(filter.page * filter.limit, data.total)} of ${data.total}`}
-                page={filter.page}
-                totalPages={Math.ceil(data.total / filter.limit)}
-                onPageChange={handlePageChange}
-                totalItems={data.total}
-              />
-            </div>
-          )}
-        </>
-      )}
+	// Check if admin
+	if (!isAdmin) {
+		return (
+			<div className="space-y-4">
+				<PageHeader
+					title="Alerts"
+					description="View and manage system alerts"
+				/>
+				<AccessDenied />
+			</div>
+		)
+	}
 
-      {/* No data state (before query) */}
-      {!isLoading && !data && (
-        <EmptyState
-          icon={Bell}
-          title="No alerts"
-          message="No alerts have been generated yet."
-        />
-      )}
-    </div>
-  )
+	return (
+		<div className="space-y-4">
+			{/* Header */}
+			<PageHeader
+				title="Alerts"
+				description="View alert history and notifications"
+			/>
+
+			{/* Filter bar */}
+			<FilterBar
+				filter={filter}
+				setFilter={setFilter}
+				onClear={handleClearFilters}
+			/>
+
+			{/* Clear All Alerts button */}
+			{data?.alerts?.length > 0 && (
+				<div className="flex justify-end">
+					<button
+						onClick={() => setShowClearAllModal(true)}
+						className="flex items-center gap-2 px-4 py-2 text-sm text-red-600 dark:text-red-400 border border-red-300 dark:border-red-800 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+					>
+						<Trash2 className="w-4 h-4" />
+						Clear All Alerts
+					</button>
+				</div>
+			)}
+
+			{/* Loading state */}
+			{isLoading && <TableSkeleton rows={5} columns={7} />}
+
+			{/* Alerts table */}
+			{!isLoading && data && (
+				<>
+					{!data.alerts?.length ? (
+						<EmptyState
+							icon={Bell}
+							title="No alerts"
+							message="No alerts match your current filters."
+						/>
+					) : (
+						<div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-sm overflow-hidden">
+							<div className="overflow-x-auto">
+								<table className="w-full">
+									<thead className="bg-gray-50 dark:bg-charcoal-darkest border-b border-gray-200 dark:border-gray-border">
+										<tr>
+											<th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider">
+												Timestamp
+											</th>
+											<th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider">
+												Alert Type
+											</th>
+											<th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider">
+												Peer
+											</th>
+											<th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider">
+												Severity
+											</th>
+											<th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider">
+												Subject
+											</th>
+											<th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider">
+												Status
+											</th>
+											<th className="px-4 py-3 text-center text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider w-12">
+												Details
+											</th>
+										</tr>
+									</thead>
+									<tbody className="divide-y divide-gray-200 dark:divide-gray-border">
+										{data.alerts.map((alert) => (
+											<AlertRow
+												key={alert.id}
+												alert={alert}
+												isExpanded={expandedRow === alert.id}
+												onToggle={() => toggleRow(alert.id)}
+												onDelete={handleDeleteAlert}
+											/>
+										))}
+									</tbody>
+								</table>
+							</div>
+
+							{/* Pagination */}
+							<Pagination
+								showingRange={`Showing ${(filter.page - 1) * filter.limit + 1} - ${Math.min(filter.page * filter.limit, data.total)} of ${data.total}`}
+								page={filter.page}
+								totalPages={Math.ceil(data.total / filter.limit)}
+								onPageChange={handlePageChange}
+								totalItems={data.total}
+							/>
+						</div>
+					)}
+				</>
+			)}
+
+			{/* No data state (before query) */}
+			{!isLoading && !data && (
+				<EmptyState
+					icon={Bell}
+					title="No alerts"
+					message="No alerts have been generated yet."
+				/>
+			)}
+
+			{/* Delete Alert Confirmation Modal */}
+			{showDeleteModal && (
+				<div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+					<div ref={deleteModalRef} className="bg-white dark:bg-charcoal-dark rounded-lg p-6 max-w-md w-full mx-4">
+						<h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
+							Delete Alert?
+						</h3>
+						<p className="text-gray-600 dark:text-amber-muted mb-6">
+							This action cannot be undone. The alert will be permanently removed from the history.
+						</p>
+						<div className="flex gap-3">
+							<button
+								onClick={() => setShowDeleteModal(null)}
+								className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-border rounded-lg text-gray-700 dark:text-amber-primary hover:bg-gray-50 dark:hover:bg-charcoal-darkest"
+							>
+								Cancel
+							</button>
+							<button
+								onClick={confirmDeleteAlert}
+								disabled={deleteMutation.isPending}
+								className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg disabled:opacity-50"
+							>
+								{deleteMutation.isPending ? 'Deleting...' : 'Delete'}
+							</button>
+						</div>
+					</div>
+				</div>
+			)}
+
+			{/* Clear All Alerts Confirmation Modal */}
+			{showClearAllModal && (
+				<div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+					<div className="bg-white dark:bg-charcoal-dark rounded-lg p-6 max-w-md w-full mx-4">
+						<h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
+							Clear All Alerts?
+						</h3>
+						<p className="text-gray-600 dark:text-amber-muted mb-6">
+							This will permanently delete all {data?.total?.toLocaleString() || 0} alerts. This action cannot be undone.
+						</p>
+						<div className="flex gap-3">
+							<button
+								onClick={() => setShowClearAllModal(false)}
+								className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-border rounded-lg text-gray-700 dark:text-amber-primary hover:bg-gray-50 dark:hover:bg-charcoal-darkest"
+							>
+								Cancel
+							</button>
+							<button
+								onClick={confirmClearAll}
+								disabled={clearAllMutation.isPending}
+								className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg disabled:opacity-50"
+							>
+								{clearAllMutation.isPending ? 'Clearing...' : 'Clear All Alerts'}
+							</button>
+						</div>
+					</div>
+				</div>
+			)}
+		</div>
+	)
 }

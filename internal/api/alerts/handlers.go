@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -32,7 +33,7 @@ func NewHandler(db *sql.DB, alertService *alerts.Service, encryptor *crypto.Encr
 	}
 }
 
-// ListAlerts returns paginated alert history.
+// ListAlerts returns paginated alert history with filtering support.
 func (h *Handler) ListAlerts(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
@@ -41,20 +42,116 @@ func (h *Handler) ListAlerts(w http.ResponseWriter, r *http.Request) {
 	if limit <= 0 {
 		limit = 50
 	}
-	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
-	if offset < 0 {
-		offset = 0
+
+	// Parse page parameter and calculate offset
+	// If both page and offset are provided, page takes precedence
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	var offset int
+	if page > 0 {
+		offset = (page - 1) * limit
+	} else {
+		offset, _ = strconv.Atoi(r.URL.Query().Get("offset"))
+		if offset < 0 {
+			offset = 0
+		}
 	}
 
-	history, err := alerts.ListAlertHistory(ctx, h.DB, limit, offset)
+	// Parse filter parameters
+	alertType := r.URL.Query().Get("alert_type")
+	severity := r.URL.Query().Get("severity")
+	status := r.URL.Query().Get("status")
+	startDate := r.URL.Query().Get("start_date")
+	endDate := r.URL.Query().Get("end_date")
+
+	// Build dynamic WHERE clause
+	var conditions []string
+	var args []interface{}
+
+	if alertType != "" {
+		conditions = append(conditions, "h.alert_type = ?")
+		args = append(args, alertType)
+	}
+	if severity != "" {
+		conditions = append(conditions, "h.severity = ?")
+		args = append(args, severity)
+	}
+	if status != "" {
+		conditions = append(conditions, "h.status = ?")
+		args = append(args, status)
+	}
+	if startDate != "" {
+		if t, err := time.Parse(time.RFC3339, startDate); err == nil {
+			conditions = append(conditions, "h.created_at >= ?")
+			args = append(args, t.Format(time.RFC3339))
+		}
+	}
+	if endDate != "" {
+		if t, err := time.Parse(time.RFC3339, endDate); err == nil {
+			conditions = append(conditions, "h.created_at <= ?")
+			args = append(args, t.Format(time.RFC3339))
+		}
+	}
+
+	whereClause := ""
+	if len(conditions) > 0 {
+		whereClause = "WHERE " + strings.Join(conditions, " AND ")
+	}
+
+	// Build and execute count query
+	countQuery := `SELECT COUNT(*) FROM alert_history h ` + whereClause
+	var total int
+	countArgs := make([]interface{}, len(args))
+	copy(countArgs, args)
+	if err := h.DB.QueryRowContext(ctx, countQuery, countArgs...).Scan(&total); err != nil {
+		log.ErrorContext(ctx, "Failed to get alert count", "error", err, "query", countQuery)
+		total = 0
+	}
+
+	// Build and execute main query with pagination
+	args = append(args, limit, offset)
+	query := `SELECT h.id, h.rule_id, h.alert_type, h.peer_id, p.hostname as peer_hostname, h.severity, h.subject, h.message, h.metadata, h.status, h.sent_at, h.error_message, h.created_at
+		FROM alert_history h
+		LEFT JOIN peers p ON h.peer_id = p.id
+		` + whereClause + `
+		ORDER BY h.created_at DESC
+		LIMIT ? OFFSET ?`
+
+	rows, err := h.DB.QueryContext(ctx, query, args...)
 	if err != nil {
 		log.ErrorContext(ctx, "Failed to list alert history", "error", err)
 		common.RespondError(w, http.StatusInternalServerError, "failed to list alerts")
 		return
 	}
+	defer func() {
+		if cerr := rows.Close(); cerr != nil {
+			log.Error("failed to close rows", "error", cerr)
+		}
+	}()
+
+	var history []alerts.AlertHistory
+	for rows.Next() {
+		var h alerts.AlertHistory
+		var peerHostname sql.NullString
+		if err := rows.Scan(&h.ID, &h.RuleID, &h.AlertType, &h.PeerID, &peerHostname, &h.Severity, &h.Subject,
+			&h.Message, &h.Metadata, &h.Status, &h.SentAt, &h.ErrorMessage, &h.CreatedAt); err != nil {
+			log.ErrorContext(ctx, "Failed to scan alert history row", "error", err)
+			continue
+		}
+		if peerHostname.Valid {
+			h.PeerHostname = peerHostname.String
+		}
+		history = append(history, h)
+	}
+
+	if err := rows.Err(); err != nil {
+		log.ErrorContext(ctx, "Error iterating alert history rows", "error", err)
+	}
+
+	history = common.EnsureSlice(history)
 
 	common.RespondJSON(w, http.StatusOK, map[string]interface{}{
 		"alerts": history,
+		"total":  total,
 		"limit":  limit,
 		"offset": offset,
 	})
@@ -437,11 +534,50 @@ func (h *Handler) UpdateNotificationPrefs(w http.ResponseWriter, r *http.Request
 	common.RespondJSON(w, http.StatusOK, prefs)
 }
 
+// DeleteAlert deletes a single alert by ID.
+func (h *Handler) DeleteAlert(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	vars := mux.Vars(r)
+
+	id, err := strconv.ParseUint(vars["id"], 10, 64)
+	if err != nil {
+		common.RespondError(w, http.StatusBadRequest, "invalid alert id")
+		return
+	}
+
+	if err := alerts.DeleteAlertHistory(ctx, h.DB, uint(id)); err != nil {
+		if err.Error() == "alert history not found" {
+			common.RespondError(w, http.StatusNotFound, "alert not found")
+			return
+		}
+		log.ErrorContext(ctx, "Failed to delete alert", "error", err)
+		common.RespondError(w, http.StatusInternalServerError, "failed to delete alert")
+		return
+	}
+
+	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// ClearAllAlerts deletes all alert history entries.
+func (h *Handler) ClearAllAlerts(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	if err := alerts.ClearAllAlertHistory(ctx, h.DB); err != nil {
+		log.ErrorContext(ctx, "Failed to clear all alerts", "error", err)
+		common.RespondError(w, http.StatusInternalServerError, "failed to clear alerts")
+		return
+	}
+
+	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
 // RegisterRoutes adds alert routes to the given router.
 func (h *Handler) RegisterRoutes(r *mux.Router) {
 	// Alert history routes (admin only)
 	r.HandleFunc("/alerts", h.ListAlerts).Methods("GET")
+	r.HandleFunc("/alerts", h.ClearAllAlerts).Methods("DELETE")
 	r.HandleFunc("/alerts/{id:[0-9]+}", h.GetAlert).Methods("GET")
+	r.HandleFunc("/alerts/{id:[0-9]+}", h.DeleteAlert).Methods("DELETE")
 
 	// Alert rules routes (admin only)
 	r.HandleFunc("/alert-rules", h.ListAlertRules).Methods("GET")

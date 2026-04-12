@@ -906,3 +906,168 @@ func TestGetAlert(t *testing.T) {
 		})
 	}
 }
+
+// TestListAlertsWithFiltering tests filtering functionality for ListAlerts.
+func TestListAlertsWithFiltering(t *testing.T) {
+	tests := []struct {
+		name      string
+		query     string
+		setup     func(t *testing.T, db *sql.DB)
+		wantCount int
+		wantTotal int
+		checkResp func(t *testing.T, resp map[string]interface{})
+	}{
+		{
+			name:      "filter by alert_type",
+			query:     "?alert_type=peer_offline",
+			wantCount: 2,
+			wantTotal: 2,
+			setup: func(t *testing.T, db *sql.DB) {
+				db.Exec(`INSERT INTO alert_history (rule_id, alert_type, severity, subject, message, metadata, status) VALUES (?, ?, ?, ?, ?, ?, ?)`, 1, "peer_offline", "warning", "Test 1", "Message 1", "{}", "sent")
+				db.Exec(`INSERT INTO alert_history (rule_id, alert_type, severity, subject, message, metadata, status) VALUES (?, ?, ?, ?, ?, ?, ?)`, 1, "peer_offline", "warning", "Test 2", "Message 2", "{}", "sent")
+				db.Exec(`INSERT INTO alert_history (rule_id, alert_type, severity, subject, message, metadata, status) VALUES (?, ?, ?, ?, ?, ?, ?)`, 1, "bundle_failed", "critical", "Test 3", "Message 3", "{}", "sent")
+			},
+			checkResp: func(t *testing.T, resp map[string]interface{}) {
+				alerts := resp["alerts"].([]interface{})
+				for _, a := range alerts {
+					alert := a.(map[string]interface{})
+					if alert["alert_type"] != "peer_offline" {
+						t.Errorf("expected alert_type peer_offline, got %v", alert["alert_type"])
+					}
+				}
+			},
+		},
+		{
+			name:      "filter by severity",
+			query:     "?severity=critical",
+			wantCount: 1,
+			wantTotal: 1,
+			setup: func(t *testing.T, db *sql.DB) {
+				db.Exec(`INSERT INTO alert_history (rule_id, alert_type, severity, subject, message, metadata, status) VALUES (?, ?, ?, ?, ?, ?, ?)`, 1, "peer_offline", "warning", "Test 1", "Message 1", "{}", "sent")
+				db.Exec(`INSERT INTO alert_history (rule_id, alert_type, severity, subject, message, metadata, status) VALUES (?, ?, ?, ?, ?, ?, ?)`, 1, "bundle_failed", "critical", "Test 2", "Message 2", "{}", "sent")
+			},
+		},
+		{
+			name:      "filter by status",
+			query:     "?status=failed",
+			wantCount: 1,
+			wantTotal: 1,
+			setup: func(t *testing.T, db *sql.DB) {
+				db.Exec(`INSERT INTO alert_history (rule_id, alert_type, severity, subject, message, metadata, status) VALUES (?, ?, ?, ?, ?, ?, ?)`, 1, "peer_offline", "warning", "Test 1", "Message 1", "{}", "sent")
+				db.Exec(`INSERT INTO alert_history (rule_id, alert_type, severity, subject, message, metadata, status) VALUES (?, ?, ?, ?, ?, ?, ?)`, 1, "bundle_failed", "critical", "Test 2", "Message 2", "{}", "failed")
+			},
+		},
+		{
+			name:      "filter by multiple parameters",
+			query:     "?alert_type=peer_offline&severity=warning&status=sent",
+			wantCount: 2,
+			wantTotal: 2,
+			setup: func(t *testing.T, db *sql.DB) {
+				db.Exec(`INSERT INTO alert_history (rule_id, alert_type, severity, subject, message, metadata, status) VALUES (?, ?, ?, ?, ?, ?, ?)`, 1, "peer_offline", "warning", "Test 1", "Message 1", "{}", "sent")
+				db.Exec(`INSERT INTO alert_history (rule_id, alert_type, severity, subject, message, metadata, status) VALUES (?, ?, ?, ?, ?, ?, ?)`, 1, "peer_offline", "warning", "Test 2", "Message 2", "{}", "sent")
+				db.Exec(`INSERT INTO alert_history (rule_id, alert_type, severity, subject, message, metadata, status) VALUES (?, ?, ?, ?, ?, ?, ?)`, 1, "peer_offline", "critical", "Test 3", "Message 3", "{}", "sent")
+				db.Exec(`INSERT INTO alert_history (rule_id, alert_type, severity, subject, message, metadata, status) VALUES (?, ?, ?, ?, ?, ?, ?)`, 1, "bundle_failed", "warning", "Test 4", "Message 4", "{}", "sent")
+			},
+		},
+		{
+			name:      "pagination with page parameter",
+			query:     "?page=2&limit=2",
+			wantCount: 2,
+			wantTotal: 5,
+			setup: func(t *testing.T, db *sql.DB) {
+				for i := 0; i < 5; i++ {
+					db.Exec(`INSERT INTO alert_history (rule_id, alert_type, severity, subject, message, metadata, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+						1, "peer_offline", "warning", "Test Alert", "Test message", "{}", "sent", time.Now().Add(time.Duration(i)*time.Minute))
+				}
+			},
+			checkResp: func(t *testing.T, resp map[string]interface{}) {
+				if resp["limit"].(float64) != 2 {
+					t.Errorf("expected limit 2, got %v", resp["limit"])
+				}
+				if resp["offset"].(float64) != 2 {
+					t.Errorf("expected offset 2 (from page=2), got %v", resp["offset"])
+				}
+				if resp["total"].(float64) != 5 {
+					t.Errorf("expected total 5, got %v", resp["total"])
+				}
+			},
+		},
+		{
+			name:      "returns total count",
+			query:     "?limit=2",
+			wantCount: 2,
+			wantTotal: 5,
+			setup: func(t *testing.T, db *sql.DB) {
+				for i := 0; i < 5; i++ {
+					db.Exec(`INSERT INTO alert_history (rule_id, alert_type, severity, subject, message, metadata, status) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+						1, "peer_offline", "warning", "Test Alert", "Test message", "{}", "sent")
+				}
+			},
+			checkResp: func(t *testing.T, resp map[string]interface{}) {
+				if resp["total"] == nil {
+					t.Error("expected total field in response")
+				}
+				if resp["total"].(float64) != 5 {
+					t.Errorf("expected total 5, got %v", resp["total"])
+				}
+			},
+		},
+		{
+			name:      "page takes precedence over offset",
+			query:     "?page=3&limit=1&offset=100",
+			wantCount: 1,
+			wantTotal: 5,
+			setup: func(t *testing.T, db *sql.DB) {
+				for i := 0; i < 5; i++ {
+					db.Exec(`INSERT INTO alert_history (rule_id, alert_type, severity, subject, message, metadata, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+						1, "peer_offline", "warning", "Test Alert", "Test message", "{}", "sent", time.Now().Add(time.Duration(i)*time.Minute))
+				}
+			},
+			checkResp: func(t *testing.T, resp map[string]interface{}) {
+				// page=3, limit=1 means offset should be (3-1)*1 = 2
+				if resp["offset"].(float64) != 2 {
+					t.Errorf("expected offset 2 (from page=3), got %v", resp["offset"])
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			database, cleanup := testutil.SetupTestDB(t)
+			defer cleanup()
+
+			if tt.setup != nil {
+				tt.setup(t, database)
+			}
+
+			req := httptest.NewRequest("GET", "/api/v1/alerts"+tt.query, nil)
+			w := httptest.NewRecorder()
+
+			handler := NewHandler(database, nil, nil)
+			handler.ListAlerts(w, req)
+
+			if w.Code != http.StatusOK {
+				t.Errorf("expected status %d, got %d: %s", http.StatusOK, w.Code, w.Body.String())
+			}
+
+			var resp map[string]interface{}
+			if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+				t.Fatalf("failed to decode response: %v", err)
+			}
+
+			alerts := resp["alerts"].([]interface{})
+			if len(alerts) != tt.wantCount {
+				t.Errorf("expected %d alerts, got %d", tt.wantCount, len(alerts))
+			}
+
+			if resp["total"].(float64) != float64(tt.wantTotal) {
+				t.Errorf("expected total %d, got %v", tt.wantTotal, resp["total"])
+			}
+
+			if tt.checkResp != nil {
+				tt.checkResp(t, resp)
+			}
+		})
+	}
+}

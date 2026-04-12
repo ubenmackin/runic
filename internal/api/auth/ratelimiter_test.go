@@ -7,15 +7,8 @@ import (
 	"time"
 )
 
-// resetRateLimitStore clears the global rate limit store between tests.
-func resetRateLimitStore() {
-	rateLimitMutex.Lock()
-	defer rateLimitMutex.Unlock()
-	rateLimitStore = make(map[string]*rateLimitEntry)
-}
-
 func TestCheckAndRecordFailure_NoLockout(t *testing.T) {
-	resetRateLimitStore()
+	ResetRateLimitStore()
 
 	username := "testuser_no_lockout"
 	remoteAddr := "127.0.0.1"
@@ -45,7 +38,7 @@ func TestCheckAndRecordFailure_NoLockout(t *testing.T) {
 }
 
 func TestCheckAndRecordFailure_TriggersLockout(t *testing.T) {
-	resetRateLimitStore()
+	ResetRateLimitStore()
 
 	username := "testuser_triggers_lockout"
 	remoteAddr := "127.0.0.1"
@@ -78,7 +71,7 @@ func TestCheckAndRecordFailure_TriggersLockout(t *testing.T) {
 }
 
 func TestCheckAndRecordFailure_LockedOut(t *testing.T) {
-	resetRateLimitStore()
+	ResetRateLimitStore()
 
 	username := "testuser_locked_out"
 	remoteAddr := "127.0.0.1"
@@ -109,7 +102,7 @@ func TestCheckAndRecordFailure_LockedOut(t *testing.T) {
 }
 
 func TestRecordSuccess_ClearsEntry(t *testing.T) {
-	resetRateLimitStore()
+	ResetRateLimitStore()
 
 	username := "testuser_record_success"
 	remoteAddr := "127.0.0.1"
@@ -144,7 +137,7 @@ func TestRecordSuccess_ClearsEntry(t *testing.T) {
 }
 
 func TestCleanupStaleEntries(t *testing.T) {
-	resetRateLimitStore()
+	ResetRateLimitStore()
 
 	// Create entries with past lockedUntil
 	rateLimitMutex.Lock()
@@ -179,7 +172,7 @@ func TestCleanupStaleEntries(t *testing.T) {
 }
 
 func TestCleanupStaleEntries_KeepsActiveLocks(t *testing.T) {
-	resetRateLimitStore()
+	ResetRateLimitStore()
 
 	// Create entries with future lockedUntil
 	rateLimitMutex.Lock()
@@ -214,7 +207,7 @@ func TestCleanupStaleEntries_KeepsActiveLocks(t *testing.T) {
 }
 
 func TestConcurrentAccess(t *testing.T) {
-	resetRateLimitStore()
+	ResetRateLimitStore()
 
 	const goroutines = 100
 	const username = "concurrent_user"
@@ -277,7 +270,7 @@ func TestConcurrentAccess(t *testing.T) {
 }
 
 func TestCheckAndRecordFailure_DifferentUsers(t *testing.T) {
-	resetRateLimitStore()
+	ResetRateLimitStore()
 
 	remoteAddr := "127.0.0.1"
 
@@ -307,7 +300,7 @@ func TestCheckAndRecordFailure_DifferentUsers(t *testing.T) {
 }
 
 func TestCheckAndRecordFailure_LockoutDuration(t *testing.T) {
-	resetRateLimitStore()
+	ResetRateLimitStore()
 
 	username := "testuser_duration"
 	remoteAddr := "127.0.0.1"

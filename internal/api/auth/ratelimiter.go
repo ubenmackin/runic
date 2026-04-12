@@ -104,3 +104,11 @@ func CleanupStaleEntries() {
 		}
 	}
 }
+
+// ResetRateLimitStore clears the global rate limit store.
+// This is intended for testing to ensure test isolation.
+func ResetRateLimitStore() {
+	rateLimitMutex.Lock()
+	defer rateLimitMutex.Unlock()
+	rateLimitStore = make(map[string]*rateLimitEntry)
+}

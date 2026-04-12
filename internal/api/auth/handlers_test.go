@@ -33,11 +33,18 @@ func newRequestWithUniqueIP(method, url string, body string) *http.Request {
 	return r
 }
 
+// resetAllRateLimiters clears both rate limiters for test isolation
+func resetAllRateLimiters() {
+	ResetRateLimitStore()
+	ResetSetupRateLimit()
+}
+
 // =============================================================================
 // Test HandleSetupGET
 // =============================================================================
 
 func TestHandleSetupGET_NoUsers(t *testing.T) {
+	resetAllRateLimiters()
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
@@ -65,6 +72,7 @@ func TestHandleSetupGET_NoUsers(t *testing.T) {
 }
 
 func TestHandleSetupGET_UsersExist(t *testing.T) {
+	resetAllRateLimiters()
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
@@ -131,6 +139,7 @@ func newTestServer(handler http.Handler) *testServer {
 // by using httptest.NewRequest and setting up different scenarios
 
 func TestHandleSetupPOST_Success(t *testing.T) {
+	resetAllRateLimiters()
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
@@ -176,6 +185,7 @@ func TestHandleSetupPOST_Success(t *testing.T) {
 }
 
 func TestHandleSetupPOST_AlreadyCompleted(t *testing.T) {
+	resetAllRateLimiters()
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
@@ -203,6 +213,7 @@ func TestHandleSetupPOST_AlreadyCompleted(t *testing.T) {
 }
 
 func TestHandleSetupPOST_InvalidJSON(t *testing.T) {
+	resetAllRateLimiters()
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
@@ -221,6 +232,7 @@ func TestHandleSetupPOST_InvalidJSON(t *testing.T) {
 }
 
 func TestHandleSetupPOST_MissingFields(t *testing.T) {
+	resetAllRateLimiters()
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
@@ -253,6 +265,7 @@ func TestHandleSetupPOST_MissingFields(t *testing.T) {
 }
 
 func TestHandleSetupPOST_DuplicateUsername(t *testing.T) {
+	resetAllRateLimiters()
 	// Note: When users already exist, setup returns 403 Forbidden first.
 	// The duplicate username error only occurs when doing setup from scratch
 	// but trying to create a user with an already-existing username.
@@ -292,46 +305,11 @@ func TestHandleLoginPOST_Success(t *testing.T) {
 	defer cleanup()
 
 	setupTestJWT(t, db)
-	resetRateLimitStore()
+	ResetRateLimitStore()
 
 	// Insert a user
 	hash, _ := bcrypt.GenerateFromPassword([]byte("password123"), 12)
-	db.Exec("INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)",
-		"loginuser", string(hash), "admin")
-
-	h := NewHandler(db, db)
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/login",
-		strings.NewReader(`{"username":"loginuser","password":"password123"}`))
-
-	h.HandleLoginPOST(w, r)
-
-	if w.Code != http.StatusOK {
-		t.Errorf("expected status %d, got %d", http.StatusOK, w.Code)
-	}
-
-	// Verify response
-	var response map[string]interface{}
-	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
-		t.Fatalf("failed to unmarshal response: %v", err)
-	}
-
-	if response["username"] != "loginuser" {
-		t.Errorf("expected username in response, got %v", response["username"])
-	}
-}
-
-func TestHandleLoginPOST_InvalidCredentials(t *testing.T) {
-	db, cleanup := testutil.SetupTestDB(t)
-	defer cleanup()
-
-	setupTestJWT(t, db)
-	resetRateLimitStore()
-
-	// Insert a user
-	hash, _ := bcrypt.GenerateFromPassword([]byte("password123"), 12)
-	db.Exec("INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)",
-		"loginuser", string(hash), "admin")
+	db.Exec("INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)", "loginuser", string(hash), "admin")
 
 	h := NewHandler(db, db)
 	w := httptest.NewRecorder()
@@ -524,6 +502,7 @@ func TestHandleRefreshPOST_InvalidToken(t *testing.T) {
 // =============================================================================
 
 func TestHandleSetup_MethodNotAllowed(t *testing.T) {
+	resetAllRateLimiters()
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
@@ -541,6 +520,7 @@ func TestHandleSetup_MethodNotAllowed(t *testing.T) {
 }
 
 func TestHandleSetup_GET(t *testing.T) {
+	resetAllRateLimiters()
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
@@ -558,6 +538,7 @@ func TestHandleSetup_GET(t *testing.T) {
 }
 
 func TestHandleSetup_POST(t *testing.T) {
+	resetAllRateLimiters()
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 

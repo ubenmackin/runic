@@ -142,6 +142,7 @@ type AlertHistory struct {
 	RuleID       uint           `json:"rule_id" gorm:"not null;index"`
 	AlertType    AlertType      `json:"alert_type" gorm:"size:50;not null;index"`
 	PeerID       *int           `json:"peer_id,omitempty" gorm:"index"`
+	PeerHostname string         `json:"peer_hostname,omitempty" gorm:"-"` // Populated from JOIN, not a DB column
 	Severity     Severity       `json:"severity" gorm:"size:20;not null"`
 	Subject      string         `json:"subject" gorm:"size:500;not null"`
 	Message      string         `json:"message" gorm:"type:text;not null"`

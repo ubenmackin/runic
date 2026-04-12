@@ -185,3 +185,10 @@ func (rl *RateLimiter) Stop() {
 		close(rl.stopCleanup)
 	})
 }
+
+// Reset clears all rate limit state. This is intended for testing to ensure test isolation.
+func (rl *RateLimiter) Reset() {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	rl.requests = make(map[string][]time.Time)
+}

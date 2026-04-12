@@ -178,8 +178,10 @@ func ListAlertHistory(ctx context.Context, database db.Querier, limit, offset in
 	}
 
 	rows, err := database.QueryContext(ctx,
-		`SELECT id, rule_id, alert_type, peer_id, severity, subject, message, metadata, status, sent_at, error_message, created_at
-		 FROM alert_history ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+		`SELECT h.id, h.rule_id, h.alert_type, h.peer_id, p.hostname as peer_hostname, h.severity, h.subject, h.message, h.metadata, h.status, h.sent_at, h.error_message, h.created_at
+		FROM alert_history h
+		LEFT JOIN peers p ON h.peer_id = p.id
+		ORDER BY h.created_at DESC LIMIT ? OFFSET ?`,
 		limit, offset,
 	)
 	if err != nil {
@@ -194,9 +196,13 @@ func ListAlertHistory(ctx context.Context, database db.Querier, limit, offset in
 	var historyList []AlertHistory
 	for rows.Next() {
 		var h AlertHistory
-		if err := rows.Scan(&h.ID, &h.RuleID, &h.AlertType, &h.PeerID, &h.Severity, &h.Subject,
+		var peerHostname sql.NullString
+		if err := rows.Scan(&h.ID, &h.RuleID, &h.AlertType, &h.PeerID, &peerHostname, &h.Severity, &h.Subject,
 			&h.Message, &h.Metadata, &h.Status, &h.SentAt, &h.ErrorMessage, &h.CreatedAt); err != nil {
 			return nil, fmt.Errorf("failed to scan alert history: %w", err)
+		}
+		if peerHostname.Valid {
+			h.PeerHostname = peerHostname.String
 		}
 		historyList = append(historyList, h)
 	}
@@ -435,7 +441,7 @@ func GetLastAlertForRuleAndPeer(ctx context.Context, database db.Querier, ruleID
 
 	err := database.QueryRowContext(ctx,
 		`SELECT id, rule_id, alert_type, peer_id, severity, subject, message, metadata, status, sent_at, error_message, created_at
-		 FROM alert_history WHERE rule_id = ? AND peer_id = ? ORDER BY created_at DESC LIMIT 1`,
+		FROM alert_history WHERE rule_id = ? AND peer_id = ? ORDER BY created_at DESC LIMIT 1`,
 		ruleID, peerID,
 	).Scan(&h.ID, &h.RuleID, &h.AlertType, &h.PeerID, &h.Severity, &h.Subject, &h.Message,
 		&h.Metadata, &h.Status, &h.SentAt, &h.ErrorMessage, &h.CreatedAt)
@@ -448,4 +454,33 @@ func GetLastAlertForRuleAndPeer(ctx context.Context, database db.Querier, ruleID
 	}
 
 	return &h, nil
+}
+
+// DeleteAlertHistory deletes an alert history entry by ID.
+func DeleteAlertHistory(ctx context.Context, database db.Querier, id uint) error {
+	result, err := database.ExecContext(ctx, `DELETE FROM alert_history WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("failed to delete alert history: %w", err)
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+
+	if affected == 0 {
+		return fmt.Errorf("alert history not found")
+	}
+
+	return nil
+}
+
+// ClearAllAlertHistory deletes all alert history entries.
+func ClearAllAlertHistory(ctx context.Context, database db.Querier) error {
+	_, err := database.ExecContext(ctx, `DELETE FROM alert_history`)
+	if err != nil {
+		return fmt.Errorf("failed to clear alert history: %w", err)
+	}
+
+	return nil
 }
