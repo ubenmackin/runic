@@ -2,6 +2,7 @@
 package alerts
 
 import (
+	"strconv"
 	"sync"
 	"time"
 )
@@ -91,6 +92,5 @@ func (t *Throttler) EntryCount() int {
 
 // makeKey creates a unique key for alert type and peer ID combination.
 func makeKey(alertType string, peerID int) string {
-	// Use a simple concatenation that handles the peerID properly
-	return alertType + "|" + time.Duration(peerID).String()
+	return alertType + "|" + strconv.Itoa(peerID)
 }
