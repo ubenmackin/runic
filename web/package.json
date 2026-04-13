@@ -6,7 +6,11 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:coverage:ui": "vitest --coverage --ui"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.17.0",
@@ -20,9 +24,12 @@
   "devDependencies": {
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.5.2",
     "@vitejs/plugin-react": "^4.3.4",
+    "@vitest/coverage-v8": "^4.1.4",
     "autoprefixer": "^10.4.17",
     "jsdom": "^29.0.2",
+    "msw": "^2.7.0",
     "postcss": "^8.4.40",
     "tailwindcss": "^3.4.1",
     "vite": "^6.4.2",
