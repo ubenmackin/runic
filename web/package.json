@@ -10,18 +10,22 @@
   },
   "dependencies": {
     "@tanstack/react-query": "^5.17.0",
+    "d3": "^7.9.0",
     "lucide-react": "^0.312.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-router-dom": "^6.30.3",
-    "d3": "^7.9.0",
     "zustand": "^4.5.0"
   },
   "devDependencies": {
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
     "@vitejs/plugin-react": "^4.3.4",
     "autoprefixer": "^10.4.17",
+    "jsdom": "^29.0.2",
     "postcss": "^8.4.40",
     "tailwindcss": "^3.4.1",
-    "vite": "^6.4.2"
+    "vite": "^6.4.2",
+    "vitest": "^4.1.4"
   }
 }

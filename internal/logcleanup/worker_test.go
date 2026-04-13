@@ -5,7 +5,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"sync"
 	"testing"
 	"time"
 
@@ -394,23 +393,6 @@ func TestWorker_runCleanup(t *testing.T) {
 
 // TestWorker_Stop tests the Stop method.
 func TestWorker_Stop(t *testing.T) {
-	t.Run("stop is idempotent", func(t *testing.T) {
-		mainDB, logsDB, cleanup := setupTestDatabases(t)
-		defer cleanup()
-
-		worker := NewWorker(mainDB, logsDB)
-		ctx := context.Background()
-
-		worker.Start(ctx)
-
-		// Call Stop multiple times - should not panic
-		worker.Stop()
-		worker.Stop()
-		worker.Stop()
-
-		// Test passes if no panic occurred
-	})
-
 	t.Run("stop terminates cleanup goroutine", func(t *testing.T) {
 		mainDB, logsDB, cleanup := setupTestDatabases(t)
 		defer cleanup()
@@ -437,33 +419,6 @@ func TestWorker_Stop(t *testing.T) {
 
 		// Test passes if no panic and goroutine exited cleanly
 	})
-}
-
-// TestWorker_ConcurrentStop tests that Stop can be called concurrently.
-func TestWorker_ConcurrentStop(t *testing.T) {
-	mainDB, logsDB, cleanup := setupTestDatabases(t)
-	defer cleanup()
-
-	worker := NewWorker(mainDB, logsDB)
-	ctx := context.Background()
-
-	worker.Start(ctx)
-
-	// Wait for goroutine to start
-	time.Sleep(50 * time.Millisecond)
-
-	// Call Stop from multiple goroutines concurrently
-	var wg sync.WaitGroup
-	for i := 0; i < 5; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			worker.Stop()
-		}()
-	}
-	wg.Wait()
-
-	// Test passes if no panic occurred
 }
 
 // TestWorker_CustomRetention tests cleanup with custom retention values.

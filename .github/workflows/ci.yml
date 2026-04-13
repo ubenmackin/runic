@@ -30,30 +30,56 @@ jobs:
 
   frontend:
     needs: changes
-    if: ${{ needs.changes.outputs.frontend == 'true' }}
     name: Build Frontend
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Cache frontend build
+        id: cache-dist
+        uses: actions/cache@v4
+        with:
+          path: web/dist/
+          # This key creates a unique fingerprint of your frontend source code.
+          # Adjust the paths inside hashFiles() if your source code lives elsewhere!
+          key: ${{ runner.os }}-frontend-dist-${{ hashFiles('web/src/**', 'web/index.html', 'web/package-lock.json', 'web/*.config.*') }}
+
       - name: Set up Node.js
+        if: steps.cache-dist.outputs.cache-hit != 'true'
         uses: actions/setup-node@v4
         with:
           node-version: '24'
           cache: 'npm'
           cache-dependency-path: web/package-lock.json
+
       - name: Build
+        if: steps.cache-dist.outputs.cache-hit != 'true'
         run: |
           cd web
           npm ci
           npm run build
 
+      - name: Upload frontend artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: web/dist/
+          retention-days: 1
+
   backend:
-    needs: changes
+    needs: [changes, frontend]
     if: ${{ needs.changes.outputs.backend == 'true' }}
     name: Test and Build Go
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Download frontend artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: web/dist/
+
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -81,11 +107,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version: '1.25.8'
           cache: false # Lint action has its own cache logic
+
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v7
         with:

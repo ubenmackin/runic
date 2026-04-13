@@ -7,6 +7,12 @@ import { useFocusTrap } from '../hooks/useFocusTrap'
 import { useAuth } from '../hooks/useAuth'
 import PageHeader from '../components/PageHeader'
 import AlertSettings from '../components/AlertSettings'
+import {
+  alertTypes,
+  transformPrefsToBackend,
+  transformPrefsFromBackend,
+  transformSMTPFromBackend,
+} from '../utils/settingsTransform'
 
 export default function Settings() {
   const qc = useQueryClient()
@@ -49,24 +55,21 @@ export default function Settings() {
   })
   const [showPassword, setShowPassword] = useState(false)
 
+  // Track if initial data has been loaded to prevent overwriting user edits on refetch
+  const smtpLoadedRef = useRef(false)
+  const prefsLoadedRef = useRef(false)
+
   const { data: smtpConfig, isLoading: smtpLoading } = useQuery({
     queryKey: QUERY_KEYS.smtpConfig(),
     queryFn: getSMTPConfig,
     enabled: isAdmin,
   })
 
-  // Update form data when SMTP config loads
+  // Update form data when SMTP config loads (only on initial load)
   useEffect(() => {
-    if (smtpConfig) {
-      setSmtpFormData({
-        host: smtpConfig.host || '',
-        port: smtpConfig.port || 587,
-        username: smtpConfig.username || '',
-        password: '', // Never populate password from fetched config
-        use_tls: smtpConfig.use_tls ?? true,
-        from_address: smtpConfig.from_address || '',
-        enabled: smtpConfig.enabled ?? false,
-      })
+    if (smtpConfig && !smtpLoadedRef.current) {
+      setSmtpFormData(transformSMTPFromBackend(smtpConfig))
+      smtpLoadedRef.current = true
     }
   }, [smtpConfig])
 
@@ -74,6 +77,7 @@ export default function Settings() {
     mutationFn: updateSMTPConfig,
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: QUERY_KEYS.smtpConfig() })
+      smtpLoadedRef.current = false // Allow next load to update form with saved data
       showToast('SMTP configuration updated', 'success')
     },
     onError: (err) => showToast(err.message, 'error'),
@@ -92,15 +96,7 @@ export default function Settings() {
   const [showQuietHours, setShowQuietHours] = useState(false)
   const [showDigest, setShowDigest] = useState(false)
 
-  // Alert types for per-user toggles
-  const alertTypes = [
-    { key: 'bundle_deployed', label: 'Bundle Deployed' },
-    { key: 'bundle_failed', label: 'Bundle Failed' },
-    { key: 'peer_offline', label: 'Peer Offline' },
-    { key: 'peer_online', label: 'Peer Online' },
-    { key: 'blocked_spike', label: 'Blocked Spike' },
-    { key: 'new_peer', label: 'New Peer' },
-  ]
+
 
   // Timezone options
   const timezones = [
@@ -122,19 +118,21 @@ export default function Settings() {
     retry: false,
   })
 
-  // Update local state when preferences load
+  // Update local state when preferences load - transform flat backend response to nested frontend structure
+  // Only update on initial load to prevent overwriting user edits on refetch
   useEffect(() => {
-    if (userPrefs) {
-      setNotificationPrefs(userPrefs)
+    if (userPrefs && !prefsLoadedRef.current) {
+      setNotificationPrefs(transformPrefsFromBackend(userPrefs))
+      prefsLoadedRef.current = true
     }
   }, [userPrefs])
 
   // Update preferences mutation
   const updatePrefsMutation = useMutation({
-    mutationFn: updateNotificationPrefs,
+    mutationFn: (prefs) => updateNotificationPrefs(transformPrefsToBackend(prefs)),
     onSuccess: (data) => {
-      setNotificationPrefs(data)
       qc.invalidateQueries({ queryKey: QUERY_KEYS.notificationPrefs() })
+      prefsLoadedRef.current = false // Allow next load to update form with saved data
       showToast('Notification preferences saved', 'success')
     },
     onError: (err) => showToast(err.message, 'error'),
@@ -558,7 +556,7 @@ export default function Settings() {
                             type={showPassword ? 'text' : 'password'}
                             value={smtpFormData.password}
                             onChange={(e) => setSmtpFormData({ ...smtpFormData, password: e.target.value })}
-                            placeholder={smtpConfig?.has_password ? '••••••••' : 'Enter password'}
+                            placeholder={smtpConfig?.password_set ? '••••••••' : 'Enter password'}
                             className="w-full px-3 py-2 pr-10 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
                           />
                           <button
