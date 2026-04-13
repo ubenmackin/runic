@@ -51,7 +51,7 @@ jobs:
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v7
         with:
-          version: v2.7.2
+          version: v2.11.4
 
       # 5. Build Phase
       - name: Build Go binary

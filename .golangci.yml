@@ -18,40 +18,40 @@ linters:
     - unconvert
     - gocritic
 
+  settings:
+    errcheck:
+      check-type-assertions: true
+      check-blank: false
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - performance
+    misspell:
+      locale: US
+    staticcheck:
+      checks:
+        - all
+        - -SA1009
+
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters: [gocritic]
+      - path: _generated\.go
+        linters: [all]
+      - path: vendor/
+        linters: [all]
+
 formatters:
   enable:
     - gofmt
     - goimports
-
-linters.settings:
-  errcheck:
-    check-type-assertions: true
-    check-blank: false
-
-  gocritic:
-    enabled-tags:
-      - diagnostic
-      - performance
-
-  gofmt:
-    simplify: true
-
-  goimports:
-    local-prefixes: runic
-
-  misspell:
-    locale: US
-
-  staticcheck:
-    checks:
-      - all
-      - -SA1009
+  settings:
+    gofmt:
+      simplify: true
+    goimports:
+      local-prefixes: [runic]
 
 issues:
-  exclude:
-    - linters: [gocritic]
-      path: _test\.go
-    - linters: [all]
-      path: _generated\.go
-    - linters: [all]
-      path: vendor/
+  max-issues-per-linter: 0
+  max-same-issues: 0
