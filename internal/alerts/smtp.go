@@ -287,12 +287,19 @@ func (s *SMTPSender) sanitizeHTMLBody(body string) string {
 func (s *SMTPSender) buildMessage(to, subject, body, contentType string) string {
 	var msg bytes.Buffer
 
-	fmt.Fprintf(&msg, "From: %s\r\n", s.config.FromAddress)
-	fmt.Fprintf(&msg, "To: %s\r\n", to)
-	fmt.Fprintf(&msg, "Subject: %s\r\n", subject)
+	// Sanitize ALL header values at the sink to prevent header injection
+	// This ensures protection regardless of whether caller sanitized values
+	safeFrom := s.sanitizeHeaderValue(s.config.FromAddress)
+	safeTo := s.sanitizeHeaderValue(to)
+	safeSubject := s.sanitizeHeaderValue(subject)
+
+	fmt.Fprintf(&msg, "From: %s\r\n", safeFrom)
+	fmt.Fprintf(&msg, "To: %s\r\n", safeTo)
+	fmt.Fprintf(&msg, "Subject: %s\r\n", safeSubject)
 	fmt.Fprintf(&msg, "Date: %s\r\n", time.Now().Format(time.RFC1123Z))
 	msg.WriteString("MIME-Version: 1.0\r\n")
-	fmt.Fprintf(&msg, "Content-Type: %s; charset=\"UTF-8\"\r\n", contentType)
+	safeContentType := s.sanitizeHeaderValue(contentType)
+	fmt.Fprintf(&msg, "Content-Type: %s; charset=\"UTF-8\"\r\n", safeContentType)
 
 	// Sanitize HTML body to prevent script injection
 	safeBody := body
