@@ -8,13 +8,13 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/http"
-	"runic/internal/common/log"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 
+	"runic/internal/common/log"
 	"runic/internal/db"
 )
 
