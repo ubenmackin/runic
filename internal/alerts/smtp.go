@@ -27,7 +27,18 @@ var (
 	// Matches event handler attributes (onclick, onerror, onload, etc.)
 	// Handles both quoted and unquoted attribute values
 	eventHandlerRegex = regexp.MustCompile(`(?i)\s+on\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)`)
-	// Matches dangerous URL protocols (javascript:, data:, vbscript:) in href/src/style attributes
+	// dangerousURLRegex matches dangerous URL protocols (javascript:, data:, vbscript:) in
+	// href, src, and style attributes.
+	//
+	// SECURITY NOTE: This regex does NOT handle HTML entity-encoded protocols
+	// (e.g., &#106;avascript: or &#x6A;avascript:). This is acceptable because:
+	// 1. User-controlled content (PeerName, Message, Type) is ALWAYS htmlEscaped
+	//    before reaching this function, converting & to &amp;
+	// 2. Entity-encoded content becomes double-encoded (&#106; → &amp;#106;)
+	// 3. Browsers display literal text, preventing protocol execution
+	//
+	// If unescaped user content ever reaches this function, the entity bypass would work.
+	// This sanitizer is defense-in-depth for trusted/system-generated content.
 	dangerousURLRegex = regexp.MustCompile(`(?i)(href|src|style)\s*=\s*(?:"[^"]*(?:javascript|data|vbscript)[^"]*"|'[^']*(?:javascript|data|vbscript)[^']*')`)
 	// Matches dangerous tags that can carry XSS payloads or cause content injection
 	dangerousTagRegex = regexp.MustCompile(`(?i)</?(?:iframe|object|embed|form|svg|math|style|link|base)[^>]*>`)
@@ -224,7 +235,31 @@ func (s *SMTPSender) htmlEscape(text string) string {
 
 // sanitizeHTMLBody sanitizes HTML email content to prevent script/content injection.
 // It removes dangerous HTML elements and attributes that could be used for XSS attacks.
-// This is a defense-in-depth measure to catch any missed untrusted interpolation.
+//
+// DEFENSE-IN-DEPTH ARCHITECTURE:
+// This function is NOT the primary XSS prevention mechanism. The primary defense is:
+//   - htmlEscape(): All user-controlled content (PeerName, Message, Type) is
+//     HTML-entity escaped before insertion into templates
+//   - SanitizeAlertInput(): Control characters removed to prevent header injection
+//
+// This function serves as a safety net to catch any missed untrusted interpolation
+// in the system-generated email content.
+//
+// KNOWN LIMITATIONS:
+//   - HTML entity-encoded protocols (&#106;avascript:) are NOT detected
+//     (mitigated by htmlEscape upstream)
+//   - CSS expression() in style attributes is NOT removed
+//     (IE-specific attack, mitigated by htmlEscape upstream)
+//   - This uses regex-based sanitization which is NOT a full HTML parser
+//     (acceptable for our controlled email templates)
+//
+// Patterns removed:
+// - <script>...</script> tags and contents
+// - <style>...</style> tags and contents (CSS injection)
+// - Event handler attributes (onclick, onerror, onload, etc.)
+// - Dangerous URL protocols (javascript:, data:, vbscript:) in href/src/style
+// - Dangerous tags (iframe, object, embed, form, svg, math, link, base)
+// - Dangerous meta refresh tags with javascript: URLs
 func (s *SMTPSender) sanitizeHTMLBody(body string) string {
 	// Remove script tags and their contents
 	body = scriptRegex.ReplaceAllString(body, "")

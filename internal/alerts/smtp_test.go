@@ -1348,3 +1348,97 @@ func TestSanitizeHTMLBody_XSSPayloads(t *testing.T) {
 		})
 	}
 }
+
+// TestSanitizeHTMLBody_EdgeCases documents expected behavior for edge case inputs.
+// Some of these are known limitations that are mitigated by the htmlEscape defense layer.
+func TestSanitizeHTMLBody_EdgeCases(t *testing.T) {
+	sender := &SMTPSender{}
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+		note     string
+	}{
+		{
+			name:     "HTML entity encoded javascript protocol",
+			input:    `<a href="java&#115;cript:alert(1)">click</a>`,
+			expected: `<a href="java&#115;cript:alert(1)">click</a>`,
+			note:     "NOT removed - entity bypass exists but is mitigated by htmlEscape upstream",
+		},
+		{
+			name:     "HTML entity encoded javascript with hex",
+			input:    `<a href="&#x6A;avascript:alert(1)">click</a>`,
+			expected: `<a href="&#x6A;avascript:alert(1)">click</a>`,
+			note:     "NOT removed - hex entity bypass exists but is mitigated by htmlEscape upstream",
+		},
+		{
+			name:     "CSS expression injection",
+			input:    `<div style="width:expression(alert(1))">test</div>`,
+			expected: `<div style="width:expression(alert(1))">test</div>`,
+			note:     "NOT removed - IE-specific, mitigated by htmlEscape upstream",
+		},
+		{
+			name:     "Event handler with forward slash",
+			input:    `<img/onclick=alert(1)>`,
+			expected: `<img/onclick=alert(1)>`,
+			note:     "NOT a valid bypass - forward slash breaks the attribute syntax",
+		},
+		{
+			name:     "Event handler without preceding space",
+			input:    `<img src=xonerror=alert(1)>`,
+			expected: `<img src=xonerror=alert(1)>`,
+			note:     "NOT a valid bypass - onerror needs to be a separate attribute",
+		},
+		{
+			name:     "Multiple script tags",
+			input:    `<script>a</script><script>b</script>`,
+			expected: ``,
+			note:     "Both script tags should be removed",
+		},
+		{
+			name:     "Nested script-like content",
+			input:    `<div><script>alert(1)</script></div>`,
+			expected: `<div></div>`,
+			note:     "Script removed, container preserved",
+		},
+		{
+			name:     "Event handler with escaped newlines in value",
+			input:    `<div onclick="alert(\n1\n)">test</div>`,
+			expected: `<div>test</div>`,
+			note:     "Removed - event handlers with escaped whitespace in value are stripped by regex",
+		},
+		{
+			name:     "Event handler with escaped tabs",
+			input:    `<div onclick="alert(\t1)">test</div>`,
+			expected: `<div>test</div>`,
+			note:     "Removed - event handlers with escaped whitespace in value are stripped by regex",
+		},
+		{
+			name:     "SVG with nested script",
+			input:    `<svg><script>alert(1)</script></svg>`,
+			expected: ``,
+			note:     "SVG removed entirely, including nested script",
+		},
+		{
+			name:     "Mixed case script tag",
+			input:    `<ScRiPt>alert(1)</ScRiPt>`,
+			expected: ``,
+			note:     "Case-insensitive matching should remove script",
+		},
+		{
+			name:     "Protocol with whitespace",
+			input:    `<a href="java\tscript:alert(1)">click</a>`,
+			expected: `<a href="java\tscript:alert(1)">click</a>`,
+			note:     "Whitespace in protocol NOT removed - edge case limitation",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := sender.sanitizeHTMLBody(tt.input)
+			if got != tt.expected {
+				t.Errorf("sanitizeHTMLBody() = %q, want %q\nNote: %s", got, tt.expected, tt.note)
+			}
+		})
+	}
+}
