@@ -63,7 +63,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: frontend-dist
-          path: web/dist/
+          path: internal/api/web/dist/
           retention-days: 1
 
   frontend-test:
