@@ -13,6 +13,7 @@ import (
 
 	"runic/internal/alerts"
 	"runic/internal/api/common"
+	"runic/internal/auth"
 	"runic/internal/common/log"
 	"runic/internal/crypto"
 )
@@ -80,13 +81,34 @@ func (h *Handler) ListAlerts(w http.ResponseWriter, r *http.Request) {
 		args = append(args, status)
 	}
 	if startDate != "" {
-		if t, err := time.Parse(time.RFC3339, startDate); err == nil {
+		// Try RFC3339 first, then YYYY-MM-DD
+		var t time.Time
+		var err error
+		t, err = time.Parse(time.RFC3339, startDate)
+		if err != nil {
+			t, err = time.Parse("2006-01-02", startDate)
+			if err == nil {
+				t = time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
+			}
+		}
+		if err == nil {
 			conditions = append(conditions, "h.created_at >= ?")
 			args = append(args, t.Format(time.RFC3339))
 		}
 	}
 	if endDate != "" {
-		if t, err := time.Parse(time.RFC3339, endDate); err == nil {
+		// Try RFC3339 first, then YYYY-MM-DD
+		var t time.Time
+		var err error
+		t, err = time.Parse(time.RFC3339, endDate)
+		if err != nil {
+			t, err = time.Parse("2006-01-02", endDate)
+			if err == nil {
+				// For end date, use end of day (23:59:59)
+				t = time.Date(t.Year(), t.Month(), t.Day(), 23, 59, 59, 0, time.UTC)
+			}
+		}
+		if err == nil {
 			conditions = append(conditions, "h.created_at <= ?")
 			args = append(args, t.Format(time.RFC3339))
 		}
@@ -388,18 +410,20 @@ func (h *Handler) UpdateSMTPConfig(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) TestSMTP(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	// Get current user's email
-	userID, ok := ctx.Value("user_id").(int)
-	if !ok {
+	// Get username from context
+	username := auth.UsernameFromContext(ctx)
+	if username == "" {
 		common.RespondError(w, http.StatusUnauthorized, "not authenticated")
 		return
 	}
 
+	// Look up user ID from username
+	var userID int
 	var email string
-	err := h.DB.QueryRowContext(ctx, "SELECT email FROM users WHERE id = ?", userID).Scan(&email)
+	err := h.DB.QueryRowContext(ctx, "SELECT id, email FROM users WHERE username = ?", username).Scan(&userID, &email)
 	if err != nil {
-		log.ErrorContext(ctx, "Failed to get user email", "error", err)
-		common.RespondError(w, http.StatusInternalServerError, "failed to get user email")
+		log.ErrorContext(ctx, "Failed to get user", "error", err)
+		common.RespondError(w, http.StatusInternalServerError, "failed to get user")
 		return
 	}
 
@@ -442,9 +466,19 @@ func (h *Handler) TestSMTP(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) GetNotificationPrefs(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	userID, ok := ctx.Value("user_id").(int)
-	if !ok {
+	// Get username from context
+	username := auth.UsernameFromContext(ctx)
+	if username == "" {
 		common.RespondError(w, http.StatusUnauthorized, "not authenticated")
+		return
+	}
+
+	// Look up user ID from username
+	var userID int
+	err := h.DB.QueryRowContext(ctx, "SELECT id FROM users WHERE username = ?", username).Scan(&userID)
+	if err != nil {
+		log.ErrorContext(ctx, "Failed to get user", "error", err)
+		common.RespondError(w, http.StatusInternalServerError, "failed to get user")
 		return
 	}
 
@@ -473,9 +507,19 @@ func (h *Handler) GetNotificationPrefs(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) UpdateNotificationPrefs(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	userID, ok := ctx.Value("user_id").(int)
-	if !ok {
+	// Get username from context
+	username := auth.UsernameFromContext(ctx)
+	if username == "" {
 		common.RespondError(w, http.StatusUnauthorized, "not authenticated")
+		return
+	}
+
+	// Look up user ID from username
+	var userID int
+	err := h.DB.QueryRowContext(ctx, "SELECT id FROM users WHERE username = ?", username).Scan(&userID)
+	if err != nil {
+		log.ErrorContext(ctx, "Failed to get user", "error", err)
+		common.RespondError(w, http.StatusInternalServerError, "failed to get user")
 		return
 	}
 

@@ -3,6 +3,7 @@ package alerts
 
 import (
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"time"
 )
@@ -37,6 +38,47 @@ const (
 	AlertStatusFailed    AlertStatus = "failed"
 	AlertStatusThrottled AlertStatus = "throttled"
 )
+
+// NullTime is a custom type that wraps sql.NullTime with proper JSON marshaling.
+// It marshals to null when invalid, and to the RFC3339 formatted time string when valid.
+type NullTime struct {
+	sql.NullTime
+}
+
+// MarshalJSON implements the json.Marshaler interface for NullTime.
+// Returns "null" for invalid times, or the RFC3339 formatted time for valid times.
+func (nt NullTime) MarshalJSON() ([]byte, error) {
+	if !nt.Valid {
+		return []byte("null"), nil
+	}
+	return json.Marshal(nt.Time)
+}
+
+// UnmarshalJSON implements the json.Unmarshaler interface for NullTime.
+func (nt *NullTime) UnmarshalJSON(data []byte) error {
+	if string(data) == "null" {
+		nt.Valid = false
+		return nil
+	}
+	if err := json.Unmarshal(data, &nt.Time); err != nil {
+		return err
+	}
+	nt.Valid = true
+	return nil
+}
+
+// Scan implements the sql.Scanner interface for NullTime.
+func (nt *NullTime) Scan(value interface{}) error {
+	return nt.NullTime.Scan(value)
+}
+
+// Value implements the driver.Valuer interface for NullTime.
+func (nt NullTime) Value() (driver.Value, error) {
+	if !nt.Valid {
+		return nil, nil
+	}
+	return nt.Time, nil
+}
 
 // String returns the string representation of the AlertType.
 func (at AlertType) String() string {
@@ -148,7 +190,7 @@ type AlertHistory struct {
 	Message      string         `json:"message" gorm:"type:text;not null"`
 	Metadata     string         `json:"metadata,omitempty" gorm:"type:text"` // JSON string for additional context
 	Status       AlertStatus    `json:"status" gorm:"size:20;not null;index"`
-	SentAt       sql.NullTime   `json:"sent_at" gorm:"index"`
+	SentAt       NullTime       `json:"sent_at" gorm:"index"`
 	ErrorMessage sql.NullString `json:"error_message,omitempty" gorm:"type:text"`
 	CreatedAt    time.Time      `json:"created_at" gorm:"autoCreateTime;index"`
 }
