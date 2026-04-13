@@ -79,6 +79,9 @@ func (s *SMTPSender) sendEmail(to, subject, body, contentType string) error {
 		password = decrypted
 	}
 
+	// Sanitize header values to prevent email header injection.
+	subject = s.sanitizeHeaderValue(subject)
+
 	// Build the email message
 	message := s.buildMessage(to, subject, body, contentType)
 
@@ -186,6 +189,13 @@ func (s *SMTPSender) sendWithTLS(addr string, auth smtp.Auth, from string, to []
 	}
 
 	return nil
+}
+
+// sanitizeHeaderValue removes CR/LF from header values to prevent header injection.
+func (s *SMTPSender) sanitizeHeaderValue(value string) string {
+	value = strings.ReplaceAll(value, "\r", "")
+	value = strings.ReplaceAll(value, "\n", "")
+	return strings.TrimSpace(value)
 }
 
 // buildMessage constructs the email message with headers.
