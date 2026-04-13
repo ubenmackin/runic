@@ -184,7 +184,7 @@ func (h *Handler) GetAlert(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	vars := mux.Vars(r)
 
-	id, err := strconv.ParseUint(vars["id"], 10, 64)
+	id, err := common.ParseUintSafe(vars["id"])
 	if err != nil {
 		common.RespondError(w, http.StatusBadRequest, "invalid alert id")
 		return
@@ -229,7 +229,7 @@ func (h *Handler) UpdateAlertRule(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	vars := mux.Vars(r)
 
-	id, err := strconv.ParseUint(vars["id"], 10, 64)
+	id, err := common.ParseUintSafe(vars["id"])
 	if err != nil {
 		common.RespondError(w, http.StatusBadRequest, "invalid rule id")
 		return
@@ -242,7 +242,7 @@ func (h *Handler) UpdateAlertRule(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get existing rule
-	rule, err := alerts.GetAlertRule(ctx, h.DB, uint(id))
+	rule, err := alerts.GetAlertRule(ctx, h.DB, id)
 	if err != nil {
 		common.RespondError(w, http.StatusNotFound, "alert rule not found")
 		return
@@ -481,6 +481,10 @@ func (h *Handler) GetNotificationPrefs(w http.ResponseWriter, r *http.Request) {
 		common.RespondError(w, http.StatusInternalServerError, "failed to get user")
 		return
 	}
+	if userID < 0 {
+		common.RespondError(w, http.StatusBadRequest, "invalid user id")
+		return
+	}
 
 	prefs, err := alerts.GetUserNotificationPreferences(ctx, h.DB, uint(userID))
 	if err != nil {
@@ -520,6 +524,10 @@ func (h *Handler) UpdateNotificationPrefs(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		log.ErrorContext(ctx, "Failed to get user", "error", err)
 		common.RespondError(w, http.StatusInternalServerError, "failed to get user")
+		return
+	}
+	if userID < 0 {
+		common.RespondError(w, http.StatusBadRequest, "invalid user id")
 		return
 	}
 
@@ -583,13 +591,13 @@ func (h *Handler) DeleteAlert(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	vars := mux.Vars(r)
 
-	id, err := strconv.ParseUint(vars["id"], 10, 64)
+	id, err := common.ParseUintSafe(vars["id"])
 	if err != nil {
 		common.RespondError(w, http.StatusBadRequest, "invalid alert id")
 		return
 	}
 
-	if err := alerts.DeleteAlertHistory(ctx, h.DB, uint(id)); err != nil {
+	if err := alerts.DeleteAlertHistory(ctx, h.DB, id); err != nil {
 		if err.Error() == "alert history not found" {
 			common.RespondError(w, http.StatusNotFound, "alert not found")
 			return

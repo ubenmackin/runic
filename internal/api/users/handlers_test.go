@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 
@@ -229,7 +230,9 @@ func TestCreateUser_ValidCreation(t *testing.T) {
 	h := NewHandler(db)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/users", strings.NewReader(`{"username":"newuser","password":"password123","email":"newuser@test.com","role":"viewer"}`))
-	r = r.WithContext(withAdminContext(context.Background()))
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	r = r.WithContext(withAdminContext(ctx))
 
 	h.CreateUser(w, r)
 

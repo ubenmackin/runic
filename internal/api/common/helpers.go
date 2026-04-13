@@ -4,6 +4,7 @@ package common
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"strconv"
 
@@ -28,4 +29,16 @@ func RespondError(w http.ResponseWriter, status int, msg string) {
 func ParseIDParam(r *http.Request, name string) (int, error) {
 	vars := mux.Vars(r)
 	return strconv.Atoi(vars[name])
+}
+
+// ParseUintSafe parses a string as a uint, checking for overflow.
+func ParseUintSafe(s string) (uint, error) {
+	parsed, err := strconv.ParseUint(s, 10, 64)
+	if err != nil {
+		return 0, err
+	}
+	if parsed > uint64(math.MaxUint) {
+		return 0, fmt.Errorf("value %d exceeds maximum uint value", parsed)
+	}
+	return uint(parsed), nil
 }

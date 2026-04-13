@@ -2,6 +2,8 @@ package common
 
 import (
 	"encoding/json"
+	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -395,5 +397,88 @@ func TestRespondJSONMultipleCalls(t *testing.T) {
 	RespondJSON(w, http.StatusCreated, map[string]string{"second": "2"})
 	if w.Code != http.StatusCreated {
 		t.Errorf("Second call status = %d, want %d", w.Code, http.StatusCreated)
+	}
+}
+
+// TestParseUintSafe tests the ParseUintSafe function with various inputs
+func TestParseUintSafe(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    uint
+		wantErr bool
+	}{
+		{
+			name:    "valid small number",
+			input:   "42",
+			want:    42,
+			wantErr: false,
+		},
+		{
+			name:    "valid number one",
+			input:   "1",
+			want:    1,
+			wantErr: false,
+		},
+		{
+			name:    "zero",
+			input:   "0",
+			want:    0,
+			wantErr: false,
+		},
+		{
+			name:    "max uint edge case",
+			input:   fmt.Sprintf("%d", uint(math.MaxUint)),
+			want:    math.MaxUint,
+			wantErr: false,
+		},
+		{
+			name:    "value exceeds max uint",
+			input:   "18446744073709551616",
+			want:    0,
+			wantErr: true,
+		},
+		{
+			name:    "invalid non-numeric input",
+			input:   "abc",
+			want:    0,
+			wantErr: true,
+		},
+		{
+			name:    "negative input",
+			input:   "-1",
+			want:    0,
+			wantErr: true,
+		},
+		{
+			name:    "empty string",
+			input:   "",
+			want:    0,
+			wantErr: true,
+		},
+		{
+			name:    "float string",
+			input:   "3.14",
+			want:    0,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ParseUintSafe(tt.input)
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("ParseUintSafe(%q) expected error, got nil", tt.input)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("ParseUintSafe(%q) unexpected error: %v", tt.input, err)
+				}
+				if got != tt.want {
+					t.Errorf("ParseUintSafe(%q) = %v, want %v", tt.input, got, tt.want)
+				}
+			}
+		})
 	}
 }

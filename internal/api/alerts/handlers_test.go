@@ -1,7 +1,6 @@
 package alerts
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json"
 	"net/http"
@@ -11,6 +10,7 @@ import (
 	"time"
 
 	"runic/internal/alerts"
+	"runic/internal/auth"
 	"runic/internal/crypto"
 	"runic/internal/testutil"
 )
@@ -323,7 +323,7 @@ func TestSendTestEmail_WithUserContext(t *testing.T) {
 		"testuser", "test@example.com", "hashedpassword", "admin")
 
 	req := httptest.NewRequest("POST", "/api/v1/settings/smtp/test", nil)
-	ctx := context.WithValue(req.Context(), "user_id", 1)
+	ctx := auth.SetContextForTest(req.Context(), "admin", "testuser")
 	req = req.WithContext(ctx)
 	w := httptest.NewRecorder()
 
@@ -627,10 +627,10 @@ func TestNotificationPrefsCRUD(t *testing.T) {
 		defer cleanup()
 
 		database.Exec(`INSERT INTO users (username, email, password_hash, role) VALUES (?, ?, ?, ?)`,
-			"testuser", "test@example.com", "hashedpassword", "user")
+			"testuser", "test@example.com", "hashedpassword", "viewer")
 
 		req := httptest.NewRequest("GET", "/api/v1/users/me/notification-preferences", nil)
-		ctx := context.WithValue(req.Context(), "user_id", 1)
+		ctx := auth.SetContextForTest(req.Context(), "viewer", "testuser")
 		req = req.WithContext(ctx)
 		w := httptest.NewRecorder()
 
@@ -659,12 +659,12 @@ func TestNotificationPrefsCRUD(t *testing.T) {
 		defer cleanup()
 
 		database.Exec(`INSERT INTO users (username, email, password_hash, role) VALUES (?, ?, ?, ?)`,
-			"testuser", "test@example.com", "hashedpassword", "user")
+			"testuser", "test@example.com", "hashedpassword", "viewer")
 
 		body := `{"quiet_hours_start":"23:00","quiet_hours_end":"06:00","digest_enabled":true}`
 		req := httptest.NewRequest("PUT", "/api/v1/users/me/notification-preferences", strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
-		ctx := context.WithValue(req.Context(), "user_id", 1)
+		ctx := auth.SetContextForTest(req.Context(), "viewer", "testuser")
 		req = req.WithContext(ctx)
 		w := httptest.NewRecorder()
 
@@ -701,13 +701,13 @@ func TestNotificationPrefsCRUD(t *testing.T) {
 		defer cleanup()
 
 		database.Exec(`INSERT INTO users (username, email, password_hash, role) VALUES (?, ?, ?, ?)`,
-			"testuser", "test@example.com", "hashedpassword", "user")
+			"testuser", "test@example.com", "hashedpassword", "viewer")
 
 		database.Exec(`INSERT INTO user_notification_preferences (user_id, quiet_hours_start, quiet_hours_end, digest_enabled) VALUES (?, ?, ?, ?)`,
 			1, "21:00", "08:00", true)
 
 		req := httptest.NewRequest("GET", "/api/v1/users/me/notification-preferences", nil)
-		ctx := context.WithValue(req.Context(), "user_id", 1)
+		ctx := auth.SetContextForTest(req.Context(), "viewer", "testuser")
 		req = req.WithContext(ctx)
 		w := httptest.NewRecorder()
 

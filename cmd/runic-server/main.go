@@ -186,7 +186,7 @@ func main() {
 	if err == nil && encryptionKey != "" {
 		enc, err := crypto.NewEncryptor(encryptionKey)
 		if err != nil {
-			log.Printf("Warning: failed to create encryptor: %v", err)
+			log.Printf("Warning: failed to create encryptor")
 		} else {
 			encryptor = enc
 			log.Printf("Encryptor initialized for sensitive data encryption")
@@ -194,6 +194,7 @@ func main() {
 	} else {
 		log.Printf("Warning: encryption_key not found in database, SMTP password encryption disabled")
 	}
+	encryptionKey = ""
 
 	// Initialize alert service for notifications
 	// Wrap *sql.DB in *db.Database for the alert service

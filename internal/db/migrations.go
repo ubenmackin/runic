@@ -953,7 +953,7 @@ func migrateSchema(ctx context.Context, database *sql.DB) error {
 			_, decryptErr := crypto.Decrypt(secretValue, encryptionKey)
 			if decryptErr == nil {
 				// Already encrypted, skip
-				log.Info("Migration: secret already encrypted", "key", secretKey)
+				log.Info("Migration: secret already encrypted")
 				continue
 			}
 
@@ -968,7 +968,7 @@ func migrateSchema(ctx context.Context, database *sql.DB) error {
 			if err != nil {
 				return fmt.Errorf("failed to update encrypted %s: %w", secretKey, err)
 			}
-			log.Info("Migration: encrypted secret", "key", secretKey)
+			log.Info("Migration: encrypted secret")
 		}
 
 		// Mark that secrets have been encrypted

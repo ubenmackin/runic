@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 
@@ -151,6 +152,10 @@ func TestHandleSetupPOST_Success(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/setup",
 		strings.NewReader(`{"username":"admin","password":"password123"}`))
 	r.RemoteAddr = "192.0.2.1:12345" // Unique IP for this test
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	r = r.WithContext(ctx)
 
 	h.HandleSetupPOST(w, r)
 
@@ -548,6 +553,10 @@ func TestHandleSetup_POST(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := newRequestWithUniqueIP(http.MethodPost, "/api/v1/setup",
 		`{"username":"setupuser","password":"password123"}`)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	r = r.WithContext(ctx)
 
 	h.HandleSetup(w, r)
 
