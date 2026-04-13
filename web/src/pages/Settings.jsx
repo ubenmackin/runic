@@ -327,37 +327,40 @@ export default function Settings() {
                       Enable Quiet Hours
                     </label>
                   </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-                      Start Time
-                    </label>
-                    <input
-                      type="time"
-                      value={notificationPrefs.quiet_hours?.start_time || '22:00'}
-                      onChange={(e) => handleQuietHoursChange('start_time', e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-                      End Time
-                    </label>
-                    <input
-                      type="time"
-                      value={notificationPrefs.quiet_hours?.end_time || '08:00'}
-                      onChange={(e) => handleQuietHoursChange('end_time', e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-                      Timezone
-                    </label>
-                    <select
-                      value={notificationPrefs.quiet_hours?.timezone || 'UTC'}
-                      onChange={(e) => handleQuietHoursChange('timezone', e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-                    >
+<div>
+      <label htmlFor="quiet_hours_start" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+        Start Time
+      </label>
+      <input
+        type="time"
+        id="quiet_hours_start"
+        value={notificationPrefs.quiet_hours?.start_time || '22:00'}
+        onChange={(e) => handleQuietHoursChange('start_time', e.target.value)}
+        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+      />
+    </div>
+    <div>
+      <label htmlFor="quiet_hours_end" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+        End Time
+      </label>
+      <input
+        type="time"
+        id="quiet_hours_end"
+        value={notificationPrefs.quiet_hours?.end_time || '08:00'}
+        onChange={(e) => handleQuietHoursChange('end_time', e.target.value)}
+        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+      />
+    </div>
+    <div>
+      <label htmlFor="quiet_hours_timezone" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+        Timezone
+      </label>
+      <select
+        id="quiet_hours_timezone"
+        value={notificationPrefs.quiet_hours?.timezone || 'UTC'}
+        onChange={(e) => handleQuietHoursChange('timezone', e.target.value)}
+        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+      >
                       {timezones.map((tz) => (
                         <option key={tz.value} value={tz.value}>
                           {tz.label}
@@ -398,17 +401,18 @@ export default function Settings() {
                       Enable Daily Digest
                     </label>
                   </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-                      Digest Time
-                    </label>
-                    <input
-                      type="time"
-                      value={notificationPrefs.daily_digest?.time || '09:00'}
-                      onChange={(e) => handleDigestChange('time', e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-                    />
-                  </div>
+<div>
+      <label htmlFor="digest_time" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+        Digest Time
+      </label>
+      <input
+        type="time"
+        id="digest_time"
+        value={notificationPrefs.daily_digest?.time || '09:00'}
+        onChange={(e) => handleDigestChange('time', e.target.value)}
+        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+      />
+    </div>
                 </div>
               )}
             </div>
@@ -503,85 +507,90 @@ export default function Settings() {
                       <Loader className="w-6 h-6 animate-spin text-purple-500" />
                     </div>
                   ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {/* SMTP Host */}
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-                          SMTP Host
-                        </label>
-                        <input
-                          type="text"
-                          value={smtpFormData.host}
-                          onChange={(e) => setSmtpFormData({ ...smtpFormData, host: e.target.value })}
-                          placeholder="smtp.example.com"
-                          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-                        />
-                      </div>
+<div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      {/* SMTP Host */}
+      <div>
+        <label htmlFor="smtp_host" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+          SMTP Host
+        </label>
+        <input
+          type="text"
+          id="smtp_host"
+          value={smtpFormData.host}
+          onChange={(e) => setSmtpFormData({ ...smtpFormData, host: e.target.value })}
+          placeholder="smtp.example.com"
+          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+        />
+      </div>
 
-                      {/* SMTP Port */}
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-                          SMTP Port
-                        </label>
-                        <input
-                          type="number"
-                          value={smtpFormData.port}
-                          onChange={(e) => setSmtpFormData({ ...smtpFormData, port: parseInt(e.target.value) || 587 })}
-                          defaultValue={587}
-                          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-                        />
-                      </div>
+      {/* SMTP Port */}
+      <div>
+        <label htmlFor="smtp_port" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+          SMTP Port
+        </label>
+        <input
+          type="number"
+          id="smtp_port"
+          value={smtpFormData.port}
+          onChange={(e) => setSmtpFormData({ ...smtpFormData, port: parseInt(e.target.value) || 587 })}
+          defaultValue={587}
+          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+        />
+      </div>
 
-                      {/* Username */}
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-                          Username
-                        </label>
-                        <input
-                          type="text"
-                          value={smtpFormData.username}
-                          onChange={(e) => setSmtpFormData({ ...smtpFormData, username: e.target.value })}
-                          placeholder="username"
-                          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-                        />
-                      </div>
+      {/* Username */}
+      <div>
+        <label htmlFor="smtp_username" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+          Username
+        </label>
+        <input
+          type="text"
+          id="smtp_username"
+          value={smtpFormData.username}
+          onChange={(e) => setSmtpFormData({ ...smtpFormData, username: e.target.value })}
+          placeholder="username"
+          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+        />
+      </div>
 
-                      {/* Password */}
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-                          Password
-                        </label>
-                        <div className="relative">
-                          <input
-                            type={showPassword ? 'text' : 'password'}
-                            value={smtpFormData.password}
-                            onChange={(e) => setSmtpFormData({ ...smtpFormData, password: e.target.value })}
-                            placeholder={smtpConfig?.password_set ? '••••••••' : 'Enter password'}
-                            className="w-full px-3 py-2 pr-10 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => setShowPassword(!showPassword)}
-                            className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-700 dark:hover:text-amber-muted"
-                          >
-                            {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                          </button>
-                        </div>
-                      </div>
+      {/* Password */}
+      <div>
+        <label htmlFor="smtp_password" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+          Password
+        </label>
+        <div className="relative">
+          <input
+            type={showPassword ? 'text' : 'password'}
+            id="smtp_password"
+            value={smtpFormData.password}
+            onChange={(e) => setSmtpFormData({ ...smtpFormData, password: e.target.value })}
+            placeholder={smtpConfig?.password_set ? '••••••••' : 'Enter password'}
+            className="w-full px-3 py-2 pr-10 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+          />
+          <button
+            type="button"
+            onClick={() => setShowPassword(!showPassword)}
+            className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-700 dark:hover:text-amber-muted"
+          >
+            {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+          </button>
+        </div>
+      </div>
 
-                      {/* From Address */}
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-                          From Address
-                        </label>
-                        <input
-                          type="email"
-                          value={smtpFormData.from_address}
-                          onChange={(e) => setSmtpFormData({ ...smtpFormData, from_address: e.target.value })}
-                          placeholder="alerts@example.com"
-                          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-                        />
-                      </div>
+      {/* From Address */}
+      <div>
+        <label htmlFor="smtp_from_address" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+          From Address
+        </label>
+        <input
+          type="email"
+          id="smtp_from_address"
+          value={smtpFormData.from_address}
+          onChange={(e) => setSmtpFormData({ ...smtpFormData, from_address: e.target.value })}
+          placeholder="alerts@example.com"
+          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+        />
+      </div>
 
                       {/* TLS and Enable toggles */}
                       <div className="flex items-center gap-6">
