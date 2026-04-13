@@ -296,9 +296,22 @@ func (c *SMTPConfig) GetAddress() string {
 }
 
 // AlertEvent represents an event that can trigger an alert.
+//
+// Security Note: String fields (PeerName, Subject, Message) may contain
+// untrusted input from external sources. The system employs a layered
+// defense approach:
+//   - Entry point: SanitizeAlertInput/SanitizeAlertInputStrict when creating
+//     AlertEvent instances from external sources
+//   - Email generation: htmlEscape() for HTML content escaping
+//
+// Callers should ensure proper sanitization at the entry point when creating
+// AlertEvent instances from external sources.
 type AlertEvent struct {
-	Type      AlertType              `json:"type"`
-	PeerID    int                    `json:"peer_id,omitempty"`
+	Type   AlertType `json:"type"`
+	PeerID int       `json:"peer_id,omitempty"`
+	// PeerName may contain untrusted input from external sources.
+	// Sanitization happens at entry point (SanitizeAlertInput) and
+	// HTML escaping at email generation (htmlEscape).
 	PeerName  string                 `json:"peer_name,omitempty"`
 	Value     int                    `json:"value,omitempty"` // e.g., blocked count for spike
 	Timestamp time.Time              `json:"timestamp"`

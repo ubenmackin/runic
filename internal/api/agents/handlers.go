@@ -186,6 +186,39 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Sanitize user input to prevent injection attacks.
+	//
+	// Defense-in-Depth Strategy: We use two layers of sanitization:
+	//
+	// 1. ENTRY POINT (here): Remove control characters (CR, LF, NUL, TAB, etc.)
+	//    - This prevents header injection attacks (e.g., email header injection via
+	//      embedded newlines that could add malicious headers like "Bcc: attacker@evil.com")
+	//    - Control characters are removed here because they can never be legitimate in
+	//      hostname/IP fields and pose systemic risks regardless of output format
+	//    - We use SanitizeAlertInput which does NOT escape HTML chars (<, >, &) because
+	//      these may be legitimate in hostnames and escaping should happen at output time
+	//
+	// 2. OUTPUT TIME (email generation): HTML escaping via htmlEscape
+	//    - HTML special characters are escaped at email generation time to prevent XSS
+	//    - This is done at output time rather than entry point because:
+	//      a) The same data may be used in non-HTML contexts (logs, CLI, JSON APIs)
+	//      b) Proper escaping depends on the output context (HTML, JSON, plain text)
+	//      c) Early escaping could corrupt legitimate data or cause double-encoding
+	//
+	// This layered approach ensures each sanitization happens at the appropriate layer
+	// for the specific threat vector it addresses.
+	sanitizedHostname, modified := alerts.SanitizeAlertInput(input.Hostname, 255)
+	if modified {
+		runiclog.Warn("hostname was sanitized during registration", "original_length", len(input.Hostname), "sanitized_length", len(sanitizedHostname))
+	}
+	input.Hostname = sanitizedHostname
+
+	sanitizedIP, modified := alerts.SanitizeAlertInput(input.IP, 45)
+	if modified {
+		runiclog.Warn("ip was sanitized during registration", "original_length", len(input.IP), "sanitized_length", len(sanitizedIP))
+	}
+	input.IP = sanitizedIP
+
 	if input.Hostname == "" {
 		http.Error(w, `{"error": "hostname required"}`, http.StatusBadRequest)
 		return

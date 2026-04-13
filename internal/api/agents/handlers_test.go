@@ -294,6 +294,212 @@ func TestRegisterAgent(t *testing.T) {
 }
 
 // =============================================================================
+// Test RegisterAgent Malicious Input
+// =============================================================================
+
+func TestRegisterAgent_MaliciousInput(t *testing.T) {
+	tests := []struct {
+		name     string
+		setup    func(t *testing.T, db *sql.DB)
+		reqBody  string
+		wantCode int
+		checkDB  func(t *testing.T, db *sql.DB)
+	}{
+		{
+			name: "XSS payload in hostname - script tag",
+			setup: func(t *testing.T, db *sql.DB) {
+				db.Exec(`INSERT INTO registration_tokens (token, description) VALUES (?, ?)`, "valid-token-xss-1", "test token")
+			},
+			reqBody:  `{"hostname": "<script>alert('xss')</script>", "registration_token": "valid-token-xss-1"}`,
+			wantCode: http.StatusCreated,
+			checkDB: func(t *testing.T, db *sql.DB) {
+				// Verify hostname was sanitized (control chars removed, stored as-is for HTML)
+				var hostname string
+				err := db.QueryRow("SELECT hostname FROM peers WHERE hostname LIKE '%script%'").Scan(&hostname)
+				if err == nil {
+					// The hostname should be stored but we verify it doesn't contain control chars
+					if hostname != "<script>alert('xss')</script>" {
+						t.Errorf("unexpected hostname stored: %s", hostname)
+					}
+				}
+			},
+		},
+		{
+			name: "header injection in hostname - CRLF",
+			setup: func(t *testing.T, db *sql.DB) {
+				db.Exec(`INSERT INTO registration_tokens (token, description) VALUES (?, ?)`, "valid-token-crlf-1", "test token")
+			},
+			reqBody:  `{"hostname": "server-01\r\nBcc: attacker@evil.com", "registration_token": "valid-token-crlf-1"}`,
+			wantCode: http.StatusCreated,
+			checkDB: func(t *testing.T, db *sql.DB) {
+				// CR/LF should be stripped
+				var hostname string
+				err := db.QueryRow("SELECT hostname FROM peers WHERE hostname LIKE '%server-01%'").Scan(&hostname)
+				if err != nil {
+					t.Errorf("expected peer to be created: %v", err)
+				}
+				// The hostname should not contain CR or LF
+				if containsAny(hostname, "\r\n") {
+					t.Errorf("hostname contains control characters: %q", hostname)
+				}
+			},
+		},
+		{
+			name: "SQL injection attempt in hostname",
+			setup: func(t *testing.T, db *sql.DB) {
+				db.Exec(`INSERT INTO registration_tokens (token, description) VALUES (?, ?)`, "valid-token-sql-1", "test token")
+			},
+			reqBody:  `{"hostname": "server'; DROP TABLE peers; --", "registration_token": "valid-token-sql-1"}`,
+			wantCode: http.StatusCreated,
+			checkDB: func(t *testing.T, db *sql.DB) {
+				// The SQL injection payload should be stored as a literal string, not executed
+				var hostname string
+				err := db.QueryRow("SELECT hostname FROM peers WHERE hostname LIKE '%DROP%'").Scan(&hostname)
+				if err != nil {
+					t.Errorf("expected peer to be created with SQL injection payload as hostname: %v", err)
+				}
+				// Verify peers table still exists (SQL wasn't executed)
+				var count int
+				err = db.QueryRow("SELECT COUNT(*) FROM peers").Scan(&count)
+				if err != nil {
+					t.Errorf("peers table should still exist: %v", err)
+				}
+			},
+		},
+		{
+			name: "XSS payload in IP address",
+			setup: func(t *testing.T, db *sql.DB) {
+				db.Exec(`INSERT INTO registration_tokens (token, description) VALUES (?, ?)`, "valid-token-ip-1", "test token")
+			},
+			reqBody:  `{"hostname": "safe-hostname", "ip": "<img src=x onerror=alert(1)>", "registration_token": "valid-token-ip-1"}`,
+			wantCode: http.StatusCreated,
+			checkDB: func(t *testing.T, db *sql.DB) {
+				var ipAddress string
+				err := db.QueryRow("SELECT ip_address FROM peers WHERE hostname = 'safe-hostname'").Scan(&ipAddress)
+				if err != nil {
+					t.Errorf("expected peer to be created: %v", err)
+				}
+				// The IP address should be stored as-is (sanitization strips control chars)
+				if containsAny(ipAddress, "\r\n") {
+					t.Errorf("IP address contains control characters: %q", ipAddress)
+				}
+			},
+		},
+		{
+			name: "header injection in IP address",
+			setup: func(t *testing.T, db *sql.DB) {
+				db.Exec(`INSERT INTO registration_tokens (token, description) VALUES (?, ?)`, "valid-token-ip-crlf", "test token")
+			},
+			reqBody:  `{"hostname": "test-server", "ip": "10.0.0.1\r\nX-Injected: header", "registration_token": "valid-token-ip-crlf"}`,
+			wantCode: http.StatusCreated,
+			checkDB: func(t *testing.T, db *sql.DB) {
+				var ipAddress string
+				err := db.QueryRow("SELECT ip_address FROM peers WHERE hostname = 'test-server'").Scan(&ipAddress)
+				if err != nil {
+					t.Errorf("expected peer to be created: %v", err)
+				}
+				// CR/LF should be stripped from IP
+				if containsAny(ipAddress, "\r\n") {
+					t.Errorf("IP address contains control characters: %q", ipAddress)
+				}
+			},
+		},
+		{
+			name: "null byte in hostname",
+			setup: func(t *testing.T, db *sql.DB) {
+				db.Exec(`INSERT INTO registration_tokens (token, description) VALUES (?, ?)`, "valid-token-null-1", "test token")
+			},
+			reqBody:  `{"hostname": "server\u0000evil", "registration_token": "valid-token-null-1"}`,
+			wantCode: http.StatusCreated,
+			checkDB: func(t *testing.T, db *sql.DB) {
+				var hostname string
+				err := db.QueryRow("SELECT hostname FROM peers WHERE hostname LIKE '%server%'").Scan(&hostname)
+				if err != nil {
+					t.Errorf("expected peer to be created: %v", err)
+				}
+				// Null byte should be stripped
+				if containsAny(hostname, "\x00") {
+					t.Errorf("hostname contains null byte: %q", hostname)
+				}
+			},
+		},
+		{
+			name: "unicode control characters in hostname",
+			setup: func(t *testing.T, db *sql.DB) {
+				db.Exec(`INSERT INTO registration_tokens (token, description) VALUES (?, ?)`, "valid-token-unicode-1", "test token")
+			},
+			reqBody:  `{"hostname": "server\u202e\u202dname", "registration_token": "valid-token-unicode-1"}`,
+			wantCode: http.StatusCreated,
+			checkDB: func(t *testing.T, db *sql.DB) {
+				var hostname string
+				err := db.QueryRow("SELECT hostname FROM peers LIMIT 1").Scan(&hostname)
+				if err != nil {
+					t.Errorf("expected peer to be created: %v", err)
+				}
+				// Note: SanitizeAlertInput does NOT strip Unicode control characters
+				// (only ASCII control chars). The hostname is stored as-is with unicode chars.
+				// If stricter sanitization is needed, use SanitizeAlertInputStrict.
+			},
+		},
+		{
+			name: "extremely long hostname - should truncate",
+			setup: func(t *testing.T, db *sql.DB) {
+				db.Exec(`INSERT INTO registration_tokens (token, description) VALUES (?, ?)`, "valid-token-long-1", "test token")
+			},
+			reqBody:  `{"hostname": "` + strings.Repeat("a", 500) + `", "registration_token": "valid-token-long-1"}`,
+			wantCode: http.StatusCreated,
+			checkDB: func(t *testing.T, db *sql.DB) {
+				var hostname string
+				err := db.QueryRow("SELECT hostname FROM peers LIMIT 1").Scan(&hostname)
+				if err != nil {
+					t.Errorf("expected peer to be created: %v", err)
+				}
+				// Hostname should be truncated to max length (255)
+				if len(hostname) > 255 {
+					t.Errorf("hostname too long: %d chars", len(hostname))
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db, cleanup := testutil.SetupTestDBWithSecret(t)
+			defer cleanup()
+
+			if tt.setup != nil {
+				tt.setup(t, db)
+			}
+
+			req := httptest.NewRequest("POST", "/api/v1/agents/register", strings.NewReader(tt.reqBody))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+
+			handler := NewHandler(db, db, nil)
+			handler.RegisterAgent(w, req)
+
+			if w.Code != tt.wantCode {
+				t.Errorf("expected %d, got %d: %s", tt.wantCode, w.Code, w.Body.String())
+			}
+
+			if tt.checkDB != nil {
+				tt.checkDB(t, db)
+			}
+		})
+	}
+}
+
+// containsAny checks if s contains any of the chars in substrings
+func containsAny(s string, chars string) bool {
+	for _, c := range chars {
+		if strings.ContainsRune(s, c) {
+			return true
+		}
+	}
+	return false
+}
+
+// =============================================================================
 // Test GetBundle
 // =============================================================================
 

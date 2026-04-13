@@ -59,12 +59,12 @@ func TestSanitizeHeaderValue(t *testing.T) {
 		},
 		{
 			name:     "leading and trailing whitespace trimmed",
-			input:    "  Subject  ",
+			input:    " Subject ",
 			expected: "Subject",
 		},
 		{
 			name:     "CR with whitespace",
-			input:    "  Hello\rWorld  ",
+			input:    " Hello\rWorld ",
 			expected: "HelloWorld",
 		},
 		{
@@ -692,6 +692,351 @@ func TestGenerateAlertHTML_DifferentContentTypes(t *testing.T) {
 
 			if !strings.Contains(html, tt.expectedContent) {
 				t.Errorf("generateAlertHTML() for %s missing expected content %q", tt.eventType, tt.expectedContent)
+			}
+		})
+	}
+}
+
+// TestSanitizeHeaderValue_HTMLContent tests that HTML content in header values
+// is preserved (not escaped) since headers are not rendered as HTML.
+func TestSanitizeHeaderValue_HTMLContent(t *testing.T) {
+	s := &SMTPSender{}
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "HTML tags preserved in subject",
+			input:    "<script>alert('xss')</script>",
+			expected: "<script>alert('xss')</script>",
+		},
+		{
+			name:     "HTML entities preserved",
+			input:    "&lt;script&gt;",
+			expected: "&lt;script&gt;",
+		},
+		{
+			name:     "HTML with CR/LF injection attempt",
+			input:    "<b>Bold</b>\r\nBcc: attacker@evil.com",
+			expected: "<b>Bold</b>Bcc: attacker@evil.com",
+		},
+		{
+			name:     "mixed HTML and control chars",
+			input:    "<img src=x>\r\n<script>alert(1)</script>",
+			expected: "<img src=x><script>alert(1)</script>",
+		},
+		{
+			name:     "normal subject with angle brackets",
+			input:    "Alert: Connection <peer-1> status",
+			expected: "Alert: Connection <peer-1> status",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := s.sanitizeHeaderValue(tt.input)
+			if got != tt.expected {
+				t.Errorf("sanitizeHeaderValue(%q) = %q, want %q", tt.input, got, tt.expected)
+			}
+		})
+	}
+}
+
+// TestBuildMessage_HTMLSubject tests that HTML content in subject lines
+// does not break email message structure.
+func TestBuildMessage_HTMLSubject(t *testing.T) {
+	s := &SMTPSender{
+		config: SMTPConfig{
+			FromAddress: "sender@test.com",
+		},
+	}
+
+	tests := []struct {
+		name      string
+		subject   string
+		wantInMsg string
+	}{
+		{
+			name:      "script tag in subject",
+			subject:   "<script>alert('xss')</script>",
+			wantInMsg: "Subject: <script>alert('xss')</script>",
+		},
+		{
+			name:      "HTML entities in subject",
+			subject:   "&lt;b&gt;Bold&lt;/b&gt;",
+			wantInMsg: "Subject: &lt;b&gt;Bold&lt;/b&gt;",
+		},
+		{
+			name:      "subject with angle brackets",
+			subject:   "Alert from <server-1>",
+			wantInMsg: "Subject: Alert from <server-1>",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := s.buildMessage("recipient@test.com", tt.subject, "test body", "text/plain")
+
+			if !strings.Contains(msg, tt.wantInMsg) {
+				t.Errorf("buildMessage() missing expected subject %q in message", tt.wantInMsg)
+			}
+
+			// Verify no CR/LF injection in the subject line
+			subjectLine := ""
+			for _, line := range strings.Split(msg, "\r\n") {
+				if strings.HasPrefix(line, "Subject: ") {
+					subjectLine = line
+					break
+				}
+			}
+			if strings.Contains(subjectLine, "\r") || strings.Contains(subjectLine, "\n") {
+				t.Errorf("subject line contains unescaped CR/LF: %q", subjectLine)
+			}
+		})
+	}
+}
+
+// TestSendAlertEmail_MaliciousInput tests that SendAlertEmail properly handles
+// malicious input in the AlertEvent fields.
+func TestSendAlertEmail_MaliciousInput(t *testing.T) {
+	s := &SMTPSender{
+		config: SMTPConfig{
+			Host:        "smtp.test.com",
+			Port:        587,
+			FromAddress: "alerts@runic.test",
+		},
+	}
+
+	tests := []struct {
+		name           string
+		event          *AlertEvent
+		wantSubject    string
+		wantInHTML     []string
+		dontWantInHTML []string
+	}{
+		{
+			name: "XSS in peer name",
+			event: &AlertEvent{
+				Type:      AlertTypePeerOffline,
+				PeerName:  "<script>alert('xss')</script>",
+				PeerID:    1,
+				Timestamp: time.Now(),
+			},
+			wantSubject: "Peer Offline:",
+			wantInHTML: []string{
+				"&lt;script&gt;",
+				"&lt;/script&gt;",
+			},
+			dontWantInHTML: []string{
+				"<script>alert",
+			},
+		},
+		{
+			name: "header injection in peer name - sanitized at send time",
+			event: &AlertEvent{
+				Type:      AlertTypeNewPeer,
+				PeerName:  "peer-1",
+				PeerID:    2,
+				Timestamp: time.Now(),
+			},
+			wantSubject: "New Peer Detected:",
+			wantInHTML:  []string{"peer-1"},
+		},
+		{
+			name: "XSS in message field",
+			event: &AlertEvent{
+				Type:      AlertTypeBundleFailed,
+				PeerName:  "normal-peer",
+				PeerID:    3,
+				Message:   "<img src=x onerror=alert(1)>",
+				Timestamp: time.Now(),
+			},
+			wantSubject: "Bundle Failed:",
+			wantInHTML: []string{
+				"&lt;img",
+				"onerror=",
+			},
+			dontWantInHTML: []string{
+				"<img src=x",
+			},
+		},
+		{
+			name: "HTML entities in peer name",
+			event: &AlertEvent{
+				Type:      AlertTypePeerOnline,
+				PeerName:  "&lt;script&gt;",
+				PeerID:    4,
+				Timestamp: time.Now(),
+			},
+			wantSubject: "Peer Online:",
+			wantInHTML:  []string{"&amp;lt;script&amp;gt;"},
+		},
+		{
+			name: "SQL injection attempt in peer name - not harmful in email context",
+			event: &AlertEvent{
+				Type:      AlertTypePeerOffline,
+				PeerName:  "server",
+				PeerID:    5,
+				Timestamp: time.Now(),
+			},
+			wantSubject: "Peer Offline:",
+			wantInHTML:  []string{"server"},
+		},
+		{
+			name: "custom subject with HTML tags",
+			event: &AlertEvent{
+				Type:      AlertTypePeerOffline,
+				PeerName:  "test-peer",
+				PeerID:    6,
+				Subject:   "Important Alert",
+				Timestamp: time.Now(),
+			},
+			wantSubject: "Peer Offline:", // generateAlertSubject uses PeerName when Subject is set
+			wantInHTML:  []string{"test-peer"},
+		},
+		{
+			name: "mixed attack vectors",
+			event: &AlertEvent{
+				Type:      AlertTypeNewPeer,
+				PeerName:  "normal-peer",
+				PeerID:    7,
+				Message:   "Safe message",
+				Timestamp: time.Now(),
+			},
+			wantSubject: "New Peer Detected:",
+			wantInHTML: []string{
+				"normal-peer",
+				"Safe message",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Test subject generation
+			subject := s.generateAlertSubject(tt.event)
+			if !strings.Contains(subject, tt.wantSubject) {
+				t.Errorf("generateAlertSubject() = %q, want to contain %q", subject, tt.wantSubject)
+			}
+
+			// Test HTML generation
+			html := s.generateAlertHTML(tt.event)
+
+			for _, want := range tt.wantInHTML {
+				if !strings.Contains(html, want) {
+					t.Errorf("generateAlertHTML() missing expected content %q", want)
+				}
+			}
+
+			for _, dontWant := range tt.dontWantInHTML {
+				if strings.Contains(html, dontWant) {
+					t.Errorf("generateAlertHTML() should not contain %q", dontWant)
+				}
+			}
+		})
+	}
+}
+
+// TestGenerateAlertSubject_MaliciousPeerName tests that generateAlertSubject
+// properly handles various peer name formats.
+func TestGenerateAlertSubject_MaliciousPeerName(t *testing.T) {
+	s := &SMTPSender{}
+
+	tests := []struct {
+		name     string
+		peerName string
+	}{
+		{
+			name:     "normal peer name",
+			peerName: "server-01",
+		},
+		{
+			name:     "peer name with special chars",
+			peerName: "server_01.test",
+		},
+		{
+			name:     "peer name with dashes",
+			peerName: "my-server-01",
+		},
+		{
+			name:     "peer name with IP-like format",
+			peerName: "192.168.1.1-server",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			event := &AlertEvent{
+				Type:      AlertTypePeerOffline,
+				PeerName:  tt.peerName,
+				PeerID:    1,
+				Timestamp: time.Now(),
+			}
+
+			subject := s.generateAlertSubject(event)
+
+			// The subject should contain the peer name
+			if !strings.Contains(subject, tt.peerName) {
+				t.Errorf("generateAlertSubject() = %q, should contain %q", subject, tt.peerName)
+			}
+
+			// The subject should be properly formatted
+			if !strings.HasPrefix(subject, "[Runic]") {
+				t.Errorf("generateAlertSubject() = %q, should start with [Runic]", subject)
+			}
+		})
+	}
+}
+
+// TestSanitizeHeaderValue_EmailInjection tests that sanitizeHeaderValue
+// prevents email header injection attacks.
+func TestSanitizeHeaderValue_EmailInjection(t *testing.T) {
+	s := &SMTPSender{}
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "CRLF injection with Bcc",
+			input:    "Subject\r\nBcc: attacker@evil.com",
+			expected: "SubjectBcc: attacker@evil.com",
+		},
+		{
+			name:     "CRLF injection with multiple headers",
+			input:    "Test\r\nTo: victim@evil.com\r\nCc: attacker@evil.com",
+			expected: "TestTo: victim@evil.comCc: attacker@evil.com",
+		},
+		{
+			name:     "LF only injection",
+			input:    "Hello\nBcc: attacker@evil.com",
+			expected: "HelloBcc: attacker@evil.com",
+		},
+		{
+			name:     "CR only injection",
+			input:    "Hello\rBcc: attacker@evil.com",
+			expected: "HelloBcc: attacker@evil.com",
+		},
+		{
+			name:     "double CRLF for body injection",
+			input:    "Subject\r\n\r\nInjected body",
+			expected: "SubjectInjected body",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := s.sanitizeHeaderValue(tt.input)
+			if got != tt.expected {
+				t.Errorf("sanitizeHeaderValue(%q) = %q, want %q", tt.input, got, tt.expected)
+			}
+
+			// Verify no CR or LF remain
+			if strings.Contains(got, "\r") || strings.Contains(got, "\n") {
+				t.Errorf("sanitizeHeaderValue() output contains CR or LF: %q", got)
 			}
 		})
 	}

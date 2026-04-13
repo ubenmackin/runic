@@ -944,7 +944,7 @@ func migrateSchema(ctx context.Context, database *sql.DB) error {
 				continue
 			}
 			if err != nil {
-				return fmt.Errorf("failed to get %s: %w", secretKey, err)
+				return fmt.Errorf("failed to get sensitive configuration: %w", err)
 			}
 
 			// Check if already encrypted by trying to decrypt
@@ -960,13 +960,13 @@ func migrateSchema(ctx context.Context, database *sql.DB) error {
 			// Encrypt the plaintext value
 			encryptedValue, err := crypto.Encrypt(secretValue, encryptionKey)
 			if err != nil {
-				return fmt.Errorf("failed to encrypt %s: %w", secretKey, err)
+				return fmt.Errorf("failed to encrypt sensitive configuration: %w", err)
 			}
 
 			// Update the secret with encrypted value
 			_, err = database.ExecContext(ctx, "UPDATE system_config SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = ?", encryptedValue, secretKey)
 			if err != nil {
-				return fmt.Errorf("failed to update encrypted %s: %w", secretKey, err)
+				return fmt.Errorf("failed to update sensitive configuration: %w", err)
 			}
 			log.Info("Migration: encrypted secret")
 		}

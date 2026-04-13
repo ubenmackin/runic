@@ -282,15 +282,21 @@ func (m *PeerMonitor) triggerPeerOfflineAlert(ctx context.Context, peerID int, i
 		offlineDuration = "unknown"
 	}
 
+	// Sanitize hostname before using in alert (defense in depth)
+	sanitizedHostname, modified := SanitizeAlertInput(info.hostname, DefaultMaxHostnameLength)
+	if modified {
+		m.logger.Warn("hostname was sanitized in offline alert", "peer_id", peerID)
+	}
+
 	if err := m.service.TriggerAlert(ctx, &AlertEvent{
 		Type:     AlertTypePeerOffline,
 		PeerID:   peerID,
-		PeerName: info.hostname,
-		Subject:  fmt.Sprintf("Peer Offline: %s", info.hostname),
-		Message:  fmt.Sprintf("The peer %s has gone offline.", info.hostname),
+		PeerName: sanitizedHostname,
+		Subject:  fmt.Sprintf("Peer Offline: %s", sanitizedHostname),
+		Message:  fmt.Sprintf("The peer %s has gone offline.", sanitizedHostname),
 		Metadata: map[string]interface{}{
 			"peer_id":          peerID,
-			"hostname":         info.hostname,
+			"hostname":         sanitizedHostname,
 			"ip_address":       info.ipAddress,
 			"offline_duration": offlineDuration,
 			"last_heartbeat":   info.lastHeartbeat,
@@ -312,16 +318,22 @@ func (m *PeerMonitor) triggerPeerOnlineAlert(ctx context.Context, peerID int, in
 	prevStatus := m.peerStates[peerID]
 	m.mu.RUnlock()
 
+	// Sanitize hostname before using in alert (defense in depth)
+	sanitizedHostname, modified := SanitizeAlertInput(info.hostname, DefaultMaxHostnameLength)
+	if modified {
+		m.logger.Warn("hostname was sanitized in online alert", "peer_id", peerID)
+	}
+
 	// For now, just report back online without duration calculation
 	if err := m.service.TriggerAlert(ctx, &AlertEvent{
 		Type:     AlertTypePeerOnline,
 		PeerID:   peerID,
-		PeerName: info.hostname,
-		Subject:  fmt.Sprintf("Peer Online: %s", info.hostname),
-		Message:  fmt.Sprintf("The peer %s is back online.", info.hostname),
+		PeerName: sanitizedHostname,
+		Subject:  fmt.Sprintf("Peer Online: %s", sanitizedHostname),
+		Message:  fmt.Sprintf("The peer %s is back online.", sanitizedHostname),
 		Metadata: map[string]interface{}{
 			"peer_id":    peerID,
-			"hostname":   info.hostname,
+			"hostname":   sanitizedHostname,
 			"ip_address": info.ipAddress,
 		},
 	}); err != nil {

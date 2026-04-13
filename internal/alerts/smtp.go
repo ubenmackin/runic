@@ -192,11 +192,10 @@ func (s *SMTPSender) sendWithTLS(addr string, auth smtp.Auth, from string, to []
 	return nil
 }
 
-// sanitizeHeaderValue removes CR/LF from header values to prevent header injection.
+// sanitizeHeaderValue sanitizes header values using the shared SanitizeAlertInput function.
 func (s *SMTPSender) sanitizeHeaderValue(value string) string {
-	value = strings.ReplaceAll(value, "\r", "")
-	value = strings.ReplaceAll(value, "\n", "")
-	return strings.TrimSpace(value)
+	sanitized, _ := SanitizeAlertInput(value, 0) // no length limit for headers
+	return sanitized
 }
 
 // htmlEscape escapes special HTML characters to prevent XSS/injection in email content.
