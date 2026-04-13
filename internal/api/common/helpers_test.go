@@ -2,7 +2,6 @@ package common
 
 import (
 	"encoding/json"
-	"fmt"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -405,7 +404,7 @@ func TestParseUintSafe(t *testing.T) {
 	tests := []struct {
 		name    string
 		input   string
-		want    uint
+		want    uint64
 		wantErr bool
 	}{
 		{
@@ -427,13 +426,13 @@ func TestParseUintSafe(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name:    "max uint edge case",
-			input:   fmt.Sprintf("%d", uint(math.MaxUint)),
-			want:    math.MaxUint,
+			name:    "max uint64 edge case",
+			input:   "18446744073709551615",
+			want:    math.MaxUint64,
 			wantErr: false,
 		},
 		{
-			name:    "value exceeds max uint",
+			name:    "value exceeds max uint64",
 			input:   "18446744073709551616",
 			want:    0,
 			wantErr: true,

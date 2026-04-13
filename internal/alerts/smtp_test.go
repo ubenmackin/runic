@@ -7,12 +7,111 @@ import (
 	"time"
 )
 
-// Note: sanitizeHeaderValue tests were removed due to escaping complexity.
-// The function uses `"\\r"` and `"\\n"` in the source code, which in Go string
-// literals means the literal two-character sequences (backslash + r/n), NOT
-// the actual CR/LF control characters. Testing this behavior requires careful
-// handling of Go string escaping that is confusing to reason about.
-// The function's behavior should be verified manually or with a different test approach.
+// TestSanitizeHeaderValue tests that the function properly removes CR/LF
+// control characters to prevent email header injection attacks.
+func TestSanitizeHeaderValue(t *testing.T) {
+	s := &SMTPSender{}
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "normal string unchanged",
+			input:    "Normal Subject",
+			expected: "Normal Subject",
+		},
+		{
+			name:     "CR character removed",
+			input:    "Hello\rWorld",
+			expected: "HelloWorld",
+		},
+		{
+			name:     "LF character removed",
+			input:    "Hello\nWorld",
+			expected: "HelloWorld",
+		},
+		{
+			name:     "CRLF sequence removed",
+			input:    "Hello\r\nWorld",
+			expected: "HelloWorld",
+		},
+		{
+			name:     "header injection attempt - Bcc",
+			input:    "Hello\r\nBcc: attacker@evil.com",
+			expected: "HelloBcc: attacker@evil.com",
+		},
+		{
+			name:     "header injection attempt - multiple headers",
+			input:    "Test\r\nTo: victim@evil.com\r\nBcc: attacker@evil.com",
+			expected: "TestTo: victim@evil.comBcc: attacker@evil.com",
+		},
+		{
+			name:     "multiple CR characters",
+			input:    "A\rB\rC",
+			expected: "ABC",
+		},
+		{
+			name:     "multiple LF characters",
+			input:    "A\nB\nC",
+			expected: "ABC",
+		},
+		{
+			name:     "leading and trailing whitespace trimmed",
+			input:    "  Subject  ",
+			expected: "Subject",
+		},
+		{
+			name:     "CR with whitespace",
+			input:    "  Hello\rWorld  ",
+			expected: "HelloWorld",
+		},
+		{
+			name:     "mixed CR and LF",
+			input:    "A\rB\nC\r\nD",
+			expected: "ABCD",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := s.sanitizeHeaderValue(tt.input)
+			if got != tt.expected {
+				t.Errorf("sanitizeHeaderValue(%q) = %q, want %q", tt.input, got, tt.expected)
+			}
+		})
+	}
+}
+
+// TestSanitizeHeaderValue_HeaderInjectionPrevention tests that header injection
+// payloads are neutralized by checking that no CRLF sequences remain.
+func TestSanitizeHeaderValue_HeaderInjectionPrevention(t *testing.T) {
+	s := &SMTPSender{}
+
+	// Real-world header injection payloads
+	payloads := []string{
+		"Hello\r\nBcc: attacker@evil.com",
+		"Test\r\nTo: victim1@evil.com\r\nCc: victim2@evil.com",
+		"Subject\r\n\r\nInjected body content",
+		"\r\nX-Injected-Header: malicious",
+		"Normal\r\n\r\n\r\nSubject",
+	}
+
+	for i, payload := range payloads {
+		t.Run("payload_"+string(rune('A'+i)), func(t *testing.T) {
+			sanitized := s.sanitizeHeaderValue(payload)
+
+			// Verify no CR or LF characters remain
+			if strings.Contains(sanitized, "\r") {
+				t.Errorf("CR character not removed from payload %d: %q", i, sanitized)
+			}
+			if strings.Contains(sanitized, "\n") {
+				t.Errorf("LF character not removed from payload %d: %q", i, sanitized)
+			}
+		})
+	}
+}
 
 // TestBuildMessage tests the buildMessage method.
 func TestBuildMessage(t *testing.T) {

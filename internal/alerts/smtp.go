@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"crypto/tls"
 	"fmt"
+	"html"
 	"log/slog"
 	"net/smtp"
 	"strings"
@@ -198,6 +199,11 @@ func (s *SMTPSender) sanitizeHeaderValue(value string) string {
 	return strings.TrimSpace(value)
 }
 
+// htmlEscape escapes special HTML characters to prevent XSS/injection in email content.
+func (s *SMTPSender) htmlEscape(text string) string {
+	return html.EscapeString(text)
+}
+
 // buildMessage constructs the email message with headers.
 func (s *SMTPSender) buildMessage(to, subject, body, contentType string) string {
 	var msg bytes.Buffer
@@ -269,24 +275,24 @@ func (s *SMTPSender) generateAlertHTML(event *AlertEvent) string {
 	switch event.Type {
 	case AlertTypePeerOffline:
 		fmt.Fprintf(&alertContent, `
-			<p><strong>Peer:</strong> %s (ID: %d)</p>
-			<p>The peer has gone offline and is no longer responding.</p>
-		`, event.PeerName, event.PeerID)
+<p><strong>Peer:</strong> %s (ID: %d)</p>
+<p>The peer has gone offline and is no longer responding.</p>
+`, s.htmlEscape(event.PeerName), event.PeerID)
 	case AlertTypePeerOnline:
 		fmt.Fprintf(&alertContent, `
-			<p><strong>Peer:</strong> %s (ID: %d)</p>
-			<p>The peer is now online and responding.</p>
-		`, event.PeerName, event.PeerID)
+<p><strong>Peer:</strong> %s (ID: %d)</p>
+<p>The peer is now online and responding.</p>
+`, s.htmlEscape(event.PeerName), event.PeerID)
 	case AlertTypeNewPeer:
 		fmt.Fprintf(&alertContent, `
-			<p><strong>Peer:</strong> %s (ID: %d)</p>
-			<p>A new peer has been detected in the network.</p>
-		`, event.PeerName, event.PeerID)
+<p><strong>Peer:</strong> %s (ID: %d)</p>
+<p>A new peer has been detected in the network.</p>
+`, s.htmlEscape(event.PeerName), event.PeerID)
 	case AlertTypeBundleFailed:
 		fmt.Fprintf(&alertContent, `
-			<p><strong>Peer:</strong> %s (ID: %d)</p>
-			<p>Bundle compilation failed for this peer.</p>
-		`, event.PeerName, event.PeerID)
+<p><strong>Peer:</strong> %s (ID: %d)</p>
+<p>Bundle compilation failed for this peer.</p>
+`, s.htmlEscape(event.PeerName), event.PeerID)
 	case AlertTypeBlockedSpike:
 		fmt.Fprintf(&alertContent, `
 			<p><strong>Blocked Events:</strong> %d</p>
@@ -294,13 +300,13 @@ func (s *SMTPSender) generateAlertHTML(event *AlertEvent) string {
 		`, event.Value)
 	default:
 		fmt.Fprintf(&alertContent, `
-			<p><strong>Alert Type:</strong> %s</p>
-		`, event.Type)
+<p><strong>Alert Type:</strong> %s</p>
+`, s.htmlEscape(string(event.Type)))
 	}
 
 	// Add custom message if provided
 	if event.Message != "" {
-		fmt.Fprintf(&alertContent, `<p><strong>Details:</strong> %s</p>`, event.Message)
+		fmt.Fprintf(&alertContent, `<p><strong>Details:</strong> %s</p>`, s.htmlEscape(event.Message))
 	}
 
 	// Build full HTML email
@@ -365,7 +371,7 @@ func (s *SMTPSender) generateAlertHTML(event *AlertEvent) string {
 `,
 		purple,                       // header background
 		severityColor, severityLabel, // badge
-		event.Type,                           // h2 title
+		s.htmlEscape(string(event.Type)),     // h2 title
 		alertContent.String(),                // content
 		event.Timestamp.Format(time.RFC1123), // timestamp
 		purple,                               // footer link color

@@ -178,23 +178,28 @@ func main() {
 	compiler := engine.NewCompiler(database)
 
 	// Initialize encryptor for sensitive data (SMTP passwords, etc.)
-	// The encryption_key is generated and stored in the database during migrations
+	// The encryption_key is generated and stored in the database during migrations.
+	// Security: The encryption key is kept in a narrow scope to minimize exposure
+	// and is not retained in any variable after use.
 	var encryptor *crypto.Encryptor
-	var encryptionKey string
-	err = database.QueryRowContext(context.Background(),
-		"SELECT value FROM system_config WHERE key = 'encryption_key'").Scan(&encryptionKey)
-	if err == nil && encryptionKey != "" {
-		enc, err := crypto.NewEncryptor(encryptionKey)
-		if err != nil {
-			log.Printf("Warning: failed to create encryptor")
+	// Use a function literal to create a narrow scope for the sensitive key
+	func() {
+		var encryptionKey string
+		err := database.QueryRowContext(context.Background(),
+			"SELECT value FROM system_config WHERE key = 'encryption_key'").Scan(&encryptionKey)
+		if err == nil && encryptionKey != "" {
+			enc, err := crypto.NewEncryptor(encryptionKey)
+			if err == nil {
+				encryptor = enc
+				log.Printf("Encryptor initialized for sensitive data encryption")
+			} else {
+				log.Printf("Warning: failed to create encryptor: %v", err)
+			}
 		} else {
-			encryptor = enc
-			log.Printf("Encryptor initialized for sensitive data encryption")
+			log.Printf("Warning: encryption_key not found in database, SMTP password encryption disabled")
 		}
-	} else {
-		log.Printf("Warning: encryption_key not found in database, SMTP password encryption disabled")
-	}
-	encryptionKey = ""
+		// encryptionKey goes out of scope here - no need to manually clear
+	}()
 
 	// Initialize alert service for notifications
 	// Wrap *sql.DB in *db.Database for the alert service
