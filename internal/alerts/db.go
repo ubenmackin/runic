@@ -38,7 +38,7 @@ func CreateAlertRule(ctx context.Context, database db.Querier, rule *AlertRule) 
 }
 
 // GetAlertRule fetches an alert rule by ID.
-func GetAlertRule(ctx context.Context, database db.Querier, id uint) (*AlertRule, error) {
+func GetAlertRule(ctx context.Context, database db.Querier, id uint64) (*AlertRule, error) {
 	var rule AlertRule
 	var peerID sql.NullInt64
 
@@ -457,7 +457,7 @@ func GetLastAlertForRuleAndPeer(ctx context.Context, database db.Querier, ruleID
 }
 
 // DeleteAlertHistory deletes an alert history entry by ID.
-func DeleteAlertHistory(ctx context.Context, database db.Querier, id uint) error {
+func DeleteAlertHistory(ctx context.Context, database db.Querier, id uint64) error {
 	result, err := database.ExecContext(ctx, `DELETE FROM alert_history WHERE id = ?`, id)
 	if err != nil {
 		return fmt.Errorf("failed to delete alert history: %w", err)

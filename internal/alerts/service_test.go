@@ -450,7 +450,7 @@ func TestTriggerAlert_Disabled(t *testing.T) {
 	createTestAlertRule(t, database, rule)
 
 	// Verify rule is disabled
-	storedRule, err := GetAlertRule(ctx, databaseWrapper, rule.ID)
+	storedRule, err := GetAlertRule(ctx, databaseWrapper, uint64(rule.ID))
 	if err != nil {
 		t.Fatalf("failed to get alert rule: %v", err)
 	}

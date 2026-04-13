@@ -548,7 +548,7 @@ func (s *Service) TriggerAlert(ctx context.Context, event *AlertEvent) error {
 
 // CheckRuleNow triggers an immediate check of a specific alert rule.
 // This is useful for testing rules or forcing a re-evaluation.
-func (s *Service) CheckRuleNow(ctx context.Context, ruleID uint) error {
+func (s *Service) CheckRuleNow(ctx context.Context, ruleID uint64) error {
 	s.mu.RLock()
 	scheduler := s.scheduler
 	s.mu.RUnlock()

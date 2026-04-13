@@ -152,7 +152,7 @@ func (s *Scheduler) CheckAllRules(ctx context.Context) {
 
 // CheckRule evaluates a specific alert rule by ID.
 // Returns an error if the rule is not found or if evaluation fails.
-func (s *Scheduler) CheckRule(ctx context.Context, ruleID uint) error {
+func (s *Scheduler) CheckRule(ctx context.Context, ruleID uint64) error {
 	rule, err := GetAlertRule(ctx, s.database, ruleID)
 	if err != nil {
 		return fmt.Errorf("failed to get alert rule %d: %w", ruleID, err)
