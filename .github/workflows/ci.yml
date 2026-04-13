@@ -49,7 +49,7 @@ jobs:
 
       # 4. Lint Phase
       - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v7
         with:
           version: v2.7.2
 
