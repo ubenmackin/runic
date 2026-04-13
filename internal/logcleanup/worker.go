@@ -4,6 +4,7 @@ package logcleanup
 import (
 	"context"
 	"database/sql"
+	"sync"
 	"time"
 
 	"runic/internal/common/log"
@@ -14,6 +15,7 @@ type Worker struct {
 	logsDB   *sql.DB
 	interval time.Duration
 	stopCh   chan struct{}
+	stopOnce sync.Once
 }
 
 func NewWorker(db *sql.DB, logsDB *sql.DB) *Worker {
@@ -109,5 +111,7 @@ func (w *Worker) runCleanup(ctx context.Context) {
 }
 
 func (w *Worker) Stop() {
-	close(w.stopCh)
+	w.stopOnce.Do(func() {
+		close(w.stopCh)
+	})
 }
