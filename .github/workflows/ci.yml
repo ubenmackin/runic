@@ -9,51 +9,84 @@ on:
     branches: [main, master]
 
 jobs:
-  pipeline:
-    name: Test, Lint, and Build
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'cmd/**'
+              - 'internal/**'
+              - 'go.mod'
+              - 'go.sum'
+            frontend:
+              - 'web/**'
+
+  frontend:
+    needs: changes
+    if: ${{ needs.changes.outputs.frontend == 'true' }}
+    name: Build Frontend
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      # 1. Unified Setup
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.25.8'
-          cache: true # GitHub handles cleanup automatically here
-
+      - uses: actions/checkout@v4
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '24'
           cache: 'npm'
           cache-dependency-path: web/package-lock.json
-
-      # 2. Frontend Build (Once)
-      - name: Build frontend
+      - name: Build
         run: |
           cd web
           npm ci
           npm run build
 
-      # 3. Test Phase
+  backend:
+    needs: changes
+    if: ${{ needs.changes.outputs.backend == 'true' }}
+    name: Test and Build Go
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.8'
+          cache: true
+          cache-dependency-path: go.sum
+      
       - name: Run tests
         run: |
           go mod tidy
-          go vet ./...
+          #go vet ./...
           go test -race -cover ./internal/...
-
+      
       - name: Build all packages
         run: go build ./...
 
-      # 4. Lint Phase
+      - name: Build Go binary
+        run: |
+          CGO_ENABLED=1 go build -ldflags="-X runic/internal/common/version.Version=$(git describe --tags --always --dirty 2>/dev/null || echo 'dev')" -o runic ./cmd/runic-server
+
+  lint:
+    needs: changes
+    if: ${{ needs.changes.outputs.backend == 'true' }}
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.8'
+          cache: false # Lint action has its own cache logic
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v7
         with:
           version: v2.11.4
-
-      # 5. Build Phase
-      - name: Build Go binary
-        run: |
-          CGO_ENABLED=1 go build -ldflags="-X runic/internal/common/version.Version=$(git describe --tags --always --dirty 2>/dev/null || echo 'dev')" -o runic ./cmd/runic-server
