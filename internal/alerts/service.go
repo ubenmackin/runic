@@ -288,32 +288,39 @@ func (s *Service) Start() error {
 
 	s.logger.Info("starting alert service")
 
+	// Capture all variables needed by goroutines before spawning them
+	// to avoid race condition when Stop() is called concurrently
+	scheduler := s.scheduler
+	processor := s.processor
+	digestGenerator := s.digestGenerator
+	ctx := s.ctx
+	wg := &s.wg
+
 	// Start the scheduler for periodic alert evaluation
-	s.scheduler.Start(s.ctx)
-	s.wg.Add(1)
+	scheduler.Start(ctx)
+	wg.Add(1)
 	go func() {
-		defer s.wg.Done()
-		<-s.ctx.Done()
-		s.scheduler.Stop()
+		defer wg.Done()
+		<-ctx.Done()
+		scheduler.Stop()
 	}()
 
 	// Start the processor for sending pending alerts
-	if err := s.processor.Start(s.ctx); err != nil {
+	if err := processor.Start(ctx); err != nil {
 		s.cancel()
 		return fmt.Errorf("failed to start processor: %w", err)
 	}
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		s.processor.Run()
-	}()
+
+	// processor.Run() spawns its own goroutine and returns immediately.
+	// Call it synchronously to ensure wg.Add(1) inside Run() completes
+	// before we release the lock, avoiding race with Stop().
+	processor.Run()
 
 	// Start the digest generator for scheduled digests
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		s.digestGenerator.RunDaily()
-	}()
+	// digestGenerator.RunDaily() spawns its own goroutine and returns immediately.
+	// Call it synchronously to ensure wg.Add(1) inside RunDaily() completes
+	// before we release the lock, avoiding race with Stop().
+	digestGenerator.RunDaily()
 
 	s.started = true
 	s.logger.Info("alert service started successfully")
