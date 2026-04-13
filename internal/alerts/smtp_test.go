@@ -1041,3 +1041,310 @@ func TestSanitizeHeaderValue_EmailInjection(t *testing.T) {
 		})
 	}
 }
+
+// TestSanitizeHTMLBody tests that sanitizeHTMLBody properly removes
+// dangerous HTML elements and attributes to prevent XSS attacks.
+func TestSanitizeHTMLBody(t *testing.T) {
+	s := &SMTPSender{}
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "remove script tags",
+			input:    `<p>Hello</p><script>alert('xss')</script><p>World</p>`,
+			expected: `<p>Hello</p><p>World</p>`,
+		},
+		{
+			name:     "remove script tags uppercase",
+			input:    `<p>Hello</p><SCRIPT>alert('xss')</SCRIPT><p>World</p>`,
+			expected: `<p>Hello</p><p>World</p>`,
+		},
+		{
+			name:     "remove script tags mixed case",
+			input:    `<p>Hello</p><ScRiPt>alert('xss')</ScRiPt><p>World</p>`,
+			expected: `<p>Hello</p><p>World</p>`,
+		},
+		{
+			name:     "remove event handlers onclick",
+			input:    `<div class="test" onclick="evil()">Click me</div>`,
+			expected: `<div class="test">Click me</div>`,
+		},
+		{
+			name:     "remove event handlers onerror",
+			input:    `<img src="x" onerror="evil()">`,
+			expected: `<img src="x">`,
+		},
+		{
+			name:     "remove event handlers onload",
+			input:    `<body class="page" onload="evil()"><p>Content</p></body>`,
+			expected: `<body class="page"><p>Content</p></body>`,
+		},
+		{
+			name:     "remove event handlers onmouseover",
+			input:    `<a href="#" onmouseover="evil()">Hover me</a>`,
+			expected: `<a href="#">Hover me</a>`,
+		},
+		{
+			name:     "remove event handlers with single quotes",
+			input:    `<div class="test" onclick='evil()'>Click</div>`,
+			expected: `<div class="test">Click</div>`,
+		},
+		{
+			name:     "remove javascript URLs in href",
+			input:    `<a href="javascript:evil()">Link</a>`,
+			expected: `<a >Link</a>`,
+		},
+		{
+			name:     "remove javascript URLs in src",
+			input:    `<img src="javascript:evil()">`,
+			expected: `<img >`,
+		},
+		{
+			name:     "remove data URLs",
+			input:    `<a href="data:text/html,test">Link</a>`,
+			expected: `<a >Link</a>`,
+		},
+		{
+			name:     "remove vbscript URLs",
+			input:    `<a href="vbscript:test">Link</a>`,
+			expected: `<a >Link</a>`,
+		},
+		{
+			name:     "preserve legitimate HTML",
+			input:    `<p>Hello <b>World</b></p>`,
+			expected: `<p>Hello <b>World</b></p>`,
+		},
+		{
+			name:     "preserve legitimate links",
+			input:    `<a href="https://example.com">Safe Link</a>`,
+			expected: `<a href="https://example.com">Safe Link</a>`,
+		},
+		{
+			name:     "preserve images with safe src",
+			input:    `<img src="https://example.com/image.png" alt="test">`,
+			expected: `<img src="https://example.com/image.png" alt="test">`,
+		},
+		{
+			name:     "remove iframe tags",
+			input:    `<iframe src="evil.com"></iframe><p>Safe</p>`,
+			expected: `<p>Safe</p>`,
+		},
+		{
+			name:     "remove iframe tags uppercase",
+			input:    `<IFRAME src="evil.com"></IFRAME><p>Safe</p>`,
+			expected: `<p>Safe</p>`,
+		},
+		{
+			name:     "remove object tags",
+			input:    `<object data="evil.swf"></object><p>Safe</p>`,
+			expected: `<p>Safe</p>`,
+		},
+		{
+			name:     "remove embed tags",
+			input:    `<embed src="evil.swf"><p>Safe</p>`,
+			expected: `<p>Safe</p>`,
+		},
+		{
+			name:     "remove form tags",
+			input:    `<form action="evil.com"><input type="text"></form><p>Safe</p>`,
+			expected: `<input type="text"><p>Safe</p>`,
+		},
+		{
+			name:     "preserve divs and spans",
+			input:    `<div class="container"><span style="color: red;">Text</span></div>`,
+			expected: `<div class="container"><span style="color: red;">Text</span></div>`,
+		},
+		{
+			name:     "preserve tables",
+			input:    `<table><tr><td>Cell</td></tr></table>`,
+			expected: `<table><tr><td>Cell</td></tr></table>`,
+		},
+		{
+			name:     "complex nested script removal",
+			input:    `<div><script>var x = 1;</script><p>Text</p><script>alert(1)</script></div>`,
+			expected: `<div><p>Text</p></div>`,
+		},
+		{
+			name:     "script with attributes",
+			input:    `<script type="text/javascript" src="evil.js"></script><p>Safe</p>`,
+			expected: `<p>Safe</p>`,
+		},
+		// Security gap tests - CSS expression injection (IE-specific)
+		{
+			name:  "CSS expression injection",
+			input: `<div style="width:expression(alert(1))">test</div>`,
+			// Note: expression() in style attributes is NOT removed by current sanitizer
+			// This is a known limitation - style attribute expressions are preserved
+			expected: `<div style="width:expression(alert(1))">test</div>`,
+		},
+		// Style URL injection
+		{
+			name:  "style URL injection - javascript in background",
+			input: `<div style="background:url(javascript:alert(1))">test</div>`,
+			// Note: javascript: in style attribute URLs is removed by dangerousURLRegex
+			expected: `<div >test</div>`,
+		},
+		// SVG with event handlers
+		{
+			name:  "SVG with event handlers",
+			input: `<svg onload="alert(1)">`,
+			// SVG tag is removed by dangerousTagRegex
+			expected: ``,
+		},
+		// Unquoted event handlers
+		{
+			name:  "unquoted event handlers",
+			input: `<img src=x onerror=alert(1)>`,
+			// Unquoted onerror is removed by eventHandlerRegex
+			expected: `<img src=x>`,
+		},
+		// Style tags with malicious CSS
+		{
+			name:  "style tags with malicious CSS",
+			input: `<style>body{background:url(javascript:evil)}</style><p>test</p>`,
+			// style tag is removed by styleTagRegex
+			expected: `<p>test</p>`,
+		},
+		// MathML tag
+		{
+			name:  "MathML tag",
+			input: `<math><mtext>x</mtext></math>`,
+			// math tag is removed by dangerousTagRegex, but inner content remains
+			expected: `<mtext>x</mtext>`,
+		},
+		// Meta refresh tag
+		{
+			name:  "meta refresh tag",
+			input: `<meta http-equiv="refresh" content="0;url=javascript:alert(1)">`,
+			// meta tag is removed by dangerousTagRegex
+			expected: ``,
+		},
+		// Base tag
+		{
+			name:  "base tag",
+			input: `<base href="javascript:alert(1)//">`,
+			// base tag is removed by dangerousTagRegex
+			expected: ``,
+		},
+		// Link tag
+		{
+			name:  "link tag",
+			input: `<link rel="stylesheet" href="javascript:alert(1)">`,
+			// link tag is removed by dangerousTagRegex
+			expected: ``,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := s.sanitizeHTMLBody(tt.input)
+			if got != tt.expected {
+				t.Errorf("sanitizeHTMLBody(%q) = %q, want %q", tt.input, got, tt.expected)
+			}
+		})
+	}
+}
+
+// TestSanitizeHTMLBody_EmailTemplate tests that the generated email template
+// passes through sanitization correctly without breaking the template structure.
+func TestSanitizeHTMLBody_EmailTemplate(t *testing.T) {
+	s := &SMTPSender{}
+
+	event := &AlertEvent{
+		Type:      AlertTypePeerOffline,
+		PeerName:  "test-peer",
+		PeerID:    1,
+		Timestamp: time.Now(),
+		Message:   "Peer has been offline for 60 minutes",
+	}
+
+	html := s.generateAlertHTML(event)
+	sanitized := s.sanitizeHTMLBody(html)
+
+	// The template should pass through unchanged since it's trusted
+	// and contains no malicious content
+	if sanitized != html {
+		t.Errorf("sanitizeHTMLBody() modified the email template when it shouldn't have")
+	}
+
+	// Verify essential template elements are preserved
+	requiredElements := []string{
+		"<!DOCTYPE html>",
+		"<html>",
+		"</html>",
+		"<head>",
+		"</head>",
+		"<body",
+		"</body>",
+		"Runic",
+		"test-peer",
+	}
+
+	for _, elem := range requiredElements {
+		if !strings.Contains(sanitized, elem) {
+			t.Errorf("sanitizeHTMLBody() removed expected element: %q", elem)
+		}
+	}
+}
+
+// TestSanitizeHTMLBody_XSSPayloads tests against common XSS attack payloads.
+func TestSanitizeHTMLBody_XSSPayloads(t *testing.T) {
+	s := &SMTPSender{}
+
+	tests := []struct {
+		name             string
+		input            string
+		shouldNotContain []string
+	}{
+		{
+			name:             "script tag injection",
+			input:            `<script>alert(1)</script>`,
+			shouldNotContain: []string{"<script", "</script>", "alert"},
+		},
+		{
+			name:             "img onerror injection quoted",
+			input:            `<img src="x" onerror="alert(1)">`,
+			shouldNotContain: []string{"onerror=", "alert"},
+		},
+		{
+			name:             "SVG onload injection quoted",
+			input:            `<svg onload="alert(1)">`,
+			shouldNotContain: []string{"onload=", "alert"},
+		},
+		{
+			name:             "body onload injection quoted",
+			input:            `<body onload="alert(1)">`,
+			shouldNotContain: []string{"onload=", "alert"},
+		},
+		{
+			name:             "javascript protocol in href",
+			input:            `<a href="javascript:alert(1)">click</a>`,
+			shouldNotContain: []string{"javascript:", "alert"},
+		},
+		{
+			name:             "iframe injection",
+			input:            `<iframe src="javascript:alert(1)"></iframe>`,
+			shouldNotContain: []string{"<iframe", "</iframe>", "alert"},
+		},
+		{
+			name:             "object tag injection",
+			input:            `<object data="javascript:alert(1)"></object>`,
+			shouldNotContain: []string{"<object", "</object>"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := s.sanitizeHTMLBody(tt.input)
+
+			for _, forbidden := range tt.shouldNotContain {
+				if strings.Contains(got, forbidden) {
+					t.Errorf("sanitizeHTMLBody() output contains forbidden content %q: %q", forbidden, got)
+				}
+			}
+		})
+	}
+}

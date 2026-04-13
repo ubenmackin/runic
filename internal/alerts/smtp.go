@@ -8,12 +8,31 @@ import (
 	"html"
 	"log/slog"
 	"net/smtp"
+	"regexp"
 	"strings"
 	"time"
 
 	"runic/internal/crypto"
 
 	"runic/internal/common/log"
+)
+
+// Package-level compiled regexes for HTML sanitization (compile once).
+// These regexes are used to sanitize HTML email content to prevent XSS attacks.
+var (
+	// Matches script tags and their contents (case-insensitive, multiline)
+	scriptRegex = regexp.MustCompile(`(?is)<script[^>]*>.*?</script>`)
+	// Matches style tags and their contents (CSS injection vector)
+	styleTagRegex = regexp.MustCompile(`(?is)<style[^>]*>.*?</style>`)
+	// Matches event handler attributes (onclick, onerror, onload, etc.)
+	// Handles both quoted and unquoted attribute values
+	eventHandlerRegex = regexp.MustCompile(`(?i)\s+on\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)`)
+	// Matches dangerous URL protocols (javascript:, data:, vbscript:) in href/src/style attributes
+	dangerousURLRegex = regexp.MustCompile(`(?i)(href|src|style)\s*=\s*(?:"[^"]*(?:javascript|data|vbscript)[^"]*"|'[^']*(?:javascript|data|vbscript)[^']*')`)
+	// Matches dangerous tags that can carry XSS payloads or cause content injection
+	dangerousTagRegex = regexp.MustCompile(`(?i)</?(?:iframe|object|embed|form|svg|math|style|link|base)[^>]*>`)
+	// Matches dangerous meta refresh tags (but preserves legitimate meta tags like charset, viewport)
+	dangerousMetaRegex = regexp.MustCompile(`(?i)<meta[^>]+http-equiv\s*=\s*["']?refresh["']?[^>]*>`)
 )
 
 // SMTPSender handles sending emails via SMTP.
@@ -203,6 +222,32 @@ func (s *SMTPSender) htmlEscape(text string) string {
 	return html.EscapeString(text)
 }
 
+// sanitizeHTMLBody sanitizes HTML email content to prevent script/content injection.
+// It removes dangerous HTML elements and attributes that could be used for XSS attacks.
+// This is a defense-in-depth measure to catch any missed untrusted interpolation.
+func (s *SMTPSender) sanitizeHTMLBody(body string) string {
+	// Remove script tags and their contents
+	body = scriptRegex.ReplaceAllString(body, "")
+
+	// Remove style tags and their contents (CSS injection)
+	body = styleTagRegex.ReplaceAllString(body, "")
+
+	// Remove event handler attributes (onclick, onerror, onload, etc.)
+	// Handles both quoted and unquoted attribute values
+	body = eventHandlerRegex.ReplaceAllString(body, "")
+
+	// Remove javascript:, data:, vbscript: URLs in href/src/style attributes
+	body = dangerousURLRegex.ReplaceAllString(body, "")
+
+	// Remove dangerous tags (iframe, object, embed, form, svg, math, style, link, base)
+	body = dangerousTagRegex.ReplaceAllString(body, "")
+
+	// Remove dangerous meta refresh tags (but preserve legitimate meta tags)
+	body = dangerousMetaRegex.ReplaceAllString(body, "")
+
+	return body
+}
+
 // buildMessage constructs the email message with headers.
 func (s *SMTPSender) buildMessage(to, subject, body, contentType string) string {
 	var msg bytes.Buffer
@@ -213,8 +258,15 @@ func (s *SMTPSender) buildMessage(to, subject, body, contentType string) string 
 	fmt.Fprintf(&msg, "Date: %s\r\n", time.Now().Format(time.RFC1123Z))
 	msg.WriteString("MIME-Version: 1.0\r\n")
 	fmt.Fprintf(&msg, "Content-Type: %s; charset=\"UTF-8\"\r\n", contentType)
+
+	// Sanitize HTML body to prevent script injection
+	safeBody := body
+	if strings.HasPrefix(strings.ToLower(contentType), "text/html") {
+		safeBody = s.sanitizeHTMLBody(body)
+	}
+
 	msg.WriteString("\r\n")
-	msg.WriteString(body)
+	msg.WriteString(safeBody)
 
 	return msg.String()
 }

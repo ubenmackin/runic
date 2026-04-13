@@ -357,13 +357,15 @@ func (h *Handler) UpdateSMTPConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Upsert each setting
+	// Note: Boolean values are stored as "1" or "0" to match how they are read back
+	// (using CAST(value AS INTEGER) in GetSMTPConfig)
 	settings := map[string]string{
 		"smtp_host":         req.Host,
 		"smtp_port":         strconv.Itoa(req.Port),
 		"smtp_username":     req.Username,
-		"smtp_use_tls":      strconv.FormatBool(req.UseTLS),
+		"smtp_use_tls":      strconv.Itoa(boolToInt(req.UseTLS)),
 		"smtp_from_address": req.FromAddress,
-		"smtp_enabled":      strconv.FormatBool(req.Enabled),
+		"smtp_enabled":      strconv.Itoa(boolToInt(req.Enabled)),
 	}
 
 	for key, value := range settings {
@@ -645,4 +647,13 @@ func (h *Handler) RegisterRoutes(r *mux.Router) {
 func (h *Handler) RegisterUserRoutes(r *mux.Router) {
 	r.HandleFunc("/users/me/notification-preferences", h.GetNotificationPrefs).Methods("GET")
 	r.HandleFunc("/users/me/notification-preferences", h.UpdateNotificationPrefs).Methods("PUT")
+}
+
+// boolToInt converts a boolean to an integer (1 for true, 0 for false).
+// Used for storing boolean values in system_config as "1" or "0" strings.
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }

@@ -1107,6 +1107,19 @@ INSERT INTO alert_rules (name, alert_type, enabled, threshold_value, threshold_w
 		log.Info("Migration: created user_notification_preferences table")
 	}
 
+	// Add missing columns to user_notification_preferences if they don't exist
+	if hasUserNotificationPrefs {
+		if err := addColumnIfMissing(ctx, database, "user_notification_preferences", "quiet_hours_enabled", "BOOLEAN NOT NULL DEFAULT 0"); err != nil {
+			return err
+		}
+		if err := addColumnIfMissing(ctx, database, "user_notification_preferences", "digest_frequency", "TEXT DEFAULT 'daily'"); err != nil {
+			return err
+		}
+		if err := addColumnIfMissing(ctx, database, "user_notification_preferences", "digest_timezone", "TEXT DEFAULT 'UTC'"); err != nil {
+			return err
+		}
+	}
+
 	// Table 4: alert_digests - stores daily digest history
 	var hasAlertDigests bool
 	err = database.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='alert_digests'").Scan(&hasAlertDigests)
