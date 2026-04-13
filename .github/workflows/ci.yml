@@ -39,7 +39,7 @@ jobs:
         id: cache-dist
         uses: actions/cache@v4
         with:
-          path: web/dist/
+          path: internal/api/web/dist/
           # This key creates a unique fingerprint of your frontend source code.
           # Adjust the paths inside hashFiles() if your source code lives elsewhere!
           key: ${{ runner.os }}-frontend-dist-${{ hashFiles('web/src/**', 'web/index.html', 'web/package-lock.json', 'web/*.config.*') }}
@@ -66,6 +66,36 @@ jobs:
           path: web/dist/
           retention-days: 1
 
+  frontend-test:
+    needs: [changes, frontend]
+    if: ${{ needs.changes.outputs.frontend == 'true' }}
+    name: Test Frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Run tests with coverage
+        working-directory: web
+        run: npm run test:coverage
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: web/coverage/
+          retention-days: 7
+
   backend:
     needs: [changes, frontend]
     if: ${{ needs.changes.outputs.backend == 'true' }}
@@ -78,7 +108,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: frontend-dist
-          path: web/dist/
+          path: internal/api/web/dist/
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -107,6 +137,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Download frontend artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: internal/api/web/dist/
 
       - name: Set up Go
         uses: actions/setup-go@v5
