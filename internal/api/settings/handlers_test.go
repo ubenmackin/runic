@@ -625,3 +625,257 @@ func TestGetLogSettings_NilLogsDB(t *testing.T) {
 		t.Errorf("expected log count 0, got %d", resp.LogCount)
 	}
 }
+
+// =============================================================================
+// Test GetInstanceSettings
+// =============================================================================
+
+func TestGetInstanceSettings(t *testing.T) {
+	tests := []struct {
+		name     string
+		setup    func(t *testing.T, db *sql.DB)
+		wantCode int
+		wantURL  string
+	}{
+		{
+			name:     "instance_url not set - returns empty string",
+			setup:    nil,
+			wantCode: http.StatusOK,
+			wantURL:  "",
+		},
+		{
+			name: "instance_url set - returns the URL",
+			setup: func(t *testing.T, db *sql.DB) {
+				db.Exec(`INSERT INTO system_config (key, value) VALUES ('instance_url', 'https://example.com')`)
+			},
+			wantCode: http.StatusOK,
+			wantURL:  "https://example.com",
+		},
+		{
+			name: "instance_url set to empty string",
+			setup: func(t *testing.T, db *sql.DB) {
+				db.Exec(`INSERT INTO system_config (key, value) VALUES ('instance_url', '')`)
+			},
+			wantCode: http.StatusOK,
+			wantURL:  "",
+		},
+		{
+			name: "instance_url with port",
+			setup: func(t *testing.T, db *sql.DB) {
+				db.Exec(`INSERT INTO system_config (key, value) VALUES ('instance_url', 'https://example.com:8443')`)
+			},
+			wantCode: http.StatusOK,
+			wantURL:  "https://example.com:8443",
+		},
+		{
+			name: "instance_url with path",
+			setup: func(t *testing.T, db *sql.DB) {
+				db.Exec(`INSERT INTO system_config (key, value) VALUES ('instance_url', 'https://example.com/runic')`)
+			},
+			wantCode: http.StatusOK,
+			wantURL:  "https://example.com/runic",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db, cleanup := testutil.SetupTestDBWithSecret(t)
+			defer cleanup()
+
+			if tt.setup != nil {
+				tt.setup(t, db)
+			}
+
+			req := httptest.NewRequest("GET", "/api/v1/settings/instance", nil)
+			w := httptest.NewRecorder()
+
+			handler := NewHandler(db, nil, "")
+			handler.GetInstanceSettings(w, req)
+
+			if w.Code != tt.wantCode {
+				t.Errorf("expected status %d, got %d: %s", tt.wantCode, w.Code, w.Body.String())
+			}
+
+			var resp map[string]string
+			if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+				t.Fatalf("failed to decode response: %v", err)
+			}
+
+			if resp["url"] != tt.wantURL {
+				t.Errorf("expected url '%s', got '%s'", tt.wantURL, resp["url"])
+			}
+		})
+	}
+}
+
+// =============================================================================
+// Test UpdateInstanceSettings
+// =============================================================================
+
+func TestUpdateInstanceSettings(t *testing.T) {
+	tests := []struct {
+		name     string
+		reqBody  string
+		wantCode int
+		wantURL  string
+	}{
+		{
+			name:     "valid https URL",
+			reqBody:  `{"url": "https://example.com"}`,
+			wantCode: http.StatusOK,
+			wantURL:  "https://example.com",
+		},
+		{
+			name:     "valid http URL",
+			reqBody:  `{"url": "http://localhost:8080"}`,
+			wantCode: http.StatusOK,
+			wantURL:  "http://localhost:8080",
+		},
+		{
+			name:     "valid URL with path",
+			reqBody:  `{"url": "https://example.com/runic/api"}`,
+			wantCode: http.StatusOK,
+			wantURL:  "https://example.com/runic/api",
+		},
+		{
+			name:     "empty URL - should be allowed",
+			reqBody:  `{"url": ""}`,
+			wantCode: http.StatusOK,
+			wantURL:  "",
+		},
+		{
+			name:     "URL with port",
+			reqBody:  `{"url": "https://example.com:9443"}`,
+			wantCode: http.StatusOK,
+			wantURL:  "https://example.com:9443",
+		},
+		{
+			name:     "IP address URL",
+			reqBody:  `{"url": "http://192.168.1.100:3000"}`,
+			wantCode: http.StatusOK,
+			wantURL:  "http://192.168.1.100:3000",
+		},
+		{
+			name:     "invalid URL - malformed",
+			reqBody:  `{"url": "://invalid-url"}`,
+			wantCode: http.StatusBadRequest,
+		},
+		{
+			name:     "invalid JSON body",
+			reqBody:  `{invalid json}`,
+			wantCode: http.StatusBadRequest,
+		},
+		{
+			name:     "empty body - uses default empty",
+			reqBody:  `{}`,
+			wantCode: http.StatusOK,
+			wantURL:  "",
+		},
+		// Security test cases
+		{
+			name:     "javascript URL scheme - should be rejected",
+			reqBody:  `{"url": "javascript:alert(1)"}`,
+			wantCode: http.StatusBadRequest,
+		},
+		{
+			name:     "data URL scheme - should be rejected",
+			reqBody:  `{"url": "data:text/html,<script>alert(1)</script>"}`,
+			wantCode: http.StatusBadRequest,
+		},
+		{
+			name:     "file URL scheme - should be rejected",
+			reqBody:  `{"url": "file:///etc/passwd"}`,
+			wantCode: http.StatusBadRequest,
+		},
+		{
+			name:     "URL exceeds max length - should be rejected",
+			reqBody:  `{"url": "https://example.com/` + strings.Repeat("a", 2100) + `"}`,
+			wantCode: http.StatusBadRequest,
+		},
+		{
+			name:     "SQL injection attempt in query params - should be sanitized",
+			reqBody:  `{"url": "https://example.com/path?q=1'; DROP TABLE system_config; --"}`,
+			wantCode: http.StatusOK,
+			wantURL:  "https://example.com/path?q=1'; DROP TABLE system_config; --",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db, cleanup := testutil.SetupTestDBWithSecret(t)
+			defer cleanup()
+
+			req := httptest.NewRequest("PUT", "/api/v1/settings/instance", strings.NewReader(tt.reqBody))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+
+			handler := NewHandler(db, nil, "")
+			handler.UpdateInstanceSettings(w, req)
+
+			if w.Code != tt.wantCode {
+				t.Errorf("expected status %d, got %d: %s", tt.wantCode, w.Code, w.Body.String())
+			}
+
+			if tt.wantCode == http.StatusOK {
+				var resp map[string]string
+				if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+					t.Fatalf("failed to decode response: %v", err)
+				}
+
+				if resp["url"] != tt.wantURL {
+					t.Errorf("expected url '%s', got '%s'", tt.wantURL, resp["url"])
+				}
+
+				// Verify the URL was persisted in the database
+				var storedURL string
+				err := db.QueryRow("SELECT value FROM system_config WHERE key = 'instance_url'").Scan(&storedURL)
+				if err != nil {
+					t.Fatalf("failed to query stored URL: %v", err)
+				}
+				if storedURL != tt.wantURL {
+					t.Errorf("expected stored url '%s', got '%s'", tt.wantURL, storedURL)
+				}
+			}
+		})
+	}
+}
+
+// =============================================================================
+// Test UpdateInstanceSettings - update existing value
+// =============================================================================
+
+func TestUpdateInstanceSettings_UpdateExisting(t *testing.T) {
+	db, cleanup := testutil.SetupTestDBWithSecret(t)
+	defer cleanup()
+
+	// Set initial value
+	db.Exec(`INSERT INTO system_config (key, value) VALUES ('instance_url', 'https://old.example.com')`)
+
+	// Update to new value
+	req := httptest.NewRequest("PUT", "/api/v1/settings/instance", strings.NewReader(`{"url": "https://new.example.com"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handler := NewHandler(db, nil, "")
+	handler.UpdateInstanceSettings(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d: %s", http.StatusOK, w.Code, w.Body.String())
+	}
+
+	var resp map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if resp["url"] != "https://new.example.com" {
+		t.Errorf("expected url 'https://new.example.com', got '%s'", resp["url"])
+	}
+
+	// Verify only one row exists
+	var count int
+	db.QueryRow("SELECT COUNT(*) FROM system_config WHERE key = 'instance_url'").Scan(&count)
+	if count != 1 {
+		t.Errorf("expected 1 row, got %d", count)
+	}
+}

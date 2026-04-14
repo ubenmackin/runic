@@ -1028,6 +1028,15 @@ initialize_database() {
 		exit 1
 	}
 	log SUCCESS "Control plane port stored in system configuration"
+
+	# Store instance URL (constructed from CONTROL_PLANE_URL and port)
+	INSTANCE_URL="https://$CONTROL_PLANE_URL:$RUNIC_PORT"
+	log INFO "Storing instance URL ($INSTANCE_URL) in system configuration..."
+	sqlite3 "$DATA_DIR/runic.db" "INSERT OR REPLACE INTO system_config (key, value) VALUES ('instance_url', '$INSTANCE_URL');" 2>> "$LOG_FILE" || {
+		log ERROR "Failed to store instance_url in system_config"
+		exit 1
+	}
+	log SUCCESS "Instance URL stored in system configuration"
 else
         log ERROR "Database was not created despite server starting successfully"
         log ERROR "Database path: $DATA_DIR/runic.db"

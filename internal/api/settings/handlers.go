@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"strconv"
 
 	"runic/internal/api/common"
@@ -136,10 +137,72 @@ func (h *Handler) ClearAllLogs(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// GetInstanceSettings returns the instance URL configuration.
+func (h *Handler) GetInstanceSettings(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	var instanceURL sql.NullString
+	err := h.DB.QueryRowContext(ctx, "SELECT value FROM system_config WHERE key = 'instance_url'").Scan(&instanceURL)
+	if err != nil && err != sql.ErrNoRows {
+		common.RespondError(w, http.StatusInternalServerError, "failed to get instance settings")
+		return
+	}
+
+	url := ""
+	if instanceURL.Valid {
+		url = instanceURL.String
+	}
+
+	common.RespondJSON(w, http.StatusOK, map[string]string{"url": url})
+}
+
+// UpdateInstanceSettings updates the instance URL configuration.
+func (h *Handler) UpdateInstanceSettings(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	var req struct {
+		URL string `json:"url"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		common.RespondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	// Validate URL format and scheme
+	if req.URL != "" {
+		parsed, err := url.Parse(req.URL)
+		if err != nil {
+			common.RespondError(w, http.StatusBadRequest, "invalid URL format")
+			return
+		}
+		if parsed.Scheme != "http" && parsed.Scheme != "https" {
+			common.RespondError(w, http.StatusBadRequest, "URL must use http or https scheme")
+			return
+		}
+		if len(req.URL) > 2048 {
+			common.RespondError(w, http.StatusBadRequest, "URL exceeds maximum length of 2048 characters")
+			return
+		}
+	}
+
+	_, err := h.DB.ExecContext(ctx,
+		"INSERT OR REPLACE INTO system_config (key, value, updated_at) VALUES ('instance_url', ?, CURRENT_TIMESTAMP)",
+		req.URL,
+	)
+	if err != nil {
+		common.RespondError(w, http.StatusInternalServerError, "failed to update instance settings")
+		return
+	}
+
+	common.RespondJSON(w, http.StatusOK, map[string]string{"url": req.URL})
+}
+
 // RegisterRoutes adds settings routes to the given router
 func (h *Handler) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/logs", h.GetLogSettings).Methods("GET")
 	r.HandleFunc("/logs", h.UpdateLogSettings).Methods("PUT")
+	r.HandleFunc("/instance", h.GetInstanceSettings).Methods("GET")
+	r.HandleFunc("/instance", h.UpdateInstanceSettings).Methods("PUT")
 }
 
 func getRetentionLabel(days int) string {

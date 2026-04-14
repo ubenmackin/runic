@@ -83,3 +83,13 @@ func GetBoolConfig(ctx context.Context, db db.Querier, key string) (bool, error)
 	}
 	return val == 1, nil
 }
+
+// GetInstanceURL retrieves the instance URL from system_config.
+func GetInstanceURL(ctx context.Context, db db.Querier) string {
+	var url string
+	err := db.QueryRowContext(ctx, "SELECT value FROM system_config WHERE key = 'instance_url'").Scan(&url)
+	if err != nil || url == "" {
+		return "" // Caller should handle empty case
+	}
+	return url
+}

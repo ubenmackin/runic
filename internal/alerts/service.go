@@ -237,9 +237,9 @@ func (s *Service) Initialize() error {
 		s.logger.Warn("failed to load SMTP config, alerts will be disabled", "error", err)
 		// Create a disabled SMTP sender
 		disabledConfig := SMTPConfig{Enabled: false}
-		s.smtpSender = NewSMTPSender(&disabledConfig, s.encryptor)
+		s.smtpSender = NewSMTPSender(&disabledConfig, s.encryptor, s.database)
 	} else {
-		s.smtpSender = NewSMTPSender(smtpConfig, s.encryptor)
+		s.smtpSender = NewSMTPSender(smtpConfig, s.encryptor, s.database)
 		s.logger.Info("SMTP sender initialized",
 			"host", smtpConfig.Host,
 			"port", smtpConfig.Port,

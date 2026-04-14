@@ -3,6 +3,7 @@ package alerts
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"fmt"
 	"html"
@@ -12,9 +13,9 @@ import (
 	"strings"
 	"time"
 
-	"runic/internal/crypto"
-
 	"runic/internal/common/log"
+	"runic/internal/crypto"
+	"runic/internal/db"
 )
 
 // Package-level compiled regexes for HTML sanitization (compile once).
@@ -51,15 +52,18 @@ type SMTPSender struct {
 	config    SMTPConfig
 	encryptor *crypto.Encryptor
 	logger    *slog.Logger
+	database  db.Querier
 }
 
 // NewSMTPSender creates a new SMTP sender with the given configuration.
 // The encryptor is used to decrypt the SMTP password if it's encrypted.
-func NewSMTPSender(config *SMTPConfig, encryptor *crypto.Encryptor) *SMTPSender {
+// The database is used to query instance_url for email footer links.
+func NewSMTPSender(config *SMTPConfig, encryptor *crypto.Encryptor, database db.Querier) *SMTPSender {
 	return &SMTPSender{
 		config:    *config,
 		encryptor: encryptor,
 		logger:    log.L().With("component", "smtp_sender"),
+		database:  database,
 	}
 }
 
@@ -85,7 +89,10 @@ func (s *SMTPSender) SendAlertEmail(to string, event *AlertEvent) error {
 		subject = s.generateAlertSubject(event)
 	}
 
-	htmlBody := s.generateAlertHTML(event)
+	// Get instance URL for footer links
+	instanceURL := GetInstanceURL(context.Background(), s.database)
+
+	htmlBody := s.generateAlertHTML(event, instanceURL)
 	return s.SendHTML(to, subject, htmlBody)
 }
 
@@ -345,7 +352,7 @@ func (s *SMTPSender) generateAlertSubject(event *AlertEvent) string {
 }
 
 // generateAlertHTML creates an HTML email body for an alert event.
-func (s *SMTPSender) generateAlertHTML(event *AlertEvent) string {
+func (s *SMTPSender) generateAlertHTML(event *AlertEvent, instanceURL string) string {
 	// Runic branding colors
 	purple := "#7C3AED"
 	amber := "#F59E0B"
@@ -388,9 +395,9 @@ func (s *SMTPSender) generateAlertHTML(event *AlertEvent) string {
 `, s.htmlEscape(event.PeerName), event.PeerID)
 	case AlertTypeBlockedSpike:
 		fmt.Fprintf(&alertContent, `
-			<p><strong>Blocked Events:</strong> %d</p>
-			<p>A spike in blocked traffic has been detected.</p>
-		`, event.Value)
+<p><strong>Blocked Events:</strong> %d</p>
+<p>A spike in blocked traffic has been detected.</p>
+`, event.Value)
 	default:
 		fmt.Fprintf(&alertContent, `
 <p><strong>Alert Type:</strong> %s</p>
@@ -402,63 +409,67 @@ func (s *SMTPSender) generateAlertHTML(event *AlertEvent) string {
 		fmt.Fprintf(&alertContent, `<p><strong>Details:</strong> %s</p>`, s.htmlEscape(event.Message))
 	}
 
+	// Build footer URLs
+	runicLink := instanceURL
+	settingsLink := instanceURL + "/settings"
+
 	// Build full HTML email
 	html := fmt.Sprintf(`
 <!DOCTYPE html>
 <html>
 <head>
-	<meta charset="UTF-8">
-	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 </head>
-<body style="margin: 0; padding: 0; background-color: #f3f4f6; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;">
-	<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%%" style="background-color: #f3f4f6; padding: 40px 20px;">
-		<tr>
-			<td align="center">
-				<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="600" style="background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">
-					<!-- Header -->
-					<tr>
-						<td style="background-color: %s; padding: 30px 40px; text-align: center;">
-							<h1 style="margin: 0; color: #ffffff; font-size: 28px; font-weight: 700;">Runic</h1>
-							<p style="margin: 10px 0 0 0; color: #ffffff; opacity: 0.9; font-size: 14px;">Network Policy Management</p>
-						</td>
-					</tr>
-					<!-- Alert Badge -->
-					<tr>
-						<td style="padding: 30px 40px 10px 40px; text-align: center;">
-							<span style="display: inline-block; background-color: %s; color: #ffffff; padding: 8px 20px; border-radius: 20px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px;">%s</span>
-						</td>
-					</tr>
-					<!-- Content -->
-					<tr>
-						<td style="padding: 20px 40px 30px 40px;">
-							<h2 style="margin: 0 0 20px 0; color: #1f2937; font-size: 20px; font-weight: 600;">%s</h2>
-							<div style="color: #4b5563; font-size: 16px; line-height: 1.6;">
-								%s
-							</div>
-						</td>
-					</tr>
-					<!-- Timestamp -->
-					<tr>
-						<td style="padding: 0 40px 30px 40px;">
-							<p style="margin: 0; color: #9ca3af; font-size: 14px;">
-								<strong>Timestamp:</strong> %s
-							</p>
-						</td>
-					</tr>
-					<!-- Footer -->
-					<tr>
-						<td style="background-color: #f9fafb; padding: 20px 40px; border-top: 1px solid #e5e7eb;">
-							<p style="margin: 0; color: #6b7280; font-size: 12px; text-align: center;">
-								This is an automated alert from <a href="#" style="color: %s; text-decoration: none; font-weight: 600;">Runic</a>.
-								<br>
-								<a href="#" style="color: %s; text-decoration: none;">Manage notification preferences</a>
-							</p>
-						</td>
-					</tr>
-				</table>
-			</td>
-		</tr>
-	</table>
+<body style="margin: 0; padding: 0; background-color: #f3f4f6; font-family: -apple-system, BlinkMacSystemFont, \'Segoe UI\', Roboto, \'Helvetica Neue\', Arial, sans-serif;">
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%%" style="background-color: #f3f4f6; padding: 40px 20px;">
+<tr>
+<td align="center">
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="600" style="background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">
+<!-- Header -->
+<tr>
+<td style="background-color: %s; padding: 30px 40px; text-align: center;">
+<h1 style="margin: 0; color: #ffffff; font-size: 28px; font-weight: 700;">Runic</h1>
+<p style="margin: 10px 0 0 0; color: #ffffff; opacity: 0.9; font-size: 14px;">Network Policy Management</p>
+</td>
+</tr>
+<!-- Alert Badge -->
+<tr>
+<td style="padding: 30px 40px 10px 40px; text-align: center;">
+<span style="display: inline-block; background-color: %s; color: #ffffff; padding: 8px 20px; border-radius: 20px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px;">%s</span>
+</td>
+</tr>
+<!-- Content -->
+<tr>
+<td style="padding: 20px 40px 30px 40px;">
+<h2 style="margin: 0 0 20px 0; color: #1f2937; font-size: 20px; font-weight: 600;">%s</h2>
+<div style="color: #4b5563; font-size: 16px; line-height: 1.6;">
+%s
+</div>
+</td>
+</tr>
+<!-- Timestamp -->
+<tr>
+<td style="padding: 0 40px 30px 40px;">
+<p style="margin: 0; color: #9ca3af; font-size: 14px;">
+<strong>Timestamp:</strong> %s
+</p>
+</td>
+</tr>
+<!-- Footer -->
+<tr>
+<td style="background-color: #f9fafb; padding: 20px 40px; border-top: 1px solid #e5e7eb;">
+<p style="margin: 0; color: #6b7280; font-size: 12px; text-align: center;">
+This is an automated alert from <a href="%s" style="color: %s; text-decoration: none; font-weight: 600;">Runic</a>.
+<br>
+<a href="%s" style="color: %s; text-decoration: none;">Manage notification preferences</a>
+</p>
+</td>
+</tr>
+</table>
+</td>
+</tr>
+</table>
 </body>
 </html>
 `,
@@ -467,8 +478,8 @@ func (s *SMTPSender) generateAlertHTML(event *AlertEvent) string {
 		s.htmlEscape(string(event.Type)),     // h2 title
 		alertContent.String(),                // content
 		event.Timestamp.Format(time.RFC1123), // timestamp
-		purple,                               // footer link color
-		amber,                                // preferences link color
+		runicLink, purple,                    // footer runic link
+		settingsLink, amber, // footer settings link
 	)
 
 	return html

@@ -496,7 +496,7 @@ func TestGenerateAlertHTML(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := s.generateAlertHTML(tt.event)
+			got := s.generateAlertHTML(tt.event, "")
 
 			for _, want := range tt.wantContains {
 				if !strings.Contains(got, want) {
@@ -518,7 +518,7 @@ func TestGenerateAlertHTML_ValidHTMLStructure(t *testing.T) {
 		Timestamp: time.Now(),
 	}
 
-	html := s.generateAlertHTML(event)
+	html := s.generateAlertHTML(event, "")
 
 	requiredElements := []string{
 		"<!DOCTYPE html>",
@@ -579,7 +579,7 @@ func TestGenerateAlertHTML_SeverityBadge(t *testing.T) {
 				Timestamp: time.Now(),
 			}
 
-			html := s.generateAlertHTML(event)
+			html := s.generateAlertHTML(event, "")
 
 			if !strings.Contains(html, tt.expectedBadge) {
 				t.Errorf("generateAlertHTML() missing badge label %q", tt.expectedBadge)
@@ -604,7 +604,7 @@ func TestGenerateAlertHTML_Timestamp(t *testing.T) {
 		Timestamp: testTime,
 	}
 
-	html := s.generateAlertHTML(event)
+	html := s.generateAlertHTML(event, "")
 
 	expectedFormat := testTime.Format(time.RFC1123)
 	if !strings.Contains(html, expectedFormat) {
@@ -624,7 +624,7 @@ func TestGenerateAlertHTML_EventDetails(t *testing.T) {
 		Message:   "Custom message for this alert",
 	}
 
-	html := s.generateAlertHTML(event)
+	html := s.generateAlertHTML(event, "")
 
 	if !strings.Contains(html, "test-peer") {
 		t.Error("generateAlertHTML() missing peer name")
@@ -688,7 +688,7 @@ func TestGenerateAlertHTML_DifferentContentTypes(t *testing.T) {
 				Timestamp: time.Now(),
 			}
 
-			html := s.generateAlertHTML(event)
+			html := s.generateAlertHTML(event, "")
 
 			if !strings.Contains(html, tt.expectedContent) {
 				t.Errorf("generateAlertHTML() for %s missing expected content %q", tt.eventType, tt.expectedContent)
@@ -922,7 +922,7 @@ func TestSendAlertEmail_MaliciousInput(t *testing.T) {
 			}
 
 			// Test HTML generation
-			html := s.generateAlertHTML(tt.event)
+			html := s.generateAlertHTML(tt.event, "")
 
 			for _, want := range tt.wantInHTML {
 				if !strings.Contains(html, want) {
@@ -1261,7 +1261,7 @@ func TestSanitizeHTMLBody_EmailTemplate(t *testing.T) {
 		Message:   "Peer has been offline for 60 minutes",
 	}
 
-	html := s.generateAlertHTML(event)
+	html := s.generateAlertHTML(event, "")
 	sanitized := s.sanitizeHTMLBody(html)
 
 	// The template should pass through unchanged since it's trusted
