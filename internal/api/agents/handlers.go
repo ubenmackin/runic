@@ -289,16 +289,18 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 
 		// Trigger new_peer alert for newly registered peer
 		if h.AlertService != nil {
+			// Sanitize hostname before using it in alert content (subject/body/metadata).
+			safeHostname, _ := alerts.SanitizeAlertInput(input.Hostname, 0)
 			// Get the ID of the newly inserted peer
 			var newPeerID int
 			if err := h.DB.QueryRowContext(ctx, "SELECT id FROM peers WHERE hostname = ?", input.Hostname).Scan(&newPeerID); err == nil {
 				if err := h.AlertService.TriggerAlert(ctx, &alerts.AlertEvent{
 					Type:     alerts.AlertTypeNewPeer,
 					PeerID:   newPeerID,
-					PeerName: input.Hostname,
-					Subject:  fmt.Sprintf("New Peer Registered: %s", input.Hostname),
+					PeerName: safeHostname,
+					Subject:  fmt.Sprintf("New Peer Registered: %s", safeHostname),
 					Metadata: map[string]interface{}{
-						"hostname":      input.Hostname,
+						"hostname":      safeHostname,
 						"ip_address":    input.IP,
 						"os_type":       input.OSType,
 						"agent_version": input.AgentVersion,
