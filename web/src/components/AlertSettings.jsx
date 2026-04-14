@@ -69,7 +69,7 @@ export default function AlertSettings() {
 
   if (rulesError) {
     return (
-      <div className="flex items-center gap-2 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+      <div className="flex items-center gap-2 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-none">
         <AlertTriangle className="w-5 h-5 text-red-500" />
         <span className="text-red-700 dark:text-red-400">Failed to load alert rules: {rulesError.message}</span>
       </div>
@@ -147,7 +147,7 @@ export default function AlertSettings() {
                         onChange={(e) => handleUpdateRule(rule?.id, 'threshold_value', parseInt(e.target.value) || 1)}
                         onBlur={() => handleUpdateRule(rule?.id, 'threshold_value', threshold)}
                         disabled={mutation.isPending || !rule}
-                        className="w-20 px-2 py-1 text-center text-sm border border-gray-300 dark:border-gray-border rounded bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral disabled:opacity-50"
+                        className="w-20 px-2 py-1 text-center text-sm border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral disabled:opacity-50"
                       />
                     </div>
                   </td>
@@ -157,7 +157,7 @@ export default function AlertSettings() {
                         value={windowMin}
                         onChange={(e) => handleUpdateRule(rule?.id, 'threshold_window_minutes', parseInt(e.target.value))}
                         disabled={mutation.isPending || !rule}
-                        className="w-24 px-2 py-1 text-sm border border-gray-300 dark:border-gray-border rounded bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral disabled:opacity-50"
+                        className="w-24 px-2 py-1 text-sm border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral disabled:opacity-50"
                       >
                         {WINDOW_OPTIONS.map(opt => (
                           <option key={opt} value={opt}>{opt}</option>
@@ -171,7 +171,7 @@ export default function AlertSettings() {
                         value={throttleMin}
                         onChange={(e) => handleUpdateRule(rule?.id, 'throttle_minutes', parseInt(e.target.value))}
                         disabled={mutation.isPending || !rule}
-                        className="w-24 px-2 py-1 text-sm border border-gray-300 dark:border-gray-border rounded bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral disabled:opacity-50"
+                        className="w-24 px-2 py-1 text-sm border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral disabled:opacity-50"
                       >
                         {THROTTLE_OPTIONS.map(opt => (
                           <option key={opt} value={opt}>{opt}</option>
@@ -184,7 +184,7 @@ export default function AlertSettings() {
                       value={peerOverride || ''}
                       onChange={(e) => handleUpdateRule(rule?.id, 'peer_override_hostname', e.target.value || null)}
                       disabled={mutation.isPending || !rule}
-                      className="w-40 px-2 py-1 text-sm border border-gray-300 dark:border-gray-border rounded bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral disabled:opacity-50"
+                      className="w-40 px-2 py-1 text-sm border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral disabled:opacity-50"
                     >
                       <option value="">All Peers</option>
                       {peers?.map(peer => (
@@ -202,7 +202,7 @@ export default function AlertSettings() {
       </div>
 
       {/* Info note */}
-      <div className="flex items-start gap-2 p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
+      <div className="flex items-start gap-2 p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-none">
         <Settings className="w-5 h-5 text-blue-500 mt-0.5" />
         <div className="text-sm text-blue-700 dark:text-blue-400">
           <p className="font-medium">Configuration Notes:</p>

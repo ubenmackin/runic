@@ -31,7 +31,7 @@ export default function LogLine({ log, expanded, onToggle }) {
         onClick={toggleExpand}
       >
         {/* Expand toggle */}
-        <button className="p-0.5 hover:bg-gray-200 dark:hover:bg-charcoal-darkest rounded">
+        <button className="p-0.5 hover:bg-gray-200 dark:hover:bg-charcoal-darkest rounded-none">
           {showExpanded ? (
             <ChevronDown className="w-3 h-3 text-gray-400" />
           ) : (
@@ -45,7 +45,7 @@ export default function LogLine({ log, expanded, onToggle }) {
         </span>
 
         {/* Action badge */}
-        <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${actionColor}`}>
+        <span className={`px-1.5 py-0.5 rounded-none text-xs font-medium ${actionColor}`}>
           {log.action}
         </span>
 

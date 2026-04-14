@@ -229,13 +229,13 @@ const peerOptions = availablePeers.map(p => ({
             <button
               onClick={handleManualRefresh}
               disabled={isManualRefreshing}
-              className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 dark:text-amber-primary bg-white dark:bg-charcoal-dark border border-gray-300 dark:border-gray-border rounded-lg hover:bg-gray-50 dark:hover:bg-charcoal-darkest disabled:opacity-50"
+              className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 dark:text-amber-primary bg-white dark:bg-charcoal-dark border border-gray-300 dark:border-gray-border rounded-none hover:bg-gray-50 dark:hover:bg-charcoal-darkest disabled:opacity-50"
             >
               <RefreshCw className={`w-4 h-4 ${isManualRefreshing ? 'animate-spin' : ''}`} />
               Refresh
             </button>
             {canEdit && (
-              <button onClick={openAdd} className="flex items-center gap-2 px-4 py-2 bg-purple-active hover:bg-purple-700 text-white text-sm font-medium rounded-lg">
+              <button onClick={openAdd} className="flex items-center gap-2 px-4 py-2 bg-purple-active hover:bg-purple-600 text-white text-sm font-bold uppercase rounded-none border border-purple-active/20 shadow-[0_0_15px_rgba(159,79,248,0.2)] transition-all">
                 <Plus className="w-4 h-4" /> New Group
               </button>
             )}
@@ -245,7 +245,7 @@ const peerOptions = availablePeers.map(p => ({
 
       {/* System Groups Panel */}
       {systemGroups.length > 0 && (
-        <div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-sm overflow-hidden">
+        <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none overflow-hidden">
           <button
             type="button"
             onClick={() => setShowSystemGroups(!showSystemGroups)}
@@ -299,7 +299,7 @@ const peerOptions = availablePeers.map(p => ({
 				id="showPendingDeletes"
 				checked={showPendingDeletes}
 				onChange={(e) => setShowPendingDeletes(e.target.checked)}
-				className="w-4 h-4 text-purple-active bg-gray-100 border-gray-300 rounded focus:ring-purple-active dark:focus:ring-purple-active dark:ring-offset-gray-800 focus:ring-2 dark:bg-charcoal-darkest dark:border-gray-600"
+				className="w-4 h-4 text-purple-active bg-gray-100 border-gray-300 rounded-none focus:ring-purple-active dark:focus:ring-purple-active dark:ring-offset-gray-800 focus:ring-2 dark:bg-charcoal-darkest dark:border-gray-600"
 			/>
 			<label htmlFor="showPendingDeletes" className="text-sm text-gray-700 dark:text-amber-primary cursor-pointer">
 				Show Pending Deletes
@@ -330,7 +330,7 @@ const peerOptions = availablePeers.map(p => ({
 					<span className="font-medium text-gray-900 dark:text-light-neutral">
 						{g.name}
 						{g.is_pending_delete && (
-							<span className="ml-2 px-2 py-1 text-xs bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300 rounded">
+							<span className="ml-2 px-2 py-1 text-xs bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300 rounded-none">
 								Pending Delete
 							</span>
 						)}
@@ -350,7 +350,7 @@ const peerOptions = availablePeers.map(p => ({
           </button>
             ),
             render: (g) => (
-<div className="flex items-center gap-1.5 px-2 py-1 bg-gray-100 dark:bg-charcoal-darkest rounded text-sm">
+<div className="flex items-center gap-1.5 px-2 py-1 bg-gray-100 dark:bg-charcoal-darkest rounded-none text-sm">
 <Users className="w-4 h-4 text-gray-500" />
 <span className="text-gray-900 dark:text-light-neutral">{g.peer_count || 0}</span>
 </div>
@@ -369,7 +369,7 @@ const peerOptions = availablePeers.map(p => ({
           </button>
             ),
             render: (g) => (
-<div className="flex items-center gap-1.5 px-2 py-1 bg-gray-100 dark:bg-charcoal-darkest rounded text-sm">
+<div className="flex items-center gap-1.5 px-2 py-1 bg-gray-100 dark:bg-charcoal-darkest rounded-none text-sm">
 <Shield className="w-4 h-4 text-gray-500" />
 <span className="text-gray-900 dark:text-light-neutral">{g.policy_count || 0}</span>
 </div>
@@ -383,7 +383,7 @@ const peerOptions = availablePeers.map(p => ({
 						{canEdit && (
 							<button
 								onClick={(e) => { e.stopPropagation(); openEdit(g) }}
-								className={`p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded ${(g.is_system || g.is_pending_delete) ? 'text-gray-400 cursor-not-allowed opacity-50' : ''}`}
+								className={`p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none ${(g.is_system || g.is_pending_delete) ? 'text-gray-400 cursor-not-allowed opacity-50' : ''}`}
 								disabled={g.is_system || g.is_pending_delete}
 								title={g.is_pending_delete ? "Cannot edit soft-deleted groups" : g.is_system ? "System groups cannot be edited" : "Edit"}
 							>
@@ -394,7 +394,7 @@ const peerOptions = availablePeers.map(p => ({
 							<button
 								onClick={(e) => { e.stopPropagation(); !g.is_system && !g.is_pending_delete && setDeleteTarget(g) }}
 								disabled={g.is_system || g.is_pending_delete}
-								className={`p-1 rounded ${(g.is_system || g.is_pending_delete) ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-100 dark:hover:bg-charcoal-darkest'}`}
+								className={`p-1 rounded-none ${(g.is_system || g.is_pending_delete) ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-100 dark:hover:bg-charcoal-darkest'}`}
 								title={g.is_pending_delete ? "Cannot delete soft-deleted groups" : g.is_system ? "System groups cannot be deleted" : "Delete"}
 							>
 								<Trash2 className="w-4 h-4 text-red-500" />
@@ -422,12 +422,12 @@ const peerOptions = availablePeers.map(p => ({
           }
         }}
       >
-<div ref={modalRef} className="bg-white dark:bg-charcoal-dark rounded-xl shadow-xl w-full max-w-2xl mx-4 max-h-[90vh] overflow-y-auto">
+<div ref={modalRef} className="bg-white dark:bg-charcoal-dark rounded-none shadow-none w-full max-w-2xl mx-4 max-h-[90vh] overflow-y-auto">
 <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-border flex items-center justify-between">
 <h3 id="modal-title" className="text-lg font-semibold text-gray-900 dark:text-light-neutral">
                 {editGroup ? `Edit Group: ${editGroup.name}` : 'New Group'}
               </h3>
-              <button onClick={closeModal} className="p-1 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded">
+              <button onClick={closeModal} className="p-1 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none">
                 <X className="w-5 h-5 text-gray-500" />
               </button>
             </div>
@@ -440,7 +440,7 @@ value={formData.name}
 onChange={e => setFormData(d => ({ ...d, name: e.target.value }))}
 required
 disabled={editGroup?.is_system}
-className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral disabled:opacity-50 disabled:cursor-not-allowed"
+className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral disabled:opacity-50 disabled:cursor-not-allowed"
 />
               </div>
 
@@ -452,27 +452,27 @@ className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border round
 {membersLoading ? (
               <div className="flex flex-wrap gap-2">
                 {[1, 2, 3].map((i) => (
-                  <div key={i} className="animate-pulse bg-gray-200 dark:bg-charcoal-darkest h-8 w-24 rounded-full" />
+                  <div key={i} className="animate-pulse bg-gray-200 dark:bg-charcoal-darkest h-8 w-24" />
                 ))}
               </div>
             ) : (
                     <div className="space-y-3">
                       {/* Member Tags */}
-                      <div className="flex flex-wrap gap-2 min-h-[40px] p-3 border border-gray-300 dark:border-gray-border rounded-lg bg-gray-50 dark:bg-charcoal-darkest">
+                      <div className="flex flex-wrap gap-2 min-h-[40px] p-3 border border-gray-300 dark:border-gray-border rounded-none bg-gray-50 dark:bg-charcoal-darkest">
                         {members.length === 0 ? (
                           <span className="text-sm text-gray-500 italic">No members in this group</span>
                         ) : (
                           members.map(m => (
 <span
 key={m.id}
-className="px-3 py-1 bg-gray-100 dark:bg-charcoal-darkest rounded-full text-sm flex items-center gap-2"
+className="px-3 py-1 bg-gray-100 dark:bg-charcoal-darkest rounded-none text-sm flex items-center gap-2"
 >
 <span className="text-gray-900 dark:text-light-neutral">{m.hostname || m.ip_address}</span>
 {!editGroup?.is_system && (
 <button
 type="button"
 onClick={() => handleRemovePeer(m.id)}
-className="hover:bg-gray-200 dark:hover:bg-charcoal-dark rounded-full p-0.5"
+className="hover:bg-gray-200 dark:hover:bg-charcoal-dark rounded-none p-0.5"
                                   disabled={deleteMemberMutation.isPending}
                                 >
                                   <X className="w-3 h-3 text-gray-500 hover:text-red-500" />
@@ -504,7 +504,7 @@ className="hover:bg-gray-200 dark:hover:bg-charcoal-dark rounded-full p-0.5"
                           type="button"
                           onClick={handleAddPeer}
                           disabled={!selectedPeerId || addMemberMutation.isPending}
-                          className="px-3 py-2 text-sm font-medium text-white bg-purple-active hover:bg-purple-700 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
+                          className="px-3 py-2 text-sm font-bold uppercase text-white bg-purple-active hover:bg-purple-600 rounded-none disabled:opacity-50 disabled:cursor-not-allowed border border-purple-active/20 shadow-[0_0_15px_rgba(159,79,248,0.2)] transition-all"
                         >
                           Add
                         </button>
@@ -524,7 +524,7 @@ className="hover:bg-gray-200 dark:hover:bg-charcoal-dark rounded-full p-0.5"
                   onChange={e => setFormData(d => ({ ...d, description: e.target.value }))}
                   rows={2}
                   disabled={editGroup?.is_system}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral disabled:opacity-50 disabled:cursor-not-allowed"
                 />
               </div>
 
@@ -532,14 +532,14 @@ className="hover:bg-gray-200 dark:hover:bg-charcoal-dark rounded-full p-0.5"
                 <button
                   type="button"
                   onClick={closeModal}
-                  className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-amber-primary bg-white dark:bg-charcoal-dark border border-gray-300 dark:border-gray-border rounded-lg hover:bg-gray-50 dark:hover:bg-charcoal-darkest"
+                  className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-amber-primary bg-white dark:bg-charcoal-dark border border-gray-300 dark:border-gray-border rounded-none hover:bg-gray-50 dark:hover:bg-charcoal-darkest"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={createMutation.isPending || updateMutation.isPending}
-                  className="px-4 py-2 text-sm font-medium text-white bg-purple-active hover:bg-purple-700 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="px-4 py-2 text-sm font-bold uppercase text-white bg-purple-active hover:bg-purple-600 rounded-none disabled:opacity-50 disabled:cursor-not-allowed border border-purple-active/20 shadow-[0_0_15px_rgba(159,79,248,0.2)] transition-all"
                 >
                   {editGroup ? 'Update' : 'Create'}
                 </button>
@@ -562,7 +562,7 @@ className="hover:bg-gray-200 dark:hover:bg-charcoal-dark rounded-full p-0.5"
     {/* Conflict Error Modal */}
     {conflictError && (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-        <div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-xl w-full max-w-md mx-4">
+        <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none w-full max-w-md mx-4">
           <div className="p-6">
             <div className="flex items-center gap-3 mb-4">
               <AlertTriangle className="w-6 h-6 text-amber-500" />
@@ -581,7 +581,7 @@ className="hover:bg-gray-200 dark:hover:bg-charcoal-dark rounded-full p-0.5"
             </p>
             <button
               onClick={() => setConflictError(null)}
-              className="w-full px-4 py-2 bg-gray-100 dark:bg-charcoal-darkest rounded-lg"
+              className="w-full px-4 py-2 bg-gray-100 dark:bg-charcoal-darkest rounded-none"
             >
               Got it
             </button>

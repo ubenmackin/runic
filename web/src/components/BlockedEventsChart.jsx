@@ -4,7 +4,7 @@ import { processHourlyData, drawChart } from '../utils/chart'
 export default function BlockedEventsChart({ logs }) {
   const canvasRef = useRef(null)
   const containerRef = useRef(null)
-  const [hoveredBar, setHoveredBar] = useState(null)
+  const [hoveredPoint, setHoveredPoint] = useState(null)
   const [tooltipPosition, setTooltipPosition] = useState({ top: 0, left: 0 })
 
   const hourlyData = useMemo(() => processHourlyData(logs), [logs])
@@ -21,13 +21,12 @@ export default function BlockedEventsChart({ logs }) {
     canvas.height = height * dpr
     ctx.scale(dpr, dpr)
 
-    drawChart(ctx, width, height, hourlyData, hoveredBar)
-  }, [hourlyData, hoveredBar])
+    drawChart(ctx, width, height, hourlyData, hoveredPoint)
+  }, [hourlyData, hoveredPoint])
 
-  const maxValue = Math.max(...hourlyData.map(d => d.count), 1)
-  const barWidth = 100 / hourlyData.length
+  const segmentWidth = 100 / hourlyData.length
 
-  const handleBarHover = useCallback((index, event) => {
+  const handlePointHover = useCallback((index, event) => {
     if (!containerRef.current) return
 
     const container = containerRef.current
@@ -36,14 +35,14 @@ export default function BlockedEventsChart({ logs }) {
     const tooltipHeight = 32 // estimated tooltip height
     const padding = 8
 
-    // Calculate bar position within the container
-    const barLeftPercent = index * barWidth
-    const barWidthPercent = barWidth
-    const barCenterPercent = barLeftPercent + (barWidthPercent / 2)
-    const barCenterPx = (barCenterPercent / 100) * containerRect.width
+    // Calculate segment position within the container
+    const segmentLeftPercent = index * segmentWidth
+    const segmentWidthPercent = segmentWidth
+    const segmentCenterPercent = segmentLeftPercent + (segmentWidthPercent / 2)
+    const segmentCenterPx = (segmentCenterPercent / 100) * containerRect.width
 
     // Calculate tooltip position
-    let left = barCenterPx - (tooltipWidth / 2)
+    let left = segmentCenterPx - (tooltipWidth / 2)
     let top = -tooltipHeight - padding // Position above the chart
 
     // Keep tooltip within container bounds
@@ -53,11 +52,11 @@ export default function BlockedEventsChart({ logs }) {
     }
 
     setTooltipPosition({ top, left })
-    setHoveredBar(index)
-  }, [barWidth])
+    setHoveredPoint(index)
+  }, [segmentWidth])
 
   const handleMouseLeave = useCallback(() => {
-    setHoveredBar(null)
+    setHoveredPoint(null)
   }, [])
 
   return (
@@ -76,16 +75,16 @@ export default function BlockedEventsChart({ logs }) {
             key={i}
             className="absolute bottom-0 h-full cursor-pointer"
             style={{
-              left: `${i * barWidth}%`,
-              width: `${barWidth}%`,
+              left: `${i * segmentWidth}%`,
+              width: `${segmentWidth}%`,
             }}
-            onMouseEnter={(e) => handleBarHover(i, e)}
+            onMouseEnter={(e) => handlePointHover(i, e)}
           />
         ))}
         {/* Tooltip */}
-        {hoveredBar !== null && hourlyData[hoveredBar] && (
+        {hoveredPoint !== null && hourlyData[hoveredPoint] && (
           <div
-            className="absolute bg-gray-900 text-white text-xs px-2 py-1 rounded shadow-lg pointer-events-none"
+            className="absolute bg-gray-900 text-white text-xs px-2 py-1 rounded-none shadow-none pointer-events-none"
             style={{
               top: `${tooltipPosition.top}px`,
               left: `${tooltipPosition.left}px`,
@@ -94,7 +93,7 @@ export default function BlockedEventsChart({ logs }) {
               zIndex: 10,
             }}
           >
-            {hourlyData[hoveredBar].label}: {hourlyData[hoveredBar].count} blocked
+            {hourlyData[hoveredPoint].label}: {hourlyData[hoveredPoint].count} blocked
           </div>
         )}
       </div>

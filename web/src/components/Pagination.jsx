@@ -12,7 +12,7 @@ export default function Pagination({ showingRange, page, totalPages, onPageChang
         <button
           onClick={() => onPageChange(page - 1)}
           disabled={page <= 1}
-          className="p-1.5 rounded hover:bg-gray-200 dark:hover:bg-charcoal-dark disabled:opacity-40 disabled:cursor-not-allowed"
+          className="p-1.5 rounded-none hover:bg-gray-200 dark:hover:bg-charcoal-dark disabled:opacity-40 disabled:cursor-not-allowed"
           title="Previous page"
           aria-label="Previous page"
         >
@@ -24,7 +24,7 @@ export default function Pagination({ showingRange, page, totalPages, onPageChang
         <button
           onClick={() => onPageChange(page + 1)}
           disabled={page >= totalPages}
-          className="p-1.5 rounded hover:bg-gray-200 dark:hover:bg-charcoal-dark disabled:opacity-40 disabled:cursor-not-allowed"
+          className="p-1.5 rounded-none hover:bg-gray-200 dark:hover:bg-charcoal-dark disabled:opacity-40 disabled:cursor-not-allowed"
           title="Next page"
           aria-label="Next page"
         >

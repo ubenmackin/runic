@@ -14,7 +14,7 @@ function getRelativeTime(timestamp) {
 
 export default function RecentActivityFeed({ activity }) {
   return (
-    <div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-sm p-4">
+    <div className="border border-gray-border bg-charcoal-dark p-4">
       <div className="flex items-center gap-2 mb-4">
         <Activity className="w-5 h-5 text-purple-active" />
         <h3 className="text-sm font-semibold text-gray-900 dark:text-light-neutral">Recent Activity</h3>
@@ -35,7 +35,7 @@ export default function RecentActivityFeed({ activity }) {
                 <span className="text-sm font-mono text-gray-900 dark:text-white">{item.src_ip}</span>
                 <span className="text-gray-400 mx-1">→</span>
                 <span className="text-sm font-mono font-semibold text-gray-900 dark:text-white">{item.dst_ip}</span>
-                <span className="px-2 py-0.5 text-xs rounded bg-gray-100 dark:bg-charcoal-darkest text-gray-600 dark:text-amber-muted ml-1">
+                <span className="px-2 py-0.5 text-xs rounded-none bg-gray-100 dark:bg-charcoal-darkest text-gray-600 dark:text-amber-muted ml-1">
                   {item.protocol}
                 </span>
                 {item.hostname && (

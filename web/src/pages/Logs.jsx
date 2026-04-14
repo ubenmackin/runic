@@ -195,7 +195,7 @@ export default function Logs() {
         actions={
           <div className="flex items-center gap-3">
             {/* Mode toggle */}
-            <div className="flex rounded-lg border border-gray-300 dark:border-gray-border overflow-hidden">
+            <div className="flex rounded-none border border-gray-300 dark:border-gray-border overflow-hidden">
               <button
                 onClick={() => setMode('historical')}
                 className={`px-3 py-1.5 text-sm font-medium ${
@@ -227,18 +227,18 @@ export default function Logs() {
               <>
                 <button
                   onClick={() => setIsPaused(!isPaused)}
-                  className={`flex items-center gap-2 px-3 py-2 text-sm rounded-lg ${
-                    isPaused
-                      ? 'bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300'
-                      : 'bg-gray-100 text-gray-700 dark:bg-charcoal-darkest dark:text-amber-primary'
-                  }`}
+className={`flex items-center gap-2 px-3 py-2 text-sm rounded-none ${
+isPaused
+? 'bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300'
+: 'bg-gray-100 text-gray-700 dark:bg-charcoal-darkest dark:text-amber-primary'
+}`}
                 >
                   {isPaused ? <Play className="w-4 h-4" /> : <Pause className="w-4 h-4" />}
                   {isPaused ? 'Resume' : 'Pause'}
                 </button>
                 <button
                   onClick={clearLiveLogs}
-                  className="flex items-center gap-2 px-3 py-2 text-sm text-red-700 dark:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg"
+                  className="flex items-center gap-2 px-3 py-2 text-sm text-red-700 dark:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-none"
                 >
                   <Trash2 className="w-4 h-4" /> Clear
                 </button>
@@ -250,7 +250,7 @@ export default function Logs() {
 
       {/* Filter panel (historical mode) */}
       {mode === 'historical' && (
-         <div className="flex flex-wrap gap-3 items-end bg-white dark:bg-charcoal-dark p-4 rounded-xl">
+         <div className="flex flex-wrap gap-3 items-end bg-white dark:bg-charcoal-dark p-4 rounded-none">
         {/* Added min-w class to ensure dropdown has sufficient width */}
         <div className="space-y-1 min-w-[200px]">
           <label className="text-xs font-medium text-gray-500 dark:text-amber-muted">Peer</label>
@@ -269,7 +269,7 @@ export default function Logs() {
               placeholder="e.g. 192.168.1"
               value={filter.src_ip}
               onChange={e => setFilter(f => ({ ...f, src_ip: e.target.value, offset: 0 }))}
-              className="px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white text-sm w-32"
+              className="px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white text-sm w-32"
             />
           </div>
 
@@ -280,7 +280,7 @@ export default function Logs() {
               placeholder="e.g. 443"
               value={filter.dst_port}
               onChange={e => setFilter(f => ({ ...f, dst_port: e.target.value, offset: 0 }))}
-              className="px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white text-sm w-24"
+              className="px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white text-sm w-24"
             />
           </div>
 
@@ -289,7 +289,7 @@ export default function Logs() {
             <select
               value={filter.limit}
               onChange={e => setFilter(f => ({ ...f, limit: parseInt(e.target.value), offset: 0 }))}
-              className="px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white text-sm"
+              className="px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white text-sm"
             >
               <option value={50}>50 rows</option>
               <option value={100}>100 rows</option>
@@ -300,7 +300,7 @@ export default function Logs() {
 
 <button
 onClick={() => refetch()}
-className="px-4 py-2 bg-purple-active hover:bg-purple-active/80 text-white text-sm font-medium rounded-lg"
+className="px-4 py-2 bg-purple-active hover:bg-purple-600 text-white text-sm font-bold uppercase rounded-none border border-purple-active/20 shadow-[0_0_15px_rgba(159,79,248,0.2)] transition-all"
 >
 Query
 </button>
@@ -310,10 +310,10 @@ Query
       {/* Live mode status */}
       {mode === 'live' && (
         <div className="flex items-center gap-2 text-sm">
-          <div className={`w-2 h-2 rounded-full ${
-            isReconnecting ? 'bg-yellow-500 animate-pulse' :
-            isConnected ? 'bg-green-500 animate-pulse' : 'bg-red-500'
-          }`} />
+<div className={`w-2 h-2 rounded-full ${
+                  isReconnecting ? 'bg-yellow-500 animate-pulse' :
+                  isConnected ? 'bg-green-500 animate-pulse shadow-[0_0_8px_rgba(34,197,94,0.6)]' : 'bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.6)]'
+                }`} />
           <span className="text-gray-600 dark:text-amber-muted">
             {isReconnecting
               ? `Reconnecting... (attempt ${reconnectAttemptDisplay}/${MAX_RECONNECT_ATTEMPTS})`
@@ -338,7 +338,7 @@ Query
               message="Try adjusting your filters or wait for agents to ship firewall events."
             />
           ) : (
-<div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-sm overflow-hidden">
+<div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none overflow-hidden">
           <div className="overflow-y-auto max-h-[600px]">
             {data.logs.map((log, i) => (
                   <LogLine key={log.id || i} log={log} />
@@ -358,7 +358,7 @@ totalItems={data.total}
       )}
 
       {mode === 'live' && (
-        <div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-sm overflow-hidden">
+        <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none overflow-hidden">
           <div className="overflow-y-auto max-h-[600px]">
             {!liveLogs.length ? (
               <div className="p-8 text-center text-gray-500 dark:text-amber-muted">

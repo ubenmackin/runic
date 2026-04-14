@@ -330,13 +330,13 @@ const { createMutation, updateMutation, deleteMutation } = useCrudMutations({
             <button
               onClick={handleManualRefresh}
               disabled={isManualRefreshing}
-              className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 dark:text-amber-primary bg-white dark:bg-charcoal-dark border border-gray-300 dark:border-gray-border rounded-lg hover:bg-gray-50 dark:hover:bg-charcoal-darkest disabled:opacity-50"
+              className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 dark:text-amber-primary bg-white dark:bg-charcoal-dark border border-gray-300 dark:border-gray-border rounded-none hover:bg-gray-50 dark:hover:bg-charcoal-darkest disabled:opacity-50"
             >
               <RefreshCw className={`w-4 h-4 ${isManualRefreshing ? 'animate-spin' : ''}`} />
               Refresh
             </button>
             {canEdit && (
-              <button onClick={openAdd} className="flex items-center gap-2 px-4 py-2 bg-purple-active hover:bg-purple-active/80 text-white text-sm font-medium rounded-lg">
+              <button onClick={openAdd} className="flex items-center gap-2 px-4 py-2 bg-purple-active hover:bg-purple-600 text-white text-sm font-bold uppercase rounded-none border border-purple-active/20 shadow-[0_0_15px_rgba(159,79,248,0.2)] transition-all">
                 <Plus className="w-4 h-4" /> New Policy
               </button>
             )}
@@ -345,7 +345,7 @@ const { createMutation, updateMutation, deleteMutation } = useCrudMutations({
       />
 
       {/* System Rules Info Panel */}
-      <div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-sm overflow-hidden">
+      <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none overflow-hidden">
         <button
           type="button"
           onClick={() => setShowSystemRules(!showSystemRules)}
@@ -403,7 +403,7 @@ const { createMutation, updateMutation, deleteMutation } = useCrudMutations({
 			<button
 				key={opt.value}
 				onClick={() => setShowDisabled(opt.value === 'disabled')}
-				className={`px-3 py-1.5 text-sm font-medium rounded-lg transition-colors ${
+				className={`px-3 py-1.5 text-sm font-medium rounded-none transition-colors ${
 					showDisabled === (opt.value === 'disabled')
 					? 'bg-purple-active text-white'
 					: 'bg-gray-100 dark:bg-charcoal-darkest text-gray-700 dark:text-amber-primary hover:bg-gray-200 dark:hover:bg-charcoal-dark'
@@ -422,7 +422,7 @@ const { createMutation, updateMutation, deleteMutation } = useCrudMutations({
 				id="showPendingDeletes"
 				checked={showPendingDeletes}
 				onChange={(e) => setShowPendingDeletes(e.target.checked)}
-				className="w-4 h-4 text-purple-active bg-gray-100 border-gray-300 rounded focus:ring-purple-active dark:focus:ring-purple-active dark:ring-offset-gray-800 focus:ring-2 dark:bg-charcoal-darkest dark:border-gray-600"
+				className="w-4 h-4 text-purple-active bg-gray-100 border-gray-300 rounded-none focus:ring-purple-active dark:focus:ring-purple-active dark:ring-offset-gray-800 focus:ring-2 dark:bg-charcoal-darkest dark:border-gray-600"
 			/>
 			<label htmlFor="showPendingDeletes" className="text-sm text-gray-700 dark:text-amber-primary cursor-pointer">
 				Show Pending Deletes
@@ -432,110 +432,110 @@ const { createMutation, updateMutation, deleteMutation } = useCrudMutations({
 
 	{!processedPolicies.length ? (
         searchTerm ? (
-          <div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-sm p-8 text-center">
+          <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none p-8 text-center">
             <p className="text-gray-500 dark:text-amber-muted">No policies match your search.</p>
           </div>
         ) : (
           <EmptyState title="No policies yet" message="Create policies to define firewall rules for your servers." action="New Policy" onAction={openAdd} />
         )
       ) : (
-        <div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-sm overflow-hidden">
+        <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
-              <thead className="bg-gray-50 dark:bg-charcoal-darkest">
-                <tr>
-                  <th className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted">
-                    Enabled
-                  </th>
-                  <th className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
-            <button type="button" onClick={() => handleSort('name')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
-              Name <SortIndicator columnKey="name" sortConfig={sortConfig} />
-            </button>
-                  </th>
-                  <th className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
-            <button type="button" onClick={() => handleSort('priority')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
-              Priority <SortIndicator columnKey="priority" sortConfig={sortConfig} />
-            </button>
-                  </th>
-                  <th className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
-            <button type="button" onClick={() => handleSort('source')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
-              Source <SortIndicator columnKey="source" sortConfig={sortConfig} />
-            </button>
-                  </th>
-                  <th className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
-            <button type="button" onClick={() => handleSort('service')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
-              Service <SortIndicator columnKey="service" sortConfig={sortConfig} />
-            </button>
-                  </th>
-                  <th className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
-            <button type="button" onClick={() => handleSort('target')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
-              Target <SortIndicator columnKey="target" sortConfig={sortConfig} />
-            </button>
-                  </th>
-                  <th className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted">
-                    Action
-                  </th>
-                  <th className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted">
-                    Direction
-                  </th>
-                  <th className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted">
-                    Actions
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-200 dark:divide-gray-border">
-                {paginatedPolicies.map((p) => (
-                  <tr key={p.id}>
-                    <td className="px-4 py-3">
-                      <ToggleSwitch checked={p.enabled} onChange={(v) => toggleMutation.mutate({ id: p.id, enabled: v })} />
-                    </td>
-				<td className="px-4 py-3">
-					<span className="font-medium text-gray-900 dark:text-light-neutral">
-						{p.name}
-						{p.is_pending_delete && (
-							<span className="ml-2 px-2 py-1 text-xs bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300 rounded">
-								Pending Delete
-							</span>
-						)}
-					</span>
-				</td>
-                    <td className="px-4 py-3 text-gray-600 dark:text-amber-primary">
-                      {p.priority}
-                    </td>
-                    <td className="px-4 py-3 text-gray-600 dark:text-amber-primary">
-                      {getEntityName(p.source_type, p.source_id)}
-                    </td>
-                    <td className="px-4 py-3 text-gray-600 dark:text-amber-primary">
-                      {getServiceName(p.service_id)}
-                    </td>
-                    <td className="px-4 py-3 text-gray-600 dark:text-amber-primary">
-                      {getEntityName(p.target_type, p.target_id)}
-                    </td>
-                    <td className="px-4 py-3">
-                      <span className={`px-2 py-0.5 rounded text-xs font-medium ${p.action === 'ACCEPT' ? 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300' : 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300'}`}>
-                        {p.action.toUpperCase()}
+<thead className="bg-charcoal-darkest">
+              <tr>
+                <th className="text-left px-4 py-2 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
+                  Enabled
+                </th>
+                <th className="text-left px-4 py-2 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+                  <button type="button" onClick={() => handleSort('name')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+                    Name <SortIndicator columnKey="name" sortConfig={sortConfig} />
+                  </button>
+                </th>
+                <th className="text-left px-4 py-2 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+                  <button type="button" onClick={() => handleSort('priority')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+                    Priority <SortIndicator columnKey="priority" sortConfig={sortConfig} />
+                  </button>
+                </th>
+                <th className="text-left px-4 py-2 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+                  <button type="button" onClick={() => handleSort('source')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+                    Source <SortIndicator columnKey="source" sortConfig={sortConfig} />
+                  </button>
+                </th>
+                <th className="text-left px-4 py-2 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+                  <button type="button" onClick={() => handleSort('service')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+                    Service <SortIndicator columnKey="service" sortConfig={sortConfig} />
+                  </button>
+                </th>
+                <th className="text-left px-4 py-2 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+                  <button type="button" onClick={() => handleSort('target')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+                    Target <SortIndicator columnKey="target" sortConfig={sortConfig} />
+                  </button>
+                </th>
+                <th className="text-left px-4 py-2 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
+                  Action
+                </th>
+                <th className="text-left px-4 py-2 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
+                  Direction
+                </th>
+                <th className="text-left px-4 py-2 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
+                  Actions
+                </th>
+              </tr>
+            </thead>
+<tbody className="divide-y divide-gray-200 dark:divide-gray-border">
+              {paginatedPolicies.map((p) => (
+              <tr key={p.id}>
+                <td className="px-4 py-2">
+                  <ToggleSwitch checked={p.enabled} onChange={(v) => toggleMutation.mutate({ id: p.id, enabled: v })} />
+                </td>
+                <td className="px-4 py-2">
+                  <span className="font-medium text-gray-900 dark:text-light-neutral">
+                    {p.name}
+                    {p.is_pending_delete && (
+                      <span className="ml-2 px-2 py-1 text-xs bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300 rounded-none">
+                        Pending Delete
                       </span>
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-1">
-                        {(p.direction === 'both' || p.direction === 'forward') && (
-                          <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400" title="Forward (Source → Target)">
-                            <ArrowRight className="w-3 h-3" />
-                          </span>
-                        )}
-                        {(p.direction === 'both' || p.direction === 'backward') && (
-                          <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400" title="Backward (Target → Source)">
-                            <ArrowLeft className="w-3 h-3" />
-                          </span>
-                        )}
-                      </div>
-                    </td>
-				<td className="px-4 py-3">
+                    )}
+                  </span>
+                </td>
+                <td className="px-4 py-2 font-mono text-gray-600 dark:text-amber-primary">
+                  {p.priority}
+                </td>
+                <td className="px-4 py-2 text-gray-600 dark:text-amber-primary">
+                  {getEntityName(p.source_type, p.source_id)}
+                </td>
+                <td className="px-4 py-2 text-gray-600 dark:text-amber-primary">
+                  {getServiceName(p.service_id)}
+                </td>
+                <td className="px-4 py-2 text-gray-600 dark:text-amber-primary">
+                  {getEntityName(p.target_type, p.target_id)}
+                </td>
+                <td className="px-4 py-2">
+                  <span className={`px-2 py-0.5 text-xs font-medium ${p.action === 'ACCEPT' ? 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300' : 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300'}`}>
+                    {p.action.toUpperCase()}
+                  </span>
+                </td>
+                <td className="px-4 py-2">
+                  <div className="flex items-center gap-1">
+                    {(p.direction === 'both' || p.direction === 'forward') && (
+                      <span className="inline-flex items-center px-1.5 py-0.5 text-xs font-medium bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400" title="Forward (Source → Target)">
+                        <ArrowRight className="w-3 h-3" />
+                      </span>
+                    )}
+                    {(p.direction === 'both' || p.direction === 'backward') && (
+                      <span className="inline-flex items-center px-1.5 py-0.5 text-xs font-medium bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400" title="Backward (Target → Source)">
+                        <ArrowLeft className="w-3 h-3" />
+                      </span>
+                    )}
+                  </div>
+                </td>
+                <td className="px-4 py-2">
 					<div className="flex items-center gap-2">
 						{canEdit && (
 							<button
 								onClick={() => openEdit(p)}
-								className={`p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded ${p.is_pending_delete ? 'text-gray-400 cursor-not-allowed opacity-50' : ''}`}
+								className={`p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none ${p.is_pending_delete ? 'text-gray-400 cursor-not-allowed opacity-50' : ''}`}
 								disabled={p.is_pending_delete}
 								title={p.is_pending_delete ? "Cannot edit soft-deleted policies" : "Edit"}
 							>
@@ -546,7 +546,7 @@ const { createMutation, updateMutation, deleteMutation } = useCrudMutations({
 							<button
 								onClick={() => !p.is_pending_delete && setDeleteTarget(p)}
 								disabled={p.is_pending_delete}
-								className={`p-1.5 rounded ${p.is_pending_delete ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-100 dark:hover:bg-charcoal-darkest'}`}
+								className={`p-1.5 rounded-none ${p.is_pending_delete ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-100 dark:hover:bg-charcoal-darkest'}`}
 								title={p.is_pending_delete ? "Cannot delete soft-deleted policies" : "Delete"}
 							>
 								<Trash2 className="w-4 h-4 text-red-500" />
@@ -566,11 +566,11 @@ const { createMutation, updateMutation, deleteMutation } = useCrudMutations({
 
 {modalOpen && (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" tabIndex="-1" onKeyDown={(e) => { if (e.key === 'Escape') { closeModal() } }}>
-        <div ref={modalRef} className="bg-white dark:bg-charcoal-dark rounded-xl shadow-xl w-full max-w-2xl mx-4 flex flex-col max-h-[90vh]">
+        <div ref={modalRef} className="bg-white dark:bg-charcoal-dark rounded-none shadow-none w-full max-w-2xl mx-4 flex flex-col max-h-[90vh]">
           {/* Header */}
           <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-border flex items-center justify-between shrink-0">
             <h3 className="text-lg font-semibold text-gray-900 dark:text-light-neutral">{editPolicy ? 'Edit Policy' : 'New Policy'}</h3>
-            <button type="button" onClick={closeModal} className="p-1 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded">
+            <button type="button" onClick={closeModal} className="p-1 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none">
               <X className="w-5 h-5 text-gray-400" />
             </button>
           </div>
@@ -586,15 +586,15 @@ const { createMutation, updateMutation, deleteMutation } = useCrudMutations({
                 <div className="grid grid-cols-2 gap-4">
                   <div className="col-span-2 sm:col-span-1">
                     <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Name</label>
-                    <input autoFocus type="text" value={formData.name} onChange={e => setFormData(d => ({ ...d, name: e.target.value }))} required className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-active" />
+                    <input autoFocus type="text" value={formData.name} onChange={e => setFormData(d => ({ ...d, name: e.target.value }))} required className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-active" />
                   </div>
                   <div className="col-span-2 sm:col-span-1">
                     <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Priority</label>
-                    <input type="number" value={formData.priority} onChange={e => setFormData(d => ({ ...d, priority: e.target.value === '' ? '' : parseInt(e.target.value, 10) }))} required className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-active" />
+                    <input type="number" value={formData.priority} onChange={e => setFormData(d => ({ ...d, priority: e.target.value === '' ? '' : parseInt(e.target.value, 10) }))} required className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-active" />
                   </div>
                 </div>
                 {/* Collapsible Description Section */}
-                <div className="border border-gray-200 dark:border-gray-border rounded-lg overflow-hidden">
+                <div className="border border-gray-200 dark:border-gray-border rounded-none overflow-hidden">
                   <button
                     type="button"
                     onClick={() => setShowDescription(!showDescription)}
@@ -611,7 +611,7 @@ const { createMutation, updateMutation, deleteMutation } = useCrudMutations({
                         value={formData.description}
                         onChange={e => setFormData(d => ({ ...d, description: e.target.value }))}
                         rows={2}
-                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white"
+                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white"
                         placeholder="Add a description for this policy..."
                       />
                     </div>
@@ -638,11 +638,11 @@ const { createMutation, updateMutation, deleteMutation } = useCrudMutations({
                           }))
                         }}
                         disabled={isSpecialService}
-                        className={`flex items-center justify-center w-28 h-8 rounded-xl border-2 transition-all duration-200 ${
-                          formData.direction === 'both' || formData.direction === 'forward'
-                            ? 'bg-emerald-900/80 border-emerald-500 text-emerald-400 hover:bg-emerald-800/80'
-                            : 'bg-gray-200 dark:bg-gray-800 border-gray-300 dark:border-gray-600 text-gray-400 dark:text-gray-500 hover:bg-gray-300 dark:hover:bg-gray-700'
-                        } ${isSpecialService ? 'opacity-50 cursor-not-allowed' : ''}`}
+className={`flex items-center justify-center w-28 h-8 rounded-none border-2 transition-all duration-200 ${
+          formData.direction === 'both' || formData.direction === 'forward'
+          ? 'bg-emerald-900/80 border-emerald-500 text-emerald-400 hover:bg-emerald-800/80'
+          : 'bg-gray-200 dark:bg-gray-800 border-gray-300 dark:border-gray-600 text-gray-400 dark:text-gray-500 hover:bg-gray-300 dark:hover:bg-gray-700'
+          } ${isSpecialService ? 'opacity-50 cursor-not-allowed' : ''}`}
                         title={isSpecialService ? "IGMP/VRRP generate OUTPUT rules automatically — direction is fixed" : "Forward: Source → Target"}
                       >
                         <svg viewBox="0 0 80 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="w-16 h-4">
@@ -660,11 +660,11 @@ const { createMutation, updateMutation, deleteMutation } = useCrudMutations({
                           }))
                         }}
                         disabled={isSpecialService}
-                        className={`flex items-center justify-center w-28 h-8 rounded-xl border-2 transition-all duration-200 ${
-                          formData.direction === 'both' || formData.direction === 'backward'
-                            ? 'bg-emerald-900/80 border-emerald-500 text-emerald-400 hover:bg-emerald-800/80'
-                            : 'bg-gray-200 dark:bg-gray-800 border-gray-300 dark:border-gray-600 text-gray-400 dark:text-gray-500 hover:bg-gray-300 dark:hover:bg-gray-700'
-                        } ${isSpecialService ? 'opacity-50 cursor-not-allowed' : ''}`}
+className={`flex items-center justify-center w-28 h-8 rounded-none border-2 transition-all duration-200 ${
+          formData.direction === 'both' || formData.direction === 'backward'
+          ? 'bg-emerald-900/80 border-emerald-500 text-emerald-400 hover:bg-emerald-800/80'
+          : 'bg-gray-200 dark:bg-gray-800 border-gray-300 dark:border-gray-600 text-gray-400 dark:text-gray-500 hover:bg-gray-300 dark:hover:bg-gray-700'
+          } ${isSpecialService ? 'opacity-50 cursor-not-allowed' : ''}`}
                         title={isSpecialService ? "IGMP/VRRP generate OUTPUT rules automatically — direction is fixed" : "Backward: Target → Source"}
                       >
                         <svg viewBox="0 0 80 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="w-16 h-4">
@@ -720,37 +720,37 @@ const { createMutation, updateMutation, deleteMutation } = useCrudMutations({
             {isIGMPService && <span className="text-xs text-blue-600 dark:text-blue-400 ml-1">— "Host Only" is typical for IGMP</span>}
             {isVRRPService && <span className="text-xs text-blue-600 dark:text-blue-400 ml-1">— "Host Only" is typical for VRRP</span>}
           </div>
-          <div className="flex bg-gray-100 dark:bg-charcoal-darkest p-1 rounded-lg border border-gray-200 dark:border-gray-border">
-            <button
-              type="button"
-              onClick={() => setFormData(d => ({ ...d, target_scope: 'both' }))}
-              className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-all duration-200 ${
-                formData.target_scope === 'both' || !formData.target_scope
-                  ? 'bg-white dark:bg-charcoal-dark text-gray-900 dark:text-white shadow-sm ring-1 ring-black/5 dark:ring-white/10'
-                  : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-white/50 dark:hover:bg-charcoal-dark/50'
-              }`}
-            >
+<div className="flex bg-gray-100 dark:bg-charcoal-darkest p-1 rounded-none border border-gray-200 dark:border-gray-border">
+        <button
+          type="button"
+          onClick={() => setFormData(d => ({ ...d, target_scope: 'both' }))}
+          className={`flex-1 py-1.5 text-xs font-medium rounded-none transition-all duration-200 ${
+            formData.target_scope === 'both' || !formData.target_scope
+              ? 'bg-white dark:bg-charcoal-dark text-gray-900 dark:text-white ring-1 ring-black/5 dark:ring-white/10'
+              : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-white/50 dark:hover:bg-charcoal-dark/50'
+          }`}
+        >
               Host + Docker
             </button>
             <button
               type="button"
               onClick={() => setFormData(d => ({ ...d, target_scope: 'host' }))}
-              className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-all duration-200 ${
-                formData.target_scope === 'host'
-                  ? 'bg-white dark:bg-charcoal-dark text-gray-900 dark:text-white shadow-sm ring-1 ring-black/5 dark:ring-white/10'
-                  : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-white/50 dark:hover:bg-charcoal-dark/50'
-              }`}
+className={`flex-1 py-1.5 text-xs font-medium rounded-none transition-all duration-200 ${
+            formData.target_scope === 'host'
+              ? 'bg-white dark:bg-charcoal-dark text-gray-900 dark:text-white ring-1 ring-black/5 dark:ring-white/10'
+              : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-white/50 dark:hover:bg-charcoal-dark/50'
+          }`}
             >
               Host Only
             </button>
             <button
               type="button"
               onClick={() => setFormData(d => ({ ...d, target_scope: 'docker' }))}
-              className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-all duration-200 ${
-                formData.target_scope === 'docker'
-                  ? 'bg-white dark:bg-charcoal-dark text-gray-900 dark:text-white shadow-sm ring-1 ring-black/5 dark:ring-white/10'
-                  : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-white/50 dark:hover:bg-charcoal-dark/50'
-              }`}
+className={`flex-1 py-1.5 text-xs font-medium rounded-none transition-all duration-200 ${
+            formData.target_scope === 'docker'
+              ? 'bg-white dark:bg-charcoal-dark text-gray-900 dark:text-white ring-1 ring-black/5 dark:ring-white/10'
+              : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-white/50 dark:hover:bg-charcoal-dark/50'
+          }`}
             >
 Docker Only
 </button>
@@ -758,7 +758,7 @@ Docker Only
 </div>
 
 {/* Policy Enabled Section */}
-      <div className="p-4 bg-gray-50 dark:bg-charcoal-darkest border border-gray-200 dark:border-gray-border rounded-lg">
+      <div className="p-4 bg-gray-50 dark:bg-charcoal-darkest border border-gray-200 dark:border-gray-border rounded-none">
         <div className="flex items-center justify-between">
           <div>
             <label className="text-sm font-medium text-gray-900 dark:text-light-neutral">Policy enabled</label>
@@ -787,7 +787,7 @@ Docker Only
                   </div>
                 )}
                 {preview && (
-                  <div className="p-3 bg-gray-900 dark:bg-charcoal-darkest rounded-lg text-xs font-mono border border-gray-800 max-h-96 overflow-y-auto">
+                  <div className="p-3 bg-gray-900 dark:bg-charcoal-darkest rounded-none text-xs font-mono border border-gray-800 max-h-96 overflow-y-auto">
                     {preview.rules?.map((rule, i) => (
                       <p key={i} className="text-green-400 whitespace-pre-wrap">{rule}</p>
                     ))}
@@ -804,9 +804,9 @@ Docker Only
             )}
           </div>
           {/* Footer */}
-          <div className="px-6 py-4 border-t border-gray-200 dark:border-gray-border flex justify-end gap-3 shrink-0 bg-white dark:bg-charcoal-dark rounded-b-xl">
-            <button type="button" onClick={closeModal} className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-amber-primary bg-white dark:bg-charcoal-dark border border-gray-300 dark:border-gray-border rounded-lg hover:bg-gray-50 dark:hover:bg-charcoal-darkest">Cancel</button>
-            <button type="submit" form="policy-form" disabled={activeTab !== 'setup'} className="px-4 py-2 text-sm font-medium text-white bg-purple-active hover:bg-purple-active/80 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed">{editPolicy ? 'Save Changes' : 'Create Policy'}</button>
+          <div className="px-6 py-4 border-t border-gray-200 dark:border-gray-border flex justify-end gap-3 shrink-0 bg-white dark:bg-charcoal-dark rounded-none">
+            <button type="button" onClick={closeModal} className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-amber-primary bg-white dark:bg-charcoal-dark border border-gray-300 dark:border-gray-border rounded-none hover:bg-gray-50 dark:hover:bg-charcoal-darkest">Cancel</button>
+            <button type="submit" form="policy-form" disabled={activeTab !== 'setup'} className="px-4 py-2 text-sm font-bold uppercase text-white bg-purple-active hover:bg-purple-600 rounded-none transition-colors disabled:opacity-50 disabled:cursor-not-allowed border border-purple-active/20 shadow-[0_0_15px_rgba(159,79,248,0.2)] transition-all">{editPolicy ? 'Save Changes' : 'Create Policy'}</button>
           </div>
         </div>
       </div>

@@ -39,13 +39,13 @@ export default class ErrorBoundary extends Component {
             <div className="flex gap-3 justify-center">
 <button
 onClick={this.reset}
-className="px-4 py-2 bg-gray-200 dark:bg-charcoal-darkest hover:bg-gray-300 dark:hover:bg-charcoal-dark text-gray-700 dark:text-amber-primary text-sm font-medium rounded-lg"
+className="px-4 py-2 bg-gray-200 dark:bg-charcoal-darkest hover:bg-gray-300 dark:hover:bg-charcoal-dark text-gray-700 dark:text-amber-primary text-sm font-medium rounded-none"
 >
 Try Again
 </button>
 <button
 onClick={() => window.location.reload()}
-className="px-4 py-2 bg-purple-active hover:bg-purple-active/80 text-white text-sm font-medium rounded-lg"
+className="px-4 py-2 bg-purple-active hover:bg-purple-600 text-white text-sm font-bold uppercase rounded-none border border-purple-active/20 shadow-[0_0_15px_rgba(159,79,248,0.2)] transition-all"
 >
 Reload Page
 </button>
@@ -75,7 +75,7 @@ export function RouteErrorBoundary({ children }) {
             <div className="flex gap-3 justify-center">
 <button
 onClick={reset}
-className="px-4 py-2 bg-purple-active hover:bg-purple-active/80 text-white text-sm font-medium rounded-lg"
+className="px-4 py-2 bg-purple-active hover:bg-purple-600 text-white text-sm font-bold uppercase rounded-none border border-purple-active/20 shadow-[0_0_15px_rgba(159,79,248,0.2)] transition-all"
 >
 Retry
 </button>

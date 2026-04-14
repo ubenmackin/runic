@@ -2,7 +2,7 @@ import Skeleton from './Skeleton'
 
 export default function TableSkeleton({ rows = 5, columns = 4 }) {
   return (
-    <div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-sm overflow-hidden">
+    <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none overflow-hidden">
       <table className="w-full">
         <thead className="bg-gray-50 dark:bg-charcoal-darkest">
           <tr>

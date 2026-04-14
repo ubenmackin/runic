@@ -582,21 +582,21 @@ function TreeGraph({ layoutData, isDark, onNodeClick, onEdgeClick, onGroupClick,
 
   return (
     <div ref={containerRef} className="relative w-full h-full" style={{ minHeight: '500px' }}>
-      <svg ref={svgRef} width={dimensions.width} height={dimensions.height} style={{ background: colors.bg }} className="rounded-lg" />
+      <svg ref={svgRef} width={dimensions.width} height={dimensions.height} style={{ background: colors.bg }} />
       {/* Zoom controls */}
-      <div className="absolute bottom-4 right-4 flex flex-col gap-1">
-        <button onClick={handleZoomIn} className="p-2 rounded-lg bg-white dark:bg-charcoal-dark shadow-md border border-gray-200 dark:border-gray-border hover:bg-gray-50 dark:hover:bg-charcoal-darkest transition-colors" title="Zoom in">
+<div className="absolute bottom-4 right-4 flex flex-col gap-1">
+      <button onClick={handleZoomIn} className="p-2 rounded-none bg-white dark:bg-charcoal-dark border border-gray-200 dark:border-gray-border hover:bg-gray-50 dark:hover:bg-charcoal-darkest transition-colors" title="Zoom in">
           <Plus className="w-4 h-4 text-gray-700 dark:text-light-neutral" />
         </button>
-        <button onClick={handleZoomOut} className="p-2 rounded-lg bg-white dark:bg-charcoal-dark shadow-md border border-gray-200 dark:border-gray-border hover:bg-gray-50 dark:hover:bg-charcoal-darkest transition-colors" title="Zoom out">
+        <button onClick={handleZoomOut} className="p-2 rounded-none bg-white dark:bg-charcoal-dark border border-gray-200 dark:border-gray-border hover:bg-gray-50 dark:hover:bg-charcoal-darkest transition-colors" title="Zoom out">
           <Minus className="w-4 h-4 text-gray-700 dark:text-light-neutral" />
         </button>
-        <button onClick={handleRecenter} className="p-2 rounded-lg bg-white dark:bg-charcoal-dark shadow-md border border-gray-200 dark:border-gray-border hover:bg-gray-50 dark:hover:bg-charcoal-darkest transition-colors" title="Fit to view">
+        <button onClick={handleRecenter} className="p-2 rounded-none bg-white dark:bg-charcoal-dark border border-gray-200 dark:border-gray-border hover:bg-gray-50 dark:hover:bg-charcoal-darkest transition-colors" title="Fit to view">
           <Maximize2 className="w-4 h-4 text-gray-700 dark:text-light-neutral" />
         </button>
       </div>
       {/* Legend */}
-      <div className="absolute top-4 left-4 bg-white/90 dark:bg-charcoal-dark/90 backdrop-blur-sm rounded-lg p-3 shadow-md border border-gray-200 dark:border-gray-border text-xs space-y-2">
+      <div className="absolute top-4 left-4 bg-white/90 dark:bg-charcoal-dark/90 backdrop-blur-sm rounded-none p-3 border border-gray-200 dark:border-gray-border text-xs space-y-2">
         <div className="font-semibold text-gray-700 dark:text-light-neutral mb-1">Legend</div>
         <div className="flex items-center gap-2">
           <span className="w-6 h-0.5 block" style={{ background: COLORS.forward }} />
@@ -634,7 +634,7 @@ function DetailPanel({ selection, onClose, onExpand, onCollapse, isDark }) {
   const { type, data } = selection
 
   return (
-    <div className="absolute top-0 right-0 h-full w-80 bg-white dark:bg-charcoal-dark border-l border-gray-200 dark:border-gray-border shadow-xl z-10 flex flex-col overflow-hidden animate-slide-in">
+    <div className="absolute top-0 right-0 h-full w-80 bg-white dark:bg-charcoal-dark border-l border-gray-200 dark:border-gray-border shadow-none z-10 flex flex-col overflow-hidden animate-slide-in">
       <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-border flex items-center justify-between shrink-0">
         <h3 className="font-semibold text-gray-900 dark:text-light-neutral text-sm">
           {type === 'peer' ? 'Peer Details' : type === 'group' ? 'Group Details' : 'Connection Details'}
@@ -660,12 +660,12 @@ function DetailPanel({ selection, onClose, onExpand, onCollapse, isDark }) {
               <div className="flex items-center gap-2">
                 {data.data?.is_manual ? (
                   <>
-                    <span className="w-2 h-2 rounded-full bg-violet-400" />
+                    <span className="w-2 h-2 rounded-full bg-violet-400 shadow-[0_0_8px_rgba(167,139,250,0.6)]" />
                     <span className="text-sm text-gray-900 dark:text-light-neutral">Manual</span>
                   </>
                 ) : (
                   <>
-                    <span className={`w-2 h-2 rounded-full ${data.data?.status === 'online' ? 'bg-green-500' : 'bg-red-500'}`} />
+                    <span className={`w-2 h-2 rounded-full ${data.data?.status === 'online' ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]' : 'bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.6)]'}`} />
                     <span className="text-sm text-gray-900 dark:text-light-neutral capitalize">{data.data?.status || 'unknown'}</span>
                   </>
                 )}
@@ -684,7 +684,7 @@ function DetailPanel({ selection, onClose, onExpand, onCollapse, isDark }) {
               </div>
             )}
             {data.isStart && (
-              <div className="mt-2 px-3 py-2 bg-purple-50 dark:bg-purple-active/10 rounded-lg border border-purple-200 dark:border-purple-active/30">
+              <div className="mt-2 px-3 py-2 bg-purple-50 dark:bg-purple-active/10 rounded-none border border-purple-200 dark:border-purple-active/30">
                 <span className="text-xs font-medium text-purple-700 dark:text-purple-400">★ Starting Peer</span>
               </div>
             )}
@@ -704,7 +704,7 @@ function DetailPanel({ selection, onClose, onExpand, onCollapse, isDark }) {
             {data.expanded ? (
               <button
                 onClick={() => onCollapse?.(data)}
-                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-gray-50 dark:bg-charcoal-darkest border border-gray-200 dark:border-gray-border hover:bg-gray-100 dark:hover:bg-charcoal-dark text-gray-700 dark:text-gray-300 text-sm font-medium rounded-lg transition-colors"
+                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-gray-50 dark:bg-charcoal-darkest border border-gray-200 dark:border-gray-border hover:bg-gray-100 dark:hover:bg-charcoal-dark text-gray-700 dark:text-gray-300 text-sm font-medium rounded-none transition-colors"
               >
                 <ChevronLeft className="w-4 h-4" />
                 Collapse Group
@@ -712,7 +712,7 @@ function DetailPanel({ selection, onClose, onExpand, onCollapse, isDark }) {
             ) : (
               <button
                 onClick={() => onExpand?.(data)}
-                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/30 hover:bg-amber-100 dark:hover:bg-amber-500/20 text-amber-700 dark:text-amber-400 text-sm font-medium rounded-lg transition-colors"
+                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/30 hover:bg-amber-100 dark:hover:bg-amber-500/20 text-amber-700 dark:text-amber-400 text-sm font-medium rounded-none transition-colors"
               >
                 Expand Group
                 <ChevronRight className="w-4 h-4" />
@@ -745,7 +745,7 @@ function DetailPanel({ selection, onClose, onExpand, onCollapse, isDark }) {
                     <div className="text-xs text-gray-500 dark:text-amber-muted uppercase tracking-wide mb-1">Ports</div>
                     <div className="flex flex-wrap gap-1.5">
                       {edge.servicePorts.split(',').map((p, j) => (
-                        <span key={j} className="px-2 py-0.5 text-xs font-mono rounded-full bg-gray-100 dark:bg-charcoal-darkest text-gray-700 dark:text-gray-300">{p.trim()}</span>
+                        <span key={j} className="px-2 py-0.5 text-xs font-mono bg-gray-100 dark:bg-charcoal-darkest text-gray-700 dark:text-gray-300">{p.trim()}</span>
                       ))}
                     </div>
                   </div>
@@ -870,7 +870,7 @@ export default function Topology() {
         {selectedPeerId && (
           <button
             onClick={handleReset}
-            className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 dark:text-amber-primary bg-white dark:bg-charcoal-dark border border-gray-300 dark:border-gray-border rounded-lg hover:bg-gray-50 dark:hover:bg-charcoal-darkest"
+            className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 dark:text-amber-primary bg-white dark:bg-charcoal-dark border border-gray-300 dark:border-gray-border rounded-none hover:bg-gray-50 dark:hover:bg-charcoal-darkest"
           >
             <RotateCcw className="w-4 h-4" />
             Reset
@@ -878,7 +878,7 @@ export default function Topology() {
         )}
       </div>
 
-      <div className="shrink-0 bg-white dark:bg-charcoal-dark rounded-xl shadow-sm p-4 border border-gray-200 dark:border-gray-border">
+      <div className="shrink-0 bg-white dark:bg-charcoal-dark rounded-none shadow-none p-4 border border-gray-200 dark:border-gray-border">
         <div className="flex items-center gap-4">
           <label className="text-sm font-medium text-gray-700 dark:text-amber-primary whitespace-nowrap">Starting Peer</label>
           <div className="w-72">
@@ -896,7 +896,7 @@ export default function Topology() {
         </div>
       </div>
 
-      <div className="flex-1 relative bg-white dark:bg-charcoal-dark rounded-xl shadow-sm border border-gray-200 dark:border-gray-border overflow-hidden" style={{ minHeight: '500px' }}>
+      <div className="flex-1 relative bg-white dark:bg-charcoal-dark rounded-none shadow-none border border-gray-200 dark:border-gray-border overflow-hidden" style={{ minHeight: '500px' }}>
         {!selectedPeerId ? (
           <div className="flex flex-col items-center justify-center h-full text-center p-8">
             <svg className="w-24 h-24 mb-6 text-gray-300 dark:text-gray-600" viewBox="0 0 100 100" fill="none">

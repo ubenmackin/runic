@@ -77,7 +77,7 @@ export default function ApiErrorDisplay({
         {/* Icon */}
         {showIcon && (
           <div className="flex justify-center">
-            <div className="p-3 bg-red-100 dark:bg-red-900/30 rounded-full">
+            <div className="p-3 bg-red-100 dark:bg-red-900/30 rounded-none">
               <Icon className="w-8 h-8 text-red-600 dark:text-red-400" />
             </div>
           </div>
@@ -107,7 +107,7 @@ export default function ApiErrorDisplay({
           {onRetry && recoverable !== false && (
             <button
               onClick={onRetry}
-              className="flex items-center gap-2 px-4 py-2 bg-purple-active hover:bg-purple-active/80 text-white text-sm font-medium rounded-lg transition-colors"
+              className="flex items-center gap-2 px-4 py-2 bg-purple-active hover:bg-purple-active/80 text-white text-sm font-medium rounded-none transition-colors"
             >
               <RefreshCw className="w-4 h-4" /> Try Again
             </button>
@@ -115,7 +115,7 @@ export default function ApiErrorDisplay({
           {type === ErrorTypes.AUTH && (
             <a
               href="/login"
-              className="px-4 py-2 bg-gray-200 dark:bg-charcoal-darkest hover:bg-gray-300 dark:hover:bg-charcoal-dark text-gray-700 dark:text-amber-primary text-sm font-medium rounded-lg transition-colors"
+              className="px-4 py-2 bg-gray-200 dark:bg-charcoal-darkest hover:bg-gray-300 dark:hover:bg-charcoal-dark text-gray-700 dark:text-amber-primary text-sm font-medium rounded-none transition-colors"
             >
               Log In
             </a>
@@ -160,7 +160,7 @@ export function ApiErrorCard({ title, error, onRetry }) {
     : { message: typeof error === 'string' ? error : 'An error occurred' }
 
   return (
-    <div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-sm p-6">
+    <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none p-6">
       {title && (
         <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">{title}</h3>
       )}
@@ -178,7 +178,7 @@ export function ApiErrorCard({ title, error, onRetry }) {
  */
 export function NetworkStatus({ connected, onRetry }) {
   return (
-    <div className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm ${
+    <div className={`flex items-center gap-2 px-3 py-2 rounded-none text-sm ${
       connected 
         ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400' 
         : 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400'

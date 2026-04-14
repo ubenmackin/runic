@@ -37,7 +37,7 @@ export default function QuickActions() {
   }
 
   return (
-    <div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-sm p-4">
+    <div className="border border-gray-border bg-charcoal-dark p-4">
       <div className="flex items-center gap-2 mb-4">
         <Shield className="w-5 h-5 text-purple-active" />
         <h3 className="text-sm font-semibold text-gray-900 dark:text-light-neutral">Quick Actions</h3>
@@ -49,7 +49,7 @@ export default function QuickActions() {
         onClick={() => setShowConfirmModal(true)}
         disabled={isLoading}
         aria-label="Push Rules to All"
-        className="w-full flex items-center gap-3 px-3 py-2.5 text-sm font-medium text-gray-700 dark:text-amber-primary bg-gray-50 dark:bg-charcoal-darkest border border-gray-200 dark:border-gray-border hover:bg-gray-200 dark:hover:bg-charcoal-light rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        className="w-full flex items-center gap-3 px-3 py-2.5 text-sm font-medium text-gray-700 dark:text-amber-primary bg-gray-50 dark:bg-charcoal-darkest border border-gray-200 dark:border-gray-border hover:bg-gray-200 dark:hover:bg-charcoal-light rounded-none transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
       >
         <Upload className="w-4 h-4 text-purple-active" />
         <span>{isLoading ? 'Loading...' : 'Push Rules to All'}</span>
@@ -59,9 +59,9 @@ export default function QuickActions() {
       <button
         onClick={() => navigate('/peers', { state: { openAddModal: true } })}
         aria-label="Add Peer"
-        className="w-full flex items-center gap-3 px-3 py-2.5 text-sm font-medium text-gray-700 dark:text-amber-primary bg-gray-50 dark:bg-charcoal-darkest border border-gray-200 dark:border-gray-border hover:bg-gray-200 dark:hover:bg-charcoal-light rounded-lg transition-colors"
-      >
-        <UserPlus className="w-4 h-4 text-purple-active" />
+className="w-full flex items-center gap-3 px-3 py-2.5 text-sm font-medium text-gray-700 dark:text-amber-primary bg-gray-50 dark:bg-charcoal-darkest border border-gray-200 dark:border-gray-border hover:bg-gray-200 dark:hover:bg-charcoal-light rounded-none transition-colors"
+>
+<UserPlus className="w-4 h-4 text-purple-active" />
         <span>Add Peer</span>
       </button>
 
@@ -69,9 +69,9 @@ export default function QuickActions() {
       <button
         onClick={() => navigate('/policies', { state: { openAddModal: true } })}
         aria-label="Create Policy"
-        className="w-full flex items-center gap-3 px-3 py-2.5 text-sm font-medium text-gray-700 dark:text-amber-primary bg-gray-50 dark:bg-charcoal-darkest border border-gray-200 dark:border-gray-border hover:bg-gray-200 dark:hover:bg-charcoal-light rounded-lg transition-colors"
-      >
-        <Shield className="w-4 h-4 text-purple-active" />
+className="w-full flex items-center gap-3 px-3 py-2.5 text-sm font-medium text-gray-700 dark:text-amber-primary bg-gray-50 dark:bg-charcoal-darkest border border-gray-200 dark:border-gray-border hover:bg-gray-200 dark:hover:bg-charcoal-light rounded-none transition-colors"
+>
+<Shield className="w-4 h-4 text-purple-active" />
         <span>Create Policy</span>
       </button>
       </div>

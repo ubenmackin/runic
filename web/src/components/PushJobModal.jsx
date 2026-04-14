@@ -149,7 +149,7 @@ export default function PushJobModal({ jobId, onClose }) {
 
   const modalContent = (
     <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50">
-      <div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-xl w-full max-w-lg mx-4 max-h-[80vh] flex flex-col overflow-hidden">
+      <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none w-full max-w-lg mx-4 max-h-[80vh] flex flex-col overflow-hidden">
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-border">
           <h2 className="text-lg font-semibold text-gray-900 dark:text-light-neutral">
@@ -157,7 +157,7 @@ export default function PushJobModal({ jobId, onClose }) {
           </h2>
           <button
             onClick={handleClose}
-            className="p-1 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded"
+            className="p-1 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none"
             aria-label="Close modal"
           >
             <X className="w-5 h-5" />
@@ -172,9 +172,9 @@ export default function PushJobModal({ jobId, onClose }) {
               <span>{succeeded + failed} of {total} peers</span>
               <span>{percentage}%</span>
             </div>
-            <div className="w-full bg-gray-200 dark:bg-charcoal-darkest rounded-full h-2.5">
-              <div
-                className={`h-2.5 rounded-full transition-all duration-300 ${
+<div className="w-full bg-gray-200 dark:bg-charcoal-darkest rounded-none h-2.5">
+								<div
+									className={`h-2.5 rounded-none transition-all duration-300 ${
                   isComplete && failed > 0
                     ? 'bg-amber-500'
                     : isComplete && failed === 0
@@ -215,7 +215,7 @@ export default function PushJobModal({ jobId, onClose }) {
               {peerList.map(([peerId, peer]) => (
                 <div
                   key={peerId}
-                  className="flex items-center justify-between py-1.5 px-2 rounded-lg bg-gray-50 dark:bg-charcoal-darkest"
+                  className="flex items-center justify-between py-1.5 px-2 rounded-none bg-gray-50 dark:bg-charcoal-darkest"
                 >
                   <div className="flex items-center gap-2 min-w-0">
                     {getStatusIcon(peer.status)}
@@ -238,7 +238,7 @@ export default function PushJobModal({ jobId, onClose }) {
         <div className="flex justify-end gap-3 p-4 border-t border-gray-200 dark:border-gray-border bg-gray-50 dark:bg-charcoal-darkest">
           <button
             onClick={handleClose}
-            className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-amber-primary bg-white dark:bg-charcoal-dark border border-gray-300 dark:border-gray-border rounded-lg hover:bg-gray-50 dark:hover:bg-charcoal-darkest"
+            className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-amber-primary bg-white dark:bg-charcoal-dark border border-gray-300 dark:border-gray-border rounded-none hover:bg-gray-50 dark:hover:bg-charcoal-darkest"
           >
             {isComplete ? 'Close' : 'Close & Run in Background'}
           </button>

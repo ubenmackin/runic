@@ -16,7 +16,7 @@ export default function DataTable({ columns, data, emptyMessage, onRowClick, pag
   }
 
   return (
-    <div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-sm overflow-hidden">
+    <div className="bg-white dark:bg-charcoal-dark shadow-none overflow-hidden">
       {/* Rows per page dropdown - top right */}
       {pagination && (
         <div className="flex justify-end items-center gap-2 px-4 py-3 border-b border-gray-200 dark:border-gray-border">
@@ -24,7 +24,7 @@ export default function DataTable({ columns, data, emptyMessage, onRowClick, pag
           <select
             value={rowsPerPage}
             onChange={(e) => onRowsPerPageChange(Number(e.target.value))}
-            className="text-sm border border-gray-300 dark:border-gray-border rounded px-2 py-1 bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral focus:ring-2 focus:ring-purple-active focus:border-purple-active"
+            className="text-sm border border-gray-300 dark:border-gray-border rounded-none px-2 py-1 bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral focus:ring-2 focus:ring-purple-active focus:border-purple-active"
             aria-label="Rows per page"
           >
             {rowsOptions.map(opt => (
@@ -38,15 +38,15 @@ export default function DataTable({ columns, data, emptyMessage, onRowClick, pag
 
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
-          <thead className="bg-gray-50 dark:bg-charcoal-darkest">
-            <tr>
-              {columns.map(col => (
-                <th key={col.key} className={`text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted ${col.className || ''}`}>
-                  {col.label}
-                </th>
-              ))}
-            </tr>
-          </thead>
+<thead className="bg-charcoal-darkest">
+          <tr>
+            {columns.map(col => (
+              <th key={col.key} className={`text-left px-4 py-2 font-medium text-slate-500 text-[10px] uppercase tracking-wider ${col.className || ''}`}>
+                {col.label}
+              </th>
+            ))}
+          </tr>
+        </thead>
           <tbody className="divide-y divide-gray-200 dark:divide-gray-border">
             {data.map((item, idx) => (
               <tr 
@@ -55,9 +55,9 @@ export default function DataTable({ columns, data, emptyMessage, onRowClick, pag
                 onClick={onRowClick ? () => onRowClick(item) : undefined}
               >
                 {columns.map(col => (
-                  <td key={col.key} className={`px-4 py-3 ${col.cellClassName || ''}`}>
-                    {col.render ? col.render(item) : item[col.key]}
-                  </td>
+<td key={col.key} className={`px-4 py-2 ${col.cellClassName || ''}`}>
+                  {col.render ? col.render(item) : item[col.key]}
+                </td>
                 ))}
               </tr>
             ))}
@@ -75,7 +75,7 @@ export default function DataTable({ columns, data, emptyMessage, onRowClick, pag
             <button
               onClick={() => onPageChange(page - 1)}
               disabled={!canGoPrev}
-              className="p-1.5 rounded hover:bg-gray-200 dark:hover:bg-charcoal-dark disabled:opacity-40 disabled:cursor-not-allowed"
+              className="p-1.5 rounded-none hover:bg-gray-200 dark:hover:bg-charcoal-dark disabled:opacity-40 disabled:cursor-not-allowed"
               title="Previous page"
               aria-label="Go to previous page"
             >
@@ -88,7 +88,7 @@ export default function DataTable({ columns, data, emptyMessage, onRowClick, pag
                 <button
                   key={p}
                   onClick={() => onPageChange(p)}
-                  className={`min-w-[32px] h-8 px-2 rounded text-sm ${
+                  className={`min-w-[32px] h-8 px-2 rounded-none text-sm ${
                     p === page
                       ? 'bg-purple-active text-white'
                       : 'hover:bg-gray-200 dark:hover:bg-charcoal-dark text-gray-700 dark:text-amber-primary'
@@ -104,7 +104,7 @@ export default function DataTable({ columns, data, emptyMessage, onRowClick, pag
                 {/* First page */}
                 <button
                   onClick={() => onPageChange(1)}
-                  className={`min-w-[32px] h-8 px-2 rounded text-sm ${
+                  className={`min-w-[32px] h-8 px-2 rounded-none text-sm ${
                     1 === page
                       ? 'bg-purple-active text-white'
                       : 'hover:bg-gray-200 dark:hover:bg-charcoal-dark text-gray-700 dark:text-amber-primary'
@@ -120,7 +120,7 @@ export default function DataTable({ columns, data, emptyMessage, onRowClick, pag
                 ) : page === 3 ? (
                   <button
                     onClick={() => onPageChange(2)}
-                    className="min-w-[32px] h-8 px-2 rounded text-sm hover:bg-gray-200 dark:hover:bg-charcoal-dark text-gray-700 dark:text-amber-primary"
+                    className="min-w-[32px] h-8 px-2 rounded-none text-sm hover:bg-gray-200 dark:hover:bg-charcoal-dark text-gray-700 dark:text-amber-primary"
                     aria-label="Go to page 2"
                   >
                     2
@@ -144,7 +144,7 @@ export default function DataTable({ columns, data, emptyMessage, onRowClick, pag
                 ) : page === totalPages - 2 ? (
                   <button
                     onClick={() => onPageChange(totalPages - 1)}
-                    className="min-w-[32px] h-8 px-2 rounded text-sm hover:bg-gray-200 dark:hover:bg-charcoal-dark text-gray-700 dark:text-amber-primary"
+                    className="min-w-[32px] h-8 px-2 rounded-none text-sm hover:bg-gray-200 dark:hover:bg-charcoal-dark text-gray-700 dark:text-amber-primary"
                     aria-label={`Go to page ${totalPages - 1}`}
                   >
                     {totalPages - 1}
@@ -155,7 +155,7 @@ export default function DataTable({ columns, data, emptyMessage, onRowClick, pag
                 {totalPages > 1 && (
                   <button
                     onClick={() => onPageChange(totalPages)}
-                    className={`min-w-[32px] h-8 px-2 rounded text-sm ${
+                    className={`min-w-[32px] h-8 px-2 rounded-none text-sm ${
                       totalPages === page
                         ? 'bg-purple-active text-white'
                         : 'hover:bg-gray-200 dark:hover:bg-charcoal-dark text-gray-700 dark:text-amber-primary'
@@ -170,7 +170,7 @@ export default function DataTable({ columns, data, emptyMessage, onRowClick, pag
             <button
               onClick={() => onPageChange(page + 1)}
               disabled={!canGoNext}
-              className="p-1.5 rounded hover:bg-gray-200 dark:hover:bg-charcoal-dark disabled:opacity-40 disabled:cursor-not-allowed"
+              className="p-1.5 rounded-none hover:bg-gray-200 dark:hover:bg-charcoal-dark disabled:opacity-40 disabled:cursor-not-allowed"
               title="Next page"
               aria-label="Go to next page"
             >

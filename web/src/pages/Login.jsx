@@ -84,7 +84,7 @@ export default function Login({ mode }) {
             {isSetup ? 'Welcome — Set up your admin account' : 'Firewall Policy Management'}
           </p>
         </div>
-        <div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-lg p-8">
+        <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none p-8">
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
 <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
@@ -95,8 +95,8 @@ export default function Login({ mode }) {
                 value={username}
                 onChange={e => setUsername(e.target.value)}
                 required
-className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-runic-500"
-				/>
+className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-runic-500"
+        />
 			</div>
 			<div>
 				<label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
@@ -107,8 +107,8 @@ className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border round
                 value={password}
                 onChange={e => setPassword(e.target.value)}
                 required
-className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-runic-500"
-				/>
+className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-runic-500"
+        />
 			</div>
 			{isSetup && (
 				<div>
@@ -120,15 +120,15 @@ className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border round
                   value={confirmPassword}
                   onChange={e => setConfirmPassword(e.target.value)}
                   required
-className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-runic-500"
-				/>
+className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-runic-500"
+        />
               </div>
             )}
             <InlineError message={error} />
             <button
               type="submit"
               disabled={loginMutation.isPending || setupMutation.isPending}
-              className="w-full py-2.5 bg-purple-active hover:bg-purple-active/80 text-white font-medium rounded-lg disabled:opacity-50"
+              className="w-full py-2.5 bg-purple-active hover:bg-purple-600 text-white font-bold uppercase rounded-none disabled:opacity-50 border border-purple-active/20 shadow-[0_0_15px_rgba(159,79,248,0.2)] transition-all"
             >
               {loginMutation.isPending || setupMutation.isPending ? 'Please wait...' : (isSetup ? 'Create Account' : 'Sign In')}
             </button>

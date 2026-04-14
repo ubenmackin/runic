@@ -275,7 +275,7 @@ export default function Settings() {
 
   // Helper component for Notification Preferences section
   const NotificationPreferencesSection = () => (
-    <div className="bg-white dark:bg-charcoal-dark rounded-lg shadow">
+    <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none">
       <div className="p-6">
         <div className="flex items-center gap-3 mb-2">
           <Bell className="w-5 h-5 text-purple-500" />
@@ -306,7 +306,7 @@ export default function Settings() {
                 id="unified_timezone"
                 value={unifiedTimezone || 'UTC'}
                 onChange={(e) => handleUnifiedTimezoneChange(e.target.value)}
-                className="w-full md:w-auto min-w-[200px] px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+                className="w-full md:w-auto min-w-[200px] px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
               >
                 {timezones.map((tz) => (
                   <option key={tz.value} value={tz.value}>
@@ -332,7 +332,7 @@ export default function Settings() {
                       id={`alert-type-${type.key}`}
                       checked={notificationPrefs.alert_types?.[type.key] ?? true}
                       onChange={() => handleToggleAlertType(type.key)}
-                      className="w-4 h-4 text-purple-600 border-gray-300 dark:border-gray-border rounded focus:ring-purple-500"
+                      className="w-4 h-4 text-purple-600 border-gray-300 dark:border-gray-border rounded-none focus:ring-purple-500"
                     />
                     <label
                       htmlFor={`alert-type-${type.key}`}
@@ -368,7 +368,7 @@ export default function Settings() {
                 id="quiet_hours_enabled"
                 checked={notificationPrefs.quiet_hours?.enabled ?? false}
                 onChange={(e) => handleQuietHoursChange('enabled', e.target.checked)}
-                className="w-4 h-4 text-purple-600 border-gray-300 dark:border-gray-border rounded focus:ring-purple-500"
+                className="w-4 h-4 text-purple-600 border-gray-300 dark:border-gray-border rounded-none focus:ring-purple-500"
               />
               <label htmlFor="quiet_hours_enabled" className="text-sm text-gray-700 dark:text-amber-primary">
                 Enable Quiet Hours
@@ -383,7 +383,7 @@ export default function Settings() {
                 id="quiet_hours_start"
                 value={notificationPrefs.quiet_hours?.start_time || '22:00'}
                 onChange={(e) => handleQuietHoursChange('start_time', e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
               />
             </div>
             <div>
@@ -395,7 +395,7 @@ export default function Settings() {
                 id="quiet_hours_end"
                 value={notificationPrefs.quiet_hours?.end_time || '08:00'}
                 onChange={(e) => handleQuietHoursChange('end_time', e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
               />
             </div>
           </div>
@@ -425,7 +425,7 @@ export default function Settings() {
                       id="digest_enabled"
                       checked={notificationPrefs.daily_digest?.enabled ?? false}
                       onChange={(e) => handleDigestChange('enabled', e.target.checked)}
-                      className="w-4 h-4 text-purple-600 border-gray-300 dark:border-gray-border rounded focus:ring-purple-500"
+                      className="w-4 h-4 text-purple-600 border-gray-300 dark:border-gray-border rounded-none focus:ring-purple-500"
                     />
                     <label htmlFor="digest_enabled" className="text-sm text-gray-700 dark:text-amber-primary">
                       Enable Daily Digest
@@ -440,7 +440,7 @@ export default function Settings() {
         id="digest_time"
         value={notificationPrefs.daily_digest?.time || '09:00'}
         onChange={(e) => handleDigestChange('time', e.target.value)}
-        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
       />
     </div>
                 </div>
@@ -503,7 +503,7 @@ export default function Settings() {
         <>
           <NotificationPreferencesSection />
 
-          <div className="bg-white dark:bg-charcoal-dark rounded-lg shadow">
+          <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none">
             <div className="p-12 text-center">
               <Lock className="w-12 h-12 text-gray-400 dark:text-gray-500 mx-auto mb-4" />
               <h2 className="text-xl font-semibold text-gray-900 dark:text-light-neutral mb-2">Access Denied</h2>
@@ -525,7 +525,7 @@ export default function Settings() {
               <NotificationPreferencesSection />
 
               {/* SMTP Configuration Section */}
-              <div className="bg-white dark:bg-charcoal-dark rounded-lg shadow">
+              <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none">
                 <div className="p-6">
                   <div className="flex items-center gap-3 mb-6">
                     <Mail className="w-5 h-5 text-purple-500" />
@@ -549,7 +549,7 @@ export default function Settings() {
           value={smtpFormData.host}
           onChange={(e) => setSmtpFormData({ ...smtpFormData, host: e.target.value })}
           placeholder="smtp.example.com"
-          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
         />
       </div>
 
@@ -564,7 +564,7 @@ export default function Settings() {
           value={smtpFormData.port}
           onChange={(e) => setSmtpFormData({ ...smtpFormData, port: parseInt(e.target.value) || 587 })}
           defaultValue={587}
-          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
         />
       </div>
 
@@ -579,7 +579,7 @@ export default function Settings() {
           value={smtpFormData.username}
           onChange={(e) => setSmtpFormData({ ...smtpFormData, username: e.target.value })}
           placeholder="username"
-          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
         />
       </div>
 
@@ -595,7 +595,7 @@ export default function Settings() {
             value={smtpFormData.password}
             onChange={(e) => setSmtpFormData({ ...smtpFormData, password: e.target.value })}
             placeholder={smtpConfig?.password_set ? '••••••••' : 'Enter password'}
-            className="w-full px-3 py-2 pr-10 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+            className="w-full px-3 py-2 pr-10 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
           />
           <button
             type="button"
@@ -618,7 +618,7 @@ export default function Settings() {
           value={smtpFormData.from_address}
           onChange={(e) => setSmtpFormData({ ...smtpFormData, from_address: e.target.value })}
           placeholder="alerts@example.com"
-          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
         />
       </div>
 
@@ -630,7 +630,7 @@ export default function Settings() {
                             id="use_tls"
                             checked={smtpFormData.use_tls}
                             onChange={(e) => setSmtpFormData({ ...smtpFormData, use_tls: e.target.checked })}
-                            className="w-4 h-4 text-purple-600 border-gray-300 dark:border-gray-border rounded focus:ring-purple-500"
+                            className="w-4 h-4 text-purple-600 border-gray-300 dark:border-gray-border rounded-none focus:ring-purple-500"
                           />
                           <label htmlFor="use_tls" className="text-sm text-gray-700 dark:text-amber-primary">
                             Use TLS
@@ -642,7 +642,7 @@ export default function Settings() {
                             id="smtp_enabled"
                             checked={smtpFormData.enabled}
                             onChange={(e) => setSmtpFormData({ ...smtpFormData, enabled: e.target.checked })}
-                            className="w-4 h-4 text-purple-600 border-gray-300 dark:border-gray-border rounded focus:ring-purple-500"
+                            className="w-4 h-4 text-purple-600 border-gray-300 dark:border-gray-border rounded-none focus:ring-purple-500"
                           />
                           <label htmlFor="smtp_enabled" className="text-sm text-gray-700 dark:text-amber-primary">
                             Enable SMTP
@@ -657,7 +657,7 @@ export default function Settings() {
                     <button
                       onClick={() => testEmailMutation.mutate()}
                       disabled={testEmailMutation.isPending || !smtpFormData.enabled}
-                      className="inline-flex items-center gap-2 px-4 py-2 text-sm border border-gray-300 dark:border-gray-border rounded-lg text-gray-700 dark:text-amber-primary hover:bg-gray-50 dark:hover:bg-charcoal-darkest disabled:opacity-50 disabled:cursor-not-allowed"
+                      className="inline-flex items-center gap-2 px-4 py-2 text-sm border border-gray-300 dark:border-gray-border rounded-none text-gray-700 dark:text-amber-primary hover:bg-gray-50 dark:hover:bg-charcoal-darkest disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       {testEmailMutation.isPending ? (
                         <Loader className="w-4 h-4 animate-spin" />
@@ -669,7 +669,7 @@ export default function Settings() {
                     <button
                       onClick={() => updateSmtpMutation.mutate(smtpFormData)}
                       disabled={updateSmtpMutation.isPending}
-                      className="inline-flex items-center gap-2 px-4 py-2 text-sm bg-purple-active hover:bg-purple-active/80 text-white rounded-lg disabled:opacity-50"
+                      className="inline-flex items-center gap-2 px-4 py-2 text-sm bg-purple-active hover:bg-purple-600 text-white rounded-none disabled:opacity-50 border border-purple-active/20 shadow-[0_0_15px_rgba(159,79,248,0.2)] transition-all"
                     >
                       {updateSmtpMutation.isPending ? 'Saving...' : 'Save SMTP Settings'}
                     </button>
@@ -678,7 +678,7 @@ export default function Settings() {
               </div>
 
               {/* Alert Settings Component */}
-              <div className="bg-white dark:bg-charcoal-dark rounded-lg shadow">
+              <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none">
                 <div className="p-6">
                   <AlertSettings />
                 </div>
@@ -689,7 +689,7 @@ export default function Settings() {
           {activeTab === 'logs' && (
             <div className="space-y-6">
               {/* Log Management Section */}
-              <div className="bg-white dark:bg-charcoal-dark rounded-lg shadow">
+              <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none">
                 <div className="p-6">
                   <div className="flex items-center justify-between mb-4">
                     <div className="flex items-center gap-3">
@@ -698,7 +698,7 @@ export default function Settings() {
                     </div>
                     <button
                       onClick={() => setShowClearLogsModal(true)}
-                      className="inline-flex items-center gap-2 px-3 py-2 text-sm bg-red-600 hover:bg-red-700 text-white rounded-lg"
+                      className="inline-flex items-center gap-2 px-3 py-2 text-sm bg-red-600 hover:bg-red-700 text-white rounded-none"
                     >
                       <Trash2 className="w-4 h-4" />
                       Clear All Logs
@@ -720,11 +720,11 @@ export default function Settings() {
                   </div>
                   {/* Logs Database Path */}
                   {logSettings?.logs_db_path && (
-                    <div className="mb-4">
-                      <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-                        Logs Database Path
-                      </label>
-                      <div className="p-2 bg-gray-100 dark:bg-charcoal-darkest rounded font-mono text-sm text-gray-700 dark:text-amber-muted">
+<div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+                  Logs Database Path
+                </label>
+                <div className="p-2 bg-gray-100 dark:bg-charcoal-darkest rounded-none font-mono text-sm text-gray-700 dark:text-amber-muted">
                         {logSettings.logs_db_path}
                       </div>
                     </div>
@@ -753,7 +753,7 @@ export default function Settings() {
                             }
                           }
                         }}
-                        className="px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+                        className="px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
                       >
                         <option value="0">Disabled (no logging)</option>
                         <option value="1">1 Day</option>
@@ -776,7 +776,7 @@ export default function Settings() {
                             setRetentionDays(Math.min(9999, Math.max(1, val)))
                           }}
                           onBlur={() => updateLogSettingsMutation.mutate(retentionDays)}
-                          className="w-24 px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+                          className="w-24 px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
                         />
                       )}
                     </div>
@@ -796,7 +796,7 @@ export default function Settings() {
           {activeTab === 'keys' && (
             <div className="space-y-6">
               {/* JWT Secret Section */}
-              <div className="bg-white dark:bg-charcoal-dark rounded-lg shadow">
+              <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none">
                 <div className="p-6">
                   <div className="flex items-center justify-between mb-4">
                     <div className="flex items-center gap-3">
@@ -806,14 +806,14 @@ export default function Settings() {
                     <div className="flex gap-2">
                       <button
                         onClick={() => setShowDeleteModal('jwt-secret')}
-                        className="inline-flex items-center gap-2 px-3 py-2 text-sm bg-red-600 hover:bg-red-700 text-white rounded-lg"
+                        className="inline-flex items-center gap-2 px-3 py-2 text-sm bg-red-600 hover:bg-red-700 text-white rounded-none"
                       >
                         <Trash2 className="w-4 h-4" />
                         Delete
                       </button>
                       <button
                         onClick={() => setShowCreateModal('jwt-secret')}
-                        className="inline-flex items-center gap-2 px-3 py-2 text-sm bg-purple-active hover:bg-purple-active/80 text-white rounded-lg"
+                        className="inline-flex items-center gap-2 px-3 py-2 text-sm bg-purple-active hover:bg-purple-600 text-white rounded-none border border-purple-active/20 shadow-[0_0_15px_rgba(159,79,248,0.2)] transition-all"
                       >
                         <Plus className="w-4 h-4" />
                         Create New
@@ -823,14 +823,14 @@ export default function Settings() {
                   <p className="text-gray-600 dark:text-amber-muted text-sm">
                     JWT Secret is used for user authentication tokens. Changing this will log out all users.
                   </p>
-                  <div className="mt-4 p-3 bg-gray-100 dark:bg-charcoal-darkest rounded font-mono text-sm text-gray-700 dark:text-amber-primary">
-                    {isLoading ? 'Loading...' : getKeyData('jwt-secret')?.exists ? '•••••••••••••••••••••••••••••••••••••••••' : 'No key configured'}
+<div className="mt-4 p-3 bg-gray-100 dark:bg-charcoal-darkest rounded-none font-mono text-sm text-gray-700 dark:text-amber-primary">
+              {isLoading ? 'Loading...' : getKeyData('jwt-secret')?.exists ? '•••••••••••••••••••••••••••••••••••••••••' : 'No key configured'}
                   </div>
                 </div>
               </div>
 
               {/* Agent JWT Secret Section */}
-              <div className="bg-white dark:bg-charcoal-dark rounded-lg shadow">
+              <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none">
                 <div className="p-6">
                   <div className="flex items-center justify-between mb-4">
                     <div className="flex items-center gap-3">
@@ -840,14 +840,14 @@ export default function Settings() {
                     <div className="flex gap-2">
                       <button
                         onClick={() => setShowDeleteModal('agent-jwt-secret')}
-                        className="inline-flex items-center gap-2 px-3 py-2 text-sm bg-red-600 hover:bg-red-700 text-white rounded-lg"
+                        className="inline-flex items-center gap-2 px-3 py-2 text-sm bg-red-600 hover:bg-red-700 text-white rounded-none"
                       >
                         <Trash2 className="w-4 h-4" />
                         Delete
                       </button>
                       <button
                         onClick={() => setShowCreateModal('agent-jwt-secret')}
-                        className="inline-flex items-center gap-2 px-3 py-2 text-sm bg-purple-active hover:bg-purple-active/80 text-white rounded-lg"
+                        className="inline-flex items-center gap-2 px-3 py-2 text-sm bg-purple-active hover:bg-purple-600 text-white rounded-none border border-purple-active/20 shadow-[0_0_15px_rgba(159,79,248,0.2)] transition-all"
                       >
                         <Plus className="w-4 h-4" />
                         Create New
@@ -857,8 +857,8 @@ export default function Settings() {
                   <p className="text-gray-600 dark:text-amber-muted text-sm">
                     Agent JWT Secret is used to authenticate agents with the control plane. Changing this will disconnect all agents.
                   </p>
-                  <div className="mt-4 p-3 bg-gray-100 dark:bg-charcoal-darkest rounded font-mono text-sm text-gray-700 dark:text-amber-primary">
-                    {isLoading ? 'Loading...' : getKeyData('agent-jwt-secret')?.exists ? '•••••••••••••••••••••••••••••••••••••••••' : 'No key configured'}
+<div className="mt-4 p-3 bg-gray-100 dark:bg-charcoal-darkest rounded-none font-mono text-sm text-gray-700 dark:text-amber-primary">
+              {isLoading ? 'Loading...' : getKeyData('agent-jwt-secret')?.exists ? '•••••••••••••••••••••••••••••••••••••••••' : 'No key configured'}
                   </div>
                 </div>
               </div>
@@ -868,7 +868,7 @@ export default function Settings() {
           {/* Delete Confirmation Modal */}
           {showDeleteModal && (
             <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-              <div ref={deleteModalRef} className="bg-white dark:bg-charcoal-dark rounded-lg p-6 max-w-md w-full mx-4">
+              <div ref={deleteModalRef} className="bg-white dark:bg-charcoal-dark rounded-none p-6 max-w-md w-full mx-4">
                 <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
                   Delete {showDeleteModal === 'jwt-secret' ? 'JWT Secret' : 'Agent JWT Secret'}?
                 </h3>
@@ -878,14 +878,14 @@ export default function Settings() {
                 <div className="flex gap-3">
                   <button
                     onClick={() => setShowDeleteModal(null)}
-                    className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-border rounded-lg text-gray-700 dark:text-amber-primary hover:bg-gray-50 dark:hover:bg-charcoal-darkest"
+                    className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-border rounded-none text-gray-700 dark:text-amber-primary hover:bg-gray-50 dark:hover:bg-charcoal-darkest"
                   >
                     Cancel
                   </button>
                   <button
                     onClick={() => handleDelete(showDeleteModal)}
                     disabled={deleteMutation.isPending}
-                    className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg disabled:opacity-50"
+                    className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-none disabled:opacity-50"
                   >
                     {deleteMutation.isPending ? 'Deleting...' : 'Delete'}
                   </button>
@@ -897,7 +897,7 @@ export default function Settings() {
           {/* Create New Confirmation Modal */}
           {showCreateModal && (
             <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-              <div ref={createModalRef} className="bg-white dark:bg-charcoal-dark rounded-lg p-6 max-w-md w-full mx-4">
+              <div ref={createModalRef} className="bg-white dark:bg-charcoal-dark rounded-none p-6 max-w-md w-full mx-4">
                 <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
                   Create New {showCreateModal === 'jwt-secret' ? 'JWT Secret' : 'Agent JWT Secret'}?
                 </h3>
@@ -907,14 +907,14 @@ export default function Settings() {
                 <div className="flex gap-3">
                   <button
                     onClick={() => setShowCreateModal(null)}
-                    className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-border rounded-lg text-gray-700 dark:text-amber-primary hover:bg-gray-50 dark:hover:bg-charcoal-darkest"
+                    className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-border rounded-none text-gray-700 dark:text-amber-primary hover:bg-gray-50 dark:hover:bg-charcoal-darkest"
                   >
                     Cancel
                   </button>
                   <button
                     onClick={() => handleCreate(showCreateModal)}
                     disabled={createMutation.isPending}
-                    className="flex-1 px-4 py-2 bg-purple-active hover:bg-purple-active/80 text-white rounded-lg disabled:opacity-50"
+                    className="flex-1 px-4 py-2 bg-purple-active hover:bg-purple-600 text-white rounded-none disabled:opacity-50 border border-purple-active/20 shadow-[0_0_15px_rgba(159,79,248,0.2)] transition-all"
                   >
                     {createMutation.isPending ? 'Creating...' : 'Create'}
                   </button>
@@ -926,7 +926,7 @@ export default function Settings() {
           {/* Clear Logs Confirmation Modal */}
           {showClearLogsModal && (
             <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-              <div className="bg-white dark:bg-charcoal-dark rounded-lg p-6 max-w-md w-full mx-4">
+              <div className="bg-white dark:bg-charcoal-dark rounded-none p-6 max-w-md w-full mx-4">
                 <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
                   Clear All Logs?
                 </h3>
@@ -936,14 +936,14 @@ export default function Settings() {
                 <div className="flex gap-3">
                   <button
                     onClick={() => setShowClearLogsModal(false)}
-                    className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-border rounded-lg text-gray-700 dark:text-amber-primary hover:bg-gray-50 dark:hover:bg-charcoal-darkest"
+                    className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-border rounded-none text-gray-700 dark:text-amber-primary hover:bg-gray-50 dark:hover:bg-charcoal-darkest"
                   >
                     Cancel
                   </button>
                   <button
                     onClick={() => clearLogsMutation.mutate()}
                     disabled={clearLogsMutation.isPending}
-                    className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg disabled:opacity-50"
+                    className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-none disabled:opacity-50"
                   >
                     {clearLogsMutation.isPending ? 'Clearing...' : 'Clear All Logs'}
                   </button>

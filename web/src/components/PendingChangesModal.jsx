@@ -167,14 +167,14 @@ const handleEntityApply = async (entityType, entityId) => {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" tabIndex="-1" onKeyDown={(e) => { if (e.key === 'Escape') onClose() }}>
-      <div ref={modalRef} className="bg-white dark:bg-charcoal-dark rounded-xl shadow-xl w-full max-w-4xl mx-4 max-h-[90vh] flex flex-col">
+      <div ref={modalRef} className="bg-white dark:bg-charcoal-dark rounded-none shadow-none w-full max-w-4xl mx-4 max-h-[90vh] flex flex-col">
         {/* Header */}
         <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-border flex items-center justify-between shrink-0">
           <div className="flex items-center gap-2">
             <AlertCircle className="w-5 h-5 text-purple-active" />
             <h3 className="text-lg font-semibold text-gray-900 dark:text-light-neutral">Pending Changes: {peerHostname}</h3>
           </div>
-          <button onClick={onClose} className="p-1 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded">
+          <button onClick={onClose} className="p-1 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none">
             <X className="w-5 h-5 text-gray-500" />
           </button>
         </div>
@@ -187,7 +187,7 @@ const handleEntityApply = async (entityType, entityId) => {
               <p className="text-sm text-gray-500 dark:text-amber-muted">Loading pending changes...</p>
             </div>
           ) : error ? (
-            <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4">
+            <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-none p-4">
               <p className="text-sm text-red-700 dark:text-red-300">{error}</p>
             </div>
           ) : changes.length === 0 ? (
@@ -213,7 +213,7 @@ const handleEntityApply = async (entityType, entityId) => {
                           <tr key={`${group.entityType}-${group.entityId}`} className="border-b border-gray-100 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-charcoal-darkest">
                             <td className="py-3 px-3">
                               <div className="flex items-center gap-2">
-                                <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300">
+                                <span className="px-2 py-0.5 text-xs font-medium bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300">
                                   {handleChangeTypeLabel(group.entityType)}
                                 </span>
                                 <span className="text-gray-900 dark:text-light-neutral font-medium">
@@ -226,7 +226,7 @@ const handleEntityApply = async (entityType, entityId) => {
                               <div className="mt-1 space-y-1">
                                 {group.changes.map((change, idx) => (
                                   <div key={change.id || idx} className="flex items-center gap-2 text-xs">
-                                    <span className={`px-2 py-0.5 text-xs font-medium rounded-full ${handleActionColor(change.change_action)}`}>
+                                    <span className={`px-2 py-0.5 text-xs font-medium ${handleActionColor(change.change_action)}`}>
                                       {handleActionLabel(change.change_action)}
                                     </span>
                                     <span className="text-gray-500 dark:text-amber-muted">
@@ -240,14 +240,14 @@ const handleEntityApply = async (entityType, entityId) => {
 <button
                   onClick={() => handleEntityApply(group.entityType, group.entityId)}
                   disabled={applyEntityLoading}
-                  className="text-green-600 hover:text-green-800 dark:text-green-400 font-medium text-sm px-3 py-1 rounded hover:bg-green-50 dark:hover:bg-green-900/20 disabled:opacity-50"
+                  className="text-green-600 hover:text-green-800 dark:text-green-400 font-medium text-sm px-3 py-1 rounded-none hover:bg-green-50 dark:hover:bg-green-900/20 disabled:opacity-50"
                 >
                   {applyEntityLoading ? 'Applying...' : '✓ Apply'}
                 </button>
 <button
                                     onClick={() => handleEntityRollback(group.entityType, group.entityId)}
                                     disabled={rollbackLoading}
-                                    className="text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 font-medium text-sm px-3 py-1 rounded hover:bg-blue-50 dark:hover:bg-blue-900/20 disabled:opacity-50 transition-colors"
+                                    className="text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 font-medium text-sm px-3 py-1 rounded-none hover:bg-blue-50 dark:hover:bg-blue-900/20 disabled:opacity-50 transition-colors"
                                 >
                                     {rollbackLoading ? 'Rolling back...' : '↩ Rollback'}
                                 </button>
@@ -280,7 +280,7 @@ const handleEntityApply = async (entityType, entityId) => {
                   {preview.diff_content && (
                     <div>
                       <h5 className="text-xs font-medium text-gray-600 dark:text-amber-muted mb-2 uppercase tracking-wide">Changes (Diff)</h5>
-                      <pre className="bg-gray-900 dark:bg-black text-gray-100 p-4 rounded-lg text-sm font-mono overflow-auto whitespace-pre max-h-[200px] border border-gray-800">
+                      <pre className="bg-gray-900 dark:bg-black text-gray-100 p-4 rounded-none text-sm font-mono overflow-auto whitespace-pre max-h-[200px] border border-gray-800">
                         <code>{preview.diff_content}</code>
                       </pre>
                     </div>
@@ -289,7 +289,7 @@ const handleEntityApply = async (entityType, entityId) => {
                   {/* Full Bundle Preview */}
                   <div className="relative group">
                     <h5 className="text-xs font-medium text-gray-600 dark:text-amber-muted mb-2 uppercase tracking-wide">Full Bundle</h5>
-                    <pre className="bg-gray-900 dark:bg-black text-gray-100 p-4 rounded-lg text-sm font-mono overflow-auto whitespace-pre max-h-[300px] border border-gray-800">
+                    <pre className="bg-gray-900 dark:bg-black text-gray-100 p-4 rounded-none text-sm font-mono overflow-auto whitespace-pre max-h-[300px] border border-gray-800">
                       <code className="text-green-400">{preview.rules_content}</code>
                     </pre>
                     <button
@@ -297,7 +297,7 @@ const handleEntityApply = async (entityType, entityId) => {
                         navigator.clipboard.writeText(preview.rules_content)
                         showToast('Copied to clipboard', 'success')
                       }}
-                      className="absolute top-8 right-3 p-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-gray-300 transition-colors"
+                      className="absolute top-8 right-3 p-2 bg-gray-800 hover:bg-gray-700 rounded-none text-gray-300 transition-colors"
                       title="Copy Rules"
                     >
                       <Copy className="w-4 h-4" />
@@ -308,7 +308,7 @@ const handleEntityApply = async (entityType, entityId) => {
                 <button
                   onClick={handleGeneratePreview}
                   disabled={previewLoading}
-                  className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-purple-active hover:bg-purple-active/80 rounded-lg disabled:opacity-50"
+                  className="flex items-center gap-2 px-4 py-2 text-sm font-bold uppercase text-white bg-purple-active hover:bg-purple-600 rounded-none disabled:opacity-50 border border-purple-active/20 shadow-[0_0_15px_rgba(159,79,248,0.2)] transition-all"
                 >
                   {previewLoading ? (
                     <>
@@ -331,7 +331,7 @@ const handleEntityApply = async (entityType, entityId) => {
         <div className="px-6 py-4 border-t border-gray-200 dark:border-gray-border flex justify-between shrink-0">
           <button
             onClick={onClose}
-            className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-light-neutral bg-gray-100 dark:bg-charcoal-darkest rounded-lg hover:bg-gray-200 dark:hover:bg-charcoal-dark transition-colors"
+            className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-light-neutral bg-gray-100 dark:bg-charcoal-darkest rounded-none hover:bg-gray-200 dark:hover:bg-charcoal-dark transition-colors"
           >
             Close
           </button>
@@ -340,7 +340,7 @@ const handleEntityApply = async (entityType, entityId) => {
                 <button
                   onClick={handleBulkRollback}
                   disabled={applyLoading || rollbackLoading}
-                  className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/40 rounded-lg disabled:opacity-50 transition-colors"
+                  className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/40 rounded-none disabled:opacity-50 transition-colors"
                   title="Discard all pending changes across all peers"
                 >
                   {rollbackLoading ? (
@@ -358,7 +358,7 @@ const handleEntityApply = async (entityType, entityId) => {
               <button
                 onClick={handleApply}
                 disabled={applyLoading || rollbackLoading || !preview}
-                className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-green-600 hover:bg-green-700 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
+                className="flex items-center gap-2 px-4 py-2 text-sm font-bold uppercase text-white bg-green-600 hover:bg-green-700 rounded-none disabled:opacity-50 disabled:cursor-not-allowed border border-green-600/20 shadow-[0_0_15px_rgba(34,197,94,0.2)] transition-all"
               >
                 {applyLoading ? (
                   <>

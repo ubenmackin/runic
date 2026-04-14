@@ -5,7 +5,7 @@ export default function TopBlockedSources({ sources }) {
   const maxCount = sources.length > 0 ? sources[0].count : 1
 
   return (
-    <div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-sm p-4">
+    <div className="border border-gray-border bg-charcoal-dark p-4">
       <div className="flex items-center gap-2 mb-4">
         <ShieldAlert className="w-5 h-5 text-purple-active" />
         <h3 className="text-sm font-semibold text-gray-900 dark:text-light-neutral">
@@ -36,16 +36,16 @@ export default function TopBlockedSources({ sources }) {
                   <span className="font-mono text-sm text-gray-900 dark:text-light-neutral flex-1">
                     {source.src_ip}
                   </span>
-                  <span className="px-2 py-0.5 text-xs rounded bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400">
+                  <span className="px-2 py-0.5 text-xs rounded-none bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400">
                     {source.count} blocks
                   </span>
                 </div>
             {showBar && (
               <div className="flex items-center gap-2 mt-1">
                 <span className="text-sm font-medium text-gray-500 w-6" />
-                <div className="flex-1 h-1.5 bg-gray-100 dark:bg-charcoal-darkest rounded-full overflow-hidden">
+                <div className="flex-1 h-1.5 bg-gray-100 dark:bg-charcoal-darkest rounded-none overflow-hidden">
                   <div
-                    className="h-full bg-red-500 rounded-full transition-all duration-300"
+                    className="h-full bg-red-500 rounded-none transition-all duration-300"
                     style={{ width: `${barWidth}%` }}
                   />
                 </div>

@@ -346,13 +346,13 @@ const handleSourcePortInputKeyDown = (e) => {
             <button
               onClick={handleManualRefresh}
               disabled={isManualRefreshing}
-              className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 dark:text-amber-primary bg-white dark:bg-charcoal-dark border border-gray-300 dark:border-gray-border rounded-lg hover:bg-gray-50 dark:hover:bg-charcoal-darkest disabled:opacity-50"
+              className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 dark:text-amber-primary bg-white dark:bg-charcoal-dark border border-gray-300 dark:border-gray-border rounded-none hover:bg-gray-50 dark:hover:bg-charcoal-darkest disabled:opacity-50"
             >
               <RefreshCw className={`w-4 h-4 ${isManualRefreshing ? 'animate-spin' : ''}`} />
               Refresh
             </button>
             {canEdit && (
-              <button onClick={openAdd} className="flex items-center gap-2 px-4 py-2 bg-purple-active hover:bg-purple-active/80 text-white text-sm font-medium rounded-lg">
+              <button onClick={openAdd} className="flex items-center gap-2 px-4 py-2 bg-purple-active hover:bg-purple-600 text-white text-sm font-bold uppercase rounded-none border border-purple-active/20 shadow-[0_0_15px_rgba(159,79,248,0.2)] transition-all">
                 <Plus className="w-4 h-4" /> New Service
               </button>
             )}
@@ -362,7 +362,7 @@ const handleSourcePortInputKeyDown = (e) => {
 
       {/* System Services Collapsible Panel */}
       {systemServices.length > 0 && (
-        <div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-sm overflow-hidden">
+        <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none overflow-hidden">
           <button
             type="button"
             onClick={() => setShowSystemServices(!showSystemServices)}
@@ -420,7 +420,7 @@ const handleSourcePortInputKeyDown = (e) => {
 				id="showPendingDeletes"
 				checked={showPendingDeletes}
 				onChange={(e) => setShowPendingDeletes(e.target.checked)}
-				className="w-4 h-4 text-purple-active bg-gray-100 border-gray-300 rounded focus:ring-purple-active dark:focus:ring-purple-active dark:ring-offset-gray-800 focus:ring-2 dark:bg-charcoal-darkest dark:border-gray-600"
+				className="w-4 h-4 text-purple-active bg-gray-100 border-gray-300 rounded-none focus:ring-purple-active dark:focus:ring-purple-active dark:ring-offset-gray-800 focus:ring-2 dark:bg-charcoal-darkest dark:border-gray-600"
 			/>
 			<label htmlFor="showPendingDeletes" className="text-sm text-gray-700 dark:text-amber-primary cursor-pointer">
 				Show Pending Deletes
@@ -430,103 +430,103 @@ const handleSourcePortInputKeyDown = (e) => {
 
       {!processedServices?.length ? (
         searchTerm ? (
-          <div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-sm p-8 text-center">
+          <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none p-8 text-center">
             <p className="text-gray-500 dark:text-amber-muted">No user services match your search.</p>
           </div>
         ) : (
           <EmptyState title="No user services yet" message="Create services to define port bundles for your policies." action="New Service" onAction={openAdd} />
         )
       ) : (
-        <div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-sm overflow-hidden">
+        <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
-              <thead className="bg-gray-50 dark:bg-charcoal-darkest">
-                <tr>
-                  <th className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
-            <button type="button" onClick={() => handleSort('name')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
-              Name <SortIndicator columnKey="name" sortConfig={sortConfig} />
-            </button>
-                  </th>
-                  <th className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
-            <button type="button" onClick={() => handleSort('protocol')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
-              Protocol <SortIndicator columnKey="protocol" sortConfig={sortConfig} />
-            </button>
-                  </th>
-                  <th className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
-            <button type="button" onClick={() => handleSort('ports')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
-              Dest Ports <SortIndicator columnKey="ports" sortConfig={sortConfig} />
-            </button>
-                  </th>
-                  <th className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
-            <button type="button" onClick={() => handleSort('description')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
-              Description <SortIndicator columnKey="description" sortConfig={sortConfig} />
-            </button>
-                  </th>
-                  <th className="text-left px-4 py-3 font-medium text-gray-500 dark:text-amber-muted">
-                    Actions
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-200 dark:divide-gray-border">
-                {paginatedServices.map((service) => (
-                  <tr key={service.id} className="">
-				<td className="px-4 py-3">
-					<span className="font-medium text-gray-900 dark:text-light-neutral">
-						{service.name}
-						{service.is_pending_delete && (
-							<span className="ml-2 px-2 py-1 text-xs bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300 rounded">
-								Pending Delete
-							</span>
-						)}
-					</span>
-				</td>
-                    <td className="px-4 py-3 text-gray-600 dark:text-amber-primary">
-                      {protocolLabel(service.protocol)}
-                    </td>
-                    <td className="px-4 py-3">
-                      {service.ports ? (
-                        <div className="flex flex-wrap items-center gap-1.5 max-w-xs">
-                          {(() => {
-                            const ports = service.ports.split(',').map(p => p.trim()).filter(Boolean)
-                            const maxVisible = 2
-                            const visiblePorts = ports.slice(0, maxVisible)
-                            const remainingCount = ports.length - maxVisible
+<thead className="bg-charcoal-darkest">
+              <tr>
+                <th className="text-left px-4 py-2 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+                  <button type="button" onClick={() => handleSort('name')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+                    Name <SortIndicator columnKey="name" sortConfig={sortConfig} />
+                  </button>
+                </th>
+                <th className="text-left px-4 py-2 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+                  <button type="button" onClick={() => handleSort('protocol')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+                    Protocol <SortIndicator columnKey="protocol" sortConfig={sortConfig} />
+                  </button>
+                </th>
+                <th className="text-left px-4 py-2 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+                  <button type="button" onClick={() => handleSort('ports')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+                    Dest Ports <SortIndicator columnKey="ports" sortConfig={sortConfig} />
+                  </button>
+                </th>
+                <th className="text-left px-4 py-2 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+                  <button type="button" onClick={() => handleSort('description')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+                    Description <SortIndicator columnKey="description" sortConfig={sortConfig} />
+                  </button>
+                </th>
+                <th className="text-left px-4 py-2 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
+                  Actions
+                </th>
+              </tr>
+            </thead>
+<tbody className="divide-y divide-gray-200 dark:divide-gray-border">
+              {paginatedServices.map((service) => (
+              <tr key={service.id} className="">
+                <td className="px-4 py-2">
+                  <span className="font-medium text-gray-900 dark:text-light-neutral">
+                    {service.name}
+                    {service.is_pending_delete && (
+                      <span className="ml-2 px-2 py-1 text-xs bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300 rounded-none">
+                        Pending Delete
+                      </span>
+                    )}
+                  </span>
+                </td>
+                <td className="px-4 py-2 text-gray-600 dark:text-amber-primary">
+                  {protocolLabel(service.protocol)}
+                </td>
+                <td className="px-4 py-2">
+                  {service.ports ? (
+                    <div className="flex flex-wrap items-center gap-1.5 max-w-xs">
+                      {(() => {
+                        const ports = service.ports.split(',').map(p => p.trim()).filter(Boolean)
+                        const maxVisible = 2
+                        const visiblePorts = ports.slice(0, maxVisible)
+                        const remainingCount = ports.length - maxVisible
 
-                            return (
-                              <>
-                                {visiblePorts.map((port, idx) => (
-                                  <span
-                                    key={idx}
-                                    className="px-2 py-0.5 text-xs font-medium rounded-full bg-purple-active/20 dark:bg-purple-active text-white whitespace-nowrap"
-                                  >
-                                    {port}
-                                  </span>
-                                ))}
-                                {remainingCount > 0 && (
-                                  <span
-                                    className="px-2 py-0.5 text-xs font-medium rounded-full bg-gray-100 dark:bg-charcoal-darkest text-gray-600 dark:text-amber-muted whitespace-nowrap"
-                                    title={ports.slice(maxVisible).join(', ')}
-                                  >
-                                    +{remainingCount}
-                                  </span>
-                                )}
-                              </>
-                            )
-                          })()}
-                        </div>
-                      ) : (
-                        <span className="text-gray-400">—</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 text-gray-600 dark:text-amber-primary">
-                      {service.description || '—'}
-                    </td>
-				<td className="px-4 py-3">
+                        return (
+                          <>
+                            {visiblePorts.map((port, idx) => (
+                              <span
+                                key={idx}
+                                className="px-2 py-0.5 text-xs font-mono bg-purple-active/20 dark:bg-purple-active text-white whitespace-nowrap"
+                              >
+                                {port}
+                              </span>
+                            ))}
+                            {remainingCount > 0 && (
+                              <span
+                                className="px-2 py-0.5 text-xs font-mono bg-gray-100 dark:bg-charcoal-darkest text-gray-600 dark:text-amber-muted whitespace-nowrap"
+                                title={ports.slice(maxVisible).join(', ')}
+                              >
+                                +{remainingCount}
+                              </span>
+                            )}
+                          </>
+                        )
+                      })()}
+                    </div>
+                  ) : (
+                    <span className="text-gray-400">—</span>
+                  )}
+                </td>
+                <td className="px-4 py-2 text-gray-600 dark:text-amber-primary">
+                  {service.description || '—'}
+                </td>
+                <td className="px-4 py-2">
 					<div className="flex items-center gap-2">
 						{canEdit && (
 							<button
 								onClick={(e) => { e.stopPropagation(); openEdit(service) }}
-								className={`p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded ${(service.is_system || service.is_pending_delete) ? 'text-gray-400 cursor-not-allowed opacity-50' : ''}`}
+								className={`p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none ${(service.is_system || service.is_pending_delete) ? 'text-gray-400 cursor-not-allowed opacity-50' : ''}`}
 								disabled={service.is_system || service.is_pending_delete}
 								title={service.is_pending_delete ? "Cannot edit soft-deleted services" : service.is_system ? "System services cannot be edited" : "Edit"}
 							>
@@ -537,7 +537,7 @@ const handleSourcePortInputKeyDown = (e) => {
 							<button
 								onClick={(e) => { e.stopPropagation(); !service.is_system && !service.is_pending_delete && setDeleteTarget(service) }}
 								disabled={service.is_system || service.is_pending_delete}
-								className={`p-1.5 rounded ${(service.is_system || service.is_pending_delete) ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-100 dark:hover:bg-charcoal-darkest'}`}
+								className={`p-1.5 rounded-none ${(service.is_system || service.is_pending_delete) ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-100 dark:hover:bg-charcoal-darkest'}`}
 								title={service.is_pending_delete ? "Cannot delete soft-deleted services" : service.is_system ? "System services cannot be deleted" : "Delete"}
 							>
 								<Trash2 className="w-4 h-4 text-red-500" />
@@ -561,13 +561,13 @@ const handleSourcePortInputKeyDown = (e) => {
 ref={modalRef}
 role="dialog"
 aria-modal="true"
-className="bg-white dark:bg-charcoal-dark rounded-xl shadow-xl w-full max-w-lg mx-4 flex flex-col max-h-[85vh]"
+className="bg-white dark:bg-charcoal-dark rounded-none shadow-none w-full max-w-lg mx-4 flex flex-col max-h-[85vh]"
 tabIndex="-1"
 >
 {/* Fixed Header */}
 <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-border flex items-center justify-between shrink-0">
 <h3 className="text-lg font-semibold text-gray-900 dark:text-light-neutral">{editService ? 'Edit Service' : 'New Service'}</h3>
-<button onClick={closeModal} className="p-1 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded">
+<button onClick={closeModal} className="p-1 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none">
 <X className="w-5 h-5 text-gray-500" />
 </button>
 </div>
@@ -575,7 +575,7 @@ tabIndex="-1"
 <form id="service-form" onSubmit={handleSubmit} className="p-6 space-y-4 overflow-y-auto flex-1">
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Name</label>
-                <input type="text" value={formData.name} onChange={e => setFormData(d => ({ ...d, name: e.target.value }))} required className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white" />
+                <input type="text" value={formData.name} onChange={e => setFormData(d => ({ ...d, name: e.target.value }))} required className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white" />
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Protocol</label>
@@ -597,7 +597,7 @@ tabIndex="-1"
               {portChips.map((port, idx) => (
                 <span
                   key={idx}
-                  className="px-2 py-1 bg-gray-100 dark:bg-charcoal-darkest rounded-md text-sm flex items-center gap-1 text-gray-900 dark:text-white"
+className="px-2 py-1 bg-gray-100 dark:bg-charcoal-darkest rounded-none text-sm flex items-center gap-1 text-gray-900 dark:text-white"
                 >
                   {port}
                   <X
@@ -618,13 +618,13 @@ tabIndex="-1"
               onKeyDown={handlePortInputKeyDown}
               disabled={formData.protocol === 'icmp' || formData.protocol === 'igmp'}
               placeholder={formData.protocol === 'icmp' ? 'N/A for ICMP' : formData.protocol === 'igmp' ? 'N/A for IGMP' : '22 or 80,443 or 8000:9000'}
-              className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white disabled:opacity-50"
+className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white disabled:opacity-50"
             />
             <button
               type="button"
               onClick={handleAddPort}
               disabled={formData.protocol === 'icmp' || formData.protocol === 'igmp'}
-              className="px-4 py-2 text-sm font-medium text-white bg-purple-active hover:bg-purple-active/80 rounded-lg disabled:opacity-50"
+className="px-4 py-2 text-sm font-bold uppercase text-white bg-purple-active hover:bg-purple-600 rounded-none disabled:opacity-50 border border-purple-active/20 shadow-[0_0_15px_rgba(159,79,248,0.2)] transition-all"
             >
               Add
             </button>
@@ -645,10 +645,10 @@ tabIndex="-1"
           )}
 </div>
 {/* Collapsible Source Ports Section */}
-<div className="border border-gray-200 dark:border-gray-border rounded-lg overflow-hidden">
-<button
-type="button"
-onClick={() => setShowSourcePorts(!showSourcePorts)}
+<div className="border border-gray-200 dark:border-gray-border rounded-none overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setShowSourcePorts(!showSourcePorts)}
 className="w-full px-4 py-3 flex items-center justify-between bg-gray-50 dark:bg-charcoal-darkest hover:bg-gray-100 dark:hover:bg-charcoal-dark transition-colors"
 >
 <span className="text-sm font-medium text-gray-700 dark:text-amber-primary">Source Ports (Optional)</span>
@@ -662,7 +662,7 @@ className="w-full px-4 py-3 flex items-center justify-between bg-gray-50 dark:bg
 {sourcePortChips.length > 0 && (
 <div className="flex flex-wrap gap-2 mb-2">
 {sourcePortChips.map((port, idx) => (
-<span key={idx} className="px-2 py-1 bg-gray-100 dark:bg-charcoal-darkest rounded-md text-sm flex items-center gap-1 text-gray-900 dark:text-white">
+<span key={idx} className="px-2 py-1 bg-gray-100 dark:bg-charcoal-darkest rounded-none text-sm flex items-center gap-1 text-gray-900 dark:text-white">
 {port}
 <X className="w-3 h-3 text-gray-500 hover:text-red-500 cursor-pointer" onClick={() => handleRemoveSourcePort(port)} />
 </span>
@@ -673,9 +673,9 @@ className="w-full px-4 py-3 flex items-center justify-between bg-gray-50 dark:bg
 <input type="text" value={sourcePortInput} onChange={e => { setSourcePortInput(e.target.value); setSourcePortInputError('') }}
 onKeyDown={handleSourcePortInputKeyDown} disabled={formData.protocol === 'icmp' || formData.protocol === 'igmp'}
 placeholder={formData.protocol === 'icmp' ? 'N/A for ICMP' : formData.protocol === 'igmp' ? 'N/A for IGMP' : '67 or 53,5353'}
-className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white disabled:opacity-50" />
+className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white disabled:opacity-50" />
 <button type="button" onClick={handleAddSourcePort} disabled={formData.protocol === 'icmp' || formData.protocol === 'igmp'}
-className="px-4 py-2 text-sm font-medium text-white bg-purple-active hover:bg-purple-active/80 rounded-lg disabled:opacity-50">Add</button>
+className="px-4 py-2 text-sm font-medium text-white bg-purple-active hover:bg-purple-active/80 rounded-none disabled:opacity-50">Add</button>
 </div>
 {sourcePortInputError && <p className="text-xs text-red-500 mt-1">{sourcePortInputError}</p>}
 {formData.protocol !== 'icmp' && formData.protocol !== 'igmp' && (
@@ -689,8 +689,8 @@ Single: <code className="bg-gray-200 text-gray-800 dark:bg-gray-800 dark:text-gr
 </div>
 </div>
 {/* Collapsible Description Section */}
-<div className="border border-gray-200 dark:border-gray-border rounded-lg overflow-hidden">
-<button type="button" onClick={() => setShowDescription(!showDescription)}
+<div className="border border-gray-200 dark:border-gray-border rounded-none overflow-hidden">
+            <button type="button" onClick={() => setShowDescription(!showDescription)}
 className="w-full px-4 py-3 flex items-center justify-between bg-gray-50 dark:bg-charcoal-darkest hover:bg-gray-100 dark:hover:bg-charcoal-dark transition-colors">
 <span className="text-sm font-medium text-gray-700 dark:text-amber-primary">Description (Optional)</span>
 <svg className={`w-4 h-4 text-gray-500 transition-transform duration-150 ${showDescription ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -700,7 +700,7 @@ className="w-full px-4 py-3 flex items-center justify-between bg-gray-50 dark:bg
 <div className={`transition-all duration-150 ease-in-out ${showDescription ? 'max-h-32 opacity-100' : 'max-h-0 opacity-0'} overflow-hidden`}>
 <div className="p-4">
 <textarea value={formData.description} onChange={e => setFormData(d => ({ ...d, description: e.target.value }))}
-rows={2} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white"
+            rows={2} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white"
 placeholder="Add a description for this service..." />
 </div>
 </div>
@@ -708,9 +708,9 @@ placeholder="Add a description for this service..." />
 <InlineError message={formErrors._general} />
 </form>
 {/* Fixed Footer */}
-<div className="px-6 py-4 border-t border-gray-200 dark:border-gray-border flex justify-end gap-3 shrink-0 bg-white dark:bg-charcoal-dark rounded-b-xl">
-<button type="button" onClick={closeModal} className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-amber-primary bg-white dark:bg-charcoal-dark border border-gray-300 dark:border-gray-border rounded-lg hover:bg-gray-50 dark:hover:bg-charcoal-darkest">Cancel</button>
-<button type="submit" form="service-form" className="px-4 py-2 text-sm font-medium text-white bg-purple-active hover:bg-purple-active/80 rounded-lg">{editService ? 'Save Changes' : 'Create Service'}</button>
+<div className="px-6 py-4 border-t border-gray-200 dark:border-gray-border flex justify-end gap-3 shrink-0 bg-white dark:bg-charcoal-dark rounded-none">
+<button type="button" onClick={closeModal} className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-amber-primary bg-white dark:bg-charcoal-dark border border-gray-300 dark:border-gray-border rounded-none hover:bg-gray-50 dark:hover:bg-charcoal-darkest">Cancel</button>
+<button type="submit" form="service-form" className="px-4 py-2 text-sm font-bold uppercase text-white bg-purple-active hover:bg-purple-600 rounded-none border border-purple-active/20 shadow-[0_0_15px_rgba(159,79,248,0.2)] transition-all">{editService ? 'Save Changes' : 'Create Service'}</button>
 </div>
 </div>
 </div>
@@ -729,9 +729,9 @@ placeholder="Add a description for this service..." />
       {/* Conflict Error Modal */}
       {conflictError && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-xl w-full max-w-lg mx-4 p-6">
+          <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none w-full max-w-lg mx-4 p-6">
             <div className="flex items-start gap-3">
-              <div className="flex-shrink-0 w-10 h-10 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center">
+              <div className="flex-shrink-0 w-10 h-10 rounded-none bg-red-100 dark:bg-red-900/30 flex items-center justify-center">
                 <svg className="w-6 h-6 text-red-600 dark:text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                 </svg>
@@ -746,7 +746,7 @@ placeholder="Add a description for this service..." />
                 <ul className="mb-4 space-y-1">
                   {conflictError.policies.map((policy, idx) => (
                     <li key={idx} className="text-sm text-gray-700 dark:text-amber-primary flex items-center gap-2">
-                      <span className="w-1.5 h-1.5 rounded-full bg-purple-active"></span>
+                      <span className="w-1.5 h-1.5 rounded-none bg-purple-active"></span>
                       {policy}
                     </li>
                   ))}
@@ -759,7 +759,7 @@ placeholder="Add a description for this service..." />
             <div className="mt-6 flex justify-end">
               <button
                 onClick={() => setConflictError(null)}
-                className="px-4 py-2 text-sm font-medium text-white bg-purple-active hover:bg-purple-active/80 rounded-lg"
+                className="px-4 py-2 text-sm font-bold uppercase text-white bg-purple-active hover:bg-purple-600 rounded-none border border-purple-active/20 shadow-[0_0_15px_rgba(159,79,248,0.2)] transition-all"
               >
                 Got it
               </button>

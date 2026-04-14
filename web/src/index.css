@@ -1,3 +1,226 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* ============================================================================
+   Global CSS Utilities & Base Styles
+   Design system utilities for tags, buttons, and status indicators
+   ============================================================================ */
+
+/* ----------------------------------------------------------------------------
+   .sharp-tag - Rectangular tag with border
+   Used for categorical labels, badges, and metadata tags
+   ---------------------------------------------------------------------------- */
+.sharp-tag {
+  @apply inline-flex items-center px-2 py-0.5 text-xs font-medium border;
+  @apply bg-neutral-100 text-neutral-700 border-neutral-300;
+}
+
+.dark .sharp-tag {
+  @apply bg-neutral-800 text-neutral-300 border-neutral-600;
+}
+
+/* Sharp tag variants */
+.sharp-tag-primary {
+  @apply border-runic-500 text-runic-700 bg-runic-50;
+}
+
+.dark .sharp-tag-primary {
+  @apply border-runic-500 text-runic-100 bg-runic-900/30;
+}
+
+.sharp-tag-amber {
+  @apply border-amber-500 text-amber-700 bg-amber-50;
+}
+
+.dark .sharp-tag-amber {
+  @apply border-amber-muted text-amber-primary bg-amber-900/20;
+}
+
+.sharp-tag-purple {
+  @apply border-purple-500 text-purple-700 bg-purple-50;
+}
+
+.dark .sharp-tag-purple {
+  @apply border-purple-active text-purple-200 bg-purple-900/20;
+}
+
+/* ----------------------------------------------------------------------------
+   .mono-bracket - Monospace text styling for tags and code-like elements
+   Used for technical labels, function names, and inline code references
+   ---------------------------------------------------------------------------- */
+.mono-bracket {
+  @apply font-mono text-sm tracking-tight;
+  @apply text-neutral-600;
+}
+
+.dark .mono-bracket {
+  @apply text-neutral-400;
+}
+
+/* Bracket decorators - adds visual brackets around content */
+.mono-bracket::before {
+  content: '[';
+  @apply text-neutral-400 mr-0.5;
+}
+
+.mono-bracket::after {
+  content: ']';
+  @apply text-neutral-400 ml-0.5;
+}
+
+.dark .mono-bracket::before,
+.dark .mono-bracket::after {
+  @apply text-neutral-500;
+}
+
+/* Inline variant without brackets */
+.mono-bracket-inline {
+  @apply font-mono text-sm tracking-tight;
+  @apply text-neutral-600;
+}
+
+.dark .mono-bracket-inline {
+  @apply text-neutral-400;
+}
+
+/* ----------------------------------------------------------------------------
+   .glow-button - Button with subtle glow effect
+   Used for primary actions and highlighted interactive elements
+   ---------------------------------------------------------------------------- */
+.glow-button {
+  @apply inline-flex items-center justify-center px-4 py-2;
+  @apply font-medium text-sm rounded-none;
+  @apply bg-runic-500 text-white;
+  @apply transition-all duration-200 ease-in-out;
+  @apply hover:bg-runic-600;
+  box-shadow: 0 0 20px -5px rgba(79, 110, 247, 0.4);
+}
+
+.glow-button:hover {
+  box-shadow: 0 0 25px -5px rgba(79, 110, 247, 0.6);
+}
+
+.glow-button:active {
+  @apply bg-runic-700;
+  box-shadow: 0 0 15px -5px rgba(79, 110, 247, 0.5);
+}
+
+.glow-button:focus-visible {
+  @apply outline-none ring-2 ring-runic-500 ring-offset-2;
+}
+
+.dark .glow-button {
+  @apply bg-runic-600;
+  box-shadow: 0 0 20px -5px rgba(79, 110, 247, 0.5);
+}
+
+.dark .glow-button:hover {
+  @apply bg-runic-500;
+  box-shadow: 0 0 25px -5px rgba(79, 110, 247, 0.7);
+}
+
+/* Glow button - Amber variant */
+.glow-button-amber {
+  @apply bg-amber-primary text-charcoal-darkest;
+  box-shadow: 0 0 20px -5px rgba(193, 158, 91, 0.5);
+}
+
+.glow-button-amber:hover {
+  @apply bg-gold-highlight;
+  box-shadow: 0 0 25px -5px rgba(193, 158, 91, 0.7);
+}
+
+.dark .glow-button-amber {
+  @apply text-charcoal-darkest;
+  box-shadow: 0 0 20px -5px rgba(193, 158, 91, 0.4);
+}
+
+.dark .glow-button-amber:hover {
+  box-shadow: 0 0 25px -5px rgba(193, 158, 91, 0.6);
+}
+
+/* Glow button - Purple variant */
+.glow-button-purple {
+  @apply bg-purple-active text-white;
+  box-shadow: 0 0 20px -5px rgba(159, 79, 248, 0.5);
+}
+
+.glow-button-purple:hover {
+  @apply bg-purple-500;
+  box-shadow: 0 0 25px -5px rgba(159, 79, 248, 0.7);
+}
+
+.dark .glow-button-purple {
+  box-shadow: 0 0 20px -5px rgba(159, 79, 248, 0.4);
+}
+
+/* ----------------------------------------------------------------------------
+   .status-dot - Status indicator with glow
+   Used for live status, connection states, and activity indicators
+   ---------------------------------------------------------------------------- */
+.status-dot {
+  @apply inline-block w-2 h-2 rounded-full;
+  @apply transition-colors duration-200;
+}
+
+/* Status dot variants */
+.status-dot-success {
+  @apply bg-emerald-500;
+  box-shadow: 0 0 8px 2px rgba(16, 185, 129, 0.4);
+}
+
+.dark .status-dot-success {
+  box-shadow: 0 0 8px 2px rgba(16, 185, 129, 0.5);
+}
+
+.status-dot-warning {
+  @apply bg-amber-primary;
+  box-shadow: 0 0 8px 2px rgba(193, 158, 91, 0.4);
+}
+
+.dark .status-dot-warning {
+  box-shadow: 0 0 8px 2px rgba(193, 158, 91, 0.5);
+}
+
+.status-dot-error {
+  @apply bg-red-500;
+  box-shadow: 0 0 8px 2px rgba(239, 68, 68, 0.4);
+}
+
+.dark .status-dot-error {
+  box-shadow: 0 0 8px 2px rgba(239, 68, 68, 0.5);
+}
+
+.status-dot-info {
+  @apply bg-runic-500;
+  box-shadow: 0 0 8px 2px rgba(79, 110, 247, 0.4);
+}
+
+.dark .status-dot-info {
+  box-shadow: 0 0 8px 2px rgba(79, 110, 247, 0.5);
+}
+
+.status-dot-neutral {
+  @apply bg-neutral-400;
+  box-shadow: 0 0 4px 1px rgba(163, 163, 163, 0.3);
+}
+
+.dark .status-dot-neutral {
+  @apply bg-neutral-500;
+  box-shadow: 0 0 4px 1px rgba(115, 115, 115, 0.3);
+}
+
+/* Pulsing animation for active/live status */
+.status-dot-pulse {
+  animation: statusPulse 2s ease-in-out infinite;
+}
+
+@keyframes statusPulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}

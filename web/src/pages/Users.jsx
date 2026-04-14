@@ -99,7 +99,7 @@ export default function Users() {
           title="Users"
           description="Manage user accounts for the Runic control plane"
         />
-        <div className="bg-white dark:bg-charcoal-dark rounded-lg shadow">
+        <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none">
           <div className="p-6 text-center">
             <p className="text-red-500 dark:text-red-400 font-medium mb-2">Failed to load users</p>
             <p className="text-gray-500 dark:text-amber-muted text-sm">{error.message}</p>
@@ -120,7 +120,7 @@ export default function Users() {
           isAdmin && (
             <button
               onClick={() => setShowCreateModal(true)}
-              className="inline-flex items-center gap-2 px-4 py-2 bg-purple-active hover:bg-purple-700 text-white rounded-lg"
+              className="inline-flex items-center gap-2 px-4 py-2 bg-purple-active hover:bg-purple-600 text-white rounded-none border border-purple-active/20 shadow-[0_0_15px_rgba(159,79,248,0.2)] transition-all"
             >
               <UserPlus className="w-5 h-5" />
               Create User
@@ -130,13 +130,13 @@ export default function Users() {
       />
 
       {!users?.length ? (
-        <div className="bg-white dark:bg-charcoal-dark rounded-lg shadow">
+        <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none">
           <div className="p-6 text-center text-gray-500 dark:text-amber-muted">
             <p>No users found. Create your first user to get started.</p>
           </div>
         </div>
       ) : (
-        <div className="bg-white dark:bg-charcoal-dark rounded-lg shadow overflow-hidden">
+        <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none overflow-hidden">
           <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-border">
             <thead className="bg-gray-50 dark:bg-charcoal-darkest">
               <tr>
@@ -163,16 +163,16 @@ export default function Users() {
                           setFormEditConfirmPassword('')
                           setShowEditModal(true)
                         }}
-                        className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded mr-1"
+                        className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none mr-1"
                       >
                         <Pencil className="w-4 h-4 text-gray-500 dark:text-amber-muted" />
                       </button>
                     )}
                     {isAdmin && user.username !== currentUsername && (
-                      <button
-                        onClick={() => setDeleteTarget(user)}
-                        className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded"
-                      >
+<button
+          onClick={() => setDeleteTarget(user)}
+          className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none"
+        >
                         <Trash2 className="w-4 h-4 text-red-500" />
                       </button>
                     )}
@@ -187,7 +187,7 @@ export default function Users() {
       {/* Create user modal */}
       {showCreateModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" role="dialog" aria-modal="true" tabIndex="-1" autoFocus onKeyDown={(e) => { if (e.key === 'Escape') { setShowCreateModal(false) } }}>
-          <div ref={createModalRef} className="bg-white dark:bg-charcoal-dark rounded-lg p-6 max-w-md w-full mx-4">
+          <div ref={createModalRef} className="bg-white dark:bg-charcoal-dark rounded-none p-6 max-w-md w-full mx-4">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-semibold text-gray-900 dark:text-light-neutral">Create User</h3>
               <button
@@ -208,8 +208,8 @@ export default function Users() {
                   required
                   value={formUsername}
                   onChange={(e) => setFormUsername(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-active focus:border-transparent"
-                  placeholder="Enter username"
+className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-active focus:border-transparent"
+        placeholder="Enter username"
                 />
               </div>
               <div>
@@ -223,8 +223,8 @@ export default function Users() {
                   minLength={8}
                   value={formPassword}
                   onChange={(e) => setFormPassword(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-active focus:border-transparent"
-                  placeholder="Enter password"
+className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-active focus:border-transparent"
+        placeholder="Enter password"
                 />
                 <p className="mt-1 text-xs text-gray-500 dark:text-amber-muted">Minimum 8 characters</p>
               </div>
@@ -239,22 +239,22 @@ export default function Users() {
                   minLength={8}
                   value={formConfirmPassword}
                   onChange={(e) => setFormConfirmPassword(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-active focus:border-transparent"
-                  placeholder="Confirm password"
+className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-active focus:border-transparent"
+        placeholder="Confirm password"
                 />
               </div>
               <div>
                 <label htmlFor="email" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
                   Email
                 </label>
-                <input
-                  id="email"
-                  type="email"
-                  value={formEmail}
-                  onChange={(e) => setFormEmail(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-active focus:border-transparent"
-                  placeholder="Enter email (optional)"
-                />
+<input
+        id="email"
+        type="email"
+        value={formEmail}
+        onChange={(e) => setFormEmail(e.target.value)}
+        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-active focus:border-transparent"
+        placeholder="Enter email (optional)"
+      />
               </div>
                 <div>
                   <label htmlFor="role" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
@@ -274,16 +274,16 @@ export default function Users() {
                     setShowCreateModal(false)
                     resetForm()
                   }}
-                  className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-border rounded-lg text-gray-700 dark:text-amber-primary hover:bg-gray-50 dark:hover:bg-charcoal-darkest"
+                  className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-border rounded-none text-gray-700 dark:text-amber-primary hover:bg-gray-50 dark:hover:bg-charcoal-darkest"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={createMutation.isPending}
-                  className="flex-1 px-4 py-2 bg-purple-active hover:bg-purple-700 text-white rounded-lg disabled:opacity-50"
-                >
-                  {createMutation.isPending ? 'Creating...' : 'Create'}
+className="flex-1 px-4 py-2 bg-purple-active hover:bg-purple-600 text-white rounded-none disabled:opacity-50 border border-purple-active/20 shadow-[0_0_15px_rgba(159,79,248,0.2)] transition-all"
+>
+{createMutation.isPending ? 'Creating...' : 'Create'}
                 </button>
               </div>
             </form>
@@ -294,7 +294,7 @@ export default function Users() {
       {/* Delete Confirmation Modal */}
       {deleteTarget && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" role="dialog" aria-modal="true">
-          <div ref={deleteModalRef} className="bg-white dark:bg-charcoal-dark rounded-lg p-6 max-w-md w-full mx-4">
+          <div ref={deleteModalRef} className="bg-white dark:bg-charcoal-dark rounded-none p-6 max-w-md w-full mx-4">
             <h3 className="text-lg font-semibold text-gray-900 dark:text-light-neutral mb-2">Delete User</h3>
             <p className="text-gray-600 dark:text-amber-muted mb-6">
               Are you sure you want to delete user "{deleteTarget.username}"? This action cannot be undone.
@@ -302,14 +302,14 @@ export default function Users() {
             <div className="flex gap-3">
               <button
                 onClick={() => setDeleteTarget(null)}
-                className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-border rounded-lg text-gray-700 dark:text-amber-primary hover:bg-gray-50 dark:hover:bg-charcoal-darkest"
+                className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-border rounded-none text-gray-700 dark:text-amber-primary hover:bg-gray-50 dark:hover:bg-charcoal-darkest"
               >
                 Cancel
               </button>
               <button
                 onClick={() => deleteMutation.mutate(deleteTarget.id)}
                 disabled={deleteMutation.isPending}
-                className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg disabled:opacity-50"
+                className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-none disabled:opacity-50"
               >
                 {deleteMutation.isPending ? 'Deleting...' : 'Delete'}
               </button>
@@ -321,13 +321,13 @@ export default function Users() {
       {/* Edit user modal */}
       {showEditModal && editTarget && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" role="dialog" aria-modal="true" tabIndex="-1" autoFocus onKeyDown={(e) => { if (e.key === 'Escape') { setShowEditModal(false) } }}>
-          <div ref={editModalRef} className="bg-white dark:bg-charcoal-dark rounded-lg p-6 max-w-md w-full mx-4">
+          <div ref={editModalRef} className="bg-white dark:bg-charcoal-dark rounded-none p-6 max-w-md w-full mx-4">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-semibold text-gray-900 dark:text-light-neutral">Edit User</h3>
-              <button
-                onClick={() => setShowEditModal(false)}
-                className="p-1 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded"
-              >
+<button
+          onClick={() => setShowEditModal(false)}
+          className="p-1 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none"
+        >
                 <X className="w-5 h-5 text-gray-500" />
               </button>
             </div>
@@ -363,8 +363,8 @@ export default function Users() {
                   type="email"
                   value={formEditEmail}
                   onChange={(e) => setFormEditEmail(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-active focus:border-transparent"
-                  placeholder="Enter email (optional)"
+className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-active focus:border-transparent"
+        placeholder="Enter email (optional)"
                 />
               </div>
               <div>
@@ -388,8 +388,8 @@ export default function Users() {
                   minLength={8}
                   value={formEditPassword}
                   onChange={(e) => setFormEditPassword(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-active focus:border-transparent"
-                  placeholder="Leave blank to keep current password"
+className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-active focus:border-transparent"
+        placeholder="Leave blank to keep current password"
                 />
                 <p className="mt-1 text-xs text-gray-500 dark:text-amber-muted">Minimum 8 characters. Leave blank to keep current password.</p>
               </div>
@@ -403,8 +403,8 @@ export default function Users() {
                   minLength={8}
                   value={formEditConfirmPassword}
                   onChange={(e) => setFormEditConfirmPassword(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-active focus:border-transparent"
-                  placeholder="Confirm new password"
+className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-active focus:border-transparent"
+        placeholder="Confirm new password"
                 />
               </div>
               <div className="flex gap-3 pt-2">
@@ -418,16 +418,16 @@ export default function Users() {
                     setFormEditPassword('')
                     setFormEditConfirmPassword('')
                   }}
-                  className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-border rounded-lg text-gray-700 dark:text-amber-primary hover:bg-gray-50 dark:hover:bg-charcoal-darkest"
+                  className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-border rounded-none text-gray-700 dark:text-amber-primary hover:bg-gray-50 dark:hover:bg-charcoal-darkest"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={updateMutation.isPending}
-                  className="flex-1 px-4 py-2 bg-purple-active hover:bg-purple-700 text-white rounded-lg disabled:opacity-50"
-                >
-                  {updateMutation.isPending ? 'Updating...' : 'Update'}
+className="flex-1 px-4 py-2 bg-purple-active hover:bg-purple-600 text-white rounded-none disabled:opacity-50 border border-purple-active/20 shadow-[0_0_15px_rgba(159,79,248,0.2)] transition-all"
+>
+{updateMutation.isPending ? 'Updating...' : 'Update'}
                 </button>
               </div>
             </form>

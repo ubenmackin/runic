@@ -219,11 +219,11 @@ export default function Dashboard() {
         <StatCard icon={Clock} label="Blocked (24h)" value={stats.blocked_last_24h + liveBlockedCount} />
       </div>
 
-      {/* Blocked events chart */}
-      <div className="bg-white dark:bg-charcoal-dark rounded-xl shadow-sm p-4">
-        <h2 className="font-semibold text-gray-900 dark:text-light-neutral mb-4">Blocked Events (Last 24 Hours)</h2>
-        <BlockedEventsChart logs={blockedLogs?.logs || []} />
-      </div>
+  {/* Blocked events chart */}
+  <div className="border border-gray-border bg-charcoal-dark p-4">
+    <h2 className="font-semibold text-gray-900 dark:text-light-neutral mb-4">Blocked Events (Last 24 Hours)</h2>
+    <BlockedEventsChart logs={blockedLogs?.logs || []} />
+  </div>
 
       {/* Dashboard Widgets */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

@@ -26,7 +26,7 @@ export default function SearchableSelect({ options = [], value, category, onChan
         type="button"
         onClick={() => !disabled && setOpen(!open)}
         disabled={disabled}
-        className={`w-full flex items-center justify-between px-3 py-2 text-left bg-white dark:bg-charcoal-dark border border-gray-300 dark:border-gray-border rounded-lg hover:border-purple-active focus:outline-none focus:ring-2 focus:ring-purple-active ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
+        className={`w-full flex items-center justify-between px-3 py-2 text-left bg-white dark:bg-charcoal-dark border border-gray-300 dark:border-gray-border rounded-none hover:border-purple-active focus:outline-none focus:ring-2 focus:ring-purple-active ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
       >
         <span className={selected ? 'text-gray-900 dark:text-light-neutral' : 'text-gray-500'}>
           {selected?.label || placeholder}
@@ -34,7 +34,7 @@ export default function SearchableSelect({ options = [], value, category, onChan
         <ChevronDown className="w-4 h-4 text-gray-400" />
       </button>
       {open && (
-        <div className="absolute z-10 mt-1 w-full bg-white dark:bg-charcoal-dark border border-gray-200 dark:border-gray-border rounded-lg shadow-lg">
+        <div className="absolute z-10 mt-1 w-full bg-white dark:bg-charcoal-dark border border-gray-200 dark:border-gray-border rounded-none shadow-none">
           <div className="p-2 border-b border-gray-200 dark:border-gray-border">
             <div className="flex items-center gap-2 px-2">
               <Search className="w-4 h-4 text-gray-400" />
