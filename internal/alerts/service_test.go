@@ -981,3 +981,104 @@ func TestAlertRule_GetThresholdDuration(t *testing.T) {
 func intPtr(i int) *int {
 	return &i
 }
+
+// TestLoadSMTPConfig_BooleanStringValues tests that SMTP config correctly parses
+// boolean values stored as "0"/"1" strings in the database.
+// This test verifies the fix for a bug where the loadSMTPConfig function
+// was incorrectly scanning string values directly into bool fields.
+func TestLoadSMTPConfig_BooleanStringValues(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	databaseWrapper := db.New(database)
+	ctx := context.Background()
+
+	// Insert SMTP config with boolean values stored as "1" strings
+	// This mimics how values are stored when SMTP is enabled via the settings API
+	_, err := database.ExecContext(ctx,
+		"INSERT INTO system_config (key, value) VALUES (?, ?)",
+		"smtp_enabled", "1",
+	)
+	if err != nil {
+		t.Fatalf("failed to insert smtp_enabled: %v", err)
+	}
+
+	_, err = database.ExecContext(ctx,
+		"INSERT INTO system_config (key, value) VALUES (?, ?)",
+		"smtp_host", "smtp.test.com",
+	)
+	if err != nil {
+		t.Fatalf("failed to insert smtp_host: %v", err)
+	}
+
+	_, err = database.ExecContext(ctx,
+		"INSERT INTO system_config (key, value) VALUES (?, ?)",
+		"smtp_port", "587",
+	)
+	if err != nil {
+		t.Fatalf("failed to insert smtp_port: %v", err)
+	}
+
+	_, err = database.ExecContext(ctx,
+		"INSERT INTO system_config (key, value) VALUES (?, ?)",
+		"smtp_use_tls", "1",
+	)
+	if err != nil {
+		t.Fatalf("failed to insert smtp_use_tls: %v", err)
+	}
+
+	_, err = database.ExecContext(ctx,
+		"INSERT INTO system_config (key, value) VALUES (?, ?)",
+		"smtp_from_address", "alerts@test.com",
+	)
+	if err != nil {
+		t.Fatalf("failed to insert smtp_from_address: %v", err)
+	}
+
+	// Create the alert service and initialize it
+	service := NewService(databaseWrapper)
+
+	// Initialize the service which calls loadSMTPConfig internally
+	err = service.Initialize()
+	if err != nil {
+		t.Fatalf("failed to initialize service: %v", err)
+	}
+
+	// Get the SMTP sender from the service
+	smtpSender := service.GetSMTPSender()
+	if smtpSender == nil {
+		t.Fatal("expected SMTP sender to be initialized")
+	}
+
+	// Test that the SMTP sender can be used (verifies config was loaded correctly)
+	// If boolean values were not parsed correctly, IsEnabled() would return false
+	// because Enabled would be false (default value when parsing fails)
+
+	// Create a test alert event to verify SMTP is properly configured
+	event := &AlertEvent{
+		Type:      AlertTypePeerOffline,
+		PeerName:  "test-peer",
+		PeerID:    1,
+		Timestamp: time.Now(),
+		Subject:   "Test Alert",
+		Message:   "This is a test alert",
+	}
+
+	// Try to send an alert email - this will fail at the network level
+	// but should succeed past the configuration check if booleans were parsed correctly
+	err = smtpSender.SendAlertEmail("test@example.com", event)
+
+	// We expect a connection error (since smtp.test.com doesn't exist)
+	// but NOT an "SMTP is not enabled or not configured" error
+	// If boolean parsing failed, we'd get "SMTP is not enabled or not configured"
+	if err != nil {
+		// The error should be about connection failure, not about SMTP being disabled
+		errMsg := err.Error()
+		if errMsg == "SMTP is not enabled or not configured" {
+			t.Error("SMTP was not enabled - boolean values '1' were not parsed correctly. " +
+				"loadSMTPConfig should convert '1' strings to true for Enabled and UseTLS")
+		}
+		// Any other error is acceptable (connection failure, etc.)
+		// This proves that the config was loaded successfully
+	}
+}

@@ -2,8 +2,11 @@
 package alerts
 
 import (
+	"context"
 	"log/slog"
 	"time"
+
+	"runic/internal/db"
 
 	"runic/internal/common/log"
 )
@@ -65,4 +68,18 @@ func LoadTimezoneOrDefaultWithLogger(tz string, logger *slog.Logger, logAttrs ..
 	}
 
 	return loc
+}
+
+// GetBoolConfig reads a boolean value from system_config stored as "0" or "1".
+// Returns false if the key doesn't exist or on any error.
+func GetBoolConfig(ctx context.Context, db db.Querier, key string) (bool, error) {
+	var val int
+	err := db.QueryRowContext(ctx,
+		`SELECT CAST(value AS INTEGER) FROM system_config WHERE key = ?`,
+		key,
+	).Scan(&val)
+	if err != nil {
+		return false, err
+	}
+	return val == 1, nil
 }

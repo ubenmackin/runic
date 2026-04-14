@@ -317,22 +317,14 @@ func (h *Handler) GetSMTPConfig(w http.ResponseWriter, r *http.Request) {
 	err = h.DB.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM system_config WHERE key = 'smtp_password' AND value IS NOT NULL AND value != ''").Scan(&hasPassword)
 	config.PasswordSet = err == nil && hasPassword
 
-	var useTLS int
-	err = h.DB.QueryRowContext(ctx, "SELECT CAST(value AS INTEGER) FROM system_config WHERE key = 'smtp_use_tls'").Scan(&useTLS)
-	if err == nil {
-		config.UseTLS = useTLS == 1
-	}
+	config.UseTLS, _ = alerts.GetBoolConfig(ctx, h.DB, "smtp_use_tls")
 
 	err = h.DB.QueryRowContext(ctx, "SELECT value FROM system_config WHERE key = 'smtp_from_address'").Scan(&config.FromAddress)
 	if err != nil && err != sql.ErrNoRows {
 		log.ErrorContext(ctx, "Failed to get smtp_from_address", "error", err)
 	}
 
-	var enabled int
-	err = h.DB.QueryRowContext(ctx, "SELECT CAST(value AS INTEGER) FROM system_config WHERE key = 'smtp_enabled'").Scan(&enabled)
-	if err == nil {
-		config.Enabled = enabled == 1
-	}
+	config.Enabled, _ = alerts.GetBoolConfig(ctx, h.DB, "smtp_enabled")
 
 	common.RespondJSON(w, http.StatusOK, config)
 }

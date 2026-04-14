@@ -432,12 +432,9 @@ func (s *Service) loadSMTPConfig(ctx context.Context) (*SMTPConfig, error) {
 	// Try to get SMTP config from system_config table
 	var host, username, password, fromAddress string
 	var port int
-	var useTLS, enabled bool
 
 	// Check if SMTP is enabled
-	err := s.database.QueryRowContext(ctx,
-		`SELECT value FROM system_config WHERE key = 'smtp_enabled'`,
-	).Scan(&enabled)
+	enabled, err := GetBoolConfig(ctx, s.database, "smtp_enabled")
 	if err != nil {
 		// SMTP not configured
 		return &SMTPConfig{Enabled: false}, nil
@@ -486,8 +483,14 @@ func (s *Service) loadSMTPConfig(ctx context.Context) (*SMTPConfig, error) {
 	}
 
 	if err := s.database.QueryRowContext(ctx,
-		`SELECT value FROM system_config WHERE key = 'smtp_use_tls'`,
-	).Scan(&useTLS); err != nil && err != sql.ErrNoRows {
+		`SELECT value FROM system_config WHERE key = 'smtp_from_address'`,
+	).Scan(&fromAddress); err != nil && err != sql.ErrNoRows {
+		s.logger.Warn("failed to load SMTP from_address", "error", err)
+	}
+
+	// Load useTLS setting
+	useTLS, err := GetBoolConfig(ctx, s.database, "smtp_use_tls")
+	if err != nil && err != sql.ErrNoRows {
 		s.logger.Warn("failed to load SMTP use_tls", "error", err)
 	}
 
