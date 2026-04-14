@@ -18,31 +18,34 @@ linters:
     - unconvert
     - gocritic
 
-settings:
-  errcheck:
-    check-type-assertions: true
-    check-blank: false
-  gocritic:
-    enabled-tags:
-      - diagnostic
-      - performance
-  misspell:
-    locale: US
-  staticcheck:
-    checks:
-      - all
-      - -SA1009
+  settings:
+    errcheck:
+      check-type-assertions: true
+      check-blank: false
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - performance
+    misspell:
+      locale: US
+    staticcheck:
+      checks:
+        - all
+        - -SA1009
 
-exclusions:
-  rules:
-    - path: _test\.go
-      linters: [gocritic]
-    - path: _generated\.go
-      linters: [all]
-    - path: vendor/
-      linters: [all]
-    - path: node_modules/
-      linters: [all]
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters: [gocritic]
+      - path: _generated\.go
+        linters: [all]
+      - path: vendor/
+        linters: [all]
+      - path: node_modules/
+        linters: [all]
+    paths:
+      - node_modules/
+      - vendor/
 
 formatters:
   enable:
