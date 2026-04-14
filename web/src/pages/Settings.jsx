@@ -95,6 +95,7 @@ export default function Settings() {
   const [notificationPrefs, setNotificationPrefs] = useState(null)
   const [showQuietHours, setShowQuietHours] = useState(false)
   const [showDigest, setShowDigest] = useState(false)
+  const [unifiedTimezone, setUnifiedTimezone] = useState(null)
 
 
 
@@ -122,7 +123,12 @@ export default function Settings() {
   // Only update on initial load to prevent overwriting user edits on refetch
   useEffect(() => {
     if (userPrefs && !prefsLoadedRef.current) {
-      setNotificationPrefs(transformPrefsFromBackend(userPrefs))
+      const transformedPrefs = transformPrefsFromBackend(userPrefs)
+      setNotificationPrefs(transformedPrefs)
+
+      // Use the unified timezone from transformPrefsFromBackend (already handles unification and browser fallback)
+      setUnifiedTimezone(transformedPrefs.quiet_hours?.timezone || 'UTC')
+
       prefsLoadedRef.current = true
     }
   }, [userPrefs])
@@ -171,6 +177,25 @@ export default function Settings() {
       daily_digest: {
         ...notificationPrefs.daily_digest,
         [field]: value,
+      },
+    }
+    setNotificationPrefs(newPrefs)
+    updatePrefsMutation.mutate(newPrefs)
+  }
+
+  // Handle unified timezone change - updates both quiet_hours and daily_digest
+  const handleUnifiedTimezoneChange = (value) => {
+    if (!notificationPrefs) return
+    setUnifiedTimezone(value)
+    const newPrefs = {
+      ...notificationPrefs,
+      quiet_hours: {
+        ...notificationPrefs.quiet_hours,
+        timezone: value,
+      },
+      daily_digest: {
+        ...notificationPrefs.daily_digest,
+        timezone: value,
       },
     }
     setNotificationPrefs(newPrefs)
@@ -272,6 +297,28 @@ export default function Settings() {
           </div>
         ) : notificationPrefs && (
           <div className="space-y-6">
+            {/* Unified Timezone Selector */}
+            <div>
+              <label htmlFor="unified_timezone" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-2">
+                Timezone
+              </label>
+              <select
+                id="unified_timezone"
+                value={unifiedTimezone || 'UTC'}
+                onChange={(e) => handleUnifiedTimezoneChange(e.target.value)}
+                className="w-full md:w-auto min-w-[200px] px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+              >
+                {timezones.map((tz) => (
+                  <option key={tz.value} value={tz.value}>
+                    {tz.label}
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-gray-500 dark:text-amber-muted mt-1">
+                Applies to both Quiet Hours and Daily Digest
+              </p>
+            </div>
+
             {/* Alert Type Toggles */}
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-3">
@@ -313,63 +360,46 @@ export default function Settings() {
                   </svg>
                 </span>
               </button>
-              {showQuietHours && (
-                <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      id="quiet_hours_enabled"
-                      checked={notificationPrefs.quiet_hours?.enabled ?? false}
-                      onChange={(e) => handleQuietHoursChange('enabled', e.target.checked)}
-                      className="w-4 h-4 text-purple-600 border-gray-300 dark:border-gray-border rounded focus:ring-purple-500"
-                    />
-                    <label htmlFor="quiet_hours_enabled" className="text-sm text-gray-700 dark:text-amber-primary">
-                      Enable Quiet Hours
-                    </label>
-                  </div>
-<div>
-      <label htmlFor="quiet_hours_start" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-        Start Time
-      </label>
-      <input
-        type="time"
-        id="quiet_hours_start"
-        value={notificationPrefs.quiet_hours?.start_time || '22:00'}
-        onChange={(e) => handleQuietHoursChange('start_time', e.target.value)}
-        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-      />
-    </div>
-    <div>
-      <label htmlFor="quiet_hours_end" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-        End Time
-      </label>
-      <input
-        type="time"
-        id="quiet_hours_end"
-        value={notificationPrefs.quiet_hours?.end_time || '08:00'}
-        onChange={(e) => handleQuietHoursChange('end_time', e.target.value)}
-        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-      />
-    </div>
-    <div>
-      <label htmlFor="quiet_hours_timezone" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-        Timezone
-      </label>
-      <select
-        id="quiet_hours_timezone"
-        value={notificationPrefs.quiet_hours?.timezone || 'UTC'}
-        onChange={(e) => handleQuietHoursChange('timezone', e.target.value)}
-        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-      >
-                      {timezones.map((tz) => (
-                        <option key={tz.value} value={tz.value}>
-                          {tz.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-              )}
+        {showQuietHours && (
+          <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="quiet_hours_enabled"
+                checked={notificationPrefs.quiet_hours?.enabled ?? false}
+                onChange={(e) => handleQuietHoursChange('enabled', e.target.checked)}
+                className="w-4 h-4 text-purple-600 border-gray-300 dark:border-gray-border rounded focus:ring-purple-500"
+              />
+              <label htmlFor="quiet_hours_enabled" className="text-sm text-gray-700 dark:text-amber-primary">
+                Enable Quiet Hours
+              </label>
+            </div>
+            <div>
+              <label htmlFor="quiet_hours_start" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+                Start Time
+              </label>
+              <input
+                type="time"
+                id="quiet_hours_start"
+                value={notificationPrefs.quiet_hours?.start_time || '22:00'}
+                onChange={(e) => handleQuietHoursChange('start_time', e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+              />
+            </div>
+            <div>
+              <label htmlFor="quiet_hours_end" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+                End Time
+              </label>
+              <input
+                type="time"
+                id="quiet_hours_end"
+                value={notificationPrefs.quiet_hours?.end_time || '08:00'}
+                onChange={(e) => handleQuietHoursChange('end_time', e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-lg bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+              />
+            </div>
+          </div>
+        )}
             </div>
 
             {/* Daily Digest Section */}

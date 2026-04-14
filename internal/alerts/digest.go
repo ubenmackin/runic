@@ -197,15 +197,7 @@ func (g *DigestGenerator) Stop() {
 func (g *DigestGenerator) checkAndSendDigests() {
 	ctx := context.Background()
 
-	// Get current time components
 	now := time.Now()
-	currentTime := now.Format("15:04")
-	currentDate := now.Format("2006-01-02")
-
-	g.logger.Debug("checking for digest sends",
-		"current_time", currentTime,
-		"current_date", currentDate,
-	)
 
 	// Get all users with digest_enabled=true
 	users, err := g.getUsersWithDigestEnabled(ctx)
@@ -215,6 +207,22 @@ func (g *DigestGenerator) checkAndSendDigests() {
 	}
 
 	for _, user := range users {
+		// Load user's timezone (default to UTC if not set)
+		tz := LoadTimezoneOrDefaultWithLogger(user.DigestTimezone, g.logger, "user_id", user.UserID)
+
+		// Convert current time to user's timezone
+		userNow := now.In(tz)
+		currentTime := userNow.Format("15:04")
+		currentDate := userNow.Format("2006-01-02")
+
+		g.logger.Debug("checking for digest sends",
+			"user_id", user.UserID,
+			"user_timezone", tz.String(),
+			"user_current_time", currentTime,
+			"user_current_date", currentDate,
+			"user_digest_time", user.DigestTime,
+		)
+
 		// Check if it's time to send the digest for this user
 		if user.DigestTime != currentTime {
 			continue

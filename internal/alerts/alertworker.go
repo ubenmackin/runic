@@ -318,13 +318,8 @@ func (w *AlertWorker) CheckQuietHours(userID uint) bool {
 	// Get current time in the user's timezone
 	now := time.Now()
 	if prefs.QuietHoursTimezone != "" {
-		loc, err := time.LoadLocation(prefs.QuietHoursTimezone)
-		if err != nil {
-			runiclog.Warn("failed to load timezone", "timezone", prefs.QuietHoursTimezone, "error", err)
-			// Fall back to local time
-		} else {
-			now = now.In(loc)
-		}
+		loc := LoadTimezoneOrDefault(prefs.QuietHoursTimezone)
+		now = now.In(loc)
 	}
 
 	// Get current time of day

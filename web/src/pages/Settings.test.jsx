@@ -268,66 +268,230 @@ describe('Settings Page', () => {
       })
     })
 
-    test('quiet hours timezone dropdown has correct options', async () => {
-      const user = userEvent.setup()
-      apiClient.getNotificationPrefs.mockResolvedValue(mockNotificationPrefs)
+  test('quiet hours section has start and end time inputs after expanding', async () => {
+    const user = userEvent.setup()
+    apiClient.getNotificationPrefs.mockResolvedValue(mockNotificationPrefs)
 
-      renderWithProviders(<Settings />)
+    renderWithProviders(<Settings />)
 
-      await waitFor(() => {
-        expect(screen.getByText('Quiet Hours')).toBeInTheDocument()
-      })
-
-      // Expand quiet hours
-      await user.click(screen.getByText('Quiet Hours'))
-
-      await waitFor(() => {
-        expect(screen.getByLabelText('Timezone')).toBeInTheDocument()
-      })
-
-      const timezoneSelect = screen.getByLabelText('Timezone')
-      expect(timezoneSelect).toHaveValue('UTC')
-
-      // Check that some timezone options exist
-      expect(screen.getByRole('option', { name: 'UTC' })).toBeInTheDocument()
-      expect(screen.getByRole('option', { name: 'Eastern (New York)' })).toBeInTheDocument()
+    await waitFor(() => {
+      expect(screen.getByText('Quiet Hours')).toBeInTheDocument()
     })
 
-    test('changing quiet hours time updates and saves', async () => {
-      const user = userEvent.setup()
-      apiClient.getNotificationPrefs.mockResolvedValue(mockNotificationPrefs)
-      apiClient.updateNotificationPrefs.mockResolvedValue({ success: true })
+    // Expand quiet hours
+    await user.click(screen.getByText('Quiet Hours'))
 
-      renderWithProviders(<Settings />)
-
-      await waitFor(() => {
-        expect(screen.getByText('Quiet Hours')).toBeInTheDocument()
-      })
-
-      // Expand quiet hours
-      await user.click(screen.getByText('Quiet Hours'))
-
-      await waitFor(() => {
-        expect(screen.getByLabelText('Start Time')).toBeInTheDocument()
-      })
-
-      // Change start time using fireEvent for time input
-      const startTimeInput = screen.getByLabelText('Start Time')
-      await user.clear(startTimeInput)
-      await user.type(startTimeInput, '23:00')
-
-      // Wait for the onChange to trigger the API call
-      await waitFor(() => {
-        expect(apiClient.updateNotificationPrefs).toHaveBeenCalled()
-      })
-
-      // The onChange fires with the new value
-      const calls = apiClient.updateNotificationPrefs.mock.calls
-      const lastCall = calls[calls.length - 1][0]
-      // Check that start_time was updated (it might be called multiple times during typing)
-      expect(lastCall).toHaveProperty('quiet_hours_start')
+    await waitFor(() => {
+      expect(screen.getByLabelText('Start Time')).toBeInTheDocument()
     })
+
+    // Verify time inputs are visible
+    expect(screen.getByLabelText('Start Time')).toBeInTheDocument()
+    expect(screen.getByLabelText('End Time')).toBeInTheDocument()
   })
+
+  test('changing quiet hours time updates and saves', async () => {
+    const user = userEvent.setup()
+    apiClient.getNotificationPrefs.mockResolvedValue(mockNotificationPrefs)
+    apiClient.updateNotificationPrefs.mockResolvedValue({ success: true })
+
+    renderWithProviders(<Settings />)
+
+    await waitFor(() => {
+      expect(screen.getByText('Quiet Hours')).toBeInTheDocument()
+    })
+
+    // Expand quiet hours
+    await user.click(screen.getByText('Quiet Hours'))
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Start Time')).toBeInTheDocument()
+    })
+
+    // Change start time using fireEvent for time input
+    const startTimeInput = screen.getByLabelText('Start Time')
+    await user.clear(startTimeInput)
+    await user.type(startTimeInput, '23:00')
+
+    // Wait for the onChange to trigger the API call
+    await waitFor(() => {
+      expect(apiClient.updateNotificationPrefs).toHaveBeenCalled()
+    })
+
+    // The onChange fires with the new value
+    const calls = apiClient.updateNotificationPrefs.mock.calls
+    const lastCall = calls[calls.length - 1][0]
+    // Check that start_time was updated (it might be called multiple times during typing)
+    expect(lastCall).toHaveProperty('quiet_hours_start')
+  })
+})
+
+describe('Unified Timezone Selector', () => {
+  const mockNotificationPrefs = createMockNotificationPrefs()
+
+  test('timezone selector renders at top level in Notification Preferences section', async () => {
+    apiClient.getNotificationPrefs.mockResolvedValue(mockNotificationPrefs)
+
+    renderWithProviders(<Settings />)
+
+    // Wait for notification preferences to load
+    await waitFor(() => {
+      expect(screen.getByText('Your Notification Preferences')).toBeInTheDocument()
+    })
+
+    // Wait for timezone selector to be available (need to wait for prefs to process)
+    await waitFor(() => {
+      expect(screen.getByLabelText('Timezone')).toBeInTheDocument()
+    })
+
+    // The unified timezone selector should be visible without expanding any collapsible
+    expect(screen.getByLabelText('Timezone')).toBeInTheDocument()
+
+    // Verify it is NOT inside a collapsible section
+    const quietHoursButton = screen.getByText('Quiet Hours')
+    const digestButton = screen.getByText('Daily Digest')
+
+    // Timezone selector should be visible before expanding either section
+    expect(quietHoursButton).toBeInTheDocument()
+    expect(digestButton).toBeInTheDocument()
+  })
+
+  test('timezone change updates both quiet_hours and daily_digest', async () => {
+    const user = userEvent.setup()
+    apiClient.getNotificationPrefs.mockResolvedValue(mockNotificationPrefs)
+    apiClient.updateNotificationPrefs.mockResolvedValue({ success: true })
+
+    renderWithProviders(<Settings />)
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Timezone')).toBeInTheDocument()
+    })
+
+    // Change the unified timezone
+    const timezoneSelect = screen.getByLabelText('Timezone')
+    await user.selectOptions(timezoneSelect, 'America/New_York')
+
+    // Wait for the API call
+    await waitFor(() => {
+      expect(apiClient.updateNotificationPrefs).toHaveBeenCalled()
+    })
+
+    // Verify the API was called with timezone for both quiet_hours and daily_digest
+    const callArgs = apiClient.updateNotificationPrefs.mock.calls[0][0]
+    expect(callArgs).toHaveProperty('quiet_hours_timezone', 'America/New_York')
+    expect(callArgs).toHaveProperty('digest_timezone', 'America/New_York')
+  })
+
+  test('browser timezone auto-detection works when no timezone is set', async () => {
+    // Mock notification prefs with no timezone set
+    const prefsWithoutTimezone = createMockNotificationPrefs({
+      quiet_hours_timezone: '',
+      digest_timezone: '',
+    })
+    apiClient.getNotificationPrefs.mockResolvedValue(prefsWithoutTimezone)
+
+    // Mock browser timezone detection
+    const originalDateTimeFormat = Intl.DateTimeFormat
+    vi.spyOn(Intl, 'DateTimeFormat').mockImplementation(() => ({
+      resolvedOptions: () => ({ timeZone: 'America/Los_Angeles' }),
+    }))
+
+    renderWithProviders(<Settings />)
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Timezone')).toBeInTheDocument()
+    })
+
+    // Should auto-detect and set browser timezone (if in list) or UTC
+    const timezoneSelect = screen.getByLabelText('Timezone')
+    expect(timezoneSelect.value).toBe('America/Los_Angeles')
+
+    // Restore original implementation
+    Intl.DateTimeFormat = originalDateTimeFormat
+  })
+
+  test('browser timezone defaults to UTC when detected timezone is not in list', async () => {
+    // Mock notification prefs with no timezone set
+    const prefsWithoutTimezone = createMockNotificationPrefs({
+      quiet_hours_timezone: '',
+      digest_timezone: '',
+    })
+    apiClient.getNotificationPrefs.mockResolvedValue(prefsWithoutTimezone)
+
+    // Mock browser timezone detection with an unsupported timezone
+    const originalDateTimeFormat = Intl.DateTimeFormat
+    vi.spyOn(Intl, 'DateTimeFormat').mockImplementation(() => ({
+      resolvedOptions: () => ({ timeZone: 'Antarctica/South_Pole' }),
+    }))
+
+    renderWithProviders(<Settings />)
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Timezone')).toBeInTheDocument()
+    })
+
+    // Should default to UTC since Antarctica/South_Pole is not in the list
+    const timezoneSelect = screen.getByLabelText('Timezone')
+    expect(timezoneSelect.value).toBe('UTC')
+
+    // Restore original implementation
+    Intl.DateTimeFormat = originalDateTimeFormat
+  })
+
+  test('timezone dropdown shows all valid timezone options', async () => {
+    apiClient.getNotificationPrefs.mockResolvedValue(mockNotificationPrefs)
+
+    renderWithProviders(<Settings />)
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Timezone')).toBeInTheDocument()
+    })
+
+    const timezoneSelect = screen.getByLabelText('Timezone')
+
+    // Check that all expected timezone options exist
+    expect(screen.getByRole('option', { name: 'UTC' })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: 'Eastern (New York)' })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: 'Central (Chicago)' })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: 'Mountain (Denver)' })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: 'Pacific (Los Angeles)' })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: 'London' })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: 'Paris' })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: 'Tokyo' })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: 'Sydney' })).toBeInTheDocument()
+  })
+
+  test('existing timezone preference is preserved on load', async () => {
+    // Mock notification prefs with existing timezone
+    const prefsWithTimezone = createMockNotificationPrefs({
+      quiet_hours_timezone: 'Europe/Paris',
+      digest_timezone: 'Europe/Paris',
+    })
+    apiClient.getNotificationPrefs.mockResolvedValue(prefsWithTimezone)
+
+    renderWithProviders(<Settings />)
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Timezone')).toBeInTheDocument()
+    })
+
+    const timezoneSelect = screen.getByLabelText('Timezone')
+    expect(timezoneSelect.value).toBe('Europe/Paris')
+  })
+
+  test('helper text explains timezone applies to both sections', async () => {
+    apiClient.getNotificationPrefs.mockResolvedValue(mockNotificationPrefs)
+
+    renderWithProviders(<Settings />)
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Timezone')).toBeInTheDocument()
+    })
+
+    // Check for helper text
+    expect(screen.getByText('Applies to both Quiet Hours and Daily Digest')).toBeInTheDocument()
+  })
+})
 
   describe('Daily Digest Section', () => {
     const mockNotificationPrefs = createMockNotificationPrefs()

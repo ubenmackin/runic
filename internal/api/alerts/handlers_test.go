@@ -823,6 +823,133 @@ func TestUnauthorized(t *testing.T) {
 	}
 }
 
+// TestNotificationPrefs_TimezoneValidation tests the timezone sync validation in UpdateNotificationPrefs.
+func TestNotificationPrefs_TimezoneValidation(t *testing.T) {
+	tests := []struct {
+		name     string
+		body     string
+		wantCode int
+		wantErr  string
+		verify   func(t *testing.T, db *sql.DB)
+	}{
+		{
+			name:     "rejects mismatched timezone fields",
+			body:     `{"quiet_hours_timezone":"America/New_York","digest_timezone":"Europe/London"}`,
+			wantCode: http.StatusBadRequest,
+			wantErr:  "quiet_hours_timezone and digest_timezone must be the same",
+		},
+		{
+			name:     "accepts valid timezone and syncs both fields",
+			body:     `{"quiet_hours_timezone":"America/New_York"}`,
+			wantCode: http.StatusOK,
+			verify: func(t *testing.T, db *sql.DB) {
+				var quietTz, digestTz string
+				err := db.QueryRow(`
+					SELECT quiet_hours_timezone, digest_timezone
+					FROM user_notification_preferences WHERE user_id = 1`).Scan(&quietTz, &digestTz)
+				if err != nil {
+					t.Fatalf("failed to query preferences: %v", err)
+				}
+				if quietTz != "America/New_York" {
+					t.Errorf("expected quiet_hours_timezone 'America/New_York', got %s", quietTz)
+				}
+				if digestTz != "America/New_York" {
+					t.Errorf("expected digest_timezone 'America/New_York', got %s", digestTz)
+				}
+			},
+		},
+		{
+			name:     "accepts valid timezone via digest_timezone and syncs both fields",
+			body:     `{"digest_timezone":"Europe/Paris"}`,
+			wantCode: http.StatusOK,
+			verify: func(t *testing.T, db *sql.DB) {
+				var quietTz, digestTz string
+				err := db.QueryRow(`
+					SELECT quiet_hours_timezone, digest_timezone
+					FROM user_notification_preferences WHERE user_id = 1`).Scan(&quietTz, &digestTz)
+				if err != nil {
+					t.Fatalf("failed to query preferences: %v", err)
+				}
+				if quietTz != "Europe/Paris" {
+					t.Errorf("expected quiet_hours_timezone 'Europe/Paris', got %s", quietTz)
+				}
+				if digestTz != "Europe/Paris" {
+					t.Errorf("expected digest_timezone 'Europe/Paris', got %s", digestTz)
+				}
+			},
+		},
+		{
+			name:     "rejects invalid IANA timezone identifier",
+			body:     `{"quiet_hours_timezone":"Invalid/Timezone"}`,
+			wantCode: http.StatusBadRequest,
+			wantErr:  "Invalid timezone: must be valid IANA timezone identifier",
+		},
+		{
+			name:     "rejects invalid timezone via digest_timezone",
+			body:     `{"digest_timezone":"NotAReal/Timezone"}`,
+			wantCode: http.StatusBadRequest,
+			wantErr:  "Invalid timezone: must be valid IANA timezone identifier",
+		},
+		{
+			name:     "accepts matching timezone fields",
+			body:     `{"quiet_hours_timezone":"Asia/Tokyo","digest_timezone":"Asia/Tokyo"}`,
+			wantCode: http.StatusOK,
+			verify: func(t *testing.T, db *sql.DB) {
+				var quietTz, digestTz string
+				err := db.QueryRow(`
+					SELECT quiet_hours_timezone, digest_timezone
+					FROM user_notification_preferences WHERE user_id = 1`).Scan(&quietTz, &digestTz)
+				if err != nil {
+					t.Fatalf("failed to query preferences: %v", err)
+				}
+				if quietTz != "Asia/Tokyo" {
+					t.Errorf("expected quiet_hours_timezone 'Asia/Tokyo', got %s", quietTz)
+				}
+				if digestTz != "Asia/Tokyo" {
+					t.Errorf("expected digest_timezone 'Asia/Tokyo', got %s", digestTz)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			database, cleanup := testutil.SetupTestDB(t)
+			defer cleanup()
+
+			database.Exec(`INSERT INTO users (username, email, password_hash, role) VALUES (?, ?, ?, ?)`,
+				"testuser", "test@example.com", "hashedpassword", "viewer")
+
+			req := httptest.NewRequest("PUT", "/api/v1/users/me/notification-preferences", strings.NewReader(tt.body))
+			req.Header.Set("Content-Type", "application/json")
+			ctx := auth.SetContextForTest(req.Context(), "viewer", "testuser")
+			req = req.WithContext(ctx)
+			w := httptest.NewRecorder()
+
+			handler := NewHandler(database, nil, nil)
+			handler.UpdateNotificationPrefs(w, req)
+
+			if w.Code != tt.wantCode {
+				t.Errorf("expected status %d, got %d: %s", tt.wantCode, w.Code, w.Body.String())
+			}
+
+			if tt.wantErr != "" {
+				var resp map[string]string
+				if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+					t.Fatalf("failed to decode error response: %v", err)
+				}
+				if !strings.Contains(resp["error"], tt.wantErr) {
+					t.Errorf("expected error containing %q, got %q", tt.wantErr, resp["error"])
+				}
+			}
+
+			if tt.verify != nil {
+				tt.verify(t, database)
+			}
+		})
+	}
+}
+
 // TestGetAlert tests the GET /alerts/{id} endpoint.
 func TestGetAlert(t *testing.T) {
 	tests := []struct {

@@ -131,7 +131,7 @@ jobs:
           CGO_ENABLED=1 go build -ldflags="-X runic/internal/common/version.Version=$(git describe --tags --always --dirty 2>/dev/null || echo 'dev')" -o runic ./cmd/runic-server
 
   lint:
-    needs: changes
+    needs: [changes, frontend]
     if: ${{ needs.changes.outputs.backend == 'true' }}
     name: Lint
     runs-on: ubuntu-latest

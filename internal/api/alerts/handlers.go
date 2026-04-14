@@ -501,6 +501,7 @@ func (h *Handler) GetNotificationPrefs(w http.ResponseWriter, r *http.Request) {
 			DigestEnabled:      false,
 			DigestFrequency:    "daily",
 			DigestTime:         "08:00",
+			DigestTimezone:     "UTC",
 		}
 		common.RespondJSON(w, http.StatusOK, defaultPrefs)
 		return
@@ -550,6 +551,32 @@ func (h *Handler) UpdateNotificationPrefs(w http.ResponseWriter, r *http.Request
 			QuietHoursTimezone: "UTC",
 			DigestFrequency:    "daily",
 			DigestTime:         "08:00",
+			DigestTimezone:     "UTC",
+		}
+	}
+
+	// Validate and sync timezone fields
+	// Both timezone fields should always have the same value
+	var timezoneToSet string
+	switch {
+	case req.QuietHoursTimezone != nil && req.DigestTimezone != nil:
+		// Both provided - validate they match
+		if *req.QuietHoursTimezone != *req.DigestTimezone {
+			common.RespondError(w, http.StatusBadRequest, "quiet_hours_timezone and digest_timezone must be the same")
+			return
+		}
+		timezoneToSet = *req.QuietHoursTimezone
+	case req.QuietHoursTimezone != nil:
+		timezoneToSet = *req.QuietHoursTimezone
+	case req.DigestTimezone != nil:
+		timezoneToSet = *req.DigestTimezone
+	}
+
+	// Validate timezone if provided
+	if timezoneToSet != "" {
+		if _, err := time.LoadLocation(timezoneToSet); err != nil {
+			common.RespondError(w, http.StatusBadRequest, "Invalid timezone: must be valid IANA timezone identifier")
+			return
 		}
 	}
 
@@ -566,8 +593,10 @@ func (h *Handler) UpdateNotificationPrefs(w http.ResponseWriter, r *http.Request
 	if req.QuietHoursEnd != nil {
 		prefs.QuietHoursEnd = *req.QuietHoursEnd
 	}
-	if req.QuietHoursTimezone != nil {
-		prefs.QuietHoursTimezone = *req.QuietHoursTimezone
+	// Sync both timezone fields
+	if timezoneToSet != "" {
+		prefs.QuietHoursTimezone = timezoneToSet
+		prefs.DigestTimezone = timezoneToSet
 	}
 	if req.DigestEnabled != nil {
 		prefs.DigestEnabled = *req.DigestEnabled
