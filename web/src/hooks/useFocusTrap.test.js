@@ -101,7 +101,7 @@ describe('useFocusTrap', () => {
       renderHook(() => useFocusTrap(modalRef, true))
 
       const firstButton = container.querySelector('#first')
-      const lastButton = container.querySelector('#last')
+      const _lastButton = container.querySelector('#last')
 
       // Focus should start on first element
       expect(document.activeElement).toBe(firstButton)

@@ -64,7 +64,7 @@ export default function Policies() {
     direction: 'both'
   })
   const [deleteTarget, setDeleteTarget] = useState(null)
-  const [filterPeer, setFilterPeer] = useState(null)
+  const [filterPeer, _setFilterPeer] = useState(null)
   const { value: showDisabled, setValue: setShowDisabled } = useFilterPersistence('policies', 'showDisabled', false)
   const [preview, setPreview] = useState(null)
   const [previewStale, setPreviewStale] = useState(false)
@@ -96,7 +96,7 @@ export default function Policies() {
     setActiveTab('setup')
     setShowDescription(false)
     handleOpenAdd()
-  }, [])
+  }, [handleOpenAdd])
   const openEdit = (p) => {
     setEditPolicy(p);
     setFormForEdit(p);
@@ -307,7 +307,7 @@ const { createMutation, updateMutation, deleteMutation } = useCrudMutations({
   // Reset page to 1 when search term changes
   useEffect(() => {
     setPoliciesPage(1)
-  }, [searchTerm])
+  }, [searchTerm, setPoliciesPage])
 
   // Auto-open New Policy modal when navigating from Dashboard Quick Actions
   useEffect(() => {
@@ -717,8 +717,8 @@ className={`flex items-center justify-center w-28 h-8 rounded-none border-2 tran
           <div className="flex items-center gap-2 mb-1">
             <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary">Applies To</label>
             <span className="text-xs text-gray-500 dark:text-amber-muted">(Docker Integration)</span>
-            {isIGMPService && <span className="text-xs text-blue-600 dark:text-blue-400 ml-1">— "Host Only" is typical for IGMP</span>}
-            {isVRRPService && <span className="text-xs text-blue-600 dark:text-blue-400 ml-1">— "Host Only" is typical for VRRP</span>}
+{isIGMPService && <span className="text-xs text-blue-600 dark:text-blue-400 ml-1">— &quot;Host Only&quot; is typical for IGMP</span>}
+{isVRRPService && <span className="text-xs text-blue-600 dark:text-blue-400 ml-1">— &quot;Host Only&quot; is typical for VRRP</span>}
           </div>
 <div className="flex bg-gray-100 dark:bg-charcoal-darkest p-1 rounded-none border border-gray-200 dark:border-gray-border">
         <button

@@ -5,7 +5,7 @@ export default function DataTable({ columns, data, emptyMessage, onRowClick, pag
 
   // Rows per page options
   const rowsOptions = [10, 25, 50, 100, -1]
-  const rowsPerPageLabel = rowsPerPage === -1 ? 'All' : rowsPerPage
+  const _rowsPerPageLabel = rowsPerPage === -1 ? 'All' : rowsPerPage
 
   const totalPages = rowsPerPage === -1 ? 1 : Math.ceil(totalItems / rowsPerPage)
   const canGoPrev = page > 1

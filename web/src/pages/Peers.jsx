@@ -145,7 +145,7 @@ const [bundleContent, setBundleContent] = useState('')
   // Manual refresh state
   const [isManualRefreshing, setIsManualRefreshing] = useState(false)
 
-  const openAdd = () => { setFormErrors({}); handleOpenAdd() }
+  const _openAdd = () => { setFormErrors({}); handleOpenAdd() }
   const openEdit = (s) => { setEditPeer(s); setFormForEdit(s); setFormErrors({}); setModalOpen(true) }
 
   const openAddModal = useCallback(() => {
@@ -177,7 +177,7 @@ const [bundleContent, setBundleContent] = useState('')
       await navigator.clipboard.writeText(agentInstallCommand)
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
-    } catch (err) {
+    } catch {
       showToast('Failed to copy to clipboard', 'error')
     }
   }
@@ -325,7 +325,7 @@ const preFilteredPeers = peers?.filter(peer => {
   // Reset page to 1 when search term changes
   useEffect(() => {
     setPeersPage(1)
-  }, [searchTerm])
+  }, [searchTerm, setPeersPage])
 
   // Auto-open Add Peer modal when navigating from Dashboard Quick Actions
   useEffect(() => {
@@ -862,7 +862,7 @@ const handleSubmit = (e) => {
           <h3 className="text-lg font-semibold">Cannot Delete Peer</h3>
         </div>
         <p className="text-gray-600 dark:text-gray-400 mb-4">
-          The peer "{conflictError.peerName}" is used by the following policies:
+          The peer &quot;{conflictError.peerName}&quot; is used by the following policies:
         </p>
         <ul className="list-disc list-inside mb-4 text-gray-700 dark:text-gray-300">
           {conflictError.policies.map(p => (
@@ -1062,7 +1062,7 @@ className={`px-3 py-1 rounded-none text-sm font-medium transition-colors ${
                                                                                         placeholder="Select an existing token..."
                                                                                 />
                                                                                 <p className="text-xs text-gray-400 dark:text-amber-muted mt-1 italic">
-                                                                                        Note: Only the full token value can be used in install commands. Generate a new token if you don't have the full value.
+                                                                                        Note: Only the full token value can be used in install commands. Generate a new token if you don&apos;t have the full value.
                                                                                 </p>
                                                                         </div>
                                                                 )}

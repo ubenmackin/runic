@@ -447,7 +447,7 @@ describe('Unified Timezone Selector', () => {
       expect(screen.getByLabelText('Timezone')).toBeInTheDocument()
     })
 
-    const timezoneSelect = screen.getByLabelText('Timezone')
+    const _timezoneSelect = screen.getByLabelText('Timezone')
 
     // Check that all expected timezone options exist
     expect(screen.getByRole('option', { name: 'UTC' })).toBeInTheDocument()

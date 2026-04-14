@@ -28,5 +28,5 @@ export function useFocusTrap(modalRef, isOpen) {
 
     modal.addEventListener('keydown', handleKeyDown)
     return () => modal.removeEventListener('keydown', handleKeyDown)
-  }, [isOpen])
+	}, [isOpen, modalRef])
 }

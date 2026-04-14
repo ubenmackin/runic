@@ -96,7 +96,7 @@ export function transformPrefsToBackend(prefs) {
   return {
     enabled_alerts: JSON.stringify(
       Object.entries(prefs.alert_types || {})
-        .filter(([key, val]) => val)
+        .filter(([_key, val]) => val)
         .map(([key]) => key)
     ),
     quiet_hours_enabled: prefs.quiet_hours?.enabled ?? false,

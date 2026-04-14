@@ -1,6 +1,6 @@
 import { useState, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Bell, Filter, ChevronDown, ChevronUp, Calendar, Search, X, Trash2, AlertTriangle, Info } from 'lucide-react'
+import { Bell, Filter, ChevronDown, ChevronUp, Calendar, X, Trash2, AlertTriangle, Info } from 'lucide-react'
 import { api, QUERY_KEYS, deleteAlert, clearAllAlerts } from '../api/client'
 import { useAuth } from '../hooks/useAuth'
 import { useToastContext } from '../hooks/ToastContext'

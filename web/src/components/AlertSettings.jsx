@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Bell, Clock, Settings, AlertTriangle, Loader2 } from 'lucide-react'
+import { Bell, Settings, AlertTriangle, Loader2 } from 'lucide-react'
 import { api, QUERY_KEYS, getAlertRules, updateAlertRule } from '../api/client'
 import { useToastContext } from '../hooks/ToastContext'
 import ToggleSwitch from './ToggleSwitch'

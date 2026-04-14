@@ -298,7 +298,7 @@ describe('getSuggestedAction', () => {
 
   test('suggests contacting support for non-recoverable errors', () => {
     // 403 Forbidden is not recoverable (permission denied)
-    const response = new Response(null, { status: 403 })
+    const _response = new Response(null, { status: 403 })
     // Note: getSuggestedAction doesn't handle Response objects correctly
     // as parseApiError returns a Promise for Responses
     // Testing with error object that has permission message

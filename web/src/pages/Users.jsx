@@ -296,9 +296,9 @@ className="flex-1 px-4 py-2 bg-purple-active hover:bg-purple-600 text-white roun
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" role="dialog" aria-modal="true">
           <div ref={deleteModalRef} className="bg-white dark:bg-charcoal-dark rounded-none p-6 max-w-md w-full mx-4">
             <h3 className="text-lg font-semibold text-gray-900 dark:text-light-neutral mb-2">Delete User</h3>
-            <p className="text-gray-600 dark:text-amber-muted mb-6">
-              Are you sure you want to delete user "{deleteTarget.username}"? This action cannot be undone.
-            </p>
+        <p className="text-gray-600 dark:text-amber-muted mb-6">
+          Are you sure you want to delete user &quot;{deleteTarget.username}&quot;? This action cannot be undone.
+        </p>
             <div className="flex gap-3">
               <button
                 onClick={() => setDeleteTarget(null)}

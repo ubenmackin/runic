@@ -66,7 +66,7 @@ export function drawChart(ctx, width, height, data, hoveredBar) {
   ctx.moveTo(firstX, firstY)
   
   for (let i = 0; i < data.length; i++) {
-    const currentX = padding.left + i * stepWidth
+    const _currentX = padding.left + i * stepWidth
     const currentY = padding.top + chartHeight - (data[i].count / maxValue) * chartHeight
     const nextX = padding.left + (i + 1) * stepWidth
     

@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Lock, Trash2, Plus, Shield, Key, Database, HardDrive, Bell, FileKey, ScrollText, Mail, Eye, EyeOff, Send, Loader } from 'lucide-react'
+import { Lock, Trash2, Plus, Shield, Key, Database, HardDrive, Bell, FileKey, ScrollText, Mail, Eye, EyeOff, Send, Loader, Globe } from 'lucide-react'
 import { api, QUERY_KEYS, getSMTPConfig, updateSMTPConfig, testSMTP, getNotificationPrefs, updateNotificationPrefs } from '../api/client'
 import { useToastContext } from '../hooks/ToastContext'
 import { useFocusTrap } from '../hooks/useFocusTrap'
@@ -13,6 +13,213 @@ import {
   transformPrefsFromBackend,
   transformSMTPFromBackend,
 } from '../utils/settingsTransform'
+
+// Timezone options
+const timezones = [
+  { value: 'UTC', label: 'UTC' },
+  { value: 'America/New_York', label: 'Eastern (New York)' },
+  { value: 'America/Chicago', label: 'Central (Chicago)' },
+  { value: 'America/Denver', label: 'Mountain (Denver)' },
+  { value: 'America/Los_Angeles', label: 'Pacific (Los Angeles)' },
+  { value: 'Europe/London', label: 'London' },
+  { value: 'Europe/Paris', label: 'Paris' },
+  { value: 'Asia/Tokyo', label: 'Tokyo' },
+  { value: 'Australia/Sydney', label: 'Sydney' },
+]
+
+// Notification Preferences Section Component (hoisted to module level)
+function NotificationPreferencesSection({
+  userPrefsLoading,
+  userPrefsError,
+  notificationPrefs,
+  unifiedTimezone,
+  showQuietHours,
+  setShowQuietHours,
+  showDigest,
+  setShowDigest,
+  onUnifiedTimezoneChange,
+  onToggleAlertType,
+  onQuietHoursChange,
+  onDigestChange,
+}) {
+  return (
+    <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none">
+      <div className="p-6">
+        <div className="flex items-center gap-3 mb-2">
+          <Bell className="w-5 h-5 text-purple-500" />
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-light-neutral">Your Notification Preferences</h2>
+        </div>
+        <p className="text-sm text-gray-600 dark:text-amber-muted mb-6">
+          Configure which alerts you receive
+        </p>
+
+        {userPrefsLoading ? (
+          <div className="flex items-center justify-center py-8">
+            <Loader className="w-6 h-6 animate-spin text-purple-500" />
+          </div>
+        ) : userPrefsError ? (
+          <div className="text-center py-8">
+            <p className="text-gray-600 dark:text-amber-muted">
+              Please log in to configure notification preferences.
+            </p>
+          </div>
+        ) : notificationPrefs && (
+          <div className="space-y-6">
+            {/* Unified Timezone Selector */}
+            <div>
+              <label htmlFor="unified_timezone" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-2">
+                Timezone
+              </label>
+              <select
+                id="unified_timezone"
+                value={unifiedTimezone || 'UTC'}
+                onChange={(e) => onUnifiedTimezoneChange(e.target.value)}
+                className="w-full md:w-auto min-w-[200px] px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+              >
+                {timezones.map((tz) => (
+                  <option key={tz.value} value={tz.value}>
+                    {tz.label}
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-gray-500 dark:text-amber-muted mt-1">
+                Applies to both Quiet Hours and Daily Digest
+              </p>
+            </div>
+
+            {/* Alert Type Toggles */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-3">
+                Alert Types
+              </label>
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                {alertTypes.map((type) => (
+                  <div key={type.key} className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id={`alert-type-${type.key}`}
+                      checked={notificationPrefs.alert_types?.[type.key] ?? true}
+                      onChange={() => onToggleAlertType(type.key)}
+                      className="w-4 h-4 text-purple-600 border-gray-300 dark:border-gray-border rounded-none focus:ring-purple-500"
+                    />
+                    <label
+                      htmlFor={`alert-type-${type.key}`}
+                      className="text-sm text-gray-700 dark:text-amber-primary cursor-pointer"
+                    >
+                      {type.label}
+                    </label>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Quiet Hours Section */}
+            <div className="border-t border-gray-200 dark:border-gray-border pt-6">
+              <button
+                onClick={() => setShowQuietHours(!showQuietHours)}
+                className="flex items-center justify-between w-full text-left"
+              >
+                <span className="text-sm font-medium text-gray-700 dark:text-amber-primary">
+                  Quiet Hours
+                </span>
+                <span className={`transform transition-transform ${showQuietHours ? 'rotate-180' : ''}`}>
+                  <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  </svg>
+                </span>
+              </button>
+              {showQuietHours && (
+                <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id="quiet_hours_enabled"
+                      checked={notificationPrefs.quiet_hours?.enabled ?? false}
+                      onChange={(e) => onQuietHoursChange('enabled', e.target.checked)}
+                      className="w-4 h-4 text-purple-600 border-gray-300 dark:border-gray-border rounded-none focus:ring-purple-500"
+                    />
+                    <label htmlFor="quiet_hours_enabled" className="text-sm text-gray-700 dark:text-amber-primary">
+                      Enable Quiet Hours
+                    </label>
+                  </div>
+                  <div>
+                    <label htmlFor="quiet_hours_start" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+                      Start Time
+                    </label>
+                    <input
+                      type="time"
+                      id="quiet_hours_start"
+                      value={notificationPrefs.quiet_hours?.start_time || '22:00'}
+                      onChange={(e) => onQuietHoursChange('start_time', e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="quiet_hours_end" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+                      End Time
+                    </label>
+                    <input
+                      type="time"
+                      id="quiet_hours_end"
+                      value={notificationPrefs.quiet_hours?.end_time || '08:00'}
+                      onChange={(e) => onQuietHoursChange('end_time', e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Daily Digest Section */}
+            <div className="border-t border-gray-200 dark:border-gray-border pt-6">
+              <button
+                onClick={() => setShowDigest(!showDigest)}
+                className="flex items-center justify-between w-full text-left"
+              >
+                <span className="text-sm font-medium text-gray-700 dark:text-amber-primary">
+                  Daily Digest
+                </span>
+                <span className={`transform transition-transform ${showDigest ? 'rotate-180' : ''}`}>
+                  <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  </svg>
+                </span>
+              </button>
+              {showDigest && (
+                <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id="digest_enabled"
+                      checked={notificationPrefs.daily_digest?.enabled ?? false}
+                      onChange={(e) => onDigestChange('enabled', e.target.checked)}
+                      className="w-4 h-4 text-purple-600 border-gray-300 dark:border-gray-border rounded-none focus:ring-purple-500"
+                    />
+                    <label htmlFor="digest_enabled" className="text-sm text-gray-700 dark:text-amber-primary">
+                      Enable Daily Digest
+                    </label>
+                  </div>
+                  <div>
+                    <label htmlFor="digest_time" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+                      Digest Time
+                    </label>
+                    <input
+                      type="time"
+                      id="digest_time"
+                      value={notificationPrefs.daily_digest?.time || '09:00'}
+                      onChange={(e) => onDigestChange('time', e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
 
 export default function Settings() {
   const qc = useQueryClient()
@@ -37,7 +244,7 @@ export default function Settings() {
     enabled: isAdmin,
   })
 
-  const { data: logSettingsData, refetch: refetchLogSettings } = useQuery({
+  const { data: logSettingsData } = useQuery({
     queryKey: QUERY_KEYS.logSettings(),
     queryFn: () => api.get('/settings/logs'),
     enabled: isAdmin,
@@ -55,6 +262,7 @@ export default function Settings() {
   })
   const [showPassword, setShowPassword] = useState(false)
 
+  // Initialize form data from backend response
   // Track if initial data has been loaded to prevent overwriting user edits on refetch
   const smtpLoadedRef = useRef(false)
   const prefsLoadedRef = useRef(false)
@@ -65,7 +273,7 @@ export default function Settings() {
     enabled: isAdmin,
   })
 
-  // Update form data when SMTP config loads (only on initial load)
+  // Initialize form data from backend response
   useEffect(() => {
     if (smtpConfig && !smtpLoadedRef.current) {
       setSmtpFormData(transformSMTPFromBackend(smtpConfig))
@@ -91,26 +299,35 @@ export default function Settings() {
     onError: (err) => showToast(err.message, 'error'),
   })
 
+  // Instance URL state
+  const [instanceUrl, setInstanceUrl] = useState('')
+  const { data: instanceSettings, isLoading: isLoadingInstance, isError: instanceError } = useQuery({
+    queryKey: ['instance-settings'],
+    queryFn: () => api.get('/settings/instance'),
+    enabled: isAdmin,
+  })
+
+  // Initialize instance URL from backend
+  useEffect(() => {
+    if (instanceSettings?.url !== undefined) {
+      setInstanceUrl(instanceSettings.url)
+    }
+  }, [instanceSettings])
+
+  const updateInstanceMutation = useMutation({
+    mutationFn: (url) => api.put('/settings/instance', { url }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['instance-settings'] })
+      showToast('Instance URL saved', 'success')
+    },
+    onError: (err) => showToast(err.message, 'error'),
+  })
+
   // Notification Preferences State
   const [notificationPrefs, setNotificationPrefs] = useState(null)
   const [showQuietHours, setShowQuietHours] = useState(false)
   const [showDigest, setShowDigest] = useState(false)
   const [unifiedTimezone, setUnifiedTimezone] = useState(null)
-
-
-
-  // Timezone options
-  const timezones = [
-    { value: 'UTC', label: 'UTC' },
-    { value: 'America/New_York', label: 'Eastern (New York)' },
-    { value: 'America/Chicago', label: 'Central (Chicago)' },
-    { value: 'America/Denver', label: 'Mountain (Denver)' },
-    { value: 'America/Los_Angeles', label: 'Pacific (Los Angeles)' },
-    { value: 'Europe/London', label: 'London' },
-    { value: 'Europe/Paris', label: 'Paris' },
-    { value: 'Asia/Tokyo', label: 'Tokyo' },
-    { value: 'Australia/Sydney', label: 'Sydney' },
-  ]
 
   // Fetch user notification preferences (visible to all authenticated users)
   const { data: userPrefs, isLoading: userPrefsLoading, isError: userPrefsError } = useQuery({
@@ -119,7 +336,7 @@ export default function Settings() {
     retry: false,
   })
 
-  // Update local state when preferences load - transform flat backend response to nested frontend structure
+  // Initialize local state when preferences load - transform flat backend response to nested frontend structure
   // Only update on initial load to prevent overwriting user edits on refetch
   useEffect(() => {
     if (userPrefs && !prefsLoadedRef.current) {
@@ -136,7 +353,7 @@ export default function Settings() {
   // Update preferences mutation
   const updatePrefsMutation = useMutation({
     mutationFn: (prefs) => updateNotificationPrefs(transformPrefsToBackend(prefs)),
-    onSuccess: (data) => {
+    onSuccess: () => {
       qc.invalidateQueries({ queryKey: QUERY_KEYS.notificationPrefs() })
       prefsLoadedRef.current = false // Allow next load to update form with saved data
       showToast('Notification preferences saved', 'success')
@@ -222,6 +439,7 @@ export default function Settings() {
     onError: (err) => showToast(err.message, 'error'),
   })
 
+  // Initialize log settings state from backend response
   useEffect(() => {
     if (logSettingsData) {
       setLogSettings(logSettingsData)
@@ -268,189 +486,10 @@ export default function Settings() {
     createMutation.mutate(keyType)
   }
 
-  const getKeyData = (keyType) => {
+const getKeyData = (keyType) => {
     if (!keys) return null
     return keys.find(k => k.type === keyType)
   }
-
-  // Helper component for Notification Preferences section
-  const NotificationPreferencesSection = () => (
-    <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none">
-      <div className="p-6">
-        <div className="flex items-center gap-3 mb-2">
-          <Bell className="w-5 h-5 text-purple-500" />
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-light-neutral">Your Notification Preferences</h2>
-        </div>
-        <p className="text-sm text-gray-600 dark:text-amber-muted mb-6">
-          Configure which alerts you receive
-        </p>
-
-        {userPrefsLoading ? (
-          <div className="flex items-center justify-center py-8">
-            <Loader className="w-6 h-6 animate-spin text-purple-500" />
-          </div>
-        ) : userPrefsError ? (
-          <div className="text-center py-8">
-            <p className="text-gray-600 dark:text-amber-muted">
-              Please log in to configure notification preferences.
-            </p>
-          </div>
-        ) : notificationPrefs && (
-          <div className="space-y-6">
-            {/* Unified Timezone Selector */}
-            <div>
-              <label htmlFor="unified_timezone" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-2">
-                Timezone
-              </label>
-              <select
-                id="unified_timezone"
-                value={unifiedTimezone || 'UTC'}
-                onChange={(e) => handleUnifiedTimezoneChange(e.target.value)}
-                className="w-full md:w-auto min-w-[200px] px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-              >
-                {timezones.map((tz) => (
-                  <option key={tz.value} value={tz.value}>
-                    {tz.label}
-                  </option>
-                ))}
-              </select>
-              <p className="text-xs text-gray-500 dark:text-amber-muted mt-1">
-                Applies to both Quiet Hours and Daily Digest
-              </p>
-            </div>
-
-            {/* Alert Type Toggles */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-3">
-                Alert Types
-              </label>
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                {alertTypes.map((type) => (
-                  <div key={type.key} className="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      id={`alert-type-${type.key}`}
-                      checked={notificationPrefs.alert_types?.[type.key] ?? true}
-                      onChange={() => handleToggleAlertType(type.key)}
-                      className="w-4 h-4 text-purple-600 border-gray-300 dark:border-gray-border rounded-none focus:ring-purple-500"
-                    />
-                    <label
-                      htmlFor={`alert-type-${type.key}`}
-                      className="text-sm text-gray-700 dark:text-amber-primary cursor-pointer"
-                    >
-                      {type.label}
-                    </label>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Quiet Hours Section */}
-            <div className="border-t border-gray-200 dark:border-gray-border pt-6">
-              <button
-                onClick={() => setShowQuietHours(!showQuietHours)}
-                className="flex items-center justify-between w-full text-left"
-              >
-                <span className="text-sm font-medium text-gray-700 dark:text-amber-primary">
-                  Quiet Hours
-                </span>
-                <span className={`transform transition-transform ${showQuietHours ? 'rotate-180' : ''}`}>
-                  <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                  </svg>
-                </span>
-              </button>
-        {showQuietHours && (
-          <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                id="quiet_hours_enabled"
-                checked={notificationPrefs.quiet_hours?.enabled ?? false}
-                onChange={(e) => handleQuietHoursChange('enabled', e.target.checked)}
-                className="w-4 h-4 text-purple-600 border-gray-300 dark:border-gray-border rounded-none focus:ring-purple-500"
-              />
-              <label htmlFor="quiet_hours_enabled" className="text-sm text-gray-700 dark:text-amber-primary">
-                Enable Quiet Hours
-              </label>
-            </div>
-            <div>
-              <label htmlFor="quiet_hours_start" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-                Start Time
-              </label>
-              <input
-                type="time"
-                id="quiet_hours_start"
-                value={notificationPrefs.quiet_hours?.start_time || '22:00'}
-                onChange={(e) => handleQuietHoursChange('start_time', e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-              />
-            </div>
-            <div>
-              <label htmlFor="quiet_hours_end" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-                End Time
-              </label>
-              <input
-                type="time"
-                id="quiet_hours_end"
-                value={notificationPrefs.quiet_hours?.end_time || '08:00'}
-                onChange={(e) => handleQuietHoursChange('end_time', e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-              />
-            </div>
-          </div>
-        )}
-            </div>
-
-            {/* Daily Digest Section */}
-            <div className="border-t border-gray-200 dark:border-gray-border pt-6">
-              <button
-                onClick={() => setShowDigest(!showDigest)}
-                className="flex items-center justify-between w-full text-left"
-              >
-                <span className="text-sm font-medium text-gray-700 dark:text-amber-primary">
-                  Daily Digest
-                </span>
-                <span className={`transform transition-transform ${showDigest ? 'rotate-180' : ''}`}>
-                  <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                  </svg>
-                </span>
-              </button>
-              {showDigest && (
-                <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      id="digest_enabled"
-                      checked={notificationPrefs.daily_digest?.enabled ?? false}
-                      onChange={(e) => handleDigestChange('enabled', e.target.checked)}
-                      className="w-4 h-4 text-purple-600 border-gray-300 dark:border-gray-border rounded-none focus:ring-purple-500"
-                    />
-                    <label htmlFor="digest_enabled" className="text-sm text-gray-700 dark:text-amber-primary">
-                      Enable Daily Digest
-                    </label>
-                  </div>
-<div>
-      <label htmlFor="digest_time" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-        Digest Time
-      </label>
-      <input
-        type="time"
-        id="digest_time"
-        value={notificationPrefs.daily_digest?.time || '09:00'}
-        onChange={(e) => handleDigestChange('time', e.target.value)}
-        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-      />
-    </div>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  )
 
   return (
     <div className="space-y-6">
@@ -501,7 +540,20 @@ export default function Settings() {
       {/* Non-admin: Show notification preferences at the top */}
       {!isAdmin && (
         <>
-          <NotificationPreferencesSection />
+          <NotificationPreferencesSection
+            userPrefsLoading={userPrefsLoading}
+            userPrefsError={userPrefsError}
+            notificationPrefs={notificationPrefs}
+            unifiedTimezone={unifiedTimezone}
+            showQuietHours={showQuietHours}
+            setShowQuietHours={setShowQuietHours}
+            showDigest={showDigest}
+            setShowDigest={setShowDigest}
+            onUnifiedTimezoneChange={handleUnifiedTimezoneChange}
+            onToggleAlertType={handleToggleAlertType}
+            onQuietHoursChange={handleQuietHoursChange}
+            onDigestChange={handleDigestChange}
+          />
 
           <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none">
             <div className="p-12 text-center">
@@ -519,10 +571,58 @@ export default function Settings() {
       {isAdmin && (
         <>
           {/* Tab Content */}
-          {activeTab === 'alerts' && (
-            <div className="space-y-6">
-              {/* User Notification Preferences - inside Alerts tab for admins */}
-              <NotificationPreferencesSection />
+        {activeTab === 'alerts' && (
+          <div className="space-y-6">
+            {/* General Section */}
+            <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none">
+              <div className="p-6">
+                <div className="flex items-center gap-3 mb-6">
+                  <Globe className="w-5 h-5 text-purple-500" />
+                  <h2 className="text-lg font-semibold text-gray-900 dark:text-light-neutral">General</h2>
+                </div>
+                {isLoadingInstance ? (
+                  <div className="text-sm text-gray-500 dark:text-amber-muted">Loading...</div>
+                ) : instanceError ? (
+                  <div className="text-sm text-red-500">Failed to load instance settings</div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label htmlFor="instance_url" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+                        Instance URL
+                      </label>
+                      <input
+                        type="url"
+                        id="instance_url"
+                        value={instanceUrl}
+                        onChange={(e) => setInstanceUrl(e.target.value)}
+                        onBlur={() => updateInstanceMutation.mutate(instanceUrl)}
+                        placeholder="https://runic.example.com"
+                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+                      />
+                      <p className="text-xs text-gray-500 dark:text-amber-muted mt-1">
+                        Used for email links and notifications
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* User Notification Preferences - inside Alerts tab for admins */}
+            <NotificationPreferencesSection
+              userPrefsLoading={userPrefsLoading}
+              userPrefsError={userPrefsError}
+              notificationPrefs={notificationPrefs}
+              unifiedTimezone={unifiedTimezone}
+              showQuietHours={showQuietHours}
+              setShowQuietHours={setShowQuietHours}
+              showDigest={showDigest}
+              setShowDigest={setShowDigest}
+              onUnifiedTimezoneChange={handleUnifiedTimezoneChange}
+              onToggleAlertType={handleToggleAlertType}
+              onQuietHoursChange={handleQuietHoursChange}
+              onDigestChange={handleDigestChange}
+            />
 
               {/* SMTP Configuration Section */}
               <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none">

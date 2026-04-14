@@ -12,7 +12,6 @@ import { useCrudMutations } from '../hooks/useCrudMutations'
 import { useAuth } from '../hooks/useAuth'
 import ConfirmModal from '../components/ConfirmModal'
 import SearchableSelect from '../components/SearchableSelect'
-import InlineError from '../components/InlineError'
 import EmptyState from '../components/EmptyState'
 import DataTable from '../components/DataTable'
 import TableSkeleton from '../components/TableSkeleton'
@@ -28,7 +27,7 @@ export default function Groups() {
   const { modalOpen, editItem: editGroup, setEditItem: setEditGroup, form: formData, setForm: setFormData, setFormForEdit, handleOpenAdd, handleCancel, setModalOpen } = useCrudModal({ name: '', description: '' })
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [conflictError, setConflictError] = useState(null)
-  const [formErrors, setFormErrors] = useState({})
+  const [_formErrors, setFormErrors] = useState({})
   
   // Sorting state
   const { sortConfig, handleSort } = useTableSort('groups', { key: 'name', direction: 'asc' })
@@ -569,7 +568,7 @@ className="hover:bg-gray-200 dark:hover:bg-charcoal-dark rounded-none p-0.5"
               <h3 className="text-lg font-semibold">Cannot Delete Group</h3>
             </div>
             <p className="text-gray-600 dark:text-gray-400 mb-4">
-              The group "{conflictError.groupName}" is used by the following policies:
+              The group &quot;{conflictError.groupName}&quot; is used by the following policies:
             </p>
             <ul className="list-disc list-inside mb-4 text-gray-700 dark:text-gray-300">
               {conflictError.policies.map(p => (

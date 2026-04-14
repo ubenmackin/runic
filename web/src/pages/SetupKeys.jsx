@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { RotateCw, CheckCircle, Clock, AlertTriangle, Copy, Key, Trash2, Plus, Shield, XCircle } from 'lucide-react'
+import { RotateCw, CheckCircle, Clock, Copy, Key, Trash2, Plus, Shield, XCircle } from 'lucide-react'
 import { QUERY_KEYS, api } from '../api/client'
 import { useToastContext } from '../hooks/ToastContext'
 import { usePagination } from '../hooks/usePagination'
@@ -207,7 +207,7 @@ export default function SetupKeys() {
   // Reset page to 1 when search term changes
   useEffect(() => {
     setPeersPage(1)
-  }, [searchTerm])
+  }, [searchTerm, setPeersPage])
 
   // Focus traps for modals
   useFocusTrap(rotateConfirmModalRef, !!showRotateModal)
@@ -656,7 +656,7 @@ className={`px-4 py-2 text-sm font-medium rounded-none transition-colors ${
               Revoke Registration Token?
             </h3>
             <p className="text-gray-600 dark:text-amber-muted mb-6">
-              This will immediately invalidate the token. Any agents that haven't registered with this token will be unable to do so.
+              This will immediately invalidate the token. Any agents that haven&apos;t registered with this token will be unable to do so.
             </p>
             <div className="flex gap-3">
               <button

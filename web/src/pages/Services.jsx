@@ -20,7 +20,6 @@ import Pagination from '../components/Pagination'
 import TableToolbar from '../components/TableToolbar'
 import PageHeader from '../components/PageHeader'
 
-const PROTOCOLS = ['tcp', 'udp', 'both', 'icmp', 'igmp']
 const PROTOCOL_OPTIONS = [
   { value: 'tcp', label: 'TCP' },
   { value: 'udp', label: 'UDP' },
@@ -137,7 +136,7 @@ export default function Services() {
   // Reset page to 1 when search term changes
   useEffect(() => {
     setServicesPage(1)
-  }, [searchTerm])
+  }, [searchTerm, setServicesPage])
 
   const { createMutation, updateMutation, deleteMutation } = useCrudMutations({
     apiPath: '/services',
@@ -305,34 +304,6 @@ const handleSourcePortInputKeyDown = (e) => {
   }
 
   const protocolLabel = (p) => ({ tcp: 'TCP', udp: 'UDP', both: 'TCP+UDP', icmp: 'ICMP', igmp: 'IGMP' }[p] || p)
-  const previewRule = () => {
-    const portsValue = portChips.join(',')
-    const sourcePortsValue = sourcePortChips.join(',')
-    if (formData.protocol === 'icmp') return `icmp`
-    if (formData.protocol === 'igmp') return `igmp`
-    if (!portsValue && !sourcePortsValue) return `${formData.protocol} (no ports specified)`
-
-    // Determine if multiport is needed for destination
-    const needsDstMultiport = portsValue.includes(',') || portsValue.includes(':')
-    const dstPortMatch = portsValue
-      ? (needsDstMultiport ? `-m multiport --dports ${portsValue}` : `--dport ${portsValue}`)
-      : ''
-
-    // Determine if multiport is needed for source
-    const needsSrcMultiport = sourcePortsValue.includes(',') || sourcePortsValue.includes(':')
-    const srcPortMatch = sourcePortsValue
-      ? (needsSrcMultiport ? `-m multiport --sports ${sourcePortsValue}` : `--sport ${sourcePortsValue}`)
-      : ''
-
-    // Combine port matches with --sport before --dport (iptables convention)
-    const portParts = [srcPortMatch, dstPortMatch].filter(Boolean)
-    const portMatch = portParts.join(' ')
-
-    if (formData.protocol === 'both') {
-      return `tcp ${portMatch}\nudp ${portMatch}`
-    }
-    return `${formData.protocol} ${portMatch}`
-  }
 
   if (isLoading) return <TableSkeleton rows={3} columns={5} />
 
@@ -741,7 +712,7 @@ placeholder="Add a description for this service..." />
                   Cannot Delete Service
                 </h3>
                 <p className="text-sm text-gray-600 dark:text-amber-muted mb-3">
-                  The service <span className="font-medium text-gray-900 dark:text-white">"{conflictError.serviceName}"</span> cannot be deleted because it is used by the following policies:
+                  The service <span className="font-medium text-gray-900 dark:text-white">&quot;{conflictError.serviceName}&quot;</span> cannot be deleted because it is used by the following policies:
                 </p>
                 <ul className="mb-4 space-y-1">
                   {conflictError.policies.map((policy, idx) => (

@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useMemo, useRef, useEffect } from 'react'
 import { useAuthStore } from '../store'
 
 export function usePagination(data, pageKey, defaultRowsPerPage = 10) {
@@ -27,10 +27,17 @@ export function usePagination(data, pageKey, defaultRowsPerPage = 10) {
     }
   }, [storageKey, rowsPerPage])
 
-  // Reset page to 1 when data changes (e.g., filter reduces results)
-  useEffect(() => {
-    setPage(1)
-  }, [data?.length])
+  // Reset page to 1 when data length changes (e.g., filter reduces results)
+  // Using ref to track previous value and setState during render is intentional here
+  // for synchronizing pagination with data changes
+  const prevDataLengthRef = useRef(data?.length)
+  if (prevDataLengthRef.current !== data?.length) {
+    prevDataLengthRef.current = data?.length
+    // Reset to page 1 when data length changes
+    if (page !== 1) {
+      setPage(1)
+    }
+  }
 
   // Reset page to 1 when rowsPerPage changes
   const setRowsPerPage = (newRowsPerPage) => {

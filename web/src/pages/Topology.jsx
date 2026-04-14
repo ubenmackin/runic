@@ -70,7 +70,7 @@ function useGroupMembers(groupIds) {
 // Build layout data: centered with left/right split
 // ──────────────────────────────────────────────────────
 
-function buildLayoutData(startPeerId, peers, groups, policies, services, groupMembersMap, expandedGroups, allPeers) {
+function buildLayoutData(startPeerId, peers, groups, policies, services, groupMembersMap, expandedGroups, _allPeers) {
   if (!startPeerId || !peers?.length || !policies?.length) return null
 
   const activePolicies = policies.filter(p => p.enabled && p.action === 'ACCEPT')
@@ -557,7 +557,9 @@ function TreeGraph({ layoutData, isDark, onNodeClick, onEdgeClick, onGroupClick,
     }, 100)
 
     return () => cancelAnimationFrame(animFrame)
-  }, [nodes, links, dimensions, isDark])
+    // colors is derived from isDark, so only isDark needs to be in deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nodes, links, dimensions, isDark, onBackgroundClick, onNodeClick, onEdgeClick, onGroupClick])
 
   // Zoom controls
   const handleZoomIn = useCallback(() => {
@@ -629,7 +631,7 @@ function TreeGraph({ layoutData, isDark, onNodeClick, onEdgeClick, onGroupClick,
 // Detail Panel
 // ──────────────────────────────────────────────────────
 
-function DetailPanel({ selection, onClose, onExpand, onCollapse, isDark }) {
+function DetailPanel({ selection, onClose, onExpand, onCollapse, _isDark }) {
   if (!selection) return null
   const { type, data } = selection
 

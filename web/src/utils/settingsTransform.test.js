@@ -5,7 +5,7 @@ import {
   alertTypes,
   getBrowserTimezone,
 } from './settingsTransform'
-import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, test, expect } from 'vitest'
 
 describe('settingsTransform', () => {
   describe('transformPrefsFromBackend (backend to frontend)', () => {

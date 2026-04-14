@@ -44,7 +44,11 @@ export default function Logs() {
 
   // Ref to track current mode in callbacks (avoid stale closures)
   const modeRef = useRef(mode)
-  modeRef.current = mode
+
+  // Keep modeRef in sync with mode state
+  useEffect(() => {
+    modeRef.current = mode
+  }, [mode])
 
   // Historical query
   const { data, isLoading, refetch } = useQuery({
@@ -69,20 +73,16 @@ export default function Logs() {
         wsRef.current.close()
         wsRef.current = null
       }
-      setIsConnected(false)
-      setIsReconnecting(false)
-      setReconnectAttemptDisplay(0)
-      reconnectAttempts.current = 0
       if (reconnectTimer.current) {
         clearTimeout(reconnectTimer.current)
         reconnectTimer.current = null
       }
+      reconnectAttempts.current = 0
       return
     }
 
     // Reset reconnect attempts when entering live mode
     reconnectAttempts.current = 0
-    setIsReconnecting(false)
 
   const connect = () => {
     if (wsRef.current) {
@@ -123,26 +123,26 @@ export default function Logs() {
         logger.error('WebSocket error:', error)
       }
 
-      ws.onclose = () => {
-        setIsConnected(false)
-        logger.log('WebSocket disconnected')
+    ws.onclose = () => {
+      setIsConnected(false)
+      logger.log('WebSocket disconnected')
 
-        // Attempt reconnection if still in live mode
-        if (modeRef.current !== 'live') return
-        if (reconnectAttempts.current >= MAX_RECONNECT_ATTEMPTS) {
-          setIsReconnecting(false)
-          return
-        }
-        setIsReconnecting(true)
-        setReconnectAttemptDisplay(reconnectAttempts.current + 1)
-        const delay = Math.min(1000 * Math.pow(2, reconnectAttempts.current), 30000)
-        reconnectTimer.current = setTimeout(() => {
-          reconnectAttempts.current++
-          connect()
-        }, delay)
+      // Attempt reconnection if still in live mode
+      if (modeRef.current !== 'live') return
+      if (reconnectAttempts.current >= MAX_RECONNECT_ATTEMPTS) {
+        setIsReconnecting(false)
+        return
       }
+      setIsReconnecting(true)
+      setReconnectAttemptDisplay(reconnectAttempts.current + 1)
+      const delay = Math.min(1000 * Math.pow(2, reconnectAttempts.current), 30000)
+      reconnectTimer.current = setTimeout(() => {
+        reconnectAttempts.current++
+        connect()
+      }, delay)
+    }
 
-      wsRef.current = ws
+    wsRef.current = ws
     }
 
     connect()
@@ -176,11 +176,11 @@ export default function Logs() {
     setLiveLogs([])
   }, [])
 
-  const handlePrevPage = () => {
+  const _handlePrevPage = () => {
     setFilter(f => ({ ...f, offset: Math.max(0, f.offset - f.limit) }))
   }
 
-  const handleNextPage = () => {
+  const _handleNextPage = () => {
     if (data && data.logs?.length === filter.limit) {
       setFilter(f => ({ ...f, offset: f.offset + f.limit }))
     }

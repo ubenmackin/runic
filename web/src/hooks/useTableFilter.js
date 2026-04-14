@@ -62,5 +62,7 @@ export function useTableFilter(data, searchTerm, sortConfig, options = {}) {
       })
 
     return sorted
+    // Spread is intentional to allow flexible additional dependencies
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, searchTerm, sortConfig, filterFn, fieldMap, secondarySortKey, ...extraDeps])
 }

@@ -44,7 +44,7 @@ export default function Dashboard() {
   // Get pending changes from context
   const { totalPendingCount } = usePendingChanges()
 
-  // Reset live counts when API data refetches (prevents drift)
+  // Reset live state when query data refreshes
   useEffect(() => {
     if (data) {
       setLiveBlockedCount(0)

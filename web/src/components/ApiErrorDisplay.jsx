@@ -1,4 +1,4 @@
-import { AlertCircle, RefreshCw, Wifi, WifiOff, Lock, Search, AlertTriangle, Server, HelpCircle } from 'lucide-react'
+import { AlertCircle, RefreshCw, Wifi, WifiOff, Lock, Search, AlertTriangle, Server } from 'lucide-react'
 import { ErrorTypes } from '../utils/apiErrors'
 
 /**
@@ -30,27 +30,17 @@ export default function ApiErrorDisplay({
 
   const { message, type, recoverable, suggestedAction } = errorData
 
-  // Get appropriate icon based on error type
-  const getIcon = () => {
-    switch (type) {
-      case ErrorTypes.NETWORK:
-        return WifiOff
-      case ErrorTypes.AUTH:
-        return Lock
-      case ErrorTypes.NOT_FOUND:
-        return Search
-      case ErrorTypes.PERMISSION:
-        return Lock
-      case ErrorTypes.SERVER:
-        return Server
-      case ErrorTypes.VALIDATION:
-        return AlertTriangle
-      default:
-        return AlertCircle
-    }
+  // Icon lookup object for error types
+  const iconMap = {
+    [ErrorTypes.NETWORK]: WifiOff,
+    [ErrorTypes.AUTH]: Lock,
+    [ErrorTypes.NOT_FOUND]: Search,
+    [ErrorTypes.PERMISSION]: Lock,
+    [ErrorTypes.SERVER]: Server,
+    [ErrorTypes.VALIDATION]: AlertTriangle
   }
 
-  const Icon = getIcon()
+  const IconComponent = iconMap[type] || AlertCircle
 
   // Compact variant for inline errors (e.g., in form fields)
   if (compact) {
@@ -78,7 +68,7 @@ export default function ApiErrorDisplay({
         {showIcon && (
           <div className="flex justify-center">
             <div className="p-3 bg-red-100 dark:bg-red-900/30 rounded-none">
-              <Icon className="w-8 h-8 text-red-600 dark:text-red-400" />
+              <IconComponent className="w-8 h-8 text-red-600 dark:text-red-400" />
             </div>
           </div>
         )}

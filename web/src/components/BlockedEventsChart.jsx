@@ -26,7 +26,7 @@ export default function BlockedEventsChart({ logs }) {
 
   const segmentWidth = 100 / hourlyData.length
 
-  const handlePointHover = useCallback((index, event) => {
+  const handlePointHover = useCallback((index, _event) => {
     if (!containerRef.current) return
 
     const container = containerRef.current

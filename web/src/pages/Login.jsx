@@ -22,11 +22,11 @@ export default function Login({ mode }) {
     // Handle edge cases:
     // - If mode="setup" but setup is already done, redirect to /login
     // - If mode is undefined but setup is needed, update state
-    if (mode === 'setup' && !needsSetup) {
-      navigate('/login', { replace: true })
-    } else if (mode === undefined && needsSetup !== null) {
-      setIsSetup(needsSetup)
-    }
+  if (mode === 'setup' && !needsSetup) {
+    navigate('/login', { replace: true })
+  } else if (mode === undefined && needsSetup !== null) {
+    setIsSetup(needsSetup)
+  }
   }, [mode, needsSetup, loading, navigate])
 
   const loginMutation = useMutation({
