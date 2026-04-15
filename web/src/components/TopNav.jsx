@@ -2,13 +2,12 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import {
-  LayoutDashboard, Network, Shield, ShieldAlert, FileText, Settings, User,
+  Shield, FileText, Settings, User,
   LogOut, Moon, Sun, ChevronDown, Flame, Server, Users as UsersIcon,
   Briefcase, Bell, Key, Menu
 } from 'lucide-react'
 import { useAuthStore } from '../store'
 import { useAuth } from '../hooks/useAuth'
-import { usePendingChanges } from '../contexts/PendingChangesContext'
 import { getVersion } from '../api/client'
 
 // Dropdown menu item component
@@ -16,16 +15,16 @@ const DropdownItem = ({ to, icon: Icon, label, onClick }) => (
   <NavLink
     to={to}
     onClick={onClick}
-    className={({ isActive }) =>
-      `flex items-center gap-2 px-3 py-2 text-sm rounded-none transition-colors ${
-        isActive
-          ? 'bg-purple-active/10 text-purple-active'
-          : 'text-slate-500 hover:text-white hover:bg-[rgb(25,25,25)]'
-      }`
-    }
+className={({ isActive }) =>
+  `flex items-center gap-2 px-3 py-2 text-sm rounded-none transition-colors ${
+    isActive
+? 'bg-purple-active/10 text-purple-active'
+: 'text-slate-500 hover:text-white hover:bg-gray-100 dark:hover:bg-charcoal-darkest'
+  }`
+}
   >
     <Icon className="w-4 h-4" />
-    <span>{label}</span>
+    <span className="uppercase">{label}</span>
   </NavLink>
 )
 
@@ -43,7 +42,7 @@ const isParentActive = (parentKey, pathname) => {
 }
 
 // Dropdown menu component
-const DropdownMenu = ({ label, icon: Icon, activeIcon: ActiveIcon, iconClassName, children, isOpen, onToggle, isActive }) => {
+const DropdownMenu = ({ label, children, isOpen, onToggle, isActive }) => {
   const dropdownRef = useRef(null)
   const closeTimeoutRef = useRef(null)
 
@@ -96,16 +95,15 @@ const DropdownMenu = ({ label, icon: Icon, activeIcon: ActiveIcon, iconClassName
       onMouseLeave={handleMouseLeave}
     >
       <button
-        className={`flex items-center justify-center gap-1.5 px-3 h-[52px] text-sm font-medium rounded-none transition-colors border-b-2 ${
-          isActive
-            ? 'bg-purple-active/10 text-purple-active border-purple-active'
-            : isOpen
-            ? 'bg-[rgb(25,25,25)] text-white border-transparent'
-            : 'text-slate-500 hover:text-white hover:bg-[rgb(25,25,25)] border-transparent'
-        }`}
+className={`flex items-center justify-center gap-1.5 px-5 h-[52px] text-sm font-medium rounded-none transition-colors border-b-2 ${
+  isActive
+    ? 'bg-purple-active/10 text-purple-active border-purple-active'
+    : isOpen
+? 'bg-gray-100 dark:bg-charcoal-darkest text-white border-transparent'
+: 'text-slate-500 hover:text-white hover:bg-gray-100 dark:hover:bg-charcoal-darkest border-transparent'
+}`}
       >
-        {ActiveIcon ? <ActiveIcon className={`w-4 h-4 ${iconClassName || ''}`} /> : <Icon className={`w-4 h-4 ${iconClassName || ''}`} />}
-        <span className="hidden lg:inline">{label}</span>
+        <span className="hidden lg:inline uppercase">{label}</span>
         <ChevronDown className={`w-3.5 h-3.5 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
       </button>
       {isOpen && (
@@ -121,20 +119,19 @@ const DropdownMenu = ({ label, icon: Icon, activeIcon: ActiveIcon, iconClassName
 }
 
 // Navigation link component
-const NavItem = ({ to, icon: Icon, label }) => (
+const NavItem = ({ to, label }) => (
   <NavLink
     to={to}
     end={to === '/'}
-    className={({ isActive }) =>
-      `flex items-center justify-center gap-1.5 px-3 h-[52px] text-sm font-medium rounded-none transition-colors border-b-2 ${
-        isActive
-          ? 'bg-purple-active/10 text-purple-active border-purple-active'
-          : 'text-slate-500 hover:text-white hover:bg-[rgb(25,25,25)] border-transparent'
-      }`
-    }
+className={({ isActive }) =>
+  `flex items-center justify-center gap-1.5 px-5 h-[52px] text-sm font-medium rounded-none transition-colors border-b-2 ${
+    isActive
+? 'bg-purple-active/10 text-purple-active border-purple-active'
+: 'text-slate-500 hover:text-white hover:bg-gray-100 dark:hover:bg-charcoal-darkest border-transparent'
+  }`
+}
   >
-    <Icon className="w-4 h-4" />
-    <span className="hidden lg:inline">{label}</span>
+    <span className="hidden lg:inline uppercase">{label}</span>
   </NavLink>
 )
 
@@ -157,7 +154,6 @@ export default function TopNav() {
   const username = useAuthStore(s => s.username)
   const { isAdmin } = useAuth()
   const navigate = useNavigate()
-  const { totalPendingCount } = usePendingChanges()
 
   // Fetch version info
   const { data: versionInfo } = useQuery({
@@ -240,18 +236,15 @@ export default function TopNav() {
 
       {/* Desktop Navigation */}
       <nav className="hidden md:flex items-center gap-1">
-        {/* Dashboard */}
-        <NavItem to="/" icon={LayoutDashboard} label="Dashboard" />
+      {/* Dashboard */}
+      <NavItem to="/" label="Dashboard" />
 
-        {/* Topology */}
-        <NavItem to="/topology" icon={Network} label="Topology" />
+      {/* Topology */}
+      <NavItem to="/topology" label="Topology" />
 
       {/* Access Control Dropdown */}
       <DropdownMenu
         label="Access Control"
-        icon={Shield}
-        activeIcon={totalPendingCount > 0 ? ShieldAlert : null}
-        iconClassName={totalPendingCount > 0 ? 'text-orange-500' : ''}
         isOpen={openDropdowns['access-control']}
         onToggle={handleDropdownToggle('access-control')}
         isActive={isParentActive('access-control', location.pathname)}
@@ -265,7 +258,6 @@ export default function TopNav() {
       {/* Logs Dropdown */}
       <DropdownMenu
         label="Logs"
-        icon={FileText}
         isOpen={openDropdowns['logs']}
         onToggle={handleDropdownToggle('logs')}
         isActive={isParentActive('logs', location.pathname)}
@@ -277,7 +269,6 @@ export default function TopNav() {
       {/* Settings Dropdown */}
       <DropdownMenu
         label="Settings"
-        icon={Settings}
         isOpen={openDropdowns['settings']}
         onToggle={handleDropdownToggle('settings')}
         isActive={isParentActive('settings', location.pathname)}
@@ -287,7 +278,7 @@ export default function TopNav() {
               toggleDark()
               handleDropdownToggle('settings')(false)
             }}
-            className="flex items-center gap-2 px-3 py-2 text-sm w-full text-gray-700 dark:text-light-neutral hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none transition-colors"
+            className="flex items-center gap-2 px-3 py-2 text-sm w-full text-gray-700 dark:text-light-neutral hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none transition-colors uppercase"
           >
             {darkMode ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
             <span>{darkMode ? 'Light Mode' : 'Dark Mode'}</span>
@@ -354,38 +345,38 @@ export default function TopNav() {
             className="absolute top-0 right-0 w-64 h-full bg-white dark:bg-charcoal-dark"
             onClick={(e) => e.stopPropagation()}
           >
-            <nav className="p-4 space-y-1">
-              <NavItem to="/" icon={LayoutDashboard} label="Dashboard" />
-              <NavItem to="/topology" icon={Network} label="Topology" />
+<nav className="p-4 space-y-1">
+            <NavItem to="/" label="Dashboard" />
+            <NavItem to="/topology" label="Topology" />
               <div className="py-2">
                 <span className="px-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Access Control</span>
               </div>
-<NavLink to="/peers" className="block px-3 py-2 text-sm text-gray-700 dark:text-light-neutral hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none">Peers</NavLink>
-<NavLink to="/groups" className="block px-3 py-2 text-sm text-gray-700 dark:text-light-neutral hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none">Groups</NavLink>
-<NavLink to="/services" className="block px-3 py-2 text-sm text-gray-700 dark:text-light-neutral hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none">Services</NavLink>
-<NavLink to="/policies" className="block px-3 py-2 text-sm text-gray-700 dark:text-light-neutral hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none">Policies</NavLink>
+<NavLink to="/peers" className="block px-3 py-2 text-sm text-gray-700 dark:text-light-neutral hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none uppercase">Peers</NavLink>
+<NavLink to="/groups" className="block px-3 py-2 text-sm text-gray-700 dark:text-light-neutral hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none uppercase">Groups</NavLink>
+<NavLink to="/services" className="block px-3 py-2 text-sm text-gray-700 dark:text-light-neutral hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none uppercase">Services</NavLink>
+<NavLink to="/policies" className="block px-3 py-2 text-sm text-gray-700 dark:text-light-neutral hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none uppercase">Policies</NavLink>
               <div className="py-2">
                 <span className="px-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Logs</span>
               </div>
-<NavLink to="/logs" className="block px-3 py-2 text-sm text-gray-700 dark:text-light-neutral hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none">Logs</NavLink>
-<NavLink to="/alerts" className="block px-3 py-2 text-sm text-gray-700 dark:text-light-neutral hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none">Alerts</NavLink>
+<NavLink to="/logs" className="block px-3 py-2 text-sm text-gray-700 dark:text-light-neutral hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none uppercase">Logs</NavLink>
+              <NavLink to="/alerts" className="block px-3 py-2 text-sm text-gray-700 dark:text-light-neutral hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none uppercase">Alerts</NavLink>
               <div className="py-2">
                 <span className="px-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Settings</span>
               </div>
-              <button
+<button
                 onClick={toggleDark}
-                className="flex items-center gap-2 w-full px-3 py-2 text-sm text-gray-700 dark:text-light-neutral hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none"
+                className="flex items-center gap-2 w-full px-3 py-2 text-sm text-gray-700 dark:text-light-neutral hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none uppercase"
               >
                 {darkMode ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
                 <span>{darkMode ? 'Light Mode' : 'Dark Mode'}</span>
               </button>
               {isAdmin && (
-<NavLink to="/setup-keys" className="block px-3 py-2 text-sm text-gray-700 dark:text-light-neutral hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none">Setup Keys</NavLink>
-)}
-{isAdmin && (
-<NavLink to="/users" className="block px-3 py-2 text-sm text-gray-700 dark:text-light-neutral hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none">Users</NavLink>
-)}
-<NavLink to="/settings" className="block px-3 py-2 text-sm text-gray-700 dark:text-light-neutral hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none">Settings</NavLink>
+                <NavLink to="/setup-keys" className="block px-3 py-2 text-sm text-gray-700 dark:text-light-neutral hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none uppercase">Setup Keys</NavLink>
+              )}
+              {isAdmin && (
+                <NavLink to="/users" className="block px-3 py-2 text-sm text-gray-700 dark:text-light-neutral hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none uppercase">Users</NavLink>
+              )}
+              <NavLink to="/settings" className="block px-3 py-2 text-sm text-gray-700 dark:text-light-neutral hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none uppercase">Settings</NavLink>
             </nav>
           </div>
         </div>

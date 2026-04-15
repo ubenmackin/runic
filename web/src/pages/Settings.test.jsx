@@ -210,11 +210,39 @@ describe('Settings Page', () => {
   })
 
   describe('Quiet Hours Section', () => {
-    const mockNotificationPrefs = createMockNotificationPrefs()
+    // Mock prefs with quiet hours disabled AND no times configured (starts collapsed)
+    const mockNotificationPrefsDisabled = createMockNotificationPrefs({
+      quiet_hours_enabled: false,
+      quiet_hours_start: '',
+      quiet_hours_end: '',
+    })
 
-    test('quiet hours section expands when clicked', async () => {
+    // Mock prefs with quiet hours enabled (starts expanded)
+    const mockNotificationPrefsEnabled = createMockNotificationPrefs({
+      quiet_hours_enabled: true,
+      quiet_hours_start: '22:00',
+      quiet_hours_end: '08:00',
+    })
+
+    test('quiet hours section starts expanded when enabled', async () => {
+      apiClient.getNotificationPrefs.mockResolvedValue(mockNotificationPrefsEnabled)
+
+      renderWithProviders(<Settings />)
+
+      await waitFor(() => {
+        expect(screen.getByText('Quiet Hours')).toBeInTheDocument()
+      })
+
+      // Time inputs should be visible immediately when enabled
+      await waitFor(() => {
+        expect(screen.getByLabelText('Start Time')).toBeInTheDocument()
+      })
+      expect(screen.getByLabelText('End Time')).toBeInTheDocument()
+    })
+
+    test('quiet hours section starts collapsed when disabled and no times configured', async () => {
       const user = userEvent.setup()
-      apiClient.getNotificationPrefs.mockResolvedValue(mockNotificationPrefs)
+      apiClient.getNotificationPrefs.mockResolvedValue(mockNotificationPrefsDisabled)
 
       renderWithProviders(<Settings />)
 
@@ -232,12 +260,41 @@ describe('Settings Page', () => {
         expect(screen.getByLabelText('Start Time')).toBeInTheDocument()
       })
       expect(screen.getByLabelText('End Time')).toBeInTheDocument()
-      expect(screen.getByLabelText('Timezone')).toBeInTheDocument()
+    })
+
+    test('user can toggle quiet hours disclosure manually', async () => {
+      const user = userEvent.setup()
+      apiClient.getNotificationPrefs.mockResolvedValue(mockNotificationPrefsEnabled)
+
+      renderWithProviders(<Settings />)
+
+      await waitFor(() => {
+        expect(screen.getByText('Quiet Hours')).toBeInTheDocument()
+      })
+
+      // Starts expanded (enabled)
+      await waitFor(() => {
+        expect(screen.getByLabelText('Start Time')).toBeInTheDocument()
+      })
+
+      // Click to collapse
+      await user.click(screen.getByText('Quiet Hours'))
+
+      await waitFor(() => {
+        expect(screen.queryByLabelText('Start Time')).not.toBeInTheDocument()
+      })
+
+      // Click to expand again
+      await user.click(screen.getByText('Quiet Hours'))
+
+      await waitFor(() => {
+        expect(screen.getByLabelText('Start Time')).toBeInTheDocument()
+      })
     })
 
     test('quiet hours settings save correctly', async () => {
       const user = userEvent.setup()
-      apiClient.getNotificationPrefs.mockResolvedValue(mockNotificationPrefs)
+      apiClient.getNotificationPrefs.mockResolvedValue(mockNotificationPrefsDisabled)
       apiClient.updateNotificationPrefs.mockResolvedValue({ success: true })
 
       renderWithProviders(<Settings />)
@@ -246,7 +303,7 @@ describe('Settings Page', () => {
         expect(screen.getByText('Quiet Hours')).toBeInTheDocument()
       })
 
-      // Expand quiet hours
+      // Expand quiet hours (starts collapsed when disabled)
       await user.click(screen.getByText('Quiet Hours'))
 
       await waitFor(() => {
@@ -266,63 +323,63 @@ describe('Settings Page', () => {
       })
     })
 
-  test('quiet hours section has start and end time inputs after expanding', async () => {
-    const user = userEvent.setup()
-    apiClient.getNotificationPrefs.mockResolvedValue(mockNotificationPrefs)
+    test('quiet hours section has start and end time inputs after expanding', async () => {
+      const user = userEvent.setup()
+      apiClient.getNotificationPrefs.mockResolvedValue(mockNotificationPrefsDisabled)
 
-    renderWithProviders(<Settings />)
+      renderWithProviders(<Settings />)
 
-    await waitFor(() => {
-      expect(screen.getByText('Quiet Hours')).toBeInTheDocument()
-    })
+      await waitFor(() => {
+        expect(screen.getByText('Quiet Hours')).toBeInTheDocument()
+      })
 
-    // Expand quiet hours
-    await user.click(screen.getByText('Quiet Hours'))
+      // Expand quiet hours (starts collapsed when disabled)
+      await user.click(screen.getByText('Quiet Hours'))
 
-    await waitFor(() => {
+      await waitFor(() => {
+        expect(screen.getByLabelText('Start Time')).toBeInTheDocument()
+      })
+
+      // Verify time inputs are visible
       expect(screen.getByLabelText('Start Time')).toBeInTheDocument()
+      expect(screen.getByLabelText('End Time')).toBeInTheDocument()
     })
 
-    // Verify time inputs are visible
-    expect(screen.getByLabelText('Start Time')).toBeInTheDocument()
-    expect(screen.getByLabelText('End Time')).toBeInTheDocument()
+    test('changing quiet hours time updates and saves', async () => {
+      const user = userEvent.setup()
+      apiClient.getNotificationPrefs.mockResolvedValue(mockNotificationPrefsDisabled)
+      apiClient.updateNotificationPrefs.mockResolvedValue({ success: true })
+
+      renderWithProviders(<Settings />)
+
+      await waitFor(() => {
+        expect(screen.getByText('Quiet Hours')).toBeInTheDocument()
+      })
+
+      // Expand quiet hours (starts collapsed when disabled)
+      await user.click(screen.getByText('Quiet Hours'))
+
+      await waitFor(() => {
+        expect(screen.getByLabelText('Start Time')).toBeInTheDocument()
+      })
+
+      // Change start time using fireEvent for time input
+      const startTimeInput = screen.getByLabelText('Start Time')
+      await user.clear(startTimeInput)
+      await user.type(startTimeInput, '23:00')
+
+      // Wait for the onChange to trigger the API call
+      await waitFor(() => {
+        expect(apiClient.updateNotificationPrefs).toHaveBeenCalled()
+      })
+
+      // The onChange fires with the new value
+      const calls = apiClient.updateNotificationPrefs.mock.calls
+      const lastCall = calls[calls.length - 1][0]
+      // Check that start_time was updated (it might be called multiple times during typing)
+      expect(lastCall).toHaveProperty('quiet_hours_start')
+    })
   })
-
-  test('changing quiet hours time updates and saves', async () => {
-    const user = userEvent.setup()
-    apiClient.getNotificationPrefs.mockResolvedValue(mockNotificationPrefs)
-    apiClient.updateNotificationPrefs.mockResolvedValue({ success: true })
-
-    renderWithProviders(<Settings />)
-
-    await waitFor(() => {
-      expect(screen.getByText('Quiet Hours')).toBeInTheDocument()
-    })
-
-    // Expand quiet hours
-    await user.click(screen.getByText('Quiet Hours'))
-
-    await waitFor(() => {
-      expect(screen.getByLabelText('Start Time')).toBeInTheDocument()
-    })
-
-    // Change start time using fireEvent for time input
-    const startTimeInput = screen.getByLabelText('Start Time')
-    await user.clear(startTimeInput)
-    await user.type(startTimeInput, '23:00')
-
-    // Wait for the onChange to trigger the API call
-    await waitFor(() => {
-      expect(apiClient.updateNotificationPrefs).toHaveBeenCalled()
-    })
-
-    // The onChange fires with the new value
-    const calls = apiClient.updateNotificationPrefs.mock.calls
-    const lastCall = calls[calls.length - 1][0]
-    // Check that start_time was updated (it might be called multiple times during typing)
-    expect(lastCall).toHaveProperty('quiet_hours_start')
-  })
-})
 
 describe('Unified Timezone Selector', () => {
   const mockNotificationPrefs = createMockNotificationPrefs()
@@ -492,11 +549,37 @@ describe('Unified Timezone Selector', () => {
 })
 
   describe('Daily Digest Section', () => {
-    const mockNotificationPrefs = createMockNotificationPrefs()
+    // Mock prefs with digest disabled AND no time configured (starts collapsed)
+    const mockNotificationPrefsDisabled = createMockNotificationPrefs({
+      digest_enabled: false,
+      digest_time: '',
+    })
 
-    test('daily digest section expands when clicked', async () => {
+    // Mock prefs with digest enabled (starts expanded)
+    const mockNotificationPrefsEnabled = createMockNotificationPrefs({
+      digest_enabled: true,
+      digest_time: '09:00',
+    })
+
+    test('daily digest section starts expanded when enabled', async () => {
+      apiClient.getNotificationPrefs.mockResolvedValue(mockNotificationPrefsEnabled)
+
+      renderWithProviders(<Settings />)
+
+      await waitFor(() => {
+        expect(screen.getByText('Daily Digest')).toBeInTheDocument()
+      })
+
+      // Digest time input should be visible immediately when enabled
+      await waitFor(() => {
+        expect(screen.getByLabelText('Digest Time')).toBeInTheDocument()
+      })
+      expect(screen.getByLabelText('Enable Daily Digest')).toBeInTheDocument()
+    })
+
+    test('daily digest section starts collapsed when disabled and no time configured', async () => {
       const user = userEvent.setup()
-      apiClient.getNotificationPrefs.mockResolvedValue(mockNotificationPrefs)
+      apiClient.getNotificationPrefs.mockResolvedValue(mockNotificationPrefsDisabled)
 
       renderWithProviders(<Settings />)
 
@@ -516,9 +599,39 @@ describe('Unified Timezone Selector', () => {
       expect(screen.getByLabelText('Enable Daily Digest')).toBeInTheDocument()
     })
 
+    test('user can toggle daily digest disclosure manually', async () => {
+      const user = userEvent.setup()
+      apiClient.getNotificationPrefs.mockResolvedValue(mockNotificationPrefsEnabled)
+
+      renderWithProviders(<Settings />)
+
+      await waitFor(() => {
+        expect(screen.getByText('Daily Digest')).toBeInTheDocument()
+      })
+
+      // Starts expanded (enabled)
+      await waitFor(() => {
+        expect(screen.getByLabelText('Digest Time')).toBeInTheDocument()
+      })
+
+      // Click to collapse
+      await user.click(screen.getByText('Daily Digest'))
+
+      await waitFor(() => {
+        expect(screen.queryByLabelText('Digest Time')).not.toBeInTheDocument()
+      })
+
+      // Click to expand again
+      await user.click(screen.getByText('Daily Digest'))
+
+      await waitFor(() => {
+        expect(screen.getByLabelText('Digest Time')).toBeInTheDocument()
+      })
+    })
+
     test('enabling daily digest saves correctly', async () => {
       const user = userEvent.setup()
-      apiClient.getNotificationPrefs.mockResolvedValue(mockNotificationPrefs)
+      apiClient.getNotificationPrefs.mockResolvedValue(mockNotificationPrefsDisabled)
       apiClient.updateNotificationPrefs.mockResolvedValue({ success: true })
 
       renderWithProviders(<Settings />)
@@ -527,7 +640,7 @@ describe('Unified Timezone Selector', () => {
         expect(screen.getByText('Daily Digest')).toBeInTheDocument()
       })
 
-      // Expand daily digest
+      // Expand daily digest (starts collapsed when disabled)
       await user.click(screen.getByText('Daily Digest'))
 
       await waitFor(() => {
@@ -548,7 +661,7 @@ describe('Unified Timezone Selector', () => {
     })
   })
 
-  describe('SMTP Configuration Section', () => {
+  describe('Email Configuration Section', () => {
     const mockSMTPConfig = {
       host: 'smtp.example.com',
       port: 587,
@@ -563,7 +676,7 @@ describe('Unified Timezone Selector', () => {
       useAuthStore.setState({ role: 'admin' })
     })
 
-    test('SMTP configuration loads and displays correctly', async () => {
+    test('Email configuration loads and displays correctly', async () => {
       useAuthStore.setState({ role: 'admin' })
       
       const mockPrefs = {
@@ -591,12 +704,12 @@ describe('Unified Timezone Selector', () => {
       // Wait for the component to load
       await waitFor(() => {
         const buttons = screen.getAllByRole('button')
-        const smtpButton = buttons.find(b => b.textContent?.includes('SMTP'))
-        expect(smtpButton).toBeInTheDocument()
+        const emailButton = buttons.find(b => b.textContent?.includes('Email Configuration'))
+        expect(emailButton).toBeInTheDocument()
       })
     })
 
-    test('SMTP configuration saves correctly', async () => {
+    test('Email configuration saves correctly', async () => {
       const user = userEvent.setup()
       apiClient.getNotificationPrefs.mockResolvedValue({
         enabled_alerts: JSON.stringify([]),
@@ -609,11 +722,11 @@ describe('Unified Timezone Selector', () => {
       renderWithProviders(<Settings />)
 
       await waitFor(() => {
-        expect(screen.getByText('Save SMTP Settings')).toBeInTheDocument()
+        expect(screen.getByText('Save Email Settings')).toBeInTheDocument()
       })
 
       // Find and click save button
-      const saveButton = screen.getByText('Save SMTP Settings')
+      const saveButton = screen.getByText('Save Email Settings')
       await user.click(saveButton)
 
       await waitFor(() => {
@@ -626,7 +739,7 @@ describe('Unified Timezone Selector', () => {
       })
     })
 
-    test('SMTP shows loading state', async () => {
+    test('Email shows loading state', async () => {
       apiClient.getNotificationPrefs.mockResolvedValue({
         enabled_alerts: JSON.stringify([]),
         quiet_hours_enabled: false,
@@ -636,7 +749,7 @@ describe('Unified Timezone Selector', () => {
 
       renderWithProviders(<Settings />)
 
-      // Should show loader while loading SMTP config
+      // Should show loader while loading email config
       await waitFor(() => {
         const loaders = document.querySelectorAll('.animate-spin')
         expect(loaders.length).toBeGreaterThan(0)
@@ -668,7 +781,7 @@ describe('Unified Timezone Selector', () => {
       expect(passwordInput).toHaveAttribute('type', 'text')
     })
 
-    test('Test email button works when SMTP is enabled', async () => {
+    test('Test email button works when Email is enabled', async () => {
       const user = userEvent.setup()
       apiClient.getNotificationPrefs.mockResolvedValue({
         enabled_alerts: JSON.stringify([]),
@@ -681,9 +794,9 @@ describe('Unified Timezone Selector', () => {
 
       renderWithProviders(<Settings />)
 
-      // Wait for SMTP config to load and form state to update
+      // Wait for Email config to load and form state to update
       await waitFor(() => {
-        expect(screen.getByLabelText('Enable SMTP')).toBeChecked()
+        expect(screen.getByLabelText('Enable Email')).toBeChecked()
       })
 
       await waitFor(() => {
@@ -705,7 +818,7 @@ describe('Unified Timezone Selector', () => {
       })
     })
 
-    test('Test email button is disabled when SMTP is not enabled', async () => {
+    test('Test email button is disabled when Email is not enabled', async () => {
       apiClient.getNotificationPrefs.mockResolvedValue({
         enabled_alerts: JSON.stringify([]),
         quiet_hours_enabled: false,
@@ -723,7 +836,7 @@ describe('Unified Timezone Selector', () => {
       expect(testEmailButton).toBeDisabled()
     })
 
-    test('TLS and Enable SMTP toggles work', async () => {
+    test('TLS and Enable Email toggles work', async () => {
       const user = userEvent.setup()
       apiClient.getNotificationPrefs.mockResolvedValue({
         enabled_alerts: JSON.stringify([]),
@@ -739,14 +852,14 @@ describe('Unified Timezone Selector', () => {
       })
 
       expect(screen.getByLabelText('Use TLS')).toBeChecked()
-      expect(screen.getByLabelText('Enable SMTP')).toBeChecked()
+      expect(screen.getByLabelText('Enable Email')).toBeChecked()
 
       // Toggle TLS
       await user.click(screen.getByLabelText('Use TLS'))
       expect(screen.getByLabelText('Use TLS')).not.toBeChecked()
     })
 
-    test('editing SMTP fields updates form state', async () => {
+    test('editing Email fields updates form state', async () => {
       const user = userEvent.setup()
       apiClient.getNotificationPrefs.mockResolvedValue({
         enabled_alerts: JSON.stringify([]),
@@ -768,13 +881,69 @@ describe('Unified Timezone Selector', () => {
       await user.type(hostInput, 'new.smtp.com')
 
       // Save
-      await user.click(screen.getByText('Save SMTP Settings'))
+      await user.click(screen.getByText('Save Email Settings'))
 
       await waitFor(() => {
         // The mutation is called with the form data as the first argument
         expect(apiClient.updateSMTPConfig).toHaveBeenCalled()
         const callArgs = apiClient.updateSMTPConfig.mock.calls[0][0]
         expect(callArgs.host).toBe('new.smtp.com')
+      })
+    })
+
+    test('Instance URL input appears within Email Configuration section', async () => {
+      useAuthStore.setState({ role: 'admin' })
+      apiClient.getNotificationPrefs.mockResolvedValue({
+        enabled_alerts: JSON.stringify([]),
+        quiet_hours_enabled: false,
+        digest_enabled: false,
+      })
+      apiClient.getSMTPConfig.mockResolvedValue({ enabled: false })
+      apiClient.api.get.mockResolvedValue({ url: 'https://runic.example.com' })
+      apiClient.getAlertRules.mockResolvedValue([])
+
+      renderWithProviders(<Settings />)
+
+      // Instance URL should be visible in the Email Configuration section
+      // Use getById since the label no longer has htmlFor (it contains nested spans)
+      await waitFor(() => {
+        expect(document.getElementById('instance_url')).toBeInTheDocument()
+      })
+    })
+
+    test('Instance URL saves correctly on blur', async () => {
+      const user = userEvent.setup()
+      useAuthStore.setState({ role: 'admin' })
+      apiClient.getNotificationPrefs.mockResolvedValue({
+        enabled_alerts: JSON.stringify([]),
+        quiet_hours_enabled: false,
+        digest_enabled: false,
+      })
+      apiClient.getSMTPConfig.mockResolvedValue({ enabled: false })
+      apiClient.api.get.mockResolvedValue({ url: 'https://runic.example.com' })
+      apiClient.api.put.mockResolvedValue({ success: true })
+      apiClient.getAlertRules.mockResolvedValue([])
+
+      renderWithProviders(<Settings />)
+
+      await waitFor(() => {
+        expect(document.getElementById('instance_url')).toBeInTheDocument()
+      })
+
+      // Edit the instance URL
+      const instanceUrlInput = document.getElementById('instance_url')
+      await user.clear(instanceUrlInput)
+      await user.type(instanceUrlInput, 'https://new-instance.example.com')
+
+      // Trigger blur to save
+      await user.click(screen.getByText('Alerts'))
+
+      await waitFor(() => {
+        expect(apiClient.api.put).toHaveBeenCalledWith('/settings/instance', { url: 'https://new-instance.example.com' })
+      })
+
+      await waitFor(() => {
+        expect(mockShowToast).toHaveBeenCalledWith('Instance URL saved', 'success')
       })
     })
   })
@@ -834,7 +1003,7 @@ describe('Unified Timezone Selector', () => {
       expect(screen.getByRole('heading', { name: 'Settings' })).toBeInTheDocument()
     })
 
-    test('shows error toast when SMTP update fails', async () => {
+    test('shows error toast when Email update fails', async () => {
       const user = userEvent.setup()
       useAuthStore.setState({ role: 'admin' })
       apiClient.getNotificationPrefs.mockResolvedValue({
@@ -847,18 +1016,18 @@ describe('Unified Timezone Selector', () => {
         port: 587,
         enabled: true,
       })
-      apiClient.updateSMTPConfig.mockRejectedValue(new Error('SMTP update failed'))
+      apiClient.updateSMTPConfig.mockRejectedValue(new Error('Email update failed'))
 
       renderWithProviders(<Settings />)
 
       await waitFor(() => {
-        expect(screen.getByText('Save SMTP Settings')).toBeInTheDocument()
+        expect(screen.getByText('Save Email Settings')).toBeInTheDocument()
       })
 
-      await user.click(screen.getByText('Save SMTP Settings'))
+      await user.click(screen.getByText('Save Email Settings'))
 
       await waitFor(() => {
-        expect(mockShowToast).toHaveBeenCalledWith('SMTP update failed', 'error')
+        expect(mockShowToast).toHaveBeenCalledWith('Email update failed', 'error')
       })
     })
 
@@ -1022,10 +1191,10 @@ test('shows loading spinner while fetching SMTP config for admin', async () => {
       renderWithProviders(<Settings />)
 
       await waitFor(() => {
-        expect(screen.getByText('Save SMTP Settings')).toBeInTheDocument()
+        expect(screen.getByText('Save Email Settings')).toBeInTheDocument()
       })
 
-      await user.click(screen.getByText('Save SMTP Settings'))
+      await user.click(screen.getByText('Save Email Settings'))
 
       // Button should show "Saving..."
       await waitFor(() => {
@@ -1090,19 +1259,21 @@ describe('Collapsible Sections', () => {
         digest_enabled: false,
       })
       apiClient.getSMTPConfig.mockResolvedValue({ enabled: false })
-      apiClient.api.get.mockResolvedValue({})
+      apiClient.api.get.mockResolvedValue([])
       apiClient.getAlertRules.mockResolvedValue([])
+      // Mock instance settings endpoint
+      apiClient.api.get.mockResolvedValueOnce({ url: '' })
 
       renderWithProviders(<Settings />)
 
       await waitFor(() => {
-        // Use button role to be specific about section title
-        expect(screen.getByRole('button', { name: 'General' })).toBeInTheDocument()
+        // Wait for component to render - just check the heading exists
+        expect(screen.getByRole('heading', { name: 'Settings' })).toBeInTheDocument()
       })
 
       // Check that sections have IDs for anchor navigation
-      expect(document.getElementById('general-section')).toBeInTheDocument()
-      expect(document.getElementById('smtp-section')).toBeInTheDocument()
+      // These IDs exist in the DOM regardless of whether the collapsible is expanded
+      expect(document.getElementById('email-section')).toBeInTheDocument()
       expect(document.getElementById('notifications-section')).toBeInTheDocument()
       expect(document.getElementById('alert-rules-section')).toBeInTheDocument()
     })
@@ -1110,9 +1281,47 @@ describe('Collapsible Sections', () => {
 
   describe('Two-Column Layout', () => {
     test('two-column grid exists for desktop layout', () => {
-      // This test verifies the component structure exists
-      // The actual two-column layout is tested in the existing tests
-      expect(true).toBe(true)
+      useAuthStore.setState({ role: 'admin' })
+      apiClient.getNotificationPrefs.mockResolvedValue({
+        enabled_alerts: JSON.stringify([]),
+        quiet_hours_enabled: false,
+        digest_enabled: false,
+      })
+      apiClient.getSMTPConfig.mockResolvedValue({ enabled: false })
+      apiClient.api.get.mockResolvedValue({})
+      apiClient.getAlertRules.mockResolvedValue([])
+
+      renderWithProviders(<Settings />)
+
+      // Verify the two-column grid exists (grid-cols-1 lg:grid-cols-2)
+      const gridContainer = document.querySelector('.grid-cols-1')
+      expect(gridContainer).toBeInTheDocument()
+    })
+
+    test('checkbox alignment with input fields in Email Configuration', async () => {
+      useAuthStore.setState({ role: 'admin' })
+      apiClient.getNotificationPrefs.mockResolvedValue({
+        enabled_alerts: JSON.stringify([]),
+        quiet_hours_enabled: false,
+        digest_enabled: false,
+      })
+      apiClient.getSMTPConfig.mockResolvedValue({
+        host: 'smtp.example.com',
+        port: 587,
+        enabled: true,
+      })
+      apiClient.api.get.mockResolvedValue({})
+      apiClient.getAlertRules.mockResolvedValue([])
+
+      renderWithProviders(<Settings />)
+
+      // Verify checkboxes align with input fields (both in same grid)
+      await waitFor(() => {
+        // Use TLS checkbox should be visible
+        expect(screen.getByLabelText('Use TLS')).toBeInTheDocument()
+        // SMTP Host input should be visible
+        expect(screen.getByLabelText('SMTP Host')).toBeInTheDocument()
+      })
     })
   })
 
@@ -1141,6 +1350,30 @@ describe('Collapsible Sections', () => {
       await waitFor(() => {
         expect(screen.getByDisplayValue('Jump to section...')).toBeInTheDocument()
       })
+    })
+
+    test('jump dropdown does not have General option', async () => {
+      useAuthStore.setState({ role: 'admin' })
+      apiClient.getNotificationPrefs.mockResolvedValue({
+        enabled_alerts: JSON.stringify([]),
+        quiet_hours_enabled: false,
+        digest_enabled: false,
+      })
+      apiClient.getSMTPConfig.mockResolvedValue({ enabled: false })
+      apiClient.api.get.mockResolvedValue({})
+      apiClient.getAlertRules.mockResolvedValue([])
+
+      renderWithProviders(<Settings />)
+
+      await waitFor(() => {
+        expect(screen.getByDisplayValue('Jump to section...')).toBeInTheDocument()
+      })
+
+      // Verify "General" option does not exist
+      expect(screen.queryByRole('option', { name: 'General' })).not.toBeInTheDocument()
+
+      // Verify "Email Configuration" option exists (replacing "SMTP Configuration")
+      expect(screen.getByRole('option', { name: 'Email Configuration' })).toBeInTheDocument()
     })
 
     test('jump dropdown is not visible for non-admin users', async () => {

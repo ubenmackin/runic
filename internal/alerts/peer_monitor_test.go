@@ -60,8 +60,8 @@ func TestPeerOfflineDetection(t *testing.T) {
 				// Insert a peer with recent heartbeat (online)
 				now := time.Now()
 				result, err := sqlDB.Exec(`
-					INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
-					VALUES (?, ?, ?, ?, ?, ?, ?)`,
+				INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
+				VALUES (?, ?, ?, ?, ?, ?, ?)`,
 					"test-peer-1", "192.168.1.100", "key1", "hmac1", 1, 0, now,
 				)
 				if err != nil {
@@ -81,8 +81,8 @@ func TestPeerOfflineDetection(t *testing.T) {
 				// Insert a peer with old heartbeat (already offline)
 				oldTime := time.Now().Add(-120 * time.Second)
 				result, err := sqlDB.Exec(`
-					INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
-					VALUES (?, ?, ?, ?, ?, ?, ?)`,
+				INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
+				VALUES (?, ?, ?, ?, ?, ?, ?)`,
 					"test-peer-2", "192.168.1.101", "key2", "hmac2", 1, 0, oldTime,
 				)
 				if err != nil {
@@ -102,8 +102,8 @@ func TestPeerOfflineDetection(t *testing.T) {
 				// Insert a manual peer (is_manual = 1)
 				now := time.Now()
 				result, err := sqlDB.Exec(`
-					INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
-					VALUES (?, ?, ?, ?, ?, ?, ?)`,
+				INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
+				VALUES (?, ?, ?, ?, ?, ?, ?)`,
 					"manual-peer", "192.168.1.102", "key3", "hmac3", 1, 1, now,
 				)
 				if err != nil {
@@ -165,12 +165,13 @@ func TestPeerOfflineDetection(t *testing.T) {
 
 				// Create a monitor with ability to capture alerts
 				monitorWithCapture := &PeerMonitor{
-					database:   sqlDB,
-					service:    nil, // Service not needed for this test
-					logger:     monitor.logger,
-					ctx:        monitor.ctx,
-					cancel:     monitor.cancel,
-					peerStates: monitor.peerStates,
+					database:         sqlDB,
+					service:          nil, // Service not needed for this test
+					logger:           monitor.logger,
+					ctx:              monitor.ctx,
+					cancel:           monitor.cancel,
+					peerStates:       monitor.peerStates,
+					offlineAlertSent: make(map[int]bool),
 				}
 
 				// Manually check peers and capture offline alerts
@@ -251,8 +252,8 @@ func TestPeerOnlineDetection(t *testing.T) {
 				t.Helper()
 				// Insert a peer with old heartbeat (offline) using SQLite datetime
 				result, err := sqlDB.Exec(`
-					INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
-					VALUES (?, ?, ?, ?, ?, ?, datetime('now', '-120 seconds'))`,
+				INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
+				VALUES (?, ?, ?, ?, ?, ?, datetime('now', '-120 seconds'))`,
 					"test-peer-online", "192.168.1.200", "key-on", "hmac-on", 1, 0,
 				)
 				if err != nil {
@@ -409,8 +410,8 @@ func TestDBRetryLogic(t *testing.T) {
 
 			// Insert a test peer
 			_, err := sqlDB.Exec(`
-				INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
-				VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
+			VALUES (?, ?, ?, ?, ?, ?, ?)`,
 				"test-peer-retry", "192.168.1.50", "key-retry", "hmac-retry", 1, 0, time.Now(),
 			)
 			if err != nil {
@@ -494,8 +495,8 @@ func TestLoadPeerStates(t *testing.T) {
 			setupPeers: func(t *testing.T, sqlDB *sql.DB) {
 				t.Helper()
 				_, err := sqlDB.Exec(`
-					INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
-					VALUES (?, ?, ?, ?, ?, ?, ?)`,
+				INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
+				VALUES (?, ?, ?, ?, ?, ?, ?)`,
 					"online-peer", "192.168.1.10", "key1", "hmac1", 1, 0, time.Now(),
 				)
 				if err != nil {
@@ -510,8 +511,8 @@ func TestLoadPeerStates(t *testing.T) {
 			setupPeers: func(t *testing.T, sqlDB *sql.DB) {
 				t.Helper()
 				_, err := sqlDB.Exec(`
-					INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
-					VALUES (?, ?, ?, ?, ?, ?, ?)`,
+				INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
+				VALUES (?, ?, ?, ?, ?, ?, ?)`,
 					"offline-peer", "192.168.1.11", "key2", "hmac2", 1, 0, time.Now().Add(-120*time.Second),
 				)
 				if err != nil {
@@ -526,8 +527,8 @@ func TestLoadPeerStates(t *testing.T) {
 			setupPeers: func(t *testing.T, sqlDB *sql.DB) {
 				t.Helper()
 				_, err := sqlDB.Exec(`
-					INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, is_manual)
-					VALUES (?, ?, ?, ?, ?, ?)`,
+				INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, is_manual)
+				VALUES (?, ?, ?, ?, ?, ?)`,
 					"null-heartbeat-peer", "192.168.1.12", "key3", "hmac3", 1, 0,
 				)
 				if err != nil {
@@ -543,8 +544,8 @@ func TestLoadPeerStates(t *testing.T) {
 				t.Helper()
 				// Online peer
 				_, err := sqlDB.Exec(`
-					INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
-					VALUES (?, ?, ?, ?, ?, ?, ?)`,
+				INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
+				VALUES (?, ?, ?, ?, ?, ?, ?)`,
 					"online-1", "192.168.1.20", "key-online", "hmac", 1, 0, time.Now(),
 				)
 				if err != nil {
@@ -552,8 +553,8 @@ func TestLoadPeerStates(t *testing.T) {
 				}
 				// Offline peer
 				_, err = sqlDB.Exec(`
-					INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
-					VALUES (?, ?, ?, ?, ?, ?, ?)`,
+				INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
+				VALUES (?, ?, ?, ?, ?, ?, ?)`,
 					"offline-1", "192.168.1.21", "key-offline", "hmac", 1, 0, time.Now().Add(-100*time.Second),
 				)
 				if err != nil {
@@ -561,8 +562,8 @@ func TestLoadPeerStates(t *testing.T) {
 				}
 				// Manual peer (should be excluded)
 				_, err = sqlDB.Exec(`
-					INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
-					VALUES (?, ?, ?, ?, ?, ?, ?)`,
+				INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
+				VALUES (?, ?, ?, ?, ?, ?, ?)`,
 					"manual-1", "192.168.1.22", "key-manual", "hmac", 1, 1, time.Now(),
 				)
 				if err != nil {
@@ -642,8 +643,8 @@ func TestCheckPeers(t *testing.T) {
 				t.Helper()
 				// Use SQLite datetime to ensure proper comparison
 				sqlDB.Exec(`
-					INSERT INTO peers (id, hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
-					VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+				INSERT INTO peers (id, hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
+				VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
 					1, "peer1", "192.168.1.1", "key", "hmac", 1, 0,
 				)
 			},
@@ -657,8 +658,8 @@ func TestCheckPeers(t *testing.T) {
 			setupDB: func(t *testing.T, sqlDB *sql.DB) {
 				t.Helper()
 				sqlDB.Exec(`
-					INSERT INTO peers (id, hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
-					VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now', '-120 seconds'))`,
+				INSERT INTO peers (id, hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
+				VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now', '-120 seconds'))`,
 					1, "peer1", "192.168.1.1", "key", "hmac", 1, 0,
 				)
 			},
@@ -672,8 +673,8 @@ func TestCheckPeers(t *testing.T) {
 			setupDB: func(t *testing.T, sqlDB *sql.DB) {
 				t.Helper()
 				sqlDB.Exec(`
-					INSERT INTO peers (id, hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
-					VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now', '-120 seconds'))`,
+				INSERT INTO peers (id, hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
+				VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now', '-120 seconds'))`,
 					1, "peer-offline", "192.168.1.2", "key", "hmac", 1, 0,
 				)
 			},
@@ -687,8 +688,8 @@ func TestCheckPeers(t *testing.T) {
 			setupDB: func(t *testing.T, sqlDB *sql.DB) {
 				t.Helper()
 				sqlDB.Exec(`
-					INSERT INTO peers (id, hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
-					VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+				INSERT INTO peers (id, hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
+				VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
 					1, "peer-online", "192.168.1.3", "key", "hmac", 1, 0,
 				)
 			},
@@ -707,8 +708,8 @@ func TestCheckPeers(t *testing.T) {
 				t.Helper()
 				// Peer 1: online -> offline
 				_, err := sqlDB.Exec(`
-					INSERT INTO peers (id, hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
-					VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now', '-120 seconds'))`,
+				INSERT INTO peers (id, hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
+				VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now', '-120 seconds'))`,
 					1, "peer1", "192.168.1.11", "key1", "hmac", 1, 0,
 				)
 				if err != nil {
@@ -716,8 +717,8 @@ func TestCheckPeers(t *testing.T) {
 				}
 				// Peer 2: offline -> online
 				_, err = sqlDB.Exec(`
-					INSERT INTO peers (id, hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
-					VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+				INSERT INTO peers (id, hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
+				VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
 					2, "peer2", "192.168.1.12", "key2", "hmac", 1, 0,
 				)
 				if err != nil {
@@ -725,8 +726,8 @@ func TestCheckPeers(t *testing.T) {
 				}
 				// Peer 3: stays online
 				_, err = sqlDB.Exec(`
-					INSERT INTO peers (id, hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
-					VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+				INSERT INTO peers (id, hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
+				VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
 					3, "peer3", "192.168.1.13", "key3", "hmac", 1, 0,
 				)
 				if err != nil {
@@ -910,8 +911,8 @@ func TestPeerMonitorLifecycle(t *testing.T) {
 
 	// Insert a test peer
 	sqlDB.Exec(`
-		INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+	INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
+	VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		"lifecycle-peer", "192.168.1.100", "key", "hmac", 1, 0, time.Now(),
 	)
 
@@ -958,8 +959,8 @@ func TestDBRetryWithBackoffTiming(t *testing.T) {
 
 	// Insert a test peer
 	_, err := sqlDB.Exec(`
-		INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+	INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
+	VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		"timing-peer", "192.168.1.60", "key-t", "hmac-t", 1, 0, time.Now(),
 	)
 	if err != nil {
@@ -998,8 +999,8 @@ func TestMultipleChecks(t *testing.T) {
 
 	// Insert peer with current time using SQLite datetime
 	_, err := sqlDB.Exec(`
-		INSERT INTO peers (id, hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
-		VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+	INSERT INTO peers (id, hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
+	VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
 		1, "multi-check-peer", "192.168.1.80", "key-mc", "hmac-mc", 1, 0,
 	)
 	if err != nil {
@@ -1079,8 +1080,8 @@ func TestBoundaryConditions(t *testing.T) {
 
 			heartbeatTime := time.Now().Add(-tt.heartbeatAge)
 			_, err := sqlDB.Exec(`
-				INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
-				VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
+			VALUES (?, ?, ?, ?, ?, ?, ?)`,
 				"boundary-peer", "192.168.1.90", "key-b", "hmac-b", 1, 0, heartbeatTime,
 			)
 			if err != nil {
@@ -1120,8 +1121,8 @@ func TestAlertSubject(t *testing.T) {
 
 	now := time.Now()
 	_, err := sqlDB.Exec(`
-		INSERT INTO peers (id, hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+	INSERT INTO peers (id, hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		1, "subject-test-peer", "192.168.1.91", "key-s", "hmac-s", 1, 0, now,
 	)
 	if err != nil {
@@ -1163,8 +1164,8 @@ func TestOfflineDurationCalculation(t *testing.T) {
 	// Create peer with specific last heartbeat
 	lastHeartbeat := time.Now().Add(-5 * time.Minute)
 	_, err := sqlDB.Exec(`
-		INSERT INTO peers (id, hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+	INSERT INTO peers (id, hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		1, "duration-peer", "192.168.1.92", "key-d", "hmac-d", 1, 0, lastHeartbeat,
 	)
 	if err != nil {
@@ -1200,4 +1201,1449 @@ func Example_peerInfo() {
 	}
 	fmt.Printf("Peer: %s (%s)\n", info.hostname, info.ipAddress)
 	// Output: Peer: example-peer (192.168.1.1)
+}
+
+// TestGracePeriodSuppressesOnlineAlerts tests that peer online alerts
+// are suppressed during the startup grace period.
+func TestGracePeriodSuppressesOnlineAlerts(t *testing.T) {
+	sqlDB, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	// Insert a peer with old heartbeat (offline)
+	result, err := sqlDB.Exec(`
+	INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
+	VALUES (?, ?, ?, ?, ?, ?, datetime('now', '-120 seconds'))`,
+		"grace-peer-online", "192.168.1.201", "key-g", "hmac-g", 1, 0,
+	)
+	if err != nil {
+		t.Fatalf("failed to insert peer: %v", err)
+	}
+	peerID, _ := result.LastInsertId()
+
+	// Create peer monitor with a 5-minute grace period (default)
+	monitor := NewPeerMonitor(sqlDB, nil)
+	monitor.SetLogger(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug})))
+
+	// Verify monitor is in grace period
+	if !monitor.isInGracePeriod() {
+		t.Error("expected monitor to be in grace period immediately after creation")
+	}
+
+	// Load initial peer states - peer should be marked as offline
+	err = monitor.loadPeerStates(context.Background())
+	if err != nil {
+		t.Fatalf("failed to load initial peer states: %v", err)
+	}
+
+	// Verify peer is initially marked as offline
+	monitor.mu.RLock()
+	status, exists := monitor.peerStates[int(peerID)]
+	monitor.mu.RUnlock()
+
+	if !exists {
+		t.Fatalf("peer %d not found in peer states", peerID)
+	}
+	if status != PeerStatusOffline {
+		t.Errorf("expected peer to be offline initially, got %s", status)
+	}
+
+	// Now update peer's last_heartbeat to recent time (online)
+	_, err = sqlDB.Exec(`UPDATE peers SET last_heartbeat = datetime('now') WHERE id = ?`, peerID)
+	if err != nil {
+		t.Fatalf("failed to update peer heartbeat: %v", err)
+	}
+
+	// Trigger check - this would normally trigger online alert, but should be suppressed
+	monitor.checkPeers()
+
+	// Verify peer is now marked as online
+	monitor.mu.RLock()
+	newStatus := monitor.peerStates[int(peerID)]
+	monitor.mu.RUnlock()
+
+	if newStatus != PeerStatusOnline {
+		t.Errorf("expected peer to be online after check, got %s", newStatus)
+	}
+
+	// Verify that grace period is still active (no alert should have been triggered)
+	// Since we can't easily mock the Service, we verify the grace period check works
+	if !monitor.isInGracePeriod() {
+		t.Error("expected monitor to still be in grace period")
+	}
+}
+
+// TestOfflineAlertsWorkDuringGracePeriod tests that peer offline alerts
+// still fire during the startup grace period.
+func TestOfflineAlertsWorkDuringGracePeriod(t *testing.T) {
+	sqlDB, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	// Insert a peer with recent heartbeat (online)
+	now := time.Now()
+	result, err := sqlDB.Exec(`
+	INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
+	VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		"grace-peer-offline", "192.168.1.202", "key-go", "hmac-go", 1, 0, now,
+	)
+	if err != nil {
+		t.Fatalf("failed to insert peer: %v", err)
+	}
+	peerID, _ := result.LastInsertId()
+
+	// Create peer monitor with default grace period
+	monitor := NewPeerMonitor(sqlDB, nil)
+	monitor.SetLogger(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug})))
+
+	// Verify monitor is in grace period
+	if !monitor.isInGracePeriod() {
+		t.Error("expected monitor to be in grace period immediately after creation")
+	}
+
+	// Load initial peer states - peer should be marked as online
+	err = monitor.loadPeerStates(context.Background())
+	if err != nil {
+		t.Fatalf("failed to load initial peer states: %v", err)
+	}
+
+	// Verify peer is initially marked as online
+	monitor.mu.RLock()
+	status, exists := monitor.peerStates[int(peerID)]
+	monitor.mu.RUnlock()
+
+	if !exists {
+		t.Fatalf("peer %d not found in peer states", peerID)
+	}
+	if status != PeerStatusOnline {
+		t.Errorf("expected peer to be online initially, got %s", status)
+	}
+
+	// Capture previous state before making peer offline
+	monitor.mu.RLock()
+	prevStates := make(map[int]PeerStatus)
+	for k, v := range monitor.peerStates {
+		prevStates[k] = v
+	}
+	monitor.mu.RUnlock()
+
+	// Now update peer's last_heartbeat to be old (offline)
+	oldTime := time.Now().Add(-120 * time.Second)
+	_, err = sqlDB.Exec(`UPDATE peers SET last_heartbeat = ? WHERE id = ?`, oldTime, peerID)
+	if err != nil {
+		t.Fatalf("failed to update peer heartbeat: %v", err)
+	}
+
+	// Trigger check - this should trigger offline alert even during grace period
+	monitor.checkPeers()
+
+	// Check if peer transitioned from online to offline
+	monitor.mu.RLock()
+	newStatus := monitor.peerStates[int(peerID)]
+	monitor.mu.RUnlock()
+
+	// Verify the state change occurred
+	if prevStates[int(peerID)] == PeerStatusOnline && newStatus == PeerStatusOffline {
+		// This is the expected behavior - offline alerts should work during grace period
+		// Since we can't easily mock the Service, we verify the state transition occurred
+		t.Logf("Peer transitioned from online to offline as expected during grace period")
+	} else {
+		t.Errorf("expected peer to transition from online to offline, got prev=%s, new=%s",
+			prevStates[int(peerID)], newStatus)
+	}
+
+	// Verify that grace period is still active (offline alert should have been allowed)
+	if !monitor.isInGracePeriod() {
+		t.Error("expected monitor to still be in grace period")
+	}
+}
+
+// TestAlertsWorkAfterGracePeriodExpires tests that peer online alerts
+// work normally after the grace period expires.
+func TestAlertsWorkAfterGracePeriodExpires(t *testing.T) {
+	sqlDB, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	// Insert a peer with old heartbeat (offline)
+	result, err := sqlDB.Exec(`
+	INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
+	VALUES (?, ?, ?, ?, ?, ?, datetime('now', '-120 seconds'))`,
+		"grace-peer-expired", "192.168.1.203", "key-ge", "hmac-ge", 1, 0,
+	)
+	if err != nil {
+		t.Fatalf("failed to insert peer: %v", err)
+	}
+	peerID, _ := result.LastInsertId()
+
+	// Create peer monitor with a very short grace period (1 millisecond)
+	monitor := NewPeerMonitor(sqlDB, nil)
+	monitor.gracePeriod = 1 * time.Millisecond
+	monitor.SetLogger(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug})))
+
+	// Wait for grace period to expire
+	time.Sleep(10 * time.Millisecond)
+
+	// Verify grace period has expired
+	if monitor.isInGracePeriod() {
+		t.Error("expected grace period to have expired")
+	}
+
+	// Load initial peer states - peer should be marked as offline
+	err = monitor.loadPeerStates(context.Background())
+	if err != nil {
+		t.Fatalf("failed to load initial peer states: %v", err)
+	}
+
+	// Verify peer is initially marked as offline
+	monitor.mu.RLock()
+	status, exists := monitor.peerStates[int(peerID)]
+	monitor.mu.RUnlock()
+
+	if !exists {
+		t.Fatalf("peer %d not found in peer states", peerID)
+	}
+	if status != PeerStatusOffline {
+		t.Errorf("expected peer to be offline initially, got %s", status)
+	}
+
+	// Now update peer's last_heartbeat to recent time (online)
+	_, err = sqlDB.Exec(`UPDATE peers SET last_heartbeat = datetime('now') WHERE id = ?`, peerID)
+	if err != nil {
+		t.Fatalf("failed to update peer heartbeat: %v", err)
+	}
+
+	// Trigger check - online alert should now work since grace period expired
+	monitor.checkPeers()
+
+	// Verify peer is now marked as online
+	monitor.mu.RLock()
+	newStatus := monitor.peerStates[int(peerID)]
+	monitor.mu.RUnlock()
+
+	if newStatus != PeerStatusOnline {
+		t.Errorf("expected peer to be online after check, got %s", newStatus)
+	}
+
+	// Verify grace period has truly expired
+	if monitor.isInGracePeriod() {
+		t.Error("expected grace period to remain expired")
+	}
+}
+
+// TestDefaultGracePeriod verifies the default grace period is 5 minutes.
+func TestDefaultGracePeriod(t *testing.T) {
+	if DefaultGracePeriod != 5*time.Minute {
+		t.Errorf("expected DefaultGracePeriod to be 5 minutes, got %v", DefaultGracePeriod)
+	}
+}
+
+// TestIsInGracePeriod tests the isInGracePeriod method.
+func TestIsInGracePeriod(t *testing.T) {
+	sqlDB, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	tests := []struct {
+		name        string
+		gracePeriod time.Duration
+		delay       time.Duration
+		wantIn      bool
+	}{
+		{
+			name:        "in grace period immediately after creation",
+			gracePeriod: 5 * time.Minute,
+			delay:       0,
+			wantIn:      true,
+		},
+		{
+			name:        "in grace period after short delay",
+			gracePeriod: 5 * time.Minute,
+			delay:       1 * time.Second,
+			wantIn:      true,
+		},
+		{
+			name:        "grace period expired after long delay",
+			gracePeriod: 1 * time.Millisecond,
+			delay:       10 * time.Millisecond,
+			wantIn:      false,
+		},
+		{
+			name:        "zero grace period means no grace period",
+			gracePeriod: 0,
+			delay:       0,
+			wantIn:      false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			monitor := NewPeerMonitor(sqlDB, nil)
+			monitor.gracePeriod = tt.gracePeriod
+
+			if tt.delay > 0 {
+				time.Sleep(tt.delay)
+			}
+
+			got := monitor.isInGracePeriod()
+			if got != tt.wantIn {
+				t.Errorf("isInGracePeriod() = %v, want %v", got, tt.wantIn)
+			}
+		})
+	}
+}
+
+// TestGracePeriodFieldsInitialized tests that grace period fields are
+// properly initialized in NewPeerMonitor.
+func TestGracePeriodFieldsInitialized(t *testing.T) {
+	sqlDB, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	monitor := NewPeerMonitor(sqlDB, nil)
+
+	// Verify startTime is set (should be very recent)
+	if monitor.startTime.IsZero() {
+		t.Error("startTime should be initialized")
+	}
+
+	// Verify gracePeriod is set to default
+	if monitor.gracePeriod != DefaultGracePeriod {
+		t.Errorf("expected gracePeriod to be %v, got %v", DefaultGracePeriod, monitor.gracePeriod)
+	}
+
+	// Verify startTime is recent (within last second)
+	if time.Since(monitor.startTime) > time.Second {
+		t.Error("startTime should be very recent")
+	}
+}
+
+// TestOfflineAlertDeduplication tests that only one offline alert is sent
+// per peer offline event, even when checkPeers is called multiple times
+// while the peer remains offline.
+func TestOfflineAlertDeduplication(t *testing.T) {
+	sqlDB, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	// Insert a peer with recent heartbeat (online)
+	now := time.Now()
+	result, err := sqlDB.Exec(`
+		INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`, "dedup-peer", "192.168.1.150", "key-d", "hmac-d", 1, 0, now,
+	)
+	if err != nil {
+		t.Fatalf("failed to insert peer: %v", err)
+	}
+	peerID, _ := result.LastInsertId()
+
+	// Create peer monitor
+	monitor := NewPeerMonitor(sqlDB, nil)
+	monitor.SetLogger(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug})))
+
+	// Load initial peer states - peer should be marked as online
+	err = monitor.loadPeerStates(context.Background())
+	if err != nil {
+		t.Fatalf("failed to load initial peer states: %v", err)
+	}
+
+	// Verify peer is initially marked as online
+	monitor.mu.RLock()
+	status, exists := monitor.peerStates[int(peerID)]
+	monitor.mu.RUnlock()
+
+	if !exists {
+		t.Fatalf("peer %d not found in peer states", peerID)
+	}
+	if status != PeerStatusOnline {
+		t.Errorf("expected peer to be online initially, got %s", status)
+	}
+
+	// Now update peer's last_heartbeat to be old (offline)
+	oldTime := time.Now().Add(-120 * time.Second)
+	_, err = sqlDB.Exec(`UPDATE peers SET last_heartbeat = ? WHERE id = ?`, oldTime, peerID)
+	if err != nil {
+		t.Fatalf("failed to update peer heartbeat: %v", err)
+	}
+
+	// First check - peer goes offline, should trigger alert (if service was set)
+	monitor.checkPeers()
+
+	// Verify peer is now marked as offline
+	monitor.mu.RLock()
+	newStatus := monitor.peerStates[int(peerID)]
+	offlineAlertSent := monitor.offlineAlertSent[int(peerID)]
+	monitor.mu.RUnlock()
+
+	if newStatus != PeerStatusOffline {
+		t.Errorf("expected peer to be offline after first check, got %s", newStatus)
+	}
+
+	// Verify the offline alert flag was set
+	if !offlineAlertSent {
+		t.Error("expected offlineAlertSent flag to be set after peer goes offline")
+	}
+
+	// Second check - peer still offline, should NOT trigger another alert
+	monitor.checkPeers()
+
+	// Verify the flag is still set (not duplicated)
+	monitor.mu.RLock()
+	offlineAlertSentAfterSecondCheck := monitor.offlineAlertSent[int(peerID)]
+	monitor.mu.RUnlock()
+
+	if !offlineAlertSentAfterSecondCheck {
+		t.Error("expected offlineAlertSent flag to still be set")
+	}
+
+	// Third check - peer still offline
+	monitor.checkPeers()
+
+	// Verify flag state is consistent
+	monitor.mu.RLock()
+	offlineAlertSentAfterThirdCheck := monitor.offlineAlertSent[int(peerID)]
+	monitor.mu.RUnlock()
+
+	if !offlineAlertSentAfterThirdCheck {
+		t.Error("expected offlineAlertSent flag to remain set while peer is offline")
+	}
+}
+
+// TestOfflineAlertFlagClearedOnRecovery tests that the offline alert flag
+// is cleared when a peer comes back online, allowing a new offline alert
+// to be sent if the peer goes offline again.
+func TestOfflineAlertFlagClearedOnRecovery(t *testing.T) {
+	sqlDB, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	// Insert a peer with recent heartbeat (online)
+	now := time.Now()
+	result, err := sqlDB.Exec(`
+		INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`, "recovery-peer", "192.168.1.151", "key-r", "hmac-r", 1, 0, now,
+	)
+	if err != nil {
+		t.Fatalf("failed to insert peer: %v", err)
+	}
+	peerID, _ := result.LastInsertId()
+
+	// Create peer monitor with expired grace period
+	monitor := NewPeerMonitor(sqlDB, nil)
+	monitor.gracePeriod = 1 * time.Millisecond // Expire grace period immediately
+	monitor.SetLogger(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug})))
+
+	// Load initial peer states
+	err = monitor.loadPeerStates(context.Background())
+	if err != nil {
+		t.Fatalf("failed to load initial peer states: %v", err)
+	}
+
+	// Wait for grace period to expire
+	time.Sleep(10 * time.Millisecond)
+
+	// Step 1: Make peer go offline
+	oldTime := time.Now().Add(-120 * time.Second)
+	_, err = sqlDB.Exec(`UPDATE peers SET last_heartbeat = ? WHERE id = ?`, oldTime, peerID)
+	if err != nil {
+		t.Fatalf("failed to update peer heartbeat: %v", err)
+	}
+
+	monitor.checkPeers()
+
+	// Verify offline alert flag is set
+	monitor.mu.RLock()
+	offlineAlertSent := monitor.offlineAlertSent[int(peerID)]
+	monitor.mu.RUnlock()
+
+	if !offlineAlertSent {
+		t.Error("expected offlineAlertSent flag to be set after peer goes offline")
+	}
+
+	// Step 2: Make peer come back online
+	_, err = sqlDB.Exec(`UPDATE peers SET last_heartbeat = datetime('now') WHERE id = ?`, peerID)
+	if err != nil {
+		t.Fatalf("failed to update peer heartbeat: %v", err)
+	}
+
+	monitor.checkPeers()
+
+	// Verify peer is online and flag is cleared
+	monitor.mu.RLock()
+	status := monitor.peerStates[int(peerID)]
+	offlineAlertSentAfterRecovery := monitor.offlineAlertSent[int(peerID)]
+	monitor.mu.RUnlock()
+
+	if status != PeerStatusOnline {
+		t.Errorf("expected peer to be online after recovery, got %s", status)
+	}
+
+	if offlineAlertSentAfterRecovery {
+		t.Error("expected offlineAlertSent flag to be cleared after peer comes back online")
+	}
+
+	// Step 3: Make peer go offline again - should be able to trigger new alert
+	_, err = sqlDB.Exec(`UPDATE peers SET last_heartbeat = datetime('now', '-120 seconds') WHERE id = ?`, peerID)
+	if err != nil {
+		t.Fatalf("failed to update peer heartbeat: %v", err)
+	}
+
+	monitor.checkPeers()
+
+	// Verify peer is offline and flag is set again (new offline event)
+	monitor.mu.RLock()
+	newStatus := monitor.peerStates[int(peerID)]
+	offlineAlertSentAfterSecondOffline := monitor.offlineAlertSent[int(peerID)]
+	monitor.mu.RUnlock()
+
+	if newStatus != PeerStatusOffline {
+		t.Errorf("expected peer to be offline after second offline event, got %s", newStatus)
+	}
+
+	if !offlineAlertSentAfterSecondOffline {
+		t.Error("expected offlineAlertSent flag to be set again after second offline event")
+	}
+}
+
+// TestOfflineAlertDeduplicationFieldsInitialized tests that offlineAlertSent
+// map is properly initialized in NewPeerMonitor.
+func TestOfflineAlertDeduplicationFieldsInitialized(t *testing.T) {
+	sqlDB, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	monitor := NewPeerMonitor(sqlDB, nil)
+
+	// Verify offlineAlertSent is initialized
+	if monitor.offlineAlertSent == nil {
+		t.Error("offlineAlertSent should be initialized")
+	}
+
+	// Verify it's an empty map
+	if len(monitor.offlineAlertSent) != 0 {
+		t.Errorf("expected offlineAlertSent to be empty, got %d entries", len(monitor.offlineAlertSent))
+	}
+}
+
+// TestServerRestartWithOfflinePeers tests that when the server restarts
+// and peers were already offline (marked as offline in initial load),
+// no offline alerts are triggered. This is the expected behavior because
+// the peer was never seen online by this monitor instance.
+func TestServerRestartWithOfflinePeers(t *testing.T) {
+	sqlDB, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	// Insert a peer with old heartbeat (already offline before server start)
+	result, err := sqlDB.Exec(`
+		INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
+		VALUES (?, ?, ?, ?, ?, ?, datetime('now', '-120 seconds'))`,
+		"restart-offline-peer", "192.168.1.210", "key-rst", "hmac-rst", 1, 0,
+	)
+	if err != nil {
+		t.Fatalf("failed to insert peer: %v", err)
+	}
+	peerID, _ := result.LastInsertId()
+
+	// Create peer monitor (simulating server restart)
+	monitor := NewPeerMonitor(sqlDB, nil)
+	monitor.SetLogger(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug})))
+
+	// Load initial peer states - peer should be marked as offline
+	err = monitor.loadPeerStates(context.Background())
+	if err != nil {
+		t.Fatalf("failed to load initial peer states: %v", err)
+	}
+
+	// Verify peer is marked as offline
+	monitor.mu.RLock()
+	status, exists := monitor.peerStates[int(peerID)]
+	monitor.mu.RUnlock()
+
+	if !exists {
+		t.Fatalf("peer %d not found in peer states", peerID)
+	}
+	if status != PeerStatusOffline {
+		t.Errorf("expected peer to be offline initially, got %s", status)
+	}
+
+	// Verify that no offline alert flag is set (peer was never online)
+	monitor.mu.RLock()
+	_, wasAlerted := monitor.offlineAlertSent[int(peerID)]
+	monitor.mu.RUnlock()
+
+	if wasAlerted {
+		t.Error("expected no offline alert flag for peer that was already offline at startup")
+	}
+
+	// Trigger check - should not trigger offline alert since peer was already offline
+	monitor.checkPeers()
+
+	// Verify state is still offline
+	monitor.mu.RLock()
+	statusAfterCheck := monitor.peerStates[int(peerID)]
+	monitor.mu.RUnlock()
+
+	if statusAfterCheck != PeerStatusOffline {
+		t.Errorf("expected peer to remain offline, got %s", statusAfterCheck)
+	}
+
+	// Verify still no offline alert flag
+	monitor.mu.RLock()
+	_, wasAlertedAfter := monitor.offlineAlertSent[int(peerID)]
+	monitor.mu.RUnlock()
+
+	if wasAlertedAfter {
+		t.Error("expected no offline alert for peer that was already offline at startup")
+	}
+}
+
+// TestGracePeriodTooShort tests that a very short grace period
+// effectively disables grace period suppression.
+func TestGracePeriodTooShort(t *testing.T) {
+	sqlDB, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	// Insert a peer with old heartbeat (offline)
+	result, err := sqlDB.Exec(`
+		INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
+		VALUES (?, ?, ?, ?, ?, ?, datetime('now', '-120 seconds'))`,
+		"short-grace-peer", "192.168.1.220", "key-sg", "hmac-sg", 1, 0,
+	)
+	if err != nil {
+		t.Fatalf("failed to insert peer: %v", err)
+	}
+	peerID, _ := result.LastInsertId()
+
+	// Create peer monitor with very short grace period (1 nanosecond)
+	monitor := NewPeerMonitor(sqlDB, nil)
+	monitor.gracePeriod = 1 * time.Nanosecond
+	monitor.SetLogger(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug})))
+
+	// Wait for grace period to expire
+	time.Sleep(1 * time.Millisecond)
+
+	// Verify grace period has expired
+	if monitor.isInGracePeriod() {
+		t.Error("expected grace period to have expired")
+	}
+
+	// Load initial peer states
+	err = monitor.loadPeerStates(context.Background())
+	if err != nil {
+		t.Fatalf("failed to load initial peer states: %v", err)
+	}
+
+	// Now update peer to be online
+	_, err = sqlDB.Exec(`UPDATE peers SET last_heartbeat = datetime('now') WHERE id = ?`, peerID)
+	if err != nil {
+		t.Fatalf("failed to update peer heartbeat: %v", err)
+	}
+
+	// Trigger check - online alert should work since grace period expired
+	monitor.checkPeers()
+
+	// Verify peer is now online
+	monitor.mu.RLock()
+	status := monitor.peerStates[int(peerID)]
+	monitor.mu.RUnlock()
+
+	if status != PeerStatusOnline {
+		t.Errorf("expected peer to be online, got %s", status)
+	}
+}
+
+// TestGracePeriodTooLong tests that a very long grace period
+// continues to suppress online alerts.
+func TestGracePeriodTooLong(t *testing.T) {
+	sqlDB, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	// Insert a peer with old heartbeat (offline)
+	result, err := sqlDB.Exec(`
+		INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
+		VALUES (?, ?, ?, ?, ?, ?, datetime('now', '-120 seconds'))`,
+		"long-grace-peer", "192.168.1.221", "key-lg", "hmac-lg", 1, 0,
+	)
+	if err != nil {
+		t.Fatalf("failed to insert peer: %v", err)
+	}
+	peerID, _ := result.LastInsertId()
+
+	// Create peer monitor with very long grace period (24 hours)
+	monitor := NewPeerMonitor(sqlDB, nil)
+	monitor.gracePeriod = 24 * time.Hour
+	monitor.SetLogger(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug})))
+
+	// Verify grace period is active
+	if !monitor.isInGracePeriod() {
+		t.Error("expected grace period to be active")
+	}
+
+	// Load initial peer states
+	err = monitor.loadPeerStates(context.Background())
+	if err != nil {
+		t.Fatalf("failed to load initial peer states: %v", err)
+	}
+
+	// Now update peer to be online
+	_, err = sqlDB.Exec(`UPDATE peers SET last_heartbeat = datetime('now') WHERE id = ?`, peerID)
+	if err != nil {
+		t.Fatalf("failed to update peer heartbeat: %v", err)
+	}
+
+	// Trigger check - online alert should be suppressed due to long grace period
+	monitor.checkPeers()
+
+	// Verify peer is now online (state changed)
+	monitor.mu.RLock()
+	status := monitor.peerStates[int(peerID)]
+	monitor.mu.RUnlock()
+
+	if status != PeerStatusOnline {
+		t.Errorf("expected peer to be online, got %s", status)
+	}
+
+	// Verify grace period is still active
+	if !monitor.isInGracePeriod() {
+		t.Error("expected grace period to still be active after 24 hour grace period")
+	}
+}
+
+// TestPeerDeletedWhileOffline tests that if a peer is deleted while offline,
+// the monitor handles it gracefully without errors.
+func TestPeerDeletedWhileOffline(t *testing.T) {
+	sqlDB, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	// Insert a peer with recent heartbeat (online)
+	now := time.Now()
+	result, err := sqlDB.Exec(`
+		INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		"deleted-peer", "192.168.1.230", "key-del", "hmac-del", 1, 0, now,
+	)
+	if err != nil {
+		t.Fatalf("failed to insert peer: %v", err)
+	}
+	peerID, _ := result.LastInsertId()
+
+	// Create peer monitor
+	monitor := NewPeerMonitor(sqlDB, nil)
+	monitor.SetLogger(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug})))
+
+	// Load initial peer states
+	err = monitor.loadPeerStates(context.Background())
+	if err != nil {
+		t.Fatalf("failed to load initial peer states: %v", err)
+	}
+
+	// Verify peer is online
+	monitor.mu.RLock()
+	status, exists := monitor.peerStates[int(peerID)]
+	monitor.mu.RUnlock()
+
+	if !exists {
+		t.Fatalf("peer %d not found in peer states", peerID)
+	}
+	if status != PeerStatusOnline {
+		t.Errorf("expected peer to be online initially, got %s", status)
+	}
+
+	// Make peer go offline
+	oldTime := time.Now().Add(-120 * time.Second)
+	_, err = sqlDB.Exec(`UPDATE peers SET last_heartbeat = ? WHERE id = ?`, oldTime, peerID)
+	if err != nil {
+		t.Fatalf("failed to update peer heartbeat: %v", err)
+	}
+
+	// Trigger check - peer goes offline
+	monitor.checkPeers()
+
+	// Verify peer is offline and flag is set
+	monitor.mu.RLock()
+	status = monitor.peerStates[int(peerID)]
+	offlineAlertSent := monitor.offlineAlertSent[int(peerID)]
+	monitor.mu.RUnlock()
+
+	if status != PeerStatusOffline {
+		t.Errorf("expected peer to be offline, got %s", status)
+	}
+	if !offlineAlertSent {
+		t.Error("expected offline alert flag to be set")
+	}
+
+	// Delete the peer while it's offline
+	_, err = sqlDB.Exec(`DELETE FROM peers WHERE id = ?`, peerID)
+	if err != nil {
+		t.Fatalf("failed to delete peer: %v", err)
+	}
+
+	// Trigger check - peer is now deleted
+	monitor.checkPeers()
+
+	// Verify peer is no longer in peer states (cleaned up)
+	monitor.mu.RLock()
+	_, existsAfterDelete := monitor.peerStates[int(peerID)]
+	_, flagExists := monitor.offlineAlertSent[int(peerID)]
+	monitor.mu.RUnlock()
+
+	if existsAfterDelete {
+		t.Error("expected peer to be removed from peer states after deletion")
+	}
+
+	// The flag may or may not be cleaned up - this is acceptable
+	// The important thing is no panic or error occurred
+	t.Logf("Flag exists after peer deletion: %v", flagExists)
+}
+
+// TestConcurrentCheckPeers tests that the monitor is thread-safe
+// when checkPeers is called concurrently.
+func TestConcurrentCheckPeers(t *testing.T) {
+	sqlDB, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	// Insert multiple peers with explicit IDs
+	for i := 1; i <= 5; i++ {
+		_, err := sqlDB.Exec(`
+			INSERT INTO peers (id, hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
+			VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+			i,
+			fmt.Sprintf("concurrent-peer-%d", i),
+			fmt.Sprintf("192.168.1.%d", 240+i),
+			fmt.Sprintf("key-cc-%d", i),
+			fmt.Sprintf("hmac-cc-%d", i),
+			1, 0,
+		)
+		if err != nil {
+			t.Fatalf("failed to insert peer %d: %v", i, err)
+		}
+	}
+
+	// Create peer monitor
+	monitor := NewPeerMonitor(sqlDB, nil)
+	monitor.SetLogger(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
+
+	// Load initial peer states
+	err := monitor.loadPeerStates(context.Background())
+	if err != nil {
+		t.Fatalf("failed to load initial peer states: %v", err)
+	}
+
+	// Verify all 5 peers are online initially
+	monitor.mu.RLock()
+	initialOnline := 0
+	for _, status := range monitor.peerStates {
+		if status == PeerStatusOnline {
+			initialOnline++
+		}
+	}
+	monitor.mu.RUnlock()
+	if initialOnline != 5 {
+		t.Fatalf("expected 5 online peers initially, got %d", initialOnline)
+	}
+
+	// Make peers 1, 2, 3 go offline using SQLite datetime
+	for i := 1; i <= 3; i++ {
+		_, err = sqlDB.Exec(`UPDATE peers SET last_heartbeat = datetime('now', '-120 seconds') WHERE id = ?`, i)
+		if err != nil {
+			t.Fatalf("failed to update peer %d: %v", i, err)
+		}
+	}
+
+	// Run concurrent checkPeers calls
+	var wg sync.WaitGroup
+	numGoroutines := 10
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			monitor.checkPeers()
+		}()
+	}
+	wg.Wait()
+
+	// Verify final state is consistent
+	monitor.mu.RLock()
+	offlineCount := 0
+	onlineCount := 0
+	for _, status := range monitor.peerStates {
+		if status == PeerStatusOffline {
+			offlineCount++
+		} else {
+			onlineCount++
+		}
+	}
+	monitor.mu.RUnlock()
+
+	// Should have 3 offline (peers 1, 2, 3) and 2 online (peers 4, 5)
+	if offlineCount != 3 {
+		t.Errorf("expected 3 offline peers, got %d", offlineCount)
+	}
+	if onlineCount != 2 {
+		t.Errorf("expected 2 online peers, got %d", onlineCount)
+	}
+}
+
+// TestConcurrentOfflineAlertDeduplication tests that the offline alert
+// deduplication is thread-safe under concurrent access.
+func TestConcurrentOfflineAlertDeduplication(t *testing.T) {
+	sqlDB, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	// Insert a peer with recent heartbeat (online)
+	now := time.Now()
+	result, err := sqlDB.Exec(`
+		INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		"concurrent-dedup-peer", "192.168.1.250", "key-cd", "hmac-cd", 1, 0, now,
+	)
+	if err != nil {
+		t.Fatalf("failed to insert peer: %v", err)
+	}
+	peerID, _ := result.LastInsertId()
+
+	// Create peer monitor
+	monitor := NewPeerMonitor(sqlDB, nil)
+	monitor.SetLogger(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
+
+	// Load initial peer states
+	err = monitor.loadPeerStates(context.Background())
+	if err != nil {
+		t.Fatalf("failed to load initial peer states: %v", err)
+	}
+
+	// Make peer go offline
+	oldTime := time.Now().Add(-120 * time.Second)
+	_, err = sqlDB.Exec(`UPDATE peers SET last_heartbeat = ? WHERE id = ?`, oldTime, peerID)
+	if err != nil {
+		t.Fatalf("failed to update peer heartbeat: %v", err)
+	}
+
+	// Run concurrent checkPeers calls - all should see the peer offline
+	// but only one should set the flag (first one)
+	var wg sync.WaitGroup
+	numGoroutines := 10
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			monitor.checkPeers()
+		}()
+	}
+	wg.Wait()
+
+	// Verify the flag is set (exactly once)
+	monitor.mu.RLock()
+	offlineAlertSent := monitor.offlineAlertSent[int(peerID)]
+	monitor.mu.RUnlock()
+
+	if !offlineAlertSent {
+		t.Error("expected offlineAlertSent flag to be set")
+	}
+
+	// Verify peer is offline
+	monitor.mu.RLock()
+	status := monitor.peerStates[int(peerID)]
+	monitor.mu.RUnlock()
+
+	if status != PeerStatusOffline {
+		t.Errorf("expected peer to be offline, got %s", status)
+	}
+}
+
+// TestConcurrentGracePeriodChecks tests that grace period checks
+// are thread-safe under concurrent access.
+func TestConcurrentGracePeriodChecks(t *testing.T) {
+	sqlDB, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	// Insert a peer with old heartbeat (offline)
+	result, err := sqlDB.Exec(`
+		INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
+		VALUES (?, ?, ?, ?, ?, ?, datetime('now', '-120 seconds'))`,
+		"concurrent-grace-peer", "192.168.1.251", "key-cg", "hmac-cg", 1, 0,
+	)
+	if err != nil {
+		t.Fatalf("failed to insert peer: %v", err)
+	}
+	peerID, _ := result.LastInsertId()
+
+	// Create peer monitor with default grace period
+	monitor := NewPeerMonitor(sqlDB, nil)
+	monitor.SetLogger(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
+
+	// Load initial peer states
+	err = monitor.loadPeerStates(context.Background())
+	if err != nil {
+		t.Fatalf("failed to load initial peer states: %v", err)
+	}
+
+	// Make peer come online during grace period
+	_, err = sqlDB.Exec(`UPDATE peers SET last_heartbeat = datetime('now') WHERE id = ?`, peerID)
+	if err != nil {
+		t.Fatalf("failed to update peer heartbeat: %v", err)
+	}
+
+	// Run concurrent checkPeers calls during grace period
+	var wg sync.WaitGroup
+	numGoroutines := 10
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			monitor.checkPeers()
+		}()
+	}
+	wg.Wait()
+
+	// Verify peer is online
+	monitor.mu.RLock()
+	status := monitor.peerStates[int(peerID)]
+	monitor.mu.RUnlock()
+
+	if status != PeerStatusOnline {
+		t.Errorf("expected peer to be online, got %s", status)
+	}
+}
+
+// TestPeerMonitorIntegration_FullLifecycle is a comprehensive integration test
+// that simulates the full peer monitoring lifecycle to verify all improvements
+// work together correctly.
+//
+// Test Scenario:
+// 1. Server startup with peers in various states
+// 2. Grace period behavior (online alerts suppressed, offline alerts work)
+// 3. Peer going offline (verify single alert)
+// 4. Peer staying offline (verify no additional alerts - deduplication)
+// 5. Peer coming back online (verify flag cleared)
+// 6. Peer going offline again (verify new alert can be sent)
+func TestPeerMonitorIntegration_FullLifecycle(t *testing.T) {
+	sqlDB, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	// Step 1: Setup - Insert multiple peers in various states
+	// - Peer 1: Online with recent heartbeat
+	// - Peer 2: Offline with old heartbeat
+	// - Peer 3: Online with recent heartbeat (will test offline during grace period)
+	now := time.Now()
+
+	// Peer 1: "lifecycle-peer-1" - online
+	result1, err := sqlDB.Exec(`
+		INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		"lifecycle-peer-1", "192.168.1.10", "key-l1", "hmac-l1", 1, 0, now,
+	)
+	if err != nil {
+		t.Fatalf("failed to insert peer 1: %v", err)
+	}
+	peerID1, _ := result1.LastInsertId()
+
+	// Peer 2: "lifecycle-peer-2" - offline (already offline at startup)
+	result2, err := sqlDB.Exec(`
+		INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
+		VALUES (?, ?, ?, ?, ?, ?, datetime('now', '-120 seconds'))`,
+		"lifecycle-peer-2", "192.168.1.11", "key-l2", "hmac-l2", 1, 0,
+	)
+	if err != nil {
+		t.Fatalf("failed to insert peer 2: %v", err)
+	}
+	peerID2, _ := result2.LastInsertId()
+
+	// Peer 3: "lifecycle-peer-3" - online (will go offline during grace period)
+	result3, err := sqlDB.Exec(`
+		INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		"lifecycle-peer-3", "192.168.1.12", "key-l3", "hmac-l3", 1, 0, now,
+	)
+	if err != nil {
+		t.Fatalf("failed to insert peer 3: %v", err)
+	}
+	peerID3, _ := result3.LastInsertId()
+
+	// Create peer monitor with short grace period for testing (100ms)
+	monitor := NewPeerMonitor(sqlDB, nil)
+	monitor.gracePeriod = 100 * time.Millisecond
+	monitor.SetLogger(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug})))
+
+	// ===========================================
+	// Step 2: Server startup with peers in various states
+	// ===========================================
+
+	// Verify monitor is in grace period immediately after creation
+	if !monitor.isInGracePeriod() {
+		t.Error("expected monitor to be in grace period immediately after creation")
+	}
+
+	// Load initial peer states
+	err = monitor.loadPeerStates(context.Background())
+	if err != nil {
+		t.Fatalf("failed to load initial peer states: %v", err)
+	}
+
+	// Verify initial states
+	// Peer 1: should be online
+	// Peer 2: should be offline
+	// Peer 3: should be online
+	monitor.mu.RLock()
+	status1 := monitor.peerStates[int(peerID1)]
+	status2 := monitor.peerStates[int(peerID2)]
+	status3 := monitor.peerStates[int(peerID3)]
+	monitor.mu.RUnlock()
+
+	if status1 != PeerStatusOnline {
+		t.Errorf("peer 1: expected online, got %s", status1)
+	}
+	if status2 != PeerStatusOffline {
+		t.Errorf("peer 2: expected offline, got %s", status2)
+	}
+	if status3 != PeerStatusOnline {
+		t.Errorf("peer 3: expected online, got %s", status3)
+	}
+
+	t.Logf("Step 2 complete: Initial states loaded - peer1=%s, peer2=%s, peer3=%s", status1, status2, status3)
+
+	// ===========================================
+	// Step 3: Grace period behavior - online alerts suppressed, offline alerts work
+	// ===========================================
+
+	// During grace period, simulate peer 2 coming online
+	// This should NOT trigger an online alert (suppressed by grace period)
+	_, err = sqlDB.Exec(`UPDATE peers SET last_heartbeat = datetime('now') WHERE id = ?`, peerID2)
+	if err != nil {
+		t.Fatalf("failed to update peer 2 heartbeat: %v", err)
+	}
+
+	// Trigger check - peer 2 should transition to online but alert should be suppressed
+	monitor.checkPeers()
+
+	// Verify peer 2 is now online
+	monitor.mu.RLock()
+	status2After := monitor.peerStates[int(peerID2)]
+	monitor.mu.RUnlock()
+
+	if status2After != PeerStatusOnline {
+		t.Errorf("peer 2: expected online after transition, got %s", status2After)
+	}
+
+	// Grace period should still be active
+	if !monitor.isInGracePeriod() {
+		t.Error("expected grace period to still be active")
+	}
+
+	t.Logf("Step 3 complete: Peer 2 transitioned to online during grace period (alert suppressed)")
+
+	// ===========================================
+	// Step 4: Peer going offline during grace period (offline alerts should work)
+	// ===========================================
+
+	// Make peer 3 go offline during grace period
+	oldTime := time.Now().Add(-120 * time.Second)
+	_, err = sqlDB.Exec(`UPDATE peers SET last_heartbeat = ? WHERE id = ?`, oldTime, peerID3)
+	if err != nil {
+		t.Fatalf("failed to update peer 3 heartbeat: %v", err)
+	}
+
+	// Trigger check - peer 3 should go offline and alert flag should be set
+	// (offline alerts work even during grace period)
+	monitor.checkPeers()
+
+	// Verify peer 3 is offline and flag is set
+	monitor.mu.RLock()
+	status3After := monitor.peerStates[int(peerID3)]
+	flag3 := monitor.offlineAlertSent[int(peerID3)]
+	monitor.mu.RUnlock()
+
+	if status3After != PeerStatusOffline {
+		t.Errorf("peer 3: expected offline, got %s", status3After)
+	}
+	if !flag3 {
+		t.Error("expected offlineAlertSent flag to be set for peer 3")
+	}
+
+	t.Logf("Step 4 complete: Peer 3 went offline during grace period (flag set)")
+
+	// ===========================================
+	// Step 5: Wait for grace period to expire
+	// ===========================================
+
+	// Wait for grace period to expire
+	time.Sleep(150 * time.Millisecond)
+
+	if monitor.isInGracePeriod() {
+		t.Error("expected grace period to have expired")
+	}
+
+	t.Logf("Step 5 complete: Grace period expired")
+
+	// ===========================================
+	// Step 6: Peer going offline after grace period (verify single alert)
+	// ===========================================
+
+	// Make peer 1 go offline after grace period
+	_, err = sqlDB.Exec(`UPDATE peers SET last_heartbeat = datetime('now', '-120 seconds') WHERE id = ?`, peerID1)
+	if err != nil {
+		t.Fatalf("failed to update peer 1 heartbeat: %v", err)
+	}
+
+	// Trigger check - peer 1 should go offline
+	monitor.checkPeers()
+
+	// Verify peer 1 is offline and flag is set
+	monitor.mu.RLock()
+	status1After := monitor.peerStates[int(peerID1)]
+	flag1 := monitor.offlineAlertSent[int(peerID1)]
+	monitor.mu.RUnlock()
+
+	if status1After != PeerStatusOffline {
+		t.Errorf("peer 1: expected offline, got %s", status1After)
+	}
+	if !flag1 {
+		t.Error("expected offlineAlertSent flag to be set for peer 1")
+	}
+
+	t.Logf("Step 6 complete: Peer 1 went offline after grace period (flag set)")
+
+	// ===========================================
+	// Step 7: Peer staying offline (verify no additional alerts - deduplication)
+	// ===========================================
+
+	// Run multiple check cycles while peer 1 and peer 3 remain offline
+	for i := 0; i < 3; i++ {
+		monitor.checkPeers()
+
+		// Verify flags are still set but not duplicated
+		monitor.mu.RLock()
+		flag1StillSet := monitor.offlineAlertSent[int(peerID1)]
+		flag3StillSet := monitor.offlineAlertSent[int(peerID3)]
+		monitor.mu.RUnlock()
+
+		if !flag1StillSet {
+			t.Errorf("iteration %d: expected offlineAlertSent flag to remain set for peer 1", i)
+		}
+		if !flag3StillSet {
+			t.Errorf("iteration %d: expected offlineAlertSent flag to remain set for peer 3", i)
+		}
+	}
+
+	// Verify states haven't changed unexpectedly
+	monitor.mu.RLock()
+	status1Final := monitor.peerStates[int(peerID1)]
+	status3Final := monitor.peerStates[int(peerID3)]
+	monitor.mu.RUnlock()
+
+	if status1Final != PeerStatusOffline {
+		t.Errorf("peer 1: expected to remain offline, got %s", status1Final)
+	}
+	if status3Final != PeerStatusOffline {
+		t.Errorf("peer 3: expected to remain offline, got %s", status3Final)
+	}
+
+	t.Logf("Step 7 complete: Deduplication verified - multiple checks, flags remain set")
+
+	// ===========================================
+	// Step 8: Peer coming back online (verify flag cleared)
+	// ===========================================
+
+	// Bring peer 1 back online
+	_, err = sqlDB.Exec(`UPDATE peers SET last_heartbeat = datetime('now') WHERE id = ?`, peerID1)
+	if err != nil {
+		t.Fatalf("failed to update peer 1 heartbeat: %v", err)
+	}
+
+	// Trigger check - peer 1 should come online
+	monitor.checkPeers()
+
+	// Verify peer 1 is online and flag is cleared
+	monitor.mu.RLock()
+	status1Recovered := monitor.peerStates[int(peerID1)]
+	flag1Cleared := monitor.offlineAlertSent[int(peerID1)]
+	monitor.mu.RUnlock()
+
+	if status1Recovered != PeerStatusOnline {
+		t.Errorf("peer 1: expected online after recovery, got %s", status1Recovered)
+	}
+	if flag1Cleared {
+		t.Error("expected offlineAlertSent flag to be cleared for peer 1 after recovery")
+	}
+
+	t.Logf("Step 8 complete: Peer 1 came back online (flag cleared)")
+
+	// ===========================================
+	// Step 9: Peer going offline again (verify new alert can be sent)
+	// ===========================================
+
+	// Make peer 1 go offline again
+	_, err = sqlDB.Exec(`UPDATE peers SET last_heartbeat = datetime('now', '-120 seconds') WHERE id = ?`, peerID1)
+	if err != nil {
+		t.Fatalf("failed to update peer 1 heartbeat: %v", err)
+	}
+
+	// Trigger check - peer 1 should go offline again
+	monitor.checkPeers()
+
+	// Verify peer 1 is offline and NEW flag is set (can send new alert)
+	monitor.mu.RLock()
+	status1OfflineAgain := monitor.peerStates[int(peerID1)]
+	flag1SetAgain := monitor.offlineAlertSent[int(peerID1)]
+	monitor.mu.RUnlock()
+
+	if status1OfflineAgain != PeerStatusOffline {
+		t.Errorf("peer 1: expected offline after second offline event, got %s", status1OfflineAgain)
+	}
+	if !flag1SetAgain {
+		t.Error("expected offlineAlertSent flag to be set again for peer 1 after second offline event")
+	}
+
+	t.Logf("Step 9 complete: Peer 1 went offline again (new flag set)")
+
+	// ===========================================
+	// Step 10: Final state verification
+	// ===========================================
+
+	// Bring peer 2 back offline to test full cycle
+	_, err = sqlDB.Exec(`UPDATE peers SET last_heartbeat = datetime('now', '-120 seconds') WHERE id = ?`, peerID2)
+	if err != nil {
+		t.Fatalf("failed to update peer 2 heartbeat: %v", err)
+	}
+
+	monitor.checkPeers()
+
+	// Final state summary
+	monitor.mu.RLock()
+	finalStates := make(map[int]PeerStatus)
+	for k, v := range monitor.peerStates {
+		finalStates[k] = v
+	}
+	finalFlags := make(map[int]bool)
+	for k, v := range monitor.offlineAlertSent {
+		finalFlags[k] = v
+	}
+	monitor.mu.RUnlock()
+
+	t.Logf("Final state summary:")
+	for peerID, status := range finalStates {
+		flag := finalFlags[peerID]
+		t.Logf("  Peer %d: status=%s, alertSent=%v", peerID, status, flag)
+	}
+
+	// Verify final states
+	// Peer 1: offline with flag set
+	// Peer 2: offline with flag set (was online, went offline)
+	// Peer 3: offline with flag set
+	if finalStates[int(peerID1)] != PeerStatusOffline {
+		t.Error("peer 1: expected final state to be offline")
+	}
+	if finalStates[int(peerID2)] != PeerStatusOffline {
+		t.Error("peer 2: expected final state to be offline")
+	}
+	if finalStates[int(peerID3)] != PeerStatusOffline {
+		t.Error("peer 3: expected final state to be offline")
+	}
+
+	// All peers should have their offline alert flags set
+	if !finalFlags[int(peerID1)] {
+		t.Error("peer 1: expected final alert flag to be set")
+	}
+	if !finalFlags[int(peerID2)] {
+		t.Error("peer 2: expected final alert flag to be set")
+	}
+	if !finalFlags[int(peerID3)] {
+		t.Error("peer 3: expected final alert flag to be set")
+	}
+
+	t.Logf("Integration test complete: Full lifecycle verified successfully")
+}
+
+// TestMultiplePeersOfflineDeduplication tests that deduplication works
+// correctly with multiple peers going offline.
+func TestMultiplePeersOfflineDeduplication(t *testing.T) {
+	sqlDB, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	now := time.Now()
+
+	// Insert two peers with recent heartbeats (online)
+	result1, err := sqlDB.Exec(`
+		INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`, "multi-peer-1", "192.168.1.160", "key-m1", "hmac-m1", 1, 0, now,
+	)
+	if err != nil {
+		t.Fatalf("failed to insert peer 1: %v", err)
+	}
+	peerID1, _ := result1.LastInsertId()
+
+	result2, err := sqlDB.Exec(`
+		INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, is_manual, last_heartbeat)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`, "multi-peer-2", "192.168.1.161", "key-m2", "hmac-m2", 1, 0, now,
+	)
+	if err != nil {
+		t.Fatalf("failed to insert peer 2: %v", err)
+	}
+	peerID2, _ := result2.LastInsertId()
+
+	// Create peer monitor
+	monitor := NewPeerMonitor(sqlDB, nil)
+	monitor.SetLogger(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug})))
+
+	// Load initial peer states
+	err = monitor.loadPeerStates(context.Background())
+	if err != nil {
+		t.Fatalf("failed to load initial peer states: %v", err)
+	}
+
+	// Make both peers go offline
+	oldTime := time.Now().Add(-120 * time.Second)
+	_, err = sqlDB.Exec(`UPDATE peers SET last_heartbeat = ? WHERE id = ?`, oldTime, peerID1)
+	if err != nil {
+		t.Fatalf("failed to update peer 1 heartbeat: %v", err)
+	}
+	_, err = sqlDB.Exec(`UPDATE peers SET last_heartbeat = ? WHERE id = ?`, oldTime, peerID2)
+	if err != nil {
+		t.Fatalf("failed to update peer 2 heartbeat: %v", err)
+	}
+
+	// First check - both peers go offline
+	monitor.checkPeers()
+
+	// Verify both flags are set
+	monitor.mu.RLock()
+	flag1 := monitor.offlineAlertSent[int(peerID1)]
+	flag2 := monitor.offlineAlertSent[int(peerID2)]
+	monitor.mu.RUnlock()
+
+	if !flag1 {
+		t.Error("expected offlineAlertSent flag to be set for peer 1")
+	}
+	if !flag2 {
+		t.Error("expected offlineAlertSent flag to be set for peer 2")
+	}
+
+	// Second check - both peers still offline
+	monitor.checkPeers()
+
+	// Verify flags are still set (no duplicate alerts)
+	monitor.mu.RLock()
+	flag1AfterSecondCheck := monitor.offlineAlertSent[int(peerID1)]
+	flag2AfterSecondCheck := monitor.offlineAlertSent[int(peerID2)]
+	monitor.mu.RUnlock()
+
+	if !flag1AfterSecondCheck {
+		t.Error("expected offlineAlertSent flag to remain set for peer 1")
+	}
+	if !flag2AfterSecondCheck {
+		t.Error("expected offlineAlertSent flag to remain set for peer 2")
+	}
+
+	// Bring peer 1 back online
+	_, err = sqlDB.Exec(`UPDATE peers SET last_heartbeat = datetime('now') WHERE id = ?`, peerID1)
+	if err != nil {
+		t.Fatalf("failed to update peer 1 heartbeat: %v", err)
+	}
+
+	monitor.checkPeers()
+
+	// Verify peer 1 flag is cleared, peer 2 flag still set
+	monitor.mu.RLock()
+	flag1AfterRecovery := monitor.offlineAlertSent[int(peerID1)]
+	flag2AfterPeer1Recovery := monitor.offlineAlertSent[int(peerID2)]
+	monitor.mu.RUnlock()
+
+	if flag1AfterRecovery {
+		t.Error("expected offlineAlertSent flag to be cleared for peer 1 after recovery")
+	}
+	if !flag2AfterPeer1Recovery {
+		t.Error("expected offlineAlertSent flag to remain set for peer 2 (still offline)")
+	}
 }

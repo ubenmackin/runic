@@ -212,10 +212,20 @@ describe('Peers Page', () => {
 
   describe('Filter Controls', () => {
     test('status filter buttons are rendered', async () => {
+      const user = userEvent.setup()
       renderWithProviders(<Peers />)
 
       await waitFor(() => {
         expect(screen.getByText('server-alpha')).toBeInTheDocument()
+      })
+
+      // Expand the Search & Filters panel first
+      const disclosureButton = screen.getByRole('button', { name: /Search & Filters/ })
+      await user.click(disclosureButton)
+
+      // Wait for the panel to expand
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: 'All' })).toBeInTheDocument()
       })
 
       // Check that filter buttons exist
@@ -230,6 +240,15 @@ describe('Peers Page', () => {
 
       await waitFor(() => {
         expect(screen.getByText('server-alpha')).toBeInTheDocument()
+      })
+
+      // Expand the Search & Filters panel first
+      const disclosureButton = screen.getByRole('button', { name: /Search & Filters/ })
+      await user.click(disclosureButton)
+
+      // Wait for the panel to expand
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: 'Offline' })).toBeInTheDocument()
       })
 
       // Click Offline filter
@@ -251,6 +270,15 @@ describe('Peers Page', () => {
 
       await waitFor(() => {
         expect(screen.getByText('server-alpha')).toBeInTheDocument()
+      })
+
+      // Expand the Search & Filters panel first
+      const disclosureButton = screen.getByRole('button', { name: /Search & Filters/ })
+      await user.click(disclosureButton)
+
+      // Wait for the panel to expand and search input to be visible
+      await waitFor(() => {
+        expect(screen.getByPlaceholderText(/Search peers/)).toBeInTheDocument()
       })
 
       const searchInput = screen.getByPlaceholderText(/Search peers/)

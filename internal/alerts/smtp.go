@@ -518,6 +518,13 @@ func (s *SMTPSender) generateAlertHTML(event *AlertEvent, instanceURL string) st
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="dark">
+<meta name="supported-color-schemes" content="dark">
+<style type="text/css">
+/* Force dark mode in email clients */
+:root { color-scheme: dark; }
+body { background-color: %s !important; }
+</style>
 </head>
 <body style="background-color: %s; padding: 40px 20px; margin: 0; font-family: 'JetBrains Mono', Consolas, 'Courier New', monospace;">
 
@@ -563,7 +570,8 @@ func (s *SMTPSender) generateAlertHTML(event *AlertEvent, instanceURL string) st
 </body>
 </html>
 `,
-		bodyBg,
+		bodyBg, // style background-color
+		bodyBg, // body background-color
 		containerBg,
 		borderColor,
 		textPrimary,

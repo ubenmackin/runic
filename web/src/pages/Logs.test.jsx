@@ -102,8 +102,8 @@ describe('Logs Page', () => {
         expect(screen.getByText('Logs')).toBeInTheDocument()
       })
 
-      // Should show the filter button with aria-expanded=false
-      const filterButton = screen.getByRole('button', { name: /Search & Filters/ })
+    // Should show the filter button with aria-expanded=false
+    const filterButton = screen.getByRole('button', { name: /Filters/ })
       expect(filterButton).toBeInTheDocument()
       expect(filterButton).toHaveAttribute('aria-expanded', 'false')
 
@@ -125,10 +125,10 @@ describe('Logs Page', () => {
       // Verify inputs are hidden initially (collapsed state)
       expect(screen.queryByPlaceholderText('e.g. 192.168.1')).not.toBeInTheDocument()
 
-      const filtersButton = screen.getByRole('button', { name: /Search & Filters/ })
-      await user.click(filtersButton)
+    const filtersButton = screen.getByRole('button', { name: /Filters/ })
+    await user.click(filtersButton)
 
-      // After clicking, filter inputs should be visible
+    // After clicking, filter inputs should be visible
       await waitFor(() => {
         expect(screen.getByPlaceholderText('e.g. 192.168.1')).toBeInTheDocument()
       })
@@ -146,9 +146,9 @@ describe('Logs Page', () => {
         expect(screen.getByText('Logs')).toBeInTheDocument()
       })
 
-      // Expand filters
-      const filtersButton = screen.getByRole('button', { name: /Search & Filters/ })
-      await user.click(filtersButton)
+    // Expand filters
+    const filtersButton = screen.getByRole('button', { name: /Filters/ })
+    await user.click(filtersButton)
 
       // Wait for filter inputs to be visible
       await waitFor(() => {
@@ -196,59 +196,67 @@ describe('Logs Page', () => {
       expect(screen.queryByPlaceholderText('e.g. 443')).not.toBeInTheDocument()
     })
 
-    test('Query button triggers refetch', async () => {
-      // Start expanded so inputs are visible (default behavior)
-      const user = userEvent.setup()
-      renderWithProviders(<Logs />)
+  test('Query button triggers refetch', async () => {
+    // Need to expand the filter panel first
+    const user = userEvent.setup()
+    renderWithProviders(<Logs />)
 
-      await waitFor(() => {
-        expect(screen.getByText('Logs')).toBeInTheDocument()
-      })
-
-      // Since default is expanded, Query button should be visible
-      await waitFor(() => {
-        expect(screen.getByText('Query')).toBeInTheDocument()
-      })
-
-      const queryButton = screen.getByText('Query')
-      await user.click(queryButton)
-
-      // API should have been called
-      await waitFor(() => {
-        expect(apiClient.api.get).toHaveBeenCalled()
-      })
+    await waitFor(() => {
+      expect(screen.getByText('Logs')).toBeInTheDocument()
     })
 
-    test('Clear button resets filters', async () => {
-      // Start expanded so inputs are visible (default behavior)
-      const user = userEvent.setup()
-      renderWithProviders(<Logs />)
+    // Expand the filter panel
+    const filtersButton = screen.getByRole('button', { name: /Filters/ })
+    await user.click(filtersButton)
 
-      await waitFor(() => {
-        expect(screen.getByText('Logs')).toBeInTheDocument()
-      })
-
-      // Wait for filter inputs to be visible (default is expanded)
-      await waitFor(() => {
-        expect(screen.getByPlaceholderText('e.g. 192.168.1')).toBeInTheDocument()
-      })
-
-      // Type in source IP
-      const srcIpInput = screen.getByPlaceholderText('e.g. 192.168.1')
-      await user.type(srcIpInput, '192.168')
-
-      // Clear button should appear
-      await waitFor(() => {
-        expect(screen.getByText('Clear')).toBeInTheDocument()
-      })
-
-      await user.click(screen.getByText('Clear'))
-
-      // Input should be cleared
-      await waitFor(() => {
-        expect(srcIpInput).toHaveValue('')
-      })
+    // Query button should now be visible
+    await waitFor(() => {
+      expect(screen.getByText('Query')).toBeInTheDocument()
     })
+
+    const queryButton = screen.getByText('Query')
+    await user.click(queryButton)
+
+    // API should have been called
+    await waitFor(() => {
+      expect(apiClient.api.get).toHaveBeenCalled()
+    })
+  })
+
+  test('Clear button resets filters', async () => {
+    // Need to expand the filter panel first
+    const user = userEvent.setup()
+    renderWithProviders(<Logs />)
+
+    await waitFor(() => {
+      expect(screen.getByText('Logs')).toBeInTheDocument()
+    })
+
+    // Expand the filter panel
+    const filtersButton = screen.getByRole('button', { name: /Filters/ })
+    await user.click(filtersButton)
+
+    // Wait for filter inputs to be visible
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText('e.g. 192.168.1')).toBeInTheDocument()
+    })
+
+    // Type in source IP
+    const srcIpInput = screen.getByPlaceholderText('e.g. 192.168.1')
+    await user.type(srcIpInput, '192.168')
+
+    // Clear button should appear
+    await waitFor(() => {
+      expect(screen.getByText('Clear')).toBeInTheDocument()
+    })
+
+    await user.click(screen.getByText('Clear'))
+
+    // Input should be cleared
+    await waitFor(() => {
+      expect(srcIpInput).toHaveValue('')
+    })
+  })
   })
 
   describe('Pagination', () => {

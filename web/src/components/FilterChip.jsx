@@ -17,8 +17,8 @@ export default function FilterChip({ label, selected, onClick }) {
       aria-label={label}
       className={`px-4 py-1.5 text-sm font-medium border transition-colors ${
         selected
-          ? 'bg-purple-active text-white border-purple-active'
-          : 'bg-white dark:bg-charcoal-dark text-gray-700 dark:text-light-neutral border-gray-300 dark:border-gray-border hover:bg-gray-50 dark:hover:bg-charcoal-darkest'
+? 'bg-purple-active text-white border-purple-active'
+  : 'bg-white dark:bg-charcoal-dark text-gray-700 dark:text-light-neutral border-gray-300 dark:border-gray-border hover:bg-purple-active/10'
       }`}
     >
       {label}

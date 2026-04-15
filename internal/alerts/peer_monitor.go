@@ -18,6 +18,10 @@ type PeerStatus string
 const (
 	PeerStatusOnline  PeerStatus = "online"
 	PeerStatusOffline PeerStatus = "offline"
+
+	// DefaultGracePeriod is the default duration after startup during which
+	// peer online alerts are suppressed to prevent false positives during server restart.
+	DefaultGracePeriod = 5 * time.Minute
 )
 
 // peerInfo holds information about a peer.
@@ -41,6 +45,13 @@ type PeerMonitor struct {
 	// State tracking: peer_id -> last known status
 	peerStates map[int]PeerStatus
 
+	// Grace period to suppress false positive online alerts during startup
+	startTime   time.Time
+	gracePeriod time.Duration
+
+	// Deduplication: tracks which peers have had offline alerts sent
+	offlineAlertSent map[int]bool
+
 	mu sync.RWMutex
 }
 
@@ -48,19 +59,29 @@ type PeerMonitor struct {
 func NewPeerMonitor(database *sql.DB, service *Service) *PeerMonitor {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &PeerMonitor{
-		database:   database,
-		service:    service,
-		logger:     log.L().With("component", "peer_monitor"),
-		ctx:        ctx,
-		cancel:     cancel,
-		stopCh:     make(chan struct{}),
-		peerStates: make(map[int]PeerStatus),
+		database:         database,
+		service:          service,
+		logger:           log.L().With("component", "peer_monitor"),
+		ctx:              ctx,
+		cancel:           cancel,
+		stopCh:           make(chan struct{}),
+		peerStates:       make(map[int]PeerStatus),
+		startTime:        time.Now(),
+		gracePeriod:      DefaultGracePeriod,
+		offlineAlertSent: make(map[int]bool),
 	}
 }
 
 // SetLogger sets a custom logger for the peer monitor.
 func (m *PeerMonitor) SetLogger(logger *slog.Logger) {
 	m.logger = logger
+}
+
+// isInGracePeriod returns true if the monitor is still within the startup grace period.
+// During this period, peer online alerts are suppressed to prevent false positives
+// that occur when the server restarts and peers were already online.
+func (m *PeerMonitor) isInGracePeriod() bool {
+	return time.Since(m.startTime) < m.gracePeriod
 }
 
 // Start begins monitoring peer status.
@@ -269,6 +290,18 @@ func (m *PeerMonitor) checkPeers() {
 }
 
 func (m *PeerMonitor) triggerPeerOfflineAlert(ctx context.Context, peerID int, info peerInfo) {
+	// Check if we've already sent an offline alert for this peer
+	m.mu.Lock()
+	alreadySent := m.offlineAlertSent[peerID]
+	if alreadySent {
+		m.mu.Unlock()
+		m.logger.Debug("skipping duplicate offline alert", "peer_id", peerID)
+		return
+	}
+	// Mark that we've sent an offline alert for this peer
+	m.offlineAlertSent[peerID] = true
+	m.mu.Unlock()
+
 	m.logger.Info("peer went offline", "peer_id", peerID, "hostname", info.hostname)
 
 	if m.service == nil {
@@ -309,14 +342,21 @@ func (m *PeerMonitor) triggerPeerOfflineAlert(ctx context.Context, peerID int, i
 func (m *PeerMonitor) triggerPeerOnlineAlert(ctx context.Context, peerID int, info peerInfo, wasOffline PeerStatus) {
 	m.logger.Info("peer came online", "peer_id", peerID, "hostname", info.hostname)
 
-	if m.service == nil {
+	// Clear the offline alert flag so future offline events can trigger alerts
+	m.mu.Lock()
+	delete(m.offlineAlertSent, peerID)
+	m.mu.Unlock()
+
+	// Suppress online alerts during grace period to prevent false positives
+	// when the server restarts and peers were already online
+	if m.isInGracePeriod() {
+		m.logger.Info("suppressing peer online alert during grace period", "peer_id", peerID)
 		return
 	}
 
-	// Get the previous status to determine how long it was offline
-	m.mu.RLock()
-	prevStatus := m.peerStates[peerID]
-	m.mu.RUnlock()
+	if m.service == nil {
+		return
+	}
 
 	// Sanitize hostname before using in alert (defense in depth)
 	sanitizedHostname, modified := SanitizeAlertInput(info.hostname, DefaultMaxHostnameLength)
@@ -339,5 +379,4 @@ func (m *PeerMonitor) triggerPeerOnlineAlert(ctx context.Context, peerID int, in
 	}); err != nil {
 		m.logger.Error("failed to trigger peer online alert", "error", err, "peer_id", peerID)
 	}
-	_ = prevStatus // suppress unused variable
 }

@@ -385,49 +385,57 @@ func (g *DigestGenerator) buildDigestSummary(alerts []AlertHistory, startTime, e
 }
 
 // generateDigestHTML creates an HTML email body for the digest.
+// Uses terminal aesthetic with dark mode colors and monospace font.
 func (g *DigestGenerator) generateDigestHTML(digest *AlertDigest, summary *DigestSummary, instanceURL string) string {
-	// Runic branding colors
-	purple := "#7C3AED"
-	amber := "#F59E0B"
-	gray := "#6B7280"
+	// Terminal aesthetic colors (matching smtp.go)
+	bodyBg := "#0a0a0a"
+	containerBg := "#121212"
+	borderColor := "#2d2d2d"
+	tableBg := "#0d0d0d"
+	textPrimary := "#d1d5db"
+	textSecondary := "#e5e7eb"
+	textMuted := "#6b7280"
+	textDim := "#9ca3af"
+	purple := "#a855f7"
+	amber := "#d97706"
 
 	var content strings.Builder
 
 	if summary.TotalAlerts == 0 {
 		content.WriteString(`
-<p style="color: #6b7280; font-size: 16px; text-align: center; padding: 40px 0;">
-No alerts were recorded in the past 24 hours.
-</p>
-`)
+		<p style="color: #6b7280; font-size: 14px; text-align: center; padding: 40px 0;">
+			No alerts were recorded in the past 24 hours.
+		</p>
+		`)
 	} else {
-		// Alert summary by severity
+		// Alert summary by severity - dark mode cards
 		fmt.Fprintf(&content, `
-<div style="margin-bottom: 30px;">
-<h3 style="margin: 0 0 15px 0; color: #374151; font-size: 16px;">Summary by Severity</h3>
-<table style="width: 100%%; border-collapse: collapse;">
-<tr>
-<td style="padding: 10px; background-color: #fef2f2; border-radius: 8px; text-align: center; width: 33.33%%;">
-<div style="font-size: 28px; font-weight: 700; color: #dc2626;">%d</div>
-<div style="font-size: 12px; color: #991b1b; text-transform: uppercase;">Critical</div>
-</td>
-<td style="padding: 10px; background-color: #fffbeb; border-radius: 8px; text-align: center; width: 33.33%%;">
-<div style="font-size: 28px; font-weight: 700; color: #d97706;">%d</div>
-<div style="font-size: 12px; color: #92400e; text-transform: uppercase;">Warning</div>
-</td>
-<td style="padding: 10px; background-color: #f3f4f6; border-radius: 8px; text-align: center; width: 33.33%%;">
-<div style="font-size: 28px; font-weight: 700; color: #6b7280;">%d</div>
-<div style="font-size: 12px; color: #4b5563; text-transform: uppercase;">Info</div>
-</td>
-</tr>
-</table>
-</div>
-`, summary.CriticalCount, summary.WarningCount, summary.InfoCount)
+		<div style="margin-bottom: 30px;">
+			<h3 style="margin: 0 0 15px 0; color: %s; font-size: 14px; font-weight: bold; text-transform: uppercase; letter-spacing: 1px;">Summary by Severity</h3>
+			<table style="width: 100%%; border-collapse: collapse;">
+				<tr>
+					<td style="padding: 15px; background-color: #1a0a0a; border: 1px solid #3d1515; border-radius: 4px; text-align: center; width: 33.33%%;">
+						<div style="font-size: 28px; font-weight: 700; color: #ef4444;">%d</div>
+						<div style="font-size: 11px; color: #f87171; text-transform: uppercase; letter-spacing: 1px;">Critical</div>
+					</td>
+					<td style="padding: 15px; background-color: #1a150a; border: 1px solid #3d2d15; border-radius: 4px; text-align: center; width: 33.33%%;">
+						<div style="font-size: 28px; font-weight: 700; color: #d97706;">%d</div>
+						<div style="font-size: 11px; color: #fbbf24; text-transform: uppercase; letter-spacing: 1px;">Warning</div>
+					</td>
+					<td style="padding: 15px; background-color: #0d0d15; border: 1px solid #1f1f3d; border-radius: 4px; text-align: center; width: 33.33%%;">
+						<div style="font-size: 28px; font-weight: 700; color: #a855f7;">%d</div>
+						<div style="font-size: 11px; color: #c084fc; text-transform: uppercase; letter-spacing: 1px;">Info</div>
+					</td>
+				</tr>
+			</table>
+		</div>
+		`, textMuted, summary.CriticalCount, summary.WarningCount, summary.InfoCount)
 
 		// Alert breakdown by type
-		content.WriteString(`
-<div style="margin-bottom: 30px;">
-<h3 style="margin: 0 0 15px 0; color: #374151; font-size: 16px;">Alerts by Type</h3>
-`)
+		fmt.Fprintf(&content, `
+		<div style="margin-bottom: 30px;">
+			<h3 style="margin: 0 0 15px 0; color: %s; font-size: 14px; font-weight: bold; text-transform: uppercase; letter-spacing: 1px;">Alerts by Type</h3>
+		`, textMuted)
 
 		for alertType, count := range summary.ByType {
 			var typeColor string
@@ -435,7 +443,7 @@ No alerts were recorded in the past 24 hours.
 
 			switch alertType {
 			case AlertTypePeerOffline:
-				typeColor = "#dc2626"
+				typeColor = "#ef4444"
 				typeIcon = "&#x1F534;"
 			case AlertTypePeerOnline:
 				typeColor = "#10b981"
@@ -444,101 +452,108 @@ No alerts were recorded in the past 24 hours.
 				typeColor = purple
 				typeIcon = "&#x2795;"
 			case AlertTypeBundleFailed:
-				typeColor = "#ef4444"
+				typeColor = "#f87171"
 				typeIcon = "&#x26A0;"
 			case AlertTypeBlockedSpike:
 				typeColor = amber
 				typeIcon = "&#x26A1;"
 			default:
-				typeColor = gray
+				typeColor = textMuted
 				typeIcon = "&#x1F4CC;"
 			}
 
 			fmt.Fprintf(&content, `
-				<div style="display: inline-block; margin: 5px; padding: 10px 15px; background-color: #f9fafb; border-radius: 8px; border-left: 4px solid %s;">
-					<span style="font-size: 14px;">%s</span>
-					<span style="font-size: 14px; font-weight: 600; color: %s;"> %s</span>
-					<span style="font-size: 14px; color: #6b7280;">: %d alert(s)</span>
-				</div>
-			`, typeColor, typeIcon, typeColor, formatAlertType(alertType), count)
+			<div style="display: inline-block; margin: 5px; padding: 10px 15px; background-color: #0d0d0d; border: 1px solid #2d2d2d; border-radius: 4px; border-left: 3px solid %s;">
+				<span style="font-size: 14px;">%s</span>
+				<span style="font-size: 14px; font-weight: 600; color: %s;"> %s</span>
+				<span style="font-size: 13px; color: %s;">: %d alert(s)</span>
+			</div>
+			`, typeColor, typeIcon, typeColor, formatAlertType(alertType), textDim, count)
 		}
 
 		content.WriteString(`</div>`)
 
 		// Recent alerts detail (limit to 10 most recent)
 		if len(summary.ByTypeAndSeverity) > 0 {
-			content.WriteString(`
-				<div style="margin-bottom: 20px;">
-					<h3 style="margin: 0 0 15px 0; color: #374151; font-size: 16px;">Alert Types Overview</h3>
-					<ul style="margin: 0; padding-left: 20px; color: #4b5563;">
-			`)
+			fmt.Fprintf(&content, `
+			<div style="margin-bottom: 20px;">
+				<h3 style="margin: 0 0 15px 0; color: %s; font-size: 14px; font-weight: bold; text-transform: uppercase; letter-spacing: 1px;">Alert Types Overview</h3>
+				<ul style="margin: 0; padding-left: 20px; color: %s;">
+			`, textMuted, textSecondary)
 
 			for alertType, typeSummary := range summary.ByTypeAndSeverity {
 				fmt.Fprintf(&content, `
-				<li style="margin-bottom: 8px;">
-					<strong>%s</strong>: %d occurrence(s)
+				<li style="margin-bottom: 8px; color: %s;">
+					<strong style="color: %s;">%s</strong>: <span style="color: %s;">%d occurrence(s)</span>
 				</li>
-			`, formatAlertType(alertType), typeSummary.Count)
+				`, textSecondary, textSecondary, formatAlertType(alertType), textDim, typeSummary.Count)
 			}
 
 			content.WriteString(`
-					</ul>
-				</div>
+				</ul>
+			</div>
 			`)
 		}
 	}
 
 	// Build footer URLs
-	runicLink := instanceURL
 	settingsLink := instanceURL + "/settings"
 
-	// Build full HTML email
+	// Build full HTML email with terminal aesthetic
 	html := fmt.Sprintf(`
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-	<meta charset="UTF-8">
-	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="dark">
+<meta name="supported-color-schemes" content="dark">
+<style type="text/css">
+/* Force dark mode in email clients */
+:root { color-scheme: dark; }
+body { background-color: %s !important; }
+</style>
 </head>
-<body style="margin: 0; padding: 0; background-color: #f3f4f6; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;">
-	<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%%" style="background-color: #f3f4f6; padding: 40px 20px;">
+<body style="margin: 0; padding: 40px 20px; background-color: %s; font-family: 'JetBrains Mono', Consolas, 'Courier New', monospace;">
+	<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%%" style="background-color: %s;">
 		<tr>
 			<td align="center">
-				<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="600" style="background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">
+				<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="600" style="background-color: %s; border: 1px solid %s; color: %s; line-height: 1.6;">
 					<!-- Header -->
 					<tr>
-						<td style="background-color: %s; padding: 30px 40px; text-align: center;">
-							<h1 style="margin: 0; color: #ffffff; font-size: 28px; font-weight: 700;">Runic</h1>
-							<p style="margin: 10px 0 0 0; color: #ffffff; opacity: 0.9; font-size: 14px;">Daily Alert Digest</p>
+						<td style="padding: 20px;">
+							<div style="border-bottom: 1px dashed #4b5563; padding-bottom: 15px; color: %s; font-size: 12px; font-weight: bold; letter-spacing: 2px;">
+								[ RUNIC // DAILY DIGEST ]
+							</div>
 						</td>
 					</tr>
 					<!-- Digest Badge -->
 					<tr>
-						<td style="padding: 30px 40px 10px 40px; text-align: center;">
-							<span style="display: inline-block; background-color: %s; color: #ffffff; padding: 8px 20px; border-radius: 20px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px;">
+						<td style="padding: 20px 20px 10px 20px; text-align: center;">
+							<span style="display: inline-block; background-color: %s; color: #ffffff; padding: 8px 20px; font-size: 11px; font-weight: bold; text-transform: uppercase; letter-spacing: 2px;">
 								%s &bull; %d Alert(s)
 							</span>
 						</td>
 					</tr>
 					<!-- Content -->
 					<tr>
-						<td style="padding: 20px 40px 30px 40px;">
-							<h2 style="margin: 0 0 10px 0; color: #1f2937; font-size: 20px; font-weight: 600;">Alert Summary</h2>
-							<p style="margin: 0 0 20px 0; color: #6b7280; font-size: 14px;">
+						<td style="padding: 10px 20px 20px 20px;">
+							<h2 style="margin: 0 0 10px 0; color: %s; font-size: 16px; font-weight: bold; text-transform: uppercase; letter-spacing: 1px;">Alert Summary</h2>
+							<p style="margin: 0 0 20px 0; color: %s; font-size: 12px;">
 								Covering the past 24 hours (%s to %s)
 							</p>
-							<div style="color: #4b5563; font-size: 16px; line-height: 1.6;">
+							<div style="color: %s; font-size: 13px; line-height: 1.6;">
 								%s
 							</div>
 						</td>
 					</tr>
 					<!-- Footer -->
 					<tr>
-						<td style="background-color: #f9fafb; padding: 20px 40px; border-top: 1px solid #e5e7eb;">
-							<p style="margin: 0; color: #6b7280; font-size: 12px; text-align: center;">
-								This is an automated digest from <a href="%s" style="color: %s; text-decoration: none; font-weight: 600;">Runic</a>.
-								<br>
-								<a href="%s" style="color: %s; text-decoration: none;">Manage notification preferences</a>
+						<td style="background-color: %s; border-top: 1px solid %s; padding: 20px; text-align: center;">
+							<p style="margin: 0; color: %s; font-size: 11px;">
+								This is an automated digest from <span style="color: %s; font-weight: bold;">Runic</span>.
+								<br><br>
+								<a href="%s" style="color: %s; text-decoration: none; border-bottom: 1px dashed %s; padding-bottom: 2px;">Manage notification preferences</a>
 							</p>
 						</td>
 					</tr>
@@ -548,14 +563,26 @@ No alerts were recorded in the past 24 hours.
 	</table>
 </body>
 </html>
-	`,
-		purple,                                         // header background
+`,
+		bodyBg, // style background-color
+		bodyBg, // body background-color
+		bodyBg, // outer table background
+		containerBg,
+		borderColor,
+		textPrimary,
+		purple,
 		purple, digest.DigestDate, summary.TotalAlerts, // badge
+		textSecondary, // heading color
+		textMuted,     // time range color
 		summary.TimeRange.Start.Format("Jan 2, 3:04 PM"), // time range start
 		summary.TimeRange.End.Format("Jan 2, 3:04 PM"),   // time range end
-		content.String(),  // content
-		runicLink, purple, // footer runic link
-		settingsLink, amber, // footer settings link
+		textSecondary,    // content color
+		content.String(), // content
+		tableBg,
+		borderColor,
+		textMuted,
+		purple,
+		settingsLink, amber, amber, // footer settings link
 	)
 
 	return html

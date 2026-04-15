@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Lock, Trash2, Plus, Shield, Key, Database, HardDrive, Bell, FileKey, ScrollText, Mail, Eye, EyeOff, Send, Loader, Globe } from 'lucide-react'
+import { Lock, Trash2, Plus, Shield, Key, Database, HardDrive, Bell, FileKey, ScrollText, Mail, Eye, EyeOff, Send, Loader } from 'lucide-react'
 import { api, QUERY_KEYS, getSMTPConfig, updateSMTPConfig, testSMTP, getNotificationPrefs, updateNotificationPrefs, getAlertRules } from '../api/client'
 import { useToastContext } from '../hooks/ToastContext'
 import { useFocusTrap } from '../hooks/useFocusTrap'
@@ -16,7 +16,6 @@ import {
 } from '../utils/settingsTransform'
 import {
   getSMTPSummary,
-  getInstanceSummary,
   getNotificationSummary,
   getAlertRulesSummary,
 } from '../utils/settingsSummary'
@@ -50,8 +49,7 @@ export default function Settings() {
   const createModalRef = useRef(null)
 
   // Controlled expanded states for jump-to-section functionality
-  const [generalExpanded, setGeneralExpanded] = useState(undefined)
-  const [smtpExpanded, setSmtpExpanded] = useState(undefined)
+  const [emailExpanded, setEmailExpanded] = useState(undefined)
   const [notificationsExpanded, setNotificationsExpanded] = useState(undefined)
   const [alertRulesExpanded, setAlertRulesExpanded] = useState(undefined)
 
@@ -65,13 +63,10 @@ export default function Settings() {
       el.scrollIntoView({ behavior: 'smooth', block: 'start' })
 
       // Expand the section after scrolling
-      setTimeout(() => {
-        switch (sectionId) {
-          case 'general-section':
-            setGeneralExpanded(true)
-            break
-          case 'smtp-section':
-            setSmtpExpanded(true)
+        setTimeout(() => {
+          switch (sectionId) {
+          case 'email-section':
+            setEmailExpanded(true)
             break
           case 'notifications-section':
             setNotificationsExpanded(true)
@@ -79,8 +74,8 @@ export default function Settings() {
           case 'alert-rules-section':
             setAlertRulesExpanded(true)
             break
-        }
-      }, 100)
+          }
+        }, 100)
     }
 
     // Reset select to default option
@@ -150,13 +145,13 @@ export default function Settings() {
     onError: (err) => showToast(err.message, 'error'),
   })
 
-  // Instance URL state
-  const [instanceUrl, setInstanceUrl] = useState('')
-  const { data: instanceSettings, isLoading: isLoadingInstance, isError: instanceError } = useQuery({
-    queryKey: ['instance-settings'],
-    queryFn: () => api.get('/settings/instance'),
-    enabled: isAdmin,
-  })
+	// Instance URL state
+	const [instanceUrl, setInstanceUrl] = useState('')
+	const { data: instanceSettings } = useQuery({
+		queryKey: ['instance-settings'],
+		queryFn: () => api.get('/settings/instance'),
+		enabled: isAdmin,
+	})
 
   // Initialize instance URL from backend
   useEffect(() => {
@@ -183,8 +178,8 @@ export default function Settings() {
 
   // Notification Preferences State
   const [notificationPrefs, setNotificationPrefs] = useState(null)
-  const [showQuietHours, setShowQuietHours] = useState(false)
-  const [showDigest, setShowDigest] = useState(false)
+  const [showQuietHours, setShowQuietHours] = useState(undefined)
+  const [showDigest, setShowDigest] = useState(undefined)
   const [unifiedTimezone, setUnifiedTimezone] = useState(null)
 
   // Fetch user notification preferences (visible to all authenticated users)
@@ -203,6 +198,20 @@ export default function Settings() {
 
       // Use the unified timezone from transformPrefsFromBackend (already handles unification and browser fallback)
       setUnifiedTimezone(transformedPrefs.quiet_hours?.timezone || 'UTC')
+
+      // Expand disclosure sections based on feature enabled status
+      // Quiet Hours is considered enabled if the toggle is on OR if start/end times are configured
+      const quietHoursEnabled = transformedPrefs.quiet_hours?.enabled ?? false
+      // Check for non-empty, non-default times (default is '22:00'/'08:00')
+      const hasQuietHoursTimes = (transformedPrefs.quiet_hours?.start_time && transformedPrefs.quiet_hours?.start_time !== '22:00') ||
+                                  (transformedPrefs.quiet_hours?.end_time && transformedPrefs.quiet_hours?.end_time !== '08:00')
+      setShowQuietHours(quietHoursEnabled || hasQuietHoursTimes)
+
+      // Daily Digest is considered enabled if the toggle is on OR if time is configured
+      const digestEnabled = transformedPrefs.daily_digest?.enabled ?? false
+      // Check for non-empty, non-default time (default is '09:00')
+      const hasDigestTime = transformedPrefs.daily_digest?.time && transformedPrefs.daily_digest?.time !== '09:00'
+      setShowDigest(digestEnabled || hasDigestTime)
 
       prefsLoadedRef.current = true
     }
@@ -476,25 +485,25 @@ const getKeyData = (keyType) => {
                     </div>
                   </div>
 
-{/* Quiet Hours Section */}
-      <div className="border-t border-gray-200 dark:border-gray-border pt-6">
-        <button
-          type="button"
-          onClick={() => setShowQuietHours(!showQuietHours)}
-          aria-expanded={showQuietHours}
-          aria-controls="quiet-hours-content"
-          className="flex items-center justify-between w-full text-left"
-        >
-          <span className="text-sm font-medium text-gray-700 dark:text-amber-primary">
-            Quiet Hours
-          </span>
-          <span className={`transform transition-transform ${showQuietHours ? 'rotate-180' : ''}`}>
-            <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-            </svg>
-          </span>
-        </button>
-        {showQuietHours && (
+                {/* Quiet Hours Section */}
+                <div className="border-t border-gray-200 dark:border-gray-border pt-6">
+                  <button
+                    type="button"
+                    onClick={() => setShowQuietHours(!showQuietHours)}
+                    aria-expanded={!!showQuietHours}
+                    aria-controls="quiet-hours-content"
+                    className="flex items-center justify-between w-full text-left"
+                  >
+                    <span className="text-sm font-medium text-gray-700 dark:text-amber-primary">
+                      Quiet Hours
+                    </span>
+                    <span className={`transform transition-transform ${showQuietHours ? 'rotate-180' : ''}`}>
+                      <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                      </svg>
+                    </span>
+                  </button>
+                  {showQuietHours && (
           <div id="quiet-hours-content" className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
                         <div className="flex items-center gap-2">
                           <input
@@ -536,25 +545,25 @@ const getKeyData = (keyType) => {
                     )}
                   </div>
 
-{/* Daily Digest Section */}
-      <div className="border-t border-gray-200 dark:border-gray-border pt-6">
-        <button
-          type="button"
-          onClick={() => setShowDigest(!showDigest)}
-          aria-expanded={showDigest}
-          aria-controls="daily-digest-content"
-          className="flex items-center justify-between w-full text-left"
-        >
-          <span className="text-sm font-medium text-gray-700 dark:text-amber-primary">
-            Daily Digest
-          </span>
-          <span className={`transform transition-transform ${showDigest ? 'rotate-180' : ''}`}>
-            <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-            </svg>
-          </span>
-        </button>
-        {showDigest && (
+                {/* Daily Digest Section */}
+                <div className="border-t border-gray-200 dark:border-gray-border pt-6">
+                  <button
+                    type="button"
+                    onClick={() => setShowDigest(!showDigest)}
+                    aria-expanded={!!showDigest}
+                    aria-controls="daily-digest-content"
+                    className="flex items-center justify-between w-full text-left"
+                  >
+                    <span className="text-sm font-medium text-gray-700 dark:text-amber-primary">
+                      Daily Digest
+                    </span>
+                    <span className={`transform transition-transform ${showDigest ? 'rotate-180' : ''}`}>
+                      <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                      </svg>
+                    </span>
+                  </button>
+                  {showDigest && (
           <div id="daily-digest-content" className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div className="flex items-center gap-2">
                           <input
@@ -613,66 +622,27 @@ const getKeyData = (keyType) => {
                   defaultValue=""
                   aria-label="Jump to section"
                 >
-              <option value="" disabled>Jump to section...</option>
-              <option value="general-section">General</option>
-              <option value="smtp-section">SMTP Configuration</option>
+<option value="" disabled>Jump to section...</option>
+              <option value="email-section">Email Configuration</option>
               <option value="notifications-section">Notifications</option>
               <option value="alert-rules-section">Alert Rules</option>
             </select>
           </div>
 
-          {/* Two-column grid for desktop: General + SMTP (left), Notification Preferences (right) */}
+          {/* Two-column grid for desktop: Email Configuration (left), Notification Preferences (right) */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* Left Column */}
             <div className="space-y-6">
-              {/* General Section */}
+              {/* Email Configuration Section */}
               <CollapsibleSection
-                id="general-section"
-                title="General"
-                icon={<Globe className="w-5 h-5 text-purple-500" />}
-                storageKey="settings_collapsed_general"
-                defaultExpanded={true}
-                summary={getInstanceSummary(instanceSettings)}
-                expanded={generalExpanded}
-                onExpandedChange={setGeneralExpanded}
-              >
-                {isLoadingInstance ? (
-                  <div className="text-sm text-gray-500 dark:text-amber-muted">Loading...</div>
-                ) : instanceError ? (
-                  <div className="text-sm text-red-500">Failed to load instance settings</div>
-                ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                      <label htmlFor="instance_url" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-                        Instance URL
-                      </label>
-                      <input
-                        type="url"
-                        id="instance_url"
-                        value={instanceUrl}
-                        onChange={(e) => setInstanceUrl(e.target.value)}
-                        onBlur={() => updateInstanceMutation.mutate(instanceUrl)}
-                        placeholder="https://runic.example.com"
-                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-                      />
-                      <p className="text-xs text-gray-500 dark:text-amber-muted mt-1">
-                        Used for email links and notifications
-                      </p>
-                    </div>
-                  </div>
-                )}
-              </CollapsibleSection>
-
-              {/* SMTP Configuration Section */}
-              <CollapsibleSection
-                id="smtp-section"
-                title="SMTP Configuration"
+                id="email-section"
+                title="Email Configuration"
                 icon={<Mail className="w-5 h-5 text-purple-500" />}
-                storageKey="settings_collapsed_smtp"
+                storageKey="settings_collapsed_email"
                 defaultExpanded={false}
-                summary={getSMTPSummary(smtpConfig)}
-                expanded={smtpExpanded}
-                onExpandedChange={setSmtpExpanded}
+                summary={getSMTPSummary(smtpConfig, instanceSettings)}
+                expanded={emailExpanded}
+                onExpandedChange={setEmailExpanded}
               >
                 {smtpLoading ? (
                   <div className="flex items-center justify-center py-8">
@@ -680,7 +650,36 @@ const getKeyData = (keyType) => {
                   </div>
                 ) : (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {/* SMTP Host */}
+{/* Row 1: Instance URL | Enable Email */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+                    <span>Instance URL</span>
+                    <span className="text-xs text-gray-500 dark:text-amber-muted ml-1">- Used for email links and notifications</span>
+                  </label>
+                  <input
+                    type="url"
+                    id="instance_url"
+                    value={instanceUrl}
+                    onChange={(e) => setInstanceUrl(e.target.value)}
+                    onBlur={() => updateInstanceMutation.mutate(instanceUrl)}
+                    placeholder="https://runic.example.com"
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+                  />
+                </div>
+                    <div className="flex items-center">
+                      <input
+                        type="checkbox"
+                        id="email_enabled"
+                        checked={smtpFormData.enabled}
+                        onChange={(e) => setSmtpFormData({ ...smtpFormData, enabled: e.target.checked })}
+                        className="w-4 h-4 text-purple-600 border-gray-300 dark:border-gray-border rounded-none focus:ring-purple-500"
+                      />
+                      <label htmlFor="email_enabled" className="ml-2 text-sm text-gray-700 dark:text-amber-primary">
+                        Enable Email
+                      </label>
+                    </div>
+
+                    {/* Row 2: SMTP Host | SMTP Port */}
                     <div>
                       <label htmlFor="smtp_host" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
                         SMTP Host
@@ -694,8 +693,6 @@ const getKeyData = (keyType) => {
                         className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
                       />
                     </div>
-
-                    {/* SMTP Port */}
                     <div>
                       <label htmlFor="smtp_port" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
                         SMTP Port
@@ -710,7 +707,7 @@ const getKeyData = (keyType) => {
                       />
                     </div>
 
-                    {/* Username */}
+                    {/* Row 3: Username | Password */}
                     <div>
                       <label htmlFor="smtp_username" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
                         Username
@@ -724,8 +721,6 @@ const getKeyData = (keyType) => {
                         className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
                       />
                     </div>
-
-                    {/* Password */}
                     <div>
                       <label htmlFor="smtp_password" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
                         Password
@@ -749,7 +744,7 @@ const getKeyData = (keyType) => {
                       </div>
                     </div>
 
-                    {/* From Address */}
+                    {/* Row 4: From Address | Use TLS */}
                     <div>
                       <label htmlFor="smtp_from_address" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
                         From Address
@@ -763,33 +758,17 @@ const getKeyData = (keyType) => {
                         className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
                       />
                     </div>
-
-                    {/* TLS and Enable toggles */}
-                    <div className="flex items-center gap-6">
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="checkbox"
-                          id="use_tls"
-                          checked={smtpFormData.use_tls}
-                          onChange={(e) => setSmtpFormData({ ...smtpFormData, use_tls: e.target.checked })}
-                          className="w-4 h-4 text-purple-600 border-gray-300 dark:border-gray-border rounded-none focus:ring-purple-500"
-                        />
-                        <label htmlFor="use_tls" className="text-sm text-gray-700 dark:text-amber-primary">
-                          Use TLS
-                        </label>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="checkbox"
-                          id="smtp_enabled"
-                          checked={smtpFormData.enabled}
-                          onChange={(e) => setSmtpFormData({ ...smtpFormData, enabled: e.target.checked })}
-                          className="w-4 h-4 text-purple-600 border-gray-300 dark:border-gray-border rounded-none focus:ring-purple-500"
-                        />
-                        <label htmlFor="smtp_enabled" className="text-sm text-gray-700 dark:text-amber-primary">
-                          Enable SMTP
-                        </label>
-                      </div>
+                    <div className="flex items-center">
+                      <input
+                        type="checkbox"
+                        id="use_tls"
+                        checked={smtpFormData.use_tls}
+                        onChange={(e) => setSmtpFormData({ ...smtpFormData, use_tls: e.target.checked })}
+                        className="w-4 h-4 text-purple-600 border-gray-300 dark:border-gray-border rounded-none focus:ring-purple-500"
+                      />
+                      <label htmlFor="use_tls" className="ml-2 text-sm text-gray-700 dark:text-amber-primary">
+                        Use TLS
+                      </label>
                     </div>
                   </div>
                 )}
@@ -813,7 +792,7 @@ const getKeyData = (keyType) => {
                     disabled={updateSmtpMutation.isPending}
                     className="inline-flex items-center gap-2 px-4 py-2 text-sm bg-purple-active hover:bg-purple-600 text-white rounded-none disabled:opacity-50 border border-purple-active/20 shadow-[0_0_15px_rgba(159,79,248,0.2)] transition-all"
                   >
-                    {updateSmtpMutation.isPending ? 'Saving...' : 'Save SMTP Settings'}
+                    {updateSmtpMutation.isPending ? 'Saving...' : 'Save Email Settings'}
                   </button>
                 </div>
               </CollapsibleSection>
@@ -892,25 +871,25 @@ const getKeyData = (keyType) => {
                       </div>
                     </div>
 
-{/* Quiet Hours Section */}
-      <div className="border-t border-gray-200 dark:border-gray-border pt-6">
-        <button
-          type="button"
-          onClick={() => setShowQuietHours(!showQuietHours)}
-          aria-expanded={showQuietHours}
-          aria-controls="admin-quiet-hours-content"
-          className="flex items-center justify-between w-full text-left"
-        >
-          <span className="text-sm font-medium text-gray-700 dark:text-amber-primary">
-            Quiet Hours
-          </span>
-          <span className={`transform transition-transform ${showQuietHours ? 'rotate-180' : ''}`}>
-            <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-            </svg>
-          </span>
-        </button>
-        {showQuietHours && (
+                {/* Quiet Hours Section */}
+                <div className="border-t border-gray-200 dark:border-gray-border pt-6">
+                  <button
+                    type="button"
+                    onClick={() => setShowQuietHours(!showQuietHours)}
+                    aria-expanded={!!showQuietHours}
+                    aria-controls="admin-quiet-hours-content"
+                    className="flex items-center justify-between w-full text-left"
+                  >
+                    <span className="text-sm font-medium text-gray-700 dark:text-amber-primary">
+                      Quiet Hours
+                    </span>
+                    <span className={`transform transition-transform ${showQuietHours ? 'rotate-180' : ''}`}>
+                      <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                      </svg>
+                    </span>
+                  </button>
+                  {showQuietHours && (
           <div id="admin-quiet-hours-content" className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
                           <div className="flex items-center gap-2">
                             <input
@@ -952,25 +931,25 @@ const getKeyData = (keyType) => {
                       )}
                     </div>
 
-{/* Daily Digest Section */}
-      <div className="border-t border-gray-200 dark:border-gray-border pt-6">
-        <button
-          type="button"
-          onClick={() => setShowDigest(!showDigest)}
-          aria-expanded={showDigest}
-          aria-controls="admin-daily-digest-content"
-          className="flex items-center justify-between w-full text-left"
-        >
-          <span className="text-sm font-medium text-gray-700 dark:text-amber-primary">
-            Daily Digest
-          </span>
-          <span className={`transform transition-transform ${showDigest ? 'rotate-180' : ''}`}>
-            <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-            </svg>
-          </span>
-        </button>
-        {showDigest && (
+                {/* Daily Digest Section */}
+                <div className="border-t border-gray-200 dark:border-gray-border pt-6">
+                  <button
+                    type="button"
+                    onClick={() => setShowDigest(!showDigest)}
+                    aria-expanded={!!showDigest}
+                    aria-controls="admin-daily-digest-content"
+                    className="flex items-center justify-between w-full text-left"
+                  >
+                    <span className="text-sm font-medium text-gray-700 dark:text-amber-primary">
+                      Daily Digest
+                    </span>
+                    <span className={`transform transition-transform ${showDigest ? 'rotate-180' : ''}`}>
+                      <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                      </svg>
+                    </span>
+                  </button>
+                  {showDigest && (
           <div id="admin-daily-digest-content" className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
                           <div className="flex items-center gap-2">
                             <input

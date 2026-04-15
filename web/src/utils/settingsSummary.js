@@ -1,40 +1,34 @@
 /**
- * Settings summary utility functions
- * Generates concise badge text for collapsed settings sections
- */
+* Settings summary utility functions
+* Generates concise badge text for collapsed settings sections
+*/
 
 /**
- * Get SMTP configuration summary
- * @param {Object} smtpConfig - SMTP configuration object
- * @param {string} smtpConfig.host - SMTP server host
- * @param {number} smtpConfig.port - SMTP server port
- * @param {string} smtpConfig.username - SMTP username
- * @param {string} smtpConfig.from_address - From email address
- * @param {boolean} smtpConfig.enabled - Whether SMTP is enabled
- * @returns {string} "SMTP: configured" | "SMTP: not configured"
- */
-export function getSMTPSummary(smtpConfig) {
-  if (!smtpConfig) {
-    return 'SMTP: not configured'
-  }
-  // Consider configured if host is set (minimum required field)
-  const isConfigured = smtpConfig.host && smtpConfig.host.trim() !== ''
-  return isConfigured ? 'SMTP: configured' : 'SMTP: not configured'
+* Get Email Configuration summary (combines SMTP and Instance URL status)
+* @param {Object} smtpConfig - SMTP configuration object
+* @param {string} smtpConfig.host - SMTP server host
+* @param {number} smtpConfig.port - SMTP server port
+* @param {string} smtpConfig.username - SMTP username
+* @param {string} smtpConfig.from_address - From email address
+* @param {boolean} smtpConfig.enabled - Whether SMTP is enabled
+* @param {Object} instanceSettings - Instance settings object (optional)
+* @param {string} instanceSettings.url - Instance URL
+* @returns {string} Summary string like "SMTP: configured | Instance: set" or "SMTP: not configured"
+*/
+export function getSMTPSummary(smtpConfig, instanceSettings) {
+// Determine SMTP status
+const smtpConfigured = smtpConfig?.host && smtpConfig.host.trim() !== ''
+const smtpStatus = smtpConfigured ? 'SMTP: configured' : 'SMTP: not configured'
+
+// Determine instance URL status
+const instanceSet = instanceSettings?.url && instanceSettings.url.trim() !== ''
+
+// Combine status - show instance URL if set
+if (instanceSet) {
+return `${smtpStatus} | Instance: set`
 }
 
-/**
- * Get instance settings summary
- * @param {Object} instanceSettings - Instance settings object
- * @param {string} instanceSettings.url - Instance URL
- * @returns {string} "Instance: set" | "Instance: not set"
- */
-export function getInstanceSummary(instanceSettings) {
-  if (!instanceSettings) {
-    return 'Instance: not set'
-  }
-  // Consider set if URL is configured
-  const isSet = instanceSettings.url && instanceSettings.url.trim() !== ''
-  return isSet ? 'Instance: set' : 'Instance: not set'
+return smtpStatus
 }
 
 /**

@@ -77,11 +77,11 @@ describe('CollapsibleSection', () => {
       expect(container.firstChild).not.toHaveAttribute('id')
     })
 
-    test('id attribute allows anchor navigation', () => {
-      renderSection({ id: 'general-section' })
-      const section = document.getElementById('general-section')
-      expect(section).toBeInTheDocument()
-    })
+	test('id attribute allows anchor navigation', () => {
+		renderSection({ id: 'test-section-id' })
+		const section = document.getElementById('test-section-id')
+		expect(section).toBeInTheDocument()
+	})
 
     test('summary can be a React node', () => {
       renderSection({ 

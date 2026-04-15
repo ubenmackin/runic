@@ -1,126 +1,135 @@
 import {
-  getSMTPSummary,
-  getInstanceSummary,
-  getNotificationSummary,
-  getAlertRulesSummary,
+getSMTPSummary,
+getNotificationSummary,
+getAlertRulesSummary,
 } from './settingsSummary'
 import { describe, test, expect } from 'vitest'
 
 describe('settingsSummary', () => {
-  describe('getSMTPSummary', () => {
-    test('returns "SMTP: configured" when host is set', () => {
-      const smtpConfig = {
-        host: 'smtp.example.com',
-        port: 587,
-        username: 'alerts',
-        from_address: 'alerts@example.com',
-        enabled: true,
-      }
+describe('getSMTPSummary', () => {
+describe('with SMTP only (no instance settings)', () => {
+test('returns "SMTP: configured" when host is set', () => {
+const smtpConfig = {
+host: 'smtp.example.com',
+port: 587,
+username: 'alerts',
+from_address: 'alerts@example.com',
+enabled: true,
+}
 
-      expect(getSMTPSummary(smtpConfig)).toBe('SMTP: configured')
-    })
+expect(getSMTPSummary(smtpConfig)).toBe('SMTP: configured')
+})
 
-    test('returns "SMTP: configured" when only host is provided', () => {
-      const smtpConfig = {
-        host: 'smtp.example.com',
-      }
+test('returns "SMTP: configured" when only host is provided', () => {
+const smtpConfig = {
+host: 'smtp.example.com',
+}
 
-      expect(getSMTPSummary(smtpConfig)).toBe('SMTP: configured')
-    })
+expect(getSMTPSummary(smtpConfig)).toBe('SMTP: configured')
+})
 
-    test('returns "SMTP: not configured" when host is empty string', () => {
-      const smtpConfig = {
-        host: '',
-        port: 587,
-        username: 'alerts',
-      }
+test('returns "SMTP: not configured" when host is empty string', () => {
+const smtpConfig = {
+host: '',
+port: 587,
+username: 'alerts',
+}
 
-      expect(getSMTPSummary(smtpConfig)).toBe('SMTP: not configured')
-    })
+expect(getSMTPSummary(smtpConfig)).toBe('SMTP: not configured')
+})
 
-    test('returns "SMTP: not configured" when host is whitespace only', () => {
-      const smtpConfig = {
-        host: '   ',
-        port: 587,
-      }
+test('returns "SMTP: not configured" when host is whitespace only', () => {
+const smtpConfig = {
+host: ' ',
+port: 587,
+}
 
-      expect(getSMTPSummary(smtpConfig)).toBe('SMTP: not configured')
-    })
+expect(getSMTPSummary(smtpConfig)).toBe('SMTP: not configured')
+})
 
-    test('returns "SMTP: not configured" for null input', () => {
-      expect(getSMTPSummary(null)).toBe('SMTP: not configured')
-    })
+test('returns "SMTP: not configured" for null input', () => {
+expect(getSMTPSummary(null)).toBe('SMTP: not configured')
+})
 
-    test('returns "SMTP: not configured" for undefined input', () => {
-      expect(getSMTPSummary(undefined)).toBe('SMTP: not configured')
-    })
+test('returns "SMTP: not configured" for undefined input', () => {
+expect(getSMTPSummary(undefined)).toBe('SMTP: not configured')
+})
 
-    test('returns "SMTP: not configured" for empty object', () => {
-      expect(getSMTPSummary({})).toBe('SMTP: not configured')
-    })
+test('returns "SMTP: not configured" for empty object', () => {
+expect(getSMTPSummary({})).toBe('SMTP: not configured')
+})
 
-    test('ignores other fields when determining configuration status', () => {
-      // Even with port, username, etc., only host matters
-      const smtpConfig = {
-        port: 587,
-        username: 'user',
-        password: 'pass',
-        from_address: 'test@example.com',
-        enabled: true,
-        // host is missing
-      }
+test('ignores other fields when determining configuration status', () => {
+// Even with port, username, etc., only host matters
+const smtpConfig = {
+port: 587,
+username: 'user',
+password: 'pass',
+from_address: 'test@example.com',
+enabled: true,
+// host is missing
+}
 
-      expect(getSMTPSummary(smtpConfig)).toBe('SMTP: not configured')
-    })
-  })
+expect(getSMTPSummary(smtpConfig)).toBe('SMTP: not configured')
+})
+})
 
-  describe('getInstanceSummary', () => {
-    test('returns "Instance: set" when URL is configured', () => {
-      const instanceSettings = {
-        url: 'https://example.runic.app',
-      }
+describe('with both SMTP and instance settings', () => {
+test('returns combined status when both are configured', () => {
+const smtpConfig = { host: 'smtp.example.com' }
+const instanceSettings = { url: 'https://runic.example.com' }
 
-      expect(getInstanceSummary(instanceSettings)).toBe('Instance: set')
-    })
+expect(getSMTPSummary(smtpConfig, instanceSettings)).toBe('SMTP: configured | Instance: set')
+})
 
-    test('returns "Instance: set" for any non-empty URL', () => {
-      const instanceSettings = {
-        url: 'https://my-instance.example.com:8080',
-      }
+test('returns combined status when SMTP configured but instance not set', () => {
+const smtpConfig = { host: 'smtp.example.com' }
+const instanceSettings = { url: '' }
 
-      expect(getInstanceSummary(instanceSettings)).toBe('Instance: set')
-    })
+expect(getSMTPSummary(smtpConfig, instanceSettings)).toBe('SMTP: configured')
+})
 
-    test('returns "Instance: not set" when URL is empty string', () => {
-      const instanceSettings = {
-        url: '',
-      }
+test('returns combined status when SMTP not configured but instance is set', () => {
+const smtpConfig = { host: '' }
+const instanceSettings = { url: 'https://runic.example.com' }
 
-      expect(getInstanceSummary(instanceSettings)).toBe('Instance: not set')
-    })
+expect(getSMTPSummary(smtpConfig, instanceSettings)).toBe('SMTP: not configured | Instance: set')
+})
 
-    test('returns "Instance: not set" when URL is whitespace only', () => {
-      const instanceSettings = {
-        url: '   ',
-      }
+test('returns SMTP status only when instance settings is null', () => {
+const smtpConfig = { host: 'smtp.example.com' }
 
-      expect(getInstanceSummary(instanceSettings)).toBe('Instance: not set')
-    })
+expect(getSMTPSummary(smtpConfig, null)).toBe('SMTP: configured')
+})
 
-    test('returns "Instance: not set" for null input', () => {
-      expect(getInstanceSummary(null)).toBe('Instance: not set')
-    })
+test('returns SMTP status only when instance settings is undefined', () => {
+const smtpConfig = { host: 'smtp.example.com' }
 
-    test('returns "Instance: not set" for undefined input', () => {
-      expect(getInstanceSummary(undefined)).toBe('Instance: not set')
-    })
+expect(getSMTPSummary(smtpConfig, undefined)).toBe('SMTP: configured')
+})
 
-    test('returns "Instance: not set" for empty object', () => {
-      expect(getInstanceSummary({})).toBe('Instance: not set')
-    })
-  })
+test('returns SMTP status only when instance settings is empty object', () => {
+const smtpConfig = { host: 'smtp.example.com' }
+const instanceSettings = {}
 
-  describe('getNotificationSummary', () => {
+expect(getSMTPSummary(smtpConfig, instanceSettings)).toBe('SMTP: configured')
+})
+
+test('handles both null inputs', () => {
+expect(getSMTPSummary(null, null)).toBe('SMTP: not configured')
+})
+
+test('handles whitespace URL in instance settings', () => {
+const smtpConfig = { host: 'smtp.example.com' }
+const instanceSettings = { url: '   ' }
+
+expect(getSMTPSummary(smtpConfig, instanceSettings)).toBe('SMTP: configured')
+})
+})
+})
+})
+
+describe('getNotificationSummary', () => {
     test('returns correct summary with timezone and alert count', () => {
       const notificationPrefs = {
         alert_types: {
@@ -341,6 +350,5 @@ describe('settingsSummary', () => {
       ]
 
       expect(getAlertRulesSummary(alertRules)).toBe('3/6 rules enabled')
-    })
-  })
+})
 })
