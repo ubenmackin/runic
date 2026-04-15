@@ -433,7 +433,7 @@ const { createMutation, updateMutation, deleteMutation } = useCrudMutations({
           <EmptyState title="No policies yet" message="Create policies to define firewall rules for your servers." action="New Policy" onAction={openAdd} />
         )
       ) : (
-        <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none overflow-hidden">
+<div className="bg-white dark:bg-charcoal-dark border border-gray-200 dark:border-gray-border overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
 <thead className="bg-gray-50 dark:bg-charcoal-darkest border-b border-gray-200 dark:border-gray-border">

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useId } from 'react'
+import { useState, useEffect, useId } from 'react'
 import { ChevronDown } from 'lucide-react'
 
 /**
@@ -15,6 +15,7 @@ import { ChevronDown } from 'lucide-react'
  * @param {React.ReactNode} props.children - Content to show when expanded
  * @param {string} [props.className] - Additional CSS classes
  * @param {string} [props.id] - Optional ID for the section wrapper (for anchor navigation)
+ * @param {string} [props.maxHeight='2000px'] - Maximum height for expanded content
  */
 export default function CollapsibleSection({
   title,
@@ -27,8 +28,8 @@ export default function CollapsibleSection({
   children,
   className = '',
   id,
+  maxHeight = '2000px',
 }) {
-  const contentRef = useRef(null)
   const headerId = useId()
   const contentId = useId()
 
@@ -79,9 +80,6 @@ export default function CollapsibleSection({
     }
   }
 
-  // Calculate content height for animation
-  const contentHeight = contentRef.current?.scrollHeight || 0
-
   return (
     <div
       id={id}
@@ -129,19 +127,20 @@ export default function CollapsibleSection({
       {/* Content with height animation */}
       <div
         id={contentId}
-        role="region"
-        aria-labelledby={headerId}
-        style={{
-          maxHeight: expanded ? `${contentHeight}px` : '0',
-          overflow: 'hidden',
-          transition: 'max-height 200ms ease-in-out',
-        }}
-      >
-        <div
-          ref={contentRef}
-          className={`
+      role="region"
+      aria-labelledby={headerId}
+      style={{
+        // Fixed height sufficient for all current use cases; accommodates longest Settings section content
+        maxHeight: expanded ? maxHeight : '0',
+        overflow: 'hidden',
+        // Slightly longer duration for smoother content expansion
+        transition: 'max-height 300ms ease-in-out',
+      }}
+    >
+      <div
+        className={`
             px-4 py-3 border-t border-gray-200 dark:border-gray-border
-            transition-opacity duration-200
+            transition-opacity duration-300
             ${expanded ? 'opacity-100' : 'opacity-0'}
           `}
         >

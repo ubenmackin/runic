@@ -9,7 +9,7 @@ import PageHeader from '../components/PageHeader'
 import Pagination from '../components/Pagination'
 import EmptyState from '../components/EmptyState'
 import TableSkeleton from '../components/TableSkeleton'
-import FilterBar from '../components/FilterBar'
+import SearchFilterPanel from '../components/SearchFilterPanel'
 
 // Alert type options
 const ALERT_TYPES = [
@@ -346,94 +346,98 @@ export default function Alerts() {
         description="View alert history and notifications"
       />
 
-    {/* Filter bar */}
-    <FilterBar
-      storageKey="alerts-filters-expanded"
-      hasActiveFilters={filter.alert_type || filter.severity || filter.status || filter.start_date || filter.end_date}
-    >
-      {/* Alert Type */}
-      <div className="space-y-1 min-w-[150px]">
-        <label className="text-xs font-medium text-gray-500 dark:text-amber-muted">Alert Type</label>
-        <select
-          value={filter.alert_type}
-          onChange={e => setFilter(f => ({ ...f, alert_type: e.target.value, page: 1 }))}
-          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white text-sm"
-        >
-          <option value="">All types</option>
-          {ALERT_TYPES.map(t => (
-            <option key={t.value} value={t.value}>{t.label}</option>
-          ))}
-        </select>
-      </div>
+      {/* Filter bar */}
+      <SearchFilterPanel
+        storageKey="alerts-filters-expanded"
+        showSearch={false}
+        hasActiveFilters={filter.alert_type || filter.severity || filter.status || filter.start_date || filter.end_date}
+        filterContent={
+          <div className="flex items-center gap-4">
+            {/* Alert Type */}
+            <div className="space-y-1 min-w-[150px]">
+              <label className="text-xs font-medium text-gray-500 dark:text-amber-muted">Alert Type</label>
+              <select
+                value={filter.alert_type}
+                onChange={e => setFilter(f => ({ ...f, alert_type: e.target.value, page: 1 }))}
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white text-sm"
+              >
+                <option value="">All types</option>
+                {ALERT_TYPES.map(t => (
+                  <option key={t.value} value={t.value}>{t.label}</option>
+                ))}
+              </select>
+            </div>
 
-      {/* Severity */}
-      <div className="space-y-1 min-w-[120px]">
-        <label className="text-xs font-medium text-gray-500 dark:text-amber-muted">Severity</label>
-        <select
-          value={filter.severity}
-          onChange={e => setFilter(f => ({ ...f, severity: e.target.value, page: 1 }))}
-          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white text-sm"
-        >
-          <option value="">All severities</option>
-          {SEVERITIES.map(s => (
-            <option key={s.value} value={s.value}>{s.label}</option>
-          ))}
-        </select>
-      </div>
+            {/* Severity */}
+            <div className="space-y-1 min-w-[120px]">
+              <label className="text-xs font-medium text-gray-500 dark:text-amber-muted">Severity</label>
+              <select
+                value={filter.severity}
+                onChange={e => setFilter(f => ({ ...f, severity: e.target.value, page: 1 }))}
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white text-sm"
+              >
+                <option value="">All severities</option>
+                {SEVERITIES.map(s => (
+                  <option key={s.value} value={s.value}>{s.label}</option>
+                ))}
+              </select>
+            </div>
 
-      {/* Status */}
-      <div className="space-y-1 min-w-[120px]">
-        <label className="text-xs font-medium text-gray-500 dark:text-amber-muted">Status</label>
-        <select
-          value={filter.status}
-          onChange={e => setFilter(f => ({ ...f, status: e.target.value, page: 1 }))}
-          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white text-sm"
-        >
-          <option value="">All statuses</option>
-          {STATUSES.map(s => (
-            <option key={s.value} value={s.value}>{s.label}</option>
-          ))}
-        </select>
-      </div>
+            {/* Status */}
+            <div className="space-y-1 min-w-[120px]">
+              <label className="text-xs font-medium text-gray-500 dark:text-amber-muted">Status</label>
+              <select
+                value={filter.status}
+                onChange={e => setFilter(f => ({ ...f, status: e.target.value, page: 1 }))}
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white text-sm"
+              >
+                <option value="">All statuses</option>
+                {STATUSES.map(s => (
+                  <option key={s.value} value={s.value}>{s.label}</option>
+                ))}
+              </select>
+            </div>
 
-      {/* Date Range */}
-      <div className="space-y-1 min-w-[150px]">
-        <label className="text-xs font-medium text-gray-500 dark:text-amber-muted">From Date</label>
-        <div className="relative">
-          <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 dark:text-amber-muted" />
-          <input
-            type="date"
-            value={filter.start_date}
-            onChange={e => setFilter(f => ({ ...f, start_date: e.target.value, page: 1 }))}
-            className="w-full pl-10 pr-3 py-2 border border-gray-300 dark:border-gray-border bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white text-sm"
-          />
-        </div>
-      </div>
+            {/* Date Range */}
+            <div className="space-y-1 min-w-[150px]">
+              <label className="text-xs font-medium text-gray-500 dark:text-amber-muted">From Date</label>
+              <div className="relative">
+                <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 dark:text-amber-muted" />
+                <input
+                  type="date"
+                  value={filter.start_date}
+                  onChange={e => setFilter(f => ({ ...f, start_date: e.target.value, page: 1 }))}
+                  className="w-full pl-10 pr-3 py-2 border border-gray-300 dark:border-gray-border bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white text-sm"
+                />
+              </div>
+            </div>
 
-      <div className="space-y-1 min-w-[150px]">
-        <label className="text-xs font-medium text-gray-500 dark:text-amber-muted">To Date</label>
-        <div className="relative">
-          <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 dark:text-amber-muted" />
-          <input
-            type="date"
-            value={filter.end_date}
-            onChange={e => setFilter(f => ({ ...f, end_date: e.target.value, page: 1 }))}
-            className="w-full pl-10 pr-3 py-2 border border-gray-300 dark:border-gray-border bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white text-sm"
-          />
-        </div>
-      </div>
-
-      {/* Clear filters */}
-      {(filter.alert_type || filter.severity || filter.status || filter.start_date || filter.end_date) && (
-        <button
-          onClick={handleClearFilters}
-          className="flex items-center gap-1 px-3 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20"
-        >
-          <X className="w-4 h-4" />
-          Clear
-        </button>
-      )}
-    </FilterBar>
+            <div className="space-y-1 min-w-[150px]">
+              <label className="text-xs font-medium text-gray-500 dark:text-amber-muted">To Date</label>
+              <div className="relative">
+                <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 dark:text-amber-muted" />
+                <input
+                  type="date"
+                  value={filter.end_date}
+                  onChange={e => setFilter(f => ({ ...f, end_date: e.target.value, page: 1 }))}
+                  className="w-full pl-10 pr-3 py-2 border border-gray-300 dark:border-gray-border bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white text-sm"
+                />
+              </div>
+            </div>
+          </div>
+        }
+        rightContent={
+          (filter.alert_type || filter.severity || filter.status || filter.start_date || filter.end_date) && (
+            <button
+              onClick={handleClearFilters}
+              className="flex items-center gap-1 px-3 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20"
+            >
+              <X className="w-4 h-4" />
+              Clear
+            </button>
+          )
+        }
+      />
 
       {/* Clear All Alerts button */}
       {data?.alerts?.length > 0 && (

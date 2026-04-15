@@ -411,9 +411,9 @@ const handleSourcePortInputKeyDown = (e) => {
         ) : (
           <EmptyState title="No user services yet" message="Create services to define port bundles for your policies." action="New Service" onAction={openAdd} />
         )
-      ) : (
-        <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none overflow-hidden">
-          <div className="overflow-x-auto">
+) : (
+<div className="bg-white dark:bg-charcoal-dark border border-gray-200 dark:border-gray-border overflow-hidden">
+<div className="overflow-x-auto">
             <table className="w-full text-sm">
 <thead className="bg-gray-50 dark:bg-charcoal-darkest border-b border-gray-200 dark:border-gray-border">
               <tr>
