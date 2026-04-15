@@ -138,13 +138,35 @@ func UpdatePushJobStatus(ctx context.Context, database Querier, jobID, status st
 	return nil
 }
 
-// UpdatePushJobCounts updates the succeeded_count and failed_count fields.
-func UpdatePushJobCounts(ctx context.Context, database Querier, jobID string, succeeded, failed int) error {
-	_, err := database.ExecContext(ctx,
-		"UPDATE push_jobs SET succeeded_count = ?, failed_count = ? WHERE id = ?",
-		succeeded, failed, jobID)
+// FinalizePushJob sets completed_at and updates the final status based on counts.
+// If failed_count > 0, status becomes 'completed_with_errors'; otherwise 'completed'.
+func FinalizePushJob(ctx context.Context, database Querier, jobID string) error {
+	_, err := database.ExecContext(ctx, `
+		UPDATE push_jobs
+		SET completed_at = CURRENT_TIMESTAMP,
+		status = CASE WHEN failed_count > 0 THEN 'completed_with_errors' ELSE 'completed' END
+		WHERE id = ?
+	`, jobID)
 	if err != nil {
-		return fmt.Errorf("update push job %s counts: %w", jobID, err)
+		return fmt.Errorf("finalize push job %s: %w", jobID, err)
+	}
+	return nil
+}
+
+// FinalizePushJobWithCounts atomically updates counts and finalizes the job.
+// This combines FinalizePushJob into a single UPDATE to prevent stale counts
+// if the process crashes between the two calls.
+func FinalizePushJobWithCounts(ctx context.Context, database Querier, jobID string, succeeded, failed int) error {
+	_, err := database.ExecContext(ctx, `
+		UPDATE push_jobs
+		SET completed_at = CURRENT_TIMESTAMP,
+		status = CASE WHEN ? > 0 THEN 'completed_with_errors' ELSE 'completed' END,
+		succeeded_count = ?,
+		failed_count = ?
+		WHERE id = ?
+	`, failed, succeeded, failed, jobID)
+	if err != nil {
+		return fmt.Errorf("finalize push job %s with counts: %w", jobID, err)
 	}
 	return nil
 }
@@ -166,68 +188,4 @@ func UpdatePushJobPeerStatus(ctx context.Context, database Querier, jobID string
 		return fmt.Errorf("update push job peer %d status to %s: %w", peerID, status, err)
 	}
 	return nil
-}
-
-// FinalizePushJob sets completed_at and updates the final status based on counts.
-// If failed_count > 0, status becomes 'completed_with_errors'; otherwise 'completed'.
-func FinalizePushJob(ctx context.Context, database Querier, jobID string) error {
-	_, err := database.ExecContext(ctx, `
-		UPDATE push_jobs
-		SET completed_at = CURRENT_TIMESTAMP,
-		status = CASE WHEN failed_count > 0 THEN 'completed_with_errors' ELSE 'completed' END
-		WHERE id = ?
-	`, jobID)
-	if err != nil {
-		return fmt.Errorf("finalize push job %s: %w", jobID, err)
-	}
-	return nil
-}
-
-// FinalizePushJobWithCounts atomically updates counts and finalizes the job.
-// This combines UpdatePushJobCounts and FinalizePushJob into a single UPDATE
-// to prevent stale counts if the process crashes between the two calls.
-func FinalizePushJobWithCounts(ctx context.Context, database Querier, jobID string, succeeded, failed int) error {
-	_, err := database.ExecContext(ctx, `
-		UPDATE push_jobs
-		SET completed_at = CURRENT_TIMESTAMP,
-		status = CASE WHEN ? > 0 THEN 'completed_with_errors' ELSE 'completed' END,
-		succeeded_count = ?,
-		failed_count = ?
-		WHERE id = ?
-	`, failed, succeeded, failed, jobID)
-	if err != nil {
-		return fmt.Errorf("finalize push job %s with counts: %w", jobID, err)
-	}
-	return nil
-}
-
-// ListPushJobs returns recent push jobs ordered by creation time descending.
-func ListPushJobs(ctx context.Context, database Querier, limit int) ([]PushJob, error) {
-	rows, err := database.QueryContext(ctx, `
-		SELECT id, initiated_by, total_peers, succeeded_count, failed_count, status,
-		COALESCE(created_at, ''), COALESCE(completed_at, '')
-		FROM push_jobs ORDER BY created_at DESC LIMIT ?
-	`, limit)
-	if err != nil {
-		return nil, fmt.Errorf("list push jobs: %w", err)
-	}
-	defer func() {
-		if err := rows.Close(); err != nil {
-			fmt.Printf("close err: %v\n", err)
-		}
-	}()
-
-	var jobs []PushJob
-	for rows.Next() {
-		var j PushJob
-		if err := rows.Scan(&j.ID, &j.InitiatedBy, &j.TotalPeers, &j.Succeeded, &j.Failed,
-			&j.Status, &j.CreatedAt, &j.CompletedAt); err != nil {
-			return nil, fmt.Errorf("scan push job: %w", err)
-		}
-		jobs = append(jobs, j)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate push jobs: %w", err)
-	}
-	return jobs, nil
 }

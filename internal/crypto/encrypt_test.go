@@ -26,36 +26,6 @@ func TestNewEncryptor_EmptyPassphrase(t *testing.T) {
 	}
 }
 
-// TestNewEncryptorWithSalt_Success tests creating an encryptor with a known salt
-func TestNewEncryptorWithSalt_Success(t *testing.T) {
-	salt, err := GenerateSalt()
-	if err != nil {
-		t.Fatalf("GenerateSalt() returned unexpected error: %v", err)
-	}
-
-	enc, err := NewEncryptorWithSalt("test-passphrase", salt)
-	if err != nil {
-		t.Fatalf("NewEncryptorWithSalt() returned unexpected error: %v", err)
-	}
-	if enc == nil {
-		t.Fatal("NewEncryptorWithSalt() returned nil encryptor")
-	}
-
-	// Verify the salt matches
-	retrievedSalt := enc.GetSalt()
-	if string(retrievedSalt) != string(salt) {
-		t.Error("GetSalt() returned different salt than provided")
-	}
-}
-
-// TestNewEncryptorWithSalt_InvalidSaltLength tests that invalid salt length is rejected
-func TestNewEncryptorWithSalt_InvalidSaltLength(t *testing.T) {
-	_, err := NewEncryptorWithSalt("test-passphrase", []byte("short"))
-	if err == nil {
-		t.Error("NewEncryptorWithSalt() expected error for invalid salt length, got nil")
-	}
-}
-
 // TestEncryptDecrypt_RoundTrip tests that encryption followed by decryption returns original text
 func TestEncryptDecrypt_RoundTrip(t *testing.T) {
 	enc, err := NewEncryptor("my-secret-passphrase")
@@ -420,42 +390,6 @@ func TestEncryptorReuse(t *testing.T) {
 		if decrypted != plaintext {
 			t.Errorf("Decrypt() iteration %d returned %q, want %q", i, decrypted, plaintext)
 		}
-	}
-}
-
-// TestEncryptRestartPersistence tests that encryption persists across restarts
-func TestEncryptRestartPersistence(t *testing.T) {
-	// Create first Encryptor instance with passphrase
-	enc1, err := NewEncryptor("test-passphrase")
-	if err != nil {
-		t.Fatalf("NewEncryptor() returned unexpected error: %v", err)
-	}
-
-	// Encrypt a plaintext string
-	plaintext := "my-secret-password"
-	ciphertext, err := enc1.Encrypt(plaintext)
-	if err != nil {
-		t.Fatalf("Encrypt() returned unexpected error: %v", err)
-	}
-
-	// Get the salt from the first encryptor
-	salt := enc1.GetSalt()
-
-	// Create a second Encryptor instance using NewEncryptorWithSalt with the same passphrase and stored salt
-	enc2, err := NewEncryptorWithSalt("test-passphrase", salt)
-	if err != nil {
-		t.Fatalf("NewEncryptorWithSalt() returned unexpected error: %v", err)
-	}
-
-	// Decrypt the ciphertext with the second encryptor
-	decrypted, err := enc2.Decrypt(ciphertext)
-	if err != nil {
-		t.Fatalf("Decrypt() returned unexpected error: %v", err)
-	}
-
-	// Verify the decrypted text matches the original plaintext
-	if decrypted != plaintext {
-		t.Errorf("Decrypt() returned %q, want %q", decrypted, plaintext)
 	}
 }
 

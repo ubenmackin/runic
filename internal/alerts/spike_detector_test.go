@@ -2,60 +2,13 @@
 package alerts
 
 import (
-	"context"
 	"database/sql"
 	"fmt"
-	"sync"
 	"testing"
 	"time"
 
 	"runic/internal/testutil"
 )
-
-// mockSpikeAlertService captures triggered alerts for testing spike detection.
-type mockSpikeAlertService struct {
-	mu      sync.Mutex
-	alerts  []*AlertEvent
-	trigger func(ctx context.Context, event *AlertEvent) error
-}
-
-// newMockSpikeAlertService creates a new mock alert service for spike tests.
-func newMockSpikeAlertService() *mockSpikeAlertService {
-	return &mockSpikeAlertService{
-		alerts: make([]*AlertEvent, 0),
-	}
-}
-
-// TriggerAlert captures the alert event for testing.
-func (m *mockSpikeAlertService) TriggerAlert(ctx context.Context, event *AlertEvent) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.alerts = append(m.alerts, event)
-	return nil
-}
-
-// getAlerts returns all captured alerts.
-func (m *mockSpikeAlertService) getAlerts() []*AlertEvent {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	result := make([]*AlertEvent, len(m.alerts))
-	copy(result, m.alerts)
-	return result
-}
-
-// reset clears all captured alerts.
-func (m *mockSpikeAlertService) reset() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.alerts = make([]*AlertEvent, 0)
-}
-
-// alertCount returns the number of captured alerts.
-func (m *mockSpikeAlertService) alertCount() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return len(m.alerts)
-}
 
 // insertFirewallLogs inserts firewall log entries with DROP action.
 func insertFirewallLogs(t *testing.T, db *sql.DB, count int, peerID string) {

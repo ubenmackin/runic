@@ -18,32 +18,6 @@ import (
 // muxVars is a helper to mock gorilla/mux vars
 var muxVars = testutil.MuxVars
 
-// mockSMTPSender is a mock implementation of SMTPSender for testing
-type mockSMTPSender struct {
-	sendCalled bool
-	lastTo     string
-	lastEvent  *alerts.AlertEvent
-	sendError  error
-}
-
-func (m *mockSMTPSender) SendAlertEmail(to string, event *alerts.AlertEvent) error {
-	m.sendCalled = true
-	m.lastTo = to
-	m.lastEvent = event
-	return m.sendError
-}
-
-// mockAlertService is a mock alert service that returns our mock SMTPSender
-type mockAlertService struct {
-	smtpSender *mockSMTPSender
-}
-
-func (m *mockAlertService) GetSMTPSender() *alerts.SMTPSender {
-	// Return nil since we can't easily mock the SMTPSender type
-	// Tests will need to use real SMTPSender or test via integration
-	return nil
-}
-
 // TestGetSMTPConfig tests the GET /settings/smtp endpoint.
 func TestGetSMTPConfig(t *testing.T) {
 	tests := []struct {

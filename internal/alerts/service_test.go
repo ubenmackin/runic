@@ -5,109 +5,12 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"sync"
 	"testing"
 	"time"
 
 	"runic/internal/db"
 	"runic/internal/testutil"
 )
-
-// mockSMTPSender is a mock SMTP sender that tracks sent emails.
-type mockSMTPSender struct {
-	mu        sync.Mutex
-	emails    []mockEmail
-	sendError error
-	config    SMTPConfig
-}
-
-type mockEmail struct {
-	To      string
-	Subject string
-	Body    string
-	Type    string // "plain" or "html"
-}
-
-// newMockSMTPSender creates a new mock SMTP sender.
-func newMockSMTPSender() *mockSMTPSender {
-	return &mockSMTPSender{
-		emails: make([]mockEmail, 0),
-		config: SMTPConfig{
-			Enabled:     true,
-			Host:        "smtp.test.com",
-			Port:        587,
-			FromAddress: "alerts@runic.test",
-		},
-	}
-}
-
-// Send implements the SMTP sender interface.
-func (m *mockSMTPSender) Send(to, subject, body string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.sendError != nil {
-		return m.sendError
-	}
-	m.emails = append(m.emails, mockEmail{
-		To: to, Subject: subject, Body: body, Type: "plain",
-	})
-	return nil
-}
-
-// SendHTML implements the SMTP sender interface.
-func (m *mockSMTPSender) SendHTML(to, subject, body string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.sendError != nil {
-		return m.sendError
-	}
-	m.emails = append(m.emails, mockEmail{
-		To: to, Subject: subject, Body: body, Type: "html",
-	})
-	return nil
-}
-
-// SendAlertEmail implements the SMTP sender interface.
-func (m *mockSMTPSender) SendAlertEmail(to string, event *AlertEvent) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.sendError != nil {
-		return m.sendError
-	}
-	subject := fmt.Sprintf("[Runic] Alert: %s", event.Type)
-	m.emails = append(m.emails, mockEmail{
-		To: to, Subject: subject, Type: "alert",
-	})
-	return nil
-}
-
-// GetEmails returns all sent emails.
-func (m *mockSMTPSender) GetEmails() []mockEmail {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	result := make([]mockEmail, len(m.emails))
-	copy(result, m.emails)
-	return result
-}
-
-// Clear clears all recorded emails.
-func (m *mockSMTPSender) Clear() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.emails = make([]mockEmail, 0)
-}
-
-// SetError sets an error to return on subsequent sends.
-func (m *mockSMTPSender) SetError(err error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.sendError = err
-}
-
-// isEnabled returns whether SMTP is enabled.
-func (m *mockSMTPSender) isEnabled() bool {
-	return m.config.Enabled
-}
 
 // setupTestAlertTables creates the necessary tables for alert tests.
 func setupTestAlertTables(t *testing.T, database *sql.DB) {
@@ -198,9 +101,6 @@ func TestTriggerAlert_Basic(t *testing.T) {
 	// Create an admin user to receive alerts
 	createTestUser(t, database, "admin", "admin@test.com", "admin")
 
-	// Create a mock SMTP sender that tracks sent emails
-	mockSMTP := newMockSMTPSender()
-
 	// Create an alert rule
 	rule := &AlertRule{
 		Name:            "Test Peer Offline Rule",
@@ -213,14 +113,6 @@ func TestTriggerAlert_Basic(t *testing.T) {
 	// Create the alert service and initialize it
 	databaseWrapper := db.New(database)
 	service := NewService(databaseWrapper)
-
-	// Create processor with mock SMTP
-	processor := NewAlertProcessor(databaseWrapper, nil)
-	processor.smtp = nil // Will use mock
-
-	// Manually set processor to use our mock for email sending
-	// We need to create a custom test setup since SMTPSender is a concrete type
-	// Instead, we test the database operations directly
 
 	// Create an alert event
 	event := &AlertEvent{
@@ -262,7 +154,6 @@ func TestTriggerAlert_Basic(t *testing.T) {
 
 	// Clean up
 	_ = service
-	_ = mockSMTP
 }
 
 // TestTriggerAlert_Throttled tests throttle behavior.

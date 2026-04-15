@@ -127,25 +127,6 @@ func UpdateAlertRule(ctx context.Context, database db.Querier, rule *AlertRule) 
 	return nil
 }
 
-// DeleteAlertRule deletes an alert rule by ID.
-func DeleteAlertRule(ctx context.Context, database db.Querier, id uint) error {
-	result, err := database.ExecContext(ctx, `DELETE FROM alert_rules WHERE id = ?`, id)
-	if err != nil {
-		return fmt.Errorf("failed to delete alert rule: %w", err)
-	}
-
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("failed to get rows affected: %w", err)
-	}
-
-	if affected == 0 {
-		return fmt.Errorf("alert rule not found")
-	}
-
-	return nil
-}
-
 // AlertHistory Operations
 
 // CreateAlertHistory inserts a new alert history entry.
@@ -169,82 +150,6 @@ func CreateAlertHistory(ctx context.Context, database db.Querier, history *Alert
 	history.ID = uint(id)
 	history.CreatedAt = now
 	return nil
-}
-
-// ListAlertHistory fetches alert history entries with pagination.
-func ListAlertHistory(ctx context.Context, database db.Querier, limit, offset int) ([]AlertHistory, error) {
-	if limit <= 0 {
-		limit = 50
-	}
-
-	rows, err := database.QueryContext(ctx,
-		`SELECT h.id, h.rule_id, h.alert_type, h.peer_id, p.hostname as peer_hostname, h.severity, h.subject, h.message, h.metadata, h.status, h.sent_at, h.error_message, h.created_at
-		FROM alert_history h
-		LEFT JOIN peers p ON h.peer_id = p.id
-		ORDER BY h.created_at DESC LIMIT ? OFFSET ?`,
-		limit, offset,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list alert history: %w", err)
-	}
-	defer func() {
-		if cerr := rows.Close(); cerr != nil {
-			log.Error("failed to close rows", "error", cerr)
-		}
-	}()
-
-	var historyList []AlertHistory
-	for rows.Next() {
-		var h AlertHistory
-		var peerHostname sql.NullString
-		if err := rows.Scan(&h.ID, &h.RuleID, &h.AlertType, &h.PeerID, &peerHostname, &h.Severity, &h.Subject,
-			&h.Message, &h.Metadata, &h.Status, &h.SentAt, &h.ErrorMessage, &h.CreatedAt); err != nil {
-			return nil, fmt.Errorf("failed to scan alert history: %w", err)
-		}
-		if peerHostname.Valid {
-			h.PeerHostname = peerHostname.String
-		}
-		historyList = append(historyList, h)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating alert history: %w", err)
-	}
-
-	return historyList, nil
-}
-
-// GetAlertHistoryByRule fetches alert history entries for a specific rule.
-func GetAlertHistoryByRule(ctx context.Context, database db.Querier, ruleID uint) ([]AlertHistory, error) {
-	rows, err := database.QueryContext(ctx,
-		`SELECT id, rule_id, alert_type, peer_id, severity, subject, message, metadata, status, sent_at, error_message, created_at
-		 FROM alert_history WHERE rule_id = ? ORDER BY created_at DESC`,
-		ruleID,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get alert history by rule: %w", err)
-	}
-	defer func() {
-		if cerr := rows.Close(); cerr != nil {
-			log.Error("failed to close rows", "error", cerr)
-		}
-	}()
-
-	var historyList []AlertHistory
-	for rows.Next() {
-		var h AlertHistory
-		if err := rows.Scan(&h.ID, &h.RuleID, &h.AlertType, &h.PeerID, &h.Severity, &h.Subject,
-			&h.Message, &h.Metadata, &h.Status, &h.SentAt, &h.ErrorMessage, &h.CreatedAt); err != nil {
-			return nil, fmt.Errorf("failed to scan alert history: %w", err)
-		}
-		historyList = append(historyList, h)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating alert history: %w", err)
-	}
-
-	return historyList, nil
 }
 
 // UserNotificationPreferences Operations
@@ -347,56 +252,6 @@ func CreateAlertDigest(ctx context.Context, database db.Querier, digest *AlertDi
 	return nil
 }
 
-// GetLatestDigest fetches the most recent digest for a user.
-func GetLatestDigest(ctx context.Context, database db.Querier, userID uint) (*AlertDigest, error) {
-	var digest AlertDigest
-
-	err := database.QueryRowContext(ctx,
-		`SELECT id, user_id, digest_date, alert_count, summary, sent_at, created_at
-		 FROM alert_digests WHERE user_id = ? ORDER BY digest_date DESC LIMIT 1`,
-		userID,
-	).Scan(&digest.ID, &digest.UserID, &digest.DigestDate, &digest.AlertCount, &digest.Summary,
-		&digest.SentAt, &digest.CreatedAt)
-
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("no digest found for user: %w", err)
-		}
-		return nil, fmt.Errorf("failed to get latest digest: %w", err)
-	}
-
-	return &digest, nil
-}
-
-// Transactional helper functions
-
-// CreateAlertRuleTx creates an alert rule within a transaction.
-func CreateAlertRuleTx(ctx context.Context, tx *sql.Tx, rule *AlertRule) error {
-	return CreateAlertRule(ctx, tx, rule)
-}
-
-// UpdateAlertHistoryStatusTx updates the status of an alert history entry within a transaction.
-func UpdateAlertHistoryStatusTx(ctx context.Context, tx *sql.Tx, id uint, status AlertStatus, sentAt sql.NullTime, errorMsg sql.NullString) error {
-	result, err := tx.ExecContext(ctx,
-		`UPDATE alert_history SET status = ?, sent_at = ?, error_message = ? WHERE id = ?`,
-		status, sentAt, errorMsg, id,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to update alert history status: %w", err)
-	}
-
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("failed to get rows affected: %w", err)
-	}
-
-	if affected == 0 {
-		return fmt.Errorf("alert history not found")
-	}
-
-	return nil
-}
-
 // GetEnabledAlertRulesByType fetches all enabled rules for a specific alert type.
 func GetEnabledAlertRulesByType(ctx context.Context, database db.Querier, alertType AlertType) ([]AlertRule, error) {
 	rows, err := database.QueryContext(ctx,
@@ -433,27 +288,6 @@ func GetEnabledAlertRulesByType(ctx context.Context, database db.Querier, alertT
 	}
 
 	return rules, nil
-}
-
-// GetLastAlertForRuleAndPeer fetches the most recent alert for a specific rule and peer.
-func GetLastAlertForRuleAndPeer(ctx context.Context, database db.Querier, ruleID uint, peerID sql.NullInt64) (*AlertHistory, error) {
-	var h AlertHistory
-
-	err := database.QueryRowContext(ctx,
-		`SELECT id, rule_id, alert_type, peer_id, severity, subject, message, metadata, status, sent_at, error_message, created_at
-		FROM alert_history WHERE rule_id = ? AND peer_id = ? ORDER BY created_at DESC LIMIT 1`,
-		ruleID, peerID,
-	).Scan(&h.ID, &h.RuleID, &h.AlertType, &h.PeerID, &h.Severity, &h.Subject, &h.Message,
-		&h.Metadata, &h.Status, &h.SentAt, &h.ErrorMessage, &h.CreatedAt)
-
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil // No previous alert, return nil without error
-		}
-		return nil, fmt.Errorf("failed to get last alert for rule and peer: %w", err)
-	}
-
-	return &h, nil
 }
 
 // DeleteAlertHistory deletes an alert history entry by ID.

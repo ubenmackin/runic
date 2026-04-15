@@ -41,22 +41,3 @@ func ServeHTMLWithNonce(w http.ResponseWriter, r *http.Request, subFS fs.FS, pat
 	_, err = w.Write(content)
 	return err
 }
-
-// HTMLWithNonceHandler creates a handler that serves HTML files with nonce injection.
-// This is used for serving the SPA with CSP nonce support.
-func HTMLWithNonceHandler(subFS fs.FS, path string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		// Get nonce from context
-		nonce, ok := GetCSPNonce(r.Context())
-		if !ok {
-			// Fallback: serve without nonce (shouldn't happen if CSP middleware is applied)
-			http.ServeFileFS(w, r, subFS, path)
-			return
-		}
-
-		// Serve with nonce injection
-		if err := ServeHTMLWithNonce(w, r, subFS, path, nonce); err != nil {
-			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		}
-	}
-}

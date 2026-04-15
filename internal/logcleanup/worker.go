@@ -4,7 +4,6 @@ package logcleanup
 import (
 	"context"
 	"database/sql"
-	"sync"
 	"time"
 
 	"runic/internal/common/log"
@@ -14,8 +13,6 @@ type Worker struct {
 	db       *sql.DB
 	logsDB   *sql.DB
 	interval time.Duration
-	stopCh   chan struct{}
-	stopOnce sync.Once
 }
 
 func NewWorker(db *sql.DB, logsDB *sql.DB) *Worker {
@@ -23,7 +20,6 @@ func NewWorker(db *sql.DB, logsDB *sql.DB) *Worker {
 		db:       db,
 		logsDB:   logsDB,
 		interval: 24 * time.Hour, // Run once per day
-		stopCh:   make(chan struct{}),
 	}
 }
 
@@ -40,8 +36,6 @@ func (w *Worker) Start(ctx context.Context) {
 		for {
 			select {
 			case <-ctx.Done():
-				return
-			case <-w.stopCh:
 				return
 			case <-ticker.C:
 				w.runCleanup(ctx)
@@ -108,10 +102,4 @@ func (w *Worker) runCleanup(ctx context.Context) {
 	if totalDeleted > 0 {
 		log.InfoContext(ctx, "Log cleanup completed", "deleted", totalDeleted, "retention_days", retentionDays)
 	}
-}
-
-func (w *Worker) Stop() {
-	w.stopOnce.Do(func() {
-		close(w.stopCh)
-	})
 }

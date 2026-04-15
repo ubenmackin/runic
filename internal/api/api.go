@@ -130,14 +130,6 @@ func apiMiddleware(a *API) mux.MiddlewareFunc {
 	}
 }
 
-// GetAPI retrieves the API instance from request context.
-func GetAPI(ctx context.Context) *API {
-	if a, ok := ctx.Value(apiContextKey).(*API); ok {
-		return a
-	}
-	return nil
-}
-
 // RegisterRoutes registers all API routes. Accepts an API instance for rule compilation endpoints.
 func (a *API) RegisterRoutes(r *mux.Router, downloadsDir string) {
 

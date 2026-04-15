@@ -2,10 +2,7 @@ package db
 
 import (
 	"context"
-	"database/sql"
 	"testing"
-
-	"runic/internal/models"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -324,21 +321,23 @@ func TestSavePendingBundlePreview(t *testing.T) {
 	}
 
 	// Verify the bundle preview was inserted
-	preview, err := GetPendingBundlePreview(ctx, db, 1)
+	var peerID int
+	var rulesContent, diffContent, versionHash string
+	err = db.QueryRowContext(ctx, "SELECT peer_id, rules_content, diff_content, version_hash FROM pending_bundle_previews WHERE peer_id = 1").Scan(&peerID, &rulesContent, &diffContent, &versionHash)
 	if err != nil {
-		t.Fatalf("GetPendingBundlePreview failed: %v", err)
+		t.Fatalf("Failed to query bundle preview: %v", err)
 	}
-	if preview.PeerID != 1 {
-		t.Errorf("Expected peer ID 1, got %d", preview.PeerID)
+	if peerID != 1 {
+		t.Errorf("Expected peer ID 1, got %d", peerID)
 	}
-	if preview.RulesContent != "rules content" {
-		t.Errorf("Expected rules content, got %s", preview.RulesContent)
+	if rulesContent != "rules content" {
+		t.Errorf("Expected rules content, got %s", rulesContent)
 	}
-	if preview.DiffContent != "diff content" {
-		t.Errorf("Expected diff content, got %s", preview.DiffContent)
+	if diffContent != "diff content" {
+		t.Errorf("Expected diff content, got %s", diffContent)
 	}
-	if preview.VersionHash != "version-hash-1" {
-		t.Errorf("Expected version hash, got %s", preview.VersionHash)
+	if versionHash != "version-hash-1" {
+		t.Errorf("Expected version hash, got %s", versionHash)
 	}
 
 	// Test update (upsert)
@@ -348,15 +347,15 @@ func TestSavePendingBundlePreview(t *testing.T) {
 	}
 
 	// Verify the bundle preview was updated
-	previewUpdated, err := GetPendingBundlePreview(ctx, db, 1)
+	err = db.QueryRowContext(ctx, "SELECT peer_id, rules_content, diff_content, version_hash FROM pending_bundle_previews WHERE peer_id = 1").Scan(&peerID, &rulesContent, &diffContent, &versionHash)
 	if err != nil {
-		t.Fatalf("GetPendingBundlePreview failed: %v", err)
+		t.Fatalf("Failed to query bundle preview: %v", err)
 	}
-	if previewUpdated.RulesContent != "updated rules" {
-		t.Errorf("Expected updated rules content, got %s", previewUpdated.RulesContent)
+	if rulesContent != "updated rules" {
+		t.Errorf("Expected updated rules content, got %s", rulesContent)
 	}
-	if previewUpdated.VersionHash != "version-hash-2" {
-		t.Errorf("Expected updated version hash, got %s", previewUpdated.VersionHash)
+	if versionHash != "version-hash-2" {
+		t.Errorf("Expected updated version hash, got %s", versionHash)
 	}
 }
 
@@ -368,56 +367,6 @@ func TestSavePendingBundlePreview_DBError(t *testing.T) {
 
 	ctx := context.Background()
 	err := SavePendingBundlePreview(ctx, db, 1, "rules", "diff", "hash")
-	if err == nil {
-		t.Fatal("Expected error when database is closed")
-	}
-}
-
-// TestGetPendingBundlePreview tests the GetPendingBundlePreview function.
-func TestGetPendingBundlePreview(t *testing.T) {
-	db, cleanup := SetupTestDB(t)
-	defer cleanup()
-
-	ctx := context.Background()
-
-	// Insert required peer for foreign key
-	_, err := db.Exec(`INSERT INTO peers (id, hostname, ip_address, agent_key, hmac_key, status) VALUES (1, 'peer1', '10.0.0.1', 'key1', 'hmac1', 'online')`)
-	if err != nil {
-		t.Fatalf("Failed to insert peer: %v", err)
-	}
-
-	// Test retrieving existing bundle preview
-	err = SavePendingBundlePreview(ctx, db, 1, "rules content", "diff content", "version-hash-1")
-	if err != nil {
-		t.Fatalf("SavePendingBundlePreview failed: %v", err)
-	}
-
-	preview, err := GetPendingBundlePreview(ctx, db, 1)
-	if err != nil {
-		t.Fatalf("GetPendingBundlePreview failed: %v", err)
-	}
-	if preview == nil {
-		t.Fatal("Expected non-nil preview")
-	}
-	if preview.PeerID != 1 {
-		t.Errorf("Expected peer ID 1, got %d", preview.PeerID)
-	}
-
-	// Test retrieving non-existent peer
-	_, err = GetPendingBundlePreview(ctx, db, 999)
-	if err != sql.ErrNoRows {
-		t.Fatalf("Expected sql.ErrNoRows for non-existent peer, got %v", err)
-	}
-}
-
-// TestGetPendingBundlePreview_DBError tests GetPendingBundlePreview with a closed database.
-func TestGetPendingBundlePreview_DBError(t *testing.T) {
-	db, cleanup := SetupTestDB(t)
-	db.Close()
-	cleanup()
-
-	ctx := context.Background()
-	_, err := GetPendingBundlePreview(ctx, db, 1)
 	if err == nil {
 		t.Fatal("Expected error when database is closed")
 	}
@@ -449,9 +398,13 @@ func TestDeletePendingBundlePreview(t *testing.T) {
 	}
 
 	// Verify it's deleted
-	_, err = GetPendingBundlePreview(ctx, db, 1)
-	if err != sql.ErrNoRows {
-		t.Fatalf("Expected sql.ErrNoRows after deletion, got %v", err)
+	var count int
+	err = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM pending_bundle_previews WHERE peer_id = 1").Scan(&count)
+	if err != nil {
+		t.Fatalf("Failed to count pending_bundle_previews: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("Expected 0 pending bundle previews after deletion, got %d", count)
 	}
 
 	// Delete non-existent peer (should not error)
@@ -469,125 +422,6 @@ func TestDeletePendingBundlePreview_DBError(t *testing.T) {
 
 	ctx := context.Background()
 	err := DeletePendingBundlePreview(ctx, db, 1)
-	if err == nil {
-		t.Fatal("Expected error when database is closed")
-	}
-}
-
-// TestSaveBundleTx tests the SaveBundleTx function.
-func TestSaveBundleTx(t *testing.T) {
-	db, cleanup := SetupTestDB(t)
-	defer cleanup()
-
-	ctx := context.Background()
-
-	// First, insert a valid peer so foreign key constraints pass
-	_, err := db.ExecContext(ctx, `INSERT INTO peers (id, hostname, ip_address, agent_key, hmac_key, status) VALUES (1, 'test-peer', '10.0.0.1', 'key1', 'hmac1', 'online')`)
-	if err != nil {
-		t.Fatalf("Failed to insert peer: %v", err)
-	}
-
-	// Test inserting bundle and updating peer bundle_version
-	params := models.CreateBundleParams{
-		PeerID:        1,
-		Version:       "v1.0.0",
-		VersionNumber: 1,
-		RulesContent:  "rules content here",
-		HMAC:          "hmac-value-123",
-	}
-
-	bundle, err := SaveBundleTx(ctx, db, params)
-	if err != nil {
-		t.Fatalf("SaveBundleTx failed: %v", err)
-	}
-
-	// Verify the bundle was inserted
-	if bundle.PeerID != 1 {
-		t.Errorf("Expected peer ID 1, got %d", bundle.PeerID)
-	}
-	if bundle.Version != "v1.0.0" {
-		t.Errorf("Expected version v1.0.0, got %s", bundle.Version)
-	}
-	if bundle.VersionNumber != 1 {
-		t.Errorf("Expected version number 1, got %d", bundle.VersionNumber)
-	}
-	if bundle.RulesContent != "rules content here" {
-		t.Errorf("Expected rules content, got %s", bundle.RulesContent)
-	}
-	if bundle.HMAC != "hmac-value-123" {
-		t.Errorf("Expected hmac, got %s", bundle.HMAC)
-	}
-	if bundle.ID == 0 {
-		t.Error("Expected non-zero bundle ID")
-	}
-
-	// Verify the peer's bundle_version was updated
-	var bundleVersion string
-	err = db.QueryRowContext(ctx, "SELECT bundle_version FROM peers WHERE id = 1").Scan(&bundleVersion)
-	if err != nil {
-		t.Fatalf("Failed to query peer bundle_version: %v", err)
-	}
-	if bundleVersion != "v1.0.0" {
-		t.Errorf("Expected peer bundle_version to be v1.0.0, got %s", bundleVersion)
-	}
-
-	// Test inserting another bundle for the same peer
-	params2 := models.CreateBundleParams{
-		PeerID:        1,
-		Version:       "v2.0.0",
-		VersionNumber: 2,
-		RulesContent:  "updated rules content",
-		HMAC:          "hmac-value-456",
-	}
-
-	bundle2, err := SaveBundleTx(ctx, db, params2)
-	if err != nil {
-		t.Fatalf("SaveBundleTx failed for second bundle: %v", err)
-	}
-
-	// Verify we have 2 bundles now
-	var count int
-	err = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM rule_bundles WHERE peer_id = 1").Scan(&count)
-	if err != nil {
-		t.Fatalf("Failed to count bundles: %v", err)
-	}
-	if count != 2 {
-		t.Fatalf("Expected 2 bundles, got %d", count)
-	}
-
-	// Verify bundle2 ID is greater than bundle1 ID
-	if bundle2.ID <= bundle.ID {
-		t.Errorf("Expected bundle2 ID (%d) > bundle1 ID (%d)", bundle2.ID, bundle.ID)
-	}
-
-	// Verify peer's bundle_version was updated to v2.0.0
-	err = db.QueryRowContext(ctx, "SELECT bundle_version FROM peers WHERE id = 1").Scan(&bundleVersion)
-	if err != nil {
-		t.Fatalf("Failed to query peer bundle_version: %v", err)
-	}
-	if bundleVersion != "v2.0.0" {
-		t.Errorf("Expected peer bundle_version to be v2.0.0, got %s", bundleVersion)
-	}
-}
-
-// TestSaveBundleTx_DBError tests SaveBundleTx with a closed database.
-func TestSaveBundleTx_DBError(t *testing.T) {
-	db, cleanup := SetupTestDB(t)
-
-	// Close the database to simulate failure
-	db.Close()
-	cleanup()
-
-	ctx := context.Background()
-	params := models.CreateBundleParams{
-		PeerID:        1,
-		Version:       "v1.0.0",
-		VersionNumber: 1,
-		RulesContent:  "rules",
-		HMAC:          "hmac",
-	}
-
-	_, err := SaveBundleTx(ctx, db, params)
 	if err == nil {
 		t.Fatal("Expected error when database is closed")
 	}

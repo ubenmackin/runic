@@ -71,25 +71,6 @@ func NewEncryptor(passphrase string) (*Encryptor, error) {
 	}, nil
 }
 
-// NewEncryptorWithSalt creates a new Encryptor with the given passphrase and salt.
-// Use this when you need to recreate an Encryptor with a known salt (e.g., after restart).
-func NewEncryptorWithSalt(passphrase string, salt []byte) (*Encryptor, error) {
-	if passphrase == "" {
-		return nil, ErrEmptyPassphrase
-	}
-	if len(salt) != saltLength {
-		return nil, errors.New("invalid salt length: expected 16 bytes")
-	}
-
-	key := pbkdf2.Key([]byte(passphrase), salt, pbkdf2Iterations, keyLength, sha256.New)
-
-	return &Encryptor{
-		passphrase: passphrase,
-		key:        key,
-		salt:       salt,
-	}, nil
-}
-
 // GetSalt returns the salt used for key derivation.
 // This can be stored alongside encrypted data for later decryption.
 func (e *Encryptor) GetSalt() []byte {

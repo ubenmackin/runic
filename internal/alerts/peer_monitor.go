@@ -58,9 +58,9 @@ func NewPeerMonitor(database *sql.DB, service *Service) *PeerMonitor {
 	}
 }
 
-// SetLogger sets a custom logger.
+// SetLogger sets a custom logger for the peer monitor.
 func (m *PeerMonitor) SetLogger(logger *slog.Logger) {
-	m.logger = logger.With("component", "peer_monitor")
+	m.logger = logger
 }
 
 // Start begins monitoring peer status.

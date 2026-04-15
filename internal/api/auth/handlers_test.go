@@ -125,20 +125,6 @@ func TestHandleSetupGET_DBError(t *testing.T) {
 // Test HandleSetupPOST
 // =============================================================================
 
-// testServer creates an httptest.Server that allows setting custom remote address
-type testServer struct {
-	*httptest.Server
-}
-
-func newTestServer(handler http.Handler) *testServer {
-	ts := httptest.NewServer(handler)
-	return &testServer{ts}
-}
-
-// RemoteAddr returns a custom remote addr for testing
-// Since we can't easily set RemoteAddr in httptest, we'll use unique IPs in tests
-// by using httptest.NewRequest and setting up different scenarios
-
 func TestHandleSetupPOST_Success(t *testing.T) {
 	resetAllRateLimiters()
 	db, cleanup := testutil.SetupTestDB(t)

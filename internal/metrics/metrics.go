@@ -150,76 +150,8 @@ func (m *Metrics) RecordError(endpoint string, errorType string, statusCode int)
 	m.httpErrorsTotal.WithLabelValues(endpoint, errorType, status).Inc()
 }
 
-// SetAgentCounters sets the agent connection counts.
-// This function uses the default Metrics instance.
-func SetAgentCounters(connected, disconnected float64) {
-	defaultMetrics.SetAgentCounters(connected, disconnected)
-}
-
-// SetAgentCounters sets the agent connection counts.
-func (m *Metrics) SetAgentCounters(connected, disconnected float64) {
-	m.agentsConnected.Set(connected)
-	m.agentsDisconnected.Set(disconnected)
-}
-
-// SetPeersTotal sets the total number of peers.
-// This function uses the default Metrics instance.
-func SetPeersTotal(count float64) {
-	defaultMetrics.SetPeersTotal(count)
-}
-
-// SetPeersTotal sets the total number of peers.
-func (m *Metrics) SetPeersTotal(count float64) {
-	m.runicPeersTotal.Set(count)
-}
-
-// SetPoliciesTotal sets the total number of policies.
-// This function uses the default Metrics instance.
-func SetPoliciesTotal(count float64) {
-	defaultMetrics.SetPoliciesTotal(count)
-}
-
-// SetPoliciesTotal sets the total number of policies.
-func (m *Metrics) SetPoliciesTotal(count float64) {
-	m.runicPoliciesTotal.Set(count)
-}
-
-// RecordBundleCompilationDuration records the duration of bundle compilation.
-// This function uses the default Metrics instance.
-func RecordBundleCompilationDuration(duration time.Duration) {
-	defaultMetrics.RecordBundleCompilationDuration(duration)
-}
-
-// RecordBundleCompilationDuration records the duration of bundle compilation.
-func (m *Metrics) RecordBundleCompilationDuration(duration time.Duration) {
-	m.runicBundleCompilationDurationSeconds.Observe(duration.Seconds())
-}
-
-// SetActiveConnections sets the number of active SSE/WebSocket connections.
-// This function uses the default Metrics instance.
-func SetActiveConnections(count float64) {
-	defaultMetrics.SetActiveConnections(count)
-}
-
-// SetActiveConnections sets the number of active SSE/WebSocket connections.
-func (m *Metrics) SetActiveConnections(count float64) {
-	m.runicActiveConnections.Set(count)
-}
-
 // Handler returns the Prometheus metrics HTTP handler.
 // This uses the default Prometheus registry.
 func Handler() http.Handler {
 	return promhttp.Handler()
-}
-
-// HandlerFor returns an HTTP handler for a specific Metrics instance's registry.
-func (m *Metrics) HandlerFor() http.Handler {
-	gatherer, ok := m.registry.(prometheus.Gatherer)
-	if !ok {
-		// Return a handler that returns an error
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			http.Error(w, "metrics registry does not implement Gatherer", http.StatusInternalServerError)
-		})
-	}
-	return promhttp.HandlerFor(gatherer, promhttp.HandlerOpts{})
 }

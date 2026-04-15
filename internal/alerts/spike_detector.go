@@ -55,12 +55,8 @@ func NewSpikeDetector(database *sql.DB, service *Service) *SpikeDetector {
 	}
 }
 
-// SetLogger sets a custom logger.
-func (d *SpikeDetector) SetLogger(logger *slog.Logger) {
-	d.logger = logger.With("component", "spike_detector")
-}
-
-// SetThresholds sets the threshold and window for spike detection.
+// SetThresholds updates the spike detection thresholds.
+// This is primarily intended for testing.
 func (d *SpikeDetector) SetThresholds(threshold, windowMinutes, throttleMinutes int) {
 	d.threshold = threshold
 	d.windowMinutes = windowMinutes

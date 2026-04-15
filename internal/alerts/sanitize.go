@@ -34,7 +34,6 @@ package alerts
 import (
 	"html"
 	"strings"
-	"unicode"
 )
 
 // DefaultMaxHostnameLength is the default maximum length for hostname-like fields.
@@ -117,25 +116,4 @@ func truncateString(s string, maxLen int) string {
 	}
 
 	return s[:maxLen]
-}
-
-// IsPrintable checks if a string contains only printable characters.
-func IsPrintable(s string) bool {
-	for _, r := range s {
-		if !unicode.IsPrint(r) && r != '\n' && r != '\r' && r != '\t' {
-			return false
-		}
-	}
-	return true
-}
-
-// RemoveControlChars removes all ASCII and Unicode control characters from a string.
-func RemoveControlChars(s string) string {
-	var result strings.Builder
-	for _, r := range s {
-		if r >= 0x20 && r != 0x7F && !unicode.Is(unicode.C, r) {
-			result.WriteRune(r)
-		}
-	}
-	return result.String()
 }

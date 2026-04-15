@@ -14,23 +14,6 @@ import (
 	"runic/internal/testutil"
 )
 
-// Helper to set up test DB with required data
-func setupTestDBWithData(t *testing.T) (*sql.DB, func()) {
-	db, cleanup := testutil.SetupTestDBWithTestData(t)
-
-	// Insert special target
-	_, err := db.Exec(
-		"INSERT INTO special_targets (name, display_name, description, address) VALUES (?, ?, ?, ?)",
-		"dns", "DNS", "DNS service", "8.8.8.8",
-	)
-	if err != nil {
-		cleanup()
-		t.Fatalf("failed to insert special target: %v", err)
-	}
-
-	return db, cleanup
-}
-
 // Helper to set up handler with real compiler (required for write operations)
 func setupHandlerWithCompiler(db *sql.DB) *Handler {
 	compiler := engine.NewCompiler(db)

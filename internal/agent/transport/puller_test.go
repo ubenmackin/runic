@@ -17,13 +17,6 @@ import (
 	"runic/internal/models"
 )
 
-// roundTripFunc implements http.RoundTripper for more complex mocking
-type roundTripFunc func(*http.Request) (*http.Response, error)
-
-func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
-	return f(req)
-}
-
 // testServer creates an httptest.Server with the given handler
 func testServer(handler http.HandlerFunc) *httptest.Server {
 	return httptest.NewServer(handler)

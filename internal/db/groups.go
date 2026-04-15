@@ -3,8 +3,8 @@ package db
 
 import (
 	"context"
-	"fmt"
 
+	"runic/internal/common/log"
 	"runic/internal/models"
 )
 
@@ -25,8 +25,8 @@ func ListGroupMembers(ctx context.Context, database Querier, groupID int) ([]mod
 		return nil, err
 	}
 	defer func() {
-		if cErr := rows.Close(); cErr != nil {
-			fmt.Printf("failed to close rows: %v\n", cErr)
+		if err := rows.Close(); err != nil {
+			log.WarnContext(ctx, "failed to close rows", "error", err)
 		}
 	}()
 
@@ -39,33 +39,4 @@ func ListGroupMembers(ctx context.Context, database Querier, groupID int) ([]mod
 		members = append(members, m)
 	}
 	return members, rows.Err()
-}
-
-// FindPoliciesByGroupID finds policies by source target group id.
-func FindPoliciesByGroupID(ctx context.Context, database Querier, groupID int) ([]models.PolicyRow, error) {
-	rows, err := database.QueryContext(ctx,
-		`SELECT id, name, COALESCE(description, ''), source_id, source_type, service_id, target_id, target_type,
-		action, priority, enabled, target_scope, COALESCE(direction, 'both'), created_at, updated_at
-		FROM policies
-		WHERE ((source_type = 'group' AND source_id = ?) OR (target_type = 'group' AND target_id = ?))
-		AND COALESCE(is_pending_delete, 0) = 0`, groupID, groupID)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		if cErr := rows.Close(); cErr != nil {
-			fmt.Printf("failed to close rows: %v\n", cErr)
-		}
-	}()
-
-	var policies []models.PolicyRow
-	for rows.Next() {
-		var p models.PolicyRow
-		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.SourceID, &p.SourceType, &p.ServiceID,
-			&p.TargetID, &p.TargetType, &p.Action, &p.Priority, &p.Enabled, &p.TargetScope, &p.Direction, &p.CreatedAt, &p.UpdatedAt); err != nil {
-			return nil, err
-		}
-		policies = append(policies, p)
-	}
-	return policies, rows.Err()
 }

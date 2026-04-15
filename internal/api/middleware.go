@@ -127,13 +127,6 @@ func RequestID() mux.MiddlewareFunc {
 	}
 }
 
-// GetRequestID extracts the request ID from the request context.
-// Returns the request ID and true if found, otherwise returns empty string and false.
-// Uses the log package's GetRequestID function for consistent context key usage.
-func GetRequestID(ctx context.Context) (string, bool) {
-	return log.GetRequestID(ctx)
-}
-
 // GetCSPNonce extracts the CSP nonce from the request context.
 // Returns the nonce and true if found, otherwise returns empty string and false.
 func GetCSPNonce(ctx context.Context) (string, bool) {

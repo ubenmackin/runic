@@ -1,8 +1,6 @@
 package metrics
 
 import (
-	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -50,22 +48,6 @@ func findMetricWithLabels(family *dto.MetricFamily, labels map[string]string) *d
 		}
 	}
 	return nil
-}
-
-// requireMetricGauge asserts that a gauge metric exists and returns its value.
-func requireMetricGauge(t *testing.T, g prometheus.Gatherer, name string) float64 {
-	t.Helper()
-	family, err := gatherMetric(g, name)
-	if err != nil {
-		t.Fatalf("failed to gather metrics: %v", err)
-	}
-	if family == nil {
-		t.Fatalf("%s metric family not found", name)
-	}
-	if len(family.GetMetric()) < 1 {
-		t.Fatalf("%s metric not found", name)
-	}
-	return family.GetMetric()[0].GetGauge().GetValue()
 }
 
 // TestRecordRequest_IncrementsCounter tests that RecordRequest increments the http_requests_total counter.
@@ -271,144 +253,6 @@ func TestRecordError_SameErrorTwice(t *testing.T) {
 	}
 }
 
-// TestSetAgentCounters_SetsGauges tests that SetAgentCounters sets both connected and disconnected gauges.
-func TestSetAgentCounters_SetsGauges(t *testing.T) {
-	registry := prometheus.NewRegistry()
-	m := NewMetrics(registry)
-	m.SetAgentCounters(5, 2)
-
-	gotConnected := requireMetricGauge(t, registry, "agents_connected")
-	if gotConnected != 5 {
-		t.Errorf("agents_connected = %f, want 5", gotConnected)
-	}
-
-	gotDisconnected := requireMetricGauge(t, registry, "agents_disconnected")
-	if gotDisconnected != 2 {
-		t.Errorf("agents_disconnected = %f, want 2", gotDisconnected)
-	}
-}
-
-// TestSetAgentCounters_ZeroValues tests that SetAgentCounters handles zero values.
-func TestSetAgentCounters_ZeroValues(t *testing.T) {
-	registry := prometheus.NewRegistry()
-	m := NewMetrics(registry)
-	m.SetAgentCounters(0, 0)
-
-	gotConnected := requireMetricGauge(t, registry, "agents_connected")
-	if gotConnected != 0 {
-		t.Errorf("agents_connected = %f, want 0", gotConnected)
-	}
-}
-
-// TestSetPeersTotal_SetsGauge tests that SetPeersTotal sets the peer count gauge.
-func TestSetPeersTotal_SetsGauge(t *testing.T) {
-	registry := prometheus.NewRegistry()
-	m := NewMetrics(registry)
-	m.SetPeersTotal(10)
-
-	got := requireMetricGauge(t, registry, "runic_peers_total")
-	if got != 10 {
-		t.Errorf("runic_peers_total = %f, want 10", got)
-	}
-}
-
-// TestSetPoliciesTotal_SetsGauge tests that SetPoliciesTotal sets the policy count gauge.
-func TestSetPoliciesTotal_SetsGauge(t *testing.T) {
-	registry := prometheus.NewRegistry()
-	m := NewMetrics(registry)
-	m.SetPoliciesTotal(25)
-
-	got := requireMetricGauge(t, registry, "runic_policies_total")
-	if got != 25 {
-		t.Errorf("runic_policies_total = %f, want 25", got)
-	}
-}
-
-// TestRecordBundleCompilationDuration tests bundle compilation duration histogram observations.
-func TestRecordBundleCompilationDuration(t *testing.T) {
-	tests := []struct {
-		name      string
-		durations []time.Duration
-		wantCount uint64
-	}{
-		{
-			name:      "records histogram",
-			durations: []time.Duration{500 * time.Millisecond},
-			wantCount: 1,
-		},
-		{
-			name:      "multiple observations",
-			durations: []time.Duration{100 * time.Millisecond, 200 * time.Millisecond, 300 * time.Millisecond},
-			wantCount: 3,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			registry := prometheus.NewRegistry()
-			m := NewMetrics(registry)
-			for _, d := range tt.durations {
-				m.RecordBundleCompilationDuration(d)
-			}
-			family, err := gatherMetric(registry, "runic_bundle_compilation_duration_seconds")
-			if err != nil {
-				t.Fatalf("failed to gather metrics: %v", err)
-			}
-			if family == nil {
-				t.Fatal("runic_bundle_compilation_duration_seconds metric family not found")
-			}
-			if len(family.GetMetric()) < 1 {
-				t.Fatal("runic_bundle_compilation_duration_seconds metric not found")
-			}
-			h := family.GetMetric()[0].GetHistogram()
-			if h.GetSampleCount() < tt.wantCount {
-				t.Errorf("expected histogram sample count >= %d, got %d", tt.wantCount, h.GetSampleCount())
-			}
-		})
-	}
-}
-
-// TestSetActiveConnections_SetsGauge tests that SetActiveConnections sets the connection count gauge.
-func TestSetActiveConnections_SetsGauge(t *testing.T) {
-	registry := prometheus.NewRegistry()
-	m := NewMetrics(registry)
-	m.SetActiveConnections(15)
-
-	got := requireMetricGauge(t, registry, "runic_active_connections")
-	if got != 15 {
-		t.Errorf("runic_active_connections = %f, want 15", got)
-	}
-}
-
-// TestSetActiveConnections_UpdateValue tests that SetActiveConnections can update an existing value.
-func TestSetActiveConnections_UpdateValue(t *testing.T) {
-	registry := prometheus.NewRegistry()
-	m := NewMetrics(registry)
-	m.SetActiveConnections(10)
-	m.SetActiveConnections(20)
-
-	got := requireMetricGauge(t, registry, "runic_active_connections")
-	if got != 20 {
-		t.Errorf("runic_active_connections = %f, want 20", got)
-	}
-}
-
-// TestHandler_ReturnsHTTPHandler tests that Handler returns a valid HTTP handler.
-func TestHandler_ReturnsHTTPHandler(t *testing.T) {
-	h := Handler()
-	if h == nil {
-		t.Fatal("Handler() returned nil")
-	}
-
-	// Verify it's a valid http.Handler by making a test request
-	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Errorf("expected status %d, got %d", http.StatusOK, rec.Code)
-	}
-}
-
 // TestRecordRequest_MultipleMethods tests that different HTTP methods produce separate counters.
 func TestRecordRequest_MultipleMethods(t *testing.T) {
 	registry := prometheus.NewRegistry()
@@ -444,18 +288,4 @@ func TestRecordRequest_MultipleMethods(t *testing.T) {
 			t.Errorf("expected counter >= 1 for method=%s, got %f", method, metric.GetCounter().GetValue())
 		}
 	}
-}
-
-// TestDefaultMetricsFunctions tests that package-level functions work with the default metrics.
-func TestDefaultMetricsFunctions(t *testing.T) {
-	// This test verifies that the default Metrics instance works correctly.
-	// We can't test isolation here since it uses the global registry,
-	// but we can verify the functions don't panic.
-	RecordRequest("/api/default", "GET", 200, 10*time.Millisecond)
-	RecordError("/api/default", "test_error", 500)
-	SetAgentCounters(1, 0)
-	SetPeersTotal(5)
-	SetPoliciesTotal(10)
-	RecordBundleCompilationDuration(100 * time.Millisecond)
-	SetActiveConnections(3)
 }

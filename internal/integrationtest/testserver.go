@@ -182,8 +182,3 @@ func JSONRequest(t *testing.T, server *httptest.Server, method, url string, body
 	}
 	return resp
 }
-
-// GetAuthToken generates a valid JWT token for testing.
-func GetAuthToken(username, role string) (string, error) {
-	return auth.GenerateToken(username, role, 24*time.Hour)
-}

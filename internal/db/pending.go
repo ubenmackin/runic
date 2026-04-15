@@ -2,7 +2,6 @@ package db
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 
 	"runic/internal/common/log"
@@ -88,71 +87,10 @@ func SavePendingBundlePreview(ctx context.Context, database Querier, peerID int,
 	return err
 }
 
-// GetPendingBundlePreview retrieves the pending bundle for a peer.
-func GetPendingBundlePreview(ctx context.Context, database Querier, peerID int) (*models.PendingBundlePreview, error) {
-	var p models.PendingBundlePreview
-	err := database.QueryRowContext(ctx,
-		`SELECT id, peer_id, rules_content, diff_content, version_hash, created_at
-		FROM pending_bundle_previews WHERE peer_id = ?
-		`, peerID).Scan(&p.ID, &p.PeerID, &p.RulesContent, &p.DiffContent, &p.VersionHash, &p.CreatedAt)
-	if err != nil {
-		return nil, err
-	}
-	return &p, nil
-}
-
 // DeletePendingBundlePreview removes the pending bundle for a peer.
 func DeletePendingBundlePreview(ctx context.Context, database Querier, peerID int) error {
 	_, err := database.ExecContext(ctx, "DELETE FROM pending_bundle_previews WHERE peer_id = ?", peerID)
 	return err
-}
-
-// SaveBundleTx is the transaction-based version for internal use.
-// This is kept separate because SaveBundle needs transactions.
-func SaveBundleTx(ctx context.Context, database *sql.DB, params models.CreateBundleParams) (models.RuleBundleRow, error) {
-	tx, err := database.BeginTx(ctx, nil)
-	if err != nil {
-		return models.RuleBundleRow{}, err
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			if rErr := tx.Rollback(); rErr != nil {
-				fmt.Printf("rollback failed: %v", rErr)
-			}
-		}
-	}()
-
-	result, err := tx.ExecContext(ctx,
-		`INSERT INTO rule_bundles (peer_id, version, version_number, rules_content, hmac) VALUES (?, ?, ?, ?, ?)`,
-		params.PeerID, params.Version, params.VersionNumber, params.RulesContent, params.HMAC)
-	if err != nil {
-		return models.RuleBundleRow{}, err
-	}
-
-	bundleID, err := result.LastInsertId()
-	if err != nil {
-		return models.RuleBundleRow{}, fmt.Errorf("get last insert id: %w", err)
-	}
-
-	_, err = tx.ExecContext(ctx, `UPDATE peers SET bundle_version = ? WHERE id = ?`, params.Version, params.PeerID)
-	if err != nil {
-		return models.RuleBundleRow{}, err
-	}
-
-	if err := tx.Commit(); err != nil {
-		return models.RuleBundleRow{}, err
-	}
-	committed = true
-
-	return models.RuleBundleRow{
-		ID:            int(bundleID),
-		PeerID:        params.PeerID,
-		Version:       params.Version,
-		VersionNumber: params.VersionNumber,
-		RulesContent:  params.RulesContent,
-		HMAC:          params.HMAC,
-	}, nil
 }
 
 // DeleteAllPendingBundlePreviews removes all pending bundle previews.

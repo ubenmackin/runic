@@ -28,11 +28,6 @@ func withEditorContext(ctx context.Context) context.Context {
 	return auth.SetContextForTest(ctx, "editor", "editor")
 }
 
-// Helper to set viewer context on request
-func withViewerContext(ctx context.Context) context.Context {
-	return auth.SetContextForTest(ctx, "viewer", "viewer")
-}
-
 // Helper to set role context with custom role and username
 func withRoleContext(ctx context.Context, role, username string) context.Context {
 	return auth.SetContextForTest(ctx, role, username)

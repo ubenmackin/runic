@@ -58,6 +58,20 @@ func NewManager(config *identity.Config, configPath string, httpClient *http.Cli
 	}
 }
 
+// GetState returns the current rotation state.
+func (m *Manager) GetState() RotationState {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.state
+}
+
+// GetLastRotation returns the time of the last successful rotation.
+func (m *Manager) GetLastRotation() time.Time {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.lastRotation
+}
+
 // CheckAndRotate checks if a rotation is pending and performs it if so.
 // This method uses fine-grained locking to avoid holding the mutex during HTTP calls.
 func (m *Manager) CheckAndRotate(ctx context.Context) error {
@@ -334,18 +348,4 @@ func (m *Manager) confirmRotation(ctx context.Context) error {
 	}()
 
 	return nil
-}
-
-// GetState returns the current rotation state.
-func (m *Manager) GetState() RotationState {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.state
-}
-
-// GetLastRotation returns the time of the last successful rotation.
-func (m *Manager) GetLastRotation() time.Time {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.lastRotation
 }

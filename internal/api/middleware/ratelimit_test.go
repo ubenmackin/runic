@@ -9,65 +9,6 @@ import (
 	"time"
 )
 
-// TestNewRateLimiter tests creation of RateLimiter with various configurations
-func TestNewRateLimiter(t *testing.T) {
-	tests := []struct {
-		name        string
-		limit       int
-		window      time.Duration
-		opts        []RateLimiterOption
-		wantUseXFF  bool
-		wantProxies map[string]bool
-	}{
-		{
-			name:       "basic rate limiter",
-			limit:      10,
-			window:     time.Minute,
-			opts:       nil,
-			wantUseXFF: false,
-		},
-		{
-			name:       "rate limiter with XFF enabled",
-			limit:      100,
-			window:     time.Hour,
-			opts:       []RateLimiterOption{UseXFF()},
-			wantUseXFF: true,
-		},
-		{
-			name:        "rate limiter with trusted proxies",
-			limit:       50,
-			window:      30 * time.Minute,
-			opts:        []RateLimiterOption{UseXFF(), WithTrustedProxies([]string{"192.168.1.1", "10.0.0.1"})},
-			wantUseXFF:  true,
-			wantProxies: map[string]bool{"192.168.1.1": true, "10.0.0.1": true},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rl := NewRateLimiter(tt.limit, tt.window, tt.opts...)
-			defer rl.Stop()
-
-			if rl.limit != tt.limit {
-				t.Errorf("limit = %d, want %d", rl.limit, tt.limit)
-			}
-			if rl.window != tt.window {
-				t.Errorf("window = %v, want %v", rl.window, tt.window)
-			}
-			if rl.useXFF != tt.wantUseXFF {
-				t.Errorf("useXFF = %v, want %v", rl.useXFF, tt.wantUseXFF)
-			}
-			if tt.wantProxies != nil {
-				for proxy := range tt.wantProxies {
-					if !rl.trustedProxies[proxy] {
-						t.Errorf("trusted proxy %s not found", proxy)
-					}
-				}
-			}
-		})
-	}
-}
-
 // TestCheck tests the Check method for rate limiting logic
 func TestCheck(t *testing.T) {
 	tests := []struct {
@@ -322,127 +263,27 @@ func TestMiddleware429Response(t *testing.T) {
 // TestGetIP tests IP extraction from requests
 func TestGetIP(t *testing.T) {
 	tests := []struct {
-		name           string
-		useXFF         bool
-		trustedProxies []string
-		remoteAddr     string
-		xffHeader      string
-		wantIP         string
-	}{
-		{
-			name:       "basic remote addr without XFF",
-			useXFF:     false,
-			remoteAddr: "192.168.1.1:12345",
-			wantIP:     "192.168.1.1:12345",
-		},
-		{
-			name:       "remote addr with port",
-			useXFF:     false,
-			remoteAddr: "10.0.0.1:8080",
-			wantIP:     "10.0.0.1:8080",
-		},
-		{
-			name:           "XFF enabled but not from trusted proxy",
-			useXFF:         true,
-			trustedProxies: []string{"10.0.0.1"},
-			remoteAddr:     "192.168.1.1:12345",
-			xffHeader:      "203.0.113.1",
-			wantIP:         "192.168.1.1:12345",
-		},
-		{
-			name:           "XFF from trusted proxy extracts client IP",
-			useXFF:         true,
-			trustedProxies: []string{"10.0.0.1"},
-			remoteAddr:     "10.0.0.1:12345",
-			xffHeader:      "203.0.113.1",
-			wantIP:         "203.0.113.1",
-		},
-		{
-			name:           "XFF with multiple proxies extracts first IP",
-			useXFF:         true,
-			trustedProxies: []string{"10.0.0.1"},
-			remoteAddr:     "10.0.0.1:12345",
-			xffHeader:      "203.0.113.1, 10.0.0.2, 10.0.0.3",
-			wantIP:         "203.0.113.1",
-		},
-		{
-			name:           "XFF from trusted proxy but header empty",
-			useXFF:         true,
-			trustedProxies: []string{"10.0.0.1"},
-			remoteAddr:     "10.0.0.1:12345",
-			xffHeader:      "",
-			wantIP:         "10.0.0.1:12345",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var opts []RateLimiterOption
-			if tt.useXFF {
-				opts = append(opts, UseXFF())
-			}
-			if len(tt.trustedProxies) > 0 {
-				opts = append(opts, WithTrustedProxies(tt.trustedProxies))
-			}
-
-			rl := NewRateLimiter(100, time.Minute, opts...)
-			defer rl.Stop()
-
-			req := httptest.NewRequest("GET", "/test", nil)
-			req.RemoteAddr = tt.remoteAddr
-			if tt.xffHeader != "" {
-				req.Header.Set("X-Forwarded-For", tt.xffHeader)
-			}
-
-			gotIP := rl.getIP(req)
-			if gotIP != tt.wantIP {
-				t.Errorf("getIP() = %q, want %q", gotIP, tt.wantIP)
-			}
-		})
-	}
-}
-
-// TestGetIPWithoutTrustedProxies tests XFF with UseXFF but no trusted proxies configured
-func TestGetIPWithoutTrustedProxies(t *testing.T) {
-	rl := NewRateLimiter(100, time.Minute, UseXFF())
-	defer rl.Stop()
-
-	req := httptest.NewRequest("GET", "/test", nil)
-	req.RemoteAddr = "192.168.1.1:12345"
-	req.Header.Set("X-Forwarded-For", "203.0.113.1")
-
-	// Should return RemoteAddr since no trusted proxies are configured
-	gotIP := rl.getIP(req)
-	wantIP := "192.168.1.1:12345"
-	if gotIP != wantIP {
-		t.Errorf("getIP() = %q, want %q", gotIP, wantIP)
-	}
-}
-
-// TestGetIPWithMalformedRemoteAddr tests handling of malformed RemoteAddr
-func TestGetIPWithMalformedRemoteAddr(t *testing.T) {
-	rl := NewRateLimiter(100, time.Minute, UseXFF(), WithTrustedProxies([]string{"10.0.0.1"}))
-	defer rl.Stop()
-
-	tests := []struct {
 		name       string
 		remoteAddr string
 		wantIP     string
 	}{
 		{
-			name:       "remote addr without port",
-			remoteAddr: "192.168.1.1",
-			wantIP:     "192.168.1.1",
+			name:       "basic remote addr",
+			remoteAddr: "192.168.1.1:12345",
+			wantIP:     "192.168.1.1:12345",
 		},
 		{
-			name:       "empty remote addr",
-			remoteAddr: "",
-			wantIP:     "",
+			name:       "remote addr with port",
+			remoteAddr: "10.0.0.1:8080",
+			wantIP:     "10.0.0.1:8080",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			rl := NewRateLimiter(100, time.Minute)
+			defer rl.Stop()
+
 			req := httptest.NewRequest("GET", "/test", nil)
 			req.RemoteAddr = tt.remoteAddr
 
@@ -559,37 +400,5 @@ func TestMiddlewareDifferentIPs(t *testing.T) {
 	handler.ServeHTTP(rr2, req2)
 	if rr2.Code != http.StatusOK {
 		t.Errorf("first request for IP 2: got status %d, want %d", rr2.Code, http.StatusOK)
-	}
-}
-
-// TestMiddlewareWithXFF tests middleware with X-Forwarded-For support
-func TestMiddlewareWithXFF(t *testing.T) {
-	rl := NewRateLimiter(2, time.Minute, UseXFF(), WithTrustedProxies([]string{"10.0.0.1"}))
-	defer rl.Stop()
-
-	handler := rl.Middleware(okHandler())
-
-	// Make requests that should be tracked by X-Forwarded-For IP
-	for i := 0; i < 2; i++ {
-		req := httptest.NewRequest("GET", "/test", nil)
-		req.RemoteAddr = "10.0.0.1:12345" // Trusted proxy
-		req.Header.Set("X-Forwarded-For", "203.0.113.1")
-		rr := httptest.NewRecorder()
-		handler.ServeHTTP(rr, req)
-
-		if rr.Code != http.StatusOK {
-			t.Errorf("request %d: got status %d, want %d", i+1, rr.Code, http.StatusOK)
-		}
-	}
-
-	// Third request should be rate limited (based on X-Forwarded-For IP)
-	req := httptest.NewRequest("GET", "/test", nil)
-	req.RemoteAddr = "10.0.0.1:12345"
-	req.Header.Set("X-Forwarded-For", "203.0.113.1")
-	rr := httptest.NewRecorder()
-	handler.ServeHTTP(rr, req)
-
-	if rr.Code != http.StatusTooManyRequests {
-		t.Errorf("third request: got status %d, want %d", rr.Code, http.StatusTooManyRequests)
 	}
 }

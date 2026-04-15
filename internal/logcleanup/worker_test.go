@@ -44,9 +44,6 @@ func TestNewWorker(t *testing.T) {
 	if worker.interval != 24*time.Hour {
 		t.Errorf("worker.interval = %v, want %v", worker.interval, 24*time.Hour)
 	}
-	if worker.stopCh == nil {
-		t.Error("worker.stopCh is nil")
-	}
 }
 
 // TestWorker_Start tests the Start method.
@@ -79,7 +76,7 @@ func TestWorker_Start(t *testing.T) {
 
 		// Wait for initial cleanup to complete
 		time.Sleep(100 * time.Millisecond)
-		worker.Stop()
+		cancel() // Cancel context to stop the worker
 
 		// Verify old log was deleted
 		var count int
@@ -128,13 +125,13 @@ func TestWorker_Start(t *testing.T) {
 		}
 
 		worker := NewWorker(mainDB, logsDB)
-		ctx := context.Background()
+		ctx, cancel := context.WithCancel(context.Background())
 
 		worker.Start(ctx)
 
-		// Stop after short delay
+		// Cancel after short delay
 		time.Sleep(50 * time.Millisecond)
-		worker.Stop()
+		cancel()
 
 		// Give time for goroutine to exit
 		time.Sleep(50 * time.Millisecond)
@@ -391,36 +388,6 @@ func TestWorker_runCleanup(t *testing.T) {
 	})
 }
 
-// TestWorker_Stop tests the Stop method.
-func TestWorker_Stop(t *testing.T) {
-	t.Run("stop terminates cleanup goroutine", func(t *testing.T) {
-		mainDB, logsDB, cleanup := setupTestDatabases(t)
-		defer cleanup()
-
-		// Set retention to -1 so cleanup is skipped quickly
-		_, err := mainDB.Exec("INSERT INTO system_config (key, value) VALUES ('log_retention_days', '-1')")
-		if err != nil {
-			t.Fatalf("Failed to insert config: %v", err)
-		}
-
-		worker := NewWorker(mainDB, logsDB)
-		ctx := context.Background()
-
-		worker.Start(ctx)
-
-		// Wait for goroutine to start
-		time.Sleep(50 * time.Millisecond)
-
-		// Stop should terminate the goroutine
-		worker.Stop()
-
-		// Give time for goroutine to fully exit
-		time.Sleep(50 * time.Millisecond)
-
-		// Test passes if no panic and goroutine exited cleanly
-	})
-}
-
 // TestWorker_CustomRetention tests cleanup with custom retention values.
 func TestWorker_CustomRetention(t *testing.T) {
 	tests := []struct {
@@ -516,7 +483,7 @@ func TestWorker_Integration(t *testing.T) {
 
 	worker.Start(ctx)
 	time.Sleep(100 * time.Millisecond)
-	worker.Stop()
+	cancel() // Cancel context to stop the worker
 
 	// Verify only recent log remains
 	var count int

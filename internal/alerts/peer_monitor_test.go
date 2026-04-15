@@ -16,60 +16,6 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-// peerMonitorMockDB wraps sql.DB to track query calls for testing.
-// Since PeerMonitor takes *sql.DB directly, we can't easily mock it.
-// Instead, we'll test the retry logic by checking the behavior directly.
-type peerMonitorMockDB struct {
-	*sql.DB
-	failCount      int
-	failThreshold  int
-	failUntilCount int // fail until this many calls have been made
-	mu             sync.Mutex
-	queryCount     int
-}
-
-func newPeerMonitorMockDB(sqlDB *sql.DB) *peerMonitorMockDB {
-	return &peerMonitorMockDB{
-		DB: sqlDB,
-	}
-}
-
-func (m *peerMonitorMockDB) setFailThreshold(threshold int) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.failThreshold = threshold
-}
-
-func (m *peerMonitorMockDB) setFailUntilCount(count int) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.failUntilCount = count
-	m.failCount = 0
-}
-
-func (m *peerMonitorMockDB) getQueryCount() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.queryCount
-}
-
-// incrementQueryCount increments the query counter.
-func (m *peerMonitorMockDB) incrementQueryCount() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.queryCount++
-}
-
-// shouldFailQuery determines if the next query should fail based on configuration.
-func (m *peerMonitorMockDB) shouldFailQuery() bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.queryCount++
-	shouldFail := m.failCount < m.failThreshold || m.queryCount <= m.failUntilCount
-	m.failCount++
-	return shouldFail
-}
-
 // testAlertCapture is a helper to capture alerts triggered by the monitor.
 // It works by providing functions that can be called directly on PeerMonitor's internal methods.
 type testAlertCapture struct {
@@ -95,12 +41,6 @@ func (c *testAlertCapture) getAlerts() []*AlertEvent {
 	result := make([]*AlertEvent, len(c.alerts))
 	copy(result, c.alerts)
 	return result
-}
-
-func (c *testAlertCapture) clear() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.alerts = make([]*AlertEvent, 0)
 }
 
 // TestPeerOfflineDetection tests that an offline alert is triggered
