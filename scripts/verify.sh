@@ -56,9 +56,9 @@ fi
 # 7. Go Build
 make agents > /dev/null 2>&1
 if [ $? -eq 0 ]; then
-    echo -e "Web Build: ${GREEN}PASS${NC}"
+    echo -e "Agent Build: ${GREEN}PASS${NC}"
 else
-    echo -e "Web Build: ${RED}FAILED${NC}"
+    echo -e "Agent Build: ${RED}FAILED${NC}"
 fi
 
 # Final Cleanup

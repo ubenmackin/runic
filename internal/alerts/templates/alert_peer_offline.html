@@ -7,29 +7,31 @@
 {{define "severity"}}warning{{end}}
 
 {{define "DetailsHTML"}}
-<div class="detail-row">
-    <span class="detail-label">Hostname:</span>
-    <span class="detail-value">{{.Hostname}}</span>
-</div>
-{{if .IPAddress}}
-<div class="detail-row">
-    <span class="detail-label">IP Address:</span>
-    <span class="detail-value">{{.IPAddress}}</span>
-</div>
-{{end}}
-{{if .LastHeartbeat}}
-<div class="detail-row">
-    <span class="detail-label">Last Heartbeat:</span>
-    <span class="detail-value">{{.LastHeartbeat}}</span>
-</div>
-{{end}}
-{{if .OfflineDuration}}
-<div class="detail-row">
-    <span class="detail-label">Offline Duration:</span>
-    <span class="detail-value">{{.OfflineDuration}} minutes</span>
-</div>
-{{end}}
+<table width="100%" cellpadding="0" cellspacing="0" style="border-collapse: collapse; font-size: 12px; background-color: #0d0d0d; border: 1px solid #2d2d2d; margin-top: 20px;">
+  <tr>
+    <td style="padding: 12px 15px; border-bottom: 1px solid #2d2d2d; color: #6b7280; width: 140px; font-weight: bold; text-transform: uppercase; letter-spacing: 1px;">Hostname</td>
+    <td style="padding: 12px 15px; border-bottom: 1px solid #2d2d2d; color: #e5e7eb;">{{.Hostname}}</td>
+  </tr>
+  {{if .IPAddress}}
+  <tr>
+    <td style="padding: 12px 15px; border-bottom: 1px solid #2d2d2d; color: #6b7280; font-weight: bold; text-transform: uppercase; letter-spacing: 1px;">IP Address</td>
+    <td style="padding: 12px 15px; border-bottom: 1px solid #2d2d2d; color: #e5e7eb;">{{.IPAddress}}</td>
+  </tr>
+  {{end}}
+  {{if .LastHeartbeat}}
+  <tr>
+    <td style="padding: 12px 15px; border-bottom: 1px solid #2d2d2d; color: #6b7280; font-weight: bold; text-transform: uppercase; letter-spacing: 1px;">Last Heartbeat</td>
+    <td style="padding: 12px 15px; border-bottom: 1px solid #2d2d2d; color: #9ca3af;">{{.LastHeartbeat}}</td>
+  </tr>
+  {{end}}
+  {{if .OfflineDuration}}
+  <tr>
+    <td style="padding: 12px 15px; border-bottom: 1px solid #2d2d2d; color: #6b7280; font-weight: bold; text-transform: uppercase; letter-spacing: 1px;">Offline Duration</td>
+    <td style="padding: 12px 15px; border-bottom: 1px solid #2d2d2d; color: #ef4444;">{{.OfflineDuration}} minutes</td>
+  </tr>
+  {{end}}
+</table>
 {{end}}
 
 {{define "Subject"}}Peer Offline: {{.Hostname}}{{end}}
-{{define "Message"}}The peer {{.Hostname}} has gone offline and is no longer responding to heartbeats. Check the peer status and network connectivity.{{end}}
+{{define "Message"}}The peer <strong style="color: #fff;">{{.Hostname}}</strong> has gone offline and is no longer responding to heartbeats. Check the peer status and network connectivity.{{end}}

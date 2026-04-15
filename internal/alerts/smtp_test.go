@@ -383,12 +383,12 @@ func TestGenerateAlertHTML(t *testing.T) {
 			},
 			wantContains: []string{
 				"<!DOCTYPE html>",
-				"<html>",
+				"<html lang",
 				"</html>",
 				"offline-peer",
 				"peer_offline",
-				"Timestamp:",
-				"Runic",
+				"Timestamp",
+				"[ RUNIC // SYSTEM ALERT ]",
 			},
 		},
 		{
@@ -401,10 +401,10 @@ func TestGenerateAlertHTML(t *testing.T) {
 			},
 			wantContains: []string{
 				"<!DOCTYPE html>",
-				"<html>",
+				"<html lang",
 				"online-peer",
 				"peer_online",
-				"Timestamp:",
+				"Timestamp",
 			},
 		},
 		{
@@ -418,7 +418,7 @@ func TestGenerateAlertHTML(t *testing.T) {
 			wantContains: []string{
 				"new-peer",
 				"new_peer",
-				"Timestamp:",
+				"Timestamp",
 			},
 		},
 		{
@@ -433,7 +433,7 @@ func TestGenerateAlertHTML(t *testing.T) {
 			wantContains: []string{
 				"failed-peer",
 				"bundle_failed",
-				"Timestamp:",
+				"Timestamp",
 				"Compilation error occurred",
 			},
 		},
@@ -447,7 +447,7 @@ func TestGenerateAlertHTML(t *testing.T) {
 			wantContains: []string{
 				"Blocked Events",
 				"200",
-				"Timestamp:",
+				"Timestamp",
 			},
 		},
 		{
@@ -461,7 +461,7 @@ func TestGenerateAlertHTML(t *testing.T) {
 			},
 			wantContains: []string{
 				"CRITICAL",
-				"#DC2626",
+				"#ef4444",
 			},
 		},
 		{
@@ -475,7 +475,7 @@ func TestGenerateAlertHTML(t *testing.T) {
 			},
 			wantContains: []string{
 				"WARNING",
-				"#F59E0B",
+				"#d97706",
 			},
 		},
 		{
@@ -489,7 +489,7 @@ func TestGenerateAlertHTML(t *testing.T) {
 			},
 			wantContains: []string{
 				"INFO",
-				"#7C3AED",
+				"#a855f7",
 			},
 		},
 	}
@@ -522,7 +522,7 @@ func TestGenerateAlertHTML_ValidHTMLStructure(t *testing.T) {
 
 	requiredElements := []string{
 		"<!DOCTYPE html>",
-		"<html>",
+		"<html lang",
 		"</html>",
 		"<head>",
 		"</head>",
@@ -553,19 +553,19 @@ func TestGenerateAlertHTML_SeverityBadge(t *testing.T) {
 			name:          "critical badge",
 			severity:      SeverityCritical,
 			expectedBadge: "CRITICAL",
-			expectedColor: "#DC2626",
+			expectedColor: "#ef4444",
 		},
 		{
 			name:          "warning badge",
 			severity:      SeverityWarning,
 			expectedBadge: "WARNING",
-			expectedColor: "#F59E0B",
+			expectedColor: "#d97706",
 		},
 		{
 			name:          "info badge",
 			severity:      SeverityInfo,
 			expectedBadge: "INFO",
-			expectedColor: "#7C3AED",
+			expectedColor: "#a855f7",
 		},
 	}
 
@@ -653,29 +653,29 @@ func TestGenerateAlertHTML_DifferentContentTypes(t *testing.T) {
 		expectedContent string
 	}{
 		{
-			name:            "peer offline shows offline message",
+			name:            "peer offline shows alert type",
 			eventType:       AlertTypePeerOffline,
-			expectedContent: "no longer responding",
+			expectedContent: "peer_offline",
 		},
 		{
-			name:            "peer online shows online message",
+			name:            "peer online shows alert type",
 			eventType:       AlertTypePeerOnline,
-			expectedContent: "now online and responding",
+			expectedContent: "peer_online",
 		},
 		{
-			name:            "new peer shows new peer message",
+			name:            "new peer shows alert type",
 			eventType:       AlertTypeNewPeer,
-			expectedContent: "new peer has been detected",
+			expectedContent: "new_peer",
 		},
 		{
-			name:            "bundle failed shows bundle message",
+			name:            "bundle failed shows alert type",
 			eventType:       AlertTypeBundleFailed,
-			expectedContent: "Bundle compilation failed",
+			expectedContent: "bundle_failed",
 		},
 		{
-			name:            "blocked spike shows spike message",
+			name:            "blocked spike shows alert type",
 			eventType:       AlertTypeBlockedSpike,
-			expectedContent: "spike in blocked traffic",
+			expectedContent: "blocked_spike",
 		},
 	}
 
@@ -1273,13 +1273,13 @@ func TestSanitizeHTMLBody_EmailTemplate(t *testing.T) {
 	// Verify essential template elements are preserved
 	requiredElements := []string{
 		"<!DOCTYPE html>",
-		"<html>",
+		"<html lang",
 		"</html>",
 		"<head>",
 		"</head>",
 		"<body",
 		"</body>",
-		"Runic",
+		"[ RUNIC // SYSTEM ALERT ]",
 		"test-peer",
 	}
 

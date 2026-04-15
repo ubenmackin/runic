@@ -1,3 +1,10 @@
+/**
+* @deprecated Use SearchFilterPanel instead.
+* This component is deprecated and will be removed in a future version.
+* Will be removed in v2.0.
+* SearchFilterPanel provides the same functionality with additional features
+* like collapsible state persistence and filter chips support.
+*/
 import { Search } from 'lucide-react'
 
 export default function TableToolbar({

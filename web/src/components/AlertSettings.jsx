@@ -20,7 +20,7 @@ const THROTTLE_OPTIONS = [1, 5, 15, 30, 60]
 // Window options in minutes (for blocked_spike)
 const WINDOW_OPTIONS = [1, 5, 15, 30, 60]
 
-export default function AlertSettings() {
+export default function AlertSettings({ showHeader = true }) {
   const qc = useQueryClient()
   const showToast = useToastContext()
 
@@ -80,10 +80,12 @@ export default function AlertSettings() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center gap-3">
-        <Bell className="w-5 h-5 text-purple-500" />
-        <h2 className="text-lg font-semibold text-gray-900 dark:text-light-neutral">Alert Rules</h2>
-      </div>
+      {showHeader && (
+        <div className="flex items-center gap-3">
+          <Bell className="w-5 h-5 text-purple-500" />
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-light-neutral">Alert Rules</h2>
+        </div>
+      )}
 
       <div className="overflow-x-auto">
         <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-border">

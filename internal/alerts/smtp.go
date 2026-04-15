@@ -352,134 +352,236 @@ func (s *SMTPSender) generateAlertSubject(event *AlertEvent) string {
 }
 
 // generateAlertHTML creates an HTML email body for an alert event.
+// Uses terminal aesthetic with dark mode colors and monospace font.
 func (s *SMTPSender) generateAlertHTML(event *AlertEvent, instanceURL string) string {
-	// Runic branding colors
-	purple := "#7C3AED"
-	amber := "#F59E0B"
+	// Terminal aesthetic colors
+	bodyBg := "#0a0a0a"
+	containerBg := "#121212"
+	borderColor := "#2d2d2d"
+	tableBg := "#0d0d0d"
+	textPrimary := "#d1d5db"
+	textSecondary := "#e5e7eb"
+	textMuted := "#6b7280"
+	textDim := "#9ca3af"
+	purple := "#a855f7"
 
-	var severityColor, severityLabel string
+	// Severity colors for badges
+	var badgeColor, badgeBg string
+	var severityLabel string
 	switch event.GetSeverity() {
 	case SeverityCritical:
-		severityColor = "#DC2626" // red
+		badgeColor = "#ef4444"
+		badgeBg = "#ef4444"
 		severityLabel = "CRITICAL"
 	case SeverityWarning:
-		severityColor = amber
+		badgeColor = "#d97706"
+		badgeBg = "#d97706"
 		severityLabel = "WARNING"
 	default:
-		severityColor = purple
+		badgeColor = "#a855f7"
+		badgeBg = "#a855f7"
 		severityLabel = "INFO"
 	}
 
-	// Build alert type specific content
-	var alertContent strings.Builder
-	switch event.Type {
-	case AlertTypePeerOffline:
-		fmt.Fprintf(&alertContent, `
-<p><strong>Peer:</strong> %s (ID: %d)</p>
-<p>The peer has gone offline and is no longer responding.</p>
-`, s.htmlEscape(event.PeerName), event.PeerID)
-	case AlertTypePeerOnline:
-		fmt.Fprintf(&alertContent, `
-<p><strong>Peer:</strong> %s (ID: %d)</p>
-<p>The peer is now online and responding.</p>
-`, s.htmlEscape(event.PeerName), event.PeerID)
-	case AlertTypeNewPeer:
-		fmt.Fprintf(&alertContent, `
-<p><strong>Peer:</strong> %s (ID: %d)</p>
-<p>A new peer has been detected in the network.</p>
-`, s.htmlEscape(event.PeerName), event.PeerID)
-	case AlertTypeBundleFailed:
-		fmt.Fprintf(&alertContent, `
-<p><strong>Peer:</strong> %s (ID: %d)</p>
-<p>Bundle compilation failed for this peer.</p>
-`, s.htmlEscape(event.PeerName), event.PeerID)
-	case AlertTypeBlockedSpike:
-		fmt.Fprintf(&alertContent, `
-<p><strong>Blocked Events:</strong> %d</p>
-<p>A spike in blocked traffic has been detected.</p>
-`, event.Value)
-	default:
-		fmt.Fprintf(&alertContent, `
-<p><strong>Alert Type:</strong> %s</p>
-`, s.htmlEscape(string(event.Type)))
+	// Helper to get metadata string value
+	getMetaString := func(key string) string {
+		if v, ok := event.Metadata[key]; ok {
+			if s, ok := v.(string); ok {
+				return s
+			}
+		}
+		return ""
 	}
 
+	// Build details table rows based on alert type
+	var detailsTable strings.Builder
+
+	switch event.Type {
+	case AlertTypePeerOffline:
+		offlineDuration := getMetaString("offline_duration")
+		fmt.Fprintf(&detailsTable, `<tr>
+<td style="padding: 12px 15px; border-bottom: 1px solid %s; color: %s; width: 140px; font-weight: bold; text-transform: uppercase; letter-spacing: 1px;">Peer</td>
+<td style="padding: 12px 15px; border-bottom: 1px solid %s; color: %s; font-weight: bold;">%s (ID: %d)</td>
+</tr>`, borderColor, textMuted, borderColor, textSecondary, s.htmlEscape(event.PeerName), event.PeerID)
+
+		if ip := getMetaString("ip_address"); ip != "" {
+			fmt.Fprintf(&detailsTable, `
+<tr>
+<td style="padding: 12px 15px; border-bottom: 1px solid %s; color: %s; font-weight: bold; text-transform: uppercase; letter-spacing: 1px;">IP Address</td>
+<td style="padding: 12px 15px; border-bottom: 1px solid %s; color: %s;">%s</td>
+</tr>`, borderColor, textMuted, borderColor, textSecondary, s.htmlEscape(ip))
+		}
+
+		if offlineDuration != "" {
+			fmt.Fprintf(&detailsTable, `
+<tr>
+<td style="padding: 12px 15px; border-bottom: 1px solid %s; color: %s; font-weight: bold; text-transform: uppercase; letter-spacing: 1px;">Offline Duration</td>
+<td style="padding: 12px 15px; border-bottom: 1px solid %s; color: %s;">%s</td>
+</tr>`, borderColor, textMuted, borderColor, textSecondary, s.htmlEscape(offlineDuration))
+		}
+
+	case AlertTypePeerOnline:
+		fmt.Fprintf(&detailsTable, `<tr>
+<td style="padding: 12px 15px; border-bottom: 1px solid %s; color: %s; width: 140px; font-weight: bold; text-transform: uppercase; letter-spacing: 1px;">Peer</td>
+<td style="padding: 12px 15px; border-bottom: 1px solid %s; color: %s; font-weight: bold;">%s (ID: %d)</td>
+</tr>`, borderColor, textMuted, borderColor, textSecondary, s.htmlEscape(event.PeerName), event.PeerID)
+
+		if ip := getMetaString("ip_address"); ip != "" {
+			fmt.Fprintf(&detailsTable, `
+<tr>
+<td style="padding: 12px 15px; border-bottom: 1px solid %s; color: %s; font-weight: bold; text-transform: uppercase; letter-spacing: 1px;">IP Address</td>
+<td style="padding: 12px 15px; border-bottom: 1px solid %s; color: %s;">%s</td>
+</tr>`, borderColor, textMuted, borderColor, textSecondary, s.htmlEscape(ip))
+		}
+
+	case AlertTypeNewPeer:
+		fmt.Fprintf(&detailsTable, `<tr>
+<td style="padding: 12px 15px; border-bottom: 1px solid %s; color: %s; width: 140px; font-weight: bold; text-transform: uppercase; letter-spacing: 1px;">Peer</td>
+<td style="padding: 12px 15px; border-bottom: 1px solid %s; color: %s; font-weight: bold;">%s (ID: %d)</td>
+</tr>`, borderColor, textMuted, borderColor, textSecondary, s.htmlEscape(event.PeerName), event.PeerID)
+
+		if ip := getMetaString("ip_address"); ip != "" {
+			fmt.Fprintf(&detailsTable, `
+<tr>
+<td style="padding: 12px 15px; border-bottom: 1px solid %s; color: %s; font-weight: bold; text-transform: uppercase; letter-spacing: 1px;">IP Address</td>
+<td style="padding: 12px 15px; border-bottom: 1px solid %s; color: %s;">%s</td>
+</tr>`, borderColor, textMuted, borderColor, textSecondary, s.htmlEscape(ip))
+		}
+
+	case AlertTypeBundleFailed:
+		fmt.Fprintf(&detailsTable, `<tr>
+<td style="padding: 12px 15px; border-bottom: 1px solid %s; color: %s; width: 140px; font-weight: bold; text-transform: uppercase; letter-spacing: 1px;">Peer</td>
+<td style="padding: 12px 15px; border-bottom: 1px solid %s; color: %s; font-weight: bold;">%s (ID: %d)</td>
+</tr>`, borderColor, textMuted, borderColor, textSecondary, s.htmlEscape(event.PeerName), event.PeerID)
+
+		errorMsg := getMetaString("error_message")
+		if errorMsg != "" {
+			fmt.Fprintf(&detailsTable, `
+<tr>
+<td style="padding: 12px 15px; border-bottom: 1px solid %s; color: %s; font-weight: bold; text-transform: uppercase; letter-spacing: 1px;">Error</td>
+<td style="padding: 12px 15px; border-bottom: 1px solid %s; color: #ef4444;">%s</td>
+</tr>`, borderColor, textMuted, borderColor, s.htmlEscape(errorMsg))
+		}
+
+	case AlertTypeBlockedSpike:
+		fmt.Fprintf(&detailsTable, `<tr>
+<td style="padding: 12px 15px; border-bottom: 1px solid %s; color: %s; width: 140px; font-weight: bold; text-transform: uppercase; letter-spacing: 1px;">Blocked Events</td>
+<td style="padding: 12px 15px; border-bottom: 1px solid %s; color: %s; font-weight: bold;">%d</td>
+</tr>`, borderColor, textMuted, borderColor, textSecondary, event.Value)
+
+		threshold := getMetaString("threshold")
+		if threshold != "" {
+			fmt.Fprintf(&detailsTable, `
+<tr>
+<td style="padding: 12px 15px; border-bottom: 1px solid %s; color: %s; font-weight: bold; text-transform: uppercase; letter-spacing: 1px;">Threshold</td>
+<td style="padding: 12px 15px; border-bottom: 1px solid %s; color: %s;">%s</td>
+</tr>`, borderColor, textMuted, borderColor, textSecondary, s.htmlEscape(threshold))
+		}
+
+	default:
+		fmt.Fprintf(&detailsTable, `<tr>
+<td style="padding: 12px 15px; border-bottom: 1px solid %s; color: %s; width: 140px; font-weight: bold; text-transform: uppercase; letter-spacing: 1px;">Alert Type</td>
+<td style="padding: 12px 15px; border-bottom: 1px solid %s; color: %s;">%s</td>
+</tr>`, borderColor, textMuted, borderColor, textSecondary, s.htmlEscape(string(event.Type)))
+	}
+
+	// Always add timestamp row
+	fmt.Fprintf(&detailsTable, `
+<tr>
+<td style="padding: 12px 15px; border-bottom: 1px solid %s; color: %s; font-weight: bold; text-transform: uppercase; letter-spacing: 1px;">Timestamp</td>
+<td style="padding: 12px 15px; border-bottom: 1px solid %s; color: %s;">%s</td>
+</tr>`, borderColor, textMuted, borderColor, textDim, event.Timestamp.Format(time.RFC1123))
+
 	// Add custom message if provided
+	var messageContent string
 	if event.Message != "" {
-		fmt.Fprintf(&alertContent, `<p><strong>Details:</strong> %s</p>`, s.htmlEscape(event.Message))
+		fmt.Fprintf(&detailsTable, `
+<tr>
+<td style="padding: 12px 15px; color: %s; font-weight: bold; text-transform: uppercase; letter-spacing: 1px;">Details</td>
+<td style="padding: 12px 15px; color: %s;">%s</td>
+</tr>`, textMuted, textSecondary, s.htmlEscape(event.Message))
+		messageContent = fmt.Sprintf(`<p style="font-size: 13px; color: %s; margin: 0 0 20px 0;">Details: %s</p>`, textDim, s.htmlEscape(event.Message))
 	}
 
 	// Build footer URLs
-	runicLink := instanceURL
 	settingsLink := instanceURL + "/settings"
 
-	// Build full HTML email
-	html := fmt.Sprintf(`
-<!DOCTYPE html>
-<html>
+	// Build alert title from subject or type
+	alertTitle := string(event.Type)
+	if event.Subject != "" {
+		alertTitle = event.Subject
+	}
+
+	// Build full HTML email with terminal aesthetic
+	html := fmt.Sprintf(`<!DOCTYPE html>
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 </head>
-<body style="margin: 0; padding: 0; background-color: #f3f4f6; font-family: -apple-system, BlinkMacSystemFont, \'Segoe UI\', Roboto, \'Helvetica Neue\', Arial, sans-serif;">
-<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%%" style="background-color: #f3f4f6; padding: 40px 20px;">
-<tr>
-<td align="center">
-<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="600" style="background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">
-<!-- Header -->
-<tr>
-<td style="background-color: %s; padding: 30px 40px; text-align: center;">
-<h1 style="margin: 0; color: #ffffff; font-size: 28px; font-weight: 700;">Runic</h1>
-<p style="margin: 10px 0 0 0; color: #ffffff; opacity: 0.9; font-size: 14px;">Network Policy Management</p>
-</td>
-</tr>
-<!-- Alert Badge -->
-<tr>
-<td style="padding: 30px 40px 10px 40px; text-align: center;">
-<span style="display: inline-block; background-color: %s; color: #ffffff; padding: 8px 20px; border-radius: 20px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px;">%s</span>
-</td>
-</tr>
-<!-- Content -->
-<tr>
-<td style="padding: 20px 40px 30px 40px;">
-<h2 style="margin: 0 0 20px 0; color: #1f2937; font-size: 20px; font-weight: 600;">%s</h2>
-<div style="color: #4b5563; font-size: 16px; line-height: 1.6;">
-%s
+<body style="background-color: %s; padding: 40px 20px; margin: 0; font-family: 'JetBrains Mono', Consolas, 'Courier New', monospace;">
+
+<!-- Main Container -->
+<div style="max-width: 600px; margin: 0 auto; background-color: %s; border: 1px solid %s; color: %s; line-height: 1.6;">
+
+  <!-- Header -->
+  <div style="padding: 20px;">
+    <div style="border-bottom: 1px dashed #4b5563; padding-bottom: 15px; color: %s; font-size: 12px; font-weight: bold; letter-spacing: 2px;">
+      [ RUNIC // SYSTEM ALERT ]
+    </div>
+  </div>
+
+  <!-- Alert Summary -->
+  <div style="padding: 0 20px;">
+    <div style="margin-bottom: 15px;">
+      <span style="color: %s; border: 1px solid %s; padding: 2px 8px; font-size: 11px; font-weight: bold; margin-right: 10px; display: inline-block;">[ %s ]</span>
+      <span style="font-size: 16px; font-weight: bold; color: #f3f4f6;">%s</span>
+    </div>
+    <!-- Content -->
+    <div style="font-size: 13px; color: %s; margin-bottom: 20px;">
+      %s
+    </div>
+  </div>
+
+  <!-- Details Table -->
+  <div style="padding: 0 20px 20px 20px;">
+    <table width="100%%" cellpadding="0" cellspacing="0" style="border-collapse: collapse; font-size: 12px; background-color: %s; border: 1px solid %s;">
+      %s
+    </table>
+  </div>
+
+  <!-- Footer -->
+  <div style="background-color: %s; border-top: 1px solid %s; padding: 20px; text-align: center;">
+    <div style="font-size: 11px; color: %s;">
+      This is an automated alert from <span style="color: %s; font-weight: bold;">Runic</span>.
+      <br><br>
+      <a href="%s" style="color: #d97706; text-decoration: none; border-bottom: 1px dashed #d97706; padding-bottom: 2px;">Manage notification preferences</a>
+    </div>
+  </div>
+
 </div>
-</td>
-</tr>
-<!-- Timestamp -->
-<tr>
-<td style="padding: 0 40px 30px 40px;">
-<p style="margin: 0; color: #9ca3af; font-size: 14px;">
-<strong>Timestamp:</strong> %s
-</p>
-</td>
-</tr>
-<!-- Footer -->
-<tr>
-<td style="background-color: #f9fafb; padding: 20px 40px; border-top: 1px solid #e5e7eb;">
-<p style="margin: 0; color: #6b7280; font-size: 12px; text-align: center;">
-This is an automated alert from <a href="%s" style="color: %s; text-decoration: none; font-weight: 600;">Runic</a>.
-<br>
-<a href="%s" style="color: %s; text-decoration: none;">Manage notification preferences</a>
-</p>
-</td>
-</tr>
-</table>
-</td>
-</tr>
-</table>
 </body>
 </html>
 `,
-		purple,                       // header background
-		severityColor, severityLabel, // badge
-		s.htmlEscape(string(event.Type)),     // h2 title
-		alertContent.String(),                // content
-		event.Timestamp.Format(time.RFC1123), // timestamp
-		runicLink, purple,                    // footer runic link
-		settingsLink, amber, // footer settings link
+		bodyBg,
+		containerBg,
+		borderColor,
+		textPrimary,
+		purple,
+		badgeColor,
+		badgeBg,
+		severityLabel,
+		s.htmlEscape(alertTitle),
+		textSecondary,
+		messageContent,
+		tableBg,
+		borderColor,
+		detailsTable.String(),
+		tableBg,
+		borderColor,
+		textMuted,
+		purple,
+		settingsLink,
 	)
 
 	return html

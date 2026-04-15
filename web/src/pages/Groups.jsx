@@ -17,7 +17,7 @@ import DataTable from '../components/DataTable'
 import TableSkeleton from '../components/TableSkeleton'
 import SortIndicator from '../components/SortIndicator'
 import Pagination from '../components/Pagination'
-import TableToolbar from '../components/TableToolbar'
+import SearchFilterPanel from '../components/SearchFilterPanel'
 import PageHeader from '../components/PageHeader'
 
 export default function Groups() {
@@ -278,33 +278,33 @@ const peerOptions = availablePeers.map(p => ({
         </div>
       )}
 
-	{/* Search Bar and Rows per page */}
-	{userGroups?.length > 0 && (
-		<TableToolbar
-			searchTerm={searchQuery}
-			onSearchChange={(v) => setSearchQuery(v)}
-			onClearSearch={() => setSearchQuery('')}
-			placeholder="Search groups..."
-			rowsPerPage={groupsRowsPerPage}
-			onRowsPerPageChange={setGroupsRowsPerPage}
-		/>
-	)}
-
-	{/* Show Pending Deletes Toggle */}
-	{userGroups?.some(g => g.is_pending_delete) && (
-		<div className="flex items-center gap-2 px-1">
-			<input
-				type="checkbox"
-				id="showPendingDeletes"
-				checked={showPendingDeletes}
-				onChange={(e) => setShowPendingDeletes(e.target.checked)}
-				className="w-4 h-4 text-purple-active bg-gray-100 border-gray-300 rounded-none focus:ring-purple-active dark:focus:ring-purple-active dark:ring-offset-gray-800 focus:ring-2 dark:bg-charcoal-darkest dark:border-gray-600"
-			/>
-			<label htmlFor="showPendingDeletes" className="text-sm text-gray-700 dark:text-amber-primary cursor-pointer">
-				Show Pending Deletes
-			</label>
-		</div>
-	)}
+		{/* Search Bar and Rows per page */}
+		{userGroups?.length > 0 && (
+			<SearchFilterPanel
+				storageKey="groups-search-filters-expanded"
+				searchTerm={searchQuery}
+				onSearchChange={setSearchQuery}
+				onClearSearch={() => setSearchQuery('')}
+				searchPlaceholder="Search groups..."
+				rowsPerPage={groupsRowsPerPage}
+				onRowsPerPageChange={setGroupsRowsPerPage}
+			>
+				{userGroups?.some(g => g.is_pending_delete) && (
+					<div className="flex items-center gap-2">
+						<input
+							type="checkbox"
+							id="showPendingDeletes"
+							checked={showPendingDeletes}
+							onChange={(e) => setShowPendingDeletes(e.target.checked)}
+							className="w-4 h-4 text-purple-active bg-gray-100 border-gray-300 rounded-none focus:ring-purple-active dark:focus:ring-purple-active dark:ring-offset-gray-800 focus:ring-2 dark:bg-charcoal-darkest dark:border-gray-600"
+						/>
+						<label htmlFor="showPendingDeletes" className="text-sm text-gray-700 dark:text-amber-primary cursor-pointer">
+							Show Pending Deletes
+						</label>
+					</div>
+				)}
+			</SearchFilterPanel>
+		)}
 
       {!userGroups?.length ? (
         <EmptyState title="No user groups yet" message="Create groups to organize peers for policy targeting." action="New Group" onAction={openAdd} />

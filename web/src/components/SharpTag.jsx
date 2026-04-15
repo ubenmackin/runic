@@ -12,16 +12,36 @@ const colorConfig = {
   info: 'border-blue-500 text-blue-500 dark:text-blue-400',
 };
 
-export default function SharpTag({ status, color }) {
+/**
+ * SharpTag - A styled status tag component
+ * @param {string} status - The status key for color lookup (will be uppercased for display if label not provided)
+ * @param {string} [label] - Optional custom label text (preserves original casing, e.g., group names)
+ * @param {string} [variant='default'] - Display variant: 'default' (bracketed [STATUS]) or 'badge' (plain text)
+ * @param {string} [color] - Optional color classes to override the default based on status
+ */
+export default function SharpTag({ status, label, variant = 'default', color }) {
   const statusKey = status?.toLowerCase() || 'pending';
   const colorClasses = color || colorConfig[statusKey] || colorConfig.pending;
-  const displayStatus = status ? status.toUpperCase() : 'PENDING';
+  // Use label if provided (preserves casing), otherwise uppercase the status
+  const displayText = label ?? (status ? status.toUpperCase() : 'PENDING');
 
+  // Default variant: bracketed display with font-mono and smaller text
+  if (variant === 'default') {
+    return (
+      <span
+        className={`inline-block px-1.5 py-0.5 border font-mono text-[10px] ${colorClasses}`}
+      >
+        [{displayText}]
+      </span>
+    );
+  }
+
+  // Badge variant: plain text without brackets, slightly larger with font-medium
   return (
     <span
-      className={`inline-block px-1.5 py-0.5 border font-mono text-[10px] ${colorClasses}`}
+      className={`inline-block px-1.5 py-0.5 border text-xs font-medium ${colorClasses}`}
     >
-      [{displayStatus}]
+      {displayText}
     </span>
   );
 }

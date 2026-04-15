@@ -9,7 +9,7 @@ import LogLine from '../components/LogLine'
 import SearchableSelect from '../components/SearchableSelect'
 import PageHeader from '../components/PageHeader'
 import Pagination from '../components/Pagination'
-import FilterBar from '../components/FilterBar'
+import SearchFilterPanel from '../components/SearchFilterPanel'
 import { logger } from '../utils/logger'
 
 const MAX_RECONNECT_ATTEMPTS = 5
@@ -249,11 +249,12 @@ isPaused
         }
       />
 
-      {/* Filter bar (historical mode) */}
+{/* Filter bar (historical mode) */}
       {mode === 'historical' && (
-        <FilterBar
+        <SearchFilterPanel
           storageKey="logs-filters-expanded"
-          hasActiveFilters={filter.peer_id || filter.src_ip || filter.dst_port}
+          showSearch={false}
+          hasActiveFilters={!!(filter.peer_id || filter.src_ip || filter.dst_port)}
         >
           {/* Peer */}
           <div className="space-y-1 min-w-[200px]">
@@ -278,58 +279,61 @@ isPaused
             />
           </div>
 
-          {/* Dest Port */}
-          <div className="space-y-1">
-            <label className="text-xs font-medium text-gray-500 dark:text-amber-muted">Dest Port</label>
-            <input
-              type="text"
-              placeholder="e.g. 443"
-              value={filter.dst_port}
-              onChange={e => setFilter(f => ({ ...f, dst_port: e.target.value, offset: 0 }))}
-              className="px-3 py-2 border border-gray-300 dark:border-gray-border bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white text-sm w-24"
-            />
-          </div>
+      {/* Dest Port */}
+      <div className="space-y-1">
+        <label className="text-xs font-medium text-gray-500 dark:text-amber-muted">Dest Port</label>
+        <input
+          type="text"
+          placeholder="e.g. 443"
+          value={filter.dst_port}
+          onChange={e => setFilter(f => ({ ...f, dst_port: e.target.value, offset: 0 }))}
+          className="px-3 py-2 border border-gray-300 dark:border-gray-border bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white text-sm w-24"
+        />
+      </div>
 
-          {/* Limit */}
-          <div className="space-y-1">
-            <label className="text-xs font-medium text-gray-500 dark:text-amber-muted">Limit</label>
-            <select
-              value={filter.limit}
-              onChange={e => setFilter(f => ({ ...f, limit: parseInt(e.target.value), offset: 0 }))}
-              className="px-3 py-2 border border-gray-300 dark:border-gray-border bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white text-sm"
-            >
-              <option value={50}>50 rows</option>
-              <option value={100}>100 rows</option>
-              <option value={200}>200 rows</option>
-              <option value={500}>500 rows</option>
-            </select>
-          </div>
-
-          {/* Query button */}
-          <button
-            onClick={() => refetch()}
-            className="px-4 py-2 bg-purple-active hover:bg-purple-600 text-white text-sm font-bold uppercase border border-purple-active/20 shadow-[0_0_15px_rgba(159,79,248,0.2)] transition-all"
+      {/* Right-aligned controls */}
+      <div className="ml-auto flex gap-4 items-end">
+        {/* Limit */}
+        <div className="space-y-1">
+          <label className="text-xs font-medium text-gray-500 dark:text-amber-muted">Limit</label>
+          <select
+            value={filter.limit}
+            onChange={e => setFilter(f => ({ ...f, limit: parseInt(e.target.value), offset: 0 }))}
+            className="px-3 py-2 border border-gray-300 dark:border-gray-border bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white text-sm"
           >
-            Query
-          </button>
+            <option value={50}>50 rows</option>
+            <option value={100}>100 rows</option>
+            <option value={200}>200 rows</option>
+            <option value={500}>500 rows</option>
+          </select>
+        </div>
 
-          {/* Clear filters */}
-          {(filter.peer_id || filter.src_ip || filter.dst_port) && (
-            <button
-              onClick={() => setFilter(f => ({
-                ...f,
-                peer_id: '',
-                src_ip: '',
-                dst_port: '',
-                offset: 0,
-              }))}
-              className="flex items-center gap-1 px-3 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20"
-            >
-              <X className="w-4 h-4" />
-              Clear
-            </button>
-          )}
-        </FilterBar>
+        {/* Query button */}
+        <button
+          onClick={() => refetch()}
+          className="px-4 py-2 bg-purple-active hover:bg-purple-600 text-white text-sm font-bold uppercase border border-purple-active/20 shadow-[0_0_15px_rgba(159,79,248,0.2)] transition-all"
+        >
+          Query
+        </button>
+
+        {/* Clear filters */}
+        {(filter.peer_id || filter.src_ip || filter.dst_port) && (
+          <button
+            onClick={() => setFilter(f => ({
+              ...f,
+              peer_id: '',
+              src_ip: '',
+              dst_port: '',
+              offset: 0,
+            }))}
+            className="flex items-center gap-1 px-3 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20"
+          >
+            <X className="w-4 h-4" />
+            Clear
+          </button>
+        )}
+      </div>
+        </SearchFilterPanel>
       )}
 
       {/* Live mode status */}

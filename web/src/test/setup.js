@@ -65,18 +65,30 @@ global.ResizeObserver = MockResizeObserver
 // Mock scrollTo for components that manipulate scroll position
 window.scrollTo = () => {}
 
-// Mock localStorage
-const localStorageMock = {
-  getItem: () => null,
-  setItem: () => {},
-  removeItem: () => {},
-  clear: () => {},
-  length: 0,
-  key: () => null,
+// Mock localStorage with actual storage functionality
+const createLocalStorageMock = () => {
+  let store = {}
+  return {
+    getItem: (key) => store[key] || null,
+    setItem: (key, value) => {
+      store[key] = value
+    },
+    removeItem: (key) => {
+      delete store[key]
+    },
+    clear: () => {
+      store = {}
+    },
+    get length() {
+      return Object.keys(store).length
+    },
+    key: (index) => Object.keys(store)[index] || null,
+  }
 }
 
 Object.defineProperty(window, 'localStorage', {
-  value: localStorageMock,
+  value: createLocalStorageMock(),
+  writable: true,
 })
 
 // Mock URL.createObjectURL and URL.revokeObjectURL (needed for file handling)

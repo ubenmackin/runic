@@ -9,51 +9,42 @@
 
 {{define "Message"}}
 <div style="margin: 20px 0;">
-    <h2 style="font-size: 18px; margin-bottom: 16px;">Alert Summary for {{.Date}}</h2>
+    <h2 style="font-size: 18px; margin-bottom: 16px; color: #f3f4f6; font-weight: bold;">Alert Summary for {{.Date}}</h2>
     
     {{if .Alerts}}
-    <table style="width: 100%; border-collapse: collapse;">
+    <table style="width: 100%; border-collapse: collapse; background: #0d0d0d; border: 1px solid #2d2d2d;">
         <thead>
-            <tr style="border-bottom: 2px solid #e5e7eb;">
-                <th style="text-align: left; padding: 8px;">Time</th>
-                <th style="text-align: left; padding: 8px;">Type</th>
-                <th style="text-align: left; padding: 8px;">Subject</th>
-                <th style="text-align: left; padding: 8px;">Severity</th>
+            <tr style="border-bottom: 1px solid #2d2d2d;">
+                <th style="text-align: left; padding: 10px 12px; color: #9ca3af; font-size: 11px; text-transform: uppercase; letter-spacing: 1px;">Time</th>
+                <th style="text-align: left; padding: 10px 12px; color: #9ca3af; font-size: 11px; text-transform: uppercase; letter-spacing: 1px;">Type</th>
+                <th style="text-align: left; padding: 10px 12px; color: #9ca3af; font-size: 11px; text-transform: uppercase; letter-spacing: 1px;">Subject</th>
+                <th style="text-align: left; padding: 10px 12px; color: #9ca3af; font-size: 11px; text-transform: uppercase; letter-spacing: 1px;">Severity</th>
             </tr>
         </thead>
         <tbody>
             {{range .Alerts}}
-            <tr style="border-bottom: 1px solid #e5e7eb;">
-                <td style="padding: 8px;">{{.Time}}</td>
-                <td style="padding: 8px;">{{.Type}}</td>
-                <td style="padding: 8px;">{{.Subject}}</td>
-                <td style="padding: 8px;">
-                    <span class="alert-badge severity-{{.Severity}}">{{.Severity}}</span>
+            <tr style="border-bottom: 1px solid #2d2d2d;">
+                <td style="padding: 10px 12px; color: #e5e7eb; font-size: 12px;">{{.Time}}</td>
+                <td style="padding: 10px 12px; color: #e5e7eb; font-size: 12px;">{{.Type}}</td>
+                <td style="padding: 10px 12px; color: #e5e7eb; font-size: 12px;">{{.Subject}}</td>
+                <td style="padding: 10px 12px;">
+                    <span style="color: {{if eq .Severity "critical"}}#ef4444{{else if eq .Severity "warning"}}#d97706{{else}}#a855f7{{end}}; font-size: 11px; font-weight: bold;">[ {{.Severity}} ]</span>
                 </td>
             </tr>
             {{end}}
         </tbody>
     </table>
     {{else}}
-    <p style="color: #6b7280;">No alerts were triggered during this period.</p>
+    <p style="color: #6b7280; font-size: 13px;">No alerts were triggered during this period.</p>
     {{end}}
 </div>
 
-<div style="margin-top: 20px; padding: 16px; background: #f9fafb; border-radius: 6px;">
-    <h3 style="font-size: 14px; margin: 0 0 8px 0;">Quick Stats</h3>
-    <div style="display: flex; gap: 24px;">
-        <div>
-            <span style="font-weight: 600;">{{.TotalAlerts}}</span> Total Alerts
-        </div>
-        <div>
-            <span style="font-weight: 600;">{{.CriticalCount}}</span> Critical
-        </div>
-        <div>
-            <span style="font-weight: 600;">{{.WarningCount}}</span> Warning
-        </div>
-        <div>
-            <span style="font-weight: 600;">{{.InfoCount}}</span> Info
-        </div>
+<div style="margin-top: 20px; padding: 16px; background: #0d0d0d; border: 1px solid #2d2d2d; border-radius: 4px;">
+    <div style="font-size: 13px; color: #6b7280;">
+        <span style="color: #f3f4f6; font-weight: bold;">{{.TotalAlerts}}</span> Total Alerts &nbsp;|&nbsp; 
+        <span style="color: #ef4444; font-weight: bold;">{{.CriticalCount}}</span> Critical &nbsp;|&nbsp; 
+        <span style="color: #d97706; font-weight: bold;">{{.WarningCount}}</span> Warning &nbsp;|&nbsp; 
+        <span style="color: #a855f7; font-weight: bold;">{{.InfoCount}}</span> Info
     </div>
 </div>
 {{end}}

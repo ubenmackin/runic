@@ -17,8 +17,9 @@ import TableSkeleton from '../components/TableSkeleton'
 import SearchableSelect from '../components/SearchableSelect'
 import SortIndicator from '../components/SortIndicator'
 import Pagination from '../components/Pagination'
-import TableToolbar from '../components/TableToolbar'
+import SearchFilterPanel from '../components/SearchFilterPanel'
 import PageHeader from '../components/PageHeader'
+import SharpTag from '../components/SharpTag'
 
 const PROTOCOL_OPTIONS = [
   { value: 'tcp', label: 'TCP' },
@@ -373,31 +374,34 @@ const handleSourcePortInputKeyDown = (e) => {
         </div>
       )}
 
-	{/* Search Bar and Rows per page */}
-	<TableToolbar
-		searchTerm={searchTerm}
-		onSearchChange={(v) => setSearchTerm(v)}
-		onClearSearch={() => setSearchTerm('')}
-		placeholder="Search services by name, protocol, ports, or description..."
-		rowsPerPage={servicesRowsPerPage}
-		onRowsPerPageChange={setServicesRowsPerPage}
-	/>
+		{/* Search Bar and Rows per page */}
+		<SearchFilterPanel
+			storageKey="services-search-filters-expanded"
+			searchTerm={searchTerm}
+			onSearchChange={setSearchTerm}
+			onClearSearch={() => setSearchTerm('')}
+			searchPlaceholder="Search services..."
+			rowsPerPage={servicesRowsPerPage}
+			onRowsPerPageChange={setServicesRowsPerPage}
+		>
+			{/* Show Pending Deletes Toggle */}
+			{userServices?.some(s => s.is_pending_delete) && (
+				<div className="flex items-center gap-2">
+					<input
+						type="checkbox"
+						id="showPendingDeletes"
+						checked={showPendingDeletes}
+						onChange={(e) => setShowPendingDeletes(e.target.checked)}
+						className="w-4 h-4 text-purple-active bg-gray-100 border-gray-300 rounded-none focus:ring-purple-active dark:focus:ring-purple-active dark:ring-offset-gray-800 focus:ring-2 dark:bg-charcoal-darkest dark:border-gray-600"
+					/>
+					<label htmlFor="showPendingDeletes" className="text-sm text-gray-700 dark:text-amber-primary cursor-pointer">
+						Show Pending Deletes
+					</label>
+				</div>
+			)}
+		</SearchFilterPanel>
 
-	{/* Show Pending Deletes Toggle */}
-	{userServices?.some(s => s.is_pending_delete) && (
-		<div className="flex items-center gap-2 px-1">
-			<input
-				type="checkbox"
-				id="showPendingDeletes"
-				checked={showPendingDeletes}
-				onChange={(e) => setShowPendingDeletes(e.target.checked)}
-				className="w-4 h-4 text-purple-active bg-gray-100 border-gray-300 rounded-none focus:ring-purple-active dark:focus:ring-purple-active dark:ring-offset-gray-800 focus:ring-2 dark:bg-charcoal-darkest dark:border-gray-600"
-			/>
-			<label htmlFor="showPendingDeletes" className="text-sm text-gray-700 dark:text-amber-primary cursor-pointer">
-				Show Pending Deletes
-			</label>
-		</div>
-	)}
+
 
       {!processedServices?.length ? (
         searchTerm ? (
@@ -411,7 +415,7 @@ const handleSourcePortInputKeyDown = (e) => {
         <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
-<thead className="bg-charcoal-darkest">
+<thead className="bg-gray-50 dark:bg-charcoal-darkest border-b border-gray-200 dark:border-gray-border">
               <tr>
                 <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
                   <button type="button" onClick={() => handleSort('name')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
@@ -465,14 +469,15 @@ const remainingCount = ports.length - maxVisible
 
 return (
 <>
-{visiblePorts.map((port, idx) => (
-<span
-key={idx}
-className="px-2 py-0.5 text-xs font-mono bg-purple-active/20 dark:bg-purple-active text-white whitespace-nowrap"
->
-{port}
-</span>
-))}
+              {visiblePorts.map((port, idx) => (
+<SharpTag
+                                                              key={idx}
+                                                              status="info"
+                                                              label={port}
+                                                              variant="badge"
+                                                              color="border-purple-500 text-purple-700 dark:text-purple-400 bg-purple-50 dark:bg-purple-900/20"
+                                                            />
+              ))}
 {remainingCount > 0 && (
 <span
 className="px-2 py-0.5 text-xs font-mono bg-gray-100 dark:bg-charcoal-darkest text-gray-600 dark:text-amber-muted whitespace-nowrap"

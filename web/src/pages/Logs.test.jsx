@@ -102,15 +102,19 @@ describe('Logs Page', () => {
         expect(screen.getByText('Logs')).toBeInTheDocument()
       })
 
-      // Should show the filter button
-      const filterButton = screen.getByRole('button', { name: /Filters/ })
+      // Should show the filter button with aria-expanded=false
+      const filterButton = screen.getByRole('button', { name: /Search & Filters/ })
       expect(filterButton).toBeInTheDocument()
-      
+      expect(filterButton).toHaveAttribute('aria-expanded', 'false')
+
       // Verify no Source IP input is visible (since collapsed)
       expect(screen.queryByPlaceholderText('e.g. 192.168.1')).not.toBeInTheDocument()
     })
 
     test('filter inputs become visible after clicking expand', async () => {
+      // Set localStorage to collapsed state BEFORE rendering so we start collapsed
+      localStorage.setItem('logs-filters-expanded', 'false')
+
       const user = userEvent.setup()
       renderWithProviders(<Logs />)
 
@@ -118,7 +122,10 @@ describe('Logs Page', () => {
         expect(screen.getByText('Logs')).toBeInTheDocument()
       })
 
-      const filtersButton = screen.getByText('Filters').closest('button')
+      // Verify inputs are hidden initially (collapsed state)
+      expect(screen.queryByPlaceholderText('e.g. 192.168.1')).not.toBeInTheDocument()
+
+      const filtersButton = screen.getByRole('button', { name: /Search & Filters/ })
       await user.click(filtersButton)
 
       // After clicking, filter inputs should be visible
@@ -129,6 +136,9 @@ describe('Logs Page', () => {
     })
 
     test('filter expanded state shows Active badge when filters have values', async () => {
+      // Set localStorage to collapsed state BEFORE rendering
+      localStorage.setItem('logs-filters-expanded', 'false')
+
       const user = userEvent.setup()
       renderWithProviders(<Logs />)
 
@@ -137,7 +147,7 @@ describe('Logs Page', () => {
       })
 
       // Expand filters
-      const filtersButton = screen.getByText('Filters').closest('button')
+      const filtersButton = screen.getByRole('button', { name: /Search & Filters/ })
       await user.click(filtersButton)
 
       // Wait for filter inputs to be visible
@@ -187,6 +197,7 @@ describe('Logs Page', () => {
     })
 
     test('Query button triggers refetch', async () => {
+      // Start expanded so inputs are visible (default behavior)
       const user = userEvent.setup()
       renderWithProviders(<Logs />)
 
@@ -194,10 +205,7 @@ describe('Logs Page', () => {
         expect(screen.getByText('Logs')).toBeInTheDocument()
       })
 
-      // Expand filters first
-      const filtersButton = screen.getByText('Filters').closest('button')
-      await user.click(filtersButton)
-
+      // Since default is expanded, Query button should be visible
       await waitFor(() => {
         expect(screen.getByText('Query')).toBeInTheDocument()
       })
@@ -212,6 +220,7 @@ describe('Logs Page', () => {
     })
 
     test('Clear button resets filters', async () => {
+      // Start expanded so inputs are visible (default behavior)
       const user = userEvent.setup()
       renderWithProviders(<Logs />)
 
@@ -219,11 +228,7 @@ describe('Logs Page', () => {
         expect(screen.getByText('Logs')).toBeInTheDocument()
       })
 
-      // Expand filters
-      const filtersButton = screen.getByText('Filters').closest('button')
-      await user.click(filtersButton)
-
-      // Wait for filter inputs to be visible
+      // Wait for filter inputs to be visible (default is expanded)
       await waitFor(() => {
         expect(screen.getByPlaceholderText('e.g. 192.168.1')).toBeInTheDocument()
       })

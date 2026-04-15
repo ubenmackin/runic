@@ -1,18 +1,25 @@
 import { useState, useRef, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Lock, Trash2, Plus, Shield, Key, Database, HardDrive, Bell, FileKey, ScrollText, Mail, Eye, EyeOff, Send, Loader, Globe } from 'lucide-react'
-import { api, QUERY_KEYS, getSMTPConfig, updateSMTPConfig, testSMTP, getNotificationPrefs, updateNotificationPrefs } from '../api/client'
+import { api, QUERY_KEYS, getSMTPConfig, updateSMTPConfig, testSMTP, getNotificationPrefs, updateNotificationPrefs, getAlertRules } from '../api/client'
 import { useToastContext } from '../hooks/ToastContext'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 import { useAuth } from '../hooks/useAuth'
 import PageHeader from '../components/PageHeader'
 import AlertSettings from '../components/AlertSettings'
+import CollapsibleSection from '../components/CollapsibleSection'
 import {
   alertTypes,
   transformPrefsToBackend,
   transformPrefsFromBackend,
   transformSMTPFromBackend,
 } from '../utils/settingsTransform'
+import {
+  getSMTPSummary,
+  getInstanceSummary,
+  getNotificationSummary,
+  getAlertRulesSummary,
+} from '../utils/settingsSummary'
 
 // Timezone options
 const timezones = [
@@ -26,200 +33,6 @@ const timezones = [
   { value: 'Asia/Tokyo', label: 'Tokyo' },
   { value: 'Australia/Sydney', label: 'Sydney' },
 ]
-
-// Notification Preferences Section Component (hoisted to module level)
-function NotificationPreferencesSection({
-  userPrefsLoading,
-  userPrefsError,
-  notificationPrefs,
-  unifiedTimezone,
-  showQuietHours,
-  setShowQuietHours,
-  showDigest,
-  setShowDigest,
-  onUnifiedTimezoneChange,
-  onToggleAlertType,
-  onQuietHoursChange,
-  onDigestChange,
-}) {
-  return (
-    <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none">
-      <div className="p-6">
-        <div className="flex items-center gap-3 mb-2">
-          <Bell className="w-5 h-5 text-purple-500" />
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-light-neutral">Your Notification Preferences</h2>
-        </div>
-        <p className="text-sm text-gray-600 dark:text-amber-muted mb-6">
-          Configure which alerts you receive
-        </p>
-
-        {userPrefsLoading ? (
-          <div className="flex items-center justify-center py-8">
-            <Loader className="w-6 h-6 animate-spin text-purple-500" />
-          </div>
-        ) : userPrefsError ? (
-          <div className="text-center py-8">
-            <p className="text-gray-600 dark:text-amber-muted">
-              Please log in to configure notification preferences.
-            </p>
-          </div>
-        ) : notificationPrefs && (
-          <div className="space-y-6">
-            {/* Unified Timezone Selector */}
-            <div>
-              <label htmlFor="unified_timezone" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-2">
-                Timezone
-              </label>
-              <select
-                id="unified_timezone"
-                value={unifiedTimezone || 'UTC'}
-                onChange={(e) => onUnifiedTimezoneChange(e.target.value)}
-                className="w-full md:w-auto min-w-[200px] px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-              >
-                {timezones.map((tz) => (
-                  <option key={tz.value} value={tz.value}>
-                    {tz.label}
-                  </option>
-                ))}
-              </select>
-              <p className="text-xs text-gray-500 dark:text-amber-muted mt-1">
-                Applies to both Quiet Hours and Daily Digest
-              </p>
-            </div>
-
-            {/* Alert Type Toggles */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-3">
-                Alert Types
-              </label>
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                {alertTypes.map((type) => (
-                  <div key={type.key} className="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      id={`alert-type-${type.key}`}
-                      checked={notificationPrefs.alert_types?.[type.key] ?? true}
-                      onChange={() => onToggleAlertType(type.key)}
-                      className="w-4 h-4 text-purple-600 border-gray-300 dark:border-gray-border rounded-none focus:ring-purple-500"
-                    />
-                    <label
-                      htmlFor={`alert-type-${type.key}`}
-                      className="text-sm text-gray-700 dark:text-amber-primary cursor-pointer"
-                    >
-                      {type.label}
-                    </label>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Quiet Hours Section */}
-            <div className="border-t border-gray-200 dark:border-gray-border pt-6">
-              <button
-                onClick={() => setShowQuietHours(!showQuietHours)}
-                className="flex items-center justify-between w-full text-left"
-              >
-                <span className="text-sm font-medium text-gray-700 dark:text-amber-primary">
-                  Quiet Hours
-                </span>
-                <span className={`transform transition-transform ${showQuietHours ? 'rotate-180' : ''}`}>
-                  <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                  </svg>
-                </span>
-              </button>
-              {showQuietHours && (
-                <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      id="quiet_hours_enabled"
-                      checked={notificationPrefs.quiet_hours?.enabled ?? false}
-                      onChange={(e) => onQuietHoursChange('enabled', e.target.checked)}
-                      className="w-4 h-4 text-purple-600 border-gray-300 dark:border-gray-border rounded-none focus:ring-purple-500"
-                    />
-                    <label htmlFor="quiet_hours_enabled" className="text-sm text-gray-700 dark:text-amber-primary">
-                      Enable Quiet Hours
-                    </label>
-                  </div>
-                  <div>
-                    <label htmlFor="quiet_hours_start" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-                      Start Time
-                    </label>
-                    <input
-                      type="time"
-                      id="quiet_hours_start"
-                      value={notificationPrefs.quiet_hours?.start_time || '22:00'}
-                      onChange={(e) => onQuietHoursChange('start_time', e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-                    />
-                  </div>
-                  <div>
-                    <label htmlFor="quiet_hours_end" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-                      End Time
-                    </label>
-                    <input
-                      type="time"
-                      id="quiet_hours_end"
-                      value={notificationPrefs.quiet_hours?.end_time || '08:00'}
-                      onChange={(e) => onQuietHoursChange('end_time', e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-                    />
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Daily Digest Section */}
-            <div className="border-t border-gray-200 dark:border-gray-border pt-6">
-              <button
-                onClick={() => setShowDigest(!showDigest)}
-                className="flex items-center justify-between w-full text-left"
-              >
-                <span className="text-sm font-medium text-gray-700 dark:text-amber-primary">
-                  Daily Digest
-                </span>
-                <span className={`transform transition-transform ${showDigest ? 'rotate-180' : ''}`}>
-                  <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                  </svg>
-                </span>
-              </button>
-              {showDigest && (
-                <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      id="digest_enabled"
-                      checked={notificationPrefs.daily_digest?.enabled ?? false}
-                      onChange={(e) => onDigestChange('enabled', e.target.checked)}
-                      className="w-4 h-4 text-purple-600 border-gray-300 dark:border-gray-border rounded-none focus:ring-purple-500"
-                    />
-                    <label htmlFor="digest_enabled" className="text-sm text-gray-700 dark:text-amber-primary">
-                      Enable Daily Digest
-                    </label>
-                  </div>
-                  <div>
-                    <label htmlFor="digest_time" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-                      Digest Time
-                    </label>
-                    <input
-                      type="time"
-                      id="digest_time"
-                      value={notificationPrefs.daily_digest?.time || '09:00'}
-                      onChange={(e) => onDigestChange('time', e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-                    />
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
 
 export default function Settings() {
   const qc = useQueryClient()
@@ -235,6 +48,44 @@ export default function Settings() {
   const [showClearLogsModal, setShowClearLogsModal] = useState(false)
   const deleteModalRef = useRef(null)
   const createModalRef = useRef(null)
+
+  // Controlled expanded states for jump-to-section functionality
+  const [generalExpanded, setGeneralExpanded] = useState(undefined)
+  const [smtpExpanded, setSmtpExpanded] = useState(undefined)
+  const [notificationsExpanded, setNotificationsExpanded] = useState(undefined)
+  const [alertRulesExpanded, setAlertRulesExpanded] = useState(undefined)
+
+  // Jump to section handler
+  const handleJumpToSection = (e) => {
+    const sectionId = e.target.value
+    if (!sectionId) return
+
+    const el = document.getElementById(sectionId)
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+
+      // Expand the section after scrolling
+      setTimeout(() => {
+        switch (sectionId) {
+          case 'general-section':
+            setGeneralExpanded(true)
+            break
+          case 'smtp-section':
+            setSmtpExpanded(true)
+            break
+          case 'notifications-section':
+            setNotificationsExpanded(true)
+            break
+          case 'alert-rules-section':
+            setAlertRulesExpanded(true)
+            break
+        }
+      }, 100)
+    }
+
+    // Reset select to default option
+    e.target.value = ''
+  }
   useFocusTrap(deleteModalRef, showDeleteModal !== null)
   useFocusTrap(createModalRef, showCreateModal !== null)
 
@@ -321,6 +172,13 @@ export default function Settings() {
       showToast('Instance URL saved', 'success')
     },
     onError: (err) => showToast(err.message, 'error'),
+  })
+
+  // Fetch alert rules for summary
+  const { data: alertRules } = useQuery({
+    queryKey: QUERY_KEYS.alertRules(),
+    queryFn: getAlertRules,
+    enabled: isAdmin,
   })
 
   // Notification Preferences State
@@ -500,86 +358,284 @@ const getKeyData = (keyType) => {
 
       {/* Tab Navigation - at the top for admins */}
       {isAdmin && (
-        <div className="flex border-b border-gray-200 dark:border-gray-border">
-          <button
-            onClick={() => setActiveTab('alerts')}
-            className={`flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors ${
-              activeTab === 'alerts'
-                ? 'border-purple-active text-purple-active dark:text-purple-active'
-                : 'border-transparent text-gray-600 dark:text-amber-muted hover:text-gray-900 dark:hover:text-light-neutral hover:border-gray-300 dark:hover:border-gray-border'
-            }`}
-          >
-            <Bell className="w-4 h-4" />
-            Alerts
-          </button>
-          <button
-            onClick={() => setActiveTab('logs')}
-            className={`flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors ${
-              activeTab === 'logs'
-                ? 'border-purple-active text-purple-active dark:text-purple-active'
-                : 'border-transparent text-gray-600 dark:text-amber-muted hover:text-gray-900 dark:hover:text-light-neutral hover:border-gray-300 dark:hover:border-gray-border'
-            }`}
-          >
-            <ScrollText className="w-4 h-4" />
-            Logs
-          </button>
-          <button
-            onClick={() => setActiveTab('keys')}
-            className={`flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors ${
-              activeTab === 'keys'
-                ? 'border-purple-active text-purple-active dark:text-purple-active'
-                : 'border-transparent text-gray-600 dark:text-amber-muted hover:text-gray-900 dark:hover:text-light-neutral hover:border-gray-300 dark:hover:border-gray-border'
-            }`}
-          >
-            <FileKey className="w-4 h-4" />
-            Keys
-          </button>
+        <div className="flex justify-center border-b border-gray-200 dark:border-gray-border">
+          <div className="flex" role="tablist">
+            <button
+              role="tab"
+              aria-selected={activeTab === 'alerts'}
+              aria-controls="alerts-tab-content"
+              onClick={() => setActiveTab('alerts')}
+              className={`flex items-center gap-3 px-6 py-4 text-base font-medium transition-colors ${
+                activeTab === 'alerts'
+                  ? 'border-b-[3px] border-purple-active text-purple-active font-semibold'
+                  : 'border-b-2 border-transparent text-gray-600 dark:text-amber-muted hover:text-gray-900 dark:hover:text-light-neutral hover:bg-gray-50 dark:hover:bg-charcoal-darkest/50'
+              }`}
+            >
+              <Bell className="w-5 h-5" />
+              Alerts
+            </button>
+            <button
+              role="tab"
+              aria-selected={activeTab === 'logs'}
+              aria-controls="logs-tab-content"
+              onClick={() => setActiveTab('logs')}
+              className={`flex items-center gap-3 px-6 py-4 text-base font-medium transition-colors ${
+                activeTab === 'logs'
+                  ? 'border-b-[3px] border-purple-active text-purple-active font-semibold'
+                  : 'border-b-2 border-transparent text-gray-600 dark:text-amber-muted hover:text-gray-900 dark:hover:text-light-neutral hover:bg-gray-50 dark:hover:bg-charcoal-darkest/50'
+              }`}
+            >
+              <ScrollText className="w-5 h-5" />
+              Logs
+            </button>
+            <button
+              role="tab"
+              aria-selected={activeTab === 'keys'}
+              aria-controls="keys-tab-content"
+              onClick={() => setActiveTab('keys')}
+              className={`flex items-center gap-3 px-6 py-4 text-base font-medium transition-colors ${
+                activeTab === 'keys'
+                  ? 'border-b-[3px] border-purple-active text-purple-active font-semibold'
+                  : 'border-b-2 border-transparent text-gray-600 dark:text-amber-muted hover:text-gray-900 dark:hover:text-light-neutral hover:bg-gray-50 dark:hover:bg-charcoal-darkest/50'
+              }`}
+            >
+              <FileKey className="w-5 h-5" />
+              Keys
+            </button>
+          </div>
         </div>
       )}
 
       {/* Non-admin: Show notification preferences at the top */}
-      {!isAdmin && (
-        <>
-          <NotificationPreferencesSection
-            userPrefsLoading={userPrefsLoading}
-            userPrefsError={userPrefsError}
-            notificationPrefs={notificationPrefs}
-            unifiedTimezone={unifiedTimezone}
-            showQuietHours={showQuietHours}
-            setShowQuietHours={setShowQuietHours}
-            showDigest={showDigest}
-            setShowDigest={setShowDigest}
-            onUnifiedTimezoneChange={handleUnifiedTimezoneChange}
-            onToggleAlertType={handleToggleAlertType}
-            onQuietHoursChange={handleQuietHoursChange}
-            onDigestChange={handleDigestChange}
-          />
+{!isAdmin && (
+          <>
+            <CollapsibleSection
+              title="Notification Preferences"
+              icon={<Bell className="w-5 h-5 text-purple-500" />}
+              storageKey="settings_collapsed_notifications"
+              defaultExpanded={true}
+              summary={getNotificationSummary(notificationPrefs)}
+            >
+              {userPrefsLoading ? (
+                <div className="flex items-center justify-center py-8">
+                  <Loader className="w-6 h-6 animate-spin text-purple-500" />
+                </div>
+              ) : userPrefsError ? (
+                <div className="text-center py-8">
+                  <p className="text-gray-600 dark:text-amber-muted">
+                    Please log in to configure notification preferences.
+                  </p>
+                </div>
+              ) : notificationPrefs && (
+                <div className="space-y-6">
+                  {/* Unified Timezone Selector */}
+                  <div>
+                    <label htmlFor="unified_timezone" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-2">
+                      Timezone
+                    </label>
+                    <select
+                      id="unified_timezone"
+                      value={unifiedTimezone || 'UTC'}
+                      onChange={(e) => handleUnifiedTimezoneChange(e.target.value)}
+                      className="w-full md:w-auto min-w-[200px] px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+                    >
+                      {timezones.map((tz) => (
+                        <option key={tz.value} value={tz.value}>
+                          {tz.label}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="text-xs text-gray-500 dark:text-amber-muted mt-1">
+                      Applies to both Quiet Hours and Daily Digest
+                    </p>
+                  </div>
 
-          <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none">
-            <div className="p-12 text-center">
-              <Lock className="w-12 h-12 text-gray-400 dark:text-gray-500 mx-auto mb-4" />
-              <h2 className="text-xl font-semibold text-gray-900 dark:text-light-neutral mb-2">Access Denied</h2>
-              <p className="text-gray-600 dark:text-amber-muted">
-                Only administrators can access Settings. Please contact an admin if you need to make changes.
-              </p>
+                  {/* Alert Type Toggles */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-3">
+                      Alert Types
+                    </label>
+                    <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                      {alertTypes.map((type) => (
+                        <div key={type.key} className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            id={`alert-type-${type.key}`}
+                            checked={notificationPrefs.alert_types?.[type.key] ?? true}
+                            onChange={() => handleToggleAlertType(type.key)}
+                            className="w-4 h-4 text-purple-600 border-gray-300 dark:border-gray-border rounded-none focus:ring-purple-500"
+                          />
+                          <label
+                            htmlFor={`alert-type-${type.key}`}
+                            className="text-sm text-gray-700 dark:text-amber-primary cursor-pointer"
+                          >
+                            {type.label}
+                          </label>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+{/* Quiet Hours Section */}
+      <div className="border-t border-gray-200 dark:border-gray-border pt-6">
+        <button
+          type="button"
+          onClick={() => setShowQuietHours(!showQuietHours)}
+          aria-expanded={showQuietHours}
+          aria-controls="quiet-hours-content"
+          className="flex items-center justify-between w-full text-left"
+        >
+          <span className="text-sm font-medium text-gray-700 dark:text-amber-primary">
+            Quiet Hours
+          </span>
+          <span className={`transform transition-transform ${showQuietHours ? 'rotate-180' : ''}`}>
+            <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </span>
+        </button>
+        {showQuietHours && (
+          <div id="quiet-hours-content" className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            id="quiet_hours_enabled"
+                            checked={notificationPrefs.quiet_hours?.enabled ?? false}
+                            onChange={(e) => handleQuietHoursChange('enabled', e.target.checked)}
+                            className="w-4 h-4 text-purple-600 border-gray-300 dark:border-gray-border rounded-none focus:ring-purple-500"
+                          />
+                          <label htmlFor="quiet_hours_enabled" className="text-sm text-gray-700 dark:text-amber-primary">
+                            Enable Quiet Hours
+                          </label>
+                        </div>
+                        <div>
+                          <label htmlFor="quiet_hours_start" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+                            Start Time
+                          </label>
+                          <input
+                            type="time"
+                            id="quiet_hours_start"
+                            value={notificationPrefs.quiet_hours?.start_time || '22:00'}
+                            onChange={(e) => handleQuietHoursChange('start_time', e.target.value)}
+                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+                          />
+                        </div>
+                        <div>
+                          <label htmlFor="quiet_hours_end" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+                            End Time
+                          </label>
+                          <input
+                            type="time"
+                            id="quiet_hours_end"
+                            value={notificationPrefs.quiet_hours?.end_time || '08:00'}
+                            onChange={(e) => handleQuietHoursChange('end_time', e.target.value)}
+                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+{/* Daily Digest Section */}
+      <div className="border-t border-gray-200 dark:border-gray-border pt-6">
+        <button
+          type="button"
+          onClick={() => setShowDigest(!showDigest)}
+          aria-expanded={showDigest}
+          aria-controls="daily-digest-content"
+          className="flex items-center justify-between w-full text-left"
+        >
+          <span className="text-sm font-medium text-gray-700 dark:text-amber-primary">
+            Daily Digest
+          </span>
+          <span className={`transform transition-transform ${showDigest ? 'rotate-180' : ''}`}>
+            <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </span>
+        </button>
+        {showDigest && (
+          <div id="daily-digest-content" className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            id="digest_enabled"
+                            checked={notificationPrefs.daily_digest?.enabled ?? false}
+                            onChange={(e) => handleDigestChange('enabled', e.target.checked)}
+                            className="w-4 h-4 text-purple-600 border-gray-300 dark:border-gray-border rounded-none focus:ring-purple-500"
+                          />
+                          <label htmlFor="digest_enabled" className="text-sm text-gray-700 dark:text-amber-primary">
+                            Enable Daily Digest
+                          </label>
+                        </div>
+                        <div>
+                          <label htmlFor="digest_time" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+                            Digest Time
+                          </label>
+                          <input
+                            type="time"
+                            id="digest_time"
+                            value={notificationPrefs.daily_digest?.time || '09:00'}
+                            onChange={(e) => handleDigestChange('time', e.target.value)}
+                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </CollapsibleSection>
+
+            <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none">
+              <div className="p-12 text-center">
+                <Lock className="w-12 h-12 text-gray-400 dark:text-gray-500 mx-auto mb-4" />
+                <h2 className="text-xl font-semibold text-gray-900 dark:text-light-neutral mb-2">Access Denied</h2>
+                <p className="text-gray-600 dark:text-amber-muted">
+                  Only administrators can access Settings. Please contact an admin if you need to make changes.
+                </p>
+              </div>
             </div>
-          </div>
-        </>
-      )}
+          </>
+        )}
 
       {/* Admin: Tab content */}
       {isAdmin && (
         <>
           {/* Tab Content */}
-        {activeTab === 'alerts' && (
-          <div className="space-y-6">
-            {/* General Section */}
-            <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none">
-              <div className="p-6">
-                <div className="flex items-center gap-3 mb-6">
-                  <Globe className="w-5 h-5 text-purple-500" />
-                  <h2 className="text-lg font-semibold text-gray-900 dark:text-light-neutral">General</h2>
-                </div>
+      {activeTab === 'alerts' && (
+        <div id="alerts-tab-content" role="tabpanel" className="space-y-6">
+          {/* Jump to section dropdown */}
+          <div className="flex justify-end mb-4">
+<select
+                  onChange={handleJumpToSection}
+                  className="text-sm px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral focus:outline-none focus:ring-2 focus:ring-purple-active"
+                  defaultValue=""
+                  aria-label="Jump to section"
+                >
+              <option value="" disabled>Jump to section...</option>
+              <option value="general-section">General</option>
+              <option value="smtp-section">SMTP Configuration</option>
+              <option value="notifications-section">Notifications</option>
+              <option value="alert-rules-section">Alert Rules</option>
+            </select>
+          </div>
+
+          {/* Two-column grid for desktop: General + SMTP (left), Notification Preferences (right) */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Left Column */}
+            <div className="space-y-6">
+              {/* General Section */}
+              <CollapsibleSection
+                id="general-section"
+                title="General"
+                icon={<Globe className="w-5 h-5 text-purple-500" />}
+                storageKey="settings_collapsed_general"
+                defaultExpanded={true}
+                summary={getInstanceSummary(instanceSettings)}
+                expanded={generalExpanded}
+                onExpandedChange={setGeneralExpanded}
+              >
                 {isLoadingInstance ? (
                   <div className="text-sm text-gray-500 dark:text-amber-muted">Loading...</div>
                 ) : instanceError ? (
@@ -605,189 +661,368 @@ const getKeyData = (keyType) => {
                     </div>
                   </div>
                 )}
-              </div>
-            </div>
-
-            {/* User Notification Preferences - inside Alerts tab for admins */}
-            <NotificationPreferencesSection
-              userPrefsLoading={userPrefsLoading}
-              userPrefsError={userPrefsError}
-              notificationPrefs={notificationPrefs}
-              unifiedTimezone={unifiedTimezone}
-              showQuietHours={showQuietHours}
-              setShowQuietHours={setShowQuietHours}
-              showDigest={showDigest}
-              setShowDigest={setShowDigest}
-              onUnifiedTimezoneChange={handleUnifiedTimezoneChange}
-              onToggleAlertType={handleToggleAlertType}
-              onQuietHoursChange={handleQuietHoursChange}
-              onDigestChange={handleDigestChange}
-            />
+              </CollapsibleSection>
 
               {/* SMTP Configuration Section */}
-              <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none">
-                <div className="p-6">
-                  <div className="flex items-center gap-3 mb-6">
-                    <Mail className="w-5 h-5 text-purple-500" />
-                    <h2 className="text-lg font-semibold text-gray-900 dark:text-light-neutral">SMTP Configuration</h2>
+              <CollapsibleSection
+                id="smtp-section"
+                title="SMTP Configuration"
+                icon={<Mail className="w-5 h-5 text-purple-500" />}
+                storageKey="settings_collapsed_smtp"
+                defaultExpanded={false}
+                summary={getSMTPSummary(smtpConfig)}
+                expanded={smtpExpanded}
+                onExpandedChange={setSmtpExpanded}
+              >
+                {smtpLoading ? (
+                  <div className="flex items-center justify-center py-8">
+                    <Loader className="w-6 h-6 animate-spin text-purple-500" />
                   </div>
-
-                  {smtpLoading ? (
-                    <div className="flex items-center justify-center py-8">
-                      <Loader className="w-6 h-6 animate-spin text-purple-500" />
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {/* SMTP Host */}
+                    <div>
+                      <label htmlFor="smtp_host" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+                        SMTP Host
+                      </label>
+                      <input
+                        type="text"
+                        id="smtp_host"
+                        value={smtpFormData.host}
+                        onChange={(e) => setSmtpFormData({ ...smtpFormData, host: e.target.value })}
+                        placeholder="smtp.example.com"
+                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+                      />
                     </div>
-                  ) : (
-<div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-      {/* SMTP Host */}
-      <div>
-        <label htmlFor="smtp_host" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-          SMTP Host
-        </label>
-        <input
-          type="text"
-          id="smtp_host"
-          value={smtpFormData.host}
-          onChange={(e) => setSmtpFormData({ ...smtpFormData, host: e.target.value })}
-          placeholder="smtp.example.com"
-          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-        />
-      </div>
 
-      {/* SMTP Port */}
-      <div>
-        <label htmlFor="smtp_port" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-          SMTP Port
-        </label>
-        <input
-          type="number"
-          id="smtp_port"
-          value={smtpFormData.port}
-          onChange={(e) => setSmtpFormData({ ...smtpFormData, port: parseInt(e.target.value) || 587 })}
-          defaultValue={587}
-          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-        />
-      </div>
+                    {/* SMTP Port */}
+                    <div>
+                      <label htmlFor="smtp_port" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+                        SMTP Port
+                      </label>
+                      <input
+                        type="number"
+                        id="smtp_port"
+                        value={smtpFormData.port}
+                        onChange={(e) => setSmtpFormData({ ...smtpFormData, port: parseInt(e.target.value) || 587 })}
+                        defaultValue={587}
+                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+                      />
+                    </div>
 
-      {/* Username */}
-      <div>
-        <label htmlFor="smtp_username" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-          Username
-        </label>
-        <input
-          type="text"
-          id="smtp_username"
-          value={smtpFormData.username}
-          onChange={(e) => setSmtpFormData({ ...smtpFormData, username: e.target.value })}
-          placeholder="username"
-          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-        />
-      </div>
+                    {/* Username */}
+                    <div>
+                      <label htmlFor="smtp_username" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+                        Username
+                      </label>
+                      <input
+                        type="text"
+                        id="smtp_username"
+                        value={smtpFormData.username}
+                        onChange={(e) => setSmtpFormData({ ...smtpFormData, username: e.target.value })}
+                        placeholder="username"
+                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+                      />
+                    </div>
 
-      {/* Password */}
-      <div>
-        <label htmlFor="smtp_password" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-          Password
-        </label>
-        <div className="relative">
-          <input
-            type={showPassword ? 'text' : 'password'}
-            id="smtp_password"
-            value={smtpFormData.password}
-            onChange={(e) => setSmtpFormData({ ...smtpFormData, password: e.target.value })}
-            placeholder={smtpConfig?.password_set ? '••••••••' : 'Enter password'}
-            className="w-full px-3 py-2 pr-10 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-          />
-          <button
-            type="button"
-            onClick={() => setShowPassword(!showPassword)}
-            className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-700 dark:hover:text-amber-muted"
-          >
-            {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-          </button>
-        </div>
-      </div>
-
-      {/* From Address */}
-      <div>
-        <label htmlFor="smtp_from_address" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-          From Address
-        </label>
-        <input
-          type="email"
-          id="smtp_from_address"
-          value={smtpFormData.from_address}
-          onChange={(e) => setSmtpFormData({ ...smtpFormData, from_address: e.target.value })}
-          placeholder="alerts@example.com"
-          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-        />
-      </div>
-
-                      {/* TLS and Enable toggles */}
-                      <div className="flex items-center gap-6">
-                        <div className="flex items-center gap-2">
-                          <input
-                            type="checkbox"
-                            id="use_tls"
-                            checked={smtpFormData.use_tls}
-                            onChange={(e) => setSmtpFormData({ ...smtpFormData, use_tls: e.target.checked })}
-                            className="w-4 h-4 text-purple-600 border-gray-300 dark:border-gray-border rounded-none focus:ring-purple-500"
-                          />
-                          <label htmlFor="use_tls" className="text-sm text-gray-700 dark:text-amber-primary">
-                            Use TLS
-                          </label>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <input
-                            type="checkbox"
-                            id="smtp_enabled"
-                            checked={smtpFormData.enabled}
-                            onChange={(e) => setSmtpFormData({ ...smtpFormData, enabled: e.target.checked })}
-                            className="w-4 h-4 text-purple-600 border-gray-300 dark:border-gray-border rounded-none focus:ring-purple-500"
-                          />
-                          <label htmlFor="smtp_enabled" className="text-sm text-gray-700 dark:text-amber-primary">
-                            Enable SMTP
-                          </label>
-                        </div>
+                    {/* Password */}
+                    <div>
+                      <label htmlFor="smtp_password" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+                        Password
+                      </label>
+                      <div className="relative">
+                        <input
+                          type={showPassword ? 'text' : 'password'}
+                          id="smtp_password"
+                          value={smtpFormData.password}
+                          onChange={(e) => setSmtpFormData({ ...smtpFormData, password: e.target.value })}
+                          placeholder={smtpConfig?.password_set ? '••••••••' : 'Enter password'}
+                          className="w-full px-3 py-2 pr-10 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowPassword(!showPassword)}
+                          className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-700 dark:hover:text-amber-muted"
+                        >
+                          {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                        </button>
                       </div>
                     </div>
-                  )}
 
-                  {/* Action Buttons */}
-                  <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-gray-200 dark:border-gray-border">
-                    <button
-                      onClick={() => testEmailMutation.mutate()}
-                      disabled={testEmailMutation.isPending || !smtpFormData.enabled}
-                      className="inline-flex items-center gap-2 px-4 py-2 text-sm border border-gray-300 dark:border-gray-border rounded-none text-gray-700 dark:text-amber-primary hover:bg-gray-50 dark:hover:bg-charcoal-darkest disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      {testEmailMutation.isPending ? (
-                        <Loader className="w-4 h-4 animate-spin" />
-                      ) : (
-                        <Send className="w-4 h-4" />
-                      )}
-                      Test Email
-                    </button>
-                    <button
-                      onClick={() => updateSmtpMutation.mutate(smtpFormData)}
-                      disabled={updateSmtpMutation.isPending}
-                      className="inline-flex items-center gap-2 px-4 py-2 text-sm bg-purple-active hover:bg-purple-600 text-white rounded-none disabled:opacity-50 border border-purple-active/20 shadow-[0_0_15px_rgba(159,79,248,0.2)] transition-all"
-                    >
-                      {updateSmtpMutation.isPending ? 'Saving...' : 'Save SMTP Settings'}
-                    </button>
+                    {/* From Address */}
+                    <div>
+                      <label htmlFor="smtp_from_address" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+                        From Address
+                      </label>
+                      <input
+                        type="email"
+                        id="smtp_from_address"
+                        value={smtpFormData.from_address}
+                        onChange={(e) => setSmtpFormData({ ...smtpFormData, from_address: e.target.value })}
+                        placeholder="alerts@example.com"
+                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+                      />
+                    </div>
+
+                    {/* TLS and Enable toggles */}
+                    <div className="flex items-center gap-6">
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          id="use_tls"
+                          checked={smtpFormData.use_tls}
+                          onChange={(e) => setSmtpFormData({ ...smtpFormData, use_tls: e.target.checked })}
+                          className="w-4 h-4 text-purple-600 border-gray-300 dark:border-gray-border rounded-none focus:ring-purple-500"
+                        />
+                        <label htmlFor="use_tls" className="text-sm text-gray-700 dark:text-amber-primary">
+                          Use TLS
+                        </label>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          id="smtp_enabled"
+                          checked={smtpFormData.enabled}
+                          onChange={(e) => setSmtpFormData({ ...smtpFormData, enabled: e.target.checked })}
+                          className="w-4 h-4 text-purple-600 border-gray-300 dark:border-gray-border rounded-none focus:ring-purple-500"
+                        />
+                        <label htmlFor="smtp_enabled" className="text-sm text-gray-700 dark:text-amber-primary">
+                          Enable SMTP
+                        </label>
+                      </div>
+                    </div>
                   </div>
-                </div>
-              </div>
+                )}
 
-              {/* Alert Settings Component */}
-              <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none">
-                <div className="p-6">
-                  <AlertSettings />
+                {/* Action Buttons */}
+                <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-gray-200 dark:border-gray-border">
+                  <button
+                    onClick={() => testEmailMutation.mutate()}
+                    disabled={testEmailMutation.isPending || !smtpFormData.enabled}
+                    className="inline-flex items-center gap-2 px-4 py-2 text-sm border border-gray-300 dark:border-gray-border rounded-none text-gray-700 dark:text-amber-primary hover:bg-gray-50 dark:hover:bg-charcoal-darkest disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {testEmailMutation.isPending ? (
+                      <Loader className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Send className="w-4 h-4" />
+                    )}
+                    Test Email
+                  </button>
+                  <button
+                    onClick={() => updateSmtpMutation.mutate(smtpFormData)}
+                    disabled={updateSmtpMutation.isPending}
+                    className="inline-flex items-center gap-2 px-4 py-2 text-sm bg-purple-active hover:bg-purple-600 text-white rounded-none disabled:opacity-50 border border-purple-active/20 shadow-[0_0_15px_rgba(159,79,248,0.2)] transition-all"
+                  >
+                    {updateSmtpMutation.isPending ? 'Saving...' : 'Save SMTP Settings'}
+                  </button>
                 </div>
-              </div>
+              </CollapsibleSection>
             </div>
-          )}
+
+            {/* Right Column */}
+            <div className="space-y-6">
+              {/* User Notification Preferences - inside Alerts tab for admins */}
+      <CollapsibleSection
+        id="notifications-section"
+        title="Your Notification Preferences"
+        icon={<Bell className="w-5 h-5 text-purple-500" />}
+        storageKey="settings_collapsed_notifications_admin"
+        defaultExpanded={false}
+                summary={getNotificationSummary(notificationPrefs)}
+                expanded={notificationsExpanded}
+                onExpandedChange={setNotificationsExpanded}
+              >
+                {userPrefsLoading ? (
+                  <div className="flex items-center justify-center py-8">
+                    <Loader className="w-6 h-6 animate-spin text-purple-500" />
+                  </div>
+                ) : userPrefsError ? (
+                  <div className="text-center py-8">
+                    <p className="text-gray-600 dark:text-amber-muted">
+                      Please log in to configure notification preferences.
+                    </p>
+                  </div>
+                ) : notificationPrefs && (
+                  <div className="space-y-6">
+                    {/* Unified Timezone Selector */}
+                    <div>
+                      <label htmlFor="unified_timezone" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-2">
+                        Timezone
+                      </label>
+                      <select
+                        id="unified_timezone"
+                        value={unifiedTimezone || 'UTC'}
+                        onChange={(e) => handleUnifiedTimezoneChange(e.target.value)}
+                        className="w-full md:w-auto min-w-[200px] px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+                      >
+                        {timezones.map((tz) => (
+                          <option key={tz.value} value={tz.value}>
+                            {tz.label}
+                          </option>
+                        ))}
+                      </select>
+                      <p className="text-xs text-gray-500 dark:text-amber-muted mt-1">
+                        Applies to both Quiet Hours and Daily Digest
+                      </p>
+                    </div>
+
+                    {/* Alert Type Toggles */}
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-3">
+                        Alert Types
+                      </label>
+                      <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                        {alertTypes.map((type) => (
+                          <div key={type.key} className="flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              id={`alert-type-${type.key}`}
+                              checked={notificationPrefs.alert_types?.[type.key] ?? true}
+                              onChange={() => handleToggleAlertType(type.key)}
+                              className="w-4 h-4 text-purple-600 border-gray-300 dark:border-gray-border rounded-none focus:ring-purple-500"
+                            />
+                            <label
+                              htmlFor={`alert-type-${type.key}`}
+                              className="text-sm text-gray-700 dark:text-amber-primary cursor-pointer"
+                            >
+                              {type.label}
+                            </label>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+{/* Quiet Hours Section */}
+      <div className="border-t border-gray-200 dark:border-gray-border pt-6">
+        <button
+          type="button"
+          onClick={() => setShowQuietHours(!showQuietHours)}
+          aria-expanded={showQuietHours}
+          aria-controls="admin-quiet-hours-content"
+          className="flex items-center justify-between w-full text-left"
+        >
+          <span className="text-sm font-medium text-gray-700 dark:text-amber-primary">
+            Quiet Hours
+          </span>
+          <span className={`transform transition-transform ${showQuietHours ? 'rotate-180' : ''}`}>
+            <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </span>
+        </button>
+        {showQuietHours && (
+          <div id="admin-quiet-hours-content" className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              id="quiet_hours_enabled"
+                              checked={notificationPrefs.quiet_hours?.enabled ?? false}
+                              onChange={(e) => handleQuietHoursChange('enabled', e.target.checked)}
+                              className="w-4 h-4 text-purple-600 border-gray-300 dark:border-gray-border rounded-none focus:ring-purple-500"
+                            />
+                            <label htmlFor="quiet_hours_enabled" className="text-sm text-gray-700 dark:text-amber-primary">
+                              Enable Quiet Hours
+                            </label>
+                          </div>
+                          <div>
+                            <label htmlFor="quiet_hours_start" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+                              Start Time
+                            </label>
+                            <input
+                              type="time"
+                              id="quiet_hours_start"
+                              value={notificationPrefs.quiet_hours?.start_time || '22:00'}
+                              onChange={(e) => handleQuietHoursChange('start_time', e.target.value)}
+                              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+                            />
+                          </div>
+                          <div>
+                            <label htmlFor="quiet_hours_end" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+                              End Time
+                            </label>
+                            <input
+                              type="time"
+                              id="quiet_hours_end"
+                              value={notificationPrefs.quiet_hours?.end_time || '08:00'}
+                              onChange={(e) => handleQuietHoursChange('end_time', e.target.value)}
+                              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+{/* Daily Digest Section */}
+      <div className="border-t border-gray-200 dark:border-gray-border pt-6">
+        <button
+          type="button"
+          onClick={() => setShowDigest(!showDigest)}
+          aria-expanded={showDigest}
+          aria-controls="admin-daily-digest-content"
+          className="flex items-center justify-between w-full text-left"
+        >
+          <span className="text-sm font-medium text-gray-700 dark:text-amber-primary">
+            Daily Digest
+          </span>
+          <span className={`transform transition-transform ${showDigest ? 'rotate-180' : ''}`}>
+            <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </span>
+        </button>
+        {showDigest && (
+          <div id="admin-daily-digest-content" className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              id="digest_enabled"
+                              checked={notificationPrefs.daily_digest?.enabled ?? false}
+                              onChange={(e) => handleDigestChange('enabled', e.target.checked)}
+                              className="w-4 h-4 text-purple-600 border-gray-300 dark:border-gray-border rounded-none focus:ring-purple-500"
+                            />
+                            <label htmlFor="digest_enabled" className="text-sm text-gray-700 dark:text-amber-primary">
+                              Enable Daily Digest
+                            </label>
+                          </div>
+                          <div>
+                            <label htmlFor="digest_time" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+                              Digest Time
+                            </label>
+                            <input
+                              type="time"
+                              id="digest_time"
+                              value={notificationPrefs.daily_digest?.time || '09:00'}
+                              onChange={(e) => handleDigestChange('time', e.target.value)}
+                              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </CollapsibleSection>
+            </div>
+          </div>
+
+          {/* Alert Settings Component - Full Width Below */}
+          <CollapsibleSection
+            id="alert-rules-section"
+            title="Alert Rules"
+            icon={<Bell className="w-5 h-5 text-purple-500" />}
+            storageKey="settings_collapsed_alert_rules"
+            defaultExpanded={false}
+            summary={getAlertRulesSummary(alertRules)}
+            expanded={alertRulesExpanded}
+            onExpandedChange={setAlertRulesExpanded}
+          >
+            <AlertSettings showHeader={false} />
+          </CollapsibleSection>
+        </div>
+      )}
 
           {activeTab === 'logs' && (
-            <div className="space-y-6">
+            <div id="logs-tab-content" role="tabpanel" className="space-y-6">
               {/* Log Management Section */}
               <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none">
                 <div className="p-6">
@@ -894,7 +1129,7 @@ const getKeyData = (keyType) => {
           )}
 
           {activeTab === 'keys' && (
-            <div className="space-y-6">
+            <div id="keys-tab-content" role="tabpanel" className="space-y-6">
               {/* JWT Secret Section */}
               <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none">
                 <div className="p-6">

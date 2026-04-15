@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from 'react'
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import { useLocation } from 'react-router-dom'
 import { useTableSort } from '../hooks/useTableSort'
 import { usePagination } from '../hooks/usePagination'
@@ -23,10 +23,11 @@ import EmptyState from '../components/EmptyState'
 import TableSkeleton from '../components/TableSkeleton'
 import SortIndicator from '../components/SortIndicator'
 import Pagination from '../components/Pagination'
-import TableToolbar from '../components/TableToolbar'
+import SearchFilterPanel from '../components/SearchFilterPanel'
 import PageHeader from '../components/PageHeader'
 import PendingChangesModal from '../components/PendingChangesModal'
 import SharpTag from '../components/SharpTag'
+import FilterChip from '../components/FilterChip'
 
 const OS_OPTIONS = [
   { value: 'ubuntu', label: 'Ubuntu' },
@@ -458,7 +459,24 @@ const handleSubmit = (e) => {
 		}
 	}
 
-	if (isLoading) return <TableSkeleton rows={3} columns={6} />
+  // Filter chips for status filter - must be above early returns for hooks rules
+  const statusFilterChips = useMemo(() => [
+    { value: 'all', label: 'All' },
+    { value: 'online', label: 'Online' },
+    { value: 'offline', label: 'Offline' },
+    { value: 'manual', label: 'Manual' },
+    { value: 'agent', label: 'Agent' },
+    { value: 'pending', label: 'Pending Changes' },
+  ].map(opt => (
+    <FilterChip
+      key={opt.value}
+      label={opt.label}
+      selected={statusFilter === opt.value}
+      onClick={() => setStatusFilter(opt.value)}
+    />
+  )), [statusFilter, setStatusFilter])
+
+  if (isLoading) return <TableSkeleton rows={3} columns={6} />
 
   return (
     <div className="space-y-4">
@@ -560,39 +578,17 @@ const handleSubmit = (e) => {
         </div>
       )}
 
-      {/* Search Bar and Rows per page */}
-      <TableToolbar
-        searchTerm={searchTerm}
-        onSearchChange={(v) => setSearchTerm(v)}
-        onClearSearch={() => setSearchTerm('')}
-        placeholder="Search peers by hostname, IP, OS, groups, or agent..."
-        rowsPerPage={peersRowsPerPage}
-        onRowsPerPageChange={setPeersRowsPerPage}
-      />
-
-      {/* Status Filter Button Bar */}
-      <div className="flex gap-0">
-        {[
-          { value: 'all', label: 'All' },
-          { value: 'online', label: 'Online' },
-          { value: 'offline', label: 'Offline' },
-          { value: 'manual', label: 'Manual' },
-          { value: 'agent', label: 'Agent' },
-          { value: 'pending', label: 'Pending Changes' },
-        ].map(opt => (
-          <button
-            key={opt.value}
-            onClick={() => setStatusFilter(opt.value)}
-            className={`px-4 py-1 text-sm font-bold border transition-colors ${
-              statusFilter === opt.value
-                ? 'bg-purple-active text-white border-purple-active'
-                : 'bg-white dark:bg-charcoal-dark text-gray-700 dark:text-amber-primary border-gray-300 dark:border-gray-border hover:border-purple-active dark:hover:border-purple-active'
-            }`}
-          >
-            {opt.label}
-          </button>
-        ))}
-      </div>
+  {/* Search Bar and Rows per page */}
+  <SearchFilterPanel
+    storageKey="peers-search-filters-expanded"
+    searchTerm={searchTerm}
+    onSearchChange={setSearchTerm}
+    onClearSearch={() => setSearchTerm('')}
+    searchPlaceholder="Search peers by hostname, IP, OS, groups, or agent..."
+    rowsPerPage={peersRowsPerPage}
+    onRowsPerPageChange={setPeersRowsPerPage}
+    filterChips={statusFilterChips}
+  />
 
       {!processedPeers?.length ? (
         searchTerm || statusFilter !== 'all' ? (
@@ -606,7 +602,7 @@ const handleSubmit = (e) => {
                         <div className="border border-gray-200 dark:border-gray-border overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
-<thead className="bg-charcoal-darkest">
+<thead className="bg-gray-50 dark:bg-charcoal-darkest border-b border-gray-200 dark:border-gray-border">
               <tr>
                 <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
                   <button type="button" onClick={() => handleSort('hostname')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
@@ -699,14 +695,15 @@ const handleSubmit = (e) => {
 
                             return (
                               <>
-                                {visibleGroups.map((group, idx) => (
-                                  <span
-                                    key={idx}
-                                    className="px-2 py-0.5 text-xs font-medium bg-purple-active/20 dark:bg-purple-active text-white whitespace-nowrap"
-                                  >
-                                    {group}
-                                  </span>
-                                ))}
+                                                {visibleGroups.map((group, idx) => (
+<SharpTag
+                                  key={idx}
+                                  status="info"
+                                  label={group}
+                                  variant="badge"
+                                  color="border-purple-500 text-purple-700 dark:text-purple-400"
+                                />
+                                                ))}
                                 {remainingCount > 0 && (
                                   <span
                                     className="px-2 py-0.5 text-xs font-medium bg-gray-100 dark:bg-charcoal-darkest text-gray-600 dark:text-amber-muted whitespace-nowrap"

@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from 'react'
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import { useLocation } from 'react-router-dom'
 import { useFilterPersistence } from '../hooks/useFilterPersistence'
 import { useTableSort } from '../hooks/useTableSort'
@@ -20,7 +20,8 @@ import EmptyState from '../components/EmptyState'
 import TableSkeleton from '../components/TableSkeleton'
 import SortIndicator from '../components/SortIndicator'
 import Pagination from '../components/Pagination'
-import TableToolbar from '../components/TableToolbar'
+import SearchFilterPanel from '../components/SearchFilterPanel'
+import FilterChip from '../components/FilterChip'
 import PageHeader from '../components/PageHeader'
 
 // Special targets - predefined network addresses for broadcast/multicast
@@ -316,6 +317,19 @@ const { createMutation, updateMutation, deleteMutation } = useCrudMutations({
     }
   }, [location.state, canEdit, openAdd])
 
+  // Filter chips for enabled/disabled toggle - must be above early returns for hooks rules
+  const enabledFilterChips = useMemo(() => [
+    { value: 'enabled', label: 'Enabled' },
+    { value: 'disabled', label: 'Disabled' },
+  ].map(opt => (
+    <FilterChip
+      key={opt.value}
+      label={opt.label}
+      selected={showDisabled === (opt.value === 'disabled')}
+      onClick={() => setShowDisabled(opt.value === 'disabled')}
+    />
+  )), [showDisabled, setShowDisabled])
+
   if (isLoading) return <TableSkeleton rows={3} columns={7} />
 
   return (
@@ -382,51 +396,33 @@ const { createMutation, updateMutation, deleteMutation } = useCrudMutations({
         )}
       </div>
 
-	{/* Filters */}
-	<TableToolbar
-		searchTerm={searchTerm}
-		onSearchChange={(v) => setSearchTerm(v)}
-		onClearSearch={() => setSearchTerm('')}
-		placeholder="Search policies by name, source, service, or target..."
-		rowsPerPage={policiesRowsPerPage}
-		onRowsPerPageChange={setPoliciesRowsPerPage}
-	/>
-
-      {/* Show Disabled Filter Chips */}
-      <div className="flex gap-0">
-        {[
-          { value: 'enabled', label: 'Enabled' },
-          { value: 'disabled', label: 'Disabled' },
-        ].map(opt => (
-          <button
-            key={opt.value}
-            onClick={() => setShowDisabled(opt.value === 'disabled')}
-            className={`px-4 py-1.5 text-sm font-medium border transition-colors ${
-              showDisabled === (opt.value === 'disabled')
-                ? 'bg-purple-active text-white border-purple-active'
-                : 'bg-white dark:bg-charcoal-dark text-gray-700 dark:text-amber-primary border-gray-300 dark:border-gray-border hover:border-purple-active dark:hover:border-purple-active'
-            }`}
-          >
-            {opt.label}
-          </button>
-        ))}
-      </div>
-
-	{/* Show Pending Deletes Toggle */}
-	{policies?.some(p => p.is_pending_delete) && (
-		<div className="flex items-center gap-2 px-1">
-			<input
-				type="checkbox"
-				id="showPendingDeletes"
-				checked={showPendingDeletes}
-				onChange={(e) => setShowPendingDeletes(e.target.checked)}
-				className="w-4 h-4 text-purple-active bg-gray-100 border-gray-300 rounded-none focus:ring-purple-active dark:focus:ring-purple-active dark:ring-offset-gray-800 focus:ring-2 dark:bg-charcoal-darkest dark:border-gray-600"
-			/>
-			<label htmlFor="showPendingDeletes" className="text-sm text-gray-700 dark:text-amber-primary cursor-pointer">
-				Show Pending Deletes
-			</label>
-		</div>
-	)}
+  {/* Filters */}
+  <SearchFilterPanel
+    storageKey="policies-search-filters-expanded"
+    searchTerm={searchTerm}
+    onSearchChange={setSearchTerm}
+    onClearSearch={() => setSearchTerm('')}
+    searchPlaceholder="Search policies by name, source, service, or target..."
+    rowsPerPage={policiesRowsPerPage}
+    onRowsPerPageChange={setPoliciesRowsPerPage}
+    filterChips={enabledFilterChips}
+  >
+        {/* Show Pending Deletes Toggle */}
+        {policies?.some(p => p.is_pending_delete) && (
+          <div className="flex items-center gap-2 px-1">
+            <input
+              type="checkbox"
+              id="showPendingDeletes"
+              checked={showPendingDeletes}
+              onChange={(e) => setShowPendingDeletes(e.target.checked)}
+              className="w-4 h-4 text-purple-active bg-gray-100 border-gray-300 rounded-none focus:ring-purple-active dark:focus:ring-purple-active dark:ring-offset-gray-800 focus:ring-2 dark:bg-charcoal-darkest dark:border-gray-600"
+            />
+            <label htmlFor="showPendingDeletes" className="text-sm text-gray-700 dark:text-amber-primary cursor-pointer">
+              Show Pending Deletes
+            </label>
+          </div>
+        )}
+      </SearchFilterPanel>
 
 	{!processedPolicies.length ? (
         searchTerm ? (
@@ -440,7 +436,7 @@ const { createMutation, updateMutation, deleteMutation } = useCrudMutations({
         <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
-<thead className="bg-charcoal-darkest">
+<thead className="bg-gray-50 dark:bg-charcoal-darkest border-b border-gray-200 dark:border-gray-border">
               <tr>
                 <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
                   Enabled

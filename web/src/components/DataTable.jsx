@@ -3,11 +3,10 @@ import { ChevronLeft, ChevronRight } from 'lucide-react'
 export default function DataTable({ columns, data, emptyMessage, onRowClick, pagination }) {
   const { page, rowsPerPage, totalItems, onPageChange, onRowsPerPageChange, showingRange } = pagination || {}
 
-  // Rows per page options
-  const rowsOptions = [10, 25, 50, 100, -1]
-  const _rowsPerPageLabel = rowsPerPage === -1 ? 'All' : rowsPerPage
+// Rows per page options
+const rowsOptions = [10, 25, 50, 100, -1]
 
-  const totalPages = rowsPerPage === -1 ? 1 : Math.ceil(totalItems / rowsPerPage)
+const totalPages = rowsPerPage === -1 ? 1 : Math.ceil(totalItems / rowsPerPage)
   const canGoPrev = page > 1
   const canGoNext = page < totalPages
 
@@ -38,7 +37,7 @@ export default function DataTable({ columns, data, emptyMessage, onRowClick, pag
 
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
-<thead className="bg-charcoal-darkest">
+<thead className="bg-gray-50 dark:bg-charcoal-darkest border-b border-gray-200 dark:border-gray-border">
           <tr>
             {columns.map(col => (
               <th key={col.key} className={`text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider ${col.className || ''}`}>

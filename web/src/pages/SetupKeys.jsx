@@ -9,7 +9,7 @@ import TableSkeleton from '../components/TableSkeleton'
 import { useTableSort } from '../hooks/useTableSort'
 import SortIndicator from '../components/SortIndicator'
 import { formatRelativeTime } from '../utils/formatTime.js'
-import TableToolbar from '../components/TableToolbar'
+import SearchFilterPanel from '../components/SearchFilterPanel'
 import PageHeader from '../components/PageHeader'
 import Pagination from '../components/Pagination'
 import { useTableFilter } from '../hooks/useTableFilter'
@@ -285,14 +285,15 @@ className={`px-4 py-2 text-sm font-medium rounded-none transition-colors ${
       {activeTab === 'keys' && (
         <>
           {/* Search Bar and Rows per page */}
-          <TableToolbar
-            searchTerm={searchTerm}
-            onSearchChange={(v) => setSearchTerm(v)}
-            onClearSearch={() => setSearchTerm('')}
-            placeholder="Search by hostname or IP..."
-            rowsPerPage={peersRowsPerPage}
-            onRowsPerPageChange={setPeersRowsPerPage}
-          />
+<SearchFilterPanel
+          storageKey="setup-keys-search-filters-expanded"
+          searchTerm={searchTerm}
+          onSearchChange={setSearchTerm}
+          onClearSearch={() => setSearchTerm('')}
+          searchPlaceholder="Search by hostname or IP..."
+          rowsPerPage={peersRowsPerPage}
+          onRowsPerPageChange={setPeersRowsPerPage}
+        />
 
           {/* Peers Rotation Table */}
           {filteredPeers.length === 0 ? (
@@ -385,12 +386,15 @@ className={`px-4 py-2 text-sm font-medium rounded-none transition-colors ${
       {activeTab === 'tokens' && (
         <>
           {/* Search Bar */}
-          <TableToolbar
-            searchTerm={tokenSearchTerm}
-            onSearchChange={(v) => setTokenSearchTerm(v)}
-            onClearSearch={() => setTokenSearchTerm('')}
-            placeholder="Search by description, hostname, or token..."
-          />
+<SearchFilterPanel
+          storageKey="setup-tokens-search-filters-expanded"
+          searchTerm={tokenSearchTerm}
+          onSearchChange={setTokenSearchTerm}
+          onClearSearch={() => setTokenSearchTerm('')}
+          searchPlaceholder="Search by description, hostname, or token..."
+          rowsPerPage={10}
+          onRowsPerPageChange={() => {}}
+        />
 
           {/* Tokens Table */}
           {filteredTokens.length === 0 ? (

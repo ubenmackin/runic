@@ -1,14 +1,17 @@
+/**
+* @deprecated This component is deprecated and will be removed in v2.0.
+* Use SearchFilterPanel instead, which provides enhanced functionality
+* and better accessibility support.
+*
+* Shared FilterBar component for collapsible filter panels.
+* Handles expand/collapse state with localStorage persistence.
+*
+* @param {string} storageKey - Key for localStorage persistence of expand/collapse state
+* @param {boolean} hasActiveFilters - Whether any filters are currently active (shows "Active" badge)
+* @param {React.ReactNode} children - Filter controls to render when expanded
+*/
 import { useState } from 'react'
 import { Filter, ChevronDown, ChevronUp } from 'lucide-react'
-
-/**
- * Shared FilterBar component for collapsible filter panels.
- * Handles expand/collapse state with localStorage persistence.
- *
- * @param {string} storageKey - Key for localStorage persistence of expand/collapse state
- * @param {boolean} hasActiveFilters - Whether any filters are currently active (shows "Active" badge)
- * @param {React.ReactNode} children - Filter controls to render when expanded
- */
 export default function FilterBar({ storageKey, hasActiveFilters, children }) {
   const [expanded, setExpanded] = useState(() => {
     const saved = localStorage.getItem(storageKey)
