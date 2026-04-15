@@ -1,6 +1,24 @@
 import { useState } from 'react'
-import { Search, ChevronDown, ChevronUp } from 'lucide-react'
+import { Search, ChevronDown, ChevronUp, X } from 'lucide-react'
 
+/**
+ * SearchFilterPanel - Collapsible panel for search and filter controls
+ *
+ * @param {Object} props
+ * @param {string} props.storageKey - Key for storing expansion state in localStorage
+ * @param {string} props.searchTerm - Current search term value
+ * @param {Function} props.onSearchChange - Handler for search input changes
+ * @param {Function} props.onClearSearch - Handler for clearing search
+ * @param {string} [props.searchPlaceholder='Search...'] - Placeholder text for search input
+ * @param {number} props.rowsPerPage - Current rows per page value
+ * @param {Function} props.onRowsPerPageChange - Handler for rows per page changes
+ * @param {React.ReactNode} [props.filterChips] - React node for filter buttons/chips
+ * @param {React.ReactNode} [props.children] - Additional content rendered below main content
+ * @param {boolean} [props.showSearch=true] - Whether to show the search input
+ * @param {boolean} [props.hasActiveFilters=false] - Whether filters are active (shows badge)
+ * @param {React.ReactNode} [props.filterContent] - Inline filters for horizontal layout (left side). When provided, enables horizontal flex layout.
+ * @param {React.ReactNode} [props.rightContent] - Right-aligned content (e.g., action buttons). Rendered on far right with flex spacer.
+ */
 export default function SearchFilterPanel({
   storageKey,
   searchTerm,
@@ -18,7 +36,7 @@ export default function SearchFilterPanel({
 }) {
   const [expanded, setExpanded] = useState(() => {
     const saved = localStorage.getItem(storageKey)
-    return saved === null ? true : saved === 'true' // Default open
+    return saved === 'true' // Default closed (match FilterBar)
   })
 
   const handleToggle = () => {
@@ -72,11 +90,11 @@ export default function SearchFilterPanel({
                     <button
                       onClick={onClearSearch}
                       className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-light-neutral"
-                      aria-label="Clear search"
-                    >
-                      ×
-                    </button>
-                  )}
+aria-label="Clear search"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        )}
                 </div>
               )}
 
@@ -118,10 +136,10 @@ export default function SearchFilterPanel({
                       <button
                         onClick={onClearSearch}
                         className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-light-neutral"
-                        aria-label="Clear search"
-                      >
-                        ×
-                      </button>
+aria-label="Clear search"
+>
+  <X className="w-4 h-4" />
+</button>
                     )}
                   </div>
                 )}

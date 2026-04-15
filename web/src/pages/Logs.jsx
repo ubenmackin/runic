@@ -276,7 +276,7 @@ isPaused
                   placeholder="e.g. 192.168.1"
                   value={filter.src_ip}
                   onChange={e => setFilter(f => ({ ...f, src_ip: e.target.value, offset: 0 }))}
-                  className="px-3 py-2 border border-gray-300 dark:border-gray-border bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white text-sm w-32"
+                  className="px-3 py-2 border border-gray-300 dark:border-gray-border bg-white dark:bg-charcoal-dark text-gray-900 dark:text-light-neutral text-sm w-32 focus:ring-2 focus:ring-purple-active focus:border-purple-active rounded-none"
                 />
               </div>
 
@@ -288,7 +288,7 @@ isPaused
                   placeholder="e.g. 443"
                   value={filter.dst_port}
                   onChange={e => setFilter(f => ({ ...f, dst_port: e.target.value, offset: 0 }))}
-                  className="px-3 py-2 border border-gray-300 dark:border-gray-border bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white text-sm w-24"
+                  className="px-3 py-2 border border-gray-300 dark:border-gray-border bg-white dark:bg-charcoal-dark text-gray-900 dark:text-light-neutral text-sm w-24 focus:ring-2 focus:ring-purple-active focus:border-purple-active rounded-none"
                 />
               </div>
             </div>
@@ -301,7 +301,7 @@ isPaused
                 <select
                   value={filter.limit}
                   onChange={e => setFilter(f => ({ ...f, limit: parseInt(e.target.value), offset: 0 }))}
-                  className="px-3 py-2 border border-gray-300 dark:border-gray-border bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white text-sm"
+                  className="px-3 py-2 border border-gray-300 dark:border-gray-border bg-white dark:bg-charcoal-dark text-gray-900 dark:text-light-neutral text-sm focus:ring-2 focus:ring-purple-active focus:border-purple-active rounded-none"
                 >
                   <option value={50}>50 rows</option>
                   <option value={100}>100 rows</option>
