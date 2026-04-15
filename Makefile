@@ -1,4 +1,4 @@
-.PHONY: all dev build web-build agents test clean install-deps sqlc help
+.PHONY: all dev build web-build agents test test-go test-web clean install-deps sqlc help lint lint-go lint-web verify
 
 # Go parameters
 GOCMD=go
@@ -69,10 +69,18 @@ web-build:
 	@echo "$(GREEN)Building web frontend...$(NC)"
 	@cd web && npm install --silent && npm run build
 
-# Run tests
-test:
-	@echo "$(GREEN)Running tests...$(NC)"
-	$(GOTEST) -v ./...
+# Existing test target update
+test: test-go test-web
+
+# Go backend testing with race detection and coverage
+test-go:
+	@echo "$(GREEN)Running Go tests...$(NC)"
+	$(GOTEST) -v -race -cover ./...
+
+# React frontend testing
+test-web:
+	@echo "$(GREEN)Running React tests...$(NC)"
+	cd web && npm ci && npm run test -- --run
 
 # Clean build artifacts
 clean:
@@ -99,7 +107,24 @@ fmt:
 
 # Run linter
 lint:
-	golangci-lint run ./... || true
+	golangci-lint run ./...
+
+# Updated Run linter target
+lint: lint-go lint-web
+
+# Go-specific linting
+lint-go:
+	@echo "$(GREEN)Linting Go code...$(NC)"
+	golangci-lint run ./...
+
+# React-specific linting
+lint-web:
+	@echo "$(GREEN)Linting React code...$(NC)"
+	cd web && npm run lint
+
+# Unified verification target
+verify: clean fmt lint test build
+	@echo "$(GREEN)All systems go. Runic is ready for commit.$(NC)"
 
 # Show help
 help:
@@ -111,8 +136,13 @@ help:
 	@echo " make web-build - Build web frontend only"
 	@echo " make agents - Build agent binaries for all platforms"
 	@echo " make test - Run tests"
+	@echo " make test-go - Run Go tests"
+	@echo " make test-web - Run React tests"
 	@echo " make clean - Clean build artifacts"
 	@echo " make install-deps - Install all dependencies"
 	@echo " make fmt - Format Go code"
-	@echo " make lint - Run linter"
+	@echo " make lint - Run all linters (Go and React)"
+	@echo " make lint-go - Run Go linter only"
+	@echo " make lint-web - Run React linter only"
+	@echo " make verify - Run fmt, lint, test, and build for Go and React"
 	@echo ""
