@@ -203,16 +203,12 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Row 1: Peers */}
+      {/* Stats Cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-0">
         <StatCard icon={Server} label="Total Peers" value={stats.total_peers} valueColor="text-slate-400" />
         <StatCard icon={Server} label="Online" value={stats.online_peers} valueColor="text-green-500" />
         <StatCard icon={Server} label="Offline" value={stats.offline_peers} valueColor={stats.offline_peers > 0 ? 'text-red-500' : 'text-slate-400'} />
         <StatCard icon={UserPlus} label="Manual Peers" value={stats.manual_peers} valueColor="text-slate-400" />
-      </div>
-
-      {/* Row 2: Policies, Pending, Blocked */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-0">
         <StatCard icon={Shield} label="Active Policies" value={stats.total_policies} valueColor="text-blue-400" />
         <StatCard icon={AlertTriangle} label="Pending Changes" value={totalPendingCount} valueColor={totalPendingCount > 0 ? 'text-orange-500' : 'text-slate-400'} />
         <StatCard icon={AlertTriangle} label="Blocked (1h)" value={stats.blocked_last_hour + liveBlockedCount} valueColor={(stats.blocked_last_hour + liveBlockedCount) > 0 ? 'text-purple-active' : 'text-slate-400'} />

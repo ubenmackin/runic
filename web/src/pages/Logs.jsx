@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { FileText, Play, Pause, Trash2, Wifi, WifiOff } from 'lucide-react'
+import { FileText, Play, Pause, Trash2, Wifi, WifiOff, X } from 'lucide-react'
 import { api, QUERY_KEYS } from '../api/client'
 import { useDebounce } from '../hooks/useDebounce'
 import EmptyState from '../components/EmptyState'
@@ -9,6 +9,7 @@ import LogLine from '../components/LogLine'
 import SearchableSelect from '../components/SearchableSelect'
 import PageHeader from '../components/PageHeader'
 import Pagination from '../components/Pagination'
+import FilterBar from '../components/FilterBar'
 import { logger } from '../utils/logger'
 
 const MAX_RECONNECT_ATTEMPTS = 5
@@ -195,25 +196,25 @@ export default function Logs() {
         actions={
           <div className="flex items-center gap-3">
             {/* Mode toggle */}
-            <div className="flex rounded-none border border-gray-300 dark:border-gray-border overflow-hidden">
-              <button
-                onClick={() => setMode('historical')}
-                className={`px-3 py-1.5 text-sm font-medium ${
-                  mode === 'historical'
-                    ? 'bg-purple-active text-white'
-                    : 'bg-white dark:bg-charcoal-dark text-gray-700 dark:text-amber-primary hover:bg-gray-50 dark:hover:bg-charcoal-darkest'
-                }`}
-              >
-                Historical
-              </button>
-              <button
-                onClick={() => setMode('live')}
-                className={`px-3 py-1.5 text-sm font-medium flex items-center gap-1.5 ${
-                  mode === 'live'
-                    ? 'bg-purple-active text-white'
-                    : 'bg-white dark:bg-charcoal-dark text-gray-700 dark:text-amber-primary hover:bg-gray-50 dark:hover:bg-charcoal-darkest'
-                }`}
-              >
+          <div className="flex rounded-none border border-gray-300 dark:border-gray-border overflow-hidden">
+            <button
+              onClick={() => setMode('historical')}
+              className={`px-4 py-1.5 text-sm font-medium ${
+                mode === 'historical'
+                  ? 'bg-purple-active text-white'
+                  : 'bg-white dark:bg-charcoal-dark text-gray-700 dark:text-amber-primary hover:bg-gray-50 dark:hover:bg-charcoal-darkest'
+              }`}
+            >
+              Historical
+            </button>
+            <button
+              onClick={() => setMode('live')}
+              className={`px-4 py-1.5 text-sm font-medium flex items-center gap-1.5 ${
+                mode === 'live'
+                  ? 'bg-purple-active text-white'
+                  : 'bg-white dark:bg-charcoal-dark text-gray-700 dark:text-amber-primary hover:bg-gray-50 dark:hover:bg-charcoal-darkest'
+              }`}
+            >
                 {isConnected ? (
                   <Wifi className="w-3.5 h-3.5" />
                 ) : (
@@ -248,31 +249,36 @@ isPaused
         }
       />
 
-      {/* Filter panel (historical mode) */}
+      {/* Filter bar (historical mode) */}
       {mode === 'historical' && (
-         <div className="flex flex-wrap gap-3 items-end bg-white dark:bg-charcoal-dark p-4 rounded-none">
-        {/* Added min-w class to ensure dropdown has sufficient width */}
-        <div className="space-y-1 min-w-[200px]">
-          <label className="text-xs font-medium text-gray-500 dark:text-amber-muted">Peer</label>
-          <SearchableSelect
-            options={(peers || []).map(p => ({ value: p.id, label: p.hostname }))}
-            value={filter.peer_id}
-            onChange={v => setFilter(f => ({ ...f, peer_id: v, offset: 0 }))}
-            placeholder="All peers"
-          />
-        </div>
+        <FilterBar
+          storageKey="logs-filters-expanded"
+          hasActiveFilters={filter.peer_id || filter.src_ip || filter.dst_port}
+        >
+          {/* Peer */}
+          <div className="space-y-1 min-w-[200px]">
+            <label className="text-xs font-medium text-gray-500 dark:text-amber-muted">Peer</label>
+            <SearchableSelect
+              options={(peers || []).map(p => ({ value: p.id, label: p.hostname }))}
+              value={filter.peer_id}
+              onChange={v => setFilter(f => ({ ...f, peer_id: v, offset: 0 }))}
+              placeholder="All peers"
+            />
+          </div>
 
-        <div className="space-y-1">
+          {/* Source IP */}
+          <div className="space-y-1">
             <label className="text-xs font-medium text-gray-500 dark:text-amber-muted">Source IP</label>
             <input
               type="text"
               placeholder="e.g. 192.168.1"
               value={filter.src_ip}
               onChange={e => setFilter(f => ({ ...f, src_ip: e.target.value, offset: 0 }))}
-              className="px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white text-sm w-32"
+              className="px-3 py-2 border border-gray-300 dark:border-gray-border bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white text-sm w-32"
             />
           </div>
 
+          {/* Dest Port */}
           <div className="space-y-1">
             <label className="text-xs font-medium text-gray-500 dark:text-amber-muted">Dest Port</label>
             <input
@@ -280,16 +286,17 @@ isPaused
               placeholder="e.g. 443"
               value={filter.dst_port}
               onChange={e => setFilter(f => ({ ...f, dst_port: e.target.value, offset: 0 }))}
-              className="px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white text-sm w-24"
+              className="px-3 py-2 border border-gray-300 dark:border-gray-border bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white text-sm w-24"
             />
           </div>
 
+          {/* Limit */}
           <div className="space-y-1">
             <label className="text-xs font-medium text-gray-500 dark:text-amber-muted">Limit</label>
             <select
               value={filter.limit}
               onChange={e => setFilter(f => ({ ...f, limit: parseInt(e.target.value), offset: 0 }))}
-              className="px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white text-sm"
+              className="px-3 py-2 border border-gray-300 dark:border-gray-border bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white text-sm"
             >
               <option value={50}>50 rows</option>
               <option value={100}>100 rows</option>
@@ -298,13 +305,31 @@ isPaused
             </select>
           </div>
 
-<button
-onClick={() => refetch()}
-className="px-4 py-2 bg-purple-active hover:bg-purple-600 text-white text-sm font-bold uppercase rounded-none border border-purple-active/20 shadow-[0_0_15px_rgba(159,79,248,0.2)] transition-all"
->
-Query
-</button>
-        </div>
+          {/* Query button */}
+          <button
+            onClick={() => refetch()}
+            className="px-4 py-2 bg-purple-active hover:bg-purple-600 text-white text-sm font-bold uppercase border border-purple-active/20 shadow-[0_0_15px_rgba(159,79,248,0.2)] transition-all"
+          >
+            Query
+          </button>
+
+          {/* Clear filters */}
+          {(filter.peer_id || filter.src_ip || filter.dst_port) && (
+            <button
+              onClick={() => setFilter(f => ({
+                ...f,
+                peer_id: '',
+                src_ip: '',
+                dst_port: '',
+                offset: 0,
+              }))}
+              className="flex items-center gap-1 px-3 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20"
+            >
+              <X className="w-4 h-4" />
+              Clear
+            </button>
+          )}
+        </FilterBar>
       )}
 
       {/* Live mode status */}

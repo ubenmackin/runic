@@ -70,7 +70,7 @@ function useGroupMembers(groupIds) {
 // Build layout data: centered with left/right split
 // ──────────────────────────────────────────────────────
 
-function buildLayoutData(startPeerId, peers, groups, policies, services, groupMembersMap, expandedGroups, _allPeers) {
+function buildLayoutData(startPeerId, peers, groups, policies, services, groupMembersMap, expandedGroups) {
   if (!startPeerId || !peers?.length || !policies?.length) return null
 
   const activePolicies = policies.filter(p => p.enabled && p.action === 'ACCEPT')
@@ -631,7 +631,7 @@ function TreeGraph({ layoutData, isDark, onNodeClick, onEdgeClick, onGroupClick,
 // Detail Panel
 // ──────────────────────────────────────────────────────
 
-function DetailPanel({ selection, onClose, onExpand, onCollapse, _isDark }) {
+function DetailPanel({ selection, onClose, onExpand, onCollapse }) {
   if (!selection) return null
   const { type, data } = selection
 
@@ -863,7 +863,7 @@ export default function Topology() {
   }, [])
 
   return (
-    <div className="space-y-4 h-full flex flex-col">
+    <div className="space-y-4 h-[calc(100vh-52px-2rem)] md:h-[calc(100vh-52px-3rem)] flex flex-col overflow-hidden">
       <div className="flex items-center justify-between shrink-0">
         <div>
           <h1 className="text-2xl font-bold text-gray-900 dark:text-light-neutral">Topology</h1>
@@ -927,13 +927,12 @@ export default function Topology() {
               onGroupClick={handleGroupClick}
               onBackgroundClick={handleBackgroundClick}
             />
-            <DetailPanel
-              selection={detailSelection}
-              onClose={() => setDetailSelection(null)}
-              onExpand={handleExpand}
-              onCollapse={handleCollapse}
-              isDark={isDark}
-            />
+                <DetailPanel
+                  selection={detailSelection}
+                  onClose={() => setDetailSelection(null)}
+                  onExpand={handleExpand}
+                  onCollapse={handleCollapse}
+                />
           </>
         ) : (
           <div className="flex flex-col items-center justify-center h-full text-center p-8">

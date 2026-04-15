@@ -19,7 +19,7 @@ const DropdownItem = ({ to, icon: Icon, label, onClick }) => (
     className={({ isActive }) =>
       `flex items-center gap-2 px-3 py-2 text-sm rounded-none transition-colors ${
         isActive
-          ? 'bg-purple-active/20 text-purple-active'
+          ? 'bg-purple-active/10 text-purple-active'
           : 'text-slate-500 hover:text-white hover:bg-[rgb(25,25,25)]'
       }`
     }
@@ -98,7 +98,7 @@ const DropdownMenu = ({ label, icon: Icon, activeIcon: ActiveIcon, iconClassName
       <button
         className={`flex items-center justify-center gap-1.5 px-3 h-[52px] text-sm font-medium rounded-none transition-colors border-b-2 ${
           isActive
-            ? 'bg-purple-active/20 text-purple-active border-purple-active'
+            ? 'bg-purple-active/10 text-purple-active border-purple-active'
             : isOpen
             ? 'bg-[rgb(25,25,25)] text-white border-transparent'
             : 'text-slate-500 hover:text-white hover:bg-[rgb(25,25,25)] border-transparent'
@@ -128,7 +128,7 @@ const NavItem = ({ to, icon: Icon, label }) => (
     className={({ isActive }) =>
       `flex items-center justify-center gap-1.5 px-3 h-[52px] text-sm font-medium rounded-none transition-colors border-b-2 ${
         isActive
-          ? 'bg-purple-active/20 text-purple-active border-purple-active'
+          ? 'bg-purple-active/10 text-purple-active border-purple-active'
           : 'text-slate-500 hover:text-white hover:bg-[rgb(25,25,25)] border-transparent'
       }`
     }

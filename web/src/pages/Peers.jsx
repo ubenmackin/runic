@@ -314,6 +314,8 @@ const preFilteredPeers = peers?.filter(peer => {
     fieldMap: {
       os_type: (p) => (p.os_type || p.os || '').toLowerCase(),
       last_heartbeat: (p) => parseHeartbeatForSort(p.last_heartbeat),
+      status: (p) => p.status || '',
+      agent_version: (p) => p.agent_version || '',
     },
     secondarySortKey: 'hostname',
   })
@@ -568,29 +570,29 @@ const handleSubmit = (e) => {
         onRowsPerPageChange={setPeersRowsPerPage}
       />
 
-{/* Status Filter Button Bar */}
-<div className="flex gap-1">
-                          {[
-                            { value: 'all', label: 'All' },
-                            { value: 'online', label: 'Online' },
-                            { value: 'offline', label: 'Offline' },
-                            { value: 'manual', label: 'Manual' },
-                            { value: 'agent', label: 'Agent' },
-                            { value: 'pending', label: 'Pending Changes' },
-                          ].map(opt => (
-                            <button
-                              key={opt.value}
-                              onClick={() => setStatusFilter(opt.value)}
-                              className={`px-2 py-1 text-sm font-bold border transition-colors ${
-                                statusFilter === opt.value
-                                  ? 'bg-purple-active text-white border-purple-active'
-                                  : 'bg-white dark:bg-charcoal-dark text-gray-700 dark:text-amber-primary border-gray-300 dark:border-gray-border hover:border-purple-active dark:hover:border-purple-active'
-                              }`}
-                            >
-                              {opt.label}
-                            </button>
-                          ))}
-                        </div>
+      {/* Status Filter Button Bar */}
+      <div className="flex gap-0">
+        {[
+          { value: 'all', label: 'All' },
+          { value: 'online', label: 'Online' },
+          { value: 'offline', label: 'Offline' },
+          { value: 'manual', label: 'Manual' },
+          { value: 'agent', label: 'Agent' },
+          { value: 'pending', label: 'Pending Changes' },
+        ].map(opt => (
+          <button
+            key={opt.value}
+            onClick={() => setStatusFilter(opt.value)}
+            className={`px-4 py-1 text-sm font-bold border transition-colors ${
+              statusFilter === opt.value
+                ? 'bg-purple-active text-white border-purple-active'
+                : 'bg-white dark:bg-charcoal-dark text-gray-700 dark:text-amber-primary border-gray-300 dark:border-gray-border hover:border-purple-active dark:hover:border-purple-active'
+            }`}
+          >
+            {opt.label}
+          </button>
+        ))}
+      </div>
 
       {!processedPeers?.length ? (
         searchTerm || statusFilter !== 'all' ? (
@@ -611,9 +613,11 @@ const handleSubmit = (e) => {
                     Hostname <SortIndicator columnKey="hostname" sortConfig={sortConfig} />
                   </button>
                 </th>
-                <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
-                  Status
-                </th>
+<th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+              <button type="button" onClick={() => handleSort('status')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+                Status <SortIndicator columnKey="status" sortConfig={sortConfig} />
+              </button>
+            </th>
                 <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
                   <button type="button" onClick={() => handleSort('ip_address')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
                     IP Address <SortIndicator columnKey="ip_address" sortConfig={sortConfig} />
@@ -632,9 +636,11 @@ const handleSubmit = (e) => {
                 <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
                   Groups
                 </th>
-                <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
-                  Agent
-                </th>
+<th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+              <button type="button" onClick={() => handleSort('agent_version')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+                Agent <SortIndicator columnKey="agent_version" sortConfig={sortConfig} />
+              </button>
+            </th>
                 <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
                   Actions
                 </th>

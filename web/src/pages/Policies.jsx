@@ -64,7 +64,6 @@ export default function Policies() {
     direction: 'both'
   })
   const [deleteTarget, setDeleteTarget] = useState(null)
-  const [filterPeer, _setFilterPeer] = useState(null)
   const { value: showDisabled, setValue: setShowDisabled } = useFilterPersistence('policies', 'showDisabled', false)
   const [preview, setPreview] = useState(null)
   const [previewStale, setPreviewStale] = useState(false)
@@ -265,10 +264,9 @@ const { createMutation, updateMutation, deleteMutation } = useCrudMutations({
   // Search state
   const [searchTerm, setSearchTerm] = useState('')
 
-  // Pre-filter by enabled toggle and peer filter before search/sort
+  // Pre-filter by enabled toggle before search/sort
   const preFilteredPolicies = (policies || []).filter(p => {
     if (!showDisabled && !p.enabled) return false
-    if (filterPeer && (p.target_type !== 'peer' || p.target_id !== filterPeer)) return false
     // Filter by pending delete status
     if (!showPendingDeletes && p.is_pending_delete) return false
     return true
@@ -394,25 +392,25 @@ const { createMutation, updateMutation, deleteMutation } = useCrudMutations({
 		onRowsPerPageChange={setPoliciesRowsPerPage}
 	/>
 
-{/* Show Disabled Filter Chips */}
-<div className="flex gap-1">
-		{[
-			{ value: 'enabled', label: 'Enabled' },
-			{ value: 'disabled', label: 'Disabled' },
-		].map(opt => (
-			<button
-				key={opt.value}
-				onClick={() => setShowDisabled(opt.value === 'disabled')}
-				className={`px-3 py-1.5 text-sm font-medium rounded-none transition-colors ${
-					showDisabled === (opt.value === 'disabled')
-					? 'bg-purple-active text-white'
-					: 'bg-gray-100 dark:bg-charcoal-darkest text-gray-700 dark:text-amber-primary hover:bg-gray-200 dark:hover:bg-charcoal-dark'
-				}`}
-			>
-			{opt.label}
-			</button>
-			))}
-		</div>
+      {/* Show Disabled Filter Chips */}
+      <div className="flex gap-0">
+        {[
+          { value: 'enabled', label: 'Enabled' },
+          { value: 'disabled', label: 'Disabled' },
+        ].map(opt => (
+          <button
+            key={opt.value}
+            onClick={() => setShowDisabled(opt.value === 'disabled')}
+            className={`px-4 py-1.5 text-sm font-medium border transition-colors ${
+              showDisabled === (opt.value === 'disabled')
+                ? 'bg-purple-active text-white border-purple-active'
+                : 'bg-white dark:bg-charcoal-dark text-gray-700 dark:text-amber-primary border-gray-300 dark:border-gray-border hover:border-purple-active dark:hover:border-purple-active'
+            }`}
+          >
+            {opt.label}
+          </button>
+        ))}
+      </div>
 
 	{/* Show Pending Deletes Toggle */}
 	{policies?.some(p => p.is_pending_delete) && (
