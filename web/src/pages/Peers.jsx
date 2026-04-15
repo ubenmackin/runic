@@ -26,6 +26,7 @@ import Pagination from '../components/Pagination'
 import TableToolbar from '../components/TableToolbar'
 import PageHeader from '../components/PageHeader'
 import PendingChangesModal from '../components/PendingChangesModal'
+import SharpTag from '../components/SharpTag'
 
 const OS_OPTIONS = [
   { value: 'ubuntu', label: 'Ubuntu' },
@@ -52,6 +53,13 @@ const ARCH_OPTIONS = [
 function parseHeartbeatForSort(timestamp) {
   if (!timestamp) return 0
   return new Date(timestamp).getTime()
+}
+
+// Sync status configuration for SharpTag display
+const syncStatusConfig = {
+  synced: { label: 'SYNCED', color: 'border-green-500 text-green-600 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-900/20' },
+  pending: { label: 'REVIEW', color: 'border-orange-500 text-orange-600 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-900/20' },
+  pending_sync: { label: 'PENDING', color: 'border-blue-500 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20' },
 }
 
 export default function Peers() {
@@ -560,8 +568,8 @@ const handleSubmit = (e) => {
         onRowsPerPageChange={setPeersRowsPerPage}
       />
 
-                        {/* Status Filter Button Bar */}
-                        <div className="flex gap-2">
+{/* Status Filter Button Bar */}
+<div className="flex gap-1">
                           {[
                             { value: 'all', label: 'All' },
                             { value: 'online', label: 'Online' },
@@ -598,36 +606,36 @@ const handleSubmit = (e) => {
             <table className="w-full text-sm">
 <thead className="bg-charcoal-darkest">
               <tr>
-                <th className="text-left px-4 py-2 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+                <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
                   <button type="button" onClick={() => handleSort('hostname')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
                     Hostname <SortIndicator columnKey="hostname" sortConfig={sortConfig} />
                   </button>
                 </th>
-                <th className="text-left px-4 py-2 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
+                <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
                   Status
                 </th>
-                <th className="text-left px-4 py-2 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+                <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
                   <button type="button" onClick={() => handleSort('ip_address')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
                     IP Address <SortIndicator columnKey="ip_address" sortConfig={sortConfig} />
                   </button>
                 </th>
-                <th className="text-left px-4 py-2 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+                <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
                   <button type="button" onClick={() => handleSort('os_type')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
                     OS <SortIndicator columnKey="os_type" sortConfig={sortConfig} />
                   </button>
                 </th>
-                <th className="text-left px-4 py-2 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+                <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
                   <button type="button" onClick={() => handleSort('last_heartbeat')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
                     Last Heartbeat <SortIndicator columnKey="last_heartbeat" sortConfig={sortConfig} />
                   </button>
                 </th>
-                <th className="text-left px-4 py-2 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
+                <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
                   Groups
                 </th>
-                <th className="text-left px-4 py-2 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
+                <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
                   Agent
                 </th>
-                <th className="text-left px-4 py-2 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
+                <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
                   Actions
                 </th>
               </tr>
@@ -635,8 +643,8 @@ const handleSubmit = (e) => {
 <tbody className="divide-y divide-gray-200 dark:divide-gray-border">
               {paginatedPeers.map((peer) => (
               <tr key={peer.id} className="">
-                <td className="px-4 py-2">
-                  <div className="flex items-center gap-2">
+<td className="px-4 py-1">
+<div className="flex items-center gap-2">
                     {!peer.is_manual && (
                       <span className={`w-2 h-2 rounded-full ${
                         peer.status === 'online' ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]' :
@@ -647,46 +655,35 @@ const handleSubmit = (e) => {
                     <span className="font-sans font-bold text-gray-900 dark:text-light-neutral">{peer.hostname}</span>
                   </div>
                 </td>
-                <td className="px-4 py-2">
-                              {peer.is_manual ? (
-                                <span className="px-1.5 py-0.5 text-xs font-bold border border-gray-400 dark:border-gray-500 text-gray-700 dark:text-amber-primary">
-                                  MANUAL
-                                </span>
-                              ) : peer.sync_status ? (
-                                <button
-                                  onClick={() => handleSyncStatusClick(peer)}
-                                  title={`Click to ${peer.sync_status === 'pending' ? 'review pending changes' : 'view deployed rules'}`}
-                                  className={`px-1.5 py-0.5 text-xs font-bold border cursor-pointer ${
-                                    peer.sync_status === 'pending'
-                                      ? 'border-orange-500 text-orange-600 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-900/20'
-                                      : peer.sync_status === 'pending_sync'
-                                      ? 'border-blue-500 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20'
-                                      : peer.sync_status === 'synced'
-                                      ? 'border-green-500 text-green-600 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-900/20'
-                                      : 'border-gray-500 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-900/20'
-                                  }`}
-                                >
-                                  {peer.sync_status === 'pending'
-                                    ? 'PENDING'
-                                    : peer.sync_status === 'pending_sync'
-                                    ? 'PENDING'
-                                    : peer.sync_status === 'synced'
-                                    ? 'SYNCED'
-                                    : peer.sync_status.toUpperCase()}
-                                </button>
-                              ) : null}
-                            </td>
-<td className="px-4 py-2 font-mono text-gray-600 dark:text-amber-primary">
-                  {peer.ip_address}
+<td className="px-4 py-1">
+                                                {peer.is_manual ? (
+                                                    <span className="px-1.5 py-0.5 text-xs font-bold border border-gray-400 dark:border-gray-500 text-gray-700 dark:text-amber-primary">
+                                                        MANUAL
+                                                    </span>
+                                                ) : peer.sync_status ? (
+                                                    <button
+                                                        onClick={() => handleSyncStatusClick(peer)}
+                                                        title={`Click to ${peer.sync_status === 'pending' ? 'review pending changes' : 'view deployed rules'}`}
+                                                        className="cursor-pointer"
+                                                    >
+                                                        <SharpTag
+                                                            status={syncStatusConfig[peer.sync_status]?.label || peer.sync_status.toUpperCase()}
+                                                            color={syncStatusConfig[peer.sync_status]?.color}
+                                                        />
+                                                    </button>
+                                                ) : null}
+                                            </td>
+<td className="px-4 py-1 font-mono text-gray-600 dark:text-amber-primary">
+{peer.ip_address}
                 </td>
-                <td className="px-4 py-2 text-gray-600 dark:text-amber-primary">
-                  {peer.os_type || peer.os || '—'}
+<td className="px-4 py-1 text-gray-600 dark:text-amber-primary">
+{peer.os_type || peer.os || '—'}
                 </td>
-                <td className="px-4 py-2 font-mono text-gray-600 dark:text-amber-primary">
-                  {peer.is_manual ? 'N/A' : formatRelativeTime(peer.last_heartbeat)}
+<td className="px-4 py-1 font-mono text-gray-600 dark:text-amber-primary">
+{peer.is_manual ? 'N/A' : formatRelativeTime(peer.last_heartbeat)}
                 </td>
-                <td className="px-4 py-2">
-                      {peer.groups ? (
+<td className="px-4 py-1">
+{peer.groups ? (
                         <div className="flex flex-wrap items-center gap-1.5 max-w-xs">
                           {(() => {
                             const groups = peer.groups.split(',').map(g => g.trim()).filter(Boolean)
@@ -720,20 +717,20 @@ const handleSubmit = (e) => {
                         <span className="text-gray-400">—</span>
                       )}
                     </td>
-<td className="px-4 py-2">
-                  {peer.is_manual ? (
-                    <span className="px-1.5 py-0.5 text-xs font-bold border border-gray-400 dark:border-gray-500 text-gray-700 dark:text-amber-primary">
-                      MANUAL
-                    </span>
-                  ) : peer.agent_version ? (
-                    <span className="font-mono text-gray-600 dark:text-amber-primary">
-                      v{peer.agent_version}
-                    </span>
-                  ) : (
-                    <span className="text-gray-400 dark:text-amber-muted">—</span>
-                  )}
-                </td>
-                <td className="px-4 py-2">
+<td className="px-4 py-1">
+{peer.is_manual ? (
+<span className="px-1.5 py-0.5 text-xs font-bold border border-gray-400 dark:border-gray-500 text-gray-700 dark:text-amber-primary">
+MANUAL
+</span>
+) : peer.agent_version ? (
+<span className="font-mono text-gray-600 dark:text-amber-primary">
+v{peer.agent_version}
+</span>
+) : (
+<span className="text-gray-400 dark:text-amber-muted">—</span>
+)}
+</td>
+<td className="px-4 py-1">
                       <div className="flex items-center gap-2">
                         {!peer.is_manual && (
                           <>

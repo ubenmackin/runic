@@ -7,7 +7,7 @@ export default function TableSkeleton({ rows = 5, columns = 4 }) {
         <thead className="bg-gray-50 dark:bg-charcoal-darkest">
           <tr>
             {Array.from({ length: columns }).map((_, i) => (
-              <th key={i} className="text-left px-4 py-3">
+              <th key={i} className="text-left px-4 py-1.5">
                 <Skeleton width="80px" height="1rem" />
               </th>
             ))}
@@ -17,7 +17,7 @@ export default function TableSkeleton({ rows = 5, columns = 4 }) {
           {Array.from({ length: rows }).map((_, i) => (
             <tr key={i}>
               {Array.from({ length: columns }).map((_, j) => (
-                <td key={j} className="px-4 py-3">
+                <td key={j} className="px-4 py-1.5">
                   <Skeleton width="100%" height="1.25rem" />
                 </td>
               ))}

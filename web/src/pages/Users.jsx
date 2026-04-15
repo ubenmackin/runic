@@ -138,21 +138,21 @@ export default function Users() {
       ) : (
         <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none overflow-hidden">
           <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-border">
-            <thead className="bg-gray-50 dark:bg-charcoal-darkest">
-              <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider">Username</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider">Email</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider">Role</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-200 dark:divide-gray-border">
-              {users.map((user) => (
-                <tr key={user.id}>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 dark:text-light-neutral">{user.username}</td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-amber-primary">{user.email || '—'}</td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-amber-primary">{user.role || 'viewer'}</td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm">
+<thead className="bg-gray-50 dark:bg-charcoal-darkest">
+<tr>
+<th className="px-6 py-1.5 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider">Username</th>
+<th className="px-6 py-1.5 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider">Email</th>
+<th className="px-6 py-1.5 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider">Role</th>
+<th className="px-6 py-1.5 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider">Actions</th>
+</tr>
+</thead>
+<tbody className="divide-y divide-gray-200 dark:divide-gray-border">
+{users.map((user) => (
+<tr key={user.id}>
+<td className="px-6 py-2 whitespace-nowrap text-sm font-medium text-gray-900 dark:text-light-neutral">{user.username}</td>
+<td className="px-6 py-2 whitespace-nowrap text-sm text-gray-500 dark:text-amber-primary">{user.email || '—'}</td>
+<td className="px-6 py-2 whitespace-nowrap text-sm text-gray-500 dark:text-amber-primary">{user.role || 'viewer'}</td>
+<td className="px-6 py-2 whitespace-nowrap text-sm">
                     {isAdmin && (
                       <button
                         onClick={() => {

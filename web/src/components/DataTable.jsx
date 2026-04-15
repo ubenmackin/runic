@@ -41,7 +41,7 @@ export default function DataTable({ columns, data, emptyMessage, onRowClick, pag
 <thead className="bg-charcoal-darkest">
           <tr>
             {columns.map(col => (
-              <th key={col.key} className={`text-left px-4 py-2 font-medium text-slate-500 text-[10px] uppercase tracking-wider ${col.className || ''}`}>
+              <th key={col.key} className={`text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider ${col.className || ''}`}>
                 {col.label}
               </th>
             ))}
@@ -55,7 +55,7 @@ export default function DataTable({ columns, data, emptyMessage, onRowClick, pag
                 onClick={onRowClick ? () => onRowClick(item) : undefined}
               >
                 {columns.map(col => (
-<td key={col.key} className={`px-4 py-2 ${col.cellClassName || ''}`}>
+<td key={col.key} className={`px-4 py-1 ${col.cellClassName || ''}`}>
                   {col.render ? col.render(item) : item[col.key]}
                 </td>
                 ))}

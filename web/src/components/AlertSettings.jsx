@@ -89,22 +89,22 @@ export default function AlertSettings() {
         <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-border">
           <thead className="bg-gray-50 dark:bg-charcoal-darkest">
             <tr>
-              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider">
-                Alert Type
-              </th>
-              <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider">
-                Enabled
-              </th>
-              <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider">
-                Threshold
-              </th>
-              <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider">
-                Window (min)
-              </th>
-              <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider">
-                Throttle (min)
-              </th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider">
+<th className="px-4 py-1.5 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider">
+Alert Type
+</th>
+<th className="px-4 py-1.5 text-center text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider">
+Enabled
+</th>
+<th className="px-4 py-1.5 text-center text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider">
+Threshold
+</th>
+<th className="px-4 py-1.5 text-center text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider">
+Window (min)
+</th>
+<th className="px-4 py-1.5 text-center text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider">
+Throttle (min)
+</th>
+<th className="px-4 py-1.5 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider">
                 Peer Override
               </th>
             </tr>
@@ -119,67 +119,67 @@ export default function AlertSettings() {
               const peerOverride = rule?.peer_override_hostname ?? ''
 
               return (
-                <tr key={alertType} className="hover:bg-gray-50 dark:hover:bg-charcoal-darkest/50">
-                  <td className="px-4 py-4 whitespace-nowrap">
-                    <div className="flex items-center gap-2">
-                      <Bell className="w-4 h-4 text-gray-400" />
-                      <span className="text-sm font-medium text-gray-900 dark:text-light-neutral">
-                        {ALERT_TYPE_LABELS[alertType]}
-                      </span>
-                    </div>
-                  </td>
-                  <td className="px-4 py-4 whitespace-nowrap text-center">
-                    <div className="flex justify-center">
-                      <ToggleSwitch
-                        checked={isEnabled}
-                        onChange={(checked) => handleUpdateRule(rule?.id, 'enabled', checked)}
-                        disabled={mutation.isPending}
-                      />
-                    </div>
-                  </td>
-                  <td className="px-4 py-4 whitespace-nowrap">
-                    <div className="flex justify-center">
-                      <input
-                        type="number"
-                        min="1"
-                        max="99999"
-                        value={threshold}
-                        onChange={(e) => handleUpdateRule(rule?.id, 'threshold_value', parseInt(e.target.value) || 1)}
-                        onBlur={() => handleUpdateRule(rule?.id, 'threshold_value', threshold)}
-                        disabled={mutation.isPending || !rule}
-                        className="w-20 px-2 py-1 text-center text-sm border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral disabled:opacity-50"
-                      />
-                    </div>
-                  </td>
-                  <td className="px-4 py-4 whitespace-nowrap">
-                    <div className="flex justify-center">
-                      <select
-                        value={windowMin}
-                        onChange={(e) => handleUpdateRule(rule?.id, 'threshold_window_minutes', parseInt(e.target.value))}
-                        disabled={mutation.isPending || !rule}
-                        className="w-24 px-2 py-1 text-sm border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral disabled:opacity-50"
-                      >
-                        {WINDOW_OPTIONS.map(opt => (
-                          <option key={opt} value={opt}>{opt}</option>
-                        ))}
-                      </select>
-                    </div>
-                  </td>
-                  <td className="px-4 py-4 whitespace-nowrap">
-                    <div className="flex justify-center">
-                      <select
-                        value={throttleMin}
-                        onChange={(e) => handleUpdateRule(rule?.id, 'throttle_minutes', parseInt(e.target.value))}
-                        disabled={mutation.isPending || !rule}
-                        className="w-24 px-2 py-1 text-sm border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral disabled:opacity-50"
-                      >
-                        {THROTTLE_OPTIONS.map(opt => (
-                          <option key={opt} value={opt}>{opt}</option>
-                        ))}
-                      </select>
-                    </div>
-                  </td>
-                  <td className="px-4 py-4 whitespace-nowrap">
+<tr key={alertType} className="hover:bg-gray-50 dark:hover:bg-charcoal-darkest/50">
+<td className="px-4 py-2 whitespace-nowrap">
+<div className="flex items-center gap-2">
+<Bell className="w-4 h-4 text-gray-400" />
+<span className="text-sm font-medium text-gray-900 dark:text-light-neutral">
+{ALERT_TYPE_LABELS[alertType]}
+</span>
+</div>
+</td>
+<td className="px-4 py-2 whitespace-nowrap text-center">
+<div className="flex justify-center">
+<ToggleSwitch
+checked={isEnabled}
+onChange={(checked) => handleUpdateRule(rule?.id, 'enabled', checked)}
+disabled={mutation.isPending}
+/>
+</div>
+</td>
+<td className="px-4 py-2 whitespace-nowrap">
+<div className="flex justify-center">
+<input
+type="number"
+min="1"
+max="99999"
+value={threshold}
+onChange={(e) => handleUpdateRule(rule?.id, 'threshold_value', parseInt(e.target.value) || 1)}
+onBlur={() => handleUpdateRule(rule?.id, 'threshold_value', threshold)}
+disabled={mutation.isPending || !rule}
+className="w-20 px-2 py-1 text-center text-sm border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral disabled:opacity-50"
+/>
+</div>
+</td>
+<td className="px-4 py-2 whitespace-nowrap">
+<div className="flex justify-center">
+<select
+value={windowMin}
+onChange={(e) => handleUpdateRule(rule?.id, 'threshold_window_minutes', parseInt(e.target.value))}
+disabled={mutation.isPending || !rule}
+className="w-24 px-2 py-1 text-sm border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral disabled:opacity-50"
+>
+{WINDOW_OPTIONS.map(opt => (
+<option key={opt} value={opt}>{opt}</option>
+))}
+</select>
+</div>
+</td>
+<td className="px-4 py-2 whitespace-nowrap">
+<div className="flex justify-center">
+<select
+value={throttleMin}
+onChange={(e) => handleUpdateRule(rule?.id, 'throttle_minutes', parseInt(e.target.value))}
+disabled={mutation.isPending || !rule}
+className="w-24 px-2 py-1 text-sm border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral disabled:opacity-50"
+>
+{THROTTLE_OPTIONS.map(opt => (
+<option key={opt} value={opt}>{opt}</option>
+))}
+</select>
+</div>
+</td>
+<td className="px-4 py-2 whitespace-nowrap">
                     <select
                       value={peerOverride || ''}
                       onChange={(e) => handleUpdateRule(rule?.id, 'peer_override_hostname', e.target.value || null)}

@@ -6,7 +6,7 @@ export default function PageHeader({ title, description, actions }) {
         <p className="text-gray-600 dark:text-amber-muted">{description}</p>
       </div>
       {actions && (
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-1">
           {actions}
         </div>
       )}

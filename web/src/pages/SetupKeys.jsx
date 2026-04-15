@@ -307,22 +307,22 @@ className={`px-4 py-2 text-sm font-medium rounded-none transition-colors ${
                 <table className="w-full text-sm">
 <thead className="bg-charcoal-darkest">
               <tr>
-                <th className="text-left px-4 py-2 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+                <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
                   <button type="button" onClick={() => handleSort('hostname')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
                     Peer <SortIndicator columnKey="hostname" sortConfig={sortConfig} />
                   </button>
                 </th>
-                <th className="text-left px-4 py-2 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+                <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
                   <button type="button" onClick={() => handleSort('status')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
                     Status <SortIndicator columnKey="status" sortConfig={sortConfig} />
                   </button>
                 </th>
-                <th className="text-left px-4 py-2 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+                <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
                   <button type="button" onClick={() => handleSort('lastRotation')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
                     Last Rotation <SortIndicator columnKey="lastRotation" sortConfig={sortConfig} />
                   </button>
                 </th>
-                <th className="text-left px-4 py-2 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
+                <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
                   Actions
                 </th>
               </tr>
@@ -333,23 +333,23 @@ className={`px-4 py-2 text-sm font-medium rounded-none transition-colors ${
               const StatusIcon = rotationStatus.icon
 
               return (
-              <tr key={peer.id} className="">
-                <td className="px-4 py-2">
-                  <div className="flex items-center">
-                    <span className="font-sans font-bold text-gray-900 dark:text-light-neutral">{peer.hostname}</span>
-                    <span className="ml-2 text-xs font-mono text-gray-500 dark:text-amber-muted">{peer.ip_address}</span>
-                  </div>
-                </td>
-                <td className="px-4 py-2">
-                  <div className="flex items-center">
-                    <StatusIcon className={`w-4 h-4 mr-2 ${rotationStatus.color}`} />
-                    <span className="text-sm text-gray-900 dark:text-light-neutral capitalize">{rotationStatus.status}</span>
-                  </div>
-                </td>
-                <td className="px-4 py-2 font-mono text-gray-600 dark:text-amber-primary">
-                  {formatRelativeTime(peer.hmac_key_last_rotated_at)}
-                </td>
-                <td className="px-4 py-2">
+<tr key={peer.id} className="">
+<td className="px-4 py-1">
+<div className="flex items-center">
+<span className="font-sans font-bold text-gray-900 dark:text-light-neutral">{peer.hostname}</span>
+<span className="ml-2 text-xs font-mono text-gray-500 dark:text-amber-muted">{peer.ip_address}</span>
+</div>
+</td>
+<td className="px-4 py-1">
+<div className="flex items-center">
+<StatusIcon className={`w-4 h-4 mr-2 ${rotationStatus.color}`} />
+<span className="text-sm text-gray-900 dark:text-light-neutral capitalize">{rotationStatus.status}</span>
+</div>
+</td>
+<td className="px-4 py-1 font-mono text-gray-600 dark:text-amber-primary">
+{formatRelativeTime(peer.hmac_key_last_rotated_at)}
+</td>
+<td className="px-4 py-1">
                   {isAdmin && (
                   <button
                     onClick={() => setShowRotateModal(peer.id)}
@@ -405,22 +405,22 @@ className={`px-4 py-2 text-sm font-medium rounded-none transition-colors ${
                 <table className="w-full text-sm">
 <thead className="bg-charcoal-darkest">
               <tr>
-                <th className="text-left px-4 py-2 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
+                <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
                   Token
                 </th>
-                <th className="text-left px-4 py-2 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
+                <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
                   Description
                 </th>
-                <th className="text-left px-4 py-2 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
+                <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
                   Status
                 </th>
-                <th className="text-left px-4 py-2 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
+                <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
                   Created
                 </th>
-                <th className="text-left px-4 py-2 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
+                <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
                   Used By
                 </th>
-                <th className="text-left px-4 py-2 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
+                <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
                   Actions
                 </th>
               </tr>
@@ -429,27 +429,27 @@ className={`px-4 py-2 text-sm font-medium rounded-none transition-colors ${
               {filteredTokens.map((token) => {
               const statusBadge = getTokenStatusBadge(token)
               return (
-              <tr key={token.id}>
-                <td className="px-4 py-2">
-                  <code className="text-xs bg-gray-100 dark:bg-charcoal-darkest px-2 py-1 rounded font-mono text-gray-700 dark:text-amber-primary">
-                    {maskToken(token.token)}
-                  </code>
-                </td>
-                <td className="px-4 py-2 text-gray-700 dark:text-light-neutral">
-                  {token.description || <span className="text-gray-400 dark:text-amber-muted italic">No description</span>}
-                </td>
-                <td className="px-4 py-2">
-                  <span className={`inline-flex items-center px-2 py-0.5 text-xs font-medium ${statusBadge.color}`}>
-                    {statusBadge.label}
-                  </span>
-                </td>
-                <td className="px-4 py-2 font-mono text-gray-600 dark:text-amber-primary text-xs">
-                  {formatRelativeTime(token.created_at)}
-                </td>
-                <td className="px-4 py-2 font-sans font-bold text-gray-600 dark:text-amber-primary text-xs">
-                  {token.used_by_hostname || <span className="text-gray-400 dark:text-amber-muted italic">—</span>}
-                </td>
-                <td className="px-4 py-2">
+<tr key={token.id}>
+<td className="px-4 py-1">
+<code className="text-xs bg-gray-100 dark:bg-charcoal-darkest px-2 py-1 rounded font-mono text-gray-700 dark:text-amber-primary">
+{maskToken(token.token)}
+</code>
+</td>
+<td className="px-4 py-1 text-gray-700 dark:text-light-neutral">
+{token.description || <span className="text-gray-400 dark:text-amber-muted italic">No description</span>}
+</td>
+<td className="px-4 py-1">
+<span className={`inline-flex items-center px-2 py-0.5 text-xs font-medium ${statusBadge.color}`}>
+{statusBadge.label}
+</span>
+</td>
+<td className="px-4 py-1 font-mono text-gray-600 dark:text-amber-primary text-xs">
+{formatRelativeTime(token.created_at)}
+</td>
+<td className="px-4 py-1 font-sans font-bold text-gray-600 dark:text-amber-primary text-xs">
+{token.used_by_hostname || <span className="text-gray-400 dark:text-amber-muted italic">—</span>}
+</td>
+<td className="px-4 py-1">
                   {isAdmin && !token.used_at && !token.is_revoked && (
                   <button
                     onClick={() => setShowRevokeModal(token.id)}

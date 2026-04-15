@@ -221,51 +221,51 @@ function FilterBar({ filter, setFilter, onClear }) {
 
 // Alert row component
 function AlertRow({ alert, isExpanded, onToggle, onDelete }) {
-  return (
-    <>
-      <tr
-        onClick={onToggle}
-        className="cursor-pointer hover:bg-gray-50 dark:hover:bg-charcoal-darkest transition-colors"
-      >
-        {/* Timestamp */}
-        <td className="px-4 py-3 text-sm text-gray-600 dark:text-amber-muted whitespace-nowrap">
-          {formatTimestamp(alert.created_at)}
-        </td>
+        return (
+                <>
+                        <tr
+                                onClick={onToggle}
+                                className="cursor-pointer hover:bg-gray-50 dark:hover:bg-charcoal-darkest transition-colors"
+                        >
+                                {/* Severity */}
+                                <td className="px-4 py-1.5">
+                                        <SeverityIcon severity={alert.severity} />
+                                </td>
 
-        {/* Alert Type */}
-        <td className="px-4 py-3">
-          <AlertTypeTag alertType={alert.alert_type} />
-        </td>
+                                {/* Timestamp */}
+                                <td className="px-4 py-1.5 text-sm text-gray-600 dark:text-amber-muted whitespace-nowrap">
+                                        {formatTimestamp(alert.created_at)}
+                                </td>
 
-        {/* Peer */}
-        <td className="px-4 py-3 text-sm text-gray-900 dark:text-light-neutral">
-          {alert.peer_hostname || '-'}
-        </td>
+                                {/* Alert Type */}
+                                <td className="px-4 py-1.5">
+                                        <AlertTypeTag alertType={alert.alert_type} />
+                                </td>
 
-        {/* Severity */}
-        <td className="px-4 py-3">
-          <SeverityIcon severity={alert.severity} />
-        </td>
+                                {/* Peer */}
+                                <td className="px-4 py-1.5 text-sm text-gray-900 dark:text-light-neutral">
+                                        {alert.peer_hostname || '-'}
+                                </td>
 
-        {/* Subject */}
-        <td className="px-4 py-3 text-sm text-gray-900 dark:text-light-neutral max-w-[200px] truncate">
-          {alert.subject}
-        </td>
+                                {/* Subject */}
+                                <td className="px-4 py-1.5 text-sm text-gray-900 dark:text-light-neutral max-w-[200px] truncate">
+                                        {alert.subject}
+                                </td>
 
-        {/* Status */}
-        <td className="px-4 py-3">
-          <StatusTag status={alert.status} />
-        </td>
+                                {/* Status */}
+                                <td className="px-4 py-1.5">
+                                        <StatusTag status={alert.status} />
+                                </td>
 
-        {/* Expand icon */}
-        <td className="px-4 py-3 text-center">
-          {isExpanded ? (
-            <ChevronUp className="w-4 h-4 text-gray-500 dark:text-amber-muted mx-auto" />
-          ) : (
-            <ChevronDown className="w-4 h-4 text-gray-500 dark:text-amber-muted mx-auto" />
-          )}
-        </td>
-      </tr>
+                                {/* Expand icon */}
+                                <td className="px-4 py-1.5 text-center">
+                                        {isExpanded ? (
+                                                <ChevronUp className="w-4 h-4 text-gray-500 dark:text-amber-muted mx-auto" />
+                                        ) : (
+                                                <ChevronDown className="w-4 h-4 text-gray-500 dark:text-amber-muted mx-auto" />
+                                        )}
+                                </td>
+                        </tr>
 
       {/* Expanded content */}
       {isExpanded && (
@@ -290,29 +290,33 @@ function AlertRow({ alert, isExpanded, onToggle, onDelete }) {
                 </div>
               )}
 
-              {/* Additional details */}
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-                <div>
-                  <span className="text-gray-500 dark:text-amber-muted">Alert ID:</span>
-                  <span className="ml-2 text-gray-900 dark:text-light-neutral">{alert.id}</span>
-                </div>
-                <div>
-                  <span className="text-gray-500 dark:text-amber-muted">Peer:</span>
-                  <span className="ml-2 text-gray-900 dark:text-light-neutral">{alert.peer_hostname || alert.peer_id || '-'}</span>
-                </div>
-                <div>
-                  <span className="text-gray-500 dark:text-amber-muted">Created:</span>
-                  <span className="ml-2 text-gray-900 dark:text-light-neutral">
-                    {new Date(alert.created_at).toLocaleString()}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-gray-500 dark:text-amber-muted">Sent At:</span>
-                  <span className="ml-2 text-gray-900 dark:text-light-neutral">
-                    {alert.sent_at ? new Date(alert.sent_at).toLocaleString() : '-'}
-                  </span>
-                </div>
-              </div>
+                                                {/* Additional details */}
+                                                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                                                        <div>
+                                                                <span className="text-gray-500 dark:text-amber-muted">Severity:</span>
+                                                                <span className="ml-2 text-gray-900 dark:text-light-neutral capitalize">{alert.severity}</span>
+                                                        </div>
+                                                        <div>
+                                                                <span className="text-gray-500 dark:text-amber-muted">Alert ID:</span>
+                                                                <span className="ml-2 text-gray-900 dark:text-light-neutral">{alert.id}</span>
+                                                        </div>
+                                                        <div>
+                                                                <span className="text-gray-500 dark:text-amber-muted">Peer:</span>
+                                                                <span className="ml-2 text-gray-900 dark:text-light-neutral">{alert.peer_hostname || alert.peer_id || '-'}</span>
+                                                        </div>
+                                                        <div>
+                                                                <span className="text-gray-500 dark:text-amber-muted">Created:</span>
+                                                                <span className="ml-2 text-gray-900 dark:text-light-neutral">
+                                                                        {new Date(alert.created_at).toLocaleString()}
+                                                                </span>
+                                                        </div>
+                                                        <div>
+                                                                <span className="text-gray-500 dark:text-amber-muted">Sent At:</span>
+                                                                <span className="ml-2 text-gray-900 dark:text-light-neutral">
+                                                                        {alert.sent_at ? new Date(alert.sent_at).toLocaleString() : '-'}
+                                                                </span>
+                                                        </div>
+                                                </div>
 
               {/* Delete button */}
               <div className="pt-2 border-t border-gray-200 dark:border-gray-border">
@@ -504,29 +508,29 @@ export default function Alerts() {
               <div className="overflow-x-auto">
                 <table className="w-full">
                   <thead className="bg-gray-50 dark:bg-charcoal-darkest border-b border-gray-200 dark:border-gray-border">
-                    <tr>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider">
-                        Timestamp
-                      </th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider">
-                        Alert Type
-                      </th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider">
-                        Peer
-                      </th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider">
-                        Severity
-                      </th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider">
-                        Subject
-                      </th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider">
-                        Status
-                      </th>
-                      <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider w-12">
-                        Details
-                      </th>
-                    </tr>
+                                                <tr>
+                                                        <th className="px-4 py-1.5 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider">
+                                                                Sev
+                                                        </th>
+                                                        <th className="px-4 py-1.5 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider">
+                                                                Timestamp
+                                                        </th>
+                                                        <th className="px-4 py-1.5 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider">
+                                                                Alert Type
+                                                        </th>
+                                                        <th className="px-4 py-1.5 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider">
+                                                                Peer
+                                                        </th>
+                                                        <th className="px-4 py-1.5 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider">
+                                                                Subject
+                                                        </th>
+                                                        <th className="px-4 py-1.5 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider">
+                                                                Status
+                                                        </th>
+                                                        <th className="px-4 py-1.5 text-center text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider w-12">
+                                                                Details
+                                                        </th>
+                                                </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-200 dark:divide-gray-border">
                     {data.alerts.map((alert) => (

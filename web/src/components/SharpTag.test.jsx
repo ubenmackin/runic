@@ -46,8 +46,8 @@ describe('SharpTag', () => {
       const { container } = render(<SharpTag status="synced" />)
 
       const tag = container.firstChild
-      expect(tag.className).toContain('border-purple-active')
-      expect(tag.className).toContain('text-purple-active')
+      expect(tag.className).toContain('border-green-500')
+      expect(tag.className).toContain('text-green-600')
     })
 
     test('applies online color classes', () => {

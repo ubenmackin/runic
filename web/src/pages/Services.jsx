@@ -413,86 +413,86 @@ const handleSourcePortInputKeyDown = (e) => {
             <table className="w-full text-sm">
 <thead className="bg-charcoal-darkest">
               <tr>
-                <th className="text-left px-4 py-2 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+                <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
                   <button type="button" onClick={() => handleSort('name')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
                     Name <SortIndicator columnKey="name" sortConfig={sortConfig} />
                   </button>
                 </th>
-                <th className="text-left px-4 py-2 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+                <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
                   <button type="button" onClick={() => handleSort('protocol')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
                     Protocol <SortIndicator columnKey="protocol" sortConfig={sortConfig} />
                   </button>
                 </th>
-                <th className="text-left px-4 py-2 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+                <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
                   <button type="button" onClick={() => handleSort('ports')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
                     Dest Ports <SortIndicator columnKey="ports" sortConfig={sortConfig} />
                   </button>
                 </th>
-                <th className="text-left px-4 py-2 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+                <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
                   <button type="button" onClick={() => handleSort('description')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
                     Description <SortIndicator columnKey="description" sortConfig={sortConfig} />
                   </button>
                 </th>
-                <th className="text-left px-4 py-2 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
+                <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
                   Actions
                 </th>
               </tr>
             </thead>
 <tbody className="divide-y divide-gray-200 dark:divide-gray-border">
               {paginatedServices.map((service) => (
-              <tr key={service.id} className="">
-                <td className="px-4 py-2">
-                  <span className="font-medium text-gray-900 dark:text-light-neutral">
-                    {service.name}
-                    {service.is_pending_delete && (
-                      <span className="ml-2 px-2 py-1 text-xs bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300 rounded-none">
-                        Pending Delete
-                      </span>
-                    )}
-                  </span>
-                </td>
-                <td className="px-4 py-2 text-gray-600 dark:text-amber-primary">
-                  {protocolLabel(service.protocol)}
-                </td>
-                <td className="px-4 py-2">
-                  {service.ports ? (
-                    <div className="flex flex-wrap items-center gap-1.5 max-w-xs">
-                      {(() => {
-                        const ports = service.ports.split(',').map(p => p.trim()).filter(Boolean)
-                        const maxVisible = 2
-                        const visiblePorts = ports.slice(0, maxVisible)
-                        const remainingCount = ports.length - maxVisible
+<tr key={service.id} className="">
+<td className="px-4 py-1">
+<span className="font-medium text-gray-900 dark:text-light-neutral">
+{service.name}
+{service.is_pending_delete && (
+<span className="ml-2 px-2 py-1 text-xs bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300 rounded-none">
+Pending Delete
+</span>
+)}
+</span>
+</td>
+<td className="px-4 py-1 text-gray-600 dark:text-amber-primary">
+{protocolLabel(service.protocol)}
+</td>
+<td className="px-4 py-1">
+{service.ports ? (
+<div className="flex flex-wrap items-center gap-1.5 max-w-xs">
+{(() => {
+const ports = service.ports.split(',').map(p => p.trim()).filter(Boolean)
+const maxVisible = 2
+const visiblePorts = ports.slice(0, maxVisible)
+const remainingCount = ports.length - maxVisible
 
-                        return (
-                          <>
-                            {visiblePorts.map((port, idx) => (
-                              <span
-                                key={idx}
-                                className="px-2 py-0.5 text-xs font-mono bg-purple-active/20 dark:bg-purple-active text-white whitespace-nowrap"
-                              >
-                                {port}
-                              </span>
-                            ))}
-                            {remainingCount > 0 && (
-                              <span
-                                className="px-2 py-0.5 text-xs font-mono bg-gray-100 dark:bg-charcoal-darkest text-gray-600 dark:text-amber-muted whitespace-nowrap"
-                                title={ports.slice(maxVisible).join(', ')}
-                              >
-                                +{remainingCount}
-                              </span>
-                            )}
-                          </>
-                        )
-                      })()}
-                    </div>
-                  ) : (
-                    <span className="text-gray-400">—</span>
-                  )}
-                </td>
-                <td className="px-4 py-2 text-gray-600 dark:text-amber-primary">
-                  {service.description || '—'}
-                </td>
-                <td className="px-4 py-2">
+return (
+<>
+{visiblePorts.map((port, idx) => (
+<span
+key={idx}
+className="px-2 py-0.5 text-xs font-mono bg-purple-active/20 dark:bg-purple-active text-white whitespace-nowrap"
+>
+{port}
+</span>
+))}
+{remainingCount > 0 && (
+<span
+className="px-2 py-0.5 text-xs font-mono bg-gray-100 dark:bg-charcoal-darkest text-gray-600 dark:text-amber-muted whitespace-nowrap"
+title={ports.slice(maxVisible).join(', ')}
+>
++{remainingCount}
+</span>
+)}
+</>
+)
+})()}
+</div>
+) : (
+<span className="text-gray-400">—</span>
+)}
+</td>
+<td className="px-4 py-1 text-gray-600 dark:text-amber-primary">
+{service.description || '—'}
+</td>
+<td className="px-4 py-1">
 					<div className="flex items-center gap-2">
 						{canEdit && (
 							<button

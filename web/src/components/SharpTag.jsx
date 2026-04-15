@@ -1,5 +1,9 @@
 const colorConfig = {
-  synced: 'border-purple-active text-purple-active',
+  // Peer sync status colors (used by Peers.jsx)
+  synced: 'border-green-500 text-green-600 dark:text-green-400',
+  review: 'border-orange-500 text-orange-600 dark:text-orange-400',
+  pending_sync: 'border-blue-500 text-blue-600 dark:text-blue-400',
+  // Other status colors
   online: 'border-green-500 text-green-500 dark:text-green-400',
   offline: 'border-red-500 text-red-500 dark:text-red-400',
   pending: 'border-amber-500 text-amber-500 dark:text-amber-400',
