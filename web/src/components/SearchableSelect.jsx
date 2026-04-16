@@ -1,18 +1,61 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
+import { createPortal } from 'react-dom'
 import { ChevronDown, Check, Search } from 'lucide-react'
 
 export default function SearchableSelect({ options = [], value, category, onChange, placeholder = 'Select...', disabled = false }) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
+  const [dropdownPos, setDropdownPos] = useState({ top: 0, left: 0, width: 0 })
   const ref = useRef(null)
+  const dropdownRef = useRef(null)
 
   useEffect(() => {
     const handler = (e) => {
-      if (ref.current && !ref.current.contains(e.target)) setOpen(false)
+      if (ref.current && !ref.current.contains(e.target) && (!dropdownRef.current || !dropdownRef.current.contains(e.target))) setOpen(false)
     }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
   }, [])
+
+  const estimateDropdownHeight = () => 300 // Estimated max dropdown height
+
+  const calculateDropdownPosition = useCallback(() => {
+    if (!ref.current) return { top: 0, left: 0, width: 0, positionAbove: false }
+    const rect = ref.current.getBoundingClientRect()
+    const estimatedHeight = estimateDropdownHeight()
+    const spaceBelow = window.innerHeight - rect.bottom
+    const spaceAbove = rect.top
+    const positionAbove = spaceBelow < estimatedHeight && spaceAbove > spaceBelow
+    return {
+      top: positionAbove
+        ? rect.top + window.scrollY - estimatedHeight
+        : rect.bottom + window.scrollY,
+      left: rect.left + window.scrollX,
+      width: rect.width,
+      positionAbove
+    }
+  }, [])
+
+  useEffect(() => {
+    if (open && ref.current) {
+      setDropdownPos(calculateDropdownPosition())
+    }
+  }, [open, calculateDropdownPosition])
+
+  useEffect(() => {
+    if (!open) return
+    const updatePosition = () => {
+      if (ref.current) {
+        setDropdownPos(calculateDropdownPosition())
+      }
+    }
+    window.addEventListener('scroll', updatePosition, true)
+    window.addEventListener('resize', updatePosition)
+    return () => {
+      window.removeEventListener('scroll', updatePosition, true)
+      window.removeEventListener('resize', updatePosition)
+    }
+  }, [open, calculateDropdownPosition])
 
   const filtered = options.filter(opt => 
     opt.label.toLowerCase().includes(search.toLowerCase())
@@ -33,8 +76,12 @@ export default function SearchableSelect({ options = [], value, category, onChan
         </span>
         <ChevronDown className="w-4 h-4 text-gray-400" />
       </button>
-      {open && (
-        <div className="absolute z-50 mt-1 w-full bg-white dark:bg-charcoal-dark border border-gray-200 dark:border-gray-border rounded-none shadow-none">
+      {open && createPortal(
+        <div
+          ref={dropdownRef}
+          style={{ position: 'absolute', top: dropdownPos.top, left: dropdownPos.left, width: dropdownPos.width }}
+          className="z-[9999] bg-white dark:bg-charcoal-dark border border-gray-200 dark:border-gray-border rounded-none shadow-none"
+        >
           <div className="p-2 border-b border-gray-200 dark:border-gray-border">
             <div className="flex items-center gap-2 px-2">
               <Search className="w-4 h-4 text-gray-400" />
@@ -81,7 +128,8 @@ export default function SearchableSelect({ options = [], value, category, onChan
               })()
             )}
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   )

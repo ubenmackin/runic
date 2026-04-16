@@ -8,6 +8,7 @@ import { useAuth } from '../hooks/useAuth'
 import PageHeader from '../components/PageHeader'
 import AlertSettings from '../components/AlertSettings'
 import CollapsibleSection from '../components/CollapsibleSection'
+import ToggleSwitch from '../components/ToggleSwitch'
 import {
   alertTypes,
   transformPrefsToBackend,
@@ -649,7 +650,7 @@ const getKeyData = (keyType) => {
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
                     <span>Instance URL</span>
-                    <span className="text-xs text-gray-500 dark:text-amber-muted ml-1">- Used for email links and notifications</span>
+			<span className="text-xs text-gray-500 dark:text-amber-muted ml-1">- Used for email links</span>
                   </label>
                   <input
                     type="url"
@@ -661,18 +662,16 @@ const getKeyData = (keyType) => {
                     className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
                   />
                 </div>
-                    <div className="flex items-center">
-                      <input
-                        type="checkbox"
-                        id="email_enabled"
-                        checked={smtpFormData.enabled}
-                        onChange={(e) => setSmtpFormData({ ...smtpFormData, enabled: e.target.checked })}
-                        className="w-4 h-4 text-purple-600 border-gray-300 dark:border-gray-border rounded-none focus:ring-purple-500"
-                      />
-                      <label htmlFor="email_enabled" className="ml-2 text-sm text-gray-700 dark:text-amber-primary">
-                        Enable Email
-                      </label>
-                    </div>
+<div className="flex items-center gap-3">
+                  <ToggleSwitch
+                    checked={smtpFormData.enabled}
+                    onChange={(value) => setSmtpFormData({ ...smtpFormData, enabled: value })}
+                    aria-labelledby="enable-email-label"
+                  />
+                  <label id="enable-email-label" className="text-sm text-gray-700 dark:text-amber-primary">
+                    Enable Email
+                  </label>
+                </div>
 
                     {/* Row 2: SMTP Host | SMTP Port */}
                     <div>
@@ -753,18 +752,16 @@ const getKeyData = (keyType) => {
                         className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
                       />
                     </div>
-                    <div className="flex items-center">
-                      <input
-                        type="checkbox"
-                        id="use_tls"
-                        checked={smtpFormData.use_tls}
-                        onChange={(e) => setSmtpFormData({ ...smtpFormData, use_tls: e.target.checked })}
-                        className="w-4 h-4 text-purple-600 border-gray-300 dark:border-gray-border rounded-none focus:ring-purple-500"
-                      />
-                      <label htmlFor="use_tls" className="ml-2 text-sm text-gray-700 dark:text-amber-primary">
-                        Use TLS
-                      </label>
-                    </div>
+<div className="flex items-center gap-3">
+                  <ToggleSwitch
+                    checked={smtpFormData.use_tls}
+                    onChange={(value) => setSmtpFormData({ ...smtpFormData, use_tls: value })}
+                    aria-labelledby="use-tls-label"
+                  />
+                  <label id="use-tls-label" className="text-sm text-gray-700 dark:text-amber-primary">
+                    Use TLS
+                  </label>
+                </div>
                   </div>
                 )}
 

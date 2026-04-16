@@ -433,9 +433,9 @@ const { createMutation, updateMutation, deleteMutation } = useCrudMutations({
           <EmptyState title="No policies yet" message="Create policies to define firewall rules for your servers." action="New Policy" onAction={openAdd} />
         )
       ) : (
-<div className="bg-white dark:bg-charcoal-dark border border-gray-200 dark:border-gray-border overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+<div className="border border-gray-200 dark:border-gray-border overflow-hidden">
+<div className="overflow-x-auto">
+<table className="w-full text-sm">
 <thead className="bg-gray-50 dark:bg-charcoal-darkest border-b border-gray-200 dark:border-gray-border">
               <tr>
                 <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
@@ -481,7 +481,8 @@ const { createMutation, updateMutation, deleteMutation } = useCrudMutations({
               {paginatedPolicies.map((p) => (
 <tr key={p.id}>
 <td className="px-4 py-1">
-<ToggleSwitch checked={p.enabled} onChange={(v) => toggleMutation.mutate({ id: p.id, enabled: v })} />
+<ToggleSwitch checked={p.enabled} onChange={(v) => toggleMutation.mutate({ id: p.id, enabled: v })} aria-labelledby={`policy-${p.id}-enabled-label`} />
+<span id={`policy-${p.id}-enabled-label`} className="sr-only">{p.name} policy enabled</span>
 </td>
 <td className="px-4 py-1">
 <span className="font-medium text-gray-900 dark:text-light-neutral">
@@ -753,13 +754,13 @@ Docker Only
 
 {/* Policy Enabled Section */}
       <div className="p-4 bg-gray-50 dark:bg-charcoal-darkest border border-gray-200 dark:border-gray-border rounded-none">
-        <div className="flex items-center justify-between">
-          <div>
-            <label className="text-sm font-medium text-gray-900 dark:text-light-neutral">Policy enabled</label>
-            <p className="text-xs text-gray-500 dark:text-amber-muted mt-0.5">When disabled, this policy will not generate any firewall rules until re-enabled.</p>
-          </div>
-          <ToggleSwitch checked={formData.enabled} onChange={v => setFormData(d => ({ ...d, enabled: v }))} />
-        </div>
+<div className="flex items-center justify-between">
+<div>
+<label id="policy-enabled-label" className="text-sm font-medium text-gray-900 dark:text-light-neutral">Policy enabled</label>
+<p className="text-xs text-gray-500 dark:text-amber-muted mt-0.5">When disabled, this policy will not generate any firewall rules until re-enabled.</p>
+</div>
+<ToggleSwitch checked={formData.enabled} onChange={v => setFormData(d => ({ ...d, enabled: v }))} aria-labelledby="policy-enabled-label" />
+</div>
       </div>
 
                 <InlineError message={formErrors._general} />

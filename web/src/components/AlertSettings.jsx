@@ -123,22 +123,26 @@ Throttle (min)
               return (
 <tr key={alertType} className="hover:bg-gray-50 dark:hover:bg-charcoal-darkest/50">
 <td className="px-4 py-2 whitespace-nowrap">
-<div className="flex items-center gap-2">
-<Bell className="w-4 h-4 text-gray-400" />
-<span className="text-sm font-medium text-gray-900 dark:text-light-neutral">
-{ALERT_TYPE_LABELS[alertType]}
-</span>
-</div>
-</td>
-<td className="px-4 py-2 whitespace-nowrap text-center">
-<div className="flex justify-center">
-<ToggleSwitch
-checked={isEnabled}
-onChange={(checked) => handleUpdateRule(rule?.id, 'enabled', checked)}
-disabled={mutation.isPending}
-/>
-</div>
-</td>
+                        <div className="flex items-center gap-2">
+                            <Bell className="w-4 h-4 text-gray-400" />
+                            <span
+                                id={`alert-label-${alertType}`}
+                                className="text-sm font-medium text-gray-900 dark:text-light-neutral"
+                            >
+                                {ALERT_TYPE_LABELS[alertType]}
+                            </span>
+                        </div>
+                    </td>
+                    <td className="px-4 py-2 whitespace-nowrap text-center">
+                        <div className="flex justify-center">
+                            <ToggleSwitch
+                                checked={isEnabled}
+                                onChange={(checked) => handleUpdateRule(rule?.id, 'enabled', checked)}
+                                disabled={mutation.isPending}
+                                aria-labelledby={`alert-label-${alertType}`}
+                            />
+                        </div>
+                    </td>
 <td className="px-4 py-2 whitespace-nowrap">
 <div className="flex justify-center">
 <input

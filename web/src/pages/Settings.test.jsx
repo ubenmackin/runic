@@ -781,42 +781,43 @@ describe('Unified Timezone Selector', () => {
       expect(passwordInput).toHaveAttribute('type', 'text')
     })
 
-    test('Test email button works when Email is enabled', async () => {
-      const user = userEvent.setup()
-      apiClient.getNotificationPrefs.mockResolvedValue({
-        enabled_alerts: JSON.stringify([]),
-        quiet_hours_enabled: false,
-        digest_enabled: false,
-      })
-      // Set enabled: true so the button is not disabled
-      apiClient.getSMTPConfig.mockResolvedValue({ ...mockSMTPConfig, enabled: true })
-      apiClient.testSMTP.mockResolvedValue({ success: true })
-
-      renderWithProviders(<Settings />)
-
-      // Wait for Email config to load and form state to update
-      await waitFor(() => {
-        expect(screen.getByLabelText('Enable Email')).toBeChecked()
-      })
-
-      await waitFor(() => {
-        expect(screen.getByText('Test Email')).toBeInTheDocument()
-      })
-
-      const testEmailButton = screen.getByText('Test Email')
-      // Button should not be disabled since smtpFormData.enabled is true
-      expect(testEmailButton).not.toBeDisabled()
-
-      await user.click(testEmailButton)
-
-      await waitFor(() => {
-        expect(apiClient.testSMTP).toHaveBeenCalled()
-      })
-
-      await waitFor(() => {
-        expect(mockShowToast).toHaveBeenCalledWith('Test email sent successfully', 'success')
-      })
+  test('Test email button works when Email is enabled', async () => {
+    const user = userEvent.setup()
+    apiClient.getNotificationPrefs.mockResolvedValue({
+      enabled_alerts: JSON.stringify([]),
+      quiet_hours_enabled: false,
+      digest_enabled: false,
     })
+    // Set enabled: true so the button is not disabled
+    apiClient.getSMTPConfig.mockResolvedValue({ ...mockSMTPConfig, enabled: true })
+    apiClient.testSMTP.mockResolvedValue({ success: true })
+
+    renderWithProviders(<Settings />)
+
+    // Wait for Email config to load and form state to update
+    // ToggleSwitch renders as button[role="switch"] with aria-checked attribute
+    await waitFor(() => {
+      expect(screen.getByRole('switch', { name: /enable email/i })).toHaveAttribute('aria-checked', 'true')
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText('Test Email')).toBeInTheDocument()
+    })
+
+    const testEmailButton = screen.getByText('Test Email')
+    // Button should not be disabled since smtpFormData.enabled is true
+    expect(testEmailButton).not.toBeDisabled()
+
+    await user.click(testEmailButton)
+
+    await waitFor(() => {
+      expect(apiClient.testSMTP).toHaveBeenCalled()
+    })
+
+    await waitFor(() => {
+      expect(mockShowToast).toHaveBeenCalledWith('Test email sent successfully', 'success')
+    })
+  })
 
     test('Test email button is disabled when Email is not enabled', async () => {
       apiClient.getNotificationPrefs.mockResolvedValue({
@@ -836,28 +837,30 @@ describe('Unified Timezone Selector', () => {
       expect(testEmailButton).toBeDisabled()
     })
 
-    test('TLS and Enable Email toggles work', async () => {
-      const user = userEvent.setup()
-      apiClient.getNotificationPrefs.mockResolvedValue({
-        enabled_alerts: JSON.stringify([]),
-        quiet_hours_enabled: false,
-        digest_enabled: false,
-      })
-      apiClient.getSMTPConfig.mockResolvedValue({ ...mockSMTPConfig, use_tls: true, enabled: true })
-
-      renderWithProviders(<Settings />)
-
-      await waitFor(() => {
-        expect(screen.getByLabelText('Use TLS')).toBeInTheDocument()
-      })
-
-      expect(screen.getByLabelText('Use TLS')).toBeChecked()
-      expect(screen.getByLabelText('Enable Email')).toBeChecked()
-
-      // Toggle TLS
-      await user.click(screen.getByLabelText('Use TLS'))
-      expect(screen.getByLabelText('Use TLS')).not.toBeChecked()
+  test('TLS and Enable Email toggles work', async () => {
+    const user = userEvent.setup()
+    apiClient.getNotificationPrefs.mockResolvedValue({
+      enabled_alerts: JSON.stringify([]),
+      quiet_hours_enabled: false,
+      digest_enabled: false,
     })
+    apiClient.getSMTPConfig.mockResolvedValue({ ...mockSMTPConfig, use_tls: true, enabled: true })
+
+    renderWithProviders(<Settings />)
+
+    await waitFor(() => {
+      expect(screen.getByRole('switch', { name: /use tls/i })).toBeInTheDocument()
+    })
+
+    // Use TLS is now also a ToggleSwitch
+    expect(screen.getByRole('switch', { name: /use tls/i })).toHaveAttribute('aria-checked', 'true')
+    // Enable Email is a ToggleSwitch (button with role="switch")
+    expect(screen.getByRole('switch', { name: /enable email/i })).toHaveAttribute('aria-checked', 'true')
+
+    // Toggle TLS (now a ToggleSwitch)
+    await user.click(screen.getByRole('switch', { name: /use tls/i }))
+    expect(screen.getByRole('switch', { name: /use tls/i })).toHaveAttribute('aria-checked', 'false')
+  })
 
     test('editing Email fields updates form state', async () => {
       const user = userEvent.setup()
@@ -1298,31 +1301,31 @@ describe('Collapsible Sections', () => {
       expect(gridContainer).toBeInTheDocument()
     })
 
-    test('checkbox alignment with input fields in Email Configuration', async () => {
-      useAuthStore.setState({ role: 'admin' })
-      apiClient.getNotificationPrefs.mockResolvedValue({
-        enabled_alerts: JSON.stringify([]),
-        quiet_hours_enabled: false,
-        digest_enabled: false,
-      })
-      apiClient.getSMTPConfig.mockResolvedValue({
-        host: 'smtp.example.com',
-        port: 587,
-        enabled: true,
-      })
-      apiClient.api.get.mockResolvedValue({})
-      apiClient.getAlertRules.mockResolvedValue([])
-
-      renderWithProviders(<Settings />)
-
-      // Verify checkboxes align with input fields (both in same grid)
-      await waitFor(() => {
-        // Use TLS checkbox should be visible
-        expect(screen.getByLabelText('Use TLS')).toBeInTheDocument()
-        // SMTP Host input should be visible
-        expect(screen.getByLabelText('SMTP Host')).toBeInTheDocument()
-      })
+  test('checkbox alignment with input fields in Email Configuration', async () => {
+    useAuthStore.setState({ role: 'admin' })
+    apiClient.getNotificationPrefs.mockResolvedValue({
+      enabled_alerts: JSON.stringify([]),
+      quiet_hours_enabled: false,
+      digest_enabled: false,
     })
+    apiClient.getSMTPConfig.mockResolvedValue({
+      host: 'smtp.example.com',
+      port: 587,
+      enabled: true,
+    })
+    apiClient.api.get.mockResolvedValue({})
+    apiClient.getAlertRules.mockResolvedValue([])
+
+    renderWithProviders(<Settings />)
+
+    // Verify checkboxes align with input fields (both in same grid)
+    await waitFor(() => {
+      // Use TLS is now a ToggleSwitch
+      expect(screen.getByRole('switch', { name: /use tls/i })).toBeInTheDocument()
+      // SMTP Host input should be visible
+      expect(screen.getByLabelText('SMTP Host')).toBeInTheDocument()
+    })
+  })
   })
 
   describe('Summary Badges', () => {

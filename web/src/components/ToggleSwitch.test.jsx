@@ -155,15 +155,37 @@ describe('ToggleSwitch', () => {
   describe('accessibility', () => {
     test('has correct role', () => {
       render(<ToggleSwitch checked={false} onChange={() => {}} />)
-      
+
       expect(screen.getByRole('switch')).toBeInTheDocument()
     })
 
     test('has type="button" attribute', () => {
       render(<ToggleSwitch checked={false} onChange={() => {}} />)
-      
+
       const toggle = screen.getByRole('switch')
       expect(toggle).toHaveAttribute('type', 'button')
+    })
+
+    test('renders with aria-labelledby attribute when provided', () => {
+      render(
+        <>
+          <label id="test-label">Test Label</label>
+          <ToggleSwitch checked={false} onChange={() => {}} aria-labelledby="test-label" />
+        </>
+      )
+      const switchButton = screen.getByRole('switch')
+      expect(switchButton).toHaveAttribute('aria-labelledby', 'test-label')
+    })
+
+    test('allows screen readers to associate toggle with its label', () => {
+      render(
+        <>
+          <label id="test-label">Test Label</label>
+          <ToggleSwitch checked={false} onChange={() => {}} aria-labelledby="test-label" />
+        </>
+      )
+      // Verify the switch can be found by its accessible name
+      expect(screen.getByRole('switch', { name: 'Test Label' })).toBeInTheDocument()
     })
   })
 })

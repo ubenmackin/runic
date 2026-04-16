@@ -1,9 +1,12 @@
-export default function ToggleSwitch({ checked, onChange, disabled = false }) {
+import PropTypes from 'prop-types'
+
+export default function ToggleSwitch({ checked, onChange, disabled = false, 'aria-labelledby': ariaLabelledBy }) {
   return (
     <button
       type="button"
       role="switch"
       aria-checked={checked}
+      aria-labelledby={ariaLabelledBy}
       disabled={disabled}
       onClick={() => !disabled && onChange(!checked)}
       className={`
@@ -22,4 +25,11 @@ export default function ToggleSwitch({ checked, onChange, disabled = false }) {
       />
     </button>
   )
+}
+
+ToggleSwitch.propTypes = {
+  checked: PropTypes.bool.isRequired,
+  onChange: PropTypes.func.isRequired,
+  disabled: PropTypes.bool,
+  'aria-labelledby': PropTypes.string,
 }
