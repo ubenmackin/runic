@@ -15,6 +15,7 @@ import {
   transformPrefsFromBackend,
   transformSMTPFromBackend,
 } from '../utils/settingsTransform'
+import { isValidPort } from '../utils/validation'
 import {
   getSMTPSummary,
   getNotificationSummary,
@@ -100,7 +101,7 @@ export default function Settings() {
   // SMTP Config State
   const [smtpFormData, setSmtpFormData] = useState({
     host: '',
-    port: 587,
+    port: '587',
     username: '',
     password: '',
     use_tls: true,
@@ -108,6 +109,29 @@ export default function Settings() {
     enabled: false,
   })
   const [showPassword, setShowPassword] = useState(false)
+  const [portError, setPortError] = useState('')
+
+// Port validation function (uses shared utility, returns error message for UI)
+const validatePort = (value) => {
+  if (value === '') {
+    return 'Port must be a number'
+  }
+  if (!isValidPort(value)) {
+    return 'Port must be 1-65535'
+  }
+  return ''
+}
+
+  // Port input handler with validation
+  const handlePortChange = (e) => {
+    const value = e.target.value
+    // Only allow digits
+    if (!/^\d*$/.test(value)) return
+    // Limit to 5 digits
+    if (value.length > 5) return
+    setSmtpFormData({ ...smtpFormData, port: value })
+    setPortError(validatePort(value))
+  }
 
   // Initialize form data from backend response
   // Track if initial data has been loaded to prevent overwriting user edits on refetch
@@ -123,7 +147,9 @@ export default function Settings() {
   // Initialize form data from backend response
   useEffect(() => {
     if (smtpConfig && !smtpLoadedRef.current) {
-      setSmtpFormData(transformSMTPFromBackend(smtpConfig))
+      const transformedData = transformSMTPFromBackend(smtpConfig)
+      setSmtpFormData(transformedData)
+      setPortError(validatePort(transformedData.port))
       smtpLoadedRef.current = true
     }
   }, [smtpConfig])
@@ -662,15 +688,17 @@ const getKeyData = (keyType) => {
                     className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
                   />
                 </div>
-<div className="flex items-center gap-3">
-                  <ToggleSwitch
-                    checked={smtpFormData.enabled}
-                    onChange={(value) => setSmtpFormData({ ...smtpFormData, enabled: value })}
-                    aria-labelledby="enable-email-label"
-                  />
-                  <label id="enable-email-label" className="text-sm text-gray-700 dark:text-amber-primary">
-                    Enable Email
-                  </label>
+<div className="flex items-center justify-center h-full">
+                  <div className="flex items-center gap-3">
+                    <ToggleSwitch
+                      checked={smtpFormData.enabled}
+                      onChange={(value) => setSmtpFormData({ ...smtpFormData, enabled: value })}
+                      aria-labelledby="enable-email-label"
+                    />
+                    <label id="enable-email-label" className="text-sm text-gray-700 dark:text-amber-primary">
+                      Enable Email
+                    </label>
+                  </div>
                 </div>
 
                     {/* Row 2: SMTP Host | SMTP Port */}
@@ -687,19 +715,36 @@ const getKeyData = (keyType) => {
                         className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
                       />
                     </div>
-                    <div>
-                      <label htmlFor="smtp_port" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-                        SMTP Port
-                      </label>
-                      <input
-                        type="number"
-                        id="smtp_port"
-                        value={smtpFormData.port}
-                        onChange={(e) => setSmtpFormData({ ...smtpFormData, port: parseInt(e.target.value) || 587 })}
-                        defaultValue={587}
-                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-                      />
-                    </div>
+<div className="flex items-center gap-3">
+                  <div>
+                    <label htmlFor="smtp_port" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+                      SMTP Port
+                    </label>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  id="smtp_port"
+                  value={smtpFormData.port}
+                  onChange={handlePortChange}
+                  aria-invalid={!!portError}
+                  aria-describedby={portError ? 'smtp_port_error' : undefined}
+                  className="w-16 px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+                />
+                {portError && (
+                  <p id="smtp_port_error" className="text-xs text-red-500 mt-1">{portError}</p>
+                )}
+                  </div>
+						<div className="flex items-center gap-3">
+							<ToggleSwitch
+								checked={smtpFormData.use_tls}
+								onChange={(value) => setSmtpFormData({ ...smtpFormData, use_tls: value })}
+								aria-labelledby="use-tls-label"
+							/>
+							<label id="use-tls-label" className="text-sm text-gray-700 dark:text-amber-primary">
+								Use TLS
+							</label>
+						</div>
+                </div>
 
                     {/* Row 3: Username | Password */}
                     <div>
@@ -738,30 +783,21 @@ const getKeyData = (keyType) => {
                       </div>
                     </div>
 
-                    {/* Row 4: From Address | Use TLS */}
-                    <div>
-                      <label htmlFor="smtp_from_address" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-                        From Address
-                      </label>
-                      <input
-                        type="email"
-                        id="smtp_from_address"
-                        value={smtpFormData.from_address}
-                        onChange={(e) => setSmtpFormData({ ...smtpFormData, from_address: e.target.value })}
-                        placeholder="alerts@example.com"
-                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-                      />
-                    </div>
-<div className="flex items-center gap-3">
-                  <ToggleSwitch
-                    checked={smtpFormData.use_tls}
-                    onChange={(value) => setSmtpFormData({ ...smtpFormData, use_tls: value })}
-                    aria-labelledby="use-tls-label"
-                  />
-                  <label id="use-tls-label" className="text-sm text-gray-700 dark:text-amber-primary">
-                    Use TLS
+{/* Row 4: From Address | (empty) */}
+                <div>
+                  <label htmlFor="smtp_from_address" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+                    From Address
                   </label>
+                  <input
+                    type="email"
+                    id="smtp_from_address"
+                    value={smtpFormData.from_address}
+                    onChange={(e) => setSmtpFormData({ ...smtpFormData, from_address: e.target.value })}
+                    placeholder="alerts@example.com"
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+                  />
                 </div>
+                <div></div>
                   </div>
                 )}
 
@@ -779,13 +815,24 @@ const getKeyData = (keyType) => {
                     )}
                     Test Email
                   </button>
-                  <button
-                    onClick={() => updateSmtpMutation.mutate(smtpFormData)}
-                    disabled={updateSmtpMutation.isPending}
-                    className="inline-flex items-center gap-2 px-4 py-2 text-sm bg-purple-active hover:bg-purple-600 text-white rounded-none disabled:opacity-50 border border-purple-active/20 shadow-[0_0_15px_rgba(159,79,248,0.2)] transition-all"
-                  >
-                    {updateSmtpMutation.isPending ? 'Saving...' : 'Save Email Settings'}
-                  </button>
+<button
+          onClick={() => {
+            if (portError) {
+              showToast('Please fix validation errors', 'error')
+              return
+            }
+            // Convert port string to number for API
+            const payload = {
+              ...smtpFormData,
+              port: smtpFormData.port === '' ? 587 : parseInt(smtpFormData.port, 10),
+            }
+            updateSmtpMutation.mutate(payload)
+          }}
+                  disabled={updateSmtpMutation.isPending}
+                  className="inline-flex items-center gap-2 px-4 py-2 text-sm bg-purple-active hover:bg-purple-600 text-white rounded-none disabled:opacity-50 border border-purple-active/20 shadow-[0_0_15px_rgba(159,79,248,0.2)] transition-all"
+                >
+                  {updateSmtpMutation.isPending ? 'Saving...' : 'Save Email Settings'}
+                </button>
                 </div>
               </CollapsibleSection>
             </div>

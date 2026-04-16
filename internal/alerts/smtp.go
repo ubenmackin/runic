@@ -83,16 +83,45 @@ func (s *SMTPSender) SendHTML(to, subject, htmlBody string) error {
 }
 
 // SendAlertEmail sends an alert notification email using the Runic branding.
+// It creates a sanitized copy of the event to prevent email content injection
+// from untrusted input in Subject, PeerName, and Metadata string values.
+// The sanitization removes control characters that could be used for header injection.
+// Existing HTML escaping and header sanitization remain as defense-in-depth layers.
 func (s *SMTPSender) SendAlertEmail(to string, event *AlertEvent) error {
-	subject := fmt.Sprintf("[Runic] %s", event.Subject)
+	// Create a sanitized copy of the event to prevent injection attacks
+	sanitizedEvent := *event
+
+	// Sanitize Subject field
+	sanitizedSubject, _ := SanitizeAlertInput(event.Subject, 0)
+	sanitizedEvent.Subject = sanitizedSubject
+
+	// Sanitize PeerName field
+	sanitizedPeerName, _ := SanitizeAlertInput(event.PeerName, 0)
+	sanitizedEvent.PeerName = sanitizedPeerName
+
+	// Sanitize Metadata map string values
+	if event.Metadata != nil {
+		sanitizedMetadata := make(map[string]interface{}, len(event.Metadata))
+		for k, v := range event.Metadata {
+			if strVal, ok := v.(string); ok {
+				safeVal, _ := SanitizeAlertInput(strVal, 0)
+				sanitizedMetadata[k] = safeVal
+				continue
+			}
+			sanitizedMetadata[k] = v
+		}
+		sanitizedEvent.Metadata = sanitizedMetadata
+	}
+
+	subject := fmt.Sprintf("[Runic] %s", sanitizedEvent.Subject)
 	if subject == "[Runic] " {
-		subject = s.generateAlertSubject(event)
+		subject = s.generateAlertSubject(&sanitizedEvent)
 	}
 
 	// Get instance URL for footer links
 	instanceURL := GetInstanceURL(context.Background(), s.database)
 
-	htmlBody := s.generateAlertHTML(event, instanceURL)
+	htmlBody := s.generateAlertHTML(&sanitizedEvent, instanceURL)
 	return s.SendHTML(to, subject, htmlBody)
 }
 

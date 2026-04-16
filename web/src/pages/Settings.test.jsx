@@ -502,9 +502,7 @@ describe('Unified Timezone Selector', () => {
       expect(screen.getByLabelText('Timezone')).toBeInTheDocument()
     })
 
-    const _timezoneSelect = screen.getByLabelText('Timezone')
-
-    // Check that all expected timezone options exist
+// Check that all expected timezone options exist
     expect(screen.getByRole('option', { name: 'UTC' })).toBeInTheDocument()
     expect(screen.getByRole('option', { name: 'Eastern (New York)' })).toBeInTheDocument()
     expect(screen.getByRole('option', { name: 'Central (Chicago)' })).toBeInTheDocument()
@@ -1391,6 +1389,443 @@ describe('Collapsible Sections', () => {
 
       // Jump dropdown should not be visible
       expect(screen.queryByDisplayValue('Jump to section...')).not.toBeInTheDocument()
+    })
+  })
+
+  describe('Port Validation', () => {
+    const mockSMTPConfigWithPort = {
+      host: 'smtp.example.com',
+      port: 587,
+      username: 'alerts@example.com',
+      password_set: true,
+      use_tls: true,
+      from_address: 'alerts@example.com',
+      enabled: true,
+    }
+
+    test('port input is text type with numeric inputMode', async () => {
+      useAuthStore.setState({ role: 'admin' })
+      apiClient.getNotificationPrefs.mockResolvedValue({
+        enabled_alerts: JSON.stringify([]),
+        quiet_hours_enabled: false,
+        digest_enabled: false,
+      })
+      apiClient.getSMTPConfig.mockResolvedValue(mockSMTPConfigWithPort)
+      apiClient.api.get.mockResolvedValue({ url: 'https://runic.example.com' })
+      apiClient.getAlertRules.mockResolvedValue([])
+
+      renderWithProviders(<Settings />)
+
+      await waitFor(() => {
+        expect(screen.getByLabelText('SMTP Port')).toBeInTheDocument()
+      })
+
+      const portInput = screen.getByLabelText('SMTP Port')
+      // Port input uses text type with inputMode numeric for better mobile UX
+      expect(portInput).toHaveAttribute('type', 'text')
+      expect(portInput).toHaveAttribute('inputMode', 'numeric')
+    })
+
+    test('non-numeric input is prevented', async () => {
+      const user = userEvent.setup()
+      useAuthStore.setState({ role: 'admin' })
+      apiClient.getNotificationPrefs.mockResolvedValue({
+        enabled_alerts: JSON.stringify([]),
+        quiet_hours_enabled: false,
+        digest_enabled: false,
+      })
+      apiClient.getSMTPConfig.mockResolvedValue(mockSMTPConfigWithPort)
+      apiClient.api.get.mockResolvedValue({ url: 'https://runic.example.com' })
+      apiClient.getAlertRules.mockResolvedValue([])
+
+      renderWithProviders(<Settings />)
+
+      await waitFor(() => {
+        expect(screen.getByLabelText('SMTP Port')).toBeInTheDocument()
+      })
+
+      const portInput = screen.getByLabelText('SMTP Port')
+      const initialValue = portInput.value
+
+      // Try to type non-numeric characters - handler should prevent this
+      await user.type(portInput, 'abc')
+      // The input should still have only numeric value (unchanged)
+      expect(portInput.value).toMatch(/^\d*$/)
+    })
+
+    test('port longer than 5 digits is prevented', async () => {
+      const user = userEvent.setup()
+      useAuthStore.setState({ role: 'admin' })
+      apiClient.getNotificationPrefs.mockResolvedValue({
+        enabled_alerts: JSON.stringify([]),
+        quiet_hours_enabled: false,
+        digest_enabled: false,
+      })
+      apiClient.getSMTPConfig.mockResolvedValue(mockSMTPConfigWithPort)
+      apiClient.api.get.mockResolvedValue({ url: 'https://runic.example.com' })
+      apiClient.getAlertRules.mockResolvedValue([])
+
+      renderWithProviders(<Settings />)
+
+      await waitFor(() => {
+        expect(screen.getByLabelText('SMTP Port')).toBeInTheDocument()
+      })
+
+      const portInput = screen.getByLabelText('SMTP Port')
+
+      // Try to type more than 5 digits
+      await user.clear(portInput)
+      await user.type(portInput, '123456')
+      // Should be limited to 5 digits
+      expect(portInput.value.length).toBeLessThanOrEqual(5)
+    })
+
+    test('port input allows valid port numbers', async () => {
+      const user = userEvent.setup()
+      useAuthStore.setState({ role: 'admin' })
+      apiClient.getNotificationPrefs.mockResolvedValue({
+        enabled_alerts: JSON.stringify([]),
+        quiet_hours_enabled: false,
+        digest_enabled: false,
+      })
+      apiClient.getSMTPConfig.mockResolvedValue(mockSMTPConfigWithPort)
+      apiClient.api.get.mockResolvedValue({ url: 'https://runic.example.com' })
+      apiClient.getAlertRules.mockResolvedValue([])
+
+      renderWithProviders(<Settings />)
+
+      await waitFor(() => {
+        expect(screen.getByLabelText('SMTP Port')).toBeInTheDocument()
+      })
+
+      const portInput = screen.getByLabelText('SMTP Port')
+
+      // Test valid port numbers
+      await user.clear(portInput)
+      await user.type(portInput, '25')
+      expect(portInput.value).toBe('25')
+
+      await user.clear(portInput)
+      await user.type(portInput, '587')
+      expect(portInput.value).toBe('587')
+
+      await user.clear(portInput)
+      await user.type(portInput, '465')
+      expect(portInput.value).toBe('465')
+    })
+
+    test('port input accepts ports up to 5 digits', async () => {
+      const user = userEvent.setup()
+      useAuthStore.setState({ role: 'admin' })
+      apiClient.getNotificationPrefs.mockResolvedValue({
+        enabled_alerts: JSON.stringify([]),
+        quiet_hours_enabled: false,
+        digest_enabled: false,
+      })
+      apiClient.getSMTPConfig.mockResolvedValue(mockSMTPConfigWithPort)
+      apiClient.api.get.mockResolvedValue({ url: 'https://runic.example.com' })
+      apiClient.getAlertRules.mockResolvedValue([])
+
+      renderWithProviders(<Settings />)
+
+      await waitFor(() => {
+        expect(screen.getByLabelText('SMTP Port')).toBeInTheDocument()
+      })
+
+      const portInput = screen.getByLabelText('SMTP Port')
+
+      // Test 5-digit port (max valid is 65535)
+      await user.clear(portInput)
+      await user.type(portInput, '65535')
+      expect(portInput.value).toBe('65535')
+
+      // Test 4-digit port
+      await user.clear(portInput)
+      await user.type(portInput, '1234')
+      expect(portInput.value).toBe('1234')
+    })
+
+    test('port input handles boundary values correctly', async () => {
+      const user = userEvent.setup()
+      useAuthStore.setState({ role: 'admin' })
+      apiClient.getNotificationPrefs.mockResolvedValue({
+        enabled_alerts: JSON.stringify([]),
+        quiet_hours_enabled: false,
+        digest_enabled: false,
+      })
+      apiClient.getSMTPConfig.mockResolvedValue(mockSMTPConfigWithPort)
+      apiClient.updateSMTPConfig.mockResolvedValue({ success: true })
+      apiClient.api.get.mockResolvedValue({ url: 'https://runic.example.com' })
+      apiClient.getAlertRules.mockResolvedValue([])
+
+      renderWithProviders(<Settings />)
+
+      await waitFor(() => {
+        expect(screen.getByLabelText('SMTP Port')).toBeInTheDocument()
+      })
+
+      const portInput = screen.getByLabelText('SMTP Port')
+
+      // Test minimum valid port
+      await user.clear(portInput)
+      await user.type(portInput, '1')
+      expect(portInput.value).toBe('1')
+
+      // Test maximum valid port
+      await user.clear(portInput)
+      await user.type(portInput, '65535')
+      expect(portInput.value).toBe('65535')
+    })
+
+    test('invalid port shows error message', async () => {
+      const user = userEvent.setup()
+      useAuthStore.setState({ role: 'admin' })
+      apiClient.getNotificationPrefs.mockResolvedValue({
+        enabled_alerts: JSON.stringify([]),
+        quiet_hours_enabled: false,
+        digest_enabled: false,
+      })
+      apiClient.getSMTPConfig.mockResolvedValue(mockSMTPConfigWithPort)
+      apiClient.api.get.mockResolvedValue({ url: 'https://runic.example.com' })
+      apiClient.getAlertRules.mockResolvedValue([])
+
+      renderWithProviders(<Settings />)
+
+      await waitFor(() => {
+        expect(screen.getByLabelText('SMTP Port')).toBeInTheDocument()
+      })
+
+      const portInput = screen.getByLabelText('SMTP Port')
+
+      // Enter an invalid port (out of range)
+      await user.clear(portInput)
+      await user.type(portInput, '70000')
+
+      // Should show error message
+      await waitFor(() => {
+        expect(screen.getByText(/Port must be 1-65535/)).toBeInTheDocument()
+      })
+    })
+
+    test('empty port shows error message', async () => {
+      const user = userEvent.setup()
+      useAuthStore.setState({ role: 'admin' })
+      apiClient.getNotificationPrefs.mockResolvedValue({
+        enabled_alerts: JSON.stringify([]),
+        quiet_hours_enabled: false,
+        digest_enabled: false,
+      })
+      apiClient.getSMTPConfig.mockResolvedValue(mockSMTPConfigWithPort)
+      apiClient.api.get.mockResolvedValue({ url: 'https://runic.example.com' })
+      apiClient.getAlertRules.mockResolvedValue([])
+
+      renderWithProviders(<Settings />)
+
+      await waitFor(() => {
+        expect(screen.getByLabelText('SMTP Port')).toBeInTheDocument()
+      })
+
+      const portInput = screen.getByLabelText('SMTP Port')
+
+      // Clear the port input
+      await user.clear(portInput)
+
+      // Should show error message for empty/invalid port
+      await waitFor(() => {
+        expect(screen.getByText(/Port must be a number/)).toBeInTheDocument()
+      })
+    })
+
+    test('save is blocked when port has validation error', async () => {
+      const user = userEvent.setup()
+      useAuthStore.setState({ role: 'admin' })
+      apiClient.getNotificationPrefs.mockResolvedValue({
+        enabled_alerts: JSON.stringify([]),
+        quiet_hours_enabled: false,
+        digest_enabled: false,
+      })
+      apiClient.getSMTPConfig.mockResolvedValue(mockSMTPConfigWithPort)
+      apiClient.updateSMTPConfig.mockResolvedValue({ success: true })
+      apiClient.api.get.mockResolvedValue({ url: 'https://runic.example.com' })
+      apiClient.getAlertRules.mockResolvedValue([])
+
+      renderWithProviders(<Settings />)
+
+      await waitFor(() => {
+        expect(screen.getByLabelText('SMTP Port')).toBeInTheDocument()
+      })
+
+      // Enter an invalid port
+      const portInput = screen.getByLabelText('SMTP Port')
+      await user.clear(portInput)
+      await user.type(portInput, '70000')
+
+      // Wait for error to appear
+      await waitFor(() => {
+        expect(screen.getByText(/Port must be 1-65535/)).toBeInTheDocument()
+      })
+
+      // Try to save - should be blocked
+      const saveButton = screen.getByText('Save Email Settings')
+      await user.click(saveButton)
+
+      // API should not be called due to validation error
+      expect(apiClient.updateSMTPConfig).not.toHaveBeenCalled()
+    })
+
+    test('save button works with valid port', async () => {
+      const user = userEvent.setup()
+      useAuthStore.setState({ role: 'admin' })
+      apiClient.getNotificationPrefs.mockResolvedValue({
+        enabled_alerts: JSON.stringify([]),
+        quiet_hours_enabled: false,
+        digest_enabled: false,
+      })
+      apiClient.getSMTPConfig.mockResolvedValue(mockSMTPConfigWithPort)
+      apiClient.updateSMTPConfig.mockResolvedValue({ success: true })
+      apiClient.api.get.mockResolvedValue({ url: 'https://runic.example.com' })
+      apiClient.getAlertRules.mockResolvedValue([])
+
+      renderWithProviders(<Settings />)
+
+      await waitFor(() => {
+        expect(screen.getByText('Save Email Settings')).toBeInTheDocument()
+      })
+
+      const saveButton = screen.getByText('Save Email Settings')
+      expect(saveButton).not.toBeDisabled()
+
+      await user.click(saveButton)
+
+      await waitFor(() => {
+        expect(apiClient.updateSMTPConfig).toHaveBeenCalled()
+      })
+    })
+  })
+
+  describe('Email Configuration Layout', () => {
+    const mockSMTPConfigForLayout = {
+      host: 'smtp.example.com',
+      port: 587,
+      username: 'alerts@example.com',
+      password_set: true,
+      use_tls: true,
+      from_address: 'alerts@example.com',
+      enabled: true,
+    }
+
+    test('Use TLS toggle is positioned in the Port row', async () => {
+      useAuthStore.setState({ role: 'admin' })
+      apiClient.getNotificationPrefs.mockResolvedValue({
+        enabled_alerts: JSON.stringify([]),
+        quiet_hours_enabled: false,
+        digest_enabled: false,
+      })
+      apiClient.getSMTPConfig.mockResolvedValue(mockSMTPConfigForLayout)
+      apiClient.api.get.mockResolvedValue({ url: 'https://runic.example.com' })
+      apiClient.getAlertRules.mockResolvedValue([])
+
+      renderWithProviders(<Settings />)
+
+      // Wait for the email section to be visible
+      await waitFor(() => {
+        expect(screen.getByLabelText('SMTP Port')).toBeInTheDocument()
+      })
+
+      // Verify Use TLS toggle is rendered (it's in the same row as SMTP Port)
+      // Use TLS doesn't have aria-labelledby, so we need to find it differently
+      const useTLSLabel = screen.getByText('Use TLS')
+      expect(useTLSLabel).toBeInTheDocument()
+
+      // Find the ToggleSwitch by looking for the button near the Use TLS label
+      const useTLSContainer = useTLSLabel.closest('div')
+      const toggleButton = useTLSContainer.querySelector('button[role="switch"]')
+      expect(toggleButton).toBeInTheDocument()
+    })
+
+    test('Enable Email toggle is rendered correctly in Row 1', async () => {
+      useAuthStore.setState({ role: 'admin' })
+      apiClient.getNotificationPrefs.mockResolvedValue({
+        enabled_alerts: JSON.stringify([]),
+        quiet_hours_enabled: false,
+        digest_enabled: false,
+      })
+      apiClient.getSMTPConfig.mockResolvedValue(mockSMTPConfigForLayout)
+      apiClient.api.get.mockResolvedValue({ url: 'https://runic.example.com' })
+      apiClient.getAlertRules.mockResolvedValue([])
+
+      renderWithProviders(<Settings />)
+
+      // Wait for the form to load
+      await waitFor(() => {
+        expect(screen.getByLabelText('SMTP Host')).toBeInTheDocument()
+      })
+
+      // Verify Enable Email toggle is rendered
+      const enableEmailLabel = screen.getByText('Enable Email')
+      expect(enableEmailLabel).toBeInTheDocument()
+
+      // Find the ToggleSwitch by looking for the button near the Enable Email label
+      const enableEmailContainer = enableEmailLabel.closest('div')
+      const toggleButton = enableEmailContainer.querySelector('button[role="switch"]')
+      expect(toggleButton).toBeInTheDocument()
+    })
+
+    test('SMTP Port input has correct attributes', async () => {
+      useAuthStore.setState({ role: 'admin' })
+      apiClient.getNotificationPrefs.mockResolvedValue({
+        enabled_alerts: JSON.stringify([]),
+        quiet_hours_enabled: false,
+        digest_enabled: false,
+      })
+      apiClient.getSMTPConfig.mockResolvedValue(mockSMTPConfigForLayout)
+      apiClient.api.get.mockResolvedValue({ url: 'https://runic.example.com' })
+      apiClient.getAlertRules.mockResolvedValue([])
+
+      renderWithProviders(<Settings />)
+
+      await waitFor(() => {
+        expect(screen.getByLabelText('SMTP Port')).toBeInTheDocument()
+      })
+
+      // Verify SMTP Port input is present with correct type
+      const portInput = screen.getByLabelText('SMTP Port')
+      expect(portInput).toBeInTheDocument()
+      // Port input uses text type with inputMode numeric
+      expect(portInput).toHaveAttribute('type', 'text')
+      expect(portInput).toHaveAttribute('inputMode', 'numeric')
+    })
+
+    test('form fields are in correct order', async () => {
+      useAuthStore.setState({ role: 'admin' })
+      apiClient.getNotificationPrefs.mockResolvedValue({
+        enabled_alerts: JSON.stringify([]),
+        quiet_hours_enabled: false,
+        digest_enabled: false,
+      })
+      apiClient.getSMTPConfig.mockResolvedValue(mockSMTPConfigForLayout)
+      apiClient.api.get.mockResolvedValue({ url: 'https://runic.example.com' })
+      apiClient.getAlertRules.mockResolvedValue([])
+
+      renderWithProviders(<Settings />)
+
+      // Wait for the form to load
+      await waitFor(() => {
+        expect(screen.getByLabelText('SMTP Host')).toBeInTheDocument()
+      })
+
+      // Verify all expected form fields are present
+      // Instance URL input (label doesn't have htmlFor, so use input id)
+      expect(document.getElementById('instance_url')).toBeInTheDocument()
+      expect(screen.getByLabelText('SMTP Host')).toBeInTheDocument()
+      expect(screen.getByLabelText('SMTP Port')).toBeInTheDocument()
+      expect(screen.getByLabelText('Username')).toBeInTheDocument()
+      expect(screen.getByLabelText('Password')).toBeInTheDocument()
+      expect(screen.getByLabelText('From Address')).toBeInTheDocument()
+
+      // Verify toggle labels are present
+      expect(screen.getByText('Enable Email')).toBeInTheDocument()
+      expect(screen.getByText('Use TLS')).toBeInTheDocument()
     })
   })
 })

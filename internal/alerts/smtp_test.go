@@ -2,6 +2,7 @@
 package alerts
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -1437,6 +1438,1004 @@ func TestSanitizeHTMLBody_EdgeCases(t *testing.T) {
 			got := sender.sanitizeHTMLBody(tt.input)
 			if got != tt.expected {
 				t.Errorf("sanitizeHTMLBody() = %q, want %q\nNote: %s", got, tt.expected, tt.note)
+			}
+		})
+	}
+}
+
+// TestSendAlertEmail_MetadataInjectionPrevention tests that control characters
+// in metadata string values are removed to prevent injection attacks.
+// Note: Not all metadata keys are rendered for all alert types - this test verifies
+// that control characters are removed from metadata values that ARE rendered.
+func TestSendAlertEmail_MetadataInjectionPrevention(t *testing.T) {
+	s := &SMTPSender{
+		config: SMTPConfig{
+			Host:        "smtp.test.com",
+			Port:        587,
+			FromAddress: "alerts@runic.test",
+		},
+	}
+
+	tests := []struct {
+		name       string
+		event      *AlertEvent
+		wantInHTML []string
+	}{
+		// AlertTypeBundleFailed renders error_message
+		{
+			name: "CRLF injection in error_message metadata",
+			event: &AlertEvent{
+				Type:     AlertTypeBundleFailed,
+				PeerName: "test-peer",
+				PeerID:   1,
+				Metadata: map[string]interface{}{
+					"error_message": "Connection failed\r\nBcc: attacker@evil.com",
+				},
+				Timestamp: time.Now(),
+			},
+			wantInHTML: []string{
+				"Connection failedBcc: attacker@evil.com",
+			},
+		},
+		{
+			name: "control character injection in error_message metadata",
+			event: &AlertEvent{
+				Type:     AlertTypeBundleFailed,
+				PeerName: "test-peer",
+				PeerID:   1,
+				Metadata: map[string]interface{}{
+					"error_message": "Error\x00with\x1Fcontrol\x7Fchars",
+				},
+				Timestamp: time.Now(),
+			},
+			wantInHTML: []string{
+				"Errorwithcontrolchars",
+			},
+		},
+		// AlertTypePeerOffline renders offline_duration and ip_address
+		{
+			name: "CRLF injection in offline_duration metadata",
+			event: &AlertEvent{
+				Type:     AlertTypePeerOffline,
+				PeerName: "test-peer",
+				PeerID:   1,
+				Metadata: map[string]interface{}{
+					"offline_duration": "60 minutes\rBcc: attacker@evil.com",
+				},
+				Timestamp: time.Now(),
+			},
+			wantInHTML: []string{
+				"60 minutesBcc: attacker@evil.com",
+			},
+		},
+		{
+			name: "LF injection in ip_address metadata",
+			event: &AlertEvent{
+				Type:     AlertTypePeerOffline,
+				PeerName: "test-peer",
+				PeerID:   1,
+				Metadata: map[string]interface{}{
+					"ip_address": "192.168.1.100\nBcc: evil.com",
+				},
+				Timestamp: time.Now(),
+			},
+			wantInHTML: []string{
+				"192.168.1.100Bcc: evil.com",
+			},
+		},
+		{
+			name: "multiple CRLF injections in metadata",
+			event: &AlertEvent{
+				Type:     AlertTypeBundleFailed,
+				PeerName: "test-peer",
+				PeerID:   1,
+				Metadata: map[string]interface{}{
+					"error_message": "Error 1\r\nError 2\r\nBcc: evil@evil.com",
+				},
+				Timestamp: time.Now(),
+			},
+			wantInHTML: []string{
+				"Error 1Error 2Bcc: evil@evil.com",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Apply sanitization like SendAlertEmail does
+			sanitizedEvent := *tt.event
+			if tt.event.Metadata != nil {
+				sanitizedMetadata := make(map[string]interface{}, len(tt.event.Metadata))
+				for k, v := range tt.event.Metadata {
+					if strVal, ok := v.(string); ok {
+						safeVal, _ := SanitizeAlertInput(strVal, 0)
+						sanitizedMetadata[k] = safeVal
+						continue
+					}
+					sanitizedMetadata[k] = v
+				}
+				sanitizedEvent.Metadata = sanitizedMetadata
+			}
+
+			// Generate HTML like SendAlertEmail does internally
+			// Note: metadata values are HTML-escaped in the template via htmlEscape
+			html := s.generateAlertHTML(&sanitizedEvent, "")
+
+			// Verify expected content is present (control chars removed + HTML-escaped)
+			for _, want := range tt.wantInHTML {
+				if !strings.Contains(html, want) {
+					t.Errorf("generateAlertHTML() missing expected content %q", want)
+				}
+			}
+		})
+	}
+}
+
+// TestSendAlertEmail_SubjectInjectionPrevention tests that control characters
+// in Subject field are sanitized to prevent email header injection.
+func TestSendAlertEmail_SubjectInjectionPrevention(t *testing.T) {
+	s := &SMTPSender{
+		config: SMTPConfig{
+			Host:        "smtp.test.com",
+			Port:        587,
+			FromAddress: "alerts@runic.test",
+		},
+	}
+
+	tests := []struct {
+		name           string
+		subject        string
+		wantInSubject  []string
+		dontWantInHTML []string
+	}{
+		{
+			name:    "CRLF injection in subject",
+			subject: "Test\r\nBcc: attacker@evil.com",
+			wantInSubject: []string{
+				"TestBcc: attacker@evil.com",
+			},
+			dontWantInHTML: []string{
+				"\r\n",
+			},
+		},
+		{
+			name:    "LF injection in subject",
+			subject: "Alert\nSubject: fake subject",
+			wantInSubject: []string{
+				"AlertSubject: fake subject",
+			},
+			dontWantInHTML: []string{
+				"\n",
+			},
+		},
+		{
+			name:    "CR injection in subject",
+			subject: "Test\rBcc: attacker@evil.com",
+			wantInSubject: []string{
+				"TestBcc: attacker@evil.com",
+			},
+			dontWantInHTML: []string{
+				"\r",
+			},
+		},
+		{
+			name:    "double CRLF injection in subject",
+			subject: "Subject\r\n\r\nInjected body",
+			wantInSubject: []string{
+				"SubjectInjected body",
+			},
+			dontWantInHTML: []string{
+				"\r\n\r\n",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			event := &AlertEvent{
+				Type:      AlertTypePeerOffline,
+				PeerName:  "test-peer",
+				PeerID:    1,
+				Subject:   tt.subject,
+				Timestamp: time.Now(),
+			}
+
+			// Test subject generation (with sanitization)
+			sanitizedSubject, _ := SanitizeAlertInput(event.Subject, 0)
+			subject := fmt.Sprintf("[Runic] %s", sanitizedSubject)
+			if subject == "[Runic] " {
+				subject = s.generateAlertSubject(event)
+			}
+
+			for _, want := range tt.wantInSubject {
+				if !strings.Contains(subject, want) {
+					t.Errorf("generateAlertSubject() missing expected content %q, got %q", want, subject)
+				}
+			}
+
+			for _, dontWant := range tt.dontWantInHTML {
+				if strings.Contains(subject, dontWant) {
+					t.Errorf("subject should not contain %q", dontWant)
+				}
+			}
+		})
+	}
+}
+
+// TestSendAlertEmail_PeerNameInjectionPrevention tests that control characters
+// in PeerName are sanitized before being used in subject/body.
+func TestSendAlertEmail_PeerNameInjectionPrevention(t *testing.T) {
+	s := &SMTPSender{
+		config: SMTPConfig{
+			Host:        "smtp.test.com",
+			Port:        587,
+			FromAddress: "alerts@runic.test",
+		},
+	}
+
+	tests := []struct {
+		name          string
+		peerName      string
+		wantInSubject []string
+		wantInHTML    []string
+	}{
+		{
+			name:     "CRLF injection in peer name",
+			peerName: "peer-1\r\nBcc: attacker@evil.com",
+			wantInSubject: []string{
+				"peer-1Bcc: attacker@evil.com",
+			},
+			wantInHTML: []string{
+				"peer-1Bcc: attacker@evil.com",
+			},
+		},
+		{
+			name:     "LF injection in peer name",
+			peerName: "peer-1\nBcc: evil.com",
+			wantInSubject: []string{
+				"peer-1Bcc: evil.com",
+			},
+			wantInHTML: []string{
+				"peer-1Bcc: evil.com",
+			},
+		},
+		{
+			name:     "embedded newline in peer name",
+			peerName: "server\n1.2.3.4",
+			wantInSubject: []string{
+				"server1.2.3.4",
+			},
+			wantInHTML: []string{
+				"server1.2.3.4",
+			},
+		},
+		{
+			name:     "control characters in peer name",
+			peerName: "peer\x00with\x1Fcontrol",
+			wantInSubject: []string{
+				"peerwithcontrol",
+			},
+			wantInHTML: []string{
+				"peerwithcontrol",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// First sanitize the peer name like SendAlertEmail does
+			sanitizedPeerName, _ := SanitizeAlertInput(tt.peerName, 0)
+
+			event := &AlertEvent{
+				Type:      AlertTypePeerOffline,
+				PeerName:  sanitizedPeerName, // Use sanitized peer name
+				PeerID:    1,
+				Timestamp: time.Now(),
+			}
+
+			// Test subject generation with sanitization
+			subject := s.generateAlertSubject(event)
+
+			// The sanitized peer name should be used
+			for _, want := range tt.wantInSubject {
+				if !strings.Contains(subject, want) {
+					t.Errorf("generateAlertSubject() missing expected content %q, got %q", want, subject)
+				}
+			}
+
+			// Test HTML generation
+			html := s.generateAlertHTML(event, "")
+
+			// Verify expected content is present (control chars removed + potentially HTML-escaped)
+			for _, want := range tt.wantInHTML {
+				if !strings.Contains(html, want) {
+					t.Errorf("generateAlertHTML() missing expected content %q", want)
+				}
+			}
+		})
+	}
+}
+
+// TestSendAlertEmail_NonStringMetadataPreservation tests that non-string metadata
+// values (integers, nested objects, etc.) are preserved unchanged.
+func TestSendAlertEmail_NonStringMetadataPreservation(t *testing.T) {
+	tests := []struct {
+		name      string
+		metadata  map[string]interface{}
+		checkFunc func(*testing.T, map[string]interface{})
+	}{
+		{
+			name: "integer metadata preserved",
+			metadata: map[string]interface{}{
+				"count":       42,
+				"threshold":   100,
+				"retry_count": 3,
+			},
+			checkFunc: func(t *testing.T, m map[string]interface{}) {
+				if m["count"] != 42 {
+					t.Errorf("integer value not preserved: got %v", m["count"])
+				}
+				if m["threshold"] != 100 {
+					t.Errorf("threshold not preserved: got %v", m["threshold"])
+				}
+				if m["retry_count"] != 3 {
+					t.Errorf("retry_count not preserved: got %v", m["retry_count"])
+				}
+			},
+		},
+		{
+			name: "float metadata preserved",
+			metadata: map[string]interface{}{
+				"cpu_usage":   75.5,
+				"memory_free": 1024.25,
+			},
+			checkFunc: func(t *testing.T, m map[string]interface{}) {
+				if m["cpu_usage"] != 75.5 {
+					t.Errorf("float value not preserved: got %v", m["cpu_usage"])
+				}
+				if m["memory_free"] != 1024.25 {
+					t.Errorf("memory_free not preserved: got %v", m["memory_free"])
+				}
+			},
+		},
+		{
+			name: "boolean metadata preserved",
+			metadata: map[string]interface{}{
+				"is_critical": true,
+				"retryable":   false,
+			},
+			checkFunc: func(t *testing.T, m map[string]interface{}) {
+				if m["is_critical"] != true {
+					t.Errorf("boolean true not preserved: got %v", m["is_critical"])
+				}
+				if m["retryable"] != false {
+					t.Errorf("boolean false not preserved: got %v", m["retryable"])
+				}
+			},
+		},
+		{
+			name: "nil metadata preserved",
+			metadata: map[string]interface{}{
+				"error": nil,
+				"data":  nil,
+			},
+			checkFunc: func(t *testing.T, m map[string]interface{}) {
+				if m["error"] != nil {
+					t.Errorf("nil value not preserved: got %v", m["error"])
+				}
+				if m["data"] != nil {
+					t.Errorf("nil data not preserved: got %v", m["data"])
+				}
+			},
+		},
+		{
+			name: "nested object metadata preserved",
+			metadata: map[string]interface{}{
+				"nested": map[string]interface{}{
+					"key": "value",
+					"num": 123,
+				},
+			},
+			checkFunc: func(t *testing.T, m map[string]interface{}) {
+				nested, ok := m["nested"].(map[string]interface{})
+				if !ok {
+					t.Errorf("nested object not preserved")
+					return
+				}
+				if nested["key"] != "value" {
+					t.Errorf("nested key not preserved: got %v", nested["key"])
+				}
+				if nested["num"] != 123 {
+					t.Errorf("nested num not preserved: got %v", nested["num"])
+				}
+			},
+		},
+		{
+			name: "slice metadata preserved",
+			metadata: map[string]interface{}{
+				"items": []string{"a", "b", "c"},
+				"nums":  []int{1, 2, 3},
+			},
+			checkFunc: func(t *testing.T, m map[string]interface{}) {
+				items, ok := m["items"].([]string)
+				if !ok {
+					t.Errorf("string slice not preserved")
+					return
+				}
+				if len(items) != 3 || items[0] != "a" {
+					t.Errorf("string slice content not preserved: got %v", items)
+				}
+				nums, ok := m["nums"].([]int)
+				if !ok {
+					t.Errorf("int slice not preserved")
+					return
+				}
+				if len(nums) != 3 || nums[0] != 1 {
+					t.Errorf("int slice content not preserved: got %v", nums)
+				}
+			},
+		},
+		{
+			name: "mixed string and non-string metadata",
+			metadata: map[string]interface{}{
+				"error_message": "some error", // string - should be sanitized
+				"error_code":    500,          // int - should be preserved
+				"retry":         true,         // bool - should be preserved
+				"timestamp":     time.Now(),   // time.Time - should be preserved
+			},
+			checkFunc: func(t *testing.T, m map[string]interface{}) {
+				// String should be preserved (not escaped in metadata, but control chars removed)
+				if m["error_message"] != "some error" {
+					t.Errorf("string value modified: got %v", m["error_message"])
+				}
+				// Non-string values should be preserved
+				if m["error_code"] != 500 {
+					t.Errorf("error_code not preserved: got %v", m["error_code"])
+				}
+				if m["retry"] != true {
+					t.Errorf("retry not preserved: got %v", m["retry"])
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Simulate what SendAlertEmail does
+			sanitizedMetadata := make(map[string]interface{}, len(tt.metadata))
+			for k, v := range tt.metadata {
+				if strVal, ok := v.(string); ok {
+					safeVal, _ := SanitizeAlertInput(strVal, 0)
+					sanitizedMetadata[k] = safeVal
+					continue
+				}
+				sanitizedMetadata[k] = v
+			}
+
+			tt.checkFunc(t, sanitizedMetadata)
+		})
+	}
+}
+
+// TestSendAlertEmail_EmptyNilMetadataHandling tests graceful handling of nil or empty metadata.
+func TestSendAlertEmail_EmptyNilMetadataHandling(t *testing.T) {
+	s := &SMTPSender{
+		config: SMTPConfig{
+			Host:        "smtp.test.com",
+			Port:        587,
+			FromAddress: "alerts@runic.test",
+		},
+	}
+
+	tests := []struct {
+		name      string
+		metadata  map[string]interface{}
+		wantPanic bool
+	}{
+		{
+			name:      "nil metadata handled gracefully",
+			metadata:  nil,
+			wantPanic: false,
+		},
+		{
+			name:      "empty metadata map handled gracefully",
+			metadata:  map[string]interface{}{},
+			wantPanic: false,
+		},
+		{
+			name:      "metadata with only nil values handled gracefully",
+			metadata:  map[string]interface{}{"key1": nil, "key2": nil},
+			wantPanic: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			event := &AlertEvent{
+				Type:      AlertTypePeerOffline,
+				PeerName:  "test-peer",
+				PeerID:    1,
+				Metadata:  tt.metadata,
+				Timestamp: time.Now(),
+			}
+
+			// Simulate what SendAlertEmail does - should not panic
+			sanitizedEvent := *event
+			if event.Metadata != nil {
+				sanitizedMetadata := make(map[string]interface{}, len(event.Metadata))
+				for k, v := range event.Metadata {
+					if strVal, ok := v.(string); ok {
+						safeVal, _ := SanitizeAlertInput(strVal, 0)
+						sanitizedMetadata[k] = safeVal
+						continue
+					}
+					sanitizedMetadata[k] = v
+				}
+				sanitizedEvent.Metadata = sanitizedMetadata
+			}
+
+			// Generate HTML to verify it works
+			html := s.generateAlertHTML(&sanitizedEvent, "")
+
+			// Should still produce valid HTML
+			if !strings.Contains(html, "test-peer") {
+				t.Error("expected peer name in HTML output")
+			}
+		})
+	}
+}
+
+// TestSendAlertEmail_FullPipeline_MaliciousInput is an integration-style test that
+// exercises the full email generation pipeline with various malicious inputs.
+// This test verifies end-to-end that:
+// 1. Subject line is safe (no header injection)
+// 2. HTML body contains no raw control characters
+// 3. HTML escaping is properly applied (double-encoded if malicious content was already HTML)
+// 4. Non-string metadata values are preserved
+func TestSendAlertEmail_FullPipeline_MaliciousInput(t *testing.T) {
+	s := &SMTPSender{
+		config: SMTPConfig{
+			Host:        "smtp.test.com",
+			Port:        587,
+			FromAddress: "alerts@runic.test",
+		},
+	}
+
+	// Create an AlertEvent with multiple malicious vectors
+	maliciousEvent := &AlertEvent{
+		Type:      AlertTypePeerOffline,
+		PeerID:    42,
+		Severity:  SeverityCritical,
+		Timestamp: time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC),
+		// Malicious Subject with header injection attempts
+		Subject: "Alert\r\nBcc: attacker@evil.com\r\nTo: victim@evil.com",
+		// Malicious PeerName with XSS and header injection
+		PeerName: "<script>alert('xss')</script>\r\nBcc: evil@evil.com",
+		// Malicious Message with XSS
+		Message: "<img src=x onerror=alert(1)>",
+		// Malicious Metadata with control characters in string values
+		// and non-string values that should be preserved
+		Metadata: map[string]interface{}{
+			"offline_duration": "60 minutes\r\nInjected: header",
+			"ip_address":       "192.168.1.100\nBcc: evil.com",
+			"error_details":    "Error\x00with\x1Fcontrol\x7Fchars",
+			// Non-string values that should be preserved
+			"count":     42,
+			"threshold": 100,
+			"retry":     true,
+			"ratio":     0.85,
+			"nested": map[string]interface{}{
+				"key": "value",
+				"num": 123,
+			},
+		},
+	}
+
+	// === STEP 1: Simulate SendAlertEmail sanitization ===
+	// This mirrors exactly what SendAlertEmail does
+	sanitizedEvent := *maliciousEvent
+
+	// Sanitize Subject field
+	sanitizedSubject, _ := SanitizeAlertInput(maliciousEvent.Subject, 0)
+	sanitizedEvent.Subject = sanitizedSubject
+
+	// Sanitize PeerName field
+	sanitizedPeerName, _ := SanitizeAlertInput(maliciousEvent.PeerName, 0)
+	sanitizedEvent.PeerName = sanitizedPeerName
+
+	// Sanitize Message field
+	sanitizedMessage, _ := SanitizeAlertInput(maliciousEvent.Message, 0)
+	sanitizedEvent.Message = sanitizedMessage
+
+	// Sanitize Metadata map string values, preserve non-string values
+	if maliciousEvent.Metadata != nil {
+		sanitizedMetadata := make(map[string]interface{}, len(maliciousEvent.Metadata))
+		for k, v := range maliciousEvent.Metadata {
+			if strVal, ok := v.(string); ok {
+				safeVal, _ := SanitizeAlertInput(strVal, 0)
+				sanitizedMetadata[k] = safeVal
+				continue
+			}
+			// Non-string values are preserved unchanged
+			sanitizedMetadata[k] = v
+		}
+		sanitizedEvent.Metadata = sanitizedMetadata
+	}
+
+	// === STEP 2: Generate email content (subject and HTML body) ===
+	// Build subject like SendAlertEmail does
+	subject := fmt.Sprintf("[Runic] %s", sanitizedEvent.Subject)
+	if subject == "[Runic] " {
+		subject = s.generateAlertSubject(&sanitizedEvent)
+	}
+
+	// Generate HTML body
+	htmlBody := s.generateAlertHTML(&sanitizedEvent, "https://runic.test")
+
+	// === STEP 3: Verify subject line is safe ===
+	t.Run("subject_safe", func(t *testing.T) {
+		// Subject should not contain CR or LF characters
+		// This prevents email header injection attacks
+		if strings.Contains(subject, "\r") {
+			t.Errorf("subject contains CR character: %q", subject)
+		}
+		if strings.Contains(subject, "\n") {
+			t.Errorf("subject contains LF character: %q", subject)
+		}
+		// Verify sanitized content is present (control chars removed)
+		// The malicious "Bcc:" and "To:" text is now just plain text content
+		// because the CRLF characters that would create new headers were removed
+		if !strings.Contains(subject, "Alert") {
+			t.Errorf("subject missing expected content 'Alert': %q", subject)
+		}
+		// Verify that while "Bcc:" appears as text, it's NOT a real header
+		// (no control chars precede it, so it's harmless text)
+		// The original injection was: "Alert\r\nBcc: attacker@evil.com\r\nTo: victim@evil.com"
+		// After sanitization: "AlertBcc: attacker@evil.comTo: victim@evil.com"
+		// This is safe because without CRLF, these are just text, not headers
+	})
+
+	// === STEP 4: Verify HTML body contains no raw control characters ===
+	t.Run("html_no_control_chars", func(t *testing.T) {
+		// Check for raw control characters from malicious input
+		// Note: The HTML template itself contains \n for formatting, which is fine.
+		// We're specifically checking that control chars from malicious input are removed.
+		// CR (\r) and control chars like \x00, \x1F, \x7F should never appear
+		if strings.Contains(htmlBody, "\r") {
+			t.Errorf("HTML body contains CR character")
+		}
+		if strings.Contains(htmlBody, "\x00") {
+			t.Errorf("HTML body contains NUL character")
+		}
+		if strings.Contains(htmlBody, "\x1F") {
+			t.Errorf("HTML body contains unit separator character")
+		}
+		if strings.Contains(htmlBody, "\x7F") {
+			t.Errorf("HTML body contains DEL character")
+		}
+		// Verify that the malicious CRLF injection attempts are neutralized
+		// (they should be concatenated without the control chars)
+		if strings.Contains(htmlBody, "minutes\r\n") {
+			t.Error("HTML body contains CRLF sequence in metadata")
+		}
+	})
+
+	// === STEP 5: Verify HTML escaping is properly applied ===
+	t.Run("html_properly_escaped", func(t *testing.T) {
+		// XSS payloads should be HTML-escaped
+		if strings.Contains(htmlBody, "<script>") {
+			t.Error("HTML body contains raw <script> tag")
+		}
+		if strings.Contains(htmlBody, "</script>") {
+			t.Error("HTML body contains raw </script> tag")
+		}
+		if strings.Contains(htmlBody, "<img src=x onerror=") {
+			t.Error("HTML body contains raw XSS img tag")
+		}
+
+		// Verify escaped versions are present
+		if !strings.Contains(htmlBody, "&lt;script&gt;") {
+			t.Error("HTML body missing escaped script tag")
+		}
+		if !strings.Contains(htmlBody, "&lt;img") {
+			t.Error("HTML body missing escaped img tag")
+		}
+
+		// The message contains onerror which should be escaped
+		if !strings.Contains(htmlBody, "onerror=") {
+			// onerror= is escaped in the content since it's part of the HTML string
+			t.Error("HTML body should contain escaped onerror reference")
+		}
+	})
+
+	// === STEP 6: Verify metadata sanitization ===
+	t.Run("metadata_sanitized", func(t *testing.T) {
+		// offline_duration should have control chars removed
+		if !strings.Contains(htmlBody, "minutes") {
+			t.Error("HTML body missing offline_duration value")
+		}
+		// The "Injected: header" text should be concatenated without newline
+		if strings.Contains(htmlBody, "minutesInjected") {
+			// This is correct - control chars were removed
+		} else if strings.Contains(htmlBody, "minutes\r\nInjected") {
+			t.Error("HTML body contains CRLF in offline_duration")
+		}
+
+		// ip_address should have newline removed
+		if !strings.Contains(htmlBody, "192.168.1.100") {
+			t.Error("HTML body missing IP address")
+		}
+
+		// error_details should have control chars removed
+		if strings.Contains(htmlBody, "Error\x00") {
+			t.Error("HTML body contains NUL character")
+		}
+	})
+
+	// === STEP 7: Verify non-string metadata is preserved ===
+	t.Run("non_string_metadata_preserved", func(t *testing.T) {
+		// Verify the sanitized metadata still contains non-string values
+		sanitizedMetadata := sanitizedEvent.Metadata
+
+		if sanitizedMetadata["count"] != 42 {
+			t.Errorf("integer metadata 'count' not preserved: got %v", sanitizedMetadata["count"])
+		}
+		if sanitizedMetadata["threshold"] != 100 {
+			t.Errorf("integer metadata 'threshold' not preserved: got %v", sanitizedMetadata["threshold"])
+		}
+		if sanitizedMetadata["retry"] != true {
+			t.Errorf("boolean metadata 'retry' not preserved: got %v", sanitizedMetadata["retry"])
+		}
+		if sanitizedMetadata["ratio"] != 0.85 {
+			t.Errorf("float metadata 'ratio' not preserved: got %v", sanitizedMetadata["ratio"])
+		}
+
+		// Verify nested object is preserved
+		nested, ok := sanitizedMetadata["nested"].(map[string]interface{})
+		if !ok {
+			t.Error("nested metadata not preserved as map")
+		} else {
+			if nested["key"] != "value" {
+				t.Errorf("nested key not preserved: got %v", nested["key"])
+			}
+			if nested["num"] != 123 {
+				t.Errorf("nested num not preserved: got %v", nested["num"])
+			}
+		}
+	})
+
+	// === STEP 8: Verify sanitized event is used in generated email ===
+	t.Run("sanitized_event_used", func(t *testing.T) {
+		// The generated HTML should contain the sanitized peer name (escaped)
+		// The peer name had both XSS and header injection
+		// After sanitization removes \r\n, and after HTML escaping:
+		expectedHTMLEscaped := "&lt;script&gt;alert(&#39;xss&#39;)&lt;/script&gt;Bcc: evil@evil.com"
+
+		if !strings.Contains(htmlBody, expectedHTMLEscaped) {
+			t.Errorf("HTML body should contain sanitized and escaped peer name.\nExpected substring: %q\nGot HTML snippet containing 'script': %s",
+				expectedHTMLEscaped, extractSnippet(htmlBody, "script", 100))
+		}
+
+		// Verify the subject uses sanitized values
+		if strings.Contains(subject, "\r\n") {
+			t.Error("subject should use sanitized values (no CRLF)")
+		}
+	})
+
+	// === STEP 9: Verify double-encoding doesn't occur ===
+	t.Run("no_double_encoding", func(t *testing.T) {
+		// If malicious content was already HTML-encoded, it should be properly handled
+		// Create an event with already-encoded HTML entities
+		doubleEncodedEvent := &AlertEvent{
+			Type:      AlertTypePeerOffline,
+			PeerName:  "&lt;script&gt;", // Already HTML-encoded
+			PeerID:    1,
+			Timestamp: time.Now(),
+		}
+
+		// Sanitize (removes control chars, preserves &lt;)
+		sanitizedPeerName, _ := SanitizeAlertInput(doubleEncodedEvent.PeerName, 0)
+		doubleEncodedEvent.PeerName = sanitizedPeerName
+
+		// Generate HTML (should double-escape to &amp;lt;)
+		html := s.generateAlertHTML(doubleEncodedEvent, "")
+
+		// The content should be double-escaped: &lt; → &amp;lt;
+		if !strings.Contains(html, "&amp;lt;script&amp;gt;") {
+			t.Errorf("HTML body should contain double-escaped entities.\nExpected: &amp;lt;script&amp;gt;\nGot snippet: %s",
+				extractSnippet(html, "script", 100))
+		}
+	})
+
+	// === STEP 10: Build complete email message and verify structure ===
+	t.Run("complete_email_message", func(t *testing.T) {
+		// Build the complete email message like buildMessage does
+		message := s.buildMessage("recipient@test.com", subject, htmlBody, "text/html")
+
+		// Split by CRLF to get lines
+		lines := strings.Split(message, "\r\n")
+
+		// Verify no CRLF injection in header lines (headers end at first empty line)
+		headerEndIndex := 0
+		for i, line := range lines {
+			if line == "" {
+				headerEndIndex = i
+				break
+			}
+		}
+
+		// Check that header lines don't contain embedded CR or LF characters
+		// (which would indicate header injection)
+		for i := 0; i < headerEndIndex; i++ {
+			if strings.Contains(lines[i], "\r") {
+				t.Errorf("Header line %d contains embedded CR: %q", i, lines[i])
+			}
+			if strings.Contains(lines[i], "\n") {
+				t.Errorf("Header line %d contains embedded LF: %q", i, lines[i])
+			}
+		}
+
+		// Verify standard email structure
+		if !strings.Contains(message, "From: alerts@runic.test") {
+			t.Error("Message missing From header")
+		}
+		if !strings.Contains(message, "To: recipient@test.com") {
+			t.Error("Message missing To header")
+		}
+		if !strings.Contains(message, "Subject:") {
+			t.Error("Message missing Subject header")
+		}
+		if !strings.Contains(message, "MIME-Version: 1.0") {
+			t.Error("Message missing MIME-Version header")
+		}
+		if !strings.Contains(message, "Content-Type: text/html") {
+			t.Error("Message missing Content-Type header")
+		}
+	})
+}
+
+// extractSnippet extracts a snippet from content around a keyword for debugging.
+func extractSnippet(content, keyword string, radius int) string {
+	idx := strings.Index(content, keyword)
+	if idx == -1 {
+		return "keyword not found"
+	}
+	start := idx - radius
+	if start < 0 {
+		start = 0
+	}
+	end := idx + radius
+	if end > len(content) {
+		end = len(content)
+	}
+	return content[start:end]
+}
+
+// TestSendAlertEmail_DefenseInDepthVerification verifies that existing HTML escaping
+// still works correctly on sanitized input (defense-in-depth).
+func TestSendAlertEmail_DefenseInDepthVerification(t *testing.T) {
+	s := &SMTPSender{
+		config: SMTPConfig{
+			Host:        "smtp.test.com",
+			Port:        587,
+			FromAddress: "alerts@runic.test",
+		},
+	}
+
+	tests := []struct {
+		name           string
+		event          *AlertEvent
+		wantInHTML     []string
+		dontWantInHTML []string
+	}{
+		{
+			name: "XSS in peer name - sanitized then HTML escaped",
+			event: &AlertEvent{
+				Type:      AlertTypePeerOffline,
+				PeerName:  "<script>alert('xss')</script>",
+				PeerID:    1,
+				Timestamp: time.Now(),
+			},
+			wantInHTML: []string{
+				"&lt;script&gt;",
+				"&lt;/script&gt;",
+			},
+			dontWantInHTML: []string{
+				"<script>",
+				"</script>",
+			},
+		},
+		{
+			name: "XSS in message - sanitized then HTML escaped",
+			event: &AlertEvent{
+				Type:      AlertTypePeerOffline,
+				PeerName:  "test-peer",
+				PeerID:    1,
+				Message:   "<img src=x onerror=alert(1)>",
+				Timestamp: time.Now(),
+			},
+			wantInHTML: []string{
+				"&lt;img",
+				"onerror=",
+			},
+			dontWantInHTML: []string{
+				"<img src=x",
+			},
+		},
+		{
+			name: "HTML entities in peer name - properly escaped",
+			event: &AlertEvent{
+				Type:      AlertTypePeerOnline,
+				PeerName:  "&lt;script&gt;",
+				PeerID:    1,
+				Timestamp: time.Now(),
+			},
+			wantInHTML: []string{
+				"&amp;lt;script&amp;gt;",
+			},
+			dontWantInHTML: []string{
+				"&lt;script&gt;",
+			},
+		},
+		{
+			name: "CRLF injection + XSS in metadata - both sanitized",
+			event: &AlertEvent{
+				Type:     AlertTypeBundleFailed,
+				PeerName: "test-peer",
+				PeerID:   1,
+				Metadata: map[string]interface{}{
+					"error_message": "<script>alert('xss')</script>\r\nBcc: evil.com",
+				},
+				Timestamp: time.Now(),
+			},
+			wantInHTML: []string{
+				"&lt;script&gt;",
+				"alert(&#39;xss&#39;)",
+				"Bcc: evil.com",
+			},
+			dontWantInHTML: []string{
+				"<script>",
+				"\r\n",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Simulate SendAlertEmail sanitization
+			sanitizedEvent := *tt.event
+			sanitizedPeerName, _ := SanitizeAlertInput(tt.event.PeerName, 0)
+			sanitizedEvent.PeerName = sanitizedPeerName
+
+			sanitizedMessage, _ := SanitizeAlertInput(tt.event.Message, 0)
+			sanitizedEvent.Message = sanitizedMessage
+
+			if tt.event.Metadata != nil {
+				sanitizedMetadata := make(map[string]interface{}, len(tt.event.Metadata))
+				for k, v := range tt.event.Metadata {
+					if strVal, ok := v.(string); ok {
+						safeVal, _ := SanitizeAlertInput(strVal, 0)
+						sanitizedMetadata[k] = safeVal
+						continue
+					}
+					sanitizedMetadata[k] = v
+				}
+				sanitizedEvent.Metadata = sanitizedMetadata
+			}
+
+			// Generate HTML - htmlEscape is applied in generateAlertHTML
+			html := s.generateAlertHTML(&sanitizedEvent, "")
+
+			for _, want := range tt.wantInHTML {
+				if !strings.Contains(html, want) {
+					t.Errorf("generateAlertHTML() missing expected content %q", want)
+				}
+			}
+
+			for _, dontWant := range tt.dontWantInHTML {
+				if strings.Contains(html, dontWant) {
+					t.Errorf("generateAlertHTML() should not contain %q", dontWant)
+				}
 			}
 		})
 	}

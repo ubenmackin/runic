@@ -397,27 +397,27 @@ describe('settingsTransform', () => {
   })
 
 describe('transformSMTPFromBackend', () => {
-    test('transforms backend config to frontend form state', () => {
-      const smtpConfig = {
-        host: 'smtp.example.com',
-        port: 587,
-        username: 'alerts',
-        password_set: true,
-        use_tls: true,
-        from_address: 'alerts@example.com',
-        enabled: true,
-      }
+  test('transforms backend config to frontend form state', () => {
+    const smtpConfig = {
+      host: 'smtp.example.com',
+      port: 587,
+      username: 'alerts',
+      password_set: true,
+      use_tls: true,
+      from_address: 'alerts@example.com',
+      enabled: true,
+    }
 
-      const result = transformSMTPFromBackend(smtpConfig)
+    const result = transformSMTPFromBackend(smtpConfig)
 
-      expect(result.host).toBe('smtp.example.com')
-      expect(result.port).toBe(587)
-      expect(result.username).toBe('alerts')
-      expect(result.password).toBe('') // Password should never be populated
-      expect(result.use_tls).toBe(true)
-      expect(result.from_address).toBe('alerts@example.com')
-      expect(result.enabled).toBe(true)
-    })
+    expect(result.host).toBe('smtp.example.com')
+    expect(result.port).toBe('587')
+    expect(result.username).toBe('alerts')
+    expect(result.password).toBe('') // Password should never be populated
+    expect(result.use_tls).toBe(true)
+    expect(result.from_address).toBe('alerts@example.com')
+    expect(result.enabled).toBe(true)
+  })
 
     test('never populates password from backend', () => {
       const smtpConfig = {
@@ -430,29 +430,29 @@ describe('transformSMTPFromBackend', () => {
       expect(result.password).toBe('')
     })
 
-    test('handles null/undefined input', () => {
-      const result = transformSMTPFromBackend(null)
+  test('handles null/undefined input', () => {
+    const result = transformSMTPFromBackend(null)
 
-      expect(result).toEqual({
-        host: '',
-        port: 587,
-        username: '',
-        password: '',
-        use_tls: true,
-        from_address: '',
-        enabled: false,
-      })
+    expect(result).toEqual({
+      host: '',
+      port: '587',
+      username: '',
+      password: '',
+      use_tls: true,
+      from_address: '',
+      enabled: false,
     })
+  })
 
-    test('uses default values for missing fields', () => {
-      const smtpConfig = {}
+  test('uses default values for missing fields', () => {
+    const smtpConfig = {}
 
-      const result = transformSMTPFromBackend(smtpConfig)
+    const result = transformSMTPFromBackend(smtpConfig)
 
-      expect(result.port).toBe(587)
-      expect(result.use_tls).toBe(true)
-      expect(result.enabled).toBe(false)
-    })
+    expect(result.port).toBe('587')
+    expect(result.use_tls).toBe(true)
+    expect(result.enabled).toBe(false)
+  })
 
     test('handles undefined boolean values with defaults', () => {
       const smtpConfig = {

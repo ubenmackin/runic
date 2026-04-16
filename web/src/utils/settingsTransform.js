@@ -120,7 +120,7 @@ export function transformSMTPFromBackend(smtpConfig) {
   if (!smtpConfig) {
     return {
       host: '',
-      port: 587,
+      port: '587',
       username: '',
       password: '',
       use_tls: true,
@@ -131,7 +131,7 @@ export function transformSMTPFromBackend(smtpConfig) {
 
   return {
     host: smtpConfig.host || '',
-    port: smtpConfig.port || 587,
+    port: smtpConfig.port ? String(smtpConfig.port) : '587',
     username: smtpConfig.username || '',
     password: '', // Never populate password from fetched config
     use_tls: smtpConfig.use_tls ?? true,
