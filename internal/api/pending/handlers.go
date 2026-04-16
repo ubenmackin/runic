@@ -619,10 +619,10 @@ func (h *Handler) PushAllRules(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	database := h.DB
 
-	// Get ALL peers from the database
-	rows, err := database.QueryContext(ctx, "SELECT id, hostname FROM peers ORDER BY hostname")
+	// Get all agent-based peers from the database (excluding manual peers)
+	rows, err := database.QueryContext(ctx, "SELECT id, hostname FROM peers WHERE is_manual = 0 ORDER BY hostname")
 	if err != nil {
-		log.ErrorContext(ctx, "failed to query all peers", "error", err)
+		log.ErrorContext(ctx, "failed to query agent-based peers", "error", err)
 		common.InternalError(w)
 		return
 	}

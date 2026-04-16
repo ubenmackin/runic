@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"runic/internal/api/common"
 	"runic/internal/api/events"
 	"runic/internal/engine"
 	"runic/internal/testutil"
@@ -1086,5 +1087,62 @@ func TestPushAllRules_CreatePushJobPeersError(t *testing.T) {
 
 	if w.Code != http.StatusInternalServerError {
 		t.Errorf("expected status %d, got %d", http.StatusInternalServerError, w.Code)
+	}
+}
+
+func TestPushAllRules_ExcludesManualPeers(t *testing.T) {
+	db, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	// Insert an agent-based peer (is_manual = 0)
+	db.Exec("INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, is_manual) VALUES (?, ?, ?, ?, ?)",
+		"agent-peer", "10.0.0.1", "key1", "hmac1", 0)
+
+	// Insert a manual peer (is_manual = 1)
+	db.Exec("INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, is_manual) VALUES (?, ?, ?, ?, ?)",
+		"manual-peer", "10.0.0.2", "key2", "hmac2", 1)
+
+	// Create PushWorker to handle enqueue without panic
+	sseHub := events.NewSSEHub()
+	pushWorker := common.NewPushWorker(db, nil, nil, sseHub)
+	handler := NewHandler(db, nil, sseHub, pushWorker)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/pending/push-all", nil)
+
+	handler.PushAllRules(w, r)
+
+	if w.Code != http.StatusAccepted {
+		t.Errorf("expected status %d, got %d", http.StatusAccepted, w.Code)
+	}
+
+	var response map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+
+	// Verify total_peers is 1 (only the agent-based peer)
+	if int(response["total_peers"].(float64)) != 1 {
+		t.Errorf("expected total_peers 1, got %v", response["total_peers"])
+	}
+
+	// Verify the push job has only the agent-based peer
+	jobID := response["job_id"].(string)
+	var peerCount int
+	err := db.QueryRow("SELECT COUNT(*) FROM push_job_peers WHERE job_id = ?", jobID).Scan(&peerCount)
+	if err != nil {
+		t.Fatalf("failed to query push_job_peers: %v", err)
+	}
+	if peerCount != 1 {
+		t.Errorf("expected 1 peer in push job, got %d", peerCount)
+	}
+
+	// Verify only the agent-based peer's ID is in the push job
+	var peerID int
+	err = db.QueryRow("SELECT peer_id FROM push_job_peers WHERE job_id = ?", jobID).Scan(&peerID)
+	if err != nil {
+		t.Fatalf("failed to query peer_id from push_job_peers: %v", err)
+	}
+	if peerID != 1 {
+		t.Errorf("expected peer_id 1 (agent-peer), got %d", peerID)
 	}
 }
