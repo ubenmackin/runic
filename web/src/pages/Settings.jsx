@@ -688,63 +688,64 @@ const getKeyData = (keyType) => {
                     className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
                   />
                 </div>
-<div className="flex items-center justify-center h-full">
-                  <div className="flex items-center gap-3">
-                    <ToggleSwitch
-                      checked={smtpFormData.enabled}
-                      onChange={(value) => setSmtpFormData({ ...smtpFormData, enabled: value })}
-                      aria-labelledby="enable-email-label"
-                    />
-                    <label id="enable-email-label" className="text-sm text-gray-700 dark:text-amber-primary">
-                      Enable Email
-                    </label>
-                  </div>
-                </div>
+{/* min-h-[42px]: py-2 (16px padding) + input height (~26px) for toggle alignment */}
+<div className="flex items-center gap-3 min-h-[42px]">
+<ToggleSwitch
+checked={smtpFormData.enabled}
+onChange={(value) => setSmtpFormData({ ...smtpFormData, enabled: value })}
+aria-labelledby="enable-email-label"
+/>
+<label id="enable-email-label" className="text-sm text-gray-700 dark:text-amber-primary">
+Enable Email
+</label>
+</div>
 
-                    {/* Row 2: SMTP Host | SMTP Port */}
-                    <div>
-                      <label htmlFor="smtp_host" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-                        SMTP Host
-                      </label>
-                      <input
-                        type="text"
-                        id="smtp_host"
-                        value={smtpFormData.host}
-                        onChange={(e) => setSmtpFormData({ ...smtpFormData, host: e.target.value })}
-                        placeholder="smtp.example.com"
-                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-                      />
-                    </div>
+{/* Row 2: SMTP Host | SMTP Port */}
+<div>
+<label htmlFor="smtp_host" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+SMTP Host
+</label>
+<input
+type="text"
+id="smtp_host"
+value={smtpFormData.host}
+onChange={(e) => setSmtpFormData({ ...smtpFormData, host: e.target.value })}
+placeholder="smtp.example.com"
+className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+/>
+</div>
+{/* Row 2 uses flex layout to keep port input and TLS toggle on same line; gap-3 provides tighter spacing for related inline elements */}
 <div className="flex items-center gap-3">
-                  <div>
-                    <label htmlFor="smtp_port" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-                      SMTP Port
-                    </label>
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  id="smtp_port"
-                  value={smtpFormData.port}
-                  onChange={handlePortChange}
-                  aria-invalid={!!portError}
-                  aria-describedby={portError ? 'smtp_port_error' : undefined}
-                  className="w-16 px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-                />
-                {portError && (
-                  <p id="smtp_port_error" className="text-xs text-red-500 mt-1">{portError}</p>
-                )}
-                  </div>
-						<div className="flex items-center gap-3">
-							<ToggleSwitch
-								checked={smtpFormData.use_tls}
-								onChange={(value) => setSmtpFormData({ ...smtpFormData, use_tls: value })}
-								aria-labelledby="use-tls-label"
-							/>
-							<label id="use-tls-label" className="text-sm text-gray-700 dark:text-amber-primary">
-								Use TLS
-							</label>
-						</div>
-                </div>
+									<div>
+										<label htmlFor="smtp_port" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+											SMTP Port
+										</label>
+										<input
+											type="text"
+											inputMode="numeric"
+											id="smtp_port"
+											value={smtpFormData.port}
+											onChange={handlePortChange}
+											aria-invalid={!!portError}
+											aria-describedby={portError ? 'smtp_port_error' : undefined}
+											className="w-32 px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+										/>
+										{portError && (
+											<p id="smtp_port_error" className="text-xs text-red-500 mt-1">{portError}</p>
+										)}
+                        </div>
+			{/* min-h-[42px]: py-2 (16px padding) + input height (~26px) for toggle alignment */}
+			<div className="flex items-center gap-3 min-h-[42px]">
+				<ToggleSwitch
+					checked={smtpFormData.use_tls}
+					onChange={(value) => setSmtpFormData({ ...smtpFormData, use_tls: value })}
+					aria-labelledby="use-tls-label"
+				/>
+				<label id="use-tls-label" className="text-sm text-gray-700 dark:text-amber-primary">
+					Use TLS
+				</label>
+			</div>
+            </div>
 
                     {/* Row 3: Username | Password */}
                     <div>
