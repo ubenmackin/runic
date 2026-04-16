@@ -598,10 +598,10 @@ const handleSubmit = (e) => {
                         ) : (
                           <EmptyState icon={Server} title="No peers yet" message="Add your first peer to start managing firewall rules." action="Add Peer" onAction={openAddModal} />
                         )
-                      ) : (
-                        <div className="border border-gray-200 dark:border-gray-border overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+) : (
+        <div className="border border-gray-200 dark:border-gray-border overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
 <thead className="bg-gray-50 dark:bg-charcoal-darkest border-b border-gray-200 dark:border-gray-border">
               <tr>
                 <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">

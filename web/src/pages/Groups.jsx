@@ -13,7 +13,7 @@ import { useAuth } from '../hooks/useAuth'
 import ConfirmModal from '../components/ConfirmModal'
 import SearchableSelect from '../components/SearchableSelect'
 import EmptyState from '../components/EmptyState'
-import DataTable from '../components/DataTable'
+
 import TableSkeleton from '../components/TableSkeleton'
 import SortIndicator from '../components/SortIndicator'
 import Pagination from '../components/Pagination'
@@ -311,101 +311,88 @@ const peerOptions = availablePeers.map(p => ({
       ) : !filteredGroups.length ? (
         <EmptyState title="No matching groups" message="Try a different search term." />
       ) : (
-        <>
-        <DataTable columns={[
-          { 
-            key: 'name', 
-            label: (
-              <button 
-                type="button"
-            onClick={() => handleSort('name')}
-            className="flex items-center hover:text-runic-600 dark:hover:text-purple-active"
-          >
-            Name
-            <SortIndicator columnKey="name" sortConfig={sortConfig} />
-          </button>
-            ), 
-				render: (g) => (
-					<span className="font-medium text-gray-900 dark:text-light-neutral">
-						{g.name}
-						{g.is_pending_delete && (
-							<span className="ml-2 px-2 py-1 text-xs bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300 rounded-none">
-								Pending Delete
-							</span>
-						)}
-					</span>
-				)
-          },
-          { 
-            key: 'peers', 
-            label: (
-              <button 
-                type="button"
-            onClick={() => handleSort('peers')}
-            className="flex items-center hover:text-runic-600 dark:hover:text-purple-active"
-          >
-            Peers
-            <SortIndicator columnKey="peers" sortConfig={sortConfig} />
-          </button>
-            ),
-            render: (g) => (
-<div className="flex items-center gap-1.5 px-2 py-1 bg-gray-100 dark:bg-charcoal-darkest rounded-none text-sm">
-<Users className="w-4 h-4 text-gray-500" />
-<span className="text-gray-900 dark:text-light-neutral">{g.peer_count || 0}</span>
-</div>
-            )
-          },
-          { 
-            key: 'policies', 
-            label: (
-              <button 
-                type="button"
-            onClick={() => handleSort('policies')}
-            className="flex items-center hover:text-runic-600 dark:hover:text-purple-active"
-          >
-            Policies
-            <SortIndicator columnKey="policies" sortConfig={sortConfig} />
-          </button>
-            ),
-            render: (g) => (
-<div className="flex items-center gap-1.5 px-2 py-1 bg-gray-100 dark:bg-charcoal-darkest rounded-none text-sm">
-<Shield className="w-4 h-4 text-gray-500" />
-<span className="text-gray-900 dark:text-light-neutral">{g.policy_count || 0}</span>
-</div>
-            )
-          },
-          { 
-				key: 'actions',
-				label: 'Actions',
-				render: (g) => (
-					<div className="flex items-center gap-2">
-						{canEdit && (
-							<button
-								onClick={(e) => { e.stopPropagation(); openEdit(g) }}
-								className={`p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none ${(g.is_system || g.is_pending_delete) ? 'text-gray-400 cursor-not-allowed opacity-50' : ''}`}
-								disabled={g.is_system || g.is_pending_delete}
-								title={g.is_pending_delete ? "Cannot edit soft-deleted groups" : g.is_system ? "System groups cannot be edited" : "Edit"}
-							>
-								<Pencil className={`w-4 h-4 ${(g.is_system || g.is_pending_delete) ? 'text-gray-400' : 'text-gray-900 dark:text-white'}`} />
-							</button>
-						)}
-						{canEdit && (
-							<button
-								onClick={(e) => { e.stopPropagation(); !g.is_system && !g.is_pending_delete && setDeleteTarget(g) }}
-								disabled={g.is_system || g.is_pending_delete}
-								className={`p-1 rounded-none ${(g.is_system || g.is_pending_delete) ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-100 dark:hover:bg-charcoal-darkest'}`}
-								title={g.is_pending_delete ? "Cannot delete soft-deleted groups" : g.is_system ? "System groups cannot be deleted" : "Delete"}
-							>
-								<Trash2 className="w-4 h-4 text-red-500" />
-							</button>
-						)}
-					</div>
-				)
-          },
-        ]} data={paginatedGroups} />
+<div className="border border-gray-200 dark:border-gray-border overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50 dark:bg-charcoal-darkest border-b border-gray-200 dark:border-gray-border">
+              <tr>
+                <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+                  <button type="button" onClick={() => handleSort('name')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+                    Name <SortIndicator columnKey="name" sortConfig={sortConfig} />
+                  </button>
+                </th>
+                <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+                  <button type="button" onClick={() => handleSort('peers')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+                    Peers <SortIndicator columnKey="peers" sortConfig={sortConfig} />
+                  </button>
+                </th>
+                <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+                  <button type="button" onClick={() => handleSort('policies')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+                    Policies <SortIndicator columnKey="policies" sortConfig={sortConfig} />
+                  </button>
+                </th>
+                <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
+                  Actions
+                </th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-200 dark:divide-gray-border">
+              {paginatedGroups.map((group) => (
+                <tr key={group.id} className="">
+                  <td className="px-4 py-1">
+                    <span className="font-medium text-gray-900 dark:text-light-neutral">
+                      {group.name}
+                      {group.is_pending_delete && (
+                        <span className="ml-2 px-2 py-1 text-xs bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300 rounded-none">
+                          Pending Delete
+                        </span>
+                      )}
+                    </span>
+                  </td>
+                  <td className="px-4 py-1">
+                    <div className="flex items-center gap-1.5 px-2 py-1 bg-gray-100 dark:bg-charcoal-darkest rounded-none text-sm">
+                      <Users className="w-4 h-4 text-gray-500" />
+                      <span className="text-gray-900 dark:text-light-neutral">{group.peer_count || 0}</span>
+                    </div>
+                  </td>
+                  <td className="px-4 py-1">
+                    <div className="flex items-center gap-1.5 px-2 py-1 bg-gray-100 dark:bg-charcoal-darkest rounded-none text-sm">
+                      <Shield className="w-4 h-4 text-gray-500" />
+                      <span className="text-gray-900 dark:text-light-neutral">{group.policy_count || 0}</span>
+                    </div>
+                  </td>
+                  <td className="px-4 py-1">
+                    <div className="flex items-center gap-2">
+                      {canEdit && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); openEdit(group) }}
+                          className={`p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none ${(group.is_system || group.is_pending_delete) ? 'text-gray-400 cursor-not-allowed opacity-50' : ''}`}
+                          disabled={group.is_system || group.is_pending_delete}
+                          title={group.is_pending_delete ? "Cannot edit soft-deleted groups" : group.is_system ? "System groups cannot be edited" : "Edit"}
+                        >
+                          <Pencil className={`w-4 h-4 ${(group.is_system || group.is_pending_delete) ? 'text-gray-400' : 'text-gray-900 dark:text-white'}`} />
+                        </button>
+                      )}
+                      {canEdit && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); !group.is_system && !group.is_pending_delete && setDeleteTarget(group) }}
+                          disabled={group.is_system || group.is_pending_delete}
+                          className={`p-1 rounded-none ${(group.is_system || group.is_pending_delete) ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-100 dark:hover:bg-charcoal-darkest'}`}
+                          title={group.is_pending_delete ? "Cannot delete soft-deleted groups" : group.is_system ? "System groups cannot be deleted" : "Delete"}
+                        >
+                          <Trash2 className="w-4 h-4 text-red-500" />
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
 
         <Pagination showingRange={groupsShowingRange} page={groupsPage} totalPages={totalPages} onPageChange={setGroupsPage} totalItems={groupsTotal} />
-        </>
+      </div>
       )}
 
   {/* Add/Edit Modal */}

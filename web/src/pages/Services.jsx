@@ -10,6 +10,7 @@ import { useFocusTrap } from '../hooks/useFocusTrap'
 import { useTableFilter } from '../hooks/useTableFilter'
 import { useCrudMutations } from '../hooks/useCrudMutations'
 import { useAuth } from '../hooks/useAuth'
+import { isValidPort } from '../utils/validation'
 import ConfirmModal from '../components/ConfirmModal'
 import InlineError from '../components/InlineError'
 import EmptyState from '../components/EmptyState'
@@ -167,37 +168,36 @@ export default function Services() {
     }
   }
 
-  // Validate a single port or range
-  const validatePortEntry = (entry) => {
-    const trimmed = entry.trim()
-    if (!trimmed) return false
+// Validate a single port or range
+const validatePortEntry = (entry) => {
+  const trimmed = entry.trim()
+  if (!trimmed) return false
 
-    // Must match backend regex: only digits, commas, and colons
-    // Pattern: ^\d+([,:]\d+)*$
-    if (!/^\d+([,:]\d+)*$/.test(trimmed)) {
+  // Must match backend regex: only digits, commas, and colons
+  // Pattern: ^\d+([,:]\d+)*$
+  if (!/^\d+([,:]\d+)*$/.test(trimmed)) {
+    return false
+  }
+
+  // Validate each port number is in valid range using shared utility
+  const parts = trimmed.split(/[,:]/)
+  for (const part of parts) {
+    if (!isValidPort(part)) {
       return false
     }
-
-    // Validate each port number is in valid range
-    const parts = trimmed.split(/[,:]/)
-    for (const part of parts) {
-      const port = parseInt(part)
-      if (isNaN(port) || port < 1 || port > 65535) {
-        return false
-      }
-    }
-
-    // Validate ranges (colon-separated pairs) have start <= end
-    const rangeMatch = trimmed.match(/(\d+):(\d+)/g)
-    if (rangeMatch) {
-      for (const range of rangeMatch) {
-        const [start, end] = range.split(':').map(Number)
-        if (start > end) return false
-      }
-    }
-
-    return true
   }
+
+  // Validate ranges (colon-separated pairs) have start <= end
+  const rangeMatch = trimmed.match(/(\d+):(\d+)/g)
+  if (rangeMatch) {
+    for (const range of rangeMatch) {
+      const [start, end] = range.split(':').map(Number)
+      if (start > end) return false
+    }
+  }
+
+  return true
+}
 
   // Add port chip
   const handleAddPort = () => {
@@ -412,9 +412,9 @@ const handleSourcePortInputKeyDown = (e) => {
           <EmptyState title="No user services yet" message="Create services to define port bundles for your policies." action="New Service" onAction={openAdd} />
         )
 ) : (
-<div className="bg-white dark:bg-charcoal-dark border border-gray-200 dark:border-gray-border overflow-hidden">
+<div className="border border-gray-200 dark:border-gray-border overflow-hidden">
 <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+<table className="w-full text-sm">
 <thead className="bg-gray-50 dark:bg-charcoal-darkest border-b border-gray-200 dark:border-gray-border">
               <tr>
                 <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
