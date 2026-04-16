@@ -18,7 +18,7 @@ export default function FilterChip({ label, selected, onClick }) {
       className={`px-4 py-1.5 text-sm font-medium border transition-colors ${
         selected
 ? 'bg-purple-active text-white border-purple-active'
-  : 'bg-white dark:bg-charcoal-dark text-gray-700 dark:text-light-neutral border-gray-300 dark:border-gray-border hover:bg-purple-active/10'
+  : 'bg-white dark:bg-charcoal-dark text-gray-700 dark:text-light-neutral border-gray-300 dark:border-gray-border hover:bg-purple-50 dark:hover:bg-purple-900/20'
       }`}
     >
       {label}

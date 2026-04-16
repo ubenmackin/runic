@@ -34,7 +34,7 @@ export default function SearchableSelect({ options = [], value, category, onChan
         <ChevronDown className="w-4 h-4 text-gray-400" />
       </button>
       {open && (
-        <div className="absolute z-10 mt-1 w-full bg-white dark:bg-charcoal-dark border border-gray-200 dark:border-gray-border rounded-none shadow-none">
+        <div className="absolute z-50 mt-1 w-full bg-white dark:bg-charcoal-dark border border-gray-200 dark:border-gray-border rounded-none shadow-none">
           <div className="p-2 border-b border-gray-200 dark:border-gray-border">
             <div className="flex items-center gap-2 px-2">
               <Search className="w-4 h-4 text-gray-400" />

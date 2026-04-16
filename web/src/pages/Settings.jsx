@@ -196,22 +196,17 @@ export default function Settings() {
       const transformedPrefs = transformPrefsFromBackend(userPrefs)
       setNotificationPrefs(transformedPrefs)
 
-      // Use the unified timezone from transformPrefsFromBackend (already handles unification and browser fallback)
-      setUnifiedTimezone(transformedPrefs.quiet_hours?.timezone || 'UTC')
+        // Use the unified timezone from transformPrefsFromBackend (already handles unification and browser fallback)
+        setUnifiedTimezone(transformedPrefs.quiet_hours?.timezone || 'UTC')
 
-      // Expand disclosure sections based on feature enabled status
-      // Quiet Hours is considered enabled if the toggle is on OR if start/end times are configured
-      const quietHoursEnabled = transformedPrefs.quiet_hours?.enabled ?? false
-      // Check for non-empty, non-default times (default is '22:00'/'08:00')
-      const hasQuietHoursTimes = (transformedPrefs.quiet_hours?.start_time && transformedPrefs.quiet_hours?.start_time !== '22:00') ||
-                                  (transformedPrefs.quiet_hours?.end_time && transformedPrefs.quiet_hours?.end_time !== '08:00')
-      setShowQuietHours(quietHoursEnabled || hasQuietHoursTimes)
+        // Expand disclosure sections based on feature enabled status
+        // Quiet Hours disclosure: open if quietHours.enabled is true
+        const quietHoursEnabled = transformedPrefs.quiet_hours?.enabled ?? false
+        setShowQuietHours(quietHoursEnabled)
 
-      // Daily Digest is considered enabled if the toggle is on OR if time is configured
-      const digestEnabled = transformedPrefs.daily_digest?.enabled ?? false
-      // Check for non-empty, non-default time (default is '09:00')
-      const hasDigestTime = transformedPrefs.daily_digest?.time && transformedPrefs.daily_digest?.time !== '09:00'
-      setShowDigest(digestEnabled || hasDigestTime)
+        // Daily Digest disclosure: open if dailyDigest.enabled is true
+        const digestEnabled = transformedPrefs.daily_digest?.enabled ?? false
+        setShowDigest(digestEnabled)
 
       prefsLoadedRef.current = true
     }
