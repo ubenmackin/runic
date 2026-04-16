@@ -84,7 +84,7 @@ func (s *SMTPSender) SendHTML(to, subject, htmlBody string) error {
 
 // SendAlertEmail sends an alert notification email using the Runic branding.
 // It creates a sanitized copy of the event to prevent email content injection
-// from untrusted input in Subject, PeerName, and Metadata string values.
+// from untrusted input in Subject, PeerName, Message, and Metadata string values.
 // The sanitization removes control characters that could be used for header injection.
 // Existing HTML escaping and header sanitization remain as defense-in-depth layers.
 func (s *SMTPSender) SendAlertEmail(to string, event *AlertEvent) error {
@@ -98,6 +98,10 @@ func (s *SMTPSender) SendAlertEmail(to string, event *AlertEvent) error {
 	// Sanitize PeerName field
 	sanitizedPeerName, _ := SanitizeAlertInput(event.PeerName, 0)
 	sanitizedEvent.PeerName = sanitizedPeerName
+
+	// Sanitize Message field
+	sanitizedMessage, _ := SanitizeAlertInput(event.Message, 0)
+	sanitizedEvent.Message = sanitizedMessage
 
 	// Sanitize Metadata map string values
 	if event.Metadata != nil {
