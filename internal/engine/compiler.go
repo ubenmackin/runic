@@ -164,6 +164,7 @@ func (rw *ruleWriter) writeStandardRules(hasDocker bool, controlPlanePort string
 	// INVALID
 	rw.buf.WriteString("# --- Standard: INVALID packet drop ---\n")
 	rw.buf.WriteString("-A INPUT -m conntrack --ctstate INVALID -j DROP\n")
+	rw.buf.WriteString("-A OUTPUT -m conntrack --ctstate INVALID -j DROP\n")
 	rw.buf.WriteString("\n")
 
 	// Control Plane Communication

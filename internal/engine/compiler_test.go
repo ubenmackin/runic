@@ -558,6 +558,9 @@ func TestConntrackStandardRules(t *testing.T) {
 	if !strings.Contains(output, "-A INPUT -m conntrack --ctstate INVALID -j DROP") {
 		t.Error("expected conntrack INVALID drop rule for INPUT")
 	}
+	if !strings.Contains(output, "-A OUTPUT -m conntrack --ctstate INVALID -j DROP") {
+		t.Error("expected conntrack INVALID drop rule for OUTPUT")
+	}
 
 	// Should NOT use old state module
 	if strings.Contains(output, "-m state --state") {
