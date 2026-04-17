@@ -14,6 +14,7 @@ import TableSkeleton from '../components/TableSkeleton'
 import SearchFilterPanel from '../components/SearchFilterPanel'
 import SortIndicator from '../components/SortIndicator'
 import MultiSelect from '../components/MultiSelect'
+import KebabMenu from '../components/KebabMenu'
 
 const ALERT_TYPES = [
   { value: 'bundle_deployed', label: 'Bundle Deployed' },
@@ -73,11 +74,114 @@ function StatusTag({ status }) {
   }
   const colorClasses = colorConfig[status] || 'border-gray-500 text-gray-700 dark:text-gray-400'
   const displayText = status.toUpperCase()
-  
+
   return (
     <span className={`inline-block px-1.5 py-0.5 border font-mono text-[10px] ${colorClasses}`}>
       [{displayText}]
     </span>
+  )
+}
+
+// Helper function to get menu items for an alert
+function getAlertMenuItems(alert, onDelete) {
+  return [
+    {
+      label: 'Delete',
+      icon: Trash2,
+      onClick: () => onDelete(alert.id),
+      danger: true,
+    },
+  ]
+}
+
+// Mobile card component for alert
+function AlertCard({ alert, isExpanded, onToggle, onDelete }) {
+  return (
+    <div className="bg-white dark:bg-charcoal-dark border border-gray-200 dark:border-gray-border">
+      <div
+        className="p-3 cursor-pointer"
+        onClick={(e) => {
+          // Don't toggle if clicking on the menu
+          if (e.target.closest('[data-testid="kebab-menu-trigger"]') || e.target.closest('[data-testid="kebab-menu-dropdown"]')) {
+            return
+          }
+          onToggle()
+        }}
+      >
+        <div className="flex items-start justify-between">
+          <div className="flex-1 min-w-0">
+            {/* First line: Severity icon + Timestamp + Menu */}
+            <div className="flex items-center gap-2">
+              <SeverityIcon severity={alert.severity} />
+              <span className="text-sm text-gray-600 dark:text-amber-muted">
+                {formatTimestamp(alert.created_at)}
+              </span>
+              <KebabMenu
+                items={getAlertMenuItems(alert, onDelete)}
+              />
+            </div>
+            {/* Second line: Alert type badge + Peer hostname */}
+            <div className="flex items-center gap-2 mt-1">
+              <AlertTypeTag alertType={alert.alert_type} />
+              <span className="text-gray-400">·</span>
+              <span className="text-sm text-gray-900 dark:text-light-neutral truncate">
+                {alert.peer_hostname || '-'}
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Expanded details */}
+      {isExpanded && (
+        <div className="px-3 pb-3 border-t border-gray-200 dark:border-gray-border bg-gray-50 dark:bg-charcoal-darkest">
+          <div className="space-y-4 pt-3">
+            <div>
+              <h4 className="text-sm font-medium text-gray-900 dark:text-light-neutral mb-1">Message</h4>
+              <p className="text-sm text-gray-600 dark:text-amber-muted whitespace-pre-wrap">
+                {alert.message}
+              </p>
+            </div>
+
+            {alert.metadata && (
+              <div>
+                <h4 className="text-sm font-medium text-gray-900 dark:text-light-neutral mb-1">Metadata</h4>
+                <pre className="text-xs bg-gray-900 dark:bg-black text-green-400 p-3 overflow-x-auto">
+                  {JSON.stringify(alert.metadata, null, 2)}
+                </pre>
+              </div>
+            )}
+
+            <div className="grid grid-cols-2 gap-4 text-sm">
+              <div>
+                <span className="text-gray-500 dark:text-amber-muted">Severity:</span>
+                <span className="ml-2 text-gray-900 dark:text-light-neutral capitalize">{alert.severity}</span>
+              </div>
+              <div>
+                <span className="text-gray-500 dark:text-amber-muted">Alert ID:</span>
+                <span className="ml-2 text-gray-900 dark:text-light-neutral">{alert.id}</span>
+              </div>
+              <div>
+                <span className="text-gray-500 dark:text-amber-muted">Peer:</span>
+                <span className="ml-2 text-gray-900 dark:text-light-neutral">{alert.peer_hostname || alert.peer_id || '-'}</span>
+              </div>
+              <div>
+                <span className="text-gray-500 dark:text-amber-muted">Created:</span>
+                <span className="ml-2 text-gray-900 dark:text-light-neutral">
+                  {new Date(alert.created_at).toLocaleString()}
+                </span>
+              </div>
+              <div>
+                <span className="text-gray-500 dark:text-amber-muted">Sent At:</span>
+                <span className="ml-2 text-gray-900 dark:text-light-neutral">
+                  {alert.sent_at ? new Date(alert.sent_at).toLocaleString() : '-'}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -445,75 +549,101 @@ rightContent={
 
       {!isLoading && data && (
         <>
-          {!data.alerts?.length ? (
-            <EmptyState
-              icon={Bell}
-              title="No alerts"
-              message="No alerts match your current filters."
+{!data.alerts?.length ? (
+          <EmptyState
+            icon={Bell}
+            title="No alerts"
+            message="No alerts match your current filters."
+          />
+        ) : (
+        <>
+          {/* Mobile card view */}
+          <div className="md:hidden space-y-2">
+            {data.alerts.map((alert) => (
+              <AlertCard
+                key={alert.id}
+                alert={alert}
+                isExpanded={expandedRow === alert.id}
+                onToggle={() => toggleRow(alert.id)}
+                onDelete={handleDeleteAlert}
+              />
+            ))}
+            <Pagination
+              showingRange={rowsPerPage === -1
+                ? `Showing all ${data.total}`
+                : `Showing ${(filter.page - 1) * rowsPerPage + 1} - ${Math.min(filter.page * rowsPerPage, data.total)} of ${data.total}`
+              }
+              page={filter.page}
+              totalPages={rowsPerPage === -1 ? 1 : Math.ceil(data.total / rowsPerPage)}
+              onPageChange={handlePageChange}
+              totalItems={data.total}
             />
-          ) : (
-<div className="bg-white dark:bg-charcoal-dark border border-gray-200 dark:border-gray-border overflow-hidden">
-              <div className="overflow-x-auto">
-                <table className="w-full">
-        <thead className="bg-gray-50 dark:bg-charcoal-darkest border-b border-gray-200 dark:border-gray-border">
-          <tr>
-            <th className="px-4 py-1.5 w-12" aria-label="Expand/collapse"></th>
-            <th className="px-4 py-1.5 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
-              <button type="button" onClick={() => handleSort('severity')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
-                Sev <SortIndicator columnKey="severity" sortConfig={sortConfig} />
-              </button>
-            </th>
-            <th className="px-4 py-1.5 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
-              <button type="button" onClick={() => handleSort('created_at')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
-                Timestamp <SortIndicator columnKey="created_at" sortConfig={sortConfig} />
-              </button>
-            </th>
-            <th className="px-4 py-1.5 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
-              <button type="button" onClick={() => handleSort('alert_type')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
-                Alert Type <SortIndicator columnKey="alert_type" sortConfig={sortConfig} />
-              </button>
-            </th>
-            <th className="px-4 py-1.5 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
-              <button type="button" onClick={() => handleSort('peer_hostname')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
-                Peer <SortIndicator columnKey="peer_hostname" sortConfig={sortConfig} />
-              </button>
-            </th>
-            <th className="px-4 py-1.5 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider">
-              Subject
-            </th>
-            <th className="px-4 py-1.5 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
-              <button type="button" onClick={() => handleSort('status')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
-                Status <SortIndicator columnKey="status" sortConfig={sortConfig} />
-              </button>
-            </th>
-          </tr>
-        </thead>
-                  <tbody className="divide-y divide-gray-200 dark:divide-gray-border">
-                    {data.alerts.map((alert) => (
-                      <AlertRow
-                        key={alert.id}
-                        alert={alert}
-                        isExpanded={expandedRow === alert.id}
-                        onToggle={() => toggleRow(alert.id)}
-                        onDelete={handleDeleteAlert}
-                      />
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+          </div>
 
-              <Pagination
-          showingRange={rowsPerPage === -1
-            ? `Showing all ${data.total}`
-            : `Showing ${(filter.page - 1) * rowsPerPage + 1} - ${Math.min(filter.page * rowsPerPage, data.total)} of ${data.total}`
-          }
-          page={filter.page}
-          totalPages={rowsPerPage === -1 ? 1 : Math.ceil(data.total / rowsPerPage)}
-          onPageChange={handlePageChange}
-          totalItems={data.total}
-        />
+          {/* Desktop table view */}
+          <div className="hidden md:block bg-white dark:bg-charcoal-dark border border-gray-200 dark:border-gray-border overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead className="bg-gray-50 dark:bg-charcoal-darkest border-b border-gray-200 dark:border-gray-border">
+                  <tr>
+                    <th className="px-4 py-1.5 w-12" aria-label="Expand/collapse"></th>
+                    <th className="px-4 py-1.5 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+                      <button type="button" onClick={() => handleSort('severity')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+                        Sev <SortIndicator columnKey="severity" sortConfig={sortConfig} />
+                      </button>
+                    </th>
+                    <th className="px-4 py-1.5 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+                      <button type="button" onClick={() => handleSort('created_at')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+                        Timestamp <SortIndicator columnKey="created_at" sortConfig={sortConfig} />
+                      </button>
+                    </th>
+                    <th className="px-4 py-1.5 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+                      <button type="button" onClick={() => handleSort('alert_type')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+                        Alert Type <SortIndicator columnKey="alert_type" sortConfig={sortConfig} />
+                      </button>
+                    </th>
+                    <th className="px-4 py-1.5 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+                      <button type="button" onClick={() => handleSort('peer_hostname')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+                        Peer <SortIndicator columnKey="peer_hostname" sortConfig={sortConfig} />
+                      </button>
+                    </th>
+                    <th className="px-4 py-1.5 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider">
+                      Subject
+                    </th>
+                    <th className="px-4 py-1.5 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+                      <button type="button" onClick={() => handleSort('status')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+                        Status <SortIndicator columnKey="status" sortConfig={sortConfig} />
+                      </button>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-200 dark:divide-gray-border">
+                  {data.alerts.map((alert) => (
+                    <AlertRow
+                      key={alert.id}
+                      alert={alert}
+                      isExpanded={expandedRow === alert.id}
+                      onToggle={() => toggleRow(alert.id)}
+                      onDelete={handleDeleteAlert}
+                    />
+                  ))}
+                </tbody>
+              </table>
             </div>
-          )}
+
+            <Pagination
+              showingRange={rowsPerPage === -1
+                ? `Showing all ${data.total}`
+                : `Showing ${(filter.page - 1) * rowsPerPage + 1} - ${Math.min(filter.page * rowsPerPage, data.total)} of ${data.total}`
+              }
+              page={filter.page}
+              totalPages={rowsPerPage === -1 ? 1 : Math.ceil(data.total / rowsPerPage)}
+              onPageChange={handlePageChange}
+              totalItems={data.total}
+            />
+          </div>
+        </>
+        )}
         </>
       )}
 

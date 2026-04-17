@@ -10,8 +10,8 @@ import { Search, ChevronDown, ChevronUp, X } from 'lucide-react'
  * @param {Function} props.onSearchChange - Handler for search input changes
  * @param {Function} props.onClearSearch - Handler for clearing search
  * @param {string} [props.searchPlaceholder='Search...'] - Placeholder text for search input
- * @param {number} props.rowsPerPage - Current rows per page value
- * @param {Function} props.onRowsPerPageChange - Handler for rows per page changes
+ * @param {number} [props.rowsPerPage] - (Intentionally unused) Reserved for interface compatibility
+ * @param {Function} [props.onRowsPerPageChange] - (Intentionally unused) Reserved for interface compatibility
  * @param {React.ReactNode} [props.filterChips] - React node for filter buttons/chips
  * @param {React.ReactNode} [props.children] - Additional content rendered below main content
  * @param {boolean} [props.showSearch=true] - Whether to show the search input
@@ -25,8 +25,8 @@ export default function SearchFilterPanel({
   onSearchChange,
   onClearSearch,
   searchPlaceholder = 'Search...',
-  rowsPerPage,
-  onRowsPerPageChange,
+  _rowsPerPage,
+  _onRowsPerPageChange,
   filterChips,
   children,
   showSearch = true,

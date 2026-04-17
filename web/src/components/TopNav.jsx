@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import {
   Shield, FileText, Settings, User,
   LogOut, Moon, Sun, ChevronDown, Flame, Server, Users as UsersIcon,
-  Briefcase, Bell, Key, Menu
+  Briefcase, Bell, Key
 } from 'lucide-react'
 import { useAuthStore } from '../store'
 import { useAuth } from '../hooks/useAuth'
@@ -136,7 +136,6 @@ export default function TopNav() {
     }
     return false
   })
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [openDropdowns, setOpenDropdowns] = useState({})
   const [userDropdownOpen, setUserDropdownOpen] = useState(false)
   const userDropdownRef = useRef(null)
@@ -197,17 +196,28 @@ export default function TopNav() {
   }
 
   const handleUserDropdownMouseEnter = useCallback(() => {
-    if (userDropdownCloseTimeoutRef.current) {
-      clearTimeout(userDropdownCloseTimeoutRef.current)
-      userDropdownCloseTimeoutRef.current = null
+    // Only apply hover behavior on desktop (md breakpoint and above)
+    if (window.innerWidth >= 768) {
+      if (userDropdownCloseTimeoutRef.current) {
+        clearTimeout(userDropdownCloseTimeoutRef.current)
+        userDropdownCloseTimeoutRef.current = null
+      }
+      setUserDropdownOpen(true)
     }
-    setUserDropdownOpen(true)
   }, [])
 
   const handleUserDropdownMouseLeave = useCallback(() => {
-    userDropdownCloseTimeoutRef.current = setTimeout(() => {
-      setUserDropdownOpen(false)
-    }, 150)
+    // Only apply hover behavior on desktop (md breakpoint and above)
+    if (window.innerWidth >= 768) {
+      userDropdownCloseTimeoutRef.current = setTimeout(() => {
+        setUserDropdownOpen(false)
+      }, 150)
+    }
+  }, [])
+
+  const handleUserDropdownClick = useCallback(() => {
+    // Toggle dropdown on mobile
+    setUserDropdownOpen(prev => !prev)
   }, [])
 
   return (
@@ -273,89 +283,48 @@ export default function TopNav() {
       </nav>
 
       <div className="flex items-center gap-2">
-        <button
-          className="md:hidden p-2 rounded-none hover:bg-gray-100 dark:hover:bg-charcoal-darkest"
-          onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-          aria-label="Toggle menu"
+        <div
+          ref={userDropdownRef}
+          className="relative"
+          onMouseEnter={handleUserDropdownMouseEnter}
+          onMouseLeave={handleUserDropdownMouseLeave}
         >
-          <Menu className="w-5 h-5 text-gray-700 dark:text-light-neutral" />
-        </button>
-
-      <div
-        ref={userDropdownRef}
-        className="relative"
-        onMouseEnter={handleUserDropdownMouseEnter}
-        onMouseLeave={handleUserDropdownMouseLeave}
-      >
-        <button
-          className="flex items-center gap-2 px-3 py-2 text-sm font-medium rounded-none hover:bg-gray-100 dark:hover:bg-charcoal-darkest transition-colors"
-        >
-          <User className="w-4 h-4 text-gray-700 dark:text-light-neutral" />
-          <span className="hidden sm:inline text-gray-700 dark:text-light-neutral">{username}</span>
-          <ChevronDown className={`w-3.5 h-3.5 text-gray-700 dark:text-light-neutral transition-transform ${userDropdownOpen ? 'rotate-180' : ''}`} />
-        </button>
-        {userDropdownOpen && (
-          <div
-            className="absolute top-full right-0 w-40 bg-white dark:bg-charcoal-dark rounded-none border border-gray-200 dark:border-gray-border py-1 z-50"
-            style={{ marginTop: '-4px', paddingTop: '4px' }}
+          <button
+            onClick={handleUserDropdownClick}
+            className="flex items-center gap-2 px-3 py-2 text-sm font-medium rounded-none hover:bg-gray-100 dark:hover:bg-charcoal-darkest transition-colors"
           >
-            <button
-              onClick={handleLogout}
-              className="flex items-center gap-2 px-3 py-2 text-sm w-full text-gray-700 dark:text-light-neutral hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none transition-colors"
+            <User className="w-4 h-4 text-gray-700 dark:text-light-neutral" />
+            <span className="hidden md:inline text-gray-700 dark:text-light-neutral">{username}</span>
+            <ChevronDown className={`w-3.5 h-3.5 text-gray-700 dark:text-light-neutral transition-transform ${userDropdownOpen ? 'rotate-180' : ''}`} />
+          </button>
+          {userDropdownOpen && (
+            <div
+              className="absolute top-full right-0 w-48 bg-white dark:bg-charcoal-dark rounded-none border border-gray-200 dark:border-gray-border py-1 z-50"
+              style={{ marginTop: '-4px', paddingTop: '4px' }}
             >
-              <LogOut className="w-4 h-4" />
-              <span>Logout</span>
-            </button>
-            <div className="px-4 py-2 text-xs text-gray-500 border-t border-gray-border">
-              Runic {versionInfo?.version || '...'}
-            </div>
-          </div>
-        )}
-      </div>
-      </div>
-
-      {mobileMenuOpen && (
-        <div className="md:hidden fixed inset-0 top-[52px] bg-black/50 z-30" onClick={() => setMobileMenuOpen(false)}>
-          <div
-            className="absolute top-0 right-0 w-64 h-full bg-white dark:bg-charcoal-dark"
-            onClick={(e) => e.stopPropagation()}
-          >
-<nav className="p-4 space-y-1">
-            <NavItem to="/" label="Dashboard" />
-            <NavItem to="/topology" label="Topology" />
-              <div className="py-2">
-                <span className="px-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Access Control</span>
+              {/* Mobile-only: Show username at top */}
+              <div className="md:hidden px-3 py-2 border-b border-gray-200 dark:border-gray-border">
+                <span className="font-bold text-gray-700 dark:text-light-neutral">{username}</span>
               </div>
-<NavLink to="/peers" className="block px-3 py-2 text-sm text-gray-700 dark:text-light-neutral hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none uppercase">Peers</NavLink>
-<NavLink to="/groups" className="block px-3 py-2 text-sm text-gray-700 dark:text-light-neutral hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none uppercase">Groups</NavLink>
-<NavLink to="/services" className="block px-3 py-2 text-sm text-gray-700 dark:text-light-neutral hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none uppercase">Services</NavLink>
-<NavLink to="/policies" className="block px-3 py-2 text-sm text-gray-700 dark:text-light-neutral hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none uppercase">Policies</NavLink>
-              <div className="py-2">
-                <span className="px-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Logs</span>
+              {/* Mobile-only: Show server version */}
+              <div className="md:hidden px-3 py-2 text-sm text-gray-500 dark:text-gray-400 border-b border-gray-200 dark:border-gray-border">
+                Server Version: {versionInfo?.version || '...'}
               </div>
-<NavLink to="/logs" className="block px-3 py-2 text-sm text-gray-700 dark:text-light-neutral hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none uppercase">Logs</NavLink>
-              <NavLink to="/alerts" className="block px-3 py-2 text-sm text-gray-700 dark:text-light-neutral hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none uppercase">Alerts</NavLink>
-              <div className="py-2">
-                <span className="px-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Settings</span>
-              </div>
-<button
-                onClick={toggleDark}
-                className="flex items-center gap-2 w-full px-3 py-2 text-sm text-gray-700 dark:text-light-neutral hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none uppercase"
+              <button
+                onClick={handleLogout}
+                className="flex items-center gap-2 px-3 py-2 text-sm w-full text-gray-700 dark:text-light-neutral hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none transition-colors"
               >
-                {darkMode ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
-                <span>{darkMode ? 'Light Mode' : 'Dark Mode'}</span>
+                <LogOut className="w-4 h-4" />
+                <span>Logout</span>
               </button>
-              {isAdmin && (
-                <NavLink to="/setup-keys" className="block px-3 py-2 text-sm text-gray-700 dark:text-light-neutral hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none uppercase">Setup Keys</NavLink>
-              )}
-              {isAdmin && (
-                <NavLink to="/users" className="block px-3 py-2 text-sm text-gray-700 dark:text-light-neutral hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none uppercase">Users</NavLink>
-              )}
-              <NavLink to="/settings" className="block px-3 py-2 text-sm text-gray-700 dark:text-light-neutral hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none uppercase">Settings</NavLink>
-            </nav>
-          </div>
+              {/* Desktop-only: Show version at bottom */}
+              <div className="hidden md:block px-4 py-2 text-xs text-gray-500 border-t border-gray-border">
+                Runic {versionInfo?.version || '...'}
+              </div>
+            </div>
+          )}
         </div>
-      )}
+      </div>
     </header>
   )
 }

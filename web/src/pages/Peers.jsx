@@ -28,6 +28,7 @@ import PageHeader from '../components/PageHeader'
 import PendingChangesModal from '../components/PendingChangesModal'
 import SharpTag from '../components/SharpTag'
 import FilterChip from '../components/FilterChip'
+import KebabMenu from '../components/KebabMenu'
 
 const OS_OPTIONS = [
   { value: 'ubuntu', label: 'Ubuntu' },
@@ -61,6 +62,98 @@ const syncStatusConfig = {
   synced: { label: 'SYNCED', color: 'border-green-500 text-green-600 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-900/20' },
   pending: { label: 'REVIEW', color: 'border-orange-500 text-orange-600 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-900/20' },
   pending_sync: { label: 'PENDING', color: 'border-blue-500 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20' },
+}
+
+// Helper function to get menu items for a peer
+function getPeerMenuItems(peer, { canEdit, fetchBundle, handlePushToPeer, openEdit, setDeleteTarget }) {
+  const items = []
+  // Agent-only items
+  if (!peer.is_manual) {
+    items.push({
+      label: 'View Deployed Rules',
+      icon: FileCode,
+      onClick: () => fetchBundle(peer, false),
+    })
+    items.push({
+      label: 'Push Current Rules',
+      icon: Send,
+      onClick: () => handlePushToPeer(peer),
+    })
+  }
+  // Manual-only items
+  if (peer.is_manual && canEdit) {
+    items.push({
+      label: 'Edit',
+      icon: Pencil,
+      onClick: () => openEdit(peer),
+    })
+  }
+  // Delete (always available if canEdit)
+  if (canEdit) {
+    items.push({
+      label: 'Delete',
+      icon: Trash2,
+      onClick: () => setDeleteTarget(peer),
+      danger: true,
+    })
+  }
+  return items
+}
+
+// Mobile card component for peer
+function PeerCard({ peer, canEdit, fetchBundle, handlePushToPeer, openEdit, setDeleteTarget, handleSyncStatusClick }) {
+  return (
+    <div className="bg-white dark:bg-charcoal-dark border border-gray-200 dark:border-gray-border p-3">
+      <div className="flex items-start justify-between">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            {/* Status indicator dot */}
+            {!peer.is_manual && (
+              <span className={`w-2 h-2 rounded-full shrink-0 ${
+                peer.status === 'online' ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]' :
+                peer.status === 'offline' ? 'bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.6)]' :
+                'bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.6)]'
+              }`} />
+            )}
+            {/* Hostname */}
+            <span className="font-medium text-gray-900 dark:text-light-neutral truncate">
+              {peer.hostname || peer.ip_address}
+            </span>
+            {/* Manual badge */}
+            {peer.is_manual && (
+              <span className="px-1.5 py-0.5 text-xs font-bold border border-gray-400 dark:border-gray-500 text-gray-700 dark:text-amber-primary shrink-0">
+                MANUAL
+              </span>
+            )}
+          </div>
+          {/* Second line: Sync status + Heartbeat */}
+          <div className="flex items-center gap-2 mt-1 text-sm text-gray-600 dark:text-amber-muted">
+            {peer.is_manual ? (
+              <span className="text-gray-400">Manual Entry</span>
+            ) : (
+              <>
+                <button
+                  onClick={() => handleSyncStatusClick(peer)}
+                  className="cursor-pointer"
+                >
+                  <SharpTag
+                    status={syncStatusConfig[peer.sync_status]?.label || 'UNKNOWN'}
+                    color={syncStatusConfig[peer.sync_status]?.color}
+                  />
+                </button>
+                <span>·</span>
+                <span>{formatRelativeTime(peer.last_heartbeat)}</span>
+              </>
+            )}
+          </div>
+        </div>
+        {/* Kebab menu */}
+        <KebabMenu
+          items={getPeerMenuItems(peer, { canEdit, fetchBundle, handlePushToPeer, openEdit, setDeleteTarget })}
+        />
+      </div>
+    </div>
+  )
 }
 
 export default function Peers() {
@@ -599,127 +692,146 @@ const handleSubmit = (e) => {
                           <EmptyState icon={Server} title="No peers yet" message="Add your first peer to start managing firewall rules." action="Add Peer" onAction={openAddModal} />
                         )
 ) : (
-        <div className="border border-gray-200 dark:border-gray-border overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+<>
+{/* Mobile card view */}
+<div className="md:hidden space-y-2">
+{paginatedPeers.map((peer) => (
+<PeerCard
+key={peer.id}
+peer={peer}
+canEdit={canEdit}
+fetchBundle={fetchBundle}
+handlePushToPeer={handlePushToPeer}
+openEdit={openEdit}
+setDeleteTarget={setDeleteTarget}
+handleSyncStatusClick={handleSyncStatusClick}
+/>
+))}
+<Pagination showingRange={peersShowingRange} page={peersPage} totalPages={totalPages} onPageChange={setPeersPage} totalItems={peersTotal} />
+</div>
+
+{/* Desktop table view */}
+<div className="hidden md:block border border-gray-200 dark:border-gray-border overflow-hidden">
+<div className="overflow-x-auto">
+<table className="w-full text-sm">
 <thead className="bg-gray-50 dark:bg-charcoal-darkest border-b border-gray-200 dark:border-gray-border">
-              <tr>
-                <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
-                  <button type="button" onClick={() => handleSort('hostname')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
-                    Hostname <SortIndicator columnKey="hostname" sortConfig={sortConfig} />
-                  </button>
-                </th>
+<tr>
 <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
-              <button type="button" onClick={() => handleSort('status')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
-                Status <SortIndicator columnKey="status" sortConfig={sortConfig} />
-              </button>
-            </th>
-                <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
-                  <button type="button" onClick={() => handleSort('ip_address')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
-                    IP Address <SortIndicator columnKey="ip_address" sortConfig={sortConfig} />
-                  </button>
-                </th>
-                <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
-                  <button type="button" onClick={() => handleSort('os_type')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
-                    OS <SortIndicator columnKey="os_type" sortConfig={sortConfig} />
-                  </button>
-                </th>
-                <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
-                  <button type="button" onClick={() => handleSort('last_heartbeat')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
-                    Last Heartbeat <SortIndicator columnKey="last_heartbeat" sortConfig={sortConfig} />
-                  </button>
-                </th>
-                <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
-                  Groups
-                </th>
+<button type="button" onClick={() => handleSort('hostname')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+Hostname <SortIndicator columnKey="hostname" sortConfig={sortConfig} />
+</button>
+</th>
 <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
-              <button type="button" onClick={() => handleSort('agent_version')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
-                Agent <SortIndicator columnKey="agent_version" sortConfig={sortConfig} />
-              </button>
-            </th>
-                <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
-                  Actions
-                </th>
-              </tr>
-            </thead>
+<button type="button" onClick={() => handleSort('status')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+Status <SortIndicator columnKey="status" sortConfig={sortConfig} />
+</button>
+</th>
+<th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+<button type="button" onClick={() => handleSort('ip_address')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+IP Address <SortIndicator columnKey="ip_address" sortConfig={sortConfig} />
+</button>
+</th>
+<th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+<button type="button" onClick={() => handleSort('os_type')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+OS <SortIndicator columnKey="os_type" sortConfig={sortConfig} />
+</button>
+</th>
+<th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+<button type="button" onClick={() => handleSort('last_heartbeat')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+Last Heartbeat <SortIndicator columnKey="last_heartbeat" sortConfig={sortConfig} />
+</button>
+</th>
+<th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
+Groups
+</th>
+<th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+<button type="button" onClick={() => handleSort('agent_version')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+Agent <SortIndicator columnKey="agent_version" sortConfig={sortConfig} />
+</button>
+</th>
+<th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
+Actions
+</th>
+</tr>
+</thead>
 <tbody className="divide-y divide-gray-200 dark:divide-gray-border">
-              {paginatedPeers.map((peer) => (
-              <tr key={peer.id} className="">
+{paginatedPeers.map((peer) => (
+<tr key={peer.id} className="">
 <td className="px-4 py-1">
 <div className="flex items-center gap-2">
-                    {!peer.is_manual && (
-                      <span className={`w-2 h-2 rounded-full ${
-                        peer.status === 'online' ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]' :
-                        peer.status === 'offline' ? 'bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.6)]' :
-                        'bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.6)]' // pending
-                      }`} />
-                    )}
-                    <span className="font-sans font-bold text-gray-900 dark:text-light-neutral">{peer.hostname}</span>
-                  </div>
-                </td>
+{!peer.is_manual && (
+<span className={`w-2 h-2 rounded-full ${
+peer.status === 'online' ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]' :
+peer.status === 'offline' ? 'bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.6)]' :
+'bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.6)]' // pending
+}`} />
+)}
+<span className="font-sans font-bold text-gray-900 dark:text-light-neutral">{peer.hostname}</span>
+</div>
+</td>
 <td className="px-4 py-1">
-                                                {peer.is_manual ? (
-                                                    <span className="px-1.5 py-0.5 text-xs font-bold border border-gray-400 dark:border-gray-500 text-gray-700 dark:text-amber-primary">
-                                                        MANUAL
-                                                    </span>
-                                                ) : peer.sync_status ? (
-                                                    <button
-                                                        onClick={() => handleSyncStatusClick(peer)}
-                                                        title={`Click to ${peer.sync_status === 'pending' ? 'review pending changes' : 'view deployed rules'}`}
-                                                        className="cursor-pointer"
-                                                    >
-                                                        <SharpTag
-                                                            status={syncStatusConfig[peer.sync_status]?.label || peer.sync_status.toUpperCase()}
-                                                            color={syncStatusConfig[peer.sync_status]?.color}
-                                                        />
-                                                    </button>
-                                                ) : null}
-                                            </td>
+{peer.is_manual ? (
+<span className="px-1.5 py-0.5 text-xs font-bold border border-gray-400 dark:border-gray-500 text-gray-700 dark:text-amber-primary">
+MANUAL
+</span>
+) : peer.sync_status ? (
+<button
+onClick={() => handleSyncStatusClick(peer)}
+title={`Click to ${peer.sync_status === 'pending' ? 'review pending changes' : 'view deployed rules'}`}
+className="cursor-pointer"
+>
+<SharpTag
+status={syncStatusConfig[peer.sync_status]?.label || peer.sync_status.toUpperCase()}
+color={syncStatusConfig[peer.sync_status]?.color}
+/>
+</button>
+) : null}
+</td>
 <td className="px-4 py-1 font-mono text-gray-600 dark:text-amber-primary">
 {peer.ip_address}
-                </td>
+</td>
 <td className="px-4 py-1 text-gray-600 dark:text-amber-primary">
 {peer.os_type || peer.os || '—'}
-                </td>
+</td>
 <td className="px-4 py-1 font-mono text-gray-600 dark:text-amber-primary">
 {peer.is_manual ? 'N/A' : formatRelativeTime(peer.last_heartbeat)}
-                </td>
+</td>
 <td className="px-4 py-1">
 {peer.groups ? (
-                        <div className="flex flex-wrap items-center gap-1.5 max-w-xs">
-                          {(() => {
-                            const groups = peer.groups.split(',').map(g => g.trim()).filter(Boolean)
-                            const maxVisible = 2
-                            const visibleGroups = groups.slice(0, maxVisible)
-                            const remainingCount = groups.length - maxVisible
+<div className="flex flex-wrap items-center gap-1.5 max-w-xs">
+{(() => {
+const groups = peer.groups.split(',').map(g => g.trim()).filter(Boolean)
+const maxVisible = 2
+const visibleGroups = groups.slice(0, maxVisible)
+const remainingCount = groups.length - maxVisible
 
-                            return (
-                              <>
-                                                {visibleGroups.map((group, idx) => (
+return (
+<>
+{visibleGroups.map((group, idx) => (
 <SharpTag
-                                  key={idx}
-                                  status="info"
-                                  label={group}
-                                  variant="badge"
-                                  color="border-purple-500 text-purple-700 dark:text-purple-400"
-                                />
-                                                ))}
-                                {remainingCount > 0 && (
-                                  <span
-                                    className="px-2 py-0.5 text-xs font-medium bg-gray-100 dark:bg-charcoal-darkest text-gray-600 dark:text-amber-muted whitespace-nowrap"
-                                    title={groups.slice(maxVisible).join(', ')}
-                                  >
-                                    +{remainingCount}
-                                  </span>
-                                )}
-                              </>
-                            )
-                          })()}
-                        </div>
-                      ) : (
-                        <span className="text-gray-400">—</span>
-                      )}
-                    </td>
+key={idx}
+status="info"
+label={group}
+variant="badge"
+color="border-purple-500 text-purple-700 dark:text-purple-400"
+/>
+))}
+{remainingCount > 0 && (
+<span
+className="px-2 py-0.5 text-xs font-medium bg-gray-100 dark:bg-charcoal-darkest text-gray-600 dark:text-amber-muted whitespace-nowrap"
+title={groups.slice(maxVisible).join(', ')}
+>
++{remainingCount}
+</span>
+)}
+</>
+)
+})()}
+</div>
+) : (
+<span className="text-gray-400">—</span>
+)}
+</td>
 <td className="px-4 py-1">
 {peer.is_manual ? (
 <span className="px-1.5 py-0.5 text-xs font-bold border border-gray-400 dark:border-gray-500 text-gray-700 dark:text-amber-primary">
@@ -734,54 +846,55 @@ v{peer.agent_version}
 )}
 </td>
 <td className="px-4 py-1">
-                      <div className="flex items-center gap-2">
-                        {!peer.is_manual && (
-                          <>
+<div className="flex items-center gap-2">
+{!peer.is_manual && (
+<>
 <button
-                  onClick={() => fetchBundle(peer, false)}
-                  className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none"
-                  title="View Deployed Rules"
-                >
-                              <FileCode className="w-4 h-4 text-purple-active" />
-                            </button>
-                            <button
-                              onClick={() => handlePushToPeer(peer)}
-                              className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none"
-                              title="Push Current Rules"
-                            >
-                              <Send className="w-4 h-4 text-green-600" />
-                            </button>
-                          </>
-                        )}
-                        {canEdit && peer.is_manual && (
-                          <button
-                            onClick={() => openEdit(peer)}
-                            className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none"
-                            title="Edit"
-                          >
-                            <Pencil className="w-4 h-4 text-gray-900 dark:text-white" />
-                          </button>
-                        )}
-                        {canEdit && (
-                          <button
-                            onClick={() => setDeleteTarget(peer)}
-                            className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none"
-                            title="Delete"
-                          >
-                            <Trash2 className="w-4 h-4 text-red-500" />
-                          </button>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+onClick={() => fetchBundle(peer, false)}
+className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none"
+title="View Deployed Rules"
+>
+<FileCode className="w-4 h-4 text-purple-active" />
+</button>
+<button
+onClick={() => handlePushToPeer(peer)}
+className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none"
+title="Push Current Rules"
+>
+<Send className="w-4 h-4 text-green-600" />
+</button>
+</>
+)}
+{canEdit && peer.is_manual && (
+<button
+onClick={() => openEdit(peer)}
+className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none"
+title="Edit"
+>
+<Pencil className="w-4 h-4 text-gray-900 dark:text-white" />
+</button>
+)}
+{canEdit && (
+<button
+onClick={() => setDeleteTarget(peer)}
+className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none"
+title="Delete"
+>
+<Trash2 className="w-4 h-4 text-red-500" />
+</button>
+)}
+</div>
+</td>
+</tr>
+))}
+</tbody>
+</table>
+</div>
 
-          <Pagination showingRange={peersShowingRange} page={peersPage} totalPages={totalPages} onPageChange={setPeersPage} totalItems={peersTotal} />
-        </div>
-      )}
+<Pagination showingRange={peersShowingRange} page={peersPage} totalPages={totalPages} onPageChange={setPeersPage} totalItems={peersTotal} />
+</div>
+</>
+)}
 
       {/* Add/Edit Modal (Legacy) */}
       {modalOpen && (

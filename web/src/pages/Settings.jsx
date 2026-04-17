@@ -659,16 +659,25 @@ const getKeyData = (keyType) => {
                                                                         className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
                                                                 />
                                                         </div>
-                                                        <div className="flex items-center h-[42px]">
-                                                                <ToggleSwitch
-                                                                        checked={smtpFormData.enabled}
-                                                                        onChange={(value) => setSmtpFormData({ ...smtpFormData, enabled: value })}
-                                                                        aria-labelledby="enable-email-label"
-                                                                />
-                                                                <label id="enable-email-label" className="text-sm text-gray-700 dark:text-amber-primary ml-3">
-                                                                        Enable Email
-                                                                </label>
-                                                        </div>
+                  <div className="flex flex-col">
+                    {/* Ghost label spacer - matches label height */}
+                    <div className="text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+                      &nbsp;
+                    </div>
+                    {/* Toggle container - matches input height */}
+                    <div className="flex items-center h-[42px]">
+                      <div className="flex items-center gap-3">
+                        <ToggleSwitch
+                          checked={smtpFormData.enabled}
+                          onChange={(value) => setSmtpFormData({ ...smtpFormData, enabled: value })}
+                          aria-labelledby="enable-email-label"
+                        />
+                        <label id="enable-email-label" className="text-sm text-gray-700 dark:text-amber-primary">
+                          Enable Email
+                        </label>
+                      </div>
+                    </div>
+                  </div>
 
                                                         {/* Row 2: SMTP Host | SMTP Port + Use TLS */}
                                                         <div>
@@ -703,16 +712,26 @@ const getKeyData = (keyType) => {
                                             <p id="smtp_port_error" className="absolute text-xs text-red-500 -bottom-5 left-0 whitespace-nowrap">{portError}</p>
                                         )}
                                     </div>
-                                                                <div className="flex items-center h-[42px]">
-                                                                        <ToggleSwitch
-                                                                                checked={smtpFormData.use_tls}
-                                                                                onChange={(value) => setSmtpFormData({ ...smtpFormData, use_tls: value })}
-                                                                                aria-labelledby="use-tls-label"
-                                                                        />
-                                                                        <label id="use-tls-label" className="text-sm text-gray-700 dark:text-amber-primary ml-3">
-                                                                                Use TLS
-                                                                        </label>
-                                                                </div>
+                    {/* Use TLS toggle - aligned with Port input */}
+                    <div className="flex flex-col">
+                      {/* Ghost label spacer - matches label height */}
+                      <div className="text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+                        &nbsp;
+                      </div>
+                      {/* Toggle container - matches input height */}
+                      <div className="flex items-center h-[42px]">
+                        <div className="flex items-center gap-3">
+                          <ToggleSwitch
+                            checked={smtpFormData.use_tls}
+                            onChange={(value) => setSmtpFormData({ ...smtpFormData, use_tls: value })}
+                            aria-labelledby="use-tls-label"
+                          />
+                          <label id="use-tls-label" className="text-sm text-gray-700 dark:text-amber-primary">
+                            Use TLS
+                          </label>
+                        </div>
+                      </div>
+                    </div>
                                                         </div>
 
                                                         {/* Row 3: Username | Password */}

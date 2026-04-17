@@ -1445,7 +1445,7 @@ describe('Collapsible Sections', () => {
       })
 
       const portInput = screen.getByLabelText('SMTP Port')
-      const initialValue = portInput.value
+      const _initialValue = portInput.value
 
       // Try to type non-numeric characters - handler should prevent this
       await user.type(portInput, 'abc')

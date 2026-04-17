@@ -21,6 +21,7 @@ import Pagination from '../components/Pagination'
 import SearchFilterPanel from '../components/SearchFilterPanel'
 import PageHeader from '../components/PageHeader'
 import SharpTag from '../components/SharpTag'
+import KebabMenu from '../components/KebabMenu'
 
 const PROTOCOL_OPTIONS = [
   { value: 'tcp', label: 'TCP' },
@@ -369,18 +370,84 @@ export default function Services() {
 
 
 
-      {!processedServices?.length ? (
-        searchTerm ? (
-          <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none p-8 text-center">
-            <p className="text-gray-500 dark:text-amber-muted">No user services match your search.</p>
+{!processedServices?.length ? (
+  searchTerm ? (
+    <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none p-8 text-center">
+      <p className="text-gray-500 dark:text-amber-muted">No user services match your search.</p>
+    </div>
+  ) : (
+    <EmptyState title="No user services yet" message="Create services to define port bundles for your policies." action="New Service" onAction={openAdd} />
+  )
+) : (
+  <>
+    {/* Mobile Card View */}
+    <div className="md:hidden space-y-3">
+      {paginatedServices.map((service) => (
+        <div
+          key={service.id}
+          className="bg-white dark:bg-charcoal-dark border border-gray-200 dark:border-gray-border p-4"
+        >
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="font-medium text-gray-900 dark:text-light-neutral truncate">
+                  {service.name}
+                </span>
+                {service.is_pending_delete && (
+                  <span className="px-2 py-1 text-xs bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300 rounded-none">
+                    Pending Delete
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-2 mt-2 text-sm text-gray-600 dark:text-amber-muted">
+                <span className="px-2 py-0.5 text-xs bg-gray-100 dark:bg-charcoal-darkest rounded-none">
+                  {protocolLabel(service.protocol)}
+                </span>
+                {service.ports && (
+                  <>
+                    <span>·</span>
+                    <span className="font-mono text-xs">
+                      :{service.ports.split(',').slice(0, 2).map(p => p.trim()).join(', :')}
+                      {service.ports.split(',').length > 2 && (
+                        <span className="text-gray-400" title={service.ports}>
+                          {' '}
+                          +{service.ports.split(',').length - 2}
+                        </span>
+                      )}
+                    </span>
+                  </>
+                )}
+              </div>
+            </div>
+            {canEdit && (
+              <KebabMenu
+                items={[
+                  {
+                    label: 'Edit',
+                    icon: Pencil,
+                    onClick: () => openEdit(service),
+                    show: canEdit && !service.is_system && !service.is_pending_delete,
+                  },
+                  {
+                    label: 'Delete',
+                    icon: Trash2,
+                    onClick: () => setDeleteTarget(service),
+                    show: canEdit && !service.is_system && !service.is_pending_delete,
+                    danger: true,
+                  },
+                ].filter(item => item.show !== false)}
+              />
+            )}
           </div>
-        ) : (
-          <EmptyState title="No user services yet" message="Create services to define port bundles for your policies." action="New Service" onAction={openAdd} />
-        )
-      ) : (
-        <div className="border border-gray-200 dark:border-gray-border overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+        </div>
+      ))}
+      <Pagination showingRange={servicesShowingRange} page={servicesPage} totalPages={totalPages} onPageChange={setServicesPage} totalItems={servicesTotal} />
+    </div>
+
+    {/* Desktop Table View */}
+    <div className="hidden md:block border border-gray-200 dark:border-gray-border overflow-hidden">
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
               <thead className="bg-gray-50 dark:bg-charcoal-darkest border-b border-gray-200 dark:border-gray-border">
                 <tr>
                   <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
@@ -493,9 +560,10 @@ export default function Services() {
             </table>
           </div>
 
-          <Pagination showingRange={servicesShowingRange} page={servicesPage} totalPages={totalPages} onPageChange={setServicesPage} totalItems={servicesTotal} />
-        </div>
-      )}
+<Pagination showingRange={servicesShowingRange} page={servicesPage} totalPages={totalPages} onPageChange={setServicesPage} totalItems={servicesTotal} />
+    </div>
+  </>
+)}
 
       {modalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" tabIndex="-1" onKeyDown={(e) => { if (e.key === 'Escape') { closeModal() } }}>

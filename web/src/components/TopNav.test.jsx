@@ -106,98 +106,6 @@ describe('TopNav', () => {
 
       expect(screen.getByText('Settings')).toBeInTheDocument()
     })
-
-    test('renders mobile menu button', () => {
-      renderWithRouter(<TopNav />)
-
-      expect(screen.getByLabelText('Toggle menu')).toBeInTheDocument()
-    })
-  })
-
-  describe('mobile menu', () => {
-    test('opens mobile menu on button click', async () => {
-      const user = userEvent.setup()
-      renderWithRouter(<TopNav />)
-
-      const menuButton = screen.getByLabelText('Toggle menu')
-      await user.click(menuButton)
-
-      // Mobile menu should show navigation items
-      await waitFor(() => {
-        expect(screen.getAllByText('Dashboard').length).toBeGreaterThan(1)
-      })
-    })
-
-    test('shows all navigation items in mobile menu', async () => {
-      const user = userEvent.setup()
-      renderWithRouter(<TopNav />)
-
-      const menuButton = screen.getByLabelText('Toggle menu')
-      await user.click(menuButton)
-
-      await waitFor(() => {
-        expect(screen.getAllByText('Dashboard').length).toBeGreaterThan(1)
-        expect(screen.getByText('Peers')).toBeInTheDocument()
-        expect(screen.getByText('Groups')).toBeInTheDocument()
-        expect(screen.getByText('Services')).toBeInTheDocument()
-        expect(screen.getByText('Policies')).toBeInTheDocument()
-        expect(screen.getAllByText('Logs').length).toBeGreaterThan(1)
-        expect(screen.getByText('Alerts')).toBeInTheDocument()
-      })
-    })
-
-    test('closes mobile menu when clicking overlay', async () => {
-      const user = userEvent.setup()
-      renderWithRouter(<TopNav />)
-
-      const menuButton = screen.getByLabelText('Toggle menu')
-      await user.click(menuButton)
-
-      await waitFor(() => {
-        expect(screen.getAllByText('Dashboard').length).toBeGreaterThan(1)
-      })
-
-      // Click the overlay
-      const overlay = document.querySelector('.fixed.inset-0.bg-black\\/50')
-      await user.click(overlay)
-
-      await waitFor(() => {
-        expect(screen.getAllByText('Dashboard').length).toBe(1)
-      })
-    })
-
-    test('shows admin-only items in mobile menu for admin users', async () => {
-      const user = userEvent.setup()
-      useAuthStore.setState({ role: 'admin' })
-
-      renderWithRouter(<TopNav />)
-
-      const menuButton = screen.getByLabelText('Toggle menu')
-      await user.click(menuButton)
-
-      await waitFor(() => {
-        expect(screen.getByText('Setup Keys')).toBeInTheDocument()
-        expect(screen.getByText('Users')).toBeInTheDocument()
-      })
-    })
-
-    test('hides admin-only items in mobile menu for non-admin users', async () => {
-      const user = userEvent.setup()
-      useAuthStore.setState({ role: 'viewer' })
-
-      renderWithRouter(<TopNav />)
-
-      const menuButton = screen.getByLabelText('Toggle menu')
-      await user.click(menuButton)
-
-      await waitFor(() => {
-        expect(screen.getAllByText('Dashboard').length).toBeGreaterThan(1)
-      })
-
-      // Admin items should not be present
-      expect(screen.queryByText('Setup Keys')).not.toBeInTheDocument()
-      expect(screen.queryByText('Users')).not.toBeInTheDocument()
-    })
   })
 
   describe('active states', () => {
@@ -523,11 +431,33 @@ describe('TopNav', () => {
       expect(desktopNav).toBeInTheDocument()
     })
 
-    test('mobile menu button is visible on mobile only', () => {
-      renderWithRouter(<TopNav />)
+    test('user dropdown button shows icon only on mobile', () => {
+      const { container } = renderWithRouter(<TopNav />)
 
-      const menuButton = screen.getByLabelText('Toggle menu')
-      expect(menuButton).toHaveClass('md:hidden')
+      // The username span should be hidden on mobile
+      const usernameSpan = screen.getByText('testuser')
+      expect(usernameSpan).toHaveClass('hidden')
+      expect(usernameSpan).toHaveClass('md:inline')
+    })
+
+    test('user dropdown shows username and version on mobile when opened', async () => {
+      const user = userEvent.setup()
+      const { container } = renderWithRouter(<TopNav />)
+
+      // Find the user button (it contains the User icon and chevron)
+      const userButtons = container.querySelectorAll('header button')
+      // The user dropdown button is the last one in the header
+      const userButton = Array.from(userButtons).find(btn =>
+        btn.querySelector('svg') && btn.closest('.relative')
+      )
+      await user.click(userButton)
+
+      await waitFor(() => {
+        // Username should appear in mobile dropdown (bold)
+        expect(screen.getAllByText('testuser').length).toBeGreaterThan(0)
+        // Server Version should be visible
+        expect(screen.getByText(/Server Version:/)).toBeInTheDocument()
+      })
     })
   })
 })

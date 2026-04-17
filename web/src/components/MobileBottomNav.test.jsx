@@ -1,6 +1,6 @@
-import { render, screen } from '@testing-library/react'
-import { describe, test, expect } from 'vitest'
-import { BrowserRouter } from 'react-router-dom'
+import { render, screen, fireEvent } from '@testing-library/react'
+import { describe, test, expect, beforeEach } from 'vitest'
+import { BrowserRouter, useLocation } from 'react-router-dom'
 import MobileBottomNav from './MobileBottomNav'
 
 // Helper to render with router
@@ -28,7 +28,7 @@ describe('MobileBottomNav', () => {
     })
   })
 
-  describe('navigation items', () => {
+  describe('navigation items without submenu', () => {
     test('Dashboard links to root', () => {
       renderWithRouter(<MobileBottomNav />)
 
@@ -42,26 +42,87 @@ describe('MobileBottomNav', () => {
       const topologyLink = screen.getByText('Topology').closest('a')
       expect(topologyLink).toHaveAttribute('href', '/topology')
     })
+  })
 
-    test('Access Control links to /peers', () => {
+  describe('submenu toggle behavior', () => {
+    test('first tap on Access Control opens submenu', () => {
       renderWithRouter(<MobileBottomNav />)
 
-      const accessControlLink = screen.getByText('Access Control').closest('a')
-      expect(accessControlLink).toHaveAttribute('href', '/peers')
+      const accessControlBtn = screen.getByTestId('nav-item-access-control')
+      fireEvent.click(accessControlBtn)
+
+      expect(screen.getByTestId('submenu-access-control')).toBeInTheDocument()
     })
 
-    test('Logs links to /logs', () => {
+    test('second tap on same submenu item closes submenu', () => {
       renderWithRouter(<MobileBottomNav />)
 
-      const logsLink = screen.getByText('Logs').closest('a')
-      expect(logsLink).toHaveAttribute('href', '/logs')
+      const accessControlBtn = screen.getByTestId('nav-item-access-control')
+      fireEvent.click(accessControlBtn)
+      expect(screen.getByTestId('submenu-access-control')).toBeInTheDocument()
+
+      fireEvent.click(accessControlBtn)
+      expect(screen.queryByTestId('submenu-access-control')).not.toBeInTheDocument()
     })
 
-    test('Settings links to /settings', () => {
+    test('tapping different submenu item closes current and opens new', () => {
       renderWithRouter(<MobileBottomNav />)
 
-      const settingsLink = screen.getByText('Settings').closest('a')
-      expect(settingsLink).toHaveAttribute('href', '/settings')
+      const accessControlBtn = screen.getByTestId('nav-item-access-control')
+      fireEvent.click(accessControlBtn)
+      expect(screen.getByTestId('submenu-access-control')).toBeInTheDocument()
+
+      const logsBtn = screen.getByTestId('nav-item-logs')
+      fireEvent.click(logsBtn)
+      expect(screen.queryByTestId('submenu-access-control')).not.toBeInTheDocument()
+      expect(screen.getByTestId('submenu-logs')).toBeInTheDocument()
+    })
+
+    test('clicking backdrop closes submenu', () => {
+      renderWithRouter(<MobileBottomNav />)
+
+      const accessControlBtn = screen.getByTestId('nav-item-access-control')
+      fireEvent.click(accessControlBtn)
+      expect(screen.getByTestId('submenu-access-control')).toBeInTheDocument()
+
+      const backdrop = screen.getByTestId('submenu-backdrop')
+      fireEvent.click(backdrop)
+      expect(screen.queryByTestId('submenu-access-control')).not.toBeInTheDocument()
+    })
+  })
+
+  describe('submenu navigation', () => {
+    test('submenu items are rendered when submenu is open', () => {
+      renderWithRouter(<MobileBottomNav />)
+
+      const accessControlBtn = screen.getByTestId('nav-item-access-control')
+      fireEvent.click(accessControlBtn)
+
+      expect(screen.getByText('Peers')).toBeInTheDocument()
+      expect(screen.getByText('Groups')).toBeInTheDocument()
+      expect(screen.getByText('Services')).toBeInTheDocument()
+      expect(screen.getByText('Policies')).toBeInTheDocument()
+    })
+
+    test('Logs submenu items are rendered when open', () => {
+      renderWithRouter(<MobileBottomNav />)
+
+      const logsBtn = screen.getByTestId('nav-item-logs')
+      fireEvent.click(logsBtn)
+
+      expect(screen.getByText('Logs')).toBeInTheDocument()
+      expect(screen.getByText('Alerts')).toBeInTheDocument()
+    })
+
+    test('Settings submenu items are rendered when open', () => {
+      renderWithRouter(<MobileBottomNav />)
+
+      const settingsBtn = screen.getByTestId('nav-item-settings')
+      fireEvent.click(settingsBtn)
+
+      expect(screen.getByText('Settings')).toBeInTheDocument()
+      expect(screen.getByText('Setup Keys')).toBeInTheDocument()
+      expect(screen.getByText('Users')).toBeInTheDocument()
     })
   })
 
@@ -80,25 +141,53 @@ describe('MobileBottomNav', () => {
       expect(topologyLink.className).toContain('text-purple-active')
     })
 
-    test('highlights active Access Control item on /peers route', () => {
+    test('highlights Access Control parent when on /peers route', () => {
       renderWithRouter(<MobileBottomNav />, { route: '/peers' })
 
-      const accessControlLink = screen.getByText('Access Control').closest('a')
-      expect(accessControlLink.className).toContain('text-purple-active')
+      const accessControlBtn = screen.getByTestId('nav-item-access-control')
+      expect(accessControlBtn.className).toContain('text-purple-active')
     })
 
-    test('highlights active Logs item on /logs route', () => {
-      renderWithRouter(<MobileBottomNav />, { route: '/logs' })
+    test('highlights Access Control parent when on /groups route', () => {
+      renderWithRouter(<MobileBottomNav />, { route: '/groups' })
 
-      const logsLink = screen.getByText('Logs').closest('a')
-      expect(logsLink.className).toContain('text-purple-active')
+      const accessControlBtn = screen.getByTestId('nav-item-access-control')
+      expect(accessControlBtn.className).toContain('text-purple-active')
     })
 
-    test('highlights active Settings item on /settings route', () => {
-      renderWithRouter(<MobileBottomNav />, { route: '/settings' })
+    test('highlights Access Control parent when on /services route', () => {
+      renderWithRouter(<MobileBottomNav />, { route: '/services' })
 
-      const settingsLink = screen.getByText('Settings').closest('a')
-      expect(settingsLink.className).toContain('text-purple-active')
+      const accessControlBtn = screen.getByTestId('nav-item-access-control')
+      expect(accessControlBtn.className).toContain('text-purple-active')
+    })
+
+    test('highlights Access Control parent when on /policies route', () => {
+      renderWithRouter(<MobileBottomNav />, { route: '/policies' })
+
+      const accessControlBtn = screen.getByTestId('nav-item-access-control')
+      expect(accessControlBtn.className).toContain('text-purple-active')
+    })
+
+    test('highlights Logs parent when on /alerts route', () => {
+      renderWithRouter(<MobileBottomNav />, { route: '/alerts' })
+
+      const logsBtn = screen.getByTestId('nav-item-logs')
+      expect(logsBtn.className).toContain('text-purple-active')
+    })
+
+    test('highlights Settings parent when on /setup-keys route', () => {
+      renderWithRouter(<MobileBottomNav />, { route: '/setup-keys' })
+
+      const settingsBtn = screen.getByTestId('nav-item-settings')
+      expect(settingsBtn.className).toContain('text-purple-active')
+    })
+
+    test('highlights Settings parent when on /users route', () => {
+      renderWithRouter(<MobileBottomNav />, { route: '/users' })
+
+      const settingsBtn = screen.getByTestId('nav-item-settings')
+      expect(settingsBtn.className).toContain('text-purple-active')
     })
 
     test('non-active items have default styling', () => {
@@ -163,6 +252,37 @@ describe('MobileBottomNav', () => {
       const dashboardLink = screen.getByText('Dashboard').closest('a')
       expect(dashboardLink.className).toContain('flex-col')
     })
+
+    test('submenu popup appears above nav bar', () => {
+      renderWithRouter(<MobileBottomNav />)
+
+      const accessControlBtn = screen.getByTestId('nav-item-access-control')
+      fireEvent.click(accessControlBtn)
+
+      const submenu = screen.getByTestId('submenu-access-control')
+      expect(submenu.className).toContain('bottom-full')
+      expect(submenu.className).toContain('mb-2')
+    })
+
+    test('submenu popup has rounded corners', () => {
+      renderWithRouter(<MobileBottomNav />)
+
+      const accessControlBtn = screen.getByTestId('nav-item-access-control')
+      fireEvent.click(accessControlBtn)
+
+      const submenu = screen.getByTestId('submenu-access-control')
+      expect(submenu.className).toContain('rounded-lg')
+    })
+
+    test('backdrop overlay is visible when submenu is open', () => {
+      renderWithRouter(<MobileBottomNav />)
+
+      const accessControlBtn = screen.getByTestId('nav-item-access-control')
+      fireEvent.click(accessControlBtn)
+
+      const backdrop = screen.getByTestId('submenu-backdrop')
+      expect(backdrop.className).toContain('bg-black/50')
+    })
   })
 
   describe('accessibility', () => {
@@ -179,7 +299,26 @@ describe('MobileBottomNav', () => {
       // Each nav item should have an icon (svg)
       const nav = container.querySelector('nav')
       const icons = nav.querySelectorAll('svg')
-      expect(icons.length).toBe(5)
+      expect(icons.length).toBeGreaterThanOrEqual(5)
+    })
+
+    test('submenu buttons have chevron indicator', () => {
+      renderWithRouter(<MobileBottomNav />)
+
+      const accessControlBtn = screen.getByTestId('nav-item-access-control')
+      // ChevronUp icon should be present
+      expect(accessControlBtn.querySelector('svg')).toBeInTheDocument()
+    })
+
+    test('chevron rotates when submenu is open', () => {
+      renderWithRouter(<MobileBottomNav />)
+
+      const accessControlBtn = screen.getByTestId('nav-item-access-control')
+      const chevron = accessControlBtn.querySelectorAll('svg')[1]
+      expect(chevron.className).not.toContain('rotate-180')
+
+      fireEvent.click(accessControlBtn)
+      expect(chevron.className).toContain('rotate-180')
     })
   })
 
@@ -187,14 +326,25 @@ describe('MobileBottomNav', () => {
     test('only one nav item is active at a time', () => {
       renderWithRouter(<MobileBottomNav />, { route: '/topology' })
 
-      const activeItems = screen.getAllByText('Topology')
-      // Only the nav item should have active styling
-      const navItem = activeItems.find(el => el.closest('a')?.className.includes('text-purple-active'))
-      expect(navItem).toBeInTheDocument()
+      const topologyLink = screen.getByText('Topology').closest('a')
+      expect(topologyLink.className).toContain('text-purple-active')
 
       // Other items should not have active styling
       const dashboardLink = screen.getByText('Dashboard').closest('a')
       expect(dashboardLink.className).not.toContain('text-purple-active')
+    })
+
+    test('only one submenu can be open at a time', () => {
+      renderWithRouter(<MobileBottomNav />)
+
+      const accessControlBtn = screen.getByTestId('nav-item-access-control')
+      fireEvent.click(accessControlBtn)
+      expect(screen.getByTestId('submenu-access-control')).toBeInTheDocument()
+
+      const settingsBtn = screen.getByTestId('nav-item-settings')
+      fireEvent.click(settingsBtn)
+      expect(screen.queryByTestId('submenu-access-control')).not.toBeInTheDocument()
+      expect(screen.getByTestId('submenu-settings')).toBeInTheDocument()
     })
   })
 })

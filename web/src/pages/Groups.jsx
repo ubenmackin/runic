@@ -13,6 +13,7 @@ import { useAuth } from '../hooks/useAuth'
 import ConfirmModal from '../components/ConfirmModal'
 import SearchableSelect from '../components/SearchableSelect'
 import EmptyState from '../components/EmptyState'
+import KebabMenu from '../components/KebabMenu'
 
 import TableSkeleton from '../components/TableSkeleton'
 import SortIndicator from '../components/SortIndicator'
@@ -289,94 +290,149 @@ export default function Groups() {
         </SearchFilterPanel>
       )}
 
-      {!userGroups?.length ? (
-        <EmptyState title="No user groups yet" message="Create groups to organize peers for policy targeting." action="New Group" onAction={openAdd} />
-      ) : !filteredGroups.length ? (
-        <EmptyState title="No matching groups" message="Try a different search term." />
-      ) : (
-        <div className="border border-gray-200 dark:border-gray-border overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-gray-50 dark:bg-charcoal-darkest border-b border-gray-200 dark:border-gray-border">
-                <tr>
-                  <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
-                    <button type="button" onClick={() => handleSort('name')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
-                      Name <SortIndicator columnKey="name" sortConfig={sortConfig} />
-                    </button>
-                  </th>
-                  <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
-                    <button type="button" onClick={() => handleSort('peers')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
-                      Peers <SortIndicator columnKey="peers" sortConfig={sortConfig} />
-                    </button>
-                  </th>
-                  <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
-                    <button type="button" onClick={() => handleSort('policies')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
-                      Policies <SortIndicator columnKey="policies" sortConfig={sortConfig} />
-                    </button>
-                  </th>
-                  <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
-                    Actions
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-200 dark:divide-gray-border">
-                {paginatedGroups.map((group) => (
-                  <tr key={group.id} className="">
-                    <td className="px-4 py-1">
-                      <span className="font-medium text-gray-900 dark:text-light-neutral">
-                        {group.name}
-                        {group.is_pending_delete && (
-                          <span className="ml-2 px-2 py-1 text-xs bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300 rounded-none">
-                            Pending Delete
-                          </span>
-                        )}
+{!userGroups?.length ? (
+  <EmptyState title="No user groups yet" message="Create groups to organize peers for policy targeting." action="New Group" onAction={openAdd} />
+) : !filteredGroups.length ? (
+  <EmptyState title="No matching groups" message="Try a different search term." />
+) : (
+  <>
+    {/* Desktop Table View */}
+    <div className="hidden md:block border border-gray-200 dark:border-gray-border overflow-hidden">
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="bg-gray-50 dark:bg-charcoal-darkest border-b border-gray-200 dark:border-gray-border">
+            <tr>
+              <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+                <button type="button" onClick={() => handleSort('name')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+                  Name <SortIndicator columnKey="name" sortConfig={sortConfig} />
+                </button>
+              </th>
+              <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+                <button type="button" onClick={() => handleSort('peers')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+                  Peers <SortIndicator columnKey="peers" sortConfig={sortConfig} />
+                </button>
+              </th>
+              <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+                <button type="button" onClick={() => handleSort('policies')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+                  Policies <SortIndicator columnKey="policies" sortConfig={sortConfig} />
+                </button>
+              </th>
+              <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
+                Actions
+              </th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-200 dark:divide-gray-border">
+            {paginatedGroups.map((group) => (
+              <tr key={group.id} className="">
+                <td className="px-4 py-1">
+                  <span className="font-medium text-gray-900 dark:text-light-neutral">
+                    {group.name}
+                    {group.is_pending_delete && (
+                      <span className="ml-2 px-2 py-1 text-xs bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300 rounded-none">
+                        Pending Delete
                       </span>
-                    </td>
-                    <td className="px-4 py-1">
-                      <div className="flex items-center gap-1.5 px-2 py-1 bg-gray-100 dark:bg-charcoal-darkest rounded-none text-sm">
-                        <Users className="w-4 h-4 text-gray-500" />
-                        <span className="text-gray-900 dark:text-light-neutral">{group.peer_count || 0}</span>
-                      </div>
-                    </td>
-                    <td className="px-4 py-1">
-                      <div className="flex items-center gap-1.5 px-2 py-1 bg-gray-100 dark:bg-charcoal-darkest rounded-none text-sm">
-                        <Shield className="w-4 h-4 text-gray-500" />
-                        <span className="text-gray-900 dark:text-light-neutral">{group.policy_count || 0}</span>
-                      </div>
-                    </td>
-                    <td className="px-4 py-1">
-                      <div className="flex items-center gap-2">
-                        {canEdit && (
-                          <button
-                            onClick={(e) => { e.stopPropagation(); openEdit(group) }}
-                            className={`p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none ${(group.is_system || group.is_pending_delete) ? 'text-gray-400 cursor-not-allowed opacity-50' : ''}`}
-                            disabled={group.is_system || group.is_pending_delete}
-                            title={group.is_pending_delete ? "Cannot edit soft-deleted groups" : group.is_system ? "System groups cannot be edited" : "Edit"}
-                          >
-                            <Pencil className={`w-4 h-4 ${(group.is_system || group.is_pending_delete) ? 'text-gray-400' : 'text-gray-900 dark:text-white'}`} />
-                          </button>
-                        )}
-                        {canEdit && (
-                          <button
-                            onClick={(e) => { e.stopPropagation(); !group.is_system && !group.is_pending_delete && setDeleteTarget(group) }}
-                            disabled={group.is_system || group.is_pending_delete}
-                            className={`p-1 rounded-none ${(group.is_system || group.is_pending_delete) ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-100 dark:hover:bg-charcoal-darkest'}`}
-                            title={group.is_pending_delete ? "Cannot delete soft-deleted groups" : group.is_system ? "System groups cannot be deleted" : "Delete"}
-                          >
-                            <Trash2 className="w-4 h-4 text-red-500" />
-                          </button>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                    )}
+                  </span>
+                </td>
+                <td className="px-4 py-1">
+                  <div className="flex items-center gap-1.5 px-2 py-1 bg-gray-100 dark:bg-charcoal-darkest rounded-none text-sm">
+                    <Users className="w-4 h-4 text-gray-500" />
+                    <span className="text-gray-900 dark:text-light-neutral">{group.peer_count || 0}</span>
+                  </div>
+                </td>
+                <td className="px-4 py-1">
+                  <div className="flex items-center gap-1.5 px-2 py-1 bg-gray-100 dark:bg-charcoal-darkest rounded-none text-sm">
+                    <Shield className="w-4 h-4 text-gray-500" />
+                    <span className="text-gray-900 dark:text-light-neutral">{group.policy_count || 0}</span>
+                  </div>
+                </td>
+                <td className="px-4 py-1">
+                  <div className="flex items-center gap-2">
+                    {canEdit && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); openEdit(group) }}
+                        className={`p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none ${(group.is_system || group.is_pending_delete) ? 'text-gray-400 cursor-not-allowed opacity-50' : ''}`}
+                        disabled={group.is_system || group.is_pending_delete}
+                        title={group.is_pending_delete ? "Cannot edit soft-deleted groups" : group.is_system ? "System groups cannot be edited" : "Edit"}
+                      >
+                        <Pencil className={`w-4 h-4 ${(group.is_system || group.is_pending_delete) ? 'text-gray-400' : 'text-gray-900 dark:text-white'}`} />
+                      </button>
+                    )}
+                    {canEdit && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); !group.is_system && !group.is_pending_delete && setDeleteTarget(group) }}
+                        disabled={group.is_system || group.is_pending_delete}
+                        className={`p-1 rounded-none ${(group.is_system || group.is_pending_delete) ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-100 dark:hover:bg-charcoal-darkest'}`}
+                        title={group.is_pending_delete ? "Cannot delete soft-deleted groups" : group.is_system ? "System groups cannot be deleted" : "Delete"}
+                      >
+                        <Trash2 className="w-4 h-4 text-red-500" />
+                      </button>
+                    )}
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
 
-          <Pagination showingRange={groupsShowingRange} page={groupsPage} totalPages={totalPages} onPageChange={setGroupsPage} totalItems={groupsTotal} />
+      <Pagination showingRange={groupsShowingRange} page={groupsPage} totalPages={totalPages} onPageChange={setGroupsPage} totalItems={groupsTotal} />
+    </div>
+
+    {/* Mobile Card View */}
+    <div className="md:hidden space-y-2">
+      {paginatedGroups.map((group) => (
+        <div key={group.id} className="bg-white dark:bg-charcoal-dark border border-gray-200 dark:border-gray-border rounded-none p-4">
+          <div className="flex items-start justify-between gap-2">
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="font-medium text-gray-900 dark:text-light-neutral truncate">
+                  {group.name}
+                </span>
+                {group.is_pending_delete && (
+                  <span className="px-2 py-1 text-xs bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300 rounded-none">
+                    Pending Delete
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-4 mt-2 text-sm text-gray-600 dark:text-amber-muted">
+                <div className="flex items-center gap-1.5">
+                  <Users className="w-4 h-4 text-gray-500" />
+                  <span>{group.peer_count || 0} peers</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <Shield className="w-4 h-4 text-gray-500" />
+                  <span>{group.policy_count || 0} policies</span>
+                </div>
+              </div>
+            </div>
+            {canEdit && (
+              <KebabMenu
+                items={[
+                  {
+                    label: 'Edit',
+                    icon: Pencil,
+                    onClick: () => openEdit(group),
+                    show: canEdit && !group.is_system && !group.is_pending_delete,
+                  },
+                  {
+                    label: 'Delete',
+                    icon: Trash2,
+                    onClick: () => setDeleteTarget(group),
+                    show: canEdit && !group.is_system && !group.is_pending_delete,
+                    danger: true,
+                  },
+                ].filter(item => item.show !== false)}
+              />
+            )}
+          </div>
         </div>
-      )}
+      ))}
+      <Pagination showingRange={groupsShowingRange} page={groupsPage} totalPages={totalPages} onPageChange={setGroupsPage} totalItems={groupsTotal} />
+    </div>
+  </>
+)}
 
       {/* Add/Edit Modal */}
       {modalOpen && (
