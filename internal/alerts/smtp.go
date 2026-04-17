@@ -148,7 +148,12 @@ func (s *SMTPSender) sendEmail(to, subject, body, contentType string) error {
 	// Sanitize header values to prevent email header injection.
 	subject = s.sanitizeHeaderValue(subject)
 
-	message := s.buildMessage(to, subject, body, contentType)
+	safeBody := body
+	if strings.EqualFold(contentType, "text/html") {
+		safeBody = s.sanitizeHTMLBody(body)
+	}
+
+	message := s.buildMessage(to, subject, safeBody, contentType)
 
 	addr := fmt.Sprintf("%s:%d", s.config.Host, s.config.Port)
 
