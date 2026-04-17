@@ -94,6 +94,18 @@ func (s *SMTPSender) SendAlertEmail(to string, event *AlertEvent) error {
 	sanitizedSubject, _ := SanitizeAlertInput(event.Subject, 0)
 	sanitizedEvent.Subject = sanitizedSubject
 
+	if event.Metadata != nil {
+		sanitizedEvent.Metadata = make(map[string]interface{}, len(event.Metadata))
+		for k, v := range event.Metadata {
+			if strVal, ok := v.(string); ok {
+				safeVal, _ := SanitizeAlertInput(strVal, 0)
+				sanitizedEvent.Metadata[k] = safeVal
+				continue
+			}
+			sanitizedEvent.Metadata[k] = v
+		}
+	}
+
 	sanitizedPeerName, _ := SanitizeAlertInput(event.PeerName, 0)
 	sanitizedEvent.PeerName = sanitizedPeerName
 
