@@ -419,33 +419,33 @@ const getKeyData = (keyType) => {
         </div>
         )}
 
-        {!isAdmin && (
-          <>
-            <CollapsibleSection
-              title="Notification Preferences"
-              icon={<Bell className="w-5 h-5 text-purple-500" />}
-              storageKey="settings_collapsed_notifications"
-              defaultExpanded={true}
-              summary={getNotificationSummary(notificationPrefs)}
-            >
-              {userPrefsLoading ? (
-                <div className="flex items-center justify-center py-8">
-                  <Loader className="w-6 h-6 animate-spin text-purple-500" />
-                </div>
-              ) : userPrefsError ? (
-                <div className="text-center py-8">
-                  <p className="text-gray-600 dark:text-amber-muted">
-                    Please log in to configure notification preferences.
-                  </p>
-                </div>
-              ) : notificationPrefs && (
-                <div className="space-y-6">
-                  <div>
-                    <label htmlFor="unified_timezone" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-2">
-                      Timezone
-                    </label>
-                    <select
-                      id="unified_timezone"
+{!isAdmin && (
+        <>
+          <CollapsibleSection
+            title="Notification Preferences"
+            icon={<Bell className="w-5 h-5 text-purple-500" />}
+            storageKey="settings_collapsed_notifications"
+            defaultExpanded={true}
+            summary={getNotificationSummary(notificationPrefs)}
+          >
+            {userPrefsLoading ? (
+              <div className="flex items-center justify-center py-8">
+                <Loader className="w-6 h-6 animate-spin text-purple-500" />
+              </div>
+            ) : userPrefsError ? (
+              <div className="text-center py-8">
+                <p className="text-gray-600 dark:text-amber-muted">
+                  Please log in to configure notification preferences.
+                </p>
+              </div>
+            ) : notificationPrefs && (
+              <div className="space-y-6">
+                <div>
+                  <label htmlFor="unified_timezone" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-2">
+                    Timezone
+                  </label>
+                  <select
+                    id="unified_timezone"
                       value={unifiedTimezone || 'UTC'}
                       onChange={(e) => handleUnifiedTimezoneChange(e.target.value)}
                       className="w-full md:w-auto min-w-[200px] px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
@@ -465,33 +465,33 @@ const getKeyData = (keyType) => {
                     <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-3">
                       Alert Types
                     </label>
-                    <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                      {alertTypes.map((type) => (
-                        <div key={type.key} className="flex items-center gap-2">
-                          <input
-                            type="checkbox"
-                            id={`alert-type-${type.key}`}
-                            checked={notificationPrefs.alert_types?.[type.key] ?? true}
-                            onChange={() => handleToggleAlertType(type.key)}
-                            className="w-4 h-4 text-purple-600 border-gray-300 dark:border-gray-border rounded-none focus:ring-purple-500"
-                          />
-                          <label
-                            htmlFor={`alert-type-${type.key}`}
-                            className="text-sm text-gray-700 dark:text-amber-primary cursor-pointer"
-                          >
-                            {type.label}
-                          </label>
-                        </div>
-                      ))}
-                    </div>
+<div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {alertTypes.map((type) => (
+                  <div key={type.key} className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id={`alert-type-${type.key}`}
+                      checked={notificationPrefs.alert_types?.[type.key] ?? true}
+                      onChange={() => handleToggleAlertType(type.key)}
+                      className="w-4 h-4 text-purple-600 border-gray-300 dark:border-gray-border rounded-none focus:ring-purple-500"
+                    />
+                    <label
+                      htmlFor={`alert-type-${type.key}`}
+                      className="text-sm text-gray-700 dark:text-amber-primary cursor-pointer"
+                    >
+                      {type.label}
+                    </label>
+                  </div>
+                ))}
               </div>
+            </div>
 
-              <div className="border-t border-gray-200 dark:border-gray-border pt-6">
-                  <button
-                    type="button"
-                    onClick={() => setShowQuietHours(!showQuietHours)}
-                    aria-expanded={!!showQuietHours}
-                    aria-controls="quiet-hours-content"
+            <div className="border-t border-gray-200 dark:border-gray-border pt-6">
+              <button
+                type="button"
+                onClick={() => setShowQuietHours(!showQuietHours)}
+                aria-expanded={!!showQuietHours}
+                aria-controls="quiet-hours-content"
                     className="flex items-center justify-between w-full text-left"
                   >
                     <span className="text-sm font-medium text-gray-700 dark:text-amber-primary">
@@ -504,44 +504,44 @@ const getKeyData = (keyType) => {
                     </span>
                   </button>
                   {showQuietHours && (
-          <div id="quiet-hours-content" className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
-                        <div className="flex items-center gap-2">
-                          <input
-                            type="checkbox"
-                            id="quiet_hours_enabled"
-                            checked={notificationPrefs.quiet_hours?.enabled ?? false}
-                            onChange={(e) => handleQuietHoursChange('enabled', e.target.checked)}
-                            className="w-4 h-4 text-purple-600 border-gray-300 dark:border-gray-border rounded-none focus:ring-purple-500"
-                          />
-                          <label htmlFor="quiet_hours_enabled" className="text-sm text-gray-700 dark:text-amber-primary">
-                            Enable Quiet Hours
-                          </label>
-                        </div>
-                        <div>
-                          <label htmlFor="quiet_hours_start" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-                            Start Time
-                          </label>
-                          <input
-                            type="time"
-                            id="quiet_hours_start"
-                            value={notificationPrefs.quiet_hours?.start_time || '22:00'}
-                            onChange={(e) => handleQuietHoursChange('start_time', e.target.value)}
-                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-                          />
-                        </div>
-                        <div>
-                          <label htmlFor="quiet_hours_end" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-                            End Time
-                          </label>
-                          <input
-                            type="time"
-                            id="quiet_hours_end"
-                            value={notificationPrefs.quiet_hours?.end_time || '08:00'}
-                            onChange={(e) => handleQuietHoursChange('end_time', e.target.value)}
-                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-                          />
-                        </div>
-                      </div>
+<div id="quiet-hours-content" className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    id="quiet_hours_enabled"
+                    checked={notificationPrefs.quiet_hours?.enabled ?? false}
+                    onChange={(e) => handleQuietHoursChange('enabled', e.target.checked)}
+                    className="w-4 h-4 text-purple-600 border-gray-300 dark:border-gray-border rounded-none focus:ring-purple-500"
+                  />
+                  <label htmlFor="quiet_hours_enabled" className="text-sm text-gray-700 dark:text-amber-primary">
+                    Enable Quiet Hours
+                  </label>
+                </div>
+                <div>
+                  <label htmlFor="quiet_hours_start" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+                    Start Time
+                  </label>
+                  <input
+                    type="time"
+                    id="quiet_hours_start"
+                    value={notificationPrefs.quiet_hours?.start_time || '22:00'}
+                    onChange={(e) => handleQuietHoursChange('start_time', e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="quiet_hours_end" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+                    End Time
+                  </label>
+                  <input
+                    type="time"
+                    id="quiet_hours_end"
+                    value={notificationPrefs.quiet_hours?.end_time || '08:00'}
+                    onChange={(e) => handleQuietHoursChange('end_time', e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+                  />
+                </div>
+              </div>
                     )}
               </div>
 
@@ -563,32 +563,32 @@ const getKeyData = (keyType) => {
                     </span>
                   </button>
                   {showDigest && (
-          <div id="daily-digest-content" className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div className="flex items-center gap-2">
-                          <input
-                            type="checkbox"
-                            id="digest_enabled"
-                            checked={notificationPrefs.daily_digest?.enabled ?? false}
-                            onChange={(e) => handleDigestChange('enabled', e.target.checked)}
-                            className="w-4 h-4 text-purple-600 border-gray-300 dark:border-gray-border rounded-none focus:ring-purple-500"
-                          />
-                          <label htmlFor="digest_enabled" className="text-sm text-gray-700 dark:text-amber-primary">
-                            Enable Daily Digest
-                          </label>
-                        </div>
-                        <div>
-                          <label htmlFor="digest_time" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-                            Digest Time
-                          </label>
-                          <input
-                            type="time"
-                            id="digest_time"
-                            value={notificationPrefs.daily_digest?.time || '09:00'}
-                            onChange={(e) => handleDigestChange('time', e.target.value)}
-                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-                          />
-                        </div>
-                      </div>
+<div id="daily-digest-content" className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    id="digest_enabled"
+                    checked={notificationPrefs.daily_digest?.enabled ?? false}
+                    onChange={(e) => handleDigestChange('enabled', e.target.checked)}
+                    className="w-4 h-4 text-purple-600 border-gray-300 dark:border-gray-border rounded-none focus:ring-purple-500"
+                  />
+                  <label htmlFor="digest_enabled" className="text-sm text-gray-700 dark:text-amber-primary">
+                    Enable Daily Digest
+                  </label>
+                </div>
+                <div>
+                  <label htmlFor="digest_time" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+                    Digest Time
+                  </label>
+                  <input
+                    type="time"
+                    id="digest_time"
+                    value={notificationPrefs.daily_digest?.time || '09:00'}
+                    onChange={(e) => handleDigestChange('time', e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+                  />
+                </div>
+              </div>
                     )}
                   </div>
                 </div>
@@ -642,132 +642,132 @@ const getKeyData = (keyType) => {
                     <Loader className="w-6 h-6 animate-spin text-purple-500" />
                   </div>
                 ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-                    <span>Instance URL</span>
-			<span className="text-xs text-gray-500 dark:text-amber-muted ml-1">- Used for email links</span>
-                  </label>
-                  <input
-                    type="url"
-                    id="instance_url"
-                    value={instanceUrl}
-                    onChange={(e) => setInstanceUrl(e.target.value)}
-                    onBlur={() => updateInstanceMutation.mutate(instanceUrl)}
-                    placeholder="https://runic.example.com"
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-                    />
-</div>
-{/* Blank spacer to match label height for alignment */}
-<span className="block mb-1">&nbsp;</span>
-              <div className="flex items-center gap-3">
-                <ToggleSwitch
-                  checked={smtpFormData.enabled}
-                  onChange={(value) => setSmtpFormData({ ...smtpFormData, enabled: value })}
-                  aria-labelledby="enable-email-label"
-                />
-                <label id="enable-email-label" className="text-sm text-gray-700 dark:text-amber-primary">
-                  Enable Email
-                </label>
-              </div>
+                                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                                        {/* Row 1: Instance URL | Enable Email toggle */}
+                                                        <div>
+<label htmlFor="instance_url" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+                                        Instance URL
+                                        <span className="text-xs text-gray-500 dark:text-amber-muted ml-1">- Used for email links</span>
+                                    </label>
+                                                                <input
+                                                                        type="url"
+                                                                        id="instance_url"
+                                                                        value={instanceUrl}
+                                                                        onChange={(e) => setInstanceUrl(e.target.value)}
+                                                                        onBlur={() => updateInstanceMutation.mutate(instanceUrl)}
+                                                                        placeholder="https://runic.example.com"
+                                                                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+                                                                />
+                                                        </div>
+                                                        <div className="flex items-center h-[42px]">
+                                                                <ToggleSwitch
+                                                                        checked={smtpFormData.enabled}
+                                                                        onChange={(value) => setSmtpFormData({ ...smtpFormData, enabled: value })}
+                                                                        aria-labelledby="enable-email-label"
+                                                                />
+                                                                <label id="enable-email-label" className="text-sm text-gray-700 dark:text-amber-primary ml-3">
+                                                                        Enable Email
+                                                                </label>
+                                                        </div>
 
-                  <div>
-<label htmlFor="smtp_host" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-SMTP Host
-</label>
-<input
-type="text"
-id="smtp_host"
-value={smtpFormData.host}
-onChange={(e) => setSmtpFormData({ ...smtpFormData, host: e.target.value })}
-placeholder="smtp.example.com"
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-                    />
-                  </div>
-                  <div className="flex items-center gap-3">
-									<div>
-										<label htmlFor="smtp_port" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-											SMTP Port
-										</label>
-										<input
-											type="text"
-											inputMode="numeric"
-											id="smtp_port"
-											value={smtpFormData.port}
-											onChange={handlePortChange}
-											aria-invalid={!!portError}
-											aria-describedby={portError ? 'smtp_port_error' : undefined}
-											className="w-32 px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-										/>
-										{portError && (
-                    <p id="smtp_port_error" className="text-xs text-red-500 mt-1">{portError}</p>
-                    )}
-                  </div>
-                                                {/* Blank spacer to match label height for alignment */}
-                                                <span className="block mb-1">&nbsp;</span>
-                                                <div className="flex items-center gap-3">
-                                                        <ToggleSwitch
-                                                                checked={smtpFormData.use_tls}
-                                                                onChange={(value) => setSmtpFormData({ ...smtpFormData, use_tls: value })}
-                                                                aria-labelledby="use-tls-label"
-                                                        />
-                                                        <label id="use-tls-label" className="text-sm text-gray-700 dark:text-amber-primary">
-                                                                Use TLS
-                                                        </label>
+                                                        {/* Row 2: SMTP Host | SMTP Port + Use TLS */}
+                                                        <div>
+                                                                <label htmlFor="smtp_host" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+                                                                        SMTP Host
+                                                                </label>
+                                                                <input
+                                                                        type="text"
+                                                                        id="smtp_host"
+                                                                        value={smtpFormData.host}
+                                                                        onChange={(e) => setSmtpFormData({ ...smtpFormData, host: e.target.value })}
+                                                                        placeholder="smtp.example.com"
+                                                                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+                                                                />
+                                                        </div>
+                                <div className={`flex items-end gap-4 ${portError ? 'mb-6' : ''}`}>
+                                    <div className="relative">
+                                        <label htmlFor="smtp_port" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+                                            SMTP Port
+                                        </label>
+                                        <input
+                                            type="text"
+                                            inputMode="numeric"
+                                            id="smtp_port"
+                                            value={smtpFormData.port}
+                                            onChange={handlePortChange}
+                                            aria-invalid={!!portError}
+                                            aria-describedby={portError ? 'smtp_port_error' : undefined}
+                                            className="w-20 px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+                                        />
+                                        {portError && (
+                                            <p id="smtp_port_error" className="absolute text-xs text-red-500 -bottom-5 left-0 whitespace-nowrap">{portError}</p>
+                                        )}
+                                    </div>
+                                                                <div className="flex items-center h-[42px]">
+                                                                        <ToggleSwitch
+                                                                                checked={smtpFormData.use_tls}
+                                                                                onChange={(value) => setSmtpFormData({ ...smtpFormData, use_tls: value })}
+                                                                                aria-labelledby="use-tls-label"
+                                                                        />
+                                                                        <label id="use-tls-label" className="text-sm text-gray-700 dark:text-amber-primary ml-3">
+                                                                                Use TLS
+                                                                        </label>
+                                                                </div>
+                                                        </div>
+
+                                                        {/* Row 3: Username | Password */}
+                                                        <div>
+                                                                <label htmlFor="smtp_username" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+                                                                        Username
+                                                                </label>
+                                                                <input
+                                                                        type="text"
+                                                                        id="smtp_username"
+                                                                        value={smtpFormData.username}
+                                                                        onChange={(e) => setSmtpFormData({ ...smtpFormData, username: e.target.value })}
+                                                                        placeholder="username"
+                                                                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+                                                                />
+                                                        </div>
+                                                        <div>
+                                                                <label htmlFor="smtp_password" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+                                                                        Password
+                                                                </label>
+                                                                <div className="relative">
+                                                                        <input
+                                                                                type={showPassword ? 'text' : 'password'}
+                                                                                id="smtp_password"
+                                                                                value={smtpFormData.password}
+                                                                                onChange={(e) => setSmtpFormData({ ...smtpFormData, password: e.target.value })}
+                                                                                placeholder={smtpConfig?.password_set ? '••••••••' : 'Enter password'}
+                                                                                className="w-full px-3 py-2 pr-10 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+                                                                        />
+                                                                        <button
+                                                                                type="button"
+                                                                                onClick={() => setShowPassword(!showPassword)}
+                                                                                className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-700 dark:hover:text-amber-muted"
+                                                                        >
+                                                                                {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                                                                        </button>
+                                                                </div>
+                                                        </div>
+
+                                                        {/* Row 4: From Address | Empty */}
+                                                        <div>
+                                                                <label htmlFor="smtp_from_address" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+                                                                        From Address
+                                                                </label>
+                                                                <input
+                                                                        type="email"
+                                                                        id="smtp_from_address"
+                                                                        value={smtpFormData.from_address}
+                                                                        onChange={(e) => setSmtpFormData({ ...smtpFormData, from_address: e.target.value })}
+                                                                        placeholder="alerts@example.com"
+                                                                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+                                                                />
+                                                        </div>
+                                                        <div></div>
                                                 </div>
-                </div>
-
-                  <div>
-                      <label htmlFor="smtp_username" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-                        Username
-                      </label>
-                      <input
-                        type="text"
-                        id="smtp_username"
-                        value={smtpFormData.username}
-                        onChange={(e) => setSmtpFormData({ ...smtpFormData, username: e.target.value })}
-                        placeholder="username"
-                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-                      />
-                    </div>
-                    <div>
-                      <label htmlFor="smtp_password" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-                        Password
-                      </label>
-                      <div className="relative">
-                        <input
-                          type={showPassword ? 'text' : 'password'}
-                          id="smtp_password"
-                          value={smtpFormData.password}
-                          onChange={(e) => setSmtpFormData({ ...smtpFormData, password: e.target.value })}
-                          placeholder={smtpConfig?.password_set ? '••••••••' : 'Enter password'}
-                          className="w-full px-3 py-2 pr-10 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => setShowPassword(!showPassword)}
-                          className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-700 dark:hover:text-amber-muted"
-                        >
-                          {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                        </button>
-                      </div>
-                  </div>
-
-                  <div>
-                  <label htmlFor="smtp_from_address" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-                    From Address
-                  </label>
-                  <input
-                    type="email"
-                    id="smtp_from_address"
-                    value={smtpFormData.from_address}
-                    onChange={(e) => setSmtpFormData({ ...smtpFormData, from_address: e.target.value })}
-                    placeholder="alerts@example.com"
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-                  />
-                </div>
-                <div></div>
-                  </div>
                 )}
 
                 <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-gray-200 dark:border-gray-border">
@@ -807,33 +807,33 @@ placeholder="smtp.example.com"
 
               <div className="space-y-6">
                 <CollapsibleSection
-        id="notifications-section"
-        title="Your Notification Preferences"
-        icon={<Bell className="w-5 h-5 text-purple-500" />}
-        storageKey="settings_collapsed_notifications_admin"
-        defaultExpanded={false}
-                summary={getNotificationSummary(notificationPrefs)}
-                expanded={notificationsExpanded}
-                onExpandedChange={setNotificationsExpanded}
-              >
-                {userPrefsLoading ? (
-                  <div className="flex items-center justify-center py-8">
-                    <Loader className="w-6 h-6 animate-spin text-purple-500" />
-                  </div>
-                ) : userPrefsError ? (
-                  <div className="text-center py-8">
-                    <p className="text-gray-600 dark:text-amber-muted">
-                      Please log in to configure notification preferences.
-                    </p>
-                  </div>
-              ) : notificationPrefs && (
-                <div className="space-y-6">
-                  <div>
-                      <label htmlFor="unified_timezone" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-2">
-                        Timezone
-                      </label>
-                      <select
-                        id="unified_timezone"
+id="notifications-section"
+            title="Your Notification Preferences"
+            icon={<Bell className="w-5 h-5 text-purple-500" />}
+            storageKey="settings_collapsed_notifications_admin"
+            defaultExpanded={false}
+            summary={getNotificationSummary(notificationPrefs)}
+            expanded={notificationsExpanded}
+            onExpandedChange={setNotificationsExpanded}
+          >
+            {userPrefsLoading ? (
+              <div className="flex items-center justify-center py-8">
+                <Loader className="w-6 h-6 animate-spin text-purple-500" />
+              </div>
+            ) : userPrefsError ? (
+              <div className="text-center py-8">
+                <p className="text-gray-600 dark:text-amber-muted">
+                  Please log in to configure notification preferences.
+                </p>
+              </div>
+            ) : notificationPrefs && (
+              <div className="space-y-6">
+                <div>
+                  <label htmlFor="admin-unified_timezone" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-2">
+                    Timezone
+                  </label>
+                  <select
+                    id="admin-unified_timezone"
                         value={unifiedTimezone || 'UTC'}
                         onChange={(e) => handleUnifiedTimezoneChange(e.target.value)}
                         className="w-full md:w-auto min-w-[200px] px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
@@ -853,33 +853,33 @@ placeholder="smtp.example.com"
                       <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-3">
                         Alert Types
                       </label>
-                      <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                        {alertTypes.map((type) => (
-                          <div key={type.key} className="flex items-center gap-2">
-                            <input
-                              type="checkbox"
-                              id={`alert-type-${type.key}`}
-                              checked={notificationPrefs.alert_types?.[type.key] ?? true}
-                              onChange={() => handleToggleAlertType(type.key)}
-                              className="w-4 h-4 text-purple-600 border-gray-300 dark:border-gray-border rounded-none focus:ring-purple-500"
-                            />
-                            <label
-                              htmlFor={`alert-type-${type.key}`}
-                              className="text-sm text-gray-700 dark:text-amber-primary cursor-pointer"
-                            >
-                              {type.label}
-                            </label>
-                          </div>
-                        ))}
-                      </div>
-                </div>
+<div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {alertTypes.map((type) => (
+                  <div key={type.key} className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id={`admin-alert-type-${type.key}`}
+                      checked={notificationPrefs.alert_types?.[type.key] ?? true}
+                      onChange={() => handleToggleAlertType(type.key)}
+                      className="w-4 h-4 text-purple-600 border-gray-300 dark:border-gray-border rounded-none focus:ring-purple-500"
+                    />
+                    <label
+                      htmlFor={`admin-alert-type-${type.key}`}
+                      className="text-sm text-gray-700 dark:text-amber-primary cursor-pointer"
+                    >
+                      {type.label}
+                    </label>
+                  </div>
+                ))}
+              </div>
+            </div>
 
-                <div className="border-t border-gray-200 dark:border-gray-border pt-6">
-                  <button
-                    type="button"
-                    onClick={() => setShowQuietHours(!showQuietHours)}
-                    aria-expanded={!!showQuietHours}
-                    aria-controls="admin-quiet-hours-content"
+            <div className="border-t border-gray-200 dark:border-gray-border pt-6">
+              <button
+                type="button"
+                onClick={() => setShowQuietHours(!showQuietHours)}
+                aria-expanded={!!showQuietHours}
+                aria-controls="admin-quiet-hours-content"
                     className="flex items-center justify-between w-full text-left"
                   >
                     <span className="text-sm font-medium text-gray-700 dark:text-amber-primary">
@@ -892,44 +892,44 @@ placeholder="smtp.example.com"
                     </span>
                   </button>
                   {showQuietHours && (
-          <div id="admin-quiet-hours-content" className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
-                          <div className="flex items-center gap-2">
-                            <input
-                              type="checkbox"
-                              id="quiet_hours_enabled"
-                              checked={notificationPrefs.quiet_hours?.enabled ?? false}
-                              onChange={(e) => handleQuietHoursChange('enabled', e.target.checked)}
-                              className="w-4 h-4 text-purple-600 border-gray-300 dark:border-gray-border rounded-none focus:ring-purple-500"
-                            />
-                            <label htmlFor="quiet_hours_enabled" className="text-sm text-gray-700 dark:text-amber-primary">
-                              Enable Quiet Hours
-                            </label>
-                          </div>
-                          <div>
-                            <label htmlFor="quiet_hours_start" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-                              Start Time
-                            </label>
-                            <input
-                              type="time"
-                              id="quiet_hours_start"
-                              value={notificationPrefs.quiet_hours?.start_time || '22:00'}
-                              onChange={(e) => handleQuietHoursChange('start_time', e.target.value)}
-                              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-                            />
-                          </div>
-                          <div>
-                            <label htmlFor="quiet_hours_end" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-                              End Time
-                            </label>
-                            <input
-                              type="time"
-                              id="quiet_hours_end"
-                              value={notificationPrefs.quiet_hours?.end_time || '08:00'}
-                              onChange={(e) => handleQuietHoursChange('end_time', e.target.value)}
-                              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-                            />
-                          </div>
-                        </div>
+<div id="admin-quiet-hours-content" className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    id="admin-quiet_hours_enabled"
+                    checked={notificationPrefs.quiet_hours?.enabled ?? false}
+                    onChange={(e) => handleQuietHoursChange('enabled', e.target.checked)}
+                    className="w-4 h-4 text-purple-600 border-gray-300 dark:border-gray-border rounded-none focus:ring-purple-500"
+                  />
+                  <label htmlFor="admin-quiet_hours_enabled" className="text-sm text-gray-700 dark:text-amber-primary">
+                    Enable Quiet Hours
+                  </label>
+                </div>
+                <div>
+                  <label htmlFor="admin-quiet_hours_start" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+                    Start Time
+                  </label>
+                  <input
+                    type="time"
+                    id="admin-quiet_hours_start"
+                    value={notificationPrefs.quiet_hours?.start_time || '22:00'}
+                    onChange={(e) => handleQuietHoursChange('start_time', e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="admin-quiet_hours_end" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+                    End Time
+                  </label>
+                  <input
+                    type="time"
+                    id="admin-quiet_hours_end"
+                    value={notificationPrefs.quiet_hours?.end_time || '08:00'}
+                    onChange={(e) => handleQuietHoursChange('end_time', e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+                  />
+                </div>
+              </div>
                       )}
                 </div>
 
@@ -951,32 +951,32 @@ placeholder="smtp.example.com"
                     </span>
                   </button>
                   {showDigest && (
-          <div id="admin-daily-digest-content" className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-                          <div className="flex items-center gap-2">
-                            <input
-                              type="checkbox"
-                              id="digest_enabled"
-                              checked={notificationPrefs.daily_digest?.enabled ?? false}
-                              onChange={(e) => handleDigestChange('enabled', e.target.checked)}
-                              className="w-4 h-4 text-purple-600 border-gray-300 dark:border-gray-border rounded-none focus:ring-purple-500"
-                            />
-                            <label htmlFor="digest_enabled" className="text-sm text-gray-700 dark:text-amber-primary">
-                              Enable Daily Digest
-                            </label>
-                          </div>
-                          <div>
-                            <label htmlFor="digest_time" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-                              Digest Time
-                            </label>
-                            <input
-                              type="time"
-                              id="digest_time"
-                              value={notificationPrefs.daily_digest?.time || '09:00'}
-                              onChange={(e) => handleDigestChange('time', e.target.value)}
-                              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-                            />
-                          </div>
-                        </div>
+<div id="admin-daily-digest-content" className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    id="admin-digest_enabled"
+                    checked={notificationPrefs.daily_digest?.enabled ?? false}
+                    onChange={(e) => handleDigestChange('enabled', e.target.checked)}
+                    className="w-4 h-4 text-purple-600 border-gray-300 dark:border-gray-border rounded-none focus:ring-purple-500"
+                  />
+                  <label htmlFor="admin-digest_enabled" className="text-sm text-gray-700 dark:text-amber-primary">
+                    Enable Daily Digest
+                  </label>
+                </div>
+                <div>
+                  <label htmlFor="admin-digest_time" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+                    Digest Time
+                  </label>
+                  <input
+                    type="time"
+                    id="admin-digest_time"
+                    value={notificationPrefs.daily_digest?.time || '09:00'}
+                    onChange={(e) => handleDigestChange('time', e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+                  />
+                </div>
+              </div>
                       )}
                     </div>
                   </div>
