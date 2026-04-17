@@ -1,0 +1,10 @@
+name: "Runic CodeQL Configuration"
+
+# Note: The go/email-injection false positive at internal/alerts/smtp.go:97
+# is suppressed inline via lgtm[go/email-injection] comment.
+# The code sanitizes all user input through SanitizeAlertInput() which removes
+# control characters (CR, LF, NUL, etc.) that enable email header injection.
+
+paths:
+  - internal
+  - cmd
