@@ -1,10 +1,15 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import Peers from './Peers'
 import * as apiClient from '../api/client'
 import { useAuthStore } from '../store'
+
+// Mock useIsMobile hook to return false for desktop view
+vi.mock('../hooks/useIsMobile', () => ({
+  useIsMobile: () => false,
+}))
 
 // Mock the API client
 vi.mock('../api/client', () => ({
@@ -92,6 +97,16 @@ function renderWithProviders(ui, options = {}) {
   return render(ui, { wrapper, ...options })
 }
 
+// Helper to get the desktop table body for scoped queries
+function getDesktopTableBody() {
+  return document.querySelector('table tbody')
+}
+
+// Helper to get the desktop table for scoped queries
+function getDesktopTable() {
+  return document.querySelector('table')
+}
+
 // Mock peers data
 const mockPeers = [
   { id: 1, hostname: 'server-alpha', ip_address: '192.168.1.10', status: 'online', agent_version: '1.0.0', os_type: 'ubuntu', last_heartbeat: new Date().toISOString(), groups: 'web,servers', sync_status: 'synced' },
@@ -128,9 +143,11 @@ describe('Peers Page', () => {
     test('Status column header is clickable', async () => {
       renderWithProviders(<Peers />)
 
-      // Wait for table to load
+      // Wait for table to load using scoped query to desktop table
       await waitFor(() => {
-        expect(screen.getByText('server-alpha')).toBeInTheDocument()
+        const tbody = getDesktopTableBody()
+        expect(tbody).toBeInTheDocument()
+        expect(within(tbody).getByText('server-alpha')).toBeInTheDocument()
       })
 
       // Find the Status column header button
@@ -141,9 +158,11 @@ describe('Peers Page', () => {
     test('Agent column header is clickable', async () => {
       renderWithProviders(<Peers />)
 
-      // Wait for table to load
+      // Wait for table to load using scoped query
       await waitFor(() => {
-        expect(screen.getByText('server-alpha')).toBeInTheDocument()
+        const tbody = getDesktopTableBody()
+        expect(tbody).toBeInTheDocument()
+        expect(within(tbody).getByText('server-alpha')).toBeInTheDocument()
       })
 
       // Find the Agent column header button - be more specific
@@ -155,18 +174,20 @@ describe('Peers Page', () => {
     test('SortIndicator is rendered for sortable columns', async () => {
       renderWithProviders(<Peers />)
 
-      // Wait for table to load
+      // Wait for table to load using scoped query
       await waitFor(() => {
-        expect(screen.getByText('server-alpha')).toBeInTheDocument()
+        const tbody = getDesktopTableBody()
+        expect(tbody).toBeInTheDocument()
+        expect(within(tbody).getByText('server-alpha')).toBeInTheDocument()
       })
 
       // Check that sortable column headers exist - be more specific with exact text
       const hostnameHeader = screen.getByRole('button', { name: /^Hostname/ })
       const statusHeader = screen.getByRole('button', { name: /^Status/ })
-      
+
       expect(hostnameHeader).toBeInTheDocument()
       expect(statusHeader).toBeInTheDocument()
-      
+
       // Agent header - there might be multiple, just check one exists
       const agentHeaders = screen.getAllByRole('button', { name: /Agent/ })
       expect(agentHeaders.length).toBeGreaterThan(0)
@@ -176,7 +197,9 @@ describe('Peers Page', () => {
       renderWithProviders(<Peers />)
 
       await waitFor(() => {
-        expect(screen.getByText('server-alpha')).toBeInTheDocument()
+        const tbody = getDesktopTableBody()
+        expect(tbody).toBeInTheDocument()
+        expect(within(tbody).getByText('server-alpha')).toBeInTheDocument()
       })
 
       // The default sort is hostname, so check that the table is rendered
@@ -190,18 +213,23 @@ describe('Peers Page', () => {
       renderWithProviders(<Peers />)
 
       await waitFor(() => {
-        expect(screen.getByText('server-alpha')).toBeInTheDocument()
+        const tbody = getDesktopTableBody()
+        expect(tbody).toBeInTheDocument()
+        expect(within(tbody).getByText('server-alpha')).toBeInTheDocument()
       })
 
-      expect(screen.getByText('server-beta')).toBeInTheDocument()
-      expect(screen.getByText('server-gamma')).toBeInTheDocument()
+      const tbody = getDesktopTableBody()
+      expect(within(tbody).getByText('server-beta')).toBeInTheDocument()
+      expect(within(tbody).getByText('server-gamma')).toBeInTheDocument()
     })
 
     test('shows online/offline status indicators', async () => {
       renderWithProviders(<Peers />)
 
       await waitFor(() => {
-        expect(screen.getByText('server-alpha')).toBeInTheDocument()
+        const tbody = getDesktopTableBody()
+        expect(tbody).toBeInTheDocument()
+        expect(within(tbody).getByText('server-alpha')).toBeInTheDocument()
       })
 
       // Online status dot (green)
@@ -216,7 +244,9 @@ describe('Peers Page', () => {
       renderWithProviders(<Peers />)
 
       await waitFor(() => {
-        expect(screen.getByText('server-alpha')).toBeInTheDocument()
+        const tbody = getDesktopTableBody()
+        expect(tbody).toBeInTheDocument()
+        expect(within(tbody).getByText('server-alpha')).toBeInTheDocument()
       })
 
       // Expand the Search & Filters panel first
@@ -239,7 +269,9 @@ describe('Peers Page', () => {
       renderWithProviders(<Peers />)
 
       await waitFor(() => {
-        expect(screen.getByText('server-alpha')).toBeInTheDocument()
+        const tbody = getDesktopTableBody()
+        expect(tbody).toBeInTheDocument()
+        expect(within(tbody).getByText('server-alpha')).toBeInTheDocument()
       })
 
       // Expand the Search & Filters panel first
@@ -254,11 +286,12 @@ describe('Peers Page', () => {
       // Click Offline filter
       await user.click(screen.getByRole('button', { name: 'Offline' }))
 
-      // Only offline peer should be visible
+      // Only offline peer should be visible - use scoped query
       await waitFor(() => {
-        expect(screen.getByText('server-beta')).toBeInTheDocument()
+        const tbody = getDesktopTableBody()
+        expect(within(tbody).getByText('server-beta')).toBeInTheDocument()
         // Online peers should be filtered out
-        expect(screen.queryByText('server-alpha')).not.toBeInTheDocument()
+        expect(within(tbody).queryByText('server-alpha')).not.toBeInTheDocument()
       })
     })
   })
@@ -269,7 +302,9 @@ describe('Peers Page', () => {
       renderWithProviders(<Peers />)
 
       await waitFor(() => {
-        expect(screen.getByText('server-alpha')).toBeInTheDocument()
+        const tbody = getDesktopTableBody()
+        expect(tbody).toBeInTheDocument()
+        expect(within(tbody).getByText('server-alpha')).toBeInTheDocument()
       })
 
       // Expand the Search & Filters panel first
@@ -285,8 +320,9 @@ describe('Peers Page', () => {
       await user.type(searchInput, 'alpha')
 
       await waitFor(() => {
-        expect(screen.getByText('server-alpha')).toBeInTheDocument()
-        expect(screen.queryByText('server-beta')).not.toBeInTheDocument()
+        const tbody = getDesktopTableBody()
+        expect(within(tbody).getByText('server-alpha')).toBeInTheDocument()
+        expect(within(tbody).queryByText('server-beta')).not.toBeInTheDocument()
       })
     })
   })
@@ -311,9 +347,11 @@ describe('Peers Page', () => {
       const user = userEvent.setup()
       renderWithProviders(<Peers />)
 
-      // Wait for table to load
+      // Wait for table to load using scoped query
       await waitFor(() => {
-        expect(screen.getByText('server-alpha')).toBeInTheDocument()
+        const tbody = getDesktopTableBody()
+        expect(tbody).toBeInTheDocument()
+        expect(within(tbody).getByText('server-alpha')).toBeInTheDocument()
       })
 
       // Find the Status column header button
@@ -346,14 +384,16 @@ describe('Peers Page', () => {
       const user = userEvent.setup()
       renderWithProviders(<Peers />)
 
-      // Wait for table to load
+      // Wait for table to load using scoped query
       await waitFor(() => {
-        expect(screen.getByText('server-alpha')).toBeInTheDocument()
+        const tbody = getDesktopTableBody()
+        expect(tbody).toBeInTheDocument()
+        expect(within(tbody).getByText('server-alpha')).toBeInTheDocument()
       })
 
       // Find the Agent column header button in the table header
       // Use within to scope search to the table
-      const table = document.querySelector('table')
+      const table = getDesktopTable()
       const agentHeader = table.querySelector('th:nth-child(7) button')
       expect(agentHeader).toBeInTheDocument()
 
@@ -383,9 +423,11 @@ describe('Peers Page', () => {
       const user = userEvent.setup()
       renderWithProviders(<Peers />)
 
-      // Wait for table to load
+      // Wait for table to load using scoped query
       await waitFor(() => {
-        expect(screen.getByText('server-alpha')).toBeInTheDocument()
+        const tbody = getDesktopTableBody()
+        expect(tbody).toBeInTheDocument()
+        expect(within(tbody).getByText('server-alpha')).toBeInTheDocument()
       })
 
       const statusHeader = screen.getByRole('button', { name: /^Status/ })
@@ -418,9 +460,11 @@ describe('Peers Page', () => {
       const user = userEvent.setup()
       renderWithProviders(<Peers />)
 
-      // Wait for table to load
+      // Wait for table to load using scoped query
       await waitFor(() => {
-        expect(screen.getByText('server-alpha')).toBeInTheDocument()
+        const tbody = getDesktopTableBody()
+        expect(tbody).toBeInTheDocument()
+        expect(within(tbody).getByText('server-alpha')).toBeInTheDocument()
       })
 
       // Get the initial order by checking row positions
@@ -455,13 +499,15 @@ describe('Peers Page', () => {
       const user = userEvent.setup()
       renderWithProviders(<Peers />)
 
-      // Wait for table to load
+      // Wait for table to load using scoped query
       await waitFor(() => {
-        expect(screen.getByText('server-alpha')).toBeInTheDocument()
+        const tbody = getDesktopTableBody()
+        expect(tbody).toBeInTheDocument()
+        expect(within(tbody).getByText('server-alpha')).toBeInTheDocument()
       })
 
       // Find the Agent column header button in the table header
-      const table = document.querySelector('table')
+      const table = getDesktopTable()
       const agentHeader = table.querySelector('th:nth-child(7) button')
 
       // Click Agent header to sort ascending
@@ -493,13 +539,15 @@ describe('Peers Page', () => {
       const user = userEvent.setup()
       renderWithProviders(<Peers />)
 
-      // Wait for table to load
+      // Wait for table to load using scoped query
       await waitFor(() => {
-        expect(screen.getByText('server-alpha')).toBeInTheDocument()
+        const tbody = getDesktopTableBody()
+        expect(tbody).toBeInTheDocument()
+        expect(within(tbody).getByText('server-alpha')).toBeInTheDocument()
       })
 
       // Find the Agent column header button in the table header
-      const table = document.querySelector('table')
+      const table = getDesktopTable()
       const agentHeader = table.querySelector('th:nth-child(7) button')
 
       // Click once for ascending
@@ -534,13 +582,15 @@ describe('Peers Page', () => {
       const user = userEvent.setup()
       renderWithProviders(<Peers />)
 
-      // Wait for table to load
+      // Wait for table to load using scoped query
       await waitFor(() => {
-        expect(screen.getByText('server-alpha')).toBeInTheDocument()
+        const tbody = getDesktopTableBody()
+        expect(tbody).toBeInTheDocument()
+        expect(within(tbody).getByText('server-alpha')).toBeInTheDocument()
       })
 
       const statusHeader = screen.getByRole('button', { name: /^Status/ })
-      const table = document.querySelector('table')
+      const table = getDesktopTable()
       const agentHeader = table.querySelector('th:nth-child(7) button')
 
       // Sort by Status ascending
@@ -552,13 +602,13 @@ describe('Peers Page', () => {
 
       // Switch to Agent - should start with ascending
       await user.click(agentHeader)
-await waitFor(() => {
-const agentContainer = agentHeader.closest('th')
-expect(agentContainer.querySelector('.text-runic-500')).toBeInTheDocument()
-// Status should no longer be active
-const statusContainer = statusHeader.closest('th')
-expect(statusContainer.querySelector('.text-gray-400')).toBeInTheDocument()
-})
-})
-})
+      await waitFor(() => {
+        const agentContainer = agentHeader.closest('th')
+        expect(agentContainer.querySelector('.text-runic-500')).toBeInTheDocument()
+        // Status should no longer be active
+        const statusContainer = statusHeader.closest('th')
+        expect(statusContainer.querySelector('.text-gray-400')).toBeInTheDocument()
+      })
+    })
+  })
 })

@@ -407,25 +407,25 @@ export default function Groups() {
                 </div>
               </div>
             </div>
-            {canEdit && (
-              <KebabMenu
-                items={[
-                  {
-                    label: 'Edit',
-                    icon: Pencil,
-                    onClick: () => openEdit(group),
-                    show: canEdit && !group.is_system && !group.is_pending_delete,
-                  },
-                  {
-                    label: 'Delete',
-                    icon: Trash2,
-                    onClick: () => setDeleteTarget(group),
-                    show: canEdit && !group.is_system && !group.is_pending_delete,
-                    danger: true,
-                  },
-                ].filter(item => item.show !== false)}
-              />
-            )}
+      {canEdit && (
+        <KebabMenu
+          items={[
+            {
+              label: 'Edit',
+              icon: Pencil,
+              onClick: () => openEdit(group),
+              show: !group.is_system && !group.is_pending_delete,
+            },
+            {
+              label: 'Delete',
+              icon: Trash2,
+              onClick: () => setDeleteTarget(group),
+              show: !group.is_system && !group.is_pending_delete,
+              danger: true,
+            },
+          ]}
+        />
+      )}
           </div>
         </div>
       ))}

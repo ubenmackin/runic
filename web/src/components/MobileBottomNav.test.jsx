@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, within } from '@testing-library/react'
 import { describe, test, expect, beforeEach } from 'vitest'
 import { BrowserRouter, useLocation } from 'react-router-dom'
 import MobileBottomNav from './MobileBottomNav'
@@ -110,8 +110,9 @@ describe('MobileBottomNav', () => {
       const logsBtn = screen.getByTestId('nav-item-logs')
       fireEvent.click(logsBtn)
 
-      expect(screen.getByText('Logs')).toBeInTheDocument()
-      expect(screen.getByText('Alerts')).toBeInTheDocument()
+      const logsSubmenu = screen.getByTestId('submenu-logs')
+      expect(within(logsSubmenu).getByText('Logs')).toBeInTheDocument()
+      expect(within(logsSubmenu).getByText('Alerts')).toBeInTheDocument()
     })
 
     test('Settings submenu items are rendered when open', () => {
@@ -120,9 +121,10 @@ describe('MobileBottomNav', () => {
       const settingsBtn = screen.getByTestId('nav-item-settings')
       fireEvent.click(settingsBtn)
 
-      expect(screen.getByText('Settings')).toBeInTheDocument()
-      expect(screen.getByText('Setup Keys')).toBeInTheDocument()
-      expect(screen.getByText('Users')).toBeInTheDocument()
+      const settingsSubmenu = screen.getByTestId('submenu-settings')
+      expect(within(settingsSubmenu).getByText('Settings')).toBeInTheDocument()
+      expect(within(settingsSubmenu).getByText('Setup Keys')).toBeInTheDocument()
+      expect(within(settingsSubmenu).getByText('Users')).toBeInTheDocument()
     })
   })
 
@@ -310,16 +312,16 @@ describe('MobileBottomNav', () => {
       expect(accessControlBtn.querySelector('svg')).toBeInTheDocument()
     })
 
-    test('chevron rotates when submenu is open', () => {
-      renderWithRouter(<MobileBottomNav />)
+	test('chevron rotates when submenu is open', () => {
+			renderWithRouter(<MobileBottomNav />)
 
-      const accessControlBtn = screen.getByTestId('nav-item-access-control')
-      const chevron = accessControlBtn.querySelectorAll('svg')[1]
-      expect(chevron.className).not.toContain('rotate-180')
+			const accessControlBtn = screen.getByTestId('nav-item-access-control')
+			const chevron = accessControlBtn.querySelectorAll('svg')[1]
+			expect(chevron.getAttribute('class')).not.toContain('rotate-180')
 
-      fireEvent.click(accessControlBtn)
-      expect(chevron.className).toContain('rotate-180')
-    })
+			fireEvent.click(accessControlBtn)
+			expect(chevron.getAttribute('class')).toContain('rotate-180')
+		})
   })
 
   describe('responsive behavior', () => {

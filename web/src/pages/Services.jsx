@@ -420,23 +420,23 @@ export default function Services() {
               </div>
             </div>
             {canEdit && (
-              <KebabMenu
-                items={[
-                  {
-                    label: 'Edit',
-                    icon: Pencil,
-                    onClick: () => openEdit(service),
-                    show: canEdit && !service.is_system && !service.is_pending_delete,
-                  },
-                  {
-                    label: 'Delete',
-                    icon: Trash2,
-                    onClick: () => setDeleteTarget(service),
-                    show: canEdit && !service.is_system && !service.is_pending_delete,
-                    danger: true,
-                  },
-                ].filter(item => item.show !== false)}
-              />
+<KebabMenu
+                  items={[
+                    {
+                      label: 'Edit',
+                      icon: Pencil,
+                      onClick: () => openEdit(service),
+show: !service.is_system && !service.is_pending_delete,
+},
+{
+label: 'Delete',
+icon: Trash2,
+onClick: () => setDeleteTarget(service),
+show: !service.is_system && !service.is_pending_delete,
+                      danger: true,
+                    },
+                  ]}
+                />
             )}
           </div>
         </div>

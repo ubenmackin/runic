@@ -8,6 +8,7 @@ import {
 } from 'lucide-react'
 import { useAuthStore } from '../store'
 import { useAuth } from '../hooks/useAuth'
+import { useIsMobile } from '../hooks/useIsMobile'
 import { getVersion } from '../api/client'
 
 const DropdownItem = ({ to, icon: Icon, label, onClick }) => (
@@ -41,6 +42,7 @@ const isParentActive = (parentKey, pathname) => {
 const DropdownMenu = ({ label, children, isOpen, onToggle, isActive }) => {
   const dropdownRef = useRef(null)
   const closeTimeoutRef = useRef(null)
+  const isMobile = useIsMobile()
 
   useEffect(() => {
     return () => {
@@ -67,18 +69,24 @@ const DropdownMenu = ({ label, children, isOpen, onToggle, isActive }) => {
   }, [isOpen, onToggle])
 
   const handleMouseEnter = useCallback(() => {
-    if (closeTimeoutRef.current) {
-      clearTimeout(closeTimeoutRef.current)
-      closeTimeoutRef.current = null
+    // Only apply hover behavior on desktop (md breakpoint and above)
+    if (!isMobile) {
+      if (closeTimeoutRef.current) {
+        clearTimeout(closeTimeoutRef.current)
+        closeTimeoutRef.current = null
+      }
+      onToggle(true)
     }
-    onToggle(true)
-  }, [onToggle])
+  }, [onToggle, isMobile])
 
   const handleMouseLeave = useCallback(() => {
-    closeTimeoutRef.current = setTimeout(() => {
-      onToggle(false)
-    }, 150)
-  }, [onToggle])
+    // Only apply hover behavior on desktop (md breakpoint and above)
+    if (!isMobile) {
+      closeTimeoutRef.current = setTimeout(() => {
+        onToggle(false)
+      }, 150)
+    }
+  }, [onToggle, isMobile])
 
   return (
     <div
@@ -129,6 +137,7 @@ className={({ isActive }) =>
 
 export default function TopNav() {
   const location = useLocation()
+  const isMobile = useIsMobile()
   const [darkMode, setDarkMode] = useState(() => {
     if (typeof window !== 'undefined') {
       return localStorage.getItem('theme') === 'dark' ||
@@ -197,23 +206,23 @@ export default function TopNav() {
 
   const handleUserDropdownMouseEnter = useCallback(() => {
     // Only apply hover behavior on desktop (md breakpoint and above)
-    if (window.innerWidth >= 768) {
+    if (!isMobile) {
       if (userDropdownCloseTimeoutRef.current) {
         clearTimeout(userDropdownCloseTimeoutRef.current)
         userDropdownCloseTimeoutRef.current = null
       }
       setUserDropdownOpen(true)
     }
-  }, [])
+  }, [isMobile])
 
   const handleUserDropdownMouseLeave = useCallback(() => {
     // Only apply hover behavior on desktop (md breakpoint and above)
-    if (window.innerWidth >= 768) {
+    if (!isMobile) {
       userDropdownCloseTimeoutRef.current = setTimeout(() => {
         setUserDropdownOpen(false)
       }, 150)
     }
-  }, [])
+  }, [isMobile])
 
   const handleUserDropdownClick = useCallback(() => {
     // Toggle dropdown on mobile

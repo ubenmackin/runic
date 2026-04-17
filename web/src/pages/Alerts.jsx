@@ -98,16 +98,7 @@ function getAlertMenuItems(alert, onDelete) {
 function AlertCard({ alert, isExpanded, onToggle, onDelete }) {
   return (
     <div className="bg-white dark:bg-charcoal-dark border border-gray-200 dark:border-gray-border">
-      <div
-        className="p-3 cursor-pointer"
-        onClick={(e) => {
-          // Don't toggle if clicking on the menu
-          if (e.target.closest('[data-testid="kebab-menu-trigger"]') || e.target.closest('[data-testid="kebab-menu-dropdown"]')) {
-            return
-          }
-          onToggle()
-        }}
-      >
+      <div className="p-3">
         <div className="flex items-start justify-between">
           <div className="flex-1 min-w-0">
             {/* First line: Severity icon + Timestamp + Menu */}
@@ -129,6 +120,19 @@ function AlertCard({ alert, isExpanded, onToggle, onDelete }) {
               </span>
             </div>
           </div>
+          {/* Expand/collapse button */}
+          <button
+            onClick={onToggle}
+            className="p-1 text-gray-500 dark:text-amber-muted hover:text-gray-700 dark:hover:text-light-neutral focus:outline-none focus:ring-2 focus:ring-purple-active"
+            aria-label={isExpanded ? 'Collapse details' : 'Expand details'}
+            aria-expanded={isExpanded}
+          >
+            {isExpanded ? (
+              <ChevronUp className="w-5 h-5" />
+            ) : (
+              <ChevronDown className="w-5 h-5" />
+            )}
+          </button>
         </div>
       </div>
 

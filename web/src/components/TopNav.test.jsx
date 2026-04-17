@@ -13,6 +13,21 @@ vi.mock('../hooks/useAuth', () => ({
   }),
 }))
 
+// Mock the API client - needed for version query
+vi.mock('../api/client', async (importOriginal) => {
+  const actual = await importOriginal()
+  return {
+    ...actual,
+    getVersion: () => Promise.resolve({ version: '1.0.0-test' }),
+  }
+})
+
+// Mock useIsMobile hook - default to false (desktop)
+const mockIsMobile = vi.fn(() => false)
+vi.mock('../hooks/useIsMobile', () => ({
+  useIsMobile: () => mockIsMobile(),
+}))
+
 // Mock usePendingChanges hook
 vi.mock('../contexts/PendingChangesContext', () => ({
   usePendingChanges: () => ({
@@ -340,7 +355,33 @@ describe('TopNav', () => {
       expect(screen.queryByText('Logout')).not.toBeInTheDocument()
     })
   })
-})
+
+  test('hover behavior is disabled on mobile viewport', async () => {
+    // Mock useIsMobile to return true (mobile viewport)
+    mockIsMobile.mockReturnValue(true)
+
+    renderWithRouter(<TopNav />)
+
+    const userButton = screen.getByRole('button', { name: /testuser/ })
+    const userDropdownContainer = userButton.closest('div.relative')
+
+    // Simulate mouse enter on mobile
+    fireEvent.mouseEnter(userDropdownContainer)
+
+    // Wait a bit to ensure any potential state changes would have occurred
+    await new Promise(resolve => setTimeout(resolve, 100))
+
+    // Dropdown should NOT open on hover on mobile
+    expect(screen.queryByText('Logout')).not.toBeInTheDocument()
+
+    // Verify the button still exists and is clickable
+    expect(userButton).toBeInTheDocument()
+
+    // Reset mock for other tests
+    mockIsMobile.mockReturnValue(false)
+  })
+
+  })
 
   describe('pending changes indicator', () => {
     test('shows regular Shield icon when no pending changes', () => {
@@ -440,24 +481,26 @@ describe('TopNav', () => {
       expect(usernameSpan).toHaveClass('md:inline')
     })
 
-    test('user dropdown shows username and version on mobile when opened', async () => {
-      const user = userEvent.setup()
-      const { container } = renderWithRouter(<TopNav />)
+test('user dropdown shows username and version on mobile when opened', async () => {
+    renderWithRouter(<TopNav />)
 
-      // Find the user button (it contains the User icon and chevron)
-      const userButtons = container.querySelectorAll('header button')
-      // The user dropdown button is the last one in the header
-      const userButton = Array.from(userButtons).find(btn =>
-        btn.querySelector('svg') && btn.closest('.relative')
-      )
-      await user.click(userButton)
+    // Find the user button by looking for the one with the User icon and chevron
+    // The user dropdown button contains the User icon (lucide-user) and shows username
+    const userButton = screen.getByRole('button', { name: /testuser/ })
 
-      await waitFor(() => {
-        // Username should appear in mobile dropdown (bold)
-        expect(screen.getAllByText('testuser').length).toBeGreaterThan(0)
-        // Server Version should be visible
-        expect(screen.getByText(/Server Version:/)).toBeInTheDocument()
-      })
+    // Click to open dropdown (toggles userDropdownOpen state)
+    fireEvent.click(userButton)
+
+    // Wait for dropdown to open and version to load
+    await waitFor(() => {
+      // Logout button should appear in dropdown
+      expect(screen.getByText('Logout')).toBeInTheDocument()
     })
+
+    // Server Version should be visible in mobile dropdown (md:hidden section)
+    await waitFor(() => {
+      expect(screen.getByText(/Server Version:/)).toBeInTheDocument()
+    })
+  })
   })
 })
