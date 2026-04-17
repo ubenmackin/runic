@@ -249,6 +249,8 @@ export default function Alerts() {
 
   const filterWithSort = { ...filter, limit: rowsPerPage, sort_key: sortConfig.key, sort_direction: sortConfig.direction }
 
+  const hasActiveFilters = filter.alert_types.length > 0 || filter.severities.length > 0 || filter.statuses.length > 0 || filter.start_date || filter.end_date
+
   const { data, isLoading } = useQuery({
     queryKey: QUERY_KEYS.alerts(filterWithSort),
     queryFn: () => api.get(`/alerts?${queryParams.toString()}`),
@@ -349,11 +351,11 @@ export default function Alerts() {
 <SearchFilterPanel
 			storageKey="alerts-filters-expanded"
 			showSearch={false}
-			hasActiveFilters={filter.alert_types.length > 0 || filter.severities.length > 0 || filter.statuses.length > 0 || filter.start_date || filter.end_date}
+			hasActiveFilters={hasActiveFilters}
 			filterContent={
 			<div className="flex items-center gap-4">
-				<div className="space-y-1 min-w-[150px]">
-					<label className="text-xs font-medium text-gray-500 dark:text-amber-muted">Alert Type</label>
+        <div className="space-y-1 min-w-[180px]">
+          <label className="text-xs font-medium text-gray-500 dark:text-amber-muted">Alert Type</label>
 					<MultiSelect
 						options={ALERT_TYPES}
 						values={filter.alert_types}
@@ -406,35 +408,37 @@ export default function Alerts() {
 							className="w-full pl-10 pr-3 py-2 border border-gray-300 dark:border-gray-border bg-white dark:bg-charcoal-dark text-gray-900 dark:text-light-neutral text-sm focus:ring-2 focus:ring-purple-active focus:border-purple-active"
 						/>
 					</div>
-				</div>
+        </div>
+      </div>
+    }
+rightContent={
+      <div className="flex items-center gap-4">
+      <div className="space-y-1 min-w-[80px]">
+        <label className="text-xs font-medium text-gray-500 dark:text-amber-muted">Rows</label>
+        <select
+          value={rowsPerPage}
+          onChange={e => handleRowsPerPageChange(Number(e.target.value))}
+          className="w-full px-2 py-2 border border-gray-300 dark:border-gray-border bg-white dark:bg-charcoal-dark text-gray-900 dark:text-light-neutral text-sm focus:ring-2 focus:ring-purple-active focus:border-purple-active"
+        >
+          <option value={10}>10</option>
+          <option value={25}>25</option>
+          <option value={50}>50</option>
+          <option value={100}>100</option>
+          <option value={-1}>All</option>
+        </select>
+      </div>
 
-				<div className="space-y-1 min-w-[80px]">
-					<label className="text-xs font-medium text-gray-500 dark:text-amber-muted">Rows</label>
-					<select
-						value={rowsPerPage}
-						onChange={e => handleRowsPerPageChange(Number(e.target.value))}
-						className="w-full px-2 py-2 border border-gray-300 dark:border-gray-border bg-white dark:bg-charcoal-dark text-gray-900 dark:text-light-neutral text-sm focus:ring-2 focus:ring-purple-active focus:border-purple-active"
-					>
-						<option value={10}>10</option>
-						<option value={25}>25</option>
-						<option value={50}>50</option>
-						<option value={100}>100</option>
-						<option value={-1}>All</option>
-					</select>
-				</div>
-			</div>
-		}
-	rightContent={
-			(filter.alert_types.length > 0 || filter.severities.length > 0 || filter.statuses.length > 0 || filter.start_date || filter.end_date) ? (
-				<button
-					onClick={handleClearFilters}
-					className="flex items-center gap-1 px-3 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20"
-				>
-					<X className="w-4 h-4" />
-					Clear
-				</button>
-			) : null
-		}
+      {hasActiveFilters && (
+        <button
+          onClick={handleClearFilters}
+          className="flex items-center gap-1 px-3 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20"
+        >
+          <X className="w-4 h-4" />
+          Clear
+        </button>
+      )}
+    </div>
+  }
       />
 
       {isLoading && <TableSkeleton rows={5} columns={7} />}

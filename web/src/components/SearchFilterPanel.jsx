@@ -104,11 +104,11 @@ aria-label="Clear search"
                 <div className="flex-grow" />
               )}
 
-              {rightContent && (
-                <div className="flex items-center">
-                  {rightContent}
-                </div>
-              )}
+        {rightContent && (
+          <div className="flex items-center justify-end">
+            {rightContent}
+          </div>
+        )}
             </div>
           ) : (
             <>
@@ -133,23 +133,8 @@ aria-label="Clear search"
 </button>
                     )}
                   </div>
-                )}
-
-                <div className="flex items-center gap-2">
-                  <span className="text-sm text-gray-500 dark:text-amber-muted">Rows:</span>
-                  <select
-                    value={rowsPerPage}
-                    onChange={(e) => onRowsPerPageChange(Number(e.target.value))}
-                    className="text-sm border border-gray-300 dark:border-gray-border px-2 py-2 bg-white dark:bg-charcoal-dark text-gray-900 dark:text-light-neutral focus:ring-2 focus:ring-purple-active focus:border-purple-active rounded-none"
-                  >
-                    <option value={10}>10</option>
-                    <option value={25}>25</option>
-                    <option value={50}>50</option>
-                    <option value={100}>100</option>
-                    <option value={-1}>All</option>
-                  </select>
-                </div>
-              </div>
+          )}
+        </div>
 
               {filterChips && (
                 <div className="flex gap-0">
