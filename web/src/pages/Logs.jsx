@@ -27,10 +27,8 @@ export default function Logs() {
     offset: 0,
   })
 
-  // Debounce filter for query
   const debouncedFilter = useDebounce(filter)
 
-  // Live mode state
   const [liveLogs, setLiveLogs] = useState([])
   const [isConnected, setIsConnected] = useState(false)
   const [isReconnecting, setIsReconnecting] = useState(false)
@@ -41,7 +39,7 @@ export default function Logs() {
   const isPausedRef = useRef(false)
   const reconnectAttempts = useRef(0)
   const reconnectTimer = useRef(null)
-  const MAX_LIVE_LOGS = 500
+  const MAX_LIVE_LOGS = 500 // Maximum logs to keep in live mode memory
 
   // Ref to track current mode in callbacks (avoid stale closures)
   const modeRef = useRef(mode)
@@ -51,7 +49,6 @@ export default function Logs() {
     modeRef.current = mode
   }, [mode])
 
-  // Historical query
   const { data, isLoading, refetch } = useQuery({
     queryKey: QUERY_KEYS.logs(debouncedFilter),
     queryFn: () => api.get(`/logs?${new URLSearchParams(
@@ -61,13 +58,11 @@ export default function Logs() {
     refetchInterval: mode === 'historical' ? false : false,
   })
 
-  // Peers for filter dropdown
   const { data: peers } = useQuery({
     queryKey: QUERY_KEYS.peers(),
     queryFn: () => api.get('/peers'),
   })
 
-  // WebSocket connection for live mode
   useEffect(() => {
     if (mode !== 'live') {
       if (wsRef.current) {
@@ -128,7 +123,6 @@ export default function Logs() {
       setIsConnected(false)
       logger.log('WebSocket disconnected')
 
-      // Attempt reconnection if still in live mode
       if (modeRef.current !== 'live') return
       if (reconnectAttempts.current >= MAX_RECONNECT_ATTEMPTS) {
         setIsReconnecting(false)
@@ -166,7 +160,6 @@ export default function Logs() {
     isPausedRef.current = isPaused
   }, [isPaused])
 
-  // Auto-scroll for live mode
   useEffect(() => {
     if (mode === 'live' && !isPaused) {
       logsEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -189,14 +182,12 @@ export default function Logs() {
 
   return (
     <div className="space-y-4">
-      {/* Header */}
       <PageHeader
         title="Logs"
         description="View firewall events and blocked traffic"
         actions={
           <div className="flex items-center gap-3">
-            {/* Mode toggle */}
-          <div className="flex rounded-none border border-gray-300 dark:border-gray-border overflow-hidden">
+            <div className="flex rounded-none border border-gray-300 dark:border-gray-border overflow-hidden">
             <button
               onClick={() => setMode('historical')}
               className={`px-4 py-1.5 text-sm font-medium ${
@@ -247,17 +238,15 @@ isPaused
             )}
           </div>
         }
-      />
+        />
 
-      {/* Filter bar (historical mode) */}
-      {mode === 'historical' && (
-        <SearchFilterPanel
+        {mode === 'historical' && (
+          <SearchFilterPanel
           storageKey="logs-filters-expanded"
           showSearch={false}
           hasActiveFilters={!!(filter.peer_id || filter.src_ip || filter.dst_port)}
           filterContent={
             <div className="flex items-center gap-4">
-              {/* Peer */}
               <div className="space-y-1 min-w-[200px]">
                 <label className="text-xs font-medium text-gray-500 dark:text-amber-muted">Peer</label>
                 <SearchableSelect
@@ -268,7 +257,6 @@ isPaused
                 />
               </div>
 
-              {/* Source IP */}
               <div className="space-y-1">
                 <label className="text-xs font-medium text-gray-500 dark:text-amber-muted">Source IP</label>
                 <input
@@ -280,7 +268,6 @@ isPaused
                 />
               </div>
 
-              {/* Dest Port */}
               <div className="space-y-1">
                 <label className="text-xs font-medium text-gray-500 dark:text-amber-muted">Dest Port</label>
                 <input
@@ -295,7 +282,6 @@ isPaused
           }
           rightContent={
             <div className="flex gap-4 items-end">
-              {/* Limit */}
               <div className="space-y-1">
                 <label className="text-xs font-medium text-gray-500 dark:text-amber-muted">Limit</label>
                 <select
@@ -310,7 +296,6 @@ isPaused
                 </select>
               </div>
 
-              {/* Query button */}
               <button
                 onClick={() => refetch()}
                 className="px-4 py-2 bg-purple-active hover:bg-purple-600 text-white text-sm font-bold uppercase border border-purple-active/20 shadow-[0_0_15px_rgba(159,79,248,0.2)] transition-all"
@@ -318,7 +303,6 @@ isPaused
                 Query
               </button>
 
-              {/* Clear filters */}
               {(filter.peer_id || filter.src_ip || filter.dst_port) && (
                 <button
                   onClick={() => setFilter(f => ({
@@ -339,7 +323,6 @@ isPaused
         />
       )}
 
-      {/* Live mode status */}
       {mode === 'live' && (
         <div className="flex items-center gap-2 text-sm">
 <div className={`w-2 h-2 rounded-full ${
@@ -354,10 +337,9 @@ isPaused
                 : 'Disconnected'}
           </span>
         </div>
-      )}
+        )}
 
-      {/* Logs display */}
-      {!mode || (mode === 'historical' && isLoading) ? (
+        {!mode || (mode === 'historical' && isLoading) ? (
         <TableSkeleton rows={5} columns={6} />
       ) : null}
 
@@ -376,8 +358,7 @@ isPaused
                   <LogLine key={log.id || i} log={log} />
                 ))}
               </div>
-{/* Pagination */}
-<Pagination
+              <Pagination
 showingRange={`Showing ${filter.offset + 1} - ${filter.offset + data.logs.length} of ${data.total}`}
 page={Math.floor(filter.offset / filter.limit) + 1}
 totalPages={Math.ceil(data.total / filter.limit)}

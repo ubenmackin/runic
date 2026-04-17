@@ -17,16 +17,13 @@ export default function Login({ mode }) {
   const navigate = useNavigate()
 
   useEffect(() => {
-    if (loading) return // Wait for context state
+    if (loading) return
 
-    // Handle edge cases:
-    // - If mode="setup" but setup is already done, redirect to /login
-    // - If mode is undefined but setup is needed, update state
-  if (mode === 'setup' && !needsSetup) {
-    navigate('/login', { replace: true })
-  } else if (mode === undefined && needsSetup !== null) {
-    setIsSetup(needsSetup)
-  }
+    if (mode === 'setup' && !needsSetup) {
+      navigate('/login', { replace: true })
+    } else if (mode === undefined && needsSetup !== null) {
+      setIsSetup(needsSetup)
+    }
   }, [mode, needsSetup, loading, navigate])
 
   const loginMutation = useMutation({
@@ -57,9 +54,7 @@ export default function Login({ mode }) {
     },
     onError: (err) => {
       setError(err.message)
-      // If setup is already completed (403 error), redirect to login
       if (err.message.includes('Setup already completed')) {
-        // Reset setup mode and let the user log in
         setIsSetup(false)
       }
     },
@@ -87,41 +82,41 @@ export default function Login({ mode }) {
         <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none p-8">
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-<label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-				Username
-			</label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+                Username
+              </label>
               <input
                 type="text"
                 value={username}
                 onChange={e => setUsername(e.target.value)}
                 required
-className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-runic-500"
-        />
-			</div>
-			<div>
-				<label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-				Password
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-runic-500"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+                Password
               </label>
               <input
                 type="password"
                 value={password}
                 onChange={e => setPassword(e.target.value)}
                 required
-className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-runic-500"
-        />
-			</div>
-			{isSetup && (
-				<div>
-				<label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-				Confirm Password
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-runic-500"
+              />
+            </div>
+            {isSetup && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+                  Confirm Password
                 </label>
                 <input
                   type="password"
                   value={confirmPassword}
                   onChange={e => setConfirmPassword(e.target.value)}
                   required
-className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-runic-500"
-        />
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-runic-500"
+                />
               </div>
             )}
             <InlineError message={error} />

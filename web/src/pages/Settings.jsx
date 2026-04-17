@@ -78,11 +78,10 @@ export default function Settings() {
             break
           }
         }, 100)
-    }
-
-    // Reset select to default option
-    e.target.value = ''
   }
+
+  e.target.value = ''
+}
   useFocusTrap(deleteModalRef, showDeleteModal !== null)
   useFocusTrap(createModalRef, showCreateModal !== null)
 
@@ -122,30 +121,25 @@ const validatePort = (value) => {
   return ''
 }
 
-  // Port input handler with validation
   const handlePortChange = (e) => {
-    const value = e.target.value
-    // Only allow digits
-    if (!/^\d*$/.test(value)) return
-    // Limit to 5 digits
-    if (value.length > 5) return
-    setSmtpFormData({ ...smtpFormData, port: value })
+  const value = e.target.value
+  if (!/^\d*$/.test(value)) return
+  if (value.length > 5) return
+  setSmtpFormData({ ...smtpFormData, port: value })
     setPortError(validatePort(value))
   }
 
-  // Initialize form data from backend response
   // Track if initial data has been loaded to prevent overwriting user edits on refetch
   const smtpLoadedRef = useRef(false)
   const prefsLoadedRef = useRef(false)
 
-  const { data: smtpConfig, isLoading: smtpLoading } = useQuery({
-    queryKey: QUERY_KEYS.smtpConfig(),
-    queryFn: getSMTPConfig,
-    enabled: isAdmin,
-  })
+const { data: smtpConfig, isLoading: smtpLoading } = useQuery({
+  queryKey: QUERY_KEYS.smtpConfig(),
+  queryFn: getSMTPConfig,
+  enabled: isAdmin,
+})
 
-  // Initialize form data from backend response
-  useEffect(() => {
+useEffect(() => {
     if (smtpConfig && !smtpLoadedRef.current) {
       const transformedData = transformSMTPFromBackend(smtpConfig)
       setSmtpFormData(transformedData)
@@ -172,15 +166,13 @@ const validatePort = (value) => {
     onError: (err) => showToast(err.message, 'error'),
   })
 
-	// Instance URL state
-	const [instanceUrl, setInstanceUrl] = useState('')
+  const [instanceUrl, setInstanceUrl] = useState('')
 	const { data: instanceSettings } = useQuery({
 		queryKey: ['instance-settings'],
 		queryFn: () => api.get('/settings/instance'),
-		enabled: isAdmin,
-	})
+  enabled: isAdmin,
+  })
 
-  // Initialize instance URL from backend
   useEffect(() => {
     if (instanceSettings?.url !== undefined) {
       setInstanceUrl(instanceSettings.url)
@@ -196,38 +188,32 @@ const validatePort = (value) => {
     onError: (err) => showToast(err.message, 'error'),
   })
 
-  // Fetch alert rules for summary
   const { data: alertRules } = useQuery({
     queryKey: QUERY_KEYS.alertRules(),
     queryFn: getAlertRules,
     enabled: isAdmin,
   })
 
-  // Notification Preferences State
   const [notificationPrefs, setNotificationPrefs] = useState(null)
   const [showQuietHours, setShowQuietHours] = useState(undefined)
   const [showDigest, setShowDigest] = useState(undefined)
   const [unifiedTimezone, setUnifiedTimezone] = useState(null)
 
-  // Fetch user notification preferences (visible to all authenticated users)
   const { data: userPrefs, isLoading: userPrefsLoading, isError: userPrefsError } = useQuery({
     queryKey: QUERY_KEYS.notificationPrefs(),
     queryFn: getNotificationPrefs,
     retry: false,
   })
 
-  // Initialize local state when preferences load - transform flat backend response to nested frontend structure
-  // Only update on initial load to prevent overwriting user edits on refetch
   useEffect(() => {
     if (userPrefs && !prefsLoadedRef.current) {
       const transformedPrefs = transformPrefsFromBackend(userPrefs)
       setNotificationPrefs(transformedPrefs)
 
-        // Use the unified timezone from transformPrefsFromBackend (already handles unification and browser fallback)
-        setUnifiedTimezone(transformedPrefs.quiet_hours?.timezone || 'UTC')
+      setUnifiedTimezone(transformedPrefs.quiet_hours?.timezone || 'UTC')
 
-        // Expand disclosure sections based on feature enabled status
-        // Quiet Hours disclosure: open if quietHours.enabled is true
+      // Expand disclosure sections based on feature enabled status
+      // Quiet Hours disclosure: open if quietHours.enabled is true
         const quietHoursEnabled = transformedPrefs.quiet_hours?.enabled ?? false
         setShowQuietHours(quietHoursEnabled)
 
@@ -239,7 +225,6 @@ const validatePort = (value) => {
     }
   }, [userPrefs])
 
-  // Update preferences mutation
   const updatePrefsMutation = useMutation({
     mutationFn: (prefs) => updateNotificationPrefs(transformPrefsToBackend(prefs)),
     onSuccess: () => {
@@ -328,7 +313,6 @@ const validatePort = (value) => {
     onError: (err) => showToast(err.message, 'error'),
   })
 
-  // Initialize log settings state from backend response
   useEffect(() => {
     if (logSettingsData) {
       setLogSettings(logSettingsData)
@@ -337,7 +321,6 @@ const validatePort = (value) => {
       const standardValues = [0, 1, 14, 30, 90, 365, -1]
       const isNonStandard = !standardValues.includes(logSettingsData.retention_days)
       if (isNonStandard) {
-        // Initialize customDays and show input for non-standard values
         setCustomDays(String(logSettingsData.retention_days))
         setUseCustomRetention(true)
       } else {
@@ -387,7 +370,6 @@ const getKeyData = (keyType) => {
         description="Configure your Runic installation"
       />
 
-      {/* Tab Navigation - at the top for admins */}
       {isAdmin && (
         <div className="flex justify-center border-b border-gray-200 dark:border-gray-border">
           <div className="flex" role="tablist">
@@ -435,10 +417,9 @@ const getKeyData = (keyType) => {
             </button>
           </div>
         </div>
-      )}
+        )}
 
-      {/* Non-admin: Show notification preferences at the top */}
-{!isAdmin && (
+        {!isAdmin && (
           <>
             <CollapsibleSection
               title="Notification Preferences"
@@ -459,7 +440,6 @@ const getKeyData = (keyType) => {
                 </div>
               ) : notificationPrefs && (
                 <div className="space-y-6">
-                  {/* Unified Timezone Selector */}
                   <div>
                     <label htmlFor="unified_timezone" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-2">
                       Timezone
@@ -478,11 +458,10 @@ const getKeyData = (keyType) => {
                     </select>
                     <p className="text-xs text-gray-500 dark:text-amber-muted mt-1">
                       Applies to both Quiet Hours and Daily Digest
-                    </p>
-                  </div>
+                  </p>
+                </div>
 
-                  {/* Alert Type Toggles */}
-                  <div>
+                <div>
                     <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-3">
                       Alert Types
                     </label>
@@ -505,10 +484,9 @@ const getKeyData = (keyType) => {
                         </div>
                       ))}
                     </div>
-                  </div>
+              </div>
 
-                {/* Quiet Hours Section */}
-                <div className="border-t border-gray-200 dark:border-gray-border pt-6">
+              <div className="border-t border-gray-200 dark:border-gray-border pt-6">
                   <button
                     type="button"
                     onClick={() => setShowQuietHours(!showQuietHours)}
@@ -565,10 +543,9 @@ const getKeyData = (keyType) => {
                         </div>
                       </div>
                     )}
-                  </div>
+              </div>
 
-                {/* Daily Digest Section */}
-                <div className="border-t border-gray-200 dark:border-gray-border pt-6">
+              <div className="border-t border-gray-200 dark:border-gray-border pt-6">
                   <button
                     type="button"
                     onClick={() => setShowDigest(!showDigest)}
@@ -630,14 +607,11 @@ const getKeyData = (keyType) => {
           </>
         )}
 
-      {/* Admin: Tab content */}
-      {isAdmin && (
-        <>
-          {/* Tab Content */}
-      {activeTab === 'alerts' && (
-        <div id="alerts-tab-content" role="tabpanel" className="space-y-6">
-          {/* Jump to section dropdown */}
-          <div className="flex justify-end mb-4">
+        {isAdmin && (
+          <>
+            {activeTab === 'alerts' && (
+              <div id="alerts-tab-content" role="tabpanel" className="space-y-6">
+                <div className="flex justify-end mb-4">
 <select
                   onChange={handleJumpToSection}
                   className="text-sm px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral focus:outline-none focus:ring-2 focus:ring-purple-active"
@@ -648,15 +622,12 @@ const getKeyData = (keyType) => {
               <option value="email-section">Email Configuration</option>
               <option value="notifications-section">Notifications</option>
               <option value="alert-rules-section">Alert Rules</option>
-            </select>
-          </div>
+                </select>
+              </div>
 
-          {/* Two-column grid for desktop: Email Configuration (left), Notification Preferences (right) */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Left Column */}
-            <div className="space-y-6">
-              {/* Email Configuration Section */}
-              <CollapsibleSection
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div className="space-y-6">
+                  <CollapsibleSection
                 id="email-section"
                 title="Email Configuration"
                 icon={<Mail className="w-5 h-5 text-purple-500" />}
@@ -672,8 +643,7 @@ const getKeyData = (keyType) => {
                   </div>
                 ) : (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-{/* Row 1: Instance URL | Enable Email */}
-                <div>
+                    <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
                     <span>Instance URL</span>
 			<span className="text-xs text-gray-500 dark:text-amber-muted ml-1">- Used for email links</span>
@@ -686,22 +656,22 @@ const getKeyData = (keyType) => {
                     onBlur={() => updateInstanceMutation.mutate(instanceUrl)}
                     placeholder="https://runic.example.com"
                     className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-                  />
-                </div>
-{/* min-h-[42px]: py-2 (16px padding) + input height (~26px) for toggle alignment */}
-<div className="flex items-center gap-3 min-h-[42px]">
-<ToggleSwitch
-checked={smtpFormData.enabled}
-onChange={(value) => setSmtpFormData({ ...smtpFormData, enabled: value })}
-aria-labelledby="enable-email-label"
-/>
-<label id="enable-email-label" className="text-sm text-gray-700 dark:text-amber-primary">
-Enable Email
-</label>
+                    />
 </div>
+{/* Blank spacer to match label height for alignment */}
+<span className="block mb-1">&nbsp;</span>
+              <div className="flex items-center gap-3">
+                <ToggleSwitch
+                  checked={smtpFormData.enabled}
+                  onChange={(value) => setSmtpFormData({ ...smtpFormData, enabled: value })}
+                  aria-labelledby="enable-email-label"
+                />
+                <label id="enable-email-label" className="text-sm text-gray-700 dark:text-amber-primary">
+                  Enable Email
+                </label>
+              </div>
 
-{/* Row 2: SMTP Host | SMTP Port */}
-<div>
+                  <div>
 <label htmlFor="smtp_host" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
 SMTP Host
 </label>
@@ -711,11 +681,10 @@ id="smtp_host"
 value={smtpFormData.host}
 onChange={(e) => setSmtpFormData({ ...smtpFormData, host: e.target.value })}
 placeholder="smtp.example.com"
-className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-/>
-</div>
-{/* Row 2 uses flex layout to keep port input and TLS toggle on same line; gap-3 provides tighter spacing for related inline elements */}
-<div className="flex items-center gap-3">
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+                    />
+                  </div>
+                  <div className="flex items-center gap-3">
 									<div>
 										<label htmlFor="smtp_port" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
 											SMTP Port
@@ -731,24 +700,24 @@ className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border round
 											className="w-32 px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
 										/>
 										{portError && (
-											<p id="smtp_port_error" className="text-xs text-red-500 mt-1">{portError}</p>
-										)}
-                        </div>
-			{/* min-h-[42px]: py-2 (16px padding) + input height (~26px) for toggle alignment */}
-			<div className="flex items-center gap-3 min-h-[42px]">
-				<ToggleSwitch
-					checked={smtpFormData.use_tls}
-					onChange={(value) => setSmtpFormData({ ...smtpFormData, use_tls: value })}
-					aria-labelledby="use-tls-label"
-				/>
-				<label id="use-tls-label" className="text-sm text-gray-700 dark:text-amber-primary">
-					Use TLS
-				</label>
-			</div>
-            </div>
+                    <p id="smtp_port_error" className="text-xs text-red-500 mt-1">{portError}</p>
+                    )}
+                  </div>
+                                                {/* Blank spacer to match label height for alignment */}
+                                                <span className="block mb-1">&nbsp;</span>
+                                                <div className="flex items-center gap-3">
+                                                        <ToggleSwitch
+                                                                checked={smtpFormData.use_tls}
+                                                                onChange={(value) => setSmtpFormData({ ...smtpFormData, use_tls: value })}
+                                                                aria-labelledby="use-tls-label"
+                                                        />
+                                                        <label id="use-tls-label" className="text-sm text-gray-700 dark:text-amber-primary">
+                                                                Use TLS
+                                                        </label>
+                                                </div>
+                </div>
 
-                    {/* Row 3: Username | Password */}
-                    <div>
+                  <div>
                       <label htmlFor="smtp_username" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
                         Username
                       </label>
@@ -782,10 +751,9 @@ className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border round
                           {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                         </button>
                       </div>
-                    </div>
+                  </div>
 
-{/* Row 4: From Address | (empty) */}
-                <div>
+                  <div>
                   <label htmlFor="smtp_from_address" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
                     From Address
                   </label>
@@ -802,7 +770,6 @@ className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border round
                   </div>
                 )}
 
-                {/* Action Buttons */}
                 <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-gray-200 dark:border-gray-border">
                   <button
                     onClick={() => testEmailMutation.mutate()}
@@ -835,13 +802,11 @@ className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border round
                   {updateSmtpMutation.isPending ? 'Saving...' : 'Save Email Settings'}
                 </button>
                 </div>
-              </CollapsibleSection>
-            </div>
+                </CollapsibleSection>
+              </div>
 
-            {/* Right Column */}
-            <div className="space-y-6">
-              {/* User Notification Preferences - inside Alerts tab for admins */}
-      <CollapsibleSection
+              <div className="space-y-6">
+                <CollapsibleSection
         id="notifications-section"
         title="Your Notification Preferences"
         icon={<Bell className="w-5 h-5 text-purple-500" />}
@@ -861,10 +826,9 @@ className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border round
                       Please log in to configure notification preferences.
                     </p>
                   </div>
-                ) : notificationPrefs && (
-                  <div className="space-y-6">
-                    {/* Unified Timezone Selector */}
-                    <div>
+              ) : notificationPrefs && (
+                <div className="space-y-6">
+                  <div>
                       <label htmlFor="unified_timezone" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-2">
                         Timezone
                       </label>
@@ -883,10 +847,9 @@ className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border round
                       <p className="text-xs text-gray-500 dark:text-amber-muted mt-1">
                         Applies to both Quiet Hours and Daily Digest
                       </p>
-                    </div>
+                  </div>
 
-                    {/* Alert Type Toggles */}
-                    <div>
+                  <div>
                       <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-3">
                         Alert Types
                       </label>
@@ -909,9 +872,8 @@ className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border round
                           </div>
                         ))}
                       </div>
-                    </div>
+                </div>
 
-                {/* Quiet Hours Section */}
                 <div className="border-t border-gray-200 dark:border-gray-border pt-6">
                   <button
                     type="button"
@@ -969,9 +931,8 @@ className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border round
                           </div>
                         </div>
                       )}
-                    </div>
+                </div>
 
-                {/* Daily Digest Section */}
                 <div className="border-t border-gray-200 dark:border-gray-border pt-6">
                   <button
                     type="button"
@@ -1021,11 +982,10 @@ className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border round
                   </div>
                 )}
               </CollapsibleSection>
-            </div>
-          </div>
+                </div>
+              </div>
 
-          {/* Alert Settings Component - Full Width Below */}
-          <CollapsibleSection
+              <CollapsibleSection
             id="alert-rules-section"
             title="Alert Rules"
             icon={<Bell className="w-5 h-5 text-purple-500" />}
@@ -1040,10 +1000,9 @@ className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border round
         </div>
       )}
 
-          {activeTab === 'logs' && (
-            <div id="logs-tab-content" role="tabpanel" className="space-y-6">
-              {/* Log Management Section */}
-              <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none">
+            {activeTab === 'logs' && (
+              <div id="logs-tab-content" role="tabpanel" className="space-y-6">
+                <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none">
                 <div className="p-6">
                   <div className="flex items-center justify-between mb-4">
                     <div className="flex items-center gap-3">
@@ -1055,11 +1014,10 @@ className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border round
                       className="inline-flex items-center gap-2 px-3 py-2 text-sm bg-red-600 hover:bg-red-700 text-white rounded-none"
                     >
                       <Trash2 className="w-4 h-4" />
-                      Clear All Logs
-                    </button>
-                  </div>
-                  {/* Stats */}
-                  <div className="flex gap-6 mb-4">
+                  Clear All Logs
+                </button>
+              </div>
+              <div className="flex gap-6 mb-4">
                     <div className="flex items-center gap-2">
                       <HardDrive className="w-4 h-4 text-gray-400" />
                       <span className="text-sm text-gray-600 dark:text-amber-muted">
@@ -1069,11 +1027,10 @@ className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border round
                     <div className="flex items-center gap-2">
                       <span className="text-sm text-gray-600 dark:text-amber-muted">
                         ~{logSettings?.estimated_size_mb?.toLocaleString() || 0} MB
-                      </span>
-                    </div>
-                  </div>
-                  {/* Logs Database Path */}
-                  {logSettings?.logs_db_path && (
+                </span>
+              </div>
+            </div>
+            {logSettings?.logs_db_path && (
 <div className="mb-4">
                 <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
                   Logs Database Path
@@ -1081,10 +1038,9 @@ className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border round
                 <div className="p-2 bg-gray-100 dark:bg-charcoal-darkest rounded-none font-mono text-sm text-gray-700 dark:text-amber-muted">
                         {logSettings.logs_db_path}
                       </div>
-                    </div>
-                  )}
-                  {/* Retention Setting */}
-                  <div className="mb-4">
+              </div>
+            )}
+            <div className="mb-4">
                     <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-2">
                       Retention Period
                     </label>
@@ -1149,7 +1105,6 @@ className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border round
 
           {activeTab === 'keys' && (
             <div id="keys-tab-content" role="tabpanel" className="space-y-6">
-              {/* JWT Secret Section */}
               <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none">
                 <div className="p-6">
                   <div className="flex items-center justify-between mb-4">
@@ -1180,11 +1135,10 @@ className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border round
 <div className="mt-4 p-3 bg-gray-100 dark:bg-charcoal-darkest rounded-none font-mono text-sm text-gray-700 dark:text-amber-primary">
               {isLoading ? 'Loading...' : getKeyData('jwt-secret')?.exists ? '•••••••••••••••••••••••••••••••••••••••••' : 'No key configured'}
                   </div>
-                </div>
               </div>
+            </div>
 
-              {/* Agent JWT Secret Section */}
-              <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none">
+            <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none">
                 <div className="p-6">
                   <div className="flex items-center justify-between mb-4">
                     <div className="flex items-center gap-3">
@@ -1219,7 +1173,6 @@ className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border round
             </div>
           )}
 
-          {/* Delete Confirmation Modal */}
           {showDeleteModal && (
             <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
               <div ref={deleteModalRef} className="bg-white dark:bg-charcoal-dark rounded-none p-6 max-w-md w-full mx-4">
@@ -1248,7 +1201,6 @@ className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border round
             </div>
           )}
 
-          {/* Create New Confirmation Modal */}
           {showCreateModal && (
             <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
               <div ref={createModalRef} className="bg-white dark:bg-charcoal-dark rounded-none p-6 max-w-md w-full mx-4">
@@ -1277,7 +1229,6 @@ className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border round
             </div>
           )}
 
-          {/* Clear Logs Confirmation Modal */}
           {showClearLogsModal && (
             <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
               <div className="bg-white dark:bg-charcoal-dark rounded-none p-6 max-w-md w-full mx-4">

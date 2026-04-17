@@ -22,7 +22,6 @@ const SetupKeys = lazy(() => import('./pages/SetupKeys'))
 const Users = lazy(() => import('./pages/Users'))
 const Settings = lazy(() => import('./pages/Settings'))
 
-// Loading fallback component for suspense boundaries
 function PageLoader() {
   return (
 <div className="min-h-screen bg-gray-50 dark:bg-charcoal-darkest flex items-center justify-center">
@@ -53,7 +52,7 @@ function AuthCheck() {
 
 function PrivateRoute({ children }) {
   const auth = useAuthStore(s => s.isAuthenticated)
-  if (auth === null) return <PageLoader />  // still checking
+  if (auth === null) return <PageLoader />
   return auth ? children : <SmartRedirect />
 }
 
@@ -62,10 +61,9 @@ function SmartRedirect() {
   const { needsSetup, loading } = useSetup()
 
   useEffect(() => {
-    if (loading) return // Wait for state to load
+    if (loading) return
 
     if (needsSetup === null) {
-      // Error state, default to login
       navigate('/login', { replace: true })
     } else if (needsSetup) {
       navigate('/setup', { replace: true })
@@ -74,7 +72,6 @@ function SmartRedirect() {
     }
   }, [navigate, needsSetup, loading])
 
-  // Improved loading state with better visual feedback
   if (loading) {
     return (
 <div className="min-h-screen bg-gray-50 dark:bg-charcoal-darkest flex items-center justify-center">

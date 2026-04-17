@@ -88,10 +88,9 @@ export default function Users() {
       password: formPassword,
       email: formEmail || undefined,
       role: formRole,
-    })
-  }
+  })
+}
 
-  // Show error state if query failed
   if (error) {
     return (
       <div className="space-y-6">
@@ -182,10 +181,9 @@ export default function Users() {
             </tbody>
           </table>
         </div>
-      )}
+)}
 
-      {/* Create user modal */}
-      {showCreateModal && (
+  {showCreateModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" role="dialog" aria-modal="true" tabIndex="-1" autoFocus onKeyDown={(e) => { if (e.key === 'Escape') { setShowCreateModal(false) } }}>
           <div ref={createModalRef} className="bg-white dark:bg-charcoal-dark rounded-none p-6 max-w-md w-full mx-4">
             <div className="flex items-center justify-between mb-4">
@@ -288,11 +286,10 @@ className="flex-1 px-4 py-2 bg-purple-active hover:bg-purple-600 text-white roun
               </div>
             </form>
           </div>
-        </div>
-      )}
+    </div>
+  )}
 
-      {/* Delete Confirmation Modal */}
-      {deleteTarget && (
+  {deleteTarget && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" role="dialog" aria-modal="true">
           <div ref={deleteModalRef} className="bg-white dark:bg-charcoal-dark rounded-none p-6 max-w-md w-full mx-4">
             <h3 className="text-lg font-semibold text-gray-900 dark:text-light-neutral mb-2">Delete User</h3>
@@ -315,11 +312,10 @@ className="flex-1 px-4 py-2 bg-purple-active hover:bg-purple-600 text-white roun
               </button>
             </div>
           </div>
-        </div>
-      )}
+    </div>
+  )}
 
-      {/* Edit user modal */}
-      {showEditModal && editTarget && (
+  {showEditModal && editTarget && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" role="dialog" aria-modal="true" tabIndex="-1" autoFocus onKeyDown={(e) => { if (e.key === 'Escape') { setShowEditModal(false) } }}>
           <div ref={editModalRef} className="bg-white dark:bg-charcoal-dark rounded-none p-6 max-w-md w-full mx-4">
             <div className="flex items-center justify-between mb-4">

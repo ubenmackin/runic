@@ -12,7 +12,6 @@ import { Server, Shield, AlertTriangle, Clock, UserPlus, Wifi, WifiOff } from 'l
 import { usePendingChanges } from '../contexts/PendingChangesContext'
 
 export default function Dashboard() {
-  // Track live updates from WebSocket
   const [liveBlockedCount, setLiveBlockedCount] = useState(0)
   const [liveActivity, setLiveActivity] = useState([])
   const [topSourcesUpdates, setTopSourcesUpdates] = useState({})
@@ -21,14 +20,12 @@ export default function Dashboard() {
   const reconnectAttempts = useRef(0)
   const reconnectTimer = useRef(null)
 
-  // Fetch dashboard stats
   const { data, isLoading } = useQuery({
     queryKey: QUERY_KEYS.dashboardStats(),
     queryFn: () => api.get('/dashboard'),
     staleTime: 30000, // Cache for 30 seconds
   })
 
-  // Logs query for chart
   const { data: blockedLogs } = useQuery({
     queryKey: QUERY_KEYS.blockedLogs24h(),
     queryFn: async () => {
@@ -41,7 +38,6 @@ export default function Dashboard() {
     staleTime: 30000,
   })
 
-  // Get pending changes from context
   const { totalPendingCount } = usePendingChanges()
 
   // Reset live state when query data refreshes
@@ -53,7 +49,6 @@ export default function Dashboard() {
     }
   }, [data])
 
-  // WebSocket connection for real-time updates
   useEffect(() => {
     const connect = () => {
       if (wsRef.current) {
@@ -81,10 +76,8 @@ export default function Dashboard() {
           // Only process DROP events (should be filtered by server, but double-check)
           if (log.action !== 'DROP') return
 
-          // Increment blocked count
           setLiveBlockedCount(prev => prev + 1)
 
-          // Add to recent activity (newest first)
           setLiveActivity(prev => {
             const newActivity = {
               timestamp: log.timestamp || new Date().toISOString(),
@@ -94,11 +87,9 @@ export default function Dashboard() {
               action: log.action,
               hostname: log.hostname || '',
             }
-            // Keep only last 5, newest first
             return [newActivity, ...prev].slice(0, 5)
           })
 
-          // Update top blocked sources count
           if (log.src_ip) {
             setTopSourcesUpdates(prev => ({
               ...prev,
@@ -112,7 +103,6 @@ export default function Dashboard() {
 
       ws.onclose = () => {
         setIsWsConnected(false)
-        // Reconnect with exponential backoff
         if (reconnectAttempts.current < 5) {
           const delay = Math.min(1000 * Math.pow(2, reconnectAttempts.current), 30000)
           reconnectTimer.current = setTimeout(() => {
@@ -142,7 +132,6 @@ export default function Dashboard() {
     }
   }, [])
 
-  // Merge live updates with fetched data
   const stats = data || {
     total_peers: 0,
     online_peers: 0,
@@ -156,12 +145,10 @@ export default function Dashboard() {
     top_blocked_sources: []
   }
 
-  // Combine API recent activity with live updates
   const combinedActivity = liveActivity.length > 0
     ? liveActivity
     : stats.recent_activity || []
 
-  // Use useMemo for combinedTopSources (performance optimization)
   const topSources = useMemo(() => {
     const combined = [...(stats.top_blocked_sources || [])].map(source => ({
       ...source,
@@ -186,8 +173,6 @@ export default function Dashboard() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-gray-900 dark:text-light-neutral">Dashboard</h1>
-
-        {/* WebSocket connection status */}
         <div className="flex items-center gap-2 text-sm">
           {isWsConnected ? (
             <div className="flex items-center gap-1.5 text-green-600 dark:text-green-400">
@@ -203,7 +188,6 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Stats Cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-0">
         <StatCard icon={Server} label="Total Peers" value={stats.total_peers} valueColor="text-slate-400" />
         <StatCard icon={Server} label="Online" value={stats.online_peers} valueColor="text-green-500" />
@@ -215,13 +199,11 @@ export default function Dashboard() {
         <StatCard icon={Clock} label="Blocked (24h)" value={stats.blocked_last_24h + liveBlockedCount} valueColor={(stats.blocked_last_24h + liveBlockedCount) > 0 ? 'text-purple-active' : 'text-slate-400'} />
       </div>
 
-  {/* Blocked events chart */}
-  <div className="border border-gray-border bg-charcoal-dark p-4">
-    <h2 className="font-semibold text-gray-900 dark:text-light-neutral mb-4">Blocked Events (Last 24 Hours)</h2>
-    <BlockedEventsChart logs={blockedLogs?.logs || []} />
-  </div>
+      <div className="border border-gray-border bg-charcoal-dark p-4">
+        <h2 className="font-semibold text-gray-900 dark:text-light-neutral mb-4">Blocked Events (Last 24 Hours)</h2>
+        <BlockedEventsChart logs={blockedLogs?.logs || []} />
+      </div>
 
-      {/* Dashboard Widgets */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-0">
         <RecentActivityFeed activity={combinedActivity} />
         <QuickActions />

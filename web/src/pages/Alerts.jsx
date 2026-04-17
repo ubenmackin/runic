@@ -5,13 +5,16 @@ import { api, QUERY_KEYS, deleteAlert, clearAllAlerts } from '../api/client'
 import { useAuth } from '../hooks/useAuth'
 import { useToastContext } from '../hooks/ToastContext'
 import { useFocusTrap } from '../hooks/useFocusTrap'
+import { useTableSort } from '../hooks/useTableSort'
+import { useFilterPersistence } from '../hooks/useFilterPersistence'
 import PageHeader from '../components/PageHeader'
 import Pagination from '../components/Pagination'
 import EmptyState from '../components/EmptyState'
 import TableSkeleton from '../components/TableSkeleton'
 import SearchFilterPanel from '../components/SearchFilterPanel'
+import SortIndicator from '../components/SortIndicator'
+import MultiSelect from '../components/MultiSelect'
 
-// Alert type options
 const ALERT_TYPES = [
   { value: 'bundle_deployed', label: 'Bundle Deployed' },
   { value: 'bundle_failed', label: 'Bundle Failed' },
@@ -21,21 +24,18 @@ const ALERT_TYPES = [
   { value: 'new_peer', label: 'New Peer' },
 ]
 
-// Severity options
 const SEVERITIES = [
   { value: 'critical', label: 'Critical' },
   { value: 'warning', label: 'Warning' },
   { value: 'info', label: 'Info' },
 ]
 
-// Status options
 const STATUSES = [
   { value: 'sent', label: 'Sent' },
   { value: 'pending', label: 'Pending' },
   { value: 'failed', label: 'Failed' },
 ]
 
-// Severity icon configuration
 function SeverityIcon({ severity }) {
   const config = {
     critical: { icon: AlertTriangle, color: 'text-red-500' },
@@ -46,7 +46,6 @@ function SeverityIcon({ severity }) {
   return <Icon className={`w-4 h-4 ${color}`} />
 }
 
-// Alert type sharp tag configuration
 function AlertTypeTag({ alertType }) {
   const colorConfig = {
     bundle_deployed: 'border-green-500 text-green-700 dark:text-green-400',
@@ -66,7 +65,6 @@ function AlertTypeTag({ alertType }) {
   )
 }
 
-// Status sharp tag configuration
 function StatusTag({ status }) {
   const colorConfig = {
     sent: 'border-green-500 text-green-700 dark:text-green-400',
@@ -83,7 +81,6 @@ function StatusTag({ status }) {
   )
 }
 
-// Format timestamp
 function formatTimestamp(timestamp) {
   const date = new Date(timestamp)
   return date.toLocaleString('en-US', {
@@ -94,46 +91,38 @@ function formatTimestamp(timestamp) {
   })
 }
 
-// Alert row component
 function AlertRow({ alert, isExpanded, onToggle, onDelete }) {
         return (
                 <>
                         <tr
                                 onClick={onToggle}
                                 className="cursor-pointer hover:bg-gray-50 dark:hover:bg-charcoal-darkest transition-colors"
-                        >
-                                {/* Severity */}
-                                <td className="px-4 py-1.5">
+      >
+        <td className="px-4 py-1.5">
                                         <SeverityIcon severity={alert.severity} />
-                                </td>
+        </td>
 
-                                {/* Timestamp */}
-                                <td className="px-4 py-1.5 text-sm text-gray-600 dark:text-amber-muted whitespace-nowrap">
+        <td className="px-4 py-1.5 text-sm text-gray-600 dark:text-amber-muted whitespace-nowrap">
                                         {formatTimestamp(alert.created_at)}
-                                </td>
+        </td>
 
-                                {/* Alert Type */}
-                                <td className="px-4 py-1.5">
+        <td className="px-4 py-1.5">
                                         <AlertTypeTag alertType={alert.alert_type} />
-                                </td>
+        </td>
 
-                                {/* Peer */}
-                                <td className="px-4 py-1.5 text-sm text-gray-900 dark:text-light-neutral">
+        <td className="px-4 py-1.5 text-sm text-gray-900 dark:text-light-neutral">
                                         {alert.peer_hostname || '-'}
-                                </td>
+        </td>
 
-                                {/* Subject */}
-                                <td className="px-4 py-1.5 text-sm text-gray-900 dark:text-light-neutral max-w-[200px] truncate">
+        <td className="px-4 py-1.5 text-sm text-gray-900 dark:text-light-neutral max-w-[200px] truncate">
                                         {alert.subject}
-                                </td>
+        </td>
 
-                                {/* Status */}
-                                <td className="px-4 py-1.5">
+        <td className="px-4 py-1.5">
                                         <StatusTag status={alert.status} />
-                                </td>
+        </td>
 
-                                {/* Expand icon */}
-                                <td className="px-4 py-1.5 text-center">
+        <td className="px-4 py-1.5 text-center">
                                         {isExpanded ? (
                                                 <ChevronUp className="w-4 h-4 text-gray-500 dark:text-amber-muted mx-auto" />
                                         ) : (
@@ -142,12 +131,10 @@ function AlertRow({ alert, isExpanded, onToggle, onDelete }) {
                                 </td>
                         </tr>
 
-      {/* Expanded content */}
       {isExpanded && (
         <tr className="bg-gray-50 dark:bg-charcoal-darkest">
           <td colSpan={7} className="px-4 py-4">
             <div className="space-y-4">
-              {/* Full message */}
               <div>
                 <h4 className="text-sm font-medium text-gray-900 dark:text-light-neutral mb-1">Message</h4>
                 <p className="text-sm text-gray-600 dark:text-amber-muted whitespace-pre-wrap">
@@ -155,7 +142,6 @@ function AlertRow({ alert, isExpanded, onToggle, onDelete }) {
                 </p>
               </div>
 
-              {/* Metadata JSON */}
               {alert.metadata && (
                 <div>
                   <h4 className="text-sm font-medium text-gray-900 dark:text-light-neutral mb-1">Metadata</h4>
@@ -165,8 +151,7 @@ function AlertRow({ alert, isExpanded, onToggle, onDelete }) {
                 </div>
               )}
 
-                                                {/* Additional details */}
-                                                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
                                                         <div>
                                                                 <span className="text-gray-500 dark:text-amber-muted">Severity:</span>
                                                                 <span className="ml-2 text-gray-900 dark:text-light-neutral capitalize">{alert.severity}</span>
@@ -193,7 +178,6 @@ function AlertRow({ alert, isExpanded, onToggle, onDelete }) {
                                                         </div>
                                                 </div>
 
-              {/* Delete button */}
               <div className="pt-2 border-t border-gray-200 dark:border-gray-border">
                 <button
                   onClick={(e) => {
@@ -214,7 +198,6 @@ function AlertRow({ alert, isExpanded, onToggle, onDelete }) {
   )
 }
 
-// Access denied component
 function AccessDenied() {
   return (
     <div className="flex items-center justify-center min-h-[400px]">
@@ -235,14 +218,15 @@ export default function Alerts() {
   const { isAdmin } = useAuth()
   const qc = useQueryClient()
   const showToast = useToastContext()
+  const { sortConfig, handleSort } = useTableSort('alerts', { key: 'created_at', direction: 'desc' })
+  const { value: rowsPerPage, setValue: setRowsPerPage } = useFilterPersistence('alerts', 'rowsPerPage', 25)
   const [filter, setFilter] = useState({
-    alert_type: '',
-    severity: '',
-    status: '',
+    alert_types: [],
+    severities: [],
+    statuses: [],
     start_date: '',
     end_date: '',
     page: 1,
-    limit: 25,
   })
   const [expandedRow, setExpandedRow] = useState(null)
   const [showDeleteModal, setShowDeleteModal] = useState(null)
@@ -250,28 +234,29 @@ export default function Alerts() {
   const deleteModalRef = useRef(null)
   useFocusTrap(deleteModalRef, showDeleteModal !== null)
 
-  // Build query params
   const queryParams = new URLSearchParams()
-  if (filter.alert_type) queryParams.set('alert_type', filter.alert_type)
-  if (filter.severity) queryParams.set('severity', filter.severity)
-  if (filter.status) queryParams.set('status', filter.status)
+  if (filter.alert_types.length > 0) queryParams.set('alert_type', filter.alert_types.join(','))
+  if (filter.severities.length > 0) queryParams.set('severity', filter.severities.join(','))
+  if (filter.statuses.length > 0) queryParams.set('status', filter.statuses.join(','))
   if (filter.start_date) queryParams.set('start_date', filter.start_date)
   if (filter.end_date) queryParams.set('end_date', filter.end_date)
   queryParams.set('page', String(filter.page))
-  queryParams.set('limit', String(filter.limit))
+  queryParams.set('limit', String(rowsPerPage === -1 ? 1000 : rowsPerPage))
+  queryParams.set('sort_key', sortConfig.key)
+  queryParams.set('sort_direction', sortConfig.direction)
 
-  // Fetch alerts
+  const filterWithSort = { ...filter, limit: rowsPerPage, sort_key: sortConfig.key, sort_direction: sortConfig.direction }
+
   const { data, isLoading } = useQuery({
-    queryKey: QUERY_KEYS.alerts(filter),
+    queryKey: QUERY_KEYS.alerts(filterWithSort),
     queryFn: () => api.get(`/alerts?${queryParams.toString()}`),
     enabled: isAdmin,
   })
 
-  // Delete single alert mutation
   const deleteMutation = useMutation({
     mutationFn: deleteAlert,
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: QUERY_KEYS.alerts(filter) })
+      qc.invalidateQueries({ queryKey: QUERY_KEYS.alerts(filterWithSort) })
       showToast('Alert deleted', 'success')
       setShowDeleteModal(null)
       setExpandedRow(null)
@@ -279,11 +264,10 @@ export default function Alerts() {
     onError: (err) => showToast(err.message, 'error'),
   })
 
-  // Clear all alerts mutation
   const clearAllMutation = useMutation({
     mutationFn: clearAllAlerts,
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: QUERY_KEYS.alerts(filter) })
+      qc.invalidateQueries({ queryKey: QUERY_KEYS.alerts(filterWithSort) })
       showToast('All alerts cleared', 'success')
       setShowClearAllModal(false)
       setExpandedRow(null)
@@ -293,18 +277,22 @@ export default function Alerts() {
 
   const handleClearFilters = () => {
     setFilter({
-      alert_type: '',
-      severity: '',
-      status: '',
+      alert_types: [],
+      severities: [],
+      statuses: [],
       start_date: '',
       end_date: '',
       page: 1,
-      limit: 25,
     })
   }
 
   const handlePageChange = (newPage) => {
     setFilter(f => ({ ...f, page: newPage }))
+  }
+
+  const handleRowsPerPageChange = (newRowsPerPage) => {
+    setRowsPerPage(newRowsPerPage)
+    setFilter(f => ({ ...f, page: 1 }))
   }
 
   const toggleRow = (id) => {
@@ -325,7 +313,6 @@ export default function Alerts() {
     clearAllMutation.mutate()
   }
 
-  // Check if admin
   if (!isAdmin) {
     return (
       <div className="space-y-4">
@@ -340,65 +327,59 @@ export default function Alerts() {
 
   return (
     <div className="space-y-4">
-      {/* Header */}
       <PageHeader
         title="Alerts"
         description="View alert history and notifications"
+        actions={
+          <>
+            {data?.alerts?.length > 0 && (
+              <button
+                onClick={() => setShowClearAllModal(true)}
+                className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/40 transition-colors rounded-none"
+              >
+                <Trash2 className="w-4 h-4" /> Clear All Alerts
+              </button>
+            )}
+          </>
+        }
       />
 
-      {/* Filter bar */}
       <SearchFilterPanel
         storageKey="alerts-filters-expanded"
         showSearch={false}
-        hasActiveFilters={filter.alert_type || filter.severity || filter.status || filter.start_date || filter.end_date}
+        hasActiveFilters={filter.alert_types.length > 0 || filter.severities.length > 0 || filter.statuses.length > 0 || filter.start_date || filter.end_date}
         filterContent={
           <div className="flex items-center gap-4">
-            {/* Alert Type */}
             <div className="space-y-1 min-w-[150px]">
               <label className="text-xs font-medium text-gray-500 dark:text-amber-muted">Alert Type</label>
-              <select
-                value={filter.alert_type}
-                onChange={e => setFilter(f => ({ ...f, alert_type: e.target.value, page: 1 }))}
-className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border bg-white dark:bg-charcoal-dark text-gray-900 dark:text-light-neutral text-sm"
-					>
-					<option value="">All types</option>
-                {ALERT_TYPES.map(t => (
-                  <option key={t.value} value={t.value}>{t.label}</option>
-                ))}
-              </select>
+              <MultiSelect
+                options={ALERT_TYPES}
+                values={filter.alert_types}
+                onChange={(values) => setFilter(f => ({ ...f, alert_types: values, page: 1 }))}
+                placeholder="All types"
+              />
             </div>
 
-            {/* Severity */}
             <div className="space-y-1 min-w-[120px]">
               <label className="text-xs font-medium text-gray-500 dark:text-amber-muted">Severity</label>
-              <select
-                value={filter.severity}
-                onChange={e => setFilter(f => ({ ...f, severity: e.target.value, page: 1 }))}
-className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border bg-white dark:bg-charcoal-dark text-gray-900 dark:text-light-neutral text-sm"
-					>
-					<option value="">All severities</option>
-                {SEVERITIES.map(s => (
-                  <option key={s.value} value={s.value}>{s.label}</option>
-                ))}
-              </select>
+              <MultiSelect
+                options={SEVERITIES}
+                values={filter.severities}
+                onChange={(values) => setFilter(f => ({ ...f, severities: values, page: 1 }))}
+                placeholder="All severities"
+              />
             </div>
 
-            {/* Status */}
             <div className="space-y-1 min-w-[120px]">
               <label className="text-xs font-medium text-gray-500 dark:text-amber-muted">Status</label>
-              <select
-                value={filter.status}
-                onChange={e => setFilter(f => ({ ...f, status: e.target.value, page: 1 }))}
-className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border bg-white dark:bg-charcoal-dark text-gray-900 dark:text-light-neutral text-sm"
-					>
-					<option value="">All statuses</option>
-                {STATUSES.map(s => (
-                  <option key={s.value} value={s.value}>{s.label}</option>
-                ))}
-              </select>
+              <MultiSelect
+                options={STATUSES}
+                values={filter.statuses}
+                onChange={(values) => setFilter(f => ({ ...f, statuses: values, page: 1 }))}
+                placeholder="All statuses"
+              />
             </div>
 
-            {/* Date Range */}
             <div className="space-y-1 min-w-[150px]">
               <label className="text-xs font-medium text-gray-500 dark:text-amber-muted">From Date</label>
               <div className="relative">
@@ -426,54 +407,38 @@ className="w-full pl-10 pr-3 py-2 border border-gray-300 dark:border-gray-border
 				</div>
 			</div>
 		}
-		rightContent={
-        <div className="flex items-center gap-4">
-          {/* Rows per page selector */}
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-gray-500 dark:text-amber-muted">Rows:</span>
-            <select
-              value={filter.limit}
-              onChange={e => setFilter(f => ({ ...f, limit: Number(e.target.value), page: 1 }))}
-              className="text-sm border border-gray-300 dark:border-gray-border px-2 py-1.5 bg-white dark:bg-charcoal-dark text-gray-900 dark:text-light-neutral"
-            >
-              <option value={10}>10</option>
-              <option value={25}>25</option>
-              <option value={50}>50</option>
-              <option value={100}>100</option>
-            </select>
-          </div>
+        rightContent={
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2">
+      <span className="text-sm text-gray-500 dark:text-amber-muted">Rows:</span>
+      <select
+        value={rowsPerPage}
+        onChange={e => handleRowsPerPageChange(Number(e.target.value))}
+        className="text-sm border border-gray-300 dark:border-gray-border px-2 py-1.5 bg-white dark:bg-charcoal-dark text-gray-900 dark:text-light-neutral"
+      >
+        <option value={10}>10</option>
+        <option value={25}>25</option>
+        <option value={50}>50</option>
+        <option value={100}>100</option>
+        <option value={-1}>All</option>
+      </select>
+            </div>
 
-          {/* Clear filters button */}
-          {(filter.alert_type || filter.severity || filter.status || filter.start_date || filter.end_date) && (
-            <button
-              onClick={handleClearFilters}
-              className="flex items-center gap-1 px-3 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20"
-            >
-              <X className="w-4 h-4" />
-              Clear
-            </button>
-          )}
-        </div>
-      }
+            {(filter.alert_types.length > 0 || filter.severities.length > 0 || filter.statuses.length > 0 || filter.start_date || filter.end_date) && (
+      <button
+        onClick={handleClearFilters}
+        className="flex items-center gap-1 px-3 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20"
+      >
+        <X className="w-4 h-4" />
+        Clear
+      </button>
+    )}
+  </div>
+}
       />
 
-      {/* Clear All Alerts button */}
-      {data?.alerts?.length > 0 && (
-        <div className="flex justify-end">
-          <button
-            onClick={() => setShowClearAllModal(true)}
-            className="flex items-center gap-2 px-4 py-2 text-sm text-red-600 dark:text-red-400 border border-red-300 dark:border-red-800 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors rounded-none"
-          >
-            <Trash2 className="w-4 h-4" />
-            Clear All Alerts
-          </button>
-        </div>
-      )}
-
-      {/* Loading state */}
       {isLoading && <TableSkeleton rows={5} columns={7} />}
 
-      {/* Alerts table */}
       {!isLoading && data && (
         <>
           {!data.alerts?.length ? (
@@ -486,31 +451,41 @@ className="w-full pl-10 pr-3 py-2 border border-gray-300 dark:border-gray-border
 <div className="bg-white dark:bg-charcoal-dark border border-gray-200 dark:border-gray-border overflow-hidden">
               <div className="overflow-x-auto">
                 <table className="w-full">
-                  <thead className="bg-gray-50 dark:bg-charcoal-darkest border-b border-gray-200 dark:border-gray-border">
-                                                <tr>
-                                                        <th className="px-4 py-1.5 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider">
-                                                                Sev
-                                                        </th>
-                                                        <th className="px-4 py-1.5 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider">
-                                                                Timestamp
-                                                        </th>
-                                                        <th className="px-4 py-1.5 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider">
-                                                                Alert Type
-                                                        </th>
-                                                        <th className="px-4 py-1.5 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider">
-                                                                Peer
-                                                        </th>
-                                                        <th className="px-4 py-1.5 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider">
-                                                                Subject
-                                                        </th>
-                                                        <th className="px-4 py-1.5 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider">
-                                                                Status
-                                                        </th>
-                                                        <th className="px-4 py-1.5 text-center text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider w-12">
-                                                                Details
-                                                        </th>
-                                                </tr>
-                  </thead>
+                <thead className="bg-gray-50 dark:bg-charcoal-darkest border-b border-gray-200 dark:border-gray-border">
+                  <tr>
+                    <th className="px-4 py-1.5 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+                      <button type="button" onClick={() => handleSort('severity')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+                        Sev <SortIndicator columnKey="severity" sortConfig={sortConfig} />
+                      </button>
+                    </th>
+                    <th className="px-4 py-1.5 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+                      <button type="button" onClick={() => handleSort('created_at')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+                        Timestamp <SortIndicator columnKey="created_at" sortConfig={sortConfig} />
+                      </button>
+                    </th>
+                    <th className="px-4 py-1.5 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+                      <button type="button" onClick={() => handleSort('alert_type')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+                        Alert Type <SortIndicator columnKey="alert_type" sortConfig={sortConfig} />
+                      </button>
+                    </th>
+                    <th className="px-4 py-1.5 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+                      <button type="button" onClick={() => handleSort('peer_hostname')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+                        Peer <SortIndicator columnKey="peer_hostname" sortConfig={sortConfig} />
+                      </button>
+                    </th>
+                    <th className="px-4 py-1.5 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider">
+                      Subject
+                    </th>
+                    <th className="px-4 py-1.5 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+                      <button type="button" onClick={() => handleSort('status')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+                        Status <SortIndicator columnKey="status" sortConfig={sortConfig} />
+                      </button>
+                    </th>
+                    <th className="px-4 py-1.5 text-center text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider w-12">
+                      Details
+                    </th>
+                  </tr>
+                </thead>
                   <tbody className="divide-y divide-gray-200 dark:divide-gray-border">
                     {data.alerts.map((alert) => (
                       <AlertRow
@@ -525,20 +500,21 @@ className="w-full pl-10 pr-3 py-2 border border-gray-300 dark:border-gray-border
                 </table>
               </div>
 
-              {/* Pagination */}
               <Pagination
-                showingRange={`Showing ${(filter.page - 1) * filter.limit + 1} - ${Math.min(filter.page * filter.limit, data.total)} of ${data.total}`}
-                page={filter.page}
-                totalPages={Math.ceil(data.total / filter.limit)}
-                onPageChange={handlePageChange}
-                totalItems={data.total}
-              />
+          showingRange={rowsPerPage === -1
+            ? `Showing all ${data.total}`
+            : `Showing ${(filter.page - 1) * rowsPerPage + 1} - ${Math.min(filter.page * rowsPerPage, data.total)} of ${data.total}`
+          }
+          page={filter.page}
+          totalPages={rowsPerPage === -1 ? 1 : Math.ceil(data.total / rowsPerPage)}
+          onPageChange={handlePageChange}
+          totalItems={data.total}
+        />
             </div>
           )}
         </>
       )}
 
-      {/* No data state (before query) */}
       {!isLoading && !data && (
         <EmptyState
           icon={Bell}
@@ -547,7 +523,6 @@ className="w-full pl-10 pr-3 py-2 border border-gray-300 dark:border-gray-border
         />
       )}
 
-      {/* Delete Alert Confirmation Modal */}
       {showDeleteModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div ref={deleteModalRef} className="bg-white dark:bg-charcoal-dark border border-gray-200 dark:border-gray-border p-6 max-w-md w-full mx-4">
@@ -576,7 +551,6 @@ className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white disabled:opac
         </div>
       )}
 
-      {/* Clear All Alerts Confirmation Modal */}
       {showClearAllModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-white dark:bg-charcoal-dark border border-gray-200 dark:border-gray-border p-6 max-w-md w-full mx-4">
@@ -594,9 +568,9 @@ className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white disabled:opac
                 Cancel
               </button>
               <button
-                onClick={confirmClearAll}
-                disabled={clearAllMutation.isPending}
-className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white disabled:opacity-50 rounded-none"
+onClick={confirmClearAll}
+          disabled={clearAllMutation.isPending}
+          className="flex-1 px-4 py-2 text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/40 disabled:opacity-50 rounded-none font-medium transition-colors"
 >
 {clearAllMutation.isPending ? 'Clearing...' : 'Clear All Alerts'}
               </button>

@@ -68,17 +68,57 @@ func (h *Handler) ListAlerts(w http.ResponseWriter, r *http.Request) {
 	var conditions []string
 	var args []interface{}
 
+	// Helper function to build IN clause for comma-separated values
+	buildInClause := func(fieldName, values string) (string, []interface{}) {
+		parts := strings.Split(values, ",")
+		// Trim whitespace from each part
+		for i, part := range parts {
+			parts[i] = strings.TrimSpace(part)
+		}
+		// Filter empty strings
+		validParts := make([]string, 0, len(parts))
+		for _, part := range parts {
+			if part != "" {
+				validParts = append(validParts, part)
+			}
+		}
+		if len(validParts) == 0 {
+			return "", nil
+		}
+		// Single value: use = for backward compatibility
+		if len(validParts) == 1 {
+			return fieldName + " = ?", []interface{}{validParts[0]}
+		}
+		// Multiple values: use IN clause
+		placeholders := make([]string, len(validParts))
+		placeholdersArgs := make([]interface{}, len(validParts))
+		for i, part := range validParts {
+			placeholders[i] = "?"
+			placeholdersArgs[i] = part
+		}
+		return fieldName + " IN (" + strings.Join(placeholders, ", ") + ")", placeholdersArgs
+	}
+
 	if alertType != "" {
-		conditions = append(conditions, "h.alert_type = ?")
-		args = append(args, alertType)
+		clause, clauseArgs := buildInClause("h.alert_type", alertType)
+		if clause != "" {
+			conditions = append(conditions, clause)
+			args = append(args, clauseArgs...)
+		}
 	}
 	if severity != "" {
-		conditions = append(conditions, "h.severity = ?")
-		args = append(args, severity)
+		clause, clauseArgs := buildInClause("h.severity", severity)
+		if clause != "" {
+			conditions = append(conditions, clause)
+			args = append(args, clauseArgs...)
+		}
 	}
 	if status != "" {
-		conditions = append(conditions, "h.status = ?")
-		args = append(args, status)
+		clause, clauseArgs := buildInClause("h.status", status)
+		if clause != "" {
+			conditions = append(conditions, clause)
+			args = append(args, clauseArgs...)
+		}
 	}
 	if startDate != "" {
 		// Try RFC3339 first, then YYYY-MM-DD

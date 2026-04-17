@@ -26,10 +26,8 @@ export default function SetupKeys() {
   const rotateConfirmModalRef = useRef(null)
   const rotateResultModalRef = useRef(null)
 
-  // Tab state
   const [activeTab, setActiveTab] = useState('keys') // 'keys' or 'tokens'
 
-  // Registration token state
   const [showGenerateModal, setShowGenerateModal] = useState(false)
   const [showRevokeModal, setShowRevokeModal] = useState(null) // token ID
   const [generatedToken, setGeneratedToken] = useState(null) // { full_token, description }
@@ -39,13 +37,11 @@ export default function SetupKeys() {
   const generateResultModalRef = useRef(null)
   const revokeModalRef = useRef(null)
 
-  // Fetch peers with rotation info
   const { data: peers, isLoading: peersLoading } = useQuery({
     queryKey: QUERY_KEYS.peers(),
     queryFn: () => api.get('/peers'),
   })
 
-  // Rotate single peer key
   const rotateMutation = useMutation({
     mutationFn: (peerId) => api.post(`/peers/${peerId}/rotate-key`),
     onSuccess: (data, peerId) => {
@@ -57,7 +53,6 @@ export default function SetupKeys() {
     onError: (err) => showToast(err.message, 'error'),
   })
 
-  // Bulk rotation
   const bulkRotateMutation = useMutation({
     mutationFn: async () => {
       if (!peers) return
@@ -86,14 +81,12 @@ export default function SetupKeys() {
     setShowRotateModal(null)
   }
 
-  // Registration tokens query
   const { data: tokens, isLoading: tokensLoading } = useQuery({
     queryKey: ['registration-tokens'],
     queryFn: () => api.get('/registration-tokens'),
     enabled: activeTab === 'tokens' && isAdmin,
   })
 
-  // Generate token mutation
   const generateTokenMutation = useMutation({
     mutationFn: (description) => api.post('/registration-tokens', { description }),
     onSuccess: (data) => {
@@ -106,7 +99,6 @@ export default function SetupKeys() {
     onError: (err) => showToast(err.message, 'error'),
   })
 
-  // Revoke token mutation
   const revokeTokenMutation = useMutation({
     mutationFn: (tokenId) => api.delete(`/registration-tokens/${tokenId}`),
     onSuccess: () => {
@@ -145,7 +137,6 @@ export default function SetupKeys() {
     return { label: 'Active', color: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' }
   }
 
-  // Filter tokens by search
   const filteredTokens = (tokens || []).filter(t => {
     const term = tokenSearchTerm.toLowerCase()
     if (!term) return true
@@ -178,7 +169,6 @@ export default function SetupKeys() {
     }
   }
 
-  // Filter out manual peers (they have no HMAC keys) and apply search
   const agentPeers = (peers || []).filter(p => !p.is_manual)
   const filteredPeers = useTableFilter(agentPeers, searchTerm, sortConfig, {
     filterFn: (p, term) => {
@@ -204,12 +194,10 @@ export default function SetupKeys() {
     totalItems: peersTotal
   } = usePagination(filteredPeers, 'setupKeys')
 
-  // Reset page to 1 when search term changes
   useEffect(() => {
     setPeersPage(1)
   }, [searchTerm, setPeersPage])
 
-  // Focus traps for modals
   useFocusTrap(rotateConfirmModalRef, !!showRotateModal)
   useFocusTrap(rotateResultModalRef, !!rotationResult)
   useFocusTrap(generateModalRef, showGenerateModal)
