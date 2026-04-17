@@ -1,11 +1,5 @@
-/**
- * Compute a simple line-by-line diff between old and new rules
- * @param {string} oldRules - The old rules content
- * @param {string} newRules - The new rules content
- * @returns {string} The diff output with +/- prefixes
- */
+// Compute a simple line-by-line diff between old and new rules with +/- prefixes
 export function computeDiff(oldRules, newRules) {
-  // Handle empty inputs - return empty string if both are empty
   if (!oldRules && !newRules) {
     return ''
   }
@@ -17,14 +11,14 @@ export function computeDiff(oldRules, newRules) {
     const oldLine = oldLines[i] || ''
     const newLine = newLines[i] || ''
     if (oldLine === newLine) {
-      result.push(` ${newLine}`) // Unchanged line
+      result.push(` ${newLine}`)
     } else if (!oldLine) {
-      result.push(`+ ${newLine}`) // New line added
+      result.push(`+ ${newLine}`)
     } else if (!newLine) {
-      result.push(`- ${oldLine}`) // Line removed
+      result.push(`- ${oldLine}`)
     } else {
-      result.push(`- ${oldLine}`) // Line changed (old)
-      result.push(`+ ${newLine}`) // Line changed (new)
+      result.push(`- ${oldLine}`)
+      result.push(`+ ${newLine}`)
     }
   }
   return result.join('\n')

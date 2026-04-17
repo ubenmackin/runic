@@ -37,7 +37,6 @@ export function transformPrefsFromBackend(backendPrefs) {
     return null
   }
 
-  // Parse enabled_alerts JSON string and convert to object
   // Wrap in try-catch to handle malformed JSON gracefully
   let enabledAlerts = []
   try {
@@ -65,7 +64,6 @@ export function transformPrefsFromBackend(backendPrefs) {
   } else if (digestTimezone) {
     unifiedTimezone = digestTimezone
   } else {
-    // Default to browser-detected timezone if both are empty
     unifiedTimezone = getBrowserTimezone()
   }
 
@@ -90,7 +88,6 @@ export function transformPrefsFromBackend(backendPrefs) {
  * @returns {Object} Backend notification preferences with flat fields
  */
 export function transformPrefsToBackend(prefs) {
-  // Get unified timezone from quiet_hours, default to browser timezone if not set
   const unifiedTimezone = prefs.quiet_hours?.timezone || getBrowserTimezone()
 
   return {

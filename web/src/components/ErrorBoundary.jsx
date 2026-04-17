@@ -22,7 +22,6 @@ export default class ErrorBoundary extends Component {
 
   render() {
     if (this.state.hasError) {
-      // Use fallback prop if provided, otherwise use default UI
       if (this.props.fallback) {
         return this.props.fallback(this.state.error, this.reset)
       }
@@ -59,7 +58,6 @@ Reload Page
   }
 }
 
-// Route-specific error boundary with custom UI
 export function RouteErrorBoundary({ children }) {
   return (
     <ErrorBoundary

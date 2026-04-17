@@ -163,7 +163,6 @@ func (h *Handler) CreatePolicy(w http.ResponseWriter, r *http.Request) {
 		log.ErrorContext(r.Context(), "failed to create snapshot", "error", err)
 	}
 
-	// Trigger async recompilation for all affected peers
 	affectedPeers, err := h.Compiler.GetAffectedPeersByPolicy(r.Context(), int(id))
 	log.InfoContext(r.Context(), "DEBUG: GetAffectedPeersByPolicy result", "policy_id", id, "affected_peers", affectedPeers, "error", err)
 	if err != nil {
@@ -310,7 +309,6 @@ func (h *Handler) UpdatePolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if any rows were updated
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
 		log.ErrorContext(r.Context(), "failed to check update result", "error", err)
@@ -322,7 +320,6 @@ func (h *Handler) UpdatePolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Trigger async recompilation for all affected peers (old and new)
 	newPeers, err := h.Compiler.GetAffectedPeersByPolicy(r.Context(), id)
 	if err != nil {
 		log.ErrorContext(r.Context(), "Failed to get new affected peers for policy", "policy_id", id, "error", err)
@@ -360,7 +357,6 @@ func (h *Handler) DeletePolicy(w http.ResponseWriter, r *http.Request) {
 		oldPeers = nil
 	}
 
-	// Check if policy exists
 	var policyName string
 	err = h.DB.QueryRowContext(r.Context(), "SELECT name FROM policies WHERE id = ? AND COALESCE(is_pending_delete, 0) = 0", id).Scan(&policyName)
 	if err != nil {
@@ -372,7 +368,6 @@ func (h *Handler) DeletePolicy(w http.ResponseWriter, r *http.Request) {
 		log.ErrorContext(r.Context(), "failed to create snapshot", "error", err)
 	}
 
-	// Soft delete the policy
 	res, err := h.DB.ExecContext(r.Context(), "UPDATE policies SET is_pending_delete = 1 WHERE id = ?", id)
 	if err != nil {
 		log.ErrorContext(r.Context(), "failed to delete policy", "error", err)
@@ -391,7 +386,6 @@ func (h *Handler) DeletePolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Trigger async recompilation for all old affected peers
 	if h.ChangeWorker != nil {
 		h.ChangeWorker.QueuePeerChange(r.Context(), h.DB, oldPeers, "policy", "delete", id, fmt.Sprintf("Policy '%s' deleted", policyName))
 	}
@@ -417,7 +411,6 @@ func (h *Handler) PolicyPreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Default direction to both
 	if req.Direction == "" {
 		req.Direction = "both"
 	}
@@ -436,7 +429,6 @@ func (h *Handler) PolicyPreview(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Generate rules using the policy-centric preview function
 	rules, err := h.Compiler.PreviewCompile(r.Context(), req.PeerID, req.SourceID, req.SourceType, req.TargetID, req.TargetType, req.ServiceID, req.Direction, req.TargetScope)
 	if err != nil {
 		log.ErrorContext(r.Context(), "failed to generate preview", "error", err)
@@ -472,7 +464,6 @@ func (h *Handler) PatchPolicy(w http.ResponseWriter, r *http.Request) {
 		log.ErrorContext(r.Context(), "failed to create snapshot", "error", err)
 	}
 
-	// Fetch policy name before update
 	var policyName string
 	err = h.DB.QueryRowContext(r.Context(), "SELECT name FROM policies WHERE id = ?", id).Scan(&policyName)
 	if err != nil {
@@ -496,7 +487,6 @@ func (h *Handler) PatchPolicy(w http.ResponseWriter, r *http.Request) {
 		common.RespondError(w, http.StatusNotFound, "policy not found")
 		return
 	}
-	// Trigger async recompilation
 	affectedPeers, err := h.Compiler.GetAffectedPeersByPolicy(r.Context(), id)
 	if err != nil {
 		log.ErrorContext(r.Context(), "Failed to get affected peers", "policy_id", id, "error", err)

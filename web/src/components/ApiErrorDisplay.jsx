@@ -23,14 +23,12 @@ export default function ApiErrorDisplay({
 }) {
   if (!error) return null
 
-  // Extract error data
   const errorData = typeof error === 'object' && error.message 
     ? error 
     : { message: typeof error === 'string' ? error : 'An error occurred', type: 'unknown' }
 
   const { message, type, recoverable, suggestedAction } = errorData
 
-  // Icon lookup object for error types
   const iconMap = {
     [ErrorTypes.NETWORK]: WifiOff,
     [ErrorTypes.AUTH]: Lock,
@@ -42,7 +40,6 @@ export default function ApiErrorDisplay({
 
   const IconComponent = iconMap[type] || AlertCircle
 
-  // Compact variant for inline errors (e.g., in form fields)
   if (compact) {
     return (
       <div className={`flex items-center gap-2 text-red-600 dark:text-red-400 text-sm ${className}`}>
@@ -60,11 +57,9 @@ export default function ApiErrorDisplay({
     )
   }
 
-  // Full variant for page-level or section-level errors
   return (
     <div className={`flex items-center justify-center p-8 ${className}`}>
       <div className="text-center space-y-4 max-w-md">
-        {/* Icon */}
         {showIcon && (
           <div className="flex justify-center">
             <div className="p-3 bg-red-100 dark:bg-red-900/30 rounded-none">
@@ -73,7 +68,6 @@ export default function ApiErrorDisplay({
           </div>
         )}
 
-        {/* Message */}
         <div className="space-y-2">
           <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
             {type === ErrorTypes.NETWORK ? 'Connection Error' : 
@@ -92,7 +86,6 @@ export default function ApiErrorDisplay({
           )}
         </div>
 
-        {/* Actions */}
         <div className="flex gap-3 justify-center">
           {onRetry && recoverable !== false && (
             <button

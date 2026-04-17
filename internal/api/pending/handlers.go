@@ -59,7 +59,6 @@ func (h *Handler) ListPendingChanges(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	database := h.DB
 
-	// Get all peers with pending changes
 	peerIDs, err := db.GetPeersWithPendingChanges(ctx, database)
 	if err != nil {
 		log.ErrorContext(ctx, "failed to get peers with pending changes", "error", err)
@@ -74,14 +73,12 @@ func (h *Handler) ListPendingChanges(w http.ResponseWriter, r *http.Request) {
 
 	var groups []peerChangeGroup
 	for _, peerID := range peerIDs {
-		// Get peer info
 		var hostname, ipAddress string
 		err := database.QueryRowContext(ctx, "SELECT hostname, ip_address FROM peers WHERE id = ?", peerID).Scan(&hostname, &ipAddress)
 		if err != nil {
 			continue // skip peers that no longer exist
 		}
 
-		// Get pending changes for this peer
 		changes, err := db.GetPendingChangesForPeer(ctx, database, peerID)
 		if err != nil {
 			log.ErrorContext(ctx, "failed to get pending changes for peer", "peer_id", peerID, "error", err)
@@ -157,7 +154,6 @@ func (h *Handler) RollbackPendingChanges(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Single-entity rollback
 	if req.EntityType != "" && req.EntityID != 0 {
 		err := db.RollbackEntitySnapshot(ctx, h.DBBeginner, req.EntityType, req.EntityID)
 		if err != nil {
@@ -179,7 +175,6 @@ func (h *Handler) RollbackPendingChanges(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Bulk rollback
 	if err := db.RollbackSnapshots(ctx, h.DBBeginner); err != nil {
 		log.ErrorContext(ctx, "failed to rollback snapshots", "error", err)
 		common.InternalError(w)
@@ -204,7 +199,6 @@ func (h *Handler) GetPeerPendingChanges(w http.ResponseWriter, r *http.Request) 
 	ctx := r.Context()
 	database := h.DB
 
-	// Verify peer exists
 	var hostname, ipAddress string
 	err = database.QueryRowContext(ctx, "SELECT hostname, ip_address FROM peers WHERE id = ?", peerID).Scan(&hostname, &ipAddress)
 	if err == sql.ErrNoRows {
@@ -266,7 +260,6 @@ func (h *Handler) PreviewPeerPendingBundle(w http.ResponseWriter, r *http.Reques
 	ctx := r.Context()
 	database := h.DB
 
-	// Verify peer exists
 	var hostname string
 	err = database.QueryRowContext(ctx, "SELECT hostname FROM peers WHERE id = ?", peerID).Scan(&hostname)
 	if err == sql.ErrNoRows {
@@ -279,7 +272,6 @@ func (h *Handler) PreviewPeerPendingBundle(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Compile fresh bundle
 	content, err := h.Compiler.Compile(ctx, peerID)
 	if err != nil {
 		log.ErrorContext(ctx, "failed to compile bundle for peer", "peer_id", peerID, "error", err)
@@ -312,10 +304,8 @@ func (h *Handler) PreviewPeerPendingBundle(w http.ResponseWriter, r *http.Reques
 		versionNumber = 0
 	}
 
-	// Generate diff
 	diffContent := generateDiff(currentContent, content, currentVersion, version)
 
-	// Save preview
 	err = db.SavePendingBundlePreview(ctx, database, peerID, content, diffContent, version)
 	if err != nil {
 		log.ErrorContext(ctx, "failed to save bundle preview", "error", err)
@@ -346,7 +336,6 @@ func (h *Handler) ApplyPeerPendingBundle(w http.ResponseWriter, r *http.Request)
 	ctx := r.Context()
 	database := h.DB
 
-	// Verify peer exists and get hostname
 	var hostname string
 	err = database.QueryRowContext(ctx, "SELECT hostname FROM peers WHERE id = ?", peerID).Scan(&hostname)
 	if err == sql.ErrNoRows {
@@ -368,7 +357,6 @@ func (h *Handler) ApplyPeerPendingBundle(w http.ResponseWriter, r *http.Request)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// Compile and store the bundle
 	bundle, err := h.Compiler.CompileAndStore(ctx, peerID)
 	if err != nil {
 		log.ErrorContext(ctx, "failed to compile and store bundle for peer", "peer_id", peerID, "error", err)
@@ -383,14 +371,12 @@ func (h *Handler) ApplyPeerPendingBundle(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Delete any pending preview
 	if err := db.DeletePendingBundlePreview(ctx, tx, peerID); err != nil {
 		log.ErrorContext(ctx, "failed to delete pending bundle preview", "error", err)
 		common.InternalError(w)
 		return
 	}
 
-	// Commit transaction
 	if err := tx.Commit(); err != nil {
 		log.ErrorContext(ctx, "failed to commit transaction", "error", err)
 		common.InternalError(w)
@@ -414,7 +400,6 @@ func (h *Handler) ApplyAllPendingBundles(w http.ResponseWriter, r *http.Request)
 	ctx := r.Context()
 	database := h.DB
 
-	// Get all peers with pending changes
 	peerIDs, err := db.GetPeersWithPendingChanges(ctx, database)
 	if err != nil {
 		log.ErrorContext(ctx, "failed to get peers with pending changes", "error", err)
@@ -476,7 +461,6 @@ func (h *Handler) ApplyEntityPendingChanges(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Validate entity type
 	if req.EntityType != "group" && req.EntityType != "policy" && req.EntityType != "service" {
 		common.RespondError(w, http.StatusBadRequest, "invalid entity_type: must be 'group', 'policy', or 'service'")
 		return
@@ -515,14 +499,12 @@ func (h *Handler) ApplyEntityPendingChanges(w http.ResponseWriter, r *http.Reque
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// Delete the snapshot for this entity
 	if err := db.DeleteSnapshot(ctx, tx, req.EntityType, req.EntityID); err != nil {
 		log.ErrorContext(ctx, "failed to delete snapshot", "error", err)
 		common.InternalError(w)
 		return
 	}
 
-	// Delete the pending_changes rows for this peer/entity
 	_, err = tx.ExecContext(ctx,
 		"DELETE FROM pending_changes WHERE peer_id = ? AND change_type = ? AND change_id = ?",
 		peerID, req.EntityType, req.EntityID,
@@ -533,7 +515,6 @@ func (h *Handler) ApplyEntityPendingChanges(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Check if other pending changes remain for this peer
 	var remainingCount int
 	err = tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM pending_changes WHERE peer_id = ?", peerID).Scan(&remainingCount)
 	if err != nil {
@@ -544,7 +525,6 @@ func (h *Handler) ApplyEntityPendingChanges(w http.ResponseWriter, r *http.Reque
 
 	// If other changes remain, regenerate the bundle preview
 	if remainingCount > 0 {
-		// Compile fresh bundle with remaining pending changes
 		content, err := h.Compiler.Compile(ctx, peerID)
 		if err != nil {
 			log.WarnContext(ctx, "failed to compile bundle preview for remaining changes", "error", err)
@@ -552,7 +532,6 @@ func (h *Handler) ApplyEntityPendingChanges(w http.ResponseWriter, r *http.Reque
 		} else {
 			version := engine.Version(content)
 
-			// Get current bundle for diff
 			var currentContent, currentVersion string
 			_ = tx.QueryRowContext(ctx, `
 SELECT rules_content, version FROM rule_bundles
@@ -560,7 +539,6 @@ WHERE peer_id = ?
 ORDER BY id DESC LIMIT 1
 `, peerID).Scan(&currentContent, &currentVersion)
 
-			// Generate diff and save preview
 			diffContent := generateDiff(currentContent, content, currentVersion, version)
 			if err := db.SavePendingBundlePreview(ctx, tx, peerID, content, diffContent, version); err != nil {
 				log.WarnContext(ctx, "failed to save bundle preview", "error", err)
@@ -571,14 +549,12 @@ ORDER BY id DESC LIMIT 1
 		_ = db.DeletePendingBundlePreview(ctx, tx, peerID)
 	}
 
-	// Commit transaction
 	if err := tx.Commit(); err != nil {
 		log.ErrorContext(ctx, "failed to commit transaction", "error", err)
 		common.InternalError(w)
 		return
 	}
 
-	// Compile and store new bundle with current state
 	var bundleVersion string
 	bundle, err := h.Compiler.CompileAndStore(ctx, peerID)
 	if err != nil {
@@ -586,7 +562,6 @@ ORDER BY id DESC LIMIT 1
 		// Don't fail - the pending change is still cleared
 	} else {
 		bundleVersion = bundle.Version
-		// Notify via SSE
 		var hostname string
 		_ = database.QueryRowContext(ctx, "SELECT hostname FROM peers WHERE id = ?", peerID).Scan(&hostname)
 		if hostname != "" {
@@ -660,10 +635,8 @@ func (h *Handler) PushAllRules(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Generate job ID
 	jobID := fmt.Sprintf("job_%d", time.Now().UnixNano())
 
-	// Create push job record
 	initiatedBy := auth.UsernameFromContext(r.Context())
 	if err := db.CreatePushJob(ctx, database, jobID, initiatedBy, len(allPeers)); err != nil {
 		log.ErrorContext(ctx, "failed to create push job", "error", err)
@@ -671,7 +644,6 @@ func (h *Handler) PushAllRules(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Create push job peer records
 	peers := make([]struct {
 		ID       int
 		Hostname string
@@ -688,7 +660,6 @@ func (h *Handler) PushAllRules(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Enqueue to worker
 	h.PushWorker.Enqueue(jobID)
 
 	log.InfoContext(ctx, "push job created", "job_id", jobID, "total_peers", len(allPeers))
@@ -712,7 +683,6 @@ func (h *Handler) PushCurrentRules(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	database := h.DB
 
-	// Verify peer exists and is agent-based
 	var hostname string
 	var agentVersion sql.NullString
 	var isManual bool
@@ -729,18 +699,15 @@ func (h *Handler) PushCurrentRules(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if peer is agent-based: has agent_version OR is_manual = false
 	isAgentBased := agentVersion.Valid || !isManual
 	if !isAgentBased {
 		common.RespondError(w, http.StatusBadRequest, "peer is not agent-based (manual peer)")
 		return
 	}
 
-	// Use the PushWorker to compile and store bundle, then notify
 	// Create a single-peer job for consistency with push-all flow
 	jobID := fmt.Sprintf("job_%d", time.Now().UnixNano())
 
-	// Create push job record with single peer
 	initiatedBy := auth.UsernameFromContext(r.Context())
 	if err := db.CreatePushJob(ctx, database, jobID, initiatedBy, 1); err != nil {
 		log.ErrorContext(ctx, "failed to create push job", "error", err)
@@ -748,7 +715,6 @@ func (h *Handler) PushCurrentRules(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Create push job peer record
 	peers := []struct {
 		ID       int
 		Hostname string
@@ -759,7 +725,6 @@ func (h *Handler) PushCurrentRules(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Enqueue to worker for processing
 	h.PushWorker.Enqueue(jobID)
 
 	log.InfoContext(ctx, "push current rules job created", "job_id", jobID, "peer_id", peerID, "hostname", hostname)
@@ -782,7 +747,6 @@ func (h *Handler) HandlePushJobSSE(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verify job exists
 	_, err := db.GetPushJob(r.Context(), h.DB, jobID)
 	if err == sql.ErrNoRows {
 		common.RespondError(w, http.StatusNotFound, "job not found")
@@ -794,7 +758,6 @@ func (h *Handler) HandlePushJobSSE(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Set SSE headers
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")

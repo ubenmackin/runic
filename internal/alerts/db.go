@@ -11,8 +11,6 @@ import (
 	"runic/internal/db"
 )
 
-// AlertRules CRUD Operations
-
 // CreateAlertRule inserts a new alert rule into the database.
 func CreateAlertRule(ctx context.Context, database db.Querier, rule *AlertRule) error {
 	now := time.Now()
@@ -127,8 +125,6 @@ func UpdateAlertRule(ctx context.Context, database db.Querier, rule *AlertRule) 
 	return nil
 }
 
-// AlertHistory Operations
-
 // CreateAlertHistory inserts a new alert history entry.
 func CreateAlertHistory(ctx context.Context, database db.Querier, history *AlertHistory) error {
 	now := time.Now()
@@ -151,8 +147,6 @@ func CreateAlertHistory(ctx context.Context, database db.Querier, history *Alert
 	history.CreatedAt = now
 	return nil
 }
-
-// UserNotificationPreferences Operations
 
 // GetUserNotificationPreferences fetches notification preferences for a user.
 func GetUserNotificationPreferences(ctx context.Context, database db.Querier, userID uint) (*UserNotificationPreferences, error) {
@@ -227,8 +221,6 @@ func UpsertUserNotificationPreferences(ctx context.Context, database db.Querier,
 
 	return nil
 }
-
-// AlertDigest Operations
 
 // CreateAlertDigest inserts a new alert digest record.
 func CreateAlertDigest(ctx context.Context, database db.Querier, digest *AlertDigest) error {

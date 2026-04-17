@@ -23,7 +23,6 @@ export function useTableFilter(data, searchTerm, sortConfig, options = {}) {
   return useMemo(() => {
     if (!data) return []
 
-    // Filter
     let filtered = data
     if (searchTerm) {
       const term = searchTerm.toLowerCase()
@@ -39,7 +38,6 @@ export function useTableFilter(data, searchTerm, sortConfig, options = {}) {
       }
     }
 
-      // Sort
       const sorted = [...filtered].sort((a, b) => {
         let aVal = getValue(a, sortConfig.key)
         let bVal = getValue(b, sortConfig.key)

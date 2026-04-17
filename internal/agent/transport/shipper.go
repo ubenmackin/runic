@@ -52,11 +52,9 @@ func NewShipper(client *http.Client, controlPlaneURL, token, hostID, logPath str
 
 // Run starts the shipper's tail and batch loops.
 func (s *Shipper) Run(ctx context.Context) {
-	// Start tailing
 	log.Info("Starting log shipper", "logPath", s.logPath, "controlPlaneURL", s.controlPlaneURL, "hostID", s.hostID)
 	tailedLines := s.tail(ctx, s.logPath)
 
-	// Process lines and batch ship
 	var batch []LogEvent
 	ticker := time.NewTicker(constants.LogShipperBatchInterval)
 	defer ticker.Stop()
@@ -65,7 +63,6 @@ func (s *Shipper) Run(ctx context.Context) {
 		select {
 		case line, ok := <-tailedLines:
 			if !ok {
-				// Tail ended, flush remaining
 				if len(batch) > 0 {
 					ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 					s.ship(ctx, batch)
@@ -88,7 +85,6 @@ func (s *Shipper) Run(ctx context.Context) {
 			}
 
 		case <-ctx.Done():
-			// Best-effort flush on shutdown
 			if len(batch) > 0 {
 				ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 				s.ship(ctx, batch)
@@ -121,7 +117,6 @@ func (s *Shipper) tail(ctx context.Context, path string) <-chan string {
 			}
 		}()
 
-		// Seek to end of file to only read new lines
 		if _, err := f.Seek(0, io.SeekEnd); err != nil {
 			log.Error("Seek failed", "error", err)
 			return
@@ -135,19 +130,16 @@ func (s *Shipper) tail(ctx context.Context, path string) <-chan string {
 			default:
 			}
 
-			// Check for new data with a small sleep
 			if !scanner.Scan() {
 				if err := scanner.Err(); err != nil {
 					log.Error("Scan error", "error", err)
 				}
-				// Handle log rotation: if file shrunk, reopen
 				if stat, statErr := os.Stat(path); statErr == nil {
 					pos, err := f.Seek(0, io.SeekCurrent)
 					if err != nil {
 						log.Warn("Failed to seek", "error", err)
 					}
 					if stat.Size() < pos {
-						// File shrunk (rotation) - reopen
 						if err := f.Close(); err != nil {
 							log.Warn("Failed to close file", "error", err)
 						}
@@ -166,7 +158,6 @@ func (s *Shipper) tail(ctx context.Context, path string) <-chan string {
 						}
 						scanner = bufio.NewScanner(f)
 					} else if stat.Size() > pos {
-						// File has grown - re-seek and recreate scanner to read new data
 						if _, err := f.Seek(pos, io.SeekStart); err != nil {
 							log.Warn("Failed to seek to last position", "error", err)
 						}
@@ -177,7 +168,6 @@ func (s *Shipper) tail(ctx context.Context, path string) <-chan string {
 				case <-ctx.Done():
 					return
 				case <-time.After(constants.LogTailSleepInterval):
-					// continue
 				}
 				continue
 			}
@@ -203,7 +193,6 @@ func ParseLogLine(line string) (LogEvent, error) {
 		RawLine: line,
 	}
 
-	// Detect action
 	switch {
 	case strings.Contains(line, "[RUNIC-DROP]"):
 		ev.Action = "DROP"
@@ -223,13 +212,10 @@ func ParseLogLine(line string) (LogEvent, error) {
 		if strings.Contains(parts[0], "T") && strings.Contains(parts[0], ":") {
 			ev.Timestamp = parts[0]
 		} else {
-			// First 3 parts are timestamp (month, day, time)
 			ev.Timestamp = fmt.Sprintf("%s %s %s", parts[0], parts[1], parts[2])
 		}
 	}
 
-	// Parse key=value fields after the kernel prefix
-	// Find the part after "kernel:"
 	kernelIdx := strings.Index(line, "kernel:")
 	if kernelIdx == -1 {
 		return ev, nil

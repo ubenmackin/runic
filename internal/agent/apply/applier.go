@@ -24,33 +24,28 @@ import (
 func ApplyBundle(ctx context.Context, bundle models.BundleResponse, hmacKey, controlPlaneURL, token, version string, confirmFunc func(context.Context, string) error) error {
 	log.Info("Received bundle version, verifying HMAC", "version", bundle.Version)
 
-	// 1. Verify HMAC
 	if !engine.Verify(bundle.Rules, hmacKey, bundle.HMAC) {
 		return fmt.Errorf("HMAC verification failed — refusing to apply bundle %s", bundle.Version)
 	}
 
-	// 2. Validate the rules are parseable (basic sanity check)
 	if err := validateRules(bundle.Rules); err != nil {
 		return fmt.Errorf("rule validation failed: %w", err)
 	}
 
-	// 3. Save current rules as backup
 	backup, err := dumpCurrentRules()
 	if err != nil {
 		return fmt.Errorf("could not dump current rules for backup: %w", err)
 	}
 
-	// 4. Schedule auto-revert watchdog (90 seconds)
 	revertCancel := scheduleRevert(ctx, backup, constants.AutoRevertDelay, controlPlaneURL, token, version)
 
-	// 4b. Flush iptables FIRST to release ipset references before destroying ipsets
+	// Flush iptables FIRST to release ipset references before destroying ipsets
 	// This prevents "ipset in use" errors during ipset recreate
 	if err := flushIPTables(ctx); err != nil {
 		revertCancel()
 		return fmt.Errorf("flush iptables: %w", err)
 	}
 
-	// 5. Write new rules to temp file
 	tmpFile, err := os.CreateTemp("", "runic-bundle-*.rules")
 	if err != nil {
 		revertCancel()
@@ -73,11 +68,10 @@ func ApplyBundle(ctx context.Context, bundle models.BundleResponse, hmacKey, con
 		return fmt.Errorf("close temp file: %w", err)
 	}
 
-	// 5b. Apply ipset definitions if present (after iptables flushed - can now destroy safely)
+	// Apply ipset definitions if present (after iptables flushed - can now destroy safely)
 	if strings.Contains(bundle.Rules, "# --- Ipset Definitions ---") {
 		if err := applyIpsets(ctx, bundle.Rules); err != nil {
 			revertCancel()
-			// Try to restore from backup on failure
 			if revertErr := revertRules(backup); revertErr != nil {
 				log.Error("Revert failed", "error", revertErr)
 			}
@@ -85,7 +79,6 @@ func ApplyBundle(ctx context.Context, bundle models.BundleResponse, hmacKey, con
 		}
 	}
 
-	// 6. Apply via iptables-restore (flushes existing rules for clean slate)
 	cmd := exec.CommandContext(ctx, "iptables-restore", tmpPath)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -93,7 +86,6 @@ func ApplyBundle(ctx context.Context, bundle models.BundleResponse, hmacKey, con
 		return fmt.Errorf("iptables-restore failed: %s: %w", string(output), err)
 	}
 
-	// 6b. Restart Docker if running (resets DOCKER chains)
 	if hasDocker() {
 		log.Info("Restarting Docker to reset internal chains")
 		if err := restartDocker(ctx); err != nil {
@@ -101,7 +93,6 @@ func ApplyBundle(ctx context.Context, bundle models.BundleResponse, hmacKey, con
 		}
 	}
 
-	// 7. Verify apply worked (smoke test)
 	if err := smokeTest(ctx, controlPlaneURL, token, version); err != nil {
 		log.Warn("Smoke test failed after apply, reverting", "error", err)
 		if revertErr := revertRules(backup); revertErr != nil {
@@ -113,17 +104,14 @@ func ApplyBundle(ctx context.Context, bundle models.BundleResponse, hmacKey, con
 		return fmt.Errorf("smoke test failed, reverted: %w", err)
 	}
 
-	// 8. Cancel revert — we're good
 	revertCancel()
 
-	// 9. Confirm to control plane
 	if confirmFunc != nil {
 		if err := confirmFunc(ctx, bundle.Version); err != nil {
 			log.Warn("Failed to confirm apply to control plane", "error", err)
 		}
 	}
 
-	// Cache bundle for apply-on-boot
 	if err := CacheBundle(bundle.Rules); err != nil {
 		log.Warn("Failed to cache bundle", "error", err)
 	}
@@ -136,13 +124,11 @@ func ApplyBundle(ctx context.Context, bundle models.BundleResponse, hmacKey, con
 func CacheBundle(rules string) error {
 	const cachePath = "/etc/runic-agent/cached-bundle.rules"
 
-	// Create directory
 	dir := filepath.Dir(cachePath)
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return fmt.Errorf("create cache dir: %w", err)
 	}
 
-	// Write to cache file
 	if err := os.WriteFile(cachePath, []byte(rules), 0600); err != nil {
 		return fmt.Errorf("write cache: %w", err)
 	}
@@ -222,12 +208,10 @@ func revertRules(backup string) error {
 
 // validateRules performs basic sanity checks on rules before applying.
 func validateRules(content string) error {
-	// Content is not empty
 	if strings.TrimSpace(content) == "" {
 		return fmt.Errorf("rules content is empty")
 	}
 
-	// Contains *filter and COMMIT
 	if !strings.Contains(content, "*filter") {
 		return fmt.Errorf("missing *filter table")
 	}
@@ -235,7 +219,6 @@ func validateRules(content string) error {
 		return fmt.Errorf("missing COMMIT")
 	}
 
-	// Contains :INPUT DROP and :OUTPUT DROP (default deny chains)
 	if !strings.Contains(content, ":INPUT DROP") {
 		return fmt.Errorf("missing :INPUT DROP chain")
 	}
@@ -243,7 +226,6 @@ func validateRules(content string) error {
 		return fmt.Errorf("missing :OUTPUT DROP chain")
 	}
 
-	// Total rule count is reasonable (>0 and <10000)
 	lines := strings.Split(content, "\n")
 	validLineCount := 0
 	malformedRegex := regexp.MustCompile(`^[A-Z].*`)
@@ -258,12 +240,11 @@ func validateRules(content string) error {
 			strings.HasPrefix(trimmed, ":") ||
 			strings.HasPrefix(trimmed, "*") ||
 			strings.HasPrefix(trimmed, "COMMIT") ||
-			strings.HasPrefix(trimmed, "-") || // other iptables options like -X, -N, etc.
-			strings.HasPrefix(trimmed, "create ") || // ipset create command
-			strings.HasPrefix(trimmed, "add ") { // ipset add command
+			strings.HasPrefix(trimmed, "-") ||
+			strings.HasPrefix(trimmed, "create ") ||
+			strings.HasPrefix(trimmed, "add ") {
 			validLineCount++
 		} else if len(trimmed) > 0 {
-			// Contains obviously malformed line
 			if !malformedRegex.MatchString(trimmed) {
 				return fmt.Errorf("possibly malformed line: %s", trimmed[:int(math.Min(50, float64(len(trimmed))))])
 			}
@@ -283,7 +264,6 @@ func validateRules(content string) error {
 
 // smokeTest verifies the control plane is reachable after applying rules.
 func smokeTest(ctx context.Context, controlPlaneURL, token, version string) error {
-	// Create a client with a 10 second timeout
 	client := &http.Client{
 		Timeout: constants.SmokeTestTimeout,
 	}
@@ -317,7 +297,6 @@ func smokeTest(ctx context.Context, controlPlaneURL, token, version string) erro
 // applyIpsets parses and applies ipset definitions from a bundle.
 // It flushes all existing runic_group_* ipsets, creates new ones, and populates them.
 func applyIpsets(ctx context.Context, rulesContent string) error {
-	// 1. Extract ipset section (between "# --- Ipset Definitions ---" and "*filter")
 	ipsetSection, err := extractIpsetSection(rulesContent)
 	if err != nil {
 		return fmt.Errorf("extract ipset section: %w", err)
@@ -326,7 +305,6 @@ func applyIpsets(ctx context.Context, rulesContent string) error {
 		return nil // No ipset definitions to apply
 	}
 
-	// 2. Parse create and add commands
 	ipsetDefs, err := parseIpsetDefs(ipsetSection)
 	if err != nil {
 		return fmt.Errorf("parse ipset definitions: %w", err)
@@ -339,12 +317,10 @@ func applyIpsets(ctx context.Context, rulesContent string) error {
 
 	log.Info("Applying ipset definitions", "count", len(ipsetDefs))
 
-	// 3. Flush all existing runic_group_* ipsets
 	if err := flushRunicIpsets(ctx); err != nil {
 		return fmt.Errorf("flush runic ipsets: %w", err)
 	}
 
-	// 4. Create new ipsets and add members
 	for _, def := range ipsetDefs {
 		createCmd := fmt.Sprintf("ipset create %s %s family inet", def.Name, def.Type)
 		log.Info("Creating ipset", "name", def.Name, "type", def.Type, "command", createCmd)
@@ -378,16 +354,14 @@ func extractIpsetSection(content string) (string, error) {
 	startMarker := "# --- Ipset Definitions ---"
 	startIdx := strings.Index(content, startMarker)
 	if startIdx == -1 {
-		return "", nil // No ipset section
+		return "", nil
 	}
 
-	// Find the *filter line after the start marker
 	filterIdx := strings.Index(content[startIdx:], "*filter")
 	if filterIdx == -1 {
 		return "", fmt.Errorf("ipset section found but no *filter marker after it")
 	}
 
-	// Extract section between start marker and *filter
 	section := content[startIdx : startIdx+filterIdx]
 	return strings.TrimSpace(section), nil
 }
@@ -400,20 +374,17 @@ func stripIpsetSection(content string) string {
 	startMarker := "# --- Ipset Definitions ---"
 	startIdx := strings.Index(content, startMarker)
 	if startIdx == -1 {
-		return content // No ipset section found
+		return content
 	}
 
-	// Find the *filter line after the start marker
 	filterIdx := strings.Index(content[startIdx:], "*filter")
 	if filterIdx == -1 {
 		return content // Safe fallback: no *filter after ipset section
 	}
 
-	// Return content before the ipset section + content from *filter onwards
 	before := content[:startIdx]
 	after := content[startIdx+filterIdx:]
 
-	// Clean up trailing whitespace/newlines from before section
 	before = strings.TrimRight(before, "\n")
 	if before != "" {
 		before += "\n"
@@ -469,7 +440,6 @@ func parseIpsetDefs(section string) ([]ipsetDef, error) {
 		}
 	}
 
-	// Convert to slice preserving order
 	result := make([]ipsetDef, 0, len(order))
 	for _, name := range order {
 		result = append(result, *defs[name])
@@ -480,7 +450,6 @@ func parseIpsetDefs(section string) ([]ipsetDef, error) {
 
 // flushRunicIpsets destroys all ipsets with names starting with "runic_group_" and the "runic_private_ranges" ipset.
 func flushRunicIpsets(ctx context.Context) error {
-	// List all ipsets
 	cmd := exec.CommandContext(ctx, "ipset", "list", "-n")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -501,13 +470,11 @@ func flushRunicIpsets(ctx context.Context) error {
 			continue
 		}
 
-		// Flush the ipset
 		flushCmd := exec.CommandContext(ctx, "ipset", "flush", name)
 		if out, err := flushCmd.CombinedOutput(); err != nil {
 			log.Warn("Failed to flush ipset", "name", name, "output", string(out))
 		}
 
-		// Destroy the ipset
 		destroyCmd := exec.CommandContext(ctx, "ipset", "destroy", name)
 		if out, err := destroyCmd.CombinedOutput(); err != nil {
 			log.Warn("Failed to destroy ipset", "name", name, "output", string(out))
@@ -563,26 +530,21 @@ func restartDocker(ctx context.Context) error {
 // This is done before destroying ipsets to release references to them.
 // The order is: flush rules (-F) first, then delete custom chains (-X).
 func flushIPTables(ctx context.Context) error {
-	// Flush all chains in the filter table
 	cmd := exec.CommandContext(ctx, "iptables", "-t", "filter", "-F")
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("flush iptables filter: %w", err)
 	}
 
-	// Delete custom user chains in filter table (now safe since rules are flushed)
 	delCmd := exec.CommandContext(ctx, "iptables", "-t", "filter", "-X")
 	if err := delCmd.Run(); err != nil {
 		log.Warn("Failed to delete custom filter chains, continuing", "error", err)
 	}
 
-	// Also flush NAT table if present (common for DNAT/SNAT rules)
 	natCmd := exec.CommandContext(ctx, "iptables", "-t", "nat", "-F")
 	if err := natCmd.Run(); err != nil {
-		// Don't fail on NAT flush error - filter table is more critical
 		log.Warn("Failed to flush NAT table, continuing", "error", err)
 	}
 
-	// Delete custom NAT chains (best-effort)
 	natDelCmd := exec.CommandContext(ctx, "iptables", "-t", "nat", "-X")
 	if err := natDelCmd.Run(); err != nil {
 		log.Warn("Failed to delete custom NAT chains, continuing", "error", err)

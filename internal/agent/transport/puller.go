@@ -45,10 +45,8 @@ func PullBundle(ctx context.Context, client common.HTTPClient, controlPlaneURL, 
 
 	switch resp.StatusCode {
 	case http.StatusNotModified:
-		// No change — nothing to do
 		return nil
 	case http.StatusOK:
-		// Continue to process bundle
 	default:
 		return &common.HTTPStatusError{StatusCode: resp.StatusCode, Method: "GET", URL: url}
 	}
@@ -120,7 +118,6 @@ func ListenSSE(ctx context.Context, client common.HTTPClient, controlPlaneURL, h
 			case <-ctx.Done():
 				return ctx.Err()
 			case <-time.After(constants.SSEReconnectDelay):
-				// Continue to reconnect
 			}
 		}
 	}
@@ -157,7 +154,6 @@ func connectSSE(ctx context.Context, client common.HTTPClient, controlPlaneURL, 
 	reader := resp.Body
 	scanner := bufio.NewScanner(reader)
 
-	// Increase scanner buffer size for SSE
 	const maxScanTokenSize = 1024 * 1024
 	buf := make([]byte, maxScanTokenSize)
 	scanner.Buffer(buf, maxScanTokenSize)
@@ -165,7 +161,6 @@ func connectSSE(ctx context.Context, client common.HTTPClient, controlPlaneURL, 
 	for scanner.Scan() {
 		line := scanner.Text()
 
-		// Check if context is canceled
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -177,7 +172,6 @@ func connectSSE(ctx context.Context, client common.HTTPClient, controlPlaneURL, 
 			go onBundleUpdate(ctx)
 		}
 
-		// Keepalive comments: ": keepalive" or similar
 		if len(line) > 0 && line[0] == ':' {
 			continue
 		}

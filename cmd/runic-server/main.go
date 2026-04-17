@@ -30,9 +30,7 @@ import (
 	"runic/internal/engine"
 )
 
-// validateCertificate reads and validates certificate and key files in PEM format
 func validateCertificate(certFile, keyFile string) error {
-	// Check if files exist
 	if _, err := os.Stat(certFile); os.IsNotExist(err) {
 		return fmt.Errorf("certificate file not found: %s", certFile)
 	}
@@ -40,19 +38,16 @@ func validateCertificate(certFile, keyFile string) error {
 		return fmt.Errorf("key file not found: %s", keyFile)
 	}
 
-	// Read certificate file
 	certPEM, err := os.ReadFile(certFile)
 	if err != nil {
 		return fmt.Errorf("failed to read certificate file: %w", err)
 	}
 
-	// Read key file
 	keyPEM, err := os.ReadFile(keyFile)
 	if err != nil {
 		return fmt.Errorf("failed to read key file: %w", err)
 	}
 
-	// Validate certificate PEM format
 	certBlock, _ := pem.Decode(certPEM)
 	if certBlock == nil {
 		return fmt.Errorf("failed to decode certificate PEM block from %s", certFile)
@@ -61,7 +56,6 @@ func validateCertificate(certFile, keyFile string) error {
 		return fmt.Errorf("invalid PEM block type in certificate file: expected CERTIFICATE, got %s", certBlock.Type)
 	}
 
-	// Validate key PEM format
 	keyBlock, _ := pem.Decode(keyPEM)
 	if keyBlock == nil {
 		return fmt.Errorf("failed to decode key PEM block from %s", keyFile)
@@ -71,7 +65,6 @@ func validateCertificate(certFile, keyFile string) error {
 		return fmt.Errorf("invalid key PEM block type: expected PRIVATE key type, got %s", keyBlock.Type)
 	}
 
-	// Parse certificate to ensure it's valid
 	cert, err := x509.ParseCertificate(certBlock.Bytes)
 	if err != nil {
 		return fmt.Errorf("failed to parse certificate: %w", err)
@@ -109,22 +102,18 @@ func setCacheHeaders(w http.ResponseWriter, path string) {
 		}
 	}
 
-	// Other static assets (images, fonts, etc.) - cache for 1 hour
 	w.Header().Set("Cache-Control", "public, max-age=3600")
 }
 
 func main() {
-	// Command-line flags
 	versionFlag := flag.Bool("version", false, "Print version and exit")
 	flag.Parse()
 
-	// Handle --version flag
 	if *versionFlag {
 		fmt.Printf("runic-server version %s\n", version.Version)
 		os.Exit(0)
 	}
 
-	// Get TLS certificate paths from environment variables
 	certFile := os.Getenv("RUNIC_CERT_FILE")
 	keyFile := os.Getenv("RUNIC_KEY_FILE")
 
@@ -132,13 +121,11 @@ func main() {
 		log.Fatal("RUNIC_CERT_FILE and RUNIC_KEY_FILE must be set for HTTPS mode")
 	}
 
-	// Validate certificates before starting server
 	log.Printf("Validating TLS certificates (CERT: %s, KEY: %s)", certFile, keyFile)
 	if err := validateCertificate(certFile, keyFile); err != nil {
 		log.Fatalf("Certificate validation failed: %v", err)
 	}
 
-	// Get port from environment variable or use default
 	port := os.Getenv("RUNIC_PORT")
 	if port == "" {
 		port = "60443"
@@ -154,11 +141,8 @@ func main() {
 		log.Fatalf("Failed to initialize database: %v", err)
 	}
 
-	// Get logs database path from environment variable
-	// Default to same directory as main DB with filename "logs.db"
 	logsDBPath := os.Getenv("RUNIC_LOGS_DB_PATH")
 	if logsDBPath == "" {
-		// Default to logs.db in the same directory as the main database
 		dbDir := filepath.Dir(dbPath)
 		logsDBPath = filepath.Join(dbDir, "logs.db")
 	}
@@ -201,13 +185,11 @@ func main() {
 		// encryptionKey goes out of scope here - no need to manually clear
 	}()
 
-	// Initialize alert service for notifications
 	// Wrap *sql.DB in *db.Database for the alert service
 	runicDB := db.New(database)
 	alertService := alerts.NewService(runicDB)
 	alertService.SetEncryptor(encryptor)
 
-	// Initialize and start the alert service
 	var peerMonitor *alerts.PeerMonitor
 	var spikeDetector *alerts.SpikeDetector
 	if err := alertService.Initialize(); err != nil {
@@ -216,7 +198,6 @@ func main() {
 		if err := alertService.Start(); err != nil {
 			log.Printf("Warning: failed to start alert service: %v", err)
 		} else {
-			// Start peer monitor and spike detector workers
 			peerMonitor = alerts.NewPeerMonitor(database, alertService)
 			peerMonitor.Start()
 			spikeDetector = alerts.NewSpikeDetector(database, alertService)
@@ -224,18 +205,15 @@ func main() {
 		}
 	}
 
-	// Initialize auth with database for token revocation
 	auth.SetDB(database)
 
 	r := mux.NewRouter()
 
 	// Public routes are now registered in internal/api/api.go
 
-	// Register all API routes (public routes like setup, protected routes, and system endpoints like /health)
 	apiInstance := api.NewAPI(database, compiler, logsDBPath, alertService, encryptor)
 	apiInstance.RegisterRoutes(r, downloadsDir)
 
-	// Serve embedded web frontend (SPA)
 	// Strip the "web/dist" prefix so http.FS can find files in the embedded FS
 	subFS, err := fs.Sub(api.WebDist, "web/dist")
 	if err != nil {
@@ -246,68 +224,53 @@ func main() {
 	// For any route not matched above, serve the SPA with CSP nonce injection
 	// If the file exists, serve it; otherwise serve index.html (for client-side routing)
 	r.PathPrefix("/").Handler(api.CSP()(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		// Get the nonce from context (set by CSP middleware)
 		nonce, ok := api.GetCSPNonce(req.Context())
 
-		// Try to open the requested file
 		path := req.URL.Path
 		if path == "/" {
 			path = "/index.html"
 		}
-		// Remove leading slash for fs.FS lookup
 		fsPath := strings.TrimPrefix(path, "/")
 
 		if _, err := subFS.Open(fsPath); err == nil {
-			// File exists
-			// For HTML files, inject the nonce
 			if strings.HasSuffix(path, ".html") {
-				// index.html should never be cached
 				w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 				w.Header().Set("Pragma", "no-cache")
 				w.Header().Set("Expires", "0")
 
 				if ok {
-					// Serve HTML with nonce injection
 					if err := api.ServeHTMLWithNonce(w, req, subFS, fsPath, nonce); err != nil {
 						http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 					}
 				} else {
-					// Fallback: serve without nonce
 					fileServer.ServeHTTP(w, req)
 				}
 			} else {
-				// Set cache headers based on file type
 				setCacheHeaders(w, path)
 				fileServer.ServeHTTP(w, req)
 			}
 		} else {
 			// File not found — serve index.html for SPA client-side routing
-			// index.html should never be cached
 			w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 			w.Header().Set("Pragma", "no-cache")
 			w.Header().Set("Expires", "0")
 
 			if ok {
-				// Serve HTML with nonce injection
 				if err := api.ServeHTMLWithNonce(w, req, subFS, "index.html", nonce); err != nil {
 					http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 				}
 			} else {
-				// Fallback: serve without nonce
 				req.URL.Path = "/index.html"
 				fileServer.ServeHTTP(w, req)
 			}
 		}
 	})))
 
-	// Create root context for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Start the ChangeWorker background goroutine
 	apiInstance.ChangeWorker.Start(ctx)
 
-	// Start offline detector goroutine
 	go startOfflineDetector(ctx, database)
 
 	// Start token revocation cleanup goroutine (prunes expired entries hourly)
@@ -335,7 +298,6 @@ func main() {
 		TLSConfig: tlsConfig,
 	}
 
-	// Wait for SIGINT/SIGTERM to shut down
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
@@ -349,22 +311,17 @@ func main() {
 	<-sigCh
 	log.Println("Received shutdown signal...")
 
-	// Cancel context to signal background goroutines to stop
 	cancel()
 
-	// Create shutdown context with timeout
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer shutdownCancel()
 
-	// Gracefully shutdown HTTP server
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Printf("HTTP server shutdown error: %v", err)
 	}
 
-	// Stop rate limiter cleanup goroutines
 	apiInstance.Stop()
 
-	// Stop alert service and workers
 	if peerMonitor != nil {
 		peerMonitor.Stop()
 	}
@@ -377,7 +334,6 @@ func main() {
 		}
 	}
 
-	// Close database connection
 	if database != nil {
 		if err := database.Close(); err != nil {
 			log.Printf("Database close error: %v", err)
@@ -387,7 +343,6 @@ func main() {
 	log.Println("Server shut down gracefully")
 }
 
-// startOfflineDetector marks peers as offline if they haven't sent a heartbeat in 90 seconds.
 func startOfflineDetector(ctx context.Context, database *sql.DB) {
 	ticker := time.NewTicker(constants.OfflineDetectorInterval)
 	defer ticker.Stop()
@@ -411,7 +366,6 @@ func startOfflineDetector(ctx context.Context, database *sql.DB) {
 	}
 }
 
-// startTokenCleanup periodically removes expired entries from the revoked_tokens table.
 func startTokenCleanup(ctx context.Context) {
 	ticker := time.NewTicker(constants.OfflineCleanupInterval)
 	defer ticker.Stop()

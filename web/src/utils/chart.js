@@ -2,7 +2,6 @@ export function processHourlyData(logs) {
   const now = new Date()
   const buckets = []
 
-  // Create 24 hourly buckets
   for (let i = 23; i >= 0; i--) {
     const hourStart = new Date(now.getTime() - i * 60 * 60 * 1000)
     buckets.push({
@@ -12,7 +11,6 @@ export function processHourlyData(logs) {
     })
   }
 
-  // Count logs in each bucket
   logs?.forEach(log => {
     const logDate = new Date(log.timestamp)
     const hoursAgo = Math.floor((now - logDate) / (60 * 60 * 1000))
@@ -35,10 +33,8 @@ export function drawChart(ctx, width, height, data, hoveredBar) {
   const maxValue = Math.max(...data.map(d => d.count), 1)
   const stepWidth = chartWidth / data.length
 
-  // Clear canvas
   ctx.clearRect(0, 0, width, height)
 
-  // Draw Y-axis labels
   ctx.fillStyle = '#9ca3af'
   ctx.font = '10px sans-serif'
   ctx.textAlign = 'right'
@@ -70,17 +66,14 @@ export function drawChart(ctx, width, height, data, hoveredBar) {
     const currentY = padding.top + chartHeight - (data[i].count / maxValue) * chartHeight
     const nextX = padding.left + (i + 1) * stepWidth
     
-    // Horizontal line to next x position (step after - hold value until next point)
     ctx.lineTo(nextX, currentY)
     
-    // Vertical line to next point's y (at the next x)
     if (i < data.length - 1) {
       const nextY = padding.top + chartHeight - (data[i + 1].count / maxValue) * chartHeight
       ctx.lineTo(nextX, nextY)
     }
   }
 
-  // Draw fill below the stepped line with low opacity
   ctx.lineTo(padding.left + chartWidth, padding.top + chartHeight)
   ctx.lineTo(padding.left, padding.top + chartHeight)
   ctx.closePath()
@@ -88,7 +81,6 @@ export function drawChart(ctx, width, height, data, hoveredBar) {
   ctx.fillStyle = 'rgba(239, 68, 68, 0.15)' // red-500 with low opacity
   ctx.fill()
 
-  // Draw the stepped line on top
   ctx.beginPath()
   ctx.moveTo(firstX, firstY)
   
@@ -104,18 +96,15 @@ export function drawChart(ctx, width, height, data, hoveredBar) {
     }
   }
 
-  // Line color: red-500
   ctx.strokeStyle = hoveredBar !== null ? '#dc2626' : '#ef4444'
   ctx.lineWidth = 2
   ctx.lineJoin = 'miter' // Sharp corners
   ctx.stroke()
 
-  // Draw hover indicator if a point is hovered
   if (hoveredBar !== null && data[hoveredBar]) {
     const hoverX = padding.left + hoveredBar * stepWidth + stepWidth / 2
     const hoverY = padding.top + chartHeight - (data[hoveredBar].count / maxValue) * chartHeight
     
-    // Draw a small circle at the hovered point
     ctx.beginPath()
     ctx.arc(hoverX, hoverY, 4, 0, Math.PI * 2)
     ctx.fillStyle = '#dc2626'

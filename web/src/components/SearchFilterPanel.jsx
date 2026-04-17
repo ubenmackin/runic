@@ -27,16 +27,16 @@ export default function SearchFilterPanel({
   searchPlaceholder = 'Search...',
   rowsPerPage,
   onRowsPerPageChange,
-  filterChips, // React node for filter buttons/chips
-  children, // Additional content (e.g., pending delete toggle)
-  showSearch = true, // Whether to show the search input
-  hasActiveFilters = false, // Whether any filters are currently active (shows "Active" badge)
-  filterContent, // Inline filters for horizontal layout (left side)
-  rightContent // Right-aligned content (e.g., Rows dropdown)
+  filterChips,
+  children,
+  showSearch = true,
+  hasActiveFilters = false,
+  filterContent,
+  rightContent
 }) {
   const [expanded, setExpanded] = useState(() => {
     const saved = localStorage.getItem(storageKey)
-    return saved === 'true' // Default closed (match FilterBar)
+    return saved === 'true'
   })
 
   const handleToggle = () => {
@@ -47,7 +47,6 @@ export default function SearchFilterPanel({
 
   return (
     <div className="bg-white dark:bg-charcoal-dark border border-gray-200 dark:border-gray-border overflow-hidden">
-      {/* Toggle header */}
       <button
         onClick={handleToggle}
         aria-expanded={expanded}
@@ -69,13 +68,10 @@ export default function SearchFilterPanel({
         )}
       </button>
 
-{/* Content */}
       {expanded && (
         <div className="p-4 border-t border-gray-200 dark:border-gray-border space-y-3">
-          {/* Horizontal layout when filterContent or rightContent is provided */}
           {(filterContent || rightContent) ? (
             <div className="flex items-center gap-4">
-              {/* Search input */}
               {showSearch && (
                 <div className="relative flex-1 max-w-md">
                   <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
@@ -98,19 +94,16 @@ aria-label="Clear search"
                 </div>
               )}
 
-              {/* Inline filter content (left side) */}
               {filterContent && (
                 <div className={showSearch ? '' : 'flex-1'}>
                   {filterContent}
                 </div>
               )}
 
-              {/* Spacer to push rightContent to far right */}
               {(filterContent || showSearch) && rightContent && (
                 <div className="flex-grow" />
               )}
 
-              {/* Right-aligned content */}
               {rightContent && (
                 <div className="flex items-center">
                   {rightContent}
@@ -118,9 +111,7 @@ aria-label="Clear search"
               )}
             </div>
           ) : (
-            /* Default vertical layout (backwards compatibility) */
             <>
-              {/* Search row */}
               <div className="flex items-center justify-between gap-4">
                 {showSearch && (
                   <div className="relative flex-1 max-w-md">
@@ -160,7 +151,6 @@ aria-label="Clear search"
                 </div>
               </div>
 
-              {/* Filter chips row */}
               {filterChips && (
                 <div className="flex gap-0">
                   {filterChips}
@@ -169,7 +159,6 @@ aria-label="Clear search"
             </>
           )}
 
-          {/* Additional content (e.g., pending delete toggle) - rendered below main content */}
           {children}
         </div>
       )}

@@ -18,7 +18,6 @@ export default function PendingChangesModal({ peerId, peerHostname, onClose, onA
 
   useFocusTrap(modalRef, true)
 
-  // Load pending changes on mount
   useEffect(() => {
     const fetchChanges = async () => {
       setLoading(true)
@@ -104,7 +103,6 @@ export default function PendingChangesModal({ peerId, peerHostname, onClose, onA
     }
   }
 
-  // Group changes by entity for per-entity rollback
   const groupedChanges = useMemo(() => {
     const groups = {}
     changes.forEach(change => {
@@ -122,7 +120,6 @@ export default function PendingChangesModal({ peerId, peerHostname, onClose, onA
     return Object.values(groups)
   }, [changes])
 
-// Per-entity rollback handler
 const handleEntityRollback = async (entityType, entityId) => {
   const confirmed = window.confirm(`Are you sure you want to rollback ${entityType}?`)
   if (!confirmed) return
@@ -132,7 +129,6 @@ const handleEntityRollback = async (entityType, entityId) => {
     await api.post('/pending-changes/rollback', { entity_type: entityType, entity_id: entityId })
     showToast('Rolled back successfully', 'success')
     onApplied() // Call parent's callback to refresh peers list
-    // Refresh the changes list
     const data = await api.get(`/pending-changes/${peerId}`)
     setChanges(data.changes || [])
   } catch (err) {
@@ -154,8 +150,7 @@ const handleEntityApply = async (entityType, entityId) => {
     try {
       await api.post(`/pending-changes/${peerId}/apply-entity`, { entity_type: entityType, entity_id: entityId })
       showToast('Changes applied successfully', 'success')
-      onApplied() // Call parent's callback to refresh peers list
-      // Refresh the changes list
+      onApplied()
       const data = await api.get(`/pending-changes/${peerId}`)
       setChanges(data.changes || [])
     } catch (err) {
@@ -168,7 +163,6 @@ const handleEntityApply = async (entityType, entityId) => {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" tabIndex="-1" onKeyDown={(e) => { if (e.key === 'Escape') onClose() }}>
       <div ref={modalRef} className="bg-white dark:bg-charcoal-dark rounded-none shadow-none w-full max-w-4xl mx-4 max-h-[90vh] flex flex-col">
-        {/* Header */}
         <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-border flex items-center justify-between shrink-0">
           <div className="flex items-center gap-2">
             <AlertCircle className="w-5 h-5 text-purple-active" />
@@ -179,7 +173,6 @@ const handleEntityApply = async (entityType, entityId) => {
           </button>
         </div>
 
-        {/* Content */}
         <div className="p-6 overflow-y-auto flex-1">
           {loading ? (
             <div className="flex flex-col items-center justify-center py-12 space-y-4">
@@ -196,7 +189,6 @@ const handleEntityApply = async (entityType, entityId) => {
             </div>
           ) : (
             <>
-                {/* Pending Changes List */}
                 <div className="mb-6">
                   <h4 className="text-sm font-medium text-gray-700 dark:text-amber-primary mb-3">Queued Changes ({changes.length})</h4>
                   <div className="overflow-x-auto">
@@ -259,12 +251,10 @@ const handleEntityApply = async (entityType, entityId) => {
                   </div>
                 </div>
 
-              {/* Preview Section */}
               {preview ? (
                 <div className="space-y-4">
                   <h4 className="text-sm font-medium text-gray-700 dark:text-amber-primary">Bundle Preview</h4>
                   
-                  {/* Version Info */}
                   <div className="flex items-center gap-4 text-sm">
                     <div>
                       <span className="text-gray-500 dark:text-amber-muted">Current Version: </span>
@@ -276,7 +266,6 @@ const handleEntityApply = async (entityType, entityId) => {
                     </div>
                   </div>
 
-                  {/* Diff Section */}
                   {preview.diff_content && (
                     <div>
                       <h5 className="text-xs font-medium text-gray-600 dark:text-amber-muted mb-2 uppercase tracking-wide">Changes (Diff)</h5>
@@ -286,7 +275,6 @@ const handleEntityApply = async (entityType, entityId) => {
                     </div>
                   )}
 
-                  {/* Full Bundle Preview */}
                   <div className="relative group">
                     <h5 className="text-xs font-medium text-gray-600 dark:text-amber-muted mb-2 uppercase tracking-wide">Full Bundle</h5>
                     <pre className="bg-gray-900 dark:bg-black text-gray-100 p-4 rounded-none text-sm font-mono overflow-auto whitespace-pre max-h-[300px] border border-gray-800">
@@ -327,7 +315,6 @@ const handleEntityApply = async (entityType, entityId) => {
           )}
         </div>
 
-        {/* Footer */}
         <div className="px-6 py-4 border-t border-gray-200 dark:border-gray-border flex justify-between shrink-0">
           <button
             onClick={onClose}

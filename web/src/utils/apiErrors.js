@@ -1,53 +1,37 @@
 /**
- * API Error Handling Utilities
- * 
- * Provides consistent error handling for API calls across the application.
- * Works with the Toast system and ErrorBoundary to display errors clearly.
- */
-
-/**
  * Parse error messages from various error types into user-friendly strings
  * @param {Error|Response|string} error - The error to parse
  * @returns {string} User-friendly error message
  */
 export function parseApiError(error) {
-  // String errors
   if (typeof error === 'string') {
     return error
   }
 
-  // Error objects
   if (error instanceof Error) {
-    // Network errors (no response)
     if (error.name === 'TypeError' && error.message === 'Failed to fetch') {
       return 'Unable to connect to server. Please check your network connection.'
     }
 
-    // Timeout errors
     if (error.name === 'AbortError') {
       return 'Request timed out. Please try again.'
     }
 
-    // Auth errors with friendly message
     if (error.message === 'Session expired. Please log in again.') {
       return error.message
     }
 
-    // Default to the error message
     return error.message || 'An unexpected error occurred.'
   }
 
-  // Response objects (fetch responses)
   if (error instanceof Response) {
     return getResponseErrorMessage(error)
   }
 
-  // Object with error property (API error response format)
   if (error?.error?.message) {
     return error.error.message
   }
 
-  // Object with message property
   if (error?.message) {
     return error.message
   }
@@ -55,11 +39,7 @@ export function parseApiError(error) {
   return 'An unexpected error occurred.'
 }
 
-/**
- * Get user-friendly message for HTTP status codes
- * @param {number} status - HTTP status code
- * @returns {string} User-friendly status message
- */
+// Get user-friendly message for HTTP status codes
 export function getStatusMessage(status) {
   const statusMessages = {
     400: 'Invalid request. Please check your input and try again.',
@@ -91,14 +71,12 @@ export async function getResponseErrorMessage(response) {
     
     // API returns { error: { message: string, code?: string } }
     if (body?.error?.message) {
-      // Override with specific auth messages
       if (body.error.code === 'UNAUTHORIZED' || response.status === 401) {
         return 'Session expired. Please log in again.'
       }
       return body.error.message
     }
 
-    // Fallback to status message
     return statusMessage
   } catch {
     return statusMessage
@@ -111,37 +89,30 @@ export async function getResponseErrorMessage(response) {
  * @returns {boolean} True if the error is recoverable
  */
 export function isRecoverableError(error) {
-  // Network errors are recoverable
   if (error?.name === 'TypeError' && error?.message === 'Failed to fetch') {
     return true
   }
 
-  // Timeout errors are recoverable
   if (error?.name === 'AbortError') {
     return true
   }
 
-  // 5xx errors are recoverable (server issues)
   if (error instanceof Response && error.status >= 500) {
     return true
   }
 
-  // Rate limiting is recoverable
   if (error instanceof Response && error.status === 429) {
     return true
   }
 
-  // Auth errors are not recoverable (need to re-login)
   if (error instanceof Response && error.status === 401) {
     return false
   }
 
-  // Permission errors are not recoverable
   if (error instanceof Response && error.status === 403) {
     return false
   }
 
-  // Default to recoverable
   return true
 }
 
@@ -195,12 +166,10 @@ export const ErrorTypes = {
  * @returns {string} Error type from ErrorTypes
  */
 export function categorizeError(error) {
-  // Network errors
   if (error?.name === 'TypeError' && error?.message === 'Failed to fetch') {
     return ErrorTypes.NETWORK
   }
 
-  // Response-based categorization
   if (error instanceof Response) {
     if (error.status === 401) return ErrorTypes.AUTH
     if (error.status === 403) return ErrorTypes.PERMISSION
@@ -209,7 +178,6 @@ export function categorizeError(error) {
     if (error.status >= 500) return ErrorTypes.SERVER
   }
 
-  // Check error message for auth
   const message = parseApiError(error)
   if (message.includes('Session expired') || message.includes('log in')) {
     return ErrorTypes.AUTH

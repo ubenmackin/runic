@@ -65,11 +65,9 @@ func (s *Scheduler) Start(ctx context.Context) {
 	s.running = true
 	s.runningMux.Unlock()
 
-	// Run once immediately on startup
 	s.logger.Info("starting alert scheduler, running initial check")
 	s.CheckAllRules(ctx)
 
-	// Then run periodically
 	go func() {
 		ticker := time.NewTicker(s.interval)
 		defer ticker.Stop()
@@ -116,7 +114,6 @@ func (s *Scheduler) Stop() {
 // CheckAllRules evaluates all enabled alert rules.
 // For each rule, it checks if the condition is met and triggers alerts accordingly.
 func (s *Scheduler) CheckAllRules(ctx context.Context) {
-	// Load all enabled rules
 	rules, err := s.getEnabledRules(ctx)
 	if err != nil {
 		s.logger.Error("failed to load enabled alert rules", "error", err)
@@ -130,11 +127,9 @@ func (s *Scheduler) CheckAllRules(ctx context.Context) {
 
 	s.logger.Debug("checking alert rules", "count", len(rules))
 
-	// Check each rule
 	for i := range rules {
 		rule := &rules[i]
 
-		// Skip if stop channel is closed
 		select {
 		case <-s.stopCh:
 			return
@@ -173,7 +168,6 @@ func (s *Scheduler) checkRule(ctx context.Context, rule *AlertRule) error {
 		"rule_name", rule.Name,
 		"alert_type", rule.AlertType)
 
-	// Evaluate the rule condition
 	triggered, event, err := s.evaluator.EvaluateRule(ctx, rule)
 	if err != nil {
 		return fmt.Errorf("failed to evaluate rule %d: %w", rule.ID, err)
@@ -186,7 +180,6 @@ func (s *Scheduler) checkRule(ctx context.Context, rule *AlertRule) error {
 		return nil
 	}
 
-	// Check throttle - don't send alert if we sent one recently
 	if s.isThrottled(ctx, rule) {
 		s.logger.Debug("alert throttled",
 			"rule_id", rule.ID,
@@ -195,7 +188,6 @@ func (s *Scheduler) checkRule(ctx context.Context, rule *AlertRule) error {
 		return nil
 	}
 
-	// Process the triggered alert
 	s.logger.Info("alert rule triggered",
 		"rule_id", rule.ID,
 		"rule_name", rule.Name,
@@ -252,15 +244,12 @@ func (s *Scheduler) getEnabledRules(ctx context.Context) ([]AlertRule, error) {
 // isThrottled checks if an alert for this rule was recently sent.
 // Returns true if the alert should be throttled (skipped).
 func (s *Scheduler) isThrottled(ctx context.Context, rule *AlertRule) bool {
-	// If throttle is disabled (0 minutes), never throttle
 	if rule.ThrottleMinutes <= 0 {
 		return false
 	}
 
-	// Calculate the cutoff time for throttling
 	cutoff := time.Now().Add(-rule.GetThrottleDuration())
 
-	// Check for recent alerts for this rule
 	var count int
 	err := s.database.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM alert_history
@@ -268,8 +257,7 @@ func (s *Scheduler) isThrottled(ctx context.Context, rule *AlertRule) bool {
 		rule.ID, cutoff, AlertStatusSent, AlertStatusPending,
 	).Scan(&count)
 	if err != nil {
-		s.logger.Error("failed to check throttle status", "rule_id", rule.ID, "error", err)
-		return false // On error, don't throttle
+		return false
 	}
 
 	return count > 0

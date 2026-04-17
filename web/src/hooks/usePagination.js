@@ -20,7 +20,6 @@ export function usePagination(data, pageKey, defaultRowsPerPage = 10) {
     return defaultRowsPerPage
   })
 
-  // Persist rowsPerPage to localStorage
   useEffect(() => {
     if (storageKey) {
       localStorage.setItem(storageKey, JSON.stringify({ rowsPerPage }))
@@ -33,13 +32,11 @@ export function usePagination(data, pageKey, defaultRowsPerPage = 10) {
   const prevDataLengthRef = useRef(data?.length)
   if (prevDataLengthRef.current !== data?.length) {
     prevDataLengthRef.current = data?.length
-    // Reset to page 1 when data length changes
     if (page !== 1) {
       setPage(1)
     }
   }
 
-  // Reset page to 1 when rowsPerPage changes
   const setRowsPerPage = (newRowsPerPage) => {
     setRowsPerPageState(newRowsPerPage)
     setPage(1)

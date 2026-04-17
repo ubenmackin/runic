@@ -136,12 +136,13 @@ type AlertRule struct {
 	Name                   string    `json:"name" gorm:"size:255;not null" validate:"required,min=1,max=255"`
 	AlertType              AlertType `json:"alert_type" gorm:"size:50;not null;index" validate:"required"`
 	Enabled                bool      `json:"enabled" gorm:"default:true"`
-	ThresholdValue         int       `json:"threshold_value" gorm:"default:0"`          // e.g., 100 for blocked_spike
-	ThresholdWindowMinutes int       `json:"threshold_window_minutes" gorm:"default:5"` // e.g., 5 minutes
-	PeerID                 *int      `json:"peer_id,omitempty" gorm:"index"`            // null for global rules
-	ThrottleMinutes        int       `json:"throttle_minutes" gorm:"default:15"`        // minimum time between alerts for this rule
-	CreatedAt              time.Time `json:"created_at" gorm:"autoCreateTime"`
-	UpdatedAt              time.Time `json:"updated_at" gorm:"autoUpdateTime"`
+	ThresholdValue         int       `json:"threshold_value" gorm:"default:0"`
+	ThresholdWindowMinutes int       `json:"threshold_window_minutes" gorm:"default:5"`
+	PeerID                 *int      `json:"peer_id,omitempty" gorm:"index"`
+	// minimum time between alerts for this rule
+	ThrottleMinutes int       `json:"throttle_minutes" gorm:"default:15"`
+	CreatedAt       time.Time `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt       time.Time `json:"updated_at" gorm:"autoUpdateTime"`
 }
 
 // TableName specifies the table name for AlertRule.
@@ -216,12 +217,12 @@ type UserNotificationPreferences struct {
 	UserID             uint      `json:"user_id" gorm:"not null;uniqueIndex"`
 	EnabledAlerts      string    `json:"enabled_alerts" gorm:"type:text"` // JSON array of alert types, empty means all enabled
 	QuietHoursEnabled  bool      `json:"quiet_hours_enabled" gorm:"default:false"`
-	QuietHoursStart    string    `json:"quiet_hours_start" gorm:"size:5"`     // HH:MM format
-	QuietHoursEnd      string    `json:"quiet_hours_end" gorm:"size:5"`       // HH:MM format
-	QuietHoursTimezone string    `json:"quiet_hours_timezone" gorm:"size:50"` // IANA timezone
+	QuietHoursStart    string    `json:"quiet_hours_start" gorm:"size:5"`
+	QuietHoursEnd      string    `json:"quiet_hours_end" gorm:"size:5"`
+	QuietHoursTimezone string    `json:"quiet_hours_timezone" gorm:"size:50"`
 	DigestEnabled      bool      `json:"digest_enabled" gorm:"default:false"`
-	DigestFrequency    string    `json:"digest_frequency" gorm:"size:20;default:'daily'"` // daily, weekly
-	DigestTime         string    `json:"digest_time" gorm:"size:5;default:'09:00'"`       // HH:MM format
+	DigestFrequency    string    `json:"digest_frequency" gorm:"size:20;default:'daily'"`
+	DigestTime         string    `json:"digest_time" gorm:"size:5;default:'09:00'"`
 	DigestTimezone     string    `json:"digest_timezone" gorm:"size:50"`
 	CreatedAt          time.Time `json:"created_at" gorm:"autoCreateTime"`
 	UpdatedAt          time.Time `json:"updated_at" gorm:"autoUpdateTime"`
@@ -235,11 +236,9 @@ func (UserNotificationPreferences) TableName() string {
 // IsAlertEnabled checks if a specific alert type is enabled for the user.
 // If EnabledAlerts is empty, all alerts are considered enabled.
 func (u *UserNotificationPreferences) IsAlertEnabled(alertType AlertType) bool {
-	// If no specific alerts configured, all are enabled
 	if u.EnabledAlerts == "" {
 		return true
 	}
-	// Parse JSON array and check if alert type is in the list
 	var enabledTypes []string
 	if err := json.Unmarshal([]byte(u.EnabledAlerts), &enabledTypes); err != nil {
 		// If parsing fails, assume all are enabled
@@ -257,9 +256,9 @@ func (u *UserNotificationPreferences) IsAlertEnabled(alertType AlertType) bool {
 type AlertDigest struct {
 	ID         uint      `json:"id" gorm:"primaryKey;autoIncrement"`
 	UserID     uint      `json:"user_id" gorm:"not null;index"`
-	DigestDate string    `json:"digest_date" gorm:"size:10;not null;index"` // YYYY-MM-DD
+	DigestDate string    `json:"digest_date" gorm:"size:10;not null;index"`
 	AlertCount int       `json:"alert_count" gorm:"default:0"`
-	Summary    string    `json:"summary" gorm:"type:text"` // JSON summary of alerts
+	Summary    string    `json:"summary" gorm:"type:text"`
 	SentAt     time.Time `json:"sent_at"`
 	CreatedAt  time.Time `json:"created_at" gorm:"autoCreateTime"`
 }
@@ -348,7 +347,6 @@ func (e *AlertEvent) CreateAlertHistory(ruleID uint) AlertHistory {
 
 	metadataJSON := ""
 	if len(e.Metadata) > 0 {
-		// Serialize metadata to JSON
 		metadataBytes, err := json.Marshal(e.Metadata)
 		if err != nil {
 			metadataJSON = "{}"
@@ -396,12 +394,12 @@ type UpdateAlertRuleRequest struct {
 type UpdateNotificationPreferencesRequest struct {
 	EnabledAlerts      *string `json:"enabled_alerts,omitempty"` // JSON array of alert types
 	QuietHoursEnabled  *bool   `json:"quiet_hours_enabled,omitempty"`
-	QuietHoursStart    *string `json:"quiet_hours_start,omitempty" validate:"omitempty,len=5"` // HH:MM
-	QuietHoursEnd      *string `json:"quiet_hours_end,omitempty" validate:"omitempty,len=5"`   // HH:MM
+	QuietHoursStart    *string `json:"quiet_hours_start,omitempty" validate:"omitempty,len=5"`
+	QuietHoursEnd      *string `json:"quiet_hours_end,omitempty" validate:"omitempty,len=5"`
 	QuietHoursTimezone *string `json:"quiet_hours_timezone,omitempty"`
 	DigestEnabled      *bool   `json:"digest_enabled,omitempty"`
 	DigestFrequency    *string `json:"digest_frequency,omitempty"`
-	DigestTime         *string `json:"digest_time,omitempty" validate:"omitempty,len=5"` // HH:MM
+	DigestTime         *string `json:"digest_time,omitempty" validate:"omitempty,len=5"`
 	DigestTimezone     *string `json:"digest_timezone,omitempty"`
 }
 

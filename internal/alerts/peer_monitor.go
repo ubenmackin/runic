@@ -42,14 +42,9 @@ type PeerMonitor struct {
 	wg     sync.WaitGroup
 	stopCh chan struct{}
 
-	// State tracking: peer_id -> last known status
-	peerStates map[int]PeerStatus
-
-	// Grace period to suppress false positive online alerts during startup
-	startTime   time.Time
-	gracePeriod time.Duration
-
-	// Deduplication: tracks which peers have had offline alerts sent
+	peerStates       map[int]PeerStatus
+	startTime        time.Time
+	gracePeriod      time.Duration
 	offlineAlertSent map[int]bool
 
 	mu sync.RWMutex
@@ -112,7 +107,7 @@ func (m *PeerMonitor) run() {
 		}
 		m.logger.Error("failed to load initial peer states", "error", err, "attempt", i+1, "max_retries", maxRetries)
 		if i < maxRetries-1 {
-			backoff := time.Duration(1<<i) * time.Second // 1s, 2s, 4s
+			backoff := time.Duration(1<<i) * time.Second
 			m.logger.Info("retrying peer state load", "backoff", backoff)
 			select {
 			case <-time.After(backoff):
@@ -125,7 +120,6 @@ func (m *PeerMonitor) run() {
 		}
 	}
 
-	// Check every 30 seconds
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
@@ -167,7 +161,6 @@ func (m *PeerMonitor) loadPeerStates(ctx context.Context) error {
 			return fmt.Errorf("failed to scan peer: %w", err)
 		}
 
-		// Determine status based on heartbeat
 		if !lastHeartbeat.Valid || lastHeartbeat.Time.Before(time.Now().Add(-90*time.Second)) {
 			m.peerStates[id] = PeerStatusOffline
 		} else {
@@ -182,7 +175,6 @@ func (m *PeerMonitor) checkPeers() {
 	ctx, cancel := context.WithTimeout(m.ctx, 10*time.Second)
 	defer cancel()
 
-	// Query peers that are offline (no heartbeat in last 90 seconds)
 	offlineRows, err := m.database.QueryContext(ctx, `
 		SELECT id, hostname, ip_address, last_heartbeat
 		FROM peers
@@ -198,7 +190,6 @@ func (m *PeerMonitor) checkPeers() {
 		}
 	}()
 
-	// Build current offline set
 	offlinePeers := make(map[int]peerInfo)
 	for offlineRows.Next() {
 		var id int
@@ -223,7 +214,6 @@ func (m *PeerMonitor) checkPeers() {
 		offlinePeers[id] = info
 	}
 
-	// Determine state changes
 	m.mu.RLock()
 	previousStates := make(map[int]PeerStatus)
 	for k, v := range m.peerStates {
@@ -231,7 +221,6 @@ func (m *PeerMonitor) checkPeers() {
 	}
 	m.mu.RUnlock()
 
-	// Check for newly offline peers (were online, now offline)
 	for peerID, info := range offlinePeers {
 		prevStatus, wasOnline := previousStates[peerID]
 		if wasOnline && prevStatus == PeerStatusOnline {
@@ -240,7 +229,6 @@ func (m *PeerMonitor) checkPeers() {
 		}
 	}
 
-	// Check for newly online peers (were offline, now online)
 	onlineRows, err := m.database.QueryContext(ctx, `
 		SELECT id, hostname, last_heartbeat
 		FROM peers
@@ -270,14 +258,12 @@ func (m *PeerMonitor) checkPeers() {
 	for peerID := range previousStates {
 		prevStatus := previousStates[peerID]
 		if _, isOffline := offlinePeers[peerID]; !isOffline && prevStatus == PeerStatusOffline {
-			// Peer transitioned from offline to online
 			if info, ok := currentOnline[peerID]; ok {
 				m.triggerPeerOnlineAlert(ctx, peerID, info, prevStatus)
 			}
 		}
 	}
 
-	// Update states
 	m.mu.Lock()
 	m.peerStates = make(map[int]PeerStatus)
 	for peerID := range offlinePeers {
@@ -290,7 +276,6 @@ func (m *PeerMonitor) checkPeers() {
 }
 
 func (m *PeerMonitor) triggerPeerOfflineAlert(ctx context.Context, peerID int, info peerInfo) {
-	// Check if we've already sent an offline alert for this peer
 	m.mu.Lock()
 	alreadySent := m.offlineAlertSent[peerID]
 	if alreadySent {
@@ -298,7 +283,6 @@ func (m *PeerMonitor) triggerPeerOfflineAlert(ctx context.Context, peerID int, i
 		m.logger.Debug("skipping duplicate offline alert", "peer_id", peerID)
 		return
 	}
-	// Mark that we've sent an offline alert for this peer
 	m.offlineAlertSent[peerID] = true
 	m.mu.Unlock()
 
@@ -342,7 +326,6 @@ func (m *PeerMonitor) triggerPeerOfflineAlert(ctx context.Context, peerID int, i
 func (m *PeerMonitor) triggerPeerOnlineAlert(ctx context.Context, peerID int, info peerInfo, wasOffline PeerStatus) {
 	m.logger.Info("peer came online", "peer_id", peerID, "hostname", info.hostname)
 
-	// Clear the offline alert flag so future offline events can trigger alerts
 	m.mu.Lock()
 	delete(m.offlineAlertSent, peerID)
 	m.mu.Unlock()
@@ -364,7 +347,6 @@ func (m *PeerMonitor) triggerPeerOnlineAlert(ctx context.Context, peerID int, in
 		m.logger.Warn("hostname was sanitized in online alert", "peer_id", peerID)
 	}
 
-	// For now, just report back online without duration calculation
 	if err := m.service.TriggerAlert(ctx, &AlertEvent{
 		Type:     AlertTypePeerOnline,
 		PeerID:   peerID,

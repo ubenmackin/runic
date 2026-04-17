@@ -46,7 +46,7 @@ func MakeLogsStreamHandler(hub *Hub) http.HandlerFunc {
 			http.Error(w, `{"error": "unauthorized"}`, http.StatusUnauthorized)
 			return
 		}
-		// Check revocation
+
 		if auth.IsRevoked(r.Context(), claims.UniqueID) {
 			http.Error(w, `{"error": "unauthorized"}`, http.StatusUnauthorized)
 			return
@@ -76,7 +76,6 @@ func MakeLogsStreamHandler(hub *Hub) http.HandlerFunc {
 
 		client.hub.register <- client
 
-		// Start read/write pumps
 		go client.writePump()
 		go client.readPump()
 	}
@@ -86,7 +85,6 @@ func MakeLogsStreamHandler(hub *Hub) http.HandlerFunc {
 func (h *Handler) GetLogs(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	// Parse query parameters
 	peerID := r.URL.Query().Get("peer_id")
 	srcIP := r.URL.Query().Get("src_ip")
 	dstPort := r.URL.Query().Get("dst_port")
@@ -210,9 +208,8 @@ func (h *Handler) GetLogs(w http.ResponseWriter, r *http.Request) {
 
 	logsData = common.EnsureSlice(logsData)
 
-	// Get total count for pagination
 	countQuery := `SELECT COUNT(*) FROM firewall_logs ` + whereClause
-	countArgs := args[:len(args)-2] // Remove limit and offset
+	countArgs := args[:len(args)-2]
 	var total int
 	if err := h.LogsDB.QueryRowContext(ctx, countQuery, countArgs...).Scan(&total); err != nil {
 		runiclog.ErrorContext(ctx, "Failed to get log count", "error", err, "query", countQuery)

@@ -205,17 +205,14 @@ func (h *Handler) HandleSetupPOST(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Commit transaction
 	if err := tx.Commit(); err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "failed to commit transaction")
 		return
 	}
 	committed = true
 
-	// Log successful user creation
 	log.InfoContext(r.Context(), "user created", "username", body.Username, "remote_addr", r.RemoteAddr)
 
-	// Generate tokens
 	accessToken, refreshToken, err := h.GenerateTokenPair(body.Username)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "failed to generate tokens")
@@ -270,11 +267,9 @@ func (h *Handler) HandleLoginPOST(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Record successful login
 	RecordSuccess(body.Username)
 	log.InfoContext(r.Context(), "user authenticated", "username", body.Username, "remote_addr", r.RemoteAddr)
 
-	// Generate tokens
 	accessToken, refreshToken, err := h.GenerateTokenPair(body.Username)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "failed to generate tokens")

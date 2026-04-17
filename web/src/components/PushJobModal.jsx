@@ -150,7 +150,6 @@ export default function PushJobModal({ jobId, onClose }) {
   const modalContent = (
     <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50">
       <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none w-full max-w-lg mx-4 max-h-[80vh] flex flex-col overflow-hidden">
-        {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-border">
           <h2 className="text-lg font-semibold text-gray-900 dark:text-light-neutral">
             Pushing Rules to All Peers
@@ -164,9 +163,7 @@ export default function PushJobModal({ jobId, onClose }) {
           </button>
         </div>
 
-        {/* Content */}
         <div className="p-4 overflow-y-auto flex-1">
-          {/* Progress Bar */}
           <div className="mb-4">
             <div className="flex justify-between text-sm text-gray-600 dark:text-gray-400 mb-1">
               <span>{succeeded + failed} of {total} peers</span>
@@ -186,7 +183,6 @@ export default function PushJobModal({ jobId, onClose }) {
             </div>
           </div>
 
-          {/* Status Summary */}
           <div className="flex gap-4 mb-4 text-sm">
             <div className="flex items-center gap-1.5">
               <CheckCircle className="w-4 h-4 text-green-500" />
@@ -206,7 +202,6 @@ export default function PushJobModal({ jobId, onClose }) {
             )}
           </div>
 
-          {/* Per-peer Status List */}
           {peerList.length > 0 && (
             <div className="space-y-1">
               <h3 className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">
@@ -234,7 +229,6 @@ export default function PushJobModal({ jobId, onClose }) {
           )}
         </div>
 
-        {/* Footer */}
         <div className="flex justify-end gap-3 p-4 border-t border-gray-200 dark:border-gray-border bg-gray-50 dark:bg-charcoal-darkest">
           <button
             onClick={handleClose}

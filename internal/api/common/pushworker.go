@@ -94,18 +94,15 @@ func (w *PushWorker) Stop() {
 }
 
 func (w *PushWorker) processJob(ctx context.Context, jobID string) {
-	// Create a per-job context with timeout to prevent indefinite hangs
 	jobCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
-	// Load job and peers
 	job, peers, err := db.GetPushJobWithPeers(jobCtx, w.db, jobID)
 	if err != nil {
 		runiclog.Error("PushWorker: failed to load job", "job_id", jobID, "error", err)
 		return
 	}
 
-	// Transition status to 'running'
 	if err := db.UpdatePushJobStatus(jobCtx, w.db, jobID, "running"); err != nil {
 		runiclog.Error("PushWorker: failed to update job status to running", "job_id", jobID, "error", err)
 		// Continue processing - this is non-fatal
@@ -131,7 +128,6 @@ func (w *PushWorker) processJob(ctx context.Context, jobID string) {
 	failed := 0
 
 	for _, peer := range peers {
-		// Send progress update
 		w.notifyProgress(jobID, "progress", map[string]interface{}{
 			"peer_id":   peer.PeerID,
 			"hostname":  peer.Hostname,
@@ -141,7 +137,6 @@ func (w *PushWorker) processJob(ctx context.Context, jobID string) {
 			"failed":    failed,
 		})
 
-		// Compile and store bundle
 		bundle, err := w.compiler.CompileAndStore(jobCtx, peer.PeerID)
 		if err != nil {
 			failed++
@@ -158,7 +153,6 @@ func (w *PushWorker) processJob(ctx context.Context, jobID string) {
 				"failed":    failed,
 			})
 
-			// Trigger bundle_failed alert
 			if w.alertService != nil {
 				if err := w.alertService.TriggerAlert(jobCtx, &alerts.AlertEvent{
 					Type:     alerts.AlertTypeBundleFailed,
@@ -182,7 +176,6 @@ func (w *PushWorker) processJob(ctx context.Context, jobID string) {
 		// Notify peer via SSE (reuse existing infrastructure)
 		w.sseHub.NotifyBundleUpdated("host-"+peer.Hostname, bundle.Version)
 
-		// Update peer status
 		if err := db.UpdatePushJobPeerStatus(jobCtx, w.db, jobID, peer.PeerID, "notified", ""); err != nil {
 			runiclog.Error("Failed to update push job peer status", "error", err)
 		}
@@ -197,7 +190,6 @@ func (w *PushWorker) processJob(ctx context.Context, jobID string) {
 			"failed":    failed,
 		})
 
-		// Trigger bundle_deployed alert
 		if w.alertService != nil {
 			if err := w.alertService.TriggerAlert(jobCtx, &alerts.AlertEvent{
 				Type:     alerts.AlertTypeBundleDeployed,

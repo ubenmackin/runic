@@ -9,17 +9,13 @@ import (
 // InjectNonceIntoHTML reads an HTML file from the filesystem and injects the CSP nonce
 // into all inline script tags. This is necessary for nonce-based CSP to work correctly.
 func InjectNonceIntoHTML(subFS fs.FS, path string, nonce string) ([]byte, error) {
-	// Read the HTML file
 	content, err := fs.ReadFile(subFS, path)
 	if err != nil {
 		return nil, err
 	}
 
-	// Convert to string for manipulation
 	html := string(content)
 
-	// Inject nonce into inline script tags
-	// Replace <script> with <script nonce="...">
 	// We need to be careful not to modify external script tags
 	html = strings.ReplaceAll(html, "<script>", `<script nonce="`+nonce+`">`)
 
@@ -34,10 +30,8 @@ func ServeHTMLWithNonce(w http.ResponseWriter, r *http.Request, subFS fs.FS, pat
 		return err
 	}
 
-	// Set content type
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 
-	// Write the modified HTML
 	_, err = w.Write(content)
 	return err
 }

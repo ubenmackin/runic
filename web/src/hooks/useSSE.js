@@ -24,7 +24,6 @@ export function useSSE({ enabled = true, onPendingChangeAdded } = {}) {
   const mountedRef = useRef(true)
   const onPendingChangeAddedRef = useRef(onPendingChangeAdded)
 
-  // Keep ref in sync with latest callback
   useEffect(() => {
     onPendingChangeAddedRef.current = onPendingChangeAdded
   }, [onPendingChangeAdded])
@@ -50,7 +49,6 @@ export function useSSE({ enabled = true, onPendingChangeAdded } = {}) {
   const connect = useCallback(() => {
     if (!enabled || !mountedRef.current) return
 
-    // Close existing connection if any
     if (eventSourceRef.current) {
       eventSourceRef.current.close()
     }
@@ -61,7 +59,6 @@ export function useSSE({ enabled = true, onPendingChangeAdded } = {}) {
     eventSourceRef.current = es
 
     es.addEventListener('connected', () => {
-      // Reset reconnect attempts on successful connection
       reconnectAttemptsRef.current = 0
     })
 
@@ -70,11 +67,9 @@ export function useSSE({ enabled = true, onPendingChangeAdded } = {}) {
         const data = JSON.parse(e.data)
         const peerId = data.peer_id
 
-        // Invalidate relevant queries to refresh the UI
         queryClient.invalidateQueries({ queryKey: QUERY_KEYS.peers() })
         queryClient.invalidateQueries({ queryKey: QUERY_KEYS.pendingChanges() })
 
-        // Call custom handler if provided
         if (onPendingChangeAddedRef.current) {
           onPendingChangeAddedRef.current(peerId, data)
         }
@@ -87,7 +82,6 @@ export function useSSE({ enabled = true, onPendingChangeAdded } = {}) {
       if (es.readyState === EventSource.CLOSED) {
         console.log('SSE connection closed')
 
-        // Attempt to reconnect with exponential backoff
         if (mountedRef.current && enabled) {
           scheduleReconnect()
         }
@@ -95,7 +89,6 @@ export function useSSE({ enabled = true, onPendingChangeAdded } = {}) {
     }
   }, [enabled, queryClient, scheduleReconnect])
 
-  // Keep connect ref updated
   connectRef.current = connect
 
   useEffect(() => {

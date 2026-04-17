@@ -123,9 +123,7 @@ func (h *Handler) CreateGroup(w http.ResponseWriter, r *http.Request) {
 		log.ErrorContext(r.Context(), "failed to create snapshot", "error", err)
 	}
 
-	// Trigger async recompilation for affected peers (if ChangeWorker is available)
 	if h.ChangeWorker != nil {
-		// Fetch group details for summary
 		group, groupErr := db.GetGroup(r.Context(), h.DB, int(id))
 
 		var summary string
@@ -173,7 +171,6 @@ func (h *Handler) UpdateGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate name
 	if input.Name != "" {
 		if err := common.ValidateName(input.Name); err != nil {
 			common.RespondError(w, http.StatusBadRequest, err.Error())
@@ -190,7 +187,6 @@ func (h *Handler) UpdateGroup(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// Get current group to check if values changed (use tx)
 	currentGroup, err := db.GetGroup(r.Context(), tx, id)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -202,7 +198,6 @@ func (h *Handler) UpdateGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if anything actually changed
 	nameChanged := input.Name != "" && input.Name != currentGroup.Name
 	descChanged := input.Description != currentGroup.Description
 	hasChanges := nameChanged || descChanged
@@ -223,18 +218,15 @@ func (h *Handler) UpdateGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Commit transaction
 	if err := tx.Commit(); err != nil {
 		log.ErrorContext(r.Context(), "failed to commit transaction", "error", err)
 		common.InternalError(w)
 		return
 	}
 
-	// Trigger async recompilation for affected peers (if ChangeWorker is available)
 	// Only trigger pending change if name or description changed
 	// Use h.DB after transaction is committed
 	if h.ChangeWorker != nil && hasChanges {
-		// Fetch group details for summary
 		group, groupErr := db.GetGroup(r.Context(), h.DB, id)
 
 		var summary string
@@ -257,7 +249,6 @@ func (h *Handler) DeleteGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Query the group to check if group exists and get its is_system flag
 	var isSystem bool
 	err = h.DB.QueryRowContext(r.Context(), "SELECT COALESCE(is_system, 0) FROM groups WHERE id = ? AND COALESCE(is_pending_delete, 0) = 0", id).Scan(&isSystem)
 	if err != nil {
@@ -265,13 +256,11 @@ func (h *Handler) DeleteGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Block deletion of system groups
 	if isSystem {
 		common.RespondError(w, http.StatusForbidden, "Cannot delete system group")
 		return
 	}
 
-	// Check if group is used by any policy
 	err = common.CheckGroupDeleteConstraints(r.Context(), h.DB, id)
 	if err != nil {
 		constraintErr, ok := err.(*common.DeleteConstraintError)
@@ -287,7 +276,6 @@ func (h *Handler) DeleteGroup(w http.ResponseWriter, r *http.Request) {
 		log.ErrorContext(r.Context(), "failed to create snapshot", "error", err)
 	}
 
-	// Soft delete the group
 	_, err = h.DB.ExecContext(r.Context(), "UPDATE groups SET is_pending_delete = 1 WHERE id = ?", id)
 	if err != nil {
 		log.ErrorContext(r.Context(), "failed to soft delete group", "error", err)
@@ -295,7 +283,6 @@ func (h *Handler) DeleteGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Trigger async recompilation for affected peers (if ChangeWorker is available)
 	if h.ChangeWorker != nil {
 		summary := "Group deleted"
 		h.ChangeWorker.QueueGroupChange(r.Context(), h.DB, h.Compiler, id, "delete", summary)
@@ -391,9 +378,7 @@ func (h *Handler) AddGroupMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Trigger async recompilation for affected peers (if ChangeWorker is available)
 	if h.ChangeWorker != nil {
-		// Fetch peer and group details for enhanced summary
 		peer, peerErr := db.GetPeer(r.Context(), h.DB, input.PeerID)
 		group, groupErr := db.GetGroup(r.Context(), h.DB, groupID)
 
@@ -434,9 +419,7 @@ func (h *Handler) DeleteGroupMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Trigger async recompilation (if ChangeWorker is available)
 	if h.ChangeWorker != nil {
-		// Fetch peer and group details for enhanced summary
 		peer, peerErr := db.GetPeer(r.Context(), h.DB, peerID)
 		group, groupErr := db.GetGroup(r.Context(), h.DB, groupID)
 

@@ -68,7 +68,6 @@ func LoadConfig(path string) (*Config, error) {
 // SaveConfig writes the config to disk with 0600 permissions.
 // Creates the directory if needed. Validates the config before saving.
 func SaveConfig(path string, cfg *Config) error {
-	// Validate config before saving
 	if err := cfg.Validate(); err != nil {
 		return fmt.Errorf("config validation failed: %w", err)
 	}
@@ -105,24 +104,19 @@ func (c *Config) NeedsRegistration() bool {
 // Validate checks that the config has valid values.
 // Returns an error describing the first validation failure, or nil if valid.
 func (c *Config) Validate() error {
-	// Validate ControlPlaneURL if provided
 	if c.ControlPlaneURL != "" {
-		// Check that it's a valid URL
 		parsedURL, err := url.Parse(c.ControlPlaneURL)
 		if err != nil {
 			return fmt.Errorf("invalid control_plane_url: %w", err)
 		}
-		// Must have a scheme (http or https)
 		if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
 			return fmt.Errorf("invalid control_plane_url: scheme must be http or https, got %q", parsedURL.Scheme)
 		}
-		// Must have a host
 		if parsedURL.Host == "" {
 			return fmt.Errorf("invalid control_plane_url: missing host")
 		}
 	}
 
-	// Validate PullIntervalSec
 	if c.PullIntervalSec < 0 {
 		return fmt.Errorf("invalid pull_interval_seconds: must be non-negative, got %d", c.PullIntervalSec)
 	}
@@ -130,24 +124,19 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("invalid pull_interval_seconds: must be at most 31536000 (1 year), got %d", c.PullIntervalSec)
 	}
 
-	// Validate HeartbeatIntervalSec
 	if c.HeartbeatIntervalSec < 0 {
 		return fmt.Errorf("invalid heartbeat_interval_seconds: must be non-negative, got %d", c.HeartbeatIntervalSec)
 	}
-	if c.HeartbeatIntervalSec > 3600 { // 1 hour
+	if c.HeartbeatIntervalSec > 3600 {
 		return fmt.Errorf("invalid heartbeat_interval_seconds: must be at most 3600 (1 hour), got %d", c.HeartbeatIntervalSec)
 	}
 
-	// Validate LogPath if provided
 	if c.LogPath != "" {
-		// Check for empty or whitespace-only path
 		if strings.TrimSpace(c.LogPath) == "" {
 			return fmt.Errorf("invalid log_path: cannot be empty or whitespace-only")
 		}
-		// Check that parent directory exists or can be created
 		logDir := filepath.Dir(c.LogPath)
 		if logDir != "" && logDir != "." {
-			// Check if the directory exists
 			if _, err := os.Stat(logDir); err != nil {
 				if !os.IsNotExist(err) {
 					return fmt.Errorf("invalid log_path: cannot access parent directory %q: %w", logDir, err)

@@ -131,7 +131,6 @@ func (h *Handler) AgentAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 
 		tokenString := authHeader[7:]
 
-		// Parse token
 		secretStr, err := db.GetSecret(r.Context(), h.DB, "agent_jwt_secret")
 		if err != nil {
 			runiclog.Error("JWT secret not configured", "error", err)
@@ -164,7 +163,6 @@ func (h *Handler) AgentAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		// Inject host_id into context
 		sub, ok := claims["sub"].(string)
 		if !ok || sub == "" {
 			http.Error(w, `{"error": "unauthorized"}`, http.StatusUnauthorized)
@@ -226,7 +224,6 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
-	// Check if hostname already exists
 	var existingID int
 	var existingToken sql.NullString
 	err := h.DB.QueryRowContext(ctx, "SELECT id, agent_token FROM peers WHERE hostname = ?", input.Hostname).Scan(&existingID, &existingToken)
@@ -250,7 +247,6 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Token consumed — now create the peer
 		hmacKey, err := GenerateHMACKey()
 		if err != nil {
 			runiclog.Error("Failed to generate HMAC key", "error", err)
@@ -291,7 +287,6 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 		if h.AlertService != nil {
 			// Sanitize hostname before using it in alert content (subject/body/metadata).
 			safeHostname, _ := alerts.SanitizeAlertInput(input.Hostname, 0)
-			// Get the ID of the newly inserted peer
 			var newPeerID int
 			if err := h.DB.QueryRowContext(ctx, "SELECT id FROM peers WHERE hostname = ?", input.Hostname).Scan(&newPeerID); err == nil {
 				if err := h.AlertService.TriggerAlert(ctx, &alerts.AlertEvent{
@@ -323,7 +318,6 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 	// Re-registration does NOT require a registration token
 	hostID := fmt.Sprintf("host-%s", input.Hostname)
 
-	// Always generate fresh token for re-registration
 	newToken, err := generateAgentToken(ctx, h.DB, input.Hostname)
 	if err != nil {
 		runiclog.Error("Failed to generate agent token error", "error", err)
@@ -361,10 +355,8 @@ func (h *Handler) GetBundle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check If-None-Match header
 	ifNoneMatch := r.Header.Get("If-None-Match")
 
-	// Get latest bundle for this peer
 	var bundle models.RuleBundleRow
 	err := h.DB.QueryRowContext(r.Context(), `SELECT id, peer_id, version, version_number, rules_content, hmac, created_at FROM rule_bundles WHERE peer_id = ? ORDER BY created_at DESC LIMIT 1`, serverID).Scan(&bundle.ID, &bundle.PeerID, &bundle.Version, &bundle.VersionNumber, &bundle.RulesContent, &bundle.HMAC, &bundle.CreatedAt)
 
@@ -377,7 +369,6 @@ func (h *Handler) GetBundle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check ETag
 	w.Header().Set("ETag", bundle.Version)
 	if ifNoneMatch == bundle.Version {
 		w.WriteHeader(http.StatusNotModified)
@@ -459,7 +450,6 @@ func (h *Handler) SubmitLogs(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		// Insert into logs database with denormalized peer_hostname
 		// Note: Logs DB schema uses different column names than main DB
 		_, err := h.LogsDB.ExecContext(r.Context(),
 			`INSERT INTO firewall_logs (peer_id, peer_hostname, timestamp, event_type, source_ip, dest_ip, protocol, source_port, dest_port, action, details) 
@@ -472,7 +462,6 @@ func (h *Handler) SubmitLogs(w http.ResponseWriter, r *http.Request) {
 		}
 		accepted++
 
-		// Fan out to WebSocket clients
 		event := models.LogEvent{
 			PeerID:   fmt.Sprintf("%d", serverID),
 			Action:   ev.Action,
@@ -543,7 +532,6 @@ func (h *Handler) MakeHandleSSEventsHandler(hub SSEBroadcaster) http.HandlerFunc
 		w.Header().Set("Connection", "keep-alive")
 		w.Header().Set("Transfer-Encoding", "chunked")
 
-		// Use the explicitly provided hub
 		if hub == nil {
 			http.Error(w, "SSE hub unavailable", http.StatusInternalServerError)
 			return
@@ -551,18 +539,15 @@ func (h *Handler) MakeHandleSSEventsHandler(hub SSEBroadcaster) http.HandlerFunc
 		ch := hub.Register(hostID)
 		defer hub.Unregister(hostID)
 
-		// Ensure flush
 		flusher, ok := w.(http.Flusher)
 		if !ok {
 			http.Error(w, "SSE not supported", http.StatusInternalServerError)
 			return
 		}
 
-		// Send keepalive periodically
 		ticker := time.NewTicker(constants.SSEKeepaliveInterval)
 		defer ticker.Stop()
 
-		// Notify client connected
 		if _, err := fmt.Fprintf(w, ": agent connected\n\n"); err != nil {
 			return
 		}
@@ -572,7 +557,6 @@ func (h *Handler) MakeHandleSSEventsHandler(hub SSEBroadcaster) http.HandlerFunc
 			select {
 			case msg, ok := <-ch:
 				if !ok {
-					// Channel closed
 					return
 				}
 				if _, err := fmt.Fprintf(w, "%s\n\n", msg); err != nil {
@@ -581,14 +565,12 @@ func (h *Handler) MakeHandleSSEventsHandler(hub SSEBroadcaster) http.HandlerFunc
 				flusher.Flush()
 
 			case <-ticker.C:
-				// Keepalive
 				if _, err := fmt.Fprintf(w, ": keepalive\n\n"); err != nil {
 					return
 				}
 				flusher.Flush()
 
 			case <-r.Context().Done():
-				// Client disconnected
 				return
 			}
 		}
@@ -620,7 +602,6 @@ func (h *Handler) AgentCheckRotation(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !rotationToken.Valid || rotationToken.String == "" {
-		// No rotation pending
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -666,7 +647,6 @@ func (h *Handler) AgentTestKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verify HMAC signature
 	mac := hmac.New(sha256.New, []byte(hmacKey))
 	mac.Write([]byte(input.Message))
 	expected := hex.EncodeToString(mac.Sum(nil))

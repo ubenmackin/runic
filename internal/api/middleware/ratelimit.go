@@ -46,7 +46,6 @@ func (rl *RateLimiter) Check(remoteAddr string) error {
 	now := time.Now()
 	requests := rl.requests[remoteAddr]
 
-	// Filter out expired requests
 	cutoff := now.Add(-rl.window)
 	validRequests := []time.Time{}
 	for _, ts := range requests {

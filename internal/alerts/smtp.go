@@ -91,15 +91,12 @@ func (s *SMTPSender) SendAlertEmail(to string, event *AlertEvent) error {
 	// Create a sanitized copy of the event to prevent injection attacks
 	sanitizedEvent := *event
 
-	// Sanitize Subject field
 	sanitizedSubject, _ := SanitizeAlertInput(event.Subject, 0)
 	sanitizedEvent.Subject = sanitizedSubject
 
-	// Sanitize PeerName field
 	sanitizedPeerName, _ := SanitizeAlertInput(event.PeerName, 0)
 	sanitizedEvent.PeerName = sanitizedPeerName
 
-	// Sanitize Message field
 	sanitizedMessage, _ := SanitizeAlertInput(event.Message, 0)
 	sanitizedEvent.Message = sanitizedMessage
 
@@ -122,7 +119,6 @@ func (s *SMTPSender) SendAlertEmail(to string, event *AlertEvent) error {
 		subject = s.generateAlertSubject(&sanitizedEvent)
 	}
 
-	// Get instance URL for footer links
 	instanceURL := GetInstanceURL(context.Background(), s.database)
 
 	htmlBody := s.generateAlertHTML(&sanitizedEvent, instanceURL)
@@ -139,7 +135,6 @@ func (s *SMTPSender) sendEmail(to, subject, body, contentType string) error {
 		return fmt.Errorf("recipient email address is required")
 	}
 
-	// Decrypt password if encryptor is provided and password exists
 	password := s.config.Password
 	if s.encryptor != nil && s.config.Password != "" {
 		decrypted, err := s.encryptor.Decrypt(s.config.Password)
@@ -153,10 +148,8 @@ func (s *SMTPSender) sendEmail(to, subject, body, contentType string) error {
 	// Sanitize header values to prevent email header injection.
 	subject = s.sanitizeHeaderValue(subject)
 
-	// Build the email message
 	message := s.buildMessage(to, subject, body, contentType)
 
-	// Create SMTP client
 	addr := fmt.Sprintf("%s:%d", s.config.Host, s.config.Port)
 
 	s.logger.Debug("sending email",
@@ -166,13 +159,11 @@ func (s *SMTPSender) sendEmail(to, subject, body, contentType string) error {
 		"smtp_port", s.config.Port,
 	)
 
-	// Get authentication
 	var auth smtp.Auth
 	if s.config.Username != "" && password != "" {
 		auth = smtp.PlainAuth("", s.config.Username, password, s.config.Host)
 	}
 
-	// Send the email
 	err := s.sendWithTLS(addr, auth, s.config.FromAddress, []string{to}, []byte(message))
 	if err != nil {
 		s.logger.Error("failed to send email",
@@ -209,7 +200,6 @@ func (s *SMTPSender) sendWithTLS(addr string, auth smtp.Auth, from string, to []
 		return fmt.Errorf("SMTP Hello failed: %w", err)
 	}
 
-	// Check if STARTTLS is supported and use it if enabled
 	if s.config.UseTLS {
 		if ok, _ := conn.Extension("STARTTLS"); ok {
 			tlsConfig := &tls.Config{
@@ -223,7 +213,6 @@ func (s *SMTPSender) sendWithTLS(addr string, auth smtp.Auth, from string, to []
 		}
 	}
 
-	// Authenticate if credentials are provided
 	if auth != nil {
 		if err := conn.Auth(auth); err != nil {
 			return fmt.Errorf("SMTP authentication failed: %w", err)
@@ -231,19 +220,16 @@ func (s *SMTPSender) sendWithTLS(addr string, auth smtp.Auth, from string, to []
 		s.logger.Debug("SMTP authentication successful")
 	}
 
-	// Set the sender
 	if err := conn.Mail(from); err != nil {
 		return fmt.Errorf("failed to set sender: %w", err)
 	}
 
-	// Set the recipients
 	for _, recipient := range to {
 		if err := conn.Rcpt(recipient); err != nil {
 			return fmt.Errorf("failed to set recipient %s: %w", recipient, err)
 		}
 	}
 
-	// Send the email body
 	wc, err := conn.Data()
 	if err != nil {
 		return fmt.Errorf("failed to get data writer: %w", err)
@@ -301,23 +287,11 @@ func (s *SMTPSender) htmlEscape(text string) string {
 // - Dangerous tags (iframe, object, embed, form, svg, math, link, base)
 // - Dangerous meta refresh tags with javascript: URLs
 func (s *SMTPSender) sanitizeHTMLBody(body string) string {
-	// Remove script tags and their contents
 	body = scriptRegex.ReplaceAllString(body, "")
-
-	// Remove style tags and their contents (CSS injection)
 	body = styleTagRegex.ReplaceAllString(body, "")
-
-	// Remove event handler attributes (onclick, onerror, onload, etc.)
-	// Handles both quoted and unquoted attribute values
 	body = eventHandlerRegex.ReplaceAllString(body, "")
-
-	// Remove javascript:, data:, vbscript: URLs in href/src/style attributes
 	body = dangerousURLRegex.ReplaceAllString(body, "")
-
-	// Remove dangerous tags (iframe, object, embed, form, svg, math, style, link, base)
 	body = dangerousTagRegex.ReplaceAllString(body, "")
-
-	// Remove dangerous meta refresh tags (but preserve legitimate meta tags)
 	body = dangerousMetaRegex.ReplaceAllString(body, "")
 
 	return body
@@ -387,7 +361,6 @@ func (s *SMTPSender) generateAlertSubject(event *AlertEvent) string {
 // generateAlertHTML creates an HTML email body for an alert event.
 // Uses terminal aesthetic with dark mode colors and monospace font.
 func (s *SMTPSender) generateAlertHTML(event *AlertEvent, instanceURL string) string {
-	// Terminal aesthetic colors
 	bodyBg := "#0a0a0a"
 	containerBg := "#121212"
 	borderColor := "#2d2d2d"
@@ -398,7 +371,6 @@ func (s *SMTPSender) generateAlertHTML(event *AlertEvent, instanceURL string) st
 	textDim := "#9ca3af"
 	purple := "#a855f7"
 
-	// Severity colors for badges
 	var badgeColor, badgeBg string
 	var severityLabel string
 	switch event.GetSeverity() {
@@ -416,7 +388,6 @@ func (s *SMTPSender) generateAlertHTML(event *AlertEvent, instanceURL string) st
 		severityLabel = "INFO"
 	}
 
-	// Helper to get metadata string value
 	getMetaString := func(key string) string {
 		if v, ok := event.Metadata[key]; ok {
 			if s, ok := v.(string); ok {
@@ -426,7 +397,6 @@ func (s *SMTPSender) generateAlertHTML(event *AlertEvent, instanceURL string) st
 		return ""
 	}
 
-	// Build details table rows based on alert type
 	var detailsTable strings.Builder
 
 	switch event.Type {
@@ -511,21 +481,18 @@ func (s *SMTPSender) generateAlertHTML(event *AlertEvent, instanceURL string) st
 </tr>`, borderColor, textMuted, borderColor, textSecondary, s.htmlEscape(threshold))
 		}
 
-	default:
 		fmt.Fprintf(&detailsTable, `<tr>
 <td style="padding: 12px 15px; border-bottom: 1px solid %s; color: %s; width: 140px; font-weight: bold; text-transform: uppercase; letter-spacing: 1px;">Alert Type</td>
 <td style="padding: 12px 15px; border-bottom: 1px solid %s; color: %s;">%s</td>
 </tr>`, borderColor, textMuted, borderColor, textSecondary, s.htmlEscape(string(event.Type)))
 	}
 
-	// Always add timestamp row
 	fmt.Fprintf(&detailsTable, `
 <tr>
 <td style="padding: 12px 15px; border-bottom: 1px solid %s; color: %s; font-weight: bold; text-transform: uppercase; letter-spacing: 1px;">Timestamp</td>
 <td style="padding: 12px 15px; border-bottom: 1px solid %s; color: %s;">%s</td>
 </tr>`, borderColor, textMuted, borderColor, textDim, event.Timestamp.Format(time.RFC1123))
 
-	// Add custom message if provided
 	var messageContent string
 	if event.Message != "" {
 		fmt.Fprintf(&detailsTable, `
@@ -536,16 +503,13 @@ func (s *SMTPSender) generateAlertHTML(event *AlertEvent, instanceURL string) st
 		messageContent = fmt.Sprintf(`<p style="font-size: 13px; color: %s; margin: 0 0 20px 0;">Details: %s</p>`, textDim, s.htmlEscape(event.Message))
 	}
 
-	// Build footer URLs
 	settingsLink := instanceURL + "/settings"
 
-	// Build alert title from subject or type
 	alertTitle := string(event.Type)
 	if event.Subject != "" {
 		alertTitle = event.Subject
 	}
 
-	// Build full HTML email with terminal aesthetic
 	html := fmt.Sprintf(`<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -603,8 +567,8 @@ body { background-color: %s !important; }
 </body>
 </html>
 `,
-		bodyBg, // style background-color
-		bodyBg, // body background-color
+		bodyBg,
+		bodyBg,
 		containerBg,
 		borderColor,
 		textPrimary,

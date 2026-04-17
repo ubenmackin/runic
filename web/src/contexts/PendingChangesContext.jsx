@@ -10,12 +10,11 @@ export function PendingChangesProvider({ children }) {
   const { data: pendingChanges, isLoading, error } = useQuery({
     queryKey: ['pending-changes'],
     queryFn: () => api.get('/pending-changes'),
-    refetchInterval: 15000, // Refetch every 15 seconds
+    refetchInterval: 15000,
     refetchIntervalInBackground: false, // Don't poll when tab is hidden
-    staleTime: 10000, // Consider data fresh for 10 seconds
+    staleTime: 10000,
   })
 
-  // Aggregate total count using the utility function
   const totalPendingCount = aggregatePendingChangesCount(pendingChanges)
 
   const value = {

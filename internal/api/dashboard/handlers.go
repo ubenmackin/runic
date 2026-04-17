@@ -66,7 +66,6 @@ type DashboardStats struct {
 func (h *Handler) HandleDashboard(w http.ResponseWriter, r *http.Request) {
 	var stats DashboardStats
 
-	// Initialize slices to avoid null in JSON
 	stats.RecentActivity = []ActivityItem{}
 	stats.PeerHealth = []PeerHealth{}
 	stats.TopBlockedSource = []BlockedIP{}
@@ -129,10 +128,8 @@ SELECT
 		}
 	}
 
-	// Run 3 LIST queries concurrently using errgroup
 	g, ctx := errgroup.WithContext(r.Context())
 
-	// Recent activity - last 5 blocked events
 	// Uses logs DB - peer_hostname is already in the log entry, no JOIN needed
 	g.Go(func() error {
 		activityRows, err := h.LogsDB.QueryContext(ctx, `
@@ -164,7 +161,6 @@ SELECT
 		return activityRows.Err()
 	})
 
-	// Peer health data
 	g.Go(func() error {
 		peerRows, err := h.DB.QueryContext(ctx, `
 SELECT hostname, ip_address, agent_version, last_heartbeat, is_manual
@@ -192,7 +188,6 @@ ORDER BY hostname`)
 			}
 			if lastHeartbeat.Valid {
 				ph.LastHeartbeat = lastHeartbeat.String
-				// Parse the timestamp and check if within offline threshold
 				if t, err := time.Parse("2006-01-02 15:04:05", lastHeartbeat.String); err == nil {
 					ph.IsOnline = time.Since(t).Seconds() < float64(constants.OfflineThresholdSeconds)
 				}
@@ -203,7 +198,6 @@ ORDER BY hostname`)
 		return peerRows.Err()
 	})
 
-	// Top 5 blocked source IPs in last 24h
 	// Uses logs DB - source_ip instead of src_ip
 	g.Go(func() error {
 		topRows, err := h.LogsDB.QueryContext(ctx, `

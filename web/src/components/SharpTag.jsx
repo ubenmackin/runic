@@ -3,7 +3,6 @@ const colorConfig = {
   synced: 'border-green-500 text-green-600 dark:text-green-400',
   review: 'border-orange-500 text-orange-600 dark:text-orange-400',
   pending_sync: 'border-blue-500 text-blue-600 dark:text-blue-400',
-  // Other status colors
   online: 'border-green-500 text-green-500 dark:text-green-400',
   offline: 'border-red-500 text-red-500 dark:text-red-400',
   pending: 'border-amber-500 text-amber-500 dark:text-amber-400',
@@ -22,10 +21,8 @@ const colorConfig = {
 export default function SharpTag({ status, label, variant = 'default', color }) {
   const statusKey = status?.toLowerCase() || 'pending';
   const colorClasses = color || colorConfig[statusKey] || colorConfig.pending;
-  // Use label if provided (preserves casing), otherwise uppercase the status
   const displayText = label ?? (status ? status.toUpperCase() : 'PENDING');
 
-  // Default variant: bracketed display with font-mono and smaller text
   if (variant === 'default') {
     return (
       <span
@@ -36,7 +33,6 @@ export default function SharpTag({ status, label, variant = 'default', color }) 
     );
   }
 
-  // Badge variant: plain text without brackets, slightly larger with font-medium
   return (
     <span
       className={`inline-block px-1.5 py-0.5 border text-xs font-medium ${colorClasses}`}

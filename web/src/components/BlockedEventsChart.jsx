@@ -31,21 +31,18 @@ export default function BlockedEventsChart({ logs }) {
 
     const container = containerRef.current
     const containerRect = container.getBoundingClientRect()
-    const tooltipWidth = 150 // estimated tooltip width
-    const tooltipHeight = 32 // estimated tooltip height
+    const tooltipWidth = 150
+    const tooltipHeight = 32
     const padding = 8
 
-    // Calculate segment position within the container
     const segmentLeftPercent = index * segmentWidth
     const segmentWidthPercent = segmentWidth
     const segmentCenterPercent = segmentLeftPercent + (segmentWidthPercent / 2)
     const segmentCenterPx = (segmentCenterPercent / 100) * containerRect.width
 
-    // Calculate tooltip position
     let left = segmentCenterPx - (tooltipWidth / 2)
-    let top = -tooltipHeight - padding // Position above the chart
+    let top = -tooltipHeight - padding
 
-    // Keep tooltip within container bounds
     if (left < 0) left = 0
     if (left + tooltipWidth > containerRect.width) {
       left = containerRect.width - tooltipWidth
@@ -81,7 +78,6 @@ export default function BlockedEventsChart({ logs }) {
             onMouseEnter={(e) => handlePointHover(i, e)}
           />
         ))}
-        {/* Tooltip */}
         {hoveredPoint !== null && hourlyData[hoveredPoint] && (
           <div
             className="absolute bg-gray-900 text-white text-xs px-2 py-1 rounded-none shadow-none pointer-events-none"
@@ -97,7 +93,6 @@ export default function BlockedEventsChart({ logs }) {
           </div>
         )}
       </div>
-      {/* X-axis labels */}
       <div className="flex text-xs text-gray-400">
         {hourlyData.filter((_, i) => i % 4 === 0).map((d, i) => (
           <div key={i} className="flex-1 text-center">

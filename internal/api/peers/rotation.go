@@ -54,7 +54,6 @@ func (h *Handler) RotatePeerKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get current peer info
 	var hostname, currentHMACKey string
 	var rotationToken sql.NullString
 	err = h.DB.QueryRowContext(r.Context(),
@@ -71,23 +70,19 @@ func (h *Handler) RotatePeerKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Generate new HMAC key
 	newHMACKey, err := generateHMACKey()
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "failed to generate HMAC key")
 		return
 	}
 
-	// Generate rotation token
 	token, err := generateRotationToken()
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "failed to generate rotation token")
 		return
 	}
 
-	// Check if rotation is already in progress
 	if rotationToken.Valid && rotationToken.String != "" {
-		// Check if existing token is still valid (not expired)
 		var lastRotatedAt sql.NullString
 		err = h.DB.QueryRowContext(r.Context(),
 			"SELECT hmac_key_last_rotated_at FROM peers WHERE id = ?",
@@ -97,7 +92,6 @@ func (h *Handler) RotatePeerKey(w http.ResponseWriter, r *http.Request) {
 		if err == nil && lastRotatedAt.Valid {
 			rotationTime, parseErr := time.Parse(time.RFC3339, lastRotatedAt.String)
 			if parseErr == nil && time.Since(rotationTime) < 5*time.Minute {
-				// Existing rotation still valid, return existing token
 				common.RespondJSON(w, http.StatusOK, map[string]interface{}{
 					"peer_id":        peerID,
 					"hostname":       hostname,
@@ -109,7 +103,6 @@ func (h *Handler) RotatePeerKey(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Store new key and token in database
 	_, err = h.DB.ExecContext(r.Context(),
 		"UPDATE peers SET hmac_key = ?, hmac_key_rotation_token = ?, hmac_key_last_rotated_at = ? WHERE id = ?",
 		newHMACKey, token, time.Now().UTC().Format(time.RFC3339), peerID,
@@ -119,14 +112,12 @@ func (h *Handler) RotatePeerKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Log the rotation event
 	slog.Info("HMAC key rotated by admin",
 		"peer_id", peerID,
 		"hostname", hostname,
 		"action", "rotate_key",
 	)
 
-	// Return new key and token to admin
 	common.RespondJSON(w, http.StatusOK, map[string]interface{}{
 		"peer_id":        peerID,
 		"hostname":       hostname,
@@ -156,7 +147,6 @@ func (h *Handler) AgentRotateKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Rate limiting
 	if rotateKeyRateLimiter.Check(r.RemoteAddr) != nil {
 		common.RespondError(w, http.StatusTooManyRequests, "rate limit exceeded")
 		return
@@ -184,7 +174,6 @@ func (h *Handler) AgentRotateKey(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	// Get the peer's rotation token and timestamp
 	var peerID int
 	var newHMACKey string
 	var lastRotatedAt sql.NullString
@@ -206,7 +195,6 @@ func (h *Handler) AgentRotateKey(w http.ResponseWriter, r *http.Request) {
 	if lastRotatedAt.Valid {
 		rotationTime, err := time.Parse(time.RFC3339, lastRotatedAt.String)
 		if err != nil || time.Since(rotationTime) > 5*time.Minute {
-			// Token expired, clear it
 			if _, err := tx.ExecContext(r.Context(), "UPDATE peers SET hmac_key_rotation_token = NULL WHERE id = ?", peerID); err != nil {
 				slog.Warn("failed to clear expired rotation token", "error", err)
 			}
@@ -261,7 +249,6 @@ func (h *Handler) AgentConfirmRotation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Rate limiting
 	if confirmRotationRateLimiter.Check(r.RemoteAddr) != nil {
 		common.RespondError(w, http.StatusTooManyRequests, "rate limit exceeded")
 		return
@@ -291,7 +278,6 @@ func (h *Handler) AgentConfirmRotation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verify rotation was actually pending or recently completed
 	if !currentToken.Valid || currentToken.String == "" {
 		// Token already consumed - check if rotation was recent
 		var lastRotatedAt sql.NullString
@@ -308,7 +294,6 @@ func (h *Handler) AgentConfirmRotation(w http.ResponseWriter, r *http.Request) {
 		if lastRotatedAt.Valid {
 			rotationTime, err := time.Parse(time.RFC3339, lastRotatedAt.String)
 			if err == nil && time.Since(rotationTime) < 10*time.Minute {
-				// Rotation was recent, allow confirmation
 				common.RespondJSON(w, http.StatusOK, map[string]string{
 					"status":  "already_confirmed",
 					"message": "Key rotation was already completed",
@@ -338,7 +323,6 @@ func (h *Handler) AgentConfirmRotation(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Update last rotation timestamp
 	_, err = h.DB.ExecContext(r.Context(),
 		"UPDATE peers SET hmac_key_last_rotated_at = ? WHERE id = ?",
 		time.Now().UTC().Format(time.RFC3339), peerID,

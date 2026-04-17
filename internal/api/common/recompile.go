@@ -113,7 +113,6 @@ func (w *ChangeWorker) Stop() {
 }
 
 func (w *ChangeWorker) processPeerChange(work *changeWork) {
-	// Debug: Check if context is canceled
 	select {
 	case <-work.ctx.Done():
 		runiclog.Warn("DEBUG: context canceled before processing", "ctx_err", work.ctx.Err())
@@ -131,9 +130,7 @@ func (w *ChangeWorker) processPeerChange(work *changeWork) {
 		}
 	}
 
-	// Notify via SSE if sseHub is available
 	if work.sseHub != nil && len(work.peerIDs) > 0 {
-		// Batch query for hostnames
 		placeholders := make([]string, len(work.peerIDs))
 		args := make([]any, len(work.peerIDs))
 		for i, id := range work.peerIDs {
@@ -156,7 +153,6 @@ func (w *ChangeWorker) processPeerChange(work *changeWork) {
 					hostnameMap[id] = hostname
 				}
 			}
-			// Notify for each peer
 			for _, peerID := range work.peerIDs {
 				if hostname, ok := hostnameMap[peerID]; ok {
 					work.sseHub.NotifyPendingChangeAdded("host-"+hostname, peerID)
@@ -210,7 +206,6 @@ func (w *ChangeWorker) processGroupChange(work *changeWork) {
 	}
 
 	for peerID := range peerSet {
-		// Check if this exact change already exists
 		var count int
 		err := work.database.QueryRowContext(work.ctx, `SELECT COUNT(*) FROM pending_changes WHERE peer_id = ? AND change_type = ? AND change_id = ? AND change_action = ?`, peerID, "group", work.groupID, work.changeAction).Scan(&count)
 		if err != nil {
@@ -225,9 +220,7 @@ func (w *ChangeWorker) processGroupChange(work *changeWork) {
 		}
 	}
 
-	// Notify via SSE if there were changes and sseHub is available
 	if len(peerSet) > 0 && work.sseHub != nil {
-		// Convert peerSet to slice for batch query
 		peerIDs := make([]int, 0, len(peerSet))
 		for peerID := range peerSet {
 			peerIDs = append(peerIDs, peerID)
@@ -256,7 +249,6 @@ func (w *ChangeWorker) processGroupChange(work *changeWork) {
 					hostnameMap[id] = hostname
 				}
 			}
-			// Notify for each peer
 			for _, peerID := range peerIDs {
 				if hostname, ok := hostnameMap[peerID]; ok {
 					work.sseHub.NotifyPendingChangeAdded("host-"+hostname, peerID)
@@ -272,9 +264,7 @@ func (w *ChangeWorker) processGroupChange(work *changeWork) {
 	}
 }
 
-// queueChangeForPeer checks if a pending change already exists for a peer and adds it if not.
 func queueChangeForPeer(ctx context.Context, database db.Querier, peerID int, changeType, changeAction string, changeID int, summary string) error {
-	// Check if this exact change is already queued (avoid duplicates)
 	var count int
 	err := database.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM pending_changes

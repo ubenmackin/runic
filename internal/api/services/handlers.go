@@ -39,7 +39,6 @@ var validProtocols = map[string]bool{
 // For user-defined services, ICMP and IGMP protocols are blocked.
 // For non-ICMP/IGMP protocols, at least one of ports or source_ports is required.
 func validateService(ports, sourcePorts, protocol string, isSystem bool) error {
-	// ICMP and IGMP are only allowed for system services
 	if protocol == "icmp" && !isSystem {
 		return fmt.Errorf("ICMP protocol is reserved for system services and cannot be used for user-defined services")
 	}
@@ -47,27 +46,22 @@ func validateService(ports, sourcePorts, protocol string, isSystem bool) error {
 		return fmt.Errorf("IGMP protocol is reserved for system services and cannot be used for user-defined services")
 	}
 
-	// For non-ICMP/IGMP protocols, validate against allowed list
 	if protocol != "icmp" && protocol != "igmp" && !validProtocols[protocol] {
 		return fmt.Errorf("invalid protocol %q: must be tcp, udp, or both", protocol)
 	}
 
-	// ICMP and IGMP don't use ports
 	if protocol == "icmp" || protocol == "igmp" {
 		return nil
 	}
 
-	// For non-ICMP protocols, at least one port type is required
 	if ports == "" && sourcePorts == "" {
 		return fmt.Errorf("at least one port type (destination ports or source ports) is required for protocol %q", protocol)
 	}
 
-	// Validate destination ports format if provided
 	if ports != "" && !engine.ValidPortsRe.MatchString(ports) {
 		return fmt.Errorf("invalid destination ports %q: must be digits separated by commas or colons", ports)
 	}
 
-	// Validate source ports format if provided
 	if sourcePorts != "" && !engine.ValidPortsRe.MatchString(sourcePorts) {
 		return fmt.Errorf("invalid source ports %q: must be digits separated by commas or colons", sourcePorts)
 	}
@@ -147,7 +141,6 @@ func (h *Handler) CreateService(w http.ResponseWriter, r *http.Request) {
 		input.DirectionHint = "inbound"
 	}
 
-	// User-created services are never system services
 	if err := validateService(input.Ports, input.SourcePorts, input.Protocol, false); err != nil {
 		common.RespondError(w, http.StatusBadRequest, err.Error())
 		return
@@ -169,7 +162,6 @@ func (h *Handler) CreateService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Queue pending changes for affected peers
 	if err := h.snapshotService(r.Context(), "create", int(id)); err != nil {
 		log.ErrorContext(r.Context(), "failed to create snapshot", "error", err)
 	}
@@ -239,7 +231,6 @@ func (h *Handler) UpdateService(w http.ResponseWriter, r *http.Request) {
 		input.Protocol = "tcp"
 	}
 
-	// Pass isSystem flag to validation to allow ICMP for system services
 	if err := validateService(input.Ports, input.SourcePorts, input.Protocol, isSystem); err != nil {
 		common.RespondError(w, http.StatusBadRequest, err.Error())
 		return
@@ -258,7 +249,6 @@ func (h *Handler) UpdateService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Queue pending changes for affected peers
 	h.queueServiceChange(r.Context(), id, "update", fmt.Sprintf("Service '%s' updated", input.Name))
 
 	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "updated"})
@@ -271,7 +261,6 @@ func (h *Handler) DeleteService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get service name before deletion for the summary
 	var serviceName string
 	err = h.DB.QueryRowContext(r.Context(), "SELECT name FROM services WHERE id = ?", id).Scan(&serviceName)
 	if err != nil {
@@ -292,7 +281,6 @@ func (h *Handler) DeleteService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if service is in use by any policies
 	err = common.CheckServiceDeleteConstraints(r.Context(), h.DB, id)
 	if err != nil {
 		constraintErr, ok := err.(*common.DeleteConstraintError)
@@ -315,7 +303,6 @@ func (h *Handler) DeleteService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Queue pending changes for affected peers
 	h.queueServiceChange(r.Context(), id, "delete", fmt.Sprintf("Service '%s' deleted", serviceName))
 
 	w.WriteHeader(http.StatusNoContent)
@@ -323,7 +310,6 @@ func (h *Handler) DeleteService(w http.ResponseWriter, r *http.Request) {
 
 // queueServiceChange queues pending changes for all peers affected by policies using this service.
 func (h *Handler) queueServiceChange(ctx context.Context, serviceID int, action, summary string) {
-	// Find policies using this service
 	rows, err := h.DB.QueryContext(ctx, `
 		SELECT DISTINCT id FROM policies
 		WHERE service_id = ? AND enabled = 1
@@ -369,7 +355,6 @@ func (h *Handler) queueServiceChange(ctx context.Context, serviceID int, action,
 	}
 }
 
-// RegisterRoutes adds service routes to the given router.
 func (h *Handler) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("", h.ListServices).Methods("GET")
 	r.HandleFunc("", h.CreateService).Methods("POST")

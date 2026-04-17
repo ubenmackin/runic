@@ -83,7 +83,6 @@ function SmartRedirect() {
     )
   }
 
-  // Fallback (should redirect before rendering)
   return null
 }
 

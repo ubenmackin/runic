@@ -24,7 +24,6 @@ type SpikeDetector struct {
 	wg     sync.WaitGroup
 	stopCh chan struct{}
 
-	// Threshold config (can be updated)
 	threshold       int
 	windowMinutes   int
 	throttleMinutes int
@@ -49,9 +48,9 @@ func NewSpikeDetector(database *sql.DB, service *Service) *SpikeDetector {
 		ctx:             ctx,
 		cancel:          cancel,
 		stopCh:          make(chan struct{}),
-		threshold:       100, // default threshold
-		windowMinutes:   5,   // default window
-		throttleMinutes: 15,  // default throttle
+		threshold:       100,
+		windowMinutes:   5,
+		throttleMinutes: 15,
 	}
 }
 
@@ -81,10 +80,8 @@ func (d *SpikeDetector) Stop() {
 }
 
 func (d *SpikeDetector) run() {
-	// Load threshold from database
 	d.loadThreshold()
 
-	// Check every 1 minute
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
 
@@ -96,7 +93,6 @@ func (d *SpikeDetector) run() {
 			return
 		case <-ticker.C:
 			d.checkForSpike()
-			// Reload threshold in case it changed
 			d.loadThreshold()
 		}
 	}
@@ -137,7 +133,6 @@ func (d *SpikeDetector) checkForSpike() {
 	ctx, cancel := context.WithTimeout(d.ctx, 10*time.Second)
 	defer cancel()
 
-	// Count DROP events in the window
 	var count int
 	err := d.database.QueryRowContext(ctx, `
 		SELECT COUNT(*)
@@ -153,7 +148,6 @@ func (d *SpikeDetector) checkForSpike() {
 	d.logger.Debug("blocked traffic count", "count", count, "threshold", d.threshold)
 
 	if count >= d.threshold {
-		// Check throttle
 		if time.Since(d.lastAlert) < time.Duration(d.throttleMinutes)*time.Minute {
 			d.logger.Debug("spike alert throttled", "last_alert", d.lastAlert)
 			return
@@ -169,13 +163,9 @@ func (d *SpikeDetector) triggerSpikeAlert(ctx context.Context, count int) {
 		return
 	}
 
-	// Get top blocked IPs
 	topIPs := d.getTopBlockedIPs(ctx)
-
-	// Get affected peers
 	affectedPeers := d.getAffectedPeers(ctx)
 
-	// Extract IP addresses from topIPs
 	var topIPList []string
 	for _, ip := range topIPs {
 		topIPList = append(topIPList, ip.ip)
@@ -238,7 +228,6 @@ func (d *SpikeDetector) getTopBlockedIPs(ctx context.Context) []topBlockedIP {
 		results = append(results, topBlockedIP{ip: ip, count: cnt})
 	}
 
-	// Sort by count descending
 	sort.Slice(results, func(i, j int) bool {
 		return results[i].count > results[j].count
 	})

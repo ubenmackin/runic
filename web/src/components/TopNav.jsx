@@ -10,7 +10,6 @@ import { useAuthStore } from '../store'
 import { useAuth } from '../hooks/useAuth'
 import { getVersion } from '../api/client'
 
-// Dropdown menu item component
 const DropdownItem = ({ to, icon: Icon, label, onClick }) => (
   <NavLink
     to={to}
@@ -28,25 +27,21 @@ className={({ isActive }) =>
   </NavLink>
 )
 
-// Route mapping for parent menu active states
 const PARENT_ROUTE_MAP = {
   'access-control': ['/peers', '/groups', '/services', '/policies'],
   'logs': ['/logs', '/alerts'],
   'settings': ['/setup-keys', '/users', '/settings']
 }
 
-// Helper function to check if any child route is active
 const isParentActive = (parentKey, pathname) => {
   const childRoutes = PARENT_ROUTE_MAP[parentKey] || []
   return childRoutes.some(route => pathname === route || pathname.startsWith(route + '/'))
 }
 
-// Dropdown menu component
 const DropdownMenu = ({ label, children, isOpen, onToggle, isActive }) => {
   const dropdownRef = useRef(null)
   const closeTimeoutRef = useRef(null)
 
-  // Clear timeout on unmount
   useEffect(() => {
     return () => {
       if (closeTimeoutRef.current) {
@@ -72,7 +67,6 @@ const DropdownMenu = ({ label, children, isOpen, onToggle, isActive }) => {
   }, [isOpen, onToggle])
 
   const handleMouseEnter = useCallback(() => {
-    // Clear any pending close timeout
     if (closeTimeoutRef.current) {
       clearTimeout(closeTimeoutRef.current)
       closeTimeoutRef.current = null
@@ -81,7 +75,6 @@ const DropdownMenu = ({ label, children, isOpen, onToggle, isActive }) => {
   }, [onToggle])
 
   const handleMouseLeave = useCallback(() => {
-    // Delay closing to allow user to move to dropdown
     closeTimeoutRef.current = setTimeout(() => {
       onToggle(false)
     }, 150)
@@ -118,7 +111,6 @@ className={`flex items-center justify-center gap-1.5 px-5 h-[52px] text-sm font-
   )
 }
 
-// Navigation link component
 const NavItem = ({ to, label }) => (
   <NavLink
     to={to}
@@ -155,19 +147,16 @@ export default function TopNav() {
   const { isAdmin } = useAuth()
   const navigate = useNavigate()
 
-  // Fetch version info
   const { data: versionInfo } = useQuery({
     queryKey: ['version'],
     queryFn: getVersion,
     staleTime: Infinity, // Version doesn't change during session
   })
 
-  // Apply dark class on mount and when darkMode changes
   useEffect(() => {
     document.documentElement.classList.toggle('dark', darkMode)
   }, [darkMode])
 
-  // Close user dropdown on outside click
   useEffect(() => {
     const handleClickOutside = (event) => {
       if (userDropdownRef.current && !userDropdownRef.current.contains(event.target)) {
@@ -184,7 +173,6 @@ export default function TopNav() {
     }
   }, [userDropdownOpen])
 
-  // Clear timeout on unmount
   useEffect(() => {
     return () => {
       if (userDropdownCloseTimeoutRef.current) {
@@ -209,7 +197,6 @@ export default function TopNav() {
   }
 
   const handleUserDropdownMouseEnter = useCallback(() => {
-    // Clear any pending close timeout
     if (userDropdownCloseTimeoutRef.current) {
       clearTimeout(userDropdownCloseTimeoutRef.current)
       userDropdownCloseTimeoutRef.current = null
@@ -218,7 +205,6 @@ export default function TopNav() {
   }, [])
 
   const handleUserDropdownMouseLeave = useCallback(() => {
-    // Delay closing to allow user to move to dropdown
     userDropdownCloseTimeoutRef.current = setTimeout(() => {
       setUserDropdownOpen(false)
     }, 150)
@@ -226,7 +212,6 @@ export default function TopNav() {
 
   return (
     <header className="h-[52px] bg-white dark:bg-charcoal-dark border-b border-gray-200 dark:border-gray-border flex items-center justify-between px-4 sticky top-0 z-40">
-    {/* Brand / Logo */}
     <div className="flex items-center gap-2">
       <Flame className="w-6 h-6 text-runic-600 dark:text-purple-active" />
       <span className="text-xl font-bold text-runic-600 dark:text-purple-active">RUNIC</span>
@@ -234,15 +219,11 @@ export default function TopNav() {
       <span className="hidden sm:inline text-sm font-normal text-gray-500 dark:text-amber-muted whitespace-nowrap">IPTables Management</span>
     </div>
 
-      {/* Desktop Navigation */}
       <nav className="hidden md:flex items-center gap-1">
-      {/* Dashboard */}
       <NavItem to="/" label="Dashboard" />
 
-      {/* Topology */}
       <NavItem to="/topology" label="Topology" />
 
-      {/* Access Control Dropdown */}
       <DropdownMenu
         label="Access Control"
         isOpen={openDropdowns['access-control']}
@@ -255,7 +236,6 @@ export default function TopNav() {
           <DropdownItem to="/policies" icon={Shield} label="Policies" onClick={() => handleDropdownToggle('access-control')(false)} />
         </DropdownMenu>
 
-      {/* Logs Dropdown */}
       <DropdownMenu
         label="Logs"
         isOpen={openDropdowns['logs']}
@@ -266,7 +246,6 @@ export default function TopNav() {
           <DropdownItem to="/alerts" icon={Bell} label="Alerts" onClick={() => handleDropdownToggle('logs')(false)} />
         </DropdownMenu>
 
-      {/* Settings Dropdown */}
       <DropdownMenu
         label="Settings"
         isOpen={openDropdowns['settings']}
@@ -293,9 +272,7 @@ export default function TopNav() {
         </DropdownMenu>
       </nav>
 
-      {/* Right side: Mobile menu + User dropdown */}
       <div className="flex items-center gap-2">
-        {/* Mobile menu button */}
         <button
           className="md:hidden p-2 rounded-none hover:bg-gray-100 dark:hover:bg-charcoal-darkest"
           onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
@@ -304,7 +281,6 @@ export default function TopNav() {
           <Menu className="w-5 h-5 text-gray-700 dark:text-light-neutral" />
         </button>
 
-      {/* Username dropdown */}
       <div
         ref={userDropdownRef}
         className="relative"
@@ -338,7 +314,6 @@ export default function TopNav() {
       </div>
       </div>
 
-      {/* Mobile menu overlay */}
       {mobileMenuOpen && (
         <div className="md:hidden fixed inset-0 top-[52px] bg-black/50 z-30" onClick={() => setMobileMenuOpen(false)}>
           <div

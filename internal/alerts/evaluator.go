@@ -29,7 +29,6 @@ func NewConditionEvaluator(database db.Querier) *ConditionEvaluator {
 // This implements the Evaluator interface.
 // Returns (triggered, event, error) where triggered indicates if the alert should fire.
 func (e *ConditionEvaluator) EvaluateRule(ctx context.Context, rule *AlertRule) (bool, *AlertEvent, error) {
-	// Skip disabled rules
 	if !rule.Enabled {
 		return false, nil, nil
 	}
@@ -62,12 +61,10 @@ func (e *ConditionEvaluator) EvaluateRule(ctx context.Context, rule *AlertRule) 
 // evaluatePeerOffline evaluates the peer_offline alert type.
 // Threshold is the number of minutes a peer must be offline.
 func (e *ConditionEvaluator) evaluatePeerOffline(ctx context.Context, rule *AlertRule) (*AlertEvent, error) {
-	// If rule has a specific peer_id, check only that peer
 	if rule.PeerID != nil {
 		return e.checkPeerOfflineByID(ctx, rule, *rule.PeerID)
 	}
 
-	// Global rule: check all peers
 	rows, err := e.database.QueryContext(ctx, `
 		SELECT id, hostname, status, last_heartbeat
 		FROM peers
@@ -92,7 +89,6 @@ func (e *ConditionEvaluator) evaluatePeerOffline(ctx context.Context, rule *Aler
 			return nil, fmt.Errorf("failed to scan peer row: %w", err)
 		}
 
-		// Calculate duration offline
 		var duration time.Duration
 		if lastHeartbeat.Valid {
 			duration = time.Since(lastHeartbeat.Time)
@@ -107,7 +103,6 @@ func (e *ConditionEvaluator) evaluatePeerOffline(ctx context.Context, rule *Aler
 			}
 		}
 
-		// Check if offline duration exceeds threshold
 		threshold := time.Duration(rule.ThresholdValue) * time.Minute
 		if duration >= threshold {
 			return &AlertEvent{
@@ -152,20 +147,17 @@ func (e *ConditionEvaluator) checkPeerOfflineByID(ctx context.Context, rule *Ale
 		return nil, fmt.Errorf("failed to query peer %d: %w", peerID, err)
 	}
 
-	// Check if peer is offline
 	if status != "offline" {
 		return nil, nil
 	}
 
-	// Calculate duration offline
 	var duration time.Duration
 	if lastHeartbeat.Valid {
 		duration = time.Since(lastHeartbeat.Time)
 	} else {
-		duration = 24 * time.Hour // Default if no heartbeat
+		duration = 24 * time.Hour
 	}
 
-	// Check threshold
 	threshold := time.Duration(rule.ThresholdValue) * time.Minute
 	if duration < threshold {
 		return nil, nil
@@ -190,13 +182,10 @@ func (e *ConditionEvaluator) checkPeerOfflineByID(ctx context.Context, rule *Ale
 // evaluateBundleFailed evaluates the bundle_failed alert type.
 // Threshold is the number of consecutive bundle generation failures.
 func (e *ConditionEvaluator) evaluateBundleFailed(ctx context.Context, rule *AlertRule) (*AlertEvent, error) {
-	// If rule has a specific peer_id, check only that peer
 	if rule.PeerID != nil {
 		return e.checkBundleFailedByID(ctx, rule, *rule.PeerID)
 	}
 
-	// Global rule: check all peers for recent bundle failures
-	// Look for failed bundle pushes in the threshold window
 	window := time.Duration(rule.ThresholdWindowMinutes) * time.Minute
 	cutoff := time.Now().Add(-window)
 
@@ -226,7 +215,6 @@ func (e *ConditionEvaluator) evaluateBundleFailed(ctx context.Context, rule *Ale
 			return nil, fmt.Errorf("failed to scan bundle failure row: %w", err)
 		}
 
-		// Count consecutive failures for this peer
 		failCount, err := e.countConsecutiveFailures(ctx, peerID, window)
 		if err != nil {
 			return nil, err
@@ -331,13 +319,10 @@ func (e *ConditionEvaluator) countConsecutiveFailures(ctx context.Context, peerI
 // evaluateBlockedSpike evaluates the blocked_spike alert type.
 // Threshold is the percentage increase in blocked traffic.
 func (e *ConditionEvaluator) evaluateBlockedSpike(ctx context.Context, rule *AlertRule) (*AlertEvent, error) {
-	// If rule has a specific peer_id, check only that peer
 	if rule.PeerID != nil {
 		return e.checkBlockedSpikeByID(ctx, rule, *rule.PeerID)
 	}
 
-	// Global rule: check all peers for blocked traffic spikes
-	// Get all peers with blocked traffic in the window
 	window := time.Duration(rule.ThresholdWindowMinutes) * time.Minute
 	cutoff := time.Now().Add(-window)
 
@@ -369,7 +354,6 @@ func (e *ConditionEvaluator) evaluateBlockedSpike(ctx context.Context, rule *Ale
 		return nil, fmt.Errorf("error iterating peers: %w", err)
 	}
 
-	// Check each peer for a spike
 	for _, peerID := range peerIDs {
 		event, err := e.checkBlockedSpikeByID(ctx, rule, peerID)
 		if err != nil {
@@ -469,7 +453,6 @@ func (e *ConditionEvaluator) CheckPeerOffline(ctx context.Context, peerID string
 // Returns true if there are recent bundle failures.
 func (e *ConditionEvaluator) CheckBundleFailed(ctx context.Context, peerID string) (bool, error) {
 
-	// Check for failed bundle pushes in the last hour
 	cutoff := time.Now().Add(-1 * time.Hour)
 
 	var failCount int
@@ -493,13 +476,11 @@ func (e *ConditionEvaluator) CheckBundleFailed(ctx context.Context, peerID strin
 // Returns true if there's a spike, along with the percentage increase.
 func (e *ConditionEvaluator) CheckBlockedSpike(ctx context.Context, peerID string) (bool, int, error) {
 
-	// Compare blocked traffic in the last 5 minutes vs the previous 5 minutes
 	now := time.Now()
 	recentStart := now.Add(-5 * time.Minute)
 	previousStart := now.Add(-10 * time.Minute)
 	previousEnd := now.Add(-5 * time.Minute)
 
-	// Count recent blocked traffic
 	var recentCount int
 	err := e.database.QueryRowContext(ctx, `
 		SELECT COUNT(*)
@@ -513,7 +494,6 @@ func (e *ConditionEvaluator) CheckBlockedSpike(ctx context.Context, peerID strin
 		return false, 0, fmt.Errorf("failed to count recent blocked traffic: %w", err)
 	}
 
-	// Count previous blocked traffic
 	var previousCount int
 	err = e.database.QueryRowContext(ctx, `
 		SELECT COUNT(*)
@@ -527,7 +507,6 @@ func (e *ConditionEvaluator) CheckBlockedSpike(ctx context.Context, peerID strin
 		return false, 0, fmt.Errorf("failed to count previous blocked traffic: %w", err)
 	}
 
-	// Calculate percentage increase
 	if previousCount == 0 {
 		// If there was no previous traffic, any current traffic is a spike
 		if recentCount > 10 {

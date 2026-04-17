@@ -144,7 +144,6 @@ func (h *Handler) CreatePeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate hostname: 1-253 chars, alphanumeric with hyphens and dots only
 	if input.Hostname == "" || len(input.Hostname) > 253 || !hostnameRegex.MatchString(input.Hostname) {
 		common.RespondError(w, http.StatusBadRequest, "hostname must be 1-253 characters, alphanumeric with hyphens and dots only")
 		return
@@ -162,7 +161,6 @@ func (h *Handler) CreatePeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate arch if provided
 	if input.Arch != "" && !slices.Contains(validArchs, input.Arch) {
 		common.RespondError(w, http.StatusBadRequest, "arch must be one of: amd64, arm64, arm, armv6")
 		return
@@ -181,7 +179,6 @@ func (h *Handler) CreatePeer(w http.ResponseWriter, r *http.Request) {
 		agentKey = "manual-" + input.Hostname + "-" + input.IPAddress
 	}
 
-	// Generate HMAC key for the peer
 	hmacKey, err := agents.GenerateHMACKey()
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "failed to generate HMAC key")
@@ -259,7 +256,6 @@ func (h *Handler) UpdatePeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Update the peer (hostname, ip_address, os_type, arch, has_docker, and description are all editable)
 	_, err = h.DB.ExecContext(r.Context(), "UPDATE peers SET hostname = ?, ip_address = ?, os_type = ?, arch = ?, has_docker = ?, description = ? WHERE id = ?", input.Hostname, input.IPAddress, input.OSType, input.Arch, input.HasDocker, input.Description, id)
 	if err != nil {
 		log.ErrorContext(r.Context(), "failed to update peer", "error", err)
@@ -312,7 +308,6 @@ func (h *Handler) DeletePeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Delete from group_members first
 	if _, err := h.DB.ExecContext(r.Context(), "DELETE FROM group_members WHERE peer_id = ?", peerID); err != nil {
 		log.WarnContext(r.Context(), "failed to cleanup group_members for peer", "peer_id", peerID, "error", err)
 	}
@@ -322,12 +317,10 @@ func (h *Handler) DeletePeer(w http.ResponseWriter, r *http.Request) {
 		log.WarnContext(r.Context(), "failed to cleanup rule_bundles for peer", "peer_id", peerID, "error", err)
 	}
 
-	// Delete any firewall logs for this peer
 	if _, err := h.DB.ExecContext(r.Context(), "DELETE FROM firewall_logs WHERE peer_id = ?", peerID); err != nil {
 		log.WarnContext(r.Context(), "failed to cleanup firewall_logs for peer", "peer_id", peerID, "error", err)
 	}
 
-	// Delete the peer
 	result, err := h.DB.ExecContext(r.Context(), "DELETE FROM peers WHERE id = ?", peerID)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "Failed to delete peer")
@@ -365,7 +358,6 @@ func (h *Handler) GetPeerBundle(w http.ResponseWriter, r *http.Request) {
 	var args []interface{}
 
 	if includePending {
-		// Get the latest bundle (what's been compiled/applied but not synced)
 		query = `SELECT version, version_number, rules_content, hmac FROM rule_bundles WHERE peer_id = ? ORDER BY created_at DESC LIMIT 1`
 		args = []interface{}{id}
 
@@ -386,7 +378,6 @@ func (h *Handler) GetPeerBundle(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Get the deployed bundle version for comparison
 		var deployedVersion sql.NullString
 		err = h.DB.QueryRowContext(r.Context(), "SELECT bundle_version FROM peers WHERE id = ?", id).Scan(&deployedVersion)
 		if err != nil && err != sql.ErrNoRows {
@@ -402,7 +393,6 @@ func (h *Handler) GetPeerBundle(w http.ResponseWriter, r *http.Request) {
 			"hmac":           hmac,
 		}
 
-		// Get deployed bundle content for diff if there's a deployed version
 		if deployedVersion.Valid && deployedVersion.String != "" {
 			var deployedContent sql.NullString
 			err = h.DB.QueryRowContext(r.Context(),
@@ -422,7 +412,6 @@ func (h *Handler) GetPeerBundle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get the deployed bundle matching peers.bundle_version
 	query = `SELECT rb.version, rb.version_number, rb.rules_content, rb.hmac
 		FROM rule_bundles rb
 		JOIN peers p ON p.id = ?

@@ -37,7 +37,6 @@ func SendHeartbeat(ctx context.Context, client common.HTTPClient, controlPlaneUR
 
 	var result map[string]interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		// Non-JSON response is fine for heartbeat
 		return nil
 	}
 

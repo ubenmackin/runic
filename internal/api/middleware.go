@@ -106,22 +106,17 @@ func buildCSPDirectives(nonce string) string {
 func RequestID() mux.MiddlewareFunc {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Try to extract request ID from header
 			requestID := r.Header.Get(RequestIDHeader)
 
-			// Generate a new request ID if not provided
 			if requestID == "" {
 				requestID = generateUUID()
 			}
 
-			// Add request ID to response header
 			w.Header().Set(RequestIDHeader, requestID)
 
-			// Add request ID to context using the log package's context key
 			ctx := r.Context()
 			ctx = log.SetRequestID(ctx, requestID)
 
-			// Call next handler with the updated context
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
@@ -152,23 +147,15 @@ func setSecurityHeaders(w http.ResponseWriter) {
 func CSP() mux.MiddlewareFunc {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Generate a unique nonce for this request
 			nonce := generateNonce()
-
-			// Build CSP directives with the nonce
 			cspDirectives := buildCSPDirectives(nonce)
 
-			// Set CSP header with nonce
 			w.Header().Set(CSPHeader, cspDirectives)
-
-			// Set nonce in response header for frontend access
 			w.Header().Set(CSPNonceHeader, nonce)
 
-			// Add nonce to context for use in handlers
 			ctx := r.Context()
 			ctx = context.WithValue(ctx, CSPNonceKey, nonce)
 
-			// Additional security hardening headers
 			setSecurityHeaders(w)
 
 			next.ServeHTTP(w, r.WithContext(ctx))
@@ -188,10 +175,7 @@ func CSPForAPI() mux.MiddlewareFunc {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set(CSPHeader, apiCSP)
-
-			// Additional security hardening headers
 			setSecurityHeaders(w)
-
 			next.ServeHTTP(w, r)
 		})
 	}
@@ -253,11 +237,9 @@ func RequestLogger() mux.MiddlewareFunc {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
 
-			// Get request ID from context (set by RequestID middleware)
 			ctx := r.Context()
 			requestID, _ := log.GetRequestID(ctx)
 
-			// Log request start
 			log.InfoContext(ctx, "request_started",
 				"method", r.Method,
 				"path", r.URL.Path,
@@ -266,16 +248,10 @@ func RequestLogger() mux.MiddlewareFunc {
 				"request_id", requestID,
 			)
 
-			// Wrap response writer to capture status code
 			rw := common.NewResponseRecorder(w)
-
-			// Call next handler
 			next.ServeHTTP(rw, r)
-
-			// Calculate duration
 			duration := time.Since(start)
 
-			// Log request completion
 			log.InfoContext(ctx, "request_completed",
 				"method", r.Method,
 				"path", r.URL.Path,
@@ -301,18 +277,13 @@ func RequestLogger() mux.MiddlewareFunc {
 // which works for production deployments where frontend and API share the same origin.
 // For development, set CORS_ORIGIN to the frontend URL (e.g., "http://localhost:5173").
 func CORS() mux.MiddlewareFunc {
-	// Get allowed origin from environment, default to same-origin (empty)
-	// In production, frontend is served from same origin as API
-	// In development, frontend runs on different port (e.g., localhost:5173)
 	allowedOrigin := os.Getenv("CORS_ORIGIN")
 
-	// If no explicit origin set and in development mode, allow common dev origins
 	if allowedOrigin == "" {
-		// Check if we're in development mode
 		if os.Getenv("GO_ENV") == "development" || os.Getenv("APP_ENV") == "development" {
 			// In dev mode, allow requests from common Vite dev server ports
 			// The actual origin will be set dynamically based on Origin header
-			allowedOrigin = "*" // Will be handled dynamically below
+			allowedOrigin = "*"
 		}
 	}
 
@@ -324,7 +295,6 @@ func CORS() mux.MiddlewareFunc {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			origin := r.Header.Get("Origin")
 
-			// Determine the origin to allow
 			originToAllow := ""
 			switch allowedOrigin {
 			case "*":
@@ -340,11 +310,9 @@ func CORS() mux.MiddlewareFunc {
 					originToAllow = origin
 				}
 			default:
-				// Use the explicitly configured origin
 				originToAllow = allowedOrigin
 			}
 
-			// Set CORS headers if we have an origin to allow
 			if originToAllow != "" {
 				w.Header().Set("Access-Control-Allow-Origin", originToAllow)
 				w.Header().Set("Access-Control-Allow-Methods", allowedMethods)
@@ -353,13 +321,11 @@ func CORS() mux.MiddlewareFunc {
 				w.Header().Set("Access-Control-Max-Age", maxAge)
 			}
 
-			// Handle preflight OPTIONS request
 			if r.Method == http.MethodOptions {
 				w.WriteHeader(http.StatusNoContent)
 				return
 			}
 
-			// Continue to the next handler
 			next.ServeHTTP(w, r)
 		})
 	}

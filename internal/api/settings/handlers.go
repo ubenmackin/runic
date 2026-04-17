@@ -46,7 +46,6 @@ func (h *Handler) GetLogSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get log count from logs database
 	var logCount int
 	if h.LogsDB != nil {
 		err = h.LogsDB.QueryRowContext(ctx, "SELECT COUNT(*) FROM firewall_logs").Scan(&logCount)
@@ -55,10 +54,8 @@ func (h *Handler) GetLogSettings(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Estimate size (average ~500 bytes per log entry)
 	estimatedSizeMB := (logCount * 500) / (1024 * 1024)
 
-	// Get human-readable label
 	retentionLabel := getRetentionLabel(retentionDays)
 
 	common.RespondJSON(w, http.StatusOK, LogSettings{
@@ -83,7 +80,6 @@ func (h *Handler) UpdateLogSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate: -1 for unlimited, 0 for disabled, 1-9999 for custom days
 	if req.RetentionDays < -1 || req.RetentionDays > 9999 {
 		common.RespondError(w, http.StatusBadRequest, "retention_days must be -1 (unlimited), 0 (disabled), or 1-9999")
 		return
@@ -168,7 +164,6 @@ func (h *Handler) UpdateInstanceSettings(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Validate URL format and scheme
 	if req.URL != "" {
 		parsed, err := url.Parse(req.URL)
 		if err != nil {

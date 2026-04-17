@@ -50,7 +50,6 @@ type API struct {
 	ChangeWorker *common.ChangeWorker
 	PushWorker   *common.PushWorker
 
-	// Handler instances with dependency injection
 	Peers     *peers.Handler
 	Agents    *agents.Handler
 	Auth      *authhandlers.Handler
@@ -75,7 +74,6 @@ type API struct {
 // NewAPI creates a new API instance with dependency injection.
 // logsDBPath is the path to the logs database (separate from main DB).
 func NewAPI(db *sql.DB, compiler *engine.Compiler, logsDBPath string, alertService *alerts.Service, encryptor *crypto.Encryptor) *API {
-	// Initialize the logs database
 	logsDB, err := dbpkg.InitLogsDB(logsDBPath)
 	if err != nil {
 		log.Fatal("Failed to initialize logs database", "error", err)
@@ -133,7 +131,6 @@ func apiMiddleware(a *API) mux.MiddlewareFunc {
 // RegisterRoutes registers all API routes. Accepts an API instance for rule compilation endpoints.
 func (a *API) RegisterRoutes(r *mux.Router, downloadsDir string) {
 
-	// Start background workers
 	ctx := context.Background()
 	if a.PushWorker != nil {
 		a.PushWorker.Start(ctx)
@@ -142,27 +139,17 @@ func (a *API) RegisterRoutes(r *mux.Router, downloadsDir string) {
 		a.ChangeWorker.Start(ctx)
 	}
 
-	// Start log cleanup worker
 	logCleanupWorker := logcleanup.NewWorker(a.DB, a.LogsDB)
 	logCleanupWorker.Start(ctx)
 
-	// Start LogHub for WebSocket log streaming
 	go a.LogHub.Run(ctx)
 
 	// Apply SecurityHeaders as the outermost middleware to ensure ALL responses include security headers
 	r.Use(SecurityHeaders)
 
-	// Apply RequestID middleware to all routes
 	r.Use(RequestID())
-
-	// Apply RequestLogger middleware for tracing requests
 	r.Use(RequestLogger())
 
-	// Health and Metrics endpoints (registered on root router for easy access)
-	r.HandleFunc("/health", HealthHandler).Methods("GET")
-	r.HandleFunc("/ready", ReadyHandler(a.DB)).Methods("GET")
-	r.Handle("/metrics", MetricsHandler()).Methods("GET")
-	// Create /api/v1 subrouter with common middleware
 	apiRouter := r.PathPrefix("/api/v1").Subrouter()
 	apiRouter.Use(CORS()) // CORS must be first to handle preflight OPTIONS requests
 	apiRouter.Use(apiMiddleware(a))
@@ -181,62 +168,46 @@ func (a *API) RegisterRoutes(r *mux.Router, downloadsDir string) {
 	a.RefreshRateLimiter = middleware.NewRateLimiter(10, time.Minute)
 	a.LogoutRateLimiter = middleware.NewRateLimiter(10, time.Minute)
 
-	// Public routes (no authentication required)
-	// Setup
 	apiRouter.HandleFunc("/setup", a.Auth.HandleSetup).Methods("GET")
 	apiRouter.HandleFunc("/setup", a.Auth.HandleSetup).Methods("POST")
 
-	// Login
 	apiRouter.Handle("/auth/login", a.LoginRateLimiter.Middleware(http.HandlerFunc(a.Auth.HandleLoginPOST))).Methods("POST")
 
 	// Token refresh (public - uses refresh token, not access token)
 	apiRouter.Handle("/auth/refresh", a.RefreshRateLimiter.Middleware(http.HandlerFunc(a.Auth.HandleRefreshPOST))).Methods("POST")
 
-	// Agent registration (no auth needed)
 	apiRouter.Handle("/agent/register", a.RegisterRateLimiter.Middleware(http.HandlerFunc(a.Agents.RegisterAgent))).Methods("POST")
 
 	// Protected routes (require JWT authentication)
 	protected := apiRouter.NewRoute().Subrouter()
 	protected.Use(auth.Middleware)
 
-	// --- Viewer routes (all authenticated users — no extra middleware) ---
-
-	// Logout
 	protected.Handle("/auth/logout", a.LogoutRateLimiter.Middleware(http.HandlerFunc(a.Auth.HandleLogoutPOST))).Methods("POST")
 
-	// Auth - viewer routes - use RegisterRoutes
 	authViewer := protected.PathPrefix("/auth").Subrouter()
 	a.Auth.RegisterRoutes(authViewer)
 
-	// Dashboard - viewer routes - use RegisterRoutes
 	dashboardViewer := protected.PathPrefix("/dashboard").Subrouter()
 	a.Dashboard.RegisterRoutes(dashboardViewer)
 
-	// Logs (read)
 	protected.HandleFunc("/logs", a.Logs.GetLogs).Methods("GET")
 	protected.HandleFunc("/logs/stream", logs.MakeLogsStreamHandler(a.LogHub)).Methods("GET")
 
-	// Peers (read-only + compile/rotate-key) - viewer routes
 	peersViewer := protected.PathPrefix("/peers").Subrouter()
 	a.Peers.RegisterRoutes(peersViewer)
 
-	// Groups (read-only + members management) - viewer routes
 	groupsViewer := protected.PathPrefix("/groups").Subrouter()
 	a.Groups.RegisterRoutes(groupsViewer)
 
-	// Services (read-only) - viewer routes
 	servicesViewer := protected.PathPrefix("/services").Subrouter()
 	a.Services.RegisterRoutes(servicesViewer)
 
-	// Policies (read-only) - viewer routes
 	policiesViewer := protected.PathPrefix("/policies").Subrouter()
 	a.Policies.RegisterRoutes(policiesViewer)
 
-	// Pending changes (viewer routes — read-only)
 	protected.HandleFunc("/pending-changes", a.Pending.ListPendingChanges).Methods("GET")
 	protected.HandleFunc("/pending-changes/{peerId:[0-9]+}", a.Pending.GetPeerPendingChanges).Methods("GET")
 
-	// Version info endpoint (requires authentication)
 	protected.HandleFunc("/info", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(map[string]interface{}{
@@ -248,66 +219,52 @@ func (a *API) RegisterRoutes(r *mux.Router, downloadsDir string) {
 		}
 	}).Methods("GET")
 
-	// --- Admin-only routes ---
 	admin := protected.PathPrefix("").Subrouter()
 	admin.Use(middleware.RequireRole("admin"))
 
-	// Users
 	admin.HandleFunc("/users", a.Users.ListUsers).Methods("GET")
 	admin.HandleFunc("/users", a.Users.CreateUser).Methods("POST")
 	admin.HandleFunc("/users/{id:[0-9]+}", a.Users.UpdateUser).Methods("PUT")
 	admin.HandleFunc("/users/{id:[0-9]+}", a.Users.DeleteUser).Methods("DELETE")
 
-	// Setup Keys
 	admin.HandleFunc("/setup-keys", a.Keys.ListKeys).Methods("GET")
 	admin.HandleFunc("/setup-keys/{type}", a.Keys.CreateKey).Methods("POST")
 	admin.HandleFunc("/setup-keys/{type}", a.Keys.DeleteKey).Methods("DELETE")
 
-	// Registration Tokens
 	admin.HandleFunc("/registration-tokens", a.Agents.ListRegistrationTokens).Methods("GET")
 	admin.HandleFunc("/registration-tokens", a.Agents.GenerateRegistrationToken).Methods("POST")
 	admin.HandleFunc("/registration-tokens/{id:[0-9]+}", a.Agents.RevokeRegistrationToken).Methods("DELETE")
 
-	// Settings (log management)
 	settingsAdmin := admin.PathPrefix("/settings").Subrouter()
 	a.Settings.RegisterRoutes(settingsAdmin)
 
-	// Clear all logs (admin only)
 	admin.HandleFunc("/logs", a.Settings.ClearAllLogs).Methods("DELETE")
 
-	// Alert routes (admin only)
 	if a.Alerts != nil {
 		alertsAdmin := admin.PathPrefix("").Subrouter()
 		a.Alerts.RegisterRoutes(alertsAdmin)
 	}
 
-	// User notification preferences (authenticated users)
 	if a.Alerts != nil {
 		userPrefs := protected.PathPrefix("").Subrouter()
 		a.Alerts.RegisterUserRoutes(userPrefs)
 	}
 
-	// --- Editor+ routes (admin and editor) ---
 	editor := protected.PathPrefix("").Subrouter()
 	editor.Use(middleware.RequireRole("admin", "editor"))
 
-	// Peer management (write operations) - use RegisterRoutes
 	peersEditor := editor.PathPrefix("/peers").Subrouter()
 	a.Peers.RegisterRoutes(peersEditor)
 
-	// Groups (write operations) - use RegisterRoutes
 	groupsEditor := editor.PathPrefix("/groups").Subrouter()
 	a.Groups.RegisterRoutes(groupsEditor)
 
-	// Services (write operations) - use RegisterRoutes
 	servicesEditor := editor.PathPrefix("/services").Subrouter()
 	a.Services.RegisterRoutes(servicesEditor)
 
-	// Policies (write operations) - use RegisterRoutes
 	policiesEditor := editor.PathPrefix("/policies").Subrouter()
 	a.Policies.RegisterRoutes(policiesEditor)
 
-	// Pending changes (editor+ routes — preview and apply)
 	editor.HandleFunc("/pending-changes/{peerId:[0-9]+}/preview", a.Pending.PreviewPeerPendingBundle).Methods("POST")
 	editor.HandleFunc("/pending-changes/{peerId:[0-9]+}/apply", a.Pending.ApplyPeerPendingBundle).Methods("POST")
 	editor.HandleFunc("/pending-changes/{peerId:[0-9]+}/apply-entity", a.Pending.ApplyEntityPendingChanges).Methods("POST")
@@ -317,7 +274,6 @@ func (a *API) RegisterRoutes(r *mux.Router, downloadsDir string) {
 	editor.HandleFunc("/pending-changes/push/{peerId:[0-9]+}", a.Pending.PushCurrentRules).Methods("POST")
 	editor.HandleFunc("/push-jobs/{job_id}/events", a.Pending.HandlePushJobSSE).Methods("GET")
 
-	// Frontend SSE endpoint for real-time notifications (authenticated users)
 	protected.HandleFunc("/events", a.Pending.HandleFrontendSSE).Methods("GET")
 
 	// Agent routes (require agent auth via JWT)
@@ -387,7 +343,6 @@ func (a *API) Stop() {
 	if a.LogoutRateLimiter != nil {
 		a.LogoutRateLimiter.Stop()
 	}
-	// Stop the auth rate limit cleanup goroutine
 	authhandlers.StopCleanup()
 }
 
@@ -405,7 +360,6 @@ func ReadyHandler(db *sql.DB) http.HandlerFunc {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
 
-		// Check database connectivity
 		if err := db.PingContext(ctx); err != nil {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			if encErr := json.NewEncoder(w).Encode(map[string]string{"status": "not_ready", "error": "database unavailable"}); encErr != nil {
@@ -436,10 +390,8 @@ func metricsMiddleware(next http.Handler) http.Handler {
 
 		next.ServeHTTP(rw, r)
 
-		// Extract endpoint name from route
 		var endpoint string
 		if vars := mux.Vars(r); len(vars) > 0 {
-			// Extract endpoint pattern without IDs
 			endpoint = r.URL.Path
 			for key := range vars {
 				newLen := len(endpoint) - len(key) - 3
@@ -454,10 +406,8 @@ func metricsMiddleware(next http.Handler) http.Handler {
 
 		duration := time.Since(start)
 
-		// Record metrics
 		metrics.RecordRequest(endpoint, r.Method, rw.StatusCode(), duration)
 
-		// Record errors if status code is 5xx
 		if rw.StatusCode() >= 500 {
 			metrics.RecordError(endpoint, "server_error", rw.StatusCode())
 		}

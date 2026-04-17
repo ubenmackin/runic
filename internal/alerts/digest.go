@@ -72,7 +72,6 @@ func (g *DigestGenerator) SetLogger(logger *slog.Logger) {
 func (g *DigestGenerator) GenerateDigest(userID uint) (*AlertDigest, error) {
 	ctx := context.Background()
 
-	// Calculate time range (past 24 hours)
 	now := time.Now()
 	startTime := now.Add(-24 * time.Hour)
 
@@ -82,22 +81,18 @@ func (g *DigestGenerator) GenerateDigest(userID uint) (*AlertDigest, error) {
 		"end_time", now.Format(time.RFC3339),
 	)
 
-	// Fetch alerts from the past 24 hours for this user
 	alerts, err := g.getAlertsForUser(ctx, userID, startTime, now)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get alerts for user: %w", err)
 	}
 
-	// Build the digest summary
 	summary := g.buildDigestSummary(alerts, startTime, now)
 
-	// Marshal summary to JSON for storage
 	summaryJSON, err := json.Marshal(summary)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal digest summary: %w", err)
 	}
 
-	// Create the digest record
 	digest := &AlertDigest{
 		UserID:     userID,
 		DigestDate: now.Format("2006-01-02"),
@@ -107,7 +102,6 @@ func (g *DigestGenerator) GenerateDigest(userID uint) (*AlertDigest, error) {
 		CreatedAt:  now,
 	}
 
-	// Store the digest in the database
 	if err := CreateAlertDigest(ctx, g.database, digest); err != nil {
 		return nil, fmt.Errorf("failed to create alert digest: %w", err)
 	}
@@ -131,7 +125,6 @@ func (g *DigestGenerator) SendDigest(digest *AlertDigest, userEmail string) erro
 		return fmt.Errorf("user email address is required")
 	}
 
-	// Parse the summary
 	var summary DigestSummary
 	if digest.Summary != "" {
 		if err := json.Unmarshal([]byte(digest.Summary), &summary); err != nil {
@@ -139,19 +132,15 @@ func (g *DigestGenerator) SendDigest(digest *AlertDigest, userEmail string) erro
 		}
 	}
 
-	// Get instance URL for footer links
 	instanceURL := GetInstanceURL(context.Background(), g.database)
 
-	// Generate HTML email body
 	htmlBody := g.generateDigestHTML(digest, &summary, instanceURL)
 
-	// Create subject line
 	subject := fmt.Sprintf("[Runic] Daily Alert Digest - %s", digest.DigestDate)
 	if digest.AlertCount == 0 {
 		subject = fmt.Sprintf("[Runic] Daily Digest - %s (No Alerts)", digest.DigestDate)
 	}
 
-	// Send the email
 	if err := g.smtp.SendHTML(userEmail, subject, htmlBody); err != nil {
 		return fmt.Errorf("failed to send digest email: %w", err)
 	}
@@ -202,7 +191,6 @@ func (g *DigestGenerator) checkAndSendDigests() {
 
 	now := time.Now()
 
-	// Get all users with digest_enabled=true
 	users, err := g.getUsersWithDigestEnabled(ctx)
 	if err != nil {
 		g.logger.Error("failed to get users with digest enabled", "error", err)
@@ -210,10 +198,8 @@ func (g *DigestGenerator) checkAndSendDigests() {
 	}
 
 	for _, user := range users {
-		// Load user's timezone (default to UTC if not set)
 		tz := LoadTimezoneOrDefaultWithLogger(user.DigestTimezone, g.logger, "user_id", user.UserID)
 
-		// Convert current time to user's timezone
 		userNow := now.In(tz)
 		currentTime := userNow.Format("15:04")
 		currentDate := userNow.Format("2006-01-02")
@@ -226,12 +212,10 @@ func (g *DigestGenerator) checkAndSendDigests() {
 			"user_digest_time", user.DigestTime,
 		)
 
-		// Check if it's time to send the digest for this user
 		if user.DigestTime != currentTime {
 			continue
 		}
 
-		// Check if we already sent a digest for this user today
 		sent, err := g.hasDigestBeenSentToday(ctx, user.UserID, currentDate)
 		if err != nil {
 			g.logger.Error("failed to check if digest already sent",
@@ -249,14 +233,12 @@ func (g *DigestGenerator) checkAndSendDigests() {
 			continue
 		}
 
-		// Generate and send the digest
 		g.sendDigestForUser(ctx, user)
 	}
 }
 
 // sendDigestForUser generates and sends a digest for a specific user.
 func (g *DigestGenerator) sendDigestForUser(ctx context.Context, user *UserNotificationPreferences) {
-	// Get user email
 	email, err := g.getUserEmail(ctx, user.UserID)
 	if err != nil {
 		g.logger.Error("failed to get user email",
@@ -273,7 +255,6 @@ func (g *DigestGenerator) sendDigestForUser(ctx context.Context, user *UserNotif
 		return
 	}
 
-	// Generate the digest
 	digest, err := g.GenerateDigest(user.UserID)
 	if err != nil {
 		g.logger.Error("failed to generate digest",
@@ -283,7 +264,6 @@ func (g *DigestGenerator) sendDigestForUser(ctx context.Context, user *UserNotif
 		return
 	}
 
-	// Send the digest
 	if err := g.SendDigest(digest, email); err != nil {
 		g.logger.Error("failed to send digest",
 			"user_id", user.UserID,
@@ -352,7 +332,6 @@ func (g *DigestGenerator) buildDigestSummary(alerts []AlertHistory, startTime, e
 
 	for i := range alerts {
 		alert := &alerts[i]
-		// Count by severity
 		switch alert.Severity {
 		case SeverityCritical:
 			summary.CriticalCount++
@@ -362,10 +341,8 @@ func (g *DigestGenerator) buildDigestSummary(alerts []AlertHistory, startTime, e
 			summary.InfoCount++
 		}
 
-		// Count by type
 		summary.ByType[alert.AlertType]++
 
-		// Build type and severity summary
 		typeSummary, exists := summary.ByTypeAndSeverity[alert.AlertType]
 		if !exists {
 			typeSummary = TypeSummary{
@@ -387,7 +364,6 @@ func (g *DigestGenerator) buildDigestSummary(alerts []AlertHistory, startTime, e
 // generateDigestHTML creates an HTML email body for the digest.
 // Uses terminal aesthetic with dark mode colors and monospace font.
 func (g *DigestGenerator) generateDigestHTML(digest *AlertDigest, summary *DigestSummary, instanceURL string) string {
-	// Terminal aesthetic colors (matching smtp.go)
 	bodyBg := "#0a0a0a"
 	containerBg := "#121212"
 	borderColor := "#2d2d2d"
@@ -408,7 +384,6 @@ func (g *DigestGenerator) generateDigestHTML(digest *AlertDigest, summary *Diges
 		</p>
 		`)
 	} else {
-		// Alert summary by severity - dark mode cards
 		fmt.Fprintf(&content, `
 		<div style="margin-bottom: 30px;">
 			<h3 style="margin: 0 0 15px 0; color: %s; font-size: 14px; font-weight: bold; text-transform: uppercase; letter-spacing: 1px;">Summary by Severity</h3>
@@ -431,7 +406,6 @@ func (g *DigestGenerator) generateDigestHTML(digest *AlertDigest, summary *Diges
 		</div>
 		`, textMuted, summary.CriticalCount, summary.WarningCount, summary.InfoCount)
 
-		// Alert breakdown by type
 		fmt.Fprintf(&content, `
 		<div style="margin-bottom: 30px;">
 			<h3 style="margin: 0 0 15px 0; color: %s; font-size: 14px; font-weight: bold; text-transform: uppercase; letter-spacing: 1px;">Alerts by Type</h3>
@@ -496,10 +470,8 @@ func (g *DigestGenerator) generateDigestHTML(digest *AlertDigest, summary *Diges
 		}
 	}
 
-	// Build footer URLs
 	settingsLink := instanceURL + "/settings"
 
-	// Build full HTML email with terminal aesthetic
 	html := fmt.Sprintf(`
 <!DOCTYPE html>
 <html lang="en">
@@ -564,25 +536,25 @@ body { background-color: %s !important; }
 </body>
 </html>
 `,
-		bodyBg, // style background-color
-		bodyBg, // body background-color
-		bodyBg, // outer table background
+		bodyBg,
+		bodyBg,
+		bodyBg,
 		containerBg,
 		borderColor,
 		textPrimary,
 		purple,
-		purple, digest.DigestDate, summary.TotalAlerts, // badge
-		textSecondary, // heading color
-		textMuted,     // time range color
-		summary.TimeRange.Start.Format("Jan 2, 3:04 PM"), // time range start
-		summary.TimeRange.End.Format("Jan 2, 3:04 PM"),   // time range end
-		textSecondary,    // content color
-		content.String(), // content
+		purple, digest.DigestDate, summary.TotalAlerts,
+		textSecondary,
+		textMuted,
+		summary.TimeRange.Start.Format("Jan 2, 3:04 PM"),
+		summary.TimeRange.End.Format("Jan 2, 3:04 PM"),
+		textSecondary,
+		content.String(),
 		tableBg,
 		borderColor,
 		textMuted,
 		purple,
-		settingsLink, amber, amber, // footer settings link
+		settingsLink, amber, amber,
 	)
 
 	return html

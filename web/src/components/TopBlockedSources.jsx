@@ -1,7 +1,6 @@
 import { ShieldAlert } from 'lucide-react'
 
 export default function TopBlockedSources({ sources }) {
-  // Calculate max count for proportional bars
   const maxCount = sources.length > 0 ? sources[0].count : 1
 
   return (

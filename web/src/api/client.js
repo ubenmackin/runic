@@ -75,7 +75,6 @@ export const api = {
   delete: (path)        => request('DELETE', path),
 }
 
-// Alert functions
 export const getAlerts = (params) => api.get(`/alerts?${new URLSearchParams(params)}`)
 export const getAlert = (id) => api.get(`/alerts/${id}`)
 export const deleteAlert = (id) => api.delete(`/alerts/${id}`)
@@ -83,12 +82,10 @@ export const clearAllAlerts = () => api.delete('/alerts')
 export const getAlertRules = () => api.get('/alert-rules')
 export const updateAlertRule = (id, data) => api.put(`/alert-rules/${id}`, data)
 
-// SMTP functions
 export const getSMTPConfig = () => api.get('/settings/smtp')
 export const updateSMTPConfig = (data) => api.put('/settings/smtp', data)
 export const testSMTP = () => api.post('/settings/smtp/test')
 
-// User notification preferences
 export const getNotificationPrefs = () => api.get('/users/me/notification-preferences')
 export const updateNotificationPrefs = (data) => api.put('/users/me/notification-preferences', data)
 

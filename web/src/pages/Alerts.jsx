@@ -92,44 +92,44 @@ function formatTimestamp(timestamp) {
 }
 
 function AlertRow({ alert, isExpanded, onToggle, onDelete }) {
-        return (
-                <>
-                        <tr
-                                onClick={onToggle}
-                                className="cursor-pointer hover:bg-gray-50 dark:hover:bg-charcoal-darkest transition-colors"
-      >
-        <td className="px-4 py-1.5">
-                                        <SeverityIcon severity={alert.severity} />
-        </td>
+  return (
+    <>
+    <tr
+      onClick={onToggle}
+      className="cursor-pointer hover:bg-gray-50 dark:hover:bg-charcoal-darkest transition-colors"
+    >
+      <td className="px-4 py-1.5 text-center w-12">
+        {isExpanded ? (
+          <ChevronUp className="w-4 h-4 text-gray-500 dark:text-amber-muted mx-auto" />
+        ) : (
+          <ChevronDown className="w-4 h-4 text-gray-500 dark:text-amber-muted mx-auto" />
+        )}
+      </td>
 
-        <td className="px-4 py-1.5 text-sm text-gray-600 dark:text-amber-muted whitespace-nowrap">
-                                        {formatTimestamp(alert.created_at)}
-        </td>
+      <td className="px-4 py-1.5">
+        <SeverityIcon severity={alert.severity} />
+      </td>
 
-        <td className="px-4 py-1.5">
-                                        <AlertTypeTag alertType={alert.alert_type} />
-        </td>
+      <td className="px-4 py-1.5 text-sm text-gray-600 dark:text-amber-muted whitespace-nowrap">
+        {formatTimestamp(alert.created_at)}
+      </td>
 
-        <td className="px-4 py-1.5 text-sm text-gray-900 dark:text-light-neutral">
-                                        {alert.peer_hostname || '-'}
-        </td>
+      <td className="px-4 py-1.5">
+        <AlertTypeTag alertType={alert.alert_type} />
+      </td>
 
-        <td className="px-4 py-1.5 text-sm text-gray-900 dark:text-light-neutral max-w-[200px] truncate">
-                                        {alert.subject}
-        </td>
+      <td className="px-4 py-1.5 text-sm text-gray-900 dark:text-light-neutral">
+        {alert.peer_hostname || '-'}
+      </td>
 
-        <td className="px-4 py-1.5">
-                                        <StatusTag status={alert.status} />
-        </td>
+      <td className="px-4 py-1.5 text-sm text-gray-900 dark:text-light-neutral max-w-[200px] truncate">
+        {alert.subject}
+      </td>
 
-        <td className="px-4 py-1.5 text-center">
-                                        {isExpanded ? (
-                                                <ChevronUp className="w-4 h-4 text-gray-500 dark:text-amber-muted mx-auto" />
-                                        ) : (
-                                                <ChevronDown className="w-4 h-4 text-gray-500 dark:text-amber-muted mx-auto" />
-                                        )}
-                                </td>
-                        </tr>
+      <td className="px-4 py-1.5">
+        <StatusTag status={alert.status} />
+      </td>
+    </tr>
 
       {isExpanded && (
         <tr className="bg-gray-50 dark:bg-charcoal-darkest">
@@ -232,7 +232,9 @@ export default function Alerts() {
   const [showDeleteModal, setShowDeleteModal] = useState(null)
   const [showClearAllModal, setShowClearAllModal] = useState(false)
   const deleteModalRef = useRef(null)
+  const clearAllModalRef = useRef(null)
   useFocusTrap(deleteModalRef, showDeleteModal !== null)
+  useFocusTrap(clearAllModalRef, showClearAllModal)
 
   const queryParams = new URLSearchParams()
   if (filter.alert_types.length > 0) queryParams.set('alert_type', filter.alert_types.join(','))
@@ -344,97 +346,95 @@ export default function Alerts() {
         }
       />
 
-      <SearchFilterPanel
-        storageKey="alerts-filters-expanded"
-        showSearch={false}
-        hasActiveFilters={filter.alert_types.length > 0 || filter.severities.length > 0 || filter.statuses.length > 0 || filter.start_date || filter.end_date}
-        filterContent={
-          <div className="flex items-center gap-4">
-            <div className="space-y-1 min-w-[150px]">
-              <label className="text-xs font-medium text-gray-500 dark:text-amber-muted">Alert Type</label>
-              <MultiSelect
-                options={ALERT_TYPES}
-                values={filter.alert_types}
-                onChange={(values) => setFilter(f => ({ ...f, alert_types: values, page: 1 }))}
-                placeholder="All types"
-              />
-            </div>
-
-            <div className="space-y-1 min-w-[120px]">
-              <label className="text-xs font-medium text-gray-500 dark:text-amber-muted">Severity</label>
-              <MultiSelect
-                options={SEVERITIES}
-                values={filter.severities}
-                onChange={(values) => setFilter(f => ({ ...f, severities: values, page: 1 }))}
-                placeholder="All severities"
-              />
-            </div>
-
-            <div className="space-y-1 min-w-[120px]">
-              <label className="text-xs font-medium text-gray-500 dark:text-amber-muted">Status</label>
-              <MultiSelect
-                options={STATUSES}
-                values={filter.statuses}
-                onChange={(values) => setFilter(f => ({ ...f, statuses: values, page: 1 }))}
-                placeholder="All statuses"
-              />
-            </div>
-
-            <div className="space-y-1 min-w-[150px]">
-              <label className="text-xs font-medium text-gray-500 dark:text-amber-muted">From Date</label>
-              <div className="relative">
-                <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 dark:text-amber-muted" />
-                <input
-                  type="date"
-                  value={filter.start_date}
-                  onChange={e => setFilter(f => ({ ...f, start_date: e.target.value, page: 1 }))}
-className="w-full pl-10 pr-3 py-2 border border-gray-300 dark:border-gray-border bg-white dark:bg-charcoal-dark text-gray-900 dark:text-light-neutral text-sm"
+<SearchFilterPanel
+			storageKey="alerts-filters-expanded"
+			showSearch={false}
+			hasActiveFilters={filter.alert_types.length > 0 || filter.severities.length > 0 || filter.statuses.length > 0 || filter.start_date || filter.end_date}
+			filterContent={
+			<div className="flex items-center gap-4">
+				<div className="space-y-1 min-w-[150px]">
+					<label className="text-xs font-medium text-gray-500 dark:text-amber-muted">Alert Type</label>
+					<MultiSelect
+						options={ALERT_TYPES}
+						values={filter.alert_types}
+						onChange={(values) => setFilter(f => ({ ...f, alert_types: values, page: 1 }))}
+						placeholder="All types"
 					/>
+				</div>
+
+				<div className="space-y-1 min-w-[120px]">
+					<label className="text-xs font-medium text-gray-500 dark:text-amber-muted">Severity</label>
+					<MultiSelect
+						options={SEVERITIES}
+						values={filter.severities}
+						onChange={(values) => setFilter(f => ({ ...f, severities: values, page: 1 }))}
+						placeholder="All severities"
+					/>
+				</div>
+
+				<div className="space-y-1 min-w-[120px]">
+					<label className="text-xs font-medium text-gray-500 dark:text-amber-muted">Status</label>
+					<MultiSelect
+						options={STATUSES}
+						values={filter.statuses}
+						onChange={(values) => setFilter(f => ({ ...f, statuses: values, page: 1 }))}
+						placeholder="All statuses"
+					/>
+				</div>
+
+				<div className="space-y-1 min-w-[150px]">
+					<label className="text-xs font-medium text-gray-500 dark:text-amber-muted">From Date</label>
+					<div className="relative">
+						<Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 dark:text-amber-muted" />
+						<input
+							type="date"
+							value={filter.start_date}
+							onChange={e => setFilter(f => ({ ...f, start_date: e.target.value, page: 1 }))}
+							className="w-full pl-10 pr-3 py-2 border border-gray-300 dark:border-gray-border bg-white dark:bg-charcoal-dark text-gray-900 dark:text-light-neutral text-sm focus:ring-2 focus:ring-purple-active focus:border-purple-active"
+						/>
 					</div>
 				</div>
 
 				<div className="space-y-1 min-w-[150px]">
 					<label className="text-xs font-medium text-gray-500 dark:text-amber-muted">To Date</label>
-              <div className="relative">
-                <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 dark:text-amber-muted" />
-                <input
-                  type="date"
-                  value={filter.end_date}
-                  onChange={e => setFilter(f => ({ ...f, end_date: e.target.value, page: 1 }))}
-className="w-full pl-10 pr-3 py-2 border border-gray-300 dark:border-gray-border bg-white dark:bg-charcoal-dark text-gray-900 dark:text-light-neutral text-sm"
-					/>
+					<div className="relative">
+						<Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 dark:text-amber-muted" />
+						<input
+							type="date"
+							value={filter.end_date}
+							onChange={e => setFilter(f => ({ ...f, end_date: e.target.value, page: 1 }))}
+							className="w-full pl-10 pr-3 py-2 border border-gray-300 dark:border-gray-border bg-white dark:bg-charcoal-dark text-gray-900 dark:text-light-neutral text-sm focus:ring-2 focus:ring-purple-active focus:border-purple-active"
+						/>
 					</div>
+				</div>
+
+				<div className="space-y-1 min-w-[80px]">
+					<label className="text-xs font-medium text-gray-500 dark:text-amber-muted">Rows</label>
+					<select
+						value={rowsPerPage}
+						onChange={e => handleRowsPerPageChange(Number(e.target.value))}
+						className="w-full px-2 py-2 border border-gray-300 dark:border-gray-border bg-white dark:bg-charcoal-dark text-gray-900 dark:text-light-neutral text-sm focus:ring-2 focus:ring-purple-active focus:border-purple-active"
+					>
+						<option value={10}>10</option>
+						<option value={25}>25</option>
+						<option value={50}>50</option>
+						<option value={100}>100</option>
+						<option value={-1}>All</option>
+					</select>
 				</div>
 			</div>
 		}
-        rightContent={
-          <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2">
-      <span className="text-sm text-gray-500 dark:text-amber-muted">Rows:</span>
-      <select
-        value={rowsPerPage}
-        onChange={e => handleRowsPerPageChange(Number(e.target.value))}
-        className="text-sm border border-gray-300 dark:border-gray-border px-2 py-1.5 bg-white dark:bg-charcoal-dark text-gray-900 dark:text-light-neutral"
-      >
-        <option value={10}>10</option>
-        <option value={25}>25</option>
-        <option value={50}>50</option>
-        <option value={100}>100</option>
-        <option value={-1}>All</option>
-      </select>
-            </div>
-
-            {(filter.alert_types.length > 0 || filter.severities.length > 0 || filter.statuses.length > 0 || filter.start_date || filter.end_date) && (
-      <button
-        onClick={handleClearFilters}
-        className="flex items-center gap-1 px-3 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20"
-      >
-        <X className="w-4 h-4" />
-        Clear
-      </button>
-    )}
-  </div>
-}
+	rightContent={
+			(filter.alert_types.length > 0 || filter.severities.length > 0 || filter.statuses.length > 0 || filter.start_date || filter.end_date) ? (
+				<button
+					onClick={handleClearFilters}
+					className="flex items-center gap-1 px-3 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20"
+				>
+					<X className="w-4 h-4" />
+					Clear
+				</button>
+			) : null
+		}
       />
 
       {isLoading && <TableSkeleton rows={5} columns={7} />}
@@ -451,41 +451,39 @@ className="w-full pl-10 pr-3 py-2 border border-gray-300 dark:border-gray-border
 <div className="bg-white dark:bg-charcoal-dark border border-gray-200 dark:border-gray-border overflow-hidden">
               <div className="overflow-x-auto">
                 <table className="w-full">
-                <thead className="bg-gray-50 dark:bg-charcoal-darkest border-b border-gray-200 dark:border-gray-border">
-                  <tr>
-                    <th className="px-4 py-1.5 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
-                      <button type="button" onClick={() => handleSort('severity')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
-                        Sev <SortIndicator columnKey="severity" sortConfig={sortConfig} />
-                      </button>
-                    </th>
-                    <th className="px-4 py-1.5 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
-                      <button type="button" onClick={() => handleSort('created_at')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
-                        Timestamp <SortIndicator columnKey="created_at" sortConfig={sortConfig} />
-                      </button>
-                    </th>
-                    <th className="px-4 py-1.5 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
-                      <button type="button" onClick={() => handleSort('alert_type')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
-                        Alert Type <SortIndicator columnKey="alert_type" sortConfig={sortConfig} />
-                      </button>
-                    </th>
-                    <th className="px-4 py-1.5 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
-                      <button type="button" onClick={() => handleSort('peer_hostname')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
-                        Peer <SortIndicator columnKey="peer_hostname" sortConfig={sortConfig} />
-                      </button>
-                    </th>
-                    <th className="px-4 py-1.5 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider">
-                      Subject
-                    </th>
-                    <th className="px-4 py-1.5 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
-                      <button type="button" onClick={() => handleSort('status')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
-                        Status <SortIndicator columnKey="status" sortConfig={sortConfig} />
-                      </button>
-                    </th>
-                    <th className="px-4 py-1.5 text-center text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider w-12">
-                      Details
-                    </th>
-                  </tr>
-                </thead>
+        <thead className="bg-gray-50 dark:bg-charcoal-darkest border-b border-gray-200 dark:border-gray-border">
+          <tr>
+            <th className="px-4 py-1.5 w-12" aria-label="Expand/collapse"></th>
+            <th className="px-4 py-1.5 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+              <button type="button" onClick={() => handleSort('severity')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+                Sev <SortIndicator columnKey="severity" sortConfig={sortConfig} />
+              </button>
+            </th>
+            <th className="px-4 py-1.5 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+              <button type="button" onClick={() => handleSort('created_at')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+                Timestamp <SortIndicator columnKey="created_at" sortConfig={sortConfig} />
+              </button>
+            </th>
+            <th className="px-4 py-1.5 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+              <button type="button" onClick={() => handleSort('alert_type')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+                Alert Type <SortIndicator columnKey="alert_type" sortConfig={sortConfig} />
+              </button>
+            </th>
+            <th className="px-4 py-1.5 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+              <button type="button" onClick={() => handleSort('peer_hostname')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+                Peer <SortIndicator columnKey="peer_hostname" sortConfig={sortConfig} />
+              </button>
+            </th>
+            <th className="px-4 py-1.5 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider">
+              Subject
+            </th>
+            <th className="px-4 py-1.5 text-left text-xs font-medium text-gray-500 dark:text-amber-muted uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+              <button type="button" onClick={() => handleSort('status')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+                Status <SortIndicator columnKey="status" sortConfig={sortConfig} />
+              </button>
+            </th>
+          </tr>
+        </thead>
                   <tbody className="divide-y divide-gray-200 dark:divide-gray-border">
                     {data.alerts.map((alert) => (
                       <AlertRow
@@ -553,7 +551,7 @@ className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white disabled:opac
 
       {showClearAllModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white dark:bg-charcoal-dark border border-gray-200 dark:border-gray-border p-6 max-w-md w-full mx-4">
+          <div ref={clearAllModalRef} className="bg-white dark:bg-charcoal-dark border border-gray-200 dark:border-gray-border p-6 max-w-md w-full mx-4">
             <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
               Clear All Alerts?
             </h3>

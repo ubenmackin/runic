@@ -50,24 +50,20 @@ func (p *AlertProcessor) SetLogger(logger *slog.Logger) {
 // ProcessAlert implements the Processor interface.
 // It processes a triggered alert event by creating a history entry and sending notification.
 func (p *AlertProcessor) ProcessAlert(ctx context.Context, event *AlertEvent, rule *AlertRule) error {
-	// Create alert history entry
 	history := event.CreateAlertHistory(rule.ID)
 	if err := CreateAlertHistory(ctx, p.database, &history); err != nil {
 		p.logger.Error("failed to create alert history", "error", err)
 		return fmt.Errorf("failed to create alert history: %w", err)
 	}
 
-	// Get user email for notification
 	email, err := p.getAdminEmail(ctx)
 	if err != nil {
 		p.logger.Warn("failed to get admin email", "error", err)
 		// Don't return error - we still want to track the alert
 	} else if email != "" {
-		// Send the alert email
 		if p.smtp != nil && p.smtp.config.IsEnabled() {
 			if err := p.smtp.SendAlertEmail(email, event); err != nil {
 				p.logger.Error("failed to send alert email", "error", err)
-				// Update history status to failed
 				p.updateHistoryStatus(ctx, history.ID, AlertStatusFailed, err.Error())
 				return fmt.Errorf("failed to send alert email: %w", err)
 			}
@@ -75,7 +71,6 @@ func (p *AlertProcessor) ProcessAlert(ctx context.Context, event *AlertEvent, ru
 		}
 	}
 
-	// Update history status to sent
 	p.updateHistoryStatus(ctx, history.ID, AlertStatusSent, "")
 	p.logger.Info("alert processed successfully", "alert_id", history.ID, "rule_id", rule.ID)
 
@@ -231,11 +226,9 @@ func (s *Service) Initialize() error {
 
 	s.logger.Info("initializing alert service")
 
-	// 1. Initialize SMTP sender
 	smtpConfig, err := s.loadSMTPConfig(s.ctx)
 	if err != nil {
 		s.logger.Warn("failed to load SMTP config, alerts will be disabled", "error", err)
-		// Create a disabled SMTP sender
 		disabledConfig := SMTPConfig{Enabled: false}
 		s.smtpSender = NewSMTPSender(&disabledConfig, s.encryptor, s.database)
 	} else {
@@ -247,20 +240,16 @@ func (s *Service) Initialize() error {
 		)
 	}
 
-	// 2. Initialize ConditionEvaluator
 	s.evaluator = NewConditionEvaluator(s.database)
 	s.logger.Debug("evaluator initialized")
 
-	// 3. Initialize AlertProcessor
 	s.processor = NewAlertProcessor(s.database, s.smtpSender)
 	s.processor.SetLogger(s.logger)
 	s.logger.Debug("processor initialized")
 
-	// 4. Initialize Scheduler
 	s.scheduler = NewScheduler(s.database, s.evaluator, s.processor)
 	s.logger.Debug("scheduler initialized")
 
-	// 5. Initialize DigestGenerator
 	s.digestGenerator = NewDigestGenerator(s.database, s.smtpSender, s.encryptor)
 	s.digestGenerator.SetLogger(s.logger)
 	s.logger.Debug("digest generator initialized")
@@ -296,7 +285,6 @@ func (s *Service) Start() error {
 	ctx := s.ctx
 	wg := &s.wg
 
-	// Start the scheduler for periodic alert evaluation
 	scheduler.Start(ctx)
 	wg.Add(1)
 	go func() {
@@ -305,7 +293,6 @@ func (s *Service) Start() error {
 		scheduler.Stop()
 	}()
 
-	// Start the processor for sending pending alerts
 	if err := processor.Start(ctx); err != nil {
 		s.cancel()
 		return fmt.Errorf("failed to start processor: %w", err)
@@ -316,7 +303,6 @@ func (s *Service) Start() error {
 	// before we release the lock, avoiding race with Stop().
 	processor.Run()
 
-	// Start the digest generator for scheduled digests
 	// digestGenerator.RunDaily() spawns its own goroutine and returns immediately.
 	// Call it synchronously to ensure wg.Add(1) inside RunDaily() completes
 	// before we release the lock, avoiding race with Stop().
@@ -340,10 +326,8 @@ func (s *Service) Stop() error {
 
 	s.logger.Info("stopping alert service")
 
-	// Cancel context to signal all components to stop
 	s.cancel()
 
-	// Stop each component explicitly
 	if s.scheduler != nil {
 		s.scheduler.Stop()
 	}
@@ -354,14 +338,12 @@ func (s *Service) Stop() error {
 		s.digestGenerator.Stop()
 	}
 
-	// Wait for all goroutines to finish
 	done := make(chan struct{})
 	go func() {
 		s.wg.Wait()
 		close(done)
 	}()
 
-	// Wait with timeout
 	select {
 	case <-done:
 		s.logger.Info("alert service stopped successfully")
@@ -427,20 +409,15 @@ func (s *Service) IsInitialized() bool {
 	return s.initialized
 }
 
-// loadSMTPConfig loads SMTP configuration from the database.
 func (s *Service) loadSMTPConfig(ctx context.Context) (*SMTPConfig, error) {
-	// Try to get SMTP config from system_config table
 	var host, username, password, fromAddress string
 	var port int
 
-	// Check if SMTP is enabled
 	enabled, err := GetBoolConfig(ctx, s.database, "smtp_enabled")
 	if err != nil {
-		// SMTP not configured
 		return &SMTPConfig{Enabled: false}, nil
 	}
 
-	// Load other SMTP settings
 	err = s.database.QueryRowContext(ctx,
 		`SELECT value FROM system_config WHERE key = 'smtp_host'`,
 	).Scan(&host)
@@ -452,24 +429,21 @@ func (s *Service) loadSMTPConfig(ctx context.Context) (*SMTPConfig, error) {
 		`SELECT value FROM system_config WHERE key = 'smtp_port'`,
 	).Scan(&port)
 	if err != nil {
-		// Try as string and convert
 		var portStr string
 		if err = s.database.QueryRowContext(ctx,
 			`SELECT value FROM system_config WHERE key = 'smtp_port'`,
 		).Scan(&portStr); err != nil {
 			return nil, fmt.Errorf("failed to load SMTP port: %w", err)
 		}
-		// Parse port string (simple conversion)
-		port = 587 // default
+		port = 587
 		if portStr != "" {
 			if _, err := fmt.Sscanf(portStr, "%d", &port); err != nil {
 				s.logger.Warn("failed to parse SMTP port", "value", portStr, "error", err)
-				port = 587 // default on parse error
+				port = 587
 			}
 		}
 	}
 
-	// Load optional SMTP settings (username, password, useTLS)
 	if err := s.database.QueryRowContext(ctx,
 		`SELECT value FROM system_config WHERE key = 'smtp_username'`,
 	).Scan(&username); err != nil && err != sql.ErrNoRows {
@@ -488,7 +462,6 @@ func (s *Service) loadSMTPConfig(ctx context.Context) (*SMTPConfig, error) {
 		s.logger.Warn("failed to load SMTP from_address", "error", err)
 	}
 
-	// Load useTLS setting
 	useTLS, err := GetBoolConfig(ctx, s.database, "smtp_use_tls")
 	if err != nil && err != sql.ErrNoRows {
 		s.logger.Warn("failed to load SMTP use_tls", "error", err)
@@ -520,22 +493,18 @@ func (s *Service) TriggerAlert(ctx context.Context, event *AlertEvent) error {
 		return fmt.Errorf("alert service not initialized")
 	}
 
-	// Get enabled rules for this alert type
 	rules, err := GetEnabledAlertRulesByType(ctx, s.database, event.Type)
 	if err != nil {
 		return fmt.Errorf("failed to get alert rules: %w", err)
 	}
 
-	// Find matching rules and process
 	for i := range rules {
 		rule := &rules[i]
 
-		// Check if rule applies to this peer
 		if event.PeerID > 0 && !rule.AppliesToPeer(event.PeerID) {
 			continue
 		}
 
-		// Process the alert using the processor
 		if processor != nil {
 			if err := processor.ProcessAlert(ctx, event, rule); err != nil {
 				return fmt.Errorf("failed to process alert: %w", err)

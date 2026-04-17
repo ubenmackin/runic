@@ -89,7 +89,7 @@ func GetInstanceURL(ctx context.Context, db db.Querier) string {
 	var url string
 	err := db.QueryRowContext(ctx, "SELECT value FROM system_config WHERE key = 'instance_url'").Scan(&url)
 	if err != nil || url == "" {
-		return "" // Caller should handle empty case
+		return ""
 	}
 	return url
 }

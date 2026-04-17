@@ -50,9 +50,7 @@ func SanitizeAlertInput(input string, maxLen int) (string, bool) {
 	modified := false
 	var result strings.Builder
 
-	// Remove control characters and build the sanitized string
 	for _, r := range input {
-		// Skip control characters (CR, LF, NUL, TAB, and other ASCII control chars)
 		// Allow space (0x20) and above, but not DEL (0x7F)
 		if r < 0x20 || r == 0x7F {
 			modified = true
@@ -63,14 +61,12 @@ func SanitizeAlertInput(input string, maxLen int) (string, bool) {
 
 	sanitized := result.String()
 
-	// Trim leading and trailing whitespace
 	trimmed := strings.TrimSpace(sanitized)
 	if trimmed != sanitized {
 		modified = true
 		sanitized = trimmed
 	}
 
-	// Truncate to max length if needed
 	if maxLen > 0 && len(sanitized) > maxLen {
 		modified = true
 		// Safe truncation that doesn't break UTF-8 sequences
@@ -87,10 +83,8 @@ func SanitizeAlertInput(input string, maxLen int) (string, bool) {
 // - Email header injection characters (@ for certain contexts)
 // Returns the sanitized string and true if modifications were made.
 func SanitizeAlertInputStrict(input string, maxLen int) (string, bool) {
-	// First use SanitizeAlertInput for control char removal
 	sanitized, modified := SanitizeAlertInput(input, maxLen)
 
-	// Then apply HTML escaping using the standard library
 	escaped := html.EscapeString(sanitized)
 	if escaped != sanitized {
 		modified = true

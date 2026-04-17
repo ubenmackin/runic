@@ -94,7 +94,6 @@ func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate username
 	req.Username = strings.TrimSpace(req.Username)
 	if req.Username == "" {
 		common.RespondError(w, http.StatusBadRequest, "Username is required")
@@ -103,7 +102,6 @@ func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 
 	req.Email = strings.TrimSpace(req.Email)
 
-	// Validate password
 	if req.Password == "" {
 		common.RespondError(w, http.StatusBadRequest, "Password is required")
 		return
@@ -113,7 +111,6 @@ func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate role
 	req.Role = strings.TrimSpace(req.Role)
 	if req.Role == "" {
 		req.Role = "viewer"
@@ -130,7 +127,6 @@ func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if username exists
 	var exists bool
 	err := h.DB.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM users WHERE username = ?)", req.Username).Scan(&exists)
 	if err != nil {
@@ -142,14 +138,12 @@ func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Hash password
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), 12)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "Failed to hash password")
 		return
 	}
 
-	// Insert user
 	result, err := h.DB.ExecContext(ctx,
 		"INSERT INTO users (username, password_hash, email, role) VALUES (?, ?, ?, ?)",
 		req.Username, string(hash), req.Email, req.Role,
@@ -186,7 +180,6 @@ func (h *Handler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := runiccommon.WithHandlerTimeout(r.Context())
 	defer cancel()
 
-	// Get authenticated username from context
 	authUsername := auth.UsernameFromContext(r.Context())
 
 	// Only admins can delete users
@@ -196,7 +189,6 @@ func (h *Handler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if user exists and get username
 	var username string
 	err = h.DB.QueryRowContext(ctx, "SELECT username FROM users WHERE id = ?", id).Scan(&username)
 	if err == sql.ErrNoRows {
@@ -214,7 +206,6 @@ func (h *Handler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Delete user
 	_, err = h.DB.ExecContext(ctx, "DELETE FROM users WHERE id = ?", id)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "Failed to delete user")
@@ -250,21 +241,18 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate email if provided
 	req.Email = strings.TrimSpace(req.Email)
 	if req.Email != "" && !emailRegex.MatchString(req.Email) {
 		common.RespondError(w, http.StatusBadRequest, "Invalid email format")
 		return
 	}
 
-	// Validate role if provided
 	req.Role = strings.TrimSpace(req.Role)
 	if req.Role != "" && req.Role != "admin" && req.Role != "editor" && req.Role != "viewer" {
 		common.RespondError(w, http.StatusBadRequest, "Role must be 'admin', 'editor', or 'viewer'")
 		return
 	}
 
-	// Check if user exists
 	var username string
 	err = h.DB.QueryRowContext(ctx, "SELECT username FROM users WHERE id = ?", id).Scan(&username)
 	if err == sql.ErrNoRows {
@@ -316,13 +304,11 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 		args = append(args, string(hash))
 	}
 
-	// If no fields to update, return early
 	if len(setClauses) == 0 {
 		common.RespondJSON(w, http.StatusOK, map[string]string{"message": "No changes to update"})
 		return
 	}
 
-	// Build and execute the query
 	query := "UPDATE users SET " + strings.Join(setClauses, ", ") + " WHERE id = ?"
 	args = append(args, id)
 

@@ -14,14 +14,12 @@ export default function QuickActions() {
   const [showConfirmModal, setShowConfirmModal] = useState(false)
   const [pushJobId, setPushJobId] = useState(null)
 
-  // Fetch peers list for confirmation modal
   const { data: peers, isLoading } = useQuery({
     queryKey: QUERY_KEYS.peers(),
     queryFn: () => api.get('/peers'),
     staleTime: 30000,
   })
 
-  // Handle push rules to all peers
   const handlePushRulesToAll = async () => {
     setShowConfirmModal(false)
     try {
@@ -44,7 +42,6 @@ export default function QuickActions() {
       </div>
 
       <div className="space-y-2">
-      {/* Push Rules to All */}
       <button
         onClick={() => setShowConfirmModal(true)}
         disabled={isLoading}
@@ -55,7 +52,6 @@ export default function QuickActions() {
         <span>{isLoading ? 'Loading...' : 'Push Rules to All'}</span>
       </button>
 
-      {/* Add Peer */}
       <button
         onClick={() => navigate('/peers', { state: { openAddModal: true } })}
         aria-label="Add Peer"
@@ -65,7 +61,6 @@ className="w-full flex items-center gap-3 px-3 py-2.5 text-sm font-medium text-g
         <span>Add Peer</span>
       </button>
 
-      {/* Create Policy */}
       <button
         onClick={() => navigate('/policies', { state: { openAddModal: true } })}
         aria-label="Create Policy"
@@ -76,7 +71,6 @@ className="w-full flex items-center gap-3 px-3 py-2.5 text-sm font-medium text-g
       </button>
       </div>
 
-      {/* Confirmation Modal for Push Rules */}
       {showConfirmModal && (
         <ConfirmModal
           title="Push Rules to All Peers"
@@ -86,7 +80,6 @@ className="w-full flex items-center gap-3 px-3 py-2.5 text-sm font-medium text-g
         />
       )}
 
-      {/* Push Job Progress Modal */}
       {pushJobId && (
         <PushJobModal
           jobId={pushJobId}

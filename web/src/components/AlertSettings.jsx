@@ -24,19 +24,16 @@ export default function AlertSettings({ showHeader = true }) {
   const qc = useQueryClient()
   const showToast = useToastContext()
 
-  // Fetch alert rules
   const { data: alertRules, isLoading: rulesLoading, error: rulesError } = useQuery({
     queryKey: QUERY_KEYS.alertRules(),
     queryFn: getAlertRules,
   })
 
-  // Fetch peers for override dropdown
   const { data: peers } = useQuery({
     queryKey: QUERY_KEYS.peers(),
     queryFn: () => api.get('/peers'),
   })
 
-  // Update alert rule mutation
   const mutation = useMutation({
     mutationFn: ({ id, data }) => updateAlertRule(id, data),
     onSuccess: () => {

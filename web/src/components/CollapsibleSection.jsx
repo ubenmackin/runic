@@ -33,10 +33,8 @@ export default function CollapsibleSection({
   const headerId = useId()
   const contentId = useId()
 
-  // Determine if component is controlled
   const isControlled = controlledExpanded !== undefined
 
-  // Initialize state with localStorage persistence if storageKey provided
   const [internalExpanded, setInternalExpanded] = useState(() => {
     if (isControlled) return controlledExpanded
     if (storageKey) {
@@ -52,17 +50,14 @@ export default function CollapsibleSection({
     return defaultExpanded
   })
 
-  // Use controlled value if provided, otherwise internal state
   const expanded = isControlled ? controlledExpanded : internalExpanded
 
-  // Sync with localStorage when storageKey changes (also sync on mount)
   useEffect(() => {
     if (storageKey && !isControlled) {
       localStorage.setItem(storageKey, JSON.stringify(expanded))
     }
   }, [storageKey, expanded, isControlled])
 
-  // Handle toggle
   const handleToggle = () => {
     if (isControlled) {
       onExpandedChange?.(!expanded)
@@ -72,7 +67,6 @@ export default function CollapsibleSection({
     }
   }
 
-  // Keyboard handler
   const handleKeyDown = (e) => {
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault()
@@ -85,7 +79,6 @@ export default function CollapsibleSection({
       id={id}
       className={`border border-gray-200 dark:border-gray-border bg-white dark:bg-charcoal-dark ${className}`}
     >
-      {/* Header */}
       <button
         type="button"
         id={headerId}
@@ -124,7 +117,6 @@ export default function CollapsibleSection({
         />
       </button>
 
-      {/* Content with height animation */}
       <div
         id={contentId}
       role="region"

@@ -26,7 +26,6 @@ const (
 	systemdLibServicePath = "/lib/systemd/system/runic-agent.service"
 )
 
-// configFlag tracks whether a config flag was explicitly set
 type configFlag struct {
 	set   bool
 	value string
@@ -46,8 +45,6 @@ func (cf *configFlag) IsBoolFlag() bool {
 	return false
 }
 
-// parseBoolFlag parses "true" or "false" string to boolean
-// Returns error for invalid values
 func parseBoolFlag(value string) (bool, error) {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "true", "1", "yes", "on":
@@ -60,10 +57,8 @@ func parseBoolFlag(value string) (bool, error) {
 }
 
 func main() {
-	// Config file path (not a config-mode flag)
 	configPath := flag.String("config", "/etc/runic-agent/config.json", "Config file path")
 
-	// Action flags (not config-mode flags)
 	uninstall := flag.Bool("uninstall", false, "Uninstall the agent from this system")
 	purge := flag.Bool("purge", false, "Also remove config files (use with --uninstall)")
 	version := flag.Bool("version", false, "Print version and exit")
@@ -87,15 +82,12 @@ func main() {
 
 	flag.Parse()
 
-	// Handle version flag
 	if *version {
 		fmt.Printf("runic-agent version %s\n", core.Version)
 		return
 	}
 
-	// Handle interactive setup wizard
 	if *setup {
-		// Get default URL from flag or env
 		defaultURL := controlPlaneURL.String()
 		if defaultURL == "" {
 			defaultURL = os.Getenv("RUNIC_CONTROL_PLANE_URL")
@@ -137,7 +129,6 @@ func main() {
 		return
 	}
 
-	// Handle uninstall
 	if *uninstall {
 		if err := uninstallAgent(*purge); err != nil {
 			log.Fatalf("uninstall failed: %v", err)
@@ -146,7 +137,6 @@ func main() {
 		return
 	}
 
-	// Check if any config flags were set - enter config-update mode
 	if isConfigMode(enableOnBoot, enableRulesBundle, disableSystemIPTables, controlPlaneURL, logPath, pullInterval) {
 		if err := handleConfigMode(*configPath, enableOnBoot, enableRulesBundle, disableSystemIPTables, controlPlaneURL, logPath, pullInterval); err != nil {
 			log.Fatalf("config update failed: %v", err)
@@ -183,7 +173,6 @@ func main() {
 	}
 }
 
-// isConfigMode returns true if any config flag was explicitly set
 func isConfigMode(flags ...configFlag) bool {
 	for _, f := range flags {
 		if f.set {
@@ -193,9 +182,7 @@ func isConfigMode(flags ...configFlag) bool {
 	return false
 }
 
-// handleConfigMode processes config flags, updates config file, and prompts for service restart
 func handleConfigMode(configPath string, enableOnBoot, enableRulesBundle, disableSystemIPTables, controlPlaneURL, logPath, pullInterval configFlag) error {
-	// Load existing config
 	cfg, err := identity.LoadConfig(configPath)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
@@ -311,10 +298,8 @@ func handleConfigMode(configPath string, enableOnBoot, enableRulesBundle, disabl
 	return nil
 }
 
-// validateConfig validates that the config is valid.
 // It performs both JSON marshaling check and field-level validation.
 func validateConfig(cfg *identity.Config) (bool, error) {
-	// Try to marshal to verify JSON is valid
 	_, err := json.Marshal(cfg)
 	if err != nil {
 		return false, fmt.Errorf("config is not valid JSON: %w", err)
@@ -328,13 +313,10 @@ func validateConfig(cfg *identity.Config) (bool, error) {
 	return true, nil
 }
 
-// isSystemdServiceInstalled checks if runic-agent.service is installed
 func isSystemdServiceInstalled() bool {
-	// Check if systemd service file exists
 	if _, err := os.Stat(systemdServicePath); err == nil {
 		return true
 	}
-	// Also check systemd directory
 	if _, err := os.Stat(systemdLibServicePath); err == nil {
 		return true
 	}
@@ -354,7 +336,6 @@ func isSystemdServiceInstalled() bool {
 // The root privilege check is tested via TestRestartSystemdServiceRequiresRoot.
 // Full integration tests should be run in a VM or container with systemd.
 func restartSystemdService() error {
-	// Check if running as root
 	if os.Geteuid() != 0 {
 		return fmt.Errorf("must be run as root to restart service (use sudo)")
 	}
@@ -368,12 +349,10 @@ func restartSystemdService() error {
 }
 
 func uninstallAgent(purge bool) error {
-	// Must be run as root
 	if os.Geteuid() != 0 {
 		return fmt.Errorf("must be run as root (use sudo)")
 	}
 
-	// Stop and disable service
 	fmt.Println("Stopping runic-agent service...")
 	if err := exec.Command("systemctl", "stop", "runic-agent").Run(); err != nil {
 		fmt.Printf("Warning: failed to stop service: %v\n", err)
@@ -382,7 +361,6 @@ func uninstallAgent(purge bool) error {
 		fmt.Printf("Warning: failed to disable service: %v\n", err)
 	}
 
-	// Remove service file
 	fmt.Println("Removing systemd service file...")
 	if err := os.Remove(systemdServicePath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to remove service file: %w", err)
@@ -391,13 +369,11 @@ func uninstallAgent(purge bool) error {
 		fmt.Printf("Warning: failed to daemon-reload: %v\n", err)
 	}
 
-	// Remove binary
 	fmt.Println("Removing runic-agent binary...")
 	if err := os.Remove("/usr/local/bin/runic-agent"); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to remove binary: %w", err)
 	}
 
-	// Optionally remove config
 	if purge {
 		fmt.Println("Removing config files...")
 		if err := os.RemoveAll("/etc/runic-agent"); err != nil {
@@ -413,9 +389,7 @@ func uninstallAgent(purge bool) error {
 	return nil
 }
 
-// runSetupWizard runs an interactive setup wizard to configure the agent.
 func runSetupWizard(configPath string, defaultControlPlaneURL string) error {
-	// Check if stdin is a terminal (not a pipe/file)
 	fd := int(os.Stdin.Fd())
 	if !term.IsTerminal(fd) {
 		return fmt.Errorf("setup wizard requires interactive terminal. Use -url flag or config file instead")
@@ -426,7 +400,6 @@ func runSetupWizard(configPath string, defaultControlPlaneURL string) error {
 	// Load existing config at start to use its values as defaults
 	cfg, err := identity.LoadConfig(configPath)
 	if err != nil {
-		// Config file doesn't exist yet, create a new one
 		cfg = &identity.Config{}
 	}
 

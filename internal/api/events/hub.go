@@ -83,7 +83,7 @@ func (h *SSEHub) NotifyPushJobProgress(jobID string, eventType string, payload s
 	}
 }
 
-// NotifyPendingChangeAdded notifies that pending changes were added for a peer.
+// NotifyPendingChangeAdded notifies agents about pending configuration changes.
 // The frontend can use this to immediately refresh the peers list.
 func (h *SSEHub) NotifyPendingChangeAdded(hostID string, peerID int) {
 	h.mu.RLock()
@@ -97,7 +97,7 @@ func (h *SSEHub) NotifyPendingChangeAdded(hostID string, peerID int) {
 	}
 }
 
-// RegisterFrontend registers a frontend client for SSE events.
+// RegisterFrontend registers a frontend client for receiving events.
 // clientID should be a unique identifier (e.g., user ID or random UUID).
 func (h *SSEHub) RegisterFrontend(clientID string) chan string {
 	ch := make(chan string, 8) // buffer for multiple event types
@@ -107,7 +107,6 @@ func (h *SSEHub) RegisterFrontend(clientID string) chan string {
 	return ch
 }
 
-// UnregisterFrontend removes a frontend client.
 func (h *SSEHub) UnregisterFrontend(clientID string) {
 	h.mu.Lock()
 	if ch, ok := h.frontendClients[clientID]; ok {
@@ -117,7 +116,6 @@ func (h *SSEHub) UnregisterFrontend(clientID string) {
 	h.mu.Unlock()
 }
 
-// NotifyFrontendPendingChangeAdded broadcasts pending_change_added to all frontend clients.
 func (h *SSEHub) NotifyFrontendPendingChangeAdded(peerID int) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()

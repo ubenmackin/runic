@@ -40,7 +40,6 @@ func Register(ctx context.Context, client common.HTTPClient, cfg *Config, versio
 		HasIPSet:     &hasIPSet,
 	}
 
-	// Include registration token if available (for new host registration)
 	if cfg.RegistrationToken != "" {
 		body.RegistrationToken = cfg.RegistrationToken
 	}
@@ -65,14 +64,12 @@ func Register(ctx context.Context, client common.HTTPClient, cfg *Config, versio
 		return fmt.Errorf("decode registration response: %w", err)
 	}
 
-	// Save credentials to config
 	cfg.HostID = regResp.HostID
 	cfg.Token = regResp.Token
 	cfg.PullIntervalSec = regResp.PullInterval
 	cfg.CurrentBundleVer = regResp.CurrentBundleVer
 	cfg.HMACKey = regResp.HMACKey
 
-	// Clear registration token so it is not persisted to disk (single-use)
 	cfg.RegistrationToken = ""
 
 	if err := saveFunc(); err != nil {
@@ -97,7 +94,6 @@ func detectOSType() string {
 			id = strings.Trim(id, `"`)
 			id = strings.ToLower(id)
 
-			// Map known values
 			switch {
 			case strings.HasPrefix(id, "opensuse"):
 				return "opensuse"
@@ -146,7 +142,6 @@ func detectDocker() bool {
 
 // detectLocalIP returns the primary non-loopback IPv4 address.
 func detectLocalIP() string {
-	// Get all network interfaces
 	ifaces, err := net.Interfaces()
 	if err != nil {
 		return ""
@@ -155,7 +150,6 @@ func detectLocalIP() string {
 	var bestIP string
 
 	for _, iface := range ifaces {
-		// Skip loopback and down interfaces
 		if iface.Flags&net.FlagLoopback != 0 || iface.Flags&net.FlagUp == 0 {
 			continue
 		}
@@ -178,14 +172,11 @@ func detectLocalIP() string {
 				continue
 			}
 
-			// Skip loopback and link-local
 			if ip.IsLoopback() || ip.IsLinkLocalUnicast() {
 				continue
 			}
 
-			// Prefer IPv4
 			if ip4 := ip.To4(); ip4 != nil {
-				// First valid IPv4 wins as fallback
 				if bestIP == "" {
 					bestIP = ip4.String()
 				}

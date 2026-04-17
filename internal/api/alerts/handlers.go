@@ -38,13 +38,11 @@ func NewHandler(db *sql.DB, alertService *alerts.Service, encryptor *crypto.Encr
 func (h *Handler) ListAlerts(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	// Parse pagination params
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	if limit <= 0 {
 		limit = 50
 	}
 
-	// Parse page parameter and calculate offset
 	// If both page and offset are provided, page takes precedence
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	var offset int
@@ -57,14 +55,41 @@ func (h *Handler) ListAlerts(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Parse filter parameters
 	alertType := r.URL.Query().Get("alert_type")
 	severity := r.URL.Query().Get("severity")
 	status := r.URL.Query().Get("status")
 	startDate := r.URL.Query().Get("start_date")
 	endDate := r.URL.Query().Get("end_date")
 
-	// Build dynamic WHERE clause
+	sortKey := r.URL.Query().Get("sort_key")
+	sortDirection := r.URL.Query().Get("sort_direction")
+
+	allowedSortKeys := map[string]string{
+		"created_at":    "h.created_at",
+		"alert_type":    "h.alert_type",
+		"peer_hostname": "p.hostname",
+		"status":        "h.status",
+		"severity":      "h.severity",
+	}
+	allowedSortDirections := map[string]string{
+		"asc":  "ASC",
+		"desc": "DESC",
+	}
+
+	orderByColumn := "h.created_at"
+	orderByDirection := "DESC"
+
+	if sortKey != "" {
+		if col, ok := allowedSortKeys[sortKey]; ok {
+			orderByColumn = col
+		}
+	}
+	if sortDirection != "" {
+		if dir, ok := allowedSortDirections[strings.ToLower(sortDirection)]; ok {
+			orderByDirection = dir
+		}
+	}
+
 	var conditions []string
 	var args []interface{}
 
@@ -159,7 +184,6 @@ func (h *Handler) ListAlerts(w http.ResponseWriter, r *http.Request) {
 		whereClause = "WHERE " + strings.Join(conditions, " AND ")
 	}
 
-	// Build and execute count query
 	countQuery := `SELECT COUNT(*) FROM alert_history h ` + whereClause
 	var total int
 	countArgs := make([]interface{}, len(args))
@@ -169,14 +193,13 @@ func (h *Handler) ListAlerts(w http.ResponseWriter, r *http.Request) {
 		total = 0
 	}
 
-	// Build and execute main query with pagination
 	args = append(args, limit, offset)
 	query := `SELECT h.id, h.rule_id, h.alert_type, h.peer_id, p.hostname as peer_hostname, h.severity, h.subject, h.message, h.metadata, h.status, h.sent_at, h.error_message, h.created_at
-		FROM alert_history h
-		LEFT JOIN peers p ON h.peer_id = p.id
-		` + whereClause + `
-		ORDER BY h.created_at DESC
-		LIMIT ? OFFSET ?`
+	FROM alert_history h
+	LEFT JOIN peers p ON h.peer_id = p.id
+	` + whereClause + `
+	ORDER BY ` + orderByColumn + ` ` + orderByDirection + `
+	LIMIT ? OFFSET ?`
 
 	rows, err := h.DB.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -281,14 +304,12 @@ func (h *Handler) UpdateAlertRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get existing rule
 	rule, err := alerts.GetAlertRule(ctx, h.DB, id)
 	if err != nil {
 		common.RespondError(w, http.StatusNotFound, "alert rule not found")
 		return
 	}
 
-	// Apply updates
 	if req.Name != "" {
 		rule.Name = req.Name
 	}
@@ -334,7 +355,6 @@ func (h *Handler) GetSMTPConfig(w http.ResponseWriter, r *http.Request) {
 		Enabled     bool   `json:"enabled"`
 	}{}
 
-	// Get individual settings
 	err := h.DB.QueryRowContext(ctx, "SELECT value FROM system_config WHERE key = 'smtp_host'").Scan(&config.Host)
 	if err != nil && err != sql.ErrNoRows {
 		log.ErrorContext(ctx, "Failed to get smtp_host", "error", err)
@@ -412,9 +432,7 @@ func (h *Handler) UpdateSMTPConfig(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Only update password if provided (non-empty)
 	if req.Password != "" {
-		// Encrypt the password before storing
 		passwordToStore := req.Password
 		if h.Encryptor != nil {
 			encrypted, err := h.Encryptor.Encrypt(req.Password)
@@ -473,7 +491,6 @@ func (h *Handler) TestSMTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Send test email
 	testEvent := &alerts.AlertEvent{
 		Type:      "test",
 		Subject:   "Runic SMTP Test",
@@ -612,7 +629,6 @@ func (h *Handler) UpdateNotificationPrefs(w http.ResponseWriter, r *http.Request
 		}
 	}
 
-	// Apply updates
 	if req.EnabledAlerts != nil {
 		prefs.EnabledAlerts = *req.EnabledAlerts
 	}

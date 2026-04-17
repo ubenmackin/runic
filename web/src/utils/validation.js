@@ -1,8 +1,4 @@
 /**
- * Shared validation utility functions
- */
-
-/**
  * Validates if a port number is in the valid range (1-65535)
  * @param {string|number} port - The port value to validate
  * @returns {boolean} True if the port is valid, false otherwise

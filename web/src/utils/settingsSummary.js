@@ -1,9 +1,4 @@
 /**
-* Settings summary utility functions
-* Generates concise badge text for collapsed settings sections
-*/
-
-/**
 * Get Email Configuration summary (combines SMTP and Instance URL status)
 * @param {Object} smtpConfig - SMTP configuration object
 * @param {string} smtpConfig.host - SMTP server host
@@ -16,14 +11,11 @@
 * @returns {string} Summary string like "SMTP: configured | Instance: set" or "SMTP: not configured"
 */
 export function getSMTPSummary(smtpConfig, instanceSettings) {
-// Determine SMTP status
 const smtpConfigured = smtpConfig?.host && smtpConfig.host.trim() !== ''
 const smtpStatus = smtpConfigured ? 'SMTP: configured' : 'SMTP: not configured'
 
-// Determine instance URL status
 const instanceSet = instanceSettings?.url && instanceSettings.url.trim() !== ''
 
-// Combine status - show instance URL if set
 if (instanceSet) {
 return `${smtpStatus} | Instance: set`
 }
@@ -44,10 +36,8 @@ export function getNotificationSummary(notificationPrefs) {
     return 'TZ: UTC | 0 alerts enabled'
   }
 
-  // Get timezone from quiet_hours, default to UTC
   const timezone = notificationPrefs.quiet_hours?.timezone || 'UTC'
 
-  // Count enabled alert types
   const alertTypes = notificationPrefs.alert_types || {}
   const enabledCount = Object.values(alertTypes).filter(Boolean).length
 
