@@ -69,10 +69,11 @@ export default function MobileBottomNav() {
           className="fixed inset-0 bg-black/50 z-30 md:hidden"
           onClick={handleBackdropClick}
           data-testid="submenu-backdrop"
+          aria-hidden="true"
         />
       )}
 
-      <nav className="fixed bottom-0 left-0 right-0 h-16 bg-charcoal-dark border-t border-gray-border md:hidden">
+      <nav className="fixed bottom-0 left-0 right-0 h-16 bg-charcoal-dark border-t border-gray-border md:hidden z-40">
         <div className="flex items-center justify-around h-full">
           {navItems.map((item) => {
             const hasSubmenu = !!item.submenu
@@ -83,10 +84,12 @@ export default function MobileBottomNav() {
               <div key={item.to || item.key} className="relative">
                 {/* Submenu popup */}
                 {hasSubmenu && isOpen && (
-                  <div
-                    className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-charcoal-dark border border-gray-border rounded-lg shadow-lg min-w-[140px] py-2 z-50"
-                    data-testid={`submenu-${item.key}`}
-                  >
+<div
+            className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-charcoal-dark border border-gray-border rounded-lg shadow-lg min-w-[140px] py-2"
+            data-testid={`submenu-${item.key}`}
+            role="menu"
+            aria-label={`${item.label} menu`}
+          >
 {item.submenu.map((subItem) => {
               const subIsActive = location.pathname === subItem.to
               return (
