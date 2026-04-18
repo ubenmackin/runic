@@ -66,7 +66,7 @@ export default function MobileBottomNav() {
       {/* Backdrop overlay for submenu */}
       {openSubmenu && (
         <div
-          className="fixed inset-0 bg-black/50 z-40 md:hidden"
+          className="fixed inset-0 bg-black/50 z-30 md:hidden"
           onClick={handleBackdropClick}
           data-testid="submenu-backdrop"
         />
@@ -90,20 +90,21 @@ export default function MobileBottomNav() {
 {item.submenu.map((subItem) => {
               const subIsActive = location.pathname === subItem.to
               return (
-                <button
-                  key={subItem.to}
-                  onClick={() => {
-                    navigate(subItem.to)
-                    setOpenSubmenu(null)
-                  }}
-className={`flex w-full items-center justify-center px-6 py-4 text-sm min-h-[44px] transition-colors ${
-                subIsActive ? 'text-purple-active bg-purple-active/10'
-                  : 'text-gray-400 hover:text-light-neutral hover:bg-white/5'
-                }`}
-                  data-testid={`submenu-item-${subItem.to.replace('/', '')}`}
-                >
-                  {subItem.label}
-                </button>
+<button
+          key={subItem.to}
+          onClick={(e) => {
+            e.stopPropagation()
+            navigate(subItem.to)
+            setOpenSubmenu(null)
+          }}
+          className={`flex w-full items-center justify-center px-6 py-4 text-base min-h-[48px] transition-colors ${
+            subIsActive ? 'text-purple-active bg-purple-active/10'
+            : 'text-gray-400 active:bg-white/10'
+          }`}
+          data-testid={`submenu-item-${subItem.to.replace('/', '')}`}
+        >
+          {subItem.label}
+        </button>
               )
             })}
                   </div>
@@ -111,34 +112,34 @@ className={`flex w-full items-center justify-center px-6 py-4 text-sm min-h-[44p
 
                 {/* Nav item */}
                 {hasSubmenu ? (
-                  <button
-                    onClick={() => handleItemClick(item)}
-className={`flex flex-col items-center justify-center px-3 py-2 min-h-[44px] transition-colors ${
-              isActive || isOpen
-                ? 'text-purple-active'
-                : 'text-gray-400 hover:text-light-neutral hover:bg-white/5'
-            }`}
-                    data-testid={`nav-item-${item.key}`}
-                  >
-                    <item.icon className="w-5 h-5" />
-                    <span className="text-xs mt-1">{item.label}</span>
-                    <ChevronUp
-                      className={`w-3 h-3 transition-transform ${isOpen ? 'rotate-180' : ''}`}
-                    />
-                  </button>
+<button
+          onClick={() => handleItemClick(item)}
+          className={`flex flex-col items-center justify-center px-3 py-2 min-h-[48px] transition-colors ${
+            isActive || isOpen
+            ? 'text-purple-active'
+            : 'text-gray-400 active:bg-white/5'
+          }`}
+          data-testid={`nav-item-${item.key}`}
+        >
+          <item.icon className="w-6 h-6" />
+          <span className="text-sm mt-1">{item.label}</span>
+          <ChevronUp
+            className={`w-3 h-3 transition-transform ${isOpen ? 'rotate-180' : ''}`}
+          />
+        </button>
                 ) : (
-                <NavLink
-                  to={item.to}
-                  end={item.to === '/'}
-                  className={({ isActive: navIsActive }) => `flex flex-col items-center justify-center px-3 py-2 min-h-[44px] transition-colors ${
-                    navIsActive
-                      ? 'text-purple-active'
-                      : 'text-gray-400 hover:text-light-neutral hover:bg-white/5'
-                  }`}
-                >
-                    <item.icon className="w-5 h-5" />
-                    <span className="text-xs mt-1">{item.label}</span>
-                  </NavLink>
+<NavLink
+          to={item.to}
+          end={item.to === '/'}
+          className={({ isActive: navIsActive }) => `flex flex-col items-center justify-center px-3 py-2 min-h-[48px] transition-colors ${
+            navIsActive
+            ? 'text-purple-active'
+            : 'text-gray-400 active:bg-white/5'
+          }`}
+        >
+          <item.icon className="w-6 h-6" />
+          <span className="text-sm mt-1">{item.label}</span>
+        </NavLink>
                 )}
               </div>
             )
