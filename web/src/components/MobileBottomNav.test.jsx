@@ -1,6 +1,6 @@
 import { render, screen, fireEvent, within } from '@testing-library/react'
-import { describe, test, expect, beforeEach } from 'vitest'
-import { BrowserRouter, useLocation } from 'react-router-dom'
+import { describe, test, expect, _beforeEach } from 'vitest'
+import { BrowserRouter, useLocation as _useLocation } from 'react-router-dom'
 import MobileBottomNav from './MobileBottomNav'
 
 // Helper to render with router

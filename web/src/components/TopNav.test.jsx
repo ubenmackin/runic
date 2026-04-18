@@ -1,5 +1,5 @@
 import { render, screen, waitFor, fireEvent } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
+import _userEvent from '@testing-library/user-event'
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest'
 import { BrowserRouter } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -472,8 +472,8 @@ describe('TopNav', () => {
       expect(desktopNav).toBeInTheDocument()
     })
 
-    test('user dropdown button shows icon only on mobile', () => {
-      const { container } = renderWithRouter(<TopNav />)
+test('user dropdown button shows icon only on mobile', () => {
+    const { container: _container } = renderWithRouter(<TopNav />)
 
       // The username span should be hidden on mobile
       const usernameSpan = screen.getByText('testuser')
