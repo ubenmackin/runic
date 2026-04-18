@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { NavLink, useLocation } from 'react-router-dom'
+import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { LayoutDashboard, Network, Shield, FileText, Settings, ChevronUp } from 'lucide-react'
 
 const navItems = [
@@ -40,6 +40,7 @@ const navItems = [
 export default function MobileBottomNav() {
   const [openSubmenu, setOpenSubmenu] = useState(null)
   const location = useLocation()
+  const navigate = useNavigate()
 
   const isSubmenuActive = (item) => {
     if (!item.submenu) return false
@@ -54,10 +55,6 @@ export default function MobileBottomNav() {
         setOpenSubmenu(item.key)
       }
     }
-  }
-
-  const handleSubmenuItemClick = () => {
-    setOpenSubmenu(null)
   }
 
   const handleBackdropClick = () => {
@@ -87,25 +84,28 @@ export default function MobileBottomNav() {
                 {/* Submenu popup */}
                 {hasSubmenu && isOpen && (
                   <div
-                    className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-charcoal-dark border border-gray-border rounded-lg shadow-lg min-w-[120px] py-1 z-50"
+                    className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-charcoal-dark border border-gray-border rounded-lg shadow-lg min-w-[140px] py-2 z-50"
                     data-testid={`submenu-${item.key}`}
                   >
-                    {item.submenu.map((subItem) => (
-                      <NavLink
-                        key={subItem.to}
-                        to={subItem.to}
-                        onClick={handleSubmenuItemClick}
-                        className={({ isActive: subIsActive }) =>
-                          `block px-4 py-2 text-sm text-center transition-colors ${
-                            subIsActive
-                              ? 'text-purple-active bg-purple-active/10'
-                              : 'text-gray-400 hover:text-light-neutral'
-                          }`
-                        }
-                      >
-                        {subItem.label}
-                      </NavLink>
-                    ))}
+{item.submenu.map((subItem) => {
+              const subIsActive = location.pathname === subItem.to
+              return (
+                <button
+                  key={subItem.to}
+                  onClick={() => {
+                    navigate(subItem.to)
+                    setOpenSubmenu(null)
+                  }}
+className={`flex w-full items-center justify-center px-6 py-4 text-sm min-h-[44px] transition-colors ${
+                subIsActive ? 'text-purple-active bg-purple-active/10'
+                  : 'text-gray-400 hover:text-light-neutral hover:bg-white/5'
+                }`}
+                  data-testid={`submenu-item-${subItem.to.replace('/', '')}`}
+                >
+                  {subItem.label}
+                </button>
+              )
+            })}
                   </div>
                 )}
 
@@ -113,11 +113,11 @@ export default function MobileBottomNav() {
                 {hasSubmenu ? (
                   <button
                     onClick={() => handleItemClick(item)}
-                    className={`flex flex-col items-center justify-center px-3 py-2 transition-colors ${
-                      isActive || isOpen
-                        ? 'text-purple-active'
-                        : 'text-gray-400 hover:text-light-neutral'
-                    }`}
+className={`flex flex-col items-center justify-center px-3 py-2 min-h-[44px] transition-colors ${
+              isActive || isOpen
+                ? 'text-purple-active'
+                : 'text-gray-400 hover:text-light-neutral hover:bg-white/5'
+            }`}
                     data-testid={`nav-item-${item.key}`}
                   >
                     <item.icon className="w-5 h-5" />
@@ -127,17 +127,15 @@ export default function MobileBottomNav() {
                     />
                   </button>
                 ) : (
-                  <NavLink
-                    to={item.to}
-                    end={item.to === '/'}
-                    className={({ isActive: navIsActive }) =>
-                      `flex flex-col items-center justify-center px-3 py-2 transition-colors ${
-                        navIsActive
-                          ? 'text-purple-active'
-                          : 'text-gray-400 hover:text-light-neutral'
-                      }`
-                    }
-                  >
+                <NavLink
+                  to={item.to}
+                  end={item.to === '/'}
+                  className={({ isActive: navIsActive }) => `flex flex-col items-center justify-center px-3 py-2 min-h-[44px] transition-colors ${
+                    navIsActive
+                      ? 'text-purple-active'
+                      : 'text-gray-400 hover:text-light-neutral hover:bg-white/5'
+                  }`}
+                >
                     <item.icon className="w-5 h-5" />
                     <span className="text-xs mt-1">{item.label}</span>
                   </NavLink>
