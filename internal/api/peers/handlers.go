@@ -467,11 +467,35 @@ func (h *Handler) GetPeerByIP(w http.ResponseWriter, r *http.Request) {
 	common.RespondJSON(w, http.StatusOK, p)
 }
 
+// GetPeerByHostname looks up a peer by exact hostname.
+// GET /api/v1/peers/by-hostname?hostname=<hostname>
+func (h *Handler) GetPeerByHostname(w http.ResponseWriter, r *http.Request) {
+	hostname := r.URL.Query().Get("hostname")
+	if hostname == "" {
+		common.RespondError(w, http.StatusBadRequest, "hostname parameter required")
+		return
+	}
+
+	// Query for peer with exact hostname match (case-sensitive)
+	var p Peer
+	err := h.DB.QueryRowContext(r.Context(), "SELECT id, hostname, ip_address, is_manual FROM peers WHERE hostname = ?", hostname).Scan(&p.ID, &p.Hostname, &p.IPAddress, &p.IsManual)
+	if err == sql.ErrNoRows {
+		common.RespondJSON(w, http.StatusOK, nil) // No peer found
+		return
+	}
+	if err != nil {
+		common.InternalError(w)
+		return
+	}
+	common.RespondJSON(w, http.StatusOK, p)
+}
+
 // RegisterRoutes adds peer routes to the given router.
 func (h *Handler) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("", h.GetPeers).Methods("GET")
 	r.HandleFunc("", h.CreatePeer).Methods("POST")
 	r.HandleFunc("/by-ip", h.GetPeerByIP).Methods("GET")
+	r.HandleFunc("/by-hostname", h.GetPeerByHostname).Methods("GET")
 	r.HandleFunc("/{id:[0-9]+}", h.GetPeers).Methods("GET")
 	r.HandleFunc("/{id:[0-9]+}", h.UpdatePeer).Methods("PUT")
 	r.HandleFunc("/{id:[0-9]+}", h.DeletePeer).Methods("DELETE")

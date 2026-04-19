@@ -428,6 +428,63 @@ function ServiceStep({
   return null
 }
 
+// Editable Field Component for Source/Target/Service/Direction
+function EditableField({
+  label,
+  displayValue,
+  autoDetectedValue,
+  isEditing,
+  onEditClick,
+  onRevert,
+  children,
+  hasOverride
+}) {
+  return (
+    <div className="flex items-center justify-between py-2">
+      <div className="flex items-center gap-2">
+        <span className="text-gray-500 dark:text-amber-muted text-sm">{label}:</span>
+        {hasOverride && (
+          <span className="text-xs px-1.5 py-0.5 bg-purple-100 dark:bg-purple-900 text-purple-700 dark:text-purple-300 rounded-none">
+            Custom
+          </span>
+        )}
+      </div>
+      <div className="flex items-center gap-2">
+        {isEditing ? (
+          <div className="flex items-center gap-2">
+            <div className="w-48">{children}</div>
+            <button
+              type="button"
+              onClick={onRevert}
+              className="text-xs text-gray-500 hover:text-gray-700 dark:text-amber-muted dark:hover:text-amber-primary"
+            >
+              Revert
+            </button>
+          </div>
+        ) : (
+          <>
+            <span className="font-medium text-gray-900 dark:text-light-neutral text-sm">
+              {displayValue}
+            </span>
+            <button
+              type="button"
+              onClick={onEditClick}
+              className="text-xs text-purple-active hover:underline"
+            >
+              Edit
+            </button>
+          </>
+        )}
+      </div>
+      {!isEditing && autoDetectedValue && displayValue !== autoDetectedValue && (
+        <span className="text-xs text-gray-400 dark:text-gray-500 ml-2">
+          (Auto: {autoDetectedValue})
+        </span>
+      )}
+    </div>
+  )
+}
+
 // Policy Configuration Step Component
 function PolicyStep({
   policyConfig,
@@ -437,7 +494,35 @@ function PolicyStep({
   targetPeer,
   direction,
   formErrors,
+  // Editable field props
+  peerOptions = [],
+  serviceOptions = [],
+  directionOptions = [],
+  selectedSourcePeerId,
+  selectedTargetPeerId,
+  selectedServiceId,
+  selectedDirection,
+  setSelectedSourcePeerId,
+  setSelectedTargetPeerId,
+  setSelectedServiceId,
+  setSelectedDirection,
+  editMode = { source: false, target: false, service: false, direction: false },
+  toggleEditMode,
+  revertToAutoDetected,
+  _allPeers = [],
+  _allServices = [],
+  peersLoading = false,
+  getSourceDisplay,
+  getTargetDisplay,
+  getServiceDisplay,
+  getDirectionDisplay,
 }) {
+  // Get the original auto-detected values for comparison
+  const autoDetectedSource = sourcePeer?.hostname || sourcePeer?.ip_address || 'Unknown'
+  const autoDetectedTarget = targetPeer?.hostname || targetPeer?.ip_address || 'Unknown'
+  const autoDetectedService = service ? `${service.name} (${service.protocol}:${service.ports})` : 'Unknown'
+  const autoDetectedDirection = direction === 'OUT' ? 'Forward' : 'Backward'
+
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 gap-4">
@@ -482,37 +567,105 @@ function PolicyStep({
 
       <div className="p-4 bg-gray-50 dark:bg-charcoal-darkest border border-gray-200 dark:border-gray-border rounded-none">
         <h4 className="text-sm font-medium text-gray-700 dark:text-amber-primary mb-3">Policy Summary</h4>
-        <div className="space-y-2 text-sm">
-          <div className="flex justify-between">
-            <span className="text-gray-500 dark:text-amber-muted">Source:</span>
-            <span className="font-medium text-gray-900 dark:text-light-neutral">
-              {sourcePeer?.hostname || sourcePeer?.ip_address || 'Unknown'}
-            </span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-gray-500 dark:text-amber-muted">Target:</span>
-            <span className="font-medium text-gray-900 dark:text-light-neutral">
-              {targetPeer?.hostname || targetPeer?.ip_address || 'Unknown'}
-            </span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-gray-500 dark:text-amber-muted">Service:</span>
-            <span className="font-medium text-gray-900 dark:text-light-neutral">
-              {service?.name} ({service?.protocol}:{service?.ports})
-            </span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-gray-500 dark:text-amber-muted">Direction:</span>
-            <span className="font-medium text-gray-900 dark:text-light-neutral">{direction}</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-gray-500 dark:text-amber-muted">Action:</span>
-            <span className="px-2 py-0.5 text-xs font-medium bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300 rounded-none">
-              ACCEPT
-            </span>
-          </div>
-        </div>
-      </div>
+        <div className="space-y-1">
+          {/* Source Field */}
+          <EditableField
+            label="Source"
+            displayValue={getSourceDisplay ? getSourceDisplay() : (autoDetectedSource)}
+            autoDetectedValue={autoDetectedSource}
+            isEditing={editMode.source}
+            onEditClick={() => toggleEditMode('source')}
+            onRevert={() => revertToAutoDetected('source')}
+            hasOverride={!!selectedSourcePeerId}
+          >
+            {editMode.source && (
+              <SearchableSelect
+                options={peerOptions}
+                value={selectedSourcePeerId}
+                onChange={(val) => { setSelectedSourcePeerId(val); toggleEditMode('source') }}
+                placeholder="Select source peer..."
+                disabled={peersLoading}
+              />
+            )}
+          </EditableField>
+
+          {/* Target Field */}
+          <EditableField
+            label="Target"
+            displayValue={getTargetDisplay ? getTargetDisplay() : (autoDetectedTarget)}
+            autoDetectedValue={autoDetectedTarget}
+            isEditing={editMode.target}
+            onEditClick={() => toggleEditMode('target')}
+            onRevert={() => revertToAutoDetected('target')}
+            hasOverride={!!selectedTargetPeerId}
+          >
+            {editMode.target && (
+              <SearchableSelect
+                options={peerOptions}
+                value={selectedTargetPeerId}
+                onChange={(val) => { setSelectedTargetPeerId(val); toggleEditMode('target') }}
+                placeholder="Select target peer..."
+                disabled={peersLoading}
+              />
+            )}
+          </EditableField>
+
+          {/* Service Field */}
+          <EditableField
+            label="Service"
+            displayValue={getServiceDisplay ? getServiceDisplay() : (autoDetectedService)}
+            autoDetectedValue={autoDetectedService}
+            isEditing={editMode.service}
+            onEditClick={() => toggleEditMode('service')}
+            onRevert={() => revertToAutoDetected('service')}
+            hasOverride={!!selectedServiceId}
+          >
+            {editMode.service && (
+              <SearchableSelect
+                options={serviceOptions}
+                value={selectedServiceId}
+                onChange={(val) => { setSelectedServiceId(val); toggleEditMode('service') }}
+                placeholder="Select service..."
+                disabled={peersLoading}
+              />
+            )}
+          </EditableField>
+
+          {/* Direction Field */}
+          <EditableField
+            label="Direction"
+            displayValue={getDirectionDisplay ? getDirectionDisplay() : (autoDetectedDirection)}
+            autoDetectedValue={autoDetectedDirection}
+            isEditing={editMode.direction}
+            onEditClick={() => toggleEditMode('direction')}
+            onRevert={() => revertToAutoDetected('direction')}
+            hasOverride={!!selectedDirection}
+          >
+            {editMode.direction && (
+              <SearchableSelect
+                options={directionOptions}
+                value={selectedDirection}
+                onChange={(val) => { setSelectedDirection(val); toggleEditMode('direction') }}
+                placeholder="Select direction..."
+              />
+            )}
+          </EditableField>
+
+{/* Action - Read Only */}
+<div className="flex justify-between py-2">
+  <span className="text-gray-500 dark:text-amber-muted text-sm">Action:</span>
+  <span className="px-2 py-0.5 text-xs font-medium bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300 rounded-none">
+    ACCEPT
+  </span>
+</div>
+
+{/* Target Scope - Read Only */}
+<div className="flex justify-between py-2">
+  <span className="text-gray-500 dark:text-amber-muted text-sm">Target Scope:</span>
+  <span className="font-medium text-gray-900 dark:text-light-neutral text-sm">Host + Docker</span>
+</div>
+</div>
+</div>
 
       <div className="flex items-center justify-between p-4 bg-gray-50 dark:bg-charcoal-darkest border border-gray-200 dark:border-gray-border rounded-none">
         <div>
@@ -543,11 +696,46 @@ function ReviewStep({
   sourcePeer,
   targetPeer,
   direction,
-  targetPeerFromLog,
+  // Override values
+  selectedSourcePeerId,
+  selectedTargetPeerId,
+  selectedServiceId,
+  selectedDirection,
+  allPeers = [],
+  allServices = [],
 }) {
   const peerToShow = createNewPeerMode ? newPeer : (existingPeer || newPeer)
   const serviceToShow = existingService || newService
-  const targetToShow = targetPeerFromLog || targetPeer
+
+  // Get display values considering user overrides
+  const getSourceDisplay = () => {
+    if (selectedSourcePeerId) {
+      const peer = allPeers.find(p => p.id === selectedSourcePeerId)
+      return peer?.hostname || peer?.ip_address || '—'
+    }
+    return sourcePeer?.hostname || sourcePeer?.ip_address || '—'
+  }
+
+  const getTargetDisplay = () => {
+    if (selectedTargetPeerId) {
+      const peer = allPeers.find(p => p.id === selectedTargetPeerId)
+      return peer?.hostname || peer?.ip_address || '—'
+    }
+    return targetPeer?.hostname || targetPeer?.ip_address || '—'
+  }
+
+  const getServiceDisplay = () => {
+    if (selectedServiceId) {
+      const svc = allServices.find(s => s.id === selectedServiceId)
+      return svc ? `${svc.name} (${svc.protocol}:${svc.ports})` : '—'
+    }
+    return serviceToShow ? `${serviceToShow.name} (${serviceToShow.protocol}:${serviceToShow.ports})` : '—'
+  }
+
+  const getDirectionDisplay = () => {
+    const effectiveDirection = selectedDirection || direction
+    return effectiveDirection === 'OUT' ? 'Forward' : 'Backward'
+  }
 
   return (
     <div className="space-y-4">
@@ -643,36 +831,40 @@ function ReviewStep({
                 {policyConfig?.priority}
               </span>
             </div>
-            <div>
-              <span className="text-gray-500 dark:text-amber-muted">Source:</span>
-              <span className="ml-2 text-gray-900 dark:text-light-neutral">
-                {sourcePeer?.hostname || sourcePeer?.ip_address || '—'}
-              </span>
-            </div>
-            <div>
-              <span className="text-gray-500 dark:text-amber-muted">Target:</span>
-              <span className="ml-2 text-gray-900 dark:text-light-neutral">
-                {targetToShow?.hostname || targetToShow?.ip_address || '—'}
-              </span>
-            </div>
-            <div>
-              <span className="text-gray-500 dark:text-amber-muted">Service:</span>
-              <span className="ml-2 text-gray-900 dark:text-light-neutral">
-                {serviceToShow?.name} ({serviceToShow?.protocol}:{serviceToShow?.ports})
-              </span>
-            </div>
-            <div>
-              <span className="text-gray-500 dark:text-amber-muted">Action:</span>
-              <span className="ml-2 px-2 py-0.5 text-xs font-medium bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300 rounded-none">
-                ACCEPT
-              </span>
-            </div>
-            <div>
-              <span className="text-gray-500 dark:text-amber-muted">Direction:</span>
-              <span className="ml-2 text-gray-900 dark:text-light-neutral">{direction}</span>
-            </div>
-            <div>
-              <span className="text-gray-500 dark:text-amber-muted">Enabled:</span>
+<div>
+          <span className="text-gray-500 dark:text-amber-muted">Source:</span>
+          <span className="ml-2 text-gray-900 dark:text-light-neutral">
+            {getSourceDisplay()}
+          </span>
+        </div>
+        <div>
+          <span className="text-gray-500 dark:text-amber-muted">Target:</span>
+          <span className="ml-2 text-gray-900 dark:text-light-neutral">
+            {getTargetDisplay()}
+          </span>
+        </div>
+        <div>
+          <span className="text-gray-500 dark:text-amber-muted">Service:</span>
+          <span className="ml-2 text-gray-900 dark:text-light-neutral">
+            {getServiceDisplay()}
+          </span>
+        </div>
+<div>
+  <span className="text-gray-500 dark:text-amber-muted">Action:</span>
+  <span className="ml-2 px-2 py-0.5 text-xs font-medium bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300 rounded-none">
+    ACCEPT
+  </span>
+</div>
+<div>
+  <span className="text-gray-500 dark:text-amber-muted">Target Scope:</span>
+  <span className="ml-2 text-gray-900 dark:text-light-neutral">Host + Docker</span>
+</div>
+<div>
+  <span className="text-gray-500 dark:text-amber-muted">Direction:</span>
+  <span className="ml-2 text-gray-900 dark:text-light-neutral">{getDirectionDisplay()}</span>
+</div>
+        <div>
+          <span className="text-gray-500 dark:text-amber-muted">Enabled:</span>
               <span className={`ml-2 ${policyConfig?.enabled ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
                 {policyConfig?.enabled ? 'Yes' : 'No'}
               </span>
@@ -720,11 +912,11 @@ export default function CraftPolicyWizard({ log, onClose, onSuccess }) {
       // Incoming traffic: source is external, destination is local
       externalIP = logEvent.src_ip || ''
       port = logEvent.dst_port || 0
-    } else if (direction === 'OUT') {
-      // Outgoing traffic: destination is external, source is local
-      externalIP = logEvent.dst_ip || ''
-      port = logEvent.src_port || 0
-    } else {
+} else if (direction === 'OUT') {
+    // Outgoing traffic: destination is external, source is local
+    externalIP = logEvent.dst_ip || ''
+    port = logEvent.dst_port || 0
+  } else {
       // Fallback: use src_ip as external
       externalIP = logEvent.src_ip || ''
       port = logEvent.dst_port || 0
@@ -743,8 +935,9 @@ export default function CraftPolicyWizard({ log, onClose, onSuccess }) {
   const protocol = parsedLog.protocol
 
   // User selections
-  const [existingPeer, setExistingPeer] = useState(null)
-  const [newPeer, setNewPeer] = useState({ hostname: '', ip_address: parsedLog.externalIP, os_type: 'linux', arch: 'amd64' })
+  const [existingTargetPeer, setExistingTargetPeer] = useState(null) // External peer (target)
+  const [newTargetPeer, setNewTargetPeer] = useState({ hostname: '', ip_address: parsedLog.externalIP, os_type: 'linux', arch: 'amd64' })
+  const [existingSourcePeer, setExistingSourcePeer] = useState(null) // Local peer (source from log)
   const [existingService, setExistingService] = useState(null)
   const [newService, setNewService] = useState({ name: '', protocol: parsedLog.protocol, ports: String(parsedLog.port) })
   const [policyConfig, setPolicyConfig] = useState({
@@ -755,64 +948,149 @@ export default function CraftPolicyWizard({ log, onClose, onSuccess }) {
   })
 
   // UI state
-  const [createNewPeerMode, setCreateNewPeerMode] = useState(false)
-  const [peerLoading, setPeerLoading] = useState(true)
-  const [peerError, setPeerError] = useState(null)
+  const [createTargetPeerMode, setCreateTargetPeerMode] = useState(false)
+  const [targetPeerLoading, setTargetPeerLoading] = useState(true)
+  const [targetPeerError, setTargetPeerError] = useState(null)
+  const [_sourcePeerLoading, setSourcePeerLoading] = useState(true)
+  const [_sourcePeerError, setSourcePeerError] = useState(null)
   const [serviceLoading, setServiceLoading] = useState(true)
   const [serviceError, setServiceError] = useState(null)
   const [submitting, setSubmitting] = useState(false)
   const [formErrors, setFormErrors] = useState({})
 
-  // Target peer from log context
-  const targetPeerFromLog = log?.peer_id ? { id: log.peer_id, hostname: log.hostname, ip_address: null } : null
+  // Editable selections for Source/Target/Service/Direction overrides
+  const [selectedSourcePeerId, setSelectedSourcePeerId] = useState(null)
+  const [selectedTargetPeerId, setSelectedTargetPeerId] = useState(null)
+  const [selectedServiceId, setSelectedServiceId] = useState(null)
+  const [selectedDirection, setSelectedDirection] = useState(null)
+  const [editMode, setEditMode] = useState({
+    source: false,
+    target: false,
+    service: false,
+    direction: false
+  })
 
-  // Fetch peer by IP on mount (Peer Step)
+  // All available peers and services for dropdown options
+  const [allPeers, setAllPeers] = useState([])
+  const [allServices, setAllServices] = useState([])
+  const [peersLoading, setPeersLoading] = useState(true)
+
+  // Fetch target peer by external IP on mount (Peer Step)
   useEffect(() => {
     if (!externalIP) {
-      setPeerLoading(false)
-      setPeerError({ message: 'No external IP found in log' })
+      setTargetPeerLoading(false)
+      setTargetPeerError({ message: 'No external IP found in log' })
       return
     }
 
     let isMounted = true
 
-    const fetchPeerByIP = async () => {
-      setPeerLoading(true)
-      setPeerError(null)
+    const fetchTargetPeerByIP = async () => {
+      setTargetPeerLoading(true)
+      setTargetPeerError(null)
       try {
         const peer = await api.get(`/peers/by-ip?ip=${encodeURIComponent(externalIP)}`)
         if (isMounted) {
-          setExistingPeer(peer)
-          setCreateNewPeerMode(false)
+          setExistingTargetPeer(peer)
+          setCreateTargetPeerMode(false)
         }
       } catch (err) {
         if (isMounted) {
           if (err.status === 404) {
-            setPeerError({ message: 'No peer found', status: 404 })
-            setCreateNewPeerMode(true)
+            setTargetPeerError({ message: 'No peer found', status: 404 })
+            setCreateTargetPeerMode(true)
             // Pre-fill hostname with a suggestion
-            setNewPeer(prev => ({
+            setNewTargetPeer(prev => ({
               ...prev,
               hostname: `peer-${externalIP.replace(/\./g, '-')}`,
               ip_address: externalIP
             }))
           } else {
-            setPeerError({ message: err.message })
+            setTargetPeerError({ message: err.message })
           }
-          setExistingPeer(null)
+          setExistingTargetPeer(null)
         }
       } finally {
         if (isMounted) {
-          setPeerLoading(false)
+          setTargetPeerLoading(false)
         }
       }
     }
 
-    fetchPeerByIP()
+    fetchTargetPeerByIP()
     return () => {
       isMounted = false
     }
   }, [externalIP])
+
+  // Fetch source peer by hostname or src_ip from log (local machine)
+  useEffect(() => {
+    const sourceIP = log?.src_ip
+    const sourceHostname = log?.hostname
+
+    if (!sourceIP && !sourceHostname) {
+      setSourcePeerLoading(false)
+      setSourcePeerError({ message: 'No source info found in log' })
+      return
+    }
+
+    let isMounted = true
+
+    const fetchSourcePeer = async () => {
+      setSourcePeerLoading(true)
+      setSourcePeerError(null)
+try {
+      // Try to find peer by hostname first, then by src_ip
+      let peer = null
+      if (sourceHostname) {
+        try {
+          // Use dedicated /by-hostname endpoint for exact match lookup
+          peer = await api.get(`/peers/by-hostname?hostname=${encodeURIComponent(sourceHostname)}`)
+        } catch {
+          // Try by IP if hostname lookup fails
+        }
+      }
+      if (!peer && sourceIP) {
+        try {
+          peer = await api.get(`/peers/by-ip?ip=${encodeURIComponent(sourceIP)}`)
+        } catch {
+          // Peer not found
+        }
+      }
+        if (isMounted) {
+          if (peer) {
+            setExistingSourcePeer(peer)
+          } else {
+            // Create a placeholder for the local source peer (it might not exist in DB yet)
+            setExistingSourcePeer({
+              id: null,
+              hostname: sourceHostname || `local-${sourceIP}`,
+              ip_address: sourceIP
+            })
+          }
+        }
+      } catch (err) {
+        if (isMounted) {
+          setSourcePeerError({ message: err.message })
+          // Still set a placeholder for the source peer
+          setExistingSourcePeer({
+            id: null,
+            hostname: sourceHostname || `local-${sourceIP}`,
+            ip_address: sourceIP
+          })
+        }
+      } finally {
+        if (isMounted) {
+          setSourcePeerLoading(false)
+        }
+      }
+    }
+
+    fetchSourcePeer()
+    return () => {
+      isMounted = false
+    }
+  }, [log?.hostname, log?.src_ip])
 
   // Fetch service by port/protocol when entering service step
   useEffect(() => {
@@ -859,27 +1137,137 @@ export default function CraftPolicyWizard({ log, onClose, onSuccess }) {
   // Generate policy name when moving to policy step
   useEffect(() => {
     if (step === 'policy' && !policyConfig.name) {
-      const peerName = existingPeer?.hostname || newPeer.hostname || 'peer'
+      const targetPeerName = existingTargetPeer?.hostname || newTargetPeer.hostname || 'peer'
       const serviceName = existingService?.name || newService.name || 'service'
-      const generatedName = `${peerName}-${serviceName}`.toLowerCase().replace(/[^a-z0-9-]/g, '-').substring(0, 50)
+      const generatedName = `${targetPeerName}-${serviceName}`.toLowerCase().replace(/[^a-z0-9-]/g, '-').substring(0, 50)
       setPolicyConfig(prev => ({ ...prev, name: generatedName }))
     }
-  }, [step, existingPeer, newPeer, existingService, newService, policyConfig.name])
+  }, [step, existingTargetPeer, newTargetPeer, existingService, newService, policyConfig.name])
+
+  // Fetch all peers and services for dropdown options when entering policy step
+  useEffect(() => {
+    if (step !== 'policy') return
+
+    let isMounted = true
+    setPeersLoading(true)
+
+    const fetchAllData = async () => {
+      try {
+        const [peersData, servicesData] = await Promise.all([
+          api.get('/peers'),
+          api.get('/services')
+        ])
+        if (isMounted) {
+          setAllPeers(peersData || [])
+          setAllServices(servicesData || [])
+        }
+      } catch (err) {
+        if (isMounted) {
+          console.error('Failed to fetch peers/services:', err)
+        }
+      } finally {
+        if (isMounted) {
+          setPeersLoading(false)
+        }
+      }
+    }
+
+    fetchAllData()
+    return () => { isMounted = false }
+  }, [step])
+
+  // Convert peers to options format for SearchableSelect
+  const peerOptions = allPeers.map(peer => ({
+    value: peer.id,
+    label: peer.hostname || peer.ip_address || 'Unknown',
+    sublabel: peer.ip_address
+  }))
+
+  // Convert services to options format for SearchableSelect
+  const serviceOptions = allServices.map(service => ({
+    value: service.id,
+    label: service.name,
+    sublabel: `${service.protocol}:${service.ports}`
+  }))
+
+  // Direction options
+  const directionOptions = [
+    { value: 'OUT', label: 'Forward (OUT)' },
+    { value: 'IN', label: 'Backward (IN)' }
+  ]
+
+  // Get display values for editable fields
+  const getSourceDisplay = () => {
+    if (selectedSourcePeerId) {
+      const peer = allPeers.find(p => p.id === selectedSourcePeerId)
+      return peer?.hostname || peer?.ip_address || 'Unknown'
+    }
+    return existingSourcePeer?.hostname || existingSourcePeer?.ip_address || 'Unknown'
+  }
+
+  const getTargetDisplay = () => {
+    if (selectedTargetPeerId) {
+      const peer = allPeers.find(p => p.id === selectedTargetPeerId)
+      return peer?.hostname || peer?.ip_address || 'Unknown'
+    }
+    const target = createTargetPeerMode ? newTargetPeer : existingTargetPeer
+    return target?.hostname || target?.ip_address || 'Unknown'
+  }
+
+  const getServiceDisplay = () => {
+    if (selectedServiceId) {
+      const svc = allServices.find(s => s.id === selectedServiceId)
+      return svc ? `${svc.name} (${svc.protocol}:${svc.ports})` : 'Unknown'
+    }
+    const svc = existingService || newService
+    return svc ? `${svc.name} (${svc.protocol}:${svc.ports})` : 'Unknown'
+  }
+
+  const getDirectionDisplay = () => {
+    if (selectedDirection) {
+      return selectedDirection === 'OUT' ? 'Forward' : 'Backward'
+    }
+    return direction === 'OUT' ? 'Forward' : 'Backward'
+  }
+
+  // Helper to toggle edit mode for a field
+  const toggleEditMode = (field) => {
+    setEditMode(prev => ({ ...prev, [field]: !prev[field] }))
+  }
+
+  // Helper to revert to auto-detected value
+  const revertToAutoDetected = (field) => {
+    switch (field) {
+      case 'source':
+        setSelectedSourcePeerId(null)
+        break
+      case 'target':
+        setSelectedTargetPeerId(null)
+        break
+      case 'service':
+        setSelectedServiceId(null)
+        break
+      case 'direction':
+        setSelectedDirection(null)
+        break
+    }
+    setEditMode(prev => ({ ...prev, [field]: false }))
+  }
 
   // Validation functions
   const validatePeerStep = useCallback(() => {
     const errors = {}
-    if (createNewPeerMode || !existingPeer) {
-      if (!newPeer.hostname?.trim()) {
+    if (createTargetPeerMode || !existingTargetPeer) {
+      if (!newTargetPeer.hostname?.trim()) {
         errors.hostname = 'Hostname is required'
       }
-      if (!newPeer.ip_address?.trim()) {
+      if (!newTargetPeer.ip_address?.trim()) {
         errors.ip_address = 'IP Address is required'
       }
     }
     setFormErrors(errors)
     return Object.keys(errors).length === 0
-  }, [createNewPeerMode, existingPeer, newPeer])
+  }, [createTargetPeerMode, existingTargetPeer, newTargetPeer])
 
   const validateServiceStep = useCallback(() => {
     const errors = {}
@@ -941,59 +1329,82 @@ export default function CraftPolicyWizard({ log, onClose, onSuccess }) {
   }
 
 // Submit handler
-const handleSubmit = async () => {
-setSubmitting(true)
-setFormErrors({})
+  const handleSubmit = async () => {
+    setSubmitting(true)
+    setFormErrors({})
 
 // Track newly created resources for cleanup on failure
-let createdPeerId = null
-let createdServiceId = null
+  let createdSourcePeerId = null
+  let createdTargetPeerId = null
+  let createdServiceId = null
 
 try {
-let sourcePeerId = existingPeer?.id
-let serviceId = existingService?.id
+    // Source is the local peer from the log, Target is the external peer
+    // Use user-selected overrides if provided, otherwise use auto-detected values
+    let sourcePeerId = selectedSourcePeerId || existingSourcePeer?.id
+    let targetPeerId = selectedTargetPeerId || existingTargetPeer?.id
+    let serviceId = selectedServiceId || existingService?.id
+    const policyDirection = selectedDirection || direction
 
-// Step 1: Create peer if needed
-if (!existingPeer || createNewPeerMode) {
-const createdPeer = await api.post('/peers', {
-hostname: newPeer.hostname,
-ip_address: newPeer.ip_address,
-os_type: newPeer.os_type || null,
-arch: newPeer.arch || null,
-is_manual: true
-})
-sourcePeerId = createdPeer.id
-createdPeerId = createdPeer.id // Track for potential cleanup
-showToast('Peer created successfully', 'success')
-}
+    // Step 0: Create source peer (local machine) if needed
+    // Only create if no existing peer and user hasn't selected an override
+    if (!selectedSourcePeerId && !existingSourcePeer?.id) {
+      const createdSourcePeer = await api.post('/peers', {
+        hostname: existingSourcePeer.hostname,
+        ip_address: existingSourcePeer.ip_address,
+        os_type: null,
+        arch: null,
+        is_manual: true
+      })
+      sourcePeerId = createdSourcePeer.id
+      createdSourcePeerId = createdSourcePeer.id // Track for potential cleanup
+      showToast('Source peer created successfully', 'success')
+    }
 
-// Step 2: Create service if needed
-if (!existingService) {
-const createdService = await api.post('/services', {
-name: newService.name,
-protocol: newService.protocol,
-ports: newService.ports
-})
-serviceId = createdService.id
-createdServiceId = createdService.id // Track for potential cleanup
-showToast('Service created successfully', 'success')
-}
+    // Step 1: Create target peer (external IP) if needed
+    // Only create if no existing peer and user hasn't selected an override
+    if (!selectedTargetPeerId && (!existingTargetPeer || createTargetPeerMode)) {
+      const createdTargetPeer = await api.post('/peers', {
+        hostname: newTargetPeer.hostname,
+        ip_address: newTargetPeer.ip_address,
+        os_type: newTargetPeer.os_type || null,
+        arch: newTargetPeer.arch || null,
+        is_manual: true
+      })
+      targetPeerId = createdTargetPeer.id
+      createdTargetPeerId = createdTargetPeer.id // Track for potential cleanup
+      showToast('Target peer created successfully', 'success')
+    }
 
-// Step 3: Create policy
-await api.post('/policies', {
-name: policyConfig.name,
-description: policyConfig.description || null,
-source_id: sourcePeerId,
-source_type: 'peer',
-service_id: serviceId,
-target_id: log?.peer_id, // Target is the peer from log context
-target_type: 'peer',
-action: 'ACCEPT',
-priority: policyConfig.priority,
-enabled: policyConfig.enabled,
-direction: direction === 'IN' ? 'forward' : 'backward',
-target_scope: 'both'
-})
+    // Step 2: Create service if needed
+    // Only create if no existing service and user hasn't selected an override
+    if (!selectedServiceId && !existingService) {
+      const createdService = await api.post('/services', {
+        name: newService.name,
+        protocol: newService.protocol,
+        ports: newService.ports
+      })
+      serviceId = createdService.id
+      createdServiceId = createdService.id // Track for potential cleanup
+      showToast('Service created successfully', 'success')
+    }
+
+    // Step 3: Create policy
+    // Source = local peer (from log), Target = external peer
+    await api.post('/policies', {
+      name: policyConfig.name,
+      description: policyConfig.description || null,
+      source_id: sourcePeerId,
+      source_type: 'peer',
+      service_id: serviceId,
+      target_id: targetPeerId,
+      target_type: 'peer',
+      action: 'ACCEPT',
+      priority: policyConfig.priority,
+      enabled: policyConfig.enabled,
+      direction: policyDirection === 'OUT' ? 'forward' : 'backward',
+      target_scope: 'both'
+    })
 
 showToast('Policy created successfully', 'success')
 
@@ -1007,22 +1418,29 @@ qc.invalidateQueries({ queryKey: QUERY_KEYS.logs() })
 onSuccess?.()
 onClose?.()
 } catch (err) {
-// Cleanup orphaned resources on failure
-const cleanupErrors = []
-if (createdServiceId) {
-try {
-await api.delete(`/services/${createdServiceId}`)
-} catch (cleanupErr) {
-cleanupErrors.push(`service: ${cleanupErr.message}`)
-}
-}
-if (createdPeerId) {
-try {
-await api.delete(`/peers/${createdPeerId}`)
-} catch (cleanupErr) {
-cleanupErrors.push(`peer: ${cleanupErr.message}`)
-}
-}
+    // Cleanup orphaned resources on failure
+    const cleanupErrors = []
+    if (createdServiceId) {
+      try {
+        await api.delete(`/services/${createdServiceId}`)
+      } catch (cleanupErr) {
+        cleanupErrors.push(`service: ${cleanupErr.message}`)
+      }
+    }
+    if (createdTargetPeerId) {
+      try {
+        await api.delete(`/peers/${createdTargetPeerId}`)
+      } catch (cleanupErr) {
+        cleanupErrors.push(`target peer: ${cleanupErr.message}`)
+      }
+    }
+    if (createdSourcePeerId) {
+      try {
+        await api.delete(`/peers/${createdSourcePeerId}`)
+      } catch (cleanupErr) {
+        cleanupErrors.push(`source peer: ${cleanupErr.message}`)
+      }
+    }
 
 const cleanupMsg = cleanupErrors.length > 0
 ? ` Additionally, cleanup failed for: ${cleanupErrors.join(', ')}`
@@ -1034,21 +1452,21 @@ setSubmitting(false)
 }
 }
 
-  // Check if can proceed
+// Check if can proceed
   const canProceed = useCallback(() => {
     switch (step) {
-      case 'peer':
-        return !peerLoading && (existingPeer || newPeer.hostname)
-      case 'service':
-        return !serviceLoading && (existingService || (newService.name && newService.ports))
-      case 'policy':
-        return !!policyConfig.name
-      case 'review':
-        return true
-      default:
-        return false
+    case 'peer':
+      return !targetPeerLoading && (existingTargetPeer || newTargetPeer.hostname)
+    case 'service':
+      return !serviceLoading && (existingService || (newService.name && newService.ports))
+    case 'policy':
+      return !!policyConfig.name
+    case 'review':
+      return true
+    default:
+      return false
     }
-  }, [step, peerLoading, existingPeer, newPeer, serviceLoading, existingService, newService, policyConfig])
+  }, [step, targetPeerLoading, existingTargetPeer, newTargetPeer, serviceLoading, existingService, newService, policyConfig])
 
   const modalContent = (
     <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50">
@@ -1074,63 +1492,91 @@ setSubmitting(false)
           <StepIndicators currentStep={step} />
         </div>
 
-        {/* Content */}
-        <div className="flex-1 overflow-y-auto p-6">
-          {step === 'peer' && (
-            <PeerStep
-              externalIP={externalIP}
-              existingPeer={existingPeer}
-              setExistingPeer={setExistingPeer}
-              newPeer={newPeer}
-              setNewPeer={setNewPeer}
-              peerLoading={peerLoading}
-              peerError={peerError}
-              createNewPeerMode={createNewPeerMode}
-              setCreateNewPeerMode={setCreateNewPeerMode}
-              formErrors={formErrors}
-            />
-          )}
+{/* Content */}
+      <div className="flex-1 overflow-y-auto p-6">
+      {step === 'peer' && (
+        <PeerStep
+          externalIP={externalIP}
+          existingPeer={existingTargetPeer}
+          setExistingPeer={setExistingTargetPeer}
+          newPeer={newTargetPeer}
+          setNewPeer={setNewTargetPeer}
+          peerLoading={targetPeerLoading}
+          peerError={targetPeerError}
+          createNewPeerMode={createTargetPeerMode}
+          setCreateNewPeerMode={setCreateTargetPeerMode}
+          formErrors={formErrors}
+        />
+      )}
 
-          {step === 'service' && (
-            <ServiceStep
-              port={port}
-              protocol={protocol}
-              existingService={existingService}
-              setExistingService={setExistingService}
-              newService={newService}
-              setNewService={setNewService}
-              serviceLoading={serviceLoading}
-              serviceError={serviceError}
-              formErrors={formErrors}
-            />
-          )}
+      {step === 'service' && (
+        <ServiceStep
+          port={port}
+          protocol={protocol}
+          existingService={existingService}
+          setExistingService={setExistingService}
+          newService={newService}
+          setNewService={setNewService}
+          serviceLoading={serviceLoading}
+          serviceError={serviceError}
+          formErrors={formErrors}
+        />
+      )}
 
-          {step === 'policy' && (
-            <PolicyStep
-              policyConfig={policyConfig}
-              setPolicyConfig={setPolicyConfig}
-              sourcePeer={createNewPeerMode ? newPeer : existingPeer}
-              service={existingService || newService}
-              targetPeer={targetPeerFromLog}
-              direction={direction}
-              formErrors={formErrors}
-            />
-          )}
+      {step === 'policy' && (
+        <PolicyStep
+          policyConfig={policyConfig}
+          setPolicyConfig={setPolicyConfig}
+          sourcePeer={existingSourcePeer}
+          service={existingService || newService}
+          targetPeer={createTargetPeerMode ? newTargetPeer : existingTargetPeer}
+          direction={direction}
+          formErrors={formErrors}
+          // Editable field props
+          peerOptions={peerOptions}
+          serviceOptions={serviceOptions}
+          directionOptions={directionOptions}
+          selectedSourcePeerId={selectedSourcePeerId}
+          selectedTargetPeerId={selectedTargetPeerId}
+          selectedServiceId={selectedServiceId}
+          selectedDirection={selectedDirection}
+          setSelectedSourcePeerId={setSelectedSourcePeerId}
+          setSelectedTargetPeerId={setSelectedTargetPeerId}
+          setSelectedServiceId={setSelectedServiceId}
+          setSelectedDirection={setSelectedDirection}
+          editMode={editMode}
+          toggleEditMode={toggleEditMode}
+          revertToAutoDetected={revertToAutoDetected}
+          allPeers={allPeers}
+          allServices={allServices}
+          peersLoading={peersLoading}
+          getSourceDisplay={getSourceDisplay}
+          getTargetDisplay={getTargetDisplay}
+          getServiceDisplay={getServiceDisplay}
+          getDirectionDisplay={getDirectionDisplay}
+        />
+      )}
 
-          {step === 'review' && (
-            <ReviewStep
-              existingPeer={existingPeer}
-              newPeer={newPeer}
-              createNewPeerMode={createNewPeerMode}
-              existingService={existingService}
-              newService={newService}
-              policyConfig={policyConfig}
-              sourcePeer={createNewPeerMode ? newPeer : existingPeer}
-              targetPeer={targetPeerFromLog}
-              direction={direction}
-              targetPeerFromLog={targetPeerFromLog}
-            />
-          )}
+      {step === 'review' && (
+        <ReviewStep
+          existingPeer={existingTargetPeer}
+          newPeer={newTargetPeer}
+          createNewPeerMode={createTargetPeerMode}
+          existingService={existingService}
+          newService={newService}
+          policyConfig={policyConfig}
+          sourcePeer={existingSourcePeer}
+          targetPeer={createTargetPeerMode ? newTargetPeer : existingTargetPeer}
+          direction={direction}
+          // Pass override values
+          selectedSourcePeerId={selectedSourcePeerId}
+          selectedTargetPeerId={selectedTargetPeerId}
+          selectedServiceId={selectedServiceId}
+          selectedDirection={selectedDirection}
+          allPeers={allPeers}
+          allServices={allServices}
+        />
+      )}
         </div>
 
         {/* Footer */}
