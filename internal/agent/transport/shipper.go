@@ -173,7 +173,7 @@ func (s *Shipper) tail(ctx context.Context, path string) <-chan string {
 			}
 
 			line := scanner.Text()
-			isRunic := strings.Contains(line, "[RUNIC-DROP]") || strings.Contains(line, "[RUNIC-ACCEPT]")
+			isRunic := strings.Contains(line, "[RUNIC-DROP-I]") || strings.Contains(line, "[RUNIC-DROP-O]") || strings.Contains(line, "[RUNIC-ACCEPT]")
 			if isRunic {
 				select {
 				case lines <- line:
@@ -194,8 +194,18 @@ func ParseLogLine(line string) (LogEvent, error) {
 	}
 
 	switch {
-	case strings.Contains(line, "[RUNIC-DROP]"):
+	case strings.Contains(line, "[RUNIC-DROP-I]"):
 		ev.Action = "DROP"
+		// Direction from prefix: I = INPUT
+		if ev.Direction == "" {
+			ev.Direction = "IN"
+		}
+	case strings.Contains(line, "[RUNIC-DROP-O]"):
+		ev.Action = "DROP"
+		// Direction from prefix: O = OUTPUT
+		if ev.Direction == "" {
+			ev.Direction = "OUT"
+		}
 	case strings.Contains(line, "[RUNIC-ACCEPT]"):
 		ev.Action = "ACCEPT"
 	case strings.Contains(line, "DROP"):

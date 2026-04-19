@@ -1,7 +1,7 @@
 import { useState } from 'react'
-import { ChevronDown, ChevronRight } from 'lucide-react'
+import { ChevronDown, ChevronRight, Wand2 } from 'lucide-react'
 
-export default function LogLine({ log, expanded, onToggle }) {
+export default function LogLine({ log, expanded, onToggle, onCraftPolicy, canEdit }) {
   const isControlled = expanded !== undefined
   const [isExpanded, setIsExpanded] = useState(false)
   const showExpanded = isControlled ? expanded : isExpanded
@@ -75,13 +75,27 @@ export default function LogLine({ log, expanded, onToggle }) {
           <pre className="text-gray-600 dark:text-amber-muted whitespace-pre-wrap break-all font-mono">
             {log.raw_line || 'No raw log available'}
           </pre>
-          {log.hostname && (
-            <div className="mt-2 text-gray-500 dark:text-amber-muted">
-              Server: {log.hostname}
-            </div>
-          )}
+{log.hostname && (
+        <div className="mt-2 text-gray-500 dark:text-amber-muted">
+          Server: {log.hostname}
+        </div>
+      )}
+      {canEdit && (log.action === 'DROP' || log.action === 'BLOCK') && onCraftPolicy && (
+        <div className="mt-3">
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              onCraftPolicy(log)
+            }}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-purple-700 dark:text-purple-300 bg-purple-100 dark:bg-purple-900/30 hover:bg-purple-200 dark:hover:bg-purple-900/50 rounded-none border border-purple-200 dark:border-purple-700/50 transition-colors"
+          >
+            <Wand2 className="w-3.5 h-3.5" />
+            Craft Policy
+          </button>
         </div>
       )}
     </div>
+    )}
+  </div>
   )
 }

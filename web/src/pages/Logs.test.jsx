@@ -6,15 +6,19 @@ import Logs from './Logs'
 import * as apiClient from '../api/client'
 
 // Mock the API client
-vi.mock('../api/client', () => ({
-  api: {
-    get: vi.fn(),
-  },
-  QUERY_KEYS: {
-    logs: () => ['logs'],
-    peers: () => ['peers'],
-  },
-}))
+vi.mock('../api/client', async (importOriginal) => {
+  const actual = await importOriginal()
+  return {
+    ...actual,
+    api: {
+      get: vi.fn(),
+    },
+    QUERY_KEYS: {
+      logs: () => ['logs'],
+      peers: () => ['peers'],
+    },
+  }
+})
 
 // Mock SearchableSelect component - render as a simple select
 vi.mock('../components/SearchableSelect', () => ({

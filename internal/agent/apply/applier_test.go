@@ -41,9 +41,9 @@ func TestValidateRulesAndHMAC(t *testing.T) {
 -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 
--A INPUT -j LOG --log-prefix "[RUNIC-DROP] " --log-level 4
+-A INPUT -j LOG --log-prefix "[RUNIC-DROP-I] " --log-level 4
 -A INPUT -j DROP
--A OUTPUT -j LOG --log-prefix "[RUNIC-DROP] " --log-level 4
+-A OUTPUT -j LOG --log-prefix "[RUNIC-DROP-O] " --log-level 4
 -A OUTPUT -j DROP
 
 COMMIT
@@ -81,11 +81,11 @@ COMMIT
 -A INPUT  -s 192.168.1.0/24 -p tcp --dport 22 -m state --state NEW,ESTABLISHED -j ACCEPT
 -A OUTPUT -d 192.168.1.0/24 -p tcp --sport 22 -m state --state ESTABLISHED -j ACCEPT
 
-# --- Logging and default deny ---
--A INPUT  -j LOG --log-prefix "[RUNIC-DROP] " --log-level 4
--A INPUT  -j DROP
--A OUTPUT -j LOG --log-prefix "[RUNIC-DROP] " --log-level 4
--A OUTPUT -j DROP
+		# --- Logging and default deny ---
+		-A INPUT -j LOG --log-prefix "[RUNIC-DROP-I] " --log-level 4
+		-A INPUT -j DROP
+		-A OUTPUT -j LOG --log-prefix "[RUNIC-DROP-O] " --log-level 4
+		-A OUTPUT -j DROP
 
 COMMIT
 `,
@@ -821,9 +821,9 @@ func TestApplyBundleSuccess(t *testing.T) {
 -A OUTPUT -p icmp -j ACCEPT
 -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
--A INPUT -j LOG --log-prefix "[RUNIC-DROP] " --log-level 4
+-A INPUT -j LOG --log-prefix "[RUNIC-DROP-I] " --log-level 4
 -A INPUT -j DROP
--A OUTPUT -j LOG --log-prefix "[RUNIC-DROP] " --log-level 4
+-A OUTPUT -j LOG --log-prefix "[RUNIC-DROP-O] " --log-level 4
 -A OUTPUT -j DROP
 COMMIT
 `,
@@ -850,9 +850,9 @@ COMMIT
 -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 -A DOCKER-USER -j RETURN
--A INPUT -j LOG --log-prefix "[RUNIC-DROP] " --log-level 4
+-A INPUT -j LOG --log-prefix "[RUNIC-DROP-I] " --log-level 4
 -A INPUT -j DROP
--A OUTPUT -j LOG --log-prefix "[RUNIC-DROP] " --log-level 4
+-A OUTPUT -j LOG --log-prefix "[RUNIC-DROP-O] " --log-level 4
 -A OUTPUT -j DROP
 COMMIT
 `,
@@ -945,9 +945,9 @@ func TestApplyBundleRollback(t *testing.T) {
 -A OUTPUT -p icmp -j ACCEPT
 -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
--A INPUT -j LOG --log-prefix "[RUNIC-DROP] " --log-level 4
+-A INPUT -j LOG --log-prefix "[RUNIC-DROP-I] " --log-level 4
 -A INPUT -j DROP
--A OUTPUT -j LOG --log-prefix "[RUNIC-DROP] " --log-level 4
+-A OUTPUT -j LOG --log-prefix "[RUNIC-DROP-O] " --log-level 4
 -A OUTPUT -j DROP
 COMMIT
 `,
@@ -971,9 +971,9 @@ COMMIT
 -A OUTPUT -p icmp -j ACCEPT
 -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
--A INPUT -j LOG --log-prefix "[RUNIC-DROP] " --log-level 4
+-A INPUT -j LOG --log-prefix "[RUNIC-DROP-I] " --log-level 4
 -A INPUT -j DROP
--A OUTPUT -j LOG --log-prefix "[RUNIC-DROP] " --log-level 4
+-A OUTPUT -j LOG --log-prefix "[RUNIC-DROP-O] " --log-level 4
 -A OUTPUT -j DROP
 COMMIT
 `,
@@ -1200,9 +1200,9 @@ func TestApplyBundleIntegrationWithRealMocks(t *testing.T) {
 -A OUTPUT -p icmp -j ACCEPT
 -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
--A INPUT -j LOG --log-prefix "[RUNIC-DROP] " --log-level 4
+-A INPUT -j LOG --log-prefix "[RUNIC-DROP-I] " --log-level 4
 -A INPUT -j DROP
--A OUTPUT -j LOG --log-prefix "[RUNIC-DROP] " --log-level 4
+-A OUTPUT -j LOG --log-prefix "[RUNIC-DROP-O] " --log-level 4
 -A OUTPUT -j DROP
 COMMIT
 `,
@@ -1291,9 +1291,9 @@ add runic_group_office 192.168.1.11
 -A OUTPUT -p icmp -j ACCEPT
 -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
--A INPUT -j LOG --log-prefix "[RUNIC-DROP] " --log-level 4
+-A INPUT -j LOG --log-prefix "[RUNIC-DROP-I] " --log-level 4
 -A INPUT -j DROP
--A OUTPUT -j LOG --log-prefix "[RUNIC-DROP] " --log-level 4
+-A OUTPUT -j LOG --log-prefix "[RUNIC-DROP-O] " --log-level 4
 -A OUTPUT -j DROP
 COMMIT
 `,

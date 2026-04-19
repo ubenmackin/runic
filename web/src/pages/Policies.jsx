@@ -43,7 +43,7 @@ const SYSTEM_RULES = [
   { type: 'accept', title: 'ICMP Error Messages', description: 'ICMP error messages (Destination Unreachable, Time Exceeded, etc.) for allowed connections are accepted.' },
   { type: 'deny', title: 'Invalid Packets', description: 'Packets with invalid state are dropped.' },
   { type: 'accept', title: 'Control Plane Communication', description: 'Agents can always communicate with the control plane for heartbeats and rule updates (requires control_plane_port configuration).' },
-  { type: 'deny', title: 'Default Deny + Logging', description: 'All unmatched INPUT and OUTPUT traffic is logged with prefix "[RUNIC-DROP] " and then dropped.' },
+  { type: 'deny', title: 'Default Deny + Logging', description: 'All unmatched INPUT traffic is logged with prefix "[RUNIC-DROP-I]" and OUTPUT traffic with "[RUNIC-DROP-O]", then dropped.' },
 ]
 
 export default function Policies() {

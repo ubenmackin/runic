@@ -80,7 +80,12 @@ func (rw *ruleWriter) drop(chain, match string) {
 }
 
 func (rw *ruleWriter) logDrop(chain, match string) {
-	fmt.Fprintf(rw.buf, "-A %s %s -j LOG --log-prefix \"[RUNIC-DROP] \" --log-level 4\n", chain, match)
+	// Use direction-specific log prefix: RUNIC-DROP-I for INPUT, RUNIC-DROP-O for OUTPUT
+	prefix := "[RUNIC-DROP-O] " // default for OUTPUT
+	if chain == "INPUT" || chain == "DOCKER-USER" {
+		prefix = "[RUNIC-DROP-I] "
+	}
+	fmt.Fprintf(rw.buf, "-A %s %s -j LOG --log-prefix \"%s\" --log-level 4\n", chain, match, prefix)
 	rw.drop(chain, match)
 }
 
@@ -633,9 +638,9 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 
 	// Logging and default deny (always last)
 	buf.WriteString("# --- Logging and default deny ---\n")
-	buf.WriteString("-A INPUT -j LOG --log-prefix \"[RUNIC-DROP] \" --log-level 4\n")
+	buf.WriteString("-A INPUT -j LOG --log-prefix \"[RUNIC-DROP-I] \" --log-level 4\n")
 	buf.WriteString("-A INPUT -j DROP\n")
-	buf.WriteString("-A OUTPUT -j LOG --log-prefix \"[RUNIC-DROP] \" --log-level 4\n")
+	buf.WriteString("-A OUTPUT -j LOG --log-prefix \"[RUNIC-DROP-O] \" --log-level 4\n")
 	buf.WriteString("-A OUTPUT -j DROP\n")
 
 	// Docker section: RETURN at the end of DOCKER-USER chain
@@ -746,10 +751,15 @@ func (c *Compiler) writeTargetRules(
 		}
 
 		// Handle LOG_DROP action by generating two rules: LOG then DROP
+		// Use direction-specific log prefix: RUNIC-DROP-I for INPUT, RUNIC-DROP-O for OUTPUT
 		handleLogDrop := func(action, chain, match string) {
 			if action == "LOG_DROP" {
+				prefix := "[RUNIC-DROP-O] " // default for OUTPUT
+				if chain == "INPUT" || chain == "DOCKER-USER" {
+					prefix = "[RUNIC-DROP-I] "
+				}
 				rules = append(rules,
-					fmt.Sprintf("-A %s %s -j LOG --log-prefix \"[RUNIC-DROP] \" --log-level 4", chain, match),
+					fmt.Sprintf("-A %s %s -j LOG --log-prefix %q --log-level 4", chain, match, prefix),
 					fmt.Sprintf("-A %s %s -j DROP", chain, match),
 				)
 			} else {

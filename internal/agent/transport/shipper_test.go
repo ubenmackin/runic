@@ -11,9 +11,9 @@ import (
 	"time"
 )
 
-// Test ParseLogLine with RUNIC-DROP action
+// Test ParseLogLine with RUNIC-DROP-I action (INPUT chain)
 func TestParseLogLine_RunicDrop(t *testing.T) {
-	line := `Jan 15 12:00:00 hostname kernel: [RUNIC-DROP] IN=eth0 SRC=192.168.1.100 DST=192.168.1.1 PROTO=TCP SPT=443 DPT=80`
+	line := `Jan 15 12:00:00 hostname kernel: [RUNIC-DROP-I] IN=eth0 SRC=192.168.1.100 DST=192.168.1.1 PROTO=TCP SPT=443 DPT=80`
 
 	ev, err := ParseLogLine(line)
 	if err != nil {
@@ -26,6 +26,30 @@ func TestParseLogLine_RunicDrop(t *testing.T) {
 
 	if ev.RawLine != line {
 		t.Errorf("expected raw line %q, got %q", line, ev.RawLine)
+	}
+
+	// Direction should be extracted from prefix
+	if ev.Direction != "IN" {
+		t.Errorf("expected direction IN from prefix, got %q", ev.Direction)
+	}
+}
+
+// Test ParseLogLine with RUNIC-DROP-O action (OUTPUT chain)
+func TestParseLogLine_RunicDropOutput(t *testing.T) {
+	line := `Jan 15 12:00:00 hostname kernel: [RUNIC-DROP-O] OUT=eth0 SRC=192.168.1.100 DST=192.168.1.1 PROTO=TCP SPT=443 DPT=80`
+
+	ev, err := ParseLogLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if ev.Action != "DROP" {
+		t.Errorf("expected action DROP, got %q", ev.Action)
+	}
+
+	// Direction should be OUT from prefix
+	if ev.Direction != "OUT" {
+		t.Errorf("expected direction OUT from prefix, got %q", ev.Direction)
 	}
 }
 
@@ -45,7 +69,7 @@ func TestParseLogLine_RunicAccept(t *testing.T) {
 
 // Test ParseLogLine with syslog timestamp format
 func TestParseLogLine_SyslogTimestamp(t *testing.T) {
-	line := `Jan 15 14:30:45 server01 kernel: [RUNIC-DROP] SRC=192.168.1.50 DST=10.0.0.1 PROTO=ICMP`
+	line := `Jan 15 14:30:45 server01 kernel: [RUNIC-DROP-I] SRC=192.168.1.50 DST=10.0.0.1 PROTO=ICMP`
 
 	ev, err := ParseLogLine(line)
 	if err != nil {
@@ -60,7 +84,7 @@ func TestParseLogLine_SyslogTimestamp(t *testing.T) {
 
 // Test ParseLogLine with ISO8601 timestamp format
 func TestParseLogLine_ISO8601Timestamp(t *testing.T) {
-	line := `2026-03-31T15:48:14.402322-07:00 hostname kernel: [RUNIC-DROP] SRC=192.168.1.100 DST=192.168.1.1 PROTO=TCP`
+	line := `2026-03-31T15:48:14.402322-07:00 hostname kernel: [RUNIC-DROP-O] SRC=192.168.1.100 DST=192.168.1.1 PROTO=TCP`
 
 	ev, err := ParseLogLine(line)
 	if err != nil {
@@ -75,7 +99,7 @@ func TestParseLogLine_ISO8601Timestamp(t *testing.T) {
 
 // Test ParseLogLine extracts source IP (SRC=)
 func TestParseLogLine_SrcIP(t *testing.T) {
-	line := `Jan 15 12:00:00 hostname kernel: [RUNIC-DROP] SRC=192.168.1.100 DST=192.168.1.1 PROTO=TCP`
+	line := `Jan 15 12:00:00 hostname kernel: [RUNIC-DROP-I] SRC=192.168.1.100 DST=192.168.1.1 PROTO=TCP`
 
 	ev, err := ParseLogLine(line)
 	if err != nil {
@@ -89,7 +113,7 @@ func TestParseLogLine_SrcIP(t *testing.T) {
 
 // Test ParseLogLine extracts destination IP (DST=)
 func TestParseLogLine_DstIP(t *testing.T) {
-	line := `Jan 15 12:00:00 hostname kernel: [RUNIC-DROP] SRC=192.168.1.100 DST=192.168.1.1 PROTO=TCP`
+	line := `Jan 15 12:00:00 hostname kernel: [RUNIC-DROP-O] SRC=192.168.1.100 DST=192.168.1.1 PROTO=TCP`
 
 	ev, err := ParseLogLine(line)
 	if err != nil {
@@ -117,7 +141,7 @@ func TestParseLogLine_Protocol(t *testing.T) {
 
 // Test ParseLogLine extracts source port (SPT=)
 func TestParseLogLine_SrcPort(t *testing.T) {
-	line := `Jan 15 12:00:00 hostname kernel: [RUNIC-DROP] SRC=192.168.1.100 DST=192.168.1.1 PROTO=TCP SPT=443 DPT=80`
+	line := `Jan 15 12:00:00 hostname kernel: [RUNIC-DROP-I] SRC=192.168.1.100 DST=192.168.1.1 PROTO=TCP SPT=443 DPT=80`
 
 	ev, err := ParseLogLine(line)
 	if err != nil {
@@ -131,7 +155,7 @@ func TestParseLogLine_SrcPort(t *testing.T) {
 
 // Test ParseLogLine extracts destination port (DPT=)
 func TestParseLogLine_DstPort(t *testing.T) {
-	line := `Jan 15 12:00:00 hostname kernel: [RUNIC-DROP] SRC=192.168.1.100 DST=192.168.1.1 PROTO=TCP SPT=443 DPT=80`
+	line := `Jan 15 12:00:00 hostname kernel: [RUNIC-DROP-O] SRC=192.168.1.100 DST=192.168.1.1 PROTO=TCP SPT=443 DPT=80`
 
 	ev, err := ParseLogLine(line)
 	if err != nil {
@@ -143,27 +167,43 @@ func TestParseLogLine_DstPort(t *testing.T) {
 	}
 }
 
-// Test ParseLogLine extracts direction (IN=, OUT=)
+// Test ParseLogLine extracts direction (IN=, OUT=) and prefix
 func TestParseLogLine_Direction(t *testing.T) {
 	tests := []struct {
-		name     string
-		line     string
-		expected string
+		name           string
+		line           string
+		expectedDir    string
+		expectedAction string
 	}{
 		{
-			name:     "IN direction",
-			line:     `Jan 15 12:00:00 hostname kernel: [RUNIC-DROP] IN=eth0 SRC=192.168.1.100 DST=192.168.1.1 PROTO=TCP`,
-			expected: "IN",
+			name:           "IN direction from prefix and field",
+			line:           `Jan 15 12:00:00 hostname kernel: [RUNIC-DROP-I] IN=eth0 SRC=192.168.1.100 DST=192.168.1.1 PROTO=TCP`,
+			expectedDir:    "IN",
+			expectedAction: "DROP",
 		},
 		{
-			name:     "OUT direction",
-			line:     `Jan 15 12:00:00 hostname kernel: [RUNIC-DROP] OUT=eth0 SRC=192.168.1.100 DST=192.168.1.1 PROTO=TCP`,
-			expected: "OUT",
+			name:           "OUT direction from prefix and field",
+			line:           `Jan 15 12:00:00 hostname kernel: [RUNIC-DROP-O] OUT=eth0 SRC=192.168.1.100 DST=192.168.1.1 PROTO=TCP`,
+			expectedDir:    "OUT",
+			expectedAction: "DROP",
 		},
 		{
-			name:     "FWD direction (both IN and OUT)",
-			line:     `Jan 15 12:00:00 hostname kernel: [RUNIC-DROP] IN=eth0 OUT=eth1 SRC=192.168.1.100 DST=192.168.1.1 PROTO=TCP`,
-			expected: "FWD",
+			name:           "FWD direction (both IN and OUT)",
+			line:           `Jan 15 12:00:00 hostname kernel: [RUNIC-DROP-I] IN=eth0 OUT=eth1 SRC=192.168.1.100 DST=192.168.1.1 PROTO=TCP`,
+			expectedDir:    "FWD",
+			expectedAction: "DROP",
+		},
+		{
+			name:           "Direction from prefix when no IN/OUT field",
+			line:           `Jan 15 12:00:00 hostname kernel: [RUNIC-DROP-I] SRC=192.168.1.100 DST=192.168.1.1 PROTO=TCP`,
+			expectedDir:    "IN",
+			expectedAction: "DROP",
+		},
+		{
+			name:           "Direction from prefix OUTPUT when no IN/OUT field",
+			line:           `Jan 15 12:00:00 hostname kernel: [RUNIC-DROP-O] SRC=192.168.1.100 DST=192.168.1.1 PROTO=TCP`,
+			expectedDir:    "OUT",
+			expectedAction: "DROP",
 		},
 	}
 
@@ -174,8 +214,12 @@ func TestParseLogLine_Direction(t *testing.T) {
 				t.Fatalf("unexpected error: %v", err)
 			}
 
-			if ev.Direction != tt.expected {
-				t.Errorf("expected direction %q, got %q", tt.expected, ev.Direction)
+			if ev.Direction != tt.expectedDir {
+				t.Errorf("expected direction %q, got %q", tt.expectedDir, ev.Direction)
+			}
+
+			if ev.Action != tt.expectedAction {
+				t.Errorf("expected action %q, got %q", tt.expectedAction, ev.Action)
 			}
 		})
 	}
@@ -183,7 +227,7 @@ func TestParseLogLine_Direction(t *testing.T) {
 
 // Test ParseLogLine handles line without kernel prefix
 func TestParseLogLine_NoKernelPrefix(t *testing.T) {
-	line := `[RUNIC-DROP] SRC=192.168.1.100 DST=192.168.1.1 PROTO=TCP`
+	line := `[RUNIC-DROP-I] SRC=192.168.1.100 DST=192.168.1.1 PROTO=TCP`
 
 	ev, err := ParseLogLine(line)
 	if err != nil {
@@ -195,6 +239,11 @@ func TestParseLogLine_NoKernelPrefix(t *testing.T) {
 		t.Errorf("expected action DROP, got %q", ev.Action)
 	}
 
+	// Direction should be extracted from prefix
+	if ev.Direction != "IN" {
+		t.Errorf("expected direction IN, got %q", ev.Direction)
+	}
+
 	// But fields should be empty as there's no kernel prefix
 	if ev.SrcIP != "" {
 		t.Errorf("expected empty src IP, got %q", ev.SrcIP)
@@ -203,7 +252,7 @@ func TestParseLogLine_NoKernelPrefix(t *testing.T) {
 
 // Test ParseLogLine handles missing fields gracefully
 func TestParseLogLine_MissingFields(t *testing.T) {
-	line := `Jan 15 12:00:00 hostname kernel: [RUNIC-DROP]`
+	line := `Jan 15 12:00:00 hostname kernel: [RUNIC-DROP-I]`
 
 	ev, err := ParseLogLine(line)
 	if err != nil {
@@ -359,7 +408,7 @@ func TestShipper_Ship_HTTPError(t *testing.T) {
 
 // Test ParseLogLine handles IPv6 addresses
 func TestParseLogLine_IPv6(t *testing.T) {
-	line := `Jan 15 12:00:00 hostname kernel: [RUNIC-DROP] SRC=2001:0db8:85a3:0000:0000:8a2e:0370:7334 DST=::1 PROTO=TCP`
+	line := `Jan 15 12:00:00 hostname kernel: [RUNIC-DROP-I] SRC=2001:0db8:85a3:0000:0000:8a2e:0370:7334 DST=::1 PROTO=TCP`
 
 	ev, err := ParseLogLine(line)
 	if err != nil {
@@ -377,7 +426,7 @@ func TestParseLogLine_IPv6(t *testing.T) {
 
 // Test ParseLogLine handles ICMP protocol
 func TestParseLogLine_ICMP(t *testing.T) {
-	line := `Jan 15 12:00:00 hostname kernel: [RUNIC-DROP] SRC=192.168.1.100 DST=192.168.1.1 PROTO=ICMP`
+	line := `Jan 15 12:00:00 hostname kernel: [RUNIC-DROP-I] SRC=192.168.1.100 DST=192.168.1.1 PROTO=ICMP`
 
 	ev, err := ParseLogLine(line)
 	if err != nil {
@@ -486,7 +535,7 @@ func TestParseLogLine_TimestampFormats(t *testing.T) {
 	}{
 		{
 			name:     "Feb 28 timestamp",
-			line:     `Feb 28 23:59:59 hostname kernel: [RUNIC-DROP] SRC=1.1.1.1 DST=2.2.2.2 PROTO=TCP`,
+			line:     `Feb 28 23:59:59 hostname kernel: [RUNIC-DROP-I] SRC=1.1.1.1 DST=2.2.2.2 PROTO=TCP`,
 			expected: "Feb 28 23:59:59",
 		},
 		{
@@ -496,7 +545,7 @@ func TestParseLogLine_TimestampFormats(t *testing.T) {
 		},
 		{
 			name:     "ISO8601 with Z",
-			line:     `2026-01-15T12:00:00Z hostname kernel: [RUNIC-DROP] SRC=1.1.1.1 DST=2.2.2.2 PROTO=TCP`,
+			line:     `2026-01-15T12:00:00Z hostname kernel: [RUNIC-DROP-O] SRC=1.1.1.1 DST=2.2.2.2 PROTO=TCP`,
 			expected: "2026-01-15T12:00:00Z",
 		},
 	}
@@ -535,7 +584,7 @@ Jan 15 12:00:01 hostname kernel: Another message`
 	if err != nil {
 		t.Fatalf("failed to open temp file for append: %v", err)
 	}
-	runicLine := `\nJan 15 12:00:02 hostname kernel: [RUNIC-DROP] SRC=192.168.1.100 DST=192.168.1.1 PROTO=TCP`
+	runicLine := `\nJan 15 12:00:02 hostname kernel: [RUNIC-DROP-I] SRC=192.168.1.100 DST=192.168.1.1 PROTO=TCP`
 	if _, err := f.WriteString(runicLine); err != nil {
 		_ = f.Close()
 		t.Fatalf("failed to append to temp file: %v", err)
@@ -556,8 +605,8 @@ Jan 15 12:00:01 hostname kernel: Another message`
 	// This test verifies that tail doesn't panic on non-existent files
 	// and that it handles filtering when it does receive lines
 	if len(runicLines) > 0 {
-		if !strings.Contains(runicLines[0], "[RUNIC-DROP]") {
-			t.Errorf("expected RUNIC-DROP line, got %q", runicLines[0])
+		if !strings.Contains(runicLines[0], "[RUNIC-DROP-I]") && !strings.Contains(runicLines[0], "[RUNIC-DROP-O]") {
+			t.Errorf("expected RUNIC-DROP-I or RUNIC-DROP-O line, got %q", runicLines[0])
 		}
 	}
 }

@@ -1282,6 +1282,124 @@ func TestDeletePeer_NotInUse_Success(t *testing.T) {
 	}
 }
 
+// TestGetPeerByIP tests the GET /peers/by-ip endpoint.
+func TestGetPeerByIP(t *testing.T) {
+	tests := []struct {
+		name        string
+		queryParams string
+		setup       func(t *testing.T, db *sql.DB)
+		wantCode    int
+		wantErr     string
+		wantPeer    *Peer
+		wantNil     bool
+	}{
+		{
+			name:        "missing ip parameter",
+			queryParams: "",
+			setup:       nil,
+			wantCode:    http.StatusBadRequest,
+			wantErr:     "ip parameter required",
+		},
+		{
+			name:        "peer found",
+			queryParams: "?ip=10.0.0.1",
+			setup: func(t *testing.T, db *sql.DB) {
+				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, is_manual) VALUES (?, ?, ?, ?, ?, ?)`, "test-peer", "10.0.0.1", "key", "hmac", 0, 0)
+			},
+			wantCode: http.StatusOK,
+			wantPeer: &Peer{ID: 1, Hostname: "test-peer", IPAddress: "10.0.0.1", IsManual: false},
+		},
+		{
+			name:        "peer not found",
+			queryParams: "?ip=10.0.0.99",
+			setup: func(t *testing.T, db *sql.DB) {
+				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`, "test-peer", "10.0.0.1", "key", "hmac", 0)
+			},
+			wantCode: http.StatusOK,
+			wantNil:  true,
+		},
+		{
+			name:        "manual peer found",
+			queryParams: "?ip=192.168.1.1",
+			setup: func(t *testing.T, db *sql.DB) {
+				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, is_manual) VALUES (?, ?, ?, ?, ?, ?)`, "manual-peer", "192.168.1.1", "key", "hmac", 0, 1)
+			},
+			wantCode: http.StatusOK,
+			wantPeer: &Peer{ID: 1, Hostname: "manual-peer", IPAddress: "192.168.1.1", IsManual: true},
+		},
+		{
+			name:        "ipv6 address - peer found",
+			queryParams: "?ip=::1",
+			setup: func(t *testing.T, db *sql.DB) {
+				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`, "ipv6-peer", "::1", "key", "hmac", 0)
+			},
+			wantCode: http.StatusOK,
+			wantPeer: &Peer{ID: 1, Hostname: "ipv6-peer", IPAddress: "::1", IsManual: false},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			database, cleanup := testutil.SetupTestDB(t)
+			defer cleanup()
+
+			if tt.setup != nil {
+				tt.setup(t, database)
+			}
+
+			url := "/api/v1/peers/by-ip" + tt.queryParams
+			req := httptest.NewRequest("GET", url, nil)
+			w := httptest.NewRecorder()
+
+			handler := NewHandler(database, nil)
+			handler.GetPeerByIP(w, req)
+
+			if w.Code != tt.wantCode {
+				t.Errorf("expected status %d, got %d: %s", tt.wantCode, w.Code, w.Body.String())
+			}
+
+			if tt.wantErr != "" {
+				var resp map[string]string
+				if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+					t.Fatalf("failed to decode error response: %v", err)
+				}
+				if !strings.Contains(resp["error"], tt.wantErr) {
+					t.Errorf("expected error containing %q, got %q", tt.wantErr, resp["error"])
+				}
+			}
+
+			if tt.wantPeer != nil {
+				var p Peer
+				if err := json.NewDecoder(w.Body).Decode(&p); err != nil {
+					t.Fatalf("failed to decode peer response: %v", err)
+				}
+				if p.ID != tt.wantPeer.ID {
+					t.Errorf("expected ID %d, got %d", tt.wantPeer.ID, p.ID)
+				}
+				if p.Hostname != tt.wantPeer.Hostname {
+					t.Errorf("expected hostname %q, got %q", tt.wantPeer.Hostname, p.Hostname)
+				}
+				if p.IPAddress != tt.wantPeer.IPAddress {
+					t.Errorf("expected ip_address %q, got %q", tt.wantPeer.IPAddress, p.IPAddress)
+				}
+				if p.IsManual != tt.wantPeer.IsManual {
+					t.Errorf("expected is_manual %v, got %v", tt.wantPeer.IsManual, p.IsManual)
+				}
+			}
+
+			if tt.wantNil {
+				var resp interface{}
+				if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+					t.Fatalf("failed to decode response: %v", err)
+				}
+				if resp != nil {
+					t.Errorf("expected nil response, got %v", resp)
+				}
+			}
+		})
+	}
+}
+
 // TestGetPeerBundle_WithIncludePending tests that include_pending=true returns
 // both the latest (pending) bundle and the deployed bundle for diff comparison.
 func TestGetPeerBundle_WithIncludePending(t *testing.T) {

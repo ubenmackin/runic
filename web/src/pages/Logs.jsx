@@ -1,11 +1,14 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { FileText, Play, Pause, Trash2, Wifi, WifiOff, X } from 'lucide-react'
 import { api, QUERY_KEYS } from '../api/client'
 import { useDebounce } from '../hooks/useDebounce'
+import { useAuth } from '../hooks/useAuth'
+import { useToastContext } from '../hooks/ToastContext'
 import EmptyState from '../components/EmptyState'
 import TableSkeleton from '../components/TableSkeleton'
 import LogLine from '../components/LogLine'
+import CraftPolicyWizard from '../components/CraftPolicyWizard'
 import SearchableSelect from '../components/SearchableSelect'
 import PageHeader from '../components/PageHeader'
 import Pagination from '../components/Pagination'
@@ -43,6 +46,19 @@ export default function Logs() {
 
   // Ref to track current mode in callbacks (avoid stale closures)
   const modeRef = useRef(mode)
+
+  const queryClient = useQueryClient()
+  const { canEdit } = useAuth()
+  const showToast = useToastContext()
+
+  // Craft Policy Wizard state
+  const [wizardOpen, setWizardOpen] = useState(false)
+  const [wizardLog, setWizardLog] = useState(null)
+
+  const handleCraftPolicy = (log) => {
+    setWizardLog(log)
+    setWizardOpen(true)
+  }
 
   // Keep modeRef in sync with mode state
   useEffect(() => {
@@ -354,8 +370,8 @@ isPaused
           ) : (
 <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none overflow-hidden">
           <div className="overflow-y-auto max-h-[600px]">
-            {data.logs.map((log, i) => (
-                  <LogLine key={log.id || i} log={log} />
+                {data.logs.map((log, i) => (
+                  <LogLine key={log.id || i} log={log} onCraftPolicy={handleCraftPolicy} canEdit={canEdit} />
                 ))}
               </div>
               <Pagination
@@ -381,12 +397,26 @@ totalItems={data.total}
               </div>
             ) : (
               liveLogs.map((log, i) => (
-                <LogLine key={log.id || `${i}-${log.timestamp}`} log={log} />
+                <LogLine key={log.id || `${i}-${log.timestamp}`} log={log} onCraftPolicy={handleCraftPolicy} canEdit={canEdit} />
               ))
             )}
-            <div ref={logsEndRef} />
-          </div>
+        <div ref={logsEndRef} />
         </div>
+      </div>
+      )}
+
+      {wizardOpen && wizardLog && (
+        <CraftPolicyWizard
+          log={wizardLog}
+          onClose={() => setWizardOpen(false)}
+          onSuccess={() => {
+            setWizardOpen(false)
+            queryClient.invalidateQueries({ queryKey: QUERY_KEYS.policies() })
+            queryClient.invalidateQueries({ queryKey: QUERY_KEYS.peers() })
+            queryClient.invalidateQueries({ queryKey: QUERY_KEYS.services() })
+            showToast('Policy created successfully', 'success')
+          }}
+        />
       )}
     </div>
   )

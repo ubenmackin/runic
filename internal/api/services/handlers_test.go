@@ -698,6 +698,243 @@ func TestDeleteService_InUseByPolicy(t *testing.T) {
 	}
 }
 
+// =============================================================================
+// GetServiceByPort Tests
+// =============================================================================
+
+func TestGetServiceByPort_MissingPort(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	h := NewHandler(database, nil, nil)
+	req := httptest.NewRequest("GET", "/api/v1/services/by-port", nil)
+	w := httptest.NewRecorder()
+
+	h.GetServiceByPort(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected status %d, got %d: %s", http.StatusBadRequest, w.Code, w.Body.String())
+	}
+}
+
+func TestGetServiceByPort_InvalidPort(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	h := NewHandler(database, nil, nil)
+	req := httptest.NewRequest("GET", "/api/v1/services/by-port?port=invalid", nil)
+	w := httptest.NewRecorder()
+
+	h.GetServiceByPort(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected status %d, got %d: %s", http.StatusBadRequest, w.Code, w.Body.String())
+	}
+}
+
+func TestGetServiceByPort_NotFound(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	h := NewHandler(database, nil, nil)
+	req := httptest.NewRequest("GET", "/api/v1/services/by-port?port=80", nil)
+	w := httptest.NewRecorder()
+
+	h.GetServiceByPort(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d", http.StatusOK, w.Code)
+	}
+
+	// Should return null (JSON encodes nil as "null")
+	if w.Body.String() != "null\n" {
+		t.Errorf("expected null response, got: %s", w.Body.String())
+	}
+}
+
+func TestGetServiceByPort_Found_SinglePort(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	// Create a user service with single port
+	database.Exec(`INSERT INTO services (name, ports, protocol, description, is_system) VALUES (?, ?, ?, ?, 0)`,
+		"ssh", "22", "tcp", "SSH service")
+
+	h := NewHandler(database, nil, nil)
+	req := httptest.NewRequest("GET", "/api/v1/services/by-port?port=22", nil)
+	w := httptest.NewRecorder()
+
+	h.GetServiceByPort(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d: %s", http.StatusOK, w.Code, w.Body.String())
+	}
+
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+
+	if resp["name"] != "ssh" {
+		t.Errorf("expected name 'ssh', got '%v'", resp["name"])
+	}
+}
+
+func TestGetServiceByPort_Found_MultiplePorts(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	// Create a user service with multiple ports
+	database.Exec(`INSERT INTO services (name, ports, protocol, description, is_system) VALUES (?, ?, ?, ?, 0)`,
+		"http", "80,443,8080", "tcp", "HTTP service")
+
+	h := NewHandler(database, nil, nil)
+
+	// Test finding port at start
+	req := httptest.NewRequest("GET", "/api/v1/services/by-port?port=80", nil)
+	w := httptest.NewRecorder()
+	h.GetServiceByPort(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d", http.StatusOK, w.Code)
+	}
+
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+	if resp["name"] != "http" {
+		t.Errorf("expected name 'http', got '%v'", resp["name"])
+	}
+
+	// Test finding port in middle
+	req = httptest.NewRequest("GET", "/api/v1/services/by-port?port=443", nil)
+	w = httptest.NewRecorder()
+	h.GetServiceByPort(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d", http.StatusOK, w.Code)
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+	if resp["name"] != "http" {
+		t.Errorf("expected name 'http', got '%v'", resp["name"])
+	}
+
+	// Test finding port at end
+	req = httptest.NewRequest("GET", "/api/v1/services/by-port?port=8080", nil)
+	w = httptest.NewRecorder()
+	h.GetServiceByPort(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d", http.StatusOK, w.Code)
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+	if resp["name"] != "http" {
+		t.Errorf("expected name 'http', got '%v'", resp["name"])
+	}
+}
+
+func TestGetServiceByPort_WithProtocolFilter(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	// Create services with same port but different protocols
+	database.Exec(`INSERT INTO services (name, ports, protocol, is_system) VALUES (?, ?, ?, 0)`,
+		"dns-tcp", "53", "tcp")
+	database.Exec(`INSERT INTO services (name, ports, protocol, is_system) VALUES (?, ?, ?, 0)`,
+		"dns-udp", "53", "udp")
+	database.Exec(`INSERT INTO services (name, ports, protocol, is_system) VALUES (?, ?, ?, 0)`,
+		"dns-both", "53", "both")
+
+	h := NewHandler(database, nil, nil)
+
+	// Filter by tcp - should match dns-tcp or dns-both
+	req := httptest.NewRequest("GET", "/api/v1/services/by-port?port=53&protocol=tcp", nil)
+	w := httptest.NewRecorder()
+	h.GetServiceByPort(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d", http.StatusOK, w.Code)
+	}
+
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+	name := resp["name"].(string)
+	if name != "dns-tcp" && name != "dns-both" {
+		t.Errorf("expected 'dns-tcp' or 'dns-both', got '%s'", name)
+	}
+
+	// Filter by udp - should match dns-udp or dns-both
+	req = httptest.NewRequest("GET", "/api/v1/services/by-port?port=53&protocol=udp", nil)
+	w = httptest.NewRecorder()
+	h.GetServiceByPort(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d", http.StatusOK, w.Code)
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+	name = resp["name"].(string)
+	if name != "dns-udp" && name != "dns-both" {
+		t.Errorf("expected 'dns-udp' or 'dns-both', got '%s'", name)
+	}
+}
+
+func TestGetServiceByPort_IgnoresSystemService(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	// Create a system service with port 22
+	database.Exec(`INSERT INTO services (name, ports, protocol, is_system) VALUES (?, ?, ?, 1)`,
+		"ssh-system", "22", "tcp")
+
+	h := NewHandler(database, nil, nil)
+	req := httptest.NewRequest("GET", "/api/v1/services/by-port?port=22", nil)
+	w := httptest.NewRecorder()
+
+	h.GetServiceByPort(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d", http.StatusOK, w.Code)
+	}
+
+	// Should return null since system services are excluded
+	if w.Body.String() != "null\n" {
+		t.Errorf("expected null response for system service, got: %s", w.Body.String())
+	}
+}
+
+func TestGetServiceByPort_IgnoresPendingDelete(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	// Create a service pending deletion
+	database.Exec(`INSERT INTO services (name, ports, protocol, is_system, is_pending_delete) VALUES (?, ?, ?, 0, 1)`,
+		"ssh-deleted", "22", "tcp")
+
+	h := NewHandler(database, nil, nil)
+	req := httptest.NewRequest("GET", "/api/v1/services/by-port?port=22", nil)
+	w := httptest.NewRecorder()
+
+	h.GetServiceByPort(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d", http.StatusOK, w.Code)
+	}
+
+	// Should return null since pending delete services are excluded
+	if w.Body.String() != "null\n" {
+		t.Errorf("expected null response for pending delete service, got: %s", w.Body.String())
+	}
+}
+
 func TestDeleteService_NotInUse_Success(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()

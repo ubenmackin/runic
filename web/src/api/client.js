@@ -114,3 +114,13 @@ export const QUERY_KEYS = {
 }
 
 export const getVersion = () => api.get('/info')
+
+// Peer lookup by IP
+export const getPeerByIP = (ip) => api.get(`/peers/by-ip?ip=${encodeURIComponent(ip)}`)
+
+// Service lookup by port
+export const getServiceByPort = (port, protocol = '') => {
+  const params = new URLSearchParams({ port })
+  if (protocol) params.append('protocol', protocol)
+  return api.get(`/services/by-port?${params}`)
+}

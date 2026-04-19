@@ -358,9 +358,72 @@ func (h *Handler) queueServiceChange(ctx context.Context, serviceID int, action,
 func (h *Handler) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("", h.ListServices).Methods("GET")
 	r.HandleFunc("", h.CreateService).Methods("POST")
+	r.HandleFunc("/by-port", h.GetServiceByPort).Methods("GET")
 	r.HandleFunc("/{id:[0-9]+}", h.GetService).Methods("GET")
 	r.HandleFunc("/{id:[0-9]+}", h.UpdateService).Methods("PUT")
 	r.HandleFunc("/{id:[0-9]+}", h.DeleteService).Methods("DELETE")
+}
+
+// GetServiceByPort returns the first user service matching a given port and optional protocol.
+// GET /api/v1/services/by-port?port=<port>&protocol=<protocol>
+func (h *Handler) GetServiceByPort(w http.ResponseWriter, r *http.Request) {
+	port := r.URL.Query().Get("port")
+	protocol := r.URL.Query().Get("protocol")
+
+	if port == "" {
+		common.RespondError(w, http.StatusBadRequest, "port parameter required")
+		return
+	}
+
+	// Validate port format
+	if !engine.ValidPortsRe.MatchString(port) {
+		common.RespondError(w, http.StatusBadRequest, "invalid port format")
+		return
+	}
+
+	// Build query to find service where port is in the ports list
+	// The ports field is comma-separated, so we need to match:
+	// - port exactly (e.g., "80")
+	// - port at start of list (e.g., "80,443")
+	// - port in middle of list (e.g., "443,80,8080")
+	// - port at end of list (e.g., "443,80")
+	query := `
+		SELECT id, name, ports, COALESCE(source_ports, ''), protocol, COALESCE(description, ''), direction_hint, COALESCE(is_system, 0), COALESCE(is_pending_delete, 0)
+		FROM services
+		WHERE (ports = ? OR ports LIKE ? OR ports LIKE ? OR ports LIKE ?)
+		AND is_system = 0
+		AND is_pending_delete = 0
+	`
+	args := []interface{}{port, port + ",%", "%," + port + ",%", "%," + port}
+
+	if protocol != "" {
+		query += " AND (protocol = ? OR protocol = 'both')"
+		args = append(args, protocol)
+	}
+
+	query += " LIMIT 1"
+
+	var s struct {
+		ID              int    `json:"id"`
+		Name            string `json:"name"`
+		Ports           string `json:"ports"`
+		SourcePorts     string `json:"source_ports"`
+		Protocol        string `json:"protocol"`
+		Description     string `json:"description"`
+		DirectionHint   string `json:"direction_hint"`
+		IsSystem        bool   `json:"is_system"`
+		IsPendingDelete bool   `json:"is_pending_delete"`
+	}
+
+	err := h.DB.QueryRowContext(r.Context(), query, args...).Scan(
+		&s.ID, &s.Name, &s.Ports, &s.SourcePorts, &s.Protocol, &s.Description, &s.DirectionHint, &s.IsSystem, &s.IsPendingDelete)
+	if err != nil {
+		// No match found - return null
+		common.RespondJSON(w, http.StatusOK, nil)
+		return
+	}
+
+	common.RespondJSON(w, http.StatusOK, s)
 }
 
 func (h *Handler) snapshotService(ctx context.Context, action string, serviceID int) error {
