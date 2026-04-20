@@ -505,7 +505,7 @@ describe('CraftPolicyWizard', () => {
       await user.click(screen.getByRole('button', { name: /next/i }))
 
       await waitFor(() => {
-        expect(screen.getByText('Policy Summary')).toBeInTheDocument()
+expect(screen.getByText('Description (Optional)')).toBeInTheDocument()
         expect(screen.getByText('ACCEPT')).toBeInTheDocument()
       })
     })
@@ -1271,9 +1271,9 @@ test('handles missing log gracefully', async () => {
       await user.click(screen.getByRole('button', { name: /next/i }))
 
       // Wait for policy step to load
-      await waitFor(() => expect(screen.getByText('Policy Summary')).toBeInTheDocument())
+await waitFor(() => expect(screen.getByText('Description (Optional)')).toBeInTheDocument())
 
-      // Verify direction displays as "Forward" for OUT direction
+// Verify direction displays as "Forward" for OUT direction
       // The component converts OUT to Forward in getDirectionDisplay
       expect(screen.getByText('Forward')).toBeInTheDocument()
 
@@ -1333,7 +1333,7 @@ test('handles missing log gracefully', async () => {
       await user.click(screen.getByRole('button', { name: /next/i }))
 
       // Wait for policy step with editable fields
-      await waitFor(() => expect(screen.getByText('Policy Summary')).toBeInTheDocument())
+      await waitFor(() => expect(screen.getByText('Description (Optional)')).toBeInTheDocument())
 
 // Verify that there are Edit buttons present for the editable fields
       // The component has Edit buttons for: Source, Target, Service, Direction
