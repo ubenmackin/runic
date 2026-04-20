@@ -517,11 +517,13 @@ function PolicyStep({
   getServiceDisplay,
   getDirectionDisplay,
 }) {
+  const [showDescription, setShowDescription] = useState(false)
+
   // Get the original auto-detected values for comparison
   const autoDetectedSource = sourcePeer?.hostname || sourcePeer?.ip_address || 'Unknown'
   const autoDetectedTarget = targetPeer?.hostname || targetPeer?.ip_address || 'Unknown'
   const autoDetectedService = service ? `${service.name} (${service.protocol}:${service.ports})` : 'Unknown'
-  const autoDetectedDirection = direction === 'OUT' ? 'Forward' : 'Backward'
+  const autoDetectedDirection = direction === 'OUT' ? 'Forward' : direction === 'IN' ? 'Backward' : 'Both'
 
   return (
     <div className="space-y-4">
@@ -552,119 +554,161 @@ function PolicyStep({
         </div>
       </div>
 
-      <div>
-        <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-          Description
-        </label>
-        <textarea
-          value={policyConfig.description}
-          onChange={e => setPolicyConfig(prev => ({ ...prev, description: e.target.value }))}
-          rows={2}
-          placeholder="Optional description for this policy"
-          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-        />
+<div className="border border-gray-200 dark:border-gray-border rounded-none overflow-hidden">
+  <button
+    type="button"
+    onClick={() => setShowDescription(!showDescription)}
+    className="w-full px-4 py-3 flex items-center justify-between bg-gray-50 dark:bg-charcoal-darkest hover:bg-gray-100 dark:hover:bg-charcoal-dark transition-colors"
+  >
+    <span className="text-sm font-medium text-gray-700 dark:text-amber-primary">Description (Optional)</span>
+    <svg className={`w-4 h-4 text-gray-500 transition-transform duration-150 ${showDescription ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+    </svg>
+  </button>
+  <div className={`transition-all duration-150 ease-in-out ${showDescription ? 'max-h-32 opacity-100' : 'max-h-0 opacity-0'} overflow-hidden`}>
+    <div className="p-4">
+      <textarea
+        value={policyConfig.description}
+        onChange={e => setPolicyConfig(prev => ({ ...prev, description: e.target.value }))}
+        rows={2}
+        placeholder="Add a description for this policy..."
+        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+      />
+    </div>
+  </div>
+</div>
+
+<div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+  {/* Direction Column */}
+  <div className="bg-gray-50 dark:bg-charcoal-darkest border border-gray-200 dark:border-gray-border rounded-none p-3">
+    <div className="flex items-center justify-between mb-2">
+      <span className="text-xs font-medium text-gray-500 dark:text-amber-muted uppercase">Direction</span>
+      {selectedDirection && (
+        <span className="text-xs px-1.5 py-0.5 bg-purple-100 dark:bg-purple-900 text-purple-700 dark:text-purple-300 rounded-none">Custom</span>
+      )}
+    </div>
+    {editMode.direction ? (
+      <SearchableSelect
+        options={directionOptions}
+        value={selectedDirection}
+        onChange={(val) => { setSelectedDirection(val); toggleEditMode('direction') }}
+        placeholder="Select direction..."
+      />
+    ) : (
+      <div className="flex items-center justify-between">
+        <span className="font-medium text-gray-900 dark:text-light-neutral text-sm">
+          {getDirectionDisplay ? getDirectionDisplay() : autoDetectedDirection}
+        </span>
+        <button
+          type="button"
+          onClick={() => toggleEditMode('direction')}
+          className="text-xs text-purple-active hover:underline"
+        >
+          Edit
+        </button>
       </div>
+    )}
+  </div>
 
-      <div className="p-4 bg-gray-50 dark:bg-charcoal-darkest border border-gray-200 dark:border-gray-border rounded-none">
-        <h4 className="text-sm font-medium text-gray-700 dark:text-amber-primary mb-3">Policy Summary</h4>
-        <div className="space-y-1">
-          {/* Source Field */}
-          <EditableField
-            label="Source"
-            displayValue={getSourceDisplay ? getSourceDisplay() : (autoDetectedSource)}
-            autoDetectedValue={autoDetectedSource}
-            isEditing={editMode.source}
-            onEditClick={() => toggleEditMode('source')}
-            onRevert={() => revertToAutoDetected('source')}
-            hasOverride={!!selectedSourcePeerId}
-          >
-            {editMode.source && (
-              <SearchableSelect
-                options={peerOptions}
-                value={selectedSourcePeerId}
-                onChange={(val) => { setSelectedSourcePeerId(val); toggleEditMode('source') }}
-                placeholder="Select source peer..."
-                disabled={peersLoading}
-              />
-            )}
-          </EditableField>
+  {/* Target Column */}
+  <div className="bg-gray-50 dark:bg-charcoal-darkest border border-gray-200 dark:border-gray-border rounded-none p-3">
+    <div className="flex items-center justify-between mb-2">
+      <span className="text-xs font-medium text-gray-500 dark:text-amber-muted uppercase">Target</span>
+      {selectedTargetPeerId && (
+        <span className="text-xs px-1.5 py-0.5 bg-purple-100 dark:bg-purple-900 text-purple-700 dark:text-purple-300 rounded-none">Custom</span>
+      )}
+    </div>
+    {editMode.target ? (
+      <SearchableSelect
+        options={peerOptions}
+        value={selectedTargetPeerId}
+        onChange={(val) => { setSelectedTargetPeerId(val); toggleEditMode('target') }}
+        placeholder="Select target peer..."
+        disabled={peersLoading}
+      />
+    ) : (
+      <div className="flex items-center justify-between">
+        <span className="font-medium text-gray-900 dark:text-light-neutral text-sm truncate" title={getTargetDisplay ? getTargetDisplay() : autoDetectedTarget}>
+          {getTargetDisplay ? getTargetDisplay() : autoDetectedTarget}
+        </span>
+        <button
+          type="button"
+          onClick={() => toggleEditMode('target')}
+          className="text-xs text-purple-active hover:underline"
+        >
+          Edit
+        </button>
+      </div>
+    )}
+  </div>
 
-          {/* Target Field */}
-          <EditableField
-            label="Target"
-            displayValue={getTargetDisplay ? getTargetDisplay() : (autoDetectedTarget)}
-            autoDetectedValue={autoDetectedTarget}
-            isEditing={editMode.target}
-            onEditClick={() => toggleEditMode('target')}
-            onRevert={() => revertToAutoDetected('target')}
-            hasOverride={!!selectedTargetPeerId}
-          >
-            {editMode.target && (
-              <SearchableSelect
-                options={peerOptions}
-                value={selectedTargetPeerId}
-                onChange={(val) => { setSelectedTargetPeerId(val); toggleEditMode('target') }}
-                placeholder="Select target peer..."
-                disabled={peersLoading}
-              />
-            )}
-          </EditableField>
+  {/* Service Column */}
+  <div className="bg-gray-50 dark:bg-charcoal-darkest border border-gray-200 dark:border-gray-border rounded-none p-3">
+    <div className="flex items-center justify-between mb-2">
+      <span className="text-xs font-medium text-gray-500 dark:text-amber-muted uppercase">Service</span>
+      {selectedServiceId && (
+        <span className="text-xs px-1.5 py-0.5 bg-purple-100 dark:bg-purple-900 text-purple-700 dark:text-purple-300 rounded-none">Custom</span>
+      )}
+    </div>
+    {editMode.service ? (
+      <SearchableSelect
+        options={serviceOptions}
+        value={selectedServiceId}
+        onChange={(val) => { setSelectedServiceId(val); toggleEditMode('service') }}
+        placeholder="Select service..."
+        disabled={peersLoading}
+      />
+    ) : (
+      <div className="flex items-center justify-between">
+        <span className="font-medium text-gray-900 dark:text-light-neutral text-sm truncate" title={getServiceDisplay ? getServiceDisplay() : autoDetectedService}>
+          {getServiceDisplay ? getServiceDisplay() : autoDetectedService}
+        </span>
+        <button
+          type="button"
+          onClick={() => toggleEditMode('service')}
+          className="text-xs text-purple-active hover:underline"
+        >
+          Edit
+        </button>
+      </div>
+    )}
+  </div>
 
-          {/* Service Field */}
-          <EditableField
-            label="Service"
-            displayValue={getServiceDisplay ? getServiceDisplay() : (autoDetectedService)}
-            autoDetectedValue={autoDetectedService}
-            isEditing={editMode.service}
-            onEditClick={() => toggleEditMode('service')}
-            onRevert={() => revertToAutoDetected('service')}
-            hasOverride={!!selectedServiceId}
-          >
-            {editMode.service && (
-              <SearchableSelect
-                options={serviceOptions}
-                value={selectedServiceId}
-                onChange={(val) => { setSelectedServiceId(val); toggleEditMode('service') }}
-                placeholder="Select service..."
-                disabled={peersLoading}
-              />
-            )}
-          </EditableField>
-
-          {/* Direction Field */}
-          <EditableField
-            label="Direction"
-            displayValue={getDirectionDisplay ? getDirectionDisplay() : (autoDetectedDirection)}
-            autoDetectedValue={autoDetectedDirection}
-            isEditing={editMode.direction}
-            onEditClick={() => toggleEditMode('direction')}
-            onRevert={() => revertToAutoDetected('direction')}
-            hasOverride={!!selectedDirection}
-          >
-            {editMode.direction && (
-              <SearchableSelect
-                options={directionOptions}
-                value={selectedDirection}
-                onChange={(val) => { setSelectedDirection(val); toggleEditMode('direction') }}
-                placeholder="Select direction..."
-              />
-            )}
-          </EditableField>
-
-{/* Action - Read Only */}
-<div className="flex justify-between py-2">
-  <span className="text-gray-500 dark:text-amber-muted text-sm">Action:</span>
-  <span className="px-2 py-0.5 text-xs font-medium bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300 rounded-none">
-    ACCEPT
-  </span>
+  {/* Target Scope Column - Read Only */}
+  <div className="bg-gray-50 dark:bg-charcoal-darkest border border-gray-200 dark:border-gray-border rounded-none p-3">
+    <div className="flex items-center justify-between mb-2">
+      <span className="text-xs font-medium text-gray-500 dark:text-amber-muted uppercase">Target Scope</span>
+    </div>
+    <div className="flex items-center justify-between">
+      <span className="font-medium text-gray-900 dark:text-light-neutral text-sm">Host + Docker</span>
+      <span className="px-2 py-0.5 text-xs font-medium bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300 rounded-none">
+        ACCEPT
+      </span>
+    </div>
+  </div>
 </div>
 
-{/* Target Scope - Read Only */}
-<div className="flex justify-between py-2">
-  <span className="text-gray-500 dark:text-amber-muted text-sm">Target Scope:</span>
-  <span className="font-medium text-gray-900 dark:text-light-neutral text-sm">Host + Docker</span>
-</div>
-</div>
+{/* Source is shown separately below the grid */}
+<div className="mt-4">
+  <EditableField
+    label="Source"
+    displayValue={getSourceDisplay ? getSourceDisplay() : (autoDetectedSource)}
+    autoDetectedValue={autoDetectedSource}
+    isEditing={editMode.source}
+    onEditClick={() => toggleEditMode('source')}
+    onRevert={() => revertToAutoDetected('source')}
+    hasOverride={!!selectedSourcePeerId}
+  >
+    {editMode.source && (
+      <SearchableSelect
+        options={peerOptions}
+        value={selectedSourcePeerId}
+        onChange={(val) => { setSelectedSourcePeerId(val); toggleEditMode('source') }}
+        placeholder="Select source peer..."
+        disabled={peersLoading}
+      />
+    )}
+  </EditableField>
 </div>
 
       <div className="flex items-center justify-between p-4 bg-gray-50 dark:bg-charcoal-darkest border border-gray-200 dark:border-gray-border rounded-none">
@@ -732,10 +776,13 @@ function ReviewStep({
     return serviceToShow ? `${serviceToShow.name} (${serviceToShow.protocol}:${serviceToShow.ports})` : '—'
   }
 
-  const getDirectionDisplay = () => {
-    const effectiveDirection = selectedDirection || direction
-    return effectiveDirection === 'OUT' ? 'Forward' : 'Backward'
-  }
+const getDirectionDisplay = () => {
+  const effectiveDirection = selectedDirection || direction
+  if (effectiveDirection === 'forward' || effectiveDirection === 'OUT') return 'Forward'
+  if (effectiveDirection === 'backward' || effectiveDirection === 'IN') return 'Backward'
+  if (effectiveDirection === 'both') return 'Both'
+  return 'Forward' // Default fallback
+}
 
   return (
     <div className="space-y-4">
@@ -1176,12 +1223,28 @@ try {
     return () => { isMounted = false }
   }, [step])
 
-  // Convert peers to options format for SearchableSelect
-  const peerOptions = allPeers.map(peer => ({
+// Convert peers to options format for SearchableSelect
+const peerOptions = [
+  ...allPeers.map(peer => ({
     value: peer.id,
     label: peer.hostname || peer.ip_address || 'Unknown',
     sublabel: peer.ip_address
-  }))
+  })),
+  // Add pending target peer if creating new
+  ...(createTargetPeerMode && newTargetPeer.hostname ? [{
+    value: 'pending-target',
+    label: newTargetPeer.hostname,
+    sublabel: newTargetPeer.ip_address,
+    isPending: true
+  }] : []),
+  // Add placeholder for source peer if not existing
+  ...(existingSourcePeer && !existingSourcePeer.id ? [{
+    value: 'pending-source',
+    label: existingSourcePeer.hostname || existingSourcePeer.ip_address,
+    sublabel: existingSourcePeer.ip_address,
+    isPending: true
+  }] : [])
+]
 
   // Convert services to options format for SearchableSelect
   const serviceOptions = allServices.map(service => ({
@@ -1190,29 +1253,38 @@ try {
     sublabel: `${service.protocol}:${service.ports}`
   }))
 
-  // Direction options
-  const directionOptions = [
-    { value: 'OUT', label: 'Forward (OUT)' },
-    { value: 'IN', label: 'Backward (IN)' }
-  ]
+// Direction options
+const directionOptions = [
+  { value: 'forward', label: 'Forward' },
+  { value: 'backward', label: 'Backward' },
+  { value: 'both', label: 'Both' }
+]
 
-  // Get display values for editable fields
-  const getSourceDisplay = () => {
-    if (selectedSourcePeerId) {
-      const peer = allPeers.find(p => p.id === selectedSourcePeerId)
-      return peer?.hostname || peer?.ip_address || 'Unknown'
+// Get display values for editable fields
+const getSourceDisplay = () => {
+  if (selectedSourcePeerId) {
+    // Check if it's a pending source
+    if (selectedSourcePeerId === 'pending-source') {
+      return existingSourcePeer?.hostname || existingSourcePeer?.ip_address || 'Unknown'
     }
-    return existingSourcePeer?.hostname || existingSourcePeer?.ip_address || 'Unknown'
+    const peer = allPeers.find(p => p.id === selectedSourcePeerId)
+    return peer?.hostname || peer?.ip_address || 'Unknown'
   }
+  return existingSourcePeer?.hostname || existingSourcePeer?.ip_address || 'Unknown'
+}
 
-  const getTargetDisplay = () => {
-    if (selectedTargetPeerId) {
-      const peer = allPeers.find(p => p.id === selectedTargetPeerId)
-      return peer?.hostname || peer?.ip_address || 'Unknown'
+const getTargetDisplay = () => {
+  if (selectedTargetPeerId) {
+    // Check if it's a pending target
+    if (selectedTargetPeerId === 'pending-target') {
+      return newTargetPeer?.hostname || newTargetPeer?.ip_address || 'Unknown'
     }
-    const target = createTargetPeerMode ? newTargetPeer : existingTargetPeer
-    return target?.hostname || target?.ip_address || 'Unknown'
+    const peer = allPeers.find(p => p.id === selectedTargetPeerId)
+    return peer?.hostname || peer?.ip_address || 'Unknown'
   }
+  const target = createTargetPeerMode ? newTargetPeer : existingTargetPeer
+  return target?.hostname || target?.ip_address || 'Unknown'
+}
 
   const getServiceDisplay = () => {
     if (selectedServiceId) {
@@ -1223,12 +1295,13 @@ try {
     return svc ? `${svc.name} (${svc.protocol}:${svc.ports})` : 'Unknown'
   }
 
-  const getDirectionDisplay = () => {
-    if (selectedDirection) {
-      return selectedDirection === 'OUT' ? 'Forward' : 'Backward'
-    }
-    return direction === 'OUT' ? 'Forward' : 'Backward'
-  }
+const getDirectionDisplay = () => {
+  const effectiveDirection = selectedDirection || direction
+  if (effectiveDirection === 'forward' || effectiveDirection === 'OUT') return 'Forward'
+  if (effectiveDirection === 'backward' || effectiveDirection === 'IN') return 'Backward'
+  if (effectiveDirection === 'both') return 'Both'
+  return 'Forward'
+}
 
   // Helper to toggle edit mode for a field
   const toggleEditMode = (field) => {
@@ -1339,12 +1412,13 @@ try {
   let createdServiceId = null
 
 try {
-    // Source is the local peer from the log, Target is the external peer
-    // Use user-selected overrides if provided, otherwise use auto-detected values
-    let sourcePeerId = selectedSourcePeerId || existingSourcePeer?.id
-    let targetPeerId = selectedTargetPeerId || existingTargetPeer?.id
-    let serviceId = selectedServiceId || existingService?.id
-    const policyDirection = selectedDirection || direction
+// Source is the local peer from the log, Target is the external peer
+  // Use user-selected overrides if provided, otherwise use auto-detected values
+  // Handle pending peer selections
+  let sourcePeerId = selectedSourcePeerId === 'pending-source' ? null : (selectedSourcePeerId || existingSourcePeer?.id)
+  let targetPeerId = selectedTargetPeerId === 'pending-target' ? null : (selectedTargetPeerId || existingTargetPeer?.id)
+  let serviceId = selectedServiceId || existingService?.id
+  const policyDirection = selectedDirection || direction
 
     // Step 0: Create source peer (local machine) if needed
     // Only create if no existing peer and user hasn't selected an override
@@ -1402,7 +1476,7 @@ try {
       action: 'ACCEPT',
       priority: policyConfig.priority,
       enabled: policyConfig.enabled,
-      direction: policyDirection === 'OUT' ? 'forward' : 'backward',
+      direction: policyDirection === 'both' ? 'both' : policyDirection === 'forward' || policyDirection === 'OUT' ? 'forward' : 'backward',
       target_scope: 'both'
     })
 
