@@ -10,13 +10,17 @@ import ToggleSwitch from '../components/ToggleSwitch'
 import SearchableSelect from '../components/SearchableSelect'
 
 const OS_OPTIONS = [
-{ value: 'debian', label: 'Debian' },
 { value: 'ubuntu', label: 'Ubuntu' },
-{ value: 'rhel', label: 'RHEL' },
-{ value: 'arch', label: 'Arch' },
 { value: 'opensuse', label: 'openSUSE' },
 { value: 'raspbian', label: 'Raspbian' },
+{ value: 'armbian', label: 'Armbian' },
+{ value: 'ios', label: 'iOS' },
+{ value: 'ipados', label: 'iPadOS' },
+{ value: 'macos', label: 'macOS' },
+{ value: 'tvos', label: 'tvOS' },
+{ value: 'windows', label: 'Windows' },
 { value: 'linux', label: 'Generic Linux' },
+{ value: 'other', label: 'Other' },
 ]
 
 // Helper function to render ports as boxed/chip items
@@ -42,10 +46,10 @@ className="px-2 py-0.5 bg-gray-200 dark:bg-charcoal-darkest text-gray-900 dark:t
 }
 
 const ARCH_OPTIONS = [
-  { value: 'amd64', label: 'amd64' },
-  { value: 'arm64', label: 'arm64' },
-  { value: 'arm', label: 'arm' },
-  { value: 'armv6', label: 'armv6' },
+{ value: 'amd64', label: 'amd64' },
+{ value: 'arm64', label: 'arm64' },
+{ value: 'arm', label: 'arm' },
+{ value: 'other', label: 'Other' },
 ]
 
 const PROTOCOL_OPTIONS = [
@@ -413,39 +417,32 @@ function ServiceStep({
     )
   }
 
-  if (existingService) {
-    return (
-      <div className="space-y-4">
-        <div className="flex items-center gap-2 p-3 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-none">
-          <Check className="w-4 h-4 text-green-600 dark:text-green-400" />
-          <p className="text-sm text-green-700 dark:text-green-300">
-            Found existing service: <span className="font-medium">{existingService.name}</span> ({existingService.protocol} {renderPortsAsChips(existingService.ports)})
-          </p>
-        </div>
-
-        <div className="p-3 bg-gray-50 dark:bg-charcoal-darkest border border-gray-200 dark:border-gray-border rounded-none">
-          <div className="grid grid-cols-2 gap-2 text-sm">
-            <div>
-              <span className="text-gray-500 dark:text-amber-muted">Name:</span>
-              <span className="ml-2 font-medium text-gray-900 dark:text-light-neutral">{existingService.name}</span>
-            </div>
-            <div>
-              <span className="text-gray-500 dark:text-amber-muted">Protocol:</span>
-              <span className="ml-2 text-gray-900 dark:text-light-neutral uppercase">{existingService.protocol}</span>
-            </div>
-<div>
-          <span className="text-gray-500 dark:text-amber-muted">Ports:</span>
-          <span className="ml-2">{renderPortsAsChips(existingService.ports)}</span>
-        </div>
-          </div>
-        </div>
-
-        <p className="text-xs text-gray-500 dark:text-amber-muted">
-          This service is already defined and will be used for the policy.
+if (existingService) {
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-2 p-3 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-none">
+        <Check className="w-4 h-4 text-green-600 dark:text-green-400" />
+        <p className="text-sm text-green-700 dark:text-green-300">
+          Found existing service: <span className="font-medium">{existingService.name}</span>
         </p>
       </div>
-    )
-  }
+      {/* Display service details inline */}
+      <div className="text-sm">
+        <div className="mb-1">
+          <span className="text-gray-500 dark:text-amber-muted">Protocol:</span>{' '}
+          <span className="text-gray-900 dark:text-light-neutral uppercase">{existingService.protocol}</span>
+        </div>
+        <div>
+          <span className="text-gray-500 dark:text-amber-muted">Ports:</span>{' '}
+          {renderPortsAsChips(existingService.ports)}
+        </div>
+      </div>
+      <p className="text-xs text-gray-500 dark:text-amber-muted">
+        This service is already defined and will be used for the policy.
+      </p>
+    </div>
+  )
+}
 
   return null
 }
@@ -499,12 +496,13 @@ const autoDetectedService = service ? `${service.name} (${service.protocol} ${se
       {/* Row 1: Name and Priority */}
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-            Policy Name <span className="text-red-500">*</span>
-          </label>
-          <input
-            type="text"
-            value={policyConfig.name}
+<label htmlFor="policy-name" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+                Name <span className="text-red-500">*</span>
+              </label>
+              <input
+                id="policy-name"
+                type="text"
+                value={policyConfig.name}
             onChange={e => setPolicyConfig(prev => ({ ...prev, name: e.target.value }))}
             placeholder="Enter policy name"
             className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
@@ -673,9 +671,9 @@ const autoDetectedService = service ? `${service.name} (${service.protocol} ${se
             />
           ) : (
             <div className="flex items-center justify-between p-2 border border-gray-200 dark:border-gray-border rounded-none bg-gray-50 dark:bg-charcoal-darkest">
-              <span className="font-medium text-gray-900 dark:text-light-neutral text-sm truncate" title={getServiceDisplayText ? getServiceDisplayText() : autoDetectedService}>
-                {getServiceDisplay ? getServiceDisplay() : autoDetectedService}
-              </span>
+<span className="font-medium text-gray-900 dark:text-light-neutral text-sm truncate" title={service?.name}>
+                  {service?.name || 'Unknown'}
+                </span>
               <button
                 type="button"
                 onClick={() => toggleEditMode('service')}
@@ -692,12 +690,9 @@ const autoDetectedService = service ? `${service.name} (${service.protocol} ${se
           <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
             Action
           </label>
-          <div className="flex items-center justify-between p-2 border border-gray-200 dark:border-gray-border rounded-none bg-gray-50 dark:bg-charcoal-darkest min-w-[100px]">
-            <span className="text-sm text-gray-500 dark:text-amber-muted">ACCEPT</span>
-            <span className="px-2 py-0.5 text-xs font-medium bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300 rounded-none">
-              ACCEPT
-            </span>
-          </div>
+<span className="inline-block px-2 py-1 text-xs font-medium bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300 rounded-none">
+                ACCEPT
+              </span>
         </div>
       </div>
 
@@ -705,7 +700,7 @@ const autoDetectedService = service ? `${service.name} (${service.protocol} ${se
       <div>
         <div className="flex items-center gap-2 mb-2">
           <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary">Applies To</label>
-          <span className="text-xs text-gray-500 dark:text-amber-muted">(Target Scope)</span>
+          <span className="text-xs text-gray-500 dark:text-amber-muted">(Docker Integration)</span>
         </div>
 <div className="flex bg-gray-100 dark:bg-charcoal-darkest p-1 rounded-none border border-gray-200 dark:border-gray-border">
   <button
@@ -749,7 +744,7 @@ const autoDetectedService = service ? `${service.name} (${service.protocol} ${se
         <div>
           <label className="text-sm font-medium text-gray-900 dark:text-light-neutral">Policy Enabled</label>
           <p className="text-xs text-gray-500 dark:text-amber-muted">
-            When enabled, this policy will generate firewall rules.
+            When disabled, this policy will not generate any firewall rules until re-enabled.
           </p>
         </div>
         <ToggleSwitch
@@ -1022,7 +1017,7 @@ export default function CraftPolicyWizard({ log, onClose, onSuccess }) {
   const [newTargetPeer, setNewTargetPeer] = useState({ hostname: '', ip_address: parsedLog.externalIP, os_type: 'linux', arch: 'amd64' })
   const [existingSourcePeer, setExistingSourcePeer] = useState(null) // Local peer (source from log)
   const [existingService, setExistingService] = useState(null)
-  const [newService, setNewService] = useState({ name: '', protocol: parsedLog.protocol, ports: String(parsedLog.port) })
+  const [newService, setNewService] = useState({ name: '', protocol: parsedLog.protocol, ports: String(parsedLog.port), description: '', source_ports: '' })
   const [policyConfig, setPolicyConfig] = useState({
     name: '',
     priority: 100,
@@ -1510,11 +1505,13 @@ try {
     // Step 2: Create service if needed
     // Only create if no existing service and user hasn't selected an override
     if (!selectedServiceId && !existingService) {
-      const createdService = await api.post('/services', {
-        name: newService.name,
-        protocol: newService.protocol,
-        ports: newService.ports
-      })
+const createdService = await api.post('/services', {
+              name: newService.name,
+              protocol: newService.protocol,
+              ports: newService.ports,
+              source_ports: newService.source_ports || null,
+              description: newService.description || null
+            })
       serviceId = createdService.id
       createdServiceId = createdService.id // Track for potential cleanup
       showToast('Service created successfully', 'success')

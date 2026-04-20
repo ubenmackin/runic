@@ -222,8 +222,8 @@ describe('CraftPolicyWizard', () => {
       await waitFor(() => expect(screen.getByText(/Found existing service/)).toBeInTheDocument())
       await user.click(screen.getByRole('button', { name: /next/i }))
 
-      await waitFor(() => expect(screen.getByText('Policy Name')).toBeInTheDocument())
-      await user.click(screen.getByRole('button', { name: /next/i }))
+await waitFor(() => expect(screen.getByRole('textbox', { name: /name/i })).toBeInTheDocument())
+await user.click(screen.getByRole('button', { name: /next/i }))
 
       await waitFor(() => {
         expect(screen.getByRole('button', { name: /create policy/i })).toBeInTheDocument()
@@ -446,10 +446,10 @@ describe('CraftPolicyWizard', () => {
       await waitFor(() => expect(screen.getByText(/Found existing service/)).toBeInTheDocument())
       await user.click(screen.getByRole('button', { name: /next/i }))
 
-      await waitFor(() => {
-        expect(screen.getByText('Policy Name')).toBeInTheDocument()
-        expect(screen.getByDisplayValue('existing-peer-https')).toBeInTheDocument()
-      })
+await waitFor(() => {
+  expect(screen.getByRole('textbox', { name: /name/i })).toBeInTheDocument()
+  expect(screen.getByDisplayValue('existing-peer-https')).toBeInTheDocument()
+})
     })
 
   test('policy name is auto-generated and Next button is enabled', async () => {
