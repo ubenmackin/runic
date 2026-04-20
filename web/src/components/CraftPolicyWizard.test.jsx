@@ -504,10 +504,10 @@ describe('CraftPolicyWizard', () => {
       await waitFor(() => expect(screen.getByText(/Found existing service/)).toBeInTheDocument())
       await user.click(screen.getByRole('button', { name: /next/i }))
 
-      await waitFor(() => {
-expect(screen.getByText('Description (Optional)')).toBeInTheDocument()
-        expect(screen.getByText('ACCEPT')).toBeInTheDocument()
-      })
+await waitFor(() => {
+  expect(screen.getByText('Description (Optional)')).toBeInTheDocument()
+  expect(screen.getAllByText('ACCEPT').length).toBeGreaterThan(0)
+})
     })
   })
 
@@ -1270,19 +1270,23 @@ test('handles missing log gracefully', async () => {
       await waitFor(() => expect(screen.getByText(/Found existing service/)).toBeInTheDocument())
       await user.click(screen.getByRole('button', { name: /next/i }))
 
-      // Wait for policy step to load
-await waitFor(() => expect(screen.getByText('Description (Optional)')).toBeInTheDocument())
+// Wait for policy step to load
+  await waitFor(() => expect(screen.getByText('Description (Optional)')).toBeInTheDocument())
 
-// Verify direction displays as "Forward" for OUT direction
-      // The component converts OUT to Forward in getDirectionDisplay
-      expect(screen.getByText('Forward')).toBeInTheDocument()
+  // Verify direction displays as forward arrow (SVG) for OUT direction
+  // The PolicyStep uses arrow buttons, not text labels
+  // The forward arrow is disabled when direction is OUT
+  const forwardArrow = screen.getByTitle('Forward: Source → Target')
+  expect(forwardArrow).toBeInTheDocument()
+  expect(forwardArrow).toBeDisabled()
 
-      // Verify Action displays as ACCEPT (TASK-005)
-      expect(screen.getByText('ACCEPT')).toBeInTheDocument()
+  // Verify Action displays as ACCEPT badge (TASK-005)
+  // There are multiple ACCEPT texts, so look for the badge with specific class
+  expect(screen.getByText('ACCEPT', { selector: '.bg-green-100' })).toBeInTheDocument()
 
-      // Verify Target Scope displays as "Host + Docker" (TASK-005)
-      expect(screen.getByText('Host + Docker')).toBeInTheDocument()
-    })
+  // Verify Target Scope displays as "Host + Docker" (TASK-005)
+  expect(screen.getByText('Host + Docker')).toBeInTheDocument()
+})
 
     test('has Edit buttons for Source, Target, Service, and Direction in policy step (TASK-004)', async () => {
       const user = userEvent.setup()
@@ -1332,14 +1336,18 @@ await waitFor(() => expect(screen.getByText('Description (Optional)')).toBeInThe
       await waitFor(() => expect(screen.getByText(/Found existing service/)).toBeInTheDocument())
       await user.click(screen.getByRole('button', { name: /next/i }))
 
-      // Wait for policy step with editable fields
-      await waitFor(() => expect(screen.getByText('Description (Optional)')).toBeInTheDocument())
+// Wait for policy step with editable fields
+  await waitFor(() => expect(screen.getByText('Description (Optional)')).toBeInTheDocument())
 
-// Verify that there are Edit buttons present for the editable fields
-      // The component has Edit buttons for: Source, Target, Service, Direction
-      const editButtons = screen.getAllByRole('button', { name: /edit/i })
-      expect(editButtons.length).toBeGreaterThanOrEqual(4)
-    })
+  // Verify that there are Edit buttons present for the editable fields
+  // The component has Edit buttons for: Source, Target, Service (Direction uses arrow buttons)
+  const editButtons = screen.getAllByRole('button', { name: /edit/i })
+  expect(editButtons.length).toBe(3)
+
+  // Verify Direction has arrow buttons instead of Edit button
+  expect(screen.getByTitle('Forward: Source → Target')).toBeInTheDocument()
+  expect(screen.getByTitle('Backward: Target → Source')).toBeInTheDocument()
+})
   })
 
   describe('form validation', () => {

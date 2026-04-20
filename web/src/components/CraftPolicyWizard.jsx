@@ -10,14 +10,36 @@ import ToggleSwitch from '../components/ToggleSwitch'
 import SearchableSelect from '../components/SearchableSelect'
 
 const OS_OPTIONS = [
-  { value: 'debian', label: 'Debian' },
-  { value: 'ubuntu', label: 'Ubuntu' },
-  { value: 'rhel', label: 'RHEL' },
-  { value: 'arch', label: 'Arch' },
-  { value: 'opensuse', label: 'openSUSE' },
-  { value: 'raspbian', label: 'Raspbian' },
-  { value: 'linux', label: 'Generic Linux' },
+{ value: 'debian', label: 'Debian' },
+{ value: 'ubuntu', label: 'Ubuntu' },
+{ value: 'rhel', label: 'RHEL' },
+{ value: 'arch', label: 'Arch' },
+{ value: 'opensuse', label: 'openSUSE' },
+{ value: 'raspbian', label: 'Raspbian' },
+{ value: 'linux', label: 'Generic Linux' },
 ]
+
+// Helper function to render ports as boxed/chip items
+// Handles: single port (80), multiple ports (80,443), ranges (8000:9000)
+function renderPortsAsChips(portsString) {
+if (!portsString) return <span className="text-gray-400">—</span>
+
+// Split by comma to handle multiple ports/ranges
+const portItems = portsString.split(',')
+
+return (
+<span className="flex flex-wrap gap-1">
+{portItems.map((item, idx) => (
+<span
+key={idx}
+className="px-2 py-0.5 bg-gray-200 dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral rounded text-xs font-mono"
+>
+{item.trim()}
+</span>
+))}
+</span>
+)
+}
 
 const ARCH_OPTIONS = [
   { value: 'amd64', label: 'amd64' },
@@ -130,36 +152,36 @@ function PeerStep({
         {/* New Peer Form */}
         <div className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-              Hostname <span className="text-red-500">*</span>
-            </label>
-            <input
-              type="text"
-              value={newPeer.hostname}
-              onChange={e => handleNewPeerChange('hostname', e.target.value)}
-              placeholder="Enter hostname"
-              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-            />
-            {formErrors.hostname && <InlineError message={formErrors.hostname} />}
-          </div>
+<label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+          Name <span className="text-red-500">*</span>
+        </label>
+        <input
+          type="text"
+          value={newPeer.hostname}
+          onChange={e => handleNewPeerChange('hostname', e.target.value)}
+          placeholder="Enter hostname"
+          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+        />
+        {formErrors.hostname && <InlineError message={formErrors.hostname} />}
+      </div>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-              IP Address <span className="text-red-500">*</span>
-            </label>
-            <input
-              type="text"
-              value={newPeer.ip_address}
-              disabled
-              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-gray-100 dark:bg-charcoal-darkest text-gray-500 dark:text-amber-muted cursor-not-allowed"
-            />
-          </div>
+      <div>
+        <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+          IP Address <span className="text-red-500">*</span>
+        </label>
+        <input
+          type="text"
+          value={newPeer.ip_address}
+          disabled
+          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-gray-100 dark:bg-charcoal-darkest text-gray-500 dark:text-amber-muted cursor-not-allowed"
+        />
+      </div>
 
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-                OS Type
-              </label>
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+            Operating System
+          </label>
               <SearchableSelect
                 options={OS_OPTIONS}
                 value={newPeer.os_type}
@@ -244,38 +266,38 @@ function PeerStep({
         )}
       </div>
 
-      <div className="space-y-4">
+<div className="space-y-4">
+      <div>
+        <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+          Name <span className="text-red-500">*</span>
+        </label>
+        <input
+          type="text"
+          value={newPeer.hostname}
+          onChange={e => handleNewPeerChange('hostname', e.target.value)}
+          placeholder="Enter hostname"
+          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+        />
+        {formErrors.hostname && <InlineError message={formErrors.hostname} />}
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+          IP Address <span className="text-red-500">*</span>
+        </label>
+        <input
+          type="text"
+          value={newPeer.ip_address}
+          disabled
+          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-gray-100 dark:bg-charcoal-darkest text-gray-500 dark:text-amber-muted cursor-not-allowed"
+        />
+      </div>
+
+      <div className="grid grid-cols-2 gap-4">
         <div>
           <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-            Hostname <span className="text-red-500">*</span>
+            Operating System
           </label>
-          <input
-            type="text"
-            value={newPeer.hostname}
-            onChange={e => handleNewPeerChange('hostname', e.target.value)}
-            placeholder="Enter hostname"
-            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-          />
-          {formErrors.hostname && <InlineError message={formErrors.hostname} />}
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-            IP Address <span className="text-red-500">*</span>
-          </label>
-          <input
-            type="text"
-            value={newPeer.ip_address}
-            disabled
-            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-gray-100 dark:bg-charcoal-darkest text-gray-500 dark:text-amber-muted cursor-not-allowed"
-          />
-        </div>
-
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-              OS Type
-            </label>
             <SearchableSelect
               options={OS_OPTIONS}
               value={newPeer.os_type}
@@ -397,7 +419,7 @@ function ServiceStep({
         <div className="flex items-center gap-2 p-3 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-none">
           <Check className="w-4 h-4 text-green-600 dark:text-green-400" />
           <p className="text-sm text-green-700 dark:text-green-300">
-            Found existing service: <span className="font-medium">{existingService.name}</span> ({existingService.protocol}:{existingService.ports})
+            Found existing service: <span className="font-medium">{existingService.name}</span> ({existingService.protocol} {renderPortsAsChips(existingService.ports)})
           </p>
         </div>
 
@@ -411,10 +433,10 @@ function ServiceStep({
               <span className="text-gray-500 dark:text-amber-muted">Protocol:</span>
               <span className="ml-2 text-gray-900 dark:text-light-neutral uppercase">{existingService.protocol}</span>
             </div>
-            <div>
-              <span className="text-gray-500 dark:text-amber-muted">Ports:</span>
-              <span className="ml-2 font-mono text-gray-900 dark:text-light-neutral">:{existingService.ports}</span>
-            </div>
+<div>
+          <span className="text-gray-500 dark:text-amber-muted">Ports:</span>
+          <span className="ml-2">{renderPortsAsChips(existingService.ports)}</span>
+        </div>
           </div>
         </div>
 
@@ -426,63 +448,6 @@ function ServiceStep({
   }
 
   return null
-}
-
-// Editable Field Component for Source/Target/Service/Direction
-function EditableField({
-  label,
-  displayValue,
-  autoDetectedValue,
-  isEditing,
-  onEditClick,
-  onRevert,
-  children,
-  hasOverride
-}) {
-  return (
-    <div className="flex items-center justify-between py-2">
-      <div className="flex items-center gap-2">
-        <span className="text-gray-500 dark:text-amber-muted text-sm">{label}:</span>
-        {hasOverride && (
-          <span className="text-xs px-1.5 py-0.5 bg-purple-100 dark:bg-purple-900 text-purple-700 dark:text-purple-300 rounded-none">
-            Custom
-          </span>
-        )}
-      </div>
-      <div className="flex items-center gap-2">
-        {isEditing ? (
-          <div className="flex items-center gap-2">
-            <div className="w-48">{children}</div>
-            <button
-              type="button"
-              onClick={onRevert}
-              className="text-xs text-gray-500 hover:text-gray-700 dark:text-amber-muted dark:hover:text-amber-primary"
-            >
-              Revert
-            </button>
-          </div>
-        ) : (
-          <>
-            <span className="font-medium text-gray-900 dark:text-light-neutral text-sm">
-              {displayValue}
-            </span>
-            <button
-              type="button"
-              onClick={onEditClick}
-              className="text-xs text-purple-active hover:underline"
-            >
-              Edit
-            </button>
-          </>
-        )}
-      </div>
-      {!isEditing && autoDetectedValue && displayValue !== autoDetectedValue && (
-        <span className="text-xs text-gray-400 dark:text-gray-500 ml-2">
-          (Auto: {autoDetectedValue})
-        </span>
-      )}
-    </div>
-  )
 }
 
 // Policy Configuration Step Component
@@ -497,7 +462,6 @@ function PolicyStep({
   // Editable field props
   peerOptions = [],
   serviceOptions = [],
-  directionOptions = [],
   selectedSourcePeerId,
   selectedTargetPeerId,
   selectedServiceId,
@@ -508,13 +472,13 @@ function PolicyStep({
   setSelectedDirection,
   editMode = { source: false, target: false, service: false, direction: false },
   toggleEditMode,
-  revertToAutoDetected,
   _allPeers = [],
   _allServices = [],
   peersLoading = false,
   getSourceDisplay,
   getTargetDisplay,
   getServiceDisplay,
+  getServiceDisplayText,
   getDirectionDisplay,
 }) {
   const [showDescription, setShowDescription] = useState(false)
@@ -522,11 +486,17 @@ function PolicyStep({
   // Get the original auto-detected values for comparison
   const autoDetectedSource = sourcePeer?.hostname || sourcePeer?.ip_address || 'Unknown'
   const autoDetectedTarget = targetPeer?.hostname || targetPeer?.ip_address || 'Unknown'
-  const autoDetectedService = service ? `${service.name} (${service.protocol}:${service.ports})` : 'Unknown'
-  const autoDetectedDirection = direction === 'OUT' ? 'Forward' : direction === 'IN' ? 'Backward' : 'Both'
+const autoDetectedService = service ? `${service.name} (${service.protocol} ${service.ports})` : 'Unknown'
+
+// Handle target_scope with default 'both'
+  const targetScope = policyConfig.target_scope || 'both'
+
+  // Determine the effective direction for display
+  const effectiveDirection = selectedDirection || direction
 
   return (
     <div className="space-y-4">
+      {/* Row 1: Name and Priority */}
       <div className="grid grid-cols-2 gap-4">
         <div>
           <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
@@ -554,163 +524,227 @@ function PolicyStep({
         </div>
       </div>
 
-<div className="border border-gray-200 dark:border-gray-border rounded-none overflow-hidden">
+      {/* Row 2: Description - collapsible */}
+      <div className="border border-gray-200 dark:border-gray-border rounded-none overflow-hidden">
+        <button
+          type="button"
+          onClick={() => setShowDescription(!showDescription)}
+          className="w-full px-4 py-3 flex items-center justify-between bg-gray-50 dark:bg-charcoal-darkest hover:bg-gray-100 dark:hover:bg-charcoal-dark transition-colors"
+        >
+          <span className="text-sm font-medium text-gray-700 dark:text-amber-primary">Description (Optional)</span>
+          <svg className={`w-4 h-4 text-gray-500 transition-transform duration-150 ${showDescription ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+          </svg>
+        </button>
+        <div className={`transition-all duration-150 ease-in-out ${showDescription ? 'max-h-32 opacity-100' : 'max-h-0 opacity-0'} overflow-hidden`}>
+          <div className="p-4">
+            <textarea
+              value={policyConfig.description}
+              onChange={e => setPolicyConfig(prev => ({ ...prev, description: e.target.value }))}
+              rows={2}
+              placeholder="Add a description for this policy..."
+              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* Row 3: Source [Direction Arrows] Target - using CSS Grid */}
+      <div className="grid grid-cols-[1fr_auto_1fr] gap-x-4 gap-y-4 items-end">
+        {/* Source Column */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+            Source
+          </label>
+          {editMode.source ? (
+            <SearchableSelect
+              options={peerOptions}
+              value={selectedSourcePeerId}
+              onChange={(val) => { setSelectedSourcePeerId(val); toggleEditMode('source') }}
+              placeholder="Select source peer..."
+              disabled={peersLoading}
+            />
+          ) : (
+            <div className="flex items-center justify-between p-2 border border-gray-200 dark:border-gray-border rounded-none bg-gray-50 dark:bg-charcoal-darkest">
+              <span className="font-medium text-gray-900 dark:text-light-neutral text-sm truncate" title={getSourceDisplay ? getSourceDisplay() : autoDetectedSource}>
+                {getSourceDisplay ? getSourceDisplay() : autoDetectedSource}
+              </span>
+              <button
+                type="button"
+                onClick={() => toggleEditMode('source')}
+                className="text-xs text-purple-active hover:underline ml-2"
+              >
+                Edit
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Direction Column - Green Arrow Buttons */}
+        <div className="flex flex-col items-center justify-end gap-1.5 pb-0.5">
+          <div className="flex flex-col gap-1.5">
+            {/* Forward button */}
+            <button
+              type="button"
+              onClick={() => {
+                if (effectiveDirection === 'forward' || effectiveDirection === 'OUT') return
+                setSelectedDirection(d => d === 'both' ? 'backward' : (d === 'backward' ? 'both' : 'forward'))
+              }}
+              disabled={effectiveDirection === 'forward' || effectiveDirection === 'OUT'}
+              className={`flex items-center justify-center w-28 h-8 rounded-none border-2 transition-all duration-200 ${
+                effectiveDirection === 'both' || effectiveDirection === 'forward' || effectiveDirection === 'OUT'
+                  ? 'bg-emerald-900/80 border-emerald-500 text-emerald-400 hover:bg-emerald-800/80'
+                  : 'bg-gray-200 dark:bg-gray-800 border-gray-300 dark:border-gray-600 text-gray-400 dark:text-gray-500 hover:bg-gray-300 dark:hover:bg-gray-700'
+              }`}
+              title="Forward: Source → Target"
+            >
+              <svg viewBox="0 0 80 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="w-16 h-4">
+                <line x1="8" y1="12" x2="66" y2="12" />
+                <polyline points="58,6 66,12 58,18" />
+              </svg>
+            </button>
+            {/* Backward button */}
+            <button
+              type="button"
+              onClick={() => {
+                if (effectiveDirection === 'backward' || effectiveDirection === 'IN') return
+                setSelectedDirection(d => d === 'both' ? 'forward' : (d === 'forward' ? 'both' : 'backward'))
+              }}
+              disabled={effectiveDirection === 'backward' || effectiveDirection === 'IN'}
+              className={`flex items-center justify-center w-28 h-8 rounded-none border-2 transition-all duration-200 ${
+                effectiveDirection === 'both' || effectiveDirection === 'backward' || effectiveDirection === 'IN'
+                  ? 'bg-emerald-900/80 border-emerald-500 text-emerald-400 hover:bg-emerald-800/80'
+                  : 'bg-gray-200 dark:bg-gray-800 border-gray-300 dark:border-gray-600 text-gray-400 dark:text-gray-500 hover:bg-gray-300 dark:hover:bg-gray-700'
+              }`}
+              title="Backward: Target → Source"
+            >
+              <svg viewBox="0 0 80 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="w-16 h-4">
+                <line x1="72" y1="12" x2="14" y2="12" />
+                <polyline points="22,6 14,12 22,18" />
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        {/* Target Column */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+            Target
+          </label>
+          {editMode.target ? (
+            <SearchableSelect
+              options={peerOptions}
+              value={selectedTargetPeerId}
+              onChange={(val) => { setSelectedTargetPeerId(val); toggleEditMode('target') }}
+              placeholder="Select target peer..."
+              disabled={peersLoading}
+            />
+          ) : (
+            <div className="flex items-center justify-between p-2 border border-gray-200 dark:border-gray-border rounded-none bg-gray-50 dark:bg-charcoal-darkest">
+              <span className="font-medium text-gray-900 dark:text-light-neutral text-sm truncate" title={getTargetDisplay ? getTargetDisplay() : autoDetectedTarget}>
+                {getTargetDisplay ? getTargetDisplay() : autoDetectedTarget}
+              </span>
+              <button
+                type="button"
+                onClick={() => toggleEditMode('target')}
+                className="text-xs text-purple-active hover:underline ml-2"
+              >
+                Edit
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Row 4: Service [Action: ACCEPT] */}
+      <div className="grid grid-cols-[1fr_auto] gap-x-4 gap-y-4 items-end">
+        {/* Service Column */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+            Service
+          </label>
+          {editMode.service ? (
+            <SearchableSelect
+              options={serviceOptions}
+              value={selectedServiceId}
+              onChange={(val) => { setSelectedServiceId(val); toggleEditMode('service') }}
+              placeholder="Select service..."
+              disabled={peersLoading}
+            />
+          ) : (
+            <div className="flex items-center justify-between p-2 border border-gray-200 dark:border-gray-border rounded-none bg-gray-50 dark:bg-charcoal-darkest">
+              <span className="font-medium text-gray-900 dark:text-light-neutral text-sm truncate" title={getServiceDisplayText ? getServiceDisplayText() : autoDetectedService}>
+                {getServiceDisplay ? getServiceDisplay() : autoDetectedService}
+              </span>
+              <button
+                type="button"
+                onClick={() => toggleEditMode('service')}
+                className="text-xs text-purple-active hover:underline ml-2"
+              >
+                Edit
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Action Column - ACCEPT badge */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+            Action
+          </label>
+          <div className="flex items-center justify-between p-2 border border-gray-200 dark:border-gray-border rounded-none bg-gray-50 dark:bg-charcoal-darkest min-w-[100px]">
+            <span className="text-sm text-gray-500 dark:text-amber-muted">ACCEPT</span>
+            <span className="px-2 py-0.5 text-xs font-medium bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300 rounded-none">
+              ACCEPT
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* Row 5: Applies To - 3-button selection */}
+      <div>
+        <div className="flex items-center gap-2 mb-2">
+          <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary">Applies To</label>
+          <span className="text-xs text-gray-500 dark:text-amber-muted">(Target Scope)</span>
+        </div>
+<div className="flex bg-gray-100 dark:bg-charcoal-darkest p-1 rounded-none border border-gray-200 dark:border-gray-border">
   <button
     type="button"
-    onClick={() => setShowDescription(!showDescription)}
-    className="w-full px-4 py-3 flex items-center justify-between bg-gray-50 dark:bg-charcoal-darkest hover:bg-gray-100 dark:hover:bg-charcoal-dark transition-colors"
+    onClick={() => setPolicyConfig(d => ({ ...d, target_scope: 'both' }))}
+    className={`flex-1 py-1.5 text-xs font-medium rounded-none transition-all duration-200 ${
+      targetScope === 'both' || !targetScope
+      ? 'bg-white dark:bg-charcoal-dark text-gray-900 dark:text-white ring-1 ring-black/5 dark:ring-white/10'
+      : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-white/50 dark:hover:bg-charcoal-dark/50'
+    }`}
   >
-    <span className="text-sm font-medium text-gray-700 dark:text-amber-primary">Description (Optional)</span>
-    <svg className={`w-4 h-4 text-gray-500 transition-transform duration-150 ${showDescription ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-    </svg>
+    Host + Docker
   </button>
-  <div className={`transition-all duration-150 ease-in-out ${showDescription ? 'max-h-32 opacity-100' : 'max-h-0 opacity-0'} overflow-hidden`}>
-    <div className="p-4">
-      <textarea
-        value={policyConfig.description}
-        onChange={e => setPolicyConfig(prev => ({ ...prev, description: e.target.value }))}
-        rows={2}
-        placeholder="Add a description for this policy..."
-        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-      />
-    </div>
-  </div>
-</div>
-
-<div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
-  {/* Direction Column */}
-  <div className="bg-gray-50 dark:bg-charcoal-darkest border border-gray-200 dark:border-gray-border rounded-none p-3">
-    <div className="flex items-center justify-between mb-2">
-      <span className="text-xs font-medium text-gray-500 dark:text-amber-muted uppercase">Direction</span>
-      {selectedDirection && (
-        <span className="text-xs px-1.5 py-0.5 bg-purple-100 dark:bg-purple-900 text-purple-700 dark:text-purple-300 rounded-none">Custom</span>
-      )}
-    </div>
-    {editMode.direction ? (
-      <SearchableSelect
-        options={directionOptions}
-        value={selectedDirection}
-        onChange={(val) => { setSelectedDirection(val); toggleEditMode('direction') }}
-        placeholder="Select direction..."
-      />
-    ) : (
-      <div className="flex items-center justify-between">
-        <span className="font-medium text-gray-900 dark:text-light-neutral text-sm">
-          {getDirectionDisplay ? getDirectionDisplay() : autoDetectedDirection}
-        </span>
-        <button
-          type="button"
-          onClick={() => toggleEditMode('direction')}
-          className="text-xs text-purple-active hover:underline"
-        >
-          Edit
-        </button>
-      </div>
-    )}
-  </div>
-
-  {/* Target Column */}
-  <div className="bg-gray-50 dark:bg-charcoal-darkest border border-gray-200 dark:border-gray-border rounded-none p-3">
-    <div className="flex items-center justify-between mb-2">
-      <span className="text-xs font-medium text-gray-500 dark:text-amber-muted uppercase">Target</span>
-      {selectedTargetPeerId && (
-        <span className="text-xs px-1.5 py-0.5 bg-purple-100 dark:bg-purple-900 text-purple-700 dark:text-purple-300 rounded-none">Custom</span>
-      )}
-    </div>
-    {editMode.target ? (
-      <SearchableSelect
-        options={peerOptions}
-        value={selectedTargetPeerId}
-        onChange={(val) => { setSelectedTargetPeerId(val); toggleEditMode('target') }}
-        placeholder="Select target peer..."
-        disabled={peersLoading}
-      />
-    ) : (
-      <div className="flex items-center justify-between">
-        <span className="font-medium text-gray-900 dark:text-light-neutral text-sm truncate" title={getTargetDisplay ? getTargetDisplay() : autoDetectedTarget}>
-          {getTargetDisplay ? getTargetDisplay() : autoDetectedTarget}
-        </span>
-        <button
-          type="button"
-          onClick={() => toggleEditMode('target')}
-          className="text-xs text-purple-active hover:underline"
-        >
-          Edit
-        </button>
-      </div>
-    )}
-  </div>
-
-  {/* Service Column */}
-  <div className="bg-gray-50 dark:bg-charcoal-darkest border border-gray-200 dark:border-gray-border rounded-none p-3">
-    <div className="flex items-center justify-between mb-2">
-      <span className="text-xs font-medium text-gray-500 dark:text-amber-muted uppercase">Service</span>
-      {selectedServiceId && (
-        <span className="text-xs px-1.5 py-0.5 bg-purple-100 dark:bg-purple-900 text-purple-700 dark:text-purple-300 rounded-none">Custom</span>
-      )}
-    </div>
-    {editMode.service ? (
-      <SearchableSelect
-        options={serviceOptions}
-        value={selectedServiceId}
-        onChange={(val) => { setSelectedServiceId(val); toggleEditMode('service') }}
-        placeholder="Select service..."
-        disabled={peersLoading}
-      />
-    ) : (
-      <div className="flex items-center justify-between">
-        <span className="font-medium text-gray-900 dark:text-light-neutral text-sm truncate" title={getServiceDisplay ? getServiceDisplay() : autoDetectedService}>
-          {getServiceDisplay ? getServiceDisplay() : autoDetectedService}
-        </span>
-        <button
-          type="button"
-          onClick={() => toggleEditMode('service')}
-          className="text-xs text-purple-active hover:underline"
-        >
-          Edit
-        </button>
-      </div>
-    )}
-  </div>
-
-  {/* Target Scope Column - Read Only */}
-  <div className="bg-gray-50 dark:bg-charcoal-darkest border border-gray-200 dark:border-gray-border rounded-none p-3">
-    <div className="flex items-center justify-between mb-2">
-      <span className="text-xs font-medium text-gray-500 dark:text-amber-muted uppercase">Target Scope</span>
-    </div>
-    <div className="flex items-center justify-between">
-      <span className="font-medium text-gray-900 dark:text-light-neutral text-sm">Host + Docker</span>
-      <span className="px-2 py-0.5 text-xs font-medium bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300 rounded-none">
-        ACCEPT
-      </span>
-    </div>
-  </div>
-</div>
-
-{/* Source is shown separately below the grid */}
-<div className="mt-4">
-  <EditableField
-    label="Source"
-    displayValue={getSourceDisplay ? getSourceDisplay() : (autoDetectedSource)}
-    autoDetectedValue={autoDetectedSource}
-    isEditing={editMode.source}
-    onEditClick={() => toggleEditMode('source')}
-    onRevert={() => revertToAutoDetected('source')}
-    hasOverride={!!selectedSourcePeerId}
+  <button
+    type="button"
+    onClick={() => setPolicyConfig(d => ({ ...d, target_scope: 'host' }))}
+    className={`flex-1 py-1.5 text-xs font-medium rounded-none transition-all duration-200 ${
+      targetScope === 'host'
+      ? 'bg-white dark:bg-charcoal-dark text-gray-900 dark:text-white ring-1 ring-black/5 dark:ring-white/10'
+      : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-white/50 dark:hover:bg-charcoal-dark/50'
+    }`}
   >
-    {editMode.source && (
-      <SearchableSelect
-        options={peerOptions}
-        value={selectedSourcePeerId}
-        onChange={(val) => { setSelectedSourcePeerId(val); toggleEditMode('source') }}
-        placeholder="Select source peer..."
-        disabled={peersLoading}
-      />
-    )}
-  </EditableField>
+    Host Only
+  </button>
+  <button
+    type="button"
+    onClick={() => setPolicyConfig(d => ({ ...d, target_scope: 'docker' }))}
+    className={`flex-1 py-1.5 text-xs font-medium rounded-none transition-all duration-200 ${
+      targetScope === 'docker'
+      ? 'bg-white dark:bg-charcoal-dark text-gray-900 dark:text-white ring-1 ring-black/5 dark:ring-white/10'
+      : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-white/50 dark:hover:bg-charcoal-dark/50'
+    }`}
+  >
+    Docker Only
+  </button>
 </div>
+      </div>
 
+      {/* Row 6: Policy Enabled - in its own well */}
       <div className="flex items-center justify-between p-4 bg-gray-50 dark:bg-charcoal-darkest border border-gray-200 dark:border-gray-border rounded-none">
         <div>
           <label className="text-sm font-medium text-gray-900 dark:text-light-neutral">Policy Enabled</label>
@@ -768,13 +802,13 @@ function ReviewStep({
     return targetPeer?.hostname || targetPeer?.ip_address || '—'
   }
 
-  const getServiceDisplay = () => {
-    if (selectedServiceId) {
-      const svc = allServices.find(s => s.id === selectedServiceId)
-      return svc ? `${svc.name} (${svc.protocol}:${svc.ports})` : '—'
-    }
-    return serviceToShow ? `${serviceToShow.name} (${serviceToShow.protocol}:${serviceToShow.ports})` : '—'
+const getServiceDisplay = () => {
+  if (selectedServiceId) {
+    const svc = allServices.find(s => s.id === selectedServiceId)
+    return svc ? <>{svc.name} ({svc.protocol} {renderPortsAsChips(svc.ports)})</> : '—'
   }
+  return serviceToShow ? <>{serviceToShow.name} ({serviceToShow.protocol} {renderPortsAsChips(serviceToShow.ports)})</> : '—'
+}
 
 const getDirectionDisplay = () => {
   const effectiveDirection = selectedDirection || direction
@@ -846,12 +880,12 @@ const getDirectionDisplay = () => {
                 {serviceToShow?.protocol || '—'}
               </span>
             </div>
-            <div>
-              <span className="text-gray-500 dark:text-amber-muted">Ports:</span>
-              <span className="ml-2 font-mono text-gray-900 dark:text-light-neutral">
-                :{serviceToShow?.ports || '—'}
-              </span>
-            </div>
+<div>
+          <span className="text-gray-500 dark:text-amber-muted">Ports:</span>
+          <span className="ml-2">
+          {renderPortsAsChips(serviceToShow?.ports)}
+          </span>
+        </div>
           </div>
         </div>
       </div>
@@ -903,9 +937,11 @@ const getDirectionDisplay = () => {
   </span>
 </div>
 <div>
-  <span className="text-gray-500 dark:text-amber-muted">Target Scope:</span>
-  <span className="ml-2 text-gray-900 dark:text-light-neutral">Host + Docker</span>
-</div>
+          <span className="text-gray-500 dark:text-amber-muted">Target Scope:</span>
+          <span className="ml-2 text-gray-900 dark:text-light-neutral">
+            {policyConfig?.target_scope === 'host' ? 'Host Only' : policyConfig?.target_scope === 'docker' ? 'Docker Only' : 'Host + Docker'}
+          </span>
+        </div>
 <div>
   <span className="text-gray-500 dark:text-amber-muted">Direction:</span>
   <span className="ml-2 text-gray-900 dark:text-light-neutral">{getDirectionDisplay()}</span>
@@ -991,7 +1027,8 @@ export default function CraftPolicyWizard({ log, onClose, onSuccess }) {
     name: '',
     priority: 100,
     enabled: true,
-    description: ''
+    description: '',
+    target_scope: 'host' // Changed from 'both'
   })
 
   // UI state
@@ -1231,10 +1268,17 @@ const peerOptions = [
     sublabel: peer.ip_address
   })),
   // Add pending target peer if creating new
-  ...(createTargetPeerMode && newTargetPeer.hostname ? [{
+  ...(createTargetPeerMode ? [{
     value: 'pending-target',
-    label: newTargetPeer.hostname,
+    label: newTargetPeer.hostname || newTargetPeer.ip_address,
     sublabel: newTargetPeer.ip_address,
+    isPending: true
+  }] : []),
+  // Add existing target peer if it doesn't have an ID yet (placeholder)
+  ...(existingTargetPeer && !existingTargetPeer.id ? [{
+    value: 'pending-target',
+    label: existingTargetPeer.hostname || existingTargetPeer.ip_address,
+    sublabel: existingTargetPeer.ip_address,
     isPending: true
   }] : []),
   // Add placeholder for source peer if not existing
@@ -1277,23 +1321,36 @@ const getTargetDisplay = () => {
   if (selectedTargetPeerId) {
     // Check if it's a pending target
     if (selectedTargetPeerId === 'pending-target') {
-      return newTargetPeer?.hostname || newTargetPeer?.ip_address || 'Unknown'
+      // Use newTargetPeer if in create mode, otherwise use existingTargetPeer
+      return createTargetPeerMode
+        ? newTargetPeer?.hostname || newTargetPeer?.ip_address
+        : existingTargetPeer?.hostname || existingTargetPeer?.ip_address || 'Unknown'
     }
     const peer = allPeers.find(p => p.id === selectedTargetPeerId)
     return peer?.hostname || peer?.ip_address || 'Unknown'
   }
+  // Auto-detected: use local state
   const target = createTargetPeerMode ? newTargetPeer : existingTargetPeer
   return target?.hostname || target?.ip_address || 'Unknown'
 }
 
-  const getServiceDisplay = () => {
-    if (selectedServiceId) {
-      const svc = allServices.find(s => s.id === selectedServiceId)
-      return svc ? `${svc.name} (${svc.protocol}:${svc.ports})` : 'Unknown'
-    }
-    const svc = existingService || newService
-    return svc ? `${svc.name} (${svc.protocol}:${svc.ports})` : 'Unknown'
+const getServiceDisplay = () => {
+  if (selectedServiceId) {
+    const svc = allServices.find(s => s.id === selectedServiceId)
+    return svc ? <>{svc.name} ({svc.protocol} {renderPortsAsChips(svc.ports)})</> : 'Unknown'
   }
+  const svc = existingService || newService
+  return svc ? <>{svc.name} ({svc.protocol} {renderPortsAsChips(svc.ports)})</> : 'Unknown'
+}
+
+const getServiceDisplayText = () => {
+  if (selectedServiceId) {
+    const svc = allServices.find(s => s.id === selectedServiceId)
+    return svc ? `${svc.name} (${svc.protocol} ${svc.ports})` : 'Unknown'
+  }
+  const svc = existingService || newService
+  return svc ? `${svc.name} (${svc.protocol} ${svc.ports})` : 'Unknown'
+}
 
 const getDirectionDisplay = () => {
   const effectiveDirection = selectedDirection || direction
@@ -1477,7 +1534,7 @@ try {
       priority: policyConfig.priority,
       enabled: policyConfig.enabled,
       direction: policyDirection === 'both' ? 'both' : policyDirection === 'forward' || policyDirection === 'OUT' ? 'forward' : 'backward',
-      target_scope: 'both'
+      target_scope: policyConfig.target_scope || 'host'
     })
 
 showToast('Policy created successfully', 'success')
@@ -1624,10 +1681,11 @@ setSubmitting(false)
           allPeers={allPeers}
           allServices={allServices}
           peersLoading={peersLoading}
-          getSourceDisplay={getSourceDisplay}
-          getTargetDisplay={getTargetDisplay}
-          getServiceDisplay={getServiceDisplay}
-          getDirectionDisplay={getDirectionDisplay}
+getSourceDisplay={getSourceDisplay}
+        getTargetDisplay={getTargetDisplay}
+        getServiceDisplay={getServiceDisplay}
+        getServiceDisplayText={getServiceDisplayText}
+        getDirectionDisplay={getDirectionDisplay}
         />
       )}
 
