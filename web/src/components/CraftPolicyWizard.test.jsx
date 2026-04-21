@@ -2,7 +2,7 @@ import { render, screen, waitFor, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import CraftPolicyWizard, { getSourceDisplayValue } from "./CraftPolicyWizard";
+import CraftPolicyWizard, { getPeerDisplayValue } from "./CraftPolicyWizard";
 
 // Mock the API module
 vi.mock("../api/client", async (importOriginal) => {
@@ -2078,7 +2078,7 @@ describe("CraftPolicyWizard", () => {
   });
 
   describe("target Unknown display fix", () => {
-    test("Service dropdown well is not constrained to 200px", async () => {
+    test("Service and Action are in a shared grid with Source/Direction/Target", async () => {
       const user = userEvent.setup();
       const mockLog = {
         peer_id: 1,
@@ -2146,9 +2146,13 @@ describe("CraftPolicyWizard", () => {
         expect(screen.getByText("Description (Optional)")).toBeInTheDocument(),
       );
 
-      // Verify that no element in the Service column area has max-w-[200px]
-      const service200pxElements = document.querySelectorAll(".max-\\[200px\\]");
-      expect(service200pxElements.length).toBe(0);
+// Verify that Service and Action are in the shared 3-column grid (not a separate 2-column grid)
+const twoColGrids = document.querySelectorAll(".grid-cols-\\[1fr_auto\\]");
+expect(twoColGrids.length).toBe(0);
+
+  // Verify that the 3-column grid exists containing Service, spacer, and Action
+  const threeColGrids = document.querySelectorAll(".sm\\:grid-cols-\\[1fr_auto_1fr\\]");
+  expect(threeColGrids.length).toBe(1);
     });
 
     test("Target well displays new target peer hostname when existingTargetPeer is null", async () => {
@@ -2230,9 +2234,9 @@ describe("CraftPolicyWizard", () => {
       expect(targetWell.textContent).not.toBe("Unknown");
     });
 
-    test('getSourceDisplayValue handles "pending-target" sentinel', () => {
+    test('getPeerDisplayValue handles "pending-target" sentinel', () => {
       // Direct unit test for the utility function
-      const result = getSourceDisplayValue({
+      const result = getPeerDisplayValue({
         selectedPeerId: "pending-target",
         allPeers: [],
         fallbackPeer: { hostname: "my-new-peer", ip_address: "10.0.0.1" },
@@ -2242,18 +2246,29 @@ describe("CraftPolicyWizard", () => {
       expect(result).toBe("my-new-peer");
     });
 
-    test('getSourceDisplayValue returns fallback when pending-target has no fallbackPeer', () => {
-      const result = getSourceDisplayValue({
+    test('getPeerDisplayValue returns fallback when pending-target has no fallbackPeer', () => {
+      const result = getPeerDisplayValue({
         selectedPeerId: "pending-target",
         allPeers: [],
         fallbackPeer: null,
         fallback: "Unknown",
       });
 
-      expect(result).toBe("Unknown");
+  expect(result).toBe("Unknown");
+  });
+
+  test('getPeerDisplayValue handles "pending-source" sentinel', () => {
+    const result = getPeerDisplayValue({
+      selectedPeerId: "pending-source",
+      allPeers: [],
+      fallbackPeer: { hostname: "my-source-peer", ip_address: "10.0.0.1" },
+      fallback: "Unknown",
     });
 
-    test("ReviewStep target display with pending-target selection", async () => {
+    expect(result).toBe("my-source-peer");
+  });
+
+  test("ReviewStep target display with pending-target selection", async () => {
       const user = userEvent.setup();
       const mockOnClose = vi.fn();
       const mockOnSuccess = vi.fn();
