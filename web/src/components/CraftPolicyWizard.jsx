@@ -474,17 +474,15 @@ function PolicyStep({
   peersLoading = false,
   getSourceDisplay,
   getTargetDisplay,
-  getServiceDisplay,
-  getServiceDisplayText,
-  getDirectionDisplay,
+  getServiceDisplay: _getServiceDisplay,
+  getServiceDisplayText: _getServiceDisplayText,
+  getDirectionDisplay: _getDirectionDisplay,
 }) {
   const [showDescription, setShowDescription] = useState(false)
 
   // Get the original auto-detected values for comparison
   const autoDetectedSource = sourcePeer?.hostname || sourcePeer?.ip_address || 'Unknown'
   const autoDetectedTarget = targetPeer?.hostname || targetPeer?.ip_address || 'Unknown'
-const autoDetectedService = service ? `${service.name} (${service.protocol} ${service.ports})` : 'Unknown'
-
 // Handle target_scope with default 'both'
   const targetScope = policyConfig.target_scope || 'both'
 
