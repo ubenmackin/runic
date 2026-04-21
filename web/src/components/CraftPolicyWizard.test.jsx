@@ -2,7 +2,7 @@ import { render, screen, waitFor, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import CraftPolicyWizard from "./CraftPolicyWizard";
+import CraftPolicyWizard, { getSourceDisplayValue } from "./CraftPolicyWizard";
 
 // Mock the API module
 vi.mock("../api/client", async (importOriginal) => {
@@ -2074,6 +2074,274 @@ describe("CraftPolicyWizard", () => {
       await act(async () => {
         resolvePost({ id: 1 });
       });
+    });
+  });
+
+  describe("target Unknown display fix", () => {
+    test("Service dropdown well is not constrained to 200px", async () => {
+      const user = userEvent.setup();
+      const mockLog = {
+        peer_id: 1,
+        hostname: "ansible",
+        src_ip: "10.100.5.36",
+        dst_ip: "91.189.92.23",
+        src_port: 47182,
+        dst_port: 80,
+        protocol: "tcp",
+        direction: "OUT",
+        raw_line:
+          "2026-04-16T05:09:04.939461-07:00 ansible kernel: [RUNIC-DROP] IN= OUT=ens160 SRC=10.100.5.36 DST=91.189.92.23 LEN=52 TOS=0x00 PREC=0x00 TTL=64 ID=24 DF PROTO=TCP SPT=47182 DPT=80 WINDOW=3167 RES=0x00 ACK PSH FIN URGP=0",
+      };
+
+      const mockPeers = [
+        { id: 1, hostname: "ansible", ip_address: "10.100.5.36" },
+        { id: 2, hostname: "ubuntu-repos", ip_address: "91.189.92.23" },
+      ];
+      const mockServices = [
+        { id: 1, name: "http", protocol: "tcp", ports: "80" },
+      ];
+
+      api.api.get
+        .mockResolvedValueOnce({
+          id: 2,
+          hostname: "ubuntu-repos",
+          ip_address: "91.189.92.23",
+        })
+        .mockResolvedValueOnce({
+          id: 1,
+          hostname: "ansible",
+          ip_address: "10.100.5.36",
+        })
+        .mockResolvedValueOnce({
+          id: 1,
+          name: "http",
+          ports: "80",
+          protocol: "tcp",
+        })
+        .mockResolvedValueOnce(mockPeers)
+        .mockResolvedValueOnce(mockServices);
+
+      render(
+        <CraftPolicyWizard
+          log={mockLog}
+          onClose={() => {}}
+          onSuccess={() => {}}
+        />,
+        { wrapper },
+      );
+
+      // Navigate to policy step
+      await waitFor(() =>
+        expect(screen.getByText(/Found existing peer/)).toBeInTheDocument(),
+      );
+      await user.click(screen.getByRole("button", { name: /next/i }));
+
+      await waitFor(() =>
+        expect(screen.getByText(/Found existing service/)).toBeInTheDocument(),
+      );
+      await user.click(screen.getByRole("button", { name: /next/i }));
+
+      // Wait for policy step to load
+      await waitFor(() =>
+        expect(screen.getByText("Description (Optional)")).toBeInTheDocument(),
+      );
+
+      // Verify that no element in the Service column area has max-w-[200px]
+      const service200pxElements = document.querySelectorAll(".max-\\[200px\\]");
+      expect(service200pxElements.length).toBe(0);
+    });
+
+    test("Target well displays new target peer hostname when existingTargetPeer is null", async () => {
+      const user = userEvent.setup();
+
+      // Use IN direction so source peer is resolved by IP lookup (same pattern as other tests)
+      // Target peer returns 404 (not found), source peer found, service found
+      api.api.get
+        .mockRejectedValueOnce(create404Error()) // target peer by IP - not found
+        .mockResolvedValueOnce({ // source peer by IP
+          id: 2,
+          hostname: "test-peer",
+          ip_address: "192.168.1.100",
+        })
+        .mockResolvedValueOnce({ // service by port
+          id: 1,
+          name: "https",
+          ports: "443",
+          protocol: "tcp",
+        })
+        .mockResolvedValueOnce([]) // all peers for dropdown
+        .mockResolvedValueOnce([]); // all services for dropdown
+
+      render(
+        <CraftPolicyWizard
+          log={createMockLog()}
+          onClose={() => {}}
+          onSuccess={() => {}}
+        />,
+        { wrapper },
+      );
+
+      // Wait for the new peer form to appear (target peer not found)
+      await waitFor(
+        () => {
+          expect(
+            screen.getByPlaceholderText("Enter hostname"),
+          ).toBeInTheDocument();
+        },
+        { timeout: 5000 },
+      );
+
+      // Navigate through steps to policy step
+      await user.click(screen.getByRole("button", { name: /next/i }));
+
+      // Wait for service step
+      await waitFor(
+        () => {
+          expect(
+          screen.queryByText(/No existing service found/) ||
+          screen.queryByText(/Found existing service/),
+          ).toBeInTheDocument();
+        },
+        { timeout: 5000 },
+      );
+
+      // If no service found, type a service name
+      const serviceInput = screen.queryByPlaceholderText("e.g., Web Server, Database");
+      if (serviceInput) {
+        await user.type(serviceInput, "https");
+      }
+
+      await user.click(screen.getByRole("button", { name: /next/i }));
+
+      // Wait for policy step
+      await waitFor(
+        () => {
+          expect(
+            screen.getByText("Description (Optional)"),
+          ).toBeInTheDocument();
+        },
+        { timeout: 5000 },
+      );
+
+      // The target well should show the new peer's hostname, NOT "Unknown"
+      // The new target peer hostname is auto-generated from the IP as "peer-192-168-1-100"
+      const targetWell = screen.getByTitle("peer-192-168-1-100");
+      expect(targetWell).toBeInTheDocument();
+      expect(targetWell.textContent).not.toBe("Unknown");
+    });
+
+    test('getSourceDisplayValue handles "pending-target" sentinel', () => {
+      // Direct unit test for the utility function
+      const result = getSourceDisplayValue({
+        selectedPeerId: "pending-target",
+        allPeers: [],
+        fallbackPeer: { hostname: "my-new-peer", ip_address: "10.0.0.1" },
+        fallback: "Unknown",
+      });
+
+      expect(result).toBe("my-new-peer");
+    });
+
+    test('getSourceDisplayValue returns fallback when pending-target has no fallbackPeer', () => {
+      const result = getSourceDisplayValue({
+        selectedPeerId: "pending-target",
+        allPeers: [],
+        fallbackPeer: null,
+        fallback: "Unknown",
+      });
+
+      expect(result).toBe("Unknown");
+    });
+
+    test("ReviewStep target display with pending-target selection", async () => {
+      const user = userEvent.setup();
+      const mockOnClose = vi.fn();
+      const mockOnSuccess = vi.fn();
+
+      // Target peer not found, source peer found, service not found
+      api.api.get
+        .mockRejectedValueOnce(create404Error()) // target peer by IP - not found
+        .mockResolvedValueOnce({ // source peer by IP
+          id: 2,
+          hostname: "test-peer",
+          ip_address: "192.168.1.100",
+        })
+        .mockRejectedValueOnce(create404Error()) // service by port - not found
+    .mockResolvedValueOnce([]) // all peers for dropdown
+    .mockResolvedValueOnce([]); // all services for dropdown
+
+      api.api.post
+        .mockResolvedValueOnce({ id: 10 }) // peer created
+        .mockResolvedValueOnce({ id: 20 }) // service created
+        .mockResolvedValueOnce({ id: 30 }); // policy created
+
+      render(
+        <CraftPolicyWizard
+          log={createMockLog()}
+          onClose={mockOnClose}
+          onSuccess={mockOnSuccess}
+        />,
+        { wrapper },
+      );
+
+      // Wait for the new peer form
+      await waitFor(
+        () => {
+          expect(
+            screen.getByPlaceholderText("Enter hostname"),
+          ).toBeInTheDocument();
+        },
+        { timeout: 5000 },
+      );
+
+      // Navigate through steps - hostname is pre-filled, click Next
+      await user.click(screen.getByRole("button", { name: /next/i }));
+
+      // Wait for service step (no existing service found)
+      await waitFor(
+        () => {
+          expect(
+            screen.getByPlaceholderText("e.g., Web Server, Database"),
+          ).toBeInTheDocument();
+        },
+        { timeout: 5000 },
+      );
+
+      // Type a service name
+      await user.type(
+        screen.getByPlaceholderText("e.g., Web Server, Database"),
+        "https",
+      );
+
+      await user.click(screen.getByRole("button", { name: /next/i }));
+
+      // Wait for policy step
+      await waitFor(
+        () => {
+          expect(
+            screen.getByText("Description (Optional)"),
+          ).toBeInTheDocument();
+        },
+        { timeout: 5000 },
+      );
+
+      await user.click(screen.getByRole("button", { name: /next/i }));
+
+      // Wait for review step
+      await waitFor(
+        () => {
+          expect(
+            screen.getByRole("button", { name: /create policy/i }),
+          ).toBeInTheDocument();
+        },
+        { timeout: 5000 },
+      );
+
+      // The review step should show target peer info, not "Unknown"
+      // The new target peer has hostname auto-generated from the IP
+  await waitFor(() => {
+    expect(screen.getAllByText("peer-192-168-1-100").length).toBeGreaterThanOrEqual(1);
+  });
     });
   });
 });

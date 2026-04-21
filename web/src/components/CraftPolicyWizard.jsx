@@ -56,17 +56,17 @@ function renderPortsAsChips(portsString) {
 }
 
 // Shared utility to resolve a peer display name from a selected peer ID or fallback peer.
-// Handles the "pending-source" sentinel value and returns the fallback string when no
+// Handles the "pending-source" and "pending-target" sentinel values and returns the fallback string when no
 // peer information is available.  Callers can customise the fallback (e.g. "—" for
 // review displays, "Unknown" for editable-field displays).
-function getSourceDisplayValue({
+export function getSourceDisplayValue({
   selectedPeerId,
   allPeers = [],
   fallbackPeer,
   fallback = "Unknown",
 }) {
   if (selectedPeerId) {
-    if (selectedPeerId === "pending-source") {
+    if (selectedPeerId === "pending-source" || selectedPeerId === "pending-target") {
       return fallbackPeer?.hostname || fallbackPeer?.ip_address || fallback;
     }
     const peer = allPeers.find((p) => p.id === selectedPeerId);
@@ -532,12 +532,10 @@ function PolicyStep({
   toggleEditMode,
   peersLoading = false,
   getSourceDisplay = () => null,
+  getTargetDisplay = () => null,
 }) {
   const [showDescription, setShowDescription] = useState(false);
 
-  // Get the original auto-detected target for display
-  const autoDetectedTarget =
-    targetPeer?.hostname || targetPeer?.ip_address || "Unknown";
   // Handle target_scope with default 'both'
   const targetScope = policyConfig.target_scope || "both";
 
@@ -778,9 +776,9 @@ function PolicyStep({
             <div className="flex items-center justify-between p-2 border border-gray-200 dark:border-gray-border rounded-none bg-gray-50 dark:bg-charcoal-darkest">
               <span
                 className="font-medium text-gray-900 dark:text-light-neutral text-sm truncate"
-                title={autoDetectedTarget}
-              >
-                {autoDetectedTarget}
+          title={getTargetDisplay()}
+        >
+          {getTargetDisplay()}
               </span>
               <button
                 type="button"
@@ -797,7 +795,7 @@ function PolicyStep({
       {/* Row 4: Service [Action: ACCEPT] */}
       <div className="grid grid-cols-[1fr_auto] gap-x-4 gap-y-4 items-end">
         {/* Service Column - constrained width */}
-        <div className="max-w-[200px]">
+        <div>
           <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
             Service
           </label>
@@ -1562,6 +1560,16 @@ export default function CraftPolicyWizard({ log, onClose, onSuccess }) {
       fallback: "Unknown",
     });
 
+  const getTargetDisplay = () =>
+    getSourceDisplayValue({
+      selectedPeerId: selectedTargetPeerId,
+      allPeers,
+      fallbackPeer: createTargetPeerMode
+        ? newTargetPeer
+        : (existingTargetPeer || newTargetPeer),
+      fallback: "Unknown",
+    });
+
   // Helper to toggle edit mode for a field
   const toggleEditMode = (field) => {
     setEditMode((prev) => ({ ...prev, [field]: !prev[field] }));
@@ -1873,13 +1881,13 @@ export default function CraftPolicyWizard({ log, onClose, onSuccess }) {
         <PolicyStep
           policyConfig={policyConfig}
           setPolicyConfig={setPolicyConfig}
-          service={existingService || newService}
-              targetPeer={
-                createTargetPeerMode ? newTargetPeer : existingTargetPeer
-              }
-              direction={direction}
-              formErrors={formErrors}
-              // Editable field props
+      service={existingService || newService}
+      targetPeer={
+        createTargetPeerMode ? newTargetPeer : (existingTargetPeer || newTargetPeer)
+      }
+      direction={direction}
+      formErrors={formErrors}
+      // Editable field props
               peerOptions={peerOptions}
               serviceOptions={serviceOptions}
               selectedSourcePeerId={selectedSourcePeerId}
@@ -1894,6 +1902,7 @@ export default function CraftPolicyWizard({ log, onClose, onSuccess }) {
               toggleEditMode={toggleEditMode}
               peersLoading={peersLoading}
               getSourceDisplay={getSourceDisplay}
+        getTargetDisplay={getTargetDisplay}
             />
           )}
 
@@ -1905,12 +1914,12 @@ export default function CraftPolicyWizard({ log, onClose, onSuccess }) {
               existingService={existingService}
               newService={newService}
               policyConfig={policyConfig}
-              sourcePeer={existingSourcePeer}
-              targetPeer={
-                createTargetPeerMode ? newTargetPeer : existingTargetPeer
-              }
-              direction={direction}
-              // Pass override values
+      sourcePeer={existingSourcePeer}
+      targetPeer={
+        createTargetPeerMode ? newTargetPeer : (existingTargetPeer || newTargetPeer)
+      }
+      direction={direction}
+      // Pass override values
               selectedSourcePeerId={selectedSourcePeerId}
               selectedTargetPeerId={selectedTargetPeerId}
               selectedServiceId={selectedServiceId}
