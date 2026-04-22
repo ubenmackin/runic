@@ -5,7 +5,7 @@ import { usePagination } from '../hooks/usePagination'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Plus, Pencil, Trash2, Server, Copy, Check, RefreshCw, X, FileCode, AlertTriangle, Globe, ChevronDown, ChevronUp, Send } from 'lucide-react'
 import { api, QUERY_KEYS } from '../api/client'
-import { REFETCH_INTERVALS } from '../constants'
+import { REFETCH_INTERVALS, OS_OPTIONS, ARCH_OPTIONS } from '../constants'
 import { useCrudModal } from '../hooks/useCrudModal'
 import { useToastContext } from '../hooks/ToastContext'
 import { formatRelativeTime } from '../utils/formatTime.js'
@@ -29,27 +29,6 @@ import PendingChangesModal from '../components/PendingChangesModal'
 import SharpTag from '../components/SharpTag'
 import FilterChip from '../components/FilterChip'
 import KebabMenu from '../components/KebabMenu'
-
-const OS_OPTIONS = [
-  { value: 'ubuntu', label: 'Ubuntu' },
-  { value: 'opensuse', label: 'openSUSE' },
-  { value: 'raspbian', label: 'Raspbian' },
-  { value: 'armbian', label: 'Armbian' },
-  { value: 'ios', label: 'iOS' },
-  { value: 'ipados', label: 'iPadOS' },
-  { value: 'macos', label: 'macOS' },
-  { value: 'tvos', label: 'tvOS' },
-  { value: 'windows', label: 'Windows' },
-  { value: 'linux', label: 'Generic Linux' },
-  { value: 'other', label: 'Other' },
-]
-
-const ARCH_OPTIONS = [
-  { value: 'amd64', label: 'amd64' },
-  { value: 'arm64', label: 'arm64' },
-  { value: 'arm', label: 'arm' },
-  { value: 'other', label: 'Other' },
-]
 
 // Helper function to parse heartbeat for sorting
 function parseHeartbeatForSort(timestamp) {
@@ -170,7 +149,7 @@ export default function Peers() {
   // Add Peer modal state
   const [addModalOpen, setAddModalOpen] = useState(false)
   const [activeTab, setActiveTab] = useState('agent') // 'agent' or 'manual'
-  const [manualForm, setManualForm] = useState({ hostname: '', ip_address: '', os_type: 'other', arch: 'other' })
+  const [manualForm, setManualForm] = useState({ hostname: '', ip_address: '', os_type: 'linux', arch: '' })
   const [manualErrors, setManualErrors] = useState({})
   const [copied, setCopied] = useState(false)
   const [selectedToken, setSelectedToken] = useState('')
@@ -253,19 +232,19 @@ const [bundleContent, setBundleContent] = useState('')
   const openAddModal = useCallback(() => {
     setAddModalOpen(true)
     setActiveTab('agent')
-    setManualForm({ hostname: '', ip_address: '', os_type: 'other', arch: 'other' })
-    setManualErrors({})
-    setCopied(false)
-    setSelectedToken('')
-    setIsGenerating(false)
-    setTokenDescription('')
+  setManualForm({ hostname: '', ip_address: '', os_type: 'linux', arch: '' })
+  setManualErrors({})
+  setCopied(false)
+  setSelectedToken('')
+  setIsGenerating(false)
+  setTokenDescription('')
   }, [])
 
   const closeAddModal = () => {
     setAddModalOpen(false)
-    setManualForm({ hostname: '', ip_address: '', os_type: 'other', arch: 'other' })
-    setManualErrors({})
-    setCopied(false)
+  setManualForm({ hostname: '', ip_address: '', os_type: 'linux', arch: '' })
+  setManualErrors({})
+  setCopied(false)
   }
 
   // Generate agent install command
@@ -332,8 +311,8 @@ const [bundleContent, setBundleContent] = useState('')
       await api.post('/peers', {
         hostname: manualForm.hostname.trim(),
         ip_address: manualForm.ip_address.trim(),
-        os_type: manualForm.os_type || null,
-        arch: manualForm.arch || null,
+      os_type: manualForm.os_type === 'other' ? 'linux' : (manualForm.os_type || null),
+      arch: manualForm.arch === 'other' ? null : (manualForm.arch || null),
         is_manual: true
       })
       showToast('Manual peer added successfully', 'success')
@@ -908,7 +887,7 @@ title="Delete"
             </div>
             <form onSubmit={handleSubmit} className="p-6 space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Hostname</label>
+                <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Name</label>
                 <input type="text" value={formData.hostname} onChange={e => setFormData(d => ({ ...d, hostname: e.target.value }))} required className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral" />
               </div>
               <div>

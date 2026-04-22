@@ -37,6 +37,25 @@ vi.mock("../hooks/useFocusTrap", () => ({
   useFocusTrap: vi.fn(),
 }));
 
+// Mock SearchableSelect component - render as a simple native select
+vi.mock("./SearchableSelect", () => ({
+  default: ({ options, value, onChange, placeholder }) => (
+    <select
+      value={value || ""}
+      onChange={(e) => onChange?.(e.target.value)}
+      aria-label="Searchable Select"
+      data-testid="searchable-select"
+    >
+      <option value="">{placeholder}</option>
+      {options?.map((opt) => (
+        <option key={opt.value} value={opt.value}>
+          {opt.label}
+        </option>
+      ))}
+    </select>
+  ),
+}));
+
 // Helper to create a 404 error with proper status property
 function create404Error(message = "Not found") {
   const error = new Error(message);
@@ -2357,6 +2376,204 @@ expect(twoColGrids.length).toBe(0);
   await waitFor(() => {
     expect(screen.getAllByText("peer-192-168-1-100").length).toBeGreaterThanOrEqual(1);
   });
+    });
+  });
+
+  describe("os_type and arch 'other' mapping", () => {
+    test("maps os_type 'other' to 'linux' in target peer API payload", async () => {
+      const user = userEvent.setup();
+      const mockOnClose = vi.fn();
+      const mockOnSuccess = vi.fn();
+
+      // Target peer not found, source peer found, service not found
+      api.api.get
+        .mockRejectedValueOnce(create404Error()) // target peer by IP - not found
+        .mockResolvedValueOnce({ // source peer by IP
+          id: 2,
+          hostname: "test-peer",
+          ip_address: "192.168.1.100",
+        })
+        .mockRejectedValueOnce(create404Error()); // service by port - not found
+
+      // Peer, service, and policy creation
+      api.api.post
+        .mockResolvedValueOnce({ id: 10 }) // peer created
+        .mockResolvedValueOnce({ id: 20 }) // service created
+        .mockResolvedValueOnce({ id: 30 }); // policy created
+
+      render(
+        <CraftPolicyWizard
+          log={createMockLog()}
+          onClose={mockOnClose}
+          onSuccess={mockOnSuccess}
+        />,
+        { wrapper },
+      );
+
+      // Wait for the new peer form to appear
+      await waitFor(
+        () => {
+          expect(
+            screen.getByPlaceholderText("Enter hostname"),
+          ).toBeInTheDocument();
+        },
+        { timeout: 5000 },
+      );
+
+        // Select os_type "other" from the dropdown
+        // With SearchableSelect mocked as native <select>, the os_type select
+        // defaults to "linux" (displayed as "Generic Linux") and has placeholder "Select OS..."
+        const osTypeSelect = screen.getByDisplayValue("Generic Linux");
+        await user.selectOptions(osTypeSelect, "other");
+
+      // Navigate through steps
+      await user.click(screen.getByRole("button", { name: /next/i }));
+
+      // Wait for service step (no existing service found)
+      await waitFor(
+        () => {
+          expect(
+            screen.getByPlaceholderText("e.g., Web Server, Database"),
+          ).toBeInTheDocument();
+        },
+        { timeout: 5000 },
+      );
+      await user.type(
+        screen.getByPlaceholderText("e.g., Web Server, Database"),
+        "https",
+      );
+      await user.click(screen.getByRole("button", { name: /next/i }));
+
+      // Wait for policy step
+      await waitFor(
+        () => {
+          expect(
+            screen.getByText("Description (Optional)"),
+          ).toBeInTheDocument();
+        },
+        { timeout: 5000 },
+      );
+      await user.click(screen.getByRole("button", { name: /next/i }));
+
+      // Wait for review step
+      await waitFor(
+        () => {
+          expect(
+            screen.getByRole("button", { name: /create policy/i }),
+          ).toBeInTheDocument();
+        },
+        { timeout: 5000 },
+      );
+      await user.click(screen.getByRole("button", { name: /create policy/i }));
+
+      // Verify the peer creation API call maps "other" os_type to "linux"
+      await waitFor(() => {
+        const peerPostCall = api.api.post.mock.calls.find(
+          (call) => call[0] === "/peers"
+        );
+        expect(peerPostCall).toBeDefined();
+        // The first peers POST should have os_type mapped from "other" to "linux"
+        expect(peerPostCall[1].os_type).toBe("linux");
+      });
+    });
+
+    test("maps arch 'other' to null in target peer API payload", async () => {
+      const user = userEvent.setup();
+      const mockOnClose = vi.fn();
+      const mockOnSuccess = vi.fn();
+
+      // Target peer not found, source peer found, service not found
+      api.api.get
+        .mockRejectedValueOnce(create404Error()) // target peer by IP - not found
+        .mockResolvedValueOnce({ // source peer by IP
+          id: 2,
+          hostname: "test-peer",
+          ip_address: "192.168.1.100",
+        })
+        .mockRejectedValueOnce(create404Error()); // service by port - not found
+
+      // Peer, service, and policy creation
+      api.api.post
+        .mockResolvedValueOnce({ id: 10 }) // peer created
+        .mockResolvedValueOnce({ id: 20 }) // service created
+        .mockResolvedValueOnce({ id: 30 }); // policy created
+
+      render(
+        <CraftPolicyWizard
+          log={createMockLog()}
+          onClose={mockOnClose}
+          onSuccess={mockOnSuccess}
+        />,
+        { wrapper },
+      );
+
+      // Wait for the new peer form to appear
+      await waitFor(
+        () => {
+          expect(
+            screen.getByPlaceholderText("Enter hostname"),
+          ).toBeInTheDocument();
+        },
+        { timeout: 5000 },
+      );
+
+        // Select arch "other" from the dropdown
+        // With SearchableSelect mocked as native <select>, the arch select
+        // defaults to "" (displayed as "Select arch...") since the default arch is empty string
+        // Use getAllByDisplayValue since multiple selects may have empty display values,
+        // then find the one with the "Select arch..." placeholder option
+        const archSelects = screen.getAllByDisplayValue("Select arch...");
+        const archSelect = archSelects.find((el) => el.tagName === "SELECT");
+        await user.selectOptions(archSelect, "other");
+
+      // Navigate through steps
+      await user.click(screen.getByRole("button", { name: /next/i }));
+
+      // Wait for service step (no existing service found)
+      await waitFor(
+        () => {
+          expect(
+            screen.getByPlaceholderText("e.g., Web Server, Database"),
+          ).toBeInTheDocument();
+        },
+        { timeout: 5000 },
+      );
+      await user.type(
+        screen.getByPlaceholderText("e.g., Web Server, Database"),
+        "https",
+      );
+      await user.click(screen.getByRole("button", { name: /next/i }));
+
+      // Wait for policy step
+      await waitFor(
+        () => {
+          expect(
+            screen.getByText("Description (Optional)"),
+          ).toBeInTheDocument();
+        },
+        { timeout: 5000 },
+      );
+      await user.click(screen.getByRole("button", { name: /next/i }));
+
+      // Wait for review step
+      await waitFor(
+        () => {
+          expect(
+            screen.getByRole("button", { name: /create policy/i }),
+          ).toBeInTheDocument();
+        },
+        { timeout: 5000 },
+      );
+      await user.click(screen.getByRole("button", { name: /create policy/i }));
+
+      // Verify the peer creation API call maps "other" arch to null
+      await waitFor(() => {
+        const peerPostCall = api.api.post.mock.calls.find(
+          (call) => call[0] === "/peers"
+        );
+        expect(peerPostCall).toBeDefined();
+        expect(peerPostCall[1].arch).toBeNull();
+      });
     });
   });
 });

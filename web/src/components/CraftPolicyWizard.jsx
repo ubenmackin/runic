@@ -18,20 +18,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import InlineError from "../components/InlineError";
 import ToggleSwitch from "../components/ToggleSwitch";
 import SearchableSelect from "../components/SearchableSelect";
-
-const OS_OPTIONS = [
-  { value: "ubuntu", label: "Ubuntu" },
-  { value: "opensuse", label: "openSUSE" },
-  { value: "raspbian", label: "Raspbian" },
-  { value: "armbian", label: "Armbian" },
-  { value: "ios", label: "iOS" },
-  { value: "ipados", label: "iPadOS" },
-  { value: "macos", label: "macOS" },
-  { value: "tvos", label: "tvOS" },
-  { value: "windows", label: "Windows" },
-  { value: "linux", label: "Generic Linux" },
-  { value: "other", label: "Other" },
-];
+import { OS_OPTIONS, ARCH_OPTIONS } from "../constants";
 
 // Helper function to render ports as boxed/chip items
 // Handles: single port (80), multiple ports (80,443), ranges (8000:9000)
@@ -75,13 +62,6 @@ export function getPeerDisplayValue({
   }
   return fallbackPeer?.hostname || fallbackPeer?.ip_address || fallback;
 }
-
-const ARCH_OPTIONS = [
-  { value: "amd64", label: "amd64" },
-  { value: "arm64", label: "arm64" },
-  { value: "arm", label: "arm" },
-  { value: "other", label: "Other" },
-];
 
 const PROTOCOL_OPTIONS = [
   { value: "tcp", label: "TCP" },
@@ -268,8 +248,8 @@ function PeerStep({
           <div className="grid grid-cols-2 gap-2 text-sm">
             <div>
               <span className="text-gray-500 dark:text-amber-muted">
-                Hostname:
-              </span>
+                            Name:
+                          </span>
               <span className="ml-2 font-medium text-gray-900 dark:text-light-neutral">
                 {existingPeer.hostname}
               </span>
@@ -957,22 +937,9 @@ function ReviewStep({
   const getServiceDisplay = () => {
     if (selectedServiceId) {
       const svc = allServices.find((s) => s.id === selectedServiceId);
-      return svc ? (
-        <>
-          {svc.name} ({svc.protocol} {renderPortsAsChips(svc.ports)})
-        </>
-      ) : (
-        "—"
-      );
+      return svc?.name || "—";
     }
-    return serviceToShow ? (
-      <>
-        {serviceToShow.name} ({serviceToShow.protocol}{" "}
-        {renderPortsAsChips(serviceToShow.ports)})
-      </>
-    ) : (
-      "—"
-    );
+    return serviceToShow?.name || "—";
   };
 
   const getDirectionDisplay = () => {
@@ -998,11 +965,11 @@ function ReviewStep({
         <div className="p-4 space-y-2 text-sm">
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <span className="text-gray-500 dark:text-amber-muted">
-                Hostname:
-              </span>
-              <span className="ml-2 font-medium text-gray-900 dark:text-light-neutral">
-                {peerToShow?.hostname || "—"}
+<span className="text-gray-500 dark:text-amber-muted">
+                          Name:
+                        </span>
+                        <span className="ml-2 font-medium text-gray-900 dark:text-light-neutral">
+                          {peerToShow?.hostname || "—"}
               </span>
             </div>
             <div>
@@ -1232,8 +1199,8 @@ export default function CraftPolicyWizard({ log, onClose, onSuccess }) {
   const [newTargetPeer, setNewTargetPeer] = useState({
     hostname: "",
     ip_address: parsedLog.externalIP,
-    os_type: "other",
-    arch: "other",
+  os_type: "linux",
+  arch: "",
   });
   const [existingSourcePeer, setExistingSourcePeer] = useState(null); // Local peer (source from log)
   const [existingService, setExistingService] = useState(null);
@@ -1681,11 +1648,11 @@ export default function CraftPolicyWizard({ log, onClose, onSuccess }) {
         const createdSourcePeer = await api.post("/peers", {
           hostname: existingSourcePeer.hostname,
           ip_address: existingSourcePeer.ip_address,
-          os_type: null,
-          arch: null,
-          is_manual: true,
-        });
-        sourcePeerId = createdSourcePeer.id;
+      os_type: existingSourcePeer.os_type === "other" ? "linux" : (existingSourcePeer.os_type || null),
+      arch: existingSourcePeer.arch === "other" ? null : (existingSourcePeer.arch || null),
+      is_manual: true,
+    });
+    sourcePeerId = createdSourcePeer.id;
         createdSourcePeerId = createdSourcePeer.id; // Track for potential cleanup
         showToast("Source peer created successfully", "success");
       }
@@ -1699,8 +1666,8 @@ export default function CraftPolicyWizard({ log, onClose, onSuccess }) {
         const createdTargetPeer = await api.post("/peers", {
           hostname: newTargetPeer.hostname,
           ip_address: newTargetPeer.ip_address,
-          os_type: newTargetPeer.os_type || null,
-          arch: newTargetPeer.arch || null,
+      os_type: newTargetPeer.os_type === "other" ? "linux" : (newTargetPeer.os_type || null),
+      arch: newTargetPeer.arch === "other" ? null : (newTargetPeer.arch || null),
           is_manual: true,
         });
         targetPeerId = createdTargetPeer.id;
