@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import ReactDOM from "react-dom";
 import {
   X,
@@ -63,11 +63,23 @@ export function getPeerDisplayValue({
   return fallbackPeer?.hostname || fallbackPeer?.ip_address || fallback;
 }
 
-const PROTOCOL_OPTIONS = [
+const BASE_PROTOCOL_OPTIONS = [
   { value: "tcp", label: "TCP" },
   { value: "udp", label: "UDP" },
   { value: "both", label: "TCP+UDP" },
 ];
+
+function useProtocolOptions(currentProtocol) {
+  return useMemo(() => {
+    if (currentProtocol === "icmp" || currentProtocol === "igmp") {
+      return [
+        { value: currentProtocol, label: currentProtocol.toUpperCase(), disabled: true },
+        ...BASE_PROTOCOL_OPTIONS,
+      ];
+    }
+    return BASE_PROTOCOL_OPTIONS;
+  }, [currentProtocol]);
+}
 
 // Step indicators component
 function StepIndicators({ currentStep }) {
@@ -371,6 +383,7 @@ function ServiceStep({
   serviceLoading,
   serviceError,
   formErrors,
+  protocolOptions,
 }) {
   const handleNewServiceChange = (field, value) => {
     setNewService((prev) => ({ ...prev, [field]: value }));
@@ -393,10 +406,10 @@ function ServiceStep({
         <div className="flex items-center gap-2 p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-none">
           <AlertCircle className="w-4 h-4 text-amber-600 dark:text-amber-400" />
           <p className="text-sm text-amber-700 dark:text-amber-300">
-            No existing service found for port{" "}
-            <span className="font-mono font-medium">
-              {port}/{protocol}
-            </span>
+No existing service found for{" "}
+              <span className="font-mono font-medium">
+                {port ? `${port}/${protocol}` : protocol}
+              </span>
           </p>
         </div>
         <p className="text-sm text-gray-600 dark:text-amber-muted">
@@ -419,18 +432,20 @@ function ServiceStep({
             {formErrors.name && <InlineError message={formErrors.name} />}
           </div>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-              Protocol
-            </label>
-            <SearchableSelect
-              options={PROTOCOL_OPTIONS}
-              value={newService.protocol}
-              onChange={(v) => handleNewServiceChange("protocol", v)}
-              placeholder="Select protocol..."
-            />
-          </div>
+        <div>
+          <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
+            Protocol
+          </label>
+          <SearchableSelect
+            options={protocolOptions}
+            value={newService.protocol}
+            onChange={(v) => handleNewServiceChange("protocol", v)}
+            placeholder="Select protocol..."
+            disabled={newService.protocol === "icmp" || newService.protocol === "igmp"}
+          />
+        </div>
 
+        {newService.protocol !== "icmp" && newService.protocol !== "igmp" && (
           <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
               Destination Ports <span className="text-red-500">*</span>
@@ -448,6 +463,7 @@ function ServiceStep({
             </p>
             {formErrors.ports && <InlineError message={formErrors.ports} />}
           </div>
+        )}
         </div>
 
         <InlineError message={formErrors._general} />
@@ -1207,7 +1223,7 @@ export default function CraftPolicyWizard({ log, onClose, onSuccess }) {
   const [newService, setNewService] = useState({
     name: "",
     protocol: parsedLog.protocol,
-    ports: String(parsedLog.port),
+    ports: protocol === "icmp" || protocol === "igmp" ? "" : String(parsedLog.port),
     description: "",
     source_ports: "",
   });
@@ -1373,11 +1389,11 @@ export default function CraftPolicyWizard({ log, onClose, onSuccess }) {
   // Fetch service by port/protocol when entering service step
   useEffect(() => {
     if (step !== "service") return;
-    if (!port) {
-      setServiceLoading(false);
-      setServiceError({ message: "No port found in log" });
-      return;
-    }
+  if (!port && !protocol) {
+    setServiceLoading(false);
+    setServiceError({ message: "No port or protocol found in log" });
+    return;
+  }
 
     let isMounted = true;
 
@@ -1518,6 +1534,9 @@ export default function CraftPolicyWizard({ log, onClose, onSuccess }) {
     sublabel: `${service.protocol}:${service.ports}`,
   }));
 
+  // Compute protocol options dynamically to include ICMP/IGMP when auto-populated
+  const protocolOptions = useProtocolOptions(newService.protocol);
+
   // Compute effective target peer once to avoid duplicated ternary
   const effectiveTargetPeer = createTargetPeerMode ? newTargetPeer : (existingTargetPeer || newTargetPeer);
 
@@ -1564,7 +1583,7 @@ export default function CraftPolicyWizard({ log, onClose, onSuccess }) {
       if (!newService.name?.trim()) {
         errors.name = "Service name is required";
       }
-      if (!newService.ports?.trim()) {
+      if (!newService.ports?.trim() && newService.protocol !== "icmp" && newService.protocol !== "igmp") {
         errors.ports = "Ports are required";
       }
     }
@@ -1648,8 +1667,8 @@ export default function CraftPolicyWizard({ log, onClose, onSuccess }) {
         const createdSourcePeer = await api.post("/peers", {
           hostname: existingSourcePeer.hostname,
           ip_address: existingSourcePeer.ip_address,
-      os_type: existingSourcePeer.os_type === "other" ? "linux" : (existingSourcePeer.os_type || null),
-      arch: existingSourcePeer.arch === "other" ? null : (existingSourcePeer.arch || null),
+      os_type: existingSourcePeer.os_type || null,
+      arch: existingSourcePeer.arch || null,
       is_manual: true,
     });
     sourcePeerId = createdSourcePeer.id;
@@ -1666,8 +1685,8 @@ export default function CraftPolicyWizard({ log, onClose, onSuccess }) {
         const createdTargetPeer = await api.post("/peers", {
           hostname: newTargetPeer.hostname,
           ip_address: newTargetPeer.ip_address,
-      os_type: newTargetPeer.os_type === "other" ? "linux" : (newTargetPeer.os_type || null),
-      arch: newTargetPeer.arch === "other" ? null : (newTargetPeer.arch || null),
+      os_type: newTargetPeer.os_type || null,
+      arch: newTargetPeer.arch || null,
           is_manual: true,
         });
         targetPeerId = createdTargetPeer.id;
@@ -1769,11 +1788,11 @@ export default function CraftPolicyWizard({ log, onClose, onSuccess }) {
         return (
           !targetPeerLoading && (existingTargetPeer || newTargetPeer.hostname)
         );
-      case "service":
-        return (
-          !serviceLoading &&
-          (existingService || (newService.name && newService.ports))
-        );
+    case "service":
+      return (
+        !serviceLoading &&
+        (existingService || (newService.name && (newService.ports || newService.protocol === "icmp" || newService.protocol === "igmp")))
+      );
       case "policy":
         return !!policyConfig.name;
       case "review":
@@ -1832,18 +1851,19 @@ export default function CraftPolicyWizard({ log, onClose, onSuccess }) {
             />
           )}
 
-          {step === "service" && (
-            <ServiceStep
-              port={port}
-              protocol={protocol}
-              existingService={existingService}
-              newService={newService}
-              setNewService={setNewService}
-              serviceLoading={serviceLoading}
-              serviceError={serviceError}
-              formErrors={formErrors}
-            />
-          )}
+        {step === "service" && (
+          <ServiceStep
+            port={port}
+            protocol={protocol}
+            existingService={existingService}
+            newService={newService}
+            setNewService={setNewService}
+            serviceLoading={serviceLoading}
+            serviceError={serviceError}
+            formErrors={formErrors}
+            protocolOptions={protocolOptions}
+          />
+        )}
 
           {step === "policy" && (
           <PolicyStep

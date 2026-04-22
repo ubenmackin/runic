@@ -35,6 +35,17 @@ var validProtocols = map[string]bool{
 	"both": true,
 }
 
+// validLookupProtocols is the set of allowed protocol values for the
+// protocol-only lookup path in GetServiceByPort. This includes system-only
+// protocols (icmp, igmp) since the protocol-only path searches system services.
+var validLookupProtocols = map[string]bool{
+	"tcp":  true,
+	"udp":  true,
+	"both": true,
+	"icmp": true,
+	"igmp": true,
+}
+
 // validateService checks that ports, source_ports, and protocol are safe to compile into iptables rules.
 // For user-defined services, ICMP and IGMP protocols are blocked.
 // For non-ICMP/IGMP protocols, at least one of ports or source_ports is required.
@@ -365,13 +376,56 @@ func (h *Handler) RegisterRoutes(r *mux.Router) {
 }
 
 // GetServiceByPort returns the first user service matching a given port and optional protocol.
+// When port is "0" or empty and protocol is provided, it performs a protocol-only lookup
+// that includes system services (useful for ICMP/IGMP which have no ports).
 // GET /api/v1/services/by-port?port=<port>&protocol=<protocol>
 func (h *Handler) GetServiceByPort(w http.ResponseWriter, r *http.Request) {
 	port := r.URL.Query().Get("port")
 	protocol := r.URL.Query().Get("protocol")
 
-	if port == "" {
-		common.RespondError(w, http.StatusBadRequest, "port parameter required")
+	type serviceResp struct {
+		ID              int    `json:"id"`
+		Name            string `json:"name"`
+		Ports           string `json:"ports"`
+		SourcePorts     string `json:"source_ports"`
+		Protocol        string `json:"protocol"`
+		Description     string `json:"description"`
+		DirectionHint   string `json:"direction_hint"`
+		IsSystem        bool   `json:"is_system"`
+		IsPendingDelete bool   `json:"is_pending_delete"`
+	}
+
+	if port == "" || port == "0" {
+		if protocol == "" {
+			common.RespondError(w, http.StatusBadRequest, "port or protocol parameter required")
+			return
+		}
+
+		// Validate protocol value for protocol-only lookup
+		if !validLookupProtocols[protocol] {
+			common.RespondError(w, http.StatusBadRequest, "invalid protocol")
+			return
+		}
+
+		// Protocol-only lookup: search by protocol including system services
+		// Match both the exact protocol and 'both' (which applies to tcp and udp)
+		query := `
+		SELECT id, name, ports, COALESCE(source_ports, ''), protocol, COALESCE(description, ''), direction_hint, COALESCE(is_system, 0), COALESCE(is_pending_delete, 0)
+		FROM services
+		WHERE (protocol = ? OR protocol = 'both') AND is_pending_delete = 0
+		LIMIT 1
+		`
+
+		var s serviceResp
+		err := h.DB.QueryRowContext(r.Context(), query, protocol).Scan(
+			&s.ID, &s.Name, &s.Ports, &s.SourcePorts, &s.Protocol, &s.Description, &s.DirectionHint, &s.IsSystem, &s.IsPendingDelete)
+		if err != nil {
+			// No match found - return null
+			common.RespondJSON(w, http.StatusOK, nil)
+			return
+		}
+
+		common.RespondJSON(w, http.StatusOK, s)
 		return
 	}
 
@@ -388,11 +442,11 @@ func (h *Handler) GetServiceByPort(w http.ResponseWriter, r *http.Request) {
 	// - port in middle of list (e.g., "443,80,8080")
 	// - port at end of list (e.g., "443,80")
 	query := `
-		SELECT id, name, ports, COALESCE(source_ports, ''), protocol, COALESCE(description, ''), direction_hint, COALESCE(is_system, 0), COALESCE(is_pending_delete, 0)
-		FROM services
-		WHERE (ports = ? OR ports LIKE ? OR ports LIKE ? OR ports LIKE ?)
-		AND is_system = 0
-		AND is_pending_delete = 0
+	SELECT id, name, ports, COALESCE(source_ports, ''), protocol, COALESCE(description, ''), direction_hint, COALESCE(is_system, 0), COALESCE(is_pending_delete, 0)
+	FROM services
+	WHERE (ports = ? OR ports LIKE ? OR ports LIKE ? OR ports LIKE ?)
+	AND is_system = 0
+	AND is_pending_delete = 0
 	`
 	args := []interface{}{port, port + ",%", "%," + port + ",%", "%," + port}
 
@@ -403,18 +457,7 @@ func (h *Handler) GetServiceByPort(w http.ResponseWriter, r *http.Request) {
 
 	query += " LIMIT 1"
 
-	var s struct {
-		ID              int    `json:"id"`
-		Name            string `json:"name"`
-		Ports           string `json:"ports"`
-		SourcePorts     string `json:"source_ports"`
-		Protocol        string `json:"protocol"`
-		Description     string `json:"description"`
-		DirectionHint   string `json:"direction_hint"`
-		IsSystem        bool   `json:"is_system"`
-		IsPendingDelete bool   `json:"is_pending_delete"`
-	}
-
+	var s serviceResp
 	err := h.DB.QueryRowContext(r.Context(), query, args...).Scan(
 		&s.ID, &s.Name, &s.Ports, &s.SourcePorts, &s.Protocol, &s.Description, &s.DirectionHint, &s.IsSystem, &s.IsPendingDelete)
 	if err != nil {

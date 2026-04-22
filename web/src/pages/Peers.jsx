@@ -311,8 +311,8 @@ const [bundleContent, setBundleContent] = useState('')
       await api.post('/peers', {
         hostname: manualForm.hostname.trim(),
         ip_address: manualForm.ip_address.trim(),
-      os_type: manualForm.os_type === 'other' ? 'linux' : (manualForm.os_type || null),
-      arch: manualForm.arch === 'other' ? null : (manualForm.arch || null),
+        os_type: manualForm.os_type || null,
+        arch: manualForm.arch || null,
         is_manual: true
       })
       showToast('Manual peer added successfully', 'success')

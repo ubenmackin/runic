@@ -246,12 +246,12 @@ func TestCreatePeer(t *testing.T) {
 			wantCode: http.StatusBadRequest,
 			wantErr:  "invalid IP address",
 		},
-		{
-			name:     "create peer - invalid os_type",
-			body:     `{"hostname":"test-peer","ip_address":"10.0.0.1","agent_key":"key","os_type":"windows"}`,
-			wantCode: http.StatusBadRequest,
-			wantErr:  "os_type must be one of",
-		},
+	{
+		name: "create peer - invalid os_type",
+		body: `{"hostname":"test-peer","ip_address":"10.0.0.1","agent_key":"key","os_type":"invalidos"}`,
+		wantCode: http.StatusBadRequest,
+		wantErr: "os_type must be one of",
+	},
 		{
 			name:     "create peer - invalid arch",
 			body:     `{"hostname":"test-peer","ip_address":"10.0.0.1","agent_key":"key","arch":"x86"}`,
@@ -1450,5 +1450,113 @@ func TestGetPeerBundle_WithIncludePending(t *testing.T) {
 	}
 	if resp["deployed_rules"] != "rule1\nrule2" {
 		t.Errorf("expected deployed_rules 'rule1\\nrule2', got %v", resp["deployed_rules"])
+	}
+}
+
+// TestCreatePeer_ValidOSOther tests that creating a peer with os_type "other" succeeds.
+func TestCreatePeer_ValidOSOther(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	body := `{"hostname":"other-os-peer","ip_address":"10.0.0.10","agent_key":"key","os_type":"other"}`
+	req := httptest.NewRequest("POST", "/api/v1/peers", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handler := NewHandler(database, nil)
+	handler.CreatePeer(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Errorf("expected status %d, got %d: %s", http.StatusCreated, w.Code, w.Body.String())
+	}
+
+	var resp map[string]int64
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp["id"] == 0 {
+		t.Error("expected non-zero id")
+	}
+
+	// Verify the peer was stored with the correct os_type
+	var osType string
+	err := database.QueryRow("SELECT os_type FROM peers WHERE id = ?", resp["id"]).Scan(&osType)
+	if err != nil {
+		t.Fatalf("failed to query peer: %v", err)
+	}
+	if osType != "other" {
+		t.Errorf("expected os_type 'other', got %q", osType)
+	}
+}
+
+// TestCreatePeer_ValidArchOther tests that creating a peer with arch "other" succeeds.
+func TestCreatePeer_ValidArchOther(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	body := `{"hostname":"other-arch-peer","ip_address":"10.0.0.11","agent_key":"key","arch":"other"}`
+	req := httptest.NewRequest("POST", "/api/v1/peers", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handler := NewHandler(database, nil)
+	handler.CreatePeer(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Errorf("expected status %d, got %d: %s", http.StatusCreated, w.Code, w.Body.String())
+	}
+
+	var resp map[string]int64
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp["id"] == 0 {
+		t.Error("expected non-zero id")
+	}
+
+	// Verify the peer was stored with the correct arch
+	var arch string
+	err := database.QueryRow("SELECT arch FROM peers WHERE id = ?", resp["id"]).Scan(&arch)
+	if err != nil {
+		t.Fatalf("failed to query peer: %v", err)
+	}
+	if arch != "other" {
+		t.Errorf("expected arch 'other', got %q", arch)
+	}
+}
+
+// TestCreatePeer_ValidMacOS tests that creating a peer with os_type "macos" succeeds.
+func TestCreatePeer_ValidMacOS(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	body := `{"hostname":"macos-peer","ip_address":"10.0.0.12","agent_key":"key","os_type":"macos"}`
+	req := httptest.NewRequest("POST", "/api/v1/peers", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handler := NewHandler(database, nil)
+	handler.CreatePeer(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Errorf("expected status %d, got %d: %s", http.StatusCreated, w.Code, w.Body.String())
+	}
+
+	var resp map[string]int64
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp["id"] == 0 {
+		t.Error("expected non-zero id")
+	}
+
+	// Verify the peer was stored with the correct os_type
+	var osType string
+	err := database.QueryRow("SELECT os_type FROM peers WHERE id = ?", resp["id"]).Scan(&osType)
+	if err != nil {
+		t.Fatalf("failed to query peer: %v", err)
+	}
+	if osType != "macos" {
+		t.Errorf("expected os_type 'macos', got %q", osType)
 	}
 }

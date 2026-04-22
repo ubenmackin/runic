@@ -715,6 +715,10 @@ func TestGetServiceByPort_MissingPort(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("expected status %d, got %d: %s", http.StatusBadRequest, w.Code, w.Body.String())
 	}
+
+	if !bytes.Contains(w.Body.Bytes(), []byte("port or protocol parameter required")) {
+		t.Errorf("expected 'port or protocol parameter required' error message, got: %s", w.Body.String())
+	}
 }
 
 func TestGetServiceByPort_InvalidPort(t *testing.T) {
@@ -908,6 +912,197 @@ func TestGetServiceByPort_IgnoresSystemService(t *testing.T) {
 	// Should return null since system services are excluded
 	if w.Body.String() != "null\n" {
 		t.Errorf("expected null response for system service, got: %s", w.Body.String())
+	}
+}
+
+func TestGetServiceByPort_ICMPProtocolLookup(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	// Insert ICMP system service
+	database.Exec(`INSERT INTO services (name, ports, source_ports, protocol, description, is_system) VALUES (?, ?, ?, ?, ?, 1)`,
+		"ICMP", "", "", "icmp", "Internet Control Message Protocol")
+
+	h := NewHandler(database, nil, nil)
+	req := httptest.NewRequest("GET", "/api/v1/services/by-port?port=0&protocol=icmp", nil)
+	w := httptest.NewRecorder()
+
+	h.GetServiceByPort(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d: %s", http.StatusOK, w.Code, w.Body.String())
+	}
+
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+
+	if resp["name"] != "ICMP" {
+		t.Errorf("expected name 'ICMP', got '%v'", resp["name"])
+	}
+	if resp["protocol"] != "icmp" {
+		t.Errorf("expected protocol 'icmp', got '%v'", resp["protocol"])
+	}
+	if isSystem, ok := resp["is_system"].(bool); !ok || !isSystem {
+		t.Errorf("expected is_system true, got '%v'", resp["is_system"])
+	}
+}
+
+func TestGetServiceByPort_IGMPProtocolLookup(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	// Insert IGMP system service
+	database.Exec(`INSERT INTO services (name, ports, source_ports, protocol, description, is_system) VALUES (?, ?, ?, ?, ?, 1)`,
+		"IGMP", "", "", "igmp", "Internet Group Management Protocol")
+
+	h := NewHandler(database, nil, nil)
+	req := httptest.NewRequest("GET", "/api/v1/services/by-port?port=0&protocol=igmp", nil)
+	w := httptest.NewRecorder()
+
+	h.GetServiceByPort(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d: %s", http.StatusOK, w.Code, w.Body.String())
+	}
+
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+
+	if resp["name"] != "IGMP" {
+		t.Errorf("expected name 'IGMP', got '%v'", resp["name"])
+	}
+	if resp["protocol"] != "igmp" {
+		t.Errorf("expected protocol 'igmp', got '%v'", resp["protocol"])
+	}
+	if isSystem, ok := resp["is_system"].(bool); !ok || !isSystem {
+		t.Errorf("expected is_system true, got '%v'", resp["is_system"])
+	}
+}
+
+func TestGetServiceByPort_PortZeroNoProtocol(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	h := NewHandler(database, nil, nil)
+	req := httptest.NewRequest("GET", "/api/v1/services/by-port?port=0", nil)
+	w := httptest.NewRecorder()
+
+	h.GetServiceByPort(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected status %d, got %d: %s", http.StatusBadRequest, w.Code, w.Body.String())
+	}
+
+	if !bytes.Contains(w.Body.Bytes(), []byte("port or protocol parameter required")) {
+		t.Errorf("expected 'port or protocol parameter required' error message, got: %s", w.Body.String())
+	}
+}
+
+func TestGetServiceByPort_ProtocolOnlyBothMatch(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	// Insert a system service with protocol "both"
+	database.Exec(`INSERT INTO services (name, ports, source_ports, protocol, description, is_system) VALUES (?, ?, ?, ?, ?, 1)`,
+		"dns-both", "53", "", "both", "DNS both TCP and UDP")
+
+	h := NewHandler(database, nil, nil)
+
+	// Protocol-only lookup with tcp should match the "both" service
+	req := httptest.NewRequest("GET", "/api/v1/services/by-port?port=0&protocol=tcp", nil)
+	w := httptest.NewRecorder()
+	h.GetServiceByPort(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d: %s", http.StatusOK, w.Code, w.Body.String())
+	}
+
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+
+	if resp["name"] != "dns-both" {
+		t.Errorf("expected name 'dns-both', got '%v'", resp["name"])
+	}
+	if resp["protocol"] != "both" {
+		t.Errorf("expected protocol 'both', got '%v'", resp["protocol"])
+	}
+
+	// Protocol-only lookup with udp should also match the "both" service
+	req = httptest.NewRequest("GET", "/api/v1/services/by-port?port=0&protocol=udp", nil)
+	w = httptest.NewRecorder()
+	h.GetServiceByPort(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d: %s", http.StatusOK, w.Code, w.Body.String())
+	}
+
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+
+	if resp["name"] != "dns-both" {
+		t.Errorf("expected name 'dns-both', got '%v'", resp["name"])
+	}
+	if resp["protocol"] != "both" {
+		t.Errorf("expected protocol 'both', got '%v'", resp["protocol"])
+	}
+}
+
+func TestGetServiceByPort_InvalidProtocolValue(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	h := NewHandler(database, nil, nil)
+
+	// Invalid protocol value should return 400
+	req := httptest.NewRequest("GET", "/api/v1/services/by-port?port=0&protocol=xyz", nil)
+	w := httptest.NewRecorder()
+	h.GetServiceByPort(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected status %d, got %d: %s", http.StatusBadRequest, w.Code, w.Body.String())
+	}
+
+	if !bytes.Contains(w.Body.Bytes(), []byte("invalid protocol")) {
+		t.Errorf("expected 'invalid protocol' error message, got: %s", w.Body.String())
+	}
+}
+
+func TestGetServiceByPort_EmptyPortWithProtocol(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	// Insert ICMP system service
+	database.Exec(`INSERT INTO services (name, ports, source_ports, protocol, description, is_system) VALUES (?, ?, ?, ?, ?, 1)`,
+		"ICMP", "", "", "icmp", "Internet Control Message Protocol")
+
+	h := NewHandler(database, nil, nil)
+	// No port param, but protocol is provided — should trigger protocol-only lookup
+	req := httptest.NewRequest("GET", "/api/v1/services/by-port?protocol=icmp", nil)
+	w := httptest.NewRecorder()
+
+	h.GetServiceByPort(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d: %s", http.StatusOK, w.Code, w.Body.String())
+	}
+
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+
+	if resp["name"] != "ICMP" {
+		t.Errorf("expected name 'ICMP', got '%v'", resp["name"])
+	}
+	if resp["protocol"] != "icmp" {
+		t.Errorf("expected protocol 'icmp', got '%v'", resp["protocol"])
 	}
 }
 

@@ -39,16 +39,17 @@ vi.mock("../hooks/useFocusTrap", () => ({
 
 // Mock SearchableSelect component - render as a simple native select
 vi.mock("./SearchableSelect", () => ({
-  default: ({ options, value, onChange, placeholder }) => (
+  default: ({ options, value, onChange, placeholder, disabled }) => (
     <select
       value={value || ""}
       onChange={(e) => onChange?.(e.target.value)}
       aria-label="Searchable Select"
       data-testid="searchable-select"
+      disabled={disabled}
     >
       <option value="">{placeholder}</option>
       {options?.map((opt) => (
-        <option key={opt.value} value={opt.value}>
+        <option key={opt.value} value={opt.value} disabled={opt.disabled}>
           {opt.label}
         </option>
       ))}
@@ -542,49 +543,199 @@ describe("CraftPolicyWizard", () => {
       });
     });
 
-    test("disables Next button when service name is empty", async () => {
-      const user = userEvent.setup();
-      api.api.get
-        .mockResolvedValueOnce({
-          id: 1,
-          hostname: "existing-peer",
-          ip_address: "192.168.1.100",
-        })
-        .mockResolvedValueOnce({
-          id: 2,
-          hostname: "test-peer",
-          ip_address: "192.168.1.100",
-        })
-        .mockRejectedValueOnce(create404Error());
+  test("disables Next button when service name is empty", async () => {
+    const user = userEvent.setup();
+    api.api.get
+      .mockResolvedValueOnce({
+        id: 1,
+        hostname: "existing-peer",
+        ip_address: "192.168.1.100",
+      })
+      .mockResolvedValueOnce({
+        id: 2,
+        hostname: "test-peer",
+        ip_address: "192.168.1.100",
+      })
+      .mockRejectedValueOnce(create404Error());
 
-      render(
-        <CraftPolicyWizard
-          log={createMockLog()}
-          onClose={() => {}}
-          onSuccess={() => {}}
-        />,
-        { wrapper },
-      );
+    render(
+      <CraftPolicyWizard
+        log={createMockLog()}
+        onClose={() => {}}
+        onSuccess={() => {}}
+      />,
+      { wrapper },
+    );
 
-      // Wait for peer to load
-      await screen.findByText(/Found existing peer/, {}, { timeout: 5000 });
+    // Wait for peer to load
+    await screen.findByText(/Found existing peer/, {}, { timeout: 5000 });
 
-      // Move to service step
-      await user.click(screen.getByRole("button", { name: /next/i }));
+    // Move to service step
+    await user.click(screen.getByRole("button", { name: /next/i }));
 
-      // Wait for service form to appear
-      await screen.findByPlaceholderText(
-        "e.g., Web Server, Database",
-        {},
-        { timeout: 5000 },
-      );
+    // Wait for service form to appear
+    await screen.findByPlaceholderText(
+      "e.g., Web Server, Database",
+      {},
+      { timeout: 5000 },
+    );
 
-      // The service name field should be empty initially, so Next should be disabled
-      const nextButton = screen.getByRole("button", { name: /next/i });
-      await waitFor(() => {
-        expect(nextButton).toBeDisabled();
-      });
+    // The service name field should be empty initially, so Next should be disabled
+    const nextButton = screen.getByRole("button", { name: /next/i });
+    await waitFor(() => {
+      expect(nextButton).toBeDisabled();
     });
+  });
+
+  test("fetches service by port=0&protocol=icmp for ICMP log events", async () => {
+    const user = userEvent.setup();
+    const icmpLog = createMockLog({
+      dst_port: 0,
+      src_port: 0,
+      protocol: "icmp",
+    });
+
+    api.api.get
+      .mockResolvedValueOnce({
+        id: 1,
+        hostname: "existing-peer",
+        ip_address: "192.168.1.100",
+      })
+      .mockResolvedValueOnce({
+        id: 2,
+        hostname: "test-peer",
+        ip_address: "192.168.1.100",
+      })
+      .mockResolvedValueOnce({
+        id: 10,
+        name: "icmp",
+        ports: "",
+        protocol: "icmp",
+      });
+
+    render(
+      <CraftPolicyWizard
+        log={icmpLog}
+        onClose={() => {}}
+        onSuccess={() => {}}
+      />,
+      { wrapper },
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText(/Found existing peer/)).toBeInTheDocument(),
+    );
+    await user.click(screen.getByRole("button", { name: /next/i }));
+
+    // Verify the API was called with port=0 and protocol=icmp
+    await waitFor(
+      () => {
+        expect(api.api.get).toHaveBeenCalledWith(
+          "/services/by-port?port=0&protocol=icmp",
+        );
+      },
+      { timeout: 3000 },
+    );
+  });
+
+  test("does not show 'No port found in log' guard for ICMP (port=0 with protocol)", async () => {
+    const user = userEvent.setup();
+    const icmpLog = createMockLog({
+      dst_port: 0,
+      src_port: 0,
+      protocol: "icmp",
+    });
+
+    api.api.get
+      .mockResolvedValueOnce({
+        id: 1,
+        hostname: "existing-peer",
+        ip_address: "192.168.1.100",
+      })
+      .mockResolvedValueOnce({
+        id: 2,
+        hostname: "test-peer",
+        ip_address: "192.168.1.100",
+      })
+      .mockRejectedValueOnce(create404Error());
+
+    render(
+      <CraftPolicyWizard
+        log={icmpLog}
+        onClose={() => {}}
+        onSuccess={() => {}}
+      />,
+      { wrapper },
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText(/Found existing peer/)).toBeInTheDocument(),
+    );
+    await user.click(screen.getByRole("button", { name: /next/i }));
+
+    // Should NOT show the old "No port found in log" error
+    await waitFor(() => {
+      expect(
+        screen.queryByText(/No port found in log/),
+      ).not.toBeInTheDocument();
+    });
+
+    // Should show the "No existing service found" message with protocol-only display
+    await waitFor(() => {
+      expect(
+        screen.getByText(/No existing service found/),
+      ).toBeInTheDocument();
+    });
+
+    // Should display "icmp" (protocol-only) instead of "0/icmp"
+    expect(screen.getByText("icmp")).toBeInTheDocument();
+  });
+
+  test("displays ICMP system service as existing service when API returns it", async () => {
+    const user = userEvent.setup();
+    const icmpLog = createMockLog({
+      dst_port: 0,
+      src_port: 0,
+      protocol: "icmp",
+    });
+
+    api.api.get
+      .mockResolvedValueOnce({
+        id: 1,
+        hostname: "existing-peer",
+        ip_address: "192.168.1.100",
+      })
+      .mockResolvedValueOnce({
+        id: 2,
+        hostname: "test-peer",
+        ip_address: "192.168.1.100",
+      })
+      .mockResolvedValueOnce({
+        id: 10,
+        name: "icmp",
+        ports: "",
+        protocol: "icmp",
+      });
+
+    render(
+      <CraftPolicyWizard
+        log={icmpLog}
+        onClose={() => {}}
+        onSuccess={() => {}}
+      />,
+      { wrapper },
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText(/Found existing peer/)).toBeInTheDocument(),
+    );
+    await user.click(screen.getByRole("button", { name: /next/i }));
+
+    // Should find and display the existing ICMP service
+    await waitFor(() => {
+      expect(screen.getByText(/Found existing service/)).toBeInTheDocument();
+    });
+  });
   });
 
   describe("policy configuration", () => {
@@ -2379,8 +2530,8 @@ expect(twoColGrids.length).toBe(0);
     });
   });
 
-  describe("os_type and arch 'other' mapping", () => {
-    test("maps os_type 'other' to 'linux' in target peer API payload", async () => {
+  describe("os_type and arch 'other' pass-through", () => {
+    test("passes os_type 'other' as-is in target peer API payload", async () => {
       const user = userEvent.setup();
       const mockOnClose = vi.fn();
       const mockOnSuccess = vi.fn();
@@ -2420,11 +2571,11 @@ expect(twoColGrids.length).toBe(0);
         { timeout: 5000 },
       );
 
-        // Select os_type "other" from the dropdown
-        // With SearchableSelect mocked as native <select>, the os_type select
-        // defaults to "linux" (displayed as "Generic Linux") and has placeholder "Select OS..."
-        const osTypeSelect = screen.getByDisplayValue("Generic Linux");
-        await user.selectOptions(osTypeSelect, "other");
+      // Select os_type "other" from the dropdown
+      // With SearchableSelect mocked as native <select>, the os_type select
+      // defaults to "linux" (displayed as "Generic Linux") and has placeholder "Select OS..."
+      const osTypeSelect = screen.getByDisplayValue("Generic Linux");
+      await user.selectOptions(osTypeSelect, "other");
 
       // Navigate through steps
       await user.click(screen.getByRole("button", { name: /next/i }));
@@ -2466,18 +2617,18 @@ expect(twoColGrids.length).toBe(0);
       );
       await user.click(screen.getByRole("button", { name: /create policy/i }));
 
-      // Verify the peer creation API call maps "other" os_type to "linux"
+      // Verify the peer creation API call passes "other" os_type as-is
       await waitFor(() => {
         const peerPostCall = api.api.post.mock.calls.find(
           (call) => call[0] === "/peers"
         );
         expect(peerPostCall).toBeDefined();
-        // The first peers POST should have os_type mapped from "other" to "linux"
-        expect(peerPostCall[1].os_type).toBe("linux");
+        // "other" os_type is now passed through directly, not mapped to "linux"
+        expect(peerPostCall[1].os_type).toBe("other");
       });
     });
 
-    test("maps arch 'other' to null in target peer API payload", async () => {
+    test("passes arch 'other' as-is in target peer API payload", async () => {
       const user = userEvent.setup();
       const mockOnClose = vi.fn();
       const mockOnSuccess = vi.fn();
@@ -2517,14 +2668,14 @@ expect(twoColGrids.length).toBe(0);
         { timeout: 5000 },
       );
 
-        // Select arch "other" from the dropdown
-        // With SearchableSelect mocked as native <select>, the arch select
-        // defaults to "" (displayed as "Select arch...") since the default arch is empty string
-        // Use getAllByDisplayValue since multiple selects may have empty display values,
-        // then find the one with the "Select arch..." placeholder option
-        const archSelects = screen.getAllByDisplayValue("Select arch...");
-        const archSelect = archSelects.find((el) => el.tagName === "SELECT");
-        await user.selectOptions(archSelect, "other");
+      // Select arch "other" from the dropdown
+      // With SearchableSelect mocked as native <select>, the arch select
+      // defaults to "" (displayed as "Select arch...") since the default arch is empty string
+      // Use getAllByDisplayValue since multiple selects may have empty display values,
+      // then find the one with the "Select arch..." placeholder option
+      const archSelects = screen.getAllByDisplayValue("Select arch...");
+      const archSelect = archSelects.find((el) => el.tagName === "SELECT");
+      await user.selectOptions(archSelect, "other");
 
       // Navigate through steps
       await user.click(screen.getByRole("button", { name: /next/i }));
@@ -2566,14 +2717,203 @@ expect(twoColGrids.length).toBe(0);
       );
       await user.click(screen.getByRole("button", { name: /create policy/i }));
 
-      // Verify the peer creation API call maps "other" arch to null
+      // Verify the peer creation API call passes "other" arch as-is
       await waitFor(() => {
         const peerPostCall = api.api.post.mock.calls.find(
           (call) => call[0] === "/peers"
         );
         expect(peerPostCall).toBeDefined();
-        expect(peerPostCall[1].arch).toBeNull();
+        // "other" arch is now passed through directly, not mapped to null
+        expect(peerPostCall[1].arch).toBe("other");
       });
+    });
+  });
+
+  describe("ICMP/IGMP new service creation", () => {
+    test("canProceed is true for service step when newService.ports is empty and protocol is icmp", async () => {
+      const user = userEvent.setup();
+      const icmpLog = createMockLog({
+        dst_port: 0,
+        src_port: 0,
+        protocol: "icmp",
+      });
+
+      // Target peer found, source peer found, service not found
+      api.api.get
+        .mockResolvedValueOnce({
+          id: 1,
+          hostname: "existing-peer",
+          ip_address: "192.168.1.100",
+        })
+        .mockResolvedValueOnce({
+          id: 2,
+          hostname: "test-peer",
+          ip_address: "192.168.1.100",
+        })
+        .mockRejectedValueOnce(create404Error());
+
+      render(
+        <CraftPolicyWizard
+          log={icmpLog}
+          onClose={() => {}}
+          onSuccess={() => {}}
+        />,
+        { wrapper },
+      );
+
+      // Navigate to peer step (existing peer found)
+      await waitFor(() =>
+        expect(screen.getByText(/Found existing peer/)).toBeInTheDocument(),
+      );
+      await user.click(screen.getByRole("button", { name: /next/i }));
+
+      // Wait for service step to load (no existing service found)
+      await waitFor(() => {
+        expect(
+          screen.getByText(/No existing service found/),
+        ).toBeInTheDocument();
+      });
+
+      // The Next button should be disabled because service name is empty
+      const nextButton = screen.getByRole("button", { name: /next/i });
+      expect(nextButton).toBeDisabled();
+
+      // Type a service name - ports should NOT be required for ICMP
+      await user.type(
+        screen.getByPlaceholderText("e.g., Web Server, Database"),
+        "icmp-service",
+      );
+
+      // Now the Next button should be enabled even though ports is empty
+      await waitFor(() => {
+        expect(nextButton).not.toBeDisabled();
+      });
+    });
+
+    test("validateServiceStep does NOT set ports error when protocol is icmp and ports is empty", async () => {
+      const user = userEvent.setup();
+      const icmpLog = createMockLog({
+        dst_port: 0,
+        src_port: 0,
+        protocol: "icmp",
+      });
+
+      // Target peer found, source peer found, service not found
+      api.api.get
+        .mockResolvedValueOnce({
+          id: 1,
+          hostname: "existing-peer",
+          ip_address: "192.168.1.100",
+        })
+        .mockResolvedValueOnce({
+          id: 2,
+          hostname: "test-peer",
+          ip_address: "192.168.1.100",
+        })
+        .mockRejectedValueOnce(create404Error());
+
+      // Mock policy step data
+      api.api.get
+        .mockResolvedValueOnce([])  // all peers
+        .mockResolvedValueOnce([]); // all services
+
+      api.api.post
+        .mockResolvedValueOnce({ id: 20 })  // service created
+        .mockResolvedValueOnce({ id: 30 }); // policy created
+
+      render(
+        <CraftPolicyWizard
+          log={icmpLog}
+          onClose={() => {}}
+          onSuccess={() => {}}
+        />,
+        { wrapper },
+      );
+
+      // Navigate to peer step
+      await waitFor(() =>
+        expect(screen.getByText(/Found existing peer/)).toBeInTheDocument(),
+      );
+      await user.click(screen.getByRole("button", { name: /next/i }));
+
+      // Wait for service step
+      await waitFor(() => {
+        expect(
+          screen.getByText(/No existing service found/),
+        ).toBeInTheDocument();
+      });
+
+      // Type a service name (no ports needed for ICMP)
+      await user.type(
+        screen.getByPlaceholderText("e.g., Web Server, Database"),
+        "icmp-service",
+      );
+
+      // Click Next to trigger validation
+      await user.click(screen.getByRole("button", { name: /next/i }));
+
+      // Should advance to policy step without ports error
+      await waitFor(() => {
+        expect(
+          screen.getByText("Description (Optional)"),
+        ).toBeInTheDocument();
+      });
+
+      // Verify no "Ports are required" error was shown
+      expect(screen.queryByText("Ports are required")).not.toBeInTheDocument();
+    });
+
+    test("Destination Ports field is NOT rendered when newService.protocol is icmp", async () => {
+      const user = userEvent.setup();
+      const icmpLog = createMockLog({
+        dst_port: 0,
+        src_port: 0,
+        protocol: "icmp",
+      });
+
+      // Target peer found, source peer found, service not found
+      api.api.get
+        .mockResolvedValueOnce({
+          id: 1,
+          hostname: "existing-peer",
+          ip_address: "192.168.1.100",
+        })
+        .mockResolvedValueOnce({
+          id: 2,
+          hostname: "test-peer",
+          ip_address: "192.168.1.100",
+        })
+        .mockRejectedValueOnce(create404Error());
+
+      render(
+        <CraftPolicyWizard
+          log={icmpLog}
+          onClose={() => {}}
+          onSuccess={() => {}}
+        />,
+        { wrapper },
+      );
+
+      // Navigate to peer step
+      await waitFor(() =>
+        expect(screen.getByText(/Found existing peer/)).toBeInTheDocument(),
+      );
+      await user.click(screen.getByRole("button", { name: /next/i }));
+
+      // Wait for service step
+      await waitFor(() => {
+        expect(
+          screen.getByText(/No existing service found/),
+        ).toBeInTheDocument();
+      });
+
+      // The "Destination Ports" label should NOT be present for ICMP
+      expect(screen.queryByText(/Destination Ports/)).not.toBeInTheDocument();
+
+      // The ports input placeholder should NOT be present
+      expect(
+        screen.queryByPlaceholderText("e.g., 443 or 80,443 or 8000:9000"),
+      ).not.toBeInTheDocument();
     });
   });
 });

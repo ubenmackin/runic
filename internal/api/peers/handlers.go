@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"regexp"
 	"slices"
+	"strings"
 
 	"github.com/gorilla/mux"
 
@@ -37,10 +38,13 @@ func NewHandler(db *sql.DB, compiler *engine.Compiler) *Handler {
 var hostnameRegex = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9.\-]*[a-zA-Z0-9])?$|^[a-zA-Z0-9]$`)
 
 // validOSTypes is the list of allowed OS types for peer creation.
-var validOSTypes = []string{"debian", "ubuntu", "rhel", "arch", "opensuse", "raspbian", "linux"}
+var validOSTypes = []string{
+	"debian", "ubuntu", "rhel", "arch", "opensuse", "raspbian", "linux",
+	"armbian", "ios", "ipados", "macos", "tvos", "windows", "other",
+}
 
 // validArchs is the list of allowed architectures for peer creation.
-var validArchs = []string{"amd64", "arm64", "arm", "armv6"}
+var validArchs = []string{"amd64", "arm64", "arm", "armv6", "other"}
 
 // Peer is the JSON representation of a peer for API responses.
 type Peer struct {
@@ -157,12 +161,12 @@ func (h *Handler) CreatePeer(w http.ResponseWriter, r *http.Request) {
 
 	// Validate os_type if provided
 	if input.OSType != "" && !slices.Contains(validOSTypes, input.OSType) {
-		common.RespondError(w, http.StatusBadRequest, "os_type must be one of: debian, ubuntu, rhel, arch, opensuse, raspbian, linux")
+		common.RespondError(w, http.StatusBadRequest, "os_type must be one of: "+strings.Join(validOSTypes, ", "))
 		return
 	}
 
 	if input.Arch != "" && !slices.Contains(validArchs, input.Arch) {
-		common.RespondError(w, http.StatusBadRequest, "arch must be one of: amd64, arm64, arm, armv6")
+		common.RespondError(w, http.StatusBadRequest, "arch must be one of: "+strings.Join(validArchs, ", "))
 		return
 	}
 
@@ -186,8 +190,8 @@ func (h *Handler) CreatePeer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result, err := h.DB.ExecContext(r.Context(),
-		`INSERT INTO peers (hostname, ip_address, os_type, agent_key, hmac_key, has_docker, is_manual) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		input.Hostname, input.IPAddress, input.OSType, agentKey, hmacKey, input.HasDocker, input.IsManual)
+		`INSERT INTO peers (hostname, ip_address, os_type, arch, agent_key, hmac_key, has_docker, is_manual) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		input.Hostname, input.IPAddress, input.OSType, input.Arch, agentKey, hmacKey, input.HasDocker, input.IsManual)
 	if err != nil {
 		log.ErrorContext(r.Context(), "failed to create peer", "error", err)
 		common.InternalError(w)
