@@ -28,6 +28,7 @@ import PageHeader from '../components/PageHeader'
 import SharpTag from '../components/SharpTag'
 import FilterChip from '../components/FilterChip'
 import KebabMenu from '../components/KebabMenu'
+import PendingChangesModal from '../components/PendingChangesModal'
 
 // Helper function to parse heartbeat for sorting
 function parseHeartbeatForSort(timestamp) {
@@ -110,12 +111,13 @@ function PeerCard({ peer, canEdit, fetchBundle, handlePushToPeer, openEdit, setD
               <span className="text-gray-400">Manual Entry</span>
             ) : (
               <>
-                <button
-                  onClick={() => handleSyncStatusClick(peer)}
-                  className="cursor-pointer"
-                >
+          <button
+            onClick={() => handleSyncStatusClick(peer)}
+            title={`Click to ${peer.sync_status === 'pending' ? 'review pending changes' : peer.sync_status === 'pending_sync' ? 'view pending bundle' : 'view deployed rules'}`}
+            className="cursor-pointer"
+          >
                   <SharpTag
-                    status={syncStatusConfig[peer.sync_status]?.label || 'UNKNOWN'}
+                    status={syncStatusConfig[peer.sync_status]?.label || peer.sync_status.toUpperCase()}
                     color={syncStatusConfig[peer.sync_status]?.color}
                   />
                 </button>
@@ -163,8 +165,10 @@ const [bundleContent, setBundleContent] = useState('')
   const [bundleData, setBundleData] = useState(null)
   const [viewingPendingRules, setViewingPendingRules] = useState(false)
   const [showDiffView, setShowDiffView] = useState(true)
+  const [pendingModalOpen, setPendingModalOpen] = useState(false)
+  const [pendingModalPeer, setPendingModalPeer] = useState(null)
 
-// Bulk Apply All state
+  // Bulk Apply All state
 	const [applyAllLoading, setApplyAllLoading] = useState(false)
 	const [rollbackLoading, setRollbackLoading] = useState(false)
 
@@ -491,15 +495,18 @@ const handleSubmit = (e) => {
   const handleSyncStatusClick = (peer) => {
     switch (peer.sync_status) {
       case 'pending':
+        setPendingModalPeer(peer)
+        setPendingModalOpen(true)
+        break
       case 'pending_sync':
         setViewingPendingRules(true)
         fetchBundle(peer, true)
         break
-case 'synced':
-    default:
-      setViewingPendingRules(false)
-      fetchBundle(peer, false)
-      break
+      case 'synced':
+      default:
+        setViewingPendingRules(false)
+        fetchBundle(peer, false)
+        break
     }
   }
 
@@ -749,7 +756,7 @@ MANUAL
 ) : peer.sync_status ? (
 <button
 onClick={() => handleSyncStatusClick(peer)}
-title={`Click to ${peer.sync_status === 'pending' ? 'review pending changes' : 'view deployed rules'}`}
+title={`Click to ${peer.sync_status === 'pending' ? 'review pending changes' : peer.sync_status === 'pending_sync' ? 'view pending bundle' : 'view deployed rules'}`}
 className="cursor-pointer"
 >
 <SharpTag
@@ -1008,7 +1015,7 @@ title="Delete"
                 </div>
               </div>
               {/* Toggle buttons for diff vs full view - only show when viewing pending rules with deployed_rules */}
-              {viewingPendingRules && bundleData?.deployed_rules !== undefined && (
+              {viewingPendingRules && 'deployed_rules' in (bundleData || {}) && (
                 <div className="flex gap-2 mb-3">
                   <button
                     onClick={() => setShowDiffView(true)}
@@ -1035,7 +1042,7 @@ className={`px-3 py-1 rounded-none text-sm font-medium transition-colors ${
               <div className="relative group">
                 <pre className="bg-gray-900 dark:bg-black text-gray-100 p-6 rounded-none text-sm font-mono overflow-auto whitespace-pre min-h-[200px] border border-gray-800">
                   <code>
-                    {viewingPendingRules && showDiffView && bundleData?.deployed_rules !== undefined
+                    {viewingPendingRules && showDiffView && 'deployed_rules' in (bundleData || {})
                       ? computeDiff(bundleData.deployed_rules || '', bundleData.rules || '')
                       : bundleContent}
                   </code>
@@ -1044,7 +1051,7 @@ className={`px-3 py-1 rounded-none text-sm font-medium transition-colors ${
                   <button
                     onClick={() => {
                       const contentToCopy =
-                        viewingPendingRules && showDiffView && bundleData?.deployed_rules !== undefined
+                        viewingPendingRules && showDiffView && 'deployed_rules' in (bundleData || {})
                           ? computeDiff(bundleData.deployed_rules || '', bundleData.rules || '')
                           : bundleContent
                       navigator.clipboard.writeText(contentToCopy)
@@ -1068,8 +1075,24 @@ className={`px-3 py-1 rounded-none text-sm font-medium transition-colors ${
                 Close
               </button>
             </div>
-          </div>
-        </div>
+      </div>
+    </div>
+  )}
+
+      {/* Pending Changes Modal */}
+      {pendingModalOpen && pendingModalPeer && (
+        <PendingChangesModal
+          peerId={pendingModalPeer.id}
+          peerHostname={pendingModalPeer.hostname}
+          onClose={() => {
+            setPendingModalOpen(false)
+            setPendingModalPeer(null)
+          }}
+          onApplied={() => {
+            qc.invalidateQueries({ queryKey: QUERY_KEYS.peers() })
+            qc.invalidateQueries({ queryKey: ['pending-changes'] })
+          }}
+        />
       )}
 
       {/* Add Peer Modal with Tabs */}
