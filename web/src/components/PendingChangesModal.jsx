@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
-import { X, RefreshCw, Copy, Check, AlertCircle, FileCode, Trash2 } from 'lucide-react'
+import { X, RefreshCw, Copy, Check, AlertCircle, Trash2 } from 'lucide-react'
 import { api } from '../api/client'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 import { useToastContext } from '../hooks/ToastContext'
+import { computeSmartDiff } from '../utils/diff.js'
 
 export default function PendingChangesModal({ peerId, peerHostname, onClose, onApplied }) {
   const showToast = useToastContext()
@@ -15,6 +16,9 @@ export default function PendingChangesModal({ peerId, peerHostname, onClose, onA
   const [applyLoading, setApplyLoading] = useState(false)
   const [rollbackLoading, setRollbackLoading] = useState(false)
   const [applyEntityLoading, setApplyEntityLoading] = useState(false)
+  const [activeTab, setActiveTab] = useState('queued')
+  const [deployedRules, setDeployedRules] = useState('')
+  const [deployedRulesLoading, setDeployedRulesLoading] = useState(true)
 
   useFocusTrap(modalRef, true)
 
@@ -23,10 +27,10 @@ export default function PendingChangesModal({ peerId, peerHostname, onClose, onA
       setLoading(true)
       setError(null)
       try {
-        const data = await api.get(`/pending-changes/${peerId}`)
-        setChanges(data.changes || [])
-      } catch (err) {
-        setError(err.message)
+      const data = await api.get(`/pending-changes/${peerId}`)
+      setChanges(data.changes || [])
+    } catch (err) {
+      setError(err.message)
       } finally {
         setLoading(false)
       }
@@ -34,18 +38,38 @@ export default function PendingChangesModal({ peerId, peerHostname, onClose, onA
     fetchChanges()
   }, [peerId])
 
-  const handleGeneratePreview = async () => {
-    setPreviewLoading(true)
-    setPreview(null)
-    try {
-      const data = await api.post(`/pending-changes/${peerId}/preview`)
-      setPreview(data)
-    } catch (err) {
-      showToast(`Failed to generate preview: ${err.message}`, 'error')
-    } finally {
-      setPreviewLoading(false)
+  useEffect(() => {
+    const fetchDeployedRules = async () => {
+      setDeployedRulesLoading(true)
+      try {
+        const data = await api.get(`/peers/${peerId}/bundle`)
+        setDeployedRules(data.rules || '')
+      } catch (err) {
+        showToast(`Failed to fetch deployed rules: ${err.message}`, 'error')
+      } finally {
+        setDeployedRulesLoading(false)
+      }
     }
-  }
+    fetchDeployedRules()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [peerId])
+
+  // Track the last changes reference we triggered preview for
+  const lastChangesRef = useRef(null)
+
+  // Auto-generate preview when changes are loaded
+  useEffect(() => {
+    if (changes.length > 0 && !preview && !previewLoading && lastChangesRef.current !== changes) {
+      lastChangesRef.current = changes
+      setPreviewLoading(true)
+      setPreview(null)
+      api.post(`/pending-changes/${peerId}/preview`)
+        .then(data => setPreview(data))
+        .catch(err => showToast(`Failed to generate preview: ${err.message}`, 'error'))
+        .finally(() => setPreviewLoading(false))
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [changes, preview, previewLoading, peerId])
 
   const handleApply = async () => {
     setApplyLoading(true)
@@ -120,29 +144,48 @@ export default function PendingChangesModal({ peerId, peerHostname, onClose, onA
     return Object.values(groups)
   }, [changes])
 
-const handleEntityRollback = async (entityType, entityId) => {
-  const confirmed = window.confirm(`Are you sure you want to rollback ${entityType}?`)
-  if (!confirmed) return
-
-  setRollbackLoading(true)
-  try {
-    await api.post('/pending-changes/rollback', { entity_type: entityType, entity_id: entityId })
-    showToast('Rolled back successfully', 'success')
-    onApplied() // Call parent's callback to refresh peers list
-    const data = await api.get(`/pending-changes/${peerId}`)
-    setChanges(data.changes || [])
-  } catch (err) {
-    if (err.status === 409) {
-      showToast(err.message || 'Cannot rollback: referenced by policies', 'error')
-    } else {
-      showToast(err.message || 'Failed to rollback', 'error')
+  const smartDiffEntries = useMemo(() => {
+    if (preview && preview.rules_content) {
+      return computeSmartDiff(deployedRules || '', preview.rules_content)
     }
-  } finally {
-    setRollbackLoading(false)
-  }
-}
+    return []
+  }, [deployedRules, preview])
 
-const handleEntityApply = async (entityType, entityId) => {
+  const diffText = useMemo(() => {
+    if (smartDiffEntries.length === 0) return ''
+    return smartDiffEntries.map(entry => {
+      if (entry.type === 'section-header') return entry.line
+      if (entry.type === 'add') return `+ ${entry.line}`
+      if (entry.type === 'remove') return `- ${entry.line}`
+      if (entry.type === 'change') return `- ${entry.oldLine}\n+ ${entry.newLine}`
+      return ''
+    }).join('\n')
+  }, [smartDiffEntries])
+
+  const handleEntityRollback = async (entityType, entityId) => {
+    const confirmed = window.confirm(`Are you sure you want to rollback ${entityType}?`)
+    if (!confirmed) return
+
+    setRollbackLoading(true)
+    try {
+      await api.post('/pending-changes/rollback', { entity_type: entityType, entity_id: entityId })
+      showToast('Rolled back successfully', 'success')
+      onApplied() // Call parent's callback to refresh peers list
+      const data = await api.get(`/pending-changes/${peerId}`)
+      setChanges(data.changes || [])
+      setPreview(null)
+    } catch (err) {
+      if (err.status === 409) {
+        showToast(err.message || 'Cannot rollback: referenced by policies', 'error')
+      } else {
+        showToast(err.message || 'Failed to rollback', 'error')
+      }
+    } finally {
+      setRollbackLoading(false)
+    }
+  }
+
+  const handleEntityApply = async (entityType, entityId) => {
     const confirmed = window.confirm(`Apply changes for ${entityType}?`)
     if (!confirmed) return
 
@@ -153,6 +196,7 @@ const handleEntityApply = async (entityType, entityId) => {
       onApplied()
       const data = await api.get(`/pending-changes/${peerId}`)
       setChanges(data.changes || [])
+      setPreview(null)
     } catch (err) {
       showToast(`Failed to apply: ${err.message}`, 'error')
     } finally {
@@ -166,12 +210,39 @@ const handleEntityApply = async (entityType, entityId) => {
         <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-border flex items-center justify-between shrink-0">
           <div className="flex items-center gap-2">
             <AlertCircle className="w-5 h-5 text-purple-active" />
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-light-neutral">Pending Changes: {peerHostname}</h3>
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-light-neutral">Changes for Review: {peerHostname}</h3>
           </div>
           <button onClick={onClose} className="p-1 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none">
             <X className="w-5 h-5 text-gray-500" />
           </button>
         </div>
+
+        {!loading && !error && changes.length > 0 && (
+          <div className="flex border-b border-gray-200 dark:border-gray-border shrink-0">
+        <button
+          type="button"
+          onClick={() => setActiveTab('queued')}
+          className={`flex-1 px-4 py-3 text-sm font-medium text-center transition-colors ${
+            activeTab === 'queued'
+              ? 'text-purple-active border-b-2 border-purple-active dark:text-purple-active'
+              : 'text-gray-500 hover:text-gray-700 dark:text-amber-muted dark:hover:text-amber-primary'
+          }`}
+        >
+          Queued Changes
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('bundle')}
+          className={`flex-1 px-4 py-3 text-sm font-medium text-center transition-colors ${
+            activeTab === 'bundle'
+              ? 'text-purple-active border-b-2 border-purple-active dark:text-purple-active'
+              : 'text-gray-500 hover:text-gray-700 dark:text-amber-muted dark:hover:text-amber-primary'
+          }`}
+        >
+          Bundle Preview
+        </button>
+          </div>
+        )}
 
         <div className="p-6 overflow-y-auto flex-1">
           {loading ? (
@@ -187,132 +258,154 @@ const handleEntityApply = async (entityType, entityId) => {
             <div className="text-center py-12">
               <p className="text-gray-500 dark:text-amber-muted">No pending changes for this peer.</p>
             </div>
-          ) : (
+          ) : activeTab === 'queued' ? (
             <>
-                <div className="mb-6">
-                  <h4 className="text-sm font-medium text-gray-700 dark:text-amber-primary mb-3">Queued Changes ({changes.length})</h4>
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="border-b border-gray-200 dark:border-gray-border">
-                          <th className="text-left py-2 px-3 font-medium text-gray-600 dark:text-amber-muted">Entity</th>
-                          <th className="text-left py-2 px-3 font-medium text-gray-600 dark:text-amber-muted">Changes</th>
-                          <th className="text-right py-2 px-3 font-medium text-gray-600 dark:text-amber-muted">Actions</th>
+              <div className="mb-6">
+                <h4 className="text-sm font-medium text-gray-700 dark:text-amber-primary mb-3">Queued Changes ({changes.length})</h4>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-gray-200 dark:border-gray-border">
+                        <th className="text-left py-2 px-3 font-medium text-gray-600 dark:text-amber-muted">Entity</th>
+                        <th className="text-left py-2 px-3 font-medium text-gray-600 dark:text-amber-muted">Changes</th>
+                        <th className="text-right py-2 px-3 font-medium text-gray-600 dark:text-amber-muted">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {groupedChanges.map(group => (
+                        <tr key={`${group.entityType}-${group.entityId}`} className="border-b border-gray-100 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-charcoal-darkest">
+                          <td className="py-3 px-3">
+                            <div className="flex items-center gap-2">
+                              <span className="px-2 py-0.5 text-xs font-medium bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300">
+                                {handleChangeTypeLabel(group.entityType)}
+                              </span>
+                              <span className="text-gray-900 dark:text-light-neutral font-medium">
+                                {group.entityName}
+                              </span>
+                            </div>
+                          </td>
+                          <td className="py-3 px-3 text-gray-600 dark:text-amber-muted">
+                            {group.changes.length} change(s)
+                            <div className="mt-1 space-y-1">
+                              {group.changes.map((change, idx) => (
+                                <div key={change.id || idx} className="flex items-center gap-2 text-xs">
+                                  <span className={`px-2 py-0.5 text-xs font-medium ${handleActionColor(change.change_action)}`}>
+                                    {handleActionLabel(change.change_action)}
+                                  </span>
+                                  <span className="text-gray-500 dark:text-amber-muted">
+                                    {change.change_summary}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          </td>
+                          <td className="py-3 px-3 text-right">
+                            <button
+                              onClick={() => handleEntityApply(group.entityType, group.entityId)}
+                              disabled={applyEntityLoading}
+                              className="text-green-600 hover:text-green-800 dark:text-green-400 font-medium text-sm px-3 py-1 rounded-none hover:bg-green-50 dark:hover:bg-green-900/20 disabled:opacity-50"
+                            >
+                              {applyEntityLoading ? 'Applying...' : '✓ Apply'}
+                            </button>
+                            <button
+                              onClick={() => handleEntityRollback(group.entityType, group.entityId)}
+                              disabled={rollbackLoading}
+                              className="text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 font-medium text-sm px-3 py-1 rounded-none hover:bg-blue-50 dark:hover:bg-blue-900/20 disabled:opacity-50 transition-colors"
+                            >
+                              {rollbackLoading ? 'Rolling back...' : '↩ Rollback'}
+                            </button>
+                          </td>
                         </tr>
-                      </thead>
-                      <tbody>
-                        {groupedChanges.map(group => (
-                          <tr key={`${group.entityType}-${group.entityId}`} className="border-b border-gray-100 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-charcoal-darkest">
-                            <td className="py-3 px-3">
-                              <div className="flex items-center gap-2">
-                                <span className="px-2 py-0.5 text-xs font-medium bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300">
-                                  {handleChangeTypeLabel(group.entityType)}
-                                </span>
-                                <span className="text-gray-900 dark:text-light-neutral font-medium">
-                                  {group.entityName}
-                                </span>
-                              </div>
-                            </td>
-                            <td className="py-3 px-3 text-gray-600 dark:text-amber-muted">
-                              {group.changes.length} change(s)
-                              <div className="mt-1 space-y-1">
-                                {group.changes.map((change, idx) => (
-                                  <div key={change.id || idx} className="flex items-center gap-2 text-xs">
-                                    <span className={`px-2 py-0.5 text-xs font-medium ${handleActionColor(change.change_action)}`}>
-                                      {handleActionLabel(change.change_action)}
-                                    </span>
-                                    <span className="text-gray-500 dark:text-amber-muted">
-                                      {change.change_summary}
-                                    </span>
-                                  </div>
-                                ))}
-                              </div>
-                            </td>
-                              <td className="py-3 px-3 text-right">
-<button
-                  onClick={() => handleEntityApply(group.entityType, group.entityId)}
-                  disabled={applyEntityLoading}
-                  className="text-green-600 hover:text-green-800 dark:text-green-400 font-medium text-sm px-3 py-1 rounded-none hover:bg-green-50 dark:hover:bg-green-900/20 disabled:opacity-50"
-                >
-                  {applyEntityLoading ? 'Applying...' : '✓ Apply'}
-                </button>
-<button
-                                    onClick={() => handleEntityRollback(group.entityType, group.entityId)}
-                                    disabled={rollbackLoading}
-                                    className="text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 font-medium text-sm px-3 py-1 rounded-none hover:bg-blue-50 dark:hover:bg-blue-900/20 disabled:opacity-50 transition-colors"
-                                >
-                                    {rollbackLoading ? 'Rolling back...' : '↩ Rollback'}
-                                </button>
-                              </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
+              </div>
 
-              {preview ? (
-                <div className="space-y-4">
-                  <h4 className="text-sm font-medium text-gray-700 dark:text-amber-primary">Bundle Preview</h4>
-                  
-                  <div className="flex items-center gap-4 text-sm">
-                    <div>
-                      <span className="text-gray-500 dark:text-amber-muted">Current Version: </span>
-                      <span className="font-mono font-medium text-gray-900 dark:text-light-neutral">{preview.current_version_number ?? '—'}</span>
-                    </div>
-                    <div>
-                      <span className="text-gray-500 dark:text-amber-muted">New Version: </span>
-                      <span className="font-mono font-medium text-gray-900 dark:text-light-neutral">{preview.new_version_number ?? '—'}</span>
-                    </div>
+              <div className="border-t border-gray-200 dark:border-gray-border my-4" />
+
+              <div>
+                <h5 className="text-xs font-medium text-gray-600 dark:text-amber-muted mb-2 uppercase tracking-wide">Smart Diff</h5>
+                {previewLoading || deployedRulesLoading ? (
+                  <div className="flex flex-col items-center justify-center py-8 space-y-4">
+                    <RefreshCw className="w-6 h-6 text-purple-active animate-spin" />
+                    <p className="text-sm text-gray-500 dark:text-amber-muted">Generating diff...</p>
                   </div>
-
-                  {preview.diff_content && (
-                    <div>
-                      <h5 className="text-xs font-medium text-gray-600 dark:text-amber-muted mb-2 uppercase tracking-wide">Changes (Diff)</h5>
-                      <pre className="bg-gray-900 dark:bg-black text-gray-100 p-4 rounded-none text-sm font-mono overflow-auto whitespace-pre max-h-[200px] border border-gray-800">
-                        <code>{preview.diff_content}</code>
-                      </pre>
-                    </div>
-                  )}
-
-                  <div className="relative group">
-                    <h5 className="text-xs font-medium text-gray-600 dark:text-amber-muted mb-2 uppercase tracking-wide">Full Bundle</h5>
-                    <pre className="bg-gray-900 dark:bg-black text-gray-100 p-4 rounded-none text-sm font-mono overflow-auto whitespace-pre max-h-[300px] border border-gray-800">
-                      <code className="text-green-400">{preview.rules_content}</code>
+                ) : smartDiffEntries.length === 0 ? (
+                  <pre className="bg-gray-900 dark:bg-black p-4 rounded-none text-sm font-mono overflow-auto whitespace-pre max-h-[300px] border border-gray-800">
+                    <div className="text-gray-400 italic">No differences from deployed rules</div>
+                  </pre>
+                ) : (
+                  <div className="relative">
+                    <pre className="bg-gray-900 dark:bg-black p-4 rounded-none text-sm font-mono overflow-auto whitespace-pre max-h-[300px] border border-gray-800">
+                      {smartDiffEntries.map((entry, idx) => {
+                        if (entry.type === 'section-header') {
+                          return <div key={idx} className="text-gray-300 font-bold">{entry.line}</div>
+                        }
+                        if (entry.type === 'add') {
+                          return <div key={idx} className="text-green-400">+ {entry.line}</div>
+                        }
+                        if (entry.type === 'remove') {
+                          return <div key={idx} className="text-red-400">- {entry.line}</div>
+                        }
+                        if (entry.type === 'change') {
+                          return (
+                            <div key={idx}>
+                              <div className="text-red-400">- {entry.oldLine}</div>
+                              <div className="text-green-400">+ {entry.newLine}</div>
+                            </div>
+                          )
+                        }
+                        return null
+                      })}
                     </pre>
                     <button
                       onClick={() => {
-                        navigator.clipboard.writeText(preview.rules_content)
+                        navigator.clipboard.writeText(diffText)
                         showToast('Copied to clipboard', 'success')
                       }}
-                      className="absolute top-8 right-3 p-2 bg-gray-800 hover:bg-gray-700 rounded-none text-gray-300 transition-colors"
-                      title="Copy Rules"
+                      className="absolute top-2 right-2 p-2 bg-gray-800 hover:bg-gray-700 rounded-none text-gray-300 transition-colors"
+                      title="Copy Diff"
                     >
                       <Copy className="w-4 h-4" />
                     </button>
                   </div>
-                </div>
-              ) : (
-                <button
-                  onClick={handleGeneratePreview}
-                  disabled={previewLoading}
-                  className="flex items-center gap-2 px-4 py-2 text-sm font-bold uppercase text-white bg-purple-active hover:bg-purple-600 rounded-none disabled:opacity-50 border border-purple-active/20 shadow-[0_0_15px_rgba(159,79,248,0.2)] transition-all"
-                >
-                  {previewLoading ? (
-                    <>
-                      <RefreshCw className="w-4 h-4 animate-spin" />
-                      Generating Preview...
-                    </>
-                  ) : (
-                    <>
-                      <FileCode className="w-4 h-4" />
-                      Generate Preview
-                    </>
-                  )}
-                </button>
-              )}
+                )}
+              </div>
             </>
-          )}
+          ) : activeTab === 'bundle' ? (
+            <div className="space-y-4">
+              <h4 className="text-sm font-medium text-gray-700 dark:text-amber-primary">Bundle Preview</h4>
+
+              <div className="flex items-center gap-4 text-sm">
+                <div>
+                  <span className="text-gray-500 dark:text-amber-muted">Current Version: </span>
+                  <span className="font-mono font-medium text-gray-900 dark:text-light-neutral">{preview?.current_version_number ?? '—'}</span>
+                </div>
+                <div>
+                  <span className="text-gray-500 dark:text-amber-muted">New Version: </span>
+                  <span className="font-mono font-medium text-gray-900 dark:text-light-neutral">{preview?.new_version_number ?? '—'}</span>
+                </div>
+              </div>
+
+              <div className="relative group">
+                <h5 className="text-xs font-medium text-gray-600 dark:text-amber-muted mb-2 uppercase tracking-wide">Full Bundle</h5>
+                <pre className="bg-gray-900 dark:bg-black text-gray-100 p-4 rounded-none text-sm font-mono overflow-auto whitespace-pre max-h-[300px] border border-gray-800">
+                  <code className="text-green-400">{preview?.rules_content ?? ''}</code>
+                </pre>
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(preview?.rules_content ?? '')
+                    showToast('Copied to clipboard', 'success')
+                  }}
+                  className="absolute top-8 right-3 p-2 bg-gray-800 hover:bg-gray-700 rounded-none text-gray-300 transition-colors"
+                  title="Copy Rules"
+                >
+                  <Copy className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          ) : null}
         </div>
 
         <div className="px-6 py-4 border-t border-gray-200 dark:border-gray-border flex justify-between shrink-0">
@@ -324,24 +417,24 @@ const handleEntityApply = async (entityType, entityId) => {
           </button>
           {changes.length > 0 && (
             <div className="flex gap-2">
-                <button
-                  onClick={handleBulkRollback}
-                  disabled={applyLoading || rollbackLoading}
-                  className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/40 rounded-none disabled:opacity-50 transition-colors"
-                  title="Discard all pending changes across all peers"
-                >
-                  {rollbackLoading ? (
-                    <>
-                      <RefreshCw className="w-4 h-4 animate-spin" />
-                      Discarding...
-                    </>
-                  ) : (
-                    <>
-                      <Trash2 className="w-4 h-4" />
-                      Discard All
-                    </>
-                  )}
-                </button>
+              <button
+                onClick={handleBulkRollback}
+                disabled={applyLoading || rollbackLoading}
+                className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/40 rounded-none disabled:opacity-50 transition-colors"
+                title="Discard all pending changes across all peers"
+              >
+                {rollbackLoading ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    Discarding...
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-4 h-4" />
+                    Discard All
+                  </>
+                )}
+              </button>
               <button
                 onClick={handleApply}
                 disabled={applyLoading || rollbackLoading || !preview}
