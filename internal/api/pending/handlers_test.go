@@ -360,9 +360,9 @@ func TestPreviewPeerPendingBundle_ExistingBundle(t *testing.T) {
 		t.Error("expected is_different in response")
 	}
 
-	// Verify diff is present
-	if response["diff"] == nil {
-		t.Error("expected diff in response")
+	// Verify diff_content is present
+	if response["diff_content"] == nil {
+		t.Error("expected diff_content in response")
 	}
 }
 
@@ -650,24 +650,32 @@ func TestHandlePushJobSSE_JobNotFound(t *testing.T) {
 
 func TestGenerateDiff_EmptyOldContent(t *testing.T) {
 	newContent := "line1\nline2\nline3"
-	result := generateDiff("", newContent, "", "v2")
+	result := generateDiff("", newContent)
 
 	if result == "" {
 		t.Error("expected non-empty diff for new bundle")
 	}
 
-	if !strings.Contains(result, "New bundle") {
-		t.Error("expected 'New bundle' in diff output")
+	// No version headers in diff output
+	if strings.Contains(result, "--- version") {
+		t.Error("expected no version header in diff output")
 	}
 
-	if !strings.Contains(result, "v2") {
-		t.Error("expected version v2 in diff output")
+	// All lines should be prefixed with "+ "
+	if !strings.Contains(result, "+ line1") {
+		t.Error("expected '+ line1' in diff output")
+	}
+	if !strings.Contains(result, "+ line2") {
+		t.Error("expected '+ line2' in diff output")
+	}
+	if !strings.Contains(result, "+ line3") {
+		t.Error("expected '+ line3' in diff output")
 	}
 }
 
 func TestGenerateDiff_NoChanges(t *testing.T) {
 	content := "same content"
-	result := generateDiff(content, content, "v1", "v1")
+	result := generateDiff(content, content)
 
 	if result != "No changes detected." {
 		t.Errorf("expected 'No changes detected.', got %s", result)
@@ -677,14 +685,16 @@ func TestGenerateDiff_NoChanges(t *testing.T) {
 func TestGenerateDiff_WithChanges(t *testing.T) {
 	oldContent := "line1\nline2\nline3"
 	newContent := "line1\nline2 modified\nline4"
-	result := generateDiff(oldContent, newContent, "v1", "v2")
+	result := generateDiff(oldContent, newContent)
 
-	if !strings.Contains(result, "--- version v1") {
-		t.Error("expected old version marker in diff")
+	// No version headers in diff output
+	if strings.Contains(result, "--- version") {
+		t.Error("expected no version header in diff output")
 	}
 
-	if !strings.Contains(result, "+++ version v2") {
-		t.Error("expected new version marker in diff")
+	// Should contain unchanged line with space prefix
+	if !strings.Contains(result, "  line1") {
+		t.Error("expected unchanged line1 in diff")
 	}
 
 	// Should contain the modified line
@@ -696,14 +706,20 @@ func TestGenerateDiff_WithChanges(t *testing.T) {
 	if !strings.Contains(result, "- line3") {
 		t.Error("expected removed line in diff")
 	}
+
+	// Should contain new line
+	if !strings.Contains(result, "+ line4") {
+		t.Error("expected added line4 in diff")
+	}
 }
 
 func TestGenerateDiff_EmptyNewContent(t *testing.T) {
 	oldContent := "line1\nline2"
-	result := generateDiff(oldContent, "", "v1", "v2")
+	result := generateDiff(oldContent, "")
 
-	if !strings.Contains(result, "--- version v1") {
-		t.Error("expected old version marker in diff")
+	// No version headers in diff output
+	if strings.Contains(result, "--- version") {
+		t.Error("expected no version header in diff output")
 	}
 
 	// Should contain removed lines
@@ -714,24 +730,21 @@ func TestGenerateDiff_EmptyNewContent(t *testing.T) {
 
 func TestGenerateDiff_OnlyAdditions(t *testing.T) {
 	newContent := "new1\nnew2"
-	result := generateDiff("", newContent, "", "v1")
+	result := generateDiff("", newContent)
 
-	// When old is empty, it returns "New bundle" format, not diff format
-	if !strings.Contains(result, "New bundle") {
-		t.Error("expected 'New bundle' in diff output")
+	// When old is empty, the LCS algorithm should produce proper diff format
+	// No version headers in diff output
+	if strings.Contains(result, "+++ version") {
+		t.Error("expected no version header in diff output")
 	}
 
-	if !strings.Contains(result, "v1") {
-		t.Error("expected version v1 in diff output")
+	// All lines should be prefixed with "+ "
+	if !strings.Contains(result, "+ new1") {
+		t.Error("expected '+ new1' in diff output")
 	}
 
-	// The new content is appended directly after "New bundle" header
-	if !strings.Contains(result, "new1") {
-		t.Error("expected new1 in diff output")
-	}
-
-	if !strings.Contains(result, "new2") {
-		t.Error("expected new2 in diff output")
+	if !strings.Contains(result, "+ new2") {
+		t.Error("expected '+ new2' in diff output")
 	}
 }
 
@@ -1014,8 +1027,8 @@ func TestPreviewPeerPendingBundle_WithExistingBundle(t *testing.T) {
 		t.Fatalf("failed to unmarshal response: %v", err)
 	}
 
-	if response["diff"] == nil {
-		t.Error("expected diff in response")
+	if response["diff_content"] == nil {
+		t.Error("expected diff_content in response")
 	}
 }
 

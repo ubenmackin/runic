@@ -304,7 +304,7 @@ func (h *Handler) PreviewPeerPendingBundle(w http.ResponseWriter, r *http.Reques
 		versionNumber = 0
 	}
 
-	diffContent := generateDiff(currentContent, content, currentVersion, version)
+	diffContent := generateDiff(currentContent, content)
 
 	err = db.SavePendingBundlePreview(ctx, database, peerID, content, diffContent, version)
 	if err != nil {
@@ -320,7 +320,7 @@ func (h *Handler) PreviewPeerPendingBundle(w http.ResponseWriter, r *http.Reques
 		"current_version_number": currentVersionNumber,
 		"new_version_number":     versionNumber,
 		"is_different":           version != currentVersion,
-		"diff":                   diffContent,
+		"diff_content":           diffContent,
 		"rules_content":          content,
 	})
 }
@@ -539,7 +539,7 @@ WHERE peer_id = ?
 ORDER BY id DESC LIMIT 1
 `, peerID).Scan(&currentContent, &currentVersion)
 
-			diffContent := generateDiff(currentContent, content, currentVersion, version)
+			diffContent := generateDiff(currentContent, content)
 			if err := db.SavePendingBundlePreview(ctx, tx, peerID, content, diffContent, version); err != nil {
 				log.WarnContext(ctx, "failed to save bundle preview", "error", err)
 			}
@@ -875,47 +875,65 @@ func applyBundleForPeer(ctx context.Context, database db.DB, compiler *engine.Co
 	return nil
 }
 
-// generateDiff produces a simple text diff between two bundle versions.
-func generateDiff(oldContent, newContent, oldVersion, newVersion string) string {
-	if oldContent == "" {
-		return fmt.Sprintf("New bundle (version %s)\n%s", newVersion, newContent)
-	}
+// generateDiff produces a text diff between two strings using LCS.
+func generateDiff(oldContent, newContent string) string {
 	if oldContent == newContent {
 		return "No changes detected."
 	}
 
-	// Simple line-by-line diff
 	oldLines := splitLines(oldContent)
 	newLines := splitLines(newContent)
 
-	var diff string
-	diff += fmt.Sprintf("--- version %s\n+++ version %s\n", oldVersion, newVersion)
-
-	maxLen := len(oldLines)
-	if len(newLines) > maxLen {
-		maxLen = len(newLines)
+	// Compute LCS using DP table
+	m, n := len(oldLines), len(newLines)
+	dp := make([][]int, m+1)
+	for i := range dp {
+		dp[i] = make([]int, n+1)
+	}
+	for i := 1; i <= m; i++ {
+		for j := 1; j <= n; j++ {
+			if oldLines[i-1] == newLines[j-1] {
+				dp[i][j] = dp[i-1][j-1] + 1
+			} else {
+				if dp[i-1][j] > dp[i][j-1] {
+					dp[i][j] = dp[i-1][j]
+				} else {
+					dp[i][j] = dp[i][j-1]
+				}
+			}
+		}
 	}
 
-	for i := 0; i < maxLen; i++ {
-		var oldLine, newLine string
-		hasOld := i < len(oldLines)
-		hasNew := i < len(newLines)
-		if hasOld {
-			oldLine = oldLines[i]
+	// Backtrack to produce diff output
+	type diffEntry struct {
+		prefix string
+		line   string
+	}
+	var entries []diffEntry
+	i, j := m, n
+	for i > 0 || j > 0 {
+		switch {
+		case i > 0 && j > 0 && oldLines[i-1] == newLines[j-1]:
+			entries = append(entries, diffEntry{"  ", oldLines[i-1]})
+			i--
+			j--
+		case j > 0 && (i == 0 || dp[i][j-1] >= dp[i-1][j]):
+			entries = append(entries, diffEntry{"+ ", newLines[j-1]})
+			j--
+		default:
+			entries = append(entries, diffEntry{"- ", oldLines[i-1]})
+			i--
 		}
-		if hasNew {
-			newLine = newLines[i]
-		}
+	}
 
-		if hasOld && hasNew && oldLine == newLine {
-			continue // skip unchanged lines for brevity
-		}
-		if hasOld && (!hasNew || oldLine != newLine) {
-			diff += fmt.Sprintf("- %s\n", oldLine)
-		}
-		if hasNew && (!hasOld || oldLine != newLine) {
-			diff += fmt.Sprintf("+ %s\n", newLine)
-		}
+	// Reverse entries (backtrack produced them in reverse order)
+	for l, r := 0, len(entries)-1; l < r; l, r = l+1, r-1 {
+		entries[l], entries[r] = entries[r], entries[l]
+	}
+
+	var diff string
+	for _, e := range entries {
+		diff += fmt.Sprintf("%s%s\n", e.prefix, e.line)
 	}
 
 	return diff

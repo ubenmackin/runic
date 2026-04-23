@@ -25,7 +25,6 @@ import SortIndicator from '../components/SortIndicator'
 import Pagination from '../components/Pagination'
 import SearchFilterPanel from '../components/SearchFilterPanel'
 import PageHeader from '../components/PageHeader'
-import PendingChangesModal from '../components/PendingChangesModal'
 import SharpTag from '../components/SharpTag'
 import FilterChip from '../components/FilterChip'
 import KebabMenu from '../components/KebabMenu'
@@ -165,11 +164,7 @@ const [bundleContent, setBundleContent] = useState('')
   const [viewingPendingRules, setViewingPendingRules] = useState(false)
   const [showDiffView, setShowDiffView] = useState(true)
 
-  // Pending Changes Modal state
-	const [pendingModalPeer, setPendingModalPeer] = useState(null)
-	const [pendingModalOpen, setPendingModalOpen] = useState(false)
-
-	// Bulk Apply All state
+// Bulk Apply All state
 	const [applyAllLoading, setApplyAllLoading] = useState(false)
 	const [rollbackLoading, setRollbackLoading] = useState(false)
 
@@ -496,17 +491,15 @@ const handleSubmit = (e) => {
   const handleSyncStatusClick = (peer) => {
     switch (peer.sync_status) {
       case 'pending':
-        setPendingModalPeer(peer)
-        setPendingModalOpen(true)
-        break
       case 'pending_sync':
         setViewingPendingRules(true)
-        fetchBundle(peer, true) // Show pending bundle
+        fetchBundle(peer, true)
         break
-      case 'synced':
-        setViewingPendingRules(false)
-        fetchBundle(peer, false) // Show deployed bundle
-        break
+case 'synced':
+    default:
+      setViewingPendingRules(false)
+      fetchBundle(peer, false)
+      break
     }
   }
 
@@ -1335,20 +1328,7 @@ className="px-4 py-2 text-sm font-bold uppercase text-white bg-purple-active hov
 	</div>
 	</div>
 	</div>
-	)}
-
-  {/* Pending Changes Modal */}
-  {pendingModalOpen && pendingModalPeer && (
-    <PendingChangesModal
-      peerId={pendingModalPeer.id}
-      peerHostname={pendingModalPeer.hostname}
-      onClose={() => { setPendingModalOpen(false); setPendingModalPeer(null) }}
-      onApplied={() => {
-        qc.invalidateQueries({ queryKey: QUERY_KEYS.peers() })
-        qc.invalidateQueries({ queryKey: ['pending-changes'] })
-      }}
-    />
-  )}
-	</div>
-	)
-	}
+)}
+      </div>
+  )
+}
