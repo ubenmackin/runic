@@ -496,6 +496,8 @@ func (a *Agent) listenSSE(ctx context.Context) {
 			if pullErr := a.pullBundle(sseCtx); pullErr != nil {
 				log.Error("SSE-triggered bundle pull failed", "error", pullErr)
 			}
+		}, func(sseCtx context.Context) {
+			a.handleFetchBackup(sseCtx)
 		})
 
 		if err != nil {
@@ -513,6 +515,39 @@ func (a *Agent) listenSSE(ctx context.Context) {
 			log.Error("SSE listener returned unexpected error, retrying", "error", err)
 		}
 	}
+}
+
+// handleFetchBackup reads the backup and ipset data, then POSTs it to the control plane.
+func (a *Agent) handleFetchBackup(ctx context.Context) {
+	backup, err := a.readBackup()
+	if err != nil {
+		log.Error("Failed to read iptables backup", "error", err)
+		return
+	}
+	ipsets, _ := a.readIpsets() // non-fatal if this fails
+	if err := transport.PostBackup(ctx, a.httpClient, a.config.ControlPlaneURL, a.config.HostID, a.config.Token, a.version, backup, ipsets); err != nil {
+		log.Error("Failed to post backup to control plane", "error", err)
+	}
+}
+
+// readBackup reads the pre-Runic iptables backup file.
+func (a *Agent) readBackup() (string, error) {
+	data, err := os.ReadFile(a.backupPath)
+	if err != nil {
+		return "", fmt.Errorf("read backup: %w", err)
+	}
+	return string(data), nil
+}
+
+// readIpsets runs ipset list and returns the output.
+// If ipset is not installed, returns empty string (non-fatal).
+func (a *Agent) readIpsets() (string, error) {
+	out, err := a.cmdRunner.Run(context.Background(), "ipset", "list")
+	if err != nil {
+		log.Warn("ipset list failed (ipset may not be installed)", "error", err)
+		return "", nil // non-fatal
+	}
+	return string(out), nil
 }
 
 // rotationCheckLoop periodically checks for pending key rotations.

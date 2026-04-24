@@ -299,3 +299,84 @@ CREATE TABLE IF NOT EXISTS alert_digests (
 	UNIQUE(user_id, digest_date)
 );
 CREATE INDEX IF NOT EXISTS idx_alert_digests_user_date ON alert_digests(user_id, digest_date DESC);
+
+-- Import session tracks the overall import workflow for a peer
+CREATE TABLE IF NOT EXISTS import_sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    peer_id INTEGER NOT NULL REFERENCES peers(id) ON DELETE CASCADE,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','parsed','reviewing','applied','cancelled')),
+    raw_backup TEXT NOT NULL,
+    raw_ipsets TEXT,
+    chain_filter TEXT DEFAULT 'INPUT,OUTPUT,DOCKER-USER',
+    total_rules_found INTEGER DEFAULT 0,
+    importable_rules INTEGER DEFAULT 0,
+    skipped_rules INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Parsed rules from the backup, with mapping status
+CREATE TABLE IF NOT EXISTS import_rules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL REFERENCES import_sessions(id) ON DELETE CASCADE,
+    chain TEXT NOT NULL,
+    rule_order INTEGER NOT NULL,
+    raw_rule TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','resolved','skipped','approved','rejected')),
+    skip_reason TEXT,
+    source_type TEXT,
+    source_id INTEGER,
+    source_staging_id INTEGER,
+    target_type TEXT,
+    target_id INTEGER,
+    target_staging_id INTEGER,
+    service_id INTEGER,
+    service_staging_id INTEGER,
+    action TEXT,
+    priority INTEGER,
+    direction TEXT DEFAULT 'both',
+    target_scope TEXT DEFAULT 'both',
+    policy_name TEXT,
+    enabled INTEGER DEFAULT 1
+);
+
+-- Staged group entries (groups that don't exist yet in real DB)
+CREATE TABLE IF NOT EXISTS import_group_mappings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL REFERENCES import_sessions(id) ON DELETE CASCADE,
+    group_name TEXT NOT NULL,
+    ipset_name TEXT,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','mapped','approved','rejected')),
+    existing_group_id INTEGER,
+    member_ips TEXT NOT NULL DEFAULT '[]',
+    member_peer_ids TEXT DEFAULT '[]',
+    member_staging_peer_ids TEXT DEFAULT '[]'
+);
+
+-- Staged peer entries (manual peers that need to be created)
+CREATE TABLE IF NOT EXISTS import_peer_mappings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL REFERENCES import_sessions(id) ON DELETE CASCADE,
+    ip_address TEXT NOT NULL,
+    hostname TEXT,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','mapped','approved','rejected')),
+    existing_peer_id INTEGER
+);
+
+-- Staged service entries (services that need to be created)
+CREATE TABLE IF NOT EXISTS import_service_mappings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL REFERENCES import_sessions(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    ports TEXT NOT NULL,
+    source_ports TEXT,
+    protocol TEXT NOT NULL DEFAULT 'tcp',
+    direction_hint TEXT,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','mapped','approved','rejected')),
+    existing_service_id INTEGER
+);
+
+-- Indexes for import tables
+CREATE INDEX IF NOT EXISTS idx_import_sessions_peer_status ON import_sessions(peer_id, status);
+CREATE INDEX IF NOT EXISTS idx_import_rules_session_status ON import_rules(session_id, status);
+CREATE INDEX IF NOT EXISTS idx_import_group_mappings_session ON import_group_mappings(session_id);

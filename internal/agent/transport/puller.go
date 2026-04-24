@@ -100,7 +100,7 @@ func ConfirmApply(ctx context.Context, client common.HTTPClient, controlPlaneURL
 
 // ListenSSE maintains a persistent SSE connection to receive push notifications.
 // Returns ErrUnauthorized if a 401 response is received, allowing the caller to trigger re-registration.
-func ListenSSE(ctx context.Context, client common.HTTPClient, controlPlaneURL, hostID, token, version string, onBundleUpdate func(context.Context)) error {
+func ListenSSE(ctx context.Context, client common.HTTPClient, controlPlaneURL, hostID, token, version string, onBundleUpdate func(context.Context), onFetchBackup func(context.Context)) error {
 	for {
 		select {
 		case <-ctx.Done():
@@ -108,7 +108,7 @@ func ListenSSE(ctx context.Context, client common.HTTPClient, controlPlaneURL, h
 		default:
 		}
 
-		if err := connectSSE(ctx, client, controlPlaneURL, hostID, token, version, onBundleUpdate); err != nil {
+		if err := connectSSE(ctx, client, controlPlaneURL, hostID, token, version, onBundleUpdate, onFetchBackup); err != nil {
 			log.Warn("SSE connection lost, reconnecting", "error", err, "delay", "15s")
 			if errors.Is(err, common.ErrUnauthorized) {
 				log.Warn("Received 401 on SSE connection, signaling for re-registration")
@@ -124,7 +124,7 @@ func ListenSSE(ctx context.Context, client common.HTTPClient, controlPlaneURL, h
 }
 
 // connectSSE establishes a single SSE connection.
-func connectSSE(ctx context.Context, client common.HTTPClient, controlPlaneURL, hostID, token, version string, onBundleUpdate func(context.Context)) error {
+func connectSSE(ctx context.Context, client common.HTTPClient, controlPlaneURL, hostID, token, version string, onBundleUpdate func(context.Context), onFetchBackup func(context.Context)) error {
 	url := fmt.Sprintf("%s/api/v1/agent/events/%s", controlPlaneURL, hostID)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
@@ -170,6 +170,11 @@ func connectSSE(ctx context.Context, client common.HTTPClient, controlPlaneURL, 
 		if strings.HasPrefix(line, "event: bundle_updated") {
 			log.Info("SSE: bundle_updated received, pulling immediately")
 			go onBundleUpdate(ctx)
+		}
+
+		if strings.HasPrefix(line, "event: fetch_backup") {
+			log.Info("SSE: fetch_backup received, reading backup")
+			go onFetchBackup(ctx)
 		}
 
 		if len(line) > 0 && line[0] == ':' {

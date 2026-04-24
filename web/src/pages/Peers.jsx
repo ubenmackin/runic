@@ -3,7 +3,7 @@ import { useLocation } from 'react-router-dom'
 import { useTableSort } from '../hooks/useTableSort'
 import { usePagination } from '../hooks/usePagination'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Plus, Pencil, Trash2, Server, Copy, Check, RefreshCw, X, FileCode, AlertTriangle, Globe, ChevronDown, ChevronUp, Send } from 'lucide-react'
+import { Plus, Pencil, Trash2, Server, Copy, Check, RefreshCw, X, FileCode, AlertTriangle, Globe, ChevronDown, ChevronUp, Send, Download } from 'lucide-react'
 import { api, QUERY_KEYS } from '../api/client'
 import { REFETCH_INTERVALS, OS_OPTIONS, ARCH_OPTIONS } from '../constants'
 import { useCrudModal } from '../hooks/useCrudModal'
@@ -29,6 +29,7 @@ import SharpTag from '../components/SharpTag'
 import FilterChip from '../components/FilterChip'
 import KebabMenu from '../components/KebabMenu'
 import PendingChangesModal from '../components/PendingChangesModal'
+import ImportRulesWizard from '../components/ImportRulesWizard'
 
 // Helper function to parse heartbeat for sorting
 function parseHeartbeatForSort(timestamp) {
@@ -44,7 +45,7 @@ const syncStatusConfig = {
 }
 
 // Helper function to get menu items for a peer
-function getPeerMenuItems(peer, { canEdit, fetchBundle, handlePushToPeer, openEdit, setDeleteTarget }) {
+function getPeerMenuItems(peer, { canEdit, fetchBundle, handlePushToPeer, openEdit, setDeleteTarget, handleImportRules }) {
   const items = []
   // Agent-only items
   if (!peer.is_manual) {
@@ -58,6 +59,14 @@ function getPeerMenuItems(peer, { canEdit, fetchBundle, handlePushToPeer, openEd
       icon: Send,
       onClick: () => handlePushToPeer(peer),
     })
+    // Import option: only for agent peers with no deployed rules
+    if (!peer.bundle_version) {
+      items.push({
+        label: 'Import Pre-Runic Rules',
+        icon: Download,
+        onClick: () => handleImportRules(peer),
+      })
+    }
   }
   // Manual-only items
   if (peer.is_manual && canEdit) {
@@ -80,7 +89,7 @@ function getPeerMenuItems(peer, { canEdit, fetchBundle, handlePushToPeer, openEd
 }
 
 // Mobile card component for peer
-function PeerCard({ peer, canEdit, fetchBundle, handlePushToPeer, openEdit, setDeleteTarget, handleSyncStatusClick }) {
+function PeerCard({ peer, canEdit, fetchBundle, handlePushToPeer, openEdit, setDeleteTarget, handleSyncStatusClick, handleImportRules }) {
   return (
     <div className="bg-white dark:bg-charcoal-dark border border-gray-200 dark:border-gray-border p-3">
       <div className="flex items-start justify-between">
@@ -129,7 +138,7 @@ function PeerCard({ peer, canEdit, fetchBundle, handlePushToPeer, openEdit, setD
         </div>
         {/* Kebab menu */}
         <KebabMenu
-          items={getPeerMenuItems(peer, { canEdit, fetchBundle, handlePushToPeer, openEdit, setDeleteTarget })}
+          items={getPeerMenuItems(peer, { canEdit, fetchBundle, handlePushToPeer, openEdit, setDeleteTarget, handleImportRules })}
         />
       </div>
     </div>
@@ -172,9 +181,13 @@ const [bundleContent, setBundleContent] = useState('')
 	const [applyAllLoading, setApplyAllLoading] = useState(false)
 	const [rollbackLoading, setRollbackLoading] = useState(false)
 
-// Push to peer state
+  // Push to peer state
   const [pushTargetPeer, setPushTargetPeer] = useState(null)
   const [pushLoading, setPushLoading] = useState(false)
+
+  // Import Rules wizard state
+  const [importingPeer, setImportingPeer] = useState(null)
+  const [showImportWizard, setShowImportWizard] = useState(false)
 
   // Real-time SSE connection for pending change notifications
   useSSE({
@@ -515,21 +528,26 @@ const handleSubmit = (e) => {
 		setPushTargetPeer(peer)
 	}
 
-	const handlePushConfirm = async () => {
-		if (!pushTargetPeer) return
-		setPushLoading(true)
-		try {
-			await api.post(`/pending-changes/push/${pushTargetPeer.id}`)
-			showToast(`Successfully pushed current rules to ${pushTargetPeer.hostname}`, 'success')
-			qc.invalidateQueries({ queryKey: QUERY_KEYS.peers() })
-			qc.invalidateQueries({ queryKey: ['pending-changes'] })
-			setPushTargetPeer(null)
-		} catch (err) {
-			showToast(`Failed to push rules: ${err.message}`, 'error')
-		} finally {
-			setPushLoading(false)
-		}
-	}
+  const handlePushConfirm = async () => {
+    if (!pushTargetPeer) return
+    setPushLoading(true)
+    try {
+      await api.post(`/pending-changes/push/${pushTargetPeer.id}`)
+      showToast(`Successfully pushed current rules to ${pushTargetPeer.hostname}`, 'success')
+      qc.invalidateQueries({ queryKey: QUERY_KEYS.peers() })
+      qc.invalidateQueries({ queryKey: ['pending-changes'] })
+      setPushTargetPeer(null)
+    } catch (err) {
+      showToast(`Failed to push rules: ${err.message}`, 'error')
+    } finally {
+      setPushLoading(false)
+    }
+  }
+
+  const handleImportRules = useCallback((peer) => {
+    setImportingPeer(peer)
+    setShowImportWizard(true)
+  }, [])
 
   // Filter chips for status filter - must be above early returns for hooks rules
   const statusFilterChips = useMemo(() => [
@@ -675,16 +693,17 @@ const handleSubmit = (e) => {
 {/* Mobile card view */}
 <div className="md:hidden space-y-2">
 {paginatedPeers.map((peer) => (
-<PeerCard
-key={peer.id}
-peer={peer}
-canEdit={canEdit}
-fetchBundle={fetchBundle}
-handlePushToPeer={handlePushToPeer}
-openEdit={openEdit}
-setDeleteTarget={setDeleteTarget}
-handleSyncStatusClick={handleSyncStatusClick}
-/>
+        <PeerCard
+          key={peer.id}
+          peer={peer}
+          canEdit={canEdit}
+          fetchBundle={fetchBundle}
+          handlePushToPeer={handlePushToPeer}
+          openEdit={openEdit}
+          setDeleteTarget={setDeleteTarget}
+          handleSyncStatusClick={handleSyncStatusClick}
+          handleImportRules={handleImportRules}
+        />
 ))}
 <Pagination showingRange={peersShowingRange} page={peersPage} totalPages={totalPages} onPageChange={setPeersPage} totalItems={peersTotal} />
 </div>
@@ -826,24 +845,33 @@ v{peer.agent_version}
 </td>
 <td className="px-4 py-1">
 <div className="flex items-center gap-2">
-{!peer.is_manual && (
-<>
-<button
-onClick={() => fetchBundle(peer, false)}
-className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none"
-title="View Deployed Rules"
->
-<FileCode className="w-4 h-4 text-purple-active" />
-</button>
-<button
-onClick={() => handlePushToPeer(peer)}
-className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none"
-title="Push Current Rules"
->
-<Send className="w-4 h-4 text-green-600" />
-</button>
-</>
-)}
+              {!peer.is_manual && (
+                <>
+                  {!peer.bundle_version && (
+                    <button
+                      onClick={() => handleImportRules(peer)}
+                      className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none"
+                      title="Import Pre-Runic Rules"
+                    >
+                      <Download className="w-4 h-4 text-blue-500" />
+                    </button>
+                  )}
+                  <button
+                    onClick={() => fetchBundle(peer, false)}
+                    className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none"
+                    title="View Deployed Rules"
+                  >
+                    <FileCode className="w-4 h-4 text-purple-active" />
+                  </button>
+                  <button
+                    onClick={() => handlePushToPeer(peer)}
+                    className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none"
+                    title="Push Current Rules"
+                  >
+                    <Send className="w-4 h-4 text-green-600" />
+                  </button>
+                </>
+              )}
 {canEdit && peer.is_manual && (
 <button
 onClick={() => openEdit(peer)}
@@ -1091,6 +1119,22 @@ className={`px-3 py-1 rounded-none text-sm font-medium transition-colors ${
           onApplied={() => {
             qc.invalidateQueries({ queryKey: QUERY_KEYS.peers() })
             qc.invalidateQueries({ queryKey: ['pending-changes'] })
+          }}
+        />
+      )}
+
+      {/* Import Rules Wizard */}
+      {showImportWizard && importingPeer && (
+        <ImportRulesWizard
+          peer={importingPeer}
+          onClose={() => {
+            setShowImportWizard(false)
+            setImportingPeer(null)
+          }}
+          onSuccess={() => {
+            qc.invalidateQueries({ queryKey: QUERY_KEYS.peers() })
+            setShowImportWizard(false)
+            setImportingPeer(null)
           }}
         />
       )}

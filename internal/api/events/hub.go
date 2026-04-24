@@ -50,6 +50,20 @@ func (h *SSEHub) NotifyBundleUpdated(hostID string, version string) {
 	}
 }
 
+// NotifyFetchBackup sends a fetch_backup event to the agent, requesting it to
+// read and POST its pre-Runic iptables backup and ipset data.
+func (h *SSEHub) NotifyFetchBackup(hostID string) {
+	h.mu.RLock()
+	ch, ok := h.clients[hostID]
+	h.mu.RUnlock()
+	if ok {
+		select {
+		case ch <- fmt.Sprintf("event: fetch_backup\ndata: {\"host_id\":%q}\n\n", hostID):
+		default: // agent not listening, will miss this request
+		}
+	}
+}
+
 // RegisterPushJob registers a channel for push job progress events.
 func (h *SSEHub) RegisterPushJob(jobID string) chan string {
 	ch := make(chan string, 16) // larger buffer for progress events

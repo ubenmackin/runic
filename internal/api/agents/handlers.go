@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -21,12 +22,13 @@ import (
 	"runic/internal/common/constants"
 	runiclog "runic/internal/common/log"
 	"runic/internal/db"
+	"runic/internal/importer"
 	"runic/internal/models"
 )
 
 // Handler provides HTTP handlers for agent endpoints with dependency injection.
 type Handler struct {
-	DB           db.Querier
+	DB           *sql.DB
 	LogsDB       db.Querier
 	AlertService *alerts.Service
 }
@@ -34,7 +36,7 @@ type Handler struct {
 // NewHandler creates a new agent handler with the given database connections.
 // db is the main database for peer queries, logsDB is the separate logs database.
 // alertService is optional and can be nil.
-func NewHandler(db db.Querier, logsDB db.Querier, alertService *alerts.Service) *Handler {
+func NewHandler(db *sql.DB, logsDB db.Querier, alertService *alerts.Service) *Handler {
 	return &Handler{DB: db, LogsDB: logsDB, AlertService: alertService}
 }
 
@@ -610,6 +612,106 @@ func (h *Handler) AgentCheckRotation(w http.ResponseWriter, r *http.Request) {
 		"rotation_token": rotationToken.String,
 		"host_id":        hostID,
 	})
+}
+
+// SubmitBackup handles backup data submissions from agents.
+// The agent posts its pre-Runic iptables backup and ipset data for import processing.
+func (h *Handler) SubmitBackup(w http.ResponseWriter, r *http.Request) {
+	_, serverID, ok := h.getHostIDFromContext(w, r)
+	if !ok {
+		return
+	}
+
+	var input struct {
+		IPTablesBackup string `json:"iptables_backup"`
+		IPSetList      string `json:"ipset_list"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		http.Error(w, `{"error": "invalid JSON"}`, http.StatusBadRequest)
+		return
+	}
+
+	if input.IPTablesBackup == "" {
+		http.Error(w, `{"error": "iptables_backup is required"}`, http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+
+	// Start a transaction for atomicity
+	tx, err := h.DB.BeginTx(ctx, nil)
+	if err != nil {
+		runiclog.Error("Failed to begin transaction", "error", err, "peer_id", serverID)
+		http.Error(w, `{"error": "failed to begin transaction"}`, http.StatusInternalServerError)
+		return
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			if rErr := tx.Rollback(); rErr != nil {
+				runiclog.Warn("Rollback failed", "error", rErr)
+			}
+		}
+	}()
+
+	// Check if there's already an active import session for this peer within the transaction
+	var existingID int64
+	var existingStatus string
+	err = tx.QueryRowContext(ctx, "SELECT id, status FROM import_sessions WHERE peer_id = ? AND status IN ('pending','parsed','reviewing')", serverID).Scan(&existingID, &existingStatus)
+
+	var sessionID int64
+	switch {
+	case err == nil:
+		// Active session exists
+		sessionID = existingID
+		if existingStatus == "pending" {
+			// Update raw_backup and raw_ipsets, keep status as 'pending'
+			_, err = tx.ExecContext(ctx, "UPDATE import_sessions SET raw_backup = ?, raw_ipsets = ?, updated_at = CURRENT_TIMESTAMP WHERE peer_id = ? AND status = 'pending'", input.IPTablesBackup, input.IPSetList, serverID)
+			if err != nil {
+				runiclog.Error("Failed to update import session with backup", "error", err, "peer_id", serverID)
+				http.Error(w, `{"error": "failed to update import session"}`, http.StatusInternalServerError)
+				return
+			}
+		}
+		// If session is in parsed/reviewing, just acknowledge — don't overwrite
+	case errors.Is(err, sql.ErrNoRows):
+		// No active session — create one with status 'pending'
+		result, err := tx.ExecContext(ctx, "INSERT INTO import_sessions (peer_id, status, raw_backup, raw_ipsets) VALUES (?, 'pending', ?, ?)", serverID, input.IPTablesBackup, input.IPSetList)
+		if err != nil {
+			runiclog.Error("Failed to create import session", "error", err, "peer_id", serverID)
+			http.Error(w, `{"error": "failed to create import session"}`, http.StatusInternalServerError)
+			return
+		}
+		sessionID, err = result.LastInsertId()
+		if err != nil {
+			runiclog.Error("Failed to get session ID", "error", err, "peer_id", serverID)
+			http.Error(w, `{"error": "failed to create import session"}`, http.StatusInternalServerError)
+			return
+		}
+	default:
+		runiclog.Error("Failed to check existing import session", "error", err, "peer_id", serverID)
+		http.Error(w, `{"error": "database error"}`, http.StatusInternalServerError)
+		return
+	}
+
+	// Commit the transaction
+	if err := tx.Commit(); err != nil {
+		runiclog.Error("Failed to commit transaction", "error", err, "peer_id", serverID)
+		http.Error(w, `{"error": "failed to commit transaction"}`, http.StatusInternalServerError)
+		return
+	}
+	committed = true
+
+	// After the transaction commits, call ParseSession to parse the backup data,
+	// insert rules, run the resolver, and update status to 'parsed'.
+	// This runs outside the transaction to avoid holding locks during parsing.
+	if err := importer.ParseSession(ctx, h.DB, sessionID); err != nil {
+		// Log the error but still return 200 — the data is saved, user can retry parse
+		runiclog.Warn("ParseSession failed after backup submit", "error", err, "session_id", sessionID, "peer_id", serverID)
+	}
+
+	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 // AgentTestKey validates an HMAC signature using the peer's current key.

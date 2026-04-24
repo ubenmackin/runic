@@ -417,7 +417,7 @@ func TestConnectSSE(t *testing.T) {
 			defer server.Close()
 
 			client := server.Client()
-			err := connectSSE(ctx, client, server.URL, "host123", "test-token", "1.0.0", onBundleUpdate)
+			err := connectSSE(ctx, client, server.URL, "host123", "test-token", "1.0.0", onBundleUpdate, func(context.Context) {})
 
 			if tt.name == "handles context cancellation" {
 				// Context cancellation should result in an error
@@ -511,7 +511,7 @@ func TestListenSSE(t *testing.T) {
 			onBundleUpdate := func(ctx context.Context) {}
 
 			client := server.Client()
-			err := ListenSSE(ctx, client, server.URL, "host123", "test-token", "1.0.0", onBundleUpdate)
+			err := ListenSSE(ctx, client, server.URL, "host123", "test-token", "1.0.0", onBundleUpdate, func(context.Context) {})
 
 			if tt.name == "returns error when context cancelled" {
 				// Context cancelled should return error
@@ -695,6 +695,7 @@ func TestConnectSSEConnectionErrors(t *testing.T) {
 				"test-token",
 				"1.0.0",
 				onBundleUpdate,
+				func(context.Context) {},
 			)
 
 			if tt.wantErr && err == nil {

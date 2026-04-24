@@ -111,6 +111,12 @@ export const QUERY_KEYS = {
   logSettings: () => ['log-settings'],
   notificationPrefs: () => ['notification-preferences'],
   pendingChanges: () => ['pending-changes'],
+  importSession: (id) => ['import-session', id],
+  importRules: (id) => ['import-rules', id],
+  importGroups: (id) => ['import-groups', id],
+  importPeers: (id) => ['import-peers', id],
+  importServices: (id) => ['import-services', id],
+  importSkipped: (id) => ['import-skipped', id],
 }
 
 export const getVersion = () => api.get('/info')
@@ -124,3 +130,18 @@ export const getServiceByPort = (port, protocol = '') => {
   if (protocol) params.append('protocol', protocol)
   return api.get(`/services/by-port?${params}`)
 }
+
+// Import session API helpers
+export const initiateImport = (peerId) => api.post(`/peers/${peerId}/import`)
+export const getImportSession = (sessionId) => api.get(`/import-sessions/${sessionId}`)
+export const getImportRules = (sessionId) => api.get(`/import-sessions/${sessionId}/rules`)
+export const getImportGroups = (sessionId) => api.get(`/import-sessions/${sessionId}/groups`)
+export const getImportPeers = (sessionId) => api.get(`/import-sessions/${sessionId}/peers`)
+export const getImportServices = (sessionId) => api.get(`/import-sessions/${sessionId}/services`)
+export const getImportSkipped = (sessionId) => api.get(`/import-sessions/${sessionId}/skipped`)
+export const updateImportRule = (sessionId, ruleId, data) => api.put(`/import-sessions/${sessionId}/rules/${ruleId}`, data)
+export const updateImportGroup = (sessionId, groupId, data) => api.put(`/import-sessions/${sessionId}/groups/${groupId}`, data)
+export const updateImportPeer = (sessionId, peerId, data) => api.put(`/import-sessions/${sessionId}/peers/${peerId}`, data)
+export const updateImportService = (sessionId, serviceId, data) => api.put(`/import-sessions/${sessionId}/services/${serviceId}`, data)
+export const applyImport = (sessionId) => api.post(`/import-sessions/${sessionId}/apply`)
+export const cancelImport = (sessionId) => api.delete(`/import-sessions/${sessionId}`)

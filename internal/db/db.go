@@ -44,6 +44,11 @@ var allowedTables = map[string]bool{
 	"alert_history":                 true,
 	"user_notification_preferences": true,
 	"alert_digests":                 true,
+	"import_sessions":               true,
+	"import_rules":                  true,
+	"import_group_mappings":         true,
+	"import_peer_mappings":          true,
+	"import_service_mappings":       true,
 }
 
 // Database wraps *sql.DB to allow dependency injection.

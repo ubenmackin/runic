@@ -1,0 +1,17 @@
+.import-wizard-overlay {
+  animation: importWizardFadeIn 0.2s ease-out;
+}
+
+.import-wizard-modal {
+  animation: importWizardSlideUp 0.3s ease-out;
+}
+
+@keyframes importWizardFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes importWizardSlideUp {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}

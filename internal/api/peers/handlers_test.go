@@ -246,12 +246,12 @@ func TestCreatePeer(t *testing.T) {
 			wantCode: http.StatusBadRequest,
 			wantErr:  "invalid IP address",
 		},
-	{
-		name: "create peer - invalid os_type",
-		body: `{"hostname":"test-peer","ip_address":"10.0.0.1","agent_key":"key","os_type":"invalidos"}`,
-		wantCode: http.StatusBadRequest,
-		wantErr: "os_type must be one of",
-	},
+		{
+			name:     "create peer - invalid os_type",
+			body:     `{"hostname":"test-peer","ip_address":"10.0.0.1","agent_key":"key","os_type":"invalidos"}`,
+			wantCode: http.StatusBadRequest,
+			wantErr:  "os_type must be one of",
+		},
 		{
 			name:     "create peer - invalid arch",
 			body:     `{"hostname":"test-peer","ip_address":"10.0.0.1","agent_key":"key","arch":"x86"}`,

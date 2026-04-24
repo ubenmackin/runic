@@ -19,6 +19,7 @@ import (
 	"runic/internal/api/downloads"
 	"runic/internal/api/events"
 	"runic/internal/api/groups"
+	"runic/internal/api/imports"
 	"runic/internal/api/keys"
 	"runic/internal/api/logs"
 	"runic/internal/api/middleware"
@@ -56,6 +57,7 @@ type API struct {
 	Groups    *groups.Handler
 	Policies  *policies.Handler
 	Services  *services.Handler
+	Imports   *imports.Handler
 	Logs      *logs.Handler
 	Users     *users.Handler
 	Keys      *keys.Handler
@@ -103,6 +105,7 @@ func NewAPI(db *sql.DB, compiler *engine.Compiler, logsDBPath string, alertServi
 		Groups:       groups.NewHandler(db, compiler, changeWorker),
 		Policies:     policies.NewHandler(db, compiler, changeWorker),
 		Services:     services.NewHandler(db, compiler, changeWorker),
+		Imports:      imports.NewHandler(db, sseHub, changeWorker),
 		Logs:         logs.NewHandler(logsDB),
 		Users:        users.NewHandler(db),
 		Keys:         keys.NewHandler(db),
@@ -265,6 +268,9 @@ func (a *API) RegisterRoutes(r *mux.Router, downloadsDir string) {
 	policiesEditor := editor.PathPrefix("/policies").Subrouter()
 	a.Policies.RegisterRoutes(policiesEditor)
 
+	importsEditor := editor.PathPrefix("").Subrouter()
+	a.Imports.RegisterRoutes(importsEditor)
+
 	editor.HandleFunc("/pending-changes/{peerId:[0-9]+}/preview", a.Pending.PreviewPeerPendingBundle).Methods("POST")
 	editor.HandleFunc("/pending-changes/{peerId:[0-9]+}/apply", a.Pending.ApplyPeerPendingBundle).Methods("POST")
 	editor.HandleFunc("/pending-changes/{peerId:[0-9]+}/apply-entity", a.Pending.ApplyEntityPendingChanges).Methods("POST")
@@ -280,6 +286,7 @@ func (a *API) RegisterRoutes(r *mux.Router, downloadsDir string) {
 	apiRouter.HandleFunc("/agent/bundle/{host_id}", a.Agents.AgentAuthMiddleware(a.Agents.GetBundle)).Methods("GET")
 	apiRouter.HandleFunc("/agent/heartbeat", a.Agents.AgentAuthMiddleware(a.Agents.Heartbeat)).Methods("GET", "POST")
 	apiRouter.HandleFunc("/agent/logs", a.Agents.AgentAuthMiddleware(a.Agents.SubmitLogs)).Methods("POST")
+	apiRouter.HandleFunc("/agent/backup/{host_id}", a.Agents.AgentAuthMiddleware(a.Agents.SubmitBackup)).Methods("POST")
 	apiRouter.HandleFunc("/agent/bundle/{host_id}/applied", a.Agents.AgentAuthMiddleware(a.Agents.ConfirmBundleApplied)).Methods("POST")
 	apiRouter.HandleFunc("/agent/events/{host_id}", a.Agents.AgentAuthMiddleware(a.Agents.MakeHandleSSEventsHandler(a.SSEHub))).Methods("GET")
 	apiRouter.HandleFunc("/agent/test-key", a.Agents.AgentAuthMiddleware(a.Agents.AgentTestKey)).Methods("POST")
