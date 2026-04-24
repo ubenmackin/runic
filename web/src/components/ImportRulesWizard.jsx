@@ -405,7 +405,7 @@ export default function ImportRulesWizard({ peer, onClose, onSuccess }) {
       />
       <div
         ref={modalRef}
-        className="relative bg-white dark:bg-charcoal-light rounded-xl shadow-2xl w-full max-w-5xl max-h-[90vh] overflow-hidden flex flex-col import-wizard-modal"
+        className="relative bg-white dark:bg-charcoal-dark rounded-none shadow-none w-full max-w-5xl max-h-[90vh] overflow-hidden flex flex-col import-wizard-modal"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -415,7 +415,7 @@ export default function ImportRulesWizard({ peer, onClose, onSuccess }) {
           </h2>
           <button
             onClick={handleCancel}
-            className="p-1 rounded-lg hover:bg-gray-100 dark:hover:bg-charcoal-darkest"
+            className="p-1 rounded-none hover:bg-gray-100 dark:hover:bg-charcoal-darkest"
           >
             <X className="w-5 h-5 text-gray-500" />
           </button>
@@ -429,7 +429,7 @@ export default function ImportRulesWizard({ peer, onClose, onSuccess }) {
         {/* Content */}
         <div className="flex-1 overflow-y-auto px-6 py-4">
           {error && (
-            <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg flex items-center gap-2">
+            <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-none flex items-center gap-2">
               <AlertCircle className="w-5 h-5 text-red-500 shrink-0" />
               <span className="text-red-700 dark:text-red-300">{error}</span>
             </div>
@@ -490,13 +490,13 @@ export default function ImportRulesWizard({ peer, onClose, onSuccess }) {
                     <div className="flex gap-2">
                       <button
                         onClick={approveAll}
-                        className="px-3 py-1.5 text-sm bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded-lg hover:bg-green-200"
+                        className="px-3 py-1.5 text-sm bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded-none hover:bg-green-200"
                       >
                         Approve All
                       </button>
                       <button
                         onClick={rejectAll}
-                        className="px-3 py-1.5 text-sm bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 rounded-lg hover:bg-red-200"
+                        className="px-3 py-1.5 text-sm bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 rounded-none hover:bg-red-200"
                       >
                         Reject All
                       </button>
@@ -505,7 +505,7 @@ export default function ImportRulesWizard({ peer, onClose, onSuccess }) {
 
                   {/* Rules Table */}
                   {importableRules.length > 0 && (
-                    <div className="overflow-x-auto border border-gray-200 dark:border-gray-border rounded-lg">
+                    <div className="overflow-x-auto border border-gray-200 dark:border-gray-border rounded-none">
                       <table className="w-full text-sm">
                         <thead className="bg-gray-50 dark:bg-charcoal-darkest">
                           <tr>
@@ -538,13 +538,13 @@ export default function ImportRulesWizard({ peer, onClose, onSuccess }) {
                                   type="checkbox"
                                   checked={rule.status === "approved"}
                                   onChange={() => toggleRuleApproval(rule)}
-                                  className="w-4 h-4 rounded"
+                                  className="w-4 h-4 rounded-none"
                                 />
                               </td>
                               <td className="px-3 py-2">
                                 <span
-                                  className={`px-2 py-0.5 rounded text-xs font-medium ${
-                                    rule.chain === "DOCKER-USER"
+className={`px-2 py-0.5 rounded-none text-xs font-medium ${
+rule.chain === "DOCKER-USER"
                                       ? "bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400"
                                       : rule.chain === "INPUT"
                                         ? "bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400"
@@ -571,8 +571,8 @@ export default function ImportRulesWizard({ peer, onClose, onSuccess }) {
                               </td>
                               <td className="px-3 py-2">
                                 <span
-                                  className={`px-2 py-0.5 rounded text-xs font-medium ${
-                                    rule.action === "ACCEPT"
+className={`px-2 py-0.5 rounded-none text-xs font-medium ${
+rule.action === "ACCEPT"
                                       ? "bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400"
                                       : "bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400"
                                   }`}
@@ -585,7 +585,7 @@ export default function ImportRulesWizard({ peer, onClose, onSuccess }) {
                                   <input
                                     type="text"
                                     defaultValue={rule.policy_name}
-                                    className="w-full px-1 py-0.5 text-xs border border-blue-400 rounded bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
+                                    className="w-full px-1 py-0.5 text-xs border border-blue-400 rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
                                     autoFocus
                                     onBlur={(e) => {
                                       updatePolicyName(
@@ -626,8 +626,8 @@ export default function ImportRulesWizard({ peer, onClose, onSuccess }) {
                               </td>
                               <td className="px-3 py-2">
                                 <span
-                                  className={`px-2 py-0.5 rounded text-xs ${
-                                    rule.target_scope === "docker"
+className={`px-2 py-0.5 rounded-none text-xs ${
+rule.target_scope === "docker"
                                       ? "bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400"
                                       : "bg-gray-100 dark:bg-charcoal-darkest text-gray-600 dark:text-gray-300"
                                   }`}
@@ -650,7 +650,7 @@ export default function ImportRulesWizard({ peer, onClose, onSuccess }) {
 
                   {/* New Groups Section */}
                   {groups.filter((g) => !g.existing_group_id).length > 0 && (
-                    <div className="border border-gray-200 dark:border-gray-border rounded-lg p-4">
+                    <div className="border border-gray-200 dark:border-gray-border rounded-none p-4">
                       <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3 flex items-center gap-2">
                         <Users className="w-4 h-4" />
                         New Groups
@@ -661,7 +661,7 @@ export default function ImportRulesWizard({ peer, onClose, onSuccess }) {
                           .map((g) => (
                             <div
                               key={g.id}
-                              className="flex items-center gap-3 p-2 bg-gray-50 dark:bg-charcoal-darkest rounded"
+                              className="flex items-center gap-3 p-2 bg-gray-50 dark:bg-charcoal-darkest rounded-none"
                             >
                               <input
                                 type="checkbox"
@@ -673,7 +673,7 @@ export default function ImportRulesWizard({ peer, onClose, onSuccess }) {
                                     g.status,
                                   )
                                 }
-                                className="w-4 h-4 rounded"
+                                className="w-4 h-4 rounded-none"
                               />
                               <div className="flex-1 min-w-0">
                                 <span className="text-sm font-medium text-gray-900 dark:text-light-neutral">
@@ -684,7 +684,7 @@ export default function ImportRulesWizard({ peer, onClose, onSuccess }) {
                                     {g.member_ips.map((ip, i) => (
                                       <span
                                         key={i}
-                                        className="px-1.5 py-0.5 bg-gray-200 dark:bg-charcoal-darker text-xs rounded font-mono text-gray-700 dark:text-gray-300"
+                                        className="px-1.5 py-0.5 bg-gray-200 dark:bg-charcoal-darkest text-xs rounded-none font-mono text-gray-700 dark:text-gray-300"
                                       >
                                         {ip}
                                       </span>
@@ -700,7 +700,7 @@ export default function ImportRulesWizard({ peer, onClose, onSuccess }) {
 
                   {/* New Peers Section */}
                   {peers.filter((p) => !p.existing_peer_id).length > 0 && (
-                    <div className="border border-gray-200 dark:border-gray-border rounded-lg p-4">
+                    <div className="border border-gray-200 dark:border-gray-border rounded-none p-4">
                       <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3 flex items-center gap-2">
                         <Server className="w-4 h-4" />
                         New Peers
@@ -711,7 +711,7 @@ export default function ImportRulesWizard({ peer, onClose, onSuccess }) {
                           .map((p) => (
                             <div
                               key={p.id}
-                              className="flex items-center gap-3 p-2 bg-gray-50 dark:bg-charcoal-darkest rounded"
+                              className="flex items-center gap-3 p-2 bg-gray-50 dark:bg-charcoal-darkest rounded-none"
                             >
                               <input
                                 type="checkbox"
@@ -723,7 +723,7 @@ export default function ImportRulesWizard({ peer, onClose, onSuccess }) {
                                     p.status,
                                   )
                                 }
-                                className="w-4 h-4 rounded"
+                                className="w-4 h-4 rounded-none"
                               />
                               <div>
                                 <span className="text-sm font-medium text-gray-900 dark:text-light-neutral">
@@ -741,7 +741,7 @@ export default function ImportRulesWizard({ peer, onClose, onSuccess }) {
 
                   {/* New Services Section */}
                   {services.filter((s) => !s.existing_service_id).length > 0 && (
-                    <div className="border border-gray-200 dark:border-gray-border rounded-lg p-4">
+                    <div className="border border-gray-200 dark:border-gray-border rounded-none p-4">
                       <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3 flex items-center gap-2">
                         <Package className="w-4 h-4" />
                         New Services
@@ -752,7 +752,7 @@ export default function ImportRulesWizard({ peer, onClose, onSuccess }) {
                           .map((s) => (
                             <div
                               key={s.id}
-                              className="flex items-center gap-3 p-2 bg-gray-50 dark:bg-charcoal-darkest rounded"
+                              className="flex items-center gap-3 p-2 bg-gray-50 dark:bg-charcoal-darkest rounded-none"
                             >
                               <input
                                 type="checkbox"
@@ -764,7 +764,7 @@ export default function ImportRulesWizard({ peer, onClose, onSuccess }) {
                                     s.status,
                                   )
                                 }
-                                className="w-4 h-4 rounded"
+                                className="w-4 h-4 rounded-none"
                               />
                               <div>
                                 <span className="text-sm font-medium text-gray-900 dark:text-light-neutral">
@@ -782,7 +782,7 @@ export default function ImportRulesWizard({ peer, onClose, onSuccess }) {
 
                   {/* Skipped Rules Section (collapsed) */}
                   {skippedCount > 0 && (
-                    <div className="border border-gray-200 dark:border-gray-border rounded-lg">
+                    <div className="border border-gray-200 dark:border-gray-border rounded-none">
                       <button
                         className="w-full flex items-center justify-between p-4 text-left"
                         onClick={() => setSkippedExpanded(!skippedExpanded)}
@@ -801,7 +801,7 @@ export default function ImportRulesWizard({ peer, onClose, onSuccess }) {
                           {skippedRules.map((sr) => (
                             <div
                               key={sr.id}
-                              className="p-2 bg-orange-50 dark:bg-orange-900/10 rounded text-xs"
+                              className="p-2 bg-orange-50 dark:bg-orange-900/10 rounded-none text-xs"
                             >
                               <div className="font-mono text-gray-700 dark:text-gray-300 break-all">
                                 {sr.raw_rule}
@@ -827,7 +827,7 @@ export default function ImportRulesWizard({ peer, onClose, onSuccess }) {
                 Confirm Import
               </h3>
               <div className="max-w-md mx-auto space-y-3">
-                <div className="flex justify-between p-3 bg-gray-50 dark:bg-charcoal-darkest rounded-lg">
+                <div className="flex justify-between p-3 bg-gray-50 dark:bg-charcoal-darkest rounded-none">
                   <span className="text-gray-600 dark:text-gray-300">
                     Policies to create
                   </span>
@@ -835,7 +835,7 @@ export default function ImportRulesWizard({ peer, onClose, onSuccess }) {
                     {approvedRulesCount}
                   </span>
                 </div>
-                <div className="flex justify-between p-3 bg-gray-50 dark:bg-charcoal-darkest rounded-lg">
+                <div className="flex justify-between p-3 bg-gray-50 dark:bg-charcoal-darkest rounded-none">
                   <span className="text-gray-600 dark:text-gray-300">
                     New groups
                   </span>
@@ -843,7 +843,7 @@ export default function ImportRulesWizard({ peer, onClose, onSuccess }) {
                     {approvedGroupsCount}
                   </span>
                 </div>
-                <div className="flex justify-between p-3 bg-gray-50 dark:bg-charcoal-darkest rounded-lg">
+                <div className="flex justify-between p-3 bg-gray-50 dark:bg-charcoal-darkest rounded-none">
                   <span className="text-gray-600 dark:text-gray-300">
                     New manual peers
                   </span>
@@ -851,7 +851,7 @@ export default function ImportRulesWizard({ peer, onClose, onSuccess }) {
                     {approvedPeersCount}
                   </span>
                 </div>
-                <div className="flex justify-between p-3 bg-gray-50 dark:bg-charcoal-darkest rounded-lg">
+                <div className="flex justify-between p-3 bg-gray-50 dark:bg-charcoal-darkest rounded-none">
                   <span className="text-gray-600 dark:text-gray-300">
                     New services
                   </span>
@@ -875,15 +875,15 @@ export default function ImportRulesWizard({ peer, onClose, onSuccess }) {
             {step === "fetch" && (
               <button
                 onClick={handleCancel}
-                className="px-4 py-2 text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-lg"
+                className="px-4 py-2 text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none"
               >
                 Cancel
               </button>
             )}
             {step === "review" && (
               <button
-                onClick={() => setStep("fetch")}
-                className="flex items-center gap-2 px-4 py-2 text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-lg"
+onClick={() => setStep("fetch")}
+          className="flex items-center gap-2 px-4 py-2 text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none"
               >
                 <ChevronLeft className="w-4 h-4" />
                 Back
@@ -891,8 +891,8 @@ export default function ImportRulesWizard({ peer, onClose, onSuccess }) {
             )}
             {step === "apply" && (
               <button
-                onClick={() => setStep("review")}
-                className="flex items-center gap-2 px-4 py-2 text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-lg"
+onClick={() => setStep("review")}
+          className="flex items-center gap-2 px-4 py-2 text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none"
               >
                 <ChevronLeft className="w-4 h-4" />
                 Back
@@ -903,7 +903,7 @@ export default function ImportRulesWizard({ peer, onClose, onSuccess }) {
             {step === "fetch" && (
               <button
                 onClick={handleCancel}
-                className="px-4 py-2 text-sm bg-gray-200 dark:bg-charcoal-darkest text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-300"
+                className="px-4 py-2 text-sm bg-gray-200 dark:bg-charcoal-darkest text-gray-700 dark:text-gray-300 rounded-none hover:bg-gray-300"
               >
                 Cancel
               </button>
@@ -911,7 +911,7 @@ export default function ImportRulesWizard({ peer, onClose, onSuccess }) {
             {step === "review" && (
               <button
                 onClick={() => setStep("apply")}
-                className="flex items-center gap-2 px-6 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                className="flex items-center gap-2 px-6 py-2 text-sm bg-blue-600 text-white rounded-none hover:bg-blue-700"
               >
                 Next
                 <ChevronRight className="w-4 h-4" />
@@ -921,7 +921,7 @@ export default function ImportRulesWizard({ peer, onClose, onSuccess }) {
               <button
                 onClick={handleApply}
                 disabled={applying || approvedRulesCount === 0}
-                className="flex items-center gap-2 px-6 py-2 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="flex items-center gap-2 px-6 py-2 text-sm bg-green-600 text-white rounded-none hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {applying ? (
                   <Loader2 className="w-4 h-4 animate-spin" />
