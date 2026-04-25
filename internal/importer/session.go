@@ -174,8 +174,8 @@ func ParseSession(ctx context.Context, database *sql.DB, sessionID int64) error 
 			policyName := generatePolicyName(rule)
 
 			_, err := tx.ExecContext(ctx,
-				"INSERT INTO import_rules (session_id, chain, rule_order, raw_rule, status, skip_reason, action, priority, direction, target_scope, policy_name, enabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)",
-				sessionID, rule.Chain, rule.Order, rule.Raw, status, skipReason, action, priority, direction, targetScope, policyName,
+				"INSERT INTO import_rules (session_id, chain, rule_order, raw_rule, status, skip_reason, action, priority, direction, target_scope, policy_name, enabled, description) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)",
+				sessionID, rule.Chain, rule.Order, rule.Raw, status, skipReason, action, priority, direction, targetScope, policyName, rule.Comment,
 			)
 			if err != nil {
 				return fmt.Errorf("insert rule: %w", err)

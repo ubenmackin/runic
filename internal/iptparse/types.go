@@ -25,6 +25,8 @@ type ParsedRule struct {
 	IsRunicStandard bool        // detected as Runic-managed standard rule
 	IsClean         bool        // can be fully mapped to Runic policy
 	SkipReason      string      // why it can't be mapped (if !IsClean)
+	Comment         string      // -m comment --comment value
+	PktType         string      // -m pkttype --pkt-type value
 }
 
 // IpsetMatch represents an ipset match in a rule.

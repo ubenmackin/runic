@@ -591,18 +591,13 @@ func TestUnsupportedModule(t *testing.T) {
 		rule   string
 		module string
 	}{
-		{
-			name:   "hashlimit module",
-			rule:   "-A INPUT -m hashlimit --hashlimit-upto 10/min -j ACCEPT",
-			module: "hashlimit",
-		},
-		{
-			name:   "comment module",
-			rule:   "-A INPUT -m comment --comment \"my rule\" -j ACCEPT",
-			module: "comment",
-		},
-		{
-			name:   "limit module",
+	{
+		name: "hashlimit module",
+		rule: "-A INPUT -m hashlimit --hashlimit-upto 10/min -j ACCEPT",
+		module: "hashlimit",
+	},
+	{
+		name: "limit module",
 			rule:   "-A INPUT -m limit --limit 10/min -j ACCEPT",
 			module: "limit",
 		},

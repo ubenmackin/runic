@@ -30,9 +30,6 @@ import {
   getImportServices,
   getImportSkipped,
   updateImportRule,
-  updateImportGroup,
-  updateImportPeer,
-  updateImportService,
   applyImport,
   cancelImport,
   QUERY_KEYS,
@@ -333,30 +330,7 @@ export default function ImportRulesWizard({ peer, onClose, onSuccess }) {
     [sessionId, showToast],
   );
 
-  // Toggle mapping approval (groups/peers/services)
-  const toggleMappingApproval = useCallback(
-    async (type, id, currentStatus) => {
-      const newStatus = currentStatus === "approved" ? "rejected" : "approved";
-      const updateFn = {
-        group: updateImportGroup,
-        peer: updateImportPeer,
-        service: updateImportService,
-      }[type];
-      const setter = { group: setGroups, peer: setPeers, service: setServices }[type];
-
-      try {
-        await updateFn(sessionId, id, { status: newStatus });
-        setter((prev) =>
-          prev.map((m) => (m.id === id ? { ...m, status: newStatus } : m)),
-        );
-      } catch {
-        showToast(`Failed to update ${type}`, "error");
-      }
-    },
-    [sessionId, showToast],
-  );
-
-  // Apply import
+// Apply import
   const handleApply = useCallback(async () => {
     setApplying(true);
     setError(null);
@@ -384,15 +358,14 @@ export default function ImportRulesWizard({ peer, onClose, onSuccess }) {
   const approvedRulesCount = rules.filter(
     (r) => r.status === "approved",
   ).length;
-  const approvedGroupsCount = groups.filter(
-    (g) => g.status === "approved" && !g.existing_group_id,
-  ).length;
-  const approvedPeersCount = peers.filter(
-    (p) => p.status === "approved" && !p.existing_peer_id,
-  ).length;
-  const approvedServicesCount = services.filter(
-    (s) => s.status === "approved" && !s.existing_service_id,
-  ).length;
+  // Get IDs of entities referenced by approved rules
+  const approvedRuleSourceStagingIds = rules.filter(r => r.status === "approved").map(r => r.source_staging_id).filter(Boolean);
+  const approvedRuleTargetStagingIds = rules.filter(r => r.status === "approved").map(r => r.target_staging_id).filter(Boolean);
+  const approvedRuleServiceStagingIds = rules.filter(r => r.status === "approved").map(r => r.service_staging_id).filter(Boolean);
+
+  const approvedGroupsCount = groups.filter(g => !g.existing_group_id && (approvedRuleTargetStagingIds.includes(g.id) || approvedRuleSourceStagingIds.includes(g.id))).length;
+  const approvedPeersCount = peers.filter(p => !p.existing_peer_id && (approvedRuleTargetStagingIds.includes(p.id) || approvedRuleSourceStagingIds.includes(p.id))).length;
+  const approvedServicesCount = services.filter(s => !s.existing_service_id && (approvedRuleServiceStagingIds.includes(s.id))).length;
 
   const importableRules = rules.filter((r) => r.status !== "skipped");
   const skippedCount = skippedRules.length;
@@ -480,13 +453,19 @@ export default function ImportRulesWizard({ peer, onClose, onSuccess }) {
                         </strong>{" "}
                         new groups
                       </span>
-                      <span className="text-teal-600 dark:text-teal-400">
-                        <strong>
-                          {peers.filter((p) => !p.existing_peer_id).length}
-                        </strong>{" "}
-                        new peers
-                      </span>
-                    </div>
+                            <span className="text-teal-600 dark:text-teal-400">
+                              <strong>
+                                {peers.filter((p) => !p.existing_peer_id).length}
+                              </strong>{" "}
+                              new peers
+                            </span>
+                            <span className="text-indigo-600 dark:text-indigo-400">
+                              <strong>
+                                {services.filter((s) => !s.existing_service_id).length}
+                              </strong>{" "}
+                              new services
+                            </span>
+                          </div>
                     <div className="flex gap-2">
                       <button
                         onClick={approveAll}
@@ -507,22 +486,40 @@ export default function ImportRulesWizard({ peer, onClose, onSuccess }) {
                   {importableRules.length > 0 && (
                     <div className="overflow-x-auto border border-gray-200 dark:border-gray-border rounded-none">
                       <table className="w-full text-sm">
-                        <thead className="bg-gray-50 dark:bg-charcoal-darkest">
-                          <tr>
-                            <th className="px-3 py-2 text-left w-10"></th>
-                            <th className="px-3 py-2 text-left">Chain</th>
-                            <th className="px-3 py-2 text-left">Rule</th>
-                            <th className="px-3 py-2 text-left">Source</th>
-                            <th className="px-3 py-2 text-left">Target</th>
-                            <th className="px-3 py-2 text-left">Service</th>
-                            <th className="px-3 py-2 text-left">Action</th>
-                            <th className="px-3 py-2 text-left">
-                              Policy Name
-                            </th>
-                            <th className="px-3 py-2 text-left">Dir</th>
-                            <th className="px-3 py-2 text-left">Scope</th>
-                          </tr>
-                        </thead>
+<thead className="bg-gray-50 dark:bg-charcoal-darkest border-b border-gray-200 dark:border-gray-border">
+          <tr>
+            <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+              Approve
+            </th>
+            <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+              Chain
+            </th>
+            <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+              Rule
+            </th>
+            <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+              Source
+            </th>
+            <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+              Target
+            </th>
+            <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+              Service
+            </th>
+            <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+              Action
+            </th>
+            <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+              Policy Name
+            </th>
+            <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+              Dir
+            </th>
+            <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+              Scope
+            </th>
+          </tr>
+        </thead>
                         <tbody className="divide-y divide-gray-100 dark:divide-gray-border">
                           {importableRules.map((rule) => (
                             <tr
@@ -533,7 +530,7 @@ export default function ImportRulesWizard({ peer, onClose, onSuccess }) {
                                   : ""
                               }`}
                             >
-                              <td className="px-3 py-2">
+                              <td className="px-4 py-1">
                                 <input
                                   type="checkbox"
                                   checked={rule.status === "approved"}
@@ -541,7 +538,7 @@ export default function ImportRulesWizard({ peer, onClose, onSuccess }) {
                                   className="w-4 h-4 rounded-none"
                                 />
                               </td>
-                              <td className="px-3 py-2">
+                              <td className="px-4 py-1">
                                 <span
 className={`px-2 py-0.5 rounded-none text-xs font-medium ${
 rule.chain === "DOCKER-USER"
@@ -555,21 +552,21 @@ rule.chain === "DOCKER-USER"
                                 </span>
                               </td>
                               <td
-                                className="px-3 py-2 font-mono text-xs text-gray-500 dark:text-gray-400 max-w-[200px] truncate"
+                                className="px-4 py-1 font-mono text-xs text-gray-500 dark:text-gray-400 max-w-[200px] truncate"
                                 title={rule.raw_rule}
                               >
                                 {rule.raw_rule}
                               </td>
-                              <td className="px-3 py-2 text-gray-700 dark:text-gray-300">
+                              <td className="px-4 py-1 text-gray-700 dark:text-gray-300">
                                 {rule.source_name || "—"}
                               </td>
-                              <td className="px-3 py-2 text-gray-700 dark:text-gray-300">
+                              <td className="px-4 py-1 text-gray-700 dark:text-gray-300">
                                 {rule.target_name || "—"}
                               </td>
-                              <td className="px-3 py-2 text-gray-700 dark:text-gray-300">
+                              <td className="px-4 py-1 text-gray-700 dark:text-gray-300">
                                 {rule.service_name || "—"}
                               </td>
-                              <td className="px-3 py-2">
+                              <td className="px-4 py-1">
                                 <span
 className={`px-2 py-0.5 rounded-none text-xs font-medium ${
 rule.action === "ACCEPT"
@@ -580,7 +577,7 @@ rule.action === "ACCEPT"
                                   {rule.action}
                                 </span>
                               </td>
-                              <td className="px-3 py-2">
+                              <td className="px-4 py-1">
                                 {editingPolicyName === rule.id ? (
                                   <input
                                     type="text"
@@ -615,7 +612,7 @@ rule.action === "ACCEPT"
                                   </span>
                                 )}
                               </td>
-                              <td className="px-3 py-2">
+                              <td className="px-4 py-1">
                                 {rule.direction === "forward" ? (
                                   <ArrowRight className="w-4 h-4 text-blue-500" />
                                 ) : rule.direction === "backward" ? (
@@ -624,7 +621,7 @@ rule.action === "ACCEPT"
                                   <MoveHorizontal className="w-4 h-4 text-gray-400" />
                                 )}
                               </td>
-                              <td className="px-3 py-2">
+                              <td className="px-4 py-1">
                                 <span
 className={`px-2 py-0.5 rounded-none text-xs ${
 rule.target_scope === "docker"
@@ -659,23 +656,11 @@ rule.target_scope === "docker"
                         {groups
                           .filter((g) => !g.existing_group_id)
                           .map((g) => (
-                            <div
-                              key={g.id}
-                              className="flex items-center gap-3 p-2 bg-gray-50 dark:bg-charcoal-darkest rounded-none"
-                            >
-                              <input
-                                type="checkbox"
-                                checked={g.status === "approved"}
-                                onChange={() =>
-                                  toggleMappingApproval(
-                                    "group",
-                                    g.id,
-                                    g.status,
-                                  )
-                                }
-                                className="w-4 h-4 rounded-none"
-                              />
-                              <div className="flex-1 min-w-0">
+          <div
+            key={g.id}
+            className="flex items-center gap-3 p-2 bg-gray-50 dark:bg-charcoal-darkest rounded-none"
+          >
+            <div className="flex-1 min-w-0">
                                 <span className="text-sm font-medium text-gray-900 dark:text-light-neutral">
                                   {g.group_name}
                                 </span>
@@ -709,23 +694,11 @@ rule.target_scope === "docker"
                         {peers
                           .filter((p) => !p.existing_peer_id)
                           .map((p) => (
-                            <div
-                              key={p.id}
-                              className="flex items-center gap-3 p-2 bg-gray-50 dark:bg-charcoal-darkest rounded-none"
-                            >
-                              <input
-                                type="checkbox"
-                                checked={p.status === "approved"}
-                                onChange={() =>
-                                  toggleMappingApproval(
-                                    "peer",
-                                    p.id,
-                                    p.status,
-                                  )
-                                }
-                                className="w-4 h-4 rounded-none"
-                              />
-                              <div>
+          <div
+            key={p.id}
+            className="flex items-center gap-3 p-2 bg-gray-50 dark:bg-charcoal-darkest rounded-none"
+          >
+            <div>
                                 <span className="text-sm font-medium text-gray-900 dark:text-light-neutral">
                                   {p.hostname || p.ip_address}
                                 </span>
@@ -750,23 +723,11 @@ rule.target_scope === "docker"
                         {services
                           .filter((s) => !s.existing_service_id)
                           .map((s) => (
-                            <div
-                              key={s.id}
-                              className="flex items-center gap-3 p-2 bg-gray-50 dark:bg-charcoal-darkest rounded-none"
-                            >
-                              <input
-                                type="checkbox"
-                                checked={s.status === "approved"}
-                                onChange={() =>
-                                  toggleMappingApproval(
-                                    "service",
-                                    s.id,
-                                    s.status,
-                                  )
-                                }
-                                className="w-4 h-4 rounded-none"
-                              />
-                              <div>
+          <div
+            key={s.id}
+            className="flex items-center gap-3 p-2 bg-gray-50 dark:bg-charcoal-darkest rounded-none"
+          >
+            <div>
                                 <span className="text-sm font-medium text-gray-900 dark:text-light-neutral">
                                   {s.name}
                                 </span>

@@ -154,7 +154,7 @@ func (h *Handler) GetRules(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows, err := h.DB.QueryContext(r.Context(),
-		"SELECT id, session_id, chain, rule_order, raw_rule, status, skip_reason, source_type, source_id, source_staging_id, target_type, target_id, target_staging_id, service_id, service_staging_id, action, priority, direction, target_scope, policy_name, enabled FROM import_rules WHERE session_id = ? ORDER BY rule_order",
+		"SELECT id, session_id, chain, rule_order, raw_rule, status, skip_reason, source_type, source_id, source_staging_id, target_type, target_id, target_staging_id, service_id, service_staging_id, action, priority, direction, target_scope, policy_name, enabled, description FROM import_rules WHERE session_id = ? ORDER BY CASE chain WHEN 'INPUT' THEN 1 WHEN 'OUTPUT' THEN 2 WHEN 'DOCKER-USER' THEN 3 END, rule_order",
 		sessionID)
 	if err != nil {
 		common.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": "database error"})
@@ -187,8 +187,9 @@ func (h *Handler) GetRules(w http.ResponseWriter, r *http.Request) {
 			TargetScope      sql.NullString
 			PolicyName       sql.NullString
 			Enabled          int
+			Description      sql.NullString
 		}
-		if err := rows.Scan(&r.ID, &r.SessionID, &r.Chain, &r.RuleOrder, &r.RawRule, &r.Status, &r.SkipReason, &r.SourceType, &r.SourceID, &r.SourceStagingID, &r.TargetType, &r.TargetID, &r.TargetStagingID, &r.ServiceID, &r.ServiceStagingID, &r.Action, &r.Priority, &r.Direction, &r.TargetScope, &r.PolicyName, &r.Enabled); err != nil {
+		if err := rows.Scan(&r.ID, &r.SessionID, &r.Chain, &r.RuleOrder, &r.RawRule, &r.Status, &r.SkipReason, &r.SourceType, &r.SourceID, &r.SourceStagingID, &r.TargetType, &r.TargetID, &r.TargetStagingID, &r.ServiceID, &r.ServiceStagingID, &r.Action, &r.Priority, &r.Direction, &r.TargetScope, &r.PolicyName, &r.Enabled, &r.Description); err != nil {
 			continue
 		}
 
@@ -220,6 +221,33 @@ func (h *Handler) GetRules(w http.ResponseWriter, r *http.Request) {
 		}
 		if r.Priority.Valid {
 			rule.Priority = int(r.Priority.Int64)
+		}
+		if r.Description.Valid {
+			rule.Description = r.Description.String
+		}
+		if r.SourceID.Valid {
+			id := r.SourceID.Int64
+			rule.SourceID = &id
+		}
+		if r.SourceStagingID.Valid {
+			id := r.SourceStagingID.Int64
+			rule.SourceStagingID = &id
+		}
+		if r.TargetID.Valid {
+			id := r.TargetID.Int64
+			rule.TargetID = &id
+		}
+		if r.TargetStagingID.Valid {
+			id := r.TargetStagingID.Int64
+			rule.TargetStagingID = &id
+		}
+		if r.ServiceID.Valid {
+			id := r.ServiceID.Int64
+			rule.ServiceID = &id
+		}
+		if r.ServiceStagingID.Valid {
+			id := r.ServiceStagingID.Int64
+			rule.ServiceStagingID = &id
 		}
 
 		// Resolve display names
@@ -423,7 +451,7 @@ func (h *Handler) GetSkippedRules(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows, err := h.DB.QueryContext(r.Context(),
-		"SELECT id, chain, rule_order, raw_rule, skip_reason FROM import_rules WHERE session_id = ? AND status = 'skipped' ORDER BY rule_order",
+		"SELECT id, chain, rule_order, raw_rule, skip_reason FROM import_rules WHERE session_id = ? AND status = 'skipped' ORDER BY CASE chain WHEN 'INPUT' THEN 1 WHEN 'OUTPUT' THEN 2 WHEN 'DOCKER-USER' THEN 3 END, rule_order",
 		sessionID)
 	if err != nil {
 		common.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": "database error"})

@@ -6,12 +6,23 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"reflect"
+	"sort"
 	"strings"
 
 	"runic/internal/common/log"
 	"runic/internal/db"
 	"runic/internal/iptparse"
 )
+
+// normalizeIP strips single-host CIDR notation (/32) from an IP address.
+// Other CIDR suffixes (e.g., /24, /16) are preserved as they represent subnets.
+func normalizeIP(ip string) string {
+	if strings.HasSuffix(ip, "/32") {
+		return strings.TrimSuffix(ip, "/32")
+	}
+	return ip
+}
 
 // resolveRules walks all import_rules for a session and attempts to map them to existing Runic entities.
 // It also processes ipset data to create group/peer mappings.
@@ -62,6 +73,16 @@ func resolveRules(ctx context.Context, database db.Querier, sessionID int64, raw
 		}
 		pr := &parsedRules[0].Rules[0]
 
+		// Check for multicast rule
+		if pr.PktType == "multicast" {
+			if err := resolveMulticastRule(ctx, database, sessionID, r.ID); err != nil {
+				log.Warn("Failed to resolve multicast rule", "rule_id", r.ID, "error", err)
+			}
+			// Update status to resolved for multicast rules
+			_, _ = database.ExecContext(ctx, "UPDATE import_rules SET status = 'resolved' WHERE id = ?", r.ID)
+			continue
+		}
+
 		// Resolve source
 		sourceType, sourceID, sourceStagingID := resolveEndpoint(ctx, database, sessionID, pr, ipsetMembers, true)
 
@@ -104,6 +125,9 @@ func resolveEndpoint(ctx context.Context, database db.Querier, sessionID int64, 
 		ip = rule.SourceIP
 	}
 
+	// Normalize IP (strip /32 CIDR)
+	ip = normalizeIP(ip)
+
 	// 0.0.0.0/0 or empty = any IP → special target
 	if ip == "" || ip == "0.0.0.0/0" {
 		return "special", 6, 0 // __any_ip__ has id=6 in special_targets
@@ -136,21 +160,24 @@ func resolveIpsetEndpoint(ctx context.Context, database db.Querier, sessionID in
 		groupName = strings.TrimPrefix(ipsetName, "runic_group_")
 	}
 
-	// Check if group exists in real DB
-	var groupID int64
-	err := database.QueryRowContext(ctx, "SELECT id FROM groups WHERE name = ?", groupName).Scan(&groupID)
+	// Check if staging group already exists for this ipset in this session
+	var existingStagingID int64
+	err := database.QueryRowContext(ctx,
+		"SELECT id FROM import_group_mappings WHERE session_id = ? AND ipset_name = ?",
+		sessionID, ipsetName,
+	).Scan(&existingStagingID)
 	if err == nil {
-		return "group", groupID, 0
+		return "group", 0, existingStagingID
 	}
 
-	// Create staging group mapping
+	// Resolve member peer IDs first (needed for both phases)
 	members := ipsetMembers[ipsetName]
 	memberIPsJSON, _ := json.Marshal(members)
 
-	// Resolve member peer IDs
 	var existingPeerIDs []int64
 	var stagingPeerIDs []int64
 	for _, memberIP := range members {
+		memberIP = normalizeIP(memberIP) // Normalize before lookup
 		var pid int64
 		err := database.QueryRowContext(ctx, "SELECT id FROM peers WHERE ip_address = ?", memberIP).Scan(&pid)
 		if err == nil {
@@ -167,6 +194,78 @@ func resolveIpsetEndpoint(ctx context.Context, database db.Querier, sessionID in
 	existingPeerIDsJSON, _ := json.Marshal(existingPeerIDs)
 	stagingPeerIDsJSON, _ := json.Marshal(stagingPeerIDs)
 
+	// Phase 1: Check if group with same name exists and has matching members
+	var groupID int64
+	err = database.QueryRowContext(ctx, "SELECT id FROM groups WHERE name = ?", groupName).Scan(&groupID)
+	if err == nil {
+		// Verify member set matches
+		var dbMemberPeerIDs []int64
+		memberRows, mErr := database.QueryContext(ctx, "SELECT peer_id FROM group_members WHERE group_id = ?", groupID)
+		if mErr == nil {
+			for memberRows.Next() {
+				var pid int64
+				if memberRows.Scan(&pid) == nil {
+					dbMemberPeerIDs = append(dbMemberPeerIDs, pid)
+				}
+			}
+			_ = memberRows.Close()
+		}
+
+		// Sort both slices for comparison
+		sort.Slice(existingPeerIDs, func(i, j int) bool { return existingPeerIDs[i] < existingPeerIDs[j] })
+		sort.Slice(dbMemberPeerIDs, func(i, j int) bool { return dbMemberPeerIDs[i] < dbMemberPeerIDs[j] })
+
+		if reflect.DeepEqual(existingPeerIDs, dbMemberPeerIDs) {
+			// Members match — create staging record pointing to existing group
+			result, _ := database.ExecContext(ctx,
+				"INSERT INTO import_group_mappings (session_id, group_name, ipset_name, status, existing_group_id, member_ips, member_peer_ids, member_staging_peer_ids) VALUES (?, ?, ?, 'mapped', ?, ?, ?, ?)",
+				sessionID, groupName, ipsetName, groupID, string(memberIPsJSON), string(existingPeerIDsJSON), string(stagingPeerIDsJSON),
+			)
+			var stagingID int64
+			if result != nil {
+				stagingID, _ = result.LastInsertId()
+			}
+			return "group", groupID, stagingID
+		}
+		// Members don't match — fall through to Phase 2
+	}
+
+	// Phase 2: Search for group with matching member set
+	if len(existingPeerIDs) > 0 {
+		placeholders := strings.Repeat("?,", len(existingPeerIDs))
+		placeholders = placeholders[:len(placeholders)-1] // trim trailing comma
+		args := make([]interface{}, len(existingPeerIDs)+1)
+		for i, id := range existingPeerIDs {
+			args[i] = id
+		}
+		args[len(existingPeerIDs)] = int64(len(existingPeerIDs)) // HAVING count
+
+		query := fmt.Sprintf(
+			"SELECT gm.group_id FROM group_members gm WHERE gm.peer_id IN (%s) GROUP BY gm.group_id HAVING COUNT(DISTINCT gm.peer_id) = ?",
+			placeholders,
+		)
+
+		var matchingGroupID int64
+		err := database.QueryRowContext(ctx, query, args...).Scan(&matchingGroupID)
+		if err == nil {
+			// Verify this group has NO extra members beyond our set
+			var totalMembers int
+			_ = database.QueryRowContext(ctx, "SELECT COUNT(*) FROM group_members WHERE group_id = ?", matchingGroupID).Scan(&totalMembers)
+			if totalMembers == len(existingPeerIDs) {
+				// Exact match found — create staging record with existing_group_id set
+				result, err := database.ExecContext(ctx,
+					"INSERT INTO import_group_mappings (session_id, group_name, ipset_name, status, existing_group_id, member_ips, member_peer_ids, member_staging_peer_ids) VALUES (?, ?, ?, 'mapped', ?, ?, ?, ?)",
+					sessionID, groupName, ipsetName, matchingGroupID, string(memberIPsJSON), string(existingPeerIDsJSON), string(stagingPeerIDsJSON),
+				)
+				if err == nil {
+					stagingID, _ := result.LastInsertId()
+					return "group", matchingGroupID, stagingID
+				}
+			}
+		}
+	}
+
+	// No match found — create new staging group
 	result, err := database.ExecContext(ctx,
 		"INSERT INTO import_group_mappings (session_id, group_name, ipset_name, status, member_ips, member_peer_ids, member_staging_peer_ids) VALUES (?, ?, ?, 'mapped', ?, ?, ?)",
 		sessionID, groupName, ipsetName, string(memberIPsJSON), string(existingPeerIDsJSON), string(stagingPeerIDsJSON),
@@ -211,6 +310,35 @@ func resolveService(ctx context.Context, database db.Querier, sessionID int64, r
 		return serviceID, 0
 	}
 
+	// For multiport values (comma-separated), try sorted port matching
+	if strings.Contains(port, ",") {
+		// Sort the port numbers for consistent matching
+		portParts := strings.Split(port, ",")
+		sort.Strings(portParts)
+		sortedPort := strings.Join(portParts, ",")
+
+		// Try exact match on sorted form
+		err = database.QueryRowContext(ctx,
+			"SELECT id FROM services WHERE protocol = ? AND ports = ?",
+			protocol, sortedPort,
+		).Scan(&serviceID)
+		if err == nil {
+			return serviceID, 0
+		}
+
+		// Try matching against each individual port in the multiport list
+		for _, singlePort := range portParts {
+			singlePort = strings.TrimSpace(singlePort)
+			err = database.QueryRowContext(ctx,
+				"SELECT id FROM services WHERE protocol = ? AND ports = ?",
+				protocol, singlePort,
+			).Scan(&serviceID)
+			if err == nil {
+				return serviceID, 0
+			}
+		}
+	}
+
 	// Create staging service mapping
 	serviceName := fmt.Sprintf("imported-%s-%s", protocol, port)
 	result, err := database.ExecContext(ctx,
@@ -228,6 +356,7 @@ func resolveService(ctx context.Context, database db.Querier, sessionID int64, r
 
 // createStagingPeer creates a staging peer mapping for an IP that doesn't match an existing peer.
 func createStagingPeer(ctx context.Context, database db.Querier, sessionID int64, ip, hostname string) (int64, error) {
+	ip = normalizeIP(ip) // Normalize before dedup/insert
 	// Check if staging peer already exists for this IP in this session
 	var existingID int64
 	err := database.QueryRowContext(ctx,
@@ -298,4 +427,24 @@ func parseIPPart(s string) string {
 // Zero maps to NULL (Valid=false), non-zero maps to the integer value (Valid=true).
 func sqlNullInt64(v int64) sql.NullInt64 {
 	return sql.NullInt64{Int64: v, Valid: v != 0}
+}
+
+// resolveMulticastRule maps a pkttype multicast rule to Runic policy entities.
+// Multicast INPUT rules map to: source=special(__all_peers__, ID=7), target=special(__all_hosts__, ID=3), service=Multicast system service.
+func resolveMulticastRule(ctx context.Context, database db.Querier, sessionID int64, ruleID int64) error {
+	// Look up the Multicast system service
+	var multicastServiceID int64
+	err := database.QueryRowContext(ctx,
+		"SELECT id FROM services WHERE name = 'Multicast' AND is_system = 1",
+	).Scan(&multicastServiceID)
+	if err != nil {
+		return fmt.Errorf("multicast system service not found: %w", err)
+	}
+
+	// Update the rule with multicast mapping
+	_, err = database.ExecContext(ctx,
+		"UPDATE import_rules SET source_type = 'special', source_id = 7, target_type = 'special', target_id = 3, service_id = ? WHERE id = ?",
+		multicastServiceID, ruleID,
+	)
+	return err
 }

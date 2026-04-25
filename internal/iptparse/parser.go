@@ -12,6 +12,9 @@ var supportedModules = map[string]bool{
 	"tcp":       true,
 	"udp":       true,
 	"icmp":      true,
+	"comment":   true,
+	"multiport": true,
+	"pkttype":   true,
 }
 
 // Parse parses iptables-save output into structured chain data.
@@ -223,6 +226,51 @@ func parseRule(line, chain string, order int) ParsedRule {
 								rule.SourcePort = tokens[i]
 							}
 						default:
+							i++
+						}
+					}
+
+				case "comment":
+					// Look for --comment
+					for i+1 < len(tokens) && tokens[i+1] != "-m" && tokens[i+1] != "-j" && tokens[i+1] != "-p" && tokens[i+1] != "-s" && tokens[i+1] != "-d" && tokens[i+1] != "-i" && tokens[i+1] != "-o" {
+						if tokens[i+1] == "--comment" {
+							i += 2 // skip --comment
+							if i < len(tokens) {
+								rule.Comment = strings.Trim(tokens[i], "\"")
+							}
+						} else {
+							i++
+						}
+					}
+
+				case "multiport":
+					// Look for --dports or --sports
+					for i+1 < len(tokens) && tokens[i+1] != "-m" && tokens[i+1] != "-j" && tokens[i+1] != "-p" && tokens[i+1] != "-s" && tokens[i+1] != "-d" && tokens[i+1] != "-i" && tokens[i+1] != "-o" {
+						switch tokens[i+1] {
+						case "--dports":
+							i += 2 // skip --dports
+							if i < len(tokens) {
+								rule.DestPort = tokens[i]
+							}
+						case "--sports":
+							i += 2 // skip --sports
+							if i < len(tokens) {
+								rule.SourcePort = tokens[i]
+							}
+						default:
+							i++
+						}
+					}
+
+				case "pkttype":
+					// Look for --pkt-type
+					for i+1 < len(tokens) && tokens[i+1] != "-m" && tokens[i+1] != "-j" && tokens[i+1] != "-p" && tokens[i+1] != "-s" && tokens[i+1] != "-d" && tokens[i+1] != "-i" && tokens[i+1] != "-o" {
+						if tokens[i+1] == "--pkt-type" {
+							i += 2 // skip --pkt-type
+							if i < len(tokens) {
+								rule.PktType = tokens[i]
+							}
+						} else {
 							i++
 						}
 					}

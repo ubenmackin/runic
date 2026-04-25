@@ -336,8 +336,9 @@ CREATE TABLE IF NOT EXISTS import_rules (
     priority INTEGER,
     direction TEXT DEFAULT 'both',
     target_scope TEXT DEFAULT 'both',
-    policy_name TEXT,
-    enabled INTEGER DEFAULT 1
+	policy_name TEXT,
+	enabled INTEGER DEFAULT 1,
+	description TEXT DEFAULT ''
 );
 
 -- Staged group entries (groups that don't exist yet in real DB)

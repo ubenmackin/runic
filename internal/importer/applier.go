@@ -37,11 +37,100 @@ func ApplySession(ctx context.Context, database *sql.DB, sessionID int64, change
 		}
 	}()
 
-	// 1. Create manual peers from import_peer_mappings (status='approved', no existing_peer_id)
-	peerRows, err := tx.QueryContext(ctx,
-		"SELECT id, ip_address, hostname FROM import_peer_mappings WHERE session_id = ? AND status = 'approved' AND existing_peer_id IS NULL",
+	// 0. Collect all staging entity IDs referenced by approved rules
+	stagingPeerIDSet := make(map[int64]bool)
+	stagingGroupIDSet := make(map[int64]bool)
+	stagingServiceIDSet := make(map[int64]bool)
+
+	refRows, err := tx.QueryContext(ctx,
+		"SELECT source_staging_id, target_staging_id, service_staging_id, source_type, target_type FROM import_rules WHERE session_id = ? AND status = 'approved'",
 		sessionID,
 	)
+	if err != nil {
+		return nil, fmt.Errorf("query approved rule references: %w", err)
+	}
+	for refRows.Next() {
+		var sourceStagingID, targetStagingID, serviceStagingID sql.NullInt64
+		var sourceType, targetType sql.NullString
+		if err := refRows.Scan(&sourceStagingID, &targetStagingID, &serviceStagingID, &sourceType, &targetType); err != nil {
+			_ = refRows.Close()
+			return nil, fmt.Errorf("scan approved rule reference: %w", err)
+		}
+		if sourceStagingID.Valid && sourceStagingID.Int64 != 0 {
+			if sourceType.Valid && sourceType.String == "peer" {
+				stagingPeerIDSet[sourceStagingID.Int64] = true
+			} else if sourceType.Valid && sourceType.String == "group" {
+				stagingGroupIDSet[sourceStagingID.Int64] = true
+			}
+		}
+		if targetStagingID.Valid && targetStagingID.Int64 != 0 {
+			if targetType.Valid && targetType.String == "peer" {
+				stagingPeerIDSet[targetStagingID.Int64] = true
+			} else if targetType.Valid && targetType.String == "group" {
+				stagingGroupIDSet[targetStagingID.Int64] = true
+			}
+		}
+		if serviceStagingID.Valid && serviceStagingID.Int64 != 0 {
+			stagingServiceIDSet[serviceStagingID.Int64] = true
+		}
+	}
+	_ = refRows.Close()
+
+	// Also add staging peers that are group members of referenced staging groups
+	if len(stagingGroupIDSet) > 0 {
+		groupIDs := make([]interface{}, 0, len(stagingGroupIDSet))
+		for id := range stagingGroupIDSet {
+			groupIDs = append(groupIDs, id)
+		}
+		placeholders := ""
+		for i := range groupIDs {
+			if i > 0 {
+				placeholders += ","
+			}
+			placeholders += "?"
+		}
+		gMemberRows, err := tx.QueryContext(ctx,
+			fmt.Sprintf("SELECT member_staging_peer_ids FROM import_group_mappings WHERE session_id = ? AND id IN (%s)", placeholders),
+			append([]interface{}{sessionID}, groupIDs...)...,
+		)
+		if err == nil {
+			for gMemberRows.Next() {
+				var memberJSON string
+				if gMemberRows.Scan(&memberJSON) == nil {
+					var stagingPeerIDs []int64
+					if json.Unmarshal([]byte(memberJSON), &stagingPeerIDs) == nil {
+						for _, spid := range stagingPeerIDs {
+							stagingPeerIDSet[spid] = true
+						}
+					}
+				}
+			}
+			_ = gMemberRows.Close()
+		}
+	}
+
+	// 1. Create manual peers from import_peer_mappings referenced by approved rules
+	peerQuery := "SELECT id, ip_address, hostname FROM import_peer_mappings WHERE session_id = ? AND existing_peer_id IS NULL"
+	peerArgs := []interface{}{sessionID}
+	if len(stagingPeerIDSet) > 0 {
+		peerIDs := make([]interface{}, 0, len(stagingPeerIDSet))
+		for id := range stagingPeerIDSet {
+			peerIDs = append(peerIDs, id)
+		}
+		placeholders := ""
+		for i := range peerIDs {
+			if i > 0 {
+				placeholders += ","
+			}
+			placeholders += "?"
+		}
+		peerQuery = fmt.Sprintf("%s AND id IN (%s)", peerQuery, placeholders)
+		peerArgs = append(peerArgs, peerIDs...)
+	} else {
+		// No referenced peers — use impossible ID to return empty set
+		peerQuery += " AND id = -1"
+	}
+	peerRows, err := tx.QueryContext(ctx, peerQuery, peerArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("query peer mappings: %w", err)
 	}
@@ -81,11 +170,27 @@ func ApplySession(ctx context.Context, database *sql.DB, sessionID int64, change
 		result.PeersCreated++
 	}
 
-	// Update staging peers that were mapped to existing peers
-	existingPeerRows, err := tx.QueryContext(ctx,
-		"SELECT id, existing_peer_id FROM import_peer_mappings WHERE session_id = ? AND status = 'approved' AND existing_peer_id IS NOT NULL",
-		sessionID,
-	)
+	// Update staging peers that were mapped to existing peers (only those referenced by approved rules)
+	existingPeerQuery := "SELECT id, existing_peer_id FROM import_peer_mappings WHERE session_id = ? AND existing_peer_id IS NOT NULL"
+	existingPeerArgs := []interface{}{sessionID}
+	if len(stagingPeerIDSet) > 0 {
+		epIDs := make([]interface{}, 0, len(stagingPeerIDSet))
+		for id := range stagingPeerIDSet {
+			epIDs = append(epIDs, id)
+		}
+		placeholders := ""
+		for i := range epIDs {
+			if i > 0 {
+				placeholders += ","
+			}
+			placeholders += "?"
+		}
+		existingPeerQuery = fmt.Sprintf("%s AND id IN (%s)", existingPeerQuery, placeholders)
+		existingPeerArgs = append(existingPeerArgs, epIDs...)
+	} else {
+		existingPeerQuery += " AND id = -1"
+	}
+	existingPeerRows, err := tx.QueryContext(ctx, existingPeerQuery, existingPeerArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("query existing peer mappings: %w", err)
 	}
@@ -99,11 +204,27 @@ func ApplySession(ctx context.Context, database *sql.DB, sessionID int64, change
 	}
 	_ = existingPeerRows.Close()
 
-	// 2. Create groups from import_group_mappings (status='approved', no existing_group_id)
-	groupRows, err := tx.QueryContext(ctx,
-		"SELECT id, group_name, member_ips, member_peer_ids, member_staging_peer_ids FROM import_group_mappings WHERE session_id = ? AND status = 'approved' AND existing_group_id IS NULL",
-		sessionID,
-	)
+	// 2. Create groups from import_group_mappings referenced by approved rules
+	groupQuery := "SELECT id, group_name, member_ips, member_peer_ids, member_staging_peer_ids FROM import_group_mappings WHERE session_id = ? AND existing_group_id IS NULL"
+	groupArgs := []interface{}{sessionID}
+	if len(stagingGroupIDSet) > 0 {
+		gIDs := make([]interface{}, 0, len(stagingGroupIDSet))
+		for id := range stagingGroupIDSet {
+			gIDs = append(gIDs, id)
+		}
+		placeholders := ""
+		for i := range gIDs {
+			if i > 0 {
+				placeholders += ","
+			}
+			placeholders += "?"
+		}
+		groupQuery = fmt.Sprintf("%s AND id IN (%s)", groupQuery, placeholders)
+		groupArgs = append(groupArgs, gIDs...)
+	} else {
+		groupQuery += " AND id = -1"
+	}
+	groupRows, err := tx.QueryContext(ctx, groupQuery, groupArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("query group mappings: %w", err)
 	}
@@ -157,11 +278,27 @@ func ApplySession(ctx context.Context, database *sql.DB, sessionID int64, change
 		}
 	}
 
-	// Update staging groups that were mapped to existing groups
-	existingGroupRows, err := tx.QueryContext(ctx,
-		"SELECT id, existing_group_id FROM import_group_mappings WHERE session_id = ? AND status = 'approved' AND existing_group_id IS NOT NULL",
-		sessionID,
-	)
+	// Update staging groups that were mapped to existing groups (only those referenced by approved rules)
+	existingGroupQuery := "SELECT id, existing_group_id FROM import_group_mappings WHERE session_id = ? AND existing_group_id IS NOT NULL"
+	existingGroupArgs := []interface{}{sessionID}
+	if len(stagingGroupIDSet) > 0 {
+		egIDs := make([]interface{}, 0, len(stagingGroupIDSet))
+		for id := range stagingGroupIDSet {
+			egIDs = append(egIDs, id)
+		}
+		placeholders := ""
+		for i := range egIDs {
+			if i > 0 {
+				placeholders += ","
+			}
+			placeholders += "?"
+		}
+		existingGroupQuery = fmt.Sprintf("%s AND id IN (%s)", existingGroupQuery, placeholders)
+		existingGroupArgs = append(existingGroupArgs, egIDs...)
+	} else {
+		existingGroupQuery += " AND id = -1"
+	}
+	existingGroupRows, err := tx.QueryContext(ctx, existingGroupQuery, existingGroupArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("query existing group mappings: %w", err)
 	}
@@ -175,11 +312,27 @@ func ApplySession(ctx context.Context, database *sql.DB, sessionID int64, change
 	}
 	_ = existingGroupRows.Close()
 
-	// 3. Create services from import_service_mappings (status='approved', no existing_service_id)
-	svcRows, err := tx.QueryContext(ctx,
-		"SELECT id, name, ports, source_ports, protocol, direction_hint FROM import_service_mappings WHERE session_id = ? AND status = 'approved' AND existing_service_id IS NULL",
-		sessionID,
-	)
+	// 3. Create services from import_service_mappings referenced by approved rules
+	svcQuery := "SELECT id, name, ports, source_ports, protocol, direction_hint FROM import_service_mappings WHERE session_id = ? AND existing_service_id IS NULL"
+	svcArgs := []interface{}{sessionID}
+	if len(stagingServiceIDSet) > 0 {
+		sIDs := make([]interface{}, 0, len(stagingServiceIDSet))
+		for id := range stagingServiceIDSet {
+			sIDs = append(sIDs, id)
+		}
+		placeholders := ""
+		for i := range sIDs {
+			if i > 0 {
+				placeholders += ","
+			}
+			placeholders += "?"
+		}
+		svcQuery = fmt.Sprintf("%s AND id IN (%s)", svcQuery, placeholders)
+		svcArgs = append(svcArgs, sIDs...)
+	} else {
+		svcQuery += " AND id = -1"
+	}
+	svcRows, err := tx.QueryContext(ctx, svcQuery, svcArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("query service mappings: %w", err)
 	}
@@ -223,11 +376,27 @@ func ApplySession(ctx context.Context, database *sql.DB, sessionID int64, change
 		result.ServicesCreated++
 	}
 
-	// Update staging services mapped to existing
-	existingSvcRows, err := tx.QueryContext(ctx,
-		"SELECT id, existing_service_id FROM import_service_mappings WHERE session_id = ? AND status = 'approved' AND existing_service_id IS NOT NULL",
-		sessionID,
-	)
+	// Update staging services mapped to existing (only those referenced by approved rules)
+	existingSvcQuery := "SELECT id, existing_service_id FROM import_service_mappings WHERE session_id = ? AND existing_service_id IS NOT NULL"
+	existingSvcArgs := []interface{}{sessionID}
+	if len(stagingServiceIDSet) > 0 {
+		esIDs := make([]interface{}, 0, len(stagingServiceIDSet))
+		for id := range stagingServiceIDSet {
+			esIDs = append(esIDs, id)
+		}
+		placeholders := ""
+		for i := range esIDs {
+			if i > 0 {
+				placeholders += ","
+			}
+			placeholders += "?"
+		}
+		existingSvcQuery = fmt.Sprintf("%s AND id IN (%s)", existingSvcQuery, placeholders)
+		existingSvcArgs = append(existingSvcArgs, esIDs...)
+	} else {
+		existingSvcQuery += " AND id = -1"
+	}
+	existingSvcRows, err := tx.QueryContext(ctx, existingSvcQuery, existingSvcArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("query existing service mappings: %w", err)
 	}
