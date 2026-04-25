@@ -65,12 +65,10 @@ func TestMigrateSchemaAddsMissingColumns(t *testing.T) {
 		{"services", "is_pending_delete"},
 		{"groups", "is_system"},
 		{"groups", "is_pending_delete"},
-		// Note: policies.source_type and policies.target_type are NOT dropped here.
-		// The polymorphic migration recreates the policies table entirely (not ADD COLUMN),
-		// so it requires the old table schema (source_group_id/target_peer_id) to work.
-		// Those columns are already present since we derive from Schema(), and the
-		// polymorphic migration correctly skips when source_type already exists.
-		// The is_pending_delete column is added via ADD COLUMN, so it can be tested.
+	// Note: policies.source_type and policies.target_type are NOT dropped here
+	// because the polymorphic migration recreates the policies table entirely
+	// (not ADD COLUMN). The drop-and-re-add test approach cannot test table
+	// recreation migrations. These columns need a dedicated test if needed.
 		{"policies", "is_pending_delete"},
 		{"revoked_tokens", "token_type"},
 		{"user_notification_preferences", "quiet_hours_enabled"},
@@ -89,8 +87,7 @@ func TestMigrateSchemaAddsMissingColumns(t *testing.T) {
 		// Check if the column exists (table must be in allowedTables safelist)
 		exists, err := columnExists(ctx, database, col.table, col.column)
 		if err != nil {
-			// Table not in safelist — skip (shouldn't happen for our tables)
-			continue
+			t.Fatalf("columnExists(%s, %s) error: %v", col.table, col.column, err)
 		}
 		if exists {
 			_, err := database.ExecContext(ctx, fmt.Sprintf("ALTER TABLE %s DROP COLUMN %s", col.table, col.column))
@@ -191,13 +188,6 @@ func TestMigrateSchemaAddsMissingColumns(t *testing.T) {
 		{"groups", "is_system", true},
 		{"groups", "is_pending_delete", true},
 		// Policies table migrations (polymorphic)
-		// Note: source_type and target_type are already present because we derive
-		// the base schema from Schema() (which includes the polymorphic schema).
-		// The polymorphic migration is a table-recreation migration that cannot be
-		// tested with the drop-and-re-add approach since it expects the old table
-		// schema (source_group_id/target_peer_id columns).
-		{"policies", "source_type", true},
-		{"policies", "target_type", true},
 		// Note: direction column is added before polymorphic migration but the
 		// polymorphic migration recreates the table without it. This is a known
 		// issue in the migration code - direction should be in the polymorphic schema.
@@ -421,5 +411,67 @@ func TestAddColumnIfMissing(t *testing.T) {
 	// Test that adding again is idempotent (no error)
 	if err := addColumnIfMissing(ctx, database, "users", "email", "TEXT DEFAULT ''"); err != nil {
 		t.Fatalf("addColumnIfMissing (idempotent) failed: %v", err)
+	}
+}
+
+// TestMigrateSchemaSkipsMissingImportRulesTable tests that migrateSchema handles
+// the case where the import_rules table doesn't exist at all (the primary scenario
+// the table-existence guard was designed to handle).
+func TestMigrateSchemaSkipsMissingImportRulesTable(t *testing.T) {
+	// Create an in-memory SQLite database
+	database, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("Failed to open in-memory database: %v", err)
+	}
+	defer database.Close()
+
+	// Enable foreign keys
+	if _, err := database.Exec("PRAGMA foreign_keys=ON"); err != nil {
+		t.Fatalf("Failed to enable foreign keys: %v", err)
+	}
+
+	ctx := context.Background()
+
+	// Create the full current schema
+	if _, err := database.ExecContext(ctx, Schema()); err != nil {
+		t.Fatalf("Failed to create full schema: %v", err)
+	}
+
+	// Drop the import-related tables to simulate a database without them
+	if _, err := database.Exec("PRAGMA foreign_keys=OFF"); err != nil {
+		t.Fatalf("Failed to disable foreign keys: %v", err)
+	}
+	if _, err := database.ExecContext(ctx, "DROP TABLE IF EXISTS import_rules"); err != nil {
+		t.Fatalf("Failed to drop import_rules: %v", err)
+	}
+	if _, err := database.ExecContext(ctx, "DROP TABLE IF EXISTS import_group_mappings"); err != nil {
+		t.Fatalf("Failed to drop import_group_mappings: %v", err)
+	}
+	if _, err := database.ExecContext(ctx, "DROP TABLE IF EXISTS import_peer_mappings"); err != nil {
+		t.Fatalf("Failed to drop import_peer_mappings: %v", err)
+	}
+	if _, err := database.ExecContext(ctx, "DROP TABLE IF EXISTS import_service_mappings"); err != nil {
+		t.Fatalf("Failed to drop import_service_mappings: %v", err)
+	}
+	if _, err := database.ExecContext(ctx, "DROP TABLE IF EXISTS import_sessions"); err != nil {
+		t.Fatalf("Failed to drop import_sessions: %v", err)
+	}
+	if _, err := database.Exec("PRAGMA foreign_keys=ON"); err != nil {
+		t.Fatalf("Failed to re-enable foreign keys: %v", err)
+	}
+
+	// Run migrations — should complete without error
+	if err := migrateSchema(ctx, database); err != nil {
+		t.Fatalf("migrateSchema failed: %v", err)
+	}
+
+	// Verify the import_rules table does NOT exist (migrations shouldn't create tables)
+	var importRulesExists bool
+	err = database.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='import_rules'").Scan(&importRulesExists)
+	if err != nil {
+		t.Fatalf("Failed to check for import_rules table: %v", err)
+	}
+	if importRulesExists {
+		t.Error("import_rules table should not exist after migration (migrations only add columns, not tables)")
 	}
 }
