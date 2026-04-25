@@ -860,14 +860,35 @@ func migrateSchema(ctx context.Context, database *sql.DB) error {
 	}
 
 	// Migration: Add is_pending_delete columns
-	if err := addColumnIfMissing(ctx, database, "groups", "is_pending_delete", "BOOLEAN NOT NULL DEFAULT 0"); err != nil {
-		return err
+	var hasGroupsTable bool
+	err = database.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='groups'").Scan(&hasGroupsTable)
+	if err != nil {
+		return fmt.Errorf("failed to check for groups table: %w", err)
 	}
-	if err := addColumnIfMissing(ctx, database, "services", "is_pending_delete", "BOOLEAN NOT NULL DEFAULT 0"); err != nil {
-		return err
+	if hasGroupsTable {
+		if err := addColumnIfMissing(ctx, database, "groups", "is_pending_delete", "BOOLEAN NOT NULL DEFAULT 0"); err != nil {
+			return err
+		}
 	}
-	if err := addColumnIfMissing(ctx, database, "policies", "is_pending_delete", "BOOLEAN NOT NULL DEFAULT 0"); err != nil {
-		return err
+	var hasServicesTable bool
+	err = database.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='services'").Scan(&hasServicesTable)
+	if err != nil {
+		return fmt.Errorf("failed to check for services table: %w", err)
+	}
+	if hasServicesTable {
+		if err := addColumnIfMissing(ctx, database, "services", "is_pending_delete", "BOOLEAN NOT NULL DEFAULT 0"); err != nil {
+			return err
+		}
+	}
+	var hasPoliciesTable bool
+	err = database.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='policies'").Scan(&hasPoliciesTable)
+	if err != nil {
+		return fmt.Errorf("failed to check for policies table: %w", err)
+	}
+	if hasPoliciesTable {
+		if err := addColumnIfMissing(ctx, database, "policies", "is_pending_delete", "BOOLEAN NOT NULL DEFAULT 0"); err != nil {
+			return err
+		}
 	}
 
 	// Migration: Create change_snapshots table
