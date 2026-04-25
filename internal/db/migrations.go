@@ -1151,8 +1151,15 @@ INSERT INTO alert_rules (name, alert_type, enabled, threshold_value, threshold_w
 	}
 
 	// Migration: Add description column to import_rules table
-	if err := addColumnIfMissing(ctx, database, "import_rules", "description", "TEXT DEFAULT ''"); err != nil {
-		return err
+	var hasImportRulesTable bool
+	err = database.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='import_rules'").Scan(&hasImportRulesTable)
+	if err != nil {
+		return fmt.Errorf("failed to check for import_rules table: %w", err)
+	}
+	if hasImportRulesTable {
+		if err := addColumnIfMissing(ctx, database, "import_rules", "description", "TEXT DEFAULT ''"); err != nil {
+			return err
+		}
 	}
 
 	return nil
