@@ -1150,5 +1150,10 @@ INSERT INTO alert_rules (name, alert_type, enabled, threshold_value, threshold_w
 		log.Info("Migration: created alert_digests table")
 	}
 
+	// Migration: Add description column to import_rules table
+	if err := addColumnIfMissing(ctx, database, "import_rules", "description", "TEXT DEFAULT ''"); err != nil {
+		return err
+	}
+
 	return nil
 }
