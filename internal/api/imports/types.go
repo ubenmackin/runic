@@ -15,31 +15,33 @@ type ImportSession struct {
 
 // ImportRule represents a parsed rule from an import session.
 type ImportRule struct {
-	ID               int64  `json:"id"`
-	SessionID        int64  `json:"session_id"`
-	Chain            string `json:"chain"`
-	RuleOrder        int    `json:"rule_order"`
-	RawRule          string `json:"raw_rule"`
-	Status           string `json:"status"`
-	SkipReason       string `json:"skip_reason,omitempty"`
-	SourceType       string `json:"source_type,omitempty"`
-	SourceName       string `json:"source_name,omitempty"`
-	TargetType       string `json:"target_type,omitempty"`
-	TargetName       string `json:"target_name,omitempty"`
-	ServiceName      string `json:"service_name,omitempty"`
-	Action           string `json:"action,omitempty"`
-	Priority         int    `json:"priority,omitempty"`
-	Direction        string `json:"direction,omitempty"`
-	TargetScope      string `json:"target_scope,omitempty"`
-	PolicyName       string `json:"policy_name,omitempty"`
-	Enabled          bool   `json:"enabled,omitempty"`
-	Description      string `json:"description,omitempty"`
-	SourceID         *int64 `json:"source_id,omitempty"`
-	SourceStagingID  *int64 `json:"source_staging_id,omitempty"`
-	TargetID         *int64 `json:"target_id,omitempty"`
-	TargetStagingID  *int64 `json:"target_staging_id,omitempty"`
-	ServiceID        *int64 `json:"service_id,omitempty"`
-	ServiceStagingID *int64 `json:"service_staging_id,omitempty"`
+	ID               int64   `json:"id"`
+	SessionID        int64   `json:"session_id"`
+	Chain            string  `json:"chain"`
+	RuleOrder        int     `json:"rule_order"`
+	RawRule          string  `json:"raw_rule"`
+	Status           string  `json:"status"`
+	SkipReason       string  `json:"skip_reason,omitempty"`
+	SourceType       string  `json:"source_type,omitempty"`
+	SourceName       string  `json:"source_name,omitempty"`
+	TargetType       string  `json:"target_type,omitempty"`
+	TargetName       string  `json:"target_name,omitempty"`
+	ServiceName      string  `json:"service_name,omitempty"`
+	Action           string  `json:"action,omitempty"`
+	Priority         int     `json:"priority,omitempty"`
+	Direction        string  `json:"direction,omitempty"`
+	TargetScope      string  `json:"target_scope,omitempty"`
+	PolicyName       string  `json:"policy_name,omitempty"`
+	Enabled          bool    `json:"enabled,omitempty"`
+	Description      string  `json:"description,omitempty"`
+	SourceID         *int64  `json:"source_id,omitempty"`
+	SourceStagingID  *int64  `json:"source_staging_id,omitempty"`
+	TargetID         *int64  `json:"target_id,omitempty"`
+	TargetStagingID  *int64  `json:"target_staging_id,omitempty"`
+	ServiceID        *int64  `json:"service_id,omitempty"`
+	ServiceStagingID *int64  `json:"service_staging_id,omitempty"`
+	SourceIP         *string `json:"source_ip,omitempty"`
+	TargetIP         *string `json:"target_ip,omitempty"`
 }
 
 // ImportGroupMapping represents a group mapping in an import session.

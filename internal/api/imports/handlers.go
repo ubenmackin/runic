@@ -154,7 +154,7 @@ func (h *Handler) GetRules(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows, err := h.DB.QueryContext(r.Context(),
-		"SELECT id, session_id, chain, rule_order, raw_rule, status, skip_reason, source_type, source_id, source_staging_id, target_type, target_id, target_staging_id, service_id, service_staging_id, action, priority, direction, target_scope, policy_name, enabled, description FROM import_rules WHERE session_id = ? ORDER BY CASE chain WHEN 'INPUT' THEN 1 WHEN 'OUTPUT' THEN 2 WHEN 'DOCKER-USER' THEN 3 END, rule_order",
+		"SELECT id, session_id, chain, rule_order, raw_rule, status, skip_reason, source_type, source_id, source_staging_id, target_type, target_id, target_staging_id, service_id, service_staging_id, action, priority, direction, target_scope, policy_name, enabled, description, source_ip, target_ip FROM import_rules WHERE session_id = ? ORDER BY CASE chain WHEN 'INPUT' THEN 1 WHEN 'OUTPUT' THEN 2 WHEN 'DOCKER-USER' THEN 3 END, rule_order",
 		sessionID)
 	if err != nil {
 		common.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": "database error"})
@@ -188,8 +188,10 @@ func (h *Handler) GetRules(w http.ResponseWriter, r *http.Request) {
 			PolicyName       sql.NullString
 			Enabled          int
 			Description      sql.NullString
+			SourceIP         sql.NullString
+			TargetIP         sql.NullString
 		}
-		if err := rows.Scan(&r.ID, &r.SessionID, &r.Chain, &r.RuleOrder, &r.RawRule, &r.Status, &r.SkipReason, &r.SourceType, &r.SourceID, &r.SourceStagingID, &r.TargetType, &r.TargetID, &r.TargetStagingID, &r.ServiceID, &r.ServiceStagingID, &r.Action, &r.Priority, &r.Direction, &r.TargetScope, &r.PolicyName, &r.Enabled, &r.Description); err != nil {
+		if err := rows.Scan(&r.ID, &r.SessionID, &r.Chain, &r.RuleOrder, &r.RawRule, &r.Status, &r.SkipReason, &r.SourceType, &r.SourceID, &r.SourceStagingID, &r.TargetType, &r.TargetID, &r.TargetStagingID, &r.ServiceID, &r.ServiceStagingID, &r.Action, &r.Priority, &r.Direction, &r.TargetScope, &r.PolicyName, &r.Enabled, &r.Description, &r.SourceIP, &r.TargetIP); err != nil {
 			continue
 		}
 
@@ -249,10 +251,18 @@ func (h *Handler) GetRules(w http.ResponseWriter, r *http.Request) {
 			id := r.ServiceStagingID.Int64
 			rule.ServiceStagingID = &id
 		}
+		if r.SourceIP.Valid {
+			ip := r.SourceIP.String
+			rule.SourceIP = &ip
+		}
+		if r.TargetIP.Valid {
+			ip := r.TargetIP.String
+			rule.TargetIP = &ip
+		}
 
-		// Resolve display names
-		rule.SourceName = h.resolveEntityName(ctx, r.SourceType, r.SourceID, r.SourceStagingID, sessionID)
-		rule.TargetName = h.resolveEntityName(ctx, r.TargetType, r.TargetID, r.TargetStagingID, sessionID)
+		// Resolve display names (pass source_ip/target_ip for multi-IP peer name suffix)
+		rule.SourceName = h.resolveEntityName(ctx, r.SourceType, r.SourceID, r.SourceStagingID, sessionID, r.SourceIP)
+		rule.TargetName = h.resolveEntityName(ctx, r.TargetType, r.TargetID, r.TargetStagingID, sessionID, r.TargetIP)
 		rule.ServiceName = h.resolveServiceName(ctx, r.ServiceID, r.ServiceStagingID, sessionID)
 
 		rules = append(rules, rule)
@@ -526,6 +536,8 @@ func (h *Handler) UpdateRule(w http.ResponseWriter, r *http.Request) {
 		Status     *string `json:"status"`
 		PolicyName *string `json:"policy_name"`
 		Enabled    *bool   `json:"enabled"`
+		SourceIP   *string `json:"source_ip"`
+		TargetIP   *string `json:"target_ip"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		common.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
@@ -554,6 +566,14 @@ func (h *Handler) UpdateRule(w http.ResponseWriter, r *http.Request) {
 		}
 		updates = append(updates, "enabled = ?")
 		args = append(args, enabled)
+	}
+	if input.SourceIP != nil {
+		updates = append(updates, "source_ip = ?")
+		args = append(args, *input.SourceIP)
+	}
+	if input.TargetIP != nil {
+		updates = append(updates, "target_ip = ?")
+		args = append(args, *input.TargetIP)
 	}
 
 	if err := h.executeUpdate(w, r, "import_rules", updates, args, sessionID, ruleID); err != nil {
@@ -733,7 +753,9 @@ func (h *Handler) getSessionID(r *http.Request) (int64, error) {
 }
 
 // resolveEntityName looks up the display name for a source or target.
-func (h *Handler) resolveEntityName(ctx context.Context, entityType sql.NullString, entityID sql.NullInt64, stagingID sql.NullInt64, sessionID int64) string {
+// When matchedIP is set (non-primary IP match via peer_ips), the display name
+// includes the specific IP as a suffix, e.g. "graylog (10.20.10.20)".
+func (h *Handler) resolveEntityName(ctx context.Context, entityType sql.NullString, entityID sql.NullInt64, stagingID sql.NullInt64, sessionID int64, matchedIP sql.NullString) string {
 	if !entityType.Valid || entityType.String == "" {
 		return ""
 	}
@@ -744,6 +766,9 @@ func (h *Handler) resolveEntityName(ctx context.Context, entityType sql.NullStri
 		case "peer":
 			var name string
 			if err := h.DB.QueryRowContext(ctx, "SELECT hostname FROM peers WHERE id = ?", entityID.Int64).Scan(&name); err == nil {
+				if matchedIP.Valid && matchedIP.String != "" {
+					return fmt.Sprintf("%s (%s)", name, matchedIP.String)
+				}
 				return name
 			}
 		case "group":
@@ -765,6 +790,9 @@ func (h *Handler) resolveEntityName(ctx context.Context, entityType sql.NullStri
 		case "peer":
 			var name string
 			if err := h.DB.QueryRowContext(ctx, "SELECT hostname FROM import_peer_mappings WHERE id = ?", stagingID.Int64).Scan(&name); err == nil {
+				if matchedIP.Valid && matchedIP.String != "" {
+					return fmt.Sprintf("%s (%s)", name, matchedIP.String)
+				}
 				return name
 			}
 			// Fall back to IP

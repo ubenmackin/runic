@@ -63,7 +63,7 @@ func TestRegisterSuccessfulRegistration(t *testing.T) {
 		return nil
 	}
 
-	err := Register(context.Background(), server.Client(), cfg, "v1.0.0", saveFunc)
+	err := Register(context.Background(), server.Client(), cfg, "v1.0.0", saveFunc, nil)
 	if err != nil {
 		t.Fatalf("Register failed: %v", err)
 	}
@@ -107,7 +107,7 @@ func TestRegisterHandles401Response(t *testing.T) {
 		ControlPlaneURL: server.URL,
 	}
 
-	err := Register(context.Background(), server.Client(), cfg, "v1.0.0", func() error { return nil })
+	err := Register(context.Background(), server.Client(), cfg, "v1.0.0", func() error { return nil }, nil)
 	if err == nil {
 		t.Fatal("expected error for 401 response, got nil")
 	}
@@ -129,7 +129,7 @@ func TestRegisterHandlesNon200StatusCode(t *testing.T) {
 		ControlPlaneURL: server.URL,
 	}
 
-	err := Register(context.Background(), server.Client(), cfg, "v1.0.0", func() error { return nil })
+	err := Register(context.Background(), server.Client(), cfg, "v1.0.0", func() error { return nil }, nil)
 	if err == nil {
 		t.Fatal("expected error for 500 response, got nil")
 	}
@@ -154,7 +154,7 @@ func TestRegisterDecodesResponseCorrectly(t *testing.T) {
 		ControlPlaneURL: server.URL,
 	}
 
-	err := Register(context.Background(), server.Client(), cfg, "v1.0.0", func() error { return nil })
+	err := Register(context.Background(), server.Client(), cfg, "v1.0.0", func() error { return nil }, nil)
 	if err != nil {
 		t.Fatalf("Register failed: %v", err)
 	}
@@ -201,7 +201,7 @@ func TestRegisterCallsSaveFuncOnSuccess(t *testing.T) {
 		return nil
 	}
 
-	err := Register(context.Background(), server.Client(), cfg, "v1.0.0", saveFunc)
+	err := Register(context.Background(), server.Client(), cfg, "v1.0.0", saveFunc, nil)
 	if err != nil {
 		t.Fatalf("Register failed: %v", err)
 	}
@@ -238,7 +238,7 @@ func TestRegisterClearsRegistrationTokenAfterUse(t *testing.T) {
 		RegistrationToken: "my-registration-token",
 	}
 
-	err := Register(context.Background(), server.Client(), cfg, "v1.0.0", func() error { return nil })
+	err := Register(context.Background(), server.Client(), cfg, "v1.0.0", func() error { return nil }, nil)
 	if err != nil {
 		t.Fatalf("Register failed: %v", err)
 	}

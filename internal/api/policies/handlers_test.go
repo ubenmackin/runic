@@ -195,6 +195,46 @@ func TestCreatePolicy(t *testing.T) {
 			wantStatusCode: http.StatusCreated,
 			wantID:         true,
 		},
+		{
+			name: "source_ip with peer type returns 201",
+			body: `{"name": "policy-with-source-ip", "source_id": 1, "source_type": "peer", "source_ip": "10.0.0.100", "service_id": 1, "target_id": 1, "target_type": "peer"}`,
+			setupDB: func(t *testing.T, db *sql.DB) {
+				db.Exec("INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)", "test-service", "8080", "tcp")
+				db.Exec("INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)", "test-peer", "10.0.0.1", "key", "hmac")
+			},
+			wantStatusCode: http.StatusCreated,
+			wantID: true,
+		},
+		{
+			name: "target_ip with peer type returns 201",
+			body: `{"name": "policy-with-target-ip", "source_id": 1, "source_type": "peer", "service_id": 1, "target_id": 1, "target_type": "peer", "target_ip": "10.0.0.200"}`,
+			setupDB: func(t *testing.T, db *sql.DB) {
+				db.Exec("INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)", "test-service", "8080", "tcp")
+				db.Exec("INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)", "test-peer", "10.0.0.1", "key", "hmac")
+			},
+			wantStatusCode: http.StatusCreated,
+			wantID: true,
+		},
+		{
+			name: "source_ip with non-peer type returns 400",
+			body: `{"name": "invalid-source-ip", "source_id": 1, "source_type": "group", "source_ip": "10.0.0.100", "service_id": 1, "target_id": 1, "target_type": "peer"}`,
+			setupDB: func(t *testing.T, db *sql.DB) {
+				db.Exec("INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)", "test-service", "8080", "tcp")
+				db.Exec("INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)", "test-peer", "10.0.0.1", "key", "hmac")
+				db.Exec("INSERT INTO groups (name, description) VALUES (?, ?)", "test-group", "desc")
+			},
+			wantStatusCode: http.StatusBadRequest,
+		},
+		{
+			name: "target_ip with non-peer type returns 400",
+			body: `{"name": "invalid-target-ip", "source_id": 1, "source_type": "peer", "service_id": 1, "target_id": 1, "target_type": "group", "target_ip": "10.0.0.200"}`,
+			setupDB: func(t *testing.T, db *sql.DB) {
+				db.Exec("INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)", "test-service", "8080", "tcp")
+				db.Exec("INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)", "test-peer", "10.0.0.1", "key", "hmac")
+				db.Exec("INSERT INTO groups (name, description) VALUES (?, ?)", "test-group", "desc")
+			},
+			wantStatusCode: http.StatusBadRequest,
+		},
 	}
 
 	for _, tt := range tests {
@@ -600,6 +640,15 @@ func TestPolicyPreview(t *testing.T) {
 		{
 			name: "valid request returns 200",
 			body: `{"source_id": 1, "source_type": "peer", "target_id": 1, "target_type": "peer", "service_id": 1, "peer_id": 1, "direction": "both", "target_scope": "both"}`,
+			setupDB: func(t *testing.T, db *sql.DB) {
+				db.Exec("INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)", "test-service", "8080", "tcp")
+				db.Exec("INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)", "test-peer", "10.0.0.1", "key", "hmac")
+			},
+			wantStatusCode: http.StatusOK,
+		},
+		{
+			name: "valid request with source_ip and target_ip returns 200",
+			body: `{"source_id": 1, "source_type": "peer", "source_ip": "10.0.0.100", "target_id": 1, "target_type": "peer", "target_ip": "10.0.0.200", "service_id": 1, "peer_id": 1, "direction": "both", "target_scope": "host"}`,
 			setupDB: func(t *testing.T, db *sql.DB) {
 				db.Exec("INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)", "test-service", "8080", "tcp")
 				db.Exec("INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)", "test-peer", "10.0.0.1", "key", "hmac")

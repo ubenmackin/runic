@@ -57,9 +57,11 @@ type PolicyRow struct {
 	Description     string
 	SourceID        int
 	SourceType      string
+	SourceIP        *string
 	ServiceID       int
 	TargetID        int
 	TargetType      string
+	TargetIP        *string
 	Action          string
 	Priority        int
 	Enabled         bool

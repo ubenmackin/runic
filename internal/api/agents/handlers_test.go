@@ -1550,6 +1550,547 @@ func TestWithHubs(t *testing.T) {
 	}
 }
 
+// =============================================================================
+// Test upsertPeerIPs
+// =============================================================================
+
+func TestUpsertPeerIPs(t *testing.T) {
+	tests := []struct {
+		name       string
+		setup      func(t *testing.T, db *sql.DB) int // returns peerID
+		allIPs     []string
+		primaryIP  string
+		wantErr    bool
+		checkDB    func(t *testing.T, db *sql.DB, peerID int)
+	}{
+		{
+			name: "initial upsert of IPs",
+			setup: func(t *testing.T, db *sql.DB) int {
+				res, err := db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)`, "test-peer", "10.0.0.1", "key1", "hmac1")
+				if err != nil {
+					t.Fatalf("setup: %v", err)
+				}
+				id, _ := res.LastInsertId()
+				return int(id)
+			},
+			allIPs:    []string{"10.0.0.1", "192.168.1.1", "172.16.0.1"},
+			primaryIP: "10.0.0.1",
+			wantErr:   false,
+			checkDB: func(t *testing.T, db *sql.DB, peerID int) {
+				rows, err := db.Query("SELECT ip_address, is_primary FROM peer_ips WHERE peer_id = ? ORDER BY ip_address", peerID)
+				if err != nil {
+					t.Fatalf("query peer_ips: %v", err)
+				}
+				defer rows.Close()
+
+				type ipEntry struct {
+					ip        string
+					isPrimary int
+				}
+				var entries []ipEntry
+				for rows.Next() {
+					var e ipEntry
+					if err := rows.Scan(&e.ip, &e.isPrimary); err != nil {
+						t.Fatalf("scan: %v", err)
+					}
+					entries = append(entries, e)
+				}
+
+				if len(entries) != 3 {
+					t.Fatalf("expected 3 peer_ips, got %d", len(entries))
+				}
+				for _, e := range entries {
+					if e.ip == "10.0.0.1" && e.isPrimary != 1 {
+						t.Errorf("expected 10.0.0.1 to be primary, got is_primary=%d", e.isPrimary)
+					}
+					if e.ip != "10.0.0.1" && e.isPrimary != 0 {
+						t.Errorf("expected %s to be non-primary, got is_primary=%d", e.ip, e.isPrimary)
+					}
+				}
+			},
+		},
+		{
+			name: "primary flag update on re-upsert",
+			setup: func(t *testing.T, db *sql.DB) int {
+				res, err := db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)`, "test-peer2", "10.0.0.2", "key2", "hmac2")
+				if err != nil {
+					t.Fatalf("setup: %v", err)
+				}
+				id, _ := res.LastInsertId()
+
+				// Insert IPs with old primary
+				db.Exec("INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 1)", id, "10.0.0.2")
+				db.Exec("INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 0)", id, "192.168.1.2")
+
+				return int(id)
+			},
+			allIPs:    []string{"10.0.0.2", "192.168.1.2"},
+			primaryIP: "192.168.1.2", // changed primary
+			wantErr:   false,
+			checkDB: func(t *testing.T, db *sql.DB, peerID int) {
+				// upsertPeerIPs sets is_primary=1 for the primary IP via UPDATE,
+				// but does NOT reset other is_primary flags to 0 (that's syncPeerIPs' job).
+				// So 192.168.1.2 should now be primary=1, and 10.0.0.2 remains primary=1.
+				var count int
+				err := db.QueryRow("SELECT COUNT(*) FROM peer_ips WHERE peer_id = ? AND is_primary = 1", peerID).Scan(&count)
+				if err != nil {
+					t.Fatalf("count primary: %v", err)
+				}
+				// Both have is_primary=1 because upsertPeerIPs only sets primary, doesn't clear old ones
+				if count != 2 {
+					t.Errorf("expected 2 primary IPs (upsert only sets, doesn't clear), got %d", count)
+				}
+			},
+		},
+		{
+			name: "duplicate IP handling is idempotent",
+			setup: func(t *testing.T, db *sql.DB) int {
+				res, err := db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)`, "test-peer3", "10.0.0.3", "key3", "hmac3")
+				if err != nil {
+					t.Fatalf("setup: %v", err)
+				}
+				id, _ := res.LastInsertId()
+				return int(id)
+			},
+			allIPs:    []string{"10.0.0.3", "10.0.0.3"}, // duplicate in input
+			primaryIP: "10.0.0.3",
+			wantErr:   false,
+			checkDB: func(t *testing.T, db *sql.DB, peerID int) {
+				var count int
+				err := db.QueryRow("SELECT COUNT(*) FROM peer_ips WHERE peer_id = ?", peerID).Scan(&count)
+				if err != nil {
+					t.Fatalf("count: %v", err)
+				}
+				// INSERT OR IGNORE means only one row despite duplicate input
+				if count != 1 {
+					t.Errorf("expected 1 peer_ip (deduped by INSERT OR IGNORE), got %d", count)
+				}
+			},
+		},
+		{
+			name: "empty AllIPs does nothing",
+			setup: func(t *testing.T, db *sql.DB) int {
+				res, err := db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)`, "test-peer4", "10.0.0.4", "key4", "hmac4")
+				if err != nil {
+					t.Fatalf("setup: %v", err)
+				}
+				id, _ := res.LastInsertId()
+				return int(id)
+			},
+			allIPs:    []string{},
+			primaryIP: "10.0.0.4",
+			wantErr:   false,
+			checkDB: func(t *testing.T, db *sql.DB, peerID int) {
+				var count int
+				err := db.QueryRow("SELECT COUNT(*) FROM peer_ips WHERE peer_id = ?", peerID).Scan(&count)
+				if err != nil {
+					t.Fatalf("count: %v", err)
+				}
+				if count != 0 {
+					t.Errorf("expected 0 peer_ips for empty input, got %d", count)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db, cleanup := testutil.SetupTestDBWithSecret(t)
+			defer cleanup()
+
+			peerID := tt.setup(t, db)
+
+			handler := NewHandler(db, db, nil)
+			err := handler.upsertPeerIPs(context.Background(), peerID, tt.allIPs, tt.primaryIP)
+
+			if (err != nil) != tt.wantErr {
+				t.Errorf("upsertPeerIPs() error = %v, wantErr %v", err, tt.wantErr)
+			}
+
+			if tt.checkDB != nil {
+				tt.checkDB(t, db, peerID)
+			}
+		})
+	}
+}
+
+// =============================================================================
+// Test syncPeerIPs
+// =============================================================================
+
+func TestSyncPeerIPs(t *testing.T) {
+	tests := []struct {
+		name      string
+		setup     func(t *testing.T, db *sql.DB) int // returns peerID
+		allIPs    []string
+		primaryIP string
+		wantErr   bool
+		checkDB   func(t *testing.T, db *sql.DB, peerID int)
+	}{
+		{
+			name: "add new IPs and remove stale ones",
+			setup: func(t *testing.T, db *sql.DB) int {
+				res, err := db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)`, "sync-peer1", "10.0.0.1", "key1", "hmac1")
+				if err != nil {
+					t.Fatalf("setup: %v", err)
+				}
+				id, _ := res.LastInsertId()
+				// Pre-populate with old IPs
+				db.Exec("INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 1)", id, "10.0.0.1")
+				db.Exec("INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 0)", id, "192.168.1.100") // stale
+				db.Exec("INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 0)", id, "172.16.0.100") // stale
+				return int(id)
+			},
+			allIPs:    []string{"10.0.0.1", "10.0.1.1"}, // new IP, old stale ones removed
+			primaryIP: "10.0.0.1",
+			wantErr:   false,
+			checkDB: func(t *testing.T, db *sql.DB, peerID int) {
+				rows, err := db.Query("SELECT ip_address, is_primary FROM peer_ips WHERE peer_id = ? ORDER BY ip_address", peerID)
+				if err != nil {
+					t.Fatalf("query: %v", err)
+				}
+				defer rows.Close()
+
+				type entry struct {
+					ip        string
+					isPrimary int
+				}
+				var entries []entry
+				for rows.Next() {
+					var e entry
+					if err := rows.Scan(&e.ip, &e.isPrimary); err != nil {
+						t.Fatalf("scan: %v", err)
+					}
+					entries = append(entries, e)
+				}
+
+				// Should only have 2 IPs (stale ones deleted)
+				if len(entries) != 2 {
+					t.Fatalf("expected 2 peer_ips, got %d", len(entries))
+				}
+
+				// Verify the IPs
+				foundIPs := map[string]int{}
+				for _, e := range entries {
+					foundIPs[e.ip] = e.isPrimary
+				}
+				if _, ok := foundIPs["10.0.0.1"]; !ok {
+					t.Error("expected 10.0.0.1 to exist")
+				}
+				if _, ok := foundIPs["10.0.1.1"]; !ok {
+					t.Error("expected 10.0.1.1 to exist")
+				}
+				if _, ok := foundIPs["192.168.1.100"]; ok {
+					t.Error("expected stale 192.168.1.100 to be deleted")
+				}
+				if _, ok := foundIPs["172.16.0.100"]; ok {
+					t.Error("expected stale 172.16.0.100 to be deleted")
+				}
+
+				// Verify primary flag
+				if foundIPs["10.0.0.1"] != 1 {
+					t.Errorf("expected 10.0.0.1 is_primary=1, got %d", foundIPs["10.0.0.1"])
+				}
+				if foundIPs["10.0.1.1"] != 0 {
+					t.Errorf("expected 10.0.1.1 is_primary=0, got %d", foundIPs["10.0.1.1"])
+				}
+			},
+		},
+		{
+			name: "primary flag reset correctly",
+			setup: func(t *testing.T, db *sql.DB) int {
+				res, err := db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)`, "sync-peer2", "10.0.0.2", "key2", "hmac2")
+				if err != nil {
+					t.Fatalf("setup: %v", err)
+				}
+				id, _ := res.LastInsertId()
+				// Both marked as primary (corrupted state)
+				db.Exec("INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 1)", id, "10.0.0.2")
+				db.Exec("INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 1)", id, "192.168.1.2")
+				return int(id)
+			},
+			allIPs:    []string{"10.0.0.2", "192.168.1.2"},
+			primaryIP: "192.168.1.2",
+			wantErr:   false,
+			checkDB: func(t *testing.T, db *sql.DB, peerID int) {
+				var primaryCount int
+				err := db.QueryRow("SELECT COUNT(*) FROM peer_ips WHERE peer_id = ? AND is_primary = 1", peerID).Scan(&primaryCount)
+				if err != nil {
+					t.Fatalf("count primary: %v", err)
+				}
+				if primaryCount != 1 {
+					t.Errorf("expected exactly 1 primary IP, got %d", primaryCount)
+				}
+
+				var primaryIP string
+				err = db.QueryRow("SELECT ip_address FROM peer_ips WHERE peer_id = ? AND is_primary = 1", peerID).Scan(&primaryIP)
+				if err != nil {
+					t.Fatalf("query primary: %v", err)
+				}
+				if primaryIP != "192.168.1.2" {
+					t.Errorf("expected primary IP 192.168.1.2, got %s", primaryIP)
+				}
+			},
+		},
+		{
+			name: "stale IP referenced by source policy is preserved",
+			setup: func(t *testing.T, db *sql.DB) int {
+				res, err := db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)`, "sync-peer3", "10.0.0.3", "key3", "hmac3")
+				if err != nil {
+					t.Fatalf("setup: %v", err)
+				}
+				id, _ := res.LastInsertId()
+
+				// Insert peer IPs
+				db.Exec("INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 1)", id, "10.0.0.3")
+				db.Exec("INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 0)", id, "192.168.1.3") // will become stale
+
+				// Create a group and service for the policy
+				db.Exec("INSERT INTO groups (name) VALUES ('test-group')")
+				db.Exec("INSERT INTO services (name, ports, protocol) VALUES ('ssh', '22', 'tcp')")
+
+				// Create a policy referencing the soon-to-be-stale IP as source_ip
+				db.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, source_ip, target_ip, action)
+					VALUES ('test-policy', ?, 'group', 1, ?, 'group', '192.168.1.3', '10.0.0.3', 'ACCEPT')`, id, id)
+
+				return int(id)
+			},
+			allIPs:    []string{"10.0.0.3"}, // 192.168.1.3 is stale
+			primaryIP: "10.0.0.3",
+			wantErr:   false,
+			checkDB: func(t *testing.T, db *sql.DB, peerID int) {
+				// Stale IP should still exist because it's referenced by a policy
+				var count int
+				err := db.QueryRow("SELECT COUNT(*) FROM peer_ips WHERE peer_id = ?", peerID).Scan(&count)
+				if err != nil {
+					t.Fatalf("count: %v", err)
+				}
+				if count != 2 {
+					t.Errorf("expected 2 peer_ips (stale IP preserved due to policy reference), got %d", count)
+				}
+
+				// Verify the stale IP still exists
+				var exists int
+				err = db.QueryRow("SELECT COUNT(*) FROM peer_ips WHERE peer_id = ? AND ip_address = '192.168.1.3'", peerID).Scan(&exists)
+				if err != nil {
+					t.Fatalf("check stale IP: %v", err)
+				}
+				if exists != 1 {
+					t.Error("expected stale IP 192.168.1.3 to be preserved (referenced by policy)")
+				}
+			},
+		},
+		{
+			name: "stale IP referenced by target policy is preserved",
+			setup: func(t *testing.T, db *sql.DB) int {
+				res, err := db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)`, "sync-peer4", "10.0.0.4", "key4", "hmac4")
+				if err != nil {
+					t.Fatalf("setup: %v", err)
+				}
+				id, _ := res.LastInsertId()
+
+				db.Exec("INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 1)", id, "10.0.0.4")
+				db.Exec("INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 0)", id, "172.16.0.4") // will become stale
+
+				// Create group and service
+				db.Exec("INSERT INTO groups (name) VALUES ('test-group4')")
+				db.Exec("INSERT INTO services (name, ports, protocol) VALUES ('http', '80', 'tcp')")
+
+				// Create a policy referencing the stale IP as target_ip
+				db.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, source_ip, target_ip, action)
+					VALUES ('target-policy', ?, 'group', 1, ?, 'group', '10.0.0.4', '172.16.0.4', 'ACCEPT')`, id, id)
+
+				return int(id)
+			},
+			allIPs:    []string{"10.0.0.4"}, // 172.16.0.4 is stale
+			primaryIP: "10.0.0.4",
+			wantErr:   false,
+			checkDB: func(t *testing.T, db *sql.DB, peerID int) {
+				var exists int
+				err := db.QueryRow("SELECT COUNT(*) FROM peer_ips WHERE peer_id = ? AND ip_address = '172.16.0.4'", peerID).Scan(&exists)
+				if err != nil {
+					t.Fatalf("check stale IP: %v", err)
+				}
+				if exists != 1 {
+					t.Error("expected stale IP 172.16.0.4 to be preserved (referenced as target_ip in policy)")
+				}
+			},
+		},
+		{
+			name: "stale IP not referenced by policy is deleted",
+			setup: func(t *testing.T, db *sql.DB) int {
+				res, err := db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)`, "sync-peer5", "10.0.0.5", "key5", "hmac5")
+				if err != nil {
+					t.Fatalf("setup: %v", err)
+				}
+				id, _ := res.LastInsertId()
+
+				db.Exec("INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 1)", id, "10.0.0.5")
+				db.Exec("INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 0)", id, "192.168.1.5") // stale, no policy ref
+
+				return int(id)
+			},
+			allIPs:    []string{"10.0.0.5"}, // 192.168.1.5 is stale and not referenced
+			primaryIP: "10.0.0.5",
+			wantErr:   false,
+			checkDB: func(t *testing.T, db *sql.DB, peerID int) {
+				var count int
+				err := db.QueryRow("SELECT COUNT(*) FROM peer_ips WHERE peer_id = ?", peerID).Scan(&count)
+				if err != nil {
+					t.Fatalf("count: %v", err)
+				}
+				if count != 1 {
+					t.Errorf("expected 1 peer_ip (unreferenced stale IP deleted), got %d", count)
+				}
+			},
+		},
+		{
+			name: "empty AllIPs removes all unreferenced stale IPs",
+			setup: func(t *testing.T, db *sql.DB) int {
+				res, err := db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)`, "sync-peer6", "10.0.0.6", "key6", "hmac6")
+				if err != nil {
+					t.Fatalf("setup: %v", err)
+				}
+				id, _ := res.LastInsertId()
+
+				db.Exec("INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 1)", id, "10.0.0.6")
+				db.Exec("INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 0)", id, "192.168.1.6")
+
+				return int(id)
+			},
+			allIPs:    []string{}, // agent reports no IPs
+			primaryIP: "10.0.0.6",
+			wantErr:   false,
+			checkDB: func(t *testing.T, db *sql.DB, peerID int) {
+				var count int
+				err := db.QueryRow("SELECT COUNT(*) FROM peer_ips WHERE peer_id = ?", peerID).Scan(&count)
+				if err != nil {
+					t.Fatalf("count: %v", err)
+				}
+				// Both IPs are stale since allIPs is empty; no policy references them
+				if count != 0 {
+					t.Errorf("expected 0 peer_ips (all stale and unreferenced), got %d", count)
+				}
+			},
+		},
+		{
+			name: "upsert and stale cleanup interaction",
+			setup: func(t *testing.T, db *sql.DB) int {
+				res, err := db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)`, "sync-peer7", "10.0.0.7", "key7", "hmac7")
+				if err != nil {
+					t.Fatalf("setup: %v", err)
+				}
+				id, _ := res.LastInsertId()
+
+				// Start with some IPs
+				db.Exec("INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 1)", id, "10.0.0.7")
+				db.Exec("INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 0)", id, "192.168.1.7")
+				db.Exec("INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 0)", id, "172.16.0.7")
+
+				return int(id)
+			},
+			allIPs:    []string{"10.0.0.7", "10.0.1.7", "10.0.2.7"}, // 2 new, 2 stale removed
+			primaryIP: "10.0.0.7",
+			wantErr:   false,
+			checkDB: func(t *testing.T, db *sql.DB, peerID int) {
+				rows, err := db.Query("SELECT ip_address FROM peer_ips WHERE peer_id = ? ORDER BY ip_address", peerID)
+				if err != nil {
+					t.Fatalf("query: %v", err)
+				}
+				defer rows.Close()
+
+				var ips []string
+				for rows.Next() {
+					var ip string
+					if err := rows.Scan(&ip); err != nil {
+						t.Fatalf("scan: %v", err)
+					}
+					ips = append(ips, ip)
+				}
+
+				expected := []string{"10.0.0.7", "10.0.1.7", "10.0.2.7"}
+				if len(ips) != len(expected) {
+					t.Fatalf("expected %d IPs, got %d: %v", len(expected), len(ips), ips)
+				}
+
+				for i, ip := range ips {
+					if ip != expected[i] {
+						t.Errorf("index %d: expected %s, got %s", i, expected[i], ip)
+					}
+				}
+			},
+		},
+		{
+			name: "policy reference from different peer does not prevent deletion",
+			setup: func(t *testing.T, db *sql.DB) int {
+				// Create the peer we'll sync
+				res, err := db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)`, "sync-peer8", "10.0.0.8", "key8", "hmac8")
+				if err != nil {
+					t.Fatalf("setup: %v", err)
+				}
+				id, _ := res.LastInsertId()
+
+				// Create a different peer
+				res2, err := db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)`, "other-peer8", "10.0.0.88", "key88", "hmac88")
+				if err != nil {
+					t.Fatalf("setup other peer: %v", err)
+				}
+				otherID, _ := res2.LastInsertId()
+
+				// Insert IPs for our peer
+				db.Exec("INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 1)", id, "10.0.0.8")
+				db.Exec("INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 0)", id, "192.168.1.8") // will be stale
+
+				// Create group and service
+				db.Exec("INSERT INTO groups (name) VALUES ('test-group8')")
+				db.Exec("INSERT INTO services (name, ports, protocol) VALUES ('mysql', '3306', 'tcp')")
+
+				// Create a policy where OTHER peer references the stale IP as source_ip
+				// This should NOT prevent deletion since source_id != our peerID
+				db.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, source_ip, target_ip, action)
+					VALUES ('cross-peer-policy', ?, 'group', 1, ?, 'group', '192.168.1.8', '10.0.0.8', 'ACCEPT')`, otherID, id)
+
+				return int(id)
+			},
+			allIPs:    []string{"10.0.0.8"}, // 192.168.1.8 is stale for our peer
+			primaryIP: "10.0.0.8",
+			wantErr:   false,
+			checkDB: func(t *testing.T, db *sql.DB, peerID int) {
+				// The stale IP should be deleted because the policy reference
+				// is from a DIFFERENT peer (source_id != peerID)
+				var count int
+				err := db.QueryRow("SELECT COUNT(*) FROM peer_ips WHERE peer_id = ?", peerID).Scan(&count)
+				if err != nil {
+					t.Fatalf("count: %v", err)
+				}
+				if count != 1 {
+					t.Errorf("expected 1 peer_ip (stale IP deleted because policy ref is from different peer), got %d", count)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db, cleanup := testutil.SetupTestDBWithSecret(t)
+			defer cleanup()
+
+			peerID := tt.setup(t, db)
+
+			handler := NewHandler(db, db, nil)
+			err := handler.syncPeerIPs(context.Background(), peerID, tt.allIPs, tt.primaryIP)
+
+			if (err != nil) != tt.wantErr {
+				t.Errorf("syncPeerIPs() error = %v, wantErr %v", err, tt.wantErr)
+			}
+
+			if tt.checkDB != nil {
+				tt.checkDB(t, db, peerID)
+			}
+		})
+	}
+}
+
 // Mock implementations for interfaces
 type mockSSEBroadcaster struct{}
 

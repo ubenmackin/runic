@@ -1657,7 +1657,7 @@ func TestPreviewCompile_DockerScope(t *testing.T) {
 	c := NewCompiler(database)
 
 	// Preview with target_scope = "docker"
-	rules, err := c.PreviewCompile(context.Background(), 0, sourcePeer, "peer", targetPeer, "peer", serviceID, "both", "docker")
+	rules, err := c.PreviewCompile(context.Background(), 0, sourcePeer, "peer", "", targetPeer, "peer", "", serviceID, "both", "docker")
 	if err != nil {
 		t.Fatalf("PreviewCompile failed: %v", err)
 	}
@@ -1704,7 +1704,7 @@ func TestPreviewCompile_HostScope(t *testing.T) {
 	c := NewCompiler(database)
 
 	// Preview with target_scope = "host"
-	rules, err := c.PreviewCompile(context.Background(), 0, sourcePeer, "peer", targetPeer, "peer", serviceID, "both", "host")
+	rules, err := c.PreviewCompile(context.Background(), 0, sourcePeer, "peer", "", targetPeer, "peer", "", serviceID, "both", "host")
 	if err != nil {
 		t.Fatalf("PreviewCompile failed: %v", err)
 	}
@@ -1752,7 +1752,7 @@ func TestPreviewCompile_BothScope(t *testing.T) {
 	c := NewCompiler(database)
 
 	// Preview with target_scope = "both"
-	rules, err := c.PreviewCompile(context.Background(), 0, sourcePeer, "peer", targetPeer, "peer", serviceID, "both", "both")
+	rules, err := c.PreviewCompile(context.Background(), 0, sourcePeer, "peer", "", targetPeer, "peer", "", serviceID, "both", "both")
 	if err != nil {
 		t.Fatalf("PreviewCompile failed: %v", err)
 	}
@@ -1922,7 +1922,7 @@ func TestPreviewCompile_IGMP(t *testing.T) {
 	c := NewCompiler(database)
 
 	// Preview with IGMP service
-	rules, err := c.PreviewCompile(context.Background(), 0, sourcePeer, "peer", targetPeer, "peer", serviceID, "both", "both")
+	rules, err := c.PreviewCompile(context.Background(), 0, sourcePeer, "peer", "", targetPeer, "peer", "", serviceID, "both", "both")
 	if err != nil {
 		t.Fatalf("PreviewCompile failed: %v", err)
 	}
@@ -2103,7 +2103,7 @@ func TestPreviewCompile_VRRP(t *testing.T) {
 	c := NewCompiler(database)
 
 	// Preview with VRRP service
-	rules, err := c.PreviewCompile(context.Background(), 0, sourcePeer, "peer", targetPeer, "peer", serviceID, "both", "both")
+	rules, err := c.PreviewCompile(context.Background(), 0, sourcePeer, "peer", "", targetPeer, "peer", "", serviceID, "both", "both")
 	if err != nil {
 		t.Fatalf("PreviewCompile failed: %v", err)
 	}
@@ -2334,5 +2334,393 @@ func TestIPSetOutputRuleDirection(t *testing.T) {
 	buggyOutputMatchSrc := "-A OUTPUT -p tcp -m set --match-set runic_group_management src"
 	if strings.Contains(output, buggyOutputMatchSrc) {
 		t.Errorf("OUTPUT rule incorrectly uses 'src' match direction (should be 'dst'), got:\\n%s", output)
+	}
+}
+
+// TestSourceIPOverride verifies that when a policy has source_ip set and source_type is "peer",
+// the compiler uses the source_ip instead of the peer's primary IP address.
+func TestSourceIPOverride(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+
+	// Create target peer (the one we compile for)
+	targetPeer := insertPeer(t, database, "target", "10.0.0.1", false)
+	// Create source peer with primary IP 10.0.0.2
+	sourcePeer := insertPeer(t, database, "source", "10.0.0.2", false)
+	serviceID := insertService(t, database, "ssh", "22", "tcp")
+
+	// Insert policy with source_ip = "10.0.0.100" (different from peer's primary IP 10.0.0.2)
+	_, err := database.Exec(
+		`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled, source_ip)
+		VALUES (?, ?, 'peer', ?, ?, 'peer', 'ACCEPT', 100, 1, ?)`,
+		"ssh-with-source-ip", sourcePeer, serviceID, targetPeer, "10.0.0.100")
+	if err != nil {
+		t.Fatalf("insert policy: %v", err)
+	}
+
+	c := NewCompiler(database)
+	output, err := c.Compile(context.Background(), targetPeer)
+	if err != nil {
+		t.Fatalf("compile error: %v", err)
+	}
+
+	// Should use source_ip (10.0.0.100) instead of the peer's primary IP (10.0.0.2)
+	if !strings.Contains(output, "-s 10.0.0.100/32 -p tcp --dport 22") {
+		t.Errorf("expected INPUT rule with source_ip 10.0.0.100/32, got:\n%s", output)
+	}
+
+	// Should NOT use the peer's primary IP
+	if strings.Contains(output, "-s 10.0.0.2/32") {
+		t.Errorf("should NOT use peer's primary IP when source_ip is set, got:\n%s", output)
+	}
+}
+
+// TestTargetIPOverride verifies that when a policy has target_ip set and target_type is "peer",
+// the compiler uses the target_ip instead of the peer's primary IP address.
+func TestTargetIPOverride(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+
+	// Create source peer (the one we compile for)
+	sourcePeer := insertPeer(t, database, "source", "10.0.0.1", false)
+	// Create target peer with primary IP 10.0.0.2
+	targetPeer := insertPeer(t, database, "target", "10.0.0.2", false)
+	serviceID := insertService(t, database, "ssh", "22", "tcp")
+
+	// Insert policy with target_ip = "10.0.0.200" (different from peer's primary IP 10.0.0.2)
+	_, err := database.Exec(
+		`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled, target_ip)
+		VALUES (?, ?, 'peer', ?, ?, 'peer', 'ACCEPT', 100, 1, ?)`,
+		"ssh-with-target-ip", sourcePeer, serviceID, targetPeer, "10.0.0.200")
+	if err != nil {
+		t.Fatalf("insert policy: %v", err)
+	}
+
+	c := NewCompiler(database)
+	output, err := c.Compile(context.Background(), sourcePeer)
+	if err != nil {
+		t.Fatalf("compile error: %v", err)
+	}
+
+	// Should use target_ip (10.0.0.200) instead of the peer's primary IP (10.0.0.2)
+	if !strings.Contains(output, "-d 10.0.0.200/32 -p tcp --dport 22") {
+		t.Errorf("expected OUTPUT rule with target_ip 10.0.0.200/32, got:\n%s", output)
+	}
+
+	// Should NOT use the peer's primary IP
+	if strings.Contains(output, "-d 10.0.0.2/32") {
+		t.Errorf("should NOT use peer's primary IP when target_ip is set, got:\n%s", output)
+	}
+}
+
+// TestEmptySourceIPFallback verifies that when source_ip is empty/null and source_type is "peer",
+// the compiler falls back to the peer's primary IP address.
+func TestEmptySourceIPFallback(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+
+	targetPeer := insertPeer(t, database, "target", "10.0.0.1", false)
+	sourcePeer := insertPeer(t, database, "source", "10.0.0.2", false)
+	serviceID := insertService(t, database, "ssh", "22", "tcp")
+
+	// Insert policy WITHOUT source_ip (backward compatibility)
+	_, err := database.Exec(
+		`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled)
+		VALUES (?, ?, 'peer', ?, ?, 'peer', 'ACCEPT', 100, 1)`,
+		"ssh-no-source-ip", sourcePeer, serviceID, targetPeer)
+	if err != nil {
+		t.Fatalf("insert policy: %v", err)
+	}
+
+	c := NewCompiler(database)
+	output, err := c.Compile(context.Background(), targetPeer)
+	if err != nil {
+		t.Fatalf("compile error: %v", err)
+	}
+
+	// Should fall back to peer's primary IP (10.0.0.2)
+	if !strings.Contains(output, "-s 10.0.0.2/32 -p tcp --dport 22") {
+		t.Errorf("expected INPUT rule with peer's primary IP 10.0.0.2/32, got:\n%s", output)
+	}
+}
+
+// TestEmptyTargetIPFallback verifies that when target_ip is empty/null and target_type is "peer",
+// the compiler falls back to the peer's primary IP address.
+func TestEmptyTargetIPFallback(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+
+	sourcePeer := insertPeer(t, database, "source", "10.0.0.1", false)
+	targetPeer := insertPeer(t, database, "target", "10.0.0.2", false)
+	serviceID := insertService(t, database, "ssh", "22", "tcp")
+
+	// Insert policy WITHOUT target_ip (backward compatibility)
+	_, err := database.Exec(
+		`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled)
+		VALUES (?, ?, 'peer', ?, ?, 'peer', 'ACCEPT', 100, 1)`,
+		"ssh-no-target-ip", sourcePeer, serviceID, targetPeer)
+	if err != nil {
+		t.Fatalf("insert policy: %v", err)
+	}
+
+	c := NewCompiler(database)
+	output, err := c.Compile(context.Background(), sourcePeer)
+	if err != nil {
+		t.Fatalf("compile error: %v", err)
+	}
+
+	// Should fall back to peer's primary IP (10.0.0.2)
+	if !strings.Contains(output, "-d 10.0.0.2/32 -p tcp --dport 22") {
+		t.Errorf("expected OUTPUT rule with peer's primary IP 10.0.0.2/32, got:\n%s", output)
+	}
+}
+
+// TestSourceIPWithCIDR verifies that source_ip values containing CIDR notation
+// are passed through without adding /32.
+func TestSourceIPWithCIDR(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+
+	targetPeer := insertPeer(t, database, "target", "10.0.0.1", false)
+	sourcePeer := insertPeer(t, database, "source", "10.0.0.2", false)
+	serviceID := insertService(t, database, "ssh", "22", "tcp")
+
+	// Insert policy with source_ip containing CIDR notation
+	_, err := database.Exec(
+		`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled, source_ip)
+		VALUES (?, ?, 'peer', ?, ?, 'peer', 'ACCEPT', 100, 1, ?)`,
+		"ssh-source-cidr", sourcePeer, serviceID, targetPeer, "10.0.0.0/24")
+	if err != nil {
+		t.Fatalf("insert policy: %v", err)
+	}
+
+	c := NewCompiler(database)
+	output, err := c.Compile(context.Background(), targetPeer)
+	if err != nil {
+		t.Fatalf("compile error: %v", err)
+	}
+
+	// Should use the CIDR as-is, without adding /32
+	if !strings.Contains(output, "-s 10.0.0.0/24 -p tcp --dport 22") {
+		t.Errorf("expected INPUT rule with source_ip CIDR 10.0.0.0/24, got:\n%s", output)
+	}
+
+	// Should NOT add /32 suffix to a CIDR
+	if strings.Contains(output, "10.0.0.0/24/32") {
+		t.Errorf("should not add /32 to CIDR notation, got:\n%s", output)
+	}
+}
+
+// TestTargetIPWithCIDR verifies that target_ip values containing CIDR notation
+// are passed through without adding /32.
+func TestTargetIPWithCIDR(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+
+	sourcePeer := insertPeer(t, database, "source", "10.0.0.1", false)
+	targetPeer := insertPeer(t, database, "target", "10.0.0.2", false)
+	serviceID := insertService(t, database, "ssh", "22", "tcp")
+
+	// Insert policy with target_ip containing CIDR notation
+	_, err := database.Exec(
+		`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled, target_ip)
+		VALUES (?, ?, 'peer', ?, ?, 'peer', 'ACCEPT', 100, 1, ?)`,
+		"ssh-target-cidr", sourcePeer, serviceID, targetPeer, "10.0.1.0/24")
+	if err != nil {
+		t.Fatalf("insert policy: %v", err)
+	}
+
+	c := NewCompiler(database)
+	output, err := c.Compile(context.Background(), sourcePeer)
+	if err != nil {
+		t.Fatalf("compile error: %v", err)
+	}
+
+	// Should use the CIDR as-is, without adding /32
+	if !strings.Contains(output, "-d 10.0.1.0/24 -p tcp --dport 22") {
+		t.Errorf("expected OUTPUT rule with target_ip CIDR 10.0.1.0/24, got:\n%s", output)
+	}
+
+	// Should NOT add /32 suffix to a CIDR
+	if strings.Contains(output, "10.0.1.0/24/32") {
+		t.Errorf("should not add /32 to CIDR notation, got:\n%s", output)
+	}
+}
+
+// TestPolicyWithSourceAndTargetIP verifies that both source_ip and target_ip
+// are used simultaneously when both are set.
+func TestPolicyWithSourceAndTargetIP(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+
+	// source peer has IP 10.0.0.1 but we use source_ip = 10.0.0.100
+	sourcePeer := insertPeer(t, database, "source", "10.0.0.1", false)
+	// target peer has IP 10.0.0.2 but we use target_ip = 10.0.0.200
+	targetPeer := insertPeer(t, database, "target", "10.0.0.2", false)
+	serviceID := insertService(t, database, "ssh", "22", "tcp")
+
+	// Insert policy with both source_ip and target_ip
+	_, err := database.Exec(
+		`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled, source_ip, target_ip)
+		VALUES (?, ?, 'peer', ?, ?, 'peer', 'ACCEPT', 100, 1, ?, ?)`,
+		"ssh-both-ips", sourcePeer, serviceID, targetPeer, "10.0.0.100", "10.0.0.200")
+	if err != nil {
+		t.Fatalf("insert policy: %v", err)
+	}
+
+	c := NewCompiler(database)
+
+	// Compile for target: should see source_ip in ingress rules
+	outputTarget, err := c.Compile(context.Background(), targetPeer)
+	if err != nil {
+		t.Fatalf("compile target error: %v", err)
+	}
+
+	if !strings.Contains(outputTarget, "-s 10.0.0.100/32 -p tcp --dport 22") {
+		t.Errorf("expected INPUT rule with source_ip 10.0.0.100/32 on target, got:\n%s", outputTarget)
+	}
+
+	// Compile for source: should see target_ip in egress rules
+	outputSource, err := c.Compile(context.Background(), sourcePeer)
+	if err != nil {
+		t.Fatalf("compile source error: %v", err)
+	}
+
+	if !strings.Contains(outputSource, "-d 10.0.0.200/32 -p tcp --dport 22") {
+		t.Errorf("expected OUTPUT rule with target_ip 10.0.0.200/32 on source, got:\n%s", outputSource)
+	}
+}
+
+// TestTargetIPWithDockerScope verifies that target_ip works correctly with Docker scope.
+func TestTargetIPWithDockerScope(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+
+	// Target peer has Docker enabled
+	targetPeer := insertPeer(t, database, "target", "10.0.0.2", true)
+	// Source peer is the one sending traffic
+	sourcePeer := insertPeer(t, database, "source", "10.0.0.1", false)
+	serviceID := insertService(t, database, "ssh", "22", "tcp")
+
+	// Insert policy: source -> target with target_ip
+	_, err := database.Exec(
+		`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled, target_ip, target_scope)
+		VALUES (?, ?, 'peer', ?, ?, 'peer', 'ACCEPT', 100, 1, ?, 'both')`,
+		"ssh-docker-target-ip", sourcePeer, serviceID, targetPeer, "10.0.0.200")
+	if err != nil {
+		t.Fatalf("insert policy: %v", err)
+	}
+
+	c := NewCompiler(database)
+
+	// Compile for source: should see target_ip in egress rules
+	outputSource, err := c.Compile(context.Background(), sourcePeer)
+	if err != nil {
+		t.Fatalf("compile source error: %v", err)
+	}
+
+	// Should use target_ip (10.0.0.200) in OUTPUT rules
+	if !strings.Contains(outputSource, "-d 10.0.0.200/32 -p tcp --dport 22") {
+		t.Errorf("expected OUTPUT rule with target_ip 10.0.0.200/32 on source, got:\n%s", outputSource)
+	}
+
+	// Compile for target: should see source peer's IP in ingress rules (target_ip is for egress direction)
+	outputTarget, err := c.Compile(context.Background(), targetPeer)
+	if err != nil {
+		t.Fatalf("compile target error: %v", err)
+	}
+
+	// Target peer sees ingress from source peer (10.0.0.1 - the source's primary IP)
+	if !strings.Contains(outputTarget, "-s 10.0.0.1/32 -p tcp --dport 22") {
+		t.Errorf("expected INPUT rule from source peer on target, got:\n%s", outputTarget)
+	}
+
+	// Target peer should have DOCKER-USER rules since has_docker=true
+	if !strings.Contains(outputTarget, "DOCKER-USER") {
+		t.Errorf("expected DOCKER-USER rules for target peer with Docker, got:\n%s", outputTarget)
+	}
+}
+
+// TestPreviewCompileWithSourceIP verifies that PreviewCompile uses source_ip
+// when provided instead of the peer's primary IP.
+func TestPreviewCompileWithSourceIP(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+
+	sourcePeer := insertPeer(t, database, "source", "10.0.0.1", false)
+	targetPeer := insertPeer(t, database, "target", "10.0.0.2", false)
+	serviceID := insertService(t, database, "ssh", "22", "tcp")
+
+	c := NewCompiler(database)
+
+	// Preview with source_ip = "10.0.0.100" (different from source peer's IP 10.0.0.1)
+	rules, err := c.PreviewCompile(context.Background(), 0, sourcePeer, "peer", "10.0.0.100", targetPeer, "peer", "", serviceID, "both", "host")
+	if err != nil {
+		t.Fatalf("PreviewCompile failed: %v", err)
+	}
+
+	// Should use the provided source_ip, not the peer's primary IP
+	hasSourceIPRule := false
+	for _, rule := range rules {
+		if strings.Contains(rule, "-s 10.0.0.100/32") {
+			hasSourceIPRule = true
+		}
+	}
+	if !hasSourceIPRule {
+		t.Errorf("expected rule with source_ip 10.0.0.100/32, got: %v", rules)
+	}
+
+	// Should NOT use the peer's primary IP (10.0.0.1)
+	for _, rule := range rules {
+		if strings.Contains(rule, "-s 10.0.0.1/32") {
+			t.Errorf("should NOT use peer's primary IP when source_ip is set, got: %s", rule)
+		}
+	}
+}
+
+// TestPreviewCompileWithTargetIP verifies that PreviewCompile uses target_ip
+// when provided instead of the peer's primary IP.
+func TestPreviewCompileWithTargetIP(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+
+	sourcePeer := insertPeer(t, database, "source", "10.0.0.1", false)
+	targetPeer := insertPeer(t, database, "target", "10.0.0.2", false)
+	serviceID := insertService(t, database, "ssh", "22", "tcp")
+
+	c := NewCompiler(database)
+
+	// Preview with target_ip = "10.0.0.200" (different from target peer's IP 10.0.0.2)
+	rules, err := c.PreviewCompile(context.Background(), 0, sourcePeer, "peer", "", targetPeer, "peer", "10.0.0.200", serviceID, "both", "host")
+	if err != nil {
+		t.Fatalf("PreviewCompile failed: %v", err)
+	}
+
+	// Should use the provided target_ip, not the peer's primary IP
+	hasTargetIPRule := false
+	for _, rule := range rules {
+		if strings.Contains(rule, "-d 10.0.0.200/32") {
+			hasTargetIPRule = true
+		}
+	}
+	if !hasTargetIPRule {
+		t.Errorf("expected rule with target_ip 10.0.0.200/32, got: %v", rules)
+	}
+
+	// Should NOT use the peer's primary IP (10.0.0.2)
+	for _, rule := range rules {
+		if strings.Contains(rule, "-d 10.0.0.2/32") {
+			t.Errorf("should NOT use peer's primary IP when target_ip is set, got: %s", rule)
+		}
 	}
 }

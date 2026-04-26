@@ -12,7 +12,7 @@ import (
 func GetGroup(ctx context.Context, database Querier, groupID int) (models.GroupRow, error) {
 	var g models.GroupRow
 	err := database.QueryRowContext(ctx,
-		"SELECT id, name, COALESCE(description, ''), COALESCE(is_system, 0) FROM groups WHERE id = ? AND COALESCE(is_pending_delete, 0) = 0", groupID,
+		"SELECT id, name, COALESCE(description, ''), COALESCE(is_system, 0) FROM groups WHERE id = ? AND is_pending_delete = 0", groupID,
 	).Scan(&g.ID, &g.Name, &g.Description, &g.IsSystem)
 	return g, err
 }

@@ -21,10 +21,14 @@ vi.mock('../api/client', () => ({
   },
   QUERY_KEYS: {
     peers: () => ['peers'],
+    peerIps: (id) => ['peers', id, 'ips'],
     groups: () => ['groups'],
     services: () => ['services'],
     policies: () => ['policies'],
   },
+  getPeerIPs: vi.fn(() => Promise.resolve([])),
+  addPeerIP: vi.fn(() => Promise.resolve()),
+  deletePeerIP: vi.fn(() => Promise.resolve()),
   setAuthFailureHandler: vi.fn(),
 }))
 

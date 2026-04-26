@@ -2,9 +2,9 @@ import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import { useLocation } from 'react-router-dom'
 import { useTableSort } from '../hooks/useTableSort'
 import { usePagination } from '../hooks/usePagination'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient, useQueries } from '@tanstack/react-query'
 import { Plus, Pencil, Trash2, Server, Copy, Check, RefreshCw, X, FileCode, AlertTriangle, Globe, ChevronDown, ChevronUp, Send, Download } from 'lucide-react'
-import { api, QUERY_KEYS } from '../api/client'
+import { api, QUERY_KEYS, getPeerIPs, addPeerIP, deletePeerIP } from '../api/client'
 import { REFETCH_INTERVALS, OS_OPTIONS, ARCH_OPTIONS } from '../constants'
 import { useCrudModal } from '../hooks/useCrudModal'
 import { useToastContext } from '../hooks/ToastContext'
@@ -89,7 +89,12 @@ function getPeerMenuItems(peer, { canEdit, fetchBundle, handlePushToPeer, openEd
 }
 
 // Mobile card component for peer
-function PeerCard({ peer, canEdit, fetchBundle, handlePushToPeer, openEdit, setDeleteTarget, handleSyncStatusClick, handleImportRules }) {
+function PeerCard({ peer, peerIPs, canEdit, fetchBundle, handlePushToPeer, openEdit, setDeleteTarget, handleSyncStatusClick, handleImportRules }) {
+  const ips = peerIPs || []
+  const primaryIp = peer.ip_address
+  const secondaryIps = ips.filter(ip => !ip.is_primary).map(ip => ip.ip_address)
+  const totalIpCount = ips.length || 1
+
   return (
     <div className="bg-white dark:bg-charcoal-dark border border-gray-200 dark:border-gray-border p-3">
       <div className="flex items-start justify-between">
@@ -113,18 +118,37 @@ function PeerCard({ peer, canEdit, fetchBundle, handlePushToPeer, openEdit, setD
                 MANUAL
               </span>
             )}
+            {/* Multi-IP badge */}
+            {totalIpCount > 1 && (
+              <span className="px-1.5 py-0.5 text-[10px] font-mono font-medium border border-blue-400 dark:border-blue-500 text-blue-600 dark:text-blue-400 shrink-0">
+                {totalIpCount} IPs
+              </span>
+            )}
           </div>
-          {/* Second line: Sync status + Heartbeat */}
+          {/* IP addresses */}
+          <div className="mt-1">
+            <span className="font-mono text-sm text-gray-700 dark:text-amber-primary">{primaryIp}</span>
+            {secondaryIps.length > 0 && (
+              <div className="flex flex-wrap gap-1 mt-0.5">
+                {secondaryIps.map(ip => (
+                  <span key={ip} className="px-1.5 py-0.5 text-[11px] font-mono bg-gray-100 dark:bg-charcoal-darkest text-gray-500 dark:text-amber-muted border border-gray-200 dark:border-gray-border">
+                    {ip}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+          {/* Third line: Sync status + Heartbeat */}
           <div className="flex items-center gap-2 mt-1 text-sm text-gray-600 dark:text-amber-muted">
             {peer.is_manual ? (
               <span className="text-gray-400">Manual Entry</span>
             ) : (
               <>
-          <button
-            onClick={() => handleSyncStatusClick(peer)}
-            title={`Click to ${peer.sync_status === 'pending' ? 'review pending changes' : peer.sync_status === 'pending_sync' ? 'view pending bundle' : 'view deployed rules'}`}
-            className="cursor-pointer"
-          >
+                <button
+                  onClick={() => handleSyncStatusClick(peer)}
+                  title={`Click to ${peer.sync_status === 'pending' ? 'review pending changes' : peer.sync_status === 'pending_sync' ? 'view pending bundle' : 'view deployed rules'}`}
+                  className="cursor-pointer"
+                >
                   <SharpTag
                     status={syncStatusConfig[peer.sync_status]?.label || peer.sync_status.toUpperCase()}
                     color={syncStatusConfig[peer.sync_status]?.color}
@@ -165,6 +189,13 @@ export default function Peers() {
   const [selectedToken, setSelectedToken] = useState('')
   const [isGenerating, setIsGenerating] = useState(false)
   const [tokenDescription, setTokenDescription] = useState('')
+
+  // Edit Peer modal IP management state
+  const [editPeerIPs, setEditPeerIPs] = useState([])
+  const [editPeerIPsLoading, setEditPeerIPsLoading] = useState(false)
+  const [newIpAddress, setNewIpAddress] = useState('')
+  const [ipAdding, setIpAdding] = useState(false)
+  const [ipDeleting, setIpDeleting] = useState(null) // IP id being deleted
 
 	// Rule Bundle state
 	const [bundleModalOpen, setBundleModalOpen] = useState(false)
@@ -239,7 +270,23 @@ const [bundleContent, setBundleContent] = useState('')
   const [isManualRefreshing, setIsManualRefreshing] = useState(false)
 
   const _openAdd = () => { setFormErrors({}); handleOpenAdd() }
-  const openEdit = (s) => { setEditPeer(s); setFormForEdit(s); setFormErrors({}); setModalOpen(true) }
+  const openEdit = (s) => {
+    setEditPeer(s); setFormForEdit(s); setFormErrors({}); setModalOpen(true)
+    // Load IPs for the peer being edited
+    setEditPeerIPs([])
+    setNewIpAddress('')
+    if (peerIPsMap[s.id]) {
+      // Use cached data if available
+      setEditPeerIPs(peerIPsMap[s.id])
+    } else {
+      // Fetch from API
+      setEditPeerIPsLoading(true)
+      getPeerIPs(s.id)
+        .then(data => setEditPeerIPs(data || []))
+        .catch(() => setEditPeerIPs([]))
+        .finally(() => setEditPeerIPsLoading(false))
+    }
+  }
 
   const openAddModal = useCallback(() => {
     setAddModalOpen(true)
@@ -336,6 +383,49 @@ const [bundleContent, setBundleContent] = useState('')
     }
   }
 
+  // Handle adding a secondary IP to a peer in the Edit modal
+  const handleAddPeerIP = async () => {
+    if (!editPeer || !newIpAddress.trim()) return
+    // Basic IP validation
+    const ipRegex = /^(\d{1,3}\.){3}\d{1,3}(\/\d{1,2})?$/
+    if (!ipRegex.test(newIpAddress.trim())) {
+      showToast('Invalid IP address format', 'error')
+      return
+    }
+    setIpAdding(true)
+    try {
+      await addPeerIP(editPeer.id, newIpAddress.trim())
+      showToast('IP address added successfully', 'success')
+      // Refresh IPs for this peer
+      const data = await getPeerIPs(editPeer.id)
+      setEditPeerIPs(data || [])
+      qc.invalidateQueries({ queryKey: QUERY_KEYS.peerIps(editPeer.id) })
+      setNewIpAddress('')
+    } catch (err) {
+      showToast(`Failed to add IP: ${err.message}`, 'error')
+    } finally {
+      setIpAdding(false)
+    }
+  }
+
+  // Handle deleting a secondary IP from a peer in the Edit modal
+  const handleDeletePeerIP = async (ipId) => {
+    if (!editPeer) return
+    setIpDeleting(ipId)
+    try {
+      await deletePeerIP(editPeer.id, ipId)
+      showToast('IP address removed successfully', 'success')
+      // Refresh IPs for this peer
+      const data = await getPeerIPs(editPeer.id)
+      setEditPeerIPs(data || [])
+      qc.invalidateQueries({ queryKey: QUERY_KEYS.peerIps(editPeer.id) })
+    } catch (err) {
+      showToast(`Failed to remove IP: ${err.message}`, 'error')
+    } finally {
+      setIpDeleting(null)
+    }
+  }
+
   const { data: peers, isLoading, refetch } = useQuery({
     queryKey: QUERY_KEYS.peers(),
     queryFn: () => api.get('/peers'),
@@ -345,6 +435,33 @@ const [bundleContent, setBundleContent] = useState('')
     refetchOnWindowFocus: true,
     staleTime: 15000,
   })
+
+  // Fetch IPs for each peer in parallel
+  const peerIPsQueries = useQueries({
+    queries: (peers || []).map(peer => ({
+      queryKey: QUERY_KEYS.peerIps(peer.id),
+      queryFn: () => getPeerIPs(peer.id),
+      staleTime: 15000,
+      refetchInterval: REFETCH_INTERVALS.PEERS_PAGE,
+      refetchIntervalInBackground: false,
+    })),
+  })
+
+  // Build a map of peerId -> IPs array for quick lookup
+  const peerIPsMap = useMemo(() => {
+    const map = {}
+    if (!peers) return map
+    peers.forEach((peer, idx) => {
+      const query = peerIPsQueries[idx]
+      if (query?.data) {
+        map[peer.id] = query.data
+      }
+    })
+    return map
+  }, [peers, peerIPsQueries])
+
+  // Check if any peer IPs are still loading
+  const peerIPsLoading = peers && peerIPsQueries.some(q => q.isLoading)
 
   const { data: registrationTokens, isLoading: tokensLoading } = useQuery({
     queryKey: ['registration-tokens'],
@@ -394,7 +511,12 @@ const preFilteredPeers = peers?.filter(peer => {
       const os = (peer.os_type || peer.os || '').toLowerCase()
       const groups = (peer.groups || '').toLowerCase()
       const agent = peer.is_manual ? 'manual' : (peer.agent_version || '').toLowerCase()
-      return hostname.includes(term) || ip.includes(term) || os.includes(term) || groups.includes(term) || agent.includes(term)
+      // Also search secondary IPs
+      const secondaryIps = (peerIPsMap[peer.id] || [])
+        .filter(ipEntry => !ipEntry.is_primary)
+        .map(ipEntry => (ipEntry.ip_address || '').toLowerCase())
+      const secondaryIpMatch = secondaryIps.some(sip => sip.includes(term))
+      return hostname.includes(term) || ip.includes(term) || os.includes(term) || groups.includes(term) || agent.includes(term) || secondaryIpMatch
     },
     fieldMap: {
       os_type: (p) => (p.os_type || p.os || '').toLowerCase(),
@@ -690,21 +812,22 @@ const handleSubmit = (e) => {
                         )
 ) : (
 <>
-{/* Mobile card view */}
-<div className="md:hidden space-y-2">
-{paginatedPeers.map((peer) => (
-        <PeerCard
-          key={peer.id}
-          peer={peer}
-          canEdit={canEdit}
-          fetchBundle={fetchBundle}
-          handlePushToPeer={handlePushToPeer}
-          openEdit={openEdit}
-          setDeleteTarget={setDeleteTarget}
-          handleSyncStatusClick={handleSyncStatusClick}
-          handleImportRules={handleImportRules}
-        />
-))}
+      {/* Mobile card view */}
+      <div className="md:hidden space-y-2">
+        {paginatedPeers.map((peer) => (
+          <PeerCard
+            key={peer.id}
+            peer={peer}
+            peerIPs={peerIPsMap[peer.id]}
+            canEdit={canEdit}
+            fetchBundle={fetchBundle}
+            handlePushToPeer={handlePushToPeer}
+            openEdit={openEdit}
+            setDeleteTarget={setDeleteTarget}
+            handleSyncStatusClick={handleSyncStatusClick}
+            handleImportRules={handleImportRules}
+          />
+        ))}
 <Pagination showingRange={peersShowingRange} page={peersPage} totalPages={totalPages} onPageChange={setPeersPage} totalItems={peersTotal} />
 </div>
 
@@ -785,9 +908,38 @@ color={syncStatusConfig[peer.sync_status]?.color}
 </button>
 ) : null}
 </td>
-<td className="px-4 py-1 font-mono text-gray-600 dark:text-amber-primary">
-{peer.ip_address}
-</td>
+          <td className="px-4 py-1">
+            <div className="flex flex-col">
+              <span className="font-mono text-gray-600 dark:text-amber-primary">{peer.ip_address}</span>
+              {(() => {
+                const ips = peerIPsMap[peer.id]
+                if (!ips) {
+                  return peerIPsLoading ? (
+                    <span className="text-[10px] text-gray-400 dark:text-amber-muted mt-0.5">Loading IPs...</span>
+                  ) : null
+                }
+                const secondaryIps = ips.filter(ip => !ip.is_primary).map(ip => ip.ip_address)
+                return (
+                  <>
+                    {secondaryIps.length > 0 && (
+                      <div className="flex flex-wrap gap-1 mt-0.5">
+                        {secondaryIps.map(ip => (
+                          <span key={ip} className="px-1.5 py-0.5 text-[11px] font-mono bg-gray-100 dark:bg-charcoal-darkest text-gray-500 dark:text-amber-muted border border-gray-200 dark:border-gray-border">
+                            {ip}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    {ips.length > 1 && (
+                      <span className="mt-0.5 px-1.5 py-0.5 text-[10px] font-mono font-medium border border-blue-400 dark:border-blue-500 text-blue-600 dark:text-blue-400 self-start">
+                        {ips.length} IPs
+                      </span>
+                    )}
+                  </>
+                )
+              })()}
+            </div>
+          </td>
 <td className="px-4 py-1 text-gray-600 dark:text-amber-primary">
 {peer.os_type || peer.os || '—'}
 </td>
@@ -906,7 +1058,7 @@ title="Delete"
       {/* Add/Edit Modal (Legacy) */}
       {modalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" tabIndex="-1" onKeyDown={(e) => { if (e.key === 'Escape') { closeModal() } }}>
-          <div ref={editModalRef} className="bg-white dark:bg-charcoal-dark rounded-none shadow-none w-full max-w-lg mx-4">
+          <div ref={editModalRef} className={`bg-white dark:bg-charcoal-dark rounded-none shadow-none w-full mx-4 ${editPeer ? 'max-w-xl' : 'max-w-lg'}`}>
             <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-border flex items-center justify-between">
               <h3 className="text-lg font-semibold text-gray-900 dark:text-light-neutral">{editPeer ? 'Edit Peer' : 'Add Peer'}</h3>
               <button onClick={closeModal} className="p-1 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded">
@@ -919,9 +1071,108 @@ title="Delete"
                 <input type="text" value={formData.hostname} onChange={e => setFormData(d => ({ ...d, hostname: e.target.value }))} required className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral" />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">IP Address</label>
+                <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Primary IP Address</label>
                 <input type="text" value={formData.ip_address} onChange={e => setFormData(d => ({ ...d, ip_address: e.target.value }))} required className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral" />
               </div>
+
+              {/* Secondary IPs Management Section */}
+              {editPeer && editPeer.is_manual && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-2">Secondary IP Addresses</label>
+                  {editPeerIPsLoading ? (
+                    <div className="flex items-center gap-2 py-2">
+                      <RefreshCw className="w-3 h-3 animate-spin text-gray-400" />
+                      <span className="text-sm text-gray-500 dark:text-amber-muted">Loading IPs...</span>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {/* List of existing IPs */}
+                      {editPeerIPs.length > 0 ? (
+                        <div className="space-y-1">
+                          {editPeerIPs.map(ip => (
+                            <div key={ip.id} className="flex items-center gap-2 px-2 py-1.5 bg-gray-50 dark:bg-charcoal-darkest border border-gray-200 dark:border-gray-border">
+                              <span className="font-mono text-sm text-gray-700 dark:text-amber-primary flex-1">{ip.ip_address}</span>
+                              {ip.is_primary ? (
+                                <span className="text-[10px] font-mono font-medium px-1.5 py-0.5 border border-purple-400 dark:border-purple-500 text-purple-600 dark:text-purple-400">PRIMARY</span>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeletePeerIP(ip.id)}
+                                  disabled={ipDeleting === ip.id}
+                                  className="p-1 hover:bg-red-100 dark:hover:bg-red-900/20 rounded-none disabled:opacity-50"
+                                  title="Remove IP address"
+                                >
+                                  {ipDeleting === ip.id ? (
+                                    <RefreshCw className="w-3.5 h-3.5 text-red-500 animate-spin" />
+                                  ) : (
+                                    <X className="w-3.5 h-3.5 text-red-500" />
+                                  )}
+                                </button>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-sm text-gray-400 dark:text-amber-muted py-1">No additional IP addresses</p>
+                      )}
+                      {/* Add new IP */}
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={newIpAddress}
+                          onChange={e => setNewIpAddress(e.target.value)}
+                          placeholder="e.g., 10.20.10.20"
+                          className="flex-1 px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral placeholder-gray-400 dark:placeholder-amber-muted focus:ring-2 focus:ring-purple-active focus:border-transparent"
+                          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleAddPeerIP() } }}
+                        />
+                        <button
+                          type="button"
+                          onClick={handleAddPeerIP}
+                          disabled={ipAdding || !newIpAddress.trim()}
+                          className="px-3 py-1.5 text-xs font-bold uppercase text-white bg-purple-active hover:bg-purple-600 rounded-none disabled:opacity-50 flex items-center gap-1 border border-purple-active/20 transition-all shrink-0"
+                        >
+                          {ipAdding ? (
+                            <RefreshCw className="w-3 h-3 animate-spin" />
+                          ) : (
+                            <Plus className="w-3 h-3" />
+                          )}
+                          Add IP
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Agent peer IPs (read-only) */}
+              {editPeer && !editPeer.is_manual && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-2">IP Addresses</label>
+                  {editPeerIPsLoading ? (
+                    <div className="flex items-center gap-2 py-2">
+                      <RefreshCw className="w-3 h-3 animate-spin text-gray-400" />
+                      <span className="text-sm text-gray-500 dark:text-amber-muted">Loading IPs...</span>
+                    </div>
+                  ) : editPeerIPs.length > 0 ? (
+                    <div className="space-y-1">
+                      {editPeerIPs.map(ip => (
+                        <div key={ip.id} className="flex items-center gap-2 px-2 py-1.5 bg-gray-50 dark:bg-charcoal-darkest border border-gray-200 dark:border-gray-border">
+                          <span className="font-mono text-sm text-gray-700 dark:text-amber-primary flex-1">{ip.ip_address}</span>
+                          {ip.is_primary && (
+                            <span className="text-[10px] font-mono font-medium px-1.5 py-0.5 border border-purple-400 dark:border-purple-500 text-purple-600 dark:text-purple-400">PRIMARY</span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-gray-400 dark:text-amber-muted py-1">No IP addresses detected</p>
+                  )}
+                  <p className="text-xs text-gray-500 dark:text-amber-muted mt-1 italic">
+                    Agent IPs are auto-detected and cannot be manually managed.
+                  </p>
+                </div>
+              )}
+
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">OS</label>

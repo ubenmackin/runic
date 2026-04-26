@@ -107,8 +107,8 @@ func RollbackSnapshots(ctx context.Context, database DB) error {
 				if err := json.Unmarshal([]byte(s.SnapshotData), &p); err != nil {
 					return fmt.Errorf("unmarshal policy snapshot: %w", err)
 				}
-				_, err = tx.ExecContext(ctx, "UPDATE policies SET name=?, description=?, source_id=?, source_type=?, service_id=?, target_id=?, target_type=?, action=?, priority=?, enabled=?, target_scope=?, direction=?, is_pending_delete=0 WHERE id=?",
-					p.Name, p.Description, p.SourceID, p.SourceType, p.ServiceID, p.TargetID, p.TargetType, p.Action, p.Priority, p.Enabled, p.TargetScope, p.Direction, s.EntityID)
+				_, err = tx.ExecContext(ctx, "UPDATE policies SET name=?, description=?, source_id=?, source_type=?, service_id=?, target_id=?, target_type=?, source_ip=?, target_ip=?, action=?, priority=?, enabled=?, target_scope=?, direction=?, is_pending_delete=0 WHERE id=?",
+					p.Name, p.Description, p.SourceID, p.SourceType, p.ServiceID, p.TargetID, p.TargetType, p.SourceIP, p.TargetIP, p.Action, p.Priority, p.Enabled, p.TargetScope, p.Direction, s.EntityID)
 				if err != nil {
 					return err
 				}
@@ -273,7 +273,7 @@ func rollbackUpdateDeleteEntity(ctx context.Context, tx Querier, entityType stri
 		if err := json.Unmarshal([]byte(snapshotData), &p); err != nil {
 			return fmt.Errorf("unmarshal policy snapshot: %w", err)
 		}
-		_, err := tx.ExecContext(ctx, "UPDATE policies SET name=?, description=?, source_id=?, source_type=?, service_id=?, target_id=?, target_type=?, action=?, priority=?, enabled=?, target_scope=?, direction=?, is_pending_delete=0 WHERE id=?", p.Name, p.Description, p.SourceID, p.SourceType, p.ServiceID, p.TargetID, p.TargetType, p.Action, p.Priority, p.Enabled, p.TargetScope, p.Direction, entityID)
+		_, err := tx.ExecContext(ctx, "UPDATE policies SET name=?, description=?, source_id=?, source_type=?, service_id=?, target_id=?, target_type=?, source_ip=?, target_ip=?, action=?, priority=?, enabled=?, target_scope=?, direction=?, is_pending_delete=0 WHERE id=?", p.Name, p.Description, p.SourceID, p.SourceType, p.ServiceID, p.TargetID, p.TargetType, p.SourceIP, p.TargetIP, p.Action, p.Priority, p.Enabled, p.TargetScope, p.Direction, entityID)
 		return err
 	}
 	return fmt.Errorf("unknown entity type: %s", entityType)

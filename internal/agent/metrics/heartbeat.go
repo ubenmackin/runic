@@ -12,7 +12,7 @@ import (
 )
 
 // SendHeartbeat sends a heartbeat to the control plane.
-func SendHeartbeat(ctx context.Context, client common.HTTPClient, controlPlaneURL, hostID, bundleVersion, token, version string) error {
+func SendHeartbeat(ctx context.Context, client common.HTTPClient, controlPlaneURL, hostID, bundleVersion, token, version string, allIPs []string) error {
 	uptime := getUptime()
 	load := getLoad1m()
 
@@ -23,6 +23,7 @@ func SendHeartbeat(ctx context.Context, client common.HTTPClient, controlPlaneUR
 		Load1m:               load,
 		AgentVersion:         version,
 		HasIPSet:             boolPtr(common.DetectIPSet()),
+		AllIPs:               allIPs,
 	}
 
 	resp, err := common.DoJSONRequest(ctx, client, "POST", controlPlaneURL+"/api/v1/agent/heartbeat", body, token, "runic-agent/"+version)

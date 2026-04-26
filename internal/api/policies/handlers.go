@@ -28,7 +28,7 @@ func NewHandler(db db.Querier, compiler *engine.Compiler, changeWorker *common.C
 func (h *Handler) ListPolicies(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.DB.QueryContext(r.Context(),
 		`SELECT id, name, COALESCE(description, ''), source_id, source_type, service_id,
-		target_id, target_type, action, priority, enabled, target_scope, COALESCE(direction, 'both'), created_at, updated_at, COALESCE(is_pending_delete, 0)
+		target_id, target_type, COALESCE(source_ip, ''), COALESCE(target_ip, ''), action, priority, enabled, target_scope, COALESCE(direction, 'both'), created_at, updated_at, is_pending_delete
 		FROM policies ORDER BY priority ASC`)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "failed to query policies")
@@ -41,31 +41,40 @@ func (h *Handler) ListPolicies(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	type policyResp struct {
-		ID              int    `json:"id"`
-		Name            string `json:"name"`
-		Description     string `json:"description"`
-		SourceID        int    `json:"source_id"`
-		SourceType      string `json:"source_type"`
-		ServiceID       int    `json:"service_id"`
-		TargetID        int    `json:"target_id"`
-		TargetType      string `json:"target_type"`
-		Action          string `json:"action"`
-		Priority        int    `json:"priority"`
-		Enabled         bool   `json:"enabled"`
-		TargetScope     string `json:"target_scope"`
-		Direction       string `json:"direction"`
-		CreatedAt       string `json:"created_at"`
-		UpdatedAt       string `json:"updated_at"`
-		IsPendingDelete bool   `json:"is_pending_delete"`
+		ID              int     `json:"id"`
+		Name            string  `json:"name"`
+		Description     string  `json:"description"`
+		SourceID        int     `json:"source_id"`
+		SourceType      string  `json:"source_type"`
+		ServiceID       int     `json:"service_id"`
+		TargetID        int     `json:"target_id"`
+		TargetType      string  `json:"target_type"`
+		SourceIP        *string `json:"source_ip"`
+		TargetIP        *string `json:"target_ip"`
+		Action          string  `json:"action"`
+		Priority        int     `json:"priority"`
+		Enabled         bool    `json:"enabled"`
+		TargetScope     string  `json:"target_scope"`
+		Direction       string  `json:"direction"`
+		CreatedAt       string  `json:"created_at"`
+		UpdatedAt       string  `json:"updated_at"`
+		IsPendingDelete bool    `json:"is_pending_delete"`
 	}
 
 	var policiesData []policyResp
 	for rows.Next() {
 		var p policyResp
+		var sourceIPStr, targetIPStr string
 		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.SourceID, &p.SourceType, &p.ServiceID,
-			&p.TargetID, &p.TargetType, &p.Action, &p.Priority, &p.Enabled, &p.TargetScope, &p.Direction, &p.CreatedAt, &p.UpdatedAt, &p.IsPendingDelete); err != nil {
+			&p.TargetID, &p.TargetType, &sourceIPStr, &targetIPStr, &p.Action, &p.Priority, &p.Enabled, &p.TargetScope, &p.Direction, &p.CreatedAt, &p.UpdatedAt, &p.IsPendingDelete); err != nil {
 			common.RespondError(w, http.StatusInternalServerError, "failed to scan policy")
 			return
+		}
+		if sourceIPStr != "" {
+			p.SourceIP = &sourceIPStr
+		}
+		if targetIPStr != "" {
+			p.TargetIP = &targetIPStr
 		}
 		policiesData = append(policiesData, p)
 	}
@@ -75,18 +84,20 @@ func (h *Handler) ListPolicies(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) CreatePolicy(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		Name        string `json:"name"`
-		Description string `json:"description"`
-		SourceID    int    `json:"source_id"`
-		SourceType  string `json:"source_type"`
-		ServiceID   int    `json:"service_id"`
-		TargetID    int    `json:"target_id"`
-		TargetType  string `json:"target_type"`
-		Action      string `json:"action"`
-		Priority    int    `json:"priority"`
-		Enabled     *bool  `json:"enabled"`
-		TargetScope string `json:"target_scope"`
-		Direction   string `json:"direction"`
+		Name        string  `json:"name"`
+		Description string  `json:"description"`
+		SourceID    int     `json:"source_id"`
+		SourceType  string  `json:"source_type"`
+		ServiceID   int     `json:"service_id"`
+		TargetID    int     `json:"target_id"`
+		TargetType  string  `json:"target_type"`
+		SourceIP    *string `json:"source_ip"`
+		TargetIP    *string `json:"target_ip"`
+		Action      string  `json:"action"`
+		Priority    int     `json:"priority"`
+		Enabled     *bool   `json:"enabled"`
+		TargetScope string  `json:"target_scope"`
+		Direction   string  `json:"direction"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		common.RespondError(w, http.StatusBadRequest, "invalid JSON")
@@ -116,6 +127,16 @@ func (h *Handler) CreatePolicy(w http.ResponseWriter, r *http.Request) {
 		common.RespondError(w, http.StatusBadRequest, "target_type must be one of: peer, group, special")
 		return
 	}
+	// source_ip is only valid when source_type is "peer"
+	if input.SourceIP != nil && *input.SourceIP != "" && input.SourceType != "peer" {
+		common.RespondError(w, http.StatusBadRequest, "source_ip is only valid when source_type is peer")
+		return
+	}
+	// target_ip is only valid when target_type is "peer"
+	if input.TargetIP != nil && *input.TargetIP != "" && input.TargetType != "peer" {
+		common.RespondError(w, http.StatusBadRequest, "target_ip is only valid when target_type is peer")
+		return
+	}
 	if input.Action == "" {
 		input.Action = "ACCEPT"
 	}
@@ -141,11 +162,20 @@ func (h *Handler) CreatePolicy(w http.ResponseWriter, r *http.Request) {
 		enabled = *input.Enabled
 	}
 
+	// Normalize source_ip/target_ip: nil for non-peer types, nil if empty
+	var sourceIP, targetIP interface{}
+	if input.SourceType == "peer" && input.SourceIP != nil && *input.SourceIP != "" {
+		sourceIP = *input.SourceIP
+	}
+	if input.TargetType == "peer" && input.TargetIP != nil && *input.TargetIP != "" {
+		targetIP = *input.TargetIP
+	}
+
 	result, err := h.DB.ExecContext(r.Context(),
-		`INSERT INTO policies (name, description, source_id, source_type, service_id, target_id, target_type, action, priority, enabled, target_scope, direction)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO policies (name, description, source_id, source_type, service_id, target_id, target_type, source_ip, target_ip, action, priority, enabled, target_scope, direction)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		input.Name, input.Description, input.SourceID, input.SourceType, input.ServiceID,
-		input.TargetID, input.TargetType, input.Action, input.Priority, enabled, input.TargetScope, input.Direction)
+		input.TargetID, input.TargetType, sourceIP, targetIP, input.Action, input.Priority, enabled, input.TargetScope, input.Direction)
 	if err != nil {
 		log.ErrorContext(r.Context(), "failed to create policy", "error", err)
 		common.InternalError(w)
@@ -185,32 +215,43 @@ func (h *Handler) GetPolicy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var p struct {
-		ID          int    `json:"id"`
-		Name        string `json:"name"`
-		Description string `json:"description"`
-		SourceID    int    `json:"source_id"`
-		SourceType  string `json:"source_type"`
-		ServiceID   int    `json:"service_id"`
-		TargetID    int    `json:"target_id"`
-		TargetType  string `json:"target_type"`
-		Action      string `json:"action"`
-		Priority    int    `json:"priority"`
-		Enabled     bool   `json:"enabled"`
-		TargetScope string `json:"target_scope"`
-		Direction   string `json:"direction"`
-		CreatedAt   string `json:"created_at"`
-		UpdatedAt   string `json:"updated_at"`
+		ID          int     `json:"id"`
+		Name        string  `json:"name"`
+		Description string  `json:"description"`
+		SourceID    int     `json:"source_id"`
+		SourceType  string  `json:"source_type"`
+		ServiceID   int     `json:"service_id"`
+		TargetID    int     `json:"target_id"`
+		TargetType  string  `json:"target_type"`
+		SourceIP    *string `json:"source_ip"`
+		TargetIP    *string `json:"target_ip"`
+		Action      string  `json:"action"`
+		Priority    int     `json:"priority"`
+		Enabled     bool    `json:"enabled"`
+		TargetScope string  `json:"target_scope"`
+		Direction   string  `json:"direction"`
+		CreatedAt   string  `json:"created_at"`
+		UpdatedAt   string  `json:"updated_at"`
 	}
 
+	var sourceIPStr, targetIPStr string
 	err = h.DB.QueryRowContext(r.Context(),
 		`SELECT id, name, COALESCE(description, ''), source_id, source_type, service_id,
-		target_id, target_type, action, priority, enabled, target_scope, COALESCE(direction, 'both'), created_at, updated_at
-		FROM policies WHERE id = ? AND COALESCE(is_pending_delete, 0) = 0`, id,
+		target_id, target_type, COALESCE(source_ip, ''), COALESCE(target_ip, ''), action, priority, enabled, target_scope, COALESCE(direction, 'both'), created_at, updated_at
+		FROM policies WHERE id = ? AND is_pending_delete = 0`, id,
 	).Scan(&p.ID, &p.Name, &p.Description, &p.SourceID, &p.SourceType, &p.ServiceID,
-		&p.TargetID, &p.TargetType, &p.Action, &p.Priority, &p.Enabled, &p.TargetScope, &p.Direction, &p.CreatedAt, &p.UpdatedAt)
+		&p.TargetID, &p.TargetType, &sourceIPStr, &targetIPStr, &p.Action, &p.Priority, &p.Enabled, &p.TargetScope, &p.Direction, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		common.RespondError(w, http.StatusNotFound, "policy not found")
 		return
+	}
+
+	// Convert empty strings to nil for source_ip/target_ip
+	if sourceIPStr != "" {
+		p.SourceIP = &sourceIPStr
+	}
+	if targetIPStr != "" {
+		p.TargetIP = &targetIPStr
 	}
 
 	common.RespondJSON(w, http.StatusOK, p)
@@ -224,18 +265,20 @@ func (h *Handler) UpdatePolicy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var input struct {
-		Name        string `json:"name"`
-		Description string `json:"description"`
-		SourceID    int    `json:"source_id"`
-		SourceType  string `json:"source_type"`
-		ServiceID   int    `json:"service_id"`
-		TargetID    int    `json:"target_id"`
-		TargetType  string `json:"target_type"`
-		Action      string `json:"action"`
-		Priority    int    `json:"priority"`
-		Enabled     *bool  `json:"enabled"`
-		TargetScope string `json:"target_scope"`
-		Direction   string `json:"direction"`
+		Name        string  `json:"name"`
+		Description string  `json:"description"`
+		SourceID    int     `json:"source_id"`
+		SourceType  string  `json:"source_type"`
+		ServiceID   int     `json:"service_id"`
+		TargetID    int     `json:"target_id"`
+		TargetType  string  `json:"target_type"`
+		SourceIP    *string `json:"source_ip"`
+		TargetIP    *string `json:"target_ip"`
+		Action      string  `json:"action"`
+		Priority    int     `json:"priority"`
+		Enabled     *bool   `json:"enabled"`
+		TargetScope string  `json:"target_scope"`
+		Direction   string  `json:"direction"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		common.RespondError(w, http.StatusBadRequest, "invalid JSON")
@@ -265,6 +308,16 @@ func (h *Handler) UpdatePolicy(w http.ResponseWriter, r *http.Request) {
 		common.RespondError(w, http.StatusBadRequest, "target_type must be one of: peer, group, special")
 		return
 	}
+	// source_ip is only valid when source_type is "peer"
+	if input.SourceIP != nil && *input.SourceIP != "" && input.SourceType != "peer" {
+		common.RespondError(w, http.StatusBadRequest, "source_ip is only valid when source_type is peer")
+		return
+	}
+	// target_ip is only valid when target_type is "peer"
+	if input.TargetIP != nil && *input.TargetIP != "" && input.TargetType != "peer" {
+		common.RespondError(w, http.StatusBadRequest, "target_ip is only valid when target_type is peer")
+		return
+	}
 	if input.Direction == "" {
 		input.Direction = "both"
 	}
@@ -285,6 +338,15 @@ func (h *Handler) UpdatePolicy(w http.ResponseWriter, r *http.Request) {
 		enabled = *input.Enabled
 	}
 
+	// Normalize source_ip/target_ip: nil for non-peer types, nil if empty
+	var sourceIP, targetIP interface{}
+	if input.SourceType == "peer" && input.SourceIP != nil && *input.SourceIP != "" {
+		sourceIP = *input.SourceIP
+	}
+	if input.TargetType == "peer" && input.TargetIP != nil && *input.TargetIP != "" {
+		targetIP = *input.TargetIP
+	}
+
 	if err := h.snapshotPolicy(r.Context(), "update", id); err != nil {
 		log.ErrorContext(r.Context(), "failed to create snapshot", "error", err)
 	}
@@ -299,10 +361,10 @@ func (h *Handler) UpdatePolicy(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.DB.ExecContext(r.Context(),
 		`UPDATE policies SET name = ?, description = ?, source_id = ?, source_type = ?, service_id = ?,
-			target_id = ?, target_type = ?, action = ?, priority = ?, enabled = ?, target_scope = ?, direction = ?, updated_at = CURRENT_TIMESTAMP
-			WHERE id = ? AND COALESCE(is_pending_delete, 0) = 0`,
+		target_id = ?, target_type = ?, source_ip = ?, target_ip = ?, action = ?, priority = ?, enabled = ?, target_scope = ?, direction = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE id = ? AND is_pending_delete = 0`,
 		input.Name, input.Description, input.SourceID, input.SourceType, input.ServiceID,
-		input.TargetID, input.TargetType, input.Action, input.Priority, enabled, input.TargetScope, input.Direction, id)
+		input.TargetID, input.TargetType, sourceIP, targetIP, input.Action, input.Priority, enabled, input.TargetScope, input.Direction, id)
 	if err != nil {
 		log.ErrorContext(r.Context(), "failed to update policy", "error", err)
 		common.InternalError(w)
@@ -358,7 +420,7 @@ func (h *Handler) DeletePolicy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var policyName string
-	err = h.DB.QueryRowContext(r.Context(), "SELECT name FROM policies WHERE id = ? AND COALESCE(is_pending_delete, 0) = 0", id).Scan(&policyName)
+	err = h.DB.QueryRowContext(r.Context(), "SELECT name FROM policies WHERE id = ? AND is_pending_delete = 0", id).Scan(&policyName)
 	if err != nil {
 		common.RespondError(w, http.StatusNotFound, "policy not found")
 		return
@@ -396,8 +458,10 @@ func (h *Handler) DeletePolicy(w http.ResponseWriter, r *http.Request) {
 type PolicyPreviewRequest struct {
 	SourceID    int    `json:"source_id"`
 	SourceType  string `json:"source_type"`
+	SourceIP    string `json:"source_ip"`
 	TargetID    int    `json:"target_id"`
 	TargetType  string `json:"target_type"`
+	TargetIP    string `json:"target_ip"`
 	ServiceID   int    `json:"service_id"`
 	PeerID      int    `json:"peer_id"`      // the peer to base the preview on
 	Direction   string `json:"direction"`    // forward, backward, or both
@@ -429,7 +493,7 @@ func (h *Handler) PolicyPreview(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	rules, err := h.Compiler.PreviewCompile(r.Context(), req.PeerID, req.SourceID, req.SourceType, req.TargetID, req.TargetType, req.ServiceID, req.Direction, req.TargetScope)
+	rules, err := h.Compiler.PreviewCompile(r.Context(), req.PeerID, req.SourceID, req.SourceType, req.SourceIP, req.TargetID, req.TargetType, req.TargetIP, req.ServiceID, req.Direction, req.TargetScope)
 	if err != nil {
 		log.ErrorContext(r.Context(), "failed to generate preview", "error", err)
 		http.Error(w, `{"error": "failed to generate preview"}`, http.StatusInternalServerError)
@@ -555,31 +619,40 @@ func (h *Handler) snapshotPolicy(ctx context.Context, action string, policyID in
 	}
 
 	var p struct {
-		ID          int    `json:"id"`
-		Name        string `json:"name"`
-		Description string `json:"description"`
-		SourceID    int    `json:"source_id"`
-		SourceType  string `json:"source_type"`
-		ServiceID   int    `json:"service_id"`
-		TargetID    int    `json:"target_id"`
-		TargetType  string `json:"target_type"`
-		Action      string `json:"action"`
-		Priority    int    `json:"priority"`
-		Enabled     bool   `json:"enabled"`
-		TargetScope string `json:"target_scope"`
-		Direction   string `json:"direction"`
-		CreatedAt   string `json:"created_at"`
-		UpdatedAt   string `json:"updated_at"`
+		ID          int     `json:"id"`
+		Name        string  `json:"name"`
+		Description string  `json:"description"`
+		SourceID    int     `json:"source_id"`
+		SourceType  string  `json:"source_type"`
+		ServiceID   int     `json:"service_id"`
+		TargetID    int     `json:"target_id"`
+		TargetType  string  `json:"target_type"`
+		SourceIP    *string `json:"source_ip"`
+		TargetIP    *string `json:"target_ip"`
+		Action      string  `json:"action"`
+		Priority    int     `json:"priority"`
+		Enabled     bool    `json:"enabled"`
+		TargetScope string  `json:"target_scope"`
+		Direction   string  `json:"direction"`
+		CreatedAt   string  `json:"created_at"`
+		UpdatedAt   string  `json:"updated_at"`
 	}
 
+	var sourceIPStr, targetIPStr string
 	err := h.DB.QueryRowContext(ctx,
 		`SELECT id, name, COALESCE(description, ''), source_id, source_type, service_id,
-		target_id, target_type, action, priority, enabled, target_scope, COALESCE(direction, 'both'), created_at, updated_at
+		target_id, target_type, COALESCE(source_ip, ''), COALESCE(target_ip, ''), action, priority, enabled, target_scope, COALESCE(direction, 'both'), created_at, updated_at
 		FROM policies WHERE id = ?`, policyID,
 	).Scan(&p.ID, &p.Name, &p.Description, &p.SourceID, &p.SourceType, &p.ServiceID,
-		&p.TargetID, &p.TargetType, &p.Action, &p.Priority, &p.Enabled, &p.TargetScope, &p.Direction, &p.CreatedAt, &p.UpdatedAt)
+		&p.TargetID, &p.TargetType, &sourceIPStr, &targetIPStr, &p.Action, &p.Priority, &p.Enabled, &p.TargetScope, &p.Direction, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("get policy: %w", err)
+	}
+	if sourceIPStr != "" {
+		p.SourceIP = &sourceIPStr
+	}
+	if targetIPStr != "" {
+		p.TargetIP = &targetIPStr
 	}
 
 	bytes, err := json.Marshal(p)

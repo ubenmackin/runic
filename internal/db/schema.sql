@@ -70,6 +70,8 @@ CREATE TABLE IF NOT EXISTS policies (
 	service_id INTEGER NOT NULL,
 	target_id INTEGER NOT NULL,
 	target_type TEXT NOT NULL,
+	source_ip TEXT,
+	target_ip TEXT,
 	action TEXT NOT NULL DEFAULT 'ACCEPT' CHECK(action IN ('ACCEPT', 'DROP', 'LOG_DROP')),
 	priority INTEGER NOT NULL DEFAULT 100,
 	enabled BOOLEAN NOT NULL DEFAULT 1,
@@ -211,15 +213,26 @@ CREATE INDEX IF NOT EXISTS idx_pending_changes_peer ON pending_changes(peer_id);
 
 -- Pending bundle previews for peer configuration previews
 CREATE TABLE IF NOT EXISTS pending_bundle_previews (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    peer_id INTEGER NOT NULL UNIQUE,
-    rules_content TEXT NOT NULL,
-    diff_content TEXT,
-    version_hash TEXT NOT NULL,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY(peer_id) REFERENCES peers(id) ON DELETE CASCADE
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  peer_id INTEGER NOT NULL UNIQUE,
+  rules_content TEXT NOT NULL,
+  diff_content TEXT,
+  version_hash TEXT NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(peer_id) REFERENCES peers(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_pending_bundle_previews_peer ON pending_bundle_previews(peer_id);
+
+CREATE TABLE IF NOT EXISTS peer_ips (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  peer_id INTEGER NOT NULL REFERENCES peers(id) ON DELETE CASCADE,
+  ip_address TEXT NOT NULL,
+  is_primary INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(peer_id, ip_address)
+);
+CREATE INDEX IF NOT EXISTS idx_peer_ips_peer_id ON peer_ips(peer_id);
+CREATE INDEX IF NOT EXISTS idx_peer_ips_ip_address ON peer_ips(ip_address);
 
 CREATE TABLE IF NOT EXISTS change_snapshots (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -338,7 +351,9 @@ CREATE TABLE IF NOT EXISTS import_rules (
     target_scope TEXT DEFAULT 'both',
 	policy_name TEXT,
 	enabled INTEGER DEFAULT 1,
-	description TEXT DEFAULT ''
+	description TEXT DEFAULT '',
+	source_ip TEXT,
+	target_ip TEXT
 );
 
 -- Staged group entries (groups that don't exist yet in real DB)

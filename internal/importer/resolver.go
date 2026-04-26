@@ -84,20 +84,21 @@ func resolveRules(ctx context.Context, database db.Querier, sessionID int64, raw
 		}
 
 		// Resolve source
-		sourceType, sourceID, sourceStagingID := resolveEndpoint(ctx, database, sessionID, pr, ipsetMembers, true)
+		sourceType, sourceID, sourceStagingID, sourceIP := resolveEndpoint(ctx, database, sessionID, pr, ipsetMembers, true)
 
 		// Resolve target (destination)
-		targetType, targetID, targetStagingID := resolveEndpoint(ctx, database, sessionID, pr, ipsetMembers, false)
+		targetType, targetID, targetStagingID, targetIP := resolveEndpoint(ctx, database, sessionID, pr, ipsetMembers, false)
 
 		// Resolve service
 		serviceID, serviceStagingID := resolveService(ctx, database, sessionID, pr)
 
 		// Update the import_rule with resolved mappings
 		_, err := database.ExecContext(ctx,
-			"UPDATE import_rules SET source_type = ?, source_id = ?, source_staging_id = ?, target_type = ?, target_id = ?, target_staging_id = ?, service_id = ?, service_staging_id = ?, status = 'resolved' WHERE id = ?",
+			"UPDATE import_rules SET source_type = ?, source_id = ?, source_staging_id = ?, target_type = ?, target_id = ?, target_staging_id = ?, service_id = ?, service_staging_id = ?, source_ip = ?, target_ip = ?, status = 'resolved' WHERE id = ?",
 			sourceType, sqlNullInt64(sourceID), sqlNullInt64(sourceStagingID),
 			targetType, sqlNullInt64(targetID), sqlNullInt64(targetStagingID),
 			sqlNullInt64(serviceID), sqlNullInt64(serviceStagingID),
+			sqlNullString(sourceIP), sqlNullString(targetIP),
 			r.ID,
 		)
 		if err != nil {
@@ -109,8 +110,9 @@ func resolveRules(ctx context.Context, database db.Querier, sessionID int64, raw
 }
 
 // resolveEndpoint resolves a source or target endpoint for a rule.
-// Returns (type, realID, stagingID) — realID is set if mapped to existing entity, stagingID if new.
-func resolveEndpoint(ctx context.Context, database db.Querier, sessionID int64, rule *iptparse.ParsedRule, ipsetMembers map[string][]string, isSource bool) (string, int64, int64) {
+// Returns (type, realID, stagingID, matchedIP) — realID is set if mapped to existing entity, stagingID if new.
+// matchedIP is set when the IP was found via peer_ips (non-primary IP match).
+func resolveEndpoint(ctx context.Context, database db.Querier, sessionID int64, rule *iptparse.ParsedRule, ipsetMembers map[string][]string, isSource bool) (string, int64, int64, string) {
 	// Check for ipset match
 	if rule.IpsetMatch != nil {
 		isMatchForEndpoint := (isSource && rule.IpsetMatch.Direction == "src") || (!isSource && rule.IpsetMatch.Direction == "dst")
@@ -130,14 +132,21 @@ func resolveEndpoint(ctx context.Context, database db.Querier, sessionID int64, 
 
 	// 0.0.0.0/0 or empty = any IP → special target
 	if ip == "" || ip == "0.0.0.0/0" {
-		return "special", 6, 0 // __any_ip__ has id=6 in special_targets
+		return "special", 6, 0, "" // __any_ip__ has id=6 in special_targets
 	}
 
-	// Look up existing peer by IP
+	// Look up existing peer by primary IP
 	var peerID int64
 	err := database.QueryRowContext(ctx, "SELECT id FROM peers WHERE ip_address = ?", ip).Scan(&peerID)
 	if err == nil {
-		return "peer", peerID, 0
+		return "peer", peerID, 0, ""
+	}
+
+	// Check peer_ips table for non-primary IP match
+	var peerIDFromIPs int64
+	err = database.QueryRowContext(ctx, "SELECT peer_id FROM peer_ips WHERE ip_address = ?", ip).Scan(&peerIDFromIPs)
+	if err == nil {
+		return "peer", peerIDFromIPs, 0, ip
 	}
 
 	// No existing peer — create staging peer mapping
@@ -147,13 +156,14 @@ func resolveEndpoint(ctx context.Context, database db.Querier, sessionID int64, 
 	if err != nil {
 		log.Warn("resolveEndpoint: staging peer creation failed — rule will be unresolvable",
 			"ip", ip, "session_id", sessionID, "error", err)
-		return "peer", 0, 0
+		return "peer", 0, 0, ""
 	}
-	return "peer", 0, stagingID
+	return "peer", 0, stagingID, ""
 }
 
 // resolveIpsetEndpoint resolves an ipset reference to a group.
-func resolveIpsetEndpoint(ctx context.Context, database db.Querier, sessionID int64, ipsetName string, ipsetMembers map[string][]string) (string, int64, int64) {
+// Returns (type, realID, stagingID, matchedIP) — matchedIP is always empty for ipset resolution.
+func resolveIpsetEndpoint(ctx context.Context, database db.Querier, sessionID int64, ipsetName string, ipsetMembers map[string][]string) (string, int64, int64, string) {
 	// Derive group name: strip "runic_group_" prefix if present
 	groupName := ipsetName
 	if strings.HasPrefix(ipsetName, "runic_group_") {
@@ -167,7 +177,7 @@ func resolveIpsetEndpoint(ctx context.Context, database db.Querier, sessionID in
 		sessionID, ipsetName,
 	).Scan(&existingStagingID)
 	if err == nil {
-		return "group", 0, existingStagingID
+		return "group", 0, existingStagingID, ""
 	}
 
 	// Resolve member peer IDs first (needed for both phases)
@@ -183,10 +193,16 @@ func resolveIpsetEndpoint(ctx context.Context, database db.Querier, sessionID in
 		if err == nil {
 			existingPeerIDs = append(existingPeerIDs, pid)
 		} else {
-			// Create staging peer for this member
-			spid, err := createStagingPeer(ctx, database, sessionID, memberIP, memberIP)
+			// Check peer_ips for non-primary IP match
+			err = database.QueryRowContext(ctx, "SELECT peer_id FROM peer_ips WHERE ip_address = ?", memberIP).Scan(&pid)
 			if err == nil {
-				stagingPeerIDs = append(stagingPeerIDs, spid)
+				existingPeerIDs = append(existingPeerIDs, pid)
+			} else {
+				// Create staging peer for this member
+				spid, err := createStagingPeer(ctx, database, sessionID, memberIP, memberIP)
+				if err == nil {
+					stagingPeerIDs = append(stagingPeerIDs, spid)
+				}
 			}
 		}
 	}
@@ -225,7 +241,7 @@ func resolveIpsetEndpoint(ctx context.Context, database db.Querier, sessionID in
 			if result != nil {
 				stagingID, _ = result.LastInsertId()
 			}
-			return "group", groupID, stagingID
+			return "group", groupID, stagingID, ""
 		}
 		// Members don't match — fall through to Phase 2
 	}
@@ -259,7 +275,7 @@ func resolveIpsetEndpoint(ctx context.Context, database db.Querier, sessionID in
 				)
 				if err == nil {
 					stagingID, _ := result.LastInsertId()
-					return "group", matchingGroupID, stagingID
+					return "group", matchingGroupID, stagingID, ""
 				}
 			}
 		}
@@ -273,11 +289,11 @@ func resolveIpsetEndpoint(ctx context.Context, database db.Querier, sessionID in
 	if err != nil {
 		log.Warn("resolveIpsetEndpoint: staging group creation failed — rule will be unresolvable",
 			"group", groupName, "ipset", ipsetName, "session_id", sessionID, "error", err)
-		return "group", 0, 0
+		return "group", 0, 0, ""
 	}
 	stagingID, _ := result.LastInsertId()
 
-	return "group", 0, stagingID
+	return "group", 0, stagingID, ""
 }
 
 // resolveService resolves a service from protocol+port.
@@ -427,6 +443,12 @@ func parseIPPart(s string) string {
 // Zero maps to NULL (Valid=false), non-zero maps to the integer value (Valid=true).
 func sqlNullInt64(v int64) sql.NullInt64 {
 	return sql.NullInt64{Int64: v, Valid: v != 0}
+}
+
+// sqlNullString returns a sql.NullString value.
+// Empty string maps to NULL (Valid=false), non-empty maps to the string value (Valid=true).
+func sqlNullString(v string) sql.NullString {
+	return sql.NullString{String: v, Valid: v != ""}
 }
 
 // resolveMulticastRule maps a pkttype multicast rule to Runic policy entities.

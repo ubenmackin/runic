@@ -268,11 +268,19 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		_, err = h.DB.ExecContext(ctx, `INSERT INTO peers (hostname, ip_address, os_type, arch, has_docker, has_ipset, agent_key, agent_token, hmac_key, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'online')`, input.Hostname, input.IP, input.OSType, input.Arch, input.HasDocker, input.HasIPSet, agentKey, agentToken, hmacKey)
+		result, err := h.DB.ExecContext(ctx, `INSERT INTO peers (hostname, ip_address, os_type, arch, has_docker, has_ipset, agent_key, agent_token, hmac_key, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'online')`, input.Hostname, input.IP, input.OSType, input.Arch, input.HasDocker, input.HasIPSet, agentKey, agentToken, hmacKey)
 		if err != nil {
 			runiclog.Error("Failed to create server error", "error", err)
 			http.Error(w, `{"error": "failed to create server"}`, http.StatusInternalServerError)
 			return
+		}
+
+		// Insert all reported IPs into peer_ips
+		peerID, _ := result.LastInsertId()
+		if len(input.AllIPs) > 0 {
+			if err := h.upsertPeerIPs(ctx, int(peerID), input.AllIPs, input.IP); err != nil {
+				runiclog.Warn("Failed to upsert peer IPs during registration", "error", err, "peer_id", peerID)
+			}
 		}
 
 		hostID := fmt.Sprintf("host-%s", input.Hostname)
@@ -341,6 +349,13 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Update peer IPs on re-registration if the agent reports IPs
+	if len(input.AllIPs) > 0 {
+		if err := h.upsertPeerIPs(ctx, existingID, input.AllIPs, input.IP); err != nil {
+			runiclog.Warn("Failed to upsert peer IPs during re-registration", "error", err, "peer_id", existingID)
+		}
+	}
+
 	common.RespondJSON(w, http.StatusOK, map[string]interface{}{
 		"host_id":                hostID,
 		"token":                  newToken,
@@ -393,11 +408,12 @@ func (h *Handler) Heartbeat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var input struct {
-		BundleVersionApplied string  `json:"bundle_version_applied"`
-		UptimeSeconds        float64 `json:"uptime_seconds"`
-		Load1m               float64 `json:"load_1m"`
-		AgentVersion         string  `json:"agent_version"`
-		HasIPSet             *bool   `json:"has_ipset"`
+		BundleVersionApplied string   `json:"bundle_version_applied"`
+		UptimeSeconds        float64  `json:"uptime_seconds"`
+		Load1m               float64  `json:"load_1m"`
+		AgentVersion         string   `json:"agent_version"`
+		HasIPSet             *bool    `json:"has_ipset"`
+		AllIPs               []string `json:"all_ips"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
@@ -409,6 +425,17 @@ func (h *Handler) Heartbeat(w http.ResponseWriter, r *http.Request) {
 	_, err := h.DB.ExecContext(r.Context(), `UPDATE peers SET last_heartbeat = CURRENT_TIMESTAMP, status = 'online', agent_version = ?, bundle_version = ?, has_ipset = ? WHERE id = ?`, input.AgentVersion, input.BundleVersionApplied, input.HasIPSet, serverID)
 	if err != nil {
 		runiclog.Error("Failed to update heartbeat error", "error", err)
+	}
+
+	// Update peer IPs if the agent reports them
+	if len(input.AllIPs) > 0 {
+		// Look up the primary IP for this peer
+		var primaryIP string
+		if err := h.DB.QueryRowContext(r.Context(), "SELECT ip_address FROM peers WHERE id = ?", serverID).Scan(&primaryIP); err == nil {
+			if err := h.syncPeerIPs(r.Context(), serverID, input.AllIPs, primaryIP); err != nil {
+				runiclog.Warn("Failed to sync peer IPs during heartbeat", "error", err, "peer_id", serverID)
+			}
+		}
 	}
 
 	common.RespondJSON(w, http.StatusOK, map[string]string{
@@ -761,4 +788,106 @@ func (h *Handler) AgentTestKey(w http.ResponseWriter, r *http.Request) {
 	common.RespondJSON(w, http.StatusOK, map[string]string{
 		"status": "ok",
 	})
+}
+
+// upsertPeerIPs inserts all reported IPs into peer_ips for a given peer.
+// The primary IP (matching the peer's ip_address) gets is_primary = 1,
+// all others get is_primary = 0. Uses INSERT OR IGNORE for duplicate safety.
+func (h *Handler) upsertPeerIPs(ctx context.Context, peerID int, allIPs []string, primaryIP string) error {
+	for _, ip := range allIPs {
+		isPrimary := 0
+		if ip == primaryIP {
+			isPrimary = 1
+		}
+		_, err := h.DB.ExecContext(ctx,
+			"INSERT OR IGNORE INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, ?)",
+			peerID, ip, isPrimary,
+		)
+		if err != nil {
+			return fmt.Errorf("insert peer IP %s: %w", ip, err)
+		}
+
+		// Update is_primary flag for existing entries that may have changed
+		if isPrimary == 1 {
+			_, err := h.DB.ExecContext(ctx,
+				"UPDATE peer_ips SET is_primary = 1 WHERE peer_id = ? AND ip_address = ?",
+				peerID, ip,
+			)
+			if err != nil {
+				runiclog.Warn("Failed to update is_primary flag", "error", err, "peer_id", peerID, "ip", ip)
+			}
+		}
+	}
+	return nil
+}
+
+// syncPeerIPs updates peer_ips to match the currently reported IPs.
+// It adds new IPs, removes stale IPs no longer reported, and updates is_primary flags.
+func (h *Handler) syncPeerIPs(ctx context.Context, peerID int, allIPs []string, primaryIP string) error {
+	// First, upsert all current IPs
+	if err := h.upsertPeerIPs(ctx, peerID, allIPs, primaryIP); err != nil {
+		return err
+	}
+
+	// Build a set of reported IPs for fast lookup
+	reportedSet := make(map[string]bool, len(allIPs))
+	for _, ip := range allIPs {
+		reportedSet[ip] = true
+	}
+
+	// Query existing IPs for this peer
+	rows, err := h.DB.QueryContext(ctx, "SELECT ip_address FROM peer_ips WHERE peer_id = ?", peerID)
+	if err != nil {
+		return fmt.Errorf("query existing peer IPs: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var staleIPs []string
+	for rows.Next() {
+		var existingIP string
+		if err := rows.Scan(&existingIP); err != nil {
+			continue
+		}
+		if !reportedSet[existingIP] {
+			staleIPs = append(staleIPs, existingIP)
+		}
+	}
+
+	// Delete stale IPs that are no longer reported, unless referenced by policies
+	for _, ip := range staleIPs {
+		var refCount int
+		err := h.DB.QueryRowContext(ctx,
+			"SELECT COUNT(*) FROM policies WHERE (source_id = ? AND source_ip = ?) OR (target_id = ? AND target_ip = ?)",
+			peerID, ip, peerID, ip,
+		).Scan(&refCount)
+		if err != nil {
+			runiclog.Warn("Failed to check policy references for stale peer IP", "error", err, "peer_id", peerID, "ip", ip)
+			continue
+		}
+		if refCount > 0 {
+			runiclog.Warn("Skipping deletion of stale peer IP: referenced by active policies", "peer_id", peerID, "ip", ip, "policy_count", refCount)
+			continue
+		}
+		_, err = h.DB.ExecContext(ctx, "DELETE FROM peer_ips WHERE peer_id = ? AND ip_address = ?", peerID, ip)
+		if err != nil {
+			runiclog.Warn("Failed to delete stale peer IP", "error", err, "peer_id", peerID, "ip", ip)
+		}
+	}
+
+	// Ensure only the primary IP has is_primary = 1
+	_, err = h.DB.ExecContext(ctx, "UPDATE peer_ips SET is_primary = 0 WHERE peer_id = ?", peerID)
+	if err != nil {
+		runiclog.Warn("Failed to reset is_primary flags", "error", err, "peer_id", peerID)
+	}
+	if primaryIP != "" {
+		_, err = h.DB.ExecContext(ctx,
+			"UPDATE peer_ips SET is_primary = 1 WHERE peer_id = ? AND ip_address = ?",
+			peerID, primaryIP,
+		)
+		if err != nil {
+			runiclog.Warn("Failed to set primary IP flag", "error", err, "peer_id", peerID, "ip", primaryIP)
+		}
+	}
+
+	return nil
 }

@@ -19,6 +19,7 @@ import InlineError from "../components/InlineError";
 import ToggleSwitch from "../components/ToggleSwitch";
 import SearchableSelect from "../components/SearchableSelect";
 import { OS_OPTIONS, ARCH_OPTIONS } from "../constants";
+import { parseCompositePeerValue } from "../utils/peerUtils";
 
 // Helper function to render ports as boxed/chip items
 // Handles: single port (80), multiple ports (80,443), ranges (8000:9000)
@@ -53,6 +54,13 @@ export function getPeerDisplayValue({
   fallbackPeer,
   fallback = "Unknown",
 }) {
+  // Check for composite value first (e.g., "peer:5:10.20.10.20")
+  const composite = parseCompositePeerValue(selectedPeerId);
+  if (composite) {
+    const peer = allPeers.find((p) => p.id === composite.id);
+    const hostname = peer?.hostname || peer?.ip_address || fallback;
+    return composite.ip ? `${hostname} (${composite.ip})` : hostname;
+  }
   if (selectedPeerId) {
     if (selectedPeerId === "pending-source" || selectedPeerId === "pending-target") {
       return fallbackPeer?.hostname || fallbackPeer?.ip_address || fallback;
@@ -1487,11 +1495,23 @@ export default function CraftPolicyWizard({ log, onClose, onSuccess }) {
 
   // Convert peers to options format for SearchableSelect
   const peerOptions = [
-    ...allPeers.map((peer) => ({
-      value: peer.id,
-      label: peer.hostname || peer.ip_address || "Unknown",
-      sublabel: peer.ip_address,
-    })),
+    ...allPeers.flatMap((peer) => {
+      const hasMultipleIPs = peer.ips && peer.ips.length > 1;
+      if (hasMultipleIPs) {
+        // Multi-IP peer: create one entry per IP with composite value
+        return peer.ips.map((peerIp) => ({
+          value: `peer:${peer.id}:${peerIp.ip_address}`,
+          label: `${peer.hostname || peer.ip_address || "Unknown"} - ${peerIp.ip_address}`,
+          sublabel: peerIp.ip_address,
+        }));
+      }
+      // Single-IP peer: use peer id directly (backward compatible)
+      return [{
+        value: peer.id,
+        label: peer.hostname || peer.ip_address || "Unknown",
+        sublabel: peer.ip_address,
+      }];
+    }),
     // Add pending target peer if creating new
     ...(createTargetPeerMode
       ? [
@@ -1646,20 +1666,29 @@ export default function CraftPolicyWizard({ log, onClose, onSuccess }) {
     let createdTargetPeerId = null;
     let createdServiceId = null;
 
-    try {
-      // Source is the local peer from the log, Target is the external peer
-      // Use user-selected overrides if provided, otherwise use auto-detected values
-      // Handle pending peer selections
-      let sourcePeerId =
-        selectedSourcePeerId === "pending-source"
-          ? null
-          : selectedSourcePeerId || existingSourcePeer?.id;
-      let targetPeerId =
-        selectedTargetPeerId === "pending-target"
-          ? null
-          : selectedTargetPeerId || existingTargetPeer?.id;
-      let serviceId = selectedServiceId || existingService?.id;
-      const policyDirection = selectedDirection || direction;
+  try {
+    // Source is the local peer from the log, Target is the external peer
+    // Use user-selected overrides if provided, otherwise use auto-detected values
+    // Handle pending peer selections and composite values (e.g., "peer:5:10.20.10.20")
+    const sourceComposite = parseCompositePeerValue(selectedSourcePeerId);
+    const targetComposite = parseCompositePeerValue(selectedTargetPeerId);
+
+    let sourcePeerId = sourceComposite
+      ? sourceComposite.id
+      : selectedSourcePeerId === "pending-source"
+        ? null
+        : selectedSourcePeerId || existingSourcePeer?.id;
+    let sourceIP = sourceComposite ? sourceComposite.ip : null;
+
+    let targetPeerId = targetComposite
+      ? targetComposite.id
+      : selectedTargetPeerId === "pending-target"
+        ? null
+        : selectedTargetPeerId || existingTargetPeer?.id;
+    let targetIP = targetComposite ? targetComposite.ip : null;
+
+    let serviceId = selectedServiceId || existingService?.id;
+    const policyDirection = selectedDirection || direction;
 
       // Step 0: Create source peer (local machine) if needed
       // Only create if no existing peer and user hasn't selected an override
@@ -1709,27 +1738,29 @@ export default function CraftPolicyWizard({ log, onClose, onSuccess }) {
         showToast("Service created successfully", "success");
       }
 
-      // Step 3: Create policy
-      // Source = local peer (from log), Target = external peer
-      await api.post("/policies", {
-        name: policyConfig.name,
-        description: policyConfig.description || null,
-        source_id: sourcePeerId,
-        source_type: "peer",
-        service_id: serviceId,
-        target_id: targetPeerId,
-        target_type: "peer",
-        action: "ACCEPT",
-        priority: policyConfig.priority,
-        enabled: policyConfig.enabled,
-        direction:
-          policyDirection === "both"
-            ? "both"
-            : policyDirection === "forward" || policyDirection === "OUT"
-              ? "forward"
-              : "backward",
-        target_scope: policyConfig.target_scope || "host",
-      });
+    // Step 3: Create policy
+    // Source = local peer (from log), Target = external peer
+    await api.post("/policies", {
+      name: policyConfig.name,
+      description: policyConfig.description || null,
+      source_id: sourcePeerId,
+      source_type: "peer",
+      source_ip: sourceIP || undefined,
+      service_id: serviceId,
+      target_id: targetPeerId,
+      target_type: "peer",
+      target_ip: targetIP || undefined,
+      action: "ACCEPT",
+      priority: policyConfig.priority,
+      enabled: policyConfig.enabled,
+      direction:
+        policyDirection === "both"
+          ? "both"
+          : policyDirection === "forward" || policyDirection === "OUT"
+            ? "forward"
+            : "backward",
+      target_scope: policyConfig.target_scope || "host",
+    });
 
       showToast("Policy created successfully", "success");
 

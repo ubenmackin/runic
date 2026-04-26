@@ -59,6 +59,8 @@ type policyInfo struct {
 	ServiceID   int
 	TargetID    int
 	TargetType  string
+	SourceIP    string
+	TargetIP    string
 	Action      string
 	Priority    int
 	TargetScope string
@@ -98,6 +100,15 @@ func (rw *ruleWriter) writeAction(action, chain, match string) {
 	case "LOG_DROP":
 		rw.logDrop(chain, match)
 	}
+}
+
+// normalizeToCIDR ensures an IP string is in CIDR notation (e.g., "10.0.0.1" -> "10.0.0.1/32").
+// If the string already contains a "/", it is returned as-is.
+func normalizeToCIDR(ip string) string {
+	if strings.Contains(ip, "/") {
+		return ip
+	}
+	return ip + "/32"
 }
 
 // formatEntityName returns a human-readable name for an entity (special, peer, or group).
@@ -205,7 +216,7 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 	}
 	// 2. Load enabled policies where peer is either target or source, ordered by priority ASC
 	rows, err := c.db.QueryContext(ctx,
-		`SELECT DISTINCT p.id, p.name, p.source_id, p.source_type, p.service_id, p.target_id, p.target_type, p.action, p.priority, p.target_scope, COALESCE(p.direction, 'both'),
+		`SELECT DISTINCT p.id, p.name, p.source_id, p.source_type, p.service_id, p.target_id, p.target_type, COALESCE(p.source_ip, ''), COALESCE(p.target_ip, ''), p.action, p.priority, p.target_scope, COALESCE(p.direction, 'both'),
 		CASE WHEN p.target_type = 'peer' AND p.target_id = ? THEN 1
 		WHEN p.target_type = 'group' AND EXISTS (SELECT 1 FROM group_members gm JOIN groups g ON gm.group_id = g.id WHERE gm.group_id = p.target_id AND gm.peer_id = ? AND g.is_pending_delete = 0) THEN 1
 		WHEN p.target_type = 'special' AND p.source_type = 'group' AND EXISTS (SELECT 1 FROM group_members gm JOIN groups g ON gm.group_id = g.id WHERE gm.group_id = p.source_id AND gm.peer_id = ? AND g.is_pending_delete = 0) THEN 1
@@ -246,7 +257,7 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 	for rows.Next() {
 		var p policyInfo
 		var isTargetInt, isSourceInt int
-		if err := rows.Scan(&p.ID, &p.Name, &p.SourceID, &p.SourceType, &p.ServiceID, &p.TargetID, &p.TargetType, &p.Action, &p.Priority, &p.TargetScope, &p.Direction, &isTargetInt, &isSourceInt); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.SourceID, &p.SourceType, &p.ServiceID, &p.TargetID, &p.TargetType, &p.SourceIP, &p.TargetIP, &p.Action, &p.Priority, &p.TargetScope, &p.Direction, &isTargetInt, &isSourceInt); err != nil {
 			return "", fmt.Errorf("scan policy: %w", err)
 		}
 		p.IsTarget = isTargetInt == 1
@@ -533,9 +544,13 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 				// Use individual rules (fallback for non-group or non-ipset peers)
 				var cidrs []string
 				var err error
-				if pol.SourceType == "special" {
+				switch {
+				case pol.SourceType == "special":
 					cidrs, err = c.resolver.ResolveSpecialTarget(ctx, pol.SourceID, ipAddress)
-				} else {
+				case pol.SourceType == "peer" && pol.SourceIP != "":
+					// Use the specific source_ip from the policy instead of peer's primary IP
+					cidrs = []string{normalizeToCIDR(pol.SourceIP)}
+				default:
 					cidrs, err = c.resolver.ResolveEntity(ctx, pol.SourceType, pol.SourceID)
 				}
 				if err != nil {
@@ -606,9 +621,13 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 				// Use individual rules (fallback for non-group or non-ipset peers)
 				var cidrs []string
 				var err error
-				if pol.TargetType == "special" {
+				switch {
+				case pol.TargetType == "special":
 					cidrs, err = c.resolver.ResolveSpecialTarget(ctx, pol.TargetID, ipAddress)
-				} else {
+				case pol.TargetType == "peer" && pol.TargetIP != "":
+					// Use the specific target_ip from the policy instead of peer's primary IP
+					cidrs = []string{normalizeToCIDR(pol.TargetIP)}
+				default:
 					cidrs, err = c.resolver.ResolveEntity(ctx, pol.TargetType, pol.TargetID)
 				}
 				if err != nil {
@@ -963,7 +982,7 @@ func (c *Compiler) writeInternetRules(
 // PreviewCompile generates a preview of iptables rules for a policy without storing them.
 // Unlike Compile(), this is policy-centric: it resolves both source and target entities
 // and generates rules based on direction, showing the complete picture across all hosts.
-func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sourceType string, targetID int, targetType string, serviceID int, direction string, targetScope string) ([]string, error) {
+func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sourceType string, sourceIP string, targetID int, targetType string, targetIP string, serviceID int, direction string, targetScope string) ([]string, error) {
 	// Load a peer IP for special target resolution (uses peerID as reference)
 	var ipAddress string
 	if peerID != 0 {
@@ -1010,12 +1029,16 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 
 	// Resolve source CIDRs
 	var sourceCIDRs []string
-	if sourceType == "special" {
+	switch {
+	case sourceType == "special":
 		sourceCIDRs, err = c.resolver.ResolveSpecialTarget(ctx, sourceID, ipAddress)
 		if err != nil {
 			return nil, fmt.Errorf("resolve source special target %d: %w", sourceID, err)
 		}
-	} else {
+	case sourceType == "peer" && sourceIP != "":
+		// Use the specific source_ip from the policy instead of peer's primary IP
+		sourceCIDRs = []string{normalizeToCIDR(sourceIP)}
+	default:
 		sourceCIDRs, err = c.resolver.ResolveEntity(ctx, sourceType, sourceID)
 		if err != nil {
 			return nil, fmt.Errorf("resolve source entity %s/%d: %w", sourceType, sourceID, err)
@@ -1024,12 +1047,16 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 
 	// Resolve target CIDRs
 	var targetCIDRs []string
-	if targetType == "special" {
+	switch {
+	case targetType == "special":
 		targetCIDRs, err = c.resolver.ResolveSpecialTarget(ctx, targetID, ipAddress)
 		if err != nil {
 			return nil, fmt.Errorf("resolve target special target %d: %w", targetID, err)
 		}
-	} else {
+	case targetType == "peer" && targetIP != "":
+		// Use the specific target_ip from the policy instead of peer's primary IP
+		targetCIDRs = []string{normalizeToCIDR(targetIP)}
+	default:
 		targetCIDRs, err = c.resolver.ResolveEntity(ctx, targetType, targetID)
 		if err != nil {
 			return nil, fmt.Errorf("resolve target entity %s/%d: %w", targetType, targetID, err)

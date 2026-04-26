@@ -1183,5 +1183,66 @@ INSERT INTO alert_rules (name, alert_type, enabled, threshold_value, threshold_w
 		}
 	}
 
+	// Migration: Create peer_ips table and backfill from peers
+	var hasPeerIPsTable bool
+	err = database.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='peer_ips'").Scan(&hasPeerIPsTable)
+	if err != nil {
+		return fmt.Errorf("failed to check for peer_ips table: %w", err)
+	}
+	if !hasPeerIPsTable {
+		log.Info("Migration: creating peer_ips table")
+		_, err = database.ExecContext(ctx, `
+CREATE TABLE IF NOT EXISTS peer_ips (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  peer_id INTEGER NOT NULL REFERENCES peers(id) ON DELETE CASCADE,
+  ip_address TEXT NOT NULL,
+  is_primary INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(peer_id, ip_address)
+)
+		`)
+		if err != nil {
+			return fmt.Errorf("failed to create peer_ips table: %w", err)
+		}
+		_, err = database.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_peer_ips_peer_id ON peer_ips(peer_id)")
+		if err != nil {
+			return fmt.Errorf("failed to create idx_peer_ips_peer_id index: %w", err)
+		}
+		_, err = database.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_peer_ips_ip_address ON peer_ips(ip_address)")
+		if err != nil {
+			return fmt.Errorf("failed to create idx_peer_ips_ip_address index: %w", err)
+		}
+		// Backfill: insert each peer's primary IP into peer_ips with is_primary = 1
+		log.Info("Migration: backfilling peer_ips from peers")
+		_, err = database.ExecContext(ctx, `
+INSERT OR IGNORE INTO peer_ips (peer_id, ip_address, is_primary)
+SELECT id, ip_address, 1 FROM peers
+		`)
+		if err != nil {
+			return fmt.Errorf("failed to backfill peer_ips: %w", err)
+		}
+		log.Info("Migration: created peer_ips table and backfilled from peers")
+	}
+
+	// Migration: Add source_ip and target_ip columns to policies table for multi-IP peer support
+	if hasPoliciesTable {
+		if err := addColumnIfMissing(ctx, database, "policies", "source_ip", "TEXT"); err != nil {
+			return err
+		}
+		if err := addColumnIfMissing(ctx, database, "policies", "target_ip", "TEXT"); err != nil {
+			return err
+		}
+	}
+
+	// Migration: Add source_ip and target_ip columns to import_rules table for multi-IP peer support
+	if hasImportRulesTable {
+		if err := addColumnIfMissing(ctx, database, "import_rules", "source_ip", "TEXT"); err != nil {
+			return err
+		}
+		if err := addColumnIfMissing(ctx, database, "import_rules", "target_ip", "TEXT"); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }

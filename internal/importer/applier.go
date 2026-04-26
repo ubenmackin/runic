@@ -412,7 +412,7 @@ func ApplySession(ctx context.Context, database *sql.DB, sessionID int64, change
 
 	// 4. Create policies from import_rules (status='approved')
 	ruleRows, err := tx.QueryContext(ctx,
-		"SELECT id, source_type, source_id, source_staging_id, target_type, target_id, target_staging_id, service_id, service_staging_id, action, priority, direction, target_scope, policy_name, enabled FROM import_rules WHERE session_id = ? AND status = 'approved'",
+		"SELECT id, source_type, source_id, source_staging_id, target_type, target_id, target_staging_id, service_id, service_staging_id, action, priority, direction, target_scope, policy_name, enabled, source_ip, target_ip FROM import_rules WHERE session_id = ? AND status = 'approved'",
 		sessionID,
 	)
 	if err != nil {
@@ -432,8 +432,9 @@ func ApplySession(ctx context.Context, database *sql.DB, sessionID int64, change
 		var priority int
 		var enabled int
 		var sourceID, sourceStagingID, targetID, targetStagingID, serviceID, serviceStagingID *int64
+		var sourceIP, targetIP sql.NullString
 
-		if err := ruleRows.Scan(&ruleID, &sourceType, &sourceID, &sourceStagingID, &targetType, &targetID, &targetStagingID, &serviceID, &serviceStagingID, &action, &priority, &direction, &targetScope, &policyName, &enabled); err != nil {
+		if err := ruleRows.Scan(&ruleID, &sourceType, &sourceID, &sourceStagingID, &targetType, &targetID, &targetStagingID, &serviceID, &serviceStagingID, &action, &priority, &direction, &targetScope, &policyName, &enabled, &sourceIP, &targetIP); err != nil {
 			_ = ruleRows.Close()
 			return nil, fmt.Errorf("scan approved rule: %w", err)
 		}
@@ -448,9 +449,18 @@ func ApplySession(ctx context.Context, database *sql.DB, sessionID int64, change
 			continue
 		}
 
+		// Normalize source_ip/target_ip: pass nil when invalid so SQL stores NULL
+		var sourceIPVal, targetIPVal interface{}
+		if sourceIP.Valid {
+			sourceIPVal = sourceIP.String
+		}
+		if targetIP.Valid {
+			targetIPVal = targetIP.String
+		}
+
 		_, err := tx.ExecContext(ctx,
-			"INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled, direction, target_scope) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-			policyName, realSourceID, sourceType, realServiceID, realTargetID, targetType, action, priority, enabled, direction, targetScope,
+			"INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled, direction, target_scope, source_ip, target_ip) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			policyName, realSourceID, sourceType, realServiceID, realTargetID, targetType, action, priority, enabled, direction, targetScope, sourceIPVal, targetIPVal,
 		)
 		if err != nil {
 			log.Warn("Failed to create policy", "name", policyName, "error", err)

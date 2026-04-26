@@ -16,7 +16,7 @@ import (
 
 // Register performs initial registration with the control plane.
 // It returns the updated config with credentials.
-func Register(ctx context.Context, client common.HTTPClient, cfg *Config, version string, saveFunc func() error) error {
+func Register(ctx context.Context, client common.HTTPClient, cfg *Config, version string, saveFunc func() error, allIPs []string) error {
 	hostname, err := os.Hostname()
 	if err != nil {
 		hostname = "unknown"
@@ -38,6 +38,7 @@ func Register(ctx context.Context, client common.HTTPClient, cfg *Config, versio
 		AgentVersion: version,
 		HasDocker:    hasDocker,
 		HasIPSet:     &hasIPSet,
+		AllIPs:       allIPs,
 	}
 
 	if cfg.RegistrationToken != "" {

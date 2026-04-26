@@ -24,6 +24,7 @@ import SearchFilterPanel from '../components/SearchFilterPanel'
 import FilterChip from '../components/FilterChip'
 import PageHeader from '../components/PageHeader'
 import KebabMenu from '../components/KebabMenu'
+import { parseCompositePeerValue } from '../utils/peerUtils'
 
 // Special targets - predefined network addresses for broadcast/multicast
 const SPECIAL_TARGETS = {
@@ -56,9 +57,11 @@ export default function Policies() {
     description: '',
     source_id: '',
     source_type: 'group',
+    source_ip: '',
     service_id: '',
     target_id: '',
     target_type: 'peer',
+    target_ip: '',
     action: 'ACCEPT',
     priority: 100,
     enabled: true,
@@ -95,7 +98,23 @@ export default function Policies() {
   }, [handleOpenAdd])
   const openEdit = (p) => {
     setEditPolicy(p);
-    setFormForEdit(p);
+    // Build composite source/target values for multi-IP peers.
+    // For multi-IP peers, use composite value like "peer:5:10.20.10.20"
+    // so the SearchableSelect can find the matching option in the dropdown.
+    // For single-IP peers, use plain numeric ID and keep source_ip/target_ip separate.
+    const sourcePeer = p.source_type === 'peer' ? peers?.find(pr => pr.id === p.source_id) : null
+    const targetPeer = p.target_type === 'peer' ? peers?.find(pr => pr.id === p.target_id) : null
+    const isSourceMultiIP = sourcePeer && sourcePeer.ips && sourcePeer.ips.length > 1
+    const isTargetMultiIP = targetPeer && targetPeer.ips && targetPeer.ips.length > 1
+    setFormForEdit({
+      ...p,
+      source_id: isSourceMultiIP && p.source_ip
+        ? `peer:${p.source_id}:${p.source_ip}`
+        : p.source_id,
+      target_id: isTargetMultiIP && p.target_ip
+        ? `peer:${p.target_id}:${p.target_ip}`
+        : p.target_id,
+    });
     setFormErrors({});
     setPreview(null);
     setPreviewStale(false);
@@ -147,11 +166,23 @@ export default function Policies() {
 
   const polymorphicOptions = [
     ...(groups || []).map(g => ({ value: g.id, label: g.name, category: 'group' })),
-    ...(peers || []).map(p => ({
-      value: p.id,
-      label: p.hostname ? `${p.hostname} - ${p.ip_address}` : p.ip_address,
-      category: 'peer'
-    })),
+    ...(peers || []).flatMap(p => {
+      const hasMultipleIPs = p.ips && p.ips.length > 1
+      if (hasMultipleIPs) {
+        // Multi-IP peer: create one entry per IP with composite value
+        return p.ips.map(peerIp => ({
+          value: `peer:${p.id}:${peerIp.ip_address}`,
+          label: `${p.hostname || p.ip_address} - ${peerIp.ip_address}`,
+          category: 'peer'
+        }))
+      }
+      // Single-IP peer: use peer id directly (backward compatible)
+      return [{
+        value: p.id,
+        label: p.hostname || p.ip_address,
+        category: 'peer'
+      }]
+    }),
     ...(specialTargets || []).map(s => ({ value: s.id, label: s.display_name, category: 'special' }))
   ]
 
@@ -189,8 +220,28 @@ export default function Policies() {
 
   const handleSubmit = (e) => {
     e.preventDefault()
-    if (editPolicy) updateMutation.mutate({ id: editPolicy.id, data: formData })
-    else createMutation.mutate(formData)
+    // Parse composite peer values to extract plain IDs and IP addresses
+    let submitData = { ...formData }
+    // Handle source_id - check for composite value first
+    const sourceParsed = parseCompositePeerValue(formData.source_id)
+    if (sourceParsed) {
+      submitData.source_id = sourceParsed.id
+      submitData.source_ip = sourceParsed.ip || ''
+    } else {
+      // Plain numeric ID — preserve existing source_ip from form (set during edit)
+      submitData.source_ip = formData.source_type === 'peer' ? (formData.source_ip || '') : ''
+    }
+    // Handle target_id - check for composite value first
+    const targetParsed = parseCompositePeerValue(formData.target_id)
+    if (targetParsed) {
+      submitData.target_id = targetParsed.id
+      submitData.target_ip = targetParsed.ip || ''
+    } else {
+      // Plain numeric ID — preserve existing target_ip from form (set during edit)
+      submitData.target_ip = formData.target_type === 'peer' ? (formData.target_ip || '') : ''
+    }
+    if (editPolicy) updateMutation.mutate({ id: editPolicy.id, data: submitData })
+    else createMutation.mutate(submitData)
   }
 
   const fetchPreview = useCallback(async () => {
@@ -199,14 +250,29 @@ export default function Policies() {
       setFormErrors({ _general: isSpecialService ? 'Select service and target to preview' : 'Select source, service, and target to preview' })
       return
     }
+    // Parse composite peer values for preview
+    const sourceParsed = parseCompositePeerValue(formData.source_id)
+    const targetParsed = parseCompositePeerValue(formData.target_id)
+    const previewSourceId = sourceParsed ? sourceParsed.id : formData.source_id
+    const previewSourceType = sourceParsed ? 'peer' : formData.source_type
+    const previewSourceIp = sourceParsed
+      ? sourceParsed.ip
+      : (formData.source_type === 'peer' ? (formData.source_ip || '') : '')
+    const previewTargetId = targetParsed ? targetParsed.id : formData.target_id
+    const previewTargetType = targetParsed ? 'peer' : formData.target_type
+    const previewTargetIp = targetParsed
+      ? targetParsed.ip
+      : (formData.target_type === 'peer' ? (formData.target_ip || '') : '')
     setPreviewLoading(true)
     try {
       const data = await api.post('/policies/preview', {
-        source_id: formData.source_id,
-        source_type: formData.source_type,
+        source_id: previewSourceId,
+        source_type: previewSourceType,
+        source_ip: previewSourceIp || undefined,
         service_id: formData.service_id,
-        target_id: formData.target_id,
-        target_type: formData.target_type,
+        target_id: previewTargetId,
+        target_type: previewTargetType,
+        target_ip: previewTargetIp || undefined,
         direction: formData.direction,
         target_scope: formData.target_scope
       })
@@ -242,12 +308,17 @@ export default function Policies() {
   // Auto-set source to "Any IP" when IGMP/VRRP service is selected
   useEffect(() => {
     if (modalOpen && isSpecialService && !formData.source_id) {
-      setFormData(d => ({ ...d, source_id: SPECIAL_TARGETS.ANY_IP.id, source_type: 'special' }))
+      setFormData(d => ({ ...d, source_id: SPECIAL_TARGETS.ANY_IP.id, source_type: 'special', source_ip: '' }))
     }
   }, [modalOpen, isSpecialService, formData.source_id, setFormData])
 
-  const getEntityName = useCallback((type, id) => {
-    if (type === 'peer') return peers?.find(p => p.id === id)?.hostname || id
+  const getEntityName = useCallback((type, id, ip) => {
+    if (type === 'peer') {
+      const peer = peers?.find(p => p.id === id)
+      const hostname = peer?.hostname || id
+      if (ip) return `${hostname} (${ip})`
+      return hostname
+    }
     if (type === 'group') return groups?.find(g => g.id === id)?.name || id
     if (type === 'special') return specialTargets?.find(s => s.id === id)?.display_name || id
     return id
@@ -266,15 +337,15 @@ export default function Policies() {
   const processedPolicies = useTableFilter(preFilteredPolicies, searchTerm, sortConfig, {
     filterFn: (p, term) => {
       const name = (p.name || '').toLowerCase()
-      const source = getEntityName(p.source_type, p.source_id).toLowerCase()
+      const source = getEntityName(p.source_type, p.source_id, p.source_ip).toLowerCase()
       const service = getServiceName(p.service_id).toLowerCase()
-      const target = getEntityName(p.target_type, p.target_id).toLowerCase()
+      const target = getEntityName(p.target_type, p.target_id, p.target_ip).toLowerCase()
       return name.includes(term) || source.includes(term) || service.includes(term) || target.includes(term)
     },
     fieldMap: {
-      source: (p) => getEntityName(p.source_type, p.source_id).toLowerCase(),
+      source: (p) => getEntityName(p.source_type, p.source_id, p.source_ip).toLowerCase(),
       service: (p) => getServiceName(p.service_id).toLowerCase(),
-      target: (p) => getEntityName(p.target_type, p.target_id).toLowerCase(),
+      target: (p) => getEntityName(p.target_type, p.target_id, p.target_ip).toLowerCase(),
     },
     extraDeps: [getEntityName, getServiceName],
     secondarySortKey: 'name',
@@ -444,7 +515,7 @@ export default function Policies() {
         </span>
         {/* Source → Target : Service */}
         <div className="text-sm text-gray-500 dark:text-amber-muted truncate mt-1">
-          {getEntityName(p.source_type, p.source_id)} → {getEntityName(p.target_type, p.target_id)} : {getServiceName(p.service_id)}
+          {getEntityName(p.source_type, p.source_id, p.source_ip)} → {getEntityName(p.target_type, p.target_id, p.target_ip)} : {getServiceName(p.service_id)}
         </div>
         </div>
       </div>
@@ -538,13 +609,13 @@ export default function Policies() {
         {p.priority}
         </td>
         <td className="px-4 py-1 text-gray-600 dark:text-amber-primary">
-        {getEntityName(p.source_type, p.source_id)}
+          {getEntityName(p.source_type, p.source_id, p.source_ip)}
         </td>
         <td className="px-4 py-1 text-gray-600 dark:text-amber-primary">
-        {getServiceName(p.service_id)}
+          {getServiceName(p.service_id)}
         </td>
         <td className="px-4 py-1 text-gray-600 dark:text-amber-primary">
-        {getEntityName(p.target_type, p.target_id)}
+          {getEntityName(p.target_type, p.target_id, p.target_ip)}
         </td>
         <td className="px-4 py-1">
         <span className={`px-2 py-0.5 text-xs font-medium ${p.action === 'ACCEPT' ? 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300' : 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300'}`}>
@@ -652,7 +723,14 @@ export default function Policies() {
                     <div>
                       <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Source</label>
                       <div title={isSpecialService ? "IGMP/VRRP are host-level protocols — source is not used" : undefined} className={isSpecialService ? 'opacity-50' : ''}>
-                        <SearchableSelect options={polymorphicOptions} value={formData.source_id} category={formData.source_type} onChange={(v, type) => setFormData(d => ({ ...d, source_id: v, source_type: type }))} placeholder="Select group or peer" disabled={isSpecialService} />
+                        <SearchableSelect options={polymorphicOptions} value={formData.source_id} category={formData.source_type} onChange={(v, type) => {
+                // Parse composite peer values to determine type and extract IP
+                const isComposite = typeof v === 'string' && v.startsWith('peer:')
+                const compositeType = isComposite ? 'peer' : type
+                // If composite, source_ip is encoded in the value; otherwise clear it
+                const newSourceIp = isComposite ? '' : (compositeType === 'peer' ? '' : '')
+                setFormData(d => ({ ...d, source_id: v, source_type: compositeType || 'group', source_ip: newSourceIp }))
+              }} placeholder="Select group or peer" disabled={isSpecialService} />
                       </div>
 
                     </div>
@@ -707,24 +785,32 @@ export default function Policies() {
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Target</label>
-                      <SearchableSelect options={polymorphicOptions} value={formData.target_id} category={formData.target_type} onChange={(v, type) => setFormData(d => ({ ...d, target_id: v, target_type: type }))} placeholder="Select group or peer" />
+                      <SearchableSelect options={polymorphicOptions} value={formData.target_id} category={formData.target_type} onChange={(v, type) => {
+                // Parse composite peer values to determine type and extract IP
+                const isComposite = typeof v === 'string' && v.startsWith('peer:')
+                const compositeType = isComposite ? 'peer' : type
+                // If composite, target_ip is encoded in the value; otherwise clear it
+                const newTargetIp = isComposite ? '' : (compositeType === 'peer' ? '' : '')
+                setFormData(d => ({ ...d, target_id: v, target_type: compositeType || 'peer', target_ip: newTargetIp }))
+              }} placeholder="Select group or peer" />
                     </div>
 
                     <div>
                       <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Service</label>
-                      <SearchableSelect options={serviceOptions} value={formData.service_id} onChange={v => {
-                        // Determine if this is a special service (IGMP/VRRP)
-                        const serviceName = services?.find(s => s.id === v)?.name?.toUpperCase()
-                        const isSpecialSvc = serviceName === 'IGMP' || serviceName === 'VRRP'
-                        // Consolidate into single setFormData call to avoid race condition
-                        setFormData(d => ({
-                          ...d,
-                          service_id: v,
-                          // Auto-set source for IGMP/VRRP, reset for others
-                          source_id: isSpecialSvc ? SPECIAL_TARGETS.ANY_IP.id : '',
-                          source_type: isSpecialSvc ? 'special' : 'group'
-                        }))
-                      }} placeholder="Select service" />
+              <SearchableSelect options={serviceOptions} value={formData.service_id} onChange={v => {
+                // Determine if this is a special service (IGMP/VRRP)
+                const serviceName = services?.find(s => s.id === v)?.name?.toUpperCase()
+                const isSpecialSvc = serviceName === 'IGMP' || serviceName === 'VRRP'
+                // Consolidate into single setFormData call to avoid race condition
+                setFormData(d => ({
+                  ...d,
+                  service_id: v,
+                  // Auto-set source for IGMP/VRRP, reset for others
+                  source_id: isSpecialSvc ? SPECIAL_TARGETS.ANY_IP.id : '',
+                  source_type: isSpecialSvc ? 'special' : 'group',
+                  source_ip: isSpecialSvc ? '' : ''
+                }))
+              }} placeholder="Select service" />
                     </div>
                     <div>{/* spacer */}</div>
                     <div>
@@ -841,7 +927,7 @@ export default function Policies() {
       {deleteTarget && (
         <ConfirmModal
           title="Delete Policy"
-          message={`Delete policy "${deleteTarget.name}"? Rules will be removed from ${getEntityName(deleteTarget.target_type, deleteTarget.target_id)} on next push.`}
+          message={`Delete policy "${deleteTarget.name}"? Rules will be removed from ${getEntityName(deleteTarget.target_type, deleteTarget.target_id, deleteTarget.target_ip)} on next push.`}
           onConfirm={() => deleteMutation.mutate(deleteTarget.id)}
           onCancel={() => setDeleteTarget(null)}
           danger

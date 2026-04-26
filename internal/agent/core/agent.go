@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -340,7 +341,12 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 
 // sendHeartbeat sends a heartbeat to the control plane.
 func (a *Agent) sendHeartbeat(ctx context.Context) error {
-	return metrics.SendHeartbeat(ctx, a.httpClient, a.config.ControlPlaneURL, a.config.HostID, a.config.CurrentBundleVer, a.config.Token, a.version)
+	allIPs := detectHostIPs(a.cmdRunner)
+	var ipStrings []string
+	for _, ipInfo := range allIPs {
+		ipStrings = append(ipStrings, ipInfo.IP)
+	}
+	return metrics.SendHeartbeat(ctx, a.httpClient, a.config.ControlPlaneURL, a.config.HostID, a.config.CurrentBundleVer, a.config.Token, a.version, ipStrings)
 }
 
 // pollLoop polls for bundle updates at the configured interval.
@@ -398,7 +404,12 @@ func (a *Agent) confirmApply(ctx context.Context, version string) error {
 
 // register performs initial registration with the control plane.
 func (a *Agent) register(ctx context.Context) error {
-	return identity.Register(ctx, a.httpClient, a.config, a.version, a.saveConfig)
+	allIPs := detectHostIPs(a.cmdRunner)
+	var ipStrings []string
+	for _, ipInfo := range allIPs {
+		ipStrings = append(ipStrings, ipInfo.IP)
+	}
+	return identity.Register(ctx, a.httpClient, a.config, a.version, a.saveConfig, ipStrings)
 }
 
 // safeRegister performs re-registration with mutex protection to prevent
@@ -562,6 +573,192 @@ func (a *Agent) rotationCheckLoop(ctx context.Context) {
 		case <-ticker.C:
 			if err := a.rotationManager.CheckAndRotate(ctx); err != nil {
 				log.Warn("Key rotation check failed", "error", err)
+			}
+		}
+	}
+}
+
+// HostIPInfo represents a detected host IP with its interface and primary status.
+type HostIPInfo struct {
+	IP        string
+	Interface string
+	IsPrimary bool
+}
+
+// detectHostIPs detects all host IPs, filtering out loopback, link-local,
+// Docker, and bridge interfaces. It returns the list of valid IPs with the
+// primary IP (from the default route interface) first.
+func detectHostIPs(runner CommandRunner) []HostIPInfo {
+	// Determine the default route interface for primary IP detection
+	defaultIface := detectDefaultRouteInterface(runner)
+
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		log.Warn("Failed to list network interfaces", "error", err)
+		return nil
+	}
+
+	// Get Docker subnets to exclude
+	dockerSubnets := getDockerSubnets(runner)
+
+	var results []HostIPInfo
+
+	for _, iface := range ifaces {
+		// Skip interfaces that are down or loopback
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+
+		// Skip filtered interface names
+		if isFilteredInterface(iface.Name) {
+			continue
+		}
+
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+
+		for _, addr := range addrs {
+			var ip net.IP
+			switch v := addr.(type) {
+			case *net.TCPAddr:
+				ip = v.IP
+			case *net.UDPAddr:
+				ip = v.IP
+			case *net.IPNet:
+				ip = v.IP
+			default:
+				continue
+			}
+
+			// Skip loopback and link-local addresses
+			if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+				continue
+			}
+
+			// Skip Docker subnet IPs
+			if isInDockerSubnet(ip, dockerSubnets) {
+				log.Debug("Skipping IP in Docker subnet", "ip", ip.String(), "interface", iface.Name)
+				continue
+			}
+
+			isPrimary := iface.Name == defaultIface
+			results = append(results, HostIPInfo{
+				IP:        ip.String(),
+				Interface: iface.Name,
+				IsPrimary: isPrimary,
+			})
+		}
+	}
+
+	// Sort: primary IPs first
+	sortHostIPs(results)
+
+	return results
+}
+
+// detectDefaultRouteInterface returns the interface name of the default route.
+func detectDefaultRouteInterface(runner CommandRunner) string {
+	out, err := runner.Run(context.Background(), "ip", "route", "show", "default")
+	if err != nil {
+		log.Warn("Failed to detect default route interface", "error", err)
+		return ""
+	}
+
+	// Parse "default via X.X.X.X dev IFACE" lines
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "default") {
+			continue
+		}
+		parts := strings.Fields(line)
+		for i, part := range parts {
+			if part == "dev" && i+1 < len(parts) {
+				return parts[i+1]
+			}
+		}
+	}
+
+	return ""
+}
+
+// isFilteredInterface returns true if the interface should be excluded from IP detection.
+func isFilteredInterface(name string) bool {
+	filteredPrefixes := []string{"lo", "docker0", "br-", "veth"}
+	for _, prefix := range filteredPrefixes {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// dockerSubnet represents a Docker network subnet.
+type dockerSubnet struct {
+	*net.IPNet
+}
+
+// getDockerSubnets queries Docker for network subnets to exclude.
+// If Docker is not available, returns an empty list.
+func getDockerSubnets(runner CommandRunner) []dockerSubnet {
+	var subnets []dockerSubnet
+
+	// List Docker networks
+	out, err := runner.Run(context.Background(), "docker", "network", "ls", "--format", "{{.Name}}")
+	if err != nil {
+		// Docker not available, skip filtering
+		return subnets
+	}
+
+	networkNames := strings.Split(strings.TrimSpace(string(out)), "\n")
+	for _, name := range networkNames {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+
+		// Inspect each network to get subnets
+		inspectOut, err := runner.Run(context.Background(), "docker", "network", "inspect", name, "--format", "{{range .IPAM.Config}}{{.Subnet}}{{end}}")
+		if err != nil {
+			log.Debug("Failed to inspect Docker network", "network", name, "error", err)
+			continue
+		}
+
+		for _, subnetStr := range strings.Split(strings.TrimSpace(string(inspectOut)), "\n") {
+			subnetStr = strings.TrimSpace(subnetStr)
+			if subnetStr == "" {
+				continue
+			}
+			_, ipNet, err := net.ParseCIDR(subnetStr)
+			if err != nil {
+				log.Debug("Failed to parse Docker subnet", "subnet", subnetStr, "error", err)
+				continue
+			}
+			subnets = append(subnets, dockerSubnet{IPNet: ipNet})
+		}
+	}
+
+	return subnets
+}
+
+// isInDockerSubnet checks if an IP falls within any Docker subnet.
+func isInDockerSubnet(ip net.IP, subnets []dockerSubnet) bool {
+	for _, subnet := range subnets {
+		if subnet.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// sortHostIPs sorts host IPs so that primary IPs come first.
+func sortHostIPs(ips []HostIPInfo) {
+	// Simple bubble sort - list is typically small
+	for i := 0; i < len(ips); i++ {
+		for j := i + 1; j < len(ips); j++ {
+			if ips[j].IsPrimary && !ips[i].IsPrimary {
+				ips[i], ips[j] = ips[j], ips[i]
 			}
 		}
 	}

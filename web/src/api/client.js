@@ -92,6 +92,7 @@ export const updateNotificationPrefs = (data) => api.put('/users/me/notification
 export const QUERY_KEYS = {
   peers: () => ['peers'],
   peer: (id) => ['peers', id],
+  peerIps: (id) => ['peers', id, 'ips'],
   groups: () => ['groups'],
   group: (id) => ['groups', id],
   members: (id) => ['groups', id, 'members'],
@@ -145,3 +146,8 @@ export const updateImportPeer = (sessionId, peerId, data) => api.put(`/import-se
 export const updateImportService = (sessionId, serviceId, data) => api.put(`/import-sessions/${sessionId}/services/${serviceId}`, data)
 export const applyImport = (sessionId) => api.post(`/import-sessions/${sessionId}/apply`)
 export const cancelImport = (sessionId) => api.delete(`/import-sessions/${sessionId}`)
+
+// Peer IP management API helpers
+export const getPeerIPs = (peerId) => api.get(`/peers/${peerId}/ips`)
+export const addPeerIP = (peerId, ipAddress) => api.post(`/peers/${peerId}/ips`, { ip_address: ipAddress })
+export const deletePeerIP = (peerId, ipId) => api.delete(`/peers/${peerId}/ips/${ipId}`)

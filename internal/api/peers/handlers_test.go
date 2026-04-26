@@ -1328,13 +1328,35 @@ func TestGetPeerByIP(t *testing.T) {
 			wantPeer: &Peer{ID: 1, Hostname: "manual-peer", IPAddress: "192.168.1.1", IsManual: true},
 		},
 		{
-			name:        "ipv6 address - peer found",
+			name: "ipv6 address - peer found",
 			queryParams: "?ip=::1",
 			setup: func(t *testing.T, db *sql.DB) {
 				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`, "ipv6-peer", "::1", "key", "hmac", 0)
 			},
 			wantCode: http.StatusOK,
 			wantPeer: &Peer{ID: 1, Hostname: "ipv6-peer", IPAddress: "::1", IsManual: false},
+		},
+		{
+			name: "peer found via secondary IP in peer_ips table",
+			queryParams: "?ip=10.0.0.2",
+			setup: func(t *testing.T, db *sql.DB) {
+				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, is_manual) VALUES (?, ?, ?, ?, ?, ?)`, "test-peer", "10.0.0.1", "key", "hmac", 0, 0)
+				db.Exec(`INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 1)`, 1, "10.0.0.1")
+				db.Exec(`INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 0)`, 1, "10.0.0.2")
+			},
+			wantCode: http.StatusOK,
+			wantPeer: &Peer{ID: 1, Hostname: "test-peer", IPAddress: "10.0.0.1", IsManual: false},
+		},
+		{
+			name: "secondary IP not found in peer_ips either",
+			queryParams: "?ip=10.0.0.99",
+			setup: func(t *testing.T, db *sql.DB) {
+				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, is_manual) VALUES (?, ?, ?, ?, ?, ?)`, "test-peer", "10.0.0.1", "key", "hmac", 0, 0)
+				db.Exec(`INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 1)`, 1, "10.0.0.1")
+				db.Exec(`INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 0)`, 1, "10.0.0.2")
+			},
+			wantCode: http.StatusOK,
+			wantNil: true,
 		},
 	}
 
@@ -1558,5 +1580,486 @@ func TestCreatePeer_ValidMacOS(t *testing.T) {
 	}
 	if osType != "macos" {
 		t.Errorf("expected os_type 'macos', got %q", osType)
+	}
+}
+
+// TestGetPeerIPs tests the GET /peers/{id}/ips endpoint.
+func TestGetPeerIPs(t *testing.T) {
+	tests := []struct {
+		name   string
+		peerID string
+		setup  func(t *testing.T, db *sql.DB)
+		wantCode    int
+		wantErr     string
+		wantIPsLen  int
+		wantPrimary bool
+	}{
+		{
+			name:   "get peer IPs - success with primary and secondary",
+			peerID: "1",
+			setup: func(t *testing.T, db *sql.DB) {
+				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`, "peer1", "10.0.0.1", "key1", "hmac1", 0)
+				db.Exec(`INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 1)`, 1, "10.0.0.1")
+				db.Exec(`INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 0)`, 1, "10.0.0.2")
+				db.Exec(`INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 0)`, 1, "10.0.0.3")
+			},
+			wantCode:    http.StatusOK,
+			wantIPsLen:  3,
+			wantPrimary: true,
+		},
+		{
+			name:   "get peer IPs - only primary IP",
+			peerID: "1",
+			setup: func(t *testing.T, db *sql.DB) {
+				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`, "peer1", "10.0.0.1", "key1", "hmac1", 0)
+				db.Exec(`INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 1)`, 1, "10.0.0.1")
+			},
+			wantCode:    http.StatusOK,
+			wantIPsLen:  1,
+			wantPrimary: true,
+		},
+		{
+			name:   "get peer IPs - no IPs in peer_ips table",
+			peerID: "1",
+			setup: func(t *testing.T, db *sql.DB) {
+				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`, "peer1", "10.0.0.1", "key1", "hmac1", 0)
+			},
+			wantCode:   http.StatusOK,
+			wantIPsLen: 0,
+		},
+		{
+			name:   "get peer IPs - peer not found",
+			peerID: "999",
+			setup: func(t *testing.T, db *sql.DB) {
+				// No peers inserted
+			},
+			wantCode: http.StatusNotFound,
+			wantErr:  "peer not found",
+		},
+		{
+			name:   "get peer IPs - invalid peer ID",
+			peerID: "invalid",
+			setup: func(t *testing.T, db *sql.DB) {
+				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`, "peer1", "10.0.0.1", "key1", "hmac1", 0)
+			},
+			wantCode: http.StatusBadRequest,
+			wantErr:  "invalid peer ID",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			database, cleanup := testutil.SetupTestDB(t)
+			defer cleanup()
+
+			if tt.setup != nil {
+				tt.setup(t, database)
+			}
+
+			req := httptest.NewRequest("GET", "/api/v1/peers/"+tt.peerID+"/ips", nil)
+			req = muxVars(req, map[string]string{"id": tt.peerID})
+			w := httptest.NewRecorder()
+
+			handler := NewHandler(database, nil)
+			handler.GetPeerIPs(w, req)
+
+			if w.Code != tt.wantCode {
+				t.Errorf("expected status %d, got %d: %s", tt.wantCode, w.Code, w.Body.String())
+			}
+
+			if tt.wantErr != "" {
+				var resp map[string]string
+				if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+					t.Fatalf("failed to decode error response: %v", err)
+				}
+				if !strings.Contains(resp["error"], tt.wantErr) {
+					t.Errorf("expected error containing %q, got %q", tt.wantErr, resp["error"])
+				}
+			}
+
+			if tt.wantIPsLen > 0 {
+				var peerIPs []PeerIP
+				if err := json.NewDecoder(w.Body).Decode(&peerIPs); err != nil {
+					t.Fatalf("failed to decode peer IPs response: %v", err)
+				}
+				if len(peerIPs) != tt.wantIPsLen {
+					t.Errorf("expected %d IPs, got %d", tt.wantIPsLen, len(peerIPs))
+				}
+				if tt.wantPrimary && len(peerIPs) > 0 {
+					// Primary IP should be first (ordered by is_primary DESC)
+					if !peerIPs[0].IsPrimary {
+						t.Error("expected first IP to be primary")
+					}
+				}
+			}
+
+			if tt.wantIPsLen == 0 && tt.wantErr == "" {
+				var peerIPs []PeerIP
+				if err := json.NewDecoder(w.Body).Decode(&peerIPs); err != nil {
+					t.Fatalf("failed to decode peer IPs response: %v", err)
+				}
+				if peerIPs == nil {
+					peerIPs = []PeerIP{}
+				}
+				if len(peerIPs) != 0 {
+					t.Errorf("expected 0 IPs, got %d", len(peerIPs))
+				}
+			}
+		})
+	}
+}
+
+// TestAddPeerIP tests the POST /peers/{id}/ips endpoint.
+func TestAddPeerIP(t *testing.T) {
+	tests := []struct {
+		name   string
+		peerID string
+		body   string
+		setup  func(t *testing.T, db *sql.DB)
+		wantCode    int
+		wantErr     string
+		verifyIP    func(t *testing.T, db *sql.DB)
+	}{
+		{
+			name:   "add peer IP - success",
+			peerID: "1",
+			body:   `{"ip_address":"10.0.0.2"}`,
+			setup: func(t *testing.T, db *sql.DB) {
+				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`, "peer1", "10.0.0.1", "key1", "hmac1", 0)
+				db.Exec(`INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 1)`, 1, "10.0.0.1")
+			},
+			wantCode: http.StatusCreated,
+			verifyIP: func(t *testing.T, db *sql.DB) {
+				var count int
+				err := db.QueryRow("SELECT COUNT(*) FROM peer_ips WHERE peer_id = 1 AND ip_address = '10.0.0.2' AND is_primary = 0").Scan(&count)
+				if err != nil {
+					t.Fatalf("failed to query peer_ips: %v", err)
+				}
+				if count != 1 {
+					t.Errorf("expected 1 secondary IP, got %d", count)
+				}
+			},
+		},
+		{
+			name:   "add peer IP - duplicate IP for same peer",
+			peerID: "1",
+			body:   `{"ip_address":"10.0.0.1"}`,
+			setup: func(t *testing.T, db *sql.DB) {
+				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`, "peer1", "10.0.0.1", "key1", "hmac1", 0)
+				db.Exec(`INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 1)`, 1, "10.0.0.1")
+			},
+			wantCode: http.StatusConflict,
+			wantErr:  "IP address already exists for this peer",
+		},
+		{
+			name:   "add peer IP - invalid IP format",
+			peerID: "1",
+			body:   `{"ip_address":"not-an-ip"}`,
+			setup: func(t *testing.T, db *sql.DB) {
+				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`, "peer1", "10.0.0.1", "key1", "hmac1", 0)
+			},
+			wantCode: http.StatusBadRequest,
+			wantErr:  "invalid IP address",
+		},
+		{
+			name:   "add peer IP - peer not found",
+			peerID: "999",
+			body:   `{"ip_address":"10.0.0.2"}`,
+			setup: func(t *testing.T, db *sql.DB) {
+				// No peers
+			},
+			wantCode: http.StatusNotFound,
+			wantErr:  "peer not found",
+		},
+		{
+			name:   "add peer IP - invalid JSON",
+			peerID: "1",
+			body:   `{"invalid":}`,
+			setup: func(t *testing.T, db *sql.DB) {
+				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`, "peer1", "10.0.0.1", "key1", "hmac1", 0)
+			},
+			wantCode: http.StatusBadRequest,
+			wantErr:  "invalid JSON",
+		},
+		{
+			name:   "add peer IP - invalid peer ID",
+			peerID: "invalid",
+			body:   `{"ip_address":"10.0.0.2"}`,
+			setup: func(t *testing.T, db *sql.DB) {
+				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`, "peer1", "10.0.0.1", "key1", "hmac1", 0)
+			},
+			wantCode: http.StatusBadRequest,
+			wantErr:  "invalid peer ID",
+		},
+		{
+			name:   "add peer IP - empty IP address",
+			peerID: "1",
+			body:   `{"ip_address":""}`,
+			setup: func(t *testing.T, db *sql.DB) {
+				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`, "peer1", "10.0.0.1", "key1", "hmac1", 0)
+			},
+			wantCode: http.StatusBadRequest,
+			wantErr:  "invalid IP address",
+		},
+		{
+			name:   "add peer IP - IPv6 address",
+			peerID: "1",
+			body:   `{"ip_address":"::1"}`,
+			setup: func(t *testing.T, db *sql.DB) {
+				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`, "peer1", "10.0.0.1", "key1", "hmac1", 0)
+				db.Exec(`INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 1)`, 1, "10.0.0.1")
+			},
+			wantCode: http.StatusCreated,
+			verifyIP: func(t *testing.T, db *sql.DB) {
+				var count int
+				err := db.QueryRow("SELECT COUNT(*) FROM peer_ips WHERE peer_id = 1 AND ip_address = '::1' AND is_primary = 0").Scan(&count)
+				if err != nil {
+					t.Fatalf("failed to query peer_ips: %v", err)
+				}
+				if count != 1 {
+					t.Errorf("expected 1 secondary IPv6 IP, got %d", count)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			database, cleanup := testutil.SetupTestDB(t)
+			defer cleanup()
+
+			if tt.setup != nil {
+				tt.setup(t, database)
+			}
+
+			req := httptest.NewRequest("POST", "/api/v1/peers/"+tt.peerID+"/ips", strings.NewReader(tt.body))
+			req.Header.Set("Content-Type", "application/json")
+			req = muxVars(req, map[string]string{"id": tt.peerID})
+			w := httptest.NewRecorder()
+
+			handler := NewHandler(database, nil)
+			handler.AddPeerIP(w, req)
+
+			if w.Code != tt.wantCode {
+				t.Errorf("expected status %d, got %d: %s", tt.wantCode, w.Code, w.Body.String())
+			}
+
+			if tt.wantErr != "" {
+				var resp map[string]string
+				if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+					t.Fatalf("failed to decode error response: %v", err)
+				}
+				if !strings.Contains(resp["error"], tt.wantErr) {
+					t.Errorf("expected error containing %q, got %q", tt.wantErr, resp["error"])
+				}
+			}
+
+			if tt.wantCode == http.StatusCreated {
+				var pip PeerIP
+				if err := json.NewDecoder(w.Body).Decode(&pip); err != nil {
+					t.Fatalf("failed to decode response: %v", err)
+				}
+				if pip.IsPrimary {
+					t.Error("expected is_primary to be false for added IP")
+				}
+				if pip.PeerID == 0 {
+					t.Error("expected non-zero peer_id")
+				}
+				if pip.ID == 0 {
+					t.Error("expected non-zero id")
+				}
+			}
+
+			if tt.verifyIP != nil {
+				tt.verifyIP(t, database)
+			}
+		})
+	}
+}
+
+// TestDeletePeerIP tests the DELETE /peers/{id}/ips/{ip_id} endpoint.
+func TestDeletePeerIP(t *testing.T) {
+	tests := []struct {
+		name   string
+		peerID string
+		ipID   string
+		setup  func(t *testing.T, db *sql.DB)
+		wantCode int
+		wantErr  string
+		verifyDelete func(t *testing.T, db *sql.DB)
+	}{
+		{
+			name:   "delete peer IP - success",
+			peerID: "1",
+			ipID:   "2",
+			setup: func(t *testing.T, db *sql.DB) {
+				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`, "peer1", "10.0.0.1", "key1", "hmac1", 0)
+				db.Exec(`INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 1)`, 1, "10.0.0.1")
+				db.Exec(`INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 0)`, 1, "10.0.0.2")
+			},
+			wantCode: http.StatusNoContent,
+			verifyDelete: func(t *testing.T, db *sql.DB) {
+				var count int
+				err := db.QueryRow("SELECT COUNT(*) FROM peer_ips WHERE id = 2").Scan(&count)
+				if err != nil {
+					t.Fatalf("failed to query peer_ips: %v", err)
+				}
+				if count != 0 {
+					t.Error("expected secondary IP to be deleted")
+				}
+			},
+		},
+		{
+			name:   "delete peer IP - cannot delete primary IP",
+			peerID: "1",
+			ipID:   "1",
+			setup: func(t *testing.T, db *sql.DB) {
+				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`, "peer1", "10.0.0.1", "key1", "hmac1", 0)
+				db.Exec(`INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 1)`, 1, "10.0.0.1")
+			},
+			wantCode: http.StatusBadRequest,
+			wantErr:  "cannot delete primary IP address",
+		},
+		{
+			name:   "delete peer IP - peer not found",
+			peerID: "999",
+			ipID:   "1",
+			setup: func(t *testing.T, db *sql.DB) {
+				// No peers
+			},
+			wantCode: http.StatusNotFound,
+			wantErr:  "peer not found",
+		},
+		{
+			name:   "delete peer IP - IP not found",
+			peerID: "1",
+			ipID:   "999",
+			setup: func(t *testing.T, db *sql.DB) {
+				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`, "peer1", "10.0.0.1", "key1", "hmac1", 0)
+				db.Exec(`INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 1)`, 1, "10.0.0.1")
+			},
+			wantCode: http.StatusNotFound,
+			wantErr:  "peer IP not found",
+		},
+		{
+			name:   "delete peer IP - IP belongs to different peer",
+			peerID: "1",
+			ipID:   "2",
+			setup: func(t *testing.T, db *sql.DB) {
+				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`, "peer1", "10.0.0.1", "key1", "hmac1", 0)
+				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`, "peer2", "10.0.0.2", "key2", "hmac2", 0)
+				db.Exec(`INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 1)`, 1, "10.0.0.1")
+				db.Exec(`INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 1)`, 2, "10.0.0.2")
+			},
+			wantCode: http.StatusNotFound,
+			wantErr:  "peer IP not found",
+		},
+		{
+			name:   "delete peer IP - invalid peer ID",
+			peerID: "invalid",
+			ipID:   "1",
+			setup: func(t *testing.T, db *sql.DB) {
+				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`, "peer1", "10.0.0.1", "key1", "hmac1", 0)
+			},
+			wantCode: http.StatusBadRequest,
+			wantErr:  "invalid peer ID",
+		},
+	{
+		name: "delete peer IP - invalid IP ID",
+		peerID: "1",
+		ipID: "invalid",
+		setup: func(t *testing.T, db *sql.DB) {
+			db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`, "peer1", "10.0.0.1", "key1", "hmac1", 0)
+		},
+		wantCode: http.StatusBadRequest,
+		wantErr: "invalid IP ID",
+	},
+	{
+		name: "delete peer IP - referenced by policy as source_ip",
+		peerID: "1",
+		ipID: "2",
+		setup: func(t *testing.T, db *sql.DB) {
+			db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`, "peer1", "10.0.0.1", "key1", "hmac1", 0)
+			db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`, "peer2", "10.0.0.3", "key2", "hmac2", 0)
+			db.Exec(`INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 1)`, 1, "10.0.0.1")
+			db.Exec(`INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 0)`, 1, "10.0.0.2")
+			db.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`, "ssh", "22", "tcp")
+			db.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, source_ip, action, priority, enabled) VALUES (?, ?, 'peer', ?, ?, 'peer', ?, 'ACCEPT', 100, 1)`, "test-policy", 1, 1, 2, "10.0.0.2")
+		},
+		wantCode: http.StatusConflict,
+		wantErr:  "cannot delete IP: referenced by 1 policy/policies",
+	},
+	{
+		name: "delete peer IP - referenced by policy as target_ip",
+		peerID: "1",
+		ipID: "2",
+		setup: func(t *testing.T, db *sql.DB) {
+			db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`, "peer1", "10.0.0.1", "key1", "hmac1", 0)
+			db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`, "peer2", "10.0.0.3", "key2", "hmac2", 0)
+			db.Exec(`INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 1)`, 1, "10.0.0.1")
+			db.Exec(`INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 0)`, 1, "10.0.0.2")
+			db.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`, "ssh", "22", "tcp")
+			db.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, target_ip, action, priority, enabled) VALUES (?, ?, 'peer', ?, ?, 'peer', ?, 'ACCEPT', 100, 1)`, "test-policy", 2, 1, 1, "10.0.0.2")
+		},
+		wantCode: http.StatusConflict,
+		wantErr:  "cannot delete IP: referenced by 1 policy/policies",
+	},
+	{
+		name: "delete peer IP - not referenced by any policy succeeds",
+		peerID: "1",
+		ipID: "2",
+		setup: func(t *testing.T, db *sql.DB) {
+			db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`, "peer1", "10.0.0.1", "key1", "hmac1", 0)
+			db.Exec(`INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 1)`, 1, "10.0.0.1")
+			db.Exec(`INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 0)`, 1, "10.0.0.2")
+		},
+		wantCode: http.StatusNoContent,
+		verifyDelete: func(t *testing.T, db *sql.DB) {
+			var count int
+			err := db.QueryRow("SELECT COUNT(*) FROM peer_ips WHERE id = 2").Scan(&count)
+			if err != nil {
+				t.Fatalf("failed to query peer_ips: %v", err)
+			}
+			if count != 0 {
+				t.Error("expected secondary IP to be deleted")
+			}
+		},
+	},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			database, cleanup := testutil.SetupTestDB(t)
+			defer cleanup()
+
+			if tt.setup != nil {
+				tt.setup(t, database)
+			}
+
+			req := httptest.NewRequest("DELETE", "/api/v1/peers/"+tt.peerID+"/ips/"+tt.ipID, nil)
+			req = muxVars(req, map[string]string{"id": tt.peerID, "ip_id": tt.ipID})
+			w := httptest.NewRecorder()
+
+			handler := NewHandler(database, nil)
+			handler.DeletePeerIP(w, req)
+
+			if w.Code != tt.wantCode {
+				t.Errorf("expected status %d, got %d: %s", tt.wantCode, w.Code, w.Body.String())
+			}
+
+			if tt.wantErr != "" {
+				var resp map[string]string
+				if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+					t.Fatalf("failed to decode error response: %v", err)
+				}
+				if !strings.Contains(resp["error"], tt.wantErr) {
+					t.Errorf("expected error containing %q, got %q", tt.wantErr, resp["error"])
+				}
+			}
+
+			if tt.verifyDelete != nil {
+				tt.verifyDelete(t, database)
+			}
+		})
 	}
 }
