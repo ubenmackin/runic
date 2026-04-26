@@ -3,7 +3,7 @@ import { useLocation } from 'react-router-dom'
 import { useTableSort } from '../hooks/useTableSort'
 import { usePagination } from '../hooks/usePagination'
 import { useQuery, useQueryClient, useQueries } from '@tanstack/react-query'
-import { Plus, Pencil, Trash2, Server, Copy, Check, RefreshCw, X, FileCode, AlertTriangle, Globe, ChevronDown, ChevronUp, Send, Download } from 'lucide-react'
+import { Plus, Pencil, Trash2, Server, Copy, Check, RefreshCw, X, FileCode, AlertTriangle, Globe, ChevronDown, ChevronUp, Send, Download, Info } from 'lucide-react'
 import { api, QUERY_KEYS, getPeerIPs, addPeerIP, deletePeerIP } from '../api/client'
 import { REFETCH_INTERVALS, OS_OPTIONS, ARCH_OPTIONS } from '../constants'
 import { useCrudModal } from '../hooks/useCrudModal'
@@ -61,13 +61,15 @@ function getPeerMenuItems(peer, { canEdit, fetchBundle, handlePushToPeer, openEd
     })
     // Import option: only for agent peers with no deployed rules
     if (!peer.bundle_version) {
-      items.push({
-        label: 'Import Pre-Runic Rules',
-        icon: Download,
-        onClick: () => handleImportRules(peer),
-      })
-    }
+    items.push({
+      label: 'Import Pre-Runic Rules',
+      icon: Download,
+      onClick: () => handleImportRules(peer),
+    })
   }
+  // View Details for agent peers
+  items.push({ label: 'View Details', icon: Info, onClick: () => openEdit(peer) })
+}
   // Manual-only items
   if (peer.is_manual && canEdit) {
     items.push({
@@ -870,9 +872,9 @@ Groups
 Agent <SortIndicator columnKey="agent_version" sortConfig={sortConfig} />
 </button>
 </th>
-<th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
-Actions
-</th>
+                             <th className="text-left px-4 py-1 w-11" aria-label="Actions">
+                                {/* Kebab menu column */}
+                            </th>
 </tr>
 </thead>
 <tbody className="divide-y divide-gray-200 dark:divide-gray-border">
@@ -995,55 +997,9 @@ v{peer.agent_version}
 <span className="text-gray-400 dark:text-amber-muted">—</span>
 )}
 </td>
-<td className="px-4 py-1">
-<div className="flex items-center gap-2">
-              {!peer.is_manual && (
-                <>
-                  {!peer.bundle_version && (
-                    <button
-                      onClick={() => handleImportRules(peer)}
-                      className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none"
-                      title="Import Pre-Runic Rules"
-                    >
-                      <Download className="w-4 h-4 text-blue-500" />
-                    </button>
-                  )}
-                  <button
-                    onClick={() => fetchBundle(peer, false)}
-                    className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none"
-                    title="View Deployed Rules"
-                  >
-                    <FileCode className="w-4 h-4 text-purple-active" />
-                  </button>
-                  <button
-                    onClick={() => handlePushToPeer(peer)}
-                    className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none"
-                    title="Push Current Rules"
-                  >
-                    <Send className="w-4 h-4 text-green-600" />
-                  </button>
-                </>
-              )}
-{canEdit && peer.is_manual && (
-<button
-onClick={() => openEdit(peer)}
-className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none"
-title="Edit"
->
-<Pencil className="w-4 h-4 text-gray-900 dark:text-white" />
-</button>
-)}
-{canEdit && (
-<button
-onClick={() => setDeleteTarget(peer)}
-className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none"
-title="Delete"
->
-<Trash2 className="w-4 h-4 text-red-500" />
-</button>
-)}
-</div>
-</td>
+                            <td className="px-4 py-1">
+                                <KebabMenu items={getPeerMenuItems(peer, { canEdit, fetchBundle, handlePushToPeer, openEdit, setDeleteTarget, handleImportRules })} />
+                            </td>
 </tr>
 ))}
 </tbody>
@@ -1060,7 +1016,9 @@ title="Delete"
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" tabIndex="-1" onKeyDown={(e) => { if (e.key === 'Escape') { closeModal() } }}>
           <div ref={editModalRef} className={`bg-white dark:bg-charcoal-dark rounded-none shadow-none w-full mx-4 ${editPeer ? 'max-w-xl' : 'max-w-lg'}`}>
             <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-border flex items-center justify-between">
-              <h3 className="text-lg font-semibold text-gray-900 dark:text-light-neutral">{editPeer ? 'Edit Peer' : 'Add Peer'}</h3>
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-light-neutral">
+                  {editPeer ? (editPeer.is_manual ? 'Edit Peer' : 'Peer Details') : 'Add Peer'}
+                </h3>
               <button onClick={closeModal} className="p-1 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded">
                 <X className="w-5 h-5 text-gray-500" />
               </button>
