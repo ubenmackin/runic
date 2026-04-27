@@ -772,14 +772,20 @@ build_binary() {
 
 	cd "$SOURCE_DIR" || { log ERROR "Source directory not found"; exit 1; }
 
-	log INFO "Building Runic Server and web frontend via Makefile..."
+    log INFO "Preparing to build Runic Server and web frontend..."
 
-	# Build via Makefile (single source of truth for build commands)
-	make all 2>&1 | tee -a "$LOG_FILE"
-	if [ ${PIPESTATUS[0]} -ne 0 ]; then
-		log ERROR "Build failed. Check $LOG_FILE for details."
-		exit 1
-	fi
+    # Check if npm is installed (required for web frontend build)
+    if ! check_command npm; then
+        log ERROR "npm is not installed. Cannot build web frontend."
+        exit 1
+    fi
+
+    # Download Go dependencies (needed before build)
+    log INFO "Downloading Go dependencies..."
+    go mod download 2>&1 | tee -a "$LOG_FILE" || { log ERROR "Failed to download Go dependencies. Check $LOG_FILE for details."; exit 1; }
+
+    # Build via Makefile (single source of truth for build commands)
+    make all 2>&1 | tee -a "$LOG_FILE" || { log ERROR "Build failed. Check $LOG_FILE for details."; exit 1; }
 
 	# Copy binary to install directory (atomic replace to avoid ETXTBSY on running binary)
 	local BINARY_TMP
@@ -812,14 +818,20 @@ build_agent_binaries() {
 
 	cd "$SOURCE_DIR" || { log ERROR "Source directory not found"; exit 1; }
 
-	log INFO "Building runic-agent binaries via Makefile..."
+    log INFO "Building runic-agent binaries via Makefile..."
 
-	# Build agents via Makefile (single source of truth for build commands)
-make agents 2>&1 | tee -a "$LOG_FILE"
-if [ ${PIPESTATUS[0]} -ne 0 ]; then
-		log ERROR "Agent build failed. Check $LOG_FILE for details."
-		exit 1
-	fi
+    # Check if npm is installed (required for web frontend build)
+    if ! check_command npm; then
+        log ERROR "npm is not installed. Cannot build web frontend."
+        exit 1
+    fi
+
+    # Download Go dependencies (needed before build)
+    log INFO "Downloading Go dependencies..."
+    go mod download 2>&1 | tee -a "$LOG_FILE" || { log ERROR "Failed to download Go dependencies. Check $LOG_FILE for details."; exit 1; }
+
+    # Build agents via Makefile (single source of truth for build commands)
+    make agents 2>&1 | tee -a "$LOG_FILE" || { log ERROR "Agent build failed. Check $LOG_FILE for details."; exit 1; }
 
 	# Copy agent binaries to install directory (atomic replace to avoid ETXTBSY on running binary)
 	local AGENT_TMP
@@ -851,11 +863,11 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
 		cp "$SOURCE_DIR/scripts/runic-agent.service" "$INSTALL_DIR/downloads/" || { log ERROR "Failed to copy runic-agent.service"; exit 1; }
 		log SUCCESS "runic-agent.service copied to downloads directory"
 	else
-		log WARNING "runic-agent.service not found at $SOURCE_DIR/scripts/runic-agent.service"
+		log WARN "runic-agent.service not found at $SOURCE_DIR/scripts/runic-agent.service"
 	fi
 
 # Set permissions on service file (644)
-chmod 644 "$INSTALL_DIR/downloads/runic-agent.service" 2>/dev/null || { log WARNING "Failed to set permissions on service file"; }
+chmod 644 "$INSTALL_DIR/downloads/runic-agent.service" 2>/dev/null || { log WARN "Failed to set permissions on service file"; }
 }
 
 create_system_user() {
