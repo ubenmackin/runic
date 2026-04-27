@@ -1,7 +1,6 @@
 package settings
 
 import (
-	"bytes"
 	"database/sql"
 	"encoding/json"
 	"net/http"
@@ -11,8 +10,6 @@ import (
 	"time"
 
 	"runic/internal/testutil"
-
-	runicversion "runic/internal/common/version"
 )
 
 // =============================================================================
@@ -881,131 +878,4 @@ func TestUpdateInstanceSettings_UpdateExisting(t *testing.T) {
 	if count != 1 {
 		t.Errorf("expected 1 row, got %d", count)
 	}
-}
-
-// =============================================================================
-// Test GetAgentVersionSettings and UpdateAgentVersionSettings
-// =============================================================================
-
-func TestAgentVersionSettings(t *testing.T) {
-	t.Run("defaults to server version when not set", func(t *testing.T) {
-		db, cleanup := testutil.SetupTestDBWithSecret(t)
-		defer cleanup()
-
-		handler := NewHandler(db, nil, "")
-
-		req := httptest.NewRequest("GET", "/api/v1/settings/agent-version", nil)
-		w := httptest.NewRecorder()
-		handler.GetAgentVersionSettings(w, req)
-
-		if w.Code != http.StatusOK {
-			t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
-		}
-
-		var resp map[string]interface{}
-		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
-			t.Fatalf("failed to decode response: %v", err)
-		}
-
-		if resp["is_default"] != true {
-			t.Errorf("expected is_default true, got %v", resp["is_default"])
-		}
-	if resp["latest_agent_version"] != runicversion.AgentVersion {
-		t.Errorf("expected agent version %s, got %v", runicversion.AgentVersion, resp["latest_agent_version"])
-	}
-})
-
-	t.Run("sets and gets explicit version", func(t *testing.T) {
-		db, cleanup := testutil.SetupTestDBWithSecret(t)
-		defer cleanup()
-
-		handler := NewHandler(db, nil, "")
-
-		// Set a version
-		body, _ := json.Marshal(map[string]string{"latest_agent_version": "1.2.3"})
-		req := httptest.NewRequest("PUT", "/api/v1/settings/agent-version", bytes.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
-		w := httptest.NewRecorder()
-		handler.UpdateAgentVersionSettings(w, req)
-
-		if w.Code != http.StatusOK {
-			t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
-		}
-
-		// Get the version
-		req = httptest.NewRequest("GET", "/api/v1/settings/agent-version", nil)
-		w = httptest.NewRecorder()
-		handler.GetAgentVersionSettings(w, req)
-
-		var resp map[string]interface{}
-		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
-			t.Fatalf("failed to decode response: %v", err)
-		}
-
-		if resp["latest_agent_version"] != "1.2.3" {
-			t.Errorf("expected version 1.2.3, got %v", resp["latest_agent_version"])
-		}
-		if resp["is_default"] != false {
-			t.Errorf("expected is_default false, got %v", resp["is_default"])
-		}
-	})
-
-	t.Run("rejects too-long version string", func(t *testing.T) {
-		db, cleanup := testutil.SetupTestDBWithSecret(t)
-		defer cleanup()
-
-		handler := NewHandler(db, nil, "")
-
-		longVersion := strings.Repeat("x", 51)
-		body, _ := json.Marshal(map[string]string{"latest_agent_version": longVersion})
-		req := httptest.NewRequest("PUT", "/api/v1/settings/agent-version", bytes.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
-		w := httptest.NewRecorder()
-		handler.UpdateAgentVersionSettings(w, req)
-
-		if w.Code != http.StatusBadRequest {
-			t.Errorf("expected 400, got %d: %s", w.Code, w.Body.String())
-		}
-	})
-
-	t.Run("empty string reverts to server version", func(t *testing.T) {
-		db, cleanup := testutil.SetupTestDBWithSecret(t)
-		defer cleanup()
-
-		handler := NewHandler(db, nil, "")
-
-		// First set an explicit version
-		body, _ := json.Marshal(map[string]string{"latest_agent_version": "2.0.0"})
-		req := httptest.NewRequest("PUT", "/api/v1/settings/agent-version", bytes.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
-		w := httptest.NewRecorder()
-		handler.UpdateAgentVersionSettings(w, req)
-
-		if w.Code != http.StatusOK {
-			t.Fatalf("expected 200 setting version, got %d: %s", w.Code, w.Body.String())
-		}
-
-		// Now revert with empty string
-		body, _ = json.Marshal(map[string]string{"latest_agent_version": ""})
-		req = httptest.NewRequest("PUT", "/api/v1/settings/agent-version", bytes.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
-		w = httptest.NewRecorder()
-		handler.UpdateAgentVersionSettings(w, req)
-
-		if w.Code != http.StatusOK {
-			t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
-		}
-
-		var resp map[string]interface{}
-		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
-			t.Fatalf("failed to decode response: %v", err)
-		}
-
-		if resp["is_default"] != true {
-			t.Errorf("expected is_default true when set to empty, got %v", resp["is_default"])
-		}
-	if resp["latest_agent_version"] != runicversion.AgentVersion {
-		t.Errorf("expected agent version %s, got %v", runicversion.AgentVersion, resp["latest_agent_version"])
-	}
-})
 }

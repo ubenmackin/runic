@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Lock, Trash2, Plus, Shield, Key, Database, HardDrive, Bell, FileKey, ScrollText, Mail, Eye, EyeOff, Send, Loader, Server } from 'lucide-react'
+import { Lock, Trash2, Plus, Shield, Key, Database, HardDrive, Bell, FileKey, ScrollText, Mail, Eye, EyeOff, Send, Loader } from 'lucide-react'
 import { api, QUERY_KEYS, getSMTPConfig, updateSMTPConfig, testSMTP, getNotificationPrefs, updateNotificationPrefs, getAlertRules } from '../api/client'
 import { useToastContext } from '../hooks/ToastContext'
 import { useFocusTrap } from '../hooks/useFocusTrap'
@@ -188,35 +188,7 @@ useEffect(() => {
     onError: (err) => showToast(err.message, 'error'),
   })
 
-  // Agent Version Settings
-  const [latestAgentVersion, setLatestAgentVersion] = useState('')
-  const [agentVersionIsDefault, setAgentVersionIsDefault] = useState(false)
-  const agentVersionLoadedRef = useRef(false)
-
-  const { data: agentVersionData } = useQuery({
-    queryKey: ['agent-version-settings'],
-    queryFn: () => api.get('/settings/agent-version'),
-    enabled: isAdmin,
-  })
-
-  useEffect(() => {
-    if (agentVersionData && !agentVersionLoadedRef.current) {
-      setLatestAgentVersion(agentVersionData.latest_agent_version || '')
-      setAgentVersionIsDefault(agentVersionData.is_default ?? false)
-      agentVersionLoadedRef.current = true
-    }
-  }, [agentVersionData])
-
-  const updateAgentVersionMutation = useMutation({
-    mutationFn: (version) => api.put('/settings/agent-version', { latest_agent_version: version }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['agent-version-settings'] })
-      qc.invalidateQueries({ queryKey: QUERY_KEYS.info() })
-      agentVersionLoadedRef.current = false
-      showToast('Agent version setting saved', 'success')
-    },
-    onError: (err) => showToast(err.message, 'error'),
-  })
+  // Agent Version Settings removed - version comes from build via ldflags
 
   const { data: alertRules } = useQuery({
     queryKey: QUERY_KEYS.alertRules(),
@@ -444,20 +416,6 @@ const getKeyData = (keyType) => {
             >
           <FileKey className="w-5 h-5" />
           Keys
-        </button>
-        <button
-          role="tab"
-          aria-selected={activeTab === 'agent'}
-          aria-controls="agent-tab-content"
-          onClick={() => setActiveTab('agent')}
-          className={`flex items-center gap-3 px-6 py-4 text-base font-medium transition-colors ${
-            activeTab === 'agent'
-              ? 'border-b-[3px] border-purple-active text-purple-active font-semibold'
-              : 'border-b-2 border-transparent text-gray-600 dark:text-amber-muted hover:text-gray-900 dark:hover:text-light-neutral hover:bg-gray-50 dark:hover:bg-charcoal-darkest/50'
-          }`}
-        >
-          <Server className="w-5 h-5" />
-          Agent
         </button>
       </div>
         </div>
@@ -1234,53 +1192,6 @@ id="notifications-section"
         </div>
       </div>
       </div>
-      )}
-
-      {activeTab === 'agent' && (
-        <div id="agent-tab-content" role="tabpanel" className="space-y-6">
-          <CollapsibleSection
-            title="Agent Version"
-            icon={<Server className="w-5 h-5 text-purple-500" />}
-            storageKey="settings_collapsed_agent_version"
-            defaultExpanded={true}
-          >
-            <div className="space-y-4">
-              <p className="text-sm text-gray-600 dark:text-amber-muted">
-                Set the latest agent version. Agents running an older version will show an update indicator in the Peers page. Leave blank to use the server version as the latest.
-              </p>
-              <div>
-                <label htmlFor="latest_agent_version" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-                  Latest Agent Version
-                </label>
-                <input
-                  type="text"
-                  id="latest_agent_version"
-                  value={latestAgentVersion}
-                  onChange={(e) => {
-                    setLatestAgentVersion(e.target.value)
-                    setAgentVersionIsDefault(false)
-                  }}
-                  placeholder="e.g., 1.2.3"
-                  className="w-full md:w-64 px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-                />
-                {agentVersionIsDefault && (
-                  <p className="text-xs text-gray-500 dark:text-amber-muted mt-1">
-                    Currently using server version as default
-                  </p>
-                )}
-              </div>
-              <div className="flex justify-end">
-                <button
-                  onClick={() => updateAgentVersionMutation.mutate(latestAgentVersion)}
-                  disabled={updateAgentVersionMutation.isPending}
-                  className="inline-flex items-center gap-2 px-4 py-2 text-sm bg-purple-active hover:bg-purple-600 text-white rounded-none disabled:opacity-50 border border-purple-active/20 shadow-[0_0_15px_rgba(159,79,248,0.2)] transition-all"
-                >
-                  {updateAgentVersionMutation.isPending ? 'Saving...' : 'Save'}
-                </button>
-              </div>
-            </div>
-          </CollapsibleSection>
-        </div>
       )}
 
       {showDeleteModal && (

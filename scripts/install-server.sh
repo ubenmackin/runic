@@ -763,65 +763,36 @@ clone_repository() {
 }
 
 build_binary() {
-    if [ "$SKIP_BUILD" = true ]; then
-        log INFO "Skipping build (--skip-build flag)"
-        return 0
-    fi
+	if [ "$SKIP_BUILD" = true ]; then
+		log INFO "Skipping build (--skip-build flag)"
+		return 0
+	fi
 
-    log_section "Building Runic Server"
+	log_section "Building Runic Server"
 
 	cd "$SOURCE_DIR" || { log ERROR "Source directory not found"; exit 1; }
 
-	# Version info for build (captured BEFORE any npm/go steps to avoid false "-dirty" suffix)
-	VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "dev")
-	COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-	BUILT_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+	log INFO "Building runic-server via Makefile..."
 
-	# Check if Go modules are available
-	if [ ! -f "go.mod" ]; then
-		log ERROR "go.mod not found. Cannot build."
+	# Build via Makefile (single source of truth for build commands)
+	make build >> "$LOG_FILE" 2>&1
+	if [ $? -ne 0 ]; then
+		log ERROR "Build failed. Check $LOG_FILE for details."
 		exit 1
 	fi
 
-	# Build the web frontend (always rebuild to pick up changes)
-	log INFO "Building web frontend..."
-	# Check if npm is installed
-	if ! command -v npm &> /dev/null; then
-		log ERROR "npm is not installed. Cannot build web frontend."
-		exit 1
-	fi
-	cd web || { log ERROR "web directory not found"; exit 1; }
-	npm install || { log ERROR "npm install failed"; exit 1; }
-	npm run build || { log ERROR "npm run build failed"; exit 1; }
-	cd .. || exit 1
-	log SUCCESS "Web frontend built successfully"
-
-	# Download Go dependencies
-	log INFO "Downloading Go dependencies..."
-	go mod download >> "$LOG_FILE" 2>&1
-
-	# Build the server binary
-	log INFO "Building runic-server with CGO enabled..."
-
-	# Create dist directory in INSTALL_DIR
+	# Copy binary to install directory
 	mkdir -p "$INSTALL_DIR/dist"
+	cp "dist/$BINARY_NAME" "$INSTALL_DIR/dist/" || { log ERROR "Failed to copy binary to install directory"; exit 1; }
 
-	# Build with CGO for SQLite support and inject version info via ldflags
-	CGO_ENABLED=1 go build -ldflags="-X runic/internal/common/version.Version=$VERSION -X runic/internal/common/version.Commit=$COMMIT -X runic/internal/common/version.BuiltAt=$BUILT_AT" -buildvcs=false -o "$INSTALL_DIR/dist/$BINARY_NAME" ./cmd/runic-server >> "$LOG_FILE" 2>&1
-
-    if [ $? -ne 0 ]; then
-        log ERROR "Build failed. Check $LOG_FILE for details."
-        exit 1
-    fi
-
-    # Verify binary
-    if [ -f "$INSTALL_DIR/dist/$BINARY_NAME" ]; then
-        local size
-        size=$(du -h "$INSTALL_DIR/dist/$BINARY_NAME" | cut -f1)
-        log SUCCESS "Binary built successfully ($size)"
-    else
-        log ERROR "Binary not found after build"
-        exit 1
+	# Verify binary
+	if [ -f "$INSTALL_DIR/dist/$BINARY_NAME" ]; then
+		local size
+		size=$(du -h "$INSTALL_DIR/dist/$BINARY_NAME" | cut -f1)
+		log SUCCESS "Binary built successfully ($size)"
+	else
+		log ERROR "Binary not found after build"
+		exit 1
 	fi
 }
 
@@ -833,60 +804,43 @@ build_agent_binaries() {
 
 	log_section "Building Runic Agent Binaries"
 
-cd "$SOURCE_DIR" || { log ERROR "Source directory not found"; exit 1; }
+	cd "$SOURCE_DIR" || { log ERROR "Source directory not found"; exit 1; }
 
-  # Capture version information before any build steps
-  VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "dev")
-  COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-BUILT_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-AGENT_VERSION=$(cat .agent-version 2>/dev/null || echo "dev")
+	log INFO "Building runic-agent binaries via Makefile..."
 
-# Create downloads directory
+	# Build agents via Makefile (single source of truth for build commands)
+	make agents >> "$LOG_FILE" 2>&1
+	if [ $? -ne 0 ]; then
+		log ERROR "Agent build failed. Check $LOG_FILE for details."
+		exit 1
+	fi
+
+	# Copy agent binaries to install directory
 	mkdir -p "$INSTALL_DIR/downloads"
+	cp dist/runic-agent-linux-* "$INSTALL_DIR/downloads/" || { log ERROR "Failed to copy agent binaries"; exit 1; }
 
-	# Build for each architecture
-	local arches=("amd64" "arm" "armv6" "arm64")
-	local built_count=0
+	# Count built binaries
+	local built_count
+	built_count=$(ls -1 "$INSTALL_DIR/downloads/runic-agent-"* 2>/dev/null | wc -l | tr -d ' ')
 
-	for arch in "${arches[@]}"; do
-		log INFO "Building runic-agent for $arch..."
-
-if [ "$arch" = "armv6" ]; then
-CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=6 go build -ldflags="-X runic/internal/agent/core.Version=$AGENT_VERSION -X runic/internal/common/version.Commit=$COMMIT -X runic/internal/common/version.BuiltAt=$BUILT_AT" -a -buildvcs=false -o "$INSTALL_DIR/downloads/runic-agent-armv6" ./cmd/runic-agent >> "$LOG_FILE" 2>&1
+	if [ "$built_count" -gt 0 ]; then
+		log SUCCESS "Agent binaries built successfully ($built_count architectures)"
 	else
-		CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -ldflags="-X runic/internal/agent/core.Version=$AGENT_VERSION -X runic/internal/common/version.Commit=$COMMIT -X runic/internal/common/version.BuiltAt=$BUILT_AT" -a -buildvcs=false -o "$INSTALL_DIR/downloads/runic-agent-$arch" ./cmd/runic-agent >> "$LOG_FILE" 2>&1
-		fi
-
-		if [ $? -ne 0 ]; then
-			log ERROR "Failed to build runic-agent for $arch. Check $LOG_FILE for details."
-			exit 1
-		fi
-
-		if [ -f "$INSTALL_DIR/downloads/runic-agent-$arch" ]; then
-			local size
-			size=$(du -h "$INSTALL_DIR/downloads/runic-agent-$arch" | cut -f1)
-			log SUCCESS "runic-agent-$arch built successfully ($size)"
-			((built_count++))
-		else
-			log ERROR "runic-agent-$arch not found after build"
-			exit 1
-		fi
-	done
+		log ERROR "No agent binaries found after build"
+		exit 1
+	fi
 
 	# Copy service file
 	if [ -f "$SOURCE_DIR/scripts/runic-agent.service" ]; then
 		cp "$SOURCE_DIR/scripts/runic-agent.service" "$INSTALL_DIR/downloads/" || { log ERROR "Failed to copy runic-agent.service"; exit 1; }
 		log SUCCESS "runic-agent.service copied to downloads directory"
 	else
-		log ERROR "runic-agent.service not found at $SOURCE_DIR/scripts/runic-agent.service"
-		exit 1
+		log WARNING "runic-agent.service not found at $SOURCE_DIR/scripts/runic-agent.service"
 	fi
 
 	# Set permissions on binaries (755) and service file (644)
-	chmod 755 "$INSTALL_DIR/downloads/runic-agent-"* || { log ERROR "Failed to set permissions on agent binaries"; exit 1; }
-	chmod 644 "$INSTALL_DIR/downloads/runic-agent.service" || { log ERROR "Failed to set permissions on service file"; exit 1; }
-
-	log SUCCESS "All agent binaries built successfully ($built_count architectures)"
+	chmod 755 "$INSTALL_DIR/downloads/runic-agent-"* 2>/dev/null || { log WARNING "Failed to set permissions on agent binaries"; }
+	chmod 644 "$INSTALL_DIR/downloads/runic-agent.service" 2>/dev/null || { log WARNING "Failed to set permissions on service file"; }
 }
 
 create_system_user() {
