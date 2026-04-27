@@ -775,15 +775,17 @@ build_binary() {
 	log INFO "Building runic-server via Makefile..."
 
 	# Build via Makefile (single source of truth for build commands)
-	make build >> "$LOG_FILE" 2>&1
-	if [ $? -ne 0 ]; then
+	make build 2>&1 | tee -a "$LOG_FILE"
+	if [ ${PIPESTATUS[0]} -ne 0 ]; then
 		log ERROR "Build failed. Check $LOG_FILE for details."
 		exit 1
 	fi
 
-	# Copy binary to install directory
-	mkdir -p "$INSTALL_DIR/dist"
-	cp "dist/$BINARY_NAME" "$INSTALL_DIR/dist/" || { log ERROR "Failed to copy binary to install directory"; exit 1; }
+	# Copy binary to install directory (atomic replace to avoid ETXTBSY on running binary)
+	local BINARY_TMP
+	BINARY_TMP=$(mktemp "$INSTALL_DIR/dist/$BINARY_NAME.XXXXXX") || { log ERROR "Failed to create temp file for atomic replace"; exit 1; }
+ cp "dist/$BINARY_NAME" "$BINARY_TMP" || { rm -f "$BINARY_TMP"; log ERROR "Failed to stage binary for atomic replace"; exit 1; }
+ mv "$BINARY_TMP" "$INSTALL_DIR/dist/$BINARY_NAME" || { rm -f "$BINARY_TMP"; log ERROR "Failed to replace binary"; exit 1; }
 
 	# Verify binary
 	if [ -f "$INSTALL_DIR/dist/$BINARY_NAME" ]; then
@@ -809,15 +811,21 @@ build_agent_binaries() {
 	log INFO "Building runic-agent binaries via Makefile..."
 
 	# Build agents via Makefile (single source of truth for build commands)
-	make agents >> "$LOG_FILE" 2>&1
-	if [ $? -ne 0 ]; then
+make agents 2>&1 | tee -a "$LOG_FILE"
+if [ ${PIPESTATUS[0]} -ne 0 ]; then
 		log ERROR "Agent build failed. Check $LOG_FILE for details."
 		exit 1
 	fi
 
-	# Copy agent binaries to install directory
-	mkdir -p "$INSTALL_DIR/downloads"
-	cp dist/runic-agent-linux-* "$INSTALL_DIR/downloads/" || { log ERROR "Failed to copy agent binaries"; exit 1; }
+	# Copy agent binaries to install directory (atomic replace to avoid ETXTBSY on running binary)
+	local AGENT_TMP
+	for agent_binary in dist/runic-agent-linux-*; do
+   [ -f "$agent_binary" ] || continue
+	agent_name=$(basename "$agent_binary" | sed 's/-linux//')
+   AGENT_TMP=$(mktemp "$INSTALL_DIR/downloads/$agent_name.XXXXXX") || { log ERROR "Failed to create temp file for atomic replace of $agent_name"; exit 1; }
+   cp "$agent_binary" "$AGENT_TMP" || { rm -f "$AGENT_TMP"; log ERROR "Failed to stage $agent_name for atomic replace"; exit 1; }
+   mv "$AGENT_TMP" "$INSTALL_DIR/downloads/$agent_name" || { rm -f "$AGENT_TMP"; log ERROR "Failed to replace $agent_name"; exit 1; }
+ done
 
 	# Count built binaries
 	local built_count
