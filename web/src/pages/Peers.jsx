@@ -37,6 +37,16 @@ function parseHeartbeatForSort(timestamp) {
   return new Date(timestamp).getTime()
 }
 
+// Compare agent versions, handling optional 'v' prefix
+function isAgentOutdated(peerVersion, latestVersion) {
+  if (!peerVersion || !latestVersion) return false
+  const stripV = (v) => v.replace(/^v/, '')
+  return stripV(peerVersion) !== stripV(latestVersion)
+}
+
+// Filter to IPv4 only — Runic is IPv4-only for firewall management
+const isIPv4 = (ip) => !ip.includes(':')
+
 // Sync status configuration for SharpTag display
 const syncStatusConfig = {
   synced: { label: 'SYNCED', color: 'border-green-500 text-green-600 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-900/20' },
@@ -70,7 +80,7 @@ function getPeerMenuItems(peer, { canEdit, fetchBundle, handlePushToPeer, openEd
 	// View Details for agent peers
 	items.push({ label: 'View Details', icon: Info, onClick: () => openEdit(peer) })
 	// Update Agent option: only for agent peers that are out of date
-	if (latestAgentVersion && peer.agent_version && peer.agent_version !== latestAgentVersion) {
+	if (isAgentOutdated(peer.agent_version, latestAgentVersion)) {
 		items.push({
 			label: 'Update Agent',
 			icon: ArrowUpCircle,
@@ -100,10 +110,9 @@ function getPeerMenuItems(peer, { canEdit, fetchBundle, handlePushToPeer, openEd
 
 // Mobile card component for peer
 function PeerCard({ peer, peerIPs, canEdit, fetchBundle, handlePushToPeer, openEdit, setDeleteTarget, handleSyncStatusClick, handleImportRules, latestAgentVersion, handleUpdateAgent }) {
-  const ips = peerIPs || []
+  const allIps = (peerIPs || []).filter(ip => isIPv4(ip.ip_address))
   const primaryIp = peer.ip_address
-  const secondaryIps = ips.filter(ip => !ip.is_primary).map(ip => ip.ip_address)
-  const totalIpCount = ips.length || 1
+  const secondaryIps = allIps.filter(ip => !ip.is_primary).map(ip => ip.ip_address)
 
   return (
     <div className="bg-white dark:bg-charcoal-dark border border-gray-200 dark:border-gray-border p-3">
@@ -128,26 +137,16 @@ function PeerCard({ peer, peerIPs, canEdit, fetchBundle, handlePushToPeer, openE
                 MANUAL
               </span>
             )}
-            {/* Multi-IP badge */}
-            {totalIpCount > 1 && (
-              <span className="px-1.5 py-0.5 text-[10px] font-mono font-medium border border-blue-400 dark:border-blue-500 text-blue-600 dark:text-blue-400 shrink-0">
-                {totalIpCount} IPs
-              </span>
-            )}
-          </div>
+            </div>
           {/* IP addresses */}
-          <div className="mt-1">
-            <span className="font-mono text-sm text-gray-700 dark:text-amber-primary">{primaryIp}</span>
-            {secondaryIps.length > 0 && (
-              <div className="flex flex-wrap gap-1 mt-0.5">
-                {secondaryIps.map(ip => (
-                  <span key={ip} className="px-1.5 py-0.5 text-[11px] font-mono bg-gray-100 dark:bg-charcoal-darkest text-gray-500 dark:text-amber-muted border border-gray-200 dark:border-gray-border">
-                    {ip}
-                  </span>
-                ))}
-              </div>
-            )}
-          </div>
+<div className="mt-1 flex items-center gap-1.5">
+              <span className="font-mono text-sm text-gray-700 dark:text-amber-primary">{primaryIp}</span>
+              {secondaryIps.length > 0 && (
+                <span className="px-1 py-0.5 text-[10px] font-mono font-medium border border-blue-400 dark:border-blue-500 text-blue-600 dark:text-blue-400" title={secondaryIps.join(', ')}>
+                  +{secondaryIps.length}
+                </span>
+              )}
+            </div>
           {/* Third line: Sync status + Heartbeat */}
           <div className="flex items-center gap-2 mt-1 text-sm text-gray-600 dark:text-amber-muted">
             {peer.is_manual ? (
@@ -166,13 +165,11 @@ function PeerCard({ peer, peerIPs, canEdit, fetchBundle, handlePushToPeer, openE
                 </button>
                 <span>·</span>
                 <span>{formatRelativeTime(peer.last_heartbeat)}</span>
-{latestAgentVersion && peer.agent_version && peer.agent_version !== latestAgentVersion && (
-	<>
-		<span>·</span>
-		<span className="px-1 py-0.5 text-[10px] font-mono font-medium border border-amber-400 dark:border-amber-500 text-amber-600 dark:text-amber-400">
-			UPDATE
-		</span>
-	</>
+{isAgentOutdated(peer.agent_version, latestAgentVersion) && (
+<>
+<span>·</span>
+<ArrowUpCircle className="w-3.5 h-3.5 text-amber-500 dark:text-amber-400 shrink-0" title={`Update available: v${latestAgentVersion}`} />
+</>
 )}
               </>
             )}
@@ -509,9 +506,6 @@ const latestAgentVersion = serverInfo?.latest_agent_version
     return map
   }, [peers, peerIPsQueries])
 
-  // Check if any peer IPs are still loading
-  const peerIPsLoading = peers && peerIPsQueries.some(q => q.isLoading)
-
   const { data: registrationTokens, isLoading: tokensLoading } = useQuery({
     queryKey: ['registration-tokens'],
     queryFn: () => api.get('/registration-tokens'),
@@ -561,9 +555,9 @@ const preFilteredPeers = peers?.filter(peer => {
       const groups = (peer.groups || '').toLowerCase()
       const agent = peer.is_manual ? 'manual' : (peer.agent_version || '').toLowerCase()
       // Also search secondary IPs
-      const secondaryIps = (peerIPsMap[peer.id] || [])
-        .filter(ipEntry => !ipEntry.is_primary)
-        .map(ipEntry => (ipEntry.ip_address || '').toLowerCase())
+        const secondaryIps = (peerIPsMap[peer.id] || [])
+          .filter(ipEntry => !ipEntry.is_primary && isIPv4(ipEntry.ip_address))
+          .map(ipEntry => (ipEntry.ip_address || '').toLowerCase())
       const secondaryIpMatch = secondaryIps.some(sip => sip.includes(term))
       return hostname.includes(term) || ip.includes(term) || os.includes(term) || groups.includes(term) || agent.includes(term) || secondaryIpMatch
     },
@@ -959,38 +953,23 @@ color={syncStatusConfig[peer.sync_status]?.color}
 </button>
 ) : null}
 </td>
-          <td className="px-4 py-1">
-            <div className="flex flex-col">
-              <span className="font-mono text-gray-600 dark:text-amber-primary">{peer.ip_address}</span>
-              {(() => {
-                const ips = peerIPsMap[peer.id]
-                if (!ips) {
-                  return peerIPsLoading ? (
-                    <span className="text-[10px] text-gray-400 dark:text-amber-muted mt-0.5">Loading IPs...</span>
-                  ) : null
-                }
-                const secondaryIps = ips.filter(ip => !ip.is_primary).map(ip => ip.ip_address)
+<td className="px-4 py-1">
+          <div className="flex items-center gap-1.5">
+            <span className="font-mono text-gray-600 dark:text-amber-primary">{peer.ip_address}</span>
+            {(() => {
+              const allIps = (peerIPsMap[peer.id] || []).filter(ip => isIPv4(ip.ip_address))
+              const secondaryCount = allIps.filter(ip => !ip.is_primary).length
+              if (secondaryCount > 0) {
                 return (
-                  <>
-                    {secondaryIps.length > 0 && (
-                      <div className="flex flex-wrap gap-1 mt-0.5">
-                        {secondaryIps.map(ip => (
-                          <span key={ip} className="px-1.5 py-0.5 text-[11px] font-mono bg-gray-100 dark:bg-charcoal-darkest text-gray-500 dark:text-amber-muted border border-gray-200 dark:border-gray-border">
-                            {ip}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                    {ips.length > 1 && (
-                      <span className="mt-0.5 px-1.5 py-0.5 text-[10px] font-mono font-medium border border-blue-400 dark:border-blue-500 text-blue-600 dark:text-blue-400 self-start">
-                        {ips.length} IPs
-                      </span>
-                    )}
-                  </>
+                  <span className="px-1 py-0.5 text-[10px] font-mono font-medium border border-blue-400 dark:border-blue-500 text-blue-600 dark:text-blue-400" title={allIps.filter(ip => !ip.is_primary).map(ip => ip.ip_address).join(', ')}>
+                    +{secondaryCount}
+                  </span>
                 )
-              })()}
-            </div>
-          </td>
+              }
+              return null
+            })()}
+          </div>
+        </td>
 <td className="px-4 py-1 text-gray-600 dark:text-amber-primary">
 {peer.os_type || peer.os || '—'}
 </td>
@@ -1041,11 +1020,9 @@ title={groups.slice(maxVisible).join(', ')}
 ) : peer.agent_version ? (
 	<div className="flex items-center gap-1">
 	<span className="font-mono text-gray-600 dark:text-amber-primary">v{peer.agent_version}</span>
-	{latestAgentVersion && peer.agent_version !== latestAgentVersion && (
-		<span className="inline-flex items-center px-1 py-0.5 text-[10px] font-mono font-medium border border-amber-400 dark:border-amber-500 text-amber-600 dark:text-amber-400" title={`Update available: v${latestAgentVersion}`}>
-		UPDATE
-		</span>
-	)}
+{isAgentOutdated(peer.agent_version, latestAgentVersion) && (
+<ArrowUpCircle className="w-4 h-4 text-amber-500 dark:text-amber-400 shrink-0" title={`Update available: v${latestAgentVersion}`} />
+)}
 	</div>
 ) : (
 	<span className="text-gray-400 dark:text-amber-muted">—</span>
@@ -1099,13 +1076,13 @@ title={groups.slice(maxVisible).join(', ')}
                   ) : (
                     <div className="space-y-2">
                       {/* List of existing IPs */}
-                      {editPeerIPs.length > 0 ? (
-                        <div className="space-y-1">
-                          {editPeerIPs.map(ip => (
-                            <div key={ip.id} className="flex items-center gap-2 px-2 py-1.5 bg-gray-50 dark:bg-charcoal-darkest border border-gray-200 dark:border-gray-border">
-                              <span className="font-mono text-sm text-gray-700 dark:text-amber-primary flex-1">{ip.ip_address}</span>
-                              {ip.is_primary ? (
-                                <span className="text-[10px] font-mono font-medium px-1.5 py-0.5 border border-purple-400 dark:border-purple-500 text-purple-600 dark:text-purple-400">PRIMARY</span>
+                {editPeerIPs.length > 0 ? (
+                <div className="space-y-1">
+                {editPeerIPs.filter(ip => isIPv4(ip.ip_address)).map(ip => (
+                  <div key={ip.id} className="flex items-center gap-2 px-2 py-1.5 bg-gray-50 dark:bg-charcoal-darkest border border-gray-200 dark:border-gray-border">
+                    <span className="font-mono text-sm text-gray-700 dark:text-amber-primary flex-1">{ip.ip_address}</span>
+                    {ip.is_primary ? (
+                      <span className="text-[10px] font-mono font-medium px-1.5 py-0.5 border border-purple-400 dark:border-purple-500 text-purple-600 dark:text-purple-400">PRIMARY</span>
                               ) : (
                                 <button
                                   type="button"
@@ -1163,7 +1140,7 @@ title={groups.slice(maxVisible).join(', ')}
 	<label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Agent Version</label>
 	<div className="flex items-center gap-2">
 	<span className="font-mono text-sm text-gray-700 dark:text-amber-primary">v{editPeer.agent_version}</span>
-	{latestAgentVersion && editPeer.agent_version && editPeer.agent_version !== latestAgentVersion && (
+	{isAgentOutdated(editPeer.agent_version, latestAgentVersion) && (
 		<span className="px-1.5 py-0.5 text-[10px] font-mono font-medium border border-amber-400 dark:border-amber-500 text-amber-600 dark:text-amber-400">
 		v{latestAgentVersion} available
 		</span>
@@ -1178,11 +1155,11 @@ title={groups.slice(maxVisible).join(', ')}
                     </div>
                   ) : editPeerIPs.length > 0 ? (
                     <div className="space-y-1">
-                      {editPeerIPs.map(ip => (
-                        <div key={ip.id} className="flex items-center gap-2 px-2 py-1.5 bg-gray-50 dark:bg-charcoal-darkest border border-gray-200 dark:border-gray-border">
-                          <span className="font-mono text-sm text-gray-700 dark:text-amber-primary flex-1">{ip.ip_address}</span>
-                          {ip.is_primary && (
-                            <span className="text-[10px] font-mono font-medium px-1.5 py-0.5 border border-purple-400 dark:border-purple-500 text-purple-600 dark:text-purple-400">PRIMARY</span>
+                {editPeerIPs.filter(ip => isIPv4(ip.ip_address)).map(ip => (
+                  <div key={ip.id} className="flex items-center gap-2 px-2 py-1.5 bg-gray-50 dark:bg-charcoal-darkest border border-gray-200 dark:border-gray-border">
+                    <span className="font-mono text-sm text-gray-700 dark:text-amber-primary flex-1">{ip.ip_address}</span>
+                    {ip.is_primary && (
+                      <span className="text-[10px] font-mono font-medium px-1.5 py-0.5 border border-purple-400 dark:border-purple-500 text-purple-600 dark:text-purple-400">PRIMARY</span>
                           )}
                         </div>
                       ))}
