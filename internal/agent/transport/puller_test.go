@@ -673,8 +673,8 @@ func TestConnectSSE_UpdateAgent(t *testing.T) {
 
 	// connectSSE will return an error when the server closes, which is expected
 	_ = connectSSE(ctx, client, server.URL, "host123", "test-token", "1.0.0",
-		func(context.Context) {},       // onBundleUpdate
-		func(context.Context) {},       // onFetchBackup
+		func(context.Context) {}, // onBundleUpdate
+		func(context.Context) {}, // onFetchBackup
 		onUpdateAgent,
 	)
 
@@ -726,17 +726,17 @@ func TestConnectSSEConnectionErrors(t *testing.T) {
 
 			onBundleUpdate := func(ctx context.Context) {}
 
-	err := connectSSE(
-		context.Background(),
-		server.Client(),
-		server.URL,
-		"host123",
-		"test-token",
-		"1.0.0",
-		onBundleUpdate,
-		func(context.Context) {},
-		func(context.Context, string) {},
-	)
+			err := connectSSE(
+				context.Background(),
+				server.Client(),
+				server.URL,
+				"host123",
+				"test-token",
+				"1.0.0",
+				onBundleUpdate,
+				func(context.Context) {},
+				func(context.Context, string) {},
+			)
 
 			if tt.wantErr && err == nil {
 				t.Errorf("expected error containing '%s'", tt.errContains)

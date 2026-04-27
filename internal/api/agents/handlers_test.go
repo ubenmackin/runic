@@ -1556,12 +1556,12 @@ func TestWithHubs(t *testing.T) {
 
 func TestUpsertPeerIPs(t *testing.T) {
 	tests := []struct {
-		name       string
-		setup      func(t *testing.T, db *sql.DB) int // returns peerID
-		allIPs     []string
-		primaryIP  string
-		wantErr    bool
-		checkDB    func(t *testing.T, db *sql.DB, peerID int)
+		name      string
+		setup     func(t *testing.T, db *sql.DB) int // returns peerID
+		allIPs    []string
+		primaryIP string
+		wantErr   bool
+		checkDB   func(t *testing.T, db *sql.DB, peerID int)
 	}{
 		{
 			name: "initial upsert of IPs",
@@ -1738,7 +1738,7 @@ func TestSyncPeerIPs(t *testing.T) {
 				// Pre-populate with old IPs
 				db.Exec("INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 1)", id, "10.0.0.1")
 				db.Exec("INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 0)", id, "192.168.1.100") // stale
-				db.Exec("INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 0)", id, "172.16.0.100") // stale
+				db.Exec("INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 0)", id, "172.16.0.100")  // stale
 				return int(id)
 			},
 			allIPs:    []string{"10.0.0.1", "10.0.1.1"}, // new IP, old stale ones removed

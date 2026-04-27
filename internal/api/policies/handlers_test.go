@@ -203,7 +203,7 @@ func TestCreatePolicy(t *testing.T) {
 				db.Exec("INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)", "test-peer", "10.0.0.1", "key", "hmac")
 			},
 			wantStatusCode: http.StatusCreated,
-			wantID: true,
+			wantID:         true,
 		},
 		{
 			name: "target_ip with peer type returns 201",
@@ -213,7 +213,7 @@ func TestCreatePolicy(t *testing.T) {
 				db.Exec("INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)", "test-peer", "10.0.0.1", "key", "hmac")
 			},
 			wantStatusCode: http.StatusCreated,
-			wantID: true,
+			wantID:         true,
 		},
 		{
 			name: "source_ip with non-peer type returns 400",

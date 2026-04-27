@@ -65,10 +65,10 @@ func TestMigrateSchemaAddsMissingColumns(t *testing.T) {
 		{"services", "is_pending_delete"},
 		{"groups", "is_system"},
 		{"groups", "is_pending_delete"},
-	// Note: policies.source_type and policies.target_type are NOT dropped here
-	// because the polymorphic migration recreates the policies table entirely
-	// (not ADD COLUMN). The drop-and-re-add test approach cannot test table
-	// recreation migrations. These columns need a dedicated test if needed.
+		// Note: policies.source_type and policies.target_type are NOT dropped here
+		// because the polymorphic migration recreates the policies table entirely
+		// (not ADD COLUMN). The drop-and-re-add test approach cannot test table
+		// recreation migrations. These columns need a dedicated test if needed.
 		{"policies", "is_pending_delete"},
 		{"revoked_tokens", "token_type"},
 		{"user_notification_preferences", "quiet_hours_enabled"},

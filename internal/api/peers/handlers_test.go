@@ -1328,7 +1328,7 @@ func TestGetPeerByIP(t *testing.T) {
 			wantPeer: &Peer{ID: 1, Hostname: "manual-peer", IPAddress: "192.168.1.1", IsManual: true},
 		},
 		{
-			name: "ipv6 address - peer found",
+			name:        "ipv6 address - peer found",
 			queryParams: "?ip=::1",
 			setup: func(t *testing.T, db *sql.DB) {
 				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`, "ipv6-peer", "::1", "key", "hmac", 0)
@@ -1337,7 +1337,7 @@ func TestGetPeerByIP(t *testing.T) {
 			wantPeer: &Peer{ID: 1, Hostname: "ipv6-peer", IPAddress: "::1", IsManual: false},
 		},
 		{
-			name: "peer found via secondary IP in peer_ips table",
+			name:        "peer found via secondary IP in peer_ips table",
 			queryParams: "?ip=10.0.0.2",
 			setup: func(t *testing.T, db *sql.DB) {
 				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, is_manual) VALUES (?, ?, ?, ?, ?, ?)`, "test-peer", "10.0.0.1", "key", "hmac", 0, 0)
@@ -1348,7 +1348,7 @@ func TestGetPeerByIP(t *testing.T) {
 			wantPeer: &Peer{ID: 1, Hostname: "test-peer", IPAddress: "10.0.0.1", IsManual: false},
 		},
 		{
-			name: "secondary IP not found in peer_ips either",
+			name:        "secondary IP not found in peer_ips either",
 			queryParams: "?ip=10.0.0.99",
 			setup: func(t *testing.T, db *sql.DB) {
 				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, is_manual) VALUES (?, ?, ?, ?, ?, ?)`, "test-peer", "10.0.0.1", "key", "hmac", 0, 0)
@@ -1356,7 +1356,7 @@ func TestGetPeerByIP(t *testing.T) {
 				db.Exec(`INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 0)`, 1, "10.0.0.2")
 			},
 			wantCode: http.StatusOK,
-			wantNil: true,
+			wantNil:  true,
 		},
 	}
 
@@ -1586,9 +1586,9 @@ func TestCreatePeer_ValidMacOS(t *testing.T) {
 // TestGetPeerIPs tests the GET /peers/{id}/ips endpoint.
 func TestGetPeerIPs(t *testing.T) {
 	tests := []struct {
-		name   string
-		peerID string
-		setup  func(t *testing.T, db *sql.DB)
+		name        string
+		peerID      string
+		setup       func(t *testing.T, db *sql.DB)
 		wantCode    int
 		wantErr     string
 		wantIPsLen  int
@@ -1712,13 +1712,13 @@ func TestGetPeerIPs(t *testing.T) {
 // TestAddPeerIP tests the POST /peers/{id}/ips endpoint.
 func TestAddPeerIP(t *testing.T) {
 	tests := []struct {
-		name   string
-		peerID string
-		body   string
-		setup  func(t *testing.T, db *sql.DB)
-		wantCode    int
-		wantErr     string
-		verifyIP    func(t *testing.T, db *sql.DB)
+		name     string
+		peerID   string
+		body     string
+		setup    func(t *testing.T, db *sql.DB)
+		wantCode int
+		wantErr  string
+		verifyIP func(t *testing.T, db *sql.DB)
 	}{
 		{
 			name:   "add peer IP - success",
@@ -1880,12 +1880,12 @@ func TestAddPeerIP(t *testing.T) {
 // TestDeletePeerIP tests the DELETE /peers/{id}/ips/{ip_id} endpoint.
 func TestDeletePeerIP(t *testing.T) {
 	tests := []struct {
-		name   string
-		peerID string
-		ipID   string
-		setup  func(t *testing.T, db *sql.DB)
-		wantCode int
-		wantErr  string
+		name         string
+		peerID       string
+		ipID         string
+		setup        func(t *testing.T, db *sql.DB)
+		wantCode     int
+		wantErr      string
 		verifyDelete func(t *testing.T, db *sql.DB)
 	}{
 		{
@@ -1964,67 +1964,67 @@ func TestDeletePeerIP(t *testing.T) {
 			wantCode: http.StatusBadRequest,
 			wantErr:  "invalid peer ID",
 		},
-	{
-		name: "delete peer IP - invalid IP ID",
-		peerID: "1",
-		ipID: "invalid",
-		setup: func(t *testing.T, db *sql.DB) {
-			db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`, "peer1", "10.0.0.1", "key1", "hmac1", 0)
+		{
+			name:   "delete peer IP - invalid IP ID",
+			peerID: "1",
+			ipID:   "invalid",
+			setup: func(t *testing.T, db *sql.DB) {
+				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`, "peer1", "10.0.0.1", "key1", "hmac1", 0)
+			},
+			wantCode: http.StatusBadRequest,
+			wantErr:  "invalid IP ID",
 		},
-		wantCode: http.StatusBadRequest,
-		wantErr: "invalid IP ID",
-	},
-	{
-		name: "delete peer IP - referenced by policy as source_ip",
-		peerID: "1",
-		ipID: "2",
-		setup: func(t *testing.T, db *sql.DB) {
-			db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`, "peer1", "10.0.0.1", "key1", "hmac1", 0)
-			db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`, "peer2", "10.0.0.3", "key2", "hmac2", 0)
-			db.Exec(`INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 1)`, 1, "10.0.0.1")
-			db.Exec(`INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 0)`, 1, "10.0.0.2")
-			db.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`, "ssh", "22", "tcp")
-			db.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, source_ip, action, priority, enabled) VALUES (?, ?, 'peer', ?, ?, 'peer', ?, 'ACCEPT', 100, 1)`, "test-policy", 1, 1, 2, "10.0.0.2")
+		{
+			name:   "delete peer IP - referenced by policy as source_ip",
+			peerID: "1",
+			ipID:   "2",
+			setup: func(t *testing.T, db *sql.DB) {
+				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`, "peer1", "10.0.0.1", "key1", "hmac1", 0)
+				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`, "peer2", "10.0.0.3", "key2", "hmac2", 0)
+				db.Exec(`INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 1)`, 1, "10.0.0.1")
+				db.Exec(`INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 0)`, 1, "10.0.0.2")
+				db.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`, "ssh", "22", "tcp")
+				db.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, source_ip, action, priority, enabled) VALUES (?, ?, 'peer', ?, ?, 'peer', ?, 'ACCEPT', 100, 1)`, "test-policy", 1, 1, 2, "10.0.0.2")
+			},
+			wantCode: http.StatusConflict,
+			wantErr:  "cannot delete IP: referenced by 1 policy/policies",
 		},
-		wantCode: http.StatusConflict,
-		wantErr:  "cannot delete IP: referenced by 1 policy/policies",
-	},
-	{
-		name: "delete peer IP - referenced by policy as target_ip",
-		peerID: "1",
-		ipID: "2",
-		setup: func(t *testing.T, db *sql.DB) {
-			db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`, "peer1", "10.0.0.1", "key1", "hmac1", 0)
-			db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`, "peer2", "10.0.0.3", "key2", "hmac2", 0)
-			db.Exec(`INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 1)`, 1, "10.0.0.1")
-			db.Exec(`INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 0)`, 1, "10.0.0.2")
-			db.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`, "ssh", "22", "tcp")
-			db.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, target_ip, action, priority, enabled) VALUES (?, ?, 'peer', ?, ?, 'peer', ?, 'ACCEPT', 100, 1)`, "test-policy", 2, 1, 1, "10.0.0.2")
+		{
+			name:   "delete peer IP - referenced by policy as target_ip",
+			peerID: "1",
+			ipID:   "2",
+			setup: func(t *testing.T, db *sql.DB) {
+				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`, "peer1", "10.0.0.1", "key1", "hmac1", 0)
+				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`, "peer2", "10.0.0.3", "key2", "hmac2", 0)
+				db.Exec(`INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 1)`, 1, "10.0.0.1")
+				db.Exec(`INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 0)`, 1, "10.0.0.2")
+				db.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`, "ssh", "22", "tcp")
+				db.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, target_ip, action, priority, enabled) VALUES (?, ?, 'peer', ?, ?, 'peer', ?, 'ACCEPT', 100, 1)`, "test-policy", 2, 1, 1, "10.0.0.2")
+			},
+			wantCode: http.StatusConflict,
+			wantErr:  "cannot delete IP: referenced by 1 policy/policies",
 		},
-		wantCode: http.StatusConflict,
-		wantErr:  "cannot delete IP: referenced by 1 policy/policies",
-	},
-	{
-		name: "delete peer IP - not referenced by any policy succeeds",
-		peerID: "1",
-		ipID: "2",
-		setup: func(t *testing.T, db *sql.DB) {
-			db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`, "peer1", "10.0.0.1", "key1", "hmac1", 0)
-			db.Exec(`INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 1)`, 1, "10.0.0.1")
-			db.Exec(`INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 0)`, 1, "10.0.0.2")
+		{
+			name:   "delete peer IP - not referenced by any policy succeeds",
+			peerID: "1",
+			ipID:   "2",
+			setup: func(t *testing.T, db *sql.DB) {
+				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`, "peer1", "10.0.0.1", "key1", "hmac1", 0)
+				db.Exec(`INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 1)`, 1, "10.0.0.1")
+				db.Exec(`INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 0)`, 1, "10.0.0.2")
+			},
+			wantCode: http.StatusNoContent,
+			verifyDelete: func(t *testing.T, db *sql.DB) {
+				var count int
+				err := db.QueryRow("SELECT COUNT(*) FROM peer_ips WHERE id = 2").Scan(&count)
+				if err != nil {
+					t.Fatalf("failed to query peer_ips: %v", err)
+				}
+				if count != 0 {
+					t.Error("expected secondary IP to be deleted")
+				}
+			},
 		},
-		wantCode: http.StatusNoContent,
-		verifyDelete: func(t *testing.T, db *sql.DB) {
-			var count int
-			err := db.QueryRow("SELECT COUNT(*) FROM peer_ips WHERE id = 2").Scan(&count)
-			if err != nil {
-				t.Fatalf("failed to query peer_ips: %v", err)
-			}
-			if count != 0 {
-				t.Error("expected secondary IP to be deleted")
-			}
-		},
-	},
 	}
 
 	for _, tt := range tests {
@@ -2162,8 +2162,8 @@ func TestUpdateAgent(t *testing.T) {
 
 // mockUpdateAgent implements the SSE hub interface for testing.
 type mockUpdateAgent struct {
-	called         bool
-	hostID         string
+	called          bool
+	hostID          string
 	controlPlaneURL string
 }
 
