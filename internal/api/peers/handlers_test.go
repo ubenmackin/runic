@@ -140,7 +140,7 @@ func TestGetPeers(t *testing.T) {
 			req := httptest.NewRequest("GET", "/api/v1/peers", nil)
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(database, nil)
+			handler := NewHandler(database, nil, nil)
 			handler.GetPeers(w, req)
 
 			if w.Code != tt.wantCode {
@@ -287,7 +287,7 @@ func TestCreatePeer(t *testing.T) {
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(database, nil)
+			handler := NewHandler(database, nil, nil)
 			handler.CreatePeer(w, req)
 
 			if w.Code != tt.wantCode {
@@ -448,7 +448,7 @@ func TestUpdatePeer(t *testing.T) {
 			req = muxVars(req, map[string]string{"id": tt.peerID})
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(database, nil)
+			handler := NewHandler(database, nil, nil)
 			handler.UpdatePeer(w, req)
 
 			if w.Code != tt.wantCode {
@@ -514,7 +514,7 @@ func TestCompilePeer(t *testing.T) {
 			req = muxVars(req, map[string]string{"id": tt.peerID})
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(database, nil)
+			handler := NewHandler(database, nil, nil)
 			handler.CompilePeer(w, req)
 
 			if w.Code != tt.wantCode {
@@ -670,7 +670,7 @@ func TestGetPeerBundle(t *testing.T) {
 			req = muxVars(req, map[string]string{"id": tt.peerID})
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(database, nil)
+			handler := NewHandler(database, nil, nil)
 			handler.GetPeerBundle(w, req)
 
 			if w.Code != tt.wantCode {
@@ -841,7 +841,7 @@ func TestDeletePeer(t *testing.T) {
 			// Mock gorilla/mux vars
 			req = muxVars(req, map[string]string{"id": tt.peerID})
 
-			handler := NewHandler(database, nil)
+			handler := NewHandler(database, nil, nil)
 			handler.DeletePeer(w, req)
 
 			if w.Code != tt.wantCode {
@@ -923,7 +923,7 @@ func TestDeletePeer_GroupMembersCleanup(t *testing.T) {
 	w := httptest.NewRecorder()
 	req = muxVars(req, map[string]string{"id": "1"})
 
-	handler := NewHandler(database, nil)
+	handler := NewHandler(database, nil, nil)
 	handler.DeletePeer(w, req)
 
 	if w.Code != http.StatusOK {
@@ -981,7 +981,7 @@ func TestDeletePeer_WithRuleBundlesAndLogs(t *testing.T) {
 	w := httptest.NewRecorder()
 	req = muxVars(req, map[string]string{"id": "1"})
 
-	handler := NewHandler(database, nil)
+	handler := NewHandler(database, nil, nil)
 	handler.DeletePeer(w, req)
 
 	if w.Code != http.StatusOK {
@@ -1033,7 +1033,7 @@ func TestDeletePeer_InUseByMultiplePolicies(t *testing.T) {
 	w := httptest.NewRecorder()
 	req = muxVars(req, map[string]string{"id": "1"})
 
-	handler := NewHandler(database, nil)
+	handler := NewHandler(database, nil, nil)
 	handler.DeletePeer(w, req)
 
 	// Should return 409 Conflict
@@ -1142,7 +1142,7 @@ func TestDeletePeer_InGroupUsedByMultiplePolicies(t *testing.T) {
 	w := httptest.NewRecorder()
 	req = muxVars(req, map[string]string{"id": "1"})
 
-	handler := NewHandler(database, nil)
+	handler := NewHandler(database, nil, nil)
 	handler.DeletePeer(w, req)
 
 	// Should return 409 Conflict
@@ -1245,7 +1245,7 @@ func TestDeletePeer_NotInUse_Success(t *testing.T) {
 	w := httptest.NewRecorder()
 	req = muxVars(req, map[string]string{"id": "1"})
 
-	handler := NewHandler(database, nil)
+	handler := NewHandler(database, nil, nil)
 	handler.DeletePeer(w, req)
 
 	// Should return 200 OK
@@ -1373,7 +1373,7 @@ func TestGetPeerByIP(t *testing.T) {
 			req := httptest.NewRequest("GET", url, nil)
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(database, nil)
+			handler := NewHandler(database, nil, nil)
 			handler.GetPeerByIP(w, req)
 
 			if w.Code != tt.wantCode {
@@ -1442,7 +1442,7 @@ func TestGetPeerBundle_WithIncludePending(t *testing.T) {
 	req = muxVars(req, map[string]string{"id": "1"})
 	w := httptest.NewRecorder()
 
-	handler := NewHandler(database, nil)
+	handler := NewHandler(database, nil, nil)
 	handler.GetPeerBundle(w, req)
 
 	// Verify response
@@ -1485,7 +1485,7 @@ func TestCreatePeer_ValidOSOther(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	handler := NewHandler(database, nil)
+	handler := NewHandler(database, nil, nil)
 	handler.CreatePeer(w, req)
 
 	if w.Code != http.StatusCreated {
@@ -1521,7 +1521,7 @@ func TestCreatePeer_ValidArchOther(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	handler := NewHandler(database, nil)
+	handler := NewHandler(database, nil, nil)
 	handler.CreatePeer(w, req)
 
 	if w.Code != http.StatusCreated {
@@ -1557,7 +1557,7 @@ func TestCreatePeer_ValidMacOS(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	handler := NewHandler(database, nil)
+	handler := NewHandler(database, nil, nil)
 	handler.CreatePeer(w, req)
 
 	if w.Code != http.StatusCreated {
@@ -1660,7 +1660,7 @@ func TestGetPeerIPs(t *testing.T) {
 			req = muxVars(req, map[string]string{"id": tt.peerID})
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(database, nil)
+			handler := NewHandler(database, nil, nil)
 			handler.GetPeerIPs(w, req)
 
 			if w.Code != tt.wantCode {
@@ -1837,7 +1837,7 @@ func TestAddPeerIP(t *testing.T) {
 			req = muxVars(req, map[string]string{"id": tt.peerID})
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(database, nil)
+			handler := NewHandler(database, nil, nil)
 			handler.AddPeerIP(w, req)
 
 			if w.Code != tt.wantCode {
@@ -2040,7 +2040,7 @@ func TestDeletePeerIP(t *testing.T) {
 			req = muxVars(req, map[string]string{"id": tt.peerID, "ip_id": tt.ipID})
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(database, nil)
+			handler := NewHandler(database, nil, nil)
 			handler.DeletePeerIP(w, req)
 
 			if w.Code != tt.wantCode {
@@ -2061,5 +2061,154 @@ func TestDeletePeerIP(t *testing.T) {
 				tt.verifyDelete(t, database)
 			}
 		})
+	}
+}
+
+// TestUpdateAgent tests the POST /peers/{id}/update-agent endpoint.
+func TestUpdateAgent(t *testing.T) {
+	t.Run("peer not found", func(t *testing.T) {
+		database, cleanup := testutil.SetupTestDB(t)
+		defer cleanup()
+
+		handler := NewHandler(database, nil, nil)
+
+		req := httptest.NewRequest("POST", "/api/v1/peers/999/update-agent", nil)
+		req = muxVars(req, map[string]string{"id": "999"})
+		w := httptest.NewRecorder()
+
+		handler.UpdateAgent(w, req)
+
+		if w.Code != http.StatusNotFound {
+			t.Errorf("expected 404, got %d", w.Code)
+		}
+	})
+
+	t.Run("invalid peer ID", func(t *testing.T) {
+		database, cleanup := testutil.SetupTestDB(t)
+		defer cleanup()
+
+		handler := NewHandler(database, nil, nil)
+
+		req := httptest.NewRequest("POST", "/api/v1/peers/invalid/update-agent", nil)
+		req = muxVars(req, map[string]string{"id": "invalid"})
+		w := httptest.NewRecorder()
+
+		handler.UpdateAgent(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("expected 400, got %d", w.Code)
+		}
+	})
+
+	t.Run("manual peer rejected", func(t *testing.T) {
+		database, cleanup := testutil.SetupTestDB(t)
+		defer cleanup()
+
+		handler := NewHandler(database, nil, nil)
+
+		database.Exec(`INSERT INTO peers (hostname, ip_address, is_manual, agent_key, hmac_key) VALUES (?, ?, 1, ?, ?)`, "manual-peer", "10.0.0.1", "manual-key", "hmac1")
+
+		req := httptest.NewRequest("POST", "/api/v1/peers/1/update-agent", nil)
+		req = muxVars(req, map[string]string{"id": "1"})
+		w := httptest.NewRecorder()
+
+		handler.UpdateAgent(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("expected 400, got %d", w.Code)
+		}
+	})
+
+	t.Run("missing instance URL", func(t *testing.T) {
+		database, cleanup := testutil.SetupTestDB(t)
+		defer cleanup()
+
+		handler := NewHandler(database, nil, nil)
+
+		database.Exec(`INSERT INTO peers (hostname, ip_address, is_manual, agent_key, hmac_key) VALUES (?, ?, 0, ?, ?)`, "test-peer", "10.0.0.2", "key1", "hmackey1")
+
+		req := httptest.NewRequest("POST", "/api/v1/peers/1/update-agent", nil)
+		req = muxVars(req, map[string]string{"id": "1"})
+		w := httptest.NewRecorder()
+
+		handler.UpdateAgent(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("expected 400, got %d", w.Code)
+		}
+	})
+
+	t.Run("nil SSEHub", func(t *testing.T) {
+		database, cleanup := testutil.SetupTestDB(t)
+		defer cleanup()
+
+		handler := NewHandler(database, nil, nil)
+
+		database.Exec(`INSERT INTO peers (hostname, ip_address, is_manual, agent_key, hmac_key) VALUES (?, ?, 0, ?, ?)`, "agent-peer", "10.0.0.3", "key2", "hmackey2")
+
+		database.Exec(`INSERT INTO system_config (key, value) VALUES ('instance_url', 'https://runic.example.com')`)
+
+		req := httptest.NewRequest("POST", "/api/v1/peers/1/update-agent", nil)
+		req = muxVars(req, map[string]string{"id": "1"})
+		w := httptest.NewRecorder()
+
+		handler.UpdateAgent(w, req)
+
+		if w.Code != http.StatusInternalServerError {
+			t.Errorf("expected 500, got %d", w.Code)
+		}
+	})
+}
+
+// mockUpdateAgent implements the SSE hub interface for testing.
+type mockUpdateAgent struct {
+	called         bool
+	hostID         string
+	controlPlaneURL string
+}
+
+func (m *mockUpdateAgent) NotifyUpdateAgent(hostID, url string) {
+	m.called = true
+	m.hostID = hostID
+	m.controlPlaneURL = url
+}
+
+func TestUpdateAgentSuccess(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	mock := &mockUpdateAgent{}
+	handler := NewHandler(database, nil, mock)
+
+	database.Exec(`INSERT INTO peers (hostname, ip_address, is_manual, agent_key, hmac_key) VALUES (?, ?, 0, ?, ?)`, "agent-peer", "10.0.0.5", "key5", "hmackey5")
+
+	database.Exec(`INSERT INTO system_config (key, value) VALUES ('instance_url', 'https://runic.example.com')`)
+
+	req := httptest.NewRequest("POST", "/api/v1/peers/1/update-agent", nil)
+	req = muxVars(req, map[string]string{"id": "1"})
+	w := httptest.NewRecorder()
+
+	handler.UpdateAgent(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp["status"] != "update_sent" {
+		t.Errorf("expected status 'update_sent', got %q", resp["status"])
+	}
+
+	if !mock.called {
+		t.Error("expected NotifyUpdateAgent to be called")
+	}
+	if mock.hostID != "host-agent-peer" {
+		t.Errorf("expected hostID 'host-agent-peer', got %q", mock.hostID)
+	}
+	if mock.controlPlaneURL != "https://runic.example.com" {
+		t.Errorf("expected controlPlaneURL 'https://runic.example.com', got %q", mock.controlPlaneURL)
 	}
 }

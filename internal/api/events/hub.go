@@ -6,6 +6,12 @@ import (
 	"sync"
 )
 
+// NotifyUpdateAgenter is the interface for sending update_agent SSE events.
+// Defined here to avoid import cycles and DRY violations.
+type NotifyUpdateAgenter interface {
+	NotifyUpdateAgent(hostID string, controlPlaneURL string)
+}
+
 type SSEHub struct {
 	clients         map[string]chan string // host_id -> event channel
 	pushJobClients  map[string]chan string // job_id -> SSE channel
@@ -60,6 +66,20 @@ func (h *SSEHub) NotifyFetchBackup(hostID string) {
 		select {
 		case ch <- fmt.Sprintf("event: fetch_backup\ndata: {\"host_id\":%q}\n\n", hostID):
 		default: // agent not listening, will miss this request
+		}
+	}
+}
+
+// NotifyUpdateAgent sends an update_agent event to the agent, instructing it
+// to self-update by running the install script with the given control plane URL.
+func (h *SSEHub) NotifyUpdateAgent(hostID string, controlPlaneURL string) {
+	h.mu.RLock()
+	ch, ok := h.clients[hostID]
+	h.mu.RUnlock()
+	if ok {
+		select {
+		case ch <- fmt.Sprintf("event: update_agent\ndata: {\"control_plane_url\":%q}\n\n", controlPlaneURL):
+		default: // agent not listening, will remain on current version
 		}
 	}
 }

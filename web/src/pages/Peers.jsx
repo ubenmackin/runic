@@ -3,7 +3,7 @@ import { useLocation } from 'react-router-dom'
 import { useTableSort } from '../hooks/useTableSort'
 import { usePagination } from '../hooks/usePagination'
 import { useQuery, useQueryClient, useQueries } from '@tanstack/react-query'
-import { Plus, Pencil, Trash2, Server, Copy, Check, RefreshCw, X, FileCode, AlertTriangle, Globe, ChevronDown, ChevronUp, Send, Download, Info } from 'lucide-react'
+import { Plus, Pencil, Trash2, Server, Copy, Check, RefreshCw, X, FileCode, AlertTriangle, Globe, ChevronDown, ChevronUp, Send, Download, Info, ArrowUpCircle } from 'lucide-react'
 import { api, QUERY_KEYS, getPeerIPs, addPeerIP, deletePeerIP } from '../api/client'
 import { REFETCH_INTERVALS, OS_OPTIONS, ARCH_OPTIONS } from '../constants'
 import { useCrudModal } from '../hooks/useCrudModal'
@@ -45,7 +45,7 @@ const syncStatusConfig = {
 }
 
 // Helper function to get menu items for a peer
-function getPeerMenuItems(peer, { canEdit, fetchBundle, handlePushToPeer, openEdit, setDeleteTarget, handleImportRules }) {
+function getPeerMenuItems(peer, { canEdit, fetchBundle, handlePushToPeer, openEdit, setDeleteTarget, handleImportRules, latestAgentVersion, handleUpdateAgent }) {
   const items = []
   // Agent-only items
   if (!peer.is_manual) {
@@ -67,9 +67,17 @@ function getPeerMenuItems(peer, { canEdit, fetchBundle, handlePushToPeer, openEd
       onClick: () => handleImportRules(peer),
     })
   }
-  // View Details for agent peers
-  items.push({ label: 'View Details', icon: Info, onClick: () => openEdit(peer) })
-}
+	// View Details for agent peers
+	items.push({ label: 'View Details', icon: Info, onClick: () => openEdit(peer) })
+	// Update Agent option: only for agent peers that are out of date
+	if (latestAgentVersion && peer.agent_version && peer.agent_version !== latestAgentVersion) {
+		items.push({
+			label: 'Update Agent',
+			icon: ArrowUpCircle,
+			onClick: () => handleUpdateAgent(peer),
+		})
+	}
+	}
   // Manual-only items
   if (peer.is_manual && canEdit) {
     items.push({
@@ -91,7 +99,7 @@ function getPeerMenuItems(peer, { canEdit, fetchBundle, handlePushToPeer, openEd
 }
 
 // Mobile card component for peer
-function PeerCard({ peer, peerIPs, canEdit, fetchBundle, handlePushToPeer, openEdit, setDeleteTarget, handleSyncStatusClick, handleImportRules }) {
+function PeerCard({ peer, peerIPs, canEdit, fetchBundle, handlePushToPeer, openEdit, setDeleteTarget, handleSyncStatusClick, handleImportRules, latestAgentVersion, handleUpdateAgent }) {
   const ips = peerIPs || []
   const primaryIp = peer.ip_address
   const secondaryIps = ips.filter(ip => !ip.is_primary).map(ip => ip.ip_address)
@@ -158,14 +166,22 @@ function PeerCard({ peer, peerIPs, canEdit, fetchBundle, handlePushToPeer, openE
                 </button>
                 <span>·</span>
                 <span>{formatRelativeTime(peer.last_heartbeat)}</span>
+{latestAgentVersion && peer.agent_version && peer.agent_version !== latestAgentVersion && (
+	<>
+		<span>·</span>
+		<span className="px-1 py-0.5 text-[10px] font-mono font-medium border border-amber-400 dark:border-amber-500 text-amber-600 dark:text-amber-400">
+			UPDATE
+		</span>
+	</>
+)}
               </>
             )}
           </div>
         </div>
         {/* Kebab menu */}
-        <KebabMenu
-          items={getPeerMenuItems(peer, { canEdit, fetchBundle, handlePushToPeer, openEdit, setDeleteTarget, handleImportRules })}
-        />
+		<KebabMenu
+			items={getPeerMenuItems(peer, { canEdit, fetchBundle, handlePushToPeer, openEdit, setDeleteTarget, handleImportRules, latestAgentVersion, handleUpdateAgent })}
+		/>
       </div>
     </div>
   )
@@ -214,9 +230,33 @@ const [bundleContent, setBundleContent] = useState('')
 	const [applyAllLoading, setApplyAllLoading] = useState(false)
 	const [rollbackLoading, setRollbackLoading] = useState(false)
 
-  // Push to peer state
-  const [pushTargetPeer, setPushTargetPeer] = useState(null)
-  const [pushLoading, setPushLoading] = useState(false)
+// Push to peer state
+const [pushTargetPeer, setPushTargetPeer] = useState(null)
+const [pushLoading, setPushLoading] = useState(false)
+
+// Update Agent state
+const [updateAgentTarget, setUpdateAgentTarget] = useState(null)
+const [updateAgentLoading, setUpdateAgentLoading] = useState(false)
+
+const handleUpdateAgent = useCallback((peer) => {
+	setUpdateAgentTarget(peer)
+}, [])
+
+const handleUpdateAgentConfirm = async () => {
+	if (!updateAgentTarget) return
+	setUpdateAgentLoading(true)
+	try {
+      await api.post(`/peers/${updateAgentTarget.id}/update-agent`)
+      showToast(`Update command sent to ${updateAgentTarget.hostname}. The agent will update and reconnect.`, 'success')
+      qc.invalidateQueries({ queryKey: QUERY_KEYS.peers() })
+      qc.invalidateQueries({ queryKey: QUERY_KEYS.info() })
+      setUpdateAgentTarget(null)
+	} catch (err) {
+		showToast(`Failed to send update command: ${err.message}`, 'error')
+	} finally {
+		setUpdateAgentLoading(false)
+	}
+}
 
   // Import Rules wizard state
   const [importingPeer, setImportingPeer] = useState(null)
@@ -428,15 +468,22 @@ const [bundleContent, setBundleContent] = useState('')
     }
   }
 
-  const { data: peers, isLoading, refetch } = useQuery({
-    queryKey: QUERY_KEYS.peers(),
-    queryFn: () => api.get('/peers'),
-    refetchInterval: REFETCH_INTERVALS.PEERS_PAGE,
-    refetchIntervalInBackground: false,
-    refetchOnReconnect: true,
-    refetchOnWindowFocus: true,
-    staleTime: 15000,
-  })
+const { data: peers, isLoading, refetch } = useQuery({
+queryKey: QUERY_KEYS.peers(),
+queryFn: () => api.get('/peers'),
+refetchInterval: REFETCH_INTERVALS.PEERS_PAGE,
+refetchIntervalInBackground: false,
+refetchOnReconnect: true,
+refetchOnWindowFocus: true,
+staleTime: 15000,
+})
+
+const { data: serverInfo } = useQuery({
+queryKey: QUERY_KEYS.info(),
+queryFn: () => api.get('/info'),
+staleTime: 30000,
+})
+const latestAgentVersion = serverInfo?.latest_agent_version
 
   // Fetch IPs for each peer in parallel
   const peerIPsQueries = useQueries({
@@ -817,18 +864,20 @@ const handleSubmit = (e) => {
       {/* Mobile card view */}
       <div className="md:hidden space-y-2">
         {paginatedPeers.map((peer) => (
-          <PeerCard
-            key={peer.id}
-            peer={peer}
-            peerIPs={peerIPsMap[peer.id]}
-            canEdit={canEdit}
-            fetchBundle={fetchBundle}
-            handlePushToPeer={handlePushToPeer}
-            openEdit={openEdit}
-            setDeleteTarget={setDeleteTarget}
-            handleSyncStatusClick={handleSyncStatusClick}
-            handleImportRules={handleImportRules}
-          />
+		<PeerCard
+			key={peer.id}
+			peer={peer}
+			peerIPs={peerIPsMap[peer.id]}
+			canEdit={canEdit}
+			fetchBundle={fetchBundle}
+			handlePushToPeer={handlePushToPeer}
+			openEdit={openEdit}
+			setDeleteTarget={setDeleteTarget}
+			handleSyncStatusClick={handleSyncStatusClick}
+			handleImportRules={handleImportRules}
+			latestAgentVersion={latestAgentVersion}
+			handleUpdateAgent={handleUpdateAgent}
+		/>
         ))}
 <Pagination showingRange={peersShowingRange} page={peersPage} totalPages={totalPages} onPageChange={setPeersPage} totalItems={peersTotal} />
 </div>
@@ -986,19 +1035,24 @@ title={groups.slice(maxVisible).join(', ')}
 </td>
 <td className="px-4 py-1">
 {peer.is_manual ? (
-<span className="px-1.5 py-0.5 text-xs font-bold border border-gray-400 dark:border-gray-500 text-gray-700 dark:text-amber-primary">
-MANUAL
-</span>
+	<span className="px-1.5 py-0.5 text-xs font-bold border border-gray-400 dark:border-gray-500 text-gray-700 dark:text-amber-primary">
+	MANUAL
+	</span>
 ) : peer.agent_version ? (
-<span className="font-mono text-gray-600 dark:text-amber-primary">
-v{peer.agent_version}
-</span>
+	<div className="flex items-center gap-1">
+	<span className="font-mono text-gray-600 dark:text-amber-primary">v{peer.agent_version}</span>
+	{latestAgentVersion && peer.agent_version !== latestAgentVersion && (
+		<span className="inline-flex items-center px-1 py-0.5 text-[10px] font-mono font-medium border border-amber-400 dark:border-amber-500 text-amber-600 dark:text-amber-400" title={`Update available: v${latestAgentVersion}`}>
+		UPDATE
+		</span>
+	)}
+	</div>
 ) : (
-<span className="text-gray-400 dark:text-amber-muted">—</span>
+	<span className="text-gray-400 dark:text-amber-muted">—</span>
 )}
 </td>
                             <td className="px-4 py-1">
-                                <KebabMenu items={getPeerMenuItems(peer, { canEdit, fetchBundle, handlePushToPeer, openEdit, setDeleteTarget, handleImportRules })} />
+                                <KebabMenu items={getPeerMenuItems(peer, { canEdit, fetchBundle, handlePushToPeer, openEdit, setDeleteTarget, handleImportRules, latestAgentVersion, handleUpdateAgent })} />
                             </td>
 </tr>
 ))}
@@ -1102,10 +1156,21 @@ v{peer.agent_version}
                 </div>
               )}
 
-              {/* Agent peer IPs (read-only) */}
-              {editPeer && !editPeer.is_manual && (
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-2">IP Addresses</label>
+{/* Agent peer IPs (read-only) */}
+{editPeer && !editPeer.is_manual && (
+<div>
+<div className="mb-3">
+	<label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Agent Version</label>
+	<div className="flex items-center gap-2">
+	<span className="font-mono text-sm text-gray-700 dark:text-amber-primary">v{editPeer.agent_version}</span>
+	{latestAgentVersion && editPeer.agent_version && editPeer.agent_version !== latestAgentVersion && (
+		<span className="px-1.5 py-0.5 text-[10px] font-mono font-medium border border-amber-400 dark:border-amber-500 text-amber-600 dark:text-amber-400">
+		v{latestAgentVersion} available
+		</span>
+	)}
+	</div>
+</div>
+<label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-2">IP Addresses</label>
                   {editPeerIPsLoading ? (
                     <div className="flex items-center gap-2 py-2">
                       <RefreshCw className="w-3 h-3 animate-spin text-gray-400" />
@@ -1171,14 +1236,26 @@ v{peer.agent_version}
 
 {/* Push to Peer Confirmation Modal */}
 {pushTargetPeer && (
-  <ConfirmModal
-    title="Push Current Rules"
-    message={`Are you sure you want to push current rules to "${pushTargetPeer.hostname}"? This will deploy all pending changes to this peer.`}
-    onConfirm={handlePushConfirm}
-    onCancel={() => setPushTargetPeer(null)}
-    confirmText="Push"
-    loading={pushLoading}
-  />
+<ConfirmModal
+	title="Push Current Rules"
+	message={`Are you sure you want to push current rules to "${pushTargetPeer.hostname}"? This will deploy all pending changes to this peer.`}
+	onConfirm={handlePushConfirm}
+	onCancel={() => setPushTargetPeer(null)}
+	confirmText="Push"
+	loading={pushLoading}
+/>
+)}
+
+{/* Update Agent Confirmation Modal */}
+{updateAgentTarget && (
+<ConfirmModal
+	title="Update Agent"
+	message={`Send update command to "${updateAgentTarget.hostname}"? The agent will download and install the latest version, then reconnect automatically.`}
+	onConfirm={handleUpdateAgentConfirm}
+	onCancel={() => setUpdateAgentTarget(null)}
+	confirmText="Update"
+	loading={updateAgentLoading}
+/>
 )}
 
 {/* Conflict Error Modal */}

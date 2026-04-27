@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -509,6 +510,8 @@ func (a *Agent) listenSSE(ctx context.Context) {
 			}
 		}, func(sseCtx context.Context) {
 			a.handleFetchBackup(sseCtx)
+		}, func(sseCtx context.Context, controlPlaneURL string) {
+			a.handleUpdateAgent(sseCtx, controlPlaneURL)
 		})
 
 		if err != nil {
@@ -539,6 +542,42 @@ func (a *Agent) handleFetchBackup(ctx context.Context) {
 	if err := transport.PostBackup(ctx, a.httpClient, a.config.ControlPlaneURL, a.config.HostID, a.config.Token, a.version, backup, ipsets); err != nil {
 		log.Error("Failed to post backup to control plane", "error", err)
 	}
+}
+
+// handleUpdateAgent runs the install script to self-update the agent.
+// After the script completes, the agent service will be restarted by the
+// install script, so this function should not attempt to continue normal
+// operation after launching the update.
+func (a *Agent) handleUpdateAgent(ctx context.Context, controlPlaneURL string) {
+	log.Info("Starting agent self-update", "control_plane_url", controlPlaneURL)
+
+	// Validate the control plane URL to prevent command injection
+	parsedURL, err := url.Parse(controlPlaneURL)
+	if err != nil || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") {
+		log.Error("Invalid control plane URL received in update_agent event", "url", controlPlaneURL, "error", err)
+		return
+	}
+
+	// Use the hardcoded install script URL
+	installScriptURL := "https://raw.githubusercontent.com/ubenmackin/runic/main/scripts/install-agent.sh"
+
+	// Run: curl -sL <install_script_url> | sudo bash -s -- <controlPlaneURL>
+	// We pass the control plane URL as a direct argument to bash to avoid shell injection
+	out, err := a.cmdRunner.Run(ctx, "bash", "-c", fmt.Sprintf("curl -sL %s | sudo bash -s -- %s", installScriptURL, shellSafeArg(parsedURL.String())))
+	if err != nil {
+		log.Error("Agent self-update failed", "error", err, "output", string(out))
+		return
+	}
+	log.Info("Agent self-update completed", "output", string(out))
+
+	// The install script will restart the agent service, so we don't need to do anything else.
+	// If we're still running after this point, the update may not have required a restart.
+}
+
+// shellSafeArg wraps a string in single quotes for safe shell interpolation.
+// This prevents shell injection by treating the value as a literal string.
+func shellSafeArg(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
 
 // readBackup reads the pre-Runic iptables backup file.

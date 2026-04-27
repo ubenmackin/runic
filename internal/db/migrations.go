@@ -1244,5 +1244,20 @@ SELECT id, ip_address, 1 FROM peers
 		}
 	}
 
+	// Migration: Add latest_agent_version to system_config if not present
+	var hasLatestAgentVersion bool
+	err = database.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM system_config WHERE key = 'latest_agent_version'").Scan(&hasLatestAgentVersion)
+	if err != nil {
+		return fmt.Errorf("failed to check for latest_agent_version: %w", err)
+	}
+	if !hasLatestAgentVersion {
+		// Default to empty string — meaning "use server version as latest"
+		_, err = database.ExecContext(ctx, "INSERT INTO system_config (key, value, updated_at) VALUES ('latest_agent_version', '', CURRENT_TIMESTAMP)")
+		if err != nil {
+			return fmt.Errorf("failed to insert latest_agent_version: %w", err)
+		}
+		log.Info("Migration: added latest_agent_version to system_config")
+	}
+
 	return nil
 }

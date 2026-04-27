@@ -10,6 +10,7 @@ import (
 
 	"runic/internal/api/common"
 	"runic/internal/common/log"
+	runicversion "runic/internal/common/version"
 
 	"github.com/gorilla/mux"
 )
@@ -192,12 +193,83 @@ func (h *Handler) UpdateInstanceSettings(w http.ResponseWriter, r *http.Request)
 	common.RespondJSON(w, http.StatusOK, map[string]string{"url": req.URL})
 }
 
+// GetAgentVersionSettings returns the latest agent version configuration.
+// If not explicitly set, it defaults to the server version.
+func (h *Handler) GetAgentVersionSettings(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	var latestVersion sql.NullString
+	err := h.DB.QueryRowContext(ctx, "SELECT value FROM system_config WHERE key = 'latest_agent_version'").Scan(&latestVersion)
+	if err != nil && err != sql.ErrNoRows {
+		common.RespondError(w, http.StatusInternalServerError, "failed to get agent version settings")
+		return
+	}
+
+	version := ""
+	if latestVersion.Valid {
+		version = latestVersion.String
+	}
+
+	// If not set, default to server version
+	if version == "" {
+		version = runicversion.Version
+	}
+
+	common.RespondJSON(w, http.StatusOK, map[string]interface{}{
+		"latest_agent_version": version,
+		"is_default":           !latestVersion.Valid || latestVersion.String == "",
+	})
+}
+
+// UpdateAgentVersionSettings updates the latest agent version configuration.
+// Set to empty string to revert to using the server version as the latest.
+func (h *Handler) UpdateAgentVersionSettings(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	var req struct {
+		LatestAgentVersion string `json:"latest_agent_version"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		common.RespondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	// Basic validation: if set, must look like a version string (allow anything reasonable)
+	if len(req.LatestAgentVersion) > 50 {
+		common.RespondError(w, http.StatusBadRequest, "version string too long (max 50 chars)")
+		return
+	}
+
+	_, err := h.DB.ExecContext(ctx,
+		"INSERT OR REPLACE INTO system_config (key, value, updated_at) VALUES ('latest_agent_version', ?, CURRENT_TIMESTAMP)",
+		req.LatestAgentVersion,
+	)
+	if err != nil {
+		common.RespondError(w, http.StatusInternalServerError, "failed to update agent version settings")
+		return
+	}
+
+	// Return the effective version (resolving empty to server version)
+	effectiveVersion := req.LatestAgentVersion
+	if effectiveVersion == "" {
+		effectiveVersion = runicversion.Version
+	}
+
+	common.RespondJSON(w, http.StatusOK, map[string]interface{}{
+		"latest_agent_version": effectiveVersion,
+		"is_default":           req.LatestAgentVersion == "",
+	})
+}
+
 // RegisterRoutes adds settings routes to the given router
 func (h *Handler) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/logs", h.GetLogSettings).Methods("GET")
 	r.HandleFunc("/logs", h.UpdateLogSettings).Methods("PUT")
 	r.HandleFunc("/instance", h.GetInstanceSettings).Methods("GET")
 	r.HandleFunc("/instance", h.UpdateInstanceSettings).Methods("PUT")
+	r.HandleFunc("/agent-version", h.GetAgentVersionSettings).Methods("GET")
+	r.HandleFunc("/agent-version", h.UpdateAgentVersionSettings).Methods("PUT")
 }
 
 func getRetentionLabel(days int) string {

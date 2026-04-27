@@ -99,7 +99,7 @@ func NewAPI(db *sql.DB, compiler *engine.Compiler, logsDBPath string, alertServi
 		LogHub:       logs.NewHub(),
 		ChangeWorker: changeWorker,
 		PushWorker:   pushWorker,
-		Peers:        peers.NewHandler(db, compiler),
+		Peers:        peers.NewHandler(db, compiler, sseHub),
 		Agents:       agents.NewHandler(db, logsDB, alertService),
 		Auth:         authhandlers.NewHandler(db, db),
 		Groups:       groups.NewHandler(db, compiler, changeWorker),
@@ -212,11 +212,20 @@ func (a *API) RegisterRoutes(r *mux.Router, downloadsDir string) {
 	protected.HandleFunc("/pending-changes/{peerId:[0-9]+}", a.Pending.GetPeerPendingChanges).Methods("GET")
 
 	protected.HandleFunc("/info", func(w http.ResponseWriter, r *http.Request) {
+		// Look up latest_agent_version from system_config
+		var latestAgentVersion sql.NullString
+		_ = a.DB.QueryRowContext(r.Context(), "SELECT value FROM system_config WHERE key = 'latest_agent_version'").Scan(&latestAgentVersion)
+		effectiveLatestAgentVersion := version.Version // default to server version
+		if latestAgentVersion.Valid && latestAgentVersion.String != "" {
+			effectiveLatestAgentVersion = latestAgentVersion.String
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(map[string]interface{}{
-			"version":  version.Version,
-			"commit":   version.Commit,
-			"built_at": version.BuiltAt,
+			"version":              version.Version,
+			"commit":               version.Commit,
+			"built_at":             version.BuiltAt,
+			"latest_agent_version": effectiveLatestAgentVersion,
 		}); err != nil {
 			log.Warn("Failed to encode version info", "error", err)
 		}
@@ -258,6 +267,7 @@ func (a *API) RegisterRoutes(r *mux.Router, downloadsDir string) {
 
 	peersEditor := editor.PathPrefix("/peers").Subrouter()
 	a.Peers.RegisterRoutes(peersEditor)
+	editor.HandleFunc("/peers/{id:[0-9]+}/update-agent", a.Peers.UpdateAgent).Methods("POST")
 
 	groupsEditor := editor.PathPrefix("/groups").Subrouter()
 	a.Groups.RegisterRoutes(groupsEditor)

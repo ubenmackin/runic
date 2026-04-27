@@ -25,6 +25,7 @@ vi.mock('../api/client', () => ({
     groups: () => ['groups'],
     services: () => ['services'],
     policies: () => ['policies'],
+    info: () => ['info'],
   },
   getPeerIPs: vi.fn(() => Promise.resolve([])),
   addPeerIP: vi.fn(() => Promise.resolve()),

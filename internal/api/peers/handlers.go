@@ -15,6 +15,7 @@ import (
 
 	"runic/internal/api/agents"
 	"runic/internal/api/common"
+	"runic/internal/api/events"
 	"runic/internal/common/constants"
 	"runic/internal/common/log"
 	"runic/internal/db"
@@ -26,11 +27,12 @@ type Handler struct {
 	DB         db.Querier // For queries
 	DBBeginner db.DB      // For transactions and queries
 	Compiler   *engine.Compiler
+	SSEHub     events.NotifyUpdateAgenter
 }
 
 // NewHandler creates a new peers handler.
-func NewHandler(db *sql.DB, compiler *engine.Compiler) *Handler {
-	return &Handler{DB: db, DBBeginner: db, Compiler: compiler}
+func NewHandler(db *sql.DB, compiler *engine.Compiler, sseHub events.NotifyUpdateAgenter) *Handler {
+	return &Handler{DB: db, DBBeginner: db, Compiler: compiler, SSEHub: sseHub}
 }
 
 // hostnameRegex validates hostnames: 1-253 chars, alphanumeric with hyphens and dots,
@@ -754,6 +756,51 @@ func (h *Handler) DeletePeerIP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// UpdateAgent sends an update_agent SSE event to the agent peer.
+// POST /api/v1/peers/{id}/update-agent
+func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
+	peerID, err := common.ParseIDParam(r, "id")
+	if err != nil {
+		common.RespondError(w, http.StatusBadRequest, "invalid peer ID")
+		return
+	}
+	ctx := r.Context()
+
+	// Look up the peer
+	var hostname string
+	var isManual bool
+	err = h.DB.QueryRowContext(ctx, "SELECT hostname, is_manual FROM peers WHERE id = ?", peerID).Scan(&hostname, &isManual)
+	if err == sql.ErrNoRows {
+		common.RespondError(w, http.StatusNotFound, "peer not found")
+		return
+	}
+	if err != nil {
+		common.RespondError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if isManual {
+		common.RespondError(w, http.StatusBadRequest, "cannot update a manual peer")
+		return
+	}
+
+	// Get instance URL from system_config for the control plane URL
+	var instanceURL string
+	err = h.DB.QueryRowContext(ctx, "SELECT value FROM system_config WHERE key = 'instance_url'").Scan(&instanceURL)
+	if err != nil || instanceURL == "" {
+		common.RespondError(w, http.StatusBadRequest, "instance URL not configured — set it in Settings to enable agent updates")
+		return
+	}
+
+	// Get the SSE hub
+	if h.SSEHub == nil {
+		common.RespondError(w, http.StatusInternalServerError, "SSE hub not available")
+		return
+	}
+	hostID := fmt.Sprintf("host-%s", hostname)
+	h.SSEHub.NotifyUpdateAgent(hostID, instanceURL)
+	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "update_sent"})
 }
 
 // RegisterRoutes adds peer routes to the given router.

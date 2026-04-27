@@ -118,6 +118,7 @@ export const QUERY_KEYS = {
   importPeers: (id) => ['import-peers', id],
   importServices: (id) => ['import-services', id],
   importSkipped: (id) => ['import-skipped', id],
+  info: () => ['info'],
 }
 
 export const getVersion = () => api.get('/info')

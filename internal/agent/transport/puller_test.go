@@ -417,7 +417,7 @@ func TestConnectSSE(t *testing.T) {
 			defer server.Close()
 
 			client := server.Client()
-			err := connectSSE(ctx, client, server.URL, "host123", "test-token", "1.0.0", onBundleUpdate, func(context.Context) {})
+			err := connectSSE(ctx, client, server.URL, "host123", "test-token", "1.0.0", onBundleUpdate, func(context.Context) {}, func(context.Context, string) {})
 
 			if tt.name == "handles context cancellation" {
 				// Context cancellation should result in an error
@@ -511,7 +511,7 @@ func TestListenSSE(t *testing.T) {
 			onBundleUpdate := func(ctx context.Context) {}
 
 			client := server.Client()
-			err := ListenSSE(ctx, client, server.URL, "host123", "test-token", "1.0.0", onBundleUpdate, func(context.Context) {})
+			err := ListenSSE(ctx, client, server.URL, "host123", "test-token", "1.0.0", onBundleUpdate, func(context.Context) {}, func(context.Context, string) {})
 
 			if tt.name == "returns error when context cancelled" {
 				// Context cancelled should return error
@@ -648,6 +648,45 @@ func TestConfirmApplyPayloadFormat(t *testing.T) {
 	}
 }
 
+func TestConnectSSE_UpdateAgent(t *testing.T) {
+	expectedURL := "https://runic.example.com"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintf(w, "event: update_agent\ndata: {\"control_plane_url\":%q}\n\n", expectedURL)
+		w.(http.Flusher).Flush()
+		// Keep connection open briefly then close
+		time.Sleep(100 * time.Millisecond)
+	}))
+	defer server.Close()
+
+	var receivedURL atomic.Pointer[string]
+	onUpdateAgent := func(ctx context.Context, controlPlaneURL string) {
+		receivedURL.Store(&controlPlaneURL)
+	}
+
+	client := server.Client()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	// connectSSE will return an error when the server closes, which is expected
+	_ = connectSSE(ctx, client, server.URL, "host123", "test-token", "1.0.0",
+		func(context.Context) {},       // onBundleUpdate
+		func(context.Context) {},       // onFetchBackup
+		onUpdateAgent,
+	)
+
+	got := receivedURL.Load()
+	if got == nil {
+		t.Fatal("onUpdateAgent callback was not called")
+	}
+	if *got != expectedURL {
+		t.Errorf("expected controlPlaneURL %q, got %q", expectedURL, *got)
+	}
+}
+
 func TestSSEReconnectDelay(t *testing.T) {
 	// Verify that the reconnect delay uses the constant
 	if constants.SSEReconnectDelay != 15*time.Second {
@@ -687,16 +726,17 @@ func TestConnectSSEConnectionErrors(t *testing.T) {
 
 			onBundleUpdate := func(ctx context.Context) {}
 
-			err := connectSSE(
-				context.Background(),
-				server.Client(),
-				server.URL,
-				"host123",
-				"test-token",
-				"1.0.0",
-				onBundleUpdate,
-				func(context.Context) {},
-			)
+	err := connectSSE(
+		context.Background(),
+		server.Client(),
+		server.URL,
+		"host123",
+		"test-token",
+		"1.0.0",
+		onBundleUpdate,
+		func(context.Context) {},
+		func(context.Context, string) {},
+	)
 
 			if tt.wantErr && err == nil {
 				t.Errorf("expected error containing '%s'", tt.errContains)

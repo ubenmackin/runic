@@ -70,7 +70,7 @@ func TestRotatePeerKey_Success(t *testing.T) {
 		t.Fatalf("failed to insert test peer: %v", err)
 	}
 
-	h := NewHandler(database, nil)
+	h := NewHandler(database, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/peers/1/rotate-key", nil)
 	req = muxVars(req, map[string]string{"id": "1"})
@@ -129,7 +129,7 @@ func TestRotatePeerKey_NonExistentPeer(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	h := NewHandler(database, nil)
+	h := NewHandler(database, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/peers/999/rotate-key", nil)
 	req = muxVars(req, map[string]string{"id": "999"})
@@ -147,7 +147,7 @@ func TestRotatePeerKey_InvalidID(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	h := NewHandler(database, nil)
+	h := NewHandler(database, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/peers/invalid/rotate-key", nil)
 	req = muxVars(req, map[string]string{"id": "invalid"})
@@ -184,7 +184,7 @@ func TestAgentRotateKey_Success(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
-	h := NewHandler(database, nil)
+	h := NewHandler(database, nil, nil)
 	h.AgentRotateKey(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -236,7 +236,7 @@ func TestAgentRotateKey_InvalidToken(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
-	h := NewHandler(database, nil)
+	h := NewHandler(database, nil, nil)
 	h.AgentRotateKey(rec, req)
 
 	if rec.Code != http.StatusUnauthorized {
@@ -272,7 +272,7 @@ func TestAgentRotateKey_ExpiredToken(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
-	h := NewHandler(database, nil)
+	h := NewHandler(database, nil, nil)
 	h.AgentRotateKey(rec, req)
 
 	// Due to RFC3339 vs SQLite datetime format mismatch, expired tokens may not be
@@ -307,7 +307,7 @@ func TestAgentRotateKey_NoToken(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
-	h := NewHandler(database, nil)
+	h := NewHandler(database, nil, nil)
 	h.AgentRotateKey(rec, req)
 
 	if rec.Code != http.StatusUnauthorized {
@@ -344,7 +344,7 @@ func TestAgentRotateKey_MissingFields(t *testing.T) {
 			database, cleanup := testutil.SetupTestDB(t)
 			defer cleanup()
 
-			h := NewHandler(database, nil)
+			h := NewHandler(database, nil, nil)
 
 			bodyBytes, _ := json.Marshal(tt.body)
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/agent/rotate-key", bytes.NewReader(bodyBytes))
@@ -365,7 +365,7 @@ func TestAgentRotateKey_InvalidJSON(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	h := NewHandler(database, nil)
+	h := NewHandler(database, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/agent/rotate-key", strings.NewReader("not-json"))
 	req.Header.Set("Content-Type", "application/json")
@@ -403,7 +403,7 @@ func TestAgentRotateKey_TokenIsSingleUse(t *testing.T) {
 	req1.Header.Set("Content-Type", "application/json")
 	rec1 := httptest.NewRecorder()
 
-	h := NewHandler(database, nil)
+	h := NewHandler(database, nil, nil)
 	h.AgentRotateKey(rec1, req1)
 
 	if rec1.Code != http.StatusOK {
@@ -445,7 +445,7 @@ func TestAgentConfirmRotation_Success(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
-	h := NewHandler(database, nil)
+	h := NewHandler(database, nil, nil)
 	h.AgentConfirmRotation(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -467,7 +467,7 @@ func TestAgentConfirmRotation_PeerNotFound(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	h := NewHandler(database, nil)
+	h := NewHandler(database, nil, nil)
 
 	body := map[string]string{
 		"host_id": "host-nonexistent",
@@ -490,7 +490,7 @@ func TestAgentConfirmRotation_MissingHostID(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	h := NewHandler(database, nil)
+	h := NewHandler(database, nil, nil)
 
 	body := map[string]string{}
 	bodyBytes, _ := json.Marshal(body)
@@ -582,7 +582,7 @@ func TestFullRotationWorkflow(t *testing.T) {
 		t.Fatalf("failed to insert test peer: %v", err)
 	}
 
-	h := NewHandler(database, nil)
+	h := NewHandler(database, nil, nil)
 
 	// Step 2: Admin initiates rotation
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/peers/1/rotate-key", nil)

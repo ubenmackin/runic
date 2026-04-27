@@ -100,7 +100,7 @@ func ConfirmApply(ctx context.Context, client common.HTTPClient, controlPlaneURL
 
 // ListenSSE maintains a persistent SSE connection to receive push notifications.
 // Returns ErrUnauthorized if a 401 response is received, allowing the caller to trigger re-registration.
-func ListenSSE(ctx context.Context, client common.HTTPClient, controlPlaneURL, hostID, token, version string, onBundleUpdate func(context.Context), onFetchBackup func(context.Context)) error {
+func ListenSSE(ctx context.Context, client common.HTTPClient, controlPlaneURL, hostID, token, version string, onBundleUpdate func(context.Context), onFetchBackup func(context.Context), onUpdateAgent func(context.Context, string)) error {
 	for {
 		select {
 		case <-ctx.Done():
@@ -108,7 +108,7 @@ func ListenSSE(ctx context.Context, client common.HTTPClient, controlPlaneURL, h
 		default:
 		}
 
-		if err := connectSSE(ctx, client, controlPlaneURL, hostID, token, version, onBundleUpdate, onFetchBackup); err != nil {
+		if err := connectSSE(ctx, client, controlPlaneURL, hostID, token, version, onBundleUpdate, onFetchBackup, onUpdateAgent); err != nil {
 			log.Warn("SSE connection lost, reconnecting", "error", err, "delay", "15s")
 			if errors.Is(err, common.ErrUnauthorized) {
 				log.Warn("Received 401 on SSE connection, signaling for re-registration")
@@ -124,7 +124,7 @@ func ListenSSE(ctx context.Context, client common.HTTPClient, controlPlaneURL, h
 }
 
 // connectSSE establishes a single SSE connection.
-func connectSSE(ctx context.Context, client common.HTTPClient, controlPlaneURL, hostID, token, version string, onBundleUpdate func(context.Context), onFetchBackup func(context.Context)) error {
+func connectSSE(ctx context.Context, client common.HTTPClient, controlPlaneURL, hostID, token, version string, onBundleUpdate func(context.Context), onFetchBackup func(context.Context), onUpdateAgent func(context.Context, string)) error {
 	url := fmt.Sprintf("%s/api/v1/agent/events/%s", controlPlaneURL, hostID)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
@@ -158,23 +158,39 @@ func connectSSE(ctx context.Context, client common.HTTPClient, controlPlaneURL, 
 	buf := make([]byte, maxScanTokenSize)
 	scanner.Buffer(buf, maxScanTokenSize)
 
+	var prevEvent string
 	for scanner.Scan() {
 		line := scanner.Text()
-
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
 		}
 
-		if strings.HasPrefix(line, "event: bundle_updated") {
+		// Track event type across lines since SSE sends event: and data: separately
+		switch {
+		case strings.HasPrefix(line, "event: bundle_updated"):
 			log.Info("SSE: bundle_updated received, pulling immediately")
+			prevEvent = "bundle_updated"
 			go onBundleUpdate(ctx)
-		}
-
-		if strings.HasPrefix(line, "event: fetch_backup") {
+		case strings.HasPrefix(line, "event: fetch_backup"):
 			log.Info("SSE: fetch_backup received, reading backup")
+			prevEvent = "fetch_backup"
 			go onFetchBackup(ctx)
+		case strings.HasPrefix(line, "event: update_agent"):
+			log.Info("SSE: update_agent received, starting self-update")
+			prevEvent = "update_agent"
+		case strings.HasPrefix(line, "data:") && prevEvent == "update_agent":
+			var data struct {
+				ControlPlaneURL string `json:"control_plane_url"`
+			}
+			if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &data); err == nil {
+				go onUpdateAgent(ctx, data.ControlPlaneURL)
+			}
+			prevEvent = "" // Reset after processing data
+		case strings.HasPrefix(line, "data:"):
+			// Data line for other events - just reset prevEvent
+			prevEvent = ""
 		}
 
 		if len(line) > 0 && line[0] == ':' {

@@ -397,6 +397,69 @@ func (m *mockCommandRunner) Run(ctx context.Context, name string, args ...string
 	return m.output, m.err
 }
 
+// TestHandleUpdateAgent tests handleUpdateAgent validates URLs and runs the install script.
+func TestHandleUpdateAgent(t *testing.T) {
+	t.Run("successful update with valid URL", func(t *testing.T) {
+		runner := &mockCommandRunner{
+			output: []byte("update successful"),
+		}
+		agent := &Agent{
+			cmdRunner: runner,
+		}
+		ctx := context.Background()
+		agent.handleUpdateAgent(ctx, "https://runic.example.com")
+
+		if len(runner.calls) == 0 {
+			t.Fatal("expected cmdRunner.Run to be called")
+		}
+		// The command should use bash -c
+		if runner.calls[0].name != "bash" {
+			t.Errorf("expected command 'bash', got %q", runner.calls[0].name)
+		}
+		if len(runner.calls[0].args) < 2 || runner.calls[0].args[0] != "-c" {
+			t.Errorf("expected args to start with '-c', got %v", runner.calls[0].args)
+		}
+		// The command should contain the install script URL and the control plane URL
+		cmdStr := runner.calls[0].args[1]
+		if !strings.Contains(cmdStr, "install-agent.sh") {
+			t.Error("expected command to contain install-agent.sh URL")
+		}
+		if !strings.Contains(cmdStr, "runic.example.com") {
+			t.Error("expected command to contain control plane URL")
+		}
+	})
+
+	t.Run("rejects invalid URL scheme", func(t *testing.T) {
+		runner := &mockCommandRunner{
+			output: []byte("should not run"),
+		}
+		agent := &Agent{
+			cmdRunner: runner,
+		}
+		ctx := context.Background()
+		agent.handleUpdateAgent(ctx, "ftp://malicious.example.com")
+
+		if len(runner.calls) > 0 {
+			t.Error("expected cmdRunner.Run NOT to be called for invalid URL scheme")
+		}
+	})
+
+	t.Run("rejects malformed URL", func(t *testing.T) {
+		runner := &mockCommandRunner{
+			output: []byte("should not run"),
+		}
+		agent := &Agent{
+			cmdRunner: runner,
+		}
+		ctx := context.Background()
+		agent.handleUpdateAgent(ctx, "://broken")
+
+		if len(runner.calls) > 0 {
+			t.Error("expected cmdRunner.Run NOT to be called for malformed URL")
+		}
+	})
+}
+
 // TestApplyCachedBundle_NoCacheFile tests applyCachedBundle returns nil when cache file doesn't exist.
 func TestApplyCachedBundle_NoCacheFile(t *testing.T) {
 	cfg := helperConfig()
