@@ -785,9 +785,13 @@ build_binary() {
 	local BINARY_TMP
 	BINARY_TMP=$(mktemp "$INSTALL_DIR/dist/$BINARY_NAME.XXXXXX") || { log ERROR "Failed to create temp file for atomic replace"; exit 1; }
  cp "dist/$BINARY_NAME" "$BINARY_TMP" || { rm -f "$BINARY_TMP"; log ERROR "Failed to stage binary for atomic replace"; exit 1; }
- mv "$BINARY_TMP" "$INSTALL_DIR/dist/$BINARY_NAME" || { rm -f "$BINARY_TMP"; log ERROR "Failed to replace binary"; exit 1; }
+mv "$BINARY_TMP" "$INSTALL_DIR/dist/$BINARY_NAME" || { rm -f "$BINARY_TMP"; log ERROR "Failed to replace binary"; exit 1; }
+    if ! chmod 755 "$INSTALL_DIR/dist/$BINARY_NAME"; then
+        log ERROR "Failed to set executable permissions on binary"
+        exit 1
+    fi
 
-	# Verify binary
+# Verify binary
 	if [ -f "$INSTALL_DIR/dist/$BINARY_NAME" ]; then
 		local size
 		size=$(du -h "$INSTALL_DIR/dist/$BINARY_NAME" | cut -f1)
@@ -824,8 +828,12 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
 	agent_name=$(basename "$agent_binary" | sed 's/-linux//')
    AGENT_TMP=$(mktemp "$INSTALL_DIR/downloads/$agent_name.XXXXXX") || { log ERROR "Failed to create temp file for atomic replace of $agent_name"; exit 1; }
    cp "$agent_binary" "$AGENT_TMP" || { rm -f "$AGENT_TMP"; log ERROR "Failed to stage $agent_name for atomic replace"; exit 1; }
-   mv "$AGENT_TMP" "$INSTALL_DIR/downloads/$agent_name" || { rm -f "$AGENT_TMP"; log ERROR "Failed to replace $agent_name"; exit 1; }
- done
+  mv "$AGENT_TMP" "$INSTALL_DIR/downloads/$agent_name" || { rm -f "$AGENT_TMP"; log ERROR "Failed to replace $agent_name"; exit 1; }
+	if ! chmod 755 "$INSTALL_DIR/downloads/$agent_name"; then
+		log ERROR "Failed to set executable permissions on $agent_name"
+		exit 1
+	fi
+  done
 
 	# Count built binaries
 	local built_count
@@ -846,9 +854,8 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
 		log WARNING "runic-agent.service not found at $SOURCE_DIR/scripts/runic-agent.service"
 	fi
 
-	# Set permissions on binaries (755) and service file (644)
-	chmod 755 "$INSTALL_DIR/downloads/runic-agent-"* 2>/dev/null || { log WARNING "Failed to set permissions on agent binaries"; }
-	chmod 644 "$INSTALL_DIR/downloads/runic-agent.service" 2>/dev/null || { log WARNING "Failed to set permissions on service file"; }
+# Set permissions on service file (644)
+chmod 644 "$INSTALL_DIR/downloads/runic-agent.service" 2>/dev/null || { log WARNING "Failed to set permissions on service file"; }
 }
 
 create_system_user() {
