@@ -194,7 +194,7 @@ func (h *Handler) UpdateInstanceSettings(w http.ResponseWriter, r *http.Request)
 }
 
 // GetAgentVersionSettings returns the latest agent version configuration.
-// If not explicitly set, it defaults to the server version.
+// If not explicitly set, it defaults to the agent version from the build (.agent-version).
 func (h *Handler) GetAgentVersionSettings(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
@@ -210,9 +210,9 @@ func (h *Handler) GetAgentVersionSettings(w http.ResponseWriter, r *http.Request
 		version = latestVersion.String
 	}
 
-	// If not set, default to server version
+	// If not set, default to agent version from build
 	if version == "" {
-		version = runicversion.Version
+		version = runicversion.AgentVersion
 	}
 
 	common.RespondJSON(w, http.StatusOK, map[string]interface{}{
@@ -253,7 +253,7 @@ func (h *Handler) UpdateAgentVersionSettings(w http.ResponseWriter, r *http.Requ
 	// Return the effective version (resolving empty to server version)
 	effectiveVersion := req.LatestAgentVersion
 	if effectiveVersion == "" {
-		effectiveVersion = runicversion.Version
+		effectiveVersion = runicversion.AgentVersion
 	}
 
 	common.RespondJSON(w, http.StatusOK, map[string]interface{}{

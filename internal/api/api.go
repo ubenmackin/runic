@@ -215,7 +215,7 @@ func (a *API) RegisterRoutes(r *mux.Router, downloadsDir string) {
 		// Look up latest_agent_version from system_config
 		var latestAgentVersion sql.NullString
 		_ = a.DB.QueryRowContext(r.Context(), "SELECT value FROM system_config WHERE key = 'latest_agent_version'").Scan(&latestAgentVersion)
-		effectiveLatestAgentVersion := version.Version // default to server version
+		effectiveLatestAgentVersion := version.AgentVersion // default to agent version from build
 		if latestAgentVersion.Valid && latestAgentVersion.String != "" {
 			effectiveLatestAgentVersion = latestAgentVersion.String
 		}

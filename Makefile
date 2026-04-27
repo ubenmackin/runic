@@ -22,7 +22,7 @@ BUILT_AT ?= $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 # Agent version from .agent-version file
 AGENT_VERSION ?= $(shell cat .agent-version 2>/dev/null || echo "dev")
 
-LD_FLAGS = -ldflags="-X runic/internal/common/version.Version=$(VERSION) -X runic/internal/common/version.Commit=$(COMMIT) -X runic/internal/common/version.BuiltAt=$(BUILT_AT)"
+LD_FLAGS = -ldflags="-X runic/internal/common/version.Version=$(VERSION) -X runic/internal/common/version.AgentVersion=$(AGENT_VERSION) -X runic/internal/common/version.Commit=$(COMMIT) -X runic/internal/common/version.BuiltAt=$(BUILT_AT)"
 AGENT_LD_FLAGS = -ldflags="-X runic/internal/agent/core.Version=$(AGENT_VERSION)"
 
 all: web-build build

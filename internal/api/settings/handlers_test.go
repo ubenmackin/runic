@@ -910,10 +910,10 @@ func TestAgentVersionSettings(t *testing.T) {
 		if resp["is_default"] != true {
 			t.Errorf("expected is_default true, got %v", resp["is_default"])
 		}
-		if resp["latest_agent_version"] != runicversion.Version {
-			t.Errorf("expected version %s, got %v", runicversion.Version, resp["latest_agent_version"])
-		}
-	})
+	if resp["latest_agent_version"] != runicversion.AgentVersion {
+		t.Errorf("expected agent version %s, got %v", runicversion.AgentVersion, resp["latest_agent_version"])
+	}
+})
 
 	t.Run("sets and gets explicit version", func(t *testing.T) {
 		db, cleanup := testutil.SetupTestDBWithSecret(t)
@@ -1004,8 +1004,8 @@ func TestAgentVersionSettings(t *testing.T) {
 		if resp["is_default"] != true {
 			t.Errorf("expected is_default true when set to empty, got %v", resp["is_default"])
 		}
-		if resp["latest_agent_version"] != runicversion.Version {
-			t.Errorf("expected version %s, got %v", runicversion.Version, resp["latest_agent_version"])
-		}
-	})
+	if resp["latest_agent_version"] != runicversion.AgentVersion {
+		t.Errorf("expected agent version %s, got %v", runicversion.AgentVersion, resp["latest_agent_version"])
+	}
+})
 }
