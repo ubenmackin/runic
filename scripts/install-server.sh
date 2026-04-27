@@ -772,10 +772,10 @@ build_binary() {
 
 	cd "$SOURCE_DIR" || { log ERROR "Source directory not found"; exit 1; }
 
-	log INFO "Building runic-server via Makefile..."
+	log INFO "Building Runic Server and web frontend via Makefile..."
 
 	# Build via Makefile (single source of truth for build commands)
-	make build 2>&1 | tee -a "$LOG_FILE"
+	make all 2>&1 | tee -a "$LOG_FILE"
 	if [ ${PIPESTATUS[0]} -ne 0 ]; then
 		log ERROR "Build failed. Check $LOG_FILE for details."
 		exit 1
