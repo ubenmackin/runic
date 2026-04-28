@@ -151,7 +151,7 @@ jobs:
 
       - name: Build Go binary
         run: |
-          CGO_ENABLED=1 go build -ldflags="-X runic/internal/common/version.Version=$(git describe --tags --always --dirty 2>/dev/null || echo 'dev')" -o runic ./cmd/runic-server
+          CGO_ENABLED=1 go build -ldflags="-X runic/internal/common/version.Version=$(git describe --tags --always 2>/dev/null || echo 'dev')" -o runic ./cmd/runic-server
 
   backend-lint:
     needs: [changes, frontend]

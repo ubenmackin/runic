@@ -30,6 +30,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
+GRAY='\033[0;37m'
 BOLD='\033[1m'
 NC='\033[0m' # No Color
 
@@ -83,12 +84,15 @@ log() {
         "WARN")
             echo -e "${YELLOW}[WARN]${NC} $message"
             ;;
-        "ERROR")
-            echo -e "${RED}[ERROR]${NC} $message" >&2
-            ;;
-        *)
-            echo "[$level] $message"
-            ;;
+"ERROR")
+ echo -e "${RED}[ERROR]${NC} $message" >&2
+ ;;
+ "DEBUG")
+ echo -e "${GRAY}[DEBUG]${NC} $message"
+ ;;
+ *)
+ echo "[$level] $message"
+ ;;
     esac
 }
 
@@ -715,8 +719,10 @@ clone_repository() {
         else
             # Fetch latest changes and hard reset to origin branch
             git fetch origin "$REPO_BRANCH" >> "$LOG_FILE" 2>&1 || { log ERROR "Failed to fetch from origin"; exit 1; }
-            git reset --hard "origin/$REPO_BRANCH" >> "$LOG_FILE" 2>&1 || { log ERROR "Failed to reset to origin/$REPO_BRANCH"; exit 1; }
-        fi
+		git reset --hard "origin/$REPO_BRANCH" >> "$LOG_FILE" 2>&1 || { log ERROR "Failed to reset to origin/$REPO_BRANCH"; exit 1; }
+		# Remove untracked files and directories to ensure clean build
+		git clean -fd >> "$LOG_FILE" 2>&1 || log WARN "git clean failed (non-fatal, may be no untracked files)"
+		fi
     else
         if [ -n "$COMMIT_REF" ]; then
             # Full clone (no --depth 1) to access arbitrary commits
@@ -757,9 +763,14 @@ clone_repository() {
                 fi
             fi
         fi
-    fi
+	fi
 
-    log SUCCESS "Repository cloned/updated"
+	log DEBUG "Git HEAD after update: $(git rev-parse HEAD 2>/dev/null || echo 'unknown')"
+	log DEBUG "Git describe after update: $(git describe --tags --always --dirty 2>/dev/null || echo 'unknown')"
+	log DEBUG "Git status (short): $(git status --short 2>/dev/null | head -20 || echo 'unknown')"
+	log DEBUG "Source dir contents (top level): $(ls -la "$SOURCE_DIR/" 2>/dev/null | head -20 || echo 'N/A')"
+
+	log SUCCESS "Repository cloned/updated"
 }
 
 build_binary() {
@@ -772,20 +783,40 @@ build_binary() {
 
 	cd "$SOURCE_DIR" || { log ERROR "Source directory not found"; exit 1; }
 
-    log INFO "Preparing to build Runic Server and web frontend..."
+	log DEBUG "SOURCE_DIR=$SOURCE_DIR INSTALL_DIR=$INSTALL_DIR BINARY_NAME=$BINARY_NAME"
+	log DEBUG "Working directory: $(pwd)"
+	log DEBUG "Git commit: $(git rev-parse --short HEAD 2>/dev/null || echo 'unknown')"
+	log DEBUG "Git describe: $(git describe --tags --always --dirty 2>/dev/null || echo 'unknown')"
 
-    # Check if npm is installed (required for web frontend build)
-    if ! check_command npm; then
-        log ERROR "npm is not installed. Cannot build web frontend."
-        exit 1
-    fi
+	log INFO "Preparing to build Runic Server and web frontend..."
 
-    # Download Go dependencies (needed before build)
-    log INFO "Downloading Go dependencies..."
-    go mod download 2>&1 | tee -a "$LOG_FILE" || { log ERROR "Failed to download Go dependencies. Check $LOG_FILE for details."; exit 1; }
+	# Check if npm is installed (required for web frontend build)
+	if ! check_command npm; then
+		log ERROR "npm is not installed. Cannot build web frontend."
+		exit 1
+	fi
+	log DEBUG "npm version: $(npm --version 2>/dev/null || echo 'not found')"
+	log DEBUG "node version: $(node --version 2>/dev/null || echo 'not found')"
 
-    # Build via Makefile (single source of truth for build commands)
-    make all 2>&1 | tee -a "$LOG_FILE" || { log ERROR "Build failed. Check $LOG_FILE for details."; exit 1; }
+	# Download Go dependencies (needed before build)
+	log INFO "Downloading Go dependencies..."
+	go mod download 2>&1 | tee -a "$LOG_FILE" || { log ERROR "Failed to download Go dependencies. Check $LOG_FILE for details."; exit 1; }
+	log DEBUG "Go version: $(go version 2>/dev/null || echo 'not found')"
+
+	# Clean previous build artifacts to ensure fresh build
+	log INFO "Cleaning previous build artifacts..."
+	make clean 2>&1 | tee -a "$LOG_FILE" || { log WARN "Clean step failed (non-fatal), continuing..."; }
+
+	# Build via Makefile (single source of truth for build commands)
+	make all 2>&1 | tee -a "$LOG_FILE" || { log ERROR "Build failed. Check $LOG_FILE for details."; exit 1; }
+	log DEBUG "Make exit status: ${PIPESTATUS[0]}"
+	log DEBUG "Checking build output: dist/$BINARY_NAME"
+	log DEBUG "Build output exists: $(test -f "dist/$BINARY_NAME" && echo "YES ($(du -h dist/$BINARY_NAME | cut -f1))" || echo "NO")"
+	log DEBUG "Build output permissions: $(ls -la dist/$BINARY_NAME 2>/dev/null || echo 'N/A')"
+
+	log DEBUG "Source: dist/$BINARY_NAME → Target: $INSTALL_DIR/dist/$BINARY_NAME"
+	log DEBUG "Target directory exists: $(test -d "$INSTALL_DIR/dist" && echo "YES" || echo "NO")"
+	log DEBUG "Old binary exists: $(test -f "$INSTALL_DIR/dist/$BINARY_NAME" && echo "YES ($(ls -la "$INSTALL_DIR/dist/$BINARY_NAME" 2>/dev/null | awk '{print $5}' | numfmt --to=iec 2>/dev/null || echo 'unknown size'))" || echo "NO")"
 
 	# Copy binary to install directory (atomic replace to avoid ETXTBSY on running binary)
 	local BINARY_TMP
@@ -795,13 +826,16 @@ mv "$BINARY_TMP" "$INSTALL_DIR/dist/$BINARY_NAME" || { rm -f "$BINARY_TMP"; log 
     if ! chmod 755 "$INSTALL_DIR/dist/$BINARY_NAME"; then
         log ERROR "Failed to set executable permissions on binary"
         exit 1
-    fi
+	fi
+	log DEBUG "New binary permissions: $(ls -la "$INSTALL_DIR/dist/$BINARY_NAME" 2>/dev/null || echo 'N/A')"
+	log DEBUG "New binary size: $(du -h "$INSTALL_DIR/dist/$BINARY_NAME" | cut -f1)"
 
-# Verify binary
+	# Verify binary
 	if [ -f "$INSTALL_DIR/dist/$BINARY_NAME" ]; then
 		local size
 		size=$(du -h "$INSTALL_DIR/dist/$BINARY_NAME" | cut -f1)
 		log SUCCESS "Binary built successfully ($size)"
+		log DEBUG "Server binary version output: $($INSTALL_DIR/dist/$BINARY_NAME --version 2>/dev/null || echo 'version flag not supported')"
 	else
 		log ERROR "Binary not found after build"
 		exit 1
@@ -818,7 +852,11 @@ build_agent_binaries() {
 
 	cd "$SOURCE_DIR" || { log ERROR "Source directory not found"; exit 1; }
 
-    log INFO "Building runic-agent binaries via Makefile..."
+	log DEBUG "SOURCE_DIR=$SOURCE_DIR INSTALL_DIR=$INSTALL_DIR"
+	log DEBUG "Working directory: $(pwd)"
+	log DEBUG "Agent version from .agent-version: $(cat .agent-version 2>/dev/null || echo 'not found')"
+
+	log INFO "Building runic-agent binaries via Makefile..."
 
     # Check if npm is installed (required for web frontend build)
     if ! check_command npm; then
@@ -830,22 +868,38 @@ build_agent_binaries() {
     log INFO "Downloading Go dependencies..."
     go mod download 2>&1 | tee -a "$LOG_FILE" || { log ERROR "Failed to download Go dependencies. Check $LOG_FILE for details."; exit 1; }
 
-    # Build agents via Makefile (single source of truth for build commands)
-    make agents 2>&1 | tee -a "$LOG_FILE" || { log ERROR "Agent build failed. Check $LOG_FILE for details."; exit 1; }
+# Build agents via Makefile (single source of truth for build commands)
+	make agents 2>&1 | tee -a "$LOG_FILE" || { log ERROR "Agent build failed. Check $LOG_FILE for details."; exit 1; }
+
+	log DEBUG "Make agents exit status: ${PIPESTATUS[0]}"
+	log DEBUG "Agent build outputs:"
+	for f in dist/runic-agent-linux-*; do
+		if [ -f "$f" ]; then
+			log DEBUG "  $(basename "$f"): $(du -h "$f" | cut -f1) permissions=$(ls -la "$f" | awk '{print $1}')"
+		fi
+	done
 
 	# Copy agent binaries to install directory (atomic replace to avoid ETXTBSY on running binary)
 	local AGENT_TMP
 	for agent_binary in dist/runic-agent-linux-*; do
    [ -f "$agent_binary" ] || continue
-	agent_name=$(basename "$agent_binary" | sed 's/-linux//')
-   AGENT_TMP=$(mktemp "$INSTALL_DIR/downloads/$agent_name.XXXXXX") || { log ERROR "Failed to create temp file for atomic replace of $agent_name"; exit 1; }
-   cp "$agent_binary" "$AGENT_TMP" || { rm -f "$AGENT_TMP"; log ERROR "Failed to stage $agent_name for atomic replace"; exit 1; }
+		agent_name=$(basename "$agent_binary" | sed 's/-linux//')
+		log DEBUG "Copying $agent_binary → $INSTALL_DIR/downloads/$agent_name"
+		AGENT_TMP=$(mktemp "$INSTALL_DIR/downloads/$agent_name.XXXXXX") || { log ERROR "Failed to create temp file for atomic replace of $agent_name"; exit 1; }
+		cp "$agent_binary" "$AGENT_TMP" || { rm -f "$AGENT_TMP"; log ERROR "Failed to stage $agent_name for atomic replace"; exit 1; }
   mv "$AGENT_TMP" "$INSTALL_DIR/downloads/$agent_name" || { rm -f "$AGENT_TMP"; log ERROR "Failed to replace $agent_name"; exit 1; }
 	if ! chmod 755 "$INSTALL_DIR/downloads/$agent_name"; then
 		log ERROR "Failed to set executable permissions on $agent_name"
 		exit 1
 	fi
   done
+
+	log DEBUG "Final agent binaries in $INSTALL_DIR/downloads/:"
+	for f in "$INSTALL_DIR/downloads/runic-agent-"*; do
+		if [ -f "$f" ]; then
+			log DEBUG "  $(basename "$f"): $(du -h "$f" | cut -f1) permissions=$(ls -la "$f" | awk '{print $1}')"
+		fi
+	done
 
 	# Count built binaries
 	local built_count
@@ -1134,8 +1188,12 @@ start_service() {
     fi
     
     # Start service
-    log INFO "Starting $SERVICE_NAME..."
-    systemctl start "$SERVICE_NAME"
+	log INFO "Starting $SERVICE_NAME..."
+	log DEBUG "Service file: $INSTALL_DIR/dist/runic-server.service or systemd unit"
+	log DEBUG "Current service status: $(systemctl is-active runic-server 2>/dev/null || echo 'unknown')"
+	systemctl start "$SERVICE_NAME"
+	log DEBUG "Service status after restart: $(systemctl is-active runic-server 2>/dev/null || echo 'unknown')"
+	log DEBUG "Service pid: $(systemctl show runic-server --property=MainPID 2>/dev/null || echo 'unknown')"
     
     if [ $? -eq 0 ]; then
         # Wait a moment for service to start
@@ -1282,11 +1340,28 @@ main() {
     # Install systemd service
     install_systemd_service
     
-    # Start service
-    start_service
-    
-    # Show status
-    show_status
+# Start service
+start_service
+
+# Debug install summary
+log DEBUG "=== Install Summary ==="
+log DEBUG "Server binary: $INSTALL_DIR/dist/$BINARY_NAME"
+log DEBUG "Server binary exists: $(test -f "$INSTALL_DIR/dist/$BINARY_NAME" && echo "YES" || echo "NO")"
+log DEBUG "Server binary size: $(du -h "$INSTALL_DIR/dist/$BINARY_NAME" 2>/dev/null | cut -f1 || echo 'N/A')"
+log DEBUG "Server binary permissions: $(ls -la "$INSTALL_DIR/dist/$BINARY_NAME" 2>/dev/null | awk '{print $1}' || echo 'N/A')"
+log DEBUG "Server binary md5: $(md5sum "$INSTALL_DIR/dist/$BINARY_NAME" 2>/dev/null | cut -d' ' -f1 || echo 'N/A')"
+log DEBUG "Source git HEAD: $(cd "$SOURCE_DIR" && git rev-parse HEAD 2>/dev/null || echo 'unknown')"
+log DEBUG "Web dist exists: $(test -d "$SOURCE_DIR/web/dist" && echo "YES ($(ls "$SOURCE_DIR/web/dist/" | wc -l | tr -d ' ') files)" || echo "NO")"
+log DEBUG "Agent binaries:"
+for f in "$INSTALL_DIR/downloads/runic-agent-"*; do
+  if [ -f "$f" ]; then
+    log DEBUG "  $(basename "$f"): $(du -h "$f" | cut -f1)"
+  fi
+done
+log DEBUG "=== End Install Summary ==="
+
+# Show status
+show_status
 }
 
 # Run main function

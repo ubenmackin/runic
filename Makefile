@@ -15,7 +15,7 @@ GREEN=\033[0;32m
 NC=\033[0m # No Color
 
 # Version information (injected at build time)
-VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo "dev")
 COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 BUILT_AT ?= $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 
