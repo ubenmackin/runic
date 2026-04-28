@@ -7,6 +7,7 @@ import (
 
 	"runic/internal/common"
 	"runic/internal/common/log"
+	"runic/internal/common/version"
 	"runic/internal/crypto"
 )
 
@@ -1257,6 +1258,12 @@ SELECT id, ip_address, 1 FROM peers
 			return fmt.Errorf("failed to insert latest_agent_version: %w", err)
 		}
 		log.Info("Migration: added latest_agent_version to system_config")
+	}
+
+	// Always sync latest_agent_version with the build-time agent version
+	_, err = database.ExecContext(ctx, "UPDATE system_config SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = 'latest_agent_version'", version.AgentVersion)
+	if err != nil {
+		return fmt.Errorf("failed to sync latest_agent_version: %w", err)
 	}
 
 	return nil

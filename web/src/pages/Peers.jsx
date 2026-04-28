@@ -10,6 +10,7 @@ import { useCrudModal } from '../hooks/useCrudModal'
 import { useToastContext } from '../hooks/ToastContext'
 import { formatRelativeTime } from '../utils/formatTime.js'
 import { computeDiff } from '../utils/diff.js'
+import { isAgentOutdated } from '../utils/version'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 import { useTableFilter } from '../hooks/useTableFilter'
 import { useFilterPersistence } from '../hooks/useFilterPersistence'
@@ -35,13 +36,6 @@ import ImportRulesWizard from '../components/ImportRulesWizard'
 function parseHeartbeatForSort(timestamp) {
   if (!timestamp) return 0
   return new Date(timestamp).getTime()
-}
-
-// Compare agent versions, handling optional 'v' prefix
-function isAgentOutdated(peerVersion, latestVersion) {
-  if (!peerVersion || !latestVersion) return false
-  const stripV = (v) => v.replace(/^v/, '')
-  return stripV(peerVersion) !== stripV(latestVersion)
 }
 
 // Filter to IPv4 only — Runic is IPv4-only for firewall management

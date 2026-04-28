@@ -212,20 +212,12 @@ func (a *API) RegisterRoutes(r *mux.Router, downloadsDir string) {
 	protected.HandleFunc("/pending-changes/{peerId:[0-9]+}", a.Pending.GetPeerPendingChanges).Methods("GET")
 
 	protected.HandleFunc("/info", func(w http.ResponseWriter, r *http.Request) {
-		// Look up latest_agent_version from system_config
-		var latestAgentVersion sql.NullString
-		_ = a.DB.QueryRowContext(r.Context(), "SELECT value FROM system_config WHERE key = 'latest_agent_version'").Scan(&latestAgentVersion)
-		effectiveLatestAgentVersion := version.AgentVersion // default to agent version from build
-		if latestAgentVersion.Valid && latestAgentVersion.String != "" {
-			effectiveLatestAgentVersion = latestAgentVersion.String
-		}
-
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(map[string]interface{}{
 			"version":              version.Version,
 			"commit":               version.Commit,
 			"built_at":             version.BuiltAt,
-			"latest_agent_version": effectiveLatestAgentVersion,
+			"latest_agent_version": version.AgentVersion,
 		}); err != nil {
 			log.Warn("Failed to encode version info", "error", err)
 		}

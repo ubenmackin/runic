@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"testing"
 	"time"
+
+	"runic/internal/common/version"
 )
 
 // TestPeerCRUDIntegration tests the full HTTP CRUD cycle for peers.
@@ -684,6 +686,12 @@ func TestAuthFlowIntegration(t *testing.T) {
 
 		if info["version"] == nil {
 			t.Error("expected version in response")
+		}
+
+		if info["latest_agent_version"] == nil {
+			t.Error("expected latest_agent_version in response")
+		} else if info["latest_agent_version"] != version.AgentVersion {
+			t.Errorf("expected latest_agent_version to be %q, got %v", version.AgentVersion, info["latest_agent_version"])
 		}
 	})
 }
