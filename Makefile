@@ -86,7 +86,6 @@ test-web:
 clean:
 	@echo "$(GREEN)Cleaning...$(NC)"
 	rm -rf dist/
-	rm -f runic.db rununic.db-shm runic.db-wal
 
 # Install Go dependencies
 install-deps:
@@ -106,10 +105,6 @@ fmt:
 	$(GOCMD) fmt ./...
 
 # Run linter
-lint:
-	golangci-lint run ./...
-
-# Updated Run linter target
 lint: lint-go lint-web
 
 # Go-specific linting
@@ -123,7 +118,7 @@ lint-web:
 	cd web && npm run lint
 
 # Unified verification target
-verify: clean fmt lint test build
+verify: fmt lint test all
 	@echo "$(GREEN)All systems go. Runic is ready for commit.$(NC)"
 
 # Show help
@@ -144,5 +139,5 @@ help:
 	@echo " make lint - Run all linters (Go and React)"
 	@echo " make lint-go - Run Go linter only"
 	@echo " make lint-web - Run React linter only"
-	@echo " make verify - Run fmt, lint, test, and build for Go and React"
+	@echo " make verify - Run fmt, lint, test, and all builds"
 	@echo ""

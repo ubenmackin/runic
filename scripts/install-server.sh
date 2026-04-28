@@ -803,9 +803,8 @@ build_binary() {
 	go mod download 2>&1 | tee -a "$LOG_FILE" || { log ERROR "Failed to download Go dependencies. Check $LOG_FILE for details."; exit 1; }
 	log DEBUG "Go version: $(go version 2>/dev/null || echo 'not found')"
 
-	# Clean previous build artifacts to ensure fresh build
-	log INFO "Cleaning previous build artifacts..."
-	make clean 2>&1 | tee -a "$LOG_FILE" || { log WARN "Clean step failed (non-fatal), continuing..."; }
+	# Remove previous server binary to force fresh build (Make skips build if target exists)
+	rm -f dist/runic-server
 
 	# Build via Makefile (single source of truth for build commands)
 	make all 2>&1 | tee -a "$LOG_FILE" || { log ERROR "Build failed. Check $LOG_FILE for details."; exit 1; }

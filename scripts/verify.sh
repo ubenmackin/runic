@@ -60,6 +60,3 @@ if [ $? -eq 0 ]; then
 else
     echo -e "Agent Build: ${RED}FAILED${NC}"
 fi
-
-# Final Cleanup
-make clean > /dev/null 2>&1
