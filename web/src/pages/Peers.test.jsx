@@ -114,9 +114,9 @@ function getDesktopTable() {
 
 // Mock peers data
 const mockPeers = [
-  { id: 1, hostname: 'server-alpha', ip_address: '192.168.1.10', status: 'online', agent_version: '1.0.0', os_type: 'ubuntu', last_heartbeat: new Date().toISOString(), groups: 'web,servers', sync_status: 'synced' },
-  { id: 2, hostname: 'server-beta', ip_address: '192.168.1.20', status: 'offline', agent_version: '1.1.0', os_type: 'ubuntu', last_heartbeat: new Date(Date.now() - 3600000).toISOString(), groups: 'db', sync_status: 'pending' },
-  { id: 3, hostname: 'server-gamma', ip_address: '192.168.1.30', status: 'online', agent_version: '1.2.0', os_type: 'debian', last_heartbeat: new Date().toISOString(), groups: 'web', sync_status: 'synced' },
+  { id: 1, hostname: 'server-alpha', ip_address: '192.168.1.10', status: 'online', agent_version: '1.0.0', os_type: 'ubuntu', last_heartbeat: new Date().toISOString(), groups: 'web,servers', sync_status: 'synced', ips: [{ id: 1, peer_id: 1, ip_address: '192.168.1.10', is_primary: true }] },
+  { id: 2, hostname: 'server-beta', ip_address: '192.168.1.20', status: 'offline', agent_version: '1.1.0', os_type: 'ubuntu', last_heartbeat: new Date(Date.now() - 3600000).toISOString(), groups: 'db', sync_status: 'pending', ips: [{ id: 2, peer_id: 2, ip_address: '192.168.1.20', is_primary: true }] },
+  { id: 3, hostname: 'server-gamma', ip_address: '192.168.1.30', status: 'online', agent_version: '1.2.0', os_type: 'debian', last_heartbeat: new Date().toISOString(), groups: 'web', sync_status: 'synced', ips: [{ id: 3, peer_id: 3, ip_address: '192.168.1.30', is_primary: true }] },
 ]
 
 describe('Peers Page', () => {
@@ -335,10 +335,10 @@ describe('Peers Page', () => {
   describe('Sort Order Changes', () => {
     // Mock peers data with different status values for sorting tests
     const sortingMockPeers = [
-      { id: 1, hostname: 'server-alpha', ip_address: '192.168.1.10', status: 'offline', agent_version: '1.0.0', os_type: 'ubuntu', last_heartbeat: new Date().toISOString(), groups: 'web', sync_status: 'synced', pending_changes_count: 0 },
-      { id: 2, hostname: 'server-beta', ip_address: '192.168.1.20', status: 'online', agent_version: '1.2.0', os_type: 'ubuntu', last_heartbeat: new Date().toISOString(), groups: 'db', sync_status: 'synced', pending_changes_count: 0 },
-      { id: 3, hostname: 'server-gamma', ip_address: '192.168.1.30', status: 'pending', agent_version: '0.9.0', os_type: 'debian', last_heartbeat: new Date().toISOString(), groups: 'web', sync_status: 'synced', pending_changes_count: 0 },
-      { id: 4, hostname: 'server-delta', ip_address: '192.168.1.40', status: 'online', agent_version: '1.1.0', os_type: 'ubuntu', last_heartbeat: new Date().toISOString(), groups: 'cache', sync_status: 'synced', pending_changes_count: 0 },
+      { id: 1, hostname: 'server-alpha', ip_address: '192.168.1.10', status: 'offline', agent_version: '1.0.0', os_type: 'ubuntu', last_heartbeat: new Date().toISOString(), groups: 'web', sync_status: 'synced', pending_changes_count: 0, ips: [{ id: 1, peer_id: 1, ip_address: '192.168.1.10', is_primary: true }] },
+      { id: 2, hostname: 'server-beta', ip_address: '192.168.1.20', status: 'online', agent_version: '1.2.0', os_type: 'ubuntu', last_heartbeat: new Date().toISOString(), groups: 'db', sync_status: 'synced', pending_changes_count: 0, ips: [{ id: 2, peer_id: 2, ip_address: '192.168.1.20', is_primary: true }] },
+      { id: 3, hostname: 'server-gamma', ip_address: '192.168.1.30', status: 'pending', agent_version: '0.9.0', os_type: 'debian', last_heartbeat: new Date().toISOString(), groups: 'web', sync_status: 'synced', pending_changes_count: 0, ips: [{ id: 3, peer_id: 3, ip_address: '192.168.1.30', is_primary: true }] },
+      { id: 4, hostname: 'server-delta', ip_address: '192.168.1.40', status: 'online', agent_version: '1.1.0', os_type: 'ubuntu', last_heartbeat: new Date().toISOString(), groups: 'cache', sync_status: 'synced', pending_changes_count: 0, ips: [{ id: 4, peer_id: 4, ip_address: '192.168.1.40', is_primary: true }] },
     ]
 
     test('clicking Status column header changes sort order indicator', async () => {

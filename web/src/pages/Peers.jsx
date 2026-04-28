@@ -2,7 +2,7 @@ import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import { useLocation } from 'react-router-dom'
 import { useTableSort } from '../hooks/useTableSort'
 import { usePagination } from '../hooks/usePagination'
-import { useQuery, useQueryClient, useQueries } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Plus, Pencil, Trash2, Server, Copy, Check, RefreshCw, X, FileCode, AlertTriangle, Globe, ChevronDown, ChevronUp, Send, Download, Info, ArrowUpCircle } from 'lucide-react'
 import { api, QUERY_KEYS, getPeerIPs, addPeerIP, deletePeerIP } from '../api/client'
 import { REFETCH_INTERVALS, OS_OPTIONS, ARCH_OPTIONS } from '../constants'
@@ -432,12 +432,13 @@ const handleUpdateAgent = useCallback((peer) => {
     }
     setIpAdding(true)
     try {
-      await addPeerIP(editPeer.id, newIpAddress.trim())
-      showToast('IP address added successfully', 'success')
-      // Refresh IPs for this peer
-      const data = await getPeerIPs(editPeer.id)
-      setEditPeerIPs(data || [])
-      qc.invalidateQueries({ queryKey: QUERY_KEYS.peerIps(editPeer.id) })
+    await addPeerIP(editPeer.id, newIpAddress.trim())
+    showToast('IP address added successfully', 'success')
+    // Invalidate peers list to trigger background re-fetch with updated IPs
+    qc.invalidateQueries({ queryKey: QUERY_KEYS.peers() })
+    // Refresh IPs for this peer in the edit modal
+    const data = await getPeerIPs(editPeer.id)
+    setEditPeerIPs(data || [])
       setNewIpAddress('')
     } catch (err) {
       showToast(`Failed to add IP: ${err.message}`, 'error')
@@ -451,12 +452,13 @@ const handleUpdateAgent = useCallback((peer) => {
     if (!editPeer) return
     setIpDeleting(ipId)
     try {
-      await deletePeerIP(editPeer.id, ipId)
-      showToast('IP address removed successfully', 'success')
-      // Refresh IPs for this peer
-      const data = await getPeerIPs(editPeer.id)
-      setEditPeerIPs(data || [])
-      qc.invalidateQueries({ queryKey: QUERY_KEYS.peerIps(editPeer.id) })
+    await deletePeerIP(editPeer.id, ipId)
+    showToast('IP address removed successfully', 'success')
+    // Invalidate peers list to trigger background re-fetch with updated IPs
+    qc.invalidateQueries({ queryKey: QUERY_KEYS.peers() })
+    // Refresh IPs for this peer in the edit modal
+    const data = await getPeerIPs(editPeer.id)
+    setEditPeerIPs(data || [])
     } catch (err) {
       showToast(`Failed to remove IP: ${err.message}`, 'error')
     } finally {
@@ -481,29 +483,15 @@ staleTime: 30000,
 })
 const latestAgentVersion = serverInfo?.latest_agent_version
 
-  // Fetch IPs for each peer in parallel
-  const peerIPsQueries = useQueries({
-    queries: (peers || []).map(peer => ({
-      queryKey: QUERY_KEYS.peerIps(peer.id),
-      queryFn: () => getPeerIPs(peer.id),
-      staleTime: 15000,
-      refetchInterval: REFETCH_INTERVALS.PEERS_PAGE,
-      refetchIntervalInBackground: false,
-    })),
-  })
-
-  // Build a map of peerId -> IPs array for quick lookup
-  const peerIPsMap = useMemo(() => {
-    const map = {}
-    if (!peers) return map
-    peers.forEach((peer, idx) => {
-      const query = peerIPsQueries[idx]
-      if (query?.data) {
-        map[peer.id] = query.data
-      }
-    })
-    return map
-  }, [peers, peerIPsQueries])
+// Build a map of peerId -> IPs array from the peers list data
+const peerIPsMap = useMemo(() => {
+  if (!peers) return {}
+  const map = {}
+  for (const peer of peers) {
+    map[peer.id] = peer.ips || []
+  }
+  return map
+}, [peers])
 
   const { data: registrationTokens, isLoading: tokensLoading } = useQuery({
     queryKey: ['registration-tokens'],

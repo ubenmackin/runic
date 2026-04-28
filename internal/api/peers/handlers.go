@@ -144,7 +144,7 @@ ORDER BY p.hostname ASC
 	}
 
 	// Fetch peer IPs for all peers in a single query
-	ipRows, err := h.DB.QueryContext(r.Context(), `SELECT peer_id, ip_address, is_primary FROM peer_ips ORDER BY peer_id, is_primary DESC`)
+	ipRows, err := h.DB.QueryContext(r.Context(), `SELECT id, peer_id, ip_address, is_primary FROM peer_ips ORDER BY peer_id, is_primary DESC`)
 	if err != nil {
 		log.WarnContext(r.Context(), "failed to query peer_ips", "error", err)
 		// Non-fatal: return peers without IPs
@@ -160,17 +160,14 @@ ORDER BY p.hostname ASC
 	// Build a map of peer_id -> []PeerIP
 	ipMap := make(map[int][]PeerIP)
 	for ipRows.Next() {
-		var peerID int
-		var ipAddr string
+		var pip PeerIP
 		var isPrimary int
-		if err := ipRows.Scan(&peerID, &ipAddr, &isPrimary); err != nil {
+		if err := ipRows.Scan(&pip.ID, &pip.PeerID, &pip.IPAddress, &isPrimary); err != nil {
 			log.WarnContext(r.Context(), "failed to scan peer_ip", "error", err)
 			continue
 		}
-		ipMap[peerID] = append(ipMap[peerID], PeerIP{
-			IPAddress: ipAddr,
-			IsPrimary: isPrimary == 1,
-		})
+		pip.IsPrimary = isPrimary == 1
+		ipMap[pip.PeerID] = append(ipMap[pip.PeerID], pip)
 	}
 
 	// Attach IPs to each peer
