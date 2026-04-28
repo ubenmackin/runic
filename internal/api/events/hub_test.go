@@ -765,3 +765,204 @@ func TestSSEHub_FrontendChannelBuffer(t *testing.T) {
 	// This should not block due to the default case in NotifyFrontendPendingChangeAdded
 	hub.NotifyFrontendPendingChangeAdded(1)
 }
+
+// =============================================================================
+// Test NotifyUpdateAgent return values
+// =============================================================================
+
+func TestSSEHub_NotifyUpdateAgent_ReturnsTrueWhenRegistered(t *testing.T) {
+	hub := NewSSEHub()
+	ch := hub.Register("host1")
+
+	got := hub.NotifyUpdateAgent("host1", "https://example.com")
+	if !got {
+		t.Error("NotifyUpdateAgent expected true for registered host, got false")
+	}
+
+	// Verify the message format sent to the channel
+	select {
+	case msg := <-ch:
+		want := "event: update_agent\ndata: {\"control_plane_url\":\"https://example.com\"}\n\n"
+		if msg != want {
+			t.Errorf("unexpected message:\ngot:  %q\nwant: %q", msg, want)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Error("timeout waiting for notification on channel")
+	}
+}
+
+func TestSSEHub_NotifyUpdateAgent_ReturnsFalseWhenNotRegistered(t *testing.T) {
+	hub := NewSSEHub()
+
+	got := hub.NotifyUpdateAgent("nonexistent", "https://example.com")
+	if got {
+		t.Error("NotifyUpdateAgent expected false for unregistered host, got true")
+	}
+}
+
+func TestSSEHub_NotifyUpdateAgent_ReturnsFalseWhenChannelFull(t *testing.T) {
+	hub := NewSSEHub()
+	ch := hub.Register("host1")
+
+	// Fill the channel buffer (capacity 4)
+	for i := 0; i < 4; i++ {
+		select {
+		case ch <- "filler":
+		default:
+			t.Fatal("channel should not be full yet")
+		}
+	}
+
+	got := hub.NotifyUpdateAgent("host1", "https://example.com")
+	if got {
+		t.Error("NotifyUpdateAgent expected false when channel is full, got true")
+	}
+}
+
+// =============================================================================
+// Test NotifyBundleUpdated return values
+// =============================================================================
+
+func TestSSEHub_NotifyBundleUpdated_ReturnsTrueWhenRegistered(t *testing.T) {
+	hub := NewSSEHub()
+	ch := hub.Register("host1")
+
+	got := hub.NotifyBundleUpdated("host1", "v1.2.3")
+	if !got {
+		t.Error("NotifyBundleUpdated expected true for registered host, got false")
+	}
+
+	// Verify the message format sent to the channel
+	select {
+	case msg := <-ch:
+		want := "event: bundle_updated\ndata: {\"version\":\"v1.2.3\"}\n\n"
+		if msg != want {
+			t.Errorf("unexpected message:\ngot:  %q\nwant: %q", msg, want)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Error("timeout waiting for notification on channel")
+	}
+}
+
+func TestSSEHub_NotifyBundleUpdated_ReturnsFalseWhenNotRegistered(t *testing.T) {
+	hub := NewSSEHub()
+
+	got := hub.NotifyBundleUpdated("nonexistent", "v1.0.0")
+	if got {
+		t.Error("NotifyBundleUpdated expected false for unregistered host, got true")
+	}
+}
+
+func TestSSEHub_NotifyBundleUpdated_ReturnsFalseWhenChannelFull(t *testing.T) {
+	hub := NewSSEHub()
+	ch := hub.Register("host1")
+
+	// Fill the channel buffer (capacity 4)
+	for i := 0; i < 4; i++ {
+		select {
+		case ch <- "filler":
+		default:
+			t.Fatal("channel should not be full yet")
+		}
+	}
+
+	got := hub.NotifyBundleUpdated("host1", "v1.0.0")
+	if got {
+		t.Error("NotifyBundleUpdated expected false when channel is full, got true")
+	}
+}
+
+// =============================================================================
+// Test NotifyFetchBackup return values
+// =============================================================================
+
+func TestSSEHub_NotifyFetchBackup_ReturnsTrueWhenRegistered(t *testing.T) {
+	hub := NewSSEHub()
+	ch := hub.Register("host1")
+
+	got := hub.NotifyFetchBackup("host1")
+	if !got {
+		t.Error("NotifyFetchBackup expected true for registered host, got false")
+	}
+
+	// Verify the message format sent to the channel
+	select {
+	case msg := <-ch:
+		want := "event: fetch_backup\ndata: {\"host_id\":\"host1\"}\n\n"
+		if msg != want {
+			t.Errorf("unexpected message:\ngot:  %q\nwant: %q", msg, want)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Error("timeout waiting for notification on channel")
+	}
+}
+
+func TestSSEHub_NotifyFetchBackup_ReturnsFalseWhenNotRegistered(t *testing.T) {
+	hub := NewSSEHub()
+
+	got := hub.NotifyFetchBackup("nonexistent")
+	if got {
+		t.Error("NotifyFetchBackup expected false for unregistered host, got true")
+	}
+}
+
+func TestSSEHub_NotifyFetchBackup_ReturnsFalseWhenChannelFull(t *testing.T) {
+	hub := NewSSEHub()
+	ch := hub.Register("host1")
+
+	// Fill the channel buffer (capacity 4)
+	for i := 0; i < 4; i++ {
+		select {
+		case ch <- "filler":
+		default:
+			t.Fatal("channel should not be full yet")
+		}
+	}
+
+	got := hub.NotifyFetchBackup("host1")
+	if got {
+		t.Error("NotifyFetchBackup expected false when channel is full, got true")
+	}
+}
+
+// =============================================================================
+// Test Register/Unregister integration with Notify methods
+// =============================================================================
+
+func TestSSEHub_RegisterThenUnregister_NotifyReturnsFalse(t *testing.T) {
+	hub := NewSSEHub()
+	ch := hub.Register("host1")
+
+	// Drain the closed channel in background to prevent goroutine leak
+	go func() {
+		for range ch {
+		}
+	}()
+
+	// Before unregister, notify should succeed
+	got := hub.NotifyUpdateAgent("host1", "https://example.com")
+	if !got {
+		t.Error("expected NotifyUpdateAgent to return true before unregister, got false")
+	}
+
+	// Unregister the client
+	hub.Unregister("host1")
+
+	// After unregister, notify should return false
+	got = hub.NotifyUpdateAgent("host1", "https://example.com")
+	if got {
+		t.Error("expected NotifyUpdateAgent to return false after unregister, got true")
+	}
+
+	// Also verify for NotifyBundleUpdated
+	got = hub.NotifyBundleUpdated("host1", "v1.0")
+	if got {
+		t.Error("expected NotifyBundleUpdated to return false after unregister, got true")
+	}
+
+	// And NotifyFetchBackup
+	got = hub.NotifyFetchBackup("host1")
+	if got {
+		t.Error("expected NotifyFetchBackup to return false after unregister, got true")
+	}
+}

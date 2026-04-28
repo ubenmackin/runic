@@ -588,7 +588,7 @@ func (h *Handler) MakeHandleSSEventsHandler(hub SSEBroadcaster) http.HandlerFunc
 				if !ok {
 					return
 				}
-				if _, err := fmt.Fprintf(w, "%s\n\n", msg); err != nil {
+				if _, err := fmt.Fprintf(w, "%s", msg); err != nil {
 					return
 				}
 				flusher.Flush()

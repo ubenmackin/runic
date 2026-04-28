@@ -799,7 +799,12 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	hostID := fmt.Sprintf("host-%s", hostname)
-	h.SSEHub.NotifyUpdateAgent(hostID, instanceURL)
+	delivered := h.SSEHub.NotifyUpdateAgent(hostID, instanceURL)
+	if !delivered {
+		common.RespondJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "agent_not_connected"})
+		return
+	}
+	log.Info("UpdateAgent: update sent via SSE", "host_id", hostID)
 	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "update_sent"})
 }
 

@@ -2163,21 +2163,23 @@ func TestUpdateAgent(t *testing.T) {
 // mockUpdateAgent implements the SSE hub interface for testing.
 type mockUpdateAgent struct {
 	called          bool
+	delivered       bool
 	hostID          string
 	controlPlaneURL string
 }
 
-func (m *mockUpdateAgent) NotifyUpdateAgent(hostID, url string) {
+func (m *mockUpdateAgent) NotifyUpdateAgent(hostID, url string) bool {
 	m.called = true
 	m.hostID = hostID
 	m.controlPlaneURL = url
+	return m.delivered
 }
 
 func TestUpdateAgentSuccess(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	mock := &mockUpdateAgent{}
+	mock := &mockUpdateAgent{delivered: true}
 	handler := NewHandler(database, nil, mock)
 
 	database.Exec(`INSERT INTO peers (hostname, ip_address, is_manual, agent_key, hmac_key) VALUES (?, ?, 0, ?, ?)`, "agent-peer", "10.0.0.5", "key5", "hmackey5")
@@ -2210,5 +2212,71 @@ func TestUpdateAgentSuccess(t *testing.T) {
 	}
 	if mock.controlPlaneURL != "https://runic.example.com" {
 		t.Errorf("expected controlPlaneURL 'https://runic.example.com', got %q", mock.controlPlaneURL)
+	}
+}
+
+func TestUpdateAgentNotConnected(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	mock := &mockUpdateAgent{delivered: false}
+	handler := NewHandler(database, nil, mock)
+
+	database.Exec(`INSERT INTO peers (hostname, ip_address, is_manual, agent_key, hmac_key) VALUES (?, ?, 0, ?, ?)`, "agent-peer", "10.0.0.5", "key5", "hmackey5")
+	database.Exec(`INSERT INTO system_config (key, value) VALUES ('instance_url', 'https://runic.example.com')`)
+
+	req := httptest.NewRequest("POST", "/api/v1/peers/1/update-agent", nil)
+	req = muxVars(req, map[string]string{"id": "1"})
+	w := httptest.NewRecorder()
+
+	handler.UpdateAgent(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp["status"] != "agent_not_connected" {
+		t.Errorf("expected status 'agent_not_connected', got %q", resp["status"])
+	}
+
+	if !mock.called {
+		t.Error("expected NotifyUpdateAgent to be called")
+	}
+}
+
+func TestUpdateAgentChannelFull(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	mock := &mockUpdateAgent{delivered: false}
+	handler := NewHandler(database, nil, mock)
+
+	database.Exec(`INSERT INTO peers (hostname, ip_address, is_manual, agent_key, hmac_key) VALUES (?, ?, 0, ?, ?)`, "agent-peer", "10.0.0.6", "key6", "hmackey6")
+	database.Exec(`INSERT INTO system_config (key, value) VALUES ('instance_url', 'https://runic.example.com')`)
+
+	req := httptest.NewRequest("POST", "/api/v1/peers/1/update-agent", nil)
+	req = muxVars(req, map[string]string{"id": "1"})
+	w := httptest.NewRecorder()
+
+	handler.UpdateAgent(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp["status"] != "agent_not_connected" {
+		t.Errorf("expected status 'agent_not_connected', got %q", resp["status"])
+	}
+
+	if !mock.called {
+		t.Error("expected NotifyUpdateAgent to be called")
 	}
 }

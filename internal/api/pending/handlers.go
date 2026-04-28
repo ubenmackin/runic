@@ -387,7 +387,9 @@ func (h *Handler) ApplyPeerPendingBundle(w http.ResponseWriter, r *http.Request)
 	_ = db.CleanupIfComplete(ctx, h.DBBeginner) // best-effort cleanup
 
 	// Notify via SSE (use hostname as the host_id for SSE)
-	h.SSEHub.NotifyBundleUpdated("host-"+hostname, bundle.Version)
+	if !h.SSEHub.NotifyBundleUpdated("host-"+hostname, bundle.Version) {
+		log.Warn("NotifyBundleUpdated failed: agent not connected after applying pending bundle", "host_id", "host-"+hostname)
+	}
 
 	common.RespondJSON(w, http.StatusOK, map[string]interface{}{
 		"status":  "applied",
@@ -565,7 +567,9 @@ ORDER BY id DESC LIMIT 1
 		var hostname string
 		_ = database.QueryRowContext(ctx, "SELECT hostname FROM peers WHERE id = ?", peerID).Scan(&hostname)
 		if hostname != "" {
-			h.SSEHub.NotifyBundleUpdated("host-"+hostname, bundle.Version)
+			if !h.SSEHub.NotifyBundleUpdated("host-"+hostname, bundle.Version) {
+				log.Warn("NotifyBundleUpdated failed: agent not connected after applying pending bundle", "host_id", "host-"+hostname)
+			}
 		}
 	}
 
@@ -870,7 +874,9 @@ func applyBundleForPeer(ctx context.Context, database db.DB, compiler *engine.Co
 	}
 
 	// Notify via SSE
-	sseHub.NotifyBundleUpdated("host-"+hostname, bundle.Version)
+	if !sseHub.NotifyBundleUpdated("host-"+hostname, bundle.Version) {
+		log.Warn("NotifyBundleUpdated failed: agent not connected after applying pending bundle", "host_id", "host-"+hostname)
+	}
 
 	return nil
 }

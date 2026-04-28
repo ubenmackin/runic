@@ -22,7 +22,7 @@ type PushWorker struct {
 	compiler     *engine.Compiler
 	alertService *alerts.Service
 	sseHub       interface {
-		NotifyBundleUpdated(hostID string, version string)
+		NotifyBundleUpdated(hostID string, version string) bool
 		NotifyPushJobProgress(jobID string, eventType string, payload string)
 	}
 	workCh    chan string
@@ -34,7 +34,7 @@ type PushWorker struct {
 
 // NewPushWorker creates a new PushWorker.
 func NewPushWorker(database *sql.DB, compiler *engine.Compiler, alertService *alerts.Service, sseHub interface {
-	NotifyBundleUpdated(hostID string, version string)
+	NotifyBundleUpdated(hostID string, version string) bool
 	NotifyPushJobProgress(jobID string, eventType string, payload string)
 }) *PushWorker {
 	return &PushWorker{
@@ -174,7 +174,42 @@ func (w *PushWorker) processJob(ctx context.Context, jobID string) {
 		}
 
 		// Notify peer via SSE (reuse existing infrastructure)
-		w.sseHub.NotifyBundleUpdated("host-"+peer.Hostname, bundle.Version)
+		delivered := w.sseHub.NotifyBundleUpdated("host-"+peer.Hostname, bundle.Version)
+
+		if !delivered {
+			failed++
+			if err := db.UpdatePushJobPeerStatus(jobCtx, w.db, jobID, peer.PeerID, "failed", "SSE delivery failed: agent not connected"); err != nil {
+				runiclog.Error("Failed to update push job peer status", "error", err)
+			}
+			runiclog.Error("PushWorker: SSE delivery failed for peer", "peer_id", peer.PeerID, "hostname", peer.Hostname)
+			w.notifyProgress(jobID, "peer_failed", map[string]interface{}{
+				"peer_id":   peer.PeerID,
+				"hostname":  peer.Hostname,
+				"error":     "SSE delivery failed: agent not connected",
+				"total":     total,
+				"succeeded": succeeded,
+				"failed":    failed,
+			})
+
+			if w.alertService != nil {
+				if err := w.alertService.TriggerAlert(jobCtx, &alerts.AlertEvent{
+					Type:     alerts.AlertTypeBundleFailed,
+					PeerID:   peer.PeerID,
+					PeerName: peer.Hostname,
+					Subject:  fmt.Sprintf("Bundle delivery failed: %s", peer.Hostname),
+					Message:  "SSE delivery failed: agent not connected",
+					Metadata: map[string]interface{}{
+						"hostname": peer.Hostname,
+						"version":  bundle.Version,
+						"job_id":   jobID,
+					},
+				}); err != nil {
+					runiclog.Warn("failed to trigger alert", "error", err, "alert_type", alerts.AlertTypeBundleFailed)
+				}
+			}
+
+			continue
+		}
 
 		if err := db.UpdatePushJobPeerStatus(jobCtx, w.db, jobID, peer.PeerID, "notified", ""); err != nil {
 			runiclog.Error("Failed to update push job peer status", "error", err)

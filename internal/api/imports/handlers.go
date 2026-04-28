@@ -99,8 +99,11 @@ func (h *Handler) InitiateImport(w http.ResponseWriter, r *http.Request) {
 	// Trigger the agent to fetch and POST its backup via SSE
 	hostID := fmt.Sprintf("host-%s", hostname)
 	if h.SSEHub != nil {
-		h.SSEHub.NotifyFetchBackup(hostID)
-		runiclog.Info("Sent fetch_backup SSE event to agent", "host_id", hostID, "peer_id", peerID)
+		if h.SSEHub.NotifyFetchBackup(hostID) {
+			runiclog.Info("Sent fetch_backup SSE event to agent", "host_id", hostID, "peer_id", peerID)
+		} else {
+			runiclog.Warn("NotifyFetchBackup failed: agent not connected", "host_id", hostID)
+		}
 	}
 
 	common.RespondJSON(w, http.StatusCreated, map[string]interface{}{

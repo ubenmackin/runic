@@ -4,12 +4,14 @@ package events
 import (
 	"fmt"
 	"sync"
+
+	runiclog "runic/internal/common/log"
 )
 
 // NotifyUpdateAgenter is the interface for sending update_agent SSE events.
 // Defined here to avoid import cycles and DRY violations.
 type NotifyUpdateAgenter interface {
-	NotifyUpdateAgent(hostID string, controlPlaneURL string)
+	NotifyUpdateAgent(hostID string, controlPlaneURL string) bool
 }
 
 type SSEHub struct {
@@ -44,43 +46,58 @@ func (h *SSEHub) Unregister(hostID string) {
 	h.mu.Unlock()
 }
 
-func (h *SSEHub) NotifyBundleUpdated(hostID string, version string) {
+func (h *SSEHub) NotifyBundleUpdated(hostID string, version string) bool {
 	h.mu.RLock()
 	ch, ok := h.clients[hostID]
 	h.mu.RUnlock()
-	if ok {
-		select {
-		case ch <- fmt.Sprintf("event: bundle_updated\ndata: {\"version\":%q}\n\n", version):
-		default: // agent not listening, will pull on poll
-		}
+	if !ok {
+		runiclog.Warn("NotifyBundleUpdated: agent not connected", "host_id", hostID)
+		return false
+	}
+	select {
+	case ch <- fmt.Sprintf("event: bundle_updated\ndata: {\"version\":%q}\n\n", version):
+		return true
+	default:
+		runiclog.Warn("NotifyBundleUpdated: channel full, dropping update", "host_id", hostID)
+		return false
 	}
 }
 
 // NotifyFetchBackup sends a fetch_backup event to the agent, requesting it to
 // read and POST its pre-Runic iptables backup and ipset data.
-func (h *SSEHub) NotifyFetchBackup(hostID string) {
+func (h *SSEHub) NotifyFetchBackup(hostID string) bool {
 	h.mu.RLock()
 	ch, ok := h.clients[hostID]
 	h.mu.RUnlock()
-	if ok {
-		select {
-		case ch <- fmt.Sprintf("event: fetch_backup\ndata: {\"host_id\":%q}\n\n", hostID):
-		default: // agent not listening, will miss this request
-		}
+	if !ok {
+		runiclog.Warn("NotifyFetchBackup: agent not connected", "host_id", hostID)
+		return false
+	}
+	select {
+	case ch <- fmt.Sprintf("event: fetch_backup\ndata: {\"host_id\":%q}\n\n", hostID):
+		return true
+	default:
+		runiclog.Warn("NotifyFetchBackup: channel full, dropping update", "host_id", hostID)
+		return false
 	}
 }
 
 // NotifyUpdateAgent sends an update_agent event to the agent, instructing it
 // to self-update by running the install script with the given control plane URL.
-func (h *SSEHub) NotifyUpdateAgent(hostID string, controlPlaneURL string) {
+func (h *SSEHub) NotifyUpdateAgent(hostID string, controlPlaneURL string) bool {
 	h.mu.RLock()
 	ch, ok := h.clients[hostID]
 	h.mu.RUnlock()
-	if ok {
-		select {
-		case ch <- fmt.Sprintf("event: update_agent\ndata: {\"control_plane_url\":%q}\n\n", controlPlaneURL):
-		default: // agent not listening, will remain on current version
-		}
+	if !ok {
+		runiclog.Warn("NotifyUpdateAgent: agent not connected", "host_id", hostID)
+		return false
+	}
+	select {
+	case ch <- fmt.Sprintf("event: update_agent\ndata: {\"control_plane_url\":%q}\n\n", controlPlaneURL):
+		return true
+	default:
+		runiclog.Warn("NotifyUpdateAgent: channel full, dropping update", "host_id", hostID)
+		return false
 	}
 }
 

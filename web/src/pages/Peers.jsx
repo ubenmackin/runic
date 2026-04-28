@@ -233,21 +233,26 @@ const handleUpdateAgent = useCallback((peer) => {
 	setUpdateAgentTarget(peer)
 }, [])
 
-const handleUpdateAgentConfirm = async () => {
-	if (!updateAgentTarget) return
-	setUpdateAgentLoading(true)
-	try {
+  const handleUpdateAgentConfirm = async () => {
+    if (!updateAgentTarget) return
+    setUpdateAgentLoading(true)
+    try {
       await api.post(`/peers/${updateAgentTarget.id}/update-agent`)
       showToast(`Update command sent to ${updateAgentTarget.hostname}. The agent will update and reconnect.`, 'success')
       qc.invalidateQueries({ queryKey: QUERY_KEYS.peers() })
       qc.invalidateQueries({ queryKey: QUERY_KEYS.info() })
       setUpdateAgentTarget(null)
-	} catch (err) {
-		showToast(`Failed to send update command: ${err.message}`, 'error')
-	} finally {
-		setUpdateAgentLoading(false)
-	}
-}
+    } catch (err) {
+      if (err.status === 503) {
+        showToast(`${updateAgentTarget.hostname} is not connected — it will update automatically when it reconnects.`, 'error')
+        setUpdateAgentTarget(null)
+      } else {
+        showToast(`Failed to send update command: ${err.message}`, 'error')
+      }
+    } finally {
+      setUpdateAgentLoading(false)
+    }
+  }
 
   // Import Rules wizard state
   const [importingPeer, setImportingPeer] = useState(null)
