@@ -26,7 +26,7 @@ func normalizeIP(ip string) string {
 
 // resolveRules walks all import_rules for a session and attempts to map them to existing Runic entities.
 // It also processes ipset data to create group/peer mappings.
-func resolveRules(ctx context.Context, database db.Querier, sessionID int64, rawIpsets string) error {
+func resolveRules(ctx context.Context, database db.Querier, sessionID int64, peerID int64, peerIPs []string, rawIpsets string) error {
 	// Parse ipset data for group member resolution
 	ipsetMembers := parseIpsetData(rawIpsets)
 
@@ -84,10 +84,10 @@ func resolveRules(ctx context.Context, database db.Querier, sessionID int64, raw
 		}
 
 		// Resolve source
-		sourceType, sourceID, sourceStagingID, sourceIP := resolveEndpoint(ctx, database, sessionID, pr, ipsetMembers, true)
+		sourceType, sourceID, sourceStagingID, sourceIP := resolveEndpoint(ctx, database, sessionID, pr, ipsetMembers, true, r.Chain, peerID, peerIPs)
 
 		// Resolve target (destination)
-		targetType, targetID, targetStagingID, targetIP := resolveEndpoint(ctx, database, sessionID, pr, ipsetMembers, false)
+		targetType, targetID, targetStagingID, targetIP := resolveEndpoint(ctx, database, sessionID, pr, ipsetMembers, false, r.Chain, peerID, peerIPs)
 
 		// Resolve service
 		serviceID, serviceStagingID := resolveService(ctx, database, sessionID, pr)
@@ -112,7 +112,7 @@ func resolveRules(ctx context.Context, database db.Querier, sessionID int64, raw
 // resolveEndpoint resolves a source or target endpoint for a rule.
 // Returns (type, realID, stagingID, matchedIP) — realID is set if mapped to existing entity, stagingID if new.
 // matchedIP is set when the IP was found via peer_ips (non-primary IP match).
-func resolveEndpoint(ctx context.Context, database db.Querier, sessionID int64, rule *iptparse.ParsedRule, ipsetMembers map[string][]string, isSource bool) (string, int64, int64, string) {
+func resolveEndpoint(ctx context.Context, database db.Querier, sessionID int64, rule *iptparse.ParsedRule, ipsetMembers map[string][]string, isSource bool, chain string, peerID int64, peerIPs []string) (string, int64, int64, string) {
 	// Check for ipset match
 	if rule.IpsetMatch != nil {
 		isMatchForEndpoint := (isSource && rule.IpsetMatch.Direction == "src") || (!isSource && rule.IpsetMatch.Direction == "dst")
@@ -130,16 +130,35 @@ func resolveEndpoint(ctx context.Context, database db.Querier, sessionID int64, 
 	// Normalize IP (strip /32 CIDR)
 	ip = normalizeIP(ip)
 
-	// 0.0.0.0/0 or empty = any IP → special target
-	if ip == "" || ip == "0.0.0.0/0" {
+	// Determine if this endpoint represents the "self" side of the imported peer
+	isSelfEndpoint := (!isSource && (chain == "INPUT" || chain == "DOCKER-USER")) || (isSource && chain == "OUTPUT")
+
+	// If this is the self-endpoint and IP is empty/0.0.0.0/0/0.0.0.0, map to the imported peer
+	if isSelfEndpoint && (ip == "" || ip == "0.0.0.0" || ip == "0.0.0.0/0") {
+		primaryIP := ""
+		if len(peerIPs) > 0 {
+			primaryIP = peerIPs[0]
+		}
+		return "peer", peerID, 0, primaryIP
+	}
+
+	// If this IP matches ANY of the imported peer's IPs, map to the imported peer with that specific IP
+	for _, peerIP := range peerIPs {
+		if ip == peerIP {
+			return "peer", peerID, 0, peerIP
+		}
+	}
+
+	// 0.0.0.0, 0.0.0.0/0, or empty = any IP → special target
+	if ip == "" || ip == "0.0.0.0" || ip == "0.0.0.0/0" {
 		return "special", 6, 0, "" // __any_ip__ has id=6 in special_targets
 	}
 
 	// Look up existing peer by primary IP
-	var peerID int64
-	err := database.QueryRowContext(ctx, "SELECT id FROM peers WHERE ip_address = ?", ip).Scan(&peerID)
+	var existingPeerID int64
+	err := database.QueryRowContext(ctx, "SELECT id FROM peers WHERE ip_address = ?", ip).Scan(&existingPeerID)
 	if err == nil {
-		return "peer", peerID, 0, ""
+		return "peer", existingPeerID, 0, ""
 	}
 
 	// Check peer_ips table for non-primary IP match

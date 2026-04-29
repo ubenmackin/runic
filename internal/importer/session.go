@@ -198,8 +198,31 @@ func ParseSession(ctx context.Context, database *sql.DB, sessionID int64) error 
 	}
 	committed = true
 
+	// Look up all IPs for the imported peer
+	var peerIPs []string
+	ipRows, err := database.QueryContext(ctx, "SELECT ip_address FROM peer_ips WHERE peer_id = ? ORDER BY is_primary DESC, id ASC", session.PeerID)
+	if err != nil {
+		log.Warn("Failed to query peer IPs for resolver", "peer_id", session.PeerID, "error", err)
+	}
+	for ipRows.Next() {
+		var ip string
+		if ipRows.Scan(&ip) == nil {
+			peerIPs = append(peerIPs, normalizeIP(ip))
+		}
+	}
+	_ = ipRows.Close()
+
+	// If no peer_ips found, fall back to the peer's primary IP
+	if len(peerIPs) == 0 {
+		var primaryIP string
+		err := database.QueryRowContext(ctx, "SELECT ip_address FROM peers WHERE id = ?", session.PeerID).Scan(&primaryIP)
+		if err == nil {
+			peerIPs = append(peerIPs, normalizeIP(primaryIP))
+		}
+	}
+
 	// Now run the resolver to map IPs/ports/ipsets to Runic entities
-	if err := resolveRules(ctx, database, sessionID, session.RawIpsets); err != nil {
+	if err := resolveRules(ctx, database, sessionID, session.PeerID, peerIPs, session.RawIpsets); err != nil {
 		log.Warn("Resolver completed with errors", "session_id", sessionID, "error", err)
 		// Don't fail the whole parse — partial resolution is OK
 	}
