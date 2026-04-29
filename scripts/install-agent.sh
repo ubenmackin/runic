@@ -61,17 +61,34 @@ if [ -z "$CONTROL_PLANE_URL" ]; then
     exit 1
 fi
 
-# Check if service is running and stop it for upgrade
-if systemctl is-active --quiet runic-agent 2>/dev/null; then
-    echo "Stopping existing runic-agent service..."
-    systemctl stop runic-agent
-fi
-
 BINARY_URL="${CONTROL_PLANE_URL}/downloads/runic-agent-${AGENT_ARCH}"
 
 echo "Downloading runic-agent for ${AGENT_ARCH}..."
 curl -fsSL -o /usr/local/bin/runic-agent "$BINARY_URL"
 chmod +x /usr/local/bin/runic-agent
+
+# Verify download succeeded
+if [ ! -s /usr/local/bin/runic-agent ]; then
+echo "Error: Binary download failed or file is empty"
+exit 1
+fi
+
+# Download service file
+echo "Downloading runic-agent service file..."
+curl -fsSL -o /etc/systemd/system/runic-agent.service \
+"${CONTROL_PLANE_URL}/downloads/runic-agent.service"
+
+# Verify service file download
+if [ ! -s /etc/systemd/system/runic-agent.service ]; then
+echo "Error: Service file download failed or file is empty"
+exit 1
+fi
+
+# Check if service is running and stop it for upgrade
+if systemctl is-active --quiet runic-agent; then
+echo "Stopping existing runic-agent service..."
+systemctl stop runic-agent
+fi
 
 # Create config directory if it doesn't exist
 mkdir -p /etc/runic-agent
@@ -272,10 +289,6 @@ else
     echo "Config: disable_system_managed_iptables=false - skipping system iptables services disable"
     echo "(Runic will manage iptables without disabling system services)"
 fi
-
-# Download service file
-curl -fsSL -o /etc/systemd/system/runic-agent.service \
-    "${CONTROL_PLANE_URL}/downloads/runic-agent.service"
 
 systemctl daemon-reload
 systemctl enable runic-agent

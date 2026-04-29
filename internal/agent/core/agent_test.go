@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -397,30 +399,101 @@ func (m *mockCommandRunner) Run(ctx context.Context, name string, args ...string
 	return m.output, m.err
 }
 
-// TestHandleUpdateAgent tests handleUpdateAgent validates URLs and runs the install script.
+// TestHandleUpdateAgent tests handleUpdateAgent validates URLs and launches the install script.
 func TestHandleUpdateAgent(t *testing.T) {
-	t.Run("successful update with valid URL", func(t *testing.T) {
-		runner := &mockCommandRunner{
-			output: []byte("update successful"),
-		}
+	t.Run("rejects invalid URL scheme", func(t *testing.T) {
+		var cmdCreated bool
 		agent := &Agent{
-			cmdRunner: runner,
+			execCommandFunc: func(ctx context.Context, name string, args ...string) *exec.Cmd {
+				cmdCreated = true
+				return exec.CommandContext(ctx, name, args...)
+			},
 		}
-		ctx := context.Background()
-		agent.handleUpdateAgent(ctx, "https://runic.example.com")
+		agent.handleUpdateAgent(context.Background(), "ftp://malicious.example.com")
+		if cmdCreated {
+			t.Error("expected no command to be created for invalid URL scheme")
+		}
+	})
 
-		if len(runner.calls) == 0 {
-			t.Fatal("expected cmdRunner.Run to be called")
+	t.Run("rejects malformed URL", func(t *testing.T) {
+		var cmdCreated bool
+		agent := &Agent{
+			execCommandFunc: func(ctx context.Context, name string, args ...string) *exec.Cmd {
+				cmdCreated = true
+				return exec.CommandContext(ctx, name, args...)
+			},
 		}
-		// The command should use bash -c
-		if runner.calls[0].name != "bash" {
-			t.Errorf("expected command 'bash', got %q", runner.calls[0].name)
+		agent.handleUpdateAgent(context.Background(), "://broken")
+		if cmdCreated {
+			t.Error("expected no command to be created for malformed URL")
 		}
-		if len(runner.calls[0].args) < 2 || runner.calls[0].args[0] != "-c" {
-			t.Errorf("expected args to start with '-c', got %v", runner.calls[0].args)
+	})
+
+	t.Run("successful update launch returns immediately", func(t *testing.T) {
+		// Use a harmless command that completes quickly
+		agent := &Agent{
+			execCommandFunc: func(ctx context.Context, name string, args ...string) *exec.Cmd {
+				// Return a real command that does nothing harmful
+				return exec.CommandContext(ctx, "true")
+			},
 		}
-		// The command should contain the install script URL and the control plane URL
-		cmdStr := runner.calls[0].args[1]
+
+		done := make(chan struct{})
+		go func() {
+			agent.handleUpdateAgent(context.Background(), "https://runic.example.com")
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			// Good — function returned immediately (fire-and-forget)
+		case <-time.After(5 * time.Second):
+			t.Fatal("handleUpdateAgent should return immediately after cmd.Start()")
+		}
+	})
+
+	t.Run("update command uses context.Background not SSE context", func(t *testing.T) {
+		var capturedCtx context.Context
+		agent := &Agent{
+			execCommandFunc: func(ctx context.Context, name string, args ...string) *exec.Cmd {
+				capturedCtx = ctx
+				return exec.CommandContext(ctx, "true")
+			},
+		}
+
+		// Pass a canceled context as the SSE context
+		sseCtx, cancel := context.WithCancel(context.Background())
+		cancel() // Cancel immediately
+		agent.handleUpdateAgent(sseCtx, "https://runic.example.com")
+
+		// The function should use context.Background(), not the canceled SSE context
+		if capturedCtx == nil {
+			t.Fatal("expected execCommandFunc to be called")
+		}
+		if capturedCtx == sseCtx {
+			t.Error("handleUpdateAgent should use context.Background(), not the SSE context")
+		}
+		// Verify the captured context is not canceled
+		if err := capturedCtx.Err(); err != nil {
+			t.Error("handleUpdateAgent should use context.Background() which is never canceled")
+		}
+	})
+
+	t.Run("update command contains install script URL and control plane URL", func(t *testing.T) {
+		var capturedArgs []string
+		agent := &Agent{
+			execCommandFunc: func(ctx context.Context, name string, args ...string) *exec.Cmd {
+				capturedArgs = args
+				return exec.CommandContext(ctx, "true")
+			},
+		}
+
+		agent.handleUpdateAgent(context.Background(), "https://runic.example.com")
+
+		if len(capturedArgs) < 2 {
+			t.Fatalf("expected at least 2 args, got %d", len(capturedArgs))
+		}
+		cmdStr := capturedArgs[1]
 		if !strings.Contains(cmdStr, "install-agent.sh") {
 			t.Error("expected command to contain install-agent.sh URL")
 		}
@@ -429,33 +502,35 @@ func TestHandleUpdateAgent(t *testing.T) {
 		}
 	})
 
-	t.Run("rejects invalid URL scheme", func(t *testing.T) {
-		runner := &mockCommandRunner{
-			output: []byte("should not run"),
-		}
+	t.Run("update command sets process group on linux", func(t *testing.T) {
+		var capturedCmd *exec.Cmd
 		agent := &Agent{
-			cmdRunner: runner,
+			execCommandFunc: func(ctx context.Context, name string, args ...string) *exec.Cmd {
+				// Return a harmless command so cmd.Start() succeeds
+				cmd := exec.CommandContext(ctx, "true")
+				capturedCmd = cmd
+				return cmd
+			},
 		}
-		ctx := context.Background()
-		agent.handleUpdateAgent(ctx, "ftp://malicious.example.com")
 
-		if len(runner.calls) > 0 {
-			t.Error("expected cmdRunner.Run NOT to be called for invalid URL scheme")
-		}
-	})
+		agent.handleUpdateAgent(context.Background(), "https://runic.example.com")
 
-	t.Run("rejects malformed URL", func(t *testing.T) {
-		runner := &mockCommandRunner{
-			output: []byte("should not run"),
+		if capturedCmd == nil {
+			t.Fatal("expected execCommandFunc to be called")
 		}
-		agent := &Agent{
-			cmdRunner: runner,
-		}
-		ctx := context.Background()
-		agent.handleUpdateAgent(ctx, "://broken")
 
-		if len(runner.calls) > 0 {
-			t.Error("expected cmdRunner.Run NOT to be called for malformed URL")
+		// On Linux, SysProcAttr should have Setpgid=true; on other platforms it should be nil
+		if runtime.GOOS == "linux" {
+			if capturedCmd.SysProcAttr == nil {
+				t.Fatal("expected SysProcAttr to be set on Linux")
+			}
+			if !capturedCmd.SysProcAttr.Setpgid {
+				t.Error("expected SysProcAttr.Setpgid to be true on Linux")
+			}
+		} else {
+			if capturedCmd.SysProcAttr != nil {
+				t.Error("expected SysProcAttr to be nil on non-Linux platforms")
+			}
 		}
 	})
 }

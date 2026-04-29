@@ -11,8 +11,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -55,6 +57,7 @@ type Agent struct {
 	rotationManager *rotation.Manager
 	regMu           sync.Mutex // protects re-registration from concurrent calls
 	cmdRunner       CommandRunner
+	execCommandFunc func(ctx context.Context, name string, args ...string) *exec.Cmd
 	cachePath       string
 	backupPath      string
 }
@@ -85,6 +88,7 @@ func New(configPath, controlPlaneURL string) *Agent {
 	}
 
 	agent.cmdRunner = &RealCommandRunner{}
+	agent.execCommandFunc = exec.CommandContext
 	agent.cachePath = "/etc/runic-agent/cached-bundle.rules"
 	agent.backupPath = "/etc/runic-agent/iptables-backup.rules"
 
@@ -545,10 +549,11 @@ func (a *Agent) handleFetchBackup(ctx context.Context) {
 }
 
 // handleUpdateAgent runs the install script to self-update the agent.
-// After the script completes, the agent service will be restarted by the
-// install script, so this function should not attempt to continue normal
-// operation after launching the update.
-func (a *Agent) handleUpdateAgent(ctx context.Context, controlPlaneURL string) {
+// The install command is launched as a detached process in its own process group
+// so that SIGTERM to the agent does not cascade to the child. The function returns
+// immediately after starting the command since the agent will be killed and
+// restarted by systemd.
+func (a *Agent) handleUpdateAgent(_ context.Context, controlPlaneURL string) {
 	log.Info("Starting agent self-update", "control_plane_url", controlPlaneURL)
 
 	// Validate the control plane URL to prevent command injection
@@ -561,17 +566,34 @@ func (a *Agent) handleUpdateAgent(ctx context.Context, controlPlaneURL string) {
 	// Use the hardcoded install script URL
 	installScriptURL := "https://raw.githubusercontent.com/ubenmackin/runic/main/scripts/install-agent.sh"
 
-	// Run: curl -sL <install_script_url> | sudo bash -s -- <controlPlaneURL>
-	// We pass the control plane URL as a direct argument to bash to avoid shell injection
-	out, err := a.cmdRunner.Run(ctx, "bash", "-c", fmt.Sprintf("curl -sL %s | sudo bash -s -- %s", installScriptURL, shellSafeArg(parsedURL.String())))
-	if err != nil {
-		log.Error("Agent self-update failed", "error", err, "output", string(out))
+	// Launch the install script as a detached process using context.Background()
+	// so it survives the parent agent's cancellation context. We use exec.CommandContext
+	// directly (bypassing cmdRunner) and put the child in its own process group
+	// so SIGTERM to the agent doesn't cascade to the install script.
+	cmd := a.execCommandFunc(context.Background(), "bash", "-c", fmt.Sprintf("curl -sL %s | sudo bash -s -- %s", installScriptURL, shellSafeArg(parsedURL.String())))
+	cmd.Stdout = os.Stderr
+	cmd.Stderr = os.Stderr
+
+	// Put the child in its own process group so SIGTERM to the agent doesn't kill it
+	if runtime.GOOS == "linux" {
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	}
+
+	if err := cmd.Start(); err != nil {
+		log.Error("Failed to launch update process", "error", err)
 		return
 	}
-	log.Info("Agent self-update completed", "output", string(out))
+	// Release the child process so it doesn't become a zombie if the agent
+	// doesn't exit. The install script runs in its own process group and
+	// will continue independently of the agent's lifecycle.
+	if err := cmd.Process.Release(); err != nil {
+		log.Error("Failed to release update process", "error", err)
+		return
+	}
+	log.Info("Update process launched, agent will restart via systemd", "pid", cmd.Process.Pid)
 
-	// The install script will restart the agent service, so we don't need to do anything else.
-	// If we're still running after this point, the update may not have required a restart.
+	// Do NOT wait for the command to complete — the agent will be killed by the
+	// install script's systemctl stop, and we want the script to continue running.
 }
 
 // shellSafeArg wraps a string in single quotes for safe shell interpolation.
