@@ -117,7 +117,6 @@ export default function ImportRulesWizard({ peer, onClose, onSuccess }) {
   const [error, setError] = useState(null);
   const [fetchStatus, setFetchStatus] = useState("initiating");
   const [skippedExpanded, setSkippedExpanded] = useState(false);
-  const [editingPolicyName, setEditingPolicyName] = useState(null);
   const [applying, setApplying] = useState(false);
   const [expandedRule, setExpandedRule] = useState(null);
 
@@ -316,23 +315,6 @@ export default function ImportRulesWizard({ peer, onClose, onSuccess }) {
     }
   }, [rules, sessionId, showToast]);
 
-  // Update policy name
-  const updatePolicyName = useCallback(
-    async (ruleId, name) => {
-      try {
-        await updateImportRule(sessionId, ruleId, { policy_name: name });
-        setRules((prev) =>
-          prev.map((r) =>
-            r.id === ruleId ? { ...r, policy_name: name } : r,
-          ),
-        );
-      } catch {
-        showToast("Failed to update policy name", "error");
-      }
-    },
-  [sessionId, showToast],
-  );
-
   const toggleRuleExpand = (id) => setExpandedRule(expandedRule === id ? null : id);
 
   // Apply import
@@ -487,175 +469,137 @@ export default function ImportRulesWizard({ peer, onClose, onSuccess }) {
                     </div>
                   </div>
 
-                  {/* Rules Table */}
-                  {importableRules.length > 0 && (
-<div className="border border-gray-200 dark:border-gray-border rounded-none p-4">
-            <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3 flex items-center gap-2">
-              <Shield className="w-4 h-4" />
-              New Policies
-            </h3>
-            <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-<thead className="bg-gray-50 dark:bg-charcoal-darkest border-b border-gray-200 dark:border-gray-border">
-                                <tr>
-                                    <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
-                                        Approve
-                                    </th>
-                                    <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
-                                        Info
-                                    </th>
-                                    <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
-                                        Chain
-                                    </th>
-                                    <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
-                                        Source
-                                    </th>
-                                    <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
-                                        Direction
-                                    </th>
-                                    <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
-                                        Target
-                                    </th>
-                                    <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
-                                        Service
-                                    </th>
-                                    <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
-                                        Action
-                                    </th>
-                                    <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
-                                        Policy Name
-                                    </th>
-                                </tr>
-        </thead>
-                        <tbody className="divide-y divide-gray-100 dark:divide-gray-border">
+              {/* Rules Table */}
+              {importableRules.length > 0 && (
+                <div className="border border-gray-200 dark:border-gray-border rounded-none p-4">
+                  <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3 flex items-center gap-2">
+                    <Shield className="w-4 h-4" />
+                    New Policies
+                  </h3>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead className="bg-gray-50 dark:bg-charcoal-darkest border-b border-gray-200 dark:border-gray-border">
+                        <tr>
+                          <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+                            {""}
+                          </th>
+                          <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+                            Approve
+                          </th>
+                          <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+                            Chain
+                          </th>
+                          <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+                            Source
+                          </th>
+                          <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+                            Direction
+                          </th>
+                          <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+                            Target
+                          </th>
+                          <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+                            Service
+                          </th>
+                          <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+                            Action
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100 dark:divide-gray-border">
                         {importableRules.map((rule) => (
-        <Fragment key={rule.id}>
-          <tr
-            className={`hover:bg-gray-50 dark:hover:bg-charcoal-darkest ${
-              rule.status === "approved"
-                ? "bg-green-50/50 dark:bg-green-900/10"
-                : ""
-            }`}
-          >
-                            <td className="px-4 py-1">
-                              <input
-                                type="checkbox"
-                                checked={rule.status === "approved"}
-                                onChange={() => toggleRuleApproval(rule)}
-                                className="w-4 h-4 rounded-none"
-                              />
-                            </td>
-                            <td className="px-4 py-1 text-center w-10">
-                              <button
-                                onClick={() => toggleRuleExpand(rule.id)}
-                                className="p-0.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest"
-                              >
-                                {expandedRule === rule.id ? (
-                                  <ChevronUp className="w-4 h-4 text-gray-500" />
+                          <Fragment key={rule.id}>
+                            <tr
+                              className={`hover:bg-gray-50 dark:hover:bg-charcoal-darkest ${
+                                rule.status === "approved"
+                                  ? "bg-green-50/50 dark:bg-green-900/10"
+                                  : ""
+                              }`}
+                            >
+                              <td className="px-4 py-1 text-center w-10">
+                                <button
+                                  onClick={() => toggleRuleExpand(rule.id)}
+                                  className="p-0.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest"
+                                >
+                                  {expandedRule === rule.id ? (
+                                    <ChevronUp className="w-4 h-4 text-gray-500" />
+                                  ) : (
+                                    <ChevronDown className="w-4 h-4 text-gray-500" />
+                                  )}
+                                </button>
+                              </td>
+                              <td className="px-4 py-1">
+                                <input
+                                  type="checkbox"
+                                  checked={rule.status === "approved"}
+                                  onChange={() => toggleRuleApproval(rule)}
+                                  className="w-4 h-4 rounded-none"
+                                />
+                              </td>
+                              <td className="px-4 py-1">
+                                <span
+                                  className={`px-2 py-0.5 rounded-none text-xs font-medium ${
+                                    rule.chain === "DOCKER-USER"
+                                      ? "bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400"
+                                      : rule.chain === "INPUT"
+                                      ? "bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400"
+                                      : "bg-violet-100 dark:bg-violet-900/30 text-violet-700 dark:text-violet-400"
+                                  }`}
+                                >
+                                  {rule.chain}
+                                </span>
+                              </td>
+                              <td className="px-4 py-1 text-gray-700 dark:text-gray-300">
+                                {rule.source_name || "—"}
+                              </td>
+                              <td className="px-4 py-1">
+                                {rule.direction === "forward" ? (
+                                  <ArrowRight className="w-4 h-4 text-blue-500" />
+                                ) : rule.direction === "backward" ? (
+                                  <ArrowLeft className="w-4 h-4 text-purple-500" />
                                 ) : (
-                                  <ChevronDown className="w-4 h-4 text-gray-500" />
-                                )}
-                              </button>
-                            </td>
-                            <td className="px-4 py-1">
-                              <span
-                                className={`px-2 py-0.5 rounded-none text-xs font-medium ${
-                                  rule.chain === "DOCKER-USER"
-                                    ? "bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400"
-                                    : rule.chain === "INPUT"
-                                    ? "bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400"
-                                    : "bg-violet-100 dark:bg-violet-900/30 text-violet-700 dark:text-violet-400"
-                                }`}
-                              >
-                                {rule.chain}
-                              </span>
-                            </td>
-                                    <td className="px-4 py-1 text-gray-700 dark:text-gray-300">
-                                        {rule.source_name || "—"}
-                                    </td>
-                                    <td className="px-4 py-1">
-                                        {rule.direction === "forward" ? (
-                                            <ArrowRight className="w-4 h-4 text-blue-500" />
-                                        ) : rule.direction === "backward" ? (
-                                            <ArrowLeft className="w-4 h-4 text-purple-500" />
-                                        ) : (
-                                            <MoveHorizontal className="w-4 h-4 text-gray-400" />
-                                        )}
-                                    </td>
-                                    <td className="px-4 py-1 text-gray-700 dark:text-gray-300">
-                                        {rule.target_name || "—"}
-                                    </td>
-                                    <td className="px-4 py-1 text-gray-700 dark:text-gray-300">
-                                        {rule.service_name || "—"}
-                                    </td>
-                                    <td className="px-4 py-1">
-                                        <span
-                                            className={`px-2 py-0.5 rounded-none text-xs font-medium ${
-                                                rule.action === "ACCEPT"
-                                                    ? "bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400"
-                                                    : "bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400"
-                                            }`}
-                                        >
-                                            {rule.action}
-                                        </span>
-                                    </td>
-                                    <td className="px-4 py-1">
-                                        {editingPolicyName === rule.id ? (
-                                            <input
-                                                type="text"
-                                                defaultValue={rule.policy_name}
-                                                className="w-full px-1 py-0.5 text-xs border border-blue-400 rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-                                                autoFocus
-                                                onBlur={(e) => {
-                                                    updatePolicyName(
-                                                        rule.id,
-                                                        e.target.value,
-                                                    );
-                                                    setEditingPolicyName(null);
-                                                }}
-                                                onKeyDown={(e) => {
-                                                    if (e.key === "Enter") {
-                                                        updatePolicyName(
-                                                            rule.id,
-                                                            e.target.value,
-                                                        );
-                                                        setEditingPolicyName(null);
-                                                    }
-                                                }}
-                                            />
-                                        ) : (
-                                            <span
-                                                className="text-xs text-gray-700 dark:text-gray-300 cursor-pointer hover:text-blue-600 dark:hover:text-blue-400"
-                                                onClick={() =>
-                                                    setEditingPolicyName(rule.id)
-                                                }
-                                            >
-                                                {rule.policy_name || "—"}
-                                            </span>
-                                        )}
-                                    </td>
-                          </tr>
-                          {expandedRule === rule.id && (
-                            <tr className="bg-gray-50 dark:bg-charcoal-darkest">
-                              <td colSpan={9} className="px-4 py-3">
-                                <div className="font-mono text-xs text-gray-600 dark:text-gray-400 whitespace-pre-wrap break-all">
-                                  {rule.raw_rule}
-                                </div>
-                                {rule.description && (
-                                  <div className="mt-2 text-xs text-gray-500 dark:text-gray-400">
-                                    Comment: {rule.description}
-                                  </div>
+                                  <MoveHorizontal className="w-4 h-4 text-gray-400" />
                                 )}
                               </td>
+                              <td className="px-4 py-1 text-gray-700 dark:text-gray-300">
+                                {rule.target_name || "—"}
+                              </td>
+                              <td className="px-4 py-1 text-gray-700 dark:text-gray-300">
+                                {rule.service_name || "—"}
+                              </td>
+                              <td className="px-4 py-1">
+                                <span
+                                  className={`px-2 py-0.5 rounded-none text-xs font-medium ${
+                                    rule.action === "ACCEPT"
+                                      ? "bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400"
+                                      : "bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400"
+                                  }`}
+                                >
+                                  {rule.action}
+                                </span>
+                              </td>
                             </tr>
-                          )}
-        </Fragment>
-      ))}
-                        </tbody>
-            </table>
-            </div>
-            </div>
-            )}
+                            {expandedRule === rule.id && (
+                              <tr className="bg-gray-50 dark:bg-charcoal-darkest">
+                                <td colSpan={8} className="px-4 py-3">
+                                  <div className="font-mono text-xs text-gray-600 dark:text-gray-400 whitespace-pre-wrap break-all">
+                                    {rule.raw_rule}
+                                  </div>
+                                  {rule.description && (
+                                    <div className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                                      Comment: {rule.description}
+                                    </div>
+                                  )}
+                                </td>
+                              </tr>
+                            )}
+                          </Fragment>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
 
                   {importableRules.length === 0 && skippedCount === 0 && (
                     <p className="text-center text-gray-500 dark:text-gray-400 py-4">

@@ -15,6 +15,13 @@ import (
 	"runic/internal/iptparse"
 )
 
+const (
+	specialTargetAnyIP            int64 = 6 // __any_ip__
+	specialTargetLimitedBroadcast int64 = 2 // __limited_broadcast__
+	specialTargetAllPeers         int64 = 7 // __all_peers__
+	specialTargetAllHosts         int64 = 3 // __all_hosts__
+)
+
 // normalizeIP strips single-host CIDR notation (/32) from an IP address.
 // Other CIDR suffixes (e.g., /24, /16) are preserved as they represent subnets.
 func normalizeIP(ip string) string {
@@ -92,6 +99,44 @@ func resolveRules(ctx context.Context, database db.Querier, sessionID int64, pee
 		// Resolve service
 		serviceID, serviceStagingID := resolveService(ctx, database, sessionID, pr)
 
+		// Correct source mapping for system policy patterns
+		if sourceType == "special" && sourceID == specialTargetAnyIP {
+			if targetType == "special" && serviceID > 0 {
+				// Check if the service is a system service
+				var isSystemService bool
+				err := database.QueryRowContext(ctx, "SELECT is_system FROM services WHERE id = ?", serviceID).Scan(&isSystemService)
+				if err != nil && err != sql.ErrNoRows {
+					log.Warn("source correction: failed to check service system status", "service_id", serviceID, "error", err)
+				}
+
+				if err == nil && isSystemService {
+					// Get the special target name for the target
+					var targetName string
+					err := database.QueryRowContext(ctx, "SELECT name FROM special_targets WHERE id = ?", targetID).Scan(&targetName)
+					if err != nil && err != sql.ErrNoRows {
+						log.Warn("source correction: failed to look up special target name", "target_id", targetID, "error", err)
+					}
+
+					if err == nil {
+						switch targetName {
+						case "__all_hosts__", "__igmpv3__":
+							// IGMP rules: source should be __all_peers__
+							sourceType = "special"
+							sourceID = specialTargetAllPeers
+							sourceStagingID = 0
+							sourceIP = ""
+						case "__limited_broadcast__":
+							// Limited Broadcast rules: source should be __limited_broadcast__
+							sourceType = "special"
+							sourceID = specialTargetLimitedBroadcast
+							sourceStagingID = 0
+							sourceIP = ""
+						}
+					}
+				}
+			}
+		}
+
 		// Update the import_rule with resolved mappings
 		_, err := database.ExecContext(ctx,
 			"UPDATE import_rules SET source_type = ?, source_id = ?, source_staging_id = ?, target_type = ?, target_id = ?, target_staging_id = ?, service_id = ?, service_staging_id = ?, source_ip = ?, target_ip = ?, status = 'resolved' WHERE id = ?",
@@ -151,7 +196,7 @@ func resolveEndpoint(ctx context.Context, database db.Querier, sessionID int64, 
 
 	// 0.0.0.0, 0.0.0.0/0, or empty = any IP → special target
 	if ip == "" || ip == "0.0.0.0" || ip == "0.0.0.0/0" {
-		return "special", 6, 0, "" // __any_ip__ has id=6 in special_targets
+		return "special", specialTargetAnyIP, 0, "" // __any_ip__
 	}
 
 	// Look up existing peer by primary IP
@@ -166,6 +211,13 @@ func resolveEndpoint(ctx context.Context, database db.Querier, sessionID int64, 
 	err = database.QueryRowContext(ctx, "SELECT peer_id FROM peer_ips WHERE ip_address = ?", ip).Scan(&peerIDFromIPs)
 	if err == nil {
 		return "peer", peerIDFromIPs, 0, ip
+	}
+
+	// Check if IP matches a special target address (e.g., 224.0.0.1 = __all_hosts__, 255.255.255.255 = __limited_broadcast__)
+	var specialID int64
+	err = database.QueryRowContext(ctx, "SELECT id FROM special_targets WHERE address = ?", ip).Scan(&specialID)
+	if err == nil {
+		return "special", specialID, 0, ""
 	}
 
 	// No existing peer — create staging peer mapping
@@ -323,7 +375,18 @@ func resolveService(ctx context.Context, database db.Querier, sessionID int64, r
 		protocol = "tcp"
 	}
 	if port == "" {
-		return 0, 0 // no service needed
+		// For protocol-only rules (e.g., IGMP, Limited Broadcast), try matching system services
+		if protocol != "" {
+			var sysServiceID int64
+			err := database.QueryRowContext(ctx,
+				"SELECT id FROM services WHERE protocol = ? AND (ports = '' OR ports IS NULL) AND is_system = 1",
+				protocol,
+			).Scan(&sysServiceID)
+			if err == nil {
+				return sysServiceID, 0
+			}
+		}
+		return 0, 0
 	}
 
 	// Look up existing service by port+protocol
@@ -484,7 +547,7 @@ func resolveMulticastRule(ctx context.Context, database db.Querier, sessionID in
 
 	// Update the rule with multicast mapping
 	_, err = database.ExecContext(ctx,
-		"UPDATE import_rules SET source_type = 'special', source_id = 7, target_type = 'special', target_id = 3, service_id = ? WHERE id = ?",
+		fmt.Sprintf("UPDATE import_rules SET source_type = 'special', source_id = %d, target_type = 'special', target_id = %d, service_id = ? WHERE id = ?", specialTargetAllPeers, specialTargetAllHosts),
 		multicastServiceID, ruleID,
 	)
 	return err
