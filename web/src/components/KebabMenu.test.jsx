@@ -336,6 +336,28 @@ describe('KebabMenu', () => {
     })
   })
 
+  describe('layout', () => {
+    test('dropdown has minimum width of 200px', async () => {
+      const user = userEvent.setup()
+      render(<KebabMenu items={defaultItems} />)
+
+      await user.click(screen.getByTestId('kebab-menu-trigger'))
+
+      const dropdown = screen.getByTestId('kebab-menu-dropdown')
+      expect(dropdown.className).toContain('min-w-[200px]')
+    })
+
+    test('menu item labels do not wrap', async () => {
+      const user = userEvent.setup()
+      render(<KebabMenu items={defaultItems} />)
+
+      await user.click(screen.getByTestId('kebab-menu-trigger'))
+
+      const label = screen.getByText('Edit')
+      expect(label.className).toContain('whitespace-nowrap')
+    })
+  })
+
   describe('accessibility', () => {
     test('trigger has correct role', () => {
       render(<KebabMenu items={defaultItems} />)

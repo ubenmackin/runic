@@ -92,7 +92,7 @@ export default function KebabMenu({ items, className = '' }) {
           aria-orientation="vertical"
           className={`
             absolute right-0 z-50
-            min-w-[160px]
+            min-w-[200px]
             bg-white dark:bg-charcoal-dark
             border border-gray-200 dark:border-gray-border
             rounded-lg shadow-lg
@@ -140,7 +140,7 @@ export default function KebabMenu({ items, className = '' }) {
                     }`}
                   />
                 )}
-                <span>{item.label}</span>
+                <span className="whitespace-nowrap">{item.label}</span>
               </button>
             )
           })}
