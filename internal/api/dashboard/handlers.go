@@ -153,6 +153,7 @@ SELECT
 			if err := activityRows.Scan(&item.Timestamp, &item.SrcIP, &item.DstIP, &item.Protocol, &item.Action, &hostname); err != nil {
 				return err
 			}
+			item.Timestamp = common.FormatSQLiteDatetime(item.Timestamp)
 			if hostname.Valid {
 				item.Hostname = hostname.String
 			}
@@ -187,8 +188,9 @@ ORDER BY hostname`)
 				ph.AgentVersion = agentVersion.String
 			}
 			if lastHeartbeat.Valid {
-				ph.LastHeartbeat = lastHeartbeat.String
-				if t, err := time.Parse("2006-01-02 15:04:05", lastHeartbeat.String); err == nil {
+				formatted := common.FormatSQLiteDatetime(lastHeartbeat.String)
+				ph.LastHeartbeat = formatted
+				if t, err := time.Parse(time.RFC3339, formatted); err == nil {
 					ph.IsOnline = time.Since(t).Seconds() < float64(constants.OfflineThresholdSeconds)
 				}
 			}

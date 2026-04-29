@@ -93,7 +93,7 @@ func (h *Handler) ListPendingChanges(w http.ResponseWriter, r *http.Request) {
 				ChangeID:      c.ChangeID,
 				ChangeAction:  c.ChangeAction,
 				ChangeSummary: c.ChangeSummary,
-				CreatedAt:     c.CreatedAt,
+				CreatedAt:     common.FormatSQLiteDatetime(c.CreatedAt),
 			}
 			// Lookup entity name based on change_type
 			var entityName string
@@ -226,7 +226,7 @@ func (h *Handler) GetPeerPendingChanges(w http.ResponseWriter, r *http.Request) 
 			ChangeID:      c.ChangeID,
 			ChangeAction:  c.ChangeAction,
 			ChangeSummary: c.ChangeSummary,
-			CreatedAt:     c.CreatedAt,
+			CreatedAt:     common.FormatSQLiteDatetime(c.CreatedAt),
 		}
 		// Lookup entity name based on change_type
 		var entityName string

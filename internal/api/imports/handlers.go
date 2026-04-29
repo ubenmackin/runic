@@ -142,8 +142,8 @@ func (h *Handler) GetSession(w http.ResponseWriter, r *http.Request) {
 		TotalRulesFound: session.TotalRulesFound,
 		ImportableRules: session.ImportableRules,
 		SkippedRules:    session.SkippedRules,
-		CreatedAt:       session.CreatedAt,
-		UpdatedAt:       session.UpdatedAt,
+		CreatedAt:       common.FormatSQLiteDatetime(session.CreatedAt),
+		UpdatedAt:       common.FormatSQLiteDatetime(session.UpdatedAt),
 	}
 	common.RespondJSON(w, http.StatusOK, resp)
 }

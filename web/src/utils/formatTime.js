@@ -1,6 +1,12 @@
 export function formatRelativeTime(timestamp) {
   if (!timestamp) return 'Never'
-  const date = new Date(timestamp)
+  // Handle SQLite datetime format (YYYY-MM-DD HH:MM:SS) by treating as UTC
+  // SQLite's CURRENT_TIMESTAMP and datetime('now') produce UTC times without timezone info
+  let normalizedTimestamp = timestamp
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(timestamp)) {
+    normalizedTimestamp = timestamp.replace(' ', 'T') + 'Z'
+  }
+  const date = new Date(normalizedTimestamp)
   const now = new Date()
   const diffMs = now - date
   const diffSeconds = Math.floor(diffMs / 1000)

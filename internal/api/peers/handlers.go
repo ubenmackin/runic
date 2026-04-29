@@ -128,13 +128,13 @@ ORDER BY p.hostname ASC
 			p.AgentVersion = agentVersion.String
 		}
 		if lastHeartbeat.Valid {
-			p.LastHeartbeat = lastHeartbeat.String
+			p.LastHeartbeat = common.FormatSQLiteDatetime(lastHeartbeat.String)
 		}
 		if description.Valid {
 			p.Description = description.String
 		}
 		if hmacKeyLastRotatedAt.Valid {
-			p.HMACKeyLastRotatedAt = hmacKeyLastRotatedAt.String
+			p.HMACKeyLastRotatedAt = common.FormatSQLiteDatetime(hmacKeyLastRotatedAt.String)
 		}
 		p.IPs = []PeerIP{} // Initialize to empty slice instead of nil
 		peers = append(peers, p)

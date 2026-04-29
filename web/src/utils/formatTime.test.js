@@ -173,6 +173,39 @@ describe('formatRelativeTime', () => {
     })
   })
 
+  describe('SQLite datetime format handling', () => {
+    test('handles SQLite format string "5 minutes ago"', () => {
+      // SQLite format: 5 minutes before mockNow (2024-01-15T12:00:00Z)
+      expect(formatRelativeTime('2024-01-15 11:55:00')).toBe('5 minutes ago')
+    })
+
+    test('handles SQLite format string "1 hour ago"', () => {
+      // SQLite format: 1 hour before mockNow
+      expect(formatRelativeTime('2024-01-15 11:00:00')).toBe('1 hour ago')
+    })
+
+    test('handles SQLite format string "Just now"', () => {
+      // SQLite format: 30 seconds before mockNow
+      expect(formatRelativeTime('2024-01-15 11:59:30')).toBe('Just now')
+    })
+
+    test('handles SQLite format string for older dates', () => {
+      // SQLite format: 3 days before mockNow
+      expect(formatRelativeTime('2024-01-12 12:00:00')).toBe('3 days ago')
+    })
+
+    test('ISO 8601 strings with Z suffix still work (backward compatibility)', () => {
+      // Standard ISO 8601: 5 minutes before mockNow
+      const fiveMinutesAgo = new Date(mockNow.getTime() - 5 * 60 * 1000).toISOString()
+      expect(formatRelativeTime(fiveMinutesAgo)).toBe('5 minutes ago')
+    })
+
+    test('SQLite format with different hours/minutes', () => {
+      // SQLite format: 2 hours before mockNow
+      expect(formatRelativeTime('2024-01-15 10:00:00')).toBe('2 hours ago')
+    })
+  })
+
   describe('edge cases', () => {
     test('handles future dates correctly', () => {
       // Future dates will result in negative diff

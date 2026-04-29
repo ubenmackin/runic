@@ -76,6 +76,8 @@ func (h *Handler) ListPolicies(w http.ResponseWriter, r *http.Request) {
 		if targetIPStr != "" {
 			p.TargetIP = &targetIPStr
 		}
+		p.CreatedAt = common.FormatSQLiteDatetime(p.CreatedAt)
+		p.UpdatedAt = common.FormatSQLiteDatetime(p.UpdatedAt)
 		policiesData = append(policiesData, p)
 	}
 	policiesData = common.EnsureSlice(policiesData)
@@ -253,6 +255,8 @@ func (h *Handler) GetPolicy(w http.ResponseWriter, r *http.Request) {
 	if targetIPStr != "" {
 		p.TargetIP = &targetIPStr
 	}
+	p.CreatedAt = common.FormatSQLiteDatetime(p.CreatedAt)
+	p.UpdatedAt = common.FormatSQLiteDatetime(p.UpdatedAt)
 
 	common.RespondJSON(w, http.StatusOK, p)
 }
@@ -654,6 +658,8 @@ func (h *Handler) snapshotPolicy(ctx context.Context, action string, policyID in
 	if targetIPStr != "" {
 		p.TargetIP = &targetIPStr
 	}
+	p.CreatedAt = common.FormatSQLiteDatetime(p.CreatedAt)
+	p.UpdatedAt = common.FormatSQLiteDatetime(p.UpdatedAt)
 
 	bytes, err := json.Marshal(p)
 	if err != nil {
