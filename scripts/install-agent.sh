@@ -1,6 +1,13 @@
 #!/bin/bash
 set -e
 
+# Clean up temp files on exit (download-then-move pattern avoids writing to
+# the running binary, which fails with "Failure writing output to destination")
+TMP_BINARY="$(mktemp)"
+TMP_SERVICE="$(mktemp)"
+cleanup() { rm -f "$TMP_BINARY" "$TMP_SERVICE"; }
+trap cleanup EXIT
+
 # Detect OS type from /etc/os-release
 # Used throughout this script for distro-specific logic
 detect_os() {
@@ -63,32 +70,45 @@ fi
 
 BINARY_URL="${CONTROL_PLANE_URL}/downloads/runic-agent-${AGENT_ARCH}"
 
+# Download binary and service file to temp files FIRST, before stopping the
+# service. This avoids "Failure writing output to destination" errors caused
+# by writing to /usr/local/bin/runic-agent while the agent process has it open.
+# After verification, we stop the service and atomically mv the files into place.
+
 echo "Downloading runic-agent for ${AGENT_ARCH}..."
-curl -fsSL -o /usr/local/bin/runic-agent "$BINARY_URL"
-chmod +x /usr/local/bin/runic-agent
+curl -fsSL -o "$TMP_BINARY" "$BINARY_URL"
+chmod +x "$TMP_BINARY"
 
 # Verify download succeeded
-if [ ! -s /usr/local/bin/runic-agent ]; then
-echo "Error: Binary download failed or file is empty"
-exit 1
+if [ ! -s "$TMP_BINARY" ]; then
+	echo "Error: Binary download failed or file is empty"
+	exit 1
 fi
 
 # Download service file
 echo "Downloading runic-agent service file..."
-curl -fsSL -o /etc/systemd/system/runic-agent.service \
-"${CONTROL_PLANE_URL}/downloads/runic-agent.service"
+curl -fsSL -o "$TMP_SERVICE" \
+	"${CONTROL_PLANE_URL}/downloads/runic-agent.service"
 
 # Verify service file download
-if [ ! -s /etc/systemd/system/runic-agent.service ]; then
-echo "Error: Service file download failed or file is empty"
-exit 1
+if [ ! -s "$TMP_SERVICE" ]; then
+	echo "Error: Service file download failed or file is empty"
+	exit 1
 fi
 
-# Check if service is running and stop it for upgrade
+# Both downloads verified -- now safe to stop the running agent.
 if systemctl is-active --quiet runic-agent; then
-echo "Stopping existing runic-agent service..."
-systemctl stop runic-agent
+	echo "Stopping existing runic-agent service..."
+	systemctl stop runic-agent
 fi
+
+# Atomically move the verified downloads into place.
+mv "$TMP_BINARY" /usr/local/bin/runic-agent
+mv "$TMP_SERVICE" /etc/systemd/system/runic-agent.service
+
+# Temp files have been moved; prevent cleanup trap from removing them
+TMP_BINARY=""
+TMP_SERVICE=""
 
 # Create config directory if it doesn't exist
 mkdir -p /etc/runic-agent
