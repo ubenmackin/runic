@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 
 	"runic/internal/common"
@@ -32,7 +33,7 @@ func SendHeartbeat(ctx context.Context, client common.HTTPClient, controlPlaneUR
 	}
 	defer func() {
 		if cErr := resp.Body.Close(); cErr != nil {
-			fmt.Printf("Failed to close body: %v\n", cErr)
+			slog.Warn("failed to close body", "error", cErr)
 		}
 	}()
 

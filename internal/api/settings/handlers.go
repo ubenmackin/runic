@@ -4,6 +4,7 @@ package settings
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -38,7 +39,7 @@ func (h *Handler) GetLogSettings(w http.ResponseWriter, r *http.Request) {
 
 	var retentionDays int
 	err := h.DB.QueryRowContext(ctx, "SELECT value FROM system_config WHERE key = 'log_retention_days'").Scan(&retentionDays)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		retentionDays = 30 // default
 	} else if err != nil {
 		log.ErrorContext(ctx, "Failed to get log_retention_days", "error", err)
@@ -139,7 +140,7 @@ func (h *Handler) GetInstanceSettings(w http.ResponseWriter, r *http.Request) {
 
 	var instanceURL sql.NullString
 	err := h.DB.QueryRowContext(ctx, "SELECT value FROM system_config WHERE key = 'instance_url'").Scan(&instanceURL)
-	if err != nil && err != sql.ErrNoRows {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		common.RespondError(w, http.StatusInternalServerError, "failed to get instance settings")
 		return
 	}

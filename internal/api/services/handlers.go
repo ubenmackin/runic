@@ -10,6 +10,7 @@ import (
 	"github.com/gorilla/mux"
 
 	"runic/internal/api/common"
+	ic "runic/internal/common"
 	"runic/internal/common/log"
 	"runic/internal/db"
 	"runic/internal/engine"
@@ -116,7 +117,7 @@ func (h *Handler) ListServices(w http.ResponseWriter, r *http.Request) {
 		}
 		servicesData = append(servicesData, s)
 	}
-	servicesData = common.EnsureSlice(servicesData)
+	servicesData = ic.EnsureSlice(servicesData)
 	common.RespondJSON(w, http.StatusOK, servicesData)
 }
 

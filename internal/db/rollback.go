@@ -145,7 +145,7 @@ func RollbackEntitySnapshot(ctx context.Context, database DB, entityType string,
 	var snapshotData sql.NullString
 	err = tx.QueryRowContext(ctx, "SELECT id, action, snapshot_data FROM change_snapshots WHERE entity_type = ? AND entity_id = ?", entityType, entityID).Scan(&snapshotID, &action, &snapshotData)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("snapshot not found for %s %d", entityType, entityID)
 		}
 		return fmt.Errorf("query snapshot: %w", err)

@@ -11,6 +11,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"runic/internal/api/common"
+	ic "runic/internal/common"
 	"runic/internal/common/constants"
 	"runic/internal/common/log"
 	"runic/internal/db"
@@ -153,7 +154,7 @@ SELECT
 			if err := activityRows.Scan(&item.Timestamp, &item.SrcIP, &item.DstIP, &item.Protocol, &item.Action, &hostname); err != nil {
 				return err
 			}
-			item.Timestamp = common.FormatSQLiteDatetime(item.Timestamp)
+			item.Timestamp = ic.FormatSQLiteDatetime(item.Timestamp)
 			if hostname.Valid {
 				item.Hostname = hostname.String
 			}
@@ -188,7 +189,7 @@ ORDER BY hostname`)
 				ph.AgentVersion = agentVersion.String
 			}
 			if lastHeartbeat.Valid {
-				formatted := common.FormatSQLiteDatetime(lastHeartbeat.String)
+				formatted := ic.FormatSQLiteDatetime(lastHeartbeat.String)
 				ph.LastHeartbeat = formatted
 				if t, err := time.Parse(time.RFC3339, formatted); err == nil {
 					ph.IsOnline = time.Since(t).Seconds() < float64(constants.OfflineThresholdSeconds)

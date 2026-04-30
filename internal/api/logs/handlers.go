@@ -10,6 +10,7 @@ import (
 
 	"runic/internal/api/common"
 	"runic/internal/auth"
+	ic "runic/internal/common"
 	runiclog "runic/internal/common/log"
 	"runic/internal/db"
 	"runic/internal/models"
@@ -206,7 +207,7 @@ func (h *Handler) GetLogs(w http.ResponseWriter, r *http.Request) {
 		runiclog.ErrorContext(ctx, "Error iterating log rows", "error", err)
 	}
 
-	logsData = common.EnsureSlice(logsData)
+	logsData = ic.EnsureSlice(logsData)
 
 	countQuery := `SELECT COUNT(*) FROM firewall_logs ` + whereClause
 	countArgs := args[:len(args)-2]

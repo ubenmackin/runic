@@ -4,6 +4,7 @@ package alerts
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"runic/internal/alerts"
 	"runic/internal/api/common"
 	"runic/internal/auth"
+	ic "runic/internal/common"
 	"runic/internal/common/log"
 	"runic/internal/crypto"
 )
@@ -232,7 +234,7 @@ func (h *Handler) ListAlerts(w http.ResponseWriter, r *http.Request) {
 		log.ErrorContext(ctx, "Error iterating alert history rows", "error", err)
 	}
 
-	history = common.EnsureSlice(history)
+	history = ic.EnsureSlice(history)
 
 	common.RespondJSON(w, http.StatusOK, map[string]interface{}{
 		"alerts": history,
@@ -260,7 +262,7 @@ func (h *Handler) GetAlert(w http.ResponseWriter, r *http.Request) {
 	`, id).Scan(&alert.ID, &alert.RuleID, &alert.AlertType, &alert.PeerID, &alert.Severity,
 		&alert.Subject, &alert.Message, &alert.Metadata, &alert.Status, &alert.SentAt, &alert.ErrorMessage, &alert.CreatedAt)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		common.RespondError(w, http.StatusNotFound, "alert not found")
 		return
 	}
@@ -356,7 +358,7 @@ func (h *Handler) GetSMTPConfig(w http.ResponseWriter, r *http.Request) {
 	}{}
 
 	err := h.DB.QueryRowContext(ctx, "SELECT value FROM system_config WHERE key = 'smtp_host'").Scan(&config.Host)
-	if err != nil && err != sql.ErrNoRows {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		log.ErrorContext(ctx, "Failed to get smtp_host", "error", err)
 		common.RespondError(w, http.StatusInternalServerError, "failed to get SMTP config")
 		return
@@ -369,7 +371,7 @@ func (h *Handler) GetSMTPConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	err = h.DB.QueryRowContext(ctx, "SELECT value FROM system_config WHERE key = 'smtp_username'").Scan(&config.Username)
-	if err != nil && err != sql.ErrNoRows {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		log.ErrorContext(ctx, "Failed to get smtp_username", "error", err)
 	}
 
@@ -380,7 +382,7 @@ func (h *Handler) GetSMTPConfig(w http.ResponseWriter, r *http.Request) {
 	config.UseTLS, _ = alerts.GetBoolConfig(ctx, h.DB, "smtp_use_tls")
 
 	err = h.DB.QueryRowContext(ctx, "SELECT value FROM system_config WHERE key = 'smtp_from_address'").Scan(&config.FromAddress)
-	if err != nil && err != sql.ErrNoRows {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		log.ErrorContext(ctx, "Failed to get smtp_from_address", "error", err)
 	}
 
@@ -677,7 +679,7 @@ func (h *Handler) DeleteAlert(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := alerts.DeleteAlertHistory(ctx, h.DB, id); err != nil {
-		if err.Error() == "alert history not found" {
+		if errors.Is(err, alerts.ErrAlertHistoryNotFound) {
 			common.RespondError(w, http.StatusNotFound, "alert not found")
 			return
 		}

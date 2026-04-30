@@ -24,6 +24,7 @@ import (
 	"runic/internal/db"
 	"runic/internal/importer"
 	"runic/internal/models"
+	"runic/internal/store"
 )
 
 // Handler provides HTTP handlers for agent endpoints with dependency injection.
@@ -230,7 +231,7 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 	var existingToken sql.NullString
 	err := h.DB.QueryRowContext(ctx, "SELECT id, agent_token FROM peers WHERE hostname = ?", input.Hostname).Scan(&existingID, &existingToken)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		// New server — require valid registration token
 		if input.RegistrationToken == "" {
 			http.Error(w, `{"error": "registration token required"}`, http.StatusUnauthorized)
@@ -241,7 +242,7 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 		consumed, err := h.ConsumeRegistrationToken(input.RegistrationToken, input.Hostname)
 		if err != nil {
 			runiclog.Error("Failed to consume registration token", "error", err)
-			http.Error(w, `{"error": "internal server error"}`, http.StatusInternalServerError)
+			common.InternalError(w)
 			return
 		}
 		if !consumed {
@@ -377,7 +378,7 @@ func (h *Handler) GetBundle(w http.ResponseWriter, r *http.Request) {
 	var bundle models.RuleBundleRow
 	err := h.DB.QueryRowContext(r.Context(), `SELECT id, peer_id, version, version_number, rules_content, hmac, created_at FROM rule_bundles WHERE peer_id = ? ORDER BY created_at DESC LIMIT 1`, serverID).Scan(&bundle.ID, &bundle.PeerID, &bundle.Version, &bundle.VersionNumber, &bundle.RulesContent, &bundle.HMAC, &bundle.CreatedAt)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		http.Error(w, `{"error": "no bundle found"}`, http.StatusNotFound)
 		return
 	} else if err != nil {
@@ -620,13 +621,13 @@ func (h *Handler) AgentCheckRotation(w http.ResponseWriter, r *http.Request) {
 		serverID,
 	).Scan(&rotationToken)
 
-	if err == sql.ErrNoRows {
-		common.RespondJSON(w, http.StatusNotFound, map[string]string{"error": "peer not found"})
+	if errors.Is(err, sql.ErrNoRows) {
+		common.RespondError(w, http.StatusNotFound, "peer not found")
 		return
 	}
 	if err != nil {
 		runiclog.Error("Failed to check rotation token error", "error", err)
-		common.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": "database error"})
+		common.RespondError(w, http.StatusInternalServerError, "database error")
 		return
 	}
 
@@ -665,70 +666,48 @@ func (h *Handler) SubmitBackup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-
-	// Start a transaction for atomicity
-	tx, err := h.DB.BeginTx(ctx, nil)
-	if err != nil {
-		runiclog.Error("Failed to begin transaction", "error", err, "peer_id", serverID)
-		http.Error(w, `{"error": "failed to begin transaction"}`, http.StatusInternalServerError)
-		return
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			if rErr := tx.Rollback(); rErr != nil {
-				runiclog.Warn("Rollback failed", "error", rErr)
-			}
-		}
-	}()
-
-	// Check if there's already an active import session for this peer within the transaction
-	var existingID int64
-	var existingStatus string
-	err = tx.QueryRowContext(ctx, "SELECT id, status FROM import_sessions WHERE peer_id = ? AND status IN ('pending','parsed','reviewing')", serverID).Scan(&existingID, &existingStatus)
-
 	var sessionID int64
-	switch {
-	case err == nil:
-		// Active session exists
-		sessionID = existingID
-		if existingStatus == "pending" {
-			// Update raw_backup and raw_ipsets, keep status as 'pending'
-			_, err = tx.ExecContext(ctx, "UPDATE import_sessions SET raw_backup = ?, raw_ipsets = ?, updated_at = CURRENT_TIMESTAMP WHERE peer_id = ? AND status = 'pending'", input.IPTablesBackup, input.IPSetList, serverID)
-			if err != nil {
-				runiclog.Error("Failed to update import session with backup", "error", err, "peer_id", serverID)
-				http.Error(w, `{"error": "failed to update import session"}`, http.StatusInternalServerError)
-				return
-			}
-		}
-		// If session is in parsed/reviewing, just acknowledge — don't overwrite
-	case errors.Is(err, sql.ErrNoRows):
-		// No active session — create one with status 'pending'
-		result, err := tx.ExecContext(ctx, "INSERT INTO import_sessions (peer_id, status, raw_backup, raw_ipsets) VALUES (?, 'pending', ?, ?)", serverID, input.IPTablesBackup, input.IPSetList)
-		if err != nil {
-			runiclog.Error("Failed to create import session", "error", err, "peer_id", serverID)
-			http.Error(w, `{"error": "failed to create import session"}`, http.StatusInternalServerError)
-			return
-		}
-		sessionID, err = result.LastInsertId()
-		if err != nil {
-			runiclog.Error("Failed to get session ID", "error", err, "peer_id", serverID)
-			http.Error(w, `{"error": "failed to create import session"}`, http.StatusInternalServerError)
-			return
-		}
-	default:
-		runiclog.Error("Failed to check existing import session", "error", err, "peer_id", serverID)
-		http.Error(w, `{"error": "database error"}`, http.StatusInternalServerError)
-		return
-	}
 
-	// Commit the transaction
-	if err := tx.Commit(); err != nil {
-		runiclog.Error("Failed to commit transaction", "error", err, "peer_id", serverID)
-		http.Error(w, `{"error": "failed to commit transaction"}`, http.StatusInternalServerError)
+	err := store.RunInTx(ctx, h.DB, func(tx *sql.Tx) error {
+		var existingID int64
+		var existingStatus string
+		err := tx.QueryRowContext(ctx, "SELECT id, status FROM import_sessions WHERE peer_id = ? AND status IN ('pending','parsed','reviewing')", serverID).Scan(&existingID, &existingStatus)
+
+		switch {
+		case err == nil:
+			sessionID = existingID
+			if existingStatus == "pending" {
+				_, err = tx.ExecContext(ctx, "UPDATE import_sessions SET raw_backup = ?, raw_ipsets = ?, updated_at = CURRENT_TIMESTAMP WHERE peer_id = ? AND status = 'pending'", input.IPTablesBackup, input.IPSetList, serverID)
+				if err != nil {
+					return common.NewHTTPError(http.StatusInternalServerError, "failed to update import session", err)
+				}
+			}
+		case errors.Is(err, sql.ErrNoRows):
+			result, err := tx.ExecContext(ctx, "INSERT INTO import_sessions (peer_id, status, raw_backup, raw_ipsets) VALUES (?, 'pending', ?, ?)", serverID, input.IPTablesBackup, input.IPSetList)
+			if err != nil {
+				return common.NewHTTPError(http.StatusInternalServerError, "failed to create import session", err)
+			}
+			sessionID, err = result.LastInsertId()
+			if err != nil {
+				return common.NewHTTPError(http.StatusInternalServerError, "failed to get session ID", err)
+			}
+		default:
+			return common.NewHTTPError(http.StatusInternalServerError, "database error", err)
+		}
+		return nil
+	})
+
+	if err != nil {
+		var httpErr *common.HTTPError
+		if errors.As(err, &httpErr) {
+			runiclog.Error(httpErr.Message, "error", httpErr.Err, "peer_id", serverID)
+			common.RespondError(w, httpErr.StatusCode, httpErr.Message)
+		} else {
+			runiclog.Error("transaction failed", "error", err, "peer_id", serverID)
+			common.InternalError(w)
+		}
 		return
 	}
-	committed = true
 
 	// After the transaction commits, call ParseSession to parse the backup data,
 	// insert rules, run the resolver, and update status to 'parsed'.
@@ -755,7 +734,7 @@ func (h *Handler) AgentTestKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		common.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+		common.RespondError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
 
@@ -766,13 +745,13 @@ func (h *Handler) AgentTestKey(w http.ResponseWriter, r *http.Request) {
 		serverID,
 	).Scan(&hmacKey)
 
-	if err == sql.ErrNoRows {
-		common.RespondJSON(w, http.StatusNotFound, map[string]string{"error": "peer not found"})
+	if errors.Is(err, sql.ErrNoRows) {
+		common.RespondError(w, http.StatusNotFound, "peer not found")
 		return
 	}
 	if err != nil {
 		runiclog.Error("Failed to get HMAC key error", "error", err)
-		common.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": "database error"})
+		common.RespondError(w, http.StatusInternalServerError, "database error")
 		return
 	}
 
@@ -781,7 +760,7 @@ func (h *Handler) AgentTestKey(w http.ResponseWriter, r *http.Request) {
 	expected := hex.EncodeToString(mac.Sum(nil))
 
 	if input.Signature != expected {
-		common.RespondJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid signature"})
+		common.RespondError(w, http.StatusUnauthorized, "invalid signature")
 		return
 	}
 

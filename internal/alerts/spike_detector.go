@@ -4,6 +4,7 @@ package alerts
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -111,7 +112,7 @@ func (d *SpikeDetector) loadThreshold() {
 	`, AlertTypeBlockedSpike).Scan(&rule.ThresholdValue, &rule.ThresholdWindowMinutes, &rule.ThrottleMinutes)
 
 	if err != nil {
-		if err != sql.ErrNoRows {
+		if !errors.Is(err, sql.ErrNoRows) {
 			d.logger.Warn("failed to load spike threshold", "error", err)
 		}
 		return

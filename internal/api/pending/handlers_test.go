@@ -636,11 +636,8 @@ func TestHandlePushJobSSE_JobNotFound(t *testing.T) {
 
 	handler.HandlePushJobSSE(w, r)
 
-	// Note: The current handler code checks `err == sql.ErrNoRows` but GetPushJob wraps
-	// the error, so it returns InternalServerError instead of NotFound.
-	// This test documents the actual behavior.
-	if w.Code != http.StatusInternalServerError {
-		t.Errorf("expected status %d (actual behavior due to error wrapping), got %d", http.StatusInternalServerError, w.Code)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("expected status %d, got %d", http.StatusNotFound, w.Code)
 	}
 }
 

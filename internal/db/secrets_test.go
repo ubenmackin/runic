@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -42,7 +43,7 @@ func TestGetSecret(t *testing.T) {
 		_, err := GetSecret(ctx, db, "non_existent_key")
 
 		// Assert
-		if err != sql.ErrNoRows {
+		if !errors.Is(err, sql.ErrNoRows) {
 			t.Errorf("expected sql.ErrNoRows, got %v", err)
 		}
 	})
@@ -55,8 +56,8 @@ func TestGetSecret(t *testing.T) {
 		if err == nil {
 			t.Error("expected error for nil database")
 		}
-		if err != nil && err.Error() != "database not initialized" {
-			t.Errorf("expected 'database not initialized' error, got %v", err)
+		if err != nil && !errors.Is(err, ErrDatabaseNotInitialized) {
+			t.Errorf("expected ErrDatabaseNotInitialized, got %v", err)
 		}
 	})
 
@@ -158,8 +159,8 @@ func TestSetSecret(t *testing.T) {
 		if err == nil {
 			t.Error("expected error for nil database")
 		}
-		if err != nil && err.Error() != "database not initialized" {
-			t.Errorf("expected 'database not initialized' error, got %v", err)
+		if err != nil && !errors.Is(err, ErrDatabaseNotInitialized) {
+			t.Errorf("expected ErrDatabaseNotInitialized, got %v", err)
 		}
 	})
 

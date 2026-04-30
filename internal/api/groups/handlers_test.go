@@ -13,6 +13,7 @@ import (
 
 	"runic/internal/api/common"
 	"runic/internal/engine"
+	"runic/internal/store"
 	"runic/internal/testutil"
 )
 
@@ -52,19 +53,19 @@ func TestListGroups(t *testing.T) {
 	tests := []struct {
 		name           string
 		wantCode       int
-		validateResult func(*testing.T, []GroupWithCounts)
+		validateResult func(*testing.T, []store.GroupWithCounts)
 	}{
 		{
 			name:     "list all groups with counts",
 			wantCode: http.StatusOK,
-			validateResult: func(t *testing.T, groups []GroupWithCounts) {
+			validateResult: func(t *testing.T, groups []store.GroupWithCounts) {
 				if len(groups) < 2 {
 					t.Errorf("expected at least 2 groups, got %d", len(groups))
 					return
 				}
 
 				// Find alpha-group
-				var alphaGroup *GroupWithCounts
+				var alphaGroup *store.GroupWithCounts
 				for i := range groups {
 					if groups[i].Name == "alpha-group" {
 						alphaGroup = &groups[i]
@@ -104,7 +105,7 @@ func TestListGroups(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h := NewHandler(database, nil, nil)
+			h := NewHandler(database, nil, nil, store.NewGroupStore(database))
 			req := httptest.NewRequest("GET", "/api/v1/groups", nil)
 			w := httptest.NewRecorder()
 
@@ -115,7 +116,7 @@ func TestListGroups(t *testing.T) {
 			}
 
 			if tt.validateResult != nil && w.Code == http.StatusOK {
-				var groups []GroupWithCounts
+				var groups []store.GroupWithCounts
 				if err := json.NewDecoder(w.Body).Decode(&groups); err != nil {
 					t.Fatalf("failed to decode response: %v", err)
 				}
@@ -135,7 +136,7 @@ func TestListGroups_SystemGroup(t *testing.T) {
 	// Insert a regular group for comparison
 	database.Exec(`INSERT INTO groups (name, description) VALUES (?, ?)`, "regular-group", "A regular group")
 
-	h := NewHandler(database, nil, nil)
+	h := NewHandler(database, nil, nil, store.NewGroupStore(database))
 	req := httptest.NewRequest("GET", "/api/v1/groups", nil)
 	w := httptest.NewRecorder()
 
@@ -145,13 +146,13 @@ func TestListGroups_SystemGroup(t *testing.T) {
 		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, w.Code, w.Body.String())
 	}
 
-	var groups []GroupWithCounts
+	var groups []store.GroupWithCounts
 	if err := json.NewDecoder(w.Body).Decode(&groups); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
 	// Find the "any" group
-	var anyGroup *GroupWithCounts
+	var anyGroup *store.GroupWithCounts
 	for i := range groups {
 		if groups[i].Name == "any" {
 			anyGroup = &groups[i]
@@ -178,7 +179,7 @@ func TestListGroups_EmptyResult(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	h := NewHandler(database, nil, nil)
+	h := NewHandler(database, nil, nil, store.NewGroupStore(database))
 	req := httptest.NewRequest("GET", "/api/v1/groups", nil)
 	w := httptest.NewRecorder()
 
@@ -188,7 +189,7 @@ func TestListGroups_EmptyResult(t *testing.T) {
 		t.Errorf("expected status %d, got %d", http.StatusOK, w.Code)
 	}
 
-	var groups []GroupWithCounts
+	var groups []store.GroupWithCounts
 	if err := json.NewDecoder(w.Body).Decode(&groups); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
@@ -219,7 +220,7 @@ func TestDeleteGroup_SystemGroup(t *testing.T) {
 	// Mock gorilla/mux vars
 	req = muxVars(req, map[string]string{"id": "1"})
 
-	h := NewHandler(database, nil, nil)
+	h := NewHandler(database, nil, nil, store.NewGroupStore(database))
 	h.DeleteGroup(w, req)
 
 	if w.Code != http.StatusForbidden {
@@ -250,7 +251,7 @@ func TestDeleteGroup_UsedByPolicy(t *testing.T) {
 
 	req = muxVars(req, map[string]string{"id": "1"})
 
-	h := NewHandler(database, nil, nil)
+	h := NewHandler(database, nil, nil, store.NewGroupStore(database))
 	h.DeleteGroup(w, req)
 
 	if w.Code != http.StatusConflict {
@@ -351,7 +352,7 @@ func TestDeleteGroup_InUseByMultiplePolicies(t *testing.T) {
 	w := httptest.NewRecorder()
 	req = muxVars(req, map[string]string{"id": "1"})
 
-	h := NewHandler(database, nil, nil)
+	h := NewHandler(database, nil, nil, store.NewGroupStore(database))
 	h.DeleteGroup(w, req)
 
 	// Verify HTTP 409 Conflict
@@ -466,7 +467,7 @@ func TestDeleteGroup_NotInUse_Success(t *testing.T) {
 	w := httptest.NewRecorder()
 	req = muxVars(req, map[string]string{"id": "1"})
 
-	h := NewHandler(database, nil, nil)
+	h := NewHandler(database, nil, nil, store.NewGroupStore(database))
 	h.DeleteGroup(w, req)
 
 	// Should return 204 No Content
@@ -511,7 +512,7 @@ func TestDeleteGroup_Success(t *testing.T) {
 
 	req = muxVars(req, map[string]string{"id": "1"})
 
-	h := NewHandler(database, nil, nil)
+	h := NewHandler(database, nil, nil, store.NewGroupStore(database))
 	h.DeleteGroup(w, req)
 
 	if w.Code != http.StatusNoContent {
@@ -549,7 +550,7 @@ func TestDeleteGroup_NotFound(t *testing.T) {
 
 	req = muxVars(req, map[string]string{"id": "999"})
 
-	h := NewHandler(database, nil, nil)
+	h := NewHandler(database, nil, nil, store.NewGroupStore(database))
 	h.DeleteGroup(w, req)
 
 	if w.Code != http.StatusNotFound {
@@ -566,7 +567,7 @@ func TestDeleteGroup_InvalidID(t *testing.T) {
 
 	req = muxVars(req, map[string]string{"id": "invalid"})
 
-	h := NewHandler(database, nil, nil)
+	h := NewHandler(database, nil, nil, store.NewGroupStore(database))
 	h.DeleteGroup(w, req)
 
 	if w.Code != http.StatusBadRequest {
@@ -643,7 +644,7 @@ func TestAddGroupMember(t *testing.T) {
 			req = muxVars(req, map[string]string{"id": tt.groupID})
 
 			// Pass nil for compiler since async recompile doesn't affect test result
-			h := NewHandler(database, nil, nil)
+			h := NewHandler(database, nil, nil, store.NewGroupStore(database))
 			handler := http.HandlerFunc(h.AddGroupMember)
 			handler(w, req)
 
@@ -685,7 +686,7 @@ func TestAddGroupMember_Duplicate(t *testing.T) {
 
 	req = muxVars(req, map[string]string{"id": "1"})
 
-	h := NewHandler(database, nil, nil)
+	h := NewHandler(database, nil, nil, store.NewGroupStore(database))
 	handler := http.HandlerFunc(h.AddGroupMember)
 	handler(w, req)
 
@@ -769,7 +770,7 @@ func TestRemoveGroupMember(t *testing.T) {
 			// Note: route uses groupId and peerId params (not id and memberId)
 			req = muxVars(req, map[string]string{"groupId": tt.groupID, "peerId": tt.peerID})
 
-			h := NewHandler(database, nil, nil)
+			h := NewHandler(database, nil, nil, store.NewGroupStore(database))
 			handler := http.HandlerFunc(h.DeleteGroupMember)
 			handler(w, req)
 
@@ -818,7 +819,7 @@ func TestRemoveGroupMember_InvalidIDs(t *testing.T) {
 
 			req = muxVars(req, map[string]string{"groupId": tt.groupID, "peerId": tt.peerID})
 
-			h := NewHandler(database, nil, nil)
+			h := NewHandler(database, nil, nil, store.NewGroupStore(database))
 			handler := http.HandlerFunc(h.DeleteGroupMember)
 			handler(w, req)
 
@@ -861,14 +862,14 @@ func TestGetGroupMembers(t *testing.T) {
 
 	req = muxVars(req, map[string]string{"id": "1"})
 
-	h := NewHandler(database, nil, nil)
+	h := NewHandler(database, nil, nil, store.NewGroupStore(database))
 	h.ListGroupMembers(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, w.Code, w.Body.String())
 	}
 
-	var peers []PeerInGroup
+	var peers []store.PeerInGroup
 	if err := json.NewDecoder(w.Body).Decode(&peers); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
@@ -914,14 +915,14 @@ func TestGetGroupMembers_EmptyGroup(t *testing.T) {
 
 	req = muxVars(req, map[string]string{"id": "1"})
 
-	h := NewHandler(database, nil, nil)
+	h := NewHandler(database, nil, nil, store.NewGroupStore(database))
 	h.ListGroupMembers(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, w.Code, w.Body.String())
 	}
 
-	var peers []PeerInGroup
+	var peers []store.PeerInGroup
 	if err := json.NewDecoder(w.Body).Decode(&peers); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
@@ -943,7 +944,7 @@ func TestGetGroupMembers_InvalidGroupID(t *testing.T) {
 
 	req = muxVars(req, map[string]string{"id": "invalid"})
 
-	h := NewHandler(database, nil, nil)
+	h := NewHandler(database, nil, nil, store.NewGroupStore(database))
 	h.ListGroupMembers(w, req)
 
 	if w.Code != http.StatusBadRequest {
@@ -997,7 +998,7 @@ func TestCreateGroup(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h := NewHandler(database, nil, nil)
+			h := NewHandler(database, nil, nil, store.NewGroupStore(database))
 			req := httptest.NewRequest("POST", "/api/v1/groups", strings.NewReader(tt.body))
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
@@ -1067,7 +1068,7 @@ func TestGetGroup(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h := NewHandler(database, nil, nil)
+			h := NewHandler(database, nil, nil, store.NewGroupStore(database))
 			req := httptest.NewRequest("GET", "/api/v1/groups/"+tt.groupID, nil)
 			w := httptest.NewRecorder()
 
@@ -1134,7 +1135,7 @@ func TestUpdateGroup(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h := NewHandler(database, nil, nil)
+			h := NewHandler(database, nil, nil, store.NewGroupStore(database))
 			req := httptest.NewRequest("PUT", "/api/v1/groups/"+tt.groupID, strings.NewReader(tt.body))
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
@@ -1171,7 +1172,7 @@ func TestListGroups_DBError(t *testing.T) {
 	// Close the database to trigger a query error
 	_ = database.Close()
 
-	h := NewHandler(database, nil, nil)
+	h := NewHandler(database, nil, nil, store.NewGroupStore(database))
 	req := httptest.NewRequest("GET", "/api/v1/groups", nil)
 	w := httptest.NewRecorder()
 
@@ -1197,7 +1198,7 @@ func TestCreateGroup_DBError(t *testing.T) {
 	// Close the database to trigger an insert error
 	_ = database.Close()
 
-	h := NewHandler(database, nil, nil)
+	h := NewHandler(database, nil, nil, store.NewGroupStore(database))
 	req := httptest.NewRequest("POST", "/api/v1/groups", strings.NewReader(`{"name": "test"}`))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -1224,7 +1225,7 @@ func TestGetGroup_DBError(t *testing.T) {
 
 	req = muxVars(req, map[string]string{"id": "1"})
 
-	h := NewHandler(database, nil, nil)
+	h := NewHandler(database, nil, nil, store.NewGroupStore(database))
 	h.GetGroup(w, req)
 
 	// After DB close, query may return not found or error
@@ -1243,7 +1244,7 @@ func TestUpdateGroup_DBError(t *testing.T) {
 	// Close DB to trigger error on UpdateGroup
 	_ = database.Close()
 
-	h := NewHandler(database, nil, nil)
+	h := NewHandler(database, nil, nil, store.NewGroupStore(database))
 	req := httptest.NewRequest("PUT", "/api/v1/groups/1", strings.NewReader(`{"name": "updated"}`))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -1265,7 +1266,7 @@ func TestUpdateGroup_NoChanges(t *testing.T) {
 	// Create a group with known name/description
 	database.Exec(`INSERT INTO groups (name, description) VALUES (?, ?)`, "test-group", "test-desc")
 
-	h := NewHandler(database, nil, nil)
+	h := NewHandler(database, nil, nil, store.NewGroupStore(database))
 	req := httptest.NewRequest("PUT", "/api/v1/groups/1", strings.NewReader(`{"name": "test-group", "description": "test-desc"}`))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -1313,7 +1314,7 @@ func TestUpdateGroup_DescriptionOnly(t *testing.T) {
 	changeWorker.Start(ctx)
 	defer changeWorker.Stop()
 
-	h := NewHandler(database, compiler, changeWorker)
+	h := NewHandler(database, compiler, changeWorker, store.NewGroupStore(database))
 	req := httptest.NewRequest("PUT", "/api/v1/groups/1", strings.NewReader(`{"name": "test-group", "description": "new-desc"}`))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -1366,7 +1367,7 @@ func TestDeleteGroup_DBError(t *testing.T) {
 
 	req = muxVars(req, map[string]string{"id": "1"})
 
-	h := NewHandler(database, nil, nil)
+	h := NewHandler(database, nil, nil, store.NewGroupStore(database))
 	h.DeleteGroup(w, req)
 
 	// After DB close, query may return not found or error
@@ -1392,7 +1393,7 @@ func TestDeleteGroup_UsedAsTarget(t *testing.T) {
 
 	req = muxVars(req, map[string]string{"id": "1"})
 
-	h := NewHandler(database, nil, nil)
+	h := NewHandler(database, nil, nil, store.NewGroupStore(database))
 	h.DeleteGroup(w, req)
 
 	if w.Code != http.StatusConflict {
@@ -1451,7 +1452,7 @@ func TestListGroupMembers_DBError(t *testing.T) {
 
 	req = muxVars(req, map[string]string{"id": "1"})
 
-	h := NewHandler(database, nil, nil)
+	h := NewHandler(database, nil, nil, store.NewGroupStore(database))
 	h.ListGroupMembers(w, req)
 
 	if w.Code != http.StatusInternalServerError {
@@ -1475,7 +1476,7 @@ func TestAddGroupMember_DBError(t *testing.T) {
 
 	req = muxVars(req, map[string]string{"id": "1"})
 
-	h := NewHandler(database, nil, nil)
+	h := NewHandler(database, nil, nil, store.NewGroupStore(database))
 	handler := http.HandlerFunc(h.AddGroupMember)
 	handler(w, req)
 
@@ -1499,7 +1500,7 @@ func TestDeleteGroupMember_DBError(t *testing.T) {
 
 	req = muxVars(req, map[string]string{"groupId": "1", "peerId": "1"})
 
-	h := NewHandler(database, nil, nil)
+	h := NewHandler(database, nil, nil, store.NewGroupStore(database))
 	handler := http.HandlerFunc(h.DeleteGroupMember)
 	handler(w, req)
 
@@ -1534,7 +1535,7 @@ func TestCreateGroup_InvalidName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h := NewHandler(database, nil, nil)
+			h := NewHandler(database, nil, nil, store.NewGroupStore(database))
 			req := httptest.NewRequest("POST", "/api/v1/groups", strings.NewReader(tt.body))
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
@@ -1587,7 +1588,7 @@ func TestUpdateGroup_InvalidName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h := NewHandler(database, nil, nil)
+			h := NewHandler(database, nil, nil, store.NewGroupStore(database))
 			req := httptest.NewRequest("PUT", "/api/v1/groups/1", strings.NewReader(tt.body))
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
@@ -1620,7 +1621,7 @@ func TestUpdateGroup_EmptyName(t *testing.T) {
 	// Insert test data
 	database.Exec(`INSERT INTO groups (name, description) VALUES (?, ?)`, "test-group", "original")
 
-	h := NewHandler(database, nil, nil)
+	h := NewHandler(database, nil, nil, store.NewGroupStore(database))
 	req := httptest.NewRequest("PUT", "/api/v1/groups/1", strings.NewReader(`{"name": "", "description": "updated"}`))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()

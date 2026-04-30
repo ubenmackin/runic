@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 
 	"runic/internal/common"
@@ -961,7 +962,7 @@ func migrateSchema(ctx context.Context, database *sql.DB) error {
 			// Check if the secret exists
 			var secretValue string
 			err = database.QueryRowContext(ctx, "SELECT value FROM system_config WHERE key = ?", secretKey).Scan(&secretValue)
-			if err == sql.ErrNoRows {
+			if errors.Is(err, sql.ErrNoRows) {
 				// Secret doesn't exist, skip
 				continue
 			}

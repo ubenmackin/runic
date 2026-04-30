@@ -3,6 +3,7 @@ package keys
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -137,7 +138,7 @@ func TestDeleteKey_Success(t *testing.T) {
 
 	// Verify key was removed from system_config
 	err = testDB.QueryRow("SELECT value FROM system_config WHERE key = ?", "jwt_secret").Scan(&value)
-	if err != sql.ErrNoRows {
+	if !errors.Is(err, sql.ErrNoRows) {
 		t.Error("jwt_secret should have been removed from system_config")
 	}
 }

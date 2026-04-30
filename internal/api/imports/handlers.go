@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -14,6 +15,7 @@ import (
 
 	"runic/internal/api/common"
 	"runic/internal/api/events"
+	ic "runic/internal/common"
 	runiclog "runic/internal/common/log"
 	"runic/internal/importer"
 )
@@ -53,7 +55,7 @@ func (h *Handler) InitiateImport(w http.ResponseWriter, r *http.Request) {
 	peerIDStr := mux.Vars(r)["id"]
 	peerID, err := strconv.ParseInt(peerIDStr, 10, 64)
 	if err != nil {
-		common.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid peer ID"})
+		common.RespondError(w, http.StatusBadRequest, "invalid peer ID")
 		return
 	}
 
@@ -61,20 +63,20 @@ func (h *Handler) InitiateImport(w http.ResponseWriter, r *http.Request) {
 	var isManual bool
 	var hostname, bundleVersion string
 	err = h.DB.QueryRowContext(r.Context(), "SELECT is_manual, hostname, bundle_version FROM peers WHERE id = ?", peerID).Scan(&isManual, &hostname, &bundleVersion)
-	if err == sql.ErrNoRows {
-		common.RespondJSON(w, http.StatusNotFound, map[string]string{"error": "peer not found"})
+	if errors.Is(err, sql.ErrNoRows) {
+		common.RespondError(w, http.StatusNotFound, "peer not found")
 		return
 	}
 	if err != nil {
-		common.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": "database error"})
+		common.RespondError(w, http.StatusInternalServerError, "database error")
 		return
 	}
 	if isManual {
-		common.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "cannot import rules for manual peer"})
+		common.RespondError(w, http.StatusBadRequest, "cannot import rules for manual peer")
 		return
 	}
 	if bundleVersion != "" {
-		common.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "peer already has deployed rules — import not allowed"})
+		common.RespondError(w, http.StatusBadRequest, "peer already has deployed rules — import not allowed")
 		return
 	}
 
@@ -92,7 +94,7 @@ func (h *Handler) InitiateImport(w http.ResponseWriter, r *http.Request) {
 	session, err := importer.CreateSession(r.Context(), h.DB, peerID, "", "")
 	if err != nil {
 		runiclog.Error("Failed to create import session", "error", err, "peer_id", peerID)
-		common.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create import session"})
+		common.RespondError(w, http.StatusInternalServerError, "failed to create import session")
 		return
 	}
 
@@ -116,17 +118,17 @@ func (h *Handler) InitiateImport(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) GetSession(w http.ResponseWriter, r *http.Request) {
 	sessionID, err := h.getSessionID(r)
 	if err != nil {
-		common.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid session ID"})
+		common.RespondError(w, http.StatusBadRequest, "invalid session ID")
 		return
 	}
 
 	session, err := importer.GetSession(r.Context(), h.DB, sessionID)
-	if err == sql.ErrNoRows {
-		common.RespondJSON(w, http.StatusNotFound, map[string]string{"error": "session not found"})
+	if errors.Is(err, sql.ErrNoRows) {
+		common.RespondError(w, http.StatusNotFound, "session not found")
 		return
 	}
 	if err != nil {
-		common.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": "database error"})
+		common.RespondError(w, http.StatusInternalServerError, "database error")
 		return
 	}
 
@@ -142,8 +144,8 @@ func (h *Handler) GetSession(w http.ResponseWriter, r *http.Request) {
 		TotalRulesFound: session.TotalRulesFound,
 		ImportableRules: session.ImportableRules,
 		SkippedRules:    session.SkippedRules,
-		CreatedAt:       common.FormatSQLiteDatetime(session.CreatedAt),
-		UpdatedAt:       common.FormatSQLiteDatetime(session.UpdatedAt),
+		CreatedAt:       ic.FormatSQLiteDatetime(session.CreatedAt),
+		UpdatedAt:       ic.FormatSQLiteDatetime(session.UpdatedAt),
 	}
 	common.RespondJSON(w, http.StatusOK, resp)
 }
@@ -152,7 +154,7 @@ func (h *Handler) GetSession(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) GetRules(w http.ResponseWriter, r *http.Request) {
 	sessionID, err := h.getSessionID(r)
 	if err != nil {
-		common.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid session ID"})
+		common.RespondError(w, http.StatusBadRequest, "invalid session ID")
 		return
 	}
 
@@ -160,7 +162,7 @@ func (h *Handler) GetRules(w http.ResponseWriter, r *http.Request) {
 		"SELECT id, session_id, chain, rule_order, raw_rule, status, skip_reason, source_type, source_id, source_staging_id, target_type, target_id, target_staging_id, service_id, service_staging_id, action, priority, direction, target_scope, policy_name, enabled, description, source_ip, target_ip FROM import_rules WHERE session_id = ? ORDER BY CASE chain WHEN 'INPUT' THEN 1 WHEN 'OUTPUT' THEN 2 WHEN 'DOCKER-USER' THEN 3 END, rule_order",
 		sessionID)
 	if err != nil {
-		common.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": "database error"})
+		common.RespondError(w, http.StatusInternalServerError, "database error")
 		return
 	}
 	defer func() { _ = rows.Close() }()
@@ -281,7 +283,7 @@ func (h *Handler) GetRules(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) GetGroups(w http.ResponseWriter, r *http.Request) {
 	sessionID, err := h.getSessionID(r)
 	if err != nil {
-		common.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid session ID"})
+		common.RespondError(w, http.StatusBadRequest, "invalid session ID")
 		return
 	}
 
@@ -289,7 +291,7 @@ func (h *Handler) GetGroups(w http.ResponseWriter, r *http.Request) {
 		"SELECT id, session_id, group_name, ipset_name, status, existing_group_id, member_ips, member_peer_ids, member_staging_peer_ids FROM import_group_mappings WHERE session_id = ?",
 		sessionID)
 	if err != nil {
-		common.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": "database error"})
+		common.RespondError(w, http.StatusInternalServerError, "database error")
 		return
 	}
 	defer func() { _ = rows.Close() }()
@@ -343,7 +345,7 @@ func (h *Handler) GetGroups(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) GetPeers(w http.ResponseWriter, r *http.Request) {
 	sessionID, err := h.getSessionID(r)
 	if err != nil {
-		common.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid session ID"})
+		common.RespondError(w, http.StatusBadRequest, "invalid session ID")
 		return
 	}
 
@@ -351,7 +353,7 @@ func (h *Handler) GetPeers(w http.ResponseWriter, r *http.Request) {
 		"SELECT id, session_id, ip_address, hostname, status, existing_peer_id FROM import_peer_mappings WHERE session_id = ?",
 		sessionID)
 	if err != nil {
-		common.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": "database error"})
+		common.RespondError(w, http.StatusInternalServerError, "database error")
 		return
 	}
 	defer func() { _ = rows.Close() }()
@@ -401,7 +403,7 @@ func (h *Handler) GetPeers(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) GetServices(w http.ResponseWriter, r *http.Request) {
 	sessionID, err := h.getSessionID(r)
 	if err != nil {
-		common.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid session ID"})
+		common.RespondError(w, http.StatusBadRequest, "invalid session ID")
 		return
 	}
 
@@ -409,7 +411,7 @@ func (h *Handler) GetServices(w http.ResponseWriter, r *http.Request) {
 		"SELECT id, session_id, name, ports, protocol, status, existing_service_id FROM import_service_mappings WHERE session_id = ?",
 		sessionID)
 	if err != nil {
-		common.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": "database error"})
+		common.RespondError(w, http.StatusInternalServerError, "database error")
 		return
 	}
 	defer func() { _ = rows.Close() }()
@@ -459,7 +461,7 @@ func (h *Handler) GetServices(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) GetSkippedRules(w http.ResponseWriter, r *http.Request) {
 	sessionID, err := h.getSessionID(r)
 	if err != nil {
-		common.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid session ID"})
+		common.RespondError(w, http.StatusBadRequest, "invalid session ID")
 		return
 	}
 
@@ -467,7 +469,7 @@ func (h *Handler) GetSkippedRules(w http.ResponseWriter, r *http.Request) {
 		"SELECT id, chain, rule_order, raw_rule, skip_reason FROM import_rules WHERE session_id = ? AND status = 'skipped' ORDER BY CASE chain WHEN 'INPUT' THEN 1 WHEN 'OUTPUT' THEN 2 WHEN 'DOCKER-USER' THEN 3 END, rule_order",
 		sessionID)
 	if err != nil {
-		common.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": "database error"})
+		common.RespondError(w, http.StatusInternalServerError, "database error")
 		return
 	}
 	defer func() { _ = rows.Close() }()
@@ -500,12 +502,12 @@ func (h *Handler) parseUpdateIDs(w http.ResponseWriter, r *http.Request, entityI
 	var err error
 	sessionID, err = h.getSessionID(r)
 	if err != nil {
-		common.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid session ID"})
+		common.RespondError(w, http.StatusBadRequest, "invalid session ID")
 		return 0, 0, false
 	}
 	entityID, err = strconv.ParseInt(mux.Vars(r)[entityIDParam], 10, 64)
 	if err != nil {
-		common.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid ID"})
+		common.RespondError(w, http.StatusBadRequest, "invalid ID")
 		return 0, 0, false
 	}
 	return sessionID, entityID, true
@@ -514,14 +516,14 @@ func (h *Handler) parseUpdateIDs(w http.ResponseWriter, r *http.Request, entityI
 // executeUpdate builds and executes a dynamic UPDATE query.
 func (h *Handler) executeUpdate(w http.ResponseWriter, r *http.Request, tableName string, updates []string, args []interface{}, sessionID int64, entityID int64) error {
 	if len(updates) == 0 {
-		common.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "no fields to update"})
+		common.RespondError(w, http.StatusBadRequest, "no fields to update")
 		return fmt.Errorf("no fields to update")
 	}
 	args = append(args, sessionID, entityID)
 	query := fmt.Sprintf("UPDATE %s SET %s WHERE session_id = ? AND id = ?", tableName, strings.Join(updates, ", "))
 	_, err := h.DB.ExecContext(r.Context(), query, args...)
 	if err != nil {
-		common.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": "database error"})
+		common.RespondError(w, http.StatusInternalServerError, "database error")
 		return err
 	}
 	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -543,7 +545,7 @@ func (h *Handler) UpdateRule(w http.ResponseWriter, r *http.Request) {
 		TargetIP   *string `json:"target_ip"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		common.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+		common.RespondError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
 
@@ -552,7 +554,7 @@ func (h *Handler) UpdateRule(w http.ResponseWriter, r *http.Request) {
 	var args []interface{}
 	if input.Status != nil {
 		if !validRuleStatuses[*input.Status] {
-			common.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid status value"})
+			common.RespondError(w, http.StatusBadRequest, "invalid status value")
 			return
 		}
 		updates = append(updates, "status = ?")
@@ -596,7 +598,7 @@ func (h *Handler) UpdateGroup(w http.ResponseWriter, r *http.Request) {
 		ExistingGroupID *int64  `json:"existing_group_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		common.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+		common.RespondError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
 
@@ -605,7 +607,7 @@ func (h *Handler) UpdateGroup(w http.ResponseWriter, r *http.Request) {
 	var args []interface{}
 	if input.Status != nil {
 		if !validMappingStatuses[*input.Status] {
-			common.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid status value"})
+			common.RespondError(w, http.StatusBadRequest, "invalid status value")
 			return
 		}
 		updates = append(updates, "status = ?")
@@ -633,7 +635,7 @@ func (h *Handler) UpdatePeer(w http.ResponseWriter, r *http.Request) {
 		ExistingPeerID *int64  `json:"existing_peer_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		common.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+		common.RespondError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
 
@@ -642,7 +644,7 @@ func (h *Handler) UpdatePeer(w http.ResponseWriter, r *http.Request) {
 	var args []interface{}
 	if input.Status != nil {
 		if !validMappingStatuses[*input.Status] {
-			common.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid status value"})
+			common.RespondError(w, http.StatusBadRequest, "invalid status value")
 			return
 		}
 		updates = append(updates, "status = ?")
@@ -670,7 +672,7 @@ func (h *Handler) UpdateService(w http.ResponseWriter, r *http.Request) {
 		ExistingServiceID *int64  `json:"existing_service_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		common.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+		common.RespondError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
 
@@ -679,7 +681,7 @@ func (h *Handler) UpdateService(w http.ResponseWriter, r *http.Request) {
 	var args []interface{}
 	if input.Status != nil {
 		if !validMappingStatuses[*input.Status] {
-			common.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid status value"})
+			common.RespondError(w, http.StatusBadRequest, "invalid status value")
 			return
 		}
 		updates = append(updates, "status = ?")
@@ -699,13 +701,13 @@ func (h *Handler) UpdateService(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) ApplySession(w http.ResponseWriter, r *http.Request) {
 	sessionID, err := h.getSessionID(r)
 	if err != nil {
-		common.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid session ID"})
+		common.RespondError(w, http.StatusBadRequest, "invalid session ID")
 		return
 	}
 
 	// Update session status to reviewing first
 	if err := importer.UpdateSessionStatus(r.Context(), h.DB, sessionID, "reviewing"); err != nil {
-		common.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": "database error"})
+		common.RespondError(w, http.StatusInternalServerError, "database error")
 		return
 	}
 
@@ -713,14 +715,14 @@ func (h *Handler) ApplySession(w http.ResponseWriter, r *http.Request) {
 	var approvedCount int
 	_ = h.DB.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM import_rules WHERE session_id = ? AND status = 'approved'", sessionID).Scan(&approvedCount)
 	if approvedCount == 0 {
-		common.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "no approved rules to apply"})
+		common.RespondError(w, http.StatusBadRequest, "no approved rules to apply")
 		return
 	}
 
 	result, err := importer.ApplySession(r.Context(), h.DB, sessionID, h.ChangeWorker)
 	if err != nil {
 		runiclog.Error("Failed to apply import session", "error", err, "session_id", sessionID)
-		common.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to apply import session"})
+		common.RespondError(w, http.StatusInternalServerError, "failed to apply import session")
 		return
 	}
 
@@ -737,12 +739,12 @@ func (h *Handler) ApplySession(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) CancelSession(w http.ResponseWriter, r *http.Request) {
 	sessionID, err := h.getSessionID(r)
 	if err != nil {
-		common.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid session ID"})
+		common.RespondError(w, http.StatusBadRequest, "invalid session ID")
 		return
 	}
 
 	if err := importer.DeleteSession(r.Context(), h.DB, sessionID); err != nil {
-		common.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to cancel session"})
+		common.RespondError(w, http.StatusInternalServerError, "failed to cancel session")
 		return
 	}
 

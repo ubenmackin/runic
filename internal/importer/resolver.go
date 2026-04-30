@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"sort"
@@ -105,7 +106,7 @@ func resolveRules(ctx context.Context, database db.Querier, sessionID int64, pee
 				// Check if the service is a system service
 				var isSystemService bool
 				err := database.QueryRowContext(ctx, "SELECT is_system FROM services WHERE id = ?", serviceID).Scan(&isSystemService)
-				if err != nil && err != sql.ErrNoRows {
+				if err != nil && !errors.Is(err, sql.ErrNoRows) {
 					log.Warn("source correction: failed to check service system status", "service_id", serviceID, "error", err)
 				}
 
@@ -113,7 +114,7 @@ func resolveRules(ctx context.Context, database db.Querier, sessionID int64, pee
 					// Get the special target name for the target
 					var targetName string
 					err := database.QueryRowContext(ctx, "SELECT name FROM special_targets WHERE id = ?", targetID).Scan(&targetName)
-					if err != nil && err != sql.ErrNoRows {
+					if err != nil && !errors.Is(err, sql.ErrNoRows) {
 						log.Warn("source correction: failed to look up special target name", "target_id", targetID, "error", err)
 					}
 

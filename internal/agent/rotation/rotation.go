@@ -199,7 +199,7 @@ func (m *Manager) retrieveNewKey(ctx context.Context, token string) (string, err
 	}
 	defer func() {
 		if cErr := resp.Body.Close(); cErr != nil {
-			fmt.Printf("close err: %v\n", cErr)
+			log.Warn("close body failed", "error", cErr)
 		}
 	}()
 
@@ -239,7 +239,7 @@ func (m *Manager) testNewKey(ctx context.Context, key string) error {
 	}
 	defer func() {
 		if cErr := resp.Body.Close(); cErr != nil {
-			fmt.Printf("close err: %v\n", cErr)
+			log.Warn("close body failed", "error", cErr)
 		}
 	}()
 

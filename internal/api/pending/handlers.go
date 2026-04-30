@@ -14,6 +14,7 @@ import (
 	"runic/internal/api/common"
 	"runic/internal/api/events"
 	"runic/internal/auth"
+	ic "runic/internal/common"
 	"runic/internal/common/log"
 	"runic/internal/db"
 	"runic/internal/engine"
@@ -93,7 +94,7 @@ func (h *Handler) ListPendingChanges(w http.ResponseWriter, r *http.Request) {
 				ChangeID:      c.ChangeID,
 				ChangeAction:  c.ChangeAction,
 				ChangeSummary: c.ChangeSummary,
-				CreatedAt:     common.FormatSQLiteDatetime(c.CreatedAt),
+				CreatedAt:     ic.FormatSQLiteDatetime(c.CreatedAt),
 			}
 			// Lookup entity name based on change_type
 			var entityName string
@@ -117,7 +118,7 @@ func (h *Handler) ListPendingChanges(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	common.RespondJSON(w, http.StatusOK, common.EnsureSlice(groups))
+	common.RespondJSON(w, http.StatusOK, ic.EnsureSlice(groups))
 }
 
 // RollbackRequest represents the request body for rollback operations.
@@ -157,10 +158,10 @@ func (h *Handler) RollbackPendingChanges(w http.ResponseWriter, r *http.Request)
 	if req.EntityType != "" && req.EntityID != 0 {
 		err := db.RollbackEntitySnapshot(ctx, h.DBBeginner, req.EntityType, req.EntityID)
 		if err != nil {
-			if errors.Is(err, db.ErrConstraintViolation) {
-				common.RespondJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
-				return
-			}
+		if errors.Is(err, db.ErrConstraintViolation) {
+			common.RespondError(w, http.StatusConflict, "operation conflict")
+			return
+		}
 			log.ErrorContext(ctx, "failed to rollback entity", "entity_type", req.EntityType, "entity_id", req.EntityID, "error", err)
 			common.InternalError(w)
 			return
@@ -201,7 +202,7 @@ func (h *Handler) GetPeerPendingChanges(w http.ResponseWriter, r *http.Request) 
 
 	var hostname, ipAddress string
 	err = database.QueryRowContext(ctx, "SELECT hostname, ip_address FROM peers WHERE id = ?", peerID).Scan(&hostname, &ipAddress)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		common.RespondError(w, http.StatusNotFound, "peer not found")
 		return
 	}
@@ -226,7 +227,7 @@ func (h *Handler) GetPeerPendingChanges(w http.ResponseWriter, r *http.Request) 
 			ChangeID:      c.ChangeID,
 			ChangeAction:  c.ChangeAction,
 			ChangeSummary: c.ChangeSummary,
-			CreatedAt:     common.FormatSQLiteDatetime(c.CreatedAt),
+			CreatedAt:     ic.FormatSQLiteDatetime(c.CreatedAt),
 		}
 		// Lookup entity name based on change_type
 		var entityName string
@@ -245,7 +246,7 @@ func (h *Handler) GetPeerPendingChanges(w http.ResponseWriter, r *http.Request) 
 		"peer_id":    peerID,
 		"hostname":   hostname,
 		"ip_address": ipAddress,
-		"changes":    common.EnsureSlice(details),
+		"changes":    ic.EnsureSlice(details),
 	})
 }
 
@@ -262,7 +263,7 @@ func (h *Handler) PreviewPeerPendingBundle(w http.ResponseWriter, r *http.Reques
 
 	var hostname string
 	err = database.QueryRowContext(ctx, "SELECT hostname FROM peers WHERE id = ?", peerID).Scan(&hostname)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		common.RespondError(w, http.StatusNotFound, "peer not found")
 		return
 	}
@@ -290,7 +291,7 @@ func (h *Handler) PreviewPeerPendingBundle(w http.ResponseWriter, r *http.Reques
 		WHERE peer_id = ?
 		ORDER BY id DESC LIMIT 1
 	`, peerID).Scan(&currentContent, &currentVersion, &currentVersionNumber)
-	if err != nil && err != sql.ErrNoRows {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		log.WarnContext(ctx, "failed to get current bundle for diff", "error", err)
 	}
 
@@ -338,7 +339,7 @@ func (h *Handler) ApplyPeerPendingBundle(w http.ResponseWriter, r *http.Request)
 
 	var hostname string
 	err = database.QueryRowContext(ctx, "SELECT hostname FROM peers WHERE id = ?", peerID).Scan(&hostname)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		common.RespondError(w, http.StatusNotFound, "peer not found")
 		return
 	}
@@ -482,7 +483,7 @@ func (h *Handler) ApplyEntityPendingChanges(w http.ResponseWriter, r *http.Reque
 		"SELECT 1 FROM pending_changes WHERE peer_id = ? AND change_type = ? AND change_id = ?",
 		peerID, req.EntityType, req.EntityID,
 	).Scan(&exists)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		common.RespondError(w, http.StatusNotFound, "pending change not found for this peer and entity")
 		return
 	}
@@ -693,7 +694,7 @@ func (h *Handler) PushCurrentRules(w http.ResponseWriter, r *http.Request) {
 	err = database.QueryRowContext(ctx, `
 		SELECT hostname, agent_version, is_manual FROM peers WHERE id = ?
 	`, peerID).Scan(&hostname, &agentVersion, &isManual)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		common.RespondError(w, http.StatusNotFound, "peer not found")
 		return
 	}
@@ -752,7 +753,7 @@ func (h *Handler) HandlePushJobSSE(w http.ResponseWriter, r *http.Request) {
 	}
 
 	_, err := db.GetPushJob(r.Context(), h.DB, jobID)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		common.RespondError(w, http.StatusNotFound, "job not found")
 		return
 	}

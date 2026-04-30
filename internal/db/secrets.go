@@ -5,15 +5,19 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 )
 
+// ErrDatabaseNotInitialized is returned when a database operation is attempted with a nil database.
+var ErrDatabaseNotInitialized = errors.New("database not initialized")
+
 // GetSecret retrieves a secret from the system_config table.
 func GetSecret(ctx context.Context, database Querier, key string) (string, error) {
 	if database == nil {
-		return "", fmt.Errorf("database not initialized")
+		return "", ErrDatabaseNotInitialized
 	}
 	var value string
 	err := database.QueryRowContext(ctx, "SELECT value FROM system_config WHERE key = ?", key).Scan(&value)
@@ -26,7 +30,7 @@ func GetSecret(ctx context.Context, database Querier, key string) (string, error
 // SetSecret stores or updates a secret in the system_config table.
 func SetSecret(ctx context.Context, database Querier, key, value string) error {
 	if database == nil {
-		return fmt.Errorf("database not initialized")
+		return ErrDatabaseNotInitialized
 	}
 	_, err := database.ExecContext(ctx,
 		`INSERT INTO system_config (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)

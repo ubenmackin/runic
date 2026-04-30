@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -86,9 +87,8 @@ func TestCheckAndRecordFailure_LockedOut(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for locked account, got nil")
 	}
-	expected := "account locked, try again later"
-	if err.Error() != expected {
-		t.Errorf("expected error %q, got %q", expected, err.Error())
+	if !errors.Is(err, ErrAccountLocked) {
+		t.Errorf("expected ErrAccountLocked, got %v", err)
 	}
 
 	// Verify failedAttempts stays at 5 (no increment while locked)

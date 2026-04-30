@@ -11,6 +11,7 @@ import (
 
 	"runic/internal/api/common"
 	"runic/internal/engine"
+	"runic/internal/store"
 	"runic/internal/testutil"
 )
 
@@ -22,12 +23,12 @@ func setupHandlerWithCompiler(db *sql.DB) *Handler {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
 	changeWorker.Start(ctx)
-	return NewHandler(db, compiler, changeWorker)
+	return NewHandler(db, compiler, changeWorker, store.NewPolicyStore(db))
 }
 
 // Helper to set up handler for read-only operations
 func setupHandler(db *sql.DB) *Handler {
-	return NewHandler(db, nil, nil)
+	return NewHandler(db, nil, nil, store.NewPolicyStore(db))
 }
 
 // Helper to create mux request with vars

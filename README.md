@@ -87,10 +87,15 @@ Check `control_plane_url` in `/etc/runic-agent/config.json`.
 
 **Rules not applying**
 
-Trigger a compile manually:
+Push rules to a specific peer or all peers:
 ```bash
+# Push to all peers
 curl -X POST -H "Authorization: Bearer $TOKEN" \
-  https://runic-server-host:60443/api/v1/servers/<id>/compile
+https://runic-server-host:60443/api/v1/pending-changes/push-all
+
+# Push to a specific peer
+curl -X POST -H "Authorization: Bearer $TOKEN" \
+https://runic-server-host:60443/api/v1/pending-changes/push/<peerId>
 ```
 
 **SQLite locked**
@@ -100,6 +105,10 @@ Stop the server, remove any `runic.db-*` lock files, start again.
 ## Contributing
 
 PRs are fine for small stuff. For bigger changes (new backends, major features), open an issue first.
+
+## API Documentation
+
+The full OpenAPI spec is available at [`docs/api/openapi.yaml`](docs/api/openapi.yaml).
 
 ## License
 

@@ -58,6 +58,15 @@ func NewTestAPIServer(t *testing.T) (*httptest.Server, func()) {
 	database.SetMaxOpenConns(25)
 	database.SetMaxIdleConns(5)
 
+	// Enable WAL mode and busy timeout to match production configuration
+	// and prevent "database is locked" errors in concurrent tests.
+	if _, err := database.Exec("PRAGMA journal_mode=WAL"); err != nil {
+		t.Log(err)
+	}
+	if _, err := database.Exec("PRAGMA busy_timeout=5000"); err != nil {
+		t.Log(err)
+	}
+
 	// Execute schema
 	if _, err := database.Exec(db.Schema()); err != nil {
 		if err := database.Close(); err != nil {

@@ -2,7 +2,7 @@ package auth
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"sync"
 	"time"
 
@@ -21,8 +21,11 @@ const (
 	lockoutDuration   = 15 * time.Minute
 )
 
+// ErrAccountLocked is returned when a login is attempted on a locked account.
+var ErrAccountLocked = errors.New("account locked, try again later")
+
 var (
-	rateLimitStore  map[string]*rateLimitEntry
+	rateLimitStore map[string]*rateLimitEntry
 	rateLimitMutex  sync.Mutex
 	stopCleanup     chan struct{}
 	stopCleanupOnce sync.Once
@@ -68,7 +71,7 @@ func CheckAndRecordFailure(username string, remoteAddr string) error {
 	}
 
 	if entry.lockedUntil.After(time.Now()) {
-		return fmt.Errorf("account locked, try again later")
+		return ErrAccountLocked
 	}
 
 	entry.failedAttempts++

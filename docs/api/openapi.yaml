@@ -47,11 +47,27 @@ tags:
   - name: Policies
     description: Policy management endpoints
   - name: Auth
-    description: Authentication endpoints
+    description: Authentication and setup endpoints
   - name: Dashboard
-    description: Dashboard and statistics endpoints
+    description: Dashboard, statistics, and event streaming endpoints
+  - name: Logs
+    description: Firewall log endpoints
   - name: Pending Changes
-    description: Pending change approval endpoints
+    description: Pending change approval and rule push endpoints
+  - name: Users
+    description: User management endpoints (admin only)
+  - name: Setup Keys
+    description: Setup key management endpoints (admin only)
+  - name: Registration Tokens
+    description: Agent registration token endpoints (admin only)
+  - name: Settings
+    description: System settings endpoints (admin only)
+  - name: Alerts
+    description: Alert management and notification endpoints
+  - name: Imports
+    description: Rule import session endpoints (editor only)
+  - name: Agent
+    description: Agent-facing endpoints for bundle pull, heartbeat, and logs
 
 paths:
   # ==================== PEERS ====================
@@ -306,17 +322,17 @@ paths:
   /peers/{id}/rotate-key:
     post:
       tags:
-        - Peers
+      - Peers
       summary: Rotate peer key
       description: Rotates the HMAC key for a peer.
       operationId: rotatePeerKey
       parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: integer
-            format: int64
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
       responses:
         '200':
           description: Key rotated successfully
@@ -337,7 +353,222 @@ paths:
         '500':
           $ref: '#/components/responses/InternalServerError'
       security:
-        - BearerAuth: []
+      - BearerAuth: []
+
+  /peers/{id}/ips:
+    get:
+      tags:
+      - Peers
+      summary: List peer IP addresses
+      description: Returns all IP addresses associated with a peer.
+      operationId: listPeerIPs
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PeerIP'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security:
+      - BearerAuth: []
+    post:
+      tags:
+      - Peers
+      summary: Add IP address to peer
+      description: Adds an additional IP address to a peer.
+      operationId: addPeerIP
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddPeerIPRequest'
+      responses:
+        '201':
+          description: IP address added successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: integer
+                    format: int64
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security:
+      - BearerAuth: []
+
+  /peers/{id}/ips/{ip_id}:
+    delete:
+      tags:
+      - Peers
+      summary: Delete IP address from peer
+      description: Removes an IP address from a peer.
+      operationId: deletePeerIP
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+      - name: ip_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+      responses:
+        '200':
+          description: IP address deleted successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "IP address deleted"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security:
+      - BearerAuth: []
+
+  /peers/by-ip:
+    get:
+      tags:
+      - Peers
+      summary: Get peer by IP address
+      description: Looks up a peer by their IP address.
+      operationId: getPeerByIP
+      parameters:
+      - name: ip
+        in: query
+        required: true
+        schema:
+          type: string
+          format: ipv4
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Peer'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security:
+      - BearerAuth: []
+
+  /peers/by-hostname:
+    get:
+      tags:
+      - Peers
+      summary: Get peer by hostname
+      description: Looks up a peer by their hostname.
+      operationId: getPeerByHostname
+      parameters:
+      - name: hostname
+        in: query
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Peer'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security:
+      - BearerAuth: []
+
+  /peers/{id}/update-agent:
+    post:
+      tags:
+      - Peers
+      summary: Trigger agent update
+      description: Triggers an agent update for a specific peer. Requires editor role.
+      operationId: updatePeerAgent
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+      responses:
+        '200':
+          description: Update triggered
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "update triggered"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security:
+      - BearerAuth: []
 
   # ==================== GROUPS ====================
   /groups:
@@ -680,6 +911,46 @@ paths:
       security:
         - BearerAuth: []
 
+  /services/by-port:
+    get:
+      tags:
+      - Services
+      summary: Get service by port
+      description: |
+        Returns the first user service matching a given port and optional protocol.
+        When port is "0" or empty and protocol is provided, performs a protocol-only lookup
+        that includes system services (useful for ICMP/IGMP which have no ports).
+      operationId: getServiceByPort
+      parameters:
+      - name: port
+        in: query
+        schema:
+          type: string
+          description: Port number to look up
+      - name: protocol
+        in: query
+        schema:
+          type: string
+          enum: [tcp, udp, both, icmp, igmp]
+          description: Protocol filter
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Service'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security:
+      - BearerAuth: []
+
   /services/{id}:
     get:
       tags:
@@ -842,6 +1113,68 @@ paths:
       security:
         - BearerAuth: []
 
+  /policies/preview:
+    post:
+      tags:
+      - Policies
+      summary: Preview policy compilation
+      description: |
+        Previews the compiled iptables rules for a policy without saving it.
+        Useful for validating policy changes before applying them.
+      operationId: previewPolicy
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePolicyRequest'
+      responses:
+        '200':
+          description: Preview result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  rules:
+                    type: array
+                    items:
+                      type: string
+                    description: Compiled iptables rule lines
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security:
+      - BearerAuth: []
+
+  /policies/special-targets:
+    get:
+      tags:
+      - Policies
+      summary: List special targets
+      description: |
+        Returns the list of available special targets (e.g., subnet broadcast,
+        limited broadcast, all hosts IGMP, mDNS, loopback, any IP, all peers).
+      operationId: listSpecialTargets
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SpecialTarget'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security:
+      - BearerAuth: []
+
   /policies/{id}:
     get:
       tags:
@@ -912,10 +1245,50 @@ paths:
         '500':
           $ref: '#/components/responses/InternalServerError'
       security:
-        - BearerAuth: []
+      - BearerAuth: []
+    patch:
+      tags:
+      - Policies
+      summary: Partially update policy
+      description: Partially updates an existing policy. Only specified fields are modified.
+      operationId: patchPolicy
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdatePolicyRequest'
+      responses:
+        '200':
+          description: Policy patched successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "policy updated"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security:
+      - BearerAuth: []
     delete:
       tags:
-        - Policies
+      - Policies
       summary: Delete policy
       description: Deletes a policy.
       operationId: deletePolicy
@@ -948,36 +1321,61 @@ paths:
       security:
         - BearerAuth: []
 
-  /policies/push-all:
-    post:
+  # ==================== AUTH ====================
+  /setup:
+    get:
       tags:
-        - Policies
-      summary: Push all rules to all peers
+      - Auth
+      summary: Get setup status
       description: |
-        Compiles and pushes rules to all connected peers.
-        Returns a job ID that can be used to track progress via SSE.
-      operationId: pushAllRules
+        Returns whether initial setup has been completed.
+        This endpoint does not require authentication.
+      operationId: getSetupStatus
       responses:
-        '202':
-          description: Job accepted
+        '200':
+          description: Successful response
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  job_id:
-                    type: string
-                    format: uuid
-                    description: The ID of the push job
-                    example: "550e8400-e29b-41d4-a716-446655440000"
-        '401':
-          $ref: '#/components/responses/Unauthorized'
+                  is_setup:
+                    type: boolean
+                    example: false
         '500':
           $ref: '#/components/responses/InternalServerError'
-      security:
-        - BearerAuth: []
+    post:
+      tags:
+      - Auth
+      summary: Complete initial setup
+      description: |
+        Completes the initial setup by creating the admin user and JWT secret.
+        This endpoint does not require authentication and can only be called once.
+      operationId: completeSetup
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetupRequest'
+      responses:
+        '200':
+          description: Setup completed successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "setup complete"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
 
-  # ==================== AUTH ====================
   /auth/login:
     post:
       tags:
@@ -1035,6 +1433,57 @@ paths:
         '500':
           $ref: '#/components/responses/InternalServerError'
 
+  /auth/refresh:
+    post:
+      tags:
+      - Auth
+      summary: Refresh access token
+      description: |
+        Refreshes the access token using a valid refresh token.
+        The refresh token is read from cookies.
+      operationId: refreshToken
+      responses:
+        '200':
+          description: Token refreshed successfully
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+                example: "runic_access_token=...; HttpOnly; Path=/"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "token refreshed"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /auth/me:
+    get:
+      tags:
+      - Auth
+      summary: Get current user info
+      description: Returns the authenticated user's profile information.
+      operationId: getMe
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserInfo'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security:
+      - BearerAuth: []
+
   /auth/verify:
     get:
       tags:
@@ -1059,13 +1508,13 @@ paths:
           $ref: '#/components/responses/InternalServerError'
 
   # ==================== DASHBOARD ====================
-  /dashboard/stats:
+  /dashboard:
     get:
       tags:
-        - Dashboard
-      summary: Get system statistics
-      description: Returns system-wide statistics including peer counts, policy counts, and recent activity.
-      operationId: getStats
+      - Dashboard
+      summary: Get dashboard data
+      description: Returns system-wide statistics, peer health, and recent activity for the dashboard.
+      operationId: getDashboard
       responses:
         '200':
           description: Successful response
@@ -1078,26 +1527,26 @@ paths:
         '500':
           $ref: '#/components/responses/InternalServerError'
       security:
-        - BearerAuth: []
+      - BearerAuth: []
 
-  /dashboard/logs:
+  /logs:
     get:
       tags:
-        - Dashboard
-      summary: Get system logs
+      - Logs
+      summary: Get firewall logs
       description: Returns firewall logs with optional filtering.
       operationId: getLogs
       parameters:
-        - name: limit
-          in: query
-          schema:
-            type: integer
-            default: 100
-        - name: offset
-          in: query
-          schema:
-            type: integer
-            default: 0
+      - name: limit
+        in: query
+        schema:
+          type: integer
+          default: 100
+      - name: offset
+        in: query
+        schema:
+          type: integer
+          default: 0
       responses:
         '200':
           description: Successful response
@@ -1112,12 +1561,30 @@ paths:
         '500':
           $ref: '#/components/responses/InternalServerError'
       security:
-        - BearerAuth: []
+      - BearerAuth: []
 
-  /dashboard/pending:
+  /logs/stream:
     get:
       tags:
-        - Pending Changes
+      - Logs
+      summary: Stream firewall logs
+      description: |
+        Opens a WebSocket connection to stream real-time firewall log events.
+        Upgrades the HTTP connection to WebSocket protocol.
+      operationId: streamLogs
+      responses:
+        '101':
+          description: WebSocket upgrade successful
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - BearerAuth: []
+
+  # ==================== PENDING CHANGES ====================
+  /pending-changes:
+    get:
+      tags:
+      - Pending Changes
       summary: Get pending changes
       description: Returns all pending changes grouped by peer.
       operationId: listPendingChanges
@@ -1135,33 +1602,31 @@ paths:
         '500':
           $ref: '#/components/responses/InternalServerError'
       security:
-        - BearerAuth: []
+      - BearerAuth: []
 
-  /dashboard/pending/{id}/approve:
-    post:
+  /pending-changes/{peerId}:
+    get:
       tags:
-        - Pending Changes
-      summary: Approve pending change
-      description: Approves a pending change and triggers rule compilation.
-      operationId: approvePendingChange
+      - Pending Changes
+      summary: Get peer pending changes
+      description: Returns all pending changes for a specific peer.
+      operationId: getPeerPendingChanges
       parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: integer
-            format: int64
+      - name: peerId
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
       responses:
         '200':
-          description: Change approved
+          description: Successful response
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  message:
-                    type: string
-                    example: "change approved"
+                type: array
+                items:
+                  $ref: '#/components/schemas/PendingChangeDetail'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -1171,33 +1636,33 @@ paths:
         '500':
           $ref: '#/components/responses/InternalServerError'
       security:
-        - BearerAuth: []
+      - BearerAuth: []
 
-  /dashboard/pending/{id}/reject:
+  /pending-changes/{peerId}/preview:
     post:
       tags:
-        - Pending Changes
-      summary: Reject pending change
-      description: Rejects a pending change.
-      operationId: rejectPendingChange
+      - Pending Changes
+      summary: Preview pending bundle
+      description: Previews the compiled iptables rules from pending changes for a peer. Requires editor role.
+      operationId: previewPeerPendingBundle
       parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: integer
-            format: int64
+      - name: peerId
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
       responses:
         '200':
-          description: Change rejected
+          description: Preview result
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  message:
+                  content:
                     type: string
-                    example: "change rejected"
+                    description: The compiled iptables rules preview
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -1207,7 +1672,1680 @@ paths:
         '500':
           $ref: '#/components/responses/InternalServerError'
       security:
-        - BearerAuth: []
+      - BearerAuth: []
+
+  /pending-changes/{peerId}/apply:
+    post:
+      tags:
+      - Pending Changes
+      summary: Apply peer pending bundle
+      description: Applies all pending changes for a specific peer. Requires editor role.
+      operationId: applyPeerPendingBundle
+      parameters:
+      - name: peerId
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+      responses:
+        '200':
+          description: Bundle applied successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "bundle applied"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security:
+      - BearerAuth: []
+
+  /pending-changes/{peerId}/apply-entity:
+    post:
+      tags:
+      - Pending Changes
+      summary: Apply entity pending changes
+      description: Applies pending changes for a specific entity (peer, group, service, or policy). Requires editor role.
+      operationId: applyEntityPendingChanges
+      parameters:
+      - name: peerId
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - change_type
+              - change_id
+              - change_action
+              properties:
+                change_type:
+                  type: string
+                  description: Type of entity (policy, service, group, peer)
+                change_id:
+                  type: integer
+                  format: int64
+                change_action:
+                  type: string
+                  description: Action (create, update, delete)
+      responses:
+        '200':
+          description: Entity changes applied
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "changes applied"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security:
+      - BearerAuth: []
+
+  /pending-changes/rollback:
+    post:
+      tags:
+      - Pending Changes
+      summary: Rollback pending changes
+      description: Rolls back all pending changes. Requires editor role.
+      operationId: rollbackPendingChanges
+      responses:
+        '200':
+          description: Changes rolled back
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "changes rolled back"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security:
+      - BearerAuth: []
+
+  /pending-changes/apply-all:
+    post:
+      tags:
+      - Pending Changes
+      summary: Apply all pending bundles
+      description: Applies all pending changes across all peers. Requires editor role.
+      operationId: applyAllPendingBundles
+      responses:
+        '200':
+          description: All bundles applied
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "all bundles applied"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security:
+      - BearerAuth: []
+
+  /pending-changes/push-all:
+    post:
+      tags:
+      - Pending Changes
+      summary: Push rules to all peers
+      description: |
+        Compiles and pushes current rules to all connected peers.
+        Returns a job ID that can be used to track progress via SSE.
+        Requires editor role.
+      operationId: pushAllRules
+      responses:
+        '202':
+          description: Job accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  job_id:
+                    type: string
+                    format: uuid
+                    description: The ID of the push job
+                    example: "550e8400-e29b-41d4-a716-446655440000"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security:
+      - BearerAuth: []
+
+  /pending-changes/push/{peerId}:
+    post:
+      tags:
+      - Pending Changes
+      summary: Push rules to a specific peer
+      description: Compiles and pushes current rules to a specific peer. Requires editor role.
+      operationId: pushPeerRules
+      parameters:
+      - name: peerId
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+      responses:
+        '200':
+          description: Rules pushed successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "rules pushed"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security:
+      - BearerAuth: []
+
+  /push-jobs/{job_id}/events:
+    get:
+      tags:
+      - Pending Changes
+      summary: Stream push job events
+      description: |
+        Opens an SSE connection to stream real-time events for a push job.
+        Used to track the progress of push-all and push-peer operations.
+      operationId: streamPushJobEvents
+      parameters:
+      - name: job_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: SSE stream started
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      security:
+      - BearerAuth: []
+
+  # ==================== INFO & EVENTS ====================
+  /info:
+    get:
+      tags:
+      - Dashboard
+      summary: Get system info
+      description: Returns version and build information for the Runic server.
+      operationId: getInfo
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SystemInfo'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security:
+      - BearerAuth: []
+
+  /events:
+    get:
+      tags:
+      - Dashboard
+      summary: Stream frontend events
+      description: |
+        Opens an SSE connection to stream real-time events to the frontend
+        (e.g., peer status changes, pending change notifications).
+      operationId: streamFrontendEvents
+      responses:
+        '200':
+          description: SSE stream started
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - BearerAuth: []
+
+  # ==================== USERS ====================
+  /users:
+    get:
+      tags:
+      - Users
+      summary: List all users
+      description: Returns a list of all users. Requires admin role.
+      operationId: listUsers
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security:
+      - BearerAuth: []
+    post:
+      tags:
+      - Users
+      summary: Create a new user
+      description: Creates a new user. Requires admin role.
+      operationId: createUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateUserRequest'
+      responses:
+        '201':
+          description: User created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: integer
+                    format: int64
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security:
+      - BearerAuth: []
+
+  /users/{id}:
+    put:
+      tags:
+      - Users
+      summary: Update user
+      description: Updates an existing user. Requires admin role.
+      operationId: updateUser
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateUserRequest'
+      responses:
+        '200':
+          description: User updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "user updated"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security:
+      - BearerAuth: []
+    delete:
+      tags:
+      - Users
+      summary: Delete user
+      description: Deletes a user. Requires admin role.
+      operationId: deleteUser
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+      responses:
+        '200':
+          description: User deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "user deleted"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security:
+      - BearerAuth: []
+
+  # ==================== SETUP KEYS ====================
+  /setup-keys:
+    get:
+      tags:
+      - Setup Keys
+      summary: List all setup keys
+      description: Returns all setup keys. Requires admin role.
+      operationId: listSetupKeys
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SetupKey'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security:
+      - BearerAuth: []
+
+  /setup-keys/{type}:
+    post:
+      tags:
+      - Setup Keys
+      summary: Create a setup key
+      description: Generates a new setup key of the specified type. Requires admin role.
+      operationId: createSetupKey
+      parameters:
+      - name: type
+        in: path
+        required: true
+        schema:
+          type: string
+          enum: [registration, jwt]
+      responses:
+        '201':
+          description: Key created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  key:
+                    type: string
+                  type:
+                    type: string
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security:
+      - BearerAuth: []
+    delete:
+      tags:
+      - Setup Keys
+      summary: Delete a setup key
+      description: Revokes a setup key. Requires admin role.
+      operationId: deleteSetupKey
+      parameters:
+      - name: type
+        in: path
+        required: true
+        schema:
+          type: string
+          enum: [registration, jwt]
+      responses:
+        '200':
+          description: Key deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "key deleted"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security:
+      - BearerAuth: []
+
+  # ==================== REGISTRATION TOKENS ====================
+  /registration-tokens:
+    get:
+      tags:
+      - Registration Tokens
+      summary: List registration tokens
+      description: Returns all agent registration tokens. Requires admin role.
+      operationId: listRegistrationTokens
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RegistrationToken'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security:
+      - BearerAuth: []
+    post:
+      tags:
+      - Registration Tokens
+      summary: Generate registration token
+      description: Generates a new agent registration token. Requires admin role.
+      operationId: generateRegistrationToken
+      responses:
+        '201':
+          description: Token generated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token:
+                    type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security:
+      - BearerAuth: []
+
+  /registration-tokens/{id}:
+    delete:
+      tags:
+      - Registration Tokens
+      summary: Revoke registration token
+      description: Revokes an agent registration token. Requires admin role.
+      operationId: revokeRegistrationToken
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+      responses:
+        '200':
+          description: Token revoked
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "token revoked"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security:
+      - BearerAuth: []
+
+  # ==================== SETTINGS ====================
+  /settings/logs:
+    get:
+      tags:
+      - Settings
+      summary: Get log settings
+      description: Returns the log retention and storage settings. Requires admin role.
+      operationId: getLogSettings
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LogSettings'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security:
+      - BearerAuth: []
+    put:
+      tags:
+      - Settings
+      summary: Update log settings
+      description: Updates the log retention and storage settings. Requires admin role.
+      operationId: updateLogSettings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LogSettings'
+      responses:
+        '200':
+          description: Settings updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "settings updated"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security:
+      - BearerAuth: []
+
+  /settings/instance:
+    get:
+      tags:
+      - Settings
+      summary: Get instance settings
+      description: Returns instance-level settings. Requires admin role.
+      operationId: getInstanceSettings
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstanceSettings'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security:
+      - BearerAuth: []
+    put:
+      tags:
+      - Settings
+      summary: Update instance settings
+      description: Updates instance-level settings. Requires admin role.
+      operationId: updateInstanceSettings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InstanceSettings'
+      responses:
+        '200':
+          description: Settings updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "settings updated"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security:
+      - BearerAuth: []
+
+  # ==================== ALERTS ====================
+  /alerts:
+    get:
+      tags:
+      - Alerts
+      summary: List all alerts
+      description: Returns alert history. Requires admin role.
+      operationId: listAlerts
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Alert'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security:
+      - BearerAuth: []
+    delete:
+      tags:
+      - Alerts
+      summary: Clear all alerts
+      description: Deletes all alert history. Requires admin role.
+      operationId: clearAllAlerts
+      responses:
+        '200':
+          description: Alerts cleared
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "alerts cleared"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security:
+      - BearerAuth: []
+
+  /alerts/{id}:
+    get:
+      tags:
+      - Alerts
+      summary: Get alert by ID
+      description: Returns a specific alert. Requires admin role.
+      operationId: getAlert
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Alert'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security:
+      - BearerAuth: []
+    delete:
+      tags:
+      - Alerts
+      summary: Delete alert
+      description: Deletes a specific alert. Requires admin role.
+      operationId: deleteAlert
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+      responses:
+        '200':
+          description: Alert deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "alert deleted"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security:
+      - BearerAuth: []
+
+  /alert-rules:
+    get:
+      tags:
+      - Alerts
+      summary: List alert rules
+      description: Returns all alert rules. Requires admin role.
+      operationId: listAlertRules
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AlertRule'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security:
+      - BearerAuth: []
+
+  /alert-rules/{id}:
+    put:
+      tags:
+      - Alerts
+      summary: Update alert rule
+      description: Updates an existing alert rule. Requires admin role.
+      operationId: updateAlertRule
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AlertRule'
+      responses:
+        '200':
+          description: Alert rule updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "alert rule updated"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security:
+      - BearerAuth: []
+
+  /settings/smtp:
+    get:
+      tags:
+      - Alerts
+      summary: Get SMTP configuration
+      description: Returns the SMTP configuration for sending alerts. Requires admin role.
+      operationId: getSMTPConfig
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SMTPConfig'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security:
+      - BearerAuth: []
+    put:
+      tags:
+      - Alerts
+      summary: Update SMTP configuration
+      description: Updates the SMTP configuration. Requires admin role.
+      operationId: updateSMTPConfig
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SMTPConfig'
+      responses:
+        '200':
+          description: SMTP configuration updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "smtp updated"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security:
+      - BearerAuth: []
+
+  /settings/smtp/test:
+    post:
+      tags:
+      - Alerts
+      summary: Test SMTP configuration
+      description: Sends a test email using the current SMTP configuration. Requires admin role.
+      operationId: testSMTP
+      responses:
+        '200':
+          description: Test email sent
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "test email sent"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security:
+      - BearerAuth: []
+
+  /users/me/notification-preferences:
+    get:
+      tags:
+      - Alerts
+      summary: Get notification preferences
+      description: Returns the current user's notification preferences.
+      operationId: getNotificationPrefs
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationPreferences'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security:
+      - BearerAuth: []
+    put:
+      tags:
+      - Alerts
+      summary: Update notification preferences
+      description: Updates the current user's notification preferences.
+      operationId: updateNotificationPrefs
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NotificationPreferences'
+      responses:
+        '200':
+          description: Preferences updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "preferences updated"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security:
+      - BearerAuth: []
+
+  # ==================== IMPORTS ====================
+  /peers/{id}/import:
+    post:
+      tags:
+      - Imports
+      summary: Initiate rule import
+      description: |
+        Starts an import session for an existing iptables rules dump from a peer.
+        Requires editor role.
+      operationId: initiateImport
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - content
+              properties:
+                content:
+                  type: string
+                  description: The raw iptables rules dump content
+      responses:
+        '200':
+          description: Import session created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  session_id:
+                    type: integer
+                    format: int64
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security:
+      - BearerAuth: []
+
+  /import-sessions/{id}:
+    get:
+      tags:
+      - Imports
+      summary: Get import session
+      description: Returns the status and details of an import session. Requires editor role.
+      operationId: getImportSession
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImportSession'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security:
+      - BearerAuth: []
+
+  /import-sessions/{id}/rules:
+    get:
+      tags:
+      - Imports
+      summary: Get imported rules
+      description: Returns the parsed rules from an import session. Requires editor role.
+      operationId: getImportRules
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ImportedRule'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security:
+      - BearerAuth: []
+
+  /import-sessions/{id}/groups:
+    get:
+      tags:
+      - Imports
+      summary: Get imported groups
+      description: Returns the groups discovered during import. Requires editor role.
+      operationId: getImportGroups
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {}
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security:
+      - BearerAuth: []
+
+  /import-sessions/{id}/peers:
+    get:
+      tags:
+      - Imports
+      summary: Get imported peers
+      description: Returns the peers discovered during import. Requires editor role.
+      operationId: getImportPeers
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {}
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security:
+      - BearerAuth: []
+
+  /import-sessions/{id}/services:
+    get:
+      tags:
+      - Imports
+      summary: Get imported services
+      description: Returns the services discovered during import. Requires editor role.
+      operationId: getImportServices
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {}
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security:
+      - BearerAuth: []
+
+  /import-sessions/{id}/skipped:
+    get:
+      tags:
+      - Imports
+      summary: Get skipped rules
+      description: Returns the rules that were skipped during import. Requires editor role.
+      operationId: getImportSkippedRules
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {}
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security:
+      - BearerAuth: []
+
+  /import-sessions/{id}/rules/{rule_id}:
+    put:
+      tags:
+      - Imports
+      summary: Update imported rule
+      description: Updates a parsed rule in an import session. Requires editor role.
+      operationId: updateImportRule
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+      - name: rule_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+      responses:
+        '200':
+          description: Rule updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "rule updated"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security:
+      - BearerAuth: []
+
+  /import-sessions/{id}/groups/{group_id}:
+    put:
+      tags:
+      - Imports
+      summary: Update imported group
+      description: Updates a group mapping in an import session. Requires editor role.
+      operationId: updateImportGroup
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+      - name: group_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+      responses:
+        '200':
+          description: Group updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "group updated"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security:
+      - BearerAuth: []
+
+  /import-sessions/{id}/peers/{peer_id}:
+    put:
+      tags:
+      - Imports
+      summary: Update imported peer
+      description: Updates a peer mapping in an import session. Requires editor role.
+      operationId: updateImportPeer
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+      - name: peer_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+      responses:
+        '200':
+          description: Peer updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "peer updated"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security:
+      - BearerAuth: []
+
+  # ==================== AGENT ROUTES ====================
+  /agent/register:
+    post:
+      tags:
+      - Agent
+      summary: Register agent
+      description: |
+        Registers a new agent using a registration token.
+        This endpoint does not require JWT authentication — it uses a registration token.
+      operationId: registerAgent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentRegistrationRequest'
+      responses:
+        '200':
+          description: Agent registered
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  agent_key:
+                    type: string
+                  host_id:
+                    type: integer
+                    format: int64
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /agent/bundle/{host_id}:
+    get:
+      tags:
+      - Agent
+      summary: Get agent bundle
+      description: Returns the compiled and signed iptables rules bundle for an agent.
+      operationId: agentGetBundle
+      parameters:
+      - name: host_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+      responses:
+        '200':
+          description: Bundle content
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  content:
+                    type: string
+                  version:
+                    type: string
+                  hmac:
+                    type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /agent/heartbeat:
+    get:
+      tags:
+      - Agent
+      summary: Agent heartbeat (GET)
+      description: Agent heartbeat signal to indicate it is still alive.
+      operationId: agentHeartbeatGet
+      responses:
+        '200':
+          description: Heartbeat acknowledged
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      tags:
+      - Agent
+      summary: Agent heartbeat (POST)
+      description: Agent heartbeat signal with optional status payload.
+      operationId: agentHeartbeatPost
+      responses:
+        '200':
+          description: Heartbeat acknowledged
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /agent/logs:
+    post:
+      tags:
+      - Agent
+      summary: Submit firewall logs
+      description: Agent submits firewall log entries to the server.
+      operationId: agentSubmitLogs
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: '#/components/schemas/FirewallLog'
+      responses:
+        '200':
+          description: Logs accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "logs accepted"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /agent/backup/{host_id}:
+    post:
+      tags:
+      - Agent
+      summary: Submit rules backup
+      description: Agent submits a backup of its current iptables rules.
+      operationId: agentSubmitBackup
+      parameters:
+      - name: host_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+      responses:
+        '200':
+          description: Backup accepted
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /agent/bundle/{host_id}/applied:
+    post:
+      tags:
+      - Agent
+      summary: Confirm bundle applied
+      description: Agent confirms that the bundle was successfully applied.
+      operationId: agentConfirmBundleApplied
+      parameters:
+      - name: host_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+      responses:
+        '200':
+          description: Confirmation acknowledged
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /agent/events/{host_id}:
+    get:
+      tags:
+      - Agent
+      summary: Stream agent SSE events
+      description: Opens an SSE connection for the agent to receive real-time server events.
+      operationId: agentStreamEvents
+      parameters:
+      - name: host_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+      responses:
+        '200':
+          description: SSE stream started
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /agent/test-key:
+    post:
+      tags:
+      - Agent
+      summary: Test agent key
+      description: Tests if the agent's authentication key is valid.
+      operationId: agentTestKey
+      responses:
+        '200':
+          description: Key is valid
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  valid:
+                    type: boolean
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /agent/check-rotation:
+    get:
+      tags:
+      - Agent
+      summary: Check key rotation
+      description: Checks if a key rotation is pending for this agent.
+      operationId: agentCheckRotation
+      responses:
+        '200':
+          description: Rotation check result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  rotation_pending:
+                    type: boolean
+                  new_key:
+                    type: string
+                    description: New key if rotation is pending
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /agent/rotate-key:
+    post:
+      tags:
+      - Agent
+      summary: Rotate agent key
+      description: |
+        Initiates or completes a key rotation for an agent.
+        Authenticated via rotation token (not JWT).
+      operationId: agentRotateKey
+      responses:
+        '200':
+          description: Key rotation processed
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /agent/confirm-rotation:
+    post:
+      tags:
+      - Agent
+      summary: Confirm key rotation
+      description: Confirms that the agent has applied the rotated key.
+      operationId: agentConfirmRotation
+      responses:
+        '200':
+          description: Rotation confirmed
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
 
 components:
   securitySchemes:
@@ -1694,6 +3832,992 @@ components:
         created_at:
           type: string
           format: date-time
+
+    # Peer IPs
+    PeerIP:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        peer_id:
+          type: integer
+          format: int64
+        ip_address:
+          type: string
+          format: ipv4
+        is_primary:
+          type: boolean
+
+    AddPeerIPRequest:
+      type: object
+      required:
+      - ip_address
+      properties:
+        ip_address:
+          type: string
+          format: ipv4
+          description: IPv4 address to add
+        is_primary:
+          type: boolean
+          default: false
+          description: Whether this IP should be the primary address
+
+    # Setup
+    SetupStatus:
+      type: object
+      properties:
+        needs_setup:
+          type: boolean
+          description: True if no users exist yet (initial setup required)
+
+    SetupRequest:
+      type: object
+      required:
+      - username
+      - password
+      properties:
+        username:
+          type: string
+          description: Admin username for initial setup
+        password:
+          type: string
+          format: password
+          description: Admin password for initial setup
+
+    TokenResponse:
+      type: object
+      properties:
+        access_token:
+          type: string
+          description: JWT access token
+        refresh_token:
+          type: string
+          description: JWT refresh token (set as cookie)
+        username:
+          type: string
+        is_setup:
+          type: boolean
+          description: True if this was created during initial setup
+
+    UserInfo:
+      type: object
+      properties:
+        username:
+          type: string
+        role:
+          type: string
+          enum: [admin, editor, viewer]
+
+    # System Info
+    SystemInfo:
+      type: object
+      properties:
+        version:
+          type: string
+          description: Server version
+        commit:
+          type: string
+          description: Git commit hash
+        built_at:
+          type: string
+          description: Build timestamp
+        latest_agent_version:
+          type: string
+          description: Latest available agent version
+
+    # Users
+    User:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        username:
+          type: string
+        email:
+          type: string
+          format: email
+        role:
+          type: string
+          enum: [admin, editor, viewer]
+        created_at:
+          type: string
+          format: date-time
+
+    CreateUserRequest:
+      type: object
+      required:
+      - username
+      - password
+      properties:
+        username:
+          type: string
+          maxLength: 255
+        password:
+          type: string
+          format: password
+          minLength: 8
+        email:
+          type: string
+          format: email
+        role:
+          type: string
+          enum: [admin, editor, viewer]
+
+    UpdateUserRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        role:
+          type: string
+          enum: [admin, editor, viewer]
+        password:
+          type: string
+          format: password
+          minLength: 8
+
+    # Setup Keys
+    SetupKey:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [jwt-secret, agent-jwt-secret]
+          description: The key type
+        exists:
+          type: boolean
+          description: Whether the key has been generated
+
+    # Registration Tokens
+    RegistrationToken:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        token:
+          type: string
+          description: Masked token (first 8 + last 4 chars)
+        description:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        used_at:
+          type: string
+          format: date-time
+          nullable: true
+        used_by_hostname:
+          type: string
+          nullable: true
+        status:
+          type: string
+          enum: [active, used, revoked]
+        is_revoked:
+          type: integer
+          description: "1 if revoked, 0 otherwise"
+
+    GenerateRegistrationTokenRequest:
+      type: object
+      properties:
+        description:
+          type: string
+          maxLength: 255
+          description: Optional description for the token
+
+    GenerateRegistrationTokenResponse:
+      type: object
+      properties:
+        full_token:
+          type: string
+          description: Full unmasked token (only shown once at creation)
+        description:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    # Log Settings
+    LogSettings:
+      type: object
+      properties:
+        retention_days:
+          type: integer
+          description: Number of days to retain logs
+        retention_label:
+          type: string
+          description: Human-readable retention period label
+        log_count:
+          type: integer
+          description: Total number of log entries
+        estimated_size_mb:
+          type: integer
+          description: Estimated database size in MB
+        logs_db_path:
+          type: string
+          description: Path to the logs database file
+
+    UpdateLogRetentionRequest:
+      type: object
+      required:
+      - retention_days
+      properties:
+        retention_days:
+          type: integer
+          minimum: 1
+          maximum: 365
+          description: Number of days to retain logs
+
+    InstanceSettings:
+      type: object
+      properties:
+        control_plane_port:
+          type: integer
+          description: The port the control plane listens on
+        cert_file:
+          type: string
+          description: Path to TLS certificate file
+        key_file:
+          type: string
+          description: Path to TLS key file
+        db_path:
+          type: string
+          description: Path to SQLite database file
+        downloads_dir:
+          type: string
+          description: Directory for agent binary downloads
+        logs_db_path:
+          type: string
+          description: Path to the firewall logs database
+
+    # Alerts
+    Alert:
+      type: object
+      description: Alias for AlertHistory — represents a triggered alert record
+      properties:
+        id:
+          type: integer
+          format: uint
+        rule_id:
+          type: integer
+          format: uint
+        alert_type:
+          type: string
+          enum: [peer_offline, bundle_failed, blocked_spike, peer_online, new_peer, bundle_deployed]
+        peer_id:
+          type: integer
+          nullable: true
+        peer_hostname:
+          type: string
+        severity:
+          type: string
+          enum: [info, warning, critical]
+        subject:
+          type: string
+        message:
+          type: string
+        metadata:
+          type: string
+          description: JSON string for additional context
+        status:
+          type: string
+          enum: [pending, sent, failed, throttled]
+        sent_at:
+          type: string
+          format: date-time
+          nullable: true
+        error_message:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    AlertRule:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: uint
+        name:
+          type: string
+          maxLength: 255
+        alert_type:
+          type: string
+          enum: [peer_offline, bundle_failed, blocked_spike, peer_online, new_peer, bundle_deployed]
+        enabled:
+          type: boolean
+        threshold_value:
+          type: integer
+          description: Threshold value (e.g., blocked count for spike)
+        threshold_window_minutes:
+          type: integer
+          description: Time window for threshold evaluation
+        peer_id:
+          type: integer
+          nullable: true
+          description: Peer ID if rule applies to a specific peer (null = all peers)
+        throttle_minutes:
+          type: integer
+          description: Minimum time between alerts for this rule
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    CreateAlertRuleRequest:
+      type: object
+      required:
+      - name
+      - alert_type
+      properties:
+        name:
+          type: string
+          maxLength: 255
+        alert_type:
+          type: string
+          enum: [peer_offline, bundle_failed, blocked_spike, peer_online, new_peer, bundle_deployed]
+        enabled:
+          type: boolean
+          default: true
+        threshold_value:
+          type: integer
+          default: 0
+        threshold_window_minutes:
+          type: integer
+          minimum: 1
+          default: 5
+        peer_id:
+          type: integer
+          nullable: true
+          description: Peer ID if rule applies to a specific peer
+        throttle_minutes:
+          type: integer
+          minimum: 0
+          default: 15
+
+    UpdateAlertRuleRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          maxLength: 255
+        alert_type:
+          type: string
+          enum: [peer_offline, bundle_failed, blocked_spike, peer_online, new_peer, bundle_deployed]
+        enabled:
+          type: boolean
+        threshold_value:
+          type: integer
+          minimum: 0
+        threshold_window_minutes:
+          type: integer
+          minimum: 1
+        peer_id:
+          type: integer
+          nullable: true
+        throttle_minutes:
+          type: integer
+          minimum: 0
+
+    AlertHistory:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: uint
+        rule_id:
+          type: integer
+          format: uint
+        alert_type:
+          type: string
+          enum: [peer_offline, bundle_failed, blocked_spike, peer_online, new_peer, bundle_deployed]
+        peer_id:
+          type: integer
+          nullable: true
+        peer_hostname:
+          type: string
+        severity:
+          type: string
+          enum: [info, warning, critical]
+        subject:
+          type: string
+        message:
+          type: string
+        metadata:
+          type: string
+          description: JSON string for additional context
+        status:
+          type: string
+          enum: [pending, sent, failed, throttled]
+        sent_at:
+          type: string
+          format: date-time
+          nullable: true
+        error_message:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    SMTPConfig:
+      type: object
+      properties:
+        host:
+          type: string
+          maxLength: 255
+        port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+        username:
+          type: string
+          maxLength: 255
+        use_tls:
+          type: boolean
+          default: true
+        from_address:
+          type: string
+          format: email
+          maxLength: 255
+        enabled:
+          type: boolean
+          default: false
+
+    UpdateSMTPConfigRequest:
+      type: object
+      required:
+      - host
+      - port
+      - from_address
+      properties:
+        host:
+          type: string
+          maxLength: 255
+        port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+        username:
+          type: string
+          maxLength: 255
+        password:
+          type: string
+          format: password
+          description: SMTP password (write-only, never returned in responses)
+        use_tls:
+          type: boolean
+          default: true
+        from_address:
+          type: string
+          format: email
+          maxLength: 255
+        enabled:
+          type: boolean
+
+    NotificationPreferences:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: uint
+        user_id:
+          type: integer
+          format: uint
+        enabled_alerts:
+          type: string
+          description: JSON array of alert types (empty means all enabled)
+        quiet_hours_enabled:
+          type: boolean
+          default: false
+        quiet_hours_start:
+          type: string
+          description: Start time in HH:MM format
+          maxLength: 5
+        quiet_hours_end:
+          type: string
+          description: End time in HH:MM format
+          maxLength: 5
+        quiet_hours_timezone:
+          type: string
+          maxLength: 50
+        digest_enabled:
+          type: boolean
+          default: false
+        digest_frequency:
+          type: string
+          enum: [daily, weekly]
+          default: daily
+        digest_time:
+          type: string
+          description: Time in HH:MM format
+          maxLength: 5
+          default: "09:00"
+        digest_timezone:
+          type: string
+          maxLength: 50
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    UpdateNotificationPreferencesRequest:
+      type: object
+      properties:
+        enabled_alerts:
+          type: string
+          description: JSON array of alert types
+        quiet_hours_enabled:
+          type: boolean
+        quiet_hours_start:
+          type: string
+          maxLength: 5
+        quiet_hours_end:
+          type: string
+          maxLength: 5
+        quiet_hours_timezone:
+          type: string
+          maxLength: 50
+        digest_enabled:
+          type: boolean
+        digest_frequency:
+          type: string
+          enum: [daily, weekly]
+        digest_time:
+          type: string
+          maxLength: 5
+        digest_timezone:
+          type: string
+          maxLength: 50
+
+    TestEmailRequest:
+      type: object
+      required:
+      - recipient
+      properties:
+        recipient:
+          type: string
+          format: email
+          description: Email address to send test email to
+
+    TestEmailResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+
+    # Special Targets
+    SpecialTarget:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        name:
+          type: string
+        description:
+          type: string
+        type:
+          type: string
+          enum: [any, lan, multicast, broadcast]
+
+    # Policy Preview
+    PolicyPreviewRequest:
+      type: object
+      required:
+      - source_id
+      - source_type
+      - service_id
+      - target_id
+      - target_type
+      - action
+      properties:
+        source_id:
+          type: integer
+          format: int64
+        source_type:
+          type: string
+          enum: [peer, group, special]
+        service_id:
+          type: integer
+          format: int64
+        target_id:
+          type: integer
+          format: int64
+        target_type:
+          type: string
+          enum: [peer, group, special]
+        action:
+          type: string
+          enum: [ACCEPT, DROP, LOG_DROP]
+        priority:
+          type: integer
+          default: 1000
+        enabled:
+          type: boolean
+          default: true
+        target_scope:
+          type: string
+          enum: [both, host, docker]
+          default: both
+        direction:
+          type: string
+          enum: [both, forward, backward]
+          default: both
+
+    PolicyPreviewResult:
+      type: object
+      properties:
+        expanded_rules:
+          type: array
+          items:
+            type: object
+            properties:
+              source_ip:
+                type: string
+              target_ip:
+                type: string
+              service:
+                type: string
+              action:
+                type: string
+              chain:
+                type: string
+              direction:
+                type: string
+        total_rules:
+          type: integer
+
+    # Imports
+    ImportSession:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        peer_id:
+          type: integer
+          format: int64
+        peer_hostname:
+          type: string
+        status:
+          type: string
+          enum: [pending, processing, completed, failed, cancelled]
+        total_rules_found:
+          type: integer
+        importable_rules:
+          type: integer
+        skipped_rules:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    ImportedRule:
+      type: object
+      description: Alias for ImportRule — represents a parsed rule from an import session
+      properties:
+        id:
+          type: integer
+          format: int64
+        session_id:
+          type: integer
+          format: int64
+        chain:
+          type: string
+        rule_order:
+          type: integer
+        raw_rule:
+          type: string
+        status:
+          type: string
+          enum: [pending, imported, skipped, error]
+        skip_reason:
+          type: string
+          nullable: true
+        source_type:
+          type: string
+          nullable: true
+        source_name:
+          type: string
+          nullable: true
+        target_type:
+          type: string
+          nullable: true
+        target_name:
+          type: string
+          nullable: true
+        service_name:
+          type: string
+          nullable: true
+        action:
+          type: string
+          nullable: true
+        priority:
+          type: integer
+          nullable: true
+        direction:
+          type: string
+          nullable: true
+        target_scope:
+          type: string
+          nullable: true
+        policy_name:
+          type: string
+          nullable: true
+        enabled:
+          type: boolean
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        source_id:
+          type: integer
+          format: int64
+          nullable: true
+        target_id:
+          type: integer
+          format: int64
+          nullable: true
+        service_id:
+          type: integer
+          format: int64
+          nullable: true
+        source_ip:
+          type: string
+          nullable: true
+        target_ip:
+          type: string
+          nullable: true
+
+    ImportRule:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        session_id:
+          type: integer
+          format: int64
+        chain:
+          type: string
+        rule_order:
+          type: integer
+        raw_rule:
+          type: string
+        status:
+          type: string
+          enum: [pending, imported, skipped, error]
+        skip_reason:
+          type: string
+          nullable: true
+        source_type:
+          type: string
+          nullable: true
+        source_name:
+          type: string
+          nullable: true
+        target_type:
+          type: string
+          nullable: true
+        target_name:
+          type: string
+          nullable: true
+        service_name:
+          type: string
+          nullable: true
+        action:
+          type: string
+          nullable: true
+        priority:
+          type: integer
+          nullable: true
+        direction:
+          type: string
+          nullable: true
+        target_scope:
+          type: string
+          nullable: true
+        policy_name:
+          type: string
+          nullable: true
+        enabled:
+          type: boolean
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        source_id:
+          type: integer
+          format: int64
+          nullable: true
+        target_id:
+          type: integer
+          format: int64
+          nullable: true
+        service_id:
+          type: integer
+          format: int64
+          nullable: true
+        source_ip:
+          type: string
+          nullable: true
+        target_ip:
+          type: string
+          nullable: true
+
+    ImportGroupMapping:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        session_id:
+          type: integer
+          format: int64
+        group_name:
+          type: string
+        ipset_name:
+          type: string
+          nullable: true
+        status:
+          type: string
+          enum: [pending, mapped, created, skipped, error]
+        existing_group_id:
+          type: integer
+          format: int64
+          nullable: true
+        existing_group_name:
+          type: string
+          nullable: true
+        member_ips:
+          type: array
+          items:
+            type: string
+        member_peer_names:
+          type: array
+          items:
+            type: string
+
+    ImportPeerMapping:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        session_id:
+          type: integer
+          format: int64
+        ip_address:
+          type: string
+          format: ipv4
+        hostname:
+          type: string
+          nullable: true
+        status:
+          type: string
+          enum: [pending, mapped, created, skipped, error]
+        existing_peer_id:
+          type: integer
+          format: int64
+          nullable: true
+        existing_peer_name:
+          type: string
+          nullable: true
+
+    ImportServiceMapping:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        session_id:
+          type: integer
+          format: int64
+        name:
+          type: string
+        ports:
+          type: string
+        protocol:
+          type: string
+        status:
+          type: string
+          enum: [pending, mapped, created, skipped, error]
+        existing_service_id:
+          type: integer
+          format: int64
+          nullable: true
+        existing_service_name:
+          type: string
+          nullable: true
+
+    # Agent Registration
+    AgentRegistrationRequest:
+      type: object
+      required:
+      - hostname
+      - token
+      properties:
+        hostname:
+          type: string
+          maxLength: 253
+        token:
+          type: string
+          description: Registration token
+        os_type:
+          type: string
+        arch:
+          type: string
+        agent_key:
+          type: string
+          description: Agent key for HMAC signing
+        has_docker:
+          type: boolean
+          default: false
+
+    AgentRegistrationResponse:
+      type: object
+      properties:
+        peer_id:
+          type: integer
+          format: int64
+        agent_key:
+          type: string
+          description: Agent key for future authentication
+
+    # Push Job
+    PushJobEvent:
+      type: object
+      properties:
+        event:
+          type: string
+          enum: [started, peer_progress, completed, error]
+        peer_id:
+          type: integer
+          format: int64
+          nullable: true
+        hostname:
+          type: string
+          nullable: true
+        status:
+          type: string
+          nullable: true
+        message:
+          type: string
+          nullable: true
 
     Error:
       type: object

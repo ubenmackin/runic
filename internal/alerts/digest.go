@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -622,7 +623,7 @@ func (g *DigestGenerator) getUserEmail(ctx context.Context, userID uint) (string
 	).Scan(&email)
 
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return "", fmt.Errorf("user not found")
 		}
 		return "", fmt.Errorf("failed to get user email: %w", err)

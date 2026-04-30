@@ -4,12 +4,19 @@ package alerts
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
 	"runic/internal/common/log"
 	"runic/internal/db"
 )
+
+// ErrAlertRuleNotFound is returned when an alert rule is not found.
+var ErrAlertRuleNotFound = errors.New("alert rule not found")
+
+// ErrAlertHistoryNotFound is returned when an alert history entry is not found.
+var ErrAlertHistoryNotFound = errors.New("alert history not found")
 
 // CreateAlertRule inserts a new alert rule into the database.
 func CreateAlertRule(ctx context.Context, database db.Querier, rule *AlertRule) error {
@@ -48,8 +55,8 @@ func GetAlertRule(ctx context.Context, database db.Querier, id uint64) (*AlertRu
 		&rule.ThresholdWindowMinutes, &peerID, &rule.ThrottleMinutes, &rule.CreatedAt, &rule.UpdatedAt)
 
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("alert rule not found: %w", err)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrAlertRuleNotFound
 		}
 		return nil, fmt.Errorf("failed to get alert rule: %w", err)
 	}
@@ -118,7 +125,7 @@ func UpdateAlertRule(ctx context.Context, database db.Querier, rule *AlertRule) 
 	}
 
 	if affected == 0 {
-		return fmt.Errorf("alert rule not found")
+		return ErrAlertRuleNotFound
 	}
 
 	rule.UpdatedAt = now
@@ -162,7 +169,7 @@ func GetUserNotificationPreferences(ctx context.Context, database db.Querier, us
 		&prefs.DigestTime, &prefs.DigestTimezone, &prefs.CreatedAt, &prefs.UpdatedAt)
 
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("notification preferences not found for user: %w", err)
 		}
 		return nil, fmt.Errorf("failed to get notification preferences: %w", err)
@@ -295,7 +302,7 @@ func DeleteAlertHistory(ctx context.Context, database db.Querier, id uint64) err
 	}
 
 	if affected == 0 {
-		return fmt.Errorf("alert history not found")
+		return ErrAlertHistoryNotFound
 	}
 
 	return nil

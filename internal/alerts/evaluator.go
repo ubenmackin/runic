@@ -4,6 +4,7 @@ package alerts
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -141,7 +142,7 @@ func (e *ConditionEvaluator) checkPeerOfflineByID(ctx context.Context, rule *Ale
 	`, peerID).Scan(&hostname, &status, &lastHeartbeat)
 
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("failed to query peer %d: %w", peerID, err)
@@ -429,7 +430,7 @@ func (e *ConditionEvaluator) CheckPeerOffline(ctx context.Context, peerID string
 	`, peerID).Scan(&status, &lastHeartbeat)
 
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return false, 0
 		}
 		return false, 0

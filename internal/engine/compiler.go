@@ -4,6 +4,7 @@ package engine
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -119,7 +120,7 @@ func (c *Compiler) formatEntityName(ctx context.Context, entityType string, enti
 	case "peer":
 		var hostname string
 		err := c.db.QueryRowContext(ctx, "SELECT hostname FROM peers WHERE id = ?", entityID).Scan(&hostname)
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return fmt.Sprintf("peer %d (not found)", entityID)
 		}
 		if err != nil {
@@ -129,7 +130,7 @@ func (c *Compiler) formatEntityName(ctx context.Context, entityType string, enti
 	case "group":
 		var name string
 		err := c.db.QueryRowContext(ctx, "SELECT name FROM groups WHERE id = ? AND is_pending_delete = 0", entityID).Scan(&name)
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return fmt.Sprintf("group %d (not found)", entityID)
 		}
 		if err != nil {
@@ -204,17 +205,20 @@ func (rw *ruleWriter) writeStandardRules(hasDocker bool, controlPlanePort string
 }
 
 // Compile produces a complete iptables-restore payload for the given peer.
-func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
-	// 1. Load peer
-	var hostname, ipAddress string
-	var hasDocker, hasIPSet bool
-	err := c.db.QueryRowContext(ctx,
+
+// --- Compiler Sub-routines ---
+
+func (c *Compiler) loadPeerData(ctx context.Context, peerID int) (hostname string, ipAddress string, hasDocker bool, hasIPSet bool, err error) {
+	err = c.db.QueryRowContext(ctx,
 		"SELECT hostname, ip_address, has_docker, COALESCE(has_ipset, false) FROM peers WHERE id = ?", peerID,
 	).Scan(&hostname, &ipAddress, &hasDocker, &hasIPSet)
 	if err != nil {
-		return "", fmt.Errorf("load peer %d: %w", peerID, err)
+		err = fmt.Errorf("load peer %d: %w", peerID, err)
 	}
-	// 2. Load enabled policies where peer is either target or source, ordered by priority ASC
+	return
+}
+
+func (c *Compiler) loadApplicablePolicies(ctx context.Context, peerID int) ([]policyInfo, []int, map[int]string, error) {
 	rows, err := c.db.QueryContext(ctx,
 		`SELECT DISTINCT p.id, p.name, p.source_id, p.source_type, p.service_id, p.target_id, p.target_type, COALESCE(p.source_ip, ''), COALESCE(p.target_ip, ''), p.action, p.priority, p.target_scope, COALESCE(p.direction, 'both'),
 		CASE WHEN p.target_type = 'peer' AND p.target_id = ? THEN 1
@@ -222,10 +226,6 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 		WHEN p.target_type = 'special' AND p.source_type = 'group' AND EXISTS (SELECT 1 FROM group_members gm JOIN groups g ON gm.group_id = g.id WHERE gm.group_id = p.source_id AND gm.peer_id = ? AND g.is_pending_delete = 0) THEN 1
 		WHEN p.target_type = 'special' AND p.source_type = 'peer' AND p.source_id = ? THEN 1
 		ELSE 0 END as is_target,
-		-- MC-EXCLUSION: Multicast special targets (3,4,8) are excluded from is_source
-		-- because they represent destinations for outbound multicast, not sources.
-		-- BC-EXCLUSION: Broadcast special targets (1,2) are excluded for the same reason.
-		-- When Source is broadcast special, the peer is the target (receiving broadcast).
 		CASE WHEN p.source_type = 'peer' AND p.source_id = ? THEN 1
 		WHEN p.source_type = 'group' AND EXISTS (SELECT 1 FROM group_members gm JOIN groups g ON gm.group_id = g.id WHERE gm.group_id = p.source_id AND gm.peer_id = ? AND g.is_pending_delete = 0) THEN 1
 		WHEN p.source_type = 'special' AND p.target_type = 'group' AND p.source_id NOT IN (?, ?, ?, ?, ?) AND EXISTS (SELECT 1 FROM group_members gm JOIN groups g ON gm.group_id = g.id WHERE gm.group_id = p.target_id AND gm.peer_id = ? AND g.is_pending_delete = 0) THEN 1
@@ -245,7 +245,7 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 		ORDER BY p.priority ASC`,
 		peerID, peerID, peerID, peerID, peerID, peerID, SpecialIDSubnetBroadcast, SpecialIDLimitedBroadcast, SpecialIDAllHosts, SpecialIDmDNS, SpecialIDIGMPv3, peerID, SpecialIDSubnetBroadcast, SpecialIDLimitedBroadcast, SpecialIDAllHosts, SpecialIDmDNS, SpecialIDIGMPv3, peerID, peerID, peerID, peerID, peerID, peerID, peerID, peerID, peerID)
 	if err != nil {
-		return "", fmt.Errorf("load policies: %w", err)
+		return nil, nil, nil, fmt.Errorf("load policies: %w", err)
 	}
 	defer func() {
 		if err := rows.Close(); err != nil {
@@ -258,14 +258,14 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 		var p policyInfo
 		var isTargetInt, isSourceInt int
 		if err := rows.Scan(&p.ID, &p.Name, &p.SourceID, &p.SourceType, &p.ServiceID, &p.TargetID, &p.TargetType, &p.SourceIP, &p.TargetIP, &p.Action, &p.Priority, &p.TargetScope, &p.Direction, &isTargetInt, &isSourceInt); err != nil {
-			return "", fmt.Errorf("scan policy: %w", err)
+			return nil, nil, nil, fmt.Errorf("scan policy: %w", err)
 		}
 		p.IsTarget = isTargetInt == 1
 		p.IsSource = isSourceInt == 1
 		policies = append(policies, p)
 	}
 	if err := rows.Err(); err != nil {
-		return "", err
+		return nil, nil, nil, err
 	}
 
 	groupIDToName := make(map[int]string)
@@ -279,7 +279,6 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 					groupIDToName[pol.SourceID] = groupName
 					groupOrder = append(groupOrder, pol.SourceID)
 				}
-				// skip non-existent groups silently
 			}
 		}
 		if pol.TargetType == "group" {
@@ -289,24 +288,26 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 					groupIDToName[pol.TargetID] = groupName
 					groupOrder = append(groupOrder, pol.TargetID)
 				}
-				// skip non-existent groups silently
 			}
 		}
 	}
 
-	// 2a. Pre-load all services referenced by these policies (batch load)
+	return policies, groupOrder, groupIDToName, nil
+}
+
+type ServiceInfo struct {
+	Name, Ports, SourcePorts, Protocol string
+	NoConntrack                        bool
+}
+
+func (c *Compiler) preloadRequiredServices(ctx context.Context, policies []policyInfo) (map[int]ServiceInfo, error) {
 	serviceIDs := make(map[int]bool)
 	for i := range policies {
 		p := &policies[i]
 		serviceIDs[p.ServiceID] = true
 	}
-	// MC-006: Include no_conntrack column
-	services := make(map[int]struct {
-		Name, Ports, SourcePorts, Protocol string
-		NoConntrack                        bool
-	})
+	services := make(map[int]ServiceInfo)
 	if len(serviceIDs) > 0 {
-		// Build the IN clause
 		serviceIDList := make([]int, 0, len(serviceIDs))
 		for id := range serviceIDs {
 			serviceIDList = append(serviceIDList, id)
@@ -318,12 +319,11 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 			placeholders[i] = "?"
 			args[i] = id
 		}
-		// MC-006: Updated query to include no_conntrack
 		query := "SELECT id, name, ports, COALESCE(source_ports,''), protocol, COALESCE(no_conntrack, 0) FROM services WHERE is_pending_delete = 0 AND id IN (" + strings.Join(placeholders, ",") + ")"
 
 		rows, err := c.db.QueryContext(ctx, query, args...)
 		if err != nil {
-			return "", fmt.Errorf("batch load services: %w", err)
+			return nil, fmt.Errorf("batch load services: %w", err)
 		}
 		defer func() {
 			if err := rows.Close(); err != nil {
@@ -333,33 +333,33 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 
 		for rows.Next() {
 			var sid int
-			var s struct {
-				Name, Ports, SourcePorts, Protocol string
-				NoConntrack                        bool
-			}
+			var s ServiceInfo
 			if err := rows.Scan(&sid, &s.Name, &s.Ports, &s.SourcePorts, &s.Protocol, &s.NoConntrack); err != nil {
-				return "", fmt.Errorf("scan service: %w", err)
+				return nil, fmt.Errorf("scan service: %w", err)
 			}
 			services[sid] = s
 		}
 		if err := rows.Err(); err != nil {
-			return "", err
+			return nil, err
 		}
 	}
+	return services, nil
+}
 
-	// 2c. Resolve ipset data if peer supports it, and build group->ipset mapping simultaneously
-	type ipsetData struct {
-		Name    string // sanitized ipset name (e.g. runic_group_webservers)
-		SetType string // hash:ip or hash:net
-		Members []string
-	}
+type ipsetData struct {
+	Name    string // sanitized ipset name (e.g. runic_group_webservers)
+	SetType string // hash:ip or hash:net
+	Members []string
+}
+
+func (c *Compiler) resolveIPSetDefinitions(ctx context.Context, hasIPSet bool, groupOrder []int, groupIDToName map[int]string) ([]ipsetData, map[int]string, error) {
 	var ipsets []ipsetData
 	groupIDToIpsetName := make(map[int]string)
 	if hasIPSet && len(groupOrder) > 0 {
 		for _, gid := range groupOrder {
 			members, hasCIDR, err := c.resolver.resolveGroupForIpset(ctx, gid)
 			if err != nil {
-				return "", fmt.Errorf("resolve group %d for ipset: %w", gid, err)
+				return nil, nil, fmt.Errorf("resolve group %d for ipset: %w", gid, err)
 			}
 			setType := "hash:ip"
 			if hasCIDR {
@@ -378,8 +378,45 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 			groupIDToIpsetName[gid] = sanitizedName
 		}
 	}
+	return ipsets, groupIDToIpsetName, nil
+}
 
+// Compile produces a complete iptables-restore payload for the given peer.
+func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
+	hostname, ipAddress, hasDocker, hasIPSet, err := c.loadPeerData(ctx, peerID)
+	if err != nil {
+		return "", err
+	}
+
+	policies, groupOrder, groupIDToName, err := c.loadApplicablePolicies(ctx, peerID)
+	if err != nil {
+		return "", err
+	}
+
+	services, err := c.preloadRequiredServices(ctx, policies)
+	if err != nil {
+		return "", err
+	}
+
+	ipsets, groupIDToIpsetName, err := c.resolveIPSetDefinitions(ctx, hasIPSet, groupOrder, groupIDToName)
+	if err != nil {
+		return "", err
+	}
+
+	return c.generateIptablesPayload(ctx, hostname, ipAddress, hasDocker, hasIPSet, policies, services, ipsets, groupIDToIpsetName)
+}
+
+func (c *Compiler) generateIptablesPayload(
+	ctx context.Context,
+	hostname, ipAddress string,
+	hasDocker, hasIPSet bool,
+	policies []policyInfo,
+	services map[int]ServiceInfo,
+	ipsets []ipsetData,
+	groupIDToIpsetName map[int]string,
+) (string, error) {
 	// 3. Build the iptables-restore output
+	var err error
 	var buf strings.Builder
 	rw := &ruleWriter{buf: &buf}
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -988,7 +1025,7 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 	if peerID != 0 {
 		if err := c.db.QueryRowContext(ctx,
 			"SELECT ip_address FROM peers WHERE id = ?", peerID,
-		).Scan(&ipAddress); err != nil && err != sql.ErrNoRows {
+		).Scan(&ipAddress); err != nil && !errors.Is(err, sql.ErrNoRows) {
 			// Log but don't fail - IP is optional for preview
 			log.WarnContext(ctx, "Failed to load peer IP for preview", "error", err)
 		}
@@ -1010,7 +1047,7 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 	var serviceName, ports, sourcePorts, protocol string
 	var noConntrack bool
 	err := c.db.QueryRowContext(ctx, "SELECT name, ports, source_ports, protocol, COALESCE(no_conntrack, 0) FROM services WHERE id = ? AND is_pending_delete = 0", serviceID).Scan(&serviceName, &ports, &sourcePorts, &protocol, &noConntrack)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("service %d is pending delete or does not exist", serviceID)
 	}
 	if err != nil {

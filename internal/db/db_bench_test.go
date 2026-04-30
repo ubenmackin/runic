@@ -160,25 +160,6 @@ func BenchmarkListEnabledPolicies(b *testing.B) {
 	}
 }
 
-// BenchmarkGetGroup benchmarks fetching a group by ID.
-func BenchmarkGetGroup(b *testing.B) {
-	database, cleanup := setupBenchmarkDB(b)
-	defer cleanup()
-
-	// Insert test group
-	database.Exec("INSERT INTO groups (name, description) VALUES (?, ?)", "test-group", "Test group description")
-
-	ctx := context.Background()
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_, err := GetGroup(ctx, database, 1)
-		if err != nil {
-			b.Fatal(err)
-		}
-	}
-}
-
 // BenchmarkListGroupMembers benchmarks listing group members.
 func BenchmarkListGroupMembers(b *testing.B) {
 	database, cleanup := setupBenchmarkDB(b)

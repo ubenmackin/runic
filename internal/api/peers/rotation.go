@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"time"
@@ -61,7 +62,7 @@ func (h *Handler) RotatePeerKey(w http.ResponseWriter, r *http.Request) {
 		peerID,
 	).Scan(&hostname, &currentHMACKey, &rotationToken)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		common.RespondError(w, http.StatusNotFound, "peer not found")
 		return
 	}
@@ -182,7 +183,7 @@ func (h *Handler) AgentRotateKey(w http.ResponseWriter, r *http.Request) {
 		WHERE hostname = ? AND hmac_key_rotation_token = ?
 	`, hostname, input.RotationToken).Scan(&peerID, &newHMACKey, &lastRotatedAt)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		common.RespondError(w, http.StatusUnauthorized, "invalid rotation token")
 		return
 	}
@@ -269,7 +270,7 @@ func (h *Handler) AgentConfirmRotation(w http.ResponseWriter, r *http.Request) {
 		hostname,
 	).Scan(&peerID, &currentToken)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		common.RespondError(w, http.StatusNotFound, "peer not found")
 		return
 	}

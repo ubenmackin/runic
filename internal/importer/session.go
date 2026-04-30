@@ -4,6 +4,7 @@ package importer
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -38,7 +39,7 @@ func CreateSession(ctx context.Context, database *sql.DB, peerID int64, rawBacku
 	if err == nil {
 		return nil, fmt.Errorf("peer already has active import session %d", existingID)
 	}
-	if err != sql.ErrNoRows {
+	if !errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("check existing session: %w", err)
 	}
 

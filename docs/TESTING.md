@@ -1,11 +1,13 @@
 # Testing Guide
 
-This document outlines the testing standards and best practices for the Runic web frontend. It covers how to run tests, write tests, and debug test failures.
+This document outlines the testing standards and best practices for the Runic project. It covers both the React web frontend and the Go backend.
 
 ## Table of Contents
 
 - [Quick Start](#quick-start)
-- [Test Setup](#test-setup)
+  - [Frontend (React)](#frontend-react)
+  - [Backend (Go)](#backend-go)
+- [Frontend Test Setup](#frontend-test-setup)
 - [Test Organization](#test-organization)
 - [Writing Tests](#writing-tests)
 - [Testing Patterns](#testing-patterns)
@@ -17,6 +19,8 @@ This document outlines the testing standards and best practices for the Runic we
 ---
 
 ## Quick Start
+
+### Frontend (React)
 
 ### Running Tests
 
@@ -32,6 +36,33 @@ npm run test:coverage
 
 # Run tests with coverage and UI dashboard
 npm run test:coverage:ui
+```
+
+### Backend (Go)
+
+```bash
+# Run all Go tests with race detection
+go test -race ./...
+
+# Run tests for a specific package
+go test -race ./internal/api/peers/...
+
+# Run a specific test by name
+go test -race -run TestHandleSetupGET ./internal/api/auth/...
+
+# Run tests with verbose output
+go test -race -v ./internal/api/...
+
+# Run tests with coverage
+go test -race -cover ./...
+
+# Run benchmarks
+go test -bench=. -benchmem ./...
+
+# Or use Makefile targets
+make test           # Run all Go tests with race detection
+make test-coverage  # Run Go tests with coverage report
+make verify         # Full verification (format, lint, test, build)
 ```
 
 ### Common Commands
@@ -52,7 +83,7 @@ npm test -- -u
 
 ---
 
-## Test Setup
+## Frontend Test Setup
 
 ### Configuration
 
@@ -960,6 +991,131 @@ Refer to existing test files for patterns:
 | Hook | `src/hooks/useDebounce.test.js` | renderHook, fake timers |
 | Hook | `src/hooks/useFocusTrap.test.js` | DOM setup/teardown, spies |
 | API | `src/api/client.test.js` | Fetch mocking, async handling |
+
+---
+
+## Go Backend Testing
+
+### Test Organization
+
+Test files are placed alongside the code they test:
+
+```
+internal/
+├── api/
+│   ├── peers/
+│   │   ├── handlers.go
+│   │   └── handlers_test.go
+│   ├── auth/
+│   │   ├── handlers.go
+│   │   ├── handlers_test.go
+│   │   ├── setupratelimiter.go
+│   │   └── setupratelimiter_test.go
+│   └── agents/
+│       ├── handlers.go
+│       ├── handlers_test.go
+│       └── tokens.go
+├── alerts/
+│   ├── models.go
+│   └── models_test.go
+└── store/
+    ├── store.go
+    └── store_test.go
+```
+
+**Naming Convention**: `<filename>_test.go` (Go standard)
+
+### Writing Handler Tests
+
+Handler tests use `httptest` to create mock HTTP requests and record responses:
+
+```go
+func TestGetPeers(t *testing.T) {
+    db := setupTestDB(t)
+    defer db.Close()
+    handler := peers.NewHandler(db)
+
+    req := httptest.NewRequest(http.MethodGet, "/api/v1/peers", nil)
+    req.Header.Set("Authorization", "Bearer "+testToken)
+    w := httptest.NewRecorder()
+
+    handler.GetPeers(w, req)
+
+    if w.Code != http.StatusOK {
+        t.Errorf("expected 200, got %d", w.Code)
+    }
+}
+```
+
+### Database Test Helpers
+
+Tests that need a database use in-memory SQLite:
+
+```go
+func setupTestDB(t *testing.T) *sql.DB {
+    t.Helper()
+    db, err := sql.Open("sqlite3", ":memory:")
+    if err != nil {
+        t.Fatal(err)
+    }
+    // Run migrations
+    if err := db.Ping(); err != nil {
+        t.Fatal(err)
+    }
+    return db
+}
+```
+
+### Table-Driven Tests
+
+Use Go's table-driven test pattern for testing multiple cases:
+
+```go
+func TestCreatePeer(t *testing.T) {
+    tests := []struct {
+        name       string
+        body       string
+        wantStatus int
+        wantErr    string
+    }{
+        {
+            name:       "valid peer",
+            body:       `{"hostname":"test","ip_address":"10.0.0.1"}`,
+            wantStatus: http.StatusCreated,
+        },
+        {
+            name:       "missing hostname",
+            body:       `{"ip_address":"10.0.0.1"}`,
+            wantStatus: http.StatusBadRequest,
+            wantErr:    "Hostname is required",
+        },
+    }
+
+    for _, tt := range tests {
+        t.Run(tt.name, func(t *testing.T) {
+            // test implementation
+        })
+    }
+}
+```
+
+### Common Test Patterns
+
+- **Use `t.Helper()`** for test utility functions to improve error reporting
+- **Use `t.Parallel()`** for tests that can run concurrently
+- **Use `t.Cleanup()`** for resource cleanup instead of defer chains
+- **Use `require`** for assertions that should stop the test on failure
+- **Use `assert`** for assertions that should log but continue
+
+### Example Backend Test Files
+
+| Type | Example File | Key Patterns |
+|------|--------------|--------------|
+| Handler | `internal/api/peers/handlers_test.go` | httptest, DB setup, response validation |
+| Handler | `internal/api/auth/handlers_test.go` | Auth flow, token validation |
+| Model | `internal/alerts/models_test.go` | Validation, enum checking |
+| Rate Limiter | `internal/api/auth/setupratelimiter_test.go` | Concurrency, time-based tests |
+| Store | `internal/store/store_test.go` | Database operations |
 
 ---
 

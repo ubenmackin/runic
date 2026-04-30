@@ -16,69 +16,46 @@ import (
 	"runic/internal/db"
 	"runic/internal/engine"
 	"runic/internal/models"
+	"runic/internal/store"
 )
+
+type GroupStore interface {
+	ListGroups(ctx context.Context) ([]store.GroupWithCounts, error)
+	CreateGroup(ctx context.Context, name, description string) (int64, error)
+	GetGroup(ctx context.Context, id int) (models.GroupRow, error)
+	GetGroupTx(ctx context.Context, q db.Querier, id int) (models.GroupRow, error)
+	UpdateGroup(ctx context.Context, q db.Querier, id int, name, description string) error
+	GetGroupSystemStatus(ctx context.Context, id int) (bool, error)
+	SoftDeleteGroup(ctx context.Context, id int) error
+	ListGroupMembers(ctx context.Context, id int) ([]store.PeerInGroup, error)
+	AddGroupMember(ctx context.Context, groupID, peerID int) (int64, error)
+	DeleteGroupMember(ctx context.Context, groupID, peerID int) error
+	GetPeerHostname(ctx context.Context, peerID int64) (string, error)
+	Snapshot(ctx context.Context, q db.Querier, action string, groupID int) error
+}
 
 // Handler provides HTTP handlers for group operations with dependency injection
 type Handler struct {
 	DB           db.DB
 	Compiler     *engine.Compiler
 	ChangeWorker *common.ChangeWorker
+	Store        GroupStore
 }
 
 // NewHandler creates a new groups handler with the given dependencies
-func NewHandler(db db.DB, compiler *engine.Compiler, changeWorker *common.ChangeWorker) *Handler {
-	return &Handler{DB: db, Compiler: compiler, ChangeWorker: changeWorker}
+func NewHandler(db db.DB, compiler *engine.Compiler, changeWorker *common.ChangeWorker, groupStore GroupStore) *Handler {
+	return &Handler{DB: db, Compiler: compiler, ChangeWorker: changeWorker, Store: groupStore}
 }
 
 // --- Groups ---
 
-// GroupWithCounts represents a group with peer and policy counts
-type GroupWithCounts struct {
-	ID              int    `json:"id"`
-	Name            string `json:"name"`
-	Description     string `json:"description"`
-	IsSystem        bool   `json:"is_system"`
-	IsPendingDelete bool   `json:"is_pending_delete"`
-	PeerCount       int    `json:"peer_count"`
-	PolicyCount     int    `json:"policy_count"`
-}
-
 func (h *Handler) ListGroups(w http.ResponseWriter, r *http.Request) {
-	query := `
-	SELECT g.id, g.name, COALESCE(g.description, ''), COALESCE(g.is_system, 0), COALESCE(g.is_pending_delete, 0),
-	COALESCE(p.peer_count, 0), COALESCE(pol.policy_count, 0)
-	FROM groups g
-	LEFT JOIN (SELECT group_id, COUNT(*) as peer_count FROM group_members GROUP BY group_id) p ON g.id = p.group_id
-	LEFT JOIN (
-		SELECT group_id, SUM(count) as policy_count FROM (
-			SELECT source_id as group_id, COUNT(*) as count FROM policies WHERE source_type='group' GROUP BY source_id
-			UNION ALL
-			SELECT target_id as group_id, COUNT(*) as count FROM policies WHERE target_type='group' GROUP BY target_id
-		) GROUP BY group_id
-	) pol ON g.id = pol.group_id
-	ORDER BY g.name ASC`
-
-	rows, err := h.DB.QueryContext(r.Context(), query)
+	groupsData, err := h.Store.ListGroups(r.Context())
 	if err != nil {
+		log.ErrorContext(r.Context(), "failed to query groups", "error", err)
 		common.RespondError(w, http.StatusInternalServerError, "failed to query groups")
 		return
 	}
-	defer func() {
-		if cerr := rows.Close(); cerr != nil {
-			log.ErrorContext(r.Context(), "failed to close rows", "error", cerr)
-		}
-	}()
-
-	var groupsData []GroupWithCounts
-	for rows.Next() {
-		var g GroupWithCounts
-		if err := rows.Scan(&g.ID, &g.Name, &g.Description, &g.IsSystem, &g.IsPendingDelete, &g.PeerCount, &g.PolicyCount); err != nil {
-			common.RespondError(w, http.StatusInternalServerError, "failed to scan group")
-			return
-		}
-		groupsData = append(groupsData, g)
-	}
-	groupsData = common.EnsureSlice(groupsData)
 	common.RespondJSON(w, http.StatusOK, groupsData)
 }
 
@@ -92,7 +69,6 @@ func (h *Handler) CreateGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate name
 	if input.Name != "" {
 		if err := common.ValidateName(input.Name); err != nil {
 			common.RespondError(w, http.StatusBadRequest, err.Error())
@@ -104,27 +80,19 @@ func (h *Handler) CreateGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.DB.ExecContext(r.Context(),
-		"INSERT INTO groups (name, description) VALUES (?, ?)", input.Name, input.Description)
+	id, err := h.Store.CreateGroup(r.Context(), input.Name, input.Description)
 	if err != nil {
 		log.ErrorContext(r.Context(), "failed to create group", "error", err)
 		common.InternalError(w)
 		return
 	}
 
-	id, err := result.LastInsertId()
-	if err != nil {
-		log.ErrorContext(r.Context(), "failed to get insert ID", "error", err)
-		common.InternalError(w)
-		return
-	}
-
-	if err := h.snapshotGroup(r.Context(), "create", int(id)); err != nil {
+	if err := h.Store.Snapshot(r.Context(), h.DB, "create", int(id)); err != nil {
 		log.ErrorContext(r.Context(), "failed to create snapshot", "error", err)
 	}
 
 	if h.ChangeWorker != nil {
-		group, groupErr := db.GetGroup(r.Context(), h.DB, int(id))
+		group, groupErr := h.Store.GetGroup(r.Context(), int(id))
 
 		var summary string
 		if groupErr == nil {
@@ -146,9 +114,14 @@ func (h *Handler) GetGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	g, err := db.GetGroup(r.Context(), h.DB, id)
+	g, err := h.Store.GetGroup(r.Context(), id)
 	if err != nil {
-		common.RespondError(w, http.StatusNotFound, "group not found")
+		if errors.Is(err, sql.ErrNoRows) {
+			common.RespondError(w, http.StatusNotFound, "group not found")
+		} else {
+			log.ErrorContext(r.Context(), "failed to query group", "error", err)
+			common.InternalError(w)
+		}
 		return
 	}
 
@@ -178,64 +151,51 @@ func (h *Handler) UpdateGroup(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Begin transaction to prevent TOCTOU race condition
-	tx, err := h.DB.BeginTx(r.Context(), nil)
-	if err != nil {
-		log.ErrorContext(r.Context(), "failed to begin transaction", "error", err)
-		common.InternalError(w)
-		return
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	currentGroup, err := db.GetGroup(r.Context(), tx, id)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			common.RespondError(w, http.StatusNotFound, "group not found")
-			return
+	hasChanges := false
+	err = store.RunInTx(r.Context(), h.DB, func(tx *sql.Tx) error {
+		currentGroup, err := h.Store.GetGroupTx(r.Context(), tx, id)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return common.NewHTTPError(http.StatusNotFound, "group not found")
+			}
+			return fmt.Errorf("failed to get group: %w", err)
 		}
-		log.ErrorContext(r.Context(), "failed to get group", "error", err)
-		common.InternalError(w)
-		return
-	}
 
-	nameChanged := input.Name != "" && input.Name != currentGroup.Name
-	descChanged := input.Description != currentGroup.Description
-	hasChanges := nameChanged || descChanged
+		nameChanged := input.Name != "" && input.Name != currentGroup.Name
+		descChanged := input.Description != currentGroup.Description
+		hasChanges = nameChanged || descChanged
 
-	if hasChanges {
-		if err := h.snapshotGroupTx(r.Context(), tx, "update", id); err != nil {
-			log.ErrorContext(r.Context(), "failed to create snapshot", "error", err)
+		if hasChanges {
+			if err := h.Store.Snapshot(r.Context(), tx, "update", id); err != nil {
+				log.ErrorContext(r.Context(), "failed to create snapshot", "error", err)
+			}
 		}
-	}
 
-	// Use COALESCE to preserve current name if input.Name is empty
-	_, err = tx.ExecContext(r.Context(),
-		"UPDATE groups SET name = COALESCE(NULLIF(?, ''), name), description = ? WHERE id = ?",
-		input.Name, input.Description, id)
+		if err := h.Store.UpdateGroup(r.Context(), tx, id, input.Name, input.Description); err != nil {
+			return fmt.Errorf("failed to update group: %w", err)
+		}
+		return nil
+	})
+
 	if err != nil {
-		log.ErrorContext(r.Context(), "failed to update group", "error", err)
-		common.InternalError(w)
+		var httpErr *common.HTTPError
+		if errors.As(err, &httpErr) {
+			common.RespondError(w, httpErr.StatusCode, httpErr.Message)
+		} else {
+			log.ErrorContext(r.Context(), "transaction failed", "error", err)
+			common.InternalError(w)
+		}
 		return
 	}
 
-	if err := tx.Commit(); err != nil {
-		log.ErrorContext(r.Context(), "failed to commit transaction", "error", err)
-		common.InternalError(w)
-		return
-	}
-
-	// Only trigger pending change if name or description changed
-	// Use h.DB after transaction is committed
 	if h.ChangeWorker != nil && hasChanges {
-		group, groupErr := db.GetGroup(r.Context(), h.DB, id)
-
+		group, groupErr := h.Store.GetGroup(r.Context(), id)
 		var summary string
 		if groupErr == nil {
 			summary = fmt.Sprintf("Group '%s' updated", group.Name)
 		} else {
 			summary = "Group updated"
 		}
-
 		h.ChangeWorker.QueueGroupChange(r.Context(), h.DB, h.Compiler, id, "update", summary)
 	}
 
@@ -249,10 +209,14 @@ func (h *Handler) DeleteGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var isSystem bool
-	err = h.DB.QueryRowContext(r.Context(), "SELECT COALESCE(is_system, 0) FROM groups WHERE id = ? AND COALESCE(is_pending_delete, 0) = 0", id).Scan(&isSystem)
+	isSystem, err := h.Store.GetGroupSystemStatus(r.Context(), id)
 	if err != nil {
-		common.RespondError(w, http.StatusNotFound, "group not found")
+		if errors.Is(err, sql.ErrNoRows) {
+			common.RespondError(w, http.StatusNotFound, "group not found")
+		} else {
+			log.ErrorContext(r.Context(), "failed to query group system status", "error", err)
+			common.InternalError(w)
+		}
 		return
 	}
 
@@ -263,8 +227,8 @@ func (h *Handler) DeleteGroup(w http.ResponseWriter, r *http.Request) {
 
 	err = common.CheckGroupDeleteConstraints(r.Context(), h.DB, id)
 	if err != nil {
-		constraintErr, ok := err.(*common.DeleteConstraintError)
-		if ok {
+		var constraintErr *common.DeleteConstraintError
+		if errors.As(err, &constraintErr) {
 			common.RespondJSON(w, http.StatusConflict, constraintErr.ToResponse())
 			return
 		}
@@ -272,11 +236,11 @@ func (h *Handler) DeleteGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.snapshotGroup(r.Context(), "delete", id); err != nil {
+	if err := h.Store.Snapshot(r.Context(), h.DB, "delete", id); err != nil {
 		log.ErrorContext(r.Context(), "failed to create snapshot", "error", err)
 	}
 
-	_, err = h.DB.ExecContext(r.Context(), "UPDATE groups SET is_pending_delete = 1 WHERE id = ?", id)
+	err = h.Store.SoftDeleteGroup(r.Context(), id)
 	if err != nil {
 		log.ErrorContext(r.Context(), "failed to soft delete group", "error", err)
 		common.InternalError(w)
@@ -284,22 +248,10 @@ func (h *Handler) DeleteGroup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.ChangeWorker != nil {
-		summary := "Group deleted"
-		h.ChangeWorker.QueueGroupChange(r.Context(), h.DB, h.Compiler, id, "delete", summary)
+		h.ChangeWorker.QueueGroupChange(r.Context(), h.DB, h.Compiler, id, "delete", "Group deleted")
 	}
 
 	w.WriteHeader(http.StatusNoContent)
-}
-
-// --- Group Members ---
-
-// PeerInGroup represents a peer that belongs to a group
-type PeerInGroup struct {
-	ID        int    `json:"id"`
-	Hostname  string `json:"hostname"`
-	IPAddress string `json:"ip_address"`
-	OSType    string `json:"os_type"`
-	IsManual  bool   `json:"is_manual"`
 }
 
 func (h *Handler) ListGroupMembers(w http.ResponseWriter, r *http.Request) {
@@ -309,34 +261,12 @@ func (h *Handler) ListGroupMembers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	query := `
-	SELECT p.id, p.hostname, p.ip_address, p.os_type, p.is_manual
-	FROM peers p
-	JOIN group_members gm ON p.id = gm.peer_id
-	WHERE gm.group_id = ?
-	ORDER BY p.hostname ASC`
-
-	rows, err := h.DB.QueryContext(r.Context(), query, id)
+	peers, err := h.Store.ListGroupMembers(r.Context(), id)
 	if err != nil {
+		log.ErrorContext(r.Context(), "failed to list group members", "error", err)
 		common.RespondError(w, http.StatusInternalServerError, "failed to query group members")
 		return
 	}
-	defer func() {
-		if cerr := rows.Close(); cerr != nil {
-			log.ErrorContext(r.Context(), "failed to close rows", "error", cerr)
-		}
-	}()
-
-	var peers []PeerInGroup
-	for rows.Next() {
-		var p PeerInGroup
-		if err := rows.Scan(&p.ID, &p.Hostname, &p.IPAddress, &p.OSType, &p.IsManual); err != nil {
-			common.RespondError(w, http.StatusInternalServerError, "failed to scan peer")
-			return
-		}
-		peers = append(peers, p)
-	}
-	peers = common.EnsureSlice(peers)
 
 	common.RespondJSON(w, http.StatusOK, peers)
 }
@@ -360,31 +290,24 @@ func (h *Handler) AddGroupMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.snapshotGroup(r.Context(), "update", groupID); err != nil {
+	if err := h.Store.Snapshot(r.Context(), h.DB, "update", groupID); err != nil {
 		log.ErrorContext(r.Context(), "failed to create snapshot", "error", err)
 	}
 
-	result, err := h.DB.ExecContext(r.Context(), "INSERT OR IGNORE INTO group_members (group_id, peer_id) VALUES (?, ?)", groupID, input.PeerID)
+	id, err := h.Store.AddGroupMember(r.Context(), groupID, input.PeerID)
 	if err != nil {
 		log.ErrorContext(r.Context(), "failed to add member", "error", err)
 		common.InternalError(w)
 		return
 	}
 
-	id, err := result.LastInsertId()
-	if err != nil {
-		log.ErrorContext(r.Context(), "failed to get insert ID", "error", err)
-		common.InternalError(w)
-		return
-	}
-
 	if h.ChangeWorker != nil {
-		peer, peerErr := db.GetPeer(r.Context(), h.DB, input.PeerID)
-		group, groupErr := db.GetGroup(r.Context(), h.DB, groupID)
+		hostname, hostnameErr := h.Store.GetPeerHostname(r.Context(), int64(input.PeerID))
+		group, groupErr := h.Store.GetGroup(r.Context(), groupID)
 
 		var summary string
-		if peerErr == nil && groupErr == nil {
-			summary = fmt.Sprintf("Peer '%s' added to group '%s'", peer.Hostname, group.Name)
+		if hostnameErr == nil && groupErr == nil {
+			summary = fmt.Sprintf("Peer '%s' added to group '%s'", hostname, group.Name)
 		} else {
 			summary = "Peer added to group"
 		}
@@ -408,11 +331,11 @@ func (h *Handler) DeleteGroupMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.snapshotGroup(r.Context(), "update", groupID); err != nil {
+	if err := h.Store.Snapshot(r.Context(), h.DB, "update", groupID); err != nil {
 		log.ErrorContext(r.Context(), "failed to create snapshot", "error", err)
 	}
 
-	_, err = h.DB.ExecContext(r.Context(), "DELETE FROM group_members WHERE group_id = ? AND peer_id = ?", groupID, peerID)
+	err = h.Store.DeleteGroupMember(r.Context(), groupID, peerID)
 	if err != nil {
 		log.ErrorContext(r.Context(), "failed to remove peer from group", "error", err)
 		common.InternalError(w)
@@ -420,12 +343,12 @@ func (h *Handler) DeleteGroupMember(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.ChangeWorker != nil {
-		peer, peerErr := db.GetPeer(r.Context(), h.DB, peerID)
-		group, groupErr := db.GetGroup(r.Context(), h.DB, groupID)
+		hostname, hostnameErr := h.Store.GetPeerHostname(r.Context(), int64(peerID))
+		group, groupErr := h.Store.GetGroup(r.Context(), groupID)
 
 		var summary string
-		if peerErr == nil && groupErr == nil {
-			summary = fmt.Sprintf("Peer '%s' removed from group '%s'", peer.Hostname, group.Name)
+		if hostnameErr == nil && groupErr == nil {
+			summary = fmt.Sprintf("Peer '%s' removed from group '%s'", hostname, group.Name)
 		} else {
 			summary = "Peer removed from group"
 		}
@@ -446,95 +369,4 @@ func (h *Handler) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/{id:[0-9]+}/members", h.ListGroupMembers).Methods("GET")
 	r.HandleFunc("/{id:[0-9]+}/members", h.AddGroupMember).Methods("POST")
 	r.HandleFunc("/{groupId:[0-9]+}/members/{peerId:[0-9]+}", h.DeleteGroupMember).Methods("DELETE")
-}
-
-// GroupSnapshotData represents the payload of a group snapshot.
-type GroupSnapshotData struct {
-	Group   *models.GroupRow        `json:"group"`
-	Members []models.GroupMemberRow `json:"members"`
-}
-
-func (h *Handler) snapshotGroup(ctx context.Context, action string, groupID int) error {
-	if action == "create" {
-		return db.CreateSnapshot(ctx, h.DB, "group", groupID, action, "")
-	}
-
-	grp, err := db.GetGroup(ctx, h.DB, groupID)
-	if err != nil {
-		return fmt.Errorf("get group: %w", err)
-	}
-
-	rows, err := h.DB.QueryContext(ctx, "SELECT id, group_id, peer_id, added_at FROM group_members WHERE group_id = ?", groupID)
-	if err != nil {
-		return fmt.Errorf("query members: %w", err)
-	}
-	defer func() {
-		_ = rows.Close()
-	}()
-
-	var members []models.GroupMemberRow
-	for rows.Next() {
-		var m models.GroupMemberRow
-		if err := rows.Scan(&m.ID, &m.GroupID, &m.PeerID, &m.AddedAt); err != nil {
-			return fmt.Errorf("scan member: %w", err)
-		}
-		members = append(members, m)
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-
-	data := GroupSnapshotData{
-		Group:   &grp,
-		Members: members,
-	}
-	bytes, err := json.Marshal(data)
-	if err != nil {
-		return fmt.Errorf("marshal snapshot: %w", err)
-	}
-
-	return db.CreateSnapshot(ctx, h.DB, "group", groupID, action, string(bytes))
-}
-
-// snapshotGroupTx creates a snapshot using a transaction
-func (h *Handler) snapshotGroupTx(ctx context.Context, tx *sql.Tx, action string, groupID int) error {
-	if action == "create" {
-		return db.CreateSnapshot(ctx, tx, "group", groupID, action, "")
-	}
-
-	grp, err := db.GetGroup(ctx, tx, groupID)
-	if err != nil {
-		return fmt.Errorf("get group: %w", err)
-	}
-
-	rows, err := tx.QueryContext(ctx, "SELECT id, group_id, peer_id, added_at FROM group_members WHERE group_id = ?", groupID)
-	if err != nil {
-		return fmt.Errorf("query members: %w", err)
-	}
-	defer func() {
-		_ = rows.Close()
-	}()
-
-	var members []models.GroupMemberRow
-	for rows.Next() {
-		var m models.GroupMemberRow
-		if err := rows.Scan(&m.ID, &m.GroupID, &m.PeerID, &m.AddedAt); err != nil {
-			return fmt.Errorf("scan member: %w", err)
-		}
-		members = append(members, m)
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-
-	data := GroupSnapshotData{
-		Group:   &grp,
-		Members: members,
-	}
-	bytes, err := json.Marshal(data)
-	if err != nil {
-		return fmt.Errorf("marshal snapshot: %w", err)
-	}
-
-	return db.CreateSnapshot(ctx, tx, "group", groupID, action, string(bytes))
 }

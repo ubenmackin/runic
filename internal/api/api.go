@@ -37,6 +37,7 @@ import (
 	"runic/internal/engine"
 	"runic/internal/logcleanup"
 	"runic/internal/metrics"
+	"runic/internal/store"
 )
 
 // API holds dependencies for the API handlers.
@@ -89,6 +90,8 @@ func NewAPI(db *sql.DB, compiler *engine.Compiler, logsDBPath string, alertServi
 	sseHub := events.NewSSEHub()
 	changeWorker := common.NewChangeWorker(sseHub)
 	pushWorker := common.NewPushWorker(db, compiler, alertService, sseHub)
+	groupStore := store.NewGroupStore(db)
+	policyStore := store.NewPolicyStore(db)
 	return &API{
 		Compiler:     compiler,
 		DB:           db,
@@ -102,8 +105,8 @@ func NewAPI(db *sql.DB, compiler *engine.Compiler, logsDBPath string, alertServi
 		Peers:        peers.NewHandler(db, compiler, sseHub),
 		Agents:       agents.NewHandler(db, logsDB, alertService),
 		Auth:         authhandlers.NewHandler(db, db),
-		Groups:       groups.NewHandler(db, compiler, changeWorker),
-		Policies:     policies.NewHandler(db, compiler, changeWorker),
+		Groups:       groups.NewHandler(db, compiler, changeWorker, groupStore),
+		Policies:     policies.NewHandler(db, compiler, changeWorker, policyStore),
 		Services:     services.NewHandler(db, compiler, changeWorker),
 		Imports:      imports.NewHandler(db, sseHub, changeWorker),
 		Logs:         logs.NewHandler(logsDB),

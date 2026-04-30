@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 )
 
@@ -47,7 +48,7 @@ func DoJSONRequest(ctx context.Context, client HTTPClient, method, url string, b
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		if cErr := resp.Body.Close(); cErr != nil {
-			fmt.Printf("close body failed: %v", cErr)
+			slog.Warn("close body failed", "error", cErr)
 		}
 		httpErr := &HTTPStatusError{
 			StatusCode: resp.StatusCode,

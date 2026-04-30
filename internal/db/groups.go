@@ -8,15 +8,6 @@ import (
 	"runic/internal/models"
 )
 
-// GetGroup fetches a group by ID.
-func GetGroup(ctx context.Context, database Querier, groupID int) (models.GroupRow, error) {
-	var g models.GroupRow
-	err := database.QueryRowContext(ctx,
-		"SELECT id, name, COALESCE(description, ''), COALESCE(is_system, 0) FROM groups WHERE id = ? AND is_pending_delete = 0", groupID,
-	).Scan(&g.ID, &g.Name, &g.Description, &g.IsSystem)
-	return g, err
-}
-
 // ListGroupMembers fetches all members of a group.
 func ListGroupMembers(ctx context.Context, database Querier, groupID int) ([]models.GroupMemberRow, error) {
 	rows, err := database.QueryContext(ctx,

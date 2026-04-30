@@ -12,6 +12,7 @@ import (
 	"github.com/gorilla/mux"
 
 	"runic/internal/api/common"
+	ic "runic/internal/common"
 	runiclog "runic/internal/common/log"
 )
 
@@ -99,15 +100,15 @@ func (h *Handler) ListRegistrationTokens(w http.ResponseWriter, r *http.Request)
 			"id":               id,
 			"token":            masked,
 			"description":      desc,
-			"created_at":       common.FormatSQLiteDatetime(createdAt.String),
-			"used_at":          common.FormatSQLiteDatetime(usedAt.String),
+			"created_at":       ic.FormatSQLiteDatetime(createdAt.String),
+			"used_at":          ic.FormatSQLiteDatetime(usedAt.String),
 			"used_by_hostname": usedByHostname.String,
 			"status":           status,
 			"is_revoked":       isRevoked,
 		})
 	}
 
-	tokens = common.EnsureSlice(tokens)
+	tokens = ic.EnsureSlice(tokens)
 	common.RespondJSON(w, http.StatusOK, tokens)
 }
 

@@ -4,6 +4,7 @@ package peers
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"runic/internal/api/agents"
 	"runic/internal/api/common"
 	"runic/internal/api/events"
+	ic "runic/internal/common"
 	"runic/internal/common/constants"
 	"runic/internal/common/log"
 	"runic/internal/db"
@@ -128,13 +130,13 @@ ORDER BY p.hostname ASC
 			p.AgentVersion = agentVersion.String
 		}
 		if lastHeartbeat.Valid {
-			p.LastHeartbeat = common.FormatSQLiteDatetime(lastHeartbeat.String)
+			p.LastHeartbeat = ic.FormatSQLiteDatetime(lastHeartbeat.String)
 		}
 		if description.Valid {
 			p.Description = description.String
 		}
 		if hmacKeyLastRotatedAt.Valid {
-			p.HMACKeyLastRotatedAt = common.FormatSQLiteDatetime(hmacKeyLastRotatedAt.String)
+			p.HMACKeyLastRotatedAt = ic.FormatSQLiteDatetime(hmacKeyLastRotatedAt.String)
 		}
 		p.IPs = []PeerIP{} // Initialize to empty slice instead of nil
 		peers = append(peers, p)
@@ -294,7 +296,7 @@ func (h *Handler) UpdatePeer(w http.ResponseWriter, r *http.Request) {
 	// Validate this is a manual peer (only manual peers can be edited)
 	var isManual bool
 	err = h.DB.QueryRowContext(r.Context(), "SELECT is_manual FROM peers WHERE id = ?", id).Scan(&isManual)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		common.RespondError(w, http.StatusNotFound, "peer not found")
 		return
 	}
@@ -419,7 +421,7 @@ func (h *Handler) GetPeerBundle(w http.ResponseWriter, r *http.Request) {
 
 		err = h.DB.QueryRowContext(r.Context(), query, args...).Scan(&version, &versionNumber, &rulesContent, &hmac)
 		if err != nil {
-			if err == sql.ErrNoRows {
+			if errors.Is(err, sql.ErrNoRows) {
 				log.WarnContext(r.Context(), "no pending bundle found", "peer_id", id)
 				common.RespondError(w, http.StatusNotFound, "bundle not found")
 				return
@@ -431,7 +433,7 @@ func (h *Handler) GetPeerBundle(w http.ResponseWriter, r *http.Request) {
 
 		var deployedVersion sql.NullString
 		err = h.DB.QueryRowContext(r.Context(), "SELECT bundle_version FROM peers WHERE id = ?", id).Scan(&deployedVersion)
-		if err != nil && err != sql.ErrNoRows {
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			log.ErrorContext(r.Context(), "failed to get deployed version", "error", err)
 			common.InternalError(w)
 			return
@@ -449,7 +451,7 @@ func (h *Handler) GetPeerBundle(w http.ResponseWriter, r *http.Request) {
 			err = h.DB.QueryRowContext(r.Context(),
 				"SELECT rules_content FROM rule_bundles WHERE peer_id = ? AND version = ?",
 				id, deployedVersion.String).Scan(&deployedContent)
-			if err != nil && err != sql.ErrNoRows {
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
 				log.ErrorContext(r.Context(), "failed to get deployed bundle", "error", err)
 				// Don't fail the request, just don't include deployed content
 			}
@@ -477,7 +479,7 @@ func (h *Handler) GetPeerBundle(w http.ResponseWriter, r *http.Request) {
 
 	err = h.DB.QueryRowContext(r.Context(), query, args...).Scan(&version, &versionNumber, &rulesContent, &hmac)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			log.WarnContext(r.Context(), "no bundle found", "peer_id", id, "include_pending", includePending)
 			common.RespondError(w, http.StatusNotFound, "bundle not found")
 			return
@@ -511,14 +513,14 @@ func (h *Handler) GetPeerByIP(w http.ResponseWriter, r *http.Request) {
 		common.RespondJSON(w, http.StatusOK, p)
 		return
 	}
-	if err != sql.ErrNoRows {
+	if !errors.Is(err, sql.ErrNoRows) {
 		common.InternalError(w)
 		return
 	}
 
 	// Fallback: check peer_ips table for secondary IPs
 	err = h.DB.QueryRowContext(r.Context(), "SELECT p.id, p.hostname, p.ip_address, p.is_manual FROM peers p JOIN peer_ips pi ON p.id = pi.peer_id WHERE pi.ip_address = ?", ip).Scan(&p.ID, &p.Hostname, &p.IPAddress, &p.IsManual)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		common.RespondJSON(w, http.StatusOK, nil) // No peer found
 		return
 	}
@@ -541,7 +543,7 @@ func (h *Handler) GetPeerByHostname(w http.ResponseWriter, r *http.Request) {
 	// Query for peer with exact hostname match (case-sensitive)
 	var p Peer
 	err := h.DB.QueryRowContext(r.Context(), "SELECT id, hostname, ip_address, is_manual FROM peers WHERE hostname = ?", hostname).Scan(&p.ID, &p.Hostname, &p.IPAddress, &p.IsManual)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		common.RespondJSON(w, http.StatusOK, nil) // No peer found
 		return
 	}
@@ -564,7 +566,7 @@ func (h *Handler) GetPeerIPs(w http.ResponseWriter, r *http.Request) {
 	// Check if peer exists
 	var exists int
 	err = h.DB.QueryRowContext(r.Context(), "SELECT 1 FROM peers WHERE id = ?", id).Scan(&exists)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		common.RespondError(w, http.StatusNotFound, "peer not found")
 		return
 	}
@@ -627,7 +629,7 @@ func (h *Handler) AddPeerIP(w http.ResponseWriter, r *http.Request) {
 	// Check if peer exists
 	var exists int
 	err = h.DB.QueryRowContext(r.Context(), "SELECT 1 FROM peers WHERE id = ?", id).Scan(&exists)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		common.RespondError(w, http.StatusNotFound, "peer not found")
 		return
 	}
@@ -688,7 +690,7 @@ func (h *Handler) DeletePeerIP(w http.ResponseWriter, r *http.Request) {
 	// Check if peer exists
 	var peerExists int
 	err = h.DB.QueryRowContext(r.Context(), "SELECT 1 FROM peers WHERE id = ?", peerID).Scan(&peerExists)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		common.RespondError(w, http.StatusNotFound, "peer not found")
 		return
 	}
@@ -700,7 +702,7 @@ func (h *Handler) DeletePeerIP(w http.ResponseWriter, r *http.Request) {
 	// Check if the peer_ip entry exists and belongs to this peer
 	var isPrimary int
 	err = h.DB.QueryRowContext(r.Context(), "SELECT is_primary FROM peer_ips WHERE id = ? AND peer_id = ?", ipID, peerID).Scan(&isPrimary)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		common.RespondError(w, http.StatusNotFound, "peer IP not found")
 		return
 	}
@@ -769,7 +771,7 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 	var hostname string
 	var isManual bool
 	err = h.DB.QueryRowContext(ctx, "SELECT hostname, is_manual FROM peers WHERE id = ?", peerID).Scan(&hostname, &isManual)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		common.RespondError(w, http.StatusNotFound, "peer not found")
 		return
 	}

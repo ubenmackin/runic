@@ -4,6 +4,7 @@ package alerts
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -446,24 +447,24 @@ func (s *Service) loadSMTPConfig(ctx context.Context) (*SMTPConfig, error) {
 
 	if err := s.database.QueryRowContext(ctx,
 		`SELECT value FROM system_config WHERE key = 'smtp_username'`,
-	).Scan(&username); err != nil && err != sql.ErrNoRows {
+	).Scan(&username); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		s.logger.Warn("failed to load SMTP username", "error", err)
 	}
 
 	if err := s.database.QueryRowContext(ctx,
 		`SELECT value FROM system_config WHERE key = 'smtp_password'`,
-	).Scan(&password); err != nil && err != sql.ErrNoRows {
+	).Scan(&password); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		s.logger.Warn("failed to load SMTP password", "error", err)
 	}
 
 	if err := s.database.QueryRowContext(ctx,
 		`SELECT value FROM system_config WHERE key = 'smtp_from_address'`,
-	).Scan(&fromAddress); err != nil && err != sql.ErrNoRows {
+	).Scan(&fromAddress); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		s.logger.Warn("failed to load SMTP from_address", "error", err)
 	}
 
 	useTLS, err := GetBoolConfig(ctx, s.database, "smtp_use_tls")
-	if err != nil && err != sql.ErrNoRows {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		s.logger.Warn("failed to load SMTP use_tls", "error", err)
 	}
 

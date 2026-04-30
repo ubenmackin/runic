@@ -4,6 +4,7 @@ package logcleanup
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"time"
 
 	"runic/internal/common/log"
@@ -47,7 +48,7 @@ func (w *Worker) Start(ctx context.Context) {
 func (w *Worker) runCleanup(ctx context.Context) {
 	var retentionDays int
 	err := w.db.QueryRowContext(ctx, "SELECT value FROM system_config WHERE key = 'log_retention_days'").Scan(&retentionDays)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		retentionDays = 30 // default
 	} else if err != nil {
 		log.ErrorContext(ctx, "Failed to get log_retention_days for cleanup", "error", err)
