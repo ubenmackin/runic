@@ -30,7 +30,6 @@ type GroupStore interface {
 	ListGroupMembers(ctx context.Context, id int) ([]store.PeerInGroup, error)
 	AddGroupMember(ctx context.Context, groupID, peerID int) (int64, error)
 	DeleteGroupMember(ctx context.Context, groupID, peerID int) error
-	GetPeerHostname(ctx context.Context, peerID int64) (string, error)
 	Snapshot(ctx context.Context, q db.Querier, action string, groupID int) error
 }
 
@@ -40,11 +39,12 @@ type Handler struct {
 	Compiler     *engine.Compiler
 	ChangeWorker *common.ChangeWorker
 	Store        GroupStore
+	PeerStore    *store.PeerStore
 }
 
 // NewHandler creates a new groups handler with the given dependencies
-func NewHandler(db db.DB, compiler *engine.Compiler, changeWorker *common.ChangeWorker, groupStore GroupStore) *Handler {
-	return &Handler{DB: db, Compiler: compiler, ChangeWorker: changeWorker, Store: groupStore}
+func NewHandler(db db.DB, compiler *engine.Compiler, changeWorker *common.ChangeWorker, groupStore GroupStore, peerStore *store.PeerStore) *Handler {
+	return &Handler{DB: db, Compiler: compiler, ChangeWorker: changeWorker, Store: groupStore, PeerStore: peerStore}
 }
 
 // --- Groups ---
@@ -302,7 +302,7 @@ func (h *Handler) AddGroupMember(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.ChangeWorker != nil {
-		hostname, hostnameErr := h.Store.GetPeerHostname(r.Context(), int64(input.PeerID))
+		hostname, hostnameErr := h.PeerStore.GetPeerHostname(r.Context(), input.PeerID)
 		group, groupErr := h.Store.GetGroup(r.Context(), groupID)
 
 		var summary string
@@ -343,7 +343,7 @@ func (h *Handler) DeleteGroupMember(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.ChangeWorker != nil {
-		hostname, hostnameErr := h.Store.GetPeerHostname(r.Context(), int64(peerID))
+		hostname, hostnameErr := h.PeerStore.GetPeerHostname(r.Context(), peerID)
 		group, groupErr := h.Store.GetGroup(r.Context(), groupID)
 
 		var summary string

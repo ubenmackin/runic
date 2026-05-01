@@ -413,3 +413,36 @@ type TestEmailResponse struct {
 	Success bool   `json:"success"`
 	Message string `json:"message"`
 }
+
+// AlertHistoryFilter holds filter, sort, and pagination parameters for ListAlertHistory.
+type AlertHistoryFilter struct {
+	Search    string `json:"search,omitempty"`
+	AlertType string `json:"alert_type,omitempty"`
+	Severity  string `json:"severity,omitempty"`
+	Status    string `json:"status,omitempty"`
+	StartDate string `json:"start_date,omitempty"`
+	EndDate   string `json:"end_date,omitempty"`
+	SortBy    string `json:"sort_by,omitempty"`
+	SortDir   string `json:"sort_dir,omitempty"`
+	Limit     int    `json:"limit,omitempty"`
+	Offset    int    `json:"offset,omitempty"`
+}
+
+// AlertHistoryListResult holds the paginated result of listing alert history.
+type AlertHistoryListResult struct {
+	Alerts []AlertHistory `json:"alerts"`
+	Total  int            `json:"total"`
+	Limit  int            `json:"limit"`
+	Offset int            `json:"offset"`
+}
+
+// SMTPConfigView represents SMTP configuration for display (password is masked).
+type SMTPConfigView struct {
+	Host        string `json:"host"`
+	Port        int    `json:"port"`
+	Username    string `json:"username"`
+	PasswordSet bool   `json:"password_set"`
+	UseTLS      bool   `json:"use_tls"`
+	FromAddress string `json:"from_address"`
+	Enabled     bool   `json:"enabled"`
+}

@@ -14,18 +14,19 @@ import (
 	"runic/internal/common/log"
 	"runic/internal/db"
 	"runic/internal/engine"
+	"runic/internal/store"
 )
 
 // Handler holds dependencies for service handlers.
 type Handler struct {
-	DB           db.Querier
+	Store        *store.ServiceStore
 	Compiler     *engine.Compiler
 	ChangeWorker *common.ChangeWorker
 }
 
 // NewHandler creates a new services handler with dependencies.
-func NewHandler(db db.Querier, compiler *engine.Compiler, changeWorker *common.ChangeWorker) *Handler {
-	return &Handler{DB: db, Compiler: compiler, ChangeWorker: changeWorker}
+func NewHandler(serviceStore *store.ServiceStore, compiler *engine.Compiler, changeWorker *common.ChangeWorker) *Handler {
+	return &Handler{Store: serviceStore, Compiler: compiler, ChangeWorker: changeWorker}
 }
 
 // validProtocols is the set of allowed protocol values for user-defined services.
@@ -81,42 +82,27 @@ func validateService(ports, sourcePorts, protocol string, isSystem bool) error {
 	return nil
 }
 
+// parseDirectionHint converts a direction hint string to its integer representation.
+func parseDirectionHint(s string) int {
+	switch s {
+	case "outbound":
+		return 1
+	case "both":
+		return 2
+	default:
+		return 0 // inbound
+	}
+}
+
 // --- Services ---
 
 func (h *Handler) ListServices(w http.ResponseWriter, r *http.Request) {
-	rows, err := h.DB.QueryContext(r.Context(),
-		"SELECT id, name, ports, COALESCE(source_ports, ''), protocol, COALESCE(description, ''), direction_hint, COALESCE(is_system, 0), COALESCE(is_pending_delete, 0) FROM services")
+	servicesData, err := h.Store.ListServices(r.Context())
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "failed to query services")
 		return
 	}
-	defer func() {
-		if cErr := rows.Close(); cErr != nil {
-			log.Warn("Failed to close rows", "error", cErr)
-		}
-	}()
 
-	type serviceResp struct {
-		ID              int    `json:"id"`
-		Name            string `json:"name"`
-		Ports           string `json:"ports"`
-		SourcePorts     string `json:"source_ports"`
-		Protocol        string `json:"protocol"`
-		Description     string `json:"description"`
-		DirectionHint   string `json:"direction_hint"`
-		IsSystem        bool   `json:"is_system"`
-		IsPendingDelete bool   `json:"is_pending_delete"`
-	}
-
-	var servicesData []serviceResp
-	for rows.Next() {
-		var s serviceResp
-		if err := rows.Scan(&s.ID, &s.Name, &s.Ports, &s.SourcePorts, &s.Protocol, &s.Description, &s.DirectionHint, &s.IsSystem, &s.IsPendingDelete); err != nil {
-			common.RespondError(w, http.StatusInternalServerError, "failed to scan service")
-			return
-		}
-		servicesData = append(servicesData, s)
-	}
 	servicesData = ic.EnsureSlice(servicesData)
 	common.RespondJSON(w, http.StatusOK, servicesData)
 }
@@ -158,23 +144,14 @@ func (h *Handler) CreateService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.DB.ExecContext(r.Context(),
-		`INSERT INTO services (name, ports, source_ports, protocol, description, direction_hint, is_system)
-		VALUES (?, ?, ?, ?, ?, ?, 0)`, input.Name, input.Ports, input.SourcePorts, input.Protocol, input.Description, input.DirectionHint)
+	id, err := h.Store.CreateService(r.Context(), input.Name, input.Ports, input.SourcePorts, input.Protocol, input.Description, parseDirectionHint(input.DirectionHint), false)
 	if err != nil {
 		log.ErrorContext(r.Context(), "failed to create service", "error", err)
 		common.InternalError(w)
 		return
 	}
 
-	id, err := result.LastInsertId()
-	if err != nil {
-		log.ErrorContext(r.Context(), "failed to get insert ID", "error", err)
-		common.InternalError(w)
-		return
-	}
-
-	if err := h.snapshotService(r.Context(), "create", int(id)); err != nil {
+	if err := h.Store.SnapshotService(r.Context(), h.Store.DB(), int(id), "create"); err != nil {
 		log.ErrorContext(r.Context(), "failed to create snapshot", "error", err)
 	}
 	h.queueServiceChange(r.Context(), int(id), "create", fmt.Sprintf("Service '%s' created", input.Name))
@@ -189,7 +166,7 @@ func (h *Handler) GetService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s, err := db.GetService(r.Context(), h.DB, id)
+	s, err := db.GetService(r.Context(), h.Store.DB(), id)
 	if err != nil {
 		common.RespondError(w, http.StatusNotFound, "service not found")
 		return
@@ -206,14 +183,13 @@ func (h *Handler) UpdateService(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check if this is a system service
-	var isSystem bool
-	err = h.DB.QueryRowContext(r.Context(), "SELECT COALESCE(is_system, 0) FROM services WHERE id = ?", id).Scan(&isSystem)
+	svc, err := db.GetService(r.Context(), h.Store.DB(), id)
 	if err != nil {
 		common.RespondError(w, http.StatusNotFound, "service not found")
 		return
 	}
 
-	if isSystem {
+	if svc.IsSystem {
 		common.RespondError(w, http.StatusForbidden, "Cannot edit system service")
 		return
 	}
@@ -243,19 +219,16 @@ func (h *Handler) UpdateService(w http.ResponseWriter, r *http.Request) {
 		input.Protocol = "tcp"
 	}
 
-	if err := validateService(input.Ports, input.SourcePorts, input.Protocol, isSystem); err != nil {
+	if err := validateService(input.Ports, input.SourcePorts, input.Protocol, svc.IsSystem); err != nil {
 		common.RespondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	if err := h.snapshotService(r.Context(), "update", id); err != nil {
+	if err := h.Store.SnapshotService(r.Context(), h.Store.DB(), id, "update"); err != nil {
 		log.ErrorContext(r.Context(), "failed to create snapshot", "error", err)
 	}
 
-	_, err = h.DB.ExecContext(r.Context(),
-		`UPDATE services SET name = ?, ports = ?, source_ports = ?, protocol = ?, description = ?, direction_hint = ?
-		WHERE id = ?`, input.Name, input.Ports, input.SourcePorts, input.Protocol, input.Description, input.DirectionHint, id)
-	if err != nil {
+	if err := h.Store.UpdateService(r.Context(), id, input.Name, input.Ports, input.SourcePorts, input.Protocol, input.Description, parseDirectionHint(input.DirectionHint)); err != nil {
 		log.ErrorContext(r.Context(), "failed to update service", "error", err)
 		common.InternalError(w)
 		return
@@ -273,27 +246,18 @@ func (h *Handler) DeleteService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var serviceName string
-	err = h.DB.QueryRowContext(r.Context(), "SELECT name FROM services WHERE id = ?", id).Scan(&serviceName)
+	svc, err := db.GetService(r.Context(), h.Store.DB(), id)
 	if err != nil {
 		common.RespondError(w, http.StatusNotFound, "service not found")
 		return
 	}
 
-	// Check if this is a system service
-	var isSystem bool
-	err = h.DB.QueryRowContext(r.Context(), "SELECT COALESCE(is_system, 0) FROM services WHERE id = ?", id).Scan(&isSystem)
-	if err != nil {
-		common.RespondError(w, http.StatusNotFound, "service not found")
-		return
-	}
-
-	if isSystem {
+	if svc.IsSystem {
 		common.RespondError(w, http.StatusForbidden, "Cannot delete system service")
 		return
 	}
 
-	err = common.CheckServiceDeleteConstraints(r.Context(), h.DB, id)
+	err = common.CheckServiceDeleteConstraints(r.Context(), h.Store.DB(), id)
 	if err != nil {
 		constraintErr, ok := err.(*common.DeleteConstraintError)
 		if ok {
@@ -304,44 +268,31 @@ func (h *Handler) DeleteService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.snapshotService(r.Context(), "delete", id); err != nil {
+	if err := h.Store.SnapshotService(r.Context(), h.Store.DB(), id, "delete"); err != nil {
 		log.ErrorContext(r.Context(), "failed to create snapshot", "error", err)
 	}
 
-	_, err = h.DB.ExecContext(r.Context(), "UPDATE services SET is_pending_delete = 1 WHERE id = ?", id)
-	if err != nil {
+	if err := h.Store.SoftDeleteService(r.Context(), id); err != nil {
 		log.ErrorContext(r.Context(), "failed to delete service", "error", err)
 		common.InternalError(w)
 		return
 	}
 
-	h.queueServiceChange(r.Context(), id, "delete", fmt.Sprintf("Service '%s' deleted", serviceName))
+	h.queueServiceChange(r.Context(), id, "delete", fmt.Sprintf("Service '%s' deleted", svc.Name))
 
 	w.WriteHeader(http.StatusNoContent)
 }
 
 // queueServiceChange queues pending changes for all peers affected by policies using this service.
 func (h *Handler) queueServiceChange(ctx context.Context, serviceID int, action, summary string) {
-	rows, err := h.DB.QueryContext(ctx, `
-		SELECT DISTINCT id FROM policies
-		WHERE service_id = ? AND enabled = 1
-	`, serviceID)
+	policyIDs, err := h.Store.FindPoliciesUsingService(ctx, serviceID)
 	if err != nil {
 		log.ErrorContext(ctx, "failed to find policies for service", "service_id", serviceID, "error", err)
 		return
 	}
-	defer func() {
-		if cErr := rows.Close(); cErr != nil {
-			log.Warn("Failed to close rows", "error", cErr)
-		}
-	}()
 
 	peerSet := make(map[int]bool)
-	for rows.Next() {
-		var policyID int
-		if err := rows.Scan(&policyID); err != nil {
-			continue
-		}
+	for _, policyID := range policyIDs {
 		affectedPeers, err := h.Compiler.GetAffectedPeersByPolicy(ctx, policyID)
 		if err != nil {
 			log.ErrorContext(ctx, "Failed to get affected peers for service change", "policy_id", policyID, "error", err)
@@ -352,18 +303,13 @@ func (h *Handler) queueServiceChange(ctx context.Context, serviceID int, action,
 		}
 	}
 
-	if err := rows.Err(); err != nil {
-		log.ErrorContext(ctx, "failed to iterate policies for service", "service_id", serviceID, "error", err)
-		return
-	}
-
 	peerIDs := make([]int, 0, len(peerSet))
 	for peerID := range peerSet {
 		peerIDs = append(peerIDs, peerID)
 	}
 
 	if len(peerIDs) > 0 && h.ChangeWorker != nil {
-		h.ChangeWorker.QueuePeerChange(ctx, h.DB, peerIDs, "service", action, serviceID, summary)
+		h.ChangeWorker.QueuePeerChange(ctx, h.Store.DB(), peerIDs, "service", action, serviceID, summary)
 	}
 }
 
@@ -384,18 +330,6 @@ func (h *Handler) GetServiceByPort(w http.ResponseWriter, r *http.Request) {
 	port := r.URL.Query().Get("port")
 	protocol := r.URL.Query().Get("protocol")
 
-	type serviceResp struct {
-		ID              int    `json:"id"`
-		Name            string `json:"name"`
-		Ports           string `json:"ports"`
-		SourcePorts     string `json:"source_ports"`
-		Protocol        string `json:"protocol"`
-		Description     string `json:"description"`
-		DirectionHint   string `json:"direction_hint"`
-		IsSystem        bool   `json:"is_system"`
-		IsPendingDelete bool   `json:"is_pending_delete"`
-	}
-
 	if port == "" || port == "0" {
 		if protocol == "" {
 			common.RespondError(w, http.StatusBadRequest, "port or protocol parameter required")
@@ -408,25 +342,16 @@ func (h *Handler) GetServiceByPort(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Protocol-only lookup: search by protocol including system services
-		// Match both the exact protocol and 'both' (which applies to tcp and udp)
-		query := `
-		SELECT id, name, ports, COALESCE(source_ports, ''), protocol, COALESCE(description, ''), direction_hint, COALESCE(is_system, 0), COALESCE(is_pending_delete, 0)
-		FROM services
-		WHERE (protocol = ? OR protocol = 'both') AND is_pending_delete = 0
-		LIMIT 1
-		`
-
-		var s serviceResp
-		err := h.DB.QueryRowContext(r.Context(), query, protocol).Scan(
-			&s.ID, &s.Name, &s.Ports, &s.SourcePorts, &s.Protocol, &s.Description, &s.DirectionHint, &s.IsSystem, &s.IsPendingDelete)
+		results, err := h.Store.GetServiceByPort(r.Context(), port, protocol)
 		if err != nil {
-			// No match found - return null
+			common.RespondError(w, http.StatusInternalServerError, "failed to lookup service by protocol")
+			return
+		}
+		if len(results) == 0 {
 			common.RespondJSON(w, http.StatusOK, nil)
 			return
 		}
-
-		common.RespondJSON(w, http.StatusOK, s)
+		common.RespondJSON(w, http.StatusOK, results[0])
 		return
 	}
 
@@ -436,54 +361,14 @@ func (h *Handler) GetServiceByPort(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build query to find service where port is in the ports list
-	// The ports field is comma-separated, so we need to match:
-	// - port exactly (e.g., "80")
-	// - port at start of list (e.g., "80,443")
-	// - port in middle of list (e.g., "443,80,8080")
-	// - port at end of list (e.g., "443,80")
-	query := `
-	SELECT id, name, ports, COALESCE(source_ports, ''), protocol, COALESCE(description, ''), direction_hint, COALESCE(is_system, 0), COALESCE(is_pending_delete, 0)
-	FROM services
-	WHERE (ports = ? OR ports LIKE ? OR ports LIKE ? OR ports LIKE ?)
-	AND is_system = 0
-	AND is_pending_delete = 0
-	`
-	args := []interface{}{port, port + ",%", "%," + port + ",%", "%," + port}
-
-	if protocol != "" {
-		query += " AND (protocol = ? OR protocol = 'both')"
-		args = append(args, protocol)
-	}
-
-	query += " LIMIT 1"
-
-	var s serviceResp
-	err := h.DB.QueryRowContext(r.Context(), query, args...).Scan(
-		&s.ID, &s.Name, &s.Ports, &s.SourcePorts, &s.Protocol, &s.Description, &s.DirectionHint, &s.IsSystem, &s.IsPendingDelete)
+	results, err := h.Store.GetServiceByPort(r.Context(), port, protocol)
 	if err != nil {
-		// No match found - return null
+		common.RespondError(w, http.StatusInternalServerError, "failed to lookup service by port")
+		return
+	}
+	if len(results) == 0 {
 		common.RespondJSON(w, http.StatusOK, nil)
 		return
 	}
-
-	common.RespondJSON(w, http.StatusOK, s)
-}
-
-func (h *Handler) snapshotService(ctx context.Context, action string, serviceID int) error {
-	if action == "create" {
-		return db.CreateSnapshot(ctx, h.DB, "service", serviceID, action, "")
-	}
-
-	svc, err := db.GetService(ctx, h.DB, serviceID)
-	if err != nil {
-		return fmt.Errorf("get service: %w", err)
-	}
-
-	bytes, err := json.Marshal(svc)
-	if err != nil {
-		return fmt.Errorf("marshal snapshot: %w", err)
-	}
-
-	return db.CreateSnapshot(ctx, h.DB, "service", serviceID, action, string(bytes))
+	common.RespondJSON(w, http.StatusOK, results[0])
 }

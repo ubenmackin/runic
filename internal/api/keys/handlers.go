@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"runic/internal/api/common"
 	runiclog "runic/internal/common/log"
 	"runic/internal/db"
 
@@ -56,18 +57,18 @@ func (h *Handler) CreateKey(w http.ResponseWriter, r *http.Request) {
 
 	dbKey, ok := keyTypeToDBKey[keyType]
 	if !ok {
-		http.Error(w, `{"error": "Invalid key type"}`, http.StatusBadRequest)
+		common.RespondError(w, http.StatusBadRequest, "Invalid key type")
 		return
 	}
 
 	newKey, err := db.GenerateSecureKey()
 	if err != nil {
-		http.Error(w, `{"error": "Failed to generate key"}`, http.StatusInternalServerError)
+		common.RespondError(w, http.StatusInternalServerError, "Failed to generate key")
 		return
 	}
 
 	if err := db.SetSecret(r.Context(), h.DB, dbKey, newKey); err != nil {
-		http.Error(w, `{"error": "Failed to store key"}`, http.StatusInternalServerError)
+		common.RespondError(w, http.StatusInternalServerError, "Failed to store key")
 		return
 	}
 
@@ -87,13 +88,12 @@ func (h *Handler) DeleteKey(w http.ResponseWriter, r *http.Request) {
 
 	dbKey, ok := keyTypeToDBKey[keyType]
 	if !ok {
-		http.Error(w, `{"error": "Invalid key type"}`, http.StatusBadRequest)
+		common.RespondError(w, http.StatusBadRequest, "Invalid key type")
 		return
 	}
 
-	_, err := h.DB.ExecContext(r.Context(), "DELETE FROM system_config WHERE key = ?", dbKey)
-	if err != nil {
-		http.Error(w, `{"error": "Failed to delete key"}`, http.StatusInternalServerError)
+	if err := db.DeleteSecret(r.Context(), h.DB, dbKey); err != nil {
+		common.RespondError(w, http.StatusInternalServerError, "Failed to delete key")
 		return
 	}
 

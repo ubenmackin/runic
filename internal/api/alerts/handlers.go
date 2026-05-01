@@ -2,12 +2,10 @@
 package alerts
 
 import (
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -15,22 +13,22 @@ import (
 	"runic/internal/alerts"
 	"runic/internal/api/common"
 	"runic/internal/auth"
-	ic "runic/internal/common"
 	"runic/internal/common/log"
 	"runic/internal/crypto"
+	"runic/internal/db"
 )
 
 // Handler handles alert API requests.
 type Handler struct {
-	DB           *sql.DB
+	DB           db.Querier
 	AlertService *alerts.Service
 	Encryptor    *crypto.Encryptor
 }
 
 // NewHandler creates a new alert handler.
-func NewHandler(db *sql.DB, alertService *alerts.Service, encryptor *crypto.Encryptor) *Handler {
+func NewHandler(database db.Querier, alertService *alerts.Service, encryptor *crypto.Encryptor) *Handler {
 	return &Handler{
-		DB:           db,
+		DB:           database,
 		AlertService: alertService,
 		Encryptor:    encryptor,
 	}
@@ -57,191 +55,27 @@ func (h *Handler) ListAlerts(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	alertType := r.URL.Query().Get("alert_type")
-	severity := r.URL.Query().Get("severity")
-	status := r.URL.Query().Get("status")
-	startDate := r.URL.Query().Get("start_date")
-	endDate := r.URL.Query().Get("end_date")
-
-	sortKey := r.URL.Query().Get("sort_key")
-	sortDirection := r.URL.Query().Get("sort_direction")
-
-	allowedSortKeys := map[string]string{
-		"created_at":    "h.created_at",
-		"alert_type":    "h.alert_type",
-		"peer_hostname": "p.hostname",
-		"status":        "h.status",
-		"severity":      "h.severity",
-	}
-	allowedSortDirections := map[string]string{
-		"asc":  "ASC",
-		"desc": "DESC",
+	filter := alerts.AlertHistoryFilter{
+		Search:    r.URL.Query().Get("search"),
+		AlertType: r.URL.Query().Get("alert_type"),
+		Severity:  r.URL.Query().Get("severity"),
+		Status:    r.URL.Query().Get("status"),
+		StartDate: r.URL.Query().Get("start_date"),
+		EndDate:   r.URL.Query().Get("end_date"),
+		SortBy:    r.URL.Query().Get("sort_key"),
+		SortDir:   r.URL.Query().Get("sort_direction"),
+		Limit:     limit,
+		Offset:    offset,
 	}
 
-	orderByColumn := "h.created_at"
-	orderByDirection := "DESC"
-
-	if sortKey != "" {
-		if col, ok := allowedSortKeys[sortKey]; ok {
-			orderByColumn = col
-		}
-	}
-	if sortDirection != "" {
-		if dir, ok := allowedSortDirections[strings.ToLower(sortDirection)]; ok {
-			orderByDirection = dir
-		}
-	}
-
-	var conditions []string
-	var args []interface{}
-
-	// Helper function to build IN clause for comma-separated values
-	buildInClause := func(fieldName, values string) (string, []interface{}) {
-		parts := strings.Split(values, ",")
-		// Trim whitespace from each part
-		for i, part := range parts {
-			parts[i] = strings.TrimSpace(part)
-		}
-		// Filter empty strings
-		validParts := make([]string, 0, len(parts))
-		for _, part := range parts {
-			if part != "" {
-				validParts = append(validParts, part)
-			}
-		}
-		if len(validParts) == 0 {
-			return "", nil
-		}
-		// Single value: use = for backward compatibility
-		if len(validParts) == 1 {
-			return fieldName + " = ?", []interface{}{validParts[0]}
-		}
-		// Multiple values: use IN clause
-		placeholders := make([]string, len(validParts))
-		placeholdersArgs := make([]interface{}, len(validParts))
-		for i, part := range validParts {
-			placeholders[i] = "?"
-			placeholdersArgs[i] = part
-		}
-		return fieldName + " IN (" + strings.Join(placeholders, ", ") + ")", placeholdersArgs
-	}
-
-	if alertType != "" {
-		clause, clauseArgs := buildInClause("h.alert_type", alertType)
-		if clause != "" {
-			conditions = append(conditions, clause)
-			args = append(args, clauseArgs...)
-		}
-	}
-	if severity != "" {
-		clause, clauseArgs := buildInClause("h.severity", severity)
-		if clause != "" {
-			conditions = append(conditions, clause)
-			args = append(args, clauseArgs...)
-		}
-	}
-	if status != "" {
-		clause, clauseArgs := buildInClause("h.status", status)
-		if clause != "" {
-			conditions = append(conditions, clause)
-			args = append(args, clauseArgs...)
-		}
-	}
-	if startDate != "" {
-		// Try RFC3339 first, then YYYY-MM-DD
-		var t time.Time
-		var err error
-		t, err = time.Parse(time.RFC3339, startDate)
-		if err != nil {
-			t, err = time.Parse("2006-01-02", startDate)
-			if err == nil {
-				t = time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
-			}
-		}
-		if err == nil {
-			conditions = append(conditions, "h.created_at >= ?")
-			args = append(args, t.Format(time.RFC3339))
-		}
-	}
-	if endDate != "" {
-		// Try RFC3339 first, then YYYY-MM-DD
-		var t time.Time
-		var err error
-		t, err = time.Parse(time.RFC3339, endDate)
-		if err != nil {
-			t, err = time.Parse("2006-01-02", endDate)
-			if err == nil {
-				// For end date, use end of day (23:59:59)
-				t = time.Date(t.Year(), t.Month(), t.Day(), 23, 59, 59, 0, time.UTC)
-			}
-		}
-		if err == nil {
-			conditions = append(conditions, "h.created_at <= ?")
-			args = append(args, t.Format(time.RFC3339))
-		}
-	}
-
-	whereClause := ""
-	if len(conditions) > 0 {
-		whereClause = "WHERE " + strings.Join(conditions, " AND ")
-	}
-
-	countQuery := `SELECT COUNT(*) FROM alert_history h ` + whereClause
-	var total int
-	countArgs := make([]interface{}, len(args))
-	copy(countArgs, args)
-	if err := h.DB.QueryRowContext(ctx, countQuery, countArgs...).Scan(&total); err != nil {
-		log.ErrorContext(ctx, "Failed to get alert count", "error", err, "query", countQuery)
-		total = 0
-	}
-
-	args = append(args, limit, offset)
-	query := `SELECT h.id, h.rule_id, h.alert_type, h.peer_id, p.hostname as peer_hostname, h.severity, h.subject, h.message, h.metadata, h.status, h.sent_at, h.error_message, h.created_at
-	FROM alert_history h
-	LEFT JOIN peers p ON h.peer_id = p.id
-	` + whereClause + `
-	ORDER BY ` + orderByColumn + ` ` + orderByDirection + `
-	LIMIT ? OFFSET ?`
-
-	rows, err := h.DB.QueryContext(ctx, query, args...)
+	result, err := alerts.ListAlertHistory(ctx, h.DB, &filter)
 	if err != nil {
 		log.ErrorContext(ctx, "Failed to list alert history", "error", err)
 		common.RespondError(w, http.StatusInternalServerError, "failed to list alerts")
 		return
 	}
-	defer func() {
-		if cerr := rows.Close(); cerr != nil {
-			log.Error("failed to close rows", "error", cerr)
-		}
-	}()
 
-	var history []alerts.AlertHistory
-	for rows.Next() {
-		var h alerts.AlertHistory
-		var peerHostname sql.NullString
-		if err := rows.Scan(&h.ID, &h.RuleID, &h.AlertType, &h.PeerID, &peerHostname, &h.Severity, &h.Subject,
-			&h.Message, &h.Metadata, &h.Status, &h.SentAt, &h.ErrorMessage, &h.CreatedAt); err != nil {
-			log.ErrorContext(ctx, "Failed to scan alert history row", "error", err)
-			continue
-		}
-		if peerHostname.Valid {
-			h.PeerHostname = peerHostname.String
-		}
-		history = append(history, h)
-	}
-
-	if err := rows.Err(); err != nil {
-		log.ErrorContext(ctx, "Error iterating alert history rows", "error", err)
-	}
-
-	history = ic.EnsureSlice(history)
-
-	common.RespondJSON(w, http.StatusOK, map[string]interface{}{
-		"alerts": history,
-		"total":  total,
-		"limit":  limit,
-		"offset": offset,
-	})
+	common.RespondJSON(w, http.StatusOK, result)
 }
 
 // GetAlert returns a single alert by ID.
@@ -255,18 +89,12 @@ func (h *Handler) GetAlert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var alert alerts.AlertHistory
-	err = h.DB.QueryRowContext(ctx, `
-		SELECT id, rule_id, alert_type, peer_id, severity, subject, message, metadata, status, sent_at, error_message, created_at
-		FROM alert_history WHERE id = ?
-	`, id).Scan(&alert.ID, &alert.RuleID, &alert.AlertType, &alert.PeerID, &alert.Severity,
-		&alert.Subject, &alert.Message, &alert.Metadata, &alert.Status, &alert.SentAt, &alert.ErrorMessage, &alert.CreatedAt)
-
-	if errors.Is(err, sql.ErrNoRows) {
-		common.RespondError(w, http.StatusNotFound, "alert not found")
-		return
-	}
+	alert, err := alerts.GetAlertHistory(ctx, h.DB, int(id))
 	if err != nil {
+		if errors.Is(err, alerts.ErrAlertHistoryNotFound) {
+			common.RespondError(w, http.StatusNotFound, "alert not found")
+			return
+		}
 		log.ErrorContext(ctx, "Failed to get alert", "error", err)
 		common.RespondError(w, http.StatusInternalServerError, "failed to get alert")
 		return
@@ -347,46 +175,12 @@ func (h *Handler) UpdateAlertRule(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) GetSMTPConfig(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	config := struct {
-		Host        string `json:"host"`
-		Port        int    `json:"port"`
-		Username    string `json:"username"`
-		PasswordSet bool   `json:"password_set"`
-		UseTLS      bool   `json:"use_tls"`
-		FromAddress string `json:"from_address"`
-		Enabled     bool   `json:"enabled"`
-	}{}
-
-	err := h.DB.QueryRowContext(ctx, "SELECT value FROM system_config WHERE key = 'smtp_host'").Scan(&config.Host)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		log.ErrorContext(ctx, "Failed to get smtp_host", "error", err)
+	config, err := alerts.GetSMTPConfig(ctx, h.DB)
+	if err != nil {
+		log.ErrorContext(ctx, "Failed to get SMTP config", "error", err)
 		common.RespondError(w, http.StatusInternalServerError, "failed to get SMTP config")
 		return
 	}
-
-	var portStr string
-	err = h.DB.QueryRowContext(ctx, "SELECT value FROM system_config WHERE key = 'smtp_port'").Scan(&portStr)
-	if err == nil {
-		config.Port, _ = strconv.Atoi(portStr)
-	}
-
-	err = h.DB.QueryRowContext(ctx, "SELECT value FROM system_config WHERE key = 'smtp_username'").Scan(&config.Username)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		log.ErrorContext(ctx, "Failed to get smtp_username", "error", err)
-	}
-
-	var hasPassword bool
-	err = h.DB.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM system_config WHERE key = 'smtp_password' AND value IS NOT NULL AND value != ''").Scan(&hasPassword)
-	config.PasswordSet = err == nil && hasPassword
-
-	config.UseTLS, _ = alerts.GetBoolConfig(ctx, h.DB, "smtp_use_tls")
-
-	err = h.DB.QueryRowContext(ctx, "SELECT value FROM system_config WHERE key = 'smtp_from_address'").Scan(&config.FromAddress)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		log.ErrorContext(ctx, "Failed to get smtp_from_address", "error", err)
-	}
-
-	config.Enabled, _ = alerts.GetBoolConfig(ctx, h.DB, "smtp_enabled")
 
 	common.RespondJSON(w, http.StatusOK, config)
 }
@@ -410,9 +204,6 @@ func (h *Handler) UpdateSMTPConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Upsert each setting
-	// Note: Boolean values are stored as "1" or "0" to match how they are read back
-	// (using CAST(value AS INTEGER) in GetSMTPConfig)
 	settings := map[string]string{
 		"smtp_host":         req.Host,
 		"smtp_port":         strconv.Itoa(req.Port),
@@ -420,18 +211,6 @@ func (h *Handler) UpdateSMTPConfig(w http.ResponseWriter, r *http.Request) {
 		"smtp_use_tls":      strconv.Itoa(boolToInt(req.UseTLS)),
 		"smtp_from_address": req.FromAddress,
 		"smtp_enabled":      strconv.Itoa(boolToInt(req.Enabled)),
-	}
-
-	for key, value := range settings {
-		_, err := h.DB.ExecContext(ctx,
-			"INSERT OR REPLACE INTO system_config (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)",
-			key, value,
-		)
-		if err != nil {
-			log.ErrorContext(ctx, "Failed to update SMTP setting", "key", key, "error", err)
-			common.RespondError(w, http.StatusInternalServerError, "failed to update SMTP config")
-			return
-		}
 	}
 
 	if req.Password != "" {
@@ -445,16 +224,13 @@ func (h *Handler) UpdateSMTPConfig(w http.ResponseWriter, r *http.Request) {
 			}
 			passwordToStore = encrypted
 		}
+		settings["smtp_password"] = passwordToStore
+	}
 
-		_, err := h.DB.ExecContext(ctx,
-			"INSERT OR REPLACE INTO system_config (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)",
-			"smtp_password", passwordToStore,
-		)
-		if err != nil {
-			log.ErrorContext(ctx, "Failed to update smtp_password", "error", err)
-			common.RespondError(w, http.StatusInternalServerError, "failed to update SMTP config")
-			return
-		}
+	if err := alerts.UpsertSMTPSettings(ctx, h.DB, settings); err != nil {
+		log.ErrorContext(ctx, "Failed to update SMTP config", "error", err)
+		common.RespondError(w, http.StatusInternalServerError, "failed to update SMTP config")
+		return
 	}
 
 	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "ok"})

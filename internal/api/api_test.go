@@ -17,8 +17,8 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 
 	"runic/internal/api/common"
-	"runic/internal/api/peers"
 	"runic/internal/engine"
+	"runic/internal/store"
 	"runic/internal/testutil"
 )
 
@@ -62,7 +62,7 @@ func TestGetPeers(t *testing.T) {
 		t.Errorf("expected status %d, got %d", http.StatusOK, w.Code)
 	}
 
-	var prs []peers.Peer
+	var prs []store.PeerView
 	if err := json.NewDecoder(w.Body).Decode(&prs); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}

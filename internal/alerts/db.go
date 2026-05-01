@@ -6,6 +6,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"runic/internal/common/log"
@@ -315,5 +317,271 @@ func ClearAllAlertHistory(ctx context.Context, database db.Querier) error {
 		return fmt.Errorf("failed to clear alert history: %w", err)
 	}
 
+	return nil
+}
+
+// buildInClause builds a SQL IN clause (or equality check) for comma-separated values.
+// For a single value it returns "field = ?", for multiple values "field IN (?, ?, ?)".
+// Returns empty string if no valid values are found.
+func buildInClause(fieldName, values string) (string, []interface{}) {
+	parts := strings.Split(values, ",")
+	// Trim whitespace from each part
+	for i, part := range parts {
+		parts[i] = strings.TrimSpace(part)
+	}
+	// Filter empty strings
+	validParts := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part != "" {
+			validParts = append(validParts, part)
+		}
+	}
+	if len(validParts) == 0 {
+		return "", nil
+	}
+	// Single value: use = for backward compatibility
+	if len(validParts) == 1 {
+		return fieldName + " = ?", []interface{}{validParts[0]}
+	}
+	// Multiple values: use IN clause
+	placeholders := make([]string, len(validParts))
+	placeholdersArgs := make([]interface{}, len(validParts))
+	for i, part := range validParts {
+		placeholders[i] = "?"
+		placeholdersArgs[i] = part
+	}
+	return fieldName + " IN (" + strings.Join(placeholders, ", ") + ")", placeholdersArgs
+}
+
+// ListAlertHistory returns paginated alert history with filtering and sorting.
+func ListAlertHistory(ctx context.Context, database db.Querier, filter *AlertHistoryFilter) (*AlertHistoryListResult, error) {
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	offset := filter.Offset
+	if offset < 0 {
+		offset = 0
+	}
+
+	// Build sort clause
+	allowedSortKeys := map[string]string{
+		"created_at":    "h.created_at",
+		"alert_type":    "h.alert_type",
+		"peer_hostname": "p.hostname",
+		"status":        "h.status",
+		"severity":      "h.severity",
+	}
+	allowedSortDirections := map[string]string{
+		"asc":  "ASC",
+		"desc": "DESC",
+	}
+
+	orderByColumn := "h.created_at"
+	orderByDirection := "DESC"
+
+	if filter.SortBy != "" {
+		if col, ok := allowedSortKeys[filter.SortBy]; ok {
+			orderByColumn = col
+		}
+	}
+	if filter.SortDir != "" {
+		if dir, ok := allowedSortDirections[strings.ToLower(filter.SortDir)]; ok {
+			orderByDirection = dir
+		}
+	}
+
+	// Build WHERE conditions
+	var conditions []string
+	var args []interface{}
+
+	if filter.AlertType != "" {
+		clause, clauseArgs := buildInClause("h.alert_type", filter.AlertType)
+		if clause != "" {
+			conditions = append(conditions, clause)
+			args = append(args, clauseArgs...)
+		}
+	}
+	if filter.Severity != "" {
+		clause, clauseArgs := buildInClause("h.severity", filter.Severity)
+		if clause != "" {
+			conditions = append(conditions, clause)
+			args = append(args, clauseArgs...)
+		}
+	}
+	if filter.Status != "" {
+		clause, clauseArgs := buildInClause("h.status", filter.Status)
+		if clause != "" {
+			conditions = append(conditions, clause)
+			args = append(args, clauseArgs...)
+		}
+	}
+	if filter.StartDate != "" {
+		var t time.Time
+		var err error
+		t, err = time.Parse(time.RFC3339, filter.StartDate)
+		if err != nil {
+			t, err = time.Parse("2006-01-02", filter.StartDate)
+			if err == nil {
+				t = time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
+			}
+		}
+		if err == nil {
+			conditions = append(conditions, "h.created_at >= ?")
+			args = append(args, t.Format(time.RFC3339))
+		}
+	}
+	if filter.EndDate != "" {
+		var t time.Time
+		var err error
+		t, err = time.Parse(time.RFC3339, filter.EndDate)
+		if err != nil {
+			t, err = time.Parse("2006-01-02", filter.EndDate)
+			if err == nil {
+				// For end date, use end of day (23:59:59)
+				t = time.Date(t.Year(), t.Month(), t.Day(), 23, 59, 59, 0, time.UTC)
+			}
+		}
+		if err == nil {
+			conditions = append(conditions, "h.created_at <= ?")
+			args = append(args, t.Format(time.RFC3339))
+		}
+	}
+	if filter.Search != "" {
+		conditions = append(conditions, "(h.subject LIKE ? OR h.message LIKE ?)")
+		searchPattern := "%" + filter.Search + "%"
+		args = append(args, searchPattern, searchPattern)
+	}
+
+	whereClause := ""
+	if len(conditions) > 0 {
+		whereClause = "WHERE " + strings.Join(conditions, " AND ")
+	}
+
+	// Count query
+	countQuery := `SELECT COUNT(*) FROM alert_history h ` + whereClause
+	var total int
+	countArgs := make([]interface{}, len(args))
+	copy(countArgs, args)
+	if err := database.QueryRowContext(ctx, countQuery, countArgs...).Scan(&total); err != nil {
+		return nil, fmt.Errorf("failed to count alert history: %w", err)
+	}
+
+	// Data query
+	args = append(args, limit, offset)
+	query := `SELECT h.id, h.rule_id, h.alert_type, h.peer_id, p.hostname as peer_hostname, h.severity, h.subject, h.message, h.metadata, h.status, h.sent_at, h.error_message, h.created_at
+	FROM alert_history h
+	LEFT JOIN peers p ON h.peer_id = p.id
+	` + whereClause + `
+	ORDER BY ` + orderByColumn + ` ` + orderByDirection + `
+	LIMIT ? OFFSET ?`
+
+	rows, err := database.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list alert history: %w", err)
+	}
+	defer func() {
+		if cerr := rows.Close(); cerr != nil {
+			log.Error("failed to close rows", "error", cerr)
+		}
+	}()
+
+	var history []AlertHistory
+	for rows.Next() {
+		var h AlertHistory
+		var peerHostname sql.NullString
+		if err := rows.Scan(&h.ID, &h.RuleID, &h.AlertType, &h.PeerID, &peerHostname, &h.Severity, &h.Subject,
+			&h.Message, &h.Metadata, &h.Status, &h.SentAt, &h.ErrorMessage, &h.CreatedAt); err != nil {
+			return nil, fmt.Errorf("failed to scan alert history row: %w", err)
+		}
+		if peerHostname.Valid {
+			h.PeerHostname = peerHostname.String
+		}
+		history = append(history, h)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating alert history rows: %w", err)
+	}
+
+	if history == nil {
+		history = []AlertHistory{}
+	}
+
+	return &AlertHistoryListResult{
+		Alerts: history,
+		Total:  total,
+		Limit:  limit,
+		Offset: offset,
+	}, nil
+}
+
+// GetAlertHistory fetches a single alert history entry by ID.
+func GetAlertHistory(ctx context.Context, database db.Querier, id int) (*AlertHistory, error) {
+	var alert AlertHistory
+
+	err := database.QueryRowContext(ctx, `
+		SELECT id, rule_id, alert_type, peer_id, severity, subject, message, metadata, status, sent_at, error_message, created_at
+		FROM alert_history WHERE id = ?`, id,
+	).Scan(&alert.ID, &alert.RuleID, &alert.AlertType, &alert.PeerID, &alert.Severity,
+		&alert.Subject, &alert.Message, &alert.Metadata, &alert.Status, &alert.SentAt, &alert.ErrorMessage, &alert.CreatedAt)
+
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrAlertHistoryNotFound
+		}
+		return nil, fmt.Errorf("failed to get alert history: %w", err)
+	}
+
+	return &alert, nil
+}
+
+// GetSMTPConfig reads SMTP configuration from system_config and returns a view with the password masked.
+func GetSMTPConfig(ctx context.Context, database db.Querier) (*SMTPConfigView, error) {
+	config := &SMTPConfigView{}
+
+	err := database.QueryRowContext(ctx, "SELECT value FROM system_config WHERE key = 'smtp_host'").Scan(&config.Host)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("failed to get smtp_host: %w", err)
+	}
+
+	var portStr string
+	err = database.QueryRowContext(ctx, "SELECT value FROM system_config WHERE key = 'smtp_port'").Scan(&portStr)
+	if err == nil {
+		config.Port, _ = strconv.Atoi(portStr)
+	}
+
+	err = database.QueryRowContext(ctx, "SELECT value FROM system_config WHERE key = 'smtp_username'").Scan(&config.Username)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("failed to get smtp_username: %w", err)
+	}
+
+	var hasPassword bool
+	err = database.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM system_config WHERE key = 'smtp_password' AND value IS NOT NULL AND value != ''").Scan(&hasPassword)
+	config.PasswordSet = err == nil && hasPassword
+
+	config.UseTLS, _ = GetBoolConfig(ctx, database, "smtp_use_tls")
+
+	err = database.QueryRowContext(ctx, "SELECT value FROM system_config WHERE key = 'smtp_from_address'").Scan(&config.FromAddress)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("failed to get smtp_from_address: %w", err)
+	}
+
+	config.Enabled, _ = GetBoolConfig(ctx, database, "smtp_enabled")
+
+	return config, nil
+}
+
+// UpsertSMTPSettings inserts or replaces SMTP settings into system_config.
+func UpsertSMTPSettings(ctx context.Context, database db.Querier, settings map[string]string) error {
+	for key, value := range settings {
+		_, err := database.ExecContext(ctx,
+			"INSERT OR REPLACE INTO system_config (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)",
+			key, value,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to upsert SMTP setting %q: %w", key, err)
+		}
+	}
 	return nil
 }

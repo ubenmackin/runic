@@ -93,6 +93,22 @@ func DeletePendingBundlePreview(ctx context.Context, database Querier, peerID in
 	return err
 }
 
+// DeletePendingChangeForEntity removes a specific pending change for a peer.
+func DeletePendingChangeForEntity(ctx context.Context, database Querier, peerID int64, changeType string, changeID int) error {
+	_, err := database.ExecContext(ctx, "DELETE FROM pending_changes WHERE peer_id = ? AND change_type = ? AND change_id = ?", peerID, changeType, changeID)
+	return err
+}
+
+// CountPendingChangesForPeer returns the number of pending changes for a peer.
+func CountPendingChangesForPeer(ctx context.Context, database Querier, peerID int64) (int, error) {
+	var count int
+	err := database.QueryRowContext(ctx, "SELECT COUNT(*) FROM pending_changes WHERE peer_id = ?", peerID).Scan(&count)
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
 // DeleteAllPendingBundlePreviews removes all pending bundle previews.
 func DeleteAllPendingBundlePreviews(ctx context.Context, database Querier) error {
 	_, err := database.ExecContext(ctx, "DELETE FROM rule_bundles_pending")

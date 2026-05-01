@@ -29,16 +29,17 @@ import (
 
 // Handler provides HTTP handlers for agent endpoints with dependency injection.
 type Handler struct {
-	DB           *sql.DB
+	PeerStore    *store.PeerStore
+	DB           db.DB // Used for SubmitBackup's store.RunInTx and registration token queries
 	LogsDB       db.Querier
 	AlertService *alerts.Service
 }
 
-// NewHandler creates a new agent handler with the given database connections.
-// db is the main database for peer queries, logsDB is the separate logs database.
-// alertService is optional and can be nil.
-func NewHandler(db *sql.DB, logsDB db.Querier, alertService *alerts.Service) *Handler {
-	return &Handler{DB: db, LogsDB: logsDB, AlertService: alertService}
+// NewHandler creates a new agent handler with the given dependencies.
+// peerStore handles peer data access, db is the main database for transactions,
+// logsDB is the separate logs database, alertService is optional and can be nil.
+func NewHandler(peerStore *store.PeerStore, db db.DB, logsDB db.Querier, alertService *alerts.Service) *Handler {
+	return &Handler{PeerStore: peerStore, DB: db, LogsDB: logsDB, AlertService: alertService}
 }
 
 // LogEvent represents a validated firewall log event from an agent.
@@ -128,7 +129,7 @@ func (h *Handler) AgentAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		authHeader := r.Header.Get("Authorization")
 		if authHeader == "" || len(authHeader) <= 7 || authHeader[:7] != "Bearer " {
-			http.Error(w, `{"error": "unauthorized"}`, http.StatusUnauthorized)
+			common.RespondError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
 
@@ -137,7 +138,7 @@ func (h *Handler) AgentAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		secretStr, err := db.GetSecret(r.Context(), h.DB, "agent_jwt_secret")
 		if err != nil {
 			runiclog.Error("JWT secret not configured", "error", err)
-			http.Error(w, `{"error": "server misconfiguration"}`, http.StatusInternalServerError)
+			common.InternalError(w)
 			return
 		}
 		secret := []byte(secretStr)
@@ -150,25 +151,25 @@ func (h *Handler) AgentAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		})
 
 		if err != nil || !token.Valid {
-			http.Error(w, `{"error": "unauthorized"}`, http.StatusUnauthorized)
+			common.RespondError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
 
 		claims, ok := token.Claims.(jwt.MapClaims)
 		if !ok {
-			http.Error(w, `{"error": "unauthorized"}`, http.StatusUnauthorized)
+			common.RespondError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
 
 		// Verify type is agent
 		if tokenType, ok := claims["type"].(string); !ok || tokenType != "agent" {
-			http.Error(w, `{"error": "unauthorized"}`, http.StatusUnauthorized)
+			common.RespondError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
 
 		sub, ok := claims["sub"].(string)
 		if !ok || sub == "" {
-			http.Error(w, `{"error": "unauthorized"}`, http.StatusUnauthorized)
+			common.RespondError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
 
@@ -183,7 +184,7 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 	var input models.AgentRegisterRequest
 
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		http.Error(w, `{"error": "invalid JSON"}`, http.StatusBadRequest)
+		common.RespondError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
 
@@ -221,20 +222,19 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 	input.IP = sanitizedIP
 
 	if input.Hostname == "" {
-		http.Error(w, `{"error": "hostname required"}`, http.StatusBadRequest)
+		common.RespondError(w, http.StatusBadRequest, "hostname required")
 		return
 	}
 
 	ctx := r.Context()
 
 	var existingID int
-	var existingToken sql.NullString
-	err := h.DB.QueryRowContext(ctx, "SELECT id, agent_token FROM peers WHERE hostname = ?", input.Hostname).Scan(&existingID, &existingToken)
+	existingID, _, err := h.PeerStore.FindPeerByHostname(ctx, input.Hostname)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		// New server — require valid registration token
 		if input.RegistrationToken == "" {
-			http.Error(w, `{"error": "registration token required"}`, http.StatusUnauthorized)
+			common.RespondError(w, http.StatusUnauthorized, "registration token required")
 			return
 		}
 
@@ -246,40 +246,39 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !consumed {
-			http.Error(w, `{"error": "invalid registration token"}`, http.StatusUnauthorized)
+			common.RespondError(w, http.StatusUnauthorized, "invalid registration token")
 			return
 		}
 
 		hmacKey, err := GenerateHMACKey()
 		if err != nil {
 			runiclog.Error("Failed to generate HMAC key", "error", err)
-			http.Error(w, `{"error": "failed to generate HMAC key"}`, http.StatusInternalServerError)
+			common.InternalError(w)
 			return
 		}
 		agentToken, err := generateAgentToken(ctx, h.DB, input.Hostname)
 		if err != nil {
 			runiclog.Error("Failed to generate agent token error", "error", err)
-			http.Error(w, `{"error": "failed to generate agent token"}`, http.StatusInternalServerError)
+			common.InternalError(w)
 			return
 		}
 		agentKey, err := generateAgentKey()
 		if err != nil {
 			runiclog.Error("Failed to generate agent key", "error", err)
-			http.Error(w, `{"error": "failed to generate agent key"}`, http.StatusInternalServerError)
+			common.InternalError(w)
 			return
 		}
 
-		result, err := h.DB.ExecContext(ctx, `INSERT INTO peers (hostname, ip_address, os_type, arch, has_docker, has_ipset, agent_key, agent_token, hmac_key, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'online')`, input.Hostname, input.IP, input.OSType, input.Arch, input.HasDocker, input.HasIPSet, agentKey, agentToken, hmacKey)
+		peerID, err := h.PeerStore.RegisterPeer(ctx, input.Hostname, input.IP, input.OSType, input.Arch, input.HasDocker, input.HasIPSet, agentKey, agentToken, hmacKey)
 		if err != nil {
 			runiclog.Error("Failed to create server error", "error", err)
-			http.Error(w, `{"error": "failed to create server"}`, http.StatusInternalServerError)
+			common.InternalError(w)
 			return
 		}
 
 		// Insert all reported IPs into peer_ips
-		peerID, _ := result.LastInsertId()
 		if len(input.AllIPs) > 0 {
-			if err := h.upsertPeerIPs(ctx, int(peerID), input.AllIPs, input.IP); err != nil {
+			if err := h.PeerStore.UpsertPeerIPs(ctx, int(peerID), input.AllIPs, input.IP); err != nil {
 				runiclog.Warn("Failed to upsert peer IPs during registration", "error", err, "peer_id", peerID)
 			}
 		}
@@ -299,7 +298,7 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 			// Sanitize hostname before using it in alert content (subject/body/metadata).
 			safeHostname, _ := alerts.SanitizeAlertInput(input.Hostname, 0)
 			var newPeerID int
-			if err := h.DB.QueryRowContext(ctx, "SELECT id FROM peers WHERE hostname = ?", input.Hostname).Scan(&newPeerID); err == nil {
+			if newPeerID, err = h.PeerStore.GetPeerIDByHostname(ctx, input.Hostname); err == nil {
 				if err := h.AlertService.TriggerAlert(ctx, &alerts.AlertEvent{
 					Type:     alerts.AlertTypeNewPeer,
 					PeerID:   newPeerID,
@@ -321,7 +320,7 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	} else if err != nil {
 		runiclog.Error("Database error checking hostname error", "error", err)
-		http.Error(w, `{"error": "database error"}`, http.StatusInternalServerError)
+		common.InternalError(w)
 		return
 	}
 
@@ -332,27 +331,27 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 	newToken, err := generateAgentToken(ctx, h.DB, input.Hostname)
 	if err != nil {
 		runiclog.Error("Failed to generate agent token error", "error", err)
-		http.Error(w, `{"error": "failed to generate agent token"}`, http.StatusInternalServerError)
+		common.InternalError(w)
 		return
 	}
 
 	// Fetch existing HMAC key (don't regenerate on reinstall)
-	var existingHMACKey string
-	if err := h.DB.QueryRowContext(ctx, "SELECT hmac_key FROM peers WHERE id = ?", existingID).Scan(&existingHMACKey); err != nil {
+	existingHMACKey, err := h.PeerStore.GetPeerHMACKey(ctx, existingID)
+	if err != nil {
 		runiclog.Error("Failed to fetch existing HMAC key", "error", err, "peer_id", existingID)
-		http.Error(w, `{"error": "failed to fetch peer data"}`, http.StatusInternalServerError)
+		common.InternalError(w)
 		return
 	}
 
-	if _, err := h.DB.ExecContext(ctx, "UPDATE peers SET agent_token = ?, status = 'online', agent_version = ?, has_docker = ?, has_ipset = ? WHERE id = ?", newToken, input.AgentVersion, input.HasDocker, input.HasIPSet, existingID); err != nil {
+	if err := h.PeerStore.UpdatePeerReRegistration(ctx, existingID, newToken, input.AgentVersion, input.HasDocker, input.HasIPSet); err != nil {
 		runiclog.Error("Failed to update peer token", "error", err, "peer_id", existingID)
-		http.Error(w, `{"error": "failed to update peer"}`, http.StatusInternalServerError)
+		common.InternalError(w)
 		return
 	}
 
 	// Update peer IPs on re-registration if the agent reports IPs
 	if len(input.AllIPs) > 0 {
-		if err := h.upsertPeerIPs(ctx, existingID, input.AllIPs, input.IP); err != nil {
+		if err := h.PeerStore.UpsertPeerIPs(ctx, existingID, input.AllIPs, input.IP); err != nil {
 			runiclog.Warn("Failed to upsert peer IPs during re-registration", "error", err, "peer_id", existingID)
 		}
 	}
@@ -376,14 +375,14 @@ func (h *Handler) GetBundle(w http.ResponseWriter, r *http.Request) {
 	ifNoneMatch := r.Header.Get("If-None-Match")
 
 	var bundle models.RuleBundleRow
-	err := h.DB.QueryRowContext(r.Context(), `SELECT id, peer_id, version, version_number, rules_content, hmac, created_at FROM rule_bundles WHERE peer_id = ? ORDER BY created_at DESC LIMIT 1`, serverID).Scan(&bundle.ID, &bundle.PeerID, &bundle.Version, &bundle.VersionNumber, &bundle.RulesContent, &bundle.HMAC, &bundle.CreatedAt)
+	bundle, err := h.PeerStore.GetLatestBundle(r.Context(), serverID)
 
 	if errors.Is(err, sql.ErrNoRows) {
-		http.Error(w, `{"error": "no bundle found"}`, http.StatusNotFound)
+		common.RespondError(w, http.StatusNotFound, "no bundle found")
 		return
 	} else if err != nil {
 		runiclog.Error("Failed to fetch bundle error", "error", err)
-		http.Error(w, `{"error": "failed to fetch bundle"}`, http.StatusInternalServerError)
+		common.InternalError(w)
 		return
 	}
 
@@ -423,17 +422,15 @@ func (h *Handler) Heartbeat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Update peer heartbeat and status
-	_, err := h.DB.ExecContext(r.Context(), `UPDATE peers SET last_heartbeat = CURRENT_TIMESTAMP, status = 'online', agent_version = ?, bundle_version = ?, has_ipset = ? WHERE id = ?`, input.AgentVersion, input.BundleVersionApplied, input.HasIPSet, serverID)
-	if err != nil {
+	if err := h.PeerStore.UpdatePeerHeartbeat(r.Context(), serverID, input.AgentVersion, input.BundleVersionApplied, input.HasIPSet); err != nil {
 		runiclog.Error("Failed to update heartbeat error", "error", err)
 	}
 
 	// Update peer IPs if the agent reports them
 	if len(input.AllIPs) > 0 {
 		// Look up the primary IP for this peer
-		var primaryIP string
-		if err := h.DB.QueryRowContext(r.Context(), "SELECT ip_address FROM peers WHERE id = ?", serverID).Scan(&primaryIP); err == nil {
-			if err := h.syncPeerIPs(r.Context(), serverID, input.AllIPs, primaryIP); err != nil {
+		if primaryIP, err := h.PeerStore.GetPeerPrimaryIP(r.Context(), serverID); err == nil {
+			if _, err := h.PeerStore.SyncPeerIPs(r.Context(), serverID, input.AllIPs, primaryIP); err != nil {
 				runiclog.Warn("Failed to sync peer IPs during heartbeat", "error", err, "peer_id", serverID)
 			}
 		}
@@ -456,13 +453,12 @@ func (h *Handler) SubmitLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		http.Error(w, `{"error": "invalid JSON"}`, http.StatusBadRequest)
+		common.RespondError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
 
 	// Look up the peer hostname from main DB for denormalization
-	var peerHostname string
-	err := h.DB.QueryRowContext(r.Context(), "SELECT hostname FROM peers WHERE id = ?", serverID).Scan(&peerHostname)
+	peerHostname, err := h.PeerStore.GetPeerHostname(r.Context(), serverID)
 	if err != nil {
 		runiclog.Error("Failed to lookup peer hostname", "error", err, "peer_id", serverID)
 		// Continue with empty hostname - better to insert logs than fail completely
@@ -523,7 +519,7 @@ func (h *Handler) ConfirmBundleApplied(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		http.Error(w, `{"error": "invalid JSON"}`, http.StatusBadRequest)
+		common.RespondError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
 
@@ -533,13 +529,13 @@ func (h *Handler) ConfirmBundleApplied(w http.ResponseWriter, r *http.Request) {
 		appliedAt = time.Now().UTC().Format(time.RFC3339)
 	}
 
-	_, err := h.DB.ExecContext(r.Context(), `UPDATE rule_bundles SET applied_at = ? WHERE peer_id = ? AND version = ?`, appliedAt, serverID, input.Version)
+	err := h.PeerStore.UpdateBundleAppliedAt(r.Context(), serverID, input.Version, appliedAt)
 	if err != nil {
 		runiclog.Error("Failed to confirm bundle apply error", "error", err)
 	}
 
 	// Update peer's bundle_version
-	if _, err := h.DB.ExecContext(r.Context(), "UPDATE peers SET bundle_version = ? WHERE id = ?", input.Version, serverID); err != nil {
+	if err := h.PeerStore.UpdatePeerBundleVersion(r.Context(), serverID, input.Version); err != nil {
 		runiclog.Error("Failed to update peer bundle version", "error", err)
 	}
 
@@ -563,7 +559,7 @@ func (h *Handler) MakeHandleSSEventsHandler(hub SSEBroadcaster) http.HandlerFunc
 		w.Header().Set("Transfer-Encoding", "chunked")
 
 		if hub == nil {
-			http.Error(w, "SSE hub unavailable", http.StatusInternalServerError)
+			common.RespondError(w, http.StatusInternalServerError, "SSE hub unavailable")
 			return
 		}
 		ch := hub.Register(hostID)
@@ -571,7 +567,7 @@ func (h *Handler) MakeHandleSSEventsHandler(hub SSEBroadcaster) http.HandlerFunc
 
 		flusher, ok := w.(http.Flusher)
 		if !ok {
-			http.Error(w, "SSE not supported", http.StatusInternalServerError)
+			common.RespondError(w, http.StatusInternalServerError, "SSE not supported")
 			return
 		}
 
@@ -615,11 +611,7 @@ func (h *Handler) AgentCheckRotation(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check if there's a pending rotation token
-	var rotationToken sql.NullString
-	err := h.DB.QueryRowContext(r.Context(),
-		"SELECT hmac_key_rotation_token FROM peers WHERE id = ?",
-		serverID,
-	).Scan(&rotationToken)
+	rotationToken, err := h.PeerStore.GetPeerRotationToken(r.Context(), serverID)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		common.RespondError(w, http.StatusNotFound, "peer not found")
@@ -656,12 +648,12 @@ func (h *Handler) SubmitBackup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		http.Error(w, `{"error": "invalid JSON"}`, http.StatusBadRequest)
+		common.RespondError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
 
 	if input.IPTablesBackup == "" {
-		http.Error(w, `{"error": "iptables_backup is required"}`, http.StatusBadRequest)
+		common.RespondError(w, http.StatusBadRequest, "iptables_backup is required")
 		return
 	}
 
@@ -712,9 +704,13 @@ func (h *Handler) SubmitBackup(w http.ResponseWriter, r *http.Request) {
 	// After the transaction commits, call ParseSession to parse the backup data,
 	// insert rules, run the resolver, and update status to 'parsed'.
 	// This runs outside the transaction to avoid holding locks during parsing.
-	if err := importer.ParseSession(ctx, h.DB, sessionID); err != nil {
-		// Log the error but still return 200 — the data is saved, user can retry parse
-		runiclog.Warn("ParseSession failed after backup submit", "error", err, "session_id", sessionID, "peer_id", serverID)
+	if sqlDB, ok := h.DB.(*sql.DB); ok {
+		if err := importer.ParseSession(ctx, sqlDB, sessionID); err != nil {
+			// Log the error but still return 200 — the data is saved, user can retry parse
+			runiclog.Warn("ParseSession failed after backup submit", "error", err, "session_id", sessionID, "peer_id", serverID)
+		}
+	} else {
+		runiclog.Warn("Cannot run ParseSession: DB is not *sql.DB", "peer_id", serverID)
 	}
 
 	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -739,11 +735,7 @@ func (h *Handler) AgentTestKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get peer's current HMAC key
-	var hmacKey string
-	err := h.DB.QueryRowContext(r.Context(),
-		"SELECT hmac_key FROM peers WHERE id = ?",
-		serverID,
-	).Scan(&hmacKey)
+	hmacKey, err := h.PeerStore.GetPeerHMACKey(r.Context(), serverID)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		common.RespondError(w, http.StatusNotFound, "peer not found")
@@ -767,106 +759,4 @@ func (h *Handler) AgentTestKey(w http.ResponseWriter, r *http.Request) {
 	common.RespondJSON(w, http.StatusOK, map[string]string{
 		"status": "ok",
 	})
-}
-
-// upsertPeerIPs inserts all reported IPs into peer_ips for a given peer.
-// The primary IP (matching the peer's ip_address) gets is_primary = 1,
-// all others get is_primary = 0. Uses INSERT OR IGNORE for duplicate safety.
-func (h *Handler) upsertPeerIPs(ctx context.Context, peerID int, allIPs []string, primaryIP string) error {
-	for _, ip := range allIPs {
-		isPrimary := 0
-		if ip == primaryIP {
-			isPrimary = 1
-		}
-		_, err := h.DB.ExecContext(ctx,
-			"INSERT OR IGNORE INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, ?)",
-			peerID, ip, isPrimary,
-		)
-		if err != nil {
-			return fmt.Errorf("insert peer IP %s: %w", ip, err)
-		}
-
-		// Update is_primary flag for existing entries that may have changed
-		if isPrimary == 1 {
-			_, err := h.DB.ExecContext(ctx,
-				"UPDATE peer_ips SET is_primary = 1 WHERE peer_id = ? AND ip_address = ?",
-				peerID, ip,
-			)
-			if err != nil {
-				runiclog.Warn("Failed to update is_primary flag", "error", err, "peer_id", peerID, "ip", ip)
-			}
-		}
-	}
-	return nil
-}
-
-// syncPeerIPs updates peer_ips to match the currently reported IPs.
-// It adds new IPs, removes stale IPs no longer reported, and updates is_primary flags.
-func (h *Handler) syncPeerIPs(ctx context.Context, peerID int, allIPs []string, primaryIP string) error {
-	// First, upsert all current IPs
-	if err := h.upsertPeerIPs(ctx, peerID, allIPs, primaryIP); err != nil {
-		return err
-	}
-
-	// Build a set of reported IPs for fast lookup
-	reportedSet := make(map[string]bool, len(allIPs))
-	for _, ip := range allIPs {
-		reportedSet[ip] = true
-	}
-
-	// Query existing IPs for this peer
-	rows, err := h.DB.QueryContext(ctx, "SELECT ip_address FROM peer_ips WHERE peer_id = ?", peerID)
-	if err != nil {
-		return fmt.Errorf("query existing peer IPs: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	var staleIPs []string
-	for rows.Next() {
-		var existingIP string
-		if err := rows.Scan(&existingIP); err != nil {
-			continue
-		}
-		if !reportedSet[existingIP] {
-			staleIPs = append(staleIPs, existingIP)
-		}
-	}
-
-	// Delete stale IPs that are no longer reported, unless referenced by policies
-	for _, ip := range staleIPs {
-		var refCount int
-		err := h.DB.QueryRowContext(ctx,
-			"SELECT COUNT(*) FROM policies WHERE (source_id = ? AND source_ip = ?) OR (target_id = ? AND target_ip = ?)",
-			peerID, ip, peerID, ip,
-		).Scan(&refCount)
-		if err != nil {
-			runiclog.Warn("Failed to check policy references for stale peer IP", "error", err, "peer_id", peerID, "ip", ip)
-			continue
-		}
-		if refCount > 0 {
-			runiclog.Warn("Skipping deletion of stale peer IP: referenced by active policies", "peer_id", peerID, "ip", ip, "policy_count", refCount)
-			continue
-		}
-		_, err = h.DB.ExecContext(ctx, "DELETE FROM peer_ips WHERE peer_id = ? AND ip_address = ?", peerID, ip)
-		if err != nil {
-			runiclog.Warn("Failed to delete stale peer IP", "error", err, "peer_id", peerID, "ip", ip)
-		}
-	}
-
-	// Ensure only the primary IP has is_primary = 1
-	_, err = h.DB.ExecContext(ctx, "UPDATE peer_ips SET is_primary = 0 WHERE peer_id = ?", peerID)
-	if err != nil {
-		runiclog.Warn("Failed to reset is_primary flags", "error", err, "peer_id", peerID)
-	}
-	if primaryIP != "" {
-		_, err = h.DB.ExecContext(ctx,
-			"UPDATE peer_ips SET is_primary = 1 WHERE peer_id = ? AND ip_address = ?",
-			peerID, primaryIP,
-		)
-		if err != nil {
-			runiclog.Warn("Failed to set primary IP flag", "error", err, "peer_id", peerID, "ip", primaryIP)
-		}
-	}
-
-	return nil
 }

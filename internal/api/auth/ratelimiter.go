@@ -25,7 +25,7 @@ const (
 var ErrAccountLocked = errors.New("account locked, try again later")
 
 var (
-	rateLimitStore map[string]*rateLimitEntry
+	rateLimitStore  map[string]*rateLimitEntry
 	rateLimitMutex  sync.Mutex
 	stopCleanup     chan struct{}
 	stopCleanupOnce sync.Once

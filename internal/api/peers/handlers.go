@@ -17,24 +17,23 @@ import (
 	"runic/internal/api/agents"
 	"runic/internal/api/common"
 	"runic/internal/api/events"
-	ic "runic/internal/common"
-	"runic/internal/common/constants"
 	"runic/internal/common/log"
 	"runic/internal/db"
 	"runic/internal/engine"
+	"runic/internal/store"
 )
 
 // Handler holds dependencies for peer handlers.
 type Handler struct {
-	DB         db.Querier // For queries
-	DBBeginner db.DB      // For transactions and queries
+	Store      *store.PeerStore
+	DBBeginner db.DB
 	Compiler   *engine.Compiler
 	SSEHub     events.NotifyUpdateAgenter
 }
 
 // NewHandler creates a new peers handler.
-func NewHandler(db *sql.DB, compiler *engine.Compiler, sseHub events.NotifyUpdateAgenter) *Handler {
-	return &Handler{DB: db, DBBeginner: db, Compiler: compiler, SSEHub: sseHub}
+func NewHandler(peerStore *store.PeerStore, dbBeginner db.DB, compiler *engine.Compiler, sseHub events.NotifyUpdateAgenter) *Handler {
+	return &Handler{Store: peerStore, DBBeginner: dbBeginner, Compiler: compiler, SSEHub: sseHub}
 }
 
 // hostnameRegex validates hostnames: 1-253 chars, alphanumeric with hyphens and dots,
@@ -50,133 +49,19 @@ var validOSTypes = []string{
 // validArchs is the list of allowed architectures for peer creation.
 var validArchs = []string{"amd64", "arm64", "arm", "armv6", "other"}
 
-// PeerIP is the JSON representation of a peer IP for API responses.
-type PeerIP struct {
+// peerByIPResponse is the JSON representation for GetPeerByIP/GetPeerByHostname responses.
+type peerByIPResponse struct {
 	ID        int    `json:"id"`
-	PeerID    int    `json:"peer_id"`
+	Hostname  string `json:"hostname"`
 	IPAddress string `json:"ip_address"`
-	IsPrimary bool   `json:"is_primary"`
-}
-
-// Peer is the JSON representation of a peer for API responses.
-type Peer struct {
-	ID                   int      `json:"id"`
-	Hostname             string   `json:"hostname"`
-	IPAddress            string   `json:"ip_address"`
-	OSType               string   `json:"os_type"`
-	Arch                 string   `json:"arch"`
-	HasDocker            bool     `json:"has_docker"`
-	IsManual             bool     `json:"is_manual"`
-	AgentVersion         string   `json:"agent_version"`
-	LastHeartbeat        string   `json:"last_heartbeat"`
-	Groups               string   `json:"groups"` // Comma-separated group names
-	Status               string   `json:"status"`
-	BundleVersion        string   `json:"bundle_version"`
-	BundleVersionNumber  int      `json:"bundle_version_number"`
-	Description          string   `json:"description"`
-	HMACKeyLastRotatedAt string   `json:"hmac_key_last_rotated_at"`
-	PendingChangesCount  int      `json:"pending_changes_count"`
-	SyncStatus           string   `json:"sync_status"`
-	IPs                  []PeerIP `json:"ips"`
+	IsManual  bool   `json:"is_manual"`
 }
 
 func (h *Handler) GetPeers(w http.ResponseWriter, r *http.Request) {
-	rows, err := h.DB.QueryContext(r.Context(), `
-SELECT p.id, p.hostname, p.ip_address, p.os_type, p.arch, p.has_docker, p.is_manual,
-COALESCE(p.agent_version, '') as agent_version,
-COALESCE(p.last_heartbeat, '') as last_heartbeat,
-CASE
-WHEN p.last_heartbeat IS NULL THEN 'pending'
-WHEN p.last_heartbeat < `+fmt.Sprintf("datetime('now', '-%d minutes')", constants.PeerOfflineThresholdMinutes)+` THEN 'offline'
-ELSE COALESCE(p.status, 'online')
-END as status,
-COALESCE(p.bundle_version, '') as bundle_version,
-COALESCE((SELECT rb.version_number FROM rule_bundles rb WHERE rb.peer_id = p.id ORDER BY rb.created_at DESC LIMIT 1), 0) as bundle_version_number,
-COALESCE(GROUP_CONCAT(g.name, ','), '') as groups,
-COALESCE(p.description, '') as description,
-COALESCE(p.hmac_key_last_rotated_at, '') as hmac_key_last_rotated_at,
-(SELECT COUNT(*) FROM pending_changes pc JOIN peers p2 ON pc.peer_id = p2.id WHERE pc.peer_id = p.id AND p2.is_manual = 0) as pending_changes_count,
-CASE
-WHEN (SELECT COUNT(*) FROM pending_changes pc JOIN peers p2 ON pc.peer_id = p2.id WHERE pc.peer_id = p.id AND p2.is_manual = 0) > 0 THEN 'pending'
-WHEN (SELECT rb.version FROM rule_bundles rb WHERE rb.peer_id = p.id ORDER BY rb.created_at DESC LIMIT 1) IS NOT NULL
-     AND (SELECT rb.version FROM rule_bundles rb WHERE rb.peer_id = p.id ORDER BY rb.created_at DESC LIMIT 1) != COALESCE(p.bundle_version, '') THEN 'pending_sync'
-ELSE 'synced'
-END as sync_status
-FROM peers p
-LEFT JOIN group_members gm ON p.id = gm.peer_id
-LEFT JOIN groups g ON gm.group_id = g.id
-GROUP BY p.id
-ORDER BY p.hostname ASC
-`)
+	peers, err := h.Store.ListPeers(r.Context())
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "failed to query peers")
 		return
-	}
-	defer func() {
-		if cErr := rows.Close(); cErr != nil {
-			log.Warn("Failed to close rows", "error", cErr)
-		}
-	}()
-
-	var peers []Peer
-	for rows.Next() {
-		var p Peer
-		var agentVersion, lastHeartbeat, description, hmacKeyLastRotatedAt sql.NullString
-		if err := rows.Scan(&p.ID, &p.Hostname, &p.IPAddress, &p.OSType, &p.Arch, &p.HasDocker, &p.IsManual, &agentVersion, &lastHeartbeat, &p.Status, &p.BundleVersion, &p.BundleVersionNumber, &p.Groups, &description, &hmacKeyLastRotatedAt, &p.PendingChangesCount, &p.SyncStatus); err != nil {
-			common.RespondError(w, http.StatusInternalServerError, "failed to scan peer")
-			return
-		}
-		if agentVersion.Valid {
-			p.AgentVersion = agentVersion.String
-		}
-		if lastHeartbeat.Valid {
-			p.LastHeartbeat = ic.FormatSQLiteDatetime(lastHeartbeat.String)
-		}
-		if description.Valid {
-			p.Description = description.String
-		}
-		if hmacKeyLastRotatedAt.Valid {
-			p.HMACKeyLastRotatedAt = ic.FormatSQLiteDatetime(hmacKeyLastRotatedAt.String)
-		}
-		p.IPs = []PeerIP{} // Initialize to empty slice instead of nil
-		peers = append(peers, p)
-	}
-	if peers == nil {
-		peers = []Peer{}
-	}
-
-	// Fetch peer IPs for all peers in a single query
-	ipRows, err := h.DB.QueryContext(r.Context(), `SELECT id, peer_id, ip_address, is_primary FROM peer_ips ORDER BY peer_id, is_primary DESC`)
-	if err != nil {
-		log.WarnContext(r.Context(), "failed to query peer_ips", "error", err)
-		// Non-fatal: return peers without IPs
-		common.RespondJSON(w, http.StatusOK, peers)
-		return
-	}
-	defer func() {
-		if cErr := ipRows.Close(); cErr != nil {
-			log.Warn("Failed to close ip rows", "error", cErr)
-		}
-	}()
-
-	// Build a map of peer_id -> []PeerIP
-	ipMap := make(map[int][]PeerIP)
-	for ipRows.Next() {
-		var pip PeerIP
-		var isPrimary int
-		if err := ipRows.Scan(&pip.ID, &pip.PeerID, &pip.IPAddress, &isPrimary); err != nil {
-			log.WarnContext(r.Context(), "failed to scan peer_ip", "error", err)
-			continue
-		}
-		pip.IsPrimary = isPrimary == 1
-		ipMap[pip.PeerID] = append(ipMap[pip.PeerID], pip)
-	}
-
-	// Attach IPs to each peer
-	for i := range peers {
-		if ips, ok := ipMap[peers[i].ID]; ok {
-			peers[i].IPs = ips
-		}
 	}
 
 	common.RespondJSON(w, http.StatusOK, peers)
@@ -238,21 +123,13 @@ func (h *Handler) CreatePeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.DB.ExecContext(r.Context(),
-		`INSERT INTO peers (hostname, ip_address, os_type, arch, agent_key, hmac_key, has_docker, is_manual) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		input.Hostname, input.IPAddress, input.OSType, input.Arch, agentKey, hmacKey, input.HasDocker, input.IsManual)
+	id, err := h.Store.CreatePeer(r.Context(), input.Hostname, input.IPAddress, input.OSType, input.Arch, agentKey, hmacKey, input.HasDocker, input.IsManual)
 	if err != nil {
 		log.ErrorContext(r.Context(), "failed to create peer", "error", err)
 		common.InternalError(w)
 		return
 	}
 
-	id, err := result.LastInsertId()
-	if err != nil {
-		log.ErrorContext(r.Context(), "failed to get insert ID", "error", err)
-		common.InternalError(w)
-		return
-	}
 	common.RespondJSON(w, http.StatusCreated, map[string]int64{"id": id})
 }
 
@@ -294,22 +171,21 @@ func (h *Handler) UpdatePeer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate this is a manual peer (only manual peers can be edited)
-	var isManual bool
-	err = h.DB.QueryRowContext(r.Context(), "SELECT is_manual FROM peers WHERE id = ?", id).Scan(&isManual)
-	if errors.Is(err, sql.ErrNoRows) {
-		common.RespondError(w, http.StatusNotFound, "peer not found")
-		return
-	}
+	peer, err := h.Store.GetPeerByID(r.Context(), id)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			common.RespondError(w, http.StatusNotFound, "peer not found")
+			return
+		}
 		common.RespondError(w, http.StatusInternalServerError, "failed to query peer")
 		return
 	}
-	if !isManual {
+	if !peer.IsManual {
 		common.RespondError(w, http.StatusBadRequest, "can only edit manual peers")
 		return
 	}
 
-	_, err = h.DB.ExecContext(r.Context(), "UPDATE peers SET hostname = ?, ip_address = ?, os_type = ?, arch = ?, has_docker = ?, description = ? WHERE id = ?", input.Hostname, input.IPAddress, input.OSType, input.Arch, input.HasDocker, input.Description, id)
+	err = h.Store.UpdatePeer(r.Context(), id, input.Hostname, input.IPAddress, input.OSType, input.Arch, input.HasDocker, input.Description)
 	if err != nil {
 		log.ErrorContext(r.Context(), "failed to update peer", "error", err)
 		common.InternalError(w)
@@ -350,7 +226,7 @@ func (h *Handler) DeletePeer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check delete constraints (target_peer_id in policies, or in group used by policy)
-	err = common.CheckPeerDeleteConstraints(r.Context(), h.DB, peerID)
+	err = common.CheckPeerDeleteConstraints(r.Context(), h.DBBeginner, peerID)
 	if err != nil {
 		constraintErr, ok := err.(*common.DeleteConstraintError)
 		if ok {
@@ -361,33 +237,13 @@ func (h *Handler) DeletePeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := h.DB.ExecContext(r.Context(), "DELETE FROM group_members WHERE peer_id = ?", peerID); err != nil {
-		log.WarnContext(r.Context(), "failed to cleanup group_members for peer", "peer_id", peerID, "error", err)
-	}
-
-	// Delete any rule bundles (foreign key constraint)
-	if _, err := h.DB.ExecContext(r.Context(), "DELETE FROM rule_bundles WHERE peer_id = ?", peerID); err != nil {
-		log.WarnContext(r.Context(), "failed to cleanup rule_bundles for peer", "peer_id", peerID, "error", err)
-	}
-
-	if _, err := h.DB.ExecContext(r.Context(), "DELETE FROM firewall_logs WHERE peer_id = ?", peerID); err != nil {
-		log.WarnContext(r.Context(), "failed to cleanup firewall_logs for peer", "peer_id", peerID, "error", err)
-	}
-
-	result, err := h.DB.ExecContext(r.Context(), "DELETE FROM peers WHERE id = ?", peerID)
+	err = h.Store.DeletePeer(r.Context(), peerID)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			common.RespondError(w, http.StatusNotFound, "Peer not found")
+			return
+		}
 		common.RespondError(w, http.StatusInternalServerError, "Failed to delete peer")
-		return
-	}
-
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		log.ErrorContext(r.Context(), "Failed to check delete result", "error", err)
-		common.InternalError(w)
-		return
-	}
-	if rowsAffected == 0 {
-		common.RespondError(w, http.StatusNotFound, "Peer not found")
 		return
 	}
 
@@ -407,77 +263,7 @@ func (h *Handler) GetPeerBundle(w http.ResponseWriter, r *http.Request) {
 
 	includePending := r.URL.Query().Get("include_pending") == "true"
 
-	var query string
-	var args []interface{}
-
-	if includePending {
-		query = `SELECT version, version_number, rules_content, hmac FROM rule_bundles WHERE peer_id = ? ORDER BY created_at DESC LIMIT 1`
-		args = []interface{}{id}
-
-		var version string
-		var versionNumber int
-		var rulesContent string
-		var hmac string
-
-		err = h.DB.QueryRowContext(r.Context(), query, args...).Scan(&version, &versionNumber, &rulesContent, &hmac)
-		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				log.WarnContext(r.Context(), "no pending bundle found", "peer_id", id)
-				common.RespondError(w, http.StatusNotFound, "bundle not found")
-				return
-			}
-			log.ErrorContext(r.Context(), "failed to get pending bundle", "error", err)
-			common.InternalError(w)
-			return
-		}
-
-		var deployedVersion sql.NullString
-		err = h.DB.QueryRowContext(r.Context(), "SELECT bundle_version FROM peers WHERE id = ?", id).Scan(&deployedVersion)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			log.ErrorContext(r.Context(), "failed to get deployed version", "error", err)
-			common.InternalError(w)
-			return
-		}
-
-		response := map[string]interface{}{
-			"version":        version,
-			"version_number": versionNumber,
-			"rules":          rulesContent,
-			"hmac":           hmac,
-		}
-
-		if deployedVersion.Valid && deployedVersion.String != "" {
-			var deployedContent sql.NullString
-			err = h.DB.QueryRowContext(r.Context(),
-				"SELECT rules_content FROM rule_bundles WHERE peer_id = ? AND version = ?",
-				id, deployedVersion.String).Scan(&deployedContent)
-			if err != nil && !errors.Is(err, sql.ErrNoRows) {
-				log.ErrorContext(r.Context(), "failed to get deployed bundle", "error", err)
-				// Don't fail the request, just don't include deployed content
-			}
-			if deployedContent.Valid {
-				response["deployed_rules"] = deployedContent.String
-				response["deployed_version"] = deployedVersion.String
-			}
-		}
-
-		common.RespondJSON(w, http.StatusOK, response)
-		return
-	}
-
-	query = `SELECT rb.version, rb.version_number, rb.rules_content, rb.hmac
-		FROM rule_bundles rb
-		JOIN peers p ON p.id = ?
-		WHERE rb.version = p.bundle_version AND rb.peer_id = p.id
-		ORDER BY rb.created_at DESC LIMIT 1`
-	args = []interface{}{id}
-
-	var version string
-	var versionNumber int
-	var rulesContent string
-	var hmac string
-
-	err = h.DB.QueryRowContext(r.Context(), query, args...).Scan(&version, &versionNumber, &rulesContent, &hmac)
+	bundleData, version, versionNumber, hmac, deployedVersion, err := h.Store.GetPeerBundle(r.Context(), id, includePending)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			log.WarnContext(r.Context(), "no bundle found", "peer_id", id, "include_pending", includePending)
@@ -489,10 +275,27 @@ func (h *Handler) GetPeerBundle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if includePending && deployedVersion != "" {
+		// Also fetch deployed rules content for diff comparison
+		deployedData, _, _, _, _, err := h.Store.GetPeerBundle(r.Context(), id, false)
+		response := map[string]interface{}{
+			"rules":          bundleData,
+			"version":        version,
+			"version_number": versionNumber,
+			"hmac":           hmac,
+		}
+		if err == nil && deployedData != "" {
+			response["deployed_rules"] = deployedData
+			response["deployed_version"] = deployedVersion
+		}
+		common.RespondJSON(w, http.StatusOK, response)
+		return
+	}
+
 	common.RespondJSON(w, http.StatusOK, map[string]interface{}{
+		"rules":          bundleData,
 		"version":        version,
 		"version_number": versionNumber,
-		"rules":          rulesContent,
 		"hmac":           hmac,
 	})
 }
@@ -506,29 +309,22 @@ func (h *Handler) GetPeerByIP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// First, query for peer with exact IP match on primary ip_address
-	var p Peer
-	err := h.DB.QueryRowContext(r.Context(), "SELECT id, hostname, ip_address, is_manual FROM peers WHERE ip_address = ?", ip).Scan(&p.ID, &p.Hostname, &p.IPAddress, &p.IsManual)
-	if err == nil {
-		common.RespondJSON(w, http.StatusOK, p)
-		return
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
+	peer, err := h.Store.GetPeerByIP(r.Context(), ip)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			common.RespondJSON(w, http.StatusOK, nil) // No peer found
+			return
+		}
 		common.InternalError(w)
 		return
 	}
 
-	// Fallback: check peer_ips table for secondary IPs
-	err = h.DB.QueryRowContext(r.Context(), "SELECT p.id, p.hostname, p.ip_address, p.is_manual FROM peers p JOIN peer_ips pi ON p.id = pi.peer_id WHERE pi.ip_address = ?", ip).Scan(&p.ID, &p.Hostname, &p.IPAddress, &p.IsManual)
-	if errors.Is(err, sql.ErrNoRows) {
-		common.RespondJSON(w, http.StatusOK, nil) // No peer found
-		return
-	}
-	if err != nil {
-		common.InternalError(w)
-		return
-	}
-	common.RespondJSON(w, http.StatusOK, p)
+	common.RespondJSON(w, http.StatusOK, peerByIPResponse{
+		ID:        peer.ID,
+		Hostname:  peer.Hostname,
+		IPAddress: peer.IPAddress,
+		IsManual:  peer.IsManual,
+	})
 }
 
 // GetPeerByHostname looks up a peer by exact hostname.
@@ -540,18 +336,22 @@ func (h *Handler) GetPeerByHostname(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Query for peer with exact hostname match (case-sensitive)
-	var p Peer
-	err := h.DB.QueryRowContext(r.Context(), "SELECT id, hostname, ip_address, is_manual FROM peers WHERE hostname = ?", hostname).Scan(&p.ID, &p.Hostname, &p.IPAddress, &p.IsManual)
-	if errors.Is(err, sql.ErrNoRows) {
-		common.RespondJSON(w, http.StatusOK, nil) // No peer found
-		return
-	}
+	peer, err := h.Store.GetPeerByHostname(r.Context(), hostname)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			common.RespondJSON(w, http.StatusOK, nil) // No peer found
+			return
+		}
 		common.InternalError(w)
 		return
 	}
-	common.RespondJSON(w, http.StatusOK, p)
+
+	common.RespondJSON(w, http.StatusOK, peerByIPResponse{
+		ID:        peer.ID,
+		Hostname:  peer.Hostname,
+		IPAddress: peer.IPAddress,
+		IsManual:  peer.IsManual,
+	})
 }
 
 // GetPeerIPs returns all IPs for a given peer.
@@ -564,42 +364,22 @@ func (h *Handler) GetPeerIPs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check if peer exists
-	var exists int
-	err = h.DB.QueryRowContext(r.Context(), "SELECT 1 FROM peers WHERE id = ?", id).Scan(&exists)
-	if errors.Is(err, sql.ErrNoRows) {
-		common.RespondError(w, http.StatusNotFound, "peer not found")
-		return
-	}
+	_, err = h.Store.GetPeerByID(r.Context(), id)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			common.RespondError(w, http.StatusNotFound, "peer not found")
+			return
+		}
 		common.RespondError(w, http.StatusInternalServerError, "failed to query peer")
 		return
 	}
 
-	rows, err := h.DB.QueryContext(r.Context(), "SELECT id, peer_id, ip_address, is_primary FROM peer_ips WHERE peer_id = ? ORDER BY is_primary DESC, id ASC", id)
+	peerIPs, err := h.Store.ListPeerIPs(r.Context(), id)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "failed to query peer IPs")
 		return
 	}
-	defer func() {
-		if cErr := rows.Close(); cErr != nil {
-			log.Warn("Failed to close rows", "error", cErr)
-		}
-	}()
 
-	var peerIPs []PeerIP
-	for rows.Next() {
-		var pip PeerIP
-		var isPrimary int
-		if err := rows.Scan(&pip.ID, &pip.PeerID, &pip.IPAddress, &isPrimary); err != nil {
-			common.RespondError(w, http.StatusInternalServerError, "failed to scan peer IP")
-			return
-		}
-		pip.IsPrimary = isPrimary == 1
-		peerIPs = append(peerIPs, pip)
-	}
-	if peerIPs == nil {
-		peerIPs = []PeerIP{}
-	}
 	common.RespondJSON(w, http.StatusOK, peerIPs)
 }
 
@@ -627,49 +407,62 @@ func (h *Handler) AddPeerIP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check if peer exists
-	var exists int
-	err = h.DB.QueryRowContext(r.Context(), "SELECT 1 FROM peers WHERE id = ?", id).Scan(&exists)
-	if errors.Is(err, sql.ErrNoRows) {
-		common.RespondError(w, http.StatusNotFound, "peer not found")
-		return
-	}
+	_, err = h.Store.GetPeerByID(r.Context(), id)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			common.RespondError(w, http.StatusNotFound, "peer not found")
+			return
+		}
 		common.RespondError(w, http.StatusInternalServerError, "failed to query peer")
 		return
 	}
 
 	// Check for duplicate IP for same peer
-	var duplicateCount int
-	err = h.DB.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM peer_ips WHERE peer_id = ? AND ip_address = ?", id, input.IPAddress).Scan(&duplicateCount)
+	existingIPs, err := h.Store.ListPeerIPs(r.Context(), id)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "failed to check duplicate IP")
 		return
 	}
-	if duplicateCount > 0 {
-		common.RespondError(w, http.StatusConflict, "IP address already exists for this peer")
-		return
+	for _, existing := range existingIPs {
+		if existing.IPAddress == input.IPAddress {
+			common.RespondError(w, http.StatusConflict, "IP address already exists for this peer")
+			return
+		}
 	}
 
-	result, err := h.DB.ExecContext(r.Context(), "INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 0)", id, input.IPAddress)
+	err = h.Store.AddPeerIP(r.Context(), id, input.IPAddress, false)
 	if err != nil {
 		log.ErrorContext(r.Context(), "failed to add peer IP", "error", err)
 		common.InternalError(w)
 		return
 	}
 
-	ipID, err := result.LastInsertId()
+	// Fetch the newly added IP to get its ID
+	updatedIPs, err := h.Store.ListPeerIPs(r.Context(), id)
 	if err != nil {
-		log.ErrorContext(r.Context(), "failed to get insert ID", "error", err)
+		log.ErrorContext(r.Context(), "failed to fetch new peer IP", "error", err)
 		common.InternalError(w)
 		return
 	}
 
-	common.RespondJSON(w, http.StatusCreated, PeerIP{
-		ID:        int(ipID),
-		PeerID:    id,
-		IPAddress: input.IPAddress,
-		IsPrimary: false,
-	})
+	// Find the newly added IP in the list
+	var newIP *store.PeerIPView
+	for i := range updatedIPs {
+		if updatedIPs[i].IPAddress == input.IPAddress {
+			newIP = &updatedIPs[i]
+			break
+		}
+	}
+
+	if newIP != nil {
+		common.RespondJSON(w, http.StatusCreated, newIP)
+	} else {
+		common.RespondJSON(w, http.StatusCreated, store.PeerIPView{
+			PeerID:    id,
+			IPAddress: input.IPAddress,
+			IsPrimary: false,
+		})
+	}
 }
 
 // DeletePeerIP removes a secondary IP from a peer.
@@ -688,46 +481,44 @@ func (h *Handler) DeletePeerIP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check if peer exists
-	var peerExists int
-	err = h.DB.QueryRowContext(r.Context(), "SELECT 1 FROM peers WHERE id = ?", peerID).Scan(&peerExists)
-	if errors.Is(err, sql.ErrNoRows) {
-		common.RespondError(w, http.StatusNotFound, "peer not found")
-		return
-	}
+	_, err = h.Store.GetPeerByID(r.Context(), peerID)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			common.RespondError(w, http.StatusNotFound, "peer not found")
+			return
+		}
 		common.RespondError(w, http.StatusInternalServerError, "failed to query peer")
 		return
 	}
 
-	// Check if the peer_ip entry exists and belongs to this peer
-	var isPrimary int
-	err = h.DB.QueryRowContext(r.Context(), "SELECT is_primary FROM peer_ips WHERE id = ? AND peer_id = ?", ipID, peerID).Scan(&isPrimary)
-	if errors.Is(err, sql.ErrNoRows) {
-		common.RespondError(w, http.StatusNotFound, "peer IP not found")
+	// Find the peer_ip entry and verify it belongs to this peer
+	peerIPs, err := h.Store.ListPeerIPs(r.Context(), peerID)
+	if err != nil {
+		common.RespondError(w, http.StatusInternalServerError, "failed to query peer IPs")
 		return
 	}
-	if err != nil {
-		common.RespondError(w, http.StatusInternalServerError, "failed to query peer IP")
+
+	var targetIP *store.PeerIPView
+	for i := range peerIPs {
+		if peerIPs[i].ID == ipID {
+			targetIP = &peerIPs[i]
+			break
+		}
+	}
+
+	if targetIP == nil {
+		common.RespondError(w, http.StatusNotFound, "peer IP not found")
 		return
 	}
 
 	// Cannot delete primary IP
-	if isPrimary == 1 {
+	if targetIP.IsPrimary {
 		common.RespondError(w, http.StatusBadRequest, "cannot delete primary IP address")
 		return
 	}
 
-	// Get the IP address for this peer_ip entry (needed for policy check)
-	var ipAddress string
-	err = h.DB.QueryRowContext(r.Context(), "SELECT ip_address FROM peer_ips WHERE id = ? AND peer_id = ?", ipID, peerID).Scan(&ipAddress)
-	if err != nil {
-		common.RespondError(w, http.StatusInternalServerError, "failed to query peer IP address")
-		return
-	}
-
 	// Check if this IP is referenced by any policies
-	var policyCount int
-	err = h.DB.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM policies WHERE (source_id = ? AND source_ip = ?) OR (target_id = ? AND target_ip = ?)", peerID, ipAddress, peerID, ipAddress).Scan(&policyCount)
+	policyCount, err := h.Store.CountPolicyRefsForPeerIP(r.Context(), h.DBBeginner, peerID, targetIP.IPAddress)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "failed to check policy references")
 		return
@@ -737,20 +528,13 @@ func (h *Handler) DeletePeerIP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.DB.ExecContext(r.Context(), "DELETE FROM peer_ips WHERE id = ? AND peer_id = ?", ipID, peerID)
+	err = h.Store.DeletePeerIP(r.Context(), ipID)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			common.RespondError(w, http.StatusNotFound, "peer IP not found")
+			return
+		}
 		common.RespondError(w, http.StatusInternalServerError, "failed to delete peer IP")
-		return
-	}
-
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		log.ErrorContext(r.Context(), "failed to check delete result", "error", err)
-		common.InternalError(w)
-		return
-	}
-	if rowsAffected == 0 {
-		common.RespondError(w, http.StatusNotFound, "peer IP not found")
 		return
 	}
 
@@ -768,25 +552,23 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	// Look up the peer
-	var hostname string
-	var isManual bool
-	err = h.DB.QueryRowContext(ctx, "SELECT hostname, is_manual FROM peers WHERE id = ?", peerID).Scan(&hostname, &isManual)
-	if errors.Is(err, sql.ErrNoRows) {
-		common.RespondError(w, http.StatusNotFound, "peer not found")
-		return
-	}
+	peer, err := h.Store.GetPeerByID(ctx, peerID)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			common.RespondError(w, http.StatusNotFound, "peer not found")
+			return
+		}
 		common.RespondError(w, http.StatusInternalServerError, "database error")
 		return
 	}
-	if isManual {
+	if peer.IsManual {
 		common.RespondError(w, http.StatusBadRequest, "cannot update a manual peer")
 		return
 	}
 
 	// Get instance URL from system_config for the control plane URL
 	var instanceURL string
-	err = h.DB.QueryRowContext(ctx, "SELECT value FROM system_config WHERE key = 'instance_url'").Scan(&instanceURL)
+	err = h.DBBeginner.QueryRowContext(ctx, "SELECT value FROM system_config WHERE key = 'instance_url'").Scan(&instanceURL)
 	if err != nil || instanceURL == "" {
 		common.RespondError(w, http.StatusBadRequest, "instance URL not configured — set it in Settings to enable agent updates")
 		return
@@ -797,7 +579,7 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 		common.RespondError(w, http.StatusInternalServerError, "SSE hub not available")
 		return
 	}
-	hostID := fmt.Sprintf("host-%s", hostname)
+	hostID := fmt.Sprintf("host-%s", peer.Hostname)
 	delivered := h.SSEHub.NotifyUpdateAgent(hostID, instanceURL)
 	if !delivered {
 		common.RespondJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "agent_not_connected"})

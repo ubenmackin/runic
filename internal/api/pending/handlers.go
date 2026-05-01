@@ -32,8 +32,32 @@ type Handler struct {
 }
 
 // NewHandler creates a new Handler with the given dependencies.
-func NewHandler(database *sql.DB, compiler *engine.Compiler, sseHub *events.SSEHub, pushWorker *common.PushWorker) *Handler {
+func NewHandler(database db.DB, compiler *engine.Compiler, sseHub *events.SSEHub, pushWorker *common.PushWorker) *Handler {
 	return &Handler{DB: database, DBBeginner: database, Compiler: compiler, SSEHub: sseHub, PushWorker: pushWorker}
+}
+
+// lookupEntityName returns the display name for an entity referenced by a pending change.
+// Returns ("Unknown", nil) for unrecognized change types.
+//
+// NOTE: This method uses raw SQL queries via h.DB for trivial name lookups.
+// A dedicated PendingStore is intentionally not created per the refactoring plan.
+func (h *Handler) lookupEntityName(ctx context.Context, changeType string, changeID int) (string, error) {
+	switch changeType {
+	case "group":
+		var name string
+		err := h.DB.QueryRowContext(ctx, "SELECT name FROM groups WHERE id = ?", changeID).Scan(&name)
+		return name, err
+	case "policy":
+		var name string
+		err := h.DB.QueryRowContext(ctx, "SELECT name FROM policies WHERE id = ?", changeID).Scan(&name)
+		return name, err
+	case "service":
+		var name string
+		err := h.DB.QueryRowContext(ctx, "SELECT name FROM services WHERE id = ?", changeID).Scan(&name)
+		return name, err
+	default:
+		return "Unknown", nil
+	}
 }
 
 // peerChangeGroup represents a peer with its pending changes and hostname.
@@ -96,16 +120,7 @@ func (h *Handler) ListPendingChanges(w http.ResponseWriter, r *http.Request) {
 				ChangeSummary: c.ChangeSummary,
 				CreatedAt:     ic.FormatSQLiteDatetime(c.CreatedAt),
 			}
-			// Lookup entity name based on change_type
-			var entityName string
-			switch c.ChangeType {
-			case "group":
-				_ = database.QueryRowContext(ctx, "SELECT name FROM groups WHERE id = ?", c.ChangeID).Scan(&entityName)
-			case "policy":
-				_ = database.QueryRowContext(ctx, "SELECT name FROM policies WHERE id = ?", c.ChangeID).Scan(&entityName)
-			case "service":
-				_ = database.QueryRowContext(ctx, "SELECT name FROM services WHERE id = ?", c.ChangeID).Scan(&entityName)
-			}
+			entityName, _ := h.lookupEntityName(ctx, c.ChangeType, c.ChangeID)
 			details[i].EntityName = entityName
 		}
 
@@ -158,10 +173,10 @@ func (h *Handler) RollbackPendingChanges(w http.ResponseWriter, r *http.Request)
 	if req.EntityType != "" && req.EntityID != 0 {
 		err := db.RollbackEntitySnapshot(ctx, h.DBBeginner, req.EntityType, req.EntityID)
 		if err != nil {
-		if errors.Is(err, db.ErrConstraintViolation) {
-			common.RespondError(w, http.StatusConflict, "operation conflict")
-			return
-		}
+			if errors.Is(err, db.ErrConstraintViolation) {
+				common.RespondError(w, http.StatusConflict, "operation conflict")
+				return
+			}
 			log.ErrorContext(ctx, "failed to rollback entity", "entity_type", req.EntityType, "entity_id", req.EntityID, "error", err)
 			common.InternalError(w)
 			return
@@ -229,16 +244,7 @@ func (h *Handler) GetPeerPendingChanges(w http.ResponseWriter, r *http.Request) 
 			ChangeSummary: c.ChangeSummary,
 			CreatedAt:     ic.FormatSQLiteDatetime(c.CreatedAt),
 		}
-		// Lookup entity name based on change_type
-		var entityName string
-		switch c.ChangeType {
-		case "group":
-			_ = database.QueryRowContext(ctx, "SELECT name FROM groups WHERE id = ?", c.ChangeID).Scan(&entityName)
-		case "policy":
-			_ = database.QueryRowContext(ctx, "SELECT name FROM policies WHERE id = ?", c.ChangeID).Scan(&entityName)
-		case "service":
-			_ = database.QueryRowContext(ctx, "SELECT name FROM services WHERE id = ?", c.ChangeID).Scan(&entityName)
-		}
+		entityName, _ := h.lookupEntityName(ctx, c.ChangeType, c.ChangeID)
 		details[i].EntityName = entityName
 	}
 
@@ -508,18 +514,13 @@ func (h *Handler) ApplyEntityPendingChanges(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	_, err = tx.ExecContext(ctx,
-		"DELETE FROM pending_changes WHERE peer_id = ? AND change_type = ? AND change_id = ?",
-		peerID, req.EntityType, req.EntityID,
-	)
-	if err != nil {
+	if err := db.DeletePendingChangeForEntity(ctx, tx, int64(peerID), req.EntityType, req.EntityID); err != nil {
 		log.ErrorContext(ctx, "failed to delete pending changes", "error", err)
 		common.InternalError(w)
 		return
 	}
 
-	var remainingCount int
-	err = tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM pending_changes WHERE peer_id = ?", peerID).Scan(&remainingCount)
+	remainingCount, err := db.CountPendingChangesForPeer(ctx, tx, int64(peerID))
 	if err != nil {
 		log.ErrorContext(ctx, "failed to count remaining pending changes", "error", err)
 		common.InternalError(w)

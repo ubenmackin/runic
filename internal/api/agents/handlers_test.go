@@ -17,6 +17,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 
 	"runic/internal/models"
+	"runic/internal/store"
 	"runic/internal/testutil"
 )
 
@@ -158,7 +159,7 @@ func TestAgentAuthMiddleware(t *testing.T) {
 			}
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(db, db, nil)
+			handler := NewHandler(store.NewPeerStore(db), db, db, nil)
 
 			// Track if next handler was called
 			nextCalled := false
@@ -279,7 +280,7 @@ func TestRegisterAgent(t *testing.T) {
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(db, db, nil)
+			handler := NewHandler(store.NewPeerStore(db), db, db, nil)
 			handler.RegisterAgent(w, req)
 
 			if w.Code != tt.wantCode {
@@ -475,7 +476,7 @@ func TestRegisterAgent_MaliciousInput(t *testing.T) {
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(db, db, nil)
+			handler := NewHandler(store.NewPeerStore(db), db, db, nil)
 			handler.RegisterAgent(w, req)
 
 			if w.Code != tt.wantCode {
@@ -578,7 +579,7 @@ func TestGetBundle(t *testing.T) {
 
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(db, db, nil)
+			handler := NewHandler(store.NewPeerStore(db), db, db, nil)
 
 			handler.AgentAuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
 				handler.GetBundle(w, r)
@@ -660,7 +661,7 @@ func TestHeartbeat(t *testing.T) {
 			req := makeAuthRequest(t, db, "POST", "/api/v1/agents/heartbeat", tt.reqBody, peer)
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(db, db, nil)
+			handler := NewHandler(store.NewPeerStore(db), db, db, nil)
 
 			handler.AgentAuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
 				handler.Heartbeat(w, r)
@@ -779,7 +780,7 @@ func TestSubmitLogs(t *testing.T) {
 			req := makeAuthRequest(t, db, "POST", "/api/v1/agents/logs", tt.reqBody, "test-agent")
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(db, logsDB, nil)
+			handler := NewHandler(store.NewPeerStore(db), db, logsDB, nil)
 
 			handler.AgentAuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
 				handler.SubmitLogs(w, r)
@@ -841,7 +842,7 @@ func TestConfirmBundleApplied(t *testing.T) {
 			req := makeAuthRequest(t, db, "POST", "/api/v1/agents/confirm-bundle", tt.reqBody, "test-agent")
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(db, db, nil)
+			handler := NewHandler(store.NewPeerStore(db), db, db, nil)
 
 			handler.AgentAuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
 				handler.ConfirmBundleApplied(w, r)
@@ -914,7 +915,7 @@ func TestAgentCheckRotation(t *testing.T) {
 			req := makeAuthRequest(t, db, "GET", "/api/v1/agents/check-rotation", "", peer)
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(db, db, nil)
+			handler := NewHandler(store.NewPeerStore(db), db, db, nil)
 
 			handler.AgentAuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
 				handler.AgentCheckRotation(w, r)
@@ -1005,7 +1006,7 @@ func TestAgentTestKey(t *testing.T) {
 			req := makeAuthRequest(t, db, "POST", "/api/v1/agents/test-key", tt.reqBody, peer)
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(db, db, nil)
+			handler := NewHandler(store.NewPeerStore(db), db, db, nil)
 
 			handler.AgentAuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
 				handler.AgentTestKey(w, r)
@@ -1076,7 +1077,7 @@ func TestGenerateRegistrationToken(t *testing.T) {
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(db, db, nil)
+			handler := NewHandler(store.NewPeerStore(db), db, db, nil)
 			handler.GenerateRegistrationToken(w, req)
 
 			if w.Code != tt.wantCode {
@@ -1155,7 +1156,7 @@ func TestListRegistrationTokens(t *testing.T) {
 			req := httptest.NewRequest("GET", "/api/v1/registration-tokens", nil)
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(db, db, nil)
+			handler := NewHandler(store.NewPeerStore(db), db, db, nil)
 			handler.ListRegistrationTokens(w, req)
 
 			if w.Code != tt.wantCode {
@@ -1219,7 +1220,7 @@ func TestRevokeRegistrationToken(t *testing.T) {
 			w := httptest.NewRecorder()
 			req = muxVars(req, map[string]string{"id": tt.tokenID})
 
-			handler := NewHandler(db, db, nil)
+			handler := NewHandler(store.NewPeerStore(db), db, db, nil)
 			handler.RevokeRegistrationToken(w, req)
 
 			if w.Code != tt.wantCode {
@@ -1489,7 +1490,7 @@ func TestConsumeRegistrationToken(t *testing.T) {
 				tt.setup(t, db)
 			}
 
-			handler := NewHandler(db, db, nil)
+			handler := NewHandler(store.NewPeerStore(db), db, db, nil)
 			consumed, err := handler.ConsumeRegistrationToken(tt.token, tt.hostname)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
@@ -1700,8 +1701,8 @@ func TestUpsertPeerIPs(t *testing.T) {
 
 			peerID := tt.setup(t, db)
 
-			handler := NewHandler(db, db, nil)
-			err := handler.upsertPeerIPs(context.Background(), peerID, tt.allIPs, tt.primaryIP)
+			handler := NewHandler(store.NewPeerStore(db), db, db, nil)
+			err := handler.PeerStore.UpsertPeerIPs(context.Background(), peerID, tt.allIPs, tt.primaryIP)
 
 			if (err != nil) != tt.wantErr {
 				t.Errorf("upsertPeerIPs() error = %v, wantErr %v", err, tt.wantErr)
@@ -2077,11 +2078,11 @@ func TestSyncPeerIPs(t *testing.T) {
 
 			peerID := tt.setup(t, db)
 
-			handler := NewHandler(db, db, nil)
-			err := handler.syncPeerIPs(context.Background(), peerID, tt.allIPs, tt.primaryIP)
+			handler := NewHandler(store.NewPeerStore(db), db, db, nil)
+			_, err := handler.PeerStore.SyncPeerIPs(context.Background(), peerID, tt.allIPs, tt.primaryIP)
 
 			if (err != nil) != tt.wantErr {
-				t.Errorf("syncPeerIPs() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("SyncPeerIPs() error = %v, wantErr %v", err, tt.wantErr)
 			}
 
 			if tt.checkDB != nil {

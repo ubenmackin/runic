@@ -199,15 +199,6 @@ func (s *GroupStore) DeleteGroupMember(ctx context.Context, groupID, peerID int)
 	return nil
 }
 
-func (s *GroupStore) GetPeerHostname(ctx context.Context, peerID int64) (string, error) {
-	var hostname string
-	err := s.db.QueryRowContext(ctx, "SELECT hostname FROM peers WHERE id = ?", peerID).Scan(&hostname)
-	if err != nil {
-		return "", fmt.Errorf("query peer hostname: %w", err)
-	}
-	return hostname, nil
-}
-
 // Snapshot creates a snapshot of the group and its members.
 // The q parameter allows it to be used inside or outside a transaction.
 func (s *GroupStore) Snapshot(ctx context.Context, q db.Querier, action string, groupID int) error {

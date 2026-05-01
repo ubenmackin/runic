@@ -10,6 +10,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 
+	apicommon "runic/internal/api/common"
 	"runic/internal/common"
 	"runic/internal/db"
 )
@@ -57,27 +58,26 @@ func generateAgentKey() (string, error) {
 func (h *Handler) getHostIDFromContext(w http.ResponseWriter, r *http.Request) (string, int, bool) {
 	hostIDVal := r.Context().Value(hostIDKey)
 	if hostIDVal == nil {
-		http.Error(w, `{"error": "host_id not found in context"}`, http.StatusUnauthorized)
+		apicommon.RespondError(w, http.StatusUnauthorized, "host_id not found in context")
 		return "", 0, false
 	}
 	hostID, ok := hostIDVal.(string)
 	if !ok {
-		http.Error(w, `{"error": "invalid host_id type"}`, http.StatusBadRequest)
+		apicommon.RespondError(w, http.StatusBadRequest, "invalid host_id type")
 		return "", 0, false
 	}
 
 	// Extract hostname from host-{hostname} format
 	var hostname string
 	if _, err := fmt.Sscanf(hostID, "host-%s", &hostname); err != nil {
-		http.Error(w, `{"error": "invalid host_id format"}`, http.StatusBadRequest)
+		apicommon.RespondError(w, http.StatusBadRequest, "invalid host_id format")
 		return "", 0, false
 	}
 
 	// Look up peer by hostname to get the numeric ID
-	var peerID int
-	err := h.DB.QueryRowContext(r.Context(), "SELECT id FROM peers WHERE hostname = ?", hostname).Scan(&peerID)
+	peerID, err := h.PeerStore.GetPeerIDByHostname(r.Context(), hostname)
 	if err != nil {
-		http.Error(w, `{"error": "peer not found"}`, http.StatusNotFound)
+		apicommon.RespondError(w, http.StatusNotFound, "peer not found")
 		return "", 0, false
 	}
 

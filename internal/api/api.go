@@ -92,6 +92,8 @@ func NewAPI(db *sql.DB, compiler *engine.Compiler, logsDBPath string, alertServi
 	pushWorker := common.NewPushWorker(db, compiler, alertService, sseHub)
 	groupStore := store.NewGroupStore(db)
 	policyStore := store.NewPolicyStore(db)
+	peerStore := store.NewPeerStore(db)
+	serviceStore := store.NewServiceStore(db)
 	return &API{
 		Compiler:     compiler,
 		DB:           db,
@@ -102,12 +104,12 @@ func NewAPI(db *sql.DB, compiler *engine.Compiler, logsDBPath string, alertServi
 		LogHub:       logs.NewHub(),
 		ChangeWorker: changeWorker,
 		PushWorker:   pushWorker,
-		Peers:        peers.NewHandler(db, compiler, sseHub),
-		Agents:       agents.NewHandler(db, logsDB, alertService),
+		Peers:        peers.NewHandler(peerStore, db, compiler, sseHub),
+		Agents:       agents.NewHandler(peerStore, db, logsDB, alertService),
 		Auth:         authhandlers.NewHandler(db, db),
-		Groups:       groups.NewHandler(db, compiler, changeWorker, groupStore),
+		Groups:       groups.NewHandler(db, compiler, changeWorker, groupStore, peerStore),
 		Policies:     policies.NewHandler(db, compiler, changeWorker, policyStore),
-		Services:     services.NewHandler(db, compiler, changeWorker),
+		Services:     services.NewHandler(serviceStore, compiler, changeWorker),
 		Imports:      imports.NewHandler(db, sseHub, changeWorker),
 		Logs:         logs.NewHandler(logsDB),
 		Users:        users.NewHandler(db),

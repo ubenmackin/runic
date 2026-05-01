@@ -11,10 +11,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -57,7 +55,6 @@ type Agent struct {
 	rotationManager *rotation.Manager
 	regMu           sync.Mutex // protects re-registration from concurrent calls
 	cmdRunner       CommandRunner
-	execCommandFunc func(ctx context.Context, name string, args ...string) *exec.Cmd
 	cachePath       string
 	backupPath      string
 }
@@ -88,7 +85,6 @@ func New(configPath, controlPlaneURL string) *Agent {
 	}
 
 	agent.cmdRunner = &RealCommandRunner{}
-	agent.execCommandFunc = exec.CommandContext
 	agent.cachePath = "/etc/runic-agent/cached-bundle.rules"
 	agent.backupPath = "/etc/runic-agent/iptables-backup.rules"
 
@@ -549,10 +545,10 @@ func (a *Agent) handleFetchBackup(ctx context.Context) {
 }
 
 // handleUpdateAgent runs the install script to self-update the agent.
-// The install command is launched as a detached process in its own process group
-// so that SIGTERM to the agent does not cascade to the child. The function returns
-// immediately after starting the command since the agent will be killed and
-// restarted by systemd.
+// The install command is launched via nohup+setsid so it runs in a fully
+// detached session. When the agent is stopped by the install script's
+// "systemctl stop runic-agent", the install script continues independently
+// and completes the update (download, file move, service restart).
 func (a *Agent) handleUpdateAgent(_ context.Context, controlPlaneURL string) {
 	log.Info("Starting agent self-update", "control_plane_url", controlPlaneURL)
 
@@ -563,37 +559,26 @@ func (a *Agent) handleUpdateAgent(_ context.Context, controlPlaneURL string) {
 		return
 	}
 
-	// Use the hardcoded install script URL
 	installScriptURL := "https://raw.githubusercontent.com/ubenmackin/runic/main/scripts/install-agent.sh"
 
-	// Launch the install script as a detached process using context.Background()
-	// so it survives the parent agent's cancellation context. We use exec.CommandContext
-	// directly (bypassing cmdRunner) and put the child in its own process group
-	// so SIGTERM to the agent doesn't cascade to the install script.
-	cmd := a.execCommandFunc(context.Background(), "bash", "-c", fmt.Sprintf("curl -sL %s | sudo bash -s -- %s", installScriptURL, shellSafeArg(parsedURL.String())))
-	cmd.Stdout = os.Stderr
-	cmd.Stderr = os.Stderr
+	// Use nohup + setsid to fully detach the install script from the agent's process
+	// tree. When systemd stops the agent (via SIGTERM from the install script's
+	// "systemctl stop runic-agent"), the install script continues in its own session
+	// and completes the download, file move, and service restart.
+	cmd := fmt.Sprintf(
+		"nohup setsid bash -c 'curl -sL %s | sudo bash -s -- %s' >/dev/null 2>&1 &",
+		installScriptURL,
+		shellSafeArg(parsedURL.String()),
+	)
 
-	// Put the child in its own process group so SIGTERM to the agent doesn't kill it
-	if runtime.GOOS == "linux" {
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	}
-
-	if err := cmd.Start(); err != nil {
-		log.Error("Failed to launch update process", "error", err)
+	// Use context.Background() so the command isn't canceled when the agent's context is canceled
+	out, err := a.cmdRunner.Run(context.Background(), "bash", "-c", cmd)
+	if err != nil {
+		log.Error("Failed to launch update process", "error", err, "output", string(out))
 		return
 	}
-	// Release the child process so it doesn't become a zombie if the agent
-	// doesn't exit. The install script runs in its own process group and
-	// will continue independently of the agent's lifecycle.
-	if err := cmd.Process.Release(); err != nil {
-		log.Error("Failed to release update process", "error", err)
-		return
-	}
-	log.Info("Update process launched, agent will restart via systemd", "pid", cmd.Process.Pid)
 
-	// Do NOT wait for the command to complete — the agent will be killed by the
-	// install script's systemctl stop, and we want the script to continue running.
+	log.Info("Update process launched, agent will be restarted by the install script")
 }
 
 // shellSafeArg wraps a string in single quotes for safe shell interpolation.

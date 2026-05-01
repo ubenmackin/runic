@@ -39,16 +39,16 @@ type GroupMemberRow struct {
 }
 
 type ServiceRow struct {
-	ID              int
-	Name            string
-	Ports           string
-	SourcePorts     string
-	Protocol        string
-	Description     string
-	DirectionHint   string
-	IsSystem        bool
-	NoConntrack     bool
-	IsPendingDelete bool
+	ID              int    `json:"id"`
+	Name            string `json:"name"`
+	Ports           string `json:"ports"`
+	SourcePorts     string `json:"source_ports"`
+	Protocol        string `json:"protocol"`
+	Description     string `json:"description"`
+	DirectionHint   string `json:"direction_hint"`
+	IsSystem        bool   `json:"is_system"`
+	NoConntrack     bool   `json:"no_conntrack"`
+	IsPendingDelete bool   `json:"is_pending_delete"`
 }
 
 type PolicyRow struct {

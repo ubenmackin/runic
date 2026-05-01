@@ -8,9 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -385,8 +383,19 @@ func TestIsControlPlaneReachableFalse(t *testing.T) {
 // mockCommandRunner implements CommandRunner for testing.
 type mockCommandRunner struct {
 	output []byte
-	err    error
-	calls  []mockCall
+	err error
+	calls []mockCall
+}
+
+type mockCall struct {
+	ctx  context.Context
+	name string
+	args []string
+}
+
+func (m *mockCommandRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	m.calls = append(m.calls, mockCall{ctx: ctx, name: name, args: args})
+	return m.output, m.err
 }
 
 type mockCall struct {

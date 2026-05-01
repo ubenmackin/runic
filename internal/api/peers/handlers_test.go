@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"runic/internal/store"
 	"runic/internal/testutil"
 )
 
@@ -140,7 +141,7 @@ func TestGetPeers(t *testing.T) {
 			req := httptest.NewRequest("GET", "/api/v1/peers", nil)
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(database, nil, nil)
+			handler := NewHandler(store.NewPeerStore(database), database, nil, nil)
 			handler.GetPeers(w, req)
 
 			if w.Code != tt.wantCode {
@@ -158,7 +159,7 @@ func TestGetPeers(t *testing.T) {
 			}
 
 			if tt.wantPeersLen > 0 {
-				var peers []Peer
+				var peers []store.PeerView
 				if err := json.NewDecoder(w.Body).Decode(&peers); err != nil {
 					t.Fatalf("failed to decode peers response: %v", err)
 				}
@@ -287,7 +288,7 @@ func TestCreatePeer(t *testing.T) {
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(database, nil, nil)
+			handler := NewHandler(store.NewPeerStore(database), database, nil, nil)
 			handler.CreatePeer(w, req)
 
 			if w.Code != tt.wantCode {
@@ -448,7 +449,7 @@ func TestUpdatePeer(t *testing.T) {
 			req = muxVars(req, map[string]string{"id": tt.peerID})
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(database, nil, nil)
+			handler := NewHandler(store.NewPeerStore(database), database, nil, nil)
 			handler.UpdatePeer(w, req)
 
 			if w.Code != tt.wantCode {
@@ -514,7 +515,7 @@ func TestCompilePeer(t *testing.T) {
 			req = muxVars(req, map[string]string{"id": tt.peerID})
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(database, nil, nil)
+			handler := NewHandler(store.NewPeerStore(database), database, nil, nil)
 			handler.CompilePeer(w, req)
 
 			if w.Code != tt.wantCode {
@@ -670,7 +671,7 @@ func TestGetPeerBundle(t *testing.T) {
 			req = muxVars(req, map[string]string{"id": tt.peerID})
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(database, nil, nil)
+			handler := NewHandler(store.NewPeerStore(database), database, nil, nil)
 			handler.GetPeerBundle(w, req)
 
 			if w.Code != tt.wantCode {
@@ -841,7 +842,7 @@ func TestDeletePeer(t *testing.T) {
 			// Mock gorilla/mux vars
 			req = muxVars(req, map[string]string{"id": tt.peerID})
 
-			handler := NewHandler(database, nil, nil)
+			handler := NewHandler(store.NewPeerStore(database), database, nil, nil)
 			handler.DeletePeer(w, req)
 
 			if w.Code != tt.wantCode {
@@ -923,7 +924,7 @@ func TestDeletePeer_GroupMembersCleanup(t *testing.T) {
 	w := httptest.NewRecorder()
 	req = muxVars(req, map[string]string{"id": "1"})
 
-	handler := NewHandler(database, nil, nil)
+	handler := NewHandler(store.NewPeerStore(database), database, nil, nil)
 	handler.DeletePeer(w, req)
 
 	if w.Code != http.StatusOK {
@@ -981,7 +982,7 @@ func TestDeletePeer_WithRuleBundlesAndLogs(t *testing.T) {
 	w := httptest.NewRecorder()
 	req = muxVars(req, map[string]string{"id": "1"})
 
-	handler := NewHandler(database, nil, nil)
+	handler := NewHandler(store.NewPeerStore(database), database, nil, nil)
 	handler.DeletePeer(w, req)
 
 	if w.Code != http.StatusOK {
@@ -1033,7 +1034,7 @@ func TestDeletePeer_InUseByMultiplePolicies(t *testing.T) {
 	w := httptest.NewRecorder()
 	req = muxVars(req, map[string]string{"id": "1"})
 
-	handler := NewHandler(database, nil, nil)
+	handler := NewHandler(store.NewPeerStore(database), database, nil, nil)
 	handler.DeletePeer(w, req)
 
 	// Should return 409 Conflict
@@ -1142,7 +1143,7 @@ func TestDeletePeer_InGroupUsedByMultiplePolicies(t *testing.T) {
 	w := httptest.NewRecorder()
 	req = muxVars(req, map[string]string{"id": "1"})
 
-	handler := NewHandler(database, nil, nil)
+	handler := NewHandler(store.NewPeerStore(database), database, nil, nil)
 	handler.DeletePeer(w, req)
 
 	// Should return 409 Conflict
@@ -1245,7 +1246,7 @@ func TestDeletePeer_NotInUse_Success(t *testing.T) {
 	w := httptest.NewRecorder()
 	req = muxVars(req, map[string]string{"id": "1"})
 
-	handler := NewHandler(database, nil, nil)
+	handler := NewHandler(store.NewPeerStore(database), database, nil, nil)
 	handler.DeletePeer(w, req)
 
 	// Should return 200 OK
@@ -1290,7 +1291,7 @@ func TestGetPeerByIP(t *testing.T) {
 		setup       func(t *testing.T, db *sql.DB)
 		wantCode    int
 		wantErr     string
-		wantPeer    *Peer
+		wantPeer    *peerByIPResponse
 		wantNil     bool
 	}{
 		{
@@ -1307,7 +1308,7 @@ func TestGetPeerByIP(t *testing.T) {
 				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, is_manual) VALUES (?, ?, ?, ?, ?, ?)`, "test-peer", "10.0.0.1", "key", "hmac", 0, 0)
 			},
 			wantCode: http.StatusOK,
-			wantPeer: &Peer{ID: 1, Hostname: "test-peer", IPAddress: "10.0.0.1", IsManual: false},
+			wantPeer: &peerByIPResponse{ID: 1, Hostname: "test-peer", IPAddress: "10.0.0.1", IsManual: false},
 		},
 		{
 			name:        "peer not found",
@@ -1325,7 +1326,7 @@ func TestGetPeerByIP(t *testing.T) {
 				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, is_manual) VALUES (?, ?, ?, ?, ?, ?)`, "manual-peer", "192.168.1.1", "key", "hmac", 0, 1)
 			},
 			wantCode: http.StatusOK,
-			wantPeer: &Peer{ID: 1, Hostname: "manual-peer", IPAddress: "192.168.1.1", IsManual: true},
+			wantPeer: &peerByIPResponse{ID: 1, Hostname: "manual-peer", IPAddress: "192.168.1.1", IsManual: true},
 		},
 		{
 			name:        "ipv6 address - peer found",
@@ -1334,7 +1335,7 @@ func TestGetPeerByIP(t *testing.T) {
 				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`, "ipv6-peer", "::1", "key", "hmac", 0)
 			},
 			wantCode: http.StatusOK,
-			wantPeer: &Peer{ID: 1, Hostname: "ipv6-peer", IPAddress: "::1", IsManual: false},
+			wantPeer: &peerByIPResponse{ID: 1, Hostname: "ipv6-peer", IPAddress: "::1", IsManual: false},
 		},
 		{
 			name:        "peer found via secondary IP in peer_ips table",
@@ -1345,7 +1346,7 @@ func TestGetPeerByIP(t *testing.T) {
 				db.Exec(`INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 0)`, 1, "10.0.0.2")
 			},
 			wantCode: http.StatusOK,
-			wantPeer: &Peer{ID: 1, Hostname: "test-peer", IPAddress: "10.0.0.1", IsManual: false},
+			wantPeer: &peerByIPResponse{ID: 1, Hostname: "test-peer", IPAddress: "10.0.0.1", IsManual: false},
 		},
 		{
 			name:        "secondary IP not found in peer_ips either",
@@ -1373,7 +1374,7 @@ func TestGetPeerByIP(t *testing.T) {
 			req := httptest.NewRequest("GET", url, nil)
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(database, nil, nil)
+			handler := NewHandler(store.NewPeerStore(database), database, nil, nil)
 			handler.GetPeerByIP(w, req)
 
 			if w.Code != tt.wantCode {
@@ -1391,7 +1392,7 @@ func TestGetPeerByIP(t *testing.T) {
 			}
 
 			if tt.wantPeer != nil {
-				var p Peer
+				var p peerByIPResponse
 				if err := json.NewDecoder(w.Body).Decode(&p); err != nil {
 					t.Fatalf("failed to decode peer response: %v", err)
 				}
@@ -1442,7 +1443,7 @@ func TestGetPeerBundle_WithIncludePending(t *testing.T) {
 	req = muxVars(req, map[string]string{"id": "1"})
 	w := httptest.NewRecorder()
 
-	handler := NewHandler(database, nil, nil)
+	handler := NewHandler(store.NewPeerStore(database), database, nil, nil)
 	handler.GetPeerBundle(w, req)
 
 	// Verify response
@@ -1485,7 +1486,7 @@ func TestCreatePeer_ValidOSOther(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	handler := NewHandler(database, nil, nil)
+	handler := NewHandler(store.NewPeerStore(database), database, nil, nil)
 	handler.CreatePeer(w, req)
 
 	if w.Code != http.StatusCreated {
@@ -1521,7 +1522,7 @@ func TestCreatePeer_ValidArchOther(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	handler := NewHandler(database, nil, nil)
+	handler := NewHandler(store.NewPeerStore(database), database, nil, nil)
 	handler.CreatePeer(w, req)
 
 	if w.Code != http.StatusCreated {
@@ -1557,7 +1558,7 @@ func TestCreatePeer_ValidMacOS(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	handler := NewHandler(database, nil, nil)
+	handler := NewHandler(store.NewPeerStore(database), database, nil, nil)
 	handler.CreatePeer(w, req)
 
 	if w.Code != http.StatusCreated {
@@ -1660,7 +1661,7 @@ func TestGetPeerIPs(t *testing.T) {
 			req = muxVars(req, map[string]string{"id": tt.peerID})
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(database, nil, nil)
+			handler := NewHandler(store.NewPeerStore(database), database, nil, nil)
 			handler.GetPeerIPs(w, req)
 
 			if w.Code != tt.wantCode {
@@ -1678,7 +1679,7 @@ func TestGetPeerIPs(t *testing.T) {
 			}
 
 			if tt.wantIPsLen > 0 {
-				var peerIPs []PeerIP
+				var peerIPs []store.PeerIPView
 				if err := json.NewDecoder(w.Body).Decode(&peerIPs); err != nil {
 					t.Fatalf("failed to decode peer IPs response: %v", err)
 				}
@@ -1694,12 +1695,12 @@ func TestGetPeerIPs(t *testing.T) {
 			}
 
 			if tt.wantIPsLen == 0 && tt.wantErr == "" {
-				var peerIPs []PeerIP
+				var peerIPs []store.PeerIPView
 				if err := json.NewDecoder(w.Body).Decode(&peerIPs); err != nil {
 					t.Fatalf("failed to decode peer IPs response: %v", err)
 				}
 				if peerIPs == nil {
-					peerIPs = []PeerIP{}
+					peerIPs = []store.PeerIPView{}
 				}
 				if len(peerIPs) != 0 {
 					t.Errorf("expected 0 IPs, got %d", len(peerIPs))
@@ -1837,7 +1838,7 @@ func TestAddPeerIP(t *testing.T) {
 			req = muxVars(req, map[string]string{"id": tt.peerID})
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(database, nil, nil)
+			handler := NewHandler(store.NewPeerStore(database), database, nil, nil)
 			handler.AddPeerIP(w, req)
 
 			if w.Code != tt.wantCode {
@@ -1855,7 +1856,7 @@ func TestAddPeerIP(t *testing.T) {
 			}
 
 			if tt.wantCode == http.StatusCreated {
-				var pip PeerIP
+				var pip store.PeerIPView
 				if err := json.NewDecoder(w.Body).Decode(&pip); err != nil {
 					t.Fatalf("failed to decode response: %v", err)
 				}
@@ -2040,7 +2041,7 @@ func TestDeletePeerIP(t *testing.T) {
 			req = muxVars(req, map[string]string{"id": tt.peerID, "ip_id": tt.ipID})
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(database, nil, nil)
+			handler := NewHandler(store.NewPeerStore(database), database, nil, nil)
 			handler.DeletePeerIP(w, req)
 
 			if w.Code != tt.wantCode {
@@ -2070,7 +2071,7 @@ func TestUpdateAgent(t *testing.T) {
 		database, cleanup := testutil.SetupTestDB(t)
 		defer cleanup()
 
-		handler := NewHandler(database, nil, nil)
+		handler := NewHandler(store.NewPeerStore(database), database, nil, nil)
 
 		req := httptest.NewRequest("POST", "/api/v1/peers/999/update-agent", nil)
 		req = muxVars(req, map[string]string{"id": "999"})
@@ -2087,7 +2088,7 @@ func TestUpdateAgent(t *testing.T) {
 		database, cleanup := testutil.SetupTestDB(t)
 		defer cleanup()
 
-		handler := NewHandler(database, nil, nil)
+		handler := NewHandler(store.NewPeerStore(database), database, nil, nil)
 
 		req := httptest.NewRequest("POST", "/api/v1/peers/invalid/update-agent", nil)
 		req = muxVars(req, map[string]string{"id": "invalid"})
@@ -2104,7 +2105,7 @@ func TestUpdateAgent(t *testing.T) {
 		database, cleanup := testutil.SetupTestDB(t)
 		defer cleanup()
 
-		handler := NewHandler(database, nil, nil)
+		handler := NewHandler(store.NewPeerStore(database), database, nil, nil)
 
 		database.Exec(`INSERT INTO peers (hostname, ip_address, is_manual, agent_key, hmac_key) VALUES (?, ?, 1, ?, ?)`, "manual-peer", "10.0.0.1", "manual-key", "hmac1")
 
@@ -2123,7 +2124,7 @@ func TestUpdateAgent(t *testing.T) {
 		database, cleanup := testutil.SetupTestDB(t)
 		defer cleanup()
 
-		handler := NewHandler(database, nil, nil)
+		handler := NewHandler(store.NewPeerStore(database), database, nil, nil)
 
 		database.Exec(`INSERT INTO peers (hostname, ip_address, is_manual, agent_key, hmac_key) VALUES (?, ?, 0, ?, ?)`, "test-peer", "10.0.0.2", "key1", "hmackey1")
 
@@ -2142,7 +2143,7 @@ func TestUpdateAgent(t *testing.T) {
 		database, cleanup := testutil.SetupTestDB(t)
 		defer cleanup()
 
-		handler := NewHandler(database, nil, nil)
+		handler := NewHandler(store.NewPeerStore(database), database, nil, nil)
 
 		database.Exec(`INSERT INTO peers (hostname, ip_address, is_manual, agent_key, hmac_key) VALUES (?, ?, 0, ?, ?)`, "agent-peer", "10.0.0.3", "key2", "hmackey2")
 
@@ -2180,7 +2181,7 @@ func TestUpdateAgentSuccess(t *testing.T) {
 	defer cleanup()
 
 	mock := &mockUpdateAgent{delivered: true}
-	handler := NewHandler(database, nil, mock)
+	handler := NewHandler(store.NewPeerStore(database), database, nil, mock)
 
 	database.Exec(`INSERT INTO peers (hostname, ip_address, is_manual, agent_key, hmac_key) VALUES (?, ?, 0, ?, ?)`, "agent-peer", "10.0.0.5", "key5", "hmackey5")
 
@@ -2220,7 +2221,7 @@ func TestUpdateAgentNotConnected(t *testing.T) {
 	defer cleanup()
 
 	mock := &mockUpdateAgent{delivered: false}
-	handler := NewHandler(database, nil, mock)
+	handler := NewHandler(store.NewPeerStore(database), database, nil, mock)
 
 	database.Exec(`INSERT INTO peers (hostname, ip_address, is_manual, agent_key, hmac_key) VALUES (?, ?, 0, ?, ?)`, "agent-peer", "10.0.0.5", "key5", "hmackey5")
 	database.Exec(`INSERT INTO system_config (key, value) VALUES ('instance_url', 'https://runic.example.com')`)
@@ -2253,7 +2254,7 @@ func TestUpdateAgentChannelFull(t *testing.T) {
 	defer cleanup()
 
 	mock := &mockUpdateAgent{delivered: false}
-	handler := NewHandler(database, nil, mock)
+	handler := NewHandler(store.NewPeerStore(database), database, nil, mock)
 
 	database.Exec(`INSERT INTO peers (hostname, ip_address, is_manual, agent_key, hmac_key) VALUES (?, ?, 0, ?, ?)`, "agent-peer", "10.0.0.6", "key6", "hmackey6")
 	database.Exec(`INSERT INTO system_config (key, value) VALUES ('instance_url', 'https://runic.example.com')`)

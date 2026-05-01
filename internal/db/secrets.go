@@ -40,6 +40,15 @@ func SetSecret(ctx context.Context, database Querier, key, value string) error {
 	return err
 }
 
+// DeleteSecret removes a secret from the system_config table.
+func DeleteSecret(ctx context.Context, database Querier, key string) error {
+	if database == nil {
+		return ErrDatabaseNotInitialized
+	}
+	_, err := database.ExecContext(ctx, "DELETE FROM system_config WHERE key = ?", key)
+	return err
+}
+
 // GenerateSecureKey generates a 32-byte random hex key.
 func GenerateSecureKey() (string, error) {
 	bytes := make([]byte, 32)
