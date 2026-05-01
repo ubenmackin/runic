@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
 
 	"runic/internal/common"
 	"runic/internal/common/constants"
@@ -42,7 +41,7 @@ type PeerView struct {
 	BundleVersion        string       `json:"bundle_version"`
 	PendingBundleVersion string       `json:"pending_bundle_version"`
 	PendingChangesCount  int          `json:"pending_changes_count"`
-	Groups               []string     `json:"groups"`
+	Groups string `json:"groups"`
 	IPs                  []PeerIPView `json:"ips"`
 	Description          string       `json:"description"`
 	HMACKeyLastRotatedAt string       `json:"hmac_key_last_rotated_at"`
@@ -125,12 +124,7 @@ ORDER BY p.hostname ASC`
 		p.IsOnline = status == "online"
 		p.HasPendingChanges = p.PendingChangesCount > 0 || p.SyncStatus == "pending"
 
-		// Split GROUP_CONCAT result into a slice
-		if groupsStr != "" {
-			p.Groups = strings.Split(groupsStr, ",")
-		} else {
-			p.Groups = []string{}
-		}
+		p.Groups = groupsStr
 
 		p.IPs = []PeerIPView{}
 		peers = append(peers, p)
