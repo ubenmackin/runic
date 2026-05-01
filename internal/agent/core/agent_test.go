@@ -398,111 +398,29 @@ func (m *mockCommandRunner) Run(ctx context.Context, name string, args ...string
 	return m.output, m.err
 }
 
-type mockCall struct {
-	name string
-	args []string
-}
-
-func (m *mockCommandRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
-	m.calls = append(m.calls, mockCall{name: name, args: args})
-	return m.output, m.err
-}
-
 // TestHandleUpdateAgent tests handleUpdateAgent validates URLs and launches the install script.
 func TestHandleUpdateAgent(t *testing.T) {
-	t.Run("rejects invalid URL scheme", func(t *testing.T) {
-		var cmdCreated bool
+	t.Run("successful update launch", func(t *testing.T) {
+		mock := &mockCommandRunner{}
 		agent := &Agent{
-			execCommandFunc: func(ctx context.Context, name string, args ...string) *exec.Cmd {
-				cmdCreated = true
-				return exec.CommandContext(ctx, name, args...)
-			},
+			cmdRunner: mock,
 		}
-		agent.handleUpdateAgent(context.Background(), "ftp://malicious.example.com")
-		if cmdCreated {
-			t.Error("expected no command to be created for invalid URL scheme")
-		}
-	})
-
-	t.Run("rejects malformed URL", func(t *testing.T) {
-		var cmdCreated bool
-		agent := &Agent{
-			execCommandFunc: func(ctx context.Context, name string, args ...string) *exec.Cmd {
-				cmdCreated = true
-				return exec.CommandContext(ctx, name, args...)
-			},
-		}
-		agent.handleUpdateAgent(context.Background(), "://broken")
-		if cmdCreated {
-			t.Error("expected no command to be created for malformed URL")
-		}
-	})
-
-	t.Run("successful update launch returns immediately", func(t *testing.T) {
-		// Use a harmless command that completes quickly
-		agent := &Agent{
-			execCommandFunc: func(ctx context.Context, name string, args ...string) *exec.Cmd {
-				// Return a real command that does nothing harmful
-				return exec.CommandContext(ctx, "true")
-			},
-		}
-
-		done := make(chan struct{})
-		go func() {
-			agent.handleUpdateAgent(context.Background(), "https://runic.example.com")
-			close(done)
-		}()
-
-		select {
-		case <-done:
-			// Good — function returned immediately (fire-and-forget)
-		case <-time.After(5 * time.Second):
-			t.Fatal("handleUpdateAgent should return immediately after cmd.Start()")
-		}
-	})
-
-	t.Run("update command uses context.Background not SSE context", func(t *testing.T) {
-		var capturedCtx context.Context
-		agent := &Agent{
-			execCommandFunc: func(ctx context.Context, name string, args ...string) *exec.Cmd {
-				capturedCtx = ctx
-				return exec.CommandContext(ctx, "true")
-			},
-		}
-
-		// Pass a canceled context as the SSE context
-		sseCtx, cancel := context.WithCancel(context.Background())
-		cancel() // Cancel immediately
-		agent.handleUpdateAgent(sseCtx, "https://runic.example.com")
-
-		// The function should use context.Background(), not the canceled SSE context
-		if capturedCtx == nil {
-			t.Fatal("expected execCommandFunc to be called")
-		}
-		if capturedCtx == sseCtx {
-			t.Error("handleUpdateAgent should use context.Background(), not the SSE context")
-		}
-		// Verify the captured context is not canceled
-		if err := capturedCtx.Err(); err != nil {
-			t.Error("handleUpdateAgent should use context.Background() which is never canceled")
-		}
-	})
-
-	t.Run("update command contains install script URL and control plane URL", func(t *testing.T) {
-		var capturedArgs []string
-		agent := &Agent{
-			execCommandFunc: func(ctx context.Context, name string, args ...string) *exec.Cmd {
-				capturedArgs = args
-				return exec.CommandContext(ctx, "true")
-			},
-		}
-
 		agent.handleUpdateAgent(context.Background(), "https://runic.example.com")
-
-		if len(capturedArgs) < 2 {
-			t.Fatalf("expected at least 2 args, got %d", len(capturedArgs))
+		if len(mock.calls) != 1 {
+			t.Fatalf("expected 1 command call, got %d", len(mock.calls))
 		}
-		cmdStr := capturedArgs[1]
+		if mock.calls[0].name != "bash" {
+			t.Errorf("expected command 'bash', got '%s'", mock.calls[0].name)
+		}
+		// The command is passed as: bash -c <cmd>
+		// So args[0] = "-c", args[1] = the full command string
+		if len(mock.calls[0].args) < 2 {
+			t.Fatalf("expected at least 2 args, got %d", len(mock.calls[0].args))
+		}
+		cmdStr := mock.calls[0].args[1]
+		if !strings.Contains(cmdStr, "nohup setsid") {
+			t.Error("expected command to contain 'nohup setsid'")
+		}
 		if !strings.Contains(cmdStr, "install-agent.sh") {
 			t.Error("expected command to contain install-agent.sh URL")
 		}
@@ -511,35 +429,48 @@ func TestHandleUpdateAgent(t *testing.T) {
 		}
 	})
 
-	t.Run("update command sets process group on linux", func(t *testing.T) {
-		var capturedCmd *exec.Cmd
+	t.Run("rejects invalid URL scheme", func(t *testing.T) {
+		mock := &mockCommandRunner{}
 		agent := &Agent{
-			execCommandFunc: func(ctx context.Context, name string, args ...string) *exec.Cmd {
-				// Return a harmless command so cmd.Start() succeeds
-				cmd := exec.CommandContext(ctx, "true")
-				capturedCmd = cmd
-				return cmd
-			},
+			cmdRunner: mock,
 		}
-
-		agent.handleUpdateAgent(context.Background(), "https://runic.example.com")
-
-		if capturedCmd == nil {
-			t.Fatal("expected execCommandFunc to be called")
+		agent.handleUpdateAgent(context.Background(), "ftp://malicious.example.com")
+		if len(mock.calls) != 0 {
+			t.Error("expected no command to be run for invalid URL scheme")
 		}
+	})
 
-		// On Linux, SysProcAttr should have Setpgid=true; on other platforms it should be nil
-		if runtime.GOOS == "linux" {
-			if capturedCmd.SysProcAttr == nil {
-				t.Fatal("expected SysProcAttr to be set on Linux")
-			}
-			if !capturedCmd.SysProcAttr.Setpgid {
-				t.Error("expected SysProcAttr.Setpgid to be true on Linux")
-			}
-		} else {
-			if capturedCmd.SysProcAttr != nil {
-				t.Error("expected SysProcAttr to be nil on non-Linux platforms")
-			}
+	t.Run("rejects malformed URL", func(t *testing.T) {
+		mock := &mockCommandRunner{}
+		agent := &Agent{
+			cmdRunner: mock,
+		}
+		agent.handleUpdateAgent(context.Background(), "://broken")
+		if len(mock.calls) != 0 {
+			t.Error("expected no command to be run for malformed URL")
+		}
+	})
+
+	t.Run("uses context.Background not SSE context", func(t *testing.T) {
+		mock := &mockCommandRunner{}
+		agent := &Agent{
+			cmdRunner: mock,
+		}
+		// Pass a canceled context as the SSE context
+		sseCtx, cancel := context.WithCancel(context.Background())
+		cancel() // Cancel immediately
+		agent.handleUpdateAgent(sseCtx, "https://runic.example.com")
+		if len(mock.calls) != 1 {
+			t.Fatalf("expected 1 command call, got %d", len(mock.calls))
+		}
+		// The function should use context.Background(), not the canceled SSE context
+		capturedCtx := mock.calls[0].ctx
+		if capturedCtx == sseCtx {
+			t.Error("handleUpdateAgent should use context.Background(), not the SSE context")
+		}
+		// Verify the captured context is not canceled
+		if err := capturedCtx.Err(); err != nil {
+			t.Error("handleUpdateAgent should use context.Background() which is never canceled")
 		}
 	})
 }
