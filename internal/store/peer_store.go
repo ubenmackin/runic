@@ -34,8 +34,9 @@ type PeerView struct {
 	HasDocker            bool         `json:"has_docker"`
 	IsManual             bool         `json:"is_manual"`
 	AgentVersion         string       `json:"agent_version"`
-	LastHeartbeat        string       `json:"last_heartbeat"`
-	IsOnline             bool         `json:"is_online"`
+	LastHeartbeat string `json:"last_heartbeat"`
+	Status        string `json:"status"`
+	IsOnline      bool   `json:"is_online"`
 	HasPendingChanges    bool         `json:"has_pending_changes"`
 	SyncStatus           string       `json:"sync_status"`
 	BundleVersion        string       `json:"bundle_version"`
@@ -121,7 +122,8 @@ ORDER BY p.hostname ASC`
 			p.HMACKeyLastRotatedAt = common.FormatSQLiteDatetime(hmacKeyLastRotatedAt.String)
 		}
 
-		p.IsOnline = status == "online"
+		p.Status = status
+		p.IsOnline = p.Status == "online"
 		p.HasPendingChanges = p.PendingChangesCount > 0 || p.SyncStatus == "pending"
 
 		p.Groups = groupsStr
