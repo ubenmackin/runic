@@ -3,7 +3,6 @@ package alerts
 
 import (
 	"database/sql"
-	"fmt"
 	"testing"
 	"time"
 
@@ -11,7 +10,7 @@ import (
 )
 
 // insertFirewallLogs inserts firewall log entries with DROP action.
-func insertFirewallLogs(t *testing.T, db *sql.DB, count int, peerID string) {
+func insertFirewallLogs(t *testing.T, db *sql.DB, count int, peerID int) {
 	t.Helper()
 	now := time.Now().UTC().Format("2006-01-02 15:04:05")
 	for i := 0; i < count; i++ {
@@ -26,7 +25,7 @@ func insertFirewallLogs(t *testing.T, db *sql.DB, count int, peerID string) {
 }
 
 // insertFirewallLogsWithTimestamp inserts firewall log entries with specific timestamps.
-func insertFirewallLogsWithTimestamp(t *testing.T, db *sql.DB, count int, peerID string, timestamp time.Time) {
+func insertFirewallLogsWithTimestamp(t *testing.T, db *sql.DB, count int, peerID int, timestamp time.Time) {
 	t.Helper()
 	ts := timestamp.UTC().Format("2006-01-02 15:04:05")
 	for i := 0; i < count; i++ {
@@ -41,16 +40,15 @@ func insertFirewallLogsWithTimestamp(t *testing.T, db *sql.DB, count int, peerID
 }
 
 // countDropEvents counts the number of DROP events in the database within the window.
-// Note: SQLite's datetime() function doesn't support parameter substitution in modifiers,
-// so we use fmt.Sprintf to build the query.
 func countDropEvents(t *testing.T, db *sql.DB, windowMinutes int) int {
 	t.Helper()
+	cutoff := time.Now().Add(-time.Duration(windowMinutes) * time.Minute).UTC().Format("2006-01-02 15:04:05")
 	var count int
-	err := db.QueryRow(fmt.Sprintf(`
+	err := db.QueryRow(`
 		SELECT COUNT(*)
 		FROM firewall_logs
-		WHERE action = 'DROP' AND timestamp >= datetime('now', '-%d minutes')
-	`, windowMinutes)).Scan(&count)
+		WHERE `+DropActionFilter+` AND timestamp >= ?
+	`, cutoff).Scan(&count)
 	if err != nil {
 		t.Fatalf("failed to count drop events: %v", err)
 	}
@@ -103,11 +101,11 @@ func TestSpikeDetection(t *testing.T) {
 			defer cleanup()
 
 			// Create spike detector
-			detector := NewSpikeDetector(logsDB, nil)
+			detector := NewSpikeDetector(logsDB, nil, nil)
 			detector.SetThresholds(tt.threshold, tt.windowMinutes, 15)
 
 			// Insert firewall logs
-			insertFirewallLogs(t, logsDB, tt.logCount, "peer-1")
+			insertFirewallLogs(t, logsDB, tt.logCount, 1)
 
 			// Verify the count in the database
 			count := countDropEvents(t, logsDB, tt.windowMinutes)
@@ -133,11 +131,11 @@ func TestSpikeThrottle(t *testing.T) {
 
 	// Create spike detector with a Service that can trigger alerts
 	// Note: We need a service for lastAlert to be set
-	detector := NewSpikeDetector(logsDB, nil)
+	detector := NewSpikeDetector(logsDB, nil, nil)
 	detector.SetThresholds(5, 5, 15) // threshold=5, window=5min, throttle=15min
 
 	// Insert enough firewall logs to trigger spike
-	insertFirewallLogs(t, logsDB, 10, "peer-1")
+	insertFirewallLogs(t, logsDB, 10, 1)
 
 	// First check - should detect spike (count >= threshold)
 	// Note: Since service is nil, lastAlert won't be set
@@ -167,11 +165,11 @@ func TestThrottleReset(t *testing.T) {
 	defer cleanup()
 
 	// Create spike detector
-	detector := NewSpikeDetector(logsDB, nil)
+	detector := NewSpikeDetector(logsDB, nil, nil)
 	detector.SetThresholds(5, 5, 15) // threshold=5, window=5min, throttle=15min
 
 	// Insert enough firewall logs to trigger spike
-	insertFirewallLogs(t, logsDB, 10, "peer-1")
+	insertFirewallLogs(t, logsDB, 10, 1)
 
 	// First check - should detect spike
 	count := countDropEvents(t, logsDB, 5)
@@ -183,7 +181,7 @@ func TestThrottleReset(t *testing.T) {
 	detector.lastAlert = time.Now().Add(-16 * time.Minute)
 
 	// Insert more logs for second spike check
-	insertFirewallLogs(t, logsDB, 10, "peer-1")
+	insertFirewallLogs(t, logsDB, 10, 1)
 
 	// Verify count after adding more logs
 	count2 := countDropEvents(t, logsDB, 5)
@@ -208,11 +206,11 @@ func TestSpikeDetectionWithService(t *testing.T) {
 	defer cleanup()
 
 	// Create spike detector with a service wrapper
-	detector := NewSpikeDetector(logsDB, nil)
+	detector := NewSpikeDetector(logsDB, nil, nil)
 	detector.SetThresholds(5, 5, 15)
 
 	// Insert firewall logs
-	insertFirewallLogs(t, logsDB, 10, "peer-1")
+	insertFirewallLogs(t, logsDB, 10, 1)
 
 	// Trigger spike check
 	detector.checkForSpike()
@@ -268,11 +266,11 @@ func TestSpikeDetection_ThresholdBoundary(t *testing.T) {
 			logsDB, cleanup := testutil.SetupTestLogsDB(t)
 			defer cleanup()
 
-			detector := NewSpikeDetector(logsDB, nil)
+			detector := NewSpikeDetector(logsDB, nil, nil)
 			detector.SetThresholds(tt.threshold, 5, 15)
 
 			// Insert logs
-			insertFirewallLogs(t, logsDB, tt.logCount, "peer-1")
+			insertFirewallLogs(t, logsDB, tt.logCount, 1)
 
 			// Count actual logs in database
 			count := countDropEvents(t, logsDB, 5)
@@ -295,12 +293,12 @@ func TestSpikeDetection_WindowFilter(t *testing.T) {
 	logsDB, cleanup := testutil.SetupTestLogsDB(t)
 	defer cleanup()
 
-	detector := NewSpikeDetector(logsDB, nil)
+	detector := NewSpikeDetector(logsDB, nil, nil)
 	detector.SetThresholds(5, 5, 15) // threshold=5, window=5min
 
 	// Insert old logs (outside window - 10 minutes ago)
 	oldTime := time.Now().Add(-10 * time.Minute)
-	insertFirewallLogsWithTimestamp(t, logsDB, 10, "peer-1", oldTime)
+	insertFirewallLogsWithTimestamp(t, logsDB, 10, 1, oldTime)
 
 	// Count logs in window - should be 0 (outside 5 minute window)
 	countOld := countDropEvents(t, logsDB, 5)
@@ -309,7 +307,7 @@ func TestSpikeDetection_WindowFilter(t *testing.T) {
 	}
 
 	// Insert recent logs (inside window)
-	insertFirewallLogs(t, logsDB, 10, "peer-1")
+	insertFirewallLogs(t, logsDB, 10, 1)
 
 	// Count logs in window - should be 10 (new entries)
 	countNew := countDropEvents(t, logsDB, 5)
@@ -330,13 +328,13 @@ func TestSpikeDetection_MultiplePeers(t *testing.T) {
 	logsDB, cleanup := testutil.SetupTestLogsDB(t)
 	defer cleanup()
 
-	detector := NewSpikeDetector(logsDB, nil)
+	detector := NewSpikeDetector(logsDB, nil, nil)
 	detector.SetThresholds(5, 5, 15)
 
 	// Insert logs from multiple peers (aggregate should trigger)
-	insertFirewallLogs(t, logsDB, 3, "peer-1")
-	insertFirewallLogs(t, logsDB, 3, "peer-2")
-	insertFirewallLogs(t, logsDB, 3, "peer-3") // total = 9, threshold = 5
+	insertFirewallLogs(t, logsDB, 3, 1)
+	insertFirewallLogs(t, logsDB, 3, 2)
+	insertFirewallLogs(t, logsDB, 3, 3) // total = 9, threshold = 5
 
 	// Count all logs in window
 	count := countDropEvents(t, logsDB, 5)
@@ -390,11 +388,11 @@ func TestThrottleMinutes(t *testing.T) {
 			logsDB, cleanup := testutil.SetupTestLogsDB(t)
 			defer cleanup()
 
-			detector := NewSpikeDetector(logsDB, nil)
+			detector := NewSpikeDetector(logsDB, nil, nil)
 			detector.SetThresholds(5, 5, tt.throttleMinutes)
 
 			// Insert logs and verify spike detection
-			insertFirewallLogs(t, logsDB, 10, "peer-1")
+			insertFirewallLogs(t, logsDB, 10, 1)
 			count := countDropEvents(t, logsDB, 5)
 			if count < detector.threshold {
 				t.Fatal("expected logs to exceed threshold")
@@ -423,7 +421,7 @@ func TestSpikeDetector_SetThresholds(t *testing.T) {
 	logsDB, cleanup := testutil.SetupTestLogsDB(t)
 	defer cleanup()
 
-	detector := NewSpikeDetector(logsDB, nil)
+	detector := NewSpikeDetector(logsDB, nil, nil)
 
 	// Default values
 	if detector.threshold != 100 {
@@ -455,12 +453,12 @@ func TestSpikeDetector_NewSpikeDetector(t *testing.T) {
 	logsDB, cleanup := testutil.SetupTestLogsDB(t)
 	defer cleanup()
 
-	detector := NewSpikeDetector(logsDB, nil)
+	detector := NewSpikeDetector(logsDB, nil, nil)
 
 	if detector == nil {
 		t.Fatal("expected non-nil detector")
 	}
-	if detector.database != logsDB {
+	if detector.logsDB != logsDB {
 		t.Error("expected database to be set")
 	}
 	if detector.stopCh == nil {
@@ -473,7 +471,7 @@ func TestSpikeDetector_NewSpikeDetector(t *testing.T) {
 // and logging a warning, rather than panicking.
 func TestSpikeDetector_NilDatabase(t *testing.T) {
 	// Create detector with nil database
-	detector := NewSpikeDetector(nil, nil)
+	detector := NewSpikeDetector(nil, nil, nil)
 
 	// Verify detector was created
 	if detector == nil {
@@ -493,7 +491,7 @@ func TestSpikeDetector_Context(t *testing.T) {
 	logsDB, cleanup := testutil.SetupTestLogsDB(t)
 	defer cleanup()
 
-	detector := NewSpikeDetector(logsDB, nil)
+	detector := NewSpikeDetector(logsDB, nil, nil)
 	detector.SetThresholds(5, 5, 15)
 
 	// Start the detector in a goroutine

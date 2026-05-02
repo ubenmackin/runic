@@ -175,11 +175,13 @@ func (m *PeerMonitor) checkPeers() {
 	ctx, cancel := context.WithTimeout(m.ctx, 10*time.Second)
 	defer cancel()
 
+	cutoff := time.Now().Add(-90 * time.Second).UTC().Format("2006-01-02 15:04:05")
+
 	offlineRows, err := m.database.QueryContext(ctx, `
 		SELECT id, hostname, ip_address, last_heartbeat
 		FROM peers
-		WHERE is_manual = 0 AND (last_heartbeat IS NULL OR last_heartbeat < datetime('now', '-90 seconds'))
-	`)
+		WHERE is_manual = 0 AND (last_heartbeat IS NULL OR last_heartbeat < ?)
+	`, cutoff)
 	if err != nil {
 		m.logger.Error("failed to query offline peers", "error", err)
 		return
@@ -232,8 +234,8 @@ func (m *PeerMonitor) checkPeers() {
 	onlineRows, err := m.database.QueryContext(ctx, `
 		SELECT id, hostname, last_heartbeat
 		FROM peers
-		WHERE is_manual = 0 AND last_heartbeat >= datetime('now', '-90 seconds')
-	`)
+		WHERE is_manual = 0 AND last_heartbeat >= ?
+	`, cutoff)
 	if err != nil {
 		m.logger.Error("failed to query online peers", "error", err)
 		return

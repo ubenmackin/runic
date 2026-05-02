@@ -197,7 +197,7 @@ func TestTriggerAlert_Throttled(t *testing.T) {
 
 	// Test the scheduler's throttle logic
 	// Create a scheduler to test throttling
-	evaluator := NewConditionEvaluator(databaseWrapper)
+	evaluator := NewConditionEvaluator(databaseWrapper, databaseWrapper)
 	processor := NewAlertProcessor(databaseWrapper, nil)
 	scheduler := NewScheduler(databaseWrapper, evaluator, processor)
 

@@ -122,8 +122,12 @@ func NewTestAPIServer(t *testing.T) (*httptest.Server, func()) {
 	// Create compiler for rule compilation
 	compiler := engine.NewCompiler(database)
 
-	// Create API instance with in-memory logs DB (pass nil for alert service and encryptor in tests)
-	testAPI := api.NewAPI(database, compiler, ":memory:", nil, nil)
+	// Create in-memory logs database for API (pass nil for alert service and encryptor in tests)
+	logsDB, err := db.InitLogsDB(":memory:")
+	if err != nil {
+		t.Fatalf("Failed to initialize logs database: %v", err)
+	}
+	testAPI := api.NewAPI(database, compiler, logsDB, ":memory:", nil, nil)
 
 	// Create router and register routes
 	router := mux.NewRouter()
@@ -134,6 +138,9 @@ func NewTestAPIServer(t *testing.T) (*httptest.Server, func()) {
 	// Cleanup function - NOTE: caller should call server.Close() FIRST
 	cleanup := func() {
 		if cErr := database.Close(); cErr != nil {
+			t.Log(cErr)
+		}
+		if cErr := logsDB.Close(); cErr != nil {
 			t.Log(cErr)
 		}
 		if rErr := os.Remove(dbPath); rErr != nil {

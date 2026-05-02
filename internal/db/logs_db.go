@@ -15,7 +15,7 @@ const logsDBSchema = `
 CREATE TABLE IF NOT EXISTS firewall_logs (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
 	timestamp DATETIME NOT NULL,
-	peer_id TEXT NOT NULL,
+	peer_id INTEGER NOT NULL,
 	peer_hostname TEXT,
 	event_type TEXT,
 	source_ip TEXT,

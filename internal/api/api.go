@@ -75,13 +75,9 @@ type API struct {
 }
 
 // NewAPI creates a new API instance with dependency injection.
-// logsDBPath is the path to the logs database (separate from main DB).
-func NewAPI(db *sql.DB, compiler *engine.Compiler, logsDBPath string, alertService *alerts.Service, encryptor *crypto.Encryptor) *API {
-	logsDB, err := dbpkg.InitLogsDB(logsDBPath)
-	if err != nil {
-		log.Fatal("Failed to initialize logs database", "error", err)
-	}
-
+// logsDB is the already-initialized logs database connection.
+// logsDBPath is the path to the logs database (for settings/clear-logs).
+func NewAPI(db *sql.DB, compiler *engine.Compiler, logsDB *sql.DB, logsDBPath string, alertService *alerts.Service, encryptor *crypto.Encryptor) *API {
 	// Migration: Copy existing firewall_logs to logs DB if needed
 	if _, err := dbpkg.MigrateLogsFromMainDB(db, logsDB); err != nil {
 		log.Warn("Log migration failed (existing logs will remain in main DB)", "error", err)

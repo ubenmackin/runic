@@ -31,9 +31,13 @@ import (
 // Version is the agent version, set at build time via ldflags.
 var Version = "dev"
 
+// InstallScriptURL is the URL of the agent self-update install script.
+const InstallScriptURL = "https://raw.githubusercontent.com/ubenmackin/runic/main/scripts/install-agent.sh"
+
 // CommandRunner abstracts exec.Command for testability.
 type CommandRunner interface {
 	Run(ctx context.Context, name string, args ...string) ([]byte, error)
+	StartDetached(ctx context.Context, name string, args ...string) error
 }
 
 // RealCommandRunner wraps exec.CommandContext for production use.
@@ -42,6 +46,30 @@ type RealCommandRunner struct{}
 func (r *RealCommandRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
 	return cmd.CombinedOutput()
+}
+
+func (r *RealCommandRunner) StartDetached(ctx context.Context, name string, args ...string) error {
+	cmd := exec.CommandContext(ctx, name, args...)
+	// Redirect stdout/stderr to /dev/null so the child doesn't block on I/O
+	devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		return fmt.Errorf("open /dev/null: %w", err)
+	}
+	defer func() {
+		_ = devNull.Close()
+	}()
+	cmd.Stdout = devNull
+	cmd.Stderr = devNull
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start detached command: %w", err)
+	}
+	// Release the process so it doesn't become a zombie when the parent exits.
+	// The child runs in its own session (via setsid in the command) and will
+	// complete independently of the agent's lifecycle.
+	if err := cmd.Process.Release(); err != nil {
+		return fmt.Errorf("release detached process: %w", err)
+	}
+	return nil
 }
 
 // Agent is the main agent struct.
@@ -545,10 +573,10 @@ func (a *Agent) handleFetchBackup(ctx context.Context) {
 }
 
 // handleUpdateAgent runs the install script to self-update the agent.
-// The install command is launched via nohup+setsid so it runs in a fully
-// detached session. When the agent is stopped by the install script's
-// "systemctl stop runic-agent", the install script continues independently
-// and completes the update (download, file move, service restart).
+// The install command is launched via nohup+setsid in a detached process
+// so it survives the agent being stopped. When the install script's
+// "systemctl stop runic-agent" kills the agent, the script continues
+// in its own session and completes the update (download, file move, service restart).
 func (a *Agent) handleUpdateAgent(_ context.Context, controlPlaneURL string) {
 	log.Info("Starting agent self-update", "control_plane_url", controlPlaneURL)
 
@@ -559,22 +587,19 @@ func (a *Agent) handleUpdateAgent(_ context.Context, controlPlaneURL string) {
 		return
 	}
 
-	installScriptURL := "https://raw.githubusercontent.com/ubenmackin/runic/main/scripts/install-agent.sh"
-
 	// Use nohup + setsid to fully detach the install script from the agent's process
-	// tree. When systemd stops the agent (via SIGTERM from the install script's
-	// "systemctl stop runic-agent"), the install script continues in its own session
-	// and completes the download, file move, and service restart.
+	// tree. setsid creates a new session entirely, nohup ensures SIGHUP is ignored.
+	// The trailing & makes bash return immediately after spawning the background process.
 	cmd := fmt.Sprintf(
 		"nohup setsid bash -c 'curl -sL %s | sudo bash -s -- %s' >/dev/null 2>&1 &",
-		installScriptURL,
+		InstallScriptURL,
 		shellSafeArg(parsedURL.String()),
 	)
 
-	// Use context.Background() so the command isn't canceled when the agent's context is canceled
-	out, err := a.cmdRunner.Run(context.Background(), "bash", "-c", cmd)
-	if err != nil {
-		log.Error("Failed to launch update process", "error", err, "output", string(out))
+	// Use StartDetached to fire-and-forget the command without waiting for completion.
+	// context.Background() ensures the command isn't canceled when the agent's context is canceled.
+	if err := a.cmdRunner.StartDetached(context.Background(), "bash", "-c", cmd); err != nil {
+		log.Error("Failed to launch update process", "error", err)
 		return
 	}
 

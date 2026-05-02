@@ -41,7 +41,7 @@ type PeerView struct {
 	BundleVersion        string       `json:"bundle_version"`
 	PendingBundleVersion string       `json:"pending_bundle_version"`
 	PendingChangesCount  int          `json:"pending_changes_count"`
-	Groups string `json:"groups"`
+	Groups               string       `json:"groups"`
 	IPs                  []PeerIPView `json:"ips"`
 	Description          string       `json:"description"`
 	HMACKeyLastRotatedAt string       `json:"hmac_key_last_rotated_at"`

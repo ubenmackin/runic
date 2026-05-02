@@ -148,6 +148,13 @@ func main() {
 	}
 	log.Printf("Logs database path: %s", logsDBPath)
 
+	// Initialize logs database early (needed by alert service and spike detector)
+	logsDB, err := db.InitLogsDB(logsDBPath)
+	if err != nil {
+		log.Fatalf("Failed to initialize logs database: %v", err)
+	}
+	log.Printf("Logs database initialized at %s", logsDBPath)
+
 	// Ensure control_plane_port is set in system_config for rule generation
 	if err := db.SetSecret(context.Background(), database, "control_plane_port", port); err != nil {
 		log.Fatalf("Failed to set control_plane_port in system_config: %v", err)
@@ -189,6 +196,7 @@ func main() {
 	runicDB := db.New(database)
 	alertService := alerts.NewService(runicDB)
 	alertService.SetEncryptor(encryptor)
+	alertService.SetLogsDB(db.New(logsDB))
 
 	var peerMonitor *alerts.PeerMonitor
 	var spikeDetector *alerts.SpikeDetector
@@ -200,7 +208,7 @@ func main() {
 		} else {
 			peerMonitor = alerts.NewPeerMonitor(database, alertService)
 			peerMonitor.Start()
-			spikeDetector = alerts.NewSpikeDetector(database, alertService)
+			spikeDetector = alerts.NewSpikeDetector(logsDB, database, alertService)
 			spikeDetector.Start()
 		}
 	}
@@ -211,7 +219,7 @@ func main() {
 
 	// Public routes are now registered in internal/api/api.go
 
-	apiInstance := api.NewAPI(database, compiler, logsDBPath, alertService, encryptor)
+	apiInstance := api.NewAPI(database, compiler, logsDB, logsDBPath, alertService, encryptor)
 	apiInstance.RegisterRoutes(r, downloadsDir)
 
 	// Strip the "web/dist" prefix so http.FS can find files in the embedded FS
@@ -337,6 +345,11 @@ func main() {
 	if database != nil {
 		if err := database.Close(); err != nil {
 			log.Printf("Database close error: %v", err)
+		}
+	}
+	if logsDB != nil {
+		if err := logsDB.Close(); err != nil {
+			log.Printf("Logs database close error: %v", err)
 		}
 	}
 

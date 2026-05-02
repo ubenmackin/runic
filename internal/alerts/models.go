@@ -8,6 +8,9 @@ import (
 	"time"
 )
 
+// DropActionFilter is the SQL WHERE clause fragment for filtering blocked traffic actions.
+const DropActionFilter = "(action = 'DROP' OR action = 'LOG_DROP')"
+
 // AlertType defines the type of alert.
 type AlertType string
 

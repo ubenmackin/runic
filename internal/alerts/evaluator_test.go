@@ -3,7 +3,6 @@ package alerts
 
 import (
 	"context"
-	"strconv"
 	"testing"
 	"time"
 
@@ -18,7 +17,7 @@ func TestCheckPeerOffline(t *testing.T) {
 
 	ctx := context.Background()
 	databaseWrapper := db.New(database)
-	evaluator := NewConditionEvaluator(databaseWrapper)
+	evaluator := NewConditionEvaluator(databaseWrapper, databaseWrapper)
 
 	// Test 1: Peer is online (returns false)
 	t.Run("peer is online", func(t *testing.T) {
@@ -31,7 +30,7 @@ func TestCheckPeerOffline(t *testing.T) {
 		}
 		peerID, _ := result.LastInsertId()
 
-		isOffline, duration := evaluator.CheckPeerOffline(ctx, strconv.FormatInt(peerID, 10))
+		isOffline, duration := evaluator.CheckPeerOffline(ctx, int(peerID))
 		if isOffline {
 			t.Error("expected online peer to return false for isOffline")
 		}
@@ -52,7 +51,7 @@ func TestCheckPeerOffline(t *testing.T) {
 		}
 		peerID, _ := result.LastInsertId()
 
-		isOffline, duration := evaluator.CheckPeerOffline(ctx, strconv.FormatInt(peerID, 10))
+		isOffline, duration := evaluator.CheckPeerOffline(ctx, int(peerID))
 		if !isOffline {
 			t.Error("expected offline peer to return true for isOffline")
 		}
@@ -63,7 +62,7 @@ func TestCheckPeerOffline(t *testing.T) {
 
 	// Test 3: Peer doesn't exist (returns false)
 	t.Run("peer does not exist", func(t *testing.T) {
-		isOffline, duration := evaluator.CheckPeerOffline(ctx, "99999")
+		isOffline, duration := evaluator.CheckPeerOffline(ctx, 99999)
 		if isOffline {
 			t.Error("expected non-existent peer to return false for isOffline")
 		}
@@ -83,7 +82,7 @@ func TestCheckPeerOffline(t *testing.T) {
 		}
 		peerID, _ := result.LastInsertId()
 
-		isOffline, duration := evaluator.CheckPeerOffline(ctx, strconv.FormatInt(peerID, 10))
+		isOffline, duration := evaluator.CheckPeerOffline(ctx, int(peerID))
 		if !isOffline {
 			t.Error("expected offline peer with no heartbeat to return true for isOffline")
 		}
@@ -101,7 +100,7 @@ func TestCheckBundleFailed(t *testing.T) {
 
 	ctx := context.Background()
 	databaseWrapper := db.New(database)
-	evaluator := NewConditionEvaluator(databaseWrapper)
+	evaluator := NewConditionEvaluator(databaseWrapper, databaseWrapper)
 
 	// Insert a peer for testing
 	result, err := database.Exec(
@@ -112,7 +111,6 @@ func TestCheckBundleFailed(t *testing.T) {
 		t.Fatalf("failed to insert peer: %v", err)
 	}
 	peerID, _ := result.LastInsertId()
-	peerIDStr := strconv.FormatInt(peerID, 10)
 
 	// Test 1: No failures (returns false)
 	t.Run("no failures", func(t *testing.T) {
@@ -125,7 +123,7 @@ func TestCheckBundleFailed(t *testing.T) {
 			t.Fatalf("failed to insert push job: %v", err)
 		}
 
-		hasFailed, err := evaluator.CheckBundleFailed(ctx, peerIDStr)
+		hasFailed, err := evaluator.CheckBundleFailed(ctx, int(peerID))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -154,7 +152,7 @@ func TestCheckBundleFailed(t *testing.T) {
 			t.Fatalf("failed to insert push job peer: %v", err)
 		}
 
-		hasFailed, err := evaluator.CheckBundleFailed(ctx, peerIDStr)
+		hasFailed, err := evaluator.CheckBundleFailed(ctx, int(peerID))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -174,7 +172,6 @@ func TestCheckBundleFailed(t *testing.T) {
 			t.Fatalf("failed to insert peer: %v", err)
 		}
 		oldPeerID, _ := result.LastInsertId()
-		oldPeerIDStr := strconv.FormatInt(oldPeerID, 10)
 
 		// Create a push job older than 1 hour (the CheckBundleFailed window)
 		_, err = database.Exec(
@@ -194,7 +191,7 @@ func TestCheckBundleFailed(t *testing.T) {
 			t.Fatalf("failed to insert old push job peer: %v", err)
 		}
 
-		hasFailed, err := evaluator.CheckBundleFailed(ctx, oldPeerIDStr)
+		hasFailed, err := evaluator.CheckBundleFailed(ctx, int(oldPeerID))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -211,7 +208,7 @@ func TestCheckBlockedSpike(t *testing.T) {
 
 	ctx := context.Background()
 	databaseWrapper := db.New(database)
-	evaluator := NewConditionEvaluator(databaseWrapper)
+	evaluator := NewConditionEvaluator(databaseWrapper, databaseWrapper)
 
 	// Insert a peer for testing
 	result, err := database.Exec(
@@ -222,11 +219,10 @@ func TestCheckBlockedSpike(t *testing.T) {
 		t.Fatalf("failed to insert peer: %v", err)
 	}
 	peerID, _ := result.LastInsertId()
-	peerIDStr := strconv.FormatInt(peerID, 10)
 
 	// Test 1: No blocked traffic (returns false, 0)
 	t.Run("no blocked traffic", func(t *testing.T) {
-		isSpike, percentage, err := evaluator.CheckBlockedSpike(ctx, peerIDStr)
+		isSpike, percentage, err := evaluator.CheckBlockedSpike(ctx, int(peerID))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -262,7 +258,7 @@ func TestCheckBlockedSpike(t *testing.T) {
 			}
 		}
 
-		isSpike, percentage, err := evaluator.CheckBlockedSpike(ctx, peerIDStr)
+		isSpike, percentage, err := evaluator.CheckBlockedSpike(ctx, int(peerID))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -285,7 +281,6 @@ func TestCheckBlockedSpike(t *testing.T) {
 			t.Fatalf("failed to insert peer: %v", err)
 		}
 		baselinePeerID, _ := result.LastInsertId()
-		baselinePeerIDStr := strconv.FormatInt(baselinePeerID, 10)
 
 		// Insert more than 10 recent blocked entries (should trigger spike detection)
 		for i := 0; i < 15; i++ {
@@ -298,7 +293,7 @@ func TestCheckBlockedSpike(t *testing.T) {
 			}
 		}
 
-		isSpike, percentage, err := evaluator.CheckBlockedSpike(ctx, baselinePeerIDStr)
+		isSpike, percentage, err := evaluator.CheckBlockedSpike(ctx, int(baselinePeerID))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}

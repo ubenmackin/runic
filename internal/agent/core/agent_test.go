@@ -382,9 +382,11 @@ func TestIsControlPlaneReachableFalse(t *testing.T) {
 
 // mockCommandRunner implements CommandRunner for testing.
 type mockCommandRunner struct {
-	output []byte
-	err error
-	calls []mockCall
+	output           []byte
+	err              error
+	calls            []mockCall
+	startDetachedErr error
+	detachedCalls    []mockCall
 }
 
 type mockCall struct {
@@ -398,6 +400,11 @@ func (m *mockCommandRunner) Run(ctx context.Context, name string, args ...string
 	return m.output, m.err
 }
 
+func (m *mockCommandRunner) StartDetached(ctx context.Context, name string, args ...string) error {
+	m.detachedCalls = append(m.detachedCalls, mockCall{ctx: ctx, name: name, args: args})
+	return m.startDetachedErr
+}
+
 // TestHandleUpdateAgent tests handleUpdateAgent validates URLs and launches the install script.
 func TestHandleUpdateAgent(t *testing.T) {
 	t.Run("successful update launch", func(t *testing.T) {
@@ -406,18 +413,18 @@ func TestHandleUpdateAgent(t *testing.T) {
 			cmdRunner: mock,
 		}
 		agent.handleUpdateAgent(context.Background(), "https://runic.example.com")
-		if len(mock.calls) != 1 {
-			t.Fatalf("expected 1 command call, got %d", len(mock.calls))
+		if len(mock.detachedCalls) != 1 {
+			t.Fatalf("expected 1 detached call, got %d", len(mock.detachedCalls))
 		}
-		if mock.calls[0].name != "bash" {
-			t.Errorf("expected command 'bash', got '%s'", mock.calls[0].name)
+		if mock.detachedCalls[0].name != "bash" {
+			t.Errorf("expected command 'bash', got '%s'", mock.detachedCalls[0].name)
 		}
 		// The command is passed as: bash -c <cmd>
 		// So args[0] = "-c", args[1] = the full command string
-		if len(mock.calls[0].args) < 2 {
-			t.Fatalf("expected at least 2 args, got %d", len(mock.calls[0].args))
+		if len(mock.detachedCalls[0].args) < 2 {
+			t.Fatalf("expected at least 2 args, got %d", len(mock.detachedCalls[0].args))
 		}
-		cmdStr := mock.calls[0].args[1]
+		cmdStr := mock.detachedCalls[0].args[1]
 		if !strings.Contains(cmdStr, "nohup setsid") {
 			t.Error("expected command to contain 'nohup setsid'")
 		}
@@ -435,7 +442,7 @@ func TestHandleUpdateAgent(t *testing.T) {
 			cmdRunner: mock,
 		}
 		agent.handleUpdateAgent(context.Background(), "ftp://malicious.example.com")
-		if len(mock.calls) != 0 {
+		if len(mock.detachedCalls) != 0 {
 			t.Error("expected no command to be run for invalid URL scheme")
 		}
 	})
@@ -446,7 +453,7 @@ func TestHandleUpdateAgent(t *testing.T) {
 			cmdRunner: mock,
 		}
 		agent.handleUpdateAgent(context.Background(), "://broken")
-		if len(mock.calls) != 0 {
+		if len(mock.detachedCalls) != 0 {
 			t.Error("expected no command to be run for malformed URL")
 		}
 	})
@@ -460,17 +467,32 @@ func TestHandleUpdateAgent(t *testing.T) {
 		sseCtx, cancel := context.WithCancel(context.Background())
 		cancel() // Cancel immediately
 		agent.handleUpdateAgent(sseCtx, "https://runic.example.com")
-		if len(mock.calls) != 1 {
-			t.Fatalf("expected 1 command call, got %d", len(mock.calls))
+		if len(mock.detachedCalls) != 1 {
+			t.Fatalf("expected 1 detached call, got %d", len(mock.detachedCalls))
 		}
 		// The function should use context.Background(), not the canceled SSE context
-		capturedCtx := mock.calls[0].ctx
+		capturedCtx := mock.detachedCalls[0].ctx
 		if capturedCtx == sseCtx {
 			t.Error("handleUpdateAgent should use context.Background(), not the SSE context")
 		}
 		// Verify the captured context is not canceled
 		if err := capturedCtx.Err(); err != nil {
 			t.Error("handleUpdateAgent should use context.Background() which is never canceled")
+		}
+	})
+
+	t.Run("handles StartDetached error gracefully", func(t *testing.T) {
+		mock := &mockCommandRunner{
+			startDetachedErr: fmt.Errorf("bash: command not found"),
+		}
+		agent := &Agent{
+			cmdRunner: mock,
+		}
+		// Should not panic or hang when StartDetached returns an error
+		agent.handleUpdateAgent(context.Background(), "https://runic.example.com")
+		// Verify StartDetached was called even though it errored
+		if len(mock.detachedCalls) != 1 {
+			t.Fatalf("expected 1 detached call, got %d", len(mock.detachedCalls))
 		}
 	})
 }

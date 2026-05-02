@@ -6,7 +6,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strconv"
 	"time"
 
 	"runic/internal/common/log"
@@ -17,12 +16,16 @@ import (
 // It implements the Evaluator interface defined in scheduler.go.
 type ConditionEvaluator struct {
 	database db.Querier
+	logsDB   db.Querier
 }
 
-// NewConditionEvaluator creates a new ConditionEvaluator with the given database connection.
-func NewConditionEvaluator(database db.Querier) *ConditionEvaluator {
+// NewConditionEvaluator creates a new ConditionEvaluator with the given database connections.
+// The database parameter is the main DB (for peers, alert_rules, etc.).
+// The logsDB parameter is the logs DB (for firewall_logs queries).
+func NewConditionEvaluator(database, logsDB db.Querier) *ConditionEvaluator {
 	return &ConditionEvaluator{
 		database: database,
+		logsDB:   logsDB,
 	}
 }
 
@@ -48,6 +51,8 @@ func (e *ConditionEvaluator) EvaluateRule(ctx context.Context, rule *AlertRule) 
 		event, err = e.evaluatePeerOnline(ctx, rule)
 	case AlertTypeNewPeer:
 		event, err = e.evaluateNewPeer(ctx, rule)
+	case AlertTypeBundleDeployed:
+		event, err = e.evaluateBundleDeployed(ctx, rule)
 	default:
 		return false, nil, fmt.Errorf("unknown alert type: %s", rule.AlertType)
 	}
@@ -255,7 +260,7 @@ func (e *ConditionEvaluator) evaluateBundleFailed(ctx context.Context, rule *Ale
 // checkBundleFailedByID checks if a specific peer has bundle failures.
 func (e *ConditionEvaluator) checkBundleFailedByID(ctx context.Context, rule *AlertRule, peerID int) (*AlertEvent, error) {
 	window := time.Duration(rule.ThresholdWindowMinutes) * time.Minute
-	isFailed, err := e.CheckBundleFailed(ctx, strconv.Itoa(peerID))
+	isFailed, err := e.CheckBundleFailed(ctx, peerID)
 	if err != nil {
 		return nil, err
 	}
@@ -327,10 +332,10 @@ func (e *ConditionEvaluator) evaluateBlockedSpike(ctx context.Context, rule *Ale
 	window := time.Duration(rule.ThresholdWindowMinutes) * time.Minute
 	cutoff := time.Now().Add(-window)
 
-	rows, err := e.database.QueryContext(ctx, `
+	rows, err := e.logsDB.QueryContext(ctx, `
 		SELECT DISTINCT peer_id
 		FROM firewall_logs
-		WHERE (action = 'DROP' OR action = 'LOG_DROP')
+		WHERE `+DropActionFilter+`
 		AND timestamp >= ?
 	`, cutoff)
 	if err != nil {
@@ -370,7 +375,7 @@ func (e *ConditionEvaluator) evaluateBlockedSpike(ctx context.Context, rule *Ale
 
 // checkBlockedSpikeByID checks if a specific peer has a blocked traffic spike.
 func (e *ConditionEvaluator) checkBlockedSpikeByID(ctx context.Context, rule *AlertRule, peerID int) (*AlertEvent, error) {
-	isSpike, percentage, err := e.CheckBlockedSpike(ctx, strconv.Itoa(peerID))
+	isSpike, percentage, err := e.CheckBlockedSpike(ctx, peerID)
 	if err != nil {
 		return nil, err
 	}
@@ -420,7 +425,7 @@ func (e *ConditionEvaluator) evaluateNewPeer(ctx context.Context, rule *AlertRul
 
 // CheckPeerOffline checks if a peer is offline and returns the duration.
 // Returns true if the peer is offline, along with the duration offline.
-func (e *ConditionEvaluator) CheckPeerOffline(ctx context.Context, peerID string) (bool, time.Duration) {
+func (e *ConditionEvaluator) CheckPeerOffline(ctx context.Context, peerID int) (bool, time.Duration) {
 
 	var status string
 	var lastHeartbeat sql.NullTime
@@ -452,7 +457,7 @@ func (e *ConditionEvaluator) CheckPeerOffline(ctx context.Context, peerID string
 
 // CheckBundleFailed checks if bundle generation has failed for a peer.
 // Returns true if there are recent bundle failures.
-func (e *ConditionEvaluator) CheckBundleFailed(ctx context.Context, peerID string) (bool, error) {
+func (e *ConditionEvaluator) CheckBundleFailed(ctx context.Context, peerID int) (bool, error) {
 
 	cutoff := time.Now().Add(-1 * time.Hour)
 
@@ -475,7 +480,10 @@ func (e *ConditionEvaluator) CheckBundleFailed(ctx context.Context, peerID strin
 
 // CheckBlockedSpike checks for a spike in blocked traffic for a peer.
 // Returns true if there's a spike, along with the percentage increase.
-func (e *ConditionEvaluator) CheckBlockedSpike(ctx context.Context, peerID string) (bool, int, error) {
+func (e *ConditionEvaluator) CheckBlockedSpike(ctx context.Context, peerID int) (bool, int, error) {
+	if e.logsDB == nil {
+		return false, 0, fmt.Errorf("logs database not configured")
+	}
 
 	now := time.Now()
 	recentStart := now.Add(-5 * time.Minute)
@@ -483,11 +491,11 @@ func (e *ConditionEvaluator) CheckBlockedSpike(ctx context.Context, peerID strin
 	previousEnd := now.Add(-5 * time.Minute)
 
 	var recentCount int
-	err := e.database.QueryRowContext(ctx, `
+	err := e.logsDB.QueryRowContext(ctx, `
 		SELECT COUNT(*)
 		FROM firewall_logs
 		WHERE peer_id = ?
-		AND (action = 'DROP' OR action = 'LOG_DROP')
+		AND `+DropActionFilter+`
 		AND timestamp >= ?
 	`, peerID, recentStart).Scan(&recentCount)
 
@@ -496,11 +504,11 @@ func (e *ConditionEvaluator) CheckBlockedSpike(ctx context.Context, peerID strin
 	}
 
 	var previousCount int
-	err = e.database.QueryRowContext(ctx, `
+	err = e.logsDB.QueryRowContext(ctx, `
 		SELECT COUNT(*)
 		FROM firewall_logs
 		WHERE peer_id = ?
-		AND (action = 'DROP' OR action = 'LOG_DROP')
+		AND `+DropActionFilter+`
 		AND timestamp >= ? AND timestamp < ?
 	`, peerID, previousStart, previousEnd).Scan(&previousCount)
 
@@ -523,4 +531,129 @@ func (e *ConditionEvaluator) CheckBlockedSpike(ctx context.Context, peerID strin
 
 	// Consider it a spike if there's a meaningful increase (at least 50%)
 	return percentageIncrease >= 50, percentageIncrease, nil
+}
+
+// evaluateBundleDeployed evaluates the bundle_deployed alert type.
+// Threshold is the number of minutes within which a bundle deployment counts.
+func (e *ConditionEvaluator) evaluateBundleDeployed(ctx context.Context, rule *AlertRule) (*AlertEvent, error) {
+	if rule.PeerID != nil {
+		return e.checkBundleDeployedByID(ctx, rule, *rule.PeerID)
+	}
+
+	window := time.Duration(rule.ThresholdWindowMinutes) * time.Minute
+	cutoff := time.Now().Add(-window)
+
+	rows, err := e.database.QueryContext(ctx, `
+		SELECT rb.id, rb.peer_id, rb.version, rb.applied_at, p.hostname
+		FROM rule_bundles rb
+		JOIN peers p ON rb.peer_id = p.id
+		WHERE rb.applied_at IS NOT NULL
+		AND rb.applied_at >= ?
+		AND NOT EXISTS (
+			SELECT 1 FROM alert_history ah
+			WHERE ah.alert_type = ?
+			AND ah.peer_id = rb.peer_id
+			AND ah.created_at >= ?
+		)
+		ORDER BY rb.applied_at DESC
+		LIMIT 1
+	`, cutoff, AlertTypeBundleDeployed, cutoff)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query deployed bundles: %w", err)
+	}
+	defer func() {
+		if cerr := rows.Close(); cerr != nil {
+			log.Error("failed to close rows", "error", cerr)
+		}
+	}()
+
+	if rows.Next() {
+		var bundleID int
+		var peerID int
+		var version string
+		var appliedAt time.Time
+		var hostname string
+		if err := rows.Scan(&bundleID, &peerID, &version, &appliedAt, &hostname); err != nil {
+			return nil, fmt.Errorf("failed to scan deployed bundle: %w", err)
+		}
+		return &AlertEvent{
+			Type:      AlertTypeBundleDeployed,
+			PeerID:    peerID,
+			PeerName:  hostname,
+			Value:     1,
+			Timestamp: time.Now(),
+			Severity:  rule.AlertType.DefaultSeverity(),
+			Subject:   fmt.Sprintf("Bundle deployed on peer %s", hostname),
+			Message:   fmt.Sprintf("Peer %s successfully deployed bundle version %s", hostname, version),
+			Metadata: map[string]interface{}{
+				"bundle_version": version,
+				"applied_at":     appliedAt.Format(time.RFC3339),
+				"window_minutes": rule.ThresholdWindowMinutes,
+			},
+		}, nil
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating deployed bundles: %w", err)
+	}
+
+	return nil, nil
+}
+
+// checkBundleDeployedByID checks if a bundle was recently deployed for a specific peer.
+func (e *ConditionEvaluator) checkBundleDeployedByID(ctx context.Context, rule *AlertRule, peerID int) (*AlertEvent, error) {
+	var hostname string
+	err := e.database.QueryRowContext(ctx, `SELECT hostname FROM peers WHERE id = ?`, peerID).Scan(&hostname)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to get peer hostname: %w", err)
+	}
+
+	window := time.Duration(rule.ThresholdWindowMinutes) * time.Minute
+	cutoff := time.Now().Add(-window)
+
+	var bundleID int
+	var version string
+	var appliedAt time.Time
+
+	err = e.database.QueryRowContext(ctx, `
+		SELECT rb.id, rb.version, rb.applied_at
+		FROM rule_bundles rb
+		WHERE rb.peer_id = ?
+		AND rb.applied_at IS NOT NULL
+		AND rb.applied_at >= ?
+		AND NOT EXISTS (
+			SELECT 1 FROM alert_history ah
+			WHERE ah.alert_type = ?
+			AND ah.peer_id = rb.peer_id
+			AND ah.created_at >= ?
+		)
+		ORDER BY rb.applied_at DESC
+		LIMIT 1
+	`, peerID, cutoff, AlertTypeBundleDeployed, cutoff).Scan(&bundleID, &version, &appliedAt)
+
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to query deployed bundle for peer %d: %w", peerID, err)
+	}
+
+	return &AlertEvent{
+		Type:      AlertTypeBundleDeployed,
+		PeerID:    peerID,
+		PeerName:  hostname,
+		Value:     1,
+		Timestamp: time.Now(),
+		Severity:  rule.AlertType.DefaultSeverity(),
+		Subject:   fmt.Sprintf("Bundle deployed on peer %s", hostname),
+		Message:   fmt.Sprintf("Peer %s successfully deployed bundle version %s", hostname, version),
+		Metadata: map[string]interface{}{
+			"bundle_version": version,
+			"applied_at":     appliedAt.Format(time.RFC3339),
+			"window_minutes": rule.ThresholdWindowMinutes,
+		},
+	}, nil
 }

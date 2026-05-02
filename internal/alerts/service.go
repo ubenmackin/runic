@@ -159,6 +159,7 @@ type Service struct {
 
 	// Core dependencies
 	database  *db.Database
+	logsDB    db.Querier
 	encryptor *crypto.Encryptor
 	logger    *slog.Logger
 
@@ -202,6 +203,14 @@ func (s *Service) SetEncryptor(encryptor *crypto.Encryptor) {
 	s.encryptor = encryptor
 }
 
+// SetLogsDB sets the logs database connection for the service.
+// This must be called before Initialize() if firewall_logs queries are needed.
+func (s *Service) SetLogsDB(logsDB db.Querier) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.logsDB = logsDB
+}
+
 // SetLogger sets a custom logger for the service and all sub-components.
 func (s *Service) SetLogger(logger *slog.Logger) {
 	s.mu.Lock()
@@ -241,7 +250,10 @@ func (s *Service) Initialize() error {
 		)
 	}
 
-	s.evaluator = NewConditionEvaluator(s.database)
+	if s.logsDB == nil {
+		s.logsDB = s.database
+	}
+	s.evaluator = NewConditionEvaluator(s.database, s.logsDB)
 	s.logger.Debug("evaluator initialized")
 
 	s.processor = NewAlertProcessor(s.database, s.smtpSender)

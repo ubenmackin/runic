@@ -16,9 +16,10 @@ import (
 
 // SpikeDetector monitors firewall logs for blocked traffic spikes.
 type SpikeDetector struct {
-	database *sql.DB
-	service  *Service
-	logger   *slog.Logger
+	logsDB  *sql.DB
+	mainDB  *sql.DB
+	service *Service
+	logger  *slog.Logger
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -40,10 +41,13 @@ type SpikeDetector struct {
 }
 
 // NewSpikeDetector creates a new spike detector.
-func NewSpikeDetector(database *sql.DB, service *Service) *SpikeDetector {
+// logsDB is the separate logs database for firewall_logs queries.
+// mainDB is the main database for alert_rules and peers queries.
+func NewSpikeDetector(logsDB, mainDB *sql.DB, service *Service) *SpikeDetector {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &SpikeDetector{
-		database:        database,
+		logsDB:          logsDB,
+		mainDB:          mainDB,
 		service:         service,
 		logger:          log.L().With("component", "spike_detector"),
 		ctx:             ctx,
@@ -100,11 +104,15 @@ func (d *SpikeDetector) run() {
 }
 
 func (d *SpikeDetector) loadThreshold() {
+	if d.mainDB == nil {
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(d.ctx, 5*time.Second)
 	defer cancel()
 
 	var rule AlertRule
-	err := d.database.QueryRowContext(ctx, `
+	err := d.mainDB.QueryRowContext(ctx, `
 		SELECT threshold_value, threshold_window_minutes, throttle_minutes
 		FROM alert_rules
 		WHERE alert_type = ? AND enabled = 1
@@ -124,22 +132,24 @@ func (d *SpikeDetector) loadThreshold() {
 }
 
 func (d *SpikeDetector) checkForSpike() {
-	// Guard against nil database - the detector requires a valid database to function.
-	// If database is nil, log a warning and return early rather than panicking.
-	if d.database == nil {
-		d.logger.Warn("spike detector has nil database, skipping check")
+	// Guard against nil database - the detector requires a valid logs database to function.
+	// If logsDB is nil, log a warning and return early rather than panicking.
+	if d.logsDB == nil {
+		d.logger.Warn("spike detector has nil logs database, skipping check")
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(d.ctx, 10*time.Second)
 	defer cancel()
 
+	cutoff := time.Now().Add(-time.Duration(d.windowMinutes) * time.Minute)
+
 	var count int
-	err := d.database.QueryRowContext(ctx, `
+	err := d.logsDB.QueryRowContext(ctx, `
 		SELECT COUNT(*)
 		FROM firewall_logs
-		WHERE action = 'DROP' AND timestamp >= datetime('now', '-? minutes')
-	`, d.windowMinutes).Scan(&count)
+		WHERE `+DropActionFilter+` AND timestamp >= ?
+	`, cutoff).Scan(&count)
 
 	if err != nil {
 		d.logger.Error("failed to count blocked traffic", "error", err)
@@ -201,14 +211,16 @@ type topBlockedIP struct {
 }
 
 func (d *SpikeDetector) getTopBlockedIPs(ctx context.Context) []topBlockedIP {
-	rows, err := d.database.QueryContext(ctx, `
+	cutoff := time.Now().Add(-time.Duration(d.windowMinutes) * time.Minute)
+
+	rows, err := d.logsDB.QueryContext(ctx, `
 		SELECT source_ip, COUNT(*) as cnt
 		FROM firewall_logs
-		WHERE action = 'DROP' AND timestamp >= datetime('now', '-? minutes')
+		WHERE `+DropActionFilter+` AND timestamp >= ?
 		GROUP BY source_ip
 		ORDER BY cnt DESC
 		LIMIT 5
-	`, d.windowMinutes)
+	`, cutoff)
 	if err != nil {
 		d.logger.Error("failed to get top blocked IPs", "error", err)
 		return nil
@@ -237,27 +249,44 @@ func (d *SpikeDetector) getTopBlockedIPs(ctx context.Context) []topBlockedIP {
 }
 
 func (d *SpikeDetector) getAffectedPeers(ctx context.Context) []string {
-	rows, err := d.database.QueryContext(ctx, `
-		SELECT DISTINCT p.hostname
-		FROM firewall_logs fl
-		JOIN peers p ON fl.peer_id = p.id
-		WHERE fl.action = 'DROP' AND fl.timestamp >= datetime('now', '-? minutes')
+	cutoff := time.Now().Add(-time.Duration(d.windowMinutes) * time.Minute)
+
+	// Step 1: Get distinct peer_ids from firewall_logs (logs DB)
+	peerRows, err := d.logsDB.QueryContext(ctx, `
+		SELECT DISTINCT peer_id
+		FROM firewall_logs
+		WHERE `+DropActionFilter+` AND timestamp >= ?
 		LIMIT 10
-	`, d.windowMinutes)
+	`, cutoff)
 	if err != nil {
-		d.logger.Error("failed to get affected peers", "error", err)
+		d.logger.Error("failed to get affected peer IDs", "error", err)
 		return nil
 	}
 	defer func() {
-		if err := rows.Close(); err != nil {
-			d.logger.Error("failed to close rows", "error", err)
+		if err := peerRows.Close(); err != nil {
+			d.logger.Error("failed to close peer rows", "error", err)
 		}
 	}()
 
+	var peerIDs []int
+	for peerRows.Next() {
+		var peerID int
+		if err := peerRows.Scan(&peerID); err != nil {
+			continue
+		}
+		peerIDs = append(peerIDs, peerID)
+	}
+
+	if len(peerIDs) == 0 || d.mainDB == nil {
+		return nil
+	}
+
+	// Step 2: Get hostnames from peers table (main DB)
 	var results []string
-	for rows.Next() {
+	for _, peerID := range peerIDs {
 		var hostname string
-		if err := rows.Scan(&hostname); err != nil {
+		err = d.mainDB.QueryRowContext(ctx, `SELECT hostname FROM peers WHERE id = ?`, peerID).Scan(&hostname)
+		if err != nil {
 			continue
 		}
 		results = append(results, hostname)

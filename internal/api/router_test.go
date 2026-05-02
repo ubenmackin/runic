@@ -18,8 +18,12 @@ func TestRouterIntegration(t *testing.T) {
 	defer cleanup()
 	compiler := engine.NewCompiler(db)
 
+	// Create in-memory logs database for API tests
+	logsDB, logsCleanup := testutil.SetupTestLogsDB(t)
+	defer logsCleanup()
+
 	// Create API and Router (pass nil for alert service and encryptor in tests)
-	a := NewAPI(db, compiler, ":memory:", nil, nil)
+	a := NewAPI(db, compiler, logsDB, ":memory:", nil, nil)
 	r := mux.NewRouter()
 
 	tempDir, err := os.MkdirTemp("", "runic-downloads-*")
@@ -99,7 +103,11 @@ func TestSecurityMiddlewares(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 	compiler := engine.NewCompiler(db)
-	a := NewAPI(db, compiler, ":memory:", nil, nil)
+
+	logsDB, logsCleanup := testutil.SetupTestLogsDB(t)
+	defer logsCleanup()
+
+	a := NewAPI(db, compiler, logsDB, ":memory:", nil, nil)
 	r := mux.NewRouter()
 	a.RegisterRoutes(r, "")
 
@@ -139,7 +147,11 @@ func TestCORSMiddleware(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 	compiler := engine.NewCompiler(db)
-	a := NewAPI(db, compiler, ":memory:", nil, nil)
+
+	logsDB, logsCleanup := testutil.SetupTestLogsDB(t)
+	defer logsCleanup()
+
+	a := NewAPI(db, compiler, logsDB, ":memory:", nil, nil)
 	r := mux.NewRouter()
 	a.RegisterRoutes(r, "")
 
@@ -162,7 +174,11 @@ func TestRateLimiters(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 	compiler := engine.NewCompiler(db)
-	a := NewAPI(db, compiler, ":memory:", nil, nil)
+
+	logsDB, logsCleanup := testutil.SetupTestLogsDB(t)
+	defer logsCleanup()
+
+	a := NewAPI(db, compiler, logsDB, ":memory:", nil, nil)
 	r := mux.NewRouter()
 	a.RegisterRoutes(r, "")
 
@@ -196,7 +212,11 @@ func TestRouterStop(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 	compiler := engine.NewCompiler(db)
-	a := NewAPI(db, compiler, ":memory:", nil, nil)
+
+	logsDB, logsCleanup := testutil.SetupTestLogsDB(t)
+	defer logsCleanup()
+
+	a := NewAPI(db, compiler, logsDB, ":memory:", nil, nil)
 	a.RegisterRoutes(mux.NewRouter(), "")
 
 	// Ensure Stop doesn't panic

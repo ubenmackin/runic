@@ -32,10 +32,18 @@ func setupTestAPI(t *testing.T) (*API, *sql.DB, func()) {
 	// Create compiler
 	compiler := engine.NewCompiler(database)
 
-	// Create API instance with a temp logs DB path (pass nil for alert service and encryptor in tests)
-	api := NewAPI(database, compiler, ":memory:", nil, nil)
+	// Create in-memory logs database for API tests
+	logsDB, logsCleanup := testutil.SetupTestLogsDB(t)
 
-	return api, database, cleanup
+	// Create API instance (pass nil for alert service and encryptor in tests)
+	api := NewAPI(database, compiler, logsDB, ":memory:", nil, nil)
+
+	combinedCleanup := func() {
+		logsCleanup()
+		cleanup()
+	}
+
+	return api, database, combinedCleanup
 }
 
 // TestGetPeers tests the GET /peers endpoint
