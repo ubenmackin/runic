@@ -1,0 +1,389 @@
+package importer
+
+import (
+	"context"
+	"database/sql"
+	"strings"
+	"testing"
+
+	_ "github.com/mattn/go-sqlite3"
+
+	"runic/internal/iptparse"
+	"runic/internal/testutil"
+)
+
+// insertTestPeer inserts a test peer and returns its ID.
+func insertTestPeer(t *testing.T, database *sql.DB, hostname, ip string, hasDocker bool) int64 {
+	t.Helper()
+	result, err := database.Exec(
+		`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
+		hostname, ip, "key-"+hostname, "test-hmac-key", hasDocker)
+	if err != nil {
+		t.Fatalf("insert peer: %v", err)
+	}
+	id, _ := result.LastInsertId()
+	return id
+}
+
+// insertSystemService inserts a system service and returns its ID.
+func insertSystemService(t *testing.T, database *sql.DB, name, ports, protocol, description string, noConntrack bool) int64 {
+	t.Helper()
+	nc := 0
+	if noConntrack {
+		nc = 1
+	}
+	result, err := database.Exec(
+		`INSERT INTO services (name, ports, protocol, description, is_system, no_conntrack) VALUES (?, ?, ?, ?, 1, ?)`,
+		name, ports, protocol, description, nc)
+	if err != nil {
+		t.Fatalf("insert system service %s: %v", name, err)
+	}
+	id, _ := result.LastInsertId()
+	return id
+}
+
+// insertTestService inserts a regular (non-system) service and returns its ID.
+func insertTestService(t *testing.T, database *sql.DB, name, ports, protocol string) int64 {
+	t.Helper()
+	result, err := database.Exec(
+		`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`,
+		name, ports, protocol)
+	if err != nil {
+		t.Fatalf("insert service %s: %v", name, err)
+	}
+	id, _ := result.LastInsertId()
+	return id
+}
+
+// --- isBroadcastDest tests ---
+
+func TestIsBroadcastDest_LimitedBroadcast(t *testing.T) {
+	rule := iptparse.ParsedRule{DestIP: "255.255.255.255"}
+	if !isBroadcastDest(&rule, "INPUT") {
+		t.Error("expected isBroadcastDest to return true for 255.255.255.255 on INPUT chain")
+	}
+}
+
+func TestIsBroadcastDest_OutputChain(t *testing.T) {
+	rule := iptparse.ParsedRule{DestIP: "255.255.255.255"}
+	if isBroadcastDest(&rule, "OUTPUT") {
+		t.Error("expected isBroadcastDest to return false for OUTPUT chain")
+	}
+}
+
+func TestIsBroadcastDest_EmptyDestIP(t *testing.T) {
+	rule := iptparse.ParsedRule{DestIP: ""}
+	if isBroadcastDest(&rule, "INPUT") {
+		t.Error("expected isBroadcastDest to return false for empty DestIP on INPUT chain")
+	}
+}
+
+func TestIsBroadcastDest_NormalIP(t *testing.T) {
+	rule := iptparse.ParsedRule{DestIP: "192.168.1.1"}
+	if isBroadcastDest(&rule, "INPUT") {
+		t.Error("expected isBroadcastDest to return false for normal IP on INPUT chain")
+	}
+}
+
+func TestIsBroadcastDest_DockerUserChain(t *testing.T) {
+	rule := iptparse.ParsedRule{DestIP: "255.255.255.255"}
+	if !isBroadcastDest(&rule, "DOCKER-USER") {
+		t.Error("expected isBroadcastDest to return true for 255.255.255.255 on DOCKER-USER chain")
+	}
+}
+
+func TestIsBroadcastDest_CIDRNotation(t *testing.T) {
+	rule := iptparse.ParsedRule{DestIP: "255.255.255.255/32"}
+	if !isBroadcastDest(&rule, "INPUT") {
+		t.Error("expected isBroadcastDest to return true for 255.255.255.255/32 on INPUT chain (normalizeIP should strip /32)")
+	}
+}
+
+// --- resolveBroadcastService tests ---
+
+func TestResolveBroadcastService_LimitedBroadcast(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+
+	limitedBroadcastID := insertSystemService(t, database, "Limited Broadcast", "", "udp", "Limited broadcast", true)
+
+	ctx := context.Background()
+	serviceID, err := resolveBroadcastService(ctx, database, specialTargetLimitedBroadcast)
+	if err != nil {
+		t.Fatalf("resolveBroadcastService returned error: %v", err)
+	}
+	if serviceID == 0 {
+		t.Fatal("expected non-zero service ID")
+	}
+	if serviceID != limitedBroadcastID {
+		t.Errorf("expected service ID %d, got %d", limitedBroadcastID, serviceID)
+	}
+
+	// Verify by querying the service name
+	var name string
+	err = database.QueryRow("SELECT name FROM services WHERE id = ?", serviceID).Scan(&name)
+	if err != nil {
+		t.Fatalf("failed to query service name: %v", err)
+	}
+	if name != "Limited Broadcast" {
+		t.Errorf("expected service name 'Limited Broadcast', got %q", name)
+	}
+}
+
+func TestResolveBroadcastService_SubnetBroadcast(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+
+	subnetBroadcastID := insertSystemService(t, database, "Subnet Broadcast", "", "udp", "Subnet broadcast", true)
+
+	ctx := context.Background()
+	serviceID, err := resolveBroadcastService(ctx, database, specialTargetSubnetBroadcast)
+	if err != nil {
+		t.Fatalf("resolveBroadcastService returned error: %v", err)
+	}
+	if serviceID == 0 {
+		t.Fatal("expected non-zero service ID")
+	}
+	if serviceID != subnetBroadcastID {
+		t.Errorf("expected service ID %d, got %d", subnetBroadcastID, serviceID)
+	}
+
+	var name string
+	err = database.QueryRow("SELECT name FROM services WHERE id = ?", serviceID).Scan(&name)
+	if err != nil {
+		t.Fatalf("failed to query service name: %v", err)
+	}
+	if name != "Subnet Broadcast" {
+		t.Errorf("expected service name 'Subnet Broadcast', got %q", name)
+	}
+}
+
+func TestResolveBroadcastService_InvalidID(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+
+	ctx := context.Background()
+	_, err := resolveBroadcastService(ctx, database, 99)
+	if err == nil {
+		t.Fatal("expected error for invalid broadcast special ID, got nil")
+	}
+	if !strings.Contains(err.Error(), "unknown broadcast special ID") {
+		t.Errorf("expected error to contain 'unknown broadcast special ID', got %q", err.Error())
+	}
+}
+
+func TestResolveBroadcastService_NotMulticast(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+
+	// Insert both Multicast and Limited Broadcast system services
+	// This tests Bug #2 — ensure broadcast resolves to the correct service, not Multicast
+	multicastID := insertSystemService(t, database, "Multicast", "", "udp", "Multicast", true)
+	limitedBroadcastID := insertSystemService(t, database, "Limited Broadcast", "", "udp", "Limited broadcast", true)
+
+	ctx := context.Background()
+	serviceID, err := resolveBroadcastService(ctx, database, specialTargetLimitedBroadcast)
+	if err != nil {
+		t.Fatalf("resolveBroadcastService returned error: %v", err)
+	}
+	if serviceID == 0 {
+		t.Fatal("expected non-zero service ID")
+	}
+
+	// The returned service must be "Limited Broadcast", NOT "Multicast"
+	if serviceID == multicastID {
+		t.Error("resolveBroadcastService returned Multicast service ID — Bug #2: broadcast should resolve to Limited Broadcast, not Multicast")
+	}
+	if serviceID != limitedBroadcastID {
+		t.Errorf("expected Limited Broadcast service ID %d, got %d", limitedBroadcastID, serviceID)
+	}
+
+	var name string
+	err = database.QueryRow("SELECT name FROM services WHERE id = ?", serviceID).Scan(&name)
+	if err != nil {
+		t.Fatalf("failed to query service name: %v", err)
+	}
+	if name != "Limited Broadcast" {
+		t.Errorf("expected service name 'Limited Broadcast', got %q", name)
+	}
+}
+
+// --- resolveBroadcastRule tests ---
+
+func TestResolveBroadcastRule_LimitedBroadcast(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+
+	// Insert a peer
+	peerID := insertTestPeer(t, database, "test-peer", "10.0.0.1", false)
+
+	// Insert Limited Broadcast system service
+	limitedBroadcastServiceID := insertSystemService(t, database, "Limited Broadcast", "", "udp", "Limited broadcast", true)
+
+	// Create an import session for the peer
+	result, err := database.Exec("INSERT INTO import_sessions (peer_id, status, raw_backup) VALUES (?, 'parsed', 'test')", peerID)
+	if err != nil {
+		t.Fatalf("insert session: %v", err)
+	}
+	sessionID, _ := result.LastInsertId()
+
+	// Insert an import_rule with broadcast destination
+	result, err = database.Exec(
+		`INSERT INTO import_rules (session_id, chain, rule_order, raw_rule, status, action, priority, direction, target_scope, policy_name)
+		 VALUES (?, 'INPUT', 1, '-d 255.255.255.255/32 -p udp -j ACCEPT', 'pending', 'ACCEPT', 100, 'both', 'both', 'test-policy')`,
+		sessionID)
+	if err != nil {
+		t.Fatalf("insert rule: %v", err)
+	}
+	ruleID, _ := result.LastInsertId()
+
+	// Create a ParsedRule representing the broadcast rule
+	rule := iptparse.ParsedRule{
+		DestIP:   "255.255.255.255/32",
+		Protocol: "udp",
+		Target:   "ACCEPT",
+	}
+
+	ctx := context.Background()
+	err = resolveBroadcastRule(ctx, database, sessionID, ruleID, peerID, &rule)
+	if err != nil {
+		t.Fatalf("resolveBroadcastRule returned error: %v", err)
+	}
+
+	// Query the import_rule to verify the resolved mappings
+	var sourceType, targetType, direction, status string
+	var sourceID, targetID, serviceID int64
+	err = database.QueryRow(
+		"SELECT source_type, source_id, target_type, target_id, service_id, direction, status FROM import_rules WHERE id = ?",
+		ruleID,
+	).Scan(&sourceType, &sourceID, &targetType, &targetID, &serviceID, &direction, &status)
+	if err != nil {
+		t.Fatalf("query rule: %v", err)
+	}
+
+	if sourceType != "special" {
+		t.Errorf("expected source_type='special', got %q", sourceType)
+	}
+	if sourceID != specialTargetLimitedBroadcast {
+		t.Errorf("expected source_id=%d (limited_broadcast), got %d", specialTargetLimitedBroadcast, sourceID)
+	}
+	if targetType != "peer" {
+		t.Errorf("expected target_type='peer', got %q", targetType)
+	}
+	if targetID != peerID {
+		t.Errorf("expected target_id=%d (peer), got %d", peerID, targetID)
+	}
+	if serviceID != limitedBroadcastServiceID {
+		t.Errorf("expected service_id=%d (Limited Broadcast), got %d", limitedBroadcastServiceID, serviceID)
+	}
+	if direction != "both" {
+		t.Errorf("expected direction='both', got %q", direction)
+	}
+	if status != "resolved" {
+		t.Errorf("expected status='resolved', got %q", status)
+	}
+}
+
+func TestResolveBroadcastRule_WithPorts(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+
+	// Insert a peer
+	peerID := insertTestPeer(t, database, "dhcp-peer", "10.0.0.1", false)
+
+	// Insert DHCP service with port 67
+	dhcpServiceID := insertTestService(t, database, "DHCP", "67", "udp")
+
+	// Also insert broadcast system services (should NOT be used when port is specified)
+	_ = insertSystemService(t, database, "Limited Broadcast", "", "udp", "Limited broadcast", true)
+
+	// Create an import session for the peer
+	result, err := database.Exec("INSERT INTO import_sessions (peer_id, status, raw_backup) VALUES (?, 'parsed', 'test')", peerID)
+	if err != nil {
+		t.Fatalf("insert session: %v", err)
+	}
+	sessionID, _ := result.LastInsertId()
+
+	// Insert an import_rule with broadcast destination and specific port
+	result, err = database.Exec(
+		`INSERT INTO import_rules (session_id, chain, rule_order, raw_rule, status, action, priority, direction, target_scope, policy_name)
+		 VALUES (?, 'INPUT', 1, '-d 255.255.255.255/32 -p udp --dport 67 -j ACCEPT', 'pending', 'ACCEPT', 100, 'both', 'both', 'dhcp-policy')`,
+		sessionID)
+	if err != nil {
+		t.Fatalf("insert rule: %v", err)
+	}
+	ruleID, _ := result.LastInsertId()
+
+	// Create a ParsedRule with a specific DestPort
+	rule := iptparse.ParsedRule{
+		DestIP:   "255.255.255.255/32",
+		Protocol: "udp",
+		DestPort: "67",
+		Target:   "ACCEPT",
+	}
+
+	ctx := context.Background()
+	err = resolveBroadcastRule(ctx, database, sessionID, ruleID, peerID, &rule)
+	if err != nil {
+		t.Fatalf("resolveBroadcastRule returned error: %v", err)
+	}
+
+	// Query the import_rule to verify the service resolved to DHCP, not broadcast system service
+	var serviceID int64
+	err = database.QueryRow(
+		"SELECT service_id FROM import_rules WHERE id = ?",
+		ruleID,
+	).Scan(&serviceID)
+	if err != nil {
+		t.Fatalf("query rule service_id: %v", err)
+	}
+
+	if serviceID != dhcpServiceID {
+		t.Errorf("expected service_id=%d (DHCP), got %d — broadcast rules with specific ports should resolve to port-specific services", dhcpServiceID, serviceID)
+	}
+
+	// Also verify source/target mappings (Bug #1 fix)
+	var sourceType, targetType string
+	var sourceID, targetID int64
+	err = database.QueryRow(
+		"SELECT source_type, source_id, target_type, target_id FROM import_rules WHERE id = ?",
+		ruleID,
+	).Scan(&sourceType, &sourceID, &targetType, &targetID)
+	if err != nil {
+		t.Fatalf("query rule source/target: %v", err)
+	}
+	if sourceType != "special" {
+		t.Errorf("expected source_type='special', got %q", sourceType)
+	}
+	if sourceID != specialTargetLimitedBroadcast {
+		t.Errorf("expected source_id=%d (limited_broadcast), got %d", specialTargetLimitedBroadcast, sourceID)
+	}
+	if targetType != "peer" {
+		t.Errorf("expected target_type='peer', got %q", targetType)
+	}
+	if targetID != peerID {
+		t.Errorf("expected target_id=%d (peer), got %d", peerID, targetID)
+	}
+}
+
+func TestResolveBroadcastRule_OutputChainNotBroadcast(t *testing.T) {
+	// This test verifies that OUTPUT chain rules with broadcast dest IP
+	// do NOT trigger broadcast handling. Since isBroadcastDest returns false
+	// for OUTPUT chain, those rules go through normal resolveEndpoint() path.
+	rule := iptparse.ParsedRule{DestIP: "255.255.255.255"}
+
+	if isBroadcastDest(&rule, "OUTPUT") {
+		t.Error("isBroadcastDest should return false for OUTPUT chain — OUTPUT broadcast rules should go through normal resolution, not broadcast path")
+	}
+
+	// Also verify FORWARD chain is not treated as broadcast
+	if isBroadcastDest(&rule, "FORWARD") {
+		t.Error("isBroadcastDest should return false for FORWARD chain")
+	}
+}

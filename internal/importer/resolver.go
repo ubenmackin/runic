@@ -21,6 +21,7 @@ const (
 	specialTargetLimitedBroadcast int64 = 2 // __limited_broadcast__
 	specialTargetAllPeers         int64 = 7 // __all_peers__
 	specialTargetAllHosts         int64 = 3 // __all_hosts__
+	specialTargetSubnetBroadcast  int64 = 1 // __subnet_broadcast__
 )
 
 // normalizeIP strips single-host CIDR notation (/32) from an IP address.
@@ -30,6 +31,28 @@ func normalizeIP(ip string) string {
 		return strings.TrimSuffix(ip, "/32")
 	}
 	return ip
+}
+
+// isBroadcastDest checks if the rule's destination IP is a broadcast address
+// and the chain is INPUT, indicating a broadcast rule that needs special handling.
+// Broadcast detection must happen before resolveEndpoint() to prevent
+// broadcast destination IPs from being resolved as target endpoints.
+func isBroadcastDest(rule *iptparse.ParsedRule, chain string) bool {
+	if chain != "INPUT" && chain != "DOCKER-USER" {
+		return false
+	}
+	destIP := normalizeIP(rule.DestIP)
+	if destIP == "" {
+		return false
+	}
+	// Check limited broadcast (255.255.255.255)
+	if destIP == "255.255.255.255" {
+		return true
+	}
+	// Subnet broadcast detection could be enhanced here by computing
+	// the peer's subnet broadcast address and comparing against DestIP.
+	// For now, limited broadcast is the primary reported bug.
+	return false
 }
 
 // resolveRules walks all import_rules for a session and attempts to map them to existing Runic entities.
@@ -91,6 +114,16 @@ func resolveRules(ctx context.Context, database db.Querier, sessionID int64, pee
 			continue
 		}
 
+		// Check if this is a broadcast rule (destination IP matches broadcast address)
+		// Broadcast detection must happen before resolveEndpoint() so that
+		// broadcast destination IPs are not resolved as target endpoints.
+		if isBroadcastDest(pr, r.Chain) {
+			if err := resolveBroadcastRule(ctx, database, sessionID, r.ID, peerID, pr); err != nil {
+				log.Warn("Failed to resolve broadcast rule", "rule_id", r.ID, "error", err)
+			}
+			continue
+		}
+
 		// Resolve source
 		sourceType, sourceID, sourceStagingID, sourceIP := resolveEndpoint(ctx, database, sessionID, pr, ipsetMembers, true, r.Chain, peerID, peerIPs)
 
@@ -127,7 +160,12 @@ func resolveRules(ctx context.Context, database db.Querier, sessionID int64, pee
 							sourceStagingID = 0
 							sourceIP = ""
 						case "__limited_broadcast__":
-							// Limited Broadcast rules: source should be __limited_broadcast__
+							// Note: Broadcast rules with -d 255.255.255.255 are handled by
+							// resolveBroadcastRule() before reaching this block, which correctly
+							// sets source=broadcast, target=peer, and service=Limited Broadcast.
+							// This safety net only corrects the source — target and service
+							// will still be incorrect (target=broadcast special, service=Multicast).
+							// If this fires, the rule should be flagged for manual review.
 							sourceType = "special"
 							sourceID = specialTargetLimitedBroadcast
 							sourceStagingID = 0
@@ -548,8 +586,100 @@ func resolveMulticastRule(ctx context.Context, database db.Querier, sessionID in
 
 	// Update the rule with multicast mapping
 	_, err = database.ExecContext(ctx,
-		fmt.Sprintf("UPDATE import_rules SET source_type = 'special', source_id = %d, target_type = 'special', target_id = %d, service_id = ? WHERE id = ?", specialTargetAllPeers, specialTargetAllHosts),
-		multicastServiceID, ruleID,
+		"UPDATE import_rules SET source_type = 'special', source_id = ?, target_type = 'special', target_id = ?, service_id = ? WHERE id = ?",
+		specialTargetAllPeers, specialTargetAllHosts, multicastServiceID, ruleID,
+	)
+	return err
+}
+
+// resolveBroadcastService resolves the correct broadcast system service based on
+// the broadcast special target ID. This avoids the bug where resolveService()
+// would return "Multicast" for UDP protocol with no ports, since it just picks
+// the first matching system service.
+func resolveBroadcastService(ctx context.Context, database db.Querier, broadcastSpecialID int64) (int64, error) {
+	var serviceName string
+	switch broadcastSpecialID {
+	case specialTargetSubnetBroadcast: // 1
+		serviceName = "Subnet Broadcast"
+	case specialTargetLimitedBroadcast: // 2
+		serviceName = "Limited Broadcast"
+	default:
+		return 0, fmt.Errorf("unknown broadcast special ID: %d", broadcastSpecialID)
+	}
+
+	var serviceID int64
+	err := database.QueryRowContext(ctx,
+		"SELECT id FROM services WHERE name = ? AND is_system = 1", serviceName,
+	).Scan(&serviceID)
+	if err != nil {
+		return 0, fmt.Errorf("failed to resolve broadcast service '%s': %w", serviceName, err)
+	}
+	return serviceID, nil
+}
+
+// resolveBroadcastRule maps a broadcast rule (detected by destination IP matching
+// a broadcast address) to Runic policy entities.
+// Broadcast INPUT rules map to: source=special(broadcast), target=peer(self), service=broadcast system service.
+// This corrects the semantic mismatch: in iptables, -d 255.255.255.255 describes the
+// packet's destination, but in Runic's policy model, the broadcast address semantically
+// represents the source (the broadcast domain), while the target is the peer itself
+// (the machine receiving the broadcast).
+func resolveBroadcastRule(ctx context.Context, database db.Querier, sessionID int64, ruleID int64, peerID int64, rule *iptparse.ParsedRule) error {
+	destIP := normalizeIP(rule.DestIP)
+
+	// Determine broadcast type from DestIP
+	var broadcastSpecialID int64
+	switch destIP {
+	case "255.255.255.255":
+		broadcastSpecialID = specialTargetLimitedBroadcast // 2
+	default:
+		// isBroadcastDest currently only detects 255.255.255.255,
+		// so this branch should not be reached. If subnet broadcast
+		// detection is added to isBroadcastDest later, this case
+		// should map the IP to the correct broadcast special ID.
+		return fmt.Errorf("resolveBroadcastRule: unrecognized broadcast destination IP %q (subnet broadcast not yet supported)", destIP)
+	}
+
+	// Resolve broadcast-specific service
+	var serviceID int64
+	if rule.DestPort != "" {
+		// If the broadcast rule has a specific port, resolve the port-specific service
+		// (e.g., DHCP port 67) rather than the generic broadcast system service
+		serviceID, _ = resolveService(ctx, database, sessionID, rule)
+		if serviceID == 0 {
+			log.Warn("Broadcast rule with specific port failed to resolve service", "rule_id", ruleID, "port", rule.DestPort, "protocol", rule.Protocol)
+		}
+	} else {
+		// No specific port — resolve to the appropriate broadcast system service
+		var err error
+		serviceID, err = resolveBroadcastService(ctx, database, broadcastSpecialID)
+		if err != nil {
+			return fmt.Errorf("failed to resolve broadcast service: %w", err)
+		}
+	}
+
+	// Determine the peer's primary IP for the target_ip field
+	var primaryIP string
+	_ = database.QueryRowContext(ctx, "SELECT ip_address FROM peers WHERE id = ?", peerID).Scan(&primaryIP)
+
+	// Determine direction: use 'both' for broadcast-only rules (no specific port),
+	// but preserve the parsed direction for port-specific rules (e.g., DHCP)
+	direction := "both"
+	if rule.DestPort != "" {
+		// For port-specific rules, read the original direction from the import_rule
+		var origDir string
+		err := database.QueryRowContext(ctx, "SELECT direction FROM import_rules WHERE id = ?", ruleID).Scan(&origDir)
+		if err == nil && origDir != "" {
+			direction = origDir
+		}
+	}
+
+	// Update the rule with broadcast mapping:
+	// source = broadcast special target (the broadcast domain)
+	// target = peer (the machine receiving the broadcast)
+	_, err := database.ExecContext(ctx,
+		"UPDATE import_rules SET source_type = 'special', source_id = ?, target_type = 'peer', target_id = ?, service_id = ?, direction = ?, target_ip = ?, status = 'resolved' WHERE id = ?",
+		broadcastSpecialID, peerID, serviceID, direction, primaryIP, ruleID,
 	)
 	return err
 }
