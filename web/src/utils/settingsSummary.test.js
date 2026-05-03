@@ -130,119 +130,57 @@ expect(getSMTPSummary(smtpConfig, instanceSettings)).toBe('SMTP: configured')
 })
 
 describe('getNotificationSummary', () => {
-    test('returns correct summary with timezone and alert count', () => {
-      const notificationPrefs = {
-        alert_types: {
-          bundle_deployed: true,
-          bundle_failed: true,
-          peer_offline: false,
-          peer_online: false,
-          blocked_spike: true,
-          new_peer: false,
-        },
-        quiet_hours: {
-          timezone: 'America/New_York',
-          enabled: true,
-          start_time: '22:00',
-          end_time: '08:00',
-        },
-      }
+  test('returns correct summary with timezone', () => {
+    const notificationPrefs = {
+      quiet_hours: {
+        timezone: 'America/New_York',
+        enabled: true,
+        start_time: '22:00',
+        end_time: '08:00',
+      },
+    }
 
-      expect(getNotificationSummary(notificationPrefs)).toBe('TZ: America/New_York | 3 alerts enabled')
-    })
-
-    test('counts enabled alerts correctly', () => {
-      const notificationPrefs = {
-        alert_types: {
-          bundle_deployed: true,
-          bundle_failed: true,
-          peer_offline: true,
-          peer_online: true,
-          blocked_spike: true,
-          new_peer: true,
-        },
-        quiet_hours: {
-          timezone: 'UTC',
-        },
-      }
-
-      expect(getNotificationSummary(notificationPrefs)).toBe('TZ: UTC | 6 alerts enabled')
-    })
-
-    test('returns "0 alerts enabled" when all alerts are disabled', () => {
-      const notificationPrefs = {
-        alert_types: {
-          bundle_deployed: false,
-          bundle_failed: false,
-          peer_offline: false,
-          peer_online: false,
-          blocked_spike: false,
-          new_peer: false,
-        },
-        quiet_hours: {
-          timezone: 'Europe/London',
-        },
-      }
-
-      expect(getNotificationSummary(notificationPrefs)).toBe('TZ: Europe/London | 0 alerts enabled')
-    })
-
-    test('defaults to UTC timezone when quiet_hours.timezone is missing', () => {
-      const notificationPrefs = {
-        alert_types: {
-          bundle_deployed: true,
-        },
-        quiet_hours: {
-          // timezone not set
-        },
-      }
-
-      expect(getNotificationSummary(notificationPrefs)).toBe('TZ: UTC | 1 alerts enabled')
-    })
-
-    test('defaults to UTC timezone when quiet_hours is missing', () => {
-      const notificationPrefs = {
-        alert_types: {
-          bundle_deployed: true,
-          peer_offline: true,
-        },
-        // quiet_hours missing entirely
-      }
-
-      expect(getNotificationSummary(notificationPrefs)).toBe('TZ: UTC | 2 alerts enabled')
-    })
-
-    test('handles missing alert_types with default to empty object', () => {
-      const notificationPrefs = {
-        quiet_hours: {
-          timezone: 'Asia/Tokyo',
-        },
-      }
-
-      expect(getNotificationSummary(notificationPrefs)).toBe('TZ: Asia/Tokyo | 0 alerts enabled')
-    })
-
-    test('returns default for null input', () => {
-      expect(getNotificationSummary(null)).toBe('TZ: UTC | 0 alerts enabled')
-    })
-
-    test('returns default for undefined input', () => {
-      expect(getNotificationSummary(undefined)).toBe('TZ: UTC | 0 alerts enabled')
-    })
-
-    test('handles empty object input', () => {
-      expect(getNotificationSummary({})).toBe('TZ: UTC | 0 alerts enabled')
-    })
-
-    test('handles various timezone formats', () => {
-      const notificationPrefs = {
-        alert_types: { bundle_deployed: true },
-        quiet_hours: { timezone: 'America/Los_Angeles' },
-      }
-
-      expect(getNotificationSummary(notificationPrefs)).toBe('TZ: America/Los_Angeles | 1 alerts enabled')
-    })
+    expect(getNotificationSummary(notificationPrefs)).toBe('TZ: America/New_York')
   })
+
+  test('defaults to UTC timezone when quiet_hours.timezone is missing', () => {
+    const notificationPrefs = {
+      quiet_hours: {
+        // timezone not set
+      },
+    }
+
+    expect(getNotificationSummary(notificationPrefs)).toBe('TZ: UTC')
+  })
+
+  test('defaults to UTC timezone when quiet_hours is missing', () => {
+    const notificationPrefs = {
+      // quiet_hours missing entirely
+    }
+
+    expect(getNotificationSummary(notificationPrefs)).toBe('TZ: UTC')
+  })
+
+  test('returns default for null input', () => {
+    expect(getNotificationSummary(null)).toBe('TZ: UTC')
+  })
+
+  test('returns default for undefined input', () => {
+    expect(getNotificationSummary(undefined)).toBe('TZ: UTC')
+  })
+
+  test('handles empty object input', () => {
+    expect(getNotificationSummary({})).toBe('TZ: UTC')
+  })
+
+  test('handles various timezone formats', () => {
+    const notificationPrefs = {
+      quiet_hours: { timezone: 'America/Los_Angeles' },
+    }
+
+    expect(getNotificationSummary(notificationPrefs)).toBe('TZ: America/Los_Angeles')
+  })
+})
 
   describe('getAlertRulesSummary', () => {
     test('returns correct summary for partially enabled rules', () => {

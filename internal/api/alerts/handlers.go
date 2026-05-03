@@ -320,7 +320,6 @@ func (h *Handler) GetNotificationPrefs(w http.ResponseWriter, r *http.Request) {
 		// Return default preferences if not found
 		defaultPrefs := &alerts.UserNotificationPreferences{
 			UserID:             uint(userID),
-			EnabledAlerts:      "[]",
 			QuietHoursEnabled:  false,
 			QuietHoursStart:    "22:00",
 			QuietHoursEnd:      "07:00",
@@ -372,7 +371,6 @@ func (h *Handler) UpdateNotificationPrefs(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		prefs = &alerts.UserNotificationPreferences{
 			UserID:             uint(userID),
-			EnabledAlerts:      "[]",
 			QuietHoursStart:    "22:00",
 			QuietHoursEnd:      "07:00",
 			QuietHoursTimezone: "UTC",
@@ -407,9 +405,8 @@ func (h *Handler) UpdateNotificationPrefs(w http.ResponseWriter, r *http.Request
 		}
 	}
 
-	if req.EnabledAlerts != nil {
-		prefs.EnabledAlerts = *req.EnabledAlerts
-	}
+	// EnabledAlerts is intentionally ignored — alert enablement is controlled
+	// per-rule via AlertRule.Enabled, not through user notification preferences.
 	if req.QuietHoursEnabled != nil {
 		prefs.QuietHoursEnabled = *req.QuietHoursEnabled
 	}

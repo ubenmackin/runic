@@ -544,20 +544,20 @@ func (e *ConditionEvaluator) evaluateBundleDeployed(ctx context.Context, rule *A
 	cutoff := time.Now().Add(-window)
 
 	rows, err := e.database.QueryContext(ctx, `
-		SELECT rb.id, rb.peer_id, rb.version, rb.applied_at, p.hostname
-		FROM rule_bundles rb
-		JOIN peers p ON rb.peer_id = p.id
-		WHERE rb.applied_at IS NOT NULL
-		AND rb.applied_at >= ?
+	SELECT rb.id, rb.peer_id, rb.version, rb.applied_at, rb.first_applied_at, p.hostname
+	FROM rule_bundles rb
+	JOIN peers p ON rb.peer_id = p.id
+		WHERE rb.first_applied_at IS NOT NULL
+		AND rb.first_applied_at >= ?
 		AND NOT EXISTS (
 			SELECT 1 FROM alert_history ah
 			WHERE ah.alert_type = ?
 			AND ah.peer_id = rb.peer_id
 			AND ah.created_at >= ?
 		)
-		ORDER BY rb.applied_at DESC
+		ORDER BY rb.first_applied_at DESC
 		LIMIT 1
-	`, cutoff, AlertTypeBundleDeployed, cutoff)
+		`, cutoff, AlertTypeBundleDeployed, cutoff)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query deployed bundles: %w", err)
 	}
@@ -571,9 +571,10 @@ func (e *ConditionEvaluator) evaluateBundleDeployed(ctx context.Context, rule *A
 		var bundleID int
 		var peerID int
 		var version string
-		var appliedAt time.Time
+		var lastAppliedAt time.Time
+		var firstAppliedAt sql.NullTime
 		var hostname string
-		if err := rows.Scan(&bundleID, &peerID, &version, &appliedAt, &hostname); err != nil {
+		if err := rows.Scan(&bundleID, &peerID, &version, &lastAppliedAt, &firstAppliedAt, &hostname); err != nil {
 			return nil, fmt.Errorf("failed to scan deployed bundle: %w", err)
 		}
 		return &AlertEvent{
@@ -586,8 +587,14 @@ func (e *ConditionEvaluator) evaluateBundleDeployed(ctx context.Context, rule *A
 			Subject:   fmt.Sprintf("Bundle deployed on peer %s", hostname),
 			Message:   fmt.Sprintf("Peer %s successfully deployed bundle version %s", hostname, version),
 			Metadata: map[string]interface{}{
-				"bundle_version": version,
-				"applied_at":     appliedAt.Format(time.RFC3339),
+				"bundle_version":  version,
+				"last_applied_at": lastAppliedAt.Format(time.RFC3339),
+				"first_applied_at": func() string {
+					if firstAppliedAt.Valid {
+						return firstAppliedAt.Time.Format(time.RFC3339)
+					}
+					return ""
+				}(),
 				"window_minutes": rule.ThresholdWindowMinutes,
 			},
 		}, nil
@@ -616,23 +623,24 @@ func (e *ConditionEvaluator) checkBundleDeployedByID(ctx context.Context, rule *
 
 	var bundleID int
 	var version string
-	var appliedAt time.Time
+	var lastAppliedAt time.Time
+	var firstAppliedAt sql.NullTime
 
 	err = e.database.QueryRowContext(ctx, `
-		SELECT rb.id, rb.version, rb.applied_at
+		SELECT rb.id, rb.version, rb.applied_at, rb.first_applied_at
 		FROM rule_bundles rb
 		WHERE rb.peer_id = ?
-		AND rb.applied_at IS NOT NULL
-		AND rb.applied_at >= ?
+		AND rb.first_applied_at IS NOT NULL
+		AND rb.first_applied_at >= ?
 		AND NOT EXISTS (
 			SELECT 1 FROM alert_history ah
 			WHERE ah.alert_type = ?
 			AND ah.peer_id = rb.peer_id
 			AND ah.created_at >= ?
 		)
-		ORDER BY rb.applied_at DESC
+		ORDER BY rb.first_applied_at DESC
 		LIMIT 1
-	`, peerID, cutoff, AlertTypeBundleDeployed, cutoff).Scan(&bundleID, &version, &appliedAt)
+	`, peerID, cutoff, AlertTypeBundleDeployed, cutoff).Scan(&bundleID, &version, &lastAppliedAt, &firstAppliedAt)
 
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -651,8 +659,14 @@ func (e *ConditionEvaluator) checkBundleDeployedByID(ctx context.Context, rule *
 		Subject:   fmt.Sprintf("Bundle deployed on peer %s", hostname),
 		Message:   fmt.Sprintf("Peer %s successfully deployed bundle version %s", hostname, version),
 		Metadata: map[string]interface{}{
-			"bundle_version": version,
-			"applied_at":     appliedAt.Format(time.RFC3339),
+			"bundle_version":  version,
+			"last_applied_at": lastAppliedAt.Format(time.RFC3339),
+			"first_applied_at": func() string {
+				if firstAppliedAt.Valid {
+					return firstAppliedAt.Time.Format(time.RFC3339)
+				}
+				return ""
+			}(),
 			"window_minutes": rule.ThresholdWindowMinutes,
 		},
 	}, nil

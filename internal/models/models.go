@@ -73,14 +73,15 @@ type PolicyRow struct {
 }
 
 type RuleBundleRow struct {
-	ID            int
-	PeerID        int
-	Version       string
-	VersionNumber int
-	RulesContent  string
-	HMAC          string
-	CreatedAt     time.Time
-	AppliedAt     sql.NullTime
+	ID             int
+	PeerID         int
+	Version        string
+	VersionNumber  int
+	RulesContent   string
+	HMAC           string
+	CreatedAt      time.Time
+	AppliedAt      sql.NullTime
+	FirstAppliedAt sql.NullTime `json:"first_applied_at" db:"first_applied_at"`
 }
 
 type CreateBundleParams struct {

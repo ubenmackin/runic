@@ -216,9 +216,10 @@ func (ah *AlertHistory) IsFailed() bool {
 
 // UserNotificationPreferences represents a user's notification settings.
 type UserNotificationPreferences struct {
-	ID                 uint      `json:"id" gorm:"primaryKey;autoIncrement"`
-	UserID             uint      `json:"user_id" gorm:"not null;uniqueIndex"`
-	EnabledAlerts      string    `json:"enabled_alerts" gorm:"type:text"` // JSON array of alert types, empty means all enabled
+	ID     uint `json:"id" gorm:"primaryKey;autoIncrement"`
+	UserID uint `json:"user_id" gorm:"not null;uniqueIndex"`
+	// Deprecated: This field is no longer used. Alert enablement is controlled per-rule via AlertRule.Enabled.
+	EnabledAlerts      string    `json:"enabled_alerts" gorm:"type:text"`
 	QuietHoursEnabled  bool      `json:"quiet_hours_enabled" gorm:"default:false"`
 	QuietHoursStart    string    `json:"quiet_hours_start" gorm:"size:5"`
 	QuietHoursEnd      string    `json:"quiet_hours_end" gorm:"size:5"`
@@ -234,25 +235,6 @@ type UserNotificationPreferences struct {
 // TableName specifies the table name for UserNotificationPreferences.
 func (UserNotificationPreferences) TableName() string {
 	return "user_notification_preferences"
-}
-
-// IsAlertEnabled checks if a specific alert type is enabled for the user.
-// If EnabledAlerts is empty, all alerts are considered enabled.
-func (u *UserNotificationPreferences) IsAlertEnabled(alertType AlertType) bool {
-	if u.EnabledAlerts == "" {
-		return true
-	}
-	var enabledTypes []string
-	if err := json.Unmarshal([]byte(u.EnabledAlerts), &enabledTypes); err != nil {
-		// If parsing fails, assume all are enabled
-		return true
-	}
-	for _, t := range enabledTypes {
-		if t == string(alertType) {
-			return true
-		}
-	}
-	return false
 }
 
 // AlertDigest represents a daily/weekly digest sent to a user.
@@ -395,7 +377,8 @@ type UpdateAlertRuleRequest struct {
 
 // UpdateNotificationPreferencesRequest represents the request payload for updating notification preferences.
 type UpdateNotificationPreferencesRequest struct {
-	EnabledAlerts      *string `json:"enabled_alerts,omitempty"` // JSON array of alert types
+	// Deprecated: This field is intentionally ignored by the handler. Alert enablement is controlled per-rule via AlertRule.Enabled.
+	EnabledAlerts      *string `json:"enabled_alerts,omitempty" validate:"omitempty"`
 	QuietHoursEnabled  *bool   `json:"quiet_hours_enabled,omitempty"`
 	QuietHoursStart    *string `json:"quiet_hours_start,omitempty" validate:"omitempty,len=5"`
 	QuietHoursEnd      *string `json:"quiet_hours_end,omitempty" validate:"omitempty,len=5"`

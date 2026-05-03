@@ -92,6 +92,7 @@ CREATE TABLE IF NOT EXISTS rule_bundles (
     hmac TEXT NOT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     applied_at DATETIME,
+    first_applied_at DATETIME,
     FOREIGN KEY(peer_id) REFERENCES peers(id) ON DELETE CASCADE,
     UNIQUE(peer_id, version)
 );

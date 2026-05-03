@@ -26,22 +26,16 @@ return smtpStatus
 /**
  * Get notification preferences summary
  * @param {Object} notificationPrefs - Notification preferences object
- * @param {Object} notificationPrefs.alert_types - Alert type toggles (key: boolean)
  * @param {Object} notificationPrefs.quiet_hours - Quiet hours settings
  * @param {string} notificationPrefs.quiet_hours.timezone - Timezone setting
- * @returns {string} "TZ: UTC | 5 alerts enabled"
+ * @returns {string} "TZ: UTC"
  */
 export function getNotificationSummary(notificationPrefs) {
   if (!notificationPrefs) {
-    return 'TZ: UTC | 0 alerts enabled'
+    return 'TZ: UTC'
   }
-
   const timezone = notificationPrefs.quiet_hours?.timezone || 'UTC'
-
-  const alertTypes = notificationPrefs.alert_types || {}
-  const enabledCount = Object.values(alertTypes).filter(Boolean).length
-
-  return `TZ: ${timezone} | ${enabledCount} alerts enabled`
+  return `TZ: ${timezone}`
 }
 
 /**

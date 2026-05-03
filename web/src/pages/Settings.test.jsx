@@ -89,7 +89,6 @@ vi.mock('../hooks/ToastContext', () => ({
 
 // Factory function to create mock notification preferences
 const createMockNotificationPrefs = (overrides = {}) => ({
-  enabled_alerts: JSON.stringify([]),
   quiet_hours_enabled: false,
   quiet_hours_start: '22:00',
   quiet_hours_end: '08:00',
@@ -117,9 +116,7 @@ describe('Settings Page', () => {
   })
 
   describe('Notification Preferences Section', () => {
-    const mockNotificationPrefs = createMockNotificationPrefs({
-      enabled_alerts: JSON.stringify(['bundle_deployed', 'peer_offline', 'blocked_spike']),
-    })
+    const mockNotificationPrefs = createMockNotificationPrefs()
 
     test('renders notification preferences section', async () => {
       apiClient.getNotificationPrefs.mockResolvedValue(mockNotificationPrefs)
@@ -139,73 +136,6 @@ describe('Settings Page', () => {
       // Look for the loader animation class
       const loaders = document.querySelectorAll('.animate-spin')
       expect(loaders.length).toBeGreaterThan(0)
-    })
-
-    test('renders alert type toggles with correct initial state', async () => {
-      apiClient.getNotificationPrefs.mockResolvedValue(mockNotificationPrefs)
-
-      renderWithProviders(<Settings />)
-
-      await waitFor(() => {
-        expect(screen.getByLabelText('Bundle Deployed')).toBeInTheDocument()
-      })
-
-      // Check the checkbox is checked (in enabled_alerts)
-      const bundleCheckbox = screen.getByLabelText('Bundle Deployed')
-      expect(bundleCheckbox).toBeChecked()
-
-      // Check unchecked item
-      const peerOnlineCheckbox = screen.getByLabelText('Peer Online')
-      expect(peerOnlineCheckbox).not.toBeChecked()
-    })
-
-    test('toggling alert types updates state and calls API', async () => {
-      const user = userEvent.setup()
-      apiClient.getNotificationPrefs.mockResolvedValue(mockNotificationPrefs)
-      apiClient.updateNotificationPrefs.mockResolvedValue({ success: true })
-
-      renderWithProviders(<Settings />)
-
-      await waitFor(() => {
-        expect(screen.getByLabelText('Bundle Deployed')).toBeInTheDocument()
-      })
-
-      // Toggle an alert type
-      const bundleCheckbox = screen.getByLabelText('Bundle Deployed')
-      await user.click(bundleCheckbox)
-
-      await waitFor(() => {
-        expect(apiClient.updateNotificationPrefs).toHaveBeenCalled()
-      })
-
-      // Verify the API was called with transformed data
-      const callArgs = apiClient.updateNotificationPrefs.mock.calls[0][0]
-      expect(callArgs).toHaveProperty('enabled_alerts')
-      expect(callArgs).toHaveProperty('quiet_hours_enabled')
-      expect(callArgs).toHaveProperty('digest_enabled')
-    })
-
-    test('renders all alert type checkboxes', async () => {
-      apiClient.getNotificationPrefs.mockResolvedValue(mockNotificationPrefs)
-
-      renderWithProviders(<Settings />)
-
-      await waitFor(() => {
-        expect(screen.getByLabelText('Bundle Deployed')).toBeInTheDocument()
-      })
-
-      const alertTypes = [
-        'Bundle Deployed',
-        'Bundle Failed',
-        'Peer Offline',
-        'Peer Online',
-        'Blocked Spike',
-        'New Peer',
-      ]
-
-      alertTypes.forEach(type => {
-        expect(screen.getByLabelText(type)).toBeInTheDocument()
-      })
     })
   })
 
@@ -678,8 +608,7 @@ describe('Unified Timezone Selector', () => {
       useAuthStore.setState({ role: 'admin' })
       
       const mockPrefs = {
-        enabled_alerts: JSON.stringify([]),
-        quiet_hours_enabled: false,
+                quiet_hours_enabled: false,
         digest_enabled: false,
       }
       
@@ -710,8 +639,7 @@ describe('Unified Timezone Selector', () => {
     test('Email configuration saves correctly', async () => {
       const user = userEvent.setup()
       apiClient.getNotificationPrefs.mockResolvedValue({
-        enabled_alerts: JSON.stringify([]),
-        quiet_hours_enabled: false,
+                quiet_hours_enabled: false,
         digest_enabled: false,
       })
       apiClient.getSMTPConfig.mockResolvedValue(mockSMTPConfig)
@@ -739,8 +667,7 @@ describe('Unified Timezone Selector', () => {
 
     test('Email shows loading state', async () => {
       apiClient.getNotificationPrefs.mockResolvedValue({
-        enabled_alerts: JSON.stringify([]),
-        quiet_hours_enabled: false,
+                quiet_hours_enabled: false,
         digest_enabled: false,
       })
       apiClient.getSMTPConfig.mockImplementation(() => new Promise(() => {}))
@@ -757,8 +684,7 @@ describe('Unified Timezone Selector', () => {
     test('password field has show/hide toggle', async () => {
       const user = userEvent.setup()
       apiClient.getNotificationPrefs.mockResolvedValue({
-        enabled_alerts: JSON.stringify([]),
-        quiet_hours_enabled: false,
+                quiet_hours_enabled: false,
         digest_enabled: false,
       })
       apiClient.getSMTPConfig.mockResolvedValue(mockSMTPConfig)
@@ -782,8 +708,7 @@ describe('Unified Timezone Selector', () => {
   test('Test email button works when Email is enabled', async () => {
     const user = userEvent.setup()
     apiClient.getNotificationPrefs.mockResolvedValue({
-      enabled_alerts: JSON.stringify([]),
-      quiet_hours_enabled: false,
+            quiet_hours_enabled: false,
       digest_enabled: false,
     })
     // Set enabled: true so the button is not disabled
@@ -819,8 +744,7 @@ describe('Unified Timezone Selector', () => {
 
     test('Test email button is disabled when Email is not enabled', async () => {
       apiClient.getNotificationPrefs.mockResolvedValue({
-        enabled_alerts: JSON.stringify([]),
-        quiet_hours_enabled: false,
+                quiet_hours_enabled: false,
         digest_enabled: false,
       })
       apiClient.getSMTPConfig.mockResolvedValue({ ...mockSMTPConfig, enabled: false })
@@ -838,8 +762,7 @@ describe('Unified Timezone Selector', () => {
   test('TLS and Enable Email toggles work', async () => {
     const user = userEvent.setup()
     apiClient.getNotificationPrefs.mockResolvedValue({
-      enabled_alerts: JSON.stringify([]),
-      quiet_hours_enabled: false,
+            quiet_hours_enabled: false,
       digest_enabled: false,
     })
     apiClient.getSMTPConfig.mockResolvedValue({ ...mockSMTPConfig, use_tls: true, enabled: true })
@@ -863,8 +786,7 @@ describe('Unified Timezone Selector', () => {
     test('editing Email fields updates form state', async () => {
       const user = userEvent.setup()
       apiClient.getNotificationPrefs.mockResolvedValue({
-        enabled_alerts: JSON.stringify([]),
-        quiet_hours_enabled: false,
+                quiet_hours_enabled: false,
         digest_enabled: false,
       })
       apiClient.getSMTPConfig.mockResolvedValue(mockSMTPConfig)
@@ -895,8 +817,7 @@ describe('Unified Timezone Selector', () => {
     test('Instance URL input appears within Email Configuration section', async () => {
       useAuthStore.setState({ role: 'admin' })
       apiClient.getNotificationPrefs.mockResolvedValue({
-        enabled_alerts: JSON.stringify([]),
-        quiet_hours_enabled: false,
+                quiet_hours_enabled: false,
         digest_enabled: false,
       })
       apiClient.getSMTPConfig.mockResolvedValue({ enabled: false })
@@ -916,8 +837,7 @@ describe('Unified Timezone Selector', () => {
       const user = userEvent.setup()
       useAuthStore.setState({ role: 'admin' })
       apiClient.getNotificationPrefs.mockResolvedValue({
-        enabled_alerts: JSON.stringify([]),
-        quiet_hours_enabled: false,
+                quiet_hours_enabled: false,
         digest_enabled: false,
       })
       apiClient.getSMTPConfig.mockResolvedValue({ enabled: false })
@@ -961,35 +881,35 @@ describe('Unified Timezone Selector', () => {
       })
     })
 
-    test('shows error toast when updating notification prefs fails', async () => {
-      const user = userEvent.setup()
-      apiClient.getNotificationPrefs.mockResolvedValue({
-        enabled_alerts: JSON.stringify(['bundle_deployed']),
-        quiet_hours_enabled: false,
-        digest_enabled: false,
-      })
-      apiClient.updateNotificationPrefs.mockRejectedValue(new Error('Update failed'))
-
-      renderWithProviders(<Settings />)
-
-      await waitFor(() => {
-        expect(screen.getByLabelText('Bundle Deployed')).toBeInTheDocument()
-      })
-
-      // Toggle a checkbox
-      await user.click(screen.getByLabelText('Bundle Deployed'))
-
-      await waitFor(() => {
-        expect(mockShowToast).toHaveBeenCalledWith('Update failed', 'error')
-      })
+  test('shows error toast when updating notification prefs fails', async () => {
+    const user = userEvent.setup()
+    apiClient.getNotificationPrefs.mockResolvedValue({
+      quiet_hours_enabled: false,
+      digest_enabled: false,
     })
+    apiClient.updateNotificationPrefs.mockRejectedValue(new Error('Update failed'))
+
+    renderWithProviders(<Settings />)
+
+    // Wait for timezone selector to appear (notification prefs loaded)
+    await waitFor(() => {
+      expect(screen.getByLabelText('Timezone')).toBeInTheDocument()
+    })
+
+    // Change timezone to trigger an update
+    const timezoneSelect = screen.getByLabelText('Timezone')
+    await user.selectOptions(timezoneSelect, 'America/New_York')
+
+    await waitFor(() => {
+      expect(mockShowToast).toHaveBeenCalledWith('Update failed', 'error')
+    })
+  })
 
     test('shows error toast when SMTP config load fails', async () => {
       useAuthStore.setState({ role: 'admin' })
       
       const mockPrefs = {
-        enabled_alerts: JSON.stringify([]),
-        quiet_hours_enabled: false,
+                quiet_hours_enabled: false,
         digest_enabled: false,
       }
       
@@ -1008,8 +928,7 @@ describe('Unified Timezone Selector', () => {
       const user = userEvent.setup()
       useAuthStore.setState({ role: 'admin' })
       apiClient.getNotificationPrefs.mockResolvedValue({
-        enabled_alerts: JSON.stringify([]),
-        quiet_hours_enabled: false,
+                quiet_hours_enabled: false,
         digest_enabled: false,
       })
       apiClient.getSMTPConfig.mockResolvedValue({
@@ -1036,8 +955,7 @@ describe('Unified Timezone Selector', () => {
       const user = userEvent.setup()
       useAuthStore.setState({ role: 'admin' })
       apiClient.getNotificationPrefs.mockResolvedValue({
-        enabled_alerts: JSON.stringify([]),
-        quiet_hours_enabled: false,
+                quiet_hours_enabled: false,
         digest_enabled: false,
       })
       apiClient.getSMTPConfig.mockResolvedValue({
@@ -1066,8 +984,7 @@ describe('Unified Timezone Selector', () => {
       useAuthStore.setState({ role: 'viewer' })
       
       const mockPrefs = {
-        enabled_alerts: JSON.stringify([]),
-        quiet_hours_enabled: false,
+                quiet_hours_enabled: false,
         digest_enabled: false,
       }
       
@@ -1090,8 +1007,7 @@ describe('Unified Timezone Selector', () => {
     test('admin users see all tabs', async () => {
       useAuthStore.setState({ role: 'admin' })
       apiClient.getNotificationPrefs.mockResolvedValue({
-        enabled_alerts: JSON.stringify([]),
-        quiet_hours_enabled: false,
+                quiet_hours_enabled: false,
         digest_enabled: false,
       })
       apiClient.getSMTPConfig.mockResolvedValue({ enabled: false })
@@ -1110,8 +1026,7 @@ describe('Unified Timezone Selector', () => {
       const user = userEvent.setup()
       useAuthStore.setState({ role: 'admin' })
       apiClient.getNotificationPrefs.mockResolvedValue({
-        enabled_alerts: JSON.stringify([]),
-        quiet_hours_enabled: false,
+                quiet_hours_enabled: false,
         digest_enabled: false,
       })
       apiClient.api.get.mockResolvedValue([])
@@ -1156,8 +1071,7 @@ test('shows loading spinner while fetching SMTP config for admin', async () => {
       useAuthStore.setState({ role: 'admin' })
       
       const mockPrefs = {
-        enabled_alerts: JSON.stringify([]),
-        quiet_hours_enabled: false,
+                quiet_hours_enabled: false,
         digest_enabled: false,
       }
       
@@ -1178,8 +1092,7 @@ test('shows loading spinner while fetching SMTP config for admin', async () => {
       const user = userEvent.setup()
       useAuthStore.setState({ role: 'admin' })
       apiClient.getNotificationPrefs.mockResolvedValue({
-        enabled_alerts: JSON.stringify([]),
-        quiet_hours_enabled: false,
+                quiet_hours_enabled: false,
         digest_enabled: false,
       })
       apiClient.getSMTPConfig.mockResolvedValue({
@@ -1207,8 +1120,7 @@ test('shows loading spinner while fetching SMTP config for admin', async () => {
       const user = userEvent.setup()
       useAuthStore.setState({ role: 'admin' })
       apiClient.getNotificationPrefs.mockResolvedValue({
-        enabled_alerts: JSON.stringify([]),
-        quiet_hours_enabled: false,
+                quiet_hours_enabled: false,
         digest_enabled: false,
       })
       apiClient.getSMTPConfig.mockResolvedValue({
@@ -1239,8 +1151,7 @@ test('shows loading spinner while fetching SMTP config for admin', async () => {
     test('tabs are not visible for non-admin users', async () => {
       useAuthStore.setState({ role: 'viewer' })
       apiClient.getNotificationPrefs.mockResolvedValue({
-        enabled_alerts: JSON.stringify([]),
-        quiet_hours_enabled: false,
+                quiet_hours_enabled: false,
         digest_enabled: false,
       })
 
@@ -1255,8 +1166,7 @@ describe('Collapsible Sections', () => {
     test('sections have unique IDs for anchor navigation', async () => {
       useAuthStore.setState({ role: 'admin' })
       apiClient.getNotificationPrefs.mockResolvedValue({
-        enabled_alerts: JSON.stringify([]),
-        quiet_hours_enabled: false,
+                quiet_hours_enabled: false,
         digest_enabled: false,
       })
       apiClient.getSMTPConfig.mockResolvedValue({ enabled: false })
@@ -1284,8 +1194,7 @@ describe('Collapsible Sections', () => {
     test('two-column grid exists for desktop layout', () => {
       useAuthStore.setState({ role: 'admin' })
       apiClient.getNotificationPrefs.mockResolvedValue({
-        enabled_alerts: JSON.stringify([]),
-        quiet_hours_enabled: false,
+                quiet_hours_enabled: false,
         digest_enabled: false,
       })
       apiClient.getSMTPConfig.mockResolvedValue({ enabled: false })
@@ -1302,8 +1211,7 @@ describe('Collapsible Sections', () => {
   test('checkbox alignment with input fields in Email Configuration', async () => {
     useAuthStore.setState({ role: 'admin' })
     apiClient.getNotificationPrefs.mockResolvedValue({
-      enabled_alerts: JSON.stringify([]),
-      quiet_hours_enabled: false,
+            quiet_hours_enabled: false,
       digest_enabled: false,
     })
     apiClient.getSMTPConfig.mockResolvedValue({
@@ -1338,8 +1246,7 @@ describe('Collapsible Sections', () => {
     test('jump dropdown is visible for admin users on Alerts tab', async () => {
       useAuthStore.setState({ role: 'admin' })
       apiClient.getNotificationPrefs.mockResolvedValue({
-        enabled_alerts: JSON.stringify([]),
-        quiet_hours_enabled: false,
+                quiet_hours_enabled: false,
         digest_enabled: false,
       })
       apiClient.getSMTPConfig.mockResolvedValue({ enabled: false })
@@ -1356,8 +1263,7 @@ describe('Collapsible Sections', () => {
     test('jump dropdown does not have General option', async () => {
       useAuthStore.setState({ role: 'admin' })
       apiClient.getNotificationPrefs.mockResolvedValue({
-        enabled_alerts: JSON.stringify([]),
-        quiet_hours_enabled: false,
+                quiet_hours_enabled: false,
         digest_enabled: false,
       })
       apiClient.getSMTPConfig.mockResolvedValue({ enabled: false })
@@ -1380,8 +1286,7 @@ describe('Collapsible Sections', () => {
     test('jump dropdown is not visible for non-admin users', async () => {
       useAuthStore.setState({ role: 'viewer' })
       apiClient.getNotificationPrefs.mockResolvedValue({
-        enabled_alerts: JSON.stringify([]),
-        quiet_hours_enabled: false,
+                quiet_hours_enabled: false,
         digest_enabled: false,
       })
 
@@ -1406,8 +1311,7 @@ describe('Collapsible Sections', () => {
     test('port input is text type with numeric inputMode', async () => {
       useAuthStore.setState({ role: 'admin' })
       apiClient.getNotificationPrefs.mockResolvedValue({
-        enabled_alerts: JSON.stringify([]),
-        quiet_hours_enabled: false,
+                quiet_hours_enabled: false,
         digest_enabled: false,
       })
       apiClient.getSMTPConfig.mockResolvedValue(mockSMTPConfigWithPort)
@@ -1430,8 +1334,7 @@ describe('Collapsible Sections', () => {
       const user = userEvent.setup()
       useAuthStore.setState({ role: 'admin' })
       apiClient.getNotificationPrefs.mockResolvedValue({
-        enabled_alerts: JSON.stringify([]),
-        quiet_hours_enabled: false,
+                quiet_hours_enabled: false,
         digest_enabled: false,
       })
       apiClient.getSMTPConfig.mockResolvedValue(mockSMTPConfigWithPort)
@@ -1457,8 +1360,7 @@ describe('Collapsible Sections', () => {
       const user = userEvent.setup()
       useAuthStore.setState({ role: 'admin' })
       apiClient.getNotificationPrefs.mockResolvedValue({
-        enabled_alerts: JSON.stringify([]),
-        quiet_hours_enabled: false,
+                quiet_hours_enabled: false,
         digest_enabled: false,
       })
       apiClient.getSMTPConfig.mockResolvedValue(mockSMTPConfigWithPort)
@@ -1484,8 +1386,7 @@ describe('Collapsible Sections', () => {
       const user = userEvent.setup()
       useAuthStore.setState({ role: 'admin' })
       apiClient.getNotificationPrefs.mockResolvedValue({
-        enabled_alerts: JSON.stringify([]),
-        quiet_hours_enabled: false,
+                quiet_hours_enabled: false,
         digest_enabled: false,
       })
       apiClient.getSMTPConfig.mockResolvedValue(mockSMTPConfigWithPort)
@@ -1518,8 +1419,7 @@ describe('Collapsible Sections', () => {
       const user = userEvent.setup()
       useAuthStore.setState({ role: 'admin' })
       apiClient.getNotificationPrefs.mockResolvedValue({
-        enabled_alerts: JSON.stringify([]),
-        quiet_hours_enabled: false,
+                quiet_hours_enabled: false,
         digest_enabled: false,
       })
       apiClient.getSMTPConfig.mockResolvedValue(mockSMTPConfigWithPort)
@@ -1549,8 +1449,7 @@ describe('Collapsible Sections', () => {
       const user = userEvent.setup()
       useAuthStore.setState({ role: 'admin' })
       apiClient.getNotificationPrefs.mockResolvedValue({
-        enabled_alerts: JSON.stringify([]),
-        quiet_hours_enabled: false,
+                quiet_hours_enabled: false,
         digest_enabled: false,
       })
       apiClient.getSMTPConfig.mockResolvedValue(mockSMTPConfigWithPort)
@@ -1581,8 +1480,7 @@ describe('Collapsible Sections', () => {
       const user = userEvent.setup()
       useAuthStore.setState({ role: 'admin' })
       apiClient.getNotificationPrefs.mockResolvedValue({
-        enabled_alerts: JSON.stringify([]),
-        quiet_hours_enabled: false,
+                quiet_hours_enabled: false,
         digest_enabled: false,
       })
       apiClient.getSMTPConfig.mockResolvedValue(mockSMTPConfigWithPort)
@@ -1611,8 +1509,7 @@ describe('Collapsible Sections', () => {
       const user = userEvent.setup()
       useAuthStore.setState({ role: 'admin' })
       apiClient.getNotificationPrefs.mockResolvedValue({
-        enabled_alerts: JSON.stringify([]),
-        quiet_hours_enabled: false,
+                quiet_hours_enabled: false,
         digest_enabled: false,
       })
       apiClient.getSMTPConfig.mockResolvedValue(mockSMTPConfigWithPort)
@@ -1640,8 +1537,7 @@ describe('Collapsible Sections', () => {
       const user = userEvent.setup()
       useAuthStore.setState({ role: 'admin' })
       apiClient.getNotificationPrefs.mockResolvedValue({
-        enabled_alerts: JSON.stringify([]),
-        quiet_hours_enabled: false,
+                quiet_hours_enabled: false,
         digest_enabled: false,
       })
       apiClient.getSMTPConfig.mockResolvedValue(mockSMTPConfigWithPort)
@@ -1677,8 +1573,7 @@ describe('Collapsible Sections', () => {
       const user = userEvent.setup()
       useAuthStore.setState({ role: 'admin' })
       apiClient.getNotificationPrefs.mockResolvedValue({
-        enabled_alerts: JSON.stringify([]),
-        quiet_hours_enabled: false,
+                quiet_hours_enabled: false,
         digest_enabled: false,
       })
       apiClient.getSMTPConfig.mockResolvedValue(mockSMTPConfigWithPort)
@@ -1717,8 +1612,7 @@ describe('Collapsible Sections', () => {
     test('Use TLS toggle is positioned in the Port row', async () => {
       useAuthStore.setState({ role: 'admin' })
       apiClient.getNotificationPrefs.mockResolvedValue({
-        enabled_alerts: JSON.stringify([]),
-        quiet_hours_enabled: false,
+                quiet_hours_enabled: false,
         digest_enabled: false,
       })
       apiClient.getSMTPConfig.mockResolvedValue(mockSMTPConfigForLayout)
@@ -1746,8 +1640,7 @@ describe('Collapsible Sections', () => {
     test('Enable Email toggle is rendered correctly in Row 1', async () => {
       useAuthStore.setState({ role: 'admin' })
       apiClient.getNotificationPrefs.mockResolvedValue({
-        enabled_alerts: JSON.stringify([]),
-        quiet_hours_enabled: false,
+                quiet_hours_enabled: false,
         digest_enabled: false,
       })
       apiClient.getSMTPConfig.mockResolvedValue(mockSMTPConfigForLayout)
@@ -1774,8 +1667,7 @@ describe('Collapsible Sections', () => {
     test('SMTP Port input has correct attributes', async () => {
       useAuthStore.setState({ role: 'admin' })
       apiClient.getNotificationPrefs.mockResolvedValue({
-        enabled_alerts: JSON.stringify([]),
-        quiet_hours_enabled: false,
+                quiet_hours_enabled: false,
         digest_enabled: false,
       })
       apiClient.getSMTPConfig.mockResolvedValue(mockSMTPConfigForLayout)
@@ -1799,8 +1691,7 @@ describe('Collapsible Sections', () => {
     test('form fields are in correct order', async () => {
       useAuthStore.setState({ role: 'admin' })
       apiClient.getNotificationPrefs.mockResolvedValue({
-        enabled_alerts: JSON.stringify([]),
-        quiet_hours_enabled: false,
+                quiet_hours_enabled: false,
         digest_enabled: false,
       })
       apiClient.getSMTPConfig.mockResolvedValue(mockSMTPConfigForLayout)

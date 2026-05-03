@@ -119,9 +119,9 @@ func resolveRules(ctx context.Context, database db.Querier, sessionID int64, pee
 		// the peer is receiving multicast packets, not sending them)
 		if isMulticastPktType(pr, r.Chain) {
 			if err := resolveMulticastRule(ctx, database, r.ID, peerID); err != nil {
-			log.Warn("Failed to resolve multicast rule", "rule_id", r.ID, "error", err)
-		}
-		continue
+				log.Warn("Failed to resolve multicast rule", "rule_id", r.ID, "error", err)
+			}
+			continue
 		}
 
 		// Check if this is a broadcast rule (destination IP matches broadcast address)

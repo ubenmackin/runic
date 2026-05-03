@@ -185,11 +185,10 @@ func UpsertUserNotificationPreferences(ctx context.Context, database db.Querier,
 	now := time.Now()
 
 	result, err := database.ExecContext(ctx,
-		`INSERT INTO user_notification_preferences (user_id, enabled_alerts, quiet_hours_enabled, quiet_hours_start,
+		`INSERT INTO user_notification_preferences (user_id, quiet_hours_enabled, quiet_hours_start,
 		quiet_hours_end, quiet_hours_timezone, digest_enabled, digest_frequency, digest_time, digest_timezone, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(user_id) DO UPDATE SET
-		enabled_alerts = excluded.enabled_alerts,
 		quiet_hours_enabled = excluded.quiet_hours_enabled,
 		quiet_hours_start = excluded.quiet_hours_start,
 		quiet_hours_end = excluded.quiet_hours_end,
@@ -199,7 +198,7 @@ func UpsertUserNotificationPreferences(ctx context.Context, database db.Querier,
 		digest_time = excluded.digest_time,
 		digest_timezone = excluded.digest_timezone,
 		updated_at = excluded.updated_at`,
-		prefs.UserID, prefs.EnabledAlerts, prefs.QuietHoursEnabled, prefs.QuietHoursStart, prefs.QuietHoursEnd,
+		prefs.UserID, prefs.QuietHoursEnabled, prefs.QuietHoursStart, prefs.QuietHoursEnd,
 		prefs.QuietHoursTimezone, prefs.DigestEnabled, prefs.DigestFrequency, prefs.DigestTime, prefs.DigestTimezone, now, now,
 	)
 	if err != nil {

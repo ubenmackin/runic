@@ -1267,5 +1267,25 @@ SELECT id, ip_address, 1 FROM peers
 		return fmt.Errorf("failed to sync latest_agent_version: %w", err)
 	}
 
+	// Migration: Add first_applied_at column to rule_bundles
+	if err := addColumnIfMissing(ctx, database, "rule_bundles", "first_applied_at", "DATETIME"); err != nil {
+		return err
+	}
+
+	// Backfill first_applied_at from applied_at for existing rows
+	var needsBackfill bool
+	err = database.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM rule_bundles WHERE applied_at IS NOT NULL AND first_applied_at IS NULL").Scan(&needsBackfill)
+	if err != nil {
+		return fmt.Errorf("failed to check for first_applied_at backfill: %w", err)
+	}
+	if needsBackfill {
+		log.Info("Migration: backfilling first_applied_at from applied_at")
+		_, err = database.ExecContext(ctx, "UPDATE rule_bundles SET first_applied_at = applied_at WHERE applied_at IS NOT NULL AND first_applied_at IS NULL")
+		if err != nil {
+			return fmt.Errorf("failed to backfill first_applied_at: %w", err)
+		}
+		log.Info("Migration: backfilled first_applied_at from applied_at")
+	}
+
 	return nil
 }

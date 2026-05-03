@@ -34,9 +34,9 @@ type PeerView struct {
 	HasDocker            bool         `json:"has_docker"`
 	IsManual             bool         `json:"is_manual"`
 	AgentVersion         string       `json:"agent_version"`
-	LastHeartbeat string `json:"last_heartbeat"`
-	Status        string `json:"status"`
-	IsOnline      bool   `json:"is_online"`
+	LastHeartbeat        string       `json:"last_heartbeat"`
+	Status               string       `json:"status"`
+	IsOnline             bool         `json:"is_online"`
 	HasPendingChanges    bool         `json:"has_pending_changes"`
 	SyncStatus           string       `json:"sync_status"`
 	BundleVersion        string       `json:"bundle_version"`
@@ -661,9 +661,9 @@ func (s *PeerStore) GetPeerIDByHostname(ctx context.Context, hostname string) (i
 func (s *PeerStore) GetLatestBundle(ctx context.Context, peerID int) (models.RuleBundleRow, error) {
 	var bundle models.RuleBundleRow
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, peer_id, version, version_number, rules_content, hmac, created_at FROM rule_bundles WHERE peer_id = ? ORDER BY created_at DESC LIMIT 1`,
+		`SELECT id, peer_id, version, version_number, rules_content, hmac, created_at, applied_at, first_applied_at FROM rule_bundles WHERE peer_id = ? ORDER BY created_at DESC LIMIT 1`,
 		peerID,
-	).Scan(&bundle.ID, &bundle.PeerID, &bundle.Version, &bundle.VersionNumber, &bundle.RulesContent, &bundle.HMAC, &bundle.CreatedAt)
+	).Scan(&bundle.ID, &bundle.PeerID, &bundle.Version, &bundle.VersionNumber, &bundle.RulesContent, &bundle.HMAC, &bundle.CreatedAt, &bundle.AppliedAt, &bundle.FirstAppliedAt)
 	if err != nil {
 		return bundle, fmt.Errorf("get latest bundle: %w", err)
 	}
@@ -672,7 +672,7 @@ func (s *PeerStore) GetLatestBundle(ctx context.Context, peerID int) (models.Rul
 
 // UpdateBundleAppliedAt sets the applied_at timestamp on a rule bundle.
 func (s *PeerStore) UpdateBundleAppliedAt(ctx context.Context, peerID int, version string, appliedAt string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE rule_bundles SET applied_at = ? WHERE peer_id = ? AND version = ?`, appliedAt, peerID, version)
+	_, err := s.db.ExecContext(ctx, `UPDATE rule_bundles SET applied_at = ?, first_applied_at = COALESCE(first_applied_at, ?) WHERE peer_id = ? AND version = ?`, appliedAt, appliedAt, peerID, version)
 	if err != nil {
 		return fmt.Errorf("update bundle applied_at: %w", err)
 	}

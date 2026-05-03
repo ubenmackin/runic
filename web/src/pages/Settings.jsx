@@ -10,7 +10,6 @@ import AlertSettings from '../components/AlertSettings'
 import CollapsibleSection from '../components/CollapsibleSection'
 import ToggleSwitch from '../components/ToggleSwitch'
 import {
-  alertTypes,
   transformPrefsToBackend,
   transformPrefsFromBackend,
   transformSMTPFromBackend,
@@ -237,19 +236,6 @@ useEffect(() => {
     onError: (err) => showToast(err.message, 'error'),
   })
 
-  const handleToggleAlertType = (key) => {
-    if (!notificationPrefs) return
-    const newPrefs = {
-      ...notificationPrefs,
-      alert_types: {
-        ...notificationPrefs.alert_types,
-        [key]: !notificationPrefs.alert_types?.[key],
-      },
-    }
-    setNotificationPrefs(newPrefs)
-    updatePrefsMutation.mutate(newPrefs)
-  }
-
   const handleQuietHoursChange = (field, value) => {
     if (!notificationPrefs) return
     const newPrefs = {
@@ -462,31 +448,6 @@ const getKeyData = (keyType) => {
                       Applies to both Quiet Hours and Daily Digest
                   </p>
                 </div>
-
-                <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-3">
-                      Alert Types
-                    </label>
-<div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                {alertTypes.map((type) => (
-                  <div key={type.key} className="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      id={`alert-type-${type.key}`}
-                      checked={notificationPrefs.alert_types?.[type.key] ?? true}
-                      onChange={() => handleToggleAlertType(type.key)}
-                      className="w-4 h-4 text-purple-600 border-gray-300 dark:border-gray-border rounded-none focus:ring-purple-500"
-                    />
-                    <label
-                      htmlFor={`alert-type-${type.key}`}
-                      className="text-sm text-gray-700 dark:text-amber-primary cursor-pointer"
-                    >
-                      {type.label}
-                    </label>
-                  </div>
-                ))}
-              </div>
-            </div>
 
             <div className="border-t border-gray-200 dark:border-gray-border pt-6">
               <button
@@ -869,31 +830,6 @@ id="notifications-section"
                         Applies to both Quiet Hours and Daily Digest
                       </p>
                   </div>
-
-                  <div>
-                      <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-3">
-                        Alert Types
-                      </label>
-<div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                {alertTypes.map((type) => (
-                  <div key={type.key} className="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      id={`admin-alert-type-${type.key}`}
-                      checked={notificationPrefs.alert_types?.[type.key] ?? true}
-                      onChange={() => handleToggleAlertType(type.key)}
-                      className="w-4 h-4 text-purple-600 border-gray-300 dark:border-gray-border rounded-none focus:ring-purple-500"
-                    />
-                    <label
-                      htmlFor={`admin-alert-type-${type.key}`}
-                      className="text-sm text-gray-700 dark:text-amber-primary cursor-pointer"
-                    >
-                      {type.label}
-                    </label>
-                  </div>
-                ))}
-              </div>
-            </div>
 
             <div className="border-t border-gray-200 dark:border-gray-border pt-6">
               <button

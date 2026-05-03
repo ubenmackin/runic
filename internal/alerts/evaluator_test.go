@@ -3,10 +3,12 @@ package alerts
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 	"time"
 
 	"runic/internal/db"
+	"runic/internal/store"
 	"runic/internal/testutil"
 )
 
@@ -305,4 +307,236 @@ func TestCheckBlockedSpike(t *testing.T) {
 			t.Errorf("expected percentage 100 for no baseline with significant traffic, got %d", percentage)
 		}
 	})
+}
+
+// TestEvaluateBundleDeployed_FirstAppliedAt tests that evaluateBundleDeployed
+// uses first_applied_at (not applied_at) to determine if a bundle was newly
+// deployed, preventing duplicate alerts when a bundle is re-applied.
+func TestEvaluateBundleDeployed_FirstAppliedAt(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	databaseWrapper := db.New(database)
+	evaluator := NewConditionEvaluator(databaseWrapper, databaseWrapper)
+
+	// Insert a peer for testing
+	result, err := database.Exec(
+		"INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, status) VALUES (?, ?, ?, ?, ?)",
+		"bundle-peer", "10.0.0.10", "key-bd", "hmac-bd", "online",
+	)
+	if err != nil {
+		t.Fatalf("failed to insert peer: %v", err)
+	}
+	peerID, _ := result.LastInsertId()
+
+	// Create an alert rule for bundle_deployed with a 60-minute window
+	rule := &AlertRule{
+		Name:                   "Bundle Deployed Rule",
+		AlertType:              AlertTypeBundleDeployed,
+		Enabled:                true,
+		ThresholdWindowMinutes: 60,
+		ThrottleMinutes:        5,
+		PeerID:                 intPtr(int(peerID)),
+	}
+
+	// --- Sub-test 1: First deployment triggers an alert ---
+	t.Run("first deployment triggers alert", func(t *testing.T) {
+		now := time.Now().Truncate(time.Second)
+
+		// Insert a rule bundle with first_applied_at = now (recently deployed)
+		_, err := database.Exec(
+			"INSERT INTO rule_bundles (peer_id, version, version_number, rules_content, hmac, applied_at, first_applied_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+			peerID, "v1.0", 1, "{}", "hmactest", now, now,
+		)
+		if err != nil {
+			t.Fatalf("failed to insert rule bundle: %v", err)
+		}
+
+		triggered, event, err := evaluator.EvaluateRule(ctx, rule)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !triggered {
+			t.Error("expected alert to be triggered for newly deployed bundle")
+		}
+		if event != nil && event.Type != AlertTypeBundleDeployed {
+			t.Errorf("expected event type %s, got %s", AlertTypeBundleDeployed, event.Type)
+		}
+	})
+
+	// --- Sub-test 2: Re-apply does NOT re-trigger alert ---
+	t.Run("re-apply does not re-trigger alert", func(t *testing.T) {
+		// First, record that an alert was already sent (simulate alert_history entry)
+		// This simulates the alert that was triggered in sub-test 1
+		_, err := database.Exec(
+			"INSERT INTO alert_history (rule_id, alert_type, peer_id, severity, subject, message, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+			0, AlertTypeBundleDeployed, peerID, "info", "Bundle deployed", "Bundle deployed", "sent", time.Now(),
+		)
+		if err != nil {
+			t.Fatalf("failed to insert alert history: %v", err)
+		}
+
+		// Now update the bundle's applied_at (simulating a re-apply) but leave first_applied_at unchanged
+		laterTime := time.Now().Truncate(time.Second)
+		_, err = database.Exec(
+			"UPDATE rule_bundles SET applied_at = ? WHERE peer_id = ? AND version = ?",
+			laterTime, peerID, "v1.0",
+		)
+		if err != nil {
+			t.Fatalf("failed to update bundle applied_at: %v", err)
+		}
+
+		// Verify first_applied_at was NOT changed
+		var firstAppliedAt sql.NullTime
+		err = database.QueryRow(
+			"SELECT first_applied_at FROM rule_bundles WHERE peer_id = ? AND version = ?",
+			peerID, "v1.0",
+		).Scan(&firstAppliedAt)
+		if err != nil {
+			t.Fatalf("failed to query first_applied_at: %v", err)
+		}
+		if !firstAppliedAt.Valid {
+			t.Fatal("expected first_applied_at to be set, but got NULL")
+		}
+
+		// Evaluate again — should NOT trigger because:
+		// 1) first_applied_at is still the old time (within window, but alert_history exists)
+		// 2) The NOT EXISTS subquery finds the alert_history entry we inserted
+		triggered, _, err := evaluator.EvaluateRule(ctx, rule)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if triggered {
+			t.Error("expected alert NOT to be re-triggered for re-applied bundle (alert already sent)")
+		}
+	})
+
+	// --- Sub-test 3: Old first_applied_at outside window does not trigger ---
+	t.Run("old first_applied_at outside window does not trigger", func(t *testing.T) {
+		// Clean up previous data for this sub-test
+		database.Exec("DELETE FROM alert_history")
+		database.Exec("DELETE FROM rule_bundles WHERE peer_id = ?", peerID)
+
+		// Insert a bundle with first_applied_at well outside the 60-minute window.
+		// Use local time consistently to avoid UTC/local timezone comparison issues
+		// in SQLite DATETIME string comparisons.
+		oldTime := time.Now().Add(-2 * time.Hour).Truncate(time.Second)
+		now := time.Now().Truncate(time.Second)
+		_, err := database.Exec(
+			"INSERT INTO rule_bundles (peer_id, version, version_number, rules_content, hmac, applied_at, first_applied_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+			peerID, "v2.0", 2, "{}", "hmactest2", now, oldTime,
+		)
+		if err != nil {
+			t.Fatalf("failed to insert old rule bundle: %v", err)
+		}
+
+		// The first_applied_at is 2 hours ago, which is outside the 60-minute window.
+		// Even though applied_at is recent, this should NOT trigger an alert.
+		triggered, _, err := evaluator.EvaluateRule(ctx, rule)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if triggered {
+			t.Error("expected alert NOT to be triggered for bundle with old first_applied_at outside window")
+		}
+	})
+
+	// --- Sub-test 4: New bundle deployment (different version) does trigger ---
+	t.Run("new bundle version triggers alert", func(t *testing.T) {
+		// Clean up previous data for this sub-test
+		database.Exec("DELETE FROM alert_history")
+		database.Exec("DELETE FROM rule_bundles WHERE peer_id = ?", peerID)
+
+		// Insert a fresh bundle with first_applied_at = now
+		now := time.Now().Truncate(time.Second)
+		_, err := database.Exec(
+			"INSERT INTO rule_bundles (peer_id, version, version_number, rules_content, hmac, applied_at, first_applied_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+			peerID, "v3.0", 3, "{}", "hmactest3", now, now,
+		)
+		if err != nil {
+			t.Fatalf("failed to insert new rule bundle: %v", err)
+		}
+
+		triggered, event, err := evaluator.EvaluateRule(ctx, rule)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !triggered {
+			t.Error("expected alert to be triggered for newly deployed bundle")
+		}
+		if event != nil && event.PeerName != "bundle-peer" {
+			t.Errorf("expected peer name 'bundle-peer', got %s", event.PeerName)
+		}
+	})
+}
+
+// TestUpdateBundleAppliedAt_COALESCE tests that the COALESCE logic in
+// UpdateBundleAppliedAt preserves first_applied_at when a bundle is
+// re-applied, while updating applied_at.
+func TestUpdateBundleAppliedAt_COALESCE(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	databaseWrapper := db.New(database)
+	peerStore := store.NewPeerStore(databaseWrapper)
+
+	// Insert a peer for testing
+	result, err := database.Exec(
+		"INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, status) VALUES (?, ?, ?, ?, ?)",
+		"coalesce-peer", "10.0.0.20", "key-co", "hmac-co", "online",
+	)
+	if err != nil {
+		t.Fatalf("failed to insert peer: %v", err)
+	}
+	peerID, _ := result.LastInsertId()
+
+	// Step 1: Insert a bundle with both applied_at and first_applied_at set
+	firstAppliedTime := time.Now().Add(-1 * time.Hour).Truncate(time.Second)
+	initialAppliedTime := firstAppliedTime // Same initially
+	_, err = database.Exec(
+		"INSERT INTO rule_bundles (peer_id, version, version_number, rules_content, hmac, applied_at, first_applied_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+		peerID, "v1.0", 1, "{}", "hmactest", initialAppliedTime, firstAppliedTime,
+	)
+	if err != nil {
+		t.Fatalf("failed to insert rule bundle: %v", err)
+	}
+
+	// Step 2: Call UpdateBundleAppliedAt to simulate a re-apply
+	reAppliedTime := time.Now().Truncate(time.Second)
+	err = peerStore.UpdateBundleAppliedAt(ctx, int(peerID), "v1.0", reAppliedTime.Format(time.RFC3339))
+	if err != nil {
+		t.Fatalf("failed to update bundle applied_at: %v", err)
+	}
+
+	// Step 3: Verify first_applied_at is UNCHANGED and applied_at is UPDATED
+	var storedAppliedAt sql.NullTime
+	var storedFirstAppliedAt sql.NullTime
+	err = database.QueryRow(
+		"SELECT applied_at, first_applied_at FROM rule_bundles WHERE peer_id = ? AND version = ?",
+		peerID, "v1.0",
+	).Scan(&storedAppliedAt, &storedFirstAppliedAt)
+	if err != nil {
+		t.Fatalf("failed to query rule bundle: %v", err)
+	}
+
+	if !storedFirstAppliedAt.Valid {
+		t.Fatal("expected first_applied_at to be set, but got NULL")
+	}
+	if !storedAppliedAt.Valid {
+		t.Fatal("expected applied_at to be set, but got NULL")
+	}
+
+	// first_applied_at should remain at the original time
+	if storedFirstAppliedAt.Time.Unix() != firstAppliedTime.Unix() {
+		t.Errorf("expected first_applied_at to be %v, got %v (COALESCE should preserve original value)",
+			firstAppliedTime, storedFirstAppliedAt.Time)
+	}
+
+	// applied_at should be updated to the new re-apply time
+	if storedAppliedAt.Time.Unix() != reAppliedTime.Unix() {
+		t.Errorf("expected applied_at to be %v, got %v",
+			reAppliedTime, storedAppliedAt.Time)
+	}
 }

@@ -16,18 +16,6 @@ export function getBrowserTimezone() {
 }
 
 /**
-* Alert types supported by the notification system
-*/
-export const alertTypes = [
-  { key: 'bundle_deployed', label: 'Bundle Deployed' },
-  { key: 'bundle_failed', label: 'Bundle Failed' },
-  { key: 'peer_offline', label: 'Peer Offline' },
-  { key: 'peer_online', label: 'Peer Online' },
-  { key: 'blocked_spike', label: 'Blocked Spike' },
-  { key: 'new_peer', label: 'New Peer' },
-]
-
-/**
  * Transform notification preferences from backend flat structure to frontend nested structure
  * @param {Object} backendPrefs - Backend notification preferences with flat fields
  * @returns {Object} Frontend notification preferences with nested structure
@@ -36,19 +24,6 @@ export function transformPrefsFromBackend(backendPrefs) {
   if (!backendPrefs) {
     return null
   }
-
-  // Wrap in try-catch to handle malformed JSON gracefully
-  let enabledAlerts = []
-  try {
-    enabledAlerts = backendPrefs.enabled_alerts ? JSON.parse(backendPrefs.enabled_alerts) : []
-  } catch {
-    enabledAlerts = []
-  }
-  const alertTypesObj = {}
-  alertTypes.forEach(type => {
-    // If no alerts are explicitly enabled, default all to true
-    alertTypesObj[type.key] = enabledAlerts.length === 0 || enabledAlerts.includes(type.key)
-  })
 
   // Handle unified timezone: prefer quiet_hours_timezone, fall back to digest_timezone,
   // then to browser-detected timezone if both are empty
@@ -68,7 +43,6 @@ export function transformPrefsFromBackend(backendPrefs) {
   }
 
   return {
-    alert_types: alertTypesObj,
     quiet_hours: {
       enabled: backendPrefs.quiet_hours_enabled ?? false,
       start_time: backendPrefs.quiet_hours_start || '22:00',
@@ -91,11 +65,6 @@ export function transformPrefsToBackend(prefs) {
   const unifiedTimezone = prefs.quiet_hours?.timezone || getBrowserTimezone()
 
   return {
-    enabled_alerts: JSON.stringify(
-      Object.entries(prefs.alert_types || {})
-        .filter(([_key, val]) => val)
-        .map(([key]) => key)
-    ),
     quiet_hours_enabled: prefs.quiet_hours?.enabled ?? false,
     quiet_hours_start: prefs.quiet_hours?.start_time || '22:00',
     quiet_hours_end: prefs.quiet_hours?.end_time || '08:00',
