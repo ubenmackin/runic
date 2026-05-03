@@ -55,6 +55,17 @@ func isBroadcastDest(rule *iptparse.ParsedRule, chain string) bool {
 	return false
 }
 
+// isMulticastPktType checks if the rule has a multicast packet type and the chain
+// is INPUT or DOCKER-USER, indicating a multicast rule that needs special handling.
+// Multicast detection on OUTPUT/FORWARD chains is skipped because those represent
+// the peer sending multicast, not receiving it — analogous to isBroadcastDest.
+func isMulticastPktType(rule *iptparse.ParsedRule, chain string) bool {
+	if rule.PktType != "multicast" {
+		return false
+	}
+	return chain == "INPUT" || chain == "DOCKER-USER"
+}
+
 // resolveRules walks all import_rules for a session and attempts to map them to existing Runic entities.
 // It also processes ipset data to create group/peer mappings.
 func resolveRules(ctx context.Context, database db.Querier, sessionID int64, peerID int64, peerIPs []string, rawIpsets string) error {
@@ -104,14 +115,13 @@ func resolveRules(ctx context.Context, database db.Querier, sessionID int64, pee
 		}
 		pr := &parsedRules[0].Rules[0]
 
-		// Check for multicast rule
-		if pr.PktType == "multicast" {
-			if err := resolveMulticastRule(ctx, database, sessionID, r.ID); err != nil {
-				log.Warn("Failed to resolve multicast rule", "rule_id", r.ID, "error", err)
-			}
-			// Update status to resolved for multicast rules
-			_, _ = database.ExecContext(ctx, "UPDATE import_rules SET status = 'resolved' WHERE id = ?", r.ID)
-			continue
+		// Check for multicast rule (only on INPUT/DOCKER-USER chains where
+		// the peer is receiving multicast packets, not sending them)
+		if isMulticastPktType(pr, r.Chain) {
+			if err := resolveMulticastRule(ctx, database, r.ID, peerID); err != nil {
+			log.Warn("Failed to resolve multicast rule", "rule_id", r.ID, "error", err)
+		}
+		continue
 		}
 
 		// Check if this is a broadcast rule (destination IP matches broadcast address)
@@ -573,8 +583,9 @@ func sqlNullString(v string) sql.NullString {
 }
 
 // resolveMulticastRule maps a pkttype multicast rule to Runic policy entities.
-// Multicast INPUT rules map to: source=special(__all_peers__, ID=7), target=special(__all_hosts__, ID=3), service=Multicast system service.
-func resolveMulticastRule(ctx context.Context, database db.Querier, sessionID int64, ruleID int64) error {
+// Multicast INPUT rules map to: source=special(__all_hosts__, ID=3), target=peer(self), service=Multicast system service.
+// This mirrors the broadcast pattern: source=special, target=peer, direction=both.
+func resolveMulticastRule(ctx context.Context, database db.Querier, ruleID int64, peerID int64) error {
 	// Look up the Multicast system service
 	var multicastServiceID int64
 	err := database.QueryRowContext(ctx,
@@ -584,10 +595,16 @@ func resolveMulticastRule(ctx context.Context, database db.Querier, sessionID in
 		return fmt.Errorf("multicast system service not found: %w", err)
 	}
 
-	// Update the rule with multicast mapping
+	// Determine the peer's primary IP for the target_ip field
+	var primaryIP string
+	_ = database.QueryRowContext(ctx, "SELECT ip_address FROM peers WHERE id = ?", peerID).Scan(&primaryIP)
+
+	// Update the rule with multicast mapping:
+	// source = __all_hosts__ (IGMP/multicast group, the broadcast domain)
+	// target = peer (the machine receiving the multicast)
 	_, err = database.ExecContext(ctx,
-		"UPDATE import_rules SET source_type = 'special', source_id = ?, target_type = 'special', target_id = ?, service_id = ? WHERE id = ?",
-		specialTargetAllPeers, specialTargetAllHosts, multicastServiceID, ruleID,
+		"UPDATE import_rules SET source_type = 'special', source_id = ?, source_staging_id = NULL, target_type = 'peer', target_id = ?, target_staging_id = NULL, service_id = ?, service_staging_id = NULL, source_ip = '', direction = 'both', target_ip = ?, status = 'resolved' WHERE id = ?",
+		specialTargetAllHosts, peerID, multicastServiceID, primaryIP, ruleID,
 	)
 	return err
 }

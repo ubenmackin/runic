@@ -387,3 +387,352 @@ func TestResolveBroadcastRule_OutputChainNotBroadcast(t *testing.T) {
 		t.Error("isBroadcastDest should return false for FORWARD chain")
 	}
 }
+
+// --- resolveMulticastRule tests ---
+
+func TestResolveMulticastRule_SourceIsAllHosts_TargetIsPeer(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+
+	// Insert a peer
+	peerID := insertTestPeer(t, database, "multicast-peer", "10.0.0.5", false)
+
+	// Insert Multicast system service
+	multicastServiceID := insertSystemService(t, database, "Multicast", "", "udp", "Multicast", true)
+
+	// Create an import session for the peer
+	result, err := database.Exec("INSERT INTO import_sessions (peer_id, status, raw_backup) VALUES (?, 'parsed', 'test')", peerID)
+	if err != nil {
+		t.Fatalf("insert session: %v", err)
+	}
+	sessionID, _ := result.LastInsertId()
+
+	// Insert an import_rule with multicast pkttype
+	result, err = database.Exec(
+		`INSERT INTO import_rules (session_id, chain, rule_order, raw_rule, status, action, priority, direction, target_scope, policy_name)
+		VALUES (?, 'INPUT', 1, '-m pkttype --pkt-type multicast -j ACCEPT', 'pending', 'ACCEPT', 100, 'both', 'both', 'test-multicast')`, sessionID)
+	if err != nil {
+		t.Fatalf("insert rule: %v", err)
+	}
+	ruleID, _ := result.LastInsertId()
+
+	ctx := context.Background()
+	err = resolveMulticastRule(ctx, database, ruleID, peerID)
+	if err != nil {
+		t.Fatalf("resolveMulticastRule returned error: %v", err)
+	}
+
+	// Query the import_rule to verify the resolved mappings
+	var sourceType, targetType, direction, status string
+	var sourceID, targetID, serviceID int64
+	err = database.QueryRow(
+		"SELECT source_type, source_id, target_type, target_id, service_id, direction, status FROM import_rules WHERE id = ?",
+		ruleID,
+	).Scan(&sourceType, &sourceID, &targetType, &targetID, &serviceID, &direction, &status)
+	if err != nil {
+		t.Fatalf("query rule: %v", err)
+	}
+
+	// Core fix verification: source = All Hosts special, target = peer
+	if sourceType != "special" {
+		t.Errorf("expected source_type='special', got %q", sourceType)
+	}
+	if sourceID != specialTargetAllHosts {
+		t.Errorf("expected source_id=%d (all_hosts), got %d", specialTargetAllHosts, sourceID)
+	}
+	if targetType != "peer" {
+		t.Errorf("expected target_type='peer', got %q", targetType)
+	}
+	if targetID != peerID {
+		t.Errorf("expected target_id=%d (peer), got %d", peerID, targetID)
+	}
+	if serviceID != multicastServiceID {
+		t.Errorf("expected service_id=%d (Multicast), got %d", multicastServiceID, serviceID)
+	}
+	if direction != "both" {
+		t.Errorf("expected direction='both', got %q", direction)
+	}
+	if status != "resolved" {
+		t.Errorf("expected status='resolved', got %q", status)
+	}
+}
+
+func TestResolveMulticastRule_NotOrphaned(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+
+	// Insert a peer
+	peerID := insertTestPeer(t, database, "orphan-peer", "10.0.0.6", false)
+
+	// Insert Multicast system service
+	_ = insertSystemService(t, database, "Multicast", "", "udp", "Multicast", true)
+
+	// Create an import session for the peer
+	result, err := database.Exec("INSERT INTO import_sessions (peer_id, status, raw_backup) VALUES (?, 'parsed', 'test')", peerID)
+	if err != nil {
+		t.Fatalf("insert session: %v", err)
+	}
+	sessionID, _ := result.LastInsertId()
+
+	// Insert an import_rule with multicast pkttype
+	result, err = database.Exec(
+		`INSERT INTO import_rules (session_id, chain, rule_order, raw_rule, status, action, priority, direction, target_scope, policy_name)
+		VALUES (?, 'INPUT', 1, '-m pkttype --pkt-type multicast -j ACCEPT', 'pending', 'ACCEPT', 100, 'both', 'both', 'orphan-test')`, sessionID)
+	if err != nil {
+		t.Fatalf("insert rule: %v", err)
+	}
+	ruleID, _ := result.LastInsertId()
+
+	ctx := context.Background()
+	err = resolveMulticastRule(ctx, database, ruleID, peerID)
+	if err != nil {
+		t.Fatalf("resolveMulticastRule returned error: %v", err)
+	}
+
+	// Verify target_type is 'peer' (not 'special') — the old bug set target_type='special'
+	var targetType string
+	var targetID int64
+	err = database.QueryRow(
+		"SELECT target_type, target_id FROM import_rules WHERE id = ?",
+		ruleID,
+	).Scan(&targetType, &targetID)
+	if err != nil {
+		t.Fatalf("query rule: %v", err)
+	}
+
+	if targetType == "special" {
+		t.Errorf("target_type should NOT be 'special' — the old code incorrectly set target_type='special' which orphaned the policy from the peer; got target_type='special', target_id=%d", targetID)
+	}
+	if targetType != "peer" {
+		t.Errorf("expected target_type='peer', got %q", targetType)
+	}
+	if targetID != peerID {
+		t.Errorf("expected target_id=%d (peer), got %d", peerID, targetID)
+	}
+}
+
+func TestResolveMulticastRule_MulticastService(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+
+	// Insert a peer
+	peerID := insertTestPeer(t, database, "svc-peer", "10.0.0.7", false)
+
+	// Insert both Multicast and broadcast system services to verify multicast
+	// resolves to the correct one (not a broadcast service)
+	multicastServiceID := insertSystemService(t, database, "Multicast", "", "udp", "Multicast", true)
+	_ = insertSystemService(t, database, "Limited Broadcast", "", "udp", "Limited broadcast", true)
+	_ = insertSystemService(t, database, "Subnet Broadcast", "", "udp", "Subnet broadcast", true)
+
+	// Create an import session for the peer
+	result, err := database.Exec("INSERT INTO import_sessions (peer_id, status, raw_backup) VALUES (?, 'parsed', 'test')", peerID)
+	if err != nil {
+		t.Fatalf("insert session: %v", err)
+	}
+	sessionID, _ := result.LastInsertId()
+
+	// Insert an import_rule with multicast pkttype
+	result, err = database.Exec(
+		`INSERT INTO import_rules (session_id, chain, rule_order, raw_rule, status, action, priority, direction, target_scope, policy_name)
+		VALUES (?, 'INPUT', 1, '-m pkttype --pkt-type multicast -j ACCEPT', 'pending', 'ACCEPT', 100, 'both', 'both', 'svc-test')`, sessionID)
+	if err != nil {
+		t.Fatalf("insert rule: %v", err)
+	}
+	ruleID, _ := result.LastInsertId()
+
+	ctx := context.Background()
+	err = resolveMulticastRule(ctx, database, ruleID, peerID)
+	if err != nil {
+		t.Fatalf("resolveMulticastRule returned error: %v", err)
+	}
+
+	// Verify the service resolves to "Multicast", not broadcast services
+	var serviceID int64
+	err = database.QueryRow(
+		"SELECT service_id FROM import_rules WHERE id = ?",
+		ruleID,
+	).Scan(&serviceID)
+	if err != nil {
+		t.Fatalf("query rule service_id: %v", err)
+	}
+	if serviceID != multicastServiceID {
+		t.Errorf("expected service_id=%d (Multicast), got %d — multicast rules should resolve to the Multicast system service, not broadcast services", multicastServiceID, serviceID)
+	}
+
+	// Also verify by name
+	var name string
+	err = database.QueryRow("SELECT name FROM services WHERE id = ?", serviceID).Scan(&name)
+	if err != nil {
+		t.Fatalf("failed to query service name: %v", err)
+	}
+	if name != "Multicast" {
+		t.Errorf("expected service name 'Multicast', got %q", name)
+	}
+}
+
+func TestResolveMulticastRule_WithPort(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+
+	// Insert a peer
+	peerID := insertTestPeer(t, database, "mdns-peer", "10.0.0.8", false)
+
+	// Insert an mDNS service with port 5353
+	mdnsServiceID := insertTestService(t, database, "mDNS", "5353", "udp")
+
+	// Also insert the generic Multicast system service
+	multicastServiceID := insertSystemService(t, database, "Multicast", "", "udp", "Multicast", true)
+
+	// Create an import session for the peer
+	result, err := database.Exec("INSERT INTO import_sessions (peer_id, status, raw_backup) VALUES (?, 'parsed', 'test')", peerID)
+	if err != nil {
+		t.Fatalf("insert session: %v", err)
+	}
+	sessionID, _ := result.LastInsertId()
+
+	// Insert an import_rule with multicast pkttype and a specific DestPort (5353 for mDNS)
+	result, err = database.Exec(
+		`INSERT INTO import_rules (session_id, chain, rule_order, raw_rule, status, action, priority, direction, target_scope, policy_name)
+		VALUES (?, 'INPUT', 1, '-m pkttype --pkt-type multicast -p udp --dport 5353 -j ACCEPT', 'pending', 'ACCEPT', 100, 'both', 'both', 'mdns-policy')`, sessionID)
+	if err != nil {
+		t.Fatalf("insert rule: %v", err)
+	}
+	ruleID, _ := result.LastInsertId()
+
+	ctx := context.Background()
+	err = resolveMulticastRule(ctx, database, ruleID, peerID)
+	if err != nil {
+		t.Fatalf("resolveMulticastRule returned error: %v", err)
+	}
+
+	// Currently resolveMulticastRule always resolves to the generic "Multicast"
+	// system service regardless of port. This test documents that behavior.
+	// If port-specific service resolution is added later, this test should be
+	// updated to expect mdnsServiceID instead.
+	var serviceID int64
+	err = database.QueryRow(
+		"SELECT service_id FROM import_rules WHERE id = ?",
+		ruleID,
+	).Scan(&serviceID)
+	if err != nil {
+		t.Fatalf("query rule service_id: %v", err)
+	}
+
+	if serviceID == mdnsServiceID {
+		t.Logf("Multicast rule with port resolved to port-specific service (mDNS, id=%d) — port-specific resolution is now supported", mdnsServiceID)
+	} else if serviceID == multicastServiceID {
+		t.Logf("Multicast rule with port resolved to generic Multicast system service (id=%d) instead of port-specific mDNS (id=%d) — current behavior: multicast always uses generic service", multicastServiceID, mdnsServiceID)
+	} else {
+		t.Errorf("expected service_id to be either Multicast (%d) or mDNS (%d), got %d", multicastServiceID, mdnsServiceID, serviceID)
+	}
+
+	// Verify source/target mappings are still correct
+	var sourceType, targetType string
+	var sourceID, targetID int64
+	err = database.QueryRow(
+		"SELECT source_type, source_id, target_type, target_id FROM import_rules WHERE id = ?",
+		ruleID,
+	).Scan(&sourceType, &sourceID, &targetType, &targetID)
+	if err != nil {
+		t.Fatalf("query rule source/target: %v", err)
+	}
+	if sourceType != "special" {
+		t.Errorf("expected source_type='special', got %q", sourceType)
+	}
+	if sourceID != specialTargetAllHosts {
+		t.Errorf("expected source_id=%d (all_hosts), got %d", specialTargetAllHosts, sourceID)
+	}
+	if targetType != "peer" {
+		t.Errorf("expected target_type='peer', got %q", targetType)
+	}
+	if targetID != peerID {
+		t.Errorf("expected target_id=%d (peer), got %d", peerID, targetID)
+	}
+}
+
+func TestResolveMulticastRule_ServiceNotFound(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+
+	// Insert a peer
+	peerID := insertTestPeer(t, database, "no-svc-peer", "10.0.0.9", false)
+
+	// Do NOT insert the Multicast system service — this is the error condition
+
+	// Create an import session for the peer
+	result, err := database.Exec("INSERT INTO import_sessions (peer_id, status, raw_backup) VALUES (?, 'parsed', 'test')", peerID)
+	if err != nil {
+		t.Fatalf("insert session: %v", err)
+	}
+	sessionID, _ := result.LastInsertId()
+
+	// Insert an import_rule with multicast pkttype
+	result, err = database.Exec(
+		`INSERT INTO import_rules (session_id, chain, rule_order, raw_rule, status, action, priority, direction, target_scope, policy_name)
+		VALUES (?, 'INPUT', 1, '-m pkttype --pkt-type multicast -j ACCEPT', 'pending', 'ACCEPT', 100, 'both', 'both', 'no-svc-test')`, sessionID)
+	if err != nil {
+		t.Fatalf("insert rule: %v", err)
+	}
+	ruleID, _ := result.LastInsertId()
+
+	ctx := context.Background()
+	err = resolveMulticastRule(ctx, database, ruleID, peerID)
+	if err == nil {
+		t.Fatal("expected error when Multicast system service is not found, got nil")
+	}
+	if !strings.Contains(err.Error(), "multicast system service not found") {
+		t.Errorf("expected error to contain 'multicast system service not found', got %q", err.Error())
+	}
+}
+
+// --- isMulticastPktType tests ---
+
+func TestIsMulticastPktType_InputChain(t *testing.T) {
+	rule := iptparse.ParsedRule{PktType: "multicast"}
+	if !isMulticastPktType(&rule, "INPUT") {
+		t.Error("expected isMulticastPktType to return true for multicast on INPUT chain")
+	}
+}
+
+func TestIsMulticastPktType_DockerUserChain(t *testing.T) {
+	rule := iptparse.ParsedRule{PktType: "multicast"}
+	if !isMulticastPktType(&rule, "DOCKER-USER") {
+		t.Error("expected isMulticastPktType to return true for multicast on DOCKER-USER chain")
+	}
+}
+
+func TestIsMulticastPktType_OutputChain(t *testing.T) {
+	// OUTPUT chain rules with multicast pkttype should NOT trigger multicast handling.
+	// On OUTPUT, the peer is sending multicast, not receiving it — analogous to
+	// isBroadcastDest returning false for OUTPUT chain.
+	rule := iptparse.ParsedRule{PktType: "multicast"}
+	if isMulticastPktType(&rule, "OUTPUT") {
+		t.Error("isMulticastPktType should return false for OUTPUT chain — OUTPUT multicast rules should go through normal resolution, not multicast path")
+	}
+}
+
+func TestIsMulticastPktType_ForwardChain(t *testing.T) {
+	rule := iptparse.ParsedRule{PktType: "multicast"}
+	if isMulticastPktType(&rule, "FORWARD") {
+		t.Error("isMulticastPktType should return false for FORWARD chain")
+	}
+}
+
+func TestIsMulticastPktType_NonMulticastPktType(t *testing.T) {
+	rule := iptparse.ParsedRule{PktType: "unicast"}
+	if isMulticastPktType(&rule, "INPUT") {
+		t.Error("isMulticastPktType should return false for non-multicast pkttype")
+	}
+}
+
+func TestIsMulticastPktType_EmptyPktType(t *testing.T) {
+	rule := iptparse.ParsedRule{PktType: ""}
+	if isMulticastPktType(&rule, "INPUT") {
+		t.Error("isMulticastPktType should return false for empty pkttype")
+	}
+}
