@@ -59,43 +59,91 @@ func insertTestService(t *testing.T, database *sql.DB, name, ports, protocol str
 
 func TestIsBroadcastDest_LimitedBroadcast(t *testing.T) {
 	rule := iptparse.ParsedRule{DestIP: "255.255.255.255"}
-	if !isBroadcastDest(&rule, "INPUT") {
-		t.Error("expected isBroadcastDest to return true for 255.255.255.255 on INPUT chain")
+	if isBroadcastDest(&rule, "INPUT", nil) != specialTargetLimitedBroadcast {
+		t.Errorf("expected isBroadcastDest to return specialTargetLimitedBroadcast (%d) for 255.255.255.255 on INPUT chain", specialTargetLimitedBroadcast)
 	}
 }
 
 func TestIsBroadcastDest_OutputChain(t *testing.T) {
 	rule := iptparse.ParsedRule{DestIP: "255.255.255.255"}
-	if isBroadcastDest(&rule, "OUTPUT") {
-		t.Error("expected isBroadcastDest to return false for OUTPUT chain")
+	if isBroadcastDest(&rule, "OUTPUT", nil) != 0 {
+		t.Error("expected isBroadcastDest to return 0 for OUTPUT chain")
 	}
 }
 
 func TestIsBroadcastDest_EmptyDestIP(t *testing.T) {
 	rule := iptparse.ParsedRule{DestIP: ""}
-	if isBroadcastDest(&rule, "INPUT") {
-		t.Error("expected isBroadcastDest to return false for empty DestIP on INPUT chain")
+	if isBroadcastDest(&rule, "INPUT", nil) != 0 {
+		t.Error("expected isBroadcastDest to return 0 for empty DestIP on INPUT chain")
 	}
 }
 
 func TestIsBroadcastDest_NormalIP(t *testing.T) {
 	rule := iptparse.ParsedRule{DestIP: "192.168.1.1"}
-	if isBroadcastDest(&rule, "INPUT") {
-		t.Error("expected isBroadcastDest to return false for normal IP on INPUT chain")
+	if isBroadcastDest(&rule, "INPUT", []string{"10.100.5.36"}) != 0 {
+		t.Error("expected isBroadcastDest to return 0 for normal IP on INPUT chain")
 	}
 }
 
 func TestIsBroadcastDest_DockerUserChain(t *testing.T) {
 	rule := iptparse.ParsedRule{DestIP: "255.255.255.255"}
-	if !isBroadcastDest(&rule, "DOCKER-USER") {
-		t.Error("expected isBroadcastDest to return true for 255.255.255.255 on DOCKER-USER chain")
+	if isBroadcastDest(&rule, "DOCKER-USER", nil) != specialTargetLimitedBroadcast {
+		t.Errorf("expected isBroadcastDest to return specialTargetLimitedBroadcast (%d) for 255.255.255.255 on DOCKER-USER chain", specialTargetLimitedBroadcast)
 	}
 }
 
 func TestIsBroadcastDest_CIDRNotation(t *testing.T) {
 	rule := iptparse.ParsedRule{DestIP: "255.255.255.255/32"}
-	if !isBroadcastDest(&rule, "INPUT") {
-		t.Error("expected isBroadcastDest to return true for 255.255.255.255/32 on INPUT chain (normalizeIP should strip /32)")
+	if isBroadcastDest(&rule, "INPUT", nil) != specialTargetLimitedBroadcast {
+		t.Errorf("expected isBroadcastDest to return specialTargetLimitedBroadcast (%d) for 255.255.255.255/32 on INPUT chain (normalizeIP should strip /32)", specialTargetLimitedBroadcast)
+	}
+}
+
+func TestIsBroadcastDest_SubnetBroadcast(t *testing.T) {
+	rule := iptparse.ParsedRule{DestIP: "10.100.5.255/32"}
+	if isBroadcastDest(&rule, "INPUT", []string{"10.100.5.36"}) != specialTargetSubnetBroadcast {
+		t.Errorf("expected isBroadcastDest to return specialTargetSubnetBroadcast (%d) for 10.100.5.255/32 on INPUT chain with peer IP 10.100.5.36", specialTargetSubnetBroadcast)
+	}
+}
+
+func TestIsBroadcastDest_SubnetBroadcast_DifferentSubnet(t *testing.T) {
+	rule := iptparse.ParsedRule{DestIP: "192.168.1.255/32"}
+	if isBroadcastDest(&rule, "INPUT", []string{"10.100.5.36"}) != 0 {
+		t.Error("expected isBroadcastDest to return 0 for 192.168.1.255/32 when peer IP is on a different subnet (10.100.5.36)")
+	}
+}
+
+func TestIsBroadcastDest_SubnetBroadcast_MultiplePeerIPs(t *testing.T) {
+	rule := iptparse.ParsedRule{DestIP: "192.168.1.255/32"}
+	if isBroadcastDest(&rule, "INPUT", []string{"10.100.5.36", "192.168.1.10"}) != specialTargetSubnetBroadcast {
+		t.Errorf("expected isBroadcastDest to return specialTargetSubnetBroadcast (%d) for 192.168.1.255/32 when second peer IP (192.168.1.10) is on matching subnet", specialTargetSubnetBroadcast)
+	}
+}
+
+func TestIsBroadcastDest_SubnetBroadcast_WithoutCIDR(t *testing.T) {
+	rule := iptparse.ParsedRule{DestIP: "10.100.5.255"}
+	if isBroadcastDest(&rule, "INPUT", []string{"10.100.5.36"}) != specialTargetSubnetBroadcast {
+		t.Errorf("expected isBroadcastDest to return specialTargetSubnetBroadcast (%d) for 10.100.5.255 without CIDR on INPUT chain", specialTargetSubnetBroadcast)
+	}
+}
+
+func TestIsBroadcastDest_SubnetBroadcast_CIDRPeerIP(t *testing.T) {
+	// peerIPs may contain CIDR-prefixed IPs (e.g., from peer_ips table with /24)
+	// parseIPPart should strip the suffix before broadcast computation
+	rule := iptparse.ParsedRule{DestIP: "10.100.5.255/32"}
+	if isBroadcastDest(&rule, "INPUT", []string{"10.100.5.36/24"}) != specialTargetSubnetBroadcast {
+		t.Errorf("expected isBroadcastDest to return specialTargetSubnetBroadcast (%d) for 10.100.5.255/32 with CIDR-prefixed peer IP 10.100.5.36/24", specialTargetSubnetBroadcast)
+	}
+}
+
+func TestIsBroadcastDest_SubnetBroadcast_EmptyPeerIPs(t *testing.T) {
+	// With no peer IPs, a subnet-broadcast-like DestIP should not match
+	rule := iptparse.ParsedRule{DestIP: "10.100.5.255/32"}
+	if isBroadcastDest(&rule, "INPUT", nil) != 0 {
+		t.Error("expected isBroadcastDest to return 0 for subnet-broadcast-like DestIP when peerIPs is nil")
+	}
+	if isBroadcastDest(&rule, "INPUT", []string{}) != 0 {
+		t.Error("expected isBroadcastDest to return 0 for subnet-broadcast-like DestIP when peerIPs is empty")
 	}
 }
 
@@ -250,7 +298,7 @@ func TestResolveBroadcastRule_LimitedBroadcast(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	err = resolveBroadcastRule(ctx, database, sessionID, ruleID, peerID, &rule)
+	err = resolveBroadcastRule(ctx, database, sessionID, ruleID, peerID, specialTargetLimitedBroadcast, &rule)
 	if err != nil {
 		t.Fatalf("resolveBroadcastRule returned error: %v", err)
 	}
@@ -329,7 +377,7 @@ func TestResolveBroadcastRule_WithPorts(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	err = resolveBroadcastRule(ctx, database, sessionID, ruleID, peerID, &rule)
+	err = resolveBroadcastRule(ctx, database, sessionID, ruleID, peerID, specialTargetLimitedBroadcast, &rule)
 	if err != nil {
 		t.Fatalf("resolveBroadcastRule returned error: %v", err)
 	}
@@ -372,19 +420,174 @@ func TestResolveBroadcastRule_WithPorts(t *testing.T) {
 	}
 }
 
+func TestResolveBroadcastRule_SubnetBroadcast(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+
+	// Insert a peer with IP on the 10.100.5.x subnet
+	peerID := insertTestPeer(t, database, "subnet-peer", "10.100.5.36", false)
+
+	// Insert Subnet Broadcast system service
+	subnetBroadcastServiceID := insertSystemService(t, database, "Subnet Broadcast", "", "udp", "Subnet broadcast", true)
+
+	// Create an import session for the peer
+	result, err := database.Exec("INSERT INTO import_sessions (peer_id, status, raw_backup) VALUES (?, 'parsed', 'test')", peerID)
+	if err != nil {
+		t.Fatalf("insert session: %v", err)
+	}
+	sessionID, _ := result.LastInsertId()
+
+	// Insert an import_rule with subnet broadcast destination
+	result, err = database.Exec(
+		`INSERT INTO import_rules (session_id, chain, rule_order, raw_rule, status, action, priority, direction, target_scope, policy_name)
+		VALUES (?, 'INPUT', 1, '-d 10.100.5.255/32 -p udp -j ACCEPT', 'pending', 'ACCEPT', 100, 'both', 'both', 'test-policy')`,
+		sessionID)
+	if err != nil {
+		t.Fatalf("insert rule: %v", err)
+	}
+	ruleID, _ := result.LastInsertId()
+
+	// Create a ParsedRule representing the subnet broadcast rule
+	rule := iptparse.ParsedRule{
+		DestIP:   "10.100.5.255/32",
+		Protocol: "udp",
+		Target:   "ACCEPT",
+	}
+
+	ctx := context.Background()
+	err = resolveBroadcastRule(ctx, database, sessionID, ruleID, peerID, specialTargetSubnetBroadcast, &rule)
+	if err != nil {
+		t.Fatalf("resolveBroadcastRule returned error: %v", err)
+	}
+
+	// Query the import_rule to verify the resolved mappings
+	var sourceType, targetType, direction, status string
+	var sourceID, targetID, serviceID int64
+	err = database.QueryRow(
+		"SELECT source_type, source_id, target_type, target_id, service_id, direction, status FROM import_rules WHERE id = ?",
+		ruleID,
+	).Scan(&sourceType, &sourceID, &targetType, &targetID, &serviceID, &direction, &status)
+	if err != nil {
+		t.Fatalf("query rule: %v", err)
+	}
+
+	if sourceType != "special" {
+		t.Errorf("expected source_type='special', got %q", sourceType)
+	}
+	if sourceID != specialTargetSubnetBroadcast {
+		t.Errorf("expected source_id=%d (subnet_broadcast), got %d", specialTargetSubnetBroadcast, sourceID)
+	}
+	if targetType != "peer" {
+		t.Errorf("expected target_type='peer', got %q", targetType)
+	}
+	if targetID != peerID {
+		t.Errorf("expected target_id=%d (peer), got %d", peerID, targetID)
+	}
+	if serviceID != subnetBroadcastServiceID {
+		t.Errorf("expected service_id=%d (Subnet Broadcast), got %d", subnetBroadcastServiceID, serviceID)
+	}
+	if direction != "both" {
+		t.Errorf("expected direction='both', got %q", direction)
+	}
+	if status != "resolved" {
+		t.Errorf("expected status='resolved', got %q", status)
+	}
+}
+
+func TestResolveBroadcastRule_SubnetBroadcast_WithPorts(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+
+	// Insert a peer
+	peerID := insertTestPeer(t, database, "subnet-dhcp-peer", "10.100.5.36", false)
+
+	// Insert DHCP service with port 67
+	dhcpServiceID := insertTestService(t, database, "DHCP", "67", "udp")
+
+	// Also insert broadcast system services (should NOT be used when port is specified)
+	_ = insertSystemService(t, database, "Subnet Broadcast", "", "udp", "Subnet broadcast", true)
+
+	// Create an import session for the peer
+	result, err := database.Exec("INSERT INTO import_sessions (peer_id, status, raw_backup) VALUES (?, 'parsed', 'test')", peerID)
+	if err != nil {
+		t.Fatalf("insert session: %v", err)
+	}
+	sessionID, _ := result.LastInsertId()
+
+	// Insert an import_rule with subnet broadcast destination and specific port
+	result, err = database.Exec(
+		`INSERT INTO import_rules (session_id, chain, rule_order, raw_rule, status, action, priority, direction, target_scope, policy_name)
+		VALUES (?, 'INPUT', 1, '-d 10.100.5.255/32 -p udp --dport 67 -j ACCEPT', 'pending', 'ACCEPT', 100, 'both', 'both', 'dhcp-policy')`,
+		sessionID)
+	if err != nil {
+		t.Fatalf("insert rule: %v", err)
+	}
+	ruleID, _ := result.LastInsertId()
+
+	// Create a ParsedRule with a specific DestPort
+	rule := iptparse.ParsedRule{
+		DestIP:   "10.100.5.255/32",
+		Protocol: "udp",
+		DestPort: "67",
+		Target:   "ACCEPT",
+	}
+
+	ctx := context.Background()
+	err = resolveBroadcastRule(ctx, database, sessionID, ruleID, peerID, specialTargetSubnetBroadcast, &rule)
+	if err != nil {
+		t.Fatalf("resolveBroadcastRule returned error: %v", err)
+	}
+
+	// Query the import_rule to verify the service resolved to DHCP, not broadcast system service
+	var serviceID int64
+	err = database.QueryRow(
+		"SELECT service_id FROM import_rules WHERE id = ?", ruleID,
+	).Scan(&serviceID)
+	if err != nil {
+		t.Fatalf("query rule service_id: %v", err)
+	}
+	if serviceID != dhcpServiceID {
+		t.Errorf("expected service_id=%d (DHCP), got %d — subnet broadcast rules with specific ports should resolve to port-specific services", dhcpServiceID, serviceID)
+	}
+
+	// Also verify source/target mappings
+	var sourceType, targetType string
+	var sourceID, targetID int64
+	err = database.QueryRow(
+		"SELECT source_type, source_id, target_type, target_id FROM import_rules WHERE id = ?", ruleID,
+	).Scan(&sourceType, &sourceID, &targetType, &targetID)
+	if err != nil {
+		t.Fatalf("query rule source/target: %v", err)
+	}
+	if sourceType != "special" {
+		t.Errorf("expected source_type='special', got %q", sourceType)
+	}
+	if sourceID != specialTargetSubnetBroadcast {
+		t.Errorf("expected source_id=%d (subnet_broadcast), got %d", specialTargetSubnetBroadcast, sourceID)
+	}
+	if targetType != "peer" {
+		t.Errorf("expected target_type='peer', got %q", targetType)
+	}
+	if targetID != peerID {
+		t.Errorf("expected target_id=%d (peer), got %d", peerID, targetID)
+	}
+}
+
 func TestResolveBroadcastRule_OutputChainNotBroadcast(t *testing.T) {
 	// This test verifies that OUTPUT chain rules with broadcast dest IP
-	// do NOT trigger broadcast handling. Since isBroadcastDest returns false
+	// do NOT trigger broadcast handling. Since isBroadcastDest returns 0
 	// for OUTPUT chain, those rules go through normal resolveEndpoint() path.
 	rule := iptparse.ParsedRule{DestIP: "255.255.255.255"}
 
-	if isBroadcastDest(&rule, "OUTPUT") {
-		t.Error("isBroadcastDest should return false for OUTPUT chain — OUTPUT broadcast rules should go through normal resolution, not broadcast path")
+	if isBroadcastDest(&rule, "OUTPUT", nil) != 0 {
+		t.Error("isBroadcastDest should return 0 for OUTPUT chain — OUTPUT broadcast rules should go through normal resolution, not broadcast path")
 	}
 
 	// Also verify FORWARD chain is not treated as broadcast
-	if isBroadcastDest(&rule, "FORWARD") {
-		t.Error("isBroadcastDest should return false for FORWARD chain")
+	if isBroadcastDest(&rule, "FORWARD", nil) != 0 {
+		t.Error("isBroadcastDest should return 0 for FORWARD chain")
 	}
 }
 

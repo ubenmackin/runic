@@ -34,25 +34,45 @@ func normalizeIP(ip string) string {
 }
 
 // isBroadcastDest checks if the rule's destination IP is a broadcast address
-// and the chain is INPUT, indicating a broadcast rule that needs special handling.
+// and the chain is INPUT or DOCKER-USER, indicating a broadcast rule that needs special handling.
+// Returns the broadcast special target ID: 0 = not broadcast, 1 = subnet broadcast, 2 = limited broadcast.
+// Subnet broadcast detection replaces the peer IP's last octet with 255, which is correct
+// for /24 subnets only (matching the engine's ResolveSpecialTarget behavior).
 // Broadcast detection must happen before resolveEndpoint() to prevent
 // broadcast destination IPs from being resolved as target endpoints.
-func isBroadcastDest(rule *iptparse.ParsedRule, chain string) bool {
+func isBroadcastDest(rule *iptparse.ParsedRule, chain string, peerIPs []string) int64 {
 	if chain != "INPUT" && chain != "DOCKER-USER" {
-		return false
+		return 0
 	}
 	destIP := normalizeIP(rule.DestIP)
 	if destIP == "" {
-		return false
+		return 0
 	}
 	// Check limited broadcast (255.255.255.255)
 	if destIP == "255.255.255.255" {
-		return true
+		return specialTargetLimitedBroadcast // 2
 	}
-	// Subnet broadcast detection could be enhanced here by computing
-	// the peer's subnet broadcast address and comparing against DestIP.
-	// For now, limited broadcast is the primary reported bug.
-	return false
+	// Check subnet broadcast: compute broadcast address from each peer IP
+	// by replacing the last octet with 255.
+	// Note: This algorithm is correct for /24 subnets only, matching the
+	// engine's ResolveSpecialTarget behavior. For non-/24 subnets (e.g., /16),
+	// the correct broadcast would require CIDR-based computation (e.g.,
+	// 10.100.0.0/16 → 10.100.255.255), but peer IPs in the importer are
+	// typically /24 or bare IPs without CIDR prefix.
+	for _, peerIP := range peerIPs {
+		// Strip any CIDR suffix (e.g., "10.100.5.36/24" → "10.100.5.36")
+		// before computing the broadcast address.
+		cleanIP := parseIPPart(peerIP)
+		parts := strings.Split(cleanIP, ".")
+		if len(parts) == 4 {
+			parts[3] = "255"
+			subnetBroadcast := strings.Join(parts, ".")
+			if destIP == subnetBroadcast {
+				return specialTargetSubnetBroadcast // 1
+			}
+		}
+	}
+	return 0
 }
 
 // isMulticastPktType checks if the rule has a multicast packet type and the chain
@@ -127,8 +147,8 @@ func resolveRules(ctx context.Context, database db.Querier, sessionID int64, pee
 		// Check if this is a broadcast rule (destination IP matches broadcast address)
 		// Broadcast detection must happen before resolveEndpoint() so that
 		// broadcast destination IPs are not resolved as target endpoints.
-		if isBroadcastDest(pr, r.Chain) {
-			if err := resolveBroadcastRule(ctx, database, sessionID, r.ID, peerID, pr); err != nil {
+	if broadcastSpecialID := isBroadcastDest(pr, r.Chain, peerIPs); broadcastSpecialID != 0 {
+		if err := resolveBroadcastRule(ctx, database, sessionID, r.ID, peerID, broadcastSpecialID, pr); err != nil {
 				log.Warn("Failed to resolve broadcast rule", "rule_id", r.ID, "error", err)
 			}
 			continue
@@ -641,21 +661,8 @@ func resolveBroadcastService(ctx context.Context, database db.Querier, broadcast
 // packet's destination, but in Runic's policy model, the broadcast address semantically
 // represents the source (the broadcast domain), while the target is the peer itself
 // (the machine receiving the broadcast).
-func resolveBroadcastRule(ctx context.Context, database db.Querier, sessionID int64, ruleID int64, peerID int64, rule *iptparse.ParsedRule) error {
-	destIP := normalizeIP(rule.DestIP)
-
-	// Determine broadcast type from DestIP
-	var broadcastSpecialID int64
-	switch destIP {
-	case "255.255.255.255":
-		broadcastSpecialID = specialTargetLimitedBroadcast // 2
-	default:
-		// isBroadcastDest currently only detects 255.255.255.255,
-		// so this branch should not be reached. If subnet broadcast
-		// detection is added to isBroadcastDest later, this case
-		// should map the IP to the correct broadcast special ID.
-		return fmt.Errorf("resolveBroadcastRule: unrecognized broadcast destination IP %q (subnet broadcast not yet supported)", destIP)
-	}
+func resolveBroadcastRule(ctx context.Context, database db.Querier, sessionID int64, ruleID int64, peerID int64, broadcastSpecialID int64, rule *iptparse.ParsedRule) error {
+	// broadcastSpecialID is already determined by isBroadcastDest()
 
 	// Resolve broadcast-specific service
 	var serviceID int64
