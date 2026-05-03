@@ -405,8 +405,6 @@ func (h *Handler) UpdateNotificationPrefs(w http.ResponseWriter, r *http.Request
 		}
 	}
 
-	// EnabledAlerts is intentionally ignored — alert enablement is controlled
-	// per-rule via AlertRule.Enabled, not through user notification preferences.
 	if req.QuietHoursEnabled != nil {
 		prefs.QuietHoursEnabled = *req.QuietHoursEnabled
 	}

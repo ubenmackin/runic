@@ -153,8 +153,8 @@ func TestMigrateSchemaAddsMissingColumns(t *testing.T) {
 
 	// Insert user notification preferences
 	result, err = database.ExecContext(ctx,
-		"INSERT INTO user_notification_preferences (user_id, enabled_alerts) VALUES (?, ?)",
-		userID, "[]")
+		"INSERT INTO user_notification_preferences (user_id) VALUES (?)",
+		userID)
 	if err != nil {
 		t.Fatalf("Failed to insert test user_notification_preferences: %v", err)
 	}

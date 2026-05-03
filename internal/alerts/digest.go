@@ -564,8 +564,8 @@ body { background-color: %s !important; }
 // getUsersWithDigestEnabled retrieves all users with digest notifications enabled.
 func (g *DigestGenerator) getUsersWithDigestEnabled(ctx context.Context) ([]*UserNotificationPreferences, error) {
 	query := `
-		SELECT id, user_id, enabled_alerts, quiet_hours_enabled, quiet_hours_start, quiet_hours_end,
-		       quiet_hours_timezone, digest_enabled, digest_frequency, digest_time, digest_timezone, created_at, updated_at
+	SELECT id, user_id, quiet_hours_enabled, quiet_hours_start, quiet_hours_end,
+		quiet_hours_timezone, digest_enabled, digest_frequency, digest_time, digest_timezone, created_at, updated_at
 		FROM user_notification_preferences
 		WHERE digest_enabled = 1
 	`
@@ -583,7 +583,7 @@ func (g *DigestGenerator) getUsersWithDigestEnabled(ctx context.Context) ([]*Use
 	var users []*UserNotificationPreferences
 	for rows.Next() {
 		var prefs UserNotificationPreferences
-		if err := rows.Scan(&prefs.ID, &prefs.UserID, &prefs.EnabledAlerts, &prefs.QuietHoursEnabled,
+		if err := rows.Scan(&prefs.ID, &prefs.UserID, &prefs.QuietHoursEnabled,
 			&prefs.QuietHoursStart, &prefs.QuietHoursEnd, &prefs.QuietHoursTimezone,
 			&prefs.DigestEnabled, &prefs.DigestFrequency, &prefs.DigestTime,
 			&prefs.DigestTimezone, &prefs.CreatedAt, &prefs.UpdatedAt); err != nil {

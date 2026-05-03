@@ -147,8 +147,8 @@ func resolveRules(ctx context.Context, database db.Querier, sessionID int64, pee
 		// Check if this is a broadcast rule (destination IP matches broadcast address)
 		// Broadcast detection must happen before resolveEndpoint() so that
 		// broadcast destination IPs are not resolved as target endpoints.
-	if broadcastSpecialID := isBroadcastDest(pr, r.Chain, peerIPs); broadcastSpecialID != 0 {
-		if err := resolveBroadcastRule(ctx, database, sessionID, r.ID, peerID, broadcastSpecialID, pr); err != nil {
+		if broadcastSpecialID := isBroadcastDest(pr, r.Chain, peerIPs); broadcastSpecialID != 0 {
+			if err := resolveBroadcastRule(ctx, database, sessionID, r.ID, peerID, broadcastSpecialID, pr); err != nil {
 				log.Warn("Failed to resolve broadcast rule", "rule_id", r.ID, "error", err)
 			}
 			continue

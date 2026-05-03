@@ -162,11 +162,11 @@ func GetUserNotificationPreferences(ctx context.Context, database db.Querier, us
 	var prefs UserNotificationPreferences
 
 	err := database.QueryRowContext(ctx,
-		`SELECT id, user_id, enabled_alerts, quiet_hours_enabled, quiet_hours_start, quiet_hours_end,
-		quiet_hours_timezone, digest_enabled, digest_frequency, digest_time, digest_timezone, created_at, updated_at
-		FROM user_notification_preferences WHERE user_id = ?`,
+		`SELECT id, user_id, quiet_hours_enabled, quiet_hours_start, quiet_hours_end,
+			quiet_hours_timezone, digest_enabled, digest_frequency, digest_time, digest_timezone, created_at, updated_at
+			FROM user_notification_preferences WHERE user_id = ?`,
 		userID,
-	).Scan(&prefs.ID, &prefs.UserID, &prefs.EnabledAlerts, &prefs.QuietHoursEnabled, &prefs.QuietHoursStart,
+	).Scan(&prefs.ID, &prefs.UserID, &prefs.QuietHoursEnabled, &prefs.QuietHoursStart,
 		&prefs.QuietHoursEnd, &prefs.QuietHoursTimezone, &prefs.DigestEnabled, &prefs.DigestFrequency,
 		&prefs.DigestTime, &prefs.DigestTimezone, &prefs.CreatedAt, &prefs.UpdatedAt)
 
