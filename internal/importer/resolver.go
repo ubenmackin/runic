@@ -19,7 +19,6 @@ import (
 const (
 	specialTargetAnyIP            int64 = 6 // __any_ip__
 	specialTargetLimitedBroadcast int64 = 2 // __limited_broadcast__
-	specialTargetAllPeers         int64 = 7 // __all_peers__
 	specialTargetAllHosts         int64 = 3 // __all_hosts__
 	specialTargetSubnetBroadcast  int64 = 1 // __subnet_broadcast__
 )
@@ -86,6 +85,45 @@ func isMulticastPktType(rule *iptparse.ParsedRule, chain string) bool {
 	return chain == "INPUT" || chain == "DOCKER-USER"
 }
 
+// isIGMPProtocol checks if the rule's protocol is IGMP and the chain is INPUT or DOCKER-USER,
+// indicating an IGMP rule that needs special handling before normal endpoint resolution.
+// IGMP rules on OUTPUT/FORWARD chains are skipped because those represent the peer sending
+// IGMP, not receiving it — analogous to isBroadcastDest and isMulticastPktType.
+func isIGMPProtocol(rule *iptparse.ParsedRule, chain string) bool {
+	if rule.Protocol != "igmp" {
+		return false
+	}
+	return chain == "INPUT" || chain == "DOCKER-USER"
+}
+
+// resolveIGMPRule maps an IGMP protocol rule to Runic policy entities.
+// IGMP INPUT rules map to: source=special(__all_hosts__, ID=3), target=peer(self), service=IGMP system service, direction=both.
+// This mirrors the multicast pattern and ensures the policy is tied to the peer (target_type='peer')
+// so it compiles correctly in loadApplicablePolicies (which only matches peer/group targets, never 'special').
+func resolveIGMPRule(ctx context.Context, database db.Querier, ruleID int64, peerID int64) error {
+	// Look up the IGMP system service
+	var igmpServiceID int64
+	err := database.QueryRowContext(ctx,
+		"SELECT id FROM services WHERE name = 'IGMP' AND is_system = 1",
+	).Scan(&igmpServiceID)
+	if err != nil {
+		return fmt.Errorf("IGMP system service not found: %w", err)
+	}
+
+	// Determine the peer's primary IP for the target_ip field
+	var primaryIP string
+	_ = database.QueryRowContext(ctx, "SELECT ip_address FROM peers WHERE id = ?", peerID).Scan(&primaryIP)
+
+	// Update the rule with IGMP mapping:
+	// source = __all_hosts__ (IGMP/multicast group, the broadcast domain)
+	// target = peer (the machine receiving the IGMP packets)
+	_, err = database.ExecContext(ctx,
+		"UPDATE import_rules SET source_type = 'special', source_id = ?, source_staging_id = NULL, target_type = 'peer', target_id = ?, target_staging_id = NULL, service_id = ?, service_staging_id = NULL, source_ip = '', direction = 'both', target_ip = ?, status = 'resolved' WHERE id = ?",
+		specialTargetAllHosts, peerID, igmpServiceID, primaryIP, ruleID,
+	)
+	return err
+}
+
 // resolveRules walks all import_rules for a session and attempts to map them to existing Runic entities.
 // It also processes ipset data to create group/peer mappings.
 func resolveRules(ctx context.Context, database db.Querier, sessionID int64, peerID int64, peerIPs []string, rawIpsets string) error {
@@ -144,6 +182,17 @@ func resolveRules(ctx context.Context, database db.Querier, sessionID int64, pee
 			continue
 		}
 
+		// Check for IGMP protocol rule (only on INPUT/DOCKER-USER chains)
+		// IGMP detection must happen before resolveEndpoint() to prevent
+		// the target from being resolved as a special target, which would
+		// orphan the policy from the peer in the compiler.
+		if isIGMPProtocol(pr, r.Chain) {
+			if err := resolveIGMPRule(ctx, database, r.ID, peerID); err != nil {
+				log.Warn("Failed to resolve IGMP rule", "rule_id", r.ID, "error", err)
+			}
+			continue
+		}
+
 		// Check if this is a broadcast rule (destination IP matches broadcast address)
 		// Broadcast detection must happen before resolveEndpoint() so that
 		// broadcast destination IPs are not resolved as target endpoints.
@@ -182,14 +231,7 @@ func resolveRules(ctx context.Context, database db.Querier, sessionID int64, pee
 					}
 
 					if err == nil {
-						switch targetName {
-						case "__all_hosts__", "__igmpv3__":
-							// IGMP rules: source should be __all_peers__
-							sourceType = "special"
-							sourceID = specialTargetAllPeers
-							sourceStagingID = 0
-							sourceIP = ""
-						case "__limited_broadcast__":
+						if targetName == "__limited_broadcast__" {
 							// Note: Broadcast rules with -d 255.255.255.255 are handled by
 							// resolveBroadcastRule() before reaching this block, which correctly
 							// sets source=broadcast, target=peer, and service=Limited Broadcast.

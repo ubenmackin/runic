@@ -939,3 +939,271 @@ func TestIsMulticastPktType_EmptyPktType(t *testing.T) {
 		t.Error("isMulticastPktType should return false for empty pkttype")
 	}
 }
+
+// --- isIGMPProtocol tests ---
+
+func TestIsIGMPProtocol_InputChain(t *testing.T) {
+	rule := iptparse.ParsedRule{Protocol: "igmp"}
+	if !isIGMPProtocol(&rule, "INPUT") {
+		t.Error("expected isIGMPProtocol to return true for IGMP on INPUT chain")
+	}
+}
+
+func TestIsIGMPProtocol_DockerUserChain(t *testing.T) {
+	rule := iptparse.ParsedRule{Protocol: "igmp"}
+	if !isIGMPProtocol(&rule, "DOCKER-USER") {
+		t.Error("expected isIGMPProtocol to return true for IGMP on DOCKER-USER chain")
+	}
+}
+
+func TestIsIGMPProtocol_OutputChain(t *testing.T) {
+	// OUTPUT chain rules with IGMP protocol should NOT trigger IGMP handling.
+	// On OUTPUT, the peer is sending IGMP, not receiving it — analogous to
+	// isBroadcastDest and isMulticastPktType returning false for OUTPUT chain.
+	rule := iptparse.ParsedRule{Protocol: "igmp"}
+	if isIGMPProtocol(&rule, "OUTPUT") {
+		t.Error("isIGMPProtocol should return false for OUTPUT chain — OUTPUT IGMP rules should go through normal resolution, not IGMP path")
+	}
+}
+
+func TestIsIGMPProtocol_ForwardChain(t *testing.T) {
+	rule := iptparse.ParsedRule{Protocol: "igmp"}
+	if isIGMPProtocol(&rule, "FORWARD") {
+		t.Error("isIGMPProtocol should return false for FORWARD chain")
+	}
+}
+
+func TestIsIGMPProtocol_NonIGMPProtocol(t *testing.T) {
+	rule := iptparse.ParsedRule{Protocol: "tcp"}
+	if isIGMPProtocol(&rule, "INPUT") {
+		t.Error("isIGMPProtocol should return false for non-IGMP protocol (tcp)")
+	}
+}
+
+func TestIsIGMPProtocol_EmptyProtocol(t *testing.T) {
+	rule := iptparse.ParsedRule{Protocol: ""}
+	if isIGMPProtocol(&rule, "INPUT") {
+		t.Error("isIGMPProtocol should return false for empty protocol")
+	}
+}
+
+// --- resolveIGMPRule tests ---
+
+func TestResolveIGMPRule_SourceIsAllHosts_TargetIsPeer(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+
+	// Insert a peer
+	peerID := insertTestPeer(t, database, "igmp-peer", "10.0.0.5", false)
+
+	// Insert IGMP system service
+	igmpServiceID := insertSystemService(t, database, "IGMP", "", "igmp", "IGMP", true)
+
+	// Create an import session for the peer
+	result, err := database.Exec("INSERT INTO import_sessions (peer_id, status, raw_backup) VALUES (?, 'parsed', 'test')", peerID)
+	if err != nil {
+		t.Fatalf("insert session: %v", err)
+	}
+	sessionID, _ := result.LastInsertId()
+
+	// Insert an import_rule with IGMP protocol
+	result, err = database.Exec(
+		`INSERT INTO import_rules (session_id, chain, rule_order, raw_rule, status, action, priority, direction, target_scope, policy_name)
+		VALUES (?, 'INPUT', 1, '-p igmp -j ACCEPT', 'pending', 'ACCEPT', 100, 'both', 'both', 'test-igmp')`, sessionID)
+	if err != nil {
+		t.Fatalf("insert rule: %v", err)
+	}
+	ruleID, _ := result.LastInsertId()
+
+	ctx := context.Background()
+	err = resolveIGMPRule(ctx, database, ruleID, peerID)
+	if err != nil {
+		t.Fatalf("resolveIGMPRule returned error: %v", err)
+	}
+
+	// Query the import_rule to verify the resolved mappings
+	var sourceType, targetType, direction, status string
+	var sourceID, targetID, serviceID int64
+	err = database.QueryRow(
+		"SELECT source_type, source_id, target_type, target_id, service_id, direction, status FROM import_rules WHERE id = ?",
+		ruleID,
+	).Scan(&sourceType, &sourceID, &targetType, &targetID, &serviceID, &direction, &status)
+	if err != nil {
+		t.Fatalf("query rule: %v", err)
+	}
+
+	// Core verification: source = All Hosts special, target = peer
+	if sourceType != "special" {
+		t.Errorf("expected source_type='special', got %q", sourceType)
+	}
+	if sourceID != specialTargetAllHosts {
+		t.Errorf("expected source_id=%d (all_hosts), got %d", specialTargetAllHosts, sourceID)
+	}
+	if targetType != "peer" {
+		t.Errorf("expected target_type='peer', got %q", targetType)
+	}
+	if targetID != peerID {
+		t.Errorf("expected target_id=%d (peer), got %d", peerID, targetID)
+	}
+	if serviceID != igmpServiceID {
+		t.Errorf("expected service_id=%d (IGMP), got %d", igmpServiceID, serviceID)
+	}
+	if direction != "both" {
+		t.Errorf("expected direction='both', got %q", direction)
+	}
+	if status != "resolved" {
+		t.Errorf("expected status='resolved', got %q", status)
+	}
+}
+
+func TestResolveIGMPRule_NotOrphaned(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+
+	// Insert a peer
+	peerID := insertTestPeer(t, database, "igmp-orphan-peer", "10.0.0.6", false)
+
+	// Insert IGMP system service
+	_ = insertSystemService(t, database, "IGMP", "", "igmp", "IGMP", true)
+
+	// Create an import session for the peer
+	result, err := database.Exec("INSERT INTO import_sessions (peer_id, status, raw_backup) VALUES (?, 'parsed', 'test')", peerID)
+	if err != nil {
+		t.Fatalf("insert session: %v", err)
+	}
+	sessionID, _ := result.LastInsertId()
+
+	// Insert an import_rule with IGMP protocol
+	result, err = database.Exec(
+		`INSERT INTO import_rules (session_id, chain, rule_order, raw_rule, status, action, priority, direction, target_scope, policy_name)
+		VALUES (?, 'INPUT', 1, '-p igmp -j ACCEPT', 'pending', 'ACCEPT', 100, 'both', 'both', 'orphan-igmp-test')`, sessionID)
+	if err != nil {
+		t.Fatalf("insert rule: %v", err)
+	}
+	ruleID, _ := result.LastInsertId()
+
+	ctx := context.Background()
+	err = resolveIGMPRule(ctx, database, ruleID, peerID)
+	if err != nil {
+		t.Fatalf("resolveIGMPRule returned error: %v", err)
+	}
+
+	// Verify target_type is 'peer' (not 'special') — the old bug set target_type='special'
+	// which orphaned the policy from the peer in loadApplicablePolicies
+	var targetType string
+	var targetID int64
+	err = database.QueryRow(
+		"SELECT target_type, target_id FROM import_rules WHERE id = ?",
+		ruleID,
+	).Scan(&targetType, &targetID)
+	if err != nil {
+		t.Fatalf("query rule: %v", err)
+	}
+
+	if targetType == "special" {
+		t.Errorf("target_type should NOT be 'special' — the old code incorrectly set target_type='special' which orphaned the policy from the peer; got target_type='special', target_id=%d", targetID)
+	}
+	if targetType != "peer" {
+		t.Errorf("expected target_type='peer', got %q", targetType)
+	}
+	if targetID != peerID {
+		t.Errorf("expected target_id=%d (peer), got %d", peerID, targetID)
+	}
+}
+
+func TestResolveIGMPRule_IGMPService(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+
+	// Insert a peer
+	peerID := insertTestPeer(t, database, "igmp-svc-peer", "10.0.0.7", false)
+
+	// Insert IGMP, Multicast, and broadcast system services to verify IGMP
+	// resolves to the correct one (not Multicast or broadcast)
+	igmpServiceID := insertSystemService(t, database, "IGMP", "", "igmp", "IGMP", true)
+	_ = insertSystemService(t, database, "Multicast", "", "udp", "Multicast", true)
+	_ = insertSystemService(t, database, "Limited Broadcast", "", "udp", "Limited broadcast", true)
+
+	// Create an import session for the peer
+	result, err := database.Exec("INSERT INTO import_sessions (peer_id, status, raw_backup) VALUES (?, 'parsed', 'test')", peerID)
+	if err != nil {
+		t.Fatalf("insert session: %v", err)
+	}
+	sessionID, _ := result.LastInsertId()
+
+	// Insert an import_rule with IGMP protocol
+	result, err = database.Exec(
+		`INSERT INTO import_rules (session_id, chain, rule_order, raw_rule, status, action, priority, direction, target_scope, policy_name)
+		VALUES (?, 'INPUT', 1, '-p igmp -j ACCEPT', 'pending', 'ACCEPT', 100, 'both', 'both', 'igmp-svc-test')`, sessionID)
+	if err != nil {
+		t.Fatalf("insert rule: %v", err)
+	}
+	ruleID, _ := result.LastInsertId()
+
+	ctx := context.Background()
+	err = resolveIGMPRule(ctx, database, ruleID, peerID)
+	if err != nil {
+		t.Fatalf("resolveIGMPRule returned error: %v", err)
+	}
+
+	// Verify the service resolves to "IGMP", not Multicast or broadcast
+	var serviceID int64
+	err = database.QueryRow(
+		"SELECT service_id FROM import_rules WHERE id = ?", ruleID,
+	).Scan(&serviceID)
+	if err != nil {
+		t.Fatalf("query rule service_id: %v", err)
+	}
+	if serviceID != igmpServiceID {
+		t.Errorf("expected service_id=%d (IGMP), got %d — IGMP rules should resolve to the IGMP system service, not Multicast or broadcast services", igmpServiceID, serviceID)
+	}
+
+	// Also verify by name
+	var name string
+	err = database.QueryRow("SELECT name FROM services WHERE id = ?", serviceID).Scan(&name)
+	if err != nil {
+		t.Fatalf("failed to query service name: %v", err)
+	}
+	if name != "IGMP" {
+		t.Errorf("expected service name 'IGMP', got %q", name)
+	}
+}
+
+func TestResolveIGMPRule_ServiceNotFound(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+
+	// Insert a peer
+	peerID := insertTestPeer(t, database, "igmp-no-svc-peer", "10.0.0.9", false)
+
+	// Do NOT insert the IGMP system service — this is the error condition
+
+	// Create an import session for the peer
+	result, err := database.Exec("INSERT INTO import_sessions (peer_id, status, raw_backup) VALUES (?, 'parsed', 'test')", peerID)
+	if err != nil {
+		t.Fatalf("insert session: %v", err)
+	}
+	sessionID, _ := result.LastInsertId()
+
+	// Insert an import_rule with IGMP protocol
+	result, err = database.Exec(
+		`INSERT INTO import_rules (session_id, chain, rule_order, raw_rule, status, action, priority, direction, target_scope, policy_name)
+		VALUES (?, 'INPUT', 1, '-p igmp -j ACCEPT', 'pending', 'ACCEPT', 100, 'both', 'both', 'igmp-no-svc-test')`, sessionID)
+	if err != nil {
+		t.Fatalf("insert rule: %v", err)
+	}
+	ruleID, _ := result.LastInsertId()
+
+	ctx := context.Background()
+	err = resolveIGMPRule(ctx, database, ruleID, peerID)
+	if err == nil {
+		t.Fatal("expected error when IGMP system service is not found, got nil")
+	}
+	if !strings.Contains(err.Error(), "IGMP system service not found") {
+		t.Errorf("expected error to contain 'IGMP system service not found', got %q", err.Error())
+	}
+}

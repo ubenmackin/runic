@@ -305,10 +305,10 @@ export default function Policies() {
     }
   }, [activeTab, previewStale, previewLoading, fetchPreview])
 
-  // Auto-set source to "Any IP" when IGMP/VRRP service is selected
+  // Auto-set source to "All Hosts (IGMP)" when IGMP/VRRP service is selected
   useEffect(() => {
     if (modalOpen && isSpecialService && !formData.source_id) {
-      setFormData(d => ({ ...d, source_id: SPECIAL_TARGETS.ANY_IP.id, source_type: 'special', source_ip: '' }))
+      setFormData(d => ({ ...d, source_id: SPECIAL_TARGETS.ALL_HOSTS.id, source_type: 'special', source_ip: '' }))
     }
   }, [modalOpen, isSpecialService, formData.source_id, setFormData])
 
@@ -806,7 +806,7 @@ export default function Policies() {
                   ...d,
                   service_id: v,
                   // Auto-set source for IGMP/VRRP, reset for others
-                  source_id: isSpecialSvc ? SPECIAL_TARGETS.ANY_IP.id : '',
+                  source_id: isSpecialSvc ? SPECIAL_TARGETS.ALL_HOSTS.id : '',
                   source_type: isSpecialSvc ? 'special' : 'group',
                   source_ip: isSpecialSvc ? '' : ''
                 }))
