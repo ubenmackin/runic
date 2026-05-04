@@ -4,6 +4,7 @@ package alerts
 import (
 	"encoding/json"
 	"errors"
+	"math"
 	"net/http"
 	"strconv"
 	"time"
@@ -89,6 +90,10 @@ func (h *Handler) GetAlert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if id > math.MaxInt {
+		common.RespondError(w, http.StatusBadRequest, "invalid alert id")
+		return
+	}
 	alert, err := alerts.GetAlertHistory(ctx, h.DB, int(id))
 	if err != nil {
 		if errors.Is(err, alerts.ErrAlertHistoryNotFound) {
