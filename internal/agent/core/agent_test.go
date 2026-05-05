@@ -506,6 +506,7 @@ func TestApplyCachedBundle_NoCacheFile(t *testing.T) {
 	// Use a non-existent cache path in temp dir
 	agent.cachePath = filepath.Join(t.TempDir(), "nonexistent.rules")
 	agent.cmdRunner = &mockCommandRunner{}
+	agent.config.ApplyRulesBundle = true // required for applyCachedBundle to execute
 
 	err := agent.applyCachedBundle(context.Background())
 
@@ -527,6 +528,7 @@ func TestApplyCachedBundle_EmptyRules(t *testing.T) {
 	_ = os.WriteFile(cachePath, []byte(""), 0600)
 	agent.cachePath = cachePath
 	agent.cmdRunner = &mockCommandRunner{}
+	agent.config.ApplyRulesBundle = true // required for applyCachedBundle to execute
 
 	err := agent.applyCachedBundle(context.Background())
 
@@ -550,6 +552,7 @@ func TestApplyCachedBundle_WhitespaceOnlyRules(t *testing.T) {
 	_ = os.WriteFile(cachePath, []byte("   \n  \n  "), 0600)
 	agent.cachePath = cachePath
 	agent.cmdRunner = &mockCommandRunner{}
+	agent.config.ApplyRulesBundle = true // required for applyCachedBundle to execute
 
 	err := agent.applyCachedBundle(context.Background())
 
@@ -569,6 +572,7 @@ func TestApplyCachedBundle_ReadError(t *testing.T) {
 	cacheDir := t.TempDir()
 	agent.cachePath = cacheDir // This is a directory, not a file
 	agent.cmdRunner = &mockCommandRunner{}
+	agent.config.ApplyRulesBundle = true // required for applyCachedBundle to execute
 
 	err := agent.applyCachedBundle(context.Background())
 
@@ -592,6 +596,7 @@ func TestApplyCachedBundle_Success(t *testing.T) {
 
 	mockCmd := &mockCommandRunner{}
 	agent.cmdRunner = mockCmd
+	agent.config.ApplyRulesBundle = true // required for applyCachedBundle to execute
 
 	err := agent.applyCachedBundle(context.Background())
 
