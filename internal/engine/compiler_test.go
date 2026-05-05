@@ -72,6 +72,57 @@ func insertService(t *testing.T, database *sql.DB, name, ports, protocol string)
 	return int(id)
 }
 
+type policyOpts struct {
+	name        string
+	sourceType  string
+	sourceID    int64
+	serviceID   int64
+	targetType  string
+	targetID    int64
+	action      string
+	priority    int
+	enabled     bool
+	direction   string
+	sourceIP    string
+	targetIP    string
+	targetScope string
+}
+
+// insertPolicyOpts inserts a test policy with the given options and returns its ID.
+func insertPolicyOpts(t *testing.T, database *sql.DB, opts policyOpts) int {
+	t.Helper()
+
+	// Apply defaults
+	if opts.direction == "" {
+		opts.direction = "both"
+	}
+	if opts.sourceType == "" {
+		opts.sourceType = "group"
+	}
+	if opts.targetType == "" {
+		opts.targetType = "peer"
+	}
+	if opts.targetScope == "" {
+		opts.targetScope = "both"
+	}
+
+	enabledInt := 0
+	if opts.enabled {
+		enabledInt = 1
+	}
+
+	result, err := database.Exec(
+		`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled, direction, source_ip, target_ip, target_scope)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		opts.name, opts.sourceID, opts.sourceType, opts.serviceID, opts.targetID, opts.targetType,
+		opts.action, opts.priority, enabledInt, opts.direction, opts.sourceIP, opts.targetIP, opts.targetScope)
+	if err != nil {
+		t.Fatalf("insert policy: %v", err)
+	}
+	id, _ := result.LastInsertId()
+	return int(id)
+}
+
 // insertPolicy inserts a test policy and returns its ID.
 // An optional direction parameter can be provided (default is "both").
 func insertPolicy(t *testing.T, database *sql.DB, name string, groupID, serviceID, peerID int, action string, priority int, enabled bool, direction ...string) int {
@@ -80,19 +131,18 @@ func insertPolicy(t *testing.T, database *sql.DB, name string, groupID, serviceI
 	if len(direction) > 0 {
 		dir = direction[0]
 	}
-	enabledInt := 0
-	if enabled {
-		enabledInt = 1
-	}
-	result, err := database.Exec(
-		`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled, direction)
-		VALUES (?, ?, "group", ?, ?, "peer", ?, ?, ?, ?)`,
-		name, groupID, serviceID, peerID, action, priority, enabledInt, dir)
-	if err != nil {
-		t.Fatalf("insert policy: %v", err)
-	}
-	id, _ := result.LastInsertId()
-	return int(id)
+	return insertPolicyOpts(t, database, policyOpts{
+		name:       name,
+		sourceType: "group",
+		sourceID:   int64(groupID),
+		serviceID:  int64(serviceID),
+		targetType: "peer",
+		targetID:   int64(peerID),
+		action:     action,
+		priority:   priority,
+		enabled:    enabled,
+		direction:  dir,
+	})
 }
 
 func TestSingleIPSource(t *testing.T) {
@@ -326,13 +376,17 @@ func TestBroadcastService_SubnetBroadcast(t *testing.T) {
 	serviceID, _ := result.LastInsertId()
 
 	// Insert policy: Source=Subnet Broadcast (special ID 1), Target=peer
-	_, err = database.Exec(
-		`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled)
-		 VALUES (?, 1, 'special', ?, ?, 'peer', 'ACCEPT', 100, 1)`,
-		"allow-subnet-broadcast", serviceID, peerID)
-	if err != nil {
-		t.Fatalf("insert policy: %v", err)
-	}
+	insertPolicyOpts(t, database, policyOpts{
+		name:       "allow-subnet-broadcast",
+		sourceType: "special",
+		sourceID:   1,
+		targetType: "peer",
+		targetID:   int64(peerID),
+		serviceID:  serviceID,
+		action:     "ACCEPT",
+		priority:   100,
+		enabled:    true,
+	})
 
 	c := NewCompiler(database)
 	output, err := c.Compile(context.Background(), peerID)
@@ -375,13 +429,17 @@ func TestBroadcastService_LimitedBroadcast(t *testing.T) {
 	serviceID, _ := result.LastInsertId()
 
 	// Insert policy: Source=Limited Broadcast (special ID 2), Target=peer
-	_, err = database.Exec(
-		`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled)
-		 VALUES (?, 2, 'special', ?, ?, 'peer', 'ACCEPT', 100, 1)`,
-		"allow-limited-broadcast", serviceID, peerID)
-	if err != nil {
-		t.Fatalf("insert policy: %v", err)
-	}
+	insertPolicyOpts(t, database, policyOpts{
+		name:       "allow-limited-broadcast",
+		sourceType: "special",
+		sourceID:   2,
+		targetType: "peer",
+		targetID:   int64(peerID),
+		serviceID:  serviceID,
+		action:     "ACCEPT",
+		priority:   100,
+		enabled:    true,
+	})
 
 	c := NewCompiler(database)
 	output, err := c.Compile(context.Background(), peerID)
@@ -414,13 +472,17 @@ func TestBroadcastService_PeerToBroadcast(t *testing.T) {
 	serviceID, _ := result.LastInsertId()
 
 	// Insert policy: Source=peer, Target=Subnet Broadcast (special ID 1)
-	_, err = database.Exec(
-		`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled)
-		 VALUES (?, ?, 'peer', ?, 1, 'special', 'ACCEPT', 100, 1)`,
-		"send-to-broadcast", peerID, serviceID)
-	if err != nil {
-		t.Fatalf("insert policy: %v", err)
-	}
+	insertPolicyOpts(t, database, policyOpts{
+		name:       "send-to-broadcast",
+		sourceType: "peer",
+		sourceID:   int64(peerID),
+		targetType: "special",
+		targetID:   1,
+		serviceID:  serviceID,
+		action:     "ACCEPT",
+		priority:   100,
+		enabled:    true,
+	})
 
 	c := NewCompiler(database)
 	output, err := c.Compile(context.Background(), peerID)
@@ -466,13 +528,17 @@ func TestMdnsPolicy_PeerToMdns(t *testing.T) {
 	serviceID, _ := result.LastInsertId()
 
 	// Insert policy: Source=peer (ansible), Target=mDNS (special ID 4)
-	_, err = database.Exec(
-		`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled)
-		 VALUES (?, ?, 'peer', ?, 4, 'special', 'ACCEPT', 100, 1)`,
-		"mDNS", peerID, serviceID)
-	if err != nil {
-		t.Fatalf("insert policy: %v", err)
-	}
+	insertPolicyOpts(t, database, policyOpts{
+		name:       "mDNS",
+		sourceType: "peer",
+		sourceID:   int64(peerID),
+		targetType: "special",
+		targetID:   4,
+		serviceID:  serviceID,
+		action:     "ACCEPT",
+		priority:   100,
+		enabled:    true,
+	})
 
 	c := NewCompiler(database)
 	output, err := c.Compile(context.Background(), peerID)
@@ -842,15 +908,17 @@ func TestIsSourcePortDirection(t *testing.T) {
 	insertGroupMember(t, database, groupID, manualPeerID)
 	serviceID := insertService(t, database, "dns", "53", "udp")
 
-	enabledInt := 1
-	result, err := database.Exec(
-		`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled)
-		VALUES (?, ?, "peer", ?, ?, "group", "ACCEPT", 100, ?)`,
-		"client-to-dns", peerID, serviceID, groupID, enabledInt)
-	if err != nil {
-		t.Fatalf("insert policy: %v", err)
-	}
-	_ = result
+	insertPolicyOpts(t, database, policyOpts{
+		name:       "client-to-dns",
+		sourceType: "peer",
+		sourceID:   int64(peerID),
+		targetType: "group",
+		targetID:   int64(groupID),
+		serviceID:  int64(serviceID),
+		action:     "ACCEPT",
+		priority:   100,
+		enabled:    true,
+	})
 
 	c := NewCompiler(database)
 	output, err := c.Compile(context.Background(), peerID)
@@ -1421,13 +1489,18 @@ func TestForwardOnlyPolicy(t *testing.T) {
 
 	// Insert policy: jump-server -> ssh-targets, forward only
 	// Source=jump-server (peer), Target=ssh-targets (group), Direction=forward
-	_, err := database.Exec(
-		`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled, direction)
-		VALUES (?, ?, 'peer', ?, ?, 'group', 'ACCEPT', 100, 1, 'forward')`,
-		"ssh-forward-only", jumpServer, serviceID, groupID)
-	if err != nil {
-		t.Fatalf("insert policy: %v", err)
-	}
+	insertPolicyOpts(t, database, policyOpts{
+		name:       "ssh-forward-only",
+		sourceType: "peer",
+		sourceID:   int64(jumpServer),
+		targetType: "group",
+		targetID:   int64(groupID),
+		serviceID:  int64(serviceID),
+		action:     "ACCEPT",
+		priority:   100,
+		enabled:    true,
+		direction:  "forward",
+	})
 
 	c := NewCompiler(database)
 
@@ -2151,13 +2224,18 @@ func TestMulticastPolicy_SourceIsMulticastSpecial(t *testing.T) {
 
 	// Policy with Source = special 3 (All Hosts IGMP), Target = peer
 	// This means the peer receives multicast traffic from the All Hosts multicast group
-	_, err := database.Exec(
-		`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled, target_scope)
-		VALUES (?, 3, 'special', ?, ?, 'peer', 'ACCEPT', 100, 1, 'host')`,
-		"multicast-receive", serviceID, peerID)
-	if err != nil {
-		t.Fatalf("insert policy: %v", err)
-	}
+	insertPolicyOpts(t, database, policyOpts{
+		name:        "multicast-receive",
+		sourceType:  "special",
+		sourceID:    3,
+		targetType:  "peer",
+		targetID:    int64(peerID),
+		serviceID:   serviceID,
+		action:      "ACCEPT",
+		priority:    100,
+		enabled:     true,
+		targetScope: "host",
+	})
 
 	c := NewCompiler(database)
 	output, err := c.Compile(context.Background(), peerID)
@@ -2184,13 +2262,18 @@ func TestMulticastPolicy_SourceIsMulticastSpecial_WithService(t *testing.T) {
 
 	// Policy with Source = special 4 (mDNS multicast address), Target = peer
 	// This means the peer receives mDNS multicast traffic
-	_, err := database.Exec(
-		`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled, target_scope)
-		VALUES (?, 4, 'special', ?, ?, 'peer', 'ACCEPT', 100, 1, 'host')`,
-		"mdns-receive", serviceID, peerID)
-	if err != nil {
-		t.Fatalf("insert policy: %v", err)
-	}
+	insertPolicyOpts(t, database, policyOpts{
+		name:        "mdns-receive",
+		sourceType:  "special",
+		sourceID:    4,
+		targetType:  "peer",
+		targetID:    int64(peerID),
+		serviceID:   int64(serviceID),
+		action:      "ACCEPT",
+		priority:    100,
+		enabled:     true,
+		targetScope: "host",
+	})
 
 	c := NewCompiler(database)
 	output, err := c.Compile(context.Background(), peerID)
@@ -2338,13 +2421,18 @@ func TestSourceIPOverride(t *testing.T) {
 	serviceID := insertService(t, database, "ssh", "22", "tcp")
 
 	// Insert policy with source_ip = "10.0.0.100" (different from peer's primary IP 10.0.0.2)
-	_, err := database.Exec(
-		`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled, source_ip)
-		VALUES (?, ?, 'peer', ?, ?, 'peer', 'ACCEPT', 100, 1, ?)`,
-		"ssh-with-source-ip", sourcePeer, serviceID, targetPeer, "10.0.0.100")
-	if err != nil {
-		t.Fatalf("insert policy: %v", err)
-	}
+	insertPolicyOpts(t, database, policyOpts{
+		name:       "ssh-with-source-ip",
+		sourceType: "peer",
+		sourceID:   int64(sourcePeer),
+		targetType: "peer",
+		targetID:   int64(targetPeer),
+		serviceID:  int64(serviceID),
+		action:     "ACCEPT",
+		priority:   100,
+		enabled:    true,
+		sourceIP:   "10.0.0.100",
+	})
 
 	c := NewCompiler(database)
 	output, err := c.Compile(context.Background(), targetPeer)
@@ -2377,13 +2465,18 @@ func TestTargetIPOverride(t *testing.T) {
 	serviceID := insertService(t, database, "ssh", "22", "tcp")
 
 	// Insert policy with target_ip = "10.0.0.200" (different from peer's primary IP 10.0.0.2)
-	_, err := database.Exec(
-		`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled, target_ip)
-		VALUES (?, ?, 'peer', ?, ?, 'peer', 'ACCEPT', 100, 1, ?)`,
-		"ssh-with-target-ip", sourcePeer, serviceID, targetPeer, "10.0.0.200")
-	if err != nil {
-		t.Fatalf("insert policy: %v", err)
-	}
+	insertPolicyOpts(t, database, policyOpts{
+		name:       "ssh-with-target-ip",
+		sourceType: "peer",
+		sourceID:   int64(sourcePeer),
+		targetType: "peer",
+		targetID:   int64(targetPeer),
+		serviceID:  int64(serviceID),
+		action:     "ACCEPT",
+		priority:   100,
+		enabled:    true,
+		targetIP:   "10.0.0.200",
+	})
 
 	c := NewCompiler(database)
 	output, err := c.Compile(context.Background(), sourcePeer)
@@ -2414,13 +2507,17 @@ func TestEmptySourceIPFallback(t *testing.T) {
 	serviceID := insertService(t, database, "ssh", "22", "tcp")
 
 	// Insert policy WITHOUT source_ip (backward compatibility)
-	_, err := database.Exec(
-		`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled)
-		VALUES (?, ?, 'peer', ?, ?, 'peer', 'ACCEPT', 100, 1)`,
-		"ssh-no-source-ip", sourcePeer, serviceID, targetPeer)
-	if err != nil {
-		t.Fatalf("insert policy: %v", err)
-	}
+	insertPolicyOpts(t, database, policyOpts{
+		name:       "ssh-no-source-ip",
+		sourceType: "peer",
+		sourceID:   int64(sourcePeer),
+		targetType: "peer",
+		targetID:   int64(targetPeer),
+		serviceID:  int64(serviceID),
+		action:     "ACCEPT",
+		priority:   100,
+		enabled:    true,
+	})
 
 	c := NewCompiler(database)
 	output, err := c.Compile(context.Background(), targetPeer)
@@ -2446,13 +2543,17 @@ func TestEmptyTargetIPFallback(t *testing.T) {
 	serviceID := insertService(t, database, "ssh", "22", "tcp")
 
 	// Insert policy WITHOUT target_ip (backward compatibility)
-	_, err := database.Exec(
-		`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled)
-		VALUES (?, ?, 'peer', ?, ?, 'peer', 'ACCEPT', 100, 1)`,
-		"ssh-no-target-ip", sourcePeer, serviceID, targetPeer)
-	if err != nil {
-		t.Fatalf("insert policy: %v", err)
-	}
+	insertPolicyOpts(t, database, policyOpts{
+		name:       "ssh-no-target-ip",
+		sourceType: "peer",
+		sourceID:   int64(sourcePeer),
+		targetType: "peer",
+		targetID:   int64(targetPeer),
+		serviceID:  int64(serviceID),
+		action:     "ACCEPT",
+		priority:   100,
+		enabled:    true,
+	})
 
 	c := NewCompiler(database)
 	output, err := c.Compile(context.Background(), sourcePeer)
@@ -2478,13 +2579,18 @@ func TestSourceIPWithCIDR(t *testing.T) {
 	serviceID := insertService(t, database, "ssh", "22", "tcp")
 
 	// Insert policy with source_ip containing CIDR notation
-	_, err := database.Exec(
-		`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled, source_ip)
-		VALUES (?, ?, 'peer', ?, ?, 'peer', 'ACCEPT', 100, 1, ?)`,
-		"ssh-source-cidr", sourcePeer, serviceID, targetPeer, "10.0.0.0/24")
-	if err != nil {
-		t.Fatalf("insert policy: %v", err)
-	}
+	insertPolicyOpts(t, database, policyOpts{
+		name:       "ssh-source-cidr",
+		sourceType: "peer",
+		sourceID:   int64(sourcePeer),
+		targetType: "peer",
+		targetID:   int64(targetPeer),
+		serviceID:  int64(serviceID),
+		action:     "ACCEPT",
+		priority:   100,
+		enabled:    true,
+		sourceIP:   "10.0.0.0/24",
+	})
 
 	c := NewCompiler(database)
 	output, err := c.Compile(context.Background(), targetPeer)
@@ -2515,13 +2621,18 @@ func TestTargetIPWithCIDR(t *testing.T) {
 	serviceID := insertService(t, database, "ssh", "22", "tcp")
 
 	// Insert policy with target_ip containing CIDR notation
-	_, err := database.Exec(
-		`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled, target_ip)
-		VALUES (?, ?, 'peer', ?, ?, 'peer', 'ACCEPT', 100, 1, ?)`,
-		"ssh-target-cidr", sourcePeer, serviceID, targetPeer, "10.0.1.0/24")
-	if err != nil {
-		t.Fatalf("insert policy: %v", err)
-	}
+	insertPolicyOpts(t, database, policyOpts{
+		name:       "ssh-target-cidr",
+		sourceType: "peer",
+		sourceID:   int64(sourcePeer),
+		targetType: "peer",
+		targetID:   int64(targetPeer),
+		serviceID:  int64(serviceID),
+		action:     "ACCEPT",
+		priority:   100,
+		enabled:    true,
+		targetIP:   "10.0.1.0/24",
+	})
 
 	c := NewCompiler(database)
 	output, err := c.Compile(context.Background(), sourcePeer)
@@ -2554,13 +2665,19 @@ func TestPolicyWithSourceAndTargetIP(t *testing.T) {
 	serviceID := insertService(t, database, "ssh", "22", "tcp")
 
 	// Insert policy with both source_ip and target_ip
-	_, err := database.Exec(
-		`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled, source_ip, target_ip)
-		VALUES (?, ?, 'peer', ?, ?, 'peer', 'ACCEPT', 100, 1, ?, ?)`,
-		"ssh-both-ips", sourcePeer, serviceID, targetPeer, "10.0.0.100", "10.0.0.200")
-	if err != nil {
-		t.Fatalf("insert policy: %v", err)
-	}
+	insertPolicyOpts(t, database, policyOpts{
+		name:       "ssh-both-ips",
+		sourceType: "peer",
+		sourceID:   int64(sourcePeer),
+		targetType: "peer",
+		targetID:   int64(targetPeer),
+		serviceID:  int64(serviceID),
+		action:     "ACCEPT",
+		priority:   100,
+		enabled:    true,
+		sourceIP:   "10.0.0.100",
+		targetIP:   "10.0.0.200",
+	})
 
 	c := NewCompiler(database)
 
@@ -2598,13 +2715,19 @@ func TestTargetIPWithDockerScope(t *testing.T) {
 	serviceID := insertService(t, database, "ssh", "22", "tcp")
 
 	// Insert policy: source -> target with target_ip
-	_, err := database.Exec(
-		`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled, target_ip, target_scope)
-		VALUES (?, ?, 'peer', ?, ?, 'peer', 'ACCEPT', 100, 1, ?, 'both')`,
-		"ssh-docker-target-ip", sourcePeer, serviceID, targetPeer, "10.0.0.200")
-	if err != nil {
-		t.Fatalf("insert policy: %v", err)
-	}
+	insertPolicyOpts(t, database, policyOpts{
+		name:        "ssh-docker-target-ip",
+		sourceType:  "peer",
+		sourceID:    int64(sourcePeer),
+		targetType:  "peer",
+		targetID:    int64(targetPeer),
+		serviceID:   int64(serviceID),
+		action:      "ACCEPT",
+		priority:    100,
+		enabled:     true,
+		targetIP:    "10.0.0.200",
+		targetScope: "both",
+	})
 
 	c := NewCompiler(database)
 
