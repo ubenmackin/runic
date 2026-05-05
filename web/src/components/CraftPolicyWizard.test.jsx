@@ -2726,10 +2726,248 @@ expect(twoColGrids.length).toBe(0);
         // "other" arch is now passed through directly, not mapped to null
         expect(peerPostCall[1].arch).toBe("other");
       });
-    });
+  });
   });
 
-  describe("ICMP/IGMP new service creation", () => {
+  // Helper to set up API mocks for direction-related tests
+  function setupDirectionTestMocks({
+    externalPeerId,
+    externalHostname,
+    externalIP = "10.20.30.40",
+    localPeerId,
+    localHostname,
+    localIP = "192.168.1.100",
+    serviceId = 1,
+    extraMocks = [],
+  }) {
+    api.api.get
+      .mockResolvedValueOnce({
+        id: externalPeerId,
+        hostname: externalHostname,
+        ip_address: externalIP,
+      })
+      .mockResolvedValueOnce({
+        id: localPeerId,
+        hostname: localHostname,
+        ip_address: localIP,
+      })
+      .mockResolvedValueOnce({
+        id: serviceId,
+        name: "https",
+        ports: "443",
+        protocol: "tcp",
+      });
+
+    // Add any extra mocks (e.g., for policy step dropdown data)
+    for (const mock of extraMocks) {
+      api.api.get.mockResolvedValueOnce(mock);
+    }
+
+    api.api.post.mockResolvedValueOnce({ id: 30 });
+  }
+
+  // Helper to navigate through wizard steps to the review step
+  async function navigateToReviewStep(user) {
+    await waitFor(() =>
+      expect(screen.getByText(/Found existing peer/)).toBeInTheDocument(),
+    );
+    await user.click(screen.getByRole("button", { name: /next/i }));
+
+    await waitFor(() =>
+      expect(screen.getByText(/Found existing service/)).toBeInTheDocument(),
+    );
+    await user.click(screen.getByRole("button", { name: /next/i }));
+
+    await waitFor(() =>
+      expect(screen.getByText("Description (Optional)")).toBeInTheDocument(),
+    );
+    await user.click(screen.getByRole("button", { name: /next/i }));
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: /create policy/i }),
+      ).toBeInTheDocument(),
+    );
+  }
+
+  describe("IN/OUT source/target swap and direction", () => {
+  test("IN log submits with Source=external, Target=local, direction=backward", async () => {
+    const user = userEvent.setup();
+    const mockOnSuccess = vi.fn();
+    const mockOnClose = vi.fn();
+
+    const mockLog = createMockLog({
+      direction: "IN",
+      src_ip: "10.20.30.40",
+    });
+
+    setupDirectionTestMocks({
+      externalPeerId: 5,
+      externalHostname: "external-peer",
+      externalIP: "10.20.30.40",
+      localPeerId: 2,
+      localHostname: "test-peer",
+    });
+
+    render(
+      <CraftPolicyWizard
+        log={mockLog}
+        onClose={mockOnClose}
+        onSuccess={mockOnSuccess}
+      />,
+      { wrapper },
+    );
+
+    await navigateToReviewStep(user);
+    await user.click(screen.getByRole("button", { name: /create policy/i }));
+
+    // Verify the policy POST payload
+    await waitFor(() => {
+      const policyPostCall = api.api.post.mock.calls.find(
+        (call) => call[0] === "/policies",
+      );
+      expect(policyPostCall).toBeDefined();
+      // IN log: Source = external peer, Target = local peer, Direction = backward
+      expect(policyPostCall[1].source_id).toBe(5); // external peer
+      expect(policyPostCall[1].target_id).toBe(2); // local peer
+      expect(policyPostCall[1].direction).toBe("backward");
+    });
+    expect(mockOnSuccess).toHaveBeenCalled();
+    expect(mockOnClose).toHaveBeenCalled();
+  });
+
+  test("OUT log submits with Source=local, Target=external, direction=forward", async () => {
+    const user = userEvent.setup();
+    const mockOnSuccess = vi.fn();
+    const mockOnClose = vi.fn();
+
+    const mockLog = createMockLog({
+      direction: "OUT",
+      src_ip: "192.168.1.100",
+      dst_ip: "50.60.70.80",
+      raw_line: "[RUNIC-OUT] blocked packet...",
+    });
+
+    setupDirectionTestMocks({
+      externalPeerId: 3,
+      externalHostname: "remote-peer",
+      externalIP: "50.60.70.80",
+      localPeerId: 2,
+      localHostname: "test-peer",
+    });
+
+    render(
+      <CraftPolicyWizard
+        log={mockLog}
+        onClose={mockOnClose}
+        onSuccess={mockOnSuccess}
+      />,
+      { wrapper },
+    );
+
+    await navigateToReviewStep(user);
+    await user.click(screen.getByRole("button", { name: /create policy/i }));
+
+    // Verify the policy POST payload
+    await waitFor(() => {
+      const policyPostCall = api.api.post.mock.calls.find(
+        (call) => call[0] === "/policies",
+      );
+      expect(policyPostCall).toBeDefined();
+      // OUT log: Source = local peer, Target = external peer, Direction = forward
+      expect(policyPostCall[1].source_id).toBe(2); // local peer
+      expect(policyPostCall[1].target_id).toBe(3); // external peer
+      expect(policyPostCall[1].direction).toBe("forward");
+    });
+    expect(mockOnSuccess).toHaveBeenCalled();
+    expect(mockOnClose).toHaveBeenCalled();
+  });
+
+  test("Both direction override works for IN log", async () => {
+    const user = userEvent.setup();
+    const mockOnSuccess = vi.fn();
+    const mockOnClose = vi.fn();
+
+    const mockLog = createMockLog({
+      direction: "IN",
+      src_ip: "10.20.30.40",
+    });
+
+    setupDirectionTestMocks({
+      externalPeerId: 5,
+      externalHostname: "external-peer",
+      externalIP: "10.20.30.40",
+      localPeerId: 2,
+      localHostname: "test-peer",
+      extraMocks: [[], []], // all peers, all services for policy step dropdowns
+    });
+
+    render(
+      <CraftPolicyWizard
+        log={mockLog}
+        onClose={mockOnClose}
+        onSuccess={mockOnSuccess}
+      />,
+      { wrapper },
+    );
+
+    // Navigate to policy step (through peer and service steps)
+    await waitFor(() =>
+      expect(screen.getByText(/Found existing peer/)).toBeInTheDocument(),
+    );
+    await user.click(screen.getByRole("button", { name: /next/i }));
+
+    await waitFor(() =>
+      expect(screen.getByText(/Found existing service/)).toBeInTheDocument(),
+    );
+    await user.click(screen.getByRole("button", { name: /next/i }));
+
+    await waitFor(() =>
+      expect(screen.getByText("Description (Optional)")).toBeInTheDocument(),
+    );
+
+    // For IN direction, the backward arrow should be disabled (active direction)
+    const backwardArrow = screen.getByTitle("Backward: Target → Source");
+    expect(backwardArrow).toBeDisabled();
+
+    // Click the forward arrow to cycle direction to "both"
+    // The forward arrow is active for IN direction
+    // Starting from null (default/IN=backward), first click → "forward", second click → "both"
+    const forwardArrow = screen.getByTitle("Forward: Source → Target");
+    expect(forwardArrow).not.toBeDisabled();
+    await user.click(forwardArrow); // null → "forward"
+    await user.click(forwardArrow); // "forward" → disabled, won't change
+
+    // For IN log, forward arrow click cycles: null → "forward"
+    // After "forward", forward arrow becomes disabled (effectiveDirection === "forward")
+    // Need to use the backward arrow to cycle to "both": "forward" → "both"
+    const backwardArrowAfterClick = screen.getByTitle("Backward: Target → Source");
+    expect(backwardArrowAfterClick).not.toBeDisabled();
+    await user.click(backwardArrowAfterClick); // "forward" → "both"
+
+    // Now navigate to review and submit
+    await user.click(screen.getByRole("button", { name: /next/i }));
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: /create policy/i }),
+      ).toBeInTheDocument(),
+    );
+    await user.click(screen.getByRole("button", { name: /create policy/i }));
+
+    // Verify the policy POST has direction='both'
+    await waitFor(() => {
+      const policyPostCall = api.api.post.mock.calls.find(
+        (call) => call[0] === "/policies",
+      );
+      expect(policyPostCall).toBeDefined();
+      expect(policyPostCall[1].direction).toBe("both");
+    });
+    expect(mockOnSuccess).toHaveBeenCalled();
+  });
+  });
+
+describe("ICMP/IGMP new service creation", () => {
     test("canProceed is true for service step when newService.ports is empty and protocol is icmp", async () => {
       const user = userEvent.setup();
       const icmpLog = createMockLog({

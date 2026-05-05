@@ -55,6 +55,19 @@ func insertTestService(t *testing.T, database *sql.DB, name, ports, protocol str
 	return id
 }
 
+// insertTestManualPeer inserts a test peer with is_manual=1 and returns its ID.
+func insertTestManualPeer(t *testing.T, database *sql.DB, hostname, ip string) int64 {
+	t.Helper()
+	result, err := database.Exec(
+		`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, is_manual) VALUES (?, ?, ?, ?, 1)`,
+		hostname, ip, "manual-"+hostname, "test-hmac-key")
+	if err != nil {
+		t.Fatalf("insert manual peer: %v", err)
+	}
+	id, _ := result.LastInsertId()
+	return id
+}
+
 // --- isBroadcastDest tests ---
 
 func TestIsBroadcastDest_LimitedBroadcast(t *testing.T) {
@@ -1205,5 +1218,354 @@ func TestResolveIGMPRule_ServiceNotFound(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "IGMP system service not found") {
 		t.Errorf("expected error to contain 'IGMP system service not found', got %q", err.Error())
+	}
+}
+
+// --- Direction-specific tests for resolveRules ---
+
+func TestInputRuleDirection_BackwardWhenRemoteIsStagingPeer(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+
+	// Insert the importing peer (the one with the INPUT rule)
+	peerID := insertTestPeer(t, database, "input-staging-peer", "10.0.0.1", false)
+
+	// Insert a service for TCP port 443
+	_ = insertTestService(t, database, "https", "443", "tcp")
+
+	// Create an import session for the importing peer
+	result, err := database.Exec("INSERT INTO import_sessions (peer_id, status, raw_backup) VALUES (?, 'parsed', 'test')", peerID)
+	if err != nil {
+		t.Fatalf("insert session: %v", err)
+	}
+	sessionID, _ := result.LastInsertId()
+
+	// Insert an INPUT rule with a source IP that has NO existing peer (staging)
+	// The remote (source) IP 10.0.0.99 does not match any peer → staging peer created → direction='backward'
+	result, err = database.Exec(
+		`INSERT INTO import_rules (session_id, chain, rule_order, raw_rule, status, skip_reason, action, priority, direction, target_scope, policy_name)
+		VALUES (?, 'INPUT', 1, '-s 10.0.0.99 -p tcp --dport 443 -j ACCEPT', 'pending', '', 'ACCEPT', 100, 'backward', 'both', 'test-input-staging')`, sessionID)
+	if err != nil {
+		t.Fatalf("insert rule: %v", err)
+	}
+	ruleID, _ := result.LastInsertId()
+
+	ctx := context.Background()
+	err = resolveRules(ctx, database, sessionID, peerID, []string{"10.0.0.1"}, "")
+	if err != nil {
+		t.Fatalf("resolveRules returned error: %v", err)
+	}
+
+	var direction string
+	err = database.QueryRow("SELECT direction FROM import_rules WHERE id = ?", ruleID).Scan(&direction)
+	if err != nil {
+		t.Fatalf("query rule direction: %v", err)
+	}
+	if direction != "backward" {
+		t.Errorf("expected direction='backward', got %q", direction)
+	}
+}
+
+func TestInputRuleDirection_BothWhenRemoteIsAgentPeer(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+
+	// Insert the importing peer
+	peerID := insertTestPeer(t, database, "input-agent-local", "10.0.0.1", false)
+
+	// Insert an existing AGENT peer (is_manual=0) at the remote IP
+	_ = insertTestPeer(t, database, "input-agent-remote", "10.0.0.2", false)
+
+	_ = insertTestService(t, database, "https", "443", "tcp")
+
+	result, err := database.Exec("INSERT INTO import_sessions (peer_id, status, raw_backup) VALUES (?, 'parsed', 'test')", peerID)
+	if err != nil {
+		t.Fatalf("insert session: %v", err)
+	}
+	sessionID, _ := result.LastInsertId()
+
+	// INPUT rule where source IP matches existing agent peer → direction='both'
+	result, err = database.Exec(
+		`INSERT INTO import_rules (session_id, chain, rule_order, raw_rule, status, skip_reason, action, priority, direction, target_scope, policy_name)
+		VALUES (?, 'INPUT', 1, '-s 10.0.0.2 -p tcp --dport 443 -j ACCEPT', 'pending', '', 'ACCEPT', 100, 'backward', 'both', 'test-input-agent')`, sessionID)
+	if err != nil {
+		t.Fatalf("insert rule: %v", err)
+	}
+	ruleID, _ := result.LastInsertId()
+
+	ctx := context.Background()
+	err = resolveRules(ctx, database, sessionID, peerID, []string{"10.0.0.1"}, "")
+	if err != nil {
+		t.Fatalf("resolveRules returned error: %v", err)
+	}
+
+	var direction string
+	err = database.QueryRow("SELECT direction FROM import_rules WHERE id = ?", ruleID).Scan(&direction)
+	if err != nil {
+		t.Fatalf("query rule direction: %v", err)
+	}
+	if direction != "both" {
+		t.Errorf("expected direction='both', got %q", direction)
+	}
+}
+
+func TestInputRuleDirection_BackwardWhenRemoteIsManualPeer(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+
+	// Insert the importing peer
+	peerID := insertTestPeer(t, database, "input-manual-local", "10.0.0.1", false)
+
+	// Insert an existing MANUAL peer (is_manual=1) at the remote IP
+	_ = insertTestManualPeer(t, database, "input-manual-remote", "10.0.0.3")
+
+	_ = insertTestService(t, database, "https", "443", "tcp")
+
+	result, err := database.Exec("INSERT INTO import_sessions (peer_id, status, raw_backup) VALUES (?, 'parsed', 'test')", peerID)
+	if err != nil {
+		t.Fatalf("insert session: %v", err)
+	}
+	sessionID, _ := result.LastInsertId()
+
+	// INPUT rule where source IP matches existing manual peer → direction='backward'
+	result, err = database.Exec(
+		`INSERT INTO import_rules (session_id, chain, rule_order, raw_rule, status, skip_reason, action, priority, direction, target_scope, policy_name)
+		VALUES (?, 'INPUT', 1, '-s 10.0.0.3 -p tcp --dport 443 -j ACCEPT', 'pending', '', 'ACCEPT', 100, 'backward', 'both', 'test-input-manual')`, sessionID)
+	if err != nil {
+		t.Fatalf("insert rule: %v", err)
+	}
+	ruleID, _ := result.LastInsertId()
+
+	ctx := context.Background()
+	err = resolveRules(ctx, database, sessionID, peerID, []string{"10.0.0.1"}, "")
+	if err != nil {
+		t.Fatalf("resolveRules returned error: %v", err)
+	}
+
+	var direction string
+	err = database.QueryRow("SELECT direction FROM import_rules WHERE id = ?", ruleID).Scan(&direction)
+	if err != nil {
+		t.Fatalf("query rule direction: %v", err)
+	}
+	if direction != "backward" {
+		t.Errorf("expected direction='backward', got %q", direction)
+	}
+}
+
+func TestOutputRuleDirection_ForwardWhenRemoteIsStagingPeer(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+
+	// Insert the importing peer
+	peerID := insertTestPeer(t, database, "output-staging-peer", "10.0.0.1", false)
+
+	_ = insertTestService(t, database, "https", "443", "tcp")
+
+	result, err := database.Exec("INSERT INTO import_sessions (peer_id, status, raw_backup) VALUES (?, 'parsed', 'test')", peerID)
+	if err != nil {
+		t.Fatalf("insert session: %v", err)
+	}
+	sessionID, _ := result.LastInsertId()
+
+	// OUTPUT rule where dest IP has NO existing peer (staging) → direction='forward'
+	result, err = database.Exec(
+		`INSERT INTO import_rules (session_id, chain, rule_order, raw_rule, status, skip_reason, action, priority, direction, target_scope, policy_name)
+		VALUES (?, 'OUTPUT', 1, '-d 10.0.0.99 -p tcp --dport 443 -j ACCEPT', 'pending', '', 'ACCEPT', 100, 'forward', 'both', 'test-output-staging')`, sessionID)
+	if err != nil {
+		t.Fatalf("insert rule: %v", err)
+	}
+	ruleID, _ := result.LastInsertId()
+
+	ctx := context.Background()
+	err = resolveRules(ctx, database, sessionID, peerID, []string{"10.0.0.1"}, "")
+	if err != nil {
+		t.Fatalf("resolveRules returned error: %v", err)
+	}
+
+	var direction string
+	err = database.QueryRow("SELECT direction FROM import_rules WHERE id = ?", ruleID).Scan(&direction)
+	if err != nil {
+		t.Fatalf("query rule direction: %v", err)
+	}
+	if direction != "forward" {
+		t.Errorf("expected direction='forward', got %q", direction)
+	}
+}
+
+func TestOutputRuleDirection_BothWhenRemoteIsAgentPeer(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+
+	// Insert the importing peer
+	peerID := insertTestPeer(t, database, "output-agent-local", "10.0.0.1", false)
+
+	// Insert an existing AGENT peer (is_manual=0) at the destination IP
+	_ = insertTestPeer(t, database, "output-agent-remote", "10.0.0.2", false)
+
+	_ = insertTestService(t, database, "https", "443", "tcp")
+
+	result, err := database.Exec("INSERT INTO import_sessions (peer_id, status, raw_backup) VALUES (?, 'parsed', 'test')", peerID)
+	if err != nil {
+		t.Fatalf("insert session: %v", err)
+	}
+	sessionID, _ := result.LastInsertId()
+
+	// OUTPUT rule where dest IP matches existing agent peer → direction='both'
+	result, err = database.Exec(
+		`INSERT INTO import_rules (session_id, chain, rule_order, raw_rule, status, skip_reason, action, priority, direction, target_scope, policy_name)
+		VALUES (?, 'OUTPUT', 1, '-d 10.0.0.2 -p tcp --dport 443 -j ACCEPT', 'pending', '', 'ACCEPT', 100, 'forward', 'both', 'test-output-agent')`, sessionID)
+	if err != nil {
+		t.Fatalf("insert rule: %v", err)
+	}
+	ruleID, _ := result.LastInsertId()
+
+	ctx := context.Background()
+	err = resolveRules(ctx, database, sessionID, peerID, []string{"10.0.0.1"}, "")
+	if err != nil {
+		t.Fatalf("resolveRules returned error: %v", err)
+	}
+
+	var direction string
+	err = database.QueryRow("SELECT direction FROM import_rules WHERE id = ?", ruleID).Scan(&direction)
+	if err != nil {
+		t.Fatalf("query rule direction: %v", err)
+	}
+	if direction != "both" {
+		t.Errorf("expected direction='both', got %q", direction)
+	}
+}
+
+func TestOutputRuleDirection_ForwardWhenRemoteIsManualPeer(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+
+	// Insert the importing peer
+	peerID := insertTestPeer(t, database, "output-manual-local", "10.0.0.1", false)
+
+	// Insert an existing MANUAL peer (is_manual=1) at the destination IP
+	_ = insertTestManualPeer(t, database, "output-manual-remote", "10.0.0.3")
+
+	_ = insertTestService(t, database, "https", "443", "tcp")
+
+	result, err := database.Exec("INSERT INTO import_sessions (peer_id, status, raw_backup) VALUES (?, 'parsed', 'test')", peerID)
+	if err != nil {
+		t.Fatalf("insert session: %v", err)
+	}
+	sessionID, _ := result.LastInsertId()
+
+	// OUTPUT rule where dest IP matches existing manual peer → direction='forward'
+	result, err = database.Exec(
+		`INSERT INTO import_rules (session_id, chain, rule_order, raw_rule, status, skip_reason, action, priority, direction, target_scope, policy_name)
+		VALUES (?, 'OUTPUT', 1, '-d 10.0.0.3 -p tcp --dport 443 -j ACCEPT', 'pending', '', 'ACCEPT', 100, 'forward', 'both', 'test-output-manual')`, sessionID)
+	if err != nil {
+		t.Fatalf("insert rule: %v", err)
+	}
+	ruleID, _ := result.LastInsertId()
+
+	ctx := context.Background()
+	err = resolveRules(ctx, database, sessionID, peerID, []string{"10.0.0.1"}, "")
+	if err != nil {
+		t.Fatalf("resolveRules returned error: %v", err)
+	}
+
+	var direction string
+	err = database.QueryRow("SELECT direction FROM import_rules WHERE id = ?", ruleID).Scan(&direction)
+	if err != nil {
+		t.Fatalf("query rule direction: %v", err)
+	}
+	if direction != "forward" {
+		t.Errorf("expected direction='forward', got %q", direction)
+	}
+}
+
+func TestInputRuleDirection_BothWhenRemoteIsSpecial(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+
+	// Insert the importing peer
+	peerID := insertTestPeer(t, database, "input-special-local", "10.0.0.1", false)
+
+	_ = insertTestService(t, database, "https", "443", "tcp")
+
+	result, err := database.Exec("INSERT INTO import_sessions (peer_id, status, raw_backup) VALUES (?, 'parsed', 'test')", peerID)
+	if err != nil {
+		t.Fatalf("insert session: %v", err)
+	}
+	sessionID, _ := result.LastInsertId()
+
+	// INPUT rule with no source IP (0.0.0.0/0) → resolves to special __any_ip__ → direction='both'
+	result, err = database.Exec(
+		`INSERT INTO import_rules (session_id, chain, rule_order, raw_rule, status, skip_reason, action, priority, direction, target_scope, policy_name)
+		VALUES (?, 'INPUT', 1, '-p tcp --dport 443 -j ACCEPT', 'pending', '', 'ACCEPT', 100, 'backward', 'both', 'test-input-special')`, sessionID)
+	if err != nil {
+		t.Fatalf("insert rule: %v", err)
+	}
+	ruleID, _ := result.LastInsertId()
+
+	ctx := context.Background()
+	err = resolveRules(ctx, database, sessionID, peerID, []string{"10.0.0.1"}, "")
+	if err != nil {
+		t.Fatalf("resolveRules returned error: %v", err)
+	}
+
+	var direction string
+	err = database.QueryRow("SELECT direction FROM import_rules WHERE id = ?", ruleID).Scan(&direction)
+	if err != nil {
+		t.Fatalf("query rule direction: %v", err)
+	}
+	if direction != "both" {
+		t.Errorf("expected direction='both' for special endpoint, got %q", direction)
+	}
+}
+
+func TestInputRuleDirection_BothWhenRemoteIsGroup(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+
+	// Insert the importing peer
+	peerID := insertTestPeer(t, database, "input-group-local", "10.0.0.1", false)
+
+	_ = insertTestService(t, database, "https", "443", "tcp")
+
+	result, err := database.Exec("INSERT INTO import_sessions (peer_id, status, raw_backup) VALUES (?, 'parsed', 'test')", peerID)
+	if err != nil {
+		t.Fatalf("insert session: %v", err)
+	}
+	sessionID, _ := result.LastInsertId()
+
+	// INPUT rule with ipset source (-m set --match-set runic_group_test src)
+	// This resolves to a group endpoint → direction='both'
+	result, err = database.Exec(
+		`INSERT INTO import_rules (session_id, chain, rule_order, raw_rule, status, skip_reason, action, priority, direction, target_scope, policy_name)
+		VALUES (?, 'INPUT', 1, '-m set --match-set runic_group_test src -p tcp --dport 443 -j ACCEPT', 'pending', '', 'ACCEPT', 100, 'backward', 'both', 'test-input-group')`, sessionID)
+	if err != nil {
+		t.Fatalf("insert rule: %v", err)
+	}
+	ruleID, _ := result.LastInsertId()
+
+	// The rawIpsets parameter provides ipset member data for group resolution
+	rawIpsets := "Name: runic_group_test\nType: hash:ip\nMembers:\n10.0.0.2\n10.0.0.3\n"
+
+	ctx := context.Background()
+	err = resolveRules(ctx, database, sessionID, peerID, []string{"10.0.0.1"}, rawIpsets)
+	if err != nil {
+		t.Fatalf("resolveRules returned error: %v", err)
+	}
+
+	var direction string
+	err = database.QueryRow("SELECT direction FROM import_rules WHERE id = ?", ruleID).Scan(&direction)
+	if err != nil {
+		t.Fatalf("query rule direction: %v", err)
+	}
+	if direction != "both" {
+		t.Errorf("expected direction='both' for group endpoint, got %q", direction)
 	}
 }

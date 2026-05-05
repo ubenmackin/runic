@@ -160,12 +160,10 @@ func ParseSession(ctx context.Context, database *sql.DB, sessionID int64) error 
 				targetScope = "docker"
 			}
 
-			// Determine direction
-			direction := "both"
-			if rule.Chain == "INPUT" && rule.DestPort != "" {
+			// Determine direction (provisional — resolver will override for agent-based peers)
+			direction := "backward"
+			if rule.Chain == "OUTPUT" {
 				direction = "forward"
-			} else if rule.Chain == "OUTPUT" && rule.DestPort != "" {
-				direction = "backward"
 			}
 
 			// Assign priority based on order (100, 200, 300...)

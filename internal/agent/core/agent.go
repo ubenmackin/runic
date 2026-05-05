@@ -152,7 +152,9 @@ func (a *Agent) Run(ctx context.Context) error {
 		log.Warn("Failed to backup iptables", "error", err)
 	}
 
-	if a.config.ApplyOnBoot {
+	bootPullDone := false
+
+	if a.config.ApplyOnBoot && a.config.ApplyRulesBundle {
 		if !a.isControlPlaneReachable(ctx) {
 			log.Info("Control plane unreachable, applying cached bundle")
 			if err := a.applyCachedBundle(ctx); err != nil {
@@ -165,8 +167,12 @@ func (a *Agent) Run(ctx context.Context) error {
 				if err := a.applyCachedBundle(ctx); err != nil {
 					log.Warn("Failed to apply cached bundle on startup", "error", err)
 				}
+			} else {
+				bootPullDone = true
 			}
 		}
+	} else if a.config.ApplyOnBoot {
+		log.Info("apply_on_boot enabled but apply_rules_bundle disabled, skipping boot-time bundle application")
 	}
 
 	a.shipper = transport.NewShipper(a.httpClient, a.config.ControlPlaneURL, a.config.Token, a.config.HostID, a.config.LogPath)
@@ -178,7 +184,7 @@ func (a *Agent) Run(ctx context.Context) error {
 		return nil
 	})
 	g.Go(func() error {
-		a.pollLoop(gCtx)
+		a.pollLoop(gCtx, bootPullDone)
 		return nil
 	})
 	g.Go(func() error {
@@ -379,12 +385,14 @@ func (a *Agent) sendHeartbeat(ctx context.Context) error {
 }
 
 // pollLoop polls for bundle updates at the configured interval.
-func (a *Agent) pollLoop(ctx context.Context) {
+func (a *Agent) pollLoop(ctx context.Context, skipFirstPull bool) {
 	ticker := time.NewTicker(time.Duration(a.config.PullIntervalSec) * time.Second)
 	defer ticker.Stop()
 
-	if err := a.pullBundle(ctx); err != nil {
-		log.Error("Initial bundle pull failed", "error", err)
+	if !skipFirstPull {
+		if err := a.pullBundle(ctx); err != nil {
+			log.Error("Initial bundle pull failed", "error", err)
+		}
 	}
 
 	for {
@@ -477,6 +485,10 @@ func (a *Agent) isControlPlaneReachable(ctx context.Context) bool {
 
 // applyCachedBundle applies the cached bundle from disk on startup.
 func (a *Agent) applyCachedBundle(ctx context.Context) error {
+	if !a.config.ApplyRulesBundle {
+		log.Info("apply_rules_bundle disabled, skipping cached bundle application")
+		return nil
+	}
 	data, err := os.ReadFile(a.cachePath)
 	if err != nil {
 		if os.IsNotExist(err) {

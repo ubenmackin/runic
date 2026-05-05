@@ -248,13 +248,26 @@ func resolveRules(ctx context.Context, database db.Querier, sessionID int64, pee
 			}
 		}
 
+		// Determine direction based on remote endpoint's agent-managed status
+		var remoteType string
+		var remoteID, remoteStagingID int64
+		if r.Chain == "INPUT" || r.Chain == "DOCKER-USER" {
+			// For INPUT/DOCKER-USER: the remote endpoint is the SOURCE
+			remoteType, remoteID, remoteStagingID = sourceType, sourceID, sourceStagingID
+		} else {
+			// For OUTPUT: the remote endpoint is the TARGET
+			remoteType, remoteID, remoteStagingID = targetType, targetID, targetStagingID
+		}
+		direction := determineDirection(ctx, r.Chain, remoteType, remoteID, remoteStagingID, database)
+
 		// Update the import_rule with resolved mappings
 		_, err := database.ExecContext(ctx,
-			"UPDATE import_rules SET source_type = ?, source_id = ?, source_staging_id = ?, target_type = ?, target_id = ?, target_staging_id = ?, service_id = ?, service_staging_id = ?, source_ip = ?, target_ip = ?, status = 'resolved' WHERE id = ?",
+			"UPDATE import_rules SET source_type = ?, source_id = ?, source_staging_id = ?, target_type = ?, target_id = ?, target_staging_id = ?, service_id = ?, service_staging_id = ?, source_ip = ?, target_ip = ?, direction = ?, status = 'resolved' WHERE id = ?",
 			sourceType, sqlNullInt64(sourceID), sqlNullInt64(sourceStagingID),
 			targetType, sqlNullInt64(targetID), sqlNullInt64(targetStagingID),
 			sqlNullInt64(serviceID), sqlNullInt64(serviceStagingID),
 			sqlNullString(sourceIP), sqlNullString(targetIP),
+			direction,
 			r.ID,
 		)
 		if err != nil {
@@ -561,6 +574,40 @@ func resolveService(ctx context.Context, database db.Querier, sessionID int64, r
 	stagingID, _ := result.LastInsertId()
 
 	return 0, stagingID
+}
+
+// determineDirection computes the correct direction for an imported rule based on
+// whether the remote endpoint is an existing agent-based peer.
+// The importing peer always gets rules (backward for INPUT, forward for OUTPUT).
+// If the remote endpoint is also agent-based (or is a special/group), direction becomes 'both'.
+func determineDirection(ctx context.Context, chain string, remoteType string, remoteID int64, remoteStagingID int64, database db.Querier) string {
+	// Default: importing peer gets rules only
+	defaultDir := "backward" // INPUT chain (importing peer = target)
+	if chain == "OUTPUT" {
+		defaultDir = "forward" // OUTPUT chain (importing peer = source)
+	}
+
+	// Special endpoints → both (safe default)
+	if remoteType == "special" {
+		return "both"
+	}
+
+	// Group endpoints → both (groups may contain agent peers)
+	if remoteType == "group" {
+		return "both"
+	}
+
+	// Peer endpoint: check if it's an existing agent-based peer
+	if remoteType == "peer" && remoteID != 0 && remoteStagingID == 0 {
+		var isManual bool
+		err := database.QueryRowContext(ctx, "SELECT is_manual FROM peers WHERE id = ?", remoteID).Scan(&isManual)
+		if err == nil && !isManual {
+			return "both" // Existing agent-based peer
+		}
+	}
+
+	// Staging peer, manual peer, or unknown → only importing peer gets rules
+	return defaultDir
 }
 
 // createStagingPeer creates a staging peer mapping for an IP that doesn't match an existing peer.

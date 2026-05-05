@@ -1560,12 +1560,26 @@ export default function CraftPolicyWizard({ log, onClose, onSuccess }) {
   // Compute effective target peer once to avoid duplicated ternary
   const effectiveTargetPeer = createTargetPeerMode ? newTargetPeer : (existingTargetPeer || newTargetPeer);
 
+  // Compute direction-aware source/target peers for policy purposes.
+  // The raw state variables represent how the peers were looked up:
+  //   existingTargetPeer = external peer (looked up by externalIP)
+  //   existingSourcePeer = local peer (looked up by log hostname/src_ip)
+  //
+  // For OUT logs: Source=local(initiator), Target=external(receiver) — matches raw state
+  // For IN logs:  Source=external(initiator), Target=local(receiver) — swap needed
+  //
+  // This matches the Policy page and importer conventions where:
+  //   IN:  Source=external, Target=local, direction=backward → target(local) gets rules
+  //   OUT: Source=local, Target=external, direction=forward → source(local) gets rules
+  const policySourcePeer = direction === "IN" ? effectiveTargetPeer : existingSourcePeer;
+  const policyTargetPeer = direction === "IN" ? existingSourcePeer : effectiveTargetPeer;
+
   // Get display values for editable fields
   const getSourceDisplay = () =>
     getPeerDisplayValue({
       selectedPeerId: selectedSourcePeerId,
       allPeers,
-      fallbackPeer: existingSourcePeer,
+      fallbackPeer: policySourcePeer,
       fallback: "Unknown",
     });
 
@@ -1573,7 +1587,7 @@ export default function CraftPolicyWizard({ log, onClose, onSuccess }) {
     getPeerDisplayValue({
       selectedPeerId: selectedTargetPeerId,
       allPeers,
-      fallbackPeer: effectiveTargetPeer,
+      fallbackPeer: policyTargetPeer,
       fallback: "Unknown",
     });
 
@@ -1667,60 +1681,81 @@ export default function CraftPolicyWizard({ log, onClose, onSuccess }) {
     let createdServiceId = null;
 
   try {
-    // Source is the local peer from the log, Target is the external peer
-    // Use user-selected overrides if provided, otherwise use auto-detected values
-    // Handle pending peer selections and composite values (e.g., "peer:5:10.20.10.20")
-    const sourceComposite = parseCompositePeerValue(selectedSourcePeerId);
-    const targetComposite = parseCompositePeerValue(selectedTargetPeerId);
+    // Source and Target assignment follows the Policy page convention:
+      // IN logs:  Source=external(initiator), Target=local(receiver)
+      // OUT logs: Source=local(initiator), Target=external(receiver)
+      // Use user-selected overrides if provided, otherwise use auto-detected values
+      // Handle pending peer selections and composite values (e.g., "peer:5:10.20.10.20")
+      const sourceComposite = parseCompositePeerValue(selectedSourcePeerId);
+      const targetComposite = parseCompositePeerValue(selectedTargetPeerId);
 
-    let sourcePeerId = sourceComposite
-      ? sourceComposite.id
-      : selectedSourcePeerId === "pending-source"
-        ? null
-        : selectedSourcePeerId || existingSourcePeer?.id;
-    let sourceIP = sourceComposite ? sourceComposite.ip : null;
+      // Determine source/target peer IDs based on direction.
+      // For IN logs: source = external peer (was existingTargetPeer), target = local peer (was existingSourcePeer)
+      // For OUT logs: source = local peer (existingSourcePeer), target = external peer (existingTargetPeer)
+      const resolvedSourcePeerId = direction === "IN" ? existingTargetPeer?.id : existingSourcePeer?.id;
+      const resolvedTargetPeerId = direction === "IN" ? existingSourcePeer?.id : existingTargetPeer?.id;
 
-    let targetPeerId = targetComposite
-      ? targetComposite.id
-      : selectedTargetPeerId === "pending-target"
+      let sourcePeerId = sourceComposite
+        ? sourceComposite.id
+        : selectedSourcePeerId === "pending-source"
         ? null
-        : selectedTargetPeerId || existingTargetPeer?.id;
-    let targetIP = targetComposite ? targetComposite.ip : null;
+        : selectedSourcePeerId || resolvedSourcePeerId;
+      let sourceIP = sourceComposite ? sourceComposite.ip : null;
+
+      let targetPeerId = targetComposite
+        ? targetComposite.id
+        : selectedTargetPeerId === "pending-target"
+        ? null
+        : selectedTargetPeerId || resolvedTargetPeerId;
+      let targetIP = targetComposite ? targetComposite.ip : null;
 
     let serviceId = selectedServiceId || existingService?.id;
     const policyDirection = selectedDirection || direction;
 
-      // Step 0: Create source peer (local machine) if needed
+      // Step 0: Create source peer if needed
+      // For IN logs: source = external peer; For OUT logs: source = local peer
       // Only create if no existing peer and user hasn't selected an override
-      if (!selectedSourcePeerId && !existingSourcePeer?.id) {
-        const createdSourcePeer = await api.post("/peers", {
-          hostname: existingSourcePeer.hostname,
-          ip_address: existingSourcePeer.ip_address,
-      os_type: existingSourcePeer.os_type || null,
-      arch: existingSourcePeer.arch || null,
-      is_manual: true,
-    });
-    sourcePeerId = createdSourcePeer.id;
-        createdSourcePeerId = createdSourcePeer.id; // Track for potential cleanup
-        showToast("Source peer created successfully", "success");
+      if (!selectedSourcePeerId) {
+        const needsSourceCreation = direction === "IN"
+          ? (!existingTargetPeer || createTargetPeerMode) // IN: source is external
+          : !existingSourcePeer?.id; // OUT: source is local
+
+        if (needsSourceCreation) {
+          // Determine the peer data to use for source creation based on direction
+          const sourcePeerData = direction === "IN"
+            ? { hostname: newTargetPeer.hostname, ip_address: newTargetPeer.ip_address, os_type: newTargetPeer.os_type || null, arch: newTargetPeer.arch || null }
+            : { hostname: existingSourcePeer.hostname, ip_address: existingSourcePeer.ip_address, os_type: existingSourcePeer.os_type || null, arch: existingSourcePeer.arch || null };
+          const createdSourcePeer = await api.post("/peers", {
+            ...sourcePeerData,
+            is_manual: true,
+          });
+          sourcePeerId = createdSourcePeer.id;
+          createdSourcePeerId = createdSourcePeer.id; // Track for potential cleanup
+          showToast("Source peer created successfully", "success");
+        }
       }
 
-      // Step 1: Create target peer (external IP) if needed
+      // Step 1: Create target peer if needed
+      // For IN logs: target = local peer; For OUT logs: target = external peer
       // Only create if no existing peer and user hasn't selected an override
-      if (
-        !selectedTargetPeerId &&
-        (!existingTargetPeer || createTargetPeerMode)
-      ) {
-        const createdTargetPeer = await api.post("/peers", {
-          hostname: newTargetPeer.hostname,
-          ip_address: newTargetPeer.ip_address,
-      os_type: newTargetPeer.os_type || null,
-      arch: newTargetPeer.arch || null,
-          is_manual: true,
-        });
-        targetPeerId = createdTargetPeer.id;
-        createdTargetPeerId = createdTargetPeer.id; // Track for potential cleanup
-        showToast("Target peer created successfully", "success");
+      if (!selectedTargetPeerId) {
+        const needsTargetCreation = direction === "IN"
+          ? !existingSourcePeer?.id // IN: target is local
+          : (!existingTargetPeer || createTargetPeerMode); // OUT: target is external
+
+        if (needsTargetCreation) {
+          // Determine the peer data to use for target creation based on direction
+          const targetPeerData = direction === "IN"
+            ? { hostname: existingSourcePeer.hostname, ip_address: existingSourcePeer.ip_address, os_type: existingSourcePeer.os_type || null, arch: existingSourcePeer.arch || null }
+            : { hostname: newTargetPeer.hostname, ip_address: newTargetPeer.ip_address, os_type: newTargetPeer.os_type || null, arch: newTargetPeer.arch || null };
+          const createdTargetPeer = await api.post("/peers", {
+            ...targetPeerData,
+            is_manual: true,
+          });
+          targetPeerId = createdTargetPeer.id;
+          createdTargetPeerId = createdTargetPeer.id; // Track for potential cleanup
+          showToast("Target peer created successfully", "success");
+        }
       }
 
       // Step 2: Create service if needed
@@ -1738,8 +1773,8 @@ export default function CraftPolicyWizard({ log, onClose, onSuccess }) {
         showToast("Service created successfully", "success");
       }
 
-    // Step 3: Create policy
-    // Source = local peer (from log), Target = external peer
+      // Step 3: Create policy
+      // IN: Source=external, Target=local; OUT: Source=local, Target=external
     await api.post("/policies", {
       name: policyConfig.name,
       description: policyConfig.description || null,
@@ -1930,8 +1965,8 @@ export default function CraftPolicyWizard({ log, onClose, onSuccess }) {
               existingService={existingService}
               newService={newService}
               policyConfig={policyConfig}
-            sourcePeer={existingSourcePeer}
-            targetPeer={effectiveTargetPeer}
+        sourcePeer={policySourcePeer}
+        targetPeer={policyTargetPeer}
       direction={direction}
       // Pass override values
               selectedSourcePeerId={selectedSourcePeerId}

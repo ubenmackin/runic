@@ -73,16 +73,21 @@ func insertService(t *testing.T, database *sql.DB, name, ports, protocol string)
 }
 
 // insertPolicy inserts a test policy and returns its ID.
-func insertPolicy(t *testing.T, database *sql.DB, name string, groupID, serviceID, peerID int, action string, priority int, enabled bool) int {
+// An optional direction parameter can be provided (default is "both").
+func insertPolicy(t *testing.T, database *sql.DB, name string, groupID, serviceID, peerID int, action string, priority int, enabled bool, direction ...string) int {
 	t.Helper()
+	dir := "both"
+	if len(direction) > 0 {
+		dir = direction[0]
+	}
 	enabledInt := 0
 	if enabled {
 		enabledInt = 1
 	}
 	result, err := database.Exec(
-		`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled)
-		VALUES (?, ?, "group", ?, ?, "peer", ?, ?, ?)`,
-		name, groupID, serviceID, peerID, action, priority, enabledInt)
+		`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled, direction)
+		VALUES (?, ?, "group", ?, ?, "peer", ?, ?, ?, ?)`,
+		name, groupID, serviceID, peerID, action, priority, enabledInt, dir)
 	if err != nil {
 		t.Fatalf("insert policy: %v", err)
 	}
@@ -1403,24 +1408,6 @@ func TestEdgeCases(t *testing.T) {
 	}
 }
 
-// insertPolicyWithDirection inserts a test policy with a direction field and returns its ID.
-func insertPolicyWithDirection(t *testing.T, database *sql.DB, name string, groupID, serviceID, peerID int, action string, priority int, enabled bool, direction string) int {
-	t.Helper()
-	enabledInt := 0
-	if enabled {
-		enabledInt = 1
-	}
-	result, err := database.Exec(
-		`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled, direction)
-		VALUES (?, ?, "group", ?, ?, "peer", ?, ?, ?, ?)`,
-		name, groupID, serviceID, peerID, action, priority, enabledInt, direction)
-	if err != nil {
-		t.Fatalf("insert policy with direction: %v", err)
-	}
-	id, _ := result.LastInsertId()
-	return int(id)
-}
-
 func TestForwardOnlyPolicy(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
@@ -1491,7 +1478,7 @@ func TestBackwardOnlyPolicy(t *testing.T) {
 
 	// Insert policy: clients -> web-server, backward only
 	// This means only the target (web-server) gets INPUT rules, source does NOT get OUTPUT rules
-	insertPolicyWithDirection(t, database, "http-backward-only", groupID, serviceID, webServer, "ACCEPT", 100, true, "backward")
+	insertPolicy(t, database, "http-backward-only", groupID, serviceID, webServer, "ACCEPT", 100, true, "backward")
 
 	c := NewCompiler(database)
 
@@ -1527,7 +1514,7 @@ func TestBidirectionalPolicy(t *testing.T) {
 	serviceID := insertService(t, database, "ssh", "22", "tcp")
 
 	// Insert policy with direction='both' (default behavior)
-	insertPolicyWithDirection(t, database, "ssh-bidirectional", groupID, serviceID, peerID, "ACCEPT", 100, true, "both")
+	insertPolicy(t, database, "ssh-bidirectional", groupID, serviceID, peerID, "ACCEPT", 100, true, "both")
 
 	c := NewCompiler(database)
 
@@ -2684,6 +2671,186 @@ func TestPreviewCompileWithSourceIP(t *testing.T) {
 		if strings.Contains(rule, "-s 10.0.0.1/32") {
 			t.Errorf("should NOT use peer's primary IP when source_ip is set, got: %s", rule)
 		}
+	}
+}
+
+// TestCompileImportedOutputRule verifies that the compiler generates both OUTPUT and INPUT rules
+// when a policy has direction='both' and the peer is the source (simulating an imported OUTPUT rule).
+func TestCompileImportedOutputRule(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+
+	// peerA (10.0.0.1) is the source peer (simulating the peer that had the OUTPUT rule)
+	// peerB (10.0.0.2) is the target peer
+	peerA := insertPeer(t, database, "import-output-src", "10.0.0.1", false)
+	peerB := insertPeer(t, database, "import-output-dst", "10.0.0.2", false)
+	groupID := insertGroup(t, database, "import-output-group")
+	insertGroupMember(t, database, groupID, peerA)
+	serviceID := insertService(t, database, "https", "443", "tcp")
+
+	// Policy: source=group(peerA), target=peerB, direction='both'
+	insertPolicy(t, database, "imported-output", groupID, serviceID, peerB, "ACCEPT", 100, true, "both")
+
+	c := NewCompiler(database)
+
+	// Compile for peerB (target): should have INPUT rule from peerA and paired OUTPUT return rule
+	outputB, err := c.Compile(context.Background(), peerB)
+	if err != nil {
+		t.Fatalf("compile peerB error: %v", err)
+	}
+	if !strings.Contains(outputB, "-A INPUT -s 10.0.0.1/32 -p tcp --dport 443") {
+		t.Errorf("expected INPUT rule from peerA on peerB, got:\n%s", outputB)
+	}
+	if !strings.Contains(outputB, "-A OUTPUT -d 10.0.0.1/32 -p tcp --sport 443") {
+		t.Errorf("expected OUTPUT return rule to peerA on peerB, got:\n%s", outputB)
+	}
+
+	// Compile for peerA (source, via group): should have OUTPUT rule to peerB and paired INPUT return rule
+	outputA, err := c.Compile(context.Background(), peerA)
+	if err != nil {
+		t.Fatalf("compile peerA error: %v", err)
+	}
+	if !strings.Contains(outputA, "-A OUTPUT -d 10.0.0.2/32 -p tcp --dport 443") {
+		t.Errorf("expected OUTPUT rule to peerB on peerA, got:\n%s", outputA)
+	}
+	if !strings.Contains(outputA, "-A INPUT -s 10.0.0.2/32 -p tcp --sport 443") {
+		t.Errorf("expected INPUT return rule from peerB on peerA, got:\n%s", outputA)
+	}
+}
+
+// TestCompileImportedInputRule verifies that the compiler generates both INPUT and OUTPUT rules
+// when a policy has direction='both' and the peer is the target (simulating an imported INPUT rule).
+func TestCompileImportedInputRule(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+
+	// peerA (10.0.0.1) is the target peer (simulating the peer that had the INPUT rule)
+	// peerB (10.0.0.2) is the source peer
+	peerA := insertPeer(t, database, "import-input-dst", "10.0.0.1", false)
+	peerB := insertPeer(t, database, "import-input-src", "10.0.0.2", false)
+	groupID := insertGroup(t, database, "import-input-group")
+	insertGroupMember(t, database, groupID, peerB)
+	serviceID := insertService(t, database, "https", "443", "tcp")
+
+	// Policy: source=group(peerB), target=peerA, direction='both'
+	insertPolicy(t, database, "imported-input", groupID, serviceID, peerA, "ACCEPT", 100, true, "both")
+
+	c := NewCompiler(database)
+
+	// Compile for peerA (target): should have INPUT rule from peerB and paired OUTPUT return rule
+	outputA, err := c.Compile(context.Background(), peerA)
+	if err != nil {
+		t.Fatalf("compile peerA error: %v", err)
+	}
+	if !strings.Contains(outputA, "-A INPUT -s 10.0.0.2/32 -p tcp --dport 443") {
+		t.Errorf("expected INPUT rule from peerB on peerA, got:\n%s", outputA)
+	}
+	if !strings.Contains(outputA, "-A OUTPUT -d 10.0.0.2/32 -p tcp --sport 443") {
+		t.Errorf("expected OUTPUT return rule to peerB on peerA, got:\n%s", outputA)
+	}
+
+	// Compile for peerB (source, via group): should have OUTPUT rule to peerA and paired INPUT return rule
+	outputB, err := c.Compile(context.Background(), peerB)
+	if err != nil {
+		t.Fatalf("compile peerB error: %v", err)
+	}
+	if !strings.Contains(outputB, "-A OUTPUT -d 10.0.0.1/32 -p tcp --dport 443") {
+		t.Errorf("expected OUTPUT rule to peerA on peerB, got:\n%s", outputB)
+	}
+	if !strings.Contains(outputB, "-A INPUT -s 10.0.0.1/32 -p tcp --sport 443") {
+		t.Errorf("expected INPUT return rule from peerA on peerB, got:\n%s", outputB)
+	}
+}
+
+// TestCompileImportedInputRule_BackwardDirection verifies that when direction='backward',
+// only the target peer gets rules (INPUT+OUTPUT pair). This simulates an imported INPUT rule
+// where the remote peer is not agent-managed.
+func TestCompileImportedInputRule_BackwardDirection(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+
+	// peerA (10.0.0.1) is the self/importing peer (target of policy)
+	// peerB (10.0.0.2) is the remote peer (source)
+	peerA := insertPeer(t, database, "import-backward-target", "10.0.0.1", false)
+	peerB := insertPeer(t, database, "import-backward-source", "10.0.0.2", false)
+
+	groupID := insertGroup(t, database, "import-backward-group")
+	insertGroupMember(t, database, groupID, peerB)
+
+	serviceID := insertService(t, database, "https", "443", "tcp")
+
+	// Policy: source=group(peerB), target=peerA, direction='backward'
+	insertPolicy(t, database, "imported-input-backward", groupID, serviceID, peerA, "ACCEPT", 100, true, "backward")
+
+	c := NewCompiler(database)
+
+	// Compile for peerA (target): should have INPUT rule from peerB and paired OUTPUT return rule
+	outputA, err := c.Compile(context.Background(), peerA)
+	if err != nil {
+		t.Fatalf("compile peerA error: %v", err)
+	}
+	if !strings.Contains(outputA, "-A INPUT -s 10.0.0.2/32 -p tcp --dport 443") {
+		t.Errorf("expected INPUT rule from peerB on peerA, got:\n%s", outputA)
+	}
+	if !strings.Contains(outputA, "-A OUTPUT -d 10.0.0.2/32 -p tcp --sport 443") {
+		t.Errorf("expected OUTPUT return rule to peerB on peerA, got:\n%s", outputA)
+	}
+
+	// Compile for peerB (source, via group): should NOT have egress rules for this policy
+	outputB, err := c.Compile(context.Background(), peerB)
+	if err != nil {
+		t.Fatalf("compile peerB error: %v", err)
+	}
+	if strings.Contains(outputB, "As Source (Egress to") {
+		t.Errorf("backward-only policy should NOT generate egress rules on source peerB, got:\n%s", outputB)
+	}
+}
+
+// TestCompileImportedOutputRule_ForwardDirection verifies that when direction='forward',
+// only the source peer gets rules (OUTPUT+INPUT pair). This simulates an imported OUTPUT rule
+// where the remote peer is not agent-managed.
+func TestCompileImportedOutputRule_ForwardDirection(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+
+	// peerA (10.0.0.1) is the self/importing peer (source of policy)
+	// peerB (10.0.0.2) is the remote peer (target)
+	peerA := insertPeer(t, database, "import-forward-source", "10.0.0.1", false)
+	peerB := insertPeer(t, database, "import-forward-target", "10.0.0.2", false)
+
+	groupID := insertGroup(t, database, "import-forward-group")
+	insertGroupMember(t, database, groupID, peerA)
+
+	serviceID := insertService(t, database, "https", "443", "tcp")
+
+	// Policy: source=group(peerA), target=peerB, direction='forward'
+	insertPolicy(t, database, "imported-output-forward", groupID, serviceID, peerB, "ACCEPT", 100, true, "forward")
+
+	c := NewCompiler(database)
+
+	// Compile for peerA (source, via group): should have OUTPUT rule to peerB and paired INPUT return rule
+	outputA, err := c.Compile(context.Background(), peerA)
+	if err != nil {
+		t.Fatalf("compile peerA error: %v", err)
+	}
+	if !strings.Contains(outputA, "-A OUTPUT -d 10.0.0.2/32 -p tcp --dport 443") {
+		t.Errorf("expected OUTPUT rule to peerB on peerA, got:\n%s", outputA)
+	}
+	if !strings.Contains(outputA, "-A INPUT -s 10.0.0.2/32 -p tcp --sport 443") {
+		t.Errorf("expected INPUT return rule from peerB on peerA, got:\n%s", outputA)
+	}
+
+	// Compile for peerB (target): should NOT have ingress rules for this policy
+	outputB, err := c.Compile(context.Background(), peerB)
+	if err != nil {
+		t.Fatalf("compile peerB error: %v", err)
+	}
+	if strings.Contains(outputB, "As Target (Ingress from") {
+		t.Errorf("forward-only policy should NOT generate ingress rules on target peerB, got:\n%s", outputB)
 	}
 }
 
