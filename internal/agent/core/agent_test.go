@@ -1235,12 +1235,12 @@ func TestAgentURLMergeLogicConfigEmpty(t *testing.T) {
 func TestAgentFailsWithNoURL(t *testing.T) {
 	// Config file has NO URL
 	cfg := &identity.Config{
-		ControlPlaneURL: "", // Empty
-		HostID: "test-host",
-		Token: "test-token",
-		PullIntervalSec: 86400,
+		ControlPlaneURL:      "", // Empty
+		HostID:               "test-host",
+		Token:                "test-token",
+		PullIntervalSec:      86400,
 		HeartbeatIntervalSec: 30,
-		LogPath: "/var/log/runic/firewall.log",
+		LogPath:              "/var/log/runic/firewall.log",
 	}
 	configPath := helperConfigPath(t, cfg)
 
