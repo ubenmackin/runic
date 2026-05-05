@@ -164,6 +164,34 @@ export default function Policies() {
 
   const isSpecialService = isIGMPService || isVRRPService
 
+  // Helper to extract peer ID from composite value (e.g., "peer:5:10.20.10.20" -> "5")
+  const extractPeerId = (value) => {
+    if (typeof value === 'string' && value.startsWith('peer:')) {
+      const parts = value.split(':')
+      return parts[1] || null
+    }
+    return value
+  }
+
+  // Helper to get peer object from selection value
+  const getPeerFromSelection = (value) => {
+    if (!value) return null
+    const peerId = extractPeerId(value)
+    return peers?.find(p => p.id === peerId) || null
+  }
+
+  // Compute whether the forward button should be enabled
+  // Forward pushes FROM Source: enabled for non-manual peers or groups, disabled for special
+  const sourceType = formData.source_type
+  const sourcePeer = sourceType === 'peer' ? getPeerFromSelection(formData.source_id) : null
+  const canEnableForward = (sourceType === 'peer' && sourcePeer && !sourcePeer.is_manual) || (sourceType === 'group')
+
+  // Compute whether the backward button should be enabled
+  // Backward pushes TO Target: enabled for non-manual peers or groups, disabled for special
+  const targetType = formData.target_type
+  const targetPeer = targetType === 'peer' ? getPeerFromSelection(formData.target_id) : null
+  const canEnableBackward = (targetType === 'peer' && targetPeer && !targetPeer.is_manual) || (targetType === 'group')
+
   const polymorphicOptions = [
     ...(groups || []).map(g => ({ value: g.id, label: g.name, category: 'group' })),
     ...(peers || []).flatMap(p => {
@@ -630,7 +658,7 @@ export default function Policies() {
           </span>
           )}
           {(p.direction === 'both' || p.direction === 'backward') && (
-          <span className="inline-flex items-center px-1.5 py-0.5 text-xs font-medium bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400" title="Backward (Target → Source)">
+          <span className="inline-flex items-center px-1.5 py-0.5 text-xs font-medium bg-blue-100 text-blue-600 dark:bg-blue-900/40 dark:text-blue-400" title="Backward (Target → Source)">
             <ArrowLeft className="w-3 h-3" />
           </span>
           )}
@@ -745,13 +773,13 @@ export default function Policies() {
                               direction: d.direction === 'both' ? 'backward' : (d.direction === 'backward' ? 'both' : 'forward')
                             }))
                           }}
-                          disabled={isSpecialService}
+                          disabled={isSpecialService || !canEnableForward}
                           className={`flex items-center justify-center w-28 h-8 rounded-none border-2 transition-all duration-200 ${
                             formData.direction === 'both' || formData.direction === 'forward'
                               ? 'bg-emerald-900/80 border-emerald-500 text-emerald-400 hover:bg-emerald-800/80'
                               : 'bg-gray-200 dark:bg-gray-800 border-gray-300 dark:border-gray-600 text-gray-400 dark:text-gray-500 hover:bg-gray-300 dark:hover:bg-gray-700'
-                          } ${isSpecialService ? 'opacity-50 cursor-not-allowed' : ''}`}
-                          title={isSpecialService ? "IGMP/VRRP generate OUTPUT rules automatically — direction is fixed" : "Forward: Source → Target"}
+                          } ${isSpecialService || !canEnableForward ? 'opacity-50 cursor-not-allowed' : ''}`}
+                          title={isSpecialService ? "IGMP/VRRP generate OUTPUT rules automatically — direction is fixed" : (!canEnableForward ? (formData.source_id ? "Cannot push rules from manual peer" : "Select a source peer first") : "Forward: Source → Target")}
                         >
                           <svg viewBox="0 0 80 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="w-16 h-4">
                             <line x1="8" y1="12" x2="66" y2="12" />
@@ -767,13 +795,13 @@ export default function Policies() {
                               direction: d.direction === 'both' ? 'forward' : (d.direction === 'forward' ? 'both' : 'backward')
                             }))
                           }}
-                          disabled={isSpecialService}
+                          disabled={isSpecialService || !canEnableBackward}
                           className={`flex items-center justify-center w-28 h-8 rounded-none border-2 transition-all duration-200 ${
                             formData.direction === 'both' || formData.direction === 'backward'
-                              ? 'bg-emerald-900/80 border-emerald-500 text-emerald-400 hover:bg-emerald-800/80'
+                              ? 'bg-blue-900/80 border-blue-500 text-blue-400 hover:bg-blue-800/80'
                               : 'bg-gray-200 dark:bg-gray-800 border-gray-300 dark:border-gray-600 text-gray-400 dark:text-gray-500 hover:bg-gray-300 dark:hover:bg-gray-700'
-                          } ${isSpecialService ? 'opacity-50 cursor-not-allowed' : ''}`}
-                          title={isSpecialService ? "IGMP/VRRP generate OUTPUT rules automatically — direction is fixed" : "Backward: Target → Source"}
+                          } ${isSpecialService || !canEnableBackward ? 'opacity-50 cursor-not-allowed' : ''}`}
+                          title={isSpecialService ? "IGMP/VRRP generate OUTPUT rules automatically — direction is fixed" : (!canEnableBackward ? (formData.target_id ? "Cannot push rules to manual peer" : "Select a target peer first") : "Backward: Target → Source")}
                         >
                           <svg viewBox="0 0 80 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="w-16 h-4">
                             <line x1="72" y1="12" x2="14" y2="12" />

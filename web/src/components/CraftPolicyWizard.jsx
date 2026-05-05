@@ -537,6 +537,7 @@ function PolicyStep({
   peersLoading = false,
   getSourceDisplay = () => null,
   getTargetDisplay = () => null,
+  allPeers = [],
 }) {
   const [showDescription, setShowDescription] = useState(false);
 
@@ -545,6 +546,49 @@ function PolicyStep({
 
   // Determine the effective direction for display
   const effectiveDirection = selectedDirection || direction;
+
+  // Helper to get the actual peer object from a selected peer ID (handles composite values)
+  const getPeerFromSelection = (selectedId) => {
+    if (!selectedId) return null;
+    // Handle composite values like "peer:5:10.20.10.20"
+    const composite = parseCompositePeerValue(selectedId);
+    if (composite) {
+      return allPeers.find((p) => p.id === composite.id) || null;
+    }
+    // Handle special pending values
+    if (selectedId === "pending-source" || selectedId === "pending-target") {
+      return null;
+    }
+    // Regular peer ID
+    return allPeers.find((p) => p.id === selectedId) || null;
+  };
+
+  // Helper to detect if a selected value is a group
+  const isGroupSelection = (selectedId) => {
+    return typeof selectedId === 'string' && selectedId.startsWith('group:');
+  };
+
+  // Extract source/target type from selection
+  const sourceType = isGroupSelection(selectedSourcePeerId) ? 'group' : 'peer';
+  const targetType = isGroupSelection(selectedTargetPeerId) ? 'group' : 'peer';
+
+  // Compute whether the forward button should be enabled (handles null peer case)
+  // Forward pushes FROM Source: enabled if source is Agent peer (not manual) OR Group
+  // If sourcePeer is null/undefined, treat as non-manual (enable button)
+  const sourcePeer = getPeerFromSelection(selectedSourcePeerId);
+  const _canEnableForward = selectedSourcePeerId && (
+    (sourceType === 'peer' && (!sourcePeer || !sourcePeer.is_manual)) ||
+    sourceType === 'group'
+  );
+
+  // Compute whether the backward button should be enabled (handles null peer case)
+  // Backward pushes TO Target: enabled if target is Agent peer (not manual) OR Group
+  // If targetPeer is null/undefined, treat as non-manual (enable button)
+  const targetPeer = getPeerFromSelection(selectedTargetPeerId);
+  const _canEnableBackward = selectedTargetPeerId && (
+    (targetType === 'peer' && (!targetPeer || !targetPeer.is_manual)) ||
+    targetType === 'group'
+  );
 
   return (
     <div className="space-y-4">
@@ -739,7 +783,7 @@ function PolicyStep({
                 effectiveDirection === "both" ||
                 effectiveDirection === "backward" ||
                 effectiveDirection === "IN"
-                  ? "bg-emerald-900/80 border-emerald-500 text-emerald-400 hover:bg-emerald-800/80"
+                  ? "bg-blue-900/80 border-blue-500 text-blue-400 hover:bg-blue-800/80"
                   : "bg-gray-200 dark:bg-gray-800 border-gray-300 dark:border-gray-600 text-gray-400 dark:text-gray-500 hover:bg-gray-300 dark:hover:bg-gray-700"
               }`}
               title="Backward: Target → Source"
@@ -1266,8 +1310,9 @@ export default function CraftPolicyWizard({ log, onClose, onSuccess }) {
     direction: false,
   });
 
-  // All available peers and services for dropdown options
+  // All available peers, groups, and services for dropdown options
   const [allPeers, setAllPeers] = useState([]);
+  const [allGroups, setAllGroups] = useState([]);
   const [allServices, setAllServices] = useState([]);
   const [peersLoading, setPeersLoading] = useState(true);
 
@@ -1468,12 +1513,14 @@ export default function CraftPolicyWizard({ log, onClose, onSuccess }) {
 
     const fetchAllData = async () => {
       try {
-        const [peersData, servicesData] = await Promise.all([
+        const [peersData, groupsData, servicesData] = await Promise.all([
           api.get("/peers"),
+          api.get("/groups"),
           api.get("/services"),
         ]);
         if (isMounted) {
           setAllPeers(peersData || []);
+          setAllGroups(groupsData || []);
           setAllServices(servicesData || []);
         }
       } catch (err) {
@@ -1495,6 +1542,13 @@ export default function CraftPolicyWizard({ log, onClose, onSuccess }) {
 
   // Convert peers to options format for SearchableSelect
   const peerOptions = [
+    // Groups first
+    ...(allGroups || []).map((g) => ({
+      value: `group:${g.id}`,
+      label: g.name,
+      sublabel: `${g.peer_count || 0} peers`,
+    })),
+    // Then peers
     ...allPeers.flatMap((peer) => {
       const hasMultipleIPs = peer.ips && peer.ips.length > 1;
       if (hasMultipleIPs) {
@@ -1931,7 +1985,7 @@ export default function CraftPolicyWizard({ log, onClose, onSuccess }) {
           />
         )}
 
-          {step === "policy" && (
+{step === "policy" && (
           <PolicyStep
             policyConfig={policyConfig}
             setPolicyConfig={setPolicyConfig}
@@ -1953,7 +2007,9 @@ export default function CraftPolicyWizard({ log, onClose, onSuccess }) {
               toggleEditMode={toggleEditMode}
               peersLoading={peersLoading}
               getSourceDisplay={getSourceDisplay}
-        getTargetDisplay={getTargetDisplay}
+              getTargetDisplay={getTargetDisplay}
+              allPeers={allPeers}
+              allGroups={allGroups}
             />
           )}
 

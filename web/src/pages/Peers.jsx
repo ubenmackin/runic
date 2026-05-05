@@ -136,7 +136,7 @@ function PeerCard({ peer, peerIPs, canEdit, fetchBundle, handlePushToPeer, openE
 <div className="mt-1 flex items-center gap-1.5">
               <span className="font-mono text-sm text-gray-700 dark:text-amber-primary">{primaryIp}</span>
               {secondaryIps.length > 0 && (
-                <span className="px-1 py-0.5 text-[10px] font-mono font-medium border border-blue-400 dark:border-blue-500 text-blue-600 dark:text-blue-400" title={secondaryIps.join(', ')}>
+                <span className="px-1 py-0.5 text-[10px] font-mono font-medium border border-amber-400 dark:border-amber-500 text-amber-600 dark:text-amber-400" title={secondaryIps.join(', ')}>
                   +{secondaryIps.length}
                 </span>
               )}
@@ -948,7 +948,7 @@ color={syncStatusConfig[peer.sync_status]?.color}
               const secondaryCount = allIps.filter(ip => !ip.is_primary).length
               if (secondaryCount > 0) {
                 return (
-                  <span className="px-1 py-0.5 text-[10px] font-mono font-medium border border-blue-400 dark:border-blue-500 text-blue-600 dark:text-blue-400" title={allIps.filter(ip => !ip.is_primary).map(ip => ip.ip_address).join(', ')}>
+                  <span className="px-1 py-0.5 text-[10px] font-mono font-medium border border-amber-400 dark:border-amber-500 text-amber-600 dark:text-amber-400" title={allIps.filter(ip => !ip.is_primary).map(ip => ip.ip_address).join(', ')}>
                     +{secondaryCount}
                   </span>
                 )

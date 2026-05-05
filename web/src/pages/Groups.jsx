@@ -336,9 +336,9 @@ export default function Groups() {
                   </span>
                 </td>
                 <td className="px-4 py-1">
-                  <div className="flex items-center gap-1.5 px-2 py-1 bg-gray-100 dark:bg-charcoal-darkest rounded-none text-sm">
-                    <Users className="w-4 h-4 text-gray-500" />
-                    <span className="text-gray-900 dark:text-light-neutral">{group.peer_count || 0}</span>
+                  <div className="flex items-center gap-1.5 px-2 py-0.5 bg-purple-100 dark:bg-purple-900/40 rounded-none text-sm">
+                    <Users className="w-4 h-4 text-purple-500" />
+                    <span className="text-purple-700 dark:text-purple-300">{group.peer_count || 0}</span>
                   </div>
                 </td>
                 <td className="px-4 py-1">

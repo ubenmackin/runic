@@ -554,9 +554,9 @@ export default function ImportRulesWizard({ peer, onClose, onSuccess }) {
                               </td>
                               <td className="px-4 py-1">
                                 {rule.direction === "forward" ? (
-                                  <ArrowRight className="w-4 h-4 text-blue-500" />
+                                  <ArrowRight className="w-4 h-4 text-green-500" />
                                 ) : rule.direction === "backward" ? (
-                                  <ArrowLeft className="w-4 h-4 text-purple-500" />
+                                  <ArrowLeft className="w-4 h-4 text-blue-500" />
                                 ) : (
                                   <MoveHorizontal className="w-4 h-4 text-gray-400" />
                                 )}
