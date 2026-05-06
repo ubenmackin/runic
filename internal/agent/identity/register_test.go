@@ -249,60 +249,6 @@ func TestRegisterClearsRegistrationTokenAfterUse(t *testing.T) {
 	}
 }
 
-// TestDetectOSTypeParsesValidOsRelease tests that detectOSType parses valid os-release file.
-func TestDetectOSTypeParsesValidOsRelease(t *testing.T) {
-	// detectOSType reads from /etc/os-release
-	// Test that function returns a valid value
-	result := detectOSType()
-	if result == "" {
-		t.Error("detectOSType returned empty string")
-	}
-	// Should return a valid OS type (ubuntu, debian, rhel, etc.)
-	if result != "linux" && result != "ubuntu" && result != "debian" && result != "rhel" &&
-		result != "opensuse" && result != "arch" && result != "raspbian" {
-		t.Logf("Got OS type: %s (may be valid)", result)
-	}
-}
-
-// TestDetectOSTypeReturnsLinuxOnError tests that detectOSType returns "linux" on error.
-func TestDetectOSTypeReturnsLinuxOnError(t *testing.T) {
-	// The actual function reads from /etc/os-release
-	// If the file doesn't exist or can't be read, it returns "linux"
-	// Test by ensuring the function works even when /etc/os-release might not exist in test env
-	result := detectOSType()
-	// Should always return a non-empty string
-	if result == "" {
-		t.Error("detectOSType returned empty string on what should be a fallback")
-	}
-}
-
-// TestDetectOSTypeMapsKnownIDsCorrectly tests that detectOSType maps known IDs correctly.
-func TestDetectOSTypeMapsKnownIDsCorrectly(t *testing.T) {
-	// Test the mapping logic by creating temp os-release files
-	testCases := []struct {
-		content  string
-		expected string
-	}{
-		{`ID=ubuntu`, "ubuntu"},
-		{`ID=debian`, "debian"},
-		{`ID=fedora`, "rhel"},
-		{`ID=rhel`, "rhel"},
-		{`ID=centos`, "rhel"},
-		{`ID=opensuse`, "opensuse"},
-		{`ID=raspbian`, "raspbian"},
-		{`ID=arch`, "arch"},
-	}
-
-	// Note: These tests would require mocking /etc/os-release
-	// For now, just verify the function returns a valid value
-	_ = testCases // testCases would be used with file mocking
-
-	result := detectOSType()
-	if result == "" {
-		t.Error("expected non-empty OS type")
-	}
-}
-
 // TestDetectKernelVersionReturnsVersionString tests that detectKernelVersion returns version string.
 func TestDetectKernelVersionReturnsVersionString(t *testing.T) {
 	result := detectKernelVersion()

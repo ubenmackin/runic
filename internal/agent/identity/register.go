@@ -22,7 +22,11 @@ func Register(ctx context.Context, client common.HTTPClient, cfg *Config, versio
 		hostname = "unknown"
 	}
 
-	osType := detectOSType()
+	osID, _ := DetectOS()
+	osType := NormalizeOS(osID)
+	if osID == "" {
+		osType = "linux"
+	}
 	kernel := detectKernelVersion()
 	hasDocker := detectDocker()
 	ip := detectLocalIP()
@@ -79,42 +83,6 @@ func Register(ctx context.Context, client common.HTTPClient, cfg *Config, versio
 
 	log.Info("Registered with Runic control plane", "hostname", hostname, "host_id", regResp.HostID)
 	return nil
-}
-
-// detectOSType reads /etc/os-release to determine the OS type.
-func detectOSType() string {
-	data, err := os.ReadFile("/etc/os-release")
-	if err != nil {
-		return "linux"
-	}
-
-	lines := strings.Split(string(data), "\n")
-	for _, line := range lines {
-		if strings.HasPrefix(line, "ID=") {
-			id := strings.TrimPrefix(line, "ID=")
-			id = strings.Trim(id, `"`)
-			id = strings.ToLower(id)
-
-			switch {
-			case strings.HasPrefix(id, "opensuse"):
-				return "opensuse"
-			case id == "raspbian":
-				return "raspbian"
-			case id == "debian":
-				return "debian"
-			case id == "ubuntu":
-				return "ubuntu"
-			case strings.HasPrefix(id, "fedora"), strings.HasPrefix(id, "rhel"), strings.HasPrefix(id, "centos"):
-				return "rhel"
-			case strings.HasPrefix(id, "arch"):
-				return "arch"
-			default:
-				return id
-			}
-		}
-	}
-
-	return "linux"
 }
 
 // detectKernelVersion returns the kernel version from /proc/version.

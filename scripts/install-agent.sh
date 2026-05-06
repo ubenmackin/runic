@@ -1,6 +1,11 @@
 #!/bin/bash
 set -e
 
+# Logging configuration
+# Log directory and exec redirect are set up early so that ALL timestamped
+# step entries (download, stop, move, restart) are captured to update.log.
+LOG_FILE="/var/log/runic/update.log"
+
 # Clean up temp files on exit (download-then-move pattern avoids writing to
 # the running binary, which fails with "Failure writing output to destination")
 TMP_BINARY="$(mktemp)"
@@ -8,31 +13,41 @@ TMP_SERVICE="$(mktemp)"
 cleanup() { rm -f "$TMP_BINARY" "$TMP_SERVICE"; }
 trap cleanup EXIT
 
-# Detect OS type from /etc/os-release
-# Used throughout this script for distro-specific logic
+# Detect OS type from /etc/os-release and return a canonical family name.
+# Mirrors the Go NormalizeOS() mapping so all downstream case arms only
+# need to match canonical names: ubuntu, debian, raspbian, rhel, arch, opensuse.
+# Note: Armbian systems have ID=debian in /etc/os-release, so they are treated
+# as "debian" (consistent with Go's NormalizeOS mapping of "armbian" → "debian").
 detect_os() {
-    if [ -f /etc/os-release ]; then
-        . /etc/os-release
-        # Handle Armbian: has ID=debian but ARMBIAN_PRETTY_NAME is set
-        if [ -n "${ARMBIAN_PRETTY_NAME:-}" ]; then
-            echo "raspbian"
-            return
-        fi
-        # Normalize OS ID for edge cases (e.g., opensuse-leap -> opensuse, opensuse-tumbleweed -> opensuse)
-        case "$ID" in
-            opensuse*|sle*)
-                echo "opensuse"
-                ;;
-            armbian|raspbian)
-                echo "raspbian"
-                ;;
-            *)
-                echo "$ID"
-                ;;
-        esac
-    else
-        echo "unknown"
-    fi
+	if [ -f /etc/os-release ]; then
+		. /etc/os-release
+		# Map raw OS ID to canonical family name (same as Go NormalizeOS)
+		case "$ID" in
+		ubuntu|pop|linuxmint)
+			echo "ubuntu"
+			;;
+		debian|armbian)
+			echo "debian"
+			;;
+		raspbian)
+			echo "raspbian"
+			;;
+		fedora*|rhel*|centos|rocky|almalinux|ol)
+			echo "rhel"
+			;;
+		arch*|manjaro|endeavouros)
+			echo "arch"
+			;;
+		opensuse*|suse|sled|sles)
+			echo "opensuse"
+			;;
+		*)
+			echo "$ID"
+			;;
+		esac
+	else
+		echo "unknown"
+	fi
 }
 
 ARCH=$(uname -m)
@@ -70,12 +85,19 @@ fi
 
 BINARY_URL="${CONTROL_PLANE_URL}/downloads/runic-agent-${AGENT_ARCH}"
 
+# Create log directory early so that the exec redirect captures ALL subsequent
+# output (including timestamped step entries) to update.log.
+mkdir -p /var/log/runic
+chmod 755 /var/log/runic
+exec > >(tee -a "$LOG_FILE") 2>&1
+
 # Download binary and service file to temp files FIRST, before stopping the
 # service. This avoids "Failure writing output to destination" errors caused
 # by writing to /usr/local/bin/runic-agent while the agent process has it open.
 # After verification, we stop the service and atomically mv the files into place.
 
 echo "Downloading runic-agent for ${AGENT_ARCH}..."
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Step: Downloading binary from $BINARY_URL"
 curl -fsSL -o "$TMP_BINARY" "$BINARY_URL"
 chmod +x "$TMP_BINARY"
 
@@ -99,10 +121,12 @@ fi
 # Both downloads verified -- now safe to stop the running agent.
 if systemctl is-active --quiet runic-agent; then
 	echo "Stopping existing runic-agent service..."
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Step: Stopping runic-agent service"
 	systemctl stop runic-agent
 fi
 
 # Atomically move the verified downloads into place.
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Step: Moving binary and service file into place"
 mv "$TMP_BINARY" /usr/local/bin/runic-agent
 mv "$TMP_SERVICE" /etc/systemd/system/runic-agent.service
 
@@ -114,10 +138,6 @@ TMP_SERVICE=""
 mkdir -p /etc/runic-agent
 chmod 700 /etc/runic-agent
 
-# Create log directory
-mkdir -p /var/log/runic
-chmod 755 /var/log/runic
-
 # Create empty firewall.log file (agent expects it to exist on startup)
 touch /var/log/runic/firewall.log
 chmod 644 /var/log/runic/firewall.log
@@ -127,31 +147,31 @@ chmod 644 /var/log/runic/firewall.log
 # rsyslog needs write access to create firewall.log
 OS_TYPE=$(detect_os)
 case "$OS_TYPE" in
-    debian|ubuntu|linuxmint|pop)
-        # Debian/Ubuntu: rsyslog runs as syslog:adm, but check if user exists
-        if id syslog &>/dev/null; then
-            chown syslog:adm /var/log/runic /var/log/runic/firewall.log
-        else
-            chown root:adm /var/log/runic /var/log/runic/firewall.log
-        fi
-        ;;
-    rhel|centos|fedora|rocky|almalinux|ol)
-        # RHEL/CentOS/Fedora/Rocky/Alma/Oracle: rsyslog typically runs as root
-        # Keep root:root ownership (755 permissions allow rsyslog to write)
-        ;;
-    raspbian)
-        # Armbian/Raspbian: check if syslog user exists
-        if id syslog &>/dev/null; then
-            chown syslog:adm /var/log/runic /var/log/runic/firewall.log
-        else
-            chown root:adm /var/log/runic /var/log/runic/firewall.log
-        fi
-        ;;
-    *)
-        # Default: try syslog:adm (common for most distributions)
-        chown syslog:adm /var/log/runic /var/log/runic/firewall.log 2>/dev/null || true
-        ;;
-    esac
+ubuntu|debian)
+# Debian/Ubuntu family: rsyslog runs as syslog:adm, but check if user exists
+if id syslog &>/dev/null; then
+chown syslog:adm /var/log/runic /var/log/runic/firewall.log
+else
+chown root:adm /var/log/runic /var/log/runic/firewall.log
+fi
+;;
+rhel)
+# RHEL family: rsyslog typically runs as root
+# Keep root:root ownership (755 permissions allow rsyslog to write)
+;;
+	raspbian)
+		# Raspbian: check if syslog user exists
+		if id syslog &>/dev/null; then
+			chown syslog:adm /var/log/runic /var/log/runic/firewall.log
+		else
+			chown root:adm /var/log/runic /var/log/runic/firewall.log
+		fi
+		;;
+*)
+# Default: try syslog:adm (common for most distributions)
+chown syslog:adm /var/log/runic /var/log/runic/firewall.log 2>/dev/null || true
+;;
+esac
 
 # Install rsyslog config for firewall logs
 if [ -d /etc/rsyslog.d ]; then
@@ -170,54 +190,54 @@ disable_iptables_services() {
     OS_TYPE=$(detect_os)
     echo "Detected OS: $OS_TYPE"
 
-    case "$OS_TYPE" in
-        ubuntu|debian|linuxmint|pop)
-            echo "Disabling Debian/Ubuntu iptables persistence services..."
-            for service in netfilter-persistent iptables-persistent; do
-                if systemctl is-active --quiet "$service" 2>/dev/null ||                    systemctl is-enabled --quiet "$service" 2>/dev/null; then
-                    echo " -> Stopping and disabling $service..."
-                    systemctl stop "$service" 2>/dev/null || true
-                    systemctl disable "$service" 2>/dev/null || true
-                    systemctl mask "$service" 2>/dev/null || true
-                fi
-            done
-            ;;
-        arch|archarm|manjaro|endeavouros)
-            echo "Disabling Arch Linux iptables services..."
-            for service in iptables ip6tables; do
-                if systemctl is-active --quiet "$service" 2>/dev/null ||                    systemctl is-enabled --quiet "$service" 2>/dev/null; then
-                    echo " -> Stopping and disabling $service.service..."
-                    systemctl stop "$service" 2>/dev/null || true
-                    systemctl disable "$service" 2>/dev/null || true
-                    systemctl mask "$service" 2>/dev/null || true
-                fi
-            done
-            ;;
-        opensuse*|suse|sled|sles)
-            echo "Disabling openSUSE/SUSE firewall services..."
-            # Modern openSUSE uses firewalld
-            for service in firewalld SuSEfirewall2; do
-                if systemctl is-active --quiet "$service" 2>/dev/null ||                    systemctl is-enabled --quiet "$service" 2>/dev/null; then
-                    echo " -> Stopping and disabling $service..."
-                    systemctl stop "$service" 2>/dev/null || true
-                    systemctl disable "$service" 2>/dev/null || true
-                    systemctl mask "$service" 2>/dev/null || true
-                fi
-            done
-            ;;
-        fedora|rhel|centos|rocky|almalinux|ol)
-            echo "Disabling RHEL/CentOS/Fedora firewall services..."
-            # firewalld is default; iptables-services on older systems
-            for service in firewalld iptables-services; do
-                if systemctl is-active --quiet "$service" 2>/dev/null ||                    systemctl is-enabled --quiet "$service" 2>/dev/null; then
-                    echo " -> Stopping and disabling $service..."
-                    systemctl stop "$service" 2>/dev/null || true
-                    systemctl disable "$service" 2>/dev/null || true
-                    systemctl mask "$service" 2>/dev/null || true
-                fi
-            done
-            ;;
-        *)
+case "$OS_TYPE" in
+ubuntu|debian)
+echo "Disabling Debian/Ubuntu iptables persistence services..."
+for service in netfilter-persistent iptables-persistent; do
+if systemctl is-active --quiet "$service" 2>/dev/null || systemctl is-enabled --quiet "$service" 2>/dev/null; then
+echo " -> Stopping and disabling $service..."
+systemctl stop "$service" 2>/dev/null || true
+systemctl disable "$service" 2>/dev/null || true
+systemctl mask "$service" 2>/dev/null || true
+fi
+done
+;;
+arch)
+echo "Disabling Arch Linux iptables services..."
+for service in iptables ip6tables; do
+if systemctl is-active --quiet "$service" 2>/dev/null || systemctl is-enabled --quiet "$service" 2>/dev/null; then
+echo " -> Stopping and disabling $service.service..."
+systemctl stop "$service" 2>/dev/null || true
+systemctl disable "$service" 2>/dev/null || true
+systemctl mask "$service" 2>/dev/null || true
+fi
+done
+;;
+opensuse)
+echo "Disabling openSUSE/SUSE firewall services..."
+# Modern openSUSE uses firewalld
+for service in firewalld SuSEfirewall2; do
+if systemctl is-active --quiet "$service" 2>/dev/null || systemctl is-enabled --quiet "$service" 2>/dev/null; then
+echo " -> Stopping and disabling $service..."
+systemctl stop "$service" 2>/dev/null || true
+systemctl disable "$service" 2>/dev/null || true
+systemctl mask "$service" 2>/dev/null || true
+fi
+done
+;;
+rhel)
+echo "Disabling RHEL/CentOS/Fedora firewall services..."
+# firewalld is default; iptables-services on older systems
+for service in firewalld iptables-services; do
+if systemctl is-active --quiet "$service" 2>/dev/null || systemctl is-enabled --quiet "$service" 2>/dev/null; then
+echo " -> Stopping and disabling $service..."
+systemctl stop "$service" 2>/dev/null || true
+systemctl disable "$service" 2>/dev/null || true
+systemctl mask "$service" 2>/dev/null || true
+fi
+done
+;;
+*)
             echo "Unknown OS: $OS_TYPE - attempting to disable common iptables persistence services..."
             # Try to disable common services as a fallback
             for service in netfilter-persistent iptables-persistent firewalld; do
@@ -314,6 +334,7 @@ systemctl daemon-reload
 systemctl enable runic-agent
 
 # Use restart to handle both new installs and upgrades
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Step: Restarting runic-agent service"
 systemctl restart runic-agent
 
 echo "Runic agent installed and started."

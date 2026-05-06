@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -15,8 +16,17 @@ import (
 	"time"
 
 	"runic/internal/agent/identity"
+	"runic/internal/common/log"
 	"runic/internal/models"
 )
+
+func TestMain(m *testing.M) {
+	// Ensure log is initialized before any test runs so that tests which
+	// call log.Init with a buffer (e.g., "handles StartDetached error gracefully")
+	// do not leave the process-global logger in a corrupted state for subsequent tests.
+	log.Init("info", os.Stdout)
+	os.Exit(m.Run())
+}
 
 // helperConfig creates a minimal config for testing.
 func helperConfig() *identity.Config {
@@ -402,7 +412,10 @@ func (m *mockCommandRunner) Run(ctx context.Context, name string, args ...string
 
 func (m *mockCommandRunner) StartDetached(ctx context.Context, name string, args ...string) error {
 	m.detachedCalls = append(m.detachedCalls, mockCall{ctx: ctx, name: name, args: args})
-	return m.startDetachedErr
+	if name == "setsid" && m.startDetachedErr != nil {
+		return m.startDetachedErr
+	}
+	return nil
 }
 
 // TestHandleUpdateAgent tests handleUpdateAgent validates URLs and launches the install script.
@@ -416,17 +429,17 @@ func TestHandleUpdateAgent(t *testing.T) {
 		if len(mock.detachedCalls) != 1 {
 			t.Fatalf("expected 1 detached call, got %d", len(mock.detachedCalls))
 		}
-		if mock.detachedCalls[0].name != "bash" {
-			t.Errorf("expected command 'bash', got '%s'", mock.detachedCalls[0].name)
+		if mock.detachedCalls[0].name != "setsid" {
+			t.Errorf("expected command 'setsid', got '%s'", mock.detachedCalls[0].name)
 		}
-		// The command is passed as: bash -c <cmd>
-		// So args[0] = "-c", args[1] = the full command string
-		if len(mock.detachedCalls[0].args) < 2 {
-			t.Fatalf("expected at least 2 args, got %d", len(mock.detachedCalls[0].args))
+		// The command is passed as: setsid bash -c <cmd>
+		// So args[0] = "bash", args[1] = "-c", args[2] = the full command string
+		if len(mock.detachedCalls[0].args) < 3 {
+			t.Fatalf("expected at least 3 args, got %d", len(mock.detachedCalls[0].args))
 		}
-		cmdStr := mock.detachedCalls[0].args[1]
-		if !strings.Contains(cmdStr, "nohup setsid") {
-			t.Error("expected command to contain 'nohup setsid'")
+		cmdStr := mock.detachedCalls[0].args[2]
+		if !strings.Contains(cmdStr, "nohup curl") {
+			t.Error("expected command to contain 'nohup curl'")
 		}
 		if !strings.Contains(cmdStr, "install-agent.sh") {
 			t.Error("expected command to contain install-agent.sh URL")
@@ -482,17 +495,37 @@ func TestHandleUpdateAgent(t *testing.T) {
 	})
 
 	t.Run("handles StartDetached error gracefully", func(t *testing.T) {
+		// Redirect log output to a buffer to verify error logging
+		var logBuf bytes.Buffer
+		log.Init("error", &logBuf)
+		defer log.Init("info", os.Stdout)
+
 		mock := &mockCommandRunner{
-			startDetachedErr: fmt.Errorf("bash: command not found"),
+			startDetachedErr: fmt.Errorf("setsid: command not found"),
 		}
 		agent := &Agent{
 			cmdRunner: mock,
 		}
 		// Should not panic or hang when StartDetached returns an error
 		agent.handleUpdateAgent(context.Background(), "https://runic.example.com")
+
 		// Verify StartDetached was called even though it errored
 		if len(mock.detachedCalls) != 1 {
 			t.Fatalf("expected 1 detached call, got %d", len(mock.detachedCalls))
+		}
+
+		// Verify the error was handled by checking that the error log was produced
+		logOutput := logBuf.String()
+		if !strings.Contains(logOutput, "Failed to launch update process") {
+			t.Errorf("expected error log 'Failed to launch update process', got log output: %q", logOutput)
+		}
+		if !strings.Contains(logOutput, "setsid: command not found") {
+			t.Errorf("expected error log to contain the original error 'setsid: command not found', got log output: %q", logOutput)
+		}
+
+		// Verify the success log was NOT produced (since the error path was taken)
+		if strings.Contains(logOutput, "Update process launched") {
+			t.Error("expected success log 'Update process launched' to NOT be present when StartDetached fails")
 		}
 	})
 }

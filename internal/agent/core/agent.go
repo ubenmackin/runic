@@ -64,7 +64,7 @@ func (r *RealCommandRunner) StartDetached(ctx context.Context, name string, args
 		return fmt.Errorf("start detached command: %w", err)
 	}
 	// Release the process so it doesn't become a zombie when the parent exits.
-	// The child runs in its own session (via setsid in the command) and will
+	// The child runs in its own session (via setsid as the direct command) and will
 	// complete independently of the agent's lifecycle.
 	if err := cmd.Process.Release(); err != nil {
 		return fmt.Errorf("release detached process: %w", err)
@@ -261,23 +261,26 @@ func (a *Agent) DisableSystemIPTablesIfConfigured() error {
 
 	log.Info("DisableSystemManagedIPTables is enabled, detecting OS and disabling services")
 
-	osType, err := detectOS()
+	osID, err := identity.DetectOS()
 	if err != nil {
 		return fmt.Errorf("detect OS: %w", err)
 	}
+	osType := identity.NormalizeOS(osID)
 
 	log.Info("Detected OS type", "os", osType)
 
 	var services []string
 	switch osType {
-	case "ubuntu", "debian", "linuxmint", "pop":
+	case "ubuntu", "debian":
 		services = []string{"netfilter-persistent", "iptables-persistent"}
-	case "arch", "archarm", "manjaro", "endeavouros":
+	case "arch":
 		services = []string{"iptables", "ip6tables"}
-	case "opensuse", "suse", "sled", "sles":
+	case "opensuse":
 		services = []string{"firewalld", "SuSEfirewall2"}
-	case "fedora", "rhel", "centos", "rocky", "almalinux", "ol":
+	case "rhel":
 		services = []string{"firewalld", "iptables-services"}
+	case "raspbian":
+		services = []string{"netfilter-persistent", "iptables-persistent"}
 	default:
 		services = []string{"netfilter-persistent", "iptables-persistent", "firewalld"}
 	}
@@ -291,25 +294,6 @@ func (a *Agent) DisableSystemIPTablesIfConfigured() error {
 	}
 
 	return nil
-}
-
-// detectOS detects the Linux distribution by reading /etc/os-release.
-func detectOS() (string, error) {
-	data, err := os.ReadFile("/etc/os-release")
-	if err != nil {
-		return "", fmt.Errorf("read os-release: %w", err)
-	}
-
-	lines := strings.Split(string(data), "\n")
-	for _, line := range lines {
-		if strings.HasPrefix(line, "ID=") {
-			id := strings.TrimPrefix(line, "ID=")
-			id = strings.Trim(id, `"`)
-			return id, nil
-		}
-	}
-
-	return "", fmt.Errorf("could not detect OS from os-release")
 }
 
 // disableService stops, disables, and masks a systemd service.
@@ -585,8 +569,8 @@ func (a *Agent) handleFetchBackup(ctx context.Context) {
 }
 
 // handleUpdateAgent runs the install script to self-update the agent.
-// The install command is launched via nohup+setsid in a detached process
-// so it survives the agent being stopped. When the install script's
+// The install command is launched via setsid in a detached process so it
+// survives the agent being stopped. When the install script's
 // "systemctl stop runic-agent" kills the agent, the script continues
 // in its own session and completes the update (download, file move, service restart).
 func (a *Agent) handleUpdateAgent(_ context.Context, controlPlaneURL string) {
@@ -599,18 +583,21 @@ func (a *Agent) handleUpdateAgent(_ context.Context, controlPlaneURL string) {
 		return
 	}
 
-	// Use nohup + setsid to fully detach the install script from the agent's process
-	// tree. setsid creates a new session entirely, nohup ensures SIGHUP is ignored.
-	// The trailing & makes bash return immediately after spawning the background process.
+	// Build the inner command: nohup ensures SIGHUP is ignored, the trailing &
+	// backgrounds the pipeline so bash returns immediately, and output is
+	// redirected to /dev/null. setsid (passed as the direct command to
+	// StartDetached) creates a new session, fully decoupling the install
+	// script from the agent's process tree.
 	cmd := fmt.Sprintf(
-		"nohup setsid bash -c 'curl -sL %s | sudo bash -s -- %s' >/dev/null 2>&1 &",
+		"nohup curl -sL %s | sudo bash -s -- %s >/dev/null 2>&1 &",
 		InstallScriptURL,
 		shellSafeArg(parsedURL.String()),
 	)
 
 	// Use StartDetached to fire-and-forget the command without waiting for completion.
 	// context.Background() ensures the command isn't canceled when the agent's context is canceled.
-	if err := a.cmdRunner.StartDetached(context.Background(), "bash", "-c", cmd); err != nil {
+	// setsid runs bash in a new session, so the update survives the agent's termination.
+	if err := a.cmdRunner.StartDetached(context.Background(), "setsid", "bash", "-c", cmd); err != nil {
 		log.Error("Failed to launch update process", "error", err)
 		return
 	}
