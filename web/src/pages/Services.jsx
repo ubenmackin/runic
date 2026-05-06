@@ -513,7 +513,7 @@ show: !service.is_system && !service.is_pending_delete,
                                 ))}
                                 {remainingCount > 0 && (
                                   <span
-                                    className="px-2 py-0.5 text-xs font-mono bg-gray-100 dark:bg-charcoal-darkest text-gray-600 dark:text-amber-muted whitespace-nowrap"
+                                    className="px-2 py-0.5 text-xs font-medium border border-purple-400 dark:border-purple-500 text-purple-600 dark:text-purple-400 whitespace-nowrap"
                                     title={ports.slice(maxVisible).join(', ')}
                                   >
                                     +{remainingCount}
