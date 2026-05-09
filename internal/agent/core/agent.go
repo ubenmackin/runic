@@ -545,10 +545,12 @@ func (a *Agent) handleFetchBackup(ctx context.Context) {
 	}
 }
 
-// The install command is launched via setsid in a detached process so it
-// survives the agent being stopped. When the install script's
-// "systemctl stop runic-agent" kills the agent, the script continues
-// in its own session and completes the update (download, file move, service restart).
+// The install command is launched via systemd-run --scope so it runs in its
+// own cgroup outside the agent's service unit. When the install script calls
+// "systemctl stop runic-agent", systemd only kills processes in the service's
+// cgroup — the scope unit survives and the script completes the update
+// (download, file move, service restart). If systemd-run is unavailable (e.g.
+// non-systemd environments), fall back to the setsid approach.
 func (a *Agent) handleUpdateAgent(_ context.Context, controlPlaneURL string) {
 	log.Info("Starting agent self-update", "control_plane_url", controlPlaneURL)
 
@@ -558,23 +560,27 @@ func (a *Agent) handleUpdateAgent(_ context.Context, controlPlaneURL string) {
 		return
 	}
 
-	// Build the inner command: nohup ensures SIGHUP is ignored, the trailing &
-	// backgrounds the pipeline so bash returns immediately, and output is
-	// redirected to /dev/null. setsid (passed as the direct command to
-	// StartDetached) creates a new session, fully decoupling the install
-	// script from the agent's process tree.
-	cmd := fmt.Sprintf(
-		"nohup curl -sL %s | sudo bash -s -- %s >/dev/null 2>&1 &",
-		InstallScriptURL,
-		shellSafeArg(parsedURL.String()),
-	)
+	// Build the install command: curl downloads the script, sudo runs it with the control plane URL.
+	cmd := fmt.Sprintf("curl -sL %s | sudo bash -s -- %s", InstallScriptURL, shellSafeArg(parsedURL.String()))
 
-	// Use StartDetached to fire-and-forget the command without waiting for completion.
-	// context.Background() ensures the command isn't canceled when the agent's context is canceled.
-	// setsid runs bash in a new session, so the update survives the agent's termination.
-	if err := a.cmdRunner.StartDetached(context.Background(), "setsid", "bash", "-c", cmd); err != nil {
-		log.Error("Failed to launch update process", "error", err)
-		return
+	// Use systemd-run --scope to launch the update in its own cgroup, outside the
+	// agent's service unit. When the install script calls "systemctl stop runic-agent",
+	// systemd only kills processes in the service's cgroup — the scope survives.
+	ctx := context.Background()
+	_, err = a.cmdRunner.Run(ctx, "systemd-run", "--scope", "--unit=runic-agent-update", "bash", "-c", cmd)
+	if err != nil {
+		// Fall back to setsid if systemd-run is unavailable (non-systemd environments)
+		log.Warn("systemd-run --scope failed, falling back to setsid", "error", err)
+		err = a.cmdRunner.StartDetached(ctx, "setsid", "bash", "-c", fmt.Sprintf(
+			"nohup curl -sL %s | sudo bash -s -- %s >/dev/null 2>&1 &",
+			InstallScriptURL,
+			shellSafeArg(parsedURL.String()),
+		),
+		)
+		if err != nil {
+			log.Error("Failed to launch update process (both systemd-run and setsid failed)", "error", err)
+			return
+		}
 	}
 
 	log.Info("Update process launched, agent will be restarted by the install script")
