@@ -56,6 +56,10 @@ func TestHandleSetupGET_NoUsers(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := newRequestWithUniqueIP(http.MethodGet, "/api/v1/setup", "")
 
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	r = r.WithContext(ctx)
+
 	h.HandleSetupGET(w, r)
 
 	if w.Code != http.StatusOK {
@@ -89,6 +93,10 @@ func TestHandleSetupGET_UsersExist(t *testing.T) {
 	h := newTestHandler(db)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/setup", nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	r = r.WithContext(ctx)
 
 	h.HandleSetupGET(w, r)
 
@@ -191,6 +199,10 @@ func TestHandleSetupPOST_AlreadyCompleted(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/setup",
 		strings.NewReader(`{"username":"newadmin","password":"password123"}`))
 
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	r = r.WithContext(ctx)
+
 	h.HandleSetupPOST(w, r)
 
 	if w.Code != http.StatusForbidden {
@@ -273,6 +285,10 @@ func TestHandleSetupPOST_DuplicateUsername(t *testing.T) {
 	r := newRequestWithUniqueIP(http.MethodPost, "/api/v1/setup",
 		`{"username":"duplicate","password":"password123"}`)
 
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	r = r.WithContext(ctx)
+
 	h.HandleSetupPOST(w, r)
 
 	// Since users already exist, setup returns 403 Forbidden
@@ -298,18 +314,21 @@ func TestHandleLoginPOST_Success(t *testing.T) {
 	w := httptest.NewRecorder()
 
 	tests := []struct {
-		name     string
-		body     string
+		name string
+		body string
 		expected int
 	}{
-		{"wrong password", `{"username":"loginuser","password":"wrongpassword"}`, http.StatusUnauthorized},
-		{"unknown user", `{"username":"unknown","password":"password123"}`, http.StatusUnauthorized},
+	{"wrong password", `{"username":"loginuser","password":"wrongpassword"}`, http.StatusUnauthorized},
+	{"unknown user", `{"username":"unknown","password":"password123"}`, http.StatusUnauthorized},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			r := httptest.NewRequest(http.MethodPost, "/api/v1/login",
 				strings.NewReader(tt.body))
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			r = r.WithContext(ctx)
 			h.HandleLoginPOST(w, r)
 
 			if w.Code != tt.expected {
@@ -508,6 +527,9 @@ func TestHandleSetup_GET(t *testing.T) {
 	h := newTestHandler(db)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/setup", nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	r = r.WithContext(ctx)
 
 	h.HandleSetup(w, r)
 
