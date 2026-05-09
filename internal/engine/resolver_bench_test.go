@@ -7,12 +7,10 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-// BenchmarkResolveEntityPeer benchmarks resolving a peer entity to CIDR.
 func BenchmarkResolveEntityPeer(b *testing.B) {
 	database, cleanup := setupBenchmarkDB(b)
 	defer cleanup()
 
-	// Insert test peers (with required NOT NULL fields)
 	database.Exec("INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)", "test-peer", "192.168.1.100", "key1", "hmac1")
 	database.Exec("INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)", "test-peer-cidr", "192.168.2.0/24", "key2", "hmac2")
 
@@ -30,15 +28,12 @@ func BenchmarkResolveEntityPeer(b *testing.B) {
 	})
 }
 
-// BenchmarkResolveEntityGroup benchmarks resolving a group with multiple peers.
 func BenchmarkResolveEntityGroup(b *testing.B) {
 	database, cleanup := setupBenchmarkDB(b)
 	defer cleanup()
 
-	// Create a group
 	database.Exec("INSERT INTO groups (name) VALUES (?)", "test-group")
 
-	// Add 50 peers to the group
 	for i := 1; i <= 50; i++ {
 		database.Exec("INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)", "peer-"+string(rune('a'+i-1)), "10.0."+string(rune('0'+i/10))+"."+string(rune('0'+i%10)), "key-"+string(rune('a'+i-1)), "hmac-"+string(rune('a'+i-1)))
 		database.Exec("INSERT INTO group_members (group_id, peer_id) VALUES (1, ?)", i)
@@ -58,15 +53,12 @@ func BenchmarkResolveEntityGroup(b *testing.B) {
 	})
 }
 
-// BenchmarkResolveEntityGroupWithCIDR benchmarks resolving a group with CIDR peers.
 func BenchmarkResolveEntityGroupWithCIDR(b *testing.B) {
 	database, cleanup := setupBenchmarkDB(b)
 	defer cleanup()
 
-	// Create a group with CIDR peers (simulates container networks)
 	database.Exec("INSERT INTO groups (name) VALUES (?)", "cidr-group")
 
-	// Add 20 CIDR peers
 	cidrs := []string{
 		"172.16.0.0/24", "172.16.1.0/24", "172.16.2.0/24", "172.16.3.0/24",
 		"172.17.0.0/24", "172.17.1.0/24", "172.17.2.0/24", "172.17.3.0/24",
@@ -93,15 +85,12 @@ func BenchmarkResolveEntityGroupWithCIDR(b *testing.B) {
 	})
 }
 
-// BenchmarkResolveSpecialTarget benchmarks resolving various special targets.
 func BenchmarkResolveSpecialTarget(b *testing.B) {
 	database, cleanup := setupBenchmarkDB(b)
 	defer cleanup()
 
-	// Insert test peer for subnet_broadcast
 	database.Exec("INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)", "test-peer", "192.168.1.100", "key1", "hmac1")
 
-	// Add some peers for __all_peers__
 	for i := 1; i <= 10; i++ {
 		database.Exec("INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)", "peer-"+string(rune('a'+i-1)), "10.0.0."+string(rune('0'+i)), "key-"+string(rune('a'+i-1)), "hmac-"+string(rune('a'+i-1)))
 	}
@@ -141,7 +130,6 @@ func BenchmarkResolveSpecialTarget(b *testing.B) {
 	}
 }
 
-// BenchmarkExpandPorts benchmarks port expansion with various port strings.
 func BenchmarkExpandPorts(b *testing.B) {
 	// Test cases covering typical port string formats
 	cases := []struct {
@@ -173,7 +161,6 @@ func BenchmarkExpandPorts(b *testing.B) {
 	}
 }
 
-// BenchmarkExpandPortsSequential runs port expansion sequentially (non-parallel).
 func BenchmarkExpandPortsSequential(b *testing.B) {
 	dstPorts := "80,443,8080,8443,9000,9090,3000,4000,5000,6000"
 	protocol := "tcp"
@@ -187,7 +174,6 @@ func BenchmarkExpandPortsSequential(b *testing.B) {
 	}
 }
 
-// BenchmarkSanitizeForIpset benchmarks the ipset name sanitization function.
 func BenchmarkSanitizeForIpset(b *testing.B) {
 	names := []string{
 		"Web Servers",
@@ -207,7 +193,6 @@ func BenchmarkSanitizeForIpset(b *testing.B) {
 	}
 }
 
-// BenchmarkValidatePorts benchmarks port validation.
 func BenchmarkValidatePorts(b *testing.B) {
 	ports := []string{
 		"80",

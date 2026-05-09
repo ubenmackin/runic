@@ -5,7 +5,6 @@ import (
 	"testing"
 )
 
-// TestParseBasicInputRule tests a simple INPUT rule accepting TCP on port 80.
 func TestParseBasicInputRule(t *testing.T) {
 	input := `*filter
 :INPUT ACCEPT [0:0]
@@ -53,7 +52,6 @@ COMMIT
 	}
 }
 
-// TestParseBasicOutputRule tests a simple OUTPUT rule.
 func TestParseBasicOutputRule(t *testing.T) {
 	input := `*filter
 :OUTPUT ACCEPT [0:0]
@@ -86,7 +84,6 @@ COMMIT
 	}
 }
 
-// TestParseDockerUserRule tests DOCKER-USER chain rule with -o docker0.
 func TestParseDockerUserRule(t *testing.T) {
 	input := `*filter
 :DOCKER-USER - [0:0]
@@ -123,7 +120,6 @@ COMMIT
 	}
 }
 
-// TestParseIpsetMatch tests rule with -m set --match-set runic_group_web src.
 func TestParseIpsetMatch(t *testing.T) {
 	input := `*filter
 :INPUT DROP [0:0]
@@ -166,7 +162,6 @@ COMMIT
 	}
 }
 
-// TestParseCustomIpset tests rule with non-Runic ipset.
 func TestParseCustomIpset(t *testing.T) {
 	input := `*filter
 :INPUT DROP [0:0]
@@ -198,7 +193,6 @@ COMMIT
 	}
 }
 
-// TestParseConntrackStates tests rule with conntrack states.
 func TestParseConntrackStates(t *testing.T) {
 	input := `*filter
 :INPUT DROP [0:0]
@@ -229,7 +223,6 @@ COMMIT
 	}
 }
 
-// TestDetectRunicStandardLoopback tests loopback ACCEPT rule detection.
 func TestDetectRunicStandardLoopback(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -279,7 +272,6 @@ func TestDetectRunicStandardLoopback(t *testing.T) {
 	}
 }
 
-// TestDetectRunicStandardICMPRelated tests ICMP RELATED ACCEPT detection.
 func TestDetectRunicStandardICMPRelated(t *testing.T) {
 	input := `*filter
 :INPUT DROP [0:0]
@@ -300,7 +292,6 @@ COMMIT
 	}
 }
 
-// TestDetectRunicStandardInvalidDrop tests INVALID DROP detection.
 func TestDetectRunicStandardInvalidDrop(t *testing.T) {
 	input := `*filter
 :INPUT DROP [0:0]
@@ -321,7 +312,6 @@ COMMIT
 	}
 }
 
-// TestDetectRunicStandardIpsetRule tests rule with runic_ prefixed ipset detection.
 func TestDetectRunicStandardIpsetRule(t *testing.T) {
 	input := `*filter
 :INPUT DROP [0:0]
@@ -342,7 +332,6 @@ COMMIT
 	}
 }
 
-// TestSkipInterfaceMatch tests that rule with -i eth0 is marked as not clean.
 func TestSkipInterfaceMatch(t *testing.T) {
 	input := `*filter
 :INPUT DROP [0:0]
@@ -363,7 +352,6 @@ COMMIT
 	}
 }
 
-// TestSkipRejectTarget tests that rule with -j REJECT is marked as not clean.
 func TestSkipRejectTarget(t *testing.T) {
 	input := `*filter
 :INPUT DROP [0:0]
@@ -384,7 +372,6 @@ COMMIT
 	}
 }
 
-// TestSkipConntrackEstablished tests that rule with ESTABLISHED state is marked as not clean.
 func TestSkipConntrackEstablished(t *testing.T) {
 	input := `*filter
 :INPUT DROP [0:0]
@@ -403,7 +390,6 @@ COMMIT
 	}
 }
 
-// TestSkipConntrackEstablishedNonRunic tests that ESTABLISHED state without RELATED is not clean.
 func TestSkipConntrackEstablishedNonRunic(t *testing.T) {
 	input := `*filter
 :INPUT DROP [0:0]
@@ -428,7 +414,6 @@ COMMIT
 	}
 }
 
-// TestSkipCustomChain tests that rule with -j CUSTOM_CHAIN is marked as not clean.
 func TestSkipCustomChain(t *testing.T) {
 	input := `*filter
 :INPUT DROP [0:0]
@@ -449,7 +434,6 @@ COMMIT
 	}
 }
 
-// TestParseEmptyInput tests that empty string returns no chains.
 func TestParseEmptyInput(t *testing.T) {
 	chains, err := Parse("", []string{"INPUT"})
 	if err != nil {
@@ -460,7 +444,6 @@ func TestParseEmptyInput(t *testing.T) {
 	}
 }
 
-// TestParseCommentLines tests that lines starting with # or : are ignored.
 func TestParseCommentLines(t *testing.T) {
 	input := `# This is a comment
 *filter
@@ -483,7 +466,6 @@ COMMIT
 	}
 }
 
-// TestParseMultipleChains tests input with rules across multiple chains.
 func TestParseMultipleChains(t *testing.T) {
 	input := `*filter
 :INPUT ACCEPT [0:0]
@@ -557,7 +539,6 @@ COMMIT
 	}
 }
 
-// TestChainFilter tests that only requested chains are parsed.
 func TestChainFilter(t *testing.T) {
 	input := `*filter
 :INPUT ACCEPT [0:0]
@@ -584,7 +565,6 @@ COMMIT
 	}
 }
 
-// TestUnsupportedModule tests that rules with unsupported modules are marked not clean.
 func TestUnsupportedModule(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -627,7 +607,6 @@ func TestUnsupportedModule(t *testing.T) {
 	}
 }
 
-// TestParseSourceAndDestIP tests source and destination IP extraction.
 func TestParseSourceAndDestIP(t *testing.T) {
 	input := `*filter
 :INPUT DROP [0:0]
@@ -654,7 +633,6 @@ COMMIT
 	}
 }
 
-// TestParseSourcePort tests source port extraction.
 func TestParseSourcePort(t *testing.T) {
 	input := `*filter
 :OUTPUT DROP [0:0]
@@ -672,7 +650,6 @@ COMMIT
 	}
 }
 
-// TestParseInInterface tests input interface extraction.
 func TestParseInInterface(t *testing.T) {
 	input := `*filter
 :INPUT DROP [0:0]
@@ -693,7 +670,6 @@ COMMIT
 	}
 }
 
-// TestParseOutInterfaceNonDocker tests output interface in non-DOCKER-USER chain.
 func TestParseOutInterfaceNonDocker(t *testing.T) {
 	input := `*filter
 :OUTPUT DROP [0:0]
@@ -717,7 +693,6 @@ COMMIT
 	}
 }
 
-// TestParseRawField tests that the Raw field preserves the original rule text.
 func TestParseRawField(t *testing.T) {
 	ruleText := "-A INPUT -p tcp -m tcp --dport 80 -j ACCEPT"
 	input := "*filter\n:INPUT DROP [0:0]\n" + ruleText + "\nCOMMIT\n"
@@ -732,7 +707,6 @@ func TestParseRawField(t *testing.T) {
 	}
 }
 
-// TestParseRuleOrder tests that rule order is correctly assigned.
 func TestParseRuleOrder(t *testing.T) {
 	input := `*filter
 :INPUT DROP [0:0]
@@ -757,7 +731,6 @@ COMMIT
 	}
 }
 
-// TestParseLOGTarget tests that LOG target is marked as unsupported.
 func TestParseLOGTarget(t *testing.T) {
 	input := `*filter
 :INPUT DROP [0:0]
@@ -781,7 +754,6 @@ COMMIT
 	}
 }
 
-// TestParseMultiplePortRanges tests rule with both sport and dport.
 func TestParseMultiplePortRanges(t *testing.T) {
 	input := `*filter
 :INPUT DROP [0:0]
@@ -802,7 +774,6 @@ COMMIT
 	}
 }
 
-// TestParseProtocolAll tests that protocol "all" is parsed correctly.
 func TestParseProtocolAll(t *testing.T) {
 	input := `*filter
 :INPUT DROP [0:0]
@@ -824,7 +795,6 @@ COMMIT
 	}
 }
 
-// TestParseConntrackMultipleStates tests conntrack with multiple states.
 func TestParseConntrackMultipleStates(t *testing.T) {
 	input := `*filter
 :INPUT DROP [0:0]
@@ -852,7 +822,6 @@ COMMIT
 	}
 }
 
-// TestDockerUserNonDocker0Interface tests that non-docker0 interface in DOCKER-USER is not clean.
 func TestDockerUserNonDocker0Interface(t *testing.T) {
 	input := `*filter
 :DOCKER-USER - [0:0]
@@ -873,7 +842,6 @@ COMMIT
 	}
 }
 
-// TestDockerUserInInterface tests that -i in DOCKER-USER chain is not clean.
 func TestDockerUserInInterface(t *testing.T) {
 	input := `*filter
 :DOCKER-USER - [0:0]
@@ -894,7 +862,6 @@ COMMIT
 	}
 }
 
-// TestStateModule tests parsing of -m state (older conntrack syntax).
 func TestStateModule(t *testing.T) {
 	input := `*filter
 :INPUT DROP [0:0]

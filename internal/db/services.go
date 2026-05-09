@@ -6,7 +6,6 @@ import (
 	"runic/internal/models"
 )
 
-// GetService fetches a service by ID.
 func GetService(ctx context.Context, database Querier, serviceID int) (models.ServiceRow, error) {
 	var s models.ServiceRow
 	err := database.QueryRowContext(ctx,

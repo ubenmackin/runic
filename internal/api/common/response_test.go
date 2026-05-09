@@ -6,7 +6,6 @@ import (
 	"testing"
 )
 
-// TestNewResponseRecorder tests the constructor
 func TestNewResponseRecorder(t *testing.T) {
 	rec := httptest.NewRecorder()
 	rr := NewResponseRecorder(rec)
@@ -21,7 +20,6 @@ func TestNewResponseRecorder(t *testing.T) {
 	}
 }
 
-// TestResponseRecorder_StatusCode tests StatusCode retrieval
 func TestResponseRecorder_StatusCode(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -73,7 +71,6 @@ func TestResponseRecorder_StatusCode(t *testing.T) {
 	}
 }
 
-// TestResponseRecorder_WriteHeader tests WriteHeader behavior
 func TestResponseRecorder_WriteHeader(t *testing.T) {
 	t.Run("delegates to underlying ResponseWriter", func(t *testing.T) {
 		rec := httptest.NewRecorder()
@@ -109,7 +106,6 @@ func TestResponseRecorder_WriteHeader(t *testing.T) {
 
 		rr.WriteHeader(http.StatusAccepted)
 
-		// Check written flag was set
 		if !rr.written {
 			t.Error("written flag should be true after WriteHeader")
 		}
@@ -123,7 +119,6 @@ func TestResponseRecorder_WriteHeader(t *testing.T) {
 	})
 }
 
-// TestResponseRecorder_Write tests Write behavior
 func TestResponseRecorder_Write(t *testing.T) {
 	t.Run("calls WriteHeader with 200 if not already written", func(t *testing.T) {
 		rec := httptest.NewRecorder()
@@ -154,7 +149,6 @@ func TestResponseRecorder_Write(t *testing.T) {
 		rec := httptest.NewRecorder()
 		rr := NewResponseRecorder(rec)
 
-		// Set status code first
 		rr.WriteHeader(http.StatusNotFound)
 
 		// Now write body
@@ -183,7 +177,6 @@ func TestResponseRecorder_Write(t *testing.T) {
 
 }
 
-// TestResponseRecorder_Flush tests Flush behavior
 func TestResponseRecorder_Flush(t *testing.T) {
 	t.Run("delegates to underlying Flusher when available", func(t *testing.T) {
 		// httptest.ResponseRecorder implements Flusher
@@ -196,7 +189,6 @@ func TestResponseRecorder_Flush(t *testing.T) {
 	})
 
 	t.Run("does not panic when underlying ResponseWriter does not implement Flusher", func(t *testing.T) {
-		// Create a minimal ResponseWriter that does NOT implement Flusher
 		rec := &mockResponseWriter{}
 		rr := NewResponseRecorder(rec)
 
@@ -206,7 +198,6 @@ func TestResponseRecorder_Flush(t *testing.T) {
 	})
 }
 
-// TestResponseRecorder_Integration tests with real HTTP handler
 func TestResponseRecorder_Integration(t *testing.T) {
 	t.Run("captures status code from HTTP handler and writes body", func(t *testing.T) {
 		rec := httptest.NewRecorder()
@@ -281,7 +272,6 @@ func TestResponseRecorder_Integration(t *testing.T) {
 	})
 }
 
-// mockResponseWriter is a minimal mock that does NOT implement http.Flusher
 type mockResponseWriter struct{}
 
 func (m *mockResponseWriter) Header() http.Header {

@@ -6,11 +6,9 @@ import (
 	"testing"
 )
 
-// TestDetectOSReadsFromOSReleasePath tests that DetectOS reads from the
 // configurable osReleasePath variable, allowing unit tests to supply a
 // temporary os-release file.
 func TestDetectOSReadsFromOSReleasePath(t *testing.T) {
-	// Create a temp file that looks like /etc/os-release
 	dir := t.TempDir()
 	osReleaseFile := filepath.Join(dir, "os-release")
 
@@ -39,7 +37,6 @@ VERSION_ID="22.04"
 	}
 }
 
-// TestDetectOSWithQuotedID tests that DetectOS correctly strips quotes from ID values.
 func TestDetectOSWithQuotedID(t *testing.T) {
 	dir := t.TempDir()
 	osReleaseFile := filepath.Join(dir, "os-release")
@@ -65,7 +62,6 @@ ID="opensuse-leap"
 	}
 }
 
-// TestDetectOSReturnsErrorOnMissingFile tests that DetectOS returns an error
 // when the os-release file does not exist.
 func TestDetectOSReturnsErrorOnMissingFile(t *testing.T) {
 	orig := osReleasePath
@@ -78,7 +74,6 @@ func TestDetectOSReturnsErrorOnMissingFile(t *testing.T) {
 	}
 }
 
-// TestDetectOSReturnsErrorWhenIDMissing tests that DetectOS returns an error
 // when the os-release file exists but contains no ID= line.
 func TestDetectOSReturnsErrorWhenIDMissing(t *testing.T) {
 	dir := t.TempDir()
@@ -102,7 +97,6 @@ PRETTY_NAME="SomeOS 1.0"
 	}
 }
 
-// TestDetectOSWithDebianID tests that DetectOS returns "debian" for a Debian os-release.
 func TestDetectOSWithDebianID(t *testing.T) {
 	dir := t.TempDir()
 	osReleaseFile := filepath.Join(dir, "os-release")
@@ -130,7 +124,6 @@ ID=debian
 	}
 }
 
-// TestDetectOSWithArmbianID tests that DetectOS returns "debian" for Armbian
 // systems where /etc/os-release has ID=debian (the common case on real Armbian).
 func TestDetectOSWithArmbianID(t *testing.T) {
 	dir := t.TempDir()
@@ -162,7 +155,6 @@ ARMBIAN_PRETTY_NAME="Armbian 23.8.1 bookworm"
 	}
 }
 
-// TestNormalizeOSMapsArmbianToDebian tests that NormalizeOS maps "armbian" to "debian".
 func TestNormalizeOSMapsArmbianToDebian(t *testing.T) {
 	result := NormalizeOS("armbian")
 	if result != "debian" {
@@ -170,7 +162,6 @@ func TestNormalizeOSMapsArmbianToDebian(t *testing.T) {
 	}
 }
 
-// TestNormalizeOSMapsKnownIDsCorrectly tests that NormalizeOS maps known IDs correctly.
 func TestNormalizeOSMapsKnownIDsCorrectly(t *testing.T) {
 	testCases := []struct {
 		id       string

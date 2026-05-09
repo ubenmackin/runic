@@ -6,12 +6,10 @@ import (
 	"strings"
 )
 
-// osReleasePath is the file path read by DetectOS. It defaults to
 // /etc/os-release but can be overridden in tests to point at a temp file.
 var osReleasePath = "/etc/os-release"
 
-// DetectOS detects the Linux distribution by reading the os-release file.
-// It returns the raw OS ID (e.g. "ubuntu", "opensuse-leap", "archarm").
+// DetectOS detects the OS from /etc/os-release. It returns the raw OS ID (e.g. "ubuntu", "opensuse-leap", "archarm").
 // Use NormalizeOS to map variant IDs to canonical family names.
 func DetectOS() (string, error) {
 	data, err := os.ReadFile(osReleasePath)
@@ -32,9 +30,7 @@ func DetectOS() (string, error) {
 	return "", fmt.Errorf("could not detect OS from os-release")
 }
 
-// NormalizeOS maps an OS ID to a canonical family name for registration.
-// For example, "opensuse-leap" maps to "opensuse", "fedora" maps to "rhel",
-// "armbian" maps to "debian" (Armbian's ID is "debian" in os-release).
+// NormalizeOS normalizes the OS ID to a canonical family name. "armbian" maps to "debian" (Armbian's ID is "debian" in os-release).
 // If the ID is not recognized, it is returned as-is.
 func NormalizeOS(id string) string {
 	id = strings.ToLower(id)

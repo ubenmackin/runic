@@ -11,8 +11,7 @@ import (
 	"runic/internal/common/log"
 )
 
-// LoadTimezoneOrDefault loads a timezone location from an IANA timezone string.
-// If the timezone string is empty or invalid, it logs a warning and returns time.UTC.
+// LoadTimezoneOrDefault loads the timezone or returns UTC as fallback. If the timezone string is empty or invalid, it logs a warning and returns time.UTC.
 //
 // Parameters:
 //   - tz: The IANA timezone string (e.g., "America/New_York", "Europe/London").
@@ -37,10 +36,7 @@ func LoadTimezoneOrDefault(tz string) *time.Location {
 	return loc
 }
 
-// LoadTimezoneOrDefaultWithLogger is like LoadTimezoneOrDefault but accepts a custom logger
-// for context-specific logging (e.g., including user_id in log messages).
-//
-// Parameters:
+// LoadTimezoneOrDefaultWithLogger loads the timezone or returns UTC as fallback with a custom logger. Parameters:
 //   - tz: The IANA timezone string (e.g., "America/New_York", "Europe/London").
 //     If empty, returns time.UTC without logging a warning.
 //   - logger: The logger to use for warning messages. If nil, uses the default logger.
@@ -70,8 +66,7 @@ func LoadTimezoneOrDefaultWithLogger(tz string, logger *slog.Logger, logAttrs ..
 	return loc
 }
 
-// GetBoolConfig reads a boolean value from system_config stored as "0" or "1".
-// Returns false if the key doesn't exist or on any error.
+// GetBoolConfig returns a boolean config value. Returns false if the key doesn't exist or on any error.
 func GetBoolConfig(ctx context.Context, db db.Querier, key string) (bool, error) {
 	var val int
 	err := db.QueryRowContext(ctx,
@@ -84,7 +79,6 @@ func GetBoolConfig(ctx context.Context, db db.Querier, key string) (bool, error)
 	return val == 1, nil
 }
 
-// GetInstanceURL retrieves the instance URL from system_config.
 func GetInstanceURL(ctx context.Context, db db.Querier) string {
 	var url string
 	err := db.QueryRowContext(ctx, "SELECT value FROM system_config WHERE key = 'instance_url'").Scan(&url)

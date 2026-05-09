@@ -5,7 +5,6 @@ import (
 	"testing"
 )
 
-// TestGenerateHMACKey_Success tests that GenerateHMACKey returns valid output
 func TestGenerateHMACKey_Success(t *testing.T) {
 	key, err := GenerateHMACKey()
 	if err != nil {
@@ -16,7 +15,6 @@ func TestGenerateHMACKey_Success(t *testing.T) {
 	}
 }
 
-// TestGenerateHMACKey_Length tests that the returned key is exactly 64 characters
 func TestGenerateHMACKey_Length(t *testing.T) {
 	key, err := GenerateHMACKey()
 	if err != nil {
@@ -27,21 +25,18 @@ func TestGenerateHMACKey_Length(t *testing.T) {
 	}
 }
 
-// TestGenerateHMACKey_HexFormat tests that the key contains only valid hex characters
 func TestGenerateHMACKey_HexFormat(t *testing.T) {
 	key, err := GenerateHMACKey()
 	if err != nil {
 		t.Fatalf("GenerateHMACKey() returned unexpected error: %v", err)
 	}
 
-	// Check that the key only contains valid hexadecimal characters
 	hexPattern := regexp.MustCompile("^[0-9a-f]{64}$")
 	if !hexPattern.MatchString(key) {
 		t.Errorf("GenerateHMACKey() returned key %q, want 64 lowercase hex characters", key)
 	}
 }
 
-// TestGenerateHMACKey_Uniqueness tests that multiple calls return different keys
 func TestGenerateHMACKey_Uniqueness(t *testing.T) {
 	keys := make(map[string]bool)
 	iterations := 100

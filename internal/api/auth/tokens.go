@@ -16,20 +16,18 @@ const (
 	RefreshTokenTTL = 7 * 24 * time.Hour // 7 days
 )
 
-// TokenResponse represents the standard token response.
 type TokenResponse struct {
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token"`
 }
 
-// GenerateTokenPair generates an access token (1h TTL) and refresh token (7d TTL).
 func (h *Handler) GenerateTokenPair(username string) (accessToken string, refreshToken string, err error) {
-	// Look up user's role from database
-	var role string
-	err = h.DB.QueryRow("SELECT role FROM users WHERE username = ?", username).Scan(&role)
-	if err != nil {
-		log.WarnContext(context.Background(), "failed to look up role, defaulting to viewer", "username", username, "error", err)
-		role = "viewer"
+	// token generation always succeeds even if the DB is temporarily unavailable.
+	role := "viewer"
+	if user, lookupErr := h.UserStore.GetUserByUsername(context.Background(), username); lookupErr == nil {
+		role = user.Role
+	} else {
+		log.WarnContext(context.Background(), "failed to look up role, defaulting to viewer", "username", username, "error", lookupErr)
 	}
 
 	accessToken, err = auth.GenerateToken(username, role, AccessTokenTTL)
@@ -43,7 +41,7 @@ func (h *Handler) GenerateTokenPair(username string) (accessToken string, refres
 	return accessToken, refreshToken, nil
 }
 
-// RespondWithTokens responds with the standard token response via httpOnly cookies.
+// RespondWithTokens sets auth cookies and returns a JSON response with username and setup status.
 // Tokens are set as cookies; only username and is_setup are returned in JSON.
 func (h *Handler) RespondWithTokens(w http.ResponseWriter, status int, accessToken, refreshToken, username string, isSetup bool) {
 	setAuthCookies(w, accessToken, refreshToken)

@@ -1,6 +1,7 @@
 package pending
 
 import (
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -10,22 +11,30 @@ import (
 	"runic/internal/api/common"
 	"runic/internal/api/events"
 	"runic/internal/engine"
+	"runic/internal/store"
 	"runic/internal/testutil"
 )
 
-// muxVars is a helper to set gorilla/mux URL variables
 var muxVars = testutil.MuxVars
 
+// newTestHandler creates a Handler with the given db and optional compiler/sseHub/pushWorker.
+func newTestHandler(db *sql.DB, compiler *engine.Compiler, sseHub *events.SSEHub, pushWorker *common.PushWorker) *Handler {
+	peerStore := store.NewPeerStore(db)
+	groupStore := store.NewGroupStore(db)
+	policyStore := store.NewPolicyStore(db)
+	serviceStore := store.NewServiceStore(db)
+	pendingStore := store.NewPendingStore(db)
+	return NewHandler(peerStore, groupStore, policyStore, serviceStore, pendingStore, db, compiler, sseHub, pushWorker)
+}
+
 // =============================================================================
-// Test ListPendingChanges
 // =============================================================================
 
 func TestListPendingChanges_EmptyTable(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Create handler with nil for optional dependencies
-	handler := NewHandler(db, nil, nil, nil)
+	handler := newTestHandler(db, nil, nil, nil)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/pending", nil)
 
@@ -49,17 +58,15 @@ func TestListPendingChanges_WithPeers(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Insert test peer
 	db.Exec("INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)",
 		"peer-one", "10.0.0.1", "key1", "hmac1")
 
-	// Insert pending changes for peer
 	db.Exec("INSERT INTO pending_changes (peer_id, change_type, change_id, change_action, change_summary) VALUES (?, ?, ?, ?, ?)",
 		1, "policy", 1, "create", "Add policy 'test-policy'")
 	db.Exec("INSERT INTO pending_changes (peer_id, change_type, change_id, change_action, change_summary) VALUES (?, ?, ?, ?, ?)",
 		1, "service", 2, "update", "Update service 'test-service'")
 
-	handler := NewHandler(db, nil, nil, nil)
+	handler := newTestHandler(db, nil, nil, nil)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/pending", nil)
 
@@ -91,21 +98,18 @@ func TestListPendingChanges_MultiplePeers(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Insert test peers
 	db.Exec("INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)",
 		"peer-one", "10.0.0.1", "key1", "hmac1")
 	db.Exec("INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)",
 		"peer-two", "10.0.0.2", "key2", "hmac2")
 
-	// Insert pending changes for peer 1
 	db.Exec("INSERT INTO pending_changes (peer_id, change_type, change_id, change_action, change_summary) VALUES (?, ?, ?, ?, ?)",
 		1, "policy", 1, "create", "Add policy")
 
-	// Insert pending changes for peer 2
 	db.Exec("INSERT INTO pending_changes (peer_id, change_type, change_id, change_action, change_summary) VALUES (?, ?, ?, ?, ?)",
 		2, "service", 1, "delete", "Remove service")
 
-	handler := NewHandler(db, nil, nil, nil)
+	handler := newTestHandler(db, nil, nil, nil)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/pending", nil)
 
@@ -126,14 +130,13 @@ func TestListPendingChanges_MultiplePeers(t *testing.T) {
 }
 
 // =============================================================================
-// Test GetPeerPendingChanges
 // =============================================================================
 
 func TestGetPeerPendingChanges_InvalidID(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	handler := NewHandler(db, nil, nil, nil)
+	handler := newTestHandler(db, nil, nil, nil)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/pending/peers/invalid", nil)
 	r = muxVars(r, map[string]string{"peerId": "invalid"})
@@ -149,7 +152,7 @@ func TestGetPeerPendingChanges_PeerNotFound(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	handler := NewHandler(db, nil, nil, nil)
+	handler := newTestHandler(db, nil, nil, nil)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/pending/peers/999", nil)
 	r = muxVars(r, map[string]string{"peerId": "999"})
@@ -165,11 +168,10 @@ func TestGetPeerPendingChanges_NoChanges(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Insert test peer (no pending changes)
 	db.Exec("INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)",
 		"peer-one", "10.0.0.1", "key1", "hmac1")
 
-	handler := NewHandler(db, nil, nil, nil)
+	handler := newTestHandler(db, nil, nil, nil)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/pending/peers/1", nil)
 	r = muxVars(r, map[string]string{"peerId": "1"})
@@ -195,17 +197,15 @@ func TestGetPeerPendingChanges_WithChanges(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Insert test peer
 	db.Exec("INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)",
 		"peer-one", "10.0.0.1", "key1", "hmac1")
 
-	// Insert pending changes
 	db.Exec("INSERT INTO pending_changes (peer_id, change_type, change_id, change_action, change_summary) VALUES (?, ?, ?, ?, ?)",
 		1, "policy", 1, "create", "Add policy 'test-policy'")
 	db.Exec("INSERT INTO pending_changes (peer_id, change_type, change_id, change_action, change_summary) VALUES (?, ?, ?, ?, ?)",
 		1, "service", 2, "update", "Update service 'test-service'")
 
-	handler := NewHandler(db, nil, nil, nil)
+	handler := newTestHandler(db, nil, nil, nil)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/pending/peers/1", nil)
 	r = muxVars(r, map[string]string{"peerId": "1"})
@@ -232,15 +232,14 @@ func TestGetPeerPendingChanges_WithChanges(t *testing.T) {
 }
 
 // =============================================================================
-// Test PreviewPeerPendingBundle
 // =============================================================================
 
 func TestPreviewPeerPendingBundle_InvalidID(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	compiler := engine.NewCompiler(db)
-	handler := NewHandler(db, compiler, nil, nil)
+	compiler := engine.NewTestCompiler(db)
+	handler := newTestHandler(db, compiler, nil, nil)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/pending/preview/invalid", nil)
 	r = muxVars(r, map[string]string{"peerId": "invalid"})
@@ -256,8 +255,8 @@ func TestPreviewPeerPendingBundle_PeerNotFound(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	compiler := engine.NewCompiler(db)
-	handler := NewHandler(db, compiler, nil, nil)
+	compiler := engine.NewTestCompiler(db)
+	handler := newTestHandler(db, compiler, nil, nil)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/pending/preview/999", nil)
 	r = muxVars(r, map[string]string{"peerId": "999"})
@@ -273,25 +272,20 @@ func TestPreviewPeerPendingBundle_PeerFound(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Insert test peer with required data for bundle compilation
 	db.Exec("INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)",
 		"peer-one", "10.0.0.1", "key1", "hmac1")
 
-	// Insert a group (required for bundle)
 	db.Exec("INSERT INTO groups (name) VALUES (?)", "test-group")
 
-	// Insert a policy
 	db.Exec("INSERT INTO policies (name, description, enabled) VALUES (?, ?, ?)",
 		"test-policy", "test description", 1)
 
-	// Insert policy group assignment
 	db.Exec("INSERT INTO policy_groups (policy_id, group_id) VALUES (?, ?)", 1, 1)
 
-	// Insert peer group assignment
 	db.Exec("INSERT INTO peer_groups (peer_id, group_id) VALUES (?, ?)", 1, 1)
 
-	compiler := engine.NewCompiler(db)
-	handler := NewHandler(db, compiler, nil, nil)
+	compiler := engine.NewTestCompiler(db)
+	handler := newTestHandler(db, compiler, nil, nil)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/pending/preview/1", nil)
 	r = muxVars(r, map[string]string{"peerId": "1"})
@@ -320,26 +314,21 @@ func TestPreviewPeerPendingBundle_ExistingBundle(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Insert test peer with required data for bundle compilation
 	db.Exec("INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)",
 		"peer-one", "10.0.0.1", "key1", "hmac1")
 
-	// Insert a group (required for bundle)
 	db.Exec("INSERT INTO groups (name) VALUES (?)", "test-group")
 
-	// Insert a policy
 	db.Exec("INSERT INTO policies (name, description, enabled) VALUES (?, ?, ?)",
 		"test-policy", "test description", 1)
 
-	// Insert policy group assignment
 	db.Exec("INSERT INTO policy_groups (policy_id, group_id) VALUES (?, ?)", 1, 1)
 
-	// Insert peer group assignment
 	db.Exec("INSERT INTO peer_groups (peer_id, group_id) VALUES (?, ?)", 1, 1)
 
 	// First compile and store a bundle
-	compiler := engine.NewCompiler(db)
-	handler := NewHandler(db, compiler, nil, nil)
+	compiler := engine.NewTestCompiler(db)
+	handler := newTestHandler(db, compiler, nil, nil)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/pending/preview/1", nil)
 	r = muxVars(r, map[string]string{"peerId": "1"})
@@ -367,15 +356,14 @@ func TestPreviewPeerPendingBundle_ExistingBundle(t *testing.T) {
 }
 
 // =============================================================================
-// Test ApplyPeerPendingBundle
 // =============================================================================
 
 func TestApplyPeerPendingBundle_InvalidID(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	compiler := engine.NewCompiler(db)
-	handler := NewHandler(db, compiler, nil, nil)
+	compiler := engine.NewTestCompiler(db)
+	handler := newTestHandler(db, compiler, nil, nil)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/pending/apply/invalid", nil)
 	r = muxVars(r, map[string]string{"peerId": "invalid"})
@@ -391,8 +379,8 @@ func TestApplyPeerPendingBundle_PeerNotFound(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	compiler := engine.NewCompiler(db)
-	handler := NewHandler(db, compiler, nil, nil)
+	compiler := engine.NewTestCompiler(db)
+	handler := newTestHandler(db, compiler, nil, nil)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/pending/apply/999", nil)
 	r = muxVars(r, map[string]string{"peerId": "999"})
@@ -408,7 +396,6 @@ func TestApplyPeerPendingBundle_Success(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Insert peer with proper data for compilation
 	db.Exec("INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)",
 		"peer-one", "10.0.0.1", "key1", "hmac1")
 	db.Exec("INSERT INTO groups (name) VALUES (?)", "test-group")
@@ -419,9 +406,9 @@ func TestApplyPeerPendingBundle_Success(t *testing.T) {
 	db.Exec("INSERT INTO pending_changes (peer_id, change_type, change_id, change_action, change_summary) VALUES (?, ?, ?, ?, ?)",
 		1, "policy", 1, "create", "Add policy")
 
-	compiler := engine.NewCompiler(db)
+	compiler := engine.NewTestCompiler(db)
 	sseHub := events.NewSSEHub()
-	handler := NewHandler(db, compiler, sseHub, nil)
+	handler := newTestHandler(db, compiler, sseHub, nil)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/pending/apply/1", nil)
 	r = muxVars(r, map[string]string{"peerId": "1"})
@@ -447,18 +434,16 @@ func TestApplyPeerPendingBundle_Success(t *testing.T) {
 }
 
 // =============================================================================
-// Test ApplyAllPendingBundles
 // =============================================================================
 
 func TestApplyAllPendingBundles_NoChanges(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Insert test peer without pending changes
 	db.Exec("INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)",
 		"peer-one", "10.0.0.1", "key1", "hmac1")
 
-	handler := NewHandler(db, nil, nil, nil)
+	handler := newTestHandler(db, nil, nil, nil)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/pending/apply-all", nil)
 
@@ -494,7 +479,6 @@ func TestApplyAllPendingBundles_Success(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Insert peer with proper data for compilation
 	db.Exec("INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)",
 		"peer-one", "10.0.0.1", "key1", "hmac1")
 	db.Exec("INSERT INTO groups (name) VALUES (?)", "test-group")
@@ -505,9 +489,9 @@ func TestApplyAllPendingBundles_Success(t *testing.T) {
 	db.Exec("INSERT INTO pending_changes (peer_id, change_type, change_id, change_action, change_summary) VALUES (?, ?, ?, ?, ?)",
 		1, "policy", 1, "create", "Add policy")
 
-	compiler := engine.NewCompiler(db)
+	compiler := engine.NewTestCompiler(db)
 	sseHub := events.NewSSEHub()
-	handler := NewHandler(db, compiler, sseHub, nil)
+	handler := newTestHandler(db, compiler, sseHub, nil)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/pending/apply-all", nil)
 
@@ -532,7 +516,6 @@ func TestApplyAllPendingBundles_Success(t *testing.T) {
 }
 
 // =============================================================================
-// Test PushAllRules
 // =============================================================================
 
 func TestPushAllRules_NoPeers(t *testing.T) {
@@ -541,7 +524,7 @@ func TestPushAllRules_NoPeers(t *testing.T) {
 
 	// No peers inserted
 
-	handler := NewHandler(db, nil, nil, nil)
+	handler := newTestHandler(db, nil, nil, nil)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/pending/push-all", nil)
 
@@ -572,7 +555,7 @@ func TestPushAllRules_DBQueryError(t *testing.T) {
 	// Close the database to cause an error
 	db.Close()
 
-	handler := NewHandler(db, nil, nil, nil)
+	handler := newTestHandler(db, nil, nil, nil)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/pending/push-all", nil)
 
@@ -588,14 +571,13 @@ func TestPushAllRules_RowsIterationError(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Insert a peer
 	db.Exec("INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)",
 		"peer-one", "10.0.0.1", "key1", "hmac1")
 
 	// Close the database before rows iteration to cause error
 	db.Close()
 
-	handler := NewHandler(db, nil, nil, nil)
+	handler := newTestHandler(db, nil, nil, nil)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/pending/push-all", nil)
 
@@ -607,14 +589,13 @@ func TestPushAllRules_RowsIterationError(t *testing.T) {
 }
 
 // =============================================================================
-// Test HandlePushJobSSE
 // =============================================================================
 
 func TestHandlePushJobSSE_MissingJobID(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	handler := NewHandler(db, nil, nil, nil)
+	handler := newTestHandler(db, nil, nil, nil)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/pending/push-jobs//sse", nil)
 
@@ -629,7 +610,7 @@ func TestHandlePushJobSSE_JobNotFound(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	handler := NewHandler(db, nil, nil, nil)
+	handler := newTestHandler(db, nil, nil, nil)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/pending/push-jobs/nonexistent/sse", nil)
 	r = muxVars(r, map[string]string{"job_id": "nonexistent"})
@@ -642,7 +623,6 @@ func TestHandlePushJobSSE_JobNotFound(t *testing.T) {
 }
 
 // =============================================================================
-// Test generateDiff
 // =============================================================================
 
 func TestGenerateDiff_EmptyOldContent(t *testing.T) {
@@ -746,7 +726,6 @@ func TestGenerateDiff_OnlyAdditions(t *testing.T) {
 }
 
 // =============================================================================
-// Test parseSSEEventType
 // =============================================================================
 
 func TestParseSSEEventType_Complete(t *testing.T) {
@@ -795,14 +774,12 @@ func TestParseSSEEventType_BundleUpdated(t *testing.T) {
 }
 
 // =============================================================================
-// Test ListPendingChanges - Error Cases
 // =============================================================================
 
 func TestListPendingChanges_PeerQueryError(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Insert peer with pending changes
 	db.Exec("INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)",
 		"peer-one", "10.0.0.1", "key1", "hmac1")
 	db.Exec("INSERT INTO pending_changes (peer_id, change_type, change_id, change_action, change_summary) VALUES (?, ?, ?, ?, ?)",
@@ -811,7 +788,7 @@ func TestListPendingChanges_PeerQueryError(t *testing.T) {
 	// Close database to cause error on peer query
 	db.Close()
 
-	handler := NewHandler(db, nil, nil, nil)
+	handler := newTestHandler(db, nil, nil, nil)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/pending", nil)
 
@@ -824,21 +801,19 @@ func TestListPendingChanges_PeerQueryError(t *testing.T) {
 }
 
 // =============================================================================
-// Test GetPeerPendingChanges - Error Cases
 // =============================================================================
 
 func TestGetPeerPendingChanges_DBError(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Insert test peer
 	db.Exec("INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)",
 		"peer-one", "10.0.0.1", "key1", "hmac1")
 
 	// Close database to cause error
 	db.Close()
 
-	handler := NewHandler(db, nil, nil, nil)
+	handler := newTestHandler(db, nil, nil, nil)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/pending/peers/1", nil)
 	r = muxVars(r, map[string]string{"peerId": "1"})
@@ -851,7 +826,6 @@ func TestGetPeerPendingChanges_DBError(t *testing.T) {
 }
 
 // =============================================================================
-// Test splitLines
 // =============================================================================
 
 func TestSplitLines_Empty(t *testing.T) {
@@ -903,18 +877,16 @@ func TestSplitLines_LeadingNewline(t *testing.T) {
 }
 
 // =============================================================================
-// Test ListPendingChanges - Additional Cases
 // =============================================================================
 
 func TestListPendingChanges_SomePeersMissing(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Insert pending changes for peer ID 999 which doesn't exist
 	db.Exec("INSERT INTO pending_changes (peer_id, change_type, change_id, change_action, change_summary) VALUES (?, ?, ?, ?, ?)",
 		999, "policy", 1, "create", "Add policy")
 
-	handler := NewHandler(db, nil, nil, nil)
+	handler := newTestHandler(db, nil, nil, nil)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/pending", nil)
 
@@ -945,7 +917,7 @@ func TestListPendingChanges_PendingChangesQueryError(t *testing.T) {
 
 	db.Close()
 
-	handler := NewHandler(db, nil, nil, nil)
+	handler := newTestHandler(db, nil, nil, nil)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/pending", nil)
 
@@ -957,7 +929,6 @@ func TestListPendingChanges_PendingChangesQueryError(t *testing.T) {
 }
 
 // =============================================================================
-// Test GetPeerPendingChanges - Additional Cases
 // =============================================================================
 
 func TestGetPeerPendingChanges_PendingChangesDBError(t *testing.T) {
@@ -971,7 +942,7 @@ func TestGetPeerPendingChanges_PendingChangesDBError(t *testing.T) {
 
 	db.Close()
 
-	handler := NewHandler(db, nil, nil, nil)
+	handler := newTestHandler(db, nil, nil, nil)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/pending/peers/1", nil)
 	r = muxVars(r, map[string]string{"peerId": "1"})
@@ -984,7 +955,6 @@ func TestGetPeerPendingChanges_PendingChangesDBError(t *testing.T) {
 }
 
 // =============================================================================
-// Test HandlePushJobSSE - Additional Cases
 // =============================================================================
 
 func TestHandlePushJobSSE_WithJobPeers(t *testing.T) {
@@ -992,7 +962,6 @@ func TestHandlePushJobSSE_WithJobPeers(t *testing.T) {
 }
 
 // =============================================================================
-// Test PreviewPeerPendingBundle - Additional Cases
 // =============================================================================
 
 func TestPreviewPeerPendingBundle_WithExistingBundle(t *testing.T) {
@@ -1007,8 +976,8 @@ func TestPreviewPeerPendingBundle_WithExistingBundle(t *testing.T) {
 	db.Exec("INSERT INTO policy_groups (policy_id, group_id) VALUES (?, ?)", 1, 1)
 	db.Exec("INSERT INTO peer_groups (peer_id, group_id) VALUES (?, ?)", 1, 1)
 
-	compiler := engine.NewCompiler(db)
-	handler := NewHandler(db, compiler, nil, nil)
+	compiler := engine.NewTestCompiler(db)
+	handler := newTestHandler(db, compiler, nil, nil)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/pending/preview/1", nil)
 	r = muxVars(r, map[string]string{"peerId": "1"})
@@ -1030,7 +999,6 @@ func TestPreviewPeerPendingBundle_WithExistingBundle(t *testing.T) {
 }
 
 // =============================================================================
-// Test ApplyPeerPendingBundle - Additional Cases
 // =============================================================================
 
 func TestApplyPeerPendingBundle_DeletePendingPreviewError(t *testing.T) {
@@ -1051,9 +1019,9 @@ func TestApplyPeerPendingBundle_DeletePendingPreviewError(t *testing.T) {
 	db.Exec("INSERT INTO pending_bundle_previews (peer_id, rules_content, diff_content, version) VALUES (?, ?, ?, ?)",
 		1, "old-content", "old-diff", "v1")
 
-	compiler := engine.NewCompiler(db)
+	compiler := engine.NewTestCompiler(db)
 	sseHub := events.NewSSEHub()
-	handler := NewHandler(db, compiler, sseHub, nil)
+	handler := newTestHandler(db, compiler, sseHub, nil)
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/pending/apply/1", nil)
@@ -1076,7 +1044,6 @@ func TestApplyPeerPendingBundle_DeletePendingPreviewError(t *testing.T) {
 }
 
 // =============================================================================
-// Test PushAllRules - Additional Cases
 // =============================================================================
 
 func TestPushAllRules_CreatePushJobPeersError(t *testing.T) {
@@ -1089,7 +1056,7 @@ func TestPushAllRules_CreatePushJobPeersError(t *testing.T) {
 	// Close db before CreatePushJobPeersT
 	db.Close()
 
-	handler := NewHandler(db, nil, nil, nil)
+	handler := newTestHandler(db, nil, nil, nil)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/pending/push-all", nil)
 
@@ -1104,18 +1071,15 @@ func TestPushAllRules_ExcludesManualPeers(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Insert an agent-based peer (is_manual = 0)
 	db.Exec("INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, is_manual) VALUES (?, ?, ?, ?, ?)",
 		"agent-peer", "10.0.0.1", "key1", "hmac1", 0)
 
-	// Insert a manual peer (is_manual = 1)
 	db.Exec("INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, is_manual) VALUES (?, ?, ?, ?, ?)",
 		"manual-peer", "10.0.0.2", "key2", "hmac2", 1)
 
-	// Create PushWorker to handle enqueue without panic
 	sseHub := events.NewSSEHub()
 	pushWorker := common.NewPushWorker(db, nil, nil, sseHub)
-	handler := NewHandler(db, nil, sseHub, pushWorker)
+	handler := newTestHandler(db, nil, sseHub, pushWorker)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/pending/push-all", nil)
 

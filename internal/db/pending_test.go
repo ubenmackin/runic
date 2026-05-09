@@ -7,14 +7,12 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-// TestAddPendingChange tests the AddPendingChange function.
 func TestAddPendingChange(t *testing.T) {
 	db, cleanup := SetupTestDB(t)
 	defer cleanup()
 
 	ctx := context.Background()
 
-	// Insert required peer for foreign key
 	_, err := db.Exec(`INSERT INTO peers (id, hostname, ip_address, agent_key, hmac_key, status) VALUES (1, 'peer1', '10.0.0.1', 'key1', 'hmac1', 'online')`)
 	if err != nil {
 		t.Fatalf("Failed to insert peer: %v", err)
@@ -43,7 +41,6 @@ func TestAddPendingChange(t *testing.T) {
 	}
 }
 
-// TestAddPendingChange_DBError tests AddPendingChange with a closed database.
 func TestAddPendingChange_DBError(t *testing.T) {
 	db, cleanup := SetupTestDB(t)
 
@@ -58,20 +55,17 @@ func TestAddPendingChange_DBError(t *testing.T) {
 	}
 }
 
-// TestGetPendingChangesForPeer tests the GetPendingChangesForPeer function.
 func TestGetPendingChangesForPeer(t *testing.T) {
 	db, cleanup := SetupTestDB(t)
 	defer cleanup()
 
 	ctx := context.Background()
 
-	// Insert required peers for foreign key
 	_, err := db.Exec(`INSERT INTO peers (id, hostname, ip_address, agent_key, hmac_key, status) VALUES (1, 'peer1', '10.0.0.1', 'key1', 'hmac1', 'online'), (2, 'peer2', '10.0.0.2', 'key2', 'hmac2', 'online')`)
 	if err != nil {
 		t.Fatalf("Failed to insert peers: %v", err)
 	}
 
-	// Add multiple pending changes
 	err = AddPendingChange(ctx, db, 1, "policy", "create", 100, "Policy create 1")
 	if err != nil {
 		t.Fatalf("AddPendingChange failed: %v", err)
@@ -85,7 +79,6 @@ func TestGetPendingChangesForPeer(t *testing.T) {
 		t.Fatalf("AddPendingChange failed: %v", err)
 	}
 
-	// Add changes for another peer
 	err = AddPendingChange(ctx, db, 2, "policy", "create", 200, "Policy create 2")
 	if err != nil {
 		t.Fatalf("AddPendingChange failed: %v", err)
@@ -131,7 +124,6 @@ func TestGetPendingChangesForPeer(t *testing.T) {
 	}
 }
 
-// TestGetPendingChangesForPeer_DBError tests GetPendingChangesForPeer with a closed database.
 func TestGetPendingChangesForPeer_DBError(t *testing.T) {
 	db, cleanup := SetupTestDB(t)
 	db.Close()
@@ -144,20 +136,17 @@ func TestGetPendingChangesForPeer_DBError(t *testing.T) {
 	}
 }
 
-// TestClearPendingChangesForPeer tests the ClearPendingChangesForPeer function.
 func TestClearPendingChangesForPeer(t *testing.T) {
 	db, cleanup := SetupTestDB(t)
 	defer cleanup()
 
 	ctx := context.Background()
 
-	// Insert required peers for foreign key
 	_, err := db.Exec(`INSERT INTO peers (id, hostname, ip_address, agent_key, hmac_key, status) VALUES (1, 'peer1', '10.0.0.1', 'key1', 'hmac1', 'online'), (2, 'peer2', '10.0.0.2', 'key2', 'hmac2', 'online')`)
 	if err != nil {
 		t.Fatalf("Failed to insert peers: %v", err)
 	}
 
-	// Add pending changes
 	err = AddPendingChange(ctx, db, 1, "policy", "create", 100, "Policy 1")
 	if err != nil {
 		t.Fatalf("AddPendingChange failed: %v", err)
@@ -202,7 +191,6 @@ func TestClearPendingChangesForPeer(t *testing.T) {
 	}
 }
 
-// TestClearPendingChangesForPeer_DBError tests ClearPendingChangesForPeer with a closed database.
 func TestClearPendingChangesForPeer_DBError(t *testing.T) {
 	db, cleanup := SetupTestDB(t)
 	db.Close()
@@ -215,20 +203,17 @@ func TestClearPendingChangesForPeer_DBError(t *testing.T) {
 	}
 }
 
-// TestGetPeersWithPendingChanges tests the GetPeersWithPendingChanges function.
 func TestGetPeersWithPendingChanges(t *testing.T) {
 	db, cleanup := SetupTestDB(t)
 	defer cleanup()
 
 	ctx := context.Background()
 
-	// Insert required peers for foreign key
 	_, err := db.Exec(`INSERT INTO peers (id, hostname, ip_address, agent_key, hmac_key, status) VALUES (1, 'peer1', '10.0.0.1', 'key1', 'hmac1', 'online'), (2, 'peer2', '10.0.0.2', 'key2', 'hmac2', 'online'), (3, 'peer3', '10.0.0.3', 'key3', 'hmac3', 'online')`)
 	if err != nil {
 		t.Fatalf("Failed to insert peers: %v", err)
 	}
 
-	// Add pending changes for multiple peers
 	err = AddPendingChange(ctx, db, 1, "policy", "create", 100, "Policy 1")
 	if err != nil {
 		t.Fatalf("AddPendingChange failed: %v", err)
@@ -288,7 +273,6 @@ func TestGetPeersWithPendingChanges(t *testing.T) {
 	}
 }
 
-// TestGetPeersWithPendingChanges_DBError tests GetPeersWithPendingChanges with a closed database.
 func TestGetPeersWithPendingChanges_DBError(t *testing.T) {
 	db, cleanup := SetupTestDB(t)
 	db.Close()
@@ -301,14 +285,12 @@ func TestGetPeersWithPendingChanges_DBError(t *testing.T) {
 	}
 }
 
-// TestSavePendingBundlePreview tests the SavePendingBundlePreview function.
 func TestSavePendingBundlePreview(t *testing.T) {
 	db, cleanup := SetupTestDB(t)
 	defer cleanup()
 
 	ctx := context.Background()
 
-	// Insert required peer for foreign key
 	_, err := db.Exec(`INSERT INTO peers (id, hostname, ip_address, agent_key, hmac_key, status) VALUES (1, 'peer1', '10.0.0.1', 'key1', 'hmac1', 'online')`)
 	if err != nil {
 		t.Fatalf("Failed to insert peer: %v", err)
@@ -359,7 +341,6 @@ func TestSavePendingBundlePreview(t *testing.T) {
 	}
 }
 
-// TestSavePendingBundlePreview_DBError tests SavePendingBundlePreview with a closed database.
 func TestSavePendingBundlePreview_DBError(t *testing.T) {
 	db, cleanup := SetupTestDB(t)
 	db.Close()
@@ -372,26 +353,22 @@ func TestSavePendingBundlePreview_DBError(t *testing.T) {
 	}
 }
 
-// TestDeletePendingBundlePreview tests the DeletePendingBundlePreview function.
 func TestDeletePendingBundlePreview(t *testing.T) {
 	db, cleanup := SetupTestDB(t)
 	defer cleanup()
 
 	ctx := context.Background()
 
-	// Insert required peer for foreign key
 	_, err := db.Exec(`INSERT INTO peers (id, hostname, ip_address, agent_key, hmac_key, status) VALUES (1, 'peer1', '10.0.0.1', 'key1', 'hmac1', 'online')`)
 	if err != nil {
 		t.Fatalf("Failed to insert peer: %v", err)
 	}
 
-	// Add a bundle preview
 	err = SavePendingBundlePreview(ctx, db, 1, "rules content", "diff content", "version-hash-1")
 	if err != nil {
 		t.Fatalf("SavePendingBundlePreview failed: %v", err)
 	}
 
-	// Delete the bundle preview
 	err = DeletePendingBundlePreview(ctx, db, 1)
 	if err != nil {
 		t.Fatalf("DeletePendingBundlePreview failed: %v", err)
@@ -407,14 +384,12 @@ func TestDeletePendingBundlePreview(t *testing.T) {
 		t.Fatalf("Expected 0 pending bundle previews after deletion, got %d", count)
 	}
 
-	// Delete non-existent peer (should not error)
 	err = DeletePendingBundlePreview(ctx, db, 999)
 	if err != nil {
 		t.Fatalf("DeletePendingBundlePreview should not fail for non-existent peer: %v", err)
 	}
 }
 
-// TestDeletePendingBundlePreview_DBError tests DeletePendingBundlePreview with a closed database.
 func TestDeletePendingBundlePreview_DBError(t *testing.T) {
 	db, cleanup := SetupTestDB(t)
 	db.Close()

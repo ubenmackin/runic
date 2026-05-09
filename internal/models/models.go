@@ -84,6 +84,22 @@ type RuleBundleRow struct {
 	FirstAppliedAt sql.NullTime `json:"first_applied_at" db:"first_applied_at"`
 }
 
+// UserRow intentionally omits the password_hash field from JSON serialization.
+type UserRow struct {
+	ID        int       `json:"id"`
+	Username  string    `json:"username"`
+	Email     string    `json:"email"`
+	Role      string    `json:"role"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// UserCredentials is returned only by UserStore.GetCredentials and must never be serialized to JSON.
+type UserCredentials struct {
+	ID           int
+	Username     string
+	PasswordHash string
+}
+
 type CreateBundleParams struct {
 	PeerID        int
 	Version       string
@@ -100,7 +116,6 @@ type SpecialTargetRow struct {
 	Address     string // IP address or "computed" for subnet_broadcast
 }
 
-// PendingChange represents a queued change that affects a peer's firewall rules.
 type PendingChange struct {
 	ID            int    `json:"id"`
 	PeerID        int    `json:"peer_id"`
@@ -111,7 +126,6 @@ type PendingChange struct {
 	CreatedAt     string `json:"created_at"`
 }
 
-// PendingBundlePreview represents a compiled bundle preview awaiting review.
 type PendingBundlePreview struct {
 	ID           int    `json:"id"`
 	PeerID       int    `json:"peer_id"`
@@ -121,7 +135,6 @@ type PendingBundlePreview struct {
 	CreatedAt    string `json:"created_at"`
 }
 
-// ChangeSnapshot stores the backup state of an entity before modification.
 type ChangeSnapshot struct {
 	ID           int    `json:"id"`
 	EntityType   string `json:"entity_type"`

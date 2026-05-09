@@ -14,11 +14,12 @@ import (
 
 	"runic/internal/crypto"
 	"runic/internal/db"
+	"runic/internal/models"
+	"runic/internal/store"
 
 	"runic/internal/common/log"
 )
 
-// DigestSummary represents a structured summary of alerts for a digest.
 type DigestSummary struct {
 	TotalAlerts       int                       `json:"total_alerts"`
 	CriticalCount     int                       `json:"critical_count"`
@@ -29,47 +30,47 @@ type DigestSummary struct {
 	TimeRange         TimeRange                 `json:"time_range"`
 }
 
-// TypeSummary represents a summary of alerts for a specific type.
 type TypeSummary struct {
 	Count    int      `json:"count"`
 	Severity Severity `json:"severity"`
 	Messages []string `json:"messages,omitempty"`
 }
 
-// TimeRange represents a time range for the digest.
 type TimeRange struct {
 	Start time.Time `json:"start"`
 	End   time.Time `json:"end"`
 }
 
-// DigestGenerator handles the generation and delivery of alert digests.
 type DigestGenerator struct {
-	database  db.Querier
-	smtp      *SMTPSender
-	encryptor *crypto.Encryptor
-	logger    *slog.Logger
-	stopChan  chan struct{}
-	wg        sync.WaitGroup
+	alertStore *store.AlertStore
+	database   db.Querier // Kept for utility functions like GetInstanceURL
+	smtp       *SMTPSender
+	encryptor  *crypto.Encryptor
+	logger     *slog.Logger
+	stopChan   chan struct{}
+	wg         sync.WaitGroup
 }
 
-// NewDigestGenerator creates a new digest generator.
-func NewDigestGenerator(database db.Querier, smtp *SMTPSender, encryptor *crypto.Encryptor) *DigestGenerator {
+func NewDigestGenerator(alertStore *store.AlertStore, smtp *SMTPSender, encryptor *crypto.Encryptor) *DigestGenerator {
 	return &DigestGenerator{
-		database:  database,
-		smtp:      smtp,
-		encryptor: encryptor,
-		logger:    log.L().With("component", "digest_generator"),
-		stopChan:  make(chan struct{}),
+		alertStore: alertStore,
+		smtp:       smtp,
+		encryptor:  encryptor,
+		logger:     log.L().With("component", "digest_generator"),
+		stopChan:   make(chan struct{}),
 	}
 }
 
-// SetLogger sets a custom logger for the digest generator.
+// SetDatabase sets the database for utility functions like GetInstanceURL.
+func (g *DigestGenerator) SetDatabase(db db.Querier) {
+	g.database = db
+}
+
 func (g *DigestGenerator) SetLogger(logger *slog.Logger) {
 	g.logger = logger.With("component", "digest_generator")
 }
 
-// GenerateDigest generates an alert digest for a specific user.
-// It aggregates alerts from the past 24 hours and creates a summary.
+// GenerateDigest generates a digest for the given user. It aggregates alerts from the past 24 hours and creates a summary.
 func (g *DigestGenerator) GenerateDigest(userID uint) (*AlertDigest, error) {
 	ctx := context.Background()
 
@@ -94,7 +95,7 @@ func (g *DigestGenerator) GenerateDigest(userID uint) (*AlertDigest, error) {
 		return nil, fmt.Errorf("failed to marshal digest summary: %w", err)
 	}
 
-	digest := &AlertDigest{
+	digest := &models.AlertDigest{
 		UserID:     userID,
 		DigestDate: now.Format("2006-01-02"),
 		AlertCount: summary.TotalAlerts,
@@ -103,7 +104,7 @@ func (g *DigestGenerator) GenerateDigest(userID uint) (*AlertDigest, error) {
 		CreatedAt:  now,
 	}
 
-	if err := CreateAlertDigest(ctx, g.database, digest); err != nil {
+	if err := g.alertStore.CreateAlertDigest(ctx, digest); err != nil {
 		return nil, fmt.Errorf("failed to create alert digest: %w", err)
 	}
 
@@ -116,7 +117,6 @@ func (g *DigestGenerator) GenerateDigest(userID uint) (*AlertDigest, error) {
 	return digest, nil
 }
 
-// SendDigest sends a digest email to the specified user.
 func (g *DigestGenerator) SendDigest(digest *AlertDigest, userEmail string) error {
 	if g.smtp == nil {
 		return fmt.Errorf("SMTP sender not configured")
@@ -155,8 +155,6 @@ func (g *DigestGenerator) SendDigest(digest *AlertDigest, userEmail string) erro
 	return nil
 }
 
-// RunDaily starts a scheduled task that runs at the configured digest time
-// for each user with digest_enabled=true.
 func (g *DigestGenerator) RunDaily() {
 	g.wg.Add(1)
 	go func() {
@@ -179,14 +177,12 @@ func (g *DigestGenerator) RunDaily() {
 	}()
 }
 
-// Stop stops the daily digest scheduler.
 func (g *DigestGenerator) Stop() {
 	close(g.stopChan)
 	g.wg.Wait()
 	g.logger.Info("digest generator stopped")
 }
 
-// checkAndSendDigests checks if any users need a digest sent at the current time.
 func (g *DigestGenerator) checkAndSendDigests() {
 	ctx := context.Background()
 
@@ -238,7 +234,6 @@ func (g *DigestGenerator) checkAndSendDigests() {
 	}
 }
 
-// sendDigestForUser generates and sends a digest for a specific user.
 func (g *DigestGenerator) sendDigestForUser(ctx context.Context, user *UserNotificationPreferences) {
 	email, err := g.getUserEmail(ctx, user.UserID)
 	if err != nil {
@@ -280,10 +275,8 @@ func (g *DigestGenerator) sendDigestForUser(ctx context.Context, user *UserNotif
 	)
 }
 
-// getAlertsForUser retrieves alerts for a user within a time range.
 // This joins alert_history with alert_rules to get alerts that apply to the user's context.
 func (g *DigestGenerator) getAlertsForUser(ctx context.Context, userID uint, startTime, endTime time.Time) ([]AlertHistory, error) {
-	// For now, we return all alerts in the time range since alerts are system-wide
 	// In the future, this could be filtered by user's peers or other context
 	query := `
 		SELECT id, rule_id, alert_type, peer_id, severity, subject, message, metadata, status, sent_at, error_message, created_at
@@ -319,7 +312,6 @@ func (g *DigestGenerator) getAlertsForUser(ctx context.Context, userID uint, sta
 	return alerts, nil
 }
 
-// buildDigestSummary builds a summary from a list of alerts.
 func (g *DigestGenerator) buildDigestSummary(alerts []AlertHistory, startTime, endTime time.Time) DigestSummary {
 	summary := DigestSummary{
 		TotalAlerts:       len(alerts),
@@ -362,7 +354,6 @@ func (g *DigestGenerator) buildDigestSummary(alerts []AlertHistory, startTime, e
 	return summary
 }
 
-// generateDigestHTML creates an HTML email body for the digest.
 // Uses terminal aesthetic with dark mode colors and monospace font.
 func (g *DigestGenerator) generateDigestHTML(digest *AlertDigest, summary *DigestSummary, instanceURL string) string {
 	bodyBg := "#0a0a0a"
@@ -561,7 +552,6 @@ body { background-color: %s !important; }
 	return html
 }
 
-// getUsersWithDigestEnabled retrieves all users with digest notifications enabled.
 func (g *DigestGenerator) getUsersWithDigestEnabled(ctx context.Context) ([]*UserNotificationPreferences, error) {
 	query := `
 	SELECT id, user_id, quiet_hours_enabled, quiet_hours_start, quiet_hours_end,
@@ -599,7 +589,6 @@ func (g *DigestGenerator) getUsersWithDigestEnabled(ctx context.Context) ([]*Use
 	return users, nil
 }
 
-// hasDigestBeenSentToday checks if a digest has already been sent for a user today.
 func (g *DigestGenerator) hasDigestBeenSentToday(ctx context.Context, userID uint, date string) (bool, error) {
 	var count int
 	err := g.database.QueryRowContext(ctx,
@@ -614,7 +603,6 @@ func (g *DigestGenerator) hasDigestBeenSentToday(ctx context.Context, userID uin
 	return count > 0, nil
 }
 
-// getUserEmail retrieves the email address for a user.
 func (g *DigestGenerator) getUserEmail(ctx context.Context, userID uint) (string, error) {
 	var email sql.NullString
 	err := g.database.QueryRowContext(ctx,
@@ -636,7 +624,6 @@ func (g *DigestGenerator) getUserEmail(ctx context.Context, userID uint) (string
 	return email.String, nil
 }
 
-// formatAlertType formats an alert type for display.
 func formatAlertType(alertType AlertType) string {
 	switch alertType {
 	case AlertTypePeerOffline:

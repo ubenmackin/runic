@@ -16,13 +16,11 @@ func TestRouterIntegration(t *testing.T) {
 	// Setup test DB and compiler
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
-	compiler := engine.NewCompiler(db)
+	compiler := engine.NewTestCompiler(db)
 
-	// Create in-memory logs database for API tests
 	logsDB, logsCleanup := testutil.SetupTestLogsDB(t)
 	defer logsCleanup()
 
-	// Create API and Router (pass nil for alert service and encryptor in tests)
 	a := NewAPI(db, compiler, logsDB, ":memory:", nil, nil)
 	r := mux.NewRouter()
 
@@ -102,7 +100,7 @@ func TestRouterIntegration(t *testing.T) {
 func TestSecurityMiddlewares(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
-	compiler := engine.NewCompiler(db)
+	compiler := engine.NewTestCompiler(db)
 
 	logsDB, logsCleanup := testutil.SetupTestLogsDB(t)
 	defer logsCleanup()
@@ -117,17 +115,14 @@ func TestSecurityMiddlewares(t *testing.T) {
 
 	headers := w.Header()
 
-	// Check SecurityHeaders (outer layer)
 	if headers.Get("Strict-Transport-Security") == "" {
 		t.Error("Strict-Transport-Security header missing")
 	}
 
-	// Check RequestID middleware
 	if headers.Get("X-Request-ID") == "" {
 		t.Error("X-Request-ID header missing")
 	}
 
-	// Check CSP for API subrouter (testing an endpoint inside the subrouter)
 	req2 := httptest.NewRequest("GET", "/api/v1/setup", nil)
 	w2 := httptest.NewRecorder()
 	r.ServeHTTP(w2, req2)
@@ -146,7 +141,7 @@ func TestCORSMiddleware(t *testing.T) {
 
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
-	compiler := engine.NewCompiler(db)
+	compiler := engine.NewTestCompiler(db)
 
 	logsDB, logsCleanup := testutil.SetupTestLogsDB(t)
 	defer logsCleanup()
@@ -173,7 +168,7 @@ func TestCORSMiddleware(t *testing.T) {
 func TestRateLimiters(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
-	compiler := engine.NewCompiler(db)
+	compiler := engine.NewTestCompiler(db)
 
 	logsDB, logsCleanup := testutil.SetupTestLogsDB(t)
 	defer logsCleanup()
@@ -211,7 +206,7 @@ func TestRateLimiters(t *testing.T) {
 func TestRouterStop(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
-	compiler := engine.NewCompiler(db)
+	compiler := engine.NewTestCompiler(db)
 
 	logsDB, logsCleanup := testutil.SetupTestLogsDB(t)
 	defer logsCleanup()

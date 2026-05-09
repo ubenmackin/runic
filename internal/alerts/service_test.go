@@ -9,10 +9,10 @@ import (
 	"time"
 
 	"runic/internal/db"
+	"runic/internal/store"
 	"runic/internal/testutil"
 )
 
-// setupTestAlertTables creates the necessary tables for alert tests.
 func setupTestAlertTables(t *testing.T, database *sql.DB) {
 	t.Helper()
 	// Tables are created by testutil.SetupTestDB which runs the schema
@@ -26,19 +26,18 @@ func setupTestAlertTables(t *testing.T, database *sql.DB) {
 	}
 }
 
-// createTestAlertRule creates a test alert rule in the database.
 func createTestAlertRule(t *testing.T, database *sql.DB, rule *AlertRule) *AlertRule {
 	t.Helper()
 	ctx := context.Background()
 	databaseWrapper := db.New(database)
+	alertStore := store.NewAlertStore(databaseWrapper)
 
-	if err := CreateAlertRule(ctx, databaseWrapper, rule); err != nil {
+	if err := alertStore.CreateAlertRule(ctx, rule); err != nil {
 		t.Fatalf("failed to create alert rule: %v", err)
 	}
 	return rule
 }
 
-// createTestUser creates a test user in the database.
 func createTestUser(t *testing.T, database *sql.DB, username, email, role string) int {
 	t.Helper()
 	result, err := database.Exec(
@@ -52,7 +51,6 @@ func createTestUser(t *testing.T, database *sql.DB, username, email, role string
 	return int(id)
 }
 
-// countAlertHistory counts alert history entries.
 func countAlertHistory(t *testing.T, database *sql.DB) int {
 	t.Helper()
 	var count int
@@ -63,7 +61,6 @@ func countAlertHistory(t *testing.T, database *sql.DB) int {
 	return count
 }
 
-// getAlertHistoryByRuleID gets alert history for a specific rule.
 func getAlertHistoryByRuleID(t *testing.T, database *sql.DB, ruleID uint) []AlertHistory {
 	t.Helper()
 	rows, err := database.Query(
@@ -91,17 +88,14 @@ func getAlertHistoryByRuleID(t *testing.T, database *sql.DB, ruleID uint) []Aler
 	return history
 }
 
-// TestTriggerAlert_Basic tests basic alert triggering.
 func TestTriggerAlert_Basic(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
 	setupTestAlertTables(t, database)
 
-	// Create an admin user to receive alerts
 	createTestUser(t, database, "admin", "admin@test.com", "admin")
 
-	// Create an alert rule
 	rule := &AlertRule{
 		Name:            "Test Peer Offline Rule",
 		AlertType:       AlertTypePeerOffline,
@@ -110,11 +104,11 @@ func TestTriggerAlert_Basic(t *testing.T) {
 	}
 	createTestAlertRule(t, database, rule)
 
-	// Create the alert service and initialize it
 	databaseWrapper := db.New(database)
-	service := NewService(databaseWrapper)
+	alertStore := store.NewAlertStore(databaseWrapper)
+	userStore := store.NewUserStore(databaseWrapper)
+	service := NewService(databaseWrapper, alertStore, userStore)
 
-	// Create an alert event
 	event := &AlertEvent{
 		Type:      AlertTypePeerOffline,
 		PeerID:    1,
@@ -124,10 +118,9 @@ func TestTriggerAlert_Basic(t *testing.T) {
 		Message:   "Peer has been offline for 60 minutes",
 	}
 
-	// Create alert history directly
 	ctx := context.Background()
 	history := event.CreateAlertHistory(rule.ID)
-	if err := CreateAlertHistory(ctx, databaseWrapper, &history); err != nil {
+	if err := alertStore.CreateAlertHistory(ctx, &history); err != nil {
 		t.Fatalf("failed to create alert history: %v", err)
 	}
 
@@ -156,17 +149,14 @@ func TestTriggerAlert_Basic(t *testing.T) {
 	_ = service
 }
 
-// TestTriggerAlert_Throttled tests throttle behavior.
 func TestTriggerAlert_Throttled(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
 	setupTestAlertTables(t, database)
 
-	// Create admin user
 	createTestUser(t, database, "admin", "admin@test.com", "admin")
 
-	// Create an alert rule with throttle
 	rule := &AlertRule{
 		Name:            "Test Throttled Rule",
 		AlertType:       AlertTypePeerOffline,
@@ -176,9 +166,10 @@ func TestTriggerAlert_Throttled(t *testing.T) {
 	createTestAlertRule(t, database, rule)
 
 	databaseWrapper := db.New(database)
+	alertStore := store.NewAlertStore(databaseWrapper)
+	userStore := store.NewUserStore(databaseWrapper)
 	ctx := context.Background()
 
-	// Create first alert event
 	event1 := &AlertEvent{
 		Type:      AlertTypePeerOffline,
 		PeerID:    1,
@@ -188,18 +179,16 @@ func TestTriggerAlert_Throttled(t *testing.T) {
 		Message:   "First alert",
 	}
 
-	// Create first alert history using the proper function
 	history1 := event1.CreateAlertHistory(rule.ID)
 	history1.Status = AlertStatusSent // Mark as sent
-	if err := CreateAlertHistory(ctx, databaseWrapper, &history1); err != nil {
+	if err := alertStore.CreateAlertHistory(ctx, &history1); err != nil {
 		t.Fatalf("failed to create first alert history: %v", err)
 	}
 
 	// Test the scheduler's throttle logic
-	// Create a scheduler to test throttling
-	evaluator := NewConditionEvaluator(databaseWrapper, databaseWrapper)
-	processor := NewAlertProcessor(databaseWrapper, nil)
-	scheduler := NewScheduler(databaseWrapper, evaluator, processor)
+	evaluator := NewConditionEvaluator(databaseWrapper, databaseWrapper, newTestHostnameLookup(database))
+	processor := NewAlertProcessor(alertStore, userStore, nil)
+	scheduler := NewScheduler(alertStore, evaluator, processor)
 
 	// Test that the rule would be throttled (we just sent an alert)
 	// The scheduler checks for recent alerts in the throttle window
@@ -229,20 +218,18 @@ func TestTriggerAlert_Throttled(t *testing.T) {
 	_ = processor
 }
 
-// TestTriggerAlert_QuietHours tests quiet hours handling.
 func TestTriggerAlert_QuietHours(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
 	setupTestAlertTables(t, database)
 
-	// Create admin user with notification preferences
 	userID := createTestUser(t, database, "admin", "admin@test.com", "admin")
 
 	databaseWrapper := db.New(database)
+	alertStore := store.NewAlertStore(databaseWrapper)
 	ctx := context.Background()
 
-	// Create notification preferences with quiet hours using the proper function
 	prefs := &UserNotificationPreferences{
 		UserID:             uint(userID),
 		QuietHoursEnabled:  true,
@@ -251,11 +238,10 @@ func TestTriggerAlert_QuietHours(t *testing.T) {
 		QuietHoursTimezone: "UTC",
 	}
 
-	if err := UpsertUserNotificationPreferences(ctx, databaseWrapper, prefs); err != nil {
+	if err := alertStore.UpsertUserNotificationPreferences(ctx, prefs); err != nil {
 		t.Fatalf("failed to create notification preferences: %v", err)
 	}
 
-	// Create an alert rule
 	rule := &AlertRule{
 		Name:            "Test Quiet Hours Rule",
 		AlertType:       AlertTypePeerOffline,
@@ -264,7 +250,6 @@ func TestTriggerAlert_QuietHours(t *testing.T) {
 	}
 	createTestAlertRule(t, database, rule)
 
-	// Create an alert event during quiet hours
 	event := &AlertEvent{
 		Type:      AlertTypePeerOffline,
 		PeerID:    1,
@@ -274,12 +259,11 @@ func TestTriggerAlert_QuietHours(t *testing.T) {
 		Message:   "This alert should be held",
 	}
 
-	// Create alert history
 	// In a real implementation, the processor would check quiet hours
 	// and potentially hold the alert or mark it differently
 	history := event.CreateAlertHistory(rule.ID)
 	history.Status = AlertStatusPending // Held until outside quiet hours
-	if err := CreateAlertHistory(ctx, databaseWrapper, &history); err != nil {
+	if err := alertStore.CreateAlertHistory(ctx, &history); err != nil {
 		t.Fatalf("failed to create alert history: %v", err)
 	}
 
@@ -295,7 +279,7 @@ func TestTriggerAlert_QuietHours(t *testing.T) {
 	}
 
 	// Verify notification preferences were stored correctly
-	storedPrefs, err := GetUserNotificationPreferences(ctx, databaseWrapper, uint(userID))
+	storedPrefs, err := alertStore.GetUserNotificationPreferences(ctx, uint(userID))
 	if err != nil {
 		t.Fatalf("failed to get notification preferences: %v", err)
 	}
@@ -318,20 +302,18 @@ func TestTriggerAlert_QuietHours(t *testing.T) {
 	_ = isQuietHours
 }
 
-// TestTriggerAlert_Disabled tests disabled alerts.
 func TestTriggerAlert_Disabled(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
 	setupTestAlertTables(t, database)
 
-	// Create admin user
 	createTestUser(t, database, "admin", "admin@test.com", "admin")
 
 	databaseWrapper := db.New(database)
+	alertStore := store.NewAlertStore(databaseWrapper)
 	ctx := context.Background()
 
-	// Create a disabled alert rule
 	rule := &AlertRule{
 		Name:            "Test Disabled Rule",
 		AlertType:       AlertTypePeerOffline,
@@ -341,7 +323,7 @@ func TestTriggerAlert_Disabled(t *testing.T) {
 	createTestAlertRule(t, database, rule)
 
 	// Verify rule is disabled
-	storedRule, err := GetAlertRule(ctx, databaseWrapper, uint64(rule.ID))
+	storedRule, err := alertStore.GetAlertRule(ctx, uint64(rule.ID))
 	if err != nil {
 		t.Fatalf("failed to get alert rule: %v", err)
 	}
@@ -361,7 +343,7 @@ func TestTriggerAlert_Disabled(t *testing.T) {
 
 	// In the actual implementation, TriggerAlert checks for enabled rules only
 	// Simulate this by checking GetEnabledAlertRulesByType
-	enabledRules, err := GetEnabledAlertRulesByType(ctx, databaseWrapper, AlertTypePeerOffline)
+	enabledRules, err := alertStore.GetEnabledAlertRulesByType(ctx, AlertTypePeerOffline)
 	if err != nil {
 		t.Fatalf("failed to get enabled rules: %v", err)
 	}
@@ -381,7 +363,6 @@ func TestTriggerAlert_Disabled(t *testing.T) {
 	_ = event
 }
 
-// TestGetRecipients tests recipient resolution.
 func TestGetRecipients(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -428,9 +409,10 @@ func TestGetRecipients(t *testing.T) {
 
 			// Query for admin users (as the processor does)
 			databaseWrapper := db.New(database)
-			processor := NewAlertProcessor(databaseWrapper, nil)
+			alertStore := store.NewAlertStore(databaseWrapper)
+			userStore := store.NewUserStore(databaseWrapper)
+			processor := NewAlertProcessor(alertStore, userStore, nil)
 
-			// Get admin email using the processor's method
 			ctx := context.Background()
 			email, err := processor.getAdminEmail(ctx)
 
@@ -461,7 +443,6 @@ func TestGetRecipients(t *testing.T) {
 	}
 }
 
-// TestSeverityAssignment tests severity per alert type.
 func TestSeverityAssignment(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -521,7 +502,6 @@ func TestSeverityAssignment(t *testing.T) {
 	}
 }
 
-// TestSeverityAssignment_WithDatabase tests severity with actual database operations.
 func TestSeverityAssignment_WithDatabase(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
@@ -529,9 +509,9 @@ func TestSeverityAssignment_WithDatabase(t *testing.T) {
 	setupTestAlertTables(t, database)
 
 	databaseWrapper := db.New(database)
+	alertStore := store.NewAlertStore(databaseWrapper)
 	ctx := context.Background()
 
-	// Create rules for different alert types
 	rules := []struct {
 		name      string
 		alertType AlertType
@@ -550,7 +530,6 @@ func TestSeverityAssignment_WithDatabase(t *testing.T) {
 		}
 		createTestAlertRule(t, database, rule)
 
-		// Create event and history
 		event := &AlertEvent{
 			Type:      r.alertType,
 			PeerID:    1,
@@ -561,7 +540,7 @@ func TestSeverityAssignment_WithDatabase(t *testing.T) {
 		}
 
 		history := event.CreateAlertHistory(rule.ID)
-		if err := CreateAlertHistory(ctx, databaseWrapper, &history); err != nil {
+		if err := alertStore.CreateAlertHistory(ctx, &history); err != nil {
 			t.Fatalf("failed to create alert history for %s: %v", r.alertType, err)
 		}
 
@@ -582,7 +561,6 @@ func TestSeverityAssignment_WithDatabase(t *testing.T) {
 	}
 }
 
-// TestServiceLifecycle tests Initialize/Start/Stop flow.
 func TestServiceLifecycle(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
@@ -590,9 +568,11 @@ func TestServiceLifecycle(t *testing.T) {
 	setupTestAlertTables(t, database)
 
 	databaseWrapper := db.New(database)
+	alertStore := store.NewAlertStore(databaseWrapper)
+	userStore := store.NewUserStore(databaseWrapper)
 
 	// Test 1: Create service
-	service := NewService(databaseWrapper)
+	service := NewService(databaseWrapper, alertStore, userStore)
 	if service == nil {
 		t.Fatal("expected non-nil service")
 	}
@@ -677,13 +657,14 @@ func TestServiceLifecycle(t *testing.T) {
 	}
 }
 
-// TestServiceLifecycle_WithoutInitialize tests starting without initializing.
 func TestServiceLifecycle_WithoutInitialize(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
 	databaseWrapper := db.New(database)
-	service := NewService(databaseWrapper)
+	alertStore := store.NewAlertStore(databaseWrapper)
+	userStore := store.NewUserStore(databaseWrapper)
+	service := NewService(databaseWrapper, alertStore, userStore)
 
 	// Try to start without initializing
 	err := service.Start()
@@ -697,7 +678,6 @@ func TestServiceLifecycle_WithoutInitialize(t *testing.T) {
 	}
 }
 
-// TestAlertEvent_IsCritical tests the IsCritical method.
 func TestAlertEvent_IsCritical(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -723,7 +703,6 @@ func TestAlertEvent_IsCritical(t *testing.T) {
 	}
 }
 
-// TestAlertEvent_CreateAlertHistory tests the CreateAlertHistory method.
 func TestAlertEvent_CreateAlertHistory(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -781,13 +760,11 @@ func TestAlertEvent_CreateAlertHistory(t *testing.T) {
 				t.Errorf("expected message %s, got %s", tt.event.Message, history.Message)
 			}
 
-			// Check severity matches default
 			expectedSeverity := tt.event.Type.DefaultSeverity()
 			if history.Severity != expectedSeverity {
 				t.Errorf("expected severity %s, got %s", expectedSeverity, history.Severity)
 			}
 
-			// Check peer_id handling
 			if tt.event.PeerID == 0 {
 				if history.PeerID != nil {
 					t.Errorf("expected nil peer_id for zero peer_id, got %v", history.PeerID)
@@ -801,7 +778,6 @@ func TestAlertEvent_CreateAlertHistory(t *testing.T) {
 	}
 }
 
-// TestAlertRule_AppliesToPeer tests the AppliesToPeer method.
 func TestAlertRule_AppliesToPeer(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -848,7 +824,6 @@ func TestAlertRule_AppliesToPeer(t *testing.T) {
 	}
 }
 
-// TestAlertRule_GetThresholdDuration tests duration calculations.
 func TestAlertRule_GetThresholdDuration(t *testing.T) {
 	rule := &AlertRule{
 		ThresholdWindowMinutes: 5,
@@ -868,12 +843,10 @@ func TestAlertRule_GetThresholdDuration(t *testing.T) {
 	}
 }
 
-// intPtr is a helper to create int pointers.
 func intPtr(i int) *int {
 	return &i
 }
 
-// TestLoadSMTPConfig_BooleanStringValues tests that SMTP config correctly parses
 // boolean values stored as "0"/"1" strings in the database.
 // This test verifies the fix for a bug where the loadSMTPConfig function
 // was incorrectly scanning string values directly into bool fields.
@@ -884,7 +857,6 @@ func TestLoadSMTPConfig_BooleanStringValues(t *testing.T) {
 	databaseWrapper := db.New(database)
 	ctx := context.Background()
 
-	// Insert SMTP config with boolean values stored as "1" strings
 	// This mimics how values are stored when SMTP is enabled via the settings API
 	_, err := database.ExecContext(ctx,
 		"INSERT INTO system_config (key, value) VALUES (?, ?)",
@@ -926,8 +898,9 @@ func TestLoadSMTPConfig_BooleanStringValues(t *testing.T) {
 		t.Fatalf("failed to insert smtp_from_address: %v", err)
 	}
 
-	// Create the alert service and initialize it
-	service := NewService(databaseWrapper)
+	alertStore := store.NewAlertStore(databaseWrapper)
+	userStore := store.NewUserStore(databaseWrapper)
+	service := NewService(databaseWrapper, alertStore, userStore)
 
 	// Initialize the service which calls loadSMTPConfig internally
 	err = service.Initialize()
@@ -935,7 +908,6 @@ func TestLoadSMTPConfig_BooleanStringValues(t *testing.T) {
 		t.Fatalf("failed to initialize service: %v", err)
 	}
 
-	// Get the SMTP sender from the service
 	smtpSender := service.GetSMTPSender()
 	if smtpSender == nil {
 		t.Fatal("expected SMTP sender to be initialized")
@@ -945,7 +917,6 @@ func TestLoadSMTPConfig_BooleanStringValues(t *testing.T) {
 	// If boolean values were not parsed correctly, IsEnabled() would return false
 	// because Enabled would be false (default value when parsing fails)
 
-	// Create a test alert event to verify SMTP is properly configured
 	event := &AlertEvent{
 		Type:      AlertTypePeerOffline,
 		PeerName:  "test-peer",

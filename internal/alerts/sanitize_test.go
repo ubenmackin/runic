@@ -6,7 +6,6 @@ import (
 	"testing"
 )
 
-// TestSanitizeAlertInput_XSSPayloads tests that XSS payloads with control characters
 // are properly sanitized. Note: SanitizeAlertInput removes control characters but
 // preserves angle brackets. Use SanitizeAlertInputStrict for HTML escaping.
 func TestSanitizeAlertInput_XSSPayloads(t *testing.T) {
@@ -81,7 +80,6 @@ func TestSanitizeAlertInput_XSSPayloads(t *testing.T) {
 	}
 }
 
-// TestSanitizeAlertInput_HeaderInjection tests that header injection is prevented.
 func TestSanitizeAlertInput_HeaderInjection(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -161,7 +159,6 @@ func TestSanitizeAlertInput_HeaderInjection(t *testing.T) {
 	}
 }
 
-// TestSanitizeAlertInput_ControlCharacters tests removal of various control characters.
 func TestSanitizeAlertInput_ControlCharacters(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -255,7 +252,6 @@ func TestSanitizeAlertInput_ControlCharacters(t *testing.T) {
 	}
 }
 
-// TestSanitizeAlertInput_LengthTruncation tests that long strings are properly truncated.
 func TestSanitizeAlertInput_LengthTruncation(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -335,7 +331,6 @@ func TestSanitizeAlertInput_LengthTruncation(t *testing.T) {
 	}
 }
 
-// TestSanitizeAlertInput_UTF8Truncation tests that UTF-8 strings are handled correctly.
 // Note: The current truncateString implementation has limitations with UTF-8 boundaries.
 func TestSanitizeAlertInput_UTF8Truncation(t *testing.T) {
 	tests := []struct {
@@ -402,7 +397,6 @@ func TestSanitizeAlertInput_UTF8Truncation(t *testing.T) {
 	}
 }
 
-// TestSanitizeAlertInput_ValidHostnames tests that valid hostnames pass through unchanged.
 func TestSanitizeAlertInput_ValidHostnames(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -503,7 +497,6 @@ func TestSanitizeAlertInput_ValidHostnames(t *testing.T) {
 	}
 }
 
-// TestSanitizeAlertInput_EmptyInput tests empty and whitespace-only inputs.
 func TestSanitizeAlertInput_EmptyInput(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -562,7 +555,6 @@ func TestSanitizeAlertInput_EmptyInput(t *testing.T) {
 	}
 }
 
-// TestSanitizeAlertInput_SpecialCharacters tests handling of special characters.
 func TestSanitizeAlertInput_SpecialCharacters(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -635,7 +627,6 @@ func TestSanitizeAlertInput_SpecialCharacters(t *testing.T) {
 	}
 }
 
-// TestSanitizeAlertInput_NoCRORLF tests that no CR or LF characters remain in output.
 func TestSanitizeAlertInput_NoCRORLF(t *testing.T) {
 	payloads := []string{
 		"test\r\nBcc: attacker@evil.com",
@@ -660,7 +651,6 @@ func TestSanitizeAlertInput_NoCRORLF(t *testing.T) {
 	}
 }
 
-// TestSanitizeAlertInput_NoControlChars tests that no control characters remain.
 func TestSanitizeAlertInput_NoControlChars(t *testing.T) {
 	// Test all ASCII control characters (0x00-0x1F and 0x7F)
 	for c := byte(0x00); c <= 0x1F; c++ {
@@ -689,7 +679,6 @@ func TestSanitizeAlertInput_NoControlChars(t *testing.T) {
 	}
 }
 
-// TestSanitizeAlertInput_CombinedAttacks tests combined attack patterns.
 func TestSanitizeAlertInput_CombinedAttacks(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -741,7 +730,6 @@ func TestSanitizeAlertInput_CombinedAttacks(t *testing.T) {
 	}
 }
 
-// TestSanitizeAlertInputStrict_HTMLSpecialChars tests the strict version with HTML escaping.
 func TestSanitizeAlertInputStrict_HTMLSpecialChars(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -814,7 +802,6 @@ func TestSanitizeAlertInputStrict_HTMLSpecialChars(t *testing.T) {
 	}
 }
 
-// TestTruncateString tests the truncateString helper function.
 func TestTruncateString(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -882,7 +869,6 @@ func TestTruncateString(t *testing.T) {
 	}
 }
 
-// TestDefaultMaxHostnameLength verifies the default constant.
 func TestDefaultMaxHostnameLength(t *testing.T) {
 	if DefaultMaxHostnameLength != 255 {
 		t.Errorf("DefaultMaxHostnameLength = %d, want 255", DefaultMaxHostnameLength)

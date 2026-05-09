@@ -2,6 +2,7 @@ package common
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 	"sync"
@@ -14,7 +15,6 @@ import (
 	"runic/internal/engine"
 )
 
-// ChangeWorker processes pending change queue operations in a single background goroutine.
 type ChangeWorker struct {
 	workCh    chan changeWork
 	done      chan struct{}
@@ -22,11 +22,11 @@ type ChangeWorker struct {
 	stopOnce  sync.Once
 	started   atomic.Bool
 	sseHub    *events.SSEHub
+	db        *sql.DB
 }
 
 type changeWork struct {
 	ctx          context.Context
-	database     db.Querier
 	peerIDs      []int
 	changeType   string
 	changeAction string
@@ -38,17 +38,16 @@ type changeWork struct {
 	sseHub       *events.SSEHub
 }
 
-// NewChangeWorker creates a new ChangeWorker.
-func NewChangeWorker(sseHub *events.SSEHub) *ChangeWorker {
+func NewChangeWorker(sseHub *events.SSEHub, database *sql.DB) *ChangeWorker {
 	return &ChangeWorker{
 		workCh: make(chan changeWork, 100),
 		done:   make(chan struct{}),
 		sseHub: sseHub,
+		db:     database,
 	}
 }
 
-// Start launches the background worker goroutine.
-// Call once during application startup.
+// Start starts the change worker goroutine. Call once during application startup.
 func (w *ChangeWorker) Start(ctx context.Context) {
 	w.startOnce.Do(func() {
 		w.started.Store(true)
@@ -73,11 +72,10 @@ func (w *ChangeWorker) Start(ctx context.Context) {
 	})
 }
 
-// QueuePeerChange submits a peer change to the worker.
-func (w *ChangeWorker) QueuePeerChange(ctx context.Context, database db.Querier, peerIDs []int, changeType, changeAction string, changeID int, summary string) {
+func (w *ChangeWorker) QueuePeerChange(ctx context.Context, peerIDs []int, changeType, changeAction string, changeID int, summary string) {
 	select {
 	case w.workCh <- changeWork{
-		ctx: context.Background(), database: database, peerIDs: peerIDs,
+		ctx: context.Background(), peerIDs: peerIDs,
 		changeType: changeType, changeAction: changeAction, changeID: changeID, summary: summary,
 		sseHub: w.sseHub,
 	}:
@@ -85,11 +83,10 @@ func (w *ChangeWorker) QueuePeerChange(ctx context.Context, database db.Querier,
 	}
 }
 
-// QueueGroupChange submits a group change to the worker.
-func (w *ChangeWorker) QueueGroupChange(ctx context.Context, database db.Querier, compiler *engine.Compiler, groupID int, changeAction string, summary string) {
+func (w *ChangeWorker) QueueGroupChange(ctx context.Context, compiler *engine.Compiler, groupID int, changeAction string, summary string) {
 	select {
 	case w.workCh <- changeWork{
-		ctx: context.Background(), database: database, compiler: compiler, groupID: groupID,
+		ctx: context.Background(), compiler: compiler, groupID: groupID,
 		changeAction: changeAction, summary: summary, isGroup: true,
 		sseHub: w.sseHub,
 	}:
@@ -97,7 +94,6 @@ func (w *ChangeWorker) QueueGroupChange(ctx context.Context, database db.Querier
 	}
 }
 
-// Stop waits for the worker to finish processing.
 func (w *ChangeWorker) Stop() {
 	w.stopOnce.Do(func() {
 		if !w.started.Load() {
@@ -123,7 +119,7 @@ func (w *ChangeWorker) processPeerChange(work *changeWork) {
 	runiclog.Info("DEBUG: processPeerChange starting", "peer_ids", work.peerIDs, "change_type", work.changeType, "change_action", work.changeAction)
 
 	for _, peerID := range work.peerIDs {
-		if err := queueChangeForPeer(work.ctx, work.database, peerID, work.changeType, work.changeAction, work.changeID, work.summary); err != nil {
+		if err := queueChangeForPeer(work.ctx, w.db, peerID, work.changeType, work.changeAction, work.changeID, work.summary); err != nil {
 			runiclog.Error("failed to queue change", "peer_id", peerID, "error", err)
 		} else {
 			runiclog.Info("DEBUG: successfully queued change", "peer_id", peerID)
@@ -138,7 +134,7 @@ func (w *ChangeWorker) processPeerChange(work *changeWork) {
 			args[i] = id
 		}
 		query := fmt.Sprintf("SELECT id, hostname FROM peers WHERE id IN (%s)", strings.Join(placeholders, ","))
-		rows, err := work.database.QueryContext(work.ctx, query, args...)
+		rows, err := w.db.QueryContext(work.ctx, query, args...)
 		if err == nil {
 			defer func() {
 				if err := rows.Close(); err != nil {
@@ -169,11 +165,11 @@ func (w *ChangeWorker) processPeerChange(work *changeWork) {
 }
 
 func (w *ChangeWorker) processGroupChange(work *changeWork) {
-	rows, err := work.database.QueryContext(work.ctx, `
-		SELECT DISTINCT id FROM policies
-		WHERE ((source_type = 'group' AND source_id = ?)
-		OR (target_type = 'group' AND target_id = ?))
-		AND enabled = 1 AND is_pending_delete = 0
+	rows, err := w.db.QueryContext(work.ctx, `
+	SELECT DISTINCT id FROM policies
+	WHERE ((source_type = 'group' AND source_id = ?)
+	OR (target_type = 'group' AND target_id = ?))
+	AND enabled = 1 AND is_pending_delete = 0
 	`, work.groupID, work.groupID)
 	if err != nil {
 		runiclog.Error("failed to find policies for group", "group_id", work.groupID, "error", err)
@@ -207,7 +203,7 @@ func (w *ChangeWorker) processGroupChange(work *changeWork) {
 
 	for peerID := range peerSet {
 		var count int
-		err := work.database.QueryRowContext(work.ctx, `SELECT COUNT(*) FROM pending_changes WHERE peer_id = ? AND change_type = ? AND change_id = ? AND change_action = ?`, peerID, "group", work.groupID, work.changeAction).Scan(&count)
+		err := w.db.QueryRowContext(work.ctx, `SELECT COUNT(*) FROM pending_changes WHERE peer_id = ? AND change_type = ? AND change_id = ? AND change_action = ?`, peerID, "group", work.groupID, work.changeAction).Scan(&count)
 		if err != nil {
 			runiclog.Error("failed to check for duplicate", "error", err)
 			continue
@@ -215,7 +211,7 @@ func (w *ChangeWorker) processGroupChange(work *changeWork) {
 		if count > 0 {
 			continue // Already queued
 		}
-		if err := db.AddPendingChange(work.ctx, work.database, peerID, "group", work.changeAction, work.groupID, work.summary); err != nil {
+		if err := db.AddPendingChange(work.ctx, w.db, peerID, "group", work.changeAction, work.groupID, work.summary); err != nil {
 			runiclog.Error("failed to queue group change", "peer_id", peerID, "error", err)
 		}
 	}
@@ -234,7 +230,7 @@ func (w *ChangeWorker) processGroupChange(work *changeWork) {
 			args[i] = id
 		}
 		query := fmt.Sprintf("SELECT id, hostname FROM peers WHERE id IN (%s)", strings.Join(placeholders, ","))
-		rows, err := work.database.QueryContext(work.ctx, query, args...)
+		rows, err := w.db.QueryContext(work.ctx, query, args...)
 		if err == nil {
 			defer func() {
 				if err := rows.Close(); err != nil {

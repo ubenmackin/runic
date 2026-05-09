@@ -12,14 +12,16 @@ import (
 	"time"
 
 	"runic/internal/common/log"
+	"runic/internal/db"
 )
 
-// SpikeDetector monitors firewall logs for blocked traffic spikes.
 type SpikeDetector struct {
-	logsDB  *sql.DB
-	mainDB  *sql.DB
+	logsDB  db.Querier
+	mainDB  db.Querier
 	service *Service
 	logger  *slog.Logger
+
+	lookupHostname PeerHostnameLookup
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -40,16 +42,17 @@ type SpikeDetector struct {
 	lastAlert time.Time
 }
 
-// NewSpikeDetector creates a new spike detector.
-// logsDB is the separate logs database for firewall_logs queries.
-// mainDB is the main database for alert_rules and peers queries.
-func NewSpikeDetector(logsDB, mainDB *sql.DB, service *Service) *SpikeDetector {
+// NewSpikeDetector creates a new spike detector. logsDB is the separate logs database for firewall_logs queries.
+// mainDB is the main database for alert_rules and peers queries. The lookupHostname parameter is required for
+// resolving peer IDs to hostnames and must not be nil.
+func NewSpikeDetector(logsDB, mainDB db.Querier, service *Service, lookupHostname PeerHostnameLookup) *SpikeDetector {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &SpikeDetector{
 		logsDB:          logsDB,
 		mainDB:          mainDB,
 		service:         service,
 		logger:          log.L().With("component", "spike_detector"),
+		lookupHostname:  lookupHostname,
 		ctx:             ctx,
 		cancel:          cancel,
 		stopCh:          make(chan struct{}),
@@ -59,15 +62,13 @@ func NewSpikeDetector(logsDB, mainDB *sql.DB, service *Service) *SpikeDetector {
 	}
 }
 
-// SetThresholds updates the spike detection thresholds.
-// This is primarily intended for testing.
+// SetThresholds sets the spike detection thresholds. This is primarily intended for testing.
 func (d *SpikeDetector) SetThresholds(threshold, windowMinutes, throttleMinutes int) {
 	d.threshold = threshold
 	d.windowMinutes = windowMinutes
 	d.throttleMinutes = throttleMinutes
 }
 
-// Start begins monitoring for blocked traffic spikes.
 func (d *SpikeDetector) Start() {
 	d.logger.Info("starting spike detector", "threshold", d.threshold, "window", d.windowMinutes)
 	d.wg.Add(1)
@@ -77,7 +78,6 @@ func (d *SpikeDetector) Start() {
 	}()
 }
 
-// Stop stops the spike detector.
 func (d *SpikeDetector) Stop() {
 	close(d.stopCh)
 	d.wg.Wait()
@@ -204,7 +204,6 @@ func (d *SpikeDetector) triggerSpikeAlert(ctx context.Context, count int) {
 	d.logger.Info("spike alert triggered", "count", count)
 }
 
-// topBlockedIP represents a blocked IP address with count.
 type topBlockedIP struct {
 	ip    string
 	count int
@@ -277,15 +276,14 @@ func (d *SpikeDetector) getAffectedPeers(ctx context.Context) []string {
 		peerIDs = append(peerIDs, peerID)
 	}
 
-	if len(peerIDs) == 0 || d.mainDB == nil {
+	if len(peerIDs) == 0 {
 		return nil
 	}
 
-	// Step 2: Get hostnames from peers table (main DB)
+	// Step 2: Get hostnames using the injected lookup
 	var results []string
 	for _, peerID := range peerIDs {
-		var hostname string
-		err = d.mainDB.QueryRowContext(ctx, `SELECT hostname FROM peers WHERE id = ?`, peerID).Scan(&hostname)
+		hostname, err := d.lookupHostname(ctx, peerID)
 		if err != nil {
 			continue
 		}

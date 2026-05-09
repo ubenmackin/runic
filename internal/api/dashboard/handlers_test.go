@@ -10,16 +10,13 @@ import (
 	"time"
 
 	"runic/internal/common/constants"
+	"runic/internal/store"
 	"runic/internal/testutil"
 )
 
 // =============================================================================
 // HTTP Handler Tests - These actually invoke HandleDashboard via httptest
 // =============================================================================
-// HandleDashboard Tests
-// NOTE: These tests use direct DB queries to verify the dashboard logic.
-// The full HTTP handler tests are marked as skipped due to potential
-// concurrency issues with the errgroup-based queries in test environment.
 // =============================================================================
 
 func TestDashboardQueries_EmptyDatabase(t *testing.T) {
@@ -78,7 +75,6 @@ func TestDashboardQueries_WithPeers(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Insert test peers using raw SQL to ensure consistent timestamp handling
 	// Use a timestamp that is clearly within the threshold (10 seconds ago)
 	recentTime := time.Now().Add(-10 * time.Second).Format("2006-01-02 15:04:05")
 
@@ -94,7 +90,6 @@ func TestDashboardQueries_WithPeers(t *testing.T) {
 	_, _ = database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, os_type, is_manual) VALUES (?, ?, ?, ?, ?, ?)`,
 		"manual-peer", "10.0.0.3", "key3", "hmac3", "windows", 1)
 
-	// Insert policies
 	database.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`, "ssh", "22", "tcp")
 	database.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, "peer", ?, ?, "peer", ?, ?, ?)`,
 		"ssh-policy", 1, 1, 1, "ACCEPT", 100, 1)
@@ -162,8 +157,6 @@ func TestDashboardQueries_WithPeers(t *testing.T) {
 		}
 		if lastHeartbeat != nil {
 			ph.LastHeartbeat = *lastHeartbeat
-			// Parse the timestamp and check if within offline threshold
-			// Add some tolerance (5 seconds) to account for timing
 			if t, err := time.Parse("2006-01-02 15:04:05", *lastHeartbeat); err == nil {
 				ph.IsOnline = time.Since(t).Seconds() < float64(constants.OfflineThresholdSeconds-5)
 			}
@@ -187,11 +180,9 @@ func TestDashboardQueries_WithBlockedEvents(t *testing.T) {
 	database, logsDB, cleanup := testutil.SetupTestDBWithSecretAndLogs(t)
 	defer cleanup()
 
-	// Insert a peer for the firewall logs
 	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)`,
 		"peer1", "10.0.0.1", "key1", "hmac1")
 
-	// Insert firewall logs with explicit timestamps relative to "now"
 	now := time.Now()
 
 	// Recent timestamps - within last hour (use 30 min ago to ensure within threshold)
@@ -326,7 +317,6 @@ func TestDashboardQueries_OnlyManualPeers(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Insert only manual peers (no heartbeats)
 	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, os_type, is_manual) VALUES (?, ?, ?, ?, ?, ?)`,
 		"manual-1", "10.0.0.1", "key1", "hmac1", "linux", 1)
 	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, os_type, is_manual) VALUES (?, ?, ?, ?, ?, ?)`,
@@ -366,11 +356,9 @@ func TestDashboardQueries_ManyBlockedEvents(t *testing.T) {
 	database, logsDB, cleanup := testutil.SetupTestDBWithSecretAndLogs(t)
 	defer cleanup()
 
-	// Insert a peer
 	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)`,
 		"peer1", "10.0.0.1", "key1", "hmac1")
 
-	// Insert many firewall logs - more than 5 (testing limit in recent activity)
 	now := time.Now()
 	for i := 0; i < 10; i++ {
 		ts := now.Add(-time.Duration(i) * time.Minute).Format("2006-01-02 15:04:05")
@@ -457,17 +445,14 @@ func TestDashboardQueries_OnlyPolicies(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Insert only policies, no peers
 	database.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`, "ssh", "22", "tcp")
 	database.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`, "http", "80", "tcp")
 
-	// Insert enabled policies
 	database.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, "peer", ?, ?, "peer", ?, ?, ?)`,
 		"ssh-policy", 1, 1, 1, "ACCEPT", 100, 1)
 	database.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, "peer", ?, ?, "peer", ?, ?, ?)`,
 		"http-policy", 1, 2, 1, "ACCEPT", 100, 1)
 
-	// Insert disabled policy
 	database.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, "peer", ?, ?, "peer", ?, ?, ?)`,
 		"disabled-policy", 1, 2, 1, "DROP", 100, 0)
 
@@ -496,7 +481,7 @@ func TestHandleDashboard_EmptyDatabase(t *testing.T) {
 	db, logsDB, cleanup := testutil.SetupTestDBWithSecretAndLogs(t)
 	defer cleanup()
 
-	handler := NewHandler(db, logsDB)
+	handler := NewHandler(store.NewDashboardStore(db, logsDB))
 
 	req := httptest.NewRequest("GET", "/dashboard", nil)
 	w := httptest.NewRecorder()
@@ -507,7 +492,6 @@ func TestHandleDashboard_EmptyDatabase(t *testing.T) {
 		t.Errorf("expected status %d, got %d: %s", http.StatusOK, w.Code, w.Body.String())
 	}
 
-	// Parse response JSON
 	var resp map[string]interface{}
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("failed to parse JSON response: %v", err)
@@ -561,24 +545,21 @@ func TestHandleDashboard_WithPeers(t *testing.T) {
 	db, logsDB, cleanup := testutil.SetupTestDBWithSecretAndLogs(t)
 	defer cleanup()
 
-	// Insert online peer (recent heartbeat)
 	recentTime := time.Now().Add(-10 * time.Second).Format("2006-01-02 15:04:05")
 	db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, os_type, is_manual, last_heartbeat) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		"online-peer", "10.0.0.1", "key1", "hmac1", "linux", 0, recentTime)
 
-	// Insert offline peer (old heartbeat)
 	oldTime := time.Now().Add(-5 * time.Minute).Format("2006-01-02 15:04:05")
 	db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, os_type, is_manual, last_heartbeat) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		"offline-peer", "10.0.0.2", "key2", "hmac2", "linux", 0, oldTime)
 
-	// Insert manual peer (no heartbeat needed)
 	db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, os_type, is_manual) VALUES (?, ?, ?, ?, ?, ?)`,
 		"manual-peer", "10.0.0.3", "key3", "hmac3", "windows", 1)
 
 	// Wait to ensure threshold comparison works
 	time.Sleep(100 * time.Millisecond)
 
-	handler := NewHandler(db, logsDB)
+	handler := NewHandler(store.NewDashboardStore(db, logsDB))
 
 	req := httptest.NewRequest("GET", "/dashboard", nil)
 	w := httptest.NewRecorder()
@@ -589,7 +570,6 @@ func TestHandleDashboard_WithPeers(t *testing.T) {
 		t.Errorf("expected status %d, got %d: %s", http.StatusOK, w.Code, w.Body.String())
 	}
 
-	// Parse response
 	var resp map[string]interface{}
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("failed to parse JSON response: %v", err)
@@ -626,7 +606,6 @@ func TestHandleDashboard_WithBlockedEvents(t *testing.T) {
 	db, logsDB, cleanup := testutil.SetupTestDBWithSecretAndLogs(t)
 	defer cleanup()
 
-	// Insert a peer for the firewall logs
 	db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)`,
 		"peer1", "10.0.0.1", "key1", "hmac1")
 
@@ -655,7 +634,7 @@ func TestHandleDashboard_WithBlockedEvents(t *testing.T) {
 	// Wait for time-based queries
 	time.Sleep(100 * time.Millisecond)
 
-	handler := NewHandler(db, logsDB)
+	handler := NewHandler(store.NewDashboardStore(db, logsDB))
 
 	req := httptest.NewRequest("GET", "/dashboard", nil)
 	w := httptest.NewRecorder()
@@ -666,7 +645,6 @@ func TestHandleDashboard_WithBlockedEvents(t *testing.T) {
 		t.Errorf("expected status %d, got %d: %s", http.StatusOK, w.Code, w.Body.String())
 	}
 
-	// Parse response
 	var resp map[string]interface{}
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("failed to parse JSON response: %v", err)
@@ -714,18 +692,15 @@ func TestHandleDashboard_WithPolicies(t *testing.T) {
 	db, logsDB, cleanup := testutil.SetupTestDBWithSecretAndLogs(t)
 	defer cleanup()
 
-	// Insert services and policies
 	db.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`, "ssh", "22", "tcp")
 	db.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`, "http", "80", "tcp")
 
-	// Insert enabled policies
 	db.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, "peer", ?, ?, "peer", ?, ?, ?)`, "ssh-policy", 1, 1, 1, "ACCEPT", 100, 1)
 	db.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, "peer", ?, ?, "peer", ?, ?, ?)`, "http-policy", 1, 2, 1, "ACCEPT", 100, 1)
 
-	// Insert disabled policy
 	db.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, "peer", ?, ?, "peer", ?, ?, ?)`, "disabled-policy", 1, 2, 1, "DROP", 100, 0)
 
-	handler := NewHandler(db, logsDB)
+	handler := NewHandler(store.NewDashboardStore(db, logsDB))
 
 	req := httptest.NewRequest("GET", "/dashboard", nil)
 	w := httptest.NewRecorder()
@@ -736,7 +711,6 @@ func TestHandleDashboard_WithPolicies(t *testing.T) {
 		t.Errorf("expected status %d, got %d: %s", http.StatusOK, w.Code, w.Body.String())
 	}
 
-	// Parse response
 	var resp map[string]interface{}
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("failed to parse JSON response: %v", err)
@@ -754,7 +728,7 @@ func TestHandleDashboard_ContentType(t *testing.T) {
 	db, logsDB, cleanup := testutil.SetupTestDBWithSecretAndLogs(t)
 	defer cleanup()
 
-	handler := NewHandler(db, logsDB)
+	handler := NewHandler(store.NewDashboardStore(db, logsDB))
 
 	req := httptest.NewRequest("GET", "/dashboard", nil)
 	w := httptest.NewRecorder()

@@ -12,24 +12,20 @@ import (
 	"runic/internal/api/common"
 	ic "runic/internal/common"
 	"runic/internal/common/log"
-	"runic/internal/db"
 	"runic/internal/engine"
 	"runic/internal/store"
 )
 
-// Handler holds dependencies for service handlers.
 type Handler struct {
 	Store        *store.ServiceStore
 	Compiler     *engine.Compiler
 	ChangeWorker *common.ChangeWorker
 }
 
-// NewHandler creates a new services handler with dependencies.
 func NewHandler(serviceStore *store.ServiceStore, compiler *engine.Compiler, changeWorker *common.ChangeWorker) *Handler {
 	return &Handler{Store: serviceStore, Compiler: compiler, ChangeWorker: changeWorker}
 }
 
-// validProtocols is the set of allowed protocol values for user-defined services.
 // Note: ICMP and IGMP are only allowed for system services, not user-defined services.
 var validProtocols = map[string]bool{
 	"tcp":  true,
@@ -37,7 +33,6 @@ var validProtocols = map[string]bool{
 	"both": true,
 }
 
-// validLookupProtocols is the set of allowed protocol values for the
 // protocol-only lookup path in GetServiceByPort. This includes system-only
 // protocols (icmp, igmp) since the protocol-only path searches system services.
 var validLookupProtocols = map[string]bool{
@@ -48,9 +43,6 @@ var validLookupProtocols = map[string]bool{
 	"igmp": true,
 }
 
-// validateService checks that ports, source_ports, and protocol are safe to compile into iptables rules.
-// For user-defined services, ICMP and IGMP protocols are blocked.
-// For non-ICMP/IGMP protocols, at least one of ports or source_ports is required.
 func validateService(ports, sourcePorts, protocol string, isSystem bool) error {
 	if protocol == "icmp" && !isSystem {
 		return fmt.Errorf("ICMP protocol is reserved for system services and cannot be used for user-defined services")
@@ -82,7 +74,6 @@ func validateService(ports, sourcePorts, protocol string, isSystem bool) error {
 	return nil
 }
 
-// parseDirectionHint converts a direction hint string to its integer representation.
 func parseDirectionHint(s string) int {
 	switch s {
 	case "outbound":
@@ -121,7 +112,6 @@ func (h *Handler) CreateService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate name
 	if input.Name != "" {
 		if err := common.ValidateName(input.Name); err != nil {
 			common.RespondError(w, http.StatusBadRequest, err.Error())
@@ -151,7 +141,7 @@ func (h *Handler) CreateService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.Store.SnapshotService(r.Context(), h.Store.DB(), int(id), "create"); err != nil {
+	if err := h.Store.SnapshotService(r.Context(), int(id), "create"); err != nil {
 		log.ErrorContext(r.Context(), "failed to create snapshot", "error", err)
 	}
 	h.queueServiceChange(r.Context(), int(id), "create", fmt.Sprintf("Service '%s' created", input.Name))
@@ -166,7 +156,7 @@ func (h *Handler) GetService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s, err := db.GetService(r.Context(), h.Store.DB(), id)
+	s, err := h.Store.GetService(r.Context(), id)
 	if err != nil {
 		common.RespondError(w, http.StatusNotFound, "service not found")
 		return
@@ -182,8 +172,7 @@ func (h *Handler) UpdateService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if this is a system service
-	svc, err := db.GetService(r.Context(), h.Store.DB(), id)
+	svc, err := h.Store.GetService(r.Context(), id)
 	if err != nil {
 		common.RespondError(w, http.StatusNotFound, "service not found")
 		return
@@ -207,7 +196,6 @@ func (h *Handler) UpdateService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate name
 	if input.Name != "" {
 		if err := common.ValidateName(input.Name); err != nil {
 			common.RespondError(w, http.StatusBadRequest, err.Error())
@@ -224,7 +212,7 @@ func (h *Handler) UpdateService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.Store.SnapshotService(r.Context(), h.Store.DB(), id, "update"); err != nil {
+	if err := h.Store.SnapshotService(r.Context(), id, "update"); err != nil {
 		log.ErrorContext(r.Context(), "failed to create snapshot", "error", err)
 	}
 
@@ -246,7 +234,7 @@ func (h *Handler) DeleteService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	svc, err := db.GetService(r.Context(), h.Store.DB(), id)
+	svc, err := h.Store.GetService(r.Context(), id)
 	if err != nil {
 		common.RespondError(w, http.StatusNotFound, "service not found")
 		return
@@ -257,7 +245,7 @@ func (h *Handler) DeleteService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = common.CheckServiceDeleteConstraints(r.Context(), h.Store.DB(), id)
+	err = h.Store.CheckDeleteConstraints(r.Context(), id)
 	if err != nil {
 		constraintErr, ok := err.(*common.DeleteConstraintError)
 		if ok {
@@ -268,7 +256,7 @@ func (h *Handler) DeleteService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.Store.SnapshotService(r.Context(), h.Store.DB(), id, "delete"); err != nil {
+	if err := h.Store.SnapshotService(r.Context(), id, "delete"); err != nil {
 		log.ErrorContext(r.Context(), "failed to create snapshot", "error", err)
 	}
 
@@ -283,7 +271,6 @@ func (h *Handler) DeleteService(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// queueServiceChange queues pending changes for all peers affected by policies using this service.
 func (h *Handler) queueServiceChange(ctx context.Context, serviceID int, action, summary string) {
 	policyIDs, err := h.Store.FindPoliciesUsingService(ctx, serviceID)
 	if err != nil {
@@ -308,8 +295,8 @@ func (h *Handler) queueServiceChange(ctx context.Context, serviceID int, action,
 		peerIDs = append(peerIDs, peerID)
 	}
 
-	if len(peerIDs) > 0 && h.ChangeWorker != nil {
-		h.ChangeWorker.QueuePeerChange(ctx, h.Store.DB(), peerIDs, "service", action, serviceID, summary)
+	if len(peerIDs) > 0 {
+		h.Store.QueuePeerChange(ctx, h.ChangeWorker, peerIDs, "service", action, serviceID, summary)
 	}
 }
 
@@ -322,10 +309,8 @@ func (h *Handler) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/{id:[0-9]+}", h.DeleteService).Methods("DELETE")
 }
 
-// GetServiceByPort returns the first user service matching a given port and optional protocol.
-// When port is "0" or empty and protocol is provided, it performs a protocol-only lookup
+// GetServiceByPort looks up a service by port and optional protocol. When port is "0" or empty and protocol is provided, it performs a protocol-only lookup
 // that includes system services (useful for ICMP/IGMP which have no ports).
-// GET /api/v1/services/by-port?port=<port>&protocol=<protocol>
 func (h *Handler) GetServiceByPort(w http.ResponseWriter, r *http.Request) {
 	port := r.URL.Query().Get("port")
 	protocol := r.URL.Query().Get("protocol")
@@ -336,7 +321,6 @@ func (h *Handler) GetServiceByPort(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Validate protocol value for protocol-only lookup
 		if !validLookupProtocols[protocol] {
 			common.RespondError(w, http.StatusBadRequest, "invalid protocol")
 			return
@@ -355,7 +339,6 @@ func (h *Handler) GetServiceByPort(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate port format
 	if !engine.ValidPortsRe.MatchString(port) {
 		common.RespondError(w, http.StatusBadRequest, "invalid port format")
 		return

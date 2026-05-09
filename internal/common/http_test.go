@@ -11,7 +11,6 @@ import (
 	"time"
 )
 
-// mockRoundTripper allows controlling HTTP client behavior for testing
 type mockRoundTripper struct {
 	response *http.Response
 	err      error
@@ -24,7 +23,6 @@ func (m *mockRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) 
 	return m.response, nil
 }
 
-// newMockClient creates an HTTP client with a mock transport
 func newMockClient(response *http.Response, err error) *http.Client {
 	return &http.Client{
 		Transport: &mockRoundTripper{
@@ -34,7 +32,6 @@ func newMockClient(response *http.Response, err error) *http.Client {
 	}
 }
 
-// TestDoJSONRequest_SuccessGET tests successful GET request
 func TestDoJSONRequest_SuccessGET(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Verify request headers
@@ -48,7 +45,6 @@ func TestDoJSONRequest_SuccessGET(t *testing.T) {
 			t.Errorf("expected method GET, got %s", r.Method)
 		}
 
-		// Return success response
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
@@ -68,7 +64,6 @@ func TestDoJSONRequest_SuccessGET(t *testing.T) {
 	resp.Body.Close()
 }
 
-// TestDoJSONRequest_SuccessPOST tests successful POST request with body
 func TestDoJSONRequest_SuccessPOST(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" {
@@ -106,7 +101,6 @@ func TestDoJSONRequest_SuccessPOST(t *testing.T) {
 	resp.Body.Close()
 }
 
-// TestDoJSONRequest_WithoutToken tests request without auth token
 func TestDoJSONRequest_WithoutToken(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "" {
@@ -129,7 +123,6 @@ func TestDoJSONRequest_WithoutToken(t *testing.T) {
 	resp.Body.Close()
 }
 
-// TestDoJSONRequest_WithoutUserAgent tests request without custom user agent
 func TestDoJSONRequest_WithoutUserAgent(t *testing.T) {
 	var gotUA string
 	// Use a mock client that captures headers directly, bypassing Transport's default UA
@@ -151,7 +144,6 @@ func TestDoJSONRequest_WithoutUserAgent(t *testing.T) {
 	resp.Body.Close()
 }
 
-// mockHTTPClient is a test HTTP client that calls a handler function
 type mockHTTPClient struct {
 	handler func(req *http.Request) (*http.Response, error)
 }
@@ -160,9 +152,7 @@ func (m *mockHTTPClient) Do(req *http.Request) (*http.Response, error) {
 	return m.handler(req)
 }
 
-// TestDoJSONRequest_MarshalError tests error during body marshaling
 func TestDoJSONRequest_MarshalError(t *testing.T) {
-	// Create a value that cannot be marshaled to JSON
 	unmarshalable := map[string]interface{}{
 		"func": func() {}, // functions cannot be marshaled to JSON
 	}
@@ -179,7 +169,6 @@ func TestDoJSONRequest_MarshalError(t *testing.T) {
 	}
 }
 
-// TestDoJSONRequest_NetworkError tests network error during request
 func TestDoJSONRequest_NetworkError(t *testing.T) {
 	ctx := context.Background()
 	// Use mock client that returns network error
@@ -195,7 +184,6 @@ func TestDoJSONRequest_NetworkError(t *testing.T) {
 	}
 }
 
-// TestDoJSONRequest_ContextCanceled tests context cancellation
 func TestDoJSONRequest_ContextCanceled(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(100 * time.Millisecond) // Simulate delay
@@ -213,7 +201,6 @@ func TestDoJSONRequest_ContextCanceled(t *testing.T) {
 	}
 }
 
-// TestDoJSONRequest_Timeout tests request timeout
 func TestDoJSONRequest_Timeout(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(200 * time.Millisecond) // Longer than context timeout
@@ -231,7 +218,6 @@ func TestDoJSONRequest_Timeout(t *testing.T) {
 	}
 }
 
-// TestDoJSONRequest_HTTPStatusErrors tests various non-2xx status codes
 func TestDoJSONRequest_HTTPStatusErrors(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -273,7 +259,6 @@ func TestDoJSONRequest_HTTPStatusErrors(t *testing.T) {
 				t.Errorf("DoJSONRequest() error should contain status code %d, got %v", tt.statusCode, err)
 			}
 
-			// For testing purposes, also verify direct error unwrapping
 			httpErr = &HTTPStatusError{StatusCode: tt.statusCode}
 			if !strings.Contains(httpErr.Error(), fmt.Sprintf("HTTP %d", tt.statusCode)) {
 				t.Errorf("HTTPStatusError.Error() should contain status code %d", tt.statusCode)
@@ -282,7 +267,6 @@ func TestDoJSONRequest_HTTPStatusErrors(t *testing.T) {
 	}
 }
 
-// TestDoJSONRequest_2xxStatusCodes tests various 2xx success codes
 func TestDoJSONRequest_2xxStatusCodes(t *testing.T) {
 	tests := []struct {
 		name       string

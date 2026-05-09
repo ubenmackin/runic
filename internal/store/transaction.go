@@ -9,8 +9,7 @@ import (
 	"runic/internal/db"
 )
 
-// RunInTx executes a function within a transaction. It abstracts the boilerplate of
-// beginning the transaction, rolling back on error, and committing on success.
+// RunInTx executes a function within a database transaction, beginning the transaction, rolling back on error, and committing on success.
 func RunInTx(ctx context.Context, database db.Beginner, fn func(tx *sql.Tx) error) error {
 	tx, err := database.BeginTx(ctx, nil)
 	if err != nil {

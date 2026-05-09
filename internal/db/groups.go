@@ -8,7 +8,6 @@ import (
 	"runic/internal/models"
 )
 
-// ListGroupMembers fetches all members of a group.
 func ListGroupMembers(ctx context.Context, database Querier, groupID int) ([]models.GroupMemberRow, error) {
 	rows, err := database.QueryContext(ctx,
 		"SELECT id, group_id, peer_id, added_at FROM group_members WHERE group_id = ?", groupID)

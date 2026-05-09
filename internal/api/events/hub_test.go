@@ -10,7 +10,6 @@ import (
 )
 
 // =============================================================================
-// Test SSEHub Initialization
 // =============================================================================
 
 func TestNewSSEHub(t *testing.T) {
@@ -36,7 +35,6 @@ func TestNewSSEHub(t *testing.T) {
 }
 
 // =============================================================================
-// Test Register/Unregister
 // =============================================================================
 
 func TestSSEHub_Register(t *testing.T) {
@@ -155,7 +153,6 @@ func TestSSEHub_RegisterUnregisterMultiple(t *testing.T) {
 }
 
 // =============================================================================
-// Test NotifyBundleUpdated
 // =============================================================================
 
 func TestSSEHub_NotifyBundleUpdated(t *testing.T) {
@@ -250,7 +247,6 @@ func TestSSEHub_NotifyBundleUpdatedFormat(t *testing.T) {
 }
 
 // =============================================================================
-// Test Push Job Registration
 // =============================================================================
 
 func TestSSEHub_RegisterPushJob(t *testing.T) {
@@ -297,7 +293,6 @@ func TestSSEHub_UnregisterPushJobNonExistent(t *testing.T) {
 }
 
 // =============================================================================
-// Test Push Job Progress Notifications
 // =============================================================================
 
 func TestSSEHub_NotifyPushJobProgress(t *testing.T) {
@@ -399,7 +394,6 @@ func TestSSEHub_NotifyPushJobComplete(t *testing.T) {
 }
 
 // =============================================================================
-// Test Concurrent Access (Thread Safety)
 // =============================================================================
 
 func TestSSEHub_ConcurrentRegisterUnregister(t *testing.T) {
@@ -494,7 +488,6 @@ func TestSSEHub_ConcurrentMixedOperations(t *testing.T) {
 			case 2:
 				hub.NotifyBundleUpdated(hostID, "v1.0")
 			case 3:
-				// Read operation simulation via lock
 				hub.mu.RLock()
 				_, _ = hub.clients[hostID]
 				hub.mu.RUnlock()
@@ -506,7 +499,6 @@ func TestSSEHub_ConcurrentMixedOperations(t *testing.T) {
 }
 
 // =============================================================================
-// Test Channel Buffer Behavior
 // =============================================================================
 
 func TestSSEHub_NotifyWhenChannelFull(t *testing.T) {
@@ -547,7 +539,6 @@ func TestSSEHub_PushJobChannelBuffer(t *testing.T) {
 }
 
 // =============================================================================
-// Test Integration with Context (Optional)
 // =============================================================================
 
 func TestSSEHub_WithContext(t *testing.T) {
@@ -574,7 +565,6 @@ func TestSSEHub_WithContext(t *testing.T) {
 }
 
 // =============================================================================
-// Test Frontend Client Registration
 // =============================================================================
 
 func TestSSEHub_RegisterFrontend(t *testing.T) {
@@ -623,7 +613,6 @@ func TestSSEHub_UnregisterFrontendNonExistent(t *testing.T) {
 }
 
 // =============================================================================
-// Test Frontend Pending Change Notifications
 // =============================================================================
 
 func TestSSEHub_NotifyFrontendPendingChangeAdded(t *testing.T) {
@@ -767,7 +756,6 @@ func TestSSEHub_FrontendChannelBuffer(t *testing.T) {
 }
 
 // =============================================================================
-// Test NotifyUpdateAgent return values
 // =============================================================================
 
 func TestSSEHub_NotifyUpdateAgent_ReturnsTrueWhenRegistered(t *testing.T) {
@@ -820,7 +808,6 @@ func TestSSEHub_NotifyUpdateAgent_ReturnsFalseWhenChannelFull(t *testing.T) {
 }
 
 // =============================================================================
-// Test NotifyBundleUpdated return values
 // =============================================================================
 
 func TestSSEHub_NotifyBundleUpdated_ReturnsTrueWhenRegistered(t *testing.T) {
@@ -873,7 +860,6 @@ func TestSSEHub_NotifyBundleUpdated_ReturnsFalseWhenChannelFull(t *testing.T) {
 }
 
 // =============================================================================
-// Test NotifyFetchBackup return values
 // =============================================================================
 
 func TestSSEHub_NotifyFetchBackup_ReturnsTrueWhenRegistered(t *testing.T) {
@@ -926,7 +912,6 @@ func TestSSEHub_NotifyFetchBackup_ReturnsFalseWhenChannelFull(t *testing.T) {
 }
 
 // =============================================================================
-// Test Register/Unregister integration with Notify methods
 // =============================================================================
 
 func TestSSEHub_RegisterThenUnregister_NotifyReturnsFalse(t *testing.T) {

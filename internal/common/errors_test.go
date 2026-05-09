@@ -6,7 +6,6 @@ import (
 	"testing"
 )
 
-// TestIsUnauthorized tests the IsUnauthorized helper function
 func TestIsUnauthorized(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -71,7 +70,6 @@ func TestIsUnauthorized(t *testing.T) {
 	}
 }
 
-// TestErrUnauthorized tests the ErrUnauthorized sentinel error
 func TestErrUnauthorized(t *testing.T) {
 	t.Run("ErrUnauthorized has correct message", func(t *testing.T) {
 		want := "unauthorized: received 401 response"
@@ -94,7 +92,6 @@ func TestErrUnauthorized(t *testing.T) {
 	})
 }
 
-// TestHTTPStatusError_ErrorsIs tests that errors.Is() works with HTTPStatusError
 func TestHTTPStatusError_ErrorsIs(t *testing.T) {
 	t.Run("errors.Is recognizes 401 as ErrUnauthorized", func(t *testing.T) {
 		err := &HTTPStatusError{
@@ -146,7 +143,6 @@ func TestHTTPStatusError_ErrorsIs(t *testing.T) {
 	})
 }
 
-// TestHTTPStatusError_IsMethod tests HTTPStatusError.Is() directly
 func TestHTTPStatusError_IsMethod(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -190,7 +186,6 @@ func TestHTTPStatusError_IsMethod(t *testing.T) {
 	}
 }
 
-// TestHTTPStatusError_Printf tests formatting HTTPStatusError with fmt
 func TestHTTPStatusError_Printf(t *testing.T) {
 	err := &HTTPStatusError{
 		StatusCode: 404,
@@ -212,7 +207,6 @@ func TestHTTPStatusError_Printf(t *testing.T) {
 	}
 }
 
-// TestHTTPStatusError_EdgeCases tests edge cases for HTTPStatusError
 func TestHTTPStatusError_EdgeCases(t *testing.T) {
 	t.Run("empty method and url", func(t *testing.T) {
 		err := &HTTPStatusError{
@@ -255,7 +249,6 @@ func TestHTTPStatusError_EdgeCases(t *testing.T) {
 	})
 }
 
-// TestHTTPStatusError_Composition tests error composition patterns
 func TestHTTPStatusError_Composition(t *testing.T) {
 	t.Run("wrap HTTPStatusError in custom error", func(t *testing.T) {
 		httpErr := &HTTPStatusError{

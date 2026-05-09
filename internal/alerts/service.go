@@ -3,8 +3,6 @@ package alerts
 
 import (
 	"context"
-	"database/sql"
-	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -12,19 +10,20 @@ import (
 
 	"runic/internal/crypto"
 	"runic/internal/db"
+	"runic/internal/store"
 
 	"runic/internal/common/log"
 )
 
-// AlertProcessor handles the processing and sending of alert notifications.
-// It implements the Processor interface defined in scheduler.go.
+// AlertProcessor implements the Processor interface defined in scheduler.go.
 type AlertProcessor struct {
-	database  *db.Database
-	smtp      *SMTPSender
-	logger    *slog.Logger
-	stopChan  chan struct{}
-	wg        sync.WaitGroup
-	alertChan chan alertTask
+	alertStore *store.AlertStore
+	userStore  *store.UserStore
+	smtp       *SMTPSender
+	logger     *slog.Logger
+	stopChan   chan struct{}
+	wg         sync.WaitGroup
+	alertChan  chan alertTask
 }
 
 type alertTask struct {
@@ -32,27 +31,25 @@ type alertTask struct {
 	rule  *AlertRule
 }
 
-// NewAlertProcessor creates a new alert processor.
-func NewAlertProcessor(database *db.Database, smtp *SMTPSender) *AlertProcessor {
+func NewAlertProcessor(alertStore *store.AlertStore, userStore *store.UserStore, smtp *SMTPSender) *AlertProcessor {
 	return &AlertProcessor{
-		database:  database,
-		smtp:      smtp,
-		logger:    log.L().With("component", "alert_processor"),
-		stopChan:  make(chan struct{}),
-		alertChan: make(chan alertTask, 100),
+		alertStore: alertStore,
+		userStore:  userStore,
+		smtp:       smtp,
+		logger:     log.L().With("component", "alert_processor"),
+		stopChan:   make(chan struct{}),
+		alertChan:  make(chan alertTask, 100),
 	}
 }
 
-// SetLogger sets a custom logger for the processor.
 func (p *AlertProcessor) SetLogger(logger *slog.Logger) {
 	p.logger = logger.With("component", "alert_processor")
 }
 
-// ProcessAlert implements the Processor interface.
-// It processes a triggered alert event by creating a history entry and sending notification.
+// ProcessAlert processes a triggered alert event by creating a history entry and sending notification.
 func (p *AlertProcessor) ProcessAlert(ctx context.Context, event *AlertEvent, rule *AlertRule) error {
 	history := event.CreateAlertHistory(rule.ID)
-	if err := CreateAlertHistory(ctx, p.database, &history); err != nil {
+	if err := p.alertStore.CreateAlertHistory(ctx, &history); err != nil {
 		p.logger.Error("failed to create alert history", "error", err)
 		return fmt.Errorf("failed to create alert history: %w", err)
 	}
@@ -78,13 +75,11 @@ func (p *AlertProcessor) ProcessAlert(ctx context.Context, event *AlertEvent, ru
 	return nil
 }
 
-// Start initializes the processor for receiving alerts.
 func (p *AlertProcessor) Start(ctx context.Context) error {
 	p.logger.Info("alert processor started")
 	return nil
 }
 
-// Run starts the processor's main loop.
 func (p *AlertProcessor) Run() {
 	p.wg.Add(1)
 	go func() {
@@ -105,14 +100,12 @@ func (p *AlertProcessor) Run() {
 	}()
 }
 
-// Stop stops the processor.
 func (p *AlertProcessor) Stop() {
 	close(p.stopChan)
 	p.wg.Wait()
 	p.logger.Info("processor stopped")
 }
 
-// QueueAlert queues an alert for asynchronous processing.
 func (p *AlertProcessor) QueueAlert(ctx context.Context, event *AlertEvent, rule *AlertRule) error {
 	select {
 	case p.alertChan <- alertTask{event: event, rule: rule}:
@@ -123,36 +116,33 @@ func (p *AlertProcessor) QueueAlert(ctx context.Context, event *AlertEvent, rule
 	}
 }
 
-// getAdminEmail retrieves the admin user's email for notifications.
 func (p *AlertProcessor) getAdminEmail(ctx context.Context) (string, error) {
-	var email string
-	err := p.database.QueryRowContext(ctx,
-		"SELECT email FROM users WHERE role = 'admin' LIMIT 1",
-	).Scan(&email)
-	if err != nil {
-		return "", fmt.Errorf("failed to get admin email: %w", err)
+	if p.userStore == nil {
+		return "", fmt.Errorf("user store not configured")
 	}
-	return email, nil
+
+	users, err := p.userStore.ListUsers(ctx)
+	if err != nil {
+		return "", fmt.Errorf("failed to list users: %w", err)
+	}
+
+	for _, user := range users {
+		if user.Role == "admin" && user.Email != "" {
+			return user.Email, nil
+		}
+	}
+
+	return "", fmt.Errorf("no admin user with email found")
 }
 
-// updateHistoryStatus updates the status of an alert history entry.
 func (p *AlertProcessor) updateHistoryStatus(ctx context.Context, id uint, status AlertStatus, errMsg string) {
-	var nullErr interface{}
-	if errMsg != "" {
-		nullErr = errMsg
-	}
-
-	_, err := p.database.ExecContext(ctx,
-		"UPDATE alert_history SET status = ?, error_message = ?, sent_at = ? WHERE id = ?",
-		status, nullErr, time.Now(), id,
-	)
+	err := p.alertStore.UpdateAlertHistoryStatus(ctx, uint64(id), status, errMsg)
 	if err != nil {
 		p.logger.Error("failed to update alert history", "error", err)
 	}
 }
 
-// Service is the main alert service coordinator that orchestrates all alert components.
-// It provides a single entry point for the alert system and manages the lifecycle
+// Service provides a single entry point for the alert system. It provides a single entry point for the alert system and manages the lifecycle
 // of evaluator, processor, scheduler, and digest generator.
 type Service struct {
 	mu sync.RWMutex
@@ -162,6 +152,13 @@ type Service struct {
 	logsDB    db.Querier
 	encryptor *crypto.Encryptor
 	logger    *slog.Logger
+
+	// Store dependencies
+	alertStore *store.AlertStore
+	userStore  *store.UserStore
+
+	// Injected lookups
+	hostnameLookup PeerHostnameLookup
 
 	// Alert components
 	evaluator       *ConditionEvaluator
@@ -182,50 +179,55 @@ type Service struct {
 	started     bool
 }
 
-// NewService creates a new alert service with the given database connection.
-// The service is created but not initialized - call Initialize() to set up components.
-func NewService(database *db.Database) *Service {
+// NewService creates a new alert service. The service is created but not initialized - call Initialize() to set up components.
+func NewService(database *db.Database, alertStore *store.AlertStore, userStore *store.UserStore) *Service {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &Service{
-		database: database,
-		logger:   log.L().With("component", "alert_service"),
-		ctx:      ctx,
-		cancel:   cancel,
+		database:   database,
+		alertStore: alertStore,
+		userStore:  userStore,
+		logger:     log.L().With("component", "alert_service"),
+		ctx:        ctx,
+		cancel:     cancel,
 	}
 }
 
-// SetEncryptor sets the encryptor for the service.
-// This must be called before Initialize() if encryption is needed.
+// SetEncryptor sets the encryptor for the alert service. This must be called before Initialize() if encryption is needed.
 func (s *Service) SetEncryptor(encryptor *crypto.Encryptor) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.encryptor = encryptor
 }
 
-// SetLogsDB sets the logs database connection for the service.
-// This must be called before Initialize() if firewall_logs queries are needed.
+// SetLogsDB sets the logs database for the alert service. This must be called before Initialize() if firewall_logs queries are needed.
 func (s *Service) SetLogsDB(logsDB db.Querier) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.logsDB = logsDB
 }
 
-// SetLogger sets a custom logger for the service and all sub-components.
+// SetHostnameLookup sets the hostname lookup function for resolving peer IDs to hostnames.
+// This must be called before Initialize() so the lookup is available to the evaluator.
+func (s *Service) SetHostnameLookup(lookup PeerHostnameLookup) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.hostnameLookup = lookup
+}
+
 func (s *Service) SetLogger(logger *slog.Logger) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.logger = logger.With("component", "alert_service")
 }
 
-// Initialize sets up all alert components.
-// This must be called before Start().
+// Initialize initializes the alert service. This must be called before Start().
 // Components are initialized in dependency order:
 //  1. SMTPSender (no dependencies)
 //  2. ConditionEvaluator (depends on DB)
-//  3. AlertProcessor (depends on DB, SMTPSender)
-//  4. Scheduler (depends on DB, Evaluator, Processor)
-//  5. DigestGenerator (depends on DB, SMTPSender)
+//  3. AlertProcessor (depends on AlertStore, UserStore, SMTPSender)
+//  4. Scheduler (depends on AlertStore, Evaluator, Processor)
+//  5. DigestGenerator (depends on AlertStore, SMTPSender)
 func (s *Service) Initialize() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -253,17 +255,18 @@ func (s *Service) Initialize() error {
 	if s.logsDB == nil {
 		s.logsDB = s.database
 	}
-	s.evaluator = NewConditionEvaluator(s.database, s.logsDB)
+	s.evaluator = NewConditionEvaluator(s.database, s.logsDB, s.hostnameLookup)
 	s.logger.Debug("evaluator initialized")
 
-	s.processor = NewAlertProcessor(s.database, s.smtpSender)
+	s.processor = NewAlertProcessor(s.alertStore, s.userStore, s.smtpSender)
 	s.processor.SetLogger(s.logger)
 	s.logger.Debug("processor initialized")
 
-	s.scheduler = NewScheduler(s.database, s.evaluator, s.processor)
+	s.scheduler = NewScheduler(s.alertStore, s.evaluator, s.processor)
 	s.logger.Debug("scheduler initialized")
 
-	s.digestGenerator = NewDigestGenerator(s.database, s.smtpSender, s.encryptor)
+	s.digestGenerator = NewDigestGenerator(s.alertStore, s.smtpSender, s.encryptor)
+	s.digestGenerator.SetDatabase(s.database)
 	s.digestGenerator.SetLogger(s.logger)
 	s.logger.Debug("digest generator initialized")
 
@@ -273,9 +276,7 @@ func (s *Service) Initialize() error {
 	return nil
 }
 
-// Start begins the alert service operation.
-// This starts the scheduler for periodic checks and the processor for sending alerts.
-// Start returns immediately; components run in background goroutines.
+// Start starts the alert service. This starts the scheduler for periodic checks and the processor for sending alerts.
 func (s *Service) Start() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -327,8 +328,7 @@ func (s *Service) Start() error {
 	return nil
 }
 
-// Stop gracefully shuts down the alert service.
-// It stops all components and waits for them to finish.
+// Stop stops the alert service. It stops all components and waits for them to finish.
 func (s *Service) Stop() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -368,54 +368,47 @@ func (s *Service) Stop() error {
 	return nil
 }
 
-// GetEvaluator returns the alert evaluator.
-// Returns nil if the service hasn't been initialized.
+// GetEvaluator returns the condition evaluator. Returns nil if the service hasn't been initialized.
 func (s *Service) GetEvaluator() *ConditionEvaluator {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.evaluator
 }
 
-// GetProcessor returns the alert processor.
-// Returns nil if the service hasn't been initialized.
+// GetProcessor returns the alert processor. Returns nil if the service hasn't been initialized.
 func (s *Service) GetProcessor() *AlertProcessor {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.processor
 }
 
-// GetScheduler returns the alert scheduler.
-// Returns nil if the service hasn't been initialized.
+// GetScheduler returns the alert scheduler. Returns nil if the service hasn't been initialized.
 func (s *Service) GetScheduler() *Scheduler {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.scheduler
 }
 
-// GetDigestGenerator returns the digest generator.
-// Returns nil if the service hasn't been initialized.
+// GetDigestGenerator returns the digest generator. Returns nil if the service hasn't been initialized.
 func (s *Service) GetDigestGenerator() *DigestGenerator {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.digestGenerator
 }
 
-// GetSMTPSender returns the SMTP sender.
-// Returns nil if the service hasn't been initialized.
+// GetSMTPSender returns the SMTP sender. Returns nil if the service hasn't been initialized.
 func (s *Service) GetSMTPSender() *SMTPSender {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.smtpSender
 }
 
-// IsStarted returns true if the service is currently running.
 func (s *Service) IsStarted() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.started
 }
 
-// IsInitialized returns true if the service has been initialized.
 func (s *Service) IsInitialized() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -423,90 +416,42 @@ func (s *Service) IsInitialized() bool {
 }
 
 func (s *Service) loadSMTPConfig(ctx context.Context) (*SMTPConfig, error) {
-	var host, username, password, fromAddress string
-	var port int
+	if s.alertStore == nil {
+		return &SMTPConfig{Enabled: false}, fmt.Errorf("alert store not configured")
+	}
 
-	enabled, err := GetBoolConfig(ctx, s.database, "smtp_enabled")
+	smtpConfigView, err := s.alertStore.GetSMTPConfig(ctx)
 	if err != nil {
-		return &SMTPConfig{Enabled: false}, nil
-	}
-
-	err = s.database.QueryRowContext(ctx,
-		`SELECT value FROM system_config WHERE key = 'smtp_host'`,
-	).Scan(&host)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load SMTP host: %w", err)
-	}
-
-	err = s.database.QueryRowContext(ctx,
-		`SELECT value FROM system_config WHERE key = 'smtp_port'`,
-	).Scan(&port)
-	if err != nil {
-		var portStr string
-		if err = s.database.QueryRowContext(ctx,
-			`SELECT value FROM system_config WHERE key = 'smtp_port'`,
-		).Scan(&portStr); err != nil {
-			return nil, fmt.Errorf("failed to load SMTP port: %w", err)
-		}
-		port = 587
-		if portStr != "" {
-			if _, err := fmt.Sscanf(portStr, "%d", &port); err != nil {
-				s.logger.Warn("failed to parse SMTP port", "value", portStr, "error", err)
-				port = 587
-			}
-		}
-	}
-
-	if err := s.database.QueryRowContext(ctx,
-		`SELECT value FROM system_config WHERE key = 'smtp_username'`,
-	).Scan(&username); err != nil && !errors.Is(err, sql.ErrNoRows) {
-		s.logger.Warn("failed to load SMTP username", "error", err)
-	}
-
-	if err := s.database.QueryRowContext(ctx,
-		`SELECT value FROM system_config WHERE key = 'smtp_password'`,
-	).Scan(&password); err != nil && !errors.Is(err, sql.ErrNoRows) {
-		s.logger.Warn("failed to load SMTP password", "error", err)
-	}
-
-	if err := s.database.QueryRowContext(ctx,
-		`SELECT value FROM system_config WHERE key = 'smtp_from_address'`,
-	).Scan(&fromAddress); err != nil && !errors.Is(err, sql.ErrNoRows) {
-		s.logger.Warn("failed to load SMTP from_address", "error", err)
-	}
-
-	useTLS, err := GetBoolConfig(ctx, s.database, "smtp_use_tls")
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		s.logger.Warn("failed to load SMTP use_tls", "error", err)
+		return &SMTPConfig{Enabled: false}, fmt.Errorf("failed to load SMTP config: %w", err)
 	}
 
 	config := &SMTPConfig{
-		Host:        host,
-		Port:        port,
-		Username:    username,
-		Password:    password, // Will be decrypted by SMTPSender
-		UseTLS:      useTLS,
-		FromAddress: fromAddress,
-		Enabled:     enabled,
+		Host:        smtpConfigView.Host,
+		Port:        smtpConfigView.Port,
+		Username:    smtpConfigView.Username,
+		Password:    "", // Password is stored encrypted; SMTPSender handles decryption
+		UseTLS:      smtpConfigView.UseTLS,
+		FromAddress: smtpConfigView.FromAddress,
+		Enabled:     smtpConfigView.Enabled,
 	}
 
 	return config, nil
 }
 
-// TriggerAlert allows manual triggering of an alert evaluation.
-// This is useful for immediate alerts outside the scheduled checks.
+// TriggerAlert triggers an immediate alert for the given event. This is useful for immediate alerts outside the scheduled checks.
 // It evaluates the event against matching rules and processes it if triggered.
 func (s *Service) TriggerAlert(ctx context.Context, event *AlertEvent) error {
 	s.mu.RLock()
 	evaluator := s.evaluator
 	processor := s.processor
+	alertStore := s.alertStore
 	s.mu.RUnlock()
 
 	if evaluator == nil {
 		return fmt.Errorf("alert service not initialized")
 	}
 
-	rules, err := GetEnabledAlertRulesByType(ctx, s.database, event.Type)
+	rules, err := alertStore.GetEnabledAlertRulesByType(ctx, event.Type)
 	if err != nil {
 		return fmt.Errorf("failed to get alert rules: %w", err)
 	}
@@ -531,8 +476,7 @@ func (s *Service) TriggerAlert(ctx context.Context, event *AlertEvent) error {
 	return nil
 }
 
-// CheckRuleNow triggers an immediate check of a specific alert rule.
-// This is useful for testing rules or forcing a re-evaluation.
+// CheckRuleNow checks a specific rule immediately. This is useful for testing rules or forcing a re-evaluation.
 func (s *Service) CheckRuleNow(ctx context.Context, ruleID uint64) error {
 	s.mu.RLock()
 	scheduler := s.scheduler
@@ -545,7 +489,6 @@ func (s *Service) CheckRuleNow(ctx context.Context, ruleID uint64) error {
 	return scheduler.CheckRule(ctx, ruleID)
 }
 
-// CheckAllRulesNow triggers an immediate check of all enabled alert rules.
 func (s *Service) CheckAllRulesNow(ctx context.Context) {
 	s.mu.RLock()
 	scheduler := s.scheduler

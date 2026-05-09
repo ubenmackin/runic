@@ -15,7 +15,6 @@ import (
 	"runic/internal/models"
 )
 
-// TestValidateRulesAndHMAC tests rule validation and HMAC signing/verification
 func TestValidateRulesAndHMAC(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -102,7 +101,6 @@ COMMIT
 			tt.bundle.HMAC = signature
 
 			// Note: This test would normally mock exec.Command to avoid actual iptables calls
-			// For now, we'll skip the actual apply and just test the validation logic
 			err := validateRules(tt.bundle.Rules)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("validateRules() error = %v, wantErr %v", err, tt.wantErr)
@@ -122,7 +120,6 @@ COMMIT
 	}
 }
 
-// TestApplyBundleFailure tests failure scenarios
 func TestApplyBundleFailure(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -315,7 +312,6 @@ COMMIT
 	}
 }
 
-// TestValidateRules tests the validateRules function specifically
 func TestValidateRules(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -428,7 +424,6 @@ COMMIT
 	}
 }
 
-// TestHMACSignature tests HMAC signing and verification
 func TestHMACSignature(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -507,7 +502,6 @@ func TestHMACSignature(t *testing.T) {
 	}
 }
 
-// TestScheduleRevert tests the revert scheduling function
 func TestScheduleRevert(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -547,7 +541,6 @@ func TestScheduleRevert(t *testing.T) {
 	}
 }
 
-// TestVersionHash tests version hashing functionality
 func TestVersionHash(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -609,7 +602,6 @@ func generateExcessiveRules(count int) string {
 	return builder.String()
 }
 
-// TestBundleResponseValidation tests bundle response structure
 func TestBundleResponseValidation(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -652,7 +644,6 @@ func TestBundleResponseValidation(t *testing.T) {
 	}
 }
 
-// TestDockerRulesInBundle tests Docker-specific rules
 func TestDockerRulesInBundle(t *testing.T) {
 	bundle := models.BundleResponse{
 		Version: "docker-test",
@@ -678,7 +669,6 @@ COMMIT
 		HMAC: engine.Sign(``, "key"),
 	}
 
-	// Add proper HMAC
 	bundle.HMAC = engine.Sign(bundle.Rules, "test-key")
 
 	// Verify the bundle contains Docker rules
@@ -689,7 +679,6 @@ COMMIT
 		t.Error("expected DOCKER-USER RETURN rule")
 	}
 
-	// Validate the rules
 	err := validateRules(bundle.Rules)
 	if err != nil {
 		t.Errorf("validateRules failed: %v", err)
@@ -701,7 +690,6 @@ COMMIT
 	}
 }
 
-// TestApplyBundleParameterValidation tests parameter validation for bundle application
 func TestApplyBundleParameterValidation(t *testing.T) {
 	// Note: This test is conceptual - the actual smokeTest function makes HTTP calls
 	// In a real test, you would mock the HTTP client
@@ -739,7 +727,6 @@ func TestApplyBundleParameterValidation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Validation would be done by actually calling smokeTest with mocked HTTP client
-			// For now, just validate the parameters
 			if tt.controlPlane == "" {
 				t.Error("control plane URL cannot be empty")
 			}
@@ -753,7 +740,6 @@ func TestApplyBundleParameterValidation(t *testing.T) {
 	}
 }
 
-// TestValidateRulesOnBackupStrings tests validation of backup rule strings
 func TestValidateRulesOnBackupStrings(t *testing.T) {
 	backup := `*filter
 :INPUT DROP [0:0]
@@ -786,7 +772,6 @@ COMMIT
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Validate the backup
 			if tt.backup != "" {
 				err := validateRules(tt.backup)
 				if (err != nil) != tt.wantErr {
@@ -797,7 +782,6 @@ COMMIT
 	}
 }
 
-// TestApplyBundleSuccess tests successful bundle application with mock iptables.
 func TestApplyBundleSuccess(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -870,7 +854,6 @@ COMMIT
 			tmpDir, cleanup := setupMockEnvironment(t, "success")
 			defer cleanup()
 
-			// Create mock control plane server
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				// Handle heartbeat for smoke test
 				if r.URL.Path == "/api/v1/agent/heartbeat" {
@@ -885,7 +868,6 @@ COMMIT
 			// Sign the bundle
 			tt.bundle.HMAC = engine.Sign(tt.bundle.Rules, tt.hmacKey)
 
-			// Create a mock confirm function
 			confirmCalled := false
 			confirmFunc := func(ctx context.Context, version string) error {
 				confirmCalled = true
@@ -921,7 +903,6 @@ COMMIT
 	}
 }
 
-// TestApplyBundleRollback tests bundle application rollback on failure.
 func TestApplyBundleRollback(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -991,9 +972,7 @@ COMMIT
 			tmpDir, cleanup := setupMockEnvironment(t, tt.mockBehavior)
 			defer cleanup()
 
-			// Create mock control plane server
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				// For smoke test failure scenario, return error
 				if r.URL.Path == "/api/v1/agent/heartbeat" {
 					if tt.mockBehavior == "success" && strings.Contains(tt.name, "smoke test") {
 						w.WriteHeader(http.StatusServiceUnavailable)
@@ -1031,7 +1010,6 @@ COMMIT
 				t.Error("iptables-save was not called for backup")
 			}
 
-			// For rollback scenarios, verify iptables-restore was called at least once
 			restoreCalledFile := filepath.Join(tmpDir, "iptables-restore.called")
 			if _, err := os.Stat(restoreCalledFile); os.IsNotExist(err) {
 				t.Error("iptables-restore was not called")
@@ -1040,7 +1018,6 @@ COMMIT
 	}
 }
 
-// setupMockEnvironment creates a temporary directory with mock iptables binaries.
 // The behavior parameter controls what the mock does:
 // - "success": all commands succeed
 // - "fail-restore": iptables-restore returns exit code 1
@@ -1048,31 +1025,26 @@ COMMIT
 func setupMockEnvironment(t *testing.T, behavior string) (tmpDir string, cleanup func()) {
 	t.Helper()
 
-	// Create temp directory
 	tmpDir = t.TempDir()
 
-	// Create mock iptables-save
 	iptablesSave := filepath.Join(tmpDir, "iptables-save")
 	saveScript := generateMockScript("iptables-save", behavior, tmpDir)
 	if err := os.WriteFile(iptablesSave, []byte(saveScript), 0755); err != nil {
 		t.Fatalf("failed to create mock iptables-save: %v", err)
 	}
 
-	// Create mock iptables-restore
 	iptablesRestore := filepath.Join(tmpDir, "iptables-restore")
 	restoreScript := generateMockScript("iptables-restore", behavior, tmpDir)
 	if err := os.WriteFile(iptablesRestore, []byte(restoreScript), 0755); err != nil {
 		t.Fatalf("failed to create mock iptables-restore: %v", err)
 	}
 
-	// Create mock ipset
 	ipset := filepath.Join(tmpDir, "ipset")
 	ipsetScript := generateMockScript("ipset", behavior, tmpDir)
 	if err := os.WriteFile(ipset, []byte(ipsetScript), 0755); err != nil {
 		t.Fatalf("failed to create mock ipset: %v", err)
 	}
 
-	// Create mock iptables (used by iptables command)
 	iptables := filepath.Join(tmpDir, "iptables")
 	iptablesScript := generateMockScript("iptables", behavior, tmpDir)
 	if err := os.WriteFile(iptables, []byte(iptablesScript), 0755); err != nil {
@@ -1088,7 +1060,6 @@ func setupMockEnvironment(t *testing.T, behavior string) (tmpDir string, cleanup
 		t.Fatalf("failed to set PATH: %v", err)
 	}
 
-	// Return cleanup function
 	cleanup = func() {
 		if err := os.Setenv("PATH", origPath); err != nil {
 			t.Logf("failed to restore PATH: %v", err)
@@ -1098,7 +1069,6 @@ func setupMockEnvironment(t *testing.T, behavior string) (tmpDir string, cleanup
 	return tmpDir, cleanup
 }
 
-// generateMockScript generates a shell script that mocks iptables/ipset commands.
 func generateMockScript(command, behavior, tmpDir string) string {
 	var script strings.Builder
 
@@ -1124,7 +1094,6 @@ func generateMockScript(command, behavior, tmpDir string) string {
 		script.WriteString("exit 1\n")
 
 	case command == "iptables-save":
-		// Return a minimal valid iptables-save output
 		script.WriteString("cat << 'EOF'\n")
 		script.WriteString("# Generated by mock iptables-save\n")
 		script.WriteString("*filter\n")
@@ -1164,13 +1133,11 @@ func generateMockScript(command, behavior, tmpDir string) string {
 	return script.String()
 }
 
-// TestApplyBundleIntegrationWithRealMocks tests the full bundle apply flow with detailed verification.
 func TestApplyBundleIntegrationWithRealMocks(t *testing.T) {
 	// Setup mock environment
 	tmpDir, cleanup := setupMockEnvironment(t, "success")
 	defer cleanup()
 
-	// Create mock control plane server
 	heartbeatCalled := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/v1/agent/heartbeat" {
@@ -1186,7 +1153,6 @@ func TestApplyBundleIntegrationWithRealMocks(t *testing.T) {
 	}))
 	defer server.Close()
 
-	// Create valid bundle
 	bundle := models.BundleResponse{
 		Version: "integration-test-v1",
 		Rules: `# Integration test bundle
@@ -1253,7 +1219,6 @@ COMMIT
 	}
 }
 
-// TestApplyBundleWithIpset tests bundle application with ipset definitions.
 // Note: This test verifies the ipset parsing logic by checking that the bundle validates.
 // The actual ipset commands are tested separately.
 func TestApplyBundleWithIpset(t *testing.T) {
@@ -1261,7 +1226,6 @@ func TestApplyBundleWithIpset(t *testing.T) {
 	tmpDir, cleanup := setupMockEnvironment(t, "success")
 	defer cleanup()
 
-	// Create mock control plane server
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/v1/agent/heartbeat" {
 			w.WriteHeader(http.StatusOK)
@@ -1272,7 +1236,6 @@ func TestApplyBundleWithIpset(t *testing.T) {
 	}))
 	defer server.Close()
 
-	// Create bundle with ipset definitions (as comments - the proper format)
 	// The ipset section is marked with a special comment before *filter
 	bundle := models.BundleResponse{
 		Version: "ipset-test-v1",
@@ -1322,7 +1285,6 @@ COMMIT
 	}
 }
 
-// TestIpsetSectionParsing tests the ipset section parsing logic.
 func TestIpsetSectionParsing(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -1399,7 +1361,6 @@ COMMIT
 	}
 }
 
-// TestStripIpsetSection tests the stripIpsetSection helper function.
 func TestStripIpsetSection(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -1511,13 +1472,11 @@ COMMIT
 	}
 }
 
-// TestApplyBundleHMACFailure tests that HMAC verification failure prevents apply.
 func TestApplyBundleHMACFailure(t *testing.T) {
 	// Setup mock environment (though it shouldn't be called)
 	_, cleanup := setupMockEnvironment(t, "success")
 	defer cleanup()
 
-	// Create bundle with invalid HMAC
 	bundle := models.BundleResponse{
 		Version: "hmac-fail-v1",
 		Rules: `*filter
@@ -1541,13 +1500,11 @@ COMMIT
 	}
 }
 
-// TestApplyBundleValidationFailure tests that rule validation failure prevents apply.
 func TestApplyBundleValidationFailure(t *testing.T) {
 	// Setup mock environment (though it shouldn't be called)
 	_, cleanup := setupMockEnvironment(t, "success")
 	defer cleanup()
 
-	// Create bundle with invalid rules
 	bundle := models.BundleResponse{
 		Version: "validation-fail-v1",
 		Rules:   `invalid rules content`,

@@ -10,7 +10,6 @@ import (
 	"runic/internal/common/version"
 )
 
-// TestPeerCRUDIntegration tests the full HTTP CRUD cycle for peers.
 func TestPeerCRUDIntegration(t *testing.T) {
 	// Test CREATE
 	t.Run("Create", func(t *testing.T) {
@@ -78,7 +77,6 @@ func TestPeerCRUDIntegration(t *testing.T) {
 		defer cleanup()
 		defer server.Close()
 
-		// CREATE
 		peerData := map[string]interface{}{
 			"hostname":   "test-peer-crud",
 			"ip_address": "10.0.0.200",
@@ -100,7 +98,6 @@ func TestPeerCRUDIntegration(t *testing.T) {
 		}
 		peerID := createResult["id"]
 
-		// READ (with ID)
 		readResp := JSONRequest(t, server, "GET", "/api/v1/peers/"+strconv.FormatInt(peerID, 10), nil, "admin", "admin")
 		defer readResp.Body.Close()
 
@@ -110,7 +107,6 @@ func TestPeerCRUDIntegration(t *testing.T) {
 			t.Errorf("read: expected status %d, got %d. Error: %v", http.StatusOK, readResp.StatusCode, errResp)
 		}
 
-		// UPDATE
 		updateData := map[string]interface{}{
 			"hostname":    "test-peer-updated",
 			"ip_address":  "10.0.0.201",
@@ -125,7 +121,6 @@ func TestPeerCRUDIntegration(t *testing.T) {
 			t.Errorf("update: expected status %d, got %d", http.StatusOK, updateResp.StatusCode)
 		}
 
-		// DELETE
 		deleteResp := JSONRequest(t, server, "DELETE", "/api/v1/peers/"+strconv.FormatInt(peerID, 10), nil, "admin", "admin")
 		defer deleteResp.Body.Close()
 
@@ -154,7 +149,6 @@ func TestPeerCRUDIntegration(t *testing.T) {
 	})
 }
 
-// TestPolicyCRUDIntegration tests the full HTTP CRUD cycle for policies.
 func TestPolicyCRUDIntegration(t *testing.T) {
 	server, cleanup := NewTestAPIServer(t)
 	defer cleanup()
@@ -164,10 +158,8 @@ func TestPolicyCRUDIntegration(t *testing.T) {
 	createPrerequisites := func(t *testing.T) (sourceID, targetID, serviceID int64) {
 		t.Helper()
 
-		// Create unique peers using timestamp to avoid unique constraint violations
 		timestamp := strconv.FormatInt(time.Now().UnixNano(), 10)
 
-		// Create a peer as source
 		sourcePeer := map[string]interface{}{
 			"hostname":   "policy-source-" + timestamp,
 			"ip_address": "10.1.0.1",
@@ -180,7 +172,6 @@ func TestPolicyCRUDIntegration(t *testing.T) {
 		json.NewDecoder(sourceResp.Body).Decode(&sourceResult)
 		sourceID = sourceResult["id"]
 
-		// Create a peer as target
 		targetPeer := map[string]interface{}{
 			"hostname":   "policy-target-" + timestamp,
 			"ip_address": "10.1.0.2",
@@ -193,7 +184,6 @@ func TestPolicyCRUDIntegration(t *testing.T) {
 		json.NewDecoder(targetResp.Body).Decode(&targetResult)
 		targetID = targetResult["id"]
 
-		// Create a service with proper ports field
 		serviceData := map[string]interface{}{
 			"name":        "policy-test-service-" + timestamp,
 			"protocol":    "tcp",
@@ -279,7 +269,6 @@ func TestPolicyCRUDIntegration(t *testing.T) {
 
 	// Test READ (single policy)
 	t.Run("ReadSingle", func(t *testing.T) {
-		// Create independent data for this test
 		sourceID, targetID, serviceID := createPrerequisites(t)
 
 		policyData := map[string]interface{}{
@@ -329,7 +318,6 @@ func TestPolicyCRUDIntegration(t *testing.T) {
 
 	// Test UPDATE
 	t.Run("Update", func(t *testing.T) {
-		// Create independent data for this test
 		sourceID, targetID, serviceID := createPrerequisites(t)
 
 		policyData := map[string]interface{}{
@@ -383,7 +371,6 @@ func TestPolicyCRUDIntegration(t *testing.T) {
 
 	// Test DELETE
 	t.Run("Delete", func(t *testing.T) {
-		// Create independent data for this test
 		sourceID, targetID, serviceID := createPrerequisites(t)
 
 		policyData := map[string]interface{}{
@@ -432,7 +419,6 @@ func TestPolicyCRUDIntegration(t *testing.T) {
 	})
 }
 
-// TestGroupCRUDIntegration tests the full HTTP CRUD cycle for groups.
 func TestGroupCRUDIntegration(t *testing.T) {
 	server, cleanup := NewTestAPIServer(t)
 	defer cleanup()
@@ -486,7 +472,6 @@ func TestGroupCRUDIntegration(t *testing.T) {
 
 	// Test READ (single group)
 	t.Run("ReadSingle", func(t *testing.T) {
-		// Create independent data for this test
 		groupData := map[string]interface{}{
 			"name":        "test-group-read-single-" + strconv.FormatInt(time.Now().UnixNano(), 10),
 			"description": "Test group for read single test",
@@ -527,7 +512,6 @@ func TestGroupCRUDIntegration(t *testing.T) {
 
 	// Test UPDATE
 	t.Run("Update", func(t *testing.T) {
-		// Create independent data for this test
 		groupData := map[string]interface{}{
 			"name":        "test-group-update-" + strconv.FormatInt(time.Now().UnixNano(), 10),
 			"description": "Test group for update test",
@@ -561,7 +545,6 @@ func TestGroupCRUDIntegration(t *testing.T) {
 
 	// Test DELETE
 	t.Run("Delete", func(t *testing.T) {
-		// Create independent data for this test
 		groupData := map[string]interface{}{
 			"name":        "test-group-delete-" + strconv.FormatInt(time.Now().UnixNano(), 10),
 			"description": "Test group for delete test",
@@ -598,7 +581,6 @@ func TestGroupCRUDIntegration(t *testing.T) {
 	})
 }
 
-// TestAuthFlowIntegration tests the authentication flow.
 func TestAuthFlowIntegration(t *testing.T) {
 	server, cleanup := NewTestAPIServer(t)
 	defer cleanup()

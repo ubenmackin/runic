@@ -55,7 +55,6 @@ func SetupTestDB(t *testing.T) (*sql.DB, func()) {
 		t.Fatal(err)
 	}
 
-	// Return cleanup function but DON'T register it here
 	// Caller is responsible for cleanup order
 	cleanup := func() {
 		if cErr := database.Close(); cErr != nil {
@@ -68,8 +67,7 @@ func SetupTestDB(t *testing.T) (*sql.DB, func()) {
 	return database, cleanup
 }
 
-// SetupTestLogsDB creates a separate test database for firewall logs.
-// This should be used for tests that query the logs database.
+// SetupTestLogsDB should be used for tests that query the logs database.
 // Uses the logsDBSchema from the db package.
 func SetupTestLogsDB(t *testing.T) (*sql.DB, func()) {
 	t.Helper()

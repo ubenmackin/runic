@@ -20,7 +20,6 @@ import (
 	"runic/internal/common/log"
 )
 
-// RotationState tracks the current rotation status.
 type RotationState string
 
 const (
@@ -32,7 +31,6 @@ const (
 	StateFallback  RotationState = "fallback"
 )
 
-// Manager handles HMAC key rotation for the agent.
 type Manager struct {
 	mu              sync.RWMutex
 	config          *identity.Config
@@ -46,7 +44,6 @@ type Manager struct {
 	lastRotation    time.Time
 }
 
-// NewManager creates a new rotation manager.
 func NewManager(config *identity.Config, configPath string, httpClient *http.Client, controlPlaneURL string, hostID string) *Manager {
 	return &Manager{
 		config:          config,
@@ -58,22 +55,19 @@ func NewManager(config *identity.Config, configPath string, httpClient *http.Cli
 	}
 }
 
-// GetState returns the current rotation state.
 func (m *Manager) GetState() RotationState {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.state
 }
 
-// GetLastRotation returns the time of the last successful rotation.
 func (m *Manager) GetLastRotation() time.Time {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.lastRotation
 }
 
-// CheckAndRotate checks if a rotation is pending and performs it if so.
-// This method uses fine-grained locking to avoid holding the mutex during HTTP calls.
+// CheckAndRotate uses fine-grained locking to avoid holding the mutex during HTTP calls.
 func (m *Manager) CheckAndRotate(ctx context.Context) error {
 	m.mu.Lock()
 	if m.state == StateRotating || m.state == StateTesting {
@@ -150,7 +144,6 @@ func (m *Manager) CheckAndRotate(ctx context.Context) error {
 	return nil
 }
 
-// checkRotationPending checks if a rotation token is available.
 func (m *Manager) checkRotationPending(ctx context.Context) (string, error) {
 	url := fmt.Sprintf("%s/api/v1/agent/check-rotation", m.controlPlaneURL)
 	resp, err := common.DoJSONRequest(ctx, m.httpClient, "GET", url, nil, m.config.Token, "runic-agent")
@@ -184,7 +177,6 @@ func (m *Manager) checkRotationPending(ctx context.Context) (string, error) {
 	return result.RotationToken, nil
 }
 
-// retrieveNewKey retrieves the new HMAC key using the rotation token.
 func (m *Manager) retrieveNewKey(ctx context.Context, token string) (string, error) {
 	url := fmt.Sprintf("%s/api/v1/agent/rotate-key", m.controlPlaneURL)
 
@@ -218,7 +210,6 @@ func (m *Manager) retrieveNewKey(ctx context.Context, token string) (string, err
 	return result.NewHMACKey, nil
 }
 
-// testNewKey verifies the new key works by making a test request.
 func (m *Manager) testNewKey(ctx context.Context, key string) error {
 	testMessage := fmt.Sprintf("test-%d", time.Now().UnixNano())
 	mac := hmac.New(sha256.New, []byte(key))
@@ -246,7 +237,6 @@ func (m *Manager) testNewKey(ctx context.Context, key string) error {
 	return nil
 }
 
-// updateConfigKey atomically updates the HMAC key in the config file.
 func (m *Manager) updateConfigKey(newKey string) error {
 	data, err := os.ReadFile(m.configPath)
 	if err != nil {
@@ -310,7 +300,6 @@ func (m *Manager) updateConfigKey(newKey string) error {
 	return nil
 }
 
-// confirmRotation notifies the control plane that rotation is complete.
 func (m *Manager) confirmRotation(ctx context.Context) error {
 	url := fmt.Sprintf("%s/api/v1/agent/confirm-rotation", m.controlPlaneURL)
 

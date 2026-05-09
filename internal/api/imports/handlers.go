@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
-	"strings"
 
 	"github.com/gorilla/mux"
 
@@ -18,22 +17,42 @@ import (
 	ic "runic/internal/common"
 	runiclog "runic/internal/common/log"
 	"runic/internal/importer"
+	"runic/internal/models"
 )
 
-// Handler provides HTTP handlers for import session endpoints.
+type ImportStore interface {
+	GetPeerForImport(ctx context.Context, peerID int64) (bool, string, string, error)
+	GetPeerHostname(ctx context.Context, peerID int64) (string, error)
+	GetRules(ctx context.Context, sessionID int64) ([]models.ImportRule, error)
+	GetGroups(ctx context.Context, sessionID int64) ([]models.ImportGroupMapping, error)
+	GetPeers(ctx context.Context, sessionID int64) ([]models.ImportPeerMapping, error)
+	GetServices(ctx context.Context, sessionID int64) ([]models.ImportServiceMapping, error)
+	GetSkippedRules(ctx context.Context, sessionID int64) ([]models.SkippedRule, error)
+	UpdateRule(ctx context.Context, sessionID, ruleID int64, status, policyName, sourceIP, targetIP *string, enabled *bool) error
+	UpdateGroup(ctx context.Context, sessionID, groupID int64, status *string, existingGroupID *int64) error
+	UpdatePeer(ctx context.Context, sessionID, peerID int64, status *string, existingPeerID *int64) error
+	UpdateService(ctx context.Context, sessionID, serviceID int64, status *string, existingServiceID *int64) error
+	CountApprovedRules(ctx context.Context, sessionID int64) (int, error)
+	GetSessionByPeer(ctx context.Context, peerID int64) (*importer.ImportSession, error)
+	CreateSession(ctx context.Context, peerID int64, rawBackup, rawIpsets string) (*importer.ImportSession, error)
+	GetSession(ctx context.Context, sessionID int64) (*importer.ImportSession, error)
+	UpdateSessionStatus(ctx context.Context, sessionID int64, status string) error
+	ApplySession(ctx context.Context, sessionID int64, changeWorker *common.ChangeWorker) (*importer.ApplyResult, error)
+	DeleteSession(ctx context.Context, sessionID int64) error
+}
+
 type Handler struct {
-	DB           *sql.DB
+	Store        ImportStore
 	SSEHub       *events.SSEHub
 	ChangeWorker *common.ChangeWorker
 }
 
-// NewHandler creates a new import handler.
-func NewHandler(db *sql.DB, sseHub *events.SSEHub, changeWorker *common.ChangeWorker) *Handler {
-	return &Handler{DB: db, SSEHub: sseHub, ChangeWorker: changeWorker}
+func NewHandler(store ImportStore, sseHub *events.SSEHub, changeWorker *common.ChangeWorker) *Handler {
+	return &Handler{Store: store, SSEHub: sseHub, ChangeWorker: changeWorker}
 }
 
-// RegisterRoutes registers the import API routes on the given subrouter.
-// All routes require editor role — the caller is responsible for applying the middleware.
+// RegisterRoutes registers all import session routes on the given router.
+// RegisterRoutes registers all import session routes. All routes require editor role — the caller is responsible for applying the middleware.
 func (h *Handler) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/peers/{id:[0-9]+}/import", h.InitiateImport).Methods("POST")
 	r.HandleFunc("/import-sessions/{id:[0-9]+}", h.GetSession).Methods("GET")
@@ -50,7 +69,6 @@ func (h *Handler) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/import-sessions/{id:[0-9]+}", h.CancelSession).Methods("DELETE")
 }
 
-// InitiateImport starts an import session for a peer by triggering the agent's fetch_backup SSE event.
 func (h *Handler) InitiateImport(w http.ResponseWriter, r *http.Request) {
 	peerIDStr := mux.Vars(r)["id"]
 	peerID, err := strconv.ParseInt(peerIDStr, 10, 64)
@@ -59,10 +77,7 @@ func (h *Handler) InitiateImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check peer exists and is an agent peer (not manual)
-	var isManual bool
-	var hostname, bundleVersion string
-	err = h.DB.QueryRowContext(r.Context(), "SELECT is_manual, hostname, bundle_version FROM peers WHERE id = ?", peerID).Scan(&isManual, &hostname, &bundleVersion)
+	isManual, hostname, bundleVersion, err := h.Store.GetPeerForImport(r.Context(), peerID)
 	if errors.Is(err, sql.ErrNoRows) {
 		common.RespondError(w, http.StatusNotFound, "peer not found")
 		return
@@ -80,8 +95,7 @@ func (h *Handler) InitiateImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check for existing active import session
-	existingSession, err := importer.GetSessionByPeer(r.Context(), h.DB, peerID)
+	existingSession, err := h.Store.GetSessionByPeer(r.Context(), peerID)
 	if err == nil && existingSession != nil {
 		common.RespondJSON(w, http.StatusConflict, map[string]interface{}{
 			"error":      "peer already has an active import session",
@@ -90,8 +104,7 @@ func (h *Handler) InitiateImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Create import session in pending state
-	session, err := importer.CreateSession(r.Context(), h.DB, peerID, "", "")
+	session, err := h.Store.CreateSession(r.Context(), peerID, "", "")
 	if err != nil {
 		runiclog.Error("Failed to create import session", "error", err, "peer_id", peerID)
 		common.RespondError(w, http.StatusInternalServerError, "failed to create import session")
@@ -114,7 +127,6 @@ func (h *Handler) InitiateImport(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// GetSession returns the details of an import session.
 func (h *Handler) GetSession(w http.ResponseWriter, r *http.Request) {
 	sessionID, err := h.getSessionID(r)
 	if err != nil {
@@ -122,7 +134,7 @@ func (h *Handler) GetSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	session, err := importer.GetSession(r.Context(), h.DB, sessionID)
+	session, err := h.Store.GetSession(r.Context(), sessionID)
 	if errors.Is(err, sql.ErrNoRows) {
 		common.RespondError(w, http.StatusNotFound, "session not found")
 		return
@@ -132,11 +144,9 @@ func (h *Handler) GetSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Look up peer hostname
-	var peerHostname string
-	_ = h.DB.QueryRowContext(r.Context(), "SELECT hostname FROM peers WHERE id = ?", session.PeerID).Scan(&peerHostname)
+	peerHostname, _ := h.Store.GetPeerHostname(r.Context(), session.PeerID)
 
-	resp := ImportSession{
+	resp := models.ImportSession{
 		ID:              session.ID,
 		PeerID:          session.PeerID,
 		PeerHostname:    peerHostname,
@@ -150,7 +160,6 @@ func (h *Handler) GetSession(w http.ResponseWriter, r *http.Request) {
 	common.RespondJSON(w, http.StatusOK, resp)
 }
 
-// GetRules returns all parsed rules for an import session.
 func (h *Handler) GetRules(w http.ResponseWriter, r *http.Request) {
 	sessionID, err := h.getSessionID(r)
 	if err != nil {
@@ -158,128 +167,15 @@ func (h *Handler) GetRules(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows, err := h.DB.QueryContext(r.Context(),
-		"SELECT id, session_id, chain, rule_order, raw_rule, status, skip_reason, source_type, source_id, source_staging_id, target_type, target_id, target_staging_id, service_id, service_staging_id, action, priority, direction, target_scope, policy_name, enabled, description, source_ip, target_ip FROM import_rules WHERE session_id = ? ORDER BY CASE chain WHEN 'INPUT' THEN 1 WHEN 'OUTPUT' THEN 2 WHEN 'DOCKER-USER' THEN 3 END, rule_order",
-		sessionID)
+	rules, err := h.Store.GetRules(r.Context(), sessionID)
 	if err != nil {
+		runiclog.Error("Failed to get rules", "error", err)
 		common.RespondError(w, http.StatusInternalServerError, "database error")
 		return
-	}
-	defer func() { _ = rows.Close() }()
-
-	var rules []ImportRule
-	ctx := r.Context()
-	for rows.Next() {
-		var r struct {
-			ID               int64
-			SessionID        int64
-			Chain            string
-			RuleOrder        int
-			RawRule          string
-			Status           string
-			SkipReason       sql.NullString
-			SourceType       sql.NullString
-			SourceID         sql.NullInt64
-			SourceStagingID  sql.NullInt64
-			TargetType       sql.NullString
-			TargetID         sql.NullInt64
-			TargetStagingID  sql.NullInt64
-			ServiceID        sql.NullInt64
-			ServiceStagingID sql.NullInt64
-			Action           sql.NullString
-			Priority         sql.NullInt64
-			Direction        sql.NullString
-			TargetScope      sql.NullString
-			PolicyName       sql.NullString
-			Enabled          int
-			Description      sql.NullString
-			SourceIP         sql.NullString
-			TargetIP         sql.NullString
-		}
-		if err := rows.Scan(&r.ID, &r.SessionID, &r.Chain, &r.RuleOrder, &r.RawRule, &r.Status, &r.SkipReason, &r.SourceType, &r.SourceID, &r.SourceStagingID, &r.TargetType, &r.TargetID, &r.TargetStagingID, &r.ServiceID, &r.ServiceStagingID, &r.Action, &r.Priority, &r.Direction, &r.TargetScope, &r.PolicyName, &r.Enabled, &r.Description, &r.SourceIP, &r.TargetIP); err != nil {
-			continue
-		}
-
-		rule := ImportRule{
-			ID:         r.ID,
-			SessionID:  r.SessionID,
-			Chain:      r.Chain,
-			RuleOrder:  r.RuleOrder,
-			RawRule:    r.RawRule,
-			Status:     r.Status,
-			Action:     r.Action.String,
-			PolicyName: r.PolicyName.String,
-			Enabled:    r.Enabled == 1,
-		}
-		if r.SkipReason.Valid {
-			rule.SkipReason = r.SkipReason.String
-		}
-		if r.SourceType.Valid {
-			rule.SourceType = r.SourceType.String
-		}
-		if r.TargetType.Valid {
-			rule.TargetType = r.TargetType.String
-		}
-		if r.Direction.Valid {
-			rule.Direction = r.Direction.String
-		}
-		if r.TargetScope.Valid {
-			rule.TargetScope = r.TargetScope.String
-		}
-		if r.Priority.Valid {
-			rule.Priority = int(r.Priority.Int64)
-		}
-		if r.Description.Valid {
-			rule.Description = r.Description.String
-		}
-		if r.SourceID.Valid {
-			id := r.SourceID.Int64
-			rule.SourceID = &id
-		}
-		if r.SourceStagingID.Valid {
-			id := r.SourceStagingID.Int64
-			rule.SourceStagingID = &id
-		}
-		if r.TargetID.Valid {
-			id := r.TargetID.Int64
-			rule.TargetID = &id
-		}
-		if r.TargetStagingID.Valid {
-			id := r.TargetStagingID.Int64
-			rule.TargetStagingID = &id
-		}
-		if r.ServiceID.Valid {
-			id := r.ServiceID.Int64
-			rule.ServiceID = &id
-		}
-		if r.ServiceStagingID.Valid {
-			id := r.ServiceStagingID.Int64
-			rule.ServiceStagingID = &id
-		}
-		if r.SourceIP.Valid {
-			ip := r.SourceIP.String
-			rule.SourceIP = &ip
-		}
-		if r.TargetIP.Valid {
-			ip := r.TargetIP.String
-			rule.TargetIP = &ip
-		}
-
-		// Resolve display names (pass source_ip/target_ip for multi-IP peer name suffix)
-		rule.SourceName = h.resolveEntityName(ctx, r.SourceType, r.SourceID, r.SourceStagingID, sessionID, r.SourceIP)
-		rule.TargetName = h.resolveEntityName(ctx, r.TargetType, r.TargetID, r.TargetStagingID, sessionID, r.TargetIP)
-		rule.ServiceName = h.resolveServiceName(ctx, r.ServiceID, r.ServiceStagingID, sessionID)
-
-		rules = append(rules, rule)
-	}
-
-	if rules == nil {
-		rules = []ImportRule{}
 	}
 	common.RespondJSON(w, http.StatusOK, rules)
 }
 
-// GetGroups returns all group mappings for an import session.
 func (h *Handler) GetGroups(w http.ResponseWriter, r *http.Request) {
 	sessionID, err := h.getSessionID(r)
 	if err != nil {
@@ -287,61 +183,15 @@ func (h *Handler) GetGroups(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows, err := h.DB.QueryContext(r.Context(),
-		"SELECT id, session_id, group_name, ipset_name, status, existing_group_id, member_ips, member_peer_ids, member_staging_peer_ids FROM import_group_mappings WHERE session_id = ?",
-		sessionID)
+	groups, err := h.Store.GetGroups(r.Context(), sessionID)
 	if err != nil {
+		runiclog.Error("Failed to get groups", "error", err)
 		common.RespondError(w, http.StatusInternalServerError, "database error")
 		return
-	}
-	defer func() { _ = rows.Close() }()
-
-	var groups []ImportGroupMapping
-	for rows.Next() {
-		var g struct {
-			ID               int64
-			SessionID        int64
-			GroupName        string
-			IpsetName        sql.NullString
-			Status           string
-			ExistingGroupID  sql.NullInt64
-			MemberIPs        string
-			MemberPeerIDs    string
-			MemberStagingIDs string
-		}
-		if err := rows.Scan(&g.ID, &g.SessionID, &g.GroupName, &g.IpsetName, &g.Status, &g.ExistingGroupID, &g.MemberIPs, &g.MemberPeerIDs, &g.MemberStagingIDs); err != nil {
-			continue
-		}
-
-		mapping := ImportGroupMapping{
-			ID:        g.ID,
-			SessionID: g.SessionID,
-			GroupName: g.GroupName,
-			Status:    g.Status,
-			MemberIPs: []string{},
-		}
-		if g.IpsetName.Valid {
-			mapping.IpsetName = g.IpsetName.String
-		}
-		if g.ExistingGroupID.Valid {
-			id := g.ExistingGroupID.Int64
-			mapping.ExistingGroupID = &id
-			// Get group name
-			_ = h.DB.QueryRowContext(r.Context(), "SELECT name FROM groups WHERE id = ?", id).Scan(&mapping.ExistingGroupName)
-		}
-
-		_ = json.Unmarshal([]byte(g.MemberIPs), &mapping.MemberIPs)
-
-		groups = append(groups, mapping)
-	}
-
-	if groups == nil {
-		groups = []ImportGroupMapping{}
 	}
 	common.RespondJSON(w, http.StatusOK, groups)
 }
 
-// GetPeers returns all peer mappings for an import session.
 func (h *Handler) GetPeers(w http.ResponseWriter, r *http.Request) {
 	sessionID, err := h.getSessionID(r)
 	if err != nil {
@@ -349,57 +199,15 @@ func (h *Handler) GetPeers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows, err := h.DB.QueryContext(r.Context(),
-		"SELECT id, session_id, ip_address, hostname, status, existing_peer_id FROM import_peer_mappings WHERE session_id = ?",
-		sessionID)
+	peers, err := h.Store.GetPeers(r.Context(), sessionID)
 	if err != nil {
+		runiclog.Error("Failed to get peers", "error", err)
 		common.RespondError(w, http.StatusInternalServerError, "database error")
 		return
-	}
-	defer func() { _ = rows.Close() }()
-
-	var peers []ImportPeerMapping
-	for rows.Next() {
-		var p struct {
-			ID             int64
-			SessionID      int64
-			IPAddress      string
-			Hostname       sql.NullString
-			Status         string
-			ExistingPeerID sql.NullInt64
-		}
-		if err := rows.Scan(&p.ID, &p.SessionID, &p.IPAddress, &p.Hostname, &p.Status, &p.ExistingPeerID); err != nil {
-			continue
-		}
-
-		mapping := ImportPeerMapping{
-			ID:        p.ID,
-			SessionID: p.SessionID,
-			IPAddress: p.IPAddress,
-			Status:    p.Status,
-		}
-		if p.Hostname.Valid {
-			mapping.Hostname = p.Hostname.String
-		}
-		if p.ExistingPeerID.Valid {
-			id := p.ExistingPeerID.Int64
-			mapping.ExistingPeerID = &id
-			var name string
-			if err := h.DB.QueryRowContext(r.Context(), "SELECT hostname FROM peers WHERE id = ?", id).Scan(&name); err == nil {
-				mapping.ExistingPeerName = name
-			}
-		}
-
-		peers = append(peers, mapping)
-	}
-
-	if peers == nil {
-		peers = []ImportPeerMapping{}
 	}
 	common.RespondJSON(w, http.StatusOK, peers)
 }
 
-// GetServices returns all service mappings for an import session.
 func (h *Handler) GetServices(w http.ResponseWriter, r *http.Request) {
 	sessionID, err := h.getSessionID(r)
 	if err != nil {
@@ -407,57 +215,15 @@ func (h *Handler) GetServices(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows, err := h.DB.QueryContext(r.Context(),
-		"SELECT id, session_id, name, ports, protocol, status, existing_service_id FROM import_service_mappings WHERE session_id = ?",
-		sessionID)
+	services, err := h.Store.GetServices(r.Context(), sessionID)
 	if err != nil {
+		runiclog.Error("Failed to get services", "error", err)
 		common.RespondError(w, http.StatusInternalServerError, "database error")
 		return
-	}
-	defer func() { _ = rows.Close() }()
-
-	var services []ImportServiceMapping
-	for rows.Next() {
-		var s struct {
-			ID                int64
-			SessionID         int64
-			Name              string
-			Ports             string
-			Protocol          string
-			Status            string
-			ExistingServiceID sql.NullInt64
-		}
-		if err := rows.Scan(&s.ID, &s.SessionID, &s.Name, &s.Ports, &s.Protocol, &s.Status, &s.ExistingServiceID); err != nil {
-			continue
-		}
-
-		mapping := ImportServiceMapping{
-			ID:        s.ID,
-			SessionID: s.SessionID,
-			Name:      s.Name,
-			Ports:     s.Ports,
-			Protocol:  s.Protocol,
-			Status:    s.Status,
-		}
-		if s.ExistingServiceID.Valid {
-			id := s.ExistingServiceID.Int64
-			mapping.ExistingServiceID = &id
-			var name string
-			if err := h.DB.QueryRowContext(r.Context(), "SELECT name FROM services WHERE id = ?", id).Scan(&name); err == nil {
-				mapping.ExistingServiceName = name
-			}
-		}
-
-		services = append(services, mapping)
-	}
-
-	if services == nil {
-		services = []ImportServiceMapping{}
 	}
 	common.RespondJSON(w, http.StatusOK, services)
 }
 
-// GetSkippedRules returns all skipped rules for an import session with raw iptables content.
 func (h *Handler) GetSkippedRules(w http.ResponseWriter, r *http.Request) {
 	sessionID, err := h.getSessionID(r)
 	if err != nil {
@@ -465,39 +231,15 @@ func (h *Handler) GetSkippedRules(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows, err := h.DB.QueryContext(r.Context(),
-		"SELECT id, chain, rule_order, raw_rule, skip_reason FROM import_rules WHERE session_id = ? AND status = 'skipped' ORDER BY CASE chain WHEN 'INPUT' THEN 1 WHEN 'OUTPUT' THEN 2 WHEN 'DOCKER-USER' THEN 3 END, rule_order",
-		sessionID)
+	skipped, err := h.Store.GetSkippedRules(r.Context(), sessionID)
 	if err != nil {
+		runiclog.Error("Failed to get skipped rules", "error", err)
 		common.RespondError(w, http.StatusInternalServerError, "database error")
 		return
-	}
-	defer func() { _ = rows.Close() }()
-
-	type SkippedRule struct {
-		ID         int64  `json:"id"`
-		Chain      string `json:"chain"`
-		RuleOrder  int    `json:"rule_order"`
-		RawRule    string `json:"raw_rule"`
-		SkipReason string `json:"skip_reason"`
-	}
-
-	var skipped []SkippedRule
-	for rows.Next() {
-		var s SkippedRule
-		if err := rows.Scan(&s.ID, &s.Chain, &s.RuleOrder, &s.RawRule, &s.SkipReason); err != nil {
-			continue
-		}
-		skipped = append(skipped, s)
-	}
-
-	if skipped == nil {
-		skipped = []SkippedRule{}
 	}
 	common.RespondJSON(w, http.StatusOK, skipped)
 }
 
-// parseUpdateIDs extracts session ID and entity ID from URL path parameters.
 func (h *Handler) parseUpdateIDs(w http.ResponseWriter, r *http.Request, entityIDParam string) (sessionID int64, entityID int64, ok bool) {
 	var err error
 	sessionID, err = h.getSessionID(r)
@@ -513,24 +255,6 @@ func (h *Handler) parseUpdateIDs(w http.ResponseWriter, r *http.Request, entityI
 	return sessionID, entityID, true
 }
 
-// executeUpdate builds and executes a dynamic UPDATE query.
-func (h *Handler) executeUpdate(w http.ResponseWriter, r *http.Request, tableName string, updates []string, args []interface{}, sessionID int64, entityID int64) error {
-	if len(updates) == 0 {
-		common.RespondError(w, http.StatusBadRequest, "no fields to update")
-		return fmt.Errorf("no fields to update")
-	}
-	args = append(args, sessionID, entityID)
-	query := fmt.Sprintf("UPDATE %s SET %s WHERE session_id = ? AND id = ?", tableName, strings.Join(updates, ", "))
-	_, err := h.DB.ExecContext(r.Context(), query, args...)
-	if err != nil {
-		common.RespondError(w, http.StatusInternalServerError, "database error")
-		return err
-	}
-	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-	return nil
-}
-
-// UpdateRule updates a rule's mapping or approval status.
 func (h *Handler) UpdateRule(w http.ResponseWriter, r *http.Request) {
 	sessionID, ruleID, ok := h.parseUpdateIDs(w, r, "rule_id")
 	if !ok {
@@ -550,43 +274,19 @@ func (h *Handler) UpdateRule(w http.ResponseWriter, r *http.Request) {
 	}
 
 	validRuleStatuses := map[string]bool{"pending": true, "resolved": true, "skipped": true, "approved": true, "rejected": true}
-	var updates []string
-	var args []interface{}
-	if input.Status != nil {
-		if !validRuleStatuses[*input.Status] {
-			common.RespondError(w, http.StatusBadRequest, "invalid status value")
-			return
-		}
-		updates = append(updates, "status = ?")
-		args = append(args, *input.Status)
-	}
-	if input.PolicyName != nil {
-		updates = append(updates, "policy_name = ?")
-		args = append(args, *input.PolicyName)
-	}
-	if input.Enabled != nil {
-		enabled := 0
-		if *input.Enabled {
-			enabled = 1
-		}
-		updates = append(updates, "enabled = ?")
-		args = append(args, enabled)
-	}
-	if input.SourceIP != nil {
-		updates = append(updates, "source_ip = ?")
-		args = append(args, *input.SourceIP)
-	}
-	if input.TargetIP != nil {
-		updates = append(updates, "target_ip = ?")
-		args = append(args, *input.TargetIP)
+	if input.Status != nil && !validRuleStatuses[*input.Status] {
+		common.RespondError(w, http.StatusBadRequest, "invalid status value")
+		return
 	}
 
-	if err := h.executeUpdate(w, r, "import_rules", updates, args, sessionID, ruleID); err != nil {
+	if err := h.Store.UpdateRule(r.Context(), sessionID, ruleID, input.Status, input.PolicyName, input.SourceIP, input.TargetIP, input.Enabled); err != nil {
 		runiclog.Warn("UpdateRule failed", "error", err)
+		common.RespondError(w, http.StatusInternalServerError, "database error")
+		return
 	}
+	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// UpdateGroup updates a group mapping.
 func (h *Handler) UpdateGroup(w http.ResponseWriter, r *http.Request) {
 	sessionID, groupID, ok := h.parseUpdateIDs(w, r, "group_id")
 	if !ok {
@@ -603,27 +303,19 @@ func (h *Handler) UpdateGroup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	validMappingStatuses := map[string]bool{"pending": true, "mapped": true, "approved": true, "rejected": true}
-	var updates []string
-	var args []interface{}
-	if input.Status != nil {
-		if !validMappingStatuses[*input.Status] {
-			common.RespondError(w, http.StatusBadRequest, "invalid status value")
-			return
-		}
-		updates = append(updates, "status = ?")
-		args = append(args, *input.Status)
-	}
-	if input.ExistingGroupID != nil {
-		updates = append(updates, "existing_group_id = ?")
-		args = append(args, *input.ExistingGroupID)
+	if input.Status != nil && !validMappingStatuses[*input.Status] {
+		common.RespondError(w, http.StatusBadRequest, "invalid status value")
+		return
 	}
 
-	if err := h.executeUpdate(w, r, "import_group_mappings", updates, args, sessionID, groupID); err != nil {
+	if err := h.Store.UpdateGroup(r.Context(), sessionID, groupID, input.Status, input.ExistingGroupID); err != nil {
 		runiclog.Warn("UpdateGroup failed", "error", err)
+		common.RespondError(w, http.StatusInternalServerError, "database error")
+		return
 	}
+	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// UpdatePeer updates a peer mapping.
 func (h *Handler) UpdatePeer(w http.ResponseWriter, r *http.Request) {
 	sessionID, peerID, ok := h.parseUpdateIDs(w, r, "peer_id")
 	if !ok {
@@ -640,27 +332,19 @@ func (h *Handler) UpdatePeer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	validMappingStatuses := map[string]bool{"pending": true, "mapped": true, "approved": true, "rejected": true}
-	var updates []string
-	var args []interface{}
-	if input.Status != nil {
-		if !validMappingStatuses[*input.Status] {
-			common.RespondError(w, http.StatusBadRequest, "invalid status value")
-			return
-		}
-		updates = append(updates, "status = ?")
-		args = append(args, *input.Status)
-	}
-	if input.ExistingPeerID != nil {
-		updates = append(updates, "existing_peer_id = ?")
-		args = append(args, *input.ExistingPeerID)
+	if input.Status != nil && !validMappingStatuses[*input.Status] {
+		common.RespondError(w, http.StatusBadRequest, "invalid status value")
+		return
 	}
 
-	if err := h.executeUpdate(w, r, "import_peer_mappings", updates, args, sessionID, peerID); err != nil {
+	if err := h.Store.UpdatePeer(r.Context(), sessionID, peerID, input.Status, input.ExistingPeerID); err != nil {
 		runiclog.Warn("UpdatePeer failed", "error", err)
+		common.RespondError(w, http.StatusInternalServerError, "database error")
+		return
 	}
+	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// UpdateService updates a service mapping.
 func (h *Handler) UpdateService(w http.ResponseWriter, r *http.Request) {
 	sessionID, serviceID, ok := h.parseUpdateIDs(w, r, "service_id")
 	if !ok {
@@ -677,27 +361,19 @@ func (h *Handler) UpdateService(w http.ResponseWriter, r *http.Request) {
 	}
 
 	validMappingStatuses := map[string]bool{"pending": true, "mapped": true, "approved": true, "rejected": true}
-	var updates []string
-	var args []interface{}
-	if input.Status != nil {
-		if !validMappingStatuses[*input.Status] {
-			common.RespondError(w, http.StatusBadRequest, "invalid status value")
-			return
-		}
-		updates = append(updates, "status = ?")
-		args = append(args, *input.Status)
-	}
-	if input.ExistingServiceID != nil {
-		updates = append(updates, "existing_service_id = ?")
-		args = append(args, *input.ExistingServiceID)
+	if input.Status != nil && !validMappingStatuses[*input.Status] {
+		common.RespondError(w, http.StatusBadRequest, "invalid status value")
+		return
 	}
 
-	if err := h.executeUpdate(w, r, "import_service_mappings", updates, args, sessionID, serviceID); err != nil {
+	if err := h.Store.UpdateService(r.Context(), sessionID, serviceID, input.Status, input.ExistingServiceID); err != nil {
 		runiclog.Warn("UpdateService failed", "error", err)
+		common.RespondError(w, http.StatusInternalServerError, "database error")
+		return
 	}
+	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// ApplySession applies all approved rules from an import session.
 func (h *Handler) ApplySession(w http.ResponseWriter, r *http.Request) {
 	sessionID, err := h.getSessionID(r)
 	if err != nil {
@@ -705,21 +381,23 @@ func (h *Handler) ApplySession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Update session status to reviewing first
-	if err := importer.UpdateSessionStatus(r.Context(), h.DB, sessionID, "reviewing"); err != nil {
+	if err := h.Store.UpdateSessionStatus(r.Context(), sessionID, "reviewing"); err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "database error")
 		return
 	}
 
 	// Count approved rules
-	var approvedCount int
-	_ = h.DB.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM import_rules WHERE session_id = ? AND status = 'approved'", sessionID).Scan(&approvedCount)
+	approvedCount, err := h.Store.CountApprovedRules(r.Context(), sessionID)
+	if err != nil {
+		common.RespondError(w, http.StatusInternalServerError, "database error")
+		return
+	}
 	if approvedCount == 0 {
 		common.RespondError(w, http.StatusBadRequest, "no approved rules to apply")
 		return
 	}
 
-	result, err := importer.ApplySession(r.Context(), h.DB, sessionID, h.ChangeWorker)
+	result, err := h.Store.ApplySession(r.Context(), sessionID, h.ChangeWorker)
 	if err != nil {
 		runiclog.Error("Failed to apply import session", "error", err, "session_id", sessionID)
 		common.RespondError(w, http.StatusInternalServerError, "failed to apply import session")
@@ -735,7 +413,6 @@ func (h *Handler) ApplySession(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// CancelSession cancels and cleans up an import session.
 func (h *Handler) CancelSession(w http.ResponseWriter, r *http.Request) {
 	sessionID, err := h.getSessionID(r)
 	if err != nil {
@@ -743,7 +420,7 @@ func (h *Handler) CancelSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := importer.DeleteSession(r.Context(), h.DB, sessionID); err != nil {
+	if err := h.Store.DeleteSession(r.Context(), sessionID); err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "failed to cancel session")
 		return
 	}
@@ -755,80 +432,4 @@ func (h *Handler) CancelSession(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) getSessionID(r *http.Request) (int64, error) {
 	return strconv.ParseInt(mux.Vars(r)["id"], 10, 64)
-}
-
-// resolveEntityName looks up the display name for a source or target.
-// When matchedIP is set (non-primary IP match via peer_ips), the display name
-// includes the specific IP as a suffix, e.g. "graylog (10.20.10.20)".
-func (h *Handler) resolveEntityName(ctx context.Context, entityType sql.NullString, entityID sql.NullInt64, stagingID sql.NullInt64, sessionID int64, matchedIP sql.NullString) string {
-	if !entityType.Valid || entityType.String == "" {
-		return ""
-	}
-
-	// If real entity ID exists, look it up
-	if entityID.Valid && entityID.Int64 != 0 {
-		switch entityType.String {
-		case "peer":
-			var name string
-			if err := h.DB.QueryRowContext(ctx, "SELECT hostname FROM peers WHERE id = ?", entityID.Int64).Scan(&name); err == nil {
-				if matchedIP.Valid && matchedIP.String != "" {
-					return fmt.Sprintf("%s (%s)", name, matchedIP.String)
-				}
-				return name
-			}
-		case "group":
-			var name string
-			if err := h.DB.QueryRowContext(ctx, "SELECT name FROM groups WHERE id = ?", entityID.Int64).Scan(&name); err == nil {
-				return name
-			}
-		case "special":
-			var name string
-			if err := h.DB.QueryRowContext(ctx, "SELECT display_name FROM special_targets WHERE id = ?", entityID.Int64).Scan(&name); err == nil {
-				return name
-			}
-		}
-	}
-
-	// If staging ID exists, look it up
-	if stagingID.Valid && stagingID.Int64 != 0 {
-		switch entityType.String {
-		case "peer":
-			var name string
-			if err := h.DB.QueryRowContext(ctx, "SELECT hostname FROM import_peer_mappings WHERE id = ?", stagingID.Int64).Scan(&name); err == nil {
-				if matchedIP.Valid && matchedIP.String != "" {
-					return fmt.Sprintf("%s (%s)", name, matchedIP.String)
-				}
-				return name
-			}
-			// Fall back to IP
-			var ip string
-			if err := h.DB.QueryRowContext(ctx, "SELECT ip_address FROM import_peer_mappings WHERE id = ?", stagingID.Int64).Scan(&ip); err == nil {
-				return ip
-			}
-		case "group":
-			var name string
-			if err := h.DB.QueryRowContext(ctx, "SELECT group_name FROM import_group_mappings WHERE id = ?", stagingID.Int64).Scan(&name); err == nil {
-				return name
-			}
-		}
-	}
-
-	return ""
-}
-
-// resolveServiceName looks up the display name for a service.
-func (h *Handler) resolveServiceName(ctx context.Context, serviceID sql.NullInt64, stagingID sql.NullInt64, sessionID int64) string {
-	if serviceID.Valid && serviceID.Int64 != 0 {
-		var name string
-		if err := h.DB.QueryRowContext(ctx, "SELECT name FROM services WHERE id = ?", serviceID.Int64).Scan(&name); err == nil {
-			return name
-		}
-	}
-	if stagingID.Valid && stagingID.Int64 != 0 {
-		var name string
-		if err := h.DB.QueryRowContext(ctx, "SELECT name FROM import_service_mappings WHERE id = ?", stagingID.Int64).Scan(&name); err == nil {
-			return name
-		}
-	}
-	return ""
 }

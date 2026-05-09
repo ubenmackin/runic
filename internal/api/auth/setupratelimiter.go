@@ -17,15 +17,13 @@ var (
 	setupRateLimiter = middleware.NewRateLimiter(setupMaxRequests, setupRateLimitWindow)
 )
 
-// CheckSetupRateLimit checks if the IP has exceeded the rate limit for setup endpoints.
-// Returns nil if allowed, error if rate limited.
+// CheckSetupRateLimit checks the setup rate limit. Returns nil if allowed, error if rate limited.
 // This function maintains backward compatibility with existing code.
 func CheckSetupRateLimit(remoteAddr string) error {
 	return setupRateLimiter.Check(remoteAddr)
 }
 
-// ResetSetupRateLimit clears the setup rate limiter state.
-// This is intended for testing to ensure test isolation.
+// ResetSetupRateLimit resets the setup rate limiter. This is intended for testing to ensure test isolation.
 func ResetSetupRateLimit() {
 	setupRateLimiter.Reset()
 }

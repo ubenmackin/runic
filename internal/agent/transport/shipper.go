@@ -15,7 +15,6 @@ import (
 	"runic/internal/common/log"
 )
 
-// LogEvent represents a parsed firewall log event.
 type LogEvent struct {
 	Timestamp string `json:"timestamp"`
 	Direction string `json:"direction"`
@@ -28,7 +27,6 @@ type LogEvent struct {
 	RawLine   string `json:"raw_line"`
 }
 
-// Shipper handles log tailing and shipping to the control plane.
 type Shipper struct {
 	client          *http.Client
 	controlPlaneURL string
@@ -38,7 +36,6 @@ type Shipper struct {
 	lines           chan string
 }
 
-// NewShipper creates a new Shipper.
 func NewShipper(client *http.Client, controlPlaneURL, token, hostID, logPath string) *Shipper {
 	return &Shipper{
 		client:          client,
@@ -50,7 +47,6 @@ func NewShipper(client *http.Client, controlPlaneURL, token, hostID, logPath str
 	}
 }
 
-// Run starts the shipper's tail and batch loops.
 func (s *Shipper) Run(ctx context.Context) {
 	log.Info("Starting log shipper", "logPath", s.logPath, "controlPlaneURL", s.controlPlaneURL, "hostID", s.hostID)
 	tailedLines := s.tail(ctx, s.logPath)
@@ -95,7 +91,6 @@ func (s *Shipper) Run(ctx context.Context) {
 	}
 }
 
-// tail watches a log file and sends new lines to a channel.
 func (s *Shipper) tail(ctx context.Context, path string) <-chan string {
 	lines := make(chan string, 100)
 
@@ -187,7 +182,6 @@ func (s *Shipper) tail(ctx context.Context, path string) <-chan string {
 	return lines
 }
 
-// ParseLogLine parses an iptables kernel log line into a LogEvent.
 func ParseLogLine(line string) (LogEvent, error) {
 	ev := LogEvent{
 		RawLine: line,
@@ -214,7 +208,6 @@ func ParseLogLine(line string) (LogEvent, error) {
 		ev.Action = "ACCEPT"
 	}
 
-	// Parse timestamp (handles both syslog and ISO8601/RFC3339 formats)
 	// Syslog Format: "Jan 1 12:00:00 hostname kernel: [RUNIC-DROP] ..."
 	// ISO Format: "2026-03-31T15:48:14.402322-07:00 hostname kernel: [RUNIC-DROP] ..."
 	parts := strings.SplitN(line, " ", 5)
@@ -276,7 +269,6 @@ func ParseLogLine(line string) (LogEvent, error) {
 	return ev, nil
 }
 
-// ship sends a batch of log events to the control plane.
 func (s *Shipper) ship(ctx context.Context, batch []LogEvent) {
 	if len(batch) == 0 {
 		return

@@ -14,18 +14,21 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"runic/internal/auth"
+	"runic/internal/store"
 	"runic/internal/testutil"
 )
+
+func newTestHandler(db *sql.DB) *Handler {
+	return NewHandler(store.NewUserStore(db), store.NewTokenStore(db), db)
+}
 
 // Helper to set admin context on request
 func withAdminContext(ctx context.Context) context.Context {
 	return auth.SetContextForTest(ctx, "admin", "adminuser")
 }
 
-// uniqueIPCounter is used to generate unique IPs for rate limit tests
 var uniqueIPCounter int
 
-// newRequestWithUniqueIP creates an HTTP request with a unique remote addr to avoid rate limiting
 func newRequestWithUniqueIP(method, url string, body string) *http.Request {
 	uniqueIPCounter++
 	ip := fmt.Sprintf("192.0.2.%d:12345", uniqueIPCounter)
@@ -34,14 +37,12 @@ func newRequestWithUniqueIP(method, url string, body string) *http.Request {
 	return r
 }
 
-// resetAllRateLimiters clears both rate limiters for test isolation
 func resetAllRateLimiters() {
 	ResetRateLimitStore()
 	ResetSetupRateLimit()
 }
 
 // =============================================================================
-// Test HandleSetupGET
 // =============================================================================
 
 func TestHandleSetupGET_NoUsers(t *testing.T) {
@@ -49,10 +50,9 @@ func TestHandleSetupGET_NoUsers(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Set up JWT key
 	setupTestJWT(t, db)
 
-	h := NewHandler(db, db)
+	h := newTestHandler(db)
 	w := httptest.NewRecorder()
 	r := newRequestWithUniqueIP(http.MethodGet, "/api/v1/setup", "")
 
@@ -77,10 +77,8 @@ func TestHandleSetupGET_UsersExist(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Set up JWT key
 	setupTestJWT(t, db)
 
-	// Insert a user
 	hash, err := bcrypt.GenerateFromPassword([]byte("password123"), 12)
 	if err != nil {
 		t.Fatal(err)
@@ -88,7 +86,7 @@ func TestHandleSetupGET_UsersExist(t *testing.T) {
 	_, _ = db.Exec("INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)",
 		"existinguser", string(hash), "admin")
 
-	h := NewHandler(db, db)
+	h := newTestHandler(db)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/setup", nil)
 
@@ -109,8 +107,9 @@ func TestHandleSetupGET_UsersExist(t *testing.T) {
 }
 
 func TestHandleSetupGET_DBError(t *testing.T) {
-	// Test with nil DB to trigger error
-	h := NewHandler(nil, nil)
+	// Test with nil UserStore to trigger error
+	var nilUserStore UserStore
+	h := NewHandler(nilUserStore, nil, nil)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/setup", nil)
 
@@ -122,7 +121,6 @@ func TestHandleSetupGET_DBError(t *testing.T) {
 }
 
 // =============================================================================
-// Test HandleSetupPOST
 // =============================================================================
 
 func TestHandleSetupPOST_Success(t *testing.T) {
@@ -130,10 +128,9 @@ func TestHandleSetupPOST_Success(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Set up JWT key
 	setupTestJWT(t, db)
 
-	h := NewHandler(db, db)
+	h := newTestHandler(db)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/setup",
 		strings.NewReader(`{"username":"admin","password":"password123"}`))
@@ -180,10 +177,8 @@ func TestHandleSetupPOST_AlreadyCompleted(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Set up JWT key
 	setupTestJWT(t, db)
 
-	// Insert a user first
 	hash, err := bcrypt.GenerateFromPassword([]byte("password123"), 12)
 	if err != nil {
 		t.Fatal(err)
@@ -191,7 +186,7 @@ func TestHandleSetupPOST_AlreadyCompleted(t *testing.T) {
 	_, _ = db.Exec("INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)",
 		"existinguser", string(hash), "admin")
 
-	h := NewHandler(db, db)
+	h := newTestHandler(db)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/setup",
 		strings.NewReader(`{"username":"newadmin","password":"password123"}`))
@@ -210,7 +205,7 @@ func TestHandleSetupPOST_InvalidJSON(t *testing.T) {
 
 	setupTestJWT(t, db)
 
-	h := NewHandler(db, db)
+	h := newTestHandler(db)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/setup",
 		strings.NewReader("{invalid json"))
@@ -229,7 +224,7 @@ func TestHandleSetupPOST_MissingFields(t *testing.T) {
 
 	setupTestJWT(t, db)
 
-	h := NewHandler(db, db)
+	h := newTestHandler(db)
 	w := httptest.NewRecorder()
 
 	tests := []struct {
@@ -266,7 +261,6 @@ func TestHandleSetupPOST_DuplicateUsername(t *testing.T) {
 
 	setupTestJWT(t, db)
 
-	// Insert a user first
 	hash, err := bcrypt.GenerateFromPassword([]byte("password123"), 12)
 	if err != nil {
 		t.Fatal(err)
@@ -274,7 +268,7 @@ func TestHandleSetupPOST_DuplicateUsername(t *testing.T) {
 	_, _ = db.Exec("INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)",
 		"duplicate", string(hash), "admin")
 
-	h := NewHandler(db, db)
+	h := newTestHandler(db)
 	w := httptest.NewRecorder()
 	r := newRequestWithUniqueIP(http.MethodPost, "/api/v1/setup",
 		`{"username":"duplicate","password":"password123"}`)
@@ -288,7 +282,6 @@ func TestHandleSetupPOST_DuplicateUsername(t *testing.T) {
 }
 
 // =============================================================================
-// Test HandleLoginPOST
 // =============================================================================
 
 func TestHandleLoginPOST_Success(t *testing.T) {
@@ -298,11 +291,10 @@ func TestHandleLoginPOST_Success(t *testing.T) {
 	setupTestJWT(t, db)
 	ResetRateLimitStore()
 
-	// Insert a user
 	hash, _ := bcrypt.GenerateFromPassword([]byte("password123"), 12)
 	db.Exec("INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)", "loginuser", string(hash), "admin")
 
-	h := NewHandler(db, db)
+	h := newTestHandler(db)
 	w := httptest.NewRecorder()
 
 	tests := []struct {
@@ -333,7 +325,7 @@ func TestHandleLoginPOST_MissingFields(t *testing.T) {
 
 	setupTestJWT(t, db)
 
-	h := NewHandler(db, db)
+	h := newTestHandler(db)
 	w := httptest.NewRecorder()
 
 	tests := []struct {
@@ -364,7 +356,7 @@ func TestHandleLoginPOST_InvalidJSON(t *testing.T) {
 
 	setupTestJWT(t, db)
 
-	h := NewHandler(db, db)
+	h := newTestHandler(db)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/login",
 		strings.NewReader("{invalid json"))
@@ -377,7 +369,6 @@ func TestHandleLoginPOST_InvalidJSON(t *testing.T) {
 }
 
 // =============================================================================
-// Test HandleLogoutPOST
 // =============================================================================
 
 func TestHandleLogoutPOST_NoCookie(t *testing.T) {
@@ -386,7 +377,7 @@ func TestHandleLogoutPOST_NoCookie(t *testing.T) {
 
 	setupTestJWT(t, db)
 
-	h := NewHandler(db, db)
+	h := newTestHandler(db)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/logout", nil)
 
@@ -403,7 +394,7 @@ func TestHandleLogoutPOST_InvalidToken(t *testing.T) {
 
 	setupTestJWT(t, db)
 
-	h := NewHandler(db, db)
+	h := newTestHandler(db)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/logout", nil)
 	r.AddCookie(&http.Cookie{Name: "runic_access_token", Value: "invalid-token"})
@@ -416,7 +407,6 @@ func TestHandleLogoutPOST_InvalidToken(t *testing.T) {
 }
 
 // =============================================================================
-// Test HandleGetMe
 // =============================================================================
 
 func TestHandleGetMe_Success(t *testing.T) {
@@ -425,7 +415,7 @@ func TestHandleGetMe_Success(t *testing.T) {
 
 	setupTestJWT(t, db)
 
-	h := NewHandler(db, db)
+	h := newTestHandler(db)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)
 	r = r.WithContext(withAdminContext(context.Background()))
@@ -450,7 +440,6 @@ func TestHandleGetMe_Success(t *testing.T) {
 }
 
 // =============================================================================
-// Test HandleRefreshPOST
 // =============================================================================
 
 func TestHandleRefreshPOST_NoCookie(t *testing.T) {
@@ -459,7 +448,7 @@ func TestHandleRefreshPOST_NoCookie(t *testing.T) {
 
 	setupTestJWT(t, db)
 
-	h := NewHandler(db, db)
+	h := newTestHandler(db)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/auth/refresh", nil)
 
@@ -476,7 +465,7 @@ func TestHandleRefreshPOST_InvalidToken(t *testing.T) {
 
 	setupTestJWT(t, db)
 
-	h := NewHandler(db, db)
+	h := newTestHandler(db)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/auth/refresh", nil)
 	r.AddCookie(&http.Cookie{Name: "runic_refresh_token", Value: "invalid-token"})
@@ -489,7 +478,6 @@ func TestHandleRefreshPOST_InvalidToken(t *testing.T) {
 }
 
 // =============================================================================
-// Test HandleSetup (router handler)
 // =============================================================================
 
 func TestHandleSetup_MethodNotAllowed(t *testing.T) {
@@ -499,7 +487,7 @@ func TestHandleSetup_MethodNotAllowed(t *testing.T) {
 
 	setupTestJWT(t, db)
 
-	h := NewHandler(db, db)
+	h := newTestHandler(db)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/setup", nil)
 
@@ -517,7 +505,7 @@ func TestHandleSetup_GET(t *testing.T) {
 
 	setupTestJWT(t, db)
 
-	h := NewHandler(db, db)
+	h := newTestHandler(db)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/setup", nil)
 
@@ -535,7 +523,7 @@ func TestHandleSetup_POST(t *testing.T) {
 
 	setupTestJWT(t, db)
 
-	h := NewHandler(db, db)
+	h := newTestHandler(db)
 	w := httptest.NewRecorder()
 	r := newRequestWithUniqueIP(http.MethodPost, "/api/v1/setup",
 		`{"username":"setupuser","password":"password123"}`)
@@ -551,17 +539,13 @@ func TestHandleSetup_POST(t *testing.T) {
 	}
 }
 
-// setupTestJWT sets up the JWT key for testing
 func setupTestJWT(t *testing.T, db *sql.DB) {
-	// Set a test JWT key - note that auth.InitJwtKey uses the secret from DB
-	// For testing we need to directly set the JwtKey
 	testKey := []byte("test-secret-key-for-testing-purposes-32")
 	auth.JwtKeyMu.Lock()
 	auth.JwtKey = testKey
 	auth.JwtKeyMu.Unlock()
 
-	// Set the auth DB for revocation checks
-	auth.SetDB(db)
+	auth.SetTokenStore(store.NewTokenStore(db))
 }
 
 // =============================================================================

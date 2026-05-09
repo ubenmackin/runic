@@ -11,7 +11,6 @@ import (
 	"time"
 )
 
-// Test ParseLogLine with RUNIC-DROP-I action (INPUT chain)
 func TestParseLogLine_RunicDrop(t *testing.T) {
 	line := `Jan 15 12:00:00 hostname kernel: [RUNIC-DROP-I] IN=eth0 SRC=192.168.1.100 DST=192.168.1.1 PROTO=TCP SPT=443 DPT=80`
 
@@ -34,7 +33,6 @@ func TestParseLogLine_RunicDrop(t *testing.T) {
 	}
 }
 
-// Test ParseLogLine with RUNIC-DROP-O action (OUTPUT chain)
 func TestParseLogLine_RunicDropOutput(t *testing.T) {
 	line := `Jan 15 12:00:00 hostname kernel: [RUNIC-DROP-O] OUT=eth0 SRC=192.168.1.100 DST=192.168.1.1 PROTO=TCP SPT=443 DPT=80`
 
@@ -53,7 +51,6 @@ func TestParseLogLine_RunicDropOutput(t *testing.T) {
 	}
 }
 
-// Test ParseLogLine with RUNIC-ACCEPT action
 func TestParseLogLine_RunicAccept(t *testing.T) {
 	line := `Jan 15 12:00:00 hostname kernel: [RUNIC-ACCEPT] OUT=eth0 SRC=10.0.0.5 DST=8.8.8.8 PROTO=UDP SPT=53 DPT=53`
 
@@ -67,7 +64,6 @@ func TestParseLogLine_RunicAccept(t *testing.T) {
 	}
 }
 
-// Test ParseLogLine with syslog timestamp format
 func TestParseLogLine_SyslogTimestamp(t *testing.T) {
 	line := `Jan 15 14:30:45 server01 kernel: [RUNIC-DROP-I] SRC=192.168.1.50 DST=10.0.0.1 PROTO=ICMP`
 
@@ -82,7 +78,6 @@ func TestParseLogLine_SyslogTimestamp(t *testing.T) {
 	}
 }
 
-// Test ParseLogLine with ISO8601 timestamp format
 func TestParseLogLine_ISO8601Timestamp(t *testing.T) {
 	line := `2026-03-31T15:48:14.402322-07:00 hostname kernel: [RUNIC-DROP-O] SRC=192.168.1.100 DST=192.168.1.1 PROTO=TCP`
 
@@ -97,7 +92,6 @@ func TestParseLogLine_ISO8601Timestamp(t *testing.T) {
 	}
 }
 
-// Test ParseLogLine extracts source IP (SRC=)
 func TestParseLogLine_SrcIP(t *testing.T) {
 	line := `Jan 15 12:00:00 hostname kernel: [RUNIC-DROP-I] SRC=192.168.1.100 DST=192.168.1.1 PROTO=TCP`
 
@@ -111,7 +105,6 @@ func TestParseLogLine_SrcIP(t *testing.T) {
 	}
 }
 
-// Test ParseLogLine extracts destination IP (DST=)
 func TestParseLogLine_DstIP(t *testing.T) {
 	line := `Jan 15 12:00:00 hostname kernel: [RUNIC-DROP-O] SRC=192.168.1.100 DST=192.168.1.1 PROTO=TCP`
 
@@ -125,7 +118,6 @@ func TestParseLogLine_DstIP(t *testing.T) {
 	}
 }
 
-// Test ParseLogLine extracts protocol (PROTO=)
 func TestParseLogLine_Protocol(t *testing.T) {
 	line := `Jan 15 12:00:00 hostname kernel: [RUNIC-ACCEPT] SRC=10.0.0.1 DST=10.0.0.2 PROTO=TCP`
 
@@ -139,7 +131,6 @@ func TestParseLogLine_Protocol(t *testing.T) {
 	}
 }
 
-// Test ParseLogLine extracts source port (SPT=)
 func TestParseLogLine_SrcPort(t *testing.T) {
 	line := `Jan 15 12:00:00 hostname kernel: [RUNIC-DROP-I] SRC=192.168.1.100 DST=192.168.1.1 PROTO=TCP SPT=443 DPT=80`
 
@@ -153,7 +144,6 @@ func TestParseLogLine_SrcPort(t *testing.T) {
 	}
 }
 
-// Test ParseLogLine extracts destination port (DPT=)
 func TestParseLogLine_DstPort(t *testing.T) {
 	line := `Jan 15 12:00:00 hostname kernel: [RUNIC-DROP-O] SRC=192.168.1.100 DST=192.168.1.1 PROTO=TCP SPT=443 DPT=80`
 
@@ -167,7 +157,6 @@ func TestParseLogLine_DstPort(t *testing.T) {
 	}
 }
 
-// Test ParseLogLine extracts direction (IN=, OUT=) and prefix
 func TestParseLogLine_Direction(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -225,7 +214,6 @@ func TestParseLogLine_Direction(t *testing.T) {
 	}
 }
 
-// Test ParseLogLine handles line without kernel prefix
 func TestParseLogLine_NoKernelPrefix(t *testing.T) {
 	line := `[RUNIC-DROP-I] SRC=192.168.1.100 DST=192.168.1.1 PROTO=TCP`
 
@@ -250,7 +238,6 @@ func TestParseLogLine_NoKernelPrefix(t *testing.T) {
 	}
 }
 
-// Test ParseLogLine handles missing fields gracefully
 func TestParseLogLine_MissingFields(t *testing.T) {
 	line := `Jan 15 12:00:00 hostname kernel: [RUNIC-DROP-I]`
 
@@ -281,7 +268,6 @@ func TestParseLogLine_MissingFields(t *testing.T) {
 	}
 }
 
-// Test NewShipper creates Shipper with correct fields
 func TestNewShipper(t *testing.T) {
 	client := &http.Client{}
 	controlPlaneURL := "https://control.example.com"
@@ -316,9 +302,7 @@ func TestNewShipper(t *testing.T) {
 	}
 }
 
-// Test Shipper.Run handles log file not existing
 func TestShipper_Run_FileNotExists(t *testing.T) {
-	// Create a shipper with a non-existent log path
 	shipper := NewShipper(&http.Client{}, "http://localhost", "token", "host1", "/nonexistent/path/log.log")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -328,7 +312,6 @@ func TestShipper_Run_FileNotExists(t *testing.T) {
 	shipper.Run(ctx)
 }
 
-// Test Shipper.ship sends batch to control plane
 func TestShipper_Ship_Success(t *testing.T) {
 	var receivedBody map[string]interface{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -383,7 +366,6 @@ func TestShipper_Ship_Success(t *testing.T) {
 	}
 }
 
-// Test Shipper.ship handles HTTP error gracefully
 func TestShipper_Ship_HTTPError(t *testing.T) {
 	// Server that returns 500 error
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -406,7 +388,6 @@ func TestShipper_Ship_HTTPError(t *testing.T) {
 	shipper.ship(ctx, batch)
 }
 
-// Test ParseLogLine handles IPv6 addresses
 func TestParseLogLine_IPv6(t *testing.T) {
 	line := `Jan 15 12:00:00 hostname kernel: [RUNIC-DROP-I] SRC=2001:0db8:85a3:0000:0000:8a2e:0370:7334 DST=::1 PROTO=TCP`
 
@@ -424,7 +405,6 @@ func TestParseLogLine_IPv6(t *testing.T) {
 	}
 }
 
-// Test ParseLogLine handles ICMP protocol
 func TestParseLogLine_ICMP(t *testing.T) {
 	line := `Jan 15 12:00:00 hostname kernel: [RUNIC-DROP-I] SRC=192.168.1.100 DST=192.168.1.1 PROTO=ICMP`
 
@@ -446,7 +426,6 @@ func TestParseLogLine_ICMP(t *testing.T) {
 	}
 }
 
-// Test batch size limit (max 100 events)
 func TestShipper_BatchSizeLimit(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -455,7 +434,6 @@ func TestShipper_BatchSizeLimit(t *testing.T) {
 
 	shipper := NewShipper(server.Client(), server.URL, "test-token", "host-123", "/var/log/kern.log")
 
-	// Create a batch of 100 events
 	batch := make([]LogEvent, 100)
 	for i := 0; i < 100; i++ {
 		batch[i] = LogEvent{
@@ -470,7 +448,6 @@ func TestShipper_BatchSizeLimit(t *testing.T) {
 	shipper.ship(ctx, batch)
 }
 
-// Test ParseLogLine handles empty line
 func TestParseLogLine_EmptyLine(t *testing.T) {
 	line := ""
 
@@ -489,7 +466,6 @@ func TestParseLogLine_EmptyLine(t *testing.T) {
 	}
 }
 
-// Test ParseLogLine with lowercase action
 func TestParseLogLine_LowercaseAction(t *testing.T) {
 	line := `Jan 15 12:00:00 hostname kernel: DROP SRC=192.168.1.100 DST=192.168.1.1 PROTO=TCP`
 
@@ -504,7 +480,6 @@ func TestParseLogLine_LowercaseAction(t *testing.T) {
 	}
 }
 
-// Test batch logic with ticker interval simulation
 func TestShipper_BatchInterval(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -526,7 +501,6 @@ func TestShipper_BatchInterval(t *testing.T) {
 	}
 }
 
-// Test ParseLogLine with various timestamp formats
 func TestParseLogLine_TimestampFormats(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -564,12 +538,9 @@ func TestParseLogLine_TimestampFormats(t *testing.T) {
 	}
 }
 
-// Test filtering of non-RUNIC lines in tail
 func TestShipper_TailFiltersNonRunicLines(t *testing.T) {
-	// Create a temporary log file
 	tmpFile := t.TempDir() + "/test.log"
 
-	// Create file first, then write RUNIC line after seeking to end
 	// First write the non-RUNIC lines
 	initialContent := `Jan 15 12:00:00 hostname kernel: Some other log message
 Jan 15 12:00:01 hostname kernel: Another message`

@@ -11,7 +11,6 @@ import (
 	"github.com/gorilla/mux"
 )
 
-// TestRespondJSON tests the RespondJSON function with various payloads
 func TestRespondJSON(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -111,22 +110,18 @@ func TestRespondJSON(t *testing.T) {
 			w := httptest.NewRecorder()
 			RespondJSON(w, tt.status, tt.data)
 
-			// Check status code
 			if w.Code != tt.wantStatus {
 				t.Errorf("RespondJSON() status = %v, want %v", w.Code, tt.wantStatus)
 			}
 
-			// Check content type header
 			if ct := w.Header().Get("Content-Type"); ct != "application/json" {
 				t.Errorf("RespondJSON() Content-Type = %v, want application/json", ct)
 			}
 
-			// Check body matches expected
 			if tt.wantBody != "" && strings.TrimSpace(w.Body.String()) != tt.wantBody {
 				t.Errorf("RespondJSON() body = %v, want %v", strings.TrimSpace(w.Body.String()), tt.wantBody)
 			}
 
-			// Check body - verify JSON is valid
 			body := w.Body.String()
 			var result interface{}
 			if err := json.Unmarshal([]byte(body), &result); err != nil {
@@ -136,7 +131,6 @@ func TestRespondJSON(t *testing.T) {
 	}
 }
 
-// TestRespondError tests the RespondError function with different error messages
 func TestRespondError(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -208,17 +202,14 @@ func TestRespondError(t *testing.T) {
 			w := httptest.NewRecorder()
 			RespondError(w, tt.status, tt.msg)
 
-			// Check status code
 			if w.Code != tt.wantStatus {
 				t.Errorf("RespondError() status = %v, want %v", w.Code, tt.wantStatus)
 			}
 
-			// Check content type header
 			if ct := w.Header().Get("Content-Type"); ct != "application/json" {
 				t.Errorf("RespondError() Content-Type = %v, want application/json", ct)
 			}
 
-			// Check body contains error field
 			var result map[string]string
 			if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
 				t.Errorf("RespondError() body is not valid JSON: %v", err)
@@ -231,7 +222,6 @@ func TestRespondError(t *testing.T) {
 	}
 }
 
-// TestParseIDParam tests the ParseIDParam function with valid and invalid inputs
 func TestParseIDParam(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -314,10 +304,8 @@ func TestParseIDParam(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Create a mock request with a safe URL path
 			req := httptest.NewRequest("GET", "/test", nil)
 
-			// Set mux variables with the actual test value
 			vars := map[string]string{tt.paramName: tt.paramVal}
 			req = mux.SetURLVars(req, vars)
 
@@ -339,7 +327,6 @@ func TestParseIDParam(t *testing.T) {
 	}
 }
 
-// TestParseIDParamMissingParam tests that ParseIDParam handles missing parameters
 func TestParseIDParamMissingParam(t *testing.T) {
 	req := httptest.NewRequest("GET", "/test", nil)
 	// No mux vars set - simulates missing parameter
@@ -353,7 +340,6 @@ func TestParseIDParamMissingParam(t *testing.T) {
 	}
 }
 
-// TestParseIDParamMultipleVars tests parsing when multiple route variables are present
 func TestParseIDParamMultipleVars(t *testing.T) {
 	req := httptest.NewRequest("GET", "/peers/123/policies/456", nil)
 	vars := map[string]string{
@@ -362,7 +348,6 @@ func TestParseIDParamMultipleVars(t *testing.T) {
 	}
 	req = mux.SetURLVars(req, vars)
 
-	// Parse peer_id
 	peerID, err := ParseIDParam(req, "peer_id")
 	if err != nil {
 		t.Errorf("ParseIDParam(peer_id) unexpected error: %v", err)
@@ -371,7 +356,6 @@ func TestParseIDParamMultipleVars(t *testing.T) {
 		t.Errorf("ParseIDParam(peer_id) = %d, want 123", peerID)
 	}
 
-	// Parse policy_id
 	policyID, err := ParseIDParam(req, "policy_id")
 	if err != nil {
 		t.Errorf("ParseIDParam(policy_id) unexpected error: %v", err)
@@ -381,7 +365,6 @@ func TestParseIDParamMultipleVars(t *testing.T) {
 	}
 }
 
-// TestRespondJSONMultipleCalls tests that multiple calls set correct headers
 func TestRespondJSONMultipleCalls(t *testing.T) {
 	w := httptest.NewRecorder()
 
@@ -399,7 +382,6 @@ func TestRespondJSONMultipleCalls(t *testing.T) {
 	}
 }
 
-// TestParseUintSafe tests the ParseUintSafe function with various inputs
 func TestParseUintSafe(t *testing.T) {
 	tests := []struct {
 		name    string

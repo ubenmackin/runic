@@ -12,7 +12,6 @@ import (
 	"runic/internal/common/log"
 )
 
-// PeerStatus represents the online/offline status of a peer.
 type PeerStatus string
 
 const (
@@ -24,14 +23,12 @@ const (
 	DefaultGracePeriod = 5 * time.Minute
 )
 
-// peerInfo holds information about a peer.
 type peerInfo struct {
 	hostname      string
 	ipAddress     string
 	lastHeartbeat time.Time
 }
 
-// PeerMonitor monitors peer online/offline status and triggers alerts on state changes.
 type PeerMonitor struct {
 	database *sql.DB
 	service  *Service
@@ -50,7 +47,6 @@ type PeerMonitor struct {
 	mu sync.RWMutex
 }
 
-// NewPeerMonitor creates a new peer monitor.
 func NewPeerMonitor(database *sql.DB, service *Service) *PeerMonitor {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &PeerMonitor{
@@ -67,19 +63,16 @@ func NewPeerMonitor(database *sql.DB, service *Service) *PeerMonitor {
 	}
 }
 
-// SetLogger sets a custom logger for the peer monitor.
 func (m *PeerMonitor) SetLogger(logger *slog.Logger) {
 	m.logger = logger
 }
 
-// isInGracePeriod returns true if the monitor is still within the startup grace period.
 // During this period, peer online alerts are suppressed to prevent false positives
 // that occur when the server restarts and peers were already online.
 func (m *PeerMonitor) isInGracePeriod() bool {
 	return time.Since(m.startTime) < m.gracePeriod
 }
 
-// Start begins monitoring peer status.
 func (m *PeerMonitor) Start() {
 	m.logger.Info("starting peer monitor")
 	m.wg.Add(1)
@@ -89,7 +82,6 @@ func (m *PeerMonitor) Start() {
 	}()
 }
 
-// Stop stops the peer monitor.
 func (m *PeerMonitor) Stop() {
 	close(m.stopCh)
 	m.wg.Wait()

@@ -8,7 +8,6 @@ import (
 	"runic/internal/agent/identity"
 )
 
-// TestNewReturnsNonNil tests that New() returns a non-nil Agent.
 func TestNewReturnsNonNil(t *testing.T) {
 	agent := New("/nonexistent/config.json", "http://localhost:8080")
 	if agent == nil {
@@ -16,7 +15,6 @@ func TestNewReturnsNonNil(t *testing.T) {
 	}
 }
 
-// TestNewReturnsProperlyInitializedAgent tests that New() returns a properly initialized Agent.
 func TestNewReturnsProperlyInitializedAgent(t *testing.T) {
 	agent := New("/tmp/test-config.json", "http://localhost:8080")
 	if agent == nil {
@@ -28,7 +26,6 @@ func TestNewReturnsProperlyInitializedAgent(t *testing.T) {
 	// The actual behavior is tested by core package tests.
 }
 
-// TestNewWithEmptyURL tests that New() works with empty control plane URL.
 func TestNewWithEmptyURL(t *testing.T) {
 	agent := New("/tmp/test-config.json", "")
 	if agent == nil {
@@ -36,9 +33,7 @@ func TestNewWithEmptyURL(t *testing.T) {
 	}
 }
 
-// TestAgentTypeAlias tests that Agent type alias works correctly.
 func TestAgentTypeAlias(t *testing.T) {
-	// Create an agent via the agent package
 	agent := New("/tmp/test-config.json", "http://localhost:8080")
 
 	// The Agent type should be assignable to core.Agent
@@ -55,9 +50,7 @@ func TestAgentTypeAlias(t *testing.T) {
 	}
 }
 
-// TestConfigTypeAlias tests that Config type alias works correctly.
 func TestConfigTypeAlias(t *testing.T) {
-	// Create a config via the agent package
 	cfg := &Config{
 		ControlPlaneURL: "http://localhost:8080",
 		HostID:          "test-host",
@@ -89,7 +82,6 @@ func TestConfigTypeAlias(t *testing.T) {
 	}
 }
 
-// TestConfigTypeAliasFields tests that Config type alias has all expected fields.
 func TestConfigTypeAliasFields(t *testing.T) {
 	cfg := &Config{
 		ControlPlaneURL:              "http://localhost:8080",
@@ -133,15 +125,12 @@ func TestConfigTypeAliasFields(t *testing.T) {
 	}
 }
 
-// TestNewWrapperDelegatesToCore tests that New() delegates to core.New().
 func TestNewWrapperDelegatesToCore(t *testing.T) {
 	configPath := "/tmp/test-config.json"
 	controlPlaneURL := "http://localhost:9090"
 
-	// Create agent via agent package
 	agentPkgAgent := New(configPath, controlPlaneURL)
 
-	// Create agent via core package
 	coreAgent := core.New(configPath, controlPlaneURL)
 
 	// Both should return non-nil
@@ -158,7 +147,6 @@ func TestNewWrapperDelegatesToCore(t *testing.T) {
 	var _ *Agent = coreAgent
 }
 
-// TestNewWithDifferentURLs tests that New() handles various URL formats.
 func TestNewWithDifferentURLs(t *testing.T) {
 	tests := []struct {
 		name string
@@ -181,7 +169,6 @@ func TestNewWithDifferentURLs(t *testing.T) {
 	}
 }
 
-// TestConfigDefaultsFromIdentity tests that Config uses identity package defaults.
 func TestConfigDefaultsFromIdentity(t *testing.T) {
 	// Verify that default values from identity package are accessible
 	// via the type alias
@@ -199,7 +186,6 @@ func TestConfigDefaultsFromIdentity(t *testing.T) {
 	}
 }
 
-// TestConfigMethodsWork tests that Config type alias methods work correctly.
 func TestConfigMethodsWork(t *testing.T) {
 	tests := []struct {
 		name           string

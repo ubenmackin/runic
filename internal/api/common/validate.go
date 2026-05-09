@@ -7,14 +7,12 @@ import (
 	"strings"
 )
 
-// hostnameRegex validates hostnames: 1-253 chars, alphanumeric with hyphens and dots,
 // must start and end with alphanumeric (single-char hostnames allowed).
 var hostnameRegex = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9.\-]*[a-zA-Z0-9])?$|^[a-zA-Z0-9]$`)
 
-// nameRegex validates names: alphanumeric with underscores, hyphens, and spaces.
 var nameRegex = regexp.MustCompile(`^[a-zA-Z0-9_\- ]{1,100}$`)
 
-// ValidateHostname validates a hostname per RFC 1123 requirements:
+// ValidateHostname validates that a hostname conforms to RFC standards:
 // - 1-253 characters
 // - alphanumeric with hyphens and dots
 // - must start and end with alphanumeric
@@ -31,7 +29,7 @@ func ValidateHostname(h string) error {
 	return nil
 }
 
-// ValidateIPAddress validates an IP address or CIDR notation.
+// ValidateIPAddress validates that the input is a valid IP address or CIDR notation.
 // Returns an error if the input is neither a valid IP nor a valid CIDR.
 func ValidateIPAddress(ip string) error {
 	if ip == "" {
@@ -49,7 +47,7 @@ func ValidateIPAddress(ip string) error {
 	return nil
 }
 
-// ValidateName validates a name field:
+// ValidateName validates that a name conforms to the application's naming rules:
 // - 1-100 characters
 // - alphanumeric with underscores, hyphens, and spaces
 func ValidateName(name string) error {

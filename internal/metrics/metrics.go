@@ -10,7 +10,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-// Metrics holds all metric objects for the application.
 type Metrics struct {
 	// httpRequestsTotal tracks total HTTP requests by endpoint, method, and status
 	httpRequestsTotal *prometheus.CounterVec
@@ -43,7 +42,6 @@ type Metrics struct {
 	registry prometheus.Registerer
 }
 
-// defaultMetrics is the default Metrics instance that uses the default Prometheus registry.
 var defaultMetrics *Metrics
 
 func init() {
@@ -51,8 +49,7 @@ func init() {
 	defaultMetrics = NewMetrics(prometheus.DefaultRegisterer)
 }
 
-// NewMetrics creates a new Metrics instance with the given registerer.
-// If registerer is nil, it uses prometheus.DefaultRegisterer.
+// NewMetrics uses prometheus.DefaultRegisterer if registerer is nil.
 func NewMetrics(registerer prometheus.Registerer) *Metrics {
 	if registerer == nil {
 		registerer = prometheus.DefaultRegisterer
@@ -125,33 +122,28 @@ func NewMetrics(registerer prometheus.Registerer) *Metrics {
 	return m
 }
 
-// RecordRequest increments the request counter and records request duration.
-// This function uses the default Metrics instance.
+// RecordRequest uses the default Metrics instance.
 func RecordRequest(endpoint, method string, statusCode int, duration time.Duration) {
 	defaultMetrics.RecordRequest(endpoint, method, statusCode, duration)
 }
 
-// RecordRequest increments the request counter and records request duration.
 func (m *Metrics) RecordRequest(endpoint, method string, statusCode int, duration time.Duration) {
 	status := strconv.Itoa(statusCode)
 	m.httpRequestsTotal.WithLabelValues(endpoint, method, status).Inc()
 	m.httpRequestDurationSeconds.WithLabelValues(endpoint, method).Observe(duration.Seconds())
 }
 
-// RecordError increments the error counter.
-// This function uses the default Metrics instance.
+// RecordError uses the default Metrics instance.
 func RecordError(endpoint string, errorType string, statusCode int) {
 	defaultMetrics.RecordError(endpoint, errorType, statusCode)
 }
 
-// RecordError increments the error counter.
 func (m *Metrics) RecordError(endpoint string, errorType string, statusCode int) {
 	status := strconv.Itoa(statusCode)
 	m.httpErrorsTotal.WithLabelValues(endpoint, errorType, status).Inc()
 }
 
-// Handler returns the Prometheus metrics HTTP handler.
-// This uses the default Prometheus registry.
+// Handler uses the default Prometheus registry.
 func Handler() http.Handler {
 	return promhttp.Handler()
 }

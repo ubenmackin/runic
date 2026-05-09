@@ -14,8 +14,7 @@ import (
 	"runic/internal/models"
 )
 
-// Register performs initial registration with the control plane.
-// It returns the updated config with credentials.
+// Register registers the agent with the control plane. It returns the updated config with credentials.
 func Register(ctx context.Context, client common.HTTPClient, cfg *Config, version string, saveFunc func() error, allIPs []string) error {
 	hostname, err := os.Hostname()
 	if err != nil {
@@ -85,7 +84,6 @@ func Register(ctx context.Context, client common.HTTPClient, cfg *Config, versio
 	return nil
 }
 
-// detectKernelVersion returns the kernel version from /proc/version.
 func detectKernelVersion() string {
 	data, err := os.ReadFile("/proc/version")
 	if err != nil {
@@ -100,7 +98,6 @@ func detectKernelVersion() string {
 	return strings.TrimSpace(string(data))
 }
 
-// detectDocker returns true if /var/run/docker.sock exists and is a socket.
 func detectDocker() bool {
 	fi, err := os.Stat("/var/run/docker.sock")
 	if err != nil {
@@ -109,7 +106,6 @@ func detectDocker() bool {
 	return fi.Mode()&os.ModeSocket != 0
 }
 
-// detectLocalIP returns the primary non-loopback IPv4 address.
 func detectLocalIP() string {
 	ifaces, err := net.Interfaces()
 	if err != nil {

@@ -14,7 +14,6 @@ import (
 	"runic/internal/agent/identity"
 )
 
-// helperConfig creates a minimal config for testing.
 func helperConfig() *identity.Config {
 	return &identity.Config{
 		ControlPlaneURL: "http://localhost:8080",
@@ -24,7 +23,6 @@ func helperConfig() *identity.Config {
 	}
 }
 
-// helperConfigPath creates a temp config file and returns its path.
 func helperConfigPath(t *testing.T, cfg *identity.Config) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -39,7 +37,6 @@ func helperConfigPath(t *testing.T, cfg *identity.Config) string {
 	return path
 }
 
-// TestNewManager verifies the manager initializes correctly.
 func TestNewManager(t *testing.T) {
 	cfg := helperConfig()
 	configPath := helperConfigPath(t, cfg)
@@ -63,7 +60,6 @@ func TestNewManager(t *testing.T) {
 	}
 }
 
-// TestCheckAndRotate_NoRotationPending verifies no-op when no rotation is pending.
 func TestCheckAndRotate_NoRotationPending(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/v1/agent/check-rotation" {
@@ -90,7 +86,6 @@ func TestCheckAndRotate_NoRotationPending(t *testing.T) {
 	}
 }
 
-// TestCheckAndRotate_NoRotationPending_NotFound verifies 404 is treated as no rotation pending.
 func TestCheckAndRotate_NoRotationPending_NotFound(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/v1/agent/check-rotation" {
@@ -117,7 +112,6 @@ func TestCheckAndRotate_NoRotationPending_NotFound(t *testing.T) {
 	}
 }
 
-// TestCheckAndRotate_RotationSuccess verifies the full rotation workflow succeeds.
 func TestCheckAndRotate_RotationSuccess(t *testing.T) {
 	callCount := 0
 	var mu sync.Mutex
@@ -197,7 +191,6 @@ func TestCheckAndRotate_RotationSuccess(t *testing.T) {
 	}
 }
 
-// TestCheckAndRotate_TokenExpired verifies rotation fails when token is expired/invalid.
 func TestCheckAndRotate_TokenExpired(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -240,7 +233,6 @@ func TestCheckAndRotate_TokenExpired(t *testing.T) {
 	}
 }
 
-// TestCheckAndRotate_KeyTestFails verifies fallback when new key test fails.
 func TestCheckAndRotate_KeyTestFails(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -286,7 +278,6 @@ func TestCheckAndRotate_KeyTestFails(t *testing.T) {
 	}
 }
 
-// TestCheckAndRotate_ConfirmFailsNonFatal verifies confirm-rotation failure is non-fatal.
 func TestCheckAndRotate_ConfirmFailsNonFatal(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -336,7 +327,6 @@ func TestCheckAndRotate_ConfirmFailsNonFatal(t *testing.T) {
 	}
 }
 
-// TestCheckAndRotate_SkipsInProgress verifies rotation is skipped if already in progress.
 func TestCheckAndRotate_SkipsInProgress(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Error("HTTP request should not be made when rotation is in progress")
@@ -365,7 +355,6 @@ func TestCheckAndRotate_SkipsInProgress(t *testing.T) {
 	}
 }
 
-// TestCheckAndRotate_SkipsTesting verifies rotation is skipped if testing is in progress.
 func TestCheckAndRotate_SkipsTesting(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Error("HTTP request should not be made when testing is in progress")
@@ -393,7 +382,6 @@ func TestCheckAndRotate_SkipsTesting(t *testing.T) {
 	}
 }
 
-// TestCheckAndRotate_EmptyKeyFromServer verifies rotation fails when server returns empty key.
 func TestCheckAndRotate_EmptyKeyFromServer(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -431,7 +419,6 @@ func TestCheckAndRotate_EmptyKeyFromServer(t *testing.T) {
 	}
 }
 
-// TestCheckAndRotate_UnexpectedStatusCode verifies rotation fails on unexpected check-rotation status.
 func TestCheckAndRotate_UnexpectedStatusCode(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -456,7 +443,6 @@ func TestCheckAndRotate_UnexpectedStatusCode(t *testing.T) {
 	}
 }
 
-// TestGetState verifies GetState returns the correct state thread-safely.
 func TestGetState(t *testing.T) {
 	cfg := helperConfig()
 	configPath := helperConfigPath(t, cfg)
@@ -478,7 +464,6 @@ func TestGetState(t *testing.T) {
 	}
 }
 
-// TestGetLastRotation verifies GetLastRotation returns the correct timestamp.
 func TestGetLastRotation(t *testing.T) {
 	cfg := helperConfig()
 	configPath := helperConfigPath(t, cfg)
@@ -490,7 +475,6 @@ func TestGetLastRotation(t *testing.T) {
 		t.Error("GetLastRotation() should be zero initially")
 	}
 
-	// Set a known time
 	expected := time.Now().UTC()
 	manager.mu.Lock()
 	manager.lastRotation = expected
@@ -501,7 +485,6 @@ func TestGetLastRotation(t *testing.T) {
 	}
 }
 
-// TestUpdateConfigKey_InvalidPath verifies config update fails with invalid path.
 func TestUpdateConfigKey_InvalidPath(t *testing.T) {
 	cfg := helperConfig()
 	configPath := "/nonexistent/path/config.json"
@@ -514,12 +497,10 @@ func TestUpdateConfigKey_InvalidPath(t *testing.T) {
 	}
 }
 
-// TestUpdateConfigKey_CorruptConfig verifies config update fails with corrupt config file.
 func TestUpdateConfigKey_CorruptConfig(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
 
-	// Write corrupt JSON
 	if err := os.WriteFile(path, []byte("not-valid-json"), 0600); err != nil {
 		t.Fatalf("failed to write corrupt config: %v", err)
 	}
@@ -533,7 +514,6 @@ func TestUpdateConfigKey_CorruptConfig(t *testing.T) {
 	}
 }
 
-// TestUpdateConfigKey_Success verifies config file is updated correctly.
 func TestUpdateConfigKey_Success(t *testing.T) {
 	cfg := helperConfig()
 	configPath := helperConfigPath(t, cfg)
@@ -572,7 +552,6 @@ func TestUpdateConfigKey_Success(t *testing.T) {
 	}
 }
 
-// TestCheckAndRotate_ConfigUpdateFails verifies fallback when config file update fails.
 func TestCheckAndRotate_ConfigUpdateFails(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -604,7 +583,6 @@ func TestCheckAndRotate_ConfigUpdateFails(t *testing.T) {
 
 	manager := NewManager(cfg, configPath, server.Client(), server.URL, "host-test-peer")
 
-	// Set state to testing to simulate post-key-retrieval state
 	manager.mu.Lock()
 	manager.state = StateTesting
 	manager.newKey = "new-hmac-key-abcdef123456789012345678901234"
@@ -618,7 +596,6 @@ func TestCheckAndRotate_ConfigUpdateFails(t *testing.T) {
 	}
 }
 
-// TestRotationStateConstants verifies all state constants are defined.
 func TestRotationStateConstants(t *testing.T) {
 	states := []RotationState{
 		StateIdle,
@@ -636,7 +613,6 @@ func TestRotationStateConstants(t *testing.T) {
 	}
 }
 
-// TestCheckAndRotate_CheckRotationReturnsInvalidJSON verifies handling of malformed JSON response.
 func TestCheckAndRotate_CheckRotationReturnsInvalidJSON(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -662,7 +638,6 @@ func TestCheckAndRotate_CheckRotationReturnsInvalidJSON(t *testing.T) {
 	}
 }
 
-// TestCheckAndRotate_RotateKeyReturnsInvalidJSON verifies handling of malformed key response.
 func TestCheckAndRotate_RotateKeyReturnsInvalidJSON(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {

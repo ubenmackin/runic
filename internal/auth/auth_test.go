@@ -9,13 +9,13 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"runic/internal/store"
 	"runic/internal/testutil"
 	"strings"
 	"testing"
 	"time"
 )
 
-// TestGenerateToken tests JWT token generation
 func TestGenerateToken(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -65,7 +65,6 @@ func TestGenerateToken(t *testing.T) {
 	}
 }
 
-// TestValidateToken tests JWT token validation
 func TestValidateToken(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -103,7 +102,6 @@ func TestValidateToken(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var token string
 			if tt.token == "" && tt.username != "" {
-				// Generate a valid token
 				var err error
 				token, err = GenerateToken(tt.username, "viewer", 1*time.Hour)
 				if err != nil {
@@ -131,10 +129,8 @@ func TestValidateToken(t *testing.T) {
 	}
 }
 
-// TestTokenExpiration tests token expiration handling
 func TestTokenExpiration(t *testing.T) {
 	// Note: This test requires mocking time or using short expiration times
-	// For now, we'll test the structure of the expiration claim
 
 	username := "testuser"
 	token, err := GenerateToken(username, "viewer", 24*time.Hour)
@@ -164,7 +160,6 @@ func TestTokenExpiration(t *testing.T) {
 	}
 }
 
-// TestMalformedToken tests malformed token handling
 func TestMalformedToken(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -221,7 +216,6 @@ func TestMalformedToken(t *testing.T) {
 	}
 }
 
-// TestMiddleware tests authentication middleware
 func TestMiddleware(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -274,7 +268,6 @@ func TestMiddleware(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Create a test handler to be wrapped by middleware
 			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusOK)
 				w.Write([]byte("success"))
@@ -283,19 +276,16 @@ func TestMiddleware(t *testing.T) {
 			// Wrap the handler with middleware
 			wrappedHandler := Middleware(handler)
 
-			// Create a test request
 			req := httptest.NewRequest("GET", "/test", nil)
 			if tt.authHeader != "" {
 				req.Header.Set("Authorization", tt.authHeader)
 			}
 
-			// Create a test response recorder
 			w := httptest.NewRecorder()
 
 			// Serve the request
 			wrappedHandler.ServeHTTP(w, req)
 
-			// Check the response
 			if w.Code != tt.wantStatusCode {
 				t.Errorf("expected status %d, got %d: %s", tt.wantStatusCode, w.Code, w.Body.String())
 			}
@@ -317,11 +307,9 @@ func TestMiddleware(t *testing.T) {
 	}
 }
 
-// TestTokenConsistency tests that tokens are consistent and reproducible
 func TestTokenConsistency(t *testing.T) {
 	username := "testuser"
 
-	// Generate two tokens for the same username
 	token1, err1 := GenerateToken(username, "viewer", 1*time.Hour)
 	token2, err2 := GenerateToken(username, "viewer", 1*time.Hour)
 
@@ -347,7 +335,6 @@ func TestTokenConsistency(t *testing.T) {
 	}
 }
 
-// TestClaimsStructure tests JWT claims structure
 func TestClaimsStructure(t *testing.T) {
 	username := "testuser"
 	token, err := GenerateToken(username, "viewer", 1*time.Hour)
@@ -379,7 +366,6 @@ func TestClaimsStructure(t *testing.T) {
 	}
 }
 
-// TestTokenWithSpecialUsernames tests tokens with special usernames
 func TestTokenWithSpecialUsernames(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -422,7 +408,6 @@ func TestTokenWithSpecialUsernames(t *testing.T) {
 	}
 }
 
-// TestGenerateAndValidateIntegration tests the full generate and validate flow
 func TestGenerateAndValidateIntegration(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -444,13 +429,11 @@ func TestGenerateAndValidateIntegration(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Generate token
 			token, err := GenerateToken(tt.username, "viewer", 1*time.Hour)
 			if err != nil {
 				t.Fatalf("GenerateToken() error = %v", err)
 			}
 
-			// Validate token
 			claims, err := ValidateToken(token)
 			if err != nil {
 				t.Fatalf("ValidateToken() error = %v", err)
@@ -472,7 +455,6 @@ func TestGenerateAndValidateIntegration(t *testing.T) {
 	}
 }
 
-// TestMiddlewareWithDifferentMethods tests middleware with different HTTP methods
 func TestMiddlewareWithDifferentMethods(t *testing.T) {
 	methods := []string{"GET", "POST", "PUT", "DELETE", "PATCH"}
 	authHeader := generateValidAuthHeader(t, "testuser")
@@ -499,11 +481,9 @@ func TestMiddlewareWithDifferentMethods(t *testing.T) {
 	}
 }
 
-// TestMiddlewareChain tests middleware chaining
 func TestMiddlewareChain(t *testing.T) {
 	authHeader := generateValidAuthHeader(t, "testuser")
 
-	// Create a handler that writes a specific response
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("passed"))
@@ -527,12 +507,10 @@ func TestMiddlewareChain(t *testing.T) {
 	}
 }
 
-// TestConcurrentTokenGeneration tests concurrent token generation
 func TestConcurrentTokenGeneration(t *testing.T) {
 	username := "testuser"
 	done := make(chan string, 10)
 
-	// Generate tokens concurrently
 	for i := 0; i < 10; i++ {
 		go func() {
 			token, err := GenerateToken(username, "viewer", 1*time.Hour)
@@ -571,7 +549,6 @@ func TestConcurrentTokenGeneration(t *testing.T) {
 	}
 }
 
-// TestSignedClaims tests that claims are properly signed
 func TestSignedClaims(t *testing.T) {
 	username := "testuser"
 	token, err := GenerateToken(username, "viewer", 1*time.Hour)
@@ -613,12 +590,10 @@ func generateValidAuthHeader(t *testing.T, username string) string {
 	return "Bearer " + token
 }
 
-// TestMiddlewareWithQueryParams tests that middleware doesn't interfere with query params
 func TestMiddlewareWithQueryParams(t *testing.T) {
 	authHeader := generateValidAuthHeader(t, "testuser")
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Check that query params are still accessible
 		if r.URL.Query().Get("param") != "value" {
 			t.Error("expected query param to be accessible")
 		}
@@ -639,12 +614,10 @@ func TestMiddlewareWithQueryParams(t *testing.T) {
 	}
 }
 
-// TestMiddlewareWithHeaders tests that middleware doesn't interfere with other headers
 func TestMiddlewareWithHeaders(t *testing.T) {
 	authHeader := generateValidAuthHeader(t, "testuser")
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Check that other headers are still accessible
 		if r.Header.Get("X-Custom-Header") != "custom-value" {
 			t.Error("expected custom header to be accessible")
 		}
@@ -666,7 +639,6 @@ func TestMiddlewareWithHeaders(t *testing.T) {
 	}
 }
 
-// TestMiddlewareResponseHeaders tests that middleware preserves response headers
 func TestMiddlewareResponseHeaders(t *testing.T) {
 	authHeader := generateValidAuthHeader(t, "testuser")
 
@@ -731,7 +703,7 @@ func TestInitJwtKey(t *testing.T) {
 func TestTokenRevocation(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
-	SetDB(db)
+	SetTokenStore(store.NewTokenStore(db))
 	ctx := context.Background()
 
 	uniqueID := "test-revocation-id"
@@ -751,7 +723,6 @@ func TestTokenRevocation(t *testing.T) {
 	}
 
 	t.Run("cleanup", func(t *testing.T) {
-		// Insert an already expired revoked token
 		past := time.Now().Add(-1 * time.Hour)
 		err := RevokeToken(ctx, "old-id", past, "access")
 		if err != nil {
@@ -775,7 +746,7 @@ func TestTokenRevocation(t *testing.T) {
 func TestMiddlewareCookie(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
-	SetDB(db)
+	SetTokenStore(store.NewTokenStore(db))
 
 	// Reset JWT key for consistent testing
 	JwtKeyMu.Lock()

@@ -10,7 +10,7 @@ import (
 	"runic/internal/common/log"
 )
 
-// RequireRole returns middleware that enforces role-based access control.
+// RequireRole returns a middleware that restricts access to users with the specified roles.
 // It accepts variadic role strings and allows the request through if the
 // authenticated user's role matches any of the provided roles.
 // Returns 403 Forbidden with JSON response if the role doesn't match.

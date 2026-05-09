@@ -22,20 +22,16 @@ import (
 	"runic/internal/testutil"
 )
 
-// setupTestAPI creates a test API instance with an in-memory database
 func setupTestAPI(t *testing.T) (*API, *sql.DB, func()) {
 	t.Helper()
 
 	// Use testutil for database setup
 	database, cleanup := testutil.SetupTestDB(t)
 
-	// Create compiler
-	compiler := engine.NewCompiler(database)
+	compiler := engine.NewTestCompiler(database)
 
-	// Create in-memory logs database for API tests
 	logsDB, logsCleanup := testutil.SetupTestLogsDB(t)
 
-	// Create API instance (pass nil for alert service and encryptor in tests)
 	api := NewAPI(database, compiler, logsDB, ":memory:", nil, nil)
 
 	combinedCleanup := func() {
@@ -46,12 +42,10 @@ func setupTestAPI(t *testing.T) (*API, *sql.DB, func()) {
 	return api, database, combinedCleanup
 }
 
-// TestGetPeers tests the GET /peers endpoint
 func TestGetPeers(t *testing.T) {
 	api, database, cleanup := setupTestAPI(t)
 	defer cleanup()
 
-	// Insert test peers (hmac_key is required in schema)
 	if _, err := database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
 		"peer1", "10.0.0.1", "key1", "test-hmac-1", true); err != nil {
 		t.Fatalf("failed to insert test peer: %v", err)
@@ -88,7 +82,6 @@ func TestGetPeers(t *testing.T) {
 	}
 }
 
-// TestCreatePeer tests the POST /peers endpoint
 func TestCreatePeer(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -153,7 +146,6 @@ func TestCreatePeer(t *testing.T) {
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
 
-			// Set up context with API instance
 			ctx := context.WithValue(req.Context(), apiContextKey, api)
 			req = req.WithContext(ctx)
 
@@ -185,12 +177,10 @@ func TestCreatePeer(t *testing.T) {
 	}
 }
 
-// TestCompilePeer tests the POST /peers/{id}/compile endpoint
 func TestCompilePeer(t *testing.T) {
 	api, database, cleanup := setupTestAPI(t)
 	defer cleanup()
 
-	// Insert test peer with required data
 	if _, err := database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
 		"test-peer", "10.0.0.1", "test-key", "test-hmac-key", true); err != nil {
 		t.Fatalf("failed to insert test data: %v", err)
@@ -198,7 +188,6 @@ func TestCompilePeer(t *testing.T) {
 	if _, err := database.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group"); err != nil {
 		t.Fatalf("failed to insert test data: %v", err)
 	}
-	// Insert manual peer for group member (new schema: groups contain peers, not IP/CIDR)
 	if _, err := database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, is_manual) VALUES (?, ?, ?, ?, 1)`,
 		"manual-peer", "192.168.1.0/24", "manual-key", "manual-hmac"); err != nil {
 		t.Fatalf("failed to insert test data: %v", err)
@@ -248,7 +237,6 @@ func TestCompilePeer(t *testing.T) {
 			// Mock gorilla/mux vars
 			req = testutil.MuxVars(req, map[string]string{"id": tt.peerID})
 
-			// Set up context with API instance
 			ctx := context.WithValue(req.Context(), apiContextKey, api)
 			req = req.WithContext(ctx)
 
@@ -288,12 +276,10 @@ func TestCompilePeer(t *testing.T) {
 	}
 }
 
-// TestListPolicies tests the GET /policies endpoint
 func TestListPolicies(t *testing.T) {
 	api, database, cleanup := setupTestAPI(t)
 	defer cleanup()
 
-	// Insert test data
 	if _, err := database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
 		"test-peer", "10.0.0.1", "test-key", "test-hmac", false); err != nil {
 		t.Fatalf("failed to insert test data: %v", err)
@@ -344,7 +330,6 @@ func TestListPolicies(t *testing.T) {
 		t.Errorf("expected 2 policies, got %d", len(policies))
 	}
 
-	// Check ordering (by priority ASC)
 	if policies[0].Priority != 100 {
 		t.Errorf("expected first policy priority 100, got %d", policies[0].Priority)
 	}
@@ -360,7 +345,6 @@ func TestListPolicies(t *testing.T) {
 	}
 }
 
-// TestCreatePolicy tests the POST /policies endpoint
 func TestCreatePolicy(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -445,7 +429,6 @@ func TestCreatePolicy(t *testing.T) {
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
 
-			// Set up context with API instance
 			ctx := context.WithValue(req.Context(), apiContextKey, api)
 			req = req.WithContext(ctx)
 
@@ -477,12 +460,10 @@ func TestCreatePolicy(t *testing.T) {
 	}
 }
 
-// TestGetPolicy tests the GET /policies/{id} endpoint
 func TestGetPolicy(t *testing.T) {
 	api, database, cleanup := setupTestAPI(t)
 	defer cleanup()
 
-	// Insert test data
 	if _, err := database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
 		"test-peer", "10.0.0.1", "test-key", "test-hmac", false); err != nil {
 		t.Fatalf("failed to insert seed peer: %v", err)
@@ -576,12 +557,10 @@ func TestGetPolicy(t *testing.T) {
 	}
 }
 
-// TestUpdatePolicy tests the PUT /policies/{id} endpoint
 func TestUpdatePolicy(t *testing.T) {
 	api, database, cleanup := setupTestAPI(t)
 	defer cleanup()
 
-	// Insert test data
 	if _, err := database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
 		"test-peer", "10.0.0.1", "test-key", "test-hmac", false); err != nil {
 		t.Fatalf("failed to insert seed peer: %v", err)
@@ -635,7 +614,6 @@ func TestUpdatePolicy(t *testing.T) {
 			// Mock gorilla/mux vars
 			req = testutil.MuxVars(req, map[string]string{"id": tt.policyID})
 
-			// Set up context with API instance
 			ctx := context.WithValue(req.Context(), apiContextKey, api)
 			req = req.WithContext(ctx)
 
@@ -649,12 +627,10 @@ func TestUpdatePolicy(t *testing.T) {
 	}
 }
 
-// TestDeletePolicy tests the DELETE /policies/{id} endpoint
 func TestDeletePolicy(t *testing.T) {
 	api, database, cleanup := setupTestAPI(t)
 	defer cleanup()
 
-	// Insert test data
 	if _, err := database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
 		"test-peer", "10.0.0.1", "test-key", "test-hmac", false); err != nil {
 		t.Fatalf("failed to insert seed peer: %v", err)
@@ -730,12 +706,10 @@ func TestDeletePolicy(t *testing.T) {
 	}
 }
 
-// TestListGroups tests the GET /groups endpoint
 func TestListGroups(t *testing.T) {
 	api, database, cleanup := setupTestAPI(t)
 	defer cleanup()
 
-	// Insert test groups
 	if _, err := database.Exec(`INSERT INTO groups (name, description) VALUES (?, ?)`, "group1", "test group 1"); err != nil {
 		t.Fatalf("failed to insert seed group: %v", err)
 	}
@@ -766,7 +740,6 @@ func TestListGroups(t *testing.T) {
 	}
 }
 
-// TestCreateGroup tests the POST /groups endpoint
 func TestCreateGroup(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -825,12 +798,10 @@ func TestCreateGroup(t *testing.T) {
 	}
 }
 
-// TestListServices tests the GET /services endpoint
 func TestListServices(t *testing.T) {
 	api, database, cleanup := setupTestAPI(t)
 	defer cleanup()
 
-	// Insert test services
 	if _, err := database.Exec(`INSERT INTO services (name, ports, protocol, description) VALUES (?, ?, ?, ?)`, "http", "80", "tcp", "HTTP web server"); err != nil {
 		t.Fatalf("failed to insert seed service: %v", err)
 	}
@@ -863,7 +834,6 @@ func TestListServices(t *testing.T) {
 	}
 }
 
-// TestCreateService tests the POST /services endpoint
 func TestCreateService(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -932,17 +902,14 @@ func TestCreateService(t *testing.T) {
 	}
 }
 
-// TestAddAndListGroupMembers tests group member operations
 func TestAddAndListGroupMembers(t *testing.T) {
 	api, database, cleanup := setupTestAPI(t)
 	defer cleanup()
 
-	// Insert test group
 	if _, err := database.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group"); err != nil {
 		t.Fatalf("failed to insert test data: %v", err)
 	}
 
-	// Insert test peers to add to group
 	// Note: SQLite auto-increment starts at 1, so these will be IDs 1 and 2
 	if _, err := database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, is_manual) VALUES (?, ?, ?, ?, 1)`,
 		"peer1", "192.168.1.100", "key1", "hmac1"); err != nil {
@@ -953,7 +920,6 @@ func TestAddAndListGroupMembers(t *testing.T) {
 		t.Fatalf("failed to insert test data: %v", err)
 	}
 
-	// Add peer 1 to group 1
 	req1 := httptest.NewRequest("POST", "/api/v1/groups/1/members", strings.NewReader(`{"peer_id": 1}`))
 	req1.Header.Set("Content-Type", "application/json")
 	w1 := httptest.NewRecorder()
@@ -963,7 +929,6 @@ func TestAddAndListGroupMembers(t *testing.T) {
 		t.Errorf("expected status %d, got %d: %s", http.StatusCreated, w1.Code, w1.Body.String())
 	}
 
-	// Add peer 2 to group 1
 	req2 := httptest.NewRequest("POST", "/api/v1/groups/1/members", strings.NewReader(`{"peer_id": 2}`))
 	req2.Header.Set("Content-Type", "application/json")
 	w2 := httptest.NewRecorder()
@@ -999,7 +964,6 @@ func TestAddAndListGroupMembers(t *testing.T) {
 	}
 }
 
-// TestHelpers tests helper functions
 func TestHelpers(t *testing.T) {
 	t.Run("RespondJSON", func(t *testing.T) {
 		w := httptest.NewRecorder()
@@ -1051,7 +1015,6 @@ func TestHelpers(t *testing.T) {
 	})
 }
 
-// TestJSONDecoding tests JSON decoding edge cases
 func TestJSONDecoding(t *testing.T) {
 	api, _, _ := setupTestAPI(t)
 
@@ -1090,7 +1053,6 @@ func TestJSONDecoding(t *testing.T) {
 			}
 			w := httptest.NewRecorder()
 
-			// Set up context with API instance
 			ctx := context.WithValue(req.Context(), apiContextKey, api)
 			req = req.WithContext(ctx)
 
@@ -1103,12 +1065,10 @@ func TestJSONDecoding(t *testing.T) {
 	}
 }
 
-// TestConcurrentRequests tests concurrent API requests
 func TestConcurrentRequests(t *testing.T) {
 	api, database, cleanup := setupTestAPI(t)
 	defer cleanup()
 
-	// Insert test data
 	if _, err := database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
 		"peer1", "10.0.0.1", "key1", "hmac1", true); err != nil {
 		t.Fatalf("failed to insert seed peer: %v", err)
@@ -1135,7 +1095,6 @@ func TestConcurrentRequests(t *testing.T) {
 	}
 }
 
-// TestResponseHeaders tests response headers
 func TestResponseHeaders(t *testing.T) {
 	api, _, cleanup := setupTestAPI(t)
 	defer cleanup()

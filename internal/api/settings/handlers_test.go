@@ -9,11 +9,20 @@ import (
 	"testing"
 	"time"
 
+	"runic/internal/db"
+	"runic/internal/store"
 	"runic/internal/testutil"
 )
 
+func newTestHandler(database *sql.DB, logsDB *sql.DB, logsDBPath string) *Handler {
+	var qLogs db.Querier
+	if logsDB != nil {
+		qLogs = logsDB
+	}
+	return NewHandler(store.NewSettingsStore(database, qLogs), logsDBPath)
+}
+
 // =============================================================================
-// Test NewHandler
 // =============================================================================
 
 func TestNewHandler(t *testing.T) {
@@ -23,23 +32,13 @@ func TestNewHandler(t *testing.T) {
 	logsDB, logsCleanup := testutil.SetupTestLogsDB(t)
 	defer logsCleanup()
 
-	handler := NewHandler(db, logsDB, "/path/to/logs.db")
+	handler := newTestHandler(db, logsDB, "/path/to/logs.db")
 	if handler == nil {
 		t.Fatal("expected non-nil handler")
-	}
-	if handler.DB != db {
-		t.Error("expected DB to be set")
-	}
-	if handler.LogsDB != logsDB {
-		t.Error("expected LogsDB to be set")
-	}
-	if handler.logsDBPath != "/path/to/logs.db" {
-		t.Errorf("expected logsDBPath '/path/to/logs.db', got '%s'", handler.logsDBPath)
 	}
 }
 
 // =============================================================================
-// Test GetLogSettings
 // =============================================================================
 
 func TestGetLogSettings(t *testing.T) {
@@ -88,7 +87,6 @@ func TestGetLogSettings(t *testing.T) {
 		{
 			name: "log count query works correctly",
 			setup: func(t *testing.T, db *sql.DB) {
-				// Insert test logs into the logs database
 			},
 			wantCode: http.StatusOK,
 			checkResp: func(t *testing.T, w *httptest.ResponseRecorder) {
@@ -268,7 +266,7 @@ func TestGetLogSettings(t *testing.T) {
 			req := httptest.NewRequest("GET", "/api/v1/settings/logs", nil)
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(db, logsDB, "/test/logs.db")
+			handler := newTestHandler(db, logsDB, "/test/logs.db")
 			handler.GetLogSettings(w, req)
 
 			if w.Code != tt.wantCode {
@@ -283,7 +281,6 @@ func TestGetLogSettings(t *testing.T) {
 }
 
 // =============================================================================
-// Test UpdateLogSettings
 // =============================================================================
 
 func TestUpdateLogSettings(t *testing.T) {
@@ -421,7 +418,7 @@ func TestUpdateLogSettings(t *testing.T) {
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(db, nil, "")
+			handler := newTestHandler(db, nil, "")
 			handler.UpdateLogSettings(w, req)
 
 			if w.Code != tt.wantCode {
@@ -436,7 +433,6 @@ func TestUpdateLogSettings(t *testing.T) {
 }
 
 // =============================================================================
-// Test ClearAllLogs
 // =============================================================================
 
 func TestClearAllLogs(t *testing.T) {
@@ -449,7 +445,6 @@ func TestClearAllLogs(t *testing.T) {
 		{
 			name: "successful deletion with logs",
 			setup: func(t *testing.T, db *sql.DB, logsDB *sql.DB) {
-				// Insert some test logs using correct schema columns
 				logsDB.Exec(`INSERT INTO firewall_logs (peer_id, peer_hostname, timestamp, event_type, source_ip, dest_ip, protocol, source_port, dest_port, action) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, "1", "peer1", time.Now(), "inbound", "192.168.1.1", "10.0.0.1", "tcp", 12345, 22, "ACCEPT")
 				logsDB.Exec(`INSERT INTO firewall_logs (peer_id, peer_hostname, timestamp, event_type, source_ip, dest_ip, protocol, source_port, dest_port, action) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, "1", "peer1", time.Now(), "outbound", "10.0.0.1", "8.8.8.8", "udp", 53, 53, "ACCEPT")
 			},
@@ -492,7 +487,7 @@ func TestClearAllLogs(t *testing.T) {
 			req := httptest.NewRequest("DELETE", "/api/v1/settings/logs/clear", nil)
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(db, logsDB, "/test/logs.db")
+			handler := newTestHandler(db, logsDB, "/test/logs.db")
 			handler.ClearAllLogs(w, req)
 
 			if w.Code != tt.wantCode {
@@ -513,8 +508,7 @@ func TestClearAllLogs_LogsDBNotInitialized(t *testing.T) {
 	req := httptest.NewRequest("DELETE", "/api/v1/settings/logs/clear", nil)
 	w := httptest.NewRecorder()
 
-	// Create handler with nil LogsDB
-	handler := NewHandler(db, nil, "")
+	handler := newTestHandler(db, nil, "")
 	handler.ClearAllLogs(w, req)
 
 	if w.Code != http.StatusInternalServerError {
@@ -523,7 +517,6 @@ func TestClearAllLogs_LogsDBNotInitialized(t *testing.T) {
 }
 
 // =============================================================================
-// Test getRetentionLabel
 // =============================================================================
 
 func TestGetRetentionLabel(t *testing.T) {
@@ -555,14 +548,12 @@ func TestGetRetentionLabel(t *testing.T) {
 }
 
 // =============================================================================
-// Test GetLogSettings with logs count
 // =============================================================================
 
 func TestGetLogSettings_LogCountAndSize(t *testing.T) {
 	db, logsDB, cleanup := testutil.SetupTestDBWithSecretAndLogs(t)
 	defer cleanup()
 
-	// Insert some test logs using correct schema columns
 	for i := 0; i < 100; i++ {
 		logsDB.Exec(`INSERT INTO firewall_logs (peer_id, peer_hostname, timestamp, event_type, source_ip, dest_ip, protocol, source_port, dest_port, action) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, "1", "peer1", time.Now(), "inbound", "192.168.1.1", "10.0.0.1", "tcp", 12345, 22, "ACCEPT")
 	}
@@ -570,7 +561,7 @@ func TestGetLogSettings_LogCountAndSize(t *testing.T) {
 	req := httptest.NewRequest("GET", "/api/v1/settings/logs", nil)
 	w := httptest.NewRecorder()
 
-	handler := NewHandler(db, logsDB, "/test/logs.db")
+	handler := newTestHandler(db, logsDB, "/test/logs.db")
 	handler.GetLogSettings(w, req)
 
 	if w.Code != http.StatusOK {
@@ -597,7 +588,6 @@ func TestGetLogSettings_LogCountAndSize(t *testing.T) {
 }
 
 // =============================================================================
-// Test GetLogSettings with nil LogsDB
 // =============================================================================
 
 func TestGetLogSettings_NilLogsDB(t *testing.T) {
@@ -607,8 +597,7 @@ func TestGetLogSettings_NilLogsDB(t *testing.T) {
 	req := httptest.NewRequest("GET", "/api/v1/settings/logs", nil)
 	w := httptest.NewRecorder()
 
-	// Create handler with nil LogsDB
-	handler := NewHandler(db, nil, "/test/logs.db")
+	handler := newTestHandler(db, nil, "/test/logs.db")
 	handler.GetLogSettings(w, req)
 
 	if w.Code != http.StatusOK {
@@ -627,7 +616,6 @@ func TestGetLogSettings_NilLogsDB(t *testing.T) {
 }
 
 // =============================================================================
-// Test GetInstanceSettings
 // =============================================================================
 
 func TestGetInstanceSettings(t *testing.T) {
@@ -689,7 +677,7 @@ func TestGetInstanceSettings(t *testing.T) {
 			req := httptest.NewRequest("GET", "/api/v1/settings/instance", nil)
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(db, nil, "")
+			handler := newTestHandler(db, nil, "")
 			handler.GetInstanceSettings(w, req)
 
 			if w.Code != tt.wantCode {
@@ -709,7 +697,6 @@ func TestGetInstanceSettings(t *testing.T) {
 }
 
 // =============================================================================
-// Test UpdateInstanceSettings
 // =============================================================================
 
 func TestUpdateInstanceSettings(t *testing.T) {
@@ -809,7 +796,7 @@ func TestUpdateInstanceSettings(t *testing.T) {
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(db, nil, "")
+			handler := newTestHandler(db, nil, "")
 			handler.UpdateInstanceSettings(w, req)
 
 			if w.Code != tt.wantCode {
@@ -841,22 +828,19 @@ func TestUpdateInstanceSettings(t *testing.T) {
 }
 
 // =============================================================================
-// Test UpdateInstanceSettings - update existing value
 // =============================================================================
 
 func TestUpdateInstanceSettings_UpdateExisting(t *testing.T) {
 	db, cleanup := testutil.SetupTestDBWithSecret(t)
 	defer cleanup()
 
-	// Set initial value
 	db.Exec(`INSERT INTO system_config (key, value) VALUES ('instance_url', 'https://old.example.com')`)
 
-	// Update to new value
 	req := httptest.NewRequest("PUT", "/api/v1/settings/instance", strings.NewReader(`{"url": "https://new.example.com"}`))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	handler := NewHandler(db, nil, "")
+	handler := newTestHandler(db, nil, "")
 	handler.UpdateInstanceSettings(w, req)
 
 	if w.Code != http.StatusOK {

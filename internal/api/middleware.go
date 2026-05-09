@@ -57,20 +57,15 @@ import (
 	"runic/internal/common/log"
 )
 
-// RequestIDHeader is the HTTP header name for request IDs.
 const RequestIDHeader = "X-Request-ID"
 
-// CSPHeader is the Content-Security-Policy header name.
 const CSPHeader = "Content-Security-Policy"
 
-// CSPNonceHeader is the header name for the CSP nonce value.
-// This can be used by frontend code to access the nonce if needed.
+// CSPNonceHeader is the HTTP header name for the CSP nonce. This can be used by frontend code to access the nonce if needed.
 const CSPNonceHeader = "X-CSP-Nonce"
 
-// CSPNonceKey is the context key for the CSP nonce value.
 const CSPNonceKey contextKey = "csp-nonce"
 
-// generateNonce generates a cryptographically secure random nonce.
 // The nonce is a base64-encoded random value suitable for CSP.
 func generateNonce() string {
 	b := make([]byte, 16)
@@ -83,7 +78,6 @@ func generateNonce() string {
 	return base64.URLEncoding.EncodeToString(b)
 }
 
-// buildCSPDirectives builds CSP directives with the given nonce.
 // Using nonce-based CSP is more flexible than hash-based CSP as it doesn't
 // require updating hashes when scripts change.
 func buildCSPDirectives(nonce string) string {
@@ -101,7 +95,7 @@ func buildCSPDirectives(nonce string) string {
 	}, "; ")
 }
 
-// RequestID middleware generates or extracts a request ID from the X-Request-ID header.
+// RequestID returns a middleware that injects a request ID into the context and response headers.
 // It adds the request ID to the request context and ensures it's also returned in the response header.
 func RequestID() mux.MiddlewareFunc {
 	return func(next http.Handler) http.Handler {
@@ -122,7 +116,7 @@ func RequestID() mux.MiddlewareFunc {
 	}
 }
 
-// GetCSPNonce extracts the CSP nonce from the request context.
+// GetCSPNonce extracts the CSP nonce from the given context.
 // Returns the nonce and true if found, otherwise returns empty string and false.
 func GetCSPNonce(ctx context.Context) (string, bool) {
 	if nonce, ok := ctx.Value(CSPNonceKey).(string); ok {
@@ -131,7 +125,6 @@ func GetCSPNonce(ctx context.Context) (string, bool) {
 	return "", false
 }
 
-// setSecurityHeaders sets common security hardening headers on the response.
 func setSecurityHeaders(w http.ResponseWriter) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("X-Frame-Options", "DENY")
@@ -140,7 +133,7 @@ func setSecurityHeaders(w http.ResponseWriter) {
 	w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
 }
 
-// CSP returns a middleware that sets Content-Security-Policy headers with a nonce.
+// CSP returns a middleware that sets Content-Security-Policy headers with a per-request nonce.
 // This provides server-side CSP enforcement which is authoritative over meta tags.
 // The nonce is generated per-request and added to the response header and context.
 // The frontend can use the nonce to authorize inline scripts.
@@ -163,7 +156,7 @@ func CSP() mux.MiddlewareFunc {
 	}
 }
 
-// CSPForAPI returns CSP headers suitable for API responses.
+// CSPForAPI returns a middleware that sets strict CSP headers for API endpoints.
 // API responses have stricter CSP since they don't need scripts, styles, or images.
 func CSPForAPI() mux.MiddlewareFunc {
 	apiCSP := strings.Join([]string{
@@ -181,7 +174,7 @@ func CSPForAPI() mux.MiddlewareFunc {
 	}
 }
 
-// SecurityHeaders returns a middleware that sets common security headers on all responses.
+// SecurityHeaders returns a middleware that sets common security headers.
 // This middleware is applied as the outermost layer to ensure all responses include security headers.
 func SecurityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -194,7 +187,6 @@ func SecurityHeaders(next http.Handler) http.Handler {
 	})
 }
 
-// generateUUID generates a random UUID using crypto/rand.
 func generateUUID() string {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
@@ -206,7 +198,6 @@ func generateUUID() string {
 	return hex.EncodeToString(b)
 }
 
-// generateFallbackID generates a fallback ID using crypto/rand.
 // This is only used if crypto/rand fails.
 func generateFallbackID() string {
 	b := make([]byte, 8)
@@ -220,7 +211,7 @@ func generateFallbackID() string {
 	return hex.EncodeToString(b)
 }
 
-// RequestLogger middleware logs request details for tracing and debugging.
+// RequestLogger returns a middleware that logs each request's start and completion with duration.
 // It logs both the start of each request and the completion with duration.
 // This is useful for tracing redirect paths and debugging request flow.
 //
@@ -264,7 +255,7 @@ func RequestLogger() mux.MiddlewareFunc {
 	}
 }
 
-// CORS middleware adds Cross-Origin Resource Sharing headers to API responses.
+// CORS returns a middleware that handles Cross-Origin Resource Sharing headers.
 // This is necessary for proper handling of cross-origin requests from the frontend.
 // The middleware:
 // - Sets appropriate CORS headers for all responses
@@ -275,7 +266,6 @@ func RequestLogger() mux.MiddlewareFunc {
 // The allowed origin can be configured via the CORS_ORIGIN environment variable.
 // If not set, it defaults to allowing same-origin requests (empty string),
 // which works for production deployments where frontend and API share the same origin.
-// For development, set CORS_ORIGIN to the frontend URL (e.g., "http://localhost:5173").
 func CORS() mux.MiddlewareFunc {
 	allowedOrigin := os.Getenv("CORS_ORIGIN")
 

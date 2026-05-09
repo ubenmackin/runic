@@ -13,7 +13,6 @@ import (
 	"runic/internal/iptparse"
 )
 
-// ImportSession represents an import session from the database.
 type ImportSession struct {
 	ID              int64
 	PeerID          int64
@@ -28,9 +27,7 @@ type ImportSession struct {
 	UpdatedAt       string
 }
 
-// CreateSession creates a new import session with status 'pending'.
 func CreateSession(ctx context.Context, database *sql.DB, peerID int64, rawBackup, rawIpsets string) (*ImportSession, error) {
-	// Check if peer already has an active import session
 	var existingID int64
 	err := database.QueryRowContext(ctx,
 		"SELECT id FROM import_sessions WHERE peer_id = ? AND status IN ('pending','parsed','reviewing')",
@@ -65,7 +62,6 @@ func CreateSession(ctx context.Context, database *sql.DB, peerID int64, rawBacku
 	}, nil
 }
 
-// GetSession retrieves an import session by ID.
 func GetSession(ctx context.Context, database db.Querier, sessionID int64) (*ImportSession, error) {
 	s := &ImportSession{}
 	err := database.QueryRowContext(ctx,
@@ -78,7 +74,6 @@ func GetSession(ctx context.Context, database db.Querier, sessionID int64) (*Imp
 	return s, nil
 }
 
-// GetSessionByPeer retrieves an active import session for a peer.
 func GetSessionByPeer(ctx context.Context, database db.Querier, peerID int64) (*ImportSession, error) {
 	s := &ImportSession{}
 	err := database.QueryRowContext(ctx,
@@ -115,7 +110,6 @@ func ParseSession(ctx context.Context, database *sql.DB, sessionID int64) error 
 		return fmt.Errorf("session is not in pending state (current: %s)", session.Status)
 	}
 
-	// Parse chains from the raw backup
 	chains := []string{"INPUT", "OUTPUT", "DOCKER-USER"}
 	parsedChains, err := iptparse.Parse(session.RawBackup, chains)
 	if err != nil {
@@ -127,7 +121,6 @@ func ParseSession(ctx context.Context, database *sql.DB, sessionID int64) error 
 	importableRules := 0
 	skippedRules := 0
 
-	// Insert parsed rules into import_rules
 	for i := range parsedChains {
 		for j := range parsedChains[i].Rules {
 			rule := &parsedChains[i].Rules[j]
@@ -182,7 +175,6 @@ func ParseSession(ctx context.Context, database *sql.DB, sessionID int64) error 
 		}
 	}
 
-	// Update session stats and status
 	_, err = tx.ExecContext(ctx,
 		"UPDATE import_sessions SET status = 'parsed', total_rules_found = ?, importable_rules = ?, skipped_rules = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
 		totalRules, importableRules, skippedRules, sessionID,
@@ -197,7 +189,6 @@ func ParseSession(ctx context.Context, database *sql.DB, sessionID int64) error 
 	}
 	committed = true
 
-	// Look up all IPs for the imported peer
 	var peerIPs []string
 	ipRows, err := database.QueryContext(ctx, "SELECT ip_address FROM peer_ips WHERE peer_id = ? ORDER BY is_primary DESC, id ASC", session.PeerID)
 	if err != nil {
@@ -229,7 +220,6 @@ func ParseSession(ctx context.Context, database *sql.DB, sessionID int64) error 
 	return nil
 }
 
-// DeleteSession cascading deletes an import session and all its staging data.
 func DeleteSession(ctx context.Context, database *sql.DB, sessionID int64) error {
 	_, err := database.ExecContext(ctx, "DELETE FROM import_sessions WHERE id = ?", sessionID)
 	if err != nil {
@@ -238,7 +228,6 @@ func DeleteSession(ctx context.Context, database *sql.DB, sessionID int64) error
 	return nil
 }
 
-// CleanupStaleSessions removes sessions older than maxAge.
 func CleanupStaleSessions(ctx context.Context, database *sql.DB, maxAge time.Duration) error {
 	cutoff := time.Now().Add(-maxAge).Format("2006-01-02 15:04:05")
 	result, err := database.ExecContext(ctx,
@@ -253,7 +242,6 @@ func CleanupStaleSessions(ctx context.Context, database *sql.DB, maxAge time.Dur
 	return nil
 }
 
-// UpdateSessionStatus updates the session's status.
 func UpdateSessionStatus(ctx context.Context, database db.Querier, sessionID int64, status string) error {
 	_, err := database.ExecContext(ctx,
 		"UPDATE import_sessions SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
@@ -262,7 +250,6 @@ func UpdateSessionStatus(ctx context.Context, database db.Querier, sessionID int
 	return err
 }
 
-// generatePolicyName creates an auto-generated policy name from a parsed rule.
 func generatePolicyName(rule *iptparse.ParsedRule) string {
 	action := rule.Target
 	proto := rule.Protocol

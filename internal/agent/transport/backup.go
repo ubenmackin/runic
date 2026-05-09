@@ -11,13 +11,11 @@ import (
 	"runic/internal/common/log"
 )
 
-// BackupRequest represents the backup data sent from agent to server.
 type BackupRequest struct {
 	IPTablesBackup string `json:"iptables_backup"`
 	IPSetList      string `json:"ipset_list"`
 }
 
-// PostBackup sends the iptables backup and ipset data to the control plane.
 func PostBackup(ctx context.Context, client common.HTTPClient, controlPlaneURL, hostID, token, version string, backupContent, ipsetContent string) error {
 	body := BackupRequest{
 		IPTablesBackup: backupContent,

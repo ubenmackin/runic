@@ -51,7 +51,6 @@ func TestHub_Broadcast(t *testing.T) {
 	hub.clients[client] = true
 	hub.mu.Unlock()
 
-	// Create and broadcast log event
 	event := &models.LogEvent{
 		ID:        1,
 		PeerID:    "test-peer",
@@ -117,7 +116,6 @@ func TestHub_Broadcast_WithFilter(t *testing.T) {
 func TestHub_Broadcast_MultipleClients(t *testing.T) {
 	hub := NewHub()
 
-	// Create two clients with different filters
 	client1 := &Client{
 		hub:  hub,
 		send: make(chan []byte, 256),

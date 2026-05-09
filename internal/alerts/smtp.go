@@ -47,7 +47,6 @@ var (
 	dangerousMetaRegex = regexp.MustCompile(`(?i)<meta[^>]+http-equiv\s*=\s*["']?refresh["']?[^>]*>`)
 )
 
-// SMTPSender handles sending emails via SMTP.
 type SMTPSender struct {
 	config    SMTPConfig
 	encryptor *crypto.Encryptor
@@ -55,8 +54,7 @@ type SMTPSender struct {
 	database  db.Querier
 }
 
-// NewSMTPSender creates a new SMTP sender with the given configuration.
-// The encryptor is used to decrypt the SMTP password if it's encrypted.
+// NewSMTPSender creates a new SMTP sender. The encryptor is used to decrypt the SMTP password if it's encrypted.
 // The database is used to query instance_url for email footer links.
 func NewSMTPSender(config *SMTPConfig, encryptor *crypto.Encryptor, database db.Querier) *SMTPSender {
 	return &SMTPSender{
@@ -67,28 +65,23 @@ func NewSMTPSender(config *SMTPConfig, encryptor *crypto.Encryptor, database db.
 	}
 }
 
-// SetLogger sets a custom logger for the SMTP sender.
 func (s *SMTPSender) SetLogger(logger *slog.Logger) {
 	s.logger = logger.With("component", "smtp_sender")
 }
 
-// Send sends a plain text email to the specified recipient.
 func (s *SMTPSender) Send(to, subject, body string) error {
 	return s.sendEmail(to, subject, body, "text/plain")
 }
 
-// SendHTML sends an HTML email to the specified recipient.
 func (s *SMTPSender) SendHTML(to, subject, htmlBody string) error {
 	return s.sendEmail(to, subject, htmlBody, "text/html")
 }
 
-// SendAlertEmail sends an alert notification email using the Runic branding.
-// It creates a sanitized copy of the event to prevent email content injection
+// SendAlertEmail sends an alert email. It creates a sanitized copy of the event to prevent email content injection
 // from untrusted input in Subject, PeerName, Message, and Metadata string values.
 // The sanitization removes control characters that could be used for header injection.
 // Existing HTML escaping and header sanitization remain as defense-in-depth layers.
 func (s *SMTPSender) SendAlertEmail(to string, event *AlertEvent) error {
-	// Create a sanitized copy of the event to prevent injection attacks
 	sanitizedEvent := *event
 
 	sanitizedSubject, _ := SanitizeAlertInput(event.Subject, 0)
@@ -124,7 +117,6 @@ func (s *SMTPSender) SendAlertEmail(to string, event *AlertEvent) error {
 	return s.SendHTML(to, subject, htmlBody)
 }
 
-// sendEmail is the internal method that handles the actual email sending.
 func (s *SMTPSender) sendEmail(to, subject, body, contentType string) error {
 	if !s.config.IsEnabled() {
 		return fmt.Errorf("SMTP is not enabled or not configured")
@@ -186,7 +178,6 @@ func (s *SMTPSender) sendEmail(to, subject, body, contentType string) error {
 	return nil
 }
 
-// sendWithTLS sends an email with TLS/STARTTLS support.
 func (s *SMTPSender) sendWithTLS(addr string, auth smtp.Auth, from string, to []string, msg []byte) error {
 	// Connect to the SMTP server
 	conn, err := smtp.Dial(addr)
@@ -199,7 +190,6 @@ func (s *SMTPSender) sendWithTLS(addr string, auth smtp.Auth, from string, to []
 		}
 	}()
 
-	// Get server hostname for Hello
 	if err := conn.Hello("localhost"); err != nil {
 		return fmt.Errorf("SMTP Hello failed: %w", err)
 	}
@@ -252,18 +242,15 @@ func (s *SMTPSender) sendWithTLS(addr string, auth smtp.Auth, from string, to []
 	return nil
 }
 
-// sanitizeHeaderValue sanitizes header values using the shared SanitizeAlertInput function.
 func (s *SMTPSender) sanitizeHeaderValue(value string) string {
 	sanitized, _ := SanitizeAlertInput(value, 0) // no length limit for headers
 	return sanitized
 }
 
-// htmlEscape escapes special HTML characters to prevent XSS/injection in email content.
 func (s *SMTPSender) htmlEscape(text string) string {
 	return html.EscapeString(text)
 }
 
-// sanitizeHTMLBody sanitizes HTML email content to prevent script/content injection.
 // It removes dangerous HTML elements and attributes that could be used for XSS attacks.
 //
 // DEFENSE-IN-DEPTH ARCHITECTURE:
@@ -301,7 +288,6 @@ func (s *SMTPSender) sanitizeHTMLBody(body string) string {
 	return body
 }
 
-// buildMessage constructs the email message with headers.
 func (s *SMTPSender) buildMessage(to, subject, body, contentType string) string {
 	var msg bytes.Buffer
 
@@ -331,7 +317,6 @@ func (s *SMTPSender) buildMessage(to, subject, body, contentType string) string 
 	return msg.String()
 }
 
-// generateAlertSubject creates a subject line for an alert event.
 func (s *SMTPSender) generateAlertSubject(event *AlertEvent) string {
 	var prefix string
 	switch event.GetSeverity() {
@@ -362,7 +347,6 @@ func (s *SMTPSender) generateAlertSubject(event *AlertEvent) string {
 	return fmt.Sprintf("[Runic] %s %s", prefix, detail)
 }
 
-// generateAlertHTML creates an HTML email body for an alert event.
 // Uses terminal aesthetic with dark mode colors and monospace font.
 func (s *SMTPSender) generateAlertHTML(event *AlertEvent, instanceURL string) string {
 	bodyBg := "#0a0a0a"

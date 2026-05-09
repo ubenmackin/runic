@@ -12,13 +12,11 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-// BenchmarkCompileSmall tests compilation with ~5 peers and ~5 policies.
 // This represents a small-scale deployment typical of a small office or home network.
 func BenchmarkCompileSmall(b *testing.B) {
 	database, cleanup := setupBenchmarkDB(b)
 	defer cleanup()
 
-	// Create 5 peers (with required NOT NULL fields)
 	for i := 1; i <= 5; i++ {
 		_, err := database.Exec("INSERT INTO peers (hostname, ip_address, has_docker, agent_key, hmac_key) VALUES (?, ?, ?, ?, ?)",
 			"peer-"+string(rune('a'+i-1)), "10.0."+string(rune('0'+i))+".10/32", false, "key-"+string(rune('a'+i-1)), "hmac-"+string(rune('a'+i-1)))
@@ -27,16 +25,13 @@ func BenchmarkCompileSmall(b *testing.B) {
 		}
 	}
 
-	// Create a group with 3 peers
 	database.Exec("INSERT INTO groups (name) VALUES (?)", "test-group")
 	for i := 1; i <= 3; i++ {
 		database.Exec("INSERT INTO group_members (group_id, peer_id) VALUES (1, ?)", i)
 	}
 
-	// Create a service
 	database.Exec("INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)", "http", "80,443", "tcp")
 
-	// Create 5 policies (mix of peer-to-peer and group-to-peer)
 	policies := []struct {
 		sourceType string
 		sourceID   int
@@ -59,7 +54,7 @@ func BenchmarkCompileSmall(b *testing.B) {
 		}
 	}
 
-	compiler := NewCompiler(database)
+	compiler := NewTestCompiler(database)
 	ctx := context.Background()
 
 	b.ResetTimer()
@@ -71,13 +66,11 @@ func BenchmarkCompileSmall(b *testing.B) {
 	}
 }
 
-// BenchmarkCompileLarge tests compilation with ~50 peers and ~20 policies.
 // This represents a medium-scale enterprise deployment.
 func BenchmarkCompileLarge(b *testing.B) {
 	database, cleanup := setupBenchmarkDB(b)
 	defer cleanup()
 
-	// Create 50 peers
 	for i := 1; i <= 50; i++ {
 		hostname := fmt.Sprintf("peer-%d", i)
 		ipAddr := fmt.Sprintf("10.0.%d.%d/32", i/10, i%10)
@@ -88,7 +81,6 @@ func BenchmarkCompileLarge(b *testing.B) {
 		}
 	}
 
-	// Create 5 groups with 10 peers each
 	for g := 1; g <= 5; g++ {
 		database.Exec("INSERT INTO groups (name) VALUES (?)", "group-"+string(rune('a'+g-1)))
 		for p := 1; p <= 10; p++ {
@@ -97,7 +89,6 @@ func BenchmarkCompileLarge(b *testing.B) {
 		}
 	}
 
-	// Create 3 services
 	services := []struct {
 		name  string
 		ports string
@@ -112,7 +103,6 @@ func BenchmarkCompileLarge(b *testing.B) {
 		_ = i // use services variable
 	}
 
-	// Create 20 policies: mix of peer->peer, peer->group, group->peer, group->group
 	policies := []struct {
 		sourceType string
 		sourceID   int
@@ -151,7 +141,7 @@ func BenchmarkCompileLarge(b *testing.B) {
 		}
 	}
 
-	compiler := NewCompiler(database)
+	compiler := NewTestCompiler(database)
 	ctx := context.Background()
 
 	// Benchmark compile for first peer (member of multiple groups)
@@ -164,12 +154,10 @@ func BenchmarkCompileLarge(b *testing.B) {
 	}
 }
 
-// BenchmarkCompileAndStore benchmarks the full compile-and-store cycle.
 func BenchmarkCompileAndStore(b *testing.B) {
 	database, cleanup := setupBenchmarkDB(b)
 	defer cleanup()
 
-	// Create 10 peers
 	for i := 1; i <= 10; i++ {
 		hostname := fmt.Sprintf("peer-%s", string(rune('a'+i-1)))
 		ipAddr := fmt.Sprintf("10.0.%d.10/32", i)
@@ -180,17 +168,14 @@ func BenchmarkCompileAndStore(b *testing.B) {
 		}
 	}
 
-	// Create a group with 5 peers
 	database.Exec("INSERT INTO groups (name) VALUES (?)", "test-group")
 	for i := 1; i <= 5; i++ {
 		database.Exec("INSERT INTO group_members (group_id, peer_id) VALUES (1, ?)", i)
 	}
 
-	// Create services
 	database.Exec("INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)", "http", "80,443", "tcp")
 	database.Exec("INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)", "ssh", "22", "tcp")
 
-	// Create 5 policies
 	policies := []struct {
 		sourceType string
 		sourceID   int
@@ -214,7 +199,7 @@ func BenchmarkCompileAndStore(b *testing.B) {
 		}
 	}
 
-	compiler := NewCompiler(database)
+	compiler := NewTestCompiler(database)
 	ctx := context.Background()
 
 	// Run once to create initial bundle, then benchmark subsequent compilations that will fail due to unique constraint
@@ -232,7 +217,6 @@ func BenchmarkCompileAndStore(b *testing.B) {
 	}
 }
 
-// setupBenchmarkDB creates a temporary test database for benchmarking.
 func setupBenchmarkDB(b *testing.B) (*sql.DB, func()) {
 	f, err := os.CreateTemp("", "runic-bench-*.db")
 	if err != nil {

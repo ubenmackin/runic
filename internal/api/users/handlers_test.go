@@ -2,6 +2,7 @@ package users
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -12,10 +13,15 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"runic/internal/auth"
+	"runic/internal/models"
+	"runic/internal/store"
 	"runic/internal/testutil"
 )
 
-// muxVars is a helper to set gorilla/mux URL variables
+func newTestHandler(db *sql.DB) *Handler {
+	return NewHandler(store.NewUserStore(db))
+}
+
 var muxVars = testutil.MuxVars
 
 // Helper to set admin context on request
@@ -34,14 +40,13 @@ func withRoleContext(ctx context.Context, role, username string) context.Context
 }
 
 // =============================================================================
-// Test ListUsers
 // =============================================================================
 
 func TestListUsers_EmptyTable(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	h := NewHandler(db)
+	h := newTestHandler(db)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/users", nil)
 
@@ -51,7 +56,7 @@ func TestListUsers_EmptyTable(t *testing.T) {
 		t.Errorf("expected status %d, got %d", http.StatusOK, w.Code)
 	}
 
-	var users []UserResponse
+	var users []models.UserRow
 	if err := json.Unmarshal(w.Body.Bytes(), &users); err != nil {
 		t.Fatalf("failed to unmarshal response: %v", err)
 	}
@@ -65,7 +70,6 @@ func TestListUsers_MultipleUsers(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Insert test users
 	hash1, _ := bcrypt.GenerateFromPassword([]byte("password123"), 12)
 	hash2, _ := bcrypt.GenerateFromPassword([]byte("password123"), 12)
 	hash3, _ := bcrypt.GenerateFromPassword([]byte("password123"), 12)
@@ -77,7 +81,7 @@ func TestListUsers_MultipleUsers(t *testing.T) {
 	db.Exec("INSERT INTO users (username, password_hash, email, role) VALUES (?, ?, ?, ?)",
 		"user3", string(hash3), "user3@test.com", "viewer")
 
-	h := NewHandler(db)
+	h := newTestHandler(db)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/users", nil)
 
@@ -87,7 +91,7 @@ func TestListUsers_MultipleUsers(t *testing.T) {
 		t.Errorf("expected status %d, got %d", http.StatusOK, w.Code)
 	}
 
-	var users []UserResponse
+	var users []models.UserRow
 	if err := json.Unmarshal(w.Body.Bytes(), &users); err != nil {
 		t.Fatalf("failed to unmarshal response: %v", err)
 	}
@@ -98,14 +102,13 @@ func TestListUsers_MultipleUsers(t *testing.T) {
 }
 
 // =============================================================================
-// Test CreateUser
 // =============================================================================
 
 func TestCreateUser_InvalidJSON(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	h := NewHandler(db)
+	h := newTestHandler(db)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/users", strings.NewReader("{invalid json"))
 	r = r.WithContext(withAdminContext(context.Background()))
@@ -121,7 +124,7 @@ func TestCreateUser_MissingUsername(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	h := NewHandler(db)
+	h := newTestHandler(db)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/users", strings.NewReader(`{"password":"password123"}`))
 	r = r.WithContext(withAdminContext(context.Background()))
@@ -137,7 +140,7 @@ func TestCreateUser_MissingPassword(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	h := NewHandler(db)
+	h := newTestHandler(db)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/users", strings.NewReader(`{"username":"testuser"}`))
 	r = r.WithContext(withAdminContext(context.Background()))
@@ -153,7 +156,7 @@ func TestCreateUser_PasswordTooShort(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	h := NewHandler(db)
+	h := newTestHandler(db)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/users", strings.NewReader(`{"username":"testuser","password":"short"}`))
 	r = r.WithContext(withAdminContext(context.Background()))
@@ -169,7 +172,7 @@ func TestCreateUser_InvalidRole(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	h := NewHandler(db)
+	h := newTestHandler(db)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/users", strings.NewReader(`{"username":"testuser","password":"password123","role":"superuser"}`))
 	r = r.WithContext(withAdminContext(context.Background()))
@@ -185,7 +188,7 @@ func TestCreateUser_NonAdminCreatingElevatedRole(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	h := NewHandler(db)
+	h := newTestHandler(db)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/users", strings.NewReader(`{"username":"newadmin","password":"password123","role":"admin"}`))
 	r = r.WithContext(withEditorContext(context.Background()))
@@ -201,12 +204,11 @@ func TestCreateUser_UsernameExists(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Insert existing user
 	hash, _ := bcrypt.GenerateFromPassword([]byte("password123"), 12)
 	db.Exec("INSERT INTO users (username, password_hash, email, role) VALUES (?, ?, ?, ?)",
 		"existinguser", string(hash), "test@test.com", "viewer")
 
-	h := NewHandler(db)
+	h := newTestHandler(db)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/users", strings.NewReader(`{"username":"existinguser","password":"password123"}`))
 	r = r.WithContext(withAdminContext(context.Background()))
@@ -222,7 +224,7 @@ func TestCreateUser_ValidCreation(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	h := NewHandler(db)
+	h := newTestHandler(db)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/users", strings.NewReader(`{"username":"newuser","password":"password123","email":"newuser@test.com","role":"viewer"}`))
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -235,7 +237,7 @@ func TestCreateUser_ValidCreation(t *testing.T) {
 		t.Errorf("expected status %d, got %d", http.StatusCreated, w.Code)
 	}
 
-	var user UserResponse
+	var user models.UserRow
 	if err := json.Unmarshal(w.Body.Bytes(), &user); err != nil {
 		t.Fatalf("failed to unmarshal response: %v", err)
 	}
@@ -249,14 +251,13 @@ func TestCreateUser_ValidCreation(t *testing.T) {
 }
 
 // =============================================================================
-// Test DeleteUser
 // =============================================================================
 
 func TestDeleteUser_InvalidID(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	h := NewHandler(db)
+	h := newTestHandler(db)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodDelete, "/api/v1/users/invalid", nil)
 	r = muxVars(r, map[string]string{"id": "invalid"})
@@ -273,7 +274,7 @@ func TestDeleteUser_UserNotFound(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	h := NewHandler(db)
+	h := newTestHandler(db)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodDelete, "/api/v1/users/9999", nil)
 	r = muxVars(r, map[string]string{"id": "9999"})
@@ -290,12 +291,11 @@ func TestDeleteUser_NonAdmin(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Insert test user
 	hash, _ := bcrypt.GenerateFromPassword([]byte("password123"), 12)
 	db.Exec("INSERT INTO users (username, password_hash, email, role) VALUES (?, ?, ?, ?)",
 		"testuser", string(hash), "test@test.com", "viewer")
 
-	h := NewHandler(db)
+	h := newTestHandler(db)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodDelete, "/api/v1/users/1", nil)
 	r = muxVars(r, map[string]string{"id": "1"})
@@ -312,12 +312,11 @@ func TestDeleteUser_CannotDeleteYourself(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Insert admin user
 	hash, _ := bcrypt.GenerateFromPassword([]byte("password123"), 12)
 	db.Exec("INSERT INTO users (username, password_hash, email, role) VALUES (?, ?, ?, ?)",
 		"admin", string(hash), "admin@test.com", "admin")
 
-	h := NewHandler(db)
+	h := newTestHandler(db)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodDelete, "/api/v1/users/1", nil)
 	r = muxVars(r, map[string]string{"id": "1"})
@@ -334,14 +333,13 @@ func TestDeleteUser_ValidDelete(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Insert test users
 	hash, _ := bcrypt.GenerateFromPassword([]byte("password123"), 12)
 	db.Exec("INSERT INTO users (username, password_hash, email, role) VALUES (?, ?, ?, ?)",
 		"admin", string(hash), "admin@test.com", "admin")
 	db.Exec("INSERT INTO users (username, password_hash, email, role) VALUES (?, ?, ?, ?)",
 		"todelete", string(hash), "delete@test.com", "viewer")
 
-	h := NewHandler(db)
+	h := newTestHandler(db)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodDelete, "/api/v1/users/2", nil)
 	r = muxVars(r, map[string]string{"id": "2"})
@@ -362,14 +360,13 @@ func TestDeleteUser_ValidDelete(t *testing.T) {
 }
 
 // =============================================================================
-// Test UpdateUser
 // =============================================================================
 
 func TestUpdateUser_InvalidID(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	h := NewHandler(db)
+	h := newTestHandler(db)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/users/invalid", strings.NewReader(`{"email":"test@test.com"}`))
 	r = muxVars(r, map[string]string{"id": "invalid"})
@@ -386,7 +383,7 @@ func TestUpdateUser_InvalidJSON(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	h := NewHandler(db)
+	h := newTestHandler(db)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/users/1", strings.NewReader("{invalid json"))
 	r = muxVars(r, map[string]string{"id": "1"})
@@ -407,7 +404,7 @@ func TestUpdateUser_InvalidEmailFormat(t *testing.T) {
 	db.Exec("INSERT INTO users (username, password_hash, email, role) VALUES (?, ?, ?, ?)",
 		"testuser", string(hash), "test@test.com", "viewer")
 
-	h := NewHandler(db)
+	h := newTestHandler(db)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/users/1", strings.NewReader(`{"email":"notanemail"}`))
 	r = muxVars(r, map[string]string{"id": "1"})
@@ -428,7 +425,7 @@ func TestUpdateUser_InvalidRole(t *testing.T) {
 	db.Exec("INSERT INTO users (username, password_hash, email, role) VALUES (?, ?, ?, ?)",
 		"testuser", string(hash), "test@test.com", "viewer")
 
-	h := NewHandler(db)
+	h := newTestHandler(db)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/users/1", strings.NewReader(`{"role":"superuser"}`))
 	r = muxVars(r, map[string]string{"id": "1"})
@@ -445,7 +442,7 @@ func TestUpdateUser_UserNotFound(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	h := NewHandler(db)
+	h := newTestHandler(db)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/users/9999", strings.NewReader(`{"email":"test@test.com"}`))
 	r = muxVars(r, map[string]string{"id": "9999"})
@@ -466,7 +463,7 @@ func TestUpdateUser_NonAdminChangingRole(t *testing.T) {
 	db.Exec("INSERT INTO users (username, password_hash, email, role) VALUES (?, ?, ?, ?)",
 		"testuser", string(hash), "test@test.com", "viewer")
 
-	h := NewHandler(db)
+	h := newTestHandler(db)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/users/1", strings.NewReader(`{"role":"admin"}`))
 	r = muxVars(r, map[string]string{"id": "1"})
@@ -487,7 +484,7 @@ func TestUpdateUser_PasswordTooShort(t *testing.T) {
 	db.Exec("INSERT INTO users (username, password_hash, email, role) VALUES (?, ?, ?, ?)",
 		"testuser", string(hash), "test@test.com", "viewer")
 
-	h := NewHandler(db)
+	h := newTestHandler(db)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/users/1", strings.NewReader(`{"password":"short"}`))
 	r = muxVars(r, map[string]string{"id": "1"})
@@ -508,7 +505,7 @@ func TestUpdateUser_ValidUpdate(t *testing.T) {
 	db.Exec("INSERT INTO users (username, password_hash, email, role) VALUES (?, ?, ?, ?)",
 		"testuser", string(hash), "old@test.com", "viewer")
 
-	h := NewHandler(db)
+	h := newTestHandler(db)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/users/1", strings.NewReader(`{"email":"new@test.com"}`))
 	r = muxVars(r, map[string]string{"id": "1"})

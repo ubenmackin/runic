@@ -2,27 +2,34 @@
 package settings
 
 import (
-	"database/sql"
+	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/url"
 	"strconv"
 
+	"github.com/gorilla/mux"
+
 	"runic/internal/api/common"
 	"runic/internal/common/log"
-
-	"github.com/gorilla/mux"
 )
 
+// SettingsStore is defined as an interface here for testability.
+type SettingsStore interface {
+	GetSystemConfigInt(ctx context.Context, key string, defaultVal int) (int, error)
+	GetLogCount(ctx context.Context) (int, error)
+	SetSystemConfig(ctx context.Context, key, value string) error
+	ClearAllLogs(ctx context.Context) (int64, error)
+	GetNullableSystemConfig(ctx context.Context, key string) (string, error)
+}
+
 type Handler struct {
-	DB         *sql.DB
-	LogsDB     *sql.DB
+	Store      SettingsStore
 	logsDBPath string
 }
 
-func NewHandler(db *sql.DB, logsDB *sql.DB, logsDBPath string) *Handler {
-	return &Handler{DB: db, LogsDB: logsDB, logsDBPath: logsDBPath}
+func NewHandler(s SettingsStore, logsDBPath string) *Handler {
+	return &Handler{Store: s, logsDBPath: logsDBPath}
 }
 
 type LogSettings struct {
@@ -33,49 +40,39 @@ type LogSettings struct {
 	LogsDBPath      string `json:"logs_db_path"`
 }
 
-// GetLogSettings returns current log retention settings and stats
 func (h *Handler) GetLogSettings(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	var retentionDays int
-	err := h.DB.QueryRowContext(ctx, "SELECT value FROM system_config WHERE key = 'log_retention_days'").Scan(&retentionDays)
-	if errors.Is(err, sql.ErrNoRows) {
-		retentionDays = 30 // default
-	} else if err != nil {
+	retentionDays, err := h.Store.GetSystemConfigInt(ctx, "log_retention_days", 30)
+	if err != nil {
 		log.ErrorContext(ctx, "Failed to get log_retention_days", "error", err)
 		common.RespondError(w, http.StatusInternalServerError, "failed to get log settings")
 		return
 	}
 
-	var logCount int
-	if h.LogsDB != nil {
-		err = h.LogsDB.QueryRowContext(ctx, "SELECT COUNT(*) FROM firewall_logs").Scan(&logCount)
-		if err != nil {
-			logCount = 0
-		}
+	logCount, err := h.Store.GetLogCount(ctx)
+	if err != nil {
+		log.WarnContext(ctx, "Failed to count logs", "error", err)
+		logCount = 0
 	}
 
 	estimatedSizeMB := (logCount * 500) / (1024 * 1024)
 
-	retentionLabel := getRetentionLabel(retentionDays)
-
 	common.RespondJSON(w, http.StatusOK, LogSettings{
 		RetentionDays:   retentionDays,
-		RetentionLabel:  retentionLabel,
+		RetentionLabel:  getRetentionLabel(retentionDays),
 		LogCount:        logCount,
 		EstimatedSizeMB: estimatedSizeMB,
 		LogsDBPath:      h.logsDBPath,
 	})
 }
 
-// UpdateLogSettings updates log retention settings
 func (h *Handler) UpdateLogSettings(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	var req struct {
 		RetentionDays int `json:"retention_days"`
 	}
-
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		common.RespondError(w, http.StatusBadRequest, "invalid JSON")
 		return
@@ -86,11 +83,7 @@ func (h *Handler) UpdateLogSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err := h.DB.ExecContext(ctx,
-		"INSERT OR REPLACE INTO system_config (key, value, updated_at) VALUES ('log_retention_days', ?, CURRENT_TIMESTAMP)",
-		req.RetentionDays,
-	)
-	if err != nil {
+	if err := h.Store.SetSystemConfig(ctx, "log_retention_days", strconv.Itoa(req.RetentionDays)); err != nil {
 		log.ErrorContext(ctx, "Failed to update log_retention_days", "error", err)
 		common.RespondError(w, http.StatusInternalServerError, "failed to update log settings")
 		return
@@ -104,56 +97,35 @@ func (h *Handler) UpdateLogSettings(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// ClearAllLogs deletes all firewall logs
 func (h *Handler) ClearAllLogs(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	if h.LogsDB == nil {
-		log.ErrorContext(ctx, "LogsDB not initialized")
-		common.RespondError(w, http.StatusInternalServerError, "logs database not available")
-		return
-	}
-
-	result, err := h.LogsDB.ExecContext(ctx, "DELETE FROM firewall_logs")
+	deleted, err := h.Store.ClearAllLogs(ctx)
 	if err != nil {
 		log.ErrorContext(ctx, "Failed to clear logs", "error", err)
 		common.RespondError(w, http.StatusInternalServerError, "failed to clear logs")
 		return
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		log.ErrorContext(ctx, "Failed to get rows affected", "error", err)
-		common.RespondError(w, http.StatusInternalServerError, "failed to clear logs")
-		return
-	}
-	log.InfoContext(ctx, "Cleared all logs", "count", rowsAffected)
-
+	log.InfoContext(ctx, "Cleared all logs", "count", deleted)
 	common.RespondJSON(w, http.StatusOK, map[string]interface{}{
-		"deleted": rowsAffected,
+		"deleted": deleted,
 	})
 }
 
-// GetInstanceSettings returns the instance URL configuration.
 func (h *Handler) GetInstanceSettings(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	var instanceURL sql.NullString
-	err := h.DB.QueryRowContext(ctx, "SELECT value FROM system_config WHERE key = 'instance_url'").Scan(&instanceURL)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+	instanceURL, err := h.Store.GetNullableSystemConfig(ctx, "instance_url")
+	if err != nil {
+		log.ErrorContext(ctx, "Failed to get instance_url", "error", err)
 		common.RespondError(w, http.StatusInternalServerError, "failed to get instance settings")
 		return
 	}
 
-	url := ""
-	if instanceURL.Valid {
-		url = instanceURL.String
-	}
-
-	common.RespondJSON(w, http.StatusOK, map[string]string{"url": url})
+	common.RespondJSON(w, http.StatusOK, map[string]string{"url": instanceURL})
 }
 
-// UpdateInstanceSettings updates the instance URL configuration.
 func (h *Handler) UpdateInstanceSettings(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
@@ -181,11 +153,7 @@ func (h *Handler) UpdateInstanceSettings(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	_, err := h.DB.ExecContext(ctx,
-		"INSERT OR REPLACE INTO system_config (key, value, updated_at) VALUES ('instance_url', ?, CURRENT_TIMESTAMP)",
-		req.URL,
-	)
-	if err != nil {
+	if err := h.Store.SetSystemConfig(ctx, "instance_url", req.URL); err != nil {
 		log.ErrorContext(ctx, "Failed to update instance settings", "error", err)
 		common.RespondError(w, http.StatusInternalServerError, "failed to update instance settings")
 		return
@@ -194,7 +162,6 @@ func (h *Handler) UpdateInstanceSettings(w http.ResponseWriter, r *http.Request)
 	common.RespondJSON(w, http.StatusOK, map[string]string{"url": req.URL})
 }
 
-// RegisterRoutes adds settings routes to the given router
 func (h *Handler) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/logs", h.GetLogSettings).Methods("GET")
 	r.HandleFunc("/logs", h.UpdateLogSettings).Methods("PUT")

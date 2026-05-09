@@ -21,7 +21,6 @@ import (
 	"runic/internal/testutil"
 )
 
-// generateValidAgentToken creates a valid JWT token for an agent
 func generateValidAgentToken(t *testing.T, db *sql.DB, hostname string) string {
 	secretStr := "test-secret-key-for-agent-jwt-256-bits!!"
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
@@ -37,10 +36,8 @@ func generateValidAgentToken(t *testing.T, db *sql.DB, hostname string) string {
 	return tokenStr
 }
 
-// muxVars is a helper to mock gorilla/mux vars
 var muxVars = testutil.MuxVars
 
-// makeAuthRequest creates a request with valid auth for a given peer
 func makeAuthRequest(t *testing.T, db *sql.DB, method, url string, body string, peerHostname string) *http.Request {
 	req := httptest.NewRequest(method, url, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -52,7 +49,6 @@ func makeAuthRequest(t *testing.T, db *sql.DB, method, url string, body string, 
 }
 
 // =============================================================================
-// Test AgentAuthMiddleware
 // =============================================================================
 
 func TestAgentAuthMiddleware(t *testing.T) {
@@ -159,7 +155,7 @@ func TestAgentAuthMiddleware(t *testing.T) {
 			}
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(store.NewPeerStore(db), db, db, nil)
+			handler := NewHandler(store.NewPeerStore(db), store.NewDashboardStore(db, db), nil, store.NewImportStore(db, store.NewPeerStore(db), store.NewGroupStore(db), store.NewServiceStore(db)))
 
 			// Track if next handler was called
 			nextCalled := false
@@ -182,7 +178,6 @@ func TestAgentAuthMiddleware(t *testing.T) {
 }
 
 // =============================================================================
-// Test RegisterAgent
 // =============================================================================
 
 func TestRegisterAgent(t *testing.T) {
@@ -280,7 +275,7 @@ func TestRegisterAgent(t *testing.T) {
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(store.NewPeerStore(db), db, db, nil)
+			handler := NewHandler(store.NewPeerStore(db), store.NewDashboardStore(db, db), nil, store.NewImportStore(db, store.NewPeerStore(db), store.NewGroupStore(db), store.NewServiceStore(db)))
 			handler.RegisterAgent(w, req)
 
 			if w.Code != tt.wantCode {
@@ -295,7 +290,6 @@ func TestRegisterAgent(t *testing.T) {
 }
 
 // =============================================================================
-// Test RegisterAgent Malicious Input
 // =============================================================================
 
 func TestRegisterAgent_MaliciousInput(t *testing.T) {
@@ -476,7 +470,7 @@ func TestRegisterAgent_MaliciousInput(t *testing.T) {
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(store.NewPeerStore(db), db, db, nil)
+			handler := NewHandler(store.NewPeerStore(db), store.NewDashboardStore(db, db), nil, store.NewImportStore(db, store.NewPeerStore(db), store.NewGroupStore(db), store.NewServiceStore(db)))
 			handler.RegisterAgent(w, req)
 
 			if w.Code != tt.wantCode {
@@ -490,7 +484,6 @@ func TestRegisterAgent_MaliciousInput(t *testing.T) {
 	}
 }
 
-// containsAny checks if s contains any of the chars in substrings
 func containsAny(s string, chars string) bool {
 	for _, c := range chars {
 		if strings.ContainsRune(s, c) {
@@ -501,7 +494,6 @@ func containsAny(s string, chars string) bool {
 }
 
 // =============================================================================
-// Test GetBundle
 // =============================================================================
 
 func TestGetBundle(t *testing.T) {
@@ -573,13 +565,12 @@ func TestGetBundle(t *testing.T) {
 				req.Header.Set("If-None-Match", tt.etag)
 			}
 
-			// Add auth header for peer lookup
 			token := generateValidAgentToken(t, db, tt.peer)
 			req.Header.Set("Authorization", "Bearer "+token)
 
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(store.NewPeerStore(db), db, db, nil)
+			handler := NewHandler(store.NewPeerStore(db), store.NewDashboardStore(db, db), nil, store.NewImportStore(db, store.NewPeerStore(db), store.NewGroupStore(db), store.NewServiceStore(db)))
 
 			handler.AgentAuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
 				handler.GetBundle(w, r)
@@ -604,7 +595,6 @@ func TestGetBundle(t *testing.T) {
 }
 
 // =============================================================================
-// Test Heartbeat
 // =============================================================================
 
 func TestHeartbeat(t *testing.T) {
@@ -661,7 +651,7 @@ func TestHeartbeat(t *testing.T) {
 			req := makeAuthRequest(t, db, "POST", "/api/v1/agents/heartbeat", tt.reqBody, peer)
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(store.NewPeerStore(db), db, db, nil)
+			handler := NewHandler(store.NewPeerStore(db), store.NewDashboardStore(db, db), nil, store.NewImportStore(db, store.NewPeerStore(db), store.NewGroupStore(db), store.NewServiceStore(db)))
 
 			handler.AgentAuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
 				handler.Heartbeat(w, r)
@@ -679,7 +669,6 @@ func TestHeartbeat(t *testing.T) {
 }
 
 // =============================================================================
-// Test SubmitLogs
 // =============================================================================
 
 func TestSubmitLogs(t *testing.T) {
@@ -780,7 +769,7 @@ func TestSubmitLogs(t *testing.T) {
 			req := makeAuthRequest(t, db, "POST", "/api/v1/agents/logs", tt.reqBody, "test-agent")
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(store.NewPeerStore(db), db, logsDB, nil)
+			handler := NewHandler(store.NewPeerStore(db), store.NewDashboardStore(db, logsDB), nil, store.NewImportStore(db, store.NewPeerStore(db), store.NewGroupStore(db), store.NewServiceStore(db)))
 
 			handler.AgentAuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
 				handler.SubmitLogs(w, r)
@@ -798,7 +787,6 @@ func TestSubmitLogs(t *testing.T) {
 }
 
 // =============================================================================
-// Test ConfirmBundleApplied
 // =============================================================================
 
 func TestConfirmBundleApplied(t *testing.T) {
@@ -842,7 +830,7 @@ func TestConfirmBundleApplied(t *testing.T) {
 			req := makeAuthRequest(t, db, "POST", "/api/v1/agents/confirm-bundle", tt.reqBody, "test-agent")
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(store.NewPeerStore(db), db, db, nil)
+			handler := NewHandler(store.NewPeerStore(db), store.NewDashboardStore(db, db), nil, store.NewImportStore(db, store.NewPeerStore(db), store.NewGroupStore(db), store.NewServiceStore(db)))
 
 			handler.AgentAuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
 				handler.ConfirmBundleApplied(w, r)
@@ -856,7 +844,6 @@ func TestConfirmBundleApplied(t *testing.T) {
 }
 
 // =============================================================================
-// Test AgentCheckRotation
 // =============================================================================
 
 func TestAgentCheckRotation(t *testing.T) {
@@ -915,7 +902,7 @@ func TestAgentCheckRotation(t *testing.T) {
 			req := makeAuthRequest(t, db, "GET", "/api/v1/agents/check-rotation", "", peer)
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(store.NewPeerStore(db), db, db, nil)
+			handler := NewHandler(store.NewPeerStore(db), store.NewDashboardStore(db, db), nil, store.NewImportStore(db, store.NewPeerStore(db), store.NewGroupStore(db), store.NewServiceStore(db)))
 
 			handler.AgentAuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
 				handler.AgentCheckRotation(w, r)
@@ -933,17 +920,14 @@ func TestAgentCheckRotation(t *testing.T) {
 }
 
 // =============================================================================
-// Test AgentTestKey
 // =============================================================================
 
 func TestAgentTestKey(t *testing.T) {
-	// Generate a valid signature for "test-message" with key "test-hmac"
 	testHMACKey := "test-hmac"
 	mac := hmac.New(sha256.New, []byte(testHMACKey))
 	mac.Write([]byte("test-message"))
 	validSignature := hex.EncodeToString(mac.Sum(nil))
 
-	// Generate invalid signature
 	invalidMAC := hmac.New(sha256.New, []byte("wrong-key"))
 	invalidMAC.Write([]byte("test-message"))
 	invalidSignature := hex.EncodeToString(invalidMAC.Sum(nil))
@@ -1006,7 +990,7 @@ func TestAgentTestKey(t *testing.T) {
 			req := makeAuthRequest(t, db, "POST", "/api/v1/agents/test-key", tt.reqBody, peer)
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(store.NewPeerStore(db), db, db, nil)
+			handler := NewHandler(store.NewPeerStore(db), store.NewDashboardStore(db, db), nil, store.NewImportStore(db, store.NewPeerStore(db), store.NewGroupStore(db), store.NewServiceStore(db)))
 
 			handler.AgentAuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
 				handler.AgentTestKey(w, r)
@@ -1020,7 +1004,6 @@ func TestAgentTestKey(t *testing.T) {
 }
 
 // =============================================================================
-// Test GenerateRegistrationToken
 // =============================================================================
 
 func TestGenerateRegistrationToken(t *testing.T) {
@@ -1077,7 +1060,7 @@ func TestGenerateRegistrationToken(t *testing.T) {
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(store.NewPeerStore(db), db, db, nil)
+			handler := NewHandler(store.NewPeerStore(db), store.NewDashboardStore(db, db), nil, store.NewImportStore(db, store.NewPeerStore(db), store.NewGroupStore(db), store.NewServiceStore(db)))
 			handler.GenerateRegistrationToken(w, req)
 
 			if w.Code != tt.wantCode {
@@ -1092,7 +1075,6 @@ func TestGenerateRegistrationToken(t *testing.T) {
 }
 
 // =============================================================================
-// Test ListRegistrationTokens
 // =============================================================================
 
 func TestListRegistrationTokens(t *testing.T) {
@@ -1133,7 +1115,6 @@ func TestListRegistrationTokens(t *testing.T) {
 				if len(resp) != 2 {
 					t.Errorf("expected 2 tokens, got %d", len(resp))
 				}
-				// Check masking - token should be masked
 				for _, token := range resp {
 					tokenStr := token["token"].(string)
 					if !strings.Contains(tokenStr, "...") {
@@ -1156,7 +1137,7 @@ func TestListRegistrationTokens(t *testing.T) {
 			req := httptest.NewRequest("GET", "/api/v1/registration-tokens", nil)
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(store.NewPeerStore(db), db, db, nil)
+			handler := NewHandler(store.NewPeerStore(db), store.NewDashboardStore(db, db), nil, store.NewImportStore(db, store.NewPeerStore(db), store.NewGroupStore(db), store.NewServiceStore(db)))
 			handler.ListRegistrationTokens(w, req)
 
 			if w.Code != tt.wantCode {
@@ -1171,7 +1152,6 @@ func TestListRegistrationTokens(t *testing.T) {
 }
 
 // =============================================================================
-// Test RevokeRegistrationToken
 // =============================================================================
 
 func TestRevokeRegistrationToken(t *testing.T) {
@@ -1220,7 +1200,7 @@ func TestRevokeRegistrationToken(t *testing.T) {
 			w := httptest.NewRecorder()
 			req = muxVars(req, map[string]string{"id": tt.tokenID})
 
-			handler := NewHandler(store.NewPeerStore(db), db, db, nil)
+			handler := NewHandler(store.NewPeerStore(db), store.NewDashboardStore(db, db), nil, store.NewImportStore(db, store.NewPeerStore(db), store.NewGroupStore(db), store.NewServiceStore(db)))
 			handler.RevokeRegistrationToken(w, req)
 
 			if w.Code != tt.wantCode {
@@ -1231,7 +1211,6 @@ func TestRevokeRegistrationToken(t *testing.T) {
 }
 
 // =============================================================================
-// Test LogEvent.Validate
 // =============================================================================
 
 func TestLogEventValidate(t *testing.T) {
@@ -1349,7 +1328,6 @@ func TestLogEventValidate(t *testing.T) {
 }
 
 // =============================================================================
-// Test GenerateHMACKey
 // =============================================================================
 
 func TestGenerateHMACKey(t *testing.T) {
@@ -1371,7 +1349,6 @@ func TestGenerateHMACKey(t *testing.T) {
 }
 
 // =============================================================================
-// Test generateAgentKey
 // =============================================================================
 
 func TestGenerateAgentKey(t *testing.T) {
@@ -1399,7 +1376,6 @@ func TestGenerateAgentKey(t *testing.T) {
 }
 
 // =============================================================================
-// Test maskToken
 // =============================================================================
 
 func TestMaskToken(t *testing.T) {
@@ -1441,7 +1417,6 @@ func TestMaskToken(t *testing.T) {
 }
 
 // =============================================================================
-// Test ConsumeRegistrationToken
 // =============================================================================
 
 func TestConsumeRegistrationToken(t *testing.T) {
@@ -1490,7 +1465,7 @@ func TestConsumeRegistrationToken(t *testing.T) {
 				tt.setup(t, db)
 			}
 
-			handler := NewHandler(store.NewPeerStore(db), db, db, nil)
+			handler := NewHandler(store.NewPeerStore(db), store.NewDashboardStore(db, db), nil, store.NewImportStore(db, store.NewPeerStore(db), store.NewGroupStore(db), store.NewServiceStore(db)))
 			consumed, err := handler.ConsumeRegistrationToken(tt.token, tt.hostname)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
@@ -1504,7 +1479,6 @@ func TestConsumeRegistrationToken(t *testing.T) {
 }
 
 // =============================================================================
-// Test Helper Functions
 // =============================================================================
 
 func TestSSEHubFromContext(t *testing.T) {
@@ -1552,7 +1526,6 @@ func TestWithHubs(t *testing.T) {
 }
 
 // =============================================================================
-// Test upsertPeerIPs
 // =============================================================================
 
 func TestUpsertPeerIPs(t *testing.T) {
@@ -1619,7 +1592,6 @@ func TestUpsertPeerIPs(t *testing.T) {
 				}
 				id, _ := res.LastInsertId()
 
-				// Insert IPs with old primary
 				db.Exec("INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 1)", id, "10.0.0.2")
 				db.Exec("INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 0)", id, "192.168.1.2")
 
@@ -1662,7 +1634,6 @@ func TestUpsertPeerIPs(t *testing.T) {
 				if err != nil {
 					t.Fatalf("count: %v", err)
 				}
-				// INSERT OR IGNORE means only one row despite duplicate input
 				if count != 1 {
 					t.Errorf("expected 1 peer_ip (deduped by INSERT OR IGNORE), got %d", count)
 				}
@@ -1701,7 +1672,7 @@ func TestUpsertPeerIPs(t *testing.T) {
 
 			peerID := tt.setup(t, db)
 
-			handler := NewHandler(store.NewPeerStore(db), db, db, nil)
+			handler := NewHandler(store.NewPeerStore(db), store.NewDashboardStore(db, db), nil, store.NewImportStore(db, store.NewPeerStore(db), store.NewGroupStore(db), store.NewServiceStore(db)))
 			err := handler.PeerStore.UpsertPeerIPs(context.Background(), peerID, tt.allIPs, tt.primaryIP)
 
 			if (err != nil) != tt.wantErr {
@@ -1716,7 +1687,6 @@ func TestUpsertPeerIPs(t *testing.T) {
 }
 
 // =============================================================================
-// Test syncPeerIPs
 // =============================================================================
 
 func TestSyncPeerIPs(t *testing.T) {
@@ -1842,15 +1812,12 @@ func TestSyncPeerIPs(t *testing.T) {
 				}
 				id, _ := res.LastInsertId()
 
-				// Insert peer IPs
 				db.Exec("INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 1)", id, "10.0.0.3")
 				db.Exec("INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 0)", id, "192.168.1.3") // will become stale
 
-				// Create a group and service for the policy
 				db.Exec("INSERT INTO groups (name) VALUES ('test-group')")
 				db.Exec("INSERT INTO services (name, ports, protocol) VALUES ('ssh', '22', 'tcp')")
 
-				// Create a policy referencing the soon-to-be-stale IP as source_ip
 				db.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, source_ip, target_ip, action)
 					VALUES ('test-policy', ?, 'group', 1, ?, 'group', '192.168.1.3', '10.0.0.3', 'ACCEPT')`, id, id)
 
@@ -1893,11 +1860,9 @@ func TestSyncPeerIPs(t *testing.T) {
 				db.Exec("INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 1)", id, "10.0.0.4")
 				db.Exec("INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 0)", id, "172.16.0.4") // will become stale
 
-				// Create group and service
 				db.Exec("INSERT INTO groups (name) VALUES ('test-group4')")
 				db.Exec("INSERT INTO services (name, ports, protocol) VALUES ('http', '80', 'tcp')")
 
-				// Create a policy referencing the stale IP as target_ip
 				db.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, source_ip, target_ip, action)
 					VALUES ('target-policy', ?, 'group', 1, ?, 'group', '10.0.0.4', '172.16.0.4', 'ACCEPT')`, id, id)
 
@@ -2024,29 +1989,24 @@ func TestSyncPeerIPs(t *testing.T) {
 		{
 			name: "policy reference from different peer does not prevent deletion",
 			setup: func(t *testing.T, db *sql.DB) int {
-				// Create the peer we'll sync
 				res, err := db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)`, "sync-peer8", "10.0.0.8", "key8", "hmac8")
 				if err != nil {
 					t.Fatalf("setup: %v", err)
 				}
 				id, _ := res.LastInsertId()
 
-				// Create a different peer
 				res2, err := db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)`, "other-peer8", "10.0.0.88", "key88", "hmac88")
 				if err != nil {
 					t.Fatalf("setup other peer: %v", err)
 				}
 				otherID, _ := res2.LastInsertId()
 
-				// Insert IPs for our peer
 				db.Exec("INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 1)", id, "10.0.0.8")
 				db.Exec("INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 0)", id, "192.168.1.8") // will be stale
 
-				// Create group and service
 				db.Exec("INSERT INTO groups (name) VALUES ('test-group8')")
 				db.Exec("INSERT INTO services (name, ports, protocol) VALUES ('mysql', '3306', 'tcp')")
 
-				// Create a policy where OTHER peer references the stale IP as source_ip
 				// This should NOT prevent deletion since source_id != our peerID
 				db.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, source_ip, target_ip, action)
 					VALUES ('cross-peer-policy', ?, 'group', 1, ?, 'group', '192.168.1.8', '10.0.0.8', 'ACCEPT')`, otherID, id)
@@ -2078,7 +2038,7 @@ func TestSyncPeerIPs(t *testing.T) {
 
 			peerID := tt.setup(t, db)
 
-			handler := NewHandler(store.NewPeerStore(db), db, db, nil)
+			handler := NewHandler(store.NewPeerStore(db), store.NewDashboardStore(db, db), nil, store.NewImportStore(db, store.NewPeerStore(db), store.NewGroupStore(db), store.NewServiceStore(db)))
 			_, err := handler.PeerStore.SyncPeerIPs(context.Background(), peerID, tt.allIPs, tt.primaryIP)
 
 			if (err != nil) != tt.wantErr {

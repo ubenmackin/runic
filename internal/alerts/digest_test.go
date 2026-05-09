@@ -7,11 +7,10 @@ import (
 	"time"
 
 	"runic/internal/db"
+	"runic/internal/store"
 	"runic/internal/testutil"
 )
 
-// TestDigestSendTime_TimezoneHandling tests that digests are sent at the correct time
-// for users in different timezones.
 func TestDigestSendTime_TimezoneHandling(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -72,7 +71,6 @@ func TestDigestSendTime_TimezoneHandling(t *testing.T) {
 				t.Fatalf("failed to load timezone %s: %v", tt.userTimezone, err)
 			}
 
-			// Create a reference time in that timezone
 			now := time.Now().In(loc)
 			currentTime := now.Format("15:04")
 			currentDate := now.Format("2006-01-02")
@@ -102,7 +100,6 @@ func TestDigestSendTime_TimezoneHandling(t *testing.T) {
 	}
 }
 
-// TestDigestFallback_InvalidTimezone tests that invalid timezone falls back to UTC.
 func TestDigestFallback_InvalidTimezone(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -177,7 +174,6 @@ func TestDigestFallback_InvalidTimezone(t *testing.T) {
 	}
 }
 
-// TestDigestTimezone_EdgeCases tests timezone handling edge cases.
 func TestDigestTimezone_EdgeCases(t *testing.T) {
 	t.Run("DST transition in America/New_York", func(t *testing.T) {
 		loc, err := time.LoadLocation("America/New_York")
@@ -302,7 +298,6 @@ func TestDigestTimezone_EdgeCases(t *testing.T) {
 	})
 }
 
-// TestDigestTime_Comparison tests the digest time comparison logic.
 func TestDigestTime_Comparison(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -361,16 +356,15 @@ func TestDigestTime_Comparison(t *testing.T) {
 	}
 }
 
-// TestDigestSendTime_MultipleTimezones tests multiple users with different timezones.
 func TestDigestSendTime_MultipleTimezones(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
 	setupTestAlertTables(t, database)
 	databaseWrapper := db.New(database)
+	alertStore := store.NewAlertStore(databaseWrapper)
 	ctx := context.Background()
 
-	// Create users in different timezones
 	users := []struct {
 		username string
 		email    string
@@ -393,12 +387,12 @@ func TestDigestSendTime_MultipleTimezones(t *testing.T) {
 			DigestTimezone: u.timezone,
 		}
 
-		if err := UpsertUserNotificationPreferences(ctx, databaseWrapper, prefs); err != nil {
+		if err := alertStore.UpsertUserNotificationPreferences(ctx, prefs); err != nil {
 			t.Fatalf("failed to create preferences for %s: %v", u.username, err)
 		}
 
 		// Verify preferences were stored correctly
-		stored, err := GetUserNotificationPreferences(ctx, databaseWrapper, uint(userID))
+		stored, err := alertStore.GetUserNotificationPreferences(ctx, uint(userID))
 		if err != nil {
 			t.Fatalf("failed to get preferences for %s: %v", u.username, err)
 		}
@@ -428,13 +422,13 @@ func TestDigestSendTime_MultipleTimezones(t *testing.T) {
 	}
 }
 
-// TestDigestSendTime_TimezoneInDatabase tests storing and retrieving timezone from database.
 func TestDigestSendTime_TimezoneInDatabase(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
 	setupTestAlertTables(t, database)
 	databaseWrapper := db.New(database)
+	alertStore := store.NewAlertStore(databaseWrapper)
 	ctx := context.Background()
 
 	userID := createTestUser(t, database, "tzuser", "tzuser@test.com", "admin")
@@ -460,11 +454,11 @@ func TestDigestSendTime_TimezoneInDatabase(t *testing.T) {
 				DigestTimezone: tt.timezone,
 			}
 
-			if err := UpsertUserNotificationPreferences(ctx, databaseWrapper, prefs); err != nil {
+			if err := alertStore.UpsertUserNotificationPreferences(ctx, prefs); err != nil {
 				t.Fatalf("failed to upsert preferences: %v", err)
 			}
 
-			stored, err := GetUserNotificationPreferences(ctx, databaseWrapper, uint(userID))
+			stored, err := alertStore.GetUserNotificationPreferences(ctx, uint(userID))
 			if err != nil {
 				t.Fatalf("failed to get preferences: %v", err)
 			}
@@ -485,13 +479,13 @@ func TestDigestSendTime_TimezoneInDatabase(t *testing.T) {
 	}
 }
 
-// TestQuietHours_TimezoneHandling tests quiet hours with timezone awareness.
 func TestQuietHours_TimezoneHandling(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
 	setupTestAlertTables(t, database)
 	databaseWrapper := db.New(database)
+	alertStore := store.NewAlertStore(databaseWrapper)
 	ctx := context.Background()
 
 	userID := createTestUser(t, database, "qhuser", "qhuser@test.com", "admin")
@@ -517,11 +511,11 @@ func TestQuietHours_TimezoneHandling(t *testing.T) {
 				QuietHoursTimezone: tt.timezone,
 			}
 
-			if err := UpsertUserNotificationPreferences(ctx, databaseWrapper, prefs); err != nil {
+			if err := alertStore.UpsertUserNotificationPreferences(ctx, prefs); err != nil {
 				t.Fatalf("failed to upsert preferences: %v", err)
 			}
 
-			stored, err := GetUserNotificationPreferences(ctx, databaseWrapper, uint(userID))
+			stored, err := alertStore.GetUserNotificationPreferences(ctx, uint(userID))
 			if err != nil {
 				t.Fatalf("failed to get preferences: %v", err)
 			}
@@ -537,7 +531,6 @@ func TestQuietHours_TimezoneHandling(t *testing.T) {
 				return
 			}
 
-			// Check current time against quiet hours in user's timezone
 			now := time.Now().In(loc)
 			currentHour := now.Hour()
 
@@ -560,7 +553,6 @@ func TestQuietHours_TimezoneHandling(t *testing.T) {
 	}
 }
 
-// parseTimeHour extracts the hour from a HH:MM time string.
 func parseTimeHour(timeStr string) int {
 	// Simple parsing: HH:MM format
 	if len(timeStr) >= 2 {

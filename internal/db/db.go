@@ -16,7 +16,6 @@ import (
 //go:embed schema.sql
 var schemaSQL string
 
-// Schema returns the database schema SQL.
 func Schema() string {
 	return schemaSQL
 }
@@ -52,25 +51,21 @@ var allowedTables = map[string]bool{
 	"peer_ips":                      true,
 }
 
-// Database wraps *sql.DB to allow dependency injection.
-// The global DB variable is kept for backward compatibility,
+// Database wraps *sql.DB. The global DB variable is kept for backward compatibility,
 // but new code should prefer passing *Database explicitly.
 type Database struct {
 	*sql.DB
 }
 
-// New creates a new Database wrapper around an existing *sql.DB.
 func New(database *sql.DB) *Database {
 	return &Database{DB: database}
 }
 
-// UnderlyingDB returns the raw *sql.DB for cases where the database driver is needed.
 func (d *Database) UnderlyingDB() *sql.DB {
 	return d.DB
 }
 
 func InitDB(dataSourceName string) (*sql.DB, error) {
-	// Check for environment variable override
 	if dbPath := os.Getenv("RUNIC_DB_PATH"); dbPath != "" {
 		dataSourceName = dbPath
 		log.Info("Using database path from RUNIC_DB_PATH", "path", dataSourceName)
@@ -96,7 +91,6 @@ func InitDB(dataSourceName string) (*sql.DB, error) {
 	database := New(sqlDB)
 
 	// Run migrations BEFORE schema creation to handle existing databases.
-	// For example, the servers → peers table rename must complete before
 	// schema.sql tries to create indexes on peer_id columns, which would
 	// fail on older databases that still have the "servers" table.
 	if err := migrateSchema(context.Background(), database.DB); err != nil {
@@ -122,7 +116,6 @@ func InitDB(dataSourceName string) (*sql.DB, error) {
 		log.Warn("Failed to migrate secrets from .env", "error", err)
 	}
 
-	// Add DB constraints (CHECK, UNIQUE) via table recreation
 	if err := addDBConstraints(database.DB); err != nil {
 		log.Warn("Failed to add DB constraints", "error", err)
 	}

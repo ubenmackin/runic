@@ -12,14 +12,13 @@ import (
 	"runic/internal/testutil"
 )
 
-// TestCheckPeerOffline tests the CheckPeerOffline helper method.
 func TestCheckPeerOffline(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
 	ctx := context.Background()
 	databaseWrapper := db.New(database)
-	evaluator := NewConditionEvaluator(databaseWrapper, databaseWrapper)
+	evaluator := NewConditionEvaluator(databaseWrapper, databaseWrapper, newTestHostnameLookup(database))
 
 	// Test 1: Peer is online (returns false)
 	t.Run("peer is online", func(t *testing.T) {
@@ -95,16 +94,14 @@ func TestCheckPeerOffline(t *testing.T) {
 	})
 }
 
-// TestCheckBundleFailed tests the CheckBundleFailed helper method.
 func TestCheckBundleFailed(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
 	ctx := context.Background()
 	databaseWrapper := db.New(database)
-	evaluator := NewConditionEvaluator(databaseWrapper, databaseWrapper)
+	evaluator := NewConditionEvaluator(databaseWrapper, databaseWrapper, newTestHostnameLookup(database))
 
-	// Insert a peer for testing
 	result, err := database.Exec(
 		"INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, status) VALUES (?, ?, ?, ?, ?)",
 		"test-peer", "10.0.0.1", "key", "hmac", "online",
@@ -116,7 +113,6 @@ func TestCheckBundleFailed(t *testing.T) {
 
 	// Test 1: No failures (returns false)
 	t.Run("no failures", func(t *testing.T) {
-		// Create a push job but no failures
 		_, err := database.Exec(
 			"INSERT INTO push_jobs (id, initiated_by, total_peers, status) VALUES (?, ?, ?, ?)",
 			"job-no-fail", "admin", 1, "completed",
@@ -136,7 +132,6 @@ func TestCheckBundleFailed(t *testing.T) {
 
 	// Test 2: Recent failures exist (returns true)
 	t.Run("recent failures exist", func(t *testing.T) {
-		// Create a push job
 		_, err := database.Exec(
 			"INSERT INTO push_jobs (id, initiated_by, total_peers, status, created_at) VALUES (?, ?, ?, ?, ?)",
 			"job-with-fail", "admin", 1, "completed_with_errors", time.Now().Add(-30*time.Minute),
@@ -145,7 +140,6 @@ func TestCheckBundleFailed(t *testing.T) {
 			t.Fatalf("failed to insert push job: %v", err)
 		}
 
-		// Create a failed push job peer entry
 		_, err = database.Exec(
 			"INSERT INTO push_job_peers (job_id, peer_id, peer_hostname, status, error_message) VALUES (?, ?, ?, ?, ?)",
 			"job-with-fail", peerID, "test-peer", "failed", "bundle generation failed",
@@ -165,7 +159,6 @@ func TestCheckBundleFailed(t *testing.T) {
 
 	// Test 3: Old failures outside window (returns false)
 	t.Run("old failures outside window", func(t *testing.T) {
-		// Create a peer for this test
 		result, err := database.Exec(
 			"INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, status) VALUES (?, ?, ?, ?, ?)",
 			"old-failure-peer", "10.0.0.2", "key2", "hmac2", "online",
@@ -175,7 +168,6 @@ func TestCheckBundleFailed(t *testing.T) {
 		}
 		oldPeerID, _ := result.LastInsertId()
 
-		// Create a push job older than 1 hour (the CheckBundleFailed window)
 		_, err = database.Exec(
 			"INSERT INTO push_jobs (id, initiated_by, total_peers, status, created_at) VALUES (?, ?, ?, ?, ?)",
 			"old-job", "admin", 1, "completed_with_errors", time.Now().Add(-2*time.Hour),
@@ -184,7 +176,6 @@ func TestCheckBundleFailed(t *testing.T) {
 			t.Fatalf("failed to insert old push job: %v", err)
 		}
 
-		// Create a failed push job peer entry (but it's old)
 		_, err = database.Exec(
 			"INSERT INTO push_job_peers (job_id, peer_id, peer_hostname, status, error_message) VALUES (?, ?, ?, ?, ?)",
 			"old-job", oldPeerID, "old-failure-peer", "failed", "old failure",
@@ -203,16 +194,14 @@ func TestCheckBundleFailed(t *testing.T) {
 	})
 }
 
-// TestCheckBlockedSpike tests the CheckBlockedSpike helper method.
 func TestCheckBlockedSpike(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
 	ctx := context.Background()
 	databaseWrapper := db.New(database)
-	evaluator := NewConditionEvaluator(databaseWrapper, databaseWrapper)
+	evaluator := NewConditionEvaluator(databaseWrapper, databaseWrapper, newTestHostnameLookup(database))
 
-	// Insert a peer for testing
 	result, err := database.Exec(
 		"INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, status) VALUES (?, ?, ?, ?, ?)",
 		"test-peer", "10.0.0.1", "key", "hmac", "online",
@@ -238,7 +227,6 @@ func TestCheckBlockedSpike(t *testing.T) {
 
 	// Test 2: Spike detected (returns true with percentage)
 	t.Run("spike detected", func(t *testing.T) {
-		// Insert previous blocked traffic (5-10 minutes ago)
 		for i := 0; i < 5; i++ {
 			_, err := database.Exec(
 				"INSERT INTO firewall_logs (peer_id, action, timestamp, src_ip, dst_ip, protocol) VALUES (?, ?, ?, ?, ?, ?)",
@@ -249,7 +237,6 @@ func TestCheckBlockedSpike(t *testing.T) {
 			}
 		}
 
-		// Insert recent blocked traffic (last 5 minutes) - much higher count to create a spike
 		for i := 0; i < 50; i++ {
 			_, err := database.Exec(
 				"INSERT INTO firewall_logs (peer_id, action, timestamp, src_ip, dst_ip, protocol) VALUES (?, ?, ?, ?, ?, ?)",
@@ -274,7 +261,6 @@ func TestCheckBlockedSpike(t *testing.T) {
 
 	// Test 3: No previous traffic baseline
 	t.Run("no previous traffic baseline", func(t *testing.T) {
-		// Create a new peer for this test
 		result, err := database.Exec(
 			"INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, status) VALUES (?, ?, ?, ?, ?)",
 			"baseline-peer", "10.0.0.2", "key2", "hmac2", "online",
@@ -284,7 +270,6 @@ func TestCheckBlockedSpike(t *testing.T) {
 		}
 		baselinePeerID, _ := result.LastInsertId()
 
-		// Insert more than 10 recent blocked entries (should trigger spike detection)
 		for i := 0; i < 15; i++ {
 			_, err := database.Exec(
 				"INSERT INTO firewall_logs (peer_id, action, timestamp, src_ip, dst_ip, protocol) VALUES (?, ?, ?, ?, ?, ?)",
@@ -309,7 +294,6 @@ func TestCheckBlockedSpike(t *testing.T) {
 	})
 }
 
-// TestEvaluateBundleDeployed_FirstAppliedAt tests that evaluateBundleDeployed
 // uses first_applied_at (not applied_at) to determine if a bundle was newly
 // deployed, preventing duplicate alerts when a bundle is re-applied.
 func TestEvaluateBundleDeployed_FirstAppliedAt(t *testing.T) {
@@ -318,9 +302,8 @@ func TestEvaluateBundleDeployed_FirstAppliedAt(t *testing.T) {
 
 	ctx := context.Background()
 	databaseWrapper := db.New(database)
-	evaluator := NewConditionEvaluator(databaseWrapper, databaseWrapper)
+	evaluator := NewConditionEvaluator(databaseWrapper, databaseWrapper, newTestHostnameLookup(database))
 
-	// Insert a peer for testing
 	result, err := database.Exec(
 		"INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, status) VALUES (?, ?, ?, ?, ?)",
 		"bundle-peer", "10.0.0.10", "key-bd", "hmac-bd", "online",
@@ -330,7 +313,6 @@ func TestEvaluateBundleDeployed_FirstAppliedAt(t *testing.T) {
 	}
 	peerID, _ := result.LastInsertId()
 
-	// Create an alert rule for bundle_deployed with a 60-minute window
 	rule := &AlertRule{
 		Name:                   "Bundle Deployed Rule",
 		AlertType:              AlertTypeBundleDeployed,
@@ -344,7 +326,6 @@ func TestEvaluateBundleDeployed_FirstAppliedAt(t *testing.T) {
 	t.Run("first deployment triggers alert", func(t *testing.T) {
 		now := time.Now().Truncate(time.Second)
 
-		// Insert a rule bundle with first_applied_at = now (recently deployed)
 		_, err := database.Exec(
 			"INSERT INTO rule_bundles (peer_id, version, version_number, rules_content, hmac, applied_at, first_applied_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
 			peerID, "v1.0", 1, "{}", "hmactest", now, now,
@@ -418,7 +399,6 @@ func TestEvaluateBundleDeployed_FirstAppliedAt(t *testing.T) {
 		database.Exec("DELETE FROM alert_history")
 		database.Exec("DELETE FROM rule_bundles WHERE peer_id = ?", peerID)
 
-		// Insert a bundle with first_applied_at well outside the 60-minute window.
 		// Use local time consistently to avoid UTC/local timezone comparison issues
 		// in SQLite DATETIME string comparisons.
 		oldTime := time.Now().Add(-2 * time.Hour).Truncate(time.Second)
@@ -448,7 +428,6 @@ func TestEvaluateBundleDeployed_FirstAppliedAt(t *testing.T) {
 		database.Exec("DELETE FROM alert_history")
 		database.Exec("DELETE FROM rule_bundles WHERE peer_id = ?", peerID)
 
-		// Insert a fresh bundle with first_applied_at = now
 		now := time.Now().Truncate(time.Second)
 		_, err := database.Exec(
 			"INSERT INTO rule_bundles (peer_id, version, version_number, rules_content, hmac, applied_at, first_applied_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -471,7 +450,6 @@ func TestEvaluateBundleDeployed_FirstAppliedAt(t *testing.T) {
 	})
 }
 
-// TestUpdateBundleAppliedAt_COALESCE tests that the COALESCE logic in
 // UpdateBundleAppliedAt preserves first_applied_at when a bundle is
 // re-applied, while updating applied_at.
 func TestUpdateBundleAppliedAt_COALESCE(t *testing.T) {
@@ -482,7 +460,6 @@ func TestUpdateBundleAppliedAt_COALESCE(t *testing.T) {
 	databaseWrapper := db.New(database)
 	peerStore := store.NewPeerStore(databaseWrapper)
 
-	// Insert a peer for testing
 	result, err := database.Exec(
 		"INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, status) VALUES (?, ?, ?, ?, ?)",
 		"coalesce-peer", "10.0.0.20", "key-co", "hmac-co", "online",

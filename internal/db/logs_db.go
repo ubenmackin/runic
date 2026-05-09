@@ -10,7 +10,6 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-// logsDBSchema contains the schema for the separate logs database.
 const logsDBSchema = `
 CREATE TABLE IF NOT EXISTS firewall_logs (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -37,13 +36,11 @@ CREATE INDEX IF NOT EXISTS idx_logs_peer_id ON firewall_logs(peer_id);
 CREATE INDEX IF NOT EXISTS idx_logs_peer_timestamp ON firewall_logs(peer_id, timestamp DESC);
 `
 
-// LogsDBSchema returns the database schema for the logs database.
 func LogsDBSchema() string {
 	return logsDBSchema
 }
 
-// InitLogsDB initializes a separate SQLite database for storing firewall logs.
-// This separation provides improved performance, storage isolation, and operational flexibility.
+// InitLogsDB initializes the logs database. This separation provides improved performance, storage isolation, and operational flexibility.
 //
 // The database is configured with:
 //   - WAL mode for better concurrent read/write performance
@@ -79,7 +76,6 @@ func InitLogsDB(path string) (*sql.DB, error) {
 		log.Warn("Failed to enable foreign keys for logs database", "error", err)
 	}
 
-	// Create the schema
 	if _, err := sqlDB.Exec(logsDBSchema); err != nil {
 		return nil, fmt.Errorf("failed to create logs database schema: %w", err)
 	}
@@ -88,8 +84,7 @@ func InitLogsDB(path string) (*sql.DB, error) {
 	return sqlDB, nil
 }
 
-// MigrateLogsFromMainDB migrates firewall_logs data from the main database to the logs database.
-// This function should be called after both databases are initialized.
+// MigrateLogsFromMainDB migrates firewall_logs from the main DB to the logs DB. This function should be called after both databases are initialized.
 //
 // Migration strategy:
 //  1. Check if firewall_logs table exists in main DB (legacy databases)
@@ -105,7 +100,6 @@ func InitLogsDB(path string) (*sql.DB, error) {
 //   - int64: Number of rows migrated
 //   - error: Any error that occurred during migration
 func MigrateLogsFromMainDB(mainDB, logsDB *sql.DB) (int64, error) {
-	// Check if firewall_logs table exists in main DB
 	var tableExists bool
 	err := mainDB.QueryRow(
 		"SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='firewall_logs'",
@@ -119,7 +113,6 @@ func MigrateLogsFromMainDB(mainDB, logsDB *sql.DB) (int64, error) {
 		return 0, nil
 	}
 
-	// Check if there's any data to migrate
 	var rowCount int
 	err = mainDB.QueryRow("SELECT COUNT(*) FROM firewall_logs").Scan(&rowCount)
 	if err != nil {
@@ -172,7 +165,6 @@ func MigrateLogsFromMainDB(mainDB, logsDB *sql.DB) (int64, error) {
 		}
 	}()
 
-	// Check the schema of the old firewall_logs table to determine column structure
 	var hasPeerHostname bool
 	err = tx.QueryRow(
 		"SELECT COUNT(*) > 0 FROM pragma_table_info('firewall_logs') WHERE name='peer_hostname'",
@@ -239,7 +231,6 @@ func MigrateLogsFromMainDB(mainDB, logsDB *sql.DB) (int64, error) {
 	return rowsMigrated, nil
 }
 
-// migrateLogsWithoutAttach performs migration by reading data and inserting row by row.
 // This is a fallback when ATTACH DATABASE cannot be used (e.g., path unavailable).
 func migrateLogsWithoutAttach(mainDB, logsDB *sql.DB) (int64, error) {
 	log.Info("Migration: using row-by-row migration approach")
@@ -271,7 +262,6 @@ func migrateLogsWithoutAttach(mainDB, logsDB *sql.DB) (int64, error) {
 		}
 	}()
 
-	// Check schema for peer_hostname column
 	var hasPeerHostname bool
 	err = mainTx.QueryRow(
 		"SELECT COUNT(*) > 0 FROM pragma_table_info('firewall_logs') WHERE name='peer_hostname'",
@@ -280,7 +270,6 @@ func migrateLogsWithoutAttach(mainDB, logsDB *sql.DB) (int64, error) {
 		return 0, fmt.Errorf("failed to check firewall_logs schema: %w", err)
 	}
 
-	// Read all rows from main DB
 	var rows *sql.Rows
 	if hasPeerHostname {
 		rows, err = mainTx.Query(`

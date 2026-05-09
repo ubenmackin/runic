@@ -17,7 +17,6 @@ import (
 	"runic/internal/models"
 )
 
-// testServer creates an httptest.Server with the given handler
 func testServer(handler http.HandlerFunc) *httptest.Server {
 	return httptest.NewServer(handler)
 }

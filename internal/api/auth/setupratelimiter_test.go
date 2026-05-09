@@ -14,22 +14,18 @@ const (
 	testSetupMaxRequests     = 10 // Same as production
 )
 
-// newTestRateLimiter creates a rate limiter with the same configuration as the production one
 func newTestRateLimiter() *middleware.RateLimiter {
 	return middleware.NewRateLimiter(setupMaxRequests, setupRateLimitWindow)
 }
 
-// newTestRateLimiterWithWindow creates a rate limiter with a custom window duration.
 // This allows testing window reset behavior without waiting for the production 1-minute window.
 func newTestRateLimiterWithWindow(window time.Duration) *middleware.RateLimiter {
 	return middleware.NewRateLimiter(testSetupMaxRequests, window)
 }
 
-// TestCheckSetupRateLimit_LimitTests tests that the rate limit is enforced correctly
 func TestCheckSetupRateLimit_LimitTests(t *testing.T) {
 	testIP := "192.168.1.100:12345"
 
-	// Create a new rate limiter for testing (same limits as production)
 	testLimiter := newTestRateLimiter()
 
 	// Make requests up to the limit - all should succeed
@@ -47,11 +43,9 @@ func TestCheckSetupRateLimit_LimitTests(t *testing.T) {
 	}
 }
 
-// TestCheckSetupRateLimit_WindowReset tests that the limit resets after the time window
 func TestCheckSetupRateLimit_WindowReset(t *testing.T) {
 	testIP := "192.168.1.101:12345"
 
-	// Create a rate limiter with a short window for testing
 	testLimiter := newTestRateLimiterWithWindow(testSetupRateLimitWindow)
 
 	// Make requests up to the limit
@@ -81,12 +75,10 @@ func TestCheckSetupRateLimit_WindowReset(t *testing.T) {
 	testLimiter.Stop()
 }
 
-// TestCheckSetupRateLimit_IndependentLimits tests that different IPs have independent rate limits
 func TestCheckSetupRateLimit_IndependentLimits(t *testing.T) {
 	ip1 := "192.168.1.102:12345"
 	ip2 := "192.168.1.103:12345"
 
-	// Create a new rate limiter for testing
 	testLimiter := newTestRateLimiter()
 
 	// Rate limit IP1 completely
@@ -115,11 +107,9 @@ func TestCheckSetupRateLimit_IndependentLimits(t *testing.T) {
 	testLimiter.Stop()
 }
 
-// TestCheckSetupRateLimit_NormalRequests tests that normal requests work as expected
 func TestCheckSetupRateLimit_NormalRequests(t *testing.T) {
 	testIP := "192.168.1.104:12345"
 
-	// Create a new rate limiter for testing
 	testLimiter := newTestRateLimiter()
 
 	// Make a few normal requests
@@ -134,7 +124,6 @@ func TestCheckSetupRateLimit_NormalRequests(t *testing.T) {
 	testLimiter.Stop()
 }
 
-// TestCheckSetupRateLimit_PublicAPI tests that the public CheckSetupRateLimit function works
 func TestCheckSetupRateLimit_PublicAPI(t *testing.T) {
 	// Use unique IPs to avoid interference from other tests
 	testIP := "192.168.1.200:54321"

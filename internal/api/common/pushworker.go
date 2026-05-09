@@ -12,15 +12,19 @@ import (
 	runiclog "runic/internal/common/log"
 	"runic/internal/db"
 	"runic/internal/engine"
-
-	"runic/internal/alerts"
+	"runic/internal/models"
 )
 
-// PushWorker processes push-all-rules jobs in a single background goroutine.
+// AlertTrigger is an interface for triggering alert events.
+// This decouples the push worker from the alerts package, avoiding import cycles.
+type AlertTrigger interface {
+	TriggerAlert(ctx context.Context, event *models.AlertEvent) error
+}
+
 type PushWorker struct {
 	db           *sql.DB
 	compiler     *engine.Compiler
-	alertService *alerts.Service
+	alertService AlertTrigger
 	sseHub       interface {
 		NotifyBundleUpdated(hostID string, version string) bool
 		NotifyPushJobProgress(jobID string, eventType string, payload string)
@@ -32,8 +36,7 @@ type PushWorker struct {
 	started   atomic.Bool
 }
 
-// NewPushWorker creates a new PushWorker.
-func NewPushWorker(database *sql.DB, compiler *engine.Compiler, alertService *alerts.Service, sseHub interface {
+func NewPushWorker(database *sql.DB, compiler *engine.Compiler, alertService AlertTrigger, sseHub interface {
 	NotifyBundleUpdated(hostID string, version string) bool
 	NotifyPushJobProgress(jobID string, eventType string, payload string)
 }) *PushWorker {
@@ -47,8 +50,7 @@ func NewPushWorker(database *sql.DB, compiler *engine.Compiler, alertService *al
 	}
 }
 
-// Start launches the background worker goroutine.
-// Call once during application startup.
+// Start starts the push worker goroutine. Call once during application startup.
 func (w *PushWorker) Start(ctx context.Context) {
 	w.startOnce.Do(func() {
 		w.started.Store(true)
@@ -69,7 +71,6 @@ func (w *PushWorker) Start(ctx context.Context) {
 	})
 }
 
-// Enqueue submits a job ID to the worker for processing.
 func (w *PushWorker) Enqueue(jobID string) {
 	select {
 	case w.workCh <- jobID:
@@ -78,7 +79,6 @@ func (w *PushWorker) Enqueue(jobID string) {
 	}
 }
 
-// Stop waits for the worker to finish processing.
 func (w *PushWorker) Stop() {
 	w.stopOnce.Do(func() {
 		if !w.started.Load() {
@@ -154,8 +154,8 @@ func (w *PushWorker) processJob(ctx context.Context, jobID string) {
 			})
 
 			if w.alertService != nil {
-				if err := w.alertService.TriggerAlert(jobCtx, &alerts.AlertEvent{
-					Type:     alerts.AlertTypeBundleFailed,
+				if err := w.alertService.TriggerAlert(jobCtx, &models.AlertEvent{
+					Type:     models.AlertTypeBundleFailed,
 					PeerID:   peer.PeerID,
 					PeerName: peer.Hostname,
 					Subject:  fmt.Sprintf("Bundle deployment failed: %s", peer.Hostname),
@@ -166,7 +166,7 @@ func (w *PushWorker) processJob(ctx context.Context, jobID string) {
 						"error":    err.Error(),
 					},
 				}); err != nil {
-					runiclog.Warn("failed to trigger alert", "error", err, "alert_type", alerts.AlertTypeBundleFailed)
+					runiclog.Warn("failed to trigger alert", "error", err, "alert_type", models.AlertTypeBundleFailed)
 				}
 			}
 
@@ -192,8 +192,8 @@ func (w *PushWorker) processJob(ctx context.Context, jobID string) {
 			})
 
 			if w.alertService != nil {
-				if err := w.alertService.TriggerAlert(jobCtx, &alerts.AlertEvent{
-					Type:     alerts.AlertTypeBundleFailed,
+				if err := w.alertService.TriggerAlert(jobCtx, &models.AlertEvent{
+					Type:     models.AlertTypeBundleFailed,
 					PeerID:   peer.PeerID,
 					PeerName: peer.Hostname,
 					Subject:  fmt.Sprintf("Bundle delivery failed: %s", peer.Hostname),
@@ -204,7 +204,7 @@ func (w *PushWorker) processJob(ctx context.Context, jobID string) {
 						"job_id":   jobID,
 					},
 				}); err != nil {
-					runiclog.Warn("failed to trigger alert", "error", err, "alert_type", alerts.AlertTypeBundleFailed)
+					runiclog.Warn("failed to trigger alert", "error", err, "alert_type", models.AlertTypeBundleFailed)
 				}
 			}
 
@@ -226,8 +226,8 @@ func (w *PushWorker) processJob(ctx context.Context, jobID string) {
 		})
 
 		if w.alertService != nil {
-			if err := w.alertService.TriggerAlert(jobCtx, &alerts.AlertEvent{
-				Type:     alerts.AlertTypeBundleDeployed,
+			if err := w.alertService.TriggerAlert(jobCtx, &models.AlertEvent{
+				Type:     models.AlertTypeBundleDeployed,
 				PeerID:   peer.PeerID,
 				PeerName: peer.Hostname,
 				Subject:  fmt.Sprintf("Bundle deployed: %s", peer.Hostname),
@@ -237,7 +237,7 @@ func (w *PushWorker) processJob(ctx context.Context, jobID string) {
 					"job_id":   jobID,
 				},
 			}); err != nil {
-				runiclog.Warn("failed to trigger alert", "error", err, "alert_type", alerts.AlertTypeBundleDeployed)
+				runiclog.Warn("failed to trigger alert", "error", err, "alert_type", models.AlertTypeBundleDeployed)
 			}
 		}
 	}

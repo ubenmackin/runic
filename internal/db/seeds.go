@@ -8,7 +8,6 @@ import (
 	"runic/internal/common/log"
 )
 
-// seedSystemServices creates default system services if they don't exist.
 // System services are non-deletable and provide essential firewall functionality.
 func seedSystemServices(ctx context.Context, database *sql.DB) error {
 	// Define system services to seed
@@ -79,7 +78,6 @@ func seedSystemServices(ctx context.Context, database *sql.DB) error {
 	}
 
 	for _, svc := range systemServices {
-		// Check if service already exists
 		var count int
 		err := database.QueryRowContext(ctx, "SELECT COUNT(*) FROM services WHERE name = ?", svc.Name).Scan(&count)
 		if err != nil {
@@ -96,7 +94,6 @@ func seedSystemServices(ctx context.Context, database *sql.DB) error {
 			continue
 		}
 
-		// Insert new system service
 		_, err = database.ExecContext(ctx,
 			"INSERT INTO services (name, ports, source_ports, protocol, description, is_system, no_conntrack) VALUES (?, ?, ?, ?, ?, 1, ?)",
 			svc.Name, svc.Ports, svc.SourcePorts, svc.Protocol, svc.Description, svc.NoConntrack,
@@ -110,7 +107,6 @@ func seedSystemServices(ctx context.Context, database *sql.DB) error {
 	return nil
 }
 
-// seedSystemGroups creates default system groups if they don't exist.
 // System groups are non-deletable and provide essential group functionality.
 func seedSystemGroups(ctx context.Context, database *sql.DB) error {
 	// Define system groups to seed
@@ -125,7 +121,6 @@ func seedSystemGroups(ctx context.Context, database *sql.DB) error {
 	}
 
 	for _, grp := range systemGroups {
-		// Check if group already exists
 		var count int
 		err := database.QueryRowContext(ctx, "SELECT COUNT(*) FROM groups WHERE name = ?", grp.Name).Scan(&count)
 		if err != nil {
@@ -142,7 +137,6 @@ func seedSystemGroups(ctx context.Context, database *sql.DB) error {
 			continue
 		}
 
-		// Insert new system group
 		_, err = database.ExecContext(ctx,
 			"INSERT INTO groups (name, description, is_system) VALUES (?, ?, 1)",
 			grp.Name, grp.Description,

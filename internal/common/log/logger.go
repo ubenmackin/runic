@@ -11,11 +11,9 @@ import (
 // A global slog logger instance, configurable at init time
 var logger *slog.Logger
 
-// requestIDKey is the context key for request ID.
 type requestIDKey struct{}
 
-// Init initializes the structured logging system.
-// Call this at application startup.
+// Init initializes the global logger. Call this at application startup.
 func Init(level string, output io.Writer) {
 	var logLevel slog.Level
 	switch level {
@@ -45,11 +43,9 @@ func Init(level string, output io.Writer) {
 		logger = slog.New(handler)
 	}
 
-	// Set default
 	slog.SetDefault(logger)
 }
 
-// L returns the configured logger instance
 func L() *slog.Logger {
 	if logger == nil {
 		// Fallback to default if not initialized
@@ -58,7 +54,6 @@ func L() *slog.Logger {
 	return logger
 }
 
-// LCtx returns a logger with request ID from the context
 func LCtx(ctx context.Context) *slog.Logger {
 	baseLogger := L()
 	if ctx == nil {
@@ -73,14 +68,12 @@ func LCtx(ctx context.Context) *slog.Logger {
 	return baseLogger.With("request_id", requestID)
 }
 
-// SetRequestID sets the request ID in the context.
-// This is for external packages to add request ID to context.
+// SetRequestID adds a request ID to the context. This is for external packages to add request ID to context.
 func SetRequestID(ctx context.Context, requestID string) context.Context {
 	return context.WithValue(ctx, requestIDKey{}, requestID)
 }
 
-// GetRequestID extracts the request ID from the context.
-// Returns the request ID and true if found, otherwise returns empty string and false.
+// GetRequestID extracts the request ID from the context. Returns the request ID and true if found, otherwise returns empty string and false.
 func GetRequestID(ctx context.Context) (string, bool) {
 	if requestID, ok := ctx.Value(requestIDKey{}).(string); ok {
 		return requestID, true
@@ -88,51 +81,41 @@ func GetRequestID(ctx context.Context) (string, bool) {
 	return "", false
 }
 
-// Debug logs a message at DebugLevel with key-value pairs.
 func Debug(msg string, args ...any) {
 	L().Debug(msg, args...)
 }
 
-// Info logs a message at InfoLevel with key-value pairs.
 func Info(msg string, args ...any) {
 	L().Info(msg, args...)
 }
 
-// Warn logs a message at WarnLevel with key-value pairs.
 func Warn(msg string, args ...any) {
 	L().Warn(msg, args...)
 }
 
-// Error logs a message at ErrorLevel with key-value pairs.
 func Error(msg string, args ...any) {
 	L().Error(msg, args...)
 }
 
-// DebugContext logs a message at DebugLevel with context and key-value pairs.
 func DebugContext(ctx context.Context, msg string, args ...any) {
 	LCtx(ctx).Debug(msg, args...)
 }
 
-// InfoContext logs a message at InfoLevel with context and key-value pairs.
 func InfoContext(ctx context.Context, msg string, args ...any) {
 	LCtx(ctx).Info(msg, args...)
 }
 
-// WarnContext logs a message at WarnLevel with context and key-value pairs.
 func WarnContext(ctx context.Context, msg string, args ...any) {
 	LCtx(ctx).Warn(msg, args...)
 }
 
-// ErrorContext logs a message at ErrorLevel with context and key-value pairs.
 func ErrorContext(ctx context.Context, msg string, args ...any) {
 	LCtx(ctx).Error(msg, args...)
 }
 
-// LevelFatal is a custom log level for fatal errors (above Error=8).
 const LevelFatal = slog.Level(12)
 
-// Fatal logs a message at FatalLevel with key-value pairs and then calls os.Exit(1).
-// Use only in main packages for truly unrecoverable errors.
+// Fatal logs a message at fatal level and exits. Use only in main packages for truly unrecoverable errors.
 func Fatal(msg string, args ...any) {
 	L().Log(context.Background(), LevelFatal, msg, args...)
 	os.Exit(1)

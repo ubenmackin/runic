@@ -7,8 +7,7 @@ import (
 	"net/http"
 )
 
-// InternalError returns a generic 500 response to prevent information leakage.
-// Detailed errors should be logged server-side before calling this function.
+// InternalError responds with a generic 500 error. Detailed errors should be logged server-side before calling this function.
 func InternalError(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusInternalServerError)
@@ -17,7 +16,6 @@ func InternalError(w http.ResponseWriter) {
 	}
 }
 
-// HTTPError represents an error with an associated HTTP status code.
 type HTTPError struct {
 	StatusCode int
 	Message    string
@@ -35,7 +33,6 @@ func (e *HTTPError) Unwrap() error {
 	return e.Err
 }
 
-// NewHTTPError creates a new HTTPError.
 func NewHTTPError(statusCode int, message string, errs ...error) *HTTPError {
 	var err error
 	if len(errs) > 0 {

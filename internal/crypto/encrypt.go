@@ -40,8 +40,7 @@ var (
 	ErrDecryptionFailed  = errors.New("decryption failed: authentication tag mismatch")
 )
 
-// Encryptor provides thread-safe AES-256-GCM encryption operations.
-// It caches the derived key to avoid recomputing PBKDF2 on each operation.
+// Encryptor provides AES-256-GCM encryption with PBKDF2 key derivation. It caches the derived key to avoid recomputing PBKDF2 on each operation.
 type Encryptor struct {
 	mu         sync.RWMutex
 	passphrase string
@@ -49,8 +48,7 @@ type Encryptor struct {
 	salt       []byte
 }
 
-// NewEncryptor creates a new Encryptor with the given passphrase.
-// The passphrase is used to derive an AES-256 key using PBKDF2.
+// NewEncryptor creates a new Encryptor from a passphrase. The passphrase is used to derive an AES-256 key using PBKDF2.
 // A random salt is generated for key derivation if not provided.
 func NewEncryptor(passphrase string) (*Encryptor, error) {
 	if passphrase == "" {
@@ -71,8 +69,7 @@ func NewEncryptor(passphrase string) (*Encryptor, error) {
 	}, nil
 }
 
-// GetSalt returns the salt used for key derivation.
-// This can be stored alongside encrypted data for later decryption.
+// GetSalt returns the salt used for key derivation. This can be stored alongside encrypted data for later decryption.
 func (e *Encryptor) GetSalt() []byte {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -82,8 +79,7 @@ func (e *Encryptor) GetSalt() []byte {
 	return salt
 }
 
-// Encrypt encrypts plaintext using AES-256-GCM and returns base64-encoded ciphertext.
-// The ciphertext format is: base64(salt || nonce || ciphertext)
+// Encrypt encrypts plaintext using AES-256-GCM. The ciphertext format is: base64(salt || nonce || ciphertext)
 // This function is thread-safe.
 func (e *Encryptor) Encrypt(plaintext string) (string, error) {
 	if plaintext == "" {
@@ -115,7 +111,6 @@ func (e *Encryptor) Encrypt(plaintext string) (string, error) {
 	ciphertext := gcm.Seal(nil, nonce, []byte(plaintext), nil)
 
 	// Combine salt + nonce + ciphertext for storage
-	// Format: salt (16 bytes) || nonce (12 bytes) || ciphertext (variable)
 	result := make([]byte, 0, saltLength+nonceLength+len(ciphertext))
 	result = append(result, salt...)
 	result = append(result, nonce...)
@@ -124,8 +119,7 @@ func (e *Encryptor) Encrypt(plaintext string) (string, error) {
 	return base64.StdEncoding.EncodeToString(result), nil
 }
 
-// Decrypt decrypts base64-encoded ciphertext using AES-256-GCM and returns plaintext.
-// The ciphertext must be in the format: base64(salt || nonce || ciphertext)
+// Decrypt decrypts ciphertext using AES-256-GCM. The ciphertext must be in the format: base64(salt || nonce || ciphertext)
 // This function is thread-safe.
 func (e *Encryptor) Decrypt(ciphertext string) (string, error) {
 	if ciphertext == "" {
@@ -173,14 +167,12 @@ func (e *Encryptor) Decrypt(ciphertext string) (string, error) {
 	return string(plaintext), nil
 }
 
-// DeriveKey derives a 32-byte key from a passphrase using PBKDF2 with SHA-256.
-// This is a standalone function for when you need to derive a key without
+// DeriveKey derives an AES-256 key from a passphrase and salt using PBKDF2. This is a standalone function for when you need to derive a key without
 // creating an Encryptor instance.
 func DeriveKey(passphrase string, salt []byte) []byte {
 	return pbkdf2.Key([]byte(passphrase), salt, pbkdf2Iterations, keyLength, sha256.New)
 }
 
-// GenerateSalt generates a cryptographically secure random salt.
 func GenerateSalt() ([]byte, error) {
 	salt := make([]byte, saltLength)
 	if _, err := io.ReadFull(rand.Reader, salt); err != nil {
@@ -189,8 +181,7 @@ func GenerateSalt() ([]byte, error) {
 	return salt, nil
 }
 
-// Encrypt encrypts plaintext using AES-256-GCM with a derived key.
-// This is a standalone function for one-off encryption operations.
+// Encrypt encrypts plaintext using AES-256-GCM with PBKDF2 key derivation. This is a standalone function for one-off encryption operations.
 // Returns base64-encoded ciphertext in format: base64(salt || nonce || ciphertext)
 func Encrypt(plaintext string, passphrase string) (string, error) {
 	if passphrase == "" {
@@ -233,8 +224,7 @@ func Encrypt(plaintext string, passphrase string) (string, error) {
 	return base64.StdEncoding.EncodeToString(result), nil
 }
 
-// Decrypt decrypts base64-encoded ciphertext using AES-256-GCM with a derived key.
-// This is a standalone function for one-off decryption operations.
+// Decrypt decrypts ciphertext using AES-256-GCM with PBKDF2 key derivation. This is a standalone function for one-off decryption operations.
 // Expects ciphertext in format: base64(salt || nonce || ciphertext)
 func Decrypt(ciphertext string, passphrase string) (string, error) {
 	if passphrase == "" {

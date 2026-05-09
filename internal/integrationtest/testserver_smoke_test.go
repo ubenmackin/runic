@@ -6,13 +6,11 @@ import (
 	"testing"
 )
 
-// TestAPIServerSmoke is a smoke test that verifies the test server infrastructure works.
 // It tests the three core requirements:
 // 1. Setup endpoint responds (200 or 401)
 // 2. Info endpoint without auth returns 401
 // 3. Authenticated request to info returns 200
 func TestAPIServerSmoke(t *testing.T) {
-	// Create test server
 	server, cleanup := NewTestAPIServer(t)
 	defer cleanup()
 	defer server.Close()

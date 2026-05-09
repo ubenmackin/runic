@@ -24,14 +24,11 @@ var upgrader = websocket.Upgrader{
 		if origin == "" {
 			return true
 		}
-		// Parse origin URL and compare hostname only (ignore port)
 		originURL, err := url.Parse(origin)
 		if err != nil {
 			return false
 		}
-		// Get host from request (may include port)
 		requestHost := r.Host
-		// Extract just the hostname if request host has port
 		if h, _, err := net.SplitHostPort(requestHost); err == nil {
 			requestHost = h
 		}

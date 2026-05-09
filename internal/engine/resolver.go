@@ -2,26 +2,24 @@ package engine
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"net"
 	"regexp"
 	"strings"
+
+	"runic/internal/db"
 )
 
-// Resolver resolves groups into flat lists of CIDRs and expands port specifications.
 type Resolver struct {
-	db *sql.DB
+	db db.Querier
 }
 
-// PortClause represents a single iptables port match clause.
 type PortClause struct {
 	Protocol     string // tcp|udp|icmp
 	PortMatch    string // e.g. "--dport 22" or "-m multiport --dports 80,443"
 	SrcPortMatch string // e.g. "--sport 67" or "-m multiport --sports 5353"
 }
 
-// ResolveEntity returns a deduplicated flat list of CIDRs for the given entity (peer or group).
 func (r *Resolver) ResolveEntity(ctx context.Context, entityType string, entityID int) ([]string, error) {
 	if entityType == "peer" {
 		var ipAddress string
@@ -43,13 +41,10 @@ func (r *Resolver) ResolveEntity(ctx context.Context, entityType string, entityI
 	return r.ResolveGroup(ctx, entityID, nil)
 }
 
-// ResolveSpecialTarget returns the IP address for a special target.
-// Special targets are predefined network addresses like broadcast and multicast.
-// For subnet_broadcast (ID 1), the address is computed from the peer's IP.
+// ResolveSpecialTarget resolves a special target to IP addresses. Special targets are predefined network addresses like broadcast and multicast.
 func (r *Resolver) ResolveSpecialTarget(ctx context.Context, specialID int, peerIP string) ([]string, error) {
 	switch specialID {
 	case 1: // __subnet_broadcast__ - compute from peer IP
-		// Extract subnet and replace last octet with 255
 		// E.g., 10.100.5.36 -> 10.100.5.255
 		parts := strings.Split(peerIP, ".")
 		if len(parts) != 4 {
@@ -99,8 +94,7 @@ func (r *Resolver) ResolveSpecialTarget(ctx context.Context, specialID int, peer
 	}
 }
 
-// ResolveGroup returns a deduplicated flat list of CIDRs for the given group.
-// In the new schema, groups contain only peers. We look up each peer's IP address.
+// ResolveGroup resolves a group to IP addresses. In the new schema, groups contain only peers. We look up each peer's IP address.
 func (r *Resolver) ResolveGroup(ctx context.Context, groupID int, visited map[int]bool) ([]string, error) {
 	// Note: visited is kept for API compatibility but not used since we no longer have nested groups
 
@@ -131,7 +125,6 @@ func (r *Resolver) ResolveGroup(ctx context.Context, groupID int, visited map[in
 		}
 
 		// The peer's ip_address is either a single IP or a CIDR notation
-		// Validate and normalize it
 		if strings.Contains(ipAddress, "/") {
 			// CIDR notation
 			if _, _, err := net.ParseCIDR(ipAddress); err != nil {
@@ -161,10 +154,8 @@ func (r *Resolver) ResolveGroup(ctx context.Context, groupID int, visited map[in
 	return results, nil
 }
 
-// ValidPortsRe matches comma/colon-separated port numbers (e.g. "22", "80,443", "8000:9000").
 var ValidPortsRe = regexp.MustCompile(`^\d+([,:]\d+)*$`)
 
-// ValidatePorts checks that a ports string contains only digits and separators.
 func ValidatePorts(ports string) error {
 	if ports == "" {
 		return nil
@@ -175,8 +166,7 @@ func ValidatePorts(ports string) error {
 	return nil
 }
 
-// ExpandPorts returns iptables port match clauses for the given destination and source ports strings and protocol.
-// Returns an error if the ports strings contain unsafe characters.
+// ExpandPorts returns an error if the ports strings contain unsafe characters.
 func ExpandPorts(dstPorts string, srcPorts string, protocol string) ([]PortClause, error) {
 	// ICMP has no port concept
 	if protocol == "icmp" {
@@ -188,7 +178,6 @@ func ExpandPorts(dstPorts string, srcPorts string, protocol string) ([]PortClaus
 		return []PortClause{{Protocol: "igmp", PortMatch: "", SrcPortMatch: ""}}, nil
 	}
 
-	// Validate both port strings
 	if err := ValidatePorts(dstPorts); err != nil {
 		return nil, fmt.Errorf("destination ports: %w", err)
 	}
@@ -210,11 +199,9 @@ func ExpandPorts(dstPorts string, srcPorts string, protocol string) ([]PortClaus
 	return expandPortsSingle(dstPorts, srcPorts, protocol), nil
 }
 
-// expandPortsSingle generates port clauses for a single protocol.
 func expandPortsSingle(dstPorts string, srcPorts string, protocol string) []PortClause {
 	var dstMatch, srcMatch string
 
-	// Generate destination port match
 	if dstPorts != "" {
 		if strings.Contains(dstPorts, ",") || strings.Contains(dstPorts, ":") {
 			dstMatch = fmt.Sprintf("-m multiport --dports %s", dstPorts)
@@ -223,7 +210,6 @@ func expandPortsSingle(dstPorts string, srcPorts string, protocol string) []Port
 		}
 	}
 
-	// Generate source port match
 	if srcPorts != "" {
 		if strings.Contains(srcPorts, ",") || strings.Contains(srcPorts, ":") {
 			srcMatch = fmt.Sprintf("-m multiport --sports %s", srcPorts)
@@ -235,7 +221,6 @@ func expandPortsSingle(dstPorts string, srcPorts string, protocol string) []Port
 	return []PortClause{{Protocol: protocol, PortMatch: dstMatch, SrcPortMatch: srcMatch}}
 }
 
-// sanitizeForIpset converts a group name into a valid ipset name component.
 // Rules: lowercase, replace all non-alphanumeric characters (except underscore) with underscore,
 // collapse multiple underscores into one, trim leading/trailing underscores.
 func sanitizeForIpset(name string) string {
@@ -256,13 +241,11 @@ func sanitizeForIpset(name string) string {
 	return result
 }
 
-// IpsetMember represents a single member of an ipset.
 type IpsetMember struct {
 	Address string // IP or CIDR
 	IsCIDR  bool   // true if Address contains a network prefix
 }
 
-// resolveGroupForIpset returns the members of a group suitable for ipset generation.
 // It returns a slice of IpsetMember and a boolean indicating whether any member is a CIDR.
 // CIDR members require hash:net ipset type, while pure IP members use hash:ip.
 func (r *Resolver) resolveGroupForIpset(ctx context.Context, groupID int) ([]IpsetMember, bool, error) {

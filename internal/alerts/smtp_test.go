@@ -8,7 +8,6 @@ import (
 	"time"
 )
 
-// TestSanitizeHeaderValue tests that the function properly removes CR/LF
 // control characters to prevent email header injection attacks.
 func TestSanitizeHeaderValue(t *testing.T) {
 	s := &SMTPSender{}
@@ -85,7 +84,6 @@ func TestSanitizeHeaderValue(t *testing.T) {
 	}
 }
 
-// TestSanitizeHeaderValue_HeaderInjectionPrevention tests that header injection
 // payloads are neutralized by checking that no CRLF sequences remain.
 func TestSanitizeHeaderValue_HeaderInjectionPrevention(t *testing.T) {
 	s := &SMTPSender{}
@@ -114,7 +112,6 @@ func TestSanitizeHeaderValue_HeaderInjectionPrevention(t *testing.T) {
 	}
 }
 
-// TestBuildMessage tests the buildMessage method.
 func TestBuildMessage(t *testing.T) {
 	s := &SMTPSender{
 		config: SMTPConfig{
@@ -179,7 +176,6 @@ func TestBuildMessage(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got := s.buildMessage(tt.to, tt.subject, tt.body, tt.contentType)
 
-			// Check all required content is present
 			for _, expected := range tt.contains {
 				if !strings.Contains(got, expected) {
 					t.Errorf("buildMessage() missing expected content %q", expected)
@@ -204,7 +200,6 @@ func TestBuildMessage(t *testing.T) {
 	}
 }
 
-// TestBuildMessage_DateHeader tests that Date header is properly formatted.
 func TestBuildMessage_DateHeader(t *testing.T) {
 	s := &SMTPSender{
 		config: SMTPConfig{
@@ -233,7 +228,6 @@ func TestBuildMessage_DateHeader(t *testing.T) {
 	}
 }
 
-// TestGenerateAlertSubject tests the generateAlertSubject method.
 func TestGenerateAlertSubject(t *testing.T) {
 	s := &SMTPSender{}
 
@@ -321,7 +315,6 @@ func TestGenerateAlertSubject(t *testing.T) {
 	}
 }
 
-// TestGenerateAlertSubject_SeverityPrefix tests that severity affects the prefix.
 func TestGenerateAlertSubject_SeverityPrefix(t *testing.T) {
 	s := &SMTPSender{}
 
@@ -364,7 +357,6 @@ func TestGenerateAlertSubject_SeverityPrefix(t *testing.T) {
 	}
 }
 
-// TestGenerateAlertHTML tests the generateAlertHTML method.
 func TestGenerateAlertHTML(t *testing.T) {
 	s := &SMTPSender{}
 
@@ -508,7 +500,6 @@ func TestGenerateAlertHTML(t *testing.T) {
 	}
 }
 
-// TestGenerateAlertHTML_ValidHTMLStructure tests that the HTML is valid.
 func TestGenerateAlertHTML_ValidHTMLStructure(t *testing.T) {
 	s := &SMTPSender{}
 
@@ -540,7 +531,6 @@ func TestGenerateAlertHTML_ValidHTMLStructure(t *testing.T) {
 	}
 }
 
-// TestGenerateAlertHTML_SeverityBadge tests that the severity badge is present.
 func TestGenerateAlertHTML_SeverityBadge(t *testing.T) {
 	s := &SMTPSender{}
 
@@ -593,7 +583,6 @@ func TestGenerateAlertHTML_SeverityBadge(t *testing.T) {
 	}
 }
 
-// TestGenerateAlertHTML_Timestamp tests that the timestamp is included.
 func TestGenerateAlertHTML_Timestamp(t *testing.T) {
 	s := &SMTPSender{}
 
@@ -613,7 +602,6 @@ func TestGenerateAlertHTML_Timestamp(t *testing.T) {
 	}
 }
 
-// TestGenerateAlertHTML_EventDetails tests that event details are included.
 func TestGenerateAlertHTML_EventDetails(t *testing.T) {
 	s := &SMTPSender{}
 
@@ -644,7 +632,6 @@ func TestGenerateAlertHTML_EventDetails(t *testing.T) {
 	}
 }
 
-// TestGenerateAlertHTML_DifferentContentTypes tests different alert types produce different content.
 func TestGenerateAlertHTML_DifferentContentTypes(t *testing.T) {
 	s := &SMTPSender{}
 
@@ -698,7 +685,6 @@ func TestGenerateAlertHTML_DifferentContentTypes(t *testing.T) {
 	}
 }
 
-// TestSanitizeHeaderValue_HTMLContent tests that HTML content in header values
 // is preserved (not escaped) since headers are not rendered as HTML.
 func TestSanitizeHeaderValue_HTMLContent(t *testing.T) {
 	s := &SMTPSender{}
@@ -745,7 +731,6 @@ func TestSanitizeHeaderValue_HTMLContent(t *testing.T) {
 	}
 }
 
-// TestBuildMessage_HTMLSubject tests that HTML content in subject lines
 // does not break email message structure.
 func TestBuildMessage_HTMLSubject(t *testing.T) {
 	s := &SMTPSender{
@@ -799,7 +784,6 @@ func TestBuildMessage_HTMLSubject(t *testing.T) {
 	}
 }
 
-// TestSendAlertEmail_MaliciousInput tests that SendAlertEmail properly handles
 // malicious input in the AlertEvent fields.
 func TestSendAlertEmail_MaliciousInput(t *testing.T) {
 	s := &SMTPSender{
@@ -940,7 +924,6 @@ func TestSendAlertEmail_MaliciousInput(t *testing.T) {
 	}
 }
 
-// TestGenerateAlertSubject_MaliciousPeerName tests that generateAlertSubject
 // properly handles various peer name formats.
 func TestGenerateAlertSubject_MaliciousPeerName(t *testing.T) {
 	s := &SMTPSender{}
@@ -991,7 +974,6 @@ func TestGenerateAlertSubject_MaliciousPeerName(t *testing.T) {
 	}
 }
 
-// TestSanitizeHeaderValue_EmailInjection tests that sanitizeHeaderValue
 // prevents email header injection attacks.
 func TestSanitizeHeaderValue_EmailInjection(t *testing.T) {
 	s := &SMTPSender{}
@@ -1043,7 +1025,6 @@ func TestSanitizeHeaderValue_EmailInjection(t *testing.T) {
 	}
 }
 
-// TestSanitizeHTMLBody tests that sanitizeHTMLBody properly removes
 // dangerous HTML elements and attributes to prevent XSS attacks.
 func TestSanitizeHTMLBody(t *testing.T) {
 	s := &SMTPSender{}
@@ -1249,7 +1230,6 @@ func TestSanitizeHTMLBody(t *testing.T) {
 	}
 }
 
-// TestSanitizeHTMLBody_EmailTemplate tests that the generated email template
 // passes through sanitization correctly without breaking the template structure.
 func TestSanitizeHTMLBody_EmailTemplate(t *testing.T) {
 	s := &SMTPSender{}
@@ -1290,7 +1270,6 @@ func TestSanitizeHTMLBody_EmailTemplate(t *testing.T) {
 	}
 }
 
-// TestSanitizeHTMLBody_XSSPayloads tests against common XSS attack payloads.
 func TestSanitizeHTMLBody_XSSPayloads(t *testing.T) {
 	s := &SMTPSender{}
 
@@ -1349,7 +1328,6 @@ func TestSanitizeHTMLBody_XSSPayloads(t *testing.T) {
 	}
 }
 
-// TestSanitizeHTMLBody_EdgeCases documents expected behavior for edge case inputs.
 // Some of these are known limitations that are mitigated by the htmlEscape defense layer.
 func TestSanitizeHTMLBody_EdgeCases(t *testing.T) {
 	sender := &SMTPSender{}
@@ -1443,7 +1421,6 @@ func TestSanitizeHTMLBody_EdgeCases(t *testing.T) {
 	}
 }
 
-// TestSendAlertEmail_MetadataInjectionPrevention tests that control characters
 // in metadata string values are removed to prevent injection attacks.
 // Note: Not all metadata keys are rendered for all alert types - this test verifies
 // that control characters are removed from metadata values that ARE rendered.
@@ -1557,7 +1534,6 @@ func TestSendAlertEmail_MetadataInjectionPrevention(t *testing.T) {
 				sanitizedEvent.Metadata = sanitizedMetadata
 			}
 
-			// Generate HTML like SendAlertEmail does internally
 			// Note: metadata values are HTML-escaped in the template via htmlEscape
 			html := s.generateAlertHTML(&sanitizedEvent, "")
 
@@ -1571,7 +1547,6 @@ func TestSendAlertEmail_MetadataInjectionPrevention(t *testing.T) {
 	}
 }
 
-// TestSendAlertEmail_SubjectInjectionPrevention tests that control characters
 // in Subject field are sanitized to prevent email header injection.
 func TestSendAlertEmail_SubjectInjectionPrevention(t *testing.T) {
 	s := &SMTPSender{
@@ -1662,7 +1637,6 @@ func TestSendAlertEmail_SubjectInjectionPrevention(t *testing.T) {
 	}
 }
 
-// TestSendAlertEmail_PeerNameInjectionPrevention tests that control characters
 // in PeerName are sanitized before being used in subject/body.
 func TestSendAlertEmail_PeerNameInjectionPrevention(t *testing.T) {
 	s := &SMTPSender{
@@ -1756,7 +1730,6 @@ func TestSendAlertEmail_PeerNameInjectionPrevention(t *testing.T) {
 	}
 }
 
-// TestSendAlertEmail_NonStringMetadataPreservation tests that non-string metadata
 // values (integers, nested objects, etc.) are preserved unchanged.
 func TestSendAlertEmail_NonStringMetadataPreservation(t *testing.T) {
 	tests := []struct {
@@ -1917,7 +1890,6 @@ func TestSendAlertEmail_NonStringMetadataPreservation(t *testing.T) {
 	}
 }
 
-// TestSendAlertEmail_EmptyNilMetadataHandling tests graceful handling of nil or empty metadata.
 func TestSendAlertEmail_EmptyNilMetadataHandling(t *testing.T) {
 	s := &SMTPSender{
 		config: SMTPConfig{
@@ -1974,7 +1946,6 @@ func TestSendAlertEmail_EmptyNilMetadataHandling(t *testing.T) {
 				sanitizedEvent.Metadata = sanitizedMetadata
 			}
 
-			// Generate HTML to verify it works
 			html := s.generateAlertHTML(&sanitizedEvent, "")
 
 			// Should still produce valid HTML
@@ -1985,7 +1956,6 @@ func TestSendAlertEmail_EmptyNilMetadataHandling(t *testing.T) {
 	}
 }
 
-// TestSendAlertEmail_FullPipeline_MaliciousInput is an integration-style test that
 // exercises the full email generation pipeline with various malicious inputs.
 // This test verifies end-to-end that:
 // 1. Subject line is safe (no header injection)
@@ -2001,7 +1971,6 @@ func TestSendAlertEmail_FullPipeline_MaliciousInput(t *testing.T) {
 		},
 	}
 
-	// Create an AlertEvent with multiple malicious vectors
 	maliciousEvent := &AlertEvent{
 		Type:      AlertTypePeerOffline,
 		PeerID:    42,
@@ -2069,7 +2038,6 @@ func TestSendAlertEmail_FullPipeline_MaliciousInput(t *testing.T) {
 		subject = s.generateAlertSubject(&sanitizedEvent)
 	}
 
-	// Generate HTML body
 	htmlBody := s.generateAlertHTML(&sanitizedEvent, "https://runic.test")
 
 	// === STEP 3: Verify subject line is safe ===
@@ -2097,7 +2065,6 @@ func TestSendAlertEmail_FullPipeline_MaliciousInput(t *testing.T) {
 
 	// === STEP 4: Verify HTML body contains no raw control characters ===
 	t.Run("html_no_control_chars", func(t *testing.T) {
-		// Check for raw control characters from malicious input
 		// Note: The HTML template itself contains \n for formatting, which is fine.
 		// We're specifically checking that control chars from malicious input are removed.
 		// CR (\r) and control chars like \x00, \x1F, \x7F should never appear
@@ -2225,7 +2192,6 @@ func TestSendAlertEmail_FullPipeline_MaliciousInput(t *testing.T) {
 	// === STEP 9: Verify double-encoding doesn't occur ===
 	t.Run("no_double_encoding", func(t *testing.T) {
 		// If malicious content was already HTML-encoded, it should be properly handled
-		// Create an event with already-encoded HTML entities
 		doubleEncodedEvent := &AlertEvent{
 			Type:      AlertTypePeerOffline,
 			PeerName:  "&lt;script&gt;", // Already HTML-encoded
@@ -2237,7 +2203,6 @@ func TestSendAlertEmail_FullPipeline_MaliciousInput(t *testing.T) {
 		sanitizedPeerName, _ := SanitizeAlertInput(doubleEncodedEvent.PeerName, 0)
 		doubleEncodedEvent.PeerName = sanitizedPeerName
 
-		// Generate HTML (should double-escape to &amp;lt;)
 		html := s.generateAlertHTML(doubleEncodedEvent, "")
 
 		// The content should be double-escaped: &lt; → &amp;lt;
@@ -2264,7 +2229,6 @@ func TestSendAlertEmail_FullPipeline_MaliciousInput(t *testing.T) {
 			}
 		}
 
-		// Check that header lines don't contain embedded CR or LF characters
 		// (which would indicate header injection)
 		for i := 0; i < headerEndIndex; i++ {
 			if strings.Contains(lines[i], "\r") {
@@ -2294,7 +2258,6 @@ func TestSendAlertEmail_FullPipeline_MaliciousInput(t *testing.T) {
 	})
 }
 
-// extractSnippet extracts a snippet from content around a keyword for debugging.
 func extractSnippet(content, keyword string, radius int) string {
 	idx := strings.Index(content, keyword)
 	if idx == -1 {
@@ -2311,7 +2274,6 @@ func extractSnippet(content, keyword string, radius int) string {
 	return content[start:end]
 }
 
-// TestSendAlertEmail_DefenseInDepthVerification verifies that existing HTML escaping
 // still works correctly on sanitized input (defense-in-depth).
 func TestSendAlertEmail_DefenseInDepthVerification(t *testing.T) {
 	s := &SMTPSender{
@@ -2423,7 +2385,6 @@ func TestSendAlertEmail_DefenseInDepthVerification(t *testing.T) {
 				sanitizedEvent.Metadata = sanitizedMetadata
 			}
 
-			// Generate HTML - htmlEscape is applied in generateAlertHTML
 			html := s.generateAlertHTML(&sanitizedEvent, "")
 
 			for _, want := range tt.wantInHTML {

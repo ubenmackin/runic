@@ -7,12 +7,13 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"runic/internal/common"
+	"runic/internal/api/common"
+	ic "runic/internal/common"
 	"runic/internal/db"
+	"runic/internal/engine"
 	"runic/internal/models"
 )
 
-// GroupWithCounts represents a group with peer and policy counts
 type GroupWithCounts struct {
 	ID              int    `json:"id"`
 	Name            string `json:"name"`
@@ -23,7 +24,6 @@ type GroupWithCounts struct {
 	PolicyCount     int    `json:"policy_count"`
 }
 
-// PeerInGroup represents a peer that belongs to a group
 type PeerInGroup struct {
 	ID        int    `json:"id"`
 	Hostname  string `json:"hostname"`
@@ -32,18 +32,38 @@ type PeerInGroup struct {
 	IsManual  bool   `json:"is_manual"`
 }
 
-// GroupSnapshotData represents the payload of a group snapshot.
 type GroupSnapshotData struct {
 	Group   *models.GroupRow        `json:"group"`
 	Members []models.GroupMemberRow `json:"members"`
 }
 
 type GroupStore struct {
-	db db.Querier
+	db db.DB
 }
 
-func NewGroupStore(database db.Querier) *GroupStore {
+func NewGroupStore(database db.DB) *GroupStore {
 	return &GroupStore{db: database}
+}
+
+// GetNameByID returns the group name for a given ID. Returns sql.ErrNoRows if not found.
+func (s *GroupStore) GetNameByID(ctx context.Context, id int) (string, error) {
+	var name string
+	err := s.db.QueryRowContext(ctx, "SELECT name FROM groups WHERE id = ?", id).Scan(&name)
+	if err != nil {
+		return "", fmt.Errorf("get group name by id: %w", err)
+	}
+	return name, nil
+}
+
+// GetActiveGroupNameByID returns the group name for a given ID, excluding pending-delete groups.
+// Returns sql.ErrNoRows if not found or if the group is pending delete.
+func (s *GroupStore) GetActiveGroupNameByID(ctx context.Context, id int) (string, error) {
+	var name string
+	err := s.db.QueryRowContext(ctx, "SELECT name FROM groups WHERE id = ? AND is_pending_delete = 0", id).Scan(&name)
+	if err != nil {
+		return "", fmt.Errorf("get active group name by id: %w", err)
+	}
+	return name, nil
 }
 
 func (s *GroupStore) ListGroups(ctx context.Context) ([]GroupWithCounts, error) {
@@ -78,7 +98,7 @@ func (s *GroupStore) ListGroups(ctx context.Context) ([]GroupWithCounts, error) 
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("rows error: %w", err)
 	}
-	return common.EnsureSlice(groupsData), nil
+	return ic.EnsureSlice(groupsData), nil
 }
 
 func (s *GroupStore) CreateGroup(ctx context.Context, name, description string) (int64, error) {
@@ -108,12 +128,33 @@ func (s *GroupStore) GetGroupTx(ctx context.Context, q db.Querier, id int) (mode
 	return g, nil
 }
 
-func (s *GroupStore) UpdateGroup(ctx context.Context, q db.Querier, id int, name, description string) error {
-	result, err := q.ExecContext(ctx,
+func (s *GroupStore) GetGroupSQLTx(ctx context.Context, tx *sql.Tx, id int) (models.GroupRow, error) {
+	return s.GetGroupTx(ctx, tx, id)
+}
+
+func (s *GroupStore) UpdateGroup(ctx context.Context, id int, name, description string) error {
+	result, err := s.db.ExecContext(ctx,
 		"UPDATE groups SET name = COALESCE(NULLIF(?, ''), name), description = ? WHERE id = ? AND is_pending_delete = 0",
 		name, description, id)
 	if err != nil {
 		return fmt.Errorf("update group: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func (s *GroupStore) UpdateGroupTx(ctx context.Context, tx *sql.Tx, id int, name, description string) error {
+	result, err := tx.ExecContext(ctx,
+		"UPDATE groups SET name = COALESCE(NULLIF(?, ''), name), description = ? WHERE id = ? AND is_pending_delete = 0",
+		name, description, id)
+	if err != nil {
+		return fmt.Errorf("update group tx: %w", err)
 	}
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
@@ -175,7 +216,7 @@ func (s *GroupStore) ListGroupMembers(ctx context.Context, id int) ([]PeerInGrou
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("rows error: %w", err)
 	}
-	return common.EnsureSlice(peers), nil
+	return ic.EnsureSlice(peers), nil
 }
 
 func (s *GroupStore) AddGroupMember(ctx context.Context, groupID, peerID int) (int64, error) {
@@ -199,19 +240,18 @@ func (s *GroupStore) DeleteGroupMember(ctx context.Context, groupID, peerID int)
 	return nil
 }
 
-// Snapshot creates a snapshot of the group and its members.
-// The q parameter allows it to be used inside or outside a transaction.
-func (s *GroupStore) Snapshot(ctx context.Context, q db.Querier, action string, groupID int) error {
+// Snapshot creates a snapshot of a group and its members.
+func (s *GroupStore) Snapshot(ctx context.Context, action string, groupID int) error {
 	if action == "create" {
-		return db.CreateSnapshot(ctx, q, "group", groupID, action, "")
+		return db.CreateSnapshot(ctx, s.db, "group", groupID, action, "")
 	}
 
-	grp, err := s.GetGroupTx(ctx, q, groupID)
+	grp, err := s.GetGroupTx(ctx, s.db, groupID)
 	if err != nil {
 		return fmt.Errorf("get group: %w", err)
 	}
 
-	members, err := db.ListGroupMembers(ctx, q, groupID)
+	members, err := db.ListGroupMembers(ctx, s.db, groupID)
 	if err != nil {
 		return fmt.Errorf("query members: %w", err)
 	}
@@ -225,5 +265,80 @@ func (s *GroupStore) Snapshot(ctx context.Context, q db.Querier, action string, 
 		return fmt.Errorf("marshal snapshot: %w", err)
 	}
 
-	return db.CreateSnapshot(ctx, q, "group", groupID, action, string(bytes))
+	return db.CreateSnapshot(ctx, s.db, "group", groupID, action, string(bytes))
+}
+
+// SnapshotTx creates a snapshot of a group and its members within a transaction.
+func (s *GroupStore) SnapshotTx(ctx context.Context, tx *sql.Tx, action string, groupID int) error {
+	if action == "create" {
+		return db.CreateSnapshot(ctx, tx, "group", groupID, action, "")
+	}
+
+	grp, err := s.GetGroupTx(ctx, tx, groupID)
+	if err != nil {
+		return fmt.Errorf("get group: %w", err)
+	}
+
+	members, err := db.ListGroupMembers(ctx, tx, groupID)
+	if err != nil {
+		return fmt.Errorf("query members: %w", err)
+	}
+
+	data := GroupSnapshotData{
+		Group:   &grp,
+		Members: members,
+	}
+	bytes, err := json.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("marshal snapshot: %w", err)
+	}
+
+	return db.CreateSnapshot(ctx, tx, "group", groupID, action, string(bytes))
+}
+
+// CheckDeleteConstraints checks whether a group can be safely deleted.
+// It checks if the group is used as a source or target in any policy.
+// Returns a *common.DeleteConstraintError with the full list of policies using the group.
+func (s *GroupStore) CheckDeleteConstraints(ctx context.Context, groupID int) error {
+	// Query ALL policies that use the group (as source or target)
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, name FROM policies
+		WHERE ((source_type='group' AND source_id=?) OR (target_type='group' AND target_id=?)) AND is_pending_delete = 0`,
+		groupID, groupID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to check policy usage: %w", err)
+	}
+
+	var policies []common.PolicyRef
+	for rows.Next() {
+		var p common.PolicyRef
+		if err := rows.Scan(&p.ID, &p.Name); err != nil {
+			if closeErr := rows.Close(); closeErr != nil {
+				return fmt.Errorf("failed to scan policy: %v, close error: %w", err, closeErr)
+			}
+			return fmt.Errorf("failed to scan policy: %w", err)
+		}
+		policies = append(policies, p)
+	}
+	if closeErr := rows.Close(); closeErr != nil {
+		return fmt.Errorf("failed to close rows: %w", closeErr)
+	}
+
+	if len(policies) > 0 {
+		return &common.DeleteConstraintError{
+			Message:  "Cannot delete group: it is in use by policies",
+			Policies: policies,
+		}
+	}
+
+	return nil
+}
+
+// QueueGroupChange enqueues a group change notification via the ChangeWorker.
+func (s *GroupStore) QueueGroupChange(ctx context.Context, changeWorker *common.ChangeWorker, compiler *engine.Compiler, groupID int, changeAction string, summary string) {
+	if changeWorker == nil {
+		return
+	}
+	changeWorker.QueueGroupChange(ctx, compiler, groupID, changeAction, summary)
 }

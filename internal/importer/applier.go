@@ -11,7 +11,6 @@ import (
 	"runic/internal/common/log"
 )
 
-// ApplyResult holds the results of an import apply operation.
 type ApplyResult struct {
 	PoliciesCreated int
 	GroupsCreated   int
@@ -19,8 +18,7 @@ type ApplyResult struct {
 	ServicesCreated int
 }
 
-// ApplySession migrates all approved staging data to real DB tables in a transaction.
-// This creates manual peers, groups, services, and policies from the import session.
+// ApplySession creates manual peers, groups, services, and policies from the import session.
 func ApplySession(ctx context.Context, database *sql.DB, sessionID int64, changeWorker *common.ChangeWorker) (*ApplyResult, error) {
 	result := &ApplyResult{}
 
@@ -155,7 +153,6 @@ func ApplySession(ctx context.Context, database *sql.DB, sessionID int64, change
 	}
 	_ = peerRows.Close()
 
-	// Generate agent keys for manual peers
 	for _, pm := range peerMappings {
 		agentKey := fmt.Sprintf("imported-%s", pm.IP)
 		res, err := tx.ExecContext(ctx,
@@ -262,7 +259,6 @@ func ApplySession(ctx context.Context, database *sql.DB, sessionID int64, change
 		stagingToRealGroup[gm.StagingID] = realGroupID
 		result.GroupsCreated++
 
-		// Add group members
 		var memberPeerIDs []int64
 		_ = json.Unmarshal([]byte(gm.MemberPeerIDs), &memberPeerIDs)
 		for _, pid := range memberPeerIDs {
@@ -376,7 +372,6 @@ func ApplySession(ctx context.Context, database *sql.DB, sessionID int64, change
 		result.ServicesCreated++
 	}
 
-	// Update staging services mapped to existing (only those referenced by approved rules)
 	existingSvcQuery := "SELECT id, existing_service_id FROM import_service_mappings WHERE session_id = ? AND existing_service_id IS NOT NULL"
 	existingSvcArgs := []interface{}{sessionID}
 	if len(stagingServiceIDSet) > 0 {
@@ -419,7 +414,6 @@ func ApplySession(ctx context.Context, database *sql.DB, sessionID int64, change
 		return nil, fmt.Errorf("query approved rules: %w", err)
 	}
 
-	// Get the peer ID for the session (for ChangeWorker)
 	session, err := GetSession(ctx, tx, sessionID)
 	if err != nil {
 		_ = ruleRows.Close()
@@ -483,7 +477,7 @@ func ApplySession(ctx context.Context, database *sql.DB, sessionID int64, change
 
 	// 6. Queue peer change for recompilation (outside transaction)
 	if changeWorker != nil {
-		changeWorker.QueuePeerChange(ctx, database, []int{int(session.PeerID)}, "policy", "create", 0, "import applied")
+		changeWorker.QueuePeerChange(ctx, []int{int(session.PeerID)}, "policy", "create", 0, "import applied")
 	}
 
 	log.Info("Import session applied",
@@ -497,7 +491,6 @@ func ApplySession(ctx context.Context, database *sql.DB, sessionID int64, change
 	return result, nil
 }
 
-// resolveID maps a staging ID to a real ID using the lookup tables.
 func resolveID(realID, stagingID *int64, entityType string, peerLookup, groupLookup map[int64]int64) int64 {
 	if realID != nil && *realID != 0 {
 		return *realID
@@ -517,7 +510,6 @@ func resolveID(realID, stagingID *int64, entityType string, peerLookup, groupLoo
 	return 0
 }
 
-// resolveServiceID maps a staging service ID to a real service ID.
 func resolveServiceID(realID, stagingID *int64, lookup map[int64]int64) int64 {
 	if realID != nil && *realID != 0 {
 		return *realID

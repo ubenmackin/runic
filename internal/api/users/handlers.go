@@ -1,14 +1,14 @@
-// Package users provides user handlers.
+// Package users provides user management handlers.
 package users
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"regexp"
 	"strings"
-	"time"
 
 	"golang.org/x/crypto/bcrypt"
 
@@ -17,66 +17,44 @@ import (
 	runiccommon "runic/internal/common"
 	"runic/internal/common/log"
 	"runic/internal/db"
+	"runic/internal/models"
+	"runic/internal/store"
 )
 
-// Handler provides HTTP handlers for user management with dependency injection.
+// UserStore is defined as an interface here for testability.
+type UserStore interface {
+	ListUsers(ctx context.Context) ([]models.UserRow, error)
+	UserExists(ctx context.Context, username string) (bool, error)
+	CreateUser(ctx context.Context, q db.Querier, username, passwordHash, email, role string) (int64, error)
+	GetUserByID(ctx context.Context, id int) (models.UserRow, error)
+	UpdateUser(ctx context.Context, id int, fields store.UpdateUserFields) error
+	DeleteUser(ctx context.Context, id int) error
+}
+
 type Handler struct {
-	DB db.Querier
+	Store UserStore
 }
 
-// NewHandler creates a new user handler with the given database connection.
-func NewHandler(db db.Querier) *Handler {
-	return &Handler{DB: db}
+func NewHandler(s UserStore) *Handler {
+	return &Handler{Store: s}
 }
 
-// emailRegex is a basic pattern for email validation
 var emailRegex = regexp.MustCompile(`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`)
 
-// UserResponse is the user data returned in API responses (no password_hash)
-type UserResponse struct {
-	ID        int       `json:"id"`
-	Username  string    `json:"username"`
-	Email     string    `json:"email"`
-	Role      string    `json:"role"`
-	CreatedAt time.Time `json:"created_at"`
-}
-
-// ListUsers handles GET /api/v1/users
 func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := runiccommon.WithHandlerTimeout(r.Context())
 	defer cancel()
 
-	rows, err := h.DB.QueryContext(ctx, "SELECT id, username, email, role, created_at FROM users ORDER BY id")
+	users, err := h.Store.ListUsers(ctx)
 	if err != nil {
-		common.RespondError(w, http.StatusInternalServerError, "Failed to query users")
+		log.ErrorContext(r.Context(), "failed to list users", "error", err)
+		common.InternalError(w)
 		return
 	}
-	defer func() {
-		if cErr := rows.Close(); cErr != nil {
-			log.Warn("Failed to close rows", "error", cErr)
-		}
-	}()
-
-	var users []UserResponse
-	for rows.Next() {
-		var u UserResponse
-		if err := rows.Scan(&u.ID, &u.Username, &u.Email, &u.Role, &u.CreatedAt); err != nil {
-			common.RespondError(w, http.StatusInternalServerError, "Failed to scan user")
-			return
-		}
-		users = append(users, u)
-	}
-	if err := rows.Err(); err != nil {
-		common.RespondError(w, http.StatusInternalServerError, "Error iterating users")
-		return
-	}
-
-	users = runiccommon.EnsureSlice(users)
 
 	common.RespondJSON(w, http.StatusOK, users)
 }
 
-// CreateUserRequest is the request body for creating a user
 type CreateUserRequest struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
@@ -84,7 +62,6 @@ type CreateUserRequest struct {
 	Role     string `json:"role"`
 }
 
-// CreateUser handles POST /api/v1/users
 func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := runiccommon.WithHandlerTimeout(r.Context())
 	defer cancel()
@@ -121,17 +98,16 @@ func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Only admins can create users with elevated roles
 	callerRole := auth.RoleFromContext(r.Context())
 	if callerRole != "admin" && (req.Role == "admin" || req.Role == "editor") {
 		common.RespondError(w, http.StatusForbidden, "Only admins can create admin or editor users")
 		return
 	}
 
-	var exists bool
-	err := h.DB.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM users WHERE username = ?)", req.Username).Scan(&exists)
+	exists, err := h.Store.UserExists(ctx, req.Username)
 	if err != nil {
-		common.RespondError(w, http.StatusInternalServerError, "Database error")
+		log.ErrorContext(r.Context(), "failed to check user existence", "error", err)
+		common.InternalError(w)
 		return
 	}
 	if exists {
@@ -141,28 +117,21 @@ func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), 12)
 	if err != nil {
-		common.RespondError(w, http.StatusInternalServerError, "Failed to hash password")
+		log.ErrorContext(r.Context(), "failed to hash password", "error", err)
+		common.InternalError(w)
 		return
 	}
 
-	result, err := h.DB.ExecContext(ctx,
-		"INSERT INTO users (username, password_hash, email, role) VALUES (?, ?, ?, ?)",
-		req.Username, string(hash), req.Email, req.Role,
-	)
+	id, err := h.Store.CreateUser(ctx, nil, req.Username, string(hash), req.Email, req.Role)
 	if err != nil {
-		common.RespondError(w, http.StatusInternalServerError, "Failed to create user")
-		return
-	}
-
-	id, err := result.LastInsertId()
-	if err != nil {
-		common.RespondError(w, http.StatusInternalServerError, "Failed to get user ID")
+		log.ErrorContext(r.Context(), "failed to create user", "error", err)
+		common.InternalError(w)
 		return
 	}
 
 	log.InfoContext(r.Context(), "user created", "username", req.Username, "role", req.Role)
 
-	common.RespondJSON(w, http.StatusCreated, UserResponse{
+	common.RespondJSON(w, http.StatusCreated, models.UserRow{
 		ID:       int(id),
 		Username: req.Username,
 		Email:    req.Email,
@@ -170,7 +139,6 @@ func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// DeleteUser handles DELETE /api/v1/users/{id}
 func (h *Handler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 	id, err := common.ParseIDParam(r, "id")
 	if err != nil {
@@ -183,49 +151,44 @@ func (h *Handler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 
 	authUsername := auth.UsernameFromContext(r.Context())
 
-	// Only admins can delete users
 	callerRole := auth.RoleFromContext(r.Context())
 	if callerRole != "admin" {
 		common.RespondError(w, http.StatusForbidden, "Only admins can delete users")
 		return
 	}
 
-	var username string
-	err = h.DB.QueryRowContext(ctx, "SELECT username FROM users WHERE id = ?", id).Scan(&username)
+	user, err := h.Store.GetUserByID(ctx, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		common.RespondError(w, http.StatusNotFound, "User not found")
 		return
 	}
 	if err != nil {
-		common.RespondError(w, http.StatusInternalServerError, "Database error")
+		log.ErrorContext(r.Context(), "failed to get user", "error", err)
+		common.InternalError(w)
 		return
 	}
 
-	// Prevent deleting yourself
-	if username == authUsername {
+	if user.Username == authUsername {
 		common.RespondError(w, http.StatusBadRequest, "Cannot delete your own account")
 		return
 	}
 
-	_, err = h.DB.ExecContext(ctx, "DELETE FROM users WHERE id = ?", id)
-	if err != nil {
-		common.RespondError(w, http.StatusInternalServerError, "Failed to delete user")
+	if err := h.Store.DeleteUser(ctx, id); err != nil {
+		log.ErrorContext(r.Context(), "failed to delete user", "error", err)
+		common.InternalError(w)
 		return
 	}
 
-	log.InfoContext(r.Context(), "user deleted", "username", username, "deleted_by", authUsername)
-
+	log.InfoContext(r.Context(), "user deleted", "username", user.Username, "deleted_by", authUsername)
 	common.RespondJSON(w, http.StatusOK, map[string]string{"message": "User deleted"})
 }
 
-// UpdateUserRequest is the request body for updating a user
 type UpdateUserRequest struct {
 	Email    string `json:"email"`
 	Role     string `json:"role"`
 	Password string `json:"password"`
 }
 
-// UpdateUser handles PUT /api/v1/users/{id}
 func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	id, err := common.ParseIDParam(r, "id")
 	if err != nil {
@@ -254,18 +217,17 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var username string
-	err = h.DB.QueryRowContext(ctx, "SELECT username FROM users WHERE id = ?", id).Scan(&username)
+	user, err := h.Store.GetUserByID(ctx, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		common.RespondError(w, http.StatusNotFound, "User not found")
 		return
 	}
 	if err != nil {
-		common.RespondError(w, http.StatusInternalServerError, "Database error")
+		log.ErrorContext(r.Context(), "failed to get user", "error", err)
+		common.InternalError(w)
 		return
 	}
 
-	// Only admins can change user roles
 	if req.Role != "" {
 		callerRole := auth.RoleFromContext(r.Context())
 		if callerRole != "admin" {
@@ -274,52 +236,35 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Build update query dynamically - only update fields that are provided
-	var setClauses []string
-	var args []interface{}
-
-	if req.Email != "" {
-		setClauses = append(setClauses, "email = ?")
-		args = append(args, req.Email)
+	fields := store.UpdateUserFields{
+		Email: req.Email,
+		Role:  req.Role,
 	}
 
-	if req.Role != "" {
-		setClauses = append(setClauses, "role = ?")
-		args = append(args, req.Role)
-	}
-
-	// Handle password separately since it needs validation and hashing
 	if req.Password != "" {
 		if len(req.Password) < 8 {
 			common.RespondError(w, http.StatusBadRequest, "Password must be at least 8 characters")
 			return
 		}
-
 		hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), 12)
 		if err != nil {
-			common.RespondError(w, http.StatusInternalServerError, "Failed to hash password")
+			log.ErrorContext(r.Context(), "failed to hash password", "error", err)
+			common.InternalError(w)
 			return
 		}
-
-		setClauses = append(setClauses, "password_hash = ?")
-		args = append(args, string(hash))
+		fields.PasswordHash = string(hash)
 	}
 
-	if len(setClauses) == 0 {
-		common.RespondJSON(w, http.StatusOK, map[string]string{"message": "No changes to update"})
+	if err := h.Store.UpdateUser(ctx, id, fields); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			common.RespondError(w, http.StatusNotFound, "User not found")
+			return
+		}
+		log.ErrorContext(r.Context(), "failed to update user", "error", err)
+		common.InternalError(w)
 		return
 	}
 
-	query := "UPDATE users SET " + strings.Join(setClauses, ", ") + " WHERE id = ?"
-	args = append(args, id)
-
-	_, err = h.DB.ExecContext(ctx, query, args...)
-	if err != nil {
-		common.RespondError(w, http.StatusInternalServerError, "Failed to update user")
-		return
-	}
-
-	log.InfoContext(r.Context(), "user updated", "username", username, "user_id", id)
-
+	log.InfoContext(r.Context(), "user updated", "username", user.Username, "user_id", id)
 	common.RespondJSON(w, http.StatusOK, map[string]string{"message": "User updated"})
 }

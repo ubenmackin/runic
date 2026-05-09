@@ -2,6 +2,8 @@
 package auth
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -16,17 +18,30 @@ import (
 	runiccommon "runic/internal/common"
 	"runic/internal/common/log"
 	"runic/internal/db"
+	"runic/internal/models"
+	"runic/internal/store"
 )
 
-// Handler provides HTTP handlers for auth endpoints with dependency injection.
-type Handler struct {
-	DB         db.Querier
-	DBBeginner db.Beginner // For transaction support (same underlying *sql.DB in production)
+// errSetupAlreadyCompleted is returned inside the setup transaction when users already exist.
+var errSetupAlreadyCompleted = errors.New("setup already completed")
+
+// UserStore is defined as an interface here for testability.
+type UserStore interface {
+	CountUsers(ctx context.Context) (int, error)
+	CountUsersTx(ctx context.Context, q db.Querier) (int, error)
+	CreateUser(ctx context.Context, q db.Querier, username, passwordHash, email, role string) (int64, error)
+	GetCredentials(ctx context.Context, username string) (models.UserCredentials, error)
+	GetUserByUsername(ctx context.Context, username string) (models.UserRow, error)
 }
 
-// NewHandler creates a new auth handler with the given database connection.
-func NewHandler(db db.Querier, dbBeginner db.Beginner) *Handler {
-	return &Handler{DB: db, DBBeginner: dbBeginner}
+type Handler struct {
+	UserStore  UserStore
+	TokenStore *store.TokenStore // For token revocation checks
+	DBBeginner db.Beginner       // For transaction support in HandleSetupPOST
+}
+
+func NewHandler(userStore UserStore, tokenStore *store.TokenStore, dbBeginner db.Beginner) *Handler {
+	return &Handler{UserStore: userStore, TokenStore: tokenStore, DBBeginner: dbBeginner}
 }
 
 var isProduction bool
@@ -35,7 +50,6 @@ func init() {
 	isProduction = os.Getenv("GO_ENV") != "development"
 }
 
-// setAuthCookies sets httpOnly cookies for access and refresh tokens.
 func setAuthCookies(w http.ResponseWriter, access, refresh string) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     "runic_access_token",
@@ -57,7 +71,6 @@ func setAuthCookies(w http.ResponseWriter, access, refresh string) {
 	})
 }
 
-// clearAuthCookies clears the auth cookies by setting them with MaxAge=-1.
 func clearAuthCookies(w http.ResponseWriter) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     "runic_access_token",
@@ -79,19 +92,16 @@ func clearAuthCookies(w http.ResponseWriter) {
 	})
 }
 
-// setupRequest is the request body for first-time setup.
 type setupRequest struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
 }
 
-// loginRequest is the request body for login.
 type loginRequest struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
 }
 
-// HandleSetup handles both GET and POST /api/v1/setup requests
 func (h *Handler) HandleSetup(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -103,10 +113,9 @@ func (h *Handler) HandleSetup(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// HandleSetupGET checks whether any users exist in the database.
-// Returns {"needs_setup": true} if no users exist, false otherwise.
+// HandleSetupGET handles the setup check. Returns {"needs_setup": true} if no users exist, false otherwise.
 func (h *Handler) HandleSetupGET(w http.ResponseWriter, r *http.Request) {
-	if h.DB == nil {
+	if h.UserStore == nil {
 		common.RespondError(w, http.StatusInternalServerError, "database not initialized")
 		return
 	}
@@ -120,8 +129,7 @@ func (h *Handler) HandleSetupGET(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := runiccommon.WithHandlerTimeout(r.Context())
 	defer cancel()
 
-	var count int
-	err := h.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM users").Scan(&count)
+	count, err := h.UserStore.CountUsers(ctx)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "failed to check setup status")
 		return
@@ -130,10 +138,9 @@ func (h *Handler) HandleSetupGET(w http.ResponseWriter, r *http.Request) {
 	common.RespondJSON(w, http.StatusOK, map[string]bool{"needs_setup": count == 0})
 }
 
-// HandleSetupPOST creates the first admin user during initial setup.
-// Returns 403 if users already exist.
+// HandleSetupPOST handles the initial setup. Returns 403 if users already exist.
 func (h *Handler) HandleSetupPOST(w http.ResponseWriter, r *http.Request) {
-	if h.DB == nil {
+	if h.UserStore == nil {
 		common.RespondError(w, http.StatusInternalServerError, "database not initialized")
 		return
 	}
@@ -157,33 +164,6 @@ func (h *Handler) HandleSetupPOST(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := runiccommon.WithHandlerTimeout(r.Context())
 	defer cancel()
 
-	// Begin transaction
-	tx, err := h.DBBeginner.BeginTx(ctx, nil)
-	if err != nil {
-		common.RespondError(w, http.StatusInternalServerError, "failed to start transaction")
-		return
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			if err := tx.Rollback(); err != nil {
-				log.Warn("rollback err", "err", err)
-			}
-		}
-	}()
-
-	// Check if any users already exist
-	var count int
-	err = tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM users").Scan(&count)
-	if err != nil {
-		common.RespondError(w, http.StatusInternalServerError, "failed to check setup status")
-		return
-	}
-	if count > 0 {
-		common.RespondError(w, http.StatusForbidden, "Setup already completed")
-		return
-	}
-
 	// Hash password
 	hash, err := bcrypt.GenerateFromPassword([]byte(body.Password), 12)
 	if err != nil {
@@ -191,25 +171,32 @@ func (h *Handler) HandleSetupPOST(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Insert user
-	_, err = tx.ExecContext(ctx,
-		"INSERT INTO users (username, password_hash, role) VALUES (?, ?, 'admin')",
-		body.Username, string(hash))
-	if err != nil {
-		var sqliteErr sqlite3.Error
-		if errors.As(err, &sqliteErr) && sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique {
-			common.RespondError(w, http.StatusConflict, "username already exists")
+	if err := store.RunInTx(ctx, h.DBBeginner, func(tx *sql.Tx) error {
+		count, countErr := h.UserStore.CountUsersTx(ctx, tx)
+		if countErr != nil {
+			return countErr
+		}
+		if count > 0 {
+			return errSetupAlreadyCompleted
+		}
+		_, createErr := h.UserStore.CreateUser(ctx, tx, body.Username, string(hash), "", "admin")
+		if createErr != nil {
+			var sqliteErr sqlite3.Error
+			if errors.As(createErr, &sqliteErr) && sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique {
+				return errSetupAlreadyCompleted
+			}
+			return createErr
+		}
+		return nil
+	}); err != nil {
+		if errors.Is(err, errSetupAlreadyCompleted) {
+			common.RespondError(w, http.StatusForbidden, "Setup already completed")
 			return
 		}
-		common.RespondError(w, http.StatusInternalServerError, "failed to create user")
+		log.ErrorContext(r.Context(), "failed to complete setup", "error", err)
+		common.RespondError(w, http.StatusInternalServerError, "failed to complete setup")
 		return
 	}
-
-	if err := tx.Commit(); err != nil {
-		common.RespondError(w, http.StatusInternalServerError, "failed to commit transaction")
-		return
-	}
-	committed = true
 
 	log.InfoContext(r.Context(), "user created", "username", body.Username, "remote_addr", r.RemoteAddr)
 
@@ -222,9 +209,8 @@ func (h *Handler) HandleSetupPOST(w http.ResponseWriter, r *http.Request) {
 	h.RespondWithTokens(w, http.StatusCreated, accessToken, refreshToken, body.Username, true)
 }
 
-// HandleLoginPOST authenticates an existing user with username and password.
 func (h *Handler) HandleLoginPOST(w http.ResponseWriter, r *http.Request) {
-	if h.DB == nil {
+	if h.UserStore == nil {
 		common.RespondError(w, http.StatusInternalServerError, "database not initialized")
 		return
 	}
@@ -248,20 +234,14 @@ func (h *Handler) HandleLoginPOST(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := runiccommon.WithHandlerTimeout(r.Context())
 	defer cancel()
 
-	// Look up user
-	var id int
-	var storedHash string
-	err := h.DB.QueryRowContext(ctx,
-		"SELECT id, password_hash FROM users WHERE username = ?",
-		body.Username).Scan(&id, &storedHash)
+	creds, err := h.UserStore.GetCredentials(ctx, body.Username)
 	if err != nil {
 		log.WarnContext(r.Context(), "login failed - unknown user", "username", body.Username, "remote_addr", r.RemoteAddr)
 		common.RespondError(w, http.StatusUnauthorized, "Invalid credentials")
 		return
 	}
 
-	// Verify password
-	if err := bcrypt.CompareHashAndPassword([]byte(storedHash), []byte(body.Password)); err != nil {
+	if err := bcrypt.CompareHashAndPassword([]byte(creds.PasswordHash), []byte(body.Password)); err != nil {
 		log.WarnContext(r.Context(), "login failed - invalid password", "username", body.Username, "remote_addr", r.RemoteAddr)
 		common.RespondError(w, http.StatusUnauthorized, "Invalid credentials")
 		return
@@ -279,7 +259,6 @@ func (h *Handler) HandleLoginPOST(w http.ResponseWriter, r *http.Request) {
 	h.RespondWithTokens(w, http.StatusOK, accessToken, refreshToken, body.Username, true)
 }
 
-// HandleLogoutPOST handles POST /api/v1/auth/logout by revoking the caller's current token.
 func (h *Handler) HandleLogoutPOST(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie("runic_access_token")
 	if err != nil || cookie.Value == "" {
@@ -295,7 +274,7 @@ func (h *Handler) HandleLogoutPOST(w http.ResponseWriter, r *http.Request) {
 	}
 
 	expiresAt := claims.ExpiresAt.Time
-	if err := auth.RevokeToken(r.Context(), claims.UniqueID, expiresAt, "access"); err != nil {
+	if err := h.TokenStore.RevokeToken(r.Context(), claims.UniqueID, expiresAt, "access"); err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "Failed to revoke token")
 		return
 	}
@@ -303,7 +282,7 @@ func (h *Handler) HandleLogoutPOST(w http.ResponseWriter, r *http.Request) {
 	// Also revoke the refresh token if present
 	if refreshCookie, err := r.Cookie("runic_refresh_token"); err == nil && refreshCookie.Value != "" {
 		if refreshClaims, err := auth.ValidateToken(refreshCookie.Value); err == nil && refreshClaims != nil {
-			if err := auth.RevokeToken(r.Context(), refreshClaims.UniqueID, refreshClaims.ExpiresAt.Time, "refresh"); err != nil {
+			if err := h.TokenStore.RevokeToken(r.Context(), refreshClaims.UniqueID, refreshClaims.ExpiresAt.Time, "refresh"); err != nil {
 				log.WarnContext(r.Context(), "failed to revoke refresh token on logout", "error", err)
 			}
 		}
@@ -314,7 +293,6 @@ func (h *Handler) HandleLogoutPOST(w http.ResponseWriter, r *http.Request) {
 	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "logged_out"})
 }
 
-// HandleGetMe returns the authenticated user's profile.
 func (h *Handler) HandleGetMe(w http.ResponseWriter, r *http.Request) {
 	common.RespondJSON(w, http.StatusOK, map[string]string{
 		"username": auth.UsernameFromContext(r.Context()),
@@ -322,10 +300,9 @@ func (h *Handler) HandleGetMe(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// HandleRefreshPOST handles POST /api/v1/auth/refresh to refresh an access token.
-// It validates the refresh token from cookie and issues a new access token if valid.
+// HandleRefreshPOST handles token refresh. It validates the refresh token from cookie and issues a new access token if valid.
 func (h *Handler) HandleRefreshPOST(w http.ResponseWriter, r *http.Request) {
-	if h.DB == nil {
+	if h.UserStore == nil {
 		common.RespondError(w, http.StatusInternalServerError, "database not initialized")
 		return
 	}
@@ -337,20 +314,17 @@ func (h *Handler) HandleRefreshPOST(w http.ResponseWriter, r *http.Request) {
 	}
 	refreshToken := cookie.Value
 
-	// Validate the refresh token
 	claims, err := auth.ValidateToken(refreshToken)
 	if err != nil || claims == nil {
 		common.RespondError(w, http.StatusUnauthorized, "Invalid refresh token")
 		return
 	}
 
-	// Check if the token has been revoked
-	if auth.IsRevoked(r.Context(), claims.UniqueID) {
+	if revoked, err := h.TokenStore.IsTokenRevoked(r.Context(), claims.UniqueID); err != nil || revoked {
 		common.RespondError(w, http.StatusUnauthorized, "Token has been revoked")
 		return
 	}
 
-	// Generate new tokens (rotation for security)
 	accessToken, refreshToken, err := h.GenerateTokenPair(claims.Username)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "failed to generate tokens")
@@ -358,7 +332,7 @@ func (h *Handler) HandleRefreshPOST(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Revoke the old refresh token (rotation)
-	if err := auth.RevokeToken(r.Context(), claims.UniqueID, claims.ExpiresAt.Time, "refresh"); err != nil {
+	if err := h.TokenStore.RevokeToken(r.Context(), claims.UniqueID, claims.ExpiresAt.Time, "refresh"); err != nil {
 		log.WarnContext(r.Context(), "failed to revoke old refresh token", "error", err)
 		// Continue anyway - the new tokens are still valid
 	}
@@ -369,7 +343,6 @@ func (h *Handler) HandleRefreshPOST(w http.ResponseWriter, r *http.Request) {
 	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// RegisterRoutes adds auth routes to the given router.
 func (h *Handler) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/me", h.HandleGetMe).Methods("GET")
 }

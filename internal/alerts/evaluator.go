@@ -12,25 +12,34 @@ import (
 	"runic/internal/db"
 )
 
-// ConditionEvaluator evaluates alert conditions against system state.
-// It implements the Evaluator interface defined in scheduler.go.
+// ConditionEvaluator implements the Evaluator interface defined in scheduler.go.
 type ConditionEvaluator struct {
-	database db.Querier
-	logsDB   db.Querier
+	database       db.Querier
+	logsDB         db.Querier
+	lookupHostname PeerHostnameLookup
 }
 
-// NewConditionEvaluator creates a new ConditionEvaluator with the given database connections.
-// The database parameter is the main DB (for peers, alert_rules, etc.).
-// The logsDB parameter is the logs DB (for firewall_logs queries).
-func NewConditionEvaluator(database, logsDB db.Querier) *ConditionEvaluator {
+// NewConditionEvaluator creates a new ConditionEvaluator. The database parameter is the main DB (for peers, alert_rules, etc.).
+// The logsDB parameter is the logs DB (for firewall_logs queries). The lookupHostname parameter is required for
+// resolving peer IDs to hostnames and must not be nil.
+func NewConditionEvaluator(database, logsDB db.Querier, lookupHostname PeerHostnameLookup) *ConditionEvaluator {
 	return &ConditionEvaluator{
-		database: database,
-		logsDB:   logsDB,
+		database:       database,
+		logsDB:         logsDB,
+		lookupHostname: lookupHostname,
 	}
 }
 
-// EvaluateRule evaluates a single alert rule and returns true if the condition is met.
-// This implements the Evaluator interface.
+// getPeerHostname resolves a peer ID to a hostname using the injected lookup function.
+func (e *ConditionEvaluator) getPeerHostname(ctx context.Context, peerID int) (string, error) {
+	hostname, err := e.lookupHostname(ctx, peerID)
+	if err != nil {
+		return "", fmt.Errorf("failed to get peer hostname: %w", err)
+	}
+	return hostname, nil
+}
+
+// EvaluateRule evaluates the given alert rule. This implements the Evaluator interface.
 // Returns (triggered, event, error) where triggered indicates if the alert should fire.
 func (e *ConditionEvaluator) EvaluateRule(ctx context.Context, rule *AlertRule) (bool, *AlertEvent, error) {
 	if !rule.Enabled {
@@ -64,7 +73,6 @@ func (e *ConditionEvaluator) EvaluateRule(ctx context.Context, rule *AlertRule) 
 	return event != nil, event, nil
 }
 
-// evaluatePeerOffline evaluates the peer_offline alert type.
 // Threshold is the number of minutes a peer must be offline.
 func (e *ConditionEvaluator) evaluatePeerOffline(ctx context.Context, rule *AlertRule) (*AlertEvent, error) {
 	if rule.PeerID != nil {
@@ -136,7 +144,6 @@ func (e *ConditionEvaluator) evaluatePeerOffline(ctx context.Context, rule *Aler
 	return nil, nil
 }
 
-// checkPeerOfflineByID checks if a specific peer is offline.
 func (e *ConditionEvaluator) checkPeerOfflineByID(ctx context.Context, rule *AlertRule, peerID int) (*AlertEvent, error) {
 	var hostname string
 	var status string
@@ -185,7 +192,6 @@ func (e *ConditionEvaluator) checkPeerOfflineByID(ctx context.Context, rule *Ale
 	}, nil
 }
 
-// evaluateBundleFailed evaluates the bundle_failed alert type.
 // Threshold is the number of consecutive bundle generation failures.
 func (e *ConditionEvaluator) evaluateBundleFailed(ctx context.Context, rule *AlertRule) (*AlertEvent, error) {
 	if rule.PeerID != nil {
@@ -257,7 +263,6 @@ func (e *ConditionEvaluator) evaluateBundleFailed(ctx context.Context, rule *Ale
 	return nil, nil
 }
 
-// checkBundleFailedByID checks if a specific peer has bundle failures.
 func (e *ConditionEvaluator) checkBundleFailedByID(ctx context.Context, rule *AlertRule, peerID int) (*AlertEvent, error) {
 	window := time.Duration(rule.ThresholdWindowMinutes) * time.Minute
 	isFailed, err := e.CheckBundleFailed(ctx, peerID)
@@ -279,9 +284,9 @@ func (e *ConditionEvaluator) checkBundleFailedByID(ctx context.Context, rule *Al
 	}
 
 	var hostname string
-	err = e.database.QueryRowContext(ctx, `SELECT hostname FROM peers WHERE id = ?`, peerID).Scan(&hostname)
+	hostname, err = e.getPeerHostname(ctx, peerID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get peer hostname: %w", err)
+		return nil, err
 	}
 
 	return &AlertEvent{
@@ -301,7 +306,6 @@ func (e *ConditionEvaluator) checkBundleFailedByID(ctx context.Context, rule *Al
 	}, nil
 }
 
-// countConsecutiveFailures counts consecutive bundle failures for a peer.
 func (e *ConditionEvaluator) countConsecutiveFailures(ctx context.Context, peerID int, window time.Duration) (int, error) {
 	cutoff := time.Now().Add(-window)
 
@@ -322,7 +326,6 @@ func (e *ConditionEvaluator) countConsecutiveFailures(ctx context.Context, peerI
 	return count, nil
 }
 
-// evaluateBlockedSpike evaluates the blocked_spike alert type.
 // Threshold is the percentage increase in blocked traffic.
 func (e *ConditionEvaluator) evaluateBlockedSpike(ctx context.Context, rule *AlertRule) (*AlertEvent, error) {
 	if rule.PeerID != nil {
@@ -373,7 +376,6 @@ func (e *ConditionEvaluator) evaluateBlockedSpike(ctx context.Context, rule *Ale
 	return nil, nil
 }
 
-// checkBlockedSpikeByID checks if a specific peer has a blocked traffic spike.
 func (e *ConditionEvaluator) checkBlockedSpikeByID(ctx context.Context, rule *AlertRule, peerID int) (*AlertEvent, error) {
 	isSpike, percentage, err := e.CheckBlockedSpike(ctx, peerID)
 	if err != nil {
@@ -385,9 +387,9 @@ func (e *ConditionEvaluator) checkBlockedSpikeByID(ctx context.Context, rule *Al
 	}
 
 	var hostname string
-	err = e.database.QueryRowContext(ctx, `SELECT hostname FROM peers WHERE id = ?`, peerID).Scan(&hostname)
+	hostname, err = e.getPeerHostname(ctx, peerID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get peer hostname: %w", err)
+		return nil, err
 	}
 
 	return &AlertEvent{
@@ -407,24 +409,19 @@ func (e *ConditionEvaluator) checkBlockedSpikeByID(ctx context.Context, rule *Al
 	}, nil
 }
 
-// evaluatePeerOnline evaluates the peer_online alert type.
 // This is triggered when a peer comes back online after being offline.
 func (e *ConditionEvaluator) evaluatePeerOnline(ctx context.Context, rule *AlertRule) (*AlertEvent, error) {
 	// This alert type is typically triggered by a webhook/event, not polling
-	// For now, return nil as this requires event-driven evaluation
 	return nil, nil
 }
 
-// evaluateNewPeer evaluates the new_peer alert type.
 // This is triggered when a new peer is registered.
 func (e *ConditionEvaluator) evaluateNewPeer(ctx context.Context, rule *AlertRule) (*AlertEvent, error) {
 	// This alert type is typically triggered by a webhook/event, not polling
-	// For now, return nil as this requires event-driven evaluation
 	return nil, nil
 }
 
-// CheckPeerOffline checks if a peer is offline and returns the duration.
-// Returns true if the peer is offline, along with the duration offline.
+// CheckPeerOffline returns true if the peer is offline, along with the duration offline.
 func (e *ConditionEvaluator) CheckPeerOffline(ctx context.Context, peerID int) (bool, time.Duration) {
 
 	var status string
@@ -455,8 +452,7 @@ func (e *ConditionEvaluator) CheckPeerOffline(ctx context.Context, peerID int) (
 	return true, duration
 }
 
-// CheckBundleFailed checks if bundle generation has failed for a peer.
-// Returns true if there are recent bundle failures.
+// CheckBundleFailed returns true if there are recent bundle failures.
 func (e *ConditionEvaluator) CheckBundleFailed(ctx context.Context, peerID int) (bool, error) {
 
 	cutoff := time.Now().Add(-1 * time.Hour)
@@ -478,8 +474,7 @@ func (e *ConditionEvaluator) CheckBundleFailed(ctx context.Context, peerID int) 
 	return failCount > 0, nil
 }
 
-// CheckBlockedSpike checks for a spike in blocked traffic for a peer.
-// Returns true if there's a spike, along with the percentage increase.
+// CheckBlockedSpike returns true if there's a spike, along with the percentage increase.
 func (e *ConditionEvaluator) CheckBlockedSpike(ctx context.Context, peerID int) (bool, int, error) {
 	if e.logsDB == nil {
 		return false, 0, fmt.Errorf("logs database not configured")
@@ -533,7 +528,6 @@ func (e *ConditionEvaluator) CheckBlockedSpike(ctx context.Context, peerID int) 
 	return percentageIncrease >= 50, percentageIncrease, nil
 }
 
-// evaluateBundleDeployed evaluates the bundle_deployed alert type.
 // Threshold is the number of minutes within which a bundle deployment counts.
 func (e *ConditionEvaluator) evaluateBundleDeployed(ctx context.Context, rule *AlertRule) (*AlertEvent, error) {
 	if rule.PeerID != nil {
@@ -607,15 +601,13 @@ func (e *ConditionEvaluator) evaluateBundleDeployed(ctx context.Context, rule *A
 	return nil, nil
 }
 
-// checkBundleDeployedByID checks if a bundle was recently deployed for a specific peer.
 func (e *ConditionEvaluator) checkBundleDeployedByID(ctx context.Context, rule *AlertRule, peerID int) (*AlertEvent, error) {
-	var hostname string
-	err := e.database.QueryRowContext(ctx, `SELECT hostname FROM peers WHERE id = ?`, peerID).Scan(&hostname)
+	hostname, err := e.getPeerHostname(ctx, peerID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("failed to get peer hostname: %w", err)
+		return nil, err
 	}
 
 	window := time.Duration(rule.ThresholdWindowMinutes) * time.Minute

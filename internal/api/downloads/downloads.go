@@ -8,7 +8,6 @@ import (
 	"strings"
 )
 
-// allowedFiles is a whitelist of filenames that can be served by this handler.
 // Any filename not in this list will be rejected with a 404 Not Found.
 var allowedFiles = map[string]bool{
 	"runic-agent-amd64":   true,
@@ -22,7 +21,7 @@ func isAllowedFile(filename string) bool {
 	return allowedFiles[filename]
 }
 
-// Handler returns an http.HandlerFunc that serves static files from the downloads directory.
+// Handler returns an HTTP handler for serving whitelisted download files.
 // It extracts the filename from the URL path /downloads/{filename} and serves the file
 // with appropriate security checks to prevent directory traversal attacks.
 func Handler(downloadsDir string) http.HandlerFunc {

@@ -14,53 +14,55 @@ import (
 	"runic/internal/api/common"
 	"runic/internal/api/events"
 	"runic/internal/auth"
-	ic "runic/internal/common"
+	commonutil "runic/internal/common"
 	"runic/internal/common/log"
 	"runic/internal/db"
 	"runic/internal/engine"
+	"runic/internal/store"
 
 	"github.com/gorilla/mux"
 )
 
-// Handler holds dependencies for pending change handlers.
 type Handler struct {
-	DB         db.Querier // For queries
-	DBBeginner db.DB      // For transactions and queries
-	Compiler   *engine.Compiler
-	SSEHub     *events.SSEHub
-	PushWorker *common.PushWorker
+	PeerStore    *store.PeerStore
+	GroupStore   *store.GroupStore
+	PolicyStore  *store.PolicyStore
+	ServiceStore *store.ServiceStore
+	PendingStore *store.PendingStore
+	beginner     db.Beginner
+	Compiler     *engine.Compiler
+	SSEHub       *events.SSEHub
+	PushWorker   *common.PushWorker
 }
 
-// NewHandler creates a new Handler with the given dependencies.
-func NewHandler(database db.DB, compiler *engine.Compiler, sseHub *events.SSEHub, pushWorker *common.PushWorker) *Handler {
-	return &Handler{DB: database, DBBeginner: database, Compiler: compiler, SSEHub: sseHub, PushWorker: pushWorker}
+func NewHandler(peerStore *store.PeerStore, groupStore *store.GroupStore, policyStore *store.PolicyStore, serviceStore *store.ServiceStore, pendingStore *store.PendingStore, beginner db.Beginner, compiler *engine.Compiler, sseHub *events.SSEHub, pushWorker *common.PushWorker) *Handler {
+	return &Handler{
+		PeerStore:    peerStore,
+		GroupStore:   groupStore,
+		PolicyStore:  policyStore,
+		ServiceStore: serviceStore,
+		PendingStore: pendingStore,
+		beginner:     beginner,
+		Compiler:     compiler,
+		SSEHub:       sseHub,
+		PushWorker:   pushWorker,
+	}
 }
 
-// lookupEntityName returns the display name for an entity referenced by a pending change.
 // Returns ("Unknown", nil) for unrecognized change types.
-//
-// NOTE: This method uses raw SQL queries via h.DB for trivial name lookups.
-// A dedicated PendingStore is intentionally not created per the refactoring plan.
 func (h *Handler) lookupEntityName(ctx context.Context, changeType string, changeID int) (string, error) {
 	switch changeType {
 	case "group":
-		var name string
-		err := h.DB.QueryRowContext(ctx, "SELECT name FROM groups WHERE id = ?", changeID).Scan(&name)
-		return name, err
+		return h.GroupStore.GetNameByID(ctx, changeID)
 	case "policy":
-		var name string
-		err := h.DB.QueryRowContext(ctx, "SELECT name FROM policies WHERE id = ?", changeID).Scan(&name)
-		return name, err
+		return h.PolicyStore.GetNameByID(ctx, changeID)
 	case "service":
-		var name string
-		err := h.DB.QueryRowContext(ctx, "SELECT name FROM services WHERE id = ?", changeID).Scan(&name)
-		return name, err
+		return h.ServiceStore.GetNameByID(ctx, changeID)
 	default:
 		return "Unknown", nil
 	}
 }
 
-// peerChangeGroup represents a peer with its pending changes and hostname.
 type peerChangeGroup struct {
 	PeerID       int                   `json:"peer_id"`
 	Hostname     string                `json:"hostname"`
@@ -79,12 +81,10 @@ type pendingChangeDetail struct {
 	CreatedAt     string `json:"created_at"`
 }
 
-// ListPendingChanges returns all pending changes grouped by peer with hostnames.
 func (h *Handler) ListPendingChanges(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	database := h.DB
 
-	peerIDs, err := db.GetPeersWithPendingChanges(ctx, database)
+	peerIDs, err := h.PendingStore.GetPeersWithPendingChanges(ctx)
 	if err != nil {
 		log.ErrorContext(ctx, "failed to get peers with pending changes", "error", err)
 		common.InternalError(w)
@@ -98,13 +98,12 @@ func (h *Handler) ListPendingChanges(w http.ResponseWriter, r *http.Request) {
 
 	var groups []peerChangeGroup
 	for _, peerID := range peerIDs {
-		var hostname, ipAddress string
-		err := database.QueryRowContext(ctx, "SELECT hostname, ip_address FROM peers WHERE id = ?", peerID).Scan(&hostname, &ipAddress)
+		hostname, ipAddress, err := h.PeerStore.GetPeerWithIP(ctx, peerID)
 		if err != nil {
 			continue // skip peers that no longer exist
 		}
 
-		changes, err := db.GetPendingChangesForPeer(ctx, database, peerID)
+		changes, err := h.PendingStore.GetPendingChangesForPeer(ctx, peerID)
 		if err != nil {
 			log.ErrorContext(ctx, "failed to get pending changes for peer", "peer_id", peerID, "error", err)
 			continue
@@ -118,7 +117,7 @@ func (h *Handler) ListPendingChanges(w http.ResponseWriter, r *http.Request) {
 				ChangeID:      c.ChangeID,
 				ChangeAction:  c.ChangeAction,
 				ChangeSummary: c.ChangeSummary,
-				CreatedAt:     ic.FormatSQLiteDatetime(c.CreatedAt),
+				CreatedAt:     commonutil.FormatSQLiteDatetime(c.CreatedAt),
 			}
 			entityName, _ := h.lookupEntityName(ctx, c.ChangeType, c.ChangeID)
 			details[i].EntityName = entityName
@@ -133,22 +132,20 @@ func (h *Handler) ListPendingChanges(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	common.RespondJSON(w, http.StatusOK, ic.EnsureSlice(groups))
+	common.RespondJSON(w, http.StatusOK, commonutil.EnsureSlice(groups))
 }
 
-// RollbackRequest represents the request body for rollback operations.
 type RollbackRequest struct {
 	EntityType string `json:"entity_type"` // Optional: empty = bulk rollback
 	EntityID   int    `json:"entity_id"`   // Optional: 0 = bulk rollback
 }
 
-// ApplyEntityRequest represents the request body for applying a single entity's pending changes.
 type ApplyEntityRequest struct {
 	EntityType string `json:"entity_type"` // "group", "policy", or "service"
 	EntityID   int    `json:"entity_id"`
 }
 
-// RollbackPendingChanges restores groups, services, and policies to their state before any pending changes.
+// RollbackPendingChanges rolls back pending changes for peers.
 // Supports both bulk rollback (empty body) and single-entity rollback (with entity_type and entity_id).
 func (h *Handler) RollbackPendingChanges(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -156,13 +153,13 @@ func (h *Handler) RollbackPendingChanges(w http.ResponseWriter, r *http.Request)
 	var req RollbackRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		// Legacy bulk rollback (no body or invalid JSON)
-		if err := db.RollbackSnapshots(ctx, h.DBBeginner); err != nil {
+		if err := h.PendingStore.RollbackSnapshots(ctx); err != nil {
 			log.ErrorContext(ctx, "failed to rollback snapshots", "error", err)
 			common.InternalError(w)
 			return
 		}
 
-		if err := db.DeleteAllPendingBundlePreviews(ctx, h.DB); err != nil {
+		if err := h.PendingStore.DeleteAllPendingBundlePreviews(ctx); err != nil {
 			log.WarnContext(ctx, "Failed to delete old previews", "error", err)
 		}
 
@@ -171,9 +168,9 @@ func (h *Handler) RollbackPendingChanges(w http.ResponseWriter, r *http.Request)
 	}
 
 	if req.EntityType != "" && req.EntityID != 0 {
-		err := db.RollbackEntitySnapshot(ctx, h.DBBeginner, req.EntityType, req.EntityID)
+		err := h.PendingStore.RollbackEntitySnapshot(ctx, req.EntityType, req.EntityID)
 		if err != nil {
-			if errors.Is(err, db.ErrConstraintViolation) {
+			if errors.Is(err, store.ErrConstraintViolation) {
 				common.RespondError(w, http.StatusConflict, "operation conflict")
 				return
 			}
@@ -182,8 +179,7 @@ func (h *Handler) RollbackPendingChanges(w http.ResponseWriter, r *http.Request)
 			return
 		}
 
-		// Delete affected bundle previews for peers
-		if err := db.DeleteAllPendingBundlePreviews(ctx, h.DB); err != nil {
+		if err := h.PendingStore.DeleteAllPendingBundlePreviews(ctx); err != nil {
 			log.WarnContext(ctx, "Failed to delete old previews", "error", err)
 		}
 
@@ -191,20 +187,19 @@ func (h *Handler) RollbackPendingChanges(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if err := db.RollbackSnapshots(ctx, h.DBBeginner); err != nil {
+	if err := h.PendingStore.RollbackSnapshots(ctx); err != nil {
 		log.ErrorContext(ctx, "failed to rollback snapshots", "error", err)
 		common.InternalError(w)
 		return
 	}
 
-	if err := db.DeleteAllPendingBundlePreviews(ctx, h.DB); err != nil {
+	if err := h.PendingStore.DeleteAllPendingBundlePreviews(ctx); err != nil {
 		log.WarnContext(ctx, "Failed to delete old previews", "error", err)
 	}
 
 	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "rolled_back"})
 }
 
-// GetPeerPendingChanges returns pending changes for a specific peer.
 func (h *Handler) GetPeerPendingChanges(w http.ResponseWriter, r *http.Request) {
 	peerID, err := common.ParseIDParam(r, "peerId")
 	if err != nil {
@@ -213,10 +208,8 @@ func (h *Handler) GetPeerPendingChanges(w http.ResponseWriter, r *http.Request) 
 	}
 
 	ctx := r.Context()
-	database := h.DB
 
-	var hostname, ipAddress string
-	err = database.QueryRowContext(ctx, "SELECT hostname, ip_address FROM peers WHERE id = ?", peerID).Scan(&hostname, &ipAddress)
+	hostname, ipAddress, err := h.PeerStore.GetPeerWithIP(ctx, peerID)
 	if errors.Is(err, sql.ErrNoRows) {
 		common.RespondError(w, http.StatusNotFound, "peer not found")
 		return
@@ -227,7 +220,7 @@ func (h *Handler) GetPeerPendingChanges(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	changes, err := db.GetPendingChangesForPeer(ctx, database, peerID)
+	changes, err := h.PendingStore.GetPendingChangesForPeer(ctx, peerID)
 	if err != nil {
 		log.ErrorContext(ctx, "failed to get pending changes", "error", err)
 		common.InternalError(w)
@@ -242,7 +235,7 @@ func (h *Handler) GetPeerPendingChanges(w http.ResponseWriter, r *http.Request) 
 			ChangeID:      c.ChangeID,
 			ChangeAction:  c.ChangeAction,
 			ChangeSummary: c.ChangeSummary,
-			CreatedAt:     ic.FormatSQLiteDatetime(c.CreatedAt),
+			CreatedAt:     commonutil.FormatSQLiteDatetime(c.CreatedAt),
 		}
 		entityName, _ := h.lookupEntityName(ctx, c.ChangeType, c.ChangeID)
 		details[i].EntityName = entityName
@@ -252,7 +245,7 @@ func (h *Handler) GetPeerPendingChanges(w http.ResponseWriter, r *http.Request) 
 		"peer_id":    peerID,
 		"hostname":   hostname,
 		"ip_address": ipAddress,
-		"changes":    ic.EnsureSlice(details),
+		"changes":    commonutil.EnsureSlice(details),
 	})
 }
 
@@ -265,10 +258,8 @@ func (h *Handler) PreviewPeerPendingBundle(w http.ResponseWriter, r *http.Reques
 	}
 
 	ctx := r.Context()
-	database := h.DB
 
-	var hostname string
-	err = database.QueryRowContext(ctx, "SELECT hostname FROM peers WHERE id = ?", peerID).Scan(&hostname)
+	_, err = h.PeerStore.GetPeerHostname(ctx, peerID)
 	if errors.Is(err, sql.ErrNoRows) {
 		common.RespondError(w, http.StatusNotFound, "peer not found")
 		return
@@ -288,24 +279,21 @@ func (h *Handler) PreviewPeerPendingBundle(w http.ResponseWriter, r *http.Reques
 
 	version := engine.Version(content)
 
-	// Get current bundle for diff
 	var currentContent string
 	var currentVersion string
 	var currentVersionNumber int
-	err = database.QueryRowContext(ctx, `
-		SELECT rules_content, version, version_number FROM rule_bundles
-		WHERE peer_id = ?
-		ORDER BY id DESC LIMIT 1
-	`, peerID).Scan(&currentContent, &currentVersion, &currentVersionNumber)
+	currentContent, currentVersion, currentVersionNumber, err = h.PeerStore.GetLatestBundleForPeer(ctx, peerID)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		log.WarnContext(ctx, "failed to get current bundle for diff", "error", err)
 	}
+	if errors.Is(err, sql.ErrNoRows) {
+		currentContent = ""
+		currentVersion = ""
+		currentVersionNumber = 0
+	}
 
 	// Compute new version number (same logic as compiler)
-	var versionNumber int
-	err = database.QueryRowContext(ctx, `
-		SELECT COALESCE(MAX(version_number), 0) + 1 FROM rule_bundles WHERE peer_id = ?
-	`, peerID).Scan(&versionNumber)
+	versionNumber, err := h.PeerStore.GetNextBundleVersionNumber(ctx, peerID)
 	if err != nil {
 		log.WarnContext(ctx, "failed to compute version number", "error", err)
 		versionNumber = 0
@@ -313,7 +301,7 @@ func (h *Handler) PreviewPeerPendingBundle(w http.ResponseWriter, r *http.Reques
 
 	diffContent := generateDiff(currentContent, content)
 
-	err = db.SavePendingBundlePreview(ctx, database, peerID, content, diffContent, version)
+	err = h.PendingStore.SavePendingBundlePreview(ctx, peerID, content, diffContent, version)
 	if err != nil {
 		log.ErrorContext(ctx, "failed to save bundle preview", "error", err)
 		common.InternalError(w)
@@ -341,10 +329,8 @@ func (h *Handler) ApplyPeerPendingBundle(w http.ResponseWriter, r *http.Request)
 	}
 
 	ctx := r.Context()
-	database := h.DB
 
-	var hostname string
-	err = database.QueryRowContext(ctx, "SELECT hostname FROM peers WHERE id = ?", peerID).Scan(&hostname)
+	hostname, err := h.PeerStore.GetPeerHostname(ctx, peerID)
 	if errors.Is(err, sql.ErrNoRows) {
 		common.RespondError(w, http.StatusNotFound, "peer not found")
 		return
@@ -356,7 +342,7 @@ func (h *Handler) ApplyPeerPendingBundle(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Begin transaction for atomic operations
-	tx, err := h.DBBeginner.BeginTx(ctx, nil)
+	tx, err := h.beginner.BeginTx(ctx, nil)
 	if err != nil {
 		log.ErrorContext(ctx, "failed to begin transaction", "error", err)
 		common.InternalError(w)
@@ -372,13 +358,13 @@ func (h *Handler) ApplyPeerPendingBundle(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Clear pending changes for this peer (MUST succeed)
-	if err := db.ClearPendingChangesForPeer(ctx, tx, peerID); err != nil {
+	if err := h.PendingStore.ClearPendingChangesForPeerTx(ctx, tx, peerID); err != nil {
 		log.ErrorContext(ctx, "failed to clear pending changes for peer", "peer_id", peerID, "error", err)
 		common.InternalError(w)
 		return
 	}
 
-	if err := db.DeletePendingBundlePreview(ctx, tx, peerID); err != nil {
+	if err := h.PendingStore.DeletePendingBundlePreviewTx(ctx, tx, peerID); err != nil {
 		log.ErrorContext(ctx, "failed to delete pending bundle preview", "error", err)
 		common.InternalError(w)
 		return
@@ -391,7 +377,7 @@ func (h *Handler) ApplyPeerPendingBundle(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Best-effort cleanup (outside transaction)
-	_ = db.CleanupIfComplete(ctx, h.DBBeginner) // best-effort cleanup
+	_ = h.PendingStore.CleanupIfComplete(ctx) // best-effort cleanup
 
 	// Notify via SSE (use hostname as the host_id for SSE)
 	if !h.SSEHub.NotifyBundleUpdated("host-"+hostname, bundle.Version) {
@@ -404,12 +390,10 @@ func (h *Handler) ApplyPeerPendingBundle(w http.ResponseWriter, r *http.Request)
 	})
 }
 
-// ApplyAllPendingBundles applies pending bundles for all peers with pending changes.
 func (h *Handler) ApplyAllPendingBundles(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	database := h.DB
 
-	peerIDs, err := db.GetPeersWithPendingChanges(ctx, database)
+	peerIDs, err := h.PendingStore.GetPeersWithPendingChanges(ctx)
 	if err != nil {
 		log.ErrorContext(ctx, "failed to get peers with pending changes", "error", err)
 		common.InternalError(w)
@@ -425,16 +409,16 @@ func (h *Handler) ApplyAllPendingBundles(w http.ResponseWriter, r *http.Request)
 	}
 
 	applied := 0
-	var errors []string
+	var applyErrors []string
 	for _, peerID := range peerIDs {
-		if err := applyBundleForPeer(ctx, h.DBBeginner, h.Compiler, h.SSEHub, peerID); err != nil {
-			errors = append(errors, fmt.Sprintf("peer %d: %v", peerID, err))
+		if err := h.applyBundleForPeer(ctx, peerID); err != nil {
+			applyErrors = append(applyErrors, fmt.Sprintf("peer %d: %v", peerID, err))
 		} else {
 			applied++
 		}
 	}
 
-	if err := db.CleanupIfComplete(ctx, h.DBBeginner); err != nil {
+	if err := h.PendingStore.CleanupIfComplete(ctx); err != nil {
 		log.WarnContext(ctx, "Failed to cleanup after apply all", "error", err)
 	}
 
@@ -443,14 +427,14 @@ func (h *Handler) ApplyAllPendingBundles(w http.ResponseWriter, r *http.Request)
 		"applied": applied,
 		"total":   len(peerIDs),
 	}
-	if len(errors) > 0 {
-		resp["errors"] = errors
+	if len(applyErrors) > 0 {
+		resp["errors"] = applyErrors
 	}
 
 	common.RespondJSON(w, http.StatusOK, resp)
 }
 
-// ApplyEntityPendingChanges applies pending changes for a single entity for a specific peer.
+// ApplyEntityPendingChanges applies all pending changes for a specific entity type on a peer.
 // It:
 // 1. Deletes the pending change record and snapshot
 // 2. Commits the transaction
@@ -481,80 +465,66 @@ func (h *Handler) ApplyEntityPendingChanges(w http.ResponseWriter, r *http.Reque
 	}
 
 	ctx := r.Context()
-	database := h.DB
 
 	// Verify the pending change exists for this peer
-	var exists int
-	err = database.QueryRowContext(ctx,
-		"SELECT 1 FROM pending_changes WHERE peer_id = ? AND change_type = ? AND change_id = ?",
-		peerID, req.EntityType, req.EntityID,
-	).Scan(&exists)
-	if errors.Is(err, sql.ErrNoRows) {
-		common.RespondError(w, http.StatusNotFound, "pending change not found for this peer and entity")
-		return
-	}
+	exists, err := h.PeerStore.CheckPendingChangeExists(ctx, peerID, req.EntityType, req.EntityID)
 	if err != nil {
 		log.ErrorContext(ctx, "failed to verify pending change", "error", err)
 		common.InternalError(w)
 		return
 	}
-
-	// Begin transaction for atomic operations
-	tx, err := h.DBBeginner.BeginTx(ctx, nil)
-	if err != nil {
-		log.ErrorContext(ctx, "failed to begin transaction", "error", err)
-		common.InternalError(w)
-		return
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	if err := db.DeleteSnapshot(ctx, tx, req.EntityType, req.EntityID); err != nil {
-		log.ErrorContext(ctx, "failed to delete snapshot", "error", err)
-		common.InternalError(w)
+	if !exists {
+		common.RespondError(w, http.StatusNotFound, "pending change not found for this peer and entity")
 		return
 	}
 
-	if err := db.DeletePendingChangeForEntity(ctx, tx, int64(peerID), req.EntityType, req.EntityID); err != nil {
-		log.ErrorContext(ctx, "failed to delete pending changes", "error", err)
-		common.InternalError(w)
-		return
-	}
-
-	remainingCount, err := db.CountPendingChangesForPeer(ctx, tx, int64(peerID))
-	if err != nil {
-		log.ErrorContext(ctx, "failed to count remaining pending changes", "error", err)
-		common.InternalError(w)
-		return
-	}
-
-	// If other changes remain, regenerate the bundle preview
-	if remainingCount > 0 {
-		content, err := h.Compiler.Compile(ctx, peerID)
-		if err != nil {
-			log.WarnContext(ctx, "failed to compile bundle preview for remaining changes", "error", err)
-			// Don't fail - just skip preview generation
-		} else {
-			version := engine.Version(content)
-
-			var currentContent, currentVersion string
-			_ = tx.QueryRowContext(ctx, `
-SELECT rules_content, version FROM rule_bundles
-WHERE peer_id = ?
-ORDER BY id DESC LIMIT 1
-`, peerID).Scan(&currentContent, &currentVersion)
-
-			diffContent := generateDiff(currentContent, content)
-			if err := db.SavePendingBundlePreview(ctx, tx, peerID, content, diffContent, version); err != nil {
-				log.WarnContext(ctx, "failed to save bundle preview", "error", err)
-			}
+	// Run all transactional operations within a single transaction
+	var remainingCount int
+	err = store.RunInTx(ctx, h.beginner, func(tx *sql.Tx) error {
+		if err := h.PendingStore.DeleteSnapshotTx(ctx, tx, req.EntityType, req.EntityID); err != nil {
+			return fmt.Errorf("delete snapshot: %w", err)
 		}
-	} else {
-		// No more pending changes, delete the preview
-		_ = db.DeletePendingBundlePreview(ctx, tx, peerID)
-	}
 
-	if err := tx.Commit(); err != nil {
-		log.ErrorContext(ctx, "failed to commit transaction", "error", err)
+		if err := h.PendingStore.DeletePendingChangeForEntityTx(ctx, tx, int64(peerID), req.EntityType, req.EntityID); err != nil {
+			return fmt.Errorf("delete pending changes: %w", err)
+		}
+
+		count, err := h.PendingStore.CountPendingChangesForPeerTx(ctx, tx, int64(peerID))
+		if err != nil {
+			return fmt.Errorf("count remaining pending changes: %w", err)
+		}
+		remainingCount = count
+
+		// If other changes remain, regenerate the bundle preview
+		if remainingCount > 0 {
+			content, compileErr := h.Compiler.Compile(ctx, peerID)
+			if compileErr != nil {
+				log.WarnContext(ctx, "failed to compile bundle preview for remaining changes", "error", compileErr)
+				// Don't fail - just skip preview generation
+			} else {
+				version := engine.Version(content)
+
+				var currentContent string
+				currentContent, _, _, bundleErr := h.PeerStore.GetLatestBundleForPeer(ctx, peerID)
+				if bundleErr != nil {
+					// No existing bundle or error — use empty values
+					currentContent = ""
+				}
+
+				diffContent := generateDiff(currentContent, content)
+				if err := h.PendingStore.SavePendingBundlePreviewTx(ctx, tx, peerID, content, diffContent, version); err != nil {
+					log.WarnContext(ctx, "failed to save bundle preview", "error", err)
+				}
+			}
+		} else {
+			// No more pending changes, delete the preview
+			_ = h.PendingStore.DeletePendingBundlePreviewTx(ctx, tx, peerID)
+		}
+
+		return nil
+	})
+	if err != nil {
+		log.ErrorContext(ctx, "failed to apply entity pending changes in transaction", "error", err)
 		common.InternalError(w)
 		return
 	}
@@ -566,9 +536,8 @@ ORDER BY id DESC LIMIT 1
 		// Don't fail - the pending change is still cleared
 	} else {
 		bundleVersion = bundle.Version
-		var hostname string
-		_ = database.QueryRowContext(ctx, "SELECT hostname FROM peers WHERE id = ?", peerID).Scan(&hostname)
-		if hostname != "" {
+		hostname, hostnameErr := h.PeerStore.GetPeerHostname(ctx, peerID)
+		if hostnameErr == nil && hostname != "" {
 			if !h.SSEHub.NotifyBundleUpdated("host-"+hostname, bundle.Version) {
 				log.Warn("NotifyBundleUpdated failed: agent not connected after applying pending bundle", "host_id", "host-"+hostname)
 			}
@@ -577,7 +546,7 @@ ORDER BY id DESC LIMIT 1
 
 	// If no pending changes remain for this peer, clean up snapshots
 	if remainingCount == 0 {
-		_ = db.CleanupIfComplete(ctx, h.DBBeginner)
+		_ = h.PendingStore.CleanupIfComplete(ctx)
 	}
 
 	response := map[string]interface{}{
@@ -594,41 +563,14 @@ ORDER BY id DESC LIMIT 1
 	common.RespondJSON(w, http.StatusOK, response)
 }
 
-// PushAllRules creates an async push job and returns immediately with a job_id.
+// PushAllRules pushes compiled rules to all agent-based peers.
 // The PushWorker processes the job in the background.
 func (h *Handler) PushAllRules(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	database := h.DB
 
-	// Get all agent-based peers from the database (excluding manual peers)
-	rows, err := database.QueryContext(ctx, "SELECT id, hostname FROM peers WHERE is_manual = 0 ORDER BY hostname")
+	allPeers, err := h.PeerStore.ListAgentBasedPeers(ctx)
 	if err != nil {
 		log.ErrorContext(ctx, "failed to query agent-based peers", "error", err)
-		common.InternalError(w)
-		return
-	}
-	defer func() {
-		if cErr := rows.Close(); cErr != nil {
-			log.Warn("Failed to close rows", "error", cErr)
-		}
-	}()
-
-	type peerInfo struct {
-		id       int
-		hostname string
-	}
-
-	var allPeers []peerInfo
-	for rows.Next() {
-		var p peerInfo
-		if err := rows.Scan(&p.id, &p.hostname); err != nil {
-			log.WarnContext(ctx, "failed to scan peer", "error", err)
-			continue
-		}
-		allPeers = append(allPeers, p)
-	}
-	if err := rows.Err(); err != nil {
-		log.ErrorContext(ctx, "error iterating peers", "error", err)
 		common.InternalError(w)
 		return
 	}
@@ -644,7 +586,7 @@ func (h *Handler) PushAllRules(w http.ResponseWriter, r *http.Request) {
 	jobID := fmt.Sprintf("job_%d", time.Now().UnixNano())
 
 	initiatedBy := auth.UsernameFromContext(r.Context())
-	if err := db.CreatePushJob(ctx, database, jobID, initiatedBy, len(allPeers)); err != nil {
+	if err := h.PendingStore.CreatePushJob(ctx, jobID, initiatedBy, len(allPeers)); err != nil {
 		log.ErrorContext(ctx, "failed to create push job", "error", err)
 		common.InternalError(w)
 		return
@@ -654,13 +596,13 @@ func (h *Handler) PushAllRules(w http.ResponseWriter, r *http.Request) {
 		ID       int
 		Hostname string
 	}, len(allPeers))
-	for i, p := range allPeers {
+	for i := range allPeers {
 		peers[i] = struct {
 			ID       int
 			Hostname string
-		}{ID: p.id, Hostname: p.hostname}
+		}{ID: allPeers[i].ID, Hostname: allPeers[i].Hostname}
 	}
-	if err := db.CreatePushJobPeersT(ctx, h.DBBeginner, jobID, peers); err != nil {
+	if err := h.PendingStore.CreatePushJobPeers(ctx, jobID, peers); err != nil {
 		log.ErrorContext(ctx, "failed to create push job peers", "error", err)
 		common.InternalError(w)
 		return
@@ -677,7 +619,7 @@ func (h *Handler) PushAllRules(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// PushCurrentRules pushes the current rules to a specific peer.
+// PushCurrentRules pushes the current compiled rules to a specific peer.
 // The peer must be agent-based (has agent_version or is_manual = false).
 func (h *Handler) PushCurrentRules(w http.ResponseWriter, r *http.Request) {
 	peerID, err := common.ParseIDParam(r, "peerId")
@@ -687,14 +629,8 @@ func (h *Handler) PushCurrentRules(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	database := h.DB
 
-	var hostname string
-	var agentVersion sql.NullString
-	var isManual bool
-	err = database.QueryRowContext(ctx, `
-		SELECT hostname, agent_version, is_manual FROM peers WHERE id = ?
-	`, peerID).Scan(&hostname, &agentVersion, &isManual)
+	hostname, agentVersion, isManual, err := h.PeerStore.GetPeerWithAgentVersion(ctx, peerID)
 	if errors.Is(err, sql.ErrNoRows) {
 		common.RespondError(w, http.StatusNotFound, "peer not found")
 		return
@@ -711,11 +647,10 @@ func (h *Handler) PushCurrentRules(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Create a single-peer job for consistency with push-all flow
 	jobID := fmt.Sprintf("job_%d", time.Now().UnixNano())
 
 	initiatedBy := auth.UsernameFromContext(r.Context())
-	if err := db.CreatePushJob(ctx, database, jobID, initiatedBy, 1); err != nil {
+	if err := h.PendingStore.CreatePushJob(ctx, jobID, initiatedBy, 1); err != nil {
 		log.ErrorContext(ctx, "failed to create push job", "error", err)
 		common.InternalError(w)
 		return
@@ -725,7 +660,7 @@ func (h *Handler) PushCurrentRules(w http.ResponseWriter, r *http.Request) {
 		ID       int
 		Hostname string
 	}{{ID: peerID, Hostname: hostname}}
-	if err := db.CreatePushJobPeersT(ctx, h.DBBeginner, jobID, peers); err != nil {
+	if err := h.PendingStore.CreatePushJobPeers(ctx, jobID, peers); err != nil {
 		log.ErrorContext(ctx, "failed to create push job peers", "error", err)
 		common.InternalError(w)
 		return
@@ -744,7 +679,6 @@ func (h *Handler) PushCurrentRules(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// HandlePushJobSSE streams real-time progress events for a push job via Server-Sent Events.
 func (h *Handler) HandlePushJobSSE(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	jobID := vars["job_id"]
@@ -753,7 +687,7 @@ func (h *Handler) HandlePushJobSSE(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err := db.GetPushJob(r.Context(), h.DB, jobID)
+	_, err := h.PendingStore.GetPushJob(r.Context(), jobID)
 	if errors.Is(err, sql.ErrNoRows) {
 		common.RespondError(w, http.StatusNotFound, "job not found")
 		return
@@ -781,7 +715,7 @@ func (h *Handler) HandlePushJobSSE(w http.ResponseWriter, r *http.Request) {
 	defer h.SSEHub.UnregisterPushJob(jobID)
 
 	// Send initial state
-	job, peers, err := db.GetPushJobWithPeers(r.Context(), h.DB, jobID)
+	job, peers, err := h.PendingStore.GetPushJobWithPeers(r.Context(), jobID)
 	if err == nil {
 		initialData := map[string]interface{}{
 			"job_id":    job.ID,
@@ -817,7 +751,6 @@ func (h *Handler) HandlePushJobSSE(w http.ResponseWriter, r *http.Request) {
 			}
 			flusher.Flush()
 
-			// Check if this was a completion event by parsing the event type explicitly
 			// SSE format: "event: {eventType}\ndata: {jsonPayload}\n\n"
 			eventType := parseSSEEventType(event)
 			if eventType == "complete" {
@@ -827,7 +760,6 @@ func (h *Handler) HandlePushJobSSE(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// parseSSEEventType extracts the event type from an SSE message.
 // Returns empty string if not found.
 func parseSSEEventType(event string) string {
 	for _, line := range strings.Split(event, "\n") {
@@ -838,35 +770,32 @@ func parseSSEEventType(event string) string {
 	return ""
 }
 
-// applyBundleForPeer compiles, stores, and clears pending for a single peer.
-func applyBundleForPeer(ctx context.Context, database db.DB, compiler *engine.Compiler, sseHub *events.SSEHub, peerID int) error {
-	// Get hostname for SSE
-	var hostname string
-	err := database.QueryRowContext(ctx, "SELECT hostname FROM peers WHERE id = ?", peerID).Scan(&hostname)
+// applyBundleForPeer compiles and stores a bundle for a peer, clears pending changes, and notifies via SSE.
+func (h *Handler) applyBundleForPeer(ctx context.Context, peerID int) error {
+	hostname, err := h.PeerStore.GetPeerHostname(ctx, peerID)
 	if err != nil {
 		return fmt.Errorf("peer not found: %w", err)
 	}
 
 	// Begin transaction for atomic operations
-	tx, err := database.BeginTx(ctx, nil)
+	tx, err := h.beginner.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
 	// Compile and store
-	bundle, err := compiler.CompileAndStore(ctx, peerID)
+	bundle, err := h.Compiler.CompileAndStore(ctx, peerID)
 	if err != nil {
 		return fmt.Errorf("compile failed: %w", err)
 	}
 
 	// Clear pending changes (MUST succeed)
-	if err := db.ClearPendingChangesForPeer(ctx, tx, peerID); err != nil {
+	if err := h.PendingStore.ClearPendingChangesForPeerTx(ctx, tx, peerID); err != nil {
 		return fmt.Errorf("failed to clear pending changes: %w", err)
 	}
 
-	// Delete pending preview (MUST succeed)
-	if err := db.DeletePendingBundlePreview(ctx, tx, peerID); err != nil {
+	if err := h.PendingStore.DeletePendingBundlePreviewTx(ctx, tx, peerID); err != nil {
 		return fmt.Errorf("failed to delete pending bundle preview: %w", err)
 	}
 
@@ -876,14 +805,13 @@ func applyBundleForPeer(ctx context.Context, database db.DB, compiler *engine.Co
 	}
 
 	// Notify via SSE
-	if !sseHub.NotifyBundleUpdated("host-"+hostname, bundle.Version) {
+	if !h.SSEHub.NotifyBundleUpdated("host-"+hostname, bundle.Version) {
 		log.Warn("NotifyBundleUpdated failed: agent not connected after applying pending bundle", "host_id", "host-"+hostname)
 	}
 
 	return nil
 }
 
-// generateDiff produces a text diff between two strings using LCS.
 func generateDiff(oldContent, newContent string) string {
 	if oldContent == newContent {
 		return "No changes detected."
@@ -966,13 +894,10 @@ func splitLines(s string) []string {
 	return lines
 }
 
-// HandleFrontendSSE streams real-time events to frontend clients via Server-Sent Events.
-// This endpoint is used for notifications like pending_change_added events.
+// HandleFrontendSSE handles Server-Sent Events for frontend clients. This endpoint is used for notifications like pending_change_added events.
 func (h *Handler) HandleFrontendSSE(w http.ResponseWriter, r *http.Request) {
-	// Generate a unique client ID for this connection
 	clientID := fmt.Sprintf("frontend-%d", time.Now().UnixNano())
 
-	// Set SSE headers
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")

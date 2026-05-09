@@ -5,7 +5,6 @@ import (
 	"strings"
 )
 
-// supportedModules lists the iptables modules we consider "clean" for Runic mapping.
 var supportedModules = map[string]bool{
 	"set":       true,
 	"conntrack": true,
@@ -17,8 +16,7 @@ var supportedModules = map[string]bool{
 	"pkttype":   true,
 }
 
-// Parse parses iptables-save output into structured chain data.
-// Only chains listed in the chains parameter are processed.
+// Parse only processes chains listed in the chains parameter.
 func Parse(iptablesSaveOutput string, chains []string) ([]ParsedChain, error) {
 	chainSet := make(map[string]bool, len(chains))
 	for _, c := range chains {
@@ -44,7 +42,6 @@ func Parse(iptablesSaveOutput string, chains []string) ([]ParsedChain, error) {
 			continue
 		}
 
-		// Extract chain name: "-A CHAIN ..."
 		parts := strings.Fields(trimmed)
 		if len(parts) < 2 {
 			continue
@@ -79,7 +76,6 @@ func Parse(iptablesSaveOutput string, chains []string) ([]ParsedChain, error) {
 	return result, nil
 }
 
-// parseRule tokenizes and parses a single iptables rule line.
 func parseRule(line, chain string, order int) ParsedRule {
 	rule := ParsedRule{
 		Chain:           chain,
@@ -290,7 +286,6 @@ func parseRule(line, chain string, order int) ParsedRule {
 	return rule
 }
 
-// classifyRule sets IsRunicStandard, IsClean, and SkipReason on a parsed rule.
 func classifyRule(rule *ParsedRule, modules []string) {
 	// --- Detect Runic standard rules ---
 	if isRunicStandard(rule) {
@@ -302,7 +297,6 @@ func classifyRule(rule *ParsedRule, modules []string) {
 
 	// --- Check for unclean conditions ---
 
-	// Check interface matches
 	if rule.InInterface != "" {
 		// Loopback is Runic standard (caught above), any other -i is unsupported
 		rule.IsClean = false
@@ -320,7 +314,6 @@ func classifyRule(rule *ParsedRule, modules []string) {
 		}
 	}
 
-	// Check target
 	if rule.Target != "ACCEPT" && rule.Target != "DROP" {
 		if rule.Target == "" {
 			// No target — not clean
@@ -333,7 +326,6 @@ func classifyRule(rule *ParsedRule, modules []string) {
 		return
 	}
 
-	// Check conntrack states
 	for _, state := range rule.ConntrackStates {
 		if state != "NEW" {
 			rule.IsClean = false
@@ -342,7 +334,6 @@ func classifyRule(rule *ParsedRule, modules []string) {
 		}
 	}
 
-	// Check for unsupported modules
 	for _, mod := range modules {
 		if !supportedModules[mod] {
 			rule.IsClean = false
@@ -356,7 +347,6 @@ func classifyRule(rule *ParsedRule, modules []string) {
 	rule.SkipReason = ""
 }
 
-// isRunicStandard detects rules that are Runic-managed standard rules.
 func isRunicStandard(rule *ParsedRule) bool {
 	// Loopback: -i lo or -o lo with ACCEPT target
 	if rule.Target == "ACCEPT" && (rule.InInterface == "lo" || rule.OutInterface == "lo") {
@@ -386,7 +376,6 @@ func isRunicStandard(rule *ParsedRule) bool {
 	return false
 }
 
-// hasConntrackState checks if a rule has a specific conntrack state.
 func hasConntrackState(rule *ParsedRule, state string) bool {
 	for _, s := range rule.ConntrackStates {
 		if s == state {

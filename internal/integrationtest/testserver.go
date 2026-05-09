@@ -18,11 +18,10 @@ import (
 	"runic/internal/auth"
 	"runic/internal/db"
 	"runic/internal/engine"
+	"runic/internal/store"
 )
 
-// NewTestAPIServer creates an httptest.Server with a fully configured API
-// for testing purposes. The server uses an in-memory test database and
-// initializes the JWT key for authentication.
+// NewTestAPIServer initializes the JWT key for authentication.
 //
 // IMPORTANT: Callers MUST call Server.Close() BEFORE calling the returned
 // cleanup function to avoid race conditions with in-flight requests.
@@ -35,7 +34,6 @@ import (
 func NewTestAPIServer(t *testing.T) (*httptest.Server, func()) {
 	t.Helper()
 
-	// Create a temporary database file
 	f, err := os.CreateTemp("", "runic-test-*.db")
 	if err != nil {
 		t.Fatal(err)
@@ -54,7 +52,6 @@ func NewTestAPIServer(t *testing.T) (*httptest.Server, func()) {
 		t.Fatal(err)
 	}
 
-	// Set connection pool settings
 	database.SetMaxOpenConns(25)
 	database.SetMaxIdleConns(5)
 
@@ -78,7 +75,6 @@ func NewTestAPIServer(t *testing.T) (*httptest.Server, func()) {
 		t.Fatal(err)
 	}
 
-	// Create pending_changes table if it doesn't exist (needed for policy changes)
 	if _, err := database.Exec(`
 		CREATE TABLE IF NOT EXISTS pending_changes (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -99,7 +95,6 @@ func NewTestAPIServer(t *testing.T) (*httptest.Server, func()) {
 		t.Fatal(err)
 	}
 
-	// Create index for pending_changes
 	if _, err := database.Exec("CREATE INDEX IF NOT EXISTS idx_pending_changes_peer ON pending_changes(peer_id)"); err != nil {
 		if err := database.Close(); err != nil {
 			t.Log(err)
@@ -119,17 +114,17 @@ func NewTestAPIServer(t *testing.T) (*httptest.Server, func()) {
 		t.Logf("InitJwtKey fallback utilized: %v", err)
 	}
 
-	// Create compiler for rule compilation
-	compiler := engine.NewCompiler(database)
+	// Set the global TokenStore for auth.Middleware revocation checks
+	auth.SetTokenStore(store.NewTokenStore(database))
 
-	// Create in-memory logs database for API (pass nil for alert service and encryptor in tests)
+	compiler := engine.NewTestCompiler(database)
+
 	logsDB, err := db.InitLogsDB(":memory:")
 	if err != nil {
 		t.Fatalf("Failed to initialize logs database: %v", err)
 	}
 	testAPI := api.NewAPI(database, compiler, logsDB, ":memory:", nil, nil)
 
-	// Create router and register routes
 	router := mux.NewRouter()
 	testAPI.RegisterRoutes(router, "")
 
@@ -151,8 +146,7 @@ func NewTestAPIServer(t *testing.T) (*httptest.Server, func()) {
 	return server, cleanup
 }
 
-// AuthenticatedRequest makes an HTTP request with JWT authentication.
-// It automatically generates a valid token for the given username and role.
+// AuthenticatedRequest automatically generates a valid token for the given username and role.
 func AuthenticatedRequest(t *testing.T, server *httptest.Server, method, url string, body interface{}, username, role string) *http.Request {
 	t.Helper()
 
@@ -172,12 +166,10 @@ func AuthenticatedRequest(t *testing.T, server *httptest.Server, method, url str
 		t.Fatalf("failed to create request: %v", err)
 	}
 
-	// Set content type for JSON requests
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
 
-	// Generate and set auth token
 	token, err := auth.GenerateToken(username, role, 24*time.Hour)
 	if err != nil {
 		t.Fatalf("failed to generate auth token: %v", err)
@@ -187,8 +179,7 @@ func AuthenticatedRequest(t *testing.T, server *httptest.Server, method, url str
 	return req
 }
 
-// JSONRequest makes an authenticated JSON request and returns the response.
-// Helper function for common GET/POST/PUT/DELETE operations.
+// JSONRequest is a helper function for common GET/POST/PUT/DELETE operations.
 func JSONRequest(t *testing.T, server *httptest.Server, method, url string, body interface{}, username, role string) *http.Response {
 	t.Helper()
 	req := AuthenticatedRequest(t, server, method, url, body, username, role)

@@ -27,7 +27,6 @@
 //     b) Proper escaping depends on the output context (HTML vs. JSON vs. plain text)
 //     c) Early escaping could corrupt legitimate data or cause double-encoding issues
 //
-// For contexts requiring both protections simultaneously, use SanitizeAlertInputStrict
 // which applies both control character removal and HTML escaping.
 package alerts
 
@@ -36,11 +35,9 @@ import (
 	"strings"
 )
 
-// DefaultMaxHostnameLength is the default maximum length for hostname-like fields.
 const DefaultMaxHostnameLength = 255
 
-// SanitizeAlertInput sanitizes untrusted input before using in alerts.
-// It removes control characters, truncates length, and escapes dangerous content.
+// SanitizeAlertInput sanitizes alert input. It removes control characters, truncates length, and escapes dangerous content.
 // Returns the sanitized string and true if modifications were made.
 func SanitizeAlertInput(input string, maxLen int) (string, bool) {
 	if input == "" {
@@ -76,8 +73,7 @@ func SanitizeAlertInput(input string, maxLen int) (string, bool) {
 	return sanitized, modified
 }
 
-// SanitizeAlertInputStrict is a stricter version that also removes potentially
-// dangerous characters for email display and HTML output. It removes/escapes:
+// SanitizeAlertInputStrict sanitizes alert input strictly, removing dangerous characters for email display and HTML output. It removes/escapes:
 // - Control characters (CR, LF, NUL, etc.)
 // - HTML special characters (<, >, &, ", ')
 // - Email header injection characters (@ for certain contexts)
@@ -93,14 +89,12 @@ func SanitizeAlertInputStrict(input string, maxLen int) (string, bool) {
 	return escaped, modified
 }
 
-// truncateString safely truncates a string to maxLen bytes without breaking
 // multi-byte UTF-8 sequences.
 func truncateString(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s
 	}
 
-	// Find the last valid UTF-8 boundary at or before maxLen
 	for maxLen > 0 {
 		if s[maxLen-1] < 0x80 || s[maxLen-1] >= 0xC0 {
 			// ASCII character or start of a multi-byte sequence

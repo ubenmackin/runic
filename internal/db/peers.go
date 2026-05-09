@@ -2,13 +2,11 @@ package db
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 
 	"runic/internal/models"
 )
 
-// GetPeer fetches a peer by ID.
 func GetPeer(ctx context.Context, database Querier, peerID int) (models.PeerRow, error) {
 	var p models.PeerRow
 	err := database.QueryRowContext(ctx,
@@ -21,8 +19,7 @@ func GetPeer(ctx context.Context, database Querier, peerID int) (models.PeerRow,
 	return p, err
 }
 
-// SaveBundle inserts a new rule bundle and updates the peer's bundle_version.
-func SaveBundle(ctx context.Context, database *sql.DB, params models.CreateBundleParams) (models.RuleBundleRow, error) {
+func SaveBundle(ctx context.Context, database Beginner, params models.CreateBundleParams) (models.RuleBundleRow, error) {
 	tx, err := database.BeginTx(ctx, nil)
 	if err != nil {
 		return models.RuleBundleRow{}, err

@@ -23,7 +23,6 @@ const (
 	specialTargetSubnetBroadcast  int64 = 1 // __subnet_broadcast__
 )
 
-// normalizeIP strips single-host CIDR notation (/32) from an IP address.
 // Other CIDR suffixes (e.g., /24, /16) are preserved as they represent subnets.
 func normalizeIP(ip string) string {
 	if strings.HasSuffix(ip, "/32") {
@@ -32,11 +31,9 @@ func normalizeIP(ip string) string {
 	return ip
 }
 
-// isBroadcastDest checks if the rule's destination IP is a broadcast address
 // and the chain is INPUT or DOCKER-USER, indicating a broadcast rule that needs special handling.
 // Returns the broadcast special target ID: 0 = not broadcast, 1 = subnet broadcast, 2 = limited broadcast.
 // Subnet broadcast detection replaces the peer IP's last octet with 255, which is correct
-// for /24 subnets only (matching the engine's ResolveSpecialTarget behavior).
 // Broadcast detection must happen before resolveEndpoint() to prevent
 // broadcast destination IPs from being resolved as target endpoints.
 func isBroadcastDest(rule *iptparse.ParsedRule, chain string, peerIPs []string) int64 {
@@ -47,11 +44,9 @@ func isBroadcastDest(rule *iptparse.ParsedRule, chain string, peerIPs []string) 
 	if destIP == "" {
 		return 0
 	}
-	// Check limited broadcast (255.255.255.255)
 	if destIP == "255.255.255.255" {
 		return specialTargetLimitedBroadcast // 2
 	}
-	// Check subnet broadcast: compute broadcast address from each peer IP
 	// by replacing the last octet with 255.
 	// Note: This algorithm is correct for /24 subnets only, matching the
 	// engine's ResolveSpecialTarget behavior. For non-/24 subnets (e.g., /16),
@@ -74,8 +69,6 @@ func isBroadcastDest(rule *iptparse.ParsedRule, chain string, peerIPs []string) 
 	return 0
 }
 
-// isMulticastPktType checks if the rule has a multicast packet type and the chain
-// is INPUT or DOCKER-USER, indicating a multicast rule that needs special handling.
 // Multicast detection on OUTPUT/FORWARD chains is skipped because those represent
 // the peer sending multicast, not receiving it — analogous to isBroadcastDest.
 func isMulticastPktType(rule *iptparse.ParsedRule, chain string) bool {
@@ -85,7 +78,6 @@ func isMulticastPktType(rule *iptparse.ParsedRule, chain string) bool {
 	return chain == "INPUT" || chain == "DOCKER-USER"
 }
 
-// isIGMPProtocol checks if the rule's protocol is IGMP and the chain is INPUT or DOCKER-USER,
 // indicating an IGMP rule that needs special handling before normal endpoint resolution.
 // IGMP rules on OUTPUT/FORWARD chains are skipped because those represent the peer sending
 // IGMP, not receiving it — analogous to isBroadcastDest and isMulticastPktType.
@@ -96,12 +88,10 @@ func isIGMPProtocol(rule *iptparse.ParsedRule, chain string) bool {
 	return chain == "INPUT" || chain == "DOCKER-USER"
 }
 
-// resolveIGMPRule maps an IGMP protocol rule to Runic policy entities.
 // IGMP INPUT rules map to: source=special(__all_hosts__, ID=3), target=peer(self), service=IGMP system service, direction=both.
 // This mirrors the multicast pattern and ensures the policy is tied to the peer (target_type='peer')
 // so it compiles correctly in loadApplicablePolicies (which only matches peer/group targets, never 'special').
 func resolveIGMPRule(ctx context.Context, database db.Querier, ruleID int64, peerID int64) error {
-	// Look up the IGMP system service
 	var igmpServiceID int64
 	err := database.QueryRowContext(ctx,
 		"SELECT id FROM services WHERE name = 'IGMP' AND is_system = 1",
@@ -114,7 +104,6 @@ func resolveIGMPRule(ctx context.Context, database db.Querier, ruleID int64, pee
 	var primaryIP string
 	_ = database.QueryRowContext(ctx, "SELECT ip_address FROM peers WHERE id = ?", peerID).Scan(&primaryIP)
 
-	// Update the rule with IGMP mapping:
 	// source = __all_hosts__ (IGMP/multicast group, the broadcast domain)
 	// target = peer (the machine receiving the IGMP packets)
 	_, err = database.ExecContext(ctx,
@@ -124,13 +113,10 @@ func resolveIGMPRule(ctx context.Context, database db.Querier, ruleID int64, pee
 	return err
 }
 
-// resolveRules walks all import_rules for a session and attempts to map them to existing Runic entities.
 // It also processes ipset data to create group/peer mappings.
 func resolveRules(ctx context.Context, database db.Querier, sessionID int64, peerID int64, peerIPs []string, rawIpsets string) error {
-	// Parse ipset data for group member resolution
 	ipsetMembers := parseIpsetData(rawIpsets)
 
-	// Get all pending rules for this session
 	rows, err := database.QueryContext(ctx,
 		"SELECT id, chain, rule_order, raw_rule, status, skip_reason, action, priority, direction, target_scope, policy_name FROM import_rules WHERE session_id = ? AND status = 'pending'",
 		sessionID,
@@ -173,7 +159,6 @@ func resolveRules(ctx context.Context, database db.Querier, sessionID int64, pee
 		}
 		pr := &parsedRules[0].Rules[0]
 
-		// Check for multicast rule (only on INPUT/DOCKER-USER chains where
 		// the peer is receiving multicast packets, not sending them)
 		if isMulticastPktType(pr, r.Chain) {
 			if err := resolveMulticastRule(ctx, database, r.ID, peerID); err != nil {
@@ -182,7 +167,6 @@ func resolveRules(ctx context.Context, database db.Querier, sessionID int64, pee
 			continue
 		}
 
-		// Check for IGMP protocol rule (only on INPUT/DOCKER-USER chains)
 		// IGMP detection must happen before resolveEndpoint() to prevent
 		// the target from being resolved as a special target, which would
 		// orphan the policy from the peer in the compiler.
@@ -193,7 +177,6 @@ func resolveRules(ctx context.Context, database db.Querier, sessionID int64, pee
 			continue
 		}
 
-		// Check if this is a broadcast rule (destination IP matches broadcast address)
 		// Broadcast detection must happen before resolveEndpoint() so that
 		// broadcast destination IPs are not resolved as target endpoints.
 		if broadcastSpecialID := isBroadcastDest(pr, r.Chain, peerIPs); broadcastSpecialID != 0 {
@@ -215,7 +198,6 @@ func resolveRules(ctx context.Context, database db.Querier, sessionID int64, pee
 		// Correct source mapping for system policy patterns
 		if sourceType == "special" && sourceID == specialTargetAnyIP {
 			if targetType == "special" && serviceID > 0 {
-				// Check if the service is a system service
 				var isSystemService bool
 				err := database.QueryRowContext(ctx, "SELECT is_system FROM services WHERE id = ?", serviceID).Scan(&isSystemService)
 				if err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -223,7 +205,6 @@ func resolveRules(ctx context.Context, database db.Querier, sessionID int64, pee
 				}
 
 				if err == nil && isSystemService {
-					// Get the special target name for the target
 					var targetName string
 					err := database.QueryRowContext(ctx, "SELECT name FROM special_targets WHERE id = ?", targetID).Scan(&targetName)
 					if err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -252,15 +233,12 @@ func resolveRules(ctx context.Context, database db.Querier, sessionID int64, pee
 		var remoteType string
 		var remoteID, remoteStagingID int64
 		if r.Chain == "INPUT" || r.Chain == "DOCKER-USER" {
-			// For INPUT/DOCKER-USER: the remote endpoint is the SOURCE
 			remoteType, remoteID, remoteStagingID = sourceType, sourceID, sourceStagingID
 		} else {
-			// For OUTPUT: the remote endpoint is the TARGET
 			remoteType, remoteID, remoteStagingID = targetType, targetID, targetStagingID
 		}
 		direction := determineDirection(ctx, r.Chain, remoteType, remoteID, remoteStagingID, database)
 
-		// Update the import_rule with resolved mappings
 		_, err := database.ExecContext(ctx,
 			"UPDATE import_rules SET source_type = ?, source_id = ?, source_staging_id = ?, target_type = ?, target_id = ?, target_staging_id = ?, service_id = ?, service_staging_id = ?, source_ip = ?, target_ip = ?, direction = ?, status = 'resolved' WHERE id = ?",
 			sourceType, sqlNullInt64(sourceID), sqlNullInt64(sourceStagingID),
@@ -278,11 +256,9 @@ func resolveRules(ctx context.Context, database db.Querier, sessionID int64, pee
 	return nil
 }
 
-// resolveEndpoint resolves a source or target endpoint for a rule.
 // Returns (type, realID, stagingID, matchedIP) — realID is set if mapped to existing entity, stagingID if new.
 // matchedIP is set when the IP was found via peer_ips (non-primary IP match).
 func resolveEndpoint(ctx context.Context, database db.Querier, sessionID int64, rule *iptparse.ParsedRule, ipsetMembers map[string][]string, isSource bool, chain string, peerID int64, peerIPs []string) (string, int64, int64, string) {
-	// Check for ipset match
 	if rule.IpsetMatch != nil {
 		isMatchForEndpoint := (isSource && rule.IpsetMatch.Direction == "src") || (!isSource && rule.IpsetMatch.Direction == "dst")
 		if isMatchForEndpoint {
@@ -290,7 +266,6 @@ func resolveEndpoint(ctx context.Context, database db.Querier, sessionID int64, 
 		}
 	}
 
-	// Get the IP based on source/destination
 	ip := rule.DestIP
 	if isSource {
 		ip = rule.SourceIP
@@ -323,14 +298,12 @@ func resolveEndpoint(ctx context.Context, database db.Querier, sessionID int64, 
 		return "special", specialTargetAnyIP, 0, "" // __any_ip__
 	}
 
-	// Look up existing peer by primary IP
 	var existingPeerID int64
 	err := database.QueryRowContext(ctx, "SELECT id FROM peers WHERE ip_address = ?", ip).Scan(&existingPeerID)
 	if err == nil {
 		return "peer", existingPeerID, 0, ""
 	}
 
-	// Check peer_ips table for non-primary IP match
 	var peerIDFromIPs int64
 	err = database.QueryRowContext(ctx, "SELECT peer_id FROM peer_ips WHERE ip_address = ?", ip).Scan(&peerIDFromIPs)
 	if err == nil {
@@ -356,7 +329,6 @@ func resolveEndpoint(ctx context.Context, database db.Querier, sessionID int64, 
 	return "peer", 0, stagingID, ""
 }
 
-// resolveIpsetEndpoint resolves an ipset reference to a group.
 // Returns (type, realID, stagingID, matchedIP) — matchedIP is always empty for ipset resolution.
 func resolveIpsetEndpoint(ctx context.Context, database db.Querier, sessionID int64, ipsetName string, ipsetMembers map[string][]string) (string, int64, int64, string) {
 	// Derive group name: strip "runic_group_" prefix if present
@@ -365,7 +337,6 @@ func resolveIpsetEndpoint(ctx context.Context, database db.Querier, sessionID in
 		groupName = strings.TrimPrefix(ipsetName, "runic_group_")
 	}
 
-	// Check if staging group already exists for this ipset in this session
 	var existingStagingID int64
 	err := database.QueryRowContext(ctx,
 		"SELECT id FROM import_group_mappings WHERE session_id = ? AND ipset_name = ?",
@@ -388,12 +359,10 @@ func resolveIpsetEndpoint(ctx context.Context, database db.Querier, sessionID in
 		if err == nil {
 			existingPeerIDs = append(existingPeerIDs, pid)
 		} else {
-			// Check peer_ips for non-primary IP match
 			err = database.QueryRowContext(ctx, "SELECT peer_id FROM peer_ips WHERE ip_address = ?", memberIP).Scan(&pid)
 			if err == nil {
 				existingPeerIDs = append(existingPeerIDs, pid)
 			} else {
-				// Create staging peer for this member
 				spid, err := createStagingPeer(ctx, database, sessionID, memberIP, memberIP)
 				if err == nil {
 					stagingPeerIDs = append(stagingPeerIDs, spid)
@@ -491,7 +460,6 @@ func resolveIpsetEndpoint(ctx context.Context, database db.Querier, sessionID in
 	return "group", 0, stagingID, ""
 }
 
-// resolveService resolves a service from protocol+port.
 func resolveService(ctx context.Context, database db.Querier, sessionID int64, rule *iptparse.ParsedRule) (int64, int64) {
 	port := rule.DestPort
 	protocol := rule.Protocol
@@ -499,7 +467,6 @@ func resolveService(ctx context.Context, database db.Querier, sessionID int64, r
 		protocol = "tcp"
 	}
 	if port == "" {
-		// For protocol-only rules (e.g., IGMP, Limited Broadcast), try matching system services
 		if protocol != "" {
 			var sysServiceID int64
 			err := database.QueryRowContext(ctx,
@@ -513,7 +480,6 @@ func resolveService(ctx context.Context, database db.Querier, sessionID int64, r
 		return 0, 0
 	}
 
-	// Look up existing service by port+protocol
 	var serviceID int64
 	err := database.QueryRowContext(ctx,
 		"SELECT id FROM services WHERE ports = ? AND protocol = ?",
@@ -532,7 +498,6 @@ func resolveService(ctx context.Context, database db.Querier, sessionID int64, r
 		return serviceID, 0
 	}
 
-	// For multiport values (comma-separated), try sorted port matching
 	if strings.Contains(port, ",") {
 		// Sort the port numbers for consistent matching
 		portParts := strings.Split(port, ",")
@@ -561,7 +526,6 @@ func resolveService(ctx context.Context, database db.Querier, sessionID int64, r
 		}
 	}
 
-	// Create staging service mapping
 	serviceName := fmt.Sprintf("imported-%s-%s", protocol, port)
 	result, err := database.ExecContext(ctx,
 		"INSERT INTO import_service_mappings (session_id, name, ports, protocol, status) VALUES (?, ?, ?, ?, 'mapped')",
@@ -576,7 +540,6 @@ func resolveService(ctx context.Context, database db.Querier, sessionID int64, r
 	return 0, stagingID
 }
 
-// determineDirection computes the correct direction for an imported rule based on
 // whether the remote endpoint is an existing agent-based peer.
 // The importing peer always gets rules (backward for INPUT, forward for OUTPUT).
 // If the remote endpoint is also agent-based (or is a special/group), direction becomes 'both'.
@@ -610,10 +573,8 @@ func determineDirection(ctx context.Context, chain string, remoteType string, re
 	return defaultDir
 }
 
-// createStagingPeer creates a staging peer mapping for an IP that doesn't match an existing peer.
 func createStagingPeer(ctx context.Context, database db.Querier, sessionID int64, ip, hostname string) (int64, error) {
 	ip = normalizeIP(ip) // Normalize before dedup/insert
-	// Check if staging peer already exists for this IP in this session
 	var existingID int64
 	err := database.QueryRowContext(ctx,
 		"SELECT id FROM import_peer_mappings WHERE session_id = ? AND ip_address = ?",
@@ -634,7 +595,6 @@ func createStagingPeer(ctx context.Context, database db.Querier, sessionID int64
 	return id, nil
 }
 
-// parseIpsetData parses raw ipset list output into a map of ipset name -> member IPs.
 // Example input:
 //
 //	Name: runic_group_web
@@ -674,28 +634,23 @@ func parseIpsetData(rawIpsets string) map[string][]string {
 	return result
 }
 
-// parseIPPart extracts just the IP portion (before /CIDR).
 func parseIPPart(s string) string {
 	return strings.Split(s, "/")[0]
 }
 
-// sqlNullInt64 returns a sql.NullInt64 value.
 // Zero maps to NULL (Valid=false), non-zero maps to the integer value (Valid=true).
 func sqlNullInt64(v int64) sql.NullInt64 {
 	return sql.NullInt64{Int64: v, Valid: v != 0}
 }
 
-// sqlNullString returns a sql.NullString value.
 // Empty string maps to NULL (Valid=false), non-empty maps to the string value (Valid=true).
 func sqlNullString(v string) sql.NullString {
 	return sql.NullString{String: v, Valid: v != ""}
 }
 
-// resolveMulticastRule maps a pkttype multicast rule to Runic policy entities.
 // Multicast INPUT rules map to: source=special(__all_hosts__, ID=3), target=peer(self), service=Multicast system service.
 // This mirrors the broadcast pattern: source=special, target=peer, direction=both.
 func resolveMulticastRule(ctx context.Context, database db.Querier, ruleID int64, peerID int64) error {
-	// Look up the Multicast system service
 	var multicastServiceID int64
 	err := database.QueryRowContext(ctx,
 		"SELECT id FROM services WHERE name = 'Multicast' AND is_system = 1",
@@ -708,7 +663,6 @@ func resolveMulticastRule(ctx context.Context, database db.Querier, ruleID int64
 	var primaryIP string
 	_ = database.QueryRowContext(ctx, "SELECT ip_address FROM peers WHERE id = ?", peerID).Scan(&primaryIP)
 
-	// Update the rule with multicast mapping:
 	// source = __all_hosts__ (IGMP/multicast group, the broadcast domain)
 	// target = peer (the machine receiving the multicast)
 	_, err = database.ExecContext(ctx,
@@ -718,7 +672,6 @@ func resolveMulticastRule(ctx context.Context, database db.Querier, ruleID int64
 	return err
 }
 
-// resolveBroadcastService resolves the correct broadcast system service based on
 // the broadcast special target ID. This avoids the bug where resolveService()
 // would return "Multicast" for UDP protocol with no ports, since it just picks
 // the first matching system service.
@@ -743,7 +696,6 @@ func resolveBroadcastService(ctx context.Context, database db.Querier, broadcast
 	return serviceID, nil
 }
 
-// resolveBroadcastRule maps a broadcast rule (detected by destination IP matching
 // a broadcast address) to Runic policy entities.
 // Broadcast INPUT rules map to: source=special(broadcast), target=peer(self), service=broadcast system service.
 // This corrects the semantic mismatch: in iptables, -d 255.255.255.255 describes the
@@ -779,7 +731,6 @@ func resolveBroadcastRule(ctx context.Context, database db.Querier, sessionID in
 	// but preserve the parsed direction for port-specific rules (e.g., DHCP)
 	direction := "both"
 	if rule.DestPort != "" {
-		// For port-specific rules, read the original direction from the import_rule
 		var origDir string
 		err := database.QueryRowContext(ctx, "SELECT direction FROM import_rules WHERE id = ?", ruleID).Scan(&origDir)
 		if err == nil && origDir != "" {
@@ -787,7 +738,6 @@ func resolveBroadcastRule(ctx context.Context, database db.Querier, sessionID in
 		}
 	}
 
-	// Update the rule with broadcast mapping:
 	// source = broadcast special target (the broadcast domain)
 	// target = peer (the machine receiving the broadcast)
 	_, err := database.ExecContext(ctx,

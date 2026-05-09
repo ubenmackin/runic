@@ -12,7 +12,7 @@ import (
 	"runic/internal/common/log"
 )
 
-// RateLimiter implements a configurable in-memory rate limiter using a sliding window algorithm.
+// A RateLimiter provides sliding-window rate limiting per client IP.
 // It supports both middleware and direct function call patterns.
 type RateLimiter struct {
 	mu          sync.Mutex
@@ -23,7 +23,7 @@ type RateLimiter struct {
 	stopOnce    sync.Once
 }
 
-// NewRateLimiter creates a new RateLimiter with the specified limit and window.
+// NewRateLimiter creates a new RateLimiter with the given limit and window.
 // limit: maximum number of requests allowed per IP within the window
 // window: the time duration for the sliding window
 func NewRateLimiter(limit int, window time.Duration) *RateLimiter {
@@ -37,7 +37,7 @@ func NewRateLimiter(limit int, window time.Duration) *RateLimiter {
 	return rl
 }
 
-// Check returns nil if allowed, error if rate limited.
+// Check checks whether the given remote address is within the rate limit.
 // This is the direct function call pattern for use outside of HTTP middleware.
 func (rl *RateLimiter) Check(remoteAddr string) error {
 	rl.mu.Lock()
@@ -62,7 +62,7 @@ func (rl *RateLimiter) Check(remoteAddr string) error {
 	return nil
 }
 
-// Middleware returns an http.Handler that wraps the next handler with rate limiting.
+// Middleware returns an HTTP middleware that enforces the rate limit.
 // It uses the client's IP address as the rate limit key.
 // If the rate limit is exceeded, it responds with HTTP 429 Too Many Requests.
 func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
@@ -80,12 +80,10 @@ func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 	})
 }
 
-// getIP extracts the client IP from the request.
 func (rl *RateLimiter) getIP(r *http.Request) string {
 	return r.RemoteAddr
 }
 
-// startCleanup starts a goroutine that periodically cleans up stale entries.
 func (rl *RateLimiter) startCleanup() {
 	go func() {
 		ticker := time.NewTicker(constants.RateLimitCleanupInterval)
@@ -101,7 +99,6 @@ func (rl *RateLimiter) startCleanup() {
 	}()
 }
 
-// cleanup removes entries with no recent activity to prevent memory leaks.
 func (rl *RateLimiter) cleanup() {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
@@ -124,14 +121,12 @@ func (rl *RateLimiter) cleanup() {
 	}
 }
 
-// Stop stops the cleanup goroutine. Useful for testing or graceful shutdown.
 func (rl *RateLimiter) Stop() {
 	rl.stopOnce.Do(func() {
 		close(rl.stopCleanup)
 	})
 }
 
-// Reset clears all rate limit state. This is intended for testing to ensure test isolation.
 func (rl *RateLimiter) Reset() {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()

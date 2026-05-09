@@ -25,22 +25,24 @@ type PolicyStore interface {
 	CreatePolicy(ctx context.Context, p *models.PolicyRow) (int64, error)
 	GetPolicy(ctx context.Context, id int) (models.PolicyRow, error)
 	GetPolicyName(ctx context.Context, id int) (string, error)
-	UpdatePolicy(ctx context.Context, q db.Querier, p *models.PolicyRow) error
-	PatchPolicyEnabled(ctx context.Context, q db.Querier, id int, enabled bool) error
-	SoftDeletePolicy(ctx context.Context, q db.Querier, id int) error
-	Snapshot(ctx context.Context, q db.Querier, action string, policyID int) error
+	UpdatePolicy(ctx context.Context, p *models.PolicyRow) error
+	PatchPolicyEnabled(ctx context.Context, id int, enabled bool) error
+	SoftDeletePolicy(ctx context.Context, id int) error
+	Snapshot(ctx context.Context, action string, policyID int) error
 	ListSpecialTargets(ctx context.Context) ([]models.SpecialTargetRow, error)
+	CheckDeleteConstraints(ctx context.Context, policyID int) error
+	QueuePeerChange(ctx context.Context, changeWorker *common.ChangeWorker, peerIDs []int, changeType, changeAction string, changeID int, summary string)
 }
 
 type Handler struct {
-	DB           db.DB
+	beginner     db.Beginner
 	Compiler     *engine.Compiler
 	ChangeWorker *common.ChangeWorker
 	Store        PolicyStore
 }
 
-func NewHandler(database db.DB, compiler *engine.Compiler, changeWorker *common.ChangeWorker, policyStore PolicyStore) *Handler {
-	return &Handler{DB: database, Compiler: compiler, ChangeWorker: changeWorker, Store: policyStore}
+func NewHandler(beginner db.Beginner, compiler *engine.Compiler, changeWorker *common.ChangeWorker, policyStore PolicyStore) *Handler {
+	return &Handler{beginner: beginner, Compiler: compiler, ChangeWorker: changeWorker, Store: policyStore}
 }
 
 type policyInput struct {
@@ -223,7 +225,7 @@ func (h *Handler) CreatePolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.Store.Snapshot(r.Context(), h.DB, "create", int(id)); err != nil {
+	if err := h.Store.Snapshot(r.Context(), "create", int(id)); err != nil {
 		log.ErrorContext(r.Context(), "failed to create snapshot", "error", err)
 	}
 
@@ -231,9 +233,7 @@ func (h *Handler) CreatePolicy(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.ErrorContext(r.Context(), "Failed to get affected peers", "policy_id", id, "error", err)
 	}
-	if h.ChangeWorker != nil {
-		h.ChangeWorker.QueuePeerChange(r.Context(), h.DB, affectedPeers, "policy", "create", int(id), fmt.Sprintf("Policy '%s' created", input.Name))
-	}
+	h.Store.QueuePeerChange(r.Context(), h.ChangeWorker, affectedPeers, "policy", "create", int(id), fmt.Sprintf("Policy '%s' created", input.Name))
 
 	common.RespondJSON(w, http.StatusCreated, map[string]int64{"id": id})
 }
@@ -343,12 +343,12 @@ func (h *Handler) UpdatePolicy(w http.ResponseWriter, r *http.Request) {
 	// and don't need to be atomically consistent with the update. Keeping them
 	// outside the tx reduces write lock hold time and avoids "database is locked"
 	// conflicts with background workers.
-	if err := h.Store.Snapshot(r.Context(), h.DB, "update", id); err != nil {
+	if err := h.Store.Snapshot(r.Context(), "update", id); err != nil {
 		log.ErrorContext(r.Context(), "failed to create snapshot", "error", err)
 	}
 
-	err = store.RunInTx(r.Context(), h.DB, func(tx *sql.Tx) error {
-		if err := h.Store.UpdatePolicy(r.Context(), tx, &p); err != nil {
+	err = store.RunInTx(r.Context(), h.beginner, func(tx *sql.Tx) error {
+		if err := h.Store.UpdatePolicy(r.Context(), &p); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return common.NewHTTPError(http.StatusNotFound, "policy not found")
 			}
@@ -386,9 +386,7 @@ func (h *Handler) UpdatePolicy(w http.ResponseWriter, r *http.Request) {
 		allPeers = append(allPeers, pid)
 	}
 
-	if h.ChangeWorker != nil {
-		h.ChangeWorker.QueuePeerChange(r.Context(), h.DB, allPeers, "policy", "update", id, fmt.Sprintf("Policy '%s' updated", input.Name))
-	}
+	h.Store.QueuePeerChange(r.Context(), h.ChangeWorker, allPeers, "policy", "update", id, fmt.Sprintf("Policy '%s' updated", input.Name))
 
 	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
@@ -420,12 +418,12 @@ func (h *Handler) DeletePolicy(w http.ResponseWriter, r *http.Request) {
 	// Take snapshot outside the transaction — snapshots are idempotent (INSERT OR IGNORE)
 	// and don't need to be atomically consistent with the delete. Keeping them
 	// outside the tx reduces write lock hold time.
-	if err := h.Store.Snapshot(r.Context(), h.DB, "delete", id); err != nil {
+	if err := h.Store.Snapshot(r.Context(), "delete", id); err != nil {
 		log.ErrorContext(r.Context(), "failed to create snapshot", "error", err)
 	}
 
-	err = store.RunInTx(r.Context(), h.DB, func(tx *sql.Tx) error {
-		if err := h.Store.SoftDeletePolicy(r.Context(), tx, id); err != nil {
+	err = store.RunInTx(r.Context(), h.beginner, func(tx *sql.Tx) error {
+		if err := h.Store.SoftDeletePolicy(r.Context(), id); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return common.NewHTTPError(http.StatusNotFound, "policy not found")
 			}
@@ -445,9 +443,7 @@ func (h *Handler) DeletePolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.ChangeWorker != nil {
-		h.ChangeWorker.QueuePeerChange(r.Context(), h.DB, oldPeers, "policy", "delete", id, fmt.Sprintf("Policy '%s' deleted", policyName))
-	}
+	h.Store.QueuePeerChange(r.Context(), h.ChangeWorker, oldPeers, "policy", "delete", id, fmt.Sprintf("Policy '%s' deleted", policyName))
 
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -533,12 +529,12 @@ func (h *Handler) PatchPolicy(w http.ResponseWriter, r *http.Request) {
 	// Take snapshot outside the transaction — snapshots are idempotent (INSERT OR IGNORE)
 	// and don't need to be atomically consistent with the patch. Keeping them
 	// outside the tx reduces write lock hold time.
-	if err := h.Store.Snapshot(r.Context(), h.DB, "update", id); err != nil {
+	if err := h.Store.Snapshot(r.Context(), "update", id); err != nil {
 		log.ErrorContext(r.Context(), "failed to create snapshot", "error", err)
 	}
 
-	err = store.RunInTx(r.Context(), h.DB, func(tx *sql.Tx) error {
-		if err := h.Store.PatchPolicyEnabled(r.Context(), tx, id, *input.Enabled); err != nil {
+	err = store.RunInTx(r.Context(), h.beginner, func(tx *sql.Tx) error {
+		if err := h.Store.PatchPolicyEnabled(r.Context(), id, *input.Enabled); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return common.NewHTTPError(http.StatusNotFound, "policy not found")
 			}
@@ -566,9 +562,7 @@ func (h *Handler) PatchPolicy(w http.ResponseWriter, r *http.Request) {
 	if !*input.Enabled {
 		enabledStr = "disabled"
 	}
-	if h.ChangeWorker != nil {
-		h.ChangeWorker.QueuePeerChange(r.Context(), h.DB, affectedPeers, "policy", "update", id, fmt.Sprintf("Policy '%s' %s", policyName, enabledStr))
-	}
+	h.Store.QueuePeerChange(r.Context(), h.ChangeWorker, affectedPeers, "policy", "update", id, fmt.Sprintf("Policy '%s' %s", policyName, enabledStr))
 	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
 
@@ -602,7 +596,6 @@ func (h *Handler) ListSpecialTargets(w http.ResponseWriter, r *http.Request) {
 	common.RespondJSON(w, http.StatusOK, ic.EnsureSlice(resp))
 }
 
-// RegisterRoutes adds policy routes to the given router.
 func (h *Handler) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("", h.ListPolicies).Methods("GET")
 	r.HandleFunc("", h.CreatePolicy).Methods("POST")

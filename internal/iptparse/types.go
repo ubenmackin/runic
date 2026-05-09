@@ -1,13 +1,11 @@
 // Package iptparse provides parsing of iptables-save output into structured data.
 package iptparse
 
-// ParsedChain represents a single iptables chain with its rules.
 type ParsedChain struct {
 	Name  string       // e.g., "INPUT", "OUTPUT", "DOCKER-USER"
 	Rules []ParsedRule // rules in order
 }
 
-// ParsedRule represents a single iptables rule parsed into structured fields.
 type ParsedRule struct {
 	Chain           string      // INPUT, OUTPUT, DOCKER-USER
 	Order           int         // position in chain
@@ -29,7 +27,6 @@ type ParsedRule struct {
 	PktType         string      // -m pkttype --pkt-type value
 }
 
-// IpsetMatch represents an ipset match in a rule.
 type IpsetMatch struct {
 	Name      string // ipset name
 	Direction string // "src" or "dst" (from --match-set name src/dst)

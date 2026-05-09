@@ -19,8 +19,7 @@ import (
 	"runic/internal/models"
 )
 
-// ApplyBundle applies a new bundle with auto-revert protection.
-// The confirmFunc callback is used to notify the control plane after successful apply.
+// ApplyBundle uses the confirmFunc callback to notify the control plane after successful apply.
 func ApplyBundle(ctx context.Context, bundle models.BundleResponse, hmacKey, controlPlaneURL, token, version string, confirmFunc func(context.Context, string) error) error {
 	log.Info("Received bundle version, verifying HMAC", "version", bundle.Version)
 
@@ -120,7 +119,6 @@ func ApplyBundle(ctx context.Context, bundle models.BundleResponse, hmacKey, con
 	return nil
 }
 
-// CacheBundle saves the bundle rules to disk for apply-on-boot.
 func CacheBundle(rules string) error {
 	const cachePath = "/etc/runic-agent/cached-bundle.rules"
 
@@ -137,7 +135,6 @@ func CacheBundle(rules string) error {
 	return nil
 }
 
-// scheduleRevert sets up a delayed revert that can be canceled.
 // Uses time.AfterFunc to avoid launching a bare goroutine.
 func scheduleRevert(ctx context.Context, backup string, delay time.Duration, controlPlaneURL, token, version string) context.CancelFunc {
 	ctx, cancel := context.WithCancel(ctx)
@@ -157,14 +154,12 @@ func scheduleRevert(ctx context.Context, backup string, delay time.Duration, con
 		}
 	})
 
-	// Return a cancel func that also stops the timer
 	return func() {
 		cancel()
 		timer.Stop()
 	}
 }
 
-// dumpCurrentRules saves the current iptables rules.
 func dumpCurrentRules() (string, error) {
 	out, err := exec.Command("iptables-save").Output()
 	if err != nil {
@@ -173,7 +168,6 @@ func dumpCurrentRules() (string, error) {
 	return string(out), nil
 }
 
-// revertRules restores rules from a backup.
 func revertRules(backup string) error {
 	tmp, err := os.CreateTemp("", "runic-revert-*.rules")
 	if err != nil {
@@ -206,7 +200,6 @@ func revertRules(backup string) error {
 	return nil
 }
 
-// validateRules performs basic sanity checks on rules before applying.
 func validateRules(content string) error {
 	if strings.TrimSpace(content) == "" {
 		return fmt.Errorf("rules content is empty")
@@ -262,7 +255,6 @@ func validateRules(content string) error {
 	return nil
 }
 
-// smokeTest verifies the control plane is reachable after applying rules.
 func smokeTest(ctx context.Context, controlPlaneURL, token, version string) error {
 	client := &http.Client{
 		Timeout: constants.SmokeTestTimeout,
@@ -294,7 +286,6 @@ func smokeTest(ctx context.Context, controlPlaneURL, token, version string) erro
 	return nil
 }
 
-// applyIpsets parses and applies ipset definitions from a bundle.
 // It flushes all existing runic_group_* ipsets, creates new ones, and populates them.
 func applyIpsets(ctx context.Context, rulesContent string) error {
 	ipsetSection, err := extractIpsetSection(rulesContent)
@@ -341,14 +332,12 @@ func applyIpsets(ctx context.Context, rulesContent string) error {
 	return nil
 }
 
-// ipsetDef represents a parsed ipset definition.
 type ipsetDef struct {
 	Name    string
 	Type    string
 	Members []string
 }
 
-// extractIpsetSection extracts the ipset definition section from bundle content.
 // Returns the text between "# --- Ipset Definitions ---" and "*filter".
 func extractIpsetSection(content string) (string, error) {
 	startMarker := "# --- Ipset Definitions ---"
@@ -366,7 +355,6 @@ func extractIpsetSection(content string) (string, error) {
 	return strings.TrimSpace(section), nil
 }
 
-// stripIpsetSection removes the ipset definition section from bundle content.
 // It strips everything from "# --- Ipset Definitions ---" up to (but not including) "*filter".
 // If no ipset section is found, the original string is returned unchanged.
 // If an ipset section is found but no "*filter" follows it, the original string is returned (safe fallback).
@@ -393,7 +381,6 @@ func stripIpsetSection(content string) string {
 	return before + after
 }
 
-// parseIpsetDefs parses ipset create and add commands from the ipset section.
 func parseIpsetDefs(section string) ([]ipsetDef, error) {
 	lines := strings.Split(section, "\n")
 	defs := make(map[string]*ipsetDef)
@@ -412,7 +399,6 @@ func parseIpsetDefs(section string) ([]ipsetDef, error) {
 
 		switch fields[0] {
 		case "create":
-			// Format: create <name> <type> [family inet]
 			if len(fields) < 3 {
 				return nil, fmt.Errorf("malformed create line: %s", trimmed)
 			}
@@ -426,7 +412,6 @@ func parseIpsetDefs(section string) ([]ipsetDef, error) {
 			order = append(order, name)
 
 		case "add":
-			// Format: add <name> <ip/cidr>
 			if len(fields) < 3 {
 				return nil, fmt.Errorf("malformed add line: %s", trimmed)
 			}
@@ -448,7 +433,6 @@ func parseIpsetDefs(section string) ([]ipsetDef, error) {
 	return result, nil
 }
 
-// flushRunicIpsets destroys all ipsets with names starting with "runic_group_" and the "runic_private_ranges" ipset.
 func flushRunicIpsets(ctx context.Context) error {
 	cmd := exec.CommandContext(ctx, "ipset", "list", "-n")
 	output, err := cmd.CombinedOutput()
@@ -490,7 +474,6 @@ func flushRunicIpsets(ctx context.Context) error {
 	return nil
 }
 
-// runIpset creates a new ipset with the given name, type, and family.
 func runIpset(ctx context.Context, name, ipsetType, family string) error {
 	cmd := exec.CommandContext(ctx, "ipset", "create", name, ipsetType, "family", family)
 	output, err := cmd.CombinedOutput()
@@ -500,7 +483,6 @@ func runIpset(ctx context.Context, name, ipsetType, family string) error {
 	return nil
 }
 
-// addIpsetMember adds a member (IP or CIDR) to an ipset.
 func addIpsetMember(ctx context.Context, name, member string) error {
 	cmd := exec.CommandContext(ctx, "ipset", "add", name, member)
 	output, err := cmd.CombinedOutput()
@@ -510,7 +492,6 @@ func addIpsetMember(ctx context.Context, name, member string) error {
 	return nil
 }
 
-// hasDocker checks if Docker is installed and running.
 func hasDocker() bool {
 	_, err := exec.LookPath("docker")
 	if err != nil {
@@ -520,13 +501,11 @@ func hasDocker() bool {
 	return err == nil && strings.TrimSpace(string(out)) == "active"
 }
 
-// restartDocker restarts the Docker service.
 func restartDocker(ctx context.Context) error {
 	cmd := exec.CommandContext(ctx, "systemctl", "restart", "docker")
 	return cmd.Run()
 }
 
-// flushIPTables flushes all iptables rules in the filter table.
 // This is done before destroying ipsets to release references to them.
 // The order is: flush rules (-F) first, then delete custom chains (-X).
 func flushIPTables(ctx context.Context) error {

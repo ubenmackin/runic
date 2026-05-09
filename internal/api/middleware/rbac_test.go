@@ -10,7 +10,6 @@ import (
 	"runic/internal/auth"
 )
 
-// runRBACtest is a helper that sets up and executes an RBAC middleware test.
 // It returns the response recorder and whether the next handler was called,
 // allowing callers to perform additional assertions.
 func runRBACtest(t *testing.T, userRole, username string, requiredRoles []string, method string, wantStatus int, wantNextCalled bool) (*httptest.ResponseRecorder, bool) {
@@ -42,7 +41,6 @@ func runRBACtest(t *testing.T, userRole, username string, requiredRoles []string
 	return rr, nextCalled
 }
 
-// TestRequireRole_SingleRole tests RequireRole middleware with a single role
 func TestRequireRole_SingleRole(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -88,7 +86,6 @@ func TestRequireRole_SingleRole(t *testing.T) {
 	}
 }
 
-// TestRequireRole_MultipleRoles tests RequireRole middleware with multiple allowed roles
 func TestRequireRole_MultipleRoles(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -148,7 +145,6 @@ func TestRequireRole_MultipleRoles(t *testing.T) {
 	}
 }
 
-// TestRequireRole_UnauthorizedAccess tests unauthorized access handling
 func TestRequireRole_UnauthorizedAccess(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -207,7 +203,6 @@ func TestRequireRole_UnauthorizedAccess(t *testing.T) {
 	}
 }
 
-// TestRequireRole_VerificationLogic tests role verification edge cases
 func TestRequireRole_VerificationLogic(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -267,7 +262,6 @@ func TestRequireRole_VerificationLogic(t *testing.T) {
 	}
 }
 
-// TestRequireRole_ResponseFormat tests the response format for forbidden requests
 func TestRequireRole_ResponseFormat(t *testing.T) {
 	rr, nextCalled := runRBACtest(t, "viewer", "testuser", []string{"admin"}, http.MethodGet, http.StatusForbidden, false)
 
@@ -292,7 +286,6 @@ func TestRequireRole_ResponseFormat(t *testing.T) {
 	}
 }
 
-// TestRequireRole_HttpMethods tests the middleware works with different HTTP methods
 func TestRequireRole_HttpMethods(t *testing.T) {
 	methods := []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch}
 
@@ -303,7 +296,6 @@ func TestRequireRole_HttpMethods(t *testing.T) {
 	}
 }
 
-// TestRequireRole_ContextPreservation tests that middleware preserves context values.
 // This test requires a custom nextHandler to capture context, so it cannot use runRBACtest.
 func TestRequireRole_ContextPreservation(t *testing.T) {
 	var receivedRole string

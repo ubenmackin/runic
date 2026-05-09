@@ -24,7 +24,6 @@ func NewWorker(db *sql.DB, logsDB *sql.DB) *Worker {
 	}
 }
 
-// Start begins the cleanup worker. It runs immediately on startup, then every interval.
 func (w *Worker) Start(ctx context.Context) {
 	// Run once immediately on startup
 	w.runCleanup(ctx)
@@ -61,16 +60,13 @@ func (w *Worker) runCleanup(ctx context.Context) {
 		return
 	}
 
-	// Check if logsDB is available
 	if w.logsDB == nil {
 		log.ErrorContext(ctx, "LogsDB not initialized for cleanup")
 		return
 	}
 
-	// Delete logs older than retention days
 	cutoff := time.Now().AddDate(0, 0, -retentionDays).Format("2006-01-02 15:04:05")
 
-	// Delete in batches to avoid locking
 	totalDeleted := 0
 	batchSize := 1000
 

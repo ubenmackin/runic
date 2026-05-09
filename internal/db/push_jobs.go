@@ -5,7 +5,6 @@ import (
 	"fmt"
 )
 
-// PushJob represents an async push-all-rules job.
 type PushJob struct {
 	ID          string
 	InitiatedBy string
@@ -17,7 +16,6 @@ type PushJob struct {
 	CompletedAt string
 }
 
-// PushJobPeer tracks per-peer status within a push job.
 type PushJobPeer struct {
 	PeerID       int
 	Hostname     string
@@ -25,7 +23,6 @@ type PushJobPeer struct {
 	ErrorMessage string
 }
 
-// CreatePushJob inserts a new push job record.
 func CreatePushJob(ctx context.Context, database Querier, jobID, initiatedBy string, totalPeers int) error {
 	_, err := database.ExecContext(ctx, `
 		INSERT INTO push_jobs (id, initiated_by, total_peers, succeeded_count, failed_count, status)
@@ -37,7 +34,6 @@ func CreatePushJob(ctx context.Context, database Querier, jobID, initiatedBy str
 	return nil
 }
 
-// CreatePushJobPeersT is the transaction-based version that requires DB (Beginner+Querier).
 func CreatePushJobPeersT(ctx context.Context, database DB, jobID string, peers []struct {
 	ID       int
 	Hostname string
@@ -77,7 +73,6 @@ func CreatePushJobPeersT(ctx context.Context, database DB, jobID string, peers [
 	return nil
 }
 
-// GetPushJob fetches a single push job by ID.
 func GetPushJob(ctx context.Context, database Querier, jobID string) (PushJob, error) {
 	var job PushJob
 	err := database.QueryRowContext(ctx, `
@@ -92,7 +87,6 @@ func GetPushJob(ctx context.Context, database Querier, jobID string) (PushJob, e
 	return job, nil
 }
 
-// GetPushJobWithPeers fetches a job and all its peer records.
 func GetPushJobWithPeers(ctx context.Context, database Querier, jobID string) (PushJob, []PushJobPeer, error) {
 	job, err := GetPushJob(ctx, database, jobID)
 	if err != nil {
@@ -127,7 +121,6 @@ func GetPushJobWithPeers(ctx context.Context, database Querier, jobID string) (P
 	return job, peers, nil
 }
 
-// UpdatePushJobStatus updates just the status field of a push job.
 func UpdatePushJobStatus(ctx context.Context, database Querier, jobID, status string) error {
 	_, err := database.ExecContext(ctx,
 		"UPDATE push_jobs SET status = ? WHERE id = ?",
@@ -138,8 +131,7 @@ func UpdatePushJobStatus(ctx context.Context, database Querier, jobID, status st
 	return nil
 }
 
-// FinalizePushJob sets completed_at and updates the final status based on counts.
-// If failed_count > 0, status becomes 'completed_with_errors'; otherwise 'completed'.
+// FinalizePushJob marks a push job as completed. If failed_count > 0, status becomes 'completed_with_errors'; otherwise 'completed'.
 func FinalizePushJob(ctx context.Context, database Querier, jobID string) error {
 	_, err := database.ExecContext(ctx, `
 		UPDATE push_jobs
@@ -153,8 +145,7 @@ func FinalizePushJob(ctx context.Context, database Querier, jobID string) error 
 	return nil
 }
 
-// FinalizePushJobWithCounts atomically updates counts and finalizes the job.
-// This combines FinalizePushJob into a single UPDATE to prevent stale counts
+// FinalizePushJobWithCounts finalizes a push job with explicit success/failure counts. This combines FinalizePushJob into a single UPDATE to prevent stale counts
 // if the process crashes between the two calls.
 func FinalizePushJobWithCounts(ctx context.Context, database Querier, jobID string, succeeded, failed int) error {
 	_, err := database.ExecContext(ctx, `
@@ -171,8 +162,7 @@ func FinalizePushJobWithCounts(ctx context.Context, database Querier, jobID stri
 	return nil
 }
 
-// UpdatePushJobPeerStatus updates a single peer's status in the job.
-// If errMsg is empty, error_message is set to NULL.
+// UpdatePushJobPeerStatus updates the status of a peer within a push job. If errMsg is empty, error_message is set to NULL.
 func UpdatePushJobPeerStatus(ctx context.Context, database Querier, jobID string, peerID int, status string, errMsg string) error {
 	var err error
 	if errMsg == "" {

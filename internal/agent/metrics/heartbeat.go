@@ -12,7 +12,6 @@ import (
 	"runic/internal/models"
 )
 
-// SendHeartbeat sends a heartbeat to the control plane.
 func SendHeartbeat(ctx context.Context, client common.HTTPClient, controlPlaneURL, hostID, bundleVersion, token, version string, allIPs []string) error {
 	uptime := getUptime()
 	load := getLoad1m()
@@ -45,7 +44,6 @@ func SendHeartbeat(ctx context.Context, client common.HTTPClient, controlPlaneUR
 	return nil
 }
 
-// getUptime reads /proc/uptime and returns uptime in seconds.
 func getUptime() float64 {
 	data, err := os.ReadFile("/proc/uptime")
 	if err != nil {
@@ -59,7 +57,6 @@ func getUptime() float64 {
 	return uptime
 }
 
-// getLoad1m reads /proc/loadavg and returns the 1-minute load average.
 func getLoad1m() float64 {
 	data, err := os.ReadFile("/proc/loadavg")
 	if err != nil {
@@ -73,7 +70,6 @@ func getLoad1m() float64 {
 	return load1
 }
 
-// boolPtr returns a pointer to the given bool value.
 func boolPtr(b bool) *bool {
 	return &b
 }

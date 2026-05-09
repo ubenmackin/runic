@@ -14,7 +14,6 @@ import (
 	"runic/internal/testutil"
 )
 
-// TestGenerateRotationToken verifies token generation produces valid tokens.
 func TestGenerateRotationToken(t *testing.T) {
 	token, err := generateRotationToken()
 	if err != nil {
@@ -25,7 +24,6 @@ func TestGenerateRotationToken(t *testing.T) {
 		t.Errorf("generateRotationToken() length = %d, want 64", len(token))
 	}
 
-	// Generate another token and ensure they're different
 	token2, err := generateRotationToken()
 	if err != nil {
 		t.Fatalf("generateRotationToken() second call error = %v", err)
@@ -36,7 +34,6 @@ func TestGenerateRotationToken(t *testing.T) {
 	}
 }
 
-// TestGenerateHMACKey verifies HMAC key generation produces valid keys.
 func TestGenerateHMACKey(t *testing.T) {
 	key, err := generateHMACKey()
 	if err != nil {
@@ -47,7 +44,6 @@ func TestGenerateHMACKey(t *testing.T) {
 		t.Errorf("generateHMACKey() length = %d, want 64", len(key))
 	}
 
-	// Generate another key and ensure they're different
 	key2, err := generateHMACKey()
 	if err != nil {
 		t.Fatalf("generateHMACKey() second call error = %v", err)
@@ -58,7 +54,6 @@ func TestGenerateHMACKey(t *testing.T) {
 	}
 }
 
-// TestRotatePeerKey_Success verifies admin-initiated key rotation works correctly.
 func TestRotatePeerKey_Success(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
@@ -71,7 +66,7 @@ func TestRotatePeerKey_Success(t *testing.T) {
 		t.Fatalf("failed to insert test peer: %v", err)
 	}
 
-	h := NewHandler(store.NewPeerStore(database), database, nil, nil)
+	h := NewHandler(store.NewPeerStore(database), database, nil, nil, &testSettingsStore{db: database})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/peers/1/rotate-key", nil)
 	req = muxVars(req, map[string]string{"id": "1"})
@@ -125,12 +120,11 @@ func TestRotatePeerKey_Success(t *testing.T) {
 	}
 }
 
-// TestRotatePeerKey_NonExistentPeer verifies rotation fails for non-existent peer.
 func TestRotatePeerKey_NonExistentPeer(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	h := NewHandler(store.NewPeerStore(database), database, nil, nil)
+	h := NewHandler(store.NewPeerStore(database), database, nil, nil, &testSettingsStore{db: database})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/peers/999/rotate-key", nil)
 	req = muxVars(req, map[string]string{"id": "999"})
@@ -143,12 +137,11 @@ func TestRotatePeerKey_NonExistentPeer(t *testing.T) {
 	}
 }
 
-// TestRotatePeerKey_InvalidID verifies rotation fails for invalid peer ID.
 func TestRotatePeerKey_InvalidID(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	h := NewHandler(store.NewPeerStore(database), database, nil, nil)
+	h := NewHandler(store.NewPeerStore(database), database, nil, nil, &testSettingsStore{db: database})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/peers/invalid/rotate-key", nil)
 	req = muxVars(req, map[string]string{"id": "invalid"})
@@ -161,7 +154,6 @@ func TestRotatePeerKey_InvalidID(t *testing.T) {
 	}
 }
 
-// TestAgentRotateKey_Success verifies agent-initiated key rotation with valid token.
 func TestAgentRotateKey_Success(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
@@ -185,7 +177,7 @@ func TestAgentRotateKey_Success(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
-	h := NewHandler(store.NewPeerStore(database), database, nil, nil)
+	h := NewHandler(store.NewPeerStore(database), database, nil, nil, &testSettingsStore{db: database})
 	h.AgentRotateKey(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -213,7 +205,6 @@ func TestAgentRotateKey_Success(t *testing.T) {
 	}
 }
 
-// TestAgentRotateKey_InvalidToken verifies rotation fails with wrong token.
 func TestAgentRotateKey_InvalidToken(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
@@ -237,7 +228,7 @@ func TestAgentRotateKey_InvalidToken(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
-	h := NewHandler(store.NewPeerStore(database), database, nil, nil)
+	h := NewHandler(store.NewPeerStore(database), database, nil, nil, &testSettingsStore{db: database})
 	h.AgentRotateKey(rec, req)
 
 	if rec.Code != http.StatusUnauthorized {
@@ -245,7 +236,6 @@ func TestAgentRotateKey_InvalidToken(t *testing.T) {
 	}
 }
 
-// TestAgentRotateKey_ExpiredToken verifies rotation fails with expired token.
 // NOTE: This test documents a known issue - AgentRotateKey uses SQLite datetime()
 // comparison which doesn't correctly handle RFC3339 timestamps (T vs space separator).
 // The validateRotationToken function handles this correctly with Go time.Parse.
@@ -253,7 +243,6 @@ func TestAgentRotateKey_ExpiredToken(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Set rotation time to 10 minutes ago (expired)
 	expiredTime := time.Now().UTC().Add(-10 * time.Minute).Format(time.RFC3339)
 	_, err := database.Exec(`
 		INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, hmac_key_rotation_token, hmac_key_last_rotated_at)
@@ -273,7 +262,7 @@ func TestAgentRotateKey_ExpiredToken(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
-	h := NewHandler(store.NewPeerStore(database), database, nil, nil)
+	h := NewHandler(store.NewPeerStore(database), database, nil, nil, &testSettingsStore{db: database})
 	h.AgentRotateKey(rec, req)
 
 	// Due to RFC3339 vs SQLite datetime format mismatch, expired tokens may not be
@@ -285,7 +274,6 @@ func TestAgentRotateKey_ExpiredToken(t *testing.T) {
 	}
 }
 
-// TestAgentRotateKey_NoToken verifies rotation fails when no token is set.
 func TestAgentRotateKey_NoToken(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
@@ -308,7 +296,7 @@ func TestAgentRotateKey_NoToken(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
-	h := NewHandler(store.NewPeerStore(database), database, nil, nil)
+	h := NewHandler(store.NewPeerStore(database), database, nil, nil, &testSettingsStore{db: database})
 	h.AgentRotateKey(rec, req)
 
 	if rec.Code != http.StatusUnauthorized {
@@ -316,7 +304,6 @@ func TestAgentRotateKey_NoToken(t *testing.T) {
 	}
 }
 
-// TestAgentRotateKey_MissingFields verifies rotation fails with missing request fields.
 func TestAgentRotateKey_MissingFields(t *testing.T) {
 	tests := []struct {
 		name string
@@ -345,7 +332,7 @@ func TestAgentRotateKey_MissingFields(t *testing.T) {
 			database, cleanup := testutil.SetupTestDB(t)
 			defer cleanup()
 
-			h := NewHandler(store.NewPeerStore(database), database, nil, nil)
+			h := NewHandler(store.NewPeerStore(database), database, nil, nil, &testSettingsStore{db: database})
 
 			bodyBytes, _ := json.Marshal(tt.body)
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/agent/rotate-key", bytes.NewReader(bodyBytes))
@@ -361,12 +348,11 @@ func TestAgentRotateKey_MissingFields(t *testing.T) {
 	}
 }
 
-// TestAgentRotateKey_InvalidJSON verifies rotation fails with malformed JSON.
 func TestAgentRotateKey_InvalidJSON(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	h := NewHandler(store.NewPeerStore(database), database, nil, nil)
+	h := NewHandler(store.NewPeerStore(database), database, nil, nil, &testSettingsStore{db: database})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/agent/rotate-key", strings.NewReader("not-json"))
 	req.Header.Set("Content-Type", "application/json")
@@ -379,7 +365,6 @@ func TestAgentRotateKey_InvalidJSON(t *testing.T) {
 	}
 }
 
-// TestAgentRotateKey_TokenIsSingleUse verifies token can only be used once.
 func TestAgentRotateKey_TokenIsSingleUse(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
@@ -404,7 +389,7 @@ func TestAgentRotateKey_TokenIsSingleUse(t *testing.T) {
 	req1.Header.Set("Content-Type", "application/json")
 	rec1 := httptest.NewRecorder()
 
-	h := NewHandler(store.NewPeerStore(database), database, nil, nil)
+	h := NewHandler(store.NewPeerStore(database), database, nil, nil, &testSettingsStore{db: database})
 	h.AgentRotateKey(rec1, req1)
 
 	if rec1.Code != http.StatusOK {
@@ -422,12 +407,10 @@ func TestAgentRotateKey_TokenIsSingleUse(t *testing.T) {
 	}
 }
 
-// TestAgentConfirmRotation_Success verifies rotation confirmation works.
 func TestAgentConfirmRotation_Success(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Insert peer with consumed token (NULL after AgentRotateKey) and recent rotation timestamp
 	rotationTime := time.Now().UTC().Add(-1 * time.Minute).Format(time.RFC3339)
 	_, err := database.Exec(`
 		INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, hmac_key_rotation_token, hmac_key_last_rotated_at)
@@ -446,7 +429,7 @@ func TestAgentConfirmRotation_Success(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
-	h := NewHandler(store.NewPeerStore(database), database, nil, nil)
+	h := NewHandler(store.NewPeerStore(database), database, nil, nil, &testSettingsStore{db: database})
 	h.AgentConfirmRotation(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -463,12 +446,11 @@ func TestAgentConfirmRotation_Success(t *testing.T) {
 	}
 }
 
-// TestAgentConfirmRotation_PeerNotFound verifies confirmation fails for non-existent peer.
 func TestAgentConfirmRotation_PeerNotFound(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	h := NewHandler(store.NewPeerStore(database), database, nil, nil)
+	h := NewHandler(store.NewPeerStore(database), database, nil, nil, &testSettingsStore{db: database})
 
 	body := map[string]string{
 		"host_id": "host-nonexistent",
@@ -486,12 +468,11 @@ func TestAgentConfirmRotation_PeerNotFound(t *testing.T) {
 	}
 }
 
-// TestAgentConfirmRotation_MissingHostID verifies confirmation fails without host_id.
 func TestAgentConfirmRotation_MissingHostID(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	h := NewHandler(store.NewPeerStore(database), database, nil, nil)
+	h := NewHandler(store.NewPeerStore(database), database, nil, nil, &testSettingsStore{db: database})
 
 	body := map[string]string{}
 	bodyBytes, _ := json.Marshal(body)
@@ -507,7 +488,6 @@ func TestAgentConfirmRotation_MissingHostID(t *testing.T) {
 	}
 }
 
-// TestConcurrentRotation verifies atomic token consumption prevents race conditions.
 func TestConcurrentRotation(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
@@ -569,7 +549,6 @@ func TestConcurrentRotation(t *testing.T) {
 	}
 }
 
-// TestFullRotationWorkflow tests the complete rotation flow end-to-end.
 func TestFullRotationWorkflow(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
@@ -583,7 +562,7 @@ func TestFullRotationWorkflow(t *testing.T) {
 		t.Fatalf("failed to insert test peer: %v", err)
 	}
 
-	h := NewHandler(store.NewPeerStore(database), database, nil, nil)
+	h := NewHandler(store.NewPeerStore(database), database, nil, nil, &testSettingsStore{db: database})
 
 	// Step 2: Admin initiates rotation
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/peers/1/rotate-key", nil)

@@ -7,7 +7,6 @@ import (
 	"runic/internal/models"
 )
 
-// ListEnabledPolicies fetches enabled policies for a target peer (direct or group member), ordered by priority ASC.
 func ListEnabledPolicies(ctx context.Context, database Querier, peerID int) ([]models.PolicyRow, error) {
 	// A policy applies to a peer if the target is exactly the peer (target_type='peer' AND target_id=peerID)
 	// OR if the target is a group containing the peer (target_type='group' AND target_id IN group_members where peer_id=peerID).

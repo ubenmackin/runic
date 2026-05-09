@@ -6,7 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"runic/internal/common"
+	"runic/internal/api/common"
+	ic "runic/internal/common"
 	"runic/internal/db"
 	"runic/internal/models"
 )
@@ -14,16 +15,80 @@ import (
 const serviceRowColumns = `id, name, ports, COALESCE(source_ports, ''), protocol, COALESCE(description, ''), direction_hint, COALESCE(is_system, 0), COALESCE(no_conntrack, 0), COALESCE(is_pending_delete, 0)`
 
 type ServiceStore struct {
-	db db.Querier
+	db db.DB
 }
 
-func NewServiceStore(database db.Querier) *ServiceStore {
+func NewServiceStore(database db.DB) *ServiceStore {
 	return &ServiceStore{db: database}
 }
 
-// DB returns the underlying db.Querier for use with functions that require direct database access.
-func (s *ServiceStore) DB() db.Querier {
-	return s.db
+// GetNameByID returns the service name for a given ID. Returns sql.ErrNoRows if not found.
+func (s *ServiceStore) GetNameByID(ctx context.Context, id int) (string, error) {
+	var name string
+	err := s.db.QueryRowContext(ctx, "SELECT name FROM services WHERE id = ?", id).Scan(&name)
+	if err != nil {
+		return "", fmt.Errorf("get service name by id: %w", err)
+	}
+	return name, nil
+}
+
+// GetService returns a single non-deleted service by ID. Returns sql.ErrNoRows if not found.
+func (s *ServiceStore) GetService(ctx context.Context, serviceID int) (models.ServiceRow, error) {
+	var svc models.ServiceRow
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id, name, ports, COALESCE(source_ports, ''), protocol, COALESCE(description, ''), direction_hint, COALESCE(is_system, 0)
+		FROM services WHERE id = ? AND is_pending_delete = 0`, serviceID,
+	).Scan(&svc.ID, &svc.Name, &svc.Ports, &svc.SourcePorts, &svc.Protocol, &svc.Description, &svc.DirectionHint, &svc.IsSystem)
+	if err != nil {
+		return models.ServiceRow{}, fmt.Errorf("get service: %w", err)
+	}
+	return svc, nil
+}
+
+// CheckDeleteConstraints checks whether a service can be safely deleted.
+// It checks if the service is used in any policy (as service_id).
+// Returns a *common.DeleteConstraintError with the full list of policies using the service.
+func (s *ServiceStore) CheckDeleteConstraints(ctx context.Context, serviceID int) error {
+	// Query ALL policies that use the service
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, name FROM policies WHERE service_id = ? AND is_pending_delete = 0`,
+		serviceID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to check policy usage: %w", err)
+	}
+
+	var policies []common.PolicyRef
+	for rows.Next() {
+		var p common.PolicyRef
+		if err := rows.Scan(&p.ID, &p.Name); err != nil {
+			if closeErr := rows.Close(); closeErr != nil {
+				return fmt.Errorf("failed to scan policy: %v, close error: %w", err, closeErr)
+			}
+			return fmt.Errorf("failed to scan policy: %w", err)
+		}
+		policies = append(policies, p)
+	}
+	if closeErr := rows.Close(); closeErr != nil {
+		return fmt.Errorf("failed to close rows: %w", closeErr)
+	}
+
+	if len(policies) > 0 {
+		return &common.DeleteConstraintError{
+			Message:  "Cannot delete service: it is in use by policies",
+			Policies: policies,
+		}
+	}
+
+	return nil
+}
+
+// QueuePeerChange enqueues a peer change notification for the given peer IDs.
+func (s *ServiceStore) QueuePeerChange(ctx context.Context, changeWorker *common.ChangeWorker, peerIDs []int, changeType, changeAction string, changeID int, summary string) {
+	if changeWorker == nil || len(peerIDs) == 0 {
+		return
+	}
+	changeWorker.QueuePeerChange(ctx, peerIDs, changeType, changeAction, changeID, summary)
 }
 
 func (s *ServiceStore) ListServices(ctx context.Context) ([]models.ServiceRow, error) {
@@ -45,7 +110,7 @@ func (s *ServiceStore) ListServices(ctx context.Context) ([]models.ServiceRow, e
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("rows error: %w", err)
 	}
-	return common.EnsureSlice(services), nil
+	return ic.EnsureSlice(services), nil
 }
 
 func (s *ServiceStore) CreateService(ctx context.Context, name, ports, sourcePorts, protocol, description string, directionHint int, isSystem bool) (int64, error) {
@@ -96,7 +161,7 @@ func (s *ServiceStore) GetServiceByPort(ctx context.Context, port, protocol stri
 		err := s.db.QueryRowContext(ctx, query, protocol).Scan(
 			&svc.ID, &svc.Name, &svc.Ports, &svc.SourcePorts, &svc.Protocol, &svc.Description, &svc.DirectionHint, &svc.IsSystem, &svc.NoConntrack, &svc.IsPendingDelete)
 		if err != nil {
-			return common.EnsureSlice([]models.ServiceRow{}), nil
+			return ic.EnsureSlice([]models.ServiceRow{}), nil
 		}
 		return []models.ServiceRow{svc}, nil
 	}
@@ -116,19 +181,18 @@ func (s *ServiceStore) GetServiceByPort(ctx context.Context, port, protocol stri
 	err := s.db.QueryRowContext(ctx, query, args...).Scan(
 		&svc.ID, &svc.Name, &svc.Ports, &svc.SourcePorts, &svc.Protocol, &svc.Description, &svc.DirectionHint, &svc.IsSystem, &svc.NoConntrack, &svc.IsPendingDelete)
 	if err != nil {
-		return common.EnsureSlice([]models.ServiceRow{}), nil
+		return ic.EnsureSlice([]models.ServiceRow{}), nil
 	}
 	return []models.ServiceRow{svc}, nil
 }
 
-// SnapshotService creates a snapshot of a service for change tracking.
-// The q parameter allows it to be used inside or outside a transaction.
-func (s *ServiceStore) SnapshotService(ctx context.Context, q db.Querier, serviceID int, action string) error {
+// SnapshotService creates a snapshot of a service.
+func (s *ServiceStore) SnapshotService(ctx context.Context, serviceID int, action string) error {
 	if action == "create" {
-		return db.CreateSnapshot(ctx, q, "service", serviceID, action, "")
+		return db.CreateSnapshot(ctx, s.db, "service", serviceID, action, "")
 	}
 
-	svc, err := db.GetService(ctx, q, serviceID)
+	svc, err := db.GetService(ctx, s.db, serviceID)
 	if err != nil {
 		return fmt.Errorf("get service: %w", err)
 	}
@@ -138,7 +202,7 @@ func (s *ServiceStore) SnapshotService(ctx context.Context, q db.Querier, servic
 		return fmt.Errorf("marshal snapshot: %w", err)
 	}
 
-	return db.CreateSnapshot(ctx, q, "service", serviceID, action, string(bytes))
+	return db.CreateSnapshot(ctx, s.db, "service", serviceID, action, string(bytes))
 }
 
 func (s *ServiceStore) FindPoliciesUsingService(ctx context.Context, serviceID int) ([]int, error) {
@@ -162,5 +226,5 @@ func (s *ServiceStore) FindPoliciesUsingService(ctx context.Context, serviceID i
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("rows error: %w", err)
 	}
-	return common.EnsureSlice(policyIDs), nil
+	return ic.EnsureSlice(policyIDs), nil
 }

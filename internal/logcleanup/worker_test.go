@@ -13,7 +13,6 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-// setupTestDatabases creates both main and logs databases for testing.
 func setupTestDatabases(t *testing.T) (*sql.DB, *sql.DB, func()) {
 	t.Helper()
 	mainDB, mainCleanup := testutil.SetupTestDB(t)
@@ -26,7 +25,6 @@ func setupTestDatabases(t *testing.T) (*sql.DB, *sql.DB, func()) {
 	return mainDB, logsDB, cleanup
 }
 
-// TestNewWorker tests the Worker constructor.
 func TestNewWorker(t *testing.T) {
 	mainDB, logsDB, cleanup := setupTestDatabases(t)
 	defer cleanup()
@@ -46,19 +44,16 @@ func TestNewWorker(t *testing.T) {
 	}
 }
 
-// TestWorker_Start tests the Start method.
 func TestWorker_Start(t *testing.T) {
 	t.Run("runs cleanup immediately on startup", func(t *testing.T) {
 		mainDB, logsDB, cleanup := setupTestDatabases(t)
 		defer cleanup()
 
-		// Set retention to 30 days
 		_, err := mainDB.Exec("INSERT INTO system_config (key, value) VALUES ('log_retention_days', '30')")
 		if err != nil {
 			t.Fatalf("Failed to insert config: %v", err)
 		}
 
-		// Insert an old log entry (older than 30 days)
 		oldDate := time.Now().AddDate(0, 0, -35).Format("2006-01-02 15:04:05")
 		_, err = logsDB.Exec(
 			"INSERT INTO firewall_logs (timestamp, peer_id, source_ip, dest_ip, protocol, action) VALUES (?, 'peer-1', '10.0.0.1', '10.0.0.2', 'tcp', 'ACCEPT')",
@@ -93,7 +88,6 @@ func TestWorker_Start(t *testing.T) {
 		mainDB, logsDB, cleanup := setupTestDatabases(t)
 		defer cleanup()
 
-		// Set retention to -1 (unlimited) so no cleanup happens
 		_, err := mainDB.Exec("INSERT INTO system_config (key, value) VALUES ('log_retention_days', '-1')")
 		if err != nil {
 			t.Fatalf("Failed to insert config: %v", err)
@@ -118,7 +112,6 @@ func TestWorker_Start(t *testing.T) {
 		mainDB, logsDB, cleanup := setupTestDatabases(t)
 		defer cleanup()
 
-		// Set retention to -1 (unlimited)
 		_, err := mainDB.Exec("INSERT INTO system_config (key, value) VALUES ('log_retention_days', '-1')")
 		if err != nil {
 			t.Fatalf("Failed to insert config: %v", err)
@@ -140,7 +133,6 @@ func TestWorker_Start(t *testing.T) {
 	})
 }
 
-// TestWorker_runCleanup tests the runCleanup method.
 func TestWorker_runCleanup(t *testing.T) {
 	t.Run("default retention when not set", func(t *testing.T) {
 		mainDB, logsDB, cleanup := setupTestDatabases(t)
@@ -148,7 +140,6 @@ func TestWorker_runCleanup(t *testing.T) {
 
 		// Don't set log_retention_days - should use default of 30 days
 
-		// Insert an old log entry (older than 30 days)
 		oldDate := time.Now().AddDate(0, 0, -35).Format("2006-01-02 15:04:05")
 		_, err := logsDB.Exec(
 			"INSERT INTO firewall_logs (timestamp, peer_id, source_ip, dest_ip, protocol, action) VALUES (?, 'peer-1', '10.0.0.1', '10.0.0.2', 'tcp', 'ACCEPT')",
@@ -158,7 +149,6 @@ func TestWorker_runCleanup(t *testing.T) {
 			t.Fatalf("Failed to insert old log: %v", err)
 		}
 
-		// Insert a recent log entry (within 30 days)
 		recentDate := time.Now().AddDate(0, 0, -5).Format("2006-01-02 15:04:05")
 		_, err = logsDB.Exec(
 			"INSERT INTO firewall_logs (timestamp, peer_id, source_ip, dest_ip, protocol, action) VALUES (?, 'peer-1', '10.0.0.1', '10.0.0.2', 'tcp', 'ACCEPT')",
@@ -186,13 +176,11 @@ func TestWorker_runCleanup(t *testing.T) {
 		mainDB, logsDB, cleanup := setupTestDatabases(t)
 		defer cleanup()
 
-		// Set retention to -1 (unlimited)
 		_, err := mainDB.Exec("INSERT INTO system_config (key, value) VALUES ('log_retention_days', '-1')")
 		if err != nil {
 			t.Fatalf("Failed to insert config: %v", err)
 		}
 
-		// Insert an old log entry
 		oldDate := time.Now().AddDate(0, 0, -100).Format("2006-01-02 15:04:05")
 		_, err = logsDB.Exec(
 			"INSERT INTO firewall_logs (timestamp, peer_id, source_ip, dest_ip, protocol, action) VALUES (?, 'peer-1', '10.0.0.1', '10.0.0.2', 'tcp', 'ACCEPT')",
@@ -220,13 +208,11 @@ func TestWorker_runCleanup(t *testing.T) {
 		mainDB, logsDB, cleanup := setupTestDatabases(t)
 		defer cleanup()
 
-		// Set retention to 0 (disabled)
 		_, err := mainDB.Exec("INSERT INTO system_config (key, value) VALUES ('log_retention_days', '0')")
 		if err != nil {
 			t.Fatalf("Failed to insert config: %v", err)
 		}
 
-		// Insert an old log entry
 		oldDate := time.Now().AddDate(0, 0, -100).Format("2006-01-02 15:04:05")
 		_, err = logsDB.Exec(
 			"INSERT INTO firewall_logs (timestamp, peer_id, source_ip, dest_ip, protocol, action) VALUES (?, 'peer-1', '10.0.0.1', '10.0.0.2', 'tcp', 'ACCEPT')",
@@ -254,13 +240,11 @@ func TestWorker_runCleanup(t *testing.T) {
 		mainDB, logsDB, cleanup := setupTestDatabases(t)
 		defer cleanup()
 
-		// Set retention to 7 days
 		_, err := mainDB.Exec("INSERT INTO system_config (key, value) VALUES ('log_retention_days', '7')")
 		if err != nil {
 			t.Fatalf("Failed to insert config: %v", err)
 		}
 
-		// Insert logs at different ages
 		tests := []struct {
 			daysAgo    int
 			shouldKeep bool
@@ -308,13 +292,11 @@ func TestWorker_runCleanup(t *testing.T) {
 		mainDB, logsDB, cleanup := setupTestDatabases(t)
 		defer cleanup()
 
-		// Set retention to 1 day
 		_, err := mainDB.Exec("INSERT INTO system_config (key, value) VALUES ('log_retention_days', '1')")
 		if err != nil {
 			t.Fatalf("Failed to insert config: %v", err)
 		}
 
-		// Insert 2500 old log entries
 		batchSize := 1000
 		totalLogs := 2500
 		oldDate := time.Now().AddDate(0, 0, -5).Format("2006-01-02 15:04:05")
@@ -354,13 +336,11 @@ func TestWorker_runCleanup(t *testing.T) {
 		mainDB, _, cleanup := setupTestDatabases(t)
 		defer cleanup()
 
-		// Set retention to 30 days
 		_, err := mainDB.Exec("INSERT INTO system_config (key, value) VALUES ('log_retention_days', '30')")
 		if err != nil {
 			t.Fatalf("Failed to insert config: %v", err)
 		}
 
-		// Create worker with nil logsDB
 		worker := NewWorker(mainDB, nil)
 
 		// runCleanup should not panic and should return early
@@ -372,7 +352,6 @@ func TestWorker_runCleanup(t *testing.T) {
 		mainDB, logsDB, cleanup := setupTestDatabases(t)
 		defer cleanup()
 
-		// Set retention to 30 days
 		_, err := mainDB.Exec("INSERT INTO system_config (key, value) VALUES ('log_retention_days', '30')")
 		if err != nil {
 			t.Fatalf("Failed to insert config: %v", err)
@@ -388,7 +367,6 @@ func TestWorker_runCleanup(t *testing.T) {
 	})
 }
 
-// TestWorker_CustomRetention tests cleanup with custom retention values.
 func TestWorker_CustomRetention(t *testing.T) {
 	tests := []struct {
 		name            string
@@ -409,14 +387,12 @@ func TestWorker_CustomRetention(t *testing.T) {
 			mainDB, logsDB, cleanup := setupTestDatabases(t)
 			defer cleanup()
 
-			// Set custom retention
 			_, err := mainDB.Exec("INSERT INTO system_config (key, value) VALUES (?, ?)",
 				"log_retention_days", tc.retentionDays)
 			if err != nil {
 				t.Fatalf("Failed to insert config: %v", err)
 			}
 
-			// Insert log
 			date := time.Now().AddDate(0, 0, -tc.logsDaysAgo).Format("2006-01-02 15:04:05")
 			_, err = logsDB.Exec(
 				"INSERT INTO firewall_logs (timestamp, peer_id, source_ip, dest_ip, protocol, action) VALUES (?, 'peer-1', '10.0.0.1', '10.0.0.2', 'tcp', 'ACCEPT')",
@@ -445,18 +421,15 @@ func TestWorker_CustomRetention(t *testing.T) {
 	}
 }
 
-// TestWorker_Integration tests the full workflow.
 func TestWorker_Integration(t *testing.T) {
 	mainDB, logsDB, cleanup := setupTestDatabases(t)
 	defer cleanup()
 
-	// Set retention to 7 days
 	_, err := mainDB.Exec("INSERT INTO system_config (key, value) VALUES ('log_retention_days', '7')")
 	if err != nil {
 		t.Fatalf("Failed to insert config: %v", err)
 	}
 
-	// Insert logs
 	oldDate := time.Now().AddDate(0, 0, -30).Format("2006-01-02 15:04:05")
 	recentDate := time.Now().AddDate(0, 0, -3).Format("2006-01-02 15:04:05")
 
@@ -476,7 +449,6 @@ func TestWorker_Integration(t *testing.T) {
 		t.Fatalf("Failed to insert recent log: %v", err)
 	}
 
-	// Create and start worker
 	worker := NewWorker(mainDB, logsDB)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()

@@ -12,7 +12,6 @@ import (
 	"runic/internal/testutil"
 )
 
-// insertTestPeer inserts a test peer and returns its ID.
 func insertTestPeer(t *testing.T, database *sql.DB, hostname, ip string, hasDocker bool) int64 {
 	t.Helper()
 	result, err := database.Exec(
@@ -25,7 +24,6 @@ func insertTestPeer(t *testing.T, database *sql.DB, hostname, ip string, hasDock
 	return id
 }
 
-// insertSystemService inserts a system service and returns its ID.
 func insertSystemService(t *testing.T, database *sql.DB, name, ports, protocol, description string, noConntrack bool) int64 {
 	t.Helper()
 	nc := 0
@@ -42,7 +40,6 @@ func insertSystemService(t *testing.T, database *sql.DB, name, ports, protocol, 
 	return id
 }
 
-// insertTestService inserts a regular (non-system) service and returns its ID.
 func insertTestService(t *testing.T, database *sql.DB, name, ports, protocol string) int64 {
 	t.Helper()
 	result, err := database.Exec(
@@ -55,7 +52,6 @@ func insertTestService(t *testing.T, database *sql.DB, name, ports, protocol str
 	return id
 }
 
-// insertTestManualPeer inserts a test peer with is_manual=1 and returns its ID.
 func insertTestManualPeer(t *testing.T, database *sql.DB, hostname, ip string) int64 {
 	t.Helper()
 	result, err := database.Exec(
@@ -241,7 +237,6 @@ func TestResolveBroadcastService_NotMulticast(t *testing.T) {
 	defer cleanup()
 	database.Exec("PRAGMA foreign_keys=OFF")
 
-	// Insert both Multicast and Limited Broadcast system services
 	// This tests Bug #2 — ensure broadcast resolves to the correct service, not Multicast
 	multicastID := insertSystemService(t, database, "Multicast", "", "udp", "Multicast", true)
 	limitedBroadcastID := insertSystemService(t, database, "Limited Broadcast", "", "udp", "Limited broadcast", true)
@@ -280,20 +275,16 @@ func TestResolveBroadcastRule_LimitedBroadcast(t *testing.T) {
 	defer cleanup()
 	database.Exec("PRAGMA foreign_keys=OFF")
 
-	// Insert a peer
 	peerID := insertTestPeer(t, database, "test-peer", "10.0.0.1", false)
 
-	// Insert Limited Broadcast system service
 	limitedBroadcastServiceID := insertSystemService(t, database, "Limited Broadcast", "", "udp", "Limited broadcast", true)
 
-	// Create an import session for the peer
 	result, err := database.Exec("INSERT INTO import_sessions (peer_id, status, raw_backup) VALUES (?, 'parsed', 'test')", peerID)
 	if err != nil {
 		t.Fatalf("insert session: %v", err)
 	}
 	sessionID, _ := result.LastInsertId()
 
-	// Insert an import_rule with broadcast destination
 	result, err = database.Exec(
 		`INSERT INTO import_rules (session_id, chain, rule_order, raw_rule, status, action, priority, direction, target_scope, policy_name)
 		 VALUES (?, 'INPUT', 1, '-d 255.255.255.255/32 -p udp -j ACCEPT', 'pending', 'ACCEPT', 100, 'both', 'both', 'test-policy')`,
@@ -303,7 +294,6 @@ func TestResolveBroadcastRule_LimitedBroadcast(t *testing.T) {
 	}
 	ruleID, _ := result.LastInsertId()
 
-	// Create a ParsedRule representing the broadcast rule
 	rule := iptparse.ParsedRule{
 		DestIP:   "255.255.255.255/32",
 		Protocol: "udp",
@@ -355,23 +345,19 @@ func TestResolveBroadcastRule_WithPorts(t *testing.T) {
 	defer cleanup()
 	database.Exec("PRAGMA foreign_keys=OFF")
 
-	// Insert a peer
 	peerID := insertTestPeer(t, database, "dhcp-peer", "10.0.0.1", false)
 
-	// Insert DHCP service with port 67
 	dhcpServiceID := insertTestService(t, database, "DHCP", "67", "udp")
 
 	// Also insert broadcast system services (should NOT be used when port is specified)
 	_ = insertSystemService(t, database, "Limited Broadcast", "", "udp", "Limited broadcast", true)
 
-	// Create an import session for the peer
 	result, err := database.Exec("INSERT INTO import_sessions (peer_id, status, raw_backup) VALUES (?, 'parsed', 'test')", peerID)
 	if err != nil {
 		t.Fatalf("insert session: %v", err)
 	}
 	sessionID, _ := result.LastInsertId()
 
-	// Insert an import_rule with broadcast destination and specific port
 	result, err = database.Exec(
 		`INSERT INTO import_rules (session_id, chain, rule_order, raw_rule, status, action, priority, direction, target_scope, policy_name)
 		 VALUES (?, 'INPUT', 1, '-d 255.255.255.255/32 -p udp --dport 67 -j ACCEPT', 'pending', 'ACCEPT', 100, 'both', 'both', 'dhcp-policy')`,
@@ -381,7 +367,6 @@ func TestResolveBroadcastRule_WithPorts(t *testing.T) {
 	}
 	ruleID, _ := result.LastInsertId()
 
-	// Create a ParsedRule with a specific DestPort
 	rule := iptparse.ParsedRule{
 		DestIP:   "255.255.255.255/32",
 		Protocol: "udp",
@@ -438,20 +423,16 @@ func TestResolveBroadcastRule_SubnetBroadcast(t *testing.T) {
 	defer cleanup()
 	database.Exec("PRAGMA foreign_keys=OFF")
 
-	// Insert a peer with IP on the 10.100.5.x subnet
 	peerID := insertTestPeer(t, database, "subnet-peer", "10.100.5.36", false)
 
-	// Insert Subnet Broadcast system service
 	subnetBroadcastServiceID := insertSystemService(t, database, "Subnet Broadcast", "", "udp", "Subnet broadcast", true)
 
-	// Create an import session for the peer
 	result, err := database.Exec("INSERT INTO import_sessions (peer_id, status, raw_backup) VALUES (?, 'parsed', 'test')", peerID)
 	if err != nil {
 		t.Fatalf("insert session: %v", err)
 	}
 	sessionID, _ := result.LastInsertId()
 
-	// Insert an import_rule with subnet broadcast destination
 	result, err = database.Exec(
 		`INSERT INTO import_rules (session_id, chain, rule_order, raw_rule, status, action, priority, direction, target_scope, policy_name)
 		VALUES (?, 'INPUT', 1, '-d 10.100.5.255/32 -p udp -j ACCEPT', 'pending', 'ACCEPT', 100, 'both', 'both', 'test-policy')`,
@@ -461,7 +442,6 @@ func TestResolveBroadcastRule_SubnetBroadcast(t *testing.T) {
 	}
 	ruleID, _ := result.LastInsertId()
 
-	// Create a ParsedRule representing the subnet broadcast rule
 	rule := iptparse.ParsedRule{
 		DestIP:   "10.100.5.255/32",
 		Protocol: "udp",
@@ -513,23 +493,19 @@ func TestResolveBroadcastRule_SubnetBroadcast_WithPorts(t *testing.T) {
 	defer cleanup()
 	database.Exec("PRAGMA foreign_keys=OFF")
 
-	// Insert a peer
 	peerID := insertTestPeer(t, database, "subnet-dhcp-peer", "10.100.5.36", false)
 
-	// Insert DHCP service with port 67
 	dhcpServiceID := insertTestService(t, database, "DHCP", "67", "udp")
 
 	// Also insert broadcast system services (should NOT be used when port is specified)
 	_ = insertSystemService(t, database, "Subnet Broadcast", "", "udp", "Subnet broadcast", true)
 
-	// Create an import session for the peer
 	result, err := database.Exec("INSERT INTO import_sessions (peer_id, status, raw_backup) VALUES (?, 'parsed', 'test')", peerID)
 	if err != nil {
 		t.Fatalf("insert session: %v", err)
 	}
 	sessionID, _ := result.LastInsertId()
 
-	// Insert an import_rule with subnet broadcast destination and specific port
 	result, err = database.Exec(
 		`INSERT INTO import_rules (session_id, chain, rule_order, raw_rule, status, action, priority, direction, target_scope, policy_name)
 		VALUES (?, 'INPUT', 1, '-d 10.100.5.255/32 -p udp --dport 67 -j ACCEPT', 'pending', 'ACCEPT', 100, 'both', 'both', 'dhcp-policy')`,
@@ -539,7 +515,6 @@ func TestResolveBroadcastRule_SubnetBroadcast_WithPorts(t *testing.T) {
 	}
 	ruleID, _ := result.LastInsertId()
 
-	// Create a ParsedRule with a specific DestPort
 	rule := iptparse.ParsedRule{
 		DestIP:   "10.100.5.255/32",
 		Protocol: "udp",
@@ -591,7 +566,6 @@ func TestResolveBroadcastRule_SubnetBroadcast_WithPorts(t *testing.T) {
 func TestResolveBroadcastRule_OutputChainNotBroadcast(t *testing.T) {
 	// This test verifies that OUTPUT chain rules with broadcast dest IP
 	// do NOT trigger broadcast handling. Since isBroadcastDest returns 0
-	// for OUTPUT chain, those rules go through normal resolveEndpoint() path.
 	rule := iptparse.ParsedRule{DestIP: "255.255.255.255"}
 
 	if isBroadcastDest(&rule, "OUTPUT", nil) != 0 {
@@ -611,20 +585,16 @@ func TestResolveMulticastRule_SourceIsAllHosts_TargetIsPeer(t *testing.T) {
 	defer cleanup()
 	database.Exec("PRAGMA foreign_keys=OFF")
 
-	// Insert a peer
 	peerID := insertTestPeer(t, database, "multicast-peer", "10.0.0.5", false)
 
-	// Insert Multicast system service
 	multicastServiceID := insertSystemService(t, database, "Multicast", "", "udp", "Multicast", true)
 
-	// Create an import session for the peer
 	result, err := database.Exec("INSERT INTO import_sessions (peer_id, status, raw_backup) VALUES (?, 'parsed', 'test')", peerID)
 	if err != nil {
 		t.Fatalf("insert session: %v", err)
 	}
 	sessionID, _ := result.LastInsertId()
 
-	// Insert an import_rule with multicast pkttype
 	result, err = database.Exec(
 		`INSERT INTO import_rules (session_id, chain, rule_order, raw_rule, status, action, priority, direction, target_scope, policy_name)
 		VALUES (?, 'INPUT', 1, '-m pkttype --pkt-type multicast -j ACCEPT', 'pending', 'ACCEPT', 100, 'both', 'both', 'test-multicast')`, sessionID)
@@ -679,20 +649,16 @@ func TestResolveMulticastRule_NotOrphaned(t *testing.T) {
 	defer cleanup()
 	database.Exec("PRAGMA foreign_keys=OFF")
 
-	// Insert a peer
 	peerID := insertTestPeer(t, database, "orphan-peer", "10.0.0.6", false)
 
-	// Insert Multicast system service
 	_ = insertSystemService(t, database, "Multicast", "", "udp", "Multicast", true)
 
-	// Create an import session for the peer
 	result, err := database.Exec("INSERT INTO import_sessions (peer_id, status, raw_backup) VALUES (?, 'parsed', 'test')", peerID)
 	if err != nil {
 		t.Fatalf("insert session: %v", err)
 	}
 	sessionID, _ := result.LastInsertId()
 
-	// Insert an import_rule with multicast pkttype
 	result, err = database.Exec(
 		`INSERT INTO import_rules (session_id, chain, rule_order, raw_rule, status, action, priority, direction, target_scope, policy_name)
 		VALUES (?, 'INPUT', 1, '-m pkttype --pkt-type multicast -j ACCEPT', 'pending', 'ACCEPT', 100, 'both', 'both', 'orphan-test')`, sessionID)
@@ -734,23 +700,19 @@ func TestResolveMulticastRule_MulticastService(t *testing.T) {
 	defer cleanup()
 	database.Exec("PRAGMA foreign_keys=OFF")
 
-	// Insert a peer
 	peerID := insertTestPeer(t, database, "svc-peer", "10.0.0.7", false)
 
-	// Insert both Multicast and broadcast system services to verify multicast
 	// resolves to the correct one (not a broadcast service)
 	multicastServiceID := insertSystemService(t, database, "Multicast", "", "udp", "Multicast", true)
 	_ = insertSystemService(t, database, "Limited Broadcast", "", "udp", "Limited broadcast", true)
 	_ = insertSystemService(t, database, "Subnet Broadcast", "", "udp", "Subnet broadcast", true)
 
-	// Create an import session for the peer
 	result, err := database.Exec("INSERT INTO import_sessions (peer_id, status, raw_backup) VALUES (?, 'parsed', 'test')", peerID)
 	if err != nil {
 		t.Fatalf("insert session: %v", err)
 	}
 	sessionID, _ := result.LastInsertId()
 
-	// Insert an import_rule with multicast pkttype
 	result, err = database.Exec(
 		`INSERT INTO import_rules (session_id, chain, rule_order, raw_rule, status, action, priority, direction, target_scope, policy_name)
 		VALUES (?, 'INPUT', 1, '-m pkttype --pkt-type multicast -j ACCEPT', 'pending', 'ACCEPT', 100, 'both', 'both', 'svc-test')`, sessionID)
@@ -794,23 +756,19 @@ func TestResolveMulticastRule_WithPort(t *testing.T) {
 	defer cleanup()
 	database.Exec("PRAGMA foreign_keys=OFF")
 
-	// Insert a peer
 	peerID := insertTestPeer(t, database, "mdns-peer", "10.0.0.8", false)
 
-	// Insert an mDNS service with port 5353
 	mdnsServiceID := insertTestService(t, database, "mDNS", "5353", "udp")
 
 	// Also insert the generic Multicast system service
 	multicastServiceID := insertSystemService(t, database, "Multicast", "", "udp", "Multicast", true)
 
-	// Create an import session for the peer
 	result, err := database.Exec("INSERT INTO import_sessions (peer_id, status, raw_backup) VALUES (?, 'parsed', 'test')", peerID)
 	if err != nil {
 		t.Fatalf("insert session: %v", err)
 	}
 	sessionID, _ := result.LastInsertId()
 
-	// Insert an import_rule with multicast pkttype and a specific DestPort (5353 for mDNS)
 	result, err = database.Exec(
 		`INSERT INTO import_rules (session_id, chain, rule_order, raw_rule, status, action, priority, direction, target_scope, policy_name)
 		VALUES (?, 'INPUT', 1, '-m pkttype --pkt-type multicast -p udp --dport 5353 -j ACCEPT', 'pending', 'ACCEPT', 100, 'both', 'both', 'mdns-policy')`, sessionID)
@@ -875,19 +833,16 @@ func TestResolveMulticastRule_ServiceNotFound(t *testing.T) {
 	defer cleanup()
 	database.Exec("PRAGMA foreign_keys=OFF")
 
-	// Insert a peer
 	peerID := insertTestPeer(t, database, "no-svc-peer", "10.0.0.9", false)
 
 	// Do NOT insert the Multicast system service — this is the error condition
 
-	// Create an import session for the peer
 	result, err := database.Exec("INSERT INTO import_sessions (peer_id, status, raw_backup) VALUES (?, 'parsed', 'test')", peerID)
 	if err != nil {
 		t.Fatalf("insert session: %v", err)
 	}
 	sessionID, _ := result.LastInsertId()
 
-	// Insert an import_rule with multicast pkttype
 	result, err = database.Exec(
 		`INSERT INTO import_rules (session_id, chain, rule_order, raw_rule, status, action, priority, direction, target_scope, policy_name)
 		VALUES (?, 'INPUT', 1, '-m pkttype --pkt-type multicast -j ACCEPT', 'pending', 'ACCEPT', 100, 'both', 'both', 'no-svc-test')`, sessionID)
@@ -1007,20 +962,16 @@ func TestResolveIGMPRule_SourceIsAllHosts_TargetIsPeer(t *testing.T) {
 	defer cleanup()
 	database.Exec("PRAGMA foreign_keys=OFF")
 
-	// Insert a peer
 	peerID := insertTestPeer(t, database, "igmp-peer", "10.0.0.5", false)
 
-	// Insert IGMP system service
 	igmpServiceID := insertSystemService(t, database, "IGMP", "", "igmp", "IGMP", true)
 
-	// Create an import session for the peer
 	result, err := database.Exec("INSERT INTO import_sessions (peer_id, status, raw_backup) VALUES (?, 'parsed', 'test')", peerID)
 	if err != nil {
 		t.Fatalf("insert session: %v", err)
 	}
 	sessionID, _ := result.LastInsertId()
 
-	// Insert an import_rule with IGMP protocol
 	result, err = database.Exec(
 		`INSERT INTO import_rules (session_id, chain, rule_order, raw_rule, status, action, priority, direction, target_scope, policy_name)
 		VALUES (?, 'INPUT', 1, '-p igmp -j ACCEPT', 'pending', 'ACCEPT', 100, 'both', 'both', 'test-igmp')`, sessionID)
@@ -1075,20 +1026,16 @@ func TestResolveIGMPRule_NotOrphaned(t *testing.T) {
 	defer cleanup()
 	database.Exec("PRAGMA foreign_keys=OFF")
 
-	// Insert a peer
 	peerID := insertTestPeer(t, database, "igmp-orphan-peer", "10.0.0.6", false)
 
-	// Insert IGMP system service
 	_ = insertSystemService(t, database, "IGMP", "", "igmp", "IGMP", true)
 
-	// Create an import session for the peer
 	result, err := database.Exec("INSERT INTO import_sessions (peer_id, status, raw_backup) VALUES (?, 'parsed', 'test')", peerID)
 	if err != nil {
 		t.Fatalf("insert session: %v", err)
 	}
 	sessionID, _ := result.LastInsertId()
 
-	// Insert an import_rule with IGMP protocol
 	result, err = database.Exec(
 		`INSERT INTO import_rules (session_id, chain, rule_order, raw_rule, status, action, priority, direction, target_scope, policy_name)
 		VALUES (?, 'INPUT', 1, '-p igmp -j ACCEPT', 'pending', 'ACCEPT', 100, 'both', 'both', 'orphan-igmp-test')`, sessionID)
@@ -1131,23 +1078,19 @@ func TestResolveIGMPRule_IGMPService(t *testing.T) {
 	defer cleanup()
 	database.Exec("PRAGMA foreign_keys=OFF")
 
-	// Insert a peer
 	peerID := insertTestPeer(t, database, "igmp-svc-peer", "10.0.0.7", false)
 
-	// Insert IGMP, Multicast, and broadcast system services to verify IGMP
 	// resolves to the correct one (not Multicast or broadcast)
 	igmpServiceID := insertSystemService(t, database, "IGMP", "", "igmp", "IGMP", true)
 	_ = insertSystemService(t, database, "Multicast", "", "udp", "Multicast", true)
 	_ = insertSystemService(t, database, "Limited Broadcast", "", "udp", "Limited broadcast", true)
 
-	// Create an import session for the peer
 	result, err := database.Exec("INSERT INTO import_sessions (peer_id, status, raw_backup) VALUES (?, 'parsed', 'test')", peerID)
 	if err != nil {
 		t.Fatalf("insert session: %v", err)
 	}
 	sessionID, _ := result.LastInsertId()
 
-	// Insert an import_rule with IGMP protocol
 	result, err = database.Exec(
 		`INSERT INTO import_rules (session_id, chain, rule_order, raw_rule, status, action, priority, direction, target_scope, policy_name)
 		VALUES (?, 'INPUT', 1, '-p igmp -j ACCEPT', 'pending', 'ACCEPT', 100, 'both', 'both', 'igmp-svc-test')`, sessionID)
@@ -1190,19 +1133,16 @@ func TestResolveIGMPRule_ServiceNotFound(t *testing.T) {
 	defer cleanup()
 	database.Exec("PRAGMA foreign_keys=OFF")
 
-	// Insert a peer
 	peerID := insertTestPeer(t, database, "igmp-no-svc-peer", "10.0.0.9", false)
 
 	// Do NOT insert the IGMP system service — this is the error condition
 
-	// Create an import session for the peer
 	result, err := database.Exec("INSERT INTO import_sessions (peer_id, status, raw_backup) VALUES (?, 'parsed', 'test')", peerID)
 	if err != nil {
 		t.Fatalf("insert session: %v", err)
 	}
 	sessionID, _ := result.LastInsertId()
 
-	// Insert an import_rule with IGMP protocol
 	result, err = database.Exec(
 		`INSERT INTO import_rules (session_id, chain, rule_order, raw_rule, status, action, priority, direction, target_scope, policy_name)
 		VALUES (?, 'INPUT', 1, '-p igmp -j ACCEPT', 'pending', 'ACCEPT', 100, 'both', 'both', 'igmp-no-svc-test')`, sessionID)
@@ -1228,20 +1168,16 @@ func TestInputRuleDirection_BackwardWhenRemoteIsStagingPeer(t *testing.T) {
 	defer cleanup()
 	database.Exec("PRAGMA foreign_keys=OFF")
 
-	// Insert the importing peer (the one with the INPUT rule)
 	peerID := insertTestPeer(t, database, "input-staging-peer", "10.0.0.1", false)
 
-	// Insert a service for TCP port 443
 	_ = insertTestService(t, database, "https", "443", "tcp")
 
-	// Create an import session for the importing peer
 	result, err := database.Exec("INSERT INTO import_sessions (peer_id, status, raw_backup) VALUES (?, 'parsed', 'test')", peerID)
 	if err != nil {
 		t.Fatalf("insert session: %v", err)
 	}
 	sessionID, _ := result.LastInsertId()
 
-	// Insert an INPUT rule with a source IP that has NO existing peer (staging)
 	// The remote (source) IP 10.0.0.99 does not match any peer → staging peer created → direction='backward'
 	result, err = database.Exec(
 		`INSERT INTO import_rules (session_id, chain, rule_order, raw_rule, status, skip_reason, action, priority, direction, target_scope, policy_name)
@@ -1272,10 +1208,8 @@ func TestInputRuleDirection_BothWhenRemoteIsAgentPeer(t *testing.T) {
 	defer cleanup()
 	database.Exec("PRAGMA foreign_keys=OFF")
 
-	// Insert the importing peer
 	peerID := insertTestPeer(t, database, "input-agent-local", "10.0.0.1", false)
 
-	// Insert an existing AGENT peer (is_manual=0) at the remote IP
 	_ = insertTestPeer(t, database, "input-agent-remote", "10.0.0.2", false)
 
 	_ = insertTestService(t, database, "https", "443", "tcp")
@@ -1316,10 +1250,8 @@ func TestInputRuleDirection_BackwardWhenRemoteIsManualPeer(t *testing.T) {
 	defer cleanup()
 	database.Exec("PRAGMA foreign_keys=OFF")
 
-	// Insert the importing peer
 	peerID := insertTestPeer(t, database, "input-manual-local", "10.0.0.1", false)
 
-	// Insert an existing MANUAL peer (is_manual=1) at the remote IP
 	_ = insertTestManualPeer(t, database, "input-manual-remote", "10.0.0.3")
 
 	_ = insertTestService(t, database, "https", "443", "tcp")
@@ -1360,7 +1292,6 @@ func TestOutputRuleDirection_ForwardWhenRemoteIsStagingPeer(t *testing.T) {
 	defer cleanup()
 	database.Exec("PRAGMA foreign_keys=OFF")
 
-	// Insert the importing peer
 	peerID := insertTestPeer(t, database, "output-staging-peer", "10.0.0.1", false)
 
 	_ = insertTestService(t, database, "https", "443", "tcp")
@@ -1401,10 +1332,8 @@ func TestOutputRuleDirection_BothWhenRemoteIsAgentPeer(t *testing.T) {
 	defer cleanup()
 	database.Exec("PRAGMA foreign_keys=OFF")
 
-	// Insert the importing peer
 	peerID := insertTestPeer(t, database, "output-agent-local", "10.0.0.1", false)
 
-	// Insert an existing AGENT peer (is_manual=0) at the destination IP
 	_ = insertTestPeer(t, database, "output-agent-remote", "10.0.0.2", false)
 
 	_ = insertTestService(t, database, "https", "443", "tcp")
@@ -1445,10 +1374,8 @@ func TestOutputRuleDirection_ForwardWhenRemoteIsManualPeer(t *testing.T) {
 	defer cleanup()
 	database.Exec("PRAGMA foreign_keys=OFF")
 
-	// Insert the importing peer
 	peerID := insertTestPeer(t, database, "output-manual-local", "10.0.0.1", false)
 
-	// Insert an existing MANUAL peer (is_manual=1) at the destination IP
 	_ = insertTestManualPeer(t, database, "output-manual-remote", "10.0.0.3")
 
 	_ = insertTestService(t, database, "https", "443", "tcp")
@@ -1489,7 +1416,6 @@ func TestInputRuleDirection_BothWhenRemoteIsSpecial(t *testing.T) {
 	defer cleanup()
 	database.Exec("PRAGMA foreign_keys=OFF")
 
-	// Insert the importing peer
 	peerID := insertTestPeer(t, database, "input-special-local", "10.0.0.1", false)
 
 	_ = insertTestService(t, database, "https", "443", "tcp")
@@ -1530,7 +1456,6 @@ func TestInputRuleDirection_BothWhenRemoteIsGroup(t *testing.T) {
 	defer cleanup()
 	database.Exec("PRAGMA foreign_keys=OFF")
 
-	// Insert the importing peer
 	peerID := insertTestPeer(t, database, "input-group-local", "10.0.0.1", false)
 
 	_ = insertTestService(t, database, "https", "443", "tcp")

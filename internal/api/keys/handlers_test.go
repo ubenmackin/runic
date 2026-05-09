@@ -11,6 +11,7 @@ import (
 	"github.com/gorilla/mux"
 	_ "github.com/mattn/go-sqlite3"
 
+	"runic/internal/store"
 	"runic/internal/testutil"
 )
 
@@ -23,10 +24,10 @@ func setupRouter(handler *Handler) *mux.Router {
 }
 
 func TestListKeys_Empty(t *testing.T) {
-	db, cleanup := testutil.SetupTestDB(t)
+	testDB, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	handler := NewHandler(db)
+	handler := NewHandler(store.NewKeyStore(testDB))
 	router := setupRouter(handler)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/setup-keys", nil)
 	rec := httptest.NewRecorder()
@@ -57,7 +58,7 @@ func TestCreateKey_Success(t *testing.T) {
 	testDB, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	handler := NewHandler(testDB)
+	handler := NewHandler(store.NewKeyStore(testDB))
 	router := setupRouter(handler)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/setup-keys/jwt-secret", nil)
 	rec := httptest.NewRecorder()
@@ -92,7 +93,7 @@ func TestCreateKey_InvalidType(t *testing.T) {
 	testDB, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	handler := NewHandler(testDB)
+	handler := NewHandler(store.NewKeyStore(testDB))
 	router := setupRouter(handler)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/setup-keys/invalid-type", nil)
 	rec := httptest.NewRecorder()
@@ -108,10 +109,9 @@ func TestDeleteKey_Success(t *testing.T) {
 	testDB, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	handler := NewHandler(testDB)
+	handler := NewHandler(store.NewKeyStore(testDB))
 	router := setupRouter(handler)
 
-	// Create a key first
 	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/setup-keys/jwt-secret", nil)
 	createRec := httptest.NewRecorder()
 	router.ServeHTTP(createRec, createReq)
@@ -127,7 +127,6 @@ func TestDeleteKey_Success(t *testing.T) {
 		t.Fatalf("jwt_secret not found in system_config after create: %v", err)
 	}
 
-	// Delete the key
 	deleteReq := httptest.NewRequest(http.MethodDelete, "/api/v1/setup-keys/jwt-secret", nil)
 	deleteRec := httptest.NewRecorder()
 	router.ServeHTTP(deleteRec, deleteReq)
@@ -147,7 +146,7 @@ func TestDeleteKey_NonExistent(t *testing.T) {
 	testDB, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	handler := NewHandler(testDB)
+	handler := NewHandler(store.NewKeyStore(testDB))
 	router := setupRouter(handler)
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/setup-keys/jwt-secret", nil)
 	rec := httptest.NewRecorder()
@@ -163,10 +162,9 @@ func TestListKeys_AfterCreate(t *testing.T) {
 	testDB, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	handler := NewHandler(testDB)
+	handler := NewHandler(store.NewKeyStore(testDB))
 	router := setupRouter(handler)
 
-	// Create jwt-secret
 	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/setup-keys/jwt-secret", nil)
 	createRec := httptest.NewRecorder()
 	router.ServeHTTP(createRec, createReq)

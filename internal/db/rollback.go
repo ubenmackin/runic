@@ -10,10 +10,8 @@ import (
 	"runic/internal/models"
 )
 
-// ErrConstraintViolation is returned when rollback is blocked by foreign key constraints
 var ErrConstraintViolation = errors.New("rollback blocked by constraint violation")
 
-// RollbackSnapshots iterates over all snapshots in reverse chronological order and restores entities.
 func RollbackSnapshots(ctx context.Context, database DB) error {
 	tx, err := database.BeginTx(ctx, nil)
 	if err != nil {
@@ -64,7 +62,6 @@ func RollbackSnapshots(ctx context.Context, database DB) error {
 				return fmt.Errorf("rollback create %s %d: %w", s.EntityType, s.EntityID, err)
 			}
 		} else {
-			// Update or delete actions -> restore state
 			switch s.EntityType {
 			case "group":
 				var data struct {
@@ -128,8 +125,7 @@ func RollbackSnapshots(ctx context.Context, database DB) error {
 	return tx.Commit()
 }
 
-// RollbackEntitySnapshot rolls back a single entity by its type and ID.
-// Returns ErrConstraintViolation if the rollback would violate referential integrity.
+// RollbackEntitySnapshot restores an entity from its snapshot. Returns ErrConstraintViolation if the rollback would violate referential integrity.
 func RollbackEntitySnapshot(ctx context.Context, database DB, entityType string, entityID int) error {
 	tx, err := database.BeginTx(ctx, nil)
 	if err != nil {
@@ -139,7 +135,6 @@ func RollbackEntitySnapshot(ctx context.Context, database DB, entityType string,
 		_ = tx.Rollback()
 	}()
 
-	// Get the snapshot for this entity
 	var snapshotID int
 	var action string
 	var snapshotData sql.NullString
@@ -179,7 +174,6 @@ func RollbackEntitySnapshot(ctx context.Context, database DB, entityType string,
 		return fmt.Errorf("clear pending changes: %w", err)
 	}
 
-	// Delete the snapshot
 	_, err = tx.ExecContext(ctx, "DELETE FROM change_snapshots WHERE entity_type = ? AND entity_id = ?", entityType, entityID)
 	if err != nil {
 		return fmt.Errorf("delete snapshot: %w", err)
@@ -188,11 +182,9 @@ func RollbackEntitySnapshot(ctx context.Context, database DB, entityType string,
 	return tx.Commit()
 }
 
-// checkCreateRollbackConstraints checks if a create rollback would violate foreign key constraints
 func checkCreateRollbackConstraints(ctx context.Context, tx Querier, entityType string, entityID int) error {
 	switch entityType {
 	case "group":
-		// Check if any policies reference this group
 		var policyCount int
 		err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM policies WHERE (source_id = ? AND source_type = 'group') OR (target_id = ? AND target_type = 'group')", entityID, entityID).Scan(&policyCount)
 		if err != nil {
@@ -202,7 +194,6 @@ func checkCreateRollbackConstraints(ctx context.Context, tx Querier, entityType 
 			return fmt.Errorf("%w: group %d is referenced by %d policy(s)", ErrConstraintViolation, entityID, policyCount)
 		}
 	case "service":
-		// Check if any policies reference this service
 		var policyCount int
 		err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM policies WHERE service_id = ?", entityID).Scan(&policyCount)
 		if err != nil {
@@ -215,7 +206,6 @@ func checkCreateRollbackConstraints(ctx context.Context, tx Querier, entityType 
 	return nil
 }
 
-// rollbackCreateEntity handles rollback of a create action
 func rollbackCreateEntity(ctx context.Context, tx Querier, entityType string, entityID int) error {
 	switch entityType {
 	case "group":
@@ -235,7 +225,6 @@ func rollbackCreateEntity(ctx context.Context, tx Querier, entityType string, en
 	return fmt.Errorf("unknown entity type: %s", entityType)
 }
 
-// rollbackUpdateDeleteEntity handles rollback of update or delete actions
 func rollbackUpdateDeleteEntity(ctx context.Context, tx Querier, entityType string, entityID int, action, snapshotData string) error {
 	switch entityType {
 	case "group":

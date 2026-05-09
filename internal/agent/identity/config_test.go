@@ -133,7 +133,6 @@ func TestLoadConfigUnreadableFile(t *testing.T) {
 		t.Fatalf("failed to write temp file: %v", err)
 	}
 
-	// Remove read permissions
 	if err := os.Chmod(tmpFile, 0000); err != nil {
 		t.Fatalf("failed to change permissions: %v", err)
 	}

@@ -28,6 +28,7 @@ import (
 	"runic/internal/crypto"
 	"runic/internal/db"
 	"runic/internal/engine"
+	"runic/internal/store"
 )
 
 func validateCertificate(certFile, keyFile string) error {
@@ -156,7 +157,8 @@ func main() {
 	log.Printf("Logs database initialized at %s", logsDBPath)
 
 	// Ensure control_plane_port is set in system_config for rule generation
-	if err := db.SetSecret(context.Background(), database, "control_plane_port", port); err != nil {
+	settingsStore := store.NewSettingsStore(database, nil)
+	if err := settingsStore.SetSystemConfig(context.Background(), "control_plane_port", port); err != nil {
 		log.Fatalf("Failed to set control_plane_port in system_config: %v", err)
 	}
 	log.Printf("Control plane port set to %s in system_config", port)
@@ -166,7 +168,12 @@ func main() {
 		downloadsDir = "./downloads"
 	}
 
-	compiler := engine.NewCompiler(database)
+	peerStore := store.NewPeerStore(database)
+	groupStore := store.NewGroupStore(database)
+	alertStore := store.NewAlertStore(database)
+	userStore := store.NewUserStore(database)
+	compiler := engine.NewCompiler(database, peerStore.GetPeerHostname, groupStore.GetActiveGroupNameByID)
+	compiler.SetBeginner(database)
 
 	// Initialize encryptor for sensitive data (SMTP passwords, etc.)
 	// The encryption_key is generated and stored in the database during migrations.
@@ -194,9 +201,10 @@ func main() {
 
 	// Wrap *sql.DB in *db.Database for the alert service
 	runicDB := db.New(database)
-	alertService := alerts.NewService(runicDB)
+	alertService := alerts.NewService(runicDB, alertStore, userStore)
 	alertService.SetEncryptor(encryptor)
 	alertService.SetLogsDB(db.New(logsDB))
+	alertService.SetHostnameLookup(peerStore.GetPeerHostname)
 
 	var peerMonitor *alerts.PeerMonitor
 	var spikeDetector *alerts.SpikeDetector
@@ -208,12 +216,12 @@ func main() {
 		} else {
 			peerMonitor = alerts.NewPeerMonitor(database, alertService)
 			peerMonitor.Start()
-			spikeDetector = alerts.NewSpikeDetector(logsDB, database, alertService)
+			spikeDetector = alerts.NewSpikeDetector(logsDB, database, alertService, peerStore.GetPeerHostname)
 			spikeDetector.Start()
 		}
 	}
 
-	auth.SetDB(database)
+	auth.SetTokenStore(store.NewTokenStore(database))
 
 	r := mux.NewRouter()
 
@@ -282,7 +290,8 @@ func main() {
 	go startOfflineDetector(ctx, database)
 
 	// Start token revocation cleanup goroutine (prunes expired entries hourly)
-	go startTokenCleanup(ctx)
+	tokenStore := store.NewTokenStore(database)
+	go startTokenCleanup(ctx, tokenStore)
 
 	// Configure TLS with modern cipher suites and minimum version TLS 1.2
 	tlsConfig := &tls.Config{
@@ -379,7 +388,7 @@ func startOfflineDetector(ctx context.Context, database *sql.DB) {
 	}
 }
 
-func startTokenCleanup(ctx context.Context) {
+func startTokenCleanup(ctx context.Context, ts *store.TokenStore) {
 	ticker := time.NewTicker(constants.OfflineCleanupInterval)
 	defer ticker.Stop()
 
@@ -390,7 +399,7 @@ func startTokenCleanup(ctx context.Context) {
 			return
 		case <-ticker.C:
 			ctx := context.Background()
-			if err := auth.CleanupExpiredTokens(ctx); err != nil {
+			if err := ts.CleanupExpiredTokens(ctx); err != nil {
 				log.Printf("Token cleanup error: %v", err)
 			}
 		}

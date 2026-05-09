@@ -114,7 +114,6 @@ func TestSeedSystemServices_ExistingServiceUpdate(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Insert an existing service with same name but is_system = 0
 	_, err := db.Exec(`
 		INSERT INTO services (name, ports, source_ports, protocol, description, is_system, no_conntrack)
 		VALUES ('ICMP', '8', '', 'icmp', 'Existing ICMP service', 0, 0)
@@ -221,7 +220,6 @@ func TestSeedSystemGroups_ExistingGroupUpdate(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Insert an existing group with same name but is_system = 0
 	_, err := db.Exec(`
 		INSERT INTO groups (name, description, is_system)
 		VALUES ('localhost', 'Existing localhost group', 0)

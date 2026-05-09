@@ -2,6 +2,7 @@
 package peers
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -23,33 +24,33 @@ import (
 	"runic/internal/store"
 )
 
-// Handler holds dependencies for peer handlers.
+// SettingsStore is defined as an interface here for testability.
+type SettingsStore interface {
+	GetSystemConfig(ctx context.Context, key string) (string, error)
+}
+
 type Handler struct {
-	Store      *store.PeerStore
-	DBBeginner db.DB
-	Compiler   *engine.Compiler
-	SSEHub     events.NotifyUpdateAgenter
+	Store         *store.PeerStore
+	beginner      db.Beginner
+	Compiler      *engine.Compiler
+	SSEHub        events.NotifyUpdateAgenter
+	SettingsStore SettingsStore
 }
 
-// NewHandler creates a new peers handler.
-func NewHandler(peerStore *store.PeerStore, dbBeginner db.DB, compiler *engine.Compiler, sseHub events.NotifyUpdateAgenter) *Handler {
-	return &Handler{Store: peerStore, DBBeginner: dbBeginner, Compiler: compiler, SSEHub: sseHub}
+func NewHandler(peerStore *store.PeerStore, beginner db.Beginner, compiler *engine.Compiler, sseHub events.NotifyUpdateAgenter, settingsStore SettingsStore) *Handler {
+	return &Handler{Store: peerStore, beginner: beginner, Compiler: compiler, SSEHub: sseHub, SettingsStore: settingsStore}
 }
 
-// hostnameRegex validates hostnames: 1-253 chars, alphanumeric with hyphens and dots,
 // must start and end with alphanumeric (single-char hostnames allowed).
 var hostnameRegex = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9.\-]*[a-zA-Z0-9])?$|^[a-zA-Z0-9]$`)
 
-// validOSTypes is the list of allowed OS types for peer creation.
 var validOSTypes = []string{
 	"debian", "ubuntu", "rhel", "arch", "opensuse", "raspbian", "linux",
 	"armbian", "ios", "ipados", "macos", "tvos", "windows", "other",
 }
 
-// validArchs is the list of allowed architectures for peer creation.
 var validArchs = []string{"amd64", "arm64", "arm", "armv6", "other"}
 
-// peerByIPResponse is the JSON representation for GetPeerByIP/GetPeerByHostname responses.
 type peerByIPResponse struct {
 	ID        int    `json:"id"`
 	Hostname  string `json:"hostname"`
@@ -87,13 +88,11 @@ func (h *Handler) CreatePeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate IP address
 	if net.ParseIP(input.IPAddress) == nil {
 		common.RespondError(w, http.StatusBadRequest, "invalid IP address")
 		return
 	}
 
-	// Validate os_type if provided
 	if input.OSType != "" && !slices.Contains(validOSTypes, input.OSType) {
 		common.RespondError(w, http.StatusBadRequest, "os_type must be one of: "+strings.Join(validOSTypes, ", "))
 		return
@@ -104,14 +103,11 @@ func (h *Handler) CreatePeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// For manual peers, hostname and IP are required but agent_key is optional
-	// For agent peers, hostname, IP, and agent_key are all required
 	if !input.IsManual && input.AgentKey == "" {
 		common.RespondError(w, http.StatusBadRequest, "agent_key is required for agent peers")
 		return
 	}
 
-	// For manual peers, generate a placeholder agent_key if not provided
 	agentKey := input.AgentKey
 	if input.IsManual && agentKey == "" {
 		agentKey = "manual-" + input.Hostname + "-" + input.IPAddress
@@ -133,7 +129,6 @@ func (h *Handler) CreatePeer(w http.ResponseWriter, r *http.Request) {
 	common.RespondJSON(w, http.StatusCreated, map[string]int64{"id": id})
 }
 
-// UpdatePeer updates a manual peer's hostname, IP, OS type, arch, has_docker, and description.
 func (h *Handler) UpdatePeer(w http.ResponseWriter, r *http.Request) {
 	id, err := common.ParseIDParam(r, "id")
 	if err != nil {
@@ -154,7 +149,6 @@ func (h *Handler) UpdatePeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate hostname
 	if input.Hostname != "" {
 		if err := common.ValidateHostname(input.Hostname); err != nil {
 			common.RespondError(w, http.StatusBadRequest, err.Error())
@@ -162,7 +156,6 @@ func (h *Handler) UpdatePeer(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Validate IP address
 	if input.IPAddress != "" {
 		if err := common.ValidateIPAddress(input.IPAddress); err != nil {
 			common.RespondError(w, http.StatusBadRequest, err.Error())
@@ -170,7 +163,6 @@ func (h *Handler) UpdatePeer(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Validate this is a manual peer (only manual peers can be edited)
 	peer, err := h.Store.GetPeerByID(r.Context(), id)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -195,7 +187,6 @@ func (h *Handler) UpdatePeer(w http.ResponseWriter, r *http.Request) {
 	common.RespondJSON(w, http.StatusOK, map[string]string{"message": "peer updated"})
 }
 
-// CompilePeer compiles rules for a peer.
 func (h *Handler) CompilePeer(w http.ResponseWriter, r *http.Request) {
 	id, err := common.ParseIDParam(r, "id")
 	if err != nil {
@@ -217,7 +208,6 @@ func (h *Handler) CompilePeer(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// DeletePeer deletes a peer after checking policy constraints.
 func (h *Handler) DeletePeer(w http.ResponseWriter, r *http.Request) {
 	peerID, err := common.ParseIDParam(r, "id")
 	if err != nil {
@@ -225,8 +215,7 @@ func (h *Handler) DeletePeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check delete constraints (target_peer_id in policies, or in group used by policy)
-	err = common.CheckPeerDeleteConstraints(r.Context(), h.DBBeginner, peerID)
+	err = h.Store.CheckDeleteConstraints(r.Context(), peerID)
 	if err != nil {
 		constraintErr, ok := err.(*common.DeleteConstraintError)
 		if ok {
@@ -250,7 +239,7 @@ func (h *Handler) DeletePeer(w http.ResponseWriter, r *http.Request) {
 	common.RespondJSON(w, http.StatusOK, map[string]string{"message": "Peer deleted"})
 }
 
-// GetPeerBundle returns the current effective rules for a peer.
+// GetPeerBundle returns the compiled bundle for a peer.
 // Supports include_pending query parameter:
 // - include_pending=true: Returns the latest bundle (what's been compiled/applied but not necessarily synced)
 // - include_pending=false or not provided: Returns the deployed bundle matching peers.bundle_version
@@ -300,8 +289,6 @@ func (h *Handler) GetPeerBundle(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// GetPeerByIP looks up a peer by exact IP address.
-// GET /api/v1/peers/by-ip?ip=<ip_address>
 func (h *Handler) GetPeerByIP(w http.ResponseWriter, r *http.Request) {
 	ip := r.URL.Query().Get("ip")
 	if ip == "" {
@@ -327,8 +314,6 @@ func (h *Handler) GetPeerByIP(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// GetPeerByHostname looks up a peer by exact hostname.
-// GET /api/v1/peers/by-hostname?hostname=<hostname>
 func (h *Handler) GetPeerByHostname(w http.ResponseWriter, r *http.Request) {
 	hostname := r.URL.Query().Get("hostname")
 	if hostname == "" {
@@ -354,8 +339,6 @@ func (h *Handler) GetPeerByHostname(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// GetPeerIPs returns all IPs for a given peer.
-// GET /api/v1/peers/{id}/ips
 func (h *Handler) GetPeerIPs(w http.ResponseWriter, r *http.Request) {
 	id, err := common.ParseIDParam(r, "id")
 	if err != nil {
@@ -363,7 +346,6 @@ func (h *Handler) GetPeerIPs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if peer exists
 	_, err = h.Store.GetPeerByID(r.Context(), id)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -383,8 +365,7 @@ func (h *Handler) GetPeerIPs(w http.ResponseWriter, r *http.Request) {
 	common.RespondJSON(w, http.StatusOK, peerIPs)
 }
 
-// AddPeerIP adds a secondary IP to a peer.
-// POST /api/v1/peers/{id}/ips
+// AddPeerIP adds an IP address to a peer. POST /api/v1/peers/{id}/ips
 func (h *Handler) AddPeerIP(w http.ResponseWriter, r *http.Request) {
 	id, err := common.ParseIDParam(r, "id")
 	if err != nil {
@@ -400,13 +381,11 @@ func (h *Handler) AddPeerIP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate IP address
 	if net.ParseIP(input.IPAddress) == nil {
 		common.RespondError(w, http.StatusBadRequest, "invalid IP address")
 		return
 	}
 
-	// Check if peer exists
 	_, err = h.Store.GetPeerByID(r.Context(), id)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -417,7 +396,6 @@ func (h *Handler) AddPeerIP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check for duplicate IP for same peer
 	existingIPs, err := h.Store.ListPeerIPs(r.Context(), id)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "failed to check duplicate IP")
@@ -437,7 +415,6 @@ func (h *Handler) AddPeerIP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fetch the newly added IP to get its ID
 	updatedIPs, err := h.Store.ListPeerIPs(r.Context(), id)
 	if err != nil {
 		log.ErrorContext(r.Context(), "failed to fetch new peer IP", "error", err)
@@ -445,7 +422,6 @@ func (h *Handler) AddPeerIP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Find the newly added IP in the list
 	var newIP *store.PeerIPView
 	for i := range updatedIPs {
 		if updatedIPs[i].IPAddress == input.IPAddress {
@@ -465,8 +441,6 @@ func (h *Handler) AddPeerIP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// DeletePeerIP removes a secondary IP from a peer.
-// DELETE /api/v1/peers/{id}/ips/{ip_id}
 func (h *Handler) DeletePeerIP(w http.ResponseWriter, r *http.Request) {
 	peerID, err := common.ParseIDParam(r, "id")
 	if err != nil {
@@ -480,7 +454,6 @@ func (h *Handler) DeletePeerIP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if peer exists
 	_, err = h.Store.GetPeerByID(r.Context(), peerID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -491,7 +464,6 @@ func (h *Handler) DeletePeerIP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Find the peer_ip entry and verify it belongs to this peer
 	peerIPs, err := h.Store.ListPeerIPs(r.Context(), peerID)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "failed to query peer IPs")
@@ -517,8 +489,7 @@ func (h *Handler) DeletePeerIP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if this IP is referenced by any policies
-	policyCount, err := h.Store.CountPolicyRefsForPeerIP(r.Context(), h.DBBeginner, peerID, targetIP.IPAddress)
+	policyCount, err := h.Store.CountPolicyRefsForPeerIP(r.Context(), peerID, targetIP.IPAddress)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "failed to check policy references")
 		return
@@ -541,8 +512,7 @@ func (h *Handler) DeletePeerIP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// UpdateAgent sends an update_agent SSE event to the agent peer.
-// POST /api/v1/peers/{id}/update-agent
+// UpdateAgent triggers a self-update for a peer's agent. POST /api/v1/peers/{id}/update-agent
 func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 	peerID, err := common.ParseIDParam(r, "id")
 	if err != nil {
@@ -551,7 +521,6 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 
-	// Look up the peer
 	peer, err := h.Store.GetPeerByID(ctx, peerID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -566,15 +535,12 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get instance URL from system_config for the control plane URL
-	var instanceURL string
-	err = h.DBBeginner.QueryRowContext(ctx, "SELECT value FROM system_config WHERE key = 'instance_url'").Scan(&instanceURL)
+	instanceURL, err := h.SettingsStore.GetSystemConfig(ctx, "instance_url")
 	if err != nil || instanceURL == "" {
 		common.RespondError(w, http.StatusBadRequest, "instance URL not configured — set it in Settings to enable agent updates")
 		return
 	}
 
-	// Get the SSE hub
 	if h.SSEHub == nil {
 		common.RespondError(w, http.StatusInternalServerError, "SSE hub not available")
 		return
@@ -589,7 +555,6 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "update_sent"})
 }
 
-// RegisterRoutes adds peer routes to the given router.
 func (h *Handler) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("", h.GetPeers).Methods("GET")
 	r.HandleFunc("", h.CreatePeer).Methods("POST")

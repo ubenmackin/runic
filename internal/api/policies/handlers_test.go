@@ -17,8 +17,8 @@ import (
 
 // Helper to set up handler with real compiler (required for write operations)
 func setupHandlerWithCompiler(db *sql.DB) *Handler {
-	compiler := engine.NewCompiler(db)
-	changeWorker := common.NewChangeWorker(nil) // nil sseHub for tests
+	compiler := engine.NewTestCompiler(db)
+	changeWorker := common.NewChangeWorker(nil, db) // nil sseHub for tests
 	// Start the worker with a cancelled context so it doesn't process anything
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
@@ -35,7 +35,6 @@ func setupHandler(db *sql.DB) *Handler {
 var muxVars = testutil.MuxVars
 
 // =============================================================================
-// Test ListPolicies
 // =============================================================================
 
 func TestListPolicies(t *testing.T) {
@@ -103,7 +102,6 @@ func TestListPolicies(t *testing.T) {
 }
 
 // =============================================================================
-// Test CreatePolicy
 // =============================================================================
 
 func TestCreatePolicy(t *testing.T) {
@@ -273,7 +271,6 @@ func TestCreatePolicy(t *testing.T) {
 }
 
 // =============================================================================
-// Test GetPolicy
 // =============================================================================
 
 func TestGetPolicy(t *testing.T) {
@@ -339,7 +336,6 @@ func TestGetPolicy(t *testing.T) {
 }
 
 // =============================================================================
-// Test UpdatePolicy
 // =============================================================================
 
 func TestUpdatePolicy(t *testing.T) {
@@ -450,7 +446,6 @@ func TestUpdatePolicy(t *testing.T) {
 }
 
 // =============================================================================
-// Test DeletePolicy
 // =============================================================================
 
 func TestDeletePolicy(t *testing.T) {
@@ -516,7 +511,6 @@ func TestDeletePolicy(t *testing.T) {
 }
 
 // =============================================================================
-// Test PatchPolicy
 // =============================================================================
 
 func TestPatchPolicy(t *testing.T) {
@@ -622,7 +616,6 @@ func TestPatchPolicy(t *testing.T) {
 }
 
 // =============================================================================
-// Test PolicyPreview
 // =============================================================================
 
 func TestPolicyPreview(t *testing.T) {
@@ -683,7 +676,6 @@ func TestPolicyPreview(t *testing.T) {
 }
 
 // =============================================================================
-// Test ListSpecialTargets
 // =============================================================================
 
 func TestListSpecialTargets(t *testing.T) {
@@ -703,7 +695,6 @@ func TestListSpecialTargets(t *testing.T) {
 			name: "multiple targets returns all",
 			setupDB: func(t *testing.T, db *sql.DB) {
 				// Schema now inserts 8 default special targets (added __igmpv3__)
-				// Insert 3 more for a total of 11
 				db.Exec("INSERT INTO special_targets (name, display_name, description, address) VALUES (?, ?, ?, ?)", "dns", "DNS", "DNS service", "8.8.8.8")
 				db.Exec("INSERT INTO special_targets (name, display_name, description, address) VALUES (?, ?, ?, ?)", "gateway", "Gateway", "Gateway service", "10.0.0.1")
 				db.Exec("INSERT INTO special_targets (name, display_name, description, address) VALUES (?, ?, ?, ?)", "mesh", "Mesh", "Mesh network", "10.0.0.2")

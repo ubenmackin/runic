@@ -10,10 +10,8 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-// TestMigrateSchemaAddsMissingColumns tests that migrations correctly add missing columns
 // while preserving existing data.
 func TestMigrateSchemaAddsMissingColumns(t *testing.T) {
-	// Create an in-memory SQLite database
 	database, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open in-memory database: %v", err)
@@ -84,7 +82,6 @@ func TestMigrateSchemaAddsMissingColumns(t *testing.T) {
 	}
 
 	for _, col := range columnsToDrop {
-		// Check if the column exists (table must be in allowedTables safelist)
 		exists, err := columnExists(ctx, database, col.table, col.column)
 		if err != nil {
 			t.Fatalf("columnExists(%s, %s) error: %v", col.table, col.column, err)
@@ -103,7 +100,6 @@ func TestMigrateSchemaAddsMissingColumns(t *testing.T) {
 	}
 
 	// Step 2: Insert test data BEFORE migration to verify preservation
-	// Insert a user
 	var userID int64
 	result, err := database.ExecContext(ctx,
 		"INSERT INTO users (username, password_hash) VALUES (?, ?)",
@@ -113,7 +109,6 @@ func TestMigrateSchemaAddsMissingColumns(t *testing.T) {
 	}
 	userID, _ = result.LastInsertId()
 
-	// Insert a peer
 	var peerID int64
 	result, err = database.ExecContext(ctx,
 		"INSERT INTO peers (hostname, ip_address, hmac_key, agent_key) VALUES (?, ?, ?, ?)",
@@ -123,7 +118,6 @@ func TestMigrateSchemaAddsMissingColumns(t *testing.T) {
 	}
 	peerID, _ = result.LastInsertId()
 
-	// Insert a group
 	var groupID int64
 	result, err = database.ExecContext(ctx,
 		"INSERT INTO groups (name, description) VALUES (?, ?)",
@@ -133,7 +127,6 @@ func TestMigrateSchemaAddsMissingColumns(t *testing.T) {
 	}
 	groupID, _ = result.LastInsertId()
 
-	// Insert a service
 	var serviceID int64
 	result, err = database.ExecContext(ctx,
 		"INSERT INTO services (name, ports, description) VALUES (?, ?, ?)",
@@ -143,7 +136,6 @@ func TestMigrateSchemaAddsMissingColumns(t *testing.T) {
 	}
 	serviceID, _ = result.LastInsertId()
 
-	// Insert a revoked token
 	result, err = database.ExecContext(ctx,
 		"INSERT INTO revoked_tokens (unique_id, expires_at) VALUES (?, datetime('now', '+1 hour'))",
 		"test-token-unique-id")
@@ -151,7 +143,6 @@ func TestMigrateSchemaAddsMissingColumns(t *testing.T) {
 		t.Fatalf("Failed to insert test revoked token: %v", err)
 	}
 
-	// Insert user notification preferences
 	result, err = database.ExecContext(ctx,
 		"INSERT INTO user_notification_preferences (user_id) VALUES (?)",
 		userID)
@@ -312,9 +303,7 @@ func TestMigrateSchemaAddsMissingColumns(t *testing.T) {
 	}
 }
 
-// TestMigrateSchemaSkipsFreshDatabase tests that migrations skip on a fresh database.
 func TestMigrateSchemaSkipsFreshDatabase(t *testing.T) {
-	// Create an in-memory SQLite database with no tables
 	database, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open in-memory database: %v", err)
@@ -341,7 +330,6 @@ func TestMigrateSchemaSkipsFreshDatabase(t *testing.T) {
 	}
 }
 
-// TestColumnExistsInvalidTable tests that columnExists rejects invalid table names.
 func TestColumnExistsInvalidTable(t *testing.T) {
 	database, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
@@ -351,7 +339,6 @@ func TestColumnExistsInvalidTable(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Create a dummy table to test against
 	if _, err := database.ExecContext(ctx, "CREATE TABLE dummy (id INTEGER)"); err != nil {
 		t.Fatalf("Failed to create dummy table: %v", err)
 	}
@@ -363,7 +350,6 @@ func TestColumnExistsInvalidTable(t *testing.T) {
 	}
 }
 
-// TestAddColumnIfMissing tests adding a column when it doesn't exist.
 func TestAddColumnIfMissing(t *testing.T) {
 	database, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
@@ -373,7 +359,6 @@ func TestAddColumnIfMissing(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Create users table without email column
 	if _, err := database.ExecContext(ctx, `
 		CREATE TABLE users (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -394,7 +379,6 @@ func TestAddColumnIfMissing(t *testing.T) {
 		t.Fatal("email column should not exist before migration")
 	}
 
-	// Add the email column
 	if err := addColumnIfMissing(ctx, database, "users", "email", "TEXT DEFAULT ''"); err != nil {
 		t.Fatalf("addColumnIfMissing failed: %v", err)
 	}
@@ -414,11 +398,9 @@ func TestAddColumnIfMissing(t *testing.T) {
 	}
 }
 
-// TestMigrateSchemaSkipsMissingImportRulesTable tests that migrateSchema handles
 // the case where the import_rules table doesn't exist at all (the primary scenario
 // the table-existence guard was designed to handle).
 func TestMigrateSchemaSkipsMissingImportRulesTable(t *testing.T) {
-	// Create an in-memory SQLite database
 	database, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open in-memory database: %v", err)
@@ -432,7 +414,6 @@ func TestMigrateSchemaSkipsMissingImportRulesTable(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Create the full current schema
 	if _, err := database.ExecContext(ctx, Schema()); err != nil {
 		t.Fatalf("Failed to create full schema: %v", err)
 	}

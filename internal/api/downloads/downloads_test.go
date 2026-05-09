@@ -9,7 +9,6 @@ import (
 )
 
 // =============================================================================
-// Test isAllowedFile
 // =============================================================================
 
 func TestIsAllowedFile(t *testing.T) {
@@ -76,11 +75,9 @@ func TestIsAllowedFile(t *testing.T) {
 }
 
 // =============================================================================
-// Test Handler Security Cases
 // =============================================================================
 
 func TestHandler(t *testing.T) {
-	// Create a temporary directory for downloads
 	tempDir, err := os.MkdirTemp("", "downloads-test-*")
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
@@ -218,7 +215,6 @@ func TestHandler(t *testing.T) {
 }
 
 // =============================================================================
-// Test Handler with All Allowed Files
 // =============================================================================
 
 func TestHandlerAllAllowedFiles(t *testing.T) {
@@ -228,7 +224,6 @@ func TestHandlerAllAllowedFiles(t *testing.T) {
 	}
 	defer func() { _ = os.RemoveAll(tempDir) }()
 
-	// Create all allowed files
 	allowedFileNames := []string{
 		"runic-agent-amd64",
 		"runic-agent-arm",

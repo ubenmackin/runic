@@ -6,7 +6,6 @@ import (
 	"time"
 )
 
-// TestWithHandlerTimeout_Deadline tests that WithHandlerTimeout returns a context
 // with a deadline approximately 5 seconds in the future.
 func TestWithHandlerTimeout_Deadline(t *testing.T) {
 	ctx := context.Background()
@@ -28,7 +27,6 @@ func TestWithHandlerTimeout_Deadline(t *testing.T) {
 	}
 }
 
-// TestWithHandlerTimeout_CancelFunction tests that the cancel function properly releases resources
 func TestWithHandlerTimeout_CancelFunction(t *testing.T) {
 	ctx := context.Background()
 
@@ -51,7 +49,6 @@ func TestWithHandlerTimeout_CancelFunction(t *testing.T) {
 	}
 }
 
-// TestWithHandlerTimeout_NilParentContext tests handling with nil parent (uses Background)
 func TestWithHandlerTimeout_NilParentContext(t *testing.T) {
 	// In Go, context.Background() is used when nil is passed
 	// The standard library handles this, but we use Background() explicitly
@@ -68,12 +65,10 @@ func TestWithHandlerTimeout_NilParentContext(t *testing.T) {
 	}
 }
 
-// TestWithHandlerTimeout_CancelledParentContext tests that cancelled parent propagates
 func TestWithHandlerTimeout_CancelledParentContext(t *testing.T) {
 	parentCtx, parentCancel := context.WithCancel(context.Background())
 	parentCancel() // Cancel parent immediately
 
-	// Create child context from cancelled parent
 	childCtx, childCancel := WithHandlerTimeout(parentCtx)
 	defer childCancel()
 
@@ -89,7 +84,6 @@ func TestWithHandlerTimeout_CancelledParentContext(t *testing.T) {
 	}
 }
 
-// TestWithHandlerTimeout_MultipleCalls tests multiple independent context creations
 func TestWithHandlerTimeout_MultipleCalls(t *testing.T) {
 	ctx1, cancel1 := WithHandlerTimeout(context.Background())
 	defer cancel1()
@@ -127,13 +121,10 @@ func TestWithHandlerTimeout_MultipleCalls(t *testing.T) {
 	}
 }
 
-// TestWithHandlerTimeout_ChainedContexts tests creating timeout from context with existing deadline
 func TestWithHandlerTimeout_ChainedContexts(t *testing.T) {
-	// Create parent with 10 second timeout
 	parentCtx, parentCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer parentCancel()
 
-	// Create child with 5 second timeout via WithHandlerTimeout
 	childCtx, childCancel := WithHandlerTimeout(parentCtx)
 	defer childCancel()
 

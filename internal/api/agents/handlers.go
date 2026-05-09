@@ -21,28 +21,23 @@ import (
 	"runic/internal/api/common"
 	"runic/internal/common/constants"
 	runiclog "runic/internal/common/log"
-	"runic/internal/db"
-	"runic/internal/importer"
 	"runic/internal/models"
 	"runic/internal/store"
 )
 
-// Handler provides HTTP handlers for agent endpoints with dependency injection.
 type Handler struct {
-	PeerStore    *store.PeerStore
-	DB           db.DB // Used for SubmitBackup's store.RunInTx and registration token queries
-	LogsDB       db.Querier
-	AlertService *alerts.Service
+	PeerStore      *store.PeerStore
+	DashboardStore *store.DashboardStore
+	AlertService   *alerts.Service
+	ImportStore    *store.ImportStore
 }
 
-// NewHandler creates a new agent handler with the given dependencies.
-// peerStore handles peer data access, db is the main database for transactions,
-// logsDB is the separate logs database, alertService is optional and can be nil.
-func NewHandler(peerStore *store.PeerStore, db db.DB, logsDB db.Querier, alertService *alerts.Service) *Handler {
-	return &Handler{PeerStore: peerStore, DB: db, LogsDB: logsDB, AlertService: alertService}
+// NewHandler creates a new agent handler. peerStore handles peer data access, dashboardStore
+// handles logs/registration-tokens/secrets, alertService is optional and can be nil.
+func NewHandler(peerStore *store.PeerStore, dashboardStore *store.DashboardStore, alertService *alerts.Service, importStore *store.ImportStore) *Handler {
+	return &Handler{PeerStore: peerStore, DashboardStore: dashboardStore, AlertService: alertService, ImportStore: importStore}
 }
 
-// LogEvent represents a validated firewall log event from an agent.
 type LogEvent struct {
 	Timestamp string `json:"timestamp"`
 	Direction string `json:"direction"`
@@ -58,8 +53,7 @@ type LogEvent struct {
 var validActions = []string{"ACCEPT", "DROP", "REJECT"}
 var validDirections = []string{"IN", "OUT"}
 
-// Validate checks that the LogEvent fields are well-formed.
-// Empty optional fields are allowed, but if present they must be valid.
+// Validate validates the LogEvent. Empty optional fields are allowed, but if present they must be valid.
 // Returns (true, "") if valid, or (false, reason) if invalid.
 func (e *LogEvent) Validate() (bool, string) {
 	if e.SrcIP != "" && net.ParseIP(e.SrcIP) == nil {
@@ -83,7 +77,6 @@ func (e *LogEvent) Validate() (bool, string) {
 	return true, ""
 }
 
-// SSEBroadcaster interfaces to avoid import cycles
 type SSEBroadcaster interface {
 	Register(hostID string) chan string
 	Unregister(hostID string)
@@ -101,7 +94,6 @@ const (
 	hostIDKey contextKey = "host_id"
 )
 
-// SSEHubFromContext returns the SSEHub from context (set by API middleware)
 func SSEHubFromContext(ctx context.Context) SSEBroadcaster {
 	if h, ok := ctx.Value(sseHubKey).(SSEBroadcaster); ok {
 		return h
@@ -109,7 +101,6 @@ func SSEHubFromContext(ctx context.Context) SSEBroadcaster {
 	return nil
 }
 
-// LogHubFromContext returns the LogHub from context (set by API middleware)
 func LogHubFromContext(ctx context.Context) LogBroadcaster {
 	if h, ok := ctx.Value(logHubKey).(LogBroadcaster); ok {
 		return h
@@ -117,14 +108,12 @@ func LogHubFromContext(ctx context.Context) LogBroadcaster {
 	return nil
 }
 
-// WithHubs injects hub dependencies into the context.
 func WithHubs(ctx context.Context, sseHub SSEBroadcaster, logHub LogBroadcaster) context.Context {
 	ctx = context.WithValue(ctx, sseHubKey, sseHub)
 	ctx = context.WithValue(ctx, logHubKey, logHub)
 	return ctx
 }
 
-// AgentAuthMiddleware handles authentication for agent endpoints.
 func (h *Handler) AgentAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		authHeader := r.Header.Get("Authorization")
@@ -135,7 +124,7 @@ func (h *Handler) AgentAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 
 		tokenString := authHeader[7:]
 
-		secretStr, err := db.GetSecret(r.Context(), h.DB, "agent_jwt_secret")
+		secretStr, err := h.DashboardStore.GetSecret(r.Context(), "agent_jwt_secret")
 		if err != nil {
 			runiclog.Error("JWT secret not configured", "error", err)
 			common.InternalError(w)
@@ -179,7 +168,6 @@ func (h *Handler) AgentAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// RegisterAgent handles agent registration.
 func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 	var input models.AgentRegisterRequest
 
@@ -208,7 +196,6 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 	//      c) Early escaping could corrupt legitimate data or cause double-encoding
 	//
 	// This layered approach ensures each sanitization happens at the appropriate layer
-	// for the specific threat vector it addresses.
 	sanitizedHostname, modified := alerts.SanitizeAlertInput(input.Hostname, 255)
 	if modified {
 		runiclog.Warn("hostname was sanitized during registration", "original_length", len(input.Hostname), "sanitized_length", len(sanitizedHostname))
@@ -256,7 +243,7 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 			common.InternalError(w)
 			return
 		}
-		agentToken, err := generateAgentToken(ctx, h.DB, input.Hostname)
+		agentToken, err := generateAgentToken(ctx, h.DashboardStore, input.Hostname)
 		if err != nil {
 			runiclog.Error("Failed to generate agent token error", "error", err)
 			common.InternalError(w)
@@ -276,7 +263,6 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Insert all reported IPs into peer_ips
 		if len(input.AllIPs) > 0 {
 			if err := h.PeerStore.UpsertPeerIPs(ctx, int(peerID), input.AllIPs, input.IP); err != nil {
 				runiclog.Warn("Failed to upsert peer IPs during registration", "error", err, "peer_id", peerID)
@@ -328,14 +314,13 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 	// Re-registration does NOT require a registration token
 	hostID := fmt.Sprintf("host-%s", input.Hostname)
 
-	newToken, err := generateAgentToken(ctx, h.DB, input.Hostname)
+	newToken, err := generateAgentToken(ctx, h.DashboardStore, input.Hostname)
 	if err != nil {
 		runiclog.Error("Failed to generate agent token error", "error", err)
 		common.InternalError(w)
 		return
 	}
 
-	// Fetch existing HMAC key (don't regenerate on reinstall)
 	existingHMACKey, err := h.PeerStore.GetPeerHMACKey(ctx, existingID)
 	if err != nil {
 		runiclog.Error("Failed to fetch existing HMAC key", "error", err, "peer_id", existingID)
@@ -349,7 +334,6 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Update peer IPs on re-registration if the agent reports IPs
 	if len(input.AllIPs) > 0 {
 		if err := h.PeerStore.UpsertPeerIPs(ctx, existingID, input.AllIPs, input.IP); err != nil {
 			runiclog.Warn("Failed to upsert peer IPs during re-registration", "error", err, "peer_id", existingID)
@@ -365,7 +349,6 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// GetBundle handles bundle download requests from agents.
 func (h *Handler) GetBundle(w http.ResponseWriter, r *http.Request) {
 	_, serverID, ok := h.getHostIDFromContext(w, r)
 	if !ok {
@@ -400,7 +383,6 @@ func (h *Handler) GetBundle(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// Heartbeat handles agent heartbeat requests.
 func (h *Handler) Heartbeat(w http.ResponseWriter, r *http.Request) {
 	_, serverID, ok := h.getHostIDFromContext(w, r)
 	if !ok {
@@ -421,14 +403,11 @@ func (h *Handler) Heartbeat(w http.ResponseWriter, r *http.Request) {
 		// Continue anyway — agent_version and bundle_version may be empty
 	}
 
-	// Update peer heartbeat and status
 	if err := h.PeerStore.UpdatePeerHeartbeat(r.Context(), serverID, input.AgentVersion, input.BundleVersionApplied, input.HasIPSet); err != nil {
 		runiclog.Error("Failed to update heartbeat error", "error", err)
 	}
 
-	// Update peer IPs if the agent reports them
 	if len(input.AllIPs) > 0 {
-		// Look up the primary IP for this peer
 		if primaryIP, err := h.PeerStore.GetPeerPrimaryIP(r.Context(), serverID); err == nil {
 			if _, err := h.PeerStore.SyncPeerIPs(r.Context(), serverID, input.AllIPs, primaryIP); err != nil {
 				runiclog.Warn("Failed to sync peer IPs during heartbeat", "error", err, "peer_id", serverID)
@@ -441,7 +420,6 @@ func (h *Handler) Heartbeat(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// SubmitLogs handles log submissions from agents.
 func (h *Handler) SubmitLogs(w http.ResponseWriter, r *http.Request) {
 	_, serverID, ok := h.getHostIDFromContext(w, r)
 	if !ok {
@@ -457,7 +435,6 @@ func (h *Handler) SubmitLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Look up the peer hostname from main DB for denormalization
 	peerHostname, err := h.PeerStore.GetPeerHostname(r.Context(), serverID)
 	if err != nil {
 		runiclog.Error("Failed to lookup peer hostname", "error", err, "peer_id", serverID)
@@ -477,10 +454,19 @@ func (h *Handler) SubmitLogs(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Note: Logs DB schema uses different column names than main DB
-		_, err := h.LogsDB.ExecContext(r.Context(),
-			`INSERT INTO firewall_logs (peer_id, peer_hostname, timestamp, event_type, source_ip, dest_ip, protocol, source_port, dest_port, action, details) 
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			fmt.Sprintf("%d", serverID), peerHostname, ev.Timestamp, ev.Direction, ev.SrcIP, ev.DstIP, ev.Protocol, ev.SrcPort, ev.DstPort, ev.Action, ev.RawLine)
+		err := h.DashboardStore.InsertFirewallLog(r.Context(), &store.FirewallLogEntry{
+			PeerID:       fmt.Sprintf("%d", serverID),
+			PeerHostname: peerHostname,
+			Timestamp:    ev.Timestamp,
+			Direction:    ev.Direction,
+			SrcIP:        ev.SrcIP,
+			DstIP:        ev.DstIP,
+			Protocol:     ev.Protocol,
+			SrcPort:      ev.SrcPort,
+			DstPort:      ev.DstPort,
+			Action:       ev.Action,
+			RawLine:      ev.RawLine,
+		})
 		if err != nil {
 			runiclog.Error("Failed to insert log event", "error", err)
 			skipped++
@@ -506,7 +492,6 @@ func (h *Handler) SubmitLogs(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// ConfirmBundleApplied handles confirmation that a bundle was applied.
 func (h *Handler) ConfirmBundleApplied(w http.ResponseWriter, r *http.Request) {
 	_, serverID, ok := h.getHostIDFromContext(w, r)
 	if !ok {
@@ -523,7 +508,6 @@ func (h *Handler) ConfirmBundleApplied(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Update applied_at timestamp on the bundle
 	appliedAt := input.AppliedAt
 	if appliedAt == "" {
 		appliedAt = time.Now().UTC().Format(time.RFC3339)
@@ -534,7 +518,6 @@ func (h *Handler) ConfirmBundleApplied(w http.ResponseWriter, r *http.Request) {
 		runiclog.Error("Failed to confirm bundle apply error", "error", err)
 	}
 
-	// Update peer's bundle_version
 	if err := h.PeerStore.UpdatePeerBundleVersion(r.Context(), serverID, input.Version); err != nil {
 		runiclog.Error("Failed to update peer bundle version", "error", err)
 	}
@@ -542,8 +525,7 @@ func (h *Handler) ConfirmBundleApplied(w http.ResponseWriter, r *http.Request) {
 	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "confirmed"})
 }
 
-// MakeHandleSSEventsHandler creates an SSE handler with explicit SSE hub injection.
-// This is the preferred way to create the SSE handler as it avoids context propagation issues.
+// MakeHandleSSEventsHandler creates the SSE handler. This is the preferred way to create the SSE handler as it avoids context propagation issues.
 func (h *Handler) MakeHandleSSEventsHandler(hub SSEBroadcaster) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		hostID, _, ok := h.getHostIDFromContext(w, r)
@@ -552,7 +534,6 @@ func (h *Handler) MakeHandleSSEventsHandler(hub SSEBroadcaster) http.HandlerFunc
 			return
 		}
 
-		// Set SSE headers
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
@@ -603,14 +584,12 @@ func (h *Handler) MakeHandleSSEventsHandler(hub SSEBroadcaster) http.HandlerFunc
 	}
 }
 
-// AgentCheckRotation checks if a rotation is pending for the agent.
 func (h *Handler) AgentCheckRotation(w http.ResponseWriter, r *http.Request) {
 	hostID, serverID, ok := h.getHostIDFromContext(w, r)
 	if !ok {
 		return
 	}
 
-	// Check if there's a pending rotation token
 	rotationToken, err := h.PeerStore.GetPeerRotationToken(r.Context(), serverID)
 
 	if errors.Is(err, sql.ErrNoRows) {
@@ -634,8 +613,7 @@ func (h *Handler) AgentCheckRotation(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// SubmitBackup handles backup data submissions from agents.
-// The agent posts its pre-Runic iptables backup and ipset data for import processing.
+// SubmitBackup handles the agent's pre-Runic iptables backup. The agent posts its pre-Runic iptables backup and ipset data for import processing.
 func (h *Handler) SubmitBackup(w http.ResponseWriter, r *http.Request) {
 	_, serverID, ok := h.getHostIDFromContext(w, r)
 	if !ok {
@@ -658,66 +636,25 @@ func (h *Handler) SubmitBackup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	var sessionID int64
 
-	err := store.RunInTx(ctx, h.DB, func(tx *sql.Tx) error {
-		var existingID int64
-		var existingStatus string
-		err := tx.QueryRowContext(ctx, "SELECT id, status FROM import_sessions WHERE peer_id = ? AND status IN ('pending','parsed','reviewing')", serverID).Scan(&existingID, &existingStatus)
-
-		switch {
-		case err == nil:
-			sessionID = existingID
-			if existingStatus == "pending" {
-				_, err = tx.ExecContext(ctx, "UPDATE import_sessions SET raw_backup = ?, raw_ipsets = ?, updated_at = CURRENT_TIMESTAMP WHERE peer_id = ? AND status = 'pending'", input.IPTablesBackup, input.IPSetList, serverID)
-				if err != nil {
-					return common.NewHTTPError(http.StatusInternalServerError, "failed to update import session", err)
-				}
-			}
-		case errors.Is(err, sql.ErrNoRows):
-			result, err := tx.ExecContext(ctx, "INSERT INTO import_sessions (peer_id, status, raw_backup, raw_ipsets) VALUES (?, 'pending', ?, ?)", serverID, input.IPTablesBackup, input.IPSetList)
-			if err != nil {
-				return common.NewHTTPError(http.StatusInternalServerError, "failed to create import session", err)
-			}
-			sessionID, err = result.LastInsertId()
-			if err != nil {
-				return common.NewHTTPError(http.StatusInternalServerError, "failed to get session ID", err)
-			}
-		default:
-			return common.NewHTTPError(http.StatusInternalServerError, "database error", err)
-		}
-		return nil
-	})
-
+	sessionID, err := h.ImportStore.SubmitBackupSession(ctx, int64(serverID), input.IPTablesBackup, input.IPSetList)
 	if err != nil {
-		var httpErr *common.HTTPError
-		if errors.As(err, &httpErr) {
-			runiclog.Error(httpErr.Message, "error", httpErr.Err, "peer_id", serverID)
-			common.RespondError(w, httpErr.StatusCode, httpErr.Message)
-		} else {
-			runiclog.Error("transaction failed", "error", err, "peer_id", serverID)
-			common.InternalError(w)
-		}
+		runiclog.Error("failed to submit backup session", "error", err, "peer_id", serverID)
+		common.InternalError(w)
 		return
 	}
 
 	// After the transaction commits, call ParseSession to parse the backup data,
-	// insert rules, run the resolver, and update status to 'parsed'.
 	// This runs outside the transaction to avoid holding locks during parsing.
-	if sqlDB, ok := h.DB.(*sql.DB); ok {
-		if err := importer.ParseSession(ctx, sqlDB, sessionID); err != nil {
-			// Log the error but still return 200 — the data is saved, user can retry parse
-			runiclog.Warn("ParseSession failed after backup submit", "error", err, "session_id", sessionID, "peer_id", serverID)
-		}
-	} else {
-		runiclog.Warn("Cannot run ParseSession: DB is not *sql.DB", "peer_id", serverID)
+	if err := h.DashboardStore.ParseBackupSession(ctx, sessionID); err != nil {
+		// Log the error but still return 200 — the data is saved, user can retry parse
+		runiclog.Warn("ParseSession failed after backup submit", "error", err, "session_id", sessionID, "peer_id", serverID)
 	}
 
 	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// AgentTestKey validates an HMAC signature using the peer's current key.
-// POST /api/v1/agent/test-key (requires agent JWT auth)
+// AgentTestKey handles POST /api/v1/agent/test-key (requires agent JWT auth)
 func (h *Handler) AgentTestKey(w http.ResponseWriter, r *http.Request) {
 	_, serverID, ok := h.getHostIDFromContext(w, r)
 	if !ok {
@@ -734,7 +671,6 @@ func (h *Handler) AgentTestKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get peer's current HMAC key
 	hmacKey, err := h.PeerStore.GetPeerHMACKey(r.Context(), serverID)
 
 	if errors.Is(err, sql.ErrNoRows) {

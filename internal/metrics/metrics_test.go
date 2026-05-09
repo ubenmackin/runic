@@ -8,7 +8,6 @@ import (
 	dto "github.com/prometheus/client_model/go"
 )
 
-// gatherMetric collects all metric families and returns the one matching the given name.
 func gatherMetric(g prometheus.Gatherer, name string) (*dto.MetricFamily, error) {
 	families, err := g.Gather()
 	if err != nil {
@@ -22,7 +21,6 @@ func gatherMetric(g prometheus.Gatherer, name string) (*dto.MetricFamily, error)
 	return nil, nil
 }
 
-// findMetricWithLabels finds a metric with matching label values.
 func findMetricWithLabels(family *dto.MetricFamily, labels map[string]string) *dto.Metric {
 	if family == nil {
 		return nil
@@ -50,7 +48,6 @@ func findMetricWithLabels(family *dto.MetricFamily, labels map[string]string) *d
 	return nil
 }
 
-// TestRecordRequest_IncrementsCounter tests that RecordRequest increments the http_requests_total counter.
 func TestRecordRequest_IncrementsCounter(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	m := NewMetrics(registry)
@@ -83,7 +80,6 @@ func TestRecordRequest_IncrementsCounter(t *testing.T) {
 	}
 }
 
-// TestRecordRequest_RecordsDuration tests that RecordRequest observes the duration histogram.
 func TestRecordRequest_RecordsDuration(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	m := NewMetrics(registry)
@@ -114,7 +110,6 @@ func TestRecordRequest_RecordsDuration(t *testing.T) {
 	}
 }
 
-// TestRecordRequest_DifferentStatusCodes tests that different status codes produce separate counters.
 func TestRecordRequest_DifferentStatusCodes(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	m := NewMetrics(registry)
@@ -149,7 +144,6 @@ func TestRecordRequest_DifferentStatusCodes(t *testing.T) {
 	}
 }
 
-// TestRecordError_IncrementsCounter tests that RecordError increments the http_errors_total counter.
 func TestRecordError_IncrementsCounter(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	m := NewMetrics(registry)
@@ -181,7 +175,6 @@ func TestRecordError_IncrementsCounter(t *testing.T) {
 	}
 }
 
-// TestRecordError_MultipleErrors tests that multiple error types are tracked separately.
 func TestRecordError_MultipleErrors(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	m := NewMetrics(registry)
@@ -221,7 +214,6 @@ func TestRecordError_MultipleErrors(t *testing.T) {
 	}
 }
 
-// TestRecordError_SameErrorTwice tests that calling RecordError twice increments the counter.
 func TestRecordError_SameErrorTwice(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	m := NewMetrics(registry)
@@ -253,7 +245,6 @@ func TestRecordError_SameErrorTwice(t *testing.T) {
 	}
 }
 
-// TestRecordRequest_MultipleMethods tests that different HTTP methods produce separate counters.
 func TestRecordRequest_MultipleMethods(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	m := NewMetrics(registry)

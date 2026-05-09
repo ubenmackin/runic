@@ -18,7 +18,6 @@ import (
 	"runic/internal/models"
 )
 
-// PullBundle fetches the latest bundle from the control plane.
 func PullBundle(ctx context.Context, client common.HTTPClient, controlPlaneURL, hostID, token, currentBundleVer, version string, applyFunc func(context.Context, models.BundleResponse) error) error {
 	url := fmt.Sprintf("%s/api/v1/agent/bundle/%s", controlPlaneURL, hostID)
 
@@ -59,7 +58,6 @@ func PullBundle(ctx context.Context, client common.HTTPClient, controlPlaneURL, 
 	return applyFunc(ctx, bundle)
 }
 
-// ConfirmApply notifies the control plane that a bundle was applied.
 func ConfirmApply(ctx context.Context, client common.HTTPClient, controlPlaneURL, hostID, token, version string, bundleVersion string) error {
 	body := map[string]string{
 		"version":    bundleVersion,
@@ -98,8 +96,7 @@ func ConfirmApply(ctx context.Context, client common.HTTPClient, controlPlaneURL
 	return nil
 }
 
-// ListenSSE maintains a persistent SSE connection to receive push notifications.
-// Returns ErrUnauthorized if a 401 response is received, allowing the caller to trigger re-registration.
+// ListenSSE listens for SSE events from the control plane. Returns ErrUnauthorized if a 401 response is received, allowing the caller to trigger re-registration.
 func ListenSSE(ctx context.Context, client common.HTTPClient, controlPlaneURL, hostID, token, version string, onBundleUpdate func(context.Context), onFetchBackup func(context.Context), onUpdateAgent func(context.Context, string)) error {
 	for {
 		select {
@@ -123,7 +120,6 @@ func ListenSSE(ctx context.Context, client common.HTTPClient, controlPlaneURL, h
 	}
 }
 
-// connectSSE establishes a single SSE connection.
 func connectSSE(ctx context.Context, client common.HTTPClient, controlPlaneURL, hostID, token, version string, onBundleUpdate func(context.Context), onFetchBackup func(context.Context), onUpdateAgent func(context.Context, string)) error {
 	url := fmt.Sprintf("%s/api/v1/agent/events/%s", controlPlaneURL, hostID)
 

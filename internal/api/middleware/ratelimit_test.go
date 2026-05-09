@@ -9,7 +9,6 @@ import (
 	"time"
 )
 
-// TestCheck tests the Check method for rate limiting logic
 func TestCheck(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -82,7 +81,6 @@ func TestCheck(t *testing.T) {
 	}
 }
 
-// TestCheckMultipleIPs tests that rate limiting is tracked separately per IP
 func TestCheckMultipleIPs(t *testing.T) {
 	rl := NewRateLimiter(2, time.Minute)
 	defer rl.Stop()
@@ -109,7 +107,6 @@ func TestCheckMultipleIPs(t *testing.T) {
 	}
 }
 
-// TestCheckWindowExpiry tests that old requests expire from the sliding window
 func TestCheckWindowExpiry(t *testing.T) {
 	// Use a very short window for testing
 	window := 100 * time.Millisecond
@@ -140,14 +137,12 @@ func TestCheckWindowExpiry(t *testing.T) {
 	}
 }
 
-// okHandler returns a simple handler that always responds with 200 OK.
 func okHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 }
 
-// TestMiddleware tests the HTTP middleware function
 func TestMiddleware(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -217,7 +212,6 @@ func TestMiddleware(t *testing.T) {
 	}
 }
 
-// TestMiddleware429Response tests that rate limited requests return proper JSON response
 func TestMiddleware429Response(t *testing.T) {
 	rl := NewRateLimiter(1, time.Minute)
 	defer rl.Stop()
@@ -244,13 +238,11 @@ func TestMiddleware429Response(t *testing.T) {
 		t.Errorf("second request: got status %d, want %d", rr2.Code, http.StatusTooManyRequests)
 	}
 
-	// Check Content-Type header
 	contentType := rr2.Header().Get("Content-Type")
 	if contentType != "application/json" {
 		t.Errorf("Content-Type = %q, want %q", contentType, "application/json")
 	}
 
-	// Check JSON body
 	var response map[string]string
 	if err := json.NewDecoder(rr2.Body).Decode(&response); err != nil {
 		t.Errorf("failed to decode response body: %v", err)
@@ -260,7 +252,6 @@ func TestMiddleware429Response(t *testing.T) {
 	}
 }
 
-// TestGetIP tests IP extraction from requests
 func TestGetIP(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -295,7 +286,6 @@ func TestGetIP(t *testing.T) {
 	}
 }
 
-// TestStop tests that Stop() properly cleans up the rate limiter
 func TestStop(t *testing.T) {
 	rl := NewRateLimiter(100, time.Minute)
 
@@ -318,7 +308,6 @@ func TestStop(t *testing.T) {
 	}
 }
 
-// TestStopOnce tests that Stop() only runs once even with concurrent calls
 func TestStopOnce(t *testing.T) {
 	rl := NewRateLimiter(100, time.Minute)
 
@@ -335,7 +324,6 @@ func TestStopOnce(t *testing.T) {
 	// Should not panic or block
 }
 
-// TestConcurrentCheck tests that Check() is safe for concurrent use
 func TestConcurrentCheck(t *testing.T) {
 	rl := NewRateLimiter(100, time.Minute)
 	defer rl.Stop()
@@ -365,7 +353,6 @@ func TestConcurrentCheck(t *testing.T) {
 	}
 }
 
-// TestMiddlewareDifferentIPs tests that different IPs have separate rate limits
 func TestMiddlewareDifferentIPs(t *testing.T) {
 	rl := NewRateLimiter(2, time.Minute)
 	defer rl.Stop()

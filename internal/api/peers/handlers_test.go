@@ -1,6 +1,7 @@
 package peers
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"net/http"
@@ -12,10 +13,22 @@ import (
 	"runic/internal/testutil"
 )
 
-// muxVars is a helper to mock gorilla/mux vars
+// testSettingsStore implements SettingsStore for tests by reading directly from the test DB.
+type testSettingsStore struct {
+	db *sql.DB
+}
+
+func (s *testSettingsStore) GetSystemConfig(_ context.Context, key string) (string, error) {
+	var value string
+	err := s.db.QueryRow("SELECT value FROM system_config WHERE key = ?", key).Scan(&value)
+	if err != nil {
+		return "", err
+	}
+	return value, nil
+}
+
 var muxVars = testutil.MuxVars
 
-// TestGetPeers tests the GET /peers endpoint.
 func TestGetPeers(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -141,7 +154,7 @@ func TestGetPeers(t *testing.T) {
 			req := httptest.NewRequest("GET", "/api/v1/peers", nil)
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(store.NewPeerStore(database), database, nil, nil)
+			handler := NewHandler(store.NewPeerStore(database), database, nil, nil, &testSettingsStore{db: database})
 			handler.GetPeers(w, req)
 
 			if w.Code != tt.wantCode {
@@ -171,7 +184,6 @@ func TestGetPeers(t *testing.T) {
 	}
 }
 
-// TestCreatePeer tests the POST /peers endpoint.
 func TestCreatePeer(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -288,7 +300,7 @@ func TestCreatePeer(t *testing.T) {
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(store.NewPeerStore(database), database, nil, nil)
+			handler := NewHandler(store.NewPeerStore(database), database, nil, nil, &testSettingsStore{db: database})
 			handler.CreatePeer(w, req)
 
 			if w.Code != tt.wantCode {
@@ -322,7 +334,6 @@ func TestCreatePeer(t *testing.T) {
 	}
 }
 
-// TestUpdatePeer tests the PUT /peers/{id} endpoint.
 func TestUpdatePeer(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -449,7 +460,7 @@ func TestUpdatePeer(t *testing.T) {
 			req = muxVars(req, map[string]string{"id": tt.peerID})
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(store.NewPeerStore(database), database, nil, nil)
+			handler := NewHandler(store.NewPeerStore(database), database, nil, nil, &testSettingsStore{db: database})
 			handler.UpdatePeer(w, req)
 
 			if w.Code != tt.wantCode {
@@ -483,7 +494,6 @@ func TestUpdatePeer(t *testing.T) {
 	}
 }
 
-// TestCompilePeer tests the POST /peers/{id}/compile endpoint.
 func TestCompilePeer(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -515,7 +525,7 @@ func TestCompilePeer(t *testing.T) {
 			req = muxVars(req, map[string]string{"id": tt.peerID})
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(store.NewPeerStore(database), database, nil, nil)
+			handler := NewHandler(store.NewPeerStore(database), database, nil, nil, &testSettingsStore{db: database})
 			handler.CompilePeer(w, req)
 
 			if w.Code != tt.wantCode {
@@ -547,7 +557,6 @@ func TestCompilePeer(t *testing.T) {
 	}
 }
 
-// TestGetPeerBundle tests the GET /peers/{id}/bundle endpoint.
 func TestGetPeerBundle(t *testing.T) {
 	tests := []struct {
 		name              string
@@ -574,7 +583,6 @@ func TestGetPeerBundle(t *testing.T) {
 			setup: func(t *testing.T, db *sql.DB) {
 				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, bundle_version) VALUES (?, ?, ?, ?, ?, ?)`,
 					"peer1", "10.0.0.1", "key1", "hmac1", 0, "v1")
-				// Create multiple bundles with different versions and explicit timestamps
 				// v1 is oldest
 				db.Exec(`INSERT INTO rule_bundles (peer_id, version, version_number, rules_content, hmac, created_at) VALUES (?, ?, ?, ?, ?, datetime('now', '-2 seconds'))`,
 					1, "v1", 1, "rules-v1", "hmac-v1")
@@ -597,7 +605,6 @@ func TestGetPeerBundle(t *testing.T) {
 			setup: func(t *testing.T, db *sql.DB) {
 				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, bundle_version) VALUES (?, ?, ?, ?, ?, ?)`,
 					"peer1", "10.0.0.1", "key1", "hmac1", 0, "v2")
-				// Create multiple bundles
 				db.Exec(`INSERT INTO rule_bundles (peer_id, version, version_number, rules_content, hmac) VALUES (?, ?, ?, ?, ?)`,
 					1, "v1", 1, "rules-v1", "hmac-v1")
 				db.Exec(`INSERT INTO rule_bundles (peer_id, version, version_number, rules_content, hmac) VALUES (?, ?, ?, ?, ?)`,
@@ -617,7 +624,6 @@ func TestGetPeerBundle(t *testing.T) {
 			setup: func(t *testing.T, db *sql.DB) {
 				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, bundle_version) VALUES (?, ?, ?, ?, ?, ?)`,
 					"peer1", "10.0.0.1", "key1", "hmac1", 0, "v1")
-				// Create multiple bundles
 				db.Exec(`INSERT INTO rule_bundles (peer_id, version, version_number, rules_content, hmac) VALUES (?, ?, ?, ?, ?)`,
 					1, "v1", 1, "rules-v1", "hmac-v1")
 				db.Exec(`INSERT INTO rule_bundles (peer_id, version, version_number, rules_content, hmac) VALUES (?, ?, ?, ?, ?)`,
@@ -633,7 +639,6 @@ func TestGetPeerBundle(t *testing.T) {
 			peerID:      "1",
 			queryParams: "?include_pending=true",
 			setup: func(t *testing.T, db *sql.DB) {
-				// Create peer without any rule bundles
 				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
 					"peer1", "10.0.0.1", "key1", "hmac1", 0)
 			},
@@ -645,10 +650,8 @@ func TestGetPeerBundle(t *testing.T) {
 			peerID:      "1",
 			queryParams: "?include_pending=false",
 			setup: func(t *testing.T, db *sql.DB) {
-				// Create peer with bundle_version pointing to non-existent bundle
 				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, bundle_version) VALUES (?, ?, ?, ?, ?, ?)`,
 					"peer1", "10.0.0.1", "key1", "hmac1", 0, "v999")
-				// Create a bundle but with different version
 				db.Exec(`INSERT INTO rule_bundles (peer_id, version, version_number, rules_content, hmac) VALUES (?, ?, ?, ?, ?)`,
 					1, "v1", 1, "rules-v1", "hmac-v1")
 			},
@@ -671,7 +674,7 @@ func TestGetPeerBundle(t *testing.T) {
 			req = muxVars(req, map[string]string{"id": tt.peerID})
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(store.NewPeerStore(database), database, nil, nil)
+			handler := NewHandler(store.NewPeerStore(database), database, nil, nil, &testSettingsStore{db: database})
 			handler.GetPeerBundle(w, req)
 
 			if w.Code != tt.wantCode {
@@ -694,7 +697,6 @@ func TestGetPeerBundle(t *testing.T) {
 					t.Fatalf("failed to decode response: %v", err)
 				}
 
-				// Check fields
 				if len(tt.wantFields) > 0 {
 					for _, field := range tt.wantFields {
 						if _, ok := resp[field]; !ok {
@@ -703,7 +705,6 @@ func TestGetPeerBundle(t *testing.T) {
 					}
 				}
 
-				// Check version
 				if tt.wantVersion != "" {
 					if resp["version"] != tt.wantVersion {
 						t.Errorf("expected version %q, got %v", tt.wantVersion, resp["version"])
@@ -717,7 +718,6 @@ func TestGetPeerBundle(t *testing.T) {
 	}
 }
 
-// TestDeletePeer tests the DELETE /peers/{id} endpoint with constraint checks.
 func TestDeletePeer(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -732,14 +732,10 @@ func TestDeletePeer(t *testing.T) {
 			name:   "delete peer that is target_peer_id in policy",
 			peerID: "1",
 			setup: func(t *testing.T, database *sql.DB) {
-				// Insert peer
 				database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
 					"test-peer", "10.0.0.1", "test-key", "test-hmac", 0)
-				// Insert group
 				database.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group")
-				// Insert service (required for policy)
 				database.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`, "ssh", "22", "tcp")
-				// Insert policy with peer as target_peer_id
 				database.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, "group", ?, ?, "peer", ?, ?, ?)`,
 					"test-policy", 1, 1, 1, "ACCEPT", 100, 1)
 			},
@@ -750,19 +746,13 @@ func TestDeletePeer(t *testing.T) {
 			name:   "delete peer that is in group used by policy",
 			peerID: "1",
 			setup: func(t *testing.T, database *sql.DB) {
-				// Insert peer
 				database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
 					"test-peer", "10.0.0.1", "test-key", "test-hmac", 0)
-				// Insert group
 				database.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group")
-				// Add peer to group
 				database.Exec(`INSERT INTO group_members (group_id, peer_id) VALUES (?, ?)`, 1, 1)
-				// Insert service (required for policy)
 				database.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`, "ssh", "22", "tcp")
-				// Insert another peer as target_peer_id (peer 1 is in source group)
 				database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
 					"target-peer", "10.0.0.2", "target-key", "target-hmac", 0)
-				// Insert policy using group 1 as source_id
 				database.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, "group", ?, ?, "peer", ?, ?, ?)`,
 					"test-policy", 1, 1, 2, "ACCEPT", 100, 1)
 			},
@@ -773,12 +763,9 @@ func TestDeletePeer(t *testing.T) {
 			name:   "successful delete - peer not used anywhere",
 			peerID: "1",
 			setup: func(t *testing.T, database *sql.DB) {
-				// Insert peer
 				database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
 					"test-peer", "10.0.0.1", "test-key", "test-hmac", 0)
-				// Insert group
 				database.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group")
-				// Add peer to group (will be cleaned up)
 				database.Exec(`INSERT INTO group_members (group_id, peer_id) VALUES (?, ?)`, 1, 1)
 			},
 			wantCode:    http.StatusOK,
@@ -842,7 +829,7 @@ func TestDeletePeer(t *testing.T) {
 			// Mock gorilla/mux vars
 			req = muxVars(req, map[string]string{"id": tt.peerID})
 
-			handler := NewHandler(store.NewPeerStore(database), database, nil, nil)
+			handler := NewHandler(store.NewPeerStore(database), database, nil, nil, &testSettingsStore{db: database})
 			handler.DeletePeer(w, req)
 
 			if w.Code != tt.wantCode {
@@ -889,22 +876,18 @@ func TestDeletePeer(t *testing.T) {
 	}
 }
 
-// TestDeletePeer_GroupMembersCleanup verifies that group_members entries are removed
 // when a peer is deleted, even if the peer was in multiple groups.
 func TestDeletePeer_GroupMembersCleanup(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Insert peer
 	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
 		"test-peer", "10.0.0.1", "test-key", "test-hmac", 0)
 
-	// Insert multiple groups
 	database.Exec(`INSERT INTO groups (name) VALUES (?)`, "group1")
 	database.Exec(`INSERT INTO groups (name) VALUES (?)`, "group2")
 	database.Exec(`INSERT INTO groups (name) VALUES (?)`, "group3")
 
-	// Add peer to all groups
 	database.Exec(`INSERT INTO group_members (group_id, peer_id) VALUES (?, ?)`, 1, 1)
 	database.Exec(`INSERT INTO group_members (group_id, peer_id) VALUES (?, ?)`, 2, 1)
 	database.Exec(`INSERT INTO group_members (group_id, peer_id) VALUES (?, ?)`, 3, 1)
@@ -919,12 +902,11 @@ func TestDeletePeer_GroupMembersCleanup(t *testing.T) {
 		t.Fatalf("expected 3 group_members entries, got %d", initialCount)
 	}
 
-	// Delete the peer
 	req := httptest.NewRequest("DELETE", "/api/v1/peers/1", nil)
 	w := httptest.NewRecorder()
 	req = muxVars(req, map[string]string{"id": "1"})
 
-	handler := NewHandler(store.NewPeerStore(database), database, nil, nil)
+	handler := NewHandler(store.NewPeerStore(database), database, nil, nil, &testSettingsStore{db: database})
 	handler.DeletePeer(w, req)
 
 	if w.Code != http.StatusOK {
@@ -952,20 +934,16 @@ func TestDeletePeer_GroupMembersCleanup(t *testing.T) {
 	}
 }
 
-// TestDeletePeer_WithRuleBundlesAndLogs verifies that related data is cleaned up.
 func TestDeletePeer_WithRuleBundlesAndLogs(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Insert peer
 	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
 		"test-peer", "10.0.0.1", "test-key", "test-hmac", 0)
 
-	// Insert rule_bundle
 	database.Exec(`INSERT INTO rule_bundles (peer_id, version, version_number, rules_content, hmac) VALUES (?, ?, ?, ?, ?)`,
 		1, "v1", 1, "test-rules", "test-hmac")
 
-	// Insert firewall_logs
 	database.Exec(`INSERT INTO firewall_logs (peer_id, timestamp, direction, src_ip, dst_ip, protocol, action) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		1, "2024-01-01 00:00:00", "inbound", "10.0.0.100", "10.0.0.1", "tcp", "ACCEPT")
 
@@ -977,12 +955,11 @@ func TestDeletePeer_WithRuleBundlesAndLogs(t *testing.T) {
 		t.Fatalf("setup failed: expected 1 bundle and 1 log, got %d bundles, %d logs", bundleCount, logCount)
 	}
 
-	// Delete the peer
 	req := httptest.NewRequest("DELETE", "/api/v1/peers/1", nil)
 	w := httptest.NewRecorder()
 	req = muxVars(req, map[string]string{"id": "1"})
 
-	handler := NewHandler(store.NewPeerStore(database), database, nil, nil)
+	handler := NewHandler(store.NewPeerStore(database), database, nil, nil, &testSettingsStore{db: database})
 	handler.DeletePeer(w, req)
 
 	if w.Code != http.StatusOK {
@@ -1002,24 +979,19 @@ func TestDeletePeer_WithRuleBundlesAndLogs(t *testing.T) {
 	}
 }
 
-// TestDeletePeer_InUseByMultiplePolicies tests that deleting a peer explicitly used by multiple policies
 // returns 409 Conflict with the list of all policies.
 func TestDeletePeer_InUseByMultiplePolicies(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Create a peer (ID will be 1)
 	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
 		"target-peer", "10.0.0.1", "test-key", "test-hmac", 0)
 
-	// Create another peer as source (ID will be 2)
 	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
 		"source-peer", "10.0.0.2", "source-key", "source-hmac", 0)
 
-	// Insert service (required for policies)
 	database.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`, "ssh", "22", "tcp")
 
-	// Create multiple policies that explicitly target the peer
 	// Policy 1: source_type='peer', source_id=1 (peer 1 is the SOURCE)
 	database.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES ('policy-1', 1, 'peer', 1, 2, 'peer', 'ACCEPT', 100, 1)`)
 
@@ -1034,7 +1006,7 @@ func TestDeletePeer_InUseByMultiplePolicies(t *testing.T) {
 	w := httptest.NewRecorder()
 	req = muxVars(req, map[string]string{"id": "1"})
 
-	handler := NewHandler(store.NewPeerStore(database), database, nil, nil)
+	handler := NewHandler(store.NewPeerStore(database), database, nil, nil, &testSettingsStore{db: database})
 	handler.DeletePeer(w, req)
 
 	// Should return 409 Conflict
@@ -1042,7 +1014,6 @@ func TestDeletePeer_InUseByMultiplePolicies(t *testing.T) {
 		t.Errorf("expected status %d, got %d: %s", http.StatusConflict, w.Code, w.Body.String())
 	}
 
-	// Parse response to verify it contains the list of policies
 	var resp map[string]interface{}
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("failed to parse response: %v", err)
@@ -1083,7 +1054,6 @@ func TestDeletePeer_InUseByMultiplePolicies(t *testing.T) {
 		policyNames[name] = true
 	}
 
-	// Check that all three policies are present
 	if !policyNames["policy-1"] {
 		t.Error("policy-1 not found in response")
 	}
@@ -1102,30 +1072,23 @@ func TestDeletePeer_InUseByMultiplePolicies(t *testing.T) {
 	}
 }
 
-// TestDeletePeer_InGroupUsedByMultiplePolicies tests that deleting a peer that is in a group
 // used by multiple policies returns 409 Conflict with the list of all policies.
 func TestDeletePeer_InGroupUsedByMultiplePolicies(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Create a peer (ID will be 1)
 	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
 		"test-peer", "10.0.0.1", "test-key", "test-hmac", 0)
 
-	// Create a group
 	database.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group")
 
-	// Add peer to group
 	database.Exec(`INSERT INTO group_members (group_id, peer_id) VALUES (?, ?)`, 1, 1)
 
-	// Insert service (required for policies)
 	database.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`, "ssh", "22", "tcp")
 
-	// Create another target peer for policies
 	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
 		"target-peer", "10.0.0.2", "target-key", "target-hmac", 0)
 
-	// Create multiple policies that use the group (group_id=1 as source)
 	// Policy 1: source_type='group', source_id=1
 	database.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, "group", ?, ?, "peer", ?, ?, ?)`,
 		"policy-1", 1, 1, 2, "ACCEPT", 100, 1)
@@ -1143,7 +1106,7 @@ func TestDeletePeer_InGroupUsedByMultiplePolicies(t *testing.T) {
 	w := httptest.NewRecorder()
 	req = muxVars(req, map[string]string{"id": "1"})
 
-	handler := NewHandler(store.NewPeerStore(database), database, nil, nil)
+	handler := NewHandler(store.NewPeerStore(database), database, nil, nil, &testSettingsStore{db: database})
 	handler.DeletePeer(w, req)
 
 	// Should return 409 Conflict
@@ -1151,7 +1114,6 @@ func TestDeletePeer_InGroupUsedByMultiplePolicies(t *testing.T) {
 		t.Errorf("expected status %d, got %d: %s", http.StatusConflict, w.Code, w.Body.String())
 	}
 
-	// Parse response to verify it contains the list of policies
 	var resp map[string]interface{}
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("failed to parse response: %v", err)
@@ -1192,7 +1154,6 @@ func TestDeletePeer_InGroupUsedByMultiplePolicies(t *testing.T) {
 		policyNames[name] = true
 	}
 
-	// Check that all three policies are present
 	if !policyNames["policy-1"] {
 		t.Error("policy-1 not found in response")
 	}
@@ -1214,39 +1175,31 @@ func TestDeletePeer_InGroupUsedByMultiplePolicies(t *testing.T) {
 	}
 }
 
-// TestDeletePeer_NotInUse_Success tests that successfully deleting a peer
 // returns 200 and actually deletes the peer from the database.
 func TestDeletePeer_NotInUse_Success(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Create a peer (ID will be 1)
 	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
 		"standalone-peer", "10.0.0.1", "test-key", "test-hmac", 0)
 
-	// Create a group (not used by any policies)
 	database.Exec(`INSERT INTO groups (name) VALUES (?)`, "unused-group")
 
-	// Add peer to the group (peer will be cleaned up on deletion)
 	database.Exec(`INSERT INTO group_members (group_id, peer_id) VALUES (?, ?)`, 1, 1)
 
-	// Create another peer that IS in use (to verify we're not blocking all deletions)
 	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
 		"used-peer", "10.0.0.2", "used-key", "used-hmac", 0)
 
-	// Insert service
 	database.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`, "ssh", "22", "tcp")
 
-	// Create a policy using the used-peer (not our test peer)
 	database.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, ?, ?, ?, "peer", ?, ?, ?)`,
 		"used-policy", 2, "peer", 1, 2, "ACCEPT", 100, 1)
 
-	// Delete the standalone peer (not in use)
 	req := httptest.NewRequest("DELETE", "/api/v1/peers/1", nil)
 	w := httptest.NewRecorder()
 	req = muxVars(req, map[string]string{"id": "1"})
 
-	handler := NewHandler(store.NewPeerStore(database), database, nil, nil)
+	handler := NewHandler(store.NewPeerStore(database), database, nil, nil, &testSettingsStore{db: database})
 	handler.DeletePeer(w, req)
 
 	// Should return 200 OK
@@ -1283,7 +1236,6 @@ func TestDeletePeer_NotInUse_Success(t *testing.T) {
 	}
 }
 
-// TestGetPeerByIP tests the GET /peers/by-ip endpoint.
 func TestGetPeerByIP(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -1374,7 +1326,7 @@ func TestGetPeerByIP(t *testing.T) {
 			req := httptest.NewRequest("GET", url, nil)
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(store.NewPeerStore(database), database, nil, nil)
+			handler := NewHandler(store.NewPeerStore(database), database, nil, nil, &testSettingsStore{db: database})
 			handler.GetPeerByIP(w, req)
 
 			if w.Code != tt.wantCode {
@@ -1423,19 +1375,15 @@ func TestGetPeerByIP(t *testing.T) {
 	}
 }
 
-// TestGetPeerBundle_WithIncludePending tests that include_pending=true returns
 // both the latest (pending) bundle and the deployed bundle for diff comparison.
 func TestGetPeerBundle_WithIncludePending(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Create peer with deployed bundle version
 	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, bundle_version) VALUES (?, ?, ?, ?, ?, ?)`, "test-peer", "10.0.0.1", "key1", "hmac1", 0, "v1.0")
 
-	// Create deployed bundle (version 1)
 	database.Exec(`INSERT INTO rule_bundles (peer_id, version, version_number, rules_content, hmac, created_at) VALUES (?, ?, ?, ?, ?, datetime('now', '-2 seconds'))`, 1, "v1.0", 1, "rule1\nrule2", "hmac1")
 
-	// Create pending bundle (version 2, newer)
 	database.Exec(`INSERT INTO rule_bundles (peer_id, version, version_number, rules_content, hmac, created_at) VALUES (?, ?, ?, ?, ?, datetime('now'))`, 1, "v2.0", 2, "rule1\nrule2\nrule3", "hmac2")
 
 	// Request with include_pending=true
@@ -1443,7 +1391,7 @@ func TestGetPeerBundle_WithIncludePending(t *testing.T) {
 	req = muxVars(req, map[string]string{"id": "1"})
 	w := httptest.NewRecorder()
 
-	handler := NewHandler(store.NewPeerStore(database), database, nil, nil)
+	handler := NewHandler(store.NewPeerStore(database), database, nil, nil, &testSettingsStore{db: database})
 	handler.GetPeerBundle(w, req)
 
 	// Verify response
@@ -1476,7 +1424,6 @@ func TestGetPeerBundle_WithIncludePending(t *testing.T) {
 	}
 }
 
-// TestCreatePeer_ValidOSOther tests that creating a peer with os_type "other" succeeds.
 func TestCreatePeer_ValidOSOther(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
@@ -1486,7 +1433,7 @@ func TestCreatePeer_ValidOSOther(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	handler := NewHandler(store.NewPeerStore(database), database, nil, nil)
+	handler := NewHandler(store.NewPeerStore(database), database, nil, nil, &testSettingsStore{db: database})
 	handler.CreatePeer(w, req)
 
 	if w.Code != http.StatusCreated {
@@ -1512,7 +1459,6 @@ func TestCreatePeer_ValidOSOther(t *testing.T) {
 	}
 }
 
-// TestCreatePeer_ValidArchOther tests that creating a peer with arch "other" succeeds.
 func TestCreatePeer_ValidArchOther(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
@@ -1522,7 +1468,7 @@ func TestCreatePeer_ValidArchOther(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	handler := NewHandler(store.NewPeerStore(database), database, nil, nil)
+	handler := NewHandler(store.NewPeerStore(database), database, nil, nil, &testSettingsStore{db: database})
 	handler.CreatePeer(w, req)
 
 	if w.Code != http.StatusCreated {
@@ -1548,7 +1494,6 @@ func TestCreatePeer_ValidArchOther(t *testing.T) {
 	}
 }
 
-// TestCreatePeer_ValidMacOS tests that creating a peer with os_type "macos" succeeds.
 func TestCreatePeer_ValidMacOS(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
@@ -1558,7 +1503,7 @@ func TestCreatePeer_ValidMacOS(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	handler := NewHandler(store.NewPeerStore(database), database, nil, nil)
+	handler := NewHandler(store.NewPeerStore(database), database, nil, nil, &testSettingsStore{db: database})
 	handler.CreatePeer(w, req)
 
 	if w.Code != http.StatusCreated {
@@ -1584,7 +1529,6 @@ func TestCreatePeer_ValidMacOS(t *testing.T) {
 	}
 }
 
-// TestGetPeerIPs tests the GET /peers/{id}/ips endpoint.
 func TestGetPeerIPs(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -1661,7 +1605,7 @@ func TestGetPeerIPs(t *testing.T) {
 			req = muxVars(req, map[string]string{"id": tt.peerID})
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(store.NewPeerStore(database), database, nil, nil)
+			handler := NewHandler(store.NewPeerStore(database), database, nil, nil, &testSettingsStore{db: database})
 			handler.GetPeerIPs(w, req)
 
 			if w.Code != tt.wantCode {
@@ -1710,7 +1654,6 @@ func TestGetPeerIPs(t *testing.T) {
 	}
 }
 
-// TestAddPeerIP tests the POST /peers/{id}/ips endpoint.
 func TestAddPeerIP(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -1838,7 +1781,7 @@ func TestAddPeerIP(t *testing.T) {
 			req = muxVars(req, map[string]string{"id": tt.peerID})
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(store.NewPeerStore(database), database, nil, nil)
+			handler := NewHandler(store.NewPeerStore(database), database, nil, nil, &testSettingsStore{db: database})
 			handler.AddPeerIP(w, req)
 
 			if w.Code != tt.wantCode {
@@ -1878,7 +1821,6 @@ func TestAddPeerIP(t *testing.T) {
 	}
 }
 
-// TestDeletePeerIP tests the DELETE /peers/{id}/ips/{ip_id} endpoint.
 func TestDeletePeerIP(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -2041,7 +1983,7 @@ func TestDeletePeerIP(t *testing.T) {
 			req = muxVars(req, map[string]string{"id": tt.peerID, "ip_id": tt.ipID})
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(store.NewPeerStore(database), database, nil, nil)
+			handler := NewHandler(store.NewPeerStore(database), database, nil, nil, &testSettingsStore{db: database})
 			handler.DeletePeerIP(w, req)
 
 			if w.Code != tt.wantCode {
@@ -2065,13 +2007,12 @@ func TestDeletePeerIP(t *testing.T) {
 	}
 }
 
-// TestUpdateAgent tests the POST /peers/{id}/update-agent endpoint.
 func TestUpdateAgent(t *testing.T) {
 	t.Run("peer not found", func(t *testing.T) {
 		database, cleanup := testutil.SetupTestDB(t)
 		defer cleanup()
 
-		handler := NewHandler(store.NewPeerStore(database), database, nil, nil)
+		handler := NewHandler(store.NewPeerStore(database), database, nil, nil, &testSettingsStore{db: database})
 
 		req := httptest.NewRequest("POST", "/api/v1/peers/999/update-agent", nil)
 		req = muxVars(req, map[string]string{"id": "999"})
@@ -2088,7 +2029,7 @@ func TestUpdateAgent(t *testing.T) {
 		database, cleanup := testutil.SetupTestDB(t)
 		defer cleanup()
 
-		handler := NewHandler(store.NewPeerStore(database), database, nil, nil)
+		handler := NewHandler(store.NewPeerStore(database), database, nil, nil, &testSettingsStore{db: database})
 
 		req := httptest.NewRequest("POST", "/api/v1/peers/invalid/update-agent", nil)
 		req = muxVars(req, map[string]string{"id": "invalid"})
@@ -2105,7 +2046,7 @@ func TestUpdateAgent(t *testing.T) {
 		database, cleanup := testutil.SetupTestDB(t)
 		defer cleanup()
 
-		handler := NewHandler(store.NewPeerStore(database), database, nil, nil)
+		handler := NewHandler(store.NewPeerStore(database), database, nil, nil, &testSettingsStore{db: database})
 
 		database.Exec(`INSERT INTO peers (hostname, ip_address, is_manual, agent_key, hmac_key) VALUES (?, ?, 1, ?, ?)`, "manual-peer", "10.0.0.1", "manual-key", "hmac1")
 
@@ -2124,7 +2065,7 @@ func TestUpdateAgent(t *testing.T) {
 		database, cleanup := testutil.SetupTestDB(t)
 		defer cleanup()
 
-		handler := NewHandler(store.NewPeerStore(database), database, nil, nil)
+		handler := NewHandler(store.NewPeerStore(database), database, nil, nil, &testSettingsStore{db: database})
 
 		database.Exec(`INSERT INTO peers (hostname, ip_address, is_manual, agent_key, hmac_key) VALUES (?, ?, 0, ?, ?)`, "test-peer", "10.0.0.2", "key1", "hmackey1")
 
@@ -2143,7 +2084,7 @@ func TestUpdateAgent(t *testing.T) {
 		database, cleanup := testutil.SetupTestDB(t)
 		defer cleanup()
 
-		handler := NewHandler(store.NewPeerStore(database), database, nil, nil)
+		handler := NewHandler(store.NewPeerStore(database), database, nil, nil, &testSettingsStore{db: database})
 
 		database.Exec(`INSERT INTO peers (hostname, ip_address, is_manual, agent_key, hmac_key) VALUES (?, ?, 0, ?, ?)`, "agent-peer", "10.0.0.3", "key2", "hmackey2")
 
@@ -2161,7 +2102,6 @@ func TestUpdateAgent(t *testing.T) {
 	})
 }
 
-// mockUpdateAgent implements the SSE hub interface for testing.
 type mockUpdateAgent struct {
 	called          bool
 	delivered       bool
@@ -2181,7 +2121,7 @@ func TestUpdateAgentSuccess(t *testing.T) {
 	defer cleanup()
 
 	mock := &mockUpdateAgent{delivered: true}
-	handler := NewHandler(store.NewPeerStore(database), database, nil, mock)
+	handler := NewHandler(store.NewPeerStore(database), database, nil, mock, &testSettingsStore{db: database})
 
 	database.Exec(`INSERT INTO peers (hostname, ip_address, is_manual, agent_key, hmac_key) VALUES (?, ?, 0, ?, ?)`, "agent-peer", "10.0.0.5", "key5", "hmackey5")
 
@@ -2221,7 +2161,7 @@ func TestUpdateAgentNotConnected(t *testing.T) {
 	defer cleanup()
 
 	mock := &mockUpdateAgent{delivered: false}
-	handler := NewHandler(store.NewPeerStore(database), database, nil, mock)
+	handler := NewHandler(store.NewPeerStore(database), database, nil, mock, &testSettingsStore{db: database})
 
 	database.Exec(`INSERT INTO peers (hostname, ip_address, is_manual, agent_key, hmac_key) VALUES (?, ?, 0, ?, ?)`, "agent-peer", "10.0.0.5", "key5", "hmackey5")
 	database.Exec(`INSERT INTO system_config (key, value) VALUES ('instance_url', 'https://runic.example.com')`)
@@ -2254,7 +2194,7 @@ func TestUpdateAgentChannelFull(t *testing.T) {
 	defer cleanup()
 
 	mock := &mockUpdateAgent{delivered: false}
-	handler := NewHandler(store.NewPeerStore(database), database, nil, mock)
+	handler := NewHandler(store.NewPeerStore(database), database, nil, mock, &testSettingsStore{db: database})
 
 	database.Exec(`INSERT INTO peers (hostname, ip_address, is_manual, agent_key, hmac_key) VALUES (?, ?, 0, ?, ?)`, "agent-peer", "10.0.0.6", "key6", "hmackey6")
 	database.Exec(`INSERT INTO system_config (key, value) VALUES ('instance_url', 'https://runic.example.com')`)

@@ -10,15 +10,12 @@ import (
 	"strings"
 )
 
-// DefaultPullIntervalSec is the default polling interval (24 hours).
-// SSE is the primary notification mechanism; polling is a fallback.
+// DefaultPullIntervalSec is the interval for polling; SSE is the primary notification mechanism; polling is a fallback.
 const DefaultPullIntervalSec = 86400 // 24 hours (SSE is primary)
 
-// DefaultHeartbeatIntervalSec is the default heartbeat interval (30 seconds).
-// Must be less than OfflineThresholdSeconds (90s) to prevent false offline detection.
+// DefaultHeartbeatIntervalSec must be less than OfflineThresholdSeconds (90s) to prevent false offline detection.
 const DefaultHeartbeatIntervalSec = 30
 
-// Config holds the agent configuration.
 type Config struct {
 	ControlPlaneURL              string `json:"control_plane_url"`
 	HostID                       string `json:"host_id"`
@@ -34,7 +31,6 @@ type Config struct {
 	DisableSystemManagedIPTables bool   `json:"disable_system_managed_iptables"`
 }
 
-// DefaultConfig returns a config with sensible defaults.
 func DefaultConfig() *Config {
 	return &Config{
 		PullIntervalSec:              DefaultPullIntervalSec,
@@ -46,8 +42,7 @@ func DefaultConfig() *Config {
 	}
 }
 
-// LoadConfig reads config from the given path.
-// If the file does not exist, returns a default config.
+// LoadConfig loads the config from the given path. If the file does not exist, returns a default config.
 func LoadConfig(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -65,8 +60,7 @@ func LoadConfig(path string) (*Config, error) {
 	return cfg, nil
 }
 
-// SaveConfig writes the config to disk with 0600 permissions.
-// Creates the directory if needed. Validates the config before saving.
+// SaveConfig saves the config to the given path. Creates the directory if needed. Validates the config before saving.
 func SaveConfig(path string, cfg *Config) error {
 	if err := cfg.Validate(); err != nil {
 		return fmt.Errorf("config validation failed: %w", err)
@@ -91,18 +85,15 @@ func SaveConfig(path string, cfg *Config) error {
 	return nil
 }
 
-// HasCredentials returns true if the config has both host_id and token.
 func (c *Config) HasCredentials() bool {
 	return c.HostID != "" && c.Token != ""
 }
 
-// NeedsRegistration returns true if the agent needs to register.
 func (c *Config) NeedsRegistration() bool {
 	return !c.HasCredentials()
 }
 
-// Validate checks that the config has valid values.
-// Returns an error describing the first validation failure, or nil if valid.
+// Validate returns an error describing the first validation failure, or nil if valid.
 func (c *Config) Validate() error {
 	if c.ControlPlaneURL != "" {
 		parsedURL, err := url.Parse(c.ControlPlaneURL)

@@ -7,19 +7,17 @@ import (
 
 	"runic/internal/api/common"
 	runiclog "runic/internal/common/log"
-	"runic/internal/db"
+	"runic/internal/store"
 
 	"github.com/gorilla/mux"
 )
 
-// Handler holds dependencies for keys handlers.
 type Handler struct {
-	DB db.Querier
+	Keys *store.KeyStore
 }
 
-// NewHandler creates a new keys handler.
-func NewHandler(db db.Querier) *Handler {
-	return &Handler{DB: db}
+func NewHandler(keys *store.KeyStore) *Handler {
+	return &Handler{Keys: keys}
 }
 
 var keyTypes = []string{
@@ -32,15 +30,14 @@ var keyTypeToDBKey = map[string]string{
 	"agent-jwt-secret": "agent_jwt_secret",
 }
 
-// ListKeys returns the status of all setup keys
 func (h *Handler) ListKeys(w http.ResponseWriter, r *http.Request) {
 	result := make([]map[string]interface{}, 0, len(keyTypes))
 	for _, kt := range keyTypes {
 		dbKey := keyTypeToDBKey[kt]
-		_, err := db.GetSecret(r.Context(), h.DB, dbKey)
+		exists, _ := h.Keys.KeyExists(r.Context(), dbKey)
 		result = append(result, map[string]interface{}{
 			"type":   kt,
-			"exists": err == nil,
+			"exists": exists,
 		})
 	}
 
@@ -50,7 +47,6 @@ func (h *Handler) ListKeys(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// CreateKey generates a new random key and stores it in the database
 func (h *Handler) CreateKey(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	keyType := vars["type"]
@@ -61,13 +57,13 @@ func (h *Handler) CreateKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	newKey, err := db.GenerateSecureKey()
+	newKey, err := h.Keys.GenerateSecureKey()
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "Failed to generate key")
 		return
 	}
 
-	if err := db.SetSecret(r.Context(), h.DB, dbKey, newKey); err != nil {
+	if err := h.Keys.SetSecret(r.Context(), dbKey, newKey); err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "Failed to store key")
 		return
 	}
@@ -81,7 +77,6 @@ func (h *Handler) CreateKey(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// DeleteKey removes a key from the database
 func (h *Handler) DeleteKey(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	keyType := vars["type"]
@@ -92,7 +87,7 @@ func (h *Handler) DeleteKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := db.DeleteSecret(r.Context(), h.DB, dbKey); err != nil {
+	if err := h.Keys.DeleteSecret(r.Context(), dbKey); err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "Failed to delete key")
 		return
 	}

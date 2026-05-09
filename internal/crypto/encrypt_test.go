@@ -7,7 +7,6 @@ import (
 	"time"
 )
 
-// TestNewEncryptor_Success tests that NewEncryptor creates a valid encryptor
 func TestNewEncryptor_Success(t *testing.T) {
 	enc, err := NewEncryptor("test-passphrase")
 	if err != nil {
@@ -18,7 +17,6 @@ func TestNewEncryptor_Success(t *testing.T) {
 	}
 }
 
-// TestNewEncryptor_EmptyPassphrase tests that NewEncryptor rejects empty passphrase
 func TestNewEncryptor_EmptyPassphrase(t *testing.T) {
 	_, err := NewEncryptor("")
 	if err != ErrEmptyPassphrase {
@@ -26,7 +24,6 @@ func TestNewEncryptor_EmptyPassphrase(t *testing.T) {
 	}
 }
 
-// TestEncryptDecrypt_RoundTrip tests that encryption followed by decryption returns original text
 func TestEncryptDecrypt_RoundTrip(t *testing.T) {
 	enc, err := NewEncryptor("my-secret-passphrase")
 	if err != nil {
@@ -49,7 +46,6 @@ func TestEncryptDecrypt_RoundTrip(t *testing.T) {
 	}
 }
 
-// TestEncrypt_MultipleCalls tests that multiple encryptions produce different ciphertexts
 func TestEncrypt_MultipleCalls(t *testing.T) {
 	enc, err := NewEncryptor("test-passphrase")
 	if err != nil {
@@ -75,7 +71,6 @@ func TestEncrypt_MultipleCalls(t *testing.T) {
 	}
 }
 
-// TestEncrypt_EmptyPlaintext tests that empty plaintext is rejected
 func TestEncrypt_EmptyPlaintext(t *testing.T) {
 	enc, err := NewEncryptor("test-passphrase")
 	if err != nil {
@@ -88,7 +83,6 @@ func TestEncrypt_EmptyPlaintext(t *testing.T) {
 	}
 }
 
-// TestDecrypt_EmptyCiphertext tests that empty ciphertext is rejected
 func TestDecrypt_EmptyCiphertext(t *testing.T) {
 	enc, err := NewEncryptor("test-passphrase")
 	if err != nil {
@@ -101,7 +95,6 @@ func TestDecrypt_EmptyCiphertext(t *testing.T) {
 	}
 }
 
-// TestDecrypt_InvalidBase64 tests that invalid base64 is rejected
 func TestDecrypt_InvalidBase64(t *testing.T) {
 	enc, err := NewEncryptor("test-passphrase")
 	if err != nil {
@@ -114,14 +107,12 @@ func TestDecrypt_InvalidBase64(t *testing.T) {
 	}
 }
 
-// TestDecrypt_TooShort tests that too-short ciphertext is rejected
 func TestDecrypt_TooShort(t *testing.T) {
 	enc, err := NewEncryptor("test-passphrase")
 	if err != nil {
 		t.Fatalf("NewEncryptor() returned unexpected error: %v", err)
 	}
 
-	// Create a valid base64 string that's too short
 	shortData := base64.StdEncoding.EncodeToString([]byte("short"))
 
 	_, err = enc.Decrypt(shortData)
@@ -130,7 +121,6 @@ func TestDecrypt_TooShort(t *testing.T) {
 	}
 }
 
-// TestDecrypt_WrongPassphrase tests that decryption fails with wrong passphrase
 func TestDecrypt_WrongPassphrase(t *testing.T) {
 	enc1, err := NewEncryptor("correct-passphrase")
 	if err != nil {
@@ -153,7 +143,6 @@ func TestDecrypt_WrongPassphrase(t *testing.T) {
 	}
 }
 
-// TestStandaloneEncryptDecrypt tests the standalone Encrypt/Decrypt functions
 func TestStandaloneEncryptDecrypt(t *testing.T) {
 	plaintext := "standalone secret"
 	passphrase := "my-passphrase"
@@ -173,7 +162,6 @@ func TestStandaloneEncryptDecrypt(t *testing.T) {
 	}
 }
 
-// TestStandaloneEncrypt_EmptyPassphrase tests standalone encrypt with empty passphrase
 func TestStandaloneEncrypt_EmptyPassphrase(t *testing.T) {
 	_, err := Encrypt("test", "")
 	if err != ErrEmptyPassphrase {
@@ -181,7 +169,6 @@ func TestStandaloneEncrypt_EmptyPassphrase(t *testing.T) {
 	}
 }
 
-// TestStandaloneEncrypt_EmptyPlaintext tests standalone encrypt with empty plaintext
 func TestStandaloneEncrypt_EmptyPlaintext(t *testing.T) {
 	_, err := Encrypt("", "passphrase")
 	if err != ErrEmptyPlaintext {
@@ -189,7 +176,6 @@ func TestStandaloneEncrypt_EmptyPlaintext(t *testing.T) {
 	}
 }
 
-// TestStandaloneDecrypt_EmptyPassphrase tests standalone decrypt with empty passphrase
 func TestStandaloneDecrypt_EmptyPassphrase(t *testing.T) {
 	_, err := Decrypt("dGVzdA==", "")
 	if err != ErrEmptyPassphrase {
@@ -197,7 +183,6 @@ func TestStandaloneDecrypt_EmptyPassphrase(t *testing.T) {
 	}
 }
 
-// TestStandaloneDecrypt_EmptyCiphertext tests standalone decrypt with empty ciphertext
 func TestStandaloneDecrypt_EmptyCiphertext(t *testing.T) {
 	_, err := Decrypt("", "passphrase")
 	if err != ErrEmptyCiphertext {
@@ -205,7 +190,6 @@ func TestStandaloneDecrypt_EmptyCiphertext(t *testing.T) {
 	}
 }
 
-// TestDeriveKey tests key derivation
 func TestDeriveKey(t *testing.T) {
 	salt := []byte("0123456789abcdef") // 16 bytes
 	key1 := DeriveKey("passphrase", salt)
@@ -233,7 +217,6 @@ func TestDeriveKey(t *testing.T) {
 	}
 }
 
-// TestGenerateSalt tests salt generation
 func TestGenerateSalt(t *testing.T) {
 	salt1, err := GenerateSalt()
 	if err != nil {
@@ -255,7 +238,6 @@ func TestGenerateSalt(t *testing.T) {
 	}
 }
 
-// TestGetSalt tests retrieving the salt from an encryptor
 func TestGetSalt(t *testing.T) {
 	enc, err := NewEncryptor("test-passphrase")
 	if err != nil {
@@ -274,7 +256,6 @@ func TestGetSalt(t *testing.T) {
 	}
 }
 
-// TestThreadSafety tests concurrent encryption/decryption operations
 func TestThreadSafety(t *testing.T) {
 	enc, err := NewEncryptor("test-passphrase")
 	if err != nil {
@@ -318,7 +299,6 @@ func TestThreadSafety(t *testing.T) {
 	}
 }
 
-// TestCiphertextFormat verifies the ciphertext format
 func TestCiphertextFormat(t *testing.T) {
 	enc, err := NewEncryptor("test-passphrase")
 	if err != nil {
@@ -344,7 +324,6 @@ func TestCiphertextFormat(t *testing.T) {
 	}
 }
 
-// TestLongPlaintext tests encryption/decryption of longer plaintexts
 func TestLongPlaintext(t *testing.T) {
 	enc, err := NewEncryptor("test-passphrase")
 	if err != nil {
@@ -368,7 +347,6 @@ func TestLongPlaintext(t *testing.T) {
 	}
 }
 
-// TestEncryptorReuse tests that an encryptor can be reused multiple times
 func TestEncryptorReuse(t *testing.T) {
 	enc, err := NewEncryptor("test-passphrase")
 	if err != nil {
@@ -393,14 +371,12 @@ func TestEncryptorReuse(t *testing.T) {
 	}
 }
 
-// TestEncryptLargeData tests encryption/decryption performance with large data
 func TestEncryptLargeData(t *testing.T) {
 	enc, err := NewEncryptor("test-passphrase")
 	if err != nil {
 		t.Fatalf("NewEncryptor() returned unexpected error: %v", err)
 	}
 
-	// Create a 1MB plaintext string
 	plaintext := strings.Repeat("x", 1024*1024)
 
 	// Measure encryption time

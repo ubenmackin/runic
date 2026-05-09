@@ -12,9 +12,7 @@ import (
 	"runic/internal/models"
 )
 
-// TestRegisterSuccessfulRegistration tests successful agent registration.
 func TestRegisterSuccessfulRegistration(t *testing.T) {
-	// Create mock server
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Verify request method and path
 		if r.Method != "POST" {
@@ -38,7 +36,6 @@ func TestRegisterSuccessfulRegistration(t *testing.T) {
 			t.Errorf("expected arch %s, got %s", runtime.GOARCH, reqBody.Arch)
 		}
 
-		// Return successful response
 		resp := models.AgentRegisterResponse{
 			HostID:           "host-123",
 			Token:            "token-abc",
@@ -51,7 +48,6 @@ func TestRegisterSuccessfulRegistration(t *testing.T) {
 	}))
 	defer server.Close()
 
-	// Create config with registration token
 	cfg := &Config{
 		ControlPlaneURL:   server.URL,
 		RegistrationToken: "initial-registration-token",
@@ -96,7 +92,6 @@ func TestRegisterSuccessfulRegistration(t *testing.T) {
 	}
 }
 
-// TestRegisterHandles401Response tests that Register handles 401 responses correctly.
 func TestRegisterHandles401Response(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
@@ -118,7 +113,6 @@ func TestRegisterHandles401Response(t *testing.T) {
 	}
 }
 
-// TestRegisterHandlesNon200StatusCode tests that Register handles non-200 status codes.
 func TestRegisterHandlesNon200StatusCode(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -135,7 +129,6 @@ func TestRegisterHandlesNon200StatusCode(t *testing.T) {
 	}
 }
 
-// TestRegisterDecodesResponseCorrectly tests that Register correctly decodes the response.
 func TestRegisterDecodesResponseCorrectly(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		resp := models.AgentRegisterResponse{
@@ -177,7 +170,6 @@ func TestRegisterDecodesResponseCorrectly(t *testing.T) {
 	}
 }
 
-// TestRegisterCallsSaveFuncOnSuccess tests that saveFunc is called on successful registration.
 func TestRegisterCallsSaveFuncOnSuccess(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		resp := models.AgentRegisterResponse{
@@ -211,7 +203,6 @@ func TestRegisterCallsSaveFuncOnSuccess(t *testing.T) {
 	}
 }
 
-// TestRegisterClearsRegistrationTokenAfterUse tests that RegistrationToken is cleared after use.
 func TestRegisterClearsRegistrationTokenAfterUse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var reqBody models.AgentRegisterRequest
@@ -249,7 +240,6 @@ func TestRegisterClearsRegistrationTokenAfterUse(t *testing.T) {
 	}
 }
 
-// TestDetectKernelVersionReturnsVersionString tests that detectKernelVersion returns version string.
 func TestDetectKernelVersionReturnsVersionString(t *testing.T) {
 	result := detectKernelVersion()
 	// On most systems, this will return something like "5.15.0--generic"
@@ -257,7 +247,6 @@ func TestDetectKernelVersionReturnsVersionString(t *testing.T) {
 	_ = result // Result may be empty in some test environments
 }
 
-// TestDetectKernelVersionReturnsEmptyOnError tests that detectKernelVersion returns empty on error.
 func TestDetectKernelVersionReturnsEmptyOnError(t *testing.T) {
 	// The function reads from /proc/version
 	// If file doesn't exist, it returns empty string
@@ -266,7 +255,6 @@ func TestDetectKernelVersionReturnsEmptyOnError(t *testing.T) {
 	_ = result
 }
 
-// TestDetectDockerReturnsTrueForSocket tests that detectDocker returns true for socket.
 func TestDetectDockerReturnsTrueForSocket(t *testing.T) {
 	// detectDocker checks /var/run/docker.sock
 	// We can't easily test this without modifying the source or running as root
@@ -277,7 +265,6 @@ func TestDetectDockerReturnsTrueForSocket(t *testing.T) {
 	}
 }
 
-// TestDetectDockerReturnsFalseWhenFileDoesntExist tests that detectDocker returns false when file doesn't exist.
 func TestDetectDockerReturnsFalseWhenFileDoesntExist(t *testing.T) {
 	// The function checks /var/run/docker.sock
 	// If it doesn't exist, returns false
@@ -286,7 +273,6 @@ func TestDetectDockerReturnsFalseWhenFileDoesntExist(t *testing.T) {
 	_ = result
 }
 
-// TestDetectLocalIPReturnsIPv4Address tests that detectLocalIP returns IPv4 address.
 func TestDetectLocalIPReturnsIPv4Address(t *testing.T) {
 	result := detectLocalIP()
 	// Result depends on actual network configuration
@@ -303,7 +289,6 @@ func TestDetectLocalIPReturnsIPv4Address(t *testing.T) {
 	}
 }
 
-// TestDetectLocalIPSkipsLoopbackInterfaces tests that detectLocalIP skips loopback interfaces.
 func TestDetectLocalIPSkipsLoopbackInterfaces(t *testing.T) {
 	result := detectLocalIP()
 	// The function should skip loopback interfaces (127.0.0.0/8)
@@ -316,7 +301,6 @@ func TestDetectLocalIPSkipsLoopbackInterfaces(t *testing.T) {
 	}
 }
 
-// contains is a simple helper to check if a string contains a substring.
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsAt(s, substr))
 }

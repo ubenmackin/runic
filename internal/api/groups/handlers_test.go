@@ -17,7 +17,6 @@ import (
 	"runic/internal/testutil"
 )
 
-// muxVars is a helper to mock gorilla/mux vars
 func muxVars(r *http.Request, vars map[string]string) *http.Request {
 	return mux.SetURLVars(r, vars)
 }
@@ -30,22 +29,17 @@ func TestListGroups(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Insert test groups
 	database.Exec(`INSERT INTO groups (name, description) VALUES (?, ?)`, "alpha-group", "First group")
 	database.Exec(`INSERT INTO groups (name, description) VALUES (?, ?)`, "beta-group", "Second group")
 
-	// Insert peers and add to groups
 	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, os_type, is_manual) VALUES (?, ?, ?, ?, ?, ?)`,
 		"peer1", "10.0.0.1", "key1", "hmac1", "linux", 0)
 	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, os_type, is_manual) VALUES (?, ?, ?, ?, ?, ?)`,
 		"peer2", "10.0.0.2", "key2", "hmac2", "linux", 1)
 
-	// Add peer1 to alpha-group (id=1)
 	database.Exec(`INSERT INTO group_members (group_id, peer_id) VALUES (?, ?)`, 1, 1)
-	// Add peer2 to alpha-group
 	database.Exec(`INSERT INTO group_members (group_id, peer_id) VALUES (?, ?)`, 1, 2)
 
-	// Create a service and policy to test policy_count
 	database.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`, "ssh", "22", "tcp")
 	database.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, "group", ?, ?, "peer", ?, ?, ?)`,
 		"ssh-policy", 1, 1, 1, "ACCEPT", 100, 1)
@@ -64,7 +58,6 @@ func TestListGroups(t *testing.T) {
 					return
 				}
 
-				// Find alpha-group
 				var alphaGroup *store.GroupWithCounts
 				for i := range groups {
 					if groups[i].Name == "alpha-group" {
@@ -130,10 +123,8 @@ func TestListGroups_SystemGroup(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Insert the "any" system group with is_system=1
 	database.Exec(`INSERT INTO groups (name, description, is_system) VALUES (?, ?, 1)`, "any", "System group representing all peers")
 
-	// Insert a regular group for comparison
 	database.Exec(`INSERT INTO groups (name, description) VALUES (?, ?)`, "regular-group", "A regular group")
 
 	h := NewHandler(database, nil, nil, store.NewGroupStore(database), store.NewPeerStore(database))
@@ -151,7 +142,6 @@ func TestListGroups_SystemGroup(t *testing.T) {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
-	// Find the "any" group
 	var anyGroup *store.GroupWithCounts
 	for i := range groups {
 		if groups[i].Name == "any" {
@@ -211,7 +201,6 @@ func TestDeleteGroup_SystemGroup(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Insert the "any" system group with is_system=1
 	database.Exec(`INSERT INTO groups (name, description, is_system) VALUES (?, ?, 1)`, "any", "System group")
 
 	req := httptest.NewRequest("DELETE", "/api/v1/groups/1", nil)
@@ -240,7 +229,6 @@ func TestDeleteGroup_UsedByPolicy(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Insert test data
 	database.Exec(`INSERT INTO groups (name, description) VALUES (?, ?)`, "web-servers", "Web server group")
 	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)`, "web-01", "10.0.0.1", "key1", "hmac1")
 	database.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`, "http", "80", "tcp")
@@ -305,20 +293,17 @@ func TestDeleteGroup_UsedByPolicy(t *testing.T) {
 	}
 }
 
-// TestDeleteGroup_InUseByMultiplePolicies tests that deleting a group used by
 // multiple policies returns ALL policies in the error response (not just one).
 func TestDeleteGroup_InUseByMultiplePolicies(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Insert test data - a group used by multiple policies
 	database.Exec(`INSERT INTO groups (name, description) VALUES (?, ?)`, "web-servers", "Web server group")
 	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)`, "web-01", "10.0.0.1", "key1", "hmac1")
 	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)`, "web-02", "10.0.0.2", "key2", "hmac2")
 	database.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`, "http", "80", "tcp")
 	database.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`, "https", "443", "tcp")
 
-	// Create multiple policies using the same group as SOURCE
 	policyResult1, err := database.Exec(`
 		INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled)
 		VALUES (?, ?, "group", ?, ?, "peer", ?, ?, ?)`,
@@ -337,7 +322,6 @@ func TestDeleteGroup_InUseByMultiplePolicies(t *testing.T) {
 	}
 	_, _ = policyResult2.LastInsertId()
 
-	// Create a third policy using the same group as TARGET
 	policyResult3, err := database.Exec(`
 		INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled)
 		VALUES (?, ?, "peer", ?, ?, "group", ?, ?, ?)`,
@@ -360,7 +344,6 @@ func TestDeleteGroup_InUseByMultiplePolicies(t *testing.T) {
 		t.Errorf("expected status %d, got %d: %s", http.StatusConflict, w.Code, w.Body.String())
 	}
 
-	// Parse response
 	var resp map[string]interface{}
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
@@ -408,7 +391,6 @@ func TestDeleteGroup_InUseByMultiplePolicies(t *testing.T) {
 		policyMap[id] = name
 	}
 
-	// Check that all three policies are present
 	if _, ok := policyMap[1]; !ok {
 		t.Errorf("policy %d (allow-http) not found in response", 1)
 	}
@@ -430,31 +412,26 @@ func TestDeleteGroup_InUseByMultiplePolicies(t *testing.T) {
 	}
 }
 
-// TestDeleteGroup_NotInUse_Success tests that a group not used by any policy
 // can be deleted successfully.
 func TestDeleteGroup_NotInUse_Success(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Create a group that is not used by any policy
 	groupResult, err := database.Exec(`INSERT INTO groups (name, description) VALUES (?, ?)`, "unused-group", "Group not used by any policy")
 	if err != nil {
 		t.Fatalf("failed to create group: %v", err)
 	}
 	_, _ = groupResult.LastInsertId()
 
-	// Create a different group that IS used by a policy (to verify we're not blocking all deletions)
 	usedGroupResult, err := database.Exec(`INSERT INTO groups (name, description) VALUES (?, ?)`, "used-group", "Group used by a policy")
 	if err != nil {
 		t.Fatalf("failed to create used group: %v", err)
 	}
 	_, _ = usedGroupResult.LastInsertId()
 
-	// Create peer and service for policies
 	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)`, "peer1", "10.0.0.1", "key1", "hmac1")
 	database.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`, "http", "80", "tcp")
 
-	// Create a policy that uses the usedGroup (not the unused-group)
 	_, err = database.Exec(`
 	INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled)
 	VALUES (?, ?, "group", ?, ?, "peer", ?, ?, ?)`, "test-policy", 2, 1, 1, "ACCEPT", 100, 1)
@@ -462,7 +439,6 @@ func TestDeleteGroup_NotInUse_Success(t *testing.T) {
 		t.Fatalf("failed to create policy: %v", err)
 	}
 
-	// Delete the unused group
 	req := httptest.NewRequest("DELETE", "/api/v1/groups/1", nil)
 	w := httptest.NewRecorder()
 	req = muxVars(req, map[string]string{"id": "1"})
@@ -499,10 +475,8 @@ func TestDeleteGroup_Success(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Insert a group without policies
 	database.Exec(`INSERT INTO groups (name, description) VALUES (?, ?)`, "unused-group", "Group not used by any policy")
 
-	// Insert a peer and add to the group
 	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)`,
 		"peer1", "10.0.0.1", "key1", "hmac1")
 	database.Exec(`INSERT INTO group_members (group_id, peer_id) VALUES (?, ?)`, 1, 1)
@@ -583,7 +557,6 @@ func TestAddGroupMember(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Insert test data
 	database.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group")
 	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, os_type, is_manual) VALUES (?, ?, ?, ?, ?, ?)`,
 		"peer1", "10.0.0.1", "key1", "hmac1", "linux", 0)
@@ -673,7 +646,6 @@ func TestAddGroupMember_Duplicate(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Insert test data
 	database.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group")
 	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)`,
 		"peer1", "10.0.0.1", "key1", "hmac1")
@@ -714,7 +686,6 @@ func TestRemoveGroupMember(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Insert test data
 	database.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group")
 	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)`,
 		"peer1", "10.0.0.1", "key1", "hmac1")
@@ -848,7 +819,6 @@ func TestGetGroupMembers(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Insert test data
 	database.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group")
 	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, os_type, is_manual) VALUES (?, ?, ?, ?, ?, ?)`,
 		"alpha-peer", "10.0.0.1", "key1", "hmac1", "linux", 0)
@@ -907,7 +877,6 @@ func TestGetGroupMembers_EmptyGroup(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Insert an empty group
 	database.Exec(`INSERT INTO groups (name) VALUES (?)`, "empty-group")
 
 	req := httptest.NewRequest("GET", "/api/v1/groups/1/members", nil)
@@ -1038,7 +1007,6 @@ func TestGetGroup(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Insert test data
 	database.Exec(`INSERT INTO groups (name, description) VALUES (?, ?)`, "test-group", "Test description")
 
 	tests := []struct {
@@ -1101,7 +1069,6 @@ func TestUpdateGroup(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Insert test data
 	database.Exec(`INSERT INTO groups (name, description) VALUES (?, ?)`, "test-group", "Original description")
 
 	tests := []struct {
@@ -1214,7 +1181,6 @@ func TestGetGroup_DBError(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Insert a group
 	database.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group")
 
 	// Close DB to trigger error on GetGroup
@@ -1238,7 +1204,6 @@ func TestUpdateGroup_DBError(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Insert a group
 	database.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group")
 
 	// Close DB to trigger error on UpdateGroup
@@ -1263,7 +1228,6 @@ func TestUpdateGroup_NoChanges(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Create a group with known name/description
 	database.Exec(`INSERT INTO groups (name, description) VALUES (?, ?)`, "test-group", "test-desc")
 
 	h := NewHandler(database, nil, nil, store.NewGroupStore(database), store.NewPeerStore(database))
@@ -1295,20 +1259,16 @@ func TestUpdateGroup_DescriptionOnly(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Create a group with known name/description
 	database.Exec(`INSERT INTO groups (name, description) VALUES (?, ?)`, "test-group", "original-desc")
 
-	// Create a peer and add to group
 	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, os_type, is_manual) VALUES (?, ?, ?, ?, ?, ?)`, "peer1", "10.0.0.1", "key1", "hmac1", "linux", 0)
 	database.Exec(`INSERT INTO group_members (group_id, peer_id) VALUES (?, ?)`, 1, 1)
 
-	// Create a service and policy that uses the group
 	database.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`, "ssh", "22", "tcp")
 	database.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled) VALUES (?, ?, "group", ?, ?, "peer", ?, ?, ?)`, "ssh-policy", 1, 1, 1, "ACCEPT", 100, 1)
 
-	// Set up handler with ChangeWorker
-	compiler := engine.NewCompiler(database)
-	changeWorker := common.NewChangeWorker(nil) // nil sseHub for tests
+	compiler := engine.NewTestCompiler(database)
+	changeWorker := common.NewChangeWorker(nil, database) // nil sseHub for tests
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	changeWorker.Start(ctx)
@@ -1356,7 +1316,6 @@ func TestDeleteGroup_DBError(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Insert a group without policies
 	database.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group")
 
 	// Close DB to trigger error on DeleteGroup
@@ -1380,7 +1339,6 @@ func TestDeleteGroup_UsedAsTarget(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Insert test data - group used as TARGET in policy
 	database.Exec(`INSERT INTO groups (name, description) VALUES (?, ?)`, "target-group", "Group used as target")
 	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)`,
 		"peer1", "10.0.0.1", "key1", "hmac1")
@@ -1441,7 +1399,6 @@ func TestListGroupMembers_DBError(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Insert test data
 	database.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group")
 
 	// Close DB
@@ -1464,7 +1421,6 @@ func TestAddGroupMember_DBError(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Insert test data
 	database.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group")
 
 	// Close DB
@@ -1489,7 +1445,6 @@ func TestDeleteGroupMember_DBError(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Insert test data
 	database.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group")
 
 	// Close DB
@@ -1563,7 +1518,6 @@ func TestUpdateGroup_InvalidName(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Insert test data
 	database.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group")
 
 	tests := []struct {
@@ -1618,7 +1572,6 @@ func TestUpdateGroup_EmptyName(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Insert test data
 	database.Exec(`INSERT INTO groups (name, description) VALUES (?, ?)`, "test-group", "original")
 
 	h := NewHandler(database, nil, nil, store.NewGroupStore(database), store.NewPeerStore(database))

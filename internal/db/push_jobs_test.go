@@ -116,7 +116,6 @@ func TestCreatePushJobPeersT(t *testing.T) {
 		t.Fatalf("failed to create push job: %v", err)
 	}
 
-	// Create peer records in the peers table (required for FK constraint)
 	_, err := db.Exec(`INSERT INTO peers (hostname, ip_address, os_type, arch, has_docker, agent_key, hmac_key, is_manual, status)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		"peer-1.example.com", "192.168.1.10", "linux", "x86_64", true, "key1", "hmac1", 1, "online")
@@ -136,7 +135,6 @@ func TestCreatePushJobPeersT(t *testing.T) {
 		t.Fatalf("failed to create peer 3: %v", err)
 	}
 
-	// Create job for empty peer list test case
 	if err := CreatePushJob(ctx, db, "job-empty-peers", "admin", 0); err != nil {
 		t.Fatalf("failed to create empty peer job: %v", err)
 	}
@@ -266,7 +264,6 @@ func TestGetPushJob(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Create test job
 	if err := CreatePushJob(ctx, db, "get-job-001", "admin", 5); err != nil {
 		t.Fatalf("failed to create test job: %v", err)
 	}
@@ -330,13 +327,11 @@ func TestGetPushJobWithPeers(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Create test job with peers
 	jobID := "get-job-peers-001"
 	if err := CreatePushJob(ctx, db, jobID, "admin", 3); err != nil {
 		t.Fatalf("failed to create test job: %v", err)
 	}
 
-	// Create peers in the database (required for FK)
 	_, err := db.Exec(`INSERT INTO peers (hostname, ip_address, os_type, arch, has_docker, agent_key, hmac_key, is_manual, status)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		"node-10.local", "192.168.1.10", "linux", "x86_64", true, "key10", "hmac10", 1, "online")
@@ -399,7 +394,6 @@ func TestGetPushJobWithPeers(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// For "job-no-peers" test case, create the job first
 			if tt.jobID == "job-no-peers" {
 				if err := CreatePushJob(ctx, db, tt.jobID, "admin", 0); err != nil {
 					t.Fatalf("failed to create test job: %v", err)
@@ -431,7 +425,6 @@ func TestUpdatePushJobStatus(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Create test job
 	jobID := "update-status-001"
 	if err := CreatePushJob(ctx, db, jobID, "admin", 5); err != nil {
 		t.Fatalf("failed to create test job: %v", err)
@@ -522,13 +515,11 @@ func TestUpdatePushJobPeerStatus(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Create test job with peers
 	jobID := "update-peer-status-001"
 	if err := CreatePushJob(ctx, db, jobID, "admin", 3); err != nil {
 		t.Fatalf("failed to create test job: %v", err)
 	}
 
-	// Create peers in the database (required for FK)
 	_, err := db.Exec(`INSERT INTO peers (hostname, ip_address, os_type, arch, has_docker, agent_key, hmac_key, is_manual, status)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		"peer-100", "192.168.1.100", "linux", "x86_64", true, "key100", "hmac100", 1, "online")
@@ -742,7 +733,6 @@ func TestFinalizePushJobWithCounts(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Create job if it doesn't start with "non-existent"
 			if tt.jobID != "non-existent-job" {
 				if err := CreatePushJob(ctx, db, tt.jobID, "admin", 10); err != nil {
 					t.Fatalf("failed to create test job: %v", err)
@@ -799,7 +789,6 @@ func TestPushJobLifecycle(t *testing.T) {
 		t.Errorf("expected initial counts (0, 0), got (%d, %d)", job.Succeeded, job.Failed)
 	}
 
-	// Create peer records in the database (required for FK)
 	_, err = db.Exec(`INSERT INTO peers (hostname, ip_address, os_type, arch, has_docker, agent_key, hmac_key, is_manual, status)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		"peer-1", "192.168.1.1", "linux", "x86_64", true, "key1", "hmac1", 1, "online")

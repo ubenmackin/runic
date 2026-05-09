@@ -12,13 +12,16 @@ import (
 	"runic/internal/alerts"
 	"runic/internal/auth"
 	"runic/internal/crypto"
+	"runic/internal/store"
 	"runic/internal/testutil"
 )
 
-// muxVars is a helper to mock gorilla/mux vars
+func newTestHandler(db *sql.DB, alertSvc *alerts.Service, enc *crypto.Encryptor) *Handler {
+	return NewHandler(store.NewAlertStore(db), alertSvc, enc, store.NewUserStore(db))
+}
+
 var muxVars = testutil.MuxVars
 
-// TestGetSMTPConfig tests the GET /settings/smtp endpoint.
 func TestGetSMTPConfig(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -29,7 +32,6 @@ func TestGetSMTPConfig(t *testing.T) {
 		{
 			name: "returns config with password masked",
 			setup: func(t *testing.T, db *sql.DB) {
-				// Insert SMTP config
 				db.Exec(`INSERT INTO system_config (key, value) VALUES ('smtp_host', 'smtp.example.com')`)
 				db.Exec(`INSERT INTO system_config (key, value) VALUES ('smtp_port', '587')`)
 				db.Exec(`INSERT INTO system_config (key, value) VALUES ('smtp_username', 'testuser')`)
@@ -97,7 +99,7 @@ func TestGetSMTPConfig(t *testing.T) {
 			req := httptest.NewRequest("GET", "/api/v1/settings/smtp", nil)
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(database, nil, nil)
+			handler := newTestHandler(database, nil, nil)
 			handler.GetSMTPConfig(w, req)
 
 			if w.Code != tt.wantCode {
@@ -123,7 +125,6 @@ func TestGetSMTPConfig(t *testing.T) {
 	}
 }
 
-// TestUpdateSMTPConfig tests the PUT /settings/smtp endpoint.
 func TestUpdateSMTPConfig(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -174,7 +175,7 @@ func TestUpdateSMTPConfig(t *testing.T) {
 			w := httptest.NewRecorder()
 
 			encryptor, _ := crypto.NewEncryptor("test-passphrase-32-bytes-long!!")
-			handler := NewHandler(database, nil, encryptor)
+			handler := newTestHandler(database, nil, encryptor)
 			handler.UpdateSMTPConfig(w, req)
 
 			if w.Code != tt.wantCode {
@@ -198,7 +199,6 @@ func TestUpdateSMTPConfig(t *testing.T) {
 	}
 }
 
-// TestUpdateSMTPConfig_WithEncryption tests that passwords are encrypted when stored.
 func TestUpdateSMTPConfig_WithEncryption(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
@@ -213,7 +213,7 @@ func TestUpdateSMTPConfig_WithEncryption(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	handler := NewHandler(database, nil, encryptor)
+	handler := newTestHandler(database, nil, encryptor)
 	handler.UpdateSMTPConfig(w, req)
 
 	if w.Code != http.StatusOK {
@@ -239,7 +239,6 @@ func TestUpdateSMTPConfig_WithEncryption(t *testing.T) {
 	}
 }
 
-// TestSendTestEmail tests the POST /settings/smtp/test endpoint.
 func TestSendTestEmail(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -268,7 +267,7 @@ func TestSendTestEmail(t *testing.T) {
 			req := httptest.NewRequest("POST", "/api/v1/settings/smtp/test", nil)
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(database, nil, nil)
+			handler := newTestHandler(database, nil, nil)
 			handler.TestSMTP(w, req)
 
 			if w.Code != tt.wantCode {
@@ -288,7 +287,6 @@ func TestSendTestEmail(t *testing.T) {
 	}
 }
 
-// TestSendTestEmail_WithUserContext tests sending test email with authenticated user.
 func TestSendTestEmail_WithUserContext(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
@@ -301,7 +299,7 @@ func TestSendTestEmail_WithUserContext(t *testing.T) {
 	req = req.WithContext(ctx)
 	w := httptest.NewRecorder()
 
-	handler := NewHandler(database, nil, nil)
+	handler := newTestHandler(database, nil, nil)
 	handler.TestSMTP(w, req)
 
 	if w.Code != http.StatusInternalServerError {
@@ -309,7 +307,6 @@ func TestSendTestEmail_WithUserContext(t *testing.T) {
 	}
 }
 
-// TestGetAlertRules tests the GET /alert-rules endpoint.
 func TestGetAlertRules(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -352,7 +349,7 @@ func TestGetAlertRules(t *testing.T) {
 			req := httptest.NewRequest("GET", "/api/v1/alert-rules", nil)
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(database, nil, nil)
+			handler := newTestHandler(database, nil, nil)
 			handler.ListAlertRules(w, req)
 
 			if w.Code != tt.wantCode {
@@ -383,7 +380,6 @@ func TestGetAlertRules(t *testing.T) {
 	}
 }
 
-// TestUpdateAlertRule tests the PUT /alert-rules/{id} endpoint.
 func TestUpdateAlertRule(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -463,7 +459,7 @@ func TestUpdateAlertRule(t *testing.T) {
 			req = muxVars(req, map[string]string{"id": tt.ruleID})
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(database, nil, nil)
+			handler := newTestHandler(database, nil, nil)
 			handler.UpdateAlertRule(w, req)
 
 			if w.Code != tt.wantCode {
@@ -487,7 +483,6 @@ func TestUpdateAlertRule(t *testing.T) {
 	}
 }
 
-// TestGetAlertHistory tests the GET /alerts endpoint with pagination.
 func TestGetAlertHistory(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -566,7 +561,7 @@ func TestGetAlertHistory(t *testing.T) {
 			req := httptest.NewRequest("GET", "/api/v1/alerts"+tt.query, nil)
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(database, nil, nil)
+			handler := newTestHandler(database, nil, nil)
 			handler.ListAlerts(w, req)
 
 			if w.Code != tt.wantCode {
@@ -594,7 +589,6 @@ func TestGetAlertHistory(t *testing.T) {
 	}
 }
 
-// TestNotificationPrefsCRUD tests the notification preferences endpoints.
 func TestNotificationPrefsCRUD(t *testing.T) {
 	t.Run("get default preferences for new user", func(t *testing.T) {
 		database, cleanup := testutil.SetupTestDB(t)
@@ -608,7 +602,7 @@ func TestNotificationPrefsCRUD(t *testing.T) {
 		req = req.WithContext(ctx)
 		w := httptest.NewRecorder()
 
-		handler := NewHandler(database, nil, nil)
+		handler := newTestHandler(database, nil, nil)
 		handler.GetNotificationPrefs(w, req)
 
 		if w.Code != http.StatusOK {
@@ -642,7 +636,7 @@ func TestNotificationPrefsCRUD(t *testing.T) {
 		req = req.WithContext(ctx)
 		w := httptest.NewRecorder()
 
-		handler := NewHandler(database, nil, nil)
+		handler := newTestHandler(database, nil, nil)
 		handler.UpdateNotificationPrefs(w, req)
 
 		if w.Code != http.StatusOK {
@@ -685,7 +679,7 @@ func TestNotificationPrefsCRUD(t *testing.T) {
 		req = req.WithContext(ctx)
 		w := httptest.NewRecorder()
 
-		handler := NewHandler(database, nil, nil)
+		handler := newTestHandler(database, nil, nil)
 		handler.GetNotificationPrefs(w, req)
 
 		if w.Code != http.StatusOK {
@@ -703,7 +697,6 @@ func TestNotificationPrefsCRUD(t *testing.T) {
 	})
 }
 
-// TestNotificationPrefs_Unauthorized tests that unauthenticated requests are rejected.
 func TestNotificationPrefs_Unauthorized(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
@@ -711,7 +704,7 @@ func TestNotificationPrefs_Unauthorized(t *testing.T) {
 	req := httptest.NewRequest("GET", "/api/v1/users/me/notification-preferences", nil)
 	w := httptest.NewRecorder()
 
-	handler := NewHandler(database, nil, nil)
+	handler := newTestHandler(database, nil, nil)
 	handler.GetNotificationPrefs(w, req)
 
 	if w.Code != http.StatusUnauthorized {
@@ -729,7 +722,6 @@ func TestNotificationPrefs_Unauthorized(t *testing.T) {
 	}
 }
 
-// TestUnauthorized tests that various endpoints reject unauthenticated requests.
 func TestUnauthorized(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -777,7 +769,7 @@ func TestUnauthorized(t *testing.T) {
 			}
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(database, nil, nil)
+			handler := newTestHandler(database, nil, nil)
 
 			switch {
 			case strings.Contains(tt.path, "notification-preferences"):
@@ -797,7 +789,6 @@ func TestUnauthorized(t *testing.T) {
 	}
 }
 
-// TestNotificationPrefs_TimezoneValidation tests the timezone sync validation in UpdateNotificationPrefs.
 func TestNotificationPrefs_TimezoneValidation(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -900,7 +891,7 @@ func TestNotificationPrefs_TimezoneValidation(t *testing.T) {
 			req = req.WithContext(ctx)
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(database, nil, nil)
+			handler := newTestHandler(database, nil, nil)
 			handler.UpdateNotificationPrefs(w, req)
 
 			if w.Code != tt.wantCode {
@@ -924,7 +915,6 @@ func TestNotificationPrefs_TimezoneValidation(t *testing.T) {
 	}
 }
 
-// TestGetAlert tests the GET /alerts/{id} endpoint.
 func TestGetAlert(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -980,7 +970,7 @@ func TestGetAlert(t *testing.T) {
 			req = muxVars(req, map[string]string{"id": tt.alertID})
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(database, nil, nil)
+			handler := newTestHandler(database, nil, nil)
 			handler.GetAlert(w, req)
 
 			if w.Code != tt.wantCode {
@@ -1008,7 +998,6 @@ func TestGetAlert(t *testing.T) {
 	}
 }
 
-// TestListAlertsWithFiltering tests filtering functionality for ListAlerts.
 func TestListAlertsWithFiltering(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -1145,7 +1134,7 @@ func TestListAlertsWithFiltering(t *testing.T) {
 			req := httptest.NewRequest("GET", "/api/v1/alerts"+tt.query, nil)
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(database, nil, nil)
+			handler := newTestHandler(database, nil, nil)
 			handler.ListAlerts(w, req)
 
 			if w.Code != http.StatusOK {

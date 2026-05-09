@@ -4,7 +4,6 @@ import (
 	"testing"
 )
 
-// sharedTypeTestCases contains test cases shared by IsValidSourceType and IsValidTargetType
 // since both functions validate the same set of allowed values: "peer", "group", "special".
 var sharedTypeTestCases = []struct {
 	name  string
@@ -113,7 +112,6 @@ var sharedTypeTestCases = []struct {
 	},
 }
 
-// runTypeValidationTests executes the shared type test cases against a given validation function.
 func runTypeValidationTests(t *testing.T, fn func(string) bool, funcName string) {
 	t.Helper()
 	for _, tt := range sharedTypeTestCases {
@@ -126,17 +124,14 @@ func runTypeValidationTests(t *testing.T, fn func(string) bool, funcName string)
 	}
 }
 
-// TestIsValidSourceType tests the IsValidSourceType validation function
 func TestIsValidSourceType(t *testing.T) {
 	runTypeValidationTests(t, IsValidSourceType, "IsValidSourceType")
 }
 
-// TestIsValidTargetType tests the IsValidTargetType validation function
 func TestIsValidTargetType(t *testing.T) {
 	runTypeValidationTests(t, IsValidTargetType, "IsValidTargetType")
 }
 
-// TestIsValidDirection tests the IsValidDirection validation function
 func TestIsValidDirection(t *testing.T) {
 	tests := []struct {
 		name  string

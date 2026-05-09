@@ -11,7 +11,6 @@ import (
 	"runic/internal/testutil"
 )
 
-// insertPeer inserts a test peer and returns its ID.
 func insertPeer(t *testing.T, database *sql.DB, hostname, ip string, hasDocker bool) int {
 	t.Helper()
 	result, err := database.Exec(
@@ -24,7 +23,6 @@ func insertPeer(t *testing.T, database *sql.DB, hostname, ip string, hasDocker b
 	return int(id)
 }
 
-// insertGroup inserts a test group and returns its ID.
 func insertGroup(t *testing.T, database *sql.DB, name string) int {
 	t.Helper()
 	result, err := database.Exec("INSERT INTO groups (name) VALUES (?)", name)
@@ -35,7 +33,6 @@ func insertGroup(t *testing.T, database *sql.DB, name string) int {
 	return int(id)
 }
 
-// insertGroupMember inserts a peer into a group.
 func insertGroupMember(t *testing.T, database *sql.DB, groupID, peerID int) {
 	t.Helper()
 	_, err := database.Exec(
@@ -46,7 +43,6 @@ func insertGroupMember(t *testing.T, database *sql.DB, groupID, peerID int) {
 	}
 }
 
-// insertManualPeer inserts a manual peer with IP/CIDR and returns its ID.
 func insertManualPeer(t *testing.T, database *sql.DB, ipOrCIDR string) int {
 	t.Helper()
 	result, err := database.Exec(
@@ -59,7 +55,6 @@ func insertManualPeer(t *testing.T, database *sql.DB, ipOrCIDR string) int {
 	return int(id)
 }
 
-// insertService inserts a test service and returns its ID.
 func insertService(t *testing.T, database *sql.DB, name, ports, protocol string) int {
 	t.Helper()
 	result, err := database.Exec(
@@ -88,7 +83,6 @@ type policyOpts struct {
 	targetScope string
 }
 
-// insertPolicyOpts inserts a test policy with the given options and returns its ID.
 func insertPolicyOpts(t *testing.T, database *sql.DB, opts policyOpts) int {
 	t.Helper()
 
@@ -123,7 +117,6 @@ func insertPolicyOpts(t *testing.T, database *sql.DB, opts policyOpts) int {
 	return int(id)
 }
 
-// insertPolicy inserts a test policy and returns its ID.
 // An optional direction parameter can be provided (default is "both").
 func insertPolicy(t *testing.T, database *sql.DB, name string, groupID, serviceID, peerID int, action string, priority int, enabled bool, direction ...string) int {
 	t.Helper()
@@ -156,7 +149,7 @@ func TestSingleIPSource(t *testing.T) {
 	serviceID := insertService(t, database, "ssh", "22", "tcp")
 	insertPolicy(t, database, "allow-ssh", groupID, serviceID, peerID, "ACCEPT", 100, true)
 
-	c := NewCompiler(database)
+	c := NewTestCompiler(database)
 	output, err := c.Compile(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
@@ -181,7 +174,7 @@ func TestCIDRSource(t *testing.T) {
 	serviceID := insertService(t, database, "https", "443", "tcp")
 	insertPolicy(t, database, "allow-https", groupID, serviceID, peerID, "ACCEPT", 100, true)
 
-	c := NewCompiler(database)
+	c := NewTestCompiler(database)
 	output, err := c.Compile(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
@@ -203,7 +196,7 @@ func TestMultiport(t *testing.T) {
 	serviceID := insertService(t, database, "web", "80,443", "tcp")
 	insertPolicy(t, database, "allow-web", groupID, serviceID, peerID, "ACCEPT", 100, true)
 
-	c := NewCompiler(database)
+	c := NewTestCompiler(database)
 	output, err := c.Compile(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
@@ -225,7 +218,7 @@ func TestPortRange(t *testing.T) {
 	serviceID := insertService(t, database, "highports", "8000:9000", "tcp")
 	insertPolicy(t, database, "allow-highports", groupID, serviceID, peerID, "ACCEPT", 100, true)
 
-	c := NewCompiler(database)
+	c := NewTestCompiler(database)
 	output, err := c.Compile(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
@@ -247,7 +240,7 @@ func TestProtocolBoth(t *testing.T) {
 	serviceID := insertService(t, database, "dns", "53", "both")
 	insertPolicy(t, database, "allow-dns", groupID, serviceID, peerID, "ACCEPT", 100, true)
 
-	c := NewCompiler(database)
+	c := NewTestCompiler(database)
 	output, err := c.Compile(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
@@ -272,7 +265,7 @@ func TestICMPService(t *testing.T) {
 	serviceID := insertService(t, database, "ping", "", "icmp")
 	insertPolicy(t, database, "allow-ping", groupID, serviceID, peerID, "ACCEPT", 100, true)
 
-	c := NewCompiler(database)
+	c := NewTestCompiler(database)
 	output, err := c.Compile(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
@@ -299,7 +292,6 @@ func TestMulticastService(t *testing.T) {
 	groupID := insertGroup(t, database, "mcast-group")
 	manualPeerID := insertManualPeer(t, database, "10.0.6.0/24")
 	insertGroupMember(t, database, groupID, manualPeerID)
-	// Insert Multicast system service manually
 	result, err := database.Exec(
 		`INSERT INTO services (name, ports, protocol, description, is_system) VALUES (?, ?, ?, ?, 1)`,
 		"Multicast", "", "udp", "Multicast traffic handling (system service)")
@@ -309,7 +301,7 @@ func TestMulticastService(t *testing.T) {
 	serviceID, _ := result.LastInsertId()
 	insertPolicy(t, database, "allow-multicast", groupID, int(serviceID), peerID, "ACCEPT", 100, true)
 
-	c := NewCompiler(database)
+	c := NewTestCompiler(database)
 	output, err := c.Compile(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
@@ -333,7 +325,6 @@ func TestMulticastServiceWithDocker(t *testing.T) {
 	groupID := insertGroup(t, database, "mcast-docker-group")
 	manualPeerID := insertManualPeer(t, database, "10.0.7.0/24")
 	insertGroupMember(t, database, groupID, manualPeerID)
-	// Insert Multicast system service manually
 	result, err := database.Exec(
 		`INSERT INTO services (name, ports, protocol, description, is_system) VALUES (?, ?, ?, ?, 1)`,
 		"Multicast", "", "udp", "Multicast traffic handling (system service)")
@@ -343,7 +334,7 @@ func TestMulticastServiceWithDocker(t *testing.T) {
 	serviceID, _ := result.LastInsertId()
 	insertPolicy(t, database, "allow-multicast-docker", groupID, int(serviceID), peerID, "ACCEPT", 100, true)
 
-	c := NewCompiler(database)
+	c := NewTestCompiler(database)
 	output, err := c.Compile(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
@@ -358,7 +349,6 @@ func TestMulticastServiceWithDocker(t *testing.T) {
 	}
 }
 
-// TestBroadcastService_SubnetBroadcast tests policy with Source=Subnet Broadcast (ID 1)
 // BC-007: Verify INPUT rules use -d (destination) for broadcast traffic
 func TestBroadcastService_SubnetBroadcast(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
@@ -366,7 +356,6 @@ func TestBroadcastService_SubnetBroadcast(t *testing.T) {
 	database.Exec("PRAGMA foreign_keys=OFF")
 	peerID := insertPeer(t, database, "bcast-peer", "10.100.5.10", false)
 
-	// Insert Subnet Broadcast service manually with no_conntrack=true
 	result, err := database.Exec(
 		`INSERT INTO services (name, ports, protocol, description, is_system, no_conntrack) VALUES (?, ?, ?, ?, 1, 1)`,
 		"Subnet Broadcast", "", "udp", "Subnet broadcast traffic handling (system service)", 1)
@@ -375,7 +364,6 @@ func TestBroadcastService_SubnetBroadcast(t *testing.T) {
 	}
 	serviceID, _ := result.LastInsertId()
 
-	// Insert policy: Source=Subnet Broadcast (special ID 1), Target=peer
 	insertPolicyOpts(t, database, policyOpts{
 		name:       "allow-subnet-broadcast",
 		sourceType: "special",
@@ -388,7 +376,7 @@ func TestBroadcastService_SubnetBroadcast(t *testing.T) {
 		enabled:    true,
 	})
 
-	c := NewCompiler(database)
+	c := NewTestCompiler(database)
 	output, err := c.Compile(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
@@ -411,7 +399,6 @@ func TestBroadcastService_SubnetBroadcast(t *testing.T) {
 	}
 }
 
-// TestBroadcastService_LimitedBroadcast tests policy with Source=Limited Broadcast (ID 2)
 // BC-007: Verify INPUT rules use -d (destination) for 255.255.255.255
 func TestBroadcastService_LimitedBroadcast(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
@@ -419,7 +406,6 @@ func TestBroadcastService_LimitedBroadcast(t *testing.T) {
 	database.Exec("PRAGMA foreign_keys=OFF")
 	peerID := insertPeer(t, database, "limited-bcast-peer", "10.100.5.10", false)
 
-	// Insert Limited Broadcast service manually with no_conntrack=true
 	result, err := database.Exec(
 		`INSERT INTO services (name, ports, protocol, description, is_system, no_conntrack) VALUES (?, ?, ?, ?, 1, 1)`,
 		"Limited Broadcast", "", "udp", "Limited broadcast traffic handling (system service)", 1)
@@ -428,7 +414,6 @@ func TestBroadcastService_LimitedBroadcast(t *testing.T) {
 	}
 	serviceID, _ := result.LastInsertId()
 
-	// Insert policy: Source=Limited Broadcast (special ID 2), Target=peer
 	insertPolicyOpts(t, database, policyOpts{
 		name:       "allow-limited-broadcast",
 		sourceType: "special",
@@ -441,7 +426,7 @@ func TestBroadcastService_LimitedBroadcast(t *testing.T) {
 		enabled:    true,
 	})
 
-	c := NewCompiler(database)
+	c := NewTestCompiler(database)
 	output, err := c.Compile(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
@@ -453,7 +438,6 @@ func TestBroadcastService_LimitedBroadcast(t *testing.T) {
 	}
 }
 
-// TestBroadcastService_PeerToBroadcast tests policy with Target=Subnet Broadcast
 // BC-007: Verify correct handling when target is broadcast special
 // MD-001: Verify no self-referencing "As Target" rules are generated
 func TestBroadcastService_PeerToBroadcast(t *testing.T) {
@@ -462,7 +446,6 @@ func TestBroadcastService_PeerToBroadcast(t *testing.T) {
 	database.Exec("PRAGMA foreign_keys=OFF")
 	peerID := insertPeer(t, database, "broadcast-sender", "10.100.5.10", false)
 
-	// Insert Subnet Broadcast service
 	result, err := database.Exec(
 		`INSERT INTO services (name, ports, protocol, description, is_system, no_conntrack) VALUES (?, ?, ?, ?, 1, 1)`,
 		"Subnet Broadcast", "", "udp", "Subnet broadcast traffic handling (system service)", 1)
@@ -471,7 +454,6 @@ func TestBroadcastService_PeerToBroadcast(t *testing.T) {
 	}
 	serviceID, _ := result.LastInsertId()
 
-	// Insert policy: Source=peer, Target=Subnet Broadcast (special ID 1)
 	insertPolicyOpts(t, database, policyOpts{
 		name:       "send-to-broadcast",
 		sourceType: "peer",
@@ -484,7 +466,7 @@ func TestBroadcastService_PeerToBroadcast(t *testing.T) {
 		enabled:    true,
 	})
 
-	c := NewCompiler(database)
+	c := NewTestCompiler(database)
 	output, err := c.Compile(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
@@ -508,7 +490,6 @@ func TestBroadcastService_PeerToBroadcast(t *testing.T) {
 	}
 }
 
-// TestMdnsPolicy_PeerToMdns tests the user's exact scenario:
 // Source=peer, Target=mDNS (special), Service=mDNS (port 5353 UDP, no_conntrack)
 // MD-001: No self-referencing "As Target" rules
 // MD-002: No overly-permissive INPUT return rule with 0.0.0.0/0
@@ -518,7 +499,6 @@ func TestMdnsPolicy_PeerToMdns(t *testing.T) {
 	database.Exec("PRAGMA foreign_keys=OFF")
 	peerID := insertPeer(t, database, "ansible", "10.100.5.36", false)
 
-	// Insert mDNS service with source_ports and no_conntrack
 	result, err := database.Exec(
 		`INSERT INTO services (name, ports, source_ports, protocol, description, is_system, no_conntrack) VALUES (?, ?, ?, ?, ?, 1, 1)`,
 		"mDNS", "5353", "5353", "udp", "Multicast DNS for local network service discovery")
@@ -527,7 +507,6 @@ func TestMdnsPolicy_PeerToMdns(t *testing.T) {
 	}
 	serviceID, _ := result.LastInsertId()
 
-	// Insert policy: Source=peer (ansible), Target=mDNS (special ID 4)
 	insertPolicyOpts(t, database, policyOpts{
 		name:       "mDNS",
 		sourceType: "peer",
@@ -540,7 +519,7 @@ func TestMdnsPolicy_PeerToMdns(t *testing.T) {
 		enabled:    true,
 	})
 
-	c := NewCompiler(database)
+	c := NewTestCompiler(database)
 	output, err := c.Compile(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
@@ -578,7 +557,7 @@ func TestNoPolicies(t *testing.T) {
 	database.Exec("PRAGMA foreign_keys=OFF")
 	peerID := insertPeer(t, database, "empty1", "192.168.1.18", false)
 
-	c := NewCompiler(database)
+	c := NewTestCompiler(database)
 	output, err := c.Compile(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
@@ -588,11 +567,9 @@ func TestNoPolicies(t *testing.T) {
 	if !strings.Contains(output, ":INPUT DROP [0:0]") {
 		t.Error("expected :INPUT DROP chain policy")
 	}
-	// Check for loopback rule
 	if !strings.Contains(output, "-A INPUT -i lo -j ACCEPT") {
 		t.Errorf("expected loopback rule, output: %q", output)
 	}
-	// Check for default deny
 	if !strings.Contains(output, "-A INPUT -j DROP") {
 		t.Errorf("expected default deny rule, output: %q", output)
 	}
@@ -611,7 +588,7 @@ func TestConntrackStandardRules(t *testing.T) {
 	database.Exec("PRAGMA foreign_keys=OFF")
 	peerID := insertPeer(t, database, "conntrack1", "192.168.1.25", false)
 
-	c := NewCompiler(database)
+	c := NewTestCompiler(database)
 	output, err := c.Compile(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
@@ -645,7 +622,7 @@ func TestConntrackDockerRules(t *testing.T) {
 	database.Exec("PRAGMA foreign_keys=OFF")
 	peerID := insertPeer(t, database, "conntrack-docker", "192.168.1.26", true)
 
-	c := NewCompiler(database)
+	c := NewTestCompiler(database)
 	output, err := c.Compile(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
@@ -671,7 +648,7 @@ func TestLogDropAction(t *testing.T) {
 	serviceID := insertService(t, database, "telnet", "23", "tcp")
 	insertPolicy(t, database, "block-telnet", groupID, serviceID, peerID, "LOG_DROP", 100, true)
 
-	c := NewCompiler(database)
+	c := NewTestCompiler(database)
 	output, err := c.Compile(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
@@ -696,7 +673,7 @@ func TestDisabledPolicy(t *testing.T) {
 	serviceID := insertService(t, database, "ftp", "21", "tcp")
 	insertPolicy(t, database, "disabled-ftp", groupID, serviceID, peerID, "ACCEPT", 100, false)
 
-	c := NewCompiler(database)
+	c := NewTestCompiler(database)
 	output, err := c.Compile(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
@@ -723,11 +700,10 @@ func TestPriorityOrdering(t *testing.T) {
 	serviceHigh := insertService(t, database, "high-prio-svc", "60443", "tcp")
 	serviceLow := insertService(t, database, "low-prio-svc", "9090", "tcp")
 
-	// Insert low priority (200) first, high priority (50) second
 	insertPolicy(t, database, "low-prio", groupID, serviceLow, peerID, "ACCEPT", 200, true)
 	insertPolicy(t, database, "high-prio", groupID, serviceHigh, peerID, "ACCEPT", 50, true)
 
-	c := NewCompiler(database)
+	c := NewTestCompiler(database)
 	output, err := c.Compile(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
@@ -751,7 +727,7 @@ func TestDockerPeer(t *testing.T) {
 	database.Exec("PRAGMA foreign_keys=OFF")
 	peerID := insertPeer(t, database, "docker1", "192.168.1.22", true)
 
-	c := NewCompiler(database)
+	c := NewTestCompiler(database)
 	output, err := c.Compile(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
@@ -880,7 +856,7 @@ func TestPolicyParsingAndValidation(t *testing.T) {
 				t.Fatalf("setup failed: %v", err)
 			}
 
-			c := NewCompiler(database)
+			c := NewTestCompiler(database)
 			_, err = c.Compile(context.Background(), peerID)
 
 			if tt.wantErr {
@@ -920,7 +896,7 @@ func TestIsSourcePortDirection(t *testing.T) {
 		enabled:    true,
 	})
 
-	c := NewCompiler(database)
+	c := NewTestCompiler(database)
 	output, err := c.Compile(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
@@ -934,7 +910,6 @@ func TestIsSourcePortDirection(t *testing.T) {
 	}
 }
 
-// Test rule compilation to iptables format
 func TestRuleCompilationToIptablesFormat(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -1030,7 +1005,7 @@ func TestRuleCompilationToIptablesFormat(t *testing.T) {
 				t.Fatalf("setup failed: %v", err)
 			}
 
-			c := NewCompiler(database)
+			c := NewTestCompiler(database)
 			output, err := c.Compile(context.Background(), peerID)
 			if err != nil {
 				t.Fatalf("compile failed: %v", err)
@@ -1056,7 +1031,6 @@ func TestRuleCompilationToIptablesFormat(t *testing.T) {
 	}
 }
 
-// Test invalid policies and malformed rules
 func TestInvalidPoliciesAndMalformedRules(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -1069,7 +1043,6 @@ func TestInvalidPoliciesAndMalformedRules(t *testing.T) {
 			setup: func(t *testing.T, db *sql.DB) (int, error) {
 				peerID := insertPeer(t, db, "test1", "10.0.0.1", false)
 				groupID := insertGroup(t, db, "bad-ip")
-				// Insert a peer with invalid IP directly (bypassing validation)
 				_, err := db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, is_manual) VALUES (?, ?, ?, ?, 1)`,
 					"bad-ip-peer", "999.999.999.999", "key", "hmac")
 				if err != nil {
@@ -1091,7 +1064,6 @@ func TestInvalidPoliciesAndMalformedRules(t *testing.T) {
 			setup: func(t *testing.T, db *sql.DB) (int, error) {
 				peerID := insertPeer(t, db, "test2", "10.0.0.2", false)
 				groupID := insertGroup(t, db, "bad-cidr")
-				// Insert a peer with invalid CIDR directly
 				_, err := db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, is_manual) VALUES (?, ?, ?, ?, 1)`,
 					"bad-cidr-peer", "10.0.0.0/33", "key", "hmac")
 				if err != nil {
@@ -1120,7 +1092,7 @@ func TestInvalidPoliciesAndMalformedRules(t *testing.T) {
 				t.Fatalf("setup failed: %v", err)
 			}
 
-			c := NewCompiler(database)
+			c := NewTestCompiler(database)
 			_, err = c.Compile(context.Background(), peerID)
 
 			if tt.wantErr {
@@ -1138,7 +1110,6 @@ func TestInvalidPoliciesAndMalformedRules(t *testing.T) {
 	}
 }
 
-// Test Docker integration with DOCKER-USER chain
 func TestDockerIntegration(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -1167,7 +1138,7 @@ func TestDockerIntegration(t *testing.T) {
 			database.Exec("PRAGMA foreign_keys=OFF")
 			peerID := insertPeer(t, database, "docker-test", "10.0.0.1", tt.hasDocker)
 
-			c := NewCompiler(database)
+			c := NewTestCompiler(database)
 			output, err := c.Compile(context.Background(), peerID)
 			if err != nil {
 				t.Fatalf("compile failed: %v", err)
@@ -1189,7 +1160,6 @@ func TestDockerIntegration(t *testing.T) {
 	}
 }
 
-// Test CompileAndStore functionality
 func TestCompileAndStore(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
@@ -1201,7 +1171,7 @@ func TestCompileAndStore(t *testing.T) {
 	serviceID := insertService(t, database, "test-service", "80", "tcp")
 	insertPolicy(t, database, "test-policy", groupID, serviceID, peerID, "ACCEPT", 100, true)
 
-	c := NewCompiler(database)
+	c := NewTestCompiler(database)
 	bundle, err := c.CompileAndStore(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("CompileAndStore failed: %v", err)
@@ -1253,7 +1223,6 @@ func TestCompileAndStore(t *testing.T) {
 	}
 }
 
-// TestCompileAndStore_VersionNumberIncrement verifies that version_number increments correctly.
 func TestCompileAndStore_VersionNumberIncrement(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
@@ -1265,7 +1234,7 @@ func TestCompileAndStore_VersionNumberIncrement(t *testing.T) {
 	serviceID := insertService(t, database, "test-service", "80", "tcp")
 	insertPolicy(t, database, "test-policy", groupID, serviceID, peerID, "ACCEPT", 100, true)
 
-	c := NewCompiler(database)
+	c := NewTestCompiler(database)
 
 	// First compile
 	bundle1, err := c.CompileAndStore(context.Background(), peerID)
@@ -1276,7 +1245,6 @@ func TestCompileAndStore_VersionNumberIncrement(t *testing.T) {
 		t.Errorf("expected version_number 1, got %d", bundle1.VersionNumber)
 	}
 
-	// Add a second policy to change the compiled content (so the hash differs)
 	serviceID2 := insertService(t, database, "test-service-2", "443", "tcp")
 	insertPolicy(t, database, "test-policy-2", groupID, serviceID2, peerID, "ACCEPT", 200, true)
 
@@ -1319,17 +1287,14 @@ func TestCompileAndStore_VersionNumberIncrement(t *testing.T) {
 	}
 }
 
-// Test RecompileAffectedPeers
 func TestRecompileAffectedPeers(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 	database.Exec("PRAGMA foreign_keys=OFF")
 
-	// Create two peers
 	peer1 := insertPeer(t, database, "peer1", "10.0.0.1", false)
 	peer2 := insertPeer(t, database, "peer2", "10.0.0.2", false)
 
-	// Create groups and members
 	group1 := insertGroup(t, database, "group1")
 	manualPeer1 := insertManualPeer(t, database, "192.168.1.0/24")
 	insertGroupMember(t, database, group1, manualPeer1)
@@ -1338,13 +1303,12 @@ func TestRecompileAffectedPeers(t *testing.T) {
 	manualPeer2 := insertManualPeer(t, database, "192.168.2.0/24")
 	insertGroupMember(t, database, group2, manualPeer2)
 
-	// Create service and policies affecting both peers
 	serviceID := insertService(t, database, "test", "80", "tcp")
 	insertPolicy(t, database, "policy1", group1, serviceID, peer1, "ACCEPT", 100, true)
 	insertPolicy(t, database, "policy2", group2, serviceID, peer2, "ACCEPT", 100, true)
 
 	// Compile initial bundles
-	c := NewCompiler(database)
+	c := NewTestCompiler(database)
 	_, err := c.CompileAndStore(context.Background(), peer1)
 	if err != nil {
 		t.Fatalf("compile peer1: %v", err)
@@ -1354,12 +1318,10 @@ func TestRecompileAffectedPeers(t *testing.T) {
 		t.Fatalf("compile peer2: %v", err)
 	}
 
-	// Get initial bundle versions
 	var v1, v2 string
 	database.QueryRow("SELECT bundle_version FROM peers WHERE id = ?", peer1).Scan(&v1)
 	database.QueryRow("SELECT bundle_version FROM peers WHERE id = ?", peer2).Scan(&v2)
 
-	// Add a new member to group1 (affects peer1)
 	newManualPeer := insertManualPeer(t, database, "10.1.1.1")
 	insertGroupMember(t, database, group1, newManualPeer)
 
@@ -1384,7 +1346,6 @@ func TestRecompileAffectedPeers(t *testing.T) {
 	}
 }
 
-// Test edge cases and error scenarios
 func TestEdgeCases(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -1455,7 +1416,7 @@ func TestEdgeCases(t *testing.T) {
 				t.Fatalf("setup failed: %v", err)
 			}
 
-			c := NewCompiler(database)
+			c := NewTestCompiler(database)
 			output, err := c.Compile(context.Background(), peerID)
 
 			if tt.wantErr {
@@ -1487,7 +1448,6 @@ func TestForwardOnlyPolicy(t *testing.T) {
 	insertGroupMember(t, database, groupID, targetServer)
 	serviceID := insertService(t, database, "ssh", "22", "tcp")
 
-	// Insert policy: jump-server -> ssh-targets, forward only
 	// Source=jump-server (peer), Target=ssh-targets (group), Direction=forward
 	insertPolicyOpts(t, database, policyOpts{
 		name:       "ssh-forward-only",
@@ -1502,7 +1462,7 @@ func TestForwardOnlyPolicy(t *testing.T) {
 		direction:  "forward",
 	})
 
-	c := NewCompiler(database)
+	c := NewTestCompiler(database)
 
 	// Compile for the jump-server (source): should have OUTPUT rules
 	outputJump, err := c.Compile(context.Background(), jumpServer)
@@ -1519,7 +1479,6 @@ func TestForwardOnlyPolicy(t *testing.T) {
 	lines := strings.Split(outputJump, "\\n")
 	for _, line := range lines {
 		if strings.Contains(line, "ssh-forward-only") || strings.Contains(line, "As Target") {
-			// Check that there are no "As Target" comment blocks for this policy
 			if strings.Contains(line, "As Target") {
 				t.Errorf("forward-only policy should not generate target/ingress rules on jump-server, found: %s", line)
 			}
@@ -1549,11 +1508,10 @@ func TestBackwardOnlyPolicy(t *testing.T) {
 	insertGroupMember(t, database, groupID, clientPeer)
 	serviceID := insertService(t, database, "http", "80", "tcp")
 
-	// Insert policy: clients -> web-server, backward only
 	// This means only the target (web-server) gets INPUT rules, source does NOT get OUTPUT rules
 	insertPolicy(t, database, "http-backward-only", groupID, serviceID, webServer, "ACCEPT", 100, true, "backward")
 
-	c := NewCompiler(database)
+	c := NewTestCompiler(database)
 
 	// Compile for web-server (target): should have INPUT rules (backward = ingress allowed)
 	outputWeb, err := c.Compile(context.Background(), webServer)
@@ -1586,10 +1544,9 @@ func TestBidirectionalPolicy(t *testing.T) {
 	insertGroupMember(t, database, groupID, clientPeer)
 	serviceID := insertService(t, database, "ssh", "22", "tcp")
 
-	// Insert policy with direction='both' (default behavior)
 	insertPolicy(t, database, "ssh-bidirectional", groupID, serviceID, peerID, "ACCEPT", 100, true, "both")
 
-	c := NewCompiler(database)
+	c := NewTestCompiler(database)
 
 	// Compile for server (target): should have INPUT rules
 	outputServer, err := c.Compile(context.Background(), peerID)
@@ -1612,7 +1569,6 @@ func TestBidirectionalPolicy(t *testing.T) {
 	}
 }
 
-// Test __any_ip__ special target (ID 6)
 func TestResolver_AnyIP(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
@@ -1634,13 +1590,11 @@ func TestResolver_AnyIP(t *testing.T) {
 	}
 }
 
-// Test __all_peers__ special target (ID 7) with peers in database
 func TestResolver_AllPeers(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 	database.Exec("PRAGMA foreign_keys=OFF")
 
-	// Insert multiple peers
 	insertPeer(t, database, "peer1", "10.0.0.1", false)
 	insertPeer(t, database, "peer2", "10.0.0.2", false)
 	insertPeer(t, database, "peer3", "192.168.1.100", false)
@@ -1657,7 +1611,6 @@ func TestResolver_AllPeers(t *testing.T) {
 		t.Errorf("expected 3 peers, got %d: %v", len(result), result)
 	}
 
-	// Check that all expected IPs are present
 	expectedIPs := map[string]bool{
 		"10.0.0.1":      false,
 		"10.0.0.2":      false,
@@ -1679,7 +1632,6 @@ func TestResolver_AllPeers(t *testing.T) {
 	}
 }
 
-// Test __all_peers__ special target (ID 7) with empty peer list
 func TestResolver_AllPeers_Empty(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
@@ -1701,20 +1653,17 @@ func TestResolver_AllPeers_Empty(t *testing.T) {
 	}
 }
 
-// Test PreviewCompile with target_scope = "docker"
 func TestPreviewCompile_DockerScope(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 	database.Exec("PRAGMA foreign_keys=OFF")
 
-	// Create source and target peers
 	sourcePeer := insertPeer(t, database, "source", "10.0.0.1", false)
 	targetPeer := insertPeer(t, database, "target", "10.0.0.2", false)
 
-	// Create service
 	serviceID := insertService(t, database, "web", "80", "tcp")
 
-	c := NewCompiler(database)
+	c := NewTestCompiler(database)
 
 	// Preview with target_scope = "docker"
 	rules, err := c.PreviewCompile(context.Background(), 0, sourcePeer, "peer", "", targetPeer, "peer", "", serviceID, "both", "docker")
@@ -1748,20 +1697,17 @@ func TestPreviewCompile_DockerScope(t *testing.T) {
 	}
 }
 
-// Test PreviewCompile with target_scope = "host"
 func TestPreviewCompile_HostScope(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 	database.Exec("PRAGMA foreign_keys=OFF")
 
-	// Create source and target peers
 	sourcePeer := insertPeer(t, database, "source", "10.0.0.1", false)
 	targetPeer := insertPeer(t, database, "target", "10.0.0.2", false)
 
-	// Create service
 	serviceID := insertService(t, database, "web", "80", "tcp")
 
-	c := NewCompiler(database)
+	c := NewTestCompiler(database)
 
 	// Preview with target_scope = "host"
 	rules, err := c.PreviewCompile(context.Background(), 0, sourcePeer, "peer", "", targetPeer, "peer", "", serviceID, "both", "host")
@@ -1796,20 +1742,17 @@ func TestPreviewCompile_HostScope(t *testing.T) {
 	}
 }
 
-// Test PreviewCompile with target_scope = "both"
 func TestPreviewCompile_BothScope(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 	database.Exec("PRAGMA foreign_keys=OFF")
 
-	// Create source and target peers
 	sourcePeer := insertPeer(t, database, "source", "10.0.0.1", false)
 	targetPeer := insertPeer(t, database, "target", "10.0.0.2", false)
 
-	// Create service
 	serviceID := insertService(t, database, "web", "80", "tcp")
 
-	c := NewCompiler(database)
+	c := NewTestCompiler(database)
 
 	// Preview with target_scope = "both"
 	rules, err := c.PreviewCompile(context.Background(), 0, sourcePeer, "peer", "", targetPeer, "peer", "", serviceID, "both", "both")
@@ -1844,7 +1787,6 @@ func TestPreviewCompile_BothScope(t *testing.T) {
 	}
 }
 
-// TestIGMPService verifies that IGMP service generates fixed rules without conntrack
 func TestIGMPService(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
@@ -1853,11 +1795,10 @@ func TestIGMPService(t *testing.T) {
 	groupID := insertGroup(t, database, "igmp-group")
 	manualPeerID := insertManualPeer(t, database, "10.0.8.0/24")
 	insertGroupMember(t, database, groupID, manualPeerID)
-	// Insert IGMP service
 	serviceID := insertService(t, database, "IGMP", "", "igmp")
 	insertPolicy(t, database, "allow-igmp", groupID, serviceID, peerID, "ACCEPT", 100, true)
 
-	c := NewCompiler(database)
+	c := NewTestCompiler(database)
 	output, err := c.Compile(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
@@ -1872,7 +1813,6 @@ func TestIGMPService(t *testing.T) {
 	}
 }
 
-// TestIGMPService_NoConntrack verifies no conntrack rules are generated for IGMP
 func TestIGMPService_NoConntrack(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
@@ -1884,7 +1824,7 @@ func TestIGMPService_NoConntrack(t *testing.T) {
 	serviceID := insertService(t, database, "IGMP", "", "igmp")
 	insertPolicy(t, database, "allow-igmp-nc", groupID, serviceID, peerID, "ACCEPT", 100, true)
 
-	c := NewCompiler(database)
+	c := NewTestCompiler(database)
 	output, err := c.Compile(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
@@ -1899,7 +1839,6 @@ func TestIGMPService_NoConntrack(t *testing.T) {
 	}
 }
 
-// TestIGMPService_NoReturnRules verifies no return rules are generated for IGMP
 func TestIGMPService_NoReturnRules(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
@@ -1911,7 +1850,7 @@ func TestIGMPService_NoReturnRules(t *testing.T) {
 	serviceID := insertService(t, database, "IGMP", "", "igmp")
 	insertPolicy(t, database, "allow-igmp-nr", groupID, serviceID, peerID, "ACCEPT", 100, true)
 
-	c := NewCompiler(database)
+	c := NewTestCompiler(database)
 	output, err := c.Compile(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
@@ -1931,7 +1870,6 @@ func TestIGMPService_NoReturnRules(t *testing.T) {
 	}
 }
 
-// TestIGMPService_WithDocker verifies IGMP generates DOCKER-USER rules when Docker is enabled
 func TestIGMPService_WithDocker(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
@@ -1943,7 +1881,7 @@ func TestIGMPService_WithDocker(t *testing.T) {
 	serviceID := insertService(t, database, "IGMP", "", "igmp")
 	insertPolicy(t, database, "allow-igmp-docker", groupID, serviceID, peerID, "ACCEPT", 100, true)
 
-	c := NewCompiler(database)
+	c := NewTestCompiler(database)
 	output, err := c.Compile(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
@@ -1966,20 +1904,17 @@ func TestIGMPService_WithDocker(t *testing.T) {
 	}
 }
 
-// TestPreviewCompile_IGMP verifies PreviewCompile handles IGMP correctly
 func TestPreviewCompile_IGMP(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 	database.Exec("PRAGMA foreign_keys=OFF")
 
-	// Create source and target peers
 	sourcePeer := insertPeer(t, database, "igmp-source", "10.0.0.1", false)
 	targetPeer := insertPeer(t, database, "igmp-target", "10.0.0.2", false)
 
-	// Create IGMP service
 	serviceID := insertService(t, database, "IGMP", "", "igmp")
 
-	c := NewCompiler(database)
+	c := NewTestCompiler(database)
 
 	// Preview with IGMP service
 	rules, err := c.PreviewCompile(context.Background(), 0, sourcePeer, "peer", "", targetPeer, "peer", "", serviceID, "both", "both")
@@ -2026,7 +1961,6 @@ func TestPreviewCompile_IGMP(t *testing.T) {
 	}
 }
 
-// TestVRRPService verifies that VRRP service generates OUTPUT rule to 224.0.0.18
 func TestVRRPService(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
@@ -2035,11 +1969,10 @@ func TestVRRPService(t *testing.T) {
 	groupID := insertGroup(t, database, "vrrp-group")
 	manualPeerID := insertManualPeer(t, database, "10.0.20.0/24")
 	insertGroupMember(t, database, groupID, manualPeerID)
-	// Insert VRRP service
 	serviceID := insertService(t, database, "VRRP", "", "vrrp")
 	insertPolicy(t, database, "allow-vrrp", groupID, serviceID, peerID, "ACCEPT", 100, true)
 
-	c := NewCompiler(database)
+	c := NewTestCompiler(database)
 	output, err := c.Compile(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
@@ -2051,7 +1984,6 @@ func TestVRRPService(t *testing.T) {
 	}
 }
 
-// TestVRRPService_NoConntrack verifies no conntrack rules are generated for VRRP
 func TestVRRPService_NoConntrack(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
@@ -2063,7 +1995,7 @@ func TestVRRPService_NoConntrack(t *testing.T) {
 	serviceID := insertService(t, database, "VRRP", "", "vrrp")
 	insertPolicy(t, database, "allow-vrrp-nc", groupID, serviceID, peerID, "ACCEPT", 100, true)
 
-	c := NewCompiler(database)
+	c := NewTestCompiler(database)
 	output, err := c.Compile(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
@@ -2078,7 +2010,6 @@ func TestVRRPService_NoConntrack(t *testing.T) {
 	}
 }
 
-// TestVRRPService_NoReturnRules verifies VRRP only generates OUTPUT rules (no INPUT/return rules)
 // VRRP is special - it only generates OUTPUT to the VRRP multicast address 224.0.0.18
 func TestVRRPService_NoReturnRules(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
@@ -2091,7 +2022,7 @@ func TestVRRPService_NoReturnRules(t *testing.T) {
 	serviceID := insertService(t, database, "VRRP", "", "vrrp")
 	insertPolicy(t, database, "allow-vrrp-nr", groupID, serviceID, peerID, "ACCEPT", 100, true)
 
-	c := NewCompiler(database)
+	c := NewTestCompiler(database)
 	output, err := c.Compile(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
@@ -2118,7 +2049,6 @@ func TestVRRPService_NoReturnRules(t *testing.T) {
 	}
 }
 
-// TestVRRPService_WithDocker verifies VRRP generates DOCKER-USER rules when Docker is enabled
 func TestVRRPService_WithDocker(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
@@ -2130,7 +2060,7 @@ func TestVRRPService_WithDocker(t *testing.T) {
 	serviceID := insertService(t, database, "VRRP", "", "vrrp")
 	insertPolicy(t, database, "allow-vrrp-docker", groupID, serviceID, peerID, "ACCEPT", 100, true)
 
-	c := NewCompiler(database)
+	c := NewTestCompiler(database)
 	output, err := c.Compile(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
@@ -2147,20 +2077,17 @@ func TestVRRPService_WithDocker(t *testing.T) {
 	}
 }
 
-// TestPreviewCompile_VRRP verifies PreviewCompile handles VRRP correctly
 func TestPreviewCompile_VRRP(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 	database.Exec("PRAGMA foreign_keys=OFF")
 
-	// Create source and target peers
 	sourcePeer := insertPeer(t, database, "vrrp-source", "10.0.0.1", false)
 	targetPeer := insertPeer(t, database, "vrrp-target", "10.0.0.2", false)
 
-	// Create VRRP service
 	serviceID := insertService(t, database, "VRRP", "", "vrrp")
 
-	c := NewCompiler(database)
+	c := NewTestCompiler(database)
 
 	// Preview with VRRP service
 	rules, err := c.PreviewCompile(context.Background(), 0, sourcePeer, "peer", "", targetPeer, "peer", "", serviceID, "both", "both")
@@ -2207,7 +2134,6 @@ func TestPreviewCompile_VRRP(t *testing.T) {
 	}
 }
 
-// TestMulticastPolicy_SourceIsMulticastSpecial verifies that when Source is a multicast special target,
 // the compiler generates INPUT rules for receiving multicast traffic
 func TestMulticastPolicy_SourceIsMulticastSpecial(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
@@ -2216,7 +2142,6 @@ func TestMulticastPolicy_SourceIsMulticastSpecial(t *testing.T) {
 
 	peerID := insertPeer(t, database, "mcast-receiver", "192.168.1.100", false)
 
-	// Insert Multicast service
 	result, _ := database.Exec(
 		`INSERT INTO services (name, ports, protocol, description, is_system) VALUES (?, ?, ?, ?, 1)`,
 		"Multicast", "", "udp", "Multicast traffic handling")
@@ -2237,7 +2162,7 @@ func TestMulticastPolicy_SourceIsMulticastSpecial(t *testing.T) {
 		targetScope: "host",
 	})
 
-	c := NewCompiler(database)
+	c := NewTestCompiler(database)
 	output, err := c.Compile(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
@@ -2257,7 +2182,6 @@ func TestMulticastPolicy_SourceIsMulticastSpecial_WithService(t *testing.T) {
 
 	peerID := insertPeer(t, database, "mcast-service-receiver", "192.168.1.101", false)
 
-	// Create a service (e.g., mDNS on port 5353 UDP)
 	serviceID := insertService(t, database, "mdns", "5353", "udp")
 
 	// Policy with Source = special 4 (mDNS multicast address), Target = peer
@@ -2275,7 +2199,7 @@ func TestMulticastPolicy_SourceIsMulticastSpecial_WithService(t *testing.T) {
 		targetScope: "host",
 	})
 
-	c := NewCompiler(database)
+	c := NewTestCompiler(database)
 	output, err := c.Compile(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
@@ -2293,14 +2217,12 @@ func TestMulticastPolicy_SourceIsMulticastSpecial_WithService(t *testing.T) {
 	}
 }
 
-// TestCommentNewlineFormat verifies that policy comments have proper newlines
 // and not literal backslash-n characters (CN-003)
 func TestCommentNewlineFormat(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 	database.Exec("PRAGMA foreign_keys=OFF")
 
-	// Create a peer and policy to generate a comment
 	peerID := insertPeer(t, database, "test-peer", "10.100.5.10", false)
 	groupID := insertGroup(t, database, "test-group")
 	manualPeerID := insertManualPeer(t, database, "10.0.1.100")
@@ -2308,7 +2230,7 @@ func TestCommentNewlineFormat(t *testing.T) {
 	serviceID := insertService(t, database, "ssh", "22", "tcp")
 	insertPolicy(t, database, "test-policy", groupID, serviceID, peerID, "ACCEPT", 100, true)
 
-	c := NewCompiler(database)
+	c := NewTestCompiler(database)
 	output, err := c.Compile(context.Background(), peerID)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
@@ -2325,11 +2247,9 @@ func TestCommentNewlineFormat(t *testing.T) {
 	lines := strings.Split(output, "\n")
 	for i, line := range lines {
 		if strings.Contains(line, "# As Target (Ingress from") {
-			// Check that the line does not end with backslash-n
 			if strings.HasSuffix(line, "\\n") {
 				t.Errorf("line %d ends with literal \\n: %s", i, line)
 			}
-			// Check that the next line exists and is not empty (it should be a rule)
 			if i+1 < len(lines) && lines[i+1] == "" {
 				t.Errorf("comment at line %d is not followed by a rule - comment may have malformed newline", i)
 			}
@@ -2343,7 +2263,6 @@ func TestCommentNewlineFormat(t *testing.T) {
 	}
 }
 
-// TestIPSetOutputRuleDirection verifies that when compiling a policy where the peer is the TARGET
 // and source is a GROUP with ipset enabled:
 // - INPUT rule uses `--match-set <ipset> src` (packets come FROM the ipset members)
 // - OUTPUT rule uses `--match-set <ipset> dst` (packets go TO the ipset members)
@@ -2352,7 +2271,6 @@ func TestIPSetOutputRuleDirection(t *testing.T) {
 	defer cleanup()
 	database.Exec("PRAGMA foreign_keys=OFF")
 
-	// Create a target peer with has_ipset=1 (ipset support enabled)
 	result, err := database.Exec(
 		`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, has_ipset) VALUES (?, ?, ?, ?, 0, 1)`,
 		"target-peer", "192.168.1.10", "key-target", "test-hmac-key")
@@ -2361,20 +2279,17 @@ func TestIPSetOutputRuleDirection(t *testing.T) {
 	}
 	targetPeerID, _ := result.LastInsertId()
 
-	// Create a source group with members
 	groupID := insertGroup(t, database, "management")
 	manualPeerID1 := insertManualPeer(t, database, "10.0.1.1")
 	manualPeerID2 := insertManualPeer(t, database, "10.0.2.0/24")
 	insertGroupMember(t, database, groupID, manualPeerID1)
 	insertGroupMember(t, database, groupID, manualPeerID2)
 
-	// Create SSH service
 	serviceID := insertService(t, database, "ssh", "22", "tcp")
 
-	// Create policy: management group -> target peer (peer is TARGET, source is GROUP with ipset)
 	insertPolicy(t, database, "allow-ssh-management", groupID, serviceID, int(targetPeerID), "ACCEPT", 100, true)
 
-	c := NewCompiler(database)
+	c := NewTestCompiler(database)
 	output, err := c.Compile(context.Background(), int(targetPeerID))
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
@@ -2407,20 +2322,16 @@ func TestIPSetOutputRuleDirection(t *testing.T) {
 	}
 }
 
-// TestSourceIPOverride verifies that when a policy has source_ip set and source_type is "peer",
 // the compiler uses the source_ip instead of the peer's primary IP address.
 func TestSourceIPOverride(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 	database.Exec("PRAGMA foreign_keys=OFF")
 
-	// Create target peer (the one we compile for)
 	targetPeer := insertPeer(t, database, "target", "10.0.0.1", false)
-	// Create source peer with primary IP 10.0.0.2
 	sourcePeer := insertPeer(t, database, "source", "10.0.0.2", false)
 	serviceID := insertService(t, database, "ssh", "22", "tcp")
 
-	// Insert policy with source_ip = "10.0.0.100" (different from peer's primary IP 10.0.0.2)
 	insertPolicyOpts(t, database, policyOpts{
 		name:       "ssh-with-source-ip",
 		sourceType: "peer",
@@ -2434,7 +2345,7 @@ func TestSourceIPOverride(t *testing.T) {
 		sourceIP:   "10.0.0.100",
 	})
 
-	c := NewCompiler(database)
+	c := NewTestCompiler(database)
 	output, err := c.Compile(context.Background(), targetPeer)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
@@ -2451,20 +2362,16 @@ func TestSourceIPOverride(t *testing.T) {
 	}
 }
 
-// TestTargetIPOverride verifies that when a policy has target_ip set and target_type is "peer",
 // the compiler uses the target_ip instead of the peer's primary IP address.
 func TestTargetIPOverride(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 	database.Exec("PRAGMA foreign_keys=OFF")
 
-	// Create source peer (the one we compile for)
 	sourcePeer := insertPeer(t, database, "source", "10.0.0.1", false)
-	// Create target peer with primary IP 10.0.0.2
 	targetPeer := insertPeer(t, database, "target", "10.0.0.2", false)
 	serviceID := insertService(t, database, "ssh", "22", "tcp")
 
-	// Insert policy with target_ip = "10.0.0.200" (different from peer's primary IP 10.0.0.2)
 	insertPolicyOpts(t, database, policyOpts{
 		name:       "ssh-with-target-ip",
 		sourceType: "peer",
@@ -2478,7 +2385,7 @@ func TestTargetIPOverride(t *testing.T) {
 		targetIP:   "10.0.0.200",
 	})
 
-	c := NewCompiler(database)
+	c := NewTestCompiler(database)
 	output, err := c.Compile(context.Background(), sourcePeer)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
@@ -2495,7 +2402,6 @@ func TestTargetIPOverride(t *testing.T) {
 	}
 }
 
-// TestEmptySourceIPFallback verifies that when source_ip is empty/null and source_type is "peer",
 // the compiler falls back to the peer's primary IP address.
 func TestEmptySourceIPFallback(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
@@ -2506,7 +2412,6 @@ func TestEmptySourceIPFallback(t *testing.T) {
 	sourcePeer := insertPeer(t, database, "source", "10.0.0.2", false)
 	serviceID := insertService(t, database, "ssh", "22", "tcp")
 
-	// Insert policy WITHOUT source_ip (backward compatibility)
 	insertPolicyOpts(t, database, policyOpts{
 		name:       "ssh-no-source-ip",
 		sourceType: "peer",
@@ -2519,7 +2424,7 @@ func TestEmptySourceIPFallback(t *testing.T) {
 		enabled:    true,
 	})
 
-	c := NewCompiler(database)
+	c := NewTestCompiler(database)
 	output, err := c.Compile(context.Background(), targetPeer)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
@@ -2531,7 +2436,6 @@ func TestEmptySourceIPFallback(t *testing.T) {
 	}
 }
 
-// TestEmptyTargetIPFallback verifies that when target_ip is empty/null and target_type is "peer",
 // the compiler falls back to the peer's primary IP address.
 func TestEmptyTargetIPFallback(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
@@ -2542,7 +2446,6 @@ func TestEmptyTargetIPFallback(t *testing.T) {
 	targetPeer := insertPeer(t, database, "target", "10.0.0.2", false)
 	serviceID := insertService(t, database, "ssh", "22", "tcp")
 
-	// Insert policy WITHOUT target_ip (backward compatibility)
 	insertPolicyOpts(t, database, policyOpts{
 		name:       "ssh-no-target-ip",
 		sourceType: "peer",
@@ -2555,7 +2458,7 @@ func TestEmptyTargetIPFallback(t *testing.T) {
 		enabled:    true,
 	})
 
-	c := NewCompiler(database)
+	c := NewTestCompiler(database)
 	output, err := c.Compile(context.Background(), sourcePeer)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
@@ -2567,7 +2470,6 @@ func TestEmptyTargetIPFallback(t *testing.T) {
 	}
 }
 
-// TestSourceIPWithCIDR verifies that source_ip values containing CIDR notation
 // are passed through without adding /32.
 func TestSourceIPWithCIDR(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
@@ -2578,7 +2480,6 @@ func TestSourceIPWithCIDR(t *testing.T) {
 	sourcePeer := insertPeer(t, database, "source", "10.0.0.2", false)
 	serviceID := insertService(t, database, "ssh", "22", "tcp")
 
-	// Insert policy with source_ip containing CIDR notation
 	insertPolicyOpts(t, database, policyOpts{
 		name:       "ssh-source-cidr",
 		sourceType: "peer",
@@ -2592,7 +2493,7 @@ func TestSourceIPWithCIDR(t *testing.T) {
 		sourceIP:   "10.0.0.0/24",
 	})
 
-	c := NewCompiler(database)
+	c := NewTestCompiler(database)
 	output, err := c.Compile(context.Background(), targetPeer)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
@@ -2609,7 +2510,6 @@ func TestSourceIPWithCIDR(t *testing.T) {
 	}
 }
 
-// TestTargetIPWithCIDR verifies that target_ip values containing CIDR notation
 // are passed through without adding /32.
 func TestTargetIPWithCIDR(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
@@ -2620,7 +2520,6 @@ func TestTargetIPWithCIDR(t *testing.T) {
 	targetPeer := insertPeer(t, database, "target", "10.0.0.2", false)
 	serviceID := insertService(t, database, "ssh", "22", "tcp")
 
-	// Insert policy with target_ip containing CIDR notation
 	insertPolicyOpts(t, database, policyOpts{
 		name:       "ssh-target-cidr",
 		sourceType: "peer",
@@ -2634,7 +2533,7 @@ func TestTargetIPWithCIDR(t *testing.T) {
 		targetIP:   "10.0.1.0/24",
 	})
 
-	c := NewCompiler(database)
+	c := NewTestCompiler(database)
 	output, err := c.Compile(context.Background(), sourcePeer)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
@@ -2651,7 +2550,6 @@ func TestTargetIPWithCIDR(t *testing.T) {
 	}
 }
 
-// TestPolicyWithSourceAndTargetIP verifies that both source_ip and target_ip
 // are used simultaneously when both are set.
 func TestPolicyWithSourceAndTargetIP(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
@@ -2664,7 +2562,6 @@ func TestPolicyWithSourceAndTargetIP(t *testing.T) {
 	targetPeer := insertPeer(t, database, "target", "10.0.0.2", false)
 	serviceID := insertService(t, database, "ssh", "22", "tcp")
 
-	// Insert policy with both source_ip and target_ip
 	insertPolicyOpts(t, database, policyOpts{
 		name:       "ssh-both-ips",
 		sourceType: "peer",
@@ -2679,7 +2576,7 @@ func TestPolicyWithSourceAndTargetIP(t *testing.T) {
 		targetIP:   "10.0.0.200",
 	})
 
-	c := NewCompiler(database)
+	c := NewTestCompiler(database)
 
 	// Compile for target: should see source_ip in ingress rules
 	outputTarget, err := c.Compile(context.Background(), targetPeer)
@@ -2702,7 +2599,6 @@ func TestPolicyWithSourceAndTargetIP(t *testing.T) {
 	}
 }
 
-// TestTargetIPWithDockerScope verifies that target_ip works correctly with Docker scope.
 func TestTargetIPWithDockerScope(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
@@ -2714,7 +2610,6 @@ func TestTargetIPWithDockerScope(t *testing.T) {
 	sourcePeer := insertPeer(t, database, "source", "10.0.0.1", false)
 	serviceID := insertService(t, database, "ssh", "22", "tcp")
 
-	// Insert policy: source -> target with target_ip
 	insertPolicyOpts(t, database, policyOpts{
 		name:        "ssh-docker-target-ip",
 		sourceType:  "peer",
@@ -2729,7 +2624,7 @@ func TestTargetIPWithDockerScope(t *testing.T) {
 		targetScope: "both",
 	})
 
-	c := NewCompiler(database)
+	c := NewTestCompiler(database)
 
 	// Compile for source: should see target_ip in egress rules
 	outputSource, err := c.Compile(context.Background(), sourcePeer)
@@ -2759,7 +2654,6 @@ func TestTargetIPWithDockerScope(t *testing.T) {
 	}
 }
 
-// TestPreviewCompileWithSourceIP verifies that PreviewCompile uses source_ip
 // when provided instead of the peer's primary IP.
 func TestPreviewCompileWithSourceIP(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
@@ -2770,7 +2664,7 @@ func TestPreviewCompileWithSourceIP(t *testing.T) {
 	targetPeer := insertPeer(t, database, "target", "10.0.0.2", false)
 	serviceID := insertService(t, database, "ssh", "22", "tcp")
 
-	c := NewCompiler(database)
+	c := NewTestCompiler(database)
 
 	// Preview with source_ip = "10.0.0.100" (different from source peer's IP 10.0.0.1)
 	rules, err := c.PreviewCompile(context.Background(), 0, sourcePeer, "peer", "10.0.0.100", targetPeer, "peer", "", serviceID, "both", "host")
@@ -2797,7 +2691,6 @@ func TestPreviewCompileWithSourceIP(t *testing.T) {
 	}
 }
 
-// TestCompileImportedOutputRule verifies that the compiler generates both OUTPUT and INPUT rules
 // when a policy has direction='both' and the peer is the source (simulating an imported OUTPUT rule).
 func TestCompileImportedOutputRule(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
@@ -2815,7 +2708,7 @@ func TestCompileImportedOutputRule(t *testing.T) {
 	// Policy: source=group(peerA), target=peerB, direction='both'
 	insertPolicy(t, database, "imported-output", groupID, serviceID, peerB, "ACCEPT", 100, true, "both")
 
-	c := NewCompiler(database)
+	c := NewTestCompiler(database)
 
 	// Compile for peerB (target): should have INPUT rule from peerA and paired OUTPUT return rule
 	outputB, err := c.Compile(context.Background(), peerB)
@@ -2842,7 +2735,6 @@ func TestCompileImportedOutputRule(t *testing.T) {
 	}
 }
 
-// TestCompileImportedInputRule verifies that the compiler generates both INPUT and OUTPUT rules
 // when a policy has direction='both' and the peer is the target (simulating an imported INPUT rule).
 func TestCompileImportedInputRule(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
@@ -2860,7 +2752,7 @@ func TestCompileImportedInputRule(t *testing.T) {
 	// Policy: source=group(peerB), target=peerA, direction='both'
 	insertPolicy(t, database, "imported-input", groupID, serviceID, peerA, "ACCEPT", 100, true, "both")
 
-	c := NewCompiler(database)
+	c := NewTestCompiler(database)
 
 	// Compile for peerA (target): should have INPUT rule from peerB and paired OUTPUT return rule
 	outputA, err := c.Compile(context.Background(), peerA)
@@ -2887,7 +2779,6 @@ func TestCompileImportedInputRule(t *testing.T) {
 	}
 }
 
-// TestCompileImportedInputRule_BackwardDirection verifies that when direction='backward',
 // only the target peer gets rules (INPUT+OUTPUT pair). This simulates an imported INPUT rule
 // where the remote peer is not agent-managed.
 func TestCompileImportedInputRule_BackwardDirection(t *testing.T) {
@@ -2908,7 +2799,7 @@ func TestCompileImportedInputRule_BackwardDirection(t *testing.T) {
 	// Policy: source=group(peerB), target=peerA, direction='backward'
 	insertPolicy(t, database, "imported-input-backward", groupID, serviceID, peerA, "ACCEPT", 100, true, "backward")
 
-	c := NewCompiler(database)
+	c := NewTestCompiler(database)
 
 	// Compile for peerA (target): should have INPUT rule from peerB and paired OUTPUT return rule
 	outputA, err := c.Compile(context.Background(), peerA)
@@ -2932,7 +2823,6 @@ func TestCompileImportedInputRule_BackwardDirection(t *testing.T) {
 	}
 }
 
-// TestCompileImportedOutputRule_ForwardDirection verifies that when direction='forward',
 // only the source peer gets rules (OUTPUT+INPUT pair). This simulates an imported OUTPUT rule
 // where the remote peer is not agent-managed.
 func TestCompileImportedOutputRule_ForwardDirection(t *testing.T) {
@@ -2953,7 +2843,7 @@ func TestCompileImportedOutputRule_ForwardDirection(t *testing.T) {
 	// Policy: source=group(peerA), target=peerB, direction='forward'
 	insertPolicy(t, database, "imported-output-forward", groupID, serviceID, peerB, "ACCEPT", 100, true, "forward")
 
-	c := NewCompiler(database)
+	c := NewTestCompiler(database)
 
 	// Compile for peerA (source, via group): should have OUTPUT rule to peerB and paired INPUT return rule
 	outputA, err := c.Compile(context.Background(), peerA)
@@ -2977,7 +2867,6 @@ func TestCompileImportedOutputRule_ForwardDirection(t *testing.T) {
 	}
 }
 
-// TestPreviewCompileWithTargetIP verifies that PreviewCompile uses target_ip
 // when provided instead of the peer's primary IP.
 func TestPreviewCompileWithTargetIP(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
@@ -2988,7 +2877,7 @@ func TestPreviewCompileWithTargetIP(t *testing.T) {
 	targetPeer := insertPeer(t, database, "target", "10.0.0.2", false)
 	serviceID := insertService(t, database, "ssh", "22", "tcp")
 
-	c := NewCompiler(database)
+	c := NewTestCompiler(database)
 
 	// Preview with target_ip = "10.0.0.200" (different from target peer's IP 10.0.0.2)
 	rules, err := c.PreviewCompile(context.Background(), 0, sourcePeer, "peer", "", targetPeer, "peer", "10.0.0.200", serviceID, "both", "host")

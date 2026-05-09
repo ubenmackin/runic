@@ -1,6 +1,5 @@
 package models
 
-// AgentRegisterRequest is the payload sent during agent registration.
 type AgentRegisterRequest struct {
 	Hostname          string   `json:"hostname"`
 	IP                string   `json:"ip"`
@@ -14,7 +13,6 @@ type AgentRegisterRequest struct {
 	AllIPs            []string `json:"all_ips"`
 }
 
-// AgentRegisterResponse is the payload returned after successful agent registration.
 type AgentRegisterResponse struct {
 	HostID           string `json:"host_id"`
 	Token            string `json:"token"`
@@ -23,7 +21,6 @@ type AgentRegisterResponse struct {
 	HMACKey          string `json:"hmac_key"`
 }
 
-// HeartbeatRequest is the payload sent in agent heartbeats.
 type HeartbeatRequest struct {
 	HostID               string   `json:"host_id"`
 	BundleVersionApplied string   `json:"bundle_version_applied"`
@@ -34,7 +31,6 @@ type HeartbeatRequest struct {
 	AllIPs               []string `json:"all_ips"`
 }
 
-// BundleResponse is the response from the bundle endpoint.
 type BundleResponse struct {
 	Version string `json:"version"`
 	Rules   string `json:"rules"`

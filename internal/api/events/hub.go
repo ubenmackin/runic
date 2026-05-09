@@ -8,7 +8,7 @@ import (
 	runiclog "runic/internal/common/log"
 )
 
-// NotifyUpdateAgenter is the interface for sending update_agent SSE events.
+// A NotifyUpdateAgenter is an interface for notifying agents to self-update.
 // Defined here to avoid import cycles and DRY violations.
 type NotifyUpdateAgenter interface {
 	NotifyUpdateAgent(hostID string, controlPlaneURL string) bool
@@ -63,8 +63,6 @@ func (h *SSEHub) NotifyBundleUpdated(hostID string, version string) bool {
 	}
 }
 
-// NotifyFetchBackup sends a fetch_backup event to the agent, requesting it to
-// read and POST its pre-Runic iptables backup and ipset data.
 func (h *SSEHub) NotifyFetchBackup(hostID string) bool {
 	h.mu.RLock()
 	ch, ok := h.clients[hostID]
@@ -82,7 +80,7 @@ func (h *SSEHub) NotifyFetchBackup(hostID string) bool {
 	}
 }
 
-// NotifyUpdateAgent sends an update_agent event to the agent, instructing it
+// NotifyUpdateAgent sends an update event to the agent, instructing it
 // to self-update by running the install script with the given control plane URL.
 func (h *SSEHub) NotifyUpdateAgent(hostID string, controlPlaneURL string) bool {
 	h.mu.RLock()
@@ -101,7 +99,6 @@ func (h *SSEHub) NotifyUpdateAgent(hostID string, controlPlaneURL string) bool {
 	}
 }
 
-// RegisterPushJob registers a channel for push job progress events.
 func (h *SSEHub) RegisterPushJob(jobID string) chan string {
 	ch := make(chan string, 16) // larger buffer for progress events
 	h.mu.Lock()
@@ -110,7 +107,6 @@ func (h *SSEHub) RegisterPushJob(jobID string) chan string {
 	return ch
 }
 
-// UnregisterPushJob removes and closes the channel for a push job.
 func (h *SSEHub) UnregisterPushJob(jobID string) {
 	h.mu.Lock()
 	if ch, ok := h.pushJobClients[jobID]; ok {
@@ -120,7 +116,6 @@ func (h *SSEHub) UnregisterPushJob(jobID string) {
 	h.mu.Unlock()
 }
 
-// NotifyPushJobProgress sends a progress event to all listeners of a push job.
 func (h *SSEHub) NotifyPushJobProgress(jobID string, eventType string, payload string) {
 	h.mu.RLock()
 	ch, ok := h.pushJobClients[jobID]
@@ -134,7 +129,7 @@ func (h *SSEHub) NotifyPushJobProgress(jobID string, eventType string, payload s
 	}
 }
 
-// NotifyPendingChangeAdded notifies agents about pending configuration changes.
+// NotifyPendingChangeAdded notifies connected agents and frontends that a pending change was added.
 // The frontend can use this to immediately refresh the peers list.
 func (h *SSEHub) NotifyPendingChangeAdded(hostID string, peerID int) {
 	h.mu.RLock()
@@ -148,8 +143,7 @@ func (h *SSEHub) NotifyPendingChangeAdded(hostID string, peerID int) {
 	}
 }
 
-// RegisterFrontend registers a frontend client for receiving events.
-// clientID should be a unique identifier (e.g., user ID or random UUID).
+// RegisterFrontend registers a frontend SSE client. clientID should be a unique identifier (e.g., user ID or random UUID).
 func (h *SSEHub) RegisterFrontend(clientID string) chan string {
 	ch := make(chan string, 8) // buffer for multiple event types
 	h.mu.Lock()

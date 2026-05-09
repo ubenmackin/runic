@@ -4,7 +4,7 @@ import (
 	"time"
 )
 
-// FormatSQLiteDatetime converts a SQLite datetime string (YYYY-MM-DD HH:MM:SS)
+// FormatSQLiteDatetime converts a SQLite datetime string
 // to RFC 3339 format (YYYY-MM-DDTHH:MM:SSZ). SQLite's CURRENT_TIMESTAMP and
 // datetime('now') produce UTC times without timezone info, so the parsed time
 // is treated as UTC. If the string is empty, it returns an empty string.

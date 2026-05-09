@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"runic/internal/common"
 	"runic/internal/common/log"
 	"runic/internal/db"
 	"runic/internal/models"
@@ -27,31 +28,43 @@ const (
 	SpecialIDInternet         = 9 // __internet__
 )
 
-// isMulticastSpecialID returns true if the special target ID is a multicast group
 func isMulticastSpecialID(id int) bool {
 	return id == SpecialIDAllHosts || id == SpecialIDmDNS || id == SpecialIDIGMPv3
 }
 
-// isBroadcastSpecialID returns true if the special target ID is a broadcast address
 func isBroadcastSpecialID(id int) bool {
 	return id == SpecialIDSubnetBroadcast || id == SpecialIDLimitedBroadcast
 }
 
-// Compiler compiles firewall policies into iptables-restore payloads.
+// PeerHostnameLookup is the shared type for hostname resolution by peer ID.
+type PeerHostnameLookup = common.PeerHostnameLookup
+
+// GroupNameLookup retrieves a group name by ID. Returns ("", sql.ErrNoRows) if not found.
+type GroupNameLookup func(ctx context.Context, groupID int) (string, error)
+
 type Compiler struct {
-	db       *sql.DB
-	resolver *Resolver
+	db              db.Querier
+	beginner        db.Beginner
+	resolver        *Resolver
+	lookupHostname  PeerHostnameLookup
+	lookupGroupName GroupNameLookup
 }
 
-// NewCompiler creates a new Compiler with the given database.
-func NewCompiler(database *sql.DB) *Compiler {
+func NewCompiler(database db.Querier, hostnameLookup PeerHostnameLookup, groupNameLookup GroupNameLookup) *Compiler {
 	return &Compiler{
-		db:       database,
-		resolver: &Resolver{db: database},
+		db:              database,
+		resolver:        &Resolver{db: database},
+		lookupHostname:  hostnameLookup,
+		lookupGroupName: groupNameLookup,
 	}
 }
 
-// policyInfo holds the extracted policy fields needed for rule compilation.
+// SetBeginner sets the transaction beginner for the Compiler.
+// This must be called before CompileAndStore, which needs transactions.
+func (c *Compiler) SetBeginner(b db.Beginner) {
+	c.beginner = b
+}
+
 type policyInfo struct {
 	ID          int
 	Name        string
@@ -70,7 +83,6 @@ type policyInfo struct {
 	IsSource    bool
 }
 
-// ruleWriter writes iptables rules for a specific action to a strings.Builder.
 // The match parameter contains everything between "-A CHAIN" and "-j ACTION".
 type ruleWriter struct{ buf *strings.Builder }
 
@@ -103,7 +115,6 @@ func (rw *ruleWriter) writeAction(action, chain, match string) {
 	}
 }
 
-// normalizeToCIDR ensures an IP string is in CIDR notation (e.g., "10.0.0.1" -> "10.0.0.1/32").
 // If the string already contains a "/", it is returned as-is.
 func normalizeToCIDR(ip string) string {
 	if strings.Contains(ip, "/") {
@@ -112,14 +123,14 @@ func normalizeToCIDR(ip string) string {
 	return ip + "/32"
 }
 
-// formatEntityName returns a human-readable name for an entity (special, peer, or group).
 func (c *Compiler) formatEntityName(ctx context.Context, entityType string, entityID int) string {
 	switch entityType {
 	case "special":
 		return c.getSpecialDisplayName(entityID)
 	case "peer":
 		var hostname string
-		err := c.db.QueryRowContext(ctx, "SELECT hostname FROM peers WHERE id = ?", entityID).Scan(&hostname)
+		var err error
+		hostname, err = c.lookupHostname(ctx, entityID)
 		if errors.Is(err, sql.ErrNoRows) {
 			return fmt.Sprintf("peer %d (not found)", entityID)
 		}
@@ -129,7 +140,8 @@ func (c *Compiler) formatEntityName(ctx context.Context, entityType string, enti
 		return hostname
 	case "group":
 		var name string
-		err := c.db.QueryRowContext(ctx, "SELECT name FROM groups WHERE id = ? AND is_pending_delete = 0", entityID).Scan(&name)
+		var err error
+		name, err = c.lookupGroupName(ctx, entityID)
 		if errors.Is(err, sql.ErrNoRows) {
 			return fmt.Sprintf("group %d (not found)", entityID)
 		}
@@ -142,7 +154,6 @@ func (c *Compiler) formatEntityName(ctx context.Context, entityType string, enti
 	}
 }
 
-// getSpecialDisplayName returns the human-readable name for a special target ID.
 func (c *Compiler) getSpecialDisplayName(specialID int) string {
 	names := map[int]string{
 		SpecialIDSubnetBroadcast:  "Subnet Broadcast",
@@ -275,7 +286,9 @@ func (c *Compiler) loadApplicablePolicies(ctx context.Context, peerID int) ([]po
 		if pol.SourceType == "group" {
 			if _, exists := groupIDToName[pol.SourceID]; !exists {
 				var groupName string
-				if err := c.db.QueryRowContext(ctx, "SELECT name FROM groups WHERE id = ? AND is_pending_delete = 0", pol.SourceID).Scan(&groupName); err == nil {
+				var err error
+				groupName, err = c.lookupGroupName(ctx, pol.SourceID)
+				if err == nil {
 					groupIDToName[pol.SourceID] = groupName
 					groupOrder = append(groupOrder, pol.SourceID)
 				}
@@ -284,7 +297,9 @@ func (c *Compiler) loadApplicablePolicies(ctx context.Context, peerID int) ([]po
 		if pol.TargetType == "group" {
 			if _, exists := groupIDToName[pol.TargetID]; !exists {
 				var groupName string
-				if err := c.db.QueryRowContext(ctx, "SELECT name FROM groups WHERE id = ? AND is_pending_delete = 0", pol.TargetID).Scan(&groupName); err == nil {
+				var err error
+				groupName, err = c.lookupGroupName(ctx, pol.TargetID)
+				if err == nil {
 					groupIDToName[pol.TargetID] = groupName
 					groupOrder = append(groupOrder, pol.TargetID)
 				}
@@ -381,7 +396,6 @@ func (c *Compiler) resolveIPSetDefinitions(ctx context.Context, hasIPSet bool, g
 	return ipsets, groupIDToIpsetName, nil
 }
 
-// Compile produces a complete iptables-restore payload for the given peer.
 func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 	hostname, ipAddress, hasDocker, hasIPSet, err := c.loadPeerData(ctx, peerID)
 	if err != nil {
@@ -442,7 +456,6 @@ func (c *Compiler) generateIptablesPayload(
 		}
 	}
 
-	// Add __internet__ private ranges ipset (used for negation to allow all non-private IPs)
 	privateCIDRs := []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8"}
 	if hasIPSet {
 		buf.WriteString("# --- Ipset: Private Ranges for __internet__ exclusion ---\n")
@@ -482,7 +495,6 @@ func (c *Compiler) generateIptablesPayload(
 		writeToHost := pol.TargetScope == "host" || pol.TargetScope == "both"
 		writeToDocker := hasDocker && (pol.TargetScope == "docker" || pol.TargetScope == "both")
 
-		// Get service from pre-loaded map
 		svc, ok := services[pol.ServiceID]
 		if !ok {
 			return "", fmt.Errorf("service %d not found", pol.ServiceID)
@@ -542,7 +554,6 @@ func (c *Compiler) generateIptablesPayload(
 			// this means the host should receive broadcast traffic - GENERATE INPUT rules with -d (destination)
 			isBroadcastSource := pol.SourceType == "special" && isBroadcastSpecialID(pol.SourceID)
 
-			// Check if we should use ipset for this source
 			useIpset := hasIPSet && pol.SourceType == "group"
 			var ipsetName string
 			if useIpset {
@@ -560,7 +571,6 @@ func (c *Compiler) generateIptablesPayload(
 				if err != nil {
 					return "", fmt.Errorf("resolve broadcast source for policy %s: %w", pol.Name, err)
 				}
-				// Generate broadcast rules for each resolved CIDR
 				for _, cidr := range cidrs {
 					c.writeBroadcastRule(rw, pol.Action, pol.TargetScope, hasDocker, cidr)
 				}
@@ -613,11 +623,9 @@ func (c *Compiler) generateIptablesPayload(
 			targetName := c.formatEntityName(ctx, pol.TargetType, pol.TargetID)
 			fmt.Fprintf(&buf, "# As Source (Egress to %s)\n", targetName)
 
-			// Check if target is __internet__ special target - use ipset negation
 			isInternetTarget := pol.TargetType == "special" && pol.TargetID == SpecialIDInternet
 			useInternetIpset := hasIPSet && isInternetTarget
 
-			// Check if we should use ipset for this target
 			useIpset := hasIPSet && pol.TargetType == "group"
 			var ipsetName string
 			if useIpset {
@@ -711,7 +719,6 @@ func (c *Compiler) generateIptablesPayload(
 	return buf.String(), nil
 }
 
-// writeIGMPRules generates fixed IGMP rules for all hosts communication.
 // IGMP is connectionless multicast, so no conntrack or return rules are needed.
 func (c *Compiler) writeIGMPRules(rw *ruleWriter, targetScope string, hasDocker bool) {
 	writeToHost := targetScope == "host" || targetScope == "both"
@@ -729,7 +736,6 @@ func (c *Compiler) writeIGMPRules(rw *ruleWriter, targetScope string, hasDocker 
 	}
 }
 
-// writeVRRPRules generates fixed VRRP rules for VRRP communication.
 // VRRP is a protocol for virtual router redundancy, using multicast 224.0.0.18.
 // No conntrack or return rules are needed.
 func (c *Compiler) writeVRRPRules(rw *ruleWriter, targetScope string, hasDocker bool) {
@@ -745,7 +751,6 @@ func (c *Compiler) writeVRRPRules(rw *ruleWriter, targetScope string, hasDocker 
 	}
 }
 
-// writeMulticastRule generates multicast tracking rules using a ruleWriter.
 func (c *Compiler) writeMulticastRule(rw *ruleWriter, action string, targetScope string, hasDocker bool) {
 	writeToHost := targetScope == "host" || targetScope == "both"
 	writeToDocker := hasDocker && (targetScope == "docker" || targetScope == "both")
@@ -759,7 +764,6 @@ func (c *Compiler) writeMulticastRule(rw *ruleWriter, action string, targetScope
 	rw.newline()
 }
 
-// writeBroadcastRule generates broadcast acceptance rules using a ruleWriter.
 // Broadcast traffic is connectionless, so no conntrack or return rules are needed.
 // For broadcast, we match on destination (-d) since broadcast packets are sent TO the broadcast address.
 func (c *Compiler) writeBroadcastRule(rw *ruleWriter, action string, targetScope string, hasDocker bool, broadcastAddr string) {
@@ -775,7 +779,6 @@ func (c *Compiler) writeBroadcastRule(rw *ruleWriter, action string, targetScope
 	}
 }
 
-// writeTargetRules writes ingress (target) rules for a policy.
 // When useIpset is true, ipsetName contains the ipset to match against.
 // When useIpset is false, cidrs contains the individual CIDRs to generate rules for.
 // noConntrack when true skips conntrack marking for multicast protocols.
@@ -868,7 +871,6 @@ func (c *Compiler) writeTargetRules(
 	return rules, nil
 }
 
-// writeSourceRules writes egress (source) rules for a policy.
 // When useIpset is true, ipsetName contains the ipset to match against.
 // When useIpset is false, cidrs contains the individual CIDRs to generate rules for.
 // noConntrack when true skips conntrack marking for multicast protocols.
@@ -894,7 +896,6 @@ func (c *Compiler) writeSourceRules(
 		inputPortMatch := invertPortMatch(pc.PortMatch, pc.SrcPortMatch)
 
 		// Build conntrack part based on noConntrack flag
-		// For bidirectional policies, we need NEW,ESTABLISHED for both outbound and return traffic
 		var conntrackFull string
 		if noConntrack {
 			conntrackFull = ""
@@ -953,7 +954,6 @@ func (c *Compiler) writeSourceRules(
 					rules = append(rules, fmt.Sprintf("-A OUTPUT -d %s -p %s %s -j %s", cidr, pc.Protocol, outputPortMatch, pol.Action))
 				}
 			}
-			// Write INPUT rules from returnCIDRs (either specific CIDRs or 0.0.0.0/0 for multicast)
 			for _, returnCidr := range returnCIDRs {
 				if pol.Action == "ACCEPT" {
 					rules = append(rules, fmt.Sprintf("-A INPUT -s %s -p %s %s %s -j ACCEPT", returnCidr, pc.Protocol, inputPortMatch, conntrackFull))
@@ -964,7 +964,6 @@ func (c *Compiler) writeSourceRules(
 	return rules, nil
 }
 
-// writeInternetRules generates rules for the __internet__ special target.
 // Uses ipset negation to match all IPs except private ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8).
 func (c *Compiler) writeInternetRules(
 	ctx context.Context,
@@ -1016,8 +1015,7 @@ func (c *Compiler) writeInternetRules(
 	return rules, nil
 }
 
-// PreviewCompile generates a preview of iptables rules for a policy without storing them.
-// Unlike Compile(), this is policy-centric: it resolves both source and target entities
+// PreviewCompile generates iptables rules for a single policy. Unlike Compile(), this is policy-centric: it resolves both source and target entities
 // and generates rules based on direction, showing the complete picture across all hosts.
 func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sourceType string, sourceIP string, targetID int, targetType string, targetIP string, serviceID int, direction string, targetScope string) ([]string, error) {
 	// Load a peer IP for special target resolution (uses peerID as reference)
@@ -1100,7 +1098,6 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 		}
 	}
 
-	// Check if target is __internet__ special target
 	isInternetTarget := targetType == "special" && targetID == SpecialIDInternet
 
 	// Build policy info for helper functions
@@ -1173,7 +1170,6 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 				if serviceName == "Multicast" {
 					rules = append(rules, "-A INPUT -m pkttype --pkt-type multicast -j ACCEPT")
 				} else {
-					// For non-Multicast services with multicast special source, generate INPUT rules
 					writeRules, err := c.writeTargetRules(ctx, pol, portClauses, false, "", sourceCIDRs, ipAddress, true, false, noConntrack)
 					if err != nil {
 						return nil, err
@@ -1252,7 +1248,6 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 					if serviceName == "Multicast" {
 						rules = append(rules, "-A DOCKER-USER -m pkttype --pkt-type multicast -j ACCEPT")
 					} else {
-						// For non-Multicast services with multicast special source, generate DOCKER-USER INPUT rules
 						writeRules, err := c.writeTargetRules(ctx, pol, portClauses, false, "", sourceCIDRs, ipAddress, false, true, noConntrack)
 						if err != nil {
 							return nil, err
@@ -1279,14 +1274,12 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 	return rules, nil
 }
 
-// CompileAndStore compiles the rules for a peer, signs them, and stores the bundle.
 func (c *Compiler) CompileAndStore(ctx context.Context, peerID int) (models.RuleBundleRow, error) {
 	content, err := c.Compile(ctx, peerID)
 	if err != nil {
 		return models.RuleBundleRow{}, fmt.Errorf("compile: %w", err)
 	}
 
-	// Fetch the peer's HMAC key from the database
 	var hmacKey string
 	err = c.db.QueryRowContext(ctx, "SELECT hmac_key FROM peers WHERE id = ?", peerID).Scan(&hmacKey)
 	if err != nil {
@@ -1313,7 +1306,7 @@ func (c *Compiler) CompileAndStore(ctx context.Context, peerID int) (models.Rule
 		HMAC:          signature,
 	}
 
-	bundle, err := db.SaveBundle(ctx, c.db, params)
+	bundle, err := db.SaveBundle(ctx, c.beginner, params)
 	if err != nil {
 		return models.RuleBundleRow{}, fmt.Errorf("save bundle: %w", err)
 	}
@@ -1321,7 +1314,6 @@ func (c *Compiler) CompileAndStore(ctx context.Context, peerID int) (models.Rule
 	return bundle, nil
 }
 
-// RecompileAffectedPeers finds all peers affected by a group change and recompiles their bundles.
 func (c *Compiler) RecompileAffectedPeers(ctx context.Context, groupID int) error {
 	rows, err := c.db.QueryContext(ctx,
 		`SELECT DISTINCT id FROM policies WHERE is_pending_delete = 0 AND ((source_type = 'group' AND source_id = ?) OR (target_type = 'group' AND target_id = ?)) AND enabled = 1`, groupID, groupID)
@@ -1366,8 +1358,7 @@ func (c *Compiler) RecompileAffectedPeers(ctx context.Context, groupID int) erro
 	return nil
 }
 
-// GetAffectedPeersByPolicy returns all peer IDs that need recompilation if a policy changes.
-// It finds any peer present in either the source or target of the policy.
+// GetAffectedPeersByPolicy returns peer IDs affected by a policy. It finds any peer present in either the source or target of the policy.
 func (c *Compiler) GetAffectedPeersByPolicy(ctx context.Context, policyID int) ([]int, error) {
 	var srcType, tgtType string
 	var srcID, tgtID int
@@ -1448,19 +1439,15 @@ func (c *Compiler) GetAffectedPeersByPolicy(ctx context.Context, policyID int) (
 	return peerList, nil
 }
 
-// invertPortMatch swaps destination and source port matches for egress rules.
-// For egress traffic, the destination ports become source ports and vice versa.
 // Example: dstMatch="--dport 80", srcMatch="--sport 5353" -> "--sport 80 --dport 5353"
 func invertPortMatch(dstMatch, srcMatch string) string {
 	var result string
 
-	// Convert destination port match to source port match
 	if dstMatch != "" {
 		result = strings.ReplaceAll(dstMatch, "--dport", "--sport")
 		result = strings.ReplaceAll(result, "--dports", "--sports")
 	}
 
-	// Convert source port match to destination port match and append
 	if srcMatch != "" {
 		srcToDst := strings.ReplaceAll(srcMatch, "--sport", "--dport")
 		srcToDst = strings.ReplaceAll(srcToDst, "--sports", "--dports")

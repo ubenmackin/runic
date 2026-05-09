@@ -12,11 +12,9 @@ import (
 	"runic/internal/crypto"
 )
 
-// columnExists checks if a column exists in a table using pragma_table_info.
 // Note: table name is validated by allowedTables safelist in the caller (addColumnIfMissing).
 // We use fmt.Sprintf here because SQLite doesn't support parameterized identifiers.
 func columnExists(ctx context.Context, database *sql.DB, table, column string) (bool, error) {
-	// Validate table name against safelist to prevent SQL injection
 	if !allowedTables[table] {
 		return false, fmt.Errorf("table %q not in migration safelist", table)
 	}
@@ -31,9 +29,7 @@ func columnExists(ctx context.Context, database *sql.DB, table, column string) (
 	return exists, nil
 }
 
-// addColumnIfMissing adds a column to a table if it doesn't already exist.
 func addColumnIfMissing(ctx context.Context, database *sql.DB, table, column, definition string) error {
-	// Validate table name against safelist to prevent SQL injection
 	if !allowedTables[table] {
 		return fmt.Errorf("table %q not in migration safelist", table)
 	}
@@ -56,7 +52,6 @@ func createSchema(ctx context.Context, database *sql.DB) error {
 	return err
 }
 
-// migrateSchema adds missing columns for schema upgrades on existing databases.
 func migrateSchema(ctx context.Context, database *sql.DB) error {
 	// Fresh database check: if no tables exist, skip all migrations
 	var tableCount int
@@ -69,7 +64,6 @@ func migrateSchema(ctx context.Context, database *sql.DB) error {
 		return nil
 	}
 
-	// Check if users table exists (fresh install check)
 	var usersTableExists bool
 	err = database.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='users'").Scan(&usersTableExists)
 	if err != nil {
@@ -241,7 +235,6 @@ func migrateSchema(ctx context.Context, database *sql.DB) error {
 		log.Info("Migration: successfully renamed servers to peers")
 	}
 
-	// Check peers table columns for missing columns (handles both fresh installs and migrated DBs)
 	if err := addColumnIfMissing(ctx, database, "peers", "is_manual", "BOOLEAN NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
@@ -278,7 +271,6 @@ func migrateSchema(ctx context.Context, database *sql.DB) error {
 	}
 
 	// Migration: group_members table restructure (peer-based)
-	// Check if group_members has the old schema (value/type columns instead of peer_id)
 	var hasOldGroupMembersSchema bool
 	groupMembersRows, err := database.QueryContext(ctx, "PRAGMA table_info(group_members)")
 	if err == nil {
@@ -765,7 +757,6 @@ func migrateSchema(ctx context.Context, database *sql.DB) error {
 			}
 		}()
 
-		// Create new table with version_number
 		if _, err := tx.ExecContext(ctx, `CREATE TABLE rule_bundles_v2 (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			peer_id INTEGER NOT NULL,
@@ -926,7 +917,6 @@ func migrateSchema(ctx context.Context, database *sql.DB) error {
 	}
 	if hasEncryptionKey == 0 {
 		log.Info("Migration: generating and storing encryption_key")
-		// Generate a secure random 32-byte key (hex-encoded for storage)
 		encryptionKey, err := common.GenerateHMACKey()
 		if err != nil {
 			return fmt.Errorf("failed to generate encryption_key: %w", err)
@@ -948,7 +938,6 @@ func migrateSchema(ctx context.Context, database *sql.DB) error {
 	if secretsEncrypted == 0 {
 		log.Info("Migration: encrypting existing secrets (jwt_secret, agent_jwt_secret)")
 
-		// Get the encryption key
 		var encryptionKey string
 		err = database.QueryRowContext(ctx, "SELECT value FROM system_config WHERE key = 'encryption_key'").Scan(&encryptionKey)
 		if err != nil {
@@ -959,7 +948,6 @@ func migrateSchema(ctx context.Context, database *sql.DB) error {
 		secretsToEncrypt := []string{"jwt_secret", "agent_jwt_secret"}
 
 		for _, secretKey := range secretsToEncrypt {
-			// Check if the secret exists
 			var secretValue string
 			err = database.QueryRowContext(ctx, "SELECT value FROM system_config WHERE key = ?", secretKey).Scan(&secretValue)
 			if errors.Is(err, sql.ErrNoRows) {
@@ -970,7 +958,6 @@ func migrateSchema(ctx context.Context, database *sql.DB) error {
 				return fmt.Errorf("failed to get sensitive configuration: %w", err)
 			}
 
-			// Check if already encrypted by trying to decrypt
 			// Encrypted values are base64-encoded and have a specific format (salt || nonce || ciphertext)
 			// We attempt to decrypt to verify. If it succeeds, it's already encrypted.
 			_, decryptErr := crypto.Decrypt(secretValue, encryptionKey)
@@ -986,7 +973,6 @@ func migrateSchema(ctx context.Context, database *sql.DB) error {
 				return fmt.Errorf("failed to encrypt sensitive configuration: %w", err)
 			}
 
-			// Update the secret with encrypted value
 			_, err = database.ExecContext(ctx, "UPDATE system_config SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = ?", encryptedValue, secretKey)
 			if err != nil {
 				return fmt.Errorf("failed to update sensitive configuration: %w", err)
@@ -1130,7 +1116,6 @@ INSERT INTO alert_rules (name, alert_type, enabled, threshold_value, threshold_w
 		log.Info("Migration: created user_notification_preferences table")
 	}
 
-	// Add missing columns to user_notification_preferences if they don't exist
 	if hasUserNotificationPrefs {
 		if err := addColumnIfMissing(ctx, database, "user_notification_preferences", "quiet_hours_enabled", "BOOLEAN NOT NULL DEFAULT 0"); err != nil {
 			return err

@@ -23,28 +23,30 @@ type GroupStore interface {
 	ListGroups(ctx context.Context) ([]store.GroupWithCounts, error)
 	CreateGroup(ctx context.Context, name, description string) (int64, error)
 	GetGroup(ctx context.Context, id int) (models.GroupRow, error)
-	GetGroupTx(ctx context.Context, q db.Querier, id int) (models.GroupRow, error)
-	UpdateGroup(ctx context.Context, q db.Querier, id int, name, description string) error
+	GetGroupSQLTx(ctx context.Context, tx *sql.Tx, id int) (models.GroupRow, error)
+	UpdateGroup(ctx context.Context, id int, name, description string) error
+	UpdateGroupTx(ctx context.Context, tx *sql.Tx, id int, name, description string) error
 	GetGroupSystemStatus(ctx context.Context, id int) (bool, error)
 	SoftDeleteGroup(ctx context.Context, id int) error
 	ListGroupMembers(ctx context.Context, id int) ([]store.PeerInGroup, error)
 	AddGroupMember(ctx context.Context, groupID, peerID int) (int64, error)
 	DeleteGroupMember(ctx context.Context, groupID, peerID int) error
-	Snapshot(ctx context.Context, q db.Querier, action string, groupID int) error
+	Snapshot(ctx context.Context, action string, groupID int) error
+	SnapshotTx(ctx context.Context, tx *sql.Tx, action string, groupID int) error
+	CheckDeleteConstraints(ctx context.Context, groupID int) error
+	QueueGroupChange(ctx context.Context, changeWorker *common.ChangeWorker, compiler *engine.Compiler, groupID int, changeAction string, summary string)
 }
 
-// Handler provides HTTP handlers for group operations with dependency injection
 type Handler struct {
-	DB           db.DB
+	beginner     db.Beginner
 	Compiler     *engine.Compiler
 	ChangeWorker *common.ChangeWorker
 	Store        GroupStore
 	PeerStore    *store.PeerStore
 }
 
-// NewHandler creates a new groups handler with the given dependencies
-func NewHandler(db db.DB, compiler *engine.Compiler, changeWorker *common.ChangeWorker, groupStore GroupStore, peerStore *store.PeerStore) *Handler {
-	return &Handler{DB: db, Compiler: compiler, ChangeWorker: changeWorker, Store: groupStore, PeerStore: peerStore}
+func NewHandler(beginner db.Beginner, compiler *engine.Compiler, changeWorker *common.ChangeWorker, groupStore GroupStore, peerStore *store.PeerStore) *Handler {
+	return &Handler{beginner: beginner, Compiler: compiler, ChangeWorker: changeWorker, Store: groupStore, PeerStore: peerStore}
 }
 
 // --- Groups ---
@@ -87,7 +89,7 @@ func (h *Handler) CreateGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.Store.Snapshot(r.Context(), h.DB, "create", int(id)); err != nil {
+	if err := h.Store.Snapshot(r.Context(), "create", int(id)); err != nil {
 		log.ErrorContext(r.Context(), "failed to create snapshot", "error", err)
 	}
 
@@ -101,7 +103,7 @@ func (h *Handler) CreateGroup(w http.ResponseWriter, r *http.Request) {
 			summary = "Group created"
 		}
 
-		h.ChangeWorker.QueueGroupChange(r.Context(), h.DB, h.Compiler, int(id), "create", summary)
+		h.ChangeWorker.QueueGroupChange(r.Context(), h.Compiler, int(id), "create", summary)
 	}
 
 	common.RespondJSON(w, http.StatusCreated, map[string]int64{"id": id})
@@ -152,8 +154,8 @@ func (h *Handler) UpdateGroup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	hasChanges := false
-	err = store.RunInTx(r.Context(), h.DB, func(tx *sql.Tx) error {
-		currentGroup, err := h.Store.GetGroupTx(r.Context(), tx, id)
+	err = store.RunInTx(r.Context(), h.beginner, func(tx *sql.Tx) error {
+		currentGroup, err := h.Store.GetGroupSQLTx(r.Context(), tx, id)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return common.NewHTTPError(http.StatusNotFound, "group not found")
@@ -166,12 +168,12 @@ func (h *Handler) UpdateGroup(w http.ResponseWriter, r *http.Request) {
 		hasChanges = nameChanged || descChanged
 
 		if hasChanges {
-			if err := h.Store.Snapshot(r.Context(), tx, "update", id); err != nil {
+			if err := h.Store.SnapshotTx(r.Context(), tx, "update", id); err != nil {
 				log.ErrorContext(r.Context(), "failed to create snapshot", "error", err)
 			}
 		}
 
-		if err := h.Store.UpdateGroup(r.Context(), tx, id, input.Name, input.Description); err != nil {
+		if err := h.Store.UpdateGroupTx(r.Context(), tx, id, input.Name, input.Description); err != nil {
 			return fmt.Errorf("failed to update group: %w", err)
 		}
 		return nil
@@ -196,7 +198,7 @@ func (h *Handler) UpdateGroup(w http.ResponseWriter, r *http.Request) {
 		} else {
 			summary = "Group updated"
 		}
-		h.ChangeWorker.QueueGroupChange(r.Context(), h.DB, h.Compiler, id, "update", summary)
+		h.ChangeWorker.QueueGroupChange(r.Context(), h.Compiler, id, "update", summary)
 	}
 
 	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "updated"})
@@ -225,7 +227,7 @@ func (h *Handler) DeleteGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = common.CheckGroupDeleteConstraints(r.Context(), h.DB, id)
+	err = h.Store.CheckDeleteConstraints(r.Context(), id)
 	if err != nil {
 		var constraintErr *common.DeleteConstraintError
 		if errors.As(err, &constraintErr) {
@@ -236,7 +238,7 @@ func (h *Handler) DeleteGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.Store.Snapshot(r.Context(), h.DB, "delete", id); err != nil {
+	if err := h.Store.Snapshot(r.Context(), "delete", id); err != nil {
 		log.ErrorContext(r.Context(), "failed to create snapshot", "error", err)
 	}
 
@@ -248,7 +250,7 @@ func (h *Handler) DeleteGroup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.ChangeWorker != nil {
-		h.ChangeWorker.QueueGroupChange(r.Context(), h.DB, h.Compiler, id, "delete", "Group deleted")
+		h.ChangeWorker.QueueGroupChange(r.Context(), h.Compiler, id, "delete", "Group deleted")
 	}
 
 	w.WriteHeader(http.StatusNoContent)
@@ -290,7 +292,7 @@ func (h *Handler) AddGroupMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.Store.Snapshot(r.Context(), h.DB, "update", groupID); err != nil {
+	if err := h.Store.Snapshot(r.Context(), "update", groupID); err != nil {
 		log.ErrorContext(r.Context(), "failed to create snapshot", "error", err)
 	}
 
@@ -312,7 +314,7 @@ func (h *Handler) AddGroupMember(w http.ResponseWriter, r *http.Request) {
 			summary = "Peer added to group"
 		}
 
-		h.ChangeWorker.QueueGroupChange(r.Context(), h.DB, h.Compiler, groupID, "update", summary)
+		h.ChangeWorker.QueueGroupChange(r.Context(), h.Compiler, groupID, "update", summary)
 	}
 
 	common.RespondJSON(w, http.StatusCreated, map[string]int64{"id": id})
@@ -331,7 +333,7 @@ func (h *Handler) DeleteGroupMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.Store.Snapshot(r.Context(), h.DB, "update", groupID); err != nil {
+	if err := h.Store.Snapshot(r.Context(), "update", groupID); err != nil {
 		log.ErrorContext(r.Context(), "failed to create snapshot", "error", err)
 	}
 
@@ -353,13 +355,12 @@ func (h *Handler) DeleteGroupMember(w http.ResponseWriter, r *http.Request) {
 			summary = "Peer removed from group"
 		}
 
-		h.ChangeWorker.QueueGroupChange(r.Context(), h.DB, h.Compiler, groupID, "update", summary)
+		h.ChangeWorker.QueueGroupChange(r.Context(), h.Compiler, groupID, "update", summary)
 	}
 
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// RegisterRoutes adds group routes to the given router.
 func (h *Handler) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("", h.ListGroups).Methods("GET")
 	r.HandleFunc("", h.CreateGroup).Methods("POST")

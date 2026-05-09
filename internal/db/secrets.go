@@ -2,64 +2,16 @@ package db
 
 import (
 	"context"
-	"crypto/rand"
 	"database/sql"
-	"encoding/hex"
-	"errors"
 	"fmt"
 	"os"
 	"strings"
 )
 
-// ErrDatabaseNotInitialized is returned when a database operation is attempted with a nil database.
-var ErrDatabaseNotInitialized = errors.New("database not initialized")
-
-// GetSecret retrieves a secret from the system_config table.
-func GetSecret(ctx context.Context, database Querier, key string) (string, error) {
-	if database == nil {
-		return "", ErrDatabaseNotInitialized
-	}
-	var value string
-	err := database.QueryRowContext(ctx, "SELECT value FROM system_config WHERE key = ?", key).Scan(&value)
-	if err != nil {
-		return "", err
-	}
-	return value, nil
-}
-
-// SetSecret stores or updates a secret in the system_config table.
-func SetSecret(ctx context.Context, database Querier, key, value string) error {
-	if database == nil {
-		return ErrDatabaseNotInitialized
-	}
-	_, err := database.ExecContext(ctx,
-		`INSERT INTO system_config (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
-		ON CONFLICT(key) DO UPDATE SET value = ?, updated_at = CURRENT_TIMESTAMP`,
-		key, value, value,
-	)
-	return err
-}
-
-// DeleteSecret removes a secret from the system_config table.
-func DeleteSecret(ctx context.Context, database Querier, key string) error {
-	if database == nil {
-		return ErrDatabaseNotInitialized
-	}
-	_, err := database.ExecContext(ctx, "DELETE FROM system_config WHERE key = ?", key)
-	return err
-}
-
-// GenerateSecureKey generates a 32-byte random hex key.
-func GenerateSecureKey() (string, error) {
-	bytes := make([]byte, 32)
-	if _, err := rand.Read(bytes); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(bytes), nil
-}
-
-// migrateEnvToDB reads /opt/runic/.env and migrates secrets to system_config.
-func migrateEnvToDB(database *sql.DB) error {
+// migrateEnvToDB reads secrets from the RUNIC_ENV_PATH file and stores them in the database.
+// It only uses Querier interface methods (ExecContext), but is currently called with *sql.DB
+// from initialization code. TODO: update callers to pass Querier implementation.
+func migrateEnvToDB(database Querier) error {
 	envPath := os.Getenv("RUNIC_ENV_PATH")
 	if envPath == "" {
 		envPath = "/opt/runic/.env"
@@ -105,10 +57,10 @@ func migrateEnvToDB(database *sql.DB) error {
 	return nil
 }
 
-// addDBConstraints adds CHECK constraints and UNIQUE constraints via table recreation.
 // SQLite doesn't support ALTER TABLE ADD CONSTRAINT, so we recreate tables.
+// TODO: Replace with a proper migration framework (e.g., golang-migrate) that handles DDL.
+// This function requires *sql.DB for DDL operations (CREATE TABLE, DROP TABLE, ALTER TABLE).
 func addDBConstraints(database *sql.DB) error {
-	// Check if constraints already applied by checking for a marker
 	var constraintApplied bool
 	err := database.QueryRow("SELECT COUNT(*) > 0 FROM system_config WHERE key = 'constraints_applied'").Scan(&constraintApplied)
 	if err != nil {

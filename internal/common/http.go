@@ -9,13 +9,11 @@ import (
 	"net/http"
 )
 
-// HTTPClient is the interface for HTTP clients.
 type HTTPClient interface {
 	Do(req *http.Request) (*http.Response, error)
 }
 
-// DoJSONRequest sends a JSON request to the given URL with the provided body and token.
-// It sets Content-Type, User-Agent, and optional Authorization headers.
+// DoJSONRequest sends an HTTP request with a JSON body. It sets Content-Type, User-Agent, and optional Authorization headers.
 func DoJSONRequest(ctx context.Context, client HTTPClient, method, url string, body interface{}, token, userAgent string) (*http.Response, error) {
 	var bodyReader *bytes.Reader
 	if body != nil {

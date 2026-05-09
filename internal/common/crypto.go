@@ -5,8 +5,7 @@ import (
 	"encoding/hex"
 )
 
-// GenerateHMACKey generates a cryptographically secure random HMAC key.
-// Returns a 64-character hex-encoded string (32 bytes).
+// GenerateHMACKey generates a random HMAC key. Returns a 64-character hex-encoded string (32 bytes).
 func GenerateHMACKey() (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {

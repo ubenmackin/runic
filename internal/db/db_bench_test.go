@@ -10,12 +10,10 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-// BenchmarkGetPeer benchmarks fetching a single peer by ID.
 func BenchmarkGetPeer(b *testing.B) {
 	database, cleanup := setupBenchmarkDB(b)
 	defer cleanup()
 
-	// Insert test peer (with all required NOT NULL fields)
 	database.Exec(`INSERT INTO peers (hostname, ip_address, os_type, arch, has_docker, agent_key, hmac_key, agent_token, agent_version, is_manual, bundle_version, status)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		"test-peer", "192.168.1.100", "linux", "x86_64", true, "key123", "hmac123", "token123", "v1.0", 1, "v1", "online")
@@ -31,12 +29,10 @@ func BenchmarkGetPeer(b *testing.B) {
 	}
 }
 
-// BenchmarkListPeers benchmarks listing all peers.
 func BenchmarkListPeers(b *testing.B) {
 	database, cleanup := setupBenchmarkDB(b)
 	defer cleanup()
 
-	// Insert 100 peers (with unique hostnames and keys)
 	for i := 1; i <= 100; i++ {
 		database.Exec(`INSERT INTO peers (hostname, ip_address, os_type, arch, has_docker, agent_key, hmac_key, agent_token, agent_version, is_manual, bundle_version, status)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -62,15 +58,12 @@ func BenchmarkListPeers(b *testing.B) {
 	}
 }
 
-// BenchmarkGetPolicy benchmarks fetching a single policy by ID.
 func BenchmarkGetPolicy(b *testing.B) {
 	database, cleanup := setupBenchmarkDB(b)
 	defer cleanup()
 
-	// Insert test service first
 	database.Exec("INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)", "http", "80,443", "tcp")
 
-	// Insert test policy
 	database.Exec(`INSERT INTO policies (name, source_type, source_id, target_type, target_id, service_id, action, priority, enabled, direction, target_scope)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		"test-policy", "peer", 1, "peer", 2, 1, "ACCEPT", 1, 1, "both", "both")
@@ -89,27 +82,22 @@ func BenchmarkGetPolicy(b *testing.B) {
 	}
 }
 
-// BenchmarkListEnabledPolicies benchmarks listing policies for a peer.
 func BenchmarkListEnabledPolicies(b *testing.B) {
 	database, cleanup := setupBenchmarkDB(b)
 	defer cleanup()
 
-	// Insert 10 peers (with required NOT NULL fields)
 	for i := 1; i <= 10; i++ {
 		database.Exec("INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)", fmt.Sprintf("peer-%d", i), fmt.Sprintf("10.0.0.%d", i), fmt.Sprintf("key-%d", i), fmt.Sprintf("hmac-%d", i))
 	}
 
-	// Insert a group with 5 peers
 	database.Exec("INSERT INTO groups (name) VALUES (?)", "test-group")
 	for i := 1; i <= 5; i++ {
 		database.Exec("INSERT INTO group_members (group_id, peer_id) VALUES (?, ?)", 1, i)
 	}
 
-	// Insert services
 	database.Exec("INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)", "http", "80", "tcp")
 	database.Exec("INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)", "ssh", "22", "tcp")
 
-	// Insert 20 policies: direct peer targets and group targets
 	policies := []struct {
 		targetType string
 		targetID   int
@@ -160,15 +148,12 @@ func BenchmarkListEnabledPolicies(b *testing.B) {
 	}
 }
 
-// BenchmarkListGroupMembers benchmarks listing group members.
 func BenchmarkListGroupMembers(b *testing.B) {
 	database, cleanup := setupBenchmarkDB(b)
 	defer cleanup()
 
-	// Insert test group
 	database.Exec("INSERT INTO groups (name) VALUES (?)", "test-group")
 
-	// Insert 50 peers and add to group
 	for i := 1; i <= 50; i++ {
 		database.Exec("INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)", fmt.Sprintf("peer-%d", i), fmt.Sprintf("10.0.0.%d", i), fmt.Sprintf("key-%d", i), fmt.Sprintf("hmac-%d", i))
 		database.Exec("INSERT INTO group_members (group_id, peer_id) VALUES (?, ?)", 1, i)
@@ -185,12 +170,10 @@ func BenchmarkListGroupMembers(b *testing.B) {
 	}
 }
 
-// BenchmarkGetService benchmarks fetching a service by ID.
 func BenchmarkGetService(b *testing.B) {
 	database, cleanup := setupBenchmarkDB(b)
 	defer cleanup()
 
-	// Insert test service
 	database.Exec("INSERT INTO services (name, ports, source_ports, protocol) VALUES (?, ?, ?, ?)", "http", "80,443", "1024:65535", "tcp")
 
 	ctx := context.Background()
@@ -204,15 +187,12 @@ func BenchmarkGetService(b *testing.B) {
 	}
 }
 
-// BenchmarkResolveGroup benchmarks resolving a group to its peer IPs.
 func BenchmarkResolveGroup(b *testing.B) {
 	database, cleanup := setupBenchmarkDB(b)
 	defer cleanup()
 
-	// Insert test group
 	database.Exec("INSERT INTO groups (name) VALUES (?)", "test-group")
 
-	// Insert 50 peers and add to group
 	for i := 1; i <= 50; i++ {
 		database.Exec("INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)", fmt.Sprintf("peer-%d", i), fmt.Sprintf("10.0.0.%d", i), fmt.Sprintf("key-%d", i), fmt.Sprintf("hmac-%d", i))
 		database.Exec("INSERT INTO group_members (group_id, peer_id) VALUES (?, ?)", 1, i)
@@ -246,15 +226,12 @@ func BenchmarkResolveGroup(b *testing.B) {
 	}
 }
 
-// BenchmarkGetBundle benchmarks fetching the latest bundle for a peer.
 func BenchmarkGetBundle(b *testing.B) {
 	database, cleanup := setupBenchmarkDB(b)
 	defer cleanup()
 
-	// Insert test peer (with required NOT NULL fields)
 	database.Exec("INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)", "test-peer", "192.168.1.100", "key1", "test-key")
 
-	// Insert multiple bundles with unique versions (version is unique per peer)
 	for i := 1; i <= 10; i++ {
 		database.Exec("INSERT INTO rule_bundles (peer_id, version, version_number, rules_content, hmac) VALUES (?, ?, ?, ?, ?)",
 			1, fmt.Sprintf("v1.%d", i), i, "*filter\n:INPUT DROP\nCOMMIT\n", fmt.Sprintf("sig-%d", i))
@@ -274,7 +251,6 @@ func BenchmarkGetBundle(b *testing.B) {
 	}
 }
 
-// setupBenchmarkDB creates a temporary test database for benchmarking.
 func setupBenchmarkDB(b *testing.B) (*sql.DB, func()) {
 	f, err := os.CreateTemp("", "runic-bench-*.db")
 	if err != nil {

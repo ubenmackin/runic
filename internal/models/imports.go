@@ -1,6 +1,5 @@
-package imports
+package models
 
-// ImportSession represents the API response for an import session.
 type ImportSession struct {
 	ID              int64  `json:"id"`
 	PeerID          int64  `json:"peer_id"`
@@ -13,7 +12,6 @@ type ImportSession struct {
 	UpdatedAt       string `json:"updated_at"`
 }
 
-// ImportRule represents a parsed rule from an import session.
 type ImportRule struct {
 	ID               int64   `json:"id"`
 	SessionID        int64   `json:"session_id"`
@@ -44,7 +42,6 @@ type ImportRule struct {
 	TargetIP         *string `json:"target_ip,omitempty"`
 }
 
-// ImportGroupMapping represents a group mapping in an import session.
 type ImportGroupMapping struct {
 	ID                int64    `json:"id"`
 	SessionID         int64    `json:"session_id"`
@@ -57,7 +54,6 @@ type ImportGroupMapping struct {
 	MemberPeerNames   []string `json:"member_peer_names,omitempty"`
 }
 
-// ImportPeerMapping represents a peer mapping in an import session.
 type ImportPeerMapping struct {
 	ID               int64  `json:"id"`
 	SessionID        int64  `json:"session_id"`
@@ -68,7 +64,6 @@ type ImportPeerMapping struct {
 	ExistingPeerName string `json:"existing_peer_name,omitempty"`
 }
 
-// ImportServiceMapping represents a service mapping in an import session.
 type ImportServiceMapping struct {
 	ID                  int64  `json:"id"`
 	SessionID           int64  `json:"session_id"`
@@ -78,4 +73,12 @@ type ImportServiceMapping struct {
 	Status              string `json:"status"`
 	ExistingServiceID   *int64 `json:"existing_service_id,omitempty"`
 	ExistingServiceName string `json:"existing_service_name,omitempty"`
+}
+
+type SkippedRule struct {
+	ID         int64  `json:"id"`
+	Chain      string `json:"chain"`
+	RuleOrder  int    `json:"rule_order"`
+	RawRule    string `json:"raw_rule"`
+	SkipReason string `json:"skip_reason"`
 }

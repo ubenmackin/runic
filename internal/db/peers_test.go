@@ -17,7 +17,6 @@ func TestGetPeer(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Insert test peer with all fields
 	_, err := db.Exec(`INSERT INTO peers (hostname, ip_address, os_type, arch, has_docker, agent_key, hmac_key, agent_token, agent_version, is_manual, bundle_version, status)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		"test-peer", "192.168.1.100", "linux", "x86_64", true, "key123", "hmac123", "token123", "v1.0", 1, "v1", "online")
@@ -127,7 +126,6 @@ func TestSaveBundle(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Insert test peer
 	_, err := db.Exec(`INSERT INTO peers (hostname, ip_address, os_type, arch, has_docker, agent_key, hmac_key, is_manual, status)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		"test-peer", "192.168.1.100", "linux", "x86_64", true, "key123", "hmac123", 1, "online")

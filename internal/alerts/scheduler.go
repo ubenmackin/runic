@@ -3,23 +3,20 @@ package alerts
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log/slog"
 	"sync"
 	"time"
 
 	"runic/internal/common/log"
-
-	"runic/internal/db"
+	"runic/internal/models"
+	"runic/internal/store"
 )
 
-// DefaultCheckInterval is the default interval for scheduled alert checks.
 const DefaultCheckInterval = 1 * time.Minute
 
-// Scheduler handles periodic alert rule checks.
 type Scheduler struct {
-	database   *db.Database
+	alertStore *store.AlertStore
 	evaluator  *ConditionEvaluator
 	processor  *AlertProcessor
 	interval   time.Duration
@@ -30,22 +27,20 @@ type Scheduler struct {
 	runningMux sync.RWMutex
 }
 
-// NewScheduler creates a new alert scheduler.
-// The scheduler will use the provided evaluator to check rule conditions
+// NewScheduler creates a new alert scheduler. The scheduler will use the provided evaluator to check rule conditions
 // and the processor to handle triggered alerts.
-func NewScheduler(database *db.Database, evaluator *ConditionEvaluator, processor *AlertProcessor) *Scheduler {
+func NewScheduler(alertStore *store.AlertStore, evaluator *ConditionEvaluator, processor *AlertProcessor) *Scheduler {
 	return &Scheduler{
-		database:  database,
-		evaluator: evaluator,
-		processor: processor,
-		interval:  DefaultCheckInterval,
-		logger:    log.L().With("component", "alert_scheduler"),
-		stopCh:    make(chan struct{}),
+		alertStore: alertStore,
+		evaluator:  evaluator,
+		processor:  processor,
+		interval:   DefaultCheckInterval,
+		logger:     log.L().With("component", "alert_scheduler"),
+		stopCh:     make(chan struct{}),
 	}
 }
 
-// WithInterval sets a custom check interval for the scheduler.
-// Returns the scheduler for method chaining.
+// WithInterval sets the check interval. Returns the scheduler for method chaining.
 func (s *Scheduler) WithInterval(interval time.Duration) *Scheduler {
 	if interval > 0 {
 		s.interval = interval
@@ -53,8 +48,7 @@ func (s *Scheduler) WithInterval(interval time.Duration) *Scheduler {
 	return s
 }
 
-// Start begins the scheduled alert checks.
-// It returns immediately; the scheduler runs in a background goroutine.
+// Start starts the alert scheduler. It returns immediately; the scheduler runs in a background goroutine.
 // The scheduler runs an immediate check on startup, then continues at the configured interval.
 func (s *Scheduler) Start(ctx context.Context) {
 	s.runningMux.Lock()
@@ -89,30 +83,25 @@ func (s *Scheduler) Start(ctx context.Context) {
 	}()
 }
 
-// setRunning safely sets the running state.
 func (s *Scheduler) setRunning(running bool) {
 	s.runningMux.Lock()
 	defer s.runningMux.Unlock()
 	s.running = running
 }
 
-// IsRunning returns whether the scheduler is currently running.
 func (s *Scheduler) IsRunning() bool {
 	s.runningMux.RLock()
 	defer s.runningMux.RUnlock()
 	return s.running
 }
 
-// Stop stops the scheduler.
-// It is safe to call Stop multiple times.
+// Stop stops the alert scheduler. It is safe to call Stop multiple times.
 func (s *Scheduler) Stop() {
 	s.stopOnce.Do(func() {
 		close(s.stopCh)
 	})
 }
 
-// CheckAllRules evaluates all enabled alert rules.
-// For each rule, it checks if the condition is met and triggers alerts accordingly.
 func (s *Scheduler) CheckAllRules(ctx context.Context) {
 	rules, err := s.getEnabledRules(ctx)
 	if err != nil {
@@ -145,10 +134,9 @@ func (s *Scheduler) CheckAllRules(ctx context.Context) {
 	}
 }
 
-// CheckRule evaluates a specific alert rule by ID.
-// Returns an error if the rule is not found or if evaluation fails.
+// CheckRule checks a specific alert rule by ID. Returns an error if the rule is not found or if evaluation fails.
 func (s *Scheduler) CheckRule(ctx context.Context, ruleID uint64) error {
-	rule, err := GetAlertRule(ctx, s.database, ruleID)
+	rule, err := s.alertStore.GetAlertRule(ctx, ruleID)
 	if err != nil {
 		return fmt.Errorf("failed to get alert rule %d: %w", ruleID, err)
 	}
@@ -161,8 +149,7 @@ func (s *Scheduler) CheckRule(ctx context.Context, ruleID uint64) error {
 	return s.checkRule(ctx, rule)
 }
 
-// checkRule evaluates a single rule and processes alerts if triggered.
-func (s *Scheduler) checkRule(ctx context.Context, rule *AlertRule) error {
+func (s *Scheduler) checkRule(ctx context.Context, rule *models.AlertRule) error {
 	s.logger.Debug("evaluating rule",
 		"rule_id", rule.ID,
 		"rule_name", rule.Name,
@@ -202,63 +189,37 @@ func (s *Scheduler) checkRule(ctx context.Context, rule *AlertRule) error {
 	return nil
 }
 
-// getEnabledRules loads all enabled alert rules from the database.
-func (s *Scheduler) getEnabledRules(ctx context.Context) ([]AlertRule, error) {
-	rows, err := s.database.QueryContext(ctx,
-		`SELECT id, name, alert_type, enabled, threshold_value, threshold_window_minutes, peer_id, throttle_minutes, created_at, updated_at
-		FROM alert_rules WHERE enabled = 1 ORDER BY created_at DESC`)
+func (s *Scheduler) getEnabledRules(ctx context.Context) ([]models.AlertRule, error) {
+	// Get all rules and filter by enabled
+	allRules, err := s.alertStore.ListAlertRules(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query enabled rules: %w", err)
-	}
-	defer func() {
-		if cerr := rows.Close(); cerr != nil {
-			log.ErrorContext(ctx, "Failed to close rows", "error", cerr)
-		}
-	}()
-
-	var rules []AlertRule
-	for rows.Next() {
-		var rule AlertRule
-		var peerID sql.NullInt64
-		if err := rows.Scan(
-			&rule.ID, &rule.Name, &rule.AlertType, &rule.Enabled,
-			&rule.ThresholdValue, &rule.ThresholdWindowMinutes,
-			&peerID, &rule.ThrottleMinutes,
-			&rule.CreatedAt, &rule.UpdatedAt); err != nil {
-			return nil, fmt.Errorf("failed to scan rule: %w", err)
-		}
-		if peerID.Valid {
-			peerIDInt := int(peerID.Int64)
-			rule.PeerID = &peerIDInt
-		}
-		rules = append(rules, rule)
+		return nil, fmt.Errorf("failed to list alert rules: %w", err)
 	}
 
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating rules: %w", err)
+	var enabledRules []models.AlertRule
+	for i := range allRules {
+		rule := &allRules[i]
+		if rule.Enabled {
+			enabledRules = append(enabledRules, *rule)
+		}
 	}
 
-	return rules, nil
+	return enabledRules, nil
 }
 
-// isThrottled checks if an alert for this rule was recently sent.
 // Returns true if the alert should be throttled (skipped).
-func (s *Scheduler) isThrottled(ctx context.Context, rule *AlertRule) bool {
+func (s *Scheduler) isThrottled(ctx context.Context, rule *models.AlertRule) bool {
 	if rule.ThrottleMinutes <= 0 {
 		return false
 	}
 
 	cutoff := time.Now().Add(-rule.GetThrottleDuration())
 
-	var count int
-	err := s.database.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM alert_history
-		WHERE rule_id = ? AND created_at > ? AND status IN (?, ?)`,
-		rule.ID, cutoff, AlertStatusSent, AlertStatusPending,
-	).Scan(&count)
+	throttled, err := s.alertStore.IsAlertThrottled(ctx, rule.ID, cutoff)
 	if err != nil {
+		s.logger.Warn("failed to check throttled status", "error", err)
 		return false
 	}
 
-	return count > 0
+	return throttled
 }

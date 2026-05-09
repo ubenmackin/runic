@@ -12,7 +12,6 @@ import (
 	"runic/internal/testutil"
 )
 
-// muxVars is a helper to mock gorilla/mux vars
 var muxVars = testutil.MuxVars
 
 // =============================================================================
@@ -48,7 +47,6 @@ func TestListServices_Multiple(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Add user services
 	database.Exec(`INSERT INTO services (name, ports, source_ports, protocol, description, is_system) VALUES (?, ?, ?, ?, ?, 0)`,
 		"http", "80,443", "", "tcp", "HTTP and HTTPS")
 	database.Exec(`INSERT INTO services (name, ports, source_ports, protocol, description, is_system) VALUES (?, ?, ?, ?, ?, 0)`,
@@ -293,7 +291,6 @@ func TestGetService_Found(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Create a user service
 	result, err := database.Exec(`INSERT INTO services (name, ports, source_ports, protocol, description, is_system) VALUES (?, ?, ?, ?, ?, 0)`,
 		"test-service", "8080", "", "tcp", "Test service")
 	if err != nil {
@@ -364,7 +361,6 @@ func TestUpdateService_SystemService_Forbidden(t *testing.T) {
 	database.Exec(`INSERT INTO services (name, ports, protocol, is_system) VALUES (?, ?, ?, 1)`,
 		"ICMP", "", "icmp")
 
-	// Get the service ID
 	var serviceID int
 	err := database.QueryRow("SELECT id FROM services WHERE name = 'ICMP'").Scan(&serviceID)
 	if err != nil {
@@ -393,7 +389,6 @@ func TestUpdateService_InvalidJSON(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Create a user service
 	result, _ := database.Exec(`INSERT INTO services (name, ports, protocol, is_system) VALUES (?, ?, ?, 0)`,
 		"user-service", "8080", "tcp")
 	serviceID, _ := result.LastInsertId()
@@ -415,7 +410,6 @@ func TestUpdateService_InvalidProtocol(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Create a user service
 	result, _ := database.Exec(`INSERT INTO services (name, ports, protocol, is_system) VALUES (?, ?, ?, 0)`,
 		"user-service", "8080", "tcp")
 	serviceID, _ := result.LastInsertId()
@@ -442,7 +436,6 @@ func TestUpdateService_Valid(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Create a user service
 	result, _ := database.Exec(`INSERT INTO services (name, ports, source_ports, protocol, description, is_system) VALUES (?, ?, ?, ?, ?, 0)`,
 		"old-name", "8080", "", "tcp", "old description")
 	serviceID, _ := result.LastInsertId()
@@ -530,7 +523,6 @@ func TestDeleteService_SystemService_Forbidden(t *testing.T) {
 	database.Exec(`INSERT INTO services (name, ports, protocol, is_system) VALUES (?, ?, ?, 1)`,
 		"ICMP", "", "icmp")
 
-	// Get the service ID
 	var serviceID int
 	err := database.QueryRow("SELECT id FROM services WHERE name = 'ICMP'").Scan(&serviceID)
 	if err != nil {
@@ -557,7 +549,6 @@ func TestDeleteService_Valid(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Create a user service
 	result, _ := database.Exec(`INSERT INTO services (name, ports, protocol, is_system) VALUES (?, ?, ?, 0)`, "to-delete", "8080", "tcp")
 	serviceID, _ := result.LastInsertId()
 
@@ -587,21 +578,18 @@ func TestDeleteService_InUseByPolicy(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Create a user service
 	serviceResult, err := database.Exec(`INSERT INTO services (name, ports, protocol, is_system) VALUES (?, ?, ?, 0)`, "web-service", "80,443", "tcp")
 	if err != nil {
 		t.Fatalf("failed to create service: %v", err)
 	}
 	serviceID, _ := serviceResult.LastInsertId()
 
-	// Create a source group for policies
 	groupResult, err := database.Exec(`INSERT INTO groups (name, description, is_system) VALUES (?, ?, 0)`, "web-servers", "Web server group")
 	if err != nil {
 		t.Fatalf("failed to create group: %v", err)
 	}
 	groupID, _ := groupResult.LastInsertId()
 
-	// Create multiple policies that use this service
 	policyResult1, err := database.Exec(`
 		INSERT INTO policies (name, description, source_id, source_type, service_id, target_id, target_type, action, enabled)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -633,7 +621,6 @@ func TestDeleteService_InUseByPolicy(t *testing.T) {
 		t.Errorf("expected status %d, got %d: %s", http.StatusConflict, w.Code, w.Body.String())
 	}
 
-	// Parse response to verify it contains the list of policies
 	var resp map[string]interface{}
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("failed to parse response: %v", err)
@@ -680,7 +667,6 @@ func TestDeleteService_InUseByPolicy(t *testing.T) {
 		policyMap[id] = name
 	}
 
-	// Check that both policies are present
 	if _, ok := policyMap[int(policyID1)]; !ok {
 		t.Errorf("policy %d not found in response", policyID1)
 	}
@@ -761,7 +747,6 @@ func TestGetServiceByPort_Found_SinglePort(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Create a user service with single port
 	database.Exec(`INSERT INTO services (name, ports, protocol, description, is_system) VALUES (?, ?, ?, ?, 0)`,
 		"ssh", "22", "tcp", "SSH service")
 
@@ -789,7 +774,6 @@ func TestGetServiceByPort_Found_MultiplePorts(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Create a user service with multiple ports
 	database.Exec(`INSERT INTO services (name, ports, protocol, description, is_system) VALUES (?, ?, ?, ?, 0)`,
 		"http", "80,443,8080", "tcp", "HTTP service")
 
@@ -847,7 +831,6 @@ func TestGetServiceByPort_WithProtocolFilter(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Create services with same port but different protocols
 	database.Exec(`INSERT INTO services (name, ports, protocol, is_system) VALUES (?, ?, ?, 0)`,
 		"dns-tcp", "53", "tcp")
 	database.Exec(`INSERT INTO services (name, ports, protocol, is_system) VALUES (?, ?, ?, 0)`,
@@ -896,7 +879,6 @@ func TestGetServiceByPort_IgnoresSystemService(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Create a system service with port 22
 	database.Exec(`INSERT INTO services (name, ports, protocol, is_system) VALUES (?, ?, ?, 1)`,
 		"ssh-system", "22", "tcp")
 
@@ -920,7 +902,6 @@ func TestGetServiceByPort_ICMPProtocolLookup(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Insert ICMP system service
 	database.Exec(`INSERT INTO services (name, ports, source_ports, protocol, description, is_system) VALUES (?, ?, ?, ?, ?, 1)`,
 		"ICMP", "", "", "icmp", "Internet Control Message Protocol")
 
@@ -954,7 +935,6 @@ func TestGetServiceByPort_IGMPProtocolLookup(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Insert IGMP system service
 	database.Exec(`INSERT INTO services (name, ports, source_ports, protocol, description, is_system) VALUES (?, ?, ?, ?, ?, 1)`,
 		"IGMP", "", "", "igmp", "Internet Group Management Protocol")
 
@@ -1007,7 +987,6 @@ func TestGetServiceByPort_ProtocolOnlyBothMatch(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Insert a system service with protocol "both"
 	database.Exec(`INSERT INTO services (name, ports, source_ports, protocol, description, is_system) VALUES (?, ?, ?, ?, ?, 1)`,
 		"dns-both", "53", "", "both", "DNS both TCP and UDP")
 
@@ -1079,7 +1058,6 @@ func TestGetServiceByPort_EmptyPortWithProtocol(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Insert ICMP system service
 	database.Exec(`INSERT INTO services (name, ports, source_ports, protocol, description, is_system) VALUES (?, ?, ?, ?, ?, 1)`,
 		"ICMP", "", "", "icmp", "Internet Control Message Protocol")
 
@@ -1111,7 +1089,6 @@ func TestGetServiceByPort_IgnoresPendingDelete(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Create a service pending deletion
 	database.Exec(`INSERT INTO services (name, ports, protocol, is_system, is_pending_delete) VALUES (?, ?, ?, 0, 1)`,
 		"ssh-deleted", "22", "tcp")
 
@@ -1135,28 +1112,24 @@ func TestDeleteService_NotInUse_Success(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	// Create a user service
 	serviceResult, err := database.Exec(`INSERT INTO services (name, ports, protocol, is_system) VALUES (?, ?, ?, 0)`, "standalone-service", "9000", "tcp")
 	if err != nil {
 		t.Fatalf("failed to create service: %v", err)
 	}
 	serviceID, _ := serviceResult.LastInsertId()
 
-	// Create a different service that IS in use (to verify we're not blocking all deletions)
 	usedServiceResult, err := database.Exec(`INSERT INTO services (name, ports, protocol, is_system) VALUES (?, ?, ?, 0)`, "used-service", "8080", "tcp")
 	if err != nil {
 		t.Fatalf("failed to create used service: %v", err)
 	}
 	usedServiceID, _ := usedServiceResult.LastInsertId()
 
-	// Create a source group
 	groupResult, err := database.Exec(`INSERT INTO groups (name, description, is_system) VALUES (?, ?, 0)`, "test-group", "Test group")
 	if err != nil {
 		t.Fatalf("failed to create group: %v", err)
 	}
 	groupID, _ := groupResult.LastInsertId()
 
-	// Create a policy that uses the usedService (not the standalone-service)
 	_, err = database.Exec(`
 		INSERT INTO policies (name, description, source_id, source_type, service_id, target_id, target_type, action, enabled)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -1165,7 +1138,6 @@ func TestDeleteService_NotInUse_Success(t *testing.T) {
 		t.Fatalf("failed to create policy: %v", err)
 	}
 
-	// Delete the standalone service (not in use)
 	h := NewHandler(store.NewServiceStore(database), nil, nil)
 	req := httptest.NewRequest("DELETE", "/api/v1/services/"+strconv.Itoa(int(serviceID)), nil)
 	req = muxVars(req, map[string]string{"id": strconv.Itoa(int(serviceID))})

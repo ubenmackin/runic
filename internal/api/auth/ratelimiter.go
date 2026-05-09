@@ -10,7 +10,6 @@ import (
 	"runic/internal/common/log"
 )
 
-// rateLimitEntry tracks failed login attempts and lockout state for a user.
 type rateLimitEntry struct {
 	failedAttempts int
 	lockedUntil    time.Time
@@ -21,7 +20,6 @@ const (
 	lockoutDuration   = 15 * time.Minute
 )
 
-// ErrAccountLocked is returned when a login is attempted on a locked account.
 var ErrAccountLocked = errors.New("account locked, try again later")
 
 var (
@@ -50,16 +48,14 @@ func init() {
 	}()
 }
 
-// StopCleanup stops the periodic rate limit cleanup goroutine.
-// Call during graceful shutdown.
+// StopCleanup stops the cleanup goroutine. Call during graceful shutdown.
 func StopCleanup() {
 	stopCleanupOnce.Do(func() {
 		close(stopCleanup)
 	})
 }
 
-// CheckAndRecordFailure records a failed login attempt and returns an error
-// if the account is currently locked out.
+// CheckAndRecordFailure checks and records a failed login attempt, returning an error if the account is currently locked out.
 func CheckAndRecordFailure(username string, remoteAddr string) error {
 	rateLimitMutex.Lock()
 	defer rateLimitMutex.Unlock()
@@ -85,7 +81,6 @@ func CheckAndRecordFailure(username string, remoteAddr string) error {
 	return nil
 }
 
-// RecordSuccess clears the rate limit entry for a user on successful login.
 func RecordSuccess(username string) {
 	rateLimitMutex.Lock()
 	defer rateLimitMutex.Unlock()
@@ -93,7 +88,6 @@ func RecordSuccess(username string) {
 	delete(rateLimitStore, username)
 }
 
-// CleanupStaleEntries removes rate limit entries whose lockout has expired.
 func CleanupStaleEntries() {
 	rateLimitMutex.Lock()
 	defer rateLimitMutex.Unlock()
@@ -108,8 +102,7 @@ func CleanupStaleEntries() {
 	}
 }
 
-// ResetRateLimitStore clears the global rate limit store.
-// This is intended for testing to ensure test isolation.
+// ResetRateLimitStore resets the rate limit store. This is intended for testing to ensure test isolation.
 func ResetRateLimitStore() {
 	rateLimitMutex.Lock()
 	defer rateLimitMutex.Unlock()

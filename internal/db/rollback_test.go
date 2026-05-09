@@ -16,7 +16,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// setupTestDB creates an in-memory database for testing
 func setupTestDB(t *testing.T) (*sql.DB, func()) {
 	t.Helper()
 
@@ -74,7 +73,6 @@ func setupTestDB(t *testing.T) (*sql.DB, func()) {
 	return database, cleanup
 }
 
-// TestRollbackEntitySnapshot_Create tests rollback of a create action
 func TestRollbackEntitySnapshot_Create(t *testing.T) {
 	database, cleanup := setupTestDB(t)
 	defer cleanup()
@@ -89,7 +87,6 @@ func TestRollbackEntitySnapshot_Create(t *testing.T) {
 	groupID, err := result.LastInsertId()
 	require.NoError(t, err, "Failed to get group ID")
 
-	// Create snapshot with action="create"
 	err = CreateSnapshot(ctx, database, "group", int(groupID), "create", "")
 	require.NoError(t, err, "Failed to create snapshot")
 
@@ -118,7 +115,6 @@ func TestRollbackEntitySnapshot_Create(t *testing.T) {
 	assert.Equal(t, 0, count, "Snapshot should be deleted after rollback")
 }
 
-// TestRollbackEntitySnapshot_Update tests rollback of an update action
 func TestRollbackEntitySnapshot_Update(t *testing.T) {
 	database, cleanup := setupTestDB(t)
 	defer cleanup()
@@ -133,7 +129,6 @@ func TestRollbackEntitySnapshot_Update(t *testing.T) {
 	groupID, err := result.LastInsertId()
 	require.NoError(t, err)
 
-	// Create snapshot with action="update" and original data
 	originalGroup := models.GroupRow{
 		ID:          int(groupID),
 		Name:        "original-name",
@@ -149,7 +144,6 @@ func TestRollbackEntitySnapshot_Update(t *testing.T) {
 	err = CreateSnapshot(ctx, database, "group", int(groupID), "update", string(snapshotJSON))
 	require.NoError(t, err)
 
-	// Update the group to new state
 	_, err = database.ExecContext(ctx,
 		"UPDATE groups SET name = ?, description = ? WHERE id = ?",
 		"updated-name", "updated description", groupID)
@@ -183,7 +177,6 @@ func TestRollbackEntitySnapshot_Update(t *testing.T) {
 	assert.Equal(t, 0, count, "Snapshot should be deleted")
 }
 
-// TestRollbackEntitySnapshot_Delete tests rollback of a delete action (soft-delete)
 func TestRollbackEntitySnapshot_Delete(t *testing.T) {
 	database, cleanup := setupTestDB(t)
 	defer cleanup()
@@ -203,7 +196,6 @@ func TestRollbackEntitySnapshot_Delete(t *testing.T) {
 		"UPDATE groups SET is_pending_delete = 1 WHERE id = ?", groupID)
 	require.NoError(t, err)
 
-	// Create snapshot with action="delete" and original data
 	originalGroup := models.GroupRow{
 		ID:              int(groupID),
 		Name:            "test-group",
@@ -246,7 +238,6 @@ func TestRollbackEntitySnapshot_Delete(t *testing.T) {
 	assert.Equal(t, 0, count, "Snapshot should be deleted")
 }
 
-// TestRollbackEntitySnapshot_ConstraintViolation tests security constraint for create rollbacks
 func TestRollbackEntitySnapshot_ConstraintViolation(t *testing.T) {
 	database, cleanup := setupTestDB(t)
 	defer cleanup()
@@ -261,14 +252,12 @@ func TestRollbackEntitySnapshot_ConstraintViolation(t *testing.T) {
 	groupID, err := result.LastInsertId()
 	require.NoError(t, err)
 
-	// Create a policy referencing the group
 	_, err = database.ExecContext(ctx,
 		`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled)
 		 VALUES (?, ?, 'group', 1, 1, 'peer', 'ACCEPT', 100, 1)`,
 		"test-policy", groupID)
 	require.NoError(t, err)
 
-	// Create snapshot with action="create" for the group
 	err = CreateSnapshot(ctx, database, "group", int(groupID), "create", "")
 	require.NoError(t, err)
 
@@ -294,7 +283,6 @@ func TestRollbackEntitySnapshot_ConstraintViolation(t *testing.T) {
 	assert.Equal(t, 1, count, "Snapshot should still exist after failed rollback")
 }
 
-// TestRollbackEntitySnapshot_NotFound tests error when snapshot missing
 func TestRollbackEntitySnapshot_NotFound(t *testing.T) {
 	database, cleanup := setupTestDB(t)
 	defer cleanup()
@@ -308,7 +296,6 @@ func TestRollbackEntitySnapshot_NotFound(t *testing.T) {
 	assert.Contains(t, err.Error(), "snapshot not found", "Error message should mention snapshot not found")
 }
 
-// TestCheckCreateRollbackConstraints_GroupReferencedByPolicy tests group constraint check
 func TestCheckCreateRollbackConstraints_GroupReferencedByPolicy(t *testing.T) {
 	database, cleanup := setupTestDB(t)
 	defer cleanup()
@@ -323,7 +310,6 @@ func TestCheckCreateRollbackConstraints_GroupReferencedByPolicy(t *testing.T) {
 	groupID, err := result.LastInsertId()
 	require.NoError(t, err)
 
-	// Create a policy referencing the group as source
 	_, err = database.ExecContext(ctx,
 		`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled)
 		 VALUES (?, ?, 'group', 1, 1, 'peer', 'ACCEPT', 100, 1)`,
@@ -343,7 +329,6 @@ func TestCheckCreateRollbackConstraints_GroupReferencedByPolicy(t *testing.T) {
 	assert.True(t, errors.Is(err, ErrConstraintViolation), "Error should be ErrConstraintViolation")
 }
 
-// TestCheckCreateRollbackConstraints_ServiceReferencedByPolicy tests service constraint check
 func TestCheckCreateRollbackConstraints_ServiceReferencedByPolicy(t *testing.T) {
 	database, cleanup := setupTestDB(t)
 	defer cleanup()
@@ -358,7 +343,6 @@ func TestCheckCreateRollbackConstraints_ServiceReferencedByPolicy(t *testing.T) 
 	serviceID, err := result.LastInsertId()
 	require.NoError(t, err)
 
-	// Create a policy referencing the service
 	_, err = database.ExecContext(ctx,
 		`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled)
 		 VALUES (?, 1, 'group', ?, 1, 'peer', 'ACCEPT', 100, 1)`,
@@ -378,7 +362,6 @@ func TestCheckCreateRollbackConstraints_ServiceReferencedByPolicy(t *testing.T) 
 	assert.True(t, errors.Is(err, ErrConstraintViolation), "Error should be ErrConstraintViolation")
 }
 
-// TestCheckCreateRollbackConstraints_NoConstraints tests constraint check with no references
 func TestCheckCreateRollbackConstraints_NoConstraints(t *testing.T) {
 	database, cleanup := setupTestDB(t)
 	defer cleanup()
@@ -405,7 +388,6 @@ func TestCheckCreateRollbackConstraints_NoConstraints(t *testing.T) {
 	assert.NoError(t, err, "Should return nil when no constraints")
 }
 
-// TestRollbackSnapshots_BulkRollback tests bulk rollback functionality
 func TestRollbackSnapshots_BulkRollback(t *testing.T) {
 	database, cleanup := setupTestDB(t)
 	defer cleanup()
@@ -443,7 +425,6 @@ func TestRollbackSnapshots_BulkRollback(t *testing.T) {
 	err = CreateSnapshot(ctx, database, "group", int(groupID2), "update", string(snapshotJSON2))
 	require.NoError(t, err)
 
-	// Update group 2
 	_, err = database.ExecContext(ctx,
 		"UPDATE groups SET name = ?, description = ? WHERE id = ?",
 		"group2-updated", "updated desc", groupID2)
@@ -510,7 +491,6 @@ func TestRollbackSnapshots_BulkRollback(t *testing.T) {
 	assert.Equal(t, 0, count, "All pending changes should be deleted")
 }
 
-// TestRollbackSnapshots_ReverseOrder tests that rollbacks happen in reverse order
 func TestRollbackSnapshots_ReverseOrder(t *testing.T) {
 	database, cleanup := setupTestDB(t)
 	defer cleanup()
@@ -521,14 +501,12 @@ func TestRollbackSnapshots_ReverseOrder(t *testing.T) {
 	// Policy 1 references group 1
 	// Policy 2 references policy 1's service (simulated)
 
-	// Create group 1
 	result, err := database.ExecContext(ctx,
 		"INSERT INTO groups (name) VALUES (?)", "group1")
 	require.NoError(t, err)
 	groupID, err := result.LastInsertId()
 	require.NoError(t, err)
 
-	// Create service 1
 	result, err = database.ExecContext(ctx,
 		"INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)",
 		"service1", "8080", "tcp")
@@ -536,7 +514,6 @@ func TestRollbackSnapshots_ReverseOrder(t *testing.T) {
 	serviceID, err := result.LastInsertId()
 	require.NoError(t, err)
 
-	// Create policy 1
 	result, err = database.ExecContext(ctx,
 		`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled)
 		 VALUES (?, ?, 'group', ?, 1, 'peer', 'ACCEPT', 100, 1)`,
@@ -545,7 +522,6 @@ func TestRollbackSnapshots_ReverseOrder(t *testing.T) {
 	policyID, err := result.LastInsertId()
 	require.NoError(t, err)
 
-	// Create snapshots in order: policy, service, group
 	// (This simulates creating a full stack: group -> service -> policy)
 	err = CreateSnapshot(ctx, database, "policy", int(policyID), "create", "")
 	require.NoError(t, err)
@@ -586,7 +562,6 @@ func TestRollbackSnapshots_ReverseOrder(t *testing.T) {
 	assert.Equal(t, 0, count, "All snapshots should be deleted")
 }
 
-// TestRollbackCreateEntity_Group tests rollbackCreateEntity for groups
 func TestRollbackCreateEntity_Group(t *testing.T) {
 	database, cleanup := setupTestDB(t)
 	defer cleanup()
@@ -599,7 +574,6 @@ func TestRollbackCreateEntity_Group(t *testing.T) {
 	groupID, err := result.LastInsertId()
 	require.NoError(t, err)
 
-	// Add members
 	_, err = database.ExecContext(ctx,
 		"INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, is_manual) VALUES (?, ?, ?, ?, 1)",
 		"peer1", "10.0.0.1", "key1", "hmac1")
@@ -634,7 +608,6 @@ func TestRollbackCreateEntity_Group(t *testing.T) {
 	assert.Equal(t, 0, count, "Group should be deleted")
 }
 
-// TestRollbackCreateEntity_Service tests rollbackCreateEntity for services
 func TestRollbackCreateEntity_Service(t *testing.T) {
 	database, cleanup := setupTestDB(t)
 	defer cleanup()
@@ -668,7 +641,6 @@ func TestRollbackCreateEntity_Service(t *testing.T) {
 	assert.Equal(t, 0, count, "Service should be deleted")
 }
 
-// TestRollbackCreateEntity_Policy tests rollbackCreateEntity for policies
 func TestRollbackCreateEntity_Policy(t *testing.T) {
 	database, cleanup := setupTestDB(t)
 	defer cleanup()
@@ -703,7 +675,6 @@ func TestRollbackCreateEntity_Policy(t *testing.T) {
 	assert.Equal(t, 0, count, "Policy should be deleted")
 }
 
-// TestRollbackUpdateDeleteEntity_Group tests rollbackUpdateDeleteEntity for groups
 func TestRollbackUpdateDeleteEntity_Group(t *testing.T) {
 	database, cleanup := setupTestDB(t)
 	defer cleanup()
@@ -717,7 +688,6 @@ func TestRollbackUpdateDeleteEntity_Group(t *testing.T) {
 	groupID, err := result.LastInsertId()
 	require.NoError(t, err)
 
-	// Create peers for group members
 	_, err = database.ExecContext(ctx,
 		"INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, is_manual) VALUES (?, ?, ?, ?, 1)",
 		"peer1", "10.0.0.1", "key1", "hmac1")
@@ -727,7 +697,6 @@ func TestRollbackUpdateDeleteEntity_Group(t *testing.T) {
 		"peer2", "10.0.0.2", "key2", "hmac2")
 	require.NoError(t, err)
 
-	// Create snapshot data with original state and members
 	originalGroup := models.GroupRow{
 		ID:          int(groupID),
 		Name:        "original-name",
@@ -772,7 +741,6 @@ func TestRollbackUpdateDeleteEntity_Group(t *testing.T) {
 	assert.Equal(t, 2, count, "Members should be restored")
 }
 
-// TestRollbackUpdateDeleteEntity_Service tests rollbackUpdateDeleteEntity for services
 func TestRollbackUpdateDeleteEntity_Service(t *testing.T) {
 	database, cleanup := setupTestDB(t)
 	defer cleanup()
@@ -786,7 +754,6 @@ func TestRollbackUpdateDeleteEntity_Service(t *testing.T) {
 	serviceID, err := result.LastInsertId()
 	require.NoError(t, err)
 
-	// Create snapshot data with original state
 	originalService := models.ServiceRow{
 		ID:          int(serviceID),
 		Name:        "original-service",
@@ -823,7 +790,6 @@ func TestRollbackUpdateDeleteEntity_Service(t *testing.T) {
 	assert.False(t, isPendingDelete, "is_pending_delete should be cleared")
 }
 
-// TestRollbackUpdateDeleteEntity_Policy tests rollbackUpdateDeleteEntity for policies
 func TestRollbackUpdateDeleteEntity_Policy(t *testing.T) {
 	database, cleanup := setupTestDB(t)
 	defer cleanup()
@@ -838,7 +804,6 @@ func TestRollbackUpdateDeleteEntity_Policy(t *testing.T) {
 	policyID, err := result.LastInsertId()
 	require.NoError(t, err)
 
-	// Create snapshot data with original state
 	originalPolicy := models.PolicyRow{
 		ID:          int(policyID),
 		Name:        "original-policy",
@@ -885,7 +850,6 @@ func TestRollbackUpdateDeleteEntity_Policy(t *testing.T) {
 	assert.False(t, enabled, "Enabled should be restored")
 }
 
-// TestRollbackCreateEntity_UnknownEntityType tests error handling for unknown entity type in rollbackCreateEntity
 func TestRollbackCreateEntity_UnknownEntityType(t *testing.T) {
 	database, cleanup := setupTestDB(t)
 	defer cleanup()
@@ -923,7 +887,6 @@ func TestRollbackUpdateDeleteEntity_UnknownEntityType(t *testing.T) {
 	assert.Contains(t, err.Error(), "unknown entity type", "Error message should mention unknown entity type")
 }
 
-// TestCheckCreateRollbackConstraints_GroupReferencedByTarget tests group referenced as target in policy
 func TestCheckCreateRollbackConstraints_GroupReferencedByTarget(t *testing.T) {
 	database, cleanup := setupTestDB(t)
 	defer cleanup()
@@ -938,7 +901,6 @@ func TestCheckCreateRollbackConstraints_GroupReferencedByTarget(t *testing.T) {
 	groupID, err := result.LastInsertId()
 	require.NoError(t, err)
 
-	// Create a policy referencing the group as target
 	_, err = database.ExecContext(ctx,
 		`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled)
 		 VALUES (?, 1, 'peer', 1, ?, 'group', 'ACCEPT', 100, 1)`,
@@ -958,7 +920,6 @@ func TestCheckCreateRollbackConstraints_GroupReferencedByTarget(t *testing.T) {
 	assert.True(t, errors.Is(err, ErrConstraintViolation), "Error should be ErrConstraintViolation")
 }
 
-// TestRollbackEntitySnapshot_MissingSnapshotData tests error when snapshot data is missing
 func TestRollbackEntitySnapshot_MissingSnapshotData(t *testing.T) {
 	database, cleanup := setupTestDB(t)
 	defer cleanup()
@@ -973,7 +934,6 @@ func TestRollbackEntitySnapshot_MissingSnapshotData(t *testing.T) {
 	groupID, err := result.LastInsertId()
 	require.NoError(t, err)
 
-	// Create snapshot with action="update" but no snapshot data
 	err = CreateSnapshot(ctx, database, "group", int(groupID), "update", "")
 	require.NoError(t, err)
 
@@ -985,7 +945,6 @@ func TestRollbackEntitySnapshot_MissingSnapshotData(t *testing.T) {
 	assert.Contains(t, err.Error(), "missing snapshot data", "Error message should mention missing snapshot data")
 }
 
-// TestRollbackSnapshots_EmptySet tests rollback with no snapshots
 func TestRollbackSnapshots_EmptySet(t *testing.T) {
 	database, cleanup := setupTestDB(t)
 	defer cleanup()
@@ -1005,7 +964,6 @@ func TestRollbackSnapshots_EmptySet(t *testing.T) {
 	assert.Equal(t, 0, count, "No snapshots should exist")
 }
 
-// TestRollbackEntitySnapshot_ClearsPendingChanges tests that pending changes are cleared
 func TestRollbackEntitySnapshot_ClearsPendingChanges(t *testing.T) {
 	database, cleanup := setupTestDB(t)
 	defer cleanup()
@@ -1020,11 +978,9 @@ func TestRollbackEntitySnapshot_ClearsPendingChanges(t *testing.T) {
 	groupID, err := result.LastInsertId()
 	require.NoError(t, err)
 
-	// Create snapshot
 	err = CreateSnapshot(ctx, database, "group", int(groupID), "create", "")
 	require.NoError(t, err)
 
-	// Create pending change
 	_, err = database.ExecContext(ctx,
 		`INSERT INTO pending_changes (peer_id, change_type, change_id, change_action, change_summary)
 		 VALUES (1, 'group', ?, 'create', 'test')`, groupID)

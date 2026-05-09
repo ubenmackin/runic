@@ -139,7 +139,6 @@ func TestRecordSuccess_ClearsEntry(t *testing.T) {
 func TestCleanupStaleEntries(t *testing.T) {
 	ResetRateLimitStore()
 
-	// Create entries with past lockedUntil
 	rateLimitMutex.Lock()
 	rateLimitStore["past_user1"] = &rateLimitEntry{
 		failedAttempts: 5,
@@ -174,7 +173,6 @@ func TestCleanupStaleEntries(t *testing.T) {
 func TestCleanupStaleEntries_KeepsActiveLocks(t *testing.T) {
 	ResetRateLimitStore()
 
-	// Create entries with future lockedUntil
 	rateLimitMutex.Lock()
 	rateLimitStore["future_user1"] = &rateLimitEntry{
 		failedAttempts: 5,

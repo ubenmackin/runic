@@ -8,7 +8,6 @@ import (
 	"runic/internal/models"
 )
 
-// AddPendingChange records a change that affects a peer.
 func AddPendingChange(ctx context.Context, database Querier, peerID int, changeType, changeAction string, changeID int, summary string) error {
 	_, err := database.ExecContext(ctx,
 		`INSERT INTO pending_changes (peer_id, change_type, change_id, change_action, change_summary)
@@ -17,7 +16,6 @@ func AddPendingChange(ctx context.Context, database Querier, peerID int, changeT
 	return err
 }
 
-// GetPendingChangesForPeer returns all pending changes for a peer.
 func GetPendingChangesForPeer(ctx context.Context, database Querier, peerID int) ([]models.PendingChange, error) {
 	rows, err := database.QueryContext(ctx,
 		`SELECT id, peer_id, change_type, change_id, change_action, change_summary, created_at
@@ -43,14 +41,12 @@ func GetPendingChangesForPeer(ctx context.Context, database Querier, peerID int)
 	return changes, rows.Err()
 }
 
-// ClearPendingChangesForPeer removes all pending changes for a peer.
 func ClearPendingChangesForPeer(ctx context.Context, database Querier, peerID int) error {
 	_, err := database.ExecContext(ctx, "DELETE FROM pending_changes WHERE peer_id = ?", peerID)
 	return err
 }
 
-// GetPeersWithPendingChanges returns all peer IDs that have pending changes.
-// Excludes manual peers (is_manual = 1) since they cannot receive rule bundles.
+// GetPeersWithPendingChanges returns IDs of peers with pending changes. Excludes manual peers (is_manual = 1) since they cannot receive rule bundles.
 func GetPeersWithPendingChanges(ctx context.Context, database Querier) ([]int, error) {
 	rows, err := database.QueryContext(ctx, "SELECT DISTINCT pc.peer_id FROM pending_changes pc JOIN peers p ON pc.peer_id = p.id WHERE p.is_manual = 0")
 	if err != nil {
@@ -73,7 +69,6 @@ func GetPeersWithPendingChanges(ctx context.Context, database Querier) ([]int, e
 	return ids, rows.Err()
 }
 
-// SavePendingBundlePreview stores a compiled bundle preview.
 func SavePendingBundlePreview(ctx context.Context, database Querier, peerID int, rulesContent, diffContent, versionHash string) error {
 	_, err := database.ExecContext(ctx,
 		`INSERT INTO pending_bundle_previews (peer_id, rules_content, diff_content, version_hash)
@@ -87,19 +82,16 @@ func SavePendingBundlePreview(ctx context.Context, database Querier, peerID int,
 	return err
 }
 
-// DeletePendingBundlePreview removes the pending bundle for a peer.
 func DeletePendingBundlePreview(ctx context.Context, database Querier, peerID int) error {
 	_, err := database.ExecContext(ctx, "DELETE FROM pending_bundle_previews WHERE peer_id = ?", peerID)
 	return err
 }
 
-// DeletePendingChangeForEntity removes a specific pending change for a peer.
 func DeletePendingChangeForEntity(ctx context.Context, database Querier, peerID int64, changeType string, changeID int) error {
 	_, err := database.ExecContext(ctx, "DELETE FROM pending_changes WHERE peer_id = ? AND change_type = ? AND change_id = ?", peerID, changeType, changeID)
 	return err
 }
 
-// CountPendingChangesForPeer returns the number of pending changes for a peer.
 func CountPendingChangesForPeer(ctx context.Context, database Querier, peerID int64) (int, error) {
 	var count int
 	err := database.QueryRowContext(ctx, "SELECT COUNT(*) FROM pending_changes WHERE peer_id = ?", peerID).Scan(&count)
@@ -109,7 +101,6 @@ func CountPendingChangesForPeer(ctx context.Context, database Querier, peerID in
 	return count, nil
 }
 
-// DeleteAllPendingBundlePreviews removes all pending bundle previews.
 func DeleteAllPendingBundlePreviews(ctx context.Context, database Querier) error {
 	_, err := database.ExecContext(ctx, "DELETE FROM rule_bundles_pending")
 	if err != nil {

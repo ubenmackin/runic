@@ -15,7 +15,6 @@ func TestGetService(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Insert test service with all fields
 	_, err := db.Exec(`
 		INSERT INTO services (name, ports, source_ports, protocol, description, direction_hint, is_system, no_conntrack)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)

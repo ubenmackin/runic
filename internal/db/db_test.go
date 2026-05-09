@@ -11,7 +11,6 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-// SetupTestDB creates a temporary test database with the full schema.
 func SetupTestDB(t *testing.T) (*sql.DB, func()) {
 	t.Helper()
 	f, err := os.CreateTemp("", "runic-test-*.db")
@@ -72,7 +71,6 @@ func SetupTestDB(t *testing.T) (*sql.DB, func()) {
 	return database, cleanup
 }
 
-// TestSchema tests that Schema() returns non-empty SQL.
 func TestSchema(t *testing.T) {
 	schema := Schema()
 	if schema == "" {
@@ -95,9 +93,7 @@ func TestSchema(t *testing.T) {
 	}
 }
 
-// TestNewDatabaseWrapper tests that New() creates a proper Database wrapper.
 func TestNewDatabaseWrapper(t *testing.T) {
-	// Create a test database connection
 	db, cleanup := SetupTestDB(t)
 	defer cleanup()
 
@@ -124,7 +120,6 @@ func TestNewDatabaseWrapper(t *testing.T) {
 	}
 }
 
-// TestAllowedTables tests the allowedTables whitelist.
 func TestAllowedTables(t *testing.T) {
 	tests := []struct {
 		tableName string
@@ -160,7 +155,6 @@ func TestAllowedTables(t *testing.T) {
 	}
 }
 
-// TestDatabaseWrapperImplementsInterface tests that Database embeds *sql.DB correctly.
 func TestDatabaseWrapperImplementsInterface(t *testing.T) {
 	db, cleanup := SetupTestDB(t)
 	defer cleanup()
@@ -180,11 +174,9 @@ func TestDatabaseWrapperImplementsInterface(t *testing.T) {
 	}
 }
 
-// TestSchemaNotEmpty tests that schema contains specific important tables.
 func TestSchemaNotEmpty(t *testing.T) {
 	schema := Schema()
 
-	// Check for minimum length (schema should be substantial)
 	if len(schema) < 1000 {
 		t.Errorf("Schema() seems too short (%d bytes), may be incomplete", len(schema))
 	}
@@ -205,7 +197,6 @@ func TestSchemaNotEmpty(t *testing.T) {
 	}
 }
 
-// contains is a helper function to check if a string contains a substring.
 func contains(s, substr string) bool {
 	return strings.Contains(s, substr)
 }

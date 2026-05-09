@@ -12,12 +12,10 @@ import (
 	"testing"
 )
 
-// resetLogger resets the global logger to nil for test isolation
 func resetLogger() {
 	logger = nil
 }
 
-// TestInit tests the Init function with various log levels
 func TestInit(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -84,7 +82,6 @@ func TestInit(t *testing.T) {
 	}
 }
 
-// TestInitDefaultLevel tests that invalid level defaults to info
 func TestInitDefaultLevel(t *testing.T) {
 	resetLogger()
 	var buf bytes.Buffer
@@ -106,12 +103,10 @@ func TestInitDefaultLevel(t *testing.T) {
 	}
 }
 
-// TestInitJSONFormat tests JSON format in production environment
 func TestInitJSONFormat(t *testing.T) {
 	resetLogger()
 	var buf bytes.Buffer
 
-	// Set production environment
 	originalEnv := os.Getenv("ENV")
 	os.Setenv("ENV", "production")
 	defer os.Setenv("ENV", originalEnv)
@@ -133,7 +128,6 @@ func TestInitJSONFormat(t *testing.T) {
 	}
 }
 
-// TestInitTextFormat tests text format in development environment
 func TestInitTextFormat(t *testing.T) {
 	resetLogger()
 	var buf bytes.Buffer
@@ -160,7 +154,6 @@ func TestInitTextFormat(t *testing.T) {
 	}
 }
 
-// TestL tests the L function
 func TestL(t *testing.T) {
 	t.Run("returns default logger when not initialized", func(t *testing.T) {
 		resetLogger()
@@ -188,7 +181,6 @@ func TestL(t *testing.T) {
 	})
 }
 
-// TestLCtx tests the LCtx function
 func TestLCtx(t *testing.T) {
 	resetLogger()
 	var buf bytes.Buffer
@@ -237,7 +229,6 @@ func TestLCtx(t *testing.T) {
 	})
 }
 
-// TestSetRequestIDGetRequestID tests SetRequestID and GetRequestID
 func TestSetRequestIDGetRequestID(t *testing.T) {
 	t.Run("set and get round-trip", func(t *testing.T) {
 		ctx := context.Background()
@@ -265,7 +256,6 @@ func TestSetRequestIDGetRequestID(t *testing.T) {
 	})
 }
 
-// TestLoggingFunctions tests Debug, Info, Warn, Error functions
 func TestLoggingFunctions(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -323,7 +313,6 @@ func TestLoggingFunctions(t *testing.T) {
 	}
 }
 
-// TestLoggingFunctionsNoPanic verifies logging functions don't panic with nil logger
 func TestLoggingFunctionsNoPanic(t *testing.T) {
 	resetLogger()
 
@@ -370,7 +359,6 @@ func TestLoggingFunctionsNoPanic(t *testing.T) {
 	}
 }
 
-// TestLoggingContextFunctions tests DebugContext, InfoContext, WarnContext, ErrorContext
 func TestLoggingContextFunctions(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -426,7 +414,6 @@ func TestLoggingContextFunctions(t *testing.T) {
 	}
 }
 
-// TestLoggingContextFunctionsNoPanic verifies context logging functions don't panic with nil context
 func TestLoggingContextFunctionsNoPanic(t *testing.T) {
 	resetLogger()
 
@@ -472,7 +459,6 @@ func TestLoggingContextFunctionsNoPanic(t *testing.T) {
 	}
 }
 
-// TestLevelFatal tests that LevelFatal is defined correctly
 func TestLevelFatal(t *testing.T) {
 	// LevelFatal should be higher than Error
 	if LevelFatal <= slog.LevelError {
@@ -480,7 +466,6 @@ func TestLevelFatal(t *testing.T) {
 	}
 }
 
-// TestFatal tests the Fatal function using a subprocess
 // The actual exit behavior is tested separately
 func TestFatal(t *testing.T) {
 	t.Run("logs message at fatal level", func(t *testing.T) {

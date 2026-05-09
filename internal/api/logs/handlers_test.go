@@ -1,6 +1,7 @@
 package logs
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -8,8 +9,19 @@ import (
 	"time"
 
 	"runic/internal/auth"
+	"runic/internal/store"
 	"runic/internal/testutil"
 )
+
+// mockTokenRevoker is a no-op TokenRevoker for tests that don't need revocation checking.
+type mockTokenRevoker struct{}
+
+func (m *mockTokenRevoker) IsTokenRevoked(_ context.Context, _ string) (bool, error) {
+	return false, nil
+}
+
+// Ensure mockTokenRevoker satisfies TokenRevoker interface.
+var _ TokenRevoker = (*mockTokenRevoker)(nil)
 
 // =============================================================================
 // GetLogs Tests
@@ -19,11 +31,9 @@ func TestGetLogs(t *testing.T) {
 	database, logsDB, cleanup := testutil.SetupTestDBWithSecretAndLogs(t)
 	defer cleanup()
 
-	// Insert test peer
 	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, os_type, is_manual) VALUES (?, ?, ?, ?, ?, ?)`,
 		"peer1", "10.0.0.1", "key1", "hmac1", "linux", 0)
 
-	// Insert test log entries (into logs DB with logs schema)
 	logsDB.Exec(`INSERT INTO firewall_logs (peer_id, peer_hostname, timestamp, event_type, source_ip, dest_ip, protocol, source_port, dest_port, action) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		"1", "peer1", time.Now(), "inbound", "192.168.1.100", "10.0.0.1", "tcp", 54321, 22, "ACCEPT")
 	logsDB.Exec(`INSERT INTO firewall_logs (peer_id, peer_hostname, timestamp, event_type, source_ip, dest_ip, protocol, source_port, dest_port, action) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -238,7 +248,7 @@ func TestGetLogs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h := NewHandler(logsDB)
+			h := NewHandler(store.NewLogsStore(logsDB), store.NewTokenStore(database))
 			req := httptest.NewRequest("GET", "/api/v1/logs?"+tt.queryParams, nil)
 			w := httptest.NewRecorder()
 
@@ -263,11 +273,10 @@ func TestGetLogs_EmptyResult(t *testing.T) {
 	database, logsDB, cleanup := testutil.SetupTestDBWithSecretAndLogs(t)
 	defer cleanup()
 
-	// Insert test peer but no logs
 	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, os_type, is_manual) VALUES (?, ?, ?, ?, ?, ?)`,
 		"peer1", "10.0.0.1", "key1", "hmac1", "linux", 0)
 
-	h := NewHandler(logsDB)
+	h := NewHandler(store.NewLogsStore(logsDB), store.NewTokenStore(database))
 	req := httptest.NewRequest("GET", "/api/v1/logs", nil)
 	w := httptest.NewRecorder()
 
@@ -308,15 +317,13 @@ func TestGetLogs_WithHostname(t *testing.T) {
 	database, logsDB, cleanup := testutil.SetupTestDBWithSecretAndLogs(t)
 	defer cleanup()
 
-	// Insert test peer
 	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, os_type, is_manual) VALUES (?, ?, ?, ?, ?, ?)`,
 		"peer1", "10.0.0.1", "key1", "hmac1", "linux", 0)
 
-	// Insert test log (into logs DB with logs schema)
 	logsDB.Exec(`INSERT INTO firewall_logs (peer_id, peer_hostname, timestamp, event_type, source_ip, dest_ip, protocol, source_port, dest_port, action) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		"1", "peer1", time.Now(), "inbound", "192.168.1.100", "10.0.0.1", "tcp", 54321, 22, "ACCEPT")
 
-	h := NewHandler(logsDB)
+	h := NewHandler(store.NewLogsStore(logsDB), store.NewTokenStore(database))
 	req := httptest.NewRequest("GET", "/api/v1/logs", nil)
 	w := httptest.NewRecorder()
 
@@ -336,7 +343,6 @@ func TestGetLogs_WithHostname(t *testing.T) {
 		t.Fatal("expected at least 1 log")
 	}
 
-	// Check first log has hostname
 	logMap, ok := logs[0].(map[string]interface{})
 	if !ok {
 		t.Fatal("expected log to be a map")
@@ -349,14 +355,13 @@ func TestGetLogs_WithHostname(t *testing.T) {
 }
 
 func TestGetLogs_OrphanedLogs(t *testing.T) {
-	_, logsDB, cleanup := testutil.SetupTestDBWithSecretAndLogs(t)
+	database, logsDB, cleanup := testutil.SetupTestDBWithSecretAndLogs(t)
 	defer cleanup()
 
-	// Insert log with non-existent peer_id (orphaned log)
 	logsDB.Exec(`INSERT INTO firewall_logs (peer_id, peer_hostname, timestamp, event_type, source_ip, dest_ip, protocol, source_port, dest_port, action) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		"999", "", time.Now(), "inbound", "192.168.1.100", "10.0.0.1", "tcp", 54321, 22, "ACCEPT")
 
-	h := NewHandler(logsDB)
+	h := NewHandler(store.NewLogsStore(logsDB), store.NewTokenStore(database))
 	req := httptest.NewRequest("GET", "/api/v1/logs", nil)
 	w := httptest.NewRecorder()
 
@@ -376,7 +381,6 @@ func TestGetLogs_OrphanedLogs(t *testing.T) {
 		t.Fatal("expected at least 1 log")
 	}
 
-	// Check first log has empty hostname (orphaned)
 	logMap, ok := logs[0].(map[string]interface{})
 	if !ok {
 		t.Fatal("expected log to be a map")
@@ -392,11 +396,10 @@ func TestGetLogs_QueryError(t *testing.T) {
 	database, logsDB, cleanup := testutil.SetupTestDBWithSecretAndLogs(t)
 	defer cleanup()
 
-	// Insert test data
 	database.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, os_type, is_manual) VALUES (?, ?, ?, ?, ?, ?)`,
 		"peer1", "10.0.0.1", "key1", "hmac1", "linux", 0)
 
-	h := NewHandler(logsDB)
+	h := NewHandler(store.NewLogsStore(logsDB), store.NewTokenStore(database))
 
 	// Close database to cause query error
 	logsDB.Close()
@@ -426,7 +429,7 @@ func TestGetLogs_QueryError(t *testing.T) {
 
 func TestMakeLogsStreamHandler_NoToken(t *testing.T) {
 	hub := NewHub()
-	handler := MakeLogsStreamHandler(hub)
+	handler := MakeLogsStreamHandler(hub, &mockTokenRevoker{})
 
 	req := httptest.NewRequest("GET", "/api/v1/logs/ws", nil)
 	w := httptest.NewRecorder()
@@ -448,7 +451,7 @@ func TestMakeLogsStreamHandler_NoToken(t *testing.T) {
 
 func TestMakeLogsStreamHandler_InvalidToken(t *testing.T) {
 	hub := NewHub()
-	handler := MakeLogsStreamHandler(hub)
+	handler := MakeLogsStreamHandler(hub, &mockTokenRevoker{})
 
 	req := httptest.NewRequest("GET", "/api/v1/logs/ws", nil)
 	req.Header.Set("Sec-WebSocket-Protocol", "invalid-token")
@@ -463,9 +466,8 @@ func TestMakeLogsStreamHandler_InvalidToken(t *testing.T) {
 
 func TestMakeLogsStreamHandler_ValidToken_WithFilters(t *testing.T) {
 	hub := NewHub()
-	handler := MakeLogsStreamHandler(hub)
+	handler := MakeLogsStreamHandler(hub, &mockTokenRevoker{})
 
-	// Create valid token - use same signature as auth.GenerateToken
 	token, err := auth.GenerateToken("test-user", "viewer", 24*time.Hour)
 	if err != nil {
 		t.Fatalf("failed to generate token: %v", err)
@@ -488,9 +490,8 @@ func TestMakeLogsStreamHandler_ValidToken_WithFilters(t *testing.T) {
 
 func TestMakeLogsStreamHandler_ValidToken_HeaderAuth(t *testing.T) {
 	hub := NewHub()
-	handler := MakeLogsStreamHandler(hub)
+	handler := MakeLogsStreamHandler(hub, &mockTokenRevoker{})
 
-	// Create valid token and use header auth
 	token, err := auth.GenerateToken("test-user-header", "viewer", 24*time.Hour)
 	if err != nil {
 		t.Fatalf("failed to generate token: %v", err)
@@ -510,9 +511,8 @@ func TestMakeLogsStreamHandler_ValidToken_HeaderAuth(t *testing.T) {
 
 func TestMakeLogsStreamHandler_CookieEmptyValue(t *testing.T) {
 	hub := NewHub()
-	handler := MakeLogsStreamHandler(hub)
+	handler := MakeLogsStreamHandler(hub, &mockTokenRevoker{})
 
-	// Create request with empty cookie value (but cookie exists)
 	req := httptest.NewRequest("GET", "/api/v1/logs/ws", nil)
 	req.AddCookie(&http.Cookie{Name: "runic_access_token", Value: ""})
 	w := httptest.NewRecorder()

@@ -7,20 +7,30 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"runic/internal/common"
+	"runic/internal/api/common"
+	ic "runic/internal/common"
 	"runic/internal/db"
 	"runic/internal/models"
 )
 
 type PolicyStore struct {
-	db db.Querier
+	db db.DB
 }
 
-func NewPolicyStore(database db.Querier) *PolicyStore {
+func NewPolicyStore(database db.DB) *PolicyStore {
 	return &PolicyStore{db: database}
 }
 
-// nullableIP converts a scanned IP string into a nil pointer when empty,
+// GetNameByID returns the policy name for a given ID. Returns sql.ErrNoRows if not found.
+func (s *PolicyStore) GetNameByID(ctx context.Context, id int) (string, error) {
+	var name string
+	err := s.db.QueryRowContext(ctx, "SELECT name FROM policies WHERE id = ?", id).Scan(&name)
+	if err != nil {
+		return "", fmt.Errorf("get policy name by id: %w", err)
+	}
+	return name, nil
+}
+
 // matching the nullable semantics of the database column.
 func nullableIP(s string) *string {
 	if s == "" {
@@ -54,7 +64,7 @@ func (s *PolicyStore) ListPolicies(ctx context.Context) ([]models.PolicyRow, err
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("rows error: %w", err)
 	}
-	return common.EnsureSlice(policies), nil
+	return ic.EnsureSlice(policies), nil
 }
 
 func (s *PolicyStore) CreatePolicy(ctx context.Context, p *models.PolicyRow) (int64, error) {
@@ -103,8 +113,8 @@ func (s *PolicyStore) GetPolicyName(ctx context.Context, id int) (string, error)
 	return name, nil
 }
 
-func (s *PolicyStore) UpdatePolicy(ctx context.Context, q db.Querier, p *models.PolicyRow) error {
-	result, err := q.ExecContext(ctx,
+func (s *PolicyStore) UpdatePolicy(ctx context.Context, p *models.PolicyRow) error {
+	result, err := s.db.ExecContext(ctx,
 		`UPDATE policies SET name = ?, description = ?, source_id = ?, source_type = ?, service_id = ?,
 		target_id = ?, target_type = ?, source_ip = ?, target_ip = ?, action = ?, priority = ?, enabled = ?, target_scope = ?, direction = ?, updated_at = CURRENT_TIMESTAMP
 		WHERE id = ? AND is_pending_delete = 0`,
@@ -123,8 +133,8 @@ func (s *PolicyStore) UpdatePolicy(ctx context.Context, q db.Querier, p *models.
 	return nil
 }
 
-func (s *PolicyStore) PatchPolicyEnabled(ctx context.Context, q db.Querier, id int, enabled bool) error {
-	result, err := q.ExecContext(ctx, "UPDATE policies SET enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND is_pending_delete = 0", enabled, id)
+func (s *PolicyStore) PatchPolicyEnabled(ctx context.Context, id int, enabled bool) error {
+	result, err := s.db.ExecContext(ctx, "UPDATE policies SET enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND is_pending_delete = 0", enabled, id)
 	if err != nil {
 		return fmt.Errorf("patch policy: %w", err)
 	}
@@ -138,8 +148,8 @@ func (s *PolicyStore) PatchPolicyEnabled(ctx context.Context, q db.Querier, id i
 	return nil
 }
 
-func (s *PolicyStore) SoftDeletePolicy(ctx context.Context, q db.Querier, id int) error {
-	res, err := q.ExecContext(ctx, "UPDATE policies SET is_pending_delete = 1 WHERE id = ? AND is_pending_delete = 0", id)
+func (s *PolicyStore) SoftDeletePolicy(ctx context.Context, id int) error {
+	res, err := s.db.ExecContext(ctx, "UPDATE policies SET is_pending_delete = 1 WHERE id = ? AND is_pending_delete = 0", id)
 	if err != nil {
 		return fmt.Errorf("soft delete policy: %w", err)
 	}
@@ -153,12 +163,12 @@ func (s *PolicyStore) SoftDeletePolicy(ctx context.Context, q db.Querier, id int
 	return nil
 }
 
-func (s *PolicyStore) Snapshot(ctx context.Context, q db.Querier, action string, policyID int) error {
+func (s *PolicyStore) Snapshot(ctx context.Context, action string, policyID int) error {
 	if action == "create" {
-		return db.CreateSnapshot(ctx, q, "policy", policyID, action, "")
+		return db.CreateSnapshot(ctx, s.db, "policy", policyID, action, "")
 	}
 
-	p, err := s.GetPolicyTx(ctx, q, policyID)
+	p, err := s.GetPolicyTx(ctx, s.db, policyID)
 	if err != nil {
 		return fmt.Errorf("get policy: %w", err)
 	}
@@ -168,7 +178,21 @@ func (s *PolicyStore) Snapshot(ctx context.Context, q db.Querier, action string,
 		return fmt.Errorf("marshal snapshot: %w", err)
 	}
 
-	return db.CreateSnapshot(ctx, q, "policy", policyID, action, string(bytes))
+	return db.CreateSnapshot(ctx, s.db, "policy", policyID, action, string(bytes))
+}
+
+// CheckDeleteConstraints checks whether a policy can be safely deleted.
+// Currently policies have no foreign-key–style constraints, so this always returns nil.
+func (s *PolicyStore) CheckDeleteConstraints(ctx context.Context, policyID int) error {
+	return nil
+}
+
+// QueuePeerChange enqueues a peer change notification for the given peer IDs via the ChangeWorker.
+func (s *PolicyStore) QueuePeerChange(ctx context.Context, changeWorker *common.ChangeWorker, peerIDs []int, changeType, changeAction string, changeID int, summary string) {
+	if changeWorker == nil || len(peerIDs) == 0 {
+		return
+	}
+	changeWorker.QueuePeerChange(ctx, peerIDs, changeType, changeAction, changeID, summary)
 }
 
 func (s *PolicyStore) ListSpecialTargets(ctx context.Context) ([]models.SpecialTargetRow, error) {
@@ -189,5 +213,5 @@ func (s *PolicyStore) ListSpecialTargets(ctx context.Context) ([]models.SpecialT
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("rows error: %w", err)
 	}
-	return common.EnsureSlice(targets), nil
+	return ic.EnsureSlice(targets), nil
 }

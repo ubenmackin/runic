@@ -12,10 +12,9 @@ import (
 
 	apicommon "runic/internal/api/common"
 	"runic/internal/common"
-	"runic/internal/db"
+	"runic/internal/store"
 )
 
-// GenerateHMACKey generates a cryptographically secure random HMAC key.
 func GenerateHMACKey() (string, error) {
 	key, err := common.GenerateHMACKey()
 	if err != nil {
@@ -24,9 +23,8 @@ func GenerateHMACKey() (string, error) {
 	return key, nil
 }
 
-// generateAgentToken generates a JWT-like token for an agent.
-func generateAgentToken(ctx context.Context, dbConn db.Querier, hostname string) (string, error) {
-	hMACKey, err := db.GetSecret(ctx, dbConn, "agent_jwt_secret")
+func generateAgentToken(ctx context.Context, ds *store.DashboardStore, hostname string) (string, error) {
+	hMACKey, err := ds.GetSecret(ctx, "agent_jwt_secret")
 	if err != nil {
 		return "", fmt.Errorf("agent JWT secret not configured: %w", err)
 	}
@@ -44,7 +42,6 @@ func generateAgentToken(ctx context.Context, dbConn db.Querier, hostname string)
 	return tokenStr, nil
 }
 
-// generateAgentKey generates a cryptographically secure unique agent key.
 func generateAgentKey() (string, error) {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
@@ -53,7 +50,6 @@ func generateAgentKey() (string, error) {
 	return "agent-key-" + hex.EncodeToString(b), nil
 }
 
-// getHostIDFromContext safely extracts host_id from request context and looks up the peer.
 // The host_id in context comes from the JWT subject claim, which is in format "host-{hostname}".
 func (h *Handler) getHostIDFromContext(w http.ResponseWriter, r *http.Request) (string, int, bool) {
 	hostIDVal := r.Context().Value(hostIDKey)
@@ -67,14 +63,12 @@ func (h *Handler) getHostIDFromContext(w http.ResponseWriter, r *http.Request) (
 		return "", 0, false
 	}
 
-	// Extract hostname from host-{hostname} format
 	var hostname string
 	if _, err := fmt.Sscanf(hostID, "host-%s", &hostname); err != nil {
 		apicommon.RespondError(w, http.StatusBadRequest, "invalid host_id format")
 		return "", 0, false
 	}
 
-	// Look up peer by hostname to get the numeric ID
 	peerID, err := h.PeerStore.GetPeerIDByHostname(r.Context(), hostname)
 	if err != nil {
 		apicommon.RespondError(w, http.StatusNotFound, "peer not found")

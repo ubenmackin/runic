@@ -40,7 +40,6 @@ import (
 	"runic/internal/store"
 )
 
-// API holds dependencies for the API handlers.
 type API struct {
 	Compiler     *engine.Compiler
 	DB           *sql.DB
@@ -74,8 +73,7 @@ type API struct {
 	LogoutRateLimiter   *middleware.RateLimiter
 }
 
-// NewAPI creates a new API instance with dependency injection.
-// logsDB is the already-initialized logs database connection.
+// NewAPI creates a new API instance. logsDB is the already-initialized logs database connection.
 // logsDBPath is the path to the logs database (for settings/clear-logs).
 func NewAPI(db *sql.DB, compiler *engine.Compiler, logsDB *sql.DB, logsDBPath string, alertService *alerts.Service, encryptor *crypto.Encryptor) *API {
 	// Migration: Copy existing firewall_logs to logs DB if needed
@@ -84,12 +82,19 @@ func NewAPI(db *sql.DB, compiler *engine.Compiler, logsDB *sql.DB, logsDBPath st
 	}
 
 	sseHub := events.NewSSEHub()
-	changeWorker := common.NewChangeWorker(sseHub)
+	changeWorker := common.NewChangeWorker(sseHub, db)
 	pushWorker := common.NewPushWorker(db, compiler, alertService, sseHub)
 	groupStore := store.NewGroupStore(db)
 	policyStore := store.NewPolicyStore(db)
 	peerStore := store.NewPeerStore(db)
 	serviceStore := store.NewServiceStore(db)
+	userStore := store.NewUserStore(db)
+	settingsStore := store.NewSettingsStore(db, logsDB)
+	importStore := store.NewImportStore(db, peerStore, groupStore, serviceStore)
+	dashboardStore := store.NewDashboardStore(db, logsDB)
+	alertStore := store.NewAlertStore(db)
+	keyStore := store.NewKeyStore(db)
+	logsStore := store.NewLogsStore(logsDB)
 	return &API{
 		Compiler:     compiler,
 		DB:           db,
@@ -100,20 +105,20 @@ func NewAPI(db *sql.DB, compiler *engine.Compiler, logsDB *sql.DB, logsDBPath st
 		LogHub:       logs.NewHub(),
 		ChangeWorker: changeWorker,
 		PushWorker:   pushWorker,
-		Peers:        peers.NewHandler(peerStore, db, compiler, sseHub),
-		Agents:       agents.NewHandler(peerStore, db, logsDB, alertService),
-		Auth:         authhandlers.NewHandler(db, db),
+		Peers:        peers.NewHandler(peerStore, db, compiler, sseHub, settingsStore),
+		Agents:       agents.NewHandler(peerStore, dashboardStore, alertService, importStore),
+		Auth:         authhandlers.NewHandler(userStore, store.NewTokenStore(db), db),
 		Groups:       groups.NewHandler(db, compiler, changeWorker, groupStore, peerStore),
 		Policies:     policies.NewHandler(db, compiler, changeWorker, policyStore),
 		Services:     services.NewHandler(serviceStore, compiler, changeWorker),
-		Imports:      imports.NewHandler(db, sseHub, changeWorker),
-		Logs:         logs.NewHandler(logsDB),
-		Users:        users.NewHandler(db),
-		Keys:         keys.NewHandler(db),
-		Pending:      pending.NewHandler(db, compiler, sseHub, pushWorker),
-		Dashboard:    dashboard.NewHandler(db, logsDB),
-		Settings:     settings.NewHandler(db, logsDB, logsDBPath),
-		Alerts:       alerthandlers.NewHandler(db, alertService, encryptor),
+		Imports:      imports.NewHandler(importStore, sseHub, changeWorker),
+		Logs:         logs.NewHandler(logsStore, store.NewTokenStore(db)),
+		Users:        users.NewHandler(userStore),
+		Keys:         keys.NewHandler(keyStore),
+		Pending:      pending.NewHandler(peerStore, groupStore, policyStore, serviceStore, store.NewPendingStore(db), db, compiler, sseHub, pushWorker),
+		Dashboard:    dashboard.NewHandler(dashboardStore),
+		Settings:     settings.NewHandler(settingsStore, logsDBPath),
+		Alerts:       alerthandlers.NewHandler(alertStore, alertService, encryptor, userStore),
 	}
 }
 
@@ -121,7 +126,6 @@ type contextKey string
 
 const apiContextKey contextKey = "api"
 
-// apiMiddleware injects the API instance into request context for handlers.
 func apiMiddleware(a *API) mux.MiddlewareFunc {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -132,7 +136,6 @@ func apiMiddleware(a *API) mux.MiddlewareFunc {
 	}
 }
 
-// RegisterRoutes registers all API routes. Accepts an API instance for rule compilation endpoints.
 func (a *API) RegisterRoutes(r *mux.Router, downloadsDir string) {
 
 	ctx := context.Background()
@@ -195,7 +198,7 @@ func (a *API) RegisterRoutes(r *mux.Router, downloadsDir string) {
 	a.Dashboard.RegisterRoutes(dashboardViewer)
 
 	protected.HandleFunc("/logs", a.Logs.GetLogs).Methods("GET")
-	protected.HandleFunc("/logs/stream", logs.MakeLogsStreamHandler(a.LogHub)).Methods("GET")
+	protected.HandleFunc("/logs/stream", logs.MakeLogsStreamHandler(a.LogHub, store.NewTokenStore(a.DB))).Methods("GET")
 
 	peersViewer := protected.PathPrefix("/peers").Subrouter()
 	a.Peers.RegisterRoutes(peersViewer)
@@ -330,7 +333,6 @@ func (a *API) RegisterRoutes(r *mux.Router, downloadsDir string) {
 	}).Methods("GET")
 }
 
-// Stop stops all rate limiter cleanup goroutines.
 func (a *API) Stop() {
 	if a.ChangeWorker != nil {
 		a.ChangeWorker.Stop()
@@ -356,7 +358,6 @@ func (a *API) Stop() {
 	authhandlers.StopCleanup()
 }
 
-// HealthHandler returns the health status of the service
 func HealthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(map[string]string{"status": "healthy"}); err != nil {
@@ -364,7 +365,6 @@ func HealthHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// ReadyHandler returns the readiness status of the service
 func ReadyHandler(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
@@ -385,12 +385,10 @@ func ReadyHandler(db *sql.DB) http.HandlerFunc {
 	}
 }
 
-// MetricsHandler returns the Prometheus metrics HTTP handler
 func MetricsHandler() http.Handler {
 	return metrics.Handler()
 }
 
-// metricsMiddleware collects metrics for all requests
 func metricsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()

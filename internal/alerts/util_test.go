@@ -159,11 +159,9 @@ func TestLoadTimezoneOrDefault_ValidTimezones(t *testing.T) {
 			if result == nil {
 				t.Errorf("LoadTimezoneOrDefault(%q) returned nil", tz)
 			}
-			// For UTC, the result should be time.UTC
 			if tz == "UTC" && result != time.UTC {
 				t.Errorf("expected time.UTC for UTC timezone, got %v", result)
 			}
-			// For non-UTC timezones, verify the location name matches
 			if tz != "UTC" {
 				// The location string should contain the timezone name
 				if !strings.Contains(result.String(), tz) && result.String() != tz {
@@ -234,7 +232,6 @@ func TestLoadTimezoneOrDefault_Concurrency(t *testing.T) {
 	}
 }
 
-// Benchmark to ensure performance is acceptable
 func BenchmarkLoadTimezoneOrDefault(b *testing.B) {
 	b.Run("empty", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
