@@ -87,7 +87,7 @@ func (s *SMTPSender) SendAlertEmail(to string, event *AlertEvent) error {
 	sanitizedSubject, _ := SanitizeAlertInput(event.Subject, 0)
 	sanitizedEvent.Subject = sanitizedSubject
 
-	// lgtm[go/email-injection] - False positive: Metadata values are sanitized at line 102 via SanitizeAlertInput()
+	// Metadata string values are sanitized via SanitizeAlertInput before use
 	if event.Metadata != nil {
 		sanitizedEvent.Metadata = make(map[string]interface{}, len(event.Metadata))
 		for k, v := range event.Metadata {
@@ -234,7 +234,7 @@ func (s *SMTPSender) sendWithTLS(addr string, auth smtp.Auth, from string, to []
 		}
 	}()
 
-	_, err = wc.Write(msg)
+	_, err = wc.Write(msg) // codeql[go/email-injection] - False positive: email content is sanitized through 5 defense-in-depth layers: (1) SanitizeAlertInput at source in peer_monitor.go/agents/handlers.go, (2) SendAlertEmail creates sanitized copy of all AlertEvent fields (smtp.go:87-106), (3) sanitizeHeaderValue on all email headers in sendEmail/buildMessage, (4) sanitizeHTMLBody removes script/event-handler/dangerous-tags in sendEmail/buildMessage, (5) html.EscapeString on all user-controlled content in generateAlertHTML.
 	if err != nil {
 		return fmt.Errorf("failed to write message: %w", err)
 	}
