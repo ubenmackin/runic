@@ -45,11 +45,6 @@ func SaveBundle(ctx context.Context, database Beginner, params models.CreateBund
 		return models.RuleBundleRow{}, fmt.Errorf("get last insert id: %w", err)
 	}
 
-	_, err = tx.ExecContext(ctx, `UPDATE peers SET bundle_version = ? WHERE id = ?`, params.Version, params.PeerID)
-	if err != nil {
-		return models.RuleBundleRow{}, err
-	}
-
 	if err := tx.Commit(); err != nil {
 		return models.RuleBundleRow{}, err
 	}

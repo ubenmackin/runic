@@ -72,12 +72,15 @@ COALESCE(GROUP_CONCAT(g.name, ','), '') as groups,
 COALESCE(p.description, '') as description,
 COALESCE(p.hmac_key_last_rotated_at, '') as hmac_key_last_rotated_at,
 (SELECT COUNT(*) FROM pending_changes pc JOIN peers p2 ON pc.peer_id = p2.id WHERE pc.peer_id = p.id AND p2.is_manual = 0) as pending_changes_count,
-CASE
-WHEN (SELECT COUNT(*) FROM pending_changes pc JOIN peers p2 ON pc.peer_id = p2.id WHERE pc.peer_id = p.id AND p2.is_manual = 0) > 0 THEN 'pending'
-WHEN (SELECT rb.version FROM rule_bundles rb WHERE rb.peer_id = p.id ORDER BY rb.created_at DESC LIMIT 1) IS NOT NULL
-AND (SELECT rb.version FROM rule_bundles rb WHERE rb.peer_id = p.id ORDER BY rb.created_at DESC LIMIT 1) != COALESCE(p.bundle_version, '') THEN 'pending_sync'
-ELSE 'synced'
-END as sync_status
+	CASE
+		WHEN (SELECT COUNT(*) FROM pending_changes pc JOIN peers p2 ON pc.peer_id = p2.id WHERE pc.peer_id = p.id AND p2.is_manual = 0) > 0 THEN 'pending'
+		WHEN (SELECT rb.version FROM rule_bundles rb WHERE rb.peer_id = p.id ORDER BY rb.created_at DESC LIMIT 1) IS NOT NULL
+		AND (
+			(SELECT rb.applied_at FROM rule_bundles rb WHERE rb.peer_id = p.id ORDER BY rb.created_at DESC LIMIT 1) IS NULL
+			OR (SELECT rb.version FROM rule_bundles rb WHERE rb.peer_id = p.id ORDER BY rb.created_at DESC LIMIT 1) != COALESCE(p.bundle_version, '')
+		) THEN 'pending_sync'
+		ELSE 'synced'
+	END as sync_status
 FROM peers p
 LEFT JOIN group_members gm ON p.id = gm.peer_id
 LEFT JOIN groups g ON gm.group_id = g.id

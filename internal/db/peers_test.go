@@ -141,7 +141,7 @@ func TestSaveBundle(t *testing.T) {
 		checkPeerVer func(*testing.T, string)
 	}{
 		{
-			name: "successfully insert bundle and update peer bundle_version",
+			name: "successfully insert bundle without updating peer bundle_version",
 			params: models.CreateBundleParams{
 				PeerID:        1,
 				Version:       "v2.0",
@@ -171,8 +171,8 @@ func TestSaveBundle(t *testing.T) {
 				}
 			},
 			checkPeerVer: func(t *testing.T, version string) {
-				if version != "v2.0" {
-					t.Errorf("expected peer bundle_version 'v2.0', got %s", version)
+				if version != "" {
+					t.Errorf("expected peer bundle_version to remain empty, got %s", version)
 				}
 			},
 		},
@@ -216,8 +216,8 @@ func TestSaveBundle(t *testing.T) {
 				}
 			},
 			checkPeerVer: func(t *testing.T, version string) {
-				if version != "v3.0" {
-					t.Errorf("expected peer bundle_version 'v3.0', got %s", version)
+				if version != "" {
+					t.Errorf("expected peer bundle_version to remain empty, got %s", version)
 				}
 			},
 		},
@@ -243,8 +243,8 @@ func TestSaveBundle(t *testing.T) {
 				}
 			},
 			checkPeerVer: func(t *testing.T, version string) {
-				if version != "v4.0" {
-					t.Errorf("expected peer bundle_version 'v4.0', got %s", version)
+				if version != "" {
+					t.Errorf("expected peer bundle_version to remain empty, got %s", version)
 				}
 			},
 		},
@@ -267,19 +267,18 @@ func TestSaveBundle(t *testing.T) {
 				tt.checkBundle(t, bundle)
 			}
 
-			if tt.checkPeerVer != nil {
-				// Verify peer's bundle_version was updated
-				var peer models.PeerRow
-				peer, err = GetPeer(ctx, db, tt.params.PeerID)
-				if err != nil {
-					t.Fatalf("failed to get peer: %v", err)
-				}
-				if peer.BundleVersion.Valid {
-					tt.checkPeerVer(t, peer.BundleVersion.String)
-				} else {
-					t.Error("expected BundleVersion to be valid")
-				}
+if tt.checkPeerVer != nil {
+			var peer models.PeerRow
+			peer, err = GetPeer(ctx, db, tt.params.PeerID)
+			if err != nil {
+				t.Fatalf("failed to get peer: %v", err)
 			}
+			var ver string
+			if peer.BundleVersion.Valid {
+				ver = peer.BundleVersion.String
+			}
+			tt.checkPeerVer(t, ver)
+		}
 		})
 	}
 }
