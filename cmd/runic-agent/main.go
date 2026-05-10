@@ -62,6 +62,7 @@ func main() {
 	uninstall := flag.Bool("uninstall", false, "Uninstall the agent from this system")
 	purge := flag.Bool("purge", false, "Also remove config files (use with --uninstall)")
 	version := flag.Bool("version", false, "Print version and exit")
+	update := flag.Bool("update", false, "Trigger a self-update using the configured control plane URL and exit")
 	setup := flag.Bool("setup", false, "Run interactive setup wizard")
 
 	// Config-mode flags (these trigger config-update mode when set)
@@ -88,10 +89,7 @@ func main() {
 	}
 
 	if *setup {
-		defaultURL := controlPlaneURL.String()
-		if defaultURL == "" {
-			defaultURL = os.Getenv("RUNIC_CONTROL_PLANE_URL")
-		}
+		defaultURL := resolveControlPlaneURL(controlPlaneURL)
 		if err := runSetupWizard(*configPath, defaultURL); err != nil {
 			log.Fatalf("setup failed: %v", err)
 		}
@@ -137,6 +135,27 @@ func main() {
 		return
 	}
 
+	// -update mode: trigger self-update and exit
+	// Must be checked before isConfigMode() so that -update -url <url>
+	// triggers an update (using -url as the URL override) rather than
+	// entering config mode (which -url would otherwise activate).
+	if *update {
+		cfg, err := identity.LoadConfig(*configPath)
+		if err != nil {
+			log.Fatalf("update: failed to load config: %v", err)
+		}
+		updateURL := resolveControlPlaneURL(controlPlaneURL)
+		if updateURL == "" && cfg.ControlPlaneURL != "" {
+			updateURL = cfg.ControlPlaneURL
+		}
+		if updateURL == "" {
+			log.Fatalf("update: control plane URL not configured. Set it via -url flag, RUNIC_CONTROL_PLANE_URL env, or config file")
+		}
+		a := agent.New(*configPath, updateURL)
+		a.HandleUpdateAgent(updateURL)
+		return
+	}
+
 	if isConfigMode(enableOnBoot, enableRulesBundle, disableSystemIPTables, controlPlaneURL, logPath, pullInterval) {
 		if err := handleConfigMode(*configPath, enableOnBoot, enableRulesBundle, disableSystemIPTables, controlPlaneURL, logPath, pullInterval); err != nil {
 			log.Fatalf("config update failed: %v", err)
@@ -147,10 +166,7 @@ func main() {
 	// Normal agent startup
 	// Pass CLI-provided URL to agent (will be merged with config file URL in loadConfig)
 	// If no CLI URL, check environment variable
-	cliURL := controlPlaneURL.String()
-	if cliURL == "" {
-		cliURL = os.Getenv("RUNIC_CONTROL_PLANE_URL")
-	}
+	cliURL := resolveControlPlaneURL(controlPlaneURL)
 	a := agent.New(*configPath, cliURL)
 
 	// Context that cancels on SIGINT/SIGTERM
@@ -180,6 +196,13 @@ func isConfigMode(flags ...configFlag) bool {
 		}
 	}
 	return false
+}
+
+func resolveControlPlaneURL(cliFlag configFlag) string {
+	if url := cliFlag.String(); url != "" {
+		return url
+	}
+	return os.Getenv("RUNIC_CONTROL_PLANE_URL")
 }
 
 func handleConfigMode(configPath string, enableOnBoot, enableRulesBundle, disableSystemIPTables, controlPlaneURL, logPath, pullInterval configFlag) error {

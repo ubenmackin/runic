@@ -594,6 +594,31 @@ func TestHandleUpdateAgent(t *testing.T) {
 	})
 }
 
+func TestHandleUpdateAgentPublic(t *testing.T) {
+	t.Run("delegates to handleUpdateAgent with context.Background", func(t *testing.T) {
+		mock := &mockCommandRunner{}
+		agent := &Agent{
+			cmdRunner: mock,
+		}
+		agent.HandleUpdateAgent("https://runic.example.com")
+
+		if len(mock.calls) != 1 {
+			t.Fatalf("expected 1 Run call, got %d", len(mock.calls))
+		}
+
+		// Verify the public method uses context.Background() (never canceled)
+		if err := mock.calls[0].ctx.Err(); err != nil {
+			t.Error("HandleUpdateAgent should use context.Background() which is never canceled")
+		}
+
+		// Verify the control plane URL is forwarded correctly
+		cmdStr := mock.calls[0].args[len(mock.calls[0].args)-1]
+		if !strings.Contains(cmdStr, "runic.example.com") {
+			t.Error("expected command to contain control plane URL")
+		}
+	})
+}
+
 func TestApplyCachedBundle_NoCacheFile(t *testing.T) {
 	cfg := helperConfig()
 	configPath := helperConfigPath(t, cfg)

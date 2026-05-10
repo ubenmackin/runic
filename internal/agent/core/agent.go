@@ -586,6 +586,12 @@ func (a *Agent) handleUpdateAgent(_ context.Context, controlPlaneURL string) {
 	log.Info("Update process launched, agent will be restarted by the install script")
 }
 
+// HandleUpdateAgent triggers the agent self-update process. It is the public
+// equivalent of handleUpdateAgent, exposed for CLI and integration test use.
+func (a *Agent) HandleUpdateAgent(controlPlaneURL string) {
+	a.handleUpdateAgent(context.Background(), controlPlaneURL)
+}
+
 // This prevents shell injection by treating the value as a literal string.
 func shellSafeArg(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
