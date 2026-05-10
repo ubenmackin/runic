@@ -1207,14 +1207,15 @@ func TestCompileAndStore(t *testing.T) {
 		t.Errorf("expected 1 bundle, got %d", count)
 	}
 
-	// Verify peer's bundle_version was updated
-	var bundleVersion string
+	// Verify peer's bundle_version was NOT updated by compilation
+	// (only heartbeat/confirmation should update it)
+	var bundleVersion sql.NullString
 	err = database.QueryRow("SELECT bundle_version FROM peers WHERE id = ?", peerID).Scan(&bundleVersion)
 	if err != nil {
 		t.Fatalf("query peer bundle version: %v", err)
 	}
-	if bundleVersion != bundle.Version {
-		t.Errorf("expected bundle_version %s, got %s", bundle.Version, bundleVersion)
+	if bundleVersion.Valid && bundleVersion.String == bundle.Version {
+		t.Errorf("bundle_version should NOT be set by CompileAndStore; expected NULL/empty, got %s", bundleVersion.String)
 	}
 
 	// Verify HMAC is valid
@@ -1318,9 +1319,17 @@ func TestRecompileAffectedPeers(t *testing.T) {
 		t.Fatalf("compile peer2: %v", err)
 	}
 
-	var v1, v2 string
+	// After our fix, compilation does NOT update peers.bundle_version.
+	// Only heartbeat/confirmation updates it. Verify bundle_version is still NULL.
+	var v1, v2 sql.NullString
 	database.QueryRow("SELECT bundle_version FROM peers WHERE id = ?", peer1).Scan(&v1)
 	database.QueryRow("SELECT bundle_version FROM peers WHERE id = ?", peer2).Scan(&v2)
+	if v1.Valid {
+		t.Errorf("expected NULL bundle_version for peer1 after compile, got %s", v1.String)
+	}
+	if v2.Valid {
+		t.Errorf("expected NULL bundle_version for peer2 after compile, got %s", v2.String)
+	}
 
 	newManualPeer := insertManualPeer(t, database, "10.1.1.1")
 	insertGroupMember(t, database, group1, newManualPeer)
@@ -1331,18 +1340,25 @@ func TestRecompileAffectedPeers(t *testing.T) {
 		t.Fatalf("recompile affected: %v", err)
 	}
 
-	// Verify peer1 has new bundle version
-	var newV1 string
+	// After recompile, bundle_version should still be NULL (not set by compilation)
+	var newV1 sql.NullString
 	database.QueryRow("SELECT bundle_version FROM peers WHERE id = ?", peer1).Scan(&newV1)
-	if newV1 == v1 {
-		t.Error("expected bundle version to change for peer1")
+	if newV1.Valid {
+		t.Errorf("expected NULL bundle_version for peer1 after recompile, got %s", newV1.String)
 	}
 
-	// Verify peer2 bundle version is unchanged
-	var newV2 string
+	// Verify peer2 bundle version is still NULL (unchanged)
+	var newV2 sql.NullString
 	database.QueryRow("SELECT bundle_version FROM peers WHERE id = ?", peer2).Scan(&newV2)
-	if newV2 != v2 {
-		t.Error("expected bundle version to stay the same for peer2")
+	if newV2.Valid {
+		t.Errorf("expected NULL bundle_version for peer2 after recompile, got %s", newV2.String)
+	}
+
+	// Verify peer1 got a new rule_bundle (the actual compilation result)
+	var bundleCount int
+	database.QueryRow("SELECT COUNT(*) FROM rule_bundles WHERE peer_id = ?", peer1).Scan(&bundleCount)
+	if bundleCount != 2 {
+		t.Errorf("expected 2 bundles for peer1 after recompile, got %d", bundleCount)
 	}
 }
 
