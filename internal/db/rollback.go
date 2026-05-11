@@ -57,6 +57,12 @@ func RollbackSnapshots(ctx context.Context, database DB) error {
 				_, err = tx.ExecContext(ctx, "DELETE FROM services WHERE id = ?", s.EntityID)
 			case "policy":
 				_, err = tx.ExecContext(ctx, "DELETE FROM policies WHERE id = ?", s.EntityID)
+			case "peer":
+				_, err = tx.ExecContext(ctx, "DELETE FROM peer_ips WHERE peer_id = ?", s.EntityID)
+				if err != nil {
+					return fmt.Errorf("rollback create peer IPs: %w", err)
+				}
+				_, err = tx.ExecContext(ctx, "DELETE FROM peers WHERE id = ?", s.EntityID)
 			}
 			if err != nil {
 				return fmt.Errorf("rollback create %s %d: %w", s.EntityType, s.EntityID, err)
@@ -109,6 +115,8 @@ func RollbackSnapshots(ctx context.Context, database DB) error {
 				if err != nil {
 					return err
 				}
+			case "peer":
+				return fmt.Errorf("peer update/delete rollback not yet implemented")
 			}
 		}
 	}
@@ -202,6 +210,20 @@ func checkCreateRollbackConstraints(ctx context.Context, tx Querier, entityType 
 		if policyCount > 0 {
 			return fmt.Errorf("%w: service %d is referenced by %d policy(s)", ErrConstraintViolation, entityID, policyCount)
 		}
+	case "peer":
+		var groupMemberCount int
+		err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM group_members WHERE peer_id = ?", entityID).Scan(&groupMemberCount)
+		if err != nil {
+			return fmt.Errorf("check group member constraints: %w", err)
+		}
+		var policyCount int
+		err = tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM policies WHERE (source_id = ? AND source_type = 'peer') OR (target_id = ? AND target_type = 'peer')", entityID, entityID).Scan(&policyCount)
+		if err != nil {
+			return fmt.Errorf("check policy constraints: %w", err)
+		}
+		if groupMemberCount > 0 || policyCount > 0 {
+			return fmt.Errorf("%w: cannot rollback peer creation: peer is referenced by %d group members and %d policies", ErrConstraintViolation, groupMemberCount, policyCount)
+		}
 	}
 	return nil
 }
@@ -220,6 +242,13 @@ func rollbackCreateEntity(ctx context.Context, tx Querier, entityType string, en
 		return err
 	case "policy":
 		_, err := tx.ExecContext(ctx, "DELETE FROM policies WHERE id = ?", entityID)
+		return err
+	case "peer":
+		_, err := tx.ExecContext(ctx, "DELETE FROM peer_ips WHERE peer_id = ?", entityID)
+		if err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, "DELETE FROM peers WHERE id = ?", entityID)
 		return err
 	}
 	return fmt.Errorf("unknown entity type: %s", entityType)
@@ -264,6 +293,8 @@ func rollbackUpdateDeleteEntity(ctx context.Context, tx Querier, entityType stri
 		}
 		_, err := tx.ExecContext(ctx, "UPDATE policies SET name=?, description=?, source_id=?, source_type=?, service_id=?, target_id=?, target_type=?, source_ip=?, target_ip=?, action=?, priority=?, enabled=?, target_scope=?, direction=?, is_pending_delete=0 WHERE id=?", p.Name, p.Description, p.SourceID, p.SourceType, p.ServiceID, p.TargetID, p.TargetType, p.SourceIP, p.TargetIP, p.Action, p.Priority, p.Enabled, p.TargetScope, p.Direction, entityID)
 		return err
+	case "peer":
+		return fmt.Errorf("peer update/delete rollback not yet supported: entityID %d", entityID)
 	}
 	return fmt.Errorf("unknown entity type: %s", entityType)
 }

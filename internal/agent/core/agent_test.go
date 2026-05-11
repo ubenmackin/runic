@@ -372,12 +372,12 @@ func TestIsControlPlaneReachableFalse(t *testing.T) {
 }
 
 type mockCommandRunner struct {
-	output []byte
-	err error
-	runErr error
-	calls []mockCall
+	output           []byte
+	err              error
+	runErr           error
+	calls            []mockCall
 	startDetachedErr error
-	detachedCalls []mockCall
+	detachedCalls    []mockCall
 }
 
 type mockCall struct {
@@ -565,7 +565,7 @@ func TestHandleUpdateAgent(t *testing.T) {
 		defer log.Init("info", os.Stdout)
 
 		mock := &mockCommandRunner{
-			runErr:          fmt.Errorf("systemd-run: command not found"),
+			runErr:           fmt.Errorf("systemd-run: command not found"),
 			startDetachedErr: fmt.Errorf("setsid: command not found"),
 		}
 		agent := &Agent{

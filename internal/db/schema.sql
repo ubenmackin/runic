@@ -236,13 +236,13 @@ CREATE INDEX IF NOT EXISTS idx_peer_ips_peer_id ON peer_ips(peer_id);
 CREATE INDEX IF NOT EXISTS idx_peer_ips_ip_address ON peer_ips(ip_address);
 
 CREATE TABLE IF NOT EXISTS change_snapshots (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	entity_type TEXT NOT NULL CHECK (entity_type IN ('group', 'service', 'policy')),
-	entity_id INTEGER NOT NULL,
-	action TEXT NOT NULL CHECK (action IN ('create', 'update', 'delete')),
-	snapshot_data TEXT,
-	created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-	UNIQUE(entity_type, entity_id)
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  entity_type TEXT NOT NULL CHECK (entity_type IN ('group', 'service', 'policy', 'peer')),
+  entity_id INTEGER NOT NULL,
+  action TEXT NOT NULL CHECK (action IN ('create', 'update', 'delete')),
+  snapshot_data TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(entity_type, entity_id)
 );
 
 -- Alert system tables

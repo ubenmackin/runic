@@ -1000,8 +1000,285 @@ func TestRollbackEntitySnapshot_ClearsPendingChanges(t *testing.T) {
 
 	// Assert: pending changes are cleared
 	err = database.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM pending_changes WHERE change_type = ? AND change_id = ?",
-		"group", groupID).Scan(&count)
+		"SELECT COUNT(*) FROM pending_changes WHERE change_type = ? AND change_id = ?", "group", groupID).Scan(&count)
 	require.NoError(t, err)
 	assert.Equal(t, 0, count, "Pending changes should be cleared after rollback")
+}
+
+func TestRollbackCreateEntity_Peer(t *testing.T) {
+	database, cleanup := setupTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Setup: Create peer
+	result, err := database.ExecContext(ctx,
+		"INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, is_manual) VALUES (?, ?, ?, ?, 1)",
+		"test-peer", "10.0.0.1", "key1", "hmac1")
+	require.NoError(t, err)
+	peerID, err := result.LastInsertId()
+	require.NoError(t, err)
+
+	// Create peer_ips entry
+	_, err = database.ExecContext(ctx,
+		"INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 1)",
+		peerID, "10.0.0.1")
+	require.NoError(t, err)
+
+	// Verify peer_ips exists before rollback
+	var count int
+	err = database.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM peer_ips WHERE peer_id = ?", peerID).Scan(&count)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count, "Peer IP should exist before rollback")
+
+	// Start transaction
+	tx, err := database.BeginTx(ctx, nil)
+	require.NoError(t, err)
+
+	// Call rollbackCreateEntity
+	err = rollbackCreateEntity(ctx, tx, "peer", int(peerID))
+	require.NoError(t, err)
+
+	// Commit to verify changes
+	err = tx.Commit()
+	require.NoError(t, err)
+
+	// Assert: peer_ips deleted
+	err = database.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM peer_ips WHERE peer_id = ?", peerID).Scan(&count)
+	require.NoError(t, err)
+	assert.Equal(t, 0, count, "Peer IPs should be deleted")
+
+	// Assert: peer deleted
+	err = database.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM peers WHERE id = ?", peerID).Scan(&count)
+	require.NoError(t, err)
+	assert.Equal(t, 0, count, "Peer should be deleted")
+}
+
+func TestRollbackEntitySnapshot_PeerCreate(t *testing.T) {
+	database, cleanup := setupTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Setup: Create peer
+	result, err := database.ExecContext(ctx,
+		"INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, is_manual) VALUES (?, ?, ?, ?, 1)",
+		"test-peer", "10.0.0.1", "key1", "hmac1")
+	require.NoError(t, err)
+	peerID, err := result.LastInsertId()
+	require.NoError(t, err)
+
+	// Create peer_ips entry
+	_, err = database.ExecContext(ctx,
+		"INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 1)",
+		peerID, "10.0.0.1")
+	require.NoError(t, err)
+
+	// Create snapshot
+	err = CreateSnapshot(ctx, database, "peer", int(peerID), "create", "")
+	require.NoError(t, err, "Failed to create snapshot")
+
+	// Insert a pending_change
+	_, err = database.ExecContext(ctx,
+		`INSERT INTO pending_changes (peer_id, change_type, change_id, change_action, change_summary)
+		VALUES (1, 'peer', ?, 'create', 'test')`, peerID)
+	require.NoError(t, err)
+
+	// Verify peer exists before rollback
+	var count int
+	err = database.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM peers WHERE id = ?", peerID).Scan(&count)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count, "Peer should exist before rollback")
+
+	// Verify peer_ips exists before rollback
+	err = database.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM peer_ips WHERE peer_id = ?", peerID).Scan(&count)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count, "Peer IP should exist before rollback")
+
+	// Call RollbackEntitySnapshot
+	err = RollbackEntitySnapshot(ctx, database, "peer", int(peerID))
+	require.NoError(t, err, "RollbackEntitySnapshot should succeed")
+
+	// Assert: peer is deleted
+	err = database.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM peers WHERE id = ?", peerID).Scan(&count)
+	require.NoError(t, err)
+	assert.Equal(t, 0, count, "Peer should be deleted after rollback")
+
+	// Assert: peer_ips is deleted
+	err = database.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM peer_ips WHERE peer_id = ?", peerID).Scan(&count)
+	require.NoError(t, err)
+	assert.Equal(t, 0, count, "Peer IPs should be deleted after rollback")
+
+	// Assert: snapshot is deleted
+	err = database.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM change_snapshots WHERE entity_type = ? AND entity_id = ?",
+		"peer", peerID).Scan(&count)
+	require.NoError(t, err)
+	assert.Equal(t, 0, count, "Snapshot should be deleted after rollback")
+
+	// Assert: pending change is deleted
+	err = database.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM pending_changes WHERE change_type = ? AND change_id = ?",
+		"peer", peerID).Scan(&count)
+	require.NoError(t, err)
+	assert.Equal(t, 0, count, "Pending change should be deleted after rollback")
+}
+
+func TestRollbackSnapshots_WithPeerCreate(t *testing.T) {
+	database, cleanup := setupTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Setup: Create a peer
+	peerResult, err := database.ExecContext(ctx,
+		"INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, is_manual) VALUES (?, ?, ?, ?, 1)",
+		"test-peer", "10.0.0.1", "key1", "hmac1")
+	require.NoError(t, err)
+	peerID, err := peerResult.LastInsertId()
+	require.NoError(t, err)
+
+	// Create peer_ips entry
+	_, err = database.ExecContext(ctx,
+		"INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 1)",
+		peerID, "10.0.0.1")
+	require.NoError(t, err)
+
+	err = CreateSnapshot(ctx, database, "peer", int(peerID), "create", "")
+	require.NoError(t, err)
+
+	// Setup: Create a group
+	groupResult, err := database.ExecContext(ctx,
+		"INSERT INTO groups (name) VALUES (?)", "test-group")
+	require.NoError(t, err)
+	groupID, err := groupResult.LastInsertId()
+	require.NoError(t, err)
+
+	err = CreateSnapshot(ctx, database, "group", int(groupID), "create", "")
+	require.NoError(t, err)
+
+	// Setup: Create a service
+	serviceResult, err := database.ExecContext(ctx,
+		"INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)", "test-service", "8080", "tcp")
+	require.NoError(t, err)
+	serviceID, err := serviceResult.LastInsertId()
+	require.NoError(t, err)
+
+	err = CreateSnapshot(ctx, database, "service", int(serviceID), "create", "")
+	require.NoError(t, err)
+
+	// Setup: Create a policy
+	policyResult, err := database.ExecContext(ctx,
+		`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled)
+		VALUES (?, ?, 'group', ?, ?, 'peer', 'ACCEPT', 100, 1)`,
+		"test-policy", groupID, serviceID, peerID)
+	require.NoError(t, err)
+	policyID, err := policyResult.LastInsertId()
+	require.NoError(t, err)
+
+	err = CreateSnapshot(ctx, database, "policy", int(policyID), "create", "")
+	require.NoError(t, err)
+
+	// Call RollbackSnapshots
+	err = RollbackSnapshots(ctx, database)
+	require.NoError(t, err, "RollbackSnapshots should succeed")
+
+	// Assert: peer is deleted
+	var count int
+	err = database.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM peers WHERE id = ?", peerID).Scan(&count)
+	require.NoError(t, err)
+	assert.Equal(t, 0, count, "Peer should be deleted")
+
+	// Assert: peer_ips is deleted
+	err = database.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM peer_ips WHERE peer_id = ?", peerID).Scan(&count)
+	require.NoError(t, err)
+	assert.Equal(t, 0, count, "Peer IPs should be deleted")
+
+	// Assert: group is deleted
+	err = database.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM groups WHERE id = ?", groupID).Scan(&count)
+	require.NoError(t, err)
+	assert.Equal(t, 0, count, "Group should be deleted")
+
+	// Assert: service is deleted
+	err = database.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM services WHERE id = ?", serviceID).Scan(&count)
+	require.NoError(t, err)
+	assert.Equal(t, 0, count, "Service should be deleted")
+
+	// Assert: policy is deleted
+	err = database.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM policies WHERE id = ?", policyID).Scan(&count)
+	require.NoError(t, err)
+	assert.Equal(t, 0, count, "Policy should be deleted")
+
+	// Assert: all snapshots are deleted
+	err = database.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM change_snapshots").Scan(&count)
+	require.NoError(t, err)
+	assert.Equal(t, 0, count, "All snapshots should be deleted")
+
+	// Assert: all pending changes are deleted
+	err = database.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM pending_changes").Scan(&count)
+	require.NoError(t, err)
+	assert.Equal(t, 0, count, "All pending changes should be deleted")
+}
+
+func TestRollbackSnapshots_PeerCreateDeletesPeerIPs(t *testing.T) {
+	database, cleanup := setupTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Setup: Create a peer
+	result, err := database.ExecContext(ctx,
+		"INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, is_manual) VALUES (?, ?, ?, ?, 1)",
+		"test-peer", "10.0.0.1", "key1", "hmac1")
+	require.NoError(t, err)
+	peerID, err := result.LastInsertId()
+	require.NoError(t, err)
+
+	// Create 2 peer_ips entries: one primary, one not
+	_, err = database.ExecContext(ctx,
+		"INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 1)",
+		peerID, "10.0.0.1")
+	require.NoError(t, err)
+
+	_, err = database.ExecContext(ctx,
+		"INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 0)",
+		peerID, "10.0.0.2")
+	require.NoError(t, err)
+
+	// Verify peer_ips exist before rollback
+	var count int
+	err = database.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM peer_ips WHERE peer_id = ?", peerID).Scan(&count)
+	require.NoError(t, err)
+	assert.Equal(t, 2, count, "Two peer IPs should exist before rollback")
+
+	// Create snapshot
+	err = CreateSnapshot(ctx, database, "peer", int(peerID), "create", "")
+	require.NoError(t, err)
+
+	// Call RollbackSnapshots
+	err = RollbackSnapshots(ctx, database)
+	require.NoError(t, err, "RollbackSnapshots should succeed")
+
+	// Assert: both peer_ips entries are deleted
+	err = database.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM peer_ips WHERE peer_id = ?", peerID).Scan(&count)
+	require.NoError(t, err)
+	assert.Equal(t, 0, count, "Both peer IPs should be deleted")
+
+	// Assert: peer is deleted
+	err = database.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM peers WHERE id = ?", peerID).Scan(&count)
+	require.NoError(t, err)
+	assert.Equal(t, 0, count, "Peer should be deleted")
 }

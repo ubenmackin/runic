@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 
 	"runic/internal/common"
 	"runic/internal/common/log"
@@ -893,20 +894,70 @@ func migrateSchema(ctx context.Context, database *sql.DB) error {
 	if !hasChangeSnapshots {
 		log.Info("Migration: creating change_snapshots table")
 		_, err = database.ExecContext(ctx, `
-			CREATE TABLE change_snapshots (
-				id INTEGER PRIMARY KEY AUTOINCREMENT,
-				entity_type TEXT NOT NULL CHECK (entity_type IN ('group', 'service', 'policy')),
-				entity_id INTEGER NOT NULL,
-				action TEXT NOT NULL CHECK (action IN ('create', 'update', 'delete')),
-				snapshot_data TEXT,
-				created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-				UNIQUE(entity_type, entity_id)
-			)
-		`)
+CREATE TABLE change_snapshots (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  entity_type TEXT NOT NULL CHECK (entity_type IN ('group', 'service', 'policy', 'peer')),
+  entity_id INTEGER NOT NULL,
+  action TEXT NOT NULL CHECK (action IN ('create', 'update', 'delete')),
+  snapshot_data TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(entity_type, entity_id)
+)
+`)
 		if err != nil {
 			return fmt.Errorf("failed to create change_snapshots table: %w", err)
 		}
 		log.Info("Migration: created change_snapshots table")
+	}
+
+	// Migration: Migrate change_snapshots to include 'peer' entity type
+	// Check if 'peer' is already in the CHECK constraint by inspecting table SQL
+	// SQLite doesn't support ALTER TABLE CHECK constraints, so we need to recreate the table
+	var changeSnapshotsHasPeer bool
+	testRow := database.QueryRowContext(ctx, "SELECT sql FROM sqlite_master WHERE type='table' AND name='change_snapshots'")
+	var tableSQL string
+	if err := testRow.Scan(&tableSQL); err == nil {
+		changeSnapshotsHasPeer = strings.Contains(tableSQL, "'peer'")
+	}
+	if !changeSnapshotsHasPeer {
+		log.Info("Migration: adding 'peer' entity type to change_snapshots CHECK constraint")
+		tx, err := database.BeginTx(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("begin change_snapshots migration tx: %w", err)
+		}
+		committed := false
+		defer func() {
+			if !committed {
+				if rErr := tx.Rollback(); rErr != nil {
+					log.Warn("Failed to rollback change_snapshots migration", "error", rErr)
+				}
+			}
+		}()
+		if _, err := tx.ExecContext(ctx, `CREATE TABLE change_snapshots_new (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			entity_type TEXT NOT NULL CHECK (entity_type IN ('group', 'service', 'policy', 'peer')),
+			entity_id INTEGER NOT NULL,
+			action TEXT NOT NULL CHECK (action IN ('create', 'update', 'delete')),
+			snapshot_data TEXT,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(entity_type, entity_id)
+		)`); err != nil {
+			return fmt.Errorf("create change_snapshots_new: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO change_snapshots_new SELECT * FROM change_snapshots`); err != nil {
+			return fmt.Errorf("copy change_snapshots data: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, "DROP TABLE change_snapshots"); err != nil {
+			return fmt.Errorf("drop old change_snapshots: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, "ALTER TABLE change_snapshots_new RENAME TO change_snapshots"); err != nil {
+			return fmt.Errorf("rename change_snapshots_new: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit change_snapshots migration: %w", err)
+		}
+		committed = true
+		log.Info("Migration: successfully added 'peer' to change_snapshots entity_type CHECK")
 	}
 
 	// Migration: Add encryption_key to system_config for AES-256-GCM encryption
@@ -1270,6 +1321,62 @@ SELECT id, ip_address, 1 FROM peers
 			return fmt.Errorf("failed to backfill first_applied_at: %w", err)
 		}
 		log.Info("Migration: backfilled first_applied_at from applied_at")
+	}
+
+	// Migration: Add 'peer' to pending_changes change_type CHECK constraint
+	// The original migration created pending_changes with CHECK (change_type IN ('policy', 'group', 'service'))
+	// which rejects change_type='peer'. Recreate the table to match schema.sql (no CHECK on change_type).
+	var pendingChangesHasRestrictiveCheck bool
+	if hasPendingChanges {
+		pcRow := database.QueryRowContext(ctx, "SELECT sql FROM sqlite_master WHERE type='table' AND name='pending_changes'")
+		var pcTableSQL string
+		if err := pcRow.Scan(&pcTableSQL); err == nil {
+			// If the table SQL still contains the restrictive CHECK on change_type, we need to recreate
+			pendingChangesHasRestrictiveCheck = strings.Contains(pcTableSQL, "change_type") && strings.Contains(pcTableSQL, "CHECK")
+		}
+	}
+	if pendingChangesHasRestrictiveCheck {
+		log.Info("Migration: removing restrictive CHECK on pending_changes.change_type to allow 'peer'")
+		tx, err := database.BeginTx(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("begin pending_changes migration tx: %w", err)
+		}
+		committed := false
+		defer func() {
+			if !committed {
+				if rErr := tx.Rollback(); rErr != nil {
+					log.Warn("Failed to rollback pending_changes migration", "error", rErr)
+				}
+			}
+		}()
+		if _, err := tx.ExecContext(ctx, `CREATE TABLE pending_changes_new (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			peer_id INTEGER NOT NULL REFERENCES peers(id) ON DELETE CASCADE,
+			change_type TEXT NOT NULL,
+			change_id INTEGER NOT NULL,
+			change_action TEXT NOT NULL,
+			change_summary TEXT,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`); err != nil {
+			return fmt.Errorf("create pending_changes_new: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO pending_changes_new SELECT * FROM pending_changes`); err != nil {
+			return fmt.Errorf("copy pending_changes data: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, "DROP TABLE pending_changes"); err != nil {
+			return fmt.Errorf("drop old pending_changes: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, "ALTER TABLE pending_changes_new RENAME TO pending_changes"); err != nil {
+			return fmt.Errorf("rename pending_changes_new: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_pending_changes_peer ON pending_changes(peer_id)"); err != nil {
+			return fmt.Errorf("create idx_pending_changes_peer: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit pending_changes migration: %w", err)
+		}
+		committed = true
+		log.Info("Migration: successfully removed restrictive CHECK on pending_changes.change_type")
 	}
 
 	return nil

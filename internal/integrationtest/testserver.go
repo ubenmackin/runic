@@ -79,7 +79,7 @@ func NewTestAPIServer(t *testing.T) (*httptest.Server, func()) {
 		CREATE TABLE IF NOT EXISTS pending_changes (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			peer_id INTEGER NOT NULL REFERENCES peers(id),
-			change_type TEXT NOT NULL CHECK (change_type IN ('policy', 'group', 'service')),
+			change_type TEXT NOT NULL,
 			change_id INTEGER NOT NULL,
 			change_action TEXT NOT NULL CHECK (change_action IN ('create', 'update', 'delete')),
 			change_summary TEXT NOT NULL,

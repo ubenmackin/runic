@@ -58,6 +58,8 @@ func (h *Handler) lookupEntityName(ctx context.Context, changeType string, chang
 		return h.PolicyStore.GetNameByID(ctx, changeID)
 	case "service":
 		return h.ServiceStore.GetNameByID(ctx, changeID)
+	case "peer":
+		return h.PeerStore.GetPeerHostname(ctx, changeID)
 	default:
 		return "Unknown", nil
 	}
@@ -141,7 +143,7 @@ type RollbackRequest struct {
 }
 
 type ApplyEntityRequest struct {
-	EntityType string `json:"entity_type"` // "group", "policy", or "service"
+	EntityType string `json:"entity_type"` // "group", "policy", "service", or "peer"
 	EntityID   int    `json:"entity_id"`
 }
 
@@ -454,8 +456,8 @@ func (h *Handler) ApplyEntityPendingChanges(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	if req.EntityType != "group" && req.EntityType != "policy" && req.EntityType != "service" {
-		common.RespondError(w, http.StatusBadRequest, "invalid entity_type: must be 'group', 'policy', or 'service'")
+	if req.EntityType != "group" && req.EntityType != "policy" && req.EntityType != "service" && req.EntityType != "peer" {
+		common.RespondError(w, http.StatusBadRequest, "invalid entity_type: must be 'group', 'policy', 'service', or 'peer'")
 		return
 	}
 

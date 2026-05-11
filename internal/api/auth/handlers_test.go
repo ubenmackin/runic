@@ -314,12 +314,12 @@ func TestHandleLoginPOST_Success(t *testing.T) {
 	w := httptest.NewRecorder()
 
 	tests := []struct {
-		name string
-		body string
+		name     string
+		body     string
 		expected int
 	}{
-	{"wrong password", `{"username":"loginuser","password":"wrongpassword"}`, http.StatusUnauthorized},
-	{"unknown user", `{"username":"unknown","password":"password123"}`, http.StatusUnauthorized},
+		{"wrong password", `{"username":"loginuser","password":"wrongpassword"}`, http.StatusUnauthorized},
+		{"unknown user", `{"username":"unknown","password":"password123"}`, http.StatusUnauthorized},
 	}
 
 	for _, tt := range tests {

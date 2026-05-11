@@ -9,6 +9,7 @@ import (
 
 	"runic/internal/api/common"
 	"runic/internal/common/log"
+	"runic/internal/db"
 )
 
 type ApplyResult struct {
@@ -18,9 +19,17 @@ type ApplyResult struct {
 	ServicesCreated int
 }
 
+type createdEntity struct {
+	entityType string
+	entityID   int
+	summary    string
+}
+
 // ApplySession creates manual peers, groups, services, and policies from the import session.
 func ApplySession(ctx context.Context, database *sql.DB, sessionID int64, changeWorker *common.ChangeWorker) (*ApplyResult, error) {
 	result := &ApplyResult{}
+
+	var createdEntities []createdEntity
 
 	tx, err := database.BeginTx(ctx, nil)
 	if err != nil {
@@ -164,6 +173,14 @@ func ApplySession(ctx context.Context, database *sql.DB, sessionID int64, change
 		}
 		realID, _ := res.LastInsertId()
 		stagingToRealPeer[pm.StagingID] = realID
+		_, err = tx.ExecContext(ctx, "INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 1)", realID, pm.IP)
+		if err != nil {
+			return nil, fmt.Errorf("create peer IP %s: %w", pm.IP, err)
+		}
+		if err := db.CreateSnapshot(ctx, tx, "peer", int(realID), "create", ""); err != nil {
+			return nil, fmt.Errorf("create peer snapshot: %w", err)
+		}
+		createdEntities = append(createdEntities, createdEntity{entityType: "peer", entityID: int(realID), summary: "Imported peer created"})
 		result.PeersCreated++
 	}
 
@@ -257,6 +274,10 @@ func ApplySession(ctx context.Context, database *sql.DB, sessionID int64, change
 		}
 		realGroupID, _ := res.LastInsertId()
 		stagingToRealGroup[gm.StagingID] = realGroupID
+		if err := db.CreateSnapshot(ctx, tx, "group", int(realGroupID), "create", ""); err != nil {
+			return nil, fmt.Errorf("create group snapshot: %w", err)
+		}
+		createdEntities = append(createdEntities, createdEntity{entityType: "group", entityID: int(realGroupID), summary: "Imported group created"})
 		result.GroupsCreated++
 
 		var memberPeerIDs []int64
@@ -369,6 +390,10 @@ func ApplySession(ctx context.Context, database *sql.DB, sessionID int64, change
 		}
 		realSvcID, _ := res.LastInsertId()
 		stagingToRealService[sm.StagingID] = realSvcID
+		if err := db.CreateSnapshot(ctx, tx, "service", int(realSvcID), "create", ""); err != nil {
+			return nil, fmt.Errorf("create service snapshot: %w", err)
+		}
+		createdEntities = append(createdEntities, createdEntity{entityType: "service", entityID: int(realSvcID), summary: "Imported service created"})
 		result.ServicesCreated++
 	}
 
@@ -452,7 +477,7 @@ func ApplySession(ctx context.Context, database *sql.DB, sessionID int64, change
 			targetIPVal = targetIP.String
 		}
 
-		_, err := tx.ExecContext(ctx,
+		policyRes, err := tx.ExecContext(ctx,
 			"INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled, direction, target_scope, source_ip, target_ip) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 			policyName, realSourceID, sourceType, realServiceID, realTargetID, targetType, action, priority, enabled, direction, targetScope, sourceIPVal, targetIPVal,
 		)
@@ -461,6 +486,12 @@ func ApplySession(ctx context.Context, database *sql.DB, sessionID int64, change
 			continue
 		}
 		result.PoliciesCreated++
+		if policyID, pErr := policyRes.LastInsertId(); pErr == nil {
+			if err := db.CreateSnapshot(ctx, tx, "policy", int(policyID), "create", ""); err != nil {
+				log.Warn("Failed to create policy snapshot", "policyID", policyID, "error", err)
+			}
+			createdEntities = append(createdEntities, createdEntity{entityType: "policy", entityID: int(policyID), summary: "Imported policy created"})
+		}
 	}
 	_ = ruleRows.Close()
 
@@ -475,9 +506,11 @@ func ApplySession(ctx context.Context, database *sql.DB, sessionID int64, change
 	}
 	committed = true
 
-	// 6. Queue peer change for recompilation (outside transaction)
+	// 6. Queue per-entity pending changes for recompilation (outside transaction)
 	if changeWorker != nil {
-		changeWorker.QueuePeerChange(ctx, []int{int(session.PeerID)}, "policy", "create", 0, "import applied")
+		for _, e := range createdEntities {
+			changeWorker.QueuePeerChange(ctx, []int{int(session.PeerID)}, e.entityType, "create", e.entityID, e.summary)
+		}
 	}
 
 	log.Info("Import session applied",

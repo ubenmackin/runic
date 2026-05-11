@@ -267,18 +267,18 @@ func TestSaveBundle(t *testing.T) {
 				tt.checkBundle(t, bundle)
 			}
 
-if tt.checkPeerVer != nil {
-			var peer models.PeerRow
-			peer, err = GetPeer(ctx, db, tt.params.PeerID)
-			if err != nil {
-				t.Fatalf("failed to get peer: %v", err)
+			if tt.checkPeerVer != nil {
+				var peer models.PeerRow
+				peer, err = GetPeer(ctx, db, tt.params.PeerID)
+				if err != nil {
+					t.Fatalf("failed to get peer: %v", err)
+				}
+				var ver string
+				if peer.BundleVersion.Valid {
+					ver = peer.BundleVersion.String
+				}
+				tt.checkPeerVer(t, ver)
 			}
-			var ver string
-			if peer.BundleVersion.Valid {
-				ver = peer.BundleVersion.String
-			}
-			tt.checkPeerVer(t, ver)
-		}
 		})
 	}
 }
