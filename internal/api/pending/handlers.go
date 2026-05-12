@@ -272,6 +272,11 @@ func (h *Handler) PreviewPeerPendingBundle(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	if h.Compiler == nil {
+		common.RespondError(w, http.StatusInternalServerError, "compiler not available")
+		return
+	}
+
 	content, err := h.Compiler.Compile(ctx, peerID)
 	if err != nil {
 		log.ErrorContext(ctx, "failed to compile bundle for peer", "peer_id", peerID, "error", err)
@@ -340,6 +345,11 @@ func (h *Handler) ApplyPeerPendingBundle(w http.ResponseWriter, r *http.Request)
 	if err != nil {
 		log.ErrorContext(ctx, "failed to query peer", "error", err)
 		common.InternalError(w)
+		return
+	}
+
+	if h.Compiler == nil {
+		common.RespondError(w, http.StatusInternalServerError, "compiler not available")
 		return
 	}
 
@@ -498,7 +508,7 @@ func (h *Handler) ApplyEntityPendingChanges(w http.ResponseWriter, r *http.Reque
 		remainingCount = count
 
 		// If other changes remain, regenerate the bundle preview
-		if remainingCount > 0 {
+		if remainingCount > 0 && h.Compiler != nil {
 			content, compileErr := h.Compiler.Compile(ctx, peerID)
 			if compileErr != nil {
 				log.WarnContext(ctx, "failed to compile bundle preview for remaining changes", "error", compileErr)
@@ -532,16 +542,18 @@ func (h *Handler) ApplyEntityPendingChanges(w http.ResponseWriter, r *http.Reque
 	}
 
 	var bundleVersion string
-	bundle, err := h.Compiler.CompileAndStore(ctx, peerID)
-	if err != nil {
-		log.WarnContext(ctx, "failed to compile and store bundle", "error", err)
-		// Don't fail - the pending change is still cleared
-	} else {
-		bundleVersion = bundle.Version
-		hostname, hostnameErr := h.PeerStore.GetPeerHostname(ctx, peerID)
-		if hostnameErr == nil && hostname != "" {
-			if !h.SSEHub.NotifyBundleUpdated("host-"+hostname, bundle.Version) {
-				log.Warn("NotifyBundleUpdated failed: agent not connected after applying pending bundle", "host_id", "host-"+hostname)
+	if h.Compiler != nil {
+		bundle, compErr := h.Compiler.CompileAndStore(ctx, peerID)
+		if compErr != nil {
+			log.WarnContext(ctx, "failed to compile and store bundle", "error", compErr)
+			// Don't fail - the pending change is still cleared
+		} else {
+			bundleVersion = bundle.Version
+			hostname, hostnameErr := h.PeerStore.GetPeerHostname(ctx, peerID)
+			if hostnameErr == nil && hostname != "" {
+				if !h.SSEHub.NotifyBundleUpdated("host-"+hostname, bundle.Version) {
+					log.Warn("NotifyBundleUpdated failed: agent not connected after applying pending bundle", "host_id", "host-"+hostname)
+				}
 			}
 		}
 	}
@@ -777,6 +789,10 @@ func (h *Handler) applyBundleForPeer(ctx context.Context, peerID int) error {
 	hostname, err := h.PeerStore.GetPeerHostname(ctx, peerID)
 	if err != nil {
 		return fmt.Errorf("peer not found: %w", err)
+	}
+
+	if h.Compiler == nil {
+		return fmt.Errorf("compiler not available")
 	}
 
 	// Begin transaction for atomic operations

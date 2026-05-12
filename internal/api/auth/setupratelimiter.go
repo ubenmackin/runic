@@ -23,6 +23,12 @@ func CheckSetupRateLimit(remoteAddr string) error {
 	return setupRateLimiter.Check(remoteAddr)
 }
 
+// StopSetupRateLimit stops the setup rate limiter's background cleanup goroutine.
+// Call during graceful shutdown to prevent goroutine leaks.
+func StopSetupRateLimit() {
+	setupRateLimiter.Stop()
+}
+
 // ResetSetupRateLimit resets the setup rate limiter. This is intended for testing to ensure test isolation.
 func ResetSetupRateLimit() {
 	setupRateLimiter.Reset()

@@ -27,15 +27,13 @@ export function usePagination(data, pageKey, defaultRowsPerPage = 10) {
   }, [storageKey, rowsPerPage])
 
   // Reset page to 1 when data length changes (e.g., filter reduces results)
-  // Using ref to track previous value and setState during render is intentional here
-  // for synchronizing pagination with data changes
   const prevDataLengthRef = useRef(data?.length)
-  if (prevDataLengthRef.current !== data?.length) {
-    prevDataLengthRef.current = data?.length
-    if (page !== 1) {
+  useEffect(() => {
+    if (prevDataLengthRef.current !== data?.length) {
+      prevDataLengthRef.current = data?.length
       setPage(1)
     }
-  }
+  }, [data?.length])
 
   const setRowsPerPage = (newRowsPerPage) => {
     setRowsPerPageState(newRowsPerPage)

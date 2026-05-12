@@ -479,12 +479,12 @@ func TestListenSSE(t *testing.T) {
 			errIsAuth: true,
 		},
 		{
-			name: "returns error when context cancelled",
+			name: "returns error when context canceled",
 			setupServer: func() *httptest.Server {
 				return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					w.Header().Set("Content-Type", "text/event-stream")
 					w.WriteHeader(http.StatusOK)
-					// Wait for context to be cancelled then close
+					// Wait for context to be canceled then close
 					time.Sleep(50 * time.Millisecond)
 				}))
 			},
@@ -512,10 +512,10 @@ func TestListenSSE(t *testing.T) {
 			client := server.Client()
 			err := ListenSSE(ctx, client, server.URL, "host123", "test-token", "1.0.0", onBundleUpdate, func(context.Context) {}, func(context.Context, string) {})
 
-			if tt.name == "returns error when context cancelled" {
-				// Context cancelled should return error
+			if tt.name == "returns error when context canceled" {
+				// Context canceled should return error
 				if err == nil {
-					t.Errorf("expected error when context cancelled")
+					t.Errorf("expected error when context canceled")
 				}
 			} else if tt.name == "returns ErrUnauthorized on 401" {
 				if !tt.wantErr {

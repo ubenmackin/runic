@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"runic/internal/api/common"
@@ -93,7 +94,7 @@ func (s *ServiceStore) QueuePeerChange(ctx context.Context, changeWorker *common
 
 func (s *ServiceStore) ListServices(ctx context.Context) ([]models.ServiceRow, error) {
 	rows, err := s.db.QueryContext(ctx,
-		"SELECT "+serviceRowColumns+" FROM services")
+		"SELECT "+serviceRowColumns+" FROM services WHERE is_pending_delete = 0")
 	if err != nil {
 		return nil, fmt.Errorf("query services: %w", err)
 	}
@@ -161,7 +162,10 @@ func (s *ServiceStore) GetServiceByPort(ctx context.Context, port, protocol stri
 		err := s.db.QueryRowContext(ctx, query, protocol).Scan(
 			&svc.ID, &svc.Name, &svc.Ports, &svc.SourcePorts, &svc.Protocol, &svc.Description, &svc.DirectionHint, &svc.IsSystem, &svc.NoConntrack, &svc.IsPendingDelete)
 		if err != nil {
-			return ic.EnsureSlice([]models.ServiceRow{}), nil
+			if errors.Is(err, sql.ErrNoRows) {
+				return ic.EnsureSlice([]models.ServiceRow{}), nil
+			}
+			return nil, fmt.Errorf("get service by port: %w", err)
 		}
 		return []models.ServiceRow{svc}, nil
 	}
@@ -181,7 +185,10 @@ func (s *ServiceStore) GetServiceByPort(ctx context.Context, port, protocol stri
 	err := s.db.QueryRowContext(ctx, query, args...).Scan(
 		&svc.ID, &svc.Name, &svc.Ports, &svc.SourcePorts, &svc.Protocol, &svc.Description, &svc.DirectionHint, &svc.IsSystem, &svc.NoConntrack, &svc.IsPendingDelete)
 	if err != nil {
-		return ic.EnsureSlice([]models.ServiceRow{}), nil
+		if errors.Is(err, sql.ErrNoRows) {
+			return ic.EnsureSlice([]models.ServiceRow{}), nil
+		}
+		return nil, fmt.Errorf("get service by port: %w", err)
 	}
 	return []models.ServiceRow{svc}, nil
 }

@@ -425,6 +425,74 @@ func TestHandleLogoutPOST_InvalidToken(t *testing.T) {
 	}
 }
 
+func TestHandleLogoutPOST_BearerTokenFallback(t *testing.T) {
+	db, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	setupTestJWT(t, db)
+
+	// Generate a valid token to use in the Authorization header
+	token, err := auth.GenerateToken("testuser", "admin", 15*time.Minute)
+	if err != nil {
+		t.Fatalf("failed to generate token: %v", err)
+	}
+
+	h := newTestHandler(db)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/logout", nil)
+	r.Header.Set("Authorization", "Bearer "+token)
+
+	h.HandleLogoutPOST(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d", http.StatusOK, w.Code)
+	}
+
+	var response map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+	if response["status"] != "logged_out" {
+		t.Errorf("expected status 'logged_out', got %q", response["status"])
+	}
+}
+
+func TestHandleLogoutPOST_InvalidBearerToken(t *testing.T) {
+	db, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	setupTestJWT(t, db)
+
+	h := newTestHandler(db)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/logout", nil)
+	r.Header.Set("Authorization", "Bearer invalid-token")
+
+	h.HandleLogoutPOST(w, r)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("expected status %d, got %d", http.StatusUnauthorized, w.Code)
+	}
+}
+
+func TestHandleLogoutPOST_MissingBearerPrefix(t *testing.T) {
+	db, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	setupTestJWT(t, db)
+
+	h := newTestHandler(db)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/logout", nil)
+	r.Header.Set("Authorization", "Basic dXNlcjpwYXNz")
+
+	h.HandleLogoutPOST(w, r)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("expected status %d, got %d", http.StatusUnauthorized, w.Code)
+	}
+}
+
 // =============================================================================
 // =============================================================================
 

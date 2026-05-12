@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Bell, Settings, AlertTriangle, Loader2 } from 'lucide-react'
 import { api, QUERY_KEYS, getAlertRules, updateAlertRule } from '../api/client'
@@ -23,6 +24,8 @@ const WINDOW_OPTIONS = [1, 5, 15, 30, 60]
 export default function AlertSettings({ showHeader = true }) {
   const qc = useQueryClient()
   const showToast = useToastContext()
+
+  const [editingThreshold, setEditingThreshold] = useState({})
 
   const { data: alertRules, isLoading: rulesLoading, error: rulesError } = useQuery({
     queryKey: QUERY_KEYS.alertRules(),
@@ -146,9 +149,22 @@ Throttle (min)
 type="number"
 min="1"
 max="99999"
-value={threshold}
-onChange={(e) => handleUpdateRule(rule?.id, 'threshold_value', parseInt(e.target.value) || 1)}
-onBlur={() => handleUpdateRule(rule?.id, 'threshold_value', threshold)}
+value={editingThreshold[rule?.id] ?? threshold}
+onChange={(e) => {
+  const newVal = parseInt(e.target.value) || 1
+  setEditingThreshold((prev) => ({ ...prev, [rule?.id]: newVal }))
+}}
+onBlur={() => {
+  const val = editingThreshold[rule?.id]
+  if (val !== undefined) {
+    handleUpdateRule(rule?.id, 'threshold_value', val)
+    setEditingThreshold((prev) => {
+      const next = { ...prev }
+      delete next[rule?.id]
+      return next
+    })
+  }
+}}
 disabled={mutation.isPending || !rule}
 className="w-20 px-2 py-1 text-center text-sm border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral disabled:opacity-50"
 />

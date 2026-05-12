@@ -179,7 +179,72 @@ func (s *SMTPSender) sendEmail(to, subject, body, contentType string) error {
 }
 
 func (s *SMTPSender) sendWithTLS(addr string, auth smtp.Auth, from string, to []string, msg []byte) error {
-	// Connect to the SMTP server
+	// SMTPS (direct TLS, typically port 465): connect with TLS from the start.
+	if s.config.UseSMTPS {
+		tlsConfig := &tls.Config{
+			InsecureSkipVerify: false,
+			ServerName:         s.config.Host,
+		}
+		conn, err := tls.Dial("tcp", addr, tlsConfig)
+		if err != nil {
+			return fmt.Errorf("failed to connect to SMTPS server: %w", err)
+		}
+		defer func() {
+			if err := conn.Close(); err != nil {
+				s.logger.Debug("failed to close SMTPS connection", "error", err)
+			}
+		}()
+
+		// Wrap the TLS connection with SMTP
+		smtpConn, err := smtp.NewClient(conn, s.config.Host)
+		if err != nil {
+			return fmt.Errorf("failed to create SMTP client over TLS: %w", err)
+		}
+		defer func() {
+			if err := smtpConn.Close(); err != nil {
+				s.logger.Debug("failed to close SMTP client", "error", err)
+			}
+		}()
+
+		if err := smtpConn.Hello("localhost"); err != nil {
+			return fmt.Errorf("SMTP Hello failed: %w", err)
+		}
+
+		if auth != nil {
+			if err := smtpConn.Auth(auth); err != nil {
+				return fmt.Errorf("SMTP authentication failed: %w", err)
+			}
+			s.logger.Debug("SMTP authentication successful")
+		}
+
+		if err := smtpConn.Mail(from); err != nil {
+			return fmt.Errorf("failed to set sender: %w", err)
+		}
+		for _, recipient := range to {
+			if err := smtpConn.Rcpt(recipient); err != nil {
+				return fmt.Errorf("failed to set recipient %s: %w", recipient, err)
+			}
+		}
+
+		wc, err := smtpConn.Data()
+		if err != nil {
+			return fmt.Errorf("failed to get data writer: %w", err)
+		}
+		defer func() {
+			if err := wc.Close(); err != nil {
+				s.logger.Debug("failed to close data writer", "error", err)
+			}
+		}()
+
+		_, err = wc.Write(msg)
+		if err != nil {
+			return fmt.Errorf("failed to write message: %w", err)
+		}
+
+		return nil
+	}
+
+	// Standard SMTP with optional STARTTLS (ports 25, 587, etc.)
 	conn, err := smtp.Dial(addr)
 	if err != nil {
 		return fmt.Errorf("failed to connect to SMTP server: %w", err)

@@ -70,6 +70,7 @@ func (r *RealCommandRunner) StartDetached(ctx context.Context, name string, args
 
 type Agent struct {
 	config          *identity.Config
+	configMu        sync.RWMutex // protects config for concurrent read/write across goroutines
 	configPath      string
 	httpClient      *http.Client
 	sseClient       *http.Client
@@ -116,30 +117,50 @@ func New(configPath, controlPlaneURL string) *Agent {
 	return agent
 }
 
+// getConfig returns a snapshot of the current config for read-only access.
+// It acquires a read lock so that concurrent goroutines can read safely
+// while updateConfig holds the write lock.
+func (a *Agent) getConfig() *identity.Config {
+	a.configMu.RLock()
+	defer a.configMu.RUnlock()
+	return a.config
+}
+
+// updateConfig acquires the write lock and applies fn to the config.
+// Use this for any mutation of config fields (e.g. CurrentBundleVer,
+// HMACKey) to avoid data races with readers in other goroutines.
+func (a *Agent) updateConfig(fn func(*identity.Config)) {
+	a.configMu.Lock()
+	defer a.configMu.Unlock()
+	fn(a.config)
+}
+
 func (a *Agent) Run(ctx context.Context) error {
 	if err := a.loadConfig(); err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	if a.config.ControlPlaneURL == "" {
+	cfg := a.getConfig()
+	if cfg.ControlPlaneURL == "" {
 		return fmt.Errorf("control plane URL is required: set via --url flag or RUNIC_CONTROL_PLANE_URL env var")
 	}
 
 	log.Info("Runic agent starting", "version", a.version)
-	log.Info("Control plane URL", "url", a.config.ControlPlaneURL)
+	log.Info("Control plane URL", "url", cfg.ControlPlaneURL)
 
 	if err := a.DisableSystemIPTablesIfConfigured(); err != nil {
 		log.Warn("Failed to disable system iptables services", "error", err)
 	}
 
-	if a.config.NeedsRegistration() {
+	if cfg.NeedsRegistration() {
 		log.Info("No credentials found, registering with control plane")
 		if err := a.register(ctx); err != nil {
 			return fmt.Errorf("registration failed: %w", err)
 		}
 	}
 
-	a.rotationManager = rotation.NewManager(a.config, a.configPath, a.httpClient, a.config.ControlPlaneURL, a.config.HostID)
+	cfg = a.getConfig()
+	a.rotationManager = rotation.NewManager(a.config, a.configPath, a.httpClient, cfg.ControlPlaneURL, cfg.HostID)
 
 	if err := a.backupIptables(); err != nil {
 		log.Warn("Failed to backup iptables", "error", err)
@@ -147,7 +168,8 @@ func (a *Agent) Run(ctx context.Context) error {
 
 	bootPullDone := false
 
-	if a.config.ApplyOnBoot && a.config.ApplyRulesBundle {
+	cfg = a.getConfig()
+	if cfg.ApplyOnBoot && cfg.ApplyRulesBundle {
 		if !a.isControlPlaneReachable(ctx) {
 			log.Info("Control plane unreachable, applying cached bundle")
 			if err := a.applyCachedBundle(ctx); err != nil {
@@ -164,11 +186,12 @@ func (a *Agent) Run(ctx context.Context) error {
 				bootPullDone = true
 			}
 		}
-	} else if a.config.ApplyOnBoot {
+	} else if cfg.ApplyOnBoot {
 		log.Info("apply_on_boot enabled but apply_rules_bundle disabled, skipping boot-time bundle application")
 	}
 
-	a.shipper = transport.NewShipper(a.httpClient, a.config.ControlPlaneURL, a.config.Token, a.config.HostID, a.config.LogPath)
+	cfg = a.getConfig()
+	a.shipper = transport.NewShipper(a.httpClient, cfg.ControlPlaneURL, cfg.Token, cfg.HostID, cfg.LogPath)
 
 	g, gCtx := errgroup.WithContext(ctx)
 
@@ -199,7 +222,7 @@ func (a *Agent) Run(ctx context.Context) error {
 
 func (a *Agent) backupIptables() error {
 	if _, err := os.Stat(a.backupPath); err == nil {
-		log.Info("iptables backup already exists, skipping")
+		log.Info("Firewall backup already exists, skipping")
 		return nil
 	}
 
@@ -210,14 +233,18 @@ func (a *Agent) backupIptables() error {
 
 	out, err := a.cmdRunner.Run(context.Background(), "iptables-save")
 	if err != nil {
-		return fmt.Errorf("iptables-save: %w", err)
+		log.Info("iptables-save failed, trying nft list ruleset", "error", err)
+		out, err = a.cmdRunner.Run(context.Background(), "nft", "list", "ruleset")
+		if err != nil {
+			return fmt.Errorf("firewall backup failed (tried iptables-save and nft list ruleset): %w", err)
+		}
 	}
 
 	if err := os.WriteFile(a.backupPath, out, 0600); err != nil {
 		return fmt.Errorf("write backup: %w", err)
 	}
 
-	log.Info("iptables rules backed up", "path", a.backupPath)
+	log.Info("Firewall rules backed up", "path", a.backupPath)
 	return nil
 }
 
@@ -227,6 +254,8 @@ func (a *Agent) loadConfig() error {
 		return err
 	}
 
+	a.configMu.Lock()
+	defer a.configMu.Unlock()
 	if a.config != nil {
 		if cfg.ControlPlaneURL == "" && a.config.ControlPlaneURL != "" {
 			cfg.ControlPlaneURL = a.config.ControlPlaneURL
@@ -238,6 +267,14 @@ func (a *Agent) loadConfig() error {
 }
 
 func (a *Agent) saveConfig() error {
+	a.configMu.RLock()
+	defer a.configMu.RUnlock()
+	return identity.SaveConfig(a.configPath, a.config)
+}
+
+// saveConfigLocked saves the config without acquiring the mutex.
+// The caller must already hold configMu (or the write lock via register).
+func (a *Agent) saveConfigLocked() error {
 	return identity.SaveConfig(a.configPath, a.config)
 }
 
@@ -245,7 +282,8 @@ func (a *Agent) saveConfig() error {
 // This prevents conflicts between runic's firewall management and system services
 // like netfilter-persistent, iptables-persistent, firewalld, etc.
 func (a *Agent) DisableSystemIPTablesIfConfigured() error {
-	if !a.config.DisableSystemManagedIPTables {
+	cfg := a.getConfig()
+	if !cfg.DisableSystemManagedIPTables {
 		return nil
 	}
 
@@ -316,7 +354,8 @@ func (a *Agent) disableService(service string) error {
 
 // This is separate from bundle polling to ensure agents stay online even when PullIntervalSec is long.
 func (a *Agent) heartbeatLoop(ctx context.Context) {
-	heartbeatInterval := a.config.HeartbeatIntervalSec
+	cfg := a.getConfig()
+	heartbeatInterval := cfg.HeartbeatIntervalSec
 	if heartbeatInterval <= 0 {
 		heartbeatInterval = identity.DefaultHeartbeatIntervalSec
 	}
@@ -352,11 +391,13 @@ func (a *Agent) sendHeartbeat(ctx context.Context) error {
 	for _, ipInfo := range allIPs {
 		ipStrings = append(ipStrings, ipInfo.IP)
 	}
-	return metrics.SendHeartbeat(ctx, a.httpClient, a.config.ControlPlaneURL, a.config.HostID, a.config.CurrentBundleVer, a.config.Token, a.version, ipStrings)
+	cfg := a.getConfig()
+	return metrics.SendHeartbeat(ctx, a.httpClient, cfg.ControlPlaneURL, cfg.HostID, cfg.CurrentBundleVer, cfg.Token, a.version, ipStrings)
 }
 
 func (a *Agent) pollLoop(ctx context.Context, skipFirstPull bool) {
-	ticker := time.NewTicker(time.Duration(a.config.PullIntervalSec) * time.Second)
+	cfg := a.getConfig()
+	ticker := time.NewTicker(time.Duration(cfg.PullIntervalSec) * time.Second)
 	defer ticker.Stop()
 
 	if !skipFirstPull {
@@ -384,17 +425,21 @@ func (a *Agent) pollLoop(ctx context.Context, skipFirstPull bool) {
 }
 
 func (a *Agent) pullBundle(ctx context.Context) error {
-	return transport.PullBundle(ctx, a.httpClient, a.config.ControlPlaneURL, a.config.HostID, a.config.Token, a.config.CurrentBundleVer, a.version, a.applyBundle)
+	cfg := a.getConfig()
+	return transport.PullBundle(ctx, a.httpClient, cfg.ControlPlaneURL, cfg.HostID, cfg.Token, cfg.CurrentBundleVer, a.version, a.applyBundle)
 }
 
 func (a *Agent) applyBundle(ctx context.Context, bundle models.BundleResponse) error {
-	if !a.config.ApplyRulesBundle {
+	cfg := a.getConfig()
+	if !cfg.ApplyRulesBundle {
 		log.Info("Bundle application disabled (apply_rules_bundle=false), skipping", "version", bundle.Version)
 		return nil
 	}
-	err := apply.ApplyBundle(ctx, bundle, a.config.HMACKey, a.config.ControlPlaneURL, a.config.Token, a.version, a.confirmApply)
+	err := apply.ApplyBundle(ctx, bundle, cfg.HMACKey, cfg.ControlPlaneURL, cfg.Token, a.version, a.confirmApply)
 	if err == nil {
-		a.config.CurrentBundleVer = bundle.Version
+		a.updateConfig(func(c *identity.Config) {
+			c.CurrentBundleVer = bundle.Version
+		})
 		if err := a.saveConfig(); err != nil {
 			log.Warn("Failed to save config after applying bundle", "error", err)
 		}
@@ -403,7 +448,8 @@ func (a *Agent) applyBundle(ctx context.Context, bundle models.BundleResponse) e
 }
 
 func (a *Agent) confirmApply(ctx context.Context, version string) error {
-	return transport.ConfirmApply(ctx, a.httpClient, a.config.ControlPlaneURL, a.config.HostID, a.config.Token, a.version, version)
+	cfg := a.getConfig()
+	return transport.ConfirmApply(ctx, a.httpClient, cfg.ControlPlaneURL, cfg.HostID, cfg.Token, a.version, version)
 }
 
 func (a *Agent) register(ctx context.Context) error {
@@ -412,7 +458,12 @@ func (a *Agent) register(ctx context.Context) error {
 	for _, ipInfo := range allIPs {
 		ipStrings = append(ipStrings, ipInfo.IP)
 	}
-	return identity.Register(ctx, a.httpClient, a.config, a.version, a.saveConfig, ipStrings)
+	// identity.Register mutates cfg (HostID, Token, etc.), so we must
+	// hold the write lock while it runs to prevent data races with
+	// concurrent readers in heartbeatLoop, pollLoop, etc.
+	a.configMu.Lock()
+	defer a.configMu.Unlock()
+	return identity.Register(ctx, a.httpClient, a.config, a.version, a.saveConfigLocked, ipStrings)
 }
 
 // thundering herd when multiple loops detect 401 errors simultaneously.
@@ -424,15 +475,16 @@ func (a *Agent) safeRegister(ctx context.Context) error {
 }
 
 func (a *Agent) isControlPlaneReachable(ctx context.Context) bool {
+	cfg := a.getConfig()
 	client := &http.Client{
 		Timeout: constants.ReachabilityTimeout,
 	}
-	url := fmt.Sprintf("%s/api/v1/agent/heartbeat", a.config.ControlPlaneURL)
+	url := fmt.Sprintf("%s/api/v1/agent/heartbeat", cfg.ControlPlaneURL)
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return false
 	}
-	req.Header.Set("Authorization", "Bearer "+a.config.Token)
+	req.Header.Set("Authorization", "Bearer "+cfg.Token)
 	req.Header.Set("User-Agent", "runic-agent/"+a.version)
 
 	resp, err := client.Do(req)
@@ -448,7 +500,8 @@ func (a *Agent) isControlPlaneReachable(ctx context.Context) bool {
 }
 
 func (a *Agent) applyCachedBundle(ctx context.Context) error {
-	if !a.config.ApplyRulesBundle {
+	cfg := a.getConfig()
+	if !cfg.ApplyRulesBundle {
 		log.Info("apply_rules_bundle disabled, skipping cached bundle application")
 		return nil
 	}
@@ -488,9 +541,26 @@ func (a *Agent) applyCachedBundle(ctx context.Context) error {
 		return fmt.Errorf("close temp file: %w", err)
 	}
 
-	output, err := a.cmdRunner.Run(ctx, "iptables-restore", "--noflush", tmpPath)
-	if err != nil {
-		return fmt.Errorf("iptables-restore failed: %s: %w", string(output), err)
+	// Use detached context so a watchdog or parent cancellation does not kill
+	// the restore mid-flight, which could leave the system in a broken state.
+	restoreCtx := context.WithoutCancel(ctx)
+
+	// Detect content format and use appropriate restore tool.
+	if apply.IsNftFormat(rules) {
+		output, err := a.cmdRunner.Run(restoreCtx, "nft", "-f", tmpPath)
+		if err != nil {
+			return fmt.Errorf("nft -f restore failed: %s: %w", string(output), err)
+		}
+	} else {
+		// We use --noflush here because this is a warm boot from cache —
+		// the running rules already match the cached state, so flushing
+		// would cause unnecessary downtime by briefly dropping all
+		// iptables rules before restoring. On cold boot where the cache
+		// is stale, ApplyBundle with flush is used instead.
+		output, err := a.cmdRunner.Run(restoreCtx, "iptables-restore", "--noflush", tmpPath)
+		if err != nil {
+			return fmt.Errorf("iptables-restore failed: %s: %w", string(output), err)
+		}
 	}
 
 	log.Info("Applied cached bundle on startup", "path", a.cachePath)
@@ -506,7 +576,8 @@ func (a *Agent) listenSSE(ctx context.Context) {
 		default:
 		}
 
-		err := transport.ListenSSE(ctx, a.sseClient, a.config.ControlPlaneURL, a.config.HostID, a.config.Token, a.version, func(sseCtx context.Context) {
+		cfg := a.getConfig()
+		err := transport.ListenSSE(ctx, a.sseClient, cfg.ControlPlaneURL, cfg.HostID, cfg.Token, a.version, func(sseCtx context.Context) {
 			if pullErr := a.pullBundle(sseCtx); pullErr != nil {
 				log.Error("SSE-triggered bundle pull failed", "error", pullErr)
 			}
@@ -540,7 +611,8 @@ func (a *Agent) handleFetchBackup(ctx context.Context) {
 		return
 	}
 	ipsets, _ := a.readIpsets() // non-fatal if this fails
-	if err := transport.PostBackup(ctx, a.httpClient, a.config.ControlPlaneURL, a.config.HostID, a.config.Token, a.version, backup, ipsets); err != nil {
+	cfg := a.getConfig()
+	if err := transport.PostBackup(ctx, a.httpClient, cfg.ControlPlaneURL, cfg.HostID, cfg.Token, a.version, backup, ipsets); err != nil {
 		log.Error("Failed to post backup to control plane", "error", err)
 	}
 }
@@ -571,7 +643,12 @@ func (a *Agent) handleUpdateAgent(_ context.Context, controlPlaneURL string) {
 	}
 
 	// Build the install command: curl downloads the script, sudo runs it with the control plane URL.
-	cmd := fmt.Sprintf("curl -sL %s | sudo bash -s -- %s", InstallScriptURL, shellSafeArg(parsedURL.String()))
+	safeURL, err := shellSafeArg(parsedURL.String())
+	if err != nil {
+		log.Error("Control plane URL contains unsafe characters", "error", err)
+		return
+	}
+	cmd := fmt.Sprintf("curl -sL %s | sudo bash -s -- %s", InstallScriptURL, safeURL)
 
 	// Use systemd-run --scope to launch the update in its own cgroup, outside the
 	// agent's service unit. When the install script calls "systemctl stop runic-agent",
@@ -584,7 +661,7 @@ func (a *Agent) handleUpdateAgent(_ context.Context, controlPlaneURL string) {
 		err = a.cmdRunner.StartDetached(ctx, "setsid", "bash", "-c", fmt.Sprintf(
 			"curl -sL %s | sudo bash -s -- %s >/dev/null 2>&1",
 			InstallScriptURL,
-			shellSafeArg(parsedURL.String()),
+			safeURL,
 		),
 		)
 		if err != nil {
@@ -620,7 +697,11 @@ func (a *Agent) handleUpdateAgentSync(_ context.Context, controlPlaneURL string)
 		return fmt.Errorf("invalid control plane URL: %s", controlPlaneURL)
 	}
 
-	cmd := fmt.Sprintf("curl -sL %s | sudo bash -s -- %s", InstallScriptURL, shellSafeArg(parsedURL.String()))
+	safeURL, err := shellSafeArg(parsedURL.String())
+	if err != nil {
+		return fmt.Errorf("control plane URL contains unsafe characters: %w", err)
+	}
+	cmd := fmt.Sprintf("curl -sL %s | sudo bash -s -- %s", InstallScriptURL, safeURL)
 
 	ctx := context.Background()
 
@@ -638,9 +719,17 @@ func (a *Agent) handleUpdateAgentSync(_ context.Context, controlPlaneURL string)
 	return nil
 }
 
-// This prevents shell injection by treating the value as a literal string.
-func shellSafeArg(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+// shellSafeArg wraps a string in POSIX single quotes for safe shell interpolation.
+// Internal single quotes are escaped with the standard '\” idiom. Control
+// characters (bytes < 0x20, except NUL which is also rejected) are rejected
+// because they can break the shell command line even when quoted.
+func shellSafeArg(s string) (string, error) {
+	for i := 0; i < len(s); i++ {
+		if s[i] < 0x20 {
+			return "", fmt.Errorf("shell argument contains control character at position %d (byte 0x%02x)", i, s[i])
+		}
+	}
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'", nil
 }
 
 func (a *Agent) readBackup() (string, error) {

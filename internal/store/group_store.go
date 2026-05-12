@@ -79,6 +79,7 @@ func (s *GroupStore) ListGroups(ctx context.Context) ([]GroupWithCounts, error) 
 			SELECT target_id as group_id, COUNT(*) as count FROM policies WHERE target_type='group' GROUP BY target_id
 		) GROUP BY group_id
 	) pol ON g.id = pol.group_id
+	WHERE g.is_pending_delete = 0
 	ORDER BY g.name ASC`
 
 	rows, err := s.db.QueryContext(ctx, query)
@@ -144,7 +145,7 @@ func (s *GroupStore) UpdateGroup(ctx context.Context, id int, name, description 
 		return fmt.Errorf("rows affected: %w", err)
 	}
 	if rowsAffected == 0 {
-		return sql.ErrNoRows
+		return fmt.Errorf("group not found")
 	}
 	return nil
 }
@@ -161,7 +162,7 @@ func (s *GroupStore) UpdateGroupTx(ctx context.Context, tx *sql.Tx, id int, name
 		return fmt.Errorf("rows affected: %w", err)
 	}
 	if rowsAffected == 0 {
-		return sql.ErrNoRows
+		return fmt.Errorf("group not found")
 	}
 	return nil
 }

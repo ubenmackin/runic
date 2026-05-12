@@ -139,6 +139,24 @@ func (d *SpikeDetector) checkForSpike() {
 		return
 	}
 
+	// Skip global spike detection when per-peer blocked_spike alert rules exist,
+	// because the ConditionEvaluator already handles per-peer spike detection and
+	// sending both global and per-peer alerts for the same underlying traffic
+	// would produce duplicate notifications.
+	if d.mainDB != nil {
+		var perPeerCount int
+		peerCtx, peerCancel := context.WithTimeout(d.ctx, 5*time.Second)
+		err := d.mainDB.QueryRowContext(peerCtx, `
+			SELECT COUNT(*) FROM alert_rules
+			WHERE alert_type = ? AND enabled = 1 AND peer_id IS NOT NULL
+		`, AlertTypeBlockedSpike).Scan(&perPeerCount)
+		peerCancel()
+		if err == nil && perPeerCount > 0 {
+			d.logger.Debug("skipping global spike check because per-peer blocked_spike rules exist")
+			return
+		}
+	}
+
 	ctx, cancel := context.WithTimeout(d.ctx, 10*time.Second)
 	defer cancel()
 

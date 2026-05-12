@@ -360,9 +360,13 @@ export default function PendingChangesModal({ peerId, peerHostname, onClose, onA
                       })}
                     </pre>
                     <button
-                      onClick={() => {
-                        navigator.clipboard.writeText(diffText)
-                        showToast('Copied to clipboard', 'success')
+                      onClick={async () => {
+                        try {
+                          await navigator.clipboard.writeText(diffText)
+                          showToast('Copied to clipboard', 'success')
+                        } catch {
+                          showToast('Failed to copy to clipboard', 'error')
+                        }
                       }}
                       className="absolute top-2 right-2 p-2 bg-gray-800 hover:bg-gray-700 rounded-none text-gray-300 transition-colors"
                       title="Copy Diff"
@@ -394,9 +398,13 @@ export default function PendingChangesModal({ peerId, peerHostname, onClose, onA
                   <code className="text-green-400">{preview?.rules_content ?? ''}</code>
                 </pre>
                 <button
-                  onClick={() => {
-                    navigator.clipboard.writeText(preview?.rules_content ?? '')
-                    showToast('Copied to clipboard', 'success')
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(preview?.rules_content ?? '')
+                      showToast('Copied to clipboard', 'success')
+                    } catch {
+                      showToast('Failed to copy to clipboard', 'error')
+                    }
                   }}
                   className="absolute top-8 right-3 p-2 bg-gray-800 hover:bg-gray-700 rounded-none text-gray-300 transition-colors"
                   title="Copy Rules"

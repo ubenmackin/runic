@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strconv"
 	"testing"
 	"time"
 
@@ -75,13 +76,12 @@ func getAlertHistoryByRuleID(t *testing.T, database *sql.DB, ruleID uint) []Aler
 	var history []AlertHistory
 	for rows.Next() {
 		var h AlertHistory
-		var peerID sql.NullInt64
+		var peerID sql.NullString
 		if err := rows.Scan(&h.ID, &h.RuleID, &h.AlertType, &peerID, &h.Severity, &h.Subject, &h.Message, &h.Status, &h.CreatedAt); err != nil {
 			t.Fatalf("failed to scan alert history: %v", err)
 		}
-		if peerID.Valid {
-			peerIDInt := int(peerID.Int64)
-			h.PeerID = &peerIDInt
+		if peerID.Valid && peerID.String != "" {
+			h.PeerID = &peerID.String
 		}
 		history = append(history, h)
 	}
@@ -770,7 +770,7 @@ func TestAlertEvent_CreateAlertHistory(t *testing.T) {
 					t.Errorf("expected nil peer_id for zero peer_id, got %v", history.PeerID)
 				}
 			} else {
-				if history.PeerID == nil || *history.PeerID != tt.event.PeerID {
+				if history.PeerID == nil || *history.PeerID != strconv.Itoa(tt.event.PeerID) {
 					t.Errorf("expected peer_id %d, got %v", tt.event.PeerID, history.PeerID)
 				}
 			}
@@ -798,7 +798,7 @@ func TestAlertRule_AppliesToPeer(t *testing.T) {
 			name: "specific rule applies to matching peer",
 			rule: &AlertRule{
 				Name:   "Specific Rule",
-				PeerID: intPtr(1),
+				PeerID: stringPtr("1"),
 			},
 			peerID:    1,
 			wantApply: true,
@@ -807,7 +807,7 @@ func TestAlertRule_AppliesToPeer(t *testing.T) {
 			name: "specific rule does not apply to other peer",
 			rule: &AlertRule{
 				Name:   "Specific Rule",
-				PeerID: intPtr(1),
+				PeerID: stringPtr("1"),
 			},
 			peerID:    2,
 			wantApply: false,
@@ -845,6 +845,10 @@ func TestAlertRule_GetThresholdDuration(t *testing.T) {
 
 func intPtr(i int) *int {
 	return &i
+}
+
+func stringPtr(s string) *string {
+	return &s
 }
 
 // boolean values stored as "0"/"1" strings in the database.

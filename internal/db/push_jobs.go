@@ -42,22 +42,26 @@ func CreatePushJobPeersT(ctx context.Context, database DB, jobID string, peers [
 	if err != nil {
 		return fmt.Errorf("begin push job peers tx: %w", err)
 	}
+
+	// Rollback on error only; after Commit, Rollback returns sql.ErrTxDone
+	// which we silently ignore.
+	committed := false
 	defer func() {
-		if err := tx.Rollback(); err != nil {
-			fmt.Printf("rollback err: %v\n", err)
+		if !committed {
+			_ = tx.Rollback()
 		}
 	}()
 
 	stmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO push_job_peers (job_id, peer_id, peer_hostname, status)
-		VALUES (?, ?, ?, 'pending')
+	INSERT INTO push_job_peers (job_id, peer_id, peer_hostname, status)
+	VALUES (?, ?, ?, 'pending')
 	`)
 	if err != nil {
 		return fmt.Errorf("prepare push job peers stmt: %w", err)
 	}
 	defer func() {
 		if cErr := stmt.Close(); cErr != nil {
-			fmt.Printf("close stmt failed: %v", cErr)
+			fmt.Printf("close stmt failed: %v\n", cErr)
 		}
 	}()
 
@@ -70,6 +74,7 @@ func CreatePushJobPeersT(ctx context.Context, database DB, jobID string, peers [
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit push job peers tx: %w", err)
 	}
+	committed = true
 	return nil
 }
 

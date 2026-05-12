@@ -169,6 +169,10 @@ func (s *ImportStore) GetRules(ctx context.Context, sessionID int64) ([]models.I
 			rule.TargetIP = &ip
 		}
 
+		// TODO(performance): N+1 query pattern — ResolveEntityName and ResolveServiceName
+		// each fire per-row queries (up to 3 per rule). For N rules this results in up to
+		// 6×N extra queries. Consider refactoring to use JOINs or batch lookups to resolve
+		// all entity and service names in bulk after the main query.
 		rule.SourceName = s.ResolveEntityName(ctx, r.SourceType, r.SourceID, r.SourceStagingID, sessionID, r.SourceIP)
 		rule.TargetName = s.ResolveEntityName(ctx, r.TargetType, r.TargetID, r.TargetStagingID, sessionID, r.TargetIP)
 		rule.ServiceName = s.ResolveServiceName(ctx, r.ServiceID, r.ServiceStagingID, sessionID)
@@ -539,7 +543,25 @@ func (s *ImportStore) SubmitBackupSession(ctx context.Context, peerID int64, ipt
 		case err == nil:
 			sessionID = existingID
 			if existingStatus == "pending" {
-				_, err = tx.ExecContext(ctx, "UPDATE import_sessions SET raw_backup = ?, raw_ipsets = ?, updated_at = CURRENT_TIMESTAMP WHERE peer_id = ? AND status = 'pending'", iptablesBackup, ipsetList, peerID)
+				// Delete existing staging data to prevent orphaned records
+				// when a backup is resubmitted while the session is still pending.
+				_, err = tx.ExecContext(ctx, "DELETE FROM import_rules WHERE session_id = ?", existingID)
+				if err != nil {
+					return fmt.Errorf("failed to delete existing rules: %w", err)
+				}
+				_, err = tx.ExecContext(ctx, "DELETE FROM import_peer_mappings WHERE session_id = ?", existingID)
+				if err != nil {
+					return fmt.Errorf("failed to delete existing peer mappings: %w", err)
+				}
+				_, err = tx.ExecContext(ctx, "DELETE FROM import_group_mappings WHERE session_id = ?", existingID)
+				if err != nil {
+					return fmt.Errorf("failed to delete existing group mappings: %w", err)
+				}
+				_, err = tx.ExecContext(ctx, "DELETE FROM import_service_mappings WHERE session_id = ?", existingID)
+				if err != nil {
+					return fmt.Errorf("failed to delete existing service mappings: %w", err)
+				}
+				_, err = tx.ExecContext(ctx, "UPDATE import_sessions SET raw_backup = ?, raw_ipsets = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", iptablesBackup, ipsetList, existingID)
 				if err != nil {
 					return fmt.Errorf("failed to update import session: %w", err)
 				}
@@ -576,10 +598,15 @@ func (s *ImportStore) GetSessionByPeer(ctx context.Context, peerID int64) (*impo
 }
 
 // CreateSession creates a new import session for the given peer.
+//
+// Limitation: This method type-asserts db.DB to *sql.DB because the
+// importer.CreateSession function needs *sql.DB to manage its own transaction.
+// A full refactor would require changing the importer package to accept
+// db.DB or a transactional interface, which is too invasive for now.
 func (s *ImportStore) CreateSession(ctx context.Context, peerID int64, rawBackup, rawIpsets string) (*importer.ImportSession, error) {
 	sqlDB, ok := s.db.(*sql.DB)
 	if !ok {
-		return nil, fmt.Errorf("create session: underlying DB is not *sql.DB")
+		return nil, fmt.Errorf("create session: underlying DB is not *sql.DB, cannot start transaction (type assertion failed; got type %T)", s.db)
 	}
 	session, err := importer.CreateSession(ctx, sqlDB, peerID, rawBackup, rawIpsets)
 	if err != nil {
@@ -607,10 +634,15 @@ func (s *ImportStore) UpdateSessionStatus(ctx context.Context, sessionID int64, 
 }
 
 // ApplySession applies the import session, creating peers, groups, services, and policies.
+//
+// Limitation: This method type-asserts db.DB to *sql.DB because the
+// importer.ApplySession function needs *sql.DB to manage its own transaction.
+// A full refactor would require changing the importer package to accept
+// db.DB or a transactional interface, which is too invasive for now.
 func (s *ImportStore) ApplySession(ctx context.Context, sessionID int64, changeWorker *apicommon.ChangeWorker) (*importer.ApplyResult, error) {
 	sqlDB, ok := s.db.(*sql.DB)
 	if !ok {
-		return nil, fmt.Errorf("apply session: underlying DB is not *sql.DB")
+		return nil, fmt.Errorf("apply session: underlying DB is not *sql.DB, cannot start transaction (type assertion failed; got type %T)", s.db)
 	}
 	result, err := importer.ApplySession(ctx, sqlDB, sessionID, changeWorker)
 	if err != nil {
@@ -620,10 +652,15 @@ func (s *ImportStore) ApplySession(ctx context.Context, sessionID int64, changeW
 }
 
 // DeleteSession deletes the import session with the given ID.
+//
+// Limitation: This method type-asserts db.DB to *sql.DB because the
+// importer.DeleteSession function needs *sql.DB to manage its own transaction.
+// A full refactor would require changing the importer package to accept
+// db.DB or a transactional interface, which is too invasive for now.
 func (s *ImportStore) DeleteSession(ctx context.Context, sessionID int64) error {
 	sqlDB, ok := s.db.(*sql.DB)
 	if !ok {
-		return fmt.Errorf("delete session: underlying DB is not *sql.DB")
+		return fmt.Errorf("delete session: underlying DB is not *sql.DB, cannot start transaction (type assertion failed; got type %T)", s.db)
 	}
 	err := importer.DeleteSession(ctx, sqlDB, sessionID)
 	if err != nil {

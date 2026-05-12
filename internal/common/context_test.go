@@ -35,12 +35,12 @@ func TestWithHandlerTimeout_CancelFunction(t *testing.T) {
 	// Cancel immediately
 	cancel()
 
-	// Verify context is cancelled
+	// Verify context is canceled
 	select {
 	case <-ctxWithTimeout.Done():
-		// Good - context was cancelled
+		// Good - context was canceled
 	default:
-		t.Error("WithHandlerTimeout() context should be cancelled after cancel() is called")
+		t.Error("WithHandlerTimeout() context should be canceled after cancel() is called")
 	}
 
 	// The error should be context.Canceled, not context.DeadlineExceeded
@@ -72,15 +72,15 @@ func TestWithHandlerTimeout_CancelledParentContext(t *testing.T) {
 	childCtx, childCancel := WithHandlerTimeout(parentCtx)
 	defer childCancel()
 
-	// Child should be cancelled because parent is cancelled
+	// Child should be canceled because parent is canceled
 	select {
 	case <-childCtx.Done():
-		// Good - child was cancelled
+		// Good - child was canceled
 		if childCtx.Err() != context.Canceled {
 			t.Errorf("child context error = %v, want context.Canceled", childCtx.Err())
 		}
 	default:
-		t.Error("child context should be cancelled when parent is cancelled")
+		t.Error("child context should be canceled when parent is canceled")
 	}
 }
 
@@ -105,17 +105,17 @@ func TestWithHandlerTimeout_MultipleCalls(t *testing.T) {
 	// Cancel only first context
 	cancel1()
 
-	// First should be cancelled, second should still be valid
+	// First should be canceled, second should still be valid
 	select {
 	case <-ctx1.Done():
 		// Good
 	default:
-		t.Error("first context should be cancelled")
+		t.Error("first context should be canceled")
 	}
 
 	select {
 	case <-ctx2.Done():
-		t.Error("second context should not be cancelled yet")
+		t.Error("second context should not be canceled yet")
 	default:
 		// Good - second context is still valid
 	}

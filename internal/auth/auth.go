@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -137,11 +138,14 @@ func RevokeToken(ctx context.Context, uniqueID string, expiresAt time.Time, toke
 
 func IsRevoked(ctx context.Context, uniqueID string) bool {
 	if tokenStore == nil {
-		return false
+		// No token store means we cannot verify revocation status.
+		// Assume revoked to be safe rather than silently allowing potentially revoked tokens.
+		return true
 	}
 	revoked, err := tokenStore.IsTokenRevoked(ctx, uniqueID)
 	if err != nil {
-		return false
+		log.WarnContext(ctx, "failed to check token revocation, assuming revoked", "error", err)
+		return true
 	}
 	return revoked
 }
@@ -156,6 +160,14 @@ func CleanupExpiredTokens(ctx context.Context) error {
 
 // --- Middleware ---
 
+func writeUnauthorizedJSON(w http.ResponseWriter, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusUnauthorized)
+	if err := json.NewEncoder(w).Encode(map[string]string{"error": message}); err != nil {
+		log.Warn("Failed to encode unauthorized response", "error", err)
+	}
+}
+
 func Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var tokenStr string
@@ -166,7 +178,7 @@ func Middleware(next http.Handler) http.Handler {
 			// Fall back to Bearer header (agent)
 			authHeader := r.Header.Get("Authorization")
 			if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
-				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				writeUnauthorizedJSON(w, "Unauthorized")
 				return
 			}
 			tokenStr = strings.TrimPrefix(authHeader, "Bearer ")
@@ -174,14 +186,14 @@ func Middleware(next http.Handler) http.Handler {
 
 		claims, err := ValidateToken(tokenStr)
 		if err != nil || claims == nil {
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			writeUnauthorizedJSON(w, "Unauthorized")
 			return
 		}
 
 		revCtx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
 		if IsRevoked(revCtx, claims.UniqueID) {
-			http.Error(w, "Unauthorized: token revoked", http.StatusUnauthorized)
+			writeUnauthorizedJSON(w, "Unauthorized: token revoked")
 			return
 		}
 

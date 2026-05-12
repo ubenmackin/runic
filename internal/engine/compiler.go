@@ -28,6 +28,17 @@ const (
 	SpecialIDInternet         = 9 // __internet__
 )
 
+// Well-known system service names. These names are reserved and must match
+// the services inserted as system services (is_system = 1). They are used
+// instead of display names to avoid breaking when a user renames a service.
+const (
+	systemServiceMulticast        = "Multicast"
+	systemServiceSubnetBroadcast  = "Subnet Broadcast"
+	systemServiceLimitedBroadcast = "Limited Broadcast"
+	systemServiceIGMP             = "IGMP"
+	systemServiceVRRP             = "VRRP"
+)
+
 func isMulticastSpecialID(id int) bool {
 	return id == SpecialIDAllHosts || id == SpecialIDmDNS || id == SpecialIDIGMPv3
 }
@@ -507,9 +518,9 @@ func (c *Compiler) generateIptablesPayload(
 
 		// Expand ports for non-multicast, non-broadcast, and non-IGMP/VRRP services
 		var portClauses []PortClause
-		isBroadcastService := serviceName == "Subnet Broadcast" || serviceName == "Limited Broadcast"
-		isIGMPorVRRP := strings.EqualFold(serviceName, "IGMP") || strings.EqualFold(serviceName, "VRRP")
-		if serviceName != "Multicast" && !isBroadcastService && !isIGMPorVRRP {
+		isBroadcastService := serviceName == systemServiceSubnetBroadcast || serviceName == systemServiceLimitedBroadcast
+		isIGMPorVRRP := strings.EqualFold(serviceName, systemServiceIGMP) || strings.EqualFold(serviceName, systemServiceVRRP)
+		if serviceName != systemServiceMulticast && !isBroadcastService && !isIGMPorVRRP {
 			portClauses, err = ExpandPorts(ports, sourcePorts, protocol)
 			if err != nil {
 				return "", fmt.Errorf("expand ports for policy %s: %w", pol.Name, err)
@@ -520,11 +531,11 @@ func (c *Compiler) generateIptablesPayload(
 
 		// IG-001: Special IGMP handling - skip normal source/target resolution
 		// VRRP-001: Special VRRP handling - skip normal source/target resolution
-		if strings.EqualFold(serviceName, "IGMP") || strings.EqualFold(serviceName, "VRRP") {
+		if strings.EqualFold(serviceName, systemServiceIGMP) || strings.EqualFold(serviceName, systemServiceVRRP) {
 			if writeToHost {
-				if strings.EqualFold(serviceName, "IGMP") {
+				if strings.EqualFold(serviceName, systemServiceIGMP) {
 					c.writeIGMPRules(rw, pol.TargetScope, hasDocker)
-				} else if strings.EqualFold(serviceName, "VRRP") {
+				} else if strings.EqualFold(serviceName, systemServiceVRRP) {
 					c.writeVRRPRules(rw, pol.TargetScope, hasDocker)
 				}
 			}
@@ -576,7 +587,7 @@ func (c *Compiler) generateIptablesPayload(
 				}
 			case useIpset:
 				// Use ipset-based rules (single rule per port clause)
-				if serviceName == "Multicast" {
+				if serviceName == systemServiceMulticast {
 					c.writeMulticastRule(rw, pol.Action, pol.TargetScope, hasDocker)
 				} else {
 					rules, err := c.writeTargetRules(ctx, pol, portClauses, true, ipsetName, nil, ipAddress, writeToHost, writeToDocker, noConntrack)
@@ -603,7 +614,7 @@ func (c *Compiler) generateIptablesPayload(
 				if err != nil {
 					return "", fmt.Errorf("resolve source for policy %s: %w", pol.Name, err)
 				}
-				if serviceName == "Multicast" {
+				if serviceName == systemServiceMulticast {
 					c.writeMulticastRule(rw, pol.Action, pol.TargetScope, hasDocker)
 				} else {
 					rules, err := c.writeTargetRules(ctx, pol, portClauses, false, "", cidrs, ipAddress, writeToHost, writeToDocker, noConntrack)
@@ -636,11 +647,16 @@ func (c *Compiler) generateIptablesPayload(
 			switch {
 			case useIpset:
 				// Use ipset-based rules (single rule per port clause)
-				if serviceName == "Multicast" {
+				if serviceName == systemServiceMulticast {
 					// MC-012: Only generate OUTPUT multicast rule when Target is a multicast special target
 					isMulticastTarget := pol.TargetType == "special" && isMulticastSpecialID(pol.TargetID)
 					if isMulticastTarget && pol.Action == "ACCEPT" {
-						buf.WriteString("-A OUTPUT -d 224.0.0.0/4 -m pkttype --pkt-type multicast -j ACCEPT\n")
+						if writeToHost {
+							buf.WriteString("-A OUTPUT -d 224.0.0.0/4 -m pkttype --pkt-type multicast -j ACCEPT\n")
+						}
+						if writeToDocker {
+							buf.WriteString("-A DOCKER-USER -d 224.0.0.0/4 -m pkttype --pkt-type multicast -j ACCEPT\n")
+						}
 					}
 				} else {
 					isMulticastTarget := pol.TargetType == "special" && isMulticastSpecialID(pol.TargetID)
@@ -678,11 +694,16 @@ func (c *Compiler) generateIptablesPayload(
 				if err != nil {
 					return "", fmt.Errorf("resolve target for policy %s: %w", pol.Name, err)
 				}
-				if serviceName == "Multicast" {
+				if serviceName == systemServiceMulticast {
 					// MC-012: Only generate OUTPUT multicast rule when Target is a multicast special target
 					isMulticastTarget := pol.TargetType == "special" && isMulticastSpecialID(pol.TargetID)
 					if isMulticastTarget && pol.Action == "ACCEPT" {
-						buf.WriteString("-A OUTPUT -d 224.0.0.0/4 -m pkttype --pkt-type multicast -j ACCEPT\n")
+						if writeToHost {
+							buf.WriteString("-A OUTPUT -d 224.0.0.0/4 -m pkttype --pkt-type multicast -j ACCEPT\n")
+						}
+						if writeToDocker {
+							buf.WriteString("-A DOCKER-USER -d 224.0.0.0/4 -m pkttype --pkt-type multicast -j ACCEPT\n")
+						}
 					}
 				} else {
 					isMulticastTarget := pol.TargetType == "special" && isMulticastSpecialID(pol.TargetID)
@@ -1054,8 +1075,8 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 
 	var portClauses []PortClause
 	// Skip port expansion for special services that don't use ports
-	isIGMPorVRRP := strings.EqualFold(serviceName, "IGMP") || strings.EqualFold(serviceName, "VRRP")
-	if serviceName != "Multicast" && !isIGMPorVRRP {
+	isIGMPorVRRP := strings.EqualFold(serviceName, systemServiceIGMP) || strings.EqualFold(serviceName, systemServiceVRRP)
+	if serviceName != systemServiceMulticast && !isIGMPorVRRP {
 		portClauses, err = ExpandPorts(ports, sourcePorts, protocol)
 		if err != nil {
 			return nil, fmt.Errorf("expand ports: %w", err)
@@ -1112,19 +1133,19 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 		// IG-002: Special IGMP handling - skip normal source/target resolution
 		// VRRP-002: Special VRRP handling - skip normal source/target resolution
 		switch {
-		case strings.EqualFold(serviceName, "IGMP"):
+		case strings.EqualFold(serviceName, systemServiceIGMP):
 			// IG-002: Special IGMP handling
 			rules = append(rules,
 				"-A INPUT -d 224.0.0.1/32 -p igmp -j ACCEPT",
 				"-A OUTPUT -d 224.0.0.22/32 -p igmp -j ACCEPT",
 			)
-		case strings.EqualFold(serviceName, "VRRP"):
+		case strings.EqualFold(serviceName, systemServiceVRRP):
 			// VRRP-002: Special VRRP handling (advertisements are sent to 224.0.0.18)
 			rules = append(rules, "-A OUTPUT -d 224.0.0.18/32 -p vrrp -j ACCEPT")
 		case direction == "both" || direction == "forward":
 			rules = append(rules, "# Forward (Source → Target)")
 			for _, targetCIDR := range targetCIDRs {
-				if serviceName == "Multicast" {
+				if serviceName == systemServiceMulticast {
 					// MC-012: Only generate OUTPUT multicast rule when Target is a multicast special target
 					isMulticastTarget := targetType == "special" && isMulticastSpecialID(targetID)
 					if isMulticastTarget {
@@ -1158,7 +1179,7 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 		// Source hosts get: INPUT from target + OUTPUT established to target
 		// IG-002: Skip backward for IGMP (already handled above)
 		// VRRP-002: Skip backward for VRRP (already handled above)
-		if !strings.EqualFold(serviceName, "IGMP") && !strings.EqualFold(serviceName, "VRRP") && (direction == "both" || direction == "backward") {
+		if !strings.EqualFold(serviceName, systemServiceIGMP) && !strings.EqualFold(serviceName, systemServiceVRRP) && (direction == "both" || direction == "backward") {
 			rules = append(rules, "# Backward (Target → Source)")
 			// MC-009: Multicast special targets as Source indicate receiving multicast traffic
 			isMulticastSource := sourceType == "special" && isMulticastSpecialID(sourceID)
@@ -1167,7 +1188,7 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 			switch {
 			case isMulticastSource:
 				// Multicast source: use packet type matching for receiving multicast traffic
-				if serviceName == "Multicast" {
+				if serviceName == systemServiceMulticast {
 					rules = append(rules, "-A INPUT -m pkttype --pkt-type multicast -j ACCEPT")
 				} else {
 					writeRules, err := c.writeTargetRules(ctx, pol, portClauses, false, "", sourceCIDRs, ipAddress, true, false, noConntrack)
@@ -1198,13 +1219,13 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 		// IG-002: Special IGMP handling for Docker
 		// VRRP-002: Special VRRP handling for Docker
 		switch {
-		case strings.EqualFold(serviceName, "IGMP"):
+		case strings.EqualFold(serviceName, systemServiceIGMP):
 			// IG-002: Special IGMP handling for Docker
 			rules = append(rules,
 				"-A DOCKER-USER -d 224.0.0.1/32 -p igmp -j ACCEPT",
 				"-A DOCKER-USER -d 224.0.0.22/32 -p igmp -j ACCEPT",
 			)
-		case strings.EqualFold(serviceName, "VRRP"):
+		case strings.EqualFold(serviceName, systemServiceVRRP):
 			// VRRP-002: Special VRRP handling (advertisements are sent to 224.0.0.18)
 			rules = append(rules, "-A DOCKER-USER -d 224.0.0.18/32 -p vrrp -j ACCEPT")
 		default:
@@ -1212,7 +1233,7 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 			// Forward direction: Source → Target (Docker)
 			if direction == "both" || direction == "forward" {
 				for _, targetCIDR := range targetCIDRs {
-					if serviceName == "Multicast" {
+					if serviceName == systemServiceMulticast {
 						rules = append(rules, "-A DOCKER-USER -d 224.0.0.0/4 -m pkttype --pkt-type multicast -j ACCEPT")
 						continue
 					}
@@ -1237,7 +1258,7 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 			// Backward direction: Target (Docker) ← Source
 			// IG-002: Skip backward for IGMP (already handled above)
 			// VRRP-002: Skip backward for VRRP (already handled above)
-			if !strings.EqualFold(serviceName, "IGMP") && !strings.EqualFold(serviceName, "VRRP") && (direction == "both" || direction == "backward") {
+			if !strings.EqualFold(serviceName, systemServiceIGMP) && !strings.EqualFold(serviceName, systemServiceVRRP) && (direction == "both" || direction == "backward") {
 				// MC-009: Multicast special targets as Source indicate receiving multicast traffic
 				isMulticastSource := sourceType == "special" && isMulticastSpecialID(sourceID)
 				// BC-003: Broadcast special targets as Source indicate receiving broadcast traffic
@@ -1245,7 +1266,7 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 				switch {
 				case isMulticastSource:
 					// Multicast source: use packet type matching for receiving multicast traffic
-					if serviceName == "Multicast" {
+					if serviceName == systemServiceMulticast {
 						rules = append(rules, "-A DOCKER-USER -m pkttype --pkt-type multicast -j ACCEPT")
 					} else {
 						writeRules, err := c.writeTargetRules(ctx, pol, portClauses, false, "", sourceCIDRs, ipAddress, false, true, noConntrack)

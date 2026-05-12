@@ -229,9 +229,12 @@ func (h *Handler) CreatePolicy(w http.ResponseWriter, r *http.Request) {
 		log.ErrorContext(r.Context(), "failed to create snapshot", "error", err)
 	}
 
-	affectedPeers, err := h.Compiler.GetAffectedPeersByPolicy(r.Context(), int(id))
-	if err != nil {
-		log.ErrorContext(r.Context(), "Failed to get affected peers", "policy_id", id, "error", err)
+	var affectedPeers []int
+	if h.Compiler != nil {
+		affectedPeers, err = h.Compiler.GetAffectedPeersByPolicy(r.Context(), int(id))
+		if err != nil {
+			log.ErrorContext(r.Context(), "Failed to get affected peers", "policy_id", id, "error", err)
+		}
 	}
 	h.Store.QueuePeerChange(r.Context(), h.ChangeWorker, affectedPeers, "policy", "create", int(id), fmt.Sprintf("Policy '%s' created", input.Name))
 
@@ -333,10 +336,13 @@ func (h *Handler) UpdatePolicy(w http.ResponseWriter, r *http.Request) {
 		Direction:   input.Direction,
 	}
 
-	oldPeers, err := h.Compiler.GetAffectedPeersByPolicy(r.Context(), id)
-	if err != nil {
-		log.ErrorContext(r.Context(), "Failed to get old affected peers for policy", "policy_id", id, "error", err)
-		oldPeers = nil
+	var oldPeers []int
+	if h.Compiler != nil {
+		oldPeers, err = h.Compiler.GetAffectedPeersByPolicy(r.Context(), id)
+		if err != nil {
+			log.ErrorContext(r.Context(), "Failed to get old affected peers for policy", "policy_id", id, "error", err)
+			oldPeers = nil
+		}
 	}
 
 	// Take snapshot outside the transaction — snapshots are idempotent (INSERT OR IGNORE)
@@ -368,10 +374,13 @@ func (h *Handler) UpdatePolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	newPeers, err := h.Compiler.GetAffectedPeersByPolicy(r.Context(), id)
-	if err != nil {
-		log.ErrorContext(r.Context(), "Failed to get new affected peers for policy", "policy_id", id, "error", err)
-		newPeers = nil
+	var newPeers []int
+	if h.Compiler != nil {
+		newPeers, err = h.Compiler.GetAffectedPeersByPolicy(r.Context(), id)
+		if err != nil {
+			log.ErrorContext(r.Context(), "Failed to get new affected peers for policy", "policy_id", id, "error", err)
+			newPeers = nil
+		}
 	}
 
 	peerSet := make(map[int]bool)
@@ -398,10 +407,13 @@ func (h *Handler) DeletePolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	oldPeers, err := h.Compiler.GetAffectedPeersByPolicy(r.Context(), id)
-	if err != nil {
-		log.ErrorContext(r.Context(), "Failed to get old affected peers for policy", "policy_id", id, "error", err)
-		oldPeers = nil
+	var oldPeers []int
+	if h.Compiler != nil {
+		oldPeers, err = h.Compiler.GetAffectedPeersByPolicy(r.Context(), id)
+		if err != nil {
+			log.ErrorContext(r.Context(), "Failed to get old affected peers for policy", "policy_id", id, "error", err)
+			oldPeers = nil
+		}
 	}
 
 	policyName, err := h.Store.GetPolicyName(r.Context(), id)
@@ -483,6 +495,11 @@ func (h *Handler) PolicyPreview(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if h.Compiler == nil {
+		common.RespondError(w, http.StatusInternalServerError, "compiler not available")
+		return
+	}
+
 	rules, err := h.Compiler.PreviewCompile(r.Context(), req.PeerID, req.SourceID, req.SourceType, req.SourceIP, req.TargetID, req.TargetType, req.TargetIP, req.ServiceID, req.Direction, req.TargetScope)
 	if err != nil {
 		log.ErrorContext(r.Context(), "failed to generate preview", "error", err)
@@ -554,9 +571,12 @@ func (h *Handler) PatchPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	affectedPeers, err := h.Compiler.GetAffectedPeersByPolicy(r.Context(), id)
-	if err != nil {
-		log.ErrorContext(r.Context(), "Failed to get affected peers", "policy_id", id, "error", err)
+	var affectedPeers []int
+	if h.Compiler != nil {
+		affectedPeers, err = h.Compiler.GetAffectedPeersByPolicy(r.Context(), id)
+		if err != nil {
+			log.ErrorContext(r.Context(), "Failed to get affected peers", "policy_id", id, "error", err)
+		}
 	}
 	enabledStr := "enabled"
 	if !*input.Enabled {
@@ -594,6 +614,13 @@ func (h *Handler) ListSpecialTargets(w http.ResponseWriter, r *http.Request) {
 	}
 
 	common.RespondJSON(w, http.StatusOK, ic.EnsureSlice(resp))
+}
+
+// RegisterReadRoutes registers read-only (GET) routes for the viewer role.
+func (h *Handler) RegisterReadRoutes(r *mux.Router) {
+	r.HandleFunc("", h.ListPolicies).Methods("GET")
+	r.HandleFunc("/{id:[0-9]+}", h.GetPolicy).Methods("GET")
+	r.HandleFunc("/special-targets", h.ListSpecialTargets).Methods("GET")
 }
 
 func (h *Handler) RegisterRoutes(r *mux.Router) {

@@ -235,17 +235,18 @@ func (h *Handler) UpdateSMTPConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.Password != "" {
-		passwordToStore := req.Password
-		if h.Encryptor != nil {
-			encrypted, err := h.Encryptor.Encrypt(req.Password)
-			if err != nil {
-				log.ErrorContext(ctx, "Failed to encrypt smtp_password", "error", err)
-				common.RespondError(w, http.StatusInternalServerError, "failed to encrypt SMTP password")
-				return
-			}
-			passwordToStore = encrypted
+		if h.Encryptor == nil {
+			log.ErrorContext(ctx, "SMTP password cannot be stored: no encryptor configured")
+			common.RespondError(w, http.StatusInternalServerError, "encryption not available — configure encryption before setting SMTP password")
+			return
 		}
-		settings["smtp_password"] = passwordToStore
+		encrypted, err := h.Encryptor.Encrypt(req.Password)
+		if err != nil {
+			log.ErrorContext(ctx, "Failed to encrypt smtp_password", "error", err)
+			common.RespondError(w, http.StatusInternalServerError, "failed to encrypt SMTP password")
+			return
+		}
+		settings["smtp_password"] = encrypted
 	}
 
 	if err := h.AlertStore.UpsertSMTPSettings(ctx, settings); err != nil {

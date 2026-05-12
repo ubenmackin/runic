@@ -464,7 +464,9 @@ func resolveService(ctx context.Context, database db.Querier, sessionID int64, r
 	port := rule.DestPort
 	protocol := rule.Protocol
 	if protocol == "" || protocol == "all" {
-		protocol = "tcp"
+		// Protocol "all" in iptables means the rule applies to both TCP and UDP.
+		// Use "both" which is the Runic protocol value that expands to tcp+udp rules.
+		protocol = "both"
 	}
 	if port == "" {
 		if protocol != "" {

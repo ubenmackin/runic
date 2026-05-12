@@ -3,6 +3,7 @@ package logs
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"net/url"
@@ -121,7 +122,7 @@ func (h *Hub) Broadcast(event *models.LogEvent) {
 
 func (c *Client) matchesFilter(ev *models.LogEvent) bool {
 	f := c.filter
-	if f.PeerID != "" && ev.PeerID != f.PeerID {
+	if f.PeerID != "" && fmt.Sprintf("%d", ev.PeerID) != f.PeerID {
 		return false
 	}
 	if f.Action != "" && ev.Action != f.Action {

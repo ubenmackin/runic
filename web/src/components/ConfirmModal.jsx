@@ -1,9 +1,14 @@
 import ReactDOM from 'react-dom'
 import { X } from 'lucide-react'
+import { useFocusTrap } from '../hooks/useFocusTrap'
+import { useRef } from 'react'
 
 export default function ConfirmModal({ title, message, onConfirm, onCancel, danger = false }) {
+  const modalRef = useRef(null)
+  useFocusTrap(modalRef, true)
+
   const modalContent = (
-    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50">
+    <div ref={modalRef} className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50">
       <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none w-full max-w-md mx-4 overflow-hidden">
         <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-border">
           <h3 className="text-lg font-semibold text-gray-900 dark:text-light-neutral">{title}</h3>

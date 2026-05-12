@@ -179,7 +179,7 @@ CREATE TABLE IF NOT EXISTS push_jobs (
     total_peers INTEGER NOT NULL,
     succeeded_count INTEGER DEFAULT 0,
     failed_count INTEGER DEFAULT 0,
-    status TEXT NOT NULL DEFAULT 'running' CHECK(status IN ('pending', 'running', 'completed', 'completed_with_errors', 'failed', 'cancelled')),
+    status TEXT NOT NULL DEFAULT 'running' CHECK(status IN ('pending', 'running', 'completed', 'completed_with_errors', 'failed', 'canceled')),
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     completed_at DATETIME
 );
@@ -318,7 +318,7 @@ CREATE INDEX IF NOT EXISTS idx_alert_digests_user_date ON alert_digests(user_id,
 CREATE TABLE IF NOT EXISTS import_sessions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     peer_id INTEGER NOT NULL REFERENCES peers(id) ON DELETE CASCADE,
-    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','parsed','reviewing','applied','cancelled')),
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','parsed','reviewing','applied','canceled')),
     raw_backup TEXT NOT NULL,
     raw_ipsets TEXT,
     chain_filter TEXT DEFAULT 'INPUT,OUTPUT,DOCKER-USER',

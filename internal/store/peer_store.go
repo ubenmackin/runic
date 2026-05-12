@@ -179,7 +179,27 @@ func (s *PeerStore) CreatePeer(ctx context.Context, hostname, ip, osType, arch, 
 }
 
 func (s *PeerStore) UpdatePeer(ctx context.Context, id int, hostname, ip, osType, arch string, hasDocker bool, description string) error {
-	_, err := s.db.ExecContext(ctx,
+	existing, err := s.GetPeerByID(ctx, id)
+	if err != nil {
+		return fmt.Errorf("get existing peer: %w", err)
+	}
+
+	// Merge: only overwrite fields that are non-empty (non-zero)
+	if hostname == "" {
+		hostname = existing.Hostname
+	}
+	if ip == "" {
+		ip = existing.IPAddress
+	}
+	if osType == "" {
+		osType = existing.OSType
+	}
+	if arch == "" {
+		arch = existing.Arch
+	}
+	// hasDocker is a bool — we always use the input value (caller must pass the desired state)
+
+	_, err = s.db.ExecContext(ctx,
 		"UPDATE peers SET hostname = ?, ip_address = ?, os_type = ?, arch = ?, has_docker = ?, description = ? WHERE id = ?",
 		hostname, ip, osType, arch, hasDocker, description, id)
 	if err != nil {
@@ -188,36 +208,44 @@ func (s *PeerStore) UpdatePeer(ctx context.Context, id int, hostname, ip, osType
 	return nil
 }
 
+// DeletePeer deletes a peer and all its associated data in a single transaction.
 func (s *PeerStore) DeletePeer(ctx context.Context, id int) error {
-	if _, err := s.db.ExecContext(ctx, "DELETE FROM group_members WHERE peer_id = ?", id); err != nil {
-		log.WarnContext(ctx, "failed to cleanup group_members for peer", "peer_id", id, "error", err)
-	}
-
-	if _, err := s.db.ExecContext(ctx, "DELETE FROM rule_bundles WHERE peer_id = ?", id); err != nil {
-		log.WarnContext(ctx, "failed to cleanup rule_bundles for peer", "peer_id", id, "error", err)
-	}
-
-	if _, err := s.db.ExecContext(ctx, "DELETE FROM firewall_logs WHERE peer_id = ?", id); err != nil {
-		log.WarnContext(ctx, "failed to cleanup firewall_logs for peer", "peer_id", id, "error", err)
-	}
-
-	if _, err := s.db.ExecContext(ctx, "DELETE FROM peer_ips WHERE peer_id = ?", id); err != nil {
-		log.WarnContext(ctx, "failed to cleanup peer_ips for peer", "peer_id", id, "error", err)
-	}
-
-	result, err := s.db.ExecContext(ctx, "DELETE FROM peers WHERE id = ?", id)
-	if err != nil {
-		return fmt.Errorf("delete peer: %w", err)
-	}
-
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if rowsAffected == 0 {
-		return sql.ErrNoRows
-	}
-	return nil
+	return RunInTx(ctx, s.db, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM group_members WHERE peer_id = ?", id); err != nil {
+			return fmt.Errorf("cleanup group_members: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, "DELETE FROM rule_bundles WHERE peer_id = ?", id); err != nil {
+			return fmt.Errorf("cleanup rule_bundles: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, "DELETE FROM firewall_logs WHERE peer_id = ?", id); err != nil {
+			// Non-fatal: firewall_logs may be in a separate logs database
+			log.WarnContext(ctx, "failed to cleanup firewall_logs for peer", "peer_id", id, "error", err)
+		}
+		if _, err := tx.ExecContext(ctx, "DELETE FROM peer_ips WHERE peer_id = ?", id); err != nil {
+			return fmt.Errorf("cleanup peer_ips: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, "DELETE FROM pending_changes WHERE peer_id = ?", id); err != nil {
+			return fmt.Errorf("cleanup pending_changes: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, "DELETE FROM change_snapshots WHERE entity_type = 'peer' AND entity_id = ?", id); err != nil {
+			return fmt.Errorf("cleanup change_snapshots: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, "DELETE FROM pending_bundle_previews WHERE peer_id = ?", id); err != nil {
+			return fmt.Errorf("cleanup pending_bundle_previews: %w", err)
+		}
+		result, err := tx.ExecContext(ctx, "DELETE FROM peers WHERE id = ?", id)
+		if err != nil {
+			return fmt.Errorf("delete peer: %w", err)
+		}
+		rowsAffected, err := result.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("rows affected: %w", err)
+		}
+		if rowsAffected == 0 {
+			return sql.ErrNoRows
+		}
+		return nil
+	})
 }
 
 func (s *PeerStore) GetPeerByID(ctx context.Context, id int) (models.PeerRow, error) {

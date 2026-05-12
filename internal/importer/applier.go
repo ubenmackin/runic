@@ -281,16 +281,24 @@ func ApplySession(ctx context.Context, database *sql.DB, sessionID int64, change
 		result.GroupsCreated++
 
 		var memberPeerIDs []int64
-		_ = json.Unmarshal([]byte(gm.MemberPeerIDs), &memberPeerIDs)
+		if err := json.Unmarshal([]byte(gm.MemberPeerIDs), &memberPeerIDs); err != nil {
+			return nil, fmt.Errorf("unmarshal member peer IDs for group %s: %w", gm.GroupName, err)
+		}
 		for _, pid := range memberPeerIDs {
-			_, _ = tx.ExecContext(ctx, "INSERT OR IGNORE INTO group_members (group_id, peer_id) VALUES (?, ?)", realGroupID, pid)
+			if _, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO group_members (group_id, peer_id) VALUES (?, ?)", realGroupID, pid); err != nil {
+				return nil, fmt.Errorf("insert group member peer %d into group %s: %w", pid, gm.GroupName, err)
+			}
 		}
 
 		var stagingPeerIDs []int64
-		_ = json.Unmarshal([]byte(gm.MemberStagingIDs), &stagingPeerIDs)
+		if err := json.Unmarshal([]byte(gm.MemberStagingIDs), &stagingPeerIDs); err != nil {
+			return nil, fmt.Errorf("unmarshal staging peer IDs for group %s: %w", gm.GroupName, err)
+		}
 		for _, spid := range stagingPeerIDs {
 			if realPID, ok := stagingToRealPeer[spid]; ok {
-				_, _ = tx.ExecContext(ctx, "INSERT OR IGNORE INTO group_members (group_id, peer_id) VALUES (?, ?)", realGroupID, realPID)
+				if _, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO group_members (group_id, peer_id) VALUES (?, ?)", realGroupID, realPID); err != nil {
+					return nil, fmt.Errorf("insert group member staging peer %d into group %s: %w", realPID, gm.GroupName, err)
+				}
 			}
 		}
 	}

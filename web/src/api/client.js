@@ -1,10 +1,17 @@
-const BASE = '/api/v1'
+export const BASE = '/api/v1'
 
 // Auth failure callback - registered by store to avoid circular imports
 let authFailureCallback = null
 
 export function setAuthFailureHandler(fn) {
   authFailureCallback = fn
+}
+
+// Read CSRF token from cookie (set by the backend if enabled)
+function getCSRFToken() {
+  if (typeof document === 'undefined') return ''
+  const match = document.cookie.match(/(?:^|;\s*)XSRF-TOKEN=([^;]*)/)
+  return match ? decodeURIComponent(match[1]) : ''
 }
 
 // Mutex to prevent multiple concurrent refresh requests
@@ -34,9 +41,15 @@ async function refreshTokenOnce() {
 }
 
 async function request(method, path, body, retry = true) {
+  const headers = { 'Content-Type': 'application/json' }
+  const csrfToken = getCSRFToken()
+  if (csrfToken) {
+    headers['X-CSRF-Token'] = csrfToken
+  }
+
   const fetchOptions = {
     method,
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     credentials: 'include',
     body: body ? JSON.stringify(body) : undefined,
   }

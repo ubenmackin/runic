@@ -21,6 +21,7 @@ import (
 	"runic/internal/api/common"
 	"runic/internal/common/constants"
 	runiclog "runic/internal/common/log"
+	"runic/internal/db"
 	"runic/internal/models"
 	"runic/internal/store"
 )
@@ -30,12 +31,14 @@ type Handler struct {
 	DashboardStore *store.DashboardStore
 	AlertService   *alerts.Service
 	ImportStore    *store.ImportStore
+	TokenStore     *store.TokenStore
+	beginner       db.Beginner
 }
 
 // NewHandler creates a new agent handler. peerStore handles peer data access, dashboardStore
 // handles logs/registration-tokens/secrets, alertService is optional and can be nil.
-func NewHandler(peerStore *store.PeerStore, dashboardStore *store.DashboardStore, alertService *alerts.Service, importStore *store.ImportStore) *Handler {
-	return &Handler{PeerStore: peerStore, DashboardStore: dashboardStore, AlertService: alertService, ImportStore: importStore}
+func NewHandler(peerStore *store.PeerStore, dashboardStore *store.DashboardStore, alertService *alerts.Service, importStore *store.ImportStore, tokenStore *store.TokenStore, beginner db.Beginner) *Handler {
+	return &Handler{PeerStore: peerStore, DashboardStore: dashboardStore, AlertService: alertService, ImportStore: importStore, TokenStore: tokenStore, beginner: beginner}
 }
 
 type LogEvent struct {
@@ -160,6 +163,17 @@ func (h *Handler) AgentAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		if !ok || sub == "" {
 			common.RespondError(w, http.StatusUnauthorized, "unauthorized")
 			return
+		}
+
+		// Check token revocation via jti (unique token ID)
+		if jti, ok := claims["jti"].(string); ok && jti != "" && h.TokenStore != nil {
+			revoked, checkErr := h.TokenStore.IsTokenRevoked(r.Context(), jti)
+			if checkErr != nil {
+				runiclog.Error("failed to check token revocation", "error", checkErr)
+			} else if revoked {
+				common.RespondError(w, http.StatusUnauthorized, "token has been revoked")
+				return
+			}
 		}
 
 		// Use typed context key to prevent collisions
@@ -475,7 +489,7 @@ func (h *Handler) SubmitLogs(w http.ResponseWriter, r *http.Request) {
 		accepted++
 
 		event := models.LogEvent{
-			PeerID:   fmt.Sprintf("%d", serverID),
+			PeerID:   serverID,
 			Action:   ev.Action,
 			SrcIP:    ev.SrcIP,
 			DstIP:    ev.DstIP,
@@ -513,13 +527,27 @@ func (h *Handler) ConfirmBundleApplied(w http.ResponseWriter, r *http.Request) {
 		appliedAt = time.Now().UTC().Format(time.RFC3339)
 	}
 
-	err := h.PeerStore.UpdateBundleAppliedAt(r.Context(), serverID, input.Version, appliedAt)
+	// Wrap both DB calls in a transaction to prevent partial state on crash
+	err := store.RunInTx(r.Context(), h.beginner, func(tx *sql.Tx) error {
+		// UpdateBundleAppliedAt and UpdatePeerBundleVersion need to be atomic.
+		// Since PeerStore methods use s.db directly, we use the raw tx ExecContext.
+		// This avoids duplicating the store methods while keeping the writes atomic.
+		if _, execErr := tx.ExecContext(r.Context(),
+			`UPDATE rule_bundles SET applied_at = ?, first_applied_at = COALESCE(first_applied_at, ?) WHERE peer_id = ? AND version = ?`,
+			appliedAt, appliedAt, serverID, input.Version); execErr != nil {
+			return fmt.Errorf("update bundle applied_at: %w", execErr)
+		}
+		if _, execErr := tx.ExecContext(r.Context(),
+			`UPDATE peers SET bundle_version = ? WHERE id = ?`,
+			input.Version, serverID); execErr != nil {
+			return fmt.Errorf("update peer bundle version: %w", execErr)
+		}
+		return nil
+	})
 	if err != nil {
-		runiclog.Error("Failed to confirm bundle apply error", "error", err)
-	}
-
-	if err := h.PeerStore.UpdatePeerBundleVersion(r.Context(), serverID, input.Version); err != nil {
-		runiclog.Error("Failed to update peer bundle version", "error", err)
+		runiclog.Error("Failed to confirm bundle apply in transaction", "error", err)
+		common.InternalError(w)
+		return
 	}
 
 	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "confirmed"})
@@ -687,7 +715,7 @@ func (h *Handler) AgentTestKey(w http.ResponseWriter, r *http.Request) {
 	mac.Write([]byte(input.Message))
 	expected := hex.EncodeToString(mac.Sum(nil))
 
-	if input.Signature != expected {
+	if !hmac.Equal([]byte(input.Signature), []byte(expected)) {
 		common.RespondError(w, http.StatusUnauthorized, "invalid signature")
 		return
 	}

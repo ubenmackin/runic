@@ -4,6 +4,7 @@ package alerts
 import (
 	"context"
 	"database/sql"
+	"strconv"
 	"testing"
 	"time"
 
@@ -213,7 +214,7 @@ func TestCheckBlockedSpike(t *testing.T) {
 
 	// Test 1: No blocked traffic (returns false, 0)
 	t.Run("no blocked traffic", func(t *testing.T) {
-		isSpike, percentage, err := evaluator.CheckBlockedSpike(ctx, int(peerID))
+		isSpike, percentage, err := evaluator.CheckBlockedSpike(ctx, int(peerID), 5)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -247,7 +248,7 @@ func TestCheckBlockedSpike(t *testing.T) {
 			}
 		}
 
-		isSpike, percentage, err := evaluator.CheckBlockedSpike(ctx, int(peerID))
+		isSpike, percentage, err := evaluator.CheckBlockedSpike(ctx, int(peerID), 5)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -280,7 +281,7 @@ func TestCheckBlockedSpike(t *testing.T) {
 			}
 		}
 
-		isSpike, percentage, err := evaluator.CheckBlockedSpike(ctx, int(baselinePeerID))
+		isSpike, percentage, err := evaluator.CheckBlockedSpike(ctx, int(baselinePeerID), 5)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -319,7 +320,7 @@ func TestEvaluateBundleDeployed_FirstAppliedAt(t *testing.T) {
 		Enabled:                true,
 		ThresholdWindowMinutes: 60,
 		ThrottleMinutes:        5,
-		PeerID:                 intPtr(int(peerID)),
+		PeerID:                 stringPtr(strconv.FormatInt(peerID, 10)),
 	}
 
 	// --- Sub-test 1: First deployment triggers an alert ---

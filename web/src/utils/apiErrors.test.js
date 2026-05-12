@@ -51,13 +51,20 @@ describe('parseApiError', () => {
   })
 
   describe('Response objects', () => {
-    test('delegates to getResponseErrorMessage', async () => {
+    test('returns status message synchronously for Response', () => {
       const response = new Response(null, { status: 404, statusText: 'Not Found' })
       const result = parseApiError(response)
-      // parseApiError returns a Promise when given a Response
-      expect(result).toBeInstanceOf(Promise)
-      const message = await result
-      expect(message).toBe('The requested resource was not found.')
+      expect(result).toBe('The requested resource was not found.')
+    })
+
+    test('handles 401 Response', () => {
+      const response = new Response(null, { status: 401 })
+      expect(parseApiError(response)).toBe('Authentication required. Please log in again.')
+    })
+
+    test('handles 500 Response', () => {
+      const response = new Response(null, { status: 500 })
+      expect(parseApiError(response)).toBe('Server error. Please try again later.')
     })
   })
 
@@ -298,10 +305,7 @@ describe('getSuggestedAction', () => {
 
   test('suggests contacting support for non-recoverable errors', () => {
     // 403 Forbidden is not recoverable (permission denied)
-    const _response = new Response(null, { status: 403 })
-    // Note: getSuggestedAction doesn't handle Response objects correctly
-    // as parseApiError returns a Promise for Responses
-    // Testing with error object that has permission message
+    // This tests the message-parse path through parseApiError
     const error = { message: 'You do not have permission' }
     expect(getSuggestedAction(error)).toBe('Contact your administrator if you believe this is an error.')
   })

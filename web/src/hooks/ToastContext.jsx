@@ -9,12 +9,14 @@ export function useToastContext() {
 }
 
 export function ToastProvider({ children }) {
-  const { toast, showToast } = useToast()
+  const { toasts, showToast } = useToast()
 
   return (
     <ToastContext.Provider value={showToast}>
       {children}
-      <Toast toast={toast} />
+      {toasts.map((toast, index) => (
+        <Toast key={toast.id} toast={toast} index={index} />
+      ))}
     </ToastContext.Provider>
   )
 }

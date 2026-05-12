@@ -3,6 +3,7 @@ package apply
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -11,12 +12,19 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"runic/internal/common/constants"
 	"runic/internal/common/log"
 	"runic/internal/engine"
 	"runic/internal/models"
+)
+
+const (
+	// LocalBackupPath is the persistent path where pre-apply firewall rules
+	// are written so that a crash mid-apply does not lose the backup.
+	LocalBackupPath = "/etc/runic-agent/pre-apply-backup.rules"
 )
 
 // ApplyBundle uses the confirmFunc callback to notify the control plane after successful apply.
@@ -36,13 +44,19 @@ func ApplyBundle(ctx context.Context, bundle models.BundleResponse, hmacKey, con
 		return fmt.Errorf("could not dump current rules for backup: %w", err)
 	}
 
+	// Persist backup to disk BEFORE any state modification so crash mid-apply
+	// does not lose the ability to restore.
+	if err := persistBackup(backup); err != nil {
+		log.Warn("Failed to persist backup to disk", "error", err)
+	}
+
 	revertCancel := scheduleRevert(ctx, backup, constants.AutoRevertDelay, controlPlaneURL, token, version)
 
 	// Flush iptables FIRST to release ipset references before destroying ipsets
 	// This prevents "ipset in use" errors during ipset recreate
 	if err := flushIPTables(ctx); err != nil {
 		revertCancel()
-		return fmt.Errorf("flush iptables: %w", err)
+		return fmt.Errorf("flush firewall: %w", err)
 	}
 
 	tmpFile, err := os.CreateTemp("", "runic-bundle-*.rules")
@@ -78,11 +92,13 @@ func ApplyBundle(ctx context.Context, bundle models.BundleResponse, hmacKey, con
 		}
 	}
 
-	cmd := exec.CommandContext(ctx, "iptables-restore", tmpPath)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
+	// Use detached context for the critical restore operation so that a watchdog
+	// or parent cancellation does not kill iptables-restore mid-flight, which
+	// could leave the system in a broken state.
+	restoreCtx := context.WithoutCancel(ctx)
+	if err := restoreRulesFromContent(restoreCtx, stripIpsetSection(bundle.Rules)); err != nil {
 		revertCancel()
-		return fmt.Errorf("iptables-restore failed: %s: %w", string(output), err)
+		return fmt.Errorf("rule restore failed: %w", err)
 	}
 
 	if hasDocker() {
@@ -105,6 +121,12 @@ func ApplyBundle(ctx context.Context, bundle models.BundleResponse, hmacKey, con
 
 	revertCancel()
 
+	// Remove persisted backup on success so a subsequent crash does not restore
+	// stale rules.
+	if err := os.Remove(LocalBackupPath); err != nil && !os.IsNotExist(err) {
+		log.Warn("Failed to remove persisted backup", "error", err)
+	}
+
 	if confirmFunc != nil {
 		if err := confirmFunc(ctx, bundle.Version); err != nil {
 			log.Warn("Failed to confirm apply to control plane", "error", err)
@@ -116,6 +138,54 @@ func ApplyBundle(ctx context.Context, bundle models.BundleResponse, hmacKey, con
 	}
 
 	log.Info("Applied bundle successfully", "version", bundle.Version)
+	return nil
+}
+
+// restoreRulesFromContent writes the given rules to a temp file and applies
+// them using the appropriate firewall backend (iptables-restore or nft -f).
+func restoreRulesFromContent(ctx context.Context, rules string) error {
+	tmpFile, err := os.CreateTemp("", "runic-restore-*.rules")
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+
+	defer func() {
+		if err := os.Remove(tmpPath); err != nil {
+			log.Warn("remove err", "err", err)
+		}
+	}()
+
+	if _, err := tmpFile.WriteString(rules); err != nil {
+		if closeErr := tmpFile.Close(); closeErr != nil {
+			log.Warn("Failed to close temp file", "error", closeErr)
+		}
+		return fmt.Errorf("write rules: %w", err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		return fmt.Errorf("close temp file: %w", err)
+	}
+
+	return restoreFromFile(ctx, tmpPath, rules)
+}
+
+// restoreFromFile applies firewall rules from a file using the appropriate
+// backend based on the content format.
+func restoreFromFile(ctx context.Context, path, content string) error {
+	if IsNftFormat(content) {
+		cmd := exec.CommandContext(ctx, "nft", "-f", path)
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("nft -f restore failed: %s: %w", string(output), err)
+		}
+		return nil
+	}
+
+	cmd := exec.CommandContext(ctx, "iptables-restore", path)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("iptables-restore failed: %s: %w", string(output), err)
+	}
 	return nil
 }
 
@@ -135,40 +205,95 @@ func CacheBundle(rules string) error {
 	return nil
 }
 
-// Uses time.AfterFunc to avoid launching a bare goroutine.
+// Uses time.AfterFunc with sync.Once to guarantee exactly one of the
+// two paths executes: either the auto-revert fires, or the caller
+// cancels it on success. This eliminates the race between cancel() and
+// the timer callback that existed with the previous select/default pattern.
 func scheduleRevert(ctx context.Context, backup string, delay time.Duration, controlPlaneURL, token, version string) context.CancelFunc {
-	ctx, cancel := context.WithCancel(ctx)
+	var once sync.Once
+
+	revertFn := func() {
+		log.Warn("Auto-revert triggered, restoring previous rules", "delay", delay)
+		if err := revertRules(backup); err != nil {
+			log.Error("Auto-revert failed", "error", err)
+		} else {
+			log.Info("Rules reverted successfully")
+		}
+	}
 
 	timer := time.AfterFunc(delay, func() {
-		select {
-		case <-ctx.Done():
-			// Canceled — apply was confirmed
-			return
-		default:
-			log.Warn("Auto-revert triggered, restoring previous rules", "delay", delay)
-			if err := revertRules(backup); err != nil {
-				log.Error("Auto-revert failed", "error", err)
-			} else {
-				log.Info("Rules reverted successfully")
-			}
-		}
+		once.Do(revertFn)
 	})
 
 	return func() {
-		cancel()
+		// Consume the once so the timer callback becomes a no-op if it
+		// has not fired yet, then stop the timer to prevent a spurious
+		// callback invocation.
+		once.Do(func() {})
 		timer.Stop()
 	}
 }
 
 func dumpCurrentRules() (string, error) {
 	out, err := exec.Command("iptables-save").Output()
+	if err == nil {
+		return string(out), nil
+	}
+	log.Info("iptables-save unavailable, trying nft list ruleset")
+	out, err = exec.Command("nft", "list", "ruleset").Output()
 	if err != nil {
-		return "", fmt.Errorf("iptables-save: %w", err)
+		return "", fmt.Errorf("firewall dump failed (tried iptables-save and nft list ruleset): %w", err)
 	}
 	return string(out), nil
 }
 
+// persistBackup writes the backup content to a persistent file so crash
+// recovery can still restore rules.
+func persistBackup(content string) error {
+	dir := filepath.Dir(LocalBackupPath)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return fmt.Errorf("create backup dir: %w", err)
+	}
+	if err := os.WriteFile(LocalBackupPath, []byte(content), 0600); err != nil {
+		return fmt.Errorf("write backup: %w", err)
+	}
+	log.Info("Backup persisted for crash recovery", "path", LocalBackupPath)
+	return nil
+}
+
+// readPersistedBackup reads the backup file from disk; returns empty string
+// and nil error if no backup exists.
+func readPersistedBackup() (string, error) {
+	data, err := os.ReadFile(LocalBackupPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("read persisted backup: %w", err)
+	}
+	return string(data), nil
+}
+
+// IsNftFormat returns true when the content looks like nftables ruleset
+// (starts with "table" rather than containing "*filter").
+func IsNftFormat(content string) bool {
+	return strings.Contains(content, "table ") && !strings.Contains(content, "*filter")
+}
+
 func revertRules(backup string) error {
+	// If the in-memory backup is empty, try reading the persistent backup.
+	if strings.TrimSpace(backup) == "" {
+		var err error
+		backup, err = readPersistedBackup()
+		if err != nil {
+			return fmt.Errorf("read persisted backup: %w", err)
+		}
+		if strings.TrimSpace(backup) == "" {
+			return fmt.Errorf("no backup available to revert (in-memory empty and no persisted backup)")
+		}
+		log.Info("Using persisted backup for revert", "path", LocalBackupPath)
+	}
+
 	tmp, err := os.CreateTemp("", "runic-revert-*.rules")
 	if err != nil {
 		return fmt.Errorf("create revert temp file: %w", err)
@@ -191,7 +316,19 @@ func revertRules(backup string) error {
 		return fmt.Errorf("close revert temp file: %w", err)
 	}
 
-	cmd := exec.Command("iptables-restore", tmpPath)
+	// Use detached context so watchdog cancellation does not kill the restore.
+	ctx := context.WithoutCancel(context.Background())
+
+	if IsNftFormat(backup) {
+		cmd := exec.CommandContext(ctx, "nft", "-f", tmpPath)
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("nft -f revert: %s: %w", string(output), err)
+		}
+		return nil
+	}
+
+	cmd := exec.CommandContext(ctx, "iptables-restore", tmpPath)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("iptables-restore revert: %s: %w", string(output), err)
@@ -203,6 +340,22 @@ func revertRules(backup string) error {
 func validateRules(content string) error {
 	if strings.TrimSpace(content) == "" {
 		return fmt.Errorf("rules content is empty")
+	}
+
+	// Nftables-format rules use "table ip filter" syntax rather than
+	// iptables "*filter" markers. The detailed iptables-specific checks
+	// (e.g. *filter, COMMIT, :INPUT DROP) do not apply to nft format, so
+	// skip them. A full nftables schema validator is not trivial to
+	// implement, so we only verify the content is non-empty and contains
+	// a recognizable nft marker.
+	if IsNftFormat(content) {
+		if !strings.Contains(content, "table ip filter") {
+			return fmt.Errorf("nft-format rules missing 'table ip filter' declaration")
+		}
+		if strings.Count(content, "\n") > 10000 {
+			return fmt.Errorf("too many lines in nft rules, refusing to apply")
+		}
+		return nil
 	}
 
 	if !strings.Contains(content, "*filter") {
@@ -313,8 +466,7 @@ func applyIpsets(ctx context.Context, rulesContent string) error {
 	}
 
 	for _, def := range ipsetDefs {
-		createCmd := fmt.Sprintf("ipset create %s %s family inet", def.Name, def.Type)
-		log.Info("Creating ipset", "name", def.Name, "type", def.Type, "command", createCmd)
+		log.Info("Creating ipset", "name", def.Name, "type", def.Type, "family", "inet")
 		if err := runIpset(ctx, def.Name, def.Type, "inet"); err != nil {
 			return fmt.Errorf("create ipset %s: %w", def.Name, err)
 		}
@@ -437,10 +589,31 @@ func flushRunicIpsets(ctx context.Context) error {
 	cmd := exec.CommandContext(ctx, "ipset", "list", "-n")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		// ipset command might fail if no ipsets exist, which is fine
-		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() != 0 {
-			log.Info("ipset list returned non-zero, possibly no ipsets exist", "output", string(output))
+		// If ipset is not installed (command not found), there is nothing to flush.
+		if errors.Is(err, exec.ErrNotFound) {
+			log.Info("ipset command not found, skipping ipset flush")
 			return nil
+		}
+		// If ipset list failed with a non-zero exit code, distinguish between
+		// "no ipsets exist" (which is fine) and real errors like permission
+		// denied or missing kernel module.
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			stderr := strings.TrimSpace(string(exitErr.Stderr))
+			// Exit code 127 typically means command not found in the shell.
+			if exitErr.ExitCode() == 127 {
+				log.Info("ipset command not found (exit 127), skipping ipset flush")
+				return nil
+			}
+			// ipset returns exit code 1 with specific messages when the
+			// kernel module is not loaded or no sets exist.
+			if strings.Contains(stderr, "No such file") ||
+				strings.Contains(stderr, "Kernel module not loaded") ||
+				strings.Contains(stderr, "No set found") {
+				log.Info("ipset list indicates no ipsets or kernel support, skipping flush", "stderr", stderr)
+				return nil
+			}
+			return fmt.Errorf("ipset list: %s: %w", stderr, err)
 		}
 		return fmt.Errorf("ipset list: %w", err)
 	}
@@ -508,7 +681,21 @@ func restartDocker(ctx context.Context) error {
 
 // This is done before destroying ipsets to release references to them.
 // The order is: flush rules (-F) first, then delete custom chains (-X).
+// Falls back to nft flush ruleset when iptables is unavailable.
 func flushIPTables(ctx context.Context) error {
+	// Check if iptables is available; if not, fall back to nft.
+	if _, err := exec.LookPath("iptables"); err != nil {
+		log.Info("iptables not found, using nft flush ruleset")
+		flushCtx := context.WithoutCancel(ctx)
+		cmd := exec.CommandContext(flushCtx, "nft", "flush", "ruleset")
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("nft flush ruleset: %s: %w", string(output), err)
+		}
+		log.Info("Flushed nftables ruleset")
+		return nil
+	}
+
 	cmd := exec.CommandContext(ctx, "iptables", "-t", "filter", "-F")
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("flush iptables filter: %w", err)

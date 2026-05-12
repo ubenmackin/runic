@@ -214,14 +214,13 @@ func (s *AlertStore) ListAlertRules(ctx context.Context) ([]models.AlertRule, er
 	var rules []models.AlertRule
 	for rows.Next() {
 		var rule models.AlertRule
-		var peerID sql.NullInt64
+		var peerID sql.NullString
 		if err := rows.Scan(&rule.ID, &rule.Name, &rule.AlertType, &rule.Enabled, &rule.ThresholdValue,
 			&rule.ThresholdWindowMinutes, &peerID, &rule.ThrottleMinutes, &rule.CreatedAt, &rule.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan alert rule: %w", err)
 		}
-		if peerID.Valid {
-			peerIDInt := int(peerID.Int64)
-			rule.PeerID = &peerIDInt
+		if peerID.Valid && peerID.String != "" {
+			rule.PeerID = &peerID.String
 		}
 		rules = append(rules, rule)
 	}
@@ -237,7 +236,7 @@ func (s *AlertStore) ListAlertRules(ctx context.Context) ([]models.AlertRule, er
 // Returns models.ErrAlertRuleNotFound if the rule does not exist.
 func (s *AlertStore) GetAlertRule(ctx context.Context, id uint64) (*models.AlertRule, error) {
 	var rule models.AlertRule
-	var peerID sql.NullInt64
+	var peerID sql.NullString
 
 	err := s.db.QueryRowContext(ctx,
 		`SELECT id, name, alert_type, enabled, threshold_value, threshold_window_minutes, peer_id, throttle_minutes, created_at, updated_at
@@ -252,9 +251,8 @@ func (s *AlertStore) GetAlertRule(ctx context.Context, id uint64) (*models.Alert
 		return nil, fmt.Errorf("get alert rule: %w", err)
 	}
 
-	if peerID.Valid {
-		peerIDInt := int(peerID.Int64)
-		rule.PeerID = &peerIDInt
+	if peerID.Valid && peerID.String != "" {
+		rule.PeerID = &peerID.String
 	}
 	return &rule, nil
 }
@@ -262,6 +260,14 @@ func (s *AlertStore) GetAlertRule(ctx context.Context, id uint64) (*models.Alert
 // UpdateAlertRule updates an existing alert rule.
 // Returns models.ErrAlertRuleNotFound if no row was affected.
 func (s *AlertStore) UpdateAlertRule(ctx context.Context, rule *models.AlertRule) error {
+	// Normalize PeerID: treat pointer-to-empty-string as nil so NULL is stored
+	// in the database rather than an empty string. This ensures consistency
+	// with ListAlertRules/GetAlertRule which treat both NULL and "" as "no peer",
+	// and prevents future WHERE peer_id IS NULL queries from missing empty-string rows.
+	if rule.PeerID != nil && *rule.PeerID == "" {
+		rule.PeerID = nil
+	}
+
 	now := time.Now()
 	result, err := s.db.ExecContext(ctx,
 		`UPDATE alert_rules SET name = ?, alert_type = ?, enabled = ?, threshold_value = ?,
@@ -438,10 +444,18 @@ func (s *AlertStore) ClearAllAlertHistory(ctx context.Context) error {
 
 // CreateAlertRule creates a new alert rule and returns with ID set.
 func (s *AlertStore) CreateAlertRule(ctx context.Context, rule *models.AlertRule) error {
+	// Normalize PeerID: treat pointer-to-empty-string as nil so NULL is stored
+	// in the database rather than an empty string. This ensures consistency
+	// with ListAlertRules/GetAlertRule which treat both NULL and "" as "no peer",
+	// and prevents future WHERE peer_id IS NULL queries from missing empty-string rows.
+	if rule.PeerID != nil && *rule.PeerID == "" {
+		rule.PeerID = nil
+	}
+
 	now := time.Now()
 	result, err := s.db.ExecContext(ctx,
 		`INSERT INTO alert_rules (name, alert_type, enabled, threshold_value, threshold_window_minutes, peer_id, throttle_minutes, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		rule.Name, rule.AlertType, rule.Enabled, rule.ThresholdValue, rule.ThresholdWindowMinutes,
 		rule.PeerID, rule.ThrottleMinutes, now, now,
 	)
@@ -498,14 +512,13 @@ func (s *AlertStore) GetEnabledAlertRulesByType(ctx context.Context, alertType m
 	var rules []models.AlertRule
 	for rows.Next() {
 		var rule models.AlertRule
-		var peerID sql.NullInt64
+		var peerID sql.NullString
 		if err := rows.Scan(&rule.ID, &rule.Name, &rule.AlertType, &rule.Enabled, &rule.ThresholdValue,
 			&rule.ThresholdWindowMinutes, &peerID, &rule.ThrottleMinutes, &rule.CreatedAt, &rule.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan alert rule: %w", err)
 		}
-		if peerID.Valid {
-			peerIDInt := int(peerID.Int64)
-			rule.PeerID = &peerIDInt
+		if peerID.Valid && peerID.String != "" {
+			rule.PeerID = &peerID.String
 		}
 		rules = append(rules, rule)
 	}

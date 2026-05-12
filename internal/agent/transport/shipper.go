@@ -281,18 +281,48 @@ func (s *Shipper) ship(ctx context.Context, batch []LogEvent) {
 		"events":  batch,
 	}
 
-	resp, err := common.DoJSONRequest(ctx, s.client, "POST", url, reqBody, s.token, "runic-agent")
-	if err != nil {
-		log.Error("Failed to ship events", "count", len(batch), "error", err)
-		return
-	}
-	defer func() {
-		if err := resp.Body.Close(); err != nil {
-			log.Warn("Failed to close response body", "error", err)
-		}
-	}()
+	// Retry with exponential backoff on transient failures.
+	maxRetries := 3
+	baseDelay := time.Second
 
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		log.Warn("Server returned error status", "status_code", resp.StatusCode, "count", len(batch))
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			delay := baseDelay * (1 << (attempt - 1)) // 1s, 2s, 4s
+			log.Warn("Retrying failed log shipment", "count", len(batch),
+				"attempt", attempt, "next_retry_ms", delay.Milliseconds())
+			select {
+			case <-ctx.Done():
+				log.Warn("Log shipment canceled during retry backoff", "count", len(batch), "error", ctx.Err())
+				return
+			case <-time.After(delay):
+			}
+		}
+
+		resp, err := common.DoJSONRequest(ctx, s.client, "POST", url, reqBody, s.token, "runic-agent")
+		if err != nil {
+			// Do not retry on 401 (unauthorized — re-registration needed).
+			if common.IsUnauthorized(err) {
+				log.Error("Log shipment rejected (unauthorized), dropping batch", "count", len(batch))
+				return
+			}
+			if attempt < maxRetries {
+				continue
+			}
+			log.Error("Failed to ship events after retries", "count", len(batch), "error", err)
+			return
+		}
+
+		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+			_ = resp.Body.Close()
+			// Retry on server errors (5xx), drop on client errors (4xx).
+			if resp.StatusCode >= 500 && attempt < maxRetries {
+				continue
+			}
+			log.Warn("Server returned error status, dropping batch", "status_code", resp.StatusCode, "count", len(batch))
+			return
+		}
+
+		_ = resp.Body.Close()
+		return // success
 	}
 }

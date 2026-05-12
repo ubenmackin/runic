@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"runic/internal/common"
@@ -17,6 +19,47 @@ import (
 	"runic/internal/common/log"
 	"runic/internal/models"
 )
+
+// sseCallbackGuard prevents concurrent execution of SSE callback goroutines.
+// When the SSE connection dies and reconnects, a new set of goroutines may be
+// spawned before the old ones finish. The guard ensures at most one invocation
+// of each callback is running at a time, skipping additional launches and
+// canceling any in-flight work via context cancellation.
+type sseCallbackGuard struct {
+	running  atomic.Bool
+	cancelMu sync.Mutex
+	cancel   context.CancelFunc
+}
+
+// tryStart attempts to start a guarded goroutine. It returns false (and does
+// nothing) if a previous invocation is still running.
+func (g *sseCallbackGuard) tryStart(ctx context.Context, fn func(context.Context)) bool {
+	if g.running.Load() {
+		log.Warn("SSE callback already running, skipping duplicate launch")
+		return false
+	}
+
+	// Cancel any previous invocation's derived context before starting a new one.
+	g.cancelMu.Lock()
+	if g.cancel != nil {
+		g.cancel()
+		g.cancel = nil
+	}
+	g.cancelMu.Unlock()
+
+	childCtx, childCancel := context.WithCancel(ctx)
+	g.cancelMu.Lock()
+	g.cancel = childCancel
+	g.cancelMu.Unlock()
+
+	g.running.Store(true)
+	go func() {
+		defer g.running.Store(false)
+		fn(childCtx)
+		childCancel()
+	}()
+	return true
+}
 
 func PullBundle(ctx context.Context, client common.HTTPClient, controlPlaneURL, hostID, token, currentBundleVer, version string, applyFunc func(context.Context, models.BundleResponse) error) error {
 	url := fmt.Sprintf("%s/api/v1/agent/bundle/%s", controlPlaneURL, hostID)
@@ -154,6 +197,9 @@ func connectSSE(ctx context.Context, client common.HTTPClient, controlPlaneURL, 
 	buf := make([]byte, maxScanTokenSize)
 	scanner.Buffer(buf, maxScanTokenSize)
 
+	// Guards to prevent goroutine leaks on SSE reconnect.
+	var bundleGuard, backupGuard sseCallbackGuard
+
 	var prevEvent string
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -168,11 +214,11 @@ func connectSSE(ctx context.Context, client common.HTTPClient, controlPlaneURL, 
 		case strings.HasPrefix(line, "event: bundle_updated"):
 			log.Info("SSE: bundle_updated received, pulling immediately")
 			prevEvent = "bundle_updated"
-			go onBundleUpdate(ctx)
+			bundleGuard.tryStart(ctx, onBundleUpdate)
 		case strings.HasPrefix(line, "event: fetch_backup"):
 			log.Info("SSE: fetch_backup received, reading backup")
 			prevEvent = "fetch_backup"
-			go onFetchBackup(ctx)
+			backupGuard.tryStart(ctx, onFetchBackup)
 		case strings.HasPrefix(line, "event: update_agent"):
 			log.Info("SSE: update_agent received, starting self-update")
 			prevEvent = "update_agent"

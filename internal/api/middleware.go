@@ -294,11 +294,9 @@ func CORS() mux.MiddlewareFunc {
 					originToAllow = origin
 				}
 			case "":
-				// Production mode: same-origin or reflect origin
-				// This handles cases where frontend is on same host but different port
-				if origin != "" {
-					originToAllow = origin
-				}
+				// Production mode: same-origin only
+				// Only allow requests from the same origin (no cross-origin in production without explicit config)
+				originToAllow = ""
 			default:
 				originToAllow = allowedOrigin
 			}

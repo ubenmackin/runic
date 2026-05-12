@@ -21,13 +21,13 @@ type TokenResponse struct {
 	RefreshToken string `json:"refresh_token"`
 }
 
-func (h *Handler) GenerateTokenPair(username string) (accessToken string, refreshToken string, err error) {
+func (h *Handler) GenerateTokenPair(ctx context.Context, username string) (accessToken string, refreshToken string, err error) {
 	// token generation always succeeds even if the DB is temporarily unavailable.
 	role := "viewer"
-	if user, lookupErr := h.UserStore.GetUserByUsername(context.Background(), username); lookupErr == nil {
+	if user, lookupErr := h.UserStore.GetUserByUsername(ctx, username); lookupErr == nil {
 		role = user.Role
 	} else {
-		log.WarnContext(context.Background(), "failed to look up role, defaulting to viewer", "username", username, "error", lookupErr)
+		log.WarnContext(ctx, "failed to look up role, defaulting to viewer", "username", username, "error", lookupErr)
 	}
 
 	accessToken, err = auth.GenerateToken(username, role, AccessTokenTTL)

@@ -34,7 +34,11 @@ func (h *Handler) ListKeys(w http.ResponseWriter, r *http.Request) {
 	result := make([]map[string]interface{}, 0, len(keyTypes))
 	for _, kt := range keyTypes {
 		dbKey := keyTypeToDBKey[kt]
-		exists, _ := h.Keys.KeyExists(r.Context(), dbKey)
+		exists, err := h.Keys.KeyExists(r.Context(), dbKey)
+		if err != nil {
+			runiclog.Error("Failed to check key existence", "key", dbKey, "error", err)
+			exists = false
+		}
 		result = append(result, map[string]interface{}{
 			"type":   kt,
 			"exists": exists,

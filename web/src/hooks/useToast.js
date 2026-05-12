@@ -1,17 +1,23 @@
 import { useState, useCallback, useRef } from 'react'
 
-export function useToast() {
-  const [toast, setToast] = useState(null)
-  const timeoutRef = useRef(null)
+let toastId = 0
 
-  const showToast = useCallback((message, type = 'error') => {
-    if (timeoutRef.current) clearTimeout(timeoutRef.current)
-    setToast({ message, type })
-    timeoutRef.current = setTimeout(() => {
-      setToast(null)
-      timeoutRef.current = null
-    }, 3000)
+export function useToast() {
+  const [toasts, setToasts] = useState([])
+  const timersRef = useRef({})
+
+  const removeToast = useCallback((id) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id))
+    delete timersRef.current[id]
   }, [])
 
-  return { toast, showToast }
+  const showToast = useCallback((message, type = 'error') => {
+    const id = ++toastId
+    setToasts((prev) => [...prev, { id, message, type }])
+    timersRef.current[id] = setTimeout(() => {
+      removeToast(id)
+    }, 3000)
+  }, [removeToast])
+
+  return { toasts, showToast }
 }

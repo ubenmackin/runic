@@ -19,7 +19,7 @@ import (
 func setupHandlerWithCompiler(db *sql.DB) *Handler {
 	compiler := engine.NewTestCompiler(db)
 	changeWorker := common.NewChangeWorker(nil, db) // nil sseHub for tests
-	// Start the worker with a cancelled context so it doesn't process anything
+	// Start the worker with a canceled context so it doesn't process anything
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
 	changeWorker.Start(ctx)

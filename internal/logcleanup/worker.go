@@ -93,7 +93,11 @@ func (w *Worker) runCleanup(ctx context.Context) {
 		log.DebugContext(ctx, "Deleted batch of old logs", "count", rowsAffected, "total", totalDeleted)
 
 		// Small pause between batches to reduce database load
-		time.Sleep(10 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
 
 	if totalDeleted > 0 {

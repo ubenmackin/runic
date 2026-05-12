@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"runic/internal/common/log"
@@ -76,7 +77,11 @@ func (e *ConditionEvaluator) EvaluateRule(ctx context.Context, rule *AlertRule) 
 // Threshold is the number of minutes a peer must be offline.
 func (e *ConditionEvaluator) evaluatePeerOffline(ctx context.Context, rule *AlertRule) (*AlertEvent, error) {
 	if rule.PeerID != nil {
-		return e.checkPeerOfflineByID(ctx, rule, *rule.PeerID)
+		pid, err := strconv.Atoi(*rule.PeerID)
+		if err != nil {
+			return nil, fmt.Errorf("invalid peer_id %q: %w", *rule.PeerID, err)
+		}
+		return e.checkPeerOfflineByID(ctx, rule, pid)
 	}
 
 	rows, err := e.database.QueryContext(ctx, `
@@ -195,7 +200,11 @@ func (e *ConditionEvaluator) checkPeerOfflineByID(ctx context.Context, rule *Ale
 // Threshold is the number of consecutive bundle generation failures.
 func (e *ConditionEvaluator) evaluateBundleFailed(ctx context.Context, rule *AlertRule) (*AlertEvent, error) {
 	if rule.PeerID != nil {
-		return e.checkBundleFailedByID(ctx, rule, *rule.PeerID)
+		pid, err := strconv.Atoi(*rule.PeerID)
+		if err != nil {
+			return nil, fmt.Errorf("invalid peer_id %q: %w", *rule.PeerID, err)
+		}
+		return e.checkBundleFailedByID(ctx, rule, pid)
 	}
 
 	window := time.Duration(rule.ThresholdWindowMinutes) * time.Minute
@@ -329,7 +338,11 @@ func (e *ConditionEvaluator) countConsecutiveFailures(ctx context.Context, peerI
 // Threshold is the percentage increase in blocked traffic.
 func (e *ConditionEvaluator) evaluateBlockedSpike(ctx context.Context, rule *AlertRule) (*AlertEvent, error) {
 	if rule.PeerID != nil {
-		return e.checkBlockedSpikeByID(ctx, rule, *rule.PeerID)
+		pid, err := strconv.Atoi(*rule.PeerID)
+		if err != nil {
+			return nil, fmt.Errorf("invalid peer_id %q: %w", *rule.PeerID, err)
+		}
+		return e.checkBlockedSpikeByID(ctx, rule, pid)
 	}
 
 	window := time.Duration(rule.ThresholdWindowMinutes) * time.Minute
@@ -377,7 +390,11 @@ func (e *ConditionEvaluator) evaluateBlockedSpike(ctx context.Context, rule *Ale
 }
 
 func (e *ConditionEvaluator) checkBlockedSpikeByID(ctx context.Context, rule *AlertRule, peerID int) (*AlertEvent, error) {
-	isSpike, percentage, err := e.CheckBlockedSpike(ctx, peerID)
+	windowMinutes := rule.ThresholdWindowMinutes
+	if windowMinutes <= 0 {
+		windowMinutes = 5
+	}
+	isSpike, percentage, err := e.CheckBlockedSpike(ctx, peerID, windowMinutes)
 	if err != nil {
 		return nil, err
 	}
@@ -475,15 +492,21 @@ func (e *ConditionEvaluator) CheckBundleFailed(ctx context.Context, peerID int) 
 }
 
 // CheckBlockedSpike returns true if there's a spike, along with the percentage increase.
-func (e *ConditionEvaluator) CheckBlockedSpike(ctx context.Context, peerID int) (bool, int, error) {
+// windowMinutes specifies the recent time window; the previous window of the same
+// duration is used as a baseline for comparison.
+func (e *ConditionEvaluator) CheckBlockedSpike(ctx context.Context, peerID int, windowMinutes int) (bool, int, error) {
 	if e.logsDB == nil {
 		return false, 0, fmt.Errorf("logs database not configured")
 	}
+	if windowMinutes <= 0 {
+		windowMinutes = 5
+	}
 
+	window := time.Duration(windowMinutes) * time.Minute
 	now := time.Now()
-	recentStart := now.Add(-5 * time.Minute)
-	previousStart := now.Add(-10 * time.Minute)
-	previousEnd := now.Add(-5 * time.Minute)
+	recentStart := now.Add(-window)
+	previousStart := now.Add(-2 * window)
+	previousEnd := now.Add(-window)
 
 	var recentCount int
 	err := e.logsDB.QueryRowContext(ctx, `
@@ -531,7 +554,11 @@ func (e *ConditionEvaluator) CheckBlockedSpike(ctx context.Context, peerID int) 
 // Threshold is the number of minutes within which a bundle deployment counts.
 func (e *ConditionEvaluator) evaluateBundleDeployed(ctx context.Context, rule *AlertRule) (*AlertEvent, error) {
 	if rule.PeerID != nil {
-		return e.checkBundleDeployedByID(ctx, rule, *rule.PeerID)
+		pid, err := strconv.Atoi(*rule.PeerID)
+		if err != nil {
+			return nil, fmt.Errorf("invalid peer_id %q: %w", *rule.PeerID, err)
+		}
+		return e.checkBundleDeployedByID(ctx, rule, pid)
 	}
 
 	window := time.Duration(rule.ThresholdWindowMinutes) * time.Minute

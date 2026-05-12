@@ -6,7 +6,7 @@
 */
 import { useEffect, useRef, useCallback } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { QUERY_KEYS } from '../api/client'
+import { QUERY_KEYS, BASE } from '../api/client'
 
 /**
 * Hook for connecting to the frontend SSE endpoint
@@ -53,7 +53,7 @@ export function useSSE({ enabled = true, onPendingChangeAdded } = {}) {
       eventSourceRef.current.close()
     }
 
-    const es = new EventSource('/api/v1/events', {
+    const es = new EventSource(`${BASE}/events`, {
       withCredentials: true,
     })
     eventSourceRef.current = es

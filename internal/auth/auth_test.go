@@ -217,6 +217,10 @@ func TestMalformedToken(t *testing.T) {
 }
 
 func TestMiddleware(t *testing.T) {
+	db, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	SetTokenStore(store.NewTokenStore(db))
+
 	tests := []struct {
 		name           string
 		authHeader     string
@@ -456,6 +460,10 @@ func TestGenerateAndValidateIntegration(t *testing.T) {
 }
 
 func TestMiddlewareWithDifferentMethods(t *testing.T) {
+	db, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	SetTokenStore(store.NewTokenStore(db))
+
 	methods := []string{"GET", "POST", "PUT", "DELETE", "PATCH"}
 	authHeader := generateValidAuthHeader(t, "testuser")
 
@@ -482,6 +490,10 @@ func TestMiddlewareWithDifferentMethods(t *testing.T) {
 }
 
 func TestMiddlewareChain(t *testing.T) {
+	db, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	SetTokenStore(store.NewTokenStore(db))
+
 	authHeader := generateValidAuthHeader(t, "testuser")
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -591,6 +603,10 @@ func generateValidAuthHeader(t *testing.T, username string) string {
 }
 
 func TestMiddlewareWithQueryParams(t *testing.T) {
+	db, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	SetTokenStore(store.NewTokenStore(db))
+
 	authHeader := generateValidAuthHeader(t, "testuser")
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -615,6 +631,10 @@ func TestMiddlewareWithQueryParams(t *testing.T) {
 }
 
 func TestMiddlewareWithHeaders(t *testing.T) {
+	db, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	SetTokenStore(store.NewTokenStore(db))
+
 	authHeader := generateValidAuthHeader(t, "testuser")
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -640,6 +660,10 @@ func TestMiddlewareWithHeaders(t *testing.T) {
 }
 
 func TestMiddlewareResponseHeaders(t *testing.T) {
+	db, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	SetTokenStore(store.NewTokenStore(db))
+
 	authHeader := generateValidAuthHeader(t, "testuser")
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -22,6 +22,13 @@ var (
 	confirmRotationRateLimiter = middleware.NewRateLimiter(20, time.Minute) // 20 requests per minute per IP
 )
 
+// StopRotationRateLimiters stops the background cleanup goroutines for the
+// package-level rate limiters. Call during graceful shutdown to prevent goroutine leaks.
+func StopRotationRateLimiters() {
+	rotateKeyRateLimiter.Stop()
+	confirmRotationRateLimiter.Stop()
+}
+
 // The token is a 32-byte random value, hex-encoded (64 chars).
 func generateRotationToken() (string, error) {
 	bytes := make([]byte, 32)
@@ -33,6 +40,16 @@ func generateRotationToken() (string, error) {
 
 func generateHMACKey() (string, error) {
 	return runiccommon.GenerateHMACKey()
+}
+
+// parseSQLiteDatetime tries to parse a datetime string from SQLite (CURRENT_TIMESTAMP format "2006-01-02 15:04:05")
+// and also accepts RFC3339 format for compatibility.
+func parseSQLiteDatetime(s string) (time.Time, error) {
+	t, err := time.Parse("2006-01-02 15:04:05", s)
+	if err == nil {
+		return t, nil
+	}
+	return time.Parse(time.RFC3339, s)
 }
 
 // Handles both "host-<hostname>" and bare "<hostname>" formats.
@@ -92,8 +109,8 @@ func (h *Handler) RotatePeerKey(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if err == nil && lastRotatedAt.Valid {
-			rotationTime, parseErr := time.Parse(time.RFC3339, lastRotatedAt.String)
+		if lastRotatedAt.Valid {
+			rotationTime, parseErr := parseSQLiteDatetime(lastRotatedAt.String)
 			if parseErr == nil && time.Since(rotationTime) < 5*time.Minute {
 				common.RespondJSON(w, http.StatusOK, map[string]interface{}{
 					"peer_id":        peerID,
@@ -146,7 +163,7 @@ func (h *Handler) AgentRotateKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if rotateKeyRateLimiter.Check(r.RemoteAddr) != nil {
+	if rotateKeyRateLimiter.Check(common.GetClientIP(r)) != nil {
 		common.RespondError(w, http.StatusTooManyRequests, "rate limit exceeded")
 		return
 	}
@@ -174,7 +191,7 @@ func (h *Handler) AgentRotateKey(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if lastRotatedAt.Valid {
-			rotationTime, parseErr := time.Parse(time.RFC3339, lastRotatedAt.String)
+			rotationTime, parseErr := parseSQLiteDatetime(lastRotatedAt.String)
 			if parseErr != nil || time.Since(rotationTime) > 5*time.Minute {
 				// Clear expired token within the same transaction
 				if execErr := h.Store.ClearRotationTokenTx(r.Context(), tx, int(peerID)); execErr != nil {
@@ -235,7 +252,7 @@ func (h *Handler) AgentConfirmRotation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if confirmRotationRateLimiter.Check(r.RemoteAddr) != nil {
+	if confirmRotationRateLimiter.Check(common.GetClientIP(r)) != nil {
 		common.RespondError(w, http.StatusTooManyRequests, "rate limit exceeded")
 		return
 	}
@@ -266,7 +283,7 @@ func (h *Handler) AgentConfirmRotation(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if lastRotatedAt.Valid {
-			rotationTime, parseErr := time.Parse(time.RFC3339, lastRotatedAt.String)
+			rotationTime, parseErr := parseSQLiteDatetime(lastRotatedAt.String)
 			if parseErr == nil && time.Since(rotationTime) < 10*time.Minute {
 				common.RespondJSON(w, http.StatusOK, map[string]string{
 					"status":  "already_confirmed",

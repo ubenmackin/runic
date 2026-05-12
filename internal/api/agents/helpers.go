@@ -15,6 +15,15 @@ import (
 	"runic/internal/store"
 )
 
+// generateUniqueID creates a random hex-encoded unique ID for JWT jti claims.
+func generateUniqueID() string {
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		return ""
+	}
+	return hex.EncodeToString(b)
+}
+
 func GenerateHMACKey() (string, error) {
 	key, err := common.GenerateHMACKey()
 	if err != nil {
@@ -32,6 +41,7 @@ func generateAgentToken(ctx context.Context, ds *store.DashboardStore, hostname 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"sub":  fmt.Sprintf("host-%s", hostname),
 		"type": "agent",
+		"jti":  generateUniqueID(),
 		"iat":  time.Now().Unix(),
 		"exp":  time.Now().Add(72 * time.Hour).Unix(),
 	})
@@ -63,11 +73,13 @@ func (h *Handler) getHostIDFromContext(w http.ResponseWriter, r *http.Request) (
 		return "", 0, false
 	}
 
-	var hostname string
-	if _, err := fmt.Sscanf(hostID, "host-%s", &hostname); err != nil {
+	// Validate and parse host_id prefix. Use string prefix matching instead of Sscanf
+	// to avoid buffer truncation issues with %s and to properly validate the format.
+	if len(hostID) < 5 || hostID[:5] != "host-" || hostID[5:] == "" {
 		apicommon.RespondError(w, http.StatusBadRequest, "invalid host_id format")
 		return "", 0, false
 	}
+	hostname := hostID[5:]
 
 	peerID, err := h.PeerStore.GetPeerIDByHostname(r.Context(), hostname)
 	if err != nil {

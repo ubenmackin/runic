@@ -75,7 +75,7 @@ func (w *ChangeWorker) Start(ctx context.Context) {
 func (w *ChangeWorker) QueuePeerChange(ctx context.Context, peerIDs []int, changeType, changeAction string, changeID int, summary string) {
 	select {
 	case w.workCh <- changeWork{
-		ctx: context.Background(), peerIDs: peerIDs,
+		ctx: ctx, peerIDs: peerIDs,
 		changeType: changeType, changeAction: changeAction, changeID: changeID, summary: summary,
 		sseHub: w.sseHub,
 	}:
@@ -86,7 +86,7 @@ func (w *ChangeWorker) QueuePeerChange(ctx context.Context, peerIDs []int, chang
 func (w *ChangeWorker) QueueGroupChange(ctx context.Context, compiler *engine.Compiler, groupID int, changeAction string, summary string) {
 	select {
 	case w.workCh <- changeWork{
-		ctx: context.Background(), compiler: compiler, groupID: groupID,
+		ctx: ctx, compiler: compiler, groupID: groupID,
 		changeAction: changeAction, summary: summary, isGroup: true,
 		sseHub: w.sseHub,
 	}:

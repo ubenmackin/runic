@@ -19,9 +19,14 @@ type KeyStore struct {
 }
 
 // NewKeyStore creates a new KeyStore.
-func NewKeyStore(database db.Querier) *KeyStore {
+// The logsDB parameter of SettingsStore is intentionally nil because KeyStore
+// only needs access to the main database (system_config table) for secret storage.
+func NewKeyStore(database db.Querier) (*KeyStore, error) {
+	if database == nil {
+		return nil, fmt.Errorf("database is required")
+	}
 	settings := NewSettingsStore(database, nil)
-	return &KeyStore{settings: settings}
+	return &KeyStore{settings: settings}, nil
 }
 
 // KeyExists returns true if a secret with the given key exists in the database.
@@ -41,6 +46,10 @@ func (s *KeyStore) KeyExists(ctx context.Context, key string) (bool, error) {
 // GetSecret returns the value of a secret by key.
 // Returns ("", sql.ErrNoRows) if the key does not exist.
 // Delegates to SettingsStore.GetSystemConfig to avoid duplicating the SELECT query.
+//
+// NOTE: The error wrapping below uses %w (not %v) to preserve sql.ErrNoRows
+// so that callers like KeyExists can use errors.Is(err, sql.ErrNoRows).
+// Do not change %w to %v without updating all callers that rely on errors.Is.
 func (s *KeyStore) GetSecret(ctx context.Context, key string) (string, error) {
 	value, err := s.settings.GetSystemConfig(ctx, key)
 	if err != nil {

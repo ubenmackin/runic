@@ -52,14 +52,15 @@ func TestHub_Broadcast(t *testing.T) {
 	hub.mu.Unlock()
 
 	event := &models.LogEvent{
-		ID:        1,
-		PeerID:    "test-peer",
-		Action:    "ACCEPT",
-		SrcIP:     "192.168.1.100",
-		DstIP:     "10.0.0.1",
-		DstPort:   22,
-		Protocol:  "tcp",
-		Timestamp: time.Now(),
+		ID:           1,
+		PeerID:       1,
+		PeerHostname: "test-peer",
+		Action:       "ACCEPT",
+		SrcIP:        "192.168.1.100",
+		DstIP:        "10.0.0.1",
+		DstPort:      22,
+		Protocol:     "tcp",
+		Timestamp:    time.Now(),
 	}
 
 	hub.Broadcast(event)
@@ -85,7 +86,7 @@ func TestHub_Broadcast_WithFilter(t *testing.T) {
 		hub:  hub,
 		send: make(chan []byte, 256),
 		filter: LogFilter{
-			PeerID: "peer-1", // Only receive logs for peer-1
+			PeerID: "1", // Only receive logs for peer 1
 		},
 	}
 
@@ -97,7 +98,7 @@ func TestHub_Broadcast_WithFilter(t *testing.T) {
 	// Broadcast event for different peer - should not be received
 	event := &models.LogEvent{
 		ID:        1,
-		PeerID:    "peer-2", // Different peer
+		PeerID:    2, // Different peer
 		Action:    "ACCEPT",
 		Timestamp: time.Now(),
 	}
@@ -120,14 +121,14 @@ func TestHub_Broadcast_MultipleClients(t *testing.T) {
 		hub:  hub,
 		send: make(chan []byte, 256),
 		filter: LogFilter{
-			PeerID: "peer1",
+			PeerID: "10",
 		},
 	}
 	client2 := &Client{
 		hub:  hub,
 		send: make(chan []byte, 256),
 		filter: LogFilter{
-			PeerID: "peer2",
+			PeerID: "20",
 		},
 	}
 
@@ -137,10 +138,10 @@ func TestHub_Broadcast_MultipleClients(t *testing.T) {
 	hub.clients[client2] = true
 	hub.mu.Unlock()
 
-	// Broadcast to peer1 - only client1 should receive
+	// Broadcast to peer 10 - only client1 should receive
 	event := &models.LogEvent{
 		ID:        1,
-		PeerID:    "peer1",
+		PeerID:    10,
 		Action:    "ACCEPT",
 		Timestamp: time.Now(),
 	}
@@ -169,7 +170,7 @@ func TestHub_Broadcast_EmptyClients(t *testing.T) {
 	// Broadcast with no clients - should not panic
 	event := &models.LogEvent{
 		ID:        1,
-		PeerID:    "test-peer",
+		PeerID:    1,
 		Action:    "ACCEPT",
 		Timestamp: time.Now(),
 	}
@@ -299,7 +300,7 @@ func TestClient_MatchesFilter(t *testing.T) {
 			name:   "empty filter matches all",
 			filter: LogFilter{},
 			event: &models.LogEvent{
-				PeerID:  "peer1",
+				PeerID:  10,
 				Action:  "ACCEPT",
 				SrcIP:   "192.168.1.1",
 				DstPort: 22,
@@ -309,20 +310,20 @@ func TestClient_MatchesFilter(t *testing.T) {
 		{
 			name: "peer_id filter matches",
 			filter: LogFilter{
-				PeerID: "peer1",
+				PeerID: "10",
 			},
 			event: &models.LogEvent{
-				PeerID: "peer1",
+				PeerID: 10,
 			},
 			expected: true,
 		},
 		{
 			name: "peer_id filter does not match",
 			filter: LogFilter{
-				PeerID: "peer1",
+				PeerID: "10",
 			},
 			event: &models.LogEvent{
-				PeerID: "peer2",
+				PeerID: 20,
 			},
 			expected: false,
 		},
@@ -399,13 +400,13 @@ func TestClient_MatchesFilter(t *testing.T) {
 		{
 			name: "multiple filters all match",
 			filter: LogFilter{
-				PeerID:  "peer1",
+				PeerID:  "10",
 				Action:  "ACCEPT",
 				SrcIP:   "192.168.1.1",
 				DstPort: 22,
 			},
 			event: &models.LogEvent{
-				PeerID:  "peer1",
+				PeerID:  10,
 				Action:  "ACCEPT",
 				SrcIP:   "192.168.1.1",
 				DstPort: 22,
@@ -415,11 +416,11 @@ func TestClient_MatchesFilter(t *testing.T) {
 		{
 			name: "multiple filters one fails",
 			filter: LogFilter{
-				PeerID: "peer1",
+				PeerID: "10",
 				Action: "ACCEPT",
 			},
 			event: &models.LogEvent{
-				PeerID: "peer1",
+				PeerID: 10,
 				Action: "DROP",
 			},
 			expected: false,
@@ -430,7 +431,7 @@ func TestClient_MatchesFilter(t *testing.T) {
 				PeerID: "",
 			},
 			event: &models.LogEvent{
-				PeerID: "any-peer",
+				PeerID: 99,
 			},
 			expected: true,
 		},
@@ -475,14 +476,14 @@ func TestClient_MatchesFilter(t *testing.T) {
 
 func TestLogFilter_Struct(t *testing.T) {
 	filter := LogFilter{
-		PeerID:  "peer1",
+		PeerID:  "10",
 		Action:  "ACCEPT",
 		SrcIP:   "192.168.1.1",
 		DstPort: 22,
 	}
 
-	if filter.PeerID != "peer1" {
-		t.Errorf("expected PeerID='peer1', got '%s'", filter.PeerID)
+	if filter.PeerID != "10" {
+		t.Errorf("expected PeerID='10', got '%s'", filter.PeerID)
 	}
 	if filter.Action != "ACCEPT" {
 		t.Errorf("expected Action='ACCEPT', got '%s'", filter.Action)
@@ -500,7 +501,7 @@ func TestLogFilter_ZeroValue(t *testing.T) {
 
 	// Zero value filter should match everything
 	event := &models.LogEvent{
-		PeerID:  "any",
+		PeerID:  42,
 		Action:  "any",
 		SrcIP:   "any",
 		DstPort: 0,

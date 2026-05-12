@@ -6,6 +6,7 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"time"
 )
 
@@ -127,7 +128,7 @@ type AlertRule struct {
 	Enabled                bool      `json:"enabled" gorm:"default:true"`
 	ThresholdValue         int       `json:"threshold_value" gorm:"default:0"`
 	ThresholdWindowMinutes int       `json:"threshold_window_minutes" gorm:"default:5"`
-	PeerID                 *int      `json:"peer_id,omitempty" gorm:"index"`
+	PeerID                 *string   `json:"peer_id,omitempty" gorm:"index"`
 	// minimum time between alerts for this rule
 	ThrottleMinutes int       `json:"throttle_minutes" gorm:"default:15"`
 	CreatedAt       time.Time `json:"created_at" gorm:"autoCreateTime"`
@@ -159,14 +160,14 @@ func (ar *AlertRule) AppliesToPeer(peerID int) bool {
 	if ar.PeerID == nil {
 		return true
 	}
-	return *ar.PeerID == peerID
+	return *ar.PeerID == strconv.Itoa(peerID)
 }
 
 type AlertHistory struct {
 	ID           uint           `json:"id" gorm:"primaryKey;autoIncrement"`
 	RuleID       uint           `json:"rule_id" gorm:"not null;index"`
 	AlertType    AlertType      `json:"alert_type" gorm:"size:50;not null;index"`
-	PeerID       *int           `json:"peer_id,omitempty" gorm:"index"`
+	PeerID       *string        `json:"peer_id,omitempty" gorm:"index"`
 	PeerHostname string         `json:"peer_hostname,omitempty" gorm:"-"` // Populated from JOIN, not a DB column
 	Severity     Severity       `json:"severity" gorm:"size:20;not null"`
 	Subject      string         `json:"subject" gorm:"size:500;not null"`
@@ -233,6 +234,7 @@ type SMTPConfig struct {
 	Username    string `json:"username" gorm:"size:255"`
 	Password    string `json:"-" gorm:"size:500"` // stored encrypted, excluded from JSON responses
 	UseTLS      bool   `json:"use_tls" gorm:"default:true"`
+	UseSMTPS    bool   `json:"use_smtps" gorm:"default:false"` // direct TLS (SMTPS, typically port 465)
 	FromAddress string `json:"from_address" gorm:"size:255" validate:"required,email"`
 	Enabled     bool   `json:"enabled" gorm:"default:false"`
 }
@@ -283,9 +285,10 @@ func (e *AlertEvent) IsCritical() bool {
 }
 
 func (e *AlertEvent) CreateAlertHistory(ruleID uint) AlertHistory {
-	peerID := &e.PeerID
-	if e.PeerID == 0 {
-		peerID = nil
+	var peerID *string
+	if e.PeerID != 0 {
+		s := strconv.Itoa(e.PeerID)
+		peerID = &s
 	}
 
 	metadataJSON := ""
@@ -317,7 +320,7 @@ type CreateAlertRuleRequest struct {
 	Enabled                bool      `json:"enabled"`
 	ThresholdValue         int       `json:"threshold_value"`
 	ThresholdWindowMinutes int       `json:"threshold_window_minutes" validate:"min=1"`
-	PeerID                 *int      `json:"peer_id,omitempty"`
+	PeerID                 *string   `json:"peer_id,omitempty"`
 	ThrottleMinutes        int       `json:"throttle_minutes" validate:"min=0"`
 }
 
@@ -327,7 +330,7 @@ type UpdateAlertRuleRequest struct {
 	Enabled                *bool     `json:"enabled,omitempty"`
 	ThresholdValue         *int      `json:"threshold_value,omitempty" validate:"omitempty,min=0"`
 	ThresholdWindowMinutes *int      `json:"threshold_window_minutes,omitempty" validate:"omitempty,min=1"`
-	PeerID                 *int      `json:"peer_id,omitempty"`
+	PeerID                 *string   `json:"peer_id,omitempty"`
 	ThrottleMinutes        *int      `json:"throttle_minutes,omitempty" validate:"omitempty,min=0"`
 }
 
@@ -377,6 +380,7 @@ type SMTPConfigView struct {
 	Username    string `json:"username"`
 	PasswordSet bool   `json:"password_set"`
 	UseTLS      bool   `json:"use_tls"`
+	UseSMTPS    bool   `json:"use_smtps"`
 	FromAddress string `json:"from_address"`
 	Enabled     bool   `json:"enabled"`
 }

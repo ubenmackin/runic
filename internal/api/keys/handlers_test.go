@@ -27,7 +27,11 @@ func TestListKeys_Empty(t *testing.T) {
 	testDB, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	handler := NewHandler(store.NewKeyStore(testDB))
+	ks, err := store.NewKeyStore(testDB)
+	if err != nil {
+		t.Fatalf("NewKeyStore: %v", err)
+	}
+	handler := NewHandler(ks)
 	router := setupRouter(handler)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/setup-keys", nil)
 	rec := httptest.NewRecorder()
@@ -58,7 +62,11 @@ func TestCreateKey_Success(t *testing.T) {
 	testDB, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	handler := NewHandler(store.NewKeyStore(testDB))
+	ks, err := store.NewKeyStore(testDB)
+	if err != nil {
+		t.Fatalf("NewKeyStore: %v", err)
+	}
+	handler := NewHandler(ks)
 	router := setupRouter(handler)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/setup-keys/jwt-secret", nil)
 	rec := httptest.NewRecorder()
@@ -80,8 +88,7 @@ func TestCreateKey_Success(t *testing.T) {
 
 	// Verify key is stored in system_config table
 	var value string
-	err := testDB.QueryRow("SELECT value FROM system_config WHERE key = ?", "jwt_secret").Scan(&value)
-	if err != nil {
+	if err := testDB.QueryRow("SELECT value FROM system_config WHERE key = ?", "jwt_secret").Scan(&value); err != nil {
 		t.Fatalf("jwt_secret not found in system_config: %v", err)
 	}
 	if len(value) == 0 {
@@ -93,7 +100,11 @@ func TestCreateKey_InvalidType(t *testing.T) {
 	testDB, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	handler := NewHandler(store.NewKeyStore(testDB))
+	ks, err := store.NewKeyStore(testDB)
+	if err != nil {
+		t.Fatalf("NewKeyStore: %v", err)
+	}
+	handler := NewHandler(ks)
 	router := setupRouter(handler)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/setup-keys/invalid-type", nil)
 	rec := httptest.NewRecorder()
@@ -109,7 +120,11 @@ func TestDeleteKey_Success(t *testing.T) {
 	testDB, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	handler := NewHandler(store.NewKeyStore(testDB))
+	ks, err := store.NewKeyStore(testDB)
+	if err != nil {
+		t.Fatalf("NewKeyStore: %v", err)
+	}
+	handler := NewHandler(ks)
 	router := setupRouter(handler)
 
 	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/setup-keys/jwt-secret", nil)
@@ -122,8 +137,7 @@ func TestDeleteKey_Success(t *testing.T) {
 
 	// Verify key exists
 	var value string
-	err := testDB.QueryRow("SELECT value FROM system_config WHERE key = ?", "jwt_secret").Scan(&value)
-	if err != nil {
+	if err := testDB.QueryRow("SELECT value FROM system_config WHERE key = ?", "jwt_secret").Scan(&value); err != nil {
 		t.Fatalf("jwt_secret not found in system_config after create: %v", err)
 	}
 
@@ -146,7 +160,11 @@ func TestDeleteKey_NonExistent(t *testing.T) {
 	testDB, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	handler := NewHandler(store.NewKeyStore(testDB))
+	ks, err := store.NewKeyStore(testDB)
+	if err != nil {
+		t.Fatalf("NewKeyStore: %v", err)
+	}
+	handler := NewHandler(ks)
 	router := setupRouter(handler)
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/setup-keys/jwt-secret", nil)
 	rec := httptest.NewRecorder()
@@ -162,7 +180,11 @@ func TestListKeys_AfterCreate(t *testing.T) {
 	testDB, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	handler := NewHandler(store.NewKeyStore(testDB))
+	ks, err := store.NewKeyStore(testDB)
+	if err != nil {
+		t.Fatalf("NewKeyStore: %v", err)
+	}
+	handler := NewHandler(ks)
 	router := setupRouter(handler)
 
 	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/setup-keys/jwt-secret", nil)

@@ -140,8 +140,8 @@ export default function TopNav() {
   const isMobile = useIsMobile()
   const [darkMode, setDarkMode] = useState(() => {
     if (typeof window !== 'undefined') {
-      return localStorage.getItem('theme') === 'dark' ||
-        (!localStorage.getItem('theme') && window.matchMedia('(prefers-color-scheme: dark)').matches)
+      return localStorage.getItem('runic_theme') === 'dark' ||
+        (!localStorage.getItem('runic_theme') && window.matchMedia('(prefers-color-scheme: dark)').matches)
     }
     return false
   })
@@ -192,7 +192,7 @@ export default function TopNav() {
   const toggleDark = () => {
     const next = !darkMode
     setDarkMode(next)
-    localStorage.setItem('theme', next ? 'dark' : 'light')
+    localStorage.setItem('runic_theme', next ? 'dark' : 'light')
   }
 
   const handleLogout = () => {

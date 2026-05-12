@@ -115,7 +115,7 @@ func (s *PendingStore) DeletePendingBundlePreview(ctx context.Context, peerID in
 
 // DeleteAllPendingBundlePreviews deletes all pending bundle previews.
 func (s *PendingStore) DeleteAllPendingBundlePreviews(ctx context.Context) error {
-	_, err := s.db.ExecContext(ctx, "DELETE FROM rule_bundles_pending")
+	_, err := s.db.ExecContext(ctx, "DELETE FROM pending_bundle_previews")
 	if err != nil {
 		return fmt.Errorf("delete all pending bundle previews: %w", err)
 	}
@@ -429,7 +429,12 @@ func (s *PendingStore) CreatePushJobPeers(ctx context.Context, jobID string, pee
 	if err != nil {
 		return fmt.Errorf("begin push job peers tx: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
 
 	stmt, err := tx.PrepareContext(ctx, `
 		INSERT INTO push_job_peers (job_id, peer_id, peer_hostname, status)
@@ -449,6 +454,7 @@ func (s *PendingStore) CreatePushJobPeers(ctx context.Context, jobID string, pee
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit push job peers tx: %w", err)
 	}
+	committed = true
 	return nil
 }
 

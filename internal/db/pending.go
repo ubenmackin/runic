@@ -102,7 +102,7 @@ func CountPendingChangesForPeer(ctx context.Context, database Querier, peerID in
 }
 
 func DeleteAllPendingBundlePreviews(ctx context.Context, database Querier) error {
-	_, err := database.ExecContext(ctx, "DELETE FROM rule_bundles_pending")
+	_, err := database.ExecContext(ctx, "DELETE FROM pending_bundle_previews")
 	if err != nil {
 		return fmt.Errorf("delete all pending bundle previews: %w", err)
 	}

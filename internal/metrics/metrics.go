@@ -106,8 +106,8 @@ func NewMetrics(registerer prometheus.Registerer) *Metrics {
 		}),
 	}
 
-	// Register all metrics with the registerer
-	registerer.MustRegister(
+	// Register all metrics with the registerer, skipping already-registered metrics to avoid panics
+	for _, c := range []prometheus.Collector{
 		m.httpRequestsTotal,
 		m.httpRequestDurationSeconds,
 		m.httpErrorsTotal,
@@ -117,7 +117,13 @@ func NewMetrics(registerer prometheus.Registerer) *Metrics {
 		m.runicPoliciesTotal,
 		m.runicBundleCompilationDurationSeconds,
 		m.runicActiveConnections,
-	)
+	} {
+		if err := registerer.Register(c); err != nil {
+			if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
+				panic(err)
+			}
+		}
+	}
 
 	return m
 }

@@ -383,7 +383,7 @@ type mockCommandRunner struct {
 }
 
 type mockCall struct {
-	ctx context.Context
+	ctx  context.Context
 	name string
 	args []string
 }

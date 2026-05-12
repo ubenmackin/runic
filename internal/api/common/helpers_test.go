@@ -382,6 +382,79 @@ func TestRespondJSONMultipleCalls(t *testing.T) {
 	}
 }
 
+func TestGetClientIP(t *testing.T) {
+	tests := []struct {
+		name         string
+		remoteAddr   string
+		forwardedFor string
+		realIP       string
+		wantClientIP string
+	}{
+		{
+			name:         "no headers, use RemoteAddr",
+			remoteAddr:   "192.0.2.1:12345",
+			wantClientIP: "192.0.2.1:12345",
+		},
+		{
+			name:         "X-Forwarded-For takes precedence",
+			remoteAddr:   "10.0.0.1:12345",
+			forwardedFor: "203.0.113.1, 70.41.3.18",
+			wantClientIP: "203.0.113.1",
+		},
+		{
+			name:         "X-Real-IP used when no X-Forwarded-For",
+			remoteAddr:   "10.0.0.1:12345",
+			realIP:       "198.51.100.7",
+			wantClientIP: "198.51.100.7",
+		},
+		{
+			name:         "X-Forwarded-For takes precedence over X-Real-IP",
+			remoteAddr:   "10.0.0.1:12345",
+			forwardedFor: "203.0.113.1",
+			realIP:       "198.51.100.7",
+			wantClientIP: "203.0.113.1",
+		},
+		{
+			name:         "X-Forwarded-For with spaces trimmed",
+			remoteAddr:   "10.0.0.1:12345",
+			forwardedFor: "  203.0.113.1  , 70.41.3.18",
+			wantClientIP: "203.0.113.1",
+		},
+		{
+			name:         "empty X-Forwarded-For falls back to X-Real-IP",
+			remoteAddr:   "10.0.0.1:12345",
+			forwardedFor: "",
+			realIP:       "198.51.100.7",
+			wantClientIP: "198.51.100.7",
+		},
+		{
+			name:         "whitespace-only X-Forwarded-For falls back to X-Real-IP",
+			remoteAddr:   "10.0.0.1:12345",
+			forwardedFor: "  ",
+			realIP:       "198.51.100.7",
+			wantClientIP: "198.51.100.7",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := httptest.NewRequest("GET", "/test", nil)
+			r.RemoteAddr = tt.remoteAddr
+			if tt.forwardedFor != "" {
+				r.Header.Set("X-Forwarded-For", tt.forwardedFor)
+			}
+			if tt.realIP != "" {
+				r.Header.Set("X-Real-IP", tt.realIP)
+			}
+
+			got := GetClientIP(r)
+			if got != tt.wantClientIP {
+				t.Errorf("GetClientIP() = %q, want %q", got, tt.wantClientIP)
+			}
+		})
+	}
+}
+
 func TestParseUintSafe(t *testing.T) {
 	tests := []struct {
 		name    string

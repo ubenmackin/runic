@@ -93,7 +93,12 @@ func NewAPI(db *sql.DB, compiler *engine.Compiler, logsDB *sql.DB, logsDBPath st
 	importStore := store.NewImportStore(db, peerStore, groupStore, serviceStore)
 	dashboardStore := store.NewDashboardStore(db, logsDB)
 	alertStore := store.NewAlertStore(db)
-	keyStore := store.NewKeyStore(db)
+	keyStore, err := store.NewKeyStore(db)
+	if err != nil {
+		// db is guaranteed non-nil when NewAPI is called; this should never happen.
+		log.Error("Failed to create key store", "error", err)
+		return nil
+	}
 	logsStore := store.NewLogsStore(logsDB)
 	return &API{
 		Compiler:     compiler,
@@ -106,7 +111,7 @@ func NewAPI(db *sql.DB, compiler *engine.Compiler, logsDB *sql.DB, logsDBPath st
 		ChangeWorker: changeWorker,
 		PushWorker:   pushWorker,
 		Peers:        peers.NewHandler(peerStore, db, compiler, sseHub, settingsStore),
-		Agents:       agents.NewHandler(peerStore, dashboardStore, alertService, importStore),
+		Agents:       agents.NewHandler(peerStore, dashboardStore, alertService, importStore, store.NewTokenStore(db), db),
 		Auth:         authhandlers.NewHandler(userStore, store.NewTokenStore(db), db),
 		Groups:       groups.NewHandler(db, compiler, changeWorker, groupStore, peerStore),
 		Policies:     policies.NewHandler(db, compiler, changeWorker, policyStore),
@@ -201,16 +206,16 @@ func (a *API) RegisterRoutes(r *mux.Router, downloadsDir string) {
 	protected.HandleFunc("/logs/stream", logs.MakeLogsStreamHandler(a.LogHub, store.NewTokenStore(a.DB))).Methods("GET")
 
 	peersViewer := protected.PathPrefix("/peers").Subrouter()
-	a.Peers.RegisterRoutes(peersViewer)
+	a.Peers.RegisterReadRoutes(peersViewer)
 
 	groupsViewer := protected.PathPrefix("/groups").Subrouter()
-	a.Groups.RegisterRoutes(groupsViewer)
+	a.Groups.RegisterReadRoutes(groupsViewer)
 
 	servicesViewer := protected.PathPrefix("/services").Subrouter()
-	a.Services.RegisterRoutes(servicesViewer)
+	a.Services.RegisterReadRoutes(servicesViewer)
 
 	policiesViewer := protected.PathPrefix("/policies").Subrouter()
-	a.Policies.RegisterRoutes(policiesViewer)
+	a.Policies.RegisterReadRoutes(policiesViewer)
 
 	protected.HandleFunc("/pending-changes", a.Pending.ListPendingChanges).Methods("GET")
 	protected.HandleFunc("/pending-changes/{peerId:[0-9]+}", a.Pending.GetPeerPendingChanges).Methods("GET")
@@ -356,6 +361,8 @@ func (a *API) Stop() {
 		a.LogoutRateLimiter.Stop()
 	}
 	authhandlers.StopCleanup()
+	authhandlers.StopSetupRateLimit()
+	peers.StopRotationRateLimiters()
 }
 
 func HealthHandler(w http.ResponseWriter, r *http.Request) {

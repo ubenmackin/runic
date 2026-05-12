@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/gorilla/mux"
 	"github.com/mattn/go-sqlite3"
@@ -121,7 +122,7 @@ func (h *Handler) HandleSetupGET(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Rate limit check based on IP to prevent enumeration
-	if err := CheckSetupRateLimit(r.RemoteAddr); err != nil {
+	if err := CheckSetupRateLimit(common.GetClientIP(r)); err != nil {
 		common.RespondError(w, http.StatusTooManyRequests, err.Error())
 		return
 	}
@@ -146,7 +147,7 @@ func (h *Handler) HandleSetupPOST(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Rate limit check based on IP to prevent enumeration/abuse
-	if err := CheckSetupRateLimit(r.RemoteAddr); err != nil {
+	if err := CheckSetupRateLimit(common.GetClientIP(r)); err != nil {
 		common.RespondError(w, http.StatusTooManyRequests, err.Error())
 		return
 	}
@@ -198,9 +199,9 @@ func (h *Handler) HandleSetupPOST(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.InfoContext(r.Context(), "user created", "username", body.Username, "remote_addr", r.RemoteAddr)
+	log.InfoContext(r.Context(), "user created", "username", body.Username, "remote_addr", common.GetClientIP(r))
 
-	accessToken, refreshToken, err := h.GenerateTokenPair(body.Username)
+	accessToken, refreshToken, err := h.GenerateTokenPair(ctx, body.Username)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "failed to generate tokens")
 		return
@@ -226,7 +227,7 @@ func (h *Handler) HandleLoginPOST(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Rate limit check
-	if err := CheckAndRecordFailure(body.Username, r.RemoteAddr); err != nil {
+	if err := CheckAndRecordFailure(body.Username, common.GetClientIP(r)); err != nil {
 		common.RespondError(w, http.StatusTooManyRequests, err.Error())
 		return
 	}
@@ -236,21 +237,21 @@ func (h *Handler) HandleLoginPOST(w http.ResponseWriter, r *http.Request) {
 
 	creds, err := h.UserStore.GetCredentials(ctx, body.Username)
 	if err != nil {
-		log.WarnContext(r.Context(), "login failed - unknown user", "username", body.Username, "remote_addr", r.RemoteAddr)
+		log.WarnContext(r.Context(), "login failed - unknown user", "username", body.Username, "remote_addr", common.GetClientIP(r))
 		common.RespondError(w, http.StatusUnauthorized, "Invalid credentials")
 		return
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(creds.PasswordHash), []byte(body.Password)); err != nil {
-		log.WarnContext(r.Context(), "login failed - invalid password", "username", body.Username, "remote_addr", r.RemoteAddr)
+		log.WarnContext(r.Context(), "login failed - invalid password", "username", body.Username, "remote_addr", common.GetClientIP(r))
 		common.RespondError(w, http.StatusUnauthorized, "Invalid credentials")
 		return
 	}
 
 	RecordSuccess(body.Username)
-	log.InfoContext(r.Context(), "user authenticated", "username", body.Username, "remote_addr", r.RemoteAddr)
+	log.InfoContext(r.Context(), "user authenticated", "username", body.Username, "remote_addr", common.GetClientIP(r))
 
-	accessToken, refreshToken, err := h.GenerateTokenPair(body.Username)
+	accessToken, refreshToken, err := h.GenerateTokenPair(ctx, body.Username)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "failed to generate tokens")
 		return
@@ -260,13 +261,20 @@ func (h *Handler) HandleLoginPOST(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) HandleLogoutPOST(w http.ResponseWriter, r *http.Request) {
-	cookie, err := r.Cookie("runic_access_token")
-	if err != nil || cookie.Value == "" {
-		common.RespondError(w, http.StatusUnauthorized, "Unauthorized")
-		return
+	var tokenStr string
+	// Try cookie first (web UI)
+	if cookie, err := r.Cookie("runic_access_token"); err == nil && cookie.Value != "" {
+		tokenStr = cookie.Value
+	} else {
+		// Fall back to Bearer header (agent)
+		authHeader := r.Header.Get("Authorization")
+		if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
+			common.RespondError(w, http.StatusUnauthorized, "Unauthorized")
+			return
+		}
+		tokenStr = strings.TrimPrefix(authHeader, "Bearer ")
 	}
 
-	tokenStr := cookie.Value
 	claims, err := auth.ValidateToken(tokenStr)
 	if err != nil || claims == nil {
 		common.RespondError(w, http.StatusUnauthorized, "Unauthorized")
@@ -325,7 +333,7 @@ func (h *Handler) HandleRefreshPOST(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	accessToken, refreshToken, err := h.GenerateTokenPair(claims.Username)
+	accessToken, refreshToken, err := h.GenerateTokenPair(r.Context(), claims.Username)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "failed to generate tokens")
 		return

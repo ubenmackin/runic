@@ -32,6 +32,10 @@ func NewSSEHub() *SSEHub {
 func (h *SSEHub) Register(hostID string) chan string {
 	ch := make(chan string, 4)
 	h.mu.Lock()
+	// Close any existing channel for this hostID to prevent channel leaks
+	if existing, ok := h.clients[hostID]; ok {
+		close(existing)
+	}
 	h.clients[hostID] = ch
 	h.mu.Unlock()
 	return ch
@@ -48,8 +52,8 @@ func (h *SSEHub) Unregister(hostID string) {
 
 func (h *SSEHub) NotifyBundleUpdated(hostID string, version string) bool {
 	h.mu.RLock()
+	defer h.mu.RUnlock()
 	ch, ok := h.clients[hostID]
-	h.mu.RUnlock()
 	if !ok {
 		runiclog.Warn("NotifyBundleUpdated: agent not connected", "host_id", hostID)
 		return false
@@ -65,8 +69,8 @@ func (h *SSEHub) NotifyBundleUpdated(hostID string, version string) bool {
 
 func (h *SSEHub) NotifyFetchBackup(hostID string) bool {
 	h.mu.RLock()
+	defer h.mu.RUnlock()
 	ch, ok := h.clients[hostID]
-	h.mu.RUnlock()
 	if !ok {
 		runiclog.Warn("NotifyFetchBackup: agent not connected", "host_id", hostID)
 		return false
@@ -84,8 +88,8 @@ func (h *SSEHub) NotifyFetchBackup(hostID string) bool {
 // to self-update by running the install script with the given control plane URL.
 func (h *SSEHub) NotifyUpdateAgent(hostID string, controlPlaneURL string) bool {
 	h.mu.RLock()
+	defer h.mu.RUnlock()
 	ch, ok := h.clients[hostID]
-	h.mu.RUnlock()
 	if !ok {
 		runiclog.Warn("NotifyUpdateAgent: agent not connected", "host_id", hostID)
 		return false
@@ -118,8 +122,8 @@ func (h *SSEHub) UnregisterPushJob(jobID string) {
 
 func (h *SSEHub) NotifyPushJobProgress(jobID string, eventType string, payload string) {
 	h.mu.RLock()
+	defer h.mu.RUnlock()
 	ch, ok := h.pushJobClients[jobID]
-	h.mu.RUnlock()
 	if ok {
 		event := fmt.Sprintf("event: %s\ndata: %s\n\n", eventType, payload)
 		select {

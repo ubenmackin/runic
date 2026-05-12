@@ -8,7 +8,6 @@ import (
 
 	ic "runic/internal/common"
 	"runic/internal/common/constants"
-	"runic/internal/common/log"
 	"runic/internal/db"
 	"runic/internal/importer"
 	"runic/internal/models"
@@ -18,13 +17,19 @@ type DashboardStore struct {
 	db       db.Querier
 	logsDB   db.Querier
 	settings *SettingsStore
+	sqlDB    *sql.DB // Underlying *sql.DB for operations that require it
 }
 
 func NewDashboardStore(database db.Querier, logsDB db.Querier) *DashboardStore {
+	// Type assertion to *sql.DB for operations that require it (e.g., ParseBackupSession).
+	// The ok value is intentionally ignored: if database is not *sql.DB, sqlDB will be nil
+	// and ParseBackupSession will return a descriptive error instead of silently failing.
+	sqlDB, _ := database.(*sql.DB)
 	return &DashboardStore{
 		db:       database,
 		logsDB:   logsDB,
 		settings: NewSettingsStore(database, nil),
+		sqlDB:    sqlDB,
 	}
 }
 
@@ -72,13 +77,18 @@ func (s *DashboardStore) InsertFirewallLog(ctx context.Context, entry *FirewallL
 }
 
 // ParseBackupSession parses an import session's raw backup data. It requires
-// *sql.DB to start its own transaction for the parse operation. If the
-// underlying database is not *sql.DB, it logs a warning and returns nil.
+// *sql.DB to start its own transaction for the parse operation.
+//
+// Limitation: This method type-asserts db.Querier to *sql.DB because the
+// importer.ParseSession function needs *sql.DB to manage its own transaction.
+// If the underlying database is not *sql.DB (e.g., a wrapped or mocked
+// Querier), this method returns a descriptive error instead of panicking.
+// A full refactor would require changing the importer package to accept
+// db.DB or a transactional interface, which is too invasive for now.
 func (s *DashboardStore) ParseBackupSession(ctx context.Context, sessionID int64) error {
 	sqlDB, ok := s.db.(*sql.DB)
 	if !ok {
-		log.Warn("Cannot run ParseSession: DB is not *sql.DB")
-		return nil
+		return fmt.Errorf("parse backup session: underlying DB is not *sql.DB, cannot start transaction (type assertion failed)")
 	}
 	return importer.ParseSession(ctx, sqlDB, sessionID)
 }

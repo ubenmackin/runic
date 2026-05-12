@@ -1327,13 +1327,17 @@ className={`px-3 py-1 rounded-none text-sm font-medium transition-colors ${
                 </pre>
                 {bundleContent && (
                   <button
-                    onClick={() => {
+                    onClick={async () => {
                       const contentToCopy =
                         viewingPendingRules && showDiffView && 'deployed_rules' in (bundleData || {})
                           ? computeDiff(bundleData.deployed_rules || '', bundleData.rules || '')
                           : bundleContent
-                      navigator.clipboard.writeText(contentToCopy)
-                      showToast('Copied to clipboard', 'success')
+                      try {
+                        await navigator.clipboard.writeText(contentToCopy)
+                        showToast('Copied to clipboard', 'success')
+                      } catch {
+                        showToast('Failed to copy to clipboard', 'error')
+                      }
                     }}
                     className="absolute top-4 right-4 p-2 bg-gray-800 hover:bg-gray-700 rounded-none text-gray-300 transition-colors"
                     title="Copy Rules"

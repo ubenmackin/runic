@@ -93,7 +93,7 @@ func (h *Handler) CreateGroup(w http.ResponseWriter, r *http.Request) {
 		log.ErrorContext(r.Context(), "failed to create snapshot", "error", err)
 	}
 
-	if h.ChangeWorker != nil {
+	if h.ChangeWorker != nil && h.Compiler != nil {
 		group, groupErr := h.Store.GetGroup(r.Context(), int(id))
 
 		var summary string
@@ -190,7 +190,7 @@ func (h *Handler) UpdateGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.ChangeWorker != nil && hasChanges {
+	if h.ChangeWorker != nil && h.Compiler != nil && hasChanges {
 		group, groupErr := h.Store.GetGroup(r.Context(), id)
 		var summary string
 		if groupErr == nil {
@@ -249,7 +249,7 @@ func (h *Handler) DeleteGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.ChangeWorker != nil {
+	if h.ChangeWorker != nil && h.Compiler != nil {
 		h.ChangeWorker.QueueGroupChange(r.Context(), h.Compiler, id, "delete", "Group deleted")
 	}
 
@@ -303,7 +303,7 @@ func (h *Handler) AddGroupMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.ChangeWorker != nil {
+	if h.ChangeWorker != nil && h.Compiler != nil {
 		hostname, hostnameErr := h.PeerStore.GetPeerHostname(r.Context(), input.PeerID)
 		group, groupErr := h.Store.GetGroup(r.Context(), groupID)
 
@@ -344,7 +344,7 @@ func (h *Handler) DeleteGroupMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.ChangeWorker != nil {
+	if h.ChangeWorker != nil && h.Compiler != nil {
 		hostname, hostnameErr := h.PeerStore.GetPeerHostname(r.Context(), peerID)
 		group, groupErr := h.Store.GetGroup(r.Context(), groupID)
 
@@ -359,6 +359,13 @@ func (h *Handler) DeleteGroupMember(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// RegisterReadRoutes registers read-only (GET) routes for the viewer role.
+func (h *Handler) RegisterReadRoutes(r *mux.Router) {
+	r.HandleFunc("", h.ListGroups).Methods("GET")
+	r.HandleFunc("/{id:[0-9]+}", h.GetGroup).Methods("GET")
+	r.HandleFunc("/{id:[0-9]+}/members", h.ListGroupMembers).Methods("GET")
 }
 
 func (h *Handler) RegisterRoutes(r *mux.Router) {

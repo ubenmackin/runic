@@ -25,7 +25,9 @@ export function parseApiError(error) {
   }
 
   if (error instanceof Response) {
-    return getResponseErrorMessage(error)
+    // Return status message synchronously (callers expect a string, not a Promise).
+    // Use getResponseErrorMessage() for an async variant that parses the response body.
+    return getStatusMessage(error.status)
   }
 
   if (error?.error?.message) {

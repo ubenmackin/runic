@@ -809,7 +809,7 @@ func migrateSchema(ctx context.Context, database *sql.DB) error {
 			total_peers INTEGER NOT NULL,
 			succeeded_count INTEGER DEFAULT 0,
 			failed_count INTEGER DEFAULT 0,
-			status TEXT NOT NULL DEFAULT 'running' CHECK(status IN ('pending', 'running', 'completed', 'completed_with_errors', 'failed', 'cancelled')),
+			status TEXT NOT NULL DEFAULT 'running' CHECK(status IN ('pending', 'running', 'completed', 'completed_with_errors', 'failed', 'canceled')),
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			completed_at DATETIME
 		)`); err != nil {
@@ -1110,7 +1110,7 @@ INSERT INTO alert_rules (name, alert_type, enabled, threshold_value, threshold_w
 				subject TEXT NOT NULL,
 				message TEXT NOT NULL,
 				metadata TEXT,
-				status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'sent', 'failed')),
+				status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'sent', 'failed', 'throttled')),
 				sent_at DATETIME,
 				error_message TEXT,
 				created_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -1377,6 +1377,118 @@ SELECT id, ip_address, 1 FROM peers
 		}
 		committed = true
 		log.Info("Migration: successfully removed restrictive CHECK on pending_changes.change_type")
+	}
+
+	// Migration: Fix 'cancelled' to 'canceled' in push_jobs and import_sessions CHECK constraints
+	// The original migrations used the British spelling 'cancelled', but the API and linter
+	// require American English 'canceled'. Without this migration, existing databases would
+	// reject the 'canceled' status value written by the API, causing CHECK constraint violations.
+
+	// Fix push_jobs CHECK constraint
+	var pushJobsHasOldCheck bool
+	pjRow := database.QueryRowContext(ctx, "SELECT sql FROM sqlite_master WHERE type='table' AND name='push_jobs'")
+	var pjTableSQL string
+	if err := pjRow.Scan(&pjTableSQL); err == nil {
+		pushJobsHasOldCheck = strings.Contains(pjTableSQL, "'cancelled'")
+	}
+	if pushJobsHasOldCheck {
+		log.Info("Migration: fixing push_jobs CHECK constraint from 'cancelled' to 'canceled'")
+		tx, err := database.BeginTx(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("begin push_jobs spelling migration tx: %w", err)
+		}
+		committed := false
+		defer func() {
+			if !committed {
+				if rErr := tx.Rollback(); rErr != nil {
+					log.Warn("Failed to rollback push_jobs spelling migration", "error", rErr)
+				}
+			}
+		}()
+		if _, err := tx.ExecContext(ctx, `CREATE TABLE push_jobs_new (
+			id TEXT PRIMARY KEY,
+			initiated_by TEXT,
+			total_peers INTEGER NOT NULL,
+			succeeded_count INTEGER DEFAULT 0,
+			failed_count INTEGER DEFAULT 0,
+			status TEXT NOT NULL DEFAULT 'running' CHECK(status IN ('pending', 'running', 'completed', 'completed_with_errors', 'failed', 'canceled')),
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			completed_at DATETIME
+		)`); err != nil {
+			return fmt.Errorf("create push_jobs_new: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO push_jobs_new SELECT * FROM push_jobs`); err != nil {
+			return fmt.Errorf("copy push_jobs data: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, "DROP TABLE push_jobs"); err != nil {
+			return fmt.Errorf("drop old push_jobs: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, "ALTER TABLE push_jobs_new RENAME TO push_jobs"); err != nil {
+			return fmt.Errorf("rename push_jobs_new: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_push_jobs_status ON push_jobs(status)"); err != nil {
+			return fmt.Errorf("create idx_push_jobs_status: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit push_jobs spelling migration: %w", err)
+		}
+		committed = true
+		log.Info("Migration: successfully fixed push_jobs CHECK constraint spelling")
+	}
+
+	// Fix import_sessions CHECK constraint
+	var importSessionsHasOldCheck bool
+	isRow := database.QueryRowContext(ctx, "SELECT sql FROM sqlite_master WHERE type='table' AND name='import_sessions'")
+	var isTableSQL string
+	if err := isRow.Scan(&isTableSQL); err == nil {
+		importSessionsHasOldCheck = strings.Contains(isTableSQL, "'cancelled'")
+	}
+	if importSessionsHasOldCheck {
+		log.Info("Migration: fixing import_sessions CHECK constraint from 'cancelled' to 'canceled'")
+		tx, err := database.BeginTx(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("begin import_sessions spelling migration tx: %w", err)
+		}
+		committed := false
+		defer func() {
+			if !committed {
+				if rErr := tx.Rollback(); rErr != nil {
+					log.Warn("Failed to rollback import_sessions spelling migration", "error", rErr)
+				}
+			}
+		}()
+		if _, err := tx.ExecContext(ctx, `CREATE TABLE import_sessions_new (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			peer_id INTEGER NOT NULL REFERENCES peers(id) ON DELETE CASCADE,
+			status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','parsed','reviewing','applied','canceled')),
+			raw_backup TEXT NOT NULL,
+			raw_ipsets TEXT,
+			chain_filter TEXT DEFAULT 'INPUT,OUTPUT,DOCKER-USER',
+			total_rules_found INTEGER DEFAULT 0,
+			importable_rules INTEGER DEFAULT 0,
+			skipped_rules INTEGER DEFAULT 0,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`); err != nil {
+			return fmt.Errorf("create import_sessions_new: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO import_sessions_new SELECT * FROM import_sessions`); err != nil {
+			return fmt.Errorf("copy import_sessions data: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, "DROP TABLE import_sessions"); err != nil {
+			return fmt.Errorf("drop old import_sessions: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, "ALTER TABLE import_sessions_new RENAME TO import_sessions"); err != nil {
+			return fmt.Errorf("rename import_sessions_new: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_import_sessions_peer_status ON import_sessions(peer_id, status)"); err != nil {
+			return fmt.Errorf("create idx_import_sessions_peer_status: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit import_sessions spelling migration: %w", err)
+		}
+		committed = true
+		log.Info("Migration: successfully fixed import_sessions CHECK constraint spelling")
 	}
 
 	return nil

@@ -68,6 +68,8 @@ func (m *Manager) GetLastRotation() time.Time {
 }
 
 // CheckAndRotate uses fine-grained locking to avoid holding the mutex during HTTP calls.
+// Config fields (HMACKey, Token) are snapshot under the rotation manager's own lock so
+// that concurrent mutations by core.Agent cannot cause a data race.
 func (m *Manager) CheckAndRotate(ctx context.Context) error {
 	m.mu.Lock()
 	if m.state == StateRotating || m.state == StateTesting {
@@ -76,10 +78,15 @@ func (m *Manager) CheckAndRotate(ctx context.Context) error {
 		return nil
 	}
 	m.state = StateRotating
-	m.oldKey = m.config.HMACKey
+	// Snapshot config fields under the lock to avoid data races with
+	// core.Agent which may mutate the shared *identity.Config from
+	// separate goroutines (e.g. applyBundle, handleUpdateAgent).
+	oldKey := m.config.HMACKey
+	authToken := m.config.Token
+	m.oldKey = oldKey
 	m.mu.Unlock()
 
-	rotationToken, err := m.checkRotationPending(ctx)
+	rotationToken, err := m.checkRotationPending(ctx, authToken)
 	if err != nil {
 		m.mu.Lock()
 		m.state = StateFailed
@@ -96,7 +103,7 @@ func (m *Manager) CheckAndRotate(ctx context.Context) error {
 
 	log.Info("Key rotation detected, starting rotation process")
 
-	newKey, err := m.retrieveNewKey(ctx, rotationToken)
+	newKey, err := m.retrieveNewKey(ctx, rotationToken, authToken)
 	if err != nil {
 		m.mu.Lock()
 		m.state = StateFailed
@@ -110,7 +117,7 @@ func (m *Manager) CheckAndRotate(ctx context.Context) error {
 	m.state = StateTesting
 	m.mu.Unlock()
 
-	if err := m.testNewKey(ctx, newKey); err != nil {
+	if err := m.testNewKey(ctx, newKey, authToken); err != nil {
 		m.mu.Lock()
 		m.state = StateFallback
 		m.mu.Unlock()
@@ -130,7 +137,7 @@ func (m *Manager) CheckAndRotate(ctx context.Context) error {
 	m.config.HMACKey = newKey
 	m.mu.Unlock()
 
-	if err := m.confirmRotation(ctx); err != nil {
+	if err := m.confirmRotation(ctx, authToken); err != nil {
 		log.Warn("Failed to confirm rotation with control plane", "error", err)
 		// Don't fail here - the key is already updated locally
 	}
@@ -144,9 +151,9 @@ func (m *Manager) CheckAndRotate(ctx context.Context) error {
 	return nil
 }
 
-func (m *Manager) checkRotationPending(ctx context.Context) (string, error) {
+func (m *Manager) checkRotationPending(ctx context.Context, token string) (string, error) {
 	url := fmt.Sprintf("%s/api/v1/agent/check-rotation", m.controlPlaneURL)
-	resp, err := common.DoJSONRequest(ctx, m.httpClient, "GET", url, nil, m.config.Token, "runic-agent")
+	resp, err := common.DoJSONRequest(ctx, m.httpClient, "GET", url, nil, token, "runic-agent")
 	if err != nil {
 		var httpErr *common.HTTPStatusError
 		if errors.As(err, &httpErr) {
@@ -177,15 +184,15 @@ func (m *Manager) checkRotationPending(ctx context.Context) (string, error) {
 	return result.RotationToken, nil
 }
 
-func (m *Manager) retrieveNewKey(ctx context.Context, token string) (string, error) {
+func (m *Manager) retrieveNewKey(ctx context.Context, rotationToken string, authToken string) (string, error) {
 	url := fmt.Sprintf("%s/api/v1/agent/rotate-key", m.controlPlaneURL)
 
 	body := map[string]string{
 		"host_id":        m.hostID,
-		"rotation_token": token,
+		"rotation_token": rotationToken,
 	}
 
-	resp, err := common.DoJSONRequest(ctx, m.httpClient, "POST", url, body, "", "runic-agent")
+	resp, err := common.DoJSONRequest(ctx, m.httpClient, "POST", url, body, authToken, "runic-agent")
 	if err != nil {
 		return "", fmt.Errorf("retrieve new key: %w", err)
 	}
@@ -210,7 +217,7 @@ func (m *Manager) retrieveNewKey(ctx context.Context, token string) (string, err
 	return result.NewHMACKey, nil
 }
 
-func (m *Manager) testNewKey(ctx context.Context, key string) error {
+func (m *Manager) testNewKey(ctx context.Context, key string, token string) error {
 	testMessage := fmt.Sprintf("test-%d", time.Now().UnixNano())
 	mac := hmac.New(sha256.New, []byte(key))
 	mac.Write([]byte(testMessage))
@@ -224,7 +231,7 @@ func (m *Manager) testNewKey(ctx context.Context, key string) error {
 		"signature": signature,
 	}
 
-	resp, err := common.DoJSONRequest(ctx, m.httpClient, "POST", url, body, m.config.Token, "runic-agent")
+	resp, err := common.DoJSONRequest(ctx, m.httpClient, "POST", url, body, token, "runic-agent")
 	if err != nil {
 		return fmt.Errorf("key test failed: %w", err)
 	}
@@ -300,14 +307,14 @@ func (m *Manager) updateConfigKey(newKey string) error {
 	return nil
 }
 
-func (m *Manager) confirmRotation(ctx context.Context) error {
+func (m *Manager) confirmRotation(ctx context.Context, token string) error {
 	url := fmt.Sprintf("%s/api/v1/agent/confirm-rotation", m.controlPlaneURL)
 
 	body := map[string]string{
 		"host_id": m.hostID,
 	}
 
-	resp, err := common.DoJSONRequest(ctx, m.httpClient, "POST", url, body, "", "runic-agent")
+	resp, err := common.DoJSONRequest(ctx, m.httpClient, "POST", url, body, token, "runic-agent")
 	if err != nil {
 		return fmt.Errorf("confirm rotation failed: %w", err)
 	}

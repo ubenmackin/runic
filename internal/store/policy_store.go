@@ -43,7 +43,7 @@ func (s *PolicyStore) ListPolicies(ctx context.Context) ([]models.PolicyRow, err
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, name, COALESCE(description, ''), source_id, source_type, service_id,
 		target_id, target_type, COALESCE(source_ip, ''), COALESCE(target_ip, ''), action, priority, enabled, target_scope, COALESCE(direction, 'both'), created_at, updated_at, is_pending_delete
-		FROM policies ORDER BY priority ASC`)
+		FROM policies WHERE is_pending_delete = 0 ORDER BY priority ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("query policies: %w", err)
 	}

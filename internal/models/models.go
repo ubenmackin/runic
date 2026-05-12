@@ -7,20 +7,25 @@ import (
 )
 
 type PeerRow struct {
-	ID            int
-	Hostname      string
-	IPAddress     string
-	OSType        string
-	Arch          string
-	HasDocker     bool
-	AgentKey      string
-	AgentToken    sql.NullString
-	AgentVersion  sql.NullString
-	IsManual      bool
-	BundleVersion sql.NullString
-	LastHeartbeat sql.NullTime
-	Status        string
-	CreatedAt     time.Time
+	ID                   int
+	Hostname             string
+	IPAddress            string
+	OSType               string
+	Arch                 string
+	HasDocker            bool
+	HasIPSet             sql.NullBool
+	AgentKey             string
+	AgentToken           sql.NullString
+	AgentVersion         sql.NullString
+	HMACKey              string
+	HMACKeyRotationToken sql.NullString
+	HMACKeyLastRotatedAt sql.NullString
+	IsManual             bool
+	BundleVersion        sql.NullString
+	LastHeartbeat        sql.NullTime
+	Status               string
+	Description          sql.NullString
+	CreatedAt            time.Time
 }
 
 type GroupRow struct {

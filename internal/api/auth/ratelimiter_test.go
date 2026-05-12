@@ -13,6 +13,7 @@ func TestCheckAndRecordFailure_NoLockout(t *testing.T) {
 
 	username := "testuser_no_lockout"
 	remoteAddr := "127.0.0.1"
+	key := getRateLimitKey(username, remoteAddr)
 
 	// Record 4 failures (below maxFailedAttempts=5), should all return nil
 	for i := 0; i < 4; i++ {
@@ -24,7 +25,7 @@ func TestCheckAndRecordFailure_NoLockout(t *testing.T) {
 
 	// Verify entry exists with 4 failed attempts
 	rateLimitMutex.Lock()
-	entry, exists := rateLimitStore[username]
+	entry, exists := rateLimitStore[key]
 	rateLimitMutex.Unlock()
 
 	if !exists {
@@ -43,6 +44,7 @@ func TestCheckAndRecordFailure_TriggersLockout(t *testing.T) {
 
 	username := "testuser_triggers_lockout"
 	remoteAddr := "127.0.0.1"
+	key := getRateLimitKey(username, remoteAddr)
 
 	// Record 5 failures, 5th should still return nil but set lockout
 	for i := 0; i < 5; i++ {
@@ -54,7 +56,7 @@ func TestCheckAndRecordFailure_TriggersLockout(t *testing.T) {
 
 	// Verify entry exists with lockout set
 	rateLimitMutex.Lock()
-	entry, exists := rateLimitStore[username]
+	entry, exists := rateLimitStore[key]
 	rateLimitMutex.Unlock()
 
 	if !exists {
@@ -76,6 +78,7 @@ func TestCheckAndRecordFailure_LockedOut(t *testing.T) {
 
 	username := "testuser_locked_out"
 	remoteAddr := "127.0.0.1"
+	key := getRateLimitKey(username, remoteAddr)
 
 	// Record 5 failures to trigger lockout
 	for i := 0; i < 5; i++ {
@@ -93,7 +96,7 @@ func TestCheckAndRecordFailure_LockedOut(t *testing.T) {
 
 	// Verify failedAttempts stays at 5 (no increment while locked)
 	rateLimitMutex.Lock()
-	entry := rateLimitStore[username]
+	entry := rateLimitStore[key]
 	rateLimitMutex.Unlock()
 
 	if entry.failedAttempts != 5 {
@@ -106,6 +109,7 @@ func TestRecordSuccess_ClearsEntry(t *testing.T) {
 
 	username := "testuser_record_success"
 	remoteAddr := "127.0.0.1"
+	key := getRateLimitKey(username, remoteAddr)
 
 	// Record 3 failures (below lockout threshold)
 	for i := 0; i < 3; i++ {
@@ -114,7 +118,7 @@ func TestRecordSuccess_ClearsEntry(t *testing.T) {
 
 	// Verify entry exists
 	rateLimitMutex.Lock()
-	if _, exists := rateLimitStore[username]; !exists {
+	if _, exists := rateLimitStore[key]; !exists {
 		t.Fatal("expected rate limit entry to exist")
 	}
 	rateLimitMutex.Unlock()
@@ -124,7 +128,7 @@ func TestRecordSuccess_ClearsEntry(t *testing.T) {
 
 	// Verify entry is removed
 	rateLimitMutex.Lock()
-	if _, exists := rateLimitStore[username]; exists {
+	if _, exists := rateLimitStore[key]; exists {
 		t.Error("expected rate limit entry to be removed after RecordSuccess")
 	}
 	rateLimitMutex.Unlock()
@@ -210,6 +214,7 @@ func TestConcurrentAccess(t *testing.T) {
 	const goroutines = 100
 	const username = "concurrent_user"
 	remoteAddr := "127.0.0.1"
+	key := getRateLimitKey(username, remoteAddr)
 
 	var wg sync.WaitGroup
 	wg.Add(goroutines)
@@ -226,7 +231,7 @@ func TestConcurrentAccess(t *testing.T) {
 	// Verify that the entry exists and failedAttempts is reasonable
 	// (between 5 and goroutines, but at least 5 due to lockout)
 	rateLimitMutex.Lock()
-	entry, exists := rateLimitStore[username]
+	entry, exists := rateLimitStore[key]
 	rateLimitMutex.Unlock()
 
 	if !exists {
@@ -261,7 +266,7 @@ func TestConcurrentAccess(t *testing.T) {
 
 	// Verify entry is removed (at least one goroutine succeeded)
 	rateLimitMutex.Lock()
-	if _, exists := rateLimitStore[username]; exists {
+	if _, exists := rateLimitStore[key]; exists {
 		t.Error("expected entry to be removed after concurrent RecordSuccess")
 	}
 	rateLimitMutex.Unlock()
@@ -271,6 +276,8 @@ func TestCheckAndRecordFailure_DifferentUsers(t *testing.T) {
 	ResetRateLimitStore()
 
 	remoteAddr := "127.0.0.1"
+	keyA := getRateLimitKey("userA", remoteAddr)
+	keyB := getRateLimitKey("userB", remoteAddr)
 
 	// User A gets 5 failures (lockout)
 	for i := 0; i < 5; i++ {
@@ -285,8 +292,8 @@ func TestCheckAndRecordFailure_DifferentUsers(t *testing.T) {
 
 	// Verify userA is locked, userB is not
 	rateLimitMutex.Lock()
-	userA := rateLimitStore["userA"]
-	userB := rateLimitStore["userB"]
+	userA := rateLimitStore[keyA]
+	userB := rateLimitStore[keyB]
 	rateLimitMutex.Unlock()
 
 	if userA.lockedUntil.IsZero() {
@@ -302,6 +309,7 @@ func TestCheckAndRecordFailure_LockoutDuration(t *testing.T) {
 
 	username := "testuser_duration"
 	remoteAddr := "127.0.0.1"
+	key := getRateLimitKey(username, remoteAddr)
 
 	before := time.Now()
 	// Record 5 failures to trigger lockout
@@ -311,7 +319,7 @@ func TestCheckAndRecordFailure_LockoutDuration(t *testing.T) {
 	after := time.Now()
 
 	rateLimitMutex.Lock()
-	entry := rateLimitStore[username]
+	entry := rateLimitStore[key]
 	lockedUntil := entry.lockedUntil
 	rateLimitMutex.Unlock()
 

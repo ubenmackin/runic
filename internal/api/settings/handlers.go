@@ -36,7 +36,7 @@ type LogSettings struct {
 	RetentionDays   int    `json:"retention_days"`
 	RetentionLabel  string `json:"retention_label"`
 	LogCount        int    `json:"log_count"`
-	EstimatedSizeMB int    `json:"estimated_size_mb"`
+	EstimatedSizeMB int64  `json:"estimated_size_mb"`
 	LogsDBPath      string `json:"logs_db_path"`
 }
 
@@ -56,7 +56,7 @@ func (h *Handler) GetLogSettings(w http.ResponseWriter, r *http.Request) {
 		logCount = 0
 	}
 
-	estimatedSizeMB := (logCount * 500) / (1024 * 1024)
+	estimatedSizeMB := int64(float64(logCount) * 500.0 / (1024.0 * 1024.0))
 
 	common.RespondJSON(w, http.StatusOK, LogSettings{
 		RetentionDays:   retentionDays,

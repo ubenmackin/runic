@@ -55,15 +55,22 @@ func StopCleanup() {
 	})
 }
 
+// getRateLimitKey returns a combined username+IP key for per-account-per-IP rate limiting.
+// This prevents both single-account brute force and cross-account password spraying.
+func getRateLimitKey(username, remoteAddr string) string {
+	return username + ":" + remoteAddr
+}
+
 // CheckAndRecordFailure checks and records a failed login attempt, returning an error if the account is currently locked out.
 func CheckAndRecordFailure(username string, remoteAddr string) error {
 	rateLimitMutex.Lock()
 	defer rateLimitMutex.Unlock()
 
-	entry, exists := rateLimitStore[username]
+	key := getRateLimitKey(username, remoteAddr)
+	entry, exists := rateLimitStore[key]
 	if !exists {
 		entry = &rateLimitEntry{}
-		rateLimitStore[username] = entry
+		rateLimitStore[key] = entry
 	}
 
 	if entry.lockedUntil.After(time.Now()) {
@@ -85,7 +92,12 @@ func RecordSuccess(username string) {
 	rateLimitMutex.Lock()
 	defer rateLimitMutex.Unlock()
 
-	delete(rateLimitStore, username)
+	// Clear all entries for this username (all IPs) on success
+	for key := range rateLimitStore {
+		if key == username || len(key) > len(username) && key[:len(username)+1] == username+":" {
+			delete(rateLimitStore, key)
+		}
+	}
 }
 
 func CleanupStaleEntries() {
@@ -93,11 +105,11 @@ func CleanupStaleEntries() {
 	defer rateLimitMutex.Unlock()
 
 	now := time.Now()
-	for username, entry := range rateLimitStore {
+	for key, entry := range rateLimitStore {
 		// Only remove entries with an expired lockout (non-zero lockedUntil that's past).
 		// Entries with zero lockedUntil (no lockout) are kept.
 		if !entry.lockedUntil.IsZero() && entry.lockedUntil.Before(now) {
-			delete(rateLimitStore, username)
+			delete(rateLimitStore, key)
 		}
 	}
 }

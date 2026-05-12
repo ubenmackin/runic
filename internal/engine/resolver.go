@@ -45,7 +45,29 @@ func (r *Resolver) ResolveEntity(ctx context.Context, entityType string, entityI
 func (r *Resolver) ResolveSpecialTarget(ctx context.Context, specialID int, peerIP string) ([]string, error) {
 	switch specialID {
 	case 1: // __subnet_broadcast__ - compute from peer IP
-		// E.g., 10.100.5.36 -> 10.100.5.255
+		// Compute the subnet broadcast address from the peer IP.
+		// If the peer IP is a CIDR (e.g., "10.100.5.0/24"), use net.IPNet to
+		// calculate the correct broadcast for any prefix length (not just /24).
+		// If it is a bare IP, fall back to setting the last octet to 255
+		// (assumes /24, which is the common case for bare-IP peers).
+		if strings.Contains(peerIP, "/") {
+			ip, ipNet, err := net.ParseCIDR(peerIP)
+			if err != nil {
+				return nil, fmt.Errorf("invalid CIDR for subnet broadcast: %s: %w", peerIP, err)
+			}
+			if ip.To4() == nil {
+				return nil, fmt.Errorf("non-IPv4 address for subnet broadcast: %s", peerIP)
+			}
+			// Compute broadcast: OR the network address with the inverted mask
+			mask := ipNet.Mask
+			broadcast := net.IP(make([]byte, 4))
+			for i := 0; i < 4; i++ {
+				broadcast[i] = ip.To4()[i] | ^mask[i]
+			}
+			broadcastAddr := broadcast.String() + "/32"
+			return []string{broadcastAddr}, nil
+		}
+		// Bare IP — assume /24 subnet
 		parts := strings.Split(peerIP, ".")
 		if len(parts) != 4 {
 			return nil, fmt.Errorf("invalid IPv4 address for subnet broadcast: %s", peerIP)

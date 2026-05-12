@@ -1492,7 +1492,7 @@ func TestForwardOnlyPolicy(t *testing.T) {
 	}
 
 	// Jump server should NOT have INPUT rules for this policy (no backward direction)
-	lines := strings.Split(outputJump, "\\n")
+	lines := strings.Split(outputJump, "\n")
 	for _, line := range lines {
 		if strings.Contains(line, "ssh-forward-only") || strings.Contains(line, "As Target") {
 			if strings.Contains(line, "As Target") {

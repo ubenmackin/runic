@@ -285,8 +285,6 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	apiInstance.ChangeWorker.Start(ctx)
-
 	go startOfflineDetector(ctx, database)
 
 	// Start token revocation cleanup goroutine (prunes expired entries hourly)

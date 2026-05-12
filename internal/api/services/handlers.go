@@ -279,14 +279,16 @@ func (h *Handler) queueServiceChange(ctx context.Context, serviceID int, action,
 	}
 
 	peerSet := make(map[int]bool)
-	for _, policyID := range policyIDs {
-		affectedPeers, err := h.Compiler.GetAffectedPeersByPolicy(ctx, policyID)
-		if err != nil {
-			log.ErrorContext(ctx, "Failed to get affected peers for service change", "policy_id", policyID, "error", err)
-			continue
-		}
-		for _, peerID := range affectedPeers {
-			peerSet[peerID] = true
+	if h.Compiler != nil {
+		for _, policyID := range policyIDs {
+			affectedPeers, err := h.Compiler.GetAffectedPeersByPolicy(ctx, policyID)
+			if err != nil {
+				log.ErrorContext(ctx, "Failed to get affected peers for service change", "policy_id", policyID, "error", err)
+				continue
+			}
+			for _, peerID := range affectedPeers {
+				peerSet[peerID] = true
+			}
 		}
 	}
 
@@ -298,6 +300,13 @@ func (h *Handler) queueServiceChange(ctx context.Context, serviceID int, action,
 	if len(peerIDs) > 0 {
 		h.Store.QueuePeerChange(ctx, h.ChangeWorker, peerIDs, "service", action, serviceID, summary)
 	}
+}
+
+// RegisterReadRoutes registers read-only (GET) routes for the viewer role.
+func (h *Handler) RegisterReadRoutes(r *mux.Router) {
+	r.HandleFunc("", h.ListServices).Methods("GET")
+	r.HandleFunc("/by-port", h.GetServiceByPort).Methods("GET")
+	r.HandleFunc("/{id:[0-9]+}", h.GetService).Methods("GET")
 }
 
 func (h *Handler) RegisterRoutes(r *mux.Router) {

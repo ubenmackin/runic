@@ -141,7 +141,7 @@ func (h *Handler) UpdatePeer(w http.ResponseWriter, r *http.Request) {
 		IPAddress   string `json:"ip_address"`
 		OSType      string `json:"os_type"`
 		Arch        string `json:"arch"`
-		HasDocker   bool   `json:"has_docker"`
+		HasDocker   *bool  `json:"has_docker"`
 		Description string `json:"description"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
@@ -177,7 +177,12 @@ func (h *Handler) UpdatePeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = h.Store.UpdatePeer(r.Context(), id, input.Hostname, input.IPAddress, input.OSType, input.Arch, input.HasDocker, input.Description)
+	hasDocker := peer.HasDocker
+	if input.HasDocker != nil {
+		hasDocker = *input.HasDocker
+	}
+
+	err = h.Store.UpdatePeer(r.Context(), id, input.Hostname, input.IPAddress, input.OSType, input.Arch, hasDocker, input.Description)
 	if err != nil {
 		log.ErrorContext(r.Context(), "failed to update peer", "error", err)
 		common.InternalError(w)
@@ -191,6 +196,12 @@ func (h *Handler) CompilePeer(w http.ResponseWriter, r *http.Request) {
 	id, err := common.ParseIDParam(r, "id")
 	if err != nil {
 		common.RespondError(w, http.StatusBadRequest, "invalid peer ID")
+		return
+	}
+
+	if h.Compiler == nil {
+		log.ErrorContext(r.Context(), "compiler not initialized")
+		common.RespondError(w, http.StatusInternalServerError, "compiler not available")
 		return
 	}
 
@@ -553,6 +564,16 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Info("UpdateAgent: update sent via SSE", "host_id", hostID)
 	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "update_sent"})
+}
+
+// RegisterReadRoutes registers read-only (GET) routes for the viewer role.
+func (h *Handler) RegisterReadRoutes(r *mux.Router) {
+	r.HandleFunc("", h.GetPeers).Methods("GET")
+	r.HandleFunc("/by-ip", h.GetPeerByIP).Methods("GET")
+	r.HandleFunc("/by-hostname", h.GetPeerByHostname).Methods("GET")
+	r.HandleFunc("/{id:[0-9]+}", h.GetPeers).Methods("GET")
+	r.HandleFunc("/{id:[0-9]+}/bundle", h.GetPeerBundle).Methods("GET")
+	r.HandleFunc("/{id:[0-9]+}/ips", h.GetPeerIPs).Methods("GET")
 }
 
 func (h *Handler) RegisterRoutes(r *mux.Router) {

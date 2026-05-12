@@ -386,6 +386,23 @@ COMMIT
 			errContains: "missing *filter table",
 		},
 		{
+			name:        "nft format without table ip filter",
+			rules:       "table ip nat {\n}\n",
+			wantErr:     true,
+			errContains: "missing 'table ip filter' declaration",
+		},
+		{
+			name:    "nft format with table ip filter",
+			rules:   "table ip filter {\n\tchain input {\n\t\ttype filter hook input priority 0; policy drop;\n\t}\n}\n",
+			wantErr: false,
+		},
+		{
+			name:        "missing commit",
+			rules:       "*filter\n:INPUT DROP [0:0]\n",
+			wantErr:     true,
+			errContains: "missing COMMIT",
+		},
+		{
 			name:        "missing commit",
 			rules:       "*filter\n:INPUT DROP [0:0]\n",
 			wantErr:     true,
@@ -509,12 +526,12 @@ func TestScheduleRevert(t *testing.T) {
 		cancelFast bool
 	}{
 		{
-			name:       "revert cancelled before timeout",
+			name:       "revert canceled before timeout",
 			delay:      5 * time.Second,
 			cancelFast: true,
 		},
 		{
-			name:       "revert not cancelled",
+			name:       "revert not canceled",
 			delay:      100 * time.Millisecond,
 			cancelFast: false,
 		},

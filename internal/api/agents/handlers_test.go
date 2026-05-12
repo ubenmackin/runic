@@ -155,7 +155,7 @@ func TestAgentAuthMiddleware(t *testing.T) {
 			}
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(store.NewPeerStore(db), store.NewDashboardStore(db, db), nil, store.NewImportStore(db, store.NewPeerStore(db), store.NewGroupStore(db), store.NewServiceStore(db)))
+			handler := NewHandler(store.NewPeerStore(db), store.NewDashboardStore(db, db), nil, store.NewImportStore(db, store.NewPeerStore(db), store.NewGroupStore(db), store.NewServiceStore(db)), store.NewTokenStore(db), db)
 
 			// Track if next handler was called
 			nextCalled := false
@@ -275,7 +275,7 @@ func TestRegisterAgent(t *testing.T) {
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(store.NewPeerStore(db), store.NewDashboardStore(db, db), nil, store.NewImportStore(db, store.NewPeerStore(db), store.NewGroupStore(db), store.NewServiceStore(db)))
+			handler := NewHandler(store.NewPeerStore(db), store.NewDashboardStore(db, db), nil, store.NewImportStore(db, store.NewPeerStore(db), store.NewGroupStore(db), store.NewServiceStore(db)), store.NewTokenStore(db), db)
 			handler.RegisterAgent(w, req)
 
 			if w.Code != tt.wantCode {
@@ -470,7 +470,7 @@ func TestRegisterAgent_MaliciousInput(t *testing.T) {
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(store.NewPeerStore(db), store.NewDashboardStore(db, db), nil, store.NewImportStore(db, store.NewPeerStore(db), store.NewGroupStore(db), store.NewServiceStore(db)))
+			handler := NewHandler(store.NewPeerStore(db), store.NewDashboardStore(db, db), nil, store.NewImportStore(db, store.NewPeerStore(db), store.NewGroupStore(db), store.NewServiceStore(db)), store.NewTokenStore(db), db)
 			handler.RegisterAgent(w, req)
 
 			if w.Code != tt.wantCode {
@@ -570,7 +570,7 @@ func TestGetBundle(t *testing.T) {
 
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(store.NewPeerStore(db), store.NewDashboardStore(db, db), nil, store.NewImportStore(db, store.NewPeerStore(db), store.NewGroupStore(db), store.NewServiceStore(db)))
+			handler := NewHandler(store.NewPeerStore(db), store.NewDashboardStore(db, db), nil, store.NewImportStore(db, store.NewPeerStore(db), store.NewGroupStore(db), store.NewServiceStore(db)), store.NewTokenStore(db), db)
 
 			handler.AgentAuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
 				handler.GetBundle(w, r)
@@ -651,7 +651,7 @@ func TestHeartbeat(t *testing.T) {
 			req := makeAuthRequest(t, db, "POST", "/api/v1/agents/heartbeat", tt.reqBody, peer)
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(store.NewPeerStore(db), store.NewDashboardStore(db, db), nil, store.NewImportStore(db, store.NewPeerStore(db), store.NewGroupStore(db), store.NewServiceStore(db)))
+			handler := NewHandler(store.NewPeerStore(db), store.NewDashboardStore(db, db), nil, store.NewImportStore(db, store.NewPeerStore(db), store.NewGroupStore(db), store.NewServiceStore(db)), store.NewTokenStore(db), db)
 
 			handler.AgentAuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
 				handler.Heartbeat(w, r)
@@ -769,7 +769,7 @@ func TestSubmitLogs(t *testing.T) {
 			req := makeAuthRequest(t, db, "POST", "/api/v1/agents/logs", tt.reqBody, "test-agent")
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(store.NewPeerStore(db), store.NewDashboardStore(db, logsDB), nil, store.NewImportStore(db, store.NewPeerStore(db), store.NewGroupStore(db), store.NewServiceStore(db)))
+			handler := NewHandler(store.NewPeerStore(db), store.NewDashboardStore(db, logsDB), nil, store.NewImportStore(db, store.NewPeerStore(db), store.NewGroupStore(db), store.NewServiceStore(db)), store.NewTokenStore(db), db)
 
 			handler.AgentAuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
 				handler.SubmitLogs(w, r)
@@ -830,7 +830,7 @@ func TestConfirmBundleApplied(t *testing.T) {
 			req := makeAuthRequest(t, db, "POST", "/api/v1/agents/confirm-bundle", tt.reqBody, "test-agent")
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(store.NewPeerStore(db), store.NewDashboardStore(db, db), nil, store.NewImportStore(db, store.NewPeerStore(db), store.NewGroupStore(db), store.NewServiceStore(db)))
+			handler := NewHandler(store.NewPeerStore(db), store.NewDashboardStore(db, db), nil, store.NewImportStore(db, store.NewPeerStore(db), store.NewGroupStore(db), store.NewServiceStore(db)), store.NewTokenStore(db), db)
 
 			handler.AgentAuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
 				handler.ConfirmBundleApplied(w, r)
@@ -902,7 +902,7 @@ func TestAgentCheckRotation(t *testing.T) {
 			req := makeAuthRequest(t, db, "GET", "/api/v1/agents/check-rotation", "", peer)
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(store.NewPeerStore(db), store.NewDashboardStore(db, db), nil, store.NewImportStore(db, store.NewPeerStore(db), store.NewGroupStore(db), store.NewServiceStore(db)))
+			handler := NewHandler(store.NewPeerStore(db), store.NewDashboardStore(db, db), nil, store.NewImportStore(db, store.NewPeerStore(db), store.NewGroupStore(db), store.NewServiceStore(db)), store.NewTokenStore(db), db)
 
 			handler.AgentAuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
 				handler.AgentCheckRotation(w, r)
@@ -990,7 +990,7 @@ func TestAgentTestKey(t *testing.T) {
 			req := makeAuthRequest(t, db, "POST", "/api/v1/agents/test-key", tt.reqBody, peer)
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(store.NewPeerStore(db), store.NewDashboardStore(db, db), nil, store.NewImportStore(db, store.NewPeerStore(db), store.NewGroupStore(db), store.NewServiceStore(db)))
+			handler := NewHandler(store.NewPeerStore(db), store.NewDashboardStore(db, db), nil, store.NewImportStore(db, store.NewPeerStore(db), store.NewGroupStore(db), store.NewServiceStore(db)), store.NewTokenStore(db), db)
 
 			handler.AgentAuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
 				handler.AgentTestKey(w, r)
@@ -1060,7 +1060,7 @@ func TestGenerateRegistrationToken(t *testing.T) {
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(store.NewPeerStore(db), store.NewDashboardStore(db, db), nil, store.NewImportStore(db, store.NewPeerStore(db), store.NewGroupStore(db), store.NewServiceStore(db)))
+			handler := NewHandler(store.NewPeerStore(db), store.NewDashboardStore(db, db), nil, store.NewImportStore(db, store.NewPeerStore(db), store.NewGroupStore(db), store.NewServiceStore(db)), store.NewTokenStore(db), db)
 			handler.GenerateRegistrationToken(w, req)
 
 			if w.Code != tt.wantCode {
@@ -1137,7 +1137,7 @@ func TestListRegistrationTokens(t *testing.T) {
 			req := httptest.NewRequest("GET", "/api/v1/registration-tokens", nil)
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(store.NewPeerStore(db), store.NewDashboardStore(db, db), nil, store.NewImportStore(db, store.NewPeerStore(db), store.NewGroupStore(db), store.NewServiceStore(db)))
+			handler := NewHandler(store.NewPeerStore(db), store.NewDashboardStore(db, db), nil, store.NewImportStore(db, store.NewPeerStore(db), store.NewGroupStore(db), store.NewServiceStore(db)), store.NewTokenStore(db), db)
 			handler.ListRegistrationTokens(w, req)
 
 			if w.Code != tt.wantCode {
@@ -1200,7 +1200,7 @@ func TestRevokeRegistrationToken(t *testing.T) {
 			w := httptest.NewRecorder()
 			req = muxVars(req, map[string]string{"id": tt.tokenID})
 
-			handler := NewHandler(store.NewPeerStore(db), store.NewDashboardStore(db, db), nil, store.NewImportStore(db, store.NewPeerStore(db), store.NewGroupStore(db), store.NewServiceStore(db)))
+			handler := NewHandler(store.NewPeerStore(db), store.NewDashboardStore(db, db), nil, store.NewImportStore(db, store.NewPeerStore(db), store.NewGroupStore(db), store.NewServiceStore(db)), store.NewTokenStore(db), db)
 			handler.RevokeRegistrationToken(w, req)
 
 			if w.Code != tt.wantCode {
@@ -1465,7 +1465,7 @@ func TestConsumeRegistrationToken(t *testing.T) {
 				tt.setup(t, db)
 			}
 
-			handler := NewHandler(store.NewPeerStore(db), store.NewDashboardStore(db, db), nil, store.NewImportStore(db, store.NewPeerStore(db), store.NewGroupStore(db), store.NewServiceStore(db)))
+			handler := NewHandler(store.NewPeerStore(db), store.NewDashboardStore(db, db), nil, store.NewImportStore(db, store.NewPeerStore(db), store.NewGroupStore(db), store.NewServiceStore(db)), store.NewTokenStore(db), db)
 			consumed, err := handler.ConsumeRegistrationToken(tt.token, tt.hostname)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
@@ -1557,6 +1557,8 @@ func TestUpsertPeerIPs(t *testing.T) {
 				}
 				defer rows.Close()
 
+				// ipEntry represents a peer_ip row for test verification.
+				// This is distinct from internal/store.ipEntry which tracks {ID, IP}.
 				type ipEntry struct {
 					ip        string
 					isPrimary int
@@ -1672,7 +1674,7 @@ func TestUpsertPeerIPs(t *testing.T) {
 
 			peerID := tt.setup(t, db)
 
-			handler := NewHandler(store.NewPeerStore(db), store.NewDashboardStore(db, db), nil, store.NewImportStore(db, store.NewPeerStore(db), store.NewGroupStore(db), store.NewServiceStore(db)))
+			handler := NewHandler(store.NewPeerStore(db), store.NewDashboardStore(db, db), nil, store.NewImportStore(db, store.NewPeerStore(db), store.NewGroupStore(db), store.NewServiceStore(db)), store.NewTokenStore(db), db)
 			err := handler.PeerStore.UpsertPeerIPs(context.Background(), peerID, tt.allIPs, tt.primaryIP)
 
 			if (err != nil) != tt.wantErr {
@@ -2038,7 +2040,7 @@ func TestSyncPeerIPs(t *testing.T) {
 
 			peerID := tt.setup(t, db)
 
-			handler := NewHandler(store.NewPeerStore(db), store.NewDashboardStore(db, db), nil, store.NewImportStore(db, store.NewPeerStore(db), store.NewGroupStore(db), store.NewServiceStore(db)))
+			handler := NewHandler(store.NewPeerStore(db), store.NewDashboardStore(db, db), nil, store.NewImportStore(db, store.NewPeerStore(db), store.NewGroupStore(db), store.NewServiceStore(db)), store.NewTokenStore(db), db)
 			_, err := handler.PeerStore.SyncPeerIPs(context.Background(), peerID, tt.allIPs, tt.primaryIP)
 
 			if (err != nil) != tt.wantErr {

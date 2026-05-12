@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"runic/internal/common/constants"
+	"runic/internal/models"
 	"runic/internal/store"
 	"runic/internal/testutil"
 )
@@ -283,14 +284,9 @@ func TestDashboardQueries_WithBlockedEvents(t *testing.T) {
 	}
 	defer func() { _ = topRows.Close() }()
 
-	type BlockedIP struct {
-		SrcIP string
-		Count int
-	}
-
-	var blockedIPs []BlockedIP
+	var blockedIPs []models.BlockedIP
 	for topRows.Next() {
-		var b BlockedIP
+		var b models.BlockedIP
 		if err := topRows.Scan(&b.SrcIP, &b.Count); err != nil {
 			t.Fatalf("scan failed: %v", err)
 		}
@@ -419,14 +415,9 @@ func TestDashboardQueries_ManyBlockedEvents(t *testing.T) {
 	}
 	defer func() { _ = topRows.Close() }()
 
-	type BlockedIP struct {
-		SrcIP string
-		Count int
-	}
-
-	var blockedIPs []BlockedIP
+	var blockedIPs []models.BlockedIP
 	for topRows.Next() {
-		var b BlockedIP
+		var b models.BlockedIP
 		if err := topRows.Scan(&b.SrcIP, &b.Count); err != nil {
 			t.Fatalf("scan failed: %v", err)
 		}
