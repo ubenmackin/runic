@@ -549,8 +549,18 @@ func (a *Agent) handleFetchBackup(ctx context.Context) {
 // own cgroup outside the agent's service unit. When the install script calls
 // "systemctl stop runic-agent", systemd only kills processes in the service's
 // cgroup — the scope unit survives and the script completes the update
-// (download, file move, service restart). If systemd-run is unavailable (e.g.
-// non-systemd environments), fall back to the setsid approach.
+// (download, file move, service restart).
+//
+// Both the primary (systemd-run) and fallback (setsid) paths use
+// StartDetached (fire-and-forget) rather than Run (blocking). This is
+// critical: Run blocks on CombinedOutput, so when the agent process is
+// killed by the install script's "systemctl stop", the blocked goroutine
+// dies and the child process is orphaned. StartDetached calls cmd.Start +
+// cmd.Process.Release, which fires the process and returns immediately —
+// the child runs independently regardless of the parent's fate.
+//
+// If systemd-run is unavailable (e.g. non-systemd environments), fall back
+// to the setsid approach.
 func (a *Agent) handleUpdateAgent(_ context.Context, controlPlaneURL string) {
 	log.Info("Starting agent self-update", "control_plane_url", controlPlaneURL)
 
@@ -567,12 +577,12 @@ func (a *Agent) handleUpdateAgent(_ context.Context, controlPlaneURL string) {
 	// agent's service unit. When the install script calls "systemctl stop runic-agent",
 	// systemd only kills processes in the service's cgroup — the scope survives.
 	ctx := context.Background()
-	_, err = a.cmdRunner.Run(ctx, "systemd-run", "--scope", "--unit=runic-agent-update", "bash", "-c", cmd)
+	err = a.cmdRunner.StartDetached(ctx, "systemd-run", "--scope", "--unit=runic-agent-update", "bash", "-c", cmd)
 	if err != nil {
 		// Fall back to setsid if systemd-run is unavailable (non-systemd environments)
 		log.Warn("systemd-run --scope failed, falling back to setsid", "error", err)
 		err = a.cmdRunner.StartDetached(ctx, "setsid", "bash", "-c", fmt.Sprintf(
-			"nohup curl -sL %s | sudo bash -s -- %s >/dev/null 2>&1 &",
+			"curl -sL %s | sudo bash -s -- %s >/dev/null 2>&1",
 			InstallScriptURL,
 			shellSafeArg(parsedURL.String()),
 		),
@@ -583,13 +593,49 @@ func (a *Agent) handleUpdateAgent(_ context.Context, controlPlaneURL string) {
 		}
 	}
 
-	log.Info("Update process launched, agent will be restarted by the install script")
+	log.Info("Update process launched")
 }
 
 // HandleUpdateAgent triggers the agent self-update process. It is the public
 // equivalent of handleUpdateAgent, exposed for CLI and integration test use.
 func (a *Agent) HandleUpdateAgent(controlPlaneURL string) {
 	a.handleUpdateAgent(context.Background(), controlPlaneURL)
+}
+
+// HandleUpdateAgentSync triggers the agent self-update synchronously.
+// It blocks until the update process completes or fails, returning any error.
+// This is intended for CLI use (e.g., `runic-agent -update`) where the caller
+// needs to know whether the update succeeded. For SSE-triggered updates,
+// use HandleUpdateAgent (async) instead, since the agent will be killed by
+// the install script and cannot wait for completion.
+func (a *Agent) HandleUpdateAgentSync(controlPlaneURL string) error {
+	return a.handleUpdateAgentSync(context.Background(), controlPlaneURL)
+}
+
+func (a *Agent) handleUpdateAgentSync(_ context.Context, controlPlaneURL string) error {
+	log.Info("Starting agent self-update (synchronous)", "control_plane_url", controlPlaneURL)
+
+	parsedURL, err := url.Parse(controlPlaneURL)
+	if err != nil || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") {
+		return fmt.Errorf("invalid control plane URL: %s", controlPlaneURL)
+	}
+
+	cmd := fmt.Sprintf("curl -sL %s | sudo bash -s -- %s", InstallScriptURL, shellSafeArg(parsedURL.String()))
+
+	ctx := context.Background()
+
+	// Try systemd-run --scope first (keeps update in its own cgroup)
+	_, err = a.cmdRunner.Run(ctx, "systemd-run", "--scope", "--unit=runic-agent-update", "bash", "-c", cmd)
+	if err != nil {
+		log.Warn("systemd-run --scope failed, falling back to direct execution", "error", err)
+		_, err = a.cmdRunner.Run(ctx, "bash", "-c", cmd)
+		if err != nil {
+			return fmt.Errorf("update process failed: %w", err)
+		}
+	}
+
+	log.Info("Update process completed, agent should restart via install script")
+	return nil
 }
 
 // This prevents shell injection by treating the value as a literal string.

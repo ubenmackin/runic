@@ -372,23 +372,31 @@ func TestIsControlPlaneReachableFalse(t *testing.T) {
 }
 
 type mockCommandRunner struct {
-	output           []byte
-	err              error
-	runErr           error
-	calls            []mockCall
-	startDetachedErr error
-	detachedCalls    []mockCall
+	output            []byte
+	err               error
+	runErr            error
+	runErrs           map[string]error
+	calls             []mockCall
+	startDetachedErr  error
+	startDetachedErrs map[string]error
+	detachedCalls     []mockCall
 }
 
 type mockCall struct {
-	ctx  context.Context
+	ctx context.Context
 	name string
 	args []string
 }
 
 func (m *mockCommandRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
 	m.calls = append(m.calls, mockCall{ctx: ctx, name: name, args: args})
-	if name == "systemd-run" && m.runErr != nil {
+	// Check per-command error map first, then fall back to generic error
+	if m.runErrs != nil {
+		if err, ok := m.runErrs[name]; ok {
+			return nil, err
+		}
+	}
+	if m.runErr != nil {
 		return nil, m.runErr
 	}
 	return m.output, m.err
@@ -396,10 +404,13 @@ func (m *mockCommandRunner) Run(ctx context.Context, name string, args ...string
 
 func (m *mockCommandRunner) StartDetached(ctx context.Context, name string, args ...string) error {
 	m.detachedCalls = append(m.detachedCalls, mockCall{ctx: ctx, name: name, args: args})
-	if name == "setsid" && m.startDetachedErr != nil {
-		return m.startDetachedErr
+	// Check per-command error map first, then fall back to generic error
+	if m.startDetachedErrs != nil {
+		if err, ok := m.startDetachedErrs[name]; ok {
+			return err
+		}
 	}
-	return nil
+	return m.startDetachedErr
 }
 
 func TestHandleUpdateAgent(t *testing.T) {
@@ -409,15 +420,16 @@ func TestHandleUpdateAgent(t *testing.T) {
 			cmdRunner: mock,
 		}
 		agent.handleUpdateAgent(context.Background(), "https://runic.example.com")
-		if len(mock.calls) != 1 {
-			t.Fatalf("expected 1 Run call, got %d", len(mock.calls))
+		if len(mock.calls) != 0 {
+			t.Fatalf("expected 0 Run calls, got %d", len(mock.calls))
 		}
-		if mock.calls[0].name != "systemd-run" {
-			t.Errorf("expected command 'systemd-run', got '%s'", mock.calls[0].name)
+		if len(mock.detachedCalls) != 1 {
+			t.Fatalf("expected 1 StartDetached call, got %d", len(mock.detachedCalls))
 		}
-		// The command is passed as: systemd-run --scope --unit=runic-agent-update bash -c <cmd>
-		// So args should contain: "--scope", "--unit=runic-agent-update", "bash", "-c", cmd
-		args := mock.calls[0].args
+		if mock.detachedCalls[0].name != "systemd-run" {
+			t.Errorf("expected command 'systemd-run', got '%s'", mock.detachedCalls[0].name)
+		}
+		args := mock.detachedCalls[0].args
 		foundScope := false
 		foundUnit := false
 		foundBash := false
@@ -462,9 +474,6 @@ func TestHandleUpdateAgent(t *testing.T) {
 		if !strings.Contains(cmdStr, "runic.example.com") {
 			t.Error("expected command to contain control plane URL")
 		}
-		if len(mock.detachedCalls) != 0 {
-			t.Errorf("expected 0 detached calls, got %d", len(mock.detachedCalls))
-		}
 	})
 
 	t.Run("rejects invalid URL scheme", func(t *testing.T) {
@@ -494,100 +503,93 @@ func TestHandleUpdateAgent(t *testing.T) {
 		agent := &Agent{
 			cmdRunner: mock,
 		}
-		// Pass a canceled context as the SSE context
 		sseCtx, cancel := context.WithCancel(context.Background())
-		cancel() // Cancel immediately
+		cancel()
 		agent.handleUpdateAgent(sseCtx, "https://runic.example.com")
-		if len(mock.calls) != 1 {
-			t.Fatalf("expected 1 Run call, got %d", len(mock.calls))
+		if len(mock.detachedCalls) != 1 {
+			t.Fatalf("expected 1 StartDetached call, got %d", len(mock.detachedCalls))
 		}
-		// The function should use context.Background(), not the canceled SSE context
-		capturedCtx := mock.calls[0].ctx
+		capturedCtx := mock.detachedCalls[0].ctx
 		if capturedCtx == sseCtx {
 			t.Error("handleUpdateAgent should use context.Background(), not the SSE context")
 		}
-		// Verify the captured context is not canceled
 		if err := capturedCtx.Err(); err != nil {
 			t.Error("handleUpdateAgent should use context.Background() which is never canceled")
 		}
 	})
 
 	t.Run("falls back to setsid when systemd-run fails", func(t *testing.T) {
-		// Redirect log output to a buffer to verify logging
 		var logBuf bytes.Buffer
 		log.Init("info", &logBuf)
 		defer log.Init("info", os.Stdout)
 
 		mock := &mockCommandRunner{
-			runErr: fmt.Errorf("systemd-run: command not found"),
+			startDetachedErrs: map[string]error{"systemd-run": fmt.Errorf("systemd-run: command not found")},
 		}
 		agent := &Agent{
 			cmdRunner: mock,
 		}
 		agent.handleUpdateAgent(context.Background(), "https://runic.example.com")
 
-		// Verify Run was called (systemd-run attempt)
-		if len(mock.calls) != 1 {
-			t.Fatalf("expected 1 Run call, got %d", len(mock.calls))
+		if len(mock.calls) != 0 {
+			t.Fatalf("expected 0 Run calls, got %d", len(mock.calls))
+		}
+		if len(mock.detachedCalls) != 2 {
+			t.Fatalf("expected 2 StartDetached calls, got %d", len(mock.detachedCalls))
+		}
+		if mock.detachedCalls[0].name != "systemd-run" {
+			t.Errorf("expected first command 'systemd-run', got '%s'", mock.detachedCalls[0].name)
+		}
+		if mock.detachedCalls[1].name != "setsid" {
+			t.Errorf("expected second command 'setsid', got '%s'", mock.detachedCalls[1].name)
+		}
+		if len(mock.detachedCalls[1].args) < 3 {
+			t.Fatalf("expected at least 3 args for setsid, got %d", len(mock.detachedCalls[1].args))
+		}
+		cmdStr := mock.detachedCalls[1].args[2]
+		if strings.Contains(cmdStr, "nohup curl") {
+			t.Error("expected fallback command to NOT contain 'nohup curl'")
+		}
+		if !strings.Contains(cmdStr, "curl -sL") {
+			t.Error("expected fallback command to contain 'curl -sL'")
 		}
 
-		// Verify StartDetached was called (setsid fallback)
-		if len(mock.detachedCalls) != 1 {
-			t.Fatalf("expected 1 detached call, got %d", len(mock.detachedCalls))
-		}
-		if mock.detachedCalls[0].name != "setsid" {
-			t.Errorf("expected command 'setsid', got '%s'", mock.detachedCalls[0].name)
-		}
-		if len(mock.detachedCalls[0].args) < 3 {
-			t.Fatalf("expected at least 3 args, got %d", len(mock.detachedCalls[0].args))
-		}
-		cmdStr := mock.detachedCalls[0].args[2]
-		if !strings.Contains(cmdStr, "nohup curl") {
-			t.Error("expected fallback command to contain 'nohup curl'")
-		}
-
-		// Verify warning log about falling back
 		logOutput := logBuf.String()
 		if !strings.Contains(logOutput, "falling back to setsid") {
 			t.Errorf("expected warning log about 'falling back to setsid', got log output: %q", logOutput)
 		}
-
-		// Verify the success log WAS produced (since the fallback succeeded)
 		if !strings.Contains(logOutput, "Update process launched") {
 			t.Error("expected success log 'Update process launched' to be present when setsid fallback succeeds")
 		}
 	})
 
 	t.Run("handles both systemd-run and setsid failure", func(t *testing.T) {
-		// Redirect log output to a buffer to verify error logging
 		var logBuf bytes.Buffer
 		log.Init("error", &logBuf)
 		defer log.Init("info", os.Stdout)
 
 		mock := &mockCommandRunner{
-			runErr:           fmt.Errorf("systemd-run: command not found"),
-			startDetachedErr: fmt.Errorf("setsid: command not found"),
+			startDetachedErrs: map[string]error{
+				"systemd-run": fmt.Errorf("systemd-run: command not found"),
+				"setsid":      fmt.Errorf("setsid: command not found"),
+			},
 		}
 		agent := &Agent{
 			cmdRunner: mock,
 		}
 		agent.handleUpdateAgent(context.Background(), "https://runic.example.com")
 
-		// Verify both Run and StartDetached were called
-		if len(mock.calls) != 1 {
-			t.Fatalf("expected 1 Run call, got %d", len(mock.calls))
+		if len(mock.calls) != 0 {
+			t.Fatalf("expected 0 Run calls, got %d", len(mock.calls))
 		}
-		if len(mock.detachedCalls) != 1 {
-			t.Fatalf("expected 1 detached call, got %d", len(mock.detachedCalls))
+		if len(mock.detachedCalls) != 2 {
+			t.Fatalf("expected 2 StartDetached calls, got %d", len(mock.detachedCalls))
 		}
 
-		// Verify the error log was produced
 		logOutput := logBuf.String()
 		if !strings.Contains(logOutput, "Failed to launch update process (both systemd-run and setsid failed)") {
 			t.Errorf("expected error log about both failures, got log output: %q", logOutput)
 		}
-
-		// Verify the success log was NOT produced (since both paths failed)
 		if strings.Contains(logOutput, "Update process launched") {
 			t.Error("expected success log 'Update process launched' to NOT be present when both methods fail")
 		}
@@ -602,19 +604,78 @@ func TestHandleUpdateAgentPublic(t *testing.T) {
 		}
 		agent.HandleUpdateAgent("https://runic.example.com")
 
-		if len(mock.calls) != 1 {
-			t.Fatalf("expected 1 Run call, got %d", len(mock.calls))
+		if len(mock.detachedCalls) != 1 {
+			t.Fatalf("expected 1 StartDetached call, got %d", len(mock.detachedCalls))
 		}
 
-		// Verify the public method uses context.Background() (never canceled)
-		if err := mock.calls[0].ctx.Err(); err != nil {
+		if err := mock.detachedCalls[0].ctx.Err(); err != nil {
 			t.Error("HandleUpdateAgent should use context.Background() which is never canceled")
 		}
 
-		// Verify the control plane URL is forwarded correctly
-		cmdStr := mock.calls[0].args[len(mock.calls[0].args)-1]
+		cmdStr := mock.detachedCalls[0].args[len(mock.detachedCalls[0].args)-1]
 		if !strings.Contains(cmdStr, "runic.example.com") {
 			t.Error("expected command to contain control plane URL")
+		}
+	})
+}
+
+func TestHandleUpdateAgentSync(t *testing.T) {
+	t.Run("succeeds with systemd-run", func(t *testing.T) {
+		mock := &mockCommandRunner{}
+		agent := &Agent{
+			cmdRunner: mock,
+		}
+		err := agent.HandleUpdateAgentSync("https://runic.example.com")
+		if err != nil {
+			t.Fatalf("expected nil error, got: %v", err)
+		}
+		if len(mock.calls) != 1 {
+			t.Fatalf("expected 1 Run call, got %d", len(mock.calls))
+		}
+		if mock.calls[0].name != "systemd-run" {
+			t.Errorf("expected command 'systemd-run', got '%s'", mock.calls[0].name)
+		}
+		if len(mock.detachedCalls) != 0 {
+			t.Errorf("expected 0 StartDetached calls, got %d", len(mock.detachedCalls))
+		}
+	})
+
+	t.Run("falls back to direct execution when systemd-run fails", func(t *testing.T) {
+		mock := &mockCommandRunner{
+			runErrs: map[string]error{"systemd-run": fmt.Errorf("systemd-run: command not found")},
+		}
+		agent := &Agent{
+			cmdRunner: mock,
+		}
+		err := agent.HandleUpdateAgentSync("https://runic.example.com")
+		if err != nil {
+			t.Fatalf("expected nil error, got: %v", err)
+		}
+		if len(mock.calls) != 2 {
+			t.Fatalf("expected 2 Run calls, got %d", len(mock.calls))
+		}
+		if mock.calls[0].name != "systemd-run" {
+			t.Errorf("expected first command 'systemd-run', got '%s'", mock.calls[0].name)
+		}
+		if mock.calls[1].name != "bash" {
+			t.Errorf("expected second command 'bash', got '%s'", mock.calls[1].name)
+		}
+		if len(mock.detachedCalls) != 0 {
+			t.Errorf("expected 0 StartDetached calls, got %d", len(mock.detachedCalls))
+		}
+	})
+
+	t.Run("rejects invalid URL", func(t *testing.T) {
+		mock := &mockCommandRunner{}
+		agent := &Agent{
+			cmdRunner: mock,
+		}
+		err := agent.HandleUpdateAgentSync("ftp://malicious.example.com")
+		if err == nil {
+			t.Fatal("expected error for invalid URL scheme, got nil")
+		}
+		if len(mock.calls) != 0 || len(mock.detachedCalls) != 0 {
+			t.Error("expected no command to be run for invalid URL scheme")
 		}
 	})
 }

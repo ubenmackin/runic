@@ -152,7 +152,9 @@ func main() {
 			log.Fatalf("update: control plane URL not configured. Set it via -url flag, RUNIC_CONTROL_PLANE_URL env, or config file")
 		}
 		a := agent.New(*configPath, updateURL)
-		a.HandleUpdateAgent(updateURL)
+		if err := a.HandleUpdateAgentSync(updateURL); err != nil {
+			log.Fatalf("update failed: %v", err)
+		}
 		return
 	}
 
