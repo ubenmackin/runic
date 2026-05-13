@@ -400,27 +400,17 @@ func metricsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 
-		// Use ResponseRecorder to capture status code
 		rw := common.NewResponseRecorder(w)
-
 		next.ServeHTTP(rw, r)
 
-		var endpoint string
-		if vars := mux.Vars(r); len(vars) > 0 {
-			endpoint = r.URL.Path
-			for key := range vars {
-				newLen := len(endpoint) - len(key) - 3
-				if newLen > 0 {
-					endpoint = endpoint[:newLen]
-				}
-				break
+		endpoint := r.URL.Path
+		if route := mux.CurrentRoute(r); route != nil {
+			if tmpl, err := route.GetPathTemplate(); err == nil {
+				endpoint = tmpl
 			}
-		} else {
-			endpoint = r.URL.Path
 		}
 
 		duration := time.Since(start)
-
 		metrics.RecordRequest(endpoint, r.Method, rw.StatusCode(), duration)
 
 		if rw.StatusCode() >= 500 {

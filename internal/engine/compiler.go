@@ -1404,7 +1404,7 @@ func (c *Compiler) GetAffectedPeersByPolicy(ctx context.Context, policyID int) (
 		if err != nil {
 			return nil, fmt.Errorf("query source group members for policy %d: %w", policyID, err)
 		}
-		if rows != nil {
+		func() {
 			defer func() {
 				if cErr := rows.Close(); cErr != nil {
 					log.Warn("close err", "err", cErr)
@@ -1418,7 +1418,7 @@ func (c *Compiler) GetAffectedPeersByPolicy(ctx context.Context, policyID int) (
 					log.Warn("Failed to scan peer from group", "error", err)
 				}
 			}
-		}
+		}()
 	}
 
 	// Process target - handle peer, group, and special types
@@ -1436,7 +1436,7 @@ func (c *Compiler) GetAffectedPeersByPolicy(ctx context.Context, policyID int) (
 		if err != nil {
 			return nil, fmt.Errorf("query target group members for policy %d: %w", policyID, err)
 		}
-		if rows != nil {
+		func() {
 			defer func() {
 				if cErr := rows.Close(); cErr != nil {
 					log.Warn("close err", "err", cErr)
@@ -1450,7 +1450,7 @@ func (c *Compiler) GetAffectedPeersByPolicy(ctx context.Context, policyID int) (
 					peers[p] = true
 				}
 			}
-		}
+		}()
 	}
 
 	var peerList []int

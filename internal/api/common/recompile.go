@@ -108,40 +108,26 @@ func (w *ChangeWorker) Stop() {
 	})
 }
 
-func (w *ChangeWorker) processPeerChange(work *changeWork) {
-	select {
-	case <-work.ctx.Done():
-		runiclog.Warn("DEBUG: context canceled before processing", "ctx_err", work.ctx.Err())
-		return
-	default:
+// notifyPeers batch-queries hostnames for the given peer IDs and fans out SSE
+// notifications to both agent and frontend subscribers.
+func (w *ChangeWorker) notifyPeers(ctx context.Context, sseHub *events.SSEHub, peerIDs []int) {
+	placeholders := make([]string, len(peerIDs))
+	args := make([]any, len(peerIDs))
+	for i, id := range peerIDs {
+		placeholders[i] = "?"
+		args[i] = id
 	}
+	query := fmt.Sprintf("SELECT id, hostname FROM peers WHERE id IN (%s)", strings.Join(placeholders, ","))
 
-	runiclog.Info("DEBUG: processPeerChange starting", "peer_ids", work.peerIDs, "change_type", work.changeType, "change_action", work.changeAction)
-
-	for _, peerID := range work.peerIDs {
-		if err := queueChangeForPeer(work.ctx, w.db, peerID, work.changeType, work.changeAction, work.changeID, work.summary); err != nil {
-			runiclog.Error("failed to queue change", "peer_id", peerID, "error", err)
-		} else {
-			runiclog.Info("DEBUG: successfully queued change", "peer_id", peerID)
-		}
-	}
-
-	if work.sseHub != nil && len(work.peerIDs) > 0 {
-		placeholders := make([]string, len(work.peerIDs))
-		args := make([]any, len(work.peerIDs))
-		for i, id := range work.peerIDs {
-			placeholders[i] = "?"
-			args[i] = id
-		}
-		query := fmt.Sprintf("SELECT id, hostname FROM peers WHERE id IN (%s)", strings.Join(placeholders, ","))
-		rows, err := w.db.QueryContext(work.ctx, query, args...)
-		if err == nil {
+	hostnameMap := make(map[int]string)
+	rows, err := w.db.QueryContext(ctx, query, args...)
+	if err == nil {
+		func() {
 			defer func() {
 				if err := rows.Close(); err != nil {
 					runiclog.Warn("Failed to close rows", "error", err)
 				}
 			}()
-			hostnameMap := make(map[int]string)
 			for rows.Next() {
 				var id int
 				var hostname string
@@ -149,18 +135,33 @@ func (w *ChangeWorker) processPeerChange(work *changeWork) {
 					hostnameMap[id] = hostname
 				}
 			}
-			for _, peerID := range work.peerIDs {
-				if hostname, ok := hostnameMap[peerID]; ok {
-					work.sseHub.NotifyPendingChangeAdded("host-"+hostname, peerID)
-				}
-				work.sseHub.NotifyFrontendPendingChangeAdded(peerID)
-			}
-		} else {
-			// Fallback: just notify frontend clients
-			for _, peerID := range work.peerIDs {
-				work.sseHub.NotifyFrontendPendingChangeAdded(peerID)
-			}
+		}()
+	}
+
+	for _, peerID := range peerIDs {
+		if hostname, ok := hostnameMap[peerID]; ok {
+			sseHub.NotifyPendingChangeAdded("host-"+hostname, peerID)
 		}
+		sseHub.NotifyFrontendPendingChangeAdded(peerID)
+	}
+}
+
+func (w *ChangeWorker) processPeerChange(work *changeWork) {
+	select {
+	case <-work.ctx.Done():
+		runiclog.Warn("context canceled before processing peer change", "ctx_err", work.ctx.Err())
+		return
+	default:
+	}
+
+	for _, peerID := range work.peerIDs {
+		if err := queueChangeForPeer(work.ctx, w.db, peerID, work.changeType, work.changeAction, work.changeID, work.summary); err != nil {
+			runiclog.Error("failed to queue change", "peer_id", peerID, "error", err)
+		}
+	}
+
+	if work.sseHub != nil && len(work.peerIDs) > 0 {
+		w.notifyPeers(work.ctx, work.sseHub, work.peerIDs)
 	}
 }
 
@@ -221,42 +222,7 @@ func (w *ChangeWorker) processGroupChange(work *changeWork) {
 		for peerID := range peerSet {
 			peerIDs = append(peerIDs, peerID)
 		}
-
-		// Batch query for hostnames
-		placeholders := make([]string, len(peerIDs))
-		args := make([]any, len(peerIDs))
-		for i, id := range peerIDs {
-			placeholders[i] = "?"
-			args[i] = id
-		}
-		query := fmt.Sprintf("SELECT id, hostname FROM peers WHERE id IN (%s)", strings.Join(placeholders, ","))
-		rows, err := w.db.QueryContext(work.ctx, query, args...)
-		if err == nil {
-			defer func() {
-				if err := rows.Close(); err != nil {
-					runiclog.Warn("Failed to close rows", "error", err)
-				}
-			}()
-			hostnameMap := make(map[int]string)
-			for rows.Next() {
-				var id int
-				var hostname string
-				if err := rows.Scan(&id, &hostname); err == nil && hostname != "" {
-					hostnameMap[id] = hostname
-				}
-			}
-			for _, peerID := range peerIDs {
-				if hostname, ok := hostnameMap[peerID]; ok {
-					work.sseHub.NotifyPendingChangeAdded("host-"+hostname, peerID)
-				}
-				work.sseHub.NotifyFrontendPendingChangeAdded(peerID)
-			}
-		} else {
-			// Fallback: just notify frontend clients
-			for _, peerID := range peerIDs {
-				work.sseHub.NotifyFrontendPendingChangeAdded(peerID)
-			}
-		}
+		w.notifyPeers(work.ctx, work.sseHub, peerIDs)
 	}
 }
 

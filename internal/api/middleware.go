@@ -125,12 +125,15 @@ func GetCSPNonce(ctx context.Context) (string, bool) {
 	return "", false
 }
 
-func setSecurityHeaders(w http.ResponseWriter) {
+func setSecurityHeaders(w http.ResponseWriter, includeHSTS bool) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("X-Frame-Options", "DENY")
 	w.Header().Set("X-XSS-Protection", "0")
 	w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 	w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+	if includeHSTS {
+		w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+	}
 }
 
 // CSP returns a middleware that sets Content-Security-Policy headers with a per-request nonce.
@@ -149,7 +152,7 @@ func CSP() mux.MiddlewareFunc {
 			ctx := r.Context()
 			ctx = context.WithValue(ctx, CSPNonceKey, nonce)
 
-			setSecurityHeaders(w)
+			setSecurityHeaders(w, false)
 
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
@@ -168,7 +171,7 @@ func CSPForAPI() mux.MiddlewareFunc {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set(CSPHeader, apiCSP)
-			setSecurityHeaders(w)
+			setSecurityHeaders(w, false)
 			next.ServeHTTP(w, r)
 		})
 	}
@@ -178,10 +181,7 @@ func CSPForAPI() mux.MiddlewareFunc {
 // This middleware is applied as the outermost layer to ensure all responses include security headers.
 func SecurityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("X-Frame-Options", "DENY")
-		w.Header().Set("X-XSS-Protection", "1; mode=block")
-		w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+		setSecurityHeaders(w, true)
 		w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
 		next.ServeHTTP(w, r)
 	})

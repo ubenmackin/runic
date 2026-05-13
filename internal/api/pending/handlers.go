@@ -2,11 +2,13 @@
 package pending
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -152,21 +154,18 @@ type ApplyEntityRequest struct {
 func (h *Handler) RollbackPendingChanges(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		common.RespondError(w, http.StatusBadRequest, "failed to read request body")
+		return
+	}
+
 	var req RollbackRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		// Legacy bulk rollback (no body or invalid JSON)
-		if err := h.PendingStore.RollbackSnapshots(ctx); err != nil {
-			log.ErrorContext(ctx, "failed to rollback snapshots", "error", err)
-			common.InternalError(w)
+	if len(bytes.TrimSpace(body)) > 0 {
+		if err := json.Unmarshal(body, &req); err != nil {
+			common.RespondError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}
-
-		if err := h.PendingStore.DeleteAllPendingBundlePreviews(ctx); err != nil {
-			log.WarnContext(ctx, "Failed to delete old previews", "error", err)
-		}
-
-		common.RespondJSON(w, http.StatusOK, map[string]string{"status": "rolled_back"})
-		return
 	}
 
 	if req.EntityType != "" && req.EntityID != 0 {
