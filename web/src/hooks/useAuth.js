@@ -8,10 +8,12 @@ import { useAuthStore } from '../store'
 
 export function useAuth() {
   const role = useAuthStore(s => s.role)
+  const isAdmin = role === 'admin'
+  const isEditor = role === 'admin' || role === 'editor'
   return {
     role,
-    isAdmin: role === 'admin',
-    isEditor: role === 'admin' || role === 'editor',
-    canEdit: role === 'admin' || role === 'editor',
+    isAdmin,
+    isEditor,
+    canEdit: isEditor,
   }
 }

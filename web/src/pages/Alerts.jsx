@@ -456,11 +456,13 @@ export default function Alerts() {
         }
       />
 
-<SearchFilterPanel
-			storageKey="alerts-filters-expanded"
-			showSearch={false}
-			hasActiveFilters={hasActiveFilters}
-			filterContent={
+        <SearchFilterPanel
+          storageKey="alerts-filters-expanded"
+          showSearch={false}
+          hasActiveFilters={hasActiveFilters}
+          rowsPerPage={rowsPerPage}
+          onRowsPerPageChange={handleRowsPerPageChange}
+          filterContent={
 			<div className="flex items-center gap-4">
         <div className="space-y-1 min-w-[180px]">
           <label className="text-xs font-medium text-gray-500 dark:text-amber-muted">Alert Type</label>
@@ -519,34 +521,19 @@ export default function Alerts() {
         </div>
       </div>
     }
-rightContent={
-      <div className="flex items-center gap-4">
-      <div className="space-y-1 min-w-[80px]">
-        <label className="text-xs font-medium text-gray-500 dark:text-amber-muted">Rows</label>
-        <select
-          value={rowsPerPage}
-          onChange={e => handleRowsPerPageChange(Number(e.target.value))}
-          className="w-full px-2 py-2 border border-gray-300 dark:border-gray-border bg-white dark:bg-charcoal-dark text-gray-900 dark:text-light-neutral text-sm focus:ring-2 focus:ring-purple-active focus:border-purple-active"
-        >
-          <option value={10}>10</option>
-          <option value={25}>25</option>
-          <option value={50}>50</option>
-          <option value={100}>100</option>
-          <option value={-1}>All</option>
-        </select>
-      </div>
-
-      {hasActiveFilters && (
-        <button
-          onClick={handleClearFilters}
-          className="flex items-center gap-1 px-3 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20"
-        >
-          <X className="w-4 h-4" />
-          Clear
-        </button>
-      )}
-    </div>
-  }
+        rightContent={
+          hasActiveFilters ? (
+            <div className="flex items-center gap-4">
+              <button
+                onClick={handleClearFilters}
+                className="flex items-center gap-1 px-3 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20"
+              >
+                <X className="w-4 h-4" />
+                Clear
+              </button>
+            </div>
+          ) : undefined
+        }
       />
 
       {isLoading && <TableSkeleton rows={5} columns={7} />}

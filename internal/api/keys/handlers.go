@@ -31,24 +31,28 @@ var keyTypeToDBKey = map[string]string{
 }
 
 func (h *Handler) ListKeys(w http.ResponseWriter, r *http.Request) {
+	dbKeys := make([]string, 0, len(keyTypes))
+	for _, kt := range keyTypes {
+		dbKeys = append(dbKeys, keyTypeToDBKey[kt])
+	}
+
+	keyStatuses, err := h.Keys.ListKeyStatuses(r.Context(), dbKeys)
+	if err != nil {
+		runiclog.Error("Failed to list key statuses", "error", err)
+		common.RespondError(w, http.StatusBadGateway, "database unavailable")
+		return
+	}
+
 	result := make([]map[string]interface{}, 0, len(keyTypes))
 	for _, kt := range keyTypes {
 		dbKey := keyTypeToDBKey[kt]
-		exists, err := h.Keys.KeyExists(r.Context(), dbKey)
-		if err != nil {
-			runiclog.Error("Failed to check key existence", "key", dbKey, "error", err)
-			exists = false
-		}
 		result = append(result, map[string]interface{}{
 			"type":   kt,
-			"exists": exists,
+			"exists": keyStatuses[dbKey],
 		})
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(result); err != nil {
-		runiclog.Error("Failed to encode keys result", "error", err)
-	}
+	common.RespondJSON(w, http.StatusOK, result)
 }
 
 func (h *Handler) CreateKey(w http.ResponseWriter, r *http.Request) {

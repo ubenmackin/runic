@@ -70,10 +70,9 @@ const CSPNonceKey contextKey = "csp-nonce"
 func generateNonce() string {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
-		// Fallback to timestamp-based value if crypto/rand fails
-		// This should be extremely rare but we log it for security monitoring
-		log.Warn("crypto/rand failed in generateNonce, using timestamp fallback", "error", err)
-		return hex.EncodeToString([]byte(time.Now().Format("20060102150405")))
+		// crypto/rand failing is unrecoverable for security — panic is safer than weak nonce
+		log.Error("crypto/rand failed in generateNonce", "error", err)
+		panic("crypto/rand unavailable — cannot generate secure CSP nonce")
 	}
 	return base64.URLEncoding.EncodeToString(b)
 }
@@ -103,7 +102,7 @@ func RequestID() mux.MiddlewareFunc {
 			requestID := r.Header.Get(RequestIDHeader)
 
 			if requestID == "" {
-				requestID = generateUUID()
+				requestID = generateRequestID()
 			}
 
 			w.Header().Set(RequestIDHeader, requestID)
@@ -187,26 +186,11 @@ func SecurityHeaders(next http.Handler) http.Handler {
 	})
 }
 
-func generateUUID() string {
+func generateRequestID() string {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
-		// Fallback to timestamp-based fallback if crypto/rand fails
-		// This should be extremely rare but we log it for security monitoring
-		log.Warn("crypto/rand failed in generateUUID, using fallback ID", "error", err)
-		return "req-" + generateFallbackID()
-	}
-	return hex.EncodeToString(b)
-}
-
-// This is only used if crypto/rand fails.
-func generateFallbackID() string {
-	b := make([]byte, 8)
-	if _, err := rand.Read(b); err != nil {
-		// Last resort fallback: use time-based values
-		// This is deterministic but better than constant patterns
-		for i := range b {
-			b[i] = byte((i*7 + 13) ^ i)
-		}
+		log.Error("crypto/rand failed in generateRequestID", "error", err)
+		panic("crypto/rand unavailable — cannot generate secure request ID")
 	}
 	return hex.EncodeToString(b)
 }

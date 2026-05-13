@@ -1,8 +1,19 @@
 package common
 
-import "os/exec"
+import (
+	"os/exec"
+	"sync"
+)
+
+var (
+	ipsetDetected bool
+	ipsetOnce     sync.Once
+)
 
 func DetectIPSet() bool {
-	_, err := exec.LookPath("ipset")
-	return err == nil
+	ipsetOnce.Do(func() {
+		_, err := exec.LookPath("ipset")
+		ipsetDetected = err == nil
+	})
+	return ipsetDetected
 }

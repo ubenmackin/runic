@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 
 	"runic/internal/db"
 )
@@ -46,6 +47,39 @@ func (s *SettingsStore) GetSystemConfigInt(ctx context.Context, key string, defa
 		return defaultVal, fmt.Errorf("get system config int %q: %w", key, err)
 	}
 	return value, nil
+}
+
+// GetSystemConfigs returns values for multiple keys in a single query.
+// Returns a map of key → value for existing keys; missing keys are omitted from the map.
+func (s *SettingsStore) GetSystemConfigs(ctx context.Context, keys []string) (map[string]string, error) {
+	if len(keys) == 0 {
+		return map[string]string{}, nil
+	}
+	placeholders := make([]string, len(keys))
+	args := make([]interface{}, len(keys))
+	for i, k := range keys {
+		placeholders[i] = "?"
+		args[i] = k
+	}
+	query := "SELECT key, value FROM system_config WHERE key IN (" + strings.Join(placeholders, ",") + ")"
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("get system configs: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	result := make(map[string]string, len(keys))
+	for rows.Next() {
+		var key, value string
+		if err := rows.Scan(&key, &value); err != nil {
+			return nil, fmt.Errorf("scan system config: %w", err)
+		}
+		result[key] = value
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows error: %w", err)
+	}
+	return result, nil
 }
 
 func (s *SettingsStore) SetSystemConfig(ctx context.Context, key, value string) error {

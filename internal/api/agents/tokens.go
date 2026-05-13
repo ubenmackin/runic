@@ -82,8 +82,8 @@ func (h *Handler) RevokeRegistrationToken(w http.ResponseWriter, r *http.Request
 // ConsumeRegistrationToken consumes a registration token. Returns (true, nil) if the token was successfully consumed,
 // (false, nil) if the token was already used/revoked/not found,
 // (false, err) on database error.
-func (h *Handler) ConsumeRegistrationToken(token, hostname string) (bool, error) {
-	return h.DashboardStore.ConsumeRegistrationToken(context.Background(), token, hostname)
+func (h *Handler) ConsumeRegistrationToken(ctx context.Context, token, hostname string) (bool, error) {
+	return h.DashboardStore.ConsumeRegistrationToken(ctx, token, hostname)
 }
 
 func maskToken(token string) string {

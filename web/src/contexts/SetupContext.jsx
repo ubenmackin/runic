@@ -9,18 +9,26 @@ export function SetupProvider({ children }) {
   const [error, setError] = useState(null)
 
   useEffect(() => {
+    let cancelled = false
+
     api.get('/setup')
       .then(data => {
-        setNeedsSetup(data.needs_setup)
+        if (!cancelled) setNeedsSetup(data.needs_setup)
       })
       .catch(err => {
-        setError(err)
-        // Default to false on error to prevent infinite loops
-        setNeedsSetup(false)
+        if (!cancelled) {
+          setError(err)
+          // Default to false on error to prevent infinite loops
+          setNeedsSetup(false)
+        }
       })
       .finally(() => {
-        setLoading(false)
+        if (!cancelled) setLoading(false)
       })
+
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   const value = {

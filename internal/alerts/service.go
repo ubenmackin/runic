@@ -22,6 +22,7 @@ type AlertProcessor struct {
 	smtp       *SMTPSender
 	logger     *slog.Logger
 	stopChan   chan struct{}
+	stopOnce   sync.Once
 	wg         sync.WaitGroup
 	alertChan  chan alertTask
 }
@@ -101,7 +102,9 @@ func (p *AlertProcessor) Run() {
 }
 
 func (p *AlertProcessor) Stop() {
-	close(p.stopChan)
+	p.stopOnce.Do(func() {
+		close(p.stopChan)
+	})
 	p.wg.Wait()
 	p.logger.Info("processor stopped")
 }
@@ -121,7 +124,7 @@ func (p *AlertProcessor) getAdminEmail(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("user store not configured")
 	}
 
-	users, err := p.userStore.ListUsers(ctx)
+	users, _, err := p.userStore.ListUsers(ctx, 1, 99999)
 	if err != nil {
 		return "", fmt.Errorf("failed to list users: %w", err)
 	}
@@ -429,7 +432,7 @@ func (s *Service) loadSMTPConfig(ctx context.Context) (*SMTPConfig, error) {
 		Host:        smtpConfigView.Host,
 		Port:        smtpConfigView.Port,
 		Username:    smtpConfigView.Username,
-		Password:    "", // Password is stored encrypted; SMTPSender handles decryption
+		Password:    smtpConfigView.Password, // encrypted; SMTPSender handles decryption
 		UseTLS:      smtpConfigView.UseTLS,
 		FromAddress: smtpConfigView.FromAddress,
 		Enabled:     smtpConfigView.Enabled,

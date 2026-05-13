@@ -11,16 +11,16 @@
 * @returns {string} Summary string like "SMTP: configured | Instance: set" or "SMTP: not configured"
 */
 export function getSMTPSummary(smtpConfig, instanceSettings) {
-const smtpConfigured = smtpConfig?.host && smtpConfig.host.trim() !== ''
-const smtpStatus = smtpConfigured ? 'SMTP: configured' : 'SMTP: not configured'
+  const smtpConfigured = smtpConfig?.host && smtpConfig.host.trim() !== ''
+  const smtpStatus = smtpConfigured ? 'SMTP: configured' : 'SMTP: not configured'
 
-const instanceSet = instanceSettings?.url && instanceSettings.url.trim() !== ''
+  const instanceSet = instanceSettings?.url && instanceSettings.url.trim() !== ''
 
-if (instanceSet) {
-return `${smtpStatus} | Instance: set`
-}
+  if (instanceSet) {
+    return `${smtpStatus} | Instance: set`
+  }
 
-return smtpStatus
+  return smtpStatus
 }
 
 /**

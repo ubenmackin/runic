@@ -1,4 +1,10 @@
 // Package models provides database models.
+//
+// Persistence strategy documentation:
+//   - Models in alert.go use GORM for persistence (gorm:"..." tags, TableName() methods).
+//   - Models in models.go, imports.go, logs.go, agent.go, dashboard.go use manual positional
+//     SQL scanning via the store layer (no gorm tags, structs scanned in field order).
+//   - nullable fields should prefer *T pointer semantics over sql.NullX types for clean JSON output.
 package models
 
 import (
@@ -77,16 +83,18 @@ type PolicyRow struct {
 	UpdatedAt       time.Time
 }
 
+// RuleBundleRow represents a stored rule bundle.
+// Model uses manual positional SQL scanning (see peer_store.go:GetLatestBundle, db/peers.go:SaveBundle).
 type RuleBundleRow struct {
-	ID             int
-	PeerID         int
-	Version        string
-	VersionNumber  int
-	RulesContent   string
-	HMAC           string
-	CreatedAt      time.Time
-	AppliedAt      sql.NullTime
-	FirstAppliedAt sql.NullTime `json:"first_applied_at" db:"first_applied_at"`
+	ID             int          `json:"id"`
+	PeerID         int          `json:"peer_id"`
+	Version        string       `json:"version"`
+	VersionNumber  int          `json:"version_number"`
+	RulesContent   string       `json:"rules_content"`
+	HMAC           string       `json:"hmac"`
+	CreatedAt      time.Time    `json:"created_at"`
+	AppliedAt      sql.NullTime `json:"applied_at"`
+	FirstAppliedAt sql.NullTime `json:"first_applied_at"`
 }
 
 // UserRow intentionally omits the password_hash field from JSON serialization.

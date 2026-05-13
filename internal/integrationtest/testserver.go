@@ -128,10 +128,16 @@ func NewTestAPIServer(t *testing.T) (*httptest.Server, func()) {
 	router := mux.NewRouter()
 	testAPI.RegisterRoutes(router, "")
 
+	// Start background lifecycle goroutines
+	ctx, cancel := context.WithCancel(context.Background())
+	testAPI.Start(ctx)
+
 	server := httptest.NewServer(router)
 
 	// Cleanup function - NOTE: caller should call server.Close() FIRST
 	cleanup := func() {
+		testAPI.Stop()
+		cancel()
 		if cErr := database.Close(); cErr != nil {
 			t.Log(cErr)
 		}

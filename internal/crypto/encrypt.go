@@ -80,43 +80,17 @@ func (e *Encryptor) GetSalt() []byte {
 }
 
 // Encrypt encrypts plaintext using AES-256-GCM. The ciphertext format is: base64(salt || nonce || ciphertext)
-// This function is thread-safe.
+// This function is thread-safe. A fresh random salt is generated for each encryption call.
 func (e *Encryptor) Encrypt(plaintext string) (string, error) {
 	if plaintext == "" {
 		return "", ErrEmptyPlaintext
 	}
 
 	e.mu.RLock()
-	key := make([]byte, len(e.key))
-	copy(key, e.key)
-	salt := make([]byte, len(e.salt))
-	copy(salt, e.salt)
+	passphrase := e.passphrase
 	e.mu.RUnlock()
 
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return "", err
-	}
-
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return "", err
-	}
-
-	nonce := make([]byte, nonceLength)
-	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-		return "", err
-	}
-
-	ciphertext := gcm.Seal(nil, nonce, []byte(plaintext), nil)
-
-	// Combine salt + nonce + ciphertext for storage
-	result := make([]byte, 0, saltLength+nonceLength+len(ciphertext))
-	result = append(result, salt...)
-	result = append(result, nonce...)
-	result = append(result, ciphertext...)
-
-	return base64.StdEncoding.EncodeToString(result), nil
+	return encryptWithPassphrase(plaintext, passphrase)
 }
 
 // Decrypt decrypts ciphertext using AES-256-GCM. The ciphertext must be in the format: base64(salt || nonce || ciphertext)
@@ -126,45 +100,11 @@ func (e *Encryptor) Decrypt(ciphertext string) (string, error) {
 		return "", ErrEmptyCiphertext
 	}
 
-	data, err := base64.StdEncoding.DecodeString(ciphertext)
-	if err != nil {
-		return "", err
-	}
-
-	// Minimum length: salt (16) + nonce (12) + GCM tag (16) = 44 bytes
-	gcmTagSize := 16
-	minLength := saltLength + nonceLength + gcmTagSize
-	if len(data) < minLength {
-		return "", ErrInvalidCiphertext
-	}
-
-	storedSalt := data[:saltLength]
-	nonce := data[saltLength : saltLength+nonceLength]
-	actualCiphertext := data[saltLength+nonceLength:]
-
 	e.mu.RLock()
 	passphrase := e.passphrase
 	e.mu.RUnlock()
 
-	// Derive the key using the stored salt
-	key := pbkdf2.Key([]byte(passphrase), storedSalt, pbkdf2Iterations, keyLength, sha256.New)
-
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return "", err
-	}
-
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return "", err
-	}
-
-	plaintext, err := gcm.Open(nil, nonce, actualCiphertext, nil)
-	if err != nil {
-		return "", ErrDecryptionFailed
-	}
-
-	return string(plaintext), nil
+	return decryptWithPassphrase(ciphertext, passphrase)
 }
 
 // DeriveKey derives an AES-256 key from a passphrase and salt using PBKDF2. This is a standalone function for when you need to derive a key without
@@ -181,9 +121,9 @@ func GenerateSalt() ([]byte, error) {
 	return salt, nil
 }
 
-// Encrypt encrypts plaintext using AES-256-GCM with PBKDF2 key derivation. This is a standalone function for one-off encryption operations.
-// Returns base64-encoded ciphertext in format: base64(salt || nonce || ciphertext)
-func Encrypt(plaintext string, passphrase string) (string, error) {
+// encryptWithPassphrase is the shared internal helper for AES-256-GCM encryption with PBKDF2 key derivation.
+// Both Encryptor.Encrypt() and Encrypt() delegate to this function.
+func encryptWithPassphrase(plaintext, passphrase string) (string, error) {
 	if passphrase == "" {
 		return "", ErrEmptyPassphrase
 	}
@@ -224,9 +164,9 @@ func Encrypt(plaintext string, passphrase string) (string, error) {
 	return base64.StdEncoding.EncodeToString(result), nil
 }
 
-// Decrypt decrypts ciphertext using AES-256-GCM with PBKDF2 key derivation. This is a standalone function for one-off decryption operations.
-// Expects ciphertext in format: base64(salt || nonce || ciphertext)
-func Decrypt(ciphertext string, passphrase string) (string, error) {
+// decryptWithPassphrase is the shared internal helper for AES-256-GCM decryption with PBKDF2 key derivation.
+// Both Encryptor.Decrypt() and Decrypt() delegate to this function.
+func decryptWithPassphrase(ciphertext, passphrase string) (string, error) {
 	if passphrase == "" {
 		return "", ErrEmptyPassphrase
 	}
@@ -256,15 +196,27 @@ func Decrypt(ciphertext string, passphrase string) (string, error) {
 		return "", err
 	}
 
-	gcmCipher, err := cipher.NewGCM(block)
+	gcm, err := cipher.NewGCM(block)
 	if err != nil {
 		return "", err
 	}
 
-	plaintext, err := gcmCipher.Open(nil, nonce, actualCiphertext, nil)
+	plaintext, err := gcm.Open(nil, nonce, actualCiphertext, nil)
 	if err != nil {
 		return "", ErrDecryptionFailed
 	}
 
 	return string(plaintext), nil
+}
+
+// Encrypt encrypts plaintext using AES-256-GCM with PBKDF2 key derivation. This is a standalone function for one-off encryption operations.
+// Returns base64-encoded ciphertext in format: base64(salt || nonce || ciphertext)
+func Encrypt(plaintext string, passphrase string) (string, error) {
+	return encryptWithPassphrase(plaintext, passphrase)
+}
+
+// Decrypt decrypts ciphertext using AES-256-GCM with PBKDF2 key derivation. This is a standalone function for one-off decryption operations.
+// Expects ciphertext in format: base64(salt || nonce || ciphertext)
+func Decrypt(ciphertext string, passphrase string) (string, error) {
+	return decryptWithPassphrase(ciphertext, passphrase)
 }

@@ -23,10 +23,11 @@ type SpikeDetector struct {
 
 	lookupHostname PeerHostnameLookup
 
-	ctx    context.Context
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
-	stopCh chan struct{}
+	ctx      context.Context
+	cancel   context.CancelFunc
+	wg       sync.WaitGroup
+	stopCh   chan struct{}
+	stopOnce sync.Once
 
 	threshold       int
 	windowMinutes   int
@@ -79,12 +80,21 @@ func (d *SpikeDetector) Start() {
 }
 
 func (d *SpikeDetector) Stop() {
-	close(d.stopCh)
+	d.stopOnce.Do(func() {
+		close(d.stopCh)
+	})
 	d.wg.Wait()
 	d.logger.Info("spike detector stopped")
 }
 
 func (d *SpikeDetector) run() {
+	select {
+	case <-d.ctx.Done():
+		return
+	case <-d.stopCh:
+		return
+	default:
+	}
 	d.loadThreshold()
 
 	ticker := time.NewTicker(1 * time.Minute)

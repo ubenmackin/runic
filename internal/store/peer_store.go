@@ -577,6 +577,48 @@ func (s *PeerStore) ConfirmRotation(ctx context.Context, hostname string) error 
 	return nil
 }
 
+// GetPeerBundleWithDeployed returns both the pending (latest) and deployed bundle data
+// in a single call, avoiding the double-query pattern (T007-#1).
+// Returns pendingData, deployedData, pendingVersion, pendingVersionNumber, pendingHMAC, deployedVersion, error.
+func (s *PeerStore) GetPeerBundleWithDeployed(ctx context.Context, peerID int) (pendingData, deployedData, version, hmac, deployedVersion string, versionNumber int, err error) {
+	// Get pending/latest bundle
+	err = s.db.QueryRowContext(ctx,
+		"SELECT rules_content, version, version_number, hmac FROM rule_bundles WHERE peer_id = ? ORDER BY created_at DESC LIMIT 1",
+		peerID,
+	).Scan(&pendingData, &version, &versionNumber, &hmac)
+	if err != nil {
+		return "", "", "", "", "", 0, fmt.Errorf("query pending bundle: %w", err)
+	}
+
+	// Get deployed version from peers table
+	var dv sql.NullString
+	err = s.db.QueryRowContext(ctx,
+		"SELECT bundle_version FROM peers WHERE id = ?", peerID,
+	).Scan(&dv)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return "", "", "", "", "", 0, fmt.Errorf("query deployed version: %w", err)
+	}
+	if dv.Valid {
+		deployedVersion = dv.String
+	}
+
+	// Get deployed bundle data if a deployed version exists
+	if deployedVersion != "" {
+		err = s.db.QueryRowContext(ctx,
+			`SELECT rules_content FROM rule_bundles WHERE peer_id = ? AND version = ? ORDER BY created_at DESC LIMIT 1`,
+			peerID, deployedVersion,
+		).Scan(&deployedData)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return "", "", "", "", "", 0, fmt.Errorf("query deployed bundle: %w", err)
+		}
+		if errors.Is(err, sql.ErrNoRows) {
+			deployedData = ""
+		}
+	}
+
+	return pendingData, deployedData, version, hmac, deployedVersion, versionNumber, nil
+}
+
 // GetPeerBundle returns the rule bundle for a peer. If includePending is true,
 // it returns the latest bundle; otherwise it returns the deployed bundle
 // matching the peer's bundle_version.

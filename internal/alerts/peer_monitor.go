@@ -34,10 +34,11 @@ type PeerMonitor struct {
 	service  *Service
 	logger   *slog.Logger
 
-	ctx    context.Context
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
-	stopCh chan struct{}
+	ctx      context.Context
+	cancel   context.CancelFunc
+	wg       sync.WaitGroup
+	stopCh   chan struct{}
+	stopOnce sync.Once
 
 	peerStates       map[int]PeerStatus
 	startTime        time.Time
@@ -83,7 +84,9 @@ func (m *PeerMonitor) Start() {
 }
 
 func (m *PeerMonitor) Stop() {
-	close(m.stopCh)
+	m.stopOnce.Do(func() {
+		close(m.stopCh)
+	})
 	m.wg.Wait()
 	m.logger.Info("peer monitor stopped")
 }

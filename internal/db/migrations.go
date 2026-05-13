@@ -21,8 +21,11 @@ func columnExists(ctx context.Context, database *sql.DB, table, column string) (
 	}
 
 	var exists bool
+	// Note: The table name is validated by allowedTables safelist above.
+	// SQLite supports parameterized values for PRAGMA table_info and the WHERE clause.
 	err := database.QueryRowContext(ctx,
-		fmt.Sprintf("SELECT COUNT(*) > 0 FROM pragma_table_info('%s') WHERE name='%s'", table, column),
+		"SELECT COUNT(*) > 0 FROM pragma_table_info($1) WHERE name = $2",
+		table, column,
 	).Scan(&exists)
 	if err != nil {
 		return false, fmt.Errorf("check column %s.%s: %w", table, column, err)

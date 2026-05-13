@@ -41,7 +41,7 @@ func TestNewManager(t *testing.T) {
 	cfg := helperConfig()
 	configPath := helperConfigPath(t, cfg)
 
-	manager := NewManager(cfg, configPath, &http.Client{}, "http://localhost:8080", "host-test-peer")
+	manager := NewManager(configPath, &http.Client{}, "http://localhost:8080", "host-test-peer")
 
 	if manager == nil {
 		t.Fatal("NewManager() returned nil")
@@ -49,10 +49,6 @@ func TestNewManager(t *testing.T) {
 
 	if manager.state != StateIdle {
 		t.Errorf("NewManager() state = %v, want %v", manager.state, StateIdle)
-	}
-
-	if manager.config != cfg {
-		t.Error("NewManager() did not store config reference")
 	}
 
 	if manager.hostID != "host-test-peer" {
@@ -74,11 +70,14 @@ func TestCheckAndRotate_NoRotationPending(t *testing.T) {
 	cfg.ControlPlaneURL = server.URL
 	configPath := helperConfigPath(t, cfg)
 
-	manager := NewManager(cfg, configPath, server.Client(), server.URL, "host-test-peer")
+	manager := NewManager(configPath, server.Client(), server.URL, "host-test-peer")
 
-	err := manager.CheckAndRotate(context.Background())
+	newKey, err := manager.CheckAndRotate(context.Background(), cfg.HMACKey, cfg.Token)
 	if err != nil {
 		t.Fatalf("CheckAndRotate() error = %v", err)
+	}
+	if newKey != "" {
+		t.Errorf("CheckAndRotate() newKey = %s, want empty", newKey)
 	}
 
 	if manager.GetState() != StateIdle {
@@ -100,11 +99,14 @@ func TestCheckAndRotate_NoRotationPending_NotFound(t *testing.T) {
 	cfg.ControlPlaneURL = server.URL
 	configPath := helperConfigPath(t, cfg)
 
-	manager := NewManager(cfg, configPath, server.Client(), server.URL, "host-test-peer")
+	manager := NewManager(configPath, server.Client(), server.URL, "host-test-peer")
 
-	err := manager.CheckAndRotate(context.Background())
+	newKey, err := manager.CheckAndRotate(context.Background(), cfg.HMACKey, cfg.Token)
 	if err != nil {
 		t.Fatalf("CheckAndRotate() error = %v", err)
+	}
+	if newKey != "" {
+		t.Errorf("CheckAndRotate() newKey = %s, want empty", newKey)
 	}
 
 	if manager.GetState() != StateIdle {
@@ -154,9 +156,9 @@ func TestCheckAndRotate_RotationSuccess(t *testing.T) {
 	cfg.HMACKey = "old-hmac-key-12345678901234567890123456789012"
 	configPath := helperConfigPath(t, cfg)
 
-	manager := NewManager(cfg, configPath, server.Client(), server.URL, "host-test-peer")
+	manager := NewManager(configPath, server.Client(), server.URL, "host-test-peer")
 
-	err := manager.CheckAndRotate(context.Background())
+	newKey, err := manager.CheckAndRotate(context.Background(), cfg.HMACKey, cfg.Token)
 	if err != nil {
 		t.Fatalf("CheckAndRotate() error = %v", err)
 	}
@@ -165,24 +167,13 @@ func TestCheckAndRotate_RotationSuccess(t *testing.T) {
 		t.Errorf("CheckAndRotate() state = %v, want %v", manager.GetState(), StateConfirmed)
 	}
 
-	// Verify config was updated with new key
-	if cfg.HMACKey != "new-hmac-key-abcdef123456789012345678901234" {
-		t.Errorf("config HMACKey = %s, want new-hmac-key-abcdef123456789012345678901234", cfg.HMACKey)
+	if newKey != "new-hmac-key-abcdef123456789012345678901234" {
+		t.Errorf("CheckAndRotate() newKey = %s, want new-hmac-key-abcdef123456789012345678901234", newKey)
 	}
 
-	// Verify config file was updated
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		t.Fatalf("failed to read config file: %v", err)
-	}
-
-	var savedCfg identity.Config
-	if err := json.Unmarshal(data, &savedCfg); err != nil {
-		t.Fatalf("failed to parse config file: %v", err)
-	}
-
-	if savedCfg.HMACKey != "new-hmac-key-abcdef123456789012345678901234" {
-		t.Errorf("saved config HMACKey = %s, want new-hmac-key-abcdef123456789012345678901234", savedCfg.HMACKey)
+	// Verify old key was preserved (Manager no longer mutates config pointer)
+	if cfg.HMACKey != "old-hmac-key-12345678901234567890123456789012" {
+		t.Errorf("config HMACKey was mutated by Manager = %s, want old key preserved", cfg.HMACKey)
 	}
 
 	// Verify last rotation timestamp was set
@@ -216,9 +207,9 @@ func TestCheckAndRotate_TokenExpired(t *testing.T) {
 	cfg.ControlPlaneURL = server.URL
 	configPath := helperConfigPath(t, cfg)
 
-	manager := NewManager(cfg, configPath, server.Client(), server.URL, "host-test-peer")
+	manager := NewManager(configPath, server.Client(), server.URL, "host-test-peer")
 
-	err := manager.CheckAndRotate(context.Background())
+	_, err := manager.CheckAndRotate(context.Background(), cfg.HMACKey, cfg.Token)
 	if err == nil {
 		t.Error("CheckAndRotate() should have failed with expired token")
 	}
@@ -227,7 +218,7 @@ func TestCheckAndRotate_TokenExpired(t *testing.T) {
 		t.Errorf("CheckAndRotate() state = %v, want %v", manager.GetState(), StateFailed)
 	}
 
-	// Verify old key was preserved
+	// Verify old key was preserved (Manager no longer mutates config pointer)
 	if cfg.HMACKey != "old-hmac-key-12345678901234567890123456789012" {
 		t.Errorf("config HMACKey was changed on failure: %s", cfg.HMACKey)
 	}
@@ -261,9 +252,9 @@ func TestCheckAndRotate_KeyTestFails(t *testing.T) {
 	cfg.ControlPlaneURL = server.URL
 	configPath := helperConfigPath(t, cfg)
 
-	manager := NewManager(cfg, configPath, server.Client(), server.URL, "host-test-peer")
+	manager := NewManager(configPath, server.Client(), server.URL, "host-test-peer")
 
-	err := manager.CheckAndRotate(context.Background())
+	_, err := manager.CheckAndRotate(context.Background(), cfg.HMACKey, cfg.Token)
 	if err == nil {
 		t.Error("CheckAndRotate() should have failed when key test fails")
 	}
@@ -272,7 +263,7 @@ func TestCheckAndRotate_KeyTestFails(t *testing.T) {
 		t.Errorf("CheckAndRotate() state = %v, want %v", manager.GetState(), StateFallback)
 	}
 
-	// Verify old key was preserved
+	// Verify old key was preserved (Manager no longer mutates config pointer)
 	if cfg.HMACKey != "old-hmac-key-12345678901234567890123456789012" {
 		t.Errorf("config HMACKey was changed on key test failure: %s", cfg.HMACKey)
 	}
@@ -309,10 +300,10 @@ func TestCheckAndRotate_ConfirmFailsNonFatal(t *testing.T) {
 	cfg.ControlPlaneURL = server.URL
 	configPath := helperConfigPath(t, cfg)
 
-	manager := NewManager(cfg, configPath, server.Client(), server.URL, "host-test-peer")
+	manager := NewManager(configPath, server.Client(), server.URL, "host-test-peer")
 
 	// Confirm-rotation failure should NOT cause an error (non-fatal)
-	err := manager.CheckAndRotate(context.Background())
+	newKey, err := manager.CheckAndRotate(context.Background(), cfg.HMACKey, cfg.Token)
 	if err != nil {
 		t.Fatalf("CheckAndRotate() error = %v (confirm-rotation failure should be non-fatal)", err)
 	}
@@ -321,9 +312,8 @@ func TestCheckAndRotate_ConfirmFailsNonFatal(t *testing.T) {
 		t.Errorf("CheckAndRotate() state = %v, want %v", manager.GetState(), StateConfirmed)
 	}
 
-	// Verify key was still updated locally
-	if cfg.HMACKey != "new-hmac-key-abcdef123456789012345678901234" {
-		t.Errorf("config HMACKey = %s, want new-hmac-key-abcdef123456789012345678901234", cfg.HMACKey)
+	if newKey != "new-hmac-key-abcdef123456789012345678901234" {
+		t.Errorf("CheckAndRotate() newKey = %s, want new-hmac-key-abcdef123456789012345678901234", newKey)
 	}
 }
 
@@ -337,16 +327,19 @@ func TestCheckAndRotate_SkipsInProgress(t *testing.T) {
 	cfg.ControlPlaneURL = server.URL
 	configPath := helperConfigPath(t, cfg)
 
-	manager := NewManager(cfg, configPath, server.Client(), server.URL, "host-test-peer")
+	manager := NewManager(configPath, server.Client(), server.URL, "host-test-peer")
 
 	// Manually set state to rotating
 	manager.mu.Lock()
 	manager.state = StateRotating
 	manager.mu.Unlock()
 
-	err := manager.CheckAndRotate(context.Background())
+	newKey, err := manager.CheckAndRotate(context.Background(), cfg.HMACKey, cfg.Token)
 	if err != nil {
 		t.Fatalf("CheckAndRotate() error = %v", err)
+	}
+	if newKey != "" {
+		t.Errorf("CheckAndRotate() newKey = %s, want empty", newKey)
 	}
 
 	// State should remain rotating (not changed)
@@ -365,16 +358,19 @@ func TestCheckAndRotate_SkipsTesting(t *testing.T) {
 	cfg.ControlPlaneURL = server.URL
 	configPath := helperConfigPath(t, cfg)
 
-	manager := NewManager(cfg, configPath, server.Client(), server.URL, "host-test-peer")
+	manager := NewManager(configPath, server.Client(), server.URL, "host-test-peer")
 
 	// Manually set state to testing
 	manager.mu.Lock()
 	manager.state = StateTesting
 	manager.mu.Unlock()
 
-	err := manager.CheckAndRotate(context.Background())
+	newKey, err := manager.CheckAndRotate(context.Background(), cfg.HMACKey, cfg.Token)
 	if err != nil {
 		t.Fatalf("CheckAndRotate() error = %v", err)
+	}
+	if newKey != "" {
+		t.Errorf("CheckAndRotate() newKey = %s, want empty", newKey)
 	}
 
 	if manager.GetState() != StateTesting {
@@ -407,9 +403,9 @@ func TestCheckAndRotate_EmptyKeyFromServer(t *testing.T) {
 	cfg.ControlPlaneURL = server.URL
 	configPath := helperConfigPath(t, cfg)
 
-	manager := NewManager(cfg, configPath, server.Client(), server.URL, "host-test-peer")
+	manager := NewManager(configPath, server.Client(), server.URL, "host-test-peer")
 
-	err := manager.CheckAndRotate(context.Background())
+	_, err := manager.CheckAndRotate(context.Background(), cfg.HMACKey, cfg.Token)
 	if err == nil {
 		t.Error("CheckAndRotate() should have failed with empty key")
 	}
@@ -435,19 +431,18 @@ func TestCheckAndRotate_UnexpectedStatusCode(t *testing.T) {
 	cfg.ControlPlaneURL = server.URL
 	configPath := helperConfigPath(t, cfg)
 
-	manager := NewManager(cfg, configPath, server.Client(), server.URL, "host-test-peer")
+	manager := NewManager(configPath, server.Client(), server.URL, "host-test-peer")
 
-	err := manager.CheckAndRotate(context.Background())
+	_, err := manager.CheckAndRotate(context.Background(), cfg.HMACKey, cfg.Token)
 	if err == nil {
 		t.Error("CheckAndRotate() should have failed with unexpected status code")
 	}
 }
 
 func TestGetState(t *testing.T) {
-	cfg := helperConfig()
-	configPath := helperConfigPath(t, cfg)
+	configPath := helperConfigPath(t, helperConfig())
 
-	manager := NewManager(cfg, configPath, &http.Client{}, "http://localhost:8080", "host-test-peer")
+	manager := NewManager(configPath, &http.Client{}, "http://localhost:8080", "host-test-peer")
 
 	// Test initial state
 	if manager.GetState() != StateIdle {
@@ -465,10 +460,9 @@ func TestGetState(t *testing.T) {
 }
 
 func TestGetLastRotation(t *testing.T) {
-	cfg := helperConfig()
-	configPath := helperConfigPath(t, cfg)
+	configPath := helperConfigPath(t, helperConfig())
 
-	manager := NewManager(cfg, configPath, &http.Client{}, "http://localhost:8080", "host-test-peer")
+	manager := NewManager(configPath, &http.Client{}, "http://localhost:8080", "host-test-peer")
 
 	// Initially should be zero
 	if !manager.GetLastRotation().IsZero() {
@@ -482,117 +476,6 @@ func TestGetLastRotation(t *testing.T) {
 
 	if manager.GetLastRotation() != expected {
 		t.Errorf("GetLastRotation() = %v, want %v", manager.GetLastRotation(), expected)
-	}
-}
-
-func TestUpdateConfigKey_InvalidPath(t *testing.T) {
-	cfg := helperConfig()
-	configPath := "/nonexistent/path/config.json"
-
-	manager := NewManager(cfg, configPath, &http.Client{}, "http://localhost:8080", "host-test-peer")
-
-	err := manager.updateConfigKey("new-key")
-	if err == nil {
-		t.Error("updateConfigKey() should have failed with invalid path")
-	}
-}
-
-func TestUpdateConfigKey_CorruptConfig(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.json")
-
-	if err := os.WriteFile(path, []byte("not-valid-json"), 0600); err != nil {
-		t.Fatalf("failed to write corrupt config: %v", err)
-	}
-
-	cfg := helperConfig()
-	manager := NewManager(cfg, path, &http.Client{}, "http://localhost:8080", "host-test-peer")
-
-	err := manager.updateConfigKey("new-key")
-	if err == nil {
-		t.Error("updateConfigKey() should have failed with corrupt config")
-	}
-}
-
-func TestUpdateConfigKey_Success(t *testing.T) {
-	cfg := helperConfig()
-	configPath := helperConfigPath(t, cfg)
-
-	manager := NewManager(cfg, configPath, &http.Client{}, "http://localhost:8080", "host-test-peer")
-
-	newKey := "brand-new-hmac-key-abcdef123456789012345678"
-	err := manager.updateConfigKey(newKey)
-	if err != nil {
-		t.Fatalf("updateConfigKey() error = %v", err)
-	}
-
-	// Verify file was updated
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		t.Fatalf("failed to read config file: %v", err)
-	}
-
-	var savedCfg identity.Config
-	if err := json.Unmarshal(data, &savedCfg); err != nil {
-		t.Fatalf("failed to parse config file: %v", err)
-	}
-
-	if savedCfg.HMACKey != newKey {
-		t.Errorf("saved HMACKey = %s, want %s", savedCfg.HMACKey, newKey)
-	}
-
-	// Verify file permissions are 0600
-	info, err := os.Stat(configPath)
-	if err != nil {
-		t.Fatalf("failed to stat config file: %v", err)
-	}
-
-	if info.Mode().Perm() != 0600 {
-		t.Errorf("config file permissions = %o, want 0600", info.Mode().Perm())
-	}
-}
-
-func TestCheckAndRotate_ConfigUpdateFails(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/v1/agent/check-rotation":
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]string{
-				"rotation_token": "valid-token",
-			})
-
-		case "/api/v1/agent/rotate-key":
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]string{
-				"new_hmac_key": "new-hmac-key-abcdef123456789012345678901234",
-			})
-
-		case "/api/v1/agent/test-key":
-			w.WriteHeader(http.StatusOK)
-
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer server.Close()
-
-	cfg := helperConfig()
-	cfg.ControlPlaneURL = server.URL
-	// Use invalid config path to trigger update failure
-	configPath := "/nonexistent/path/config.json"
-
-	manager := NewManager(cfg, configPath, server.Client(), server.URL, "host-test-peer")
-
-	manager.mu.Lock()
-	manager.state = StateTesting
-	manager.newKey = "new-hmac-key-abcdef123456789012345678901234"
-	manager.oldKey = "old-hmac-key-12345678901234567890123456789012"
-	manager.mu.Unlock()
-
-	// Manually call updateConfigKey to test the failure path
-	err := manager.updateConfigKey("new-hmac-key-abcdef123456789012345678901234")
-	if err == nil {
-		t.Error("updateConfigKey() should have failed with invalid path")
 	}
 }
 
@@ -630,9 +513,9 @@ func TestCheckAndRotate_CheckRotationReturnsInvalidJSON(t *testing.T) {
 	cfg.ControlPlaneURL = server.URL
 	configPath := helperConfigPath(t, cfg)
 
-	manager := NewManager(cfg, configPath, server.Client(), server.URL, "host-test-peer")
+	manager := NewManager(configPath, server.Client(), server.URL, "host-test-peer")
 
-	err := manager.CheckAndRotate(context.Background())
+	_, err := manager.CheckAndRotate(context.Background(), cfg.HMACKey, cfg.Token)
 	if err == nil {
 		t.Error("CheckAndRotate() should have failed with invalid JSON response")
 	}
@@ -661,9 +544,9 @@ func TestCheckAndRotate_RotateKeyReturnsInvalidJSON(t *testing.T) {
 	cfg.ControlPlaneURL = server.URL
 	configPath := helperConfigPath(t, cfg)
 
-	manager := NewManager(cfg, configPath, server.Client(), server.URL, "host-test-peer")
+	manager := NewManager(configPath, server.Client(), server.URL, "host-test-peer")
 
-	err := manager.CheckAndRotate(context.Background())
+	_, err := manager.CheckAndRotate(context.Background(), cfg.HMACKey, cfg.Token)
 	if err == nil {
 		t.Error("CheckAndRotate() should have failed with invalid JSON from rotate-key")
 	}

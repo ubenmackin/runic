@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 
+	"runic/internal/common/log"
 	"runic/internal/models"
 )
 
@@ -18,7 +19,9 @@ func RollbackSnapshots(ctx context.Context, database DB) error {
 		return fmt.Errorf("begin tx: %w", err)
 	}
 	defer func() {
-		_ = tx.Rollback()
+		if rErr := tx.Rollback(); rErr != nil && !errors.Is(rErr, sql.ErrTxDone) {
+			log.WarnContext(ctx, "rollback failed", "error", rErr)
+		}
 	}()
 
 	rows, err := tx.QueryContext(ctx, "SELECT id, entity_type, entity_id, action, snapshot_data FROM change_snapshots ORDER BY id DESC")
@@ -140,7 +143,9 @@ func RollbackEntitySnapshot(ctx context.Context, database DB, entityType string,
 		return fmt.Errorf("begin tx: %w", err)
 	}
 	defer func() {
-		_ = tx.Rollback()
+		if rErr := tx.Rollback(); rErr != nil && !errors.Is(rErr, sql.ErrTxDone) {
+			log.WarnContext(ctx, "rollback failed", "error", rErr)
+		}
 	}()
 
 	var snapshotID int
@@ -305,7 +310,9 @@ func CleanupAfterApplyAll(ctx context.Context, database DB) error {
 		return fmt.Errorf("begin tx: %w", err)
 	}
 	defer func() {
-		_ = tx.Rollback()
+		if rErr := tx.Rollback(); rErr != nil && !errors.Is(rErr, sql.ErrTxDone) {
+			log.WarnContext(ctx, "rollback failed", "error", rErr)
+		}
 	}()
 
 	// Hard delete soft deleted entities

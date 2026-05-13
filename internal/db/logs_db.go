@@ -2,8 +2,10 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 
 	"runic/internal/common/log"
 
@@ -62,6 +64,9 @@ func InitLogsDB(path string) (*sql.DB, error) {
 		return nil, fmt.Errorf("failed to open logs database: %w", err)
 	}
 
+	sqlDB.SetMaxOpenConns(1) // SQLite is single-writer
+	sqlDB.SetMaxIdleConns(1)
+
 	if err = sqlDB.Ping(); err != nil {
 		return nil, fmt.Errorf("failed to ping logs database: %w", err)
 	}
@@ -99,9 +104,9 @@ func InitLogsDB(path string) (*sql.DB, error) {
 // Returns:
 //   - int64: Number of rows migrated
 //   - error: Any error that occurred during migration
-func MigrateLogsFromMainDB(mainDB, logsDB *sql.DB) (int64, error) {
+func MigrateLogsFromMainDB(ctx context.Context, mainDB, logsDB *sql.DB) (int64, error) {
 	var tableExists bool
-	err := mainDB.QueryRow(
+	err := mainDB.QueryRowContext(ctx,
 		"SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='firewall_logs'",
 	).Scan(&tableExists)
 	if err != nil {
@@ -114,14 +119,14 @@ func MigrateLogsFromMainDB(mainDB, logsDB *sql.DB) (int64, error) {
 	}
 
 	var rowCount int
-	err = mainDB.QueryRow("SELECT COUNT(*) FROM firewall_logs").Scan(&rowCount)
+	err = mainDB.QueryRowContext(ctx, "SELECT COUNT(*) FROM firewall_logs").Scan(&rowCount)
 	if err != nil {
 		return 0, fmt.Errorf("failed to count firewall_logs rows: %w", err)
 	}
 
 	if rowCount == 0 {
 		log.Info("Migration: firewall_logs table is empty, dropping table from main DB")
-		if _, err := mainDB.Exec("DROP TABLE firewall_logs"); err != nil {
+		if _, err := mainDB.ExecContext(ctx, "DROP TABLE firewall_logs"); err != nil {
 			log.Warn("Failed to drop empty firewall_logs table", "error", err)
 		}
 		return 0, nil
@@ -132,17 +137,24 @@ func MigrateLogsFromMainDB(mainDB, logsDB *sql.DB) (int64, error) {
 	// Attach the logs database to the main database connection for cross-database queries
 	// We need to get the path from the logsDB connection - we'll use a temporary attach
 	// First, get the logs DB path by querying from logsDB
+	var discard interface{}
 	var logsDBPath string
-	err = logsDB.QueryRow("PRAGMA database_list").Scan(nil, nil, &logsDBPath)
+	err = logsDB.QueryRowContext(ctx, "PRAGMA database_list").Scan(&discard, &discard, &logsDBPath)
 	if err != nil {
 		// If we can't get the path, we'll need to use the attach approach differently
 		log.Warn("Could not determine logs DB path, using alternative migration approach", "error", err)
-		return migrateLogsWithoutAttach(mainDB, logsDB)
+		return migrateLogsWithoutAttach(ctx, mainDB, logsDB)
+	}
+
+	// Validate the logs DB path before interpolation to prevent SQL injection
+	// SQLite does not support parameterized ATTACH DATABASE, so we validate the path.
+	if strings.ContainsAny(logsDBPath, "'\\") {
+		return 0, fmt.Errorf("invalid logs db path containing special characters")
 	}
 
 	// Use ATTACH DATABASE to enable cross-database queries
 	// Begin transaction on main DB to ensure atomicity
-	tx, err := mainDB.Begin()
+	tx, err := mainDB.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("failed to begin migration transaction: %w", err)
 	}
@@ -156,51 +168,32 @@ func MigrateLogsFromMainDB(mainDB, logsDB *sql.DB) (int64, error) {
 	}()
 
 	// Attach logs database
-	if _, err := tx.Exec(fmt.Sprintf("ATTACH DATABASE '%s' AS logs_db", logsDBPath)); err != nil {
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf("ATTACH DATABASE '%s' AS logs_db", logsDBPath)); err != nil {
 		return 0, fmt.Errorf("failed to attach logs database: %w", err)
 	}
 	defer func() {
-		if _, err := mainDB.Exec("DETACH DATABASE logs_db"); err != nil {
+		if _, err := mainDB.ExecContext(ctx, "DETACH DATABASE logs_db"); err != nil {
 			log.Warn("Failed to detach logs database", "error", err)
 		}
 	}()
 
 	var hasPeerHostname bool
-	err = tx.QueryRow(
+	err = tx.QueryRowContext(ctx,
 		"SELECT COUNT(*) > 0 FROM pragma_table_info('firewall_logs') WHERE name='peer_hostname'",
 	).Scan(&hasPeerHostname)
 	if err != nil {
 		return 0, fmt.Errorf("failed to check firewall_logs schema: %w", err)
 	}
 
-	// Copy data using INSERT INTO ... SELECT with JOIN to get hostname
-	// The logs DB schema has: id, timestamp, peer_id, peer_hostname, event_type, source_ip, dest_ip, source_port, dest_port, protocol, action, details
-	// The main DB schema (current) has: id, peer_id, peer_hostname, timestamp, direction, src_ip, dst_ip, protocol, src_port, dst_port, action, raw_line
-	//
-	// We need to map old columns to new schema:
-	// - timestamp: timestamp (same)
-	// - peer_id: peer_id (same)
-	// - peer_hostname: peer_hostname (same, or from peers table if missing)
-	// - event_type: direction (rename)
-	// - source_ip: src_ip (rename)
-	// - dest_ip: dst_ip (rename)
-	// - source_port: src_port (rename)
-	// - dest_port: dst_port (rename)
-	// - protocol: protocol (same)
-	// - action: action (same)
-	// - details: raw_line (rename)
-
 	var result sql.Result
 	if hasPeerHostname {
-		// New schema - columns already have peer_hostname
-		result, err = tx.Exec(`
+		result, err = tx.ExecContext(ctx, `
 			INSERT INTO logs_db.firewall_logs (timestamp, peer_id, peer_hostname, event_type, source_ip, dest_ip, source_port, dest_port, protocol, action, details)
 			SELECT timestamp, peer_id, peer_hostname, direction, src_ip, dst_ip, src_port, dst_port, protocol, action, raw_line
 			FROM main.firewall_logs
 		`)
 	} else {
-		// Old schema - need to join with peers table to get hostname
-		result, err = tx.Exec(`
+		result, err = tx.ExecContext(ctx, `
 			INSERT INTO logs_db.firewall_logs (timestamp, peer_id, peer_hostname, event_type, source_ip, dest_ip, source_port, dest_port, protocol, action, details)
 			SELECT fl.timestamp, fl.peer_id, p.hostname, fl.direction, fl.src_ip, fl.dst_ip, fl.src_port, fl.dst_port, fl.protocol, fl.action, fl.raw_line
 			FROM main.firewall_logs fl
@@ -218,7 +211,7 @@ func MigrateLogsFromMainDB(mainDB, logsDB *sql.DB) (int64, error) {
 	}
 
 	// Drop the old table from main DB
-	if _, err := tx.Exec("DROP TABLE main.firewall_logs"); err != nil {
+	if _, err := tx.ExecContext(ctx, "DROP TABLE main.firewall_logs"); err != nil {
 		return 0, fmt.Errorf("failed to drop old firewall_logs table: %w", err)
 	}
 
@@ -232,11 +225,11 @@ func MigrateLogsFromMainDB(mainDB, logsDB *sql.DB) (int64, error) {
 }
 
 // This is a fallback when ATTACH DATABASE cannot be used (e.g., path unavailable).
-func migrateLogsWithoutAttach(mainDB, logsDB *sql.DB) (int64, error) {
+func migrateLogsWithoutAttach(ctx context.Context, mainDB, logsDB *sql.DB) (int64, error) {
 	log.Info("Migration: using row-by-row migration approach")
 
 	// Begin transactions on both databases
-	mainTx, err := mainDB.Begin()
+	mainTx, err := mainDB.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("failed to begin main DB transaction: %w", err)
 	}
@@ -249,7 +242,7 @@ func migrateLogsWithoutAttach(mainDB, logsDB *sql.DB) (int64, error) {
 		}
 	}()
 
-	logsTx, err := logsDB.Begin()
+	logsTx, err := logsDB.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("failed to begin logs DB transaction: %w", err)
 	}
@@ -263,7 +256,7 @@ func migrateLogsWithoutAttach(mainDB, logsDB *sql.DB) (int64, error) {
 	}()
 
 	var hasPeerHostname bool
-	err = mainTx.QueryRow(
+	err = mainTx.QueryRowContext(ctx,
 		"SELECT COUNT(*) > 0 FROM pragma_table_info('firewall_logs') WHERE name='peer_hostname'",
 	).Scan(&hasPeerHostname)
 	if err != nil {
@@ -272,12 +265,12 @@ func migrateLogsWithoutAttach(mainDB, logsDB *sql.DB) (int64, error) {
 
 	var rows *sql.Rows
 	if hasPeerHostname {
-		rows, err = mainTx.Query(`
+		rows, err = mainTx.QueryContext(ctx, `
 			SELECT timestamp, peer_id, peer_hostname, direction, src_ip, dst_ip, src_port, dst_port, protocol, action, raw_line
 			FROM firewall_logs
 		`)
 	} else {
-		rows, err = mainTx.Query(`
+		rows, err = mainTx.QueryContext(ctx, `
 			SELECT fl.timestamp, fl.peer_id, p.hostname, fl.direction, fl.src_ip, fl.dst_ip, fl.src_port, fl.dst_port, fl.protocol, fl.action, fl.raw_line
 			FROM firewall_logs fl
 			LEFT JOIN peers p ON fl.peer_id = p.id
@@ -289,7 +282,7 @@ func migrateLogsWithoutAttach(mainDB, logsDB *sql.DB) (int64, error) {
 	defer func() { _ = rows.Close() }()
 
 	// Prepare insert statement
-	stmt, err := logsTx.Prepare(`
+	stmt, err := logsTx.PrepareContext(ctx, `
 		INSERT INTO firewall_logs (timestamp, peer_id, peer_hostname, event_type, source_ip, dest_ip, source_port, dest_port, protocol, action, details)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`)
@@ -307,7 +300,7 @@ func migrateLogsWithoutAttach(mainDB, logsDB *sql.DB) (int64, error) {
 			return 0, fmt.Errorf("failed to scan row: %w", err)
 		}
 
-		if _, err := stmt.Exec(
+		if _, err := stmt.ExecContext(ctx,
 			timestamp, peerID, peerHostname, direction, srcIP, dstIP, srcPort, dstPort, protocol, action, rawLine,
 		); err != nil {
 			return 0, fmt.Errorf("failed to insert row: %w", err)
@@ -320,7 +313,7 @@ func migrateLogsWithoutAttach(mainDB, logsDB *sql.DB) (int64, error) {
 	}
 
 	// Drop the old table from main DB
-	if _, err := mainTx.Exec("DROP TABLE firewall_logs"); err != nil {
+	if _, err := mainTx.ExecContext(ctx, "DROP TABLE firewall_logs"); err != nil {
 		return 0, fmt.Errorf("failed to drop old firewall_logs table: %w", err)
 	}
 

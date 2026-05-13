@@ -3,6 +3,7 @@ package services
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -12,18 +13,20 @@ import (
 	"runic/internal/api/common"
 	ic "runic/internal/common"
 	"runic/internal/common/log"
+	"runic/internal/db"
 	"runic/internal/engine"
 	"runic/internal/store"
 )
 
 type Handler struct {
+	beginner     db.Beginner
 	Store        *store.ServiceStore
 	Compiler     *engine.Compiler
 	ChangeWorker *common.ChangeWorker
 }
 
-func NewHandler(serviceStore *store.ServiceStore, compiler *engine.Compiler, changeWorker *common.ChangeWorker) *Handler {
-	return &Handler{Store: serviceStore, Compiler: compiler, ChangeWorker: changeWorker}
+func NewHandler(beginner db.Beginner, serviceStore *store.ServiceStore, compiler *engine.Compiler, changeWorker *common.ChangeWorker) *Handler {
+	return &Handler{beginner: beginner, Store: serviceStore, Compiler: compiler, ChangeWorker: changeWorker}
 }
 
 // Note: ICMP and IGMP are only allowed for system services, not user-defined services.
@@ -212,12 +215,17 @@ func (h *Handler) UpdateService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.Store.SnapshotService(r.Context(), id, "update"); err != nil {
-		log.ErrorContext(r.Context(), "failed to create snapshot", "error", err)
-	}
-
-	if err := h.Store.UpdateService(r.Context(), id, input.Name, input.Ports, input.SourcePorts, input.Protocol, input.Description, parseDirectionHint(input.DirectionHint)); err != nil {
-		log.ErrorContext(r.Context(), "failed to update service", "error", err)
+	err = store.RunInTx(r.Context(), h.beginner, func(tx *sql.Tx) error {
+		if err := h.Store.SnapshotServiceTx(r.Context(), tx, id, "update"); err != nil {
+			return fmt.Errorf("snapshot: %w", err)
+		}
+		if err := h.Store.UpdateServiceTx(r.Context(), tx, id, input.Name, input.Ports, input.SourcePorts, input.Protocol, input.Description, parseDirectionHint(input.DirectionHint)); err != nil {
+			return fmt.Errorf("update: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		log.ErrorContext(r.Context(), "transaction failed", "error", err)
 		common.InternalError(w)
 		return
 	}

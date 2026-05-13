@@ -27,6 +27,27 @@ const (
 	LocalBackupPath = "/etc/runic-agent/pre-apply-backup.rules"
 )
 
+// writeTempFile creates a temporary file with the given pattern, writes content to it,
+// then closes it. Returns the path to the temp file. The caller is responsible for
+// removing the file (e.g. defer os.Remove(path)).
+func writeTempFile(pattern, content string) (string, error) {
+	tmp, err := os.CreateTemp("", pattern)
+	if err != nil {
+		return "", fmt.Errorf("create temp file: %w", err)
+	}
+	path := tmp.Name()
+	if _, err := tmp.WriteString(content); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(path)
+		return "", fmt.Errorf("write temp file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(path)
+		return "", fmt.Errorf("close temp file: %w", err)
+	}
+	return path, nil
+}
+
 // ApplyBundle uses the confirmFunc callback to notify the control plane after successful apply.
 func ApplyBundle(ctx context.Context, bundle models.BundleResponse, hmacKey, controlPlaneURL, token, version string, confirmFunc func(context.Context, string) error) error {
 	log.Info("Received bundle version, verifying HMAC", "version", bundle.Version)
@@ -59,27 +80,16 @@ func ApplyBundle(ctx context.Context, bundle models.BundleResponse, hmacKey, con
 		return fmt.Errorf("flush firewall: %w", err)
 	}
 
-	tmpFile, err := os.CreateTemp("", "runic-bundle-*.rules")
+	tmpPath, err := writeTempFile("runic-bundle-*.rules", stripIpsetSection(bundle.Rules))
 	if err != nil {
 		revertCancel()
-		return fmt.Errorf("create temp file: %w", err)
+		return fmt.Errorf("write bundle: %w", err)
 	}
-	tmpPath := tmpFile.Name()
-
 	defer func() {
 		if err := os.Remove(tmpPath); err != nil {
-			log.Warn("remove err", "err", err)
+			log.Warn("Failed to remove temp file", "path", tmpPath, "error", err)
 		}
 	}()
-
-	if _, err := tmpFile.WriteString(stripIpsetSection(bundle.Rules)); err != nil {
-		revertCancel()
-		return fmt.Errorf("write bundle to temp file: %w", err)
-	}
-	if err := tmpFile.Close(); err != nil {
-		revertCancel()
-		return fmt.Errorf("close temp file: %w", err)
-	}
 
 	// Apply ipset definitions if present (after iptables flushed - can now destroy safely)
 	if strings.Contains(bundle.Rules, "# --- Ipset Definitions ---") {
@@ -144,27 +154,15 @@ func ApplyBundle(ctx context.Context, bundle models.BundleResponse, hmacKey, con
 // restoreRulesFromContent writes the given rules to a temp file and applies
 // them using the appropriate firewall backend (iptables-restore or nft -f).
 func restoreRulesFromContent(ctx context.Context, rules string) error {
-	tmpFile, err := os.CreateTemp("", "runic-restore-*.rules")
+	tmpPath, err := writeTempFile("runic-restore-*.rules", rules)
 	if err != nil {
-		return fmt.Errorf("create temp file: %w", err)
-	}
-	tmpPath := tmpFile.Name()
-
-	defer func() {
-		if err := os.Remove(tmpPath); err != nil {
-			log.Warn("remove err", "err", err)
-		}
-	}()
-
-	if _, err := tmpFile.WriteString(rules); err != nil {
-		if closeErr := tmpFile.Close(); closeErr != nil {
-			log.Warn("Failed to close temp file", "error", closeErr)
-		}
 		return fmt.Errorf("write rules: %w", err)
 	}
-	if err := tmpFile.Close(); err != nil {
-		return fmt.Errorf("close temp file: %w", err)
-	}
+	defer func() {
+		if err := os.Remove(tmpPath); err != nil {
+			log.Warn("Failed to remove temp file", "path", tmpPath, "error", err)
+		}
+	}()
 
 	return restoreFromFile(ctx, tmpPath, rules)
 }
@@ -294,27 +292,16 @@ func revertRules(backup string) error {
 		log.Info("Using persisted backup for revert", "path", LocalBackupPath)
 	}
 
-	tmp, err := os.CreateTemp("", "runic-revert-*.rules")
+	tmpPath, err := writeTempFile("runic-revert-*.rules", backup)
 	if err != nil {
-		return fmt.Errorf("create revert temp file: %w", err)
+		return fmt.Errorf("write backup: %w", err)
 	}
-	tmpPath := tmp.Name()
 
 	defer func() {
 		if err := os.Remove(tmpPath); err != nil {
-			log.Warn("remove err", "err", err)
+			log.Warn("Failed to remove temp file", "path", tmpPath, "error", err)
 		}
 	}()
-
-	if _, err := tmp.WriteString(backup); err != nil {
-		if err := tmp.Close(); err != nil {
-			log.Warn("Failed to close temporary script file", "error", err)
-		}
-		return fmt.Errorf("write backup: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close revert temp file: %w", err)
-	}
 
 	// Use detached context so watchdog cancellation does not kill the restore.
 	ctx := context.WithoutCancel(context.Background())
@@ -408,11 +395,14 @@ func validateRules(content string) error {
 	return nil
 }
 
-func smokeTest(ctx context.Context, controlPlaneURL, token, version string) error {
-	client := &http.Client{
-		Timeout: constants.SmokeTestTimeout,
-	}
+// smokeTestClient is a cached HTTP client used for post-apply smoke tests.
+// It is shared across all ApplyBundle invocations to avoid allocating a new
+// http.Transport (with connection pool, DNS cache, etc.) on every call.
+var smokeTestClient = &http.Client{
+	Timeout: constants.SmokeTestTimeout,
+}
 
+func smokeTest(ctx context.Context, controlPlaneURL, token, version string) error {
 	url := fmt.Sprintf("%s/api/v1/agent/heartbeat", controlPlaneURL)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
@@ -422,7 +412,7 @@ func smokeTest(ctx context.Context, controlPlaneURL, token, version string) erro
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("User-Agent", "runic-agent/"+version)
 
-	resp, err := client.Do(req)
+	resp, err := smokeTestClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("smoke test request failed: %w", err)
 	}

@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
+	"runic/internal/api/common"
 	"runic/internal/common/constants"
 	"runic/internal/common/log"
 )
@@ -82,17 +82,7 @@ func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 }
 
 func (rl *RateLimiter) getIP(r *http.Request) string {
-	// Check X-Forwarded-For header first (reverse proxy scenario).
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		if ip := strings.TrimSpace(strings.SplitN(xff, ",", 2)[0]); ip != "" {
-			return ip
-		}
-	}
-	// Check X-Real-IP header next.
-	if realIP := r.Header.Get("X-Real-IP"); realIP != "" {
-		return strings.TrimSpace(realIP)
-	}
-	return r.RemoteAddr
+	return common.GetClientIP(r)
 }
 
 func (rl *RateLimiter) startCleanup() {

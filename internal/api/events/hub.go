@@ -15,16 +15,16 @@ type NotifyUpdateAgenter interface {
 }
 
 type SSEHub struct {
-	clients         map[string]chan string // host_id -> event channel
-	pushJobClients  map[string]chan string // job_id -> SSE channel
-	frontendClients map[string]chan string // client_id -> event channel for frontend users
+	clients         map[string]chan string   // host_id -> event channel
+	pushJobClients  map[string][]chan string // job_id -> SSE channels (supports multiple listeners)
+	frontendClients map[string]chan string   // client_id -> event channel for frontend users
 	mu              sync.RWMutex
 }
 
 func NewSSEHub() *SSEHub {
 	return &SSEHub{
 		clients:         make(map[string]chan string),
-		pushJobClients:  make(map[string]chan string),
+		pushJobClients:  make(map[string][]chan string),
 		frontendClients: make(map[string]chan string),
 	}
 }
@@ -106,26 +106,36 @@ func (h *SSEHub) NotifyUpdateAgent(hostID string, controlPlaneURL string) bool {
 func (h *SSEHub) RegisterPushJob(jobID string) chan string {
 	ch := make(chan string, 16) // larger buffer for progress events
 	h.mu.Lock()
-	h.pushJobClients[jobID] = ch
+	h.pushJobClients[jobID] = append(h.pushJobClients[jobID], ch)
 	h.mu.Unlock()
 	return ch
 }
 
-func (h *SSEHub) UnregisterPushJob(jobID string) {
+func (h *SSEHub) UnregisterPushJob(jobID string, ch chan string) {
 	h.mu.Lock()
-	if ch, ok := h.pushJobClients[jobID]; ok {
-		close(ch)
-		delete(h.pushJobClients, jobID)
+	defer h.mu.Unlock()
+	clients := h.pushJobClients[jobID]
+	for i, c := range clients {
+		if c == ch {
+			close(c)
+			h.pushJobClients[jobID] = append(clients[:i], clients[i+1:]...)
+			if len(h.pushJobClients[jobID]) == 0 {
+				delete(h.pushJobClients, jobID)
+			}
+			return
+		}
 	}
-	h.mu.Unlock()
 }
 
 func (h *SSEHub) NotifyPushJobProgress(jobID string, eventType string, payload string) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	ch, ok := h.pushJobClients[jobID]
-	if ok {
-		event := fmt.Sprintf("event: %s\ndata: %s\n\n", eventType, payload)
+	clients, ok := h.pushJobClients[jobID]
+	if !ok {
+		return
+	}
+	event := fmt.Sprintf("event: %s\ndata: %s\n\n", eventType, payload)
+	for _, ch := range clients {
 		select {
 		case ch <- event:
 		default: // client not reading, skip

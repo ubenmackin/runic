@@ -11,7 +11,7 @@ import (
 // migrateEnvToDB reads secrets from the RUNIC_ENV_PATH file and stores them in the database.
 // It only uses Querier interface methods (ExecContext), but is currently called with *sql.DB
 // from initialization code. TODO: update callers to pass Querier implementation.
-func migrateEnvToDB(database Querier) error {
+func migrateEnvToDB(ctx context.Context, database Querier) error {
 	envPath := os.Getenv("RUNIC_ENV_PATH")
 	if envPath == "" {
 		envPath = "/opt/runic/.env"
@@ -42,7 +42,7 @@ func migrateEnvToDB(database Querier) error {
 			if strings.HasPrefix(line, prefix) {
 				value := strings.TrimPrefix(line, prefix)
 				if value != "" {
-					_, err := database.ExecContext(context.Background(),
+					_, err := database.ExecContext(ctx,
 						"INSERT INTO system_config (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP) ON CONFLICT(key) DO UPDATE SET value = ?, updated_at = CURRENT_TIMESTAMP",
 						dbKey, value, value,
 					)
@@ -60,9 +60,9 @@ func migrateEnvToDB(database Querier) error {
 // SQLite doesn't support ALTER TABLE ADD CONSTRAINT, so we recreate tables.
 // TODO: Replace with a proper migration framework (e.g., golang-migrate) that handles DDL.
 // This function requires *sql.DB for DDL operations (CREATE TABLE, DROP TABLE, ALTER TABLE).
-func addDBConstraints(database *sql.DB) error {
+func addDBConstraints(ctx context.Context, database *sql.DB) error {
 	var constraintApplied bool
-	err := database.QueryRow("SELECT COUNT(*) > 0 FROM system_config WHERE key = 'constraints_applied'").Scan(&constraintApplied)
+	err := database.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM system_config WHERE key = 'constraints_applied'").Scan(&constraintApplied)
 	if err != nil {
 		constraintApplied = false
 	}
@@ -71,7 +71,7 @@ func addDBConstraints(database *sql.DB) error {
 	}
 
 	// peers: CHECK (hostname != '')
-	if _, err := database.Exec(`
+	if _, err := database.ExecContext(ctx, `
 		CREATE TABLE peers_new (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			hostname TEXT UNIQUE NOT NULL CHECK(hostname != ''),
@@ -96,18 +96,18 @@ func addDBConstraints(database *sql.DB) error {
 	`); err != nil {
 		return fmt.Errorf("create peers_new: %w", err)
 	}
-	if _, err := database.Exec("INSERT INTO peers_new SELECT * FROM peers"); err != nil {
+	if _, err := database.ExecContext(ctx, "INSERT INTO peers_new SELECT * FROM peers"); err != nil {
 		return fmt.Errorf("copy peers: %w", err)
 	}
-	if _, err := database.Exec("DROP TABLE peers"); err != nil {
+	if _, err := database.ExecContext(ctx, "DROP TABLE peers"); err != nil {
 		return fmt.Errorf("drop peers: %w", err)
 	}
-	if _, err := database.Exec("ALTER TABLE peers_new RENAME TO peers"); err != nil {
+	if _, err := database.ExecContext(ctx, "ALTER TABLE peers_new RENAME TO peers"); err != nil {
 		return fmt.Errorf("rename peers_new: %w", err)
 	}
 
 	// users: CHECK (role IN ('admin', 'editor', 'viewer'))
-	if _, err := database.Exec(`
+	if _, err := database.ExecContext(ctx, `
 		CREATE TABLE users_new (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			username TEXT UNIQUE NOT NULL,
@@ -121,7 +121,7 @@ func addDBConstraints(database *sql.DB) error {
 	}
 	// Migrate existing roles: first user -> admin, rest -> viewer
 	// Also map old 'user' role to 'viewer'
-	if _, err := database.Exec(`
+	if _, err := database.ExecContext(ctx, `
 		INSERT INTO users_new 
 		SELECT id, username, password_hash, email, 
 			   CASE 
@@ -134,14 +134,14 @@ func addDBConstraints(database *sql.DB) error {
 	`); err != nil {
 		return fmt.Errorf("copy users: %w", err)
 	}
-	if _, err := database.Exec("DROP TABLE users"); err != nil {
+	if _, err := database.ExecContext(ctx, "DROP TABLE users"); err != nil {
 		return fmt.Errorf("drop users: %w", err)
 	}
-	if _, err := database.Exec("ALTER TABLE users_new RENAME TO users"); err != nil {
+	if _, err := database.ExecContext(ctx, "ALTER TABLE users_new RENAME TO users"); err != nil {
 		return fmt.Errorf("rename users_new: %w", err)
 	}
 
-	if _, err := database.Exec(`
+	if _, err := database.ExecContext(ctx, `
 		CREATE TABLE rule_bundles_new (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			peer_id INTEGER NOT NULL,
@@ -156,18 +156,18 @@ func addDBConstraints(database *sql.DB) error {
 	`); err != nil {
 		return fmt.Errorf("create rule_bundles_new: %w", err)
 	}
-	if _, err := database.Exec("INSERT INTO rule_bundles_new SELECT * FROM rule_bundles"); err != nil {
+	if _, err := database.ExecContext(ctx, "INSERT INTO rule_bundles_new SELECT * FROM rule_bundles"); err != nil {
 		return fmt.Errorf("copy rule_bundles: %w", err)
 	}
-	if _, err := database.Exec("DROP TABLE rule_bundles"); err != nil {
+	if _, err := database.ExecContext(ctx, "DROP TABLE rule_bundles"); err != nil {
 		return fmt.Errorf("drop rule_bundles: %w", err)
 	}
-	if _, err := database.Exec("ALTER TABLE rule_bundles_new RENAME TO rule_bundles"); err != nil {
+	if _, err := database.ExecContext(ctx, "ALTER TABLE rule_bundles_new RENAME TO rule_bundles"); err != nil {
 		return fmt.Errorf("rename rule_bundles_new: %w", err)
 	}
 
 	// Mark constraints as applied
-	_, err = database.Exec("INSERT INTO system_config (key, value) VALUES ('constraints_applied', '1')")
+	_, err = database.ExecContext(ctx, "INSERT INTO system_config (key, value) VALUES ('constraints_applied', '1')")
 	if err != nil {
 		return fmt.Errorf("mark constraints applied: %w", err)
 	}

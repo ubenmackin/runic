@@ -191,6 +191,21 @@ func (s *GroupStore) SoftDeleteGroup(ctx context.Context, id int) error {
 	return nil
 }
 
+func (s *GroupStore) SoftDeleteGroupTx(ctx context.Context, tx *sql.Tx, id int) error {
+	res, err := tx.ExecContext(ctx, "UPDATE groups SET is_pending_delete = 1 WHERE id = ? AND is_pending_delete = 0", id)
+	if err != nil {
+		return fmt.Errorf("soft delete group tx: %w", err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
+	}
+	if affected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 func (s *GroupStore) ListGroupMembers(ctx context.Context, id int) ([]PeerInGroup, error) {
 	query := `
 	SELECT p.id, p.hostname, p.ip_address, p.os_type, p.is_manual

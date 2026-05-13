@@ -26,8 +26,11 @@ type PolicyStore interface {
 	GetPolicy(ctx context.Context, id int) (models.PolicyRow, error)
 	GetPolicyName(ctx context.Context, id int) (string, error)
 	UpdatePolicy(ctx context.Context, p *models.PolicyRow) error
+	UpdatePolicyTx(ctx context.Context, tx *sql.Tx, p *models.PolicyRow) error
 	PatchPolicyEnabled(ctx context.Context, id int, enabled bool) error
+	PatchPolicyEnabledTx(ctx context.Context, tx *sql.Tx, id int, enabled bool) error
 	SoftDeletePolicy(ctx context.Context, id int) error
+	SoftDeletePolicyTx(ctx context.Context, tx *sql.Tx, id int) error
 	Snapshot(ctx context.Context, action string, policyID int) error
 	ListSpecialTargets(ctx context.Context) ([]models.SpecialTargetRow, error)
 	CheckDeleteConstraints(ctx context.Context, policyID int) error
@@ -130,6 +133,29 @@ func validatePolicyInput(input *policyInput, isUpdate bool) error {
 	return nil
 }
 
+func toPolicyResponse(p *models.PolicyRow) policyResponse {
+	return policyResponse{
+		ID:              p.ID,
+		Name:            p.Name,
+		Description:     p.Description,
+		SourceID:        p.SourceID,
+		SourceType:      p.SourceType,
+		ServiceID:       p.ServiceID,
+		TargetID:        p.TargetID,
+		TargetType:      p.TargetType,
+		SourceIP:        p.SourceIP,
+		TargetIP:        p.TargetIP,
+		Action:          p.Action,
+		Priority:        p.Priority,
+		Enabled:         p.Enabled,
+		TargetScope:     p.TargetScope,
+		Direction:       p.Direction,
+		CreatedAt:       ic.FormatSQLiteDatetime(p.CreatedAt.Format("2006-01-02 15:04:05")),
+		UpdatedAt:       ic.FormatSQLiteDatetime(p.UpdatedAt.Format("2006-01-02 15:04:05")),
+		IsPendingDelete: p.IsPendingDelete,
+	}
+}
+
 func (h *Handler) ListPolicies(w http.ResponseWriter, r *http.Request) {
 	policies, err := h.Store.ListPolicies(r.Context())
 	if err != nil {
@@ -141,26 +167,7 @@ func (h *Handler) ListPolicies(w http.ResponseWriter, r *http.Request) {
 	var data []policyResponse
 	for i := range policies {
 		p := &policies[i]
-		data = append(data, policyResponse{
-			ID:              p.ID,
-			Name:            p.Name,
-			Description:     p.Description,
-			SourceID:        p.SourceID,
-			SourceType:      p.SourceType,
-			ServiceID:       p.ServiceID,
-			TargetID:        p.TargetID,
-			TargetType:      p.TargetType,
-			SourceIP:        p.SourceIP,
-			TargetIP:        p.TargetIP,
-			Action:          p.Action,
-			Priority:        p.Priority,
-			Enabled:         p.Enabled,
-			TargetScope:     p.TargetScope,
-			Direction:       p.Direction,
-			CreatedAt:       ic.FormatSQLiteDatetime(p.CreatedAt.Format("2006-01-02 15:04:05")),
-			UpdatedAt:       ic.FormatSQLiteDatetime(p.UpdatedAt.Format("2006-01-02 15:04:05")),
-			IsPendingDelete: p.IsPendingDelete,
-		})
+		data = append(data, toPolicyResponse(p))
 	}
 
 	common.RespondJSON(w, http.StatusOK, ic.EnsureSlice(data))
@@ -259,26 +266,7 @@ func (h *Handler) GetPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := policyResponse{
-		ID:              p.ID,
-		Name:            p.Name,
-		Description:     p.Description,
-		SourceID:        p.SourceID,
-		SourceType:      p.SourceType,
-		ServiceID:       p.ServiceID,
-		TargetID:        p.TargetID,
-		TargetType:      p.TargetType,
-		SourceIP:        p.SourceIP,
-		TargetIP:        p.TargetIP,
-		Action:          p.Action,
-		Priority:        p.Priority,
-		Enabled:         p.Enabled,
-		TargetScope:     p.TargetScope,
-		Direction:       p.Direction,
-		CreatedAt:       ic.FormatSQLiteDatetime(p.CreatedAt.Format("2006-01-02 15:04:05")),
-		UpdatedAt:       ic.FormatSQLiteDatetime(p.UpdatedAt.Format("2006-01-02 15:04:05")),
-		IsPendingDelete: p.IsPendingDelete,
-	}
+	resp := toPolicyResponse(&p)
 
 	common.RespondJSON(w, http.StatusOK, resp)
 }
@@ -354,7 +342,7 @@ func (h *Handler) UpdatePolicy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	err = store.RunInTx(r.Context(), h.beginner, func(tx *sql.Tx) error {
-		if err := h.Store.UpdatePolicy(r.Context(), &p); err != nil {
+		if err := h.Store.UpdatePolicyTx(r.Context(), tx, &p); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return common.NewHTTPError(http.StatusNotFound, "policy not found")
 			}
@@ -435,7 +423,7 @@ func (h *Handler) DeletePolicy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	err = store.RunInTx(r.Context(), h.beginner, func(tx *sql.Tx) error {
-		if err := h.Store.SoftDeletePolicy(r.Context(), id); err != nil {
+		if err := h.Store.SoftDeletePolicyTx(r.Context(), tx, id); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return common.NewHTTPError(http.StatusNotFound, "policy not found")
 			}
@@ -469,6 +457,7 @@ type PolicyPreviewRequest struct {
 	TargetIP    string `json:"target_ip"`
 	ServiceID   int    `json:"service_id"`
 	PeerID      int    `json:"peer_id"`
+	Action      string `json:"action"`
 	Direction   string `json:"direction"`
 	TargetScope string `json:"target_scope"`
 }
@@ -486,6 +475,9 @@ func (h *Handler) PolicyPreview(w http.ResponseWriter, r *http.Request) {
 	if req.TargetScope == "" {
 		req.TargetScope = "both"
 	}
+	if req.Action == "" {
+		req.Action = "ACCEPT"
+	}
 
 	if req.PeerID == 0 {
 		if req.SourceType == "peer" {
@@ -500,7 +492,7 @@ func (h *Handler) PolicyPreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rules, err := h.Compiler.PreviewCompile(r.Context(), req.PeerID, req.SourceID, req.SourceType, req.SourceIP, req.TargetID, req.TargetType, req.TargetIP, req.ServiceID, req.Direction, req.TargetScope)
+	rules, err := h.Compiler.PreviewCompile(r.Context(), req.PeerID, req.SourceID, req.SourceType, req.SourceIP, req.TargetID, req.TargetType, req.TargetIP, req.ServiceID, req.Action, req.Direction, req.TargetScope)
 	if err != nil {
 		log.ErrorContext(r.Context(), "failed to generate preview", "error", err)
 		common.InternalError(w)
@@ -551,7 +543,7 @@ func (h *Handler) PatchPolicy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	err = store.RunInTx(r.Context(), h.beginner, func(tx *sql.Tx) error {
-		if err := h.Store.PatchPolicyEnabled(r.Context(), id, *input.Enabled); err != nil {
+		if err := h.Store.PatchPolicyEnabledTx(r.Context(), tx, id, *input.Enabled); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return common.NewHTTPError(http.StatusNotFound, "policy not found")
 			}

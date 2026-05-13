@@ -76,6 +76,9 @@ func InitDB(dataSourceName string) (*sql.DB, error) {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
+	sqlDB.SetMaxOpenConns(1) // SQLite is single-writer
+	sqlDB.SetMaxIdleConns(1)
+
 	if err = sqlDB.Ping(); err != nil {
 		return nil, fmt.Errorf("failed to ping database: %w", err)
 	}
@@ -112,11 +115,11 @@ func InitDB(dataSourceName string) (*sql.DB, error) {
 	}
 
 	// Migrate secrets from .env to database
-	if err := migrateEnvToDB(database.DB); err != nil {
+	if err := migrateEnvToDB(context.Background(), database.DB); err != nil {
 		log.Warn("Failed to migrate secrets from .env", "error", err)
 	}
 
-	if err := addDBConstraints(database.DB); err != nil {
+	if err := addDBConstraints(context.Background(), database.DB); err != nil {
 		log.Warn("Failed to add DB constraints", "error", err)
 	}
 

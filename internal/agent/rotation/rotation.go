@@ -10,12 +10,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
-	"path/filepath"
 	"sync"
 	"time"
 
-	"runic/internal/agent/identity"
 	"runic/internal/common"
 	"runic/internal/common/log"
 )
@@ -33,7 +30,6 @@ const (
 
 type Manager struct {
 	mu              sync.RWMutex
-	config          *identity.Config
 	configPath      string
 	httpClient      *http.Client
 	controlPlaneURL string
@@ -44,9 +40,8 @@ type Manager struct {
 	lastRotation    time.Time
 }
 
-func NewManager(config *identity.Config, configPath string, httpClient *http.Client, controlPlaneURL string, hostID string) *Manager {
+func NewManager(configPath string, httpClient *http.Client, controlPlaneURL string, hostID string) *Manager {
 	return &Manager{
-		config:          config,
 		configPath:      configPath,
 		httpClient:      httpClient,
 		controlPlaneURL: controlPlaneURL,
@@ -67,49 +62,46 @@ func (m *Manager) GetLastRotation() time.Time {
 	return m.lastRotation
 }
 
-// CheckAndRotate uses fine-grained locking to avoid holding the mutex during HTTP calls.
-// Config fields (HMACKey, Token) are snapshot under the rotation manager's own lock so
-// that concurrent mutations by core.Agent cannot cause a data race.
-func (m *Manager) CheckAndRotate(ctx context.Context) error {
+// CheckAndRotate checks for pending key rotation and rotates the HMAC key if needed.
+// The currentHMACKey and currentToken are passed in by the caller (Agent) so that
+// the Manager does not hold an aliased pointer to the Agent's config, avoiding
+// data races between the two components. The new key is returned to the caller
+// for atomic persistence under the Agent's own configMu.
+func (m *Manager) CheckAndRotate(ctx context.Context, currentHMACKey, currentToken string) (newKey string, err error) {
 	m.mu.Lock()
 	if m.state == StateRotating || m.state == StateTesting {
 		m.mu.Unlock()
 		log.Info("Rotation already in progress, skipping")
-		return nil
+		return "", nil
 	}
 	m.state = StateRotating
-	// Snapshot config fields under the lock to avoid data races with
-	// core.Agent which may mutate the shared *identity.Config from
-	// separate goroutines (e.g. applyBundle, handleUpdateAgent).
-	oldKey := m.config.HMACKey
-	authToken := m.config.Token
-	m.oldKey = oldKey
+	m.oldKey = currentHMACKey
 	m.mu.Unlock()
 
-	rotationToken, err := m.checkRotationPending(ctx, authToken)
+	rotationToken, err := m.checkRotationPending(ctx, currentToken)
 	if err != nil {
 		m.mu.Lock()
 		m.state = StateFailed
 		m.mu.Unlock()
-		return fmt.Errorf("check rotation pending: %w", err)
+		return "", fmt.Errorf("check rotation pending: %w", err)
 	}
 
 	if rotationToken == "" {
 		m.mu.Lock()
 		m.state = StateIdle
 		m.mu.Unlock()
-		return nil
+		return "", nil
 	}
 
 	log.Info("Key rotation detected, starting rotation process")
 
-	newKey, err := m.retrieveNewKey(ctx, rotationToken, authToken)
+	newKey, err = m.retrieveNewKey(ctx, rotationToken, currentToken)
 	if err != nil {
 		m.mu.Lock()
 		m.state = StateFailed
 		m.mu.Unlock()
 		log.Error("Failed to retrieve new key, keeping old key", "error", err)
-		return fmt.Errorf("retrieve new key: %w", err)
+		return "", fmt.Errorf("retrieve new key: %w", err)
 	}
 
 	m.mu.Lock()
@@ -117,29 +109,17 @@ func (m *Manager) CheckAndRotate(ctx context.Context) error {
 	m.state = StateTesting
 	m.mu.Unlock()
 
-	if err := m.testNewKey(ctx, newKey, authToken); err != nil {
+	if err := m.testNewKey(ctx, newKey, currentToken); err != nil {
 		m.mu.Lock()
 		m.state = StateFallback
 		m.mu.Unlock()
 		log.Error("New key test failed, falling back to old key", "error", err)
-		return fmt.Errorf("test new key: %w", err)
+		return "", fmt.Errorf("test new key: %w", err)
 	}
 
-	if err := m.updateConfigKey(newKey); err != nil {
-		m.mu.Lock()
-		m.state = StateFallback
-		m.mu.Unlock()
-		log.Error("Failed to update config with new key, falling back", "error", err)
-		return fmt.Errorf("update config: %w", err)
-	}
-
-	m.mu.Lock()
-	m.config.HMACKey = newKey
-	m.mu.Unlock()
-
-	if err := m.confirmRotation(ctx, authToken); err != nil {
+	if err := m.confirmRotation(ctx, currentToken); err != nil {
 		log.Warn("Failed to confirm rotation with control plane", "error", err)
-		// Don't fail here - the key is already updated locally
+		// Don't fail here - the key is already usable
 	}
 
 	m.mu.Lock()
@@ -148,7 +128,7 @@ func (m *Manager) CheckAndRotate(ctx context.Context) error {
 	m.mu.Unlock()
 
 	log.Info("Key rotation completed successfully")
-	return nil
+	return newKey, nil
 }
 
 func (m *Manager) checkRotationPending(ctx context.Context, token string) (string, error) {
@@ -240,69 +220,6 @@ func (m *Manager) testNewKey(ctx context.Context, key string, token string) erro
 			log.Warn("close body failed", "error", cErr)
 		}
 	}()
-
-	return nil
-}
-
-func (m *Manager) updateConfigKey(newKey string) error {
-	data, err := os.ReadFile(m.configPath)
-	if err != nil {
-		return fmt.Errorf("read config: %w", err)
-	}
-
-	var cfg identity.Config
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return fmt.Errorf("parse config: %w", err)
-	}
-
-	cfg.HMACKey = newKey
-
-	dir := filepath.Dir(m.configPath)
-	tmpFile, err := os.CreateTemp(dir, "config-*.tmp")
-	if err != nil {
-		return fmt.Errorf("create temp file: %w", err)
-	}
-	tmpPath := tmpFile.Name()
-
-	encoder := json.NewEncoder(tmpFile)
-	encoder.SetIndent("", "  ")
-	if err := encoder.Encode(cfg); err != nil {
-		if cErr := tmpFile.Close(); cErr != nil {
-			log.Warn("Failed to close file", "error", cErr)
-		}
-		if rErr := os.Remove(tmpPath); rErr != nil {
-			log.Warn("Failed to remove file", "error", rErr)
-		}
-		return fmt.Errorf("write config: %w", err)
-	}
-
-	if err := tmpFile.Sync(); err != nil {
-		if cErr := tmpFile.Close(); cErr != nil {
-			log.Warn("Failed to close file", "error", cErr)
-		}
-		if rErr := os.Remove(tmpPath); rErr != nil {
-			log.Warn("Failed to remove file", "error", rErr)
-		}
-		return fmt.Errorf("sync config: %w", err)
-	}
-
-	if err := tmpFile.Close(); err != nil {
-		if rErr := os.Remove(tmpPath); rErr != nil {
-			log.Warn("Failed to remove file", "error", rErr)
-		}
-		return fmt.Errorf("close temp file: %w", err)
-	}
-
-	if err := os.Rename(tmpPath, m.configPath); err != nil {
-		if rErr := os.Remove(tmpPath); rErr != nil {
-			log.Warn("Failed to remove file", "error", rErr)
-		}
-		return fmt.Errorf("rename config: %w", err)
-	}
-
-	if err := os.Chmod(m.configPath, 0600); err != nil {
-		return fmt.Errorf("chmod config: %w", err)
-	}
 
 	return nil
 }

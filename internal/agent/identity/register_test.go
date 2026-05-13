@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"runtime"
+	"strings"
 	"testing"
 
 	"runic/internal/models"
@@ -108,7 +109,7 @@ func TestRegisterHandles401Response(t *testing.T) {
 	}
 
 	// Should return a status error
-	if !contains(err.Error(), "401") && !contains(err.Error(), "status") {
+	if !strings.Contains(err.Error(), "401") && !strings.Contains(err.Error(), "status") {
 		t.Errorf("expected error to contain status code info, got: %v", err)
 	}
 }
@@ -299,17 +300,4 @@ func TestDetectLocalIPSkipsLoopbackInterfaces(t *testing.T) {
 			t.Errorf("detectLocalIP returned loopback address: %s", result)
 		}
 	}
-}
-
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsAt(s, substr))
-}
-
-func containsAt(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }

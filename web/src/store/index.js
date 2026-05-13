@@ -5,14 +5,7 @@ export const useAuthStore = create((set) => ({
   isAuthenticated: null,  // null = checking, true/false = known
   username: null,
   role: null,
-  login: async () => {
-    try {
-      const user = await api.get('/auth/me')
-      set({ isAuthenticated: true, username: user.username, role: user.role })
-    } catch {
-      set({ isAuthenticated: false, username: null, role: null })
-    }
-  },
+  login: async () => useAuthStore.getState().checkAuth(),
 logout: async () => {
     try { await api.post('/auth/logout', {}) } catch {
       // Intentionally ignore - state may not exist in localStorage

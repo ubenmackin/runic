@@ -28,6 +28,7 @@ type GroupStore interface {
 	UpdateGroupTx(ctx context.Context, tx *sql.Tx, id int, name, description string) error
 	GetGroupSystemStatus(ctx context.Context, id int) (bool, error)
 	SoftDeleteGroup(ctx context.Context, id int) error
+	SoftDeleteGroupTx(ctx context.Context, tx *sql.Tx, id int) error
 	ListGroupMembers(ctx context.Context, id int) ([]store.PeerInGroup, error)
 	AddGroupMember(ctx context.Context, groupID, peerID int) (int64, error)
 	DeleteGroupMember(ctx context.Context, groupID, peerID int) error
@@ -238,13 +239,17 @@ func (h *Handler) DeleteGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.Store.Snapshot(r.Context(), "delete", id); err != nil {
-		log.ErrorContext(r.Context(), "failed to create snapshot", "error", err)
-	}
-
-	err = h.Store.SoftDeleteGroup(r.Context(), id)
+	err = store.RunInTx(r.Context(), h.beginner, func(tx *sql.Tx) error {
+		if err := h.Store.SnapshotTx(r.Context(), tx, "delete", id); err != nil {
+			return fmt.Errorf("snapshot: %w", err)
+		}
+		if err := h.Store.SoftDeleteGroupTx(r.Context(), tx, id); err != nil {
+			return fmt.Errorf("soft delete: %w", err)
+		}
+		return nil
+	})
 	if err != nil {
-		log.ErrorContext(r.Context(), "failed to soft delete group", "error", err)
+		log.ErrorContext(r.Context(), "transaction failed", "error", err)
 		common.InternalError(w)
 		return
 	}

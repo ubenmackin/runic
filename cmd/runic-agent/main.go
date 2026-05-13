@@ -19,11 +19,7 @@ import (
 	"runic/internal/agent"
 	"runic/internal/agent/core"
 	"runic/internal/agent/identity"
-)
-
-const (
-	systemdServicePath    = "/etc/systemd/system/runic-agent.service"
-	systemdLibServicePath = "/lib/systemd/system/runic-agent.service"
+	"runic/internal/common/systemd"
 )
 
 type configFlag struct {
@@ -96,7 +92,7 @@ func main() {
 		fmt.Println("Configuration saved.")
 
 		// Check if systemd service is installed and prompt for restart
-		if isSystemdServiceInstalled() {
+		if systemd.IsServiceInstalled() {
 			fmt.Println("\nThe runic-agent systemd service is installed.")
 			fmt.Print("Would you like to restart the service now? (sudo systemctl restart runic-agent) [y/N]: ")
 
@@ -110,7 +106,7 @@ func main() {
 
 			input = strings.TrimSpace(strings.ToLower(input))
 			if input == "y" || input == "yes" {
-				if err := restartSystemdService(); err != nil {
+				if err := systemd.RestartService("runic-agent"); err != nil {
 					fmt.Printf("Failed to restart service: %v\n", err)
 					fmt.Println("Restart manually with: sudo systemctl restart runic-agent")
 				} else {
@@ -292,7 +288,7 @@ func handleConfigMode(configPath string, enableOnBoot, enableRulesBundle, disabl
 	fmt.Printf("Config saved to: %s\n", configPath)
 
 	// Check if systemd service is installed and prompt for restart
-	if isSystemdServiceInstalled() {
+	if systemd.IsServiceInstalled() {
 		fmt.Println("\nThe runic-agent systemd service is installed.")
 		fmt.Print("Would you like to restart the service now? (sudo systemctl restart runic-agent) [y/N]: ")
 
@@ -306,7 +302,7 @@ func handleConfigMode(configPath string, enableOnBoot, enableRulesBundle, disabl
 
 		input = strings.TrimSpace(strings.ToLower(input))
 		if input == "y" || input == "yes" {
-			if err := restartSystemdService(); err != nil {
+			if err := systemd.RestartService("runic-agent"); err != nil {
 				fmt.Printf("Failed to restart service: %v\n", err)
 				fmt.Println("Restart manually with: sudo systemctl restart runic-agent")
 			} else {
@@ -338,41 +334,6 @@ func validateConfig(cfg *identity.Config) (bool, error) {
 	return true, nil
 }
 
-func isSystemdServiceInstalled() bool {
-	if _, err := os.Stat(systemdServicePath); err == nil {
-		return true
-	}
-	if _, err := os.Stat(systemdLibServicePath); err == nil {
-		return true
-	}
-	return false
-}
-
-// restartSystemdService restarts the runic-agent service.
-//
-// Testing Note: This function is intentionally difficult to unit test because:
-//  1. It requires root privileges (os.Geteuid() check) - running as root in test environments
-//     is not recommended for security reasons
-//  2. It calls an external system command (systemctl) which requires systemd to be installed
-//     and the runic-agent service to be registered
-//  3. Integration tests in a real or containerized environment (with systemd) would be more
-//     appropriate for testing this functionality
-//
-// The root privilege check is tested via TestRestartSystemdServiceRequiresRoot.
-// Full integration tests should be run in a VM or container with systemd.
-func restartSystemdService() error {
-	if os.Geteuid() != 0 {
-		return fmt.Errorf("must be run as root to restart service (use sudo)")
-	}
-
-	cmd := exec.Command("systemctl", "restart", "runic-agent")
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("%w: %s", err, string(output))
-	}
-	return nil
-}
-
 func uninstallAgent(purge bool) error {
 	if os.Geteuid() != 0 {
 		return fmt.Errorf("must be run as root (use sudo)")
@@ -387,7 +348,7 @@ func uninstallAgent(purge bool) error {
 	}
 
 	fmt.Println("Removing systemd service file...")
-	if err := os.Remove(systemdServicePath); err != nil && !os.IsNotExist(err) {
+	if err := os.Remove(systemd.ServicePath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to remove service file: %w", err)
 	}
 	if err := exec.Command("systemctl", "daemon-reload").Run(); err != nil {

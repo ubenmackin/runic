@@ -272,7 +272,7 @@ func TestSSEHub_UnregisterPushJob(t *testing.T) {
 	ch := hub.RegisterPushJob("job1")
 
 	// Unregister
-	hub.UnregisterPushJob("job1")
+	hub.UnregisterPushJob("job1", ch)
 
 	// Verify channel is closed
 	select {
@@ -289,7 +289,7 @@ func TestSSEHub_UnregisterPushJobNonExistent(t *testing.T) {
 	hub := NewSSEHub()
 
 	// Unregister non-existent job should not panic
-	hub.UnregisterPushJob("nonexistent")
+	hub.UnregisterPushJob("nonexistent", nil)
 }
 
 // =============================================================================
@@ -329,7 +329,7 @@ func TestSSEHub_NotifyPushJobProgress(t *testing.T) {
 			name: "notify after unregister",
 			setup: func(h *SSEHub) string {
 				ch := h.RegisterPushJob("job1")
-				h.UnregisterPushJob("job1")
+				h.UnregisterPushJob("job1", ch)
 				// Drain channel
 				go func() {
 					for range ch {
@@ -424,22 +424,30 @@ func TestSSEHub_ConcurrentRegisterUnregister(t *testing.T) {
 func TestSSEHub_ConcurrentPushJobRegistration(t *testing.T) {
 	hub := NewSSEHub()
 	var wg sync.WaitGroup
+	var channels []chan string
+	var mu sync.Mutex
 
 	// Concurrent push job registrations
 	for i := 0; i < 10; i++ {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
-			hub.RegisterPushJob(fmt.Sprintf("job%d", id))
+			ch := hub.RegisterPushJob(fmt.Sprintf("job%d", id))
+			mu.Lock()
+			channels = append(channels, ch)
+			mu.Unlock()
 		}(i)
 	}
+
+	// Wait for all registrations to complete
+	wg.Wait()
 
 	// Concurrent push job unregistrations
 	for i := 0; i < 10; i++ {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
-			hub.UnregisterPushJob(fmt.Sprintf("job%d", id))
+			hub.UnregisterPushJob(fmt.Sprintf("job%d", id), channels[id])
 		}(i)
 	}
 

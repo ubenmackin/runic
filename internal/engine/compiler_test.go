@@ -1682,7 +1682,7 @@ func TestPreviewCompile_DockerScope(t *testing.T) {
 	c := NewTestCompiler(database)
 
 	// Preview with target_scope = "docker"
-	rules, err := c.PreviewCompile(context.Background(), 0, sourcePeer, "peer", "", targetPeer, "peer", "", serviceID, "both", "docker")
+	rules, err := c.PreviewCompile(context.Background(), 0, sourcePeer, "peer", "", targetPeer, "peer", "", serviceID, "ACCEPT", "both", "docker")
 	if err != nil {
 		t.Fatalf("PreviewCompile failed: %v", err)
 	}
@@ -1726,7 +1726,7 @@ func TestPreviewCompile_HostScope(t *testing.T) {
 	c := NewTestCompiler(database)
 
 	// Preview with target_scope = "host"
-	rules, err := c.PreviewCompile(context.Background(), 0, sourcePeer, "peer", "", targetPeer, "peer", "", serviceID, "both", "host")
+	rules, err := c.PreviewCompile(context.Background(), 0, sourcePeer, "peer", "", targetPeer, "peer", "", serviceID, "ACCEPT", "both", "host")
 	if err != nil {
 		t.Fatalf("PreviewCompile failed: %v", err)
 	}
@@ -1771,7 +1771,7 @@ func TestPreviewCompile_BothScope(t *testing.T) {
 	c := NewTestCompiler(database)
 
 	// Preview with target_scope = "both"
-	rules, err := c.PreviewCompile(context.Background(), 0, sourcePeer, "peer", "", targetPeer, "peer", "", serviceID, "both", "both")
+	rules, err := c.PreviewCompile(context.Background(), 0, sourcePeer, "peer", "", targetPeer, "peer", "", serviceID, "ACCEPT", "both", "both")
 	if err != nil {
 		t.Fatalf("PreviewCompile failed: %v", err)
 	}
@@ -1933,7 +1933,7 @@ func TestPreviewCompile_IGMP(t *testing.T) {
 	c := NewTestCompiler(database)
 
 	// Preview with IGMP service
-	rules, err := c.PreviewCompile(context.Background(), 0, sourcePeer, "peer", "", targetPeer, "peer", "", serviceID, "both", "both")
+	rules, err := c.PreviewCompile(context.Background(), 0, sourcePeer, "peer", "", targetPeer, "peer", "", serviceID, "ACCEPT", "both", "both")
 	if err != nil {
 		t.Fatalf("PreviewCompile failed: %v", err)
 	}
@@ -2106,7 +2106,7 @@ func TestPreviewCompile_VRRP(t *testing.T) {
 	c := NewTestCompiler(database)
 
 	// Preview with VRRP service
-	rules, err := c.PreviewCompile(context.Background(), 0, sourcePeer, "peer", "", targetPeer, "peer", "", serviceID, "both", "both")
+	rules, err := c.PreviewCompile(context.Background(), 0, sourcePeer, "peer", "", targetPeer, "peer", "", serviceID, "ACCEPT", "both", "both")
 	if err != nil {
 		t.Fatalf("PreviewCompile failed: %v", err)
 	}
@@ -2683,7 +2683,7 @@ func TestPreviewCompileWithSourceIP(t *testing.T) {
 	c := NewTestCompiler(database)
 
 	// Preview with source_ip = "10.0.0.100" (different from source peer's IP 10.0.0.1)
-	rules, err := c.PreviewCompile(context.Background(), 0, sourcePeer, "peer", "10.0.0.100", targetPeer, "peer", "", serviceID, "both", "host")
+	rules, err := c.PreviewCompile(context.Background(), 0, sourcePeer, "peer", "10.0.0.100", targetPeer, "peer", "", serviceID, "ACCEPT", "both", "host")
 	if err != nil {
 		t.Fatalf("PreviewCompile failed: %v", err)
 	}
@@ -2896,7 +2896,7 @@ func TestPreviewCompileWithTargetIP(t *testing.T) {
 	c := NewTestCompiler(database)
 
 	// Preview with target_ip = "10.0.0.200" (different from target peer's IP 10.0.0.2)
-	rules, err := c.PreviewCompile(context.Background(), 0, sourcePeer, "peer", "", targetPeer, "peer", "10.0.0.200", serviceID, "both", "host")
+	rules, err := c.PreviewCompile(context.Background(), 0, sourcePeer, "peer", "", targetPeer, "peer", "10.0.0.200", serviceID, "ACCEPT", "both", "host")
 	if err != nil {
 		t.Fatalf("PreviewCompile failed: %v", err)
 	}

@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 )
 
 type HTTPClient interface {
@@ -45,6 +47,7 @@ func DoJSONRequest(ctx context.Context, client HTTPClient, method, url string, b
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		bodyBytes, readErr := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		if cErr := resp.Body.Close(); cErr != nil {
 			slog.Warn("close body failed", "error", cErr)
 		}
@@ -52,6 +55,12 @@ func DoJSONRequest(ctx context.Context, client HTTPClient, method, url string, b
 			StatusCode: resp.StatusCode,
 			Method:     method,
 			URL:        url,
+		}
+		if readErr == nil {
+			bodyStr := strings.TrimSpace(string(bodyBytes))
+			if bodyStr != "" {
+				return nil, fmt.Errorf("request failed: %w (body: %s)", httpErr, bodyStr)
+			}
 		}
 		return nil, fmt.Errorf("request failed: %w", httpErr)
 	}

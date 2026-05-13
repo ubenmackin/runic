@@ -3,7 +3,7 @@ package logs
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"math/rand"
 	"net"
 	"net/http"
 	"net/url"
@@ -46,10 +46,11 @@ type Hub struct {
 }
 
 type Client struct {
-	hub    *Hub
-	conn   *websocket.Conn
-	send   chan []byte
-	filter LogFilter
+	hub          *Hub
+	conn         *websocket.Conn
+	send         chan []byte
+	filter       LogFilter
+	filterPeerID int // -1 means no filter
 }
 
 type LogFilter struct {
@@ -115,16 +116,20 @@ func (h *Hub) Broadcast(event *models.LogEvent) {
 			select {
 			case client.send <- data:
 			default:
+				if rand.Float64() < 0.01 { // 1% sample to avoid log storms
+					runiclog.Warn("dropping log event for slow client",
+						"peer_id_filter", client.filter.PeerID)
+				}
 			}
 		}
 	}
 }
 
 func (c *Client) matchesFilter(ev *models.LogEvent) bool {
-	f := c.filter
-	if f.PeerID != "" && fmt.Sprintf("%d", ev.PeerID) != f.PeerID {
+	if c.filterPeerID >= 0 && ev.PeerID != c.filterPeerID {
 		return false
 	}
+	f := c.filter
 	if f.Action != "" && ev.Action != f.Action {
 		return false
 	}

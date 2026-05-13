@@ -16,12 +16,12 @@ import (
 )
 
 // generateUniqueID creates a random hex-encoded unique ID for JWT jti claims.
-func generateUniqueID() string {
+func generateUniqueID() (string, error) {
 	b := make([]byte, 8)
 	if _, err := rand.Read(b); err != nil {
-		return ""
+		return "", fmt.Errorf("generate unique id: %w", err)
 	}
-	return hex.EncodeToString(b)
+	return hex.EncodeToString(b), nil
 }
 
 func GenerateHMACKey() (string, error) {
@@ -38,10 +38,14 @@ func generateAgentToken(ctx context.Context, ds *store.DashboardStore, hostname 
 		return "", fmt.Errorf("agent JWT secret not configured: %w", err)
 	}
 	// In production, use proper JWT generation with expiration
+	jti, err := generateUniqueID()
+	if err != nil {
+		return "", fmt.Errorf("generate jti: %w", err)
+	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"sub":  fmt.Sprintf("host-%s", hostname),
 		"type": "agent",
-		"jti":  generateUniqueID(),
+		"jti":  jti,
 		"iat":  time.Now().Unix(),
 		"exp":  time.Now().Add(72 * time.Hour).Unix(),
 	})

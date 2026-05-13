@@ -193,8 +193,9 @@ func (h *Handler) AgentRotateKey(w http.ResponseWriter, r *http.Request) {
 		if lastRotatedAt.Valid {
 			rotationTime, parseErr := parseSQLiteDatetime(lastRotatedAt.String)
 			if parseErr != nil || time.Since(rotationTime) > 5*time.Minute {
-				// Clear expired token within the same transaction
-				if execErr := h.Store.ClearRotationTokenTx(r.Context(), tx, int(peerID)); execErr != nil {
+				// Clear expired token in a separate, immediately-committed transaction
+				// so the cleanup is not rolled back when we return the error.
+				if execErr := h.Store.ClearRotationToken(r.Context(), int(peerID)); execErr != nil {
 					slog.Warn("failed to clear expired rotation token", "error", execErr)
 				}
 				return common.NewHTTPError(http.StatusUnauthorized, "expired rotation token")

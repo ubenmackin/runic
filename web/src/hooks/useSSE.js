@@ -4,8 +4,9 @@
 * Provides real-time notifications from the backend via SSE.
 * Automatically reconnects on connection failure.
 */
-import { useEffect, useRef, useCallback } from 'react'
+import { useEffect, useRef, useCallback, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
+import { logger } from '../utils/logger'
 import { QUERY_KEYS, BASE } from '../api/client'
 
 /**
@@ -18,6 +19,7 @@ import { QUERY_KEYS, BASE } from '../api/client'
 */
 export function useSSE({ enabled = true, onPendingChangeAdded } = {}) {
   const queryClient = useQueryClient()
+  const [connected, setConnected] = useState(false)
   const eventSourceRef = useRef(null)
   const reconnectTimeoutRef = useRef(null)
   const reconnectAttemptsRef = useRef(0)
@@ -37,7 +39,7 @@ export function useSSE({ enabled = true, onPendingChangeAdded } = {}) {
     const delay = Math.min(1000 * Math.pow(2, reconnectAttemptsRef.current), 30000)
     reconnectAttemptsRef.current++
 
-    console.log(`SSE reconnecting in ${delay}ms (attempt ${reconnectAttemptsRef.current})`)
+    logger.log(`SSE reconnecting in ${delay}ms (attempt ${reconnectAttemptsRef.current})`)
 
     reconnectTimeoutRef.current = setTimeout(() => {
       if (mountedRef.current && enabled && connectRef.current) {
@@ -58,8 +60,12 @@ export function useSSE({ enabled = true, onPendingChangeAdded } = {}) {
     })
     eventSourceRef.current = es
 
+    es.addEventListener('open', () => {
+      setConnected(true)
+    })
     es.addEventListener('connected', () => {
       reconnectAttemptsRef.current = 0
+      setConnected(true)
     })
 
     es.addEventListener('pending_change_added', (e) => {
@@ -74,13 +80,14 @@ export function useSSE({ enabled = true, onPendingChangeAdded } = {}) {
           onPendingChangeAddedRef.current(peerId, data)
         }
       } catch (err) {
-        console.error('Failed to parse pending_change_added event:', err)
+        logger.error('Failed to parse pending_change_added event:', err)
       }
     })
 
     es.onerror = () => {
       if (es.readyState === EventSource.CLOSED) {
-        console.log('SSE connection closed')
+        setConnected(false)
+        logger.log('SSE connection closed')
 
         if (mountedRef.current && enabled) {
           scheduleReconnect()
@@ -113,9 +120,7 @@ export function useSSE({ enabled = true, onPendingChangeAdded } = {}) {
     }
   }, [enabled, connect])
 
-  return {
-    connected: eventSourceRef.current?.readyState === EventSource.OPEN,
-  }
+  return { connected }
 }
 
 export default useSSE

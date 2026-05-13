@@ -1466,7 +1466,7 @@ func TestConsumeRegistrationToken(t *testing.T) {
 			}
 
 			handler := NewHandler(store.NewPeerStore(db), store.NewDashboardStore(db, db), nil, store.NewImportStore(db, store.NewPeerStore(db), store.NewGroupStore(db), store.NewServiceStore(db)), store.NewTokenStore(db), db)
-			consumed, err := handler.ConsumeRegistrationToken(tt.token, tt.hostname)
+			consumed, err := handler.ConsumeRegistrationToken(context.Background(), tt.token, tt.hostname)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}

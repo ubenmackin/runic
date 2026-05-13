@@ -230,11 +230,17 @@ func main() {
 	apiInstance := api.NewAPI(database, compiler, logsDB, logsDBPath, alertService, encryptor)
 	apiInstance.RegisterRoutes(r, downloadsDir)
 
+	// Start background lifecycle goroutines (workers, log hub, cleanup)
+	ctx, cancel := context.WithCancel(context.Background())
+	apiInstance.Start(ctx)
+
 	// Strip the "web/dist" prefix so http.FS can find files in the embedded FS
 	subFS, err := fs.Sub(api.WebDist, "web/dist")
 	if err != nil {
+		cancel()
 		log.Fatalf("Failed to create sub filesystem: %v", err)
 	}
+	defer cancel()
 	fileServer := http.FileServer(http.FS(subFS))
 
 	// For any route not matched above, serve the SPA with CSP nonce injection
@@ -281,9 +287,6 @@ func main() {
 			}
 		}
 	})))
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	go startOfflineDetector(ctx, database)
 
@@ -373,7 +376,6 @@ func startOfflineDetector(ctx context.Context, database *sql.DB) {
 			log.Println("Offline detector shutting down")
 			return
 		case <-ticker.C:
-			ctx := context.Background()
 			_, err := database.ExecContext(ctx,
 				fmt.Sprintf(`UPDATE peers SET status = 'offline'
 				WHERE status = 'online'
@@ -396,7 +398,6 @@ func startTokenCleanup(ctx context.Context, ts *store.TokenStore) {
 			log.Println("Token cleanup shutting down")
 			return
 		case <-ticker.C:
-			ctx := context.Background()
 			if err := ts.CleanupExpiredTokens(ctx); err != nil {
 				log.Printf("Token cleanup error: %v", err)
 			}

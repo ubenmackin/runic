@@ -133,6 +133,26 @@ func (s *PolicyStore) UpdatePolicy(ctx context.Context, p *models.PolicyRow) err
 	return nil
 }
 
+func (s *PolicyStore) UpdatePolicyTx(ctx context.Context, tx *sql.Tx, p *models.PolicyRow) error {
+	result, err := tx.ExecContext(ctx,
+		`UPDATE policies SET name = ?, description = ?, source_id = ?, source_type = ?, service_id = ?,
+		target_id = ?, target_type = ?, source_ip = ?, target_ip = ?, action = ?, priority = ?, enabled = ?, target_scope = ?, direction = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE id = ? AND is_pending_delete = 0`,
+		p.Name, p.Description, p.SourceID, p.SourceType, p.ServiceID,
+		p.TargetID, p.TargetType, p.SourceIP, p.TargetIP, p.Action, p.Priority, p.Enabled, p.TargetScope, p.Direction, p.ID)
+	if err != nil {
+		return fmt.Errorf("update policy tx: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 func (s *PolicyStore) PatchPolicyEnabled(ctx context.Context, id int, enabled bool) error {
 	result, err := s.db.ExecContext(ctx, "UPDATE policies SET enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND is_pending_delete = 0", enabled, id)
 	if err != nil {
@@ -148,10 +168,40 @@ func (s *PolicyStore) PatchPolicyEnabled(ctx context.Context, id int, enabled bo
 	return nil
 }
 
+func (s *PolicyStore) PatchPolicyEnabledTx(ctx context.Context, tx *sql.Tx, id int, enabled bool) error {
+	result, err := tx.ExecContext(ctx, "UPDATE policies SET enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND is_pending_delete = 0", enabled, id)
+	if err != nil {
+		return fmt.Errorf("patch policy tx: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 func (s *PolicyStore) SoftDeletePolicy(ctx context.Context, id int) error {
 	res, err := s.db.ExecContext(ctx, "UPDATE policies SET is_pending_delete = 1 WHERE id = ? AND is_pending_delete = 0", id)
 	if err != nil {
 		return fmt.Errorf("soft delete policy: %w", err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
+	}
+	if affected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func (s *PolicyStore) SoftDeletePolicyTx(ctx context.Context, tx *sql.Tx, id int) error {
+	res, err := tx.ExecContext(ctx, "UPDATE policies SET is_pending_delete = 1 WHERE id = ? AND is_pending_delete = 0", id)
+	if err != nil {
+		return fmt.Errorf("soft delete policy tx: %w", err)
 	}
 	affected, err := res.RowsAffected()
 	if err != nil {

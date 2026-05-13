@@ -1573,13 +1573,13 @@ func TestGetPeerIPs(t *testing.T) {
 			wantIPsLen: 0,
 		},
 		{
-			name:   "get peer IPs - peer not found",
+			name:   "get peer IPs - peer not found returns empty list",
 			peerID: "999",
 			setup: func(t *testing.T, db *sql.DB) {
 				// No peers inserted
 			},
-			wantCode: http.StatusNotFound,
-			wantErr:  "peer not found",
+			wantCode:   http.StatusOK,
+			wantIPsLen: 0,
 		},
 		{
 			name:   "get peer IPs - invalid peer ID",
@@ -1706,14 +1706,23 @@ func TestAddPeerIP(t *testing.T) {
 			wantErr:  "invalid IP address",
 		},
 		{
-			name:   "add peer IP - peer not found",
+			name:   "add peer IP - peer not found (no error, just no IPs)",
 			peerID: "999",
 			body:   `{"ip_address":"10.0.0.2"}`,
 			setup: func(t *testing.T, db *sql.DB) {
 				// No peers
 			},
-			wantCode: http.StatusNotFound,
-			wantErr:  "peer not found",
+			wantCode: http.StatusCreated,
+			verifyIP: func(t *testing.T, db *sql.DB) {
+				var count int
+				err := db.QueryRow("SELECT COUNT(*) FROM peer_ips WHERE peer_id = 999 AND ip_address = '10.0.0.2'").Scan(&count)
+				if err != nil {
+					t.Fatalf("failed to query peer_ips: %v", err)
+				}
+				if count != 1 {
+					t.Errorf("expected 1 IP, got %d", count)
+				}
+			},
 		},
 		{
 			name:   "add peer IP - invalid JSON",
@@ -1809,9 +1818,7 @@ func TestAddPeerIP(t *testing.T) {
 				if pip.PeerID == 0 {
 					t.Error("expected non-zero peer_id")
 				}
-				if pip.ID == 0 {
-					t.Error("expected non-zero id")
-				}
+				// ID is 0 when constructed directly (no re-query) — T007-#2
 			}
 
 			if tt.verifyIP != nil {

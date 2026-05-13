@@ -34,7 +34,7 @@ type sseCallbackGuard struct {
 // tryStart attempts to start a guarded goroutine. It returns false (and does
 // nothing) if a previous invocation is still running.
 func (g *sseCallbackGuard) tryStart(ctx context.Context, fn func(context.Context)) bool {
-	if g.running.Load() {
+	if !g.running.CompareAndSwap(false, true) {
 		log.Warn("SSE callback already running, skipping duplicate launch")
 		return false
 	}
@@ -43,16 +43,11 @@ func (g *sseCallbackGuard) tryStart(ctx context.Context, fn func(context.Context
 	g.cancelMu.Lock()
 	if g.cancel != nil {
 		g.cancel()
-		g.cancel = nil
 	}
-	g.cancelMu.Unlock()
-
 	childCtx, childCancel := context.WithCancel(ctx)
-	g.cancelMu.Lock()
 	g.cancel = childCancel
 	g.cancelMu.Unlock()
 
-	g.running.Store(true)
 	go func() {
 		defer g.running.Store(false)
 		fn(childCtx)
@@ -198,7 +193,7 @@ func connectSSE(ctx context.Context, client common.HTTPClient, controlPlaneURL, 
 	scanner.Buffer(buf, maxScanTokenSize)
 
 	// Guards to prevent goroutine leaks on SSE reconnect.
-	var bundleGuard, backupGuard sseCallbackGuard
+	var bundleGuard, backupGuard, updateGuard sseCallbackGuard
 
 	var prevEvent string
 	for scanner.Scan() {
@@ -227,7 +222,9 @@ func connectSSE(ctx context.Context, client common.HTTPClient, controlPlaneURL, 
 				ControlPlaneURL string `json:"control_plane_url"`
 			}
 			if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &data); err == nil {
-				go onUpdateAgent(ctx, data.ControlPlaneURL)
+				updateGuard.tryStart(ctx, func(sseCtx context.Context) {
+					onUpdateAgent(sseCtx, data.ControlPlaneURL)
+				})
 			}
 			prevEvent = "" // Reset after processing data
 		case strings.HasPrefix(line, "data:"):

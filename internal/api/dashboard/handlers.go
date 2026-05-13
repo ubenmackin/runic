@@ -4,6 +4,7 @@ package dashboard
 import (
 	"context"
 	"net/http"
+	"sync/atomic"
 
 	"github.com/gorilla/mux"
 	"golang.org/x/sync/errgroup"
@@ -39,13 +40,20 @@ func (h *Handler) HandleDashboard(w http.ResponseWriter, r *http.Request) {
 	// Using errgroup to fetch data concurrently from the store
 	g, ctx := errgroup.WithContext(r.Context())
 
+	var hadErrors atomic.Bool
+
 	g.Go(func() error {
 		var err error
 		stats.TotalPeers, stats.ManualPeers, stats.OnlinePeers, stats.TotalPolicies, err = h.Store.GetPeerAndPolicyCounts(ctx)
 		if err != nil {
+			hadErrors.Store(true)
 			log.ErrorContext(ctx, "failed to get peer/policy counts", "error", err)
 		}
-		stats.OfflinePeers = stats.TotalPeers - stats.ManualPeers - stats.OnlinePeers
+		offline := stats.TotalPeers - stats.ManualPeers - stats.OnlinePeers
+		if offline < 0 {
+			offline = 0
+		}
+		stats.OfflinePeers = offline
 		return nil // Don't fail entire request for one metric
 	})
 
@@ -53,6 +61,7 @@ func (h *Handler) HandleDashboard(w http.ResponseWriter, r *http.Request) {
 		var err error
 		stats.BlockedLastHour, stats.BlockedLast24h, err = h.Store.GetBlockedCounts(ctx)
 		if err != nil {
+			hadErrors.Store(true)
 			log.ErrorContext(ctx, "failed to get blocked counts", "error", err)
 		}
 		return nil
@@ -62,6 +71,7 @@ func (h *Handler) HandleDashboard(w http.ResponseWriter, r *http.Request) {
 		var err error
 		stats.RecentActivity, err = h.Store.GetRecentActivity(ctx, 5)
 		if err != nil {
+			hadErrors.Store(true)
 			log.ErrorContext(ctx, "failed to get recent activity", "error", err)
 		}
 		return nil
@@ -71,6 +81,7 @@ func (h *Handler) HandleDashboard(w http.ResponseWriter, r *http.Request) {
 		var err error
 		stats.PeerHealth, err = h.Store.GetPeerHealth(ctx)
 		if err != nil {
+			hadErrors.Store(true)
 			log.ErrorContext(ctx, "failed to get peer health", "error", err)
 		}
 		return nil
@@ -80,6 +91,7 @@ func (h *Handler) HandleDashboard(w http.ResponseWriter, r *http.Request) {
 		var err error
 		stats.TopBlockedSource, err = h.Store.GetTopBlockedSources(ctx, 5)
 		if err != nil {
+			hadErrors.Store(true)
 			log.ErrorContext(ctx, "failed to get top blocked sources", "error", err)
 		}
 		return nil
@@ -87,6 +99,10 @@ func (h *Handler) HandleDashboard(w http.ResponseWriter, r *http.Request) {
 
 	_ = g.Wait() // Errors are logged inside goroutines, continue with partial data
 
+	if hadErrors.Load() {
+		stats.Degraded = true
+		w.Header().Set("X-Dashboard-Degraded", "true")
+	}
 	common.RespondJSON(w, http.StatusOK, map[string]interface{}{"data": stats})
 }
 

@@ -42,6 +42,13 @@ func withRoleContext(ctx context.Context, role, username string) context.Context
 // =============================================================================
 // =============================================================================
 
+type listUsersResponse struct {
+	Users   []models.UserRow `json:"users"`
+	Total   int              `json:"total"`
+	Page    int              `json:"page"`
+	PerPage int              `json:"per_page"`
+}
+
 func TestListUsers_EmptyTable(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
@@ -49,6 +56,7 @@ func TestListUsers_EmptyTable(t *testing.T) {
 	h := newTestHandler(db)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/users", nil)
+	r = r.WithContext(withAdminContext(r.Context()))
 
 	h.ListUsers(w, r)
 
@@ -56,13 +64,22 @@ func TestListUsers_EmptyTable(t *testing.T) {
 		t.Errorf("expected status %d, got %d", http.StatusOK, w.Code)
 	}
 
-	var users []models.UserRow
-	if err := json.Unmarshal(w.Body.Bytes(), &users); err != nil {
+	var resp listUsersResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("failed to unmarshal response: %v", err)
 	}
 
-	if len(users) != 0 {
-		t.Errorf("expected empty users list, got %d users", len(users))
+	if len(resp.Users) != 0 {
+		t.Errorf("expected empty users list, got %d users", len(resp.Users))
+	}
+	if resp.Total != 0 {
+		t.Errorf("expected total 0, got %d", resp.Total)
+	}
+	if resp.Page != 1 {
+		t.Errorf("expected page 1, got %d", resp.Page)
+	}
+	if resp.PerPage != 50 {
+		t.Errorf("expected per_page 50, got %d", resp.PerPage)
 	}
 }
 
@@ -84,6 +101,7 @@ func TestListUsers_MultipleUsers(t *testing.T) {
 	h := newTestHandler(db)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/users", nil)
+	r = r.WithContext(withAdminContext(r.Context()))
 
 	h.ListUsers(w, r)
 
@@ -91,13 +109,19 @@ func TestListUsers_MultipleUsers(t *testing.T) {
 		t.Errorf("expected status %d, got %d", http.StatusOK, w.Code)
 	}
 
-	var users []models.UserRow
-	if err := json.Unmarshal(w.Body.Bytes(), &users); err != nil {
+	var resp listUsersResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("failed to unmarshal response: %v", err)
 	}
 
-	if len(users) != 3 {
-		t.Errorf("expected 3 users, got %d", len(users))
+	if len(resp.Users) != 3 {
+		t.Errorf("expected 3 users, got %d", len(resp.Users))
+	}
+	if resp.Total != 3 {
+		t.Errorf("expected total 3, got %d", resp.Total)
+	}
+	if resp.Page != 1 {
+		t.Errorf("expected page 1, got %d", resp.Page)
 	}
 }
 

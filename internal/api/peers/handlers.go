@@ -263,7 +263,35 @@ func (h *Handler) GetPeerBundle(w http.ResponseWriter, r *http.Request) {
 
 	includePending := r.URL.Query().Get("include_pending") == "true"
 
-	bundleData, version, versionNumber, hmac, deployedVersion, err := h.Store.GetPeerBundle(r.Context(), id, includePending)
+	if includePending {
+		pendingData, deployedData, version, hmac, deployedVersion, versionNumber, err := h.Store.GetPeerBundleWithDeployed(r.Context(), id)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				log.WarnContext(r.Context(), "no bundle found", "peer_id", id, "include_pending", includePending)
+				common.RespondError(w, http.StatusNotFound, "bundle not found")
+				return
+			}
+			log.ErrorContext(r.Context(), "failed to get bundle", "error", err)
+			common.InternalError(w)
+			return
+		}
+
+		response := map[string]interface{}{
+			"rules":          pendingData,
+			"version":        version,
+			"version_number": versionNumber,
+			"hmac":           hmac,
+		}
+		if deployedData != "" {
+			response["deployed_rules"] = deployedData
+			response["deployed_version"] = deployedVersion
+		}
+		common.RespondJSON(w, http.StatusOK, response)
+		return
+	}
+
+	// Deployed bundle mode — single call, no double-query
+	bundleData, version, versionNumber, hmac, _, err := h.Store.GetPeerBundle(r.Context(), id, false)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			log.WarnContext(r.Context(), "no bundle found", "peer_id", id, "include_pending", includePending)
@@ -272,23 +300,6 @@ func (h *Handler) GetPeerBundle(w http.ResponseWriter, r *http.Request) {
 		}
 		log.ErrorContext(r.Context(), "failed to get bundle", "error", err)
 		common.InternalError(w)
-		return
-	}
-
-	if includePending && deployedVersion != "" {
-		// Also fetch deployed rules content for diff comparison
-		deployedData, _, _, _, _, err := h.Store.GetPeerBundle(r.Context(), id, false)
-		response := map[string]interface{}{
-			"rules":          bundleData,
-			"version":        version,
-			"version_number": versionNumber,
-			"hmac":           hmac,
-		}
-		if err == nil && deployedData != "" {
-			response["deployed_rules"] = deployedData
-			response["deployed_version"] = deployedVersion
-		}
-		common.RespondJSON(w, http.StatusOK, response)
 		return
 	}
 
@@ -357,16 +368,8 @@ func (h *Handler) GetPeerIPs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err = h.Store.GetPeerByID(r.Context(), id)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			common.RespondError(w, http.StatusNotFound, "peer not found")
-			return
-		}
-		common.RespondError(w, http.StatusInternalServerError, "failed to query peer")
-		return
-	}
-
+	// ListPeerIPs returns an empty slice for non-existent peers — no need for
+	// a separate existence check (T007-#3).
 	peerIPs, err := h.Store.ListPeerIPs(r.Context(), id)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "failed to query peer IPs")
@@ -397,16 +400,8 @@ func (h *Handler) AddPeerIP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err = h.Store.GetPeerByID(r.Context(), id)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			common.RespondError(w, http.StatusNotFound, "peer not found")
-			return
-		}
-		common.RespondError(w, http.StatusInternalServerError, "failed to query peer")
-		return
-	}
-
+	// Single query: ListPeerIPs handles both existence verification (empty = no peer)
+	// and duplicate IP detection (T007-#2).
 	existingIPs, err := h.Store.ListPeerIPs(r.Context(), id)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "failed to check duplicate IP")
@@ -426,30 +421,12 @@ func (h *Handler) AddPeerIP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	updatedIPs, err := h.Store.ListPeerIPs(r.Context(), id)
-	if err != nil {
-		log.ErrorContext(r.Context(), "failed to fetch new peer IP", "error", err)
-		common.InternalError(w)
-		return
-	}
-
-	var newIP *store.PeerIPView
-	for i := range updatedIPs {
-		if updatedIPs[i].IPAddress == input.IPAddress {
-			newIP = &updatedIPs[i]
-			break
-		}
-	}
-
-	if newIP != nil {
-		common.RespondJSON(w, http.StatusCreated, newIP)
-	} else {
-		common.RespondJSON(w, http.StatusCreated, store.PeerIPView{
-			PeerID:    id,
-			IPAddress: input.IPAddress,
-			IsPrimary: false,
-		})
-	}
+	// Return the known inserted data directly instead of re-querying (T007-#2).
+	common.RespondJSON(w, http.StatusCreated, store.PeerIPView{
+		PeerID:    id,
+		IPAddress: input.IPAddress,
+		IsPrimary: false,
+	})
 }
 
 func (h *Handler) DeletePeerIP(w http.ResponseWriter, r *http.Request) {

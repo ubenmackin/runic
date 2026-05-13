@@ -1,4 +1,8 @@
 // Package models provides database models.
+//
+// Persistence strategy: Models in this file use GORM for persistence
+// (gorm:"..." tags, TableName() methods). Models in models.go, imports.go, logs.go,
+// agent.go, and dashboard.go use manual positional SQL scanning via the store layer.
 package models
 
 import (
@@ -378,6 +382,7 @@ type SMTPConfigView struct {
 	Host        string `json:"host"`
 	Port        int    `json:"port"`
 	Username    string `json:"username"`
+	Password    string `json:"-"`
 	PasswordSet bool   `json:"password_set"`
 	UseTLS      bool   `json:"use_tls"`
 	UseSMTPS    bool   `json:"use_smtps"`

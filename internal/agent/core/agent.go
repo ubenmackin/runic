@@ -87,7 +87,7 @@ func New(configPath, controlPlaneURL string) *Agent {
 	agent.backupPath = "/etc/runic-agent/iptables-backup.rules"
 
 	// Initialize rotation manager (hostID will be set after registration/load)
-	agent.rotationManager = rotation.NewManager(cfg, configPath, httpClient, cfg.ControlPlaneURL, "")
+	agent.rotationManager = rotation.NewManager(configPath, httpClient, cfg.ControlPlaneURL, "")
 
 	return agent
 }
@@ -123,7 +123,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	log.Info("Runic agent starting", "version", a.version)
 	log.Info("Control plane URL", "url", cfg.ControlPlaneURL)
 
-	if err := a.DisableSystemIPTablesIfConfigured(); err != nil {
+	if err := a.DisableSystemIPTablesIfConfigured(ctx); err != nil {
 		log.Warn("Failed to disable system iptables services", "error", err)
 	}
 
@@ -135,9 +135,9 @@ func (a *Agent) Run(ctx context.Context) error {
 	}
 
 	cfg = a.getConfig()
-	a.rotationManager = rotation.NewManager(a.config, a.configPath, a.httpClient, cfg.ControlPlaneURL, cfg.HostID)
+	a.rotationManager = rotation.NewManager(a.configPath, a.httpClient, cfg.ControlPlaneURL, cfg.HostID)
 
-	if err := a.backupIptables(); err != nil {
+	if err := a.backupIptables(ctx); err != nil {
 		log.Warn("Failed to backup iptables", "error", err)
 	}
 
@@ -195,7 +195,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	return g.Wait()
 }
 
-func (a *Agent) backupIptables() error {
+func (a *Agent) backupIptables(ctx context.Context) error {
 	if _, err := os.Stat(a.backupPath); err == nil {
 		log.Info("Firewall backup already exists, skipping")
 		return nil
@@ -206,10 +206,10 @@ func (a *Agent) backupIptables() error {
 		return fmt.Errorf("create backup dir: %w", err)
 	}
 
-	out, err := a.cmdRunner.Run(context.Background(), "iptables-save")
+	out, err := a.cmdRunner.Run(ctx, "iptables-save")
 	if err != nil {
 		log.Info("iptables-save failed, trying nft list ruleset", "error", err)
-		out, err = a.cmdRunner.Run(context.Background(), "nft", "list", "ruleset")
+		out, err = a.cmdRunner.Run(ctx, "nft", "list", "ruleset")
 		if err != nil {
 			return fmt.Errorf("firewall backup failed (tried iptables-save and nft list ruleset): %w", err)
 		}
@@ -256,7 +256,7 @@ func (a *Agent) saveConfigLocked() error {
 // DisableSystemIPTablesIfConfigured disables system iptables if the DisableSystemManagedIPTables config option is set to true.
 // This prevents conflicts between runic's firewall management and system services
 // like netfilter-persistent, iptables-persistent, firewalld, etc.
-func (a *Agent) DisableSystemIPTablesIfConfigured() error {
+func (a *Agent) DisableSystemIPTablesIfConfigured(ctx context.Context) error {
 	cfg := a.getConfig()
 	if !cfg.DisableSystemManagedIPTables {
 		return nil
@@ -289,7 +289,7 @@ func (a *Agent) DisableSystemIPTablesIfConfigured() error {
 	}
 
 	for _, svc := range services {
-		if err := a.disableService(svc); err != nil {
+		if err := a.disableService(ctx, svc); err != nil {
 			log.Warn("Failed to disable service", "service", svc, "error", err)
 			continue
 		}
@@ -299,8 +299,7 @@ func (a *Agent) DisableSystemIPTablesIfConfigured() error {
 	return nil
 }
 
-func (a *Agent) disableService(service string) error {
-	ctx := context.Background()
+func (a *Agent) disableService(ctx context.Context, service string) error {
 
 	checkActive, _ := a.cmdRunner.Run(ctx, "systemctl", "is-active", service)   // intentionally discarded - checking if service exists
 	checkEnabled, _ := a.cmdRunner.Run(ctx, "systemctl", "is-enabled", service) // intentionally discarded - checking if service exists
@@ -360,14 +359,18 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 	}
 }
 
-func (a *Agent) sendHeartbeat(ctx context.Context) error {
+func (a *Agent) detectIPStrings() []string {
 	allIPs := detectHostIPs(a.cmdRunner)
-	var ipStrings []string
-	for _, ipInfo := range allIPs {
-		ipStrings = append(ipStrings, ipInfo.IP)
+	ips := make([]string, len(allIPs))
+	for i, ipInfo := range allIPs {
+		ips[i] = ipInfo.IP
 	}
+	return ips
+}
+
+func (a *Agent) sendHeartbeat(ctx context.Context) error {
 	cfg := a.getConfig()
-	return metrics.SendHeartbeat(ctx, a.httpClient, cfg.ControlPlaneURL, cfg.HostID, cfg.CurrentBundleVer, cfg.Token, a.version, ipStrings)
+	return metrics.SendHeartbeat(ctx, a.httpClient, cfg.ControlPlaneURL, cfg.HostID, cfg.CurrentBundleVer, cfg.Token, a.version, a.detectIPStrings())
 }
 
 func (a *Agent) pollLoop(ctx context.Context, skipFirstPull bool) {
@@ -428,17 +431,12 @@ func (a *Agent) confirmApply(ctx context.Context, version string) error {
 }
 
 func (a *Agent) register(ctx context.Context) error {
-	allIPs := detectHostIPs(a.cmdRunner)
-	var ipStrings []string
-	for _, ipInfo := range allIPs {
-		ipStrings = append(ipStrings, ipInfo.IP)
-	}
 	// identity.Register mutates cfg (HostID, Token, etc.), so we must
 	// hold the write lock while it runs to prevent data races with
 	// concurrent readers in heartbeatLoop, pollLoop, etc.
 	a.configMu.Lock()
 	defer a.configMu.Unlock()
-	return identity.Register(ctx, a.httpClient, a.config, a.version, a.saveConfigLocked, ipStrings)
+	return identity.Register(ctx, a.httpClient, a.config, a.version, a.saveConfigLocked, a.detectIPStrings())
 }
 
 // thundering herd when multiple loops detect 401 errors simultaneously.
@@ -451,9 +449,6 @@ func (a *Agent) safeRegister(ctx context.Context) error {
 
 func (a *Agent) isControlPlaneReachable(ctx context.Context) bool {
 	cfg := a.getConfig()
-	client := &http.Client{
-		Timeout: constants.ReachabilityTimeout,
-	}
 	url := fmt.Sprintf("%s/api/v1/agent/heartbeat", cfg.ControlPlaneURL)
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
@@ -462,7 +457,7 @@ func (a *Agent) isControlPlaneReachable(ctx context.Context) bool {
 	req.Header.Set("Authorization", "Bearer "+cfg.Token)
 	req.Header.Set("User-Agent", "runic-agent/"+a.version)
 
-	resp, err := client.Do(req)
+	resp, err := a.httpClient.Do(req)
 	if err != nil {
 		return false
 	}
@@ -585,7 +580,7 @@ func (a *Agent) handleFetchBackup(ctx context.Context) {
 		log.Error("Failed to read iptables backup", "error", err)
 		return
 	}
-	ipsets, _ := a.readIpsets() // non-fatal if this fails
+	ipsets, _ := a.readIpsets(ctx) // non-fatal if this fails
 	cfg := a.getConfig()
 	if err := transport.PostBackup(ctx, a.httpClient, cfg.ControlPlaneURL, cfg.HostID, cfg.Token, a.version, backup, ipsets); err != nil {
 		log.Error("Failed to post backup to control plane", "error", err)
@@ -664,8 +659,8 @@ func (a *Agent) readBackup() (string, error) {
 }
 
 // If ipset is not installed, returns empty string (non-fatal).
-func (a *Agent) readIpsets() (string, error) {
-	out, err := a.cmdRunner.Run(context.Background(), "ipset", "list")
+func (a *Agent) readIpsets(ctx context.Context) (string, error) {
+	out, err := a.cmdRunner.Run(ctx, "ipset", "list")
 	if err != nil {
 		log.Warn("ipset list failed (ipset may not be installed)", "error", err)
 		return "", nil // non-fatal
@@ -682,8 +677,19 @@ func (a *Agent) rotationCheckLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := a.rotationManager.CheckAndRotate(ctx); err != nil {
+			cfg := a.getConfig()
+			newKey, err := a.rotationManager.CheckAndRotate(ctx, cfg.HMACKey, cfg.Token)
+			if err != nil {
 				log.Warn("Key rotation check failed", "error", err)
+				continue
+			}
+			if newKey != "" {
+				a.updateConfig(func(c *identity.Config) {
+					c.HMACKey = newKey
+				})
+				if err := a.saveConfig(); err != nil {
+					log.Warn("Failed to save config after key rotation", "error", err)
+				}
 			}
 		}
 	}

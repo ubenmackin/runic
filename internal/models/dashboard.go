@@ -34,4 +34,5 @@ type DashboardStats struct {
 	RecentActivity   []ActivityItem `json:"recent_activity"`
 	PeerHealth       []PeerHealth   `json:"peer_health"`
 	TopBlockedSource []BlockedIP    `json:"top_blocked_sources"`
+	Degraded         bool           `json:"degraded,omitempty"`
 }

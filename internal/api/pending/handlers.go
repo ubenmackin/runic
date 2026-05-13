@@ -725,7 +725,7 @@ func (h *Handler) HandlePushJobSSE(w http.ResponseWriter, r *http.Request) {
 
 	// Register for push job events
 	ch := h.SSEHub.RegisterPushJob(jobID)
-	defer h.SSEHub.UnregisterPushJob(jobID)
+	defer h.SSEHub.UnregisterPushJob(jobID, ch)
 
 	// Send initial state
 	job, peers, err := h.PendingStore.GetPushJobWithPeers(r.Context(), jobID)
@@ -837,22 +837,22 @@ func generateDiff(oldContent, newContent string) string {
 	oldLines := splitLines(oldContent)
 	newLines := splitLines(newContent)
 
-	// Compute LCS using DP table
+	// Compute LCS using 2-row DP table (O(n) space instead of O(m×n))
 	m, n := len(oldLines), len(newLines)
-	dp := make([][]int, m+1)
+	dp := make([][]int, 2)
 	for i := range dp {
 		dp[i] = make([]int, n+1)
 	}
 	for i := 1; i <= m; i++ {
+		prev, cur := dp[(i-1)%2], dp[i%2]
 		for j := 1; j <= n; j++ {
-			if oldLines[i-1] == newLines[j-1] {
-				dp[i][j] = dp[i-1][j-1] + 1
-			} else {
-				if dp[i-1][j] > dp[i][j-1] {
-					dp[i][j] = dp[i-1][j]
-				} else {
-					dp[i][j] = dp[i][j-1]
-				}
+			switch {
+			case oldLines[i-1] == newLines[j-1]:
+				cur[j] = prev[j-1] + 1
+			case prev[j] > cur[j-1]:
+				cur[j] = prev[j]
+			default:
+				cur[j] = cur[j-1]
 			}
 		}
 	}
@@ -870,7 +870,7 @@ func generateDiff(oldContent, newContent string) string {
 			entries = append(entries, diffEntry{"  ", oldLines[i-1]})
 			i--
 			j--
-		case j > 0 && (i == 0 || dp[i][j-1] >= dp[i-1][j]):
+		case j > 0 && (i == 0 || dp[i%2][j-1] >= dp[(i-1)%2][j]):
 			entries = append(entries, diffEntry{"+ ", newLines[j-1]})
 			j--
 		default:

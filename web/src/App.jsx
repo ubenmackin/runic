@@ -22,6 +22,16 @@ const SetupKeys = lazy(() => import('./pages/SetupKeys'))
 const Users = lazy(() => import('./pages/Users'))
 const Settings = lazy(() => import('./pages/Settings'))
 
+function LazyPage({ Component, ...props }) {
+  return (
+    <RouteErrorBoundary>
+      <Suspense fallback={<PageLoader />}>
+        <Component {...props} />
+      </Suspense>
+    </RouteErrorBoundary>
+  )
+}
+
 function PageLoader() {
   return (
 <div className="min-h-screen bg-gray-50 dark:bg-charcoal-darkest flex items-center justify-center">
@@ -95,8 +105,8 @@ export default function App() {
           <SetupProvider>
             <BrowserRouter>
               <Routes>
-                <Route path="/login" element={<RouteErrorBoundary><Suspense fallback={<PageLoader />}><Login /></Suspense></RouteErrorBoundary>} />
-        <Route path="/setup" element={<RouteErrorBoundary><Suspense fallback={<PageLoader />}><Login mode="setup" /></Suspense></RouteErrorBoundary>} />
+                <Route path="/login" element={<LazyPage Component={Login} />} />
+        <Route path="/setup" element={<LazyPage Component={Login} mode="setup" />} />
         <Route path="/" element={
           <PrivateRoute>
             <PendingChangesProvider>
@@ -104,17 +114,17 @@ export default function App() {
             </PendingChangesProvider>
           </PrivateRoute>
         }>
-          <Route index element={<RouteErrorBoundary><Suspense fallback={<PageLoader />}><Dashboard /></Suspense></RouteErrorBoundary>} />
-                  <Route path="topology" element={<RouteErrorBoundary><Suspense fallback={<PageLoader />}><Topology /></Suspense></RouteErrorBoundary>} />
-                  <Route path="peers" element={<RouteErrorBoundary><Suspense fallback={<PageLoader />}><Peers /></Suspense></RouteErrorBoundary>} />
-                  <Route path="groups" element={<RouteErrorBoundary><Suspense fallback={<PageLoader />}><Groups /></Suspense></RouteErrorBoundary>} />
-                  <Route path="services" element={<RouteErrorBoundary><Suspense fallback={<PageLoader />}><Services /></Suspense></RouteErrorBoundary>} />
-                  <Route path="policies" element={<RouteErrorBoundary><Suspense fallback={<PageLoader />}><Policies /></Suspense></RouteErrorBoundary>} />
-                  <Route path="logs" element={<RouteErrorBoundary><Suspense fallback={<PageLoader />}><Logs /></Suspense></RouteErrorBoundary>} />
-                  <Route path="alerts" element={<RouteErrorBoundary><Suspense fallback={<PageLoader />}><Alerts /></Suspense></RouteErrorBoundary>} />
-                  <Route path="setup-keys" element={<RouteErrorBoundary><Suspense fallback={<PageLoader />}><SetupKeys /></Suspense></RouteErrorBoundary>} />
-                  <Route path="users" element={<RouteErrorBoundary><Suspense fallback={<PageLoader />}><Users /></Suspense></RouteErrorBoundary>} />
-                  <Route path="settings" element={<RouteErrorBoundary><Suspense fallback={<PageLoader />}><Settings /></Suspense></RouteErrorBoundary>} />
+          <Route index element={<LazyPage Component={Dashboard} />} />
+          <Route path="topology" element={<LazyPage Component={Topology} />} />
+          <Route path="peers" element={<LazyPage Component={Peers} />} />
+          <Route path="groups" element={<LazyPage Component={Groups} />} />
+          <Route path="services" element={<LazyPage Component={Services} />} />
+          <Route path="policies" element={<LazyPage Component={Policies} />} />
+          <Route path="logs" element={<LazyPage Component={Logs} />} />
+          <Route path="alerts" element={<LazyPage Component={Alerts} />} />
+          <Route path="setup-keys" element={<LazyPage Component={SetupKeys} />} />
+          <Route path="users" element={<LazyPage Component={Users} />} />
+          <Route path="settings" element={<LazyPage Component={Settings} />} />
                 </Route>
               </Routes>
             </BrowserRouter>

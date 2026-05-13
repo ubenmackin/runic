@@ -314,9 +314,11 @@ func (s *AlertStore) GetSMTPConfig(ctx context.Context) (*models.SMTPConfigView,
 		return nil, fmt.Errorf("get smtp_username: %w", err)
 	}
 
-	var hasPassword bool
-	err = s.db.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM system_config WHERE key = 'smtp_password' AND value IS NOT NULL AND value != ''").Scan(&hasPassword)
-	config.PasswordSet = err == nil && hasPassword
+	err = s.db.QueryRowContext(ctx, "SELECT value FROM system_config WHERE key = 'smtp_password'").Scan(&config.Password)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("get smtp_password: %w", err)
+	}
+	config.PasswordSet = config.Password != ""
 
 	config.UseTLS, _ = getBoolConfig(ctx, s.db, "smtp_use_tls")
 

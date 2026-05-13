@@ -75,6 +75,12 @@ func MakeLogsStreamHandler(hub *Hub, tokenStore TokenRevoker) http.HandlerFunc {
 				Action: r.URL.Query().Get("action"),
 				SrcIP:  r.URL.Query().Get("src_ip"),
 			},
+			filterPeerID: -1,
+		}
+		if pid := r.URL.Query().Get("peer_id"); pid != "" {
+			if n, err := strconv.Atoi(pid); err == nil {
+				client.filterPeerID = n
+			}
 		}
 		if dstPort := r.URL.Query().Get("dst_port"); dstPort != "" {
 			if p, err := strconv.Atoi(dstPort); err == nil {

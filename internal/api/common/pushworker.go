@@ -128,6 +128,16 @@ func (w *PushWorker) processJob(ctx context.Context, jobID string) {
 	failed := 0
 
 	for _, peer := range peers {
+		// Check context before each peer — abort on shutdown
+		select {
+		case <-jobCtx.Done():
+			runiclog.Warn("PushWorker: job context canceled, aborting",
+				"job_id", jobID, "error", jobCtx.Err())
+			_ = db.FinalizePushJobWithCounts(jobCtx, w.db, jobID, succeeded, failed)
+			return
+		default:
+		}
+
 		w.notifyProgress(jobID, "progress", map[string]interface{}{
 			"peer_id":   peer.PeerID,
 			"hostname":  peer.Hostname,

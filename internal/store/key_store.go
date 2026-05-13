@@ -29,6 +29,21 @@ func NewKeyStore(database db.Querier) (*KeyStore, error) {
 	return &KeyStore{settings: settings}, nil
 }
 
+// ListKeyStatuses returns the existence status of all specified keys in a single query.
+// Returns a map of dbKey → exists. This replaces the per-type N+1 query pattern (T007-#5).
+func (s *KeyStore) ListKeyStatuses(ctx context.Context, dbKeys []string) (map[string]bool, error) {
+	configs, err := s.settings.GetSystemConfigs(ctx, dbKeys)
+	if err != nil {
+		return nil, fmt.Errorf("list key statuses: %w", err)
+	}
+	result := make(map[string]bool, len(dbKeys))
+	for _, k := range dbKeys {
+		_, exists := configs[k]
+		result[k] = exists
+	}
+	return result, nil
+}
+
 // KeyExists returns true if a secret with the given key exists in the database.
 // It delegates to GetSecret and checks for sql.ErrNoRows instead of
 // duplicating the SELECT query.

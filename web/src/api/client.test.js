@@ -263,26 +263,26 @@ describe('API Client', () => {
       expect(retryOptions.body).toBe(JSON.stringify(body))
     })
 
-test('does not retry more than once (prevents infinite loops)', async () => {
+    test('does not retry more than once (prevents infinite loops)', async () => {
       mockFetch
-      // First request returns 401
-      .mockResolvedValueOnce({
-        ok: false,
-        status: 401,
-        json: async () => ({ error: 'Unauthorized' }),
-      })
-      // Refresh succeeds
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        json: async () => ({ data: { token: 'new-token' } }),
-      })
-      // Retry also returns 401 - should not retry again
-      .mockResolvedValueOnce({
-        ok: false,
-        status: 401,
-        json: async () => ({ error: 'Still unauthorized' }),
-      })
+        // First request returns 401
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 401,
+          json: async () => ({ error: 'Unauthorized' }),
+        })
+        // Refresh succeeds
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => ({ data: { token: 'new-token' } }),
+        })
+        // Retry also returns 401 - should not retry again
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 401,
+          json: async () => ({ error: 'Still unauthorized' }),
+        })
 
       await expect(api.get('/protected')).rejects.toThrow('Still unauthorized')
       expect(mockFetch).toHaveBeenCalledTimes(3)
@@ -347,7 +347,7 @@ test('does not retry more than once (prevents infinite loops)', async () => {
     })
   })
 
-describe('failed refresh calls authFailureCallback', () => {
+  describe('failed refresh calls authFailureCallback', () => {
     test('calls authFailureCallback when refresh fails', async () => {
       const callback = vi.fn()
       setAuthFailureHandler(callback)

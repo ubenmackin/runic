@@ -62,7 +62,7 @@ func GetPeersWithPendingChanges(ctx context.Context, database Querier) ([]int, e
 	for rows.Next() {
 		var id int
 		if err := rows.Scan(&id); err != nil {
-			log.WarnContext(ctx, "failed to scan peer ID", "error", err)
+			return nil, fmt.Errorf("scan peer ID from pending_changes: %w", err)
 		}
 		ids = append(ids, id)
 	}

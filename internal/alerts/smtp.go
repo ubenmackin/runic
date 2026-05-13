@@ -111,7 +111,9 @@ func (s *SMTPSender) SendAlertEmail(to string, event *AlertEvent) error {
 		subject = s.generateAlertSubject(&sanitizedEvent)
 	}
 
-	instanceURL := GetInstanceURL(context.Background(), s.database)
+	instanceCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	instanceURL := GetInstanceURL(instanceCtx, s.database)
 
 	htmlBody := s.generateAlertHTML(&sanitizedEvent, instanceURL)
 	return s.SendHTML(to, subject, htmlBody)
@@ -179,6 +181,8 @@ func (s *SMTPSender) sendEmail(to, subject, body, contentType string) error {
 }
 
 func (s *SMTPSender) sendWithTLS(addr string, auth smtp.Auth, from string, to []string, msg []byte) error {
+	var smtpConn *smtp.Client
+
 	// SMTPS (direct TLS, typically port 465): connect with TLS from the start.
 	if s.config.UseSMTPS {
 		tlsConfig := &tls.Config{
@@ -195,101 +199,73 @@ func (s *SMTPSender) sendWithTLS(addr string, auth smtp.Auth, from string, to []
 			}
 		}()
 
-		// Wrap the TLS connection with SMTP
-		smtpConn, err := smtp.NewClient(conn, s.config.Host)
+		smtpConn, err = smtp.NewClient(conn, s.config.Host)
 		if err != nil {
 			return fmt.Errorf("failed to create SMTP client over TLS: %w", err)
 		}
+	} else {
+		// Standard SMTP with optional STARTTLS (ports 25, 587, etc.)
+		var err error
+		conn, err := smtp.Dial(addr)
+		if err != nil {
+			return fmt.Errorf("failed to connect to SMTP server: %w", err)
+		}
 		defer func() {
-			if err := smtpConn.Close(); err != nil {
-				s.logger.Debug("failed to close SMTP client", "error", err)
+			if err := conn.Close(); err != nil {
+				s.logger.Debug("failed to close SMTP connection", "error", err)
 			}
 		}()
 
-		if err := smtpConn.Hello("localhost"); err != nil {
-			return fmt.Errorf("SMTP Hello failed: %w", err)
-		}
+		smtpConn = conn
 
-		if auth != nil {
-			if err := smtpConn.Auth(auth); err != nil {
-				return fmt.Errorf("SMTP authentication failed: %w", err)
-			}
-			s.logger.Debug("SMTP authentication successful")
-		}
-
-		if err := smtpConn.Mail(from); err != nil {
-			return fmt.Errorf("failed to set sender: %w", err)
-		}
-		for _, recipient := range to {
-			if err := smtpConn.Rcpt(recipient); err != nil {
-				return fmt.Errorf("failed to set recipient %s: %w", recipient, err)
+		if s.config.UseTLS {
+			if ok, _ := conn.Extension("STARTTLS"); ok {
+				tlsConfig := &tls.Config{
+					InsecureSkipVerify: false,
+					ServerName:         s.config.Host,
+				}
+				if err := conn.StartTLS(tlsConfig); err != nil {
+					return fmt.Errorf("STARTTLS failed: %w", err)
+				}
+				s.logger.Debug("STARTTLS enabled for SMTP connection")
 			}
 		}
-
-		wc, err := smtpConn.Data()
-		if err != nil {
-			return fmt.Errorf("failed to get data writer: %w", err)
-		}
-		defer func() {
-			if err := wc.Close(); err != nil {
-				s.logger.Debug("failed to close data writer", "error", err)
-			}
-		}()
-
-		_, err = wc.Write(msg)
-		if err != nil {
-			return fmt.Errorf("failed to write message: %w", err)
-		}
-
-		return nil
 	}
 
-	// Standard SMTP with optional STARTTLS (ports 25, 587, etc.)
-	conn, err := smtp.Dial(addr)
-	if err != nil {
-		return fmt.Errorf("failed to connect to SMTP server: %w", err)
-	}
 	defer func() {
-		if err := conn.Close(); err != nil {
-			s.logger.Debug("failed to close SMTP connection", "error", err)
+		if err := smtpConn.Close(); err != nil {
+			s.logger.Debug("failed to close SMTP client", "error", err)
 		}
 	}()
 
-	if err := conn.Hello("localhost"); err != nil {
+	return s.smtpConversation(smtpConn, auth, from, to, msg)
+}
+
+// smtpConversation performs the standard SMTP conversation (Hello, Auth, Mail, Rcpt, Data, Write)
+// on an already-connected *smtp.Client. This eliminates the 100-line code duplication between
+// the SMTPS and STARTTLS branches of sendWithTLS.
+func (s *SMTPSender) smtpConversation(client *smtp.Client, auth smtp.Auth, from string, to []string, msg []byte) error {
+	if err := client.Hello("localhost"); err != nil {
 		return fmt.Errorf("SMTP Hello failed: %w", err)
 	}
 
-	if s.config.UseTLS {
-		if ok, _ := conn.Extension("STARTTLS"); ok {
-			tlsConfig := &tls.Config{
-				InsecureSkipVerify: false,
-				ServerName:         s.config.Host,
-			}
-			if err := conn.StartTLS(tlsConfig); err != nil {
-				return fmt.Errorf("STARTTLS failed: %w", err)
-			}
-			s.logger.Debug("STARTTLS enabled for SMTP connection")
-		}
-	}
-
 	if auth != nil {
-		if err := conn.Auth(auth); err != nil {
+		if err := client.Auth(auth); err != nil {
 			return fmt.Errorf("SMTP authentication failed: %w", err)
 		}
 		s.logger.Debug("SMTP authentication successful")
 	}
 
-	if err := conn.Mail(from); err != nil {
+	if err := client.Mail(from); err != nil {
 		return fmt.Errorf("failed to set sender: %w", err)
 	}
-
 	for _, recipient := range to {
-		if err := conn.Rcpt(recipient); err != nil {
+		if err := client.Rcpt(recipient); err != nil {
 			return fmt.Errorf("failed to set recipient %s: %w", recipient, err)
 		}
 	}
 
-	wc, err := conn.Data()
+	wc, err := client.Data()
 	if err != nil {
 		return fmt.Errorf("failed to get data writer: %w", err)
 	}
@@ -299,7 +275,7 @@ func (s *SMTPSender) sendWithTLS(addr string, auth smtp.Auth, from string, to []
 		}
 	}()
 
-	_, err = wc.Write(msg) // codeql[go/email-injection] - False positive: email content is sanitized through 5 defense-in-depth layers: (1) SanitizeAlertInput at source in peer_monitor.go/agents/handlers.go, (2) SendAlertEmail creates sanitized copy of all AlertEvent fields (smtp.go:87-106), (3) sanitizeHeaderValue on all email headers in sendEmail/buildMessage, (4) sanitizeHTMLBody removes script/event-handler/dangerous-tags in sendEmail/buildMessage, (5) html.EscapeString on all user-controlled content in generateAlertHTML.
+	_, err = wc.Write(msg)
 	if err != nil {
 		return fmt.Errorf("failed to write message: %w", err)
 	}

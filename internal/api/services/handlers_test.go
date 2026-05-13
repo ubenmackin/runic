@@ -22,7 +22,7 @@ func TestListServices_Empty(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	h := NewHandler(store.NewServiceStore(database), nil, nil)
+	h := NewHandler(database, store.NewServiceStore(database), nil, nil)
 	req := httptest.NewRequest("GET", "/api/v1/services", nil)
 	w := httptest.NewRecorder()
 
@@ -52,7 +52,7 @@ func TestListServices_Multiple(t *testing.T) {
 	database.Exec(`INSERT INTO services (name, ports, source_ports, protocol, description, is_system) VALUES (?, ?, ?, ?, ?, 0)`,
 		"ssh", "22", "", "tcp", "SSH access")
 
-	h := NewHandler(store.NewServiceStore(database), nil, nil)
+	h := NewHandler(database, store.NewServiceStore(database), nil, nil)
 	req := httptest.NewRequest("GET", "/api/v1/services", nil)
 	w := httptest.NewRecorder()
 
@@ -81,7 +81,7 @@ func TestCreateService_InvalidJSON(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	h := NewHandler(store.NewServiceStore(database), nil, nil)
+	h := NewHandler(database, store.NewServiceStore(database), nil, nil)
 	req := httptest.NewRequest("POST", "/api/v1/services", bytes.NewBufferString("not valid json"))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -97,7 +97,7 @@ func TestCreateService_MissingName(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	h := NewHandler(store.NewServiceStore(database), nil, nil)
+	h := NewHandler(database, store.NewServiceStore(database), nil, nil)
 	body := `{"ports": "80", "protocol": "tcp"}`
 	req := httptest.NewRequest("POST", "/api/v1/services", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -114,7 +114,7 @@ func TestCreateService_InvalidProtocol_ICMP(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	h := NewHandler(store.NewServiceStore(database), nil, nil)
+	h := NewHandler(database, store.NewServiceStore(database), nil, nil)
 	body := `{"name": "test-icmp", "ports": "", "protocol": "icmp"}`
 	req := httptest.NewRequest("POST", "/api/v1/services", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -135,7 +135,7 @@ func TestCreateService_InvalidProtocol_IGMP(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	h := NewHandler(store.NewServiceStore(database), nil, nil)
+	h := NewHandler(database, store.NewServiceStore(database), nil, nil)
 	body := `{"name": "test-igmp", "ports": "", "protocol": "igmp"}`
 	req := httptest.NewRequest("POST", "/api/v1/services", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -156,7 +156,7 @@ func TestCreateService_InvalidProtocol_Unknown(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	h := NewHandler(store.NewServiceStore(database), nil, nil)
+	h := NewHandler(database, store.NewServiceStore(database), nil, nil)
 	body := `{"name": "test-unknown", "ports": "80", "protocol": "unknown"}`
 	req := httptest.NewRequest("POST", "/api/v1/services", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -177,7 +177,7 @@ func TestCreateService_InvalidPortsFormat(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	h := NewHandler(store.NewServiceStore(database), nil, nil)
+	h := NewHandler(database, store.NewServiceStore(database), nil, nil)
 	body := `{"name": "test-ports", "ports": "invalid!ports", "protocol": "tcp"}`
 	req := httptest.NewRequest("POST", "/api/v1/services", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -198,7 +198,7 @@ func TestCreateService_MissingPorts(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	h := NewHandler(store.NewServiceStore(database), nil, nil)
+	h := NewHandler(database, store.NewServiceStore(database), nil, nil)
 	body := `{"name": "test-no-ports", "ports": "", "protocol": "tcp"}`
 	req := httptest.NewRequest("POST", "/api/v1/services", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -219,7 +219,7 @@ func TestCreateService_Valid(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	h := NewHandler(store.NewServiceStore(database), nil, nil)
+	h := NewHandler(database, store.NewServiceStore(database), nil, nil)
 	body := `{"name": "http-service", "ports": "80,443", "protocol": "tcp", "description": "HTTP and HTTPS", "direction_hint": "inbound"}`
 	req := httptest.NewRequest("POST", "/api/v1/services", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -259,7 +259,7 @@ func TestGetService_InvalidID(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	h := NewHandler(store.NewServiceStore(database), nil, nil)
+	h := NewHandler(database, store.NewServiceStore(database), nil, nil)
 	req := httptest.NewRequest("GET", "/api/v1/services/abc", nil)
 	req = muxVars(req, map[string]string{"id": "abc"})
 	w := httptest.NewRecorder()
@@ -275,7 +275,7 @@ func TestGetService_NotFound(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	h := NewHandler(store.NewServiceStore(database), nil, nil)
+	h := NewHandler(database, store.NewServiceStore(database), nil, nil)
 	req := httptest.NewRequest("GET", "/api/v1/services/99999", nil)
 	req = muxVars(req, map[string]string{"id": "99999"})
 	w := httptest.NewRecorder()
@@ -298,7 +298,7 @@ func TestGetService_Found(t *testing.T) {
 	}
 	serviceID, _ := result.LastInsertId()
 
-	h := NewHandler(store.NewServiceStore(database), nil, nil)
+	h := NewHandler(database, store.NewServiceStore(database), nil, nil)
 	req := httptest.NewRequest("GET", "/api/v1/services/"+strconv.Itoa(int(serviceID)), nil)
 	req = muxVars(req, map[string]string{"id": strconv.Itoa(int(serviceID))})
 	w := httptest.NewRecorder()
@@ -323,7 +323,7 @@ func TestUpdateService_InvalidID(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	h := NewHandler(store.NewServiceStore(database), nil, nil)
+	h := NewHandler(database, store.NewServiceStore(database), nil, nil)
 	req := httptest.NewRequest("PUT", "/api/v1/services/abc", nil)
 	req = muxVars(req, map[string]string{"id": "abc"})
 	w := httptest.NewRecorder()
@@ -339,7 +339,7 @@ func TestUpdateService_NotFound(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	h := NewHandler(store.NewServiceStore(database), nil, nil)
+	h := NewHandler(database, store.NewServiceStore(database), nil, nil)
 	body := `{"name": "updated", "ports": "80"}`
 	req := httptest.NewRequest("PUT", "/api/v1/services/99999", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -367,7 +367,7 @@ func TestUpdateService_SystemService_Forbidden(t *testing.T) {
 		t.Fatalf("failed to find service: %v", err)
 	}
 
-	h := NewHandler(store.NewServiceStore(database), nil, nil)
+	h := NewHandler(database, store.NewServiceStore(database), nil, nil)
 	body := `{"name": "updated-icmp", "ports": "80"}`
 	req := httptest.NewRequest("PUT", "/api/v1/services/"+strconv.Itoa(serviceID), bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -393,7 +393,7 @@ func TestUpdateService_InvalidJSON(t *testing.T) {
 		"user-service", "8080", "tcp")
 	serviceID, _ := result.LastInsertId()
 
-	h := NewHandler(store.NewServiceStore(database), nil, nil)
+	h := NewHandler(database, store.NewServiceStore(database), nil, nil)
 	req := httptest.NewRequest("PUT", "/api/v1/services/"+strconv.Itoa(int(serviceID)), bytes.NewBufferString("not valid json"))
 	req.Header.Set("Content-Type", "application/json")
 	req = muxVars(req, map[string]string{"id": strconv.Itoa(int(serviceID))})
@@ -414,7 +414,7 @@ func TestUpdateService_InvalidProtocol(t *testing.T) {
 		"user-service", "8080", "tcp")
 	serviceID, _ := result.LastInsertId()
 
-	h := NewHandler(store.NewServiceStore(database), nil, nil)
+	h := NewHandler(database, store.NewServiceStore(database), nil, nil)
 	body := `{"name": "updated", "ports": "80", "protocol": "icmp"}`
 	req := httptest.NewRequest("PUT", "/api/v1/services/"+strconv.Itoa(int(serviceID)), bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -440,7 +440,7 @@ func TestUpdateService_Valid(t *testing.T) {
 		"old-name", "8080", "", "tcp", "old description")
 	serviceID, _ := result.LastInsertId()
 
-	h := NewHandler(store.NewServiceStore(database), nil, nil)
+	h := NewHandler(database, store.NewServiceStore(database), nil, nil)
 	body := `{"name": "new-name", "ports": "9090", "source_ports": "1000,2000,3000", "protocol": "udp", "description": "new description", "direction_hint": "outbound"}`
 	req := httptest.NewRequest("PUT", "/api/v1/services/"+strconv.Itoa(int(serviceID)), bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -487,7 +487,7 @@ func TestDeleteService_InvalidID(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	h := NewHandler(store.NewServiceStore(database), nil, nil)
+	h := NewHandler(database, store.NewServiceStore(database), nil, nil)
 	req := httptest.NewRequest("DELETE", "/api/v1/services/abc", nil)
 	req = muxVars(req, map[string]string{"id": "abc"})
 	w := httptest.NewRecorder()
@@ -503,7 +503,7 @@ func TestDeleteService_NotFound(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	h := NewHandler(store.NewServiceStore(database), nil, nil)
+	h := NewHandler(database, store.NewServiceStore(database), nil, nil)
 	req := httptest.NewRequest("DELETE", "/api/v1/services/99999", nil)
 	req = muxVars(req, map[string]string{"id": "99999"})
 	w := httptest.NewRecorder()
@@ -529,7 +529,7 @@ func TestDeleteService_SystemService_Forbidden(t *testing.T) {
 		t.Fatalf("failed to find service: %v", err)
 	}
 
-	h := NewHandler(store.NewServiceStore(database), nil, nil)
+	h := NewHandler(database, store.NewServiceStore(database), nil, nil)
 	req := httptest.NewRequest("DELETE", "/api/v1/services/"+strconv.Itoa(serviceID), nil)
 	req = muxVars(req, map[string]string{"id": strconv.Itoa(serviceID)})
 	w := httptest.NewRecorder()
@@ -552,7 +552,7 @@ func TestDeleteService_Valid(t *testing.T) {
 	result, _ := database.Exec(`INSERT INTO services (name, ports, protocol, is_system) VALUES (?, ?, ?, 0)`, "to-delete", "8080", "tcp")
 	serviceID, _ := result.LastInsertId()
 
-	h := NewHandler(store.NewServiceStore(database), nil, nil)
+	h := NewHandler(database, store.NewServiceStore(database), nil, nil)
 	req := httptest.NewRequest("DELETE", "/api/v1/services/"+strconv.Itoa(int(serviceID)), nil)
 	req = muxVars(req, map[string]string{"id": strconv.Itoa(int(serviceID))})
 	w := httptest.NewRecorder()
@@ -609,7 +609,7 @@ func TestDeleteService_InUseByPolicy(t *testing.T) {
 	policyID2, _ := policyResult2.LastInsertId()
 
 	// Try to delete the service
-	h := NewHandler(store.NewServiceStore(database), nil, nil)
+	h := NewHandler(database, store.NewServiceStore(database), nil, nil)
 	req := httptest.NewRequest("DELETE", "/api/v1/services/"+strconv.Itoa(int(serviceID)), nil)
 	req = muxVars(req, map[string]string{"id": strconv.Itoa(int(serviceID))})
 	w := httptest.NewRecorder()
@@ -693,7 +693,7 @@ func TestGetServiceByPort_MissingPort(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	h := NewHandler(store.NewServiceStore(database), nil, nil)
+	h := NewHandler(database, store.NewServiceStore(database), nil, nil)
 	req := httptest.NewRequest("GET", "/api/v1/services/by-port", nil)
 	w := httptest.NewRecorder()
 
@@ -712,7 +712,7 @@ func TestGetServiceByPort_InvalidPort(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	h := NewHandler(store.NewServiceStore(database), nil, nil)
+	h := NewHandler(database, store.NewServiceStore(database), nil, nil)
 	req := httptest.NewRequest("GET", "/api/v1/services/by-port?port=invalid", nil)
 	w := httptest.NewRecorder()
 
@@ -727,7 +727,7 @@ func TestGetServiceByPort_NotFound(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	h := NewHandler(store.NewServiceStore(database), nil, nil)
+	h := NewHandler(database, store.NewServiceStore(database), nil, nil)
 	req := httptest.NewRequest("GET", "/api/v1/services/by-port?port=80", nil)
 	w := httptest.NewRecorder()
 
@@ -750,7 +750,7 @@ func TestGetServiceByPort_Found_SinglePort(t *testing.T) {
 	database.Exec(`INSERT INTO services (name, ports, protocol, description, is_system) VALUES (?, ?, ?, ?, 0)`,
 		"ssh", "22", "tcp", "SSH service")
 
-	h := NewHandler(store.NewServiceStore(database), nil, nil)
+	h := NewHandler(database, store.NewServiceStore(database), nil, nil)
 	req := httptest.NewRequest("GET", "/api/v1/services/by-port?port=22", nil)
 	w := httptest.NewRecorder()
 
@@ -777,7 +777,7 @@ func TestGetServiceByPort_Found_MultiplePorts(t *testing.T) {
 	database.Exec(`INSERT INTO services (name, ports, protocol, description, is_system) VALUES (?, ?, ?, ?, 0)`,
 		"http", "80,443,8080", "tcp", "HTTP service")
 
-	h := NewHandler(store.NewServiceStore(database), nil, nil)
+	h := NewHandler(database, store.NewServiceStore(database), nil, nil)
 
 	// Test finding port at start
 	req := httptest.NewRequest("GET", "/api/v1/services/by-port?port=80", nil)
@@ -838,7 +838,7 @@ func TestGetServiceByPort_WithProtocolFilter(t *testing.T) {
 	database.Exec(`INSERT INTO services (name, ports, protocol, is_system) VALUES (?, ?, ?, 0)`,
 		"dns-both", "53", "both")
 
-	h := NewHandler(store.NewServiceStore(database), nil, nil)
+	h := NewHandler(database, store.NewServiceStore(database), nil, nil)
 
 	// Filter by tcp - should match dns-tcp or dns-both
 	req := httptest.NewRequest("GET", "/api/v1/services/by-port?port=53&protocol=tcp", nil)
@@ -882,7 +882,7 @@ func TestGetServiceByPort_IgnoresSystemService(t *testing.T) {
 	database.Exec(`INSERT INTO services (name, ports, protocol, is_system) VALUES (?, ?, ?, 1)`,
 		"ssh-system", "22", "tcp")
 
-	h := NewHandler(store.NewServiceStore(database), nil, nil)
+	h := NewHandler(database, store.NewServiceStore(database), nil, nil)
 	req := httptest.NewRequest("GET", "/api/v1/services/by-port?port=22", nil)
 	w := httptest.NewRecorder()
 
@@ -905,7 +905,7 @@ func TestGetServiceByPort_ICMPProtocolLookup(t *testing.T) {
 	database.Exec(`INSERT INTO services (name, ports, source_ports, protocol, description, is_system) VALUES (?, ?, ?, ?, ?, 1)`,
 		"ICMP", "", "", "icmp", "Internet Control Message Protocol")
 
-	h := NewHandler(store.NewServiceStore(database), nil, nil)
+	h := NewHandler(database, store.NewServiceStore(database), nil, nil)
 	req := httptest.NewRequest("GET", "/api/v1/services/by-port?port=0&protocol=icmp", nil)
 	w := httptest.NewRecorder()
 
@@ -938,7 +938,7 @@ func TestGetServiceByPort_IGMPProtocolLookup(t *testing.T) {
 	database.Exec(`INSERT INTO services (name, ports, source_ports, protocol, description, is_system) VALUES (?, ?, ?, ?, ?, 1)`,
 		"IGMP", "", "", "igmp", "Internet Group Management Protocol")
 
-	h := NewHandler(store.NewServiceStore(database), nil, nil)
+	h := NewHandler(database, store.NewServiceStore(database), nil, nil)
 	req := httptest.NewRequest("GET", "/api/v1/services/by-port?port=0&protocol=igmp", nil)
 	w := httptest.NewRecorder()
 
@@ -968,7 +968,7 @@ func TestGetServiceByPort_PortZeroNoProtocol(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	h := NewHandler(store.NewServiceStore(database), nil, nil)
+	h := NewHandler(database, store.NewServiceStore(database), nil, nil)
 	req := httptest.NewRequest("GET", "/api/v1/services/by-port?port=0", nil)
 	w := httptest.NewRecorder()
 
@@ -990,7 +990,7 @@ func TestGetServiceByPort_ProtocolOnlyBothMatch(t *testing.T) {
 	database.Exec(`INSERT INTO services (name, ports, source_ports, protocol, description, is_system) VALUES (?, ?, ?, ?, ?, 1)`,
 		"dns-both", "53", "", "both", "DNS both TCP and UDP")
 
-	h := NewHandler(store.NewServiceStore(database), nil, nil)
+	h := NewHandler(database, store.NewServiceStore(database), nil, nil)
 
 	// Protocol-only lookup with tcp should match the "both" service
 	req := httptest.NewRequest("GET", "/api/v1/services/by-port?port=0&protocol=tcp", nil)
@@ -1038,7 +1038,7 @@ func TestGetServiceByPort_InvalidProtocolValue(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	h := NewHandler(store.NewServiceStore(database), nil, nil)
+	h := NewHandler(database, store.NewServiceStore(database), nil, nil)
 
 	// Invalid protocol value should return 400
 	req := httptest.NewRequest("GET", "/api/v1/services/by-port?port=0&protocol=xyz", nil)
@@ -1061,7 +1061,7 @@ func TestGetServiceByPort_EmptyPortWithProtocol(t *testing.T) {
 	database.Exec(`INSERT INTO services (name, ports, source_ports, protocol, description, is_system) VALUES (?, ?, ?, ?, ?, 1)`,
 		"ICMP", "", "", "icmp", "Internet Control Message Protocol")
 
-	h := NewHandler(store.NewServiceStore(database), nil, nil)
+	h := NewHandler(database, store.NewServiceStore(database), nil, nil)
 	// No port param, but protocol is provided — should trigger protocol-only lookup
 	req := httptest.NewRequest("GET", "/api/v1/services/by-port?protocol=icmp", nil)
 	w := httptest.NewRecorder()
@@ -1092,7 +1092,7 @@ func TestGetServiceByPort_IgnoresPendingDelete(t *testing.T) {
 	database.Exec(`INSERT INTO services (name, ports, protocol, is_system, is_pending_delete) VALUES (?, ?, ?, 0, 1)`,
 		"ssh-deleted", "22", "tcp")
 
-	h := NewHandler(store.NewServiceStore(database), nil, nil)
+	h := NewHandler(database, store.NewServiceStore(database), nil, nil)
 	req := httptest.NewRequest("GET", "/api/v1/services/by-port?port=22", nil)
 	w := httptest.NewRecorder()
 
@@ -1138,7 +1138,7 @@ func TestDeleteService_NotInUse_Success(t *testing.T) {
 		t.Fatalf("failed to create policy: %v", err)
 	}
 
-	h := NewHandler(store.NewServiceStore(database), nil, nil)
+	h := NewHandler(database, store.NewServiceStore(database), nil, nil)
 	req := httptest.NewRequest("DELETE", "/api/v1/services/"+strconv.Itoa(int(serviceID)), nil)
 	req = muxVars(req, map[string]string{"id": strconv.Itoa(int(serviceID))})
 	w := httptest.NewRecorder()

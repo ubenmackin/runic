@@ -338,7 +338,7 @@ func (h *Handler) GetNotificationPrefs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	prefs, err := h.AlertStore.GetUserNotificationPreferences(ctx, uint(userID))
-	if err != nil {
+	if errors.Is(err, sql.ErrNoRows) {
 		defaultPrefs := &models.UserNotificationPreferences{
 			UserID:             uint(userID),
 			QuietHoursEnabled:  false,
@@ -351,6 +351,10 @@ func (h *Handler) GetNotificationPrefs(w http.ResponseWriter, r *http.Request) {
 			DigestTimezone:     "UTC",
 		}
 		common.RespondJSON(w, http.StatusOK, defaultPrefs)
+		return
+	} else if err != nil {
+		log.ErrorContext(ctx, "Failed to get notification preferences", "error", err)
+		common.RespondError(w, http.StatusInternalServerError, "database error")
 		return
 	}
 
@@ -389,7 +393,7 @@ func (h *Handler) UpdateNotificationPrefs(w http.ResponseWriter, r *http.Request
 	}
 
 	prefs, err := h.AlertStore.GetUserNotificationPreferences(ctx, uint(userID))
-	if err != nil {
+	if errors.Is(err, sql.ErrNoRows) {
 		prefs = &models.UserNotificationPreferences{
 			UserID:             uint(userID),
 			QuietHoursStart:    "22:00",
@@ -399,6 +403,10 @@ func (h *Handler) UpdateNotificationPrefs(w http.ResponseWriter, r *http.Request
 			DigestTime:         "08:00",
 			DigestTimezone:     "UTC",
 		}
+	} else if err != nil {
+		log.ErrorContext(ctx, "Failed to get notification preferences", "error", err)
+		common.RespondError(w, http.StatusInternalServerError, "database error")
+		return
 	}
 
 	// Both timezone fields should always have the same value

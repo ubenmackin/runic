@@ -212,6 +212,36 @@ func (s *ServiceStore) SnapshotService(ctx context.Context, serviceID int, actio
 	return db.CreateSnapshot(ctx, s.db, "service", serviceID, action, string(bytes))
 }
 
+// SnapshotServiceTx creates a snapshot of a service within a transaction.
+func (s *ServiceStore) SnapshotServiceTx(ctx context.Context, tx *sql.Tx, serviceID int, action string) error {
+	if action == "create" {
+		return db.CreateSnapshot(ctx, tx, "service", serviceID, action, "")
+	}
+
+	svc, err := db.GetService(ctx, tx, serviceID)
+	if err != nil {
+		return fmt.Errorf("get service: %w", err)
+	}
+
+	bytes, err := json.Marshal(svc)
+	if err != nil {
+		return fmt.Errorf("marshal snapshot: %w", err)
+	}
+
+	return db.CreateSnapshot(ctx, tx, "service", serviceID, action, string(bytes))
+}
+
+// UpdateServiceTx updates a service within a transaction.
+func (s *ServiceStore) UpdateServiceTx(ctx context.Context, tx *sql.Tx, id int, name, ports, sourcePorts, protocol, description string, directionHint int) error {
+	_, err := tx.ExecContext(ctx,
+		`UPDATE services SET name = ?, ports = ?, source_ports = ?, protocol = ?, description = ?, direction_hint = ?
+		WHERE id = ?`, name, ports, sourcePorts, protocol, description, directionHint, id)
+	if err != nil {
+		return fmt.Errorf("update service tx: %w", err)
+	}
+	return nil
+}
+
 func (s *ServiceStore) FindPoliciesUsingService(ctx context.Context, serviceID int) ([]int, error) {
 	rows, err := s.db.QueryContext(ctx, `
 	SELECT DISTINCT id FROM policies

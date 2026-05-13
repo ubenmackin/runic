@@ -986,7 +986,7 @@ func TestBackupIptables_SkipsIfBackupExists(t *testing.T) {
 	agent.backupPath = backupPath
 	agent.cmdRunner = &mockCommandRunner{}
 
-	err := agent.backupIptables()
+	err := agent.backupIptables(context.Background())
 
 	if err != nil {
 		t.Errorf("backupIptables() error = %v, want nil for existing backup", err)
@@ -1004,7 +1004,7 @@ func TestBackupIptables_IptablesSaveFails(t *testing.T) {
 	agent.backupPath = filepath.Join(backupDir, "iptables-backup.rules")
 	agent.cmdRunner = &mockCommandRunner{err: fmt.Errorf("iptables-save: command not found")}
 
-	err := agent.backupIptables()
+	err := agent.backupIptables(context.Background())
 
 	if err == nil {
 		t.Error("backupIptables() expected error when iptables-save fails, got nil")
@@ -1021,7 +1021,7 @@ func TestBackupIptables_Success(t *testing.T) {
 	agent.backupPath = filepath.Join(backupDir, "iptables-backup.rules")
 	agent.cmdRunner = &mockCommandRunner{output: []byte("*filter\n:INPUT ACCEPT [0:0]\nCOMMIT\n")}
 
-	err := agent.backupIptables()
+	err := agent.backupIptables(context.Background())
 
 	if err != nil {
 		t.Errorf("backupIptables() error = %v, want nil", err)

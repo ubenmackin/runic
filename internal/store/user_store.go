@@ -19,11 +19,19 @@ func NewUserStore(database db.Querier) *UserStore {
 	return &UserStore{db: database}
 }
 
-func (s *UserStore) ListUsers(ctx context.Context) ([]models.UserRow, error) {
+func (s *UserStore) ListUsers(ctx context.Context, page, perPage int) ([]models.UserRow, int, error) {
+	// Get total count
+	var total int
+	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM users").Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count users: %w", err)
+	}
+
+	offset := (page - 1) * perPage
 	rows, err := s.db.QueryContext(ctx,
-		"SELECT id, username, COALESCE(email, ''), role, created_at FROM users ORDER BY id")
+		"SELECT id, username, COALESCE(email, ''), role, created_at FROM users ORDER BY id LIMIT ? OFFSET ?",
+		perPage, offset)
 	if err != nil {
-		return nil, fmt.Errorf("query users: %w", err)
+		return nil, 0, fmt.Errorf("query users: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -31,14 +39,14 @@ func (s *UserStore) ListUsers(ctx context.Context) ([]models.UserRow, error) {
 	for rows.Next() {
 		var u models.UserRow
 		if err := rows.Scan(&u.ID, &u.Username, &u.Email, &u.Role, &u.CreatedAt); err != nil {
-			return nil, fmt.Errorf("scan user: %w", err)
+			return nil, 0, fmt.Errorf("scan user: %w", err)
 		}
 		users = append(users, u)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("rows error: %w", err)
+		return nil, 0, fmt.Errorf("rows error: %w", err)
 	}
-	return common.EnsureSlice(users), nil
+	return common.EnsureSlice(users), total, nil
 }
 
 func (s *UserStore) GetUserByID(ctx context.Context, id int) (models.UserRow, error) {
@@ -89,6 +97,15 @@ func (s *UserStore) UserExists(ctx context.Context, username string) (bool, erro
 
 func (s *UserStore) CountUsers(ctx context.Context) (int, error) {
 	return s.CountUsersTx(ctx, s.db)
+}
+
+// CountAdmins returns the number of users with the 'admin' role.
+func (s *UserStore) CountAdmins(ctx context.Context) (int, error) {
+	var count int
+	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM users WHERE role = 'admin'").Scan(&count); err != nil {
+		return 0, fmt.Errorf("count admins: %w", err)
+	}
+	return count, nil
 }
 
 // CountUsersTx counts users using the provided Querier (supports transaction usage).

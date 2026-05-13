@@ -8,6 +8,8 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+
+	"runic/internal/common/log"
 )
 
 type Metrics struct {
@@ -120,7 +122,7 @@ func NewMetrics(registerer prometheus.Registerer) *Metrics {
 	} {
 		if err := registerer.Register(c); err != nil {
 			if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
-				panic(err)
+				log.Warn("Failed to register metric", "error", err)
 			}
 		}
 	}

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"golang.org/x/crypto/bcrypt"
@@ -23,12 +24,13 @@ import (
 
 // UserStore is defined as an interface here for testability.
 type UserStore interface {
-	ListUsers(ctx context.Context) ([]models.UserRow, error)
+	ListUsers(ctx context.Context, page, perPage int) ([]models.UserRow, int, error)
 	UserExists(ctx context.Context, username string) (bool, error)
 	CreateUser(ctx context.Context, q db.Querier, username, passwordHash, email, role string) (int64, error)
 	GetUserByID(ctx context.Context, id int) (models.UserRow, error)
 	UpdateUser(ctx context.Context, id int, fields store.UpdateUserFields) error
 	DeleteUser(ctx context.Context, id int) error
+	CountAdmins(ctx context.Context) (int, error)
 }
 
 type Handler struct {
@@ -45,14 +47,35 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := runiccommon.WithHandlerTimeout(r.Context())
 	defer cancel()
 
-	users, err := h.Store.ListUsers(ctx)
+	// Only admin and editor roles can list users — viewer role is a recon vector
+	callerRole := auth.RoleFromContext(r.Context())
+	if callerRole != "admin" && callerRole != "editor" {
+		common.RespondError(w, http.StatusForbidden, "Insufficient permissions")
+		return
+	}
+
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	if page < 1 {
+		page = 1
+	}
+	perPage, _ := strconv.Atoi(r.URL.Query().Get("per_page"))
+	if perPage < 1 || perPage > 100 {
+		perPage = 50
+	}
+
+	users, total, err := h.Store.ListUsers(ctx, page, perPage)
 	if err != nil {
 		log.ErrorContext(r.Context(), "failed to list users", "error", err)
 		common.InternalError(w)
 		return
 	}
 
-	common.RespondJSON(w, http.StatusOK, users)
+	common.RespondJSON(w, http.StatusOK, map[string]interface{}{
+		"users":    users,
+		"total":    total,
+		"page":     page,
+		"per_page": perPage,
+	})
 }
 
 type CreateUserRequest struct {
@@ -171,6 +194,20 @@ func (h *Handler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 	if user.Username == authUsername {
 		common.RespondError(w, http.StatusBadRequest, "Cannot delete your own account")
 		return
+	}
+
+	// Prevent deleting the last admin account — would orphan the system
+	if user.Role == "admin" {
+		adminCount, err := h.Store.CountAdmins(ctx)
+		if err != nil {
+			log.ErrorContext(r.Context(), "failed to count admins", "error", err)
+			common.InternalError(w)
+			return
+		}
+		if adminCount <= 1 {
+			common.RespondError(w, http.StatusBadRequest, "Cannot delete the last admin user")
+			return
+		}
 	}
 
 	if err := h.Store.DeleteUser(ctx, id); err != nil {

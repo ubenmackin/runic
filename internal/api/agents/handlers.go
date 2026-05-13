@@ -240,7 +240,7 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Atomic consume: validates AND consumes in single query
-		consumed, err := h.ConsumeRegistrationToken(input.RegistrationToken, input.Hostname)
+		consumed, err := h.ConsumeRegistrationToken(ctx, input.RegistrationToken, input.Hostname)
 		if err != nil {
 			runiclog.Error("Failed to consume registration token", "error", err)
 			common.InternalError(w)
@@ -413,7 +413,7 @@ func (h *Handler) Heartbeat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		runiclog.Error("Heartbeat: failed to decode body error", "error", err)
+		runiclog.Warn("Heartbeat: failed to decode body, continuing with partial data", "error", err)
 		// Continue anyway — agent_version and bundle_version may be empty
 	}
 

@@ -3,6 +3,7 @@ package logs
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -41,9 +42,10 @@ func TestNewHub(t *testing.T) {
 func TestHub_Broadcast(t *testing.T) {
 	hub := NewHub()
 	client := &Client{
-		hub:    hub,
-		send:   make(chan []byte, 256),
-		filter: LogFilter{}, // Empty filter accepts all
+		hub:          hub,
+		send:         make(chan []byte, 256),
+		filter:       LogFilter{}, // Empty filter accepts all
+		filterPeerID: -1,
 	}
 
 	// Manually register client (bypass channel)
@@ -88,6 +90,7 @@ func TestHub_Broadcast_WithFilter(t *testing.T) {
 		filter: LogFilter{
 			PeerID: "1", // Only receive logs for peer 1
 		},
+		filterPeerID: 1,
 	}
 
 	// Manually register client
@@ -123,6 +126,7 @@ func TestHub_Broadcast_MultipleClients(t *testing.T) {
 		filter: LogFilter{
 			PeerID: "10",
 		},
+		filterPeerID: 10,
 	}
 	client2 := &Client{
 		hub:  hub,
@@ -130,6 +134,7 @@ func TestHub_Broadcast_MultipleClients(t *testing.T) {
 		filter: LogFilter{
 			PeerID: "20",
 		},
+		filterPeerID: 20,
 	}
 
 	// Register both clients
@@ -193,8 +198,9 @@ func TestHub_Run(t *testing.T) {
 
 	// Register a client
 	client := &Client{
-		hub:  hub,
-		send: make(chan []byte, 256),
+		hub:          hub,
+		send:         make(chan []byte, 256),
+		filterPeerID: -1,
 	}
 	hub.register <- client
 
@@ -239,9 +245,10 @@ func TestHub_Run_Broadcast(t *testing.T) {
 
 	// Register a client with empty filter
 	client := &Client{
-		hub:    hub,
-		send:   make(chan []byte, 256),
-		filter: LogFilter{},
+		hub:          hub,
+		send:         make(chan []byte, 256),
+		filter:       LogFilter{},
+		filterPeerID: -1,
 	}
 	hub.register <- client
 
@@ -460,7 +467,16 @@ func TestClient_MatchesFilter(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			client := &Client{
-				filter: tt.filter,
+				filter:       tt.filter,
+				filterPeerID: -1,
+			}
+			// If filter has a PeerID string, try to parse it as int for filterPeerID
+			if tt.filter.PeerID != "" {
+				// Parse PeerID string to int for the filterPeerID optimization
+				var pid int
+				if _, err := fmt.Sscanf(tt.filter.PeerID, "%d", &pid); err == nil {
+					client.filterPeerID = pid
+				}
 			}
 			result := client.matchesFilter(tt.event)
 			if result != tt.expected {
@@ -508,7 +524,8 @@ func TestLogFilter_ZeroValue(t *testing.T) {
 	}
 
 	client := &Client{
-		filter: filter,
+		filter:       filter,
+		filterPeerID: -1,
 	}
 
 	if !client.matchesFilter(event) {

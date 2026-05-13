@@ -71,13 +71,18 @@ type API struct {
 	RefreshRateLimiter  *middleware.RateLimiter
 	DownloadRateLimiter *middleware.RateLimiter
 	LogoutRateLimiter   *middleware.RateLimiter
+
+	logCleanupWorker *logcleanup.Worker
+	logCleanupCancel context.CancelFunc
+	logHubCtx        context.Context
+	logHubCancel     context.CancelFunc
 }
 
 // NewAPI creates a new API instance. logsDB is the already-initialized logs database connection.
 // logsDBPath is the path to the logs database (for settings/clear-logs).
 func NewAPI(db *sql.DB, compiler *engine.Compiler, logsDB *sql.DB, logsDBPath string, alertService *alerts.Service, encryptor *crypto.Encryptor) *API {
 	// Migration: Copy existing firewall_logs to logs DB if needed
-	if _, err := dbpkg.MigrateLogsFromMainDB(db, logsDB); err != nil {
+	if _, err := dbpkg.MigrateLogsFromMainDB(context.Background(), db, logsDB); err != nil {
 		log.Warn("Log migration failed (existing logs will remain in main DB)", "error", err)
 	}
 
@@ -115,7 +120,7 @@ func NewAPI(db *sql.DB, compiler *engine.Compiler, logsDB *sql.DB, logsDBPath st
 		Auth:         authhandlers.NewHandler(userStore, store.NewTokenStore(db), db),
 		Groups:       groups.NewHandler(db, compiler, changeWorker, groupStore, peerStore),
 		Policies:     policies.NewHandler(db, compiler, changeWorker, policyStore),
-		Services:     services.NewHandler(serviceStore, compiler, changeWorker),
+		Services:     services.NewHandler(db, serviceStore, compiler, changeWorker),
 		Imports:      imports.NewHandler(importStore, sseHub, changeWorker),
 		Logs:         logs.NewHandler(logsStore, store.NewTokenStore(db)),
 		Users:        users.NewHandler(userStore),
@@ -132,6 +137,8 @@ type contextKey string
 const apiContextKey contextKey = "api"
 
 func apiMiddleware(a *API) mux.MiddlewareFunc {
+	// TODO: Narrow the context value to only expose specific dependencies
+	// instead of the entire *API struct. See TASK-004 finding M-2 for details.
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ctx := context.WithValue(r.Context(), apiContextKey, a)
@@ -141,9 +148,9 @@ func apiMiddleware(a *API) mux.MiddlewareFunc {
 	}
 }
 
-func (a *API) RegisterRoutes(r *mux.Router, downloadsDir string) {
-
-	ctx := context.Background()
+// Start launches background lifecycle goroutines (workers, log hub, cleanup).
+// This is separated from RegisterRoutes so that route registration remains pure.
+func (a *API) Start(ctx context.Context) {
 	if a.PushWorker != nil {
 		a.PushWorker.Start(ctx)
 	}
@@ -151,12 +158,16 @@ func (a *API) RegisterRoutes(r *mux.Router, downloadsDir string) {
 		a.ChangeWorker.Start(ctx)
 	}
 
-	logCleanupWorker := logcleanup.NewWorker(a.DB, a.LogsDB)
-	logCleanupWorker.Start(ctx)
+	var logCleanupCtx context.Context
+	logCleanupCtx, a.logCleanupCancel = context.WithCancel(ctx)
+	a.logCleanupWorker = logcleanup.NewWorker(a.DB, a.LogsDB)
+	a.logCleanupWorker.Start(logCleanupCtx)
 
-	go a.LogHub.Run(ctx)
+	a.logHubCtx, a.logHubCancel = context.WithCancel(ctx)
+	go a.LogHub.Run(a.logHubCtx)
+}
 
-	// Apply SecurityHeaders as the outermost middleware to ensure ALL responses include security headers
+func (a *API) RegisterRoutes(r *mux.Router, downloadsDir string) {
 	r.Use(SecurityHeaders)
 
 	r.Use(RequestID())
@@ -344,6 +355,12 @@ func (a *API) Stop() {
 	}
 	if a.PushWorker != nil {
 		a.PushWorker.Stop()
+	}
+	if a.logCleanupCancel != nil {
+		a.logCleanupCancel()
+	}
+	if a.logHubCancel != nil {
+		a.logHubCancel()
 	}
 	if a.LoginRateLimiter != nil {
 		a.LoginRateLimiter.Stop()

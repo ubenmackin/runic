@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { RotateCw, CheckCircle, Clock, Copy, Key, Trash2, Plus, Shield, XCircle } from 'lucide-react'
+import { RotateCw, CheckCircle, Clock, Copy, Key, Plus, Shield, XCircle, Ban } from 'lucide-react'
 import { QUERY_KEYS, api } from '../api/client'
 import { useToastContext } from '../hooks/ToastContext'
 import { usePagination } from '../hooks/usePagination'
@@ -14,6 +14,7 @@ import PageHeader from '../components/PageHeader'
 import Pagination from '../components/Pagination'
 import { useTableFilter } from '../hooks/useTableFilter'
 import { useAuth } from '../hooks/useAuth'
+import KebabMenu from '../components/KebabMenu'
 
 export default function SetupKeys() {
   const qc = useQueryClient()
@@ -285,73 +286,74 @@ className={`px-4 py-2 text-sm font-medium rounded-none transition-colors ${
 
           {/* Peers Rotation Table */}
           {filteredPeers.length === 0 ? (
-            <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none p-8 text-center">
-              <p className="text-gray-500 dark:text-amber-muted">
-                {searchTerm ? 'No peers match your search.' : 'No peers found. Add peers to manage their keys.'}
-              </p>
-            </div>
+<div className="border border-gray-200 dark:border-gray-border p-8 text-center">
+                <p className="text-gray-500 dark:text-amber-muted">
+                  {searchTerm ? 'No peers match your search.' : 'No peers found. Add peers to manage their keys.'}
+                </p>
+              </div>
           ) : (
-            <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none overflow-hidden">
+<div className="border border-gray-200 dark:border-gray-border overflow-hidden">
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
-<thead className="bg-charcoal-darkest">
-              <tr>
-                <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
-                  <button type="button" onClick={() => handleSort('hostname')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
-                    Peer <SortIndicator columnKey="hostname" sortConfig={sortConfig} />
-                  </button>
-                </th>
-                <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
-                  <button type="button" onClick={() => handleSort('status')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
-                    Status <SortIndicator columnKey="status" sortConfig={sortConfig} />
-                  </button>
-                </th>
-                <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
-                  <button type="button" onClick={() => handleSort('lastRotation')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
-                    Last Rotation <SortIndicator columnKey="lastRotation" sortConfig={sortConfig} />
-                  </button>
-                </th>
-                <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
-                  Actions
-                </th>
-              </tr>
-            </thead>
+                  <thead className="bg-gray-50 dark:bg-charcoal-darkest border-b border-gray-200 dark:border-gray-border">
+                    <tr>
+                      <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+                        <button type="button" onClick={() => handleSort('hostname')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+                          Peer <SortIndicator columnKey="hostname" sortConfig={sortConfig} />
+                        </button>
+                      </th>
+                      <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+                        <button type="button" onClick={() => handleSort('status')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+                          Status <SortIndicator columnKey="status" sortConfig={sortConfig} />
+                        </button>
+                      </th>
+                      <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+                        <button type="button" onClick={() => handleSort('lastRotation')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+                          Last Rotation <SortIndicator columnKey="lastRotation" sortConfig={sortConfig} />
+                        </button>
+                      </th>
+                      <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
+                        Actions
+                      </th>
+                    </tr>
+                  </thead>
 <tbody className="divide-y divide-gray-200 dark:divide-gray-border">
-              {paginatedPeers.map((peer) => {
-              const rotationStatus = getRotationStatus(peer)
-              const StatusIcon = rotationStatus.icon
+        {paginatedPeers.map((peer) => {
+        const rotationStatus = getRotationStatus(peer)
+        const StatusIcon = rotationStatus.icon
+        const peerMenuItems = [
+          {
+            label: 'Rotate Key',
+            icon: RotateCw,
+            onClick: () => setShowRotateModal(peer.id),
+            show: isAdmin,
+          },
+        ]
 
-              return (
-<tr key={peer.id} className="">
-<td className="px-4 py-1">
-<div className="flex items-center">
-<span className="font-sans font-bold text-gray-900 dark:text-light-neutral">{peer.hostname}</span>
-<span className="ml-2 text-xs font-mono text-gray-500 dark:text-amber-muted">{peer.ip_address}</span>
-</div>
-</td>
-<td className="px-4 py-1">
-<div className="flex items-center">
-<StatusIcon className={`w-4 h-4 mr-2 ${rotationStatus.color}`} />
-<span className="text-sm text-gray-900 dark:text-light-neutral capitalize">{rotationStatus.status}</span>
-</div>
-</td>
-<td className="px-4 py-1 font-mono text-gray-600 dark:text-amber-primary">
-{formatRelativeTime(peer.hmac_key_last_rotated_at)}
-</td>
-<td className="px-4 py-1">
-                  {isAdmin && (
-                  <button
-                    onClick={() => setShowRotateModal(peer.id)}
-                    disabled={rotateMutation.isPending}
-                    className="inline-flex items-center gap-2 px-3 py-1.5 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded-none disabled:opacity-50"
-                  >
-                    <RotateCw className="w-3 h-3" />
-                    Rotate
-                  </button>
-                )}
-                </td>
-              </tr>
-              )
+        return (
+          <tr key={peer.id} className="">
+            <td className="px-4 py-1">
+              <div className="flex items-center">
+                <span className="font-sans font-bold text-gray-900 dark:text-light-neutral">{peer.hostname}</span>
+                <span className="ml-2 text-xs font-mono text-gray-500 dark:text-amber-muted">{peer.ip_address}</span>
+              </div>
+            </td>
+            <td className="px-4 py-1">
+              <div className="flex items-center">
+                <StatusIcon className={`w-4 h-4 mr-2 ${rotationStatus.color}`} />
+                <span className="text-sm text-gray-900 dark:text-light-neutral capitalize">{rotationStatus.status}</span>
+              </div>
+            </td>
+            <td className="px-4 py-1 font-mono text-gray-600 dark:text-amber-primary">
+              {formatRelativeTime(peer.hmac_key_last_rotated_at)}
+            </td>
+            <td className="px-4 py-1">
+              {peerMenuItems.some(item => item.show !== false) && (
+                <KebabMenu items={peerMenuItems} />
+              )}
+            </td>
+          </tr>
+        )
               })}
             </tbody>
                 </table>
@@ -386,75 +388,83 @@ className={`px-4 py-2 text-sm font-medium rounded-none transition-colors ${
 
           {/* Tokens Table */}
           {filteredTokens.length === 0 ? (
-            <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none p-8 text-center">
-              <p className="text-gray-500 dark:text-amber-muted">
-                {tokenSearchTerm ? 'No tokens match your search.' : 'No registration tokens yet. Generate one to allow agents to register.'}
-              </p>
-            </div>
+<div className="border border-gray-200 dark:border-gray-border p-8 text-center">
+                <p className="text-gray-500 dark:text-amber-muted">
+                  {tokenSearchTerm ? 'No tokens match your search.' : 'No registration tokens yet. Generate one to allow agents to register.'}
+                </p>
+              </div>
           ) : (
-            <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none overflow-hidden">
+<div className="border border-gray-200 dark:border-gray-border overflow-hidden">
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
-<thead className="bg-charcoal-darkest">
-              <tr>
-                <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
-                  Token
-                </th>
-                <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
-                  Description
-                </th>
-                <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
-                  Status
-                </th>
-                <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
-                  Created
-                </th>
-                <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
-                  Used By
-                </th>
-                <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
-                  Actions
-                </th>
-              </tr>
-            </thead>
+                  <thead className="bg-gray-50 dark:bg-charcoal-darkest border-b border-gray-200 dark:border-gray-border">
+                    <tr>
+                      <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
+                        Token
+                      </th>
+                      <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
+                        Description
+                      </th>
+                      <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
+                        Status
+                      </th>
+                      <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
+                        Created
+                      </th>
+                      <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
+                        Used By
+                      </th>
+                      <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
+                        Actions
+                      </th>
+                    </tr>
+                  </thead>
 <tbody className="divide-y divide-gray-200 dark:divide-gray-border">
-              {filteredTokens.map((token) => {
-              const statusBadge = getTokenStatusBadge(token)
-              return (
-<tr key={token.id}>
-<td className="px-4 py-1">
-<code className="text-xs bg-gray-100 dark:bg-charcoal-darkest px-2 py-1 rounded font-mono text-gray-700 dark:text-amber-primary">
-{maskToken(token.token)}
-</code>
-</td>
-<td className="px-4 py-1 text-gray-700 dark:text-light-neutral">
-{token.description || <span className="text-gray-400 dark:text-amber-muted italic">No description</span>}
-</td>
-<td className="px-4 py-1">
-<span className={`inline-flex items-center px-2 py-0.5 text-xs font-medium ${statusBadge.color}`}>
-{statusBadge.label}
-</span>
-</td>
-<td className="px-4 py-1 font-mono text-gray-600 dark:text-amber-primary text-xs">
-{formatRelativeTime(token.created_at)}
-</td>
-<td className="px-4 py-1 font-sans font-bold text-gray-600 dark:text-amber-primary text-xs">
-{token.used_by_hostname || <span className="text-gray-400 dark:text-amber-muted italic">—</span>}
-</td>
-<td className="px-4 py-1">
-                  {isAdmin && !token.used_at && !token.is_revoked && (
-                  <button
-                    onClick={() => setShowRevokeModal(token.id)}
-                    disabled={revokeTokenMutation.isPending}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm bg-red-600 hover:bg-red-700 text-white rounded-none disabled:opacity-50"
-                  >
-                    <Trash2 className="w-3 h-3" />
-                    Revoke
-                  </button>
-                )}
-                </td>
-              </tr>
-              )
+        {filteredTokens.map((token) => {
+        const statusBadge = getTokenStatusBadge(token)
+        const tokenMenuItems = [
+          {
+            label: 'Copy Token',
+            icon: Copy,
+            onClick: () => copyToClipboard(token.token),
+            show: !!token.token,
+          },
+          {
+            label: 'Revoke',
+            icon: Ban,
+            onClick: () => setShowRevokeModal(token.id),
+            show: isAdmin && !token.used_at && !token.is_revoked,
+            danger: true,
+          },
+        ]
+        return (
+          <tr key={token.id}>
+            <td className="px-4 py-1">
+              <code className="text-xs bg-gray-100 dark:bg-charcoal-darkest px-2 py-1 rounded font-mono text-gray-700 dark:text-amber-primary">
+                {maskToken(token.token)}
+              </code>
+            </td>
+            <td className="px-4 py-1 text-gray-700 dark:text-light-neutral">
+              {token.description || <span className="text-gray-400 dark:text-amber-muted italic">No description</span>}
+            </td>
+            <td className="px-4 py-1">
+              <span className={`inline-flex items-center px-2 py-0.5 text-xs font-medium ${statusBadge.color}`}>
+                {statusBadge.label}
+              </span>
+            </td>
+            <td className="px-4 py-1 font-mono text-gray-600 dark:text-amber-primary text-xs">
+              {formatRelativeTime(token.created_at)}
+            </td>
+            <td className="px-4 py-1 font-sans font-bold text-gray-600 dark:text-amber-primary text-xs">
+              {token.used_by_hostname || <span className="text-gray-400 dark:text-amber-muted italic">—</span>}
+            </td>
+            <td className="px-4 py-1">
+              {tokenMenuItems.some(item => item.show !== false) && (
+                <KebabMenu items={tokenMenuItems} />
+              )}
+            </td>
+          </tr>
+        )
               })}
             </tbody>
                 </table>

@@ -232,7 +232,7 @@ func (rw *ruleWriter) writeStandardRules(hasDocker bool, controlPlanePort string
 
 func (c *Compiler) loadPeerData(ctx context.Context, peerID int) (hostname string, ipAddress string, hasDocker bool, hasIPSet bool, err error) {
 	err = c.db.QueryRowContext(ctx,
-		"SELECT hostname, ip_address, has_docker, COALESCE(has_ipset, false) FROM peers WHERE id = ?", peerID,
+		"SELECT hostname, ip_address, has_docker, COALESCE(has_ipset, 0) FROM peers WHERE id = ?", peerID,
 	).Scan(&hostname, &ipAddress, &hasDocker, &hasIPSet)
 	if err != nil {
 		err = fmt.Errorf("load peer %d: %w", peerID, err)
@@ -441,7 +441,6 @@ func (c *Compiler) generateIptablesPayload(
 	groupIDToIpsetName map[int]string,
 ) (string, error) {
 	// 3. Build the iptables-restore output
-	var err error
 	var buf strings.Builder
 	rw := &ruleWriter{buf: &buf}
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -503,8 +502,7 @@ func (c *Compiler) generateIptablesPayload(
 	// Policy rules
 	for i := range policies {
 		pol := &policies[i]
-		writeToHost := pol.TargetScope == "host" || pol.TargetScope == "both"
-		writeToDocker := hasDocker && (pol.TargetScope == "docker" || pol.TargetScope == "both")
+		writeToHost, writeToDocker := c.scopeFlags(pol.TargetScope, hasDocker)
 
 		svc, ok := services[pol.ServiceID]
 		if !ok {
@@ -521,6 +519,7 @@ func (c *Compiler) generateIptablesPayload(
 		isBroadcastService := serviceName == systemServiceSubnetBroadcast || serviceName == systemServiceLimitedBroadcast
 		isIGMPorVRRP := strings.EqualFold(serviceName, systemServiceIGMP) || strings.EqualFold(serviceName, systemServiceVRRP)
 		if serviceName != systemServiceMulticast && !isBroadcastService && !isIGMPorVRRP {
+			var err error
 			portClauses, err = ExpandPorts(ports, sourcePorts, protocol)
 			if err != nil {
 				return "", fmt.Errorf("expand ports for policy %s: %w", pol.Name, err)
@@ -565,12 +564,12 @@ func (c *Compiler) generateIptablesPayload(
 			// this means the host should receive broadcast traffic - GENERATE INPUT rules with -d (destination)
 			isBroadcastSource := pol.SourceType == "special" && isBroadcastSpecialID(pol.SourceID)
 
-			useIpset := hasIPSet && pol.SourceType == "group"
+			canUseIpset := hasIPSet && pol.SourceType == "group"
 			var ipsetName string
-			if useIpset {
+			if canUseIpset {
 				ipsetName = groupIDToIpsetName[pol.SourceID]
-				useIpset = ipsetName != ""
 			}
+			useIpset := canUseIpset && ipsetName != ""
 
 			switch {
 			case isMulticastSource:
@@ -583,14 +582,14 @@ func (c *Compiler) generateIptablesPayload(
 					return "", fmt.Errorf("resolve broadcast source for policy %s: %w", pol.Name, err)
 				}
 				for _, cidr := range cidrs {
-					c.writeBroadcastRule(rw, pol.Action, pol.TargetScope, hasDocker, cidr)
+					c.writeBroadcastRule(rw, pol.Action, pol.TargetScope, hasDocker, cidr, protocol)
 				}
 			case useIpset:
 				// Use ipset-based rules (single rule per port clause)
 				if serviceName == systemServiceMulticast {
 					c.writeMulticastRule(rw, pol.Action, pol.TargetScope, hasDocker)
 				} else {
-					rules, err := c.writeTargetRules(ctx, pol, portClauses, true, ipsetName, nil, ipAddress, writeToHost, writeToDocker, noConntrack)
+					rules, err := c.writeTargetRules(pol, portClauses, true, ipsetName, nil, ipAddress, writeToHost, writeToDocker, noConntrack)
 					if err != nil {
 						return "", err
 					}
@@ -617,7 +616,7 @@ func (c *Compiler) generateIptablesPayload(
 				if serviceName == systemServiceMulticast {
 					c.writeMulticastRule(rw, pol.Action, pol.TargetScope, hasDocker)
 				} else {
-					rules, err := c.writeTargetRules(ctx, pol, portClauses, false, "", cidrs, ipAddress, writeToHost, writeToDocker, noConntrack)
+					rules, err := c.writeTargetRules(pol, portClauses, false, "", cidrs, ipAddress, writeToHost, writeToDocker, noConntrack)
 					if err != nil {
 						return "", err
 					}
@@ -637,12 +636,12 @@ func (c *Compiler) generateIptablesPayload(
 			isInternetTarget := pol.TargetType == "special" && pol.TargetID == SpecialIDInternet
 			useInternetIpset := hasIPSet && isInternetTarget
 
-			useIpset := hasIPSet && pol.TargetType == "group"
+			canUseIpset := hasIPSet && pol.TargetType == "group"
 			var ipsetName string
-			if useIpset {
+			if canUseIpset {
 				ipsetName = groupIDToIpsetName[pol.TargetID]
-				useIpset = ipsetName != ""
 			}
+			useIpset := canUseIpset && ipsetName != ""
 
 			switch {
 			case useIpset:
@@ -660,7 +659,7 @@ func (c *Compiler) generateIptablesPayload(
 					}
 				} else {
 					isMulticastTarget := pol.TargetType == "special" && isMulticastSpecialID(pol.TargetID)
-					rules, err := c.writeSourceRules(ctx, pol, portClauses, true, ipsetName, nil, ipAddress, writeToHost, writeToDocker, noConntrack, isMulticastTarget)
+					rules, err := c.writeSourceRules(pol, portClauses, true, ipsetName, nil, ipAddress, writeToHost, writeToDocker, noConntrack, isMulticastTarget)
 					if err != nil {
 						return "", err
 					}
@@ -671,7 +670,7 @@ func (c *Compiler) generateIptablesPayload(
 			case useInternetIpset:
 				// __internet__ special target: use ipset negation to exclude private ranges
 				isMulticastTarget := false
-				rules, err := c.writeInternetRules(ctx, pol, portClauses, ipAddress, writeToHost, writeToDocker, noConntrack, isMulticastTarget)
+				rules, err := c.writeInternetRules(pol, portClauses, ipAddress, writeToHost, writeToDocker, noConntrack, isMulticastTarget)
 				if err != nil {
 					return "", err
 				}
@@ -707,7 +706,7 @@ func (c *Compiler) generateIptablesPayload(
 					}
 				} else {
 					isMulticastTarget := pol.TargetType == "special" && isMulticastSpecialID(pol.TargetID)
-					rules, err := c.writeSourceRules(ctx, pol, portClauses, false, "", cidrs, ipAddress, writeToHost, writeToDocker, noConntrack, isMulticastTarget)
+					rules, err := c.writeSourceRules(pol, portClauses, false, "", cidrs, ipAddress, writeToHost, writeToDocker, noConntrack, isMulticastTarget)
 					if err != nil {
 						return "", err
 					}
@@ -742,8 +741,7 @@ func (c *Compiler) generateIptablesPayload(
 
 // IGMP is connectionless multicast, so no conntrack or return rules are needed.
 func (c *Compiler) writeIGMPRules(rw *ruleWriter, targetScope string, hasDocker bool) {
-	writeToHost := targetScope == "host" || targetScope == "both"
-	writeToDocker := hasDocker && (targetScope == "docker" || targetScope == "both")
+	writeToHost, writeToDocker := c.scopeFlags(targetScope, hasDocker)
 
 	if writeToHost {
 		// Accept IGMP queries (224.0.0.1 = All Hosts on this subnet)
@@ -760,8 +758,7 @@ func (c *Compiler) writeIGMPRules(rw *ruleWriter, targetScope string, hasDocker 
 // VRRP is a protocol for virtual router redundancy, using multicast 224.0.0.18.
 // No conntrack or return rules are needed.
 func (c *Compiler) writeVRRPRules(rw *ruleWriter, targetScope string, hasDocker bool) {
-	writeToHost := targetScope == "host" || targetScope == "both"
-	writeToDocker := hasDocker && (targetScope == "docker" || targetScope == "both")
+	writeToHost, writeToDocker := c.scopeFlags(targetScope, hasDocker)
 
 	if writeToHost {
 		// Accept VRRP advertisements (224.0.0.18 = VRRP multicast)
@@ -773,8 +770,7 @@ func (c *Compiler) writeVRRPRules(rw *ruleWriter, targetScope string, hasDocker 
 }
 
 func (c *Compiler) writeMulticastRule(rw *ruleWriter, action string, targetScope string, hasDocker bool) {
-	writeToHost := targetScope == "host" || targetScope == "both"
-	writeToDocker := hasDocker && (targetScope == "docker" || targetScope == "both")
+	writeToHost, writeToDocker := c.scopeFlags(targetScope, hasDocker)
 
 	if writeToHost {
 		rw.writeAction(action, "INPUT", "-m pkttype --pkt-type multicast")
@@ -787,24 +783,28 @@ func (c *Compiler) writeMulticastRule(rw *ruleWriter, action string, targetScope
 
 // Broadcast traffic is connectionless, so no conntrack or return rules are needed.
 // For broadcast, we match on destination (-d) since broadcast packets are sent TO the broadcast address.
-func (c *Compiler) writeBroadcastRule(rw *ruleWriter, action string, targetScope string, hasDocker bool, broadcastAddr string) {
-	writeToHost := targetScope == "host" || targetScope == "both"
-	writeToDocker := hasDocker && (targetScope == "docker" || targetScope == "both")
+func (c *Compiler) writeBroadcastRule(rw *ruleWriter, action string, targetScope string, hasDocker bool, broadcastAddr string, protocol string) {
+	writeToHost, writeToDocker := c.scopeFlags(targetScope, hasDocker)
 
 	if writeToHost {
 		// Accept broadcast traffic destined for the broadcast address
-		rw.accept("INPUT", fmt.Sprintf("-d %s -p udp", broadcastAddr))
+		rw.accept("INPUT", fmt.Sprintf("-d %s -p %s", broadcastAddr, protocol))
 	}
 	if writeToDocker {
-		rw.accept("DOCKER-USER", fmt.Sprintf("-d %s -p udp", broadcastAddr))
+		rw.accept("DOCKER-USER", fmt.Sprintf("-d %s -p %s", broadcastAddr, protocol))
 	}
+}
+
+func (c *Compiler) scopeFlags(targetScope string, hasDocker bool) (writeToHost, writeToDocker bool) {
+	writeToHost = targetScope == "host" || targetScope == "both"
+	writeToDocker = hasDocker && (targetScope == "docker" || targetScope == "both")
+	return
 }
 
 // When useIpset is true, ipsetName contains the ipset to match against.
 // When useIpset is false, cidrs contains the individual CIDRs to generate rules for.
 // noConntrack when true skips conntrack marking for multicast protocols.
 func (c *Compiler) writeTargetRules(
-	ctx context.Context,
 	pol *policyInfo,
 	portClauses []PortClause,
 	useIpset bool,
@@ -897,7 +897,6 @@ func (c *Compiler) writeTargetRules(
 // noConntrack when true skips conntrack marking for multicast protocols.
 // isMulticastTarget when true indicates the target is a multicast special target (3=__all_hosts__, 4=__mdns__, 8=__igmpv3__)
 func (c *Compiler) writeSourceRules(
-	ctx context.Context,
 	pol *policyInfo,
 	portClauses []PortClause,
 	useIpset bool,
@@ -987,7 +986,6 @@ func (c *Compiler) writeSourceRules(
 
 // Uses ipset negation to match all IPs except private ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8).
 func (c *Compiler) writeInternetRules(
-	ctx context.Context,
 	pol *policyInfo,
 	portClauses []PortClause,
 	ipAddress string,
@@ -1038,7 +1036,7 @@ func (c *Compiler) writeInternetRules(
 
 // PreviewCompile generates iptables rules for a single policy. Unlike Compile(), this is policy-centric: it resolves both source and target entities
 // and generates rules based on direction, showing the complete picture across all hosts.
-func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sourceType string, sourceIP string, targetID int, targetType string, targetIP string, serviceID int, direction string, targetScope string) ([]string, error) {
+func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sourceType string, sourceIP string, targetID int, targetType string, targetIP string, serviceID int, action, direction string, targetScope string) ([]string, error) {
 	// Load a peer IP for special target resolution (uses peerID as reference)
 	var ipAddress string
 	if peerID != 0 {
@@ -1123,7 +1121,7 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 
 	// Build policy info for helper functions
 	pol := &policyInfo{
-		Action: "ACCEPT", // Preview assumes ACCEPT for rule generation
+		Action: action,
 	}
 
 	// Forward: Source initiates connections TO Target
@@ -1158,7 +1156,7 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 			// Use writeSourceRules for forward direction (egress)
 			if isInternetTarget {
 				// Use writeInternetRules for internet target
-				writeRules, err := c.writeInternetRules(ctx, pol, portClauses, ipAddress, true, false, noConntrack, false)
+				writeRules, err := c.writeInternetRules(pol, portClauses, ipAddress, true, false, noConntrack, false)
 				if err != nil {
 					return nil, err
 				}
@@ -1166,7 +1164,7 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 			} else {
 				// Use writeSourceRules for regular targets
 				isMulticastTarget := targetType == "special" && isMulticastSpecialID(targetID)
-				writeRules, err := c.writeSourceRules(ctx, pol, portClauses, false, "", targetCIDRs, ipAddress, true, false, noConntrack, isMulticastTarget)
+				writeRules, err := c.writeSourceRules(pol, portClauses, false, "", targetCIDRs, ipAddress, true, false, noConntrack, isMulticastTarget)
 				if err != nil {
 					return nil, err
 				}
@@ -1191,7 +1189,7 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 				if serviceName == systemServiceMulticast {
 					rules = append(rules, "-A INPUT -m pkttype --pkt-type multicast -j ACCEPT")
 				} else {
-					writeRules, err := c.writeTargetRules(ctx, pol, portClauses, false, "", sourceCIDRs, ipAddress, true, false, noConntrack)
+					writeRules, err := c.writeTargetRules(pol, portClauses, false, "", sourceCIDRs, ipAddress, true, false, noConntrack)
 					if err != nil {
 						return nil, err
 					}
@@ -1204,7 +1202,7 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 				}
 			default:
 				// Use writeTargetRules for backward direction (ingress from source perspective)
-				writeRules, err := c.writeTargetRules(ctx, pol, portClauses, false, "", sourceCIDRs, ipAddress, true, false, noConntrack)
+				writeRules, err := c.writeTargetRules(pol, portClauses, false, "", sourceCIDRs, ipAddress, true, false, noConntrack)
 				if err != nil {
 					return nil, err
 				}
@@ -1241,14 +1239,14 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 				}
 				// Use writeSourceRules for Docker forward direction (egress to Docker)
 				if isInternetTarget {
-					writeRules, err := c.writeInternetRules(ctx, pol, portClauses, ipAddress, false, true, noConntrack, false)
+					writeRules, err := c.writeInternetRules(pol, portClauses, ipAddress, false, true, noConntrack, false)
 					if err != nil {
 						return nil, err
 					}
 					rules = append(rules, writeRules...)
 				} else {
 					isMulticastTarget := targetType == "special" && isMulticastSpecialID(targetID)
-					writeRules, err := c.writeSourceRules(ctx, pol, portClauses, false, "", targetCIDRs, ipAddress, false, true, noConntrack, isMulticastTarget)
+					writeRules, err := c.writeSourceRules(pol, portClauses, false, "", targetCIDRs, ipAddress, false, true, noConntrack, isMulticastTarget)
 					if err != nil {
 						return nil, err
 					}
@@ -1258,7 +1256,7 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 			// Backward direction: Target (Docker) ← Source
 			// IG-002: Skip backward for IGMP (already handled above)
 			// VRRP-002: Skip backward for VRRP (already handled above)
-			if !strings.EqualFold(serviceName, systemServiceIGMP) && !strings.EqualFold(serviceName, systemServiceVRRP) && (direction == "both" || direction == "backward") {
+			if direction == "both" || direction == "backward" {
 				// MC-009: Multicast special targets as Source indicate receiving multicast traffic
 				isMulticastSource := sourceType == "special" && isMulticastSpecialID(sourceID)
 				// BC-003: Broadcast special targets as Source indicate receiving broadcast traffic
@@ -1269,7 +1267,7 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 					if serviceName == systemServiceMulticast {
 						rules = append(rules, "-A DOCKER-USER -m pkttype --pkt-type multicast -j ACCEPT")
 					} else {
-						writeRules, err := c.writeTargetRules(ctx, pol, portClauses, false, "", sourceCIDRs, ipAddress, false, true, noConntrack)
+						writeRules, err := c.writeTargetRules(pol, portClauses, false, "", sourceCIDRs, ipAddress, false, true, noConntrack)
 						if err != nil {
 							return nil, err
 						}
@@ -1282,7 +1280,7 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 					}
 				default:
 					// Use writeTargetRules for Docker backward direction
-					writeRules, err := c.writeTargetRules(ctx, pol, portClauses, false, "", sourceCIDRs, ipAddress, false, true, noConntrack)
+					writeRules, err := c.writeTargetRules(pol, portClauses, false, "", sourceCIDRs, ipAddress, false, true, noConntrack)
 					if err != nil {
 						return nil, err
 					}
@@ -1404,21 +1402,22 @@ func (c *Compiler) GetAffectedPeersByPolicy(ctx context.Context, policyID int) (
 		if err != nil {
 			return nil, fmt.Errorf("query source group members for policy %d: %w", policyID, err)
 		}
-		func() {
-			defer func() {
-				if cErr := rows.Close(); cErr != nil {
-					log.Warn("close err", "err", cErr)
-				}
-			}()
-			for rows.Next() {
-				var p int
-				if err := rows.Scan(&p); err == nil {
-					peers[p] = true
-				} else {
-					log.Warn("Failed to scan peer from group", "error", err)
-				}
+		defer func() {
+			if err := rows.Close(); err != nil {
+				log.Warn("close err", "err", err)
 			}
 		}()
+		for rows.Next() {
+			var p int
+			if err := rows.Scan(&p); err != nil {
+				log.WarnContext(ctx, "Failed to scan peer from group", "error", err)
+				continue
+			}
+			peers[p] = true
+		}
+		if err := rows.Err(); err != nil {
+			log.ErrorContext(ctx, "rows iteration error in GetAffectedPeersByPolicy (source group)", "policy_id", policyID, "error", err)
+		}
 	}
 
 	// Process target - handle peer, group, and special types
@@ -1436,21 +1435,22 @@ func (c *Compiler) GetAffectedPeersByPolicy(ctx context.Context, policyID int) (
 		if err != nil {
 			return nil, fmt.Errorf("query target group members for policy %d: %w", policyID, err)
 		}
-		func() {
-			defer func() {
-				if cErr := rows.Close(); cErr != nil {
-					log.Warn("close err", "err", cErr)
-				}
-			}()
-			for rows.Next() {
-				var p int
-				if err := rows.Scan(&p); err != nil {
-					log.Warn("Failed to scan peer from target group", "error", err)
-				} else {
-					peers[p] = true
-				}
+		defer func() {
+			if err := rows.Close(); err != nil {
+				log.Warn("close err", "err", err)
 			}
 		}()
+		for rows.Next() {
+			var p int
+			if err := rows.Scan(&p); err != nil {
+				log.WarnContext(ctx, "Failed to scan peer from target group", "error", err)
+				continue
+			}
+			peers[p] = true
+		}
+		if err := rows.Err(); err != nil {
+			log.ErrorContext(ctx, "rows iteration error in GetAffectedPeersByPolicy (target group)", "policy_id", policyID, "error", err)
+		}
 	}
 
 	var peerList []int

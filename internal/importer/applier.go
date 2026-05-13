@@ -25,6 +25,23 @@ type createdEntity struct {
 	summary    string
 }
 
+func buildPlaceholders(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	// Build a string of n question marks separated by commas, e.g. "?,?,?"
+	// Pre-allocate for efficiency: each placeholder is "?," except the last which is just "?"
+	// Total length = n*2 - 1 (since each "?," is 2 chars except last "?" which is 1)
+	b := make([]byte, n*2-1)
+	for i := 0; i < n; i++ {
+		b[i*2] = '?'
+		if i < n-1 {
+			b[i*2+1] = ','
+		}
+	}
+	return string(b)
+}
+
 // ApplySession creates manual peers, groups, services, and policies from the import session.
 func ApplySession(ctx context.Context, database *sql.DB, sessionID int64, changeWorker *common.ChangeWorker) (*ApplyResult, error) {
 	result := &ApplyResult{}
@@ -89,13 +106,7 @@ func ApplySession(ctx context.Context, database *sql.DB, sessionID int64, change
 		for id := range stagingGroupIDSet {
 			groupIDs = append(groupIDs, id)
 		}
-		placeholders := ""
-		for i := range groupIDs {
-			if i > 0 {
-				placeholders += ","
-			}
-			placeholders += "?"
-		}
+		placeholders := buildPlaceholders(len(groupIDs))
 		gMemberRows, err := tx.QueryContext(ctx,
 			fmt.Sprintf("SELECT member_staging_peer_ids FROM import_group_mappings WHERE session_id = ? AND id IN (%s)", placeholders),
 			append([]interface{}{sessionID}, groupIDs...)...,
@@ -124,13 +135,7 @@ func ApplySession(ctx context.Context, database *sql.DB, sessionID int64, change
 		for id := range stagingPeerIDSet {
 			peerIDs = append(peerIDs, id)
 		}
-		placeholders := ""
-		for i := range peerIDs {
-			if i > 0 {
-				placeholders += ","
-			}
-			placeholders += "?"
-		}
+		placeholders := buildPlaceholders(len(peerIDs))
 		peerQuery = fmt.Sprintf("%s AND id IN (%s)", peerQuery, placeholders)
 		peerArgs = append(peerArgs, peerIDs...)
 	} else {
@@ -192,13 +197,7 @@ func ApplySession(ctx context.Context, database *sql.DB, sessionID int64, change
 		for id := range stagingPeerIDSet {
 			epIDs = append(epIDs, id)
 		}
-		placeholders := ""
-		for i := range epIDs {
-			if i > 0 {
-				placeholders += ","
-			}
-			placeholders += "?"
-		}
+		placeholders := buildPlaceholders(len(epIDs))
 		existingPeerQuery = fmt.Sprintf("%s AND id IN (%s)", existingPeerQuery, placeholders)
 		existingPeerArgs = append(existingPeerArgs, epIDs...)
 	} else {
@@ -226,13 +225,7 @@ func ApplySession(ctx context.Context, database *sql.DB, sessionID int64, change
 		for id := range stagingGroupIDSet {
 			gIDs = append(gIDs, id)
 		}
-		placeholders := ""
-		for i := range gIDs {
-			if i > 0 {
-				placeholders += ","
-			}
-			placeholders += "?"
-		}
+		placeholders := buildPlaceholders(len(gIDs))
 		groupQuery = fmt.Sprintf("%s AND id IN (%s)", groupQuery, placeholders)
 		groupArgs = append(groupArgs, gIDs...)
 	} else {
@@ -311,13 +304,7 @@ func ApplySession(ctx context.Context, database *sql.DB, sessionID int64, change
 		for id := range stagingGroupIDSet {
 			egIDs = append(egIDs, id)
 		}
-		placeholders := ""
-		for i := range egIDs {
-			if i > 0 {
-				placeholders += ","
-			}
-			placeholders += "?"
-		}
+		placeholders := buildPlaceholders(len(egIDs))
 		existingGroupQuery = fmt.Sprintf("%s AND id IN (%s)", existingGroupQuery, placeholders)
 		existingGroupArgs = append(existingGroupArgs, egIDs...)
 	} else {
@@ -345,13 +332,7 @@ func ApplySession(ctx context.Context, database *sql.DB, sessionID int64, change
 		for id := range stagingServiceIDSet {
 			sIDs = append(sIDs, id)
 		}
-		placeholders := ""
-		for i := range sIDs {
-			if i > 0 {
-				placeholders += ","
-			}
-			placeholders += "?"
-		}
+		placeholders := buildPlaceholders(len(sIDs))
 		svcQuery = fmt.Sprintf("%s AND id IN (%s)", svcQuery, placeholders)
 		svcArgs = append(svcArgs, sIDs...)
 	} else {
@@ -412,13 +393,7 @@ func ApplySession(ctx context.Context, database *sql.DB, sessionID int64, change
 		for id := range stagingServiceIDSet {
 			esIDs = append(esIDs, id)
 		}
-		placeholders := ""
-		for i := range esIDs {
-			if i > 0 {
-				placeholders += ","
-			}
-			placeholders += "?"
-		}
+		placeholders := buildPlaceholders(len(esIDs))
 		existingSvcQuery = fmt.Sprintf("%s AND id IN (%s)", existingSvcQuery, placeholders)
 		existingSvcArgs = append(existingSvcArgs, esIDs...)
 	} else {

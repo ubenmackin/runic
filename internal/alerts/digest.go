@@ -48,6 +48,7 @@ type DigestGenerator struct {
 	encryptor  *crypto.Encryptor
 	logger     *slog.Logger
 	stopChan   chan struct{}
+	stopOnce   sync.Once
 	wg         sync.WaitGroup
 }
 
@@ -72,7 +73,8 @@ func (g *DigestGenerator) SetLogger(logger *slog.Logger) {
 
 // GenerateDigest generates a digest for the given user. It aggregates alerts from the past 24 hours and creates a summary.
 func (g *DigestGenerator) GenerateDigest(userID uint) (*AlertDigest, error) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 
 	now := time.Now()
 	startTime := now.Add(-24 * time.Hour)
@@ -133,7 +135,9 @@ func (g *DigestGenerator) SendDigest(digest *AlertDigest, userEmail string) erro
 		}
 	}
 
-	instanceURL := GetInstanceURL(context.Background(), g.database)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	instanceURL := GetInstanceURL(ctx, g.database)
 
 	htmlBody := g.generateDigestHTML(digest, &summary, instanceURL)
 
@@ -178,13 +182,16 @@ func (g *DigestGenerator) RunDaily() {
 }
 
 func (g *DigestGenerator) Stop() {
-	close(g.stopChan)
+	g.stopOnce.Do(func() {
+		close(g.stopChan)
+	})
 	g.wg.Wait()
 	g.logger.Info("digest generator stopped")
 }
 
 func (g *DigestGenerator) checkAndSendDigests() {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
 
 	now := time.Now()
 

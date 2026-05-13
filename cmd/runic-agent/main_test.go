@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"runic/internal/agent/identity"
+	"runic/internal/common/systemd"
 )
 
 // TestBooleanFlagParsing tests parsing of boolean CLI flags
@@ -837,7 +838,7 @@ func TestConfigFileIntegrityAfterSave(t *testing.T) {
 func TestIsSystemdServiceInstalled(t *testing.T) {
 	// This test just verifies the function doesn't panic
 	// The actual result depends on the system state
-	_ = isSystemdServiceInstalled()
+	_ = systemd.IsServiceInstalled()
 }
 
 // TestConfigFlagCombinedWithInvalidValue tests that when one flag has an invalid value, config is not saved
@@ -889,9 +890,9 @@ func TestRestartSystemdServiceRequiresRoot(t *testing.T) {
 	}
 
 	// When not running as root, the function should return an error
-	err := restartSystemdService()
+	err := systemd.RestartService("runic-agent")
 	if err == nil {
-		t.Error("restartSystemdService() should return error when not running as root")
+		t.Error("systemd.RestartService() should return error when not running as root")
 	}
 
 	// Verify the error message mentions root/sudo
@@ -913,15 +914,15 @@ func TestIsSystemdServiceInstalledPaths(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	// Note: isSystemdServiceInstalled() checks hardcoded paths (/etc/systemd/system, /lib/systemd/system)
+	// Note: systemd.IsServiceInstalled() checks hardcoded paths (/etc/systemd/system, /lib/systemd/system)
 	// This test verifies the function doesn't panic and handles non-existent paths gracefully.
 	// In a real system with systemd installed, it would return true if the service file exists.
 
 	// This is a sanity check that the function returns false when no service is installed
 	// (which is the expected case in test environments)
-	result := isSystemdServiceInstalled()
+	result := systemd.IsServiceInstalled()
 	// We don't assert the result because it depends on the system state
-	t.Logf("isSystemdServiceInstalled() returned: %v (depends on system state)", result)
+	t.Logf("systemd.IsServiceInstalled() returned: %v (depends on system state)", result)
 }
 
 // TestRestartSystemdServiceErrorFormat tests that the error message format is correct.
@@ -929,7 +930,7 @@ func TestIsSystemdServiceInstalledPaths(t *testing.T) {
 func TestRestartSystemdServiceErrorFormat(t *testing.T) {
 	// When not running as root, we should get a specific error
 	if os.Geteuid() != 0 {
-		err := restartSystemdService()
+		err := systemd.RestartService("runic-agent")
 		if err == nil {
 			t.Error("expected error when not running as root")
 			return
