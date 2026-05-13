@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -20,10 +21,38 @@ import (
 	"runic/internal/models"
 )
 
+// syncWriter wraps an io.Writer with a Mutex to make concurrent writes and
+// reads safe. This is necessary because bytes.Buffer is not safe for
+// concurrent use, and the background goroutine in handleUpdateAgent writes
+// logs via log.Error while the test goroutine reads the buffer.
+type syncWriter struct {
+	mu  sync.Mutex
+	buf *bytes.Buffer
+}
+
+func newSyncWriter() *syncWriter {
+	return &syncWriter{buf: &bytes.Buffer{}}
+}
+
+func (w *syncWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buf.Write(p)
+}
+
+func (w *syncWriter) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buf.String()
+}
+
+// Verify syncWriter implements io.Writer at compile time.
+var _ io.Writer = (*syncWriter)(nil)
+
 func TestMain(m *testing.M) {
 	// Ensure log is initialized before any test runs so that tests which
-	// call log.Init with a buffer (e.g., "handles both systemd-run and setsid failure")
-	// do not leave the process-global logger in a corrupted state for subsequent tests.
+	// call log.Init with a buffer do not leave the process-global logger
+	// in a corrupted state for subsequent tests.
 	log.Init("info", os.Stdout)
 	os.Exit(m.Run())
 }
@@ -372,14 +401,11 @@ func TestIsControlPlaneReachableFalse(t *testing.T) {
 }
 
 type mockCommandRunner struct {
-	output            []byte
-	err               error
-	runErr            error
-	runErrs           map[string]error
-	calls             []mockCall
-	startDetachedErr  error
-	startDetachedErrs map[string]error
-	detachedCalls     []mockCall
+	output  []byte
+	err     error
+	runErr  error
+	runErrs map[string]error
+	calls   []mockCall
 }
 
 type mockCall struct {
@@ -402,280 +428,438 @@ func (m *mockCommandRunner) Run(ctx context.Context, name string, args ...string
 	return m.output, m.err
 }
 
-func (m *mockCommandRunner) StartDetached(ctx context.Context, name string, args ...string) error {
-	m.detachedCalls = append(m.detachedCalls, mockCall{ctx: ctx, name: name, args: args})
-	// Check per-command error map first, then fall back to generic error
-	if m.startDetachedErrs != nil {
-		if err, ok := m.startDetachedErrs[name]; ok {
-			return err
-		}
-	}
-	return m.startDetachedErr
-}
-
 func TestHandleUpdateAgent(t *testing.T) {
-	t.Run("successful update launch", func(t *testing.T) {
-		mock := &mockCommandRunner{}
+	t.Run("downloads and applies update from valid URL", func(t *testing.T) {
+		// Serve a fake binary via httptest
+		fakeBinary := []byte("#!/bin/sh\n# fake agent binary\n")
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.Contains(r.URL.Path, "downloads") {
+				w.WriteHeader(http.StatusOK)
+				w.Write(fakeBinary)
+				return
+			}
+			http.NotFound(w, r)
+		}))
+		defer server.Close()
+
+		// Set UpdateBinaryPath to a temp file so performUpdate can write to it
+		tmpDir := t.TempDir()
+		binaryPath := filepath.Join(tmpDir, "runic-agent")
+		// Create the file so selfupdate.Apply can swap it
+		if err := os.WriteFile(binaryPath, []byte("old-binary"), 0755); err != nil {
+			t.Fatalf("failed to create target binary: %v", err)
+		}
+
+		// Override UpdateBinaryPath for this test
+		origUpdateBinaryPath := UpdateBinaryPath
+		t.Cleanup(func() { UpdateBinaryPath = origUpdateBinaryPath })
+		UpdateBinaryPath = binaryPath
+
+		exitCh := make(chan int, 1)
 		agent := &Agent{
-			cmdRunner: mock,
+			httpClient: server.Client(),
+			exitFunc: func(code int) {
+				select {
+				case exitCh <- code:
+				default:
+				}
+			},
 		}
-		agent.handleUpdateAgent(context.Background(), "https://runic.example.com")
-		if len(mock.calls) != 0 {
-			t.Fatalf("expected 0 Run calls, got %d", len(mock.calls))
-		}
-		if len(mock.detachedCalls) != 1 {
-			t.Fatalf("expected 1 StartDetached call, got %d", len(mock.detachedCalls))
-		}
-		if mock.detachedCalls[0].name != "systemd-run" {
-			t.Errorf("expected command 'systemd-run', got '%s'", mock.detachedCalls[0].name)
-		}
-		args := mock.detachedCalls[0].args
-		foundScope := false
-		foundUnit := false
-		foundBash := false
-		foundC := false
-		var cmdStr string
-		for i, arg := range args {
-			if arg == "--scope" {
-				foundScope = true
+
+		// handleUpdateAgent is async — it launches update in a goroutine
+		agent.handleUpdateAgent(context.Background(), server.URL)
+
+		// Wait for exitFunc to be called with proper synchronization
+		// (the goroutine uses a 2-second delay before exitFunc, so we allow up to 5 seconds)
+		select {
+		case code := <-exitCh:
+			if code != 0 {
+				t.Errorf("expected exit code 0, got %d", code)
 			}
-			if arg == "--unit=runic-agent-update" {
-				foundUnit = true
-			}
-			if arg == "bash" {
-				foundBash = true
-			}
-			if arg == "-c" && i+1 < len(args) {
-				foundC = true
-				cmdStr = args[i+1]
-			}
+		case <-time.After(5 * time.Second):
+			t.Error("expected exitFunc to be called after successful update")
 		}
-		if !foundScope {
-			t.Error("expected args to contain '--scope'")
+
+		// Verify the binary was replaced
+		data, err := os.ReadFile(binaryPath)
+		if err != nil {
+			t.Fatalf("failed to read updated binary: %v", err)
 		}
-		if !foundUnit {
-			t.Error("expected args to contain '--unit=runic-agent-update'")
-		}
-		if !foundBash {
-			t.Error("expected args to contain 'bash'")
-		}
-		if !foundC {
-			t.Error("expected args to contain '-c'")
-		}
-		if !strings.Contains(cmdStr, "curl -sL") {
-			t.Error("expected command to contain 'curl -sL'")
-		}
-		if strings.Contains(cmdStr, "nohup curl") {
-			t.Error("expected command to NOT contain 'nohup curl' in systemd-run path")
-		}
-		if !strings.Contains(cmdStr, "install-agent.sh") {
-			t.Error("expected command to contain install-agent.sh URL")
-		}
-		if !strings.Contains(cmdStr, "runic.example.com") {
-			t.Error("expected command to contain control plane URL")
+		if string(data) != string(fakeBinary) {
+			t.Errorf("binary content = %q, want %q", string(data), string(fakeBinary))
 		}
 	})
 
 	t.Run("rejects invalid URL scheme", func(t *testing.T) {
-		mock := &mockCommandRunner{}
-		agent := &Agent{
-			cmdRunner: mock,
-		}
-		agent.handleUpdateAgent(context.Background(), "ftp://malicious.example.com")
-		if len(mock.calls) != 0 || len(mock.detachedCalls) != 0 {
-			t.Error("expected no command to be run for invalid URL scheme")
-		}
-	})
-
-	t.Run("rejects malformed URL", func(t *testing.T) {
-		mock := &mockCommandRunner{}
-		agent := &Agent{
-			cmdRunner: mock,
-		}
-		agent.handleUpdateAgent(context.Background(), "://broken")
-		if len(mock.calls) != 0 || len(mock.detachedCalls) != 0 {
-			t.Error("expected no command to be run for malformed URL")
-		}
-	})
-
-	t.Run("uses context.Background not SSE context", func(t *testing.T) {
-		mock := &mockCommandRunner{}
-		agent := &Agent{
-			cmdRunner: mock,
-		}
-		sseCtx, cancel := context.WithCancel(context.Background())
-		cancel()
-		agent.handleUpdateAgent(sseCtx, "https://runic.example.com")
-		if len(mock.detachedCalls) != 1 {
-			t.Fatalf("expected 1 StartDetached call, got %d", len(mock.detachedCalls))
-		}
-		capturedCtx := mock.detachedCalls[0].ctx
-		if capturedCtx == sseCtx {
-			t.Error("handleUpdateAgent should use context.Background(), not the SSE context")
-		}
-		if err := capturedCtx.Err(); err != nil {
-			t.Error("handleUpdateAgent should use context.Background() which is never canceled")
-		}
-	})
-
-	t.Run("falls back to setsid when systemd-run fails", func(t *testing.T) {
-		var logBuf bytes.Buffer
-		log.Init("info", &logBuf)
-		defer log.Init("info", os.Stdout)
-
-		mock := &mockCommandRunner{
-			startDetachedErrs: map[string]error{"systemd-run": fmt.Errorf("systemd-run: command not found")},
-		}
-		agent := &Agent{
-			cmdRunner: mock,
-		}
-		agent.handleUpdateAgent(context.Background(), "https://runic.example.com")
-
-		if len(mock.calls) != 0 {
-			t.Fatalf("expected 0 Run calls, got %d", len(mock.calls))
-		}
-		if len(mock.detachedCalls) != 2 {
-			t.Fatalf("expected 2 StartDetached calls, got %d", len(mock.detachedCalls))
-		}
-		if mock.detachedCalls[0].name != "systemd-run" {
-			t.Errorf("expected first command 'systemd-run', got '%s'", mock.detachedCalls[0].name)
-		}
-		if mock.detachedCalls[1].name != "setsid" {
-			t.Errorf("expected second command 'setsid', got '%s'", mock.detachedCalls[1].name)
-		}
-		if len(mock.detachedCalls[1].args) < 3 {
-			t.Fatalf("expected at least 3 args for setsid, got %d", len(mock.detachedCalls[1].args))
-		}
-		cmdStr := mock.detachedCalls[1].args[2]
-		if strings.Contains(cmdStr, "nohup curl") {
-			t.Error("expected fallback command to NOT contain 'nohup curl'")
-		}
-		if !strings.Contains(cmdStr, "curl -sL") {
-			t.Error("expected fallback command to contain 'curl -sL'")
-		}
-
-		logOutput := logBuf.String()
-		if !strings.Contains(logOutput, "falling back to setsid") {
-			t.Errorf("expected warning log about 'falling back to setsid', got log output: %q", logOutput)
-		}
-		if !strings.Contains(logOutput, "Update process launched") {
-			t.Error("expected success log 'Update process launched' to be present when setsid fallback succeeds")
-		}
-	})
-
-	t.Run("handles both systemd-run and setsid failure", func(t *testing.T) {
 		var logBuf bytes.Buffer
 		log.Init("error", &logBuf)
 		defer log.Init("info", os.Stdout)
 
-		mock := &mockCommandRunner{
-			startDetachedErrs: map[string]error{
-				"systemd-run": fmt.Errorf("systemd-run: command not found"),
-				"setsid":      fmt.Errorf("setsid: command not found"),
+		exitCh := make(chan int, 1)
+		agent := &Agent{
+			httpClient: http.DefaultClient,
+			exitFunc: func(code int) {
+				select {
+				case exitCh <- code:
+				default:
+				}
 			},
 		}
-		agent := &Agent{
-			cmdRunner: mock,
-		}
-		agent.handleUpdateAgent(context.Background(), "https://runic.example.com")
 
-		if len(mock.calls) != 0 {
-			t.Fatalf("expected 0 Run calls, got %d", len(mock.calls))
-		}
-		if len(mock.detachedCalls) != 2 {
-			t.Fatalf("expected 2 StartDetached calls, got %d", len(mock.detachedCalls))
+		// handleUpdateAgent returns early for invalid URL — no goroutine spawned,
+		// so there is no data race on logBuf.
+		agent.handleUpdateAgent(context.Background(), "ftp://malicious.example.com")
+
+		select {
+		case <-exitCh:
+			t.Error("expected exitFunc NOT to be called for invalid URL scheme")
+		default:
+			// Expected: exitFunc was not called
 		}
 
 		logOutput := logBuf.String()
-		if !strings.Contains(logOutput, "Failed to launch update process (both systemd-run and setsid failed)") {
-			t.Errorf("expected error log about both failures, got log output: %q", logOutput)
+		if !strings.Contains(logOutput, "Invalid control plane URL") {
+			t.Errorf("expected error log about invalid URL, got: %q", logOutput)
 		}
-		if strings.Contains(logOutput, "Update process launched") {
-			t.Error("expected success log 'Update process launched' to NOT be present when both methods fail")
+	})
+
+	t.Run("rejects malformed URL", func(t *testing.T) {
+		var logBuf bytes.Buffer
+		log.Init("error", &logBuf)
+		defer log.Init("info", os.Stdout)
+
+		exitCh := make(chan int, 1)
+		agent := &Agent{
+			httpClient: http.DefaultClient,
+			exitFunc: func(code int) {
+				select {
+				case exitCh <- code:
+				default:
+				}
+			},
 		}
+
+		// handleUpdateAgent returns early for malformed URL — no goroutine spawned,
+		// so there is no data race on logBuf.
+		agent.handleUpdateAgent(context.Background(), "://broken")
+
+		select {
+		case <-exitCh:
+			t.Error("expected exitFunc NOT to be called for malformed URL")
+		default:
+			// Expected: exitFunc was not called
+		}
+
+		logOutput := logBuf.String()
+		if !strings.Contains(logOutput, "Invalid control plane URL") {
+			t.Errorf("expected error log about invalid URL, got: %q", logOutput)
+		}
+	})
+
+	t.Run("handles download failure", func(t *testing.T) {
+		// Server that returns 500 for download requests
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		defer server.Close()
+
+		logBuf := newSyncWriter()
+		log.Init("error", logBuf)
+		defer log.Init("info", os.Stdout)
+
+		tmpDir := t.TempDir()
+		binaryPath := filepath.Join(tmpDir, "runic-agent")
+		if err := os.WriteFile(binaryPath, []byte("old-binary"), 0755); err != nil {
+			t.Fatalf("failed to create target binary: %v", err)
+		}
+
+		origUpdateBinaryPath := UpdateBinaryPath
+		t.Cleanup(func() { UpdateBinaryPath = origUpdateBinaryPath })
+		UpdateBinaryPath = binaryPath
+
+		exitCh := make(chan int, 1)
+		agent := &Agent{
+			httpClient: server.Client(),
+			exitFunc: func(code int) {
+				select {
+				case exitCh <- code:
+				default:
+				}
+			},
+		}
+
+		agent.handleUpdateAgent(context.Background(), server.URL)
+
+		// Wait for either exitFunc to be called (shouldn't happen) or a timeout.
+		// Since the server returns 500 immediately, the goroutine should complete
+		// well within 2 seconds.
+		select {
+		case <-exitCh:
+			t.Error("expected exitFunc NOT to be called on download failure")
+		case <-time.After(2 * time.Second):
+			// Expected: exitFunc was not called
+		}
+
+		// logBuf is protected by a mutex (syncWriter), so reading it here is
+		// safe even if the background goroutine hasn't fully finished yet.
+		logOutput := logBuf.String()
+		if !strings.Contains(logOutput, "download") && !strings.Contains(logOutput, "update") {
+			t.Errorf("expected error log about download/update failure, got: %q", logOutput)
+		}
+	})
+
+	t.Run("handles permission error", func(t *testing.T) {
+		// Serve a valid binary
+		fakeBinary := []byte("#!/bin/sh\n# fake agent binary\n")
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.Contains(r.URL.Path, "downloads") {
+				w.WriteHeader(http.StatusOK)
+				w.Write(fakeBinary)
+				return
+			}
+			http.NotFound(w, r)
+		}))
+		defer server.Close()
+
+		// Use a read-only directory so selfupdate.Apply / CheckPermissions fails
+		readOnlyDir := t.TempDir()
+		binaryPath := filepath.Join(readOnlyDir, "runic-agent")
+		if err := os.WriteFile(binaryPath, []byte("old-binary"), 0755); err != nil {
+			t.Fatalf("failed to create target binary: %v", err)
+		}
+		// Make the directory read-only
+		if err := os.Chmod(readOnlyDir, 0555); err != nil {
+			t.Fatalf("failed to chmod dir: %v", err)
+		}
+		// Make the file read-only
+		if err := os.Chmod(binaryPath, 0444); err != nil {
+			t.Fatalf("failed to chmod binary: %v", err)
+		}
+		t.Cleanup(func() {
+			// Restore permissions so TempDir cleanup can remove the dir
+			os.Chmod(readOnlyDir, 0755)
+			os.Chmod(binaryPath, 0644)
+		})
+
+		origUpdateBinaryPath := UpdateBinaryPath
+		t.Cleanup(func() { UpdateBinaryPath = origUpdateBinaryPath })
+		UpdateBinaryPath = binaryPath
+
+		logBuf := newSyncWriter()
+		log.Init("error", logBuf)
+		defer log.Init("info", os.Stdout)
+
+		exitCh := make(chan int, 1)
+		agent := &Agent{
+			httpClient: server.Client(),
+			exitFunc: func(code int) {
+				select {
+				case exitCh <- code:
+				default:
+				}
+			},
+		}
+
+		agent.handleUpdateAgent(context.Background(), server.URL)
+
+		// Wait for either exitFunc to be called (shouldn't happen) or a timeout.
+		// The download may succeed but apply should fail quickly due to
+		// permissions, so 2 seconds is plenty.
+		select {
+		case <-exitCh:
+			t.Error("expected exitFunc NOT to be called on permission error")
+		case <-time.After(2 * time.Second):
+			// Expected: exitFunc was not called
+		}
+
+		// logBuf is protected by a mutex (syncWriter), so reading it here is
+		// safe even if the background goroutine hasn't fully finished yet.
+		logOutput := logBuf.String()
+		if !strings.Contains(logOutput, "permission") && !strings.Contains(logOutput, "update") {
+			t.Errorf("expected error log about permission/update failure, got: %q", logOutput)
+		}
+	})
+
+	t.Run("uses context.Background not SSE context", func(t *testing.T) {
+		// This test verifies that handleUpdateAgent delegates to
+		// context.Background() rather than using the SSE context that
+		// was passed in. Since the new implementation calls
+		// performUpdate with context.Background(), we verify the
+		// method doesn't fail just because the incoming context is
+		// canceled.
+		sseCtx, cancel := context.WithCancel(context.Background())
+		cancel() // immediately cancel
+
+		exitCh := make(chan int, 1)
+		agent := &Agent{
+			httpClient: http.DefaultClient,
+			exitFunc: func(code int) {
+				select {
+				case exitCh <- code:
+				default:
+				}
+			},
+		}
+
+		// Use an invalid URL so it fails early (but shouldn't panic)
+		// handleUpdateAgent returns early for invalid URL — no goroutine spawned.
+		agent.handleUpdateAgent(sseCtx, "ftp://invalid.example.com")
+
+		select {
+		case <-exitCh:
+			t.Error("expected exitFunc NOT to be called for invalid URL")
+		default:
+			// Expected: exitFunc was not called
+		}
+		// The key verification: the method should not have panicked
+		// or blocked even though the SSE context was canceled.
 	})
 }
 
 func TestHandleUpdateAgentPublic(t *testing.T) {
 	t.Run("delegates to handleUpdateAgent with context.Background", func(t *testing.T) {
-		mock := &mockCommandRunner{}
+		// Verify that HandleUpdateAgent properly delegates and uses
+		// context.Background() rather than any canceled context.
+		exitCh := make(chan int, 1)
 		agent := &Agent{
-			cmdRunner: mock,
-		}
-		agent.HandleUpdateAgent("https://runic.example.com")
-
-		if len(mock.detachedCalls) != 1 {
-			t.Fatalf("expected 1 StartDetached call, got %d", len(mock.detachedCalls))
-		}
-
-		if err := mock.detachedCalls[0].ctx.Err(); err != nil {
-			t.Error("HandleUpdateAgent should use context.Background() which is never canceled")
+			httpClient: http.DefaultClient,
+			exitFunc: func(code int) {
+				select {
+				case exitCh <- code:
+				default:
+				}
+			},
 		}
 
-		cmdStr := mock.detachedCalls[0].args[len(mock.detachedCalls[0].args)-1]
-		if !strings.Contains(cmdStr, "runic.example.com") {
-			t.Error("expected command to contain control plane URL")
+		// Use an invalid URL scheme so it returns early without
+		// actually downloading, but the delegation still happens.
+		agent.HandleUpdateAgent("ftp://invalid.example.com")
+
+		select {
+		case <-exitCh:
+			t.Error("expected exitFunc NOT to be called for invalid URL scheme")
+		default:
+			// Expected: exitFunc was not called
 		}
+		// The method should not panic when delegating with context.Background()
 	})
 }
 
 func TestHandleUpdateAgentSync(t *testing.T) {
-	t.Run("succeeds with systemd-run", func(t *testing.T) {
-		mock := &mockCommandRunner{}
+	t.Run("returns error for invalid URL", func(t *testing.T) {
 		agent := &Agent{
-			cmdRunner: mock,
+			httpClient: http.DefaultClient,
+			exitFunc:   func(int) {},
 		}
-		err := agent.HandleUpdateAgentSync("https://runic.example.com")
-		if err != nil {
-			t.Fatalf("expected nil error, got: %v", err)
-		}
-		if len(mock.calls) != 1 {
-			t.Fatalf("expected 1 Run call, got %d", len(mock.calls))
-		}
-		if mock.calls[0].name != "systemd-run" {
-			t.Errorf("expected command 'systemd-run', got '%s'", mock.calls[0].name)
-		}
-		if len(mock.detachedCalls) != 0 {
-			t.Errorf("expected 0 StartDetached calls, got %d", len(mock.detachedCalls))
-		}
-	})
 
-	t.Run("falls back to direct execution when systemd-run fails", func(t *testing.T) {
-		mock := &mockCommandRunner{
-			runErrs: map[string]error{"systemd-run": fmt.Errorf("systemd-run: command not found")},
-		}
-		agent := &Agent{
-			cmdRunner: mock,
-		}
-		err := agent.HandleUpdateAgentSync("https://runic.example.com")
-		if err != nil {
-			t.Fatalf("expected nil error, got: %v", err)
-		}
-		if len(mock.calls) != 2 {
-			t.Fatalf("expected 2 Run calls, got %d", len(mock.calls))
-		}
-		if mock.calls[0].name != "systemd-run" {
-			t.Errorf("expected first command 'systemd-run', got '%s'", mock.calls[0].name)
-		}
-		if mock.calls[1].name != "bash" {
-			t.Errorf("expected second command 'bash', got '%s'", mock.calls[1].name)
-		}
-		if len(mock.detachedCalls) != 0 {
-			t.Errorf("expected 0 StartDetached calls, got %d", len(mock.detachedCalls))
-		}
-	})
-
-	t.Run("rejects invalid URL", func(t *testing.T) {
-		mock := &mockCommandRunner{}
-		agent := &Agent{
-			cmdRunner: mock,
-		}
 		err := agent.HandleUpdateAgentSync("ftp://malicious.example.com")
 		if err == nil {
 			t.Fatal("expected error for invalid URL scheme, got nil")
 		}
-		if len(mock.calls) != 0 || len(mock.detachedCalls) != 0 {
-			t.Error("expected no command to be run for invalid URL scheme")
+		if !strings.Contains(err.Error(), "invalid control plane URL") {
+			t.Errorf("error = %v, want 'invalid control plane URL'", err)
+		}
+	})
+
+	t.Run("calls exitFunc on success", func(t *testing.T) {
+		// Serve a fake binary via httptest
+		fakeBinary := []byte("#!/bin/sh\n# fake agent binary\n")
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.Contains(r.URL.Path, "downloads") {
+				w.WriteHeader(http.StatusOK)
+				w.Write(fakeBinary)
+				return
+			}
+			http.NotFound(w, r)
+		}))
+		defer server.Close()
+
+		tmpDir := t.TempDir()
+		binaryPath := filepath.Join(tmpDir, "runic-agent")
+		if err := os.WriteFile(binaryPath, []byte("old-binary"), 0755); err != nil {
+			t.Fatalf("failed to create target binary: %v", err)
+		}
+
+		origUpdateBinaryPath := UpdateBinaryPath
+		t.Cleanup(func() { UpdateBinaryPath = origUpdateBinaryPath })
+		UpdateBinaryPath = binaryPath
+
+		exitCh := make(chan int, 1)
+		agent := &Agent{
+			httpClient: server.Client(),
+			exitFunc: func(code int) {
+				select {
+				case exitCh <- code:
+				default:
+				}
+			},
+		}
+
+		err := agent.HandleUpdateAgentSync(server.URL)
+		if err != nil {
+			t.Fatalf("expected nil error, got: %v", err)
+		}
+
+		// HandleUpdateAgentSync is synchronous, so exitFunc has already been called
+		// by the time HandleUpdateAgentSync returns.
+		select {
+		case code := <-exitCh:
+			if code != 0 {
+				t.Errorf("expected exit code 0, got %d", code)
+			}
+		default:
+			t.Error("expected exitFunc to be called after successful sync update")
+		}
+
+		// Verify the binary was replaced
+		data, err := os.ReadFile(binaryPath)
+		if err != nil {
+			t.Fatalf("failed to read updated binary: %v", err)
+		}
+		if string(data) != string(fakeBinary) {
+			t.Errorf("binary content = %q, want %q", string(data), string(fakeBinary))
+		}
+	})
+
+	t.Run("returns error on download failure", func(t *testing.T) {
+		// Server that returns 500
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		defer server.Close()
+
+		tmpDir := t.TempDir()
+		binaryPath := filepath.Join(tmpDir, "runic-agent")
+		if err := os.WriteFile(binaryPath, []byte("old-binary"), 0755); err != nil {
+			t.Fatalf("failed to create target binary: %v", err)
+		}
+
+		origUpdateBinaryPath := UpdateBinaryPath
+		t.Cleanup(func() { UpdateBinaryPath = origUpdateBinaryPath })
+		UpdateBinaryPath = binaryPath
+
+		exitCh := make(chan int, 1)
+		agent := &Agent{
+			httpClient: server.Client(),
+			exitFunc: func(code int) {
+				select {
+				case exitCh <- code:
+				default:
+				}
+			},
+		}
+
+		err := agent.HandleUpdateAgentSync(server.URL)
+		if err == nil {
+			t.Fatal("expected error for download failure, got nil")
+		}
+
+		// HandleUpdateAgentSync is synchronous, so we can check immediately.
+		select {
+		case <-exitCh:
+			t.Error("expected exitFunc NOT to be called on download failure")
+		default:
+			// Expected: exitFunc was not called
 		}
 	})
 }

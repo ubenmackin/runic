@@ -6,7 +6,11 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"sync"
 )
+
+// mu protects the logger variable for concurrent access.
+var mu sync.RWMutex
 
 // A global slog logger instance, configurable at init time
 var logger *slog.Logger
@@ -33,25 +37,31 @@ func Init(level string, output io.Writer) {
 		Level: logLevel,
 	}
 
+	var newLogger *slog.Logger
 	// Determine output format based on environment
 	// JSON format for production, text format for development
 	if os.Getenv("ENV") == "production" {
 		handler := slog.NewJSONHandler(output, opts)
-		logger = slog.New(handler)
+		newLogger = slog.New(handler)
 	} else {
 		handler := slog.NewTextHandler(output, opts)
-		logger = slog.New(handler)
+		newLogger = slog.New(handler)
 	}
 
-	slog.SetDefault(logger)
+	mu.Lock()
+	logger = newLogger
+	mu.Unlock()
+	slog.SetDefault(newLogger)
 }
 
 func L() *slog.Logger {
-	if logger == nil {
-		// Fallback to default if not initialized
+	mu.RLock()
+	l := logger
+	mu.RUnlock()
+	if l == nil {
 		return slog.Default()
 	}
-	return logger
+	return l
 }
 
 func LCtx(ctx context.Context) *slog.Logger {

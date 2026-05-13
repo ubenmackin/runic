@@ -25,7 +25,10 @@ NoNewPrivileges=false
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict
-ReadWritePaths=/etc/runic-agent /var/log
+# /usr/local/bin is needed for the agent's in-process self-update mechanism
+# (atomic binary swap). The agent downloads a new binary and renames it into
+# place, then exits — systemd Restart=always brings it back with the new version.
+ReadWritePaths=/etc/runic-agent /var/log /usr/local/bin
 
 [Install]
 WantedBy=multi-user.target

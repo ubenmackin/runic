@@ -30,11 +30,8 @@ import (
 
 var Version = "dev"
 
-const InstallScriptURL = "https://raw.githubusercontent.com/ubenmackin/runic/main/scripts/install-agent.sh"
-
 type CommandRunner interface {
 	Run(ctx context.Context, name string, args ...string) ([]byte, error)
-	StartDetached(ctx context.Context, name string, args ...string) error
 }
 
 type RealCommandRunner struct{}
@@ -42,30 +39,6 @@ type RealCommandRunner struct{}
 func (r *RealCommandRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
 	return cmd.CombinedOutput()
-}
-
-func (r *RealCommandRunner) StartDetached(ctx context.Context, name string, args ...string) error {
-	cmd := exec.CommandContext(ctx, name, args...)
-	// Redirect stdout/stderr to /dev/null so the child doesn't block on I/O
-	devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
-	if err != nil {
-		return fmt.Errorf("open /dev/null: %w", err)
-	}
-	defer func() {
-		_ = devNull.Close()
-	}()
-	cmd.Stdout = devNull
-	cmd.Stderr = devNull
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("start detached command: %w", err)
-	}
-	// Release the process so it doesn't become a zombie when the parent exits.
-	// The child runs in its own session (via setsid as the direct command) and will
-	// complete independently of the agent's lifecycle.
-	if err := cmd.Process.Release(); err != nil {
-		return fmt.Errorf("release detached process: %w", err)
-	}
-	return nil
 }
 
 type Agent struct {
@@ -81,6 +54,7 @@ type Agent struct {
 	cmdRunner       CommandRunner
 	cachePath       string
 	backupPath      string
+	exitFunc        func(int) // for testing; defaults to os.Exit
 }
 
 func New(configPath, controlPlaneURL string) *Agent {
@@ -108,6 +82,7 @@ func New(configPath, controlPlaneURL string) *Agent {
 	}
 
 	agent.cmdRunner = &RealCommandRunner{}
+	agent.exitFunc = os.Exit
 	agent.cachePath = "/etc/runic-agent/cached-bundle.rules"
 	agent.backupPath = "/etc/runic-agent/iptables-backup.rules"
 
@@ -617,22 +592,13 @@ func (a *Agent) handleFetchBackup(ctx context.Context) {
 	}
 }
 
-// The install command is launched via systemd-run --scope so it runs in its
-// own cgroup outside the agent's service unit. When the install script calls
-// "systemctl stop runic-agent", systemd only kills processes in the service's
-// cgroup — the scope unit survives and the script completes the update
-// (download, file move, service restart).
+// handleUpdateAgent performs an in-process self-update. It downloads the new
+// binary via HTTP and applies it in-place using selfupdate.Apply, then exits
+// the process so the service manager can restart with the new binary.
 //
-// Both the primary (systemd-run) and fallback (setsid) paths use
-// StartDetached (fire-and-forget) rather than Run (blocking). This is
-// critical: Run blocks on CombinedOutput, so when the agent process is
-// killed by the install script's "systemctl stop", the blocked goroutine
-// dies and the child process is orphaned. StartDetached calls cmd.Start +
-// cmd.Process.Release, which fires the process and returns immediately —
-// the child runs independently regardless of the parent's fate.
-//
-// If systemd-run is unavailable (e.g. non-systemd environments), fall back
-// to the setsid approach.
+// The update runs in a goroutine because the caller (SSE event handler) must
+// not block. After a successful apply, the agent waits 2 seconds for the SSE
+// acknowledgment to be sent, then calls exitFunc(0) (os.Exit in production).
 func (a *Agent) handleUpdateAgent(_ context.Context, controlPlaneURL string) {
 	log.Info("Starting agent self-update", "control_plane_url", controlPlaneURL)
 
@@ -642,35 +608,17 @@ func (a *Agent) handleUpdateAgent(_ context.Context, controlPlaneURL string) {
 		return
 	}
 
-	// Build the install command: curl downloads the script, sudo runs it with the control plane URL.
-	safeURL, err := shellSafeArg(parsedURL.String())
-	if err != nil {
-		log.Error("Control plane URL contains unsafe characters", "error", err)
-		return
-	}
-	cmd := fmt.Sprintf("curl -sL %s | sudo bash -s -- %s", InstallScriptURL, safeURL)
-
-	// Use systemd-run --scope to launch the update in its own cgroup, outside the
-	// agent's service unit. When the install script calls "systemctl stop runic-agent",
-	// systemd only kills processes in the service's cgroup — the scope survives.
-	ctx := context.Background()
-	err = a.cmdRunner.StartDetached(ctx, "systemd-run", "--scope", "--unit=runic-agent-update", "bash", "-c", cmd)
-	if err != nil {
-		// Fall back to setsid if systemd-run is unavailable (non-systemd environments)
-		log.Warn("systemd-run --scope failed, falling back to setsid", "error", err)
-		err = a.cmdRunner.StartDetached(ctx, "setsid", "bash", "-c", fmt.Sprintf(
-			"curl -sL %s | sudo bash -s -- %s >/dev/null 2>&1",
-			InstallScriptURL,
-			safeURL,
-		),
-		)
-		if err != nil {
-			log.Error("Failed to launch update process (both systemd-run and setsid failed)", "error", err)
+	go func() {
+		ctx := context.Background()
+		if err := performUpdate(ctx, a.httpClient, parsedURL.String()); err != nil {
+			log.Error("Agent self-update failed", "error", err)
 			return
 		}
-	}
 
-	log.Info("Update process launched")
+		log.Info("Agent update applied, exiting for restart in 2s")
+		time.Sleep(2 * time.Second)
+		a.exitFunc(0)
+	}()
 }
 
 // HandleUpdateAgent triggers the agent self-update process. It is the public
@@ -681,10 +629,10 @@ func (a *Agent) HandleUpdateAgent(controlPlaneURL string) {
 
 // HandleUpdateAgentSync triggers the agent self-update synchronously.
 // It blocks until the update process completes or fails, returning any error.
+// On success, it calls exitFunc(0) to exit the process for restart.
 // This is intended for CLI use (e.g., `runic-agent -update`) where the caller
 // needs to know whether the update succeeded. For SSE-triggered updates,
-// use HandleUpdateAgent (async) instead, since the agent will be killed by
-// the install script and cannot wait for completion.
+// use HandleUpdateAgent (async) instead.
 func (a *Agent) HandleUpdateAgentSync(controlPlaneURL string) error {
 	return a.handleUpdateAgentSync(context.Background(), controlPlaneURL)
 }
@@ -697,39 +645,14 @@ func (a *Agent) handleUpdateAgentSync(_ context.Context, controlPlaneURL string)
 		return fmt.Errorf("invalid control plane URL: %s", controlPlaneURL)
 	}
 
-	safeURL, err := shellSafeArg(parsedURL.String())
-	if err != nil {
-		return fmt.Errorf("control plane URL contains unsafe characters: %w", err)
-	}
-	cmd := fmt.Sprintf("curl -sL %s | sudo bash -s -- %s", InstallScriptURL, safeURL)
-
 	ctx := context.Background()
-
-	// Try systemd-run --scope first (keeps update in its own cgroup)
-	_, err = a.cmdRunner.Run(ctx, "systemd-run", "--scope", "--unit=runic-agent-update", "bash", "-c", cmd)
-	if err != nil {
-		log.Warn("systemd-run --scope failed, falling back to direct execution", "error", err)
-		_, err = a.cmdRunner.Run(ctx, "bash", "-c", cmd)
-		if err != nil {
-			return fmt.Errorf("update process failed: %w", err)
-		}
+	if err := performUpdate(ctx, a.httpClient, parsedURL.String()); err != nil {
+		return fmt.Errorf("agent self-update failed: %w", err)
 	}
 
-	log.Info("Update process completed, agent should restart via install script")
+	log.Info("Agent update applied successfully, exiting for restart")
+	a.exitFunc(0)
 	return nil
-}
-
-// shellSafeArg wraps a string in POSIX single quotes for safe shell interpolation.
-// Internal single quotes are escaped with the standard '\” idiom. Control
-// characters (bytes < 0x20, except NUL which is also rejected) are rejected
-// because they can break the shell command line even when quoted.
-func shellSafeArg(s string) (string, error) {
-	for i := 0; i < len(s); i++ {
-		if s[i] < 0x20 {
-			return "", fmt.Errorf("shell argument contains control character at position %d (byte 0x%02x)", i, s[i])
-		}
-	}
-	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'", nil
 }
 
 func (a *Agent) readBackup() (string, error) {
