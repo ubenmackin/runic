@@ -3,8 +3,8 @@
 #
 # This script must be run on a Linux system with systemd (not macOS).
 # It verifies the full self-update flow: build, install a "stale" version,
-# trigger the -update flag (added in TASK-002), and verify the update process
-# launched correctly via systemd-run or the setsid fallback path.
+# trigger the -update flag (added in TASK-002), and verify the in-process
+# download, atomic swap, and agent exit for systemd restart.
 #
 # Usage:
 #   sudo ./scripts/test-self-update.sh [--url <control-plane-url>] [--dry-run]
@@ -290,9 +290,9 @@ if [[ "$DRY_RUN" == "true" ]]; then
     log_info "DRY-RUN: Command: ${UPDATE_CMD[*]}"
 
     # Verify the binary accepts the flags without error
-    # The -update flag triggers HandleUpdateAgent which will attempt to launch
-    # the update process. In dry-run, we just check the command parses correctly
-    # by inspecting the help output and verifying the flag combination.
+	# The -update flag triggers HandleUpdateAgentSync which performs an in-process
+	# download and atomic swap. In dry-run, we just check the command parses correctly
+	# by inspecting the help output and verifying the flag combination.
     log_info "DRY-RUN: Checking that -update flag is accepted by the binary"
     if timeout 5 "$AGENT_BINARY" -h 2>&1 | grep -q -- "-update"; then
         log_pass "DRY-RUN: -update flag accepted"
@@ -309,10 +309,14 @@ if [[ "$DRY_RUN" == "true" ]]; then
         exit 1
     fi
 
-	# Show the expected systemd-run command that would be constructed
-	# Ref: internal/agent/core/agent.go — InstallScriptURL constant
-	EXPECTED_CMD="systemd-run --scope --unit=runic-agent-update bash -c 'curl -sL https://raw.githubusercontent.com/ubenmackin/runic/main/scripts/install-agent.sh | sudo bash -s -- ${CONTROL_PLANE_URL}'"
-    log_info "DRY-RUN: Expected update command: $EXPECTED_CMD"
+	# Show the expected in-process update flow
+	# Ref: internal/agent/core/updater.go — performUpdate(), downloadBinary()
+	ARCH="$(uname -m)"
+	log_info "DRY-RUN: Update flow:"
+	log_info "DRY-RUN: 1. Download new binary from: ${CONTROL_PLANE_URL}/downloads/runic-agent-${ARCH}"
+	log_info "DRY-RUN: 2. Verify binary (checksum if available)"
+	log_info "DRY-RUN: 3. Atomically swap: rename current → runic-agent.old, rename new → runic-agent"
+	log_info "DRY-RUN: 4. Exit process — systemd Restart=always brings agent back with new binary"
     log_pass "DRY-RUN: Command construction validated"
 
     echo ""
@@ -321,8 +325,8 @@ if [[ "$DRY_RUN" == "true" ]]; then
 fi
 
 # Actually run the update trigger
-# Note: this will attempt to contact the control plane and run the install script.
-# In a real test environment, the control plane should serve the install script.
+# Note: this will attempt to contact the control plane and download the new binary.
+# In a real test environment, the control plane should serve the binary at /downloads/runic-agent-$(uname -m).
 log_info "Running: ${UPDATE_CMD[*]}"
 UPDATE_OUTPUT="$(timeout 30 "${UPDATE_CMD[@]}" 2>&1)" || true
 log_info "Update output: $UPDATE_OUTPUT"
@@ -330,50 +334,59 @@ log_info "Update output: $UPDATE_OUTPUT"
 # ── Step 5: Verify update process ───────────────────────────────────────────
 log_step "Verifying update process"
 
-# 5a. Check for systemd scope unit (the primary update path)
-# When the agent calls handleUpdateAgent, it uses:
-#   systemd-run --scope --unit=runic-agent-update bash -c <cmd>
-# We check if the scope was registered.
-SCOPE_FOUND=false
-if systemctl list-units --all 2>/dev/null | grep -q "runic-agent-update"; then
-    log_pass "runic-agent-update.scope detected via systemctl list-units"
-    SCOPE_FOUND=true
+# 5a. Check for in-process update log messages
+UPDATE_STARTED=false
+if echo "$UPDATE_OUTPUT" | grep -qi "Starting agent self-update"; then
+	log_pass "Agent logged 'Starting agent self-update'"
+	UPDATE_STARTED=true
 fi
 
-# Also check via systemd-run's exit — if the agent logged that it launched
-if echo "$UPDATE_OUTPUT" | grep -qi "update process launched"; then
-    log_pass "Agent logged 'update process launched'"
-    SCOPE_FOUND=true
+UPDATE_DOWNLOADING=false
+if echo "$UPDATE_OUTPUT" | grep -qi "Downloading agent update"; then
+	log_pass "Agent logged 'Downloading agent update'"
+	UPDATE_DOWNLOADING=true
 fi
 
-# 5b. Check for the setsid fallback path
-# If systemd-run was unavailable, the agent falls back to setsid.
-FALLBACK_FOUND=false
-if echo "$UPDATE_OUTPUT" | grep -qi "falling back to setsid"; then
-    log_info "Agent used setsid fallback path"
-    FALLBACK_FOUND=true
+UPDATE_APPLYING=false
+if echo "$UPDATE_OUTPUT" | grep -qi "Applying agent update"; then
+	log_pass "Agent logged 'Applying agent update'"
+	UPDATE_APPLYING=true
 fi
 
-if echo "$UPDATE_OUTPUT" | grep -qi "both systemd-run and setsid failed"; then
-    log_fail "Both systemd-run and setsid approaches failed"
-    exit 1
+UPDATE_APPLIED=false
+if echo "$UPDATE_OUTPUT" | grep -qi "Agent update applied successfully"; then
+	log_pass "Agent logged 'Agent update applied successfully'"
+	UPDATE_APPLIED=true
 fi
 
-# At least one update path must have been attempted
-if [[ "$SCOPE_FOUND" == "true" ]] || [[ "$FALLBACK_FOUND" == "true" ]]; then
-    log_pass "Update process was launched (scope=$SCOPE_FOUND, fallback=$FALLBACK_FOUND)"
+# 5b. Check for binary swap evidence
+BINARY_SWAPPED=false
+if [[ -f "${AGENT_BINARY}.old" ]]; then
+	log_pass "Old binary backed up to ${AGENT_BINARY}.old (atomic swap evidence)"
+	BINARY_SWAPPED=true
+fi
+
+# Check if binary modification time changed
+if [[ -x "$AGENT_BINARY" ]]; then
+	CURRENT_MTIME="$(stat -c %Y "$AGENT_BINARY" 2>/dev/null || stat -f %m "$AGENT_BINARY" 2>/dev/null || echo 0)"
+	log_info "Current binary mtime: $CURRENT_MTIME"
+fi
+
+# 5c. At least the update must have been started
+if [[ "$UPDATE_STARTED" == "true" ]]; then
+	log_pass "Update process was initiated (started=$UPDATE_STARTED, downloading=$UPDATE_DOWNLOADING, applying=$UPDATE_APPLYING, applied=$UPDATE_APPLIED, swapped=$BINARY_SWAPPED)"
 else
-    # In some test environments the update may fail to connect to the control plane,
-    # but the agent should still have attempted it. Check journal logs.
-    log_info "Checking journalctl for update-related log entries..."
-    JOURNAL_OUTPUT="$(journalctl -u runic-agent --since "1 min ago" --no-pager 2>/dev/null || true)"
-    if echo "$JOURNAL_OUTPUT" | grep -qi "self-update\|update process launched\|runic-agent-update"; then
-        log_pass "Journal logs confirm update was attempted"
-    else
-        log_fail "No evidence of update process launch found"
-        log_info "This may indicate the control plane URL was unreachable or the agent exited before launching the update"
-        exit 1
-    fi
+	# In some test environments the update may fail to connect to the control plane,
+	# but the agent should still have attempted it. Check journal logs.
+	log_info "Checking journalctl for update-related log entries..."
+	JOURNAL_OUTPUT="$(journalctl -u runic-agent --since "1 min ago" --no-pager 2>/dev/null || true)"
+	if echo "$JOURNAL_OUTPUT" | grep -qi "Starting agent self-update\|Downloading agent update\|Applying agent update"; then
+		log_pass "Journal logs confirm update was attempted"
+	else
+		log_fail "No evidence of update process launch found"
+		log_info "This may indicate the control plane URL was unreachable or the agent exited before starting the update"
+		exit 1
+	fi
 fi
 
 # ── Summary ─────────────────────────────────────────────────────────────────
@@ -383,6 +396,7 @@ echo "  Self-update integration test: PASSED"
 echo "========================================="
 echo "  Control plane URL: $CONTROL_PLANE_URL"
 echo "  Dry-run:           $DRY_RUN"
-echo "  Scope path used:   $SCOPE_FOUND"
-echo "  Fallback used:     $FALLBACK_FOUND"
+echo " Update started: $UPDATE_STARTED"
+echo " Binary swapped: $BINARY_SWAPPED"
+echo " In-process update: true"
 echo "========================================="
