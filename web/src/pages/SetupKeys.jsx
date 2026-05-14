@@ -14,7 +14,6 @@ import PageHeader from '../components/PageHeader'
 import Pagination from '../components/Pagination'
 import { useTableFilter } from '../hooks/useTableFilter'
 import { useAuth } from '../hooks/useAuth'
-import KebabMenu from '../components/KebabMenu'
 
 export default function SetupKeys() {
   const qc = useQueryClient()
@@ -24,6 +23,7 @@ export default function SetupKeys() {
   const [rotationResult, setRotationResult] = useState(null) // { peerId, newKey, token }
   const [searchTerm, setSearchTerm] = useState('')
   const { sortConfig, handleSort } = useTableSort('setupKeys', { key: 'hostname', direction: 'asc' })
+  const { sortConfig: tokenSortConfig, handleSort: handleTokenSort } = useTableSort('registrationTokens', { key: 'created_at', direction: 'desc' })
   const rotateConfirmModalRef = useRef(null)
   const rotateResultModalRef = useRef(null)
 
@@ -138,12 +138,20 @@ export default function SetupKeys() {
     return { label: 'Active', color: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' }
   }
 
-  const filteredTokens = (tokens || []).filter(t => {
-    const term = tokenSearchTerm.toLowerCase()
-    if (!term) return true
-    return (t.description || '').toLowerCase().includes(term) ||
-           (t.used_by_hostname || '').toLowerCase().includes(term) ||
-           (t.token || '').toLowerCase().includes(term)
+  const filteredTokens = useTableFilter(tokens || [], tokenSearchTerm, tokenSortConfig, {
+    filterFn: (t, term) => {
+      return (t.description || '').toLowerCase().includes(term) ||
+        (t.used_by_hostname || '').toLowerCase().includes(term) ||
+        (t.token || '').toLowerCase().includes(term)
+    },
+    fieldMap: {
+      status: (t) => {
+        if (t.is_revoked) return 2
+        if (t.used_at) return 1
+        return 0
+      },
+      used_by: (t) => t.used_by_hostname || '',
+    },
   })
 
   const getRotationStatusString = (peer) => {
@@ -319,18 +327,10 @@ className={`px-4 py-2 text-sm font-medium rounded-none transition-colors ${
                   </thead>
 <tbody className="divide-y divide-gray-200 dark:divide-gray-border">
         {paginatedPeers.map((peer) => {
-        const rotationStatus = getRotationStatus(peer)
-        const StatusIcon = rotationStatus.icon
-        const peerMenuItems = [
-          {
-            label: 'Rotate Key',
-            icon: RotateCw,
-            onClick: () => setShowRotateModal(peer.id),
-            show: isAdmin,
-          },
-        ]
+          const rotationStatus = getRotationStatus(peer)
+          const StatusIcon = rotationStatus.icon
 
-        return (
+          return (
           <tr key={peer.id} className="">
             <td className="px-4 py-1">
               <div className="flex items-center">
@@ -348,13 +348,21 @@ className={`px-4 py-2 text-sm font-medium rounded-none transition-colors ${
               {formatRelativeTime(peer.hmac_key_last_rotated_at)}
             </td>
             <td className="px-4 py-1">
-              {peerMenuItems.some(item => item.show !== false) && (
-                <KebabMenu items={peerMenuItems} />
-              )}
+              <div className="flex items-center gap-2">
+                {isAdmin && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setShowRotateModal(peer.id) }}
+                    className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none"
+                    title="Rotate Key"
+                  >
+                    <RotateCw className="w-4 h-4 text-gray-900 dark:text-white" />
+                  </button>
+                )}
+              </div>
             </td>
           </tr>
-        )
-              })}
+          )
+        })}
             </tbody>
                 </table>
               </div>
@@ -376,14 +384,12 @@ className={`px-4 py-2 text-sm font-medium rounded-none transition-colors ${
       {activeTab === 'tokens' && (
         <>
           {/* Search Bar */}
-<SearchFilterPanel
+        <SearchFilterPanel
           storageKey="setup-tokens-search-filters-expanded"
           searchTerm={tokenSearchTerm}
           onSearchChange={setTokenSearchTerm}
           onClearSearch={() => setTokenSearchTerm('')}
           searchPlaceholder="Search by description, hostname, or token..."
-          rowsPerPage={10}
-          onRowsPerPageChange={() => {}}
         />
 
           {/* Tokens Table */}
@@ -398,45 +404,40 @@ className={`px-4 py-2 text-sm font-medium rounded-none transition-colors ${
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead className="bg-gray-50 dark:bg-charcoal-darkest border-b border-gray-200 dark:border-gray-border">
-                    <tr>
-                      <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
-                        Token
-                      </th>
-                      <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
-                        Description
-                      </th>
-                      <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
-                        Status
-                      </th>
-                      <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
-                        Created
-                      </th>
-                      <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
-                        Used By
-                      </th>
-                      <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
-                        Actions
-                      </th>
-                    </tr>
+                      <tr>
+                        <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+                          <button type="button" onClick={() => handleTokenSort('token')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+                            Token <SortIndicator columnKey="token" sortConfig={tokenSortConfig} />
+                          </button>
+                        </th>
+                        <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+                          <button type="button" onClick={() => handleTokenSort('description')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+                            Description <SortIndicator columnKey="description" sortConfig={tokenSortConfig} />
+                          </button>
+                        </th>
+                        <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+                          <button type="button" onClick={() => handleTokenSort('status')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+                            Status <SortIndicator columnKey="status" sortConfig={tokenSortConfig} />
+                          </button>
+                        </th>
+                        <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+                          <button type="button" onClick={() => handleTokenSort('created_at')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+                            Created <SortIndicator columnKey="created_at" sortConfig={tokenSortConfig} />
+                          </button>
+                        </th>
+                        <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider hover:bg-gray-100 dark:hover:bg-charcoal-dark select-none">
+                          <button type="button" onClick={() => handleTokenSort('used_by')} className="flex items-center hover:text-runic-600 dark:hover:text-purple-active">
+                            Used By <SortIndicator columnKey="used_by" sortConfig={tokenSortConfig} />
+                          </button>
+                        </th>
+                        <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider">
+                          Actions
+                        </th>
+                      </tr>
                   </thead>
 <tbody className="divide-y divide-gray-200 dark:divide-gray-border">
-        {filteredTokens.map((token) => {
+      {filteredTokens.map((token) => {
         const statusBadge = getTokenStatusBadge(token)
-        const tokenMenuItems = [
-          {
-            label: 'Copy Token',
-            icon: Copy,
-            onClick: () => copyToClipboard(token.token),
-            show: !!token.token,
-          },
-          {
-            label: 'Revoke',
-            icon: Ban,
-            onClick: () => setShowRevokeModal(token.id),
-            show: isAdmin && !token.used_at && !token.is_revoked,
-            danger: true,
-          },
-        ]
         return (
           <tr key={token.id}>
             <td className="px-4 py-1">
@@ -459,13 +460,28 @@ className={`px-4 py-2 text-sm font-medium rounded-none transition-colors ${
               {token.used_by_hostname || <span className="text-gray-400 dark:text-amber-muted italic">—</span>}
             </td>
             <td className="px-4 py-1">
-              {tokenMenuItems.some(item => item.show !== false) && (
-                <KebabMenu items={tokenMenuItems} />
-              )}
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={(e) => { e.stopPropagation(); copyToClipboard(token.token) }}
+                  className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none"
+                  title="Copy Token"
+                >
+                  <Copy className="w-4 h-4 text-gray-900 dark:text-white" />
+                </button>
+                {isAdmin && !token.used_at && !token.is_revoked && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setShowRevokeModal(token.id) }}
+                    className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none"
+                    title="Revoke"
+                  >
+                    <Ban className="w-4 h-4 text-red-500" />
+                  </button>
+                )}
+              </div>
             </td>
           </tr>
         )
-              })}
+      })}
             </tbody>
                 </table>
               </div>

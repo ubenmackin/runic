@@ -73,7 +73,7 @@ export default function SearchFilterPanel({
     <select
       value={rowsPerPage}
       onChange={(e) => onRowsPerPageChange(Number(e.target.value))}
-      className="text-xs border border-gray-200 dark:border-gray-border bg-white dark:bg-charcoal-dark rounded-none px-2 py-1 focus:outline-none focus:ring-1 focus:ring-purple-active"
+      className="text-xs text-gray-900 dark:text-light-neutral border border-gray-200 dark:border-gray-border bg-white dark:bg-charcoal-dark rounded-none px-2 py-1 focus:outline-none focus:ring-1 focus:ring-purple-active"
     >
       <option value={10}>Rows: 10</option>
       <option value={25}>Rows: 25</option>
