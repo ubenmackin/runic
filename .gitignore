@@ -108,6 +108,7 @@ Thumbs.db
 coverage/
 *.cover
 *.prof
+findings/
 
 # -----------------------------------------------------------------------------
 # Database files (if any local DB files)
