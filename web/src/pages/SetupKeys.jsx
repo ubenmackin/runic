@@ -203,9 +203,24 @@ export default function SetupKeys() {
     totalItems: peersTotal
   } = usePagination(filteredPeers, 'setupKeys')
 
+  const {
+    paginatedData: paginatedTokens,
+    totalPages: tokensTotalPages,
+    showingRange: tokensShowingRange,
+    page: tokensPage,
+    rowsPerPage: tokensRowsPerPage,
+    onPageChange: setTokensPage,
+    onRowsPerPageChange: setTokensRowsPerPage,
+    totalItems: tokensTotal,
+  } = usePagination(filteredTokens, 'registrationTokens')
+
   useEffect(() => {
     setPeersPage(1)
   }, [searchTerm, setPeersPage])
+
+  useEffect(() => {
+    setTokensPage(1)
+  }, [tokenSearchTerm, setTokensPage])
 
   useFocusTrap(rotateConfirmModalRef, !!showRotateModal)
   useFocusTrap(rotateResultModalRef, !!rotationResult)
@@ -386,11 +401,13 @@ className={`px-4 py-2 text-sm font-medium rounded-none transition-colors ${
           {/* Search Bar */}
         <SearchFilterPanel
           storageKey="setup-tokens-search-filters-expanded"
-          searchTerm={tokenSearchTerm}
-          onSearchChange={setTokenSearchTerm}
-          onClearSearch={() => setTokenSearchTerm('')}
-          searchPlaceholder="Search by description, hostname, or token..."
-        />
+        searchTerm={tokenSearchTerm}
+        onSearchChange={setTokenSearchTerm}
+        onClearSearch={() => setTokenSearchTerm('')}
+        searchPlaceholder="Search by description, hostname, or token..."
+        rowsPerPage={tokensRowsPerPage}
+        onRowsPerPageChange={setTokensRowsPerPage}
+      />
 
           {/* Tokens Table */}
           {filteredTokens.length === 0 ? (
@@ -436,7 +453,7 @@ className={`px-4 py-2 text-sm font-medium rounded-none transition-colors ${
                       </tr>
                   </thead>
 <tbody className="divide-y divide-gray-200 dark:divide-gray-border">
-      {filteredTokens.map((token) => {
+      {paginatedTokens.map((token) => {
         const statusBadge = getTokenStatusBadge(token)
         return (
           <tr key={token.id}>
@@ -483,10 +500,18 @@ className={`px-4 py-2 text-sm font-medium rounded-none transition-colors ${
         )
       })}
             </tbody>
-                </table>
-              </div>
-            </div>
-          )}
+</table>
+          </div>
+
+          <Pagination
+            showingRange={tokensShowingRange}
+            page={tokensPage}
+            totalPages={tokensTotalPages}
+            onPageChange={setTokensPage}
+            totalItems={tokensTotal}
+          />
+        </div>
+      )}
         </>
       )}
 
