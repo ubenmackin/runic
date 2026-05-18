@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"runic/internal/api/common"
@@ -12,6 +13,10 @@ import (
 	"runic/internal/db"
 	"runic/internal/models"
 )
+
+const policyRowColumns = `id, name, COALESCE(description, ''), source_id, source_type, service_id, target_id, target_type, COALESCE(source_ip, ''), COALESCE(target_ip, ''), action, priority, enabled, target_scope, COALESCE(direction, 'both'), created_at, updated_at, is_pending_delete`
+
+var ErrPolicyNotFound = errors.New("policy not found")
 
 type PolicyStore struct {
 	db db.DB
@@ -23,12 +28,7 @@ func NewPolicyStore(database db.DB) *PolicyStore {
 
 // GetNameByID returns the policy name for a given ID. Returns sql.ErrNoRows if not found.
 func (s *PolicyStore) GetNameByID(ctx context.Context, id int) (string, error) {
-	var name string
-	err := s.db.QueryRowContext(ctx, "SELECT name FROM policies WHERE id = ?", id).Scan(&name)
-	if err != nil {
-		return "", fmt.Errorf("get policy name by id: %w", err)
-	}
-	return name, nil
+	return getNameByID(ctx, s.db, "policies", id, "", "policy")
 }
 
 // matching the nullable semantics of the database column.
@@ -41,9 +41,7 @@ func nullableIP(s string) *string {
 
 func (s *PolicyStore) ListPolicies(ctx context.Context) ([]models.PolicyRow, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, name, COALESCE(description, ''), source_id, source_type, service_id,
-		target_id, target_type, COALESCE(source_ip, ''), COALESCE(target_ip, ''), action, priority, enabled, target_scope, COALESCE(direction, 'both'), created_at, updated_at, is_pending_delete
-		FROM policies WHERE is_pending_delete = 0 ORDER BY priority ASC`)
+		"SELECT "+policyRowColumns+" FROM policies WHERE is_pending_delete = 0 ORDER BY priority ASC")
 	if err != nil {
 		return nil, fmt.Errorf("query policies: %w", err)
 	}
@@ -91,9 +89,7 @@ func (s *PolicyStore) GetPolicyTx(ctx context.Context, q db.Querier, id int) (mo
 	var p models.PolicyRow
 	var sourceIPStr, targetIPStr string
 	err := q.QueryRowContext(ctx,
-		`SELECT id, name, COALESCE(description, ''), source_id, source_type, service_id,
-		target_id, target_type, COALESCE(source_ip, ''), COALESCE(target_ip, ''), action, priority, enabled, target_scope, COALESCE(direction, 'both'), created_at, updated_at, is_pending_delete
-		FROM policies WHERE id = ? AND is_pending_delete = 0`, id,
+		"SELECT "+policyRowColumns+" FROM policies WHERE id = ? AND is_pending_delete = 0", id,
 	).Scan(&p.ID, &p.Name, &p.Description, &p.SourceID, &p.SourceType, &p.ServiceID,
 		&p.TargetID, &p.TargetType, &sourceIPStr, &targetIPStr, &p.Action, &p.Priority, &p.Enabled, &p.TargetScope, &p.Direction, &p.CreatedAt, &p.UpdatedAt, &p.IsPendingDelete)
 	if err != nil {
@@ -114,103 +110,43 @@ func (s *PolicyStore) GetPolicyName(ctx context.Context, id int) (string, error)
 }
 
 func (s *PolicyStore) UpdatePolicy(ctx context.Context, p *models.PolicyRow) error {
-	result, err := s.db.ExecContext(ctx,
+	return execUpdate(ctx, s.db,
 		`UPDATE policies SET name = ?, description = ?, source_id = ?, source_type = ?, service_id = ?,
 		target_id = ?, target_type = ?, source_ip = ?, target_ip = ?, action = ?, priority = ?, enabled = ?, target_scope = ?, direction = ?, updated_at = CURRENT_TIMESTAMP
 		WHERE id = ? AND is_pending_delete = 0`,
+		ErrPolicyNotFound,
 		p.Name, p.Description, p.SourceID, p.SourceType, p.ServiceID,
 		p.TargetID, p.TargetType, p.SourceIP, p.TargetIP, p.Action, p.Priority, p.Enabled, p.TargetScope, p.Direction, p.ID)
-	if err != nil {
-		return fmt.Errorf("update policy: %w", err)
-	}
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if rowsAffected == 0 {
-		return sql.ErrNoRows
-	}
-	return nil
 }
 
 func (s *PolicyStore) UpdatePolicyTx(ctx context.Context, tx *sql.Tx, p *models.PolicyRow) error {
-	result, err := tx.ExecContext(ctx,
+	return execUpdate(ctx, tx,
 		`UPDATE policies SET name = ?, description = ?, source_id = ?, source_type = ?, service_id = ?,
 		target_id = ?, target_type = ?, source_ip = ?, target_ip = ?, action = ?, priority = ?, enabled = ?, target_scope = ?, direction = ?, updated_at = CURRENT_TIMESTAMP
 		WHERE id = ? AND is_pending_delete = 0`,
+		ErrPolicyNotFound,
 		p.Name, p.Description, p.SourceID, p.SourceType, p.ServiceID,
 		p.TargetID, p.TargetType, p.SourceIP, p.TargetIP, p.Action, p.Priority, p.Enabled, p.TargetScope, p.Direction, p.ID)
-	if err != nil {
-		return fmt.Errorf("update policy tx: %w", err)
-	}
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if rowsAffected == 0 {
-		return sql.ErrNoRows
-	}
-	return nil
 }
 
 func (s *PolicyStore) PatchPolicyEnabled(ctx context.Context, id int, enabled bool) error {
-	result, err := s.db.ExecContext(ctx, "UPDATE policies SET enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND is_pending_delete = 0", enabled, id)
-	if err != nil {
-		return fmt.Errorf("patch policy: %w", err)
-	}
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if rowsAffected == 0 {
-		return sql.ErrNoRows
-	}
-	return nil
+	return execUpdate(ctx, s.db,
+		"UPDATE policies SET enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND is_pending_delete = 0",
+		ErrPolicyNotFound, enabled, id)
 }
 
 func (s *PolicyStore) PatchPolicyEnabledTx(ctx context.Context, tx *sql.Tx, id int, enabled bool) error {
-	result, err := tx.ExecContext(ctx, "UPDATE policies SET enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND is_pending_delete = 0", enabled, id)
-	if err != nil {
-		return fmt.Errorf("patch policy tx: %w", err)
-	}
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if rowsAffected == 0 {
-		return sql.ErrNoRows
-	}
-	return nil
+	return execUpdate(ctx, tx,
+		"UPDATE policies SET enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND is_pending_delete = 0",
+		ErrPolicyNotFound, enabled, id)
 }
 
 func (s *PolicyStore) SoftDeletePolicy(ctx context.Context, id int) error {
-	res, err := s.db.ExecContext(ctx, "UPDATE policies SET is_pending_delete = 1 WHERE id = ? AND is_pending_delete = 0", id)
-	if err != nil {
-		return fmt.Errorf("soft delete policy: %w", err)
-	}
-	affected, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if affected == 0 {
-		return sql.ErrNoRows
-	}
-	return nil
+	return softDelete(ctx, s.db, "policies", id, ErrPolicyNotFound)
 }
 
 func (s *PolicyStore) SoftDeletePolicyTx(ctx context.Context, tx *sql.Tx, id int) error {
-	res, err := tx.ExecContext(ctx, "UPDATE policies SET is_pending_delete = 1 WHERE id = ? AND is_pending_delete = 0", id)
-	if err != nil {
-		return fmt.Errorf("soft delete policy tx: %w", err)
-	}
-	affected, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if affected == 0 {
-		return sql.ErrNoRows
-	}
-	return nil
+	return softDelete(ctx, tx, "policies", id, ErrPolicyNotFound)
 }
 
 func (s *PolicyStore) Snapshot(ctx context.Context, action string, policyID int) error {

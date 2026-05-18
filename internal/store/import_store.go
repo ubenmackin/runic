@@ -187,150 +187,126 @@ func (s *ImportStore) GetRules(ctx context.Context, sessionID int64) ([]models.I
 }
 
 func (s *ImportStore) GetGroups(ctx context.Context, sessionID int64) ([]models.ImportGroupMapping, error) {
-	rows, err := s.db.QueryContext(ctx,
+	return queryRows(ctx, s.db,
 		"SELECT id, session_id, group_name, ipset_name, status, existing_group_id, member_ips, member_peer_ids, member_staging_peer_ids FROM import_group_mappings WHERE session_id = ?",
-		sessionID)
-	if err != nil {
-		return nil, fmt.Errorf("query groups: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	var groups []models.ImportGroupMapping
-	for rows.Next() {
-		var g struct {
-			ID               int64
-			SessionID        int64
-			GroupName        string
-			IpsetName        sql.NullString
-			Status           string
-			ExistingGroupID  sql.NullInt64
-			MemberIPs        string
-			MemberPeerIDs    string
-			MemberStagingIDs string
-		}
-		if err := rows.Scan(&g.ID, &g.SessionID, &g.GroupName, &g.IpsetName, &g.Status, &g.ExistingGroupID, &g.MemberIPs, &g.MemberPeerIDs, &g.MemberStagingIDs); err != nil {
-			return nil, fmt.Errorf("scan group: %w", err)
-		}
-
-		mapping := models.ImportGroupMapping{
-			ID:        g.ID,
-			SessionID: g.SessionID,
-			GroupName: g.GroupName,
-			Status:    g.Status,
-			MemberIPs: []string{},
-		}
-		if g.IpsetName.Valid {
-			mapping.IpsetName = g.IpsetName.String
-		}
-		if g.ExistingGroupID.Valid {
-			id := g.ExistingGroupID.Int64
-			mapping.ExistingGroupID = &id
-			if name, err := s.groupStore.GetNameByID(ctx, int(id)); err == nil {
-				mapping.ExistingGroupName = name
+		[]interface{}{sessionID},
+		"group",
+		func(rows *sql.Rows) (models.ImportGroupMapping, error) {
+			var g struct {
+				ID               int64
+				SessionID        int64
+				GroupName        string
+				IpsetName        sql.NullString
+				Status           string
+				ExistingGroupID  sql.NullInt64
+				MemberIPs        string
+				MemberPeerIDs    string
+				MemberStagingIDs string
 			}
-		}
+			if err := rows.Scan(&g.ID, &g.SessionID, &g.GroupName, &g.IpsetName, &g.Status, &g.ExistingGroupID, &g.MemberIPs, &g.MemberPeerIDs, &g.MemberStagingIDs); err != nil {
+				return models.ImportGroupMapping{}, err
+			}
 
-		_ = json.Unmarshal([]byte(g.MemberIPs), &mapping.MemberIPs)
-		groups = append(groups, mapping)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("rows error groups: %w", err)
-	}
-	return common.EnsureSlice(groups), nil
+			mapping := models.ImportGroupMapping{
+				ID:        g.ID,
+				SessionID: g.SessionID,
+				GroupName: g.GroupName,
+				Status:    g.Status,
+				MemberIPs: []string{},
+			}
+			if g.IpsetName.Valid {
+				mapping.IpsetName = g.IpsetName.String
+			}
+			if g.ExistingGroupID.Valid {
+				id := g.ExistingGroupID.Int64
+				mapping.ExistingGroupID = &id
+				if name, err := s.groupStore.GetNameByID(ctx, int(id)); err == nil {
+					mapping.ExistingGroupName = name
+				}
+			}
+
+			_ = json.Unmarshal([]byte(g.MemberIPs), &mapping.MemberIPs)
+			return mapping, nil
+		},
+	)
 }
 
 func (s *ImportStore) GetPeers(ctx context.Context, sessionID int64) ([]models.ImportPeerMapping, error) {
-	rows, err := s.db.QueryContext(ctx,
+	return queryRows(ctx, s.db,
 		"SELECT id, session_id, ip_address, hostname, status, existing_peer_id FROM import_peer_mappings WHERE session_id = ?",
-		sessionID)
-	if err != nil {
-		return nil, fmt.Errorf("query peers: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	var peers []models.ImportPeerMapping
-	for rows.Next() {
-		var p struct {
-			ID             int64
-			SessionID      int64
-			IPAddress      string
-			Hostname       sql.NullString
-			Status         string
-			ExistingPeerID sql.NullInt64
-		}
-		if err := rows.Scan(&p.ID, &p.SessionID, &p.IPAddress, &p.Hostname, &p.Status, &p.ExistingPeerID); err != nil {
-			return nil, fmt.Errorf("scan peer: %w", err)
-		}
-
-		mapping := models.ImportPeerMapping{
-			ID:        p.ID,
-			SessionID: p.SessionID,
-			IPAddress: p.IPAddress,
-			Status:    p.Status,
-		}
-		if p.Hostname.Valid {
-			mapping.Hostname = p.Hostname.String
-		}
-		if p.ExistingPeerID.Valid {
-			id := p.ExistingPeerID.Int64
-			mapping.ExistingPeerID = &id
-			if name, err := s.peerStore.GetPeerHostname(ctx, int(id)); err == nil {
-				mapping.ExistingPeerName = name
+		[]interface{}{sessionID},
+		"peer",
+		func(rows *sql.Rows) (models.ImportPeerMapping, error) {
+			var p struct {
+				ID             int64
+				SessionID      int64
+				IPAddress      string
+				Hostname       sql.NullString
+				Status         string
+				ExistingPeerID sql.NullInt64
 			}
-		}
-		peers = append(peers, mapping)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("rows error peers: %w", err)
-	}
-	return common.EnsureSlice(peers), nil
+			if err := rows.Scan(&p.ID, &p.SessionID, &p.IPAddress, &p.Hostname, &p.Status, &p.ExistingPeerID); err != nil {
+				return models.ImportPeerMapping{}, err
+			}
+
+			mapping := models.ImportPeerMapping{
+				ID:        p.ID,
+				SessionID: p.SessionID,
+				IPAddress: p.IPAddress,
+				Status:    p.Status,
+			}
+			if p.Hostname.Valid {
+				mapping.Hostname = p.Hostname.String
+			}
+			if p.ExistingPeerID.Valid {
+				id := p.ExistingPeerID.Int64
+				mapping.ExistingPeerID = &id
+				if name, err := s.peerStore.GetPeerHostname(ctx, int(id)); err == nil {
+					mapping.ExistingPeerName = name
+				}
+			}
+			return mapping, nil
+		},
+	)
 }
 
 func (s *ImportStore) GetServices(ctx context.Context, sessionID int64) ([]models.ImportServiceMapping, error) {
-	rows, err := s.db.QueryContext(ctx,
+	return queryRows(ctx, s.db,
 		"SELECT id, session_id, name, ports, protocol, status, existing_service_id FROM import_service_mappings WHERE session_id = ?",
-		sessionID)
-	if err != nil {
-		return nil, fmt.Errorf("query services: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	var services []models.ImportServiceMapping
-	for rows.Next() {
-		var ms struct {
-			ID                int64
-			SessionID         int64
-			Name              string
-			Ports             string
-			Protocol          string
-			Status            string
-			ExistingServiceID sql.NullInt64
-		}
-		if err := rows.Scan(&ms.ID, &ms.SessionID, &ms.Name, &ms.Ports, &ms.Protocol, &ms.Status, &ms.ExistingServiceID); err != nil {
-			return nil, fmt.Errorf("scan service: %w", err)
-		}
-
-		mapping := models.ImportServiceMapping{
-			ID:        ms.ID,
-			SessionID: ms.SessionID,
-			Name:      ms.Name,
-			Ports:     ms.Ports,
-			Protocol:  ms.Protocol,
-			Status:    ms.Status,
-		}
-		if ms.ExistingServiceID.Valid {
-			id := ms.ExistingServiceID.Int64
-			mapping.ExistingServiceID = &id
-			if name, err := s.serviceStore.GetNameByID(ctx, int(id)); err == nil {
-				mapping.ExistingServiceName = name
+		[]interface{}{sessionID},
+		"service",
+		func(rows *sql.Rows) (models.ImportServiceMapping, error) {
+			var ms struct {
+				ID                int64
+				SessionID         int64
+				Name              string
+				Ports             string
+				Protocol          string
+				Status            string
+				ExistingServiceID sql.NullInt64
 			}
-		}
-		services = append(services, mapping)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("rows error services: %w", err)
-	}
-	return common.EnsureSlice(services), nil
+			if err := rows.Scan(&ms.ID, &ms.SessionID, &ms.Name, &ms.Ports, &ms.Protocol, &ms.Status, &ms.ExistingServiceID); err != nil {
+				return models.ImportServiceMapping{}, err
+			}
+
+			mapping := models.ImportServiceMapping{
+				ID:        ms.ID,
+				SessionID: ms.SessionID,
+				Name:      ms.Name,
+				Ports:     ms.Ports,
+				Protocol:  ms.Protocol,
+				Status:    ms.Status,
+			}
+			if ms.ExistingServiceID.Valid {
+				id := ms.ExistingServiceID.Int64
+				mapping.ExistingServiceID = &id
+				if name, err := s.serviceStore.GetNameByID(ctx, int(id)); err == nil {
+					mapping.ExistingServiceName = name
+				}
+			}
+			return mapping, nil
+		},
+	)
 }
 
 func (s *ImportStore) GetSkippedRules(ctx context.Context, sessionID int64) ([]models.SkippedRule, error) {
@@ -598,17 +574,8 @@ func (s *ImportStore) GetSessionByPeer(ctx context.Context, peerID int64) (*impo
 }
 
 // CreateSession creates a new import session for the given peer.
-//
-// Limitation: This method type-asserts db.DB to *sql.DB because the
-// importer.CreateSession function needs *sql.DB to manage its own transaction.
-// A full refactor would require changing the importer package to accept
-// db.DB or a transactional interface, which is too invasive for now.
 func (s *ImportStore) CreateSession(ctx context.Context, peerID int64, rawBackup, rawIpsets string) (*importer.ImportSession, error) {
-	sqlDB, ok := s.db.(*sql.DB)
-	if !ok {
-		return nil, fmt.Errorf("create session: underlying DB is not *sql.DB, cannot start transaction (type assertion failed; got type %T)", s.db)
-	}
-	session, err := importer.CreateSession(ctx, sqlDB, peerID, rawBackup, rawIpsets)
+	session, err := importer.CreateSession(ctx, s.db, peerID, rawBackup, rawIpsets)
 	if err != nil {
 		return nil, fmt.Errorf("create session: %w", err)
 	}
@@ -634,17 +601,8 @@ func (s *ImportStore) UpdateSessionStatus(ctx context.Context, sessionID int64, 
 }
 
 // ApplySession applies the import session, creating peers, groups, services, and policies.
-//
-// Limitation: This method type-asserts db.DB to *sql.DB because the
-// importer.ApplySession function needs *sql.DB to manage its own transaction.
-// A full refactor would require changing the importer package to accept
-// db.DB or a transactional interface, which is too invasive for now.
 func (s *ImportStore) ApplySession(ctx context.Context, sessionID int64, changeWorker *apicommon.ChangeWorker) (*importer.ApplyResult, error) {
-	sqlDB, ok := s.db.(*sql.DB)
-	if !ok {
-		return nil, fmt.Errorf("apply session: underlying DB is not *sql.DB, cannot start transaction (type assertion failed; got type %T)", s.db)
-	}
-	result, err := importer.ApplySession(ctx, sqlDB, sessionID, changeWorker)
+	result, err := importer.ApplySession(ctx, s.db, sessionID, changeWorker)
 	if err != nil {
 		return nil, fmt.Errorf("apply session: %w", err)
 	}
@@ -652,17 +610,8 @@ func (s *ImportStore) ApplySession(ctx context.Context, sessionID int64, changeW
 }
 
 // DeleteSession deletes the import session with the given ID.
-//
-// Limitation: This method type-asserts db.DB to *sql.DB because the
-// importer.DeleteSession function needs *sql.DB to manage its own transaction.
-// A full refactor would require changing the importer package to accept
-// db.DB or a transactional interface, which is too invasive for now.
 func (s *ImportStore) DeleteSession(ctx context.Context, sessionID int64) error {
-	sqlDB, ok := s.db.(*sql.DB)
-	if !ok {
-		return fmt.Errorf("delete session: underlying DB is not *sql.DB, cannot start transaction (type assertion failed; got type %T)", s.db)
-	}
-	err := importer.DeleteSession(ctx, sqlDB, sessionID)
+	err := importer.DeleteSession(ctx, s.db, sessionID)
 	if err != nil {
 		return fmt.Errorf("delete session: %w", err)
 	}

@@ -4,12 +4,15 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"testing"
 
 	"runic/internal/models"
 
 	_ "github.com/mattn/go-sqlite3"
 )
+
+var errFKViolation = fmt.Errorf("expected foreign key violation for invalid peer_id")
 
 func TestGetPeer(t *testing.T) {
 	db, cleanup := SetupTestDB(t)
@@ -185,7 +188,7 @@ func TestSaveBundle(t *testing.T) {
 				RulesContent:  "*filter\n:INPUT DROP\nCOMMIT\n",
 				HMAC:          "hmac-sig",
 			},
-			wantErr: nil, // With FK enabled, returns error but not sql.ErrTxDone
+			wantErr: errFKViolation,
 			checkBundle: func(t *testing.T, b models.RuleBundleRow) {
 				// Bundle should be empty on error
 				if b.ID != 0 {
@@ -255,7 +258,11 @@ func TestSaveBundle(t *testing.T) {
 			bundle, err := SaveBundle(ctx, db, tt.params)
 
 			if tt.wantErr != nil {
-				if !errors.Is(err, tt.wantErr) {
+				if tt.wantErr == errFKViolation {
+					if err == nil {
+						t.Errorf("expected error but got nil")
+					}
+				} else if !errors.Is(err, tt.wantErr) {
 					t.Errorf("expected error %v, got %v", tt.wantErr, err)
 				}
 			} else {

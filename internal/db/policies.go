@@ -2,8 +2,8 @@ package db
 
 import (
 	"context"
-	"fmt"
 
+	"runic/internal/common/log"
 	"runic/internal/models"
 )
 
@@ -25,7 +25,7 @@ func ListEnabledPolicies(ctx context.Context, database Querier, peerID int) ([]m
 	}
 	defer func() {
 		if cErr := rows.Close(); cErr != nil {
-			fmt.Printf("failed to close rows: %v\n", cErr)
+			log.WarnContext(ctx, "failed to close rows", "error", cErr)
 		}
 	}()
 

@@ -176,7 +176,7 @@ func AuthenticatedRequest(t *testing.T, server *httptest.Server, method, url str
 		req.Header.Set("Content-Type", "application/json")
 	}
 
-	token, err := auth.GenerateToken(username, role, 24*time.Hour)
+	token, err := auth.GenerateToken(username, role, auth.TokenTypeAccess, 24*time.Hour)
 	if err != nil {
 		t.Fatalf("failed to generate auth token: %v", err)
 	}

@@ -25,11 +25,14 @@ const (
 	// nonceLength is the length of the GCM nonce (96 bits = 12 bytes)
 	nonceLength = 12
 
-	// pbkdf2Iterations is the number of iterations for PBKDF2 key derivation
-	// Using 100,000 iterations for security (OWASP recommends at least 600,000 for PBKDF2-SHA256)
-	// We use a moderate value for performance while maintaining security
-	pbkdf2Iterations = 100000
+	// gcmTagSize is the size of the GCM authentication tag in bytes (128 bits = 16 bytes)
+	gcmTagSize = 16
 )
+
+// pbkdf2Iterations is the number of iterations for PBKDF2 key derivation.
+// Default is 600,000 as recommended by OWASP for PBKDF2-SHA256.
+// This is a variable so it can be overridden in tests for performance.
+var pbkdf2Iterations = 600000
 
 // Errors returned by encryption and decryption operations
 var (
@@ -45,7 +48,12 @@ type Encryptor struct {
 	mu         sync.RWMutex
 	passphrase string
 	key        []byte
-	salt       []byte
+	// salt stores the initial salt generated at construction time.
+	// It is exposed via GetSalt() for callers that need to persist the salt
+	// alongside encrypted data. Each Encrypt/Decrypt call derives a fresh
+	// salt independently (embedded in the ciphertext), so this field is
+	// optional metadata and not used for crypto operations.
+	salt []byte
 }
 
 // NewEncryptor creates a new Encryptor from a passphrase. The passphrase is used to derive an AES-256 key using PBKDF2.
@@ -179,7 +187,6 @@ func decryptWithPassphrase(ciphertext, passphrase string) (string, error) {
 		return "", err
 	}
 
-	gcmTagSize := 16
 	minLength := saltLength + nonceLength + gcmTagSize
 	if len(data) < minLength {
 		return "", ErrInvalidCiphertext

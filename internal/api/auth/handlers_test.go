@@ -432,7 +432,7 @@ func TestHandleLogoutPOST_BearerTokenFallback(t *testing.T) {
 	setupTestJWT(t, db)
 
 	// Generate a valid token to use in the Authorization header
-	token, err := auth.GenerateToken("testuser", "admin", 15*time.Minute)
+	token, err := auth.GenerateToken("testuser", "admin", auth.TokenTypeAccess, 15*time.Minute)
 	if err != nil {
 		t.Fatalf("failed to generate token: %v", err)
 	}

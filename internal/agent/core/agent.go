@@ -141,29 +141,7 @@ func (a *Agent) Run(ctx context.Context) error {
 		log.Warn("Failed to backup iptables", "error", err)
 	}
 
-	bootPullDone := false
-
-	cfg = a.getConfig()
-	if cfg.ApplyOnBoot && cfg.ApplyRulesBundle {
-		if !a.isControlPlaneReachable(ctx) {
-			log.Info("Control plane unreachable, applying cached bundle")
-			if err := a.applyCachedBundle(ctx); err != nil {
-				log.Warn("Failed to apply cached bundle on startup", "error", err)
-			}
-		} else {
-			log.Info("Control plane reachable, pulling and applying latest bundle")
-			if err := a.pullBundle(ctx); err != nil {
-				log.Warn("Failed to pull latest bundle, applying cached bundle", "error", err)
-				if err := a.applyCachedBundle(ctx); err != nil {
-					log.Warn("Failed to apply cached bundle on startup", "error", err)
-				}
-			} else {
-				bootPullDone = true
-			}
-		}
-	} else if cfg.ApplyOnBoot {
-		log.Info("apply_on_boot enabled but apply_rules_bundle disabled, skipping boot-time bundle application")
-	}
+	bootPullDone, _ := a.applyBootBundle(ctx)
 
 	cfg = a.getConfig()
 	a.shipper = transport.NewShipper(a.httpClient, cfg.ControlPlaneURL, cfg.Token, cfg.HostID, cfg.LogPath)
@@ -183,8 +161,7 @@ func (a *Agent) Run(ctx context.Context) error {
 		return nil
 	})
 	g.Go(func() error {
-		a.listenSSE(gCtx)
-		return nil
+		return a.listenSSE(gCtx)
 	})
 	g.Go(func() error {
 		a.rotationCheckLoop(gCtx)
@@ -221,6 +198,37 @@ func (a *Agent) backupIptables(ctx context.Context) error {
 
 	log.Info("Firewall rules backed up", "path", a.backupPath)
 	return nil
+}
+
+// applyBootBundle handles the boot-time bundle application logic.
+// It returns (true, nil) if a fresh pull was performed, (false, nil) if
+// a cached bundle was applied or no action was needed, and (false, err) on error.
+func (a *Agent) applyBootBundle(ctx context.Context) (bool, error) {
+	cfg := a.getConfig()
+	if !cfg.ApplyOnBoot || !cfg.ApplyRulesBundle {
+		if cfg.ApplyOnBoot {
+			log.Info("apply_on_boot enabled but apply_rules_bundle disabled, skipping boot-time bundle application")
+		}
+		return false, nil
+	}
+
+	if !a.isControlPlaneReachable(ctx) {
+		log.Info("Control plane unreachable, applying cached bundle")
+		if err := a.applyCachedBundle(ctx); err != nil {
+			log.Warn("Failed to apply cached bundle on startup", "error", err)
+		}
+		return false, nil
+	}
+
+	log.Info("Control plane reachable, pulling and applying latest bundle")
+	if err := a.pullBundle(ctx); err != nil {
+		log.Warn("Failed to pull latest bundle, applying cached bundle", "error", err)
+		if err := a.applyCachedBundle(ctx); err != nil {
+			log.Warn("Failed to apply cached bundle on startup", "error", err)
+		}
+		return false, nil
+	}
+	return true, nil
 }
 
 func (a *Agent) loadConfig() error {
@@ -538,11 +546,11 @@ func (a *Agent) applyCachedBundle(ctx context.Context) error {
 }
 
 // It handles 401 Unauthorized responses by triggering re-registration.
-func (a *Agent) listenSSE(ctx context.Context) {
+func (a *Agent) listenSSE(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return ctx.Err()
 		default:
 		}
 
@@ -567,9 +575,10 @@ func (a *Agent) listenSSE(ctx context.Context) {
 				continue
 			}
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				return
+				return nil
 			}
-			log.Error("SSE listener returned unexpected error, retrying", "error", err)
+			log.Error("SSE listener returned unexpected error, propagating to errgroup", "error", err)
+			return fmt.Errorf("SSE listener error: %w", err)
 		}
 	}
 }

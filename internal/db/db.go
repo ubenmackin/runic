@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	_ "embed"
+	"errors"
 	"fmt"
 	"os"
 
@@ -90,6 +91,9 @@ func InitDB(dataSourceName string) (*sql.DB, error) {
 	if _, err := sqlDB.Exec("PRAGMA foreign_keys=ON"); err != nil {
 		log.Warn("Failed to enable foreign keys", "error", err)
 	}
+	if _, err := sqlDB.Exec("PRAGMA busy_timeout=5000"); err != nil {
+		log.Warn("Failed to set busy timeout", "error", err)
+	}
 
 	database := New(sqlDB)
 
@@ -125,4 +129,34 @@ func InitDB(dataSourceName string) (*sql.DB, error) {
 
 	log.Info("Database connection established")
 	return database.DB, nil
+}
+
+// withTx executes a function within a database transaction.
+// It handles BeginTx, deferred rollback (with warning on failure),
+// and commit automatically. The committed flag ensures rollback is
+// only called if commit hasn't succeeded.
+func withTx(ctx context.Context, db Beginner, fn func(context.Context, *sql.Tx) error) (err error) {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+
+	committed := false
+	defer func() {
+		if !committed {
+			if rErr := tx.Rollback(); rErr != nil && !errors.Is(rErr, sql.ErrTxDone) {
+				log.WarnContext(ctx, "transaction rollback failed", "error", rErr)
+			}
+		}
+	}()
+
+	if err := fn(ctx, tx); err != nil {
+		return err // deferred rollback handles cleanup
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit tx: %w", err)
+	}
+	committed = true
+	return nil
 }

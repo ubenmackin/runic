@@ -2,16 +2,14 @@ package db
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
-	"os"
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
 )
 
 func BenchmarkGetPeer(b *testing.B) {
-	database, cleanup := setupBenchmarkDB(b)
+	database, cleanup := SetupTestDB(b)
 	defer cleanup()
 
 	database.Exec(`INSERT INTO peers (hostname, ip_address, os_type, arch, has_docker, agent_key, hmac_key, agent_token, agent_version, is_manual, bundle_version, status)
@@ -30,7 +28,7 @@ func BenchmarkGetPeer(b *testing.B) {
 }
 
 func BenchmarkListPeers(b *testing.B) {
-	database, cleanup := setupBenchmarkDB(b)
+	database, cleanup := SetupTestDB(b)
 	defer cleanup()
 
 	for i := 1; i <= 100; i++ {
@@ -59,7 +57,7 @@ func BenchmarkListPeers(b *testing.B) {
 }
 
 func BenchmarkGetPolicy(b *testing.B) {
-	database, cleanup := setupBenchmarkDB(b)
+	database, cleanup := SetupTestDB(b)
 	defer cleanup()
 
 	database.Exec("INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)", "http", "80,443", "tcp")
@@ -83,7 +81,7 @@ func BenchmarkGetPolicy(b *testing.B) {
 }
 
 func BenchmarkListEnabledPolicies(b *testing.B) {
-	database, cleanup := setupBenchmarkDB(b)
+	database, cleanup := SetupTestDB(b)
 	defer cleanup()
 
 	for i := 1; i <= 10; i++ {
@@ -149,7 +147,7 @@ func BenchmarkListEnabledPolicies(b *testing.B) {
 }
 
 func BenchmarkListGroupMembers(b *testing.B) {
-	database, cleanup := setupBenchmarkDB(b)
+	database, cleanup := SetupTestDB(b)
 	defer cleanup()
 
 	database.Exec("INSERT INTO groups (name) VALUES (?)", "test-group")
@@ -171,7 +169,7 @@ func BenchmarkListGroupMembers(b *testing.B) {
 }
 
 func BenchmarkGetService(b *testing.B) {
-	database, cleanup := setupBenchmarkDB(b)
+	database, cleanup := SetupTestDB(b)
 	defer cleanup()
 
 	database.Exec("INSERT INTO services (name, ports, source_ports, protocol) VALUES (?, ?, ?, ?)", "http", "80,443", "1024:65535", "tcp")
@@ -188,7 +186,7 @@ func BenchmarkGetService(b *testing.B) {
 }
 
 func BenchmarkResolveGroup(b *testing.B) {
-	database, cleanup := setupBenchmarkDB(b)
+	database, cleanup := SetupTestDB(b)
 	defer cleanup()
 
 	database.Exec("INSERT INTO groups (name) VALUES (?)", "test-group")
@@ -227,7 +225,7 @@ func BenchmarkResolveGroup(b *testing.B) {
 }
 
 func BenchmarkGetBundle(b *testing.B) {
-	database, cleanup := setupBenchmarkDB(b)
+	database, cleanup := SetupTestDB(b)
 	defer cleanup()
 
 	database.Exec("INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)", "test-peer", "192.168.1.100", "key1", "test-key")
@@ -249,31 +247,4 @@ func BenchmarkGetBundle(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
-}
-
-func setupBenchmarkDB(b *testing.B) (*sql.DB, func()) {
-	f, err := os.CreateTemp("", "runic-bench-*.db")
-	if err != nil {
-		b.Fatal(err)
-	}
-	dbPath := f.Name()
-	f.Close()
-
-	database, err := sql.Open("sqlite3", dbPath)
-	if err != nil {
-		os.Remove(dbPath)
-		b.Fatal(err)
-	}
-
-	if _, err := database.Exec(Schema()); err != nil {
-		database.Close()
-		os.Remove(dbPath)
-		b.Fatal(err)
-	}
-
-	cleanup := func() {
-		database.Close()
-		os.Remove(dbPath)
-	}
-	return database, cleanup
 }

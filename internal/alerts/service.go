@@ -55,18 +55,20 @@ func (p *AlertProcessor) ProcessAlert(ctx context.Context, event *AlertEvent, ru
 		return fmt.Errorf("failed to create alert history: %w", err)
 	}
 
-	email, err := p.getAdminEmail(ctx)
+	emails, err := p.getAdminEmails(ctx)
 	if err != nil {
-		p.logger.Warn("failed to get admin email", "error", err)
+		p.logger.Warn("failed to get admin emails", "error", err)
 		// Don't return error - we still want to track the alert
-	} else if email != "" {
+	} else if len(emails) > 0 {
 		if p.smtp != nil && p.smtp.config.IsEnabled() {
-			if err := p.smtp.SendAlertEmail(email, event); err != nil {
-				p.logger.Error("failed to send alert email", "error", err)
-				p.updateHistoryStatus(ctx, history.ID, AlertStatusFailed, err.Error())
-				return fmt.Errorf("failed to send alert email: %w", err)
+			for _, email := range emails {
+				if err := p.smtp.SendAlertEmail(email, event); err != nil {
+					p.logger.Error("failed to send alert email", "email", email, "error", err)
+					p.updateHistoryStatus(ctx, history.ID, AlertStatusFailed, err.Error())
+					return fmt.Errorf("failed to send alert email to %s: %w", email, err)
+				}
+				p.logger.Info("alert email sent", "email", email, "alert_type", event.Type)
 			}
-			p.logger.Info("alert email sent", "email", email, "alert_type", event.Type)
 		}
 	}
 
@@ -119,23 +121,28 @@ func (p *AlertProcessor) QueueAlert(ctx context.Context, event *AlertEvent, rule
 	}
 }
 
-func (p *AlertProcessor) getAdminEmail(ctx context.Context) (string, error) {
+func (p *AlertProcessor) getAdminEmails(ctx context.Context) ([]string, error) {
 	if p.userStore == nil {
-		return "", fmt.Errorf("user store not configured")
+		return nil, fmt.Errorf("user store not configured")
 	}
 
 	users, _, err := p.userStore.ListUsers(ctx, 1, 99999)
 	if err != nil {
-		return "", fmt.Errorf("failed to list users: %w", err)
+		return nil, fmt.Errorf("failed to list users: %w", err)
 	}
 
+	var emails []string
 	for _, user := range users {
 		if user.Role == "admin" && user.Email != "" {
-			return user.Email, nil
+			emails = append(emails, user.Email)
 		}
 	}
 
-	return "", fmt.Errorf("no admin user with email found")
+	if len(emails) == 0 {
+		return nil, fmt.Errorf("no admin user with email found")
+	}
+
+	return emails, nil
 }
 
 func (p *AlertProcessor) updateHistoryStatus(ctx context.Context, id uint, status AlertStatus, errMsg string) {
@@ -459,6 +466,7 @@ func (s *Service) TriggerAlert(ctx context.Context, event *AlertEvent) error {
 		return fmt.Errorf("failed to get alert rules: %w", err)
 	}
 
+	var lastErr error
 	for i := range rules {
 		rule := &rules[i]
 
@@ -468,15 +476,13 @@ func (s *Service) TriggerAlert(ctx context.Context, event *AlertEvent) error {
 
 		if processor != nil {
 			if err := processor.ProcessAlert(ctx, event, rule); err != nil {
-				return fmt.Errorf("failed to process alert: %w", err)
+				s.logger.Error("failed to process alert", "error", err, "rule_id", rule.ID)
+				lastErr = err
 			}
 		}
-
-		// Only process with first matching rule
-		return nil
 	}
 
-	return nil
+	return lastErr
 }
 
 // CheckRuleNow checks a specific rule immediately. This is useful for testing rules or forcing a re-evaluation.

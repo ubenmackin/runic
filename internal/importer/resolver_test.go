@@ -9,6 +9,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 
 	"runic/internal/iptparse"
+	"runic/internal/resolve"
 	"runic/internal/testutil"
 )
 
@@ -68,71 +69,71 @@ func insertTestManualPeer(t *testing.T, database *sql.DB, hostname, ip string) i
 
 func TestIsBroadcastDest_LimitedBroadcast(t *testing.T) {
 	rule := iptparse.ParsedRule{DestIP: "255.255.255.255"}
-	if isBroadcastDest(&rule, "INPUT", nil) != specialTargetLimitedBroadcast {
-		t.Errorf("expected isBroadcastDest to return specialTargetLimitedBroadcast (%d) for 255.255.255.255 on INPUT chain", specialTargetLimitedBroadcast)
+	if resolve.IsBroadcastDest(rule.DestIP, "INPUT", nil) != resolve.SpecialIDLimitedBroadcast {
+		t.Errorf("expected isBroadcastDest to return resolve.SpecialIDLimitedBroadcast (%d) for 255.255.255.255 on INPUT chain", resolve.SpecialIDLimitedBroadcast)
 	}
 }
 
 func TestIsBroadcastDest_OutputChain(t *testing.T) {
 	rule := iptparse.ParsedRule{DestIP: "255.255.255.255"}
-	if isBroadcastDest(&rule, "OUTPUT", nil) != 0 {
+	if resolve.IsBroadcastDest(rule.DestIP, "OUTPUT", nil) != 0 {
 		t.Error("expected isBroadcastDest to return 0 for OUTPUT chain")
 	}
 }
 
 func TestIsBroadcastDest_EmptyDestIP(t *testing.T) {
 	rule := iptparse.ParsedRule{DestIP: ""}
-	if isBroadcastDest(&rule, "INPUT", nil) != 0 {
+	if resolve.IsBroadcastDest(rule.DestIP, "INPUT", nil) != 0 {
 		t.Error("expected isBroadcastDest to return 0 for empty DestIP on INPUT chain")
 	}
 }
 
 func TestIsBroadcastDest_NormalIP(t *testing.T) {
 	rule := iptparse.ParsedRule{DestIP: "192.168.1.1"}
-	if isBroadcastDest(&rule, "INPUT", []string{"10.100.5.36"}) != 0 {
+	if resolve.IsBroadcastDest(rule.DestIP, "INPUT", []string{"10.100.5.36"}) != 0 {
 		t.Error("expected isBroadcastDest to return 0 for normal IP on INPUT chain")
 	}
 }
 
 func TestIsBroadcastDest_DockerUserChain(t *testing.T) {
 	rule := iptparse.ParsedRule{DestIP: "255.255.255.255"}
-	if isBroadcastDest(&rule, "DOCKER-USER", nil) != specialTargetLimitedBroadcast {
-		t.Errorf("expected isBroadcastDest to return specialTargetLimitedBroadcast (%d) for 255.255.255.255 on DOCKER-USER chain", specialTargetLimitedBroadcast)
+	if resolve.IsBroadcastDest(rule.DestIP, "DOCKER-USER", nil) != resolve.SpecialIDLimitedBroadcast {
+		t.Errorf("expected isBroadcastDest to return resolve.SpecialIDLimitedBroadcast (%d) for 255.255.255.255 on DOCKER-USER chain", resolve.SpecialIDLimitedBroadcast)
 	}
 }
 
 func TestIsBroadcastDest_CIDRNotation(t *testing.T) {
 	rule := iptparse.ParsedRule{DestIP: "255.255.255.255/32"}
-	if isBroadcastDest(&rule, "INPUT", nil) != specialTargetLimitedBroadcast {
-		t.Errorf("expected isBroadcastDest to return specialTargetLimitedBroadcast (%d) for 255.255.255.255/32 on INPUT chain (normalizeIP should strip /32)", specialTargetLimitedBroadcast)
+	if resolve.IsBroadcastDest(rule.DestIP, "INPUT", nil) != resolve.SpecialIDLimitedBroadcast {
+		t.Errorf("expected isBroadcastDest to return resolve.SpecialIDLimitedBroadcast (%d) for 255.255.255.255/32 on INPUT chain (normalizeIP should strip /32)", resolve.SpecialIDLimitedBroadcast)
 	}
 }
 
 func TestIsBroadcastDest_SubnetBroadcast(t *testing.T) {
 	rule := iptparse.ParsedRule{DestIP: "10.100.5.255/32"}
-	if isBroadcastDest(&rule, "INPUT", []string{"10.100.5.36"}) != specialTargetSubnetBroadcast {
-		t.Errorf("expected isBroadcastDest to return specialTargetSubnetBroadcast (%d) for 10.100.5.255/32 on INPUT chain with peer IP 10.100.5.36", specialTargetSubnetBroadcast)
+	if resolve.IsBroadcastDest(rule.DestIP, "INPUT", []string{"10.100.5.36"}) != resolve.SpecialIDSubnetBroadcast {
+		t.Errorf("expected isBroadcastDest to return resolve.SpecialIDSubnetBroadcast (%d) for 10.100.5.255/32 on INPUT chain with peer IP 10.100.5.36", resolve.SpecialIDSubnetBroadcast)
 	}
 }
 
 func TestIsBroadcastDest_SubnetBroadcast_DifferentSubnet(t *testing.T) {
 	rule := iptparse.ParsedRule{DestIP: "192.168.1.255/32"}
-	if isBroadcastDest(&rule, "INPUT", []string{"10.100.5.36"}) != 0 {
+	if resolve.IsBroadcastDest(rule.DestIP, "INPUT", []string{"10.100.5.36"}) != 0 {
 		t.Error("expected isBroadcastDest to return 0 for 192.168.1.255/32 when peer IP is on a different subnet (10.100.5.36)")
 	}
 }
 
 func TestIsBroadcastDest_SubnetBroadcast_MultiplePeerIPs(t *testing.T) {
 	rule := iptparse.ParsedRule{DestIP: "192.168.1.255/32"}
-	if isBroadcastDest(&rule, "INPUT", []string{"10.100.5.36", "192.168.1.10"}) != specialTargetSubnetBroadcast {
-		t.Errorf("expected isBroadcastDest to return specialTargetSubnetBroadcast (%d) for 192.168.1.255/32 when second peer IP (192.168.1.10) is on matching subnet", specialTargetSubnetBroadcast)
+	if resolve.IsBroadcastDest(rule.DestIP, "INPUT", []string{"10.100.5.36", "192.168.1.10"}) != resolve.SpecialIDSubnetBroadcast {
+		t.Errorf("expected isBroadcastDest to return resolve.SpecialIDSubnetBroadcast (%d) for 192.168.1.255/32 when second peer IP (192.168.1.10) is on matching subnet", resolve.SpecialIDSubnetBroadcast)
 	}
 }
 
 func TestIsBroadcastDest_SubnetBroadcast_WithoutCIDR(t *testing.T) {
 	rule := iptparse.ParsedRule{DestIP: "10.100.5.255"}
-	if isBroadcastDest(&rule, "INPUT", []string{"10.100.5.36"}) != specialTargetSubnetBroadcast {
-		t.Errorf("expected isBroadcastDest to return specialTargetSubnetBroadcast (%d) for 10.100.5.255 without CIDR on INPUT chain", specialTargetSubnetBroadcast)
+	if resolve.IsBroadcastDest(rule.DestIP, "INPUT", []string{"10.100.5.36"}) != resolve.SpecialIDSubnetBroadcast {
+		t.Errorf("expected isBroadcastDest to return resolve.SpecialIDSubnetBroadcast (%d) for 10.100.5.255 without CIDR on INPUT chain", resolve.SpecialIDSubnetBroadcast)
 	}
 }
 
@@ -140,18 +141,18 @@ func TestIsBroadcastDest_SubnetBroadcast_CIDRPeerIP(t *testing.T) {
 	// peerIPs may contain CIDR-prefixed IPs (e.g., from peer_ips table with /24)
 	// parseIPPart should strip the suffix before broadcast computation
 	rule := iptparse.ParsedRule{DestIP: "10.100.5.255/32"}
-	if isBroadcastDest(&rule, "INPUT", []string{"10.100.5.36/24"}) != specialTargetSubnetBroadcast {
-		t.Errorf("expected isBroadcastDest to return specialTargetSubnetBroadcast (%d) for 10.100.5.255/32 with CIDR-prefixed peer IP 10.100.5.36/24", specialTargetSubnetBroadcast)
+	if resolve.IsBroadcastDest(rule.DestIP, "INPUT", []string{"10.100.5.36/24"}) != resolve.SpecialIDSubnetBroadcast {
+		t.Errorf("expected isBroadcastDest to return resolve.SpecialIDSubnetBroadcast (%d) for 10.100.5.255/32 with CIDR-prefixed peer IP 10.100.5.36/24", resolve.SpecialIDSubnetBroadcast)
 	}
 }
 
 func TestIsBroadcastDest_SubnetBroadcast_EmptyPeerIPs(t *testing.T) {
 	// With no peer IPs, a subnet-broadcast-like DestIP should not match
 	rule := iptparse.ParsedRule{DestIP: "10.100.5.255/32"}
-	if isBroadcastDest(&rule, "INPUT", nil) != 0 {
+	if resolve.IsBroadcastDest(rule.DestIP, "INPUT", nil) != 0 {
 		t.Error("expected isBroadcastDest to return 0 for subnet-broadcast-like DestIP when peerIPs is nil")
 	}
-	if isBroadcastDest(&rule, "INPUT", []string{}) != 0 {
+	if resolve.IsBroadcastDest(rule.DestIP, "INPUT", []string{}) != 0 {
 		t.Error("expected isBroadcastDest to return 0 for subnet-broadcast-like DestIP when peerIPs is empty")
 	}
 }
@@ -166,7 +167,7 @@ func TestResolveBroadcastService_LimitedBroadcast(t *testing.T) {
 	limitedBroadcastID := insertSystemService(t, database, "Limited Broadcast", "", "udp", "Limited broadcast", true)
 
 	ctx := context.Background()
-	serviceID, err := resolveBroadcastService(ctx, database, specialTargetLimitedBroadcast)
+	serviceID, err := resolveBroadcastService(ctx, database, resolve.SpecialIDLimitedBroadcast)
 	if err != nil {
 		t.Fatalf("resolveBroadcastService returned error: %v", err)
 	}
@@ -196,7 +197,7 @@ func TestResolveBroadcastService_SubnetBroadcast(t *testing.T) {
 	subnetBroadcastID := insertSystemService(t, database, "Subnet Broadcast", "", "udp", "Subnet broadcast", true)
 
 	ctx := context.Background()
-	serviceID, err := resolveBroadcastService(ctx, database, specialTargetSubnetBroadcast)
+	serviceID, err := resolveBroadcastService(ctx, database, resolve.SpecialIDSubnetBroadcast)
 	if err != nil {
 		t.Fatalf("resolveBroadcastService returned error: %v", err)
 	}
@@ -242,7 +243,7 @@ func TestResolveBroadcastService_NotMulticast(t *testing.T) {
 	limitedBroadcastID := insertSystemService(t, database, "Limited Broadcast", "", "udp", "Limited broadcast", true)
 
 	ctx := context.Background()
-	serviceID, err := resolveBroadcastService(ctx, database, specialTargetLimitedBroadcast)
+	serviceID, err := resolveBroadcastService(ctx, database, resolve.SpecialIDLimitedBroadcast)
 	if err != nil {
 		t.Fatalf("resolveBroadcastService returned error: %v", err)
 	}
@@ -301,7 +302,7 @@ func TestResolveBroadcastRule_LimitedBroadcast(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	err = resolveBroadcastRule(ctx, database, sessionID, ruleID, peerID, specialTargetLimitedBroadcast, &rule)
+	err = resolveBroadcastRule(ctx, database, sessionID, ruleID, peerID, resolve.SpecialIDLimitedBroadcast, &rule)
 	if err != nil {
 		t.Fatalf("resolveBroadcastRule returned error: %v", err)
 	}
@@ -320,8 +321,8 @@ func TestResolveBroadcastRule_LimitedBroadcast(t *testing.T) {
 	if sourceType != "special" {
 		t.Errorf("expected source_type='special', got %q", sourceType)
 	}
-	if sourceID != specialTargetLimitedBroadcast {
-		t.Errorf("expected source_id=%d (limited_broadcast), got %d", specialTargetLimitedBroadcast, sourceID)
+	if sourceID != resolve.SpecialIDLimitedBroadcast {
+		t.Errorf("expected source_id=%d (limited_broadcast), got %d", resolve.SpecialIDLimitedBroadcast, sourceID)
 	}
 	if targetType != "peer" {
 		t.Errorf("expected target_type='peer', got %q", targetType)
@@ -375,7 +376,7 @@ func TestResolveBroadcastRule_WithPorts(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	err = resolveBroadcastRule(ctx, database, sessionID, ruleID, peerID, specialTargetLimitedBroadcast, &rule)
+	err = resolveBroadcastRule(ctx, database, sessionID, ruleID, peerID, resolve.SpecialIDLimitedBroadcast, &rule)
 	if err != nil {
 		t.Fatalf("resolveBroadcastRule returned error: %v", err)
 	}
@@ -407,8 +408,8 @@ func TestResolveBroadcastRule_WithPorts(t *testing.T) {
 	if sourceType != "special" {
 		t.Errorf("expected source_type='special', got %q", sourceType)
 	}
-	if sourceID != specialTargetLimitedBroadcast {
-		t.Errorf("expected source_id=%d (limited_broadcast), got %d", specialTargetLimitedBroadcast, sourceID)
+	if sourceID != resolve.SpecialIDLimitedBroadcast {
+		t.Errorf("expected source_id=%d (limited_broadcast), got %d", resolve.SpecialIDLimitedBroadcast, sourceID)
 	}
 	if targetType != "peer" {
 		t.Errorf("expected target_type='peer', got %q", targetType)
@@ -449,7 +450,7 @@ func TestResolveBroadcastRule_SubnetBroadcast(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	err = resolveBroadcastRule(ctx, database, sessionID, ruleID, peerID, specialTargetSubnetBroadcast, &rule)
+	err = resolveBroadcastRule(ctx, database, sessionID, ruleID, peerID, resolve.SpecialIDSubnetBroadcast, &rule)
 	if err != nil {
 		t.Fatalf("resolveBroadcastRule returned error: %v", err)
 	}
@@ -468,8 +469,8 @@ func TestResolveBroadcastRule_SubnetBroadcast(t *testing.T) {
 	if sourceType != "special" {
 		t.Errorf("expected source_type='special', got %q", sourceType)
 	}
-	if sourceID != specialTargetSubnetBroadcast {
-		t.Errorf("expected source_id=%d (subnet_broadcast), got %d", specialTargetSubnetBroadcast, sourceID)
+	if sourceID != resolve.SpecialIDSubnetBroadcast {
+		t.Errorf("expected source_id=%d (subnet_broadcast), got %d", resolve.SpecialIDSubnetBroadcast, sourceID)
 	}
 	if targetType != "peer" {
 		t.Errorf("expected target_type='peer', got %q", targetType)
@@ -523,7 +524,7 @@ func TestResolveBroadcastRule_SubnetBroadcast_WithPorts(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	err = resolveBroadcastRule(ctx, database, sessionID, ruleID, peerID, specialTargetSubnetBroadcast, &rule)
+	err = resolveBroadcastRule(ctx, database, sessionID, ruleID, peerID, resolve.SpecialIDSubnetBroadcast, &rule)
 	if err != nil {
 		t.Fatalf("resolveBroadcastRule returned error: %v", err)
 	}
@@ -552,8 +553,8 @@ func TestResolveBroadcastRule_SubnetBroadcast_WithPorts(t *testing.T) {
 	if sourceType != "special" {
 		t.Errorf("expected source_type='special', got %q", sourceType)
 	}
-	if sourceID != specialTargetSubnetBroadcast {
-		t.Errorf("expected source_id=%d (subnet_broadcast), got %d", specialTargetSubnetBroadcast, sourceID)
+	if sourceID != resolve.SpecialIDSubnetBroadcast {
+		t.Errorf("expected source_id=%d (subnet_broadcast), got %d", resolve.SpecialIDSubnetBroadcast, sourceID)
 	}
 	if targetType != "peer" {
 		t.Errorf("expected target_type='peer', got %q", targetType)
@@ -568,12 +569,12 @@ func TestResolveBroadcastRule_OutputChainNotBroadcast(t *testing.T) {
 	// do NOT trigger broadcast handling. Since isBroadcastDest returns 0
 	rule := iptparse.ParsedRule{DestIP: "255.255.255.255"}
 
-	if isBroadcastDest(&rule, "OUTPUT", nil) != 0 {
+	if resolve.IsBroadcastDest(rule.DestIP, "OUTPUT", nil) != 0 {
 		t.Error("isBroadcastDest should return 0 for OUTPUT chain — OUTPUT broadcast rules should go through normal resolution, not broadcast path")
 	}
 
 	// Also verify FORWARD chain is not treated as broadcast
-	if isBroadcastDest(&rule, "FORWARD", nil) != 0 {
+	if resolve.IsBroadcastDest(rule.DestIP, "FORWARD", nil) != 0 {
 		t.Error("isBroadcastDest should return 0 for FORWARD chain")
 	}
 }
@@ -624,8 +625,8 @@ func TestResolveMulticastRule_SourceIsAllHosts_TargetIsPeer(t *testing.T) {
 	if sourceType != "special" {
 		t.Errorf("expected source_type='special', got %q", sourceType)
 	}
-	if sourceID != specialTargetAllHosts {
-		t.Errorf("expected source_id=%d (all_hosts), got %d", specialTargetAllHosts, sourceID)
+	if sourceID != resolve.SpecialIDAllHosts {
+		t.Errorf("expected source_id=%d (all_hosts), got %d", resolve.SpecialIDAllHosts, sourceID)
 	}
 	if targetType != "peer" {
 		t.Errorf("expected target_type='peer', got %q", targetType)
@@ -817,8 +818,8 @@ func TestResolveMulticastRule_WithPort(t *testing.T) {
 	if sourceType != "special" {
 		t.Errorf("expected source_type='special', got %q", sourceType)
 	}
-	if sourceID != specialTargetAllHosts {
-		t.Errorf("expected source_id=%d (all_hosts), got %d", specialTargetAllHosts, sourceID)
+	if sourceID != resolve.SpecialIDAllHosts {
+		t.Errorf("expected source_id=%d (all_hosts), got %d", resolve.SpecialIDAllHosts, sourceID)
 	}
 	if targetType != "peer" {
 		t.Errorf("expected target_type='peer', got %q", targetType)
@@ -1001,8 +1002,8 @@ func TestResolveIGMPRule_SourceIsAllHosts_TargetIsPeer(t *testing.T) {
 	if sourceType != "special" {
 		t.Errorf("expected source_type='special', got %q", sourceType)
 	}
-	if sourceID != specialTargetAllHosts {
-		t.Errorf("expected source_id=%d (all_hosts), got %d", specialTargetAllHosts, sourceID)
+	if sourceID != resolve.SpecialIDAllHosts {
+		t.Errorf("expected source_id=%d (all_hosts), got %d", resolve.SpecialIDAllHosts, sourceID)
 	}
 	if targetType != "peer" {
 		t.Errorf("expected target_type='peer', got %q", targetType)

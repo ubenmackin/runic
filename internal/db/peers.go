@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 
 	"runic/internal/models"
@@ -20,42 +21,29 @@ func GetPeer(ctx context.Context, database Querier, peerID int) (models.PeerRow,
 }
 
 func SaveBundle(ctx context.Context, database Beginner, params models.CreateBundleParams) (models.RuleBundleRow, error) {
-	tx, err := database.BeginTx(ctx, nil)
-	if err != nil {
-		return models.RuleBundleRow{}, err
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			if rErr := tx.Rollback(); rErr != nil {
-				fmt.Printf("rollback failed: %v", rErr)
-			}
+	var bundle models.RuleBundleRow
+	err := withTx(ctx, database, func(ctx context.Context, tx *sql.Tx) error {
+		result, err := tx.ExecContext(ctx,
+			`INSERT INTO rule_bundles (peer_id, version, version_number, rules_content, hmac) VALUES (?, ?, ?, ?, ?)`,
+			params.PeerID, params.Version, params.VersionNumber, params.RulesContent, params.HMAC)
+		if err != nil {
+			return err
 		}
-	}()
 
-	result, err := tx.ExecContext(ctx,
-		`INSERT INTO rule_bundles (peer_id, version, version_number, rules_content, hmac) VALUES (?, ?, ?, ?, ?)`,
-		params.PeerID, params.Version, params.VersionNumber, params.RulesContent, params.HMAC)
-	if err != nil {
-		return models.RuleBundleRow{}, err
-	}
+		bundleID, err := result.LastInsertId()
+		if err != nil {
+			return fmt.Errorf("get last insert id: %w", err)
+		}
 
-	bundleID, err := result.LastInsertId()
-	if err != nil {
-		return models.RuleBundleRow{}, fmt.Errorf("get last insert id: %w", err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return models.RuleBundleRow{}, err
-	}
-	committed = true
-
-	return models.RuleBundleRow{
-		ID:            int(bundleID),
-		PeerID:        params.PeerID,
-		Version:       params.Version,
-		VersionNumber: params.VersionNumber,
-		RulesContent:  params.RulesContent,
-		HMAC:          params.HMAC,
-	}, nil
+		bundle = models.RuleBundleRow{
+			ID:            int(bundleID),
+			PeerID:        params.PeerID,
+			Version:       params.Version,
+			VersionNumber: params.VersionNumber,
+			RulesContent:  params.RulesContent,
+			HMAC:          params.HMAC,
+		}
+		return nil
+	})
+	return bundle, err
 }

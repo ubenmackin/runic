@@ -11,6 +11,7 @@ import (
 	"runic/internal/common/log"
 	"runic/internal/db"
 	"runic/internal/iptparse"
+	"runic/internal/resolve"
 )
 
 type ImportSession struct {
@@ -27,7 +28,7 @@ type ImportSession struct {
 	UpdatedAt       string
 }
 
-func CreateSession(ctx context.Context, database *sql.DB, peerID int64, rawBackup, rawIpsets string) (*ImportSession, error) {
+func CreateSession(ctx context.Context, database db.DB, peerID int64, rawBackup, rawIpsets string) (*ImportSession, error) {
 	var existingID int64
 	err := database.QueryRowContext(ctx,
 		"SELECT id FROM import_sessions WHERE peer_id = ? AND status IN ('pending','parsed','reviewing')",
@@ -88,7 +89,7 @@ func GetSessionByPeer(ctx context.Context, database db.Querier, peerID int64) (*
 
 // ParseSession runs the iptparse parser on the session's raw backup, creates import_rules entries, then runs the resolver.
 // The entire operation runs within a database transaction for atomicity.
-func ParseSession(ctx context.Context, database *sql.DB, sessionID int64) error {
+func ParseSession(ctx context.Context, database db.DB, sessionID int64) error {
 	tx, err := database.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
@@ -197,17 +198,19 @@ func ParseSession(ctx context.Context, database *sql.DB, sessionID int64) error 
 	for ipRows.Next() {
 		var ip string
 		if ipRows.Scan(&ip) == nil {
-			peerIPs = append(peerIPs, normalizeIP(ip))
+			peerIPs = append(peerIPs, resolve.NormalizeIP(ip))
 		}
 	}
-	_ = ipRows.Close()
+	if cErr := ipRows.Close(); cErr != nil {
+		log.Warn("Error closing ipRows", "error", cErr)
+	}
 
 	// If no peer_ips found, fall back to the peer's primary IP
 	if len(peerIPs) == 0 {
 		var primaryIP string
 		err := database.QueryRowContext(ctx, "SELECT ip_address FROM peers WHERE id = ?", session.PeerID).Scan(&primaryIP)
 		if err == nil {
-			peerIPs = append(peerIPs, normalizeIP(primaryIP))
+			peerIPs = append(peerIPs, resolve.NormalizeIP(primaryIP))
 		}
 	}
 
@@ -220,7 +223,7 @@ func ParseSession(ctx context.Context, database *sql.DB, sessionID int64) error 
 	return nil
 }
 
-func DeleteSession(ctx context.Context, database *sql.DB, sessionID int64) error {
+func DeleteSession(ctx context.Context, database db.DB, sessionID int64) error {
 	_, err := database.ExecContext(ctx, "DELETE FROM import_sessions WHERE id = ?", sessionID)
 	if err != nil {
 		return fmt.Errorf("delete session: %w", err)
@@ -228,7 +231,7 @@ func DeleteSession(ctx context.Context, database *sql.DB, sessionID int64) error
 	return nil
 }
 
-func CleanupStaleSessions(ctx context.Context, database *sql.DB, maxAge time.Duration) error {
+func CleanupStaleSessions(ctx context.Context, database db.DB, maxAge time.Duration) error {
 	cutoff := time.Now().Add(-maxAge).Format("2006-01-02 15:04:05")
 	result, err := database.ExecContext(ctx,
 		"DELETE FROM import_sessions WHERE status IN ('pending','parsed','reviewing') AND created_at < ?",

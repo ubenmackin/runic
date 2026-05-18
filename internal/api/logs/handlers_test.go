@@ -468,7 +468,7 @@ func TestMakeLogsStreamHandler_ValidToken_WithFilters(t *testing.T) {
 	hub := NewHub()
 	handler := MakeLogsStreamHandler(hub, &mockTokenRevoker{})
 
-	token, err := auth.GenerateToken("test-user", "viewer", 24*time.Hour)
+	token, err := auth.GenerateToken("test-user", "viewer", auth.TokenTypeAccess, 24*time.Hour)
 	if err != nil {
 		t.Fatalf("failed to generate token: %v", err)
 	}
@@ -492,7 +492,7 @@ func TestMakeLogsStreamHandler_ValidToken_HeaderAuth(t *testing.T) {
 	hub := NewHub()
 	handler := MakeLogsStreamHandler(hub, &mockTokenRevoker{})
 
-	token, err := auth.GenerateToken("test-user-header", "viewer", 24*time.Hour)
+	token, err := auth.GenerateToken("test-user-header", "viewer", auth.TokenTypeAccess, 24*time.Hour)
 	if err != nil {
 		t.Fatalf("failed to generate token: %v", err)
 	}

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net"
 
 	"runic/internal/api/common"
 	ic "runic/internal/common"
@@ -15,6 +16,8 @@ import (
 )
 
 const peerRowColumns = `id, hostname, ip_address, os_type, arch, has_docker, agent_key, agent_token, agent_version, is_manual, bundle_version, last_heartbeat, COALESCE(status, ''), created_at`
+
+const ruleBundleRowColumns = `id, peer_id, version, version_number, rules_content, hmac, created_at, applied_at, first_applied_at`
 
 type PeerIPView struct {
 	ID        int    `json:"id"`
@@ -63,7 +66,7 @@ COALESCE(p.agent_version, '') as agent_version,
 COALESCE(p.last_heartbeat, '') as last_heartbeat,
 CASE
 WHEN p.last_heartbeat IS NULL THEN 'pending'
-WHEN p.last_heartbeat < ` + fmt.Sprintf("datetime('now', '-%d minutes')", constants.PeerOfflineThresholdMinutes) + ` THEN 'offline'
+WHEN p.last_heartbeat < ` + fmt.Sprintf("datetime('now', '-%d seconds')", int(constants.OfflineThreshold.Seconds())) + ` THEN 'offline'
 ELSE COALESCE(p.status, 'online')
 END as status,
 COALESCE(p.bundle_version, '') as bundle_version,
@@ -165,6 +168,12 @@ ORDER BY p.hostname ASC`
 }
 
 func (s *PeerStore) CreatePeer(ctx context.Context, hostname, ip, osType, arch, agentKey, hmacKey string, hasDocker bool, isManual bool) (int64, error) {
+	if hostname == "" {
+		return 0, errors.New("hostname is required")
+	}
+	if ip != "" && net.ParseIP(ip) == nil {
+		return 0, fmt.Errorf("invalid IP address: %q", ip)
+	}
 	result, err := s.db.ExecContext(ctx,
 		`INSERT INTO peers (hostname, ip_address, os_type, arch, agent_key, hmac_key, has_docker, is_manual) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		hostname, ip, osType, arch, agentKey, hmacKey, hasDocker, isManual)
@@ -577,29 +586,38 @@ func (s *PeerStore) ConfirmRotation(ctx context.Context, hostname string) error 
 	return nil
 }
 
-// GetPeerBundleWithDeployed returns both the pending (latest) and deployed bundle data
-// in a single call, avoiding the double-query pattern (T007-#1).
-// Returns pendingData, deployedData, pendingVersion, pendingVersionNumber, pendingHMAC, deployedVersion, error.
-func (s *PeerStore) GetPeerBundleWithDeployed(ctx context.Context, peerID int) (pendingData, deployedData, version, hmac, deployedVersion string, versionNumber int, err error) {
-	// Get pending/latest bundle
+// getPendingBundleInfo returns the latest (pending) bundle data and the deployed version
+// for a peer. This is the shared query pattern used by both GetPeerBundle and
+// GetPeerBundleWithDeployed.
+func (s *PeerStore) getPendingBundleInfo(ctx context.Context, peerID int) (rulesContent, version, hmac, deployedVersion string, versionNumber int, err error) {
 	err = s.db.QueryRowContext(ctx,
 		"SELECT rules_content, version, version_number, hmac FROM rule_bundles WHERE peer_id = ? ORDER BY created_at DESC LIMIT 1",
 		peerID,
-	).Scan(&pendingData, &version, &versionNumber, &hmac)
+	).Scan(&rulesContent, &version, &versionNumber, &hmac)
 	if err != nil {
-		return "", "", "", "", "", 0, fmt.Errorf("query pending bundle: %w", err)
+		return "", "", "", "", 0, fmt.Errorf("query pending bundle: %w", err)
 	}
 
-	// Get deployed version from peers table
 	var dv sql.NullString
 	err = s.db.QueryRowContext(ctx,
 		"SELECT bundle_version FROM peers WHERE id = ?", peerID,
 	).Scan(&dv)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return "", "", "", "", "", 0, fmt.Errorf("query deployed version: %w", err)
+		return "", "", "", "", 0, fmt.Errorf("query deployed version: %w", err)
 	}
 	if dv.Valid {
 		deployedVersion = dv.String
+	}
+	return rulesContent, version, hmac, deployedVersion, versionNumber, nil
+}
+
+// GetPeerBundleWithDeployed returns both the pending (latest) and deployed bundle data
+// in a single call, avoiding the double-query pattern (T007-#1).
+// Returns pendingData, deployedData, pendingVersion, pendingVersionNumber, pendingHMAC, deployedVersion, error.
+func (s *PeerStore) GetPeerBundleWithDeployed(ctx context.Context, peerID int) (pendingData, deployedData, version, hmac, deployedVersion string, versionNumber int, err error) {
+	pendingData, version, hmac, deployedVersion, versionNumber, err = s.getPendingBundleInfo(ctx, peerID)
+	if err != nil {
+		return "", "", "", "", "", 0, err
 	}
 
 	// Get deployed bundle data if a deployed version exists
@@ -625,23 +643,9 @@ func (s *PeerStore) GetPeerBundleWithDeployed(ctx context.Context, peerID int) (
 // Returns bundleData (rules_content), version, versionNumber, hmac, deployedVersion, and any error.
 func (s *PeerStore) GetPeerBundle(ctx context.Context, peerID int, includePending bool) (bundleData string, version string, versionNumber int, hmac string, deployedVersion string, err error) {
 	if includePending {
-		err = s.db.QueryRowContext(ctx,
-			"SELECT rules_content, version, version_number, hmac FROM rule_bundles WHERE peer_id = ? ORDER BY created_at DESC LIMIT 1",
-			peerID,
-		).Scan(&bundleData, &version, &versionNumber, &hmac)
+		bundleData, version, hmac, deployedVersion, versionNumber, err = s.getPendingBundleInfo(ctx, peerID)
 		if err != nil {
-			return "", "", 0, "", "", fmt.Errorf("query pending bundle: %w", err)
-		}
-
-		var dv sql.NullString
-		err = s.db.QueryRowContext(ctx,
-			"SELECT bundle_version FROM peers WHERE id = ?", peerID,
-		).Scan(&dv)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return "", "", 0, "", "", fmt.Errorf("query deployed version: %w", err)
-		}
-		if dv.Valid {
-			deployedVersion = dv.String
+			return "", "", 0, "", "", err
 		}
 		return bundleData, version, versionNumber, hmac, deployedVersion, nil
 	}
@@ -737,7 +741,7 @@ func (s *PeerStore) GetPeerIDByHostname(ctx context.Context, hostname string) (i
 func (s *PeerStore) GetLatestBundle(ctx context.Context, peerID int) (models.RuleBundleRow, error) {
 	var bundle models.RuleBundleRow
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, peer_id, version, version_number, rules_content, hmac, created_at, applied_at, first_applied_at FROM rule_bundles WHERE peer_id = ? ORDER BY created_at DESC LIMIT 1`,
+		"SELECT "+ruleBundleRowColumns+" FROM rule_bundles WHERE peer_id = ? ORDER BY created_at DESC LIMIT 1",
 		peerID,
 	).Scan(&bundle.ID, &bundle.PeerID, &bundle.Version, &bundle.VersionNumber, &bundle.RulesContent, &bundle.HMAC, &bundle.CreatedAt, &bundle.AppliedAt, &bundle.FirstAppliedAt)
 	if err != nil {

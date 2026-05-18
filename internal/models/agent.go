@@ -1,9 +1,9 @@
 package models
 
 type AgentRegisterRequest struct {
-	Hostname          string   `json:"hostname"`
-	IP                string   `json:"ip"`
-	OSType            string   `json:"os_type"`
+	Hostname          string   `json:"hostname" validate:"required,hostname"`
+	IP                string   `json:"ip" validate:"required,ip"`
+	OSType            string   `json:"os_type" validate:"required"`
 	Arch              string   `json:"arch"`
 	Kernel            string   `json:"kernel"`
 	AgentVersion      string   `json:"agent_version"`
@@ -22,7 +22,7 @@ type AgentRegisterResponse struct {
 }
 
 type HeartbeatRequest struct {
-	HostID               string   `json:"host_id"`
+	HostID               string   `json:"host_id" validate:"required"`
 	BundleVersionApplied string   `json:"bundle_version_applied"`
 	UptimeSeconds        float64  `json:"uptime_seconds"`
 	Load1m               float64  `json:"load_1m"`
@@ -32,7 +32,8 @@ type HeartbeatRequest struct {
 }
 
 type BundleResponse struct {
-	Version string `json:"version"`
-	Rules   string `json:"rules"`
-	HMAC    string `json:"hmac"`
+	Version       string `json:"version"`
+	VersionNumber int    `json:"version_number"`
+	Rules         string `json:"rules"`
+	HMAC          string `json:"hmac"`
 }

@@ -29,6 +29,8 @@ type SpikeDetector struct {
 	stopCh   chan struct{}
 	stopOnce sync.Once
 
+	mu sync.RWMutex
+
 	threshold       int
 	windowMinutes   int
 	throttleMinutes int
@@ -65,13 +67,41 @@ func NewSpikeDetector(logsDB, mainDB db.Querier, service *Service, lookupHostnam
 
 // SetThresholds sets the spike detection thresholds. This is primarily intended for testing.
 func (d *SpikeDetector) SetThresholds(threshold, windowMinutes, throttleMinutes int) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	d.threshold = threshold
 	d.windowMinutes = windowMinutes
 	d.throttleMinutes = throttleMinutes
 }
 
+// GetThresholds returns the current spike detection thresholds. This is primarily intended for testing.
+func (d *SpikeDetector) GetThresholds() (threshold, windowMinutes, throttleMinutes int) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.threshold, d.windowMinutes, d.throttleMinutes
+}
+
+// GetLastAlert returns the time of the last spike alert. This is primarily intended for testing.
+func (d *SpikeDetector) GetLastAlert() time.Time {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.lastAlert
+}
+
+// SetLastAlert sets the last alert time. This is primarily intended for testing.
+func (d *SpikeDetector) SetLastAlert(t time.Time) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.lastAlert = t
+}
+
 func (d *SpikeDetector) Start() {
-	d.logger.Info("starting spike detector", "threshold", d.threshold, "window", d.windowMinutes)
+	d.mu.RLock()
+	threshold := d.threshold
+	window := d.windowMinutes
+	d.mu.RUnlock()
+
+	d.logger.Info("starting spike detector", "threshold", threshold, "window", window)
 	d.wg.Add(1)
 	go func() {
 		defer d.wg.Done()
@@ -136,9 +166,11 @@ func (d *SpikeDetector) loadThreshold() {
 		return
 	}
 
+	d.mu.Lock()
 	d.threshold = rule.ThresholdValue
 	d.windowMinutes = rule.ThresholdWindowMinutes
 	d.throttleMinutes = rule.ThrottleMinutes
+	d.mu.Unlock()
 }
 
 func (d *SpikeDetector) checkForSpike() {
@@ -149,28 +181,17 @@ func (d *SpikeDetector) checkForSpike() {
 		return
 	}
 
-	// Skip global spike detection when per-peer blocked_spike alert rules exist,
-	// because the ConditionEvaluator already handles per-peer spike detection and
-	// sending both global and per-peer alerts for the same underlying traffic
-	// would produce duplicate notifications.
-	if d.mainDB != nil {
-		var perPeerCount int
-		peerCtx, peerCancel := context.WithTimeout(d.ctx, 5*time.Second)
-		err := d.mainDB.QueryRowContext(peerCtx, `
-			SELECT COUNT(*) FROM alert_rules
-			WHERE alert_type = ? AND enabled = 1 AND peer_id IS NOT NULL
-		`, AlertTypeBlockedSpike).Scan(&perPeerCount)
-		peerCancel()
-		if err == nil && perPeerCount > 0 {
-			d.logger.Debug("skipping global spike check because per-peer blocked_spike rules exist")
-			return
-		}
-	}
-
 	ctx, cancel := context.WithTimeout(d.ctx, 10*time.Second)
 	defer cancel()
 
-	cutoff := time.Now().Add(-time.Duration(d.windowMinutes) * time.Minute)
+	d.mu.RLock()
+	windowMinutes := d.windowMinutes
+	threshold := d.threshold
+	throttleMinutes := d.throttleMinutes
+	lastAlert := d.lastAlert
+	d.mu.RUnlock()
+
+	cutoff := time.Now().Add(-time.Duration(windowMinutes) * time.Minute)
 
 	var count int
 	err := d.logsDB.QueryRowContext(ctx, `
@@ -184,15 +205,15 @@ func (d *SpikeDetector) checkForSpike() {
 		return
 	}
 
-	d.logger.Debug("blocked traffic count", "count", count, "threshold", d.threshold)
+	d.logger.Debug("blocked traffic count", "count", count, "threshold", threshold)
 
-	if count >= d.threshold {
-		if time.Since(d.lastAlert) < time.Duration(d.throttleMinutes)*time.Minute {
-			d.logger.Debug("spike alert throttled", "last_alert", d.lastAlert)
+	if count >= threshold {
+		if time.Since(lastAlert) < time.Duration(throttleMinutes)*time.Minute {
+			d.logger.Debug("spike alert throttled", "last_alert", lastAlert)
 			return
 		}
 
-		d.logger.Info("blocked traffic spike detected", "count", count, "threshold", d.threshold)
+		d.logger.Info("blocked traffic spike detected", "count", count, "threshold", threshold)
 		d.triggerSpikeAlert(ctx, count)
 	}
 }
@@ -210,24 +231,32 @@ func (d *SpikeDetector) triggerSpikeAlert(ctx context.Context, count int) {
 		topIPList = append(topIPList, ip.ip)
 	}
 
-	d.lastAlert = time.Now()
+	d.mu.RLock()
+	windowMinutes := d.windowMinutes
+	threshold := d.threshold
+	d.mu.RUnlock()
 
 	if err := d.service.TriggerAlert(ctx, &AlertEvent{
 		Type:    AlertTypeBlockedSpike,
 		PeerID:  0, // global alert
 		Subject: "Blocked Traffic Spike Detected",
-		Message: fmt.Sprintf("%d packets blocked in %d minutes (threshold: %d)", count, d.windowMinutes, d.threshold),
+		Message: fmt.Sprintf("%d packets blocked in %d minutes (threshold: %d)", count, windowMinutes, threshold),
 		Value:   count,
 		Metadata: map[string]interface{}{
 			"blocked_count":  count,
-			"threshold":      d.threshold,
-			"window_minutes": d.windowMinutes,
+			"threshold":      threshold,
+			"window_minutes": windowMinutes,
 			"top_source_ips": topIPList,
 			"affected_peers": affectedPeers,
 		},
 	}); err != nil {
 		d.logger.Error("failed to trigger spike alert", "error", err)
+		return
 	}
+
+	d.mu.Lock()
+	d.lastAlert = time.Now()
+	d.mu.Unlock()
 
 	d.logger.Info("spike alert triggered", "count", count)
 }
@@ -238,7 +267,11 @@ type topBlockedIP struct {
 }
 
 func (d *SpikeDetector) getTopBlockedIPs(ctx context.Context) []topBlockedIP {
-	cutoff := time.Now().Add(-time.Duration(d.windowMinutes) * time.Minute)
+	d.mu.RLock()
+	windowMinutes := d.windowMinutes
+	d.mu.RUnlock()
+
+	cutoff := time.Now().Add(-time.Duration(windowMinutes) * time.Minute)
 
 	rows, err := d.logsDB.QueryContext(ctx, `
 		SELECT source_ip, COUNT(*) as cnt
@@ -276,7 +309,11 @@ func (d *SpikeDetector) getTopBlockedIPs(ctx context.Context) []topBlockedIP {
 }
 
 func (d *SpikeDetector) getAffectedPeers(ctx context.Context) []string {
-	cutoff := time.Now().Add(-time.Duration(d.windowMinutes) * time.Minute)
+	d.mu.RLock()
+	windowMinutes := d.windowMinutes
+	d.mu.RUnlock()
+
+	cutoff := time.Now().Add(-time.Duration(windowMinutes) * time.Minute)
 
 	// Step 1: Get distinct peer_ids from firewall_logs (logs DB)
 	peerRows, err := d.logsDB.QueryContext(ctx, `

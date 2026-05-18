@@ -11,23 +11,23 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-func SetupTestDB(t *testing.T) (*sql.DB, func()) {
-	t.Helper()
+func SetupTestDB(tb testing.TB) (*sql.DB, func()) {
+	tb.Helper()
 	f, err := os.CreateTemp("", "runic-test-*.db")
 	if err != nil {
-		t.Fatal(err)
+		tb.Fatal(err)
 	}
 	dbPath := f.Name()
 	if cErr := f.Close(); cErr != nil {
-		t.Logf("Failed to close temp file: %v", cErr)
+		tb.Logf("Failed to close temp file: %v", cErr)
 	}
 
 	database, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
 		if rErr := os.Remove(dbPath); rErr != nil {
-			t.Logf("Failed to remove db: %v", rErr)
+			tb.Logf("Failed to remove db: %v", rErr)
 		}
-		t.Fatal(err)
+		tb.Fatal(err)
 	}
 
 	database.SetMaxOpenConns(10)
@@ -37,35 +37,35 @@ func SetupTestDB(t *testing.T) (*sql.DB, func()) {
 	if _, err := database.Exec("PRAGMA foreign_keys=ON"); err != nil {
 		database.Close()
 		os.Remove(dbPath)
-		t.Fatal(err)
+		tb.Fatal(err)
 	}
 
 	if _, err := database.Exec(Schema()); err != nil {
 		if cErr := database.Close(); cErr != nil {
-			t.Logf("Failed to close database: %v", cErr)
+			tb.Logf("Failed to close database: %v", cErr)
 		}
 		if rErr := os.Remove(dbPath); rErr != nil {
-			t.Logf("Failed to remove db: %v", rErr)
+			tb.Logf("Failed to remove db: %v", rErr)
 		}
-		t.Fatal(err)
+		tb.Fatal(err)
 	}
 
 	if err := database.Ping(); err != nil {
 		if cErr := database.Close(); cErr != nil {
-			t.Logf("Failed to close database: %v", cErr)
+			tb.Logf("Failed to close database: %v", cErr)
 		}
 		if rErr := os.Remove(dbPath); rErr != nil {
-			t.Logf("Failed to remove db: %v", rErr)
+			tb.Logf("Failed to remove db: %v", rErr)
 		}
-		t.Fatal(err)
+		tb.Fatal(err)
 	}
 
 	cleanup := func() {
 		if cErr := database.Close(); cErr != nil {
-			t.Logf("Failed to close database: %v", cErr)
+			tb.Logf("Failed to close database: %v", cErr)
 		}
 		if rErr := os.Remove(dbPath); rErr != nil {
-			t.Logf("Failed to remove db: %v", rErr)
+			tb.Logf("Failed to remove db: %v", rErr)
 		}
 	}
 	return database, cleanup
@@ -87,7 +87,7 @@ func TestSchema(t *testing.T) {
 	}
 
 	for _, expected := range expectedTables {
-		if !contains(schema, expected) {
+		if !strings.Contains(schema, expected) {
 			t.Errorf("Schema() missing expected content: %s", expected)
 		}
 	}
@@ -191,12 +191,8 @@ func TestSchemaNotEmpty(t *testing.T) {
 	}
 
 	for _, table := range importantTables {
-		if !contains(schema, table) {
+		if !strings.Contains(schema, table) {
 			t.Errorf("Schema missing table: %s", table)
 		}
 	}
-}
-
-func contains(s, substr string) bool {
-	return strings.Contains(s, substr)
 }

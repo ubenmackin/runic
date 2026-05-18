@@ -9,6 +9,7 @@ import (
 	"html"
 	"log/slog"
 	"net/smtp"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -45,6 +46,13 @@ var (
 	dangerousTagRegex = regexp.MustCompile(`(?i)</?(?:iframe|object|embed|form|svg|math|style|link|base)[^>]*>`)
 	// Matches dangerous meta refresh tags (but preserves legitimate meta tags like charset, viewport)
 	dangerousMetaRegex = regexp.MustCompile(`(?i)<meta[^>]+http-equiv\s*=\s*["']?refresh["']?[^>]*>`)
+)
+
+// Default SMTP retry constants.
+const (
+	smtpMaxRetries  = 3
+	smtpBaseBackoff = 1 * time.Second
+	smtpMaxBackoff  = 8 * time.Second // 1s, 2s, 4s, 8s cap
 )
 
 type SMTPSender struct {
@@ -162,22 +170,41 @@ func (s *SMTPSender) sendEmail(to, subject, body, contentType string) error {
 		auth = smtp.PlainAuth("", s.config.Username, password, s.config.Host)
 	}
 
-	err := s.sendWithTLS(addr, auth, s.config.FromAddress, []string{to}, []byte(message))
-	if err != nil {
+	// Retry with exponential backoff on transient SMTP failures.
+	var lastErr error
+	for attempt := 0; attempt <= smtpMaxRetries; attempt++ {
+		if attempt > 0 {
+			backoff := time.Duration(1<<(attempt-1)) * smtpBaseBackoff
+			if backoff > smtpMaxBackoff {
+				backoff = smtpMaxBackoff
+			}
+			s.logger.Info("retrying SMTP send",
+				"attempt", attempt,
+				"max_retries", smtpMaxRetries,
+				"backoff", backoff,
+				"last_error", lastErr,
+			)
+			time.Sleep(backoff)
+		}
+
+		err := s.sendWithTLS(addr, auth, s.config.FromAddress, []string{to}, []byte(message))
+		if err == nil {
+			s.logger.Info("email sent successfully",
+				"to", to,
+				"subject", subject,
+			)
+			return nil
+		}
+		lastErr = err
 		s.logger.Error("failed to send email",
 			"to", to,
 			"subject", subject,
+			"attempt", attempt+1,
 			"error", err,
 		)
-		return fmt.Errorf("failed to send email: %w", err)
 	}
 
-	s.logger.Info("email sent successfully",
-		"to", to,
-		"subject", subject,
-	)
-
-	return nil
+	return fmt.Errorf("failed to send email after %d attempts: %w", smtpMaxRetries+1, lastErr)
 }
 
 func (s *SMTPSender) sendWithTLS(addr string, auth smtp.Auth, from string, to []string, msg []byte) error {
@@ -245,8 +272,9 @@ func (s *SMTPSender) sendWithTLS(addr string, auth smtp.Auth, from string, to []
 // on an already-connected *smtp.Client. This eliminates the 100-line code duplication between
 // the SMTPS and STARTTLS branches of sendWithTLS.
 func (s *SMTPSender) smtpConversation(client *smtp.Client, auth smtp.Auth, from string, to []string, msg []byte) error {
-	if err := client.Hello("localhost"); err != nil {
-		return fmt.Errorf("SMTP Hello failed: %w", err)
+	heloHostname := s.getHeloHostname()
+	if err := client.Hello(heloHostname); err != nil {
+		return fmt.Errorf("SMTP Hello (HELO) failed: %w", err)
 	}
 
 	if auth != nil {
@@ -281,6 +309,21 @@ func (s *SMTPSender) smtpConversation(client *smtp.Client, auth smtp.Auth, from 
 	}
 
 	return nil
+}
+
+// getHeloHostname returns the HELO/EHLO hostname to use in the SMTP conversation.
+// If config.HeloHostname is set, it is used. Otherwise, the system hostname is used.
+// If os.Hostname() also fails, "localhost" is returned as a safe default.
+func (s *SMTPSender) getHeloHostname() string {
+	if s.config.HeloHostname != "" {
+		return s.config.HeloHostname
+	}
+	hostname, err := os.Hostname()
+	if err != nil {
+		s.logger.Warn("failed to get system hostname for HELO, falling back to localhost", "error", err)
+		return "localhost"
+	}
+	return hostname
 }
 
 func (s *SMTPSender) sanitizeHeaderValue(value string) string {
@@ -426,109 +469,61 @@ func (s *SMTPSender) generateAlertHTML(event *AlertEvent, instanceURL string) st
 		return ""
 	}
 
+	// renderTDRow builds a single table row with label and value columns.
+	// This eliminates repeated HTML-in-Go template code across alert types.
+	renderTDRow := func(label, value, valueColor string) string {
+		if valueColor == "" {
+			valueColor = textSecondary
+		}
+		return fmt.Sprintf(`<tr>
+<td style="padding: 12px 15px; border-bottom: 1px solid %s; color: %s; width: 140px; font-weight: bold; text-transform: uppercase; letter-spacing: 1px;">%s</td>
+<td style="padding: 12px 15px; border-bottom: 1px solid %s; color: %s;">%s</td>
+</tr>`, borderColor, textMuted, s.htmlEscape(label), borderColor, valueColor, value)
+	}
+
 	var detailsTable strings.Builder
 
 	switch event.Type {
 	case AlertTypePeerOffline:
-		offlineDuration := getMetaString("offline_duration")
-		fmt.Fprintf(&detailsTable, `<tr>
-<td style="padding: 12px 15px; border-bottom: 1px solid %s; color: %s; width: 140px; font-weight: bold; text-transform: uppercase; letter-spacing: 1px;">Peer</td>
-<td style="padding: 12px 15px; border-bottom: 1px solid %s; color: %s; font-weight: bold;">%s (ID: %d)</td>
-</tr>`, borderColor, textMuted, borderColor, textSecondary, s.htmlEscape(event.PeerName), event.PeerID)
-
+		detailsTable.WriteString(renderTDRow("Peer", fmt.Sprintf("%s (ID: %d)", s.htmlEscape(event.PeerName), event.PeerID), ""))
 		if ip := getMetaString("ip_address"); ip != "" {
-			fmt.Fprintf(&detailsTable, `
-<tr>
-<td style="padding: 12px 15px; border-bottom: 1px solid %s; color: %s; font-weight: bold; text-transform: uppercase; letter-spacing: 1px;">IP Address</td>
-<td style="padding: 12px 15px; border-bottom: 1px solid %s; color: %s;">%s</td>
-</tr>`, borderColor, textMuted, borderColor, textSecondary, s.htmlEscape(ip))
+			detailsTable.WriteString(renderTDRow("IP Address", s.htmlEscape(ip), ""))
 		}
-
-		if offlineDuration != "" {
-			fmt.Fprintf(&detailsTable, `
-<tr>
-<td style="padding: 12px 15px; border-bottom: 1px solid %s; color: %s; font-weight: bold; text-transform: uppercase; letter-spacing: 1px;">Offline Duration</td>
-<td style="padding: 12px 15px; border-bottom: 1px solid %s; color: %s;">%s</td>
-</tr>`, borderColor, textMuted, borderColor, textSecondary, s.htmlEscape(offlineDuration))
+		if offlineDuration := getMetaString("offline_duration"); offlineDuration != "" {
+			detailsTable.WriteString(renderTDRow("Offline Duration", s.htmlEscape(offlineDuration), ""))
 		}
 
 	case AlertTypePeerOnline:
-		fmt.Fprintf(&detailsTable, `<tr>
-<td style="padding: 12px 15px; border-bottom: 1px solid %s; color: %s; width: 140px; font-weight: bold; text-transform: uppercase; letter-spacing: 1px;">Peer</td>
-<td style="padding: 12px 15px; border-bottom: 1px solid %s; color: %s; font-weight: bold;">%s (ID: %d)</td>
-</tr>`, borderColor, textMuted, borderColor, textSecondary, s.htmlEscape(event.PeerName), event.PeerID)
-
+		detailsTable.WriteString(renderTDRow("Peer", fmt.Sprintf("%s (ID: %d)", s.htmlEscape(event.PeerName), event.PeerID), ""))
 		if ip := getMetaString("ip_address"); ip != "" {
-			fmt.Fprintf(&detailsTable, `
-<tr>
-<td style="padding: 12px 15px; border-bottom: 1px solid %s; color: %s; font-weight: bold; text-transform: uppercase; letter-spacing: 1px;">IP Address</td>
-<td style="padding: 12px 15px; border-bottom: 1px solid %s; color: %s;">%s</td>
-</tr>`, borderColor, textMuted, borderColor, textSecondary, s.htmlEscape(ip))
+			detailsTable.WriteString(renderTDRow("IP Address", s.htmlEscape(ip), ""))
 		}
 
 	case AlertTypeNewPeer:
-		fmt.Fprintf(&detailsTable, `<tr>
-<td style="padding: 12px 15px; border-bottom: 1px solid %s; color: %s; width: 140px; font-weight: bold; text-transform: uppercase; letter-spacing: 1px;">Peer</td>
-<td style="padding: 12px 15px; border-bottom: 1px solid %s; color: %s; font-weight: bold;">%s (ID: %d)</td>
-</tr>`, borderColor, textMuted, borderColor, textSecondary, s.htmlEscape(event.PeerName), event.PeerID)
-
+		detailsTable.WriteString(renderTDRow("Peer", fmt.Sprintf("%s (ID: %d)", s.htmlEscape(event.PeerName), event.PeerID), ""))
 		if ip := getMetaString("ip_address"); ip != "" {
-			fmt.Fprintf(&detailsTable, `
-<tr>
-<td style="padding: 12px 15px; border-bottom: 1px solid %s; color: %s; font-weight: bold; text-transform: uppercase; letter-spacing: 1px;">IP Address</td>
-<td style="padding: 12px 15px; border-bottom: 1px solid %s; color: %s;">%s</td>
-</tr>`, borderColor, textMuted, borderColor, textSecondary, s.htmlEscape(ip))
+			detailsTable.WriteString(renderTDRow("IP Address", s.htmlEscape(ip), ""))
 		}
 
 	case AlertTypeBundleFailed:
-		fmt.Fprintf(&detailsTable, `<tr>
-<td style="padding: 12px 15px; border-bottom: 1px solid %s; color: %s; width: 140px; font-weight: bold; text-transform: uppercase; letter-spacing: 1px;">Peer</td>
-<td style="padding: 12px 15px; border-bottom: 1px solid %s; color: %s; font-weight: bold;">%s (ID: %d)</td>
-</tr>`, borderColor, textMuted, borderColor, textSecondary, s.htmlEscape(event.PeerName), event.PeerID)
-
-		errorMsg := getMetaString("error_message")
-		if errorMsg != "" {
-			fmt.Fprintf(&detailsTable, `
-<tr>
-<td style="padding: 12px 15px; border-bottom: 1px solid %s; color: %s; font-weight: bold; text-transform: uppercase; letter-spacing: 1px;">Error</td>
-<td style="padding: 12px 15px; border-bottom: 1px solid %s; color: #ef4444;">%s</td>
-</tr>`, borderColor, textMuted, borderColor, s.htmlEscape(errorMsg))
+		detailsTable.WriteString(renderTDRow("Peer", fmt.Sprintf("%s (ID: %d)", s.htmlEscape(event.PeerName), event.PeerID), ""))
+		if errorMsg := getMetaString("error_message"); errorMsg != "" {
+			detailsTable.WriteString(renderTDRow("Error", s.htmlEscape(errorMsg), "#ef4444"))
 		}
 
 	case AlertTypeBlockedSpike:
-		fmt.Fprintf(&detailsTable, `<tr>
-<td style="padding: 12px 15px; border-bottom: 1px solid %s; color: %s; width: 140px; font-weight: bold; text-transform: uppercase; letter-spacing: 1px;">Blocked Events</td>
-<td style="padding: 12px 15px; border-bottom: 1px solid %s; color: %s; font-weight: bold;">%d</td>
-</tr>`, borderColor, textMuted, borderColor, textSecondary, event.Value)
-
-		threshold := getMetaString("threshold")
-		if threshold != "" {
-			fmt.Fprintf(&detailsTable, `
-<tr>
-<td style="padding: 12px 15px; border-bottom: 1px solid %s; color: %s; font-weight: bold; text-transform: uppercase; letter-spacing: 1px;">Threshold</td>
-<td style="padding: 12px 15px; border-bottom: 1px solid %s; color: %s;">%s</td>
-</tr>`, borderColor, textMuted, borderColor, textSecondary, s.htmlEscape(threshold))
+		detailsTable.WriteString(renderTDRow("Blocked Events", fmt.Sprintf("%d", event.Value), ""))
+		if threshold := getMetaString("threshold"); threshold != "" {
+			detailsTable.WriteString(renderTDRow("Threshold", s.htmlEscape(threshold), ""))
 		}
-
-		fmt.Fprintf(&detailsTable, `<tr>
-<td style="padding: 12px 15px; border-bottom: 1px solid %s; color: %s; width: 140px; font-weight: bold; text-transform: uppercase; letter-spacing: 1px;">Alert Type</td>
-<td style="padding: 12px 15px; border-bottom: 1px solid %s; color: %s;">%s</td>
-</tr>`, borderColor, textMuted, borderColor, textSecondary, s.htmlEscape(string(event.Type)))
+		detailsTable.WriteString(renderTDRow("Alert Type", s.htmlEscape(string(event.Type)), ""))
 	}
 
-	fmt.Fprintf(&detailsTable, `
-<tr>
-<td style="padding: 12px 15px; border-bottom: 1px solid %s; color: %s; font-weight: bold; text-transform: uppercase; letter-spacing: 1px;">Timestamp</td>
-<td style="padding: 12px 15px; border-bottom: 1px solid %s; color: %s;">%s</td>
-</tr>`, borderColor, textMuted, borderColor, textDim, event.Timestamp.Format(time.RFC1123))
+	detailsTable.WriteString(renderTDRow("Timestamp", event.Timestamp.Format(time.RFC1123), textDim))
 
 	var messageContent string
 	if event.Message != "" {
-		fmt.Fprintf(&detailsTable, `
-<tr>
-<td style="padding: 12px 15px; color: %s; font-weight: bold; text-transform: uppercase; letter-spacing: 1px;">Details</td>
-<td style="padding: 12px 15px; color: %s;">%s</td>
-</tr>`, textMuted, textSecondary, s.htmlEscape(event.Message))
+		detailsTable.WriteString(renderTDRow("Details", s.htmlEscape(event.Message), ""))
 		messageContent = fmt.Sprintf(`<p style="font-size: 13px; color: %s; margin: 0 0 20px 0;">Details: %s</p>`, textDim, s.htmlEscape(event.Message))
 	}
 

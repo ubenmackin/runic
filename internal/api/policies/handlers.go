@@ -343,7 +343,7 @@ func (h *Handler) UpdatePolicy(w http.ResponseWriter, r *http.Request) {
 
 	err = store.RunInTx(r.Context(), h.beginner, func(tx *sql.Tx) error {
 		if err := h.Store.UpdatePolicyTx(r.Context(), tx, &p); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
+			if errors.Is(err, store.ErrPolicyNotFound) {
 				return common.NewHTTPError(http.StatusNotFound, "policy not found")
 			}
 			return fmt.Errorf("failed to update policy: %w", err)
@@ -424,7 +424,7 @@ func (h *Handler) DeletePolicy(w http.ResponseWriter, r *http.Request) {
 
 	err = store.RunInTx(r.Context(), h.beginner, func(tx *sql.Tx) error {
 		if err := h.Store.SoftDeletePolicyTx(r.Context(), tx, id); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
+			if errors.Is(err, store.ErrPolicyNotFound) {
 				return common.NewHTTPError(http.StatusNotFound, "policy not found")
 			}
 			return fmt.Errorf("failed to soft delete: %w", err)
@@ -544,7 +544,7 @@ func (h *Handler) PatchPolicy(w http.ResponseWriter, r *http.Request) {
 
 	err = store.RunInTx(r.Context(), h.beginner, func(tx *sql.Tx) error {
 		if err := h.Store.PatchPolicyEnabledTx(r.Context(), tx, id, *input.Enabled); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
+			if errors.Is(err, store.ErrPolicyNotFound) {
 				return common.NewHTTPError(http.StatusNotFound, "policy not found")
 			}
 			return fmt.Errorf("failed to patch policy: %w", err)

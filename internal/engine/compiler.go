@@ -13,19 +13,7 @@ import (
 	"runic/internal/common/log"
 	"runic/internal/db"
 	"runic/internal/models"
-)
-
-// Special target IDs for multicast groups
-const (
-	SpecialIDSubnetBroadcast  = 1 // __subnet_broadcast__
-	SpecialIDLimitedBroadcast = 2 // __limited_broadcast__
-	SpecialIDAllHosts         = 3 // __all_hosts__ (IGMP)
-	SpecialIDmDNS             = 4 // __mdns__
-	SpecialIDLoopback         = 5 // __loopback__
-	SpecialIDAnyIP            = 6 // __any_ip__
-	SpecialIDAllPeers         = 7 // __all_peers__
-	SpecialIDIGMPv3           = 8 // __igmpv3__
-	SpecialIDInternet         = 9 // __internet__
+	"runic/internal/resolve"
 )
 
 // Well-known system service names. These names are reserved and must match
@@ -40,11 +28,11 @@ const (
 )
 
 func isMulticastSpecialID(id int) bool {
-	return id == SpecialIDAllHosts || id == SpecialIDmDNS || id == SpecialIDIGMPv3
+	return id == resolve.SpecialIDAllHosts || id == resolve.SpecialIDmDNS || id == resolve.SpecialIDIGMPv3
 }
 
 func isBroadcastSpecialID(id int) bool {
-	return id == SpecialIDSubnetBroadcast || id == SpecialIDLimitedBroadcast
+	return id == resolve.SpecialIDSubnetBroadcast || id == resolve.SpecialIDLimitedBroadcast
 }
 
 // PeerHostnameLookup is the shared type for hostname resolution by peer ID.
@@ -127,13 +115,6 @@ func (rw *ruleWriter) writeAction(action, chain, match string) {
 }
 
 // If the string already contains a "/", it is returned as-is.
-func normalizeToCIDR(ip string) string {
-	if strings.Contains(ip, "/") {
-		return ip
-	}
-	return ip + "/32"
-}
-
 func (c *Compiler) formatEntityName(ctx context.Context, entityType string, entityID int) string {
 	switch entityType {
 	case "special":
@@ -167,15 +148,15 @@ func (c *Compiler) formatEntityName(ctx context.Context, entityType string, enti
 
 func (c *Compiler) getSpecialDisplayName(specialID int) string {
 	names := map[int]string{
-		SpecialIDSubnetBroadcast:  "Subnet Broadcast",
-		SpecialIDLimitedBroadcast: "Limited Broadcast",
-		SpecialIDAllHosts:         "All Hosts (IGMP)",
-		SpecialIDmDNS:             "mDNS",
-		SpecialIDLoopback:         "Loopback",
-		SpecialIDAnyIP:            "Any IP",
-		SpecialIDAllPeers:         "All Peers",
-		SpecialIDIGMPv3:           "IGMPv3",
-		SpecialIDInternet:         "Internet",
+		resolve.SpecialIDSubnetBroadcast:  "Subnet Broadcast",
+		resolve.SpecialIDLimitedBroadcast: "Limited Broadcast",
+		resolve.SpecialIDAllHosts:         "All Hosts (IGMP)",
+		resolve.SpecialIDmDNS:             "mDNS",
+		resolve.SpecialIDLoopback:         "Loopback",
+		resolve.SpecialIDAnyIP:            "Any IP",
+		resolve.SpecialIDAllPeers:         "All Peers",
+		resolve.SpecialIDIGMPv3:           "IGMPv3",
+		resolve.SpecialIDInternet:         "Internet",
 	}
 	if name, ok := names[specialID]; ok {
 		return name
@@ -265,7 +246,7 @@ func (c *Compiler) loadApplicablePolicies(ctx context.Context, peerID int) ([]po
 		(p.source_type = 'special' AND p.target_type = 'peer' AND p.target_id = ?)
 		)
 		ORDER BY p.priority ASC`,
-		peerID, peerID, peerID, peerID, peerID, peerID, SpecialIDSubnetBroadcast, SpecialIDLimitedBroadcast, SpecialIDAllHosts, SpecialIDmDNS, SpecialIDIGMPv3, peerID, SpecialIDSubnetBroadcast, SpecialIDLimitedBroadcast, SpecialIDAllHosts, SpecialIDmDNS, SpecialIDIGMPv3, peerID, peerID, peerID, peerID, peerID, peerID, peerID, peerID, peerID)
+		peerID, peerID, peerID, peerID, peerID, peerID, resolve.SpecialIDSubnetBroadcast, resolve.SpecialIDLimitedBroadcast, resolve.SpecialIDAllHosts, resolve.SpecialIDmDNS, resolve.SpecialIDIGMPv3, peerID, resolve.SpecialIDSubnetBroadcast, resolve.SpecialIDLimitedBroadcast, resolve.SpecialIDAllHosts, resolve.SpecialIDmDNS, resolve.SpecialIDIGMPv3, peerID, peerID, peerID, peerID, peerID, peerID, peerID, peerID, peerID)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("load policies: %w", err)
 	}
@@ -428,7 +409,14 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 		return "", err
 	}
 
-	return c.generateIptablesPayload(ctx, hostname, ipAddress, hasDocker, hasIPSet, policies, services, ipsets, groupIDToIpsetName)
+	// Load control plane port up-front (was previously a hidden side-effect inside generateIptablesPayload)
+	var controlPlanePort string
+	if err := c.db.QueryRowContext(ctx, "SELECT value FROM system_config WHERE key = 'control_plane_port'").Scan(&controlPlanePort); err != nil {
+		log.WarnContext(ctx, "Failed to load control_plane_port, using default 8080", "error", err)
+		controlPlanePort = "8080"
+	}
+
+	return c.generateIptablesPayload(ctx, hostname, ipAddress, hasDocker, hasIPSet, policies, services, ipsets, groupIDToIpsetName, controlPlanePort)
 }
 
 func (c *Compiler) generateIptablesPayload(
@@ -439,28 +427,46 @@ func (c *Compiler) generateIptablesPayload(
 	services map[int]ServiceInfo,
 	ipsets []ipsetData,
 	groupIDToIpsetName map[int]string,
+	controlPlanePort string,
 ) (string, error) {
-	// 3. Build the iptables-restore output
 	var buf strings.Builder
 	rw := &ruleWriter{buf: &buf}
-	now := time.Now().UTC().Format(time.RFC3339)
 
-	// Header comment
-	buf.WriteString("# Runic rule bundle\n")
-	fmt.Fprintf(&buf, "# Host: %s\n", hostname)
-	fmt.Fprintf(&buf, "# Generated: %s\n", now)
-	fmt.Fprintf(&buf, "# Policies: %d\n", len(policies))
-	if hasIPSet && len(ipsets) > 0 {
-		fmt.Fprintf(&buf, "# Ipsets: %d\n", len(ipsets))
+	c.writePayloadHeader(&buf, hostname, policies, hasIPSet, ipsets)
+	c.writeIpsetDefinitions(&buf, hasIPSet, ipsets)
+	c.writeFilterTableHeader(&buf, hasDocker)
+	rw.writeStandardRules(hasDocker, controlPlanePort)
+
+	if err := c.writePolicySection(ctx, &buf, rw, policies, services, ipsets, groupIDToIpsetName, hasDocker, hasIPSet, ipAddress); err != nil {
+		return "", err
 	}
 
-	// Ipset definitions (before *filter)
+	c.writeLoggingSection(&buf, hasDocker)
+	buf.WriteString("\nCOMMIT\n")
+
+	return buf.String(), nil
+}
+
+// writePayloadHeader writes the comment header at the top of the bundle.
+func (c *Compiler) writePayloadHeader(buf *strings.Builder, hostname string, policies []policyInfo, hasIPSet bool, ipsets []ipsetData) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	buf.WriteString("# Runic rule bundle\n")
+	fmt.Fprintf(buf, "# Host: %s\n", hostname)
+	fmt.Fprintf(buf, "# Generated: %s\n", now)
+	fmt.Fprintf(buf, "# Policies: %d\n", len(policies))
+	if hasIPSet && len(ipsets) > 0 {
+		fmt.Fprintf(buf, "# Ipsets: %d\n", len(ipsets))
+	}
+}
+
+// writeIpsetDefinitions writes ipset create/add definitions (before *filter).
+func (c *Compiler) writeIpsetDefinitions(buf *strings.Builder, hasIPSet bool, ipsets []ipsetData) {
 	if hasIPSet && len(ipsets) > 0 {
 		buf.WriteString("\n# --- Ipset Definitions ---\n")
 		for _, is := range ipsets {
-			fmt.Fprintf(&buf, "create %s %s family inet\n", is.Name, is.SetType)
+			fmt.Fprintf(buf, "create %s %s family inet\n", is.Name, is.SetType)
 			for _, member := range is.Members {
-				fmt.Fprintf(&buf, "add %s %s\n", is.Name, member)
+				fmt.Fprintf(buf, "add %s %s\n", is.Name, member)
 			}
 			buf.WriteString("\n")
 		}
@@ -471,272 +477,310 @@ func (c *Compiler) generateIptablesPayload(
 		buf.WriteString("# --- Ipset: Private Ranges for __internet__ exclusion ---\n")
 		buf.WriteString("create runic_private_ranges hash:net family inet\n")
 		for _, cidr := range privateCIDRs {
-			fmt.Fprintf(&buf, "add runic_private_ranges %s\n", cidr)
+			fmt.Fprintf(buf, "add runic_private_ranges %s\n", cidr)
 		}
 		buf.WriteString("\n")
 	}
+}
 
-	// Filter table and chain policies
+// writeFilterTableHeader writes the *filter table declaration and chain policies.
+func (c *Compiler) writeFilterTableHeader(buf *strings.Builder, hasDocker bool) {
 	buf.WriteString("*filter\n")
 	buf.WriteString(":INPUT DROP [0:0]\n")
 	buf.WriteString(":OUTPUT DROP [0:0]\n")
 	buf.WriteString(":FORWARD DROP [0:0]\n")
-
-	// Docker chain declaration if needed
 	if hasDocker {
 		buf.WriteString(":DOCKER-USER - [0:0]\n")
 	}
+	buf.WriteString("\n")
+}
+
+// writePolicySection iterates over all policies and generates corresponding iptables rules.
+func (c *Compiler) writePolicySection(
+	ctx context.Context,
+	buf *strings.Builder,
+	rw *ruleWriter,
+	policies []policyInfo,
+	services map[int]ServiceInfo,
+	ipsets []ipsetData,
+	groupIDToIpsetName map[int]string,
+	hasDocker bool,
+	hasIPSet bool,
+	ipAddress string,
+) error {
+	for i := range policies {
+		if err := c.writeSinglePolicy(ctx, buf, rw, &policies[i], services, groupIDToIpsetName, hasDocker, hasIPSet, ipAddress); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// writeSinglePolicy generates iptables rules for a single policy.
+func (c *Compiler) writeSinglePolicy(
+	ctx context.Context,
+	buf *strings.Builder,
+	rw *ruleWriter,
+	pol *policyInfo,
+	services map[int]ServiceInfo,
+	groupIDToIpsetName map[int]string,
+	hasDocker bool,
+	hasIPSet bool,
+	ipAddress string,
+) error {
+	writeToHost, writeToDocker := c.scopeFlags(pol.TargetScope, hasDocker)
+
+	svc, ok := services[pol.ServiceID]
+	if !ok {
+		return fmt.Errorf("service %d not found", pol.ServiceID)
+	}
+	serviceName := svc.Name
+	ports := svc.Ports
+	sourcePorts := svc.SourcePorts
+	protocol := svc.Protocol
+	noConntrack := svc.NoConntrack
+
+	// Expand ports for non-multicast, non-broadcast, and non-IGMP/VRRP services
+	var portClauses []PortClause
+	isBroadcastService := serviceName == systemServiceSubnetBroadcast || serviceName == systemServiceLimitedBroadcast
+	isIGMPorVRRP := strings.EqualFold(serviceName, systemServiceIGMP) || strings.EqualFold(serviceName, systemServiceVRRP)
+	if serviceName != systemServiceMulticast && !isBroadcastService && !isIGMPorVRRP {
+		var err error
+		portClauses, err = ExpandPorts(ports, sourcePorts, protocol)
+		if err != nil {
+			return fmt.Errorf("expand ports for policy %s: %w", pol.Name, err)
+		}
+	}
+
+	fmt.Fprintf(buf, "# --- Policy: %s ---\n", pol.Name)
+
+	// IG-001: Special IGMP handling - skip normal source/target resolution
+	// VRRP-001: Special VRRP handling - skip normal source/target resolution
+	if strings.EqualFold(serviceName, systemServiceIGMP) || strings.EqualFold(serviceName, systemServiceVRRP) {
+		if writeToHost {
+			if strings.EqualFold(serviceName, systemServiceIGMP) {
+				c.writeIGMPRules(rw, pol.TargetScope, hasDocker)
+			} else if strings.EqualFold(serviceName, systemServiceVRRP) {
+				c.writeVRRPRules(rw, pol.TargetScope, hasDocker)
+			}
+		}
+		buf.WriteString("\n")
+		return nil
+	}
+
+	// Process as TARGET (Ingress traffic)
+	if err := c.writeTargetSection(ctx, buf, rw, pol, portClauses, serviceName, protocol, groupIDToIpsetName, hasDocker, hasIPSet, ipAddress, writeToHost, writeToDocker, noConntrack); err != nil {
+		return err
+	}
+
+	// Process as SOURCE (Egress traffic)
+	if err := c.writeSourceSection(ctx, buf, rw, pol, portClauses, serviceName, groupIDToIpsetName, hasDocker, hasIPSet, ipAddress, writeToHost, writeToDocker, noConntrack); err != nil {
+		return err
+	}
 
 	buf.WriteString("\n")
+	return nil
+}
 
-	// Query control plane port before calling writeStandardRules
-	var controlPlanePort string
-	if err := c.db.QueryRowContext(ctx, "SELECT value FROM system_config WHERE key = 'control_plane_port'").Scan(&controlPlanePort); err != nil {
-		log.WarnContext(ctx, "Failed to load control_plane_port, using default 8080", "error", err)
-		controlPlanePort = "8080"
+// writeTargetSection handles the "As Target" (Ingress) processing for a single policy.
+func (c *Compiler) writeTargetSection(
+	ctx context.Context,
+	buf *strings.Builder,
+	rw *ruleWriter,
+	pol *policyInfo,
+	portClauses []PortClause,
+	serviceName, protocol string,
+	groupIDToIpsetName map[int]string,
+	hasDocker, hasIPSet bool,
+	ipAddress string,
+	writeToHost, writeToDocker bool,
+	noConntrack bool,
+) error {
+	// MD-001: Skip "As Target" when target is a multicast/broadcast special.
+	isSpecialMulticastOrBroadcastTarget := pol.TargetType == "special" &&
+		(isMulticastSpecialID(pol.TargetID) || isBroadcastSpecialID(pol.TargetID))
+	if !pol.IsTarget || (pol.Direction != "both" && pol.Direction != "backward") || isSpecialMulticastOrBroadcastTarget {
+		return nil
 	}
 
-	// Standard rules (extracted to helper)
-	rw.writeStandardRules(hasDocker, controlPlanePort)
+	sourceName := c.formatEntityName(ctx, pol.SourceType, pol.SourceID)
+	fmt.Fprintf(buf, "# As Target (Ingress from %s)\n", sourceName)
 
-	// Policy rules
-	for i := range policies {
-		pol := &policies[i]
-		writeToHost, writeToDocker := c.scopeFlags(pol.TargetScope, hasDocker)
+	isMulticastSource := pol.SourceType == "special" && isMulticastSpecialID(pol.SourceID)
+	isBroadcastSource := pol.SourceType == "special" && isBroadcastSpecialID(pol.SourceID)
 
-		svc, ok := services[pol.ServiceID]
-		if !ok {
-			return "", fmt.Errorf("service %d not found", pol.ServiceID)
+	canUseIpset := hasIPSet && pol.SourceType == "group"
+	var ipsetName string
+	if canUseIpset {
+		ipsetName = groupIDToIpsetName[pol.SourceID]
+	}
+	useIpset := canUseIpset && ipsetName != ""
+
+	switch {
+	case isMulticastSource:
+		c.writeMulticastRule(rw, pol.Action, pol.TargetScope, hasDocker)
+	case isBroadcastSource:
+		cidrs, err := c.resolver.ResolveSpecialTarget(ctx, pol.SourceID, ipAddress)
+		if err != nil {
+			return fmt.Errorf("resolve broadcast source for policy %s: %w", pol.Name, err)
 		}
-		serviceName := svc.Name
-		ports := svc.Ports
-		sourcePorts := svc.SourcePorts
-		protocol := svc.Protocol
-		noConntrack := svc.NoConntrack
-
-		// Expand ports for non-multicast, non-broadcast, and non-IGMP/VRRP services
-		var portClauses []PortClause
-		isBroadcastService := serviceName == systemServiceSubnetBroadcast || serviceName == systemServiceLimitedBroadcast
-		isIGMPorVRRP := strings.EqualFold(serviceName, systemServiceIGMP) || strings.EqualFold(serviceName, systemServiceVRRP)
-		if serviceName != systemServiceMulticast && !isBroadcastService && !isIGMPorVRRP {
-			var err error
-			portClauses, err = ExpandPorts(ports, sourcePorts, protocol)
+		for _, cidr := range cidrs {
+			c.writeBroadcastRule(rw, pol.Action, pol.TargetScope, hasDocker, cidr, protocol)
+		}
+	case useIpset:
+		if serviceName == systemServiceMulticast {
+			c.writeMulticastRule(rw, pol.Action, pol.TargetScope, hasDocker)
+		} else {
+			rules, err := c.writeRules(pol, portClauses, true, ipsetName, nil, ipAddress, writeToHost, writeToDocker, noConntrack, "target", false)
 			if err != nil {
-				return "", fmt.Errorf("expand ports for policy %s: %w", pol.Name, err)
+				return err
+			}
+			for _, rule := range rules {
+				buf.WriteString(rule + "\n")
 			}
 		}
-
-		fmt.Fprintf(&buf, "# --- Policy: %s ---\n", pol.Name)
-
-		// IG-001: Special IGMP handling - skip normal source/target resolution
-		// VRRP-001: Special VRRP handling - skip normal source/target resolution
-		if strings.EqualFold(serviceName, systemServiceIGMP) || strings.EqualFold(serviceName, systemServiceVRRP) {
-			if writeToHost {
-				if strings.EqualFold(serviceName, systemServiceIGMP) {
-					c.writeIGMPRules(rw, pol.TargetScope, hasDocker)
-				} else if strings.EqualFold(serviceName, systemServiceVRRP) {
-					c.writeVRRPRules(rw, pol.TargetScope, hasDocker)
-				}
-			}
-			buf.WriteString("\n")
-			continue // Skip to next policy
+	default:
+		var cidrs []string
+		var err error
+		switch {
+		case pol.SourceType == "special":
+			cidrs, err = c.resolver.ResolveSpecialTarget(ctx, pol.SourceID, ipAddress)
+		case pol.SourceType == "peer" && pol.SourceIP != "":
+			cidrs = []string{resolve.NormalizeToCIDR(pol.SourceIP)}
+		default:
+			cidrs, err = c.resolver.ResolveEntity(ctx, pol.SourceType, pol.SourceID)
 		}
-
-		// Process as TARGET (Ingress traffic)
-		// Only emit if direction is 'both' or 'backward' (backward = target receives inbound from source)
-		// MD-001: Skip "As Target" when target is a multicast/broadcast special.
-		// When target is a multicast group (mDNS, All Hosts, IGMPv3) or broadcast address,
-		// the peer is the source of outbound traffic to that address. Generating "As Target"
-		// ingress rules would create self-referencing rules (INPUT from the peer's own IP)
-		// which are nonsensical. The useful rules are generated in the "As Source" block.
-		isSpecialMulticastOrBroadcastTarget := pol.TargetType == "special" &&
-			(isMulticastSpecialID(pol.TargetID) || isBroadcastSpecialID(pol.TargetID))
-		if pol.IsTarget && (pol.Direction == "both" || pol.Direction == "backward") && !isSpecialMulticastOrBroadcastTarget {
-			sourceName := c.formatEntityName(ctx, pol.SourceType, pol.SourceID)
-			fmt.Fprintf(&buf, "# As Target (Ingress from %s)\n", sourceName)
-
-			// MC-009: Multicast special targets as Source indicate the host receives multicast traffic
-			// When Source is a multicast special target (IDs 3=__all_hosts__, 4=__mdns__, 8=__igmpv3__),
-			// this means the host should receive multicast traffic from that group - GENERATE INPUT rules
-			isMulticastSource := pol.SourceType == "special" && isMulticastSpecialID(pol.SourceID)
-			// BC-003: Broadcast special targets as Source indicate the host receives broadcast traffic
-			// When Source is a broadcast special target (IDs 1=__subnet_broadcast__, 2=__limited_broadcast__),
-			// this means the host should receive broadcast traffic - GENERATE INPUT rules with -d (destination)
-			isBroadcastSource := pol.SourceType == "special" && isBroadcastSpecialID(pol.SourceID)
-
-			canUseIpset := hasIPSet && pol.SourceType == "group"
-			var ipsetName string
-			if canUseIpset {
-				ipsetName = groupIDToIpsetName[pol.SourceID]
+		if err != nil {
+			return fmt.Errorf("resolve source for policy %s: %w", pol.Name, err)
+		}
+		if serviceName == systemServiceMulticast {
+			c.writeMulticastRule(rw, pol.Action, pol.TargetScope, hasDocker)
+		} else {
+			rules, err := c.writeRules(pol, portClauses, false, "", cidrs, ipAddress, writeToHost, writeToDocker, noConntrack, "target", false)
+			if err != nil {
+				return err
 			}
-			useIpset := canUseIpset && ipsetName != ""
-
-			switch {
-			case isMulticastSource:
-				// Multicast source: use packet type matching for receiving multicast traffic
-				c.writeMulticastRule(rw, pol.Action, pol.TargetScope, hasDocker)
-			case isBroadcastSource:
-				// Broadcast source: resolve the broadcast address and use -d (destination) matching
-				cidrs, err := c.resolver.ResolveSpecialTarget(ctx, pol.SourceID, ipAddress)
-				if err != nil {
-					return "", fmt.Errorf("resolve broadcast source for policy %s: %w", pol.Name, err)
-				}
-				for _, cidr := range cidrs {
-					c.writeBroadcastRule(rw, pol.Action, pol.TargetScope, hasDocker, cidr, protocol)
-				}
-			case useIpset:
-				// Use ipset-based rules (single rule per port clause)
-				if serviceName == systemServiceMulticast {
-					c.writeMulticastRule(rw, pol.Action, pol.TargetScope, hasDocker)
-				} else {
-					rules, err := c.writeTargetRules(pol, portClauses, true, ipsetName, nil, ipAddress, writeToHost, writeToDocker, noConntrack)
-					if err != nil {
-						return "", err
-					}
-					for _, rule := range rules {
-						rw.buf.WriteString(rule + "\n")
-					}
-				}
-			default:
-				// Use individual rules (fallback for non-group or non-ipset peers)
-				var cidrs []string
-				var err error
-				switch {
-				case pol.SourceType == "special":
-					cidrs, err = c.resolver.ResolveSpecialTarget(ctx, pol.SourceID, ipAddress)
-				case pol.SourceType == "peer" && pol.SourceIP != "":
-					// Use the specific source_ip from the policy instead of peer's primary IP
-					cidrs = []string{normalizeToCIDR(pol.SourceIP)}
-				default:
-					cidrs, err = c.resolver.ResolveEntity(ctx, pol.SourceType, pol.SourceID)
-				}
-				if err != nil {
-					return "", fmt.Errorf("resolve source for policy %s: %w", pol.Name, err)
-				}
-				if serviceName == systemServiceMulticast {
-					c.writeMulticastRule(rw, pol.Action, pol.TargetScope, hasDocker)
-				} else {
-					rules, err := c.writeTargetRules(pol, portClauses, false, "", cidrs, ipAddress, writeToHost, writeToDocker, noConntrack)
-					if err != nil {
-						return "", err
-					}
-					for _, rule := range rules {
-						rw.buf.WriteString(rule + "\n")
-					}
-				}
+			for _, rule := range rules {
+				buf.WriteString(rule + "\n")
 			}
 		}
+	}
+	return nil
+}
 
-		// Process as SOURCE (Egress traffic)
-		// Only emit if direction is 'both' or 'forward' (forward = source sends outbound to target)
-		if pol.IsSource && (pol.Direction == "both" || pol.Direction == "forward") {
-			targetName := c.formatEntityName(ctx, pol.TargetType, pol.TargetID)
-			fmt.Fprintf(&buf, "# As Source (Egress to %s)\n", targetName)
-
-			isInternetTarget := pol.TargetType == "special" && pol.TargetID == SpecialIDInternet
-			useInternetIpset := hasIPSet && isInternetTarget
-
-			canUseIpset := hasIPSet && pol.TargetType == "group"
-			var ipsetName string
-			if canUseIpset {
-				ipsetName = groupIDToIpsetName[pol.TargetID]
-			}
-			useIpset := canUseIpset && ipsetName != ""
-
-			switch {
-			case useIpset:
-				// Use ipset-based rules (single rule per port clause)
-				if serviceName == systemServiceMulticast {
-					// MC-012: Only generate OUTPUT multicast rule when Target is a multicast special target
-					isMulticastTarget := pol.TargetType == "special" && isMulticastSpecialID(pol.TargetID)
-					if isMulticastTarget && pol.Action == "ACCEPT" {
-						if writeToHost {
-							buf.WriteString("-A OUTPUT -d 224.0.0.0/4 -m pkttype --pkt-type multicast -j ACCEPT\n")
-						}
-						if writeToDocker {
-							buf.WriteString("-A DOCKER-USER -d 224.0.0.0/4 -m pkttype --pkt-type multicast -j ACCEPT\n")
-						}
-					}
-				} else {
-					isMulticastTarget := pol.TargetType == "special" && isMulticastSpecialID(pol.TargetID)
-					rules, err := c.writeSourceRules(pol, portClauses, true, ipsetName, nil, ipAddress, writeToHost, writeToDocker, noConntrack, isMulticastTarget)
-					if err != nil {
-						return "", err
-					}
-					for _, rule := range rules {
-						rw.buf.WriteString(rule + "\n")
-					}
-				}
-			case useInternetIpset:
-				// __internet__ special target: use ipset negation to exclude private ranges
-				isMulticastTarget := false
-				rules, err := c.writeInternetRules(pol, portClauses, ipAddress, writeToHost, writeToDocker, noConntrack, isMulticastTarget)
-				if err != nil {
-					return "", err
-				}
-				for _, rule := range rules {
-					rw.buf.WriteString(rule + "\n")
-				}
-			default:
-				// Use individual rules (fallback for non-group or non-ipset peers)
-				var cidrs []string
-				var err error
-				switch {
-				case pol.TargetType == "special":
-					cidrs, err = c.resolver.ResolveSpecialTarget(ctx, pol.TargetID, ipAddress)
-				case pol.TargetType == "peer" && pol.TargetIP != "":
-					// Use the specific target_ip from the policy instead of peer's primary IP
-					cidrs = []string{normalizeToCIDR(pol.TargetIP)}
-				default:
-					cidrs, err = c.resolver.ResolveEntity(ctx, pol.TargetType, pol.TargetID)
-				}
-				if err != nil {
-					return "", fmt.Errorf("resolve target for policy %s: %w", pol.Name, err)
-				}
-				if serviceName == systemServiceMulticast {
-					// MC-012: Only generate OUTPUT multicast rule when Target is a multicast special target
-					isMulticastTarget := pol.TargetType == "special" && isMulticastSpecialID(pol.TargetID)
-					if isMulticastTarget && pol.Action == "ACCEPT" {
-						if writeToHost {
-							buf.WriteString("-A OUTPUT -d 224.0.0.0/4 -m pkttype --pkt-type multicast -j ACCEPT\n")
-						}
-						if writeToDocker {
-							buf.WriteString("-A DOCKER-USER -d 224.0.0.0/4 -m pkttype --pkt-type multicast -j ACCEPT\n")
-						}
-					}
-				} else {
-					isMulticastTarget := pol.TargetType == "special" && isMulticastSpecialID(pol.TargetID)
-					rules, err := c.writeSourceRules(pol, portClauses, false, "", cidrs, ipAddress, writeToHost, writeToDocker, noConntrack, isMulticastTarget)
-					if err != nil {
-						return "", err
-					}
-					for _, rule := range rules {
-						rw.buf.WriteString(rule + "\n")
-					}
-				}
-			}
-		}
-
-		buf.WriteString("\n")
+// writeSourceSection handles the "As Source" (Egress) processing for a single policy.
+func (c *Compiler) writeSourceSection(
+	ctx context.Context,
+	buf *strings.Builder,
+	rw *ruleWriter,
+	pol *policyInfo,
+	portClauses []PortClause,
+	serviceName string,
+	groupIDToIpsetName map[int]string,
+	hasDocker, hasIPSet bool,
+	ipAddress string,
+	writeToHost, writeToDocker bool,
+	noConntrack bool,
+) error {
+	if !pol.IsSource || (pol.Direction != "both" && pol.Direction != "forward") {
+		return nil
 	}
 
-	// Logging and default deny (always last)
+	targetName := c.formatEntityName(ctx, pol.TargetType, pol.TargetID)
+	fmt.Fprintf(buf, "# As Source (Egress to %s)\n", targetName)
+
+	isInternetTarget := pol.TargetType == "special" && pol.TargetID == resolve.SpecialIDInternet
+	useInternetIpset := hasIPSet && isInternetTarget
+
+	canUseIpset := hasIPSet && pol.TargetType == "group"
+	var ipsetName string
+	if canUseIpset {
+		ipsetName = groupIDToIpsetName[pol.TargetID]
+	}
+	useIpset := canUseIpset && ipsetName != ""
+
+	switch {
+	case useIpset:
+		if serviceName == systemServiceMulticast {
+			isMulticastTarget := pol.TargetType == "special" && isMulticastSpecialID(pol.TargetID)
+			if isMulticastTarget && pol.Action == "ACCEPT" {
+				if writeToHost {
+					buf.WriteString("-A OUTPUT -d 224.0.0.0/4 -m pkttype --pkt-type multicast -j ACCEPT\n")
+				}
+				if writeToDocker {
+					buf.WriteString("-A DOCKER-USER -d 224.0.0.0/4 -m pkttype --pkt-type multicast -j ACCEPT\n")
+				}
+			}
+		} else {
+			isMulticastTarget := pol.TargetType == "special" && isMulticastSpecialID(pol.TargetID)
+			rules, err := c.writeRules(pol, portClauses, true, ipsetName, nil, ipAddress, writeToHost, writeToDocker, noConntrack, "source", isMulticastTarget)
+			if err != nil {
+				return err
+			}
+			for _, rule := range rules {
+				buf.WriteString(rule + "\n")
+			}
+		}
+	case useInternetIpset:
+		isMulticastTarget := false
+		rules, err := c.writeRules(pol, portClauses, false, "", nil, ipAddress, writeToHost, writeToDocker, noConntrack, "internet", isMulticastTarget)
+		if err != nil {
+			return err
+		}
+		for _, rule := range rules {
+			buf.WriteString(rule + "\n")
+		}
+	default:
+		var cidrs []string
+		var err error
+		switch {
+		case pol.TargetType == "special":
+			cidrs, err = c.resolver.ResolveSpecialTarget(ctx, pol.TargetID, ipAddress)
+		case pol.TargetType == "peer" && pol.TargetIP != "":
+			cidrs = []string{resolve.NormalizeToCIDR(pol.TargetIP)}
+		default:
+			cidrs, err = c.resolver.ResolveEntity(ctx, pol.TargetType, pol.TargetID)
+		}
+		if err != nil {
+			return fmt.Errorf("resolve target for policy %s: %w", pol.Name, err)
+		}
+		if serviceName == systemServiceMulticast {
+			isMulticastTarget := pol.TargetType == "special" && isMulticastSpecialID(pol.TargetID)
+			if isMulticastTarget && pol.Action == "ACCEPT" {
+				if writeToHost {
+					buf.WriteString("-A OUTPUT -d 224.0.0.0/4 -m pkttype --pkt-type multicast -j ACCEPT\n")
+				}
+				if writeToDocker {
+					buf.WriteString("-A DOCKER-USER -d 224.0.0.0/4 -m pkttype --pkt-type multicast -j ACCEPT\n")
+				}
+			}
+		} else {
+			isMulticastTarget := pol.TargetType == "special" && isMulticastSpecialID(pol.TargetID)
+			rules, err := c.writeRules(pol, portClauses, false, "", cidrs, ipAddress, writeToHost, writeToDocker, noConntrack, "source", isMulticastTarget)
+			if err != nil {
+				return err
+			}
+			for _, rule := range rules {
+				buf.WriteString(rule + "\n")
+			}
+		}
+	}
+	return nil
+}
+
+// writeLoggingSection writes the final logging and default deny rules.
+func (c *Compiler) writeLoggingSection(buf *strings.Builder, hasDocker bool) {
 	buf.WriteString("# --- Logging and default deny ---\n")
 	buf.WriteString("-A INPUT -j LOG --log-prefix \"[RUNIC-DROP-I] \" --log-level 4\n")
 	buf.WriteString("-A INPUT -j DROP\n")
 	buf.WriteString("-A OUTPUT -j LOG --log-prefix \"[RUNIC-DROP-O] \" --log-level 4\n")
 	buf.WriteString("-A OUTPUT -j DROP\n")
 
-	// Docker section: RETURN at the end of DOCKER-USER chain
 	if hasDocker {
 		buf.WriteString("\n")
 		buf.WriteString("# --- Docker: DOCKER-USER chain default ---\n")
 		buf.WriteString("-A DOCKER-USER -j RETURN\n")
 	}
-
-	buf.WriteString("\nCOMMIT\n")
-
-	return buf.String(), nil
 }
 
 // IGMP is connectionless multicast, so no conntrack or return rules are needed.
@@ -801,10 +845,35 @@ func (c *Compiler) scopeFlags(targetScope string, hasDocker bool) (writeToHost, 
 	return
 }
 
-// When useIpset is true, ipsetName contains the ipset to match against.
-// When useIpset is false, cidrs contains the individual CIDRs to generate rules for.
-// noConntrack when true skips conntrack marking for multicast protocols.
-func (c *Compiler) writeTargetRules(
+// logDropRule generates a LOG + DROP rule pair for a given chain and match.
+// Uses direction-specific log prefix: RUNIC-DROP-I for INPUT/DOCKER-USER, RUNIC-DROP-O otherwise.
+func (c *Compiler) logDropRule(action, chain, match string) []string {
+	if action != "LOG_DROP" {
+		return []string{fmt.Sprintf("-A %s %s -j %s", chain, match, action)}
+	}
+	prefix := "[RUNIC-DROP-O] " // default for OUTPUT
+	if chain == "INPUT" || chain == "DOCKER-USER" {
+		prefix = "[RUNIC-DROP-I] "
+	}
+	return []string{
+		fmt.Sprintf("-A %s %s -j LOG --log-prefix %q --log-level 4", chain, match, prefix),
+		fmt.Sprintf("-A %s %s -j DROP", chain, match),
+	}
+}
+
+// --- Unified rule-writing ---
+//
+// writeRules generates iptables rules for a single policy's port clauses.
+// It consolidates writeTargetRules, writeSourceRules, and writeInternetRules into one function.
+//
+// ruleDir controls the direction:
+//
+//	"target" — rules are for ingress (INPUT matches source, OUTPUT is return traffic)
+//	"source" — rules are for egress (OUTPUT matches destination, INPUT is return traffic)
+//	"internet" — same as "source" but uses runic_private_ranges ipset negation
+//
+// isMulticastTarget when true adjusts INPUT return rule behavior for multicast targets.
+func (c *Compiler) writeRules(
 	pol *policyInfo,
 	portClauses []PortClause,
 	useIpset bool,
@@ -813,195 +882,20 @@ func (c *Compiler) writeTargetRules(
 	ipAddress string,
 	writeToHost, writeToDocker bool,
 	noConntrack bool,
-) ([]string, error) {
-	var rules []string
-	for _, pc := range portClauses {
-		inputPortMatch := pc.PortMatch
-		if pc.SrcPortMatch != "" {
-			inputPortMatch = pc.SrcPortMatch + " " + inputPortMatch
-		}
-		outputPortMatch := invertPortMatch(pc.PortMatch, pc.SrcPortMatch)
-
-		// Build conntrack part based on noConntrack flag
-		var conntrackFull string
-		if noConntrack {
-			conntrackFull = ""
-		} else {
-			conntrackFull = "-m conntrack --ctstate NEW,ESTABLISHED"
-		}
-
-		// Handle LOG_DROP action by generating two rules: LOG then DROP
-		// Use direction-specific log prefix: RUNIC-DROP-I for INPUT, RUNIC-DROP-O for OUTPUT
-		handleLogDrop := func(action, chain, match string) {
-			if action == "LOG_DROP" {
-				prefix := "[RUNIC-DROP-O] " // default for OUTPUT
-				if chain == "INPUT" || chain == "DOCKER-USER" {
-					prefix = "[RUNIC-DROP-I] "
-				}
-				rules = append(rules,
-					fmt.Sprintf("-A %s %s -j LOG --log-prefix %q --log-level 4", chain, match, prefix),
-					fmt.Sprintf("-A %s %s -j DROP", chain, match),
-				)
-			} else {
-				rules = append(rules, fmt.Sprintf("-A %s %s -j %s", chain, match, action))
-			}
-		}
-
-		if useIpset {
-			ipsetMatchSrc := fmt.Sprintf("-m set --match-set %s src", ipsetName)
-			ipsetMatchDst := fmt.Sprintf("-m set --match-set %s dst", ipsetName)
-			if writeToHost {
-				if pol.Action == "ACCEPT" {
-					rules = append(rules,
-						fmt.Sprintf("-A INPUT -p %s %s %s %s -j %s", pc.Protocol, ipsetMatchSrc, inputPortMatch, conntrackFull, pol.Action),
-						fmt.Sprintf("-A OUTPUT -p %s %s %s %s -j ACCEPT", pc.Protocol, ipsetMatchDst, outputPortMatch, conntrackFull),
-					)
-				} else {
-					handleLogDrop(pol.Action, "INPUT", fmt.Sprintf("-p %s %s %s", pc.Protocol, ipsetMatchSrc, inputPortMatch))
-				}
-			}
-			if writeToDocker {
-				if pol.Action == "ACCEPT" {
-					rules = append(rules, fmt.Sprintf("-A DOCKER-USER -p %s %s %s %s -j %s", pc.Protocol, ipsetMatchSrc, inputPortMatch, conntrackFull, pol.Action))
-				} else {
-					handleLogDrop(pol.Action, "DOCKER-USER", fmt.Sprintf("-p %s %s %s", pc.Protocol, ipsetMatchSrc, inputPortMatch))
-				}
-			}
-		} else {
-			for _, cidr := range cidrs {
-				if writeToHost {
-					if pol.Action == "ACCEPT" {
-						rules = append(rules,
-							fmt.Sprintf("-A INPUT -s %s -p %s %s %s -j %s", cidr, pc.Protocol, inputPortMatch, conntrackFull, pol.Action),
-							fmt.Sprintf("-A OUTPUT -d %s -p %s %s %s -j ACCEPT", cidr, pc.Protocol, outputPortMatch, conntrackFull),
-						)
-					} else {
-						handleLogDrop(pol.Action, "INPUT", fmt.Sprintf("-s %s -p %s %s", cidr, pc.Protocol, inputPortMatch))
-					}
-				}
-				if writeToDocker {
-					if pol.Action == "ACCEPT" {
-						rules = append(rules, fmt.Sprintf("-A DOCKER-USER -s %s -p %s %s %s -j %s", cidr, pc.Protocol, inputPortMatch, conntrackFull, pol.Action))
-					} else {
-						rules = append(rules, fmt.Sprintf("-A DOCKER-USER -s %s -p %s %s -j %s", cidr, pc.Protocol, inputPortMatch, pol.Action))
-					}
-				}
-			}
-		}
-	}
-	return rules, nil
-}
-
-// When useIpset is true, ipsetName contains the ipset to match against.
-// When useIpset is false, cidrs contains the individual CIDRs to generate rules for.
-// noConntrack when true skips conntrack marking for multicast protocols.
-// isMulticastTarget when true indicates the target is a multicast special target (3=__all_hosts__, 4=__mdns__, 8=__igmpv3__)
-func (c *Compiler) writeSourceRules(
-	pol *policyInfo,
-	portClauses []PortClause,
-	useIpset bool,
-	ipsetName string,
-	cidrs []string,
-	ipAddress string,
-	writeToHost, writeToDocker bool,
-	noConntrack bool,
-	isMulticastTarget bool,
-) ([]string, error) {
-	var rules []string
-	for _, pc := range portClauses {
-		outputPortMatch := pc.PortMatch
-		if pc.SrcPortMatch != "" {
-			outputPortMatch = pc.SrcPortMatch + " " + outputPortMatch
-		}
-		inputPortMatch := invertPortMatch(pc.PortMatch, pc.SrcPortMatch)
-
-		// Build conntrack part based on noConntrack flag
-		var conntrackFull string
-		if noConntrack {
-			conntrackFull = ""
-		} else {
-			conntrackFull = "-m conntrack --ctstate NEW,ESTABLISHED"
-		}
-
-		// MC-010/MD-002: For multicast targets, determine INPUT return rule behavior.
-		// When noConntrack is true (e.g., mDNS), skip INPUT return rules entirely.
-		// mDNS responses arrive as multicast themselves, so a separate INPUT return
-		// rule is unnecessary and overly permissive (would accept from 0.0.0.0/0).
-		// When noConntrack is false, use 0.0.0.0/0 with conntrack ESTABLISHED state
-		// since responses come from individual hosts, not the multicast address.
-		var returnCIDRs []string
-		if isMulticastTarget {
-			if noConntrack {
-				// Skip INPUT return rules for no_conntrack multicast services
-				returnCIDRs = nil
-			} else {
-				returnCIDRs = []string{"0.0.0.0/0"}
-			}
-		} else {
-			returnCIDRs = cidrs
-		}
-
-		// Filter out self-referencing rules (peer connecting to itself)
-		filteredCidrs := make([]string, 0, len(cidrs))
-		for _, cidr := range cidrs {
-			if cidr != ipAddress+"/32" {
-				filteredCidrs = append(filteredCidrs, cidr)
-			}
-		}
-		cidrs = filteredCidrs
-
-		// Same for returnCIDRs
-		filteredReturnCidrs := make([]string, 0, len(returnCIDRs))
-		for _, cidr := range returnCIDRs {
-			if cidr != ipAddress+"/32" {
-				filteredReturnCidrs = append(filteredReturnCidrs, cidr)
-			}
-		}
-		returnCIDRs = filteredReturnCidrs
-
-		if useIpset {
-			ipsetMatchSrc := fmt.Sprintf("-m set --match-set %s src", ipsetName)
-			ipsetMatchDst := fmt.Sprintf("-m set --match-set %s dst", ipsetName)
-			rules = append(rules,
-				fmt.Sprintf("-A OUTPUT -p %s %s %s %s -j %s", pc.Protocol, ipsetMatchDst, outputPortMatch, conntrackFull, pol.Action),
-				fmt.Sprintf("-A INPUT -p %s %s %s %s -j %s", pc.Protocol, ipsetMatchSrc, inputPortMatch, conntrackFull, pol.Action),
-			)
-		} else {
-			for _, cidr := range cidrs {
-				if pol.Action == "ACCEPT" {
-					rules = append(rules, fmt.Sprintf("-A OUTPUT -d %s -p %s %s %s -j %s", cidr, pc.Protocol, outputPortMatch, conntrackFull, pol.Action))
-				} else {
-					rules = append(rules, fmt.Sprintf("-A OUTPUT -d %s -p %s %s -j %s", cidr, pc.Protocol, outputPortMatch, pol.Action))
-				}
-			}
-			for _, returnCidr := range returnCIDRs {
-				if pol.Action == "ACCEPT" {
-					rules = append(rules, fmt.Sprintf("-A INPUT -s %s -p %s %s %s -j ACCEPT", returnCidr, pc.Protocol, inputPortMatch, conntrackFull))
-				}
-			}
-		}
-	}
-	return rules, nil
-}
-
-// Uses ipset negation to match all IPs except private ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8).
-func (c *Compiler) writeInternetRules(
-	pol *policyInfo,
-	portClauses []PortClause,
-	ipAddress string,
-	writeToHost, writeToDocker bool,
-	noConntrack bool,
+	ruleDir string,
 	isMulticastTarget bool,
 ) ([]string, error) {
 	var rules []string
 	privateIpsetMatch := "-m set ! --match-set runic_private_ranges dst"
 
 	for _, pc := range portClauses {
-		outputPortMatch := pc.PortMatch
+		// Build port matches depending on direction
+		var primaryPortMatch, returnPortMatch string
+		primaryPortMatch = pc.PortMatch
 		if pc.SrcPortMatch != "" {
-			outputPortMatch = pc.SrcPortMatch + " " + outputPortMatch
+			primaryPortMatch = pc.SrcPortMatch + " " + primaryPortMatch
 		}
-		inputPortMatch := invertPortMatch(pc.PortMatch, pc.SrcPortMatch)
+		returnPortMatch = invertPortMatch(pc.PortMatch, pc.SrcPortMatch)
 
 		// Build conntrack part based on noConntrack flag
 		var conntrackFull string
@@ -1011,23 +905,153 @@ func (c *Compiler) writeInternetRules(
 			conntrackFull = "-m conntrack --ctstate NEW,ESTABLISHED"
 		}
 
-		// Use negation ipset match to exclude private ranges
-		privateIpsetMatchSrc := "-m set ! --match-set runic_private_ranges src"
-		if writeToHost {
-			if pol.Action == "ACCEPT" {
-				rules = append(rules,
-					fmt.Sprintf("-A OUTPUT -p %s %s %s %s -j %s", pc.Protocol, privateIpsetMatch, outputPortMatch, conntrackFull, pol.Action),
-					fmt.Sprintf("-A INPUT -p %s %s %s %s -j ACCEPT", pc.Protocol, privateIpsetMatchSrc, inputPortMatch, conntrackFull),
-				)
+		// For "source" direction, determine return CIDRs with multicast adjustments
+		var returnCIDRs []string
+		if ruleDir == "source" || ruleDir == "internet" {
+			if isMulticastTarget {
+				if noConntrack {
+					returnCIDRs = nil
+				} else {
+					returnCIDRs = []string{"0.0.0.0/0"}
+				}
 			} else {
-				rules = append(rules, fmt.Sprintf("-A OUTPUT -p %s %s %s -j %s", pc.Protocol, privateIpsetMatch, outputPortMatch, pol.Action))
+				returnCIDRs = cidrs
 			}
 		}
-		if writeToDocker {
-			if pol.Action == "ACCEPT" {
-				rules = append(rules, fmt.Sprintf("-A DOCKER-USER -p %s %s %s %s -j %s", pc.Protocol, privateIpsetMatch, outputPortMatch, conntrackFull, pol.Action))
-			} else {
-				rules = append(rules, fmt.Sprintf("-A DOCKER-USER -p %s %s %s -j %s", pc.Protocol, privateIpsetMatch, outputPortMatch, pol.Action))
+
+		if useIpset {
+			ipsetMatchPrimary := fmt.Sprintf("-m set --match-set %s src", ipsetName)
+			ipsetMatchReturn := fmt.Sprintf("-m set --match-set %s dst", ipsetName)
+			// For source direction, swap the ipset match roles
+			if ruleDir == "source" {
+				ipsetMatchPrimary, ipsetMatchReturn = ipsetMatchReturn, ipsetMatchPrimary
+			}
+
+			if writeToHost {
+				if pol.Action == "ACCEPT" {
+					switch ruleDir {
+					case "target":
+						rules = append(rules,
+							fmt.Sprintf("-A INPUT -p %s %s %s %s -j %s", pc.Protocol, ipsetMatchPrimary, primaryPortMatch, conntrackFull, pol.Action),
+							fmt.Sprintf("-A OUTPUT -p %s %s %s %s -j ACCEPT", pc.Protocol, ipsetMatchReturn, returnPortMatch, conntrackFull),
+						)
+					case "source":
+						rules = append(rules,
+							fmt.Sprintf("-A OUTPUT -p %s %s %s %s -j %s", pc.Protocol, ipsetMatchPrimary, primaryPortMatch, conntrackFull, pol.Action),
+							fmt.Sprintf("-A INPUT -p %s %s %s %s -j %s", pc.Protocol, ipsetMatchReturn, returnPortMatch, conntrackFull, pol.Action),
+						)
+					case "internet":
+						rules = append(rules,
+							fmt.Sprintf("-A OUTPUT -p %s %s %s %s -j %s", pc.Protocol, privateIpsetMatch, primaryPortMatch, conntrackFull, pol.Action),
+							fmt.Sprintf("-A INPUT -p %s %s %s %s -j ACCEPT", pc.Protocol, "-m set ! --match-set runic_private_ranges src", returnPortMatch, conntrackFull),
+						)
+					}
+				} else {
+					chain := "INPUT"
+					if ruleDir == "source" || ruleDir == "internet" {
+						chain = "OUTPUT"
+					}
+					match := fmt.Sprintf("-p %s %s %s", pc.Protocol, ipsetMatchPrimary, primaryPortMatch)
+					if ruleDir == "internet" {
+						match = fmt.Sprintf("-p %s %s %s", pc.Protocol, privateIpsetMatch, primaryPortMatch)
+					}
+					rules = append(rules, c.logDropRule(pol.Action, chain, match)...)
+				}
+			}
+			if writeToDocker {
+				if pol.Action == "ACCEPT" {
+					switch ruleDir {
+					case "target":
+						rules = append(rules, fmt.Sprintf("-A DOCKER-USER -p %s %s %s %s -j %s", pc.Protocol, ipsetMatchPrimary, primaryPortMatch, conntrackFull, pol.Action))
+					case "source":
+						rules = append(rules, fmt.Sprintf("-A DOCKER-USER -p %s %s %s %s -j %s", pc.Protocol, ipsetMatchPrimary, primaryPortMatch, conntrackFull, pol.Action))
+					case "internet":
+						rules = append(rules, fmt.Sprintf("-A DOCKER-USER -p %s %s %s %s -j %s", pc.Protocol, privateIpsetMatch, primaryPortMatch, conntrackFull, pol.Action))
+					}
+				} else {
+					match := fmt.Sprintf("-p %s %s %s", pc.Protocol, ipsetMatchPrimary, primaryPortMatch)
+					if ruleDir == "internet" {
+						match = fmt.Sprintf("-p %s %s %s", pc.Protocol, privateIpsetMatch, primaryPortMatch)
+					}
+					rules = append(rules, c.logDropRule(pol.Action, "DOCKER-USER", match)...)
+				}
+			}
+		} else {
+			// Filter out self-referencing CIDRs (peer connecting to itself).
+			// A CIDR is self-referencing if it exactly matches the peer's own
+			// IP address (normalized to CIDR notation). For example, peer with
+			// IP "10.0.0.1" has CIDR "10.0.0.1/32", so a source CIDR of
+			// "10.0.0.1/32" is self-referencing. A CIDR range like "10.0.0.0/24"
+			// is NOT self-referencing even if it contains the peer's IP.
+			var filteredCidrs []string
+			peerCIDR := resolve.NormalizeToCIDR(ipAddress)
+			for _, cidr := range cidrs {
+				if cidr != peerCIDR {
+					filteredCidrs = append(filteredCidrs, cidr)
+				}
+			}
+
+			for _, cidr := range filteredCidrs {
+				if writeToHost {
+					switch ruleDir {
+					case "target":
+						if pol.Action == "ACCEPT" {
+							rules = append(rules,
+								fmt.Sprintf("-A INPUT -s %s -p %s %s %s -j %s", cidr, pc.Protocol, primaryPortMatch, conntrackFull, pol.Action),
+								fmt.Sprintf("-A OUTPUT -d %s -p %s %s %s -j ACCEPT", cidr, pc.Protocol, returnPortMatch, conntrackFull),
+							)
+						} else {
+							rules = append(rules, c.logDropRule(pol.Action, "INPUT", fmt.Sprintf("-s %s -p %s %s", cidr, pc.Protocol, primaryPortMatch))...)
+						}
+					case "source":
+						if pol.Action == "ACCEPT" {
+							rules = append(rules, fmt.Sprintf("-A OUTPUT -d %s -p %s %s %s -j %s", cidr, pc.Protocol, primaryPortMatch, conntrackFull, pol.Action))
+						} else {
+							rules = append(rules, c.logDropRule(pol.Action, "OUTPUT", fmt.Sprintf("-d %s -p %s %s", cidr, pc.Protocol, primaryPortMatch))...)
+						}
+					case "internet":
+						if pol.Action == "ACCEPT" {
+							rules = append(rules, fmt.Sprintf("-A OUTPUT -d %s -p %s %s %s -j %s", cidr, pc.Protocol, primaryPortMatch, conntrackFull, pol.Action))
+						} else {
+							rules = append(rules, c.logDropRule(pol.Action, "OUTPUT", fmt.Sprintf("-d %s -p %s %s", cidr, pc.Protocol, primaryPortMatch))...)
+						}
+					}
+				}
+				if writeToDocker {
+					switch ruleDir {
+					case "target":
+						if pol.Action == "ACCEPT" {
+							rules = append(rules, fmt.Sprintf("-A DOCKER-USER -s %s -p %s %s %s -j %s", cidr, pc.Protocol, primaryPortMatch, conntrackFull, pol.Action))
+						} else {
+							rules = append(rules, c.logDropRule(pol.Action, "DOCKER-USER", fmt.Sprintf("-s %s -p %s %s", cidr, pc.Protocol, primaryPortMatch))...)
+						}
+					case "source":
+						if pol.Action == "ACCEPT" {
+							rules = append(rules, fmt.Sprintf("-A DOCKER-USER -d %s -p %s %s %s -j %s", cidr, pc.Protocol, primaryPortMatch, conntrackFull, pol.Action))
+						} else {
+							rules = append(rules, c.logDropRule(pol.Action, "DOCKER-USER", fmt.Sprintf("-d %s -p %s %s", cidr, pc.Protocol, primaryPortMatch))...)
+						}
+					case "internet":
+						if pol.Action == "ACCEPT" {
+							rules = append(rules, fmt.Sprintf("-A DOCKER-USER -d %s -p %s %s %s -j %s", cidr, pc.Protocol, primaryPortMatch, conntrackFull, pol.Action))
+						} else {
+							rules = append(rules, c.logDropRule(pol.Action, "DOCKER-USER", fmt.Sprintf("-d %s -p %s %s", cidr, pc.Protocol, primaryPortMatch))...)
+						}
+					}
+				}
+			}
+
+			// Generate INPUT return rules for source/internet direction
+			if (ruleDir == "source" || ruleDir == "internet") && pol.Action == "ACCEPT" {
+				var filteredReturnCidrs []string
+				for _, rc := range returnCIDRs {
+					if rc != peerCIDR {
+						filteredReturnCidrs = append(filteredReturnCidrs, rc)
+					}
+				}
+				for _, returnCidr := range filteredReturnCidrs {
+					rules = append(rules, fmt.Sprintf("-A INPUT -s %s -p %s %s %s -j ACCEPT", returnCidr, pc.Protocol, returnPortMatch, conntrackFull))
+				}
 			}
 		}
 	}
@@ -1091,7 +1115,7 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 		}
 	case sourceType == "peer" && sourceIP != "":
 		// Use the specific source_ip from the policy instead of peer's primary IP
-		sourceCIDRs = []string{normalizeToCIDR(sourceIP)}
+		sourceCIDRs = []string{resolve.NormalizeToCIDR(sourceIP)}
 	default:
 		sourceCIDRs, err = c.resolver.ResolveEntity(ctx, sourceType, sourceID)
 		if err != nil {
@@ -1109,7 +1133,7 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 		}
 	case targetType == "peer" && targetIP != "":
 		// Use the specific target_ip from the policy instead of peer's primary IP
-		targetCIDRs = []string{normalizeToCIDR(targetIP)}
+		targetCIDRs = []string{resolve.NormalizeToCIDR(targetIP)}
 	default:
 		targetCIDRs, err = c.resolver.ResolveEntity(ctx, targetType, targetID)
 		if err != nil {
@@ -1117,7 +1141,7 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 		}
 	}
 
-	isInternetTarget := targetType == "special" && targetID == SpecialIDInternet
+	isInternetTarget := targetType == "special" && targetID == resolve.SpecialIDInternet
 
 	// Build policy info for helper functions
 	pol := &policyInfo{
@@ -1155,8 +1179,7 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 			}
 			// Use writeSourceRules for forward direction (egress)
 			if isInternetTarget {
-				// Use writeInternetRules for internet target
-				writeRules, err := c.writeInternetRules(pol, portClauses, ipAddress, true, false, noConntrack, false)
+				writeRules, err := c.writeRules(pol, portClauses, false, "", nil, ipAddress, true, false, noConntrack, "internet", false)
 				if err != nil {
 					return nil, err
 				}
@@ -1164,7 +1187,7 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 			} else {
 				// Use writeSourceRules for regular targets
 				isMulticastTarget := targetType == "special" && isMulticastSpecialID(targetID)
-				writeRules, err := c.writeSourceRules(pol, portClauses, false, "", targetCIDRs, ipAddress, true, false, noConntrack, isMulticastTarget)
+				writeRules, err := c.writeRules(pol, portClauses, false, "", targetCIDRs, ipAddress, true, false, noConntrack, "source", isMulticastTarget)
 				if err != nil {
 					return nil, err
 				}
@@ -1189,7 +1212,7 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 				if serviceName == systemServiceMulticast {
 					rules = append(rules, "-A INPUT -m pkttype --pkt-type multicast -j ACCEPT")
 				} else {
-					writeRules, err := c.writeTargetRules(pol, portClauses, false, "", sourceCIDRs, ipAddress, true, false, noConntrack)
+					writeRules, err := c.writeRules(pol, portClauses, false, "", sourceCIDRs, ipAddress, true, false, noConntrack, "target", false)
 					if err != nil {
 						return nil, err
 					}
@@ -1202,7 +1225,7 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 				}
 			default:
 				// Use writeTargetRules for backward direction (ingress from source perspective)
-				writeRules, err := c.writeTargetRules(pol, portClauses, false, "", sourceCIDRs, ipAddress, true, false, noConntrack)
+				writeRules, err := c.writeRules(pol, portClauses, false, "", sourceCIDRs, ipAddress, true, false, noConntrack, "target", false)
 				if err != nil {
 					return nil, err
 				}
@@ -1239,14 +1262,14 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 				}
 				// Use writeSourceRules for Docker forward direction (egress to Docker)
 				if isInternetTarget {
-					writeRules, err := c.writeInternetRules(pol, portClauses, ipAddress, false, true, noConntrack, false)
+					writeRules, err := c.writeRules(pol, portClauses, false, "", nil, ipAddress, false, true, noConntrack, "internet", false)
 					if err != nil {
 						return nil, err
 					}
 					rules = append(rules, writeRules...)
 				} else {
 					isMulticastTarget := targetType == "special" && isMulticastSpecialID(targetID)
-					writeRules, err := c.writeSourceRules(pol, portClauses, false, "", targetCIDRs, ipAddress, false, true, noConntrack, isMulticastTarget)
+					writeRules, err := c.writeRules(pol, portClauses, false, "", targetCIDRs, ipAddress, false, true, noConntrack, "source", isMulticastTarget)
 					if err != nil {
 						return nil, err
 					}
@@ -1267,7 +1290,7 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 					if serviceName == systemServiceMulticast {
 						rules = append(rules, "-A DOCKER-USER -m pkttype --pkt-type multicast -j ACCEPT")
 					} else {
-						writeRules, err := c.writeTargetRules(pol, portClauses, false, "", sourceCIDRs, ipAddress, false, true, noConntrack)
+						writeRules, err := c.writeRules(pol, portClauses, false, "", sourceCIDRs, ipAddress, false, true, noConntrack, "target", false)
 						if err != nil {
 							return nil, err
 						}
@@ -1280,7 +1303,7 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 					}
 				default:
 					// Use writeTargetRules for Docker backward direction
-					writeRules, err := c.writeTargetRules(pol, portClauses, false, "", sourceCIDRs, ipAddress, false, true, noConntrack)
+					writeRules, err := c.writeRules(pol, portClauses, false, "", sourceCIDRs, ipAddress, false, true, noConntrack, "target", false)
 					if err != nil {
 						return nil, err
 					}
@@ -1305,9 +1328,6 @@ func (c *Compiler) CompileAndStore(ctx context.Context, peerID int) (models.Rule
 		return models.RuleBundleRow{}, fmt.Errorf("fetch peer HMAC key: %w", err)
 	}
 
-	version := Version(content)
-	signature := Sign(content, hmacKey)
-
 	// Compute next version number for this peer
 	var versionNumber int
 	err = c.db.QueryRowContext(ctx,
@@ -1315,6 +1335,9 @@ func (c *Compiler) CompileAndStore(ctx context.Context, peerID int) (models.Rule
 	if err != nil {
 		return models.RuleBundleRow{}, fmt.Errorf("get next version number: %w", err)
 	}
+
+	version := Version(content)
+	signature := SignWithVersion(content, hmacKey, versionNumber)
 
 	// Use db.SaveBundle to avoid duplicate transaction logic
 	params := models.CreateBundleParams{
@@ -1334,10 +1357,48 @@ func (c *Compiler) CompileAndStore(ctx context.Context, peerID int) (models.Rule
 }
 
 func (c *Compiler) RecompileAffectedPeers(ctx context.Context, groupID int) error {
+	// Collect all transitively related groups. When a peer is added to a group,
+	// it also affects any other group that shares peers with this group (transitive
+	// membership via overlapping group membership). We find all groups that share
+	// at least one peer with the given group, then recompile all affected peers
+	// for the entire set of related groups.
+	allGroupIDs := c.collectTransitiveGroupIDs(ctx, groupID)
+
+	// Collect all affected peer IDs from policies referencing any related group.
+	peerSet := make(map[int]bool)
+	for _, gid := range allGroupIDs {
+		policyIDs, err := c.findPoliciesByGroup(ctx, gid)
+		if err != nil {
+			return err
+		}
+
+		for _, pid := range policyIDs {
+			affected, err := c.GetAffectedPeersByPolicy(ctx, pid)
+			if err != nil {
+				log.ErrorContext(ctx, "Failed to get affected peers for recompile", "policy_id", pid, "error", err)
+				continue
+			}
+			for _, peerID := range affected {
+				peerSet[peerID] = true
+			}
+		}
+	}
+
+	for peerID := range peerSet {
+		if _, err := c.CompileAndStore(ctx, peerID); err != nil {
+			return fmt.Errorf("recompile peer %d: %w", peerID, err)
+		}
+	}
+	return nil
+}
+
+// findPoliciesByGroup returns IDs of enabled, non-deleted policies that reference
+// the given group as either source or target.
+func (c *Compiler) findPoliciesByGroup(ctx context.Context, groupID int) ([]int, error) {
 	rows, err := c.db.QueryContext(ctx,
 		`SELECT DISTINCT id FROM policies WHERE is_pending_delete = 0 AND ((source_type = 'group' AND source_id = ?) OR (target_type = 'group' AND target_id = ?)) AND enabled = 1`, groupID, groupID)
 	if err != nil {
-		return fmt.Errorf("find affected policies: %w", err)
+		return nil, fmt.Errorf("find affected policies for group %d: %w", groupID, err)
 	}
 	defer func() {
 		if err := rows.Close(); err != nil {
@@ -1349,32 +1410,64 @@ func (c *Compiler) RecompileAffectedPeers(ctx context.Context, groupID int) erro
 	for rows.Next() {
 		var id int
 		if err := rows.Scan(&id); err != nil {
-			return err
+			return nil, err
 		}
 		policyIDs = append(policyIDs, id)
 	}
 	if err := rows.Err(); err != nil {
-		return err
+		return nil, err
 	}
+	return policyIDs, nil
+}
 
-	peerSet := make(map[int]bool)
-	for _, pid := range policyIDs {
-		affected, err := c.GetAffectedPeersByPolicy(ctx, pid)
+// collectTransitiveGroupIDs finds all groups that are transitively related to
+// the given group through shared peer membership. For example, if groupA and
+// groupB both contain peer 42, then changes to groupA also affect groupB.
+// This returns the original groupID along with all transitively related groups.
+func (c *Compiler) collectTransitiveGroupIDs(ctx context.Context, groupID int) []int {
+	visited := make(map[int]bool)
+	var result []int
+
+	var walk func(gid int)
+	walk = func(gid int) {
+		if visited[gid] {
+			return
+		}
+		visited[gid] = true
+		result = append(result, gid)
+
+		// Find all groups that share at least one peer with this group.
+		rows, err := c.db.QueryContext(ctx, `
+			SELECT DISTINCT gm2.group_id
+			FROM group_members gm1
+			JOIN group_members gm2 ON gm1.peer_id = gm2.peer_id AND gm2.group_id != gm1.group_id
+			JOIN groups g ON gm2.group_id = g.id
+			WHERE gm1.group_id = ? AND g.is_pending_delete = 0`, gid)
 		if err != nil {
-			log.ErrorContext(ctx, "Failed to get affected peers for recompile", "policy_id", pid, "error", err)
-			continue
+			log.WarnContext(ctx, "Failed to find transitive groups", "group_id", gid, "error", err)
+			return
 		}
-		for _, peerID := range affected {
-			peerSet[peerID] = true
+		defer func() {
+			if cErr := rows.Close(); cErr != nil {
+				log.Warn("close err", "err", cErr)
+			}
+		}()
+
+		for rows.Next() {
+			var relatedGID int
+			if err := rows.Scan(&relatedGID); err != nil {
+				log.WarnContext(ctx, "Failed to scan related group", "error", err)
+				continue
+			}
+			walk(relatedGID)
+		}
+		if err := rows.Err(); err != nil {
+			log.WarnContext(ctx, "Rows iteration error", "error", err)
 		}
 	}
 
-	for peerID := range peerSet {
-		if _, err := c.CompileAndStore(ctx, peerID); err != nil {
-			return fmt.Errorf("recompile peer %d: %w", peerID, err)
-		}
-	}
-	return nil
+	walk(groupID)
+	return result
 }
 
 // GetAffectedPeersByPolicy returns peer IDs affected by a policy. It finds any peer present in either the source or target of the policy.
@@ -1460,18 +1553,21 @@ func (c *Compiler) GetAffectedPeersByPolicy(ctx context.Context, policyID int) (
 	return peerList, nil
 }
 
+// invertPortMatch swaps destination port flags with source port flags.
 // Example: dstMatch="--dport 80", srcMatch="--sport 5353" -> "--sport 80 --dport 5353"
+// The plural forms (--dports/--sports) are replaced BEFORE singular forms (--dport/--sport)
+// to avoid substring collisions (e.g. "--dport" is a substring of "--dports").
 func invertPortMatch(dstMatch, srcMatch string) string {
 	var result string
 
 	if dstMatch != "" {
-		result = strings.ReplaceAll(dstMatch, "--dport", "--sport")
-		result = strings.ReplaceAll(result, "--dports", "--sports")
+		result = strings.ReplaceAll(dstMatch, "--dports", "--sports")
+		result = strings.ReplaceAll(result, "--dport", "--sport")
 	}
 
 	if srcMatch != "" {
-		srcToDst := strings.ReplaceAll(srcMatch, "--sport", "--dport")
-		srcToDst = strings.ReplaceAll(srcToDst, "--sports", "--dports")
+		srcToDst := strings.ReplaceAll(srcMatch, "--sports", "--dports")
+		srcToDst = strings.ReplaceAll(srcToDst, "--sport", "--dport")
 		if result != "" {
 			result = result + " " + srcToDst
 		} else {

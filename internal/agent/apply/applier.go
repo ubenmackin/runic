@@ -52,7 +52,7 @@ func writeTempFile(pattern, content string) (string, error) {
 func ApplyBundle(ctx context.Context, bundle models.BundleResponse, hmacKey, controlPlaneURL, token, version string, confirmFunc func(context.Context, string) error) error {
 	log.Info("Received bundle version, verifying HMAC", "version", bundle.Version)
 
-	if !engine.Verify(bundle.Rules, hmacKey, bundle.HMAC) {
+	if !engine.VerifyWithVersion(bundle.Rules, hmacKey, bundle.HMAC, bundle.VersionNumber) {
 		return fmt.Errorf("HMAC verification failed — refusing to apply bundle %s", bundle.Version)
 	}
 

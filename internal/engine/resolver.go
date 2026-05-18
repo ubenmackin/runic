@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"runic/internal/db"
+	"runic/internal/resolve"
 )
 
 type Resolver struct {
@@ -38,7 +39,7 @@ func (r *Resolver) ResolveEntity(ctx context.Context, entityType string, entityI
 		return []string{ipAddress + "/32"}, nil
 	}
 
-	return r.ResolveGroup(ctx, entityID, nil)
+	return r.ResolveGroup(ctx, entityID)
 }
 
 // ResolveSpecialTarget resolves a special target to IP addresses. Special targets are predefined network addresses like broadcast and multicast.
@@ -101,7 +102,8 @@ func (r *Resolver) ResolveSpecialTarget(ctx context.Context, specialID int, peer
 			if err := rows.Scan(&ip); err != nil {
 				return nil, fmt.Errorf("failed to scan peer IP: %w", err)
 			}
-			peers = append(peers, ip)
+			// Normalize to CIDR notation: append /32 if not already present
+			peers = append(peers, resolve.NormalizeToCIDR(ip))
 		}
 		if err := rows.Err(); err != nil {
 			return nil, fmt.Errorf("error iterating peers: %w", err)
@@ -117,8 +119,7 @@ func (r *Resolver) ResolveSpecialTarget(ctx context.Context, specialID int, peer
 }
 
 // ResolveGroup resolves a group to IP addresses. In the new schema, groups contain only peers. We look up each peer's IP address.
-func (r *Resolver) ResolveGroup(ctx context.Context, groupID int, visited map[int]bool) ([]string, error) {
-	// Note: visited is kept for API compatibility but not used since we no longer have nested groups
+func (r *Resolver) ResolveGroup(ctx context.Context, groupID int) ([]string, error) {
 
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT p.id, p.ip_address, p.is_manual
@@ -243,8 +244,18 @@ func expandPortsSingle(dstPorts string, srcPorts string, protocol string) []Port
 	return []PortClause{{Protocol: protocol, PortMatch: dstMatch, SrcPortMatch: srcMatch}}
 }
 
+// ValidateIPSetName checks that the full ipset name (including any prefix like "runic_group_")
+// does not exceed the Linux kernel limit of 32 characters.
+func ValidateIPSetName(fullName string) error {
+	if len(fullName) > 32 {
+		return fmt.Errorf("ipset name %q is %d characters, exceeds Linux kernel limit of 32", fullName, len(fullName))
+	}
+	return nil
+}
+
 // Rules: lowercase, replace all non-alphanumeric characters (except underscore) with underscore,
 // collapse multiple underscores into one, trim leading/trailing underscores.
+// The Linux kernel limits ipset names to 32 characters including any prefix like "runic_group_".
 func sanitizeForIpset(name string) string {
 	name = strings.ToLower(name)
 	var b strings.Builder
@@ -260,6 +271,14 @@ func sanitizeForIpset(name string) string {
 	}
 	result := b.String()
 	result = strings.Trim(result, "_")
+
+	// Enforce 32-character Linux kernel ipset name limit.
+	// The "runic_group_" prefix takes 12 characters, leaving 20 for the group name.
+	// Truncate from the right to preserve the most meaningful part.
+	if len(result) > 20 {
+		result = result[:20]
+	}
+
 	return result
 }
 

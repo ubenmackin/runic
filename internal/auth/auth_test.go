@@ -1,10 +1,5 @@
 package auth
 
-// TODO: Pending implementation of test infrastructure for the following:
-// - JWT key mocking (for TestTokenWithDifferentKeys)
-// - Time mocking (for TestTokenValidationAfterExpiration)
-// - Manual token crafting (for TestEmptyClaims)
-
 import (
 	"context"
 	"net/http"
@@ -14,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/golang-jwt/jwt/v5"
 )
 
 func TestGenerateToken(t *testing.T) {
@@ -46,7 +43,7 @@ func TestGenerateToken(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			token, err := GenerateToken(tt.username, "viewer", 1*time.Hour)
+			token, err := GenerateToken(tt.username, "viewer", TokenTypeAccess, 1*time.Hour)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("GenerateToken() error = %v, wantErr %v", err, tt.wantErr)
 			}
@@ -103,7 +100,7 @@ func TestValidateToken(t *testing.T) {
 			var token string
 			if tt.token == "" && tt.username != "" {
 				var err error
-				token, err = GenerateToken(tt.username, "viewer", 1*time.Hour)
+				token, err = GenerateToken(tt.username, "viewer", TokenTypeAccess, 1*time.Hour)
 				if err != nil {
 					t.Fatalf("failed to generate token: %v", err)
 				}
@@ -130,10 +127,10 @@ func TestValidateToken(t *testing.T) {
 }
 
 func TestTokenExpiration(t *testing.T) {
-	// Note: This test requires mocking time or using short expiration times
-
 	username := "testuser"
-	token, err := GenerateToken(username, "viewer", 24*time.Hour)
+	before := time.Now()
+	token, err := GenerateToken(username, "viewer", TokenTypeAccess, 24*time.Hour)
+	after := time.Now()
 	if err != nil {
 		t.Fatalf("failed to generate token: %v", err)
 	}
@@ -152,11 +149,14 @@ func TestTokenExpiration(t *testing.T) {
 		t.Error("expected expiration time to be in the future")
 	}
 
-	// Verify expiration is approximately 24 hours from now
-	expectedExpiry := time.Now().Add(24 * time.Hour)
-	diff := expectedExpiry.Sub(claims.ExpiresAt.Time)
-	if diff < -time.Minute || diff > time.Minute {
-		t.Errorf("expected expiration time to be approximately 24 hours from now, got difference of %v", diff)
+	// Verify expiration is approximately 24 hours from the generation time.
+	// Use [before, after] as the generation window to avoid flakiness from time drift.
+	// Allow ±2s tolerance because JWT numeric dates are Unix timestamps (second precision).
+	minExpected := before.Add(24 * time.Hour).Add(-2 * time.Second)
+	maxExpected := after.Add(24 * time.Hour).Add(2 * time.Second)
+	exp := claims.ExpiresAt.Time
+	if exp.Before(minExpected) || exp.After(maxExpected) {
+		t.Errorf("expected expiration between %v and %v (24h window), got %v", minExpected, maxExpected, exp)
 	}
 }
 
@@ -314,8 +314,8 @@ func TestMiddleware(t *testing.T) {
 func TestTokenConsistency(t *testing.T) {
 	username := "testuser"
 
-	token1, err1 := GenerateToken(username, "viewer", 1*time.Hour)
-	token2, err2 := GenerateToken(username, "viewer", 1*time.Hour)
+	token1, err1 := GenerateToken(username, "viewer", TokenTypeAccess, 1*time.Hour)
+	token2, err2 := GenerateToken(username, "viewer", TokenTypeAccess, 1*time.Hour)
 
 	if err1 != nil || err2 != nil {
 		t.Fatalf("failed to generate tokens: %v, %v", err1, err2)
@@ -341,7 +341,7 @@ func TestTokenConsistency(t *testing.T) {
 
 func TestClaimsStructure(t *testing.T) {
 	username := "testuser"
-	token, err := GenerateToken(username, "viewer", 1*time.Hour)
+	token, err := GenerateToken(username, "viewer", TokenTypeAccess, 1*time.Hour)
 	if err != nil {
 		t.Fatalf("failed to generate token: %v", err)
 	}
@@ -395,7 +395,7 @@ func TestTokenWithSpecialUsernames(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			token, err := GenerateToken(tt.username, "viewer", 1*time.Hour)
+			token, err := GenerateToken(tt.username, "viewer", TokenTypeAccess, 1*time.Hour)
 			if err != nil {
 				t.Fatalf("failed to generate token for username %q: %v", tt.username, err)
 			}
@@ -433,7 +433,7 @@ func TestGenerateAndValidateIntegration(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			token, err := GenerateToken(tt.username, "viewer", 1*time.Hour)
+			token, err := GenerateToken(tt.username, "viewer", TokenTypeAccess, 1*time.Hour)
 			if err != nil {
 				t.Fatalf("GenerateToken() error = %v", err)
 			}
@@ -459,64 +459,60 @@ func TestGenerateAndValidateIntegration(t *testing.T) {
 	}
 }
 
-func TestMiddlewareWithDifferentMethods(t *testing.T) {
+func TestMiddlewareHTTP(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 	SetTokenStore(store.NewTokenStore(db))
 
-	methods := []string{"GET", "POST", "PUT", "DELETE", "PATCH"}
 	authHeader := generateValidAuthHeader(t, "testuser")
 
-	for _, method := range methods {
-		t.Run(method, func(t *testing.T) {
-			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				w.WriteHeader(http.StatusOK)
-				w.Write([]byte("success"))
+	t.Run("different methods", func(t *testing.T) {
+		methods := []string{"GET", "POST", "PUT", "DELETE", "PATCH"}
+		for _, method := range methods {
+			t.Run(method, func(t *testing.T) {
+				handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.WriteHeader(http.StatusOK)
+					w.Write([]byte("success"))
+				})
+
+				wrappedHandler := Middleware(handler)
+
+				req := httptest.NewRequest(method, "/test", nil)
+				req.Header.Set("Authorization", authHeader)
+				w := httptest.NewRecorder()
+
+				wrappedHandler.ServeHTTP(w, req)
+
+				if w.Code != http.StatusOK {
+					t.Errorf("expected status %d, got %d", http.StatusOK, w.Code)
+				}
 			})
-
-			wrappedHandler := Middleware(handler)
-
-			req := httptest.NewRequest(method, "/test", nil)
-			req.Header.Set("Authorization", authHeader)
-			w := httptest.NewRecorder()
-
-			wrappedHandler.ServeHTTP(w, req)
-
-			if w.Code != http.StatusOK {
-				t.Errorf("for method %s: expected status %d, got %d", method, http.StatusOK, w.Code)
-			}
-		})
-	}
-}
-
-func TestMiddlewareChain(t *testing.T) {
-	db, cleanup := testutil.SetupTestDB(t)
-	defer cleanup()
-	SetTokenStore(store.NewTokenStore(db))
-
-	authHeader := generateValidAuthHeader(t, "testuser")
-
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("passed"))
+		}
 	})
 
-	// Chain multiple middleware layers
-	wrappedHandler := Middleware(handler)
+	t.Run("chained middleware", func(t *testing.T) {
+		handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("passed"))
+		})
 
-	req := httptest.NewRequest("GET", "/test", nil)
-	req.Header.Set("Authorization", authHeader)
-	w := httptest.NewRecorder()
+		// Chain multiple middleware layers
+		wrappedHandler := Middleware(handler)
 
-	wrappedHandler.ServeHTTP(w, req)
+		req := httptest.NewRequest("GET", "/test", nil)
+		req.Header.Set("Authorization", authHeader)
+		w := httptest.NewRecorder()
 
-	if w.Code != http.StatusOK {
-		t.Errorf("expected status %d, got %d", http.StatusOK, w.Code)
-	}
+		wrappedHandler.ServeHTTP(w, req)
 
-	if w.Body.String() != "passed" {
-		t.Errorf("expected response %q, got %q", "passed", w.Body.String())
-	}
+		if w.Code != http.StatusOK {
+			t.Errorf("expected status %d, got %d", http.StatusOK, w.Code)
+		}
+
+		if w.Body.String() != "passed" {
+			t.Errorf("expected response %q, got %q", "passed", w.Body.String())
+		}
+	})
 }
 
 func TestConcurrentTokenGeneration(t *testing.T) {
@@ -525,7 +521,7 @@ func TestConcurrentTokenGeneration(t *testing.T) {
 
 	for i := 0; i < 10; i++ {
 		go func() {
-			token, err := GenerateToken(username, "viewer", 1*time.Hour)
+			token, err := GenerateToken(username, "viewer", TokenTypeAccess, 1*time.Hour)
 			if err != nil {
 				t.Errorf("failed to generate token: %v", err)
 				return
@@ -563,7 +559,7 @@ func TestConcurrentTokenGeneration(t *testing.T) {
 
 func TestSignedClaims(t *testing.T) {
 	username := "testuser"
-	token, err := GenerateToken(username, "viewer", 1*time.Hour)
+	token, err := GenerateToken(username, "viewer", TokenTypeAccess, 1*time.Hour)
 	if err != nil {
 		t.Fatalf("failed to generate token: %v", err)
 	}
@@ -593,9 +589,94 @@ func TestSignedClaims(t *testing.T) {
 	}
 }
 
+func TestEmptyClaims(t *testing.T) {
+	JwtKeyMu.Lock()
+	origKey := JwtKey
+	origPrevKey := JwtPrevKey
+	JwtKey = []byte("test-key-for-empty-claims-12345")
+	JwtPrevKey = nil
+	JwtKeyMu.Unlock()
+	defer func() {
+		JwtKeyMu.Lock()
+		JwtKey = origKey
+		JwtPrevKey = origPrevKey
+		JwtKeyMu.Unlock()
+	}()
+
+	// Craft a token with no custom claims (all zero values) but with
+	// the required registered claims (issuer/audience) that ValidateToken enforces.
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, &Claims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:   "runic",
+			Audience: jwt.ClaimStrings{"runic"},
+		},
+	})
+	tokenStr, err := token.SignedString(JwtKey)
+	if err != nil {
+		t.Fatalf("failed to sign empty claims token: %v", err)
+	}
+
+	// Validate with the same key — should succeed
+	claims, err := ValidateToken(tokenStr)
+	if err != nil {
+		t.Fatalf("ValidateToken() returned unexpected error for empty claims token: %v", err)
+	}
+
+	if claims == nil {
+		t.Fatal("expected non-nil claims")
+	}
+
+	// Custom claim fields should be empty
+	if claims.Username != "" {
+		t.Errorf("expected empty username, got %q", claims.Username)
+	}
+	if claims.Role != "" {
+		t.Errorf("expected empty role, got %q", claims.Role)
+	}
+	if claims.TokenType != "" {
+		t.Errorf("expected empty token_type, got %q", claims.TokenType)
+	}
+	if claims.UniqueID != "" {
+		t.Errorf("expected empty unique_id, got %q", claims.UniqueID)
+	}
+}
+
+func TestTokenWithDifferentKeys(t *testing.T) {
+	JwtKeyMu.Lock()
+	origKey := JwtKey
+	origPrevKey := JwtPrevKey
+	JwtKey = []byte("signing-key-for-test-one-123456")
+	JwtPrevKey = nil
+	JwtKeyMu.Unlock()
+	defer func() {
+		JwtKeyMu.Lock()
+		JwtKey = origKey
+		JwtPrevKey = origPrevKey
+		JwtKeyMu.Unlock()
+	}()
+
+	// Generate a token with the first key
+	token, err := GenerateToken("testuser", "viewer", TokenTypeAccess, 1*time.Hour)
+	if err != nil {
+		t.Fatalf("failed to generate token: %v", err)
+	}
+
+	// Change to a different key
+	JwtKeyMu.Lock()
+	JwtKey = []byte("different-key-for-test-two-987654")
+	JwtPrevKey = nil
+	JwtKeyMu.Unlock()
+
+	// Validation should fail — token was signed with a different key
+	_, err = ValidateToken(token)
+	if err == nil {
+		t.Error("expected validation to fail when token is signed with a different key")
+	}
+}
+
 // Helper function to generate a valid authorization header
 func generateValidAuthHeader(t *testing.T, username string) string {
-	token, err := GenerateToken(username, "viewer", 1*time.Hour)
+	token, err := GenerateToken(username, "viewer", TokenTypeAccess, 1*time.Hour)
 	if err != nil {
 		t.Fatalf("failed to generate token: %v", err)
 	}
@@ -707,7 +788,8 @@ func TestInitJwtKey(t *testing.T) {
 
 	t.Run("from database", func(t *testing.T) {
 		expectedSecret := "dedicated-test-secret-123456789012"
-		_, err := db.Exec("INSERT INTO system_config (key, value) VALUES (?, ?)", "jwt_secret", expectedSecret)
+		settings := store.NewSettingsStore(db, nil)
+		err := settings.SetSystemConfig(ctx, "jwt_secret", expectedSecret)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -778,7 +860,7 @@ func TestMiddlewareCookie(t *testing.T) {
 	JwtKeyMu.Unlock()
 
 	username := "cookieuser"
-	token, err := GenerateToken(username, "admin", 1*time.Hour)
+	token, err := GenerateToken(username, "admin", TokenTypeAccess, 1*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}

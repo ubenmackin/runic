@@ -159,7 +159,7 @@ func TestDashboardQueries_WithPeers(t *testing.T) {
 		if lastHeartbeat != nil {
 			ph.LastHeartbeat = *lastHeartbeat
 			if t, err := time.Parse("2006-01-02 15:04:05", *lastHeartbeat); err == nil {
-				ph.IsOnline = time.Since(t).Seconds() < float64(constants.OfflineThresholdSeconds-5)
+				ph.IsOnline = time.Since(t).Seconds() < constants.OfflineThreshold.Seconds()-5
 			}
 		}
 		peers = append(peers, ph)

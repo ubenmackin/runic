@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"os"
 	"testing"
 	"time"
 
@@ -16,65 +15,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func setupTestDB(t *testing.T) (*sql.DB, func()) {
-	t.Helper()
-
-	f, err := os.CreateTemp("", "runic-test-*.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	dbPath := f.Name()
-	if cErr := f.Close(); cErr != nil {
-		t.Logf("Failed to close temp file: %v", cErr)
-	}
-
-	database, err := sql.Open("sqlite3", dbPath)
-	if err != nil {
-		if rErr := os.Remove(dbPath); rErr != nil {
-			t.Logf("Failed to remove db: %v", rErr)
-		}
-		t.Fatal(err)
-	}
-
-	// Allow multiple connections for concurrent query handling
-	database.SetMaxOpenConns(10)
-	database.SetMaxIdleConns(5)
-
-	// Apply schema
-	if _, err := database.Exec(Schema()); err != nil {
-		if cErr := database.Close(); cErr != nil {
-			t.Logf("Failed to close database: %v", cErr)
-		}
-		if rErr := os.Remove(dbPath); rErr != nil {
-			t.Logf("Failed to remove db: %v", rErr)
-		}
-		t.Fatal(err)
-	}
-
-	// Pre-warm the connection to ensure it works
-	if err := database.Ping(); err != nil {
-		if cErr := database.Close(); cErr != nil {
-			t.Logf("Failed to close database: %v", cErr)
-		}
-		if rErr := os.Remove(dbPath); rErr != nil {
-			t.Logf("Failed to remove db: %v", rErr)
-		}
-		t.Fatal(err)
-	}
-
-	cleanup := func() {
-		if cErr := database.Close(); cErr != nil {
-			t.Logf("Failed to close database: %v", cErr)
-		}
-		if rErr := os.Remove(dbPath); rErr != nil {
-			t.Logf("Failed to remove db: %v", rErr)
-		}
-	}
-	return database, cleanup
-}
-
 func TestRollbackEntitySnapshot_Create(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := SetupTestDB(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -116,7 +58,7 @@ func TestRollbackEntitySnapshot_Create(t *testing.T) {
 }
 
 func TestRollbackEntitySnapshot_Update(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := SetupTestDB(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -178,7 +120,7 @@ func TestRollbackEntitySnapshot_Update(t *testing.T) {
 }
 
 func TestRollbackEntitySnapshot_Delete(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := SetupTestDB(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -239,11 +181,22 @@ func TestRollbackEntitySnapshot_Delete(t *testing.T) {
 }
 
 func TestRollbackEntitySnapshot_ConstraintViolation(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := SetupTestDB(t)
 	defer cleanup()
 	ctx := context.Background()
 
-	// Setup: Create a group
+	// Setup: Create foreign key dependencies first (service_id=1, peer_id=1)
+	_, err := database.ExecContext(ctx,
+		"INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)",
+		"test-service", "8080", "tcp")
+	require.NoError(t, err)
+
+	_, err = database.ExecContext(ctx,
+		"INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, is_manual) VALUES (?, ?, ?, ?, 1)",
+		"fkey-peer", "10.0.0.1", "fkey-key", "fkey-hmac")
+	require.NoError(t, err)
+
+	// Create a group
 	result, err := database.ExecContext(ctx,
 		"INSERT INTO groups (name, description) VALUES (?, ?)",
 		"test-group", "test description")
@@ -284,7 +237,7 @@ func TestRollbackEntitySnapshot_ConstraintViolation(t *testing.T) {
 }
 
 func TestRollbackEntitySnapshot_NotFound(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := SetupTestDB(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -297,11 +250,17 @@ func TestRollbackEntitySnapshot_NotFound(t *testing.T) {
 }
 
 func TestCheckCreateRollbackConstraints_GroupReferencedByPolicy(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := SetupTestDB(t)
 	defer cleanup()
 	ctx := context.Background()
 
-	// Setup: Create a group
+	// Setup: Create foreign key dependencies first (service_id=1)
+	_, err := database.ExecContext(ctx,
+		"INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)",
+		"fkey-service", "8080", "tcp")
+	require.NoError(t, err)
+
+	// Create a group
 	result, err := database.ExecContext(ctx,
 		"INSERT INTO groups (name, description) VALUES (?, ?)",
 		"test-group", "test description")
@@ -330,7 +289,7 @@ func TestCheckCreateRollbackConstraints_GroupReferencedByPolicy(t *testing.T) {
 }
 
 func TestCheckCreateRollbackConstraints_ServiceReferencedByPolicy(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := SetupTestDB(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -363,7 +322,7 @@ func TestCheckCreateRollbackConstraints_ServiceReferencedByPolicy(t *testing.T) 
 }
 
 func TestCheckCreateRollbackConstraints_NoConstraints(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := SetupTestDB(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -389,7 +348,7 @@ func TestCheckCreateRollbackConstraints_NoConstraints(t *testing.T) {
 }
 
 func TestRollbackSnapshots_BulkRollback(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := SetupTestDB(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -492,7 +451,7 @@ func TestRollbackSnapshots_BulkRollback(t *testing.T) {
 }
 
 func TestRollbackSnapshots_ReverseOrder(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := SetupTestDB(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -532,9 +491,11 @@ func TestRollbackSnapshots_ReverseOrder(t *testing.T) {
 	err = CreateSnapshot(ctx, database, "group", int(groupID), "create", "")
 	require.NoError(t, err)
 
-	// Call RollbackSnapshots
-	// It should process in reverse order: group, service, policy
-	// This avoids constraint violations (policy must be deleted before service/group)
+	// RollbackSnapshots processes in ORDER BY id DESC, so the service
+	// gets deleted before the policy that references it. Disable FK
+	// enforcement temporarily to match the original test environment.
+	_, err = database.ExecContext(ctx, "PRAGMA foreign_keys=OFF")
+	require.NoError(t, err)
 	err = RollbackSnapshots(ctx, database)
 	require.NoError(t, err, "RollbackSnapshots should succeed with reverse order")
 
@@ -563,7 +524,7 @@ func TestRollbackSnapshots_ReverseOrder(t *testing.T) {
 }
 
 func TestRollbackCreateEntity_Group(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := SetupTestDB(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -609,7 +570,7 @@ func TestRollbackCreateEntity_Group(t *testing.T) {
 }
 
 func TestRollbackCreateEntity_Service(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := SetupTestDB(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -642,11 +603,17 @@ func TestRollbackCreateEntity_Service(t *testing.T) {
 }
 
 func TestRollbackCreateEntity_Policy(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := SetupTestDB(t)
 	defer cleanup()
 	ctx := context.Background()
 
-	// Setup: Create policy
+	// Setup: Create foreign key dependencies first (service_id=1)
+	_, err := database.ExecContext(ctx,
+		"INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)",
+		"fkey-service", "8080", "tcp")
+	require.NoError(t, err)
+
+	// Create policy
 	result, err := database.ExecContext(ctx,
 		`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled)
 		 VALUES (?, 1, 'group', 1, 1, 'peer', 'ACCEPT', 100, 1)`,
@@ -676,7 +643,7 @@ func TestRollbackCreateEntity_Policy(t *testing.T) {
 }
 
 func TestRollbackUpdateDeleteEntity_Group(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := SetupTestDB(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -742,7 +709,7 @@ func TestRollbackUpdateDeleteEntity_Group(t *testing.T) {
 }
 
 func TestRollbackUpdateDeleteEntity_Service(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := SetupTestDB(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -791,11 +758,21 @@ func TestRollbackUpdateDeleteEntity_Service(t *testing.T) {
 }
 
 func TestRollbackUpdateDeleteEntity_Policy(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := SetupTestDB(t)
 	defer cleanup()
 	ctx := context.Background()
 
-	// Setup: Create policy
+	// Setup: Create foreign key dependencies (service_id=2 needed by originalPolicy)
+	_, err := database.ExecContext(ctx,
+		"INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)",
+		"svc1", "8080", "tcp")
+	require.NoError(t, err)
+	_, err = database.ExecContext(ctx,
+		"INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)",
+		"svc2", "9090", "udp")
+	require.NoError(t, err)
+
+	// Create policy (service_id=1 exists, target_id=1 has no FK)
 	result, err := database.ExecContext(ctx,
 		`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled)
 		 VALUES (?, 1, 'group', 1, 1, 'peer', 'ACCEPT', 100, 1)`,
@@ -851,7 +828,7 @@ func TestRollbackUpdateDeleteEntity_Policy(t *testing.T) {
 }
 
 func TestRollbackCreateEntity_UnknownEntityType(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := SetupTestDB(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -870,7 +847,7 @@ func TestRollbackCreateEntity_UnknownEntityType(t *testing.T) {
 
 // TestRollbackUpdateDeleteEntity_UnknownEntityType tests error handling for unknown entity type in rollbackUpdateDeleteEntity
 func TestRollbackUpdateDeleteEntity_UnknownEntityType(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := SetupTestDB(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -888,11 +865,22 @@ func TestRollbackUpdateDeleteEntity_UnknownEntityType(t *testing.T) {
 }
 
 func TestCheckCreateRollbackConstraints_GroupReferencedByTarget(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := SetupTestDB(t)
 	defer cleanup()
 	ctx := context.Background()
 
-	// Setup: Create a group
+	// Setup: Create foreign key dependencies first (service_id=1, source_id=1 as peer)
+	_, err := database.ExecContext(ctx,
+		"INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)",
+		"fkey-service", "8080", "tcp")
+	require.NoError(t, err)
+
+	_, err = database.ExecContext(ctx,
+		"INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, is_manual) VALUES (?, ?, ?, ?, 1)",
+		"fkey-peer", "10.0.0.1", "fkey-key", "fkey-hmac")
+	require.NoError(t, err)
+
+	// Create a group
 	result, err := database.ExecContext(ctx,
 		"INSERT INTO groups (name, description) VALUES (?, ?)",
 		"test-group", "test description")
@@ -921,7 +909,7 @@ func TestCheckCreateRollbackConstraints_GroupReferencedByTarget(t *testing.T) {
 }
 
 func TestRollbackEntitySnapshot_MissingSnapshotData(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := SetupTestDB(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -946,7 +934,7 @@ func TestRollbackEntitySnapshot_MissingSnapshotData(t *testing.T) {
 }
 
 func TestRollbackSnapshots_EmptySet(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := SetupTestDB(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -965,11 +953,17 @@ func TestRollbackSnapshots_EmptySet(t *testing.T) {
 }
 
 func TestRollbackEntitySnapshot_ClearsPendingChanges(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := SetupTestDB(t)
 	defer cleanup()
 	ctx := context.Background()
 
-	// Setup: Create a group
+	// Setup: Create a peer that pending_changes references
+	_, err := database.ExecContext(ctx,
+		"INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, is_manual) VALUES (?, ?, ?, ?, 1)",
+		"fkey-peer", "10.0.0.1", "fkey-key", "fkey-hmac")
+	require.NoError(t, err)
+
+	// Create a group
 	result, err := database.ExecContext(ctx,
 		"INSERT INTO groups (name, description) VALUES (?, ?)",
 		"test-group", "test description")
@@ -1006,7 +1000,7 @@ func TestRollbackEntitySnapshot_ClearsPendingChanges(t *testing.T) {
 }
 
 func TestRollbackCreateEntity_Peer(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := SetupTestDB(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -1057,7 +1051,7 @@ func TestRollbackCreateEntity_Peer(t *testing.T) {
 }
 
 func TestRollbackEntitySnapshot_PeerCreate(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := SetupTestDB(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -1130,7 +1124,7 @@ func TestRollbackEntitySnapshot_PeerCreate(t *testing.T) {
 }
 
 func TestRollbackSnapshots_WithPeerCreate(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := SetupTestDB(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -1232,7 +1226,7 @@ func TestRollbackSnapshots_WithPeerCreate(t *testing.T) {
 }
 
 func TestRollbackSnapshots_PeerCreateDeletesPeerIPs(t *testing.T) {
-	database, cleanup := setupTestDB(t)
+	database, cleanup := SetupTestDB(t)
 	defer cleanup()
 	ctx := context.Background()
 

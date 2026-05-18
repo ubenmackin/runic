@@ -146,6 +146,7 @@ func addDBConstraints(ctx context.Context, database *sql.DB) error {
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			peer_id INTEGER NOT NULL,
 			version TEXT NOT NULL,
+			version_number INTEGER NOT NULL DEFAULT 0,
 			rules_content TEXT NOT NULL,
 			hmac TEXT NOT NULL,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -156,7 +157,8 @@ func addDBConstraints(ctx context.Context, database *sql.DB) error {
 	`); err != nil {
 		return fmt.Errorf("create rule_bundles_new: %w", err)
 	}
-	if _, err := database.ExecContext(ctx, "INSERT INTO rule_bundles_new SELECT * FROM rule_bundles"); err != nil {
+	if _, err := database.ExecContext(ctx, `INSERT INTO rule_bundles_new (id, peer_id, version, version_number, rules_content, hmac, created_at, applied_at)
+		SELECT id, peer_id, version, COALESCE(version_number, 0), rules_content, hmac, created_at, applied_at FROM rule_bundles`); err != nil {
 		return fmt.Errorf("copy rule_bundles: %w", err)
 	}
 	if _, err := database.ExecContext(ctx, "DROP TABLE rule_bundles"); err != nil {

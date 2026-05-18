@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 
 	"runic/internal/api/common"
 	ic "runic/internal/common"
@@ -14,6 +16,8 @@ import (
 )
 
 const serviceRowColumns = `id, name, ports, COALESCE(source_ports, ''), protocol, COALESCE(description, ''), direction_hint, COALESCE(is_system, 0), COALESCE(no_conntrack, 0), COALESCE(is_pending_delete, 0)`
+
+var ErrServiceNotFound = errors.New("service not found")
 
 type ServiceStore struct {
 	db db.DB
@@ -25,12 +29,7 @@ func NewServiceStore(database db.DB) *ServiceStore {
 
 // GetNameByID returns the service name for a given ID. Returns sql.ErrNoRows if not found.
 func (s *ServiceStore) GetNameByID(ctx context.Context, id int) (string, error) {
-	var name string
-	err := s.db.QueryRowContext(ctx, "SELECT name FROM services WHERE id = ?", id).Scan(&name)
-	if err != nil {
-		return "", fmt.Errorf("get service name by id: %w", err)
-	}
-	return name, nil
+	return getNameByID(ctx, s.db, "services", id, "", "service")
 }
 
 // GetService returns a single non-deleted service by ID. Returns sql.ErrNoRows if not found.
@@ -115,6 +114,19 @@ func (s *ServiceStore) ListServices(ctx context.Context) ([]models.ServiceRow, e
 }
 
 func (s *ServiceStore) CreateService(ctx context.Context, name, ports, sourcePorts, protocol, description string, directionHint int, isSystem bool) (int64, error) {
+	if name == "" {
+		return 0, errors.New("service name is required")
+	}
+	if ports != "" {
+		if err := validatePortList(ports); err != nil {
+			return 0, fmt.Errorf("invalid ports: %w", err)
+		}
+	}
+	if sourcePorts != "" {
+		if err := validatePortList(sourcePorts); err != nil {
+			return 0, fmt.Errorf("invalid source_ports: %w", err)
+		}
+	}
 	result, err := s.db.ExecContext(ctx,
 		`INSERT INTO services (name, ports, source_ports, protocol, description, direction_hint, is_system)
 		VALUES (?, ?, ?, ?, ?, ?, ?)`, name, ports, sourcePorts, protocol, description, directionHint, isSystem)
@@ -128,14 +140,49 @@ func (s *ServiceStore) CreateService(ctx context.Context, name, ports, sourcePor
 	return id, nil
 }
 
-func (s *ServiceStore) UpdateService(ctx context.Context, id int, name, ports, sourcePorts, protocol, description string, directionHint int) error {
-	_, err := s.db.ExecContext(ctx,
-		`UPDATE services SET name = ?, ports = ?, source_ports = ?, protocol = ?, description = ?, direction_hint = ?
-		WHERE id = ?`, name, ports, sourcePorts, protocol, description, directionHint, id)
-	if err != nil {
-		return fmt.Errorf("update service: %w", err)
+// validatePortList checks that each entry in a comma-separated port list is either a single port (1-65535)
+// or a port range (e.g. "8000:9000"). Empty strings are allowed (caller should check non-empty before calling).
+func validatePortList(portList string) error {
+	for _, part := range strings.Split(portList, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			return errors.New("empty port entry in list")
+		}
+		if strings.Contains(part, ":") {
+			// Port range
+			parts := strings.SplitN(part, ":", 2)
+			if len(parts) != 2 {
+				return fmt.Errorf("invalid port range: %q", part)
+			}
+			lo, err := strconv.Atoi(strings.TrimSpace(parts[0]))
+			if err != nil {
+				return fmt.Errorf("invalid port in range %q: %w", part, err)
+			}
+			hi, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+			if err != nil {
+				return fmt.Errorf("invalid port in range %q: %w", part, err)
+			}
+			if lo < 1 || lo > 65535 || hi < 1 || hi > 65535 || lo > hi {
+				return fmt.Errorf("port range out of bounds: %q", part)
+			}
+		} else {
+			// Single port
+			p, err := strconv.Atoi(part)
+			if err != nil {
+				return fmt.Errorf("invalid port: %q", part)
+			}
+			if p < 1 || p > 65535 {
+				return fmt.Errorf("port out of range (1-65535): %d", p)
+			}
+		}
 	}
 	return nil
+}
+
+func (s *ServiceStore) UpdateService(ctx context.Context, id int, name, ports, sourcePorts, protocol, description string, directionHint int) error {
+	return execUpdate(ctx, s.db,
+		`UPDATE services SET name = ?, ports = ?, source_ports = ?, protocol = ?, description = ?, direction_hint = ?
+		WHERE id = ?`, ErrServiceNotFound, name, ports, sourcePorts, protocol, description, directionHint, id)
 }
 
 func (s *ServiceStore) SoftDeleteService(ctx context.Context, id int) error {
@@ -148,7 +195,7 @@ func (s *ServiceStore) SoftDeleteService(ctx context.Context, id int) error {
 		return fmt.Errorf("rows affected: %w", err)
 	}
 	if affected == 0 {
-		return sql.ErrNoRows
+		return ErrServiceNotFound
 	}
 	return nil
 }
@@ -233,13 +280,9 @@ func (s *ServiceStore) SnapshotServiceTx(ctx context.Context, tx *sql.Tx, servic
 
 // UpdateServiceTx updates a service within a transaction.
 func (s *ServiceStore) UpdateServiceTx(ctx context.Context, tx *sql.Tx, id int, name, ports, sourcePorts, protocol, description string, directionHint int) error {
-	_, err := tx.ExecContext(ctx,
+	return execUpdate(ctx, tx,
 		`UPDATE services SET name = ?, ports = ?, source_ports = ?, protocol = ?, description = ?, direction_hint = ?
-		WHERE id = ?`, name, ports, sourcePorts, protocol, description, directionHint, id)
-	if err != nil {
-		return fmt.Errorf("update service tx: %w", err)
-	}
-	return nil
+		WHERE id = ?`, ErrServiceNotFound, name, ports, sourcePorts, protocol, description, directionHint, id)
 }
 
 func (s *ServiceStore) FindPoliciesUsingService(ctx context.Context, serviceID int) ([]int, error) {

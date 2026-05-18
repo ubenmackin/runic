@@ -17,19 +17,13 @@ type DashboardStore struct {
 	db       db.Querier
 	logsDB   db.Querier
 	settings *SettingsStore
-	sqlDB    *sql.DB // Underlying *sql.DB for operations that require it
 }
 
 func NewDashboardStore(database db.Querier, logsDB db.Querier) *DashboardStore {
-	// Type assertion to *sql.DB for operations that require it (e.g., ParseBackupSession).
-	// The ok value is intentionally ignored: if database is not *sql.DB, sqlDB will be nil
-	// and ParseBackupSession will return a descriptive error instead of silently failing.
-	sqlDB, _ := database.(*sql.DB)
 	return &DashboardStore{
 		db:       database,
 		logsDB:   logsDB,
 		settings: NewSettingsStore(database, nil),
-		sqlDB:    sqlDB,
 	}
 }
 
@@ -77,20 +71,15 @@ func (s *DashboardStore) InsertFirewallLog(ctx context.Context, entry *FirewallL
 }
 
 // ParseBackupSession parses an import session's raw backup data. It requires
-// *sql.DB to start its own transaction for the parse operation.
-//
-// Limitation: This method type-asserts db.Querier to *sql.DB because the
-// importer.ParseSession function needs *sql.DB to manage its own transaction.
-// If the underlying database is not *sql.DB (e.g., a wrapped or mocked
-// Querier), this method returns a descriptive error instead of panicking.
-// A full refactor would require changing the importer package to accept
-// db.DB or a transactional interface, which is too invasive for now.
+// a db.DB (Querier + Beginner) to start its own transaction for the parse
+// operation. If the underlying database does not implement Beginner (e.g., a
+// wrapped or mocked Querier), this method returns a descriptive error.
 func (s *DashboardStore) ParseBackupSession(ctx context.Context, sessionID int64) error {
-	sqlDB, ok := s.db.(*sql.DB)
+	database, ok := s.db.(db.DB)
 	if !ok {
-		return fmt.Errorf("parse backup session: underlying DB is not *sql.DB, cannot start transaction (type assertion failed)")
+		return fmt.Errorf("parse backup session: underlying DB does not support transactions (type assertion failed; got %T)", s.db)
 	}
-	return importer.ParseSession(ctx, sqlDB, sessionID)
+	return importer.ParseSession(ctx, database, sessionID)
 }
 
 // GenerateRegistrationToken creates a new registration token and stores it in the database.
@@ -191,9 +180,9 @@ func (s *DashboardStore) GetPeerAndPolicyCounts(ctx context.Context) (totalPeers
 SELECT
 	(SELECT COUNT(*) FROM peers) as total_peers,
 	(SELECT COUNT(*) FROM peers WHERE is_manual = 1) as manual_peers,
-	(SELECT COUNT(*) FROM peers WHERE is_manual = 0 AND last_heartbeat > datetime('now', '-%d seconds')) as online_peers,
-	(SELECT COUNT(*) FROM policies WHERE enabled = 1) as total_policies`,
-		constants.OfflineThresholdSeconds)
+(SELECT COUNT(*) FROM peers WHERE is_manual = 0 AND last_heartbeat > datetime('now', '-%d seconds')) as online_peers,
+		(SELECT COUNT(*) FROM policies WHERE enabled = 1) as total_policies`,
+		int(constants.OfflineThreshold.Seconds()))
 
 	err = s.db.QueryRowContext(ctx, query).Scan(&totalPeers, &manualPeers, &onlinePeers, &totalPolicies)
 	if err != nil {
@@ -278,7 +267,7 @@ func (s *DashboardStore) GetPeerHealth(ctx context.Context) ([]models.PeerHealth
 			formatted := ic.FormatSQLiteDatetime(lastHeartbeat.String)
 			ph.LastHeartbeat = formatted
 			if t, err := time.Parse(time.RFC3339, formatted); err == nil {
-				ph.IsOnline = time.Since(t).Seconds() < float64(constants.OfflineThresholdSeconds)
+				ph.IsOnline = time.Since(t).Seconds() < constants.OfflineThreshold.Seconds()
 			}
 		}
 		ph.IsManual = isManual

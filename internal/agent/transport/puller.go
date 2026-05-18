@@ -205,6 +205,11 @@ func connectSSE(ctx context.Context, client common.HTTPClient, controlPlaneURL, 
 		}
 
 		// Track event type across lines since SSE sends event: and data: separately
+		// Reset prevEvent on any event: line so unknown events don't pollute state
+		if strings.HasPrefix(line, "event:") {
+			prevEvent = ""
+		}
+
 		switch {
 		case strings.HasPrefix(line, "event: bundle_updated"):
 			log.Info("SSE: bundle_updated received, pulling immediately")

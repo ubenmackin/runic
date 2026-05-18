@@ -34,8 +34,22 @@ var (
 	JwtKey   []byte
 	JwtKeyMu sync.RWMutex
 
+	// JwtPrevKey holds the previous signing key during key rotation.
+	// Tokens signed with the old key are still accepted for verification
+	// until the rotation window expires.
+	JwtPrevKey []byte
+
+	// JwtKeyRotationAt records when the key was last rotated.
+	JwtKeyRotationAt time.Time
+
 	// tokenStore is the store used for token revocation queries.
 	tokenStore *store.TokenStore
+)
+
+// Token type constants used for access vs refresh token differentiation.
+const (
+	TokenTypeAccess  = "access"
+	TokenTypeRefresh = "refresh"
 )
 
 // SetTokenStore sets the TokenStore used for token revocation operations.
@@ -69,13 +83,14 @@ func InitJwtKey(ctx context.Context, database db.Querier) error {
 }
 
 type Claims struct {
-	Username string `json:"username"`
-	UniqueID string `json:"unique_id"`
-	Role     string `json:"role"`
+	Username  string `json:"username"`
+	UniqueID  string `json:"unique_id"`
+	Role      string `json:"role"`
+	TokenType string `json:"token_type"`
 	jwt.RegisteredClaims
 }
 
-func GenerateToken(username string, role string, duration time.Duration) (string, error) {
+func GenerateToken(username string, role string, tokenType string, duration time.Duration) (string, error) {
 	now := time.Now()
 	expirationTime := now.Add(duration)
 
@@ -86,12 +101,15 @@ func GenerateToken(username string, role string, duration time.Duration) (string
 	uniqueID := hex.EncodeToString(uniqueBytes)
 
 	claims := &Claims{
-		Username: username,
-		UniqueID: uniqueID,
-		Role:     role,
+		Username:  username,
+		UniqueID:  uniqueID,
+		Role:      role,
+		TokenType: tokenType,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expirationTime),
 			IssuedAt:  jwt.NewNumericDate(now),
+			Issuer:    "runic",
+			Audience:  jwt.ClaimStrings{"runic"},
 		},
 	}
 
@@ -101,22 +119,44 @@ func GenerateToken(username string, role string, duration time.Duration) (string
 	return token.SignedString(JwtKey)
 }
 
+// RotateJwtKey rotates the JWT signing key. The current key is retained as
+// the previous key so that tokens signed before the rotation remain valid
+// for verification during the overlapping rotation window.
+func RotateJwtKey(newKey []byte) {
+	JwtKeyMu.Lock()
+	defer JwtKeyMu.Unlock()
+	JwtPrevKey = JwtKey
+	JwtKey = newKey
+	JwtKeyRotationAt = time.Now()
+}
+
 func ValidateToken(tokenString string) (*Claims, error) {
 	claims := &Claims{}
 	JwtKeyMu.RLock()
-	defer JwtKeyMu.RUnlock()
+	key := JwtKey
+	prevKey := JwtPrevKey
+	JwtKeyMu.RUnlock()
+
 	token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
 		// Verify the signing algorithm to prevent algorithm confusion attacks.
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 		}
-		return JwtKey, nil
-	})
+		return key, nil
+	}, jwt.WithIssuer("runic"), jwt.WithAudience("runic"))
+
+	// If validation fails with the primary key, try the previous key (rotation window).
+	if err != nil && prevKey != nil {
+		claims = &Claims{}
+		token, err = jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
+			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+				return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+			}
+			return prevKey, nil
+		}, jwt.WithIssuer("runic"), jwt.WithAudience("runic"))
+	}
 
 	if err != nil {
-		if err == jwt.ErrSignatureInvalid {
-			return nil, err
-		}
 		return nil, err
 	}
 

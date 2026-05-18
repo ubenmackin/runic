@@ -91,7 +91,6 @@ func TestResolveEntityPeer(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			db, cleanup := testutil.SetupTestDB(t)
 			defer cleanup()
-			defer cleanup()
 
 			if err := tt.setupDB(db); err != nil {
 				t.Fatalf("setupDB failed: %v", err)
@@ -108,7 +107,7 @@ func TestResolveEntityPeer(t *testing.T) {
 			}
 
 			if err != nil {
-				t.Errorf("unexpected error: %v", err)
+				t.Fatalf("unexpected error: %v", err)
 				return
 			}
 
@@ -251,7 +250,6 @@ func TestResolveEntityGroup(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			db, cleanup := testutil.SetupTestDB(t)
 			defer cleanup()
-			defer cleanup()
 
 			if err := tt.setupDB(db); err != nil {
 				t.Fatalf("setupDB failed: %v", err)
@@ -268,7 +266,7 @@ func TestResolveEntityGroup(t *testing.T) {
 			}
 
 			if err != nil {
-				t.Errorf("unexpected error: %v", err)
+				t.Fatalf("unexpected error: %v", err)
 				return
 			}
 
@@ -374,7 +372,7 @@ func TestResolveSpecialTarget(t *testing.T) {
 				}
 				return nil
 			},
-			expectCIDRs: []string{"192.168.1.10", "192.168.1.11"},
+			expectCIDRs: []string{"192.168.1.10/32", "192.168.1.11/32"},
 			expectError: false,
 		},
 		{
@@ -399,7 +397,6 @@ func TestResolveSpecialTarget(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			db, cleanup := testutil.SetupTestDB(t)
-			defer cleanup()
 			defer cleanup()
 
 			if err := tt.setupDB(db); err != nil {

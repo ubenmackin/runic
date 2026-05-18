@@ -5,12 +5,14 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"sync"
 	"time"
 
 	"runic/internal/common/log"
 )
 
 type Worker struct {
+	mu       sync.Mutex
 	db       *sql.DB
 	logsDB   *sql.DB
 	interval time.Duration
@@ -30,6 +32,12 @@ func (w *Worker) Start(ctx context.Context) {
 
 	// Then run periodically
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error("panic in log cleanup worker", "recover", r)
+			}
+		}()
+
 		ticker := time.NewTicker(w.interval)
 		defer ticker.Stop()
 
@@ -45,6 +53,9 @@ func (w *Worker) Start(ctx context.Context) {
 }
 
 func (w *Worker) runCleanup(ctx context.Context) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
 	var retentionDays int
 	err := w.db.QueryRowContext(ctx, "SELECT value FROM system_config WHERE key = 'log_retention_days'").Scan(&retentionDays)
 	if errors.Is(err, sql.ErrNoRows) {

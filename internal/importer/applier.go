@@ -10,6 +10,7 @@ import (
 	"runic/internal/api/common"
 	"runic/internal/common/log"
 	"runic/internal/db"
+	"runic/internal/sqlutil"
 )
 
 type ApplyResult struct {
@@ -25,25 +26,8 @@ type createdEntity struct {
 	summary    string
 }
 
-func buildPlaceholders(n int) string {
-	if n <= 0 {
-		return ""
-	}
-	// Build a string of n question marks separated by commas, e.g. "?,?,?"
-	// Pre-allocate for efficiency: each placeholder is "?," except the last which is just "?"
-	// Total length = n*2 - 1 (since each "?," is 2 chars except last "?" which is 1)
-	b := make([]byte, n*2-1)
-	for i := 0; i < n; i++ {
-		b[i*2] = '?'
-		if i < n-1 {
-			b[i*2+1] = ','
-		}
-	}
-	return string(b)
-}
-
 // ApplySession creates manual peers, groups, services, and policies from the import session.
-func ApplySession(ctx context.Context, database *sql.DB, sessionID int64, changeWorker *common.ChangeWorker) (*ApplyResult, error) {
+func ApplySession(ctx context.Context, database db.DB, sessionID int64, changeWorker *common.ChangeWorker) (*ApplyResult, error) {
 	result := &ApplyResult{}
 
 	var createdEntities []createdEntity
@@ -77,7 +61,9 @@ func ApplySession(ctx context.Context, database *sql.DB, sessionID int64, change
 		var sourceStagingID, targetStagingID, serviceStagingID sql.NullInt64
 		var sourceType, targetType sql.NullString
 		if err := refRows.Scan(&sourceStagingID, &targetStagingID, &serviceStagingID, &sourceType, &targetType); err != nil {
-			_ = refRows.Close()
+			if cErr := refRows.Close(); cErr != nil {
+				log.Warn("Error closing refRows after scan failure", "error", cErr)
+			}
 			return nil, fmt.Errorf("scan approved rule reference: %w", err)
 		}
 		if sourceStagingID.Valid && sourceStagingID.Int64 != 0 {
@@ -98,7 +84,9 @@ func ApplySession(ctx context.Context, database *sql.DB, sessionID int64, change
 			stagingServiceIDSet[serviceStagingID.Int64] = true
 		}
 	}
-	_ = refRows.Close()
+	if cErr := refRows.Close(); cErr != nil {
+		log.Warn("Error closing refRows", "error", cErr)
+	}
 
 	// Also add staging peers that are group members of referenced staging groups
 	if len(stagingGroupIDSet) > 0 {
@@ -106,7 +94,7 @@ func ApplySession(ctx context.Context, database *sql.DB, sessionID int64, change
 		for id := range stagingGroupIDSet {
 			groupIDs = append(groupIDs, id)
 		}
-		placeholders := buildPlaceholders(len(groupIDs))
+		placeholders := sqlutil.BuildPlaceholders(len(groupIDs))
 		gMemberRows, err := tx.QueryContext(ctx,
 			fmt.Sprintf("SELECT member_staging_peer_ids FROM import_group_mappings WHERE session_id = ? AND id IN (%s)", placeholders),
 			append([]interface{}{sessionID}, groupIDs...)...,
@@ -123,7 +111,9 @@ func ApplySession(ctx context.Context, database *sql.DB, sessionID int64, change
 					}
 				}
 			}
-			_ = gMemberRows.Close()
+			if cErr := gMemberRows.Close(); cErr != nil {
+				log.Warn("Error closing gMemberRows", "error", cErr)
+			}
 		}
 	}
 
@@ -135,7 +125,7 @@ func ApplySession(ctx context.Context, database *sql.DB, sessionID int64, change
 		for id := range stagingPeerIDSet {
 			peerIDs = append(peerIDs, id)
 		}
-		placeholders := buildPlaceholders(len(peerIDs))
+		placeholders := sqlutil.BuildPlaceholders(len(peerIDs))
 		peerQuery = fmt.Sprintf("%s AND id IN (%s)", peerQuery, placeholders)
 		peerArgs = append(peerArgs, peerIDs...)
 	} else {
@@ -160,12 +150,16 @@ func ApplySession(ctx context.Context, database *sql.DB, sessionID int64, change
 	for peerRows.Next() {
 		var pm peerMapping
 		if err := peerRows.Scan(&pm.StagingID, &pm.IP, &pm.Hostname); err != nil {
-			_ = peerRows.Close()
+			if cErr := peerRows.Close(); cErr != nil {
+				log.Warn("Error closing peerRows after scan failure", "error", cErr)
+			}
 			return nil, fmt.Errorf("scan peer mapping: %w", err)
 		}
 		peerMappings = append(peerMappings, pm)
 	}
-	_ = peerRows.Close()
+	if cErr := peerRows.Close(); cErr != nil {
+		log.Warn("Error closing peerRows", "error", cErr)
+	}
 
 	for _, pm := range peerMappings {
 		agentKey := fmt.Sprintf("imported-%s", pm.IP)
@@ -197,7 +191,7 @@ func ApplySession(ctx context.Context, database *sql.DB, sessionID int64, change
 		for id := range stagingPeerIDSet {
 			epIDs = append(epIDs, id)
 		}
-		placeholders := buildPlaceholders(len(epIDs))
+		placeholders := sqlutil.BuildPlaceholders(len(epIDs))
 		existingPeerQuery = fmt.Sprintf("%s AND id IN (%s)", existingPeerQuery, placeholders)
 		existingPeerArgs = append(existingPeerArgs, epIDs...)
 	} else {
@@ -210,12 +204,16 @@ func ApplySession(ctx context.Context, database *sql.DB, sessionID int64, change
 	for existingPeerRows.Next() {
 		var stagingID, realID int64
 		if err := existingPeerRows.Scan(&stagingID, &realID); err != nil {
-			_ = existingPeerRows.Close()
+			if cErr := existingPeerRows.Close(); cErr != nil {
+				log.Warn("Error closing existingPeerRows after scan failure", "error", cErr)
+			}
 			return nil, fmt.Errorf("scan existing peer mapping: %w", err)
 		}
 		stagingToRealPeer[stagingID] = realID
 	}
-	_ = existingPeerRows.Close()
+	if cErr := existingPeerRows.Close(); cErr != nil {
+		log.Warn("Error closing existingPeerRows", "error", cErr)
+	}
 
 	// 2. Create groups from import_group_mappings referenced by approved rules
 	groupQuery := "SELECT id, group_name, member_ips, member_peer_ids, member_staging_peer_ids FROM import_group_mappings WHERE session_id = ? AND existing_group_id IS NULL"
@@ -225,7 +223,7 @@ func ApplySession(ctx context.Context, database *sql.DB, sessionID int64, change
 		for id := range stagingGroupIDSet {
 			gIDs = append(gIDs, id)
 		}
-		placeholders := buildPlaceholders(len(gIDs))
+		placeholders := sqlutil.BuildPlaceholders(len(gIDs))
 		groupQuery = fmt.Sprintf("%s AND id IN (%s)", groupQuery, placeholders)
 		groupArgs = append(groupArgs, gIDs...)
 	} else {
@@ -250,12 +248,16 @@ func ApplySession(ctx context.Context, database *sql.DB, sessionID int64, change
 	for groupRows.Next() {
 		var gm groupMapping
 		if err := groupRows.Scan(&gm.StagingID, &gm.GroupName, &gm.MemberIPs, &gm.MemberPeerIDs, &gm.MemberStagingIDs); err != nil {
-			_ = groupRows.Close()
+			if cErr := groupRows.Close(); cErr != nil {
+				log.Warn("Error closing groupRows after scan failure", "error", cErr)
+			}
 			return nil, fmt.Errorf("scan group mapping: %w", err)
 		}
 		groupMappings = append(groupMappings, gm)
 	}
-	_ = groupRows.Close()
+	if cErr := groupRows.Close(); cErr != nil {
+		log.Warn("Error closing groupRows", "error", cErr)
+	}
 
 	for _, gm := range groupMappings {
 		res, err := tx.ExecContext(ctx,
@@ -304,7 +306,7 @@ func ApplySession(ctx context.Context, database *sql.DB, sessionID int64, change
 		for id := range stagingGroupIDSet {
 			egIDs = append(egIDs, id)
 		}
-		placeholders := buildPlaceholders(len(egIDs))
+		placeholders := sqlutil.BuildPlaceholders(len(egIDs))
 		existingGroupQuery = fmt.Sprintf("%s AND id IN (%s)", existingGroupQuery, placeholders)
 		existingGroupArgs = append(existingGroupArgs, egIDs...)
 	} else {
@@ -317,12 +319,16 @@ func ApplySession(ctx context.Context, database *sql.DB, sessionID int64, change
 	for existingGroupRows.Next() {
 		var stagingID, realID int64
 		if err := existingGroupRows.Scan(&stagingID, &realID); err != nil {
-			_ = existingGroupRows.Close()
+			if cErr := existingGroupRows.Close(); cErr != nil {
+				log.Warn("Error closing existingGroupRows after scan failure", "error", cErr)
+			}
 			return nil, fmt.Errorf("scan existing group mapping: %w", err)
 		}
 		stagingToRealGroup[stagingID] = realID
 	}
-	_ = existingGroupRows.Close()
+	if cErr := existingGroupRows.Close(); cErr != nil {
+		log.Warn("Error closing existingGroupRows", "error", cErr)
+	}
 
 	// 3. Create services from import_service_mappings referenced by approved rules
 	svcQuery := "SELECT id, name, ports, source_ports, protocol, direction_hint FROM import_service_mappings WHERE session_id = ? AND existing_service_id IS NULL"
@@ -332,7 +338,7 @@ func ApplySession(ctx context.Context, database *sql.DB, sessionID int64, change
 		for id := range stagingServiceIDSet {
 			sIDs = append(sIDs, id)
 		}
-		placeholders := buildPlaceholders(len(sIDs))
+		placeholders := sqlutil.BuildPlaceholders(len(sIDs))
 		svcQuery = fmt.Sprintf("%s AND id IN (%s)", svcQuery, placeholders)
 		svcArgs = append(svcArgs, sIDs...)
 	} else {
@@ -358,12 +364,16 @@ func ApplySession(ctx context.Context, database *sql.DB, sessionID int64, change
 	for svcRows.Next() {
 		var sm svcMapping
 		if err := svcRows.Scan(&sm.StagingID, &sm.Name, &sm.Ports, &sm.SourcePorts, &sm.Protocol, &sm.DirectionHint); err != nil {
-			_ = svcRows.Close()
+			if cErr := svcRows.Close(); cErr != nil {
+				log.Warn("Error closing svcRows after scan failure", "error", cErr)
+			}
 			return nil, fmt.Errorf("scan service mapping: %w", err)
 		}
 		svcMappings = append(svcMappings, sm)
 	}
-	_ = svcRows.Close()
+	if cErr := svcRows.Close(); cErr != nil {
+		log.Warn("Error closing svcRows", "error", cErr)
+	}
 
 	for _, sm := range svcMappings {
 		dirHint := sm.DirectionHint
@@ -393,7 +403,7 @@ func ApplySession(ctx context.Context, database *sql.DB, sessionID int64, change
 		for id := range stagingServiceIDSet {
 			esIDs = append(esIDs, id)
 		}
-		placeholders := buildPlaceholders(len(esIDs))
+		placeholders := sqlutil.BuildPlaceholders(len(esIDs))
 		existingSvcQuery = fmt.Sprintf("%s AND id IN (%s)", existingSvcQuery, placeholders)
 		existingSvcArgs = append(existingSvcArgs, esIDs...)
 	} else {
@@ -406,12 +416,16 @@ func ApplySession(ctx context.Context, database *sql.DB, sessionID int64, change
 	for existingSvcRows.Next() {
 		var stagingID, realID int64
 		if err := existingSvcRows.Scan(&stagingID, &realID); err != nil {
-			_ = existingSvcRows.Close()
+			if cErr := existingSvcRows.Close(); cErr != nil {
+				log.Warn("Error closing existingSvcRows after scan failure", "error", cErr)
+			}
 			return nil, fmt.Errorf("scan existing service mapping: %w", err)
 		}
 		stagingToRealService[stagingID] = realID
 	}
-	_ = existingSvcRows.Close()
+	if cErr := existingSvcRows.Close(); cErr != nil {
+		log.Warn("Error closing existingSvcRows", "error", cErr)
+	}
 
 	// 4. Create policies from import_rules (status='approved')
 	ruleRows, err := tx.QueryContext(ctx,
@@ -424,7 +438,9 @@ func ApplySession(ctx context.Context, database *sql.DB, sessionID int64, change
 
 	session, err := GetSession(ctx, tx, sessionID)
 	if err != nil {
-		_ = ruleRows.Close()
+		if cErr := ruleRows.Close(); cErr != nil {
+			log.Warn("Error closing ruleRows after GetSession failure", "error", cErr)
+		}
 		return nil, fmt.Errorf("get session: %w", err)
 	}
 
@@ -437,14 +453,16 @@ func ApplySession(ctx context.Context, database *sql.DB, sessionID int64, change
 		var sourceIP, targetIP sql.NullString
 
 		if err := ruleRows.Scan(&ruleID, &sourceType, &sourceID, &sourceStagingID, &targetType, &targetID, &targetStagingID, &serviceID, &serviceStagingID, &action, &priority, &direction, &targetScope, &policyName, &enabled, &sourceIP, &targetIP); err != nil {
-			_ = ruleRows.Close()
+			if cErr := ruleRows.Close(); cErr != nil {
+				log.Warn("Error closing ruleRows after scan failure", "error", cErr)
+			}
 			return nil, fmt.Errorf("scan approved rule: %w", err)
 		}
 
 		// Resolve staging IDs to real IDs
 		realSourceID := resolveID(sourceID, sourceStagingID, sourceType, stagingToRealPeer, stagingToRealGroup)
 		realTargetID := resolveID(targetID, targetStagingID, targetType, stagingToRealPeer, stagingToRealGroup)
-		realServiceID := resolveServiceID(serviceID, serviceStagingID, stagingToRealService)
+		realServiceID := resolveID(serviceID, serviceStagingID, "service", stagingToRealPeer, stagingToRealService)
 
 		if realSourceID == 0 || realTargetID == 0 {
 			log.Warn("Skipping rule with unresolved IDs", "rule_id", ruleID)
@@ -476,11 +494,20 @@ func ApplySession(ctx context.Context, database *sql.DB, sessionID int64, change
 			createdEntities = append(createdEntities, createdEntity{entityType: "policy", entityID: int(policyID), summary: "Imported policy created"})
 		}
 	}
-	_ = ruleRows.Close()
+	if cErr := ruleRows.Close(); cErr != nil {
+		log.Warn("Error closing ruleRows", "error", cErr)
+	}
 
 	// 5. Update session status to 'applied'
 	if _, err := tx.ExecContext(ctx, "UPDATE import_sessions SET status = 'applied', updated_at = CURRENT_TIMESTAMP WHERE id = ?", sessionID); err != nil {
 		return nil, fmt.Errorf("update session status: %w", err)
+	}
+
+	// 6. Queue per-entity pending changes for recompilation (inside transaction, before commit)
+	if changeWorker != nil {
+		for _, e := range createdEntities {
+			changeWorker.QueuePeerChange(ctx, []int{int(session.PeerID)}, e.entityType, "create", e.entityID, e.summary)
+		}
 	}
 
 	// Commit the transaction
@@ -488,13 +515,6 @@ func ApplySession(ctx context.Context, database *sql.DB, sessionID int64, change
 		return nil, fmt.Errorf("commit transaction: %w", err)
 	}
 	committed = true
-
-	// 6. Queue per-entity pending changes for recompilation (outside transaction)
-	if changeWorker != nil {
-		for _, e := range createdEntities {
-			changeWorker.QueuePeerChange(ctx, []int{int(session.PeerID)}, e.entityType, "create", e.entityID, e.summary)
-		}
-	}
 
 	log.Info("Import session applied",
 		"session_id", sessionID,
@@ -507,6 +527,8 @@ func ApplySession(ctx context.Context, database *sql.DB, sessionID int64, change
 	return result, nil
 }
 
+// resolveID resolves a staging entity ID to a real entity ID.
+// peerLookup is used when entityType is "peer", groupLookup when entityType is "group" or "service".
 func resolveID(realID, stagingID *int64, entityType string, peerLookup, groupLookup map[int64]int64) int64 {
 	if realID != nil && *realID != 0 {
 		return *realID
@@ -517,22 +539,10 @@ func resolveID(realID, stagingID *int64, entityType string, peerLookup, groupLoo
 			if id, ok := peerLookup[*stagingID]; ok {
 				return id
 			}
-		case "group":
+		case "group", "service":
 			if id, ok := groupLookup[*stagingID]; ok {
 				return id
 			}
-		}
-	}
-	return 0
-}
-
-func resolveServiceID(realID, stagingID *int64, lookup map[int64]int64) int64 {
-	if realID != nil && *realID != 0 {
-		return *realID
-	}
-	if stagingID != nil && *stagingID != 0 {
-		if id, ok := lookup[*stagingID]; ok {
-			return id
 		}
 	}
 	return 0

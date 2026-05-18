@@ -402,3 +402,14 @@ func TestEncryptLargeData(t *testing.T) {
 		t.Error("Decrypt() failed to return original large plaintext")
 	}
 }
+
+// TestMain allows tests to customize behavior before running tests.
+func TestMain(m *testing.M) {
+	// Override PBKDF2 iterations for testing.
+	// Production uses 600,000 iterations (OWASP recommended), but that's too slow
+	// for tests that run thousands of encryption/decryption operations.
+	// 1,000 iterations is sufficient for test coverage while keeping tests fast.
+	pbkdf2Iterations = 1000
+
+	m.Run()
+}

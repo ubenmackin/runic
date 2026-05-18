@@ -46,8 +46,9 @@ type Metrics struct {
 
 var defaultMetrics *Metrics
 
-func init() {
-	// Initialize default metrics with the default Prometheus registry
+// RegisterMetrics initializes default metrics with the default Prometheus registry.
+// Must be called explicitly at application startup before any metrics are recorded.
+func RegisterMetrics() {
 	defaultMetrics = NewMetrics(prometheus.DefaultRegisterer)
 }
 
@@ -68,8 +69,12 @@ func NewMetrics(registerer prometheus.Registerer) *Metrics {
 		),
 		httpRequestDurationSeconds: prometheus.NewHistogramVec(
 			prometheus.HistogramOpts{
-				Name:    "http_request_duration_seconds",
-				Help:    "HTTP request latency in seconds",
+				Name: "http_request_duration_seconds",
+				Help: "HTTP request latency in seconds",
+				// NOTE: prometheus.DefBuckets (default: .005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10)
+				// provides poor resolution for very fast endpoints like health checks which complete in
+				// sub-millisecond range. If more granularity is required for fast endpoints, consider
+				// defining custom buckets such as prometheus.LinearBuckets(0.0001, 0.0002, 10).
 				Buckets: prometheus.DefBuckets,
 			},
 			[]string{"endpoint", "method"},
@@ -132,6 +137,9 @@ func NewMetrics(registerer prometheus.Registerer) *Metrics {
 
 // RecordRequest uses the default Metrics instance.
 func RecordRequest(endpoint, method string, statusCode int, duration time.Duration) {
+	if defaultMetrics == nil {
+		return
+	}
 	defaultMetrics.RecordRequest(endpoint, method, statusCode, duration)
 }
 
@@ -143,6 +151,9 @@ func (m *Metrics) RecordRequest(endpoint, method string, statusCode int, duratio
 
 // RecordError uses the default Metrics instance.
 func RecordError(endpoint string, errorType string, statusCode int) {
+	if defaultMetrics == nil {
+		return
+	}
 	defaultMetrics.RecordError(endpoint, errorType, statusCode)
 }
 

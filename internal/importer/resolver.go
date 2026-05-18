@@ -14,63 +14,11 @@ import (
 	"runic/internal/common/log"
 	"runic/internal/db"
 	"runic/internal/iptparse"
+	"runic/internal/resolve"
 )
-
-const (
-	specialTargetAnyIP            int64 = 6 // __any_ip__
-	specialTargetLimitedBroadcast int64 = 2 // __limited_broadcast__
-	specialTargetAllHosts         int64 = 3 // __all_hosts__
-	specialTargetSubnetBroadcast  int64 = 1 // __subnet_broadcast__
-)
-
-// Other CIDR suffixes (e.g., /24, /16) are preserved as they represent subnets.
-func normalizeIP(ip string) string {
-	if strings.HasSuffix(ip, "/32") {
-		return strings.TrimSuffix(ip, "/32")
-	}
-	return ip
-}
-
-// and the chain is INPUT or DOCKER-USER, indicating a broadcast rule that needs special handling.
-// Returns the broadcast special target ID: 0 = not broadcast, 1 = subnet broadcast, 2 = limited broadcast.
-// Subnet broadcast detection replaces the peer IP's last octet with 255, which is correct
-// Broadcast detection must happen before resolveEndpoint() to prevent
-// broadcast destination IPs from being resolved as target endpoints.
-func isBroadcastDest(rule *iptparse.ParsedRule, chain string, peerIPs []string) int64 {
-	if chain != "INPUT" && chain != "DOCKER-USER" {
-		return 0
-	}
-	destIP := normalizeIP(rule.DestIP)
-	if destIP == "" {
-		return 0
-	}
-	if destIP == "255.255.255.255" {
-		return specialTargetLimitedBroadcast // 2
-	}
-	// by replacing the last octet with 255.
-	// Note: This algorithm is correct for /24 subnets only, matching the
-	// engine's ResolveSpecialTarget behavior. For non-/24 subnets (e.g., /16),
-	// the correct broadcast would require CIDR-based computation (e.g.,
-	// 10.100.0.0/16 → 10.100.255.255), but peer IPs in the importer are
-	// typically /24 or bare IPs without CIDR prefix.
-	for _, peerIP := range peerIPs {
-		// Strip any CIDR suffix (e.g., "10.100.5.36/24" → "10.100.5.36")
-		// before computing the broadcast address.
-		cleanIP := parseIPPart(peerIP)
-		parts := strings.Split(cleanIP, ".")
-		if len(parts) == 4 {
-			parts[3] = "255"
-			subnetBroadcast := strings.Join(parts, ".")
-			if destIP == subnetBroadcast {
-				return specialTargetSubnetBroadcast // 1
-			}
-		}
-	}
-	return 0
-}
 
 // Multicast detection on OUTPUT/FORWARD chains is skipped because those represent
-// the peer sending multicast, not receiving it — analogous to isBroadcastDest.
+// the peer sending multicast, not receiving it — analogous to resolve.IsBroadcastDest.
 func isMulticastPktType(rule *iptparse.ParsedRule, chain string) bool {
 	if rule.PktType != "multicast" {
 		return false
@@ -80,7 +28,7 @@ func isMulticastPktType(rule *iptparse.ParsedRule, chain string) bool {
 
 // indicating an IGMP rule that needs special handling before normal endpoint resolution.
 // IGMP rules on OUTPUT/FORWARD chains are skipped because those represent the peer sending
-// IGMP, not receiving it — analogous to isBroadcastDest and isMulticastPktType.
+// IGMP, not receiving it — analogous to resolve.IsBroadcastDest and isMulticastPktType.
 func isIGMPProtocol(rule *iptparse.ParsedRule, chain string) bool {
 	if rule.Protocol != "igmp" {
 		return false
@@ -108,7 +56,7 @@ func resolveIGMPRule(ctx context.Context, database db.Querier, ruleID int64, pee
 	// target = peer (the machine receiving the IGMP packets)
 	_, err = database.ExecContext(ctx,
 		"UPDATE import_rules SET source_type = 'special', source_id = ?, source_staging_id = NULL, target_type = 'peer', target_id = ?, target_staging_id = NULL, service_id = ?, service_staging_id = NULL, source_ip = '', direction = 'both', target_ip = ?, status = 'resolved' WHERE id = ?",
-		specialTargetAllHosts, peerID, igmpServiceID, primaryIP, ruleID,
+		int64(resolve.SpecialIDAllHosts), peerID, igmpServiceID, primaryIP, ruleID,
 	)
 	return err
 }
@@ -124,7 +72,11 @@ func resolveRules(ctx context.Context, database db.Querier, sessionID int64, pee
 	if err != nil {
 		return fmt.Errorf("query rules: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() {
+		if cErr := rows.Close(); cErr != nil {
+			log.Warn("Error closing resolver rows", "error", cErr)
+		}
+	}()
 
 	type ruleRow struct {
 		ID          int64
@@ -148,7 +100,9 @@ func resolveRules(ctx context.Context, database db.Querier, sessionID int64, pee
 		}
 		rules = append(rules, r)
 	}
-	_ = rows.Close()
+	if cErr := rows.Close(); cErr != nil {
+		log.Warn("Error closing resolver rows after iteration", "error", cErr)
+	}
 
 	// Re-parse each rule to get source/target/service info
 	for i := range rules {
@@ -179,8 +133,8 @@ func resolveRules(ctx context.Context, database db.Querier, sessionID int64, pee
 
 		// Broadcast detection must happen before resolveEndpoint() so that
 		// broadcast destination IPs are not resolved as target endpoints.
-		if broadcastSpecialID := isBroadcastDest(pr, r.Chain, peerIPs); broadcastSpecialID != 0 {
-			if err := resolveBroadcastRule(ctx, database, sessionID, r.ID, peerID, broadcastSpecialID, pr); err != nil {
+		if broadcastSpecialID := resolve.IsBroadcastDest(pr.DestIP, r.Chain, peerIPs); broadcastSpecialID != 0 {
+			if err := resolveBroadcastRule(ctx, database, sessionID, r.ID, peerID, int64(broadcastSpecialID), pr); err != nil {
 				log.Warn("Failed to resolve broadcast rule", "rule_id", r.ID, "error", err)
 			}
 			continue
@@ -196,7 +150,7 @@ func resolveRules(ctx context.Context, database db.Querier, sessionID int64, pee
 		serviceID, serviceStagingID := resolveService(ctx, database, sessionID, pr)
 
 		// Correct source mapping for system policy patterns
-		if sourceType == "special" && sourceID == specialTargetAnyIP {
+		if sourceType == "special" && sourceID == int64(resolve.SpecialIDAnyIP) {
 			if targetType == "special" && serviceID > 0 {
 				var isSystemService bool
 				err := database.QueryRowContext(ctx, "SELECT is_system FROM services WHERE id = ?", serviceID).Scan(&isSystemService)
@@ -220,7 +174,7 @@ func resolveRules(ctx context.Context, database db.Querier, sessionID int64, pee
 							// will still be incorrect (target=broadcast special, service=Multicast).
 							// If this fires, the rule should be flagged for manual review.
 							sourceType = "special"
-							sourceID = specialTargetLimitedBroadcast
+							sourceID = int64(resolve.SpecialIDLimitedBroadcast)
 							sourceStagingID = 0
 							sourceIP = ""
 						}
@@ -272,7 +226,7 @@ func resolveEndpoint(ctx context.Context, database db.Querier, sessionID int64, 
 	}
 
 	// Normalize IP (strip /32 CIDR)
-	ip = normalizeIP(ip)
+	ip = resolve.NormalizeIP(ip)
 
 	// Determine if this endpoint represents the "self" side of the imported peer
 	isSelfEndpoint := (!isSource && (chain == "INPUT" || chain == "DOCKER-USER")) || (isSource && chain == "OUTPUT")
@@ -295,7 +249,7 @@ func resolveEndpoint(ctx context.Context, database db.Querier, sessionID int64, 
 
 	// 0.0.0.0, 0.0.0.0/0, or empty = any IP → special target
 	if ip == "" || ip == "0.0.0.0" || ip == "0.0.0.0/0" {
-		return "special", specialTargetAnyIP, 0, "" // __any_ip__
+		return "special", int64(resolve.SpecialIDAnyIP), 0, "" // __any_ip__
 	}
 
 	var existingPeerID int64
@@ -353,7 +307,7 @@ func resolveIpsetEndpoint(ctx context.Context, database db.Querier, sessionID in
 	var existingPeerIDs []int64
 	var stagingPeerIDs []int64
 	for _, memberIP := range members {
-		memberIP = normalizeIP(memberIP) // Normalize before lookup
+		memberIP = resolve.NormalizeIP(memberIP) // Normalize before lookup
 		var pid int64
 		err := database.QueryRowContext(ctx, "SELECT id FROM peers WHERE ip_address = ?", memberIP).Scan(&pid)
 		if err == nil {
@@ -388,7 +342,9 @@ func resolveIpsetEndpoint(ctx context.Context, database db.Querier, sessionID in
 					dbMemberPeerIDs = append(dbMemberPeerIDs, pid)
 				}
 			}
-			_ = memberRows.Close()
+			if cErr := memberRows.Close(); cErr != nil {
+				log.Warn("Error closing memberRows", "error", cErr)
+			}
 		}
 
 		// Sort both slices for comparison
@@ -576,7 +532,7 @@ func determineDirection(ctx context.Context, chain string, remoteType string, re
 }
 
 func createStagingPeer(ctx context.Context, database db.Querier, sessionID int64, ip, hostname string) (int64, error) {
-	ip = normalizeIP(ip) // Normalize before dedup/insert
+	ip = resolve.NormalizeIP(ip) // Normalize before dedup/insert
 	var existingID int64
 	err := database.QueryRowContext(ctx,
 		"SELECT id FROM import_peer_mappings WHERE session_id = ? AND ip_address = ?",
@@ -627,17 +583,13 @@ func parseIpsetData(rawIpsets string) map[string][]string {
 			parts := strings.Fields(line)
 			if len(parts) > 0 {
 				ip := parts[0]
-				if netIP := parseIPPart(ip); netIP != "" {
+				if netIP := strings.Split(ip, "/")[0]; netIP != "" {
 					result[currentName] = append(result[currentName], netIP)
 				}
 			}
 		}
 	}
 	return result
-}
-
-func parseIPPart(s string) string {
-	return strings.Split(s, "/")[0]
 }
 
 // Zero maps to NULL (Valid=false), non-zero maps to the integer value (Valid=true).
@@ -669,7 +621,7 @@ func resolveMulticastRule(ctx context.Context, database db.Querier, ruleID int64
 	// target = peer (the machine receiving the multicast)
 	_, err = database.ExecContext(ctx,
 		"UPDATE import_rules SET source_type = 'special', source_id = ?, source_staging_id = NULL, target_type = 'peer', target_id = ?, target_staging_id = NULL, service_id = ?, service_staging_id = NULL, source_ip = '', direction = 'both', target_ip = ?, status = 'resolved' WHERE id = ?",
-		specialTargetAllHosts, peerID, multicastServiceID, primaryIP, ruleID,
+		int64(resolve.SpecialIDAllHosts), peerID, multicastServiceID, primaryIP, ruleID,
 	)
 	return err
 }
@@ -680,9 +632,9 @@ func resolveMulticastRule(ctx context.Context, database db.Querier, ruleID int64
 func resolveBroadcastService(ctx context.Context, database db.Querier, broadcastSpecialID int64) (int64, error) {
 	var serviceName string
 	switch broadcastSpecialID {
-	case specialTargetSubnetBroadcast: // 1
+	case int64(resolve.SpecialIDSubnetBroadcast): // 1
 		serviceName = "Subnet Broadcast"
-	case specialTargetLimitedBroadcast: // 2
+	case int64(resolve.SpecialIDLimitedBroadcast): // 2
 		serviceName = "Limited Broadcast"
 	default:
 		return 0, fmt.Errorf("unknown broadcast special ID: %d", broadcastSpecialID)
@@ -705,7 +657,7 @@ func resolveBroadcastService(ctx context.Context, database db.Querier, broadcast
 // represents the source (the broadcast domain), while the target is the peer itself
 // (the machine receiving the broadcast).
 func resolveBroadcastRule(ctx context.Context, database db.Querier, sessionID int64, ruleID int64, peerID int64, broadcastSpecialID int64, rule *iptparse.ParsedRule) error {
-	// broadcastSpecialID is already determined by isBroadcastDest()
+	// broadcastSpecialID is already determined by resolve.IsBroadcastDest()
 
 	// Resolve broadcast-specific service
 	var serviceID int64

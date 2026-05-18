@@ -57,10 +57,6 @@ func (e *ConditionEvaluator) EvaluateRule(ctx context.Context, rule *AlertRule) 
 		event, err = e.evaluateBundleFailed(ctx, rule)
 	case AlertTypeBlockedSpike:
 		event, err = e.evaluateBlockedSpike(ctx, rule)
-	case AlertTypePeerOnline:
-		event, err = e.evaluatePeerOnline(ctx, rule)
-	case AlertTypeNewPeer:
-		event, err = e.evaluateNewPeer(ctx, rule)
 	case AlertTypeBundleDeployed:
 		event, err = e.evaluateBundleDeployed(ctx, rule)
 	default:
@@ -424,18 +420,6 @@ func (e *ConditionEvaluator) checkBlockedSpikeByID(ctx context.Context, rule *Al
 			"window_minutes":      rule.ThresholdWindowMinutes,
 		},
 	}, nil
-}
-
-// This is triggered when a peer comes back online after being offline.
-func (e *ConditionEvaluator) evaluatePeerOnline(ctx context.Context, rule *AlertRule) (*AlertEvent, error) {
-	// This alert type is typically triggered by a webhook/event, not polling
-	return nil, nil
-}
-
-// This is triggered when a new peer is registered.
-func (e *ConditionEvaluator) evaluateNewPeer(ctx context.Context, rule *AlertRule) (*AlertEvent, error) {
-	// This alert type is typically triggered by a webhook/event, not polling
-	return nil, nil
 }
 
 // CheckPeerOffline returns true if the peer is offline, along with the duration offline.

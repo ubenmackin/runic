@@ -2,6 +2,7 @@ package iptparse
 
 import (
 	"fmt"
+	"log"
 	"strings"
 )
 
@@ -14,6 +15,26 @@ var supportedModules = map[string]bool{
 	"comment":   true,
 	"multiport": true,
 	"pkttype":   true,
+}
+
+// parseModuleParams advances through tokens for a given module, calling the handler
+// for each recognized flag within the module's parameter block. The block ends when
+// a new flag starting with "-" (other than module-specific flags) or a known module
+// flag is encountered. Returns the updated token index.
+func parseModuleParams(tokens []string, i int, module string, handlers map[string]func([]string, *int)) int {
+	for i+1 < len(tokens) {
+		next := tokens[i+1]
+		// Stop if next token starts a new module, jump target, or basic match flag
+		if next == "-m" || next == "-j" || next == "-p" || next == "-s" || next == "-d" || next == "-i" || next == "-o" {
+			break
+		}
+		if fn, ok := handlers[next]; ok {
+			fn(tokens, &i)
+		} else {
+			i++
+		}
+	}
+	return i
 }
 
 // Parse only processes chains listed in the chains parameter.
@@ -74,6 +95,106 @@ func Parse(iptablesSaveOutput string, chains []string) ([]ParsedChain, error) {
 	}
 
 	return result, nil
+}
+
+// moduleHandlers returns the parameter handlers for a given iptables module name.
+func moduleHandlers(rule *ParsedRule, mod string) map[string]func([]string, *int) {
+	switch mod {
+	case "set":
+		return map[string]func([]string, *int){
+			"--match-set": func(ts []string, ip *int) {
+				*ip += 2 // skip --match-set
+				if *ip+1 < len(ts) {
+					rule.IpsetMatch = &IpsetMatch{
+						Name:      ts[*ip],
+						Direction: ts[*ip+1],
+					}
+					*ip++ // skip direction (consumed in next i++)
+				}
+			},
+		}
+	case "conntrack":
+		return map[string]func([]string, *int){
+			"--ctstate": func(ts []string, ip *int) {
+				*ip += 2 // skip --ctstate
+				if *ip < len(ts) {
+					states := strings.Split(ts[*ip], ",")
+					for _, s := range states {
+						trimmed := strings.TrimSpace(s)
+						if trimmed != "" {
+							rule.ConntrackStates = append(rule.ConntrackStates, trimmed)
+						}
+					}
+				}
+			},
+		}
+	case "tcp", "udp":
+		return map[string]func([]string, *int){
+			"--dport": func(ts []string, ip *int) {
+				*ip += 2
+				if *ip < len(ts) {
+					rule.DestPort = ts[*ip]
+				}
+			},
+			"--sport": func(ts []string, ip *int) {
+				*ip += 2
+				if *ip < len(ts) {
+					rule.SourcePort = ts[*ip]
+				}
+			},
+		}
+	case "comment":
+		return map[string]func([]string, *int){
+			"--comment": func(ts []string, ip *int) {
+				*ip += 2
+				if *ip < len(ts) {
+					rule.Comment = strings.Trim(ts[*ip], "\"")
+				}
+			},
+		}
+	case "multiport":
+		return map[string]func([]string, *int){
+			"--dports": func(ts []string, ip *int) {
+				*ip += 2
+				if *ip < len(ts) {
+					rule.DestPort = ts[*ip]
+				}
+			},
+			"--sports": func(ts []string, ip *int) {
+				*ip += 2
+				if *ip < len(ts) {
+					rule.SourcePort = ts[*ip]
+				}
+			},
+		}
+	case "pkttype":
+		return map[string]func([]string, *int){
+			"--pkt-type": func(ts []string, ip *int) {
+				*ip += 2
+				if *ip < len(ts) {
+					rule.PktType = ts[*ip]
+				}
+			},
+		}
+	default:
+		return nil
+	}
+}
+
+// completenessError returns a non-empty error string if the parsed rule is
+// truncated or malformed — missing a target or containing no meaningful matches.
+func completenessError(rule *ParsedRule) string {
+	if rule.Target == "" {
+		return "rule missing target (-j)"
+	}
+	if rule.Protocol == "" && rule.SourceIP == "" && rule.DestIP == "" &&
+		rule.SourcePort == "" && rule.DestPort == "" &&
+		rule.InInterface == "" && rule.OutInterface == "" &&
+		rule.IpsetMatch == nil && len(rule.ConntrackStates) == 0 &&
+		rule.Comment == "" && rule.PktType == "" {
+		return "rule has no match criteria — possibly truncated"
+	}
+	return ""
 }
 
 func parseRule(line, chain string, order int) ParsedRule {
@@ -149,141 +270,53 @@ func parseRule(line, chain string, order int) ParsedRule {
 				mod := tokens[i]
 				modules = append(modules, mod)
 
-				switch mod {
-				case "set":
-					// Look for --match-set NAME DIR
-					for i+1 < len(tokens) && tokens[i+1] != "-m" && tokens[i+1] != "-j" && tokens[i+1] != "-p" && tokens[i+1] != "-s" && tokens[i+1] != "-d" && tokens[i+1] != "-i" && tokens[i+1] != "-o" {
-						if tokens[i+1] == "--match-set" {
-							i += 2 // skip --match-set
-							if i+1 < len(tokens) {
-								ipsetName := tokens[i]
-								ipsetDir := tokens[i+1]
-								rule.IpsetMatch = &IpsetMatch{
-									Name:      ipsetName,
-									Direction: ipsetDir,
-								}
-								i++ // skip direction (consumed in next i++)
-							}
-						} else {
-							i++
-						}
-					}
-
-				case "conntrack":
-					// Look for --ctstate
-					for i+1 < len(tokens) && tokens[i+1] != "-m" && tokens[i+1] != "-j" && tokens[i+1] != "-p" && tokens[i+1] != "-s" && tokens[i+1] != "-d" && tokens[i+1] != "-i" && tokens[i+1] != "-o" {
-						if tokens[i+1] == "--ctstate" {
-							i += 2 // skip --ctstate
-							if i < len(tokens) {
-								states := strings.Split(tokens[i], ",")
-								for _, s := range states {
-									trimmed := strings.TrimSpace(s)
-									if trimmed != "" {
-										rule.ConntrackStates = append(rule.ConntrackStates, trimmed)
-									}
-								}
-							}
-						} else {
-							i++
-						}
-					}
-
-				case "tcp":
-					// Look for --dport or --sport
-					for i+1 < len(tokens) && tokens[i+1] != "-m" && tokens[i+1] != "-j" && tokens[i+1] != "-p" && tokens[i+1] != "-s" && tokens[i+1] != "-d" && tokens[i+1] != "-i" && tokens[i+1] != "-o" {
-						switch tokens[i+1] {
-						case "--dport":
-							i += 2 // skip --dport
-							if i < len(tokens) {
-								rule.DestPort = tokens[i]
-							}
-						case "--sport":
-							i += 2 // skip --sport
-							if i < len(tokens) {
-								rule.SourcePort = tokens[i]
-							}
-						default:
-							i++
-						}
-					}
-
-				case "udp":
-					// Look for --dport or --sport
-					for i+1 < len(tokens) && tokens[i+1] != "-m" && tokens[i+1] != "-j" && tokens[i+1] != "-p" && tokens[i+1] != "-s" && tokens[i+1] != "-d" && tokens[i+1] != "-i" && tokens[i+1] != "-o" {
-						switch tokens[i+1] {
-						case "--dport":
-							i += 2 // skip --dport
-							if i < len(tokens) {
-								rule.DestPort = tokens[i]
-							}
-						case "--sport":
-							i += 2 // skip --sport
-							if i < len(tokens) {
-								rule.SourcePort = tokens[i]
-							}
-						default:
-							i++
-						}
-					}
-
-				case "comment":
-					// Look for --comment
-					for i+1 < len(tokens) && tokens[i+1] != "-m" && tokens[i+1] != "-j" && tokens[i+1] != "-p" && tokens[i+1] != "-s" && tokens[i+1] != "-d" && tokens[i+1] != "-i" && tokens[i+1] != "-o" {
-						if tokens[i+1] == "--comment" {
-							i += 2 // skip --comment
-							if i < len(tokens) {
-								rule.Comment = strings.Trim(tokens[i], "\"")
-							}
-						} else {
-							i++
-						}
-					}
-
-				case "multiport":
-					// Look for --dports or --sports
-					for i+1 < len(tokens) && tokens[i+1] != "-m" && tokens[i+1] != "-j" && tokens[i+1] != "-p" && tokens[i+1] != "-s" && tokens[i+1] != "-d" && tokens[i+1] != "-i" && tokens[i+1] != "-o" {
-						switch tokens[i+1] {
-						case "--dports":
-							i += 2 // skip --dports
-							if i < len(tokens) {
-								rule.DestPort = tokens[i]
-							}
-						case "--sports":
-							i += 2 // skip --sports
-							if i < len(tokens) {
-								rule.SourcePort = tokens[i]
-							}
-						default:
-							i++
-						}
-					}
-
-				case "pkttype":
-					// Look for --pkt-type
-					for i+1 < len(tokens) && tokens[i+1] != "-m" && tokens[i+1] != "-j" && tokens[i+1] != "-p" && tokens[i+1] != "-s" && tokens[i+1] != "-d" && tokens[i+1] != "-i" && tokens[i+1] != "-o" {
-						if tokens[i+1] == "--pkt-type" {
-							i += 2 // skip --pkt-type
-							if i < len(tokens) {
-								rule.PktType = tokens[i]
-							}
-						} else {
-							i++
-						}
-					}
+				if handlers := moduleHandlers(&rule, mod); handlers != nil {
+					i = parseModuleParams(tokens, i, mod, handlers)
 				}
 			}
 
 		default:
-			// Skip unrecognized tokens
+			log.Printf("unrecognized token in rule %d (chain %s): %s", order, chain, tok)
 		}
 
 		i++
+	}
+
+	// Validate completeness for truncated/malformed input
+	if reason := completenessError(&rule); reason != "" {
+		log.Printf("incomplete rule %d (chain %s): %s — raw: %s", order, chain, reason, line)
 	}
 
 	// Determine IsRunicStandard, IsClean, and SkipReason
 	classifyRule(&rule, modules)
 
 	return rule
+}
+
+// Validate ensures the input has complete structure (non-empty, contains at least one rule line).
+func Validate(iptablesSaveOutput string) error {
+	if strings.TrimSpace(iptablesSaveOutput) == "" {
+		return fmt.Errorf("empty iptables-save output")
+	}
+	lines := strings.Split(iptablesSaveOutput, "\n")
+	hasChain := false
+	hasRule := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, ":") {
+			hasChain = true
+		}
+		if strings.HasPrefix(trimmed, "-A ") {
+			hasRule = true
+		}
+	}
+	if !hasChain {
+		return fmt.Errorf("missing chain definitions in iptables-save output")
+	}
+	if !hasRule {
+		return fmt.Errorf("no rules found in iptables-save output")
+	}
+	return nil
 }
 
 func classifyRule(rule *ParsedRule, modules []string) {

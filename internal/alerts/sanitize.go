@@ -31,7 +31,6 @@
 package alerts
 
 import (
-	"html"
 	"strings"
 )
 
@@ -71,22 +70,6 @@ func SanitizeAlertInput(input string, maxLen int) (string, bool) {
 	}
 
 	return sanitized, modified
-}
-
-// SanitizeAlertInputStrict sanitizes alert input strictly, removing dangerous characters for email display and HTML output. It removes/escapes:
-// - Control characters (CR, LF, NUL, etc.)
-// - HTML special characters (<, >, &, ", ')
-// - Email header injection characters (@ for certain contexts)
-// Returns the sanitized string and true if modifications were made.
-func SanitizeAlertInputStrict(input string, maxLen int) (string, bool) {
-	sanitized, modified := SanitizeAlertInput(input, maxLen)
-
-	escaped := html.EscapeString(sanitized)
-	if escaped != sanitized {
-		modified = true
-	}
-
-	return escaped, modified
 }
 
 // multi-byte UTF-8 sequences.

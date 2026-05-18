@@ -159,10 +159,10 @@ func BenchmarkCompileAndStore(b *testing.B) {
 	defer cleanup()
 
 	for i := 1; i <= 10; i++ {
-		hostname := fmt.Sprintf("peer-%s", string(rune('a'+i-1)))
+		hostname := fmt.Sprintf("peer-%d", i)
 		ipAddr := fmt.Sprintf("10.0.%d.10/32", i)
 		_, err := database.Exec("INSERT INTO peers (hostname, ip_address, has_docker, agent_key, hmac_key) VALUES (?, ?, ?, ?, ?)",
-			hostname, ipAddr, false, "key-"+string(rune('a'+i-1)), "test-key-"+string(rune('a'+i-1)))
+			hostname, ipAddr, false, fmt.Sprintf("key-%d", i), fmt.Sprintf("test-key-%d", i))
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -202,14 +202,13 @@ func BenchmarkCompileAndStore(b *testing.B) {
 	compiler := NewTestCompiler(database)
 	ctx := context.Background()
 
-	// Run once to create initial bundle, then benchmark subsequent compilations that will fail due to unique constraint
-	// So we run only 1 iteration for this benchmark
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if i > 0 {
-			// Clear previous bundles to avoid unique constraint
-			database.Exec("DELETE FROM rule_bundles WHERE peer_id = 1")
-		}
+		// Remove previously stored bundle to keep DB clean between iterations
+		b.StopTimer()
+		database.Exec("DELETE FROM rule_bundles WHERE peer_id = 1")
+		b.StartTimer()
+
 		_, err := compiler.CompileAndStore(ctx, 1)
 		if err != nil {
 			b.Fatalf("CompileAndStore failed: %v", err)

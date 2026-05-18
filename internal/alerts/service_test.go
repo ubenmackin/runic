@@ -414,7 +414,7 @@ func TestGetRecipients(t *testing.T) {
 			processor := NewAlertProcessor(alertStore, userStore, nil)
 
 			ctx := context.Background()
-			email, err := processor.getAdminEmail(ctx)
+			emails, err := processor.getAdminEmails(ctx)
 
 			if tt.wantRecipients == 0 {
 				if err == nil {
@@ -424,19 +424,24 @@ func TestGetRecipients(t *testing.T) {
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)
 				}
-				if email == "" {
-					t.Error("expected non-empty email")
+				if len(emails) == 0 {
+					t.Error("expected non-empty emails list")
 				}
-				// Verify the email matches one of our expected emails
-				found := false
+				if len(emails) != tt.wantRecipients {
+					t.Errorf("expected %d emails, got %d: %v", tt.wantRecipients, len(emails), emails)
+				}
+				// Verify all expected emails are present
 				for _, wantEmail := range tt.wantEmails {
-					if email == wantEmail {
-						found = true
-						break
+					found := false
+					for _, email := range emails {
+						if email == wantEmail {
+							found = true
+							break
+						}
 					}
-				}
-				if !found {
-					t.Errorf("email %s not in expected list %v", email, tt.wantEmails)
+					if !found {
+						t.Errorf("expected email %s not found in results %v", wantEmail, emails)
+					}
 				}
 			}
 		})

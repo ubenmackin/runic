@@ -13,7 +13,7 @@ import (
 // DefaultPullIntervalSec is the interval for polling; SSE is the primary notification mechanism; polling is a fallback.
 const DefaultPullIntervalSec = 86400 // 24 hours (SSE is primary)
 
-// DefaultHeartbeatIntervalSec must be less than OfflineThresholdSeconds (90s) to prevent false offline detection.
+// DefaultHeartbeatIntervalSec must be less than constants.OfflineThreshold (90s) to prevent false offline detection.
 const DefaultHeartbeatIntervalSec = 30
 
 type Config struct {

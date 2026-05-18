@@ -64,14 +64,11 @@ func TestWorker_Start(t *testing.T) {
 		}
 
 		worker := NewWorker(mainDB, logsDB)
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
-		worker.Start(ctx)
-
-		// Wait for initial cleanup to complete
-		time.Sleep(100 * time.Millisecond)
-		cancel() // Cancel context to stop the worker
+		worker.Start(ctx) // cleanup runs synchronously before goroutine starts
+		cancel()          // stop background goroutine
 
 		// Verify old log was deleted
 		var count int
@@ -96,38 +93,8 @@ func TestWorker_Start(t *testing.T) {
 		worker := NewWorker(mainDB, logsDB)
 		ctx, cancel := context.WithCancel(context.Background())
 
-		worker.Start(ctx)
-
-		// Cancel context after short delay
-		time.Sleep(50 * time.Millisecond)
-		cancel()
-
-		// Give time for goroutine to exit
-		time.Sleep(50 * time.Millisecond)
-
-		// The worker should have stopped - no panic means success
-	})
-
-	t.Run("respects stop channel", func(t *testing.T) {
-		mainDB, logsDB, cleanup := setupTestDatabases(t)
-		defer cleanup()
-
-		_, err := mainDB.Exec("INSERT INTO system_config (key, value) VALUES ('log_retention_days', '-1')")
-		if err != nil {
-			t.Fatalf("Failed to insert config: %v", err)
-		}
-
-		worker := NewWorker(mainDB, logsDB)
-		ctx, cancel := context.WithCancel(context.Background())
-
-		worker.Start(ctx)
-
-		// Cancel after short delay
-		time.Sleep(50 * time.Millisecond)
-		cancel()
-
-		// Give time for goroutine to exit
-		time.Sleep(50 * time.Millisecond)
+		worker.Start(ctx) // runCleanup returns immediately (retention=-1)
+		cancel()          // cancel context; goroutine exits on next select iteration
 
 		// The worker should have stopped - no panic means success
 	})
@@ -450,12 +417,11 @@ func TestWorker_Integration(t *testing.T) {
 	}
 
 	worker := NewWorker(mainDB, logsDB)
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	worker.Start(ctx)
-	time.Sleep(100 * time.Millisecond)
-	cancel() // Cancel context to stop the worker
+	worker.Start(ctx) // cleanup runs synchronously; old log is deleted before goroutine starts
+	cancel()          // stop background goroutine
 
 	// Verify only recent log remains
 	var count int

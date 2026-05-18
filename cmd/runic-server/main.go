@@ -28,6 +28,7 @@ import (
 	"runic/internal/crypto"
 	"runic/internal/db"
 	"runic/internal/engine"
+	"runic/internal/metrics"
 	"runic/internal/store"
 )
 
@@ -222,6 +223,7 @@ func main() {
 	}
 
 	auth.SetTokenStore(store.NewTokenStore(database))
+	metrics.RegisterMetrics()
 
 	r := mux.NewRouter()
 
@@ -379,7 +381,7 @@ func startOfflineDetector(ctx context.Context, database *sql.DB) {
 			_, err := database.ExecContext(ctx,
 				fmt.Sprintf(`UPDATE peers SET status = 'offline'
 				WHERE status = 'online'
-				AND last_heartbeat < datetime('now', '-%d seconds')`, constants.OfflineThresholdSeconds),
+				AND last_heartbeat < datetime('now', '-%d seconds')`, int(constants.OfflineThreshold.Seconds())),
 			)
 			if err != nil {
 				log.Printf("Offline detector error: %v", err)

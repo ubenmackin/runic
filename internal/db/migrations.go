@@ -103,139 +103,127 @@ func migrateSchema(ctx context.Context, database *sql.DB) error {
 	if hasServersTable {
 		log.Info("Migration: renaming servers to peers")
 
-		tx, err := database.BeginTx(ctx, nil)
-		if err != nil {
-			return fmt.Errorf("failed to begin migration transaction: %w", err)
-		}
-		committed := false
-		defer func() {
-			if !committed {
-				if rErr := tx.Rollback(); rErr != nil {
-					fmt.Printf("rollback failed: %v", rErr)
-				}
+		if err := withTx(ctx, database, func(ctx context.Context, tx *sql.Tx) error {
+			// 1. Rename servers table to peers
+			if _, err := tx.ExecContext(ctx, "ALTER TABLE servers RENAME TO peers"); err != nil {
+				return fmt.Errorf("failed to rename servers to peers: %w", err)
 			}
-		}()
 
-		// 1. Rename servers table to peers
-		if _, err := tx.ExecContext(ctx, "ALTER TABLE servers RENAME TO peers"); err != nil {
-			return fmt.Errorf("failed to rename servers to peers: %w", err)
-		}
+			// 2. Add is_manual column
+			if _, err := tx.ExecContext(ctx, "ALTER TABLE peers ADD COLUMN is_manual BOOLEAN NOT NULL DEFAULT 0"); err != nil {
+				return fmt.Errorf("failed to add is_manual column: %w", err)
+			}
 
-		// 2. Add is_manual column
-		if _, err := tx.ExecContext(ctx, "ALTER TABLE peers ADD COLUMN is_manual BOOLEAN NOT NULL DEFAULT 0"); err != nil {
-			return fmt.Errorf("failed to add is_manual column: %w", err)
-		}
+			// 3. Recreate policies table with target_peer_id
+			if _, err := tx.ExecContext(ctx, `CREATE TABLE policies_new (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				name TEXT NOT NULL,
+				description TEXT,
+				source_group_id INTEGER NOT NULL,
+				service_id INTEGER NOT NULL,
+				target_peer_id INTEGER NOT NULL,
+				action TEXT NOT NULL DEFAULT 'ACCEPT' CHECK(action IN ('ACCEPT', 'DROP', 'LOG_DROP')),
+				priority INTEGER NOT NULL DEFAULT 100,
+				enabled BOOLEAN NOT NULL DEFAULT 1,
+				created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+				updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+				FOREIGN KEY(source_group_id) REFERENCES groups(id),
+				FOREIGN KEY(service_id) REFERENCES services(id),
+				FOREIGN KEY(target_peer_id) REFERENCES peers(id)
+			)`); err != nil {
+				return fmt.Errorf("failed to create policies_new: %w", err)
+			}
+			if _, err := tx.ExecContext(ctx, `INSERT INTO policies_new SELECT id, name, description, source_group_id, service_id, target_server_id, action, priority, enabled, created_at, updated_at FROM policies`); err != nil {
+				return fmt.Errorf("failed to copy policies: %w", err)
+			}
+			if _, err := tx.ExecContext(ctx, "DROP TABLE policies"); err != nil {
+				return fmt.Errorf("failed to drop policies: %w", err)
+			}
+			if _, err := tx.ExecContext(ctx, "ALTER TABLE policies_new RENAME TO policies"); err != nil {
+				return fmt.Errorf("failed to rename policies_new: %w", err)
+			}
 
-		// 3. Recreate policies table with target_peer_id
-		if _, err := tx.ExecContext(ctx, `CREATE TABLE policies_new (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			name TEXT NOT NULL,
-			description TEXT,
-			source_group_id INTEGER NOT NULL,
-			service_id INTEGER NOT NULL,
-			target_peer_id INTEGER NOT NULL,
-			action TEXT NOT NULL DEFAULT 'ACCEPT' CHECK(action IN ('ACCEPT', 'DROP', 'LOG_DROP')),
-			priority INTEGER NOT NULL DEFAULT 100,
-			enabled BOOLEAN NOT NULL DEFAULT 1,
-			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			FOREIGN KEY(source_group_id) REFERENCES groups(id),
-			FOREIGN KEY(service_id) REFERENCES services(id),
-			FOREIGN KEY(target_peer_id) REFERENCES peers(id)
-		)`); err != nil {
-			return fmt.Errorf("failed to create policies_new: %w", err)
-		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO policies_new SELECT id, name, description, source_group_id, service_id, target_server_id, action, priority, enabled, created_at, updated_at FROM policies`); err != nil {
-			return fmt.Errorf("failed to copy policies: %w", err)
-		}
-		if _, err := tx.ExecContext(ctx, "DROP TABLE policies"); err != nil {
-			return fmt.Errorf("failed to drop policies: %w", err)
-		}
-		if _, err := tx.ExecContext(ctx, "ALTER TABLE policies_new RENAME TO policies"); err != nil {
-			return fmt.Errorf("failed to rename policies_new: %w", err)
-		}
+			// 4. Recreate rule_bundles table with peer_id
+			if _, err := tx.ExecContext(ctx, `CREATE TABLE rule_bundles_new (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				peer_id INTEGER NOT NULL,
+				version TEXT NOT NULL,
+				rules_content TEXT NOT NULL,
+				hmac TEXT NOT NULL,
+				created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+				applied_at DATETIME,
+				FOREIGN KEY(peer_id) REFERENCES peers(id) ON DELETE CASCADE
+			)`); err != nil {
+				return fmt.Errorf("failed to create rule_bundles_new: %w", err)
+			}
+			if _, err := tx.ExecContext(ctx, `INSERT INTO rule_bundles_new SELECT id, server_id, version, rules_content, hmac, created_at, applied_at FROM rule_bundles`); err != nil {
+				return fmt.Errorf("failed to copy rule_bundles: %w", err)
+			}
+			if _, err := tx.ExecContext(ctx, "DROP TABLE rule_bundles"); err != nil {
+				return fmt.Errorf("failed to drop rule_bundles: %w", err)
+			}
+			if _, err := tx.ExecContext(ctx, "ALTER TABLE rule_bundles_new RENAME TO rule_bundles"); err != nil {
+				return fmt.Errorf("failed to rename rule_bundles_new: %w", err)
+			}
 
-		// 4. Recreate rule_bundles table with peer_id
-		if _, err := tx.ExecContext(ctx, `CREATE TABLE rule_bundles_new (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			peer_id INTEGER NOT NULL,
-			version TEXT NOT NULL,
-			rules_content TEXT NOT NULL,
-			hmac TEXT NOT NULL,
-			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			applied_at DATETIME,
-			FOREIGN KEY(peer_id) REFERENCES peers(id) ON DELETE CASCADE
-		)`); err != nil {
-			return fmt.Errorf("failed to create rule_bundles_new: %w", err)
-		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO rule_bundles_new SELECT id, server_id, version, rules_content, hmac, created_at, applied_at FROM rule_bundles`); err != nil {
-			return fmt.Errorf("failed to copy rule_bundles: %w", err)
-		}
-		if _, err := tx.ExecContext(ctx, "DROP TABLE rule_bundles"); err != nil {
-			return fmt.Errorf("failed to drop rule_bundles: %w", err)
-		}
-		if _, err := tx.ExecContext(ctx, "ALTER TABLE rule_bundles_new RENAME TO rule_bundles"); err != nil {
-			return fmt.Errorf("failed to rename rule_bundles_new: %w", err)
-		}
+			// 5. Recreate firewall_logs table with peer_id
+			if _, err := tx.ExecContext(ctx, `CREATE TABLE firewall_logs_new (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				peer_id INTEGER NOT NULL,
+				timestamp DATETIME NOT NULL,
+				direction TEXT,
+				src_ip TEXT NOT NULL,
+				dst_ip TEXT NOT NULL,
+				protocol TEXT NOT NULL,
+				src_port INTEGER,
+				dst_port INTEGER,
+				action TEXT NOT NULL,
+				raw_line TEXT,
+				FOREIGN KEY(peer_id) REFERENCES peers(id) ON DELETE CASCADE
+			)`); err != nil {
+				return fmt.Errorf("failed to create firewall_logs_new: %w", err)
+			}
+			if _, err := tx.ExecContext(ctx, `INSERT INTO firewall_logs_new SELECT id, server_id, timestamp, direction, src_ip, dst_ip, protocol, src_port, dst_port, action, raw_line FROM firewall_logs`); err != nil {
+				return fmt.Errorf("failed to copy firewall_logs: %w", err)
+			}
+			if _, err := tx.ExecContext(ctx, "DROP TABLE firewall_logs"); err != nil {
+				return fmt.Errorf("failed to drop firewall_logs: %w", err)
+			}
+			if _, err := tx.ExecContext(ctx, "ALTER TABLE firewall_logs_new RENAME TO firewall_logs"); err != nil {
+				return fmt.Errorf("failed to rename firewall_logs_new: %w", err)
+			}
 
-		// 5. Recreate firewall_logs table with peer_id
-		if _, err := tx.ExecContext(ctx, `CREATE TABLE firewall_logs_new (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			peer_id INTEGER NOT NULL,
-			timestamp DATETIME NOT NULL,
-			direction TEXT,
-			src_ip TEXT NOT NULL,
-			dst_ip TEXT NOT NULL,
-			protocol TEXT NOT NULL,
-			src_port INTEGER,
-			dst_port INTEGER,
-			action TEXT NOT NULL,
-			raw_line TEXT,
-			FOREIGN KEY(peer_id) REFERENCES peers(id) ON DELETE CASCADE
-		)`); err != nil {
-			return fmt.Errorf("failed to create firewall_logs_new: %w", err)
-		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO firewall_logs_new SELECT id, server_id, timestamp, direction, src_ip, dst_ip, protocol, src_port, dst_port, action, raw_line FROM firewall_logs`); err != nil {
-			return fmt.Errorf("failed to copy firewall_logs: %w", err)
-		}
-		if _, err := tx.ExecContext(ctx, "DROP TABLE firewall_logs"); err != nil {
-			return fmt.Errorf("failed to drop firewall_logs: %w", err)
-		}
-		if _, err := tx.ExecContext(ctx, "ALTER TABLE firewall_logs_new RENAME TO firewall_logs"); err != nil {
-			return fmt.Errorf("failed to rename firewall_logs_new: %w", err)
-		}
+			// 6. Drop old indexes and create new ones
+			if _, err := tx.ExecContext(ctx, "DROP INDEX IF EXISTS idx_servers_last_heartbeat"); err != nil {
+				log.WarnContext(ctx, "Failed to drop old index idx_servers_last_heartbeat", "error", err)
+			}
+			if _, err := tx.ExecContext(ctx, "DROP INDEX IF EXISTS idx_firewall_logs_server_id"); err != nil {
+				log.WarnContext(ctx, "Failed to drop old index idx_firewall_logs_server_id", "error", err)
+			}
+			if _, err := tx.ExecContext(ctx, "DROP INDEX IF EXISTS idx_firewall_logs_server_timestamp"); err != nil {
+				log.WarnContext(ctx, "Failed to drop old index idx_firewall_logs_server_timestamp", "error", err)
+			}
+			if _, err := tx.ExecContext(ctx, "DROP INDEX IF EXISTS idx_servers_status_heartbeat"); err != nil {
+				log.WarnContext(ctx, "Failed to drop old index idx_servers_status_heartbeat", "error", err)
+			}
 
-		// 6. Drop old indexes and create new ones
-		if _, err := tx.ExecContext(ctx, "DROP INDEX IF EXISTS idx_servers_last_heartbeat"); err != nil {
-			log.Warn("Failed to drop old index idx_servers_last_heartbeat", "error", err)
-		}
-		if _, err := tx.ExecContext(ctx, "DROP INDEX IF EXISTS idx_firewall_logs_server_id"); err != nil {
-			log.Warn("Failed to drop old index idx_firewall_logs_server_id", "error", err)
-		}
-		if _, err := tx.ExecContext(ctx, "DROP INDEX IF EXISTS idx_firewall_logs_server_timestamp"); err != nil {
-			log.Warn("Failed to drop old index idx_firewall_logs_server_timestamp", "error", err)
-		}
-		if _, err := tx.ExecContext(ctx, "DROP INDEX IF EXISTS idx_servers_status_heartbeat"); err != nil {
-			log.Warn("Failed to drop old index idx_servers_status_heartbeat", "error", err)
-		}
+			if _, err := tx.ExecContext(ctx, "CREATE INDEX idx_peers_last_heartbeat ON peers(last_heartbeat)"); err != nil {
+				return fmt.Errorf("failed to create idx_peers_last_heartbeat: %w", err)
+			}
+			if _, err := tx.ExecContext(ctx, "CREATE INDEX idx_firewall_logs_peer_id ON firewall_logs(peer_id)"); err != nil {
+				return fmt.Errorf("failed to create idx_firewall_logs_peer_id: %w", err)
+			}
+			if _, err := tx.ExecContext(ctx, "CREATE INDEX idx_firewall_logs_peer_timestamp ON firewall_logs(peer_id, timestamp DESC)"); err != nil {
+				return fmt.Errorf("failed to create idx_firewall_logs_peer_timestamp: %w", err)
+			}
+			if _, err := tx.ExecContext(ctx, "CREATE INDEX idx_peers_status_heartbeat ON peers(status, last_heartbeat)"); err != nil {
+				return fmt.Errorf("failed to create idx_peers_status_heartbeat: %w", err)
+			}
 
-		if _, err := tx.ExecContext(ctx, "CREATE INDEX idx_peers_last_heartbeat ON peers(last_heartbeat)"); err != nil {
-			return fmt.Errorf("failed to create idx_peers_last_heartbeat: %w", err)
+			return nil
+		}); err != nil {
+			return err
 		}
-		if _, err := tx.ExecContext(ctx, "CREATE INDEX idx_firewall_logs_peer_id ON firewall_logs(peer_id)"); err != nil {
-			return fmt.Errorf("failed to create idx_firewall_logs_peer_id: %w", err)
-		}
-		if _, err := tx.ExecContext(ctx, "CREATE INDEX idx_firewall_logs_peer_timestamp ON firewall_logs(peer_id, timestamp DESC)"); err != nil {
-			return fmt.Errorf("failed to create idx_firewall_logs_peer_timestamp: %w", err)
-		}
-		if _, err := tx.ExecContext(ctx, "CREATE INDEX idx_peers_status_heartbeat ON peers(status, last_heartbeat)"); err != nil {
-			return fmt.Errorf("failed to create idx_peers_status_heartbeat: %w", err)
-		}
-
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("failed to commit migration: %w", err)
-		}
-		committed = true
 		log.Info("Migration: successfully renamed servers to peers")
 	}
 
@@ -304,53 +292,41 @@ func migrateSchema(ctx context.Context, database *sql.DB) error {
 	if hasOldGroupMembersSchema {
 		log.Info("Migration: restructuring group_members table to peer-based schema")
 
-		tx, err := database.BeginTx(ctx, nil)
-		if err != nil {
-			return fmt.Errorf("failed to begin group_members migration transaction: %w", err)
-		}
-		committed := false
-		defer func() {
-			if !committed {
-				if rErr := tx.Rollback(); rErr != nil {
-					log.Warn("Failed to rollback transaction", "error", rErr)
-				}
+		if err := withTx(ctx, database, func(ctx context.Context, tx *sql.Tx) error {
+			// 1. Drop existing group_members table
+			if _, err := tx.ExecContext(ctx, "DROP TABLE group_members"); err != nil {
+				return fmt.Errorf("failed to drop group_members table: %w", err)
 			}
-		}()
 
-		// 1. Drop existing group_members table
-		if _, err := tx.ExecContext(ctx, "DROP TABLE group_members"); err != nil {
-			return fmt.Errorf("failed to drop group_members table: %w", err)
-		}
+			// 2. Create new group_members table with peer_id
+			if _, err := tx.ExecContext(ctx, `
+				CREATE TABLE group_members (
+					id INTEGER PRIMARY KEY AUTOINCREMENT,
+					group_id INTEGER NOT NULL,
+					peer_id INTEGER NOT NULL,
+					added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+					FOREIGN KEY(group_id) REFERENCES groups(id) ON DELETE CASCADE,
+					FOREIGN KEY(peer_id) REFERENCES peers(id) ON DELETE CASCADE,
+					UNIQUE(group_id, peer_id)
+				)
+			`); err != nil {
+				return fmt.Errorf("failed to create group_members table: %w", err)
+			}
 
-		// 2. Create new group_members table with peer_id
-		if _, err := tx.ExecContext(ctx, `
-			CREATE TABLE group_members (
-				id INTEGER PRIMARY KEY AUTOINCREMENT,
-				group_id INTEGER NOT NULL,
-				peer_id INTEGER NOT NULL,
-				added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-				FOREIGN KEY(group_id) REFERENCES groups(id) ON DELETE CASCADE,
-				FOREIGN KEY(peer_id) REFERENCES peers(id) ON DELETE CASCADE,
-				UNIQUE(group_id, peer_id)
-			)
-		`); err != nil {
-			return fmt.Errorf("failed to create group_members table: %w", err)
-		}
+			// 3. Create index
+			if _, err := tx.ExecContext(ctx, "CREATE INDEX idx_group_members_peer_id ON group_members(peer_id)"); err != nil {
+				return fmt.Errorf("failed to create group_members index: %w", err)
+			}
 
-		// 3. Create index
-		if _, err := tx.ExecContext(ctx, "CREATE INDEX idx_group_members_peer_id ON group_members(peer_id)"); err != nil {
-			return fmt.Errorf("failed to create group_members index: %w", err)
-		}
+			// 4. Delete existing "any" group (moved to separate migration with special targets)
+			if _, err := tx.ExecContext(ctx, "DELETE FROM groups WHERE name = 'any'"); err != nil {
+				return fmt.Errorf("failed to delete existing any group: %w", err)
+			}
 
-		// 4. Delete existing "any" group (moved to separate migration with special targets)
-		if _, err := tx.ExecContext(ctx, "DELETE FROM groups WHERE name = 'any'"); err != nil {
-			return fmt.Errorf("failed to delete existing any group: %w", err)
+			return nil
+		}); err != nil {
+			return err
 		}
-
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("failed to commit group_members migration: %w", err)
-		}
-		committed = true
 		log.Info("Migration: successfully restructured group_members table")
 	}
 
@@ -359,56 +335,44 @@ func migrateSchema(ctx context.Context, database *sql.DB) error {
 	err = database.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM pragma_table_info('policies') WHERE name='source_type'").Scan(&hasPolymorphic)
 	if err == nil && !hasPolymorphic {
 		log.Info("Migration: upgrading policies to polymorphic sources and targets")
-		tx, err := database.BeginTx(ctx, nil)
-		if err != nil {
-			return fmt.Errorf("begin polymorphic migration: %w", err)
-		}
-		committed := false
-		defer func() {
-			if !committed {
-				if rErr := tx.Rollback(); rErr != nil {
-					log.Warn("Failed to rollback transaction", "error", rErr)
-				}
+		if err := withTx(ctx, database, func(ctx context.Context, tx *sql.Tx) error {
+			if _, err := tx.ExecContext(ctx, `CREATE TABLE policies_poly (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				name TEXT NOT NULL,
+				description TEXT,
+				source_id INTEGER NOT NULL,
+				source_type TEXT NOT NULL,
+				service_id INTEGER NOT NULL,
+				target_id INTEGER NOT NULL,
+				target_type TEXT NOT NULL,
+				action TEXT NOT NULL DEFAULT 'ACCEPT' CHECK(action IN ('ACCEPT', 'DROP', 'LOG_DROP')),
+				priority INTEGER NOT NULL DEFAULT 100,
+				enabled BOOLEAN NOT NULL DEFAULT 1,
+				docker_only BOOLEAN NOT NULL DEFAULT 0,
+				created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+				updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+				FOREIGN KEY(service_id) REFERENCES services(id)
+			)`); err != nil {
+				return fmt.Errorf("create policies_poly: %w", err)
 			}
-		}()
 
-		if _, err := tx.ExecContext(ctx, `CREATE TABLE policies_poly (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			name TEXT NOT NULL,
-			description TEXT,
-			source_id INTEGER NOT NULL,
-			source_type TEXT NOT NULL,
-			service_id INTEGER NOT NULL,
-			target_id INTEGER NOT NULL,
-			target_type TEXT NOT NULL,
-			action TEXT NOT NULL DEFAULT 'ACCEPT' CHECK(action IN ('ACCEPT', 'DROP', 'LOG_DROP')),
-			priority INTEGER NOT NULL DEFAULT 100,
-			enabled BOOLEAN NOT NULL DEFAULT 1,
-			docker_only BOOLEAN NOT NULL DEFAULT 0,
-			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			FOREIGN KEY(service_id) REFERENCES services(id)
-		)`); err != nil {
-			return fmt.Errorf("create policies_poly: %w", err)
-		}
+			if _, err := tx.ExecContext(ctx, `INSERT INTO policies_poly
+				SELECT id, name, description, source_group_id, 'group', service_id, target_peer_id, 'peer',
+				action, priority, enabled, docker_only, created_at, updated_at FROM policies`); err != nil {
+				return fmt.Errorf("copy policies: %w", err)
+			}
 
-		if _, err := tx.ExecContext(ctx, `INSERT INTO policies_poly
-			SELECT id, name, description, source_group_id, 'group', service_id, target_peer_id, 'peer',
-			action, priority, enabled, docker_only, created_at, updated_at FROM policies`); err != nil {
-			return fmt.Errorf("copy policies: %w", err)
-		}
+			if _, err := tx.ExecContext(ctx, "DROP TABLE policies"); err != nil {
+				return fmt.Errorf("drop old policies: %w", err)
+			}
+			if _, err := tx.ExecContext(ctx, "ALTER TABLE policies_poly RENAME TO policies"); err != nil {
+				return fmt.Errorf("rename policies_poly: %w", err)
+			}
 
-		if _, err := tx.ExecContext(ctx, "DROP TABLE policies"); err != nil {
-			return fmt.Errorf("drop old policies: %w", err)
+			return nil
+		}); err != nil {
+			return err
 		}
-		if _, err := tx.ExecContext(ctx, "ALTER TABLE policies_poly RENAME TO policies"); err != nil {
-			return fmt.Errorf("rename policies_poly: %w", err)
-		}
-
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("commit polymorphic migration: %w", err)
-		}
-		committed = true
 		log.Info("Migration: successfully upgraded policies to polymorphic")
 	}
 
@@ -748,54 +712,42 @@ func migrateSchema(ctx context.Context, database *sql.DB) error {
 	}
 	if !hasVersionNumberColumn {
 		log.Info("Migration: adding version_number column to rule_bundles")
-		tx, err := database.BeginTx(ctx, nil)
-		if err != nil {
-			return fmt.Errorf("failed to begin version_number migration: %w", err)
-		}
-		committed := false
-		defer func() {
-			if !committed {
-				if rErr := tx.Rollback(); rErr != nil {
-					log.Warn("Failed to rollback transaction", "error", rErr)
-				}
+		if err := withTx(ctx, database, func(ctx context.Context, tx *sql.Tx) error {
+			if _, err := tx.ExecContext(ctx, `CREATE TABLE rule_bundles_v2 (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				peer_id INTEGER NOT NULL,
+				version TEXT NOT NULL,
+				version_number INTEGER NOT NULL DEFAULT 0,
+				rules_content TEXT NOT NULL,
+				hmac TEXT NOT NULL,
+				created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+				applied_at DATETIME,
+				FOREIGN KEY(peer_id) REFERENCES peers(id) ON DELETE CASCADE,
+				UNIQUE(peer_id, version)
+			)`); err != nil {
+				return fmt.Errorf("failed to create rule_bundles_v2: %w", err)
 			}
-		}()
 
-		if _, err := tx.ExecContext(ctx, `CREATE TABLE rule_bundles_v2 (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			peer_id INTEGER NOT NULL,
-			version TEXT NOT NULL,
-			version_number INTEGER NOT NULL DEFAULT 0,
-			rules_content TEXT NOT NULL,
-			hmac TEXT NOT NULL,
-			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			applied_at DATETIME,
-			FOREIGN KEY(peer_id) REFERENCES peers(id) ON DELETE CASCADE,
-			UNIQUE(peer_id, version)
-		)`); err != nil {
-			return fmt.Errorf("failed to create rule_bundles_v2: %w", err)
-		}
+			// Copy data and backfill version_number using ROW_NUMBER()
+			if _, err := tx.ExecContext(ctx, `INSERT INTO rule_bundles_v2 (id, peer_id, version, version_number, rules_content, hmac, created_at, applied_at)
+				SELECT id, peer_id, version,
+				ROW_NUMBER() OVER (PARTITION BY peer_id ORDER BY created_at),
+				rules_content, hmac, created_at, applied_at
+				FROM rule_bundles`); err != nil {
+				return fmt.Errorf("failed to copy rule_bundles: %w", err)
+			}
 
-		// Copy data and backfill version_number using ROW_NUMBER()
-		if _, err := tx.ExecContext(ctx, `INSERT INTO rule_bundles_v2 (id, peer_id, version, version_number, rules_content, hmac, created_at, applied_at)
-			SELECT id, peer_id, version,
-			ROW_NUMBER() OVER (PARTITION BY peer_id ORDER BY created_at),
-			rules_content, hmac, created_at, applied_at
-			FROM rule_bundles`); err != nil {
-			return fmt.Errorf("failed to copy rule_bundles: %w", err)
-		}
+			if _, err := tx.ExecContext(ctx, "DROP TABLE rule_bundles"); err != nil {
+				return fmt.Errorf("failed to drop rule_bundles: %w", err)
+			}
+			if _, err := tx.ExecContext(ctx, "ALTER TABLE rule_bundles_v2 RENAME TO rule_bundles"); err != nil {
+				return fmt.Errorf("failed to rename rule_bundles_v2: %w", err)
+			}
 
-		if _, err := tx.ExecContext(ctx, "DROP TABLE rule_bundles"); err != nil {
-			return fmt.Errorf("failed to drop rule_bundles: %w", err)
+			return nil
+		}); err != nil {
+			return err
 		}
-		if _, err := tx.ExecContext(ctx, "ALTER TABLE rule_bundles_v2 RENAME TO rule_bundles"); err != nil {
-			return fmt.Errorf("failed to rename rule_bundles_v2: %w", err)
-		}
-
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("failed to commit version_number migration: %w", err)
-		}
-		committed = true
 		log.Info("Migration: added version_number column to rule_bundles")
 	}
 
@@ -924,42 +876,31 @@ CREATE TABLE change_snapshots (
 	}
 	if !changeSnapshotsHasPeer {
 		log.Info("Migration: adding 'peer' entity type to change_snapshots CHECK constraint")
-		tx, err := database.BeginTx(ctx, nil)
-		if err != nil {
-			return fmt.Errorf("begin change_snapshots migration tx: %w", err)
-		}
-		committed := false
-		defer func() {
-			if !committed {
-				if rErr := tx.Rollback(); rErr != nil {
-					log.Warn("Failed to rollback change_snapshots migration", "error", rErr)
-				}
+		if err := withTx(ctx, database, func(ctx context.Context, tx *sql.Tx) error {
+			if _, err := tx.ExecContext(ctx, `CREATE TABLE change_snapshots_new (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				entity_type TEXT NOT NULL CHECK (entity_type IN ('group', 'service', 'policy', 'peer')),
+				entity_id INTEGER NOT NULL,
+				action TEXT NOT NULL CHECK (action IN ('create', 'update', 'delete')),
+				snapshot_data TEXT,
+				created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+				UNIQUE(entity_type, entity_id)
+			)`); err != nil {
+				return fmt.Errorf("create change_snapshots_new: %w", err)
 			}
-		}()
-		if _, err := tx.ExecContext(ctx, `CREATE TABLE change_snapshots_new (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			entity_type TEXT NOT NULL CHECK (entity_type IN ('group', 'service', 'policy', 'peer')),
-			entity_id INTEGER NOT NULL,
-			action TEXT NOT NULL CHECK (action IN ('create', 'update', 'delete')),
-			snapshot_data TEXT,
-			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			UNIQUE(entity_type, entity_id)
-		)`); err != nil {
-			return fmt.Errorf("create change_snapshots_new: %w", err)
+			if _, err := tx.ExecContext(ctx, `INSERT INTO change_snapshots_new SELECT * FROM change_snapshots`); err != nil {
+				return fmt.Errorf("copy change_snapshots data: %w", err)
+			}
+			if _, err := tx.ExecContext(ctx, "DROP TABLE change_snapshots"); err != nil {
+				return fmt.Errorf("drop old change_snapshots: %w", err)
+			}
+			if _, err := tx.ExecContext(ctx, "ALTER TABLE change_snapshots_new RENAME TO change_snapshots"); err != nil {
+				return fmt.Errorf("rename change_snapshots_new: %w", err)
+			}
+			return nil
+		}); err != nil {
+			return err
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO change_snapshots_new SELECT * FROM change_snapshots`); err != nil {
-			return fmt.Errorf("copy change_snapshots data: %w", err)
-		}
-		if _, err := tx.ExecContext(ctx, "DROP TABLE change_snapshots"); err != nil {
-			return fmt.Errorf("drop old change_snapshots: %w", err)
-		}
-		if _, err := tx.ExecContext(ctx, "ALTER TABLE change_snapshots_new RENAME TO change_snapshots"); err != nil {
-			return fmt.Errorf("rename change_snapshots_new: %w", err)
-		}
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("commit change_snapshots migration: %w", err)
-		}
-		committed = true
 		log.Info("Migration: successfully added 'peer' to change_snapshots entity_type CHECK")
 	}
 
@@ -1340,45 +1281,34 @@ SELECT id, ip_address, 1 FROM peers
 	}
 	if pendingChangesHasRestrictiveCheck {
 		log.Info("Migration: removing restrictive CHECK on pending_changes.change_type to allow 'peer'")
-		tx, err := database.BeginTx(ctx, nil)
-		if err != nil {
-			return fmt.Errorf("begin pending_changes migration tx: %w", err)
-		}
-		committed := false
-		defer func() {
-			if !committed {
-				if rErr := tx.Rollback(); rErr != nil {
-					log.Warn("Failed to rollback pending_changes migration", "error", rErr)
-				}
+		if err := withTx(ctx, database, func(ctx context.Context, tx *sql.Tx) error {
+			if _, err := tx.ExecContext(ctx, `CREATE TABLE pending_changes_new (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				peer_id INTEGER NOT NULL REFERENCES peers(id) ON DELETE CASCADE,
+				change_type TEXT NOT NULL,
+				change_id INTEGER NOT NULL,
+				change_action TEXT NOT NULL,
+				change_summary TEXT,
+				created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+			)`); err != nil {
+				return fmt.Errorf("create pending_changes_new: %w", err)
 			}
-		}()
-		if _, err := tx.ExecContext(ctx, `CREATE TABLE pending_changes_new (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			peer_id INTEGER NOT NULL REFERENCES peers(id) ON DELETE CASCADE,
-			change_type TEXT NOT NULL,
-			change_id INTEGER NOT NULL,
-			change_action TEXT NOT NULL,
-			change_summary TEXT,
-			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-		)`); err != nil {
-			return fmt.Errorf("create pending_changes_new: %w", err)
+			if _, err := tx.ExecContext(ctx, `INSERT INTO pending_changes_new SELECT * FROM pending_changes`); err != nil {
+				return fmt.Errorf("copy pending_changes data: %w", err)
+			}
+			if _, err := tx.ExecContext(ctx, "DROP TABLE pending_changes"); err != nil {
+				return fmt.Errorf("drop old pending_changes: %w", err)
+			}
+			if _, err := tx.ExecContext(ctx, "ALTER TABLE pending_changes_new RENAME TO pending_changes"); err != nil {
+				return fmt.Errorf("rename pending_changes_new: %w", err)
+			}
+			if _, err := tx.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_pending_changes_peer ON pending_changes(peer_id)"); err != nil {
+				return fmt.Errorf("create idx_pending_changes_peer: %w", err)
+			}
+			return nil
+		}); err != nil {
+			return err
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO pending_changes_new SELECT * FROM pending_changes`); err != nil {
-			return fmt.Errorf("copy pending_changes data: %w", err)
-		}
-		if _, err := tx.ExecContext(ctx, "DROP TABLE pending_changes"); err != nil {
-			return fmt.Errorf("drop old pending_changes: %w", err)
-		}
-		if _, err := tx.ExecContext(ctx, "ALTER TABLE pending_changes_new RENAME TO pending_changes"); err != nil {
-			return fmt.Errorf("rename pending_changes_new: %w", err)
-		}
-		if _, err := tx.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_pending_changes_peer ON pending_changes(peer_id)"); err != nil {
-			return fmt.Errorf("create idx_pending_changes_peer: %w", err)
-		}
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("commit pending_changes migration: %w", err)
-		}
-		committed = true
 		log.Info("Migration: successfully removed restrictive CHECK on pending_changes.change_type")
 	}
 
@@ -1396,46 +1326,35 @@ SELECT id, ip_address, 1 FROM peers
 	}
 	if pushJobsHasOldCheck {
 		log.Info("Migration: fixing push_jobs CHECK constraint from 'cancelled' to 'canceled'")
-		tx, err := database.BeginTx(ctx, nil)
-		if err != nil {
-			return fmt.Errorf("begin push_jobs spelling migration tx: %w", err)
-		}
-		committed := false
-		defer func() {
-			if !committed {
-				if rErr := tx.Rollback(); rErr != nil {
-					log.Warn("Failed to rollback push_jobs spelling migration", "error", rErr)
-				}
+		if err := withTx(ctx, database, func(ctx context.Context, tx *sql.Tx) error {
+			if _, err := tx.ExecContext(ctx, `CREATE TABLE push_jobs_new (
+				id TEXT PRIMARY KEY,
+				initiated_by TEXT,
+				total_peers INTEGER NOT NULL,
+				succeeded_count INTEGER DEFAULT 0,
+				failed_count INTEGER DEFAULT 0,
+				status TEXT NOT NULL DEFAULT 'running' CHECK(status IN ('pending', 'running', 'completed', 'completed_with_errors', 'failed', 'canceled')),
+				created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+				completed_at DATETIME
+			)`); err != nil {
+				return fmt.Errorf("create push_jobs_new: %w", err)
 			}
-		}()
-		if _, err := tx.ExecContext(ctx, `CREATE TABLE push_jobs_new (
-			id TEXT PRIMARY KEY,
-			initiated_by TEXT,
-			total_peers INTEGER NOT NULL,
-			succeeded_count INTEGER DEFAULT 0,
-			failed_count INTEGER DEFAULT 0,
-			status TEXT NOT NULL DEFAULT 'running' CHECK(status IN ('pending', 'running', 'completed', 'completed_with_errors', 'failed', 'canceled')),
-			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			completed_at DATETIME
-		)`); err != nil {
-			return fmt.Errorf("create push_jobs_new: %w", err)
+			if _, err := tx.ExecContext(ctx, `INSERT INTO push_jobs_new SELECT * FROM push_jobs`); err != nil {
+				return fmt.Errorf("copy push_jobs data: %w", err)
+			}
+			if _, err := tx.ExecContext(ctx, "DROP TABLE push_jobs"); err != nil {
+				return fmt.Errorf("drop old push_jobs: %w", err)
+			}
+			if _, err := tx.ExecContext(ctx, "ALTER TABLE push_jobs_new RENAME TO push_jobs"); err != nil {
+				return fmt.Errorf("rename push_jobs_new: %w", err)
+			}
+			if _, err := tx.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_push_jobs_status ON push_jobs(status)"); err != nil {
+				return fmt.Errorf("create idx_push_jobs_status: %w", err)
+			}
+			return nil
+		}); err != nil {
+			return err
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO push_jobs_new SELECT * FROM push_jobs`); err != nil {
-			return fmt.Errorf("copy push_jobs data: %w", err)
-		}
-		if _, err := tx.ExecContext(ctx, "DROP TABLE push_jobs"); err != nil {
-			return fmt.Errorf("drop old push_jobs: %w", err)
-		}
-		if _, err := tx.ExecContext(ctx, "ALTER TABLE push_jobs_new RENAME TO push_jobs"); err != nil {
-			return fmt.Errorf("rename push_jobs_new: %w", err)
-		}
-		if _, err := tx.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_push_jobs_status ON push_jobs(status)"); err != nil {
-			return fmt.Errorf("create idx_push_jobs_status: %w", err)
-		}
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("commit push_jobs spelling migration: %w", err)
-		}
-		committed = true
 		log.Info("Migration: successfully fixed push_jobs CHECK constraint spelling")
 	}
 
@@ -1448,49 +1367,38 @@ SELECT id, ip_address, 1 FROM peers
 	}
 	if importSessionsHasOldCheck {
 		log.Info("Migration: fixing import_sessions CHECK constraint from 'cancelled' to 'canceled'")
-		tx, err := database.BeginTx(ctx, nil)
-		if err != nil {
-			return fmt.Errorf("begin import_sessions spelling migration tx: %w", err)
-		}
-		committed := false
-		defer func() {
-			if !committed {
-				if rErr := tx.Rollback(); rErr != nil {
-					log.Warn("Failed to rollback import_sessions spelling migration", "error", rErr)
-				}
+		if err := withTx(ctx, database, func(ctx context.Context, tx *sql.Tx) error {
+			if _, err := tx.ExecContext(ctx, `CREATE TABLE import_sessions_new (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				peer_id INTEGER NOT NULL REFERENCES peers(id) ON DELETE CASCADE,
+				status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','parsed','reviewing','applied','canceled')),
+				raw_backup TEXT NOT NULL,
+				raw_ipsets TEXT,
+				chain_filter TEXT DEFAULT 'INPUT,OUTPUT,DOCKER-USER',
+				total_rules_found INTEGER DEFAULT 0,
+				importable_rules INTEGER DEFAULT 0,
+				skipped_rules INTEGER DEFAULT 0,
+				created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+				updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+			)`); err != nil {
+				return fmt.Errorf("create import_sessions_new: %w", err)
 			}
-		}()
-		if _, err := tx.ExecContext(ctx, `CREATE TABLE import_sessions_new (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			peer_id INTEGER NOT NULL REFERENCES peers(id) ON DELETE CASCADE,
-			status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','parsed','reviewing','applied','canceled')),
-			raw_backup TEXT NOT NULL,
-			raw_ipsets TEXT,
-			chain_filter TEXT DEFAULT 'INPUT,OUTPUT,DOCKER-USER',
-			total_rules_found INTEGER DEFAULT 0,
-			importable_rules INTEGER DEFAULT 0,
-			skipped_rules INTEGER DEFAULT 0,
-			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-		)`); err != nil {
-			return fmt.Errorf("create import_sessions_new: %w", err)
+			if _, err := tx.ExecContext(ctx, `INSERT INTO import_sessions_new SELECT * FROM import_sessions`); err != nil {
+				return fmt.Errorf("copy import_sessions data: %w", err)
+			}
+			if _, err := tx.ExecContext(ctx, "DROP TABLE import_sessions"); err != nil {
+				return fmt.Errorf("drop old import_sessions: %w", err)
+			}
+			if _, err := tx.ExecContext(ctx, "ALTER TABLE import_sessions_new RENAME TO import_sessions"); err != nil {
+				return fmt.Errorf("rename import_sessions_new: %w", err)
+			}
+			if _, err := tx.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_import_sessions_peer_status ON import_sessions(peer_id, status)"); err != nil {
+				return fmt.Errorf("create idx_import_sessions_peer_status: %w", err)
+			}
+			return nil
+		}); err != nil {
+			return err
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO import_sessions_new SELECT * FROM import_sessions`); err != nil {
-			return fmt.Errorf("copy import_sessions data: %w", err)
-		}
-		if _, err := tx.ExecContext(ctx, "DROP TABLE import_sessions"); err != nil {
-			return fmt.Errorf("drop old import_sessions: %w", err)
-		}
-		if _, err := tx.ExecContext(ctx, "ALTER TABLE import_sessions_new RENAME TO import_sessions"); err != nil {
-			return fmt.Errorf("rename import_sessions_new: %w", err)
-		}
-		if _, err := tx.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_import_sessions_peer_status ON import_sessions(peer_id, status)"); err != nil {
-			return fmt.Errorf("create idx_import_sessions_peer_status: %w", err)
-		}
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("commit import_sessions spelling migration: %w", err)
-		}
-		committed = true
 		log.Info("Migration: successfully fixed import_sessions CHECK constraint spelling")
 	}
 

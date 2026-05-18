@@ -87,12 +87,12 @@ func DeletePendingBundlePreview(ctx context.Context, database Querier, peerID in
 	return err
 }
 
-func DeletePendingChangeForEntity(ctx context.Context, database Querier, peerID int64, changeType string, changeID int) error {
+func DeletePendingChangeForEntity(ctx context.Context, database Querier, peerID int, changeType string, changeID int) error {
 	_, err := database.ExecContext(ctx, "DELETE FROM pending_changes WHERE peer_id = ? AND change_type = ? AND change_id = ?", peerID, changeType, changeID)
 	return err
 }
 
-func CountPendingChangesForPeer(ctx context.Context, database Querier, peerID int64) (int, error) {
+func CountPendingChangesForPeer(ctx context.Context, database Querier, peerID int) (int, error) {
 	var count int
 	err := database.QueryRowContext(ctx, "SELECT COUNT(*) FROM pending_changes WHERE peer_id = ?", peerID).Scan(&count)
 	if err != nil {

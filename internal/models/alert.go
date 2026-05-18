@@ -233,14 +233,15 @@ func (d *AlertDigest) HasAlerts() bool {
 }
 
 type SMTPConfig struct {
-	Host        string `json:"host" gorm:"size:255;not null" validate:"required"`
-	Port        int    `json:"port" gorm:"not null" validate:"required,min=1,max=65535"`
-	Username    string `json:"username" gorm:"size:255"`
-	Password    string `json:"-" gorm:"size:500"` // stored encrypted, excluded from JSON responses
-	UseTLS      bool   `json:"use_tls" gorm:"default:true"`
-	UseSMTPS    bool   `json:"use_smtps" gorm:"default:false"` // direct TLS (SMTPS, typically port 465)
-	FromAddress string `json:"from_address" gorm:"size:255" validate:"required,email"`
-	Enabled     bool   `json:"enabled" gorm:"default:false"`
+	Host         string `json:"host" gorm:"size:255;not null" validate:"required"`
+	Port         int    `json:"port" gorm:"not null" validate:"required,min=1,max=65535"`
+	Username     string `json:"username" gorm:"size:255"`
+	Password     string `json:"-" gorm:"size:500"` // stored encrypted, excluded from JSON responses
+	UseTLS       bool   `json:"use_tls" gorm:"default:true"`
+	UseSMTPS     bool   `json:"use_smtps" gorm:"default:false"` // direct TLS (SMTPS, typically port 465)
+	FromAddress  string `json:"from_address" gorm:"size:255" validate:"required,email"`
+	HeloHostname string `json:"helo_hostname" gorm:"size:255"` // HELO hostname; empty = use os.Hostname()
+	Enabled      bool   `json:"enabled" gorm:"default:false"`
 }
 
 func (c *SMTPConfig) IsEnabled() bool {

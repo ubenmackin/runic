@@ -30,11 +30,11 @@ func (h *Handler) GenerateTokenPair(ctx context.Context, username string) (acces
 		log.WarnContext(ctx, "failed to look up role, defaulting to viewer", "username", username, "error", lookupErr)
 	}
 
-	accessToken, err = auth.GenerateToken(username, role, AccessTokenTTL)
+	accessToken, err = auth.GenerateToken(username, role, auth.TokenTypeAccess, AccessTokenTTL)
 	if err != nil {
 		return "", "", err
 	}
-	refreshToken, err = auth.GenerateToken(username, role, RefreshTokenTTL)
+	refreshToken, err = auth.GenerateToken(username, role, auth.TokenTypeRefresh, RefreshTokenTTL)
 	if err != nil {
 		return "", "", err
 	}

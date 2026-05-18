@@ -14,185 +14,173 @@ import (
 var ErrConstraintViolation = errors.New("rollback blocked by constraint violation")
 
 func RollbackSnapshots(ctx context.Context, database DB) error {
-	tx, err := database.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin tx: %w", err)
-	}
-	defer func() {
-		if rErr := tx.Rollback(); rErr != nil && !errors.Is(rErr, sql.ErrTxDone) {
-			log.WarnContext(ctx, "rollback failed", "error", rErr)
+	return withTx(ctx, database, func(ctx context.Context, tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, "SELECT id, entity_type, entity_id, action, snapshot_data FROM change_snapshots ORDER BY id DESC")
+		if err != nil {
+			return fmt.Errorf("query snapshots: %w", err)
 		}
-	}()
 
-	rows, err := tx.QueryContext(ctx, "SELECT id, entity_type, entity_id, action, snapshot_data FROM change_snapshots ORDER BY id DESC")
-	if err != nil {
-		return fmt.Errorf("query snapshots: %w", err)
-	}
-
-	var snapshots []models.ChangeSnapshot
-	for rows.Next() {
-		var s models.ChangeSnapshot
-		var data sql.NullString
-		if err := rows.Scan(&s.ID, &s.EntityType, &s.EntityID, &s.Action, &data); err != nil {
-			_ = rows.Close()
-			return fmt.Errorf("scan snapshot: %w", err)
-		}
-		if data.Valid {
-			s.SnapshotData = data.String
-		}
-		snapshots = append(snapshots, s)
-	}
-	_ = rows.Close()
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("rows error: %w", err)
-	}
-
-	for _, s := range snapshots {
-		if s.Action == "create" {
-			switch s.EntityType {
-			case "group":
-				_, err = tx.ExecContext(ctx, "DELETE FROM group_members WHERE group_id = ?", s.EntityID)
-				if err != nil {
-					return err
+		var snapshots []models.ChangeSnapshot
+		for rows.Next() {
+			var s models.ChangeSnapshot
+			var data sql.NullString
+			if err := rows.Scan(&s.ID, &s.EntityType, &s.EntityID, &s.Action, &data); err != nil {
+				if cErr := rows.Close(); cErr != nil {
+					log.WarnContext(ctx, "failed to close rows after scan error", "error", cErr)
 				}
-				_, err = tx.ExecContext(ctx, "DELETE FROM groups WHERE id = ?", s.EntityID)
-			case "service":
-				_, err = tx.ExecContext(ctx, "DELETE FROM services WHERE id = ?", s.EntityID)
-			case "policy":
-				_, err = tx.ExecContext(ctx, "DELETE FROM policies WHERE id = ?", s.EntityID)
-			case "peer":
-				_, err = tx.ExecContext(ctx, "DELETE FROM peer_ips WHERE peer_id = ?", s.EntityID)
-				if err != nil {
-					return fmt.Errorf("rollback create peer IPs: %w", err)
-				}
-				_, err = tx.ExecContext(ctx, "DELETE FROM peers WHERE id = ?", s.EntityID)
+				return fmt.Errorf("scan snapshot: %w", err)
 			}
-			if err != nil {
-				return fmt.Errorf("rollback create %s %d: %w", s.EntityType, s.EntityID, err)
+			if data.Valid {
+				s.SnapshotData = data.String
 			}
-		} else {
-			switch s.EntityType {
-			case "group":
-				var data struct {
-					Group   models.GroupRow         `json:"group"`
-					Members []models.GroupMemberRow `json:"members"`
-				}
-				if err := json.Unmarshal([]byte(s.SnapshotData), &data); err != nil {
-					return fmt.Errorf("unmarshal group snapshot: %w", err)
-				}
-				_, err = tx.ExecContext(ctx, "UPDATE groups SET name=?, description=?, is_pending_delete=0 WHERE id=?",
-					data.Group.Name, data.Group.Description, s.EntityID)
-				if err != nil {
-					return err
-				}
+			snapshots = append(snapshots, s)
+		}
+		if err := rows.Close(); err != nil {
+			log.WarnContext(ctx, "failed to close rows", "error", err)
+		}
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("rows error: %w", err)
+		}
 
-				_, err = tx.ExecContext(ctx, "DELETE FROM group_members WHERE group_id = ?", s.EntityID)
-				if err != nil {
-					return err
-				}
-
-				for _, m := range data.Members {
-					_, err = tx.ExecContext(ctx, "INSERT INTO group_members (id, group_id, peer_id, added_at) VALUES (?, ?, ?, ?)",
-						m.ID, m.GroupID, m.PeerID, m.AddedAt)
+		for _, s := range snapshots {
+			if s.Action == "create" {
+				switch s.EntityType {
+				case "group":
+					_, err = tx.ExecContext(ctx, "DELETE FROM group_members WHERE group_id = ?", s.EntityID)
 					if err != nil {
 						return err
 					}
+					_, err = tx.ExecContext(ctx, "DELETE FROM groups WHERE id = ?", s.EntityID)
+				case "service":
+					_, err = tx.ExecContext(ctx, "DELETE FROM services WHERE id = ?", s.EntityID)
+				case "policy":
+					_, err = tx.ExecContext(ctx, "DELETE FROM policies WHERE id = ?", s.EntityID)
+				case "peer":
+					_, err = tx.ExecContext(ctx, "DELETE FROM peer_ips WHERE peer_id = ?", s.EntityID)
+					if err != nil {
+						return fmt.Errorf("rollback create peer IPs: %w", err)
+					}
+					_, err = tx.ExecContext(ctx, "DELETE FROM peers WHERE id = ?", s.EntityID)
 				}
-			case "service":
-				var svc models.ServiceRow
-				if err := json.Unmarshal([]byte(s.SnapshotData), &svc); err != nil {
-					return fmt.Errorf("unmarshal service snapshot: %w", err)
-				}
-				_, err = tx.ExecContext(ctx, "UPDATE services SET name=?, ports=?, source_ports=?, protocol=?, description=?, direction_hint=?, is_system=?, is_pending_delete=0 WHERE id=?",
-					svc.Name, svc.Ports, svc.SourcePorts, svc.Protocol, svc.Description, svc.DirectionHint, svc.IsSystem, s.EntityID)
 				if err != nil {
-					return err
+					return fmt.Errorf("rollback create %s %d: %w", s.EntityType, s.EntityID, err)
 				}
-			case "policy":
-				var p models.PolicyRow
-				if err := json.Unmarshal([]byte(s.SnapshotData), &p); err != nil {
-					return fmt.Errorf("unmarshal policy snapshot: %w", err)
+			} else {
+				switch s.EntityType {
+				case "group":
+					var data struct {
+						Group   models.GroupRow         `json:"group"`
+						Members []models.GroupMemberRow `json:"members"`
+					}
+					if err := json.Unmarshal([]byte(s.SnapshotData), &data); err != nil {
+						return fmt.Errorf("unmarshal group snapshot: %w", err)
+					}
+					_, err = tx.ExecContext(ctx, "UPDATE groups SET name=?, description=?, is_pending_delete=0 WHERE id=?",
+						data.Group.Name, data.Group.Description, s.EntityID)
+					if err != nil {
+						return err
+					}
+
+					_, err = tx.ExecContext(ctx, "DELETE FROM group_members WHERE group_id = ?", s.EntityID)
+					if err != nil {
+						return err
+					}
+
+					for _, m := range data.Members {
+						_, err = tx.ExecContext(ctx, "INSERT INTO group_members (id, group_id, peer_id, added_at) VALUES (?, ?, ?, ?)",
+							m.ID, m.GroupID, m.PeerID, m.AddedAt)
+						if err != nil {
+							return err
+						}
+					}
+				case "service":
+					var svc models.ServiceRow
+					if err := json.Unmarshal([]byte(s.SnapshotData), &svc); err != nil {
+						return fmt.Errorf("unmarshal service snapshot: %w", err)
+					}
+					_, err = tx.ExecContext(ctx, "UPDATE services SET name=?, ports=?, source_ports=?, protocol=?, description=?, direction_hint=?, is_system=?, is_pending_delete=0 WHERE id=?",
+						svc.Name, svc.Ports, svc.SourcePorts, svc.Protocol, svc.Description, svc.DirectionHint, svc.IsSystem, s.EntityID)
+					if err != nil {
+						return err
+					}
+				case "policy":
+					var p models.PolicyRow
+					if err := json.Unmarshal([]byte(s.SnapshotData), &p); err != nil {
+						return fmt.Errorf("unmarshal policy snapshot: %w", err)
+					}
+					_, err = tx.ExecContext(ctx, "UPDATE policies SET name=?, description=?, source_id=?, source_type=?, service_id=?, target_id=?, target_type=?, source_ip=?, target_ip=?, action=?, priority=?, enabled=?, target_scope=?, direction=?, is_pending_delete=0 WHERE id=?",
+						p.Name, p.Description, p.SourceID, p.SourceType, p.ServiceID, p.TargetID, p.TargetType, p.SourceIP, p.TargetIP, p.Action, p.Priority, p.Enabled, p.TargetScope, p.Direction, s.EntityID)
+					if err != nil {
+						return err
+					}
+				case "peer":
+					return fmt.Errorf("peer update/delete rollback not yet implemented")
 				}
-				_, err = tx.ExecContext(ctx, "UPDATE policies SET name=?, description=?, source_id=?, source_type=?, service_id=?, target_id=?, target_type=?, source_ip=?, target_ip=?, action=?, priority=?, enabled=?, target_scope=?, direction=?, is_pending_delete=0 WHERE id=?",
-					p.Name, p.Description, p.SourceID, p.SourceType, p.ServiceID, p.TargetID, p.TargetType, p.SourceIP, p.TargetIP, p.Action, p.Priority, p.Enabled, p.TargetScope, p.Direction, s.EntityID)
-				if err != nil {
-					return err
-				}
-			case "peer":
-				return fmt.Errorf("peer update/delete rollback not yet implemented")
 			}
 		}
-	}
 
-	_, err = tx.ExecContext(ctx, "DELETE FROM change_snapshots")
-	if err != nil {
-		return err
-	}
-	_, err = tx.ExecContext(ctx, "DELETE FROM pending_changes")
-	if err != nil {
-		return err
-	}
+		_, err = tx.ExecContext(ctx, "DELETE FROM change_snapshots")
+		if err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, "DELETE FROM pending_changes")
+		if err != nil {
+			return err
+		}
 
-	return tx.Commit()
+		return nil
+	})
 }
 
 // RollbackEntitySnapshot restores an entity from its snapshot. Returns ErrConstraintViolation if the rollback would violate referential integrity.
 func RollbackEntitySnapshot(ctx context.Context, database DB, entityType string, entityID int) error {
-	tx, err := database.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin tx: %w", err)
-	}
-	defer func() {
-		if rErr := tx.Rollback(); rErr != nil && !errors.Is(rErr, sql.ErrTxDone) {
-			log.WarnContext(ctx, "rollback failed", "error", rErr)
+	return withTx(ctx, database, func(ctx context.Context, tx *sql.Tx) error {
+		var snapshotID int
+		var action string
+		var snapshotData sql.NullString
+		err := tx.QueryRowContext(ctx, "SELECT id, action, snapshot_data FROM change_snapshots WHERE entity_type = ? AND entity_id = ?", entityType, entityID).Scan(&snapshotID, &action, &snapshotData)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return fmt.Errorf("snapshot not found for %s %d", entityType, entityID)
+			}
+			return fmt.Errorf("query snapshot: %w", err)
 		}
-	}()
 
-	var snapshotID int
-	var action string
-	var snapshotData sql.NullString
-	err = tx.QueryRowContext(ctx, "SELECT id, action, snapshot_data FROM change_snapshots WHERE entity_type = ? AND entity_id = ?", entityType, entityID).Scan(&snapshotID, &action, &snapshotData)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("snapshot not found for %s %d", entityType, entityID)
+		// Security check for create rollbacks
+		if action == "create" {
+			if err := checkCreateRollbackConstraints(ctx, tx, entityType, entityID); err != nil {
+				return err
+			}
 		}
-		return fmt.Errorf("query snapshot: %w", err)
-	}
 
-	// Security check for create rollbacks
-	if action == "create" {
-		if err := checkCreateRollbackConstraints(ctx, tx, entityType, entityID); err != nil {
-			return err
+		// Execute rollback based on action
+		switch action {
+		case "create":
+			if err := rollbackCreateEntity(ctx, tx, entityType, entityID); err != nil {
+				return err
+			}
+		case "update", "delete":
+			if !snapshotData.Valid {
+				return fmt.Errorf("missing snapshot data for %s %d", entityType, entityID)
+			}
+			if err := rollbackUpdateDeleteEntity(ctx, tx, entityType, entityID, action, snapshotData.String); err != nil {
+				return err
+			}
 		}
-	}
 
-	// Execute rollback based on action
-	switch action {
-	case "create":
-		if err := rollbackCreateEntity(ctx, tx, entityType, entityID); err != nil {
-			return err
+		// Clear pending changes for this entity
+		_, err = tx.ExecContext(ctx, "DELETE FROM pending_changes WHERE change_type = ? AND change_id = ?", entityType, entityID)
+		if err != nil {
+			return fmt.Errorf("clear pending changes: %w", err)
 		}
-	case "update", "delete":
-		if !snapshotData.Valid {
-			return fmt.Errorf("missing snapshot data for %s %d", entityType, entityID)
+
+		_, err = tx.ExecContext(ctx, "DELETE FROM change_snapshots WHERE entity_type = ? AND entity_id = ?", entityType, entityID)
+		if err != nil {
+			return fmt.Errorf("delete snapshot: %w", err)
 		}
-		if err := rollbackUpdateDeleteEntity(ctx, tx, entityType, entityID, action, snapshotData.String); err != nil {
-			return err
-		}
-	}
 
-	// Clear pending changes for this entity
-	_, err = tx.ExecContext(ctx, "DELETE FROM pending_changes WHERE change_type = ? AND change_id = ?", entityType, entityID)
-	if err != nil {
-		return fmt.Errorf("clear pending changes: %w", err)
-	}
-
-	_, err = tx.ExecContext(ctx, "DELETE FROM change_snapshots WHERE entity_type = ? AND entity_id = ?", entityType, entityID)
-	if err != nil {
-		return fmt.Errorf("delete snapshot: %w", err)
-	}
-
-	return tx.Commit()
+		return nil
+	})
 }
 
 func checkCreateRollbackConstraints(ctx context.Context, tx Querier, entityType string, entityID int) error {
@@ -305,40 +293,32 @@ func rollbackUpdateDeleteEntity(ctx context.Context, tx Querier, entityType stri
 }
 
 func CleanupAfterApplyAll(ctx context.Context, database DB) error {
-	tx, err := database.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin tx: %w", err)
-	}
-	defer func() {
-		if rErr := tx.Rollback(); rErr != nil && !errors.Is(rErr, sql.ErrTxDone) {
-			log.WarnContext(ctx, "rollback failed", "error", rErr)
+	return withTx(ctx, database, func(ctx context.Context, tx *sql.Tx) error {
+		// Hard delete soft deleted entities
+		_, err := tx.ExecContext(ctx, "DELETE FROM group_members WHERE group_id IN (SELECT id FROM groups WHERE is_pending_delete = 1)")
+		if err != nil {
+			return err
 		}
-	}()
+		_, err = tx.ExecContext(ctx, "DELETE FROM groups WHERE is_pending_delete = 1")
+		if err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, "DELETE FROM policies WHERE is_pending_delete = 1")
+		if err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, "DELETE FROM services WHERE is_pending_delete = 1")
+		if err != nil {
+			return err
+		}
 
-	// Hard delete soft deleted entities
-	_, err = tx.ExecContext(ctx, "DELETE FROM group_members WHERE group_id IN (SELECT id FROM groups WHERE is_pending_delete = 1)")
-	if err != nil {
-		return err
-	}
-	_, err = tx.ExecContext(ctx, "DELETE FROM groups WHERE is_pending_delete = 1")
-	if err != nil {
-		return err
-	}
-	_, err = tx.ExecContext(ctx, "DELETE FROM policies WHERE is_pending_delete = 1")
-	if err != nil {
-		return err
-	}
-	_, err = tx.ExecContext(ctx, "DELETE FROM services WHERE is_pending_delete = 1")
-	if err != nil {
-		return err
-	}
+		_, err = tx.ExecContext(ctx, "DELETE FROM change_snapshots")
+		if err != nil {
+			return err
+		}
 
-	_, err = tx.ExecContext(ctx, "DELETE FROM change_snapshots")
-	if err != nil {
-		return err
-	}
-
-	return tx.Commit()
+		return nil
+	})
 }
 
 func CleanupIfComplete(ctx context.Context, database DB) error {

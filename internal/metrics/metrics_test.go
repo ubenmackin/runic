@@ -245,6 +245,168 @@ func TestRecordError_SameErrorTwice(t *testing.T) {
 	}
 }
 
+func TestGauge_AgentsConnected(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	m := NewMetrics(registry)
+
+	family, err := gatherMetric(registry, "agents_connected")
+	if err != nil {
+		t.Fatalf("failed to gather metrics: %v", err)
+	}
+	if family == nil {
+		t.Fatal("agents_connected metric family not found")
+	}
+
+	// Gauge should start at 0
+	if family.GetMetric()[0].GetGauge().GetValue() != 0 {
+		t.Errorf("expected initial gauge value 0, got %f", family.GetMetric()[0].GetGauge().GetValue())
+	}
+
+	// Set gauge and verify
+	m.agentsConnected.Set(5)
+	family, err = gatherMetric(registry, "agents_connected")
+	if err != nil {
+		t.Fatalf("failed to gather metrics after set: %v", err)
+	}
+	if family.GetMetric()[0].GetGauge().GetValue() != 5 {
+		t.Errorf("expected gauge value 5, got %f", family.GetMetric()[0].GetGauge().GetValue())
+	}
+
+	// Increment and verify
+	m.agentsConnected.Inc()
+	family, err = gatherMetric(registry, "agents_connected")
+	if err != nil {
+		t.Fatalf("failed to gather metrics after inc: %v", err)
+	}
+	if family.GetMetric()[0].GetGauge().GetValue() != 6 {
+		t.Errorf("expected gauge value 6, got %f", family.GetMetric()[0].GetGauge().GetValue())
+	}
+
+	// Decrement and verify
+	m.agentsConnected.Dec()
+	family, err = gatherMetric(registry, "agents_connected")
+	if err != nil {
+		t.Fatalf("failed to gather metrics after dec: %v", err)
+	}
+	if family.GetMetric()[0].GetGauge().GetValue() != 5 {
+		t.Errorf("expected gauge value 5, got %f", family.GetMetric()[0].GetGauge().GetValue())
+	}
+}
+
+func TestGauge_RunicPeersTotal(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	m := NewMetrics(registry)
+
+	family, err := gatherMetric(registry, "runic_peers_total")
+	if err != nil {
+		t.Fatalf("failed to gather metrics: %v", err)
+	}
+	if family == nil {
+		t.Fatal("runic_peers_total metric family not found")
+	}
+
+	// Gauge should start at 0
+	if family.GetMetric()[0].GetGauge().GetValue() != 0 {
+		t.Errorf("expected initial gauge value 0, got %f", family.GetMetric()[0].GetGauge().GetValue())
+	}
+
+	// Set gauge via Add
+	m.runicPeersTotal.Add(10)
+	family, err = gatherMetric(registry, "runic_peers_total")
+	if err != nil {
+		t.Fatalf("failed to gather metrics after add: %v", err)
+	}
+	if family.GetMetric()[0].GetGauge().GetValue() != 10 {
+		t.Errorf("expected gauge value 10, got %f", family.GetMetric()[0].GetGauge().GetValue())
+	}
+
+	// Sub via Sub
+	m.runicPeersTotal.Sub(3)
+	family, err = gatherMetric(registry, "runic_peers_total")
+	if err != nil {
+		t.Fatalf("failed to gather metrics after sub: %v", err)
+	}
+	if family.GetMetric()[0].GetGauge().GetValue() != 7 {
+		t.Errorf("expected gauge value 7, got %f", family.GetMetric()[0].GetGauge().GetValue())
+	}
+}
+
+func TestGauge_RunicPoliciesTotal(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	m := NewMetrics(registry)
+
+	family, err := gatherMetric(registry, "runic_policies_total")
+	if err != nil {
+		t.Fatalf("failed to gather metrics: %v", err)
+	}
+	if family == nil {
+		t.Fatal("runic_policies_total metric family not found")
+	}
+
+	// Set gauge and verify
+	m.runicPoliciesTotal.Set(42)
+	family, err = gatherMetric(registry, "runic_policies_total")
+	if err != nil {
+		t.Fatalf("failed to gather metrics: %v", err)
+	}
+	if family.GetMetric()[0].GetGauge().GetValue() != 42 {
+		t.Errorf("expected gauge value 42, got %f", family.GetMetric()[0].GetGauge().GetValue())
+	}
+}
+
+func TestGauge_ActiveConnections(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	m := NewMetrics(registry)
+
+	family, err := gatherMetric(registry, "runic_active_connections")
+	if err != nil {
+		t.Fatalf("failed to gather metrics: %v", err)
+	}
+	if family == nil {
+		t.Fatal("runic_active_connections metric family not found")
+	}
+
+	// Set and verify
+	m.runicActiveConnections.Set(3)
+	family, err = gatherMetric(registry, "runic_active_connections")
+	if err != nil {
+		t.Fatalf("failed to gather metrics: %v", err)
+	}
+	if family.GetMetric()[0].GetGauge().GetValue() != 3 {
+		t.Errorf("expected gauge value 3, got %f", family.GetMetric()[0].GetGauge().GetValue())
+	}
+}
+
+func TestHistogram_BundleCompilationDuration(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	m := NewMetrics(registry)
+
+	// Observe some durations
+	m.runicBundleCompilationDurationSeconds.Observe(0.5)
+	m.runicBundleCompilationDurationSeconds.Observe(1.0)
+	m.runicBundleCompilationDurationSeconds.Observe(2.5)
+
+	family, err := gatherMetric(registry, "runic_bundle_compilation_duration_seconds")
+	if err != nil {
+		t.Fatalf("failed to gather metrics: %v", err)
+	}
+	if family == nil {
+		t.Fatal("runic_bundle_compilation_duration_seconds metric family not found")
+	}
+
+	metric := family.GetMetric()[0]
+	histogram := metric.GetHistogram()
+
+	if histogram.GetSampleCount() != 3 {
+		t.Errorf("expected sample count 3, got %d", histogram.GetSampleCount())
+	}
+
+	// Total of observed values: 0.5 + 1.0 + 2.5 = 4.0
+	if histogram.GetSampleSum() != 4.0 {
+		t.Errorf("expected sample sum 4.0, got %f", histogram.GetSampleSum())
+	}
+}
+
 func TestRecordRequest_MultipleMethods(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	m := NewMetrics(registry)

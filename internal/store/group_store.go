@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"runic/internal/api/common"
@@ -13,6 +14,10 @@ import (
 	"runic/internal/engine"
 	"runic/internal/models"
 )
+
+const groupRowColumns = `id, name, COALESCE(description, ''), COALESCE(is_system, 0), COALESCE(is_pending_delete, 0)`
+
+var ErrGroupNotFound = errors.New("group not found")
 
 type GroupWithCounts struct {
 	ID              int    `json:"id"`
@@ -47,23 +52,13 @@ func NewGroupStore(database db.DB) *GroupStore {
 
 // GetNameByID returns the group name for a given ID. Returns sql.ErrNoRows if not found.
 func (s *GroupStore) GetNameByID(ctx context.Context, id int) (string, error) {
-	var name string
-	err := s.db.QueryRowContext(ctx, "SELECT name FROM groups WHERE id = ?", id).Scan(&name)
-	if err != nil {
-		return "", fmt.Errorf("get group name by id: %w", err)
-	}
-	return name, nil
+	return getNameByID(ctx, s.db, "groups", id, "", "group")
 }
 
 // GetActiveGroupNameByID returns the group name for a given ID, excluding pending-delete groups.
 // Returns sql.ErrNoRows if not found or if the group is pending delete.
 func (s *GroupStore) GetActiveGroupNameByID(ctx context.Context, id int) (string, error) {
-	var name string
-	err := s.db.QueryRowContext(ctx, "SELECT name FROM groups WHERE id = ? AND is_pending_delete = 0", id).Scan(&name)
-	if err != nil {
-		return "", fmt.Errorf("get active group name by id: %w", err)
-	}
-	return name, nil
+	return getNameByID(ctx, s.db, "groups", id, " AND is_pending_delete = 0", "active group")
 }
 
 func (s *GroupStore) ListGroups(ctx context.Context) ([]GroupWithCounts, error) {
@@ -103,6 +98,9 @@ func (s *GroupStore) ListGroups(ctx context.Context) ([]GroupWithCounts, error) 
 }
 
 func (s *GroupStore) CreateGroup(ctx context.Context, name, description string) (int64, error) {
+	if name == "" {
+		return 0, errors.New("group name is required")
+	}
 	result, err := s.db.ExecContext(ctx, "INSERT INTO groups (name, description) VALUES (?, ?)", name, description)
 	if err != nil {
 		return 0, fmt.Errorf("insert group: %w", err)
@@ -121,7 +119,7 @@ func (s *GroupStore) GetGroup(ctx context.Context, id int) (models.GroupRow, err
 func (s *GroupStore) GetGroupTx(ctx context.Context, q db.Querier, id int) (models.GroupRow, error) {
 	var g models.GroupRow
 	err := q.QueryRowContext(ctx,
-		"SELECT id, name, COALESCE(description, ''), COALESCE(is_system, 0), COALESCE(is_pending_delete, 0) FROM groups WHERE id = ? AND is_pending_delete = 0", id,
+		"SELECT "+groupRowColumns+" FROM groups WHERE id = ? AND is_pending_delete = 0", id,
 	).Scan(&g.ID, &g.Name, &g.Description, &g.IsSystem, &g.IsPendingDelete)
 	if err != nil {
 		return g, fmt.Errorf("query group tx: %w", err)
@@ -134,37 +132,15 @@ func (s *GroupStore) GetGroupSQLTx(ctx context.Context, tx *sql.Tx, id int) (mod
 }
 
 func (s *GroupStore) UpdateGroup(ctx context.Context, id int, name, description string) error {
-	result, err := s.db.ExecContext(ctx,
+	return execUpdate(ctx, s.db,
 		"UPDATE groups SET name = COALESCE(NULLIF(?, ''), name), description = ? WHERE id = ? AND is_pending_delete = 0",
-		name, description, id)
-	if err != nil {
-		return fmt.Errorf("update group: %w", err)
-	}
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if rowsAffected == 0 {
-		return fmt.Errorf("group not found")
-	}
-	return nil
+		ErrGroupNotFound, name, description, id)
 }
 
 func (s *GroupStore) UpdateGroupTx(ctx context.Context, tx *sql.Tx, id int, name, description string) error {
-	result, err := tx.ExecContext(ctx,
+	return execUpdate(ctx, tx,
 		"UPDATE groups SET name = COALESCE(NULLIF(?, ''), name), description = ? WHERE id = ? AND is_pending_delete = 0",
-		name, description, id)
-	if err != nil {
-		return fmt.Errorf("update group tx: %w", err)
-	}
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if rowsAffected == 0 {
-		return fmt.Errorf("group not found")
-	}
-	return nil
+		ErrGroupNotFound, name, description, id)
 }
 
 func (s *GroupStore) GetGroupSystemStatus(ctx context.Context, id int) (bool, error) {
@@ -177,33 +153,11 @@ func (s *GroupStore) GetGroupSystemStatus(ctx context.Context, id int) (bool, er
 }
 
 func (s *GroupStore) SoftDeleteGroup(ctx context.Context, id int) error {
-	res, err := s.db.ExecContext(ctx, "UPDATE groups SET is_pending_delete = 1 WHERE id = ? AND is_pending_delete = 0", id)
-	if err != nil {
-		return fmt.Errorf("soft delete group: %w", err)
-	}
-	affected, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if affected == 0 {
-		return sql.ErrNoRows
-	}
-	return nil
+	return softDelete(ctx, s.db, "groups", id, ErrGroupNotFound)
 }
 
 func (s *GroupStore) SoftDeleteGroupTx(ctx context.Context, tx *sql.Tx, id int) error {
-	res, err := tx.ExecContext(ctx, "UPDATE groups SET is_pending_delete = 1 WHERE id = ? AND is_pending_delete = 0", id)
-	if err != nil {
-		return fmt.Errorf("soft delete group tx: %w", err)
-	}
-	affected, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if affected == 0 {
-		return sql.ErrNoRows
-	}
-	return nil
+	return softDelete(ctx, tx, "groups", id, ErrGroupNotFound)
 }
 
 func (s *GroupStore) ListGroupMembers(ctx context.Context, id int) ([]PeerInGroup, error) {

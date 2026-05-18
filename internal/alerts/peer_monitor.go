@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"runic/internal/common/log"
+	"runic/internal/db"
 )
 
 type PeerStatus string
@@ -30,7 +31,7 @@ type peerInfo struct {
 }
 
 type PeerMonitor struct {
-	database *sql.DB
+	database db.Querier
 	service  *Service
 	logger   *slog.Logger
 
@@ -48,7 +49,7 @@ type PeerMonitor struct {
 	mu sync.RWMutex
 }
 
-func NewPeerMonitor(database *sql.DB, service *Service) *PeerMonitor {
+func NewPeerMonitor(database db.Querier, service *Service) *PeerMonitor {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &PeerMonitor{
 		database:         database,

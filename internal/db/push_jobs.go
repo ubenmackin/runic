@@ -2,7 +2,10 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+
+	"runic/internal/common/log"
 )
 
 type PushJob struct {
@@ -38,44 +41,27 @@ func CreatePushJobPeersT(ctx context.Context, database DB, jobID string, peers [
 	ID       int
 	Hostname string
 }) error {
-	tx, err := database.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin push job peers tx: %w", err)
-	}
-
-	// Rollback on error only; after Commit, Rollback returns sql.ErrTxDone
-	// which we silently ignore.
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback()
+	return withTx(ctx, database, func(ctx context.Context, tx *sql.Tx) error {
+		stmt, err := tx.PrepareContext(ctx, `
+			INSERT INTO push_job_peers (job_id, peer_id, peer_hostname, status)
+			VALUES (?, ?, ?, 'pending')
+		`)
+		if err != nil {
+			return fmt.Errorf("prepare push job peers stmt: %w", err)
 		}
-	}()
+		defer func() {
+			if cErr := stmt.Close(); cErr != nil {
+				log.WarnContext(ctx, "close push job peers stmt failed", "error", cErr)
+			}
+		}()
 
-	stmt, err := tx.PrepareContext(ctx, `
-	INSERT INTO push_job_peers (job_id, peer_id, peer_hostname, status)
-	VALUES (?, ?, ?, 'pending')
-	`)
-	if err != nil {
-		return fmt.Errorf("prepare push job peers stmt: %w", err)
-	}
-	defer func() {
-		if cErr := stmt.Close(); cErr != nil {
-			fmt.Printf("close stmt failed: %v\n", cErr)
+		for _, p := range peers {
+			if _, err := stmt.ExecContext(ctx, jobID, p.ID, p.Hostname); err != nil {
+				return fmt.Errorf("insert push job peer %d: %w", p.ID, err)
+			}
 		}
-	}()
-
-	for _, p := range peers {
-		if _, err := stmt.ExecContext(ctx, jobID, p.ID, p.Hostname); err != nil {
-			return fmt.Errorf("insert push job peer %d: %w", p.ID, err)
-		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit push job peers tx: %w", err)
-	}
-	committed = true
-	return nil
+		return nil
+	})
 }
 
 func GetPushJob(ctx context.Context, database Querier, jobID string) (PushJob, error) {
@@ -107,7 +93,7 @@ func GetPushJobWithPeers(ctx context.Context, database Querier, jobID string) (P
 	}
 	defer func() {
 		if err := rows.Close(); err != nil {
-			fmt.Printf("close err: %v\n", err)
+			log.WarnContext(ctx, "close rows failed", "error", err)
 		}
 	}()
 

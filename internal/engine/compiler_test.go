@@ -1219,7 +1219,7 @@ func TestCompileAndStore(t *testing.T) {
 	}
 
 	// Verify HMAC is valid
-	if !Verify(bundle.RulesContent, "test-hmac-key", bundle.HMAC) {
+	if !VerifyWithVersion(bundle.RulesContent, "test-hmac-key", bundle.HMAC, bundle.VersionNumber) {
 		t.Error("HMAC verification failed")
 	}
 }
@@ -1628,9 +1628,9 @@ func TestResolver_AllPeers(t *testing.T) {
 	}
 
 	expectedIPs := map[string]bool{
-		"10.0.0.1":      false,
-		"10.0.0.2":      false,
-		"192.168.1.100": false,
+		"10.0.0.1/32":      false,
+		"10.0.0.2/32":      false,
+		"192.168.1.100/32": false,
 	}
 
 	for _, ip := range result {
@@ -1710,6 +1710,17 @@ func TestPreviewCompile_DockerScope(t *testing.T) {
 
 	if dockerRuleCount == 0 {
 		t.Errorf("expected at least one DOCKER-USER rule, got: %v", rules)
+	}
+
+	// Count actual -A DOCKER-USER rules (exclude comment lines)
+	actualDockerRules := 0
+	for _, rule := range rules {
+		if strings.HasPrefix(rule, "-A DOCKER-USER") {
+			actualDockerRules++
+		}
+	}
+	if actualDockerRules != 2 {
+		t.Errorf("expected exactly 2 DOCKER-USER iptables rules, got %d: %v", actualDockerRules, rules)
 	}
 }
 
