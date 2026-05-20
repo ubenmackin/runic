@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, fireEvent, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, test, expect, vi } from 'vitest'
 import CopyButton from './CopyButton'
@@ -52,38 +52,48 @@ describe('CopyButton', () => {
     })
 
     test('shows check icon after successful copy', async () => {
-      const user = userEvent.setup()
       vi.useFakeTimers()
       vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined)
 
       render(<CopyButton text="test content" />)
 
-      await user.click(screen.getByRole('button'))
-
-      // After clicking, aria-label should change to 'Copied'
       const button = screen.getByRole('button')
+      fireEvent.click(button)
+
+      // Flush microtasks so the async handleCopy resolves
+      await act(async () => {
+        vi.advanceTimersByTime(0)
+      })
+
       expect(button).toHaveAttribute('aria-label', 'Copied')
 
       vi.useRealTimers()
     })
 
     test('reverts to copy icon after timeout', async () => {
-      const user = userEvent.setup()
       vi.useFakeTimers()
       vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined)
 
       render(<CopyButton text="test content" />)
 
-      await user.click(screen.getByRole('button'))
+      const button = screen.getByRole('button')
+      fireEvent.click(button)
+
+      // Flush microtasks so the async handleCopy resolves
+      await act(async () => {
+        vi.advanceTimersByTime(0)
+      })
 
       // After clicking, shows copied state
-      expect(screen.getByRole('button')).toHaveAttribute('aria-label', 'Copied')
+      expect(button).toHaveAttribute('aria-label', 'Copied')
 
       // Advance past the 2-second timeout
-      vi.advanceTimersByTime(2000)
+      act(() => {
+        vi.advanceTimersByTime(2000)
+      })
 
       // Should revert back to default label
-      expect(screen.getByRole('button')).toHaveAttribute('aria-label', 'Copy')
+      expect(button).toHaveAttribute('aria-label', 'Copy')
 
       vi.useRealTimers()
     })
@@ -91,16 +101,22 @@ describe('CopyButton', () => {
 
   describe('error handling', () => {
     test('handles clipboard API failure gracefully', async () => {
-      const user = userEvent.setup()
+      vi.useFakeTimers()
       vi.spyOn(navigator.clipboard, 'writeText').mockRejectedValue(new Error('Not allowed'))
 
       render(<CopyButton text="test content" />)
 
-      // Should not throw when clipboard fails
-      await user.click(screen.getByRole('button'))
-
       const button = screen.getByRole('button')
+      fireEvent.click(button)
+
+      // Flush microtasks so the async handleCopy resolves (and catches the error)
+      await act(async () => {
+        vi.advanceTimersByTime(0)
+      })
+
       expect(button).toBeInTheDocument()
+
+      vi.useRealTimers()
     })
   })
 

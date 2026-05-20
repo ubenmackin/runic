@@ -69,7 +69,7 @@ describe('TopNav', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
-    vi.useFakeTimers()
+    vi.useFakeTimers({ shouldAdvanceTime: true })
     useAuthStore.setState({
       isAuthenticated: true,
       username: 'testuser',

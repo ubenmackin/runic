@@ -28,9 +28,6 @@ export function useTableFilter(data, searchTerm, sortConfig, options = {}) {
     return item[key] ?? ''
   }
 
-  // Stringify extraDeps for stable dependency tracking
-  const extraDepsKey = extraDeps.map(d => (typeof d === 'object' ? JSON.stringify(d) : d)).join('|')
-
   return useMemo(() => {
     if (!data) return []
 
@@ -73,5 +70,6 @@ export function useTableFilter(data, searchTerm, sortConfig, options = {}) {
     })
 
     return sorted
-  }, [data, searchTerm, sortConfig.key, sortConfig.direction, secondarySortKey, extraDepsKey])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, searchTerm, sortConfig.key, sortConfig.direction, secondarySortKey, ...extraDeps])
 }

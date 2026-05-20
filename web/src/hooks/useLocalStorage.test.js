@@ -30,8 +30,9 @@ describe('useLocalStorage', () => {
       result.current[1]('updated')
     })
 
-    // Before debounce completes
-    expect(localStorage.getItem('test-key')).toBe(JSON.stringify('initial'))
+    // Before debounce completes, nothing has been written yet
+    // (the hook only writes when the value changes, not for the initial value)
+    expect(localStorage.getItem('test-key')).toBeNull()
 
     // After debounce completes
     act(() => {
@@ -118,7 +119,7 @@ describe('useLocalStorage', () => {
     act(() => {
       vi.advanceTimersByTime(300)
     })
-    expect(localStorage.getItem('test-key')).toBe(JSON.stringify('initial'))
+    expect(localStorage.getItem('test-key')).toBeNull()
 
     // Written at 500ms
     act(() => {

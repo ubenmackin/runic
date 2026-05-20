@@ -167,8 +167,9 @@ describe('PolicyTable', () => {
     test('renders policy names', () => {
       render(<PolicyTable {...defaultProps} />)
 
-      expect(screen.getByText('allow-ssh')).toBeInTheDocument()
-      expect(screen.getByText('block-telnet')).toBeInTheDocument()
+      // Policy names appear in both mobile and desktop views, so use getAllByText
+      expect(screen.getAllByText('allow-ssh').length).toBeGreaterThanOrEqual(1)
+      expect(screen.getAllByText('block-telnet').length).toBeGreaterThanOrEqual(1)
     })
 
     test('renders action badges', () => {
