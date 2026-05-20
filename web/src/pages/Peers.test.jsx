@@ -51,7 +51,7 @@ vi.mock('react-router-dom', () => ({
 // Mock toast context
 const mockShowToast = vi.fn()
 vi.mock('../hooks/ToastContext', () => ({
-  useToastContext: () => mockShowToast,
+  useToastContext: () => ({ showToast: mockShowToast }),
 }))
 
 // Mock SearchableSelect component

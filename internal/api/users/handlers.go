@@ -211,7 +211,7 @@ func (h *Handler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.InfoContext(r.Context(), "user deleted", "username", user.Username, "deleted_by", authUsername)
-	common.RespondJSON(w, http.StatusOK, map[string]string{"message": "User deleted"})
+	w.WriteHeader(http.StatusNoContent)
 }
 
 type UpdateUserRequest struct {

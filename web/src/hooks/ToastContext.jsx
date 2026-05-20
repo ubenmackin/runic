@@ -1,4 +1,4 @@
-import { createContext, useContext } from 'react'
+import { createContext, useContext, useMemo } from 'react'
 import Toast from '../components/Toast'
 import { useToast } from './useToast'
 
@@ -15,8 +15,10 @@ export function useToastContext() {
 export function ToastProvider({ children }) {
   const { toasts, showToast } = useToast()
 
+  const value = useMemo(() => ({ showToast }), [showToast])
+
   return (
-    <ToastContext.Provider value={showToast}>
+    <ToastContext.Provider value={value}>
       {children}
       {toasts.map((toast, index) => (
         <Toast key={toast.id} toast={toast} index={index} />

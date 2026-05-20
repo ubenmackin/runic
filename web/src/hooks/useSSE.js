@@ -3,6 +3,7 @@
  *
  * Provides real-time notifications from the backend via SSE.
  * Automatically reconnects on connection failure.
+ * Supports Last-Event-ID for replaying missed events on reconnection.
  */
 import { useEffect, useRef, useCallback, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
@@ -18,10 +19,6 @@ const MAX_RECONNECT_ATTEMPTS = 10
  * @param {boolean} options.enabled - Whether to connect (default: true)
  * @param {Function} options.onPendingChangeAdded - Callback when pending_change_added event received
  * @returns {Object} - { connected, error }
- *
- * NOTE: This hook does not currently send Last-Event-ID on reconnection,
- * so events missed during disconnection are not replayed. This is a known
- * limitation that could be addressed in a future iteration.
  */
 export function useSSE({ enabled = true, onPendingChangeAdded } = {}) {
   const queryClient = useQueryClient()
@@ -32,6 +29,7 @@ export function useSSE({ enabled = true, onPendingChangeAdded } = {}) {
   const reconnectAttemptsRef = useRef(0)
   const mountedRef = useRef(true)
   const onPendingChangeAddedRef = useRef(onPendingChangeAdded)
+  const lastEventIdRef = useRef(null)
 
   useEffect(() => {
     onPendingChangeAddedRef.current = onPendingChangeAdded
@@ -76,7 +74,14 @@ export function useSSE({ enabled = true, onPendingChangeAdded } = {}) {
       eventSourceRef.current.close()
     }
 
-    const es = new EventSource(`${BASE}/events`, {
+    // Build URL with Last-Event-ID for reconnection replay
+    let url = `${BASE}/events`
+    const lastId = lastEventIdRef.current
+    if (lastId) {
+      url += `?lastEventId=${encodeURIComponent(lastId)}`
+    }
+
+    const es = new EventSource(url, {
       withCredentials: true,
     })
     eventSourceRef.current = es
@@ -91,6 +96,11 @@ export function useSSE({ enabled = true, onPendingChangeAdded } = {}) {
     })
 
     es.addEventListener('pending_change_added', (e) => {
+      // Track last event ID for reconnection
+      if (e.lastEventId) {
+        lastEventIdRef.current = e.lastEventId
+      }
+
       try {
         const data = JSON.parse(e.data)
         const peerId = data.peer_id

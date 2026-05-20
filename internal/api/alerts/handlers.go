@@ -166,7 +166,12 @@ func (h *Handler) UpdateAlertRule(w http.ResponseWriter, r *http.Request) {
 
 	rule, err := h.AlertStore.GetAlertRule(ctx, id)
 	if err != nil {
-		common.RespondError(w, http.StatusNotFound, "alert rule not found")
+		if errors.Is(err, alerts.ErrAlertRuleNotFound) {
+			common.RespondError(w, http.StatusNotFound, "alert rule not found")
+			return
+		}
+		log.ErrorContext(ctx, "Failed to get alert rule", "error", err)
+		common.RespondError(w, http.StatusInternalServerError, "failed to get alert rule")
 		return
 	}
 
@@ -506,7 +511,7 @@ func (h *Handler) DeleteAlert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *Handler) ClearAllAlerts(w http.ResponseWriter, r *http.Request) {

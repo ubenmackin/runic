@@ -47,9 +47,9 @@ func NewShipper(client *http.Client, controlPlaneURL, token, hostID, logPath str
 	}
 }
 
-func (s *Shipper) Run(ctx context.Context) {
+func (s *Shipper) Run(ctx context.Context) error {
 	log.Info("Starting log shipper", "logPath", s.logPath, "controlPlaneURL", s.controlPlaneURL, "hostID", s.hostID)
-	tailedLines := s.tail(ctx, s.logPath)
+	tailedLines, tailDone := s.tail(ctx, s.logPath)
 
 	var batch []LogEvent
 	ticker := time.NewTicker(constants.LogShipperBatchInterval)
@@ -60,11 +60,13 @@ func (s *Shipper) Run(ctx context.Context) {
 		case line, ok := <-tailedLines:
 			if !ok {
 				if len(batch) > 0 {
-					ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-					s.ship(ctx, batch)
+					shipCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+					s.ship(shipCtx, batch)
 					cancel()
 				}
-				return
+				// Wait for tail goroutine to finish before returning
+				<-tailDone
+				return nil
 			}
 			if ev, err := ParseLogLine(line); err == nil {
 				batch = append(batch, ev)
@@ -82,24 +84,24 @@ func (s *Shipper) Run(ctx context.Context) {
 
 		case <-ctx.Done():
 			if len(batch) > 0 {
-				ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-				s.ship(ctx, batch)
+				shipCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+				s.ship(shipCtx, batch)
 				cancel()
 			}
-			return
+			// Wait for tail goroutine to finish before returning
+			<-tailDone
+			return nil
 		}
 	}
 }
 
-func (s *Shipper) tail(ctx context.Context, path string) <-chan string {
+func (s *Shipper) tail(ctx context.Context, path string) (<-chan string, <-chan struct{}) {
 	lines := make(chan string, 100)
+	done := make(chan struct{})
 
-	// NOTE: This goroutine is intentionally fire-and-forget. It is tightly coupled
-	// to the `lines` channel lifecycle — it closes the channel on exit (defer close(lines))
-	// and respects ctx.Done() at multiple points. Integrating into errgroup would
-	// require restructuring the channel-based producer/consumer pattern.
 	go func() {
 		defer close(lines)
+		defer close(done)
 
 		f, err := os.Open(path)
 		if err != nil {
@@ -125,7 +127,20 @@ func (s *Shipper) tail(ctx context.Context, path string) <-chan string {
 			default:
 			}
 
-			if !scanner.Scan() {
+			// Use a non-blocking scan with a timeout to avoid indefinite blocking.
+			scanDone := make(chan bool, 1)
+			go func() {
+				scanDone <- scanner.Scan()
+			}()
+
+			var scanned bool
+			select {
+			case <-ctx.Done():
+				return
+			case scanned = <-scanDone:
+			}
+
+			if !scanned {
 				if err := scanner.Err(); err != nil {
 					log.Error("Scan error", "error", err)
 				}
@@ -179,7 +194,7 @@ func (s *Shipper) tail(ctx context.Context, path string) <-chan string {
 		}
 	}()
 
-	return lines
+	return lines, done
 }
 
 func ParseLogLine(line string) (LogEvent, error) {
@@ -201,10 +216,6 @@ func ParseLogLine(line string) (LogEvent, error) {
 			ev.Direction = "OUT"
 		}
 	case strings.Contains(line, "[RUNIC-ACCEPT]"):
-		ev.Action = "ACCEPT"
-	case strings.Contains(line, "DROP"):
-		ev.Action = "DROP"
-	case strings.Contains(line, "ACCEPT"):
 		ev.Action = "ACCEPT"
 	}
 

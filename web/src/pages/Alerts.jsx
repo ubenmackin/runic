@@ -325,7 +325,7 @@ function AccessDenied() {
 export default function Alerts() {
   const { isAdmin } = useAuth()
   const qc = useQueryClient()
-  const showToast = useToastContext()
+  const { showToast } = useToastContext()
   const { sortConfig, handleSort } = useTableSort('alerts', { key: 'created_at', direction: 'desc' })
   const { value: rowsPerPage, setValue: setRowsPerPage } = useFilterPersistence('alerts', 'rowsPerPage', 25)
   const [filter, setFilter] = useState({
@@ -361,7 +361,7 @@ export default function Alerts() {
 
   const { data, isLoading } = useQuery({
     queryKey: QUERY_KEYS.alerts(filterWithSort),
-    queryFn: () => api.get(`/alerts?${queryParams.toString()}`),
+    queryFn: ({ signal }) => api.get(`/alerts?${queryParams.toString()}`, signal),
     enabled: isAdmin,
   })
 

@@ -47,8 +47,8 @@ func SignWithVersion(content string, key string, versionNumber int) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-func Verify(content string, key string, signature string) bool {
-	expected := Sign(content, key)
+func Verify(content string, key string, signature string, versionNumber int) bool {
+	expected := SignWithVersion(content, key, versionNumber)
 	return hmac.Equal([]byte(expected), []byte(signature))
 }
 

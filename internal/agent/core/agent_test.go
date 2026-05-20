@@ -108,8 +108,10 @@ func TestNew(t *testing.T) {
 		t.Error("New() version is empty")
 	}
 
-	if agent.rotationManager == nil {
-		t.Error("New() rotationManager is nil")
+	// rotationManager is nil after New(); it is initialized during initialize()
+	// once the hostID is known (after registration or config load).
+	if agent.rotationManager != nil {
+		t.Error("New() rotationManager should be nil before initialize()")
 	}
 
 	// Verify default config values
@@ -1282,7 +1284,8 @@ func TestAgentFields(t *testing.T) {
 	_ = agent.shipper
 	_ = agent.rotationManager
 
-	// All fields should be non-nil (except shipper which is set in Run)
+	// All fields should be non-nil (except shipper and rotationManager which are
+	// set in initialize() after registration/config load).
 	if agent.config == nil {
 		t.Error("Agent.config is nil")
 	}
@@ -1292,9 +1295,7 @@ func TestAgentFields(t *testing.T) {
 	if agent.sseClient == nil {
 		t.Error("Agent.sseClient is nil")
 	}
-	if agent.rotationManager == nil {
-		t.Error("Agent.rotationManager is nil")
-	}
+	// rotationManager is intentionally nil after New(); set during initialize().
 }
 
 func TestAgentMutexFieldExists(t *testing.T) {
@@ -1346,7 +1347,7 @@ func TestPollLoopStructure(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 
-	go agent.pollLoop(ctx, false)
+	go agent.pollLoop(ctx)
 
 	// Give it time to run
 	time.Sleep(30 * time.Millisecond)
@@ -1798,12 +1799,13 @@ func TestPollLoopSkipsDuplicatePull(t *testing.T) {
 	defer server.Close()
 	agent.config.ControlPlaneURL = server.URL
 
-	// Run pollLoop with skipFirstPull=true for a very brief time
+	// Run pollLoop with bootPullDone=true for a very brief time
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 
-	// When skipFirstPull=true, pollLoop should NOT call pullBundle immediately
-	go agent.pollLoop(ctx, true)
+	// When bootPullDone=true, pollLoop should NOT call pullBundle immediately
+	agent.bootPullDone = true
+	go agent.pollLoop(ctx)
 
 	// Wait for context to expire
 	<-ctx.Done()

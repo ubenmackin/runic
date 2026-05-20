@@ -23,7 +23,7 @@ import PageHeader from '../components/PageHeader'
 
 export default function Groups() {
   const qc = useQueryClient()
-  const showToast = useToastContext()
+  const { showToast } = useToastContext()
   const { canEdit } = useAuth()
   const { modalOpen, editItem: editGroup, setEditItem: setEditGroup, form: formData, setForm: setFormData, setFormForEdit, handleOpenAdd, handleCancel, setModalOpen } = useCrudModal({ name: '', description: '' })
   const [deleteTarget, setDeleteTarget] = useState(null)
@@ -60,7 +60,7 @@ export default function Groups() {
 
   const { data: groups, isLoading, refetch } = useQuery({
     queryKey: QUERY_KEYS.groups(),
-    queryFn: () => api.get('/groups'),
+    queryFn: ({ signal }) => api.get('/groups', signal),
   })
 
   const handleManualRefresh = useCallback(async () => {
@@ -71,14 +71,14 @@ export default function Groups() {
 
   const { data: membersData, isLoading: membersLoading } = useQuery({
     queryKey: QUERY_KEYS.members(editGroup?.id),
-    queryFn: () => api.get(`/groups/${editGroup.id}/members`),
+    queryFn: ({ signal }) => api.get(`/groups/${editGroup.id}/members`, signal),
     enabled: !!editGroup?.id,
   })
   const members = membersData || []
 
   const { data: allPeers } = useQuery({
     queryKey: QUERY_KEYS.peers(),
-    queryFn: () => api.get('/peers'),
+    queryFn: ({ signal }) => api.get('/peers', signal),
     enabled: modalOpen && !!editGroup,
   })
 

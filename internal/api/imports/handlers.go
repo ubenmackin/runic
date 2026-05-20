@@ -51,7 +51,10 @@ func NewHandler(store ImportStore, sseHub *events.SSEHub, changeWorker *common.C
 	return &Handler{Store: store, SSEHub: sseHub, ChangeWorker: changeWorker}
 }
 
-// RegisterRoutes registers all import session routes on the given router.
+var validRuleStatuses = map[string]bool{"pending": true, "resolved": true, "skipped": true, "approved": true, "rejected": true}
+
+var validMappingStatuses = map[string]bool{"pending": true, "mapped": true, "approved": true, "rejected": true}
+
 // RegisterRoutes registers all import session routes. All routes require editor role — the caller is responsible for applying the middleware.
 func (h *Handler) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/peers/{id:[0-9]+}/import", h.InitiateImport).Methods("POST")
@@ -266,7 +269,6 @@ func (h *Handler) UpdateRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	validRuleStatuses := map[string]bool{"pending": true, "resolved": true, "skipped": true, "approved": true, "rejected": true}
 	if input.Status != nil && !validRuleStatuses[*input.Status] {
 		common.RespondError(w, http.StatusBadRequest, "invalid status value")
 		return
@@ -303,7 +305,6 @@ func (h *Handler) UpdateGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	validMappingStatuses := map[string]bool{"pending": true, "mapped": true, "approved": true, "rejected": true}
 	if input.Status != nil && !validMappingStatuses[*input.Status] {
 		common.RespondError(w, http.StatusBadRequest, "invalid status value")
 		return
@@ -340,7 +341,6 @@ func (h *Handler) UpdatePeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	validMappingStatuses := map[string]bool{"pending": true, "mapped": true, "approved": true, "rejected": true}
 	if input.Status != nil && !validMappingStatuses[*input.Status] {
 		common.RespondError(w, http.StatusBadRequest, "invalid status value")
 		return
@@ -377,7 +377,6 @@ func (h *Handler) UpdateService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	validMappingStatuses := map[string]bool{"pending": true, "mapped": true, "approved": true, "rejected": true}
 	if input.Status != nil && !validMappingStatuses[*input.Status] {
 		common.RespondError(w, http.StatusBadRequest, "invalid status value")
 		return
@@ -442,7 +441,7 @@ func (h *Handler) CancelSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	common.RespondJSON(w, http.StatusOK, statusResponse{Status: "canceled"})
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // Response types
@@ -467,7 +466,12 @@ type applyResponse struct {
 // Helper functions
 
 func (h *Handler) getSessionID(r *http.Request) (int64, error) {
-	return strconv.ParseInt(mux.Vars(r)["session_id"], 10, 64)
+	vars := mux.Vars(r)
+	val := vars["session_id"]
+	if val == "" {
+		return 0, fmt.Errorf("missing session_id")
+	}
+	return strconv.ParseInt(val, 10, 64)
 }
 
 func parseUpdateIDs(r *http.Request, entityIDParam string) (sessionID int64, entityID int64, err error) {

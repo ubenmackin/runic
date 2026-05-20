@@ -46,13 +46,13 @@ const SIBLING_SPACING = 110
 function useGroupMembers(groupIds) {
   return useQuery({
     queryKey: ['topology-group-members', ...groupIds],
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       if (!groupIds.length) return {}
       const results = {}
       await Promise.all(
         groupIds.map(async (gid) => {
           try {
-            const members = await api.get(`/groups/${gid}/members`)
+            const members = await api.get(`/groups/${gid}/members`, signal)
             results[gid] = members || []
           } catch {
             results[gid] = []
@@ -777,10 +777,10 @@ export default function Topology() {
     return () => observer.disconnect()
   }, [])
 
-  const { data: peers } = useQuery({ queryKey: QUERY_KEYS.peers(), queryFn: () => api.get('/peers') })
-  const { data: groups } = useQuery({ queryKey: QUERY_KEYS.groups(), queryFn: () => api.get('/groups') })
-  const { data: policies } = useQuery({ queryKey: QUERY_KEYS.policies(), queryFn: () => api.get('/policies') })
-  const { data: services } = useQuery({ queryKey: QUERY_KEYS.services(), queryFn: () => api.get('/services') })
+  const { data: peers } = useQuery({ queryKey: QUERY_KEYS.peers(), queryFn: ({ signal }) => api.get('/peers', signal) })
+  const { data: groups } = useQuery({ queryKey: QUERY_KEYS.groups(), queryFn: ({ signal }) => api.get('/groups', signal) })
+  const { data: policies } = useQuery({ queryKey: QUERY_KEYS.policies(), queryFn: ({ signal }) => api.get('/policies', signal) })
+  const { data: services } = useQuery({ queryKey: QUERY_KEYS.services(), queryFn: ({ signal }) => api.get('/services', signal) })
 
   const relevantGroupIds = useMemo(() => {
     if (!policies || !groups) return []

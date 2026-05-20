@@ -248,3 +248,94 @@ func BenchmarkGetBundle(b *testing.B) {
 		}
 	}
 }
+
+// BenchmarkRollbackSnapshots measures performance of RollbackSnapshots with a
+// large number of snapshots. This simulates a real-world bulk rollback scenario
+// where many pending changes need to be reverted at once.
+func BenchmarkRollbackSnapshots(b *testing.B) {
+	database, cleanup := SetupTestDB(b)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Pre-populate with snapshots for rollback
+	// Create groups (simplest entity for "create" rollback)
+	for i := 1; i <= 500; i++ {
+		_, err := database.ExecContext(ctx,
+			"INSERT INTO groups (name, description) VALUES (?, ?)",
+			fmt.Sprintf("bench-group-%d", i), "benchmark test")
+		if err != nil {
+			b.Fatalf("insert group %d: %v", i, err)
+		}
+		err = CreateSnapshot(ctx, database, "group", i, "create", "")
+		if err != nil {
+			b.Fatalf("create snapshot for group %d: %v", i, err)
+		}
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		// Rollback removes all snapshots and entities
+		if err := RollbackSnapshots(ctx, database); err != nil {
+			b.Fatalf("RollbackSnapshots: %v", err)
+		}
+
+		// Re-create data for next iteration
+		b.StopTimer()
+		for j := 1; j <= 500; j++ {
+			_, err := database.ExecContext(ctx,
+				"INSERT INTO groups (name, description) VALUES (?, ?)",
+				fmt.Sprintf("bench-group-%d", j), "benchmark test")
+			if err != nil {
+				b.Fatalf("re-insert group %d: %v", j, err)
+			}
+			err = CreateSnapshot(ctx, database, "group", j, "create", "")
+			if err != nil {
+				b.Fatalf("re-create snapshot for group %d: %v", j, err)
+			}
+		}
+		b.StartTimer()
+	}
+}
+
+// BenchmarkRollbackSnapshots_Small measures RollbackSnapshots with a small
+// number of snapshots for baseline comparison.
+func BenchmarkRollbackSnapshots_Small(b *testing.B) {
+	database, cleanup := SetupTestDB(b)
+	defer cleanup()
+	ctx := context.Background()
+
+	for i := 1; i <= 10; i++ {
+		_, err := database.ExecContext(ctx,
+			"INSERT INTO groups (name, description) VALUES (?, ?)",
+			fmt.Sprintf("bench-group-%d", i), "benchmark test")
+		if err != nil {
+			b.Fatalf("insert group %d: %v", i, err)
+		}
+		err = CreateSnapshot(ctx, database, "group", i, "create", "")
+		if err != nil {
+			b.Fatalf("create snapshot for group %d: %v", i, err)
+		}
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := RollbackSnapshots(ctx, database); err != nil {
+			b.Fatalf("RollbackSnapshots: %v", err)
+		}
+
+		b.StopTimer()
+		for j := 1; j <= 10; j++ {
+			_, err := database.ExecContext(ctx,
+				"INSERT INTO groups (name, description) VALUES (?, ?)",
+				fmt.Sprintf("bench-group-%d", j), "benchmark test")
+			if err != nil {
+				b.Fatalf("re-insert group %d: %v", j, err)
+			}
+			err = CreateSnapshot(ctx, database, "group", j, "create", "")
+			if err != nil {
+				b.Fatalf("re-create snapshot for group %d: %v", j, err)
+			}
+		}
+		b.StartTimer()
+	}
+}

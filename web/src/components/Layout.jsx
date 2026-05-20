@@ -7,7 +7,7 @@ export default function Layout() {
     <div className="min-h-screen bg-gray-50 dark:bg-charcoal-darkest flex flex-col">
       <TopNav />
 
-      <main className="flex-1 p-4 md:p-6 overflow-auto pb-20 md:pb-6">
+      <main aria-label="Main content" className="flex-1 p-4 md:p-6 overflow-auto pb-20 md:pb-6">
         <Outlet />
       </main>
 

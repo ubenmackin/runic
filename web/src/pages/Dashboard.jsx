@@ -19,16 +19,16 @@ export default function Dashboard() {
 
   const { data, isLoading } = useQuery({
     queryKey: QUERY_KEYS.dashboardStats(),
-    queryFn: () => api.get('/dashboard'),
+    queryFn: ({ signal }) => api.get('/dashboard', signal),
     staleTime: 30000, // Cache for 30 seconds
   })
 
   const { data: blockedLogs } = useQuery({
     queryKey: QUERY_KEYS.blockedLogs24h(),
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       const to = new Date()
       const from = new Date(to.getTime() - 24 * 60 * 60 * 1000)
-      return api.get(`/logs?limit=1000&action=DROP&from=${from.toISOString()}&to=${to.toISOString()}`)
+      return api.get(`/logs?limit=1000&action=DROP&from=${from.toISOString()}&to=${to.toISOString()}`, signal)
     },
     refetchInterval: REFETCH_INTERVALS.DASHBOARD_LOGS, // Refresh every minute
     refetchIntervalInBackground: false,

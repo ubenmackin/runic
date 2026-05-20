@@ -44,6 +44,9 @@ var (
 
 	// tokenStore is the store used for token revocation queries.
 	tokenStore *store.TokenStore
+
+	// settingsStore is the store used for persisting JWT key rotation.
+	settingsStore *store.SettingsStore
 )
 
 // Token type constants used for access vs refresh token differentiation.
@@ -57,6 +60,11 @@ func SetTokenStore(ts *store.TokenStore) {
 	tokenStore = ts
 }
 
+// SetSettingsStore sets the SettingsStore used for persisting JWT key rotation.
+func SetSettingsStore(ss *store.SettingsStore) {
+	settingsStore = ss
+}
+
 // InitJwtKey initializes the JWT key. Must be called after database initialization.
 func InitJwtKey(ctx context.Context, database db.Querier) error {
 	settings := store.NewSettingsStore(database, nil)
@@ -65,20 +73,28 @@ func InitJwtKey(ctx context.Context, database db.Querier) error {
 		JwtKeyMu.Lock()
 		JwtKey = []byte(secret)
 		JwtKeyMu.Unlock()
-		return nil
-	}
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+	} else if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		log.Warn("Failed to query jwt_secret from database", "error", err)
 	}
 
-	key := make([]byte, 32)
-	if _, err := rand.Read(key); err != nil {
-		return fmt.Errorf("failed to generate random JWT key: %w", err)
+	// Load the previous key if it exists (from a prior rotation).
+	prevSecret, err := settings.GetSystemConfig(ctx, "jwt_prev_secret")
+	if err == nil && prevSecret != "" {
+		JwtKeyMu.Lock()
+		JwtPrevKey = []byte(prevSecret)
+		JwtKeyMu.Unlock()
 	}
-	JwtKeyMu.Lock()
-	JwtKey = key
-	JwtKeyMu.Unlock()
-	log.Warn("Using random JWT key (no jwt_secret found in database)")
+
+	if JwtKey == nil {
+		key := make([]byte, 32)
+		if _, err := rand.Read(key); err != nil {
+			return fmt.Errorf("failed to generate random JWT key: %w", err)
+		}
+		JwtKeyMu.Lock()
+		JwtKey = key
+		JwtKeyMu.Unlock()
+		log.Warn("Using random JWT key (no jwt_secret found in database)")
+	}
 	return nil
 }
 
@@ -122,12 +138,27 @@ func GenerateToken(username string, role string, tokenType string, duration time
 // RotateJwtKey rotates the JWT signing key. The current key is retained as
 // the previous key so that tokens signed before the rotation remain valid
 // for verification during the overlapping rotation window.
-func RotateJwtKey(newKey []byte) {
+// Both the new key and the old key are persisted to the database via the
+// settings store so they survive a restart.
+func RotateJwtKey(ctx context.Context, newKey []byte) error {
 	JwtKeyMu.Lock()
-	defer JwtKeyMu.Unlock()
-	JwtPrevKey = JwtKey
+	oldKey := JwtKey
+	JwtPrevKey = oldKey
 	JwtKey = newKey
 	JwtKeyRotationAt = time.Now()
+	JwtKeyMu.Unlock()
+
+	if settingsStore != nil {
+		if err := settingsStore.SetSystemConfig(ctx, "jwt_secret", string(newKey)); err != nil {
+			return fmt.Errorf("failed to persist new JWT key: %w", err)
+		}
+		if oldKey != nil {
+			if err := settingsStore.SetSystemConfig(ctx, "jwt_prev_secret", string(oldKey)); err != nil {
+				return fmt.Errorf("failed to persist previous JWT key: %w", err)
+			}
+		}
+	}
+	return nil
 }
 
 func ValidateToken(tokenString string) (*Claims, error) {
@@ -269,9 +300,10 @@ func RoleFromContext(ctx context.Context) string {
 
 // SetContextForTest sets auth context values for testing. This is needed because the context keys are unexported and can't be directly
 // accessed from other packages.
-func SetContextForTest(ctx context.Context, role, username string) context.Context {
+func SetContextForTest(ctx context.Context, role, username, uniqueID string) context.Context {
 	ctx = context.WithValue(ctx, ctxKeyRole, role)
 	ctx = context.WithValue(ctx, ctxKeyUsername, username)
+	ctx = context.WithValue(ctx, ctxKeyUniqueID, uniqueID)
 	return ctx
 }
 

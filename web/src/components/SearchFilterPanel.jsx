@@ -37,6 +37,7 @@ export default function SearchFilterPanel({
   rightContent
 }) {
   const [expanded, setExpanded] = useState(() => {
+    if (!storageKey) return false
     const saved = localStorage.getItem(storageKey)
     return saved === 'true'
   })
@@ -46,7 +47,7 @@ export default function SearchFilterPanel({
   const handleToggle = () => {
     const next = !expanded
     setExpanded(next)
-    localStorage.setItem(storageKey, String(next))
+    if (storageKey) localStorage.setItem(storageKey, String(next))
   }
 
   const searchInput = showSearch && (

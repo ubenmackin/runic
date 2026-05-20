@@ -23,18 +23,18 @@ const WINDOW_OPTIONS = [1, 5, 15, 30, 60]
 
 export default function AlertSettings({ showHeader = true }) {
   const qc = useQueryClient()
-  const showToast = useToastContext()
+  const { showToast } = useToastContext()
 
   const [editingThreshold, setEditingThreshold] = useState({})
 
   const { data: alertRules, isLoading: rulesLoading, error: rulesError } = useQuery({
     queryKey: QUERY_KEYS.alertRules(),
-    queryFn: getAlertRules,
+    queryFn: ({ signal }) => getAlertRules(signal),
   })
 
   const { data: peers } = useQuery({
     queryKey: QUERY_KEYS.peers(),
-    queryFn: () => api.get('/peers'),
+    queryFn: ({ signal }) => api.get('/peers', signal),
   })
 
   const mutation = useMutation({

@@ -1,40 +1,23 @@
-import { createContext, useContext, useState, useEffect } from 'react'
+import { createContext, useContext } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { api } from '../api/client'
 
 const SetupContext = createContext(null)
 
 export function SetupProvider({ children }) {
-  const [needsSetup, setNeedsSetup] = useState(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState(null)
-
-  useEffect(() => {
-    let cancelled = false
-
-    api.get('/setup')
-      .then(data => {
-        if (!cancelled) setNeedsSetup(data.needs_setup)
-      })
-      .catch(err => {
-        if (!cancelled) {
-          setError(err)
-          // Default to false on error to prevent infinite loops
-          setNeedsSetup(false)
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false)
-      })
-
-    return () => {
-      cancelled = true
-    }
-  }, [])
+  const { data, isLoading, error } = useQuery({
+    queryKey: ['setup'],
+    queryFn: ({ signal }) => api.get('/setup', signal),
+    staleTime: 60_000,
+    retry: 1,
+    // Default needsSetup to false on error to prevent infinite redirect loops
+    select: (d) => d?.needs_setup ?? false,
+  })
 
   const value = {
-    needsSetup,
-    loading,
-    error
+    needsSetup: error ? false : (isLoading ? null : data),
+    loading: isLoading,
+    error,
   }
 
   return <SetupContext.Provider value={value}>{children}</SetupContext.Provider>

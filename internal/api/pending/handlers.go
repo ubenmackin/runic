@@ -20,6 +20,7 @@ import (
 	"runic/internal/common/log"
 	"runic/internal/db"
 	"runic/internal/engine"
+	"runic/internal/models"
 	"runic/internal/store"
 
 	"github.com/gorilla/mux"
@@ -49,6 +50,20 @@ func NewHandler(peerStore *store.PeerStore, groupStore *store.GroupStore, policy
 		SSEHub:       sseHub,
 		PushWorker:   pushWorker,
 	}
+}
+
+// setupSSEHeaders configures the response writer for Server-Sent Events.
+// Returns an http.Flusher if the writer supports flushing, or nil otherwise.
+func setupSSEHeaders(w http.ResponseWriter) http.Flusher {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		return nil
+	}
+	return flusher
 }
 
 // Returns ("Unknown", nil) for unrecognized change types.
@@ -711,14 +726,8 @@ func (h *Handler) HandlePushJobSSE(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("X-Accel-Buffering", "no")
-
-	flusher, ok := w.(http.Flusher)
-	if !ok {
+	flusher := setupSSEHeaders(w)
+	if flusher == nil {
 		common.InternalError(w)
 		return
 	}
@@ -794,31 +803,28 @@ func (h *Handler) applyBundleForPeer(ctx context.Context, peerID int) error {
 		return fmt.Errorf("compiler not available")
 	}
 
-	// Begin transaction for atomic operations
-	tx, err := h.beginner.BeginTx(ctx, nil)
+	var bundle models.RuleBundleRow
+	err = store.RunInTx(ctx, h.beginner, func(tx *sql.Tx) error {
+		// Compile and store
+		b, compileErr := h.Compiler.CompileAndStore(ctx, peerID)
+		if compileErr != nil {
+			return fmt.Errorf("compile failed: %w", compileErr)
+		}
+		bundle = b
+
+		// Clear pending changes (MUST succeed)
+		if err := h.PendingStore.ClearPendingChangesForPeerTx(ctx, tx, peerID); err != nil {
+			return fmt.Errorf("failed to clear pending changes: %w", err)
+		}
+
+		if err := h.PendingStore.DeletePendingBundlePreviewTx(ctx, tx, peerID); err != nil {
+			return fmt.Errorf("failed to delete pending bundle preview: %w", err)
+		}
+
+		return nil
+	})
 	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	// Compile and store
-	bundle, err := h.Compiler.CompileAndStore(ctx, peerID)
-	if err != nil {
-		return fmt.Errorf("compile failed: %w", err)
-	}
-
-	// Clear pending changes (MUST succeed)
-	if err := h.PendingStore.ClearPendingChangesForPeerTx(ctx, tx, peerID); err != nil {
-		return fmt.Errorf("failed to clear pending changes: %w", err)
-	}
-
-	if err := h.PendingStore.DeletePendingBundlePreviewTx(ctx, tx, peerID); err != nil {
-		return fmt.Errorf("failed to delete pending bundle preview: %w", err)
-	}
-
-	// Commit transaction
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("failed to commit transaction: %w", err)
+		return err
 	}
 
 	// Notify via SSE
@@ -833,13 +839,8 @@ func (h *Handler) applyBundleForPeer(ctx context.Context, peerID int) error {
 func (h *Handler) HandleFrontendSSE(w http.ResponseWriter, r *http.Request) {
 	clientID := fmt.Sprintf("frontend-%d", time.Now().UnixNano())
 
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("X-Accel-Buffering", "no")
-
-	flusher, ok := w.(http.Flusher)
-	if !ok {
+	flusher := setupSSEHeaders(w)
+	if flusher == nil {
 		common.InternalError(w)
 		return
 	}

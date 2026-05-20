@@ -127,11 +127,9 @@ func detectLocalIP() string {
 		for _, addr := range addrs {
 			var ip net.IP
 			switch v := addr.(type) {
-			case *net.TCPAddr:
-				ip = v.IP
-			case *net.UDPAddr:
-				ip = v.IP
 			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
 				ip = v.IP
 			default:
 				continue

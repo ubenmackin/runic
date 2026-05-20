@@ -43,7 +43,7 @@ const SYSTEM_RULES = [
 
 export default function Policies() {
   const qc = useQueryClient()
-  const showToast = useToastContext()
+  const { showToast } = useToastContext()
   const { canEdit } = useAuth()
   const location = useLocation()
   const { modalOpen, setModalOpen, editItem: editPolicy, setEditItem: setEditPolicy, form: formData, setForm: setFormData, setFormForEdit, handleOpenAdd, handleCancel } = useCrudModal({
@@ -119,7 +119,7 @@ export default function Policies() {
 
   const { data: policies, isLoading, refetch } = useQuery({
     queryKey: QUERY_KEYS.policies(),
-    queryFn: () => api.get('/policies'),
+    queryFn: ({ signal }) => api.get('/policies', signal),
   })
 
   const handleManualRefresh = useCallback(async () => {
@@ -130,22 +130,22 @@ export default function Policies() {
 
   const { data: peers } = useQuery({
     queryKey: QUERY_KEYS.peers(),
-    queryFn: () => api.get('/peers'),
+    queryFn: ({ signal }) => api.get('/peers', signal),
   })
 
   const { data: groups } = useQuery({
     queryKey: QUERY_KEYS.groups(),
-    queryFn: () => api.get('/groups'),
+    queryFn: ({ signal }) => api.get('/groups', signal),
   })
 
   const { data: services } = useQuery({
     queryKey: QUERY_KEYS.services(),
-    queryFn: () => api.get('/services'),
+    queryFn: ({ signal }) => api.get('/services', signal),
   })
 
   const { data: specialTargets } = useQuery({
     queryKey: ['special-targets'],
-    queryFn: () => api.get('/policies/special-targets'),
+    queryFn: ({ signal }) => api.get('/policies/special-targets', signal),
   })
 
   const isIGMPService = formData.service_id && services?.find(s => s.id === formData.service_id)?.name?.toUpperCase() === 'IGMP'

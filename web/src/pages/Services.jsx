@@ -39,7 +39,7 @@ const USER_PROTOCOL_OPTIONS = [
 ]
 
 export default function Services() {
-  const showToast = useToastContext()
+  const { showToast } = useToastContext()
   const { canEdit } = useAuth()
   const { modalOpen, setModalOpen, editItem: editService, setEditItem: setEditService, form: formData, setForm: setFormData, setFormForEdit, handleOpenAdd, handleCancel: closeModal } = useCrudModal({ name: '', protocol: 'tcp', ports: '', source_ports: '', description: '' })
   const [deleteTarget, setDeleteTarget] = useState(null)
@@ -86,7 +86,7 @@ export default function Services() {
 
   const { data: services, isLoading, refetch } = useQuery({
     queryKey: QUERY_KEYS.services(),
-    queryFn: () => api.get('/services'),
+    queryFn: ({ signal }) => api.get('/services', signal),
   })
 
   const handleManualRefresh = useCallback(async () => {

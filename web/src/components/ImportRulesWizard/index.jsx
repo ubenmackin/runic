@@ -33,7 +33,7 @@ import ApplyStep from "./ApplyStep";
 
 export default function ImportRulesWizard({ peer, onClose, onSuccess }) {
   const qc = useQueryClient();
-  const showToast = useToastContext();
+  const { showToast } = useToastContext();
   const modalRef = useRef(null);
 
   useFocusTrap(modalRef, true);

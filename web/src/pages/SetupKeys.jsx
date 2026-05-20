@@ -17,7 +17,7 @@ import { useAuth } from '../hooks/useAuth'
 
 export default function SetupKeys() {
   const qc = useQueryClient()
-  const showToast = useToastContext()
+  const { showToast } = useToastContext()
   const { isAdmin } = useAuth()
   const [showRotateModal, setShowRotateModal] = useState(null) // peer ID or 'bulk'
   const [rotationResult, setRotationResult] = useState(null) // { peerId, newKey, token }
@@ -40,7 +40,7 @@ export default function SetupKeys() {
 
   const { data: peers, isLoading: peersLoading } = useQuery({
     queryKey: QUERY_KEYS.peers(),
-    queryFn: () => api.get('/peers'),
+    queryFn: ({ signal }) => api.get('/peers', signal),
   })
 
   const rotateMutation = useMutation({
@@ -84,7 +84,7 @@ export default function SetupKeys() {
 
   const { data: tokens, isLoading: tokensLoading } = useQuery({
     queryKey: ['registration-tokens'],
-    queryFn: () => api.get('/registration-tokens'),
+    queryFn: ({ signal }) => api.get('/registration-tokens', signal),
     enabled: activeTab === 'tokens' && isAdmin,
   })
 

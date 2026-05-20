@@ -3,8 +3,9 @@ package common
 
 import (
 	"fmt"
-	"log/slog"
 	"net/http"
+
+	"runic/internal/common/log"
 )
 
 // InternalError responds with a generic 500 error. Detailed errors should be logged server-side before calling this function.
@@ -12,7 +13,7 @@ func InternalError(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusInternalServerError)
 	if _, err := w.Write([]byte(`{"error": "internal server error"}`)); err != nil {
-		slog.Error("failed to write error response", "error", err)
+		log.Error("failed to write error response", "error", err)
 	}
 }
 

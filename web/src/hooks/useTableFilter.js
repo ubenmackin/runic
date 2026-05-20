@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useMemo, useRef } from 'react'
 
 /**
  * Generic hook for filtering and sorting table data.
@@ -15,19 +15,32 @@ import { useMemo } from 'react'
 export function useTableFilter(data, searchTerm, sortConfig, options = {}) {
   const { filterFn, fieldMap = {}, extraDeps = [], secondarySortKey } = options
 
+  // Stabilize references so they don't trigger unnecessary re-computation.
+  // The actual values are always read from refs inside the useMemo callback.
+  const filterFnRef = useRef(filterFn)
+  filterFnRef.current = filterFn
+
+  const fieldMapRef = useRef(fieldMap)
+  fieldMapRef.current = fieldMap
+
   const getValue = (item, key) => {
-    if (fieldMap[key]) return fieldMap[key](item)
+    if (fieldMapRef.current[key]) return fieldMapRef.current[key](item)
     return item[key] ?? ''
   }
+
+  // Stringify extraDeps for stable dependency tracking
+  const extraDepsKey = extraDeps.map(d => (typeof d === 'object' ? JSON.stringify(d) : d)).join('|')
 
   return useMemo(() => {
     if (!data) return []
 
+    const currentFilterFn = filterFnRef.current
+
     let filtered = data
     if (searchTerm) {
       const term = searchTerm.toLowerCase()
-      if (filterFn) {
-        filtered = data.filter(item => filterFn(item, term))
+      if (currentFilterFn) {
+        filtered = data.filter(item => currentFilterFn(item, term))
       } else {
         // Default: search all string values in the object
         filtered = data.filter(item =>
@@ -38,29 +51,27 @@ export function useTableFilter(data, searchTerm, sortConfig, options = {}) {
       }
     }
 
-      const sorted = [...filtered].sort((a, b) => {
-        let aVal = getValue(a, sortConfig.key)
-        let bVal = getValue(b, sortConfig.key)
+    const sorted = [...filtered].sort((a, b) => {
+      let aVal = getValue(a, sortConfig.key)
+      let bVal = getValue(b, sortConfig.key)
 
-        // Handle null/undefined values consistently
-        if (aVal == null) aVal = ''
-        if (bVal == null) bVal = ''
+      // Handle null/undefined values consistently
+      if (aVal == null) aVal = ''
+      if (bVal == null) bVal = ''
 
-        if (aVal < bVal) return sortConfig.direction === 'asc' ? -1 : 1
-        if (aVal > bVal) return sortConfig.direction === 'asc' ? 1 : -1
+      if (aVal < bVal) return sortConfig.direction === 'asc' ? -1 : 1
+      if (aVal > bVal) return sortConfig.direction === 'asc' ? 1 : -1
 
-        // Secondary sort for consistent ordering when primary values are equal
-        if (secondarySortKey) {
-          const aSecondary = getValue(a, secondarySortKey)
-          const bSecondary = getValue(b, secondarySortKey)
-          return String(aSecondary).localeCompare(String(bSecondary))
-        }
+      // Secondary sort for consistent ordering when primary values are equal
+      if (secondarySortKey) {
+        const aSecondary = getValue(a, secondarySortKey)
+        const bSecondary = getValue(b, secondarySortKey)
+        return String(aSecondary).localeCompare(String(bSecondary))
+      }
 
-        return 0
-      })
+      return 0
+    })
 
     return sorted
-    // Spread is intentional to allow flexible additional dependencies
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, searchTerm, sortConfig, filterFn, fieldMap, secondarySortKey, ...extraDeps])
+  }, [data, searchTerm, sortConfig.key, sortConfig.direction, secondarySortKey, extraDepsKey])
 }

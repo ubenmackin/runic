@@ -42,6 +42,10 @@ func SendHeartbeat(ctx context.Context, client common.HTTPClient, controlPlaneUR
 		return nil
 	}
 
+	if status, ok := result["status"]; ok {
+		slog.Debug("heartbeat response", "status", status)
+	}
+
 	return nil
 }
 

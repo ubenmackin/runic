@@ -426,11 +426,8 @@ func TestCancelSession_Success(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.CancelSession(w, req)
 
-	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, http.StatusNoContent, w.Code)
 	assert.True(t, deleted)
-	var resp statusResponse
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, "canceled", resp.Status)
 }
 
 func TestCancelSession_InvalidSessionID(t *testing.T) {

@@ -8,7 +8,7 @@ import CopyButton from './CopyButton'
 import ConfirmModal from './ConfirmModal'
 
 export default function PendingChangesModal({ peerId, peerHostname, onClose, onApplied }) {
-  const showToast = useToastContext()
+  const { showToast } = useToastContext()
   const modalRef = useRef(null)
   const [loading, setLoading] = useState(true)
   const [changes, setChanges] = useState([])
@@ -19,6 +19,8 @@ export default function PendingChangesModal({ peerId, peerHostname, onClose, onA
   const [rollbackLoading, setRollbackLoading] = useState(false)
   const [applyEntityLoading, setApplyEntityLoading] = useState(false)
   const [showRollbackConfirm, setShowRollbackConfirm] = useState(false)
+  const [showEntityRollbackConfirm, setShowEntityRollbackConfirm] = useState(null) // { entityType, entityId }
+  const [showEntityApplyConfirm, setShowEntityApplyConfirm] = useState(null) // { entityType, entityId }
   const [activeTab, setActiveTab] = useState('queued')
   const [deployedRules, setDeployedRules] = useState('')
   const [deployedRulesLoading, setDeployedRulesLoading] = useState(true)
@@ -161,9 +163,13 @@ export default function PendingChangesModal({ peerId, peerHostname, onClose, onA
     }).join('\n')
   }, [smartDiffEntries])
 
-  const handleEntityRollback = async (entityType, entityId) => {
-    const confirmed = window.confirm(`Are you sure you want to rollback ${entityType}?`)
-    if (!confirmed) return
+  const handleEntityRollback = (entityType, entityId) => {
+    setShowEntityRollbackConfirm({ entityType, entityId })
+  }
+
+  const handleEntityRollbackConfirmed = async () => {
+    const { entityType, entityId } = showEntityRollbackConfirm
+    setShowEntityRollbackConfirm(null)
 
     setRollbackLoading(true)
     try {
@@ -184,9 +190,13 @@ export default function PendingChangesModal({ peerId, peerHostname, onClose, onA
     }
   }
 
-  const handleEntityApply = async (entityType, entityId) => {
-    const confirmed = window.confirm(`Apply changes for ${entityType}?`)
-    if (!confirmed) return
+  const handleEntityApply = (entityType, entityId) => {
+    setShowEntityApplyConfirm({ entityType, entityId })
+  }
+
+  const handleEntityApplyConfirmed = async () => {
+    const { entityType, entityId } = showEntityApplyConfirm
+    setShowEntityApplyConfirm(null)
 
     setApplyEntityLoading(true)
     try {
@@ -439,28 +449,45 @@ export default function PendingChangesModal({ peerId, peerHostname, onClose, onA
         </div>
       </div>
     </div>
-    {showRollbackConfirm && (
-      <ConfirmModal
-        title="Discard All Pending Changes?"
-        message="Are you sure you want to discard ALL pending changes across all peers? This action cannot be undone."
-        danger
-        onConfirm={async () => {
-          setShowRollbackConfirm(false)
-          setRollbackLoading(true)
-          try {
-            await api.post('/pending-changes/rollback')
-            showToast('All pending changes discarded successfully', 'success')
-            onApplied()
-            onClose()
-          } catch (err) {
-            showToast(`Failed to rollback changes: ${err.message}`, 'error')
-          } finally {
-            setRollbackLoading(false)
-          }
-        }}
-        onCancel={() => setShowRollbackConfirm(false)}
-      />
-    )}
+{showRollbackConfirm && (
+    <ConfirmModal
+      title="Discard All Pending Changes?"
+      message="Are you sure you want to discard ALL pending changes across all peers? This action cannot be undone."
+      danger
+      onConfirm={async () => {
+        setShowRollbackConfirm(false)
+        setRollbackLoading(true)
+        try {
+          await api.post('/pending-changes/rollback')
+          showToast('All pending changes discarded successfully', 'success')
+          onApplied()
+          onClose()
+        } catch (err) {
+          showToast(`Failed to rollback changes: ${err.message}`, 'error')
+        } finally {
+          setRollbackLoading(false)
+        }
+      }}
+      onCancel={() => setShowRollbackConfirm(false)}
+    />
+  )}
+  {showEntityRollbackConfirm && (
+    <ConfirmModal
+      title={`Rollback ${showEntityRollbackConfirm.entityType}?`}
+      message={`Are you sure you want to rollback ${showEntityRollbackConfirm.entityType}?`}
+      danger
+      onConfirm={handleEntityRollbackConfirmed}
+      onCancel={() => setShowEntityRollbackConfirm(null)}
+    />
+  )}
+  {showEntityApplyConfirm && (
+    <ConfirmModal
+      title={`Apply changes for ${showEntityApplyConfirm.entityType}?`}
+      message={`Are you sure you want to apply changes for ${showEntityApplyConfirm.entityType}?`}
+      onConfirm={handleEntityApplyConfirmed}
+      onCancel={() => setShowEntityApplyConfirm(null)}
+    />
+  )}
     </>
   )
 }

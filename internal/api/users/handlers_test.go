@@ -26,17 +26,17 @@ var muxVars = testutil.MuxVars
 
 // Helper to set admin context on request
 func withAdminContext(ctx context.Context) context.Context {
-	return auth.SetContextForTest(ctx, "admin", "admin")
+	return auth.SetContextForTest(ctx, "admin", "admin", "test-unique-id")
 }
 
 // Helper to set editor context on request
 func withEditorContext(ctx context.Context) context.Context {
-	return auth.SetContextForTest(ctx, "editor", "editor")
+	return auth.SetContextForTest(ctx, "editor", "editor", "test-unique-id")
 }
 
 // Helper to set role context with custom role and username
 func withRoleContext(ctx context.Context, role, username string) context.Context {
-	return auth.SetContextForTest(ctx, role, username)
+	return auth.SetContextForTest(ctx, role, username, "test-unique-id")
 }
 
 // =============================================================================
@@ -350,8 +350,8 @@ func TestDeleteUser_ValidDelete(t *testing.T) {
 
 	h.DeleteUser(w, r)
 
-	if w.Code != http.StatusOK {
-		t.Errorf("expected status %d, got %d", http.StatusOK, w.Code)
+	if w.Code != http.StatusNoContent {
+		t.Errorf("expected status %d, got %d", http.StatusNoContent, w.Code)
 	}
 
 	// Verify user was deleted

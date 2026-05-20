@@ -19,7 +19,7 @@ const ROLE_OPTIONS = [
 ]
 
 export default function Users() {
-  const showToast = useToastContext()
+  const { showToast } = useToastContext()
   const currentUsername = useAuthStore(s => s.username)
   const { isAdmin } = useAuth()
   const [showCreateModal, setShowCreateModal] = useState(false)
@@ -46,7 +46,7 @@ export default function Users() {
 
   const { data: users, isLoading, error } = useQuery({
     queryKey: QUERY_KEYS.users(),
-    queryFn: () => api.get('/users'),
+    queryFn: ({ signal }) => api.get('/users', signal),
   })
 
   const resetForm = () => {

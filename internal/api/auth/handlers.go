@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/mattn/go-sqlite3"
@@ -270,30 +271,20 @@ func (h *Handler) HandleLoginPOST(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) HandleLogoutPOST(w http.ResponseWriter, r *http.Request) {
-	var tokenStr string
-	// Try cookie first (web UI)
-	if cookie, err := r.Cookie("runic_access_token"); err == nil && cookie.Value != "" {
-		tokenStr = cookie.Value
-	} else {
-		// Fall back to Bearer header (agent)
-		// Per RFC 7235, the Authorization scheme is case-insensitive. Handle
-		// "Bearer", "bearer", "BEARER", etc.
-		authHeader := r.Header.Get("Authorization")
-		tokenStr = auth.ExtractBearerToken(authHeader)
-		if tokenStr == "" {
-			common.RespondError(w, http.StatusUnauthorized, "Unauthorized")
-			return
-		}
-	}
-
-	claims, err := auth.ValidateToken(tokenStr)
-	if err != nil || claims == nil {
+	// The auth.Middleware has already validated the token and populated the context.
+	// Use context values instead of re-parsing the JWT.
+	uniqueID := auth.UniqueIDFromContext(r.Context())
+	if uniqueID == "" {
 		common.RespondError(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
-	expiresAt := claims.ExpiresAt.Time
-	if err := h.TokenStore.RevokeToken(r.Context(), claims.UniqueID, expiresAt, "access"); err != nil {
+	// Revoke the access token using its stored unique_id.
+	// We use the token's original expiry as the TTL for the revocation entry.
+	// Since we don't have the original expiry from context, we use the default
+	// access token lifetime (15 minutes) as a safe upper bound.
+	expiresAt := time.Now().Add(15 * time.Minute)
+	if err := h.TokenStore.RevokeToken(r.Context(), uniqueID, expiresAt, "access"); err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "Failed to revoke token")
 		return
 	}

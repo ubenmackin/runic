@@ -909,18 +909,101 @@ func TestContextHelpers(t *testing.T) {
 	if UsernameFromContext(ctx) != "" {
 		t.Error("expected empty username for empty context")
 	}
+	if UniqueIDFromContext(ctx) != "" {
+		t.Error("expected empty uniqueID for empty context")
+	}
 
-	ctx = SetContextForTest(ctx, "editor", "alice")
+	ctx = SetContextForTest(ctx, "editor", "alice", "uid-123")
 	if UsernameFromContext(ctx) != "alice" {
 		t.Errorf("expected alice, got %s", UsernameFromContext(ctx))
 	}
 	if RoleFromContext(ctx) != "editor" {
 		t.Errorf("expected editor, got %s", RoleFromContext(ctx))
 	}
-
-	// Test UniqueIDFromContext indirectly via SetContextForTest (wait, SetContextForTest doesn't set ID)
-	ctx = context.WithValue(ctx, ctxKeyUniqueID, "uid-123")
 	if UniqueIDFromContext(ctx) != "uid-123" {
 		t.Errorf("expected uid-123, got %s", UniqueIDFromContext(ctx))
+	}
+}
+
+func TestRotateJwtKey_PersistsToDatabase(t *testing.T) {
+	db, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	settings := store.NewSettingsStore(db, nil)
+	SetSettingsStore(settings)
+
+	// Initialize with a known key from the database.
+	originalSecret := "original-secret-key-for-rotation-test"
+	if err := settings.SetSystemConfig(ctx, "jwt_secret", originalSecret); err != nil {
+		t.Fatal(err)
+	}
+	if err := InitJwtKey(ctx, db); err != nil {
+		t.Fatalf("InitJwtKey failed: %v", err)
+	}
+
+	// Rotate to a new key.
+	newKey := []byte("new-rotated-secret-key-for-testing")
+	if err := RotateJwtKey(ctx, newKey); err != nil {
+		t.Fatalf("RotateJwtKey failed: %v", err)
+	}
+
+	// Verify in-memory state.
+	JwtKeyMu.RLock()
+	currentKey := string(JwtKey)
+	prevKey := string(JwtPrevKey)
+	JwtKeyMu.RUnlock()
+
+	if currentKey != string(newKey) {
+		t.Errorf("expected current key %q, got %q", string(newKey), currentKey)
+	}
+	if prevKey != originalSecret {
+		t.Errorf("expected prev key %q, got %q", originalSecret, prevKey)
+	}
+
+	// Simulate a restart: reset in-memory state and re-initialize from the database.
+	JwtKeyMu.Lock()
+	JwtKey = nil
+	JwtPrevKey = nil
+	JwtKeyMu.Unlock()
+
+	if err := InitJwtKey(ctx, db); err != nil {
+		t.Fatalf("InitJwtKey after rotation failed: %v", err)
+	}
+
+	// Verify the rotated keys survived the re-init cycle.
+	JwtKeyMu.RLock()
+	restoredKey := string(JwtKey)
+	restoredPrevKey := string(JwtPrevKey)
+	JwtKeyMu.RUnlock()
+
+	if restoredKey != string(newKey) {
+		t.Errorf("expected restored key %q, got %q", string(newKey), restoredKey)
+	}
+	if restoredPrevKey != originalSecret {
+		t.Errorf("expected restored prev key %q, got %q", originalSecret, restoredPrevKey)
+	}
+
+	// Verify that a token signed with the old key is still valid after rotation.
+	JwtKeyMu.Lock()
+	JwtKey = []byte(originalSecret)
+	JwtKeyMu.Unlock()
+	oldToken, err := GenerateToken("testuser", "viewer", TokenTypeAccess, 1*time.Hour)
+	if err != nil {
+		t.Fatalf("failed to generate token with old key: %v", err)
+	}
+
+	// Restore the rotated keys so ValidateToken uses the new key as primary and old as fallback.
+	JwtKeyMu.Lock()
+	JwtKey = newKey
+	JwtPrevKey = []byte(originalSecret)
+	JwtKeyMu.Unlock()
+
+	claims, err := ValidateToken(oldToken)
+	if err != nil {
+		t.Errorf("expected old token to validate with prev key, got error: %v", err)
+	}
+	if claims == nil || claims.Username != "testuser" {
+		t.Errorf("expected claims for testuser, got %+v", claims)
 	}
 }

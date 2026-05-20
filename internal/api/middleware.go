@@ -27,7 +27,7 @@ package api
 // ----------------
 // All protected endpoints use rate limiting:
 //   - POST /api/v1/auth/login
-//   - POST /api/v1/auth/register
+//   - POST /api/v1/agent/register
 //   - POST /api/v1/auth/refresh
 //   - POST /api/v1/auth/logout
 //   - GET /downloads/{filename}
@@ -84,7 +84,7 @@ func buildCSPDirectives(nonce string) string {
 	return strings.Join([]string{
 		"default-src 'self'",
 		fmt.Sprintf("script-src 'self' 'nonce-%s'", nonce),
-		"style-src 'self' 'unsafe-inline'",
+		"style-src 'self' 'unsafe-inline'", // unsafe-inline required: the SPA uses CSS-in-JS and third-party component libraries that inject inline styles at runtime
 		"img-src 'self' data:",
 		"font-src 'self'",
 		"connect-src 'self'",
@@ -274,13 +274,17 @@ func RequestLogger() mux.MiddlewareFunc {
 // If not set, it defaults to allowing same-origin requests (empty string),
 // which works for production deployments where frontend and API share the same origin.
 func CORS() mux.MiddlewareFunc {
-	allowedOrigin := os.Getenv("CORS_ORIGIN")
+	// originConfig holds the configured origin mode:
+	//   ""     — same-origin only (production default)
+	//   "*"    — dev mode: reflect the request's Origin header
+	//   other  — explicit origin from CORS_ORIGIN env var
+	originConfig := os.Getenv("CORS_ORIGIN")
 
-	if allowedOrigin == "" {
+	if originConfig == "" {
 		if os.Getenv("GO_ENV") == "development" {
 			// In dev mode, allow requests from common Vite dev server ports
 			// The actual origin will be set dynamically based on Origin header
-			allowedOrigin = "*"
+			originConfig = "*"
 		}
 	}
 
@@ -293,7 +297,7 @@ func CORS() mux.MiddlewareFunc {
 			origin := r.Header.Get("Origin")
 
 			originToAllow := ""
-			switch allowedOrigin {
+			switch originConfig {
 			case "*":
 				// In wildcard mode (dev), reflect the request origin
 				// This allows any origin but maintains credential support
@@ -305,7 +309,7 @@ func CORS() mux.MiddlewareFunc {
 				// Only allow requests from the same origin (no cross-origin in production without explicit config)
 				originToAllow = ""
 			default:
-				originToAllow = allowedOrigin
+				originToAllow = originConfig
 			}
 
 			if originToAllow != "" {
@@ -321,6 +325,26 @@ func CORS() mux.MiddlewareFunc {
 				return
 			}
 
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// RequireRefreshCookie returns a middleware that verifies the refresh token cookie is present.
+// This provides an additional layer of protection for the token refresh endpoint by rejecting
+// requests that don't include the expected cookie before they reach the handler.
+func RequireRefreshCookie() mux.MiddlewareFunc {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			cookie, err := r.Cookie("runic_refresh_token")
+			if err != nil || cookie.Value == "" {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusUnauthorized)
+				if _, writeErr := w.Write([]byte(`{"error": "Unauthorized"}`)); writeErr != nil {
+					log.Error("failed to write unauthorized response", "error", writeErr)
+				}
+				return
+			}
 			next.ServeHTTP(w, r)
 		})
 	}

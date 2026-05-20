@@ -184,6 +184,139 @@ func TestGetPeers(t *testing.T) {
 	}
 }
 
+func TestGetPeer(t *testing.T) {
+	tests := []struct {
+		name       string
+		peerID     string
+		setup      func(t *testing.T, db *sql.DB)
+		wantCode   int
+		wantErr    string
+		wantID     int
+		wantHost   string
+		wantIP     string
+		wantManual bool
+	}{
+		{
+			name:   "get peer by id - success",
+			peerID: "1",
+			setup: func(t *testing.T, db *sql.DB) {
+				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, is_manual) VALUES (?, ?, ?, ?, ?, ?)`,
+					"test-peer", "10.0.0.1", "key1", "hmac1", 0, 0)
+			},
+			wantCode:   http.StatusOK,
+			wantID:     1,
+			wantHost:   "test-peer",
+			wantIP:     "10.0.0.1",
+			wantManual: false,
+		},
+		{
+			name:   "get peer by id - manual peer",
+			peerID: "1",
+			setup: func(t *testing.T, db *sql.DB) {
+				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, is_manual) VALUES (?, ?, ?, ?, ?, ?)`,
+					"manual-peer", "192.168.1.1", "manual-key", "hmac2", 1, 1)
+			},
+			wantCode:   http.StatusOK,
+			wantID:     1,
+			wantHost:   "manual-peer",
+			wantIP:     "192.168.1.1",
+			wantManual: true,
+		},
+		{
+			name:     "get peer by id - not found",
+			peerID:   "999",
+			setup:    func(t *testing.T, db *sql.DB) {},
+			wantCode: http.StatusNotFound,
+			wantErr:  "peer not found",
+		},
+		{
+			name:     "get peer by id - invalid ID",
+			peerID:   "invalid",
+			setup:    func(t *testing.T, db *sql.DB) {},
+			wantCode: http.StatusBadRequest,
+			wantErr:  "invalid peer ID",
+		},
+		{
+			name:   "get peer by id - returns single peer not list",
+			peerID: "1",
+			setup: func(t *testing.T, db *sql.DB) {
+				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
+					"peer1", "10.0.0.1", "key1", "hmac1", 0)
+				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
+					"peer2", "10.0.0.2", "key2", "hmac2", 0)
+			},
+			wantCode: http.StatusOK,
+			wantID:   1,
+			wantHost: "peer1",
+			wantIP:   "10.0.0.1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			database, cleanup := testutil.SetupTestDB(t)
+			defer cleanup()
+
+			if tt.setup != nil {
+				tt.setup(t, database)
+			}
+
+			req := httptest.NewRequest("GET", "/api/v1/peers/"+tt.peerID, nil)
+			req = muxVars(req, map[string]string{"id": tt.peerID})
+			w := httptest.NewRecorder()
+
+			handler := NewHandler(store.NewPeerStore(database), database, nil, nil, &testSettingsStore{db: database})
+			handler.GetPeer(w, req)
+
+			if w.Code != tt.wantCode {
+				t.Errorf("expected status %d, got %d: %s", tt.wantCode, w.Code, w.Body.String())
+			}
+
+			if tt.wantErr != "" {
+				var resp map[string]string
+				if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+					t.Fatalf("failed to decode error response: %v", err)
+				}
+				if !strings.Contains(resp["error"], tt.wantErr) {
+					t.Errorf("expected error containing %q, got %q", tt.wantErr, resp["error"])
+				}
+				return
+			}
+
+			// Verify response is a single object, not an array
+			var resp map[string]interface{}
+			if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+				t.Fatalf("failed to decode response: %v", err)
+			}
+
+			if tt.wantID > 0 {
+				idFloat, ok := resp["ID"].(float64)
+				if !ok {
+					t.Errorf("expected ID field in response, got: %v", resp)
+				} else if int(idFloat) != tt.wantID {
+					t.Errorf("expected ID %d, got %d", tt.wantID, int(idFloat))
+				}
+			}
+			if tt.wantHost != "" {
+				if resp["Hostname"] != tt.wantHost {
+					t.Errorf("expected hostname %q, got %v", tt.wantHost, resp["Hostname"])
+				}
+			}
+			if tt.wantIP != "" {
+				if resp["IPAddress"] != tt.wantIP {
+					t.Errorf("expected ip_address %q, got %v", tt.wantIP, resp["IPAddress"])
+				}
+			}
+			if tt.name == "get peer by id - returns single peer not list" {
+				// Ensure we got exactly 1 peer, not a list of 2
+				if len(resp) < 3 {
+					t.Errorf("expected single peer object with multiple fields, got: %v", resp)
+				}
+			}
+		})
+	}
+}
+
 func TestCreatePeer(t *testing.T) {
 	tests := []struct {
 		name       string

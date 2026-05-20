@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"runic/internal/agent/firewall"
 	"runic/internal/common/constants"
 	"runic/internal/common/log"
 	"runic/internal/engine"
@@ -71,15 +72,10 @@ func ApplyBundle(ctx context.Context, bundle models.BundleResponse, hmacKey, con
 		log.Warn("Failed to persist backup to disk", "error", err)
 	}
 
-	revertCancel := scheduleRevert(ctx, backup, constants.AutoRevertDelay, controlPlaneURL, token, version)
+	revertCancel := scheduleRevert(backup, constants.AutoRevertDelay, controlPlaneURL, token, version)
 
-	// Flush iptables FIRST to release ipset references before destroying ipsets
-	// This prevents "ipset in use" errors during ipset recreate
-	if err := flushIPTables(ctx); err != nil {
-		revertCancel()
-		return fmt.Errorf("flush firewall: %w", err)
-	}
-
+	// Write bundle to temp file BEFORE flushing so the restore payload is ready
+	// and the unprotected window between flush and restore is minimized.
 	tmpPath, err := writeTempFile("runic-bundle-*.rules", stripIpsetSection(bundle.Rules))
 	if err != nil {
 		revertCancel()
@@ -90,6 +86,13 @@ func ApplyBundle(ctx context.Context, bundle models.BundleResponse, hmacKey, con
 			log.Warn("Failed to remove temp file", "path", tmpPath, "error", err)
 		}
 	}()
+
+	// Flush iptables FIRST to release ipset references before destroying ipsets
+	// This prevents "ipset in use" errors during ipset recreate
+	if err := flushIPTables(ctx); err != nil {
+		revertCancel()
+		return fmt.Errorf("flush firewall: %w", err)
+	}
 
 	// Apply ipset definitions if present (after iptables flushed - can now destroy safely)
 	if strings.Contains(bundle.Rules, "# --- Ipset Definitions ---") {
@@ -105,8 +108,9 @@ func ApplyBundle(ctx context.Context, bundle models.BundleResponse, hmacKey, con
 	// Use detached context for the critical restore operation so that a watchdog
 	// or parent cancellation does not kill iptables-restore mid-flight, which
 	// could leave the system in a broken state.
+	// --noflush flag ensures atomic replacement without an intermediate empty state.
 	restoreCtx := context.WithoutCancel(ctx)
-	if err := restoreRulesFromContent(restoreCtx, stripIpsetSection(bundle.Rules)); err != nil {
+	if err := restoreFromFile(restoreCtx, tmpPath, stripIpsetSection(bundle.Rules)); err != nil {
 		revertCancel()
 		return fmt.Errorf("rule restore failed: %w", err)
 	}
@@ -151,22 +155,6 @@ func ApplyBundle(ctx context.Context, bundle models.BundleResponse, hmacKey, con
 	return nil
 }
 
-// restoreRulesFromContent writes the given rules to a temp file and applies
-// them using the appropriate firewall backend (iptables-restore or nft -f).
-func restoreRulesFromContent(ctx context.Context, rules string) error {
-	tmpPath, err := writeTempFile("runic-restore-*.rules", rules)
-	if err != nil {
-		return fmt.Errorf("write rules: %w", err)
-	}
-	defer func() {
-		if err := os.Remove(tmpPath); err != nil {
-			log.Warn("Failed to remove temp file", "path", tmpPath, "error", err)
-		}
-	}()
-
-	return restoreFromFile(ctx, tmpPath, rules)
-}
-
 // restoreFromFile applies firewall rules from a file using the appropriate
 // backend based on the content format.
 func restoreFromFile(ctx context.Context, path, content string) error {
@@ -179,7 +167,7 @@ func restoreFromFile(ctx context.Context, path, content string) error {
 		return nil
 	}
 
-	cmd := exec.CommandContext(ctx, "iptables-restore", path)
+	cmd := exec.CommandContext(ctx, "iptables-restore", "--noflush", path)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("iptables-restore failed: %s: %w", string(output), err)
@@ -207,7 +195,7 @@ func CacheBundle(rules string) error {
 // two paths executes: either the auto-revert fires, or the caller
 // cancels it on success. This eliminates the race between cancel() and
 // the timer callback that existed with the previous select/default pattern.
-func scheduleRevert(ctx context.Context, backup string, delay time.Duration, controlPlaneURL, token, version string) context.CancelFunc {
+func scheduleRevert(backup string, delay time.Duration, controlPlaneURL, token, version string) context.CancelFunc {
 	var once sync.Once
 
 	revertFn := func() {
@@ -233,16 +221,17 @@ func scheduleRevert(ctx context.Context, backup string, delay time.Duration, con
 }
 
 func dumpCurrentRules() (string, error) {
-	out, err := exec.Command("iptables-save").Output()
-	if err == nil {
-		return string(out), nil
-	}
-	log.Info("iptables-save unavailable, trying nft list ruleset")
-	out, err = exec.Command("nft", "list", "ruleset").Output()
-	if err != nil {
-		return "", fmt.Errorf("firewall dump failed (tried iptables-save and nft list ruleset): %w", err)
-	}
-	return string(out), nil
+	ctx := context.Background()
+	runner := &execCommandRunner{}
+	return firewall.DumpRules(ctx, runner)
+}
+
+// execCommandRunner adapts exec.Command to the firewall.CommandRunner interface.
+type execCommandRunner struct{}
+
+func (r *execCommandRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	return cmd.CombinedOutput()
 }
 
 // persistBackup writes the backup content to a persistent file so crash
@@ -315,7 +304,7 @@ func revertRules(backup string) error {
 		return nil
 	}
 
-	cmd := exec.CommandContext(ctx, "iptables-restore", tmpPath)
+	cmd := exec.CommandContext(ctx, "iptables-restore", "--noflush", tmpPath)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("iptables-restore revert: %s: %w", string(output), err)
@@ -369,11 +358,22 @@ func validateRules(content string) error {
 		}
 		// Valid lines: -A (rule), : (chain definition), * (table), COMMIT
 		// Also valid: ipset commands (create, add) in ipset section
+		// Only accept known iptables flag prefixes, not arbitrary lines starting with '-'.
 		if strings.HasPrefix(trimmed, "-A") ||
+			strings.HasPrefix(trimmed, "-P") ||
+			strings.HasPrefix(trimmed, "-N") ||
+			strings.HasPrefix(trimmed, "-X") ||
+			strings.HasPrefix(trimmed, "-F") ||
+			strings.HasPrefix(trimmed, "-Z") ||
+			strings.HasPrefix(trimmed, "-I") ||
+			strings.HasPrefix(trimmed, "-D") ||
+			strings.HasPrefix(trimmed, "-R") ||
+			strings.HasPrefix(trimmed, "-L") ||
+			strings.HasPrefix(trimmed, "-S") ||
+			strings.HasPrefix(trimmed, "-E") ||
 			strings.HasPrefix(trimmed, ":") ||
 			strings.HasPrefix(trimmed, "*") ||
 			strings.HasPrefix(trimmed, "COMMIT") ||
-			strings.HasPrefix(trimmed, "-") ||
 			strings.HasPrefix(trimmed, "create ") ||
 			strings.HasPrefix(trimmed, "add ") {
 			validLineCount++
@@ -395,14 +395,11 @@ func validateRules(content string) error {
 	return nil
 }
 
-// smokeTestClient is a cached HTTP client used for post-apply smoke tests.
-// It is shared across all ApplyBundle invocations to avoid allocating a new
-// http.Transport (with connection pool, DNS cache, etc.) on every call.
-var smokeTestClient = &http.Client{
-	Timeout: constants.SmokeTestTimeout,
-}
-
 func smokeTest(ctx context.Context, controlPlaneURL, token, version string) error {
+	client := &http.Client{
+		Timeout: constants.SmokeTestTimeout,
+	}
+
 	url := fmt.Sprintf("%s/api/v1/agent/heartbeat", controlPlaneURL)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
@@ -412,7 +409,7 @@ func smokeTest(ctx context.Context, controlPlaneURL, token, version string) erro
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("User-Agent", "runic-agent/"+version)
 
-	resp, err := smokeTestClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("smoke test request failed: %w", err)
 	}
@@ -655,13 +652,22 @@ func addIpsetMember(ctx context.Context, name, member string) error {
 	return nil
 }
 
+var (
+	hasDockerOnce   sync.Once
+	hasDockerCached bool
+)
+
 func hasDocker() bool {
-	_, err := exec.LookPath("docker")
-	if err != nil {
-		return false
-	}
-	out, err := exec.Command("systemctl", "is-active", "docker").Output()
-	return err == nil && strings.TrimSpace(string(out)) == "active"
+	hasDockerOnce.Do(func() {
+		_, err := exec.LookPath("docker")
+		if err != nil {
+			hasDockerCached = false
+			return
+		}
+		out, err := exec.Command("systemctl", "is-active", "docker").Output()
+		hasDockerCached = err == nil && strings.TrimSpace(string(out)) == "active"
+	})
+	return hasDockerCached
 }
 
 func restartDocker(ctx context.Context) error {

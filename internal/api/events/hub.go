@@ -4,6 +4,7 @@ package events
 import (
 	"fmt"
 	"sync"
+	"time"
 
 	runiclog "runic/internal/common/log"
 )
@@ -61,8 +62,8 @@ func (h *SSEHub) NotifyBundleUpdated(hostID string, version string) bool {
 	select {
 	case ch <- fmt.Sprintf("event: bundle_updated\ndata: {\"version\":%q}\n\n", version):
 		return true
-	default:
-		runiclog.Warn("NotifyBundleUpdated: channel full, dropping update", "host_id", hostID)
+	case <-time.After(100 * time.Millisecond):
+		runiclog.Warn("NotifyBundleUpdated: slow consumer, dropping update", "host_id", hostID)
 		return false
 	}
 }

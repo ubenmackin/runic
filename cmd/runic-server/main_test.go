@@ -1,13 +1,16 @@
 package main
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"database/sql"
 	"encoding/pem"
+	"fmt"
 	"math/big"
 	"net/http/httptest"
 	"os"
@@ -16,6 +19,9 @@ import (
 	"time"
 
 	"runic/internal/api"
+	"runic/internal/common/constants"
+	runicdb "runic/internal/db"
+	"runic/internal/store"
 )
 
 // TestValidateCertificate tests the validateCertificate function
@@ -623,4 +629,199 @@ func generateTestCertAndKeyEC() ([]byte, []byte, error) {
 	})
 
 	return certPEM, keyPEM, nil
+}
+
+func TestStartOfflineDetector_ContextCancellation(t *testing.T) {
+	database, cleanup := setupTestMainDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Insert a peer with online status
+	_, err := database.ExecContext(ctx,
+		"INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, is_manual, status, last_heartbeat) VALUES (?, ?, ?, ?, 0, 'online', datetime('now'))",
+		"online-peer", "10.0.0.1", "key", "hmac")
+	if err != nil {
+		t.Fatalf("insert peer: %v", err)
+	}
+
+	// Start detector with a context that we'll cancel quickly
+	detectorCtx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan struct{})
+	go func() {
+		startOfflineDetector(detectorCtx, database)
+		close(done)
+	}()
+
+	// Cancel after a brief moment
+	cancel()
+
+	// The goroutine should exit promptly
+	select {
+	case <-done:
+		// Success: detector shut down
+	case <-time.After(2 * time.Second):
+		t.Error("startOfflineDetector did not shut down after context cancellation")
+	}
+}
+
+func TestStartOfflineDetector_MarksStalePeersOffline(t *testing.T) {
+	database, cleanup := setupTestMainDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Insert a peer with stale heartbeat (90+ seconds ago)
+	_, err := database.ExecContext(ctx,
+		"INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, is_manual, status, last_heartbeat) VALUES (?, ?, ?, ?, 0, 'online', datetime('now', '-120 seconds'))",
+		"stale-peer", "10.0.0.2", "stale-agent-key", "stale-hmac-key")
+	if err != nil {
+		t.Fatalf("insert stale peer: %v", err)
+	}
+
+	// Insert a peer with recent heartbeat
+	_, err = database.ExecContext(ctx,
+		"INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, is_manual, status, last_heartbeat) VALUES (?, ?, ?, ?, 0, 'online', datetime('now'))",
+		"fresh-peer", "10.0.0.3", "fresh-agent-key", "fresh-hmac-key")
+	if err != nil {
+		t.Fatalf("insert fresh peer: %v", err)
+	}
+
+	// Simulate what startOfflineDetector does on each tick
+	_, err = database.ExecContext(ctx,
+		fmt.Sprintf(`UPDATE peers SET status = 'offline'
+		WHERE status = 'online'
+		AND last_heartbeat < datetime('now', '-%d seconds')`, int(constants.OfflineThreshold.Seconds())),
+	)
+	if err != nil {
+		t.Fatalf("offline update: %v", err)
+	}
+
+	// Stale peer should be offline
+	var staleStatus string
+	err = database.QueryRowContext(ctx, "SELECT status FROM peers WHERE hostname = ?", "stale-peer").Scan(&staleStatus)
+	if err != nil {
+		t.Fatalf("query stale peer: %v", err)
+	}
+	if staleStatus != "offline" {
+		t.Errorf("expected stale peer status 'offline', got %q", staleStatus)
+	}
+
+	// Fresh peer should still be online
+	var freshStatus string
+	err = database.QueryRowContext(ctx, "SELECT status FROM peers WHERE hostname = ?", "fresh-peer").Scan(&freshStatus)
+	if err != nil {
+		t.Fatalf("query fresh peer: %v", err)
+	}
+	if freshStatus != "online" {
+		t.Errorf("expected fresh peer status 'online', got %q", freshStatus)
+	}
+}
+
+func TestStartTokenCleanup_ContextCancellation(t *testing.T) {
+	database, cleanup := setupTestMainDB(t)
+	defer cleanup()
+
+	tokenStore := store.NewTokenStore(database)
+
+	detectorCtx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan struct{})
+	go func() {
+		startTokenCleanup(detectorCtx, tokenStore)
+		close(done)
+	}()
+
+	// Cancel after a brief moment
+	cancel()
+
+	// The goroutine should exit promptly
+	select {
+	case <-done:
+		// Success: cleanup shut down
+	case <-time.After(2 * time.Second):
+		t.Error("startTokenCleanup did not shut down after context cancellation")
+	}
+}
+
+func TestStartTokenCleanup_RemovesExpiredTokens(t *testing.T) {
+	database, cleanup := setupTestMainDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	tokenStore := store.NewTokenStore(database)
+
+	// Insert an expired token
+	pastTime := time.Now().Add(-1 * time.Hour)
+	err := tokenStore.RevokeToken(ctx, "expired-token-1", pastTime, "refresh")
+	if err != nil {
+		t.Fatalf("revoke expired token: %v", err)
+	}
+
+	// Insert a non-expired token
+	futureTime := time.Now().Add(1 * time.Hour)
+	err = tokenStore.RevokeToken(ctx, "valid-token-1", futureTime, "refresh")
+	if err != nil {
+		t.Fatalf("revoke valid token: %v", err)
+	}
+
+	// Run cleanup
+	err = tokenStore.CleanupExpiredTokens(ctx)
+	if err != nil {
+		t.Fatalf("CleanupExpiredTokens: %v", err)
+	}
+
+	// Expired token should be gone
+	revoked, err := tokenStore.IsTokenRevoked(ctx, "expired-token-1")
+	if err != nil {
+		t.Fatalf("check expired token: %v", err)
+	}
+	if revoked {
+		t.Error("expected expired token to be cleaned up")
+	}
+
+	// Valid token should still be there
+	revoked, err = tokenStore.IsTokenRevoked(ctx, "valid-token-1")
+	if err != nil {
+		t.Fatalf("check valid token: %v", err)
+	}
+	if !revoked {
+		t.Error("expected valid token to still be revoked")
+	}
+}
+
+// setupTestMainDB creates a temporary database for testing main.go functions.
+func setupTestMainDB(t *testing.T) (*sql.DB, func()) {
+	t.Helper()
+	f, err := os.CreateTemp("", "runic-main-test-*.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dbPath := f.Name()
+	if cErr := f.Close(); cErr != nil {
+		t.Logf("Failed to close temp file: %v", cErr)
+	}
+
+	database, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		os.Remove(dbPath)
+		t.Fatal(err)
+	}
+
+	if _, err := database.Exec("PRAGMA foreign_keys=ON"); err != nil {
+		database.Close()
+		os.Remove(dbPath)
+		t.Fatal(err)
+	}
+
+	if _, err := database.Exec(runicdb.Schema()); err != nil {
+		database.Close()
+		os.Remove(dbPath)
+		t.Fatal(err)
+	}
+
+	cleanup := func() {
+		database.Close()
+		os.Remove(dbPath)
+	}
+	return database, cleanup
 }

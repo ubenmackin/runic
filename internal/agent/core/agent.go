@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"runic/internal/agent/apply"
+	"runic/internal/agent/firewall"
 	"runic/internal/agent/identity"
 	"runic/internal/agent/metrics"
 	"runic/internal/agent/rotation"
@@ -29,10 +31,6 @@ import (
 )
 
 var Version = "dev"
-
-type CommandRunner interface {
-	Run(ctx context.Context, name string, args ...string) ([]byte, error)
-}
 
 type RealCommandRunner struct{}
 
@@ -51,10 +49,11 @@ type Agent struct {
 	shipper         *transport.Shipper
 	rotationManager *rotation.Manager
 	regMu           sync.Mutex // protects re-registration from concurrent calls
-	cmdRunner       CommandRunner
+	cmdRunner       firewall.CommandRunner
 	cachePath       string
 	backupPath      string
 	exitFunc        func(int) // for testing; defaults to os.Exit
+	bootPullDone    bool      // tracks whether a fresh bundle pull was done during initialization
 }
 
 func New(configPath, controlPlaneURL string) *Agent {
@@ -86,9 +85,6 @@ func New(configPath, controlPlaneURL string) *Agent {
 	agent.cachePath = "/etc/runic-agent/cached-bundle.rules"
 	agent.backupPath = "/etc/runic-agent/iptables-backup.rules"
 
-	// Initialize rotation manager (hostID will be set after registration/load)
-	agent.rotationManager = rotation.NewManager(configPath, httpClient, cfg.ControlPlaneURL, "")
-
 	return agent
 }
 
@@ -111,27 +107,34 @@ func (a *Agent) updateConfig(fn func(*identity.Config)) {
 }
 
 func (a *Agent) Run(ctx context.Context) error {
+	if err := a.initialize(ctx); err != nil {
+		return err
+	}
+	return a.startLoops(ctx)
+}
+
+// initialize handles agent startup: loading config, validating, disabling
+// system iptables services, registering, backing up iptables, and applying
+// the boot bundle.
+func (a *Agent) initialize(ctx context.Context) error {
 	if err := a.loadConfig(); err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	cfg := a.getConfig()
-	if cfg.ControlPlaneURL == "" {
-		return fmt.Errorf("control plane URL is required: set via --url flag or RUNIC_CONTROL_PLANE_URL env var")
+	if err := a.validateConfig(); err != nil {
+		return err
 	}
 
+	cfg := a.getConfig()
 	log.Info("Runic agent starting", "version", a.version)
 	log.Info("Control plane URL", "url", cfg.ControlPlaneURL)
 
-	if err := a.DisableSystemIPTablesIfConfigured(ctx); err != nil {
+	if err := a.disableSystemServices(ctx); err != nil {
 		log.Warn("Failed to disable system iptables services", "error", err)
 	}
 
-	if cfg.NeedsRegistration() {
-		log.Info("No credentials found, registering with control plane")
-		if err := a.register(ctx); err != nil {
-			return fmt.Errorf("registration failed: %w", err)
-		}
+	if err := a.registerIfNeeded(ctx); err != nil {
+		return err
 	}
 
 	cfg = a.getConfig()
@@ -142,10 +145,17 @@ func (a *Agent) Run(ctx context.Context) error {
 	}
 
 	bootPullDone, _ := a.applyBootBundle(ctx)
+	a.bootPullDone = bootPullDone
 
 	cfg = a.getConfig()
 	a.shipper = transport.NewShipper(a.httpClient, cfg.ControlPlaneURL, cfg.Token, cfg.HostID, cfg.LogPath)
 
+	return nil
+}
+
+// startLoops starts all background goroutines (heartbeat, poll, shipper, SSE, rotation)
+// and blocks until the context is canceled or a goroutine returns an error.
+func (a *Agent) startLoops(ctx context.Context) error {
 	g, gCtx := errgroup.WithContext(ctx)
 
 	g.Go(func() error {
@@ -153,12 +163,11 @@ func (a *Agent) Run(ctx context.Context) error {
 		return nil
 	})
 	g.Go(func() error {
-		a.pollLoop(gCtx, bootPullDone)
+		a.pollLoop(gCtx)
 		return nil
 	})
 	g.Go(func() error {
-		a.shipper.Run(gCtx)
-		return nil
+		return a.shipper.Run(gCtx)
 	})
 	g.Go(func() error {
 		return a.listenSSE(gCtx)
@@ -172,6 +181,32 @@ func (a *Agent) Run(ctx context.Context) error {
 	return g.Wait()
 }
 
+// validateConfig checks that the loaded configuration is valid for agent operation.
+func (a *Agent) validateConfig() error {
+	cfg := a.getConfig()
+	if cfg.ControlPlaneURL == "" {
+		return fmt.Errorf("control plane URL is required: set via --url flag or RUNIC_CONTROL_PLANE_URL env var")
+	}
+	return nil
+}
+
+// disableSystemServices disables system iptables services if configured.
+func (a *Agent) disableSystemServices(ctx context.Context) error {
+	return a.DisableSystemIPTablesIfConfigured(ctx)
+}
+
+// registerIfNeeded registers the agent with the control plane if credentials are missing.
+func (a *Agent) registerIfNeeded(ctx context.Context) error {
+	cfg := a.getConfig()
+	if cfg.NeedsRegistration() {
+		log.Info("No credentials found, registering with control plane")
+		if err := a.register(ctx); err != nil {
+			return fmt.Errorf("registration failed: %w", err)
+		}
+	}
+	return nil
+}
+
 func (a *Agent) backupIptables(ctx context.Context) error {
 	if _, err := os.Stat(a.backupPath); err == nil {
 		log.Info("Firewall backup already exists, skipping")
@@ -183,16 +218,12 @@ func (a *Agent) backupIptables(ctx context.Context) error {
 		return fmt.Errorf("create backup dir: %w", err)
 	}
 
-	out, err := a.cmdRunner.Run(ctx, "iptables-save")
+	out, err := firewall.DumpRules(ctx, a.cmdRunner)
 	if err != nil {
-		log.Info("iptables-save failed, trying nft list ruleset", "error", err)
-		out, err = a.cmdRunner.Run(ctx, "nft", "list", "ruleset")
-		if err != nil {
-			return fmt.Errorf("firewall backup failed (tried iptables-save and nft list ruleset): %w", err)
-		}
+		return err
 	}
 
-	if err := os.WriteFile(a.backupPath, out, 0600); err != nil {
+	if err := os.WriteFile(a.backupPath, []byte(out), 0600); err != nil {
 		return fmt.Errorf("write backup: %w", err)
 	}
 
@@ -240,8 +271,13 @@ func (a *Agent) loadConfig() error {
 	a.configMu.Lock()
 	defer a.configMu.Unlock()
 	if a.config != nil {
+		// Preserve CLI-provided values over config file values.
+		// CLI values take precedence only when the config file value is empty/zero.
 		if cfg.ControlPlaneURL == "" && a.config.ControlPlaneURL != "" {
 			cfg.ControlPlaneURL = a.config.ControlPlaneURL
+		}
+		if cfg.LogPath == "" && a.config.LogPath != "" {
+			cfg.LogPath = a.config.LogPath
 		}
 	}
 
@@ -309,8 +345,14 @@ func (a *Agent) DisableSystemIPTablesIfConfigured(ctx context.Context) error {
 
 func (a *Agent) disableService(ctx context.Context, service string) error {
 
-	checkActive, _ := a.cmdRunner.Run(ctx, "systemctl", "is-active", service)   // intentionally discarded - checking if service exists
-	checkEnabled, _ := a.cmdRunner.Run(ctx, "systemctl", "is-enabled", service) // intentionally discarded - checking if service exists
+	checkActive, err := a.cmdRunner.Run(ctx, "systemctl", "is-active", service)
+	if err != nil {
+		log.Debug("systemctl is-active check failed", "service", service, "error", err)
+	}
+	checkEnabled, err := a.cmdRunner.Run(ctx, "systemctl", "is-enabled", service)
+	if err != nil {
+		log.Debug("systemctl is-enabled check failed", "service", service, "error", err)
+	}
 
 	isActive := strings.TrimSpace(string(checkActive)) == "active"
 	isEnabled := strings.TrimSpace(string(checkEnabled)) == "enabled"
@@ -381,12 +423,12 @@ func (a *Agent) sendHeartbeat(ctx context.Context) error {
 	return metrics.SendHeartbeat(ctx, a.httpClient, cfg.ControlPlaneURL, cfg.HostID, cfg.CurrentBundleVer, cfg.Token, a.version, a.detectIPStrings())
 }
 
-func (a *Agent) pollLoop(ctx context.Context, skipFirstPull bool) {
+func (a *Agent) pollLoop(ctx context.Context) {
 	cfg := a.getConfig()
 	ticker := time.NewTicker(time.Duration(cfg.PullIntervalSec) * time.Second)
 	defer ticker.Stop()
 
-	if !skipFirstPull {
+	if !a.bootPullDone {
 		if err := a.pullBundle(ctx); err != nil {
 			log.Error("Initial bundle pull failed", "error", err)
 		}
@@ -510,9 +552,6 @@ func (a *Agent) applyCachedBundle(ctx context.Context) error {
 	}()
 
 	if _, err := tmpFile.WriteString(rules); err != nil {
-		if err := tmpFile.Close(); err != nil {
-			log.Warn("Failed to close download file", "error", err)
-		}
 		return fmt.Errorf("write cached bundle to temp file: %w", err)
 	}
 	if err := tmpFile.Close(); err != nil {
@@ -603,7 +642,7 @@ func (a *Agent) handleFetchBackup(ctx context.Context) {
 // The update runs in a goroutine because the caller (SSE event handler) must
 // not block. After a successful apply, the agent waits 2 seconds for the SSE
 // acknowledgment to be sent, then calls exitFunc(0) (os.Exit in production).
-func (a *Agent) handleUpdateAgent(_ context.Context, controlPlaneURL string) {
+func (a *Agent) handleUpdateAgent(ctx context.Context, controlPlaneURL string) {
 	log.Info("Starting agent self-update", "control_plane_url", controlPlaneURL)
 
 	parsedURL, err := url.Parse(controlPlaneURL)
@@ -613,15 +652,25 @@ func (a *Agent) handleUpdateAgent(_ context.Context, controlPlaneURL string) {
 	}
 
 	go func() {
-		ctx := context.Background()
-		if err := performUpdate(ctx, a.httpClient, parsedURL.String()); err != nil {
-			log.Error("Agent self-update failed", "error", err)
-			return
-		}
+		updateCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
 
-		log.Info("Agent update applied, exiting for restart in 2s")
-		time.Sleep(2 * time.Second)
-		a.exitFunc(0)
+		done := make(chan struct{})
+		go func() {
+			if err := performUpdate(updateCtx, a.httpClient, parsedURL.String()); err != nil {
+				log.Error("Agent self-update failed", "error", err)
+			}
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			log.Info("Agent update applied, exiting for restart in 2s")
+			time.Sleep(2 * time.Second)
+			a.exitFunc(0)
+		case <-ctx.Done():
+			log.Info("Agent shutting down, skipping exit after update")
+		}
 	}()
 }
 
@@ -712,9 +761,10 @@ type HostIPInfo struct {
 
 // Docker, and bridge interfaces. It returns the list of valid IPs with the
 // primary IP (from the default route interface) first.
-func detectHostIPs(runner CommandRunner) []HostIPInfo {
+func detectHostIPs(runner firewall.CommandRunner) []HostIPInfo {
 	// Determine the default route interface for primary IP detection
-	defaultIface := detectDefaultRouteInterface(runner)
+	ctx := context.Background()
+	defaultIface := detectDefaultRouteInterface(ctx, runner)
 
 	ifaces, err := net.Interfaces()
 	if err != nil {
@@ -722,7 +772,7 @@ func detectHostIPs(runner CommandRunner) []HostIPInfo {
 		return nil
 	}
 
-	dockerSubnets := getDockerSubnets(runner)
+	dockerSubnets := getDockerSubnets(ctx, runner)
 
 	var results []HostIPInfo
 
@@ -745,10 +795,6 @@ func detectHostIPs(runner CommandRunner) []HostIPInfo {
 		for _, addr := range addrs {
 			var ip net.IP
 			switch v := addr.(type) {
-			case *net.TCPAddr:
-				ip = v.IP
-			case *net.UDPAddr:
-				ip = v.IP
 			case *net.IPNet:
 				ip = v.IP
 			default:
@@ -781,8 +827,8 @@ func detectHostIPs(runner CommandRunner) []HostIPInfo {
 	return results
 }
 
-func detectDefaultRouteInterface(runner CommandRunner) string {
-	out, err := runner.Run(context.Background(), "ip", "route", "show", "default")
+func detectDefaultRouteInterface(ctx context.Context, runner firewall.CommandRunner) string {
+	out, err := runner.Run(ctx, "ip", "route", "show", "default")
 	if err != nil {
 		log.Warn("Failed to detect default route interface", "error", err)
 		return ""
@@ -819,11 +865,11 @@ type dockerSubnet struct {
 }
 
 // If Docker is not available, returns an empty list.
-func getDockerSubnets(runner CommandRunner) []dockerSubnet {
+func getDockerSubnets(ctx context.Context, runner firewall.CommandRunner) []dockerSubnet {
 	var subnets []dockerSubnet
 
 	// List Docker networks
-	out, err := runner.Run(context.Background(), "docker", "network", "ls", "--format", "{{.Name}}")
+	out, err := runner.Run(ctx, "docker", "network", "ls", "--format", "{{.Name}}")
 	if err != nil {
 		// Docker not available, skip filtering
 		return subnets
@@ -837,7 +883,7 @@ func getDockerSubnets(runner CommandRunner) []dockerSubnet {
 		}
 
 		// Inspect each network to get subnets
-		inspectOut, err := runner.Run(context.Background(), "docker", "network", "inspect", name, "--format", "{{range .IPAM.Config}}{{.Subnet}}{{end}}")
+		inspectOut, err := runner.Run(ctx, "docker", "network", "inspect", name, "--format", "{{range .IPAM.Config}}{{.Subnet}}{{end}}")
 		if err != nil {
 			log.Debug("Failed to inspect Docker network", "network", name, "error", err)
 			continue
@@ -870,12 +916,14 @@ func isInDockerSubnet(ip net.IP, subnets []dockerSubnet) bool {
 }
 
 func sortHostIPs(ips []HostIPInfo) {
-	// Simple bubble sort - list is typically small
-	for i := 0; i < len(ips); i++ {
-		for j := i + 1; j < len(ips); j++ {
-			if ips[j].IsPrimary && !ips[i].IsPrimary {
-				ips[i], ips[j] = ips[j], ips[i]
-			}
+	slices.SortFunc(ips, func(a, b HostIPInfo) int {
+		// Primary IPs first
+		if a.IsPrimary && !b.IsPrimary {
+			return -1
 		}
-	}
+		if !a.IsPrimary && b.IsPrimary {
+			return 1
+		}
+		return 0
+	})
 }

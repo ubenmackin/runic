@@ -467,6 +467,8 @@ func TestParseLogLine_EmptyLine(t *testing.T) {
 }
 
 func TestParseLogLine_LowercaseAction(t *testing.T) {
+	// Lines without the [RUNIC-DROP-I/O] or [RUNIC-ACCEPT] prefix are no longer
+	// matched by false-positive fallbacks. The action remains empty.
 	line := `Jan 15 12:00:00 hostname kernel: DROP SRC=192.168.1.100 DST=192.168.1.1 PROTO=TCP`
 
 	ev, err := ParseLogLine(line)
@@ -474,9 +476,9 @@ func TestParseLogLine_LowercaseAction(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Should detect DROP even without RUNIC prefix
-	if ev.Action != "DROP" {
-		t.Errorf("expected action DROP, got %q", ev.Action)
+	// Without a RUNIC prefix, action should be empty (fallbacks removed).
+	if ev.Action != "" {
+		t.Errorf("expected empty action for non-RUNIC line, got %q", ev.Action)
 	}
 }
 
@@ -568,7 +570,8 @@ Jan 15 12:00:01 hostname kernel: Another message`
 
 	// Collect lines from tail (will only get new lines after seek)
 	var runicLines []string
-	for line := range shipper.tail(ctx, tmpFile) {
+	lines, _ := shipper.tail(ctx, tmpFile)
+	for line := range lines {
 		runicLines = append(runicLines, line)
 	}
 

@@ -30,7 +30,7 @@ import * as api from '../api/client'
 // Mock ToastContext
 const mockShowToast = vi.fn()
 vi.mock('../hooks/ToastContext', () => ({
-  useToastContext: () => mockShowToast,
+  useToastContext: () => ({ showToast: mockShowToast }),
 }))
 
 // Mock useFocusTrap

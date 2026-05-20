@@ -334,6 +334,30 @@ func TestWorker_runCleanup(t *testing.T) {
 	})
 }
 
+func TestWorker_Start_PanicRecovery(t *testing.T) {
+	t.Run("recovers from panic in initial cleanup and still starts goroutine", func(t *testing.T) {
+		// Create a worker with nil db to trigger a panic in runCleanup
+		// (QueryRowContext on nil *sql.DB will panic)
+		_, logsDB, cleanup := setupTestDatabases(t)
+		defer cleanup()
+
+		worker := NewWorker(nil, logsDB)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		// Start should not crash the test even though runCleanup panics
+		worker.Start(ctx)
+
+		// Give the goroutine a moment to start
+		time.Sleep(10 * time.Millisecond)
+
+		// If we reach here without the test process crashing, the panic was
+		// recovered and the goroutine was started successfully.
+		// Cancel to cleanly stop the goroutine.
+		cancel()
+	})
+}
+
 func TestWorker_CustomRetention(t *testing.T) {
 	tests := []struct {
 		name            string

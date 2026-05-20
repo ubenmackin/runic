@@ -25,7 +25,7 @@ func runRBACtest(t *testing.T, userRole, username string, requiredRoles []string
 	handler := middleware(nextHandler)
 
 	req := httptest.NewRequest(method, "/", nil)
-	ctx := auth.SetContextForTest(context.Background(), userRole, username)
+	ctx := auth.SetContextForTest(context.Background(), userRole, username, "test-unique-id")
 	req = req.WithContext(ctx)
 
 	rr := httptest.NewRecorder()
@@ -311,7 +311,7 @@ func TestRequireRole_ContextPreservation(t *testing.T) {
 	handler := middleware(nextHandler)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	ctx := auth.SetContextForTest(context.Background(), "admin", "testuser")
+	ctx := auth.SetContextForTest(context.Background(), "admin", "testuser", "test-unique-id")
 	req = req.WithContext(ctx)
 
 	rr := httptest.NewRecorder()

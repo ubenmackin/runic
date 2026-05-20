@@ -35,7 +35,7 @@ func TestSignVerifyRoundTrip(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			sig := Sign(tt.content, tt.key)
-			if !Verify(tt.content, tt.key, sig) {
+			if !Verify(tt.content, tt.key, sig, 0) {
 				t.Errorf("Sign(%q, %q) produced signature that failed Verify", tt.content, tt.key)
 			}
 		})
@@ -78,7 +78,7 @@ func TestVerifyRejectsTamperedContent(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			sig := Sign(tt.original, tt.key)
-			if Verify(tt.tampered, tt.key, sig) {
+			if Verify(tt.tampered, tt.key, sig, 0) {
 				t.Errorf("Verify(%q, %q, sig) returned true for tampered content", tt.tampered, tt.key)
 			}
 		})
@@ -157,13 +157,13 @@ func TestDifferentKeysProduceDifferentSignatures(t *testing.T) {
 	// Verify that each key's signature validates correctly but others don't
 	for _, key := range keys {
 		sig := Sign(content, key)
-		if !Verify(content, key, sig) {
+		if !Verify(content, key, sig, 0) {
 			t.Errorf("Signature for key %q failed self-verification", key)
 		}
 		// Verify that signature from one key fails with another key
 		for _, otherKey := range keys {
 			if otherKey != key {
-				if Verify(content, otherKey, sig) {
+				if Verify(content, otherKey, sig, 0) {
 					t.Errorf("Signature from key %q validated with different key %q", key, otherKey)
 				}
 			}
@@ -243,5 +243,76 @@ func TestVersionDifferentContent(t *testing.T) {
 				t.Errorf("Version produced same hash for different content")
 			}
 		})
+	}
+}
+
+// TestVerify_UsesSignWithVersion is a regression test for the bug where
+// Verify() called Sign() instead of SignWithVersion(), causing versioned
+// payloads to always be verified against version 0 regardless of the
+// versionNumber argument. If Verify() were still using Sign(), then
+// Verify(content, key, sig, 5) would internally compute the signature for
+// version 0 and succeed — which would be wrong.
+func TestVerify_UsesSignWithVersion(t *testing.T) {
+	content := "*filter\n-A INPUT -j ACCEPT\nCOMMIT\n"
+	key := "regression-test-key"
+	version := 5
+
+	// Sign the content with a specific non-zero version number.
+	sig := SignWithVersion(content, key, version)
+
+	// Verify() must succeed when called with the SAME version number.
+	if !Verify(content, key, sig, version) {
+		t.Errorf("Verify() returned false for signature created with version %d; expected true", version)
+	}
+
+	// Verify() must fail when called with a DIFFERENT version number.
+	// If Verify() incorrectly used Sign() (version 0) internally, this
+	// would still pass for version 0 — so we also check a wrong version
+	// that is NOT 0 to catch both the v0-vs-v5 and v1-vs-v5 cases.
+	wrongVersion := version + 1
+	if Verify(content, key, sig, wrongVersion) {
+		t.Errorf("Verify() returned true for signature created with version %d when verified with version %d; expected false (Verify may be using Sign instead of SignWithVersion)", version, wrongVersion)
+	}
+
+	// Additionally, verifying against version 0 must fail because the
+	// signature was created with a non-zero version.
+	if Verify(content, key, sig, 0) {
+		t.Errorf("Verify() returned true for signature created with version %d when verified with version 0; expected false (Verify may be using Sign instead of SignWithVersion)", version)
+	}
+}
+
+func TestVerify_VersionedSignature(t *testing.T) {
+	content := "*filter\n-A INPUT -j ACCEPT\nCOMMIT\n"
+	key := "test-hmac-key"
+
+	// Create a version-1 signature using SignWithVersion
+	sigV1 := SignWithVersion(content, key, 1)
+
+	// Verify with version 1 should succeed
+	if !Verify(content, key, sigV1, 1) {
+		t.Error("Verify failed for version-1 signature with version=1")
+	}
+
+	// Verify with version 0 should fail (version mismatch)
+	if Verify(content, key, sigV1, 0) {
+		t.Error("Verify succeeded for version-1 signature with version=0 (expected failure)")
+	}
+
+	// Create a version-0 signature using SignWithVersion
+	sigV0 := SignWithVersion(content, key, 0)
+
+	// Verify with version 0 should succeed
+	if !Verify(content, key, sigV0, 0) {
+		t.Error("Verify failed for version-0 signature with version=0")
+	}
+
+	// Verify with version 1 should fail (version mismatch)
+	if Verify(content, key, sigV0, 1) {
+		t.Error("Verify succeeded for version-0 signature with version=1 (expected failure)")
+	}
+
+	// Verify that version-0 and version-1 signatures are different
+	if sigV0 == sigV1 {
+		t.Error("Version-0 and version-1 signatures are identical (expected different)")
 	}
 }

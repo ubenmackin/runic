@@ -45,9 +45,9 @@ class MockEventSource {
     handlers.forEach((h) => h())
   }
 
-  simulateEvent(type, data) {
+  simulateEvent(type, data, lastEventId = null) {
     const handlers = this._listeners[type] || []
-    const event = { data: typeof data === 'string' ? data : JSON.stringify(data) }
+    const event = { data: typeof data === 'string' ? data : JSON.stringify(data), lastEventId }
     handlers.forEach((h) => h(event))
   }
 
@@ -117,6 +117,7 @@ describe('useSSE', () => {
     expect(MockEventSource.instances).toHaveLength(1)
     const es = MockEventSource.last()
     expect(es.url).toContain('/api/v1/events')
+    expect(es.url).not.toContain('lastEventId')
     expect(es.opts).toEqual({ withCredentials: true })
   })
 
@@ -331,5 +332,39 @@ describe('useSSE', () => {
     expect(onPendingChangeAdded).not.toHaveBeenCalled()
 
     consoleSpy.mockRestore()
+  })
+
+  test('sends Last-Event-ID on reconnection after receiving events with IDs', () => {
+    renderHook(() => useSSE(), {
+      wrapper: createWrapper(),
+    })
+
+    const es = MockEventSource.last()
+
+    // Simulate receiving an event with a lastEventId
+    act(() => {
+      es.simulateEvent('pending_change_added', { peer_id: 'peer-1' }, 'evt-42')
+    })
+
+    // Trigger disconnection and reconnect
+    act(() => {
+      es.simulateCloseError()
+    })
+    act(() => {
+      vi.advanceTimersByTime(30000)
+    })
+
+    // The new EventSource should include lastEventId in the URL
+    const newEs = MockEventSource.last()
+    expect(newEs.url).toContain('lastEventId=evt-42')
+  })
+
+  test('does not send Last-Event-ID on initial connection', () => {
+    renderHook(() => useSSE(), {
+      wrapper: createWrapper(),
+    })
+
+    const es = MockEventSource.last()
+    expect(es.url).not.toContain('lastEventId')
   })
 })

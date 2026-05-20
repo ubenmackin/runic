@@ -24,7 +24,7 @@ func newTestHandler(db *sql.DB) *Handler {
 
 // Helper to set admin context on request
 func withAdminContext(ctx context.Context) context.Context {
-	return auth.SetContextForTest(ctx, "admin", "adminuser")
+	return auth.SetContextForTest(ctx, "admin", "adminuser", "test-unique-id")
 }
 
 var uniqueIPCounter int
@@ -437,10 +437,21 @@ func TestHandleLogoutPOST_BearerTokenFallback(t *testing.T) {
 		t.Fatalf("failed to generate token: %v", err)
 	}
 
+	// Since HandleLogoutPOST now reads uniqueID from context (set by auth middleware),
+	// we must validate the token and populate the context the same way the middleware does.
+	claims, err := auth.ValidateToken(token)
+	if err != nil || claims == nil {
+		t.Fatalf("failed to validate generated token: %v", err)
+	}
+
 	h := newTestHandler(db)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/logout", nil)
 	r.Header.Set("Authorization", "Bearer "+token)
+
+	// Set auth context values as the middleware would
+	ctx := auth.SetContextForTest(r.Context(), claims.Role, claims.Username, claims.UniqueID)
+	r = r.WithContext(ctx)
 
 	h.HandleLogoutPOST(w, r)
 

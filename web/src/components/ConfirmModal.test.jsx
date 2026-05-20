@@ -229,7 +229,7 @@ describe('ConfirmModal', () => {
   })
 
   describe('keyboard interactions', () => {
-    test('Escape key does not automatically close modal (requires explicit handler)', async () => {
+    test('Escape key triggers onCancel handler', async () => {
       const user = userEvent.setup()
       const handleCancel = vi.fn()
       

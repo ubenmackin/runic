@@ -882,6 +882,18 @@ func TestSendDigest_NilDatabaseNoPanic(t *testing.T) {
 	t.Logf("send digest error (expected with nil database): %v", err)
 }
 
+func TestGetUsersWithDigestEnabled_NilDatabase(t *testing.T) {
+	gen := &DigestGenerator{}
+
+	_, err := gen.getUsersWithDigestEnabled(context.Background())
+	if err == nil {
+		t.Fatal("expected error for nil database, got nil")
+	}
+	if err.Error() != "database not configured" {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
 func TestGenerateDigest_WithDigestDate(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()

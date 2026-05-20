@@ -95,17 +95,19 @@ func (c *Config) NeedsRegistration() bool {
 
 // Validate returns an error describing the first validation failure, or nil if valid.
 func (c *Config) Validate() error {
-	if c.ControlPlaneURL != "" {
-		parsedURL, err := url.Parse(c.ControlPlaneURL)
-		if err != nil {
-			return fmt.Errorf("invalid control_plane_url: %w", err)
-		}
-		if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
-			return fmt.Errorf("invalid control_plane_url: scheme must be http or https, got %q", parsedURL.Scheme)
-		}
-		if parsedURL.Host == "" {
-			return fmt.Errorf("invalid control_plane_url: missing host")
-		}
+	if c.ControlPlaneURL == "" {
+		return fmt.Errorf("control_plane_url is required")
+	}
+
+	parsedURL, err := url.Parse(c.ControlPlaneURL)
+	if err != nil {
+		return fmt.Errorf("invalid control_plane_url: %w", err)
+	}
+	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
+		return fmt.Errorf("invalid control_plane_url: scheme must be http or https, got %q", parsedURL.Scheme)
+	}
+	if parsedURL.Host == "" {
+		return fmt.Errorf("invalid control_plane_url: missing host")
 	}
 
 	if c.PullIntervalSec < 0 {

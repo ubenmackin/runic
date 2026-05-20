@@ -1,5 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../api/client'
+import { logger } from '../utils/logger'
 
 /**
  * Generic CRUD mutations with optimistic updates.
@@ -38,6 +39,7 @@ export function useCrudMutations({
     },
     onError: (err) => {
       setFormErrors?.({ _general: err.message })
+      showToast?.(err.message, 'error')
     },
   })
 
@@ -48,7 +50,10 @@ export function useCrudMutations({
       await Promise.all(additionalInvalidations.map(key => qc.cancelQueries({ queryKey: key })))
       const previousData = qc.getQueryData(queryKey)
       qc.setQueryData(queryKey, old => {
-        if (!Array.isArray(old)) return old || []
+        if (!Array.isArray(old)) {
+          logger.warn(`useCrudMutations: expected array for queryKey ${JSON.stringify(queryKey)}, got ${typeof old}`)
+          return old
+        }
         return old.map(item => getId(item) === id ? { ...item, ...data } : item)
       })
       return { previousData }
@@ -71,7 +76,10 @@ export function useCrudMutations({
       await Promise.all(additionalInvalidations.map(key => qc.cancelQueries({ queryKey: key })))
       const previousData = qc.getQueryData(queryKey)
       qc.setQueryData(queryKey, old => {
-        if (!Array.isArray(old)) return old || []
+        if (!Array.isArray(old)) {
+          logger.warn(`useCrudMutations: expected array for queryKey ${JSON.stringify(queryKey)}, got ${typeof old}`)
+          return old
+        }
         return old.filter(item => getId(item) !== id)
       })
       return { previousData }

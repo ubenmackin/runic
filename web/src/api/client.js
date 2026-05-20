@@ -120,18 +120,18 @@ export const api = {
   delete: (path, signal)        => request('DELETE', path, undefined, true, signal),
 }
 
-export const getAlerts = (params) => api.get(`/alerts?${new URLSearchParams(params)}`)
-export const getAlert = (id) => api.get(`/alerts/${id}`)
-export const deleteAlert = (id) => api.delete(`/alerts/${id}`)
-export const clearAllAlerts = () => api.delete('/alerts')
-export const getAlertRules = () => api.get('/alert-rules')
+export const getAlerts = (params, signal) => api.get(`/alerts?${new URLSearchParams(params)}`, signal)
+export const getAlert = (id, signal) => api.get(`/alerts/${id}`, signal)
+export const deleteAlert = (id, signal) => api.delete(`/alerts/${id}`, signal)
+export const clearAllAlerts = (signal) => api.delete('/alerts', signal)
+export const getAlertRules = (signal) => api.get('/alert-rules', signal)
 export const updateAlertRule = (id, data) => api.put(`/alert-rules/${id}`, data)
 
-export const getSMTPConfig = () => api.get('/settings/smtp')
+export const getSMTPConfig = (signal) => api.get('/settings/smtp', signal)
 export const updateSMTPConfig = (data) => api.put('/settings/smtp', data)
 export const testSMTP = () => api.post('/settings/smtp/test')
 
-export const getNotificationPrefs = () => api.get('/users/me/notification-preferences')
+export const getNotificationPrefs = (signal) => api.get('/users/me/notification-preferences', signal)
 export const updateNotificationPrefs = (data) => api.put('/users/me/notification-preferences', data)
 
 export const QUERY_KEYS = {
@@ -167,7 +167,7 @@ export const QUERY_KEYS = {
   info: () => ['info'],
 }
 
-export const getVersion = () => api.get('/info')
+export const getVersion = (signal) => api.get('/info', signal)
 
 // Peer lookup by IP
 export const getPeerByIP = (ip) => api.get(`/peers/by-ip?ip=${encodeURIComponent(ip)}`)

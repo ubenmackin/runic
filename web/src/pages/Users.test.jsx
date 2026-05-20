@@ -18,7 +18,7 @@ vi.mock('../components/SearchableSelect', () => ({
   ),
 }))
 const mockShowToast = vi.fn()
-vi.mock('../hooks/ToastContext', () => ({ useToastContext: () => mockShowToast }))
+vi.mock('../hooks/ToastContext', () => ({ useToastContext: () => ({ showToast: mockShowToast }) }))
 vi.mock('../api/client', async (importOriginal) => {
   const actual = await importOriginal()
   return { ...actual, api: { get: vi.fn(), post: vi.fn(), put: vi.fn(), patch: vi.fn(), delete: vi.fn() }, setAuthFailureHandler: vi.fn() }

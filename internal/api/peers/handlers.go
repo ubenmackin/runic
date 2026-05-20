@@ -68,6 +68,26 @@ func (h *Handler) GetPeers(w http.ResponseWriter, r *http.Request) {
 	common.RespondJSON(w, http.StatusOK, peers)
 }
 
+func (h *Handler) GetPeer(w http.ResponseWriter, r *http.Request) {
+	id, err := common.ParseIDParam(r, "id")
+	if err != nil {
+		common.RespondError(w, http.StatusBadRequest, "invalid peer ID")
+		return
+	}
+
+	peer, err := h.Store.GetPeerByID(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			common.RespondError(w, http.StatusNotFound, "peer not found")
+			return
+		}
+		common.RespondError(w, http.StatusInternalServerError, "failed to query peer")
+		return
+	}
+
+	common.RespondJSON(w, http.StatusOK, peer)
+}
+
 func (h *Handler) CreatePeer(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB limit
 
@@ -569,7 +589,7 @@ func (h *Handler) RegisterReadRoutes(r *mux.Router) {
 	r.HandleFunc("", h.GetPeers).Methods("GET")
 	r.HandleFunc("/by-ip", h.GetPeerByIP).Methods("GET")
 	r.HandleFunc("/by-hostname", h.GetPeerByHostname).Methods("GET")
-	r.HandleFunc("/{id:[0-9]+}", h.GetPeers).Methods("GET")
+	r.HandleFunc("/{id:[0-9]+}", h.GetPeer).Methods("GET")
 	r.HandleFunc("/{id:[0-9]+}/bundle", h.GetPeerBundle).Methods("GET")
 	r.HandleFunc("/{id:[0-9]+}/ips", h.GetPeerIPs).Methods("GET")
 }
@@ -579,7 +599,7 @@ func (h *Handler) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("", h.CreatePeer).Methods("POST")
 	r.HandleFunc("/by-ip", h.GetPeerByIP).Methods("GET")
 	r.HandleFunc("/by-hostname", h.GetPeerByHostname).Methods("GET")
-	r.HandleFunc("/{id:[0-9]+}", h.GetPeers).Methods("GET")
+	r.HandleFunc("/{id:[0-9]+}", h.GetPeer).Methods("GET")
 	r.HandleFunc("/{id:[0-9]+}", h.UpdatePeer).Methods("PUT")
 	r.HandleFunc("/{id:[0-9]+}", h.DeletePeer).Methods("DELETE")
 	r.HandleFunc("/{id:[0-9]+}/bundle", h.GetPeerBundle).Methods("GET")

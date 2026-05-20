@@ -155,6 +155,7 @@ func TestSaveConfigCreatesDirectory(t *testing.T) {
 	configPath := filepath.Join(subDir, "config.json")
 
 	cfg := DefaultConfig()
+	cfg.ControlPlaneURL = "https://example.com"
 	cfg.HostID = "test-host"
 	cfg.Token = "test-token"
 
@@ -198,6 +199,7 @@ func TestSaveConfigFilePermissions(t *testing.T) {
 	configPath := filepath.Join(tmpDir, "config.json")
 
 	cfg := DefaultConfig()
+	cfg.ControlPlaneURL = "https://example.com"
 
 	err = SaveConfig(configPath, cfg)
 	if err != nil {
@@ -228,6 +230,7 @@ func TestSaveConfigInvalidPath(t *testing.T) {
 	configPath := tmpFile.Name() + "/config.json"
 
 	cfg := DefaultConfig()
+	cfg.ControlPlaneURL = "https://example.com"
 
 	err = SaveConfig(configPath, cfg)
 	if err == nil {

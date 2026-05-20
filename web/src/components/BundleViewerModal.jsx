@@ -12,7 +12,7 @@ export default function BundleViewerModal({
   peerHostname,
   viewingPendingRules = false,
 }) {
-  const showToast = useToastContext()
+  const { showToast } = useToastContext()
   const modalRef = useRef(null)
   const [bundleContent, setBundleContent] = useState('')
   const [bundleData, setBundleData] = useState(null)

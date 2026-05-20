@@ -9,7 +9,7 @@ export function PendingChangesProvider({ children }) {
   // Single query for pending changes, shared across components
   const { data: pendingChanges, isLoading, error } = useQuery({
     queryKey: QUERY_KEYS.pendingChanges(),
-    queryFn: () => api.get('/pending-changes'),
+    queryFn: ({ signal }) => api.get('/pending-changes', signal),
     refetchInterval: 15000,
     refetchIntervalInBackground: false, // Don't poll when tab is hidden
     staleTime: 10000,

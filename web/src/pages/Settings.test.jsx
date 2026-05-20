@@ -84,7 +84,7 @@ function renderWithProviders(ui, options = {}) {
 // Mock toast context
 const mockShowToast = vi.fn()
 vi.mock('../hooks/ToastContext', () => ({
-  useToastContext: () => mockShowToast,
+  useToastContext: () => ({ showToast: mockShowToast }),
 }))
 
 // Factory function to create mock notification preferences

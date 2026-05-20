@@ -181,7 +181,7 @@ function PeerCard({ peer, peerIPs, canEdit, fetchBundle, handlePushToPeer, openE
 
 export default function Peers() {
   const qc = useQueryClient()
-  const showToast = useToastContext()
+  const { showToast } = useToastContext()
   const { canEdit } = useAuth()
   const location = useLocation()
   const { modalOpen, setModalOpen, editItem: editPeer, setEditItem: setEditPeer, form: formData, setForm: setFormData, setFormForEdit, handleCancel: closeModal } = useCrudModal({ hostname: '', ip_address: '', os_type: 'ubuntu', arch: 'amd64', has_docker: false, description: '' })
@@ -435,7 +435,7 @@ const handleUpdateAgent = useCallback((peer) => {
 
 const { data: peers, isLoading, refetch } = useQuery({
 queryKey: QUERY_KEYS.peers(),
-queryFn: () => api.get('/peers'),
+queryFn: ({ signal }) => api.get('/peers', signal),
 refetchInterval: REFETCH_INTERVALS.PEERS_PAGE,
 refetchIntervalInBackground: false,
 refetchOnReconnect: true,
@@ -445,7 +445,7 @@ staleTime: 15000,
 
 const { data: serverInfo } = useQuery({
 queryKey: QUERY_KEYS.info(),
-queryFn: () => api.get('/info'),
+queryFn: ({ signal }) => api.get('/info', signal),
 staleTime: 30000,
 })
 const latestAgentVersion = serverInfo?.latest_agent_version
@@ -462,13 +462,13 @@ const peerIPsMap = useMemo(() => {
 
   const { data: registrationTokens, isLoading: tokensLoading } = useQuery({
     queryKey: ['registration-tokens'],
-    queryFn: () => api.get('/registration-tokens'),
+    queryFn: ({ signal }) => api.get('/registration-tokens', signal),
     enabled: addModalOpen,
   })
 
   const { data: specialTargets } = useQuery({
     queryKey: ['special-targets'],
-    queryFn: () => api.get('/policies/special-targets'),
+    queryFn: ({ signal }) => api.get('/policies/special-targets', signal),
   })
 
   // Manual refresh handler

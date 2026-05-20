@@ -149,7 +149,7 @@ export default function TopNav() {
 
   const { data: versionInfo } = useQuery({
     queryKey: ['version'],
-    queryFn: getVersion,
+    queryFn: ({ signal }) => getVersion(signal),
     staleTime: Infinity, // Version doesn't change during session
   })
 

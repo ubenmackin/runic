@@ -295,7 +295,7 @@ func TestSendTestEmail_WithUserContext(t *testing.T) {
 		"testuser", "test@example.com", "hashedpassword", "admin")
 
 	req := httptest.NewRequest("POST", "/api/v1/settings/smtp/test", nil)
-	ctx := auth.SetContextForTest(req.Context(), "admin", "testuser")
+	ctx := auth.SetContextForTest(req.Context(), "admin", "testuser", "test-unique-id")
 	req = req.WithContext(ctx)
 	w := httptest.NewRecorder()
 
@@ -598,7 +598,7 @@ func TestNotificationPrefsCRUD(t *testing.T) {
 			"testuser", "test@example.com", "hashedpassword", "viewer")
 
 		req := httptest.NewRequest("GET", "/api/v1/users/me/notification-preferences", nil)
-		ctx := auth.SetContextForTest(req.Context(), "viewer", "testuser")
+		ctx := auth.SetContextForTest(req.Context(), "viewer", "testuser", "test-unique-id")
 		req = req.WithContext(ctx)
 		w := httptest.NewRecorder()
 
@@ -632,7 +632,7 @@ func TestNotificationPrefsCRUD(t *testing.T) {
 		body := `{"quiet_hours_start":"23:00","quiet_hours_end":"06:00","digest_enabled":true}`
 		req := httptest.NewRequest("PUT", "/api/v1/users/me/notification-preferences", strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
-		ctx := auth.SetContextForTest(req.Context(), "viewer", "testuser")
+		ctx := auth.SetContextForTest(req.Context(), "viewer", "testuser", "test-unique-id")
 		req = req.WithContext(ctx)
 		w := httptest.NewRecorder()
 
@@ -675,7 +675,7 @@ func TestNotificationPrefsCRUD(t *testing.T) {
 			1, "21:00", "08:00", true)
 
 		req := httptest.NewRequest("GET", "/api/v1/users/me/notification-preferences", nil)
-		ctx := auth.SetContextForTest(req.Context(), "viewer", "testuser")
+		ctx := auth.SetContextForTest(req.Context(), "viewer", "testuser", "test-unique-id")
 		req = req.WithContext(ctx)
 		w := httptest.NewRecorder()
 
@@ -887,7 +887,7 @@ func TestNotificationPrefs_TimezoneValidation(t *testing.T) {
 
 			req := httptest.NewRequest("PUT", "/api/v1/users/me/notification-preferences", strings.NewReader(tt.body))
 			req.Header.Set("Content-Type", "application/json")
-			ctx := auth.SetContextForTest(req.Context(), "viewer", "testuser")
+			ctx := auth.SetContextForTest(req.Context(), "viewer", "testuser", "test-unique-id")
 			req = req.WithContext(ctx)
 			w := httptest.NewRecorder()
 

@@ -69,6 +69,7 @@ describe('TopNav', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.useFakeTimers()
     useAuthStore.setState({
       isAuthenticated: true,
       username: 'testuser',
@@ -79,6 +80,7 @@ describe('TopNav', () => {
   })
 
   afterEach(() => {
+    vi.useRealTimers()
     useAuthStore.setState(originalState)
   })
 
@@ -272,8 +274,8 @@ describe('TopNav', () => {
     // Dropdown should still be visible immediately after mouse leave (due to delay)
     expect(screen.getByText('Peers')).toBeInTheDocument()
 
-    // Wait for the delay to pass (150ms + some buffer)
-    await new Promise(resolve => setTimeout(resolve, 200))
+    // Advance timers past the delay (150ms + some buffer)
+    vi.advanceTimersByTime(200)
 
     // Dropdown should now be closed
     await waitFor(() => {
@@ -297,11 +299,11 @@ describe('TopNav', () => {
     fireEvent.mouseLeave(dropdownContainer)
 
     // Before the timeout fires, re-enter
-    await new Promise(resolve => setTimeout(resolve, 50))
+    vi.advanceTimersByTime(50)
     fireEvent.mouseEnter(dropdownContainer)
 
-    // Wait past original timeout
-    await new Promise(resolve => setTimeout(resolve, 200))
+    // Advance past original timeout
+    vi.advanceTimersByTime(200)
 
     // Dropdown should still be visible because we re-entered
     expect(screen.getByText('Peers')).toBeInTheDocument()
@@ -338,8 +340,8 @@ describe('TopNav', () => {
     // Should still be visible immediately
     expect(screen.getByText('Logout')).toBeInTheDocument()
 
-    // Wait for the delay to pass (150ms + some buffer)
-    await new Promise(resolve => setTimeout(resolve, 200))
+    // Advance timers past the delay (150ms + some buffer)
+    vi.advanceTimersByTime(200)
 
     // Should now be closed
     await waitFor(() => {
@@ -359,8 +361,8 @@ describe('TopNav', () => {
     // Simulate mouse enter on mobile
     fireEvent.mouseEnter(userDropdownContainer)
 
-    // Wait a bit to ensure any potential state changes would have occurred
-    await new Promise(resolve => setTimeout(resolve, 100))
+    // Advance timers to ensure any potential state changes would have occurred
+    vi.advanceTimersByTime(100)
 
     // Dropdown should NOT open on hover on mobile
     expect(screen.queryByText('Logout')).not.toBeInTheDocument()

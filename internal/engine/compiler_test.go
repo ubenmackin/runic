@@ -759,7 +759,7 @@ func TestHMACVerifySuccess(t *testing.T) {
 	key := "test-hmac-key"
 
 	sig := Sign(content, key)
-	if !Verify(content, key, sig) {
+	if !Verify(content, key, sig, 0) {
 		t.Error("expected Verify to return true for valid signature")
 	}
 }
@@ -770,7 +770,7 @@ func TestHMACTamperDetection(t *testing.T) {
 
 	sig := Sign(content, key)
 	tamperedContent := content + " tampered"
-	if Verify(tamperedContent, key, sig) {
+	if Verify(tamperedContent, key, sig, 0) {
 		t.Error("expected Verify to return false for tampered content")
 	}
 }

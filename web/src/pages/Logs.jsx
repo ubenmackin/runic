@@ -38,7 +38,7 @@ export default function Logs() {
 
   const queryClient = useQueryClient()
   const { canEdit } = useAuth()
-  const showToast = useToastContext()
+  const { showToast } = useToastContext()
 
   // Craft Policy Wizard state
   const [wizardOpen, setWizardOpen] = useState(false)
@@ -51,16 +51,16 @@ export default function Logs() {
 
   const { data, isLoading, refetch } = useQuery({
     queryKey: QUERY_KEYS.logs(debouncedFilter),
-    queryFn: () => api.get(`/logs?${new URLSearchParams(
+    queryFn: ({ signal }) => api.get(`/logs?${new URLSearchParams(
       Object.entries(debouncedFilter).filter(([_, v]) => v !== '').map(([k, v]) => [k, String(v)])
-    )}`),
+    )}`, signal),
     enabled: mode === 'historical',
     refetchInterval: mode === 'historical' ? false : false,
   })
 
   const { data: peers } = useQuery({
     queryKey: QUERY_KEYS.peers(),
-    queryFn: () => api.get('/peers'),
+    queryFn: ({ signal }) => api.get('/peers', signal),
   })
 
   // WebSocket connection for live logs

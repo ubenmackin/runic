@@ -581,6 +581,10 @@ body { background-color: %s !important; }
 }
 
 func (g *DigestGenerator) getUsersWithDigestEnabled(ctx context.Context) ([]*UserNotificationPreferences, error) {
+	if g.database == nil {
+		return nil, fmt.Errorf("database not configured")
+	}
+
 	query := `
 	SELECT id, user_id, quiet_hours_enabled, quiet_hours_start, quiet_hours_end,
 		quiet_hours_timezone, digest_enabled, digest_frequency, digest_time, digest_timezone, created_at, updated_at

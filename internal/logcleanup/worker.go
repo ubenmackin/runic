@@ -27,8 +27,15 @@ func NewWorker(db *sql.DB, logsDB *sql.DB) *Worker {
 }
 
 func (w *Worker) Start(ctx context.Context) {
-	// Run once immediately on startup
-	w.runCleanup(ctx)
+	// Run once immediately on startup (protected by recover so goroutine still starts)
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error("panic in initial log cleanup", "recover", r)
+			}
+		}()
+		w.runCleanup(ctx)
+	}()
 
 	// Then run periodically
 	go func() {

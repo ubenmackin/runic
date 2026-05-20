@@ -24,7 +24,7 @@ import {
 
 export default function Settings() {
   const qc = useQueryClient()
-  const showToast = useToastContext()
+  const { showToast } = useToastContext()
   const { isAdmin } = useAuth()
   const [activeTab, setActiveTab] = useState('alerts')
   const [showDeleteModal, setShowDeleteModal] = useState(null)
@@ -74,13 +74,13 @@ export default function Settings() {
 
   const { data: keys, isLoading } = useQuery({
     queryKey: QUERY_KEYS.setupKeys(),
-    queryFn: () => api.get('/setup-keys'),
+    queryFn: ({ signal }) => api.get('/setup-keys', signal),
     enabled: isAdmin,
   })
 
   const { data: logSettingsData } = useQuery({
     queryKey: QUERY_KEYS.logSettings(),
-    queryFn: () => api.get('/settings/logs'),
+    queryFn: ({ signal }) => api.get('/settings/logs', signal),
     enabled: isAdmin,
   })
 
@@ -122,7 +122,7 @@ const validatePort = (value) => {
 
 const { data: smtpConfig, isLoading: smtpLoading } = useQuery({
   queryKey: QUERY_KEYS.smtpConfig(),
-  queryFn: getSMTPConfig,
+  queryFn: ({ signal }) => getSMTPConfig(signal),
   enabled: isAdmin,
 })
 
@@ -156,7 +156,7 @@ useEffect(() => {
   const [instanceUrl, setInstanceUrl] = useState('')
 	const { data: instanceSettings } = useQuery({
 		queryKey: ['instance-settings'],
-		queryFn: () => api.get('/settings/instance'),
+		queryFn: ({ signal }) => api.get('/settings/instance', signal),
   enabled: isAdmin,
   })
 
@@ -179,7 +179,7 @@ useEffect(() => {
 
   const { data: alertRules } = useQuery({
     queryKey: QUERY_KEYS.alertRules(),
-    queryFn: getAlertRules,
+    queryFn: ({ signal }) => getAlertRules(signal),
     enabled: isAdmin,
   })
 
@@ -190,7 +190,7 @@ useEffect(() => {
 
   const { data: userPrefs, isLoading: userPrefsLoading, isError: userPrefsError } = useQuery({
     queryKey: QUERY_KEYS.notificationPrefs(),
-    queryFn: getNotificationPrefs,
+    queryFn: ({ signal }) => getNotificationPrefs(signal),
     retry: false,
   })
 

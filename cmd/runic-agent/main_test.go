@@ -24,6 +24,7 @@ func setupTestConfig(t *testing.T) string {
 
 	configPath := filepath.Join(tmpDir, "config.json")
 	cfg := identity.DefaultConfig()
+	cfg.ControlPlaneURL = "https://example.com"
 	if err := identity.SaveConfig(configPath, cfg); err != nil {
 		t.Fatalf("failed to save initial config: %v", err)
 	}
@@ -187,9 +188,9 @@ func TestStringFlagValidation(t *testing.T) {
 				wantErr: true,
 			},
 			{
-				name:    "empty URL - valid (will use env or prompt)",
+				name:    "empty URL - invalid (control_plane_url is required)",
 				url:     "",
-				wantErr: false,
+				wantErr: true,
 			},
 		}
 
@@ -394,6 +395,7 @@ func TestConfigValidation(t *testing.T) {
 		{
 			name: "valid config - all defaults",
 			config: &identity.Config{
+				ControlPlaneURL:      "https://example.com",
 				PullIntervalSec:      86400,
 				HeartbeatIntervalSec: 30,
 				LogPath:              "/var/log/runic/firewall.log",
@@ -424,6 +426,7 @@ func TestConfigValidation(t *testing.T) {
 		{
 			name: "invalid config - negative pull interval",
 			config: &identity.Config{
+				ControlPlaneURL:      "https://example.com",
 				PullIntervalSec:      -100,
 				HeartbeatIntervalSec: 30,
 				LogPath:              "/var/log/runic/firewall.log",
@@ -434,6 +437,7 @@ func TestConfigValidation(t *testing.T) {
 		{
 			name: "invalid config - pull interval too large",
 			config: &identity.Config{
+				ControlPlaneURL:      "https://example.com",
 				PullIntervalSec:      40000000,
 				HeartbeatIntervalSec: 30,
 				LogPath:              "/var/log/runic/firewall.log",
@@ -444,22 +448,24 @@ func TestConfigValidation(t *testing.T) {
 		{
 			name: "invalid config - whitespace log path",
 			config: &identity.Config{
+				ControlPlaneURL:      "https://example.com",
 				PullIntervalSec:      86400,
 				HeartbeatIntervalSec: 30,
-				LogPath:              "   ",
+				LogPath:              " ",
 			},
 			wantErr: true,
 			errMsg:  "cannot be empty or whitespace-only",
 		},
 		{
-			name: "valid config - empty URL (will use env)",
+			name: "invalid config - empty URL",
 			config: &identity.Config{
 				ControlPlaneURL:      "",
 				PullIntervalSec:      86400,
 				HeartbeatIntervalSec: 30,
 				LogPath:              "/var/log/runic/firewall.log",
 			},
-			wantErr: false,
+			wantErr: true,
+			errMsg:  "control_plane_url is required",
 		},
 		{
 			name: "valid config - URL with path",
@@ -510,8 +516,12 @@ func TestValidateConfigFunction(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name:    "valid config",
-			config:  identity.DefaultConfig(),
+			name: "valid config",
+			config: func() *identity.Config {
+				cfg := identity.DefaultConfig()
+				cfg.ControlPlaneURL = "https://example.com"
+				return cfg
+			}(),
 			wantErr: false,
 		},
 		{

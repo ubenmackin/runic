@@ -10,13 +10,13 @@ import PushJobModal from './PushJobModal'
 export default function QuickActions() {
   const navigate = useNavigate()
   const qc = useQueryClient()
-  const showToast = useToastContext()
+  const { showToast } = useToastContext()
   const [showConfirmModal, setShowConfirmModal] = useState(false)
   const [pushJobId, setPushJobId] = useState(null)
 
   const { data: peers, isLoading } = useQuery({
     queryKey: QUERY_KEYS.peers(),
-    queryFn: () => api.get('/peers'),
+    queryFn: ({ signal }) => api.get('/peers', signal),
     staleTime: 30000,
   })
 

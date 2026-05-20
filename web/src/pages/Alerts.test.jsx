@@ -13,7 +13,7 @@ vi.mock('../hooks/useFocusTrap', () => ({ useFocusTrap: vi.fn() }))
 
 // Mock toast
 const mockShowToast = vi.fn()
-vi.mock('../hooks/ToastContext', () => ({ useToastContext: () => mockShowToast }))
+vi.mock('../hooks/ToastContext', () => ({ useToastContext: () => ({ showToast: mockShowToast }) }))
 
 // Mock API client
 vi.mock('../api/client', async (importOriginal) => {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"runic/internal/api/common"
@@ -35,14 +36,19 @@ func NewHandler(logsStore LogsStore, tokenStore TokenRevoker) *Handler {
 func MakeLogsStreamHandler(hub *Hub, tokenStore TokenRevoker) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Authenticate WebSocket connection: try cookie first (web UI),
-		// then fall back to Sec-WebSocket-Protocol header (legacy agent WS).
+		// then fall back to Sec-WebSocket-Protocol header (agent WS clients).
+		// The Sec-WebSocket-Protocol header may contain comma-separated values;
+		// we use the first token-like value as the bearer token.
 		var tokenStr string
 		if c, err := r.Cookie("runic_access_token"); err == nil && c.Value != "" {
 			tokenStr = c.Value
 		} else {
-			subprotocols := r.Header.Values("Sec-WebSocket-Protocol")
-			if len(subprotocols) > 0 {
-				tokenStr = subprotocols[0]
+			for _, proto := range r.Header.Values("Sec-WebSocket-Protocol") {
+				// Header may contain comma-separated protocol values
+				if first := strings.SplitN(proto, ",", 2)[0]; strings.TrimSpace(first) != "" {
+					tokenStr = strings.TrimSpace(first)
+					break
+				}
 			}
 		}
 		if tokenStr == "" {
@@ -122,11 +128,15 @@ func (h *Handler) GetLogs(w http.ResponseWriter, r *http.Request) {
 	if fromStr != "" {
 		if t, err := time.Parse(time.RFC3339, fromStr); err == nil {
 			fromTime = t.Format(time.RFC3339)
+		} else {
+			runiclog.WarnContext(ctx, "Invalid 'from' time parameter, ignoring", "from", fromStr, "error", err)
 		}
 	}
 	if toStr != "" {
 		if t, err := time.Parse(time.RFC3339, toStr); err == nil {
 			toTime = t.Format(time.RFC3339)
+		} else {
+			runiclog.WarnContext(ctx, "Invalid 'to' time parameter, ignoring", "to", toStr, "error", err)
 		}
 	}
 

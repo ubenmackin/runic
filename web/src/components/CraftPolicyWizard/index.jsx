@@ -16,6 +16,7 @@ import { useFocusTrap } from "../../hooks/useFocusTrap";
 import { useQueryClient } from "@tanstack/react-query";
 import { parseCompositePeerValue } from "../../utils/peerUtils";
 import { getPeerDisplayValue } from "./shared";
+import { logger } from "../../utils/logger";
 import StepIndicator from "../StepIndicator";
 import PeerStep from "./PeerStep";
 import ServiceStep from "./ServiceStep";
@@ -45,7 +46,7 @@ function useProtocolOptions(currentProtocol) {
 
 export default function CraftPolicyWizard({ log, onClose, onSuccess }) {
   const qc = useQueryClient();
-  const showToast = useToastContext();
+  const { showToast } = useToastContext();
   const modalRef = useRef(null);
 
   useFocusTrap(modalRef, true);
@@ -359,7 +360,7 @@ export default function CraftPolicyWizard({ log, onClose, onSuccess }) {
         }
       } catch (err) {
         if (isMounted) {
-          console.error("Failed to fetch peers/services:", err);
+          logger.error("Failed to fetch peers/services:", err);
         }
       } finally {
         if (isMounted) {

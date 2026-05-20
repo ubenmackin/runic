@@ -168,8 +168,13 @@ func (h *Handler) GetService(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s, err := h.Store.GetService(r.Context(), id)
-	if err != nil {
+	if errors.Is(err, sql.ErrNoRows) {
 		common.RespondError(w, http.StatusNotFound, "service not found")
+		return
+	}
+	if err != nil {
+		log.ErrorContext(r.Context(), "failed to get service", "error", err)
+		common.InternalError(w)
 		return
 	}
 
@@ -184,8 +189,13 @@ func (h *Handler) UpdateService(w http.ResponseWriter, r *http.Request) {
 	}
 
 	svc, err := h.Store.GetService(r.Context(), id)
-	if err != nil {
+	if errors.Is(err, sql.ErrNoRows) {
 		common.RespondError(w, http.StatusNotFound, "service not found")
+		return
+	}
+	if err != nil {
+		log.ErrorContext(r.Context(), "failed to get service", "error", err)
+		common.InternalError(w)
 		return
 	}
 
@@ -258,8 +268,13 @@ func (h *Handler) DeleteService(w http.ResponseWriter, r *http.Request) {
 	}
 
 	svc, err := h.Store.GetService(r.Context(), id)
-	if err != nil {
+	if errors.Is(err, sql.ErrNoRows) {
 		common.RespondError(w, http.StatusNotFound, "service not found")
+		return
+	}
+	if err != nil {
+		log.ErrorContext(r.Context(), "failed to get service", "error", err)
+		common.InternalError(w)
 		return
 	}
 

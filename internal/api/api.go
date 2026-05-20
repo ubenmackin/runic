@@ -175,7 +175,7 @@ func (a *API) RegisterRoutes(r *mux.Router, downloadsDir string) {
 	r.Use(RequestLogger())
 
 	apiRouter := r.PathPrefix("/api/v1").Subrouter()
-	apiRouter.Use(CORS()) // CORS must be first to handle preflight OPTIONS requests
+	apiRouter.Use(CORS()) // CORS applied to /api/v1 routes; handles preflight OPTIONS
 	apiRouter.Use(apiMiddleware(a))
 	apiRouter.Use(metricsMiddleware)
 	// API routes have their own stricter CSP
@@ -191,6 +191,7 @@ func (a *API) RegisterRoutes(r *mux.Router, downloadsDir string) {
 	a.RegisterRateLimiter = middleware.NewRateLimiter(10, time.Minute)
 	a.RefreshRateLimiter = middleware.NewRateLimiter(10, time.Minute)
 	a.LogoutRateLimiter = middleware.NewRateLimiter(10, time.Minute)
+	a.DownloadRateLimiter = middleware.NewRateLimiter(10, time.Minute)
 
 	apiRouter.HandleFunc("/setup", a.Auth.HandleSetup).Methods("GET")
 	apiRouter.HandleFunc("/setup", a.Auth.HandleSetup).Methods("POST")
@@ -198,7 +199,8 @@ func (a *API) RegisterRoutes(r *mux.Router, downloadsDir string) {
 	apiRouter.Handle("/auth/login", a.LoginRateLimiter.Middleware(http.HandlerFunc(a.Auth.HandleLoginPOST))).Methods("POST")
 
 	// Token refresh (public - uses refresh token, not access token)
-	apiRouter.Handle("/auth/refresh", a.RefreshRateLimiter.Middleware(http.HandlerFunc(a.Auth.HandleRefreshPOST))).Methods("POST")
+	// Protected by cookie presence check + IP rate limiting
+	apiRouter.Handle("/auth/refresh", RequireRefreshCookie()(a.RefreshRateLimiter.Middleware(http.HandlerFunc(a.Auth.HandleRefreshPOST)))).Methods("POST")
 
 	apiRouter.Handle("/agent/register", a.RegisterRateLimiter.Middleware(http.HandlerFunc(a.Agents.RegisterAgent))).Methods("POST")
 
@@ -333,7 +335,6 @@ func (a *API) RegisterRoutes(r *mux.Router, downloadsDir string) {
 	// Downloads route (public - for agent binary downloads)
 	// Must be registered before SPA catch-all handler (in main.go)
 	// Rate limited to 10 requests per minute to prevent abuse
-	a.DownloadRateLimiter = middleware.NewRateLimiter(10, time.Minute)
 	downloadsHandler := a.DownloadRateLimiter.Middleware(downloads.Handler(downloadsDir))
 	r.Handle("/downloads/{filename}", downloadsHandler).Methods("GET")
 

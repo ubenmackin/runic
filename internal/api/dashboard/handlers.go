@@ -5,6 +5,7 @@ import (
 	"context"
 	"net/http"
 	"sync/atomic"
+	"time"
 
 	"github.com/gorilla/mux"
 	"golang.org/x/sync/errgroup"
@@ -39,6 +40,8 @@ func (h *Handler) HandleDashboard(w http.ResponseWriter, r *http.Request) {
 
 	// Using errgroup to fetch data concurrently from the store
 	g, ctx := errgroup.WithContext(r.Context())
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
 
 	var hadErrors atomic.Bool
 

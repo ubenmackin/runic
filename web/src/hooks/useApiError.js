@@ -11,7 +11,7 @@ import { createApiError, categorizeError, ErrorTypes } from '../utils/apiErrors'
  * @returns {Object} Error handling utilities
  */
 export function useApiError() {
-  const showToast = useToastContext()
+  const { showToast } = useToastContext()
 
   const handleError = useCallback((error, options = {}) => {
     const apiError = createApiError(error)
@@ -27,8 +27,9 @@ export function useApiError() {
   const handleMutationError = useCallback((error, setFormErrors, field = '_general') => {
     const apiError = createApiError(error)
     setFormErrors(prev => ({ ...prev, [field]: apiError.message }))
+    showToast(apiError.message, 'error')
     return apiError
-  }, [])
+  }, [showToast])
 
   const createErrorHandler = useCallback((options = {}) => {
     return (error) => {

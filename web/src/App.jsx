@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, useNavigate } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { SetupProvider, useSetup } from './contexts/SetupContext'
 import { PendingChangesProvider } from './contexts/PendingChangesContext'
@@ -67,33 +67,22 @@ function PrivateRoute({ children }) {
 }
 
 function SmartRedirect() {
-  const navigate = useNavigate()
   const { needsSetup, loading } = useSetup()
-
-  useEffect(() => {
-    if (loading) return
-
-    if (needsSetup === null) {
-      navigate('/login', { replace: true })
-    } else if (needsSetup) {
-      navigate('/setup', { replace: true })
-    } else {
-      navigate('/login', { replace: true })
-    }
-  }, [navigate, needsSetup, loading])
 
   if (loading) {
     return (
-<div className="min-h-screen bg-gray-50 dark:bg-charcoal-darkest flex items-center justify-center">
-				<div className="text-center">
-					<div className="animate-spin rounded-full h-12 w-12 border-b-2 border-runic-600 dark:border-purple-active mx-auto mb-4"></div>
-					<p className="text-gray-600 dark:text-amber-muted text-lg">Checking setup status...</p>
+      <div className="min-h-screen bg-gray-50 dark:bg-charcoal-darkest flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-runic-600 dark:border-purple-active mx-auto mb-4"></div>
+          <p className="text-gray-600 dark:text-amber-muted text-lg">Checking setup status...</p>
         </div>
       </div>
     )
   }
 
-  return null
+  // Consolidate needsSetup === null and needsSetup === false — both redirect to /login
+  const to = needsSetup ? '/setup' : '/login'
+  return <Navigate to={to} replace />
 }
 
 export default function App() {
