@@ -27,14 +27,14 @@ func (h *Handler) GenerateRegistrationToken(w http.ResponseWriter, r *http.Reque
 	tokenBytes := make([]byte, 32)
 	if _, err := rand.Read(tokenBytes); err != nil {
 		runiclog.Error("Failed to generate token", "error", err)
-		http.Error(w, `{"error": "internal server error"}`, http.StatusInternalServerError)
+		common.RespondError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 	token := hex.EncodeToString(tokenBytes)
 
 	if err := h.DashboardStore.GenerateRegistrationToken(r.Context(), token, input.Description); err != nil {
 		runiclog.Error("Failed to store token", "error", err)
-		http.Error(w, `{"error": "internal server error"}`, http.StatusInternalServerError)
+		common.RespondError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 
@@ -49,7 +49,7 @@ func (h *Handler) ListRegistrationTokens(w http.ResponseWriter, r *http.Request)
 	tokens, err := h.DashboardStore.ListRegistrationTokens(r.Context())
 	if err != nil {
 		runiclog.Error("Failed to list tokens", "error", err)
-		http.Error(w, `{"error": "internal server error"}`, http.StatusInternalServerError)
+		common.RespondError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 
@@ -68,11 +68,11 @@ func (h *Handler) RevokeRegistrationToken(w http.ResponseWriter, r *http.Request
 	revoked, err := h.DashboardStore.RevokeRegistrationToken(r.Context(), id)
 	if err != nil {
 		runiclog.Error("Failed to revoke token", "error", err)
-		http.Error(w, `{"error": "internal server error"}`, http.StatusInternalServerError)
+		common.RespondError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 	if !revoked {
-		http.Error(w, `{"error": "token not found or already used/revoked"}`, http.StatusNotFound)
+		common.RespondError(w, http.StatusNotFound, "token not found or already used/revoked")
 		return
 	}
 

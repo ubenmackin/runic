@@ -7,8 +7,8 @@ import (
 	"strings"
 )
 
-// must start and end with alphanumeric (single-char hostnames allowed).
-var hostnameRegex = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9.\-]*[a-zA-Z0-9])?$|^[a-zA-Z0-9]$`)
+// must start and end with alphanumeric; no consecutive dots allowed.
+var hostnameRegex = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?)*$`)
 
 var nameRegex = regexp.MustCompile(`^[a-zA-Z0-9_\- ]{1,100}$`)
 

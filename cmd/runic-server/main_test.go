@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -12,10 +14,13 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"runic/internal/api"
 )
 
 // TestValidateCertificate tests the validateCertificate function
 func TestValidateCertificate(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name        string
 		setupCert   func(certFile, keyFile *os.File) error
@@ -201,41 +206,8 @@ func TestValidateCertificate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Create temp cert file
-			certFile, err := os.CreateTemp("", "test-cert-*.pem")
-			if err != nil {
-				t.Fatalf("failed to create temp cert file: %v", err)
-			}
-			defer os.Remove(certFile.Name())
-			certFile.Close()
-
-			// Create temp key file
-			keyFile, err := os.CreateTemp("", "test-key-*.pem")
-			if err != nil {
-				t.Fatalf("failed to create temp key file: %v", err)
-			}
-			defer os.Remove(keyFile.Name())
-			keyFile.Close()
-
-			// Reopen files for writing
-			certFile, err = os.OpenFile(certFile.Name(), os.O_WRONLY, 0644)
-			if err != nil {
-				t.Fatalf("failed to reopen cert file: %v", err)
-			}
-			keyFile, err = os.OpenFile(keyFile.Name(), os.O_WRONLY, 0644)
-			if err != nil {
-				t.Fatalf("failed to reopen key file: %v", err)
-			}
-
-			// Setup test case
-			if err := tt.setupCert(certFile, keyFile); err != nil {
-				t.Fatalf("setupCert failed: %v", err)
-			}
-			certFile.Close()
-			keyFile.Close()
-
-			// Run validation
-			err = validateCertificate(certFile.Name(), keyFile.Name())
+			t.Parallel()
+			err := testValidateCertificate(t, tt.setupCert)
 
 			if tt.wantErr {
 				if err == nil {
@@ -254,8 +226,69 @@ func TestValidateCertificate(t *testing.T) {
 	}
 }
 
-// TestSetCacheHeaders tests the setCacheHeaders function
+// testValidateCertificate is a helper that creates temp cert/key files, runs the
+// provided setup function to populate them, and calls validateCertificate.
+func testValidateCertificate(t *testing.T, setupCert func(certFile, keyFile *os.File) error) error {
+	t.Helper()
+	certFile, keyFile, cleanup := testTempCertKeyFiles(t)
+	defer cleanup()
+
+	if err := setupCert(certFile, keyFile); err != nil {
+		t.Fatalf("setupCert failed: %v", err)
+	}
+	certFile.Close()
+	keyFile.Close()
+
+	return validateCertificate(certFile.Name(), keyFile.Name())
+}
+
+// testTempCertKeyFiles creates temporary certificate and key files for testing.
+// Returns the opened files (ready for writing) and a cleanup function.
+// After writing to the files, callers must close them before calling validateCertificate.
+func testTempCertKeyFiles(t *testing.T) (certFile, keyFile *os.File, cleanup func()) {
+	t.Helper()
+
+	f, err := os.CreateTemp("", "test-cert-*.pem")
+	if err != nil {
+		t.Fatalf("failed to create temp cert file: %v", err)
+	}
+	certName := f.Name()
+	f.Close()
+
+	f, err = os.CreateTemp("", "test-key-*.pem")
+	if err != nil {
+		os.Remove(certName)
+		t.Fatalf("failed to create temp key file: %v", err)
+	}
+	keyName := f.Name()
+	f.Close()
+
+	// Reopen for writing
+	certFile, err = os.OpenFile(certName, os.O_WRONLY, 0644)
+	if err != nil {
+		os.Remove(certName)
+		os.Remove(keyName)
+		t.Fatalf("failed to reopen cert file: %v", err)
+	}
+	keyFile, err = os.OpenFile(keyName, os.O_WRONLY, 0644)
+	if err != nil {
+		certFile.Close()
+		os.Remove(certName)
+		os.Remove(keyName)
+		t.Fatalf("failed to reopen key file: %v", err)
+	}
+
+	cleanup = func() {
+		os.Remove(certName)
+		os.Remove(keyName)
+	}
+
+	return certFile, keyFile, cleanup
+}
+
+// TestSetCacheHeaders tests the api.SetCacheHeaders function
 func TestSetCacheHeaders(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name          string
 		path          string
@@ -390,8 +423,9 @@ func TestSetCacheHeaders(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			w := httptest.NewRecorder()
-			setCacheHeaders(w, tt.path)
+			api.SetCacheHeaders(w, tt.path)
 
 			headers := w.Header()
 
@@ -439,50 +473,64 @@ func TestSetCacheHeaders(t *testing.T) {
 	}
 }
 
-// TestSetCacheHeadersNoMutation verifies that setCacheHeaders only sets headers
+// TestSetCacheHeadersNoMutation verifies that api.SetCacheHeaders only sets headers
 // and doesn't mutate other parts of the response
 func TestSetCacheHeadersNoMutation(t *testing.T) {
+	t.Parallel()
 	w := httptest.NewRecorder()
 
 	// Set some pre-existing headers
 	w.Header().Set("Content-Type", "text/html")
 	w.Header().Set("X-Custom-Header", "custom-value")
 
-	setCacheHeaders(w, "index.html")
+	// Verify pre-existing headers were set properly (avoid false-positive setup)
+	if w.Header().Get("Content-Type") != "text/html" {
+		t.Fatal("test setup: failed to set Content-Type header")
+	}
+	if w.Header().Get("X-Custom-Header") != "custom-value" {
+		t.Fatal("test setup: failed to set X-Custom-Header header")
+	}
+
+	api.SetCacheHeaders(w, "index.html")
+
+	// Use Result().Header for assertions after handler completes
+	// (Header() is for mutation within a handler; Result().Header is for inspection)
+	res := w.Result()
 
 	// Verify pre-existing headers are preserved
-	if w.Header().Get("Content-Type") != "text/html" {
+	if res.Header.Get("Content-Type") != "text/html" {
 		t.Errorf("Content-Type should be preserved")
 	}
-	if w.Header().Set("X-Custom-Header", "custom-value"); w.Header().Get("X-Custom-Header") != "custom-value" {
+	if res.Header.Get("X-Custom-Header") != "custom-value" {
 		t.Errorf("X-Custom-Header should be preserved")
 	}
 
 	// Verify cache headers are set
-	if w.Header().Get("Cache-Control") != "no-cache, no-store, must-revalidate" {
+	if res.Header.Get("Cache-Control") != "no-cache, no-store, must-revalidate" {
 		t.Errorf("Cache-Control should be set")
 	}
 }
 
-// TestSetCacheHeadersMultipleCalls verifies that calling setCacheHeaders
+// TestSetCacheHeadersMultipleCalls verifies that calling api.SetCacheHeaders
 // multiple times updates the headers correctly
 func TestSetCacheHeadersMultipleCalls(t *testing.T) {
+	t.Parallel()
 	w := httptest.NewRecorder()
 
 	// First call for HTML
-	setCacheHeaders(w, "page.html")
+	api.SetCacheHeaders(w, "page.html")
 	if !strings.Contains(w.Header().Get("Cache-Control"), "no-cache") {
 		t.Error("First call should set no-cache for HTML")
 	}
 
 	// Second call for different file type - headers should be overwritten
-	setCacheHeaders(w, "assets/app-abc123.js")
+	api.SetCacheHeaders(w, "assets/app-abc123.js")
 	if !strings.Contains(w.Header().Get("Cache-Control"), "immutable") {
 		t.Error("Second call should set immutable for hashed asset")
 	}
 
 	// Third call for another HTML - should override immutable headers
-	setCacheHeaders(w, "another.html")
+	api.SetCacheHeaders(w, "another.html")
 	if !strings.Contains(w.Header().Get("Cache-Control"), "no-cache") {
 		t.Error("Third call should set no-cache for HTML")
 	}
@@ -530,10 +578,11 @@ func generateTestCertAndKey() ([]byte, []byte, error) {
 	return certPEM, keyPEM, nil
 }
 
-// generateTestCertAndKeyEC generates a test certificate and EC private key
+// generateTestCertAndKeyEC generates a test certificate and EC private key (P-256)
+// Uses PKCS#8 PEM format for the key ("PRIVATE KEY" label).
 func generateTestCertAndKeyEC() ([]byte, []byte, error) {
-	// Generate EC private key
-	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	// Generate ECDSA P-256 private key
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -546,7 +595,7 @@ func generateTestCertAndKeyEC() ([]byte, []byte, error) {
 		},
 		NotBefore:             time.Now(),
 		NotAfter:              time.Now().Add(time.Hour),
-		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		KeyUsage:              x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
 	}
@@ -563,11 +612,14 @@ func generateTestCertAndKeyEC() ([]byte, []byte, error) {
 		Bytes: certDER,
 	})
 
-	// PEM encode private key (using EC PRIVATE KEY type by marshaling as PKCS8 and extracting)
-	// For simplicity, we'll use RSA PRIVATE KEY which is also accepted
+	// PEM encode private key using PKCS#8 (produces "PRIVATE KEY" label)
+	pkcs8Key, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		return nil, nil, err
+	}
 	keyPEM := pem.EncodeToMemory(&pem.Block{
-		Type:  "EC PRIVATE KEY",
-		Bytes: x509.MarshalPKCS1PrivateKey(priv),
+		Type:  "PRIVATE KEY",
+		Bytes: pkcs8Key,
 	})
 
 	return certPEM, keyPEM, nil

@@ -48,6 +48,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -86,12 +87,37 @@ func buildCSPDirectives(nonce string) string {
 		"style-src 'self' 'unsafe-inline'",
 		"img-src 'self' data:",
 		"font-src 'self'",
-		"connect-src 'self' ws: wss:",
+		"connect-src 'self'",
 		"object-src 'none'",
 		"base-uri 'self'",
 		"form-action 'self'",
 		"frame-ancestors 'none'",
 	}, "; ")
+}
+
+// PanicRecovery returns a middleware that catches panics, logs them with a full stack trace,
+// and returns a 500 Internal Server Error response. This must be the outermost middleware
+// so that any panic downstream is caught and handled gracefully.
+func PanicRecovery() mux.MiddlewareFunc {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			defer func() {
+				if rec := recover(); rec != nil {
+					stack := string(debug.Stack())
+					log.Error("panic recovered",
+						"method", r.Method,
+						"path", r.URL.Path,
+						"query", r.URL.RawQuery,
+						"remote_addr", r.RemoteAddr,
+						"panic", rec,
+						"stack", stack,
+					)
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+			}()
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 // RequestID returns a middleware that injects a request ID into the context and response headers.
@@ -151,8 +177,6 @@ func CSP() mux.MiddlewareFunc {
 			ctx := r.Context()
 			ctx = context.WithValue(ctx, CSPNonceKey, nonce)
 
-			setSecurityHeaders(w, false)
-
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
@@ -170,7 +194,6 @@ func CSPForAPI() mux.MiddlewareFunc {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set(CSPHeader, apiCSP)
-			setSecurityHeaders(w, false)
 			next.ServeHTTP(w, r)
 		})
 	}
@@ -254,7 +277,7 @@ func CORS() mux.MiddlewareFunc {
 	allowedOrigin := os.Getenv("CORS_ORIGIN")
 
 	if allowedOrigin == "" {
-		if os.Getenv("GO_ENV") == "development" || os.Getenv("APP_ENV") == "development" {
+		if os.Getenv("GO_ENV") == "development" {
 			// In dev mode, allow requests from common Vite dev server ports
 			// The actual origin will be set dynamically based on Origin header
 			allowedOrigin = "*"

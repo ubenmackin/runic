@@ -8,11 +8,15 @@ export default function ConfirmModal({ title, message, onConfirm, onCancel, dang
   useFocusTrap(modalRef, true)
 
   const modalContent = (
-    <div ref={modalRef} className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50">
+    <div 
+      ref={modalRef} 
+      className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50"
+      onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); onCancel(); } }}
+    >
       <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none w-full max-w-md mx-4 overflow-hidden">
         <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-border">
           <h3 className="text-lg font-semibold text-gray-900 dark:text-light-neutral">{title}</h3>
-          <button onClick={onCancel} className="p-1 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded">
+          <button onClick={onCancel} className="p-1 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded" aria-label="Close modal">
             <X className="w-5 h-5" />
           </button>
         </div>

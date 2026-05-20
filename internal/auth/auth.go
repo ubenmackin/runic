@@ -216,12 +216,14 @@ func Middleware(next http.Handler) http.Handler {
 			tokenStr = c.Value
 		} else {
 			// Fall back to Bearer header (agent)
+			// Per RFC 7235, the Authorization scheme is case-insensitive. Handle
+			// "Bearer", "bearer", "BEARER", etc.
 			authHeader := r.Header.Get("Authorization")
-			if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
+			tokenStr = ExtractBearerToken(authHeader)
+			if tokenStr == "" {
 				writeUnauthorizedJSON(w, "Unauthorized")
 				return
 			}
-			tokenStr = strings.TrimPrefix(authHeader, "Bearer ")
 		}
 
 		claims, err := ValidateToken(tokenStr)
@@ -271,4 +273,20 @@ func SetContextForTest(ctx context.Context, role, username string) context.Conte
 	ctx = context.WithValue(ctx, ctxKeyRole, role)
 	ctx = context.WithValue(ctx, ctxKeyUsername, username)
 	return ctx
+}
+
+// ExtractBearerToken extracts the token value from an Authorization header value.
+// Per RFC 7235, the auth-scheme token is case-insensitive, so we accept
+// "Bearer", "bearer", "BEARER", and any other casing variant.
+// Returns the token string, or "" if the header does not contain a Bearer token.
+func ExtractBearerToken(authHeader string) string {
+	const bearerLen = len("Bearer ")
+	if len(authHeader) <= bearerLen {
+		return ""
+	}
+	// Case-insensitive prefix check per RFC 7235
+	if !strings.EqualFold(authHeader[:bearerLen], "Bearer ") {
+		return ""
+	}
+	return authHeader[bearerLen:]
 }

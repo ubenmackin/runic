@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api, QUERY_KEYS } from '../api/client'
 import { REFETCH_INTERVALS } from '../constants'
@@ -10,15 +10,12 @@ import QuickActions from '../components/QuickActions'
 import TopBlockedSources from '../components/TopBlockedSources'
 import { Server, Shield, AlertTriangle, Clock, UserPlus, Wifi, WifiOff } from 'lucide-react'
 import { usePendingChanges } from '../contexts/PendingChangesContext'
+import { useWebSocket } from '../hooks/useWebSocket'
 
 export default function Dashboard() {
   const [liveBlockedCount, setLiveBlockedCount] = useState(0)
   const [liveActivity, setLiveActivity] = useState([])
   const [topSourcesUpdates, setTopSourcesUpdates] = useState({})
-  const [isWsConnected, setIsWsConnected] = useState(false)
-  const wsRef = useRef(null)
-  const reconnectAttempts = useRef(0)
-  const reconnectTimer = useRef(null)
 
   const { data, isLoading } = useQuery({
     queryKey: QUERY_KEYS.dashboardStats(),
@@ -49,88 +46,46 @@ export default function Dashboard() {
     }
   }, [data])
 
-  useEffect(() => {
-    const connect = () => {
-      if (wsRef.current) {
-        wsRef.current.close()
-        wsRef.current = null
-      }
+  // WebSocket connection for live blocked events
+  const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  const wsUrl = `${wsProto}//${window.location.host}/api/v1/logs/stream?action=DROP`
 
-      const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-      const wsUrl = `${wsProto}//${window.location.host}/api/v1/logs/stream?action=DROP`
+  const { connected: isWsConnected } = useWebSocket({
+    url: wsUrl,
+    enabled: true,
+    maxRetries: 5,
+    onMessage: (event) => {
+      try {
+        const log = JSON.parse(event.data)
 
-      // Authentication is handled via HttpOnly cookies (runic_access_token)
-      // which are automatically sent with the WebSocket upgrade request.
-      // The server checks cookies first before falling back to Sec-WebSocket-Protocol header.
-      const ws = new WebSocket(wsUrl)
+        // Only process DROP events (should be filtered by server, but double-check)
+        if (log.action !== 'DROP') return
 
-      ws.onopen = () => {
-        reconnectAttempts.current = 0
-        setIsWsConnected(true)
-      }
+        setLiveBlockedCount(prev => prev + 1)
 
-      ws.onmessage = (event) => {
-        try {
-          const log = JSON.parse(event.data)
-
-          // Only process DROP events (should be filtered by server, but double-check)
-          if (log.action !== 'DROP') return
-
-          setLiveBlockedCount(prev => prev + 1)
-
-          setLiveActivity(prev => {
-            const newActivity = {
-              timestamp: log.timestamp || new Date().toISOString(),
-              src_ip: log.src_ip,
-              dst_ip: log.dst_ip,
-              protocol: log.protocol,
-              action: log.action,
-              hostname: log.hostname || '',
-            }
-            return [newActivity, ...prev].slice(0, 5)
-          })
-
-          if (log.src_ip) {
-            setTopSourcesUpdates(prev => ({
-              ...prev,
-              [log.src_ip]: (prev[log.src_ip] || 0) + 1,
-            }))
+        setLiveActivity(prev => {
+          const newActivity = {
+            timestamp: log.timestamp || new Date().toISOString(),
+            src_ip: log.src_ip,
+            dst_ip: log.dst_ip,
+            protocol: log.protocol,
+            action: log.action,
+            hostname: log.hostname || '',
           }
-        } catch (e) {
-          console.error('Failed to parse WebSocket message:', e)
+          return [newActivity, ...prev].slice(0, 5)
+        })
+
+        if (log.src_ip) {
+          setTopSourcesUpdates(prev => ({
+            ...prev,
+            [log.src_ip]: (prev[log.src_ip] || 0) + 1,
+          }))
         }
+      } catch (e) {
+        console.error('Failed to parse WebSocket message:', e)
       }
-
-      ws.onclose = () => {
-        setIsWsConnected(false)
-        if (reconnectAttempts.current < 5) {
-          const delay = Math.min(1000 * Math.pow(2, reconnectAttempts.current), 30000)
-          reconnectTimer.current = setTimeout(() => {
-            reconnectAttempts.current++
-            connect()
-          }, delay)
-        }
-      }
-
-      ws.onerror = () => {
-        ws.close()
-      }
-
-      wsRef.current = ws
-    }
-
-    connect()
-
-    return () => {
-      if (reconnectTimer.current) {
-        clearTimeout(reconnectTimer.current)
-      }
-      if (wsRef.current) {
-        wsRef.current.close()
-        wsRef.current = null
-      }
-    }
-  }, [])
+    },
+  })
 
   const stats = data || {
     total_peers: 0,

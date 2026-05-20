@@ -168,6 +168,7 @@ func (a *API) Start(ctx context.Context) {
 }
 
 func (a *API) RegisterRoutes(r *mux.Router, downloadsDir string) {
+	r.Use(PanicRecovery()) // outermost — catches panics from all downstream middlewares and handlers
 	r.Use(SecurityHeaders)
 
 	r.Use(RequestID())
@@ -246,7 +247,6 @@ func (a *API) RegisterRoutes(r *mux.Router, downloadsDir string) {
 	admin := protected.PathPrefix("").Subrouter()
 	admin.Use(middleware.RequireRole("admin"))
 
-	admin.HandleFunc("/users", a.Users.ListUsers).Methods("GET")
 	admin.HandleFunc("/users", a.Users.CreateUser).Methods("POST")
 	admin.HandleFunc("/users/{id:[0-9]+}", a.Users.UpdateUser).Methods("PUT")
 	admin.HandleFunc("/users/{id:[0-9]+}", a.Users.DeleteUser).Methods("DELETE")
@@ -276,6 +276,8 @@ func (a *API) RegisterRoutes(r *mux.Router, downloadsDir string) {
 
 	editor := protected.PathPrefix("").Subrouter()
 	editor.Use(middleware.RequireRole("admin", "editor"))
+
+	editor.HandleFunc("/users", a.Users.ListUsers).Methods("GET")
 
 	peersEditor := editor.PathPrefix("/peers").Subrouter()
 	a.Peers.RegisterRoutes(peersEditor)
@@ -417,7 +419,12 @@ func metricsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 
-		rw := common.NewResponseRecorder(w)
+		// Reuse existing ResponseRecorder if one is already in the chain (e.g. from RequestLogger)
+		// to avoid double-wrapping the ResponseWriter.
+		rw, ok := w.(*common.ResponseRecorder)
+		if !ok {
+			rw = common.NewResponseRecorder(w)
+		}
 		next.ServeHTTP(rw, r)
 
 		endpoint := r.URL.Path

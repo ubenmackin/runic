@@ -8,7 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"os"
-	"strings"
+	"sync"
 
 	"github.com/gorilla/mux"
 	"github.com/mattn/go-sqlite3"
@@ -23,8 +23,13 @@ import (
 	"runic/internal/store"
 )
 
-// errSetupAlreadyCompleted is returned inside the setup transaction when users already exist.
-var errSetupAlreadyCompleted = errors.New("setup already completed")
+var (
+	isProduction   bool
+	isProductionMu sync.Once
+
+	// errSetupAlreadyCompleted is returned inside the setup transaction when users already exist.
+	errSetupAlreadyCompleted = errors.New("setup already completed")
+)
 
 // UserStore is defined as an interface here for testability.
 type UserStore interface {
@@ -45,10 +50,13 @@ func NewHandler(userStore UserStore, tokenStore *store.TokenStore, dbBeginner db
 	return &Handler{UserStore: userStore, TokenStore: tokenStore, DBBeginner: dbBeginner}
 }
 
-var isProduction bool
-
-func init() {
-	isProduction = os.Getenv("GO_ENV") != "development"
+// getIsProduction returns whether the app is running in production mode.
+// Uses lazy initialization via sync.Once to avoid init()-order issues.
+func getIsProduction() bool {
+	isProductionMu.Do(func() {
+		isProduction = os.Getenv("GO_ENV") != "development"
+	})
+	return isProduction
 }
 
 func setAuthCookies(w http.ResponseWriter, access, refresh string) {
@@ -57,16 +65,16 @@ func setAuthCookies(w http.ResponseWriter, access, refresh string) {
 		Value:    access,
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   isProduction,
+		Secure:   getIsProduction(),
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   900, // 15 minutes
 	})
 	http.SetCookie(w, &http.Cookie{
 		Name:     "runic_refresh_token",
 		Value:    refresh,
-		Path:     "/",
+		Path:     "/api/v1/auth/refresh",
 		HttpOnly: true,
-		Secure:   isProduction,
+		Secure:   getIsProduction(),
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   604800, // 7 days
 	})
@@ -78,16 +86,16 @@ func clearAuthCookies(w http.ResponseWriter) {
 		Value:    "",
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   isProduction,
+		Secure:   getIsProduction(),
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   -1,
 	})
 	http.SetCookie(w, &http.Cookie{
 		Name:     "runic_refresh_token",
 		Value:    "",
-		Path:     "/",
+		Path:     "/api/v1/auth/refresh",
 		HttpOnly: true,
-		Secure:   isProduction,
+		Secure:   getIsProduction(),
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   -1,
 	})
@@ -122,7 +130,7 @@ func (h *Handler) HandleSetupGET(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Rate limit check based on IP to prevent enumeration
-	if err := CheckSetupRateLimit(common.GetClientIP(r)); err != nil {
+	if err := CheckSetupGetRateLimit(common.GetClientIP(r)); err != nil {
 		common.RespondError(w, http.StatusTooManyRequests, err.Error())
 		return
 	}
@@ -147,7 +155,8 @@ func (h *Handler) HandleSetupPOST(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Rate limit check based on IP to prevent enumeration/abuse
-	if err := CheckSetupRateLimit(common.GetClientIP(r)); err != nil {
+	// POST has a stricter limit than GET since it creates an admin user.
+	if err := CheckSetupPostRateLimit(common.GetClientIP(r)); err != nil {
 		common.RespondError(w, http.StatusTooManyRequests, err.Error())
 		return
 	}
@@ -267,12 +276,14 @@ func (h *Handler) HandleLogoutPOST(w http.ResponseWriter, r *http.Request) {
 		tokenStr = cookie.Value
 	} else {
 		// Fall back to Bearer header (agent)
+		// Per RFC 7235, the Authorization scheme is case-insensitive. Handle
+		// "Bearer", "bearer", "BEARER", etc.
 		authHeader := r.Header.Get("Authorization")
-		if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
+		tokenStr = auth.ExtractBearerToken(authHeader)
+		if tokenStr == "" {
 			common.RespondError(w, http.StatusUnauthorized, "Unauthorized")
 			return
 		}
-		tokenStr = strings.TrimPrefix(authHeader, "Bearer ")
 	}
 
 	claims, err := auth.ValidateToken(tokenStr)
@@ -339,9 +350,12 @@ func (h *Handler) HandleRefreshPOST(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Revoke the old refresh token (rotation)
+	// Revoke the old refresh token (rotation).
+	// If revoking the old token fails, we still issue the new tokens to avoid
+	// disrupting the user's session, but we log at CRITICAL level so operators
+	// are aware that an old refresh token remains valid.
 	if err := h.TokenStore.RevokeToken(r.Context(), claims.UniqueID, claims.ExpiresAt.Time, "refresh"); err != nil {
-		log.WarnContext(r.Context(), "failed to revoke old refresh token", "error", err)
+		log.ErrorContext(r.Context(), "CRITICAL: failed to revoke old refresh token during rotation; the old token remains valid", "error", err)
 		// Continue anyway - the new tokens are still valid
 	}
 

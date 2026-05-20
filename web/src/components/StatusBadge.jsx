@@ -1,3 +1,7 @@
+/**
+ * @deprecated Use SharpTag component instead for consistent styling.
+ * This component will be removed in a future version.
+ */
 const statusConfig = {
   online: { border: 'border-green-500', text: 'text-green-700 dark:text-green-400', label: 'Online' },
   offline: { border: 'border-red-500', text: 'text-red-700 dark:text-red-400', label: 'Offline' },

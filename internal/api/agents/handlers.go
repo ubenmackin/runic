@@ -19,6 +19,7 @@ import (
 
 	"runic/internal/alerts"
 	"runic/internal/api/common"
+	"runic/internal/auth"
 	"runic/internal/common/constants"
 	runiclog "runic/internal/common/log"
 	"runic/internal/db"
@@ -120,12 +121,11 @@ func WithHubs(ctx context.Context, sseHub SSEBroadcaster, logHub LogBroadcaster)
 func (h *Handler) AgentAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		authHeader := r.Header.Get("Authorization")
-		if authHeader == "" || len(authHeader) <= 7 || authHeader[:7] != "Bearer " {
+		tokenString := auth.ExtractBearerToken(authHeader)
+		if tokenString == "" {
 			common.RespondError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
-
-		tokenString := authHeader[7:]
 
 		secretStr, err := h.DashboardStore.GetSecret(r.Context(), "agent_jwt_secret")
 		if err != nil {
@@ -183,9 +183,16 @@ func (h *Handler) AgentAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB limit
+
 	var input models.AgentRegisterRequest
 
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			common.RespondError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return
+		}
 		common.RespondError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
@@ -403,6 +410,9 @@ func (h *Handler) Heartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Limit request body size to prevent slowloris attacks
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB limit
+
 	var input struct {
 		BundleVersionApplied string   `json:"bundle_version_applied"`
 		UptimeSeconds        float64  `json:"uptime_seconds"`
@@ -440,11 +450,18 @@ func (h *Handler) SubmitLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB limit
+
 	var input struct {
 		Events []LogEvent `json:"events"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			common.RespondError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return
+		}
 		common.RespondError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
@@ -512,12 +529,19 @@ func (h *Handler) ConfirmBundleApplied(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB limit
+
 	var input struct {
 		Version   string `json:"version"`
 		AppliedAt string `json:"applied_at"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			common.RespondError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return
+		}
 		common.RespondError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
@@ -648,12 +672,19 @@ func (h *Handler) SubmitBackup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 10<<20) // 10MB limit (iptables backup can be large)
+
 	var input struct {
 		IPTablesBackup string `json:"iptables_backup"`
 		IPSetList      string `json:"ipset_list"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			common.RespondError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return
+		}
 		common.RespondError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
@@ -689,12 +720,19 @@ func (h *Handler) AgentTestKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB limit
+
 	var input struct {
 		Message   string `json:"message"`
 		Signature string `json:"signature"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			common.RespondError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return
+		}
 		common.RespondError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}

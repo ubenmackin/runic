@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { ChevronDown, ChevronRight, Wand2 } from 'lucide-react'
 
 export default function LogLine({ log, expanded, onToggle, onCraftPolicy, canEdit }) {
@@ -15,28 +15,39 @@ export default function LogLine({ log, expanded, onToggle, onCraftPolicy, canEdi
     }
   }
 
-  const actionColor = log.action === 'DROP' || log.action === 'BLOCK'
-    ? 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300'
-    : 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300'
+  const actionColor = useMemo(() =>
+    log.action === 'DROP' || log.action === 'BLOCK'
+      ? 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300'
+      : 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300',
+  [log.action])
 
-  const directionIcon = log.direction === 'IN' ? '↓' : '↑'
-  const directionColor = log.direction === 'IN'
-    ? 'text-blue-600 dark:text-blue-400'
-    : 'text-amber-600 dark:text-amber-400'
+  const directionIcon = useMemo(() => log.direction === 'IN' ? '↓' : '↑', [log.direction])
+  const directionColor = useMemo(() =>
+    log.direction === 'IN'
+      ? 'text-blue-600 dark:text-blue-400'
+      : 'text-amber-600 dark:text-amber-400',
+  [log.direction])
 
   return (
     <div className="border-b border-gray-200 dark:border-gray-border">
       <div
         className="flex items-center gap-2 px-3 py-2 hover:bg-gray-50 dark:hover:bg-charcoal-dark cursor-pointer font-mono text-xs"
         onClick={toggleExpand}
+        role="button"
+        tabIndex={0}
+        aria-expanded={showExpanded}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            toggleExpand()
+          }
+        }}
       >
-        <button className="p-0.5 hover:bg-gray-200 dark:hover:bg-charcoal-darkest rounded-none">
-          {showExpanded ? (
-            <ChevronDown className="w-3 h-3 text-gray-400" />
-          ) : (
-            <ChevronRight className="w-3 h-3 text-gray-400" />
-          )}
-        </button>
+        {showExpanded ? (
+          <ChevronDown className="w-3 h-3 text-gray-400" />
+        ) : (
+          <ChevronRight className="w-3 h-3 text-gray-400" />
+        )}
 
         <span className="text-gray-500 dark:text-amber-muted w-36 whitespace-nowrap">
           {log.timestamp?.replace('T', ' ').slice(0, 19) || '—'}

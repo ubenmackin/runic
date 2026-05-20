@@ -1,8 +1,9 @@
-import { useState, useRef, useEffect } from 'react'
+import React, { useState, useRef, useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronDown, Check, Search } from 'lucide-react'
+import { useDropdownPosition } from '../hooks/useDropdownPosition'
 
-export default function MultiSelect({
+function MultiSelect({
   options = [],
   values = [],
   onChange,
@@ -12,11 +13,11 @@ export default function MultiSelect({
 }) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
-  const [dropdownPos, setDropdownPos] = useState({ top: 0, left: 0, width: 0 })
   const [activeIndex, setActiveIndex] = useState(-1)
   const ref = useRef(null)
   const dropdownRef = useRef(null)
   const optionRefs = useRef([])
+  const dropdownPos = useDropdownPosition({ open, triggerRef: ref, estimatedHeight: 350 })
 
   useEffect(() => {
     const handler = (e) => {
@@ -25,45 +26,6 @@ export default function MultiSelect({
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
   }, [])
-
-  const ESTIMATED_DROPDOWN_HEIGHT = 350
-
-  const getDropdownPosition = () => {
-    if (!ref.current) return { top: 0, left: 0, width: 0, positionAbove: false }
-    const rect = ref.current.getBoundingClientRect()
-    const spaceBelow = window.innerHeight - rect.bottom
-    const spaceAbove = rect.top
-    const positionAbove = spaceBelow < ESTIMATED_DROPDOWN_HEIGHT && spaceAbove > spaceBelow
-    return {
-      top: positionAbove
-        ? rect.top + window.scrollY - ESTIMATED_DROPDOWN_HEIGHT
-        : rect.bottom + window.scrollY,
-      left: rect.left + window.scrollX,
-      width: rect.width,
-      positionAbove
-    }
-  }
-
-  useEffect(() => {
-    if (open && ref.current) {
-      setDropdownPos(getDropdownPosition())
-    }
-  }, [open])
-
-  useEffect(() => {
-    if (!open) return
-    const updatePosition = () => {
-      if (ref.current) {
-        setDropdownPos(getDropdownPosition())
-      }
-    }
-    window.addEventListener('scroll', updatePosition, true)
-    window.addEventListener('resize', updatePosition)
-    return () => {
-      window.removeEventListener('scroll', updatePosition, true)
-      window.removeEventListener('resize', updatePosition)
-    }
-  }, [open])
 
   const filtered = options.filter(opt =>
     opt.label.toLowerCase().includes(search.toLowerCase())
@@ -195,6 +157,7 @@ export default function MultiSelect({
                 onKeyDown={handleKeyDown}
                 placeholder="Search..."
                 disabled={disabled}
+                aria-label="Search options"
                 className="flex-1 text-sm bg-transparent border-none outline-none text-gray-900 dark:text-light-neutral placeholder-gray-400 disabled:cursor-not-allowed"
                 autoFocus
               />
@@ -258,3 +221,5 @@ export default function MultiSelect({
     </div>
   )
 }
+
+export default React.memo(MultiSelect)

@@ -243,12 +243,19 @@ func (h *Handler) AgentRotateKey(w http.ResponseWriter, r *http.Request) {
 // AgentConfirmRotation confirms completion of a key rotation. POST /api/v1/agent/confirm-rotation
 // Requires the rotation token as proof of legitimate rotation.
 func (h *Handler) AgentConfirmRotation(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB limit
+
 	var input struct {
 		HostID        string `json:"host_id"`
 		RotationToken string `json:"rotation_token"` // Required only if rotation token still exists (not yet consumed)
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			common.RespondError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return
+		}
 		common.RespondError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}

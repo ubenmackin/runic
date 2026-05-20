@@ -1,5 +1,7 @@
 export const BASE = '/api/v1'
 
+const DEFAULT_TIMEOUT = 30000 // 30 seconds
+
 // Auth failure callback - registered by store to avoid circular imports
 let authFailureCallback = null
 
@@ -40,52 +42,73 @@ async function refreshTokenOnce() {
   return refreshPromise
 }
 
-async function request(method, path, body, retry = true) {
+async function request(method, path, body, retry = true, signal = null) {
   const headers = { 'Content-Type': 'application/json' }
   const csrfToken = getCSRFToken()
   if (csrfToken) {
     headers['X-CSRF-Token'] = csrfToken
   }
 
+  // Create abort controller with timeout if no signal provided
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT)
+
+  const actualSignal = signal || controller.signal
+
   const fetchOptions = {
     method,
     headers,
     credentials: 'include',
     body: body ? JSON.stringify(body) : undefined,
+    signal: actualSignal,
   }
 
-  const res = await fetch(BASE + path, fetchOptions)
+  try {
+    const res = await fetch(BASE + path, fetchOptions)
 
-  if (res.status === 401 && retry) {
-    const refreshed = await refreshTokenOnce()
-    if (refreshed.ok) {
-      return request(method, path, body, false)
-    } else {
-      if (authFailureCallback) authFailureCallback()
-      throw new Error('Session expired. Please log in again.')
+    if (res.status === 401 && retry) {
+      const refreshed = await refreshTokenOnce()
+      if (refreshed.ok) {
+        clearTimeout(timeoutId)
+        return request(method, path, body, false)
+      } else {
+        if (authFailureCallback) authFailureCallback()
+        clearTimeout(timeoutId)
+        throw new Error('Session expired. Please log in again.')
+      }
     }
-  }
 
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: res.statusText }))
-    const message = typeof err.error === 'string' ? err.error : err.error?.message
-    const error = new Error(message || 'Request failed')
-    error.status = res.status
-    error.data = err
-    throw error
-  }
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: res.statusText }))
+      const message = typeof err.error === 'string' ? err.error : err.error?.message
+      const error = new Error(message || 'Request failed')
+      error.status = res.status
+      error.data = err
+      clearTimeout(timeoutId)
+      throw error
+    }
 
-  if (res.status === 204) return null
-  const json = await res.json()
-  return json.data ?? json
+    clearTimeout(timeoutId)
+    if (res.status === 204) return null
+    const json = await res.json()
+    return json.data ?? json
+  } catch (err) {
+    clearTimeout(timeoutId)
+    if (err.name === 'AbortError') {
+      const error = new Error('Request timed out')
+      error.status = 408
+      throw error
+    }
+    throw err
+  }
 }
 
 export const api = {
-  get:    (path)        => request('GET',    path),
-  post:   (path, body)  => request('POST',   path, body),
-  put:    (path, body)  => request('PUT',    path, body),
-  patch:  (path, body)  => request('PATCH',  path, body),
-  delete: (path)        => request('DELETE', path),
+  get:    (path, signal)        => request('GET',    path, undefined, true, signal),
+  post:   (path, body, signal)  => request('POST',   path, body, true, signal),
+  put:    (path, body, signal)  => request('PUT',    path, body, true, signal),
+  patch:  (path, body, signal)  => request('PATCH',  path, body, true, signal),
+  delete: (path, signal)        => request('DELETE', path, undefined, true, signal),
 }
 
 export const getAlerts = (params) => api.get(`/alerts?${new URLSearchParams(params)}`)

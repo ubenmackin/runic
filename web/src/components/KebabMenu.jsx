@@ -1,8 +1,8 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, memo } from 'react'
 import { MoreVertical } from 'lucide-react'
 import PropTypes from 'prop-types'
 
-export default function KebabMenu({ items, className = '' }) {
+const KebabMenu = memo(function KebabMenu({ items, className = '' }) {
   const [isOpen, setIsOpen] = useState(false)
   const menuRef = useRef(null)
   const triggerRef = useRef(null)
@@ -148,7 +148,7 @@ export default function KebabMenu({ items, className = '' }) {
       )}
     </div>
   )
-}
+})
 
 KebabMenu.propTypes = {
   items: PropTypes.arrayOf(
@@ -163,3 +163,5 @@ KebabMenu.propTypes = {
   ).isRequired,
   className: PropTypes.string,
 }
+
+export default KebabMenu

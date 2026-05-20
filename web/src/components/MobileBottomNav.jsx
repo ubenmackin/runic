@@ -1,46 +1,11 @@
 import { useState } from 'react'
-import { NavLink, useLocation, useNavigate } from 'react-router-dom'
-import { LayoutDashboard, Network, Shield, FileText, Settings, ChevronUp } from 'lucide-react'
-
-const navItems = [
-  { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
-  { to: '/topology', icon: Network, label: 'Topology' },
-  {
-    key: 'access-control',
-    icon: Shield,
-    label: 'Access Control',
-    submenu: [
-      { to: '/peers', label: 'Peers' },
-      { to: '/groups', label: 'Groups' },
-      { to: '/services', label: 'Services' },
-      { to: '/policies', label: 'Policies' },
-    ],
-  },
-  {
-    key: 'logs',
-    icon: FileText,
-    label: 'Logs',
-    submenu: [
-      { to: '/logs', label: 'Logs' },
-      { to: '/alerts', label: 'Alerts' },
-    ],
-  },
-  {
-    key: 'settings',
-    icon: Settings,
-    label: 'Settings',
-    submenu: [
-      { to: '/settings', label: 'Settings' },
-      { to: '/setup-keys', label: 'Setup Keys' },
-      { to: '/users', label: 'Users' },
-    ],
-  },
-]
+import { NavLink, useLocation } from 'react-router-dom'
+import { ChevronUp } from 'lucide-react'
+import NAV_ITEMS from './navigationConfig'
 
 export default function MobileBottomNav() {
   const [openSubmenu, setOpenSubmenu] = useState(null)
   const location = useLocation()
-  const navigate = useNavigate()
 
   const isSubmenuActive = (item) => {
     if (!item.submenu) return false
@@ -73,9 +38,9 @@ export default function MobileBottomNav() {
         />
       )}
 
-      <nav className="fixed bottom-0 left-0 right-0 h-16 bg-charcoal-dark border-t border-gray-border md:hidden z-40">
+      <nav className="fixed bottom-0 left-0 right-0 h-16 bg-charcoal-dark border-t border-gray-border md:hidden z-40" aria-label="Mobile navigation">
         <div className="flex items-center justify-around h-full">
-          {navItems.map((item) => {
+          {NAV_ITEMS.map((item) => {
             const hasSubmenu = !!item.submenu
             const isOpen = openSubmenu === item.key
             const isActive = hasSubmenu ? isSubmenuActive(item) : false
@@ -90,32 +55,32 @@ export default function MobileBottomNav() {
             role="menu"
             aria-label={`${item.label} menu`}
           >
-{item.submenu.map((subItem) => {
-              const subIsActive = location.pathname === subItem.to
-              return (
-<button
-          key={subItem.to}
-          onClick={(e) => {
-            e.stopPropagation()
-            navigate(subItem.to)
-            setOpenSubmenu(null)
-          }}
-          className={`flex w-full items-center justify-center px-6 py-4 text-base min-h-[48px] transition-colors ${
-            subIsActive ? 'text-purple-active bg-purple-active/10'
-            : 'text-gray-400 active:bg-white/10'
-          }`}
-          data-testid={`submenu-item-${subItem.to.replace('/', '')}`}
-        >
-          {subItem.label}
-        </button>
-              )
-            })}
+{item.submenu.map((subItem) => (
+                    <NavLink
+                      key={subItem.to}
+                      to={subItem.to}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setOpenSubmenu(null)
+                      }}
+                      className={({ isActive: navIsActive }) =>
+                        `flex w-full items-center justify-center px-6 py-4 text-base min-h-[48px] transition-colors ${
+                          navIsActive
+                            ? 'text-purple-active bg-purple-active/10'
+                            : 'text-gray-400 active:bg-white/10'
+                        }`
+                      }
+                      data-testid={`submenu-item-${subItem.to.replace('/', '')}`}
+                    >
+                      {subItem.label}
+                    </NavLink>
+                  ))}
                   </div>
                 )}
 
                 {/* Nav item */}
                 {hasSubmenu ? (
-<button
+        <button
           onClick={() => handleItemClick(item)}
           className={`flex flex-col items-center justify-center px-3 py-2 min-h-[48px] transition-colors ${
             isActive || isOpen
@@ -123,6 +88,8 @@ export default function MobileBottomNav() {
             : 'text-gray-400 active:bg-white/5'
           }`}
           data-testid={`nav-item-${item.key}`}
+          data-active={isActive ? 'true' : 'false'}
+          aria-label={item.label}
         >
           <item.icon className="w-6 h-6" />
           <span className="text-sm mt-1">{item.label}</span>
@@ -139,6 +106,7 @@ export default function MobileBottomNav() {
             ? 'text-purple-active'
             : 'text-gray-400 active:bg-white/5'
           }`}
+          aria-label={item.label}
         >
           <item.icon className="w-6 h-6" />
           <span className="text-sm mt-1">{item.label}</span>

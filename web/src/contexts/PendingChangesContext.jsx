@@ -1,6 +1,6 @@
 import { createContext, useContext } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { api } from '../api/client'
+import { api, QUERY_KEYS } from '../api/client'
 import { aggregatePendingChangesCount } from '../utils/pendingChanges'
 
 const PendingChangesContext = createContext(null)
@@ -8,7 +8,7 @@ const PendingChangesContext = createContext(null)
 export function PendingChangesProvider({ children }) {
   // Single query for pending changes, shared across components
   const { data: pendingChanges, isLoading, error } = useQuery({
-    queryKey: ['pending-changes'],
+    queryKey: QUERY_KEYS.pendingChanges(),
     queryFn: () => api.get('/pending-changes'),
     refetchInterval: 15000,
     refetchIntervalInBackground: false, // Don't poll when tab is hidden

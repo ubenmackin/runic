@@ -20,6 +20,11 @@ vi.mock('../api/client', async (importOriginal) => {
   }
 })
 
+// Mock ToastContext
+vi.mock('../hooks/ToastContext', () => ({
+  useToastContext: () => vi.fn(),
+}))
+
 // Mock SearchableSelect component - render as a simple select
 vi.mock('../components/SearchableSelect', () => ({
   default: ({ options, value, onChange, placeholder }) => (

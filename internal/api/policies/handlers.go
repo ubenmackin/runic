@@ -106,10 +106,10 @@ func validatePolicyInput(input *policyInput, isUpdate bool) error {
 		}
 	}
 
-	if input.SourceType != "" && !common.IsValidSourceType(input.SourceType) {
+	if input.SourceType != "" && !common.IsValidEntityType(input.SourceType) {
 		return common.NewHTTPError(http.StatusBadRequest, "source_type must be one of: peer, group, special")
 	}
-	if input.TargetType != "" && !common.IsValidTargetType(input.TargetType) {
+	if input.TargetType != "" && !common.IsValidEntityType(input.TargetType) {
 		return common.NewHTTPError(http.StatusBadRequest, "target_type must be one of: peer, group, special")
 	}
 	if input.SourceIP != nil && *input.SourceIP != "" && input.SourceType != "peer" {
@@ -174,8 +174,15 @@ func (h *Handler) ListPolicies(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) CreatePolicy(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB limit
+
 	var input policyInput
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			common.RespondError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return
+		}
 		common.RespondError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
@@ -232,9 +239,9 @@ func (h *Handler) CreatePolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.Store.Snapshot(r.Context(), "create", int(id)); err != nil {
-		log.ErrorContext(r.Context(), "failed to create snapshot", "error", err)
-	}
+	common.SnapshotOrLog(r.Context(), "policy", int(id), "create", func() error {
+		return h.Store.Snapshot(r.Context(), "create", int(id))
+	})
 
 	var affectedPeers []int
 	if h.Compiler != nil {
@@ -278,8 +285,15 @@ func (h *Handler) UpdatePolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB limit
+
 	var input policyInput
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			common.RespondError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return
+		}
 		common.RespondError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
@@ -337,9 +351,9 @@ func (h *Handler) UpdatePolicy(w http.ResponseWriter, r *http.Request) {
 	// and don't need to be atomically consistent with the update. Keeping them
 	// outside the tx reduces write lock hold time and avoids "database is locked"
 	// conflicts with background workers.
-	if err := h.Store.Snapshot(r.Context(), "update", id); err != nil {
-		log.ErrorContext(r.Context(), "failed to create snapshot", "error", err)
-	}
+	common.SnapshotOrLog(r.Context(), "policy", id, "update", func() error {
+		return h.Store.Snapshot(r.Context(), "update", id)
+	})
 
 	err = store.RunInTx(r.Context(), h.beginner, func(tx *sql.Tx) error {
 		if err := h.Store.UpdatePolicyTx(r.Context(), tx, &p); err != nil {
@@ -371,18 +385,7 @@ func (h *Handler) UpdatePolicy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	peerSet := make(map[int]bool)
-	for _, pid := range oldPeers {
-		peerSet[pid] = true
-	}
-	for _, pid := range newPeers {
-		peerSet[pid] = true
-	}
-	var allPeers []int
-	for pid := range peerSet {
-		allPeers = append(allPeers, pid)
-	}
-
+	allPeers := common.MergePeerIDs(oldPeers, newPeers)
 	h.Store.QueuePeerChange(r.Context(), h.ChangeWorker, allPeers, "policy", "update", id, fmt.Sprintf("Policy '%s' updated", input.Name))
 
 	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "updated"})
@@ -418,9 +421,9 @@ func (h *Handler) DeletePolicy(w http.ResponseWriter, r *http.Request) {
 	// Take snapshot outside the transaction — snapshots are idempotent (INSERT OR IGNORE)
 	// and don't need to be atomically consistent with the delete. Keeping them
 	// outside the tx reduces write lock hold time.
-	if err := h.Store.Snapshot(r.Context(), "delete", id); err != nil {
-		log.ErrorContext(r.Context(), "failed to create snapshot", "error", err)
-	}
+	common.SnapshotOrLog(r.Context(), "policy", id, "delete", func() error {
+		return h.Store.Snapshot(r.Context(), "delete", id)
+	})
 
 	err = store.RunInTx(r.Context(), h.beginner, func(tx *sql.Tx) error {
 		if err := h.Store.SoftDeletePolicyTx(r.Context(), tx, id); err != nil {
@@ -463,8 +466,15 @@ type PolicyPreviewRequest struct {
 }
 
 func (h *Handler) PolicyPreview(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB limit
+
 	var req PolicyPreviewRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			common.RespondError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return
+		}
 		common.RespondError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
@@ -512,10 +522,18 @@ func (h *Handler) PatchPolicy(w http.ResponseWriter, r *http.Request) {
 		common.RespondError(w, http.StatusBadRequest, "invalid policy ID")
 		return
 	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB limit
+
 	var input struct {
 		Enabled *bool `json:"enabled"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			common.RespondError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return
+		}
 		common.RespondError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
@@ -538,9 +556,9 @@ func (h *Handler) PatchPolicy(w http.ResponseWriter, r *http.Request) {
 	// Take snapshot outside the transaction — snapshots are idempotent (INSERT OR IGNORE)
 	// and don't need to be atomically consistent with the patch. Keeping them
 	// outside the tx reduces write lock hold time.
-	if err := h.Store.Snapshot(r.Context(), "update", id); err != nil {
-		log.ErrorContext(r.Context(), "failed to create snapshot", "error", err)
-	}
+	common.SnapshotOrLog(r.Context(), "policy", id, "update", func() error {
+		return h.Store.Snapshot(r.Context(), "update", id)
+	})
 
 	err = store.RunInTx(r.Context(), h.beginner, func(tx *sql.Tx) error {
 		if err := h.Store.PatchPolicyEnabledTx(r.Context(), tx, id, *input.Enabled); err != nil {

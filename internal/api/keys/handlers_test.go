@@ -73,8 +73,8 @@ func TestCreateKey_Success(t *testing.T) {
 
 	router.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Errorf("CreateKey() status = %d, want %d", rec.Code, http.StatusOK)
+	if rec.Code != http.StatusCreated {
+		t.Errorf("CreateKey() status = %d, want %d", rec.Code, http.StatusCreated)
 	}
 
 	var resp map[string]interface{}
@@ -131,7 +131,7 @@ func TestDeleteKey_Success(t *testing.T) {
 	createRec := httptest.NewRecorder()
 	router.ServeHTTP(createRec, createReq)
 
-	if createRec.Code != http.StatusOK {
+	if createRec.Code != http.StatusCreated {
 		t.Fatalf("CreateKey() failed: status = %d", createRec.Code)
 	}
 
@@ -191,7 +191,7 @@ func TestListKeys_AfterCreate(t *testing.T) {
 	createRec := httptest.NewRecorder()
 	router.ServeHTTP(createRec, createReq)
 
-	if createRec.Code != http.StatusOK {
+	if createRec.Code != http.StatusCreated {
 		t.Fatalf("CreateKey() failed: status = %d", createRec.Code)
 	}
 

@@ -1,9 +1,11 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
-import { X, RefreshCw, Copy, Check, AlertCircle, Trash2 } from 'lucide-react'
+import { X, RefreshCw, Check, AlertCircle, Trash2 } from 'lucide-react'
 import { api } from '../api/client'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 import { useToastContext } from '../hooks/ToastContext'
 import { computeSmartDiff } from '../utils/diff.js'
+import CopyButton from './CopyButton'
+import ConfirmModal from './ConfirmModal'
 
 export default function PendingChangesModal({ peerId, peerHostname, onClose, onApplied }) {
   const showToast = useToastContext()
@@ -16,6 +18,7 @@ export default function PendingChangesModal({ peerId, peerHostname, onClose, onA
   const [applyLoading, setApplyLoading] = useState(false)
   const [rollbackLoading, setRollbackLoading] = useState(false)
   const [applyEntityLoading, setApplyEntityLoading] = useState(false)
+  const [showRollbackConfirm, setShowRollbackConfirm] = useState(false)
   const [activeTab, setActiveTab] = useState('queued')
   const [deployedRules, setDeployedRules] = useState('')
   const [deployedRulesLoading, setDeployedRulesLoading] = useState(true)
@@ -61,12 +64,19 @@ export default function PendingChangesModal({ peerId, peerHostname, onClose, onA
   useEffect(() => {
     if (changes.length > 0 && !preview && !previewLoading && lastChangesRef.current !== changes) {
       lastChangesRef.current = changes
-      setPreviewLoading(true)
-      setPreview(null)
-      api.post(`/pending-changes/${peerId}/preview`)
-        .then(data => setPreview(data))
-        .catch(err => showToast(`Failed to generate preview: ${err.message}`, 'error'))
-        .finally(() => setPreviewLoading(false))
+      const fetchPreview = async () => {
+        setPreviewLoading(true)
+        setPreview(null)
+        try {
+          const data = await api.post(`/pending-changes/${peerId}/preview`)
+          setPreview(data)
+        } catch (err) {
+          showToast(`Failed to generate preview: ${err.message}`, 'error')
+        } finally {
+          setPreviewLoading(false)
+        }
+      }
+      fetchPreview()
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
 }, [changes, preview, previewLoading, peerId])
@@ -85,19 +95,8 @@ export default function PendingChangesModal({ peerId, peerHostname, onClose, onA
     }
   }
 
-  const handleBulkRollback = async () => {
-    if (!window.confirm('Are you sure you want to discard ALL pending changes across all peers? This action cannot be undone.')) return
-    setRollbackLoading(true)
-    try {
-      await api.post('/pending-changes/rollback')
-      showToast('All pending changes discarded successfully', 'success')
-      onApplied() // Triggers a refetch in the parent component
-      onClose()
-    } catch (err) {
-      showToast(`Failed to rollback changes: ${err.message}`, 'error')
-    } finally {
-      setRollbackLoading(false)
-    }
+  const handleBulkRollback = () => {
+    setShowRollbackConfirm(true)
   }
 
   const handleChangeTypeLabel = (type) => {
@@ -205,6 +204,7 @@ export default function PendingChangesModal({ peerId, peerHostname, onClose, onA
   }
 
   return (
+    <>
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" tabIndex="-1" onKeyDown={(e) => { if (e.key === 'Escape') onClose() }}>
       <div ref={modalRef} className="bg-white dark:bg-charcoal-dark rounded-none shadow-none w-full max-w-4xl mx-4 max-h-[90vh] flex flex-col">
         <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-border flex items-center justify-between shrink-0">
@@ -359,20 +359,7 @@ export default function PendingChangesModal({ peerId, peerHostname, onClose, onA
                         return null
                       })}
                     </pre>
-                    <button
-                      onClick={async () => {
-                        try {
-                          await navigator.clipboard.writeText(diffText)
-                          showToast('Copied to clipboard', 'success')
-                        } catch {
-                          showToast('Failed to copy to clipboard', 'error')
-                        }
-                      }}
-                      className="absolute top-2 right-2 p-2 bg-gray-800 hover:bg-gray-700 rounded-none text-gray-300 transition-colors"
-                      title="Copy Diff"
-                    >
-                      <Copy className="w-4 h-4" />
-                    </button>
+                    <CopyButton text={diffText} label="Copy Diff" />
                   </div>
                 )}
               </div>
@@ -397,20 +384,7 @@ export default function PendingChangesModal({ peerId, peerHostname, onClose, onA
                 <pre className="bg-gray-900 dark:bg-black text-gray-100 p-4 rounded-none text-sm font-mono overflow-auto whitespace-pre max-h-[300px] border border-gray-800">
                   <code className="text-green-400">{preview?.rules_content ?? ''}</code>
                 </pre>
-                <button
-                  onClick={async () => {
-                    try {
-                      await navigator.clipboard.writeText(preview?.rules_content ?? '')
-                      showToast('Copied to clipboard', 'success')
-                    } catch {
-                      showToast('Failed to copy to clipboard', 'error')
-                    }
-                  }}
-                  className="absolute top-8 right-3 p-2 bg-gray-800 hover:bg-gray-700 rounded-none text-gray-300 transition-colors"
-                  title="Copy Rules"
-                >
-                  <Copy className="w-4 h-4" />
-                </button>
+                <CopyButton text={preview?.rules_content ?? ''} label="Copy Rules" />
               </div>
             </div>
           ) : null}
@@ -465,5 +439,28 @@ export default function PendingChangesModal({ peerId, peerHostname, onClose, onA
         </div>
       </div>
     </div>
+    {showRollbackConfirm && (
+      <ConfirmModal
+        title="Discard All Pending Changes?"
+        message="Are you sure you want to discard ALL pending changes across all peers? This action cannot be undone."
+        danger
+        onConfirm={async () => {
+          setShowRollbackConfirm(false)
+          setRollbackLoading(true)
+          try {
+            await api.post('/pending-changes/rollback')
+            showToast('All pending changes discarded successfully', 'success')
+            onApplied()
+            onClose()
+          } catch (err) {
+            showToast(`Failed to rollback changes: ${err.message}`, 'error')
+          } finally {
+            setRollbackLoading(false)
+          }
+        }}
+        onCancel={() => setShowRollbackConfirm(false)}
+      />
+    )}
+    </>
   )
 }

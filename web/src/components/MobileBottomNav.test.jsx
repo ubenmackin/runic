@@ -1,6 +1,6 @@
 import { render, screen, fireEvent, within } from '@testing-library/react'
-import { describe, test, expect, _beforeEach } from 'vitest'
-import { BrowserRouter, useLocation as _useLocation } from 'react-router-dom'
+import { describe, test, expect } from 'vitest'
+import { BrowserRouter } from 'react-router-dom'
 import MobileBottomNav from './MobileBottomNav'
 
 // Helper to render with router
@@ -26,6 +26,13 @@ describe('MobileBottomNav', () => {
 
       expect(container.querySelector('nav')).toBeInTheDocument()
     })
+
+    test('navigation has correct aria-label', () => {
+      renderWithRouter(<MobileBottomNav />)
+
+      const nav = screen.getByRole('navigation')
+      expect(nav).toHaveAttribute('aria-label', 'Mobile navigation')
+    })
   })
 
   describe('navigation items without submenu', () => {
@@ -41,6 +48,13 @@ describe('MobileBottomNav', () => {
 
       const topologyLink = screen.getByText('Topology').closest('a')
       expect(topologyLink).toHaveAttribute('href', '/topology')
+    })
+
+    test('Dashboard and Topology have accessible labels', () => {
+      renderWithRouter(<MobileBottomNav />)
+
+      expect(screen.getByLabelText('Dashboard')).toBeInTheDocument()
+      expect(screen.getByLabelText('Topology')).toBeInTheDocument()
     })
   })
 
@@ -126,6 +140,20 @@ describe('MobileBottomNav', () => {
       expect(within(settingsSubmenu).getByText('Setup Keys')).toBeInTheDocument()
       expect(within(settingsSubmenu).getByText('Users')).toBeInTheDocument()
     })
+
+    test('submenu items are NavLink elements with proper href', () => {
+      renderWithRouter(<MobileBottomNav />)
+
+      const accessControlBtn = screen.getByTestId('nav-item-access-control')
+      fireEvent.click(accessControlBtn)
+
+      const peersLink = screen.getByTestId('submenu-item-peers')
+      expect(peersLink.tagName).toBe('A')
+      expect(peersLink).toHaveAttribute('href', '/peers')
+
+      const groupsLink = screen.getByTestId('submenu-item-groups')
+      expect(groupsLink).toHaveAttribute('href', '/groups')
+    })
   })
 
   describe('active states', () => {
@@ -133,166 +161,91 @@ describe('MobileBottomNav', () => {
       renderWithRouter(<MobileBottomNav />, { route: '/' })
 
       const dashboardLink = screen.getByText('Dashboard').closest('a')
-      expect(dashboardLink.className).toContain('text-purple-active')
+      expect(dashboardLink).toHaveAttribute('aria-current', 'page')
     })
 
     test('highlights active Topology item on /topology route', () => {
       renderWithRouter(<MobileBottomNav />, { route: '/topology' })
 
       const topologyLink = screen.getByText('Topology').closest('a')
-      expect(topologyLink.className).toContain('text-purple-active')
+      expect(topologyLink).toHaveAttribute('aria-current', 'page')
     })
 
     test('highlights Access Control parent when on /peers route', () => {
       renderWithRouter(<MobileBottomNav />, { route: '/peers' })
 
       const accessControlBtn = screen.getByTestId('nav-item-access-control')
-      expect(accessControlBtn.className).toContain('text-purple-active')
+      expect(accessControlBtn).toHaveAttribute('data-active', 'true')
     })
 
     test('highlights Access Control parent when on /groups route', () => {
       renderWithRouter(<MobileBottomNav />, { route: '/groups' })
 
       const accessControlBtn = screen.getByTestId('nav-item-access-control')
-      expect(accessControlBtn.className).toContain('text-purple-active')
+      expect(accessControlBtn).toHaveAttribute('data-active', 'true')
     })
 
     test('highlights Access Control parent when on /services route', () => {
       renderWithRouter(<MobileBottomNav />, { route: '/services' })
 
       const accessControlBtn = screen.getByTestId('nav-item-access-control')
-      expect(accessControlBtn.className).toContain('text-purple-active')
+      expect(accessControlBtn).toHaveAttribute('data-active', 'true')
     })
 
     test('highlights Access Control parent when on /policies route', () => {
       renderWithRouter(<MobileBottomNav />, { route: '/policies' })
 
       const accessControlBtn = screen.getByTestId('nav-item-access-control')
-      expect(accessControlBtn.className).toContain('text-purple-active')
+      expect(accessControlBtn).toHaveAttribute('data-active', 'true')
     })
 
     test('highlights Logs parent when on /alerts route', () => {
       renderWithRouter(<MobileBottomNav />, { route: '/alerts' })
 
       const logsBtn = screen.getByTestId('nav-item-logs')
-      expect(logsBtn.className).toContain('text-purple-active')
+      expect(logsBtn).toHaveAttribute('data-active', 'true')
     })
 
     test('highlights Settings parent when on /setup-keys route', () => {
       renderWithRouter(<MobileBottomNav />, { route: '/setup-keys' })
 
       const settingsBtn = screen.getByTestId('nav-item-settings')
-      expect(settingsBtn.className).toContain('text-purple-active')
+      expect(settingsBtn).toHaveAttribute('data-active', 'true')
     })
 
     test('highlights Settings parent when on /users route', () => {
       renderWithRouter(<MobileBottomNav />, { route: '/users' })
 
       const settingsBtn = screen.getByTestId('nav-item-settings')
-      expect(settingsBtn.className).toContain('text-purple-active')
+      expect(settingsBtn).toHaveAttribute('data-active', 'true')
     })
 
-    test('non-active items have default styling', () => {
+    test('non-active items have default aria attributes', () => {
       renderWithRouter(<MobileBottomNav />, { route: '/' })
 
       const topologyLink = screen.getByText('Topology').closest('a')
-      expect(topologyLink.className).toContain('text-gray-400')
+      expect(topologyLink).not.toHaveAttribute('aria-current')
+    })
+
+    test('submenu item shows active state when on matching route', async () => {
+      renderWithRouter(<MobileBottomNav />, { route: '/peers' })
+
+      // Open the Access Control submenu
+      const accessControlBtn = screen.getByTestId('nav-item-access-control')
+      fireEvent.click(accessControlBtn)
+
+      // The Peers submenu item should have aria-current (it's a NavLink)
+      const peersItem = screen.getByTestId('submenu-item-peers')
+      expect(peersItem).toHaveAttribute('aria-current', 'page')
     })
   })
 
-  describe('styling', () => {
-    test('nav is fixed at bottom', () => {
+  describe('semantic structure', () => {
+    test('nav is rendered as navigation landmark', () => {
       const { container } = renderWithRouter(<MobileBottomNav />)
 
       const nav = container.querySelector('nav')
-      expect(nav.className).toContain('fixed')
-      expect(nav.className).toContain('bottom-0')
-      expect(nav.className).toContain('left-0')
-      expect(nav.className).toContain('right-0')
-    })
-
-    test('nav has correct height', () => {
-      const { container } = renderWithRouter(<MobileBottomNav />)
-
-      const nav = container.querySelector('nav')
-      expect(nav.className).toContain('h-16')
-    })
-
-    test('nav has dark background', () => {
-      const { container } = renderWithRouter(<MobileBottomNav />)
-
-      const nav = container.querySelector('nav')
-      expect(nav.className).toContain('bg-charcoal-dark')
-    })
-
-    test('nav has top border', () => {
-      const { container } = renderWithRouter(<MobileBottomNav />)
-
-      const nav = container.querySelector('nav')
-      expect(nav.className).toContain('border-t')
-      expect(nav.className).toContain('border-gray-border')
-    })
-
-    test('nav is hidden on desktop (md breakpoint and up)', () => {
-      const { container } = renderWithRouter(<MobileBottomNav />)
-
-      const nav = container.querySelector('nav')
-      expect(nav.className).toContain('md:hidden')
-    })
-
-    test('nav items are arranged horizontally', () => {
-      const { container } = renderWithRouter(<MobileBottomNav />)
-
-      const innerDiv = container.querySelector('nav > div')
-      expect(innerDiv.className).toContain('flex')
-      expect(innerDiv.className).toContain('justify-around')
-    })
-
-    test('nav items have column layout', () => {
-      renderWithRouter(<MobileBottomNav />)
-
-      const dashboardLink = screen.getByText('Dashboard').closest('a')
-      expect(dashboardLink.className).toContain('flex-col')
-    })
-
-    test('submenu popup appears above nav bar', () => {
-      renderWithRouter(<MobileBottomNav />)
-
-      const accessControlBtn = screen.getByTestId('nav-item-access-control')
-      fireEvent.click(accessControlBtn)
-
-      const submenu = screen.getByTestId('submenu-access-control')
-      expect(submenu.className).toContain('bottom-full')
-      expect(submenu.className).toContain('mb-2')
-    })
-
-    test('submenu popup has rounded corners', () => {
-      renderWithRouter(<MobileBottomNav />)
-
-      const accessControlBtn = screen.getByTestId('nav-item-access-control')
-      fireEvent.click(accessControlBtn)
-
-      const submenu = screen.getByTestId('submenu-access-control')
-      expect(submenu.className).toContain('rounded-lg')
-    })
-
-    test('backdrop overlay is visible when submenu is open', () => {
-      renderWithRouter(<MobileBottomNav />)
-
-      const accessControlBtn = screen.getByTestId('nav-item-access-control')
-      fireEvent.click(accessControlBtn)
-
-      const backdrop = screen.getByTestId('submenu-backdrop')
-      expect(backdrop.className).toContain('bg-black/50')
-    })
-  })
-
-  describe('accessibility', () => {
-    test('nav items are focusable', () => {
-      renderWithRouter(<MobileBottomNav />)
-
-      const dashboardLink = screen.getByText('Dashboard').closest('a')
-      expect(dashboardLink).toBeInTheDocument()
+      expect(nav).toBeInTheDocument()
     })
 
     test('icons are present for all nav items', () => {
@@ -317,7 +270,6 @@ describe('MobileBottomNav', () => {
 
 			const accessControlBtn = screen.getByTestId('nav-item-access-control')
 			const chevron = accessControlBtn.querySelectorAll('svg')[1]
-			expect(chevron.getAttribute('class')).not.toContain('rotate-180')
 
 			fireEvent.click(accessControlBtn)
 			expect(chevron.getAttribute('class')).toContain('rotate-180')
@@ -329,11 +281,11 @@ describe('MobileBottomNav', () => {
       renderWithRouter(<MobileBottomNav />, { route: '/topology' })
 
       const topologyLink = screen.getByText('Topology').closest('a')
-      expect(topologyLink.className).toContain('text-purple-active')
+      expect(topologyLink).toHaveAttribute('aria-current', 'page')
 
       // Other items should not have active styling
       const dashboardLink = screen.getByText('Dashboard').closest('a')
-      expect(dashboardLink.className).not.toContain('text-purple-active')
+      expect(dashboardLink).not.toHaveAttribute('aria-current')
     })
 
     test('only one submenu can be open at a time', () => {

@@ -567,3 +567,341 @@ func parseTimeHour(timeStr string) int {
 	}
 	return 0
 }
+
+// ---------------------------------------------------------------------------
+// Digest generation tests
+// ---------------------------------------------------------------------------
+
+func TestBuildDigestSummary_NoAlerts(t *testing.T) {
+	startTime := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	endTime := time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC)
+
+	gen := &DigestGenerator{}
+	summary := gen.buildDigestSummary(nil, startTime, endTime)
+
+	if summary.TotalAlerts != 0 {
+		t.Errorf("expected 0 total alerts, got %d", summary.TotalAlerts)
+	}
+	if summary.CriticalCount != 0 || summary.WarningCount != 0 || summary.InfoCount != 0 {
+		t.Error("expected all severity counts to be 0")
+	}
+	if len(summary.ByType) != 0 {
+		t.Errorf("expected empty ByType map, got %d entries", len(summary.ByType))
+	}
+	if !summary.TimeRange.Start.Equal(startTime) || !summary.TimeRange.End.Equal(endTime) {
+		t.Error("time range mismatch")
+	}
+}
+
+func TestBuildDigestSummary_MultipleAlerts(t *testing.T) {
+	startTime := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	endTime := time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC)
+
+	alerts := []AlertHistory{
+		{
+			AlertType: AlertTypePeerOffline,
+			Severity:  SeverityCritical,
+			Subject:   "Peer offline",
+			Message:   "peer-01 is offline",
+			CreatedAt: time.Date(2025, 1, 1, 10, 0, 0, 0, time.UTC),
+		},
+		{
+			AlertType: AlertTypePeerOffline,
+			Severity:  SeverityCritical,
+			Subject:   "Peer offline",
+			Message:   "peer-02 is offline",
+			CreatedAt: time.Date(2025, 1, 1, 11, 0, 0, 0, time.UTC),
+		},
+		{
+			AlertType: AlertTypeBundleFailed,
+			Severity:  SeverityWarning,
+			Subject:   "Bundle failed",
+			Message:   "bundle build failed",
+			CreatedAt: time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC),
+		},
+		{
+			AlertType: AlertTypeBlockedSpike,
+			Severity:  SeverityInfo,
+			Subject:   "Traffic spike",
+			Message:   "",
+			CreatedAt: time.Date(2025, 1, 1, 13, 0, 0, 0, time.UTC),
+		},
+		{
+			AlertType: AlertTypeBlockedSpike,
+			Severity:  SeverityInfo,
+			Subject:   "Traffic spike 2",
+			Message:   "",
+			CreatedAt: time.Date(2025, 1, 1, 14, 0, 0, 0, time.UTC),
+		},
+	}
+
+	gen := &DigestGenerator{}
+	summary := gen.buildDigestSummary(alerts, startTime, endTime)
+
+	if summary.TotalAlerts != 5 {
+		t.Errorf("expected 5 total alerts, got %d", summary.TotalAlerts)
+	}
+	if summary.CriticalCount != 2 {
+		t.Errorf("expected 2 critical, got %d", summary.CriticalCount)
+	}
+	if summary.WarningCount != 1 {
+		t.Errorf("expected 1 warning, got %d", summary.WarningCount)
+	}
+	if summary.InfoCount != 2 {
+		t.Errorf("expected 2 info, got %d", summary.InfoCount)
+	}
+
+	// ByType
+	if summary.ByType[AlertTypePeerOffline] != 2 {
+		t.Errorf("expected 2 peer_offline, got %d", summary.ByType[AlertTypePeerOffline])
+	}
+	if summary.ByType[AlertTypeBundleFailed] != 1 {
+		t.Errorf("expected 1 bundle_failed, got %d", summary.ByType[AlertTypeBundleFailed])
+	}
+	if summary.ByType[AlertTypeBlockedSpike] != 2 {
+		t.Errorf("expected 2 blocked_spike, got %d", summary.ByType[AlertTypeBlockedSpike])
+	}
+
+	// ByTypeAndSeverity - check messages (only non-empty messages are stored)
+	offlineSummary := summary.ByTypeAndSeverity[AlertTypePeerOffline]
+	if offlineSummary.Count != 2 {
+		t.Errorf("expected offline summary count 2, got %d", offlineSummary.Count)
+	}
+	if len(offlineSummary.Messages) != 2 {
+		t.Errorf("expected 2 offline messages, got %d", len(offlineSummary.Messages))
+	}
+
+	spikeSummary := summary.ByTypeAndSeverity[AlertTypeBlockedSpike]
+	if spikeSummary.Count != 2 {
+		t.Errorf("expected spike summary count 2, got %d", spikeSummary.Count)
+	}
+	if len(spikeSummary.Messages) != 0 {
+		t.Errorf("expected 0 spike messages (all empty), got %d", len(spikeSummary.Messages))
+	}
+}
+
+func TestBuildDigestSummary_TimeRange(t *testing.T) {
+	startTime := time.Date(2025, 6, 1, 8, 0, 0, 0, time.UTC)
+	endTime := time.Date(2025, 6, 2, 8, 0, 0, 0, time.UTC)
+
+	gen := &DigestGenerator{}
+	summary := gen.buildDigestSummary(nil, startTime, endTime)
+
+	if !summary.TimeRange.Start.Equal(startTime) {
+		t.Errorf("expected start %v, got %v", startTime, summary.TimeRange.Start)
+	}
+	if !summary.TimeRange.End.Equal(endTime) {
+		t.Errorf("expected end %v, got %v", endTime, summary.TimeRange.End)
+	}
+}
+
+func TestGenerateDigest_Success(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	setupTestAlertTables(t, database)
+	databaseWrapper := db.New(database)
+	alertStore := store.NewAlertStore(databaseWrapper)
+
+	// Create a test user
+	userID := createTestUser(t, database, "digestuser", "digestuser@test.com", "admin")
+
+	// Insert some alert history entries for the user
+	now := time.Now()
+	_, err := database.Exec(`
+		INSERT INTO alert_history (rule_id, alert_type, peer_id, severity, subject, message, metadata, status, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		1, AlertTypePeerOffline, "1", SeverityCritical, "Peer offline", "peer-01 is offline", "{}", "sent", now.Add(-2*time.Hour),
+	)
+	if err != nil {
+		t.Fatalf("failed to insert alert history: %v", err)
+	}
+
+	_, err = database.Exec(`
+		INSERT INTO alert_history (rule_id, alert_type, peer_id, severity, subject, message, metadata, status, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		2, AlertTypeBundleFailed, "2", SeverityWarning, "Bundle failed", "bundle build failed", "{}", "sent", now.Add(-5*time.Hour),
+	)
+	if err != nil {
+		t.Fatalf("failed to insert alert history: %v", err)
+	}
+
+	gen := NewDigestGenerator(alertStore, nil, nil)
+	gen.SetDatabase(databaseWrapper)
+
+	digest, err := gen.GenerateDigest(uint(userID))
+	if err != nil {
+		t.Fatalf("GenerateDigest failed: %v", err)
+	}
+
+	if digest.UserID != uint(userID) {
+		t.Errorf("expected user_id %d, got %d", userID, digest.UserID)
+	}
+	if digest.AlertCount != 2 {
+		t.Errorf("expected 2 alerts, got %d", digest.AlertCount)
+	}
+	if digest.DigestDate == "" {
+		t.Error("expected non-empty digest date")
+	}
+	if digest.Summary == "" {
+		t.Error("expected non-empty summary")
+	}
+	if digest.ID == 0 {
+		t.Error("expected non-zero digest ID after creation")
+	}
+}
+
+func TestGenerateDigest_NoAlerts(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	setupTestAlertTables(t, database)
+	databaseWrapper := db.New(database)
+	alertStore := store.NewAlertStore(databaseWrapper)
+
+	userID := createTestUser(t, database, "noalertuser", "noalert@test.com", "admin")
+
+	gen := NewDigestGenerator(alertStore, nil, nil)
+	gen.SetDatabase(databaseWrapper)
+
+	digest, err := gen.GenerateDigest(uint(userID))
+	if err != nil {
+		t.Fatalf("GenerateDigest failed: %v", err)
+	}
+
+	if digest.UserID != uint(userID) {
+		t.Errorf("expected user_id %d, got %d", userID, digest.UserID)
+	}
+	if digest.AlertCount != 0 {
+		t.Errorf("expected 0 alerts, got %d", digest.AlertCount)
+	}
+}
+
+func TestSendDigest_NilSMTP(t *testing.T) {
+	digest := &AlertDigest{
+		UserID:     1,
+		DigestDate: "2025-01-01",
+		AlertCount: 0,
+		Summary:    `{"total_alerts":0}`,
+	}
+
+	gen := &DigestGenerator{}
+	err := gen.SendDigest(digest, "user@test.com")
+	if err == nil {
+		t.Fatal("expected error for nil SMTP sender, got nil")
+	}
+	if err.Error() != "SMTP sender not configured" {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+func TestSendDigest_EmptyEmail(t *testing.T) {
+	digest := &AlertDigest{
+		UserID:     1,
+		DigestDate: "2025-01-01",
+		AlertCount: 0,
+		Summary:    `{"total_alerts":0}`,
+	}
+
+	// Use disabled SMTP so sendEmail fails immediately without network dial.
+	smtp := NewSMTPSender(&SMTPConfig{
+		Host:        "localhost",
+		Port:        25,
+		FromAddress: "test@test.com",
+		Enabled:     false,
+	}, nil, nil)
+
+	gen := &DigestGenerator{
+		smtp: smtp,
+	}
+
+	err := gen.SendDigest(digest, "")
+	if err == nil {
+		t.Fatal("expected error for empty email, got nil")
+	}
+}
+
+func TestSendDigest_InvalidSummary(t *testing.T) {
+	digest := &AlertDigest{
+		UserID:     1,
+		DigestDate: "2025-01-01",
+		AlertCount: 0,
+		Summary:    `{invalid json`,
+	}
+
+	// Use disabled SMTP so sendEmail fails immediately without network dial.
+	smtp := NewSMTPSender(&SMTPConfig{
+		Host:        "localhost",
+		Port:        25,
+		FromAddress: "test@test.com",
+		Enabled:     false,
+	}, nil, nil)
+
+	gen := &DigestGenerator{
+		smtp: smtp,
+	}
+
+	err := gen.SendDigest(digest, "user@test.com")
+	if err == nil {
+		t.Fatal("expected error for invalid summary JSON, got nil")
+	}
+}
+
+func TestSendDigest_NilDatabaseNoPanic(t *testing.T) {
+	digest := &AlertDigest{
+		UserID:     1,
+		DigestDate: "2025-01-01",
+		AlertCount: 0,
+		Summary:    `{"total_alerts":0}`,
+	}
+
+	// Use a disabled SMTP config so sendEmail fails immediately without network dial.
+	smtp := NewSMTPSender(&SMTPConfig{
+		Host:        "localhost",
+		Port:        25,
+		FromAddress: "test@test.com",
+		Enabled:     false,
+	}, nil, nil)
+
+	gen := &DigestGenerator{
+		smtp: smtp,
+		// database is nil - should not panic
+	}
+
+	// Should call GetInstanceURL with nil database without panicking.
+	err := gen.SendDigest(digest, "user@test.com")
+	// The error should be about SMTP not being enabled, not a nil pointer dereference
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	// Verify the error is NOT a nil pointer dereference
+	errStr := err.Error()
+	if errStr == "runtime error: invalid memory address or nil pointer dereference" {
+		t.Fatal("received nil pointer dereference - database nil guard is missing")
+	}
+	t.Logf("send digest error (expected with nil database): %v", err)
+}
+
+func TestGenerateDigest_WithDigestDate(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	setupTestAlertTables(t, database)
+	databaseWrapper := db.New(database)
+	alertStore := store.NewAlertStore(databaseWrapper)
+
+	userID := createTestUser(t, database, "dateuser", "dateuser@test.com", "admin")
+
+	gen := NewDigestGenerator(alertStore, nil, nil)
+	gen.SetDatabase(databaseWrapper)
+
+	digest, err := gen.GenerateDigest(uint(userID))
+	if err != nil {
+		t.Fatalf("GenerateDigest failed: %v", err)
+	}
+
+	expectedDate := time.Now().Format("2006-01-02")
+	if digest.DigestDate != expectedDate {
+		t.Errorf("expected digest_date %q, got %q", expectedDate, digest.DigestDate)
+	}
+}

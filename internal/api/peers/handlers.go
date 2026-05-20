@@ -41,8 +41,8 @@ func NewHandler(peerStore *store.PeerStore, beginner db.Beginner, compiler *engi
 	return &Handler{Store: peerStore, beginner: beginner, Compiler: compiler, SSEHub: sseHub, SettingsStore: settingsStore}
 }
 
-// must start and end with alphanumeric (single-char hostnames allowed).
-var hostnameRegex = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9.\-]*[a-zA-Z0-9])?$|^[a-zA-Z0-9]$`)
+// must start and end with alphanumeric; no consecutive dots allowed.
+var hostnameRegex = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?)*$`)
 
 var validOSTypes = []string{
 	"debian", "ubuntu", "rhel", "arch", "opensuse", "raspbian", "linux",
@@ -69,6 +69,8 @@ func (h *Handler) GetPeers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) CreatePeer(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB limit
+
 	var input struct {
 		Hostname  string `json:"hostname"`
 		IPAddress string `json:"ip_address"`
@@ -79,6 +81,11 @@ func (h *Handler) CreatePeer(w http.ResponseWriter, r *http.Request) {
 		IsManual  bool   `json:"is_manual"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			common.RespondError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return
+		}
 		common.RespondError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
@@ -136,6 +143,8 @@ func (h *Handler) UpdatePeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB limit
+
 	var input struct {
 		Hostname    string `json:"hostname"`
 		IPAddress   string `json:"ip_address"`
@@ -145,6 +154,11 @@ func (h *Handler) UpdatePeer(w http.ResponseWriter, r *http.Request) {
 		Description string `json:"description"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			common.RespondError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return
+		}
 		common.RespondError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
@@ -247,7 +261,7 @@ func (h *Handler) DeletePeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	common.RespondJSON(w, http.StatusOK, map[string]string{"message": "Peer deleted"})
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // GetPeerBundle returns the compiled bundle for a peer.
@@ -321,7 +335,7 @@ func (h *Handler) GetPeerByIP(w http.ResponseWriter, r *http.Request) {
 	peer, err := h.Store.GetPeerByIP(r.Context(), ip)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			common.RespondJSON(w, http.StatusOK, nil) // No peer found
+			common.RespondError(w, http.StatusNotFound, "peer not found")
 			return
 		}
 		common.InternalError(w)
@@ -346,7 +360,7 @@ func (h *Handler) GetPeerByHostname(w http.ResponseWriter, r *http.Request) {
 	peer, err := h.Store.GetPeerByHostname(r.Context(), hostname)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			common.RespondJSON(w, http.StatusOK, nil) // No peer found
+			common.RespondError(w, http.StatusNotFound, "peer not found")
 			return
 		}
 		common.InternalError(w)
@@ -387,10 +401,17 @@ func (h *Handler) AddPeerIP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB limit
+
 	var input struct {
 		IPAddress string `json:"ip_address"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			common.RespondError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return
+		}
 		common.RespondError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}

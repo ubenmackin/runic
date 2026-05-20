@@ -4,6 +4,7 @@ package settings
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -70,10 +71,17 @@ func (h *Handler) GetLogSettings(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) UpdateLogSettings(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB limit
+
 	var req struct {
 		RetentionDays int `json:"retention_days"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			common.RespondError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return
+		}
 		common.RespondError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
@@ -129,10 +137,17 @@ func (h *Handler) GetInstanceSettings(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) UpdateInstanceSettings(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB limit
+
 	var req struct {
 		URL string `json:"url"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			common.RespondError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return
+		}
 		common.RespondError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}

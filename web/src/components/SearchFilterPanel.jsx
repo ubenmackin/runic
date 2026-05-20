@@ -1,5 +1,7 @@
 import { useState } from 'react'
-import { Search, ChevronDown, ChevronUp, X } from 'lucide-react'
+import { Search, ChevronDown, ChevronUp } from 'lucide-react'
+import SearchInput from './SearchInput'
+import RowsPerPageSelect from './RowsPerPageSelect'
 
 /**
  * SearchFilterPanel - Collapsible panel for search and filter controls
@@ -48,39 +50,20 @@ export default function SearchFilterPanel({
   }
 
   const searchInput = showSearch && (
-    <div className="relative flex-1 max-w-md">
-      <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
-      <input
-        type="text"
-        placeholder={searchPlaceholder}
-        value={searchTerm}
-        onChange={(e) => onSearchChange(e.target.value)}
-        className="w-full pl-9 pr-10 py-2 border border-gray-300 dark:border-gray-border bg-white dark:bg-charcoal-dark text-gray-900 dark:text-light-neutral placeholder-gray-400 focus:ring-2 focus:ring-purple-active focus:border-purple-active rounded-none"
-      />
-      {searchTerm && (
-        <button
-          onClick={onClearSearch}
-          className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-light-neutral"
-          aria-label="Clear search"
-        >
-          <X className="w-4 h-4" />
-        </button>
-      )}
-    </div>
+    <SearchInput
+      value={searchTerm}
+      onChange={onSearchChange}
+      onClear={onClearSearch}
+      placeholder={searchPlaceholder}
+      ariaLabel="Search"
+    />
   )
 
   const rowsPerPageSelect = showRowsPerPageSelect && (
-    <select
+    <RowsPerPageSelect
       value={rowsPerPage}
-      onChange={(e) => onRowsPerPageChange(Number(e.target.value))}
-      className="text-xs text-gray-900 dark:text-light-neutral border border-gray-200 dark:border-gray-border bg-white dark:bg-charcoal-dark rounded-none px-2 py-1 focus:outline-none focus:ring-1 focus:ring-purple-active"
-    >
-      <option value={10}>Rows: 10</option>
-      <option value={25}>Rows: 25</option>
-      <option value={50}>Rows: 50</option>
-      <option value={100}>Rows: 100</option>
-      <option value={-1}>Rows: All</option>
-    </select>
+      onChange={onRowsPerPageChange}
+    />
   )
 
   return (

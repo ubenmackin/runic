@@ -11,6 +11,8 @@ export default function Toast({ toast, index = 0 }) {
 
   return (
     <div
+      role="alert"
+      aria-live="polite"
       className={`fixed right-4 z-50 flex items-center gap-2 px-4 py-3 rounded-none shadow-none text-white text-sm ${bgColor}`}
       style={{ bottom: `${bottomOffset}px` }}
     >

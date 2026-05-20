@@ -30,6 +30,10 @@ var (
 )
 
 func init() {
+	// NOTE: rateLimitStore is an in-memory map — all rate limit data is lost on
+	// process restart. This is intentional: lockout state is ephemeral and does
+	// not need to survive reboots. A restart also resets any accumulated failed
+	// attempt counters.
 	rateLimitStore = make(map[string]*rateLimitEntry)
 	stopCleanup = make(chan struct{})
 

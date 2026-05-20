@@ -5,6 +5,7 @@ import { api, QUERY_KEYS } from '../api/client'
 import { useDebounce } from '../hooks/useDebounce'
 import { useAuth } from '../hooks/useAuth'
 import { useToastContext } from '../hooks/ToastContext'
+import { useWebSocket } from '../hooks/useWebSocket'
 import EmptyState from '../components/EmptyState'
 import TableSkeleton from '../components/TableSkeleton'
 import LogLine from '../components/LogLine'
@@ -13,9 +14,6 @@ import SearchableSelect from '../components/SearchableSelect'
 import PageHeader from '../components/PageHeader'
 import Pagination from '../components/Pagination'
 import SearchFilterPanel from '../components/SearchFilterPanel'
-import { logger } from '../utils/logger'
-
-const MAX_RECONNECT_ATTEMPTS = 5
 
 export default function Logs() {
   const [mode, setMode] = useState('historical') // 'live' | 'historical'
@@ -33,19 +31,10 @@ export default function Logs() {
   const debouncedFilter = useDebounce(filter)
 
   const [liveLogs, setLiveLogs] = useState([])
-  const [isConnected, setIsConnected] = useState(false)
-  const [isReconnecting, setIsReconnecting] = useState(false)
-  const [reconnectAttemptDisplay, setReconnectAttemptDisplay] = useState(0)
   const [isPaused, setIsPaused] = useState(false)
-  const wsRef = useRef(null)
   const logsEndRef = useRef(null)
   const isPausedRef = useRef(false)
-  const reconnectAttempts = useRef(0)
-  const reconnectTimer = useRef(null)
   const MAX_LIVE_LOGS = 500 // Maximum logs to keep in live mode memory
-
-  // Ref to track current mode in callbacks (avoid stale closures)
-  const modeRef = useRef(mode)
 
   const queryClient = useQueryClient()
   const { canEdit } = useAuth()
@@ -59,11 +48,6 @@ export default function Logs() {
     setWizardLog(log)
     setWizardOpen(true)
   }
-
-  // Keep modeRef in sync with mode state
-  useEffect(() => {
-    modeRef.current = mode
-  }, [mode])
 
   const { data, isLoading, refetch } = useQuery({
     queryKey: QUERY_KEYS.logs(debouncedFilter),
@@ -79,97 +63,29 @@ export default function Logs() {
     queryFn: () => api.get('/peers'),
   })
 
-  useEffect(() => {
-    if (mode !== 'live') {
-      if (wsRef.current) {
-        wsRef.current.close()
-        wsRef.current = null
+  // WebSocket connection for live logs
+  const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  const wsUrl = `${wsProto}//${window.location.host}/api/v1/logs/stream`
+
+  const { connected: isConnected, retryCount } = useWebSocket({
+    url: wsUrl,
+    enabled: mode === 'live',
+    maxRetries: 5,
+    onMessage: (event) => {
+      if (isPausedRef.current) return
+      try {
+        const log = JSON.parse(event.data)
+        setLiveLogs(prev => {
+          const newLogs = [log, ...prev].slice(0, MAX_LIVE_LOGS)
+          return newLogs
+        })
+      } catch (e) {
+        console.error('Failed to parse log message:', e)
       }
-      if (reconnectTimer.current) {
-        clearTimeout(reconnectTimer.current)
-        reconnectTimer.current = null
-      }
-      reconnectAttempts.current = 0
-      return
-    }
+    },
+  })
 
-    // Reset reconnect attempts when entering live mode
-    reconnectAttempts.current = 0
-
-  const connect = () => {
-    if (wsRef.current) {
-      wsRef.current.close()
-      wsRef.current = null
-    }
-
-    const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const wsUrl = `${wsProto}//${window.location.host}/api/v1/logs/stream`
-
-    // Authentication is handled via HttpOnly cookies (runic_access_token)
-    // which are automatically sent with the WebSocket upgrade request.
-    // The server checks cookies first before falling back to Sec-WebSocket-Protocol header.
-    const ws = new WebSocket(wsUrl)
-
-      ws.onopen = () => {
-        setIsConnected(true)
-        reconnectAttempts.current = 0
-        setReconnectAttemptDisplay(0)
-        setIsReconnecting(false)
-        logger.log('WebSocket connected')
-      }
-
-      ws.onmessage = (event) => {
-        if (isPausedRef.current) return
-        try {
-          const log = JSON.parse(event.data)
-          setLiveLogs(prev => {
-            const newLogs = [log, ...prev].slice(0, MAX_LIVE_LOGS)
-            return newLogs
-          })
-        } catch (e) {
-          logger.error('Failed to parse log message:', e)
-        }
-      }
-
-      ws.onerror = (error) => {
-        logger.error('WebSocket error:', error)
-      }
-
-    ws.onclose = () => {
-      setIsConnected(false)
-      logger.log('WebSocket disconnected')
-
-      if (modeRef.current !== 'live') return
-      if (reconnectAttempts.current >= MAX_RECONNECT_ATTEMPTS) {
-        setIsReconnecting(false)
-        return
-      }
-      setIsReconnecting(true)
-      setReconnectAttemptDisplay(reconnectAttempts.current + 1)
-      const delay = Math.min(1000 * Math.pow(2, reconnectAttempts.current), 30000)
-      reconnectTimer.current = setTimeout(() => {
-        reconnectAttempts.current++
-        connect()
-      }, delay)
-    }
-
-    wsRef.current = ws
-    }
-
-    connect()
-
-    return () => {
-      if (wsRef.current) {
-        wsRef.current.close()
-        wsRef.current = null
-      }
-      if (reconnectTimer.current) {
-        clearTimeout(reconnectTimer.current)
-        reconnectTimer.current = null
-      }
-      setReconnectAttemptDisplay(0)
-    }
-  }, [mode])
+  const isReconnecting = mode === 'live' && !isConnected && retryCount > 0
 
   // Keep isPausedRef in sync with isPaused state
   useEffect(() => {
@@ -185,16 +101,6 @@ export default function Logs() {
   const clearLiveLogs = useCallback(() => {
     setLiveLogs([])
   }, [])
-
-  const _handlePrevPage = () => {
-    setFilter(f => ({ ...f, offset: Math.max(0, f.offset - f.limit) }))
-  }
-
-  const _handleNextPage = () => {
-    if (data && data.logs?.length === filter.limit) {
-      setFilter(f => ({ ...f, offset: f.offset + f.limit }))
-    }
-  }
 
   return (
     <div className="space-y-4">
@@ -347,7 +253,7 @@ isPaused
                 }`} />
           <span className="text-gray-600 dark:text-amber-muted">
             {isReconnecting
-              ? `Reconnecting... (attempt ${reconnectAttemptDisplay}/${MAX_RECONNECT_ATTEMPTS})`
+              ? `Reconnecting... (attempt ${retryCount}/5)`
               : isConnected
                 ? `Connected — ${liveLogs.length} logs`
                 : 'Disconnected'}

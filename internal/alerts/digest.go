@@ -137,7 +137,10 @@ func (g *DigestGenerator) SendDigest(digest *AlertDigest, userEmail string) erro
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	instanceURL := GetInstanceURL(ctx, g.database)
+	var instanceURL string
+	if g.database != nil {
+		instanceURL = GetInstanceURL(ctx, g.database)
+	}
 
 	htmlBody := g.generateDigestHTML(digest, &summary, instanceURL)
 
@@ -205,20 +208,38 @@ func (g *DigestGenerator) checkAndSendDigests() {
 		tz := LoadTimezoneOrDefaultWithLogger(user.DigestTimezone, g.logger, "user_id", user.UserID)
 
 		userNow := now.In(tz)
-		currentTime := userNow.Format("15:04")
 		currentDate := userNow.Format("2006-01-02")
+
+		// Parse the user's digest time and compare using time.Time with a 1-minute tolerance.
+		// This avoids the fragility of string comparison and handles edge cases like DST
+		// transitions where the same clock time may repeat or be skipped.
+		digestParsed, err := time.ParseInLocation("15:04", user.DigestTime, tz)
+		if err != nil {
+			g.logger.Warn("invalid digest time format, skipping",
+				"user_id", user.UserID,
+				"digest_time", user.DigestTime,
+				"error", err,
+			)
+			continue
+		}
+
+		// Build a full time.Time for the digest target on the user's current date.
+		digestTarget := time.Date(userNow.Year(), userNow.Month(), userNow.Day(),
+			digestParsed.Hour(), digestParsed.Minute(), 0, 0, tz)
+
+		// Allow a ±1 minute tolerance for the time comparison.
+		diff := userNow.Sub(digestTarget)
+		if diff < -1*time.Minute || diff > 1*time.Minute {
+			continue
+		}
 
 		g.logger.Debug("checking for digest sends",
 			"user_id", user.UserID,
 			"user_timezone", tz.String(),
-			"user_current_time", currentTime,
+			"user_current_time", userNow.Format("15:04"),
 			"user_current_date", currentDate,
 			"user_digest_time", user.DigestTime,
 		)
-
-		if user.DigestTime != currentTime {
-			continue
-		}
 
 		sent, err := g.hasDigestBeenSentToday(ctx, user.UserID, currentDate)
 		if err != nil {

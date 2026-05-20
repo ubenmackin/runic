@@ -9,13 +9,10 @@ import (
 	"flag"
 	"fmt"
 	"io/fs"
-	"log"
 	"net/http"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -24,6 +21,8 @@ import (
 	"runic/internal/api"
 	"runic/internal/auth"
 	"runic/internal/common/constants"
+	runiclog "runic/internal/common/log"
+	"runic/internal/common/signal"
 	"runic/internal/common/version"
 	"runic/internal/crypto"
 	"runic/internal/db"
@@ -72,65 +71,55 @@ func validateCertificate(certFile, keyFile string) error {
 		return fmt.Errorf("failed to parse certificate: %w", err)
 	}
 
-	log.Printf("Certificate validated successfully (Subject: %s, Expires: %s)", cert.Subject.CommonName, cert.NotAfter.Format(time.RFC3339))
+	runiclog.Info("Certificate validated successfully",
+		"subject", cert.Subject.CommonName,
+		"expires", cert.NotAfter.Format(time.RFC3339))
 
 	return nil
 }
 
-// setCacheHeaders sets appropriate Cache-Control headers based on file type.
-// - HTML files: no-cache (must revalidate to get latest version)
-// - Assets with content hashes (*.js, *.css in assets/): 1 year cache (immutable)
-// - Other static files: 1 hour cache
-func setCacheHeaders(w http.ResponseWriter, path string) {
-	ext := filepath.Ext(path)
-	fileName := filepath.Base(path)
-
-	// HTML files should never be cached (always fetch latest)
-	if ext == ".html" {
-		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
-		w.Header().Set("Pragma", "no-cache")
-		w.Header().Set("Expires", "0")
-		return
-	}
-
-	// Assets with content hashes (Vite generates files like index-Abc123.js)
-	// These are immutable - the hash changes when content changes
-	if strings.HasPrefix(path, "assets/") && (ext == ".js" || ext == ".css") {
-		// Check if filename contains a hash pattern (hyphen followed by alphanumeric)
-		// Vite pattern: name-hash.ext
-		if strings.Contains(fileName, "-") {
-			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-			return
-		}
-	}
-
-	w.Header().Set("Cache-Control", "public, max-age=3600")
-}
-
 func main() {
 	versionFlag := flag.Bool("version", false, "Print version and exit")
+	certFlag := flag.String("cert", "", "TLS certificate file path")
+	keyFlag := flag.String("key", "", "TLS private key file path")
 	flag.Parse()
 
 	if *versionFlag {
-		fmt.Printf("runic-server version %s\n", version.Version)
-		os.Exit(0)
+		version.PrintVersion("runic-server", version.Version)
 	}
 
-	certFile := os.Getenv("RUNIC_CERT_FILE")
-	keyFile := os.Getenv("RUNIC_KEY_FILE")
+	logLevel := os.Getenv("LOG_LEVEL")
+	if logLevel == "" {
+		logLevel = "info"
+	}
+	runiclog.Init(logLevel, os.Stderr)
+
+	// CLI flags take precedence, then env vars
+	certFile := *certFlag
+	if certFile == "" {
+		certFile = os.Getenv("RUNIC_CERT_FILE")
+	}
+	keyFile := *keyFlag
+	if keyFile == "" {
+		keyFile = os.Getenv("RUNIC_KEY_FILE")
+	}
 
 	if certFile == "" || keyFile == "" {
-		log.Fatal("RUNIC_CERT_FILE and RUNIC_KEY_FILE must be set for HTTPS mode")
+		runiclog.Fatal("TLS certificate and key are required. Use -cert/-key flags or RUNIC_CERT_FILE/RUNIC_KEY_FILE env vars")
 	}
 
-	log.Printf("Validating TLS certificates (CERT: %s, KEY: %s)", certFile, keyFile)
+	runiclog.Info("Validating TLS certificates")
 	if err := validateCertificate(certFile, keyFile); err != nil {
-		log.Fatalf("Certificate validation failed: %v", err)
+		runiclog.Fatal("Certificate validation failed", "error", err)
 	}
 
 	port := os.Getenv("RUNIC_PORT")
 	if port == "" {
 		port = "60443"
+	}
+	portNum := 0
+	if _, err := fmt.Sscanf(port, "%d", &portNum); err != nil || portNum < 1 || portNum > 65535 {
+		runiclog.Fatal("Invalid port number", "port", port)
 	}
 	addr := ":" + port
 
@@ -140,7 +129,7 @@ func main() {
 	}
 	database, err := db.InitDB(dbPath)
 	if err != nil {
-		log.Fatalf("Failed to initialize database: %v", err)
+		runiclog.Fatal("Failed to initialize database", "error", err)
 	}
 
 	logsDBPath := os.Getenv("RUNIC_LOGS_DB_PATH")
@@ -148,21 +137,21 @@ func main() {
 		dbDir := filepath.Dir(dbPath)
 		logsDBPath = filepath.Join(dbDir, "logs.db")
 	}
-	log.Printf("Logs database path: %s", logsDBPath)
+	runiclog.Info("Using logs database path", "path", logsDBPath)
 
 	// Initialize logs database early (needed by alert service and spike detector)
 	logsDB, err := db.InitLogsDB(logsDBPath)
 	if err != nil {
-		log.Fatalf("Failed to initialize logs database: %v", err)
+		runiclog.Fatal("Failed to initialize logs database", "error", err)
 	}
-	log.Printf("Logs database initialized at %s", logsDBPath)
+	runiclog.Info("Logs database initialized", "path", logsDBPath)
 
 	// Ensure control_plane_port is set in system_config for rule generation
 	settingsStore := store.NewSettingsStore(database, nil)
-	if err := settingsStore.SetSystemConfig(context.Background(), "control_plane_port", port); err != nil {
-		log.Fatalf("Failed to set control_plane_port in system_config: %v", err)
+	if err := settingsStore.SetSystemConfig(context.TODO(), "control_plane_port", port); err != nil {
+		runiclog.Fatal("Failed to set control_plane_port in system_config", "error", err)
 	}
-	log.Printf("Control plane port set to %s in system_config", port)
+	runiclog.Debug("control_plane_port set in system_config", "port", port)
 
 	downloadsDir := os.Getenv("RUNIC_DOWNLOADS_DIR")
 	if downloadsDir == "" {
@@ -183,22 +172,33 @@ func main() {
 	var encryptor *crypto.Encryptor
 	// Use a function literal to create a narrow scope for the sensitive key
 	func() {
-		var encryptionKey string
-		err := database.QueryRowContext(context.Background(),
-			"SELECT value FROM system_config WHERE key = 'encryption_key'").Scan(&encryptionKey)
+		encryptionKey, err := settingsStore.GetSystemConfig(context.TODO(), "encryption_key")
 		if err == nil && encryptionKey != "" {
 			enc, err := crypto.NewEncryptor(encryptionKey)
 			if err == nil {
 				encryptor = enc
-				log.Printf("Encryptor initialized for sensitive data encryption")
+				runiclog.Info("Encryptor initialized for sensitive data encryption")
 			} else {
-				log.Printf("Warning: failed to create encryptor: %v", err)
+				runiclog.Warn("Failed to create encryptor", "error", err)
 			}
 		} else {
-			log.Printf("Warning: encryption_key not found in database, SMTP password encryption disabled")
+			runiclog.Warn("Encryption key not found, SMTP password encryption disabled")
 		}
 		// encryptionKey goes out of scope here - no need to manually clear
 	}()
+
+	// Strip the "web/dist" prefix so http.FS can find files in the embedded FS.
+	// Validated early (before ctx creation) so a fatal exit doesn't skip deferred cleanup.
+	subFS, err := fs.Sub(api.WebDist, "web/dist")
+	if err != nil {
+		runiclog.Fatal("Failed to create sub filesystem", "error", err)
+	}
+	fileServer := http.FileServer(http.FS(subFS))
+
+	// Create a lifecycle context for background tasks. Placed after all fatal-exit
+	// checks so that os.Exit via runiclog.Fatal never skips defer cancel().
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	// Wrap *sql.DB in *db.Database for the alert service
 	runicDB := db.New(database)
@@ -210,10 +210,10 @@ func main() {
 	var peerMonitor *alerts.PeerMonitor
 	var spikeDetector *alerts.SpikeDetector
 	if err := alertService.Initialize(); err != nil {
-		log.Printf("Warning: failed to initialize alert service: %v", err)
+		runiclog.Warn("Failed to initialize alert service", "error", err)
 	} else {
 		if err := alertService.Start(); err != nil {
-			log.Printf("Warning: failed to start alert service: %v", err)
+			runiclog.Warn("Failed to start alert service", "error", err)
 		} else {
 			peerMonitor = alerts.NewPeerMonitor(database, alertService)
 			peerMonitor.Start()
@@ -233,17 +233,9 @@ func main() {
 	apiInstance.RegisterRoutes(r, downloadsDir)
 
 	// Start background lifecycle goroutines (workers, log hub, cleanup)
-	ctx, cancel := context.WithCancel(context.Background())
 	apiInstance.Start(ctx)
 
-	// Strip the "web/dist" prefix so http.FS can find files in the embedded FS
-	subFS, err := fs.Sub(api.WebDist, "web/dist")
-	if err != nil {
-		cancel()
-		log.Fatalf("Failed to create sub filesystem: %v", err)
-	}
-	defer cancel()
-	fileServer := http.FileServer(http.FS(subFS))
+	srv := &http.Server{}
 
 	// For any route not matched above, serve the SPA with CSP nonce injection
 	// If the file exists, serve it; otherwise serve index.html (for client-side routing)
@@ -270,7 +262,7 @@ func main() {
 					fileServer.ServeHTTP(w, req)
 				}
 			} else {
-				setCacheHeaders(w, path)
+				api.SetCacheHeaders(w, path)
 				fileServer.ServeHTTP(w, req)
 			}
 		} else {
@@ -290,13 +282,7 @@ func main() {
 		}
 	})))
 
-	go startOfflineDetector(ctx, database)
-
-	// Start token revocation cleanup goroutine (prunes expired entries hourly)
-	tokenStore := store.NewTokenStore(database)
-	go startTokenCleanup(ctx, tokenStore)
-
-	// Configure TLS with modern cipher suites and minimum version TLS 1.2
+	// Configure TLS with modern cipher suites and minimum version TLS 1.2, P-256 and X25519 curves
 	tlsConfig := &tls.Config{
 		MinVersion: tls.VersionTLS12,
 		CipherSuites: []uint16{
@@ -310,34 +296,59 @@ func main() {
 			tls.TLS_CHACHA20_POLY1305_SHA256, // TLS 1.3
 			tls.TLS_AES_128_GCM_SHA256,       // TLS 1.3
 		},
+		CurvePreferences: []tls.CurveID{
+			tls.CurveP256,
+			tls.X25519,
+		},
 	}
 
-	srv := &http.Server{
-		Addr:      addr,
-		Handler:   r,
-		TLSConfig: tlsConfig,
-	}
+	srv.Addr = addr
+	srv.Handler = r
+	srv.TLSConfig = tlsConfig
 
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	// Signal channel with buffer 2 to prevent lost signals during shutdown
+	sigCh := signal.ShutdownSignal()
 
-	log.Printf("Starting Runic HTTPS server on %s (CERT: %s, KEY: %s)", addr, certFile, keyFile)
+	// Channel to receive fatal server errors from the listener goroutine
+	srvErrCh := make(chan error, 1)
+
+	runiclog.Info("Starting Runic HTTPS server", "addr", addr)
 	go func() {
 		if err := srv.ListenAndServeTLS(certFile, keyFile); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Server failed: %v", err)
+			srvErrCh <- err
 		}
 	}()
 
-	<-sigCh
-	log.Println("Received shutdown signal...")
+	// Start background goroutines AFTER the server has started listening
+	go startOfflineDetector(ctx, database)
+	tokenStore := store.NewTokenStore(database)
+	go startTokenCleanup(ctx, tokenStore)
 
-	cancel()
+	// Wait for shutdown signal OR server failure
+	select {
+	case <-sigCh:
+		runiclog.Info("Received shutdown signal...")
+	case err := <-srvErrCh:
+		runiclog.Error("Server failed to start", "error", err)
+	}
 
+	// Reset signal handling to prevent double-kill during shutdown
+	signal.ResetSignalHandling()
+
+	cancel() // Signal all context-dependent goroutines to stop
+
+	gracefulShutdown(srv, apiInstance, peerMonitor, spikeDetector, alertService, database, logsDB)
+	runiclog.Info("Server shut down gracefully")
+}
+
+// gracefulShutdown runs the full shutdown sequence during normal server
+// shutdown (signal or listener failure).
+func gracefulShutdown(srv *http.Server, apiInstance *api.API, peerMonitor *alerts.PeerMonitor, spikeDetector *alerts.SpikeDetector, alertService *alerts.Service, database *sql.DB, logsDB *sql.DB) {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer shutdownCancel()
 
 	if err := srv.Shutdown(shutdownCtx); err != nil {
-		log.Printf("HTTP server shutdown error: %v", err)
+		runiclog.Warn("HTTP server shutdown error", "error", err)
 	}
 
 	apiInstance.Stop()
@@ -350,22 +361,20 @@ func main() {
 	}
 	if alertService != nil {
 		if err := alertService.Stop(); err != nil {
-			log.Printf("Alert service shutdown error: %v", err)
+			runiclog.Warn("Alert service shutdown error", "error", err)
 		}
 	}
 
 	if database != nil {
 		if err := database.Close(); err != nil {
-			log.Printf("Database close error: %v", err)
+			runiclog.Warn("Database close error", "error", err)
 		}
 	}
 	if logsDB != nil {
 		if err := logsDB.Close(); err != nil {
-			log.Printf("Logs database close error: %v", err)
+			runiclog.Warn("Logs database close error", "error", err)
 		}
 	}
-
-	log.Println("Server shut down gracefully")
 }
 
 func startOfflineDetector(ctx context.Context, database *sql.DB) {
@@ -375,7 +384,7 @@ func startOfflineDetector(ctx context.Context, database *sql.DB) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Println("Offline detector shutting down")
+			runiclog.Debug("Offline detector shutting down")
 			return
 		case <-ticker.C:
 			_, err := database.ExecContext(ctx,
@@ -384,7 +393,7 @@ func startOfflineDetector(ctx context.Context, database *sql.DB) {
 				AND last_heartbeat < datetime('now', '-%d seconds')`, int(constants.OfflineThreshold.Seconds())),
 			)
 			if err != nil {
-				log.Printf("Offline detector error: %v", err)
+				runiclog.Warn("Offline detector error", "error", err)
 			}
 		}
 	}
@@ -397,11 +406,11 @@ func startTokenCleanup(ctx context.Context, ts *store.TokenStore) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Println("Token cleanup shutting down")
+			runiclog.Debug("Token cleanup shutting down")
 			return
 		case <-ticker.C:
 			if err := ts.CleanupExpiredTokens(ctx); err != nil {
-				log.Printf("Token cleanup error: %v", err)
+				runiclog.Warn("Token cleanup error", "error", err)
 			}
 		}
 	}

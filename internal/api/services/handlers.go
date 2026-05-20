@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -102,6 +103,8 @@ func (h *Handler) ListServices(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) CreateService(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB limit
+
 	var input struct {
 		Name          string `json:"name"`
 		Ports         string `json:"ports"`
@@ -111,6 +114,11 @@ func (h *Handler) CreateService(w http.ResponseWriter, r *http.Request) {
 		DirectionHint string `json:"direction_hint"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			common.RespondError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return
+		}
 		common.RespondError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
@@ -144,9 +152,9 @@ func (h *Handler) CreateService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.Store.SnapshotService(r.Context(), int(id), "create"); err != nil {
-		log.ErrorContext(r.Context(), "failed to create snapshot", "error", err)
-	}
+	common.SnapshotOrLog(r.Context(), "service", int(id), "create", func() error {
+		return h.Store.SnapshotService(r.Context(), int(id), "create")
+	})
 	h.queueServiceChange(r.Context(), int(id), "create", fmt.Sprintf("Service '%s' created", input.Name))
 
 	common.RespondJSON(w, http.StatusCreated, map[string]int64{"id": id})
@@ -186,6 +194,8 @@ func (h *Handler) UpdateService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB limit
+
 	var input struct {
 		Name          string `json:"name"`
 		Ports         string `json:"ports"`
@@ -195,6 +205,11 @@ func (h *Handler) UpdateService(w http.ResponseWriter, r *http.Request) {
 		DirectionHint string `json:"direction_hint"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			common.RespondError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return
+		}
 		common.RespondError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
@@ -216,9 +231,9 @@ func (h *Handler) UpdateService(w http.ResponseWriter, r *http.Request) {
 	}
 
 	err = store.RunInTx(r.Context(), h.beginner, func(tx *sql.Tx) error {
-		if err := h.Store.SnapshotServiceTx(r.Context(), tx, id, "update"); err != nil {
-			return fmt.Errorf("snapshot: %w", err)
-		}
+		common.SnapshotOrLog(r.Context(), "service", id, "update", func() error {
+			return h.Store.SnapshotServiceTx(r.Context(), tx, id, "update")
+		})
 		if err := h.Store.UpdateServiceTx(r.Context(), tx, id, input.Name, input.Ports, input.SourcePorts, input.Protocol, input.Description, parseDirectionHint(input.DirectionHint)); err != nil {
 			return fmt.Errorf("update: %w", err)
 		}
@@ -264,9 +279,9 @@ func (h *Handler) DeleteService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.Store.SnapshotService(r.Context(), id, "delete"); err != nil {
-		log.ErrorContext(r.Context(), "failed to create snapshot", "error", err)
-	}
+	common.SnapshotOrLog(r.Context(), "service", id, "delete", func() error {
+		return h.Store.SnapshotService(r.Context(), id, "delete")
+	})
 
 	if err := h.Store.SoftDeleteService(r.Context(), id); err != nil {
 		log.ErrorContext(r.Context(), "failed to delete service", "error", err)
@@ -286,7 +301,7 @@ func (h *Handler) queueServiceChange(ctx context.Context, serviceID int, action,
 		return
 	}
 
-	peerSet := make(map[int]bool)
+	var allPeers [][]int
 	if h.Compiler != nil {
 		for _, policyID := range policyIDs {
 			affectedPeers, err := h.Compiler.GetAffectedPeersByPolicy(ctx, policyID)
@@ -294,17 +309,11 @@ func (h *Handler) queueServiceChange(ctx context.Context, serviceID int, action,
 				log.ErrorContext(ctx, "Failed to get affected peers for service change", "policy_id", policyID, "error", err)
 				continue
 			}
-			for _, peerID := range affectedPeers {
-				peerSet[peerID] = true
-			}
+			allPeers = append(allPeers, affectedPeers)
 		}
 	}
 
-	peerIDs := make([]int, 0, len(peerSet))
-	for peerID := range peerSet {
-		peerIDs = append(peerIDs, peerID)
-	}
-
+	peerIDs := common.MergePeerIDs(allPeers...)
 	if len(peerIDs) > 0 {
 		h.Store.QueuePeerChange(ctx, h.ChangeWorker, peerIDs, "service", action, serviceID, summary)
 	}

@@ -118,8 +118,7 @@ describe('ConfirmModal', () => {
         />
       )
 
-      // The X button doesn't have accessible name, so we find it by its container
-      const closeButton = screen.getByRole('button', { name: '' })
+      const closeButton = screen.getByRole('button', { name: /close modal/i })
       await user.click(closeButton)
 
       expect(handleCancel).toHaveBeenCalledTimes(1)
@@ -243,12 +242,11 @@ describe('ConfirmModal', () => {
         />
       )
 
-      // Pressing Escape without an onKeyDown handler won't trigger onCancel
+      // Pressing Escape triggers onCancel via the built-in Escape key handler
       await user.keyboard('{Escape}')
 
-      // The modal doesn't have built-in escape key handling
-      // This is expected behavior - the parent component controls visibility
-      expect(handleCancel).not.toHaveBeenCalled()
+      // The modal now has built-in escape key handling
+      expect(handleCancel).toHaveBeenCalledTimes(1)
     })
 
     test('Enter key on focused Confirm button triggers onConfirm', async () => {

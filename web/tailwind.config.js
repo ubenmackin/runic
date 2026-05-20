@@ -23,7 +23,21 @@ export default {
       'light-neutral': '#fafafa',
       'gold-highlight': 'rgb(219, 189, 126)',
             'gray-border': 'rgb(35, 35, 35)',
-            }
+            },
+      keyframes: {
+        importWizardFadeIn: {
+          from: { opacity: '0' },
+          to: { opacity: '1' },
+        },
+        importWizardSlideUp: {
+          from: { opacity: '0', transform: 'translateY(20px)' },
+          to: { opacity: '1', transform: 'translateY(0)' },
+        },
+      },
+      animation: {
+        'import-wizard-fade-in': 'importWizardFadeIn 0.2s ease-out',
+        'import-wizard-slide-up': 'importWizardSlideUp 0.3s ease-out',
+      },
         }
     }
 };

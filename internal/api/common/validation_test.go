@@ -124,12 +124,8 @@ func runTypeValidationTests(t *testing.T, fn func(string) bool, funcName string)
 	}
 }
 
-func TestIsValidSourceType(t *testing.T) {
-	runTypeValidationTests(t, IsValidSourceType, "IsValidSourceType")
-}
-
-func TestIsValidTargetType(t *testing.T) {
-	runTypeValidationTests(t, IsValidTargetType, "IsValidTargetType")
+func TestIsValidEntityType(t *testing.T) {
+	runTypeValidationTests(t, IsValidEntityType, "IsValidEntityType")
 }
 
 func TestIsValidDirection(t *testing.T) {

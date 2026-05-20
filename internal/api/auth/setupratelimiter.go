@@ -7,29 +7,44 @@ import (
 )
 
 const (
-	setupMaxRequests     = 10          // Max 10 requests per window
-	setupRateLimitWindow = time.Minute // 1 minute window
+	// Setup endpoints have different rate limits for GET (read-only, no side effects)
+	// vs POST (creates admin user, writes to database).
+	setupGetMaxRequests      = 20               // Max 20 GET requests per window
+	setupGetRateLimitWindow  = time.Minute      // 1 minute window
+	setupPostMaxRequests     = 5                // Max 5 POST requests per window
+	setupPostRateLimitWindow = 10 * time.Minute // 10 minute window
 )
 
 var (
-	// setupRateLimiter is the shared rate limiter for setup endpoints.
-	// Using the unified middleware package with periodic cleanup.
-	setupRateLimiter = middleware.NewRateLimiter(setupMaxRequests, setupRateLimitWindow)
+	// setupGetRateLimiter is the rate limiter for setup GET (read-only check).
+	setupGetRateLimiter = middleware.NewRateLimiter(setupGetMaxRequests, setupGetRateLimitWindow)
+
+	// setupPostRateLimiter is the rate limiter for setup POST (user creation).
+	// Stricter than GET since this operation has side effects.
+	setupPostRateLimiter = middleware.NewRateLimiter(setupPostMaxRequests, setupPostRateLimitWindow)
 )
 
-// CheckSetupRateLimit checks the setup rate limit. Returns nil if allowed, error if rate limited.
-// This function maintains backward compatibility with existing code.
-func CheckSetupRateLimit(remoteAddr string) error {
-	return setupRateLimiter.Check(remoteAddr)
+// CheckSetupGetRateLimit checks the rate limit for setup GET requests.
+// Returns nil if allowed, error if rate limited.
+func CheckSetupGetRateLimit(remoteAddr string) error {
+	return setupGetRateLimiter.Check(remoteAddr)
 }
 
-// StopSetupRateLimit stops the setup rate limiter's background cleanup goroutine.
+// CheckSetupPostRateLimit checks the rate limit for setup POST requests.
+// Returns nil if allowed, error if rate limited.
+func CheckSetupPostRateLimit(remoteAddr string) error {
+	return setupPostRateLimiter.Check(remoteAddr)
+}
+
+// StopSetupRateLimit stops the setup rate limiters' background cleanup goroutines.
 // Call during graceful shutdown to prevent goroutine leaks.
 func StopSetupRateLimit() {
-	setupRateLimiter.Stop()
+	setupGetRateLimiter.Stop()
+	setupPostRateLimiter.Stop()
 }
 
-// ResetSetupRateLimit resets the setup rate limiter. This is intended for testing to ensure test isolation.
+// ResetSetupRateLimit resets the setup rate limiters. This is intended for testing to ensure test isolation.
 func ResetSetupRateLimit() {
-	setupRateLimiter.Reset()
+	setupGetRateLimiter.Reset()
+	setupPostRateLimiter.Reset()
 }

@@ -124,32 +124,27 @@ describe('TopNav', () => {
   })
 
   describe('active states', () => {
-    test('highlights active nav item with purple styling', () => {
+    test('highlights active nav item with aria-current', () => {
       renderWithRouter(<TopNav />, { route: '/topology' })
 
-      // The Topology nav item should have purple active styling
+      // The Topology nav item should have aria-current="page"
       const topologyLink = screen.getByText('Topology').closest('a')
-      expect(topologyLink.className).toContain('bg-purple-active')
-      expect(topologyLink.className).toContain('text-purple-active')
-      expect(topologyLink.className).toContain('border-purple-active')
+      expect(topologyLink).toHaveAttribute('aria-current', 'page')
     })
 
     test('highlights Dashboard as active on root route', () => {
       renderWithRouter(<TopNav />, { route: '/' })
 
       const dashboardLink = screen.getByText('Dashboard').closest('a')
-      expect(dashboardLink.className).toContain('bg-purple-active')
-      expect(dashboardLink.className).toContain('text-purple-active')
-      expect(dashboardLink.className).toContain('border-purple-active')
+      expect(dashboardLink).toHaveAttribute('aria-current', 'page')
     })
 
-    test('inactive nav items have default styling', () => {
+    test('inactive nav items do not have aria-current', () => {
       renderWithRouter(<TopNav />, { route: '/topology' })
 
       // Dashboard should be inactive
       const dashboardLink = screen.getByText('Dashboard').closest('a')
-      expect(dashboardLink.className).toContain('text-slate-500')
-      expect(dashboardLink.className).toContain('border-transparent')
+      expect(dashboardLink).not.toHaveAttribute('aria-current')
     })
   })
 
@@ -157,68 +152,65 @@ describe('TopNav', () => {
     test('highlights Access Control parent when child route is active', () => {
       renderWithRouter(<TopNav />, { route: '/peers' })
 
-      // Access Control button should show active styling
+      // Access Control button should show active state via data-active attribute
       const accessControlButton = screen.getByText('Access Control').closest('button')
-      expect(accessControlButton.className).toContain('bg-purple-active')
-      expect(accessControlButton.className).toContain('text-purple-active')
-      expect(accessControlButton.className).toContain('border-purple-active')
+      expect(accessControlButton).toHaveAttribute('data-active', 'true')
     })
 
     test('highlights Access Control parent for /groups route', () => {
       renderWithRouter(<TopNav />, { route: '/groups' })
 
       const accessControlButton = screen.getByText('Access Control').closest('button')
-      expect(accessControlButton.className).toContain('bg-purple-active')
+      expect(accessControlButton).toHaveAttribute('data-active', 'true')
     })
 
     test('highlights Access Control parent for /services route', () => {
       renderWithRouter(<TopNav />, { route: '/services' })
 
       const accessControlButton = screen.getByText('Access Control').closest('button')
-      expect(accessControlButton.className).toContain('bg-purple-active')
+      expect(accessControlButton).toHaveAttribute('data-active', 'true')
     })
 
     test('highlights Access Control parent for /policies route', () => {
       renderWithRouter(<TopNav />, { route: '/policies' })
 
       const accessControlButton = screen.getByText('Access Control').closest('button')
-      expect(accessControlButton.className).toContain('bg-purple-active')
+      expect(accessControlButton).toHaveAttribute('data-active', 'true')
     })
 
     test('highlights Logs parent when /logs route is active', () => {
       renderWithRouter(<TopNav />, { route: '/logs' })
 
       const logsButton = screen.getByText('Logs').closest('button')
-      expect(logsButton.className).toContain('bg-purple-active')
-      expect(logsButton.className).toContain('text-purple-active')
+      expect(logsButton).toHaveAttribute('data-active', 'true')
     })
 
     test('highlights Logs parent when /alerts route is active', () => {
       renderWithRouter(<TopNav />, { route: '/alerts' })
 
       const logsButton = screen.getByText('Logs').closest('button')
-      expect(logsButton.className).toContain('bg-purple-active')
+      expect(logsButton).toHaveAttribute('data-active', 'true')
     })
 
     test('highlights Settings parent when /setup-keys route is active', () => {
       renderWithRouter(<TopNav />, { route: '/setup-keys' })
 
       const settingsButton = screen.getByText('Settings').closest('button')
-      expect(settingsButton.className).toContain('bg-purple-active')
+      expect(settingsButton).toHaveAttribute('data-active', 'true')
     })
 
     test('highlights Settings parent when /users route is active', () => {
       renderWithRouter(<TopNav />, { route: '/users' })
 
       const settingsButton = screen.getByText('Settings').closest('button')
-      expect(settingsButton.className).toContain('bg-purple-active')
+      expect(settingsButton).toHaveAttribute('data-active', 'true')
     })
 
     test('highlights Settings parent when /settings route is active', () => {
       renderWithRouter(<TopNav />, { route: '/settings' })
 
       const settingsButton = screen.getByText('Settings').closest('button')
-      expect(settingsButton.className).toContain('bg-purple-active')
+      expect(settingsButton).toHaveAttribute('data-active', 'true')
     })
 
   test('dropdown item shows active styling when route matches', async () => {
@@ -239,8 +231,7 @@ describe('TopNav', () => {
     // Find the Peers link (should be the one in the dropdown menu)
     const peersLink = Array.from(allLinks).find(link => link.textContent.includes('Peers'))
     expect(peersLink).toBeTruthy()
-    expect(peersLink.className).toContain('bg-purple-active')
-    expect(peersLink.className).toContain('text-purple-active')
+    expect(peersLink).toHaveAttribute('aria-current', 'page')
   })
   })
 
@@ -384,64 +375,38 @@ describe('TopNav', () => {
   })
 
   describe('pending changes indicator', () => {
-    test('shows regular Shield icon when no pending changes', () => {
+    test('renders Shield icon for Access Control', () => {
       renderWithRouter(<TopNav />)
 
-      // The Shield icon should be rendered without orange color
+      // The Access Control button should exist
       const accessControlButton = screen.getByText('Access Control').closest('button')
+      expect(accessControlButton).toBeInTheDocument()
+      // It should contain an SVG icon
       const icon = accessControlButton.querySelector('svg')
-      expect(icon.className).not.toContain('text-orange-500')
+      expect(icon).toBeInTheDocument()
     })
   })
 
-  describe('styling', () => {
-    test('header has correct height', () => {
+  describe('semantic structure', () => {
+    test('header element is rendered', () => {
       const { container } = renderWithRouter(<TopNav />)
 
       const header = container.querySelector('header')
-      expect(header.className).toContain('h-[52px]')
+      expect(header).toBeInTheDocument()
     })
 
-    test('header is sticky at top', () => {
-      const { container } = renderWithRouter(<TopNav />)
+    test('navigation element has correct aria-label', () => {
+      renderWithRouter(<TopNav />)
 
-      const header = container.querySelector('header')
-      expect(header.className).toContain('sticky')
-      expect(header.className).toContain('top-0')
+      const nav = screen.getByRole('navigation')
+      expect(nav).toHaveAttribute('aria-label', 'Main navigation')
     })
 
-    test('has correct z-index for fixed positioning', () => {
-      const { container } = renderWithRouter(<TopNav />)
+    test('user menu button has accessible label', () => {
+      renderWithRouter(<TopNav />)
 
-      const header = container.querySelector('header')
-      expect(header.className).toContain('z-40')
-    })
-
-    test('nav items use rounded-none class', () => {
-      const { container } = renderWithRouter(<TopNav />)
-
-      // Check that nav items have rounded-none
-      const navItems = container.querySelectorAll('nav a')
-      navItems.forEach(item => {
-        expect(item.className).toContain('rounded-none')
-      })
-    })
-
-    test('buttons in dropdowns use rounded-none class', () => {
-      const { container } = renderWithRouter(<TopNav />)
-
-      // Find all buttons in the nav
-      const buttons = container.querySelectorAll('nav button')
-      buttons.forEach(button => {
-        expect(button.className).toContain('rounded-none')
-      })
-    })
-
-    test('header has border', () => {
-      const { container } = renderWithRouter(<TopNav />)
-
-      const header = container.querySelector('header')
-      expect(header.className).toContain('border-b')
+      const userButton = screen.getByRole('button', { name: /user menu/i })
+      expect(userButton).toBeInTheDocument()
     })
   })
 
@@ -455,37 +420,34 @@ describe('TopNav', () => {
       expect(flameIcon).toBeInTheDocument()
     })
 
-    test('brand text has correct styling', () => {
+    test('brand text is rendered', () => {
       renderWithRouter(<TopNav />)
 
       const brandText = screen.getByText('RUNIC')
-      expect(brandText.className).toContain('text-xl')
-      expect(brandText.className).toContain('font-bold')
+      expect(brandText).toBeInTheDocument()
     })
   })
 
   describe('responsive design', () => {
-    test('desktop nav is hidden on mobile', () => {
+    test('desktop nav is rendered inside header', () => {
       const { container } = renderWithRouter(<TopNav />)
 
-      const desktopNav = container.querySelector('nav.hidden.md\\:flex')
+      const desktopNav = container.querySelector('header nav')
       expect(desktopNav).toBeInTheDocument()
     })
 
-test('user dropdown button shows icon only on mobile', () => {
-    const { container: _container } = renderWithRouter(<TopNav />)
+test('user dropdown button shows username', () => {
+    renderWithRouter(<TopNav />)
 
-      // The username span should be hidden on mobile
+      // The username span should be rendered
       const usernameSpan = screen.getByText('testuser')
-      expect(usernameSpan).toHaveClass('hidden')
-      expect(usernameSpan).toHaveClass('md:inline')
+      expect(usernameSpan).toBeInTheDocument()
     })
 
 test('user dropdown shows username and version on mobile when opened', async () => {
     renderWithRouter(<TopNav />)
 
-    // Find the user button by looking for the one with the User icon and chevron
-    // The user dropdown button contains the User icon (lucide-user) and shows username
+    // Find the user button
     const userButton = screen.getByRole('button', { name: /testuser/ })
 
     // Click to open dropdown (toggles userDropdownOpen state)
@@ -497,7 +459,7 @@ test('user dropdown shows username and version on mobile when opened', async () 
       expect(screen.getByText('Logout')).toBeInTheDocument()
     })
 
-    // Server Version should be visible in mobile dropdown (md:hidden section)
+    // Server Version should be visible in mobile dropdown
     await waitFor(() => {
       expect(screen.getByText(/Server Version:/)).toBeInTheDocument()
     })

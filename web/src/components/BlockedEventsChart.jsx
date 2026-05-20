@@ -24,7 +24,9 @@ export default function BlockedEventsChart({ logs }) {
     drawChart(ctx, width, height, hourlyData, hoveredPoint)
   }, [hourlyData, hoveredPoint])
 
-  const segmentWidth = 100 / hourlyData.length
+  const segmentWidth = useMemo(() =>
+    hourlyData.length > 0 ? 100 / hourlyData.length : 0,
+  [hourlyData.length])
 
   const handlePointHover = useCallback((index, _event) => {
     if (!containerRef.current) return
@@ -66,10 +68,12 @@ export default function BlockedEventsChart({ logs }) {
         <canvas
           ref={canvasRef}
           className="w-full h-full"
+          role="img"
+          aria-label="Blocked events chart showing hourly blocked event counts"
         />
         {hourlyData.map((d, i) => (
           <div
-            key={i}
+            key={`${d.label}-${d.count}`}
             className="absolute bottom-0 h-full cursor-pointer"
             style={{
               left: `${i * segmentWidth}%`,

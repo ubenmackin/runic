@@ -2,6 +2,8 @@ import { formatRelativeTime } from './formatTime'
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest'
 
 describe('formatRelativeTime', () => {
+  // Default return for null/undefined is em dash per updated spec
+  const NULL_RETURN = '\u2014'
   let mockNow
 
   beforeEach(() => {
@@ -16,29 +18,26 @@ describe('formatRelativeTime', () => {
   })
 
   describe('handles invalid dates', () => {
-    test('returns "Never" for null', () => {
-      expect(formatRelativeTime(null)).toBe('Never')
+    test('returns "—" for null', () => {
+      expect(formatRelativeTime(null)).toBe(NULL_RETURN)
     })
 
-    test('returns "Never" for undefined', () => {
-      expect(formatRelativeTime(undefined)).toBe('Never')
+    test('returns "—" for undefined', () => {
+      expect(formatRelativeTime(undefined)).toBe(NULL_RETURN)
     })
 
-    test('returns "Never" for empty string', () => {
-      expect(formatRelativeTime('')).toBe('Never')
+    test('returns "—" for empty string', () => {
+      expect(formatRelativeTime('')).toBe(NULL_RETURN)
     })
 
-    test('returns "Never" for false', () => {
-      expect(formatRelativeTime(false)).toBe('Never')
+    test('returns "—" for false', () => {
+      expect(formatRelativeTime(false)).toBe(NULL_RETURN)
     })
 
-    test('returns formatted date for invalid date string', () => {
-      // Invalid dates are parsed as "Invalid Date" which returns NaN for getTime()
-      // The function will return a formatted date string via toLocaleDateString()
+    test('returns "—" for invalid date string', () => {
+      // Invalid Date produces NaN, which should be handled gracefully
       const result = formatRelativeTime('not-a-date')
-      // Invalid Date produces NaN, which results in very large diff values
-      // The function will return toLocaleDateString() for dates >= 7 days
-      expect(typeof result).toBe('string')
+      expect(result).toBe(NULL_RETURN)
     })
   })
 
@@ -53,135 +52,131 @@ describe('formatRelativeTime', () => {
       expect(formatRelativeTime(fiftyNineSecondsAgo)).toBe('Just now')
     })
 
-    test('returns "1 minute ago" for exactly 60 seconds ago', () => {
+    test('returns "1 min ago" for exactly 60 seconds ago', () => {
       const oneMinuteAgo = new Date(mockNow.getTime() - 60 * 1000).toISOString()
-      expect(formatRelativeTime(oneMinuteAgo)).toBe('1 minute ago')
+      expect(formatRelativeTime(oneMinuteAgo)).toBe('1 min ago')
     })
 
-    test('returns "5 minutes ago" for 5 minutes ago', () => {
+    test('returns "5 min ago" for 5 minutes ago', () => {
       const fiveMinutesAgo = new Date(mockNow.getTime() - 5 * 60 * 1000).toISOString()
-      expect(formatRelativeTime(fiveMinutesAgo)).toBe('5 minutes ago')
+      expect(formatRelativeTime(fiveMinutesAgo)).toBe('5 min ago')
     })
 
-    test('returns "59 minutes ago" for 59 minutes ago', () => {
+    test('returns "59 min ago" for 59 minutes ago', () => {
       const fiftyNineMinutesAgo = new Date(mockNow.getTime() - 59 * 60 * 1000).toISOString()
-      expect(formatRelativeTime(fiftyNineMinutesAgo)).toBe('59 minutes ago')
+      expect(formatRelativeTime(fiftyNineMinutesAgo)).toBe('59 min ago')
     })
 
-    test('returns "1 hour ago" for exactly 60 minutes ago', () => {
+    test('returns "1h ago" for exactly 60 minutes ago', () => {
       const oneHourAgo = new Date(mockNow.getTime() - 60 * 60 * 1000).toISOString()
-      expect(formatRelativeTime(oneHourAgo)).toBe('1 hour ago')
+      expect(formatRelativeTime(oneHourAgo)).toBe('1h ago')
     })
 
-    test('returns "2 hours ago" for 2 hours ago', () => {
+    test('returns "2h ago" for 2 hours ago', () => {
       const twoHoursAgo = new Date(mockNow.getTime() - 2 * 60 * 60 * 1000).toISOString()
-      expect(formatRelativeTime(twoHoursAgo)).toBe('2 hours ago')
+      expect(formatRelativeTime(twoHoursAgo)).toBe('2h ago')
     })
 
-    test('returns "23 hours ago" for 23 hours ago', () => {
+    test('returns "23h ago" for 23 hours ago', () => {
       const twentyThreeHoursAgo = new Date(mockNow.getTime() - 23 * 60 * 60 * 1000).toISOString()
-      expect(formatRelativeTime(twentyThreeHoursAgo)).toBe('23 hours ago')
+      expect(formatRelativeTime(twentyThreeHoursAgo)).toBe('23h ago')
     })
 
-    test('returns "1 day ago" for exactly 24 hours ago', () => {
+    test('returns "1d ago" for exactly 24 hours ago', () => {
       const oneDayAgo = new Date(mockNow.getTime() - 24 * 60 * 60 * 1000).toISOString()
-      expect(formatRelativeTime(oneDayAgo)).toBe('1 day ago')
+      expect(formatRelativeTime(oneDayAgo)).toBe('1d ago')
     })
 
-    test('returns "3 days ago" for 3 days ago', () => {
+    test('returns "3d ago" for 3 days ago', () => {
       const threeDaysAgo = new Date(mockNow.getTime() - 3 * 24 * 60 * 60 * 1000).toISOString()
-      expect(formatRelativeTime(threeDaysAgo)).toBe('3 days ago')
+      expect(formatRelativeTime(threeDaysAgo)).toBe('3d ago')
     })
 
-    test('returns "6 days ago" for 6 days ago', () => {
+    test('returns "6d ago" for 6 days ago', () => {
       const sixDaysAgo = new Date(mockNow.getTime() - 6 * 24 * 60 * 60 * 1000).toISOString()
-      expect(formatRelativeTime(sixDaysAgo)).toBe('6 days ago')
+      expect(formatRelativeTime(sixDaysAgo)).toBe('6d ago')
     })
   })
 
   describe('date format for older dates', () => {
-    test('returns formatted date for 7 days ago', () => {
+    test('returns "7d ago" for 7 days ago', () => {
       const sevenDaysAgo = new Date(mockNow.getTime() - 7 * 24 * 60 * 60 * 1000)
       const result = formatRelativeTime(sevenDaysAgo.toISOString())
-      // toLocaleDateString() format depends on locale, just verify it's a string
-      expect(typeof result).toBe('string')
-      expect(result).not.toBe('Just now')
-      expect(result).not.toContain('ago')
+      expect(result).toBe('7d ago')
     })
 
-    test('returns formatted date for 30 days ago', () => {
+    test('returns "30d ago" for 30 days ago', () => {
       const thirtyDaysAgo = new Date(mockNow.getTime() - 30 * 24 * 60 * 60 * 1000)
       const result = formatRelativeTime(thirtyDaysAgo.toISOString())
-      expect(typeof result).toBe('string')
-      expect(result).not.toContain('ago')
+      expect(result).toBe('30d ago')
     })
   })
 
   describe('various date formats', () => {
     test('handles ISO 8601 format', () => {
       const isoDate = new Date(mockNow.getTime() - 5 * 60 * 1000).toISOString()
-      expect(formatRelativeTime(isoDate)).toBe('5 minutes ago')
+      expect(formatRelativeTime(isoDate)).toBe('5 min ago')
     })
 
     test('handles Unix timestamp (milliseconds)', () => {
       const timestamp = mockNow.getTime() - 5 * 60 * 1000
-      expect(formatRelativeTime(timestamp)).toBe('5 minutes ago')
+      expect(formatRelativeTime(timestamp)).toBe('5 min ago')
     })
 
     test('handles Date objects', () => {
       const date = new Date(mockNow.getTime() - 5 * 60 * 1000)
-      expect(formatRelativeTime(date)).toBe('5 minutes ago')
+      expect(formatRelativeTime(date)).toBe('5 min ago')
     })
 
     test('handles common date string format', () => {
       // Create a date 5 minutes before mockNow
       const date = new Date(mockNow.getTime() - 5 * 60 * 1000)
       const dateString = date.toString()
-      expect(formatRelativeTime(dateString)).toBe('5 minutes ago')
+      expect(formatRelativeTime(dateString)).toBe('5 min ago')
     })
   })
 
   describe('singular vs plural forms', () => {
-    test('uses singular "minute" for 1 minute', () => {
+    test('uses "1 min ago" for 1 minute', () => {
       const oneMinuteAgo = new Date(mockNow.getTime() - 60 * 1000).toISOString()
-      expect(formatRelativeTime(oneMinuteAgo)).toBe('1 minute ago')
+      expect(formatRelativeTime(oneMinuteAgo)).toBe('1 min ago')
     })
 
-    test('uses plural "minutes" for 2 minutes', () => {
+    test('uses "2 min ago" for 2 minutes', () => {
       const twoMinutesAgo = new Date(mockNow.getTime() - 2 * 60 * 1000).toISOString()
-      expect(formatRelativeTime(twoMinutesAgo)).toBe('2 minutes ago')
+      expect(formatRelativeTime(twoMinutesAgo)).toBe('2 min ago')
     })
 
-    test('uses singular "hour" for 1 hour', () => {
+    test('uses "1h ago" for 1 hour', () => {
       const oneHourAgo = new Date(mockNow.getTime() - 60 * 60 * 1000).toISOString()
-      expect(formatRelativeTime(oneHourAgo)).toBe('1 hour ago')
+      expect(formatRelativeTime(oneHourAgo)).toBe('1h ago')
     })
 
-    test('uses plural "hours" for 2 hours', () => {
+    test('uses "2h ago" for 2 hours', () => {
       const twoHoursAgo = new Date(mockNow.getTime() - 2 * 60 * 60 * 1000).toISOString()
-      expect(formatRelativeTime(twoHoursAgo)).toBe('2 hours ago')
+      expect(formatRelativeTime(twoHoursAgo)).toBe('2h ago')
     })
 
-    test('uses singular "day" for 1 day', () => {
+    test('uses "1d ago" for 1 day', () => {
       const oneDayAgo = new Date(mockNow.getTime() - 24 * 60 * 60 * 1000).toISOString()
-      expect(formatRelativeTime(oneDayAgo)).toBe('1 day ago')
+      expect(formatRelativeTime(oneDayAgo)).toBe('1d ago')
     })
 
-    test('uses plural "days" for 2 days', () => {
+    test('uses "2d ago" for 2 days', () => {
       const twoDaysAgo = new Date(mockNow.getTime() - 2 * 24 * 60 * 60 * 1000).toISOString()
-      expect(formatRelativeTime(twoDaysAgo)).toBe('2 days ago')
+      expect(formatRelativeTime(twoDaysAgo)).toBe('2d ago')
     })
   })
 
   describe('SQLite datetime format handling', () => {
-    test('handles SQLite format string "5 minutes ago"', () => {
+    test('handles SQLite format string "5 min ago"', () => {
       // SQLite format: 5 minutes before mockNow (2024-01-15T12:00:00Z)
-      expect(formatRelativeTime('2024-01-15 11:55:00')).toBe('5 minutes ago')
+      expect(formatRelativeTime('2024-01-15 11:55:00')).toBe('5 min ago')
     })
 
-    test('handles SQLite format string "1 hour ago"', () => {
+    test('handles SQLite format string "1h ago"', () => {
       // SQLite format: 1 hour before mockNow
-      expect(formatRelativeTime('2024-01-15 11:00:00')).toBe('1 hour ago')
+      expect(formatRelativeTime('2024-01-15 11:00:00')).toBe('1h ago')
     })
 
     test('handles SQLite format string "Just now"', () => {
@@ -191,28 +186,39 @@ describe('formatRelativeTime', () => {
 
     test('handles SQLite format string for older dates', () => {
       // SQLite format: 3 days before mockNow
-      expect(formatRelativeTime('2024-01-12 12:00:00')).toBe('3 days ago')
+      expect(formatRelativeTime('2024-01-12 12:00:00')).toBe('3d ago')
     })
 
     test('ISO 8601 strings with Z suffix still work (backward compatibility)', () => {
       // Standard ISO 8601: 5 minutes before mockNow
       const fiveMinutesAgo = new Date(mockNow.getTime() - 5 * 60 * 1000).toISOString()
-      expect(formatRelativeTime(fiveMinutesAgo)).toBe('5 minutes ago')
+      expect(formatRelativeTime(fiveMinutesAgo)).toBe('5 min ago')
     })
 
     test('SQLite format with different hours/minutes', () => {
       // SQLite format: 2 hours before mockNow
-      expect(formatRelativeTime('2024-01-15 10:00:00')).toBe('2 hours ago')
+      expect(formatRelativeTime('2024-01-15 10:00:00')).toBe('2h ago')
     })
   })
 
   describe('edge cases', () => {
     test('handles future dates correctly', () => {
-      // Future dates will result in negative diff
+      // Future dates should show "in X min"
       const futureDate = new Date(mockNow.getTime() + 5 * 60 * 1000).toISOString()
       const result = formatRelativeTime(futureDate)
-      // Negative diff means "Just now" since diffSeconds < 0 < 60
-      expect(result).toBe('Just now')
+      expect(result).toBe('in 5 min')
+    })
+
+    test('handles future dates with hours', () => {
+      const futureDate = new Date(mockNow.getTime() + 3 * 60 * 60 * 1000).toISOString()
+      const result = formatRelativeTime(futureDate)
+      expect(result).toBe('in 3h')
+    })
+
+    test('handles future dates with days', () => {
+      const futureDate = new Date(mockNow.getTime() + 2 * 24 * 60 * 60 * 1000).toISOString()
+      const result = formatRelativeTime(futureDate)
+      expect(result).toBe('in 2d')
     })
 
     test('handles exactly zero time difference', () => {
@@ -222,8 +228,7 @@ describe('formatRelativeTime', () => {
     test('handles very large time differences', () => {
       const oneYearAgo = new Date(mockNow.getTime() - 365 * 24 * 60 * 60 * 1000)
       const result = formatRelativeTime(oneYearAgo.toISOString())
-      expect(typeof result).toBe('string')
-      expect(result).not.toContain('ago')
+      expect(result).toBe('365d ago')
     })
   })
 })

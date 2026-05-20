@@ -6,20 +6,18 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"log"
 	"os"
-	"os/exec"
-	"os/signal"
 	"strconv"
 	"strings"
-	"syscall"
 
 	"golang.org/x/term"
 
 	"runic/internal/agent"
-	"runic/internal/agent/core"
 	"runic/internal/agent/identity"
+	runiclog "runic/internal/common/log"
+	"runic/internal/common/signal"
 	"runic/internal/common/systemd"
+	"runic/internal/common/version"
 )
 
 type configFlag struct {
@@ -57,7 +55,7 @@ func main() {
 
 	uninstall := flag.Bool("uninstall", false, "Uninstall the agent from this system")
 	purge := flag.Bool("purge", false, "Also remove config files (use with --uninstall)")
-	version := flag.Bool("version", false, "Print version and exit")
+	versionFlag := flag.Bool("version", false, "Print version and exit")
 	update := flag.Bool("update", false, "Trigger a self-update using the configured control plane URL and exit")
 	setup := flag.Bool("setup", false, "Run interactive setup wizard")
 
@@ -79,53 +77,30 @@ func main() {
 
 	flag.Parse()
 
-	if *version {
-		fmt.Printf("runic-agent version %s\n", core.Version)
-		return
+	logLevel := os.Getenv("LOG_LEVEL")
+	if logLevel == "" {
+		logLevel = "info"
+	}
+	runiclog.Init(logLevel, os.Stderr)
+
+	if *versionFlag {
+		version.PrintVersion("runic-agent", version.AgentVersion)
 	}
 
 	if *setup {
 		defaultURL := resolveControlPlaneURL(controlPlaneURL)
 		if err := runSetupWizard(*configPath, defaultURL); err != nil {
-			log.Fatalf("setup failed: %v", err)
+			runiclog.Fatal("Setup failed", "error", err)
 		}
 		fmt.Println("Configuration saved.")
-
-		// Check if systemd service is installed and prompt for restart
-		if systemd.IsServiceInstalled() {
-			fmt.Println("\nThe runic-agent systemd service is installed.")
-			fmt.Print("Would you like to restart the service now? (sudo systemctl restart runic-agent) [y/N]: ")
-
-			reader := bufio.NewReader(os.Stdin)
-			input, err := reader.ReadString('\n')
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Warning: failed to read stdin: %v\n", err)
-				fmt.Printf("\nNote: Could not read input. Restart manually with: sudo systemctl restart runic-agent\n")
-				return
-			}
-
-			input = strings.TrimSpace(strings.ToLower(input))
-			if input == "y" || input == "yes" {
-				if err := systemd.RestartService("runic-agent"); err != nil {
-					fmt.Printf("Failed to restart service: %v\n", err)
-					fmt.Println("Restart manually with: sudo systemctl restart runic-agent")
-				} else {
-					fmt.Println("Service restarted successfully.")
-				}
-			} else {
-				fmt.Println("\nTo apply changes, restart the service with: sudo systemctl restart runic-agent")
-			}
-		} else {
-			fmt.Println("\nNote: runic-agent systemd service is not installed.")
-			fmt.Println("To apply changes, restart the agent manually.")
-		}
+		systemd.PromptRestart()
 		fmt.Println("\nRun without -setup to start the agent.")
 		return
 	}
 
 	if *uninstall {
 		if err := uninstallAgent(*purge); err != nil {
-			log.Fatalf("uninstall failed: %v", err)
+			runiclog.Fatal("Uninstall failed", "error", err)
 		}
 		fmt.Println("Runic agent uninstalled successfully.")
 		return
@@ -138,25 +113,25 @@ func main() {
 	if *update {
 		cfg, err := identity.LoadConfig(*configPath)
 		if err != nil {
-			log.Fatalf("update: failed to load config: %v", err)
+			runiclog.Fatal("Update: failed to load config", "error", err)
 		}
 		updateURL := resolveControlPlaneURL(controlPlaneURL)
 		if updateURL == "" && cfg.ControlPlaneURL != "" {
 			updateURL = cfg.ControlPlaneURL
 		}
 		if updateURL == "" {
-			log.Fatalf("update: control plane URL not configured. Set it via -url flag, RUNIC_CONTROL_PLANE_URL env, or config file")
+			runiclog.Fatal("Update: control plane URL not configured")
 		}
 		a := agent.New(*configPath, updateURL)
 		if err := a.HandleUpdateAgentSync(updateURL); err != nil {
-			log.Fatalf("update failed: %v", err)
+			runiclog.Fatal("Update failed", "error", err)
 		}
 		return
 	}
 
 	if isConfigMode(enableOnBoot, enableRulesBundle, disableSystemIPTables, controlPlaneURL, logPath, pullInterval) {
 		if err := handleConfigMode(*configPath, enableOnBoot, enableRulesBundle, disableSystemIPTables, controlPlaneURL, logPath, pullInterval); err != nil {
-			log.Fatalf("config update failed: %v", err)
+			runiclog.Fatal("Config update failed", "error", err)
 		}
 		return
 	}
@@ -171,19 +146,16 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-
 	go func() {
-		<-sigCh
-		log.Println("Received shutdown signal — stopping agent...")
+		<-signal.ShutdownSignal()
+		runiclog.Info("Received shutdown signal — stopping agent...")
 		cancel()
 	}()
 
-	log.Printf("Starting runic-agent version %s", core.Version)
+	runiclog.Info("Starting runic-agent", "version", version.AgentVersion)
 
 	if err := a.Run(ctx); err != nil {
-		log.Printf("agent error: %v", err)
+		runiclog.Warn("Agent error", "error", err)
 	}
 }
 
@@ -272,7 +244,7 @@ func handleConfigMode(configPath string, enableOnBoot, enableRulesBundle, disabl
 	}
 
 	// Validate config before saving
-	if _, err := validateConfig(cfg); err != nil {
+	if err := validateConfig(cfg); err != nil {
 		return fmt.Errorf("config validation failed: %w", err)
 	}
 
@@ -286,52 +258,23 @@ func handleConfigMode(configPath string, enableOnBoot, enableRulesBundle, disabl
 		fmt.Printf("  - %s\n", change)
 	}
 	fmt.Printf("Config saved to: %s\n", configPath)
-
-	// Check if systemd service is installed and prompt for restart
-	if systemd.IsServiceInstalled() {
-		fmt.Println("\nThe runic-agent systemd service is installed.")
-		fmt.Print("Would you like to restart the service now? (sudo systemctl restart runic-agent) [y/N]: ")
-
-		reader := bufio.NewReader(os.Stdin)
-		input, err := reader.ReadString('\n')
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to read stdin: %v\n", err)
-			fmt.Printf("\nNote: Could not read input. Restart manually with: sudo systemctl restart runic-agent\n")
-			return nil
-		}
-
-		input = strings.TrimSpace(strings.ToLower(input))
-		if input == "y" || input == "yes" {
-			if err := systemd.RestartService("runic-agent"); err != nil {
-				fmt.Printf("Failed to restart service: %v\n", err)
-				fmt.Println("Restart manually with: sudo systemctl restart runic-agent")
-			} else {
-				fmt.Println("Service restarted successfully.")
-			}
-		} else {
-			fmt.Println("\nTo apply changes, restart the service with: sudo systemctl restart runic-agent")
-		}
-	} else {
-		fmt.Println("\nNote: runic-agent systemd service is not installed.")
-		fmt.Println("To apply changes, restart the agent manually.")
-	}
-
+	systemd.PromptRestart()
 	return nil
 }
 
 // It performs both JSON marshaling check and field-level validation.
-func validateConfig(cfg *identity.Config) (bool, error) {
+func validateConfig(cfg *identity.Config) error {
 	_, err := json.Marshal(cfg)
 	if err != nil {
-		return false, fmt.Errorf("config is not valid JSON: %w", err)
+		return fmt.Errorf("config is not valid JSON: %w", err)
 	}
 
 	// Perform field-level validation
 	if err := cfg.Validate(); err != nil {
-		return false, fmt.Errorf("config validation failed: %w", err)
+		return fmt.Errorf("config validation failed: %w", err)
 	}
 
-	return true, nil
+	return nil
 }
 
 func uninstallAgent(purge bool) error {
@@ -340,10 +283,10 @@ func uninstallAgent(purge bool) error {
 	}
 
 	fmt.Println("Stopping runic-agent service...")
-	if err := exec.Command("systemctl", "stop", "runic-agent").Run(); err != nil {
+	if err := systemd.StopService("runic-agent"); err != nil {
 		fmt.Printf("Warning: failed to stop service: %v\n", err)
 	}
-	if err := exec.Command("systemctl", "disable", "runic-agent").Run(); err != nil {
+	if err := systemd.DisableService("runic-agent"); err != nil {
 		fmt.Printf("Warning: failed to disable service: %v\n", err)
 	}
 
@@ -351,7 +294,7 @@ func uninstallAgent(purge bool) error {
 	if err := os.Remove(systemd.ServicePath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to remove service file: %w", err)
 	}
-	if err := exec.Command("systemctl", "daemon-reload").Run(); err != nil {
+	if err := systemd.DaemonReload(); err != nil {
 		fmt.Printf("Warning: failed to daemon-reload: %v\n", err)
 	}
 
@@ -375,6 +318,95 @@ func uninstallAgent(purge bool) error {
 	return nil
 }
 
+// promptControlPlaneURL reads a control plane URL from the user, using the provided default.
+func promptControlPlaneURL(reader *bufio.Reader, defaultURL string) (string, error) {
+	fmt.Print("Control Plane URL")
+	if defaultURL != "" {
+		fmt.Printf(" [%s]: ", defaultURL)
+	} else {
+		fmt.Print(": ")
+	}
+	input, err := reader.ReadString('\n')
+	if err != nil {
+		runiclog.Warn("Failed to read control plane URL input", "error", err)
+	}
+	input = strings.TrimSpace(input)
+	if input != "" {
+		return input, nil
+	}
+	if defaultURL == "" {
+		return "", fmt.Errorf("control plane URL is required")
+	}
+	return defaultURL, nil
+}
+
+// promptYesNo reads a y/n answer and returns the resulting value based on the provided default.
+func promptYesNo(reader *bufio.Reader, prompt string, currentDefault bool) bool {
+	if currentDefault {
+		fmt.Printf("%s [Y/n]: ", prompt)
+	} else {
+		fmt.Printf("%s [y/N]: ", prompt)
+	}
+	input, err := reader.ReadString('\n')
+	if err != nil {
+		runiclog.Warn("Failed to read input for %q", "error", err)
+		return currentDefault
+	}
+	input = strings.TrimSpace(strings.ToLower(input))
+	switch input {
+	case "y":
+		return true
+	case "n":
+		return false
+	case "":
+		return currentDefault
+	default:
+		runiclog.Warn("Invalid input received, using default value")
+		return currentDefault
+	}
+}
+
+// promptPullInterval reads a pull interval in seconds from the user.
+func promptPullInterval(reader *bufio.Reader, currentDefault int) int {
+	if currentDefault == 0 {
+		currentDefault = 86400
+	}
+	fmt.Printf("Pull interval in seconds (default %d): ", currentDefault)
+	input, err := reader.ReadString('\n')
+	if err != nil {
+		runiclog.Warn("Failed to read pull interval input", "error", err)
+		return currentDefault
+	}
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return currentDefault
+	}
+	var newVal int
+	if _, err := fmt.Sscanf(input, "%d", &newVal); err != nil {
+		runiclog.Warn("Invalid pull interval format", "error", err)
+		return currentDefault
+	}
+	return newVal
+}
+
+// promptLogPath reads a log file path from the user.
+func promptLogPath(reader *bufio.Reader, currentDefault string) string {
+	if currentDefault == "" {
+		currentDefault = "/var/log/runic/firewall.log"
+	}
+	fmt.Printf("Log path (default %s): ", currentDefault)
+	input, err := reader.ReadString('\n')
+	if err != nil {
+		runiclog.Warn("Failed to read log path input", "error", err)
+		return currentDefault
+	}
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return currentDefault
+	}
+	return input
+}
+
 func runSetupWizard(configPath string, defaultControlPlaneURL string) error {
 	fd := int(os.Stdin.Fd())
 	if !term.IsTerminal(fd) {
@@ -389,136 +421,21 @@ func runSetupWizard(configPath string, defaultControlPlaneURL string) error {
 		cfg = &identity.Config{}
 	}
 
-	// Control plane URL - use CLI/env default first, fall back to config value
-	controlPlaneURL := defaultControlPlaneURL
-	if controlPlaneURL == "" && cfg.ControlPlaneURL != "" {
-		controlPlaneURL = cfg.ControlPlaneURL
-	}
-	fmt.Print("Control Plane URL")
-	if controlPlaneURL != "" {
-		fmt.Printf(" [%s]: ", controlPlaneURL)
-	} else {
-		fmt.Print(": ")
-	}
-	input, err := reader.ReadString('\n')
-	if err != nil {
-		log.Printf("Warning: failed to read control plane URL input: %v", err)
-	}
-	input = strings.TrimSpace(input)
-	if input != "" {
-		controlPlaneURL = input
-	}
-	if controlPlaneURL == "" {
-		return fmt.Errorf("control plane URL is required")
+	// Build default URL from CLI/env first, falling back to config value
+	urlDefault := defaultControlPlaneURL
+	if urlDefault == "" && cfg.ControlPlaneURL != "" {
+		urlDefault = cfg.ControlPlaneURL
 	}
 
-	// Enable apply on boot - use config value as default
-	fmt.Print("Enable apply on boot ")
-	if cfg.ApplyOnBoot {
-		fmt.Print("[Y/n]: ")
-	} else {
-		fmt.Print("[y/N]: ")
-	}
-	input, err = reader.ReadString('\n')
+	controlPlaneURL, err := promptControlPlaneURL(reader, urlDefault)
 	if err != nil {
-		log.Printf("Warning: failed to read apply on boot input: %v", err)
+		return err
 	}
-	input = strings.TrimSpace(strings.ToLower(input))
-	applyOnBoot := cfg.ApplyOnBoot // default to current config value
-	switch input {
-	case "y":
-		applyOnBoot = true
-	case "n":
-		applyOnBoot = false
-	case "":
-		// Keep default
-	default:
-		// Invalid input, keep default
-		log.Printf("Warning: invalid input, using default value")
-	}
-
-	// Enable rules bundle - use config value as default
-	fmt.Print("Enable automatic bundle application ")
-	if cfg.ApplyRulesBundle {
-		fmt.Print("[Y/n]: ")
-	} else {
-		fmt.Print("[y/N]: ")
-	}
-	input, err = reader.ReadString('\n')
-	if err != nil {
-		log.Printf("Warning: failed to read rules bundle input: %v", err)
-	}
-	input = strings.TrimSpace(strings.ToLower(input))
-	applyRulesBundle := cfg.ApplyRulesBundle // default to current config value
-	switch input {
-	case "y":
-		applyRulesBundle = true
-	case "n":
-		applyRulesBundle = false
-	case "":
-		// Keep default
-	default:
-		log.Printf("Warning: invalid input, using default value")
-	}
-
-	// Pull interval - use config value as default
-	pullInterval := cfg.PullIntervalSec
-	if pullInterval == 0 {
-		pullInterval = 86400 // default if not set in config
-	}
-	fmt.Printf("Pull interval in seconds (default %d): ", pullInterval)
-	input, err = reader.ReadString('\n')
-	if err != nil {
-		log.Printf("Warning: failed to read pull interval input: %v", err)
-	}
-	input = strings.TrimSpace(input)
-	if input != "" {
-		newVal := 0
-		if _, err := fmt.Sscanf(input, "%d", &newVal); err != nil {
-			log.Printf("Warning: invalid pull interval format: %v", err)
-		} else {
-			pullInterval = newVal
-		}
-	}
-
-	// Log path - use config value as default
-	logPath := cfg.LogPath
-	if logPath == "" {
-		logPath = "/var/log/runic/firewall.log" // default if not set in config
-	}
-	fmt.Printf("Log path (default %s): ", logPath)
-	input, err = reader.ReadString('\n')
-	if err != nil {
-		log.Printf("Warning: failed to read log path input: %v", err)
-	}
-	input = strings.TrimSpace(input)
-	if input != "" {
-		logPath = input
-	}
-
-	// Disable system iptables - use config value as default
-	fmt.Print("Disable system-managed iptables services ")
-	if cfg.DisableSystemManagedIPTables {
-		fmt.Print("[Y/n]: ")
-	} else {
-		fmt.Print("[y/N]: ")
-	}
-	input, err = reader.ReadString('\n')
-	if err != nil {
-		log.Printf("Warning: failed to read disable system iptables input: %v", err)
-	}
-	input = strings.TrimSpace(strings.ToLower(input))
-	disableSystemIPTables := cfg.DisableSystemManagedIPTables // default to current config value
-	switch input {
-	case "y":
-		disableSystemIPTables = true
-	case "n":
-		disableSystemIPTables = false
-	case "":
-		// Keep default
-	default:
-		log.Printf("Warning: invalid input, using default value")
-	}
+	applyOnBoot := promptYesNo(reader, "Enable apply on boot", cfg.ApplyOnBoot)
+	applyRulesBundle := promptYesNo(reader, "Enable automatic bundle application", cfg.ApplyRulesBundle)
+	pullInterval := promptPullInterval(reader, cfg.PullIntervalSec)
+	logPath := promptLogPath(reader, cfg.LogPath)
+	disableSystemIPTables := promptYesNo(reader, "Disable system-managed iptables services", cfg.DisableSystemManagedIPTables)
 
 	// Preserve existing config values for host_id, token, hmac_key (already loaded)
 	cfg.ControlPlaneURL = controlPlaneURL

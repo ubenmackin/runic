@@ -9,7 +9,6 @@ import { REFETCH_INTERVALS, OS_OPTIONS, ARCH_OPTIONS } from '../constants'
 import { useCrudModal } from '../hooks/useCrudModal'
 import { useToastContext } from '../hooks/ToastContext'
 import { formatRelativeTime } from '../utils/formatTime.js'
-import { computeDiff } from '../utils/diff.js'
 import { isAgentOutdated } from '../utils/version'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 import { useTableFilter } from '../hooks/useTableFilter'
@@ -31,6 +30,8 @@ import FilterChip from '../components/FilterChip'
 import KebabMenu from '../components/KebabMenu'
 import PendingChangesModal from '../components/PendingChangesModal'
 import ImportRulesWizard from '../components/ImportRulesWizard'
+import BundleViewerModal from '../components/BundleViewerModal'
+import IPManager from '../components/IPManager'
 
 // Helper function to parse heartbeat for sorting
 function parseHeartbeatForSort(timestamp) {
@@ -183,7 +184,7 @@ export default function Peers() {
   const showToast = useToastContext()
   const { canEdit } = useAuth()
   const location = useLocation()
-  const { modalOpen, setModalOpen, editItem: editPeer, setEditItem: setEditPeer, form: formData, setForm: setFormData, setFormForEdit, handleOpenAdd, handleCancel: closeModal } = useCrudModal({ hostname: '', ip_address: '', os_type: 'ubuntu', arch: 'amd64', has_docker: false, description: '' })
+  const { modalOpen, setModalOpen, editItem: editPeer, setEditItem: setEditPeer, form: formData, setForm: setFormData, setFormForEdit, handleCancel: closeModal } = useCrudModal({ hostname: '', ip_address: '', os_type: 'ubuntu', arch: 'amd64', has_docker: false, description: '' })
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [conflictError, setConflictError] = useState(null)
   const [formErrors, setFormErrors] = useState({})
@@ -202,18 +203,11 @@ export default function Peers() {
   // Edit Peer modal IP management state
   const [editPeerIPs, setEditPeerIPs] = useState([])
   const [editPeerIPsLoading, setEditPeerIPsLoading] = useState(false)
-  const [newIpAddress, setNewIpAddress] = useState('')
-  const [ipAdding, setIpAdding] = useState(false)
-  const [ipDeleting, setIpDeleting] = useState(null) // IP id being deleted
 
 	// Rule Bundle state
 	const [bundleModalOpen, setBundleModalOpen] = useState(false)
-	const [bundleLoading, setBundleLoading] = useState(false)
-const [bundleContent, setBundleContent] = useState('')
   const [bundlePeer, setBundlePeer] = useState(null)
-  const [bundleData, setBundleData] = useState(null)
   const [viewingPendingRules, setViewingPendingRules] = useState(false)
-  const [showDiffView, setShowDiffView] = useState(true)
   const [pendingModalOpen, setPendingModalOpen] = useState(false)
   const [pendingModalPeer, setPendingModalPeer] = useState(null)
 
@@ -268,35 +262,19 @@ const handleUpdateAgent = useCallback((peer) => {
     },
   })
 
-  const fetchBundle = async (peer, showPending = false) => {
+  const fetchBundle = (peer, showPending = false) => {
+    setViewingPendingRules(showPending)
     setBundlePeer(peer)
     setBundleModalOpen(true)
-    setBundleLoading(true)
-    setBundleContent('')
-    setBundleData(null)
-    setShowDiffView(true) // Default to showing diff view
-    try {
-      const endpoint = showPending ? `/peers/${peer.id}/bundle?include_pending=true` : `/peers/${peer.id}/bundle`
-      const data = await api.get(endpoint)
-      setBundleContent(data.rules)
-      setBundleData(data)
-    } catch (err) {
-      setBundleContent(`# Error: ${err.message}`)
-      setBundleData(null)
-    } finally {
-      setBundleLoading(false)
-    }
   }
 
   // Modal ref for focus trap
   const editModalRef = useRef(null)
   const addModalRef = useRef(null)
-  const bundleModalRef = useRef(null)
 
   // Focus traps for modals
   useFocusTrap(editModalRef, modalOpen)
   useFocusTrap(addModalRef, addModalOpen)
-  useFocusTrap(bundleModalRef, bundleModalOpen)
 
   // Sorting state (persisted per-user)
   const { sortConfig, handleSort } = useTableSort('peers', { key: 'hostname', direction: 'asc' })
@@ -307,12 +285,10 @@ const handleUpdateAgent = useCallback((peer) => {
   // Manual refresh state
   const [isManualRefreshing, setIsManualRefreshing] = useState(false)
 
-  const _openAdd = () => { setFormErrors({}); handleOpenAdd() }
   const openEdit = (s) => {
     setEditPeer(s); setFormForEdit(s); setFormErrors({}); setModalOpen(true)
     // Load IPs for the peer being edited
     setEditPeerIPs([])
-    setNewIpAddress('')
     if (peerIPsMap[s.id]) {
       // Use cached data if available
       setEditPeerIPs(peerIPsMap[s.id])
@@ -422,47 +398,38 @@ const handleUpdateAgent = useCallback((peer) => {
   }
 
   // Handle adding a secondary IP to a peer in the Edit modal
-  const handleAddPeerIP = async () => {
-    if (!editPeer || !newIpAddress.trim()) return
-    // Basic IP validation
-    const ipRegex = /^(\d{1,3}\.){3}\d{1,3}(\/\d{1,2})?$/
-    if (!ipRegex.test(newIpAddress.trim())) {
-      showToast('Invalid IP address format', 'error')
-      return
-    }
-    setIpAdding(true)
+  // Called by IPManager which manages its own input/loading state
+  const handleAddPeerIP = async (peerId, ipAddress) => {
+    if (!peerId || !ipAddress) return
     try {
-    await addPeerIP(editPeer.id, newIpAddress.trim())
-    showToast('IP address added successfully', 'success')
-    // Invalidate peers list to trigger background re-fetch with updated IPs
-    qc.invalidateQueries({ queryKey: QUERY_KEYS.peers() })
-    // Refresh IPs for this peer in the edit modal
-    const data = await getPeerIPs(editPeer.id)
-    setEditPeerIPs(data || [])
-      setNewIpAddress('')
+      await addPeerIP(peerId, ipAddress)
+      showToast('IP address added successfully', 'success')
+      // Invalidate peers list to trigger background re-fetch with updated IPs
+      qc.invalidateQueries({ queryKey: QUERY_KEYS.peers() })
+      // Refresh IPs for this peer in the edit modal
+      const data = await getPeerIPs(peerId)
+      setEditPeerIPs(data || [])
     } catch (err) {
       showToast(`Failed to add IP: ${err.message}`, 'error')
-    } finally {
-      setIpAdding(false)
+      throw err // re-throw so IPManager can reset its state
     }
   }
 
   // Handle deleting a secondary IP from a peer in the Edit modal
-  const handleDeletePeerIP = async (ipId) => {
-    if (!editPeer) return
-    setIpDeleting(ipId)
+  // Called by IPManager which manages its own loading state
+  const handleDeletePeerIP = async (peerId, ipId) => {
+    if (!peerId || !ipId) return
     try {
-    await deletePeerIP(editPeer.id, ipId)
-    showToast('IP address removed successfully', 'success')
-    // Invalidate peers list to trigger background re-fetch with updated IPs
-    qc.invalidateQueries({ queryKey: QUERY_KEYS.peers() })
-    // Refresh IPs for this peer in the edit modal
-    const data = await getPeerIPs(editPeer.id)
-    setEditPeerIPs(data || [])
+      await deletePeerIP(peerId, ipId)
+      showToast('IP address removed successfully', 'success')
+      // Invalidate peers list to trigger background re-fetch with updated IPs
+      qc.invalidateQueries({ queryKey: QUERY_KEYS.peers() })
+      // Refresh IPs for this peer in the edit modal
+      const data = await getPeerIPs(peerId)
+      setEditPeerIPs(data || [])
     } catch (err) {
       showToast(`Failed to remove IP: ${err.message}`, 'error')
-    } finally {
-      setIpDeleting(null)
+      throw err // re-throw so IPManager can reset its state
     }
   }
 
@@ -1051,113 +1018,18 @@ title={groups.slice(maxVisible).join(', ')}
                 <input type="text" value={formData.ip_address} onChange={e => setFormData(d => ({ ...d, ip_address: e.target.value }))} required className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral" />
               </div>
 
-              {/* Secondary IPs Management Section */}
-              {editPeer && editPeer.is_manual && (
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-2">Secondary IP Addresses</label>
-                  {editPeerIPsLoading ? (
-                    <div className="flex items-center gap-2 py-2">
-                      <RefreshCw className="w-3 h-3 animate-spin text-gray-400" />
-                      <span className="text-sm text-gray-500 dark:text-amber-muted">Loading IPs...</span>
-                    </div>
-                  ) : (
-                    <div className="space-y-2">
-                      {/* List of existing IPs */}
-                {editPeerIPs.length > 0 ? (
-                <div className="space-y-1">
-                {editPeerIPs.filter(ip => isIPv4(ip.ip_address)).map(ip => (
-                  <div key={ip.id} className="flex items-center gap-2 px-2 py-1.5 bg-gray-50 dark:bg-charcoal-darkest border border-gray-200 dark:border-gray-border">
-                    <span className="font-mono text-sm text-gray-700 dark:text-amber-primary flex-1">{ip.ip_address}</span>
-                    {ip.is_primary ? (
-                      <span className="text-[10px] font-mono font-medium px-1.5 py-0.5 border border-purple-400 dark:border-purple-500 text-purple-600 dark:text-purple-400">PRIMARY</span>
-                              ) : (
-                                <button
-                                  type="button"
-                                  onClick={() => handleDeletePeerIP(ip.id)}
-                                  disabled={ipDeleting === ip.id}
-                                  className="p-1 hover:bg-red-100 dark:hover:bg-red-900/20 rounded-none disabled:opacity-50"
-                                  title="Remove IP address"
-                                >
-                                  {ipDeleting === ip.id ? (
-                                    <RefreshCw className="w-3.5 h-3.5 text-red-500 animate-spin" />
-                                  ) : (
-                                    <X className="w-3.5 h-3.5 text-red-500" />
-                                  )}
-                                </button>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      ) : (
-                        <p className="text-sm text-gray-400 dark:text-amber-muted py-1">No additional IP addresses</p>
-                      )}
-                      {/* Add new IP */}
-                      <div className="flex gap-2">
-                        <input
-                          type="text"
-                          value={newIpAddress}
-                          onChange={e => setNewIpAddress(e.target.value)}
-                          placeholder="e.g., 10.20.10.20"
-                          className="flex-1 px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral placeholder-gray-400 dark:placeholder-amber-muted focus:ring-2 focus:ring-purple-active focus:border-transparent"
-                          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleAddPeerIP() } }}
-                        />
-                        <button
-                          type="button"
-                          onClick={handleAddPeerIP}
-                          disabled={ipAdding || !newIpAddress.trim()}
-                          className="px-3 py-1.5 text-xs font-bold uppercase text-white bg-purple-active hover:bg-purple-600 rounded-none disabled:opacity-50 flex items-center gap-1 border border-purple-active/20 transition-all shrink-0"
-                        >
-                          {ipAdding ? (
-                            <RefreshCw className="w-3 h-3 animate-spin" />
-                          ) : (
-                            <Plus className="w-3 h-3" />
-                          )}
-                          Add IP
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-
-{/* Agent peer IPs (read-only) */}
-{editPeer && !editPeer.is_manual && (
-<div>
-<div className="mb-3">
-	<label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">Agent Version</label>
-	<div className="flex items-center gap-2">
-	<span className="font-mono text-sm text-gray-700 dark:text-amber-primary">v{editPeer.agent_version}</span>
-	{isAgentOutdated(editPeer.agent_version, latestAgentVersion) && (
-		<span className="px-1.5 py-0.5 text-[10px] font-mono font-medium border border-amber-400 dark:border-amber-500 text-amber-600 dark:text-amber-400">
-		v{latestAgentVersion} available
-		</span>
-	)}
-	</div>
-</div>
-<label className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-2">IP Addresses</label>
-                  {editPeerIPsLoading ? (
-                    <div className="flex items-center gap-2 py-2">
-                      <RefreshCw className="w-3 h-3 animate-spin text-gray-400" />
-                      <span className="text-sm text-gray-500 dark:text-amber-muted">Loading IPs...</span>
-                    </div>
-                  ) : editPeerIPs.length > 0 ? (
-                    <div className="space-y-1">
-                {editPeerIPs.filter(ip => isIPv4(ip.ip_address)).map(ip => (
-                  <div key={ip.id} className="flex items-center gap-2 px-2 py-1.5 bg-gray-50 dark:bg-charcoal-darkest border border-gray-200 dark:border-gray-border">
-                    <span className="font-mono text-sm text-gray-700 dark:text-amber-primary flex-1">{ip.ip_address}</span>
-                    {ip.is_primary && (
-                      <span className="text-[10px] font-mono font-medium px-1.5 py-0.5 border border-purple-400 dark:border-purple-500 text-purple-600 dark:text-purple-400">PRIMARY</span>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="text-sm text-gray-400 dark:text-amber-muted py-1">No IP addresses detected</p>
-                  )}
-                  <p className="text-xs text-gray-500 dark:text-amber-muted mt-1 italic">
-                    Agent IPs are auto-detected and cannot be manually managed.
-                  </p>
-                </div>
+              {editPeer && (
+                <IPManager
+                  peerId={editPeer.id}
+                  isManual={editPeer.is_manual}
+                  ips={editPeerIPs}
+                  loading={editPeerIPsLoading}
+                  onAddIP={handleAddPeerIP}
+                  onDeleteIP={handleDeletePeerIP}
+                  agentVersion={editPeer.agent_version}
+                  latestAgentVersion={latestAgentVersion}
+                  isAgentOutdated={isAgentOutdated(editPeer.agent_version, latestAgentVersion)}
+                />
               )}
 
               <div className="grid grid-cols-2 gap-4">
@@ -1253,113 +1125,18 @@ title={groups.slice(maxVisible).join(', ')}
   </div>
 )}
 
-{/* Rule Bundle Modal */}
-      {bundleModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" tabIndex="-1" onKeyDown={(e) => { if (e.key === 'Escape') { setBundleModalOpen(false) } }}>
-          <div ref={bundleModalRef} className="bg-white dark:bg-charcoal-dark rounded-none shadow-none w-full max-w-4xl mx-4 max-h-[90vh] flex flex-col">
-            <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-border flex items-center justify-between shrink-0">
-              <div className="flex items-center gap-2">
-                <FileCode className="w-5 h-5 text-purple-active" />
-                <h3 className="text-lg font-semibold text-gray-900 dark:text-light-neutral">
-                  {viewingPendingRules ? `Pending Rules: ${bundlePeer?.hostname}` : `Deployed Rules: ${bundlePeer?.hostname}`}
-                </h3>
-              </div>
-<button
-            onClick={() => setBundleModalOpen(false)}
-            className="p-1 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none"
-          >
-                <X className="w-5 h-5 text-gray-500" />
-              </button>
-            </div>
-            <div className="p-6 overflow-y-auto flex-1">
-              {bundleLoading ? (
-                <div className="flex flex-col items-center justify-center py-12 space-y-4">
-                  <RefreshCw className="w-8 h-8 text-purple-active animate-spin" />
-                  <p className="text-sm text-gray-500 dark:text-amber-muted">Fetching latest bundle...</p>
-                </div>
-	) : (
-<>
-              <div className="mb-3">
-                <div className="mt-2 text-sm">
-                  <span className="text-gray-500 dark:text-amber-muted">Bundle Version: </span>
-                  <span className="font-mono font-medium text-gray-900 dark:text-light-neutral" title={bundleData?.version || ''}>
-                    v{bundleData?.version_number || '—'}
-                  </span>
-                  {viewingPendingRules && bundleData?.deployed_version && (
-                    <span className="ml-2 text-gray-500 dark:text-amber-muted">
-                      (was v{bundleData?.deployed_version?.split('-')[0] || '—'})
-                    </span>
-                  )}
-                </div>
-              </div>
-              {/* Toggle buttons for diff vs full view - only show when viewing pending rules with deployed_rules */}
-              {viewingPendingRules && 'deployed_rules' in (bundleData || {}) && (
-                <div className="flex gap-2 mb-3">
-                  <button
-                    onClick={() => setShowDiffView(true)}
-className={`px-3 py-1 rounded-none text-sm font-medium transition-colors ${
-            showDiffView
-              ? 'bg-purple-active text-white'
-              : 'bg-gray-100 dark:bg-charcoal-darkest text-gray-700 dark:text-amber-primary hover:bg-gray-200 dark:hover:bg-charcoal-dark'
-          }`}
-                  >
-                    Show Diff
-                  </button>
-                  <button
-                    onClick={() => setShowDiffView(false)}
-className={`px-3 py-1 rounded-none text-sm font-medium transition-colors ${
-            !showDiffView
-              ? 'bg-purple-active text-white'
-              : 'bg-gray-100 dark:bg-charcoal-darkest text-gray-700 dark:text-amber-primary hover:bg-gray-200 dark:hover:bg-charcoal-dark'
-          }`}
-                  >
-                    Show Full Rules
-                  </button>
-                </div>
-              )}
-              <div className="relative group">
-                <pre className="bg-gray-900 dark:bg-black text-gray-100 p-6 rounded-none text-sm font-mono overflow-auto whitespace-pre min-h-[200px] border border-gray-800">
-                  <code>
-                    {viewingPendingRules && showDiffView && 'deployed_rules' in (bundleData || {})
-                      ? computeDiff(bundleData.deployed_rules || '', bundleData.rules || '')
-                      : bundleContent}
-                  </code>
-                </pre>
-                {bundleContent && (
-                  <button
-                    onClick={async () => {
-                      const contentToCopy =
-                        viewingPendingRules && showDiffView && 'deployed_rules' in (bundleData || {})
-                          ? computeDiff(bundleData.deployed_rules || '', bundleData.rules || '')
-                          : bundleContent
-                      try {
-                        await navigator.clipboard.writeText(contentToCopy)
-                        showToast('Copied to clipboard', 'success')
-                      } catch {
-                        showToast('Failed to copy to clipboard', 'error')
-                      }
-                    }}
-                    className="absolute top-4 right-4 p-2 bg-gray-800 hover:bg-gray-700 rounded-none text-gray-300 transition-colors"
-                    title="Copy Rules"
-                  >
-                    <Copy className="w-4 h-4" />
-                  </button>
-                )}
-              </div>
-            </>
-	)}
-            </div>
-            <div className="px-6 py-4 border-t border-gray-200 dark:border-gray-border flex justify-end shrink-0">
-              <button 
-                onClick={() => setBundleModalOpen(false)} 
-                className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-light-neutral bg-gray-100 dark:bg-charcoal-darkest rounded-none hover:bg-gray-200 dark:hover:bg-charcoal-dark transition-colors"
-              >
-                Close
-              </button>
-            </div>
-      </div>
-    </div>
-  )}
+{bundlePeer && (
+        <BundleViewerModal
+          isOpen={bundleModalOpen}
+          onClose={() => {
+            setBundleModalOpen(false)
+            setBundlePeer(null)
+          }}
+          peerId={bundlePeer.id}
+          peerHostname={bundlePeer.hostname}
+          viewingPendingRules={viewingPendingRules}
+        />
+      )}
 
       {/* Pending Changes Modal */}
       {pendingModalOpen && pendingModalPeer && (

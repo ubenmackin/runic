@@ -60,10 +60,8 @@ export function useApiError() {
     createErrorHandler,
     isAuthError,
     getErrorMessage,
-    // Deprecated: import directly from '../utils/apiErrors'
-    createApiError,
-    // Deprecated: import directly from '../utils/apiErrors'
-    categorizeError,
+    // Note: createApiError and categorizeError were previously re-exported here
+    // but they are deprecated. Import directly from '../utils/apiErrors' instead.
   }
 }
 

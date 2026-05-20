@@ -1,10 +1,26 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 
 export function useFocusTrap(modalRef, isOpen) {
+  const previousFocusRef = useRef(null)
+
   useEffect(() => {
-    if (!isOpen) return
+    if (!isOpen) {
+      // Restore focus to the previously focused element when modal closes
+      if (previousFocusRef.current) {
+        previousFocusRef.current.focus()
+        previousFocusRef.current = null
+      }
+      return
+    }
+
+    // Save the currently focused element before opening
+    previousFocusRef.current = document.activeElement
+
     const modal = modalRef.current
-    if (!modal) return
+    if (!modal) {
+      previousFocusRef.current = null
+      return
+    }
 
     const focusableElements = modal.querySelectorAll(
       'button, [href], input, select, textarea, [contenteditable], [tabindex]:not([tabindex="-1"])'

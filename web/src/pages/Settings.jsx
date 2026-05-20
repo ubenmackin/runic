@@ -9,6 +9,7 @@ import PageHeader from '../components/PageHeader'
 import AlertSettings from '../components/AlertSettings'
 import CollapsibleSection from '../components/CollapsibleSection'
 import ToggleSwitch from '../components/ToggleSwitch'
+import NotificationPrefsForm from '../components/NotificationPrefsForm'
 import {
   transformPrefsToBackend,
   transformPrefsFromBackend,
@@ -20,19 +21,6 @@ import {
   getNotificationSummary,
   getAlertRulesSummary,
 } from '../utils/settingsSummary'
-
-// Timezone options
-const timezones = [
-  { value: 'UTC', label: 'UTC' },
-  { value: 'America/New_York', label: 'Eastern (New York)' },
-  { value: 'America/Chicago', label: 'Central (Chicago)' },
-  { value: 'America/Denver', label: 'Mountain (Denver)' },
-  { value: 'America/Los_Angeles', label: 'Pacific (Los Angeles)' },
-  { value: 'Europe/London', label: 'London' },
-  { value: 'Europe/Paris', label: 'Paris' },
-  { value: 'Asia/Tokyo', label: 'Tokyo' },
-  { value: 'Australia/Sydney', label: 'Sydney' },
-]
 
 export default function Settings() {
   const qc = useQueryClient()
@@ -416,146 +404,19 @@ const getKeyData = (keyType) => {
             defaultExpanded={true}
             summary={getNotificationSummary(notificationPrefs)}
           >
-            {userPrefsLoading ? (
-              <div className="flex items-center justify-center py-8">
-                <Loader className="w-6 h-6 animate-spin text-purple-500" />
-              </div>
-            ) : userPrefsError ? (
-              <div className="text-center py-8">
-                <p className="text-gray-600 dark:text-amber-muted">
-                  Please log in to configure notification preferences.
-                </p>
-              </div>
-            ) : notificationPrefs && (
-              <div className="space-y-6">
-                <div>
-                  <label htmlFor="unified_timezone" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-2">
-                    Timezone
-                  </label>
-                  <select
-                    id="unified_timezone"
-                      value={unifiedTimezone || 'UTC'}
-                      onChange={(e) => handleUnifiedTimezoneChange(e.target.value)}
-                      className="w-full md:w-auto min-w-[200px] px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-                    >
-                      {timezones.map((tz) => (
-                        <option key={tz.value} value={tz.value}>
-                          {tz.label}
-                        </option>
-                      ))}
-                    </select>
-                    <p className="text-xs text-gray-500 dark:text-amber-muted mt-1">
-                      Applies to both Quiet Hours and Daily Digest
-                  </p>
-                </div>
-
-            <div className="border-t border-gray-200 dark:border-gray-border pt-6">
-              <button
-                type="button"
-                onClick={() => setShowQuietHours(!showQuietHours)}
-                aria-expanded={!!showQuietHours}
-                aria-controls="quiet-hours-content"
-                    className="flex items-center justify-between w-full text-left"
-                  >
-                    <span className="text-sm font-medium text-gray-700 dark:text-amber-primary">
-                      Quiet Hours
-                    </span>
-                    <span className={`transform transition-transform ${showQuietHours ? 'rotate-180' : ''}`}>
-                      <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                      </svg>
-                    </span>
-                  </button>
-                  {showQuietHours && (
-<div id="quiet-hours-content" className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    id="quiet_hours_enabled"
-                    checked={notificationPrefs.quiet_hours?.enabled ?? false}
-                    onChange={(e) => handleQuietHoursChange('enabled', e.target.checked)}
-                    className="w-4 h-4 text-purple-600 border-gray-300 dark:border-gray-border rounded-none focus:ring-purple-500"
-                  />
-                  <label htmlFor="quiet_hours_enabled" className="text-sm text-gray-700 dark:text-amber-primary">
-                    Enable Quiet Hours
-                  </label>
-                </div>
-                <div>
-                  <label htmlFor="quiet_hours_start" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-                    Start Time
-                  </label>
-                  <input
-                    type="time"
-                    id="quiet_hours_start"
-                    value={notificationPrefs.quiet_hours?.start_time || '22:00'}
-                    onChange={(e) => handleQuietHoursChange('start_time', e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-                  />
-                </div>
-                <div>
-                  <label htmlFor="quiet_hours_end" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-                    End Time
-                  </label>
-                  <input
-                    type="time"
-                    id="quiet_hours_end"
-                    value={notificationPrefs.quiet_hours?.end_time || '08:00'}
-                    onChange={(e) => handleQuietHoursChange('end_time', e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-                  />
-                </div>
-              </div>
-                    )}
-              </div>
-
-              <div className="border-t border-gray-200 dark:border-gray-border pt-6">
-                  <button
-                    type="button"
-                    onClick={() => setShowDigest(!showDigest)}
-                    aria-expanded={!!showDigest}
-                    aria-controls="daily-digest-content"
-                    className="flex items-center justify-between w-full text-left"
-                  >
-                    <span className="text-sm font-medium text-gray-700 dark:text-amber-primary">
-                      Daily Digest
-                    </span>
-                    <span className={`transform transition-transform ${showDigest ? 'rotate-180' : ''}`}>
-                      <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                      </svg>
-                    </span>
-                  </button>
-                  {showDigest && (
-<div id="daily-digest-content" className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    id="digest_enabled"
-                    checked={notificationPrefs.daily_digest?.enabled ?? false}
-                    onChange={(e) => handleDigestChange('enabled', e.target.checked)}
-                    className="w-4 h-4 text-purple-600 border-gray-300 dark:border-gray-border rounded-none focus:ring-purple-500"
-                  />
-                  <label htmlFor="digest_enabled" className="text-sm text-gray-700 dark:text-amber-primary">
-                    Enable Daily Digest
-                  </label>
-                </div>
-                <div>
-                  <label htmlFor="digest_time" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-                    Digest Time
-                  </label>
-                  <input
-                    type="time"
-                    id="digest_time"
-                    value={notificationPrefs.daily_digest?.time || '09:00'}
-                    onChange={(e) => handleDigestChange('time', e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-                  />
-                </div>
-              </div>
-                    )}
-                  </div>
-                </div>
-              )}
+            <NotificationPrefsForm
+              prefs={notificationPrefs}
+              unifiedTimezone={unifiedTimezone}
+              loading={userPrefsLoading}
+              error={userPrefsError}
+              showQuietHours={showQuietHours}
+              setShowQuietHours={setShowQuietHours}
+              showDigest={showDigest}
+              setShowDigest={setShowDigest}
+              onQuietHoursChange={handleQuietHoursChange}
+              onDigestChange={handleDigestChange}
+              onUnifiedTimezoneChange={handleUnifiedTimezoneChange}
+            />
             </CollapsibleSection>
 
             <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none">
@@ -798,146 +659,20 @@ id="notifications-section"
             expanded={notificationsExpanded}
             onExpandedChange={setNotificationsExpanded}
           >
-            {userPrefsLoading ? (
-              <div className="flex items-center justify-center py-8">
-                <Loader className="w-6 h-6 animate-spin text-purple-500" />
-              </div>
-            ) : userPrefsError ? (
-              <div className="text-center py-8">
-                <p className="text-gray-600 dark:text-amber-muted">
-                  Please log in to configure notification preferences.
-                </p>
-              </div>
-            ) : notificationPrefs && (
-              <div className="space-y-6">
-                <div>
-                  <label htmlFor="admin-unified_timezone" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-2">
-                    Timezone
-                  </label>
-                  <select
-                    id="admin-unified_timezone"
-                        value={unifiedTimezone || 'UTC'}
-                        onChange={(e) => handleUnifiedTimezoneChange(e.target.value)}
-                        className="w-full md:w-auto min-w-[200px] px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-                      >
-                        {timezones.map((tz) => (
-                          <option key={tz.value} value={tz.value}>
-                            {tz.label}
-                          </option>
-                        ))}
-                      </select>
-                      <p className="text-xs text-gray-500 dark:text-amber-muted mt-1">
-                        Applies to both Quiet Hours and Daily Digest
-                      </p>
-                  </div>
-
-            <div className="border-t border-gray-200 dark:border-gray-border pt-6">
-              <button
-                type="button"
-                onClick={() => setShowQuietHours(!showQuietHours)}
-                aria-expanded={!!showQuietHours}
-                aria-controls="admin-quiet-hours-content"
-                    className="flex items-center justify-between w-full text-left"
-                  >
-                    <span className="text-sm font-medium text-gray-700 dark:text-amber-primary">
-                      Quiet Hours
-                    </span>
-                    <span className={`transform transition-transform ${showQuietHours ? 'rotate-180' : ''}`}>
-                      <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                      </svg>
-                    </span>
-                  </button>
-                  {showQuietHours && (
-<div id="admin-quiet-hours-content" className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    id="admin-quiet_hours_enabled"
-                    checked={notificationPrefs.quiet_hours?.enabled ?? false}
-                    onChange={(e) => handleQuietHoursChange('enabled', e.target.checked)}
-                    className="w-4 h-4 text-purple-600 border-gray-300 dark:border-gray-border rounded-none focus:ring-purple-500"
-                  />
-                  <label htmlFor="admin-quiet_hours_enabled" className="text-sm text-gray-700 dark:text-amber-primary">
-                    Enable Quiet Hours
-                  </label>
-                </div>
-                <div>
-                  <label htmlFor="admin-quiet_hours_start" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-                    Start Time
-                  </label>
-                  <input
-                    type="time"
-                    id="admin-quiet_hours_start"
-                    value={notificationPrefs.quiet_hours?.start_time || '22:00'}
-                    onChange={(e) => handleQuietHoursChange('start_time', e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-                  />
-                </div>
-                <div>
-                  <label htmlFor="admin-quiet_hours_end" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-                    End Time
-                  </label>
-                  <input
-                    type="time"
-                    id="admin-quiet_hours_end"
-                    value={notificationPrefs.quiet_hours?.end_time || '08:00'}
-                    onChange={(e) => handleQuietHoursChange('end_time', e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-                  />
-                </div>
-              </div>
-                      )}
-                </div>
-
-                <div className="border-t border-gray-200 dark:border-gray-border pt-6">
-                  <button
-                    type="button"
-                    onClick={() => setShowDigest(!showDigest)}
-                    aria-expanded={!!showDigest}
-                    aria-controls="admin-daily-digest-content"
-                    className="flex items-center justify-between w-full text-left"
-                  >
-                    <span className="text-sm font-medium text-gray-700 dark:text-amber-primary">
-                      Daily Digest
-                    </span>
-                    <span className={`transform transition-transform ${showDigest ? 'rotate-180' : ''}`}>
-                      <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                      </svg>
-                    </span>
-                  </button>
-                  {showDigest && (
-<div id="admin-daily-digest-content" className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    id="admin-digest_enabled"
-                    checked={notificationPrefs.daily_digest?.enabled ?? false}
-                    onChange={(e) => handleDigestChange('enabled', e.target.checked)}
-                    className="w-4 h-4 text-purple-600 border-gray-300 dark:border-gray-border rounded-none focus:ring-purple-500"
-                  />
-                  <label htmlFor="admin-digest_enabled" className="text-sm text-gray-700 dark:text-amber-primary">
-                    Enable Daily Digest
-                  </label>
-                </div>
-                <div>
-                  <label htmlFor="admin-digest_time" className="block text-sm font-medium text-gray-700 dark:text-amber-primary mb-1">
-                    Digest Time
-                  </label>
-                  <input
-                    type="time"
-                    id="admin-digest_time"
-                    value={notificationPrefs.daily_digest?.time || '09:00'}
-                    onChange={(e) => handleDigestChange('time', e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral"
-                  />
-                </div>
-              </div>
-                      )}
-                    </div>
-                  </div>
-                )}
+            <NotificationPrefsForm
+              prefs={notificationPrefs}
+              unifiedTimezone={unifiedTimezone}
+              loading={userPrefsLoading}
+              error={userPrefsError}
+              showQuietHours={showQuietHours}
+              setShowQuietHours={setShowQuietHours}
+              showDigest={showDigest}
+              setShowDigest={setShowDigest}
+              onQuietHoursChange={handleQuietHoursChange}
+              onDigestChange={handleDigestChange}
+              onUnifiedTimezoneChange={handleUnifiedTimezoneChange}
+              idPrefix="admin"
+            />
               </CollapsibleSection>
                 </div>
               </div>

@@ -311,27 +311,6 @@ func TestDeleteUser_UserNotFound(t *testing.T) {
 	}
 }
 
-func TestDeleteUser_NonAdmin(t *testing.T) {
-	db, cleanup := testutil.SetupTestDB(t)
-	defer cleanup()
-
-	hash, _ := bcrypt.GenerateFromPassword([]byte("password123"), 12)
-	db.Exec("INSERT INTO users (username, password_hash, email, role) VALUES (?, ?, ?, ?)",
-		"testuser", string(hash), "test@test.com", "viewer")
-
-	h := newTestHandler(db)
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodDelete, "/api/v1/users/1", nil)
-	r = muxVars(r, map[string]string{"id": "1"})
-	r = r.WithContext(withEditorContext(r.Context()))
-
-	h.DeleteUser(w, r)
-
-	if w.Code != http.StatusForbidden {
-		t.Errorf("expected status %d, got %d", http.StatusForbidden, w.Code)
-	}
-}
-
 func TestDeleteUser_CannotDeleteYourself(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
@@ -476,27 +455,6 @@ func TestUpdateUser_UserNotFound(t *testing.T) {
 
 	if w.Code != http.StatusNotFound {
 		t.Errorf("expected status %d, got %d", http.StatusNotFound, w.Code)
-	}
-}
-
-func TestUpdateUser_NonAdminChangingRole(t *testing.T) {
-	db, cleanup := testutil.SetupTestDB(t)
-	defer cleanup()
-
-	hash, _ := bcrypt.GenerateFromPassword([]byte("password123"), 12)
-	db.Exec("INSERT INTO users (username, password_hash, email, role) VALUES (?, ?, ?, ?)",
-		"testuser", string(hash), "test@test.com", "viewer")
-
-	h := newTestHandler(db)
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/users/1", strings.NewReader(`{"role":"admin"}`))
-	r = muxVars(r, map[string]string{"id": "1"})
-	r = r.WithContext(withEditorContext(r.Context()))
-
-	h.UpdateUser(w, r)
-
-	if w.Code != http.StatusForbidden {
-		t.Errorf("expected status %d, got %d", http.StatusForbidden, w.Code)
 	}
 }
 

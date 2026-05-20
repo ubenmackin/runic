@@ -15,7 +15,7 @@ const (
 )
 
 func newTestRateLimiter() *middleware.RateLimiter {
-	return middleware.NewRateLimiter(setupMaxRequests, setupRateLimitWindow)
+	return middleware.NewRateLimiter(setupGetMaxRequests, setupGetRateLimitWindow)
 }
 
 // This allows testing window reset behavior without waiting for the production 1-minute window.
@@ -29,7 +29,7 @@ func TestCheckSetupRateLimit_LimitTests(t *testing.T) {
 	testLimiter := newTestRateLimiter()
 
 	// Make requests up to the limit - all should succeed
-	for i := 0; i < setupMaxRequests; i++ {
+	for i := 0; i < setupGetMaxRequests; i++ {
 		err := testLimiter.Check(testIP)
 		if err != nil {
 			t.Errorf("Request %d: expected success, got error: %v", i+1, err)
@@ -82,7 +82,7 @@ func TestCheckSetupRateLimit_IndependentLimits(t *testing.T) {
 	testLimiter := newTestRateLimiter()
 
 	// Rate limit IP1 completely
-	for i := 0; i < setupMaxRequests; i++ {
+	for i := 0; i < setupGetMaxRequests; i++ {
 		err := testLimiter.Check(ip1)
 		if err != nil {
 			t.Errorf("IP1 request %d: expected success, got error: %v", i+1, err)
@@ -96,7 +96,7 @@ func TestCheckSetupRateLimit_IndependentLimits(t *testing.T) {
 	}
 
 	// IP2 should still be able to make requests (independent limit)
-	for i := 0; i < setupMaxRequests; i++ {
+	for i := 0; i < setupGetMaxRequests; i++ {
 		err := testLimiter.Check(ip2)
 		if err != nil {
 			t.Errorf("IP2 request %d: expected success, got error: %v", i+1, err)
@@ -130,7 +130,7 @@ func TestCheckSetupRateLimit_PublicAPI(t *testing.T) {
 
 	// Test that the public API function works
 	for i := 0; i < 5; i++ {
-		err := CheckSetupRateLimit(testIP)
+		err := CheckSetupGetRateLimit(testIP)
 		if err != nil {
 			t.Errorf("Public API request %d: expected success, got error: %v", i+1, err)
 		}

@@ -87,9 +87,7 @@ describe('aggregatePendingChangesCount', () => {
         null,
         { peer_id: 'peer-2', changes_count: 2 },
       ]
-      // The current implementation doesn't handle null items in array
-      // This test documents the actual behavior (throws error)
-      expect(() => aggregatePendingChangesCount(pendingChanges)).toThrow()
+      expect(aggregatePendingChangesCount(pendingChanges)).toBe(5)
     })
 
     test('handles undefined items in array', () => {
@@ -98,9 +96,7 @@ describe('aggregatePendingChangesCount', () => {
         undefined,
         { peer_id: 'peer-2', changes_count: 1 },
       ]
-      // The current implementation doesn't handle undefined items in array
-      // This test documents the actual behavior (throws error)
-      expect(() => aggregatePendingChangesCount(pendingChanges)).toThrow()
+      expect(aggregatePendingChangesCount(pendingChanges)).toBe(5)
     })
   })
 
@@ -118,9 +114,9 @@ describe('aggregatePendingChangesCount', () => {
         { peer_id: 'peer-1', changes_count: '5' },
         { peer_id: 'peer-2', changes_count: '3' },
       ]
-      // String numbers result in string concatenation: 0 + '5' = '05', '05' + '3' = '053'
+      // String numbers are now parsed to integers
       const result = aggregatePendingChangesCount(pendingChanges)
-      expect(result).toBe('053') // string concatenation occurs with leading 0
+      expect(result).toBe(8)
     })
   })
 })

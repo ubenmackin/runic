@@ -1,17 +1,17 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import {
-  Shield, FileText, Settings, User,
-  LogOut, Moon, Sun, ChevronDown, Flame, Server, Users as UsersIcon,
-  Briefcase, Bell, Key
+  User,
+  LogOut, Moon, Sun, ChevronDown, Flame,
 } from 'lucide-react'
 import { useAuthStore } from '../store'
 import { useAuth } from '../hooks/useAuth'
 import { useIsMobile } from '../hooks/useIsMobile'
 import { getVersion } from '../api/client'
+import NAV_ITEMS, { isParentActive } from './navigationConfig'
 
-const DropdownItem = ({ to, icon: Icon, label, onClick }) => (
+const DropdownItem = React.memo(({ to, icon: Icon, label, onClick }) => (
   <NavLink
     to={to}
     onClick={onClick}
@@ -26,20 +26,10 @@ className={({ isActive }) =>
     <Icon className="w-4 h-4" />
     <span className="uppercase">{label}</span>
   </NavLink>
-)
+))
+DropdownItem.displayName = 'DropdownItem'
 
-const PARENT_ROUTE_MAP = {
-  'access-control': ['/peers', '/groups', '/services', '/policies'],
-  'logs': ['/logs', '/alerts'],
-  'settings': ['/setup-keys', '/users', '/settings']
-}
-
-const isParentActive = (parentKey, pathname) => {
-  const childRoutes = PARENT_ROUTE_MAP[parentKey] || []
-  return childRoutes.some(route => pathname === route || pathname.startsWith(route + '/'))
-}
-
-const DropdownMenu = ({ label, children, isOpen, onToggle, isActive }) => {
+const DropdownMenu = React.memo(({ label, children, isOpen, onToggle, isActive }) => {
   const dropdownRef = useRef(null)
   const closeTimeoutRef = useRef(null)
   const isMobile = useIsMobile()
@@ -96,13 +86,14 @@ const DropdownMenu = ({ label, children, isOpen, onToggle, isActive }) => {
       onMouseLeave={handleMouseLeave}
     >
       <button
-className={`flex items-center justify-center gap-1.5 px-5 h-[52px] text-sm font-medium rounded-none transition-colors border-b-2 ${
-  isActive
-    ? 'bg-purple-active/10 text-purple-active border-purple-active'
-    : isOpen
+        data-active={isActive ? 'true' : 'false'}
+        className={`flex items-center justify-center gap-1.5 px-5 h-[52px] text-sm font-medium rounded-none transition-colors border-b-2 ${
+          isActive
+            ? 'bg-purple-active/10 text-purple-active border-purple-active'
+            : isOpen
 ? 'bg-gray-100 dark:bg-charcoal-darkest text-white border-transparent'
 : 'text-slate-500 hover:text-white hover:bg-gray-100 dark:hover:bg-charcoal-darkest border-transparent'
-}`}
+        }`}
       >
         <span className="hidden lg:inline uppercase">{label}</span>
         <ChevronDown className={`w-3.5 h-3.5 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
@@ -117,7 +108,8 @@ className={`flex items-center justify-center gap-1.5 px-5 h-[52px] text-sm font-
       )}
     </div>
   )
-}
+})
+DropdownMenu.displayName = 'DropdownMenu'
 
 const NavItem = ({ to, label }) => (
   <NavLink
@@ -200,9 +192,9 @@ export default function TopNav() {
     navigate('/login')
   }
 
-  const handleDropdownToggle = (key) => (open) => {
+  const handleDropdownToggle = useCallback((key) => (open) => {
     setOpenDropdowns(prev => ({ ...prev, [key]: open }))
-  }
+  }, [])
 
   const handleUserDropdownMouseEnter = useCallback(() => {
     // Only apply hover behavior on desktop (md breakpoint and above)
@@ -238,57 +230,83 @@ export default function TopNav() {
       <span className="hidden sm:inline text-sm font-normal text-gray-500 dark:text-amber-muted whitespace-nowrap">IPTables Management</span>
     </div>
 
-      <nav className="hidden md:flex items-center gap-1">
-      <NavItem to="/" label="Dashboard" />
+      <nav className="hidden md:flex items-center gap-1" aria-label="Main navigation">
+        {NAV_ITEMS.map(item => {
+          // Simple nav items (no submenu)
+          if (!item.submenu) {
+            return <NavItem key={item.to} to={item.to} label={item.label} />
+          }
 
-      <NavItem to="/topology" label="Topology" />
+          // Access Control and Logs dropdowns - straightforward from NAV_ITEMS
+          if (item.key !== 'settings') {
+            return (
+              <DropdownMenu
+                key={item.key}
+                label={item.label}
+                isOpen={openDropdowns[item.key]}
+                onToggle={handleDropdownToggle(item.key)}
+                isActive={isParentActive(item.key, location.pathname)}
+              >
+                {item.submenu.map(subItem => (
+                  <DropdownItem
+                    key={subItem.to}
+                    to={subItem.to}
+                    icon={subItem.icon}
+                    label={subItem.label}
+                    onClick={() => handleDropdownToggle(item.key)(false)}
+                  />
+                ))}
+              </DropdownMenu>
+            )
+          }
 
-      <DropdownMenu
-        label="Access Control"
-        isOpen={openDropdowns['access-control']}
-        onToggle={handleDropdownToggle('access-control')}
-        isActive={isParentActive('access-control', location.pathname)}
-      >
-          <DropdownItem to="/peers" icon={Server} label="Peers" onClick={() => handleDropdownToggle('access-control')(false)} />
-          <DropdownItem to="/groups" icon={UsersIcon} label="Groups" onClick={() => handleDropdownToggle('access-control')(false)} />
-          <DropdownItem to="/services" icon={Briefcase} label="Services" onClick={() => handleDropdownToggle('access-control')(false)} />
-          <DropdownItem to="/policies" icon={Shield} label="Policies" onClick={() => handleDropdownToggle('access-control')(false)} />
-        </DropdownMenu>
-
-      <DropdownMenu
-        label="Logs"
-        isOpen={openDropdowns['logs']}
-        onToggle={handleDropdownToggle('logs')}
-        isActive={isParentActive('logs', location.pathname)}
-      >
-          <DropdownItem to="/logs" icon={FileText} label="Logs" onClick={() => handleDropdownToggle('logs')(false)} />
-          <DropdownItem to="/alerts" icon={Bell} label="Alerts" onClick={() => handleDropdownToggle('logs')(false)} />
-        </DropdownMenu>
-
-      <DropdownMenu
-        label="Settings"
-        isOpen={openDropdowns['settings']}
-        onToggle={handleDropdownToggle('settings')}
-        isActive={isParentActive('settings', location.pathname)}
-      >
-          <button
-            onClick={() => {
-              toggleDark()
-              handleDropdownToggle('settings')(false)
-            }}
-            className="flex items-center gap-2 px-3 py-2 text-sm w-full text-gray-700 dark:text-light-neutral hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none transition-colors uppercase"
-          >
-            {darkMode ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
-            <span>{darkMode ? 'Light Mode' : 'Dark Mode'}</span>
-          </button>
-          {isAdmin && (
-            <DropdownItem to="/setup-keys" icon={Key} label="Setup Keys" onClick={() => handleDropdownToggle('settings')(false)} />
-          )}
-          {isAdmin && (
-            <DropdownItem to="/users" icon={User} label="Users" onClick={() => handleDropdownToggle('settings')(false)} />
-          )}
-          <DropdownItem to="/settings" icon={Settings} label="Settings" onClick={() => handleDropdownToggle('settings')(false)} />
-        </DropdownMenu>
+          // Settings dropdown - special handling for dark mode toggle and admin-only items
+          return (
+            <DropdownMenu
+              key={item.key}
+              label={item.label}
+              isOpen={openDropdowns['settings']}
+              onToggle={handleDropdownToggle('settings')}
+              isActive={isParentActive('settings', location.pathname)}
+            >
+              <button
+                onClick={() => {
+                  toggleDark()
+                  handleDropdownToggle('settings')(false)
+                }}
+                className="flex items-center gap-2 px-3 py-2 text-sm w-full text-gray-700 dark:text-light-neutral hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none transition-colors uppercase"
+                aria-label={darkMode ? 'Switch to light mode' : 'Switch to dark mode'}
+              >
+                {darkMode ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+                <span>{darkMode ? 'Light Mode' : 'Dark Mode'}</span>
+              </button>
+              {/* Setup Keys - admin only */}
+              {isAdmin && (
+                <DropdownItem
+                  to="/setup-keys"
+                  icon={item.submenu.find(s => s.to === '/setup-keys').icon}
+                  label="Setup Keys"
+                  onClick={() => handleDropdownToggle('settings')(false)}
+                />
+              )}
+              {/* Users - admin only */}
+              {isAdmin && (
+                <DropdownItem
+                  to="/users"
+                  icon={item.submenu.find(s => s.to === '/users').icon}
+                  label="Users"
+                  onClick={() => handleDropdownToggle('settings')(false)}
+                />
+              )}
+              <DropdownItem
+                to="/settings"
+                icon={item.submenu.find(s => s.to === '/settings').icon}
+                label="Settings"
+                onClick={() => handleDropdownToggle('settings')(false)}
+              />
+            </DropdownMenu>
+          )
+        })}
       </nav>
 
       <div className="flex items-center gap-2">
@@ -301,6 +319,7 @@ export default function TopNav() {
           <button
             onClick={handleUserDropdownClick}
             className="flex items-center gap-2 px-3 py-2 text-sm font-medium rounded-none hover:bg-gray-100 dark:hover:bg-charcoal-darkest transition-colors"
+            aria-label={username ? `User menu for ${username}` : 'User menu'}
           >
             <User className="w-4 h-4 text-gray-700 dark:text-light-neutral" />
             <span className="hidden md:inline text-gray-700 dark:text-light-neutral">{username}</span>
@@ -322,6 +341,7 @@ export default function TopNav() {
               <button
                 onClick={handleLogout}
                 className="flex items-center gap-2 px-3 py-2 text-sm w-full text-gray-700 dark:text-light-neutral hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none transition-colors"
+                aria-label="Logout"
               >
                 <LogOut className="w-4 h-4" />
                 <span>Logout</span>

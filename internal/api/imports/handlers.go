@@ -55,18 +55,18 @@ func NewHandler(store ImportStore, sseHub *events.SSEHub, changeWorker *common.C
 // RegisterRoutes registers all import session routes. All routes require editor role — the caller is responsible for applying the middleware.
 func (h *Handler) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/peers/{id:[0-9]+}/import", h.InitiateImport).Methods("POST")
-	r.HandleFunc("/import-sessions/{id:[0-9]+}", h.GetSession).Methods("GET")
-	r.HandleFunc("/import-sessions/{id:[0-9]+}/rules", h.GetRules).Methods("GET")
-	r.HandleFunc("/import-sessions/{id:[0-9]+}/groups", h.GetGroups).Methods("GET")
-	r.HandleFunc("/import-sessions/{id:[0-9]+}/peers", h.GetPeers).Methods("GET")
-	r.HandleFunc("/import-sessions/{id:[0-9]+}/services", h.GetServices).Methods("GET")
-	r.HandleFunc("/import-sessions/{id:[0-9]+}/skipped", h.GetSkippedRules).Methods("GET")
-	r.HandleFunc("/import-sessions/{id:[0-9]+}/rules/{rule_id:[0-9]+}", h.UpdateRule).Methods("PUT")
-	r.HandleFunc("/import-sessions/{id:[0-9]+}/groups/{group_id:[0-9]+}", h.UpdateGroup).Methods("PUT")
-	r.HandleFunc("/import-sessions/{id:[0-9]+}/peers/{peer_id:[0-9]+}", h.UpdatePeer).Methods("PUT")
-	r.HandleFunc("/import-sessions/{id:[0-9]+}/services/{service_id:[0-9]+}", h.UpdateService).Methods("PUT")
-	r.HandleFunc("/import-sessions/{id:[0-9]+}/apply", h.ApplySession).Methods("POST")
-	r.HandleFunc("/import-sessions/{id:[0-9]+}", h.CancelSession).Methods("DELETE")
+	r.HandleFunc("/import-sessions/{session_id:[0-9]+}", h.GetSession).Methods("GET")
+	r.HandleFunc("/import-sessions/{session_id:[0-9]+}/rules", h.GetRules).Methods("GET")
+	r.HandleFunc("/import-sessions/{session_id:[0-9]+}/groups", h.GetGroups).Methods("GET")
+	r.HandleFunc("/import-sessions/{session_id:[0-9]+}/peers", h.GetPeers).Methods("GET")
+	r.HandleFunc("/import-sessions/{session_id:[0-9]+}/services", h.GetServices).Methods("GET")
+	r.HandleFunc("/import-sessions/{session_id:[0-9]+}/skipped", h.GetSkippedRules).Methods("GET")
+	r.HandleFunc("/import-sessions/{session_id:[0-9]+}/rules/{rule_id:[0-9]+}", h.UpdateRule).Methods("PUT")
+	r.HandleFunc("/import-sessions/{session_id:[0-9]+}/groups/{group_id:[0-9]+}", h.UpdateGroup).Methods("PUT")
+	r.HandleFunc("/import-sessions/{session_id:[0-9]+}/peers/{peer_id:[0-9]+}", h.UpdatePeer).Methods("PUT")
+	r.HandleFunc("/import-sessions/{session_id:[0-9]+}/services/{service_id:[0-9]+}", h.UpdateService).Methods("PUT")
+	r.HandleFunc("/import-sessions/{session_id:[0-9]+}/apply", h.ApplySession).Methods("POST")
+	r.HandleFunc("/import-sessions/{session_id:[0-9]+}", h.CancelSession).Methods("DELETE")
 }
 
 func (h *Handler) InitiateImport(w http.ResponseWriter, r *http.Request) {
@@ -121,9 +121,9 @@ func (h *Handler) InitiateImport(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	common.RespondJSON(w, http.StatusCreated, map[string]interface{}{
-		"session_id": session.ID,
-		"status":     session.Status,
+	common.RespondJSON(w, http.StatusCreated, initiateImportResponse{
+		SessionID: session.ID,
+		Status:    session.Status,
 	})
 }
 
@@ -240,26 +240,14 @@ func (h *Handler) GetSkippedRules(w http.ResponseWriter, r *http.Request) {
 	common.RespondJSON(w, http.StatusOK, skipped)
 }
 
-func (h *Handler) parseUpdateIDs(w http.ResponseWriter, r *http.Request, entityIDParam string) (sessionID int64, entityID int64, ok bool) {
-	var err error
-	sessionID, err = h.getSessionID(r)
-	if err != nil {
-		common.RespondError(w, http.StatusBadRequest, "invalid session ID")
-		return 0, 0, false
-	}
-	entityID, err = strconv.ParseInt(mux.Vars(r)[entityIDParam], 10, 64)
-	if err != nil {
-		common.RespondError(w, http.StatusBadRequest, "invalid ID")
-		return 0, 0, false
-	}
-	return sessionID, entityID, true
-}
-
 func (h *Handler) UpdateRule(w http.ResponseWriter, r *http.Request) {
-	sessionID, ruleID, ok := h.parseUpdateIDs(w, r, "rule_id")
-	if !ok {
+	sessionID, ruleID, err := parseUpdateIDs(r, "rule_id")
+	if err != nil {
+		common.RespondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB limit
 
 	var input struct {
 		Status     *string `json:"status"`
@@ -269,6 +257,11 @@ func (h *Handler) UpdateRule(w http.ResponseWriter, r *http.Request) {
 		TargetIP   *string `json:"target_ip"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			common.RespondError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return
+		}
 		common.RespondError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
@@ -284,20 +277,28 @@ func (h *Handler) UpdateRule(w http.ResponseWriter, r *http.Request) {
 		common.RespondError(w, http.StatusInternalServerError, "database error")
 		return
 	}
-	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	common.RespondJSON(w, http.StatusOK, statusResponse{Status: "ok"})
 }
 
 func (h *Handler) UpdateGroup(w http.ResponseWriter, r *http.Request) {
-	sessionID, groupID, ok := h.parseUpdateIDs(w, r, "group_id")
-	if !ok {
+	sessionID, groupID, err := parseUpdateIDs(r, "group_id")
+	if err != nil {
+		common.RespondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB limit
 
 	var input struct {
 		Status          *string `json:"status"`
 		ExistingGroupID *int64  `json:"existing_group_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			common.RespondError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return
+		}
 		common.RespondError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
@@ -313,20 +314,28 @@ func (h *Handler) UpdateGroup(w http.ResponseWriter, r *http.Request) {
 		common.RespondError(w, http.StatusInternalServerError, "database error")
 		return
 	}
-	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	common.RespondJSON(w, http.StatusOK, statusResponse{Status: "ok"})
 }
 
 func (h *Handler) UpdatePeer(w http.ResponseWriter, r *http.Request) {
-	sessionID, peerID, ok := h.parseUpdateIDs(w, r, "peer_id")
-	if !ok {
+	sessionID, peerID, err := parseUpdateIDs(r, "peer_id")
+	if err != nil {
+		common.RespondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB limit
 
 	var input struct {
 		Status         *string `json:"status"`
 		ExistingPeerID *int64  `json:"existing_peer_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			common.RespondError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return
+		}
 		common.RespondError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
@@ -342,20 +351,28 @@ func (h *Handler) UpdatePeer(w http.ResponseWriter, r *http.Request) {
 		common.RespondError(w, http.StatusInternalServerError, "database error")
 		return
 	}
-	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	common.RespondJSON(w, http.StatusOK, statusResponse{Status: "ok"})
 }
 
 func (h *Handler) UpdateService(w http.ResponseWriter, r *http.Request) {
-	sessionID, serviceID, ok := h.parseUpdateIDs(w, r, "service_id")
-	if !ok {
+	sessionID, serviceID, err := parseUpdateIDs(r, "service_id")
+	if err != nil {
+		common.RespondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB limit
 
 	var input struct {
 		Status            *string `json:"status"`
 		ExistingServiceID *int64  `json:"existing_service_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			common.RespondError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return
+		}
 		common.RespondError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
@@ -371,7 +388,7 @@ func (h *Handler) UpdateService(w http.ResponseWriter, r *http.Request) {
 		common.RespondError(w, http.StatusInternalServerError, "database error")
 		return
 	}
-	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	common.RespondJSON(w, http.StatusOK, statusResponse{Status: "ok"})
 }
 
 func (h *Handler) ApplySession(w http.ResponseWriter, r *http.Request) {
@@ -404,12 +421,12 @@ func (h *Handler) ApplySession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	common.RespondJSON(w, http.StatusOK, map[string]interface{}{
-		"status":           "applied",
-		"policies_created": result.PoliciesCreated,
-		"groups_created":   result.GroupsCreated,
-		"peers_created":    result.PeersCreated,
-		"services_created": result.ServicesCreated,
+	common.RespondJSON(w, http.StatusOK, applyResponse{
+		Status:          "applied",
+		PoliciesCreated: result.PoliciesCreated,
+		GroupsCreated:   result.GroupsCreated,
+		PeersCreated:    result.PeersCreated,
+		ServicesCreated: result.ServicesCreated,
 	})
 }
 
@@ -425,11 +442,42 @@ func (h *Handler) CancelSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "canceled"})
+	common.RespondJSON(w, http.StatusOK, statusResponse{Status: "canceled"})
+}
+
+// Response types
+
+type statusResponse struct {
+	Status string `json:"status"`
+}
+
+type initiateImportResponse struct {
+	SessionID int64  `json:"session_id"`
+	Status    string `json:"status"`
+}
+
+type applyResponse struct {
+	Status          string `json:"status"`
+	PoliciesCreated int    `json:"policies_created"`
+	GroupsCreated   int    `json:"groups_created"`
+	PeersCreated    int    `json:"peers_created"`
+	ServicesCreated int    `json:"services_created"`
 }
 
 // Helper functions
 
 func (h *Handler) getSessionID(r *http.Request) (int64, error) {
-	return strconv.ParseInt(mux.Vars(r)["id"], 10, 64)
+	return strconv.ParseInt(mux.Vars(r)["session_id"], 10, 64)
+}
+
+func parseUpdateIDs(r *http.Request, entityIDParam string) (sessionID int64, entityID int64, err error) {
+	sessionID, err = strconv.ParseInt(mux.Vars(r)["session_id"], 10, 64)
+	if err != nil {
+		return 0, 0, fmt.Errorf("invalid session ID")
+	}
+	entityID, err = strconv.ParseInt(mux.Vars(r)[entityIDParam], 10, 64)
+	if err != nil {
+		return 0, 0, fmt.Errorf("invalid %s", entityIDParam)
+	}
+	return sessionID, entityID, nil
 }

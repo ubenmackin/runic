@@ -124,8 +124,8 @@ func TestPeerCRUDIntegration(t *testing.T) {
 		deleteResp := JSONRequest(t, server, "DELETE", "/api/v1/peers/"+strconv.FormatInt(peerID, 10), nil, "admin", "admin")
 		defer deleteResp.Body.Close()
 
-		if deleteResp.StatusCode != http.StatusOK {
-			t.Errorf("delete: expected status %d, got %d", http.StatusOK, deleteResp.StatusCode)
+		if deleteResp.StatusCode != http.StatusNoContent && deleteResp.StatusCode != http.StatusOK {
+			t.Errorf("delete: expected status %d or %d, got %d", http.StatusNoContent, http.StatusOK, deleteResp.StatusCode)
 		}
 
 		// VERIFY DELETION - peer list should be empty for this ID

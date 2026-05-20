@@ -45,8 +45,12 @@ export function useCrudMutations({
     mutationFn: ({ id, data }) => api.put(`${apiPath}/${id}`, data),
     onMutate: async ({ id, data }) => {
       await qc.cancelQueries({ queryKey })
+      await Promise.all(additionalInvalidations.map(key => qc.cancelQueries({ queryKey: key })))
       const previousData = qc.getQueryData(queryKey)
-      qc.setQueryData(queryKey, old => old?.map(item => getId(item) === id ? { ...item, ...data } : item) || [])
+      qc.setQueryData(queryKey, old => {
+        if (!Array.isArray(old)) return old || []
+        return old.map(item => getId(item) === id ? { ...item, ...data } : item)
+      })
       return { previousData }
     },
     onError: (err, vars, context) => {
@@ -64,8 +68,12 @@ export function useCrudMutations({
     mutationFn: (id) => api.delete(`${apiPath}/${id}`),
     onMutate: async (id) => {
       await qc.cancelQueries({ queryKey })
+      await Promise.all(additionalInvalidations.map(key => qc.cancelQueries({ queryKey: key })))
       const previousData = qc.getQueryData(queryKey)
-      qc.setQueryData(queryKey, old => old?.filter(item => getId(item) !== id) || [])
+      qc.setQueryData(queryKey, old => {
+        if (!Array.isArray(old)) return old || []
+        return old.filter(item => getId(item) !== id)
+      })
       return { previousData }
     },
     onError: (err, id, context) => {

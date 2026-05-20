@@ -274,7 +274,7 @@ func TestCheckBlockedSpike(t *testing.T) {
 		for i := 0; i < 15; i++ {
 			_, err := database.Exec(
 				"INSERT INTO firewall_logs (peer_id, action, timestamp, src_ip, dst_ip, protocol) VALUES (?, ?, ?, ?, ?, ?)",
-				baselinePeerID, "LOG_DROP", time.Now().Add(-2*time.Minute), "192.168.1.1", "10.0.0.2", "tcp",
+				baselinePeerID, "DROP", time.Now().Add(-2*time.Minute), "192.168.1.1", "10.0.0.2", "tcp",
 			)
 			if err != nil {
 				t.Fatalf("failed to insert firewall log: %v", err)

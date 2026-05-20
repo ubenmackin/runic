@@ -1,32 +1,26 @@
-import { useState, useMemo, useRef, useEffect } from 'react'
-import { useAuthStore } from '../store'
+import { useState, useMemo, useRef, useEffect, useCallback } from 'react'
+import { useLocalStorage } from './useLocalStorage'
+import { useCurrentUsername, buildStorageKey } from './useCurrentUsername'
 
 export function usePagination(data, pageKey, defaultRowsPerPage = 10) {
-  const username = useAuthStore(s => s.username)
-  const storageKey = username ? `runic_${username}_${pageKey}_pagination` : null
+  const username = useCurrentUsername()
+  const storageKey = buildStorageKey(username, pageKey, 'pagination')
+  const [rowsPerPage, setRowsPerPageState] = useLocalStorage(
+    storageKey,
+    defaultRowsPerPage,
+    300,
+    (saved) => {
+      // Migration: old format stored { rowsPerPage: N }, new format stores just N
+      if (saved && typeof saved === 'object' && 'rowsPerPage' in saved) {
+        return saved.rowsPerPage
+      }
+      return saved
+    }
+  )
 
   const [page, setPage] = useState(1)
-  const [rowsPerPage, setRowsPerPageState] = useState(() => {
-    if (!storageKey) return defaultRowsPerPage
-    const saved = localStorage.getItem(storageKey)
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved)
-        return parsed.rowsPerPage ?? defaultRowsPerPage
-      } catch {
-        return defaultRowsPerPage
-      }
-    }
-    return defaultRowsPerPage
-  })
 
-  useEffect(() => {
-    if (storageKey) {
-      localStorage.setItem(storageKey, JSON.stringify({ rowsPerPage }))
-    }
-  }, [storageKey, rowsPerPage])
-
-  // Reset page to 1 when data length changes (e.g., filter reduces results)
+  // Reset page to 1 when data length changes (batched with same render)
   const prevDataLengthRef = useRef(data?.length)
   useEffect(() => {
     if (prevDataLengthRef.current !== data?.length) {
@@ -35,10 +29,10 @@ export function usePagination(data, pageKey, defaultRowsPerPage = 10) {
     }
   }, [data?.length])
 
-  const setRowsPerPage = (newRowsPerPage) => {
+  const setRowsPerPage = useCallback((newRowsPerPage) => {
     setRowsPerPageState(newRowsPerPage)
     setPage(1)
-  }
+  }, [setRowsPerPageState])
 
   const paginatedData = useMemo(() => {
     if (!data) return []

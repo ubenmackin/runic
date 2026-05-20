@@ -2,7 +2,6 @@
 package keys
 
 import (
-	"encoding/json"
 	"net/http"
 
 	"runic/internal/api/common"
@@ -76,13 +75,10 @@ func (h *Handler) CreateKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(map[string]interface{}{
+	common.RespondJSON(w, http.StatusCreated, map[string]interface{}{
 		"type":   keyType,
 		"exists": true,
-	}); err != nil {
-		runiclog.Error("Failed to encode create key result", "error", err)
-	}
+	})
 }
 
 func (h *Handler) DeleteKey(w http.ResponseWriter, r *http.Request) {
@@ -100,11 +96,8 @@ func (h *Handler) DeleteKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(map[string]interface{}{
+	common.RespondJSON(w, http.StatusOK, map[string]interface{}{
 		"type":   keyType,
 		"exists": false,
-	}); err != nil {
-		runiclog.Error("Failed to encode delete key result", "error", err)
-	}
+	})
 }

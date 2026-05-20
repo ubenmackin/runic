@@ -1,25 +1,32 @@
 /**
-* useSSE - React hook for Server-Sent Events (SSE) connections
-*
-* Provides real-time notifications from the backend via SSE.
-* Automatically reconnects on connection failure.
-*/
+ * useSSE - React hook for Server-Sent Events (SSE) connections
+ *
+ * Provides real-time notifications from the backend via SSE.
+ * Automatically reconnects on connection failure.
+ */
 import { useEffect, useRef, useCallback, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { logger } from '../utils/logger'
 import { QUERY_KEYS, BASE } from '../api/client'
 
+const MAX_RECONNECT_ATTEMPTS = 10
+
 /**
-* Hook for connecting to the frontend SSE endpoint
-*
-* @param {Object} options - Hook options
-* @param {boolean} options.enabled - Whether to connect (default: true)
-* @param {Function} options.onPendingChangeAdded - Callback when pending_change_added event received
-* @returns {Object} - { connected, error }
-*/
+ * Hook for connecting to the frontend SSE endpoint
+ *
+ * @param {Object} options - Hook options
+ * @param {boolean} options.enabled - Whether to connect (default: true)
+ * @param {Function} options.onPendingChangeAdded - Callback when pending_change_added event received
+ * @returns {Object} - { connected, error }
+ *
+ * NOTE: This hook does not currently send Last-Event-ID on reconnection,
+ * so events missed during disconnection are not replayed. This is a known
+ * limitation that could be addressed in a future iteration.
+ */
 export function useSSE({ enabled = true, onPendingChangeAdded } = {}) {
   const queryClient = useQueryClient()
   const [connected, setConnected] = useState(false)
+  const [error, setError] = useState(null)
   const eventSourceRef = useRef(null)
   const reconnectTimeoutRef = useRef(null)
   const reconnectAttemptsRef = useRef(0)
@@ -33,8 +40,22 @@ export function useSSE({ enabled = true, onPendingChangeAdded } = {}) {
   // Store connect function in a ref to avoid circular dependency
   const connectRef = useRef(null)
 
+  // Clear stale reconnect timeout when enabled toggles off
+  useEffect(() => {
+    if (!enabled && reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current)
+      reconnectTimeoutRef.current = null
+    }
+  }, [enabled])
+
   const scheduleReconnect = useCallback(() => {
     if (!mountedRef.current || !enabled) return
+
+    if (reconnectAttemptsRef.current >= MAX_RECONNECT_ATTEMPTS) {
+      setError(new Error('SSE connection failed: max reconnect attempts reached'))
+      setConnected(false)
+      return
+    }
 
     const delay = Math.min(1000 * Math.pow(2, reconnectAttemptsRef.current), 30000)
     reconnectAttemptsRef.current++
@@ -65,6 +86,7 @@ export function useSSE({ enabled = true, onPendingChangeAdded } = {}) {
     })
     es.addEventListener('connected', () => {
       reconnectAttemptsRef.current = 0
+      setError(null)
       setConnected(true)
     })
 
@@ -120,7 +142,7 @@ export function useSSE({ enabled = true, onPendingChangeAdded } = {}) {
     }
   }, [enabled, connect])
 
-  return { connected }
+  return { connected, error }
 }
 
 export default useSSE

@@ -5,7 +5,11 @@ import { useToast } from './useToast'
 const ToastContext = createContext(null)
 
 export function useToastContext() {
-  return useContext(ToastContext)
+  const context = useContext(ToastContext)
+  if (context === null) {
+    throw new Error('useToastContext must be used within a ToastProvider')
+  }
+  return context
 }
 
 export function ToastProvider({ children }) {

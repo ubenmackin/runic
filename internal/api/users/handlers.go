@@ -47,13 +47,6 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := runiccommon.WithHandlerTimeout(r.Context())
 	defer cancel()
 
-	// Only admin and editor roles can list users — viewer role is a recon vector
-	callerRole := auth.RoleFromContext(r.Context())
-	if callerRole != "admin" && callerRole != "editor" {
-		common.RespondError(w, http.StatusForbidden, "Insufficient permissions")
-		return
-	}
-
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	if page < 1 {
 		page = 1
@@ -89,8 +82,15 @@ func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := runiccommon.WithHandlerTimeout(r.Context())
 	defer cancel()
 
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB limit
+
 	var req CreateUserRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			common.RespondError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return
+		}
 		common.RespondError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
@@ -174,12 +174,6 @@ func (h *Handler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 
 	authUsername := auth.UsernameFromContext(r.Context())
 
-	callerRole := auth.RoleFromContext(r.Context())
-	if callerRole != "admin" {
-		common.RespondError(w, http.StatusForbidden, "Only admins can delete users")
-		return
-	}
-
 	user, err := h.Store.GetUserByID(ctx, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		common.RespondError(w, http.StatusNotFound, "User not found")
@@ -236,8 +230,15 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := runiccommon.WithHandlerTimeout(r.Context())
 	defer cancel()
 
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB limit
+
 	var req UpdateUserRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			common.RespondError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return
+		}
 		common.RespondError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
@@ -263,14 +264,6 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 		log.ErrorContext(r.Context(), "failed to get user", "error", err)
 		common.InternalError(w)
 		return
-	}
-
-	if req.Role != "" {
-		callerRole := auth.RoleFromContext(r.Context())
-		if callerRole != "admin" {
-			common.RespondError(w, http.StatusForbidden, "Only admins can change user roles")
-			return
-		}
 	}
 
 	fields := store.UpdateUserFields{

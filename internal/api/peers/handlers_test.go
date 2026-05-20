@@ -768,8 +768,7 @@ func TestDeletePeer(t *testing.T) {
 				database.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group")
 				database.Exec(`INSERT INTO group_members (group_id, peer_id) VALUES (?, ?)`, 1, 1)
 			},
-			wantCode:    http.StatusOK,
-			wantMessage: "Peer deleted",
+			wantCode: http.StatusNoContent,
 			verifyDelete: func(t *testing.T, database *sql.DB) {
 				// Verify peer was deleted
 				var peerCount int
@@ -909,8 +908,8 @@ func TestDeletePeer_GroupMembersCleanup(t *testing.T) {
 	handler := NewHandler(store.NewPeerStore(database), database, nil, nil, &testSettingsStore{db: database})
 	handler.DeletePeer(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Errorf("expected status %d, got %d: %s", http.StatusOK, w.Code, w.Body.String())
+	if w.Code != http.StatusNoContent {
+		t.Errorf("expected status %d, got %d: %s", http.StatusNoContent, w.Code, w.Body.String())
 	}
 
 	// Verify all group_members entries were removed
@@ -962,8 +961,8 @@ func TestDeletePeer_WithRuleBundlesAndLogs(t *testing.T) {
 	handler := NewHandler(store.NewPeerStore(database), database, nil, nil, &testSettingsStore{db: database})
 	handler.DeletePeer(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Errorf("expected status %d, got %d: %s", http.StatusOK, w.Code, w.Body.String())
+	if w.Code != http.StatusNoContent {
+		t.Errorf("expected status %d, got %d: %s", http.StatusNoContent, w.Code, w.Body.String())
 	}
 
 	// Verify rule_bundles was deleted (cascade)
@@ -1202,9 +1201,9 @@ func TestDeletePeer_NotInUse_Success(t *testing.T) {
 	handler := NewHandler(store.NewPeerStore(database), database, nil, nil, &testSettingsStore{db: database})
 	handler.DeletePeer(w, req)
 
-	// Should return 200 OK
-	if w.Code != http.StatusOK {
-		t.Errorf("expected status %d, got %d: %s", http.StatusOK, w.Code, w.Body.String())
+	// Should return 204 No Content
+	if w.Code != http.StatusNoContent {
+		t.Errorf("expected status %d, got %d: %s", http.StatusNoContent, w.Code, w.Body.String())
 	}
 
 	// Verify the peer was deleted
@@ -1268,8 +1267,8 @@ func TestGetPeerByIP(t *testing.T) {
 			setup: func(t *testing.T, db *sql.DB) {
 				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`, "test-peer", "10.0.0.1", "key", "hmac", 0)
 			},
-			wantCode: http.StatusOK,
-			wantNil:  true,
+			wantCode: http.StatusNotFound,
+			wantErr:  "peer not found",
 		},
 		{
 			name:        "manual peer found",
@@ -1308,8 +1307,8 @@ func TestGetPeerByIP(t *testing.T) {
 				db.Exec(`INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 1)`, 1, "10.0.0.1")
 				db.Exec(`INSERT INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, 0)`, 1, "10.0.0.2")
 			},
-			wantCode: http.StatusOK,
-			wantNil:  true,
+			wantCode: http.StatusNotFound,
+			wantErr:  "peer not found",
 		},
 	}
 

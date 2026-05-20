@@ -63,11 +63,18 @@ func (h *Handler) ListGroups(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) CreateGroup(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB limit
+
 	var input struct {
 		Name        string `json:"name"`
 		Description string `json:"description"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			common.RespondError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return
+		}
 		common.RespondError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
@@ -90,22 +97,10 @@ func (h *Handler) CreateGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.Store.Snapshot(r.Context(), "create", int(id)); err != nil {
-		log.ErrorContext(r.Context(), "failed to create snapshot", "error", err)
-	}
-
-	if h.ChangeWorker != nil && h.Compiler != nil {
-		group, groupErr := h.Store.GetGroup(r.Context(), int(id))
-
-		var summary string
-		if groupErr == nil {
-			summary = fmt.Sprintf("Group '%s' created", group.Name)
-		} else {
-			summary = "Group created"
-		}
-
-		h.ChangeWorker.QueueGroupChange(r.Context(), h.Compiler, int(id), "create", summary)
-	}
+	common.SnapshotOrLog(r.Context(), "group", int(id), "create", func() error {
+		return h.Store.Snapshot(r.Context(), "create", int(id))
+	})
+	common.QueueGroupChangeSummary(r.Context(), h.ChangeWorker, h.Compiler, h.Store, int(id), "create", "created")
 
 	common.RespondJSON(w, http.StatusCreated, map[string]int64{"id": id})
 }
@@ -138,11 +133,18 @@ func (h *Handler) UpdateGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB limit
+
 	var input struct {
 		Name        string `json:"name"`
 		Description string `json:"description"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			common.RespondError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return
+		}
 		common.RespondError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
@@ -169,9 +171,9 @@ func (h *Handler) UpdateGroup(w http.ResponseWriter, r *http.Request) {
 		hasChanges = nameChanged || descChanged
 
 		if hasChanges {
-			if err := h.Store.SnapshotTx(r.Context(), tx, "update", id); err != nil {
-				log.ErrorContext(r.Context(), "failed to create snapshot", "error", err)
-			}
+			common.SnapshotOrLog(r.Context(), "group", id, "update", func() error {
+				return h.Store.SnapshotTx(r.Context(), tx, "update", id)
+			})
 		}
 
 		if err := h.Store.UpdateGroupTx(r.Context(), tx, id, input.Name, input.Description); err != nil {
@@ -191,15 +193,8 @@ func (h *Handler) UpdateGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.ChangeWorker != nil && h.Compiler != nil && hasChanges {
-		group, groupErr := h.Store.GetGroup(r.Context(), id)
-		var summary string
-		if groupErr == nil {
-			summary = fmt.Sprintf("Group '%s' updated", group.Name)
-		} else {
-			summary = "Group updated"
-		}
-		h.ChangeWorker.QueueGroupChange(r.Context(), h.Compiler, id, "update", summary)
+	if hasChanges {
+		common.QueueGroupChangeSummary(r.Context(), h.ChangeWorker, h.Compiler, h.Store, id, "update", "updated")
 	}
 
 	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "updated"})
@@ -240,9 +235,9 @@ func (h *Handler) DeleteGroup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	err = store.RunInTx(r.Context(), h.beginner, func(tx *sql.Tx) error {
-		if err := h.Store.SnapshotTx(r.Context(), tx, "delete", id); err != nil {
-			return fmt.Errorf("snapshot: %w", err)
-		}
+		common.SnapshotOrLog(r.Context(), "group", id, "delete", func() error {
+			return h.Store.SnapshotTx(r.Context(), tx, "delete", id)
+		})
 		if err := h.Store.SoftDeleteGroupTx(r.Context(), tx, id); err != nil {
 			return fmt.Errorf("soft delete: %w", err)
 		}
@@ -254,9 +249,7 @@ func (h *Handler) DeleteGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.ChangeWorker != nil && h.Compiler != nil {
-		h.ChangeWorker.QueueGroupChange(r.Context(), h.Compiler, id, "delete", "Group deleted")
-	}
+	common.QueueGroupChangeSummary(r.Context(), h.ChangeWorker, h.Compiler, h.Store, id, "delete", "deleted")
 
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -285,10 +278,17 @@ func (h *Handler) AddGroupMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB limit
+
 	var input struct {
 		PeerID int `json:"peer_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			common.RespondError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return
+		}
 		common.RespondError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
@@ -297,9 +297,9 @@ func (h *Handler) AddGroupMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.Store.Snapshot(r.Context(), "update", groupID); err != nil {
-		log.ErrorContext(r.Context(), "failed to create snapshot", "error", err)
-	}
+	common.SnapshotOrLog(r.Context(), "group", groupID, "update", func() error {
+		return h.Store.Snapshot(r.Context(), "update", groupID)
+	})
 
 	id, err := h.Store.AddGroupMember(r.Context(), groupID, input.PeerID)
 	if err != nil {
@@ -338,9 +338,9 @@ func (h *Handler) DeleteGroupMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.Store.Snapshot(r.Context(), "update", groupID); err != nil {
-		log.ErrorContext(r.Context(), "failed to create snapshot", "error", err)
-	}
+	common.SnapshotOrLog(r.Context(), "group", groupID, "update", func() error {
+		return h.Store.Snapshot(r.Context(), "update", groupID)
+	})
 
 	err = h.Store.DeleteGroupMember(r.Context(), groupID, peerID)
 	if err != nil {

@@ -390,12 +390,12 @@ func (e *ConditionEvaluator) checkBlockedSpikeByID(ctx context.Context, rule *Al
 	if windowMinutes <= 0 {
 		windowMinutes = 5
 	}
-	isSpike, percentage, err := e.CheckBlockedSpike(ctx, peerID, windowMinutes)
+	isSpike, percentage, err := e.CheckBlockedSpike(ctx, peerID, windowMinutes, rule.ThresholdValue)
 	if err != nil {
 		return nil, err
 	}
 
-	if !isSpike || percentage < rule.ThresholdValue {
+	if !isSpike {
 		return nil, nil
 	}
 
@@ -477,13 +477,20 @@ func (e *ConditionEvaluator) CheckBundleFailed(ctx context.Context, peerID int) 
 
 // CheckBlockedSpike returns true if there's a spike, along with the percentage increase.
 // windowMinutes specifies the recent time window; the previous window of the same
-// duration is used as a baseline for comparison.
-func (e *ConditionEvaluator) CheckBlockedSpike(ctx context.Context, peerID int, windowMinutes int) (bool, int, error) {
+// duration is used as a baseline for comparison. thresholdPercent is the minimum
+// percentage increase required to consider it a spike (e.g., 50 means a 50% increase).
+// Pass 0 to use the default threshold of 50%.
+func (e *ConditionEvaluator) CheckBlockedSpike(ctx context.Context, peerID int, windowMinutes int, thresholdPercent ...int) (bool, int, error) {
 	if e.logsDB == nil {
 		return false, 0, fmt.Errorf("logs database not configured")
 	}
 	if windowMinutes <= 0 {
 		windowMinutes = 5
+	}
+
+	minThreshold := 50
+	if len(thresholdPercent) > 0 && thresholdPercent[0] > 0 {
+		minThreshold = thresholdPercent[0]
 	}
 
 	window := time.Duration(windowMinutes) * time.Minute
@@ -531,8 +538,7 @@ func (e *ConditionEvaluator) CheckBlockedSpike(ctx context.Context, peerID int, 
 		percentageIncrease = 0
 	}
 
-	// Consider it a spike if there's a meaningful increase (at least 50%)
-	return percentageIncrease >= 50, percentageIncrease, nil
+	return percentageIncrease >= minThreshold, percentageIncrease, nil
 }
 
 // Threshold is the number of minutes within which a bundle deployment counts.
