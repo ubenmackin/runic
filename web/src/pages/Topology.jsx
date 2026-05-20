@@ -794,7 +794,12 @@ export default function Topology() {
     return Array.from(ids)
   }, [policies, groups])
 
-  const { data: groupMembersMap } = useGroupMembers(relevantGroupIds)
+  const { data: rawGroupMembersMap } = useGroupMembers(relevantGroupIds)
+  // Stabilize the reference: only produce a new object identity when content
+  // actually changes. Without this, React Query creating a fresh object for an
+  // equivalent result would force a full buildLayoutData recompute every render.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const groupMembersMap = useMemo(() => rawGroupMembersMap, [JSON.stringify(rawGroupMembersMap)])
 
   const layoutData = useMemo(() =>
     buildLayoutData(selectedPeerId, peers, groups, policies, services, groupMembersMap, expandedGroups),

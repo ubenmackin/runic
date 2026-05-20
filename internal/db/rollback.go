@@ -43,79 +43,18 @@ func RollbackSnapshots(ctx context.Context, database DB) error {
 		}
 
 		for _, s := range snapshots {
+			var rollbackErr error
 			if s.Action == "create" {
-				switch s.EntityType {
-				case "group":
-					_, err = tx.ExecContext(ctx, "DELETE FROM group_members WHERE group_id = ?", s.EntityID)
-					if err != nil {
-						return err
-					}
-					_, err = tx.ExecContext(ctx, "DELETE FROM groups WHERE id = ?", s.EntityID)
-				case "service":
-					_, err = tx.ExecContext(ctx, "DELETE FROM services WHERE id = ?", s.EntityID)
-				case "policy":
-					_, err = tx.ExecContext(ctx, "DELETE FROM policies WHERE id = ?", s.EntityID)
-				case "peer":
-					_, err = tx.ExecContext(ctx, "DELETE FROM peer_ips WHERE peer_id = ?", s.EntityID)
-					if err != nil {
-						return fmt.Errorf("rollback create peer IPs: %w", err)
-					}
-					_, err = tx.ExecContext(ctx, "DELETE FROM peers WHERE id = ?", s.EntityID)
-				}
-				if err != nil {
-					return fmt.Errorf("rollback create %s %d: %w", s.EntityType, s.EntityID, err)
-				}
+				rollbackErr = rollbackCreateEntity(ctx, tx, s.EntityType, s.EntityID)
 			} else {
-				switch s.EntityType {
-				case "group":
-					var data struct {
-						Group   models.GroupRow         `json:"group"`
-						Members []models.GroupMemberRow `json:"members"`
-					}
-					if err := json.Unmarshal([]byte(s.SnapshotData), &data); err != nil {
-						return fmt.Errorf("unmarshal group snapshot: %w", err)
-					}
-					_, err = tx.ExecContext(ctx, "UPDATE groups SET name=?, description=?, is_pending_delete=0 WHERE id=?",
-						data.Group.Name, data.Group.Description, s.EntityID)
-					if err != nil {
-						return err
-					}
-
-					_, err = tx.ExecContext(ctx, "DELETE FROM group_members WHERE group_id = ?", s.EntityID)
-					if err != nil {
-						return err
-					}
-
-					for _, m := range data.Members {
-						_, err = tx.ExecContext(ctx, "INSERT INTO group_members (id, group_id, peer_id, added_at) VALUES (?, ?, ?, ?)",
-							m.ID, m.GroupID, m.PeerID, m.AddedAt)
-						if err != nil {
-							return err
-						}
-					}
-				case "service":
-					var svc models.ServiceRow
-					if err := json.Unmarshal([]byte(s.SnapshotData), &svc); err != nil {
-						return fmt.Errorf("unmarshal service snapshot: %w", err)
-					}
-					_, err = tx.ExecContext(ctx, "UPDATE services SET name=?, ports=?, source_ports=?, protocol=?, description=?, direction_hint=?, is_system=?, is_pending_delete=0 WHERE id=?",
-						svc.Name, svc.Ports, svc.SourcePorts, svc.Protocol, svc.Description, svc.DirectionHint, svc.IsSystem, s.EntityID)
-					if err != nil {
-						return err
-					}
-				case "policy":
-					var p models.PolicyRow
-					if err := json.Unmarshal([]byte(s.SnapshotData), &p); err != nil {
-						return fmt.Errorf("unmarshal policy snapshot: %w", err)
-					}
-					_, err = tx.ExecContext(ctx, "UPDATE policies SET name=?, description=?, source_id=?, source_type=?, service_id=?, target_id=?, target_type=?, source_ip=?, target_ip=?, action=?, priority=?, enabled=?, target_scope=?, direction=?, is_pending_delete=0 WHERE id=?",
-						p.Name, p.Description, p.SourceID, p.SourceType, p.ServiceID, p.TargetID, p.TargetType, p.SourceIP, p.TargetIP, p.Action, p.Priority, p.Enabled, p.TargetScope, p.Direction, s.EntityID)
-					if err != nil {
-						return err
-					}
-				case "peer":
-					return fmt.Errorf("peer update/delete rollback not yet implemented")
+				// update / delete — snapshot data is required
+				if s.SnapshotData == "" {
+					return fmt.Errorf("missing snapshot data for %s %d", s.EntityType, s.EntityID)
 				}
+				rollbackErr = rollbackUpdateDeleteEntity(ctx, tx, s.EntityType, s.EntityID, s.Action, s.SnapshotData)
+			}
+			if rollbackErr != nil {
+				return fmt.Errorf("rollback %s %s %d: %w", s.Action, s.EntityType, s.EntityID, rollbackErr)
 			}
 		}
 

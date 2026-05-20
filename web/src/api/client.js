@@ -49,18 +49,27 @@ async function request(method, path, body, retry = true, signal = null) {
     headers['X-CSRF-Token'] = csrfToken
   }
 
-  // Create abort controller with timeout if no signal provided
+  // Always create a timeout controller. If a caller signal is provided (e.g.
+  // from React Query's AbortController), wire it into our controller so that
+  // either a timeout OR a React Query cancellation aborts the request.
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT)
 
-  const actualSignal = signal || controller.signal
+  if (signal) {
+    // If the caller signal is already aborted, abort immediately
+    if (signal.aborted) {
+      controller.abort(signal.reason)
+    } else {
+      signal.addEventListener('abort', () => controller.abort(signal.reason), { once: true })
+    }
+  }
 
   const fetchOptions = {
     method,
     headers,
     credentials: 'include',
     body: body ? JSON.stringify(body) : undefined,
-    signal: actualSignal,
+    signal: controller.signal,
   }
 
   try {
@@ -126,6 +135,7 @@ export const getNotificationPrefs = () => api.get('/users/me/notification-prefer
 export const updateNotificationPrefs = (data) => api.put('/users/me/notification-preferences', data)
 
 export const QUERY_KEYS = {
+  users: () => ['users'],
   peers: () => ['peers'],
   peer: (id) => ['peers', id],
   peerIps: (id) => ['peers', id, 'ips'],

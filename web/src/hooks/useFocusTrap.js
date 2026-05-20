@@ -4,14 +4,7 @@ export function useFocusTrap(modalRef, isOpen) {
   const previousFocusRef = useRef(null)
 
   useEffect(() => {
-    if (!isOpen) {
-      // Restore focus to the previously focused element when modal closes
-      if (previousFocusRef.current) {
-        previousFocusRef.current.focus()
-        previousFocusRef.current = null
-      }
-      return
-    }
+    if (!isOpen) return
 
     // Save the currently focused element before opening
     previousFocusRef.current = document.activeElement
@@ -43,6 +36,15 @@ export function useFocusTrap(modalRef, isOpen) {
     }
 
     modal.addEventListener('keydown', handleKeyDown)
-    return () => modal.removeEventListener('keydown', handleKeyDown)
+
+    return () => {
+      modal.removeEventListener('keydown', handleKeyDown)
+      // Restore focus on cleanup — fires on both isOpen->false transitions
+      // AND when a modal is conditionally unmounted from the DOM.
+      if (previousFocusRef.current) {
+        previousFocusRef.current.focus()
+        previousFocusRef.current = null
+      }
+    }
   }, [isOpen, modalRef])
 }

@@ -3,8 +3,19 @@ export function computeDiff(oldRules, newRules) {
   if (!oldRules && !newRules) {
     return ''
   }
-  const oldLines = (oldRules || '').split('\n').filter((l, i, arr) => i < arr.length - 1 || l !== '')
-  const newLines = (newRules || '').split('\n').filter((l, i, arr) => i < arr.length - 1 || l !== '')
+  // normalizeLines splits on '\n' and removes the single trailing empty string
+  // that results from files ending with a newline (Unix convention). This ensures:
+  //   - null / '' → [] (no lines, not one empty line)
+  //   - 'a\n' → ['a'] (the terminating \n is not a blank line)
+  //   - 'a\n\n' → ['a', ''] (intentional trailing blank line is preserved)
+  const normalizeLines = (s) => {
+    if (!s) return []
+    const lines = s.split('\n')
+    if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop()
+    return lines
+  }
+  const oldLines = normalizeLines(oldRules)
+  const newLines = normalizeLines(newRules)
 
   // Build LCS DP table of lengths
   const m = oldLines.length

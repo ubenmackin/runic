@@ -1,7 +1,8 @@
 import { useState, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { UserPlus, Trash2, Pencil, X } from 'lucide-react'
-import { api } from '../api/client'
+import { api, QUERY_KEYS } from '../api/client'
+import { isValidEmail } from '../utils/validation'
 import { useToastContext } from '../hooks/ToastContext'
 import TableSkeleton from '../components/TableSkeleton'
 import { useAuthStore } from '../store'
@@ -44,7 +45,7 @@ export default function Users() {
   useFocusTrap(deleteModalRef, !!deleteTarget)
 
   const { data: users, isLoading, error } = useQuery({
-    queryKey: ['users'],
+    queryKey: QUERY_KEYS.users(),
     queryFn: () => api.get('/users'),
   })
 
@@ -58,7 +59,7 @@ export default function Users() {
 
   const { createMutation, updateMutation, deleteMutation } = useCrudMutations({
     apiPath: '/users',
-    queryKey: ['users'],
+    queryKey: QUERY_KEYS.users(),
     onCreateSuccess: () => {
       setShowCreateModal(false)
       resetForm()
@@ -330,8 +331,7 @@ className="flex-1 px-4 py-2 bg-purple-active hover:bg-purple-600 text-white roun
             <form
               onSubmit={(e) => {
                 e.preventDefault()
-                const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-                if (formEditEmail && !emailRegex.test(formEditEmail)) {
+                if (formEditEmail && !isValidEmail(formEditEmail)) {
                   showToast('Please enter a valid email address', 'error')
                   return
                 }

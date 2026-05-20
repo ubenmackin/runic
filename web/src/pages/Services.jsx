@@ -502,9 +502,9 @@ show: !service.is_system && !service.is_pending_delete,
 
                             return (
                               <>
-                                {visiblePorts.map((port, idx) => (
+                                {visiblePorts.map((port) => (
                                   <SharpTag
-                                    key={idx}
+                                    key={port}
                                     status="info"
                                     label={port}
                                     variant="badge"
@@ -601,9 +601,9 @@ show: !service.is_system && !service.is_pending_delete,
 
                 {portChips.length > 0 && (
                   <div className="flex flex-wrap gap-2 mb-2">
-                    {portChips.map((port, idx) => (
+                    {portChips.map((port) => (
                       <span
-                        key={idx}
+                        key={port}
                         className="px-2 py-1 bg-gray-100 dark:bg-charcoal-darkest rounded-none text-sm flex items-center gap-1 text-gray-900 dark:text-white"
                       >
                         {port}
@@ -664,8 +664,8 @@ show: !service.is_system && !service.is_pending_delete,
                     <p className="text-xs text-gray-500 dark:text-amber-muted">Optional. Match traffic from specific source ports.</p>
                     {sourcePortChips.length > 0 && (
                       <div className="flex flex-wrap gap-2 mb-2">
-                        {sourcePortChips.map((port, idx) => (
-                          <span key={idx} className="px-2 py-1 bg-gray-100 dark:bg-charcoal-darkest rounded-none text-sm flex items-center gap-1 text-gray-900 dark:text-white">
+                        {sourcePortChips.map((port) => (
+                          <span key={port} className="px-2 py-1 bg-gray-100 dark:bg-charcoal-darkest rounded-none text-sm flex items-center gap-1 text-gray-900 dark:text-white">
                             {port}
                             <X className="w-3 h-3 text-gray-500 hover:text-red-500 cursor-pointer" onClick={() => handleRemoveSourcePort(port)} />
                           </span>
