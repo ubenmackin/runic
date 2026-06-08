@@ -354,6 +354,51 @@ func (s *PeerStore) AddPeerIP(ctx context.Context, peerID int, ip string, isPrim
 	return nil
 }
 
+// GetPeerIP returns a single peer_ip row by its own id.
+// Returns (*PeerIPView, nil) on success or (nil, sql.ErrNoRows) if not found.
+func (s *PeerStore) GetPeerIP(ctx context.Context, ipID int) (*PeerIPView, error) {
+	var pip PeerIPView
+	var isPrimary int
+	err := s.db.QueryRowContext(ctx,
+		"SELECT id, peer_id, ip_address, is_primary FROM peer_ips WHERE id = ?",
+		ipID,
+	).Scan(&pip.ID, &pip.PeerID, &pip.IPAddress, &isPrimary)
+	if err != nil {
+		return nil, fmt.Errorf("get peer IP: %w", err)
+	}
+	pip.IsPrimary = isPrimary == 1
+	return &pip, nil
+}
+
+// DeletePeerIPIfOrphan deletes a peer_ip by id, but only when it is not
+// referenced by any policy (as source_ip or target_ip).  Returns sql.ErrNoRows
+// if the row does not exist or if policy references block the delete.
+func (s *PeerStore) DeletePeerIPIfOrphan(ctx context.Context, ipID int, peerID int, ipAddress string) error {
+	var refCount int
+	err := s.db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM policies WHERE (source_id = ? AND source_ip = ?) OR (target_id = ? AND target_ip = ?)",
+		peerID, ipAddress, peerID, ipAddress,
+	).Scan(&refCount)
+	if err != nil {
+		return fmt.Errorf("count policy refs: %w", err)
+	}
+	if refCount > 0 {
+		return fmt.Errorf("peer IP %d is referenced by %d policy/policies: %w", ipID, refCount, sql.ErrNoRows)
+	}
+	result, err := s.db.ExecContext(ctx, "DELETE FROM peer_ips WHERE id = ?", ipID)
+	if err != nil {
+		return fmt.Errorf("delete peer IP: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
+	}
+	if rows == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 func (s *PeerStore) DeletePeerIP(ctx context.Context, ipID int) error {
 	result, err := s.db.ExecContext(ctx, "DELETE FROM peer_ips WHERE id = ?", ipID)
 	if err != nil {
@@ -666,11 +711,27 @@ func (s *PeerStore) GetPeerBundle(ctx context.Context, peerID int, includePendin
 }
 
 func (s *PeerStore) UpdatePeerBundleVersion(ctx context.Context, peerID int, version string) error {
-	_, err := s.db.ExecContext(ctx,
-		"UPDATE peers SET bundle_version = ? WHERE id = ?",
-		version, peerID)
+	_, err := s.db.ExecContext(ctx, "UPDATE peers SET bundle_version = ? WHERE id = ?", version, peerID)
 	if err != nil {
 		return fmt.Errorf("update peer bundle version: %w", err)
+	}
+	return nil
+}
+
+// UpdatePeerBundleVersionTx updates the peer bundle version within a transaction.
+func (s *PeerStore) UpdatePeerBundleVersionTx(ctx context.Context, tx *sql.Tx, peerID int, version string) error {
+	_, err := tx.ExecContext(ctx, "UPDATE peers SET bundle_version = ? WHERE id = ?", version, peerID)
+	if err != nil {
+		return fmt.Errorf("update peer bundle version tx: %w", err)
+	}
+	return nil
+}
+
+// UpdateBundleAppliedAtTx updates the bundle applied_at and first_applied_at within a transaction.
+func (s *PeerStore) UpdateBundleAppliedAtTx(ctx context.Context, tx *sql.Tx, peerID int, version string, appliedAt string) error {
+	_, err := tx.ExecContext(ctx, `UPDATE rule_bundles SET applied_at = ?, first_applied_at = COALESCE(first_applied_at, ?) WHERE peer_id = ? AND version = ?`, appliedAt, appliedAt, peerID, version)
+	if err != nil {
+		return fmt.Errorf("update bundle applied_at tx: %w", err)
 	}
 	return nil
 }

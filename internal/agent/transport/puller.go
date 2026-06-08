@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -34,19 +35,21 @@ type sseCallbackGuard struct {
 // tryStart attempts to start a guarded goroutine. It returns false (and does
 // nothing) if a previous invocation is still running.
 func (g *sseCallbackGuard) tryStart(ctx context.Context, fn func(context.Context)) bool {
-	if !g.running.CompareAndSwap(false, true) {
+	g.cancelMu.Lock()
+	defer g.cancelMu.Unlock()
+
+	if g.running.Load() {
 		log.Warn("SSE callback already running, skipping duplicate launch")
 		return false
 	}
 
 	// Cancel any previous invocation's derived context before starting a new one.
-	g.cancelMu.Lock()
 	if g.cancel != nil {
 		g.cancel()
 	}
 	childCtx, childCancel := context.WithCancel(ctx)
 	g.cancel = childCancel
-	g.cancelMu.Unlock()
+	g.running.Store(true)
 
 	go func() {
 		defer g.running.Store(false)
@@ -149,10 +152,12 @@ func ListenSSE(ctx context.Context, client common.HTTPClient, controlPlaneURL, h
 				log.Warn("Received 401 on SSE connection, signaling for re-registration")
 				return err
 			}
+			reconnectTimer := time.NewTimer(constants.SSEReconnectDelay)
 			select {
 			case <-ctx.Done():
+				reconnectTimer.Stop()
 				return ctx.Err()
-			case <-time.After(constants.SSEReconnectDelay):
+			case <-reconnectTimer.C:
 			}
 		}
 	}
@@ -182,6 +187,8 @@ func connectSSE(ctx context.Context, client common.HTTPClient, controlPlaneURL, 
 	}()
 
 	if resp.StatusCode != http.StatusOK {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
 		return &common.HTTPStatusError{StatusCode: resp.StatusCode, Method: "GET", URL: url}
 	}
 

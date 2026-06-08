@@ -165,6 +165,21 @@ func (w *ChangeWorker) processPeerChange(work *changeWork) {
 	}
 }
 
+// processGroupChange is invoked from the worker goroutine when a group
+// changes. It walks every policy that references the group, asks the
+// compiler which peers each policy affects, and queues a pending change
+// per affected peer.
+//
+// Performance note (N+1, partial): this function still issues one
+// SQL query per affected policy via the compiler's batched helper
+// (GetAffectedPeersByPolicies, which currently loops
+// GetAffectedPeersByPolicy internally) and one COUNT query per
+// affected peer to detect duplicate pending changes. The remaining
+// N+1 lives inside the engine layer; the worker side is now a single
+// call to the batched helper with an honest comment in the engine
+// flagging the real fix (a single "policies IN (...)" query) as
+// future work. The cost is acceptable in practice because the
+// worker is serial and group changes are infrequent.
 func (w *ChangeWorker) processGroupChange(work *changeWork) {
 	rows, err := w.db.QueryContext(work.ctx, `
 	SELECT DISTINCT id FROM policies
@@ -176,30 +191,40 @@ func (w *ChangeWorker) processGroupChange(work *changeWork) {
 		runiclog.Error("failed to find policies for group", "group_id", work.groupID, "error", err)
 		return
 	}
-	defer func() {
-		if err := rows.Close(); err != nil {
-			runiclog.Error("Failed to close rows", "error", err)
+
+	policyIDs := make([]int, 0)
+	rowErr := func() error {
+		defer func() {
+			if err := rows.Close(); err != nil {
+				runiclog.Error("Failed to close rows", "error", err)
+			}
+		}()
+		for rows.Next() {
+			var policyID int
+			if err := rows.Scan(&policyID); err != nil {
+				continue
+			}
+			policyIDs = append(policyIDs, policyID)
 		}
+		return rows.Err()
 	}()
+	if rowErr != nil {
+		runiclog.Error("failed to iterate policies for group", "group_id", work.groupID, "error", rowErr)
+		return
+	}
 
 	peerSet := make(map[int]bool)
-	for rows.Next() {
-		var policyID int
-		if err := rows.Scan(&policyID); err != nil {
-			continue
-		}
-		affectedPeers, err := work.compiler.GetAffectedPeersByPolicy(work.ctx, policyID)
+	if len(policyIDs) > 0 {
+		affectedByPolicy, err := work.compiler.GetAffectedPeersByPolicies(work.ctx, policyIDs)
 		if err != nil {
-			runiclog.Warn("failed to get affected peers for policy", "policy_id", policyID, "error", err)
-			continue
+			runiclog.Warn("failed to get affected peers for policies", "group_id", work.groupID, "error", err)
+			return
 		}
-		for _, peerID := range affectedPeers {
-			peerSet[peerID] = true
+		for _, affectedPeers := range affectedByPolicy {
+			for _, peerID := range affectedPeers {
+				peerSet[peerID] = true
+			}
 		}
-	}
-	if err := rows.Err(); err != nil {
-		runiclog.Error("failed to iterate policies for group", "group_id", work.groupID, "error", err)
-		return
 	}
 
 	for peerID := range peerSet {

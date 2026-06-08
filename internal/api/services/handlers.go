@@ -181,6 +181,25 @@ func (h *Handler) GetService(w http.ResponseWriter, r *http.Request) {
 	common.RespondJSON(w, http.StatusOK, s)
 }
 
+func (h *Handler) persistServiceUpdateTx(ctx context.Context, id int, input *struct {
+	Name          string
+	Ports         string
+	SourcePorts   string
+	Protocol      string
+	Description   string
+	DirectionHint string
+}) error {
+	return store.RunInTx(ctx, h.beginner, func(tx *sql.Tx) error {
+		common.SnapshotOrLog(ctx, "service", id, "update", func() error {
+			return h.Store.SnapshotServiceTx(ctx, tx, id, "update")
+		})
+		if err := h.Store.UpdateServiceTx(ctx, tx, id, input.Name, input.Ports, input.SourcePorts, input.Protocol, input.Description, parseDirectionHint(input.DirectionHint)); err != nil {
+			return fmt.Errorf("update: %w", err)
+		}
+		return nil
+	})
+}
+
 func (h *Handler) UpdateService(w http.ResponseWriter, r *http.Request) {
 	id, err := common.ParseIDParam(r, "id")
 	if err != nil {
@@ -240,16 +259,22 @@ func (h *Handler) UpdateService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = store.RunInTx(r.Context(), h.beginner, func(tx *sql.Tx) error {
-		common.SnapshotOrLog(r.Context(), "service", id, "update", func() error {
-			return h.Store.SnapshotServiceTx(r.Context(), tx, id, "update")
-		})
-		if err := h.Store.UpdateServiceTx(r.Context(), tx, id, input.Name, input.Ports, input.SourcePorts, input.Protocol, input.Description, parseDirectionHint(input.DirectionHint)); err != nil {
-			return fmt.Errorf("update: %w", err)
-		}
-		return nil
-	})
-	if err != nil {
+	txInput := &struct {
+		Name          string
+		Ports         string
+		SourcePorts   string
+		Protocol      string
+		Description   string
+		DirectionHint string
+	}{
+		Name:          input.Name,
+		Ports:         input.Ports,
+		SourcePorts:   input.SourcePorts,
+		Protocol:      input.Protocol,
+		Description:   input.Description,
+		DirectionHint: input.DirectionHint,
+	}
+	if err := h.persistServiceUpdateTx(r.Context(), id, txInput); err != nil {
 		log.ErrorContext(r.Context(), "transaction failed", "error", err)
 		common.InternalError(w)
 		return

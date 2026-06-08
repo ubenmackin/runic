@@ -127,6 +127,10 @@ func (s *GroupStore) GetGroupTx(ctx context.Context, q db.Querier, id int) (mode
 	return g, nil
 }
 
+// GetGroupSQLTx is part of the api/groups handler interface. The
+// implementation is identical to GetGroupTx, but the method name
+// explicitly states the *sql.Tx parameter type. Kept for backward
+// compatibility with the handler interface.
 func (s *GroupStore) GetGroupSQLTx(ctx context.Context, tx *sql.Tx, id int) (models.GroupRow, error) {
 	return s.GetGroupTx(ctx, tx, id)
 }
@@ -271,28 +275,21 @@ func (s *GroupStore) SnapshotTx(ctx context.Context, tx *sql.Tx, action string, 
 // Returns a *common.DeleteConstraintError with the full list of policies using the group.
 func (s *GroupStore) CheckDeleteConstraints(ctx context.Context, groupID int) error {
 	// Query ALL policies that use the group (as source or target)
-	rows, err := s.db.QueryContext(ctx,
+	policies, err := queryRows(ctx, s.db,
 		`SELECT id, name FROM policies
 		WHERE ((source_type='group' AND source_id=?) OR (target_type='group' AND target_id=?)) AND is_pending_delete = 0`,
-		groupID, groupID,
+		[]interface{}{groupID, groupID},
+		"policy usage",
+		func(rows *sql.Rows) (common.PolicyRef, error) {
+			var p common.PolicyRef
+			if err := rows.Scan(&p.ID, &p.Name); err != nil {
+				return p, err
+			}
+			return p, nil
+		},
 	)
 	if err != nil {
-		return fmt.Errorf("failed to check policy usage: %w", err)
-	}
-
-	var policies []common.PolicyRef
-	for rows.Next() {
-		var p common.PolicyRef
-		if err := rows.Scan(&p.ID, &p.Name); err != nil {
-			if closeErr := rows.Close(); closeErr != nil {
-				return fmt.Errorf("failed to scan policy: %v, close error: %w", err, closeErr)
-			}
-			return fmt.Errorf("failed to scan policy: %w", err)
-		}
-		policies = append(policies, p)
-	}
-	if closeErr := rows.Close(); closeErr != nil {
-		return fmt.Errorf("failed to close rows: %w", closeErr)
+		return err
 	}
 
 	if len(policies) > 0 {

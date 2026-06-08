@@ -278,6 +278,47 @@ func (h *Handler) GetPolicy(w http.ResponseWriter, r *http.Request) {
 	common.RespondJSON(w, http.StatusOK, resp)
 }
 
+func (h *Handler) buildAndPersistPolicyUpdate(ctx context.Context, id int, input *policyInput, p *models.PolicyRow) ([]int, error) {
+	var oldPeers []int
+	var err error
+	if h.Compiler != nil {
+		oldPeers, err = h.Compiler.GetAffectedPeersByPolicy(ctx, id)
+		if err != nil {
+			log.ErrorContext(ctx, "Failed to get old affected peers for policy", "policy_id", id, "error", err)
+			oldPeers = nil
+		}
+	}
+
+	common.SnapshotOrLog(ctx, "policy", id, "update", func() error {
+		return h.Store.Snapshot(ctx, "update", id)
+	})
+
+	err = store.RunInTx(ctx, h.beginner, func(tx *sql.Tx) error {
+		if err := h.Store.UpdatePolicyTx(ctx, tx, p); err != nil {
+			if errors.Is(err, store.ErrPolicyNotFound) {
+				return common.NewHTTPError(http.StatusNotFound, "policy not found")
+			}
+			return fmt.Errorf("failed to update policy: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	var newPeers []int
+	if h.Compiler != nil {
+		newPeers, err = h.Compiler.GetAffectedPeersByPolicy(ctx, id)
+		if err != nil {
+			log.ErrorContext(ctx, "Failed to get new affected peers for policy", "policy_id", id, "error", err)
+			newPeers = nil
+		}
+	}
+
+	allPeers := common.MergePeerIDs(oldPeers, newPeers)
+	return allPeers, nil
+}
+
 func (h *Handler) UpdatePolicy(w http.ResponseWriter, r *http.Request) {
 	id, err := common.ParseIDParam(r, "id")
 	if err != nil {
@@ -338,33 +379,7 @@ func (h *Handler) UpdatePolicy(w http.ResponseWriter, r *http.Request) {
 		Direction:   input.Direction,
 	}
 
-	var oldPeers []int
-	if h.Compiler != nil {
-		oldPeers, err = h.Compiler.GetAffectedPeersByPolicy(r.Context(), id)
-		if err != nil {
-			log.ErrorContext(r.Context(), "Failed to get old affected peers for policy", "policy_id", id, "error", err)
-			oldPeers = nil
-		}
-	}
-
-	// Take snapshot outside the transaction — snapshots are idempotent (INSERT OR IGNORE)
-	// and don't need to be atomically consistent with the update. Keeping them
-	// outside the tx reduces write lock hold time and avoids "database is locked"
-	// conflicts with background workers.
-	common.SnapshotOrLog(r.Context(), "policy", id, "update", func() error {
-		return h.Store.Snapshot(r.Context(), "update", id)
-	})
-
-	err = store.RunInTx(r.Context(), h.beginner, func(tx *sql.Tx) error {
-		if err := h.Store.UpdatePolicyTx(r.Context(), tx, &p); err != nil {
-			if errors.Is(err, store.ErrPolicyNotFound) {
-				return common.NewHTTPError(http.StatusNotFound, "policy not found")
-			}
-			return fmt.Errorf("failed to update policy: %w", err)
-		}
-		return nil
-	})
-
+	allPeers, err := h.buildAndPersistPolicyUpdate(r.Context(), id, &input, &p)
 	if err != nil {
 		var httpErr *common.HTTPError
 		if errors.As(err, &httpErr) {
@@ -376,16 +391,6 @@ func (h *Handler) UpdatePolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var newPeers []int
-	if h.Compiler != nil {
-		newPeers, err = h.Compiler.GetAffectedPeersByPolicy(r.Context(), id)
-		if err != nil {
-			log.ErrorContext(r.Context(), "Failed to get new affected peers for policy", "policy_id", id, "error", err)
-			newPeers = nil
-		}
-	}
-
-	allPeers := common.MergePeerIDs(oldPeers, newPeers)
 	h.Store.QueuePeerChange(r.Context(), h.ChangeWorker, allPeers, "policy", "update", id, fmt.Sprintf("Policy '%s' updated", input.Name))
 
 	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "updated"})

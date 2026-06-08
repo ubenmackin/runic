@@ -16,18 +16,23 @@ type HTTPClient interface {
 	Do(req *http.Request) (*http.Response, error)
 }
 
-// DoJSONRequest sends an HTTP request with a JSON body. It sets Content-Type, User-Agent, and optional Authorization headers.
+// DoJSONRequest sends an HTTP request with a JSON body. It sets Content-Type,
+// User-Agent, and optional Authorization headers.
+//
+// The caller MUST close resp.Body on the returned response when finished
+// reading from it. On non-2xx status codes the body is already drained and
+// closed before an error is returned; on success the caller is responsible
+// for closing resp.Body.
 func DoJSONRequest(ctx context.Context, client HTTPClient, method, url string, body interface{}, token, userAgent string) (*http.Response, error) {
-	var bodyReader *bytes.Reader
+	var data []byte
 	if body != nil {
-		data, err := json.Marshal(body)
+		var err error
+		data, err = json.Marshal(body)
 		if err != nil {
 			return nil, fmt.Errorf("marshal request body: %w", err)
 		}
-		bodyReader = bytes.NewReader(data)
-	} else {
-		bodyReader = bytes.NewReader(nil)
 	}
+	bodyReader := bytes.NewReader(data)
 
 	req, err := http.NewRequestWithContext(ctx, method, url, bodyReader)
 	if err != nil {

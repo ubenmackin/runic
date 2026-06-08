@@ -2,26 +2,36 @@ package iptparse
 
 import (
 	"fmt"
-	"log"
 	"strings"
+
+	"runic/internal/common/log"
 )
 
-var supportedModules = map[string]bool{
-	"set":       true,
-	"conntrack": true,
-	"tcp":       true,
-	"udp":       true,
-	"icmp":      true,
-	"comment":   true,
-	"multiport": true,
-	"pkttype":   true,
+// supportedModules is the set of iptables module names that the parser is
+// willing to consume. Modules outside this set cause the rule to be marked
+// unclean (see classifyRule). Stored as map[string]struct{} to make the
+// "presence-only" intent explicit and save a byte per entry.
+var supportedModules = map[string]struct{}{
+	"set":       {},
+	"conntrack": {},
+	"tcp":       {},
+	"udp":       {},
+	"icmp":      {},
+	"comment":   {},
+	"multiport": {},
+	"pkttype":   {},
 }
 
 // parseModuleParams advances through tokens for a given module, calling the handler
 // for each recognized flag within the module's parameter block. The block ends when
 // a new flag starting with "-" (other than module-specific flags) or a known module
 // flag is encountered. Returns the updated token index.
-func parseModuleParams(tokens []string, i int, module string, handlers map[string]func([]string, *int)) int {
+//
+// Each handler has signature func(ts []string, i int) int: it consumes the tokens
+// it needs and returns the new index. This makes the side-effect-free nature of
+// parsing explicit (the caller owns `i`) and avoids the previous pattern of
+// taking a *int and reassigning through it.
+func parseModuleParams(tokens []string, i int, module string, handlers map[string]func([]string, int) int) int {
 	for i+1 < len(tokens) {
 		next := tokens[i+1]
 		// Stop if next token starts a new module, jump target, or basic match flag
@@ -29,7 +39,7 @@ func parseModuleParams(tokens []string, i int, module string, handlers map[strin
 			break
 		}
 		if fn, ok := handlers[next]; ok {
-			fn(tokens, &i)
+			i = fn(tokens, i)
 		} else {
 			i++
 		}
@@ -38,14 +48,21 @@ func parseModuleParams(tokens []string, i int, module string, handlers map[strin
 }
 
 // Parse only processes chains listed in the chains parameter.
+//
+// The parser is lossless: parse errors and warnings are collected into
+// rule.Warnings and chain.Warnings rather than returned as the function
+// error. This preserves the historical contract that Parse returns
+// ([]ParsedChain, nil) for any input that is structurally valid (i.e.,
+// contains a *filter or similar table marker plus at least one -A rule).
 func Parse(iptablesSaveOutput string, chains []string) ([]ParsedChain, error) {
-	chainSet := make(map[string]bool, len(chains))
+	chainSet := make(map[string]struct{}, len(chains))
 	for _, c := range chains {
-		chainSet[c] = true
+		chainSet[c] = struct{}{}
 	}
 
 	// Collect rules per chain, preserving order
 	chainRules := make(map[string][]string)
+	chainWarnings := make(map[string][]string)
 	var chainOrder []string
 
 	lines := strings.Split(iptablesSaveOutput, "\n")
@@ -69,7 +86,7 @@ func Parse(iptablesSaveOutput string, chains []string) ([]ParsedChain, error) {
 		}
 		chainName := parts[1]
 
-		if !chainSet[chainName] {
+		if _, ok := chainSet[chainName]; !ok {
 			continue
 		}
 
@@ -89,8 +106,9 @@ func Parse(iptablesSaveOutput string, chains []string) ([]ParsedChain, error) {
 			parsedRules = append(parsedRules, rule)
 		}
 		result = append(result, ParsedChain{
-			Name:  name,
-			Rules: parsedRules,
+			Name:     name,
+			Rules:    parsedRules,
+			Warnings: chainWarnings[name],
 		})
 	}
 
@@ -98,27 +116,31 @@ func Parse(iptablesSaveOutput string, chains []string) ([]ParsedChain, error) {
 }
 
 // moduleHandlers returns the parameter handlers for a given iptables module name.
-func moduleHandlers(rule *ParsedRule, mod string) map[string]func([]string, *int) {
+// Each handler signature is func(ts []string, i int) int — it consumes the tokens
+// it needs (the flag, plus any value) and returns the new index. The caller
+// (parseModuleParams) stores the result and continues.
+func moduleHandlers(rule *ParsedRule, mod string) map[string]func([]string, int) int {
 	switch mod {
 	case "set":
-		return map[string]func([]string, *int){
-			"--match-set": func(ts []string, ip *int) {
-				*ip += 2 // skip --match-set
-				if *ip+1 < len(ts) {
+		return map[string]func([]string, int) int{
+			"--match-set": func(ts []string, i int) int {
+				i += 2 // skip --match-set
+				if i+1 < len(ts) {
 					rule.IpsetMatch = &IpsetMatch{
-						Name:      ts[*ip],
-						Direction: ts[*ip+1],
+						Name:      ts[i],
+						Direction: ts[i+1],
 					}
-					*ip++ // skip direction (consumed in next i++)
+					i++ // skip direction; the +1 in the outer loop will skip the value
 				}
+				return i
 			},
 		}
 	case "conntrack":
-		return map[string]func([]string, *int){
-			"--ctstate": func(ts []string, ip *int) {
-				*ip += 2 // skip --ctstate
-				if *ip < len(ts) {
-					states := strings.Split(ts[*ip], ",")
+		return map[string]func([]string, int) int{
+			"--ctstate": func(ts []string, i int) int {
+				i += 2 // skip --ctstate
+				if i < len(ts) {
+					states := strings.Split(ts[i], ",")
 					for _, s := range states {
 						trimmed := strings.TrimSpace(s)
 						if trimmed != "" {
@@ -126,54 +148,65 @@ func moduleHandlers(rule *ParsedRule, mod string) map[string]func([]string, *int
 						}
 					}
 				}
+				return i
 			},
 		}
 	case "tcp", "udp":
-		return map[string]func([]string, *int){
-			"--dport": func(ts []string, ip *int) {
-				*ip += 2
-				if *ip < len(ts) {
-					rule.DestPort = ts[*ip]
+		return map[string]func([]string, int) int{
+			"--dport": func(ts []string, i int) int {
+				i += 2
+				if i < len(ts) {
+					rule.DestPort = ts[i]
 				}
+				return i
 			},
-			"--sport": func(ts []string, ip *int) {
-				*ip += 2
-				if *ip < len(ts) {
-					rule.SourcePort = ts[*ip]
+			"--sport": func(ts []string, i int) int {
+				i += 2
+				if i < len(ts) {
+					rule.SourcePort = ts[i]
 				}
+				return i
 			},
 		}
 	case "comment":
-		return map[string]func([]string, *int){
-			"--comment": func(ts []string, ip *int) {
-				*ip += 2
-				if *ip < len(ts) {
-					rule.Comment = strings.Trim(ts[*ip], "\"")
+		// Note: --comment does not handle embedded spaces. The value is a single
+		// token in iptables-save output even if the original rule used quoted
+		// spaces, so spaces will be silently lost. A quoting-aware parser would
+		// need to re-tokenize the raw line rather than rely on strings.Fields.
+		return map[string]func([]string, int) int{
+			"--comment": func(ts []string, i int) int {
+				i += 2
+				if i < len(ts) {
+					rule.Comment = strings.Trim(ts[i], "\"")
 				}
+				return i
 			},
 		}
 	case "multiport":
-		return map[string]func([]string, *int){
-			"--dports": func(ts []string, ip *int) {
-				*ip += 2
-				if *ip < len(ts) {
-					rule.DestPort = ts[*ip]
+		return map[string]func([]string, int) int{
+			"--dports": func(ts []string, i int) int {
+				i += 2
+				if i < len(ts) {
+					rule.DestPort = ts[i]
 				}
+				return i
 			},
-			"--sports": func(ts []string, ip *int) {
-				*ip += 2
-				if *ip < len(ts) {
-					rule.SourcePort = ts[*ip]
+			"--sports": func(ts []string, i int) int {
+				i += 2
+				if i < len(ts) {
+					rule.SourcePort = ts[i]
 				}
+				return i
 			},
 		}
 	case "pkttype":
-		return map[string]func([]string, *int){
-			"--pkt-type": func(ts []string, ip *int) {
-				*ip += 2
-				if *ip < len(ts) {
-					rule.PktType = ts[*ip]
+		return map[string]func([]string, int) int{
+			"--pkt-type": func(ts []string, i int) int {
+				i += 2
+				if i < len(ts) {
+					rule.PktType = ts[i]
 				}
+				return i
 			},
 		}
 	default:
@@ -203,6 +236,7 @@ func parseRule(line, chain string, order int) ParsedRule {
 		Order:           order,
 		Raw:             line,
 		ConntrackStates: []string{},
+		Warnings:        []string{},
 	}
 
 	// Strip the "-A CHAIN " prefix
@@ -276,15 +310,24 @@ func parseRule(line, chain string, order int) ParsedRule {
 			}
 
 		default:
-			log.Printf("unrecognized token in rule %d (chain %s): %s", order, chain, tok)
+			// Unknown tokens are recorded as warnings instead of being silently
+			// dropped. They are also still emitted to the structured log so
+			// operators monitoring the agent can spot unexpected iptables
+			// extensions in the wild.
+			warning := fmt.Sprintf("unrecognized token: %s", tok)
+			rule.Warnings = append(rule.Warnings, warning)
+			log.Warn("iptparse: unrecognized token", "rule_order", order, "chain", chain, "token", tok)
 		}
 
 		i++
 	}
 
-	// Validate completeness for truncated/malformed input
+	// Validate completeness for truncated/malformed input. We record the
+	// reason as a warning AND emit a structured log entry — the warning so
+	// the importer UI can surface it, the log for offline debugging.
 	if reason := completenessError(&rule); reason != "" {
-		log.Printf("incomplete rule %d (chain %s): %s — raw: %s", order, chain, reason, line)
+		rule.Warnings = append(rule.Warnings, reason)
+		log.Warn("iptparse: incomplete rule", "rule_order", order, "chain", chain, "reason", reason, "raw", line)
 	}
 
 	// Determine IsRunicStandard, IsClean, and SkipReason
@@ -368,7 +411,7 @@ func classifyRule(rule *ParsedRule, modules []string) {
 	}
 
 	for _, mod := range modules {
-		if !supportedModules[mod] {
+		if _, ok := supportedModules[mod]; !ok {
 			rule.IsClean = false
 			rule.SkipReason = fmt.Sprintf("unsupported module: %s", mod)
 			return

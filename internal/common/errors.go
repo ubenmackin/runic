@@ -22,6 +22,9 @@ func (e *HTTPStatusError) Error() string {
 	return fmt.Sprintf("HTTP %d %s %s", e.StatusCode, e.Method, e.URL)
 }
 
+// Is reports whether the receiver matches target. It matches ErrUnauthorized
+// if and only if the receiver's StatusCode is 401. All other status codes
+// (including 403 Forbidden) and all other target errors return false.
 func (e *HTTPStatusError) Is(target error) bool {
 	if target == ErrUnauthorized && e.StatusCode == 401 {
 		return true

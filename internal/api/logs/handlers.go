@@ -72,21 +72,26 @@ func MakeLogsStreamHandler(hub *Hub, tokenStore TokenRevoker) http.HandlerFunc {
 			return
 		}
 
+		peerIDStr := r.URL.Query().Get("peer_id")
+
 		client := &Client{
 			hub:  hub,
 			conn: conn,
 			send: make(chan []byte, 256),
 			filter: LogFilter{
-				PeerID: r.URL.Query().Get("peer_id"),
+				PeerID: peerIDStr,
 				Action: r.URL.Query().Get("action"),
 				SrcIP:  r.URL.Query().Get("src_ip"),
 			},
-			filterPeerID: -1,
 		}
-		if pid := r.URL.Query().Get("peer_id"); pid != "" {
-			if n, err := strconv.Atoi(pid); err == nil {
+		if peerIDStr != "" {
+			if n, err := strconv.Atoi(peerIDStr); err == nil {
 				client.filterPeerID = n
+			} else {
+				client.filterPeerID = -1
 			}
+		} else {
+			client.filterPeerID = -1
 		}
 		if dstPort := r.URL.Query().Get("dst_port"); dstPort != "" {
 			if p, err := strconv.Atoi(dstPort); err == nil {

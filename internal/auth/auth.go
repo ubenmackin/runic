@@ -16,18 +16,21 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 
+	"runic/internal/common/constants"
 	"runic/internal/common/log"
 	"runic/internal/db"
 	"runic/internal/store"
 )
 
-// preventing collisions with keys from other packages.
-type contextKey string
+// contextKey is an unexported named-int type so that values of it cannot
+// collide with context keys defined in other packages (a Go idiom for
+// safe context.WithValue use).
+type contextKey int
 
 const (
-	ctxKeyUsername contextKey = "username"
-	ctxKeyUniqueID contextKey = "unique_id"
-	ctxKeyRole     contextKey = "role"
+	ctxKeyUsername contextKey = iota
+	ctxKeyUniqueID
+	ctxKeyRole
 )
 
 var (
@@ -38,9 +41,6 @@ var (
 	// Tokens signed with the old key are still accepted for verification
 	// until the rotation window expires.
 	JwtPrevKey []byte
-
-	// JwtKeyRotationAt records when the key was last rotated.
-	JwtKeyRotationAt time.Time
 
 	// tokenStore is the store used for token revocation queries.
 	tokenStore *store.TokenStore
@@ -85,13 +85,20 @@ func InitJwtKey(ctx context.Context, database db.Querier) error {
 		JwtKeyMu.Unlock()
 	}
 
-	if JwtKey == nil {
+	JwtKeyMu.RLock()
+	needsNewKey := JwtKey == nil
+	JwtKeyMu.RUnlock()
+	if needsNewKey {
 		key := make([]byte, 32)
 		if _, err := rand.Read(key); err != nil {
 			return fmt.Errorf("failed to generate random JWT key: %w", err)
 		}
 		JwtKeyMu.Lock()
-		JwtKey = key
+		// Re-check under the write lock: another goroutine may have populated
+		// JwtKey while we were deriving a random one. If so, discard ours.
+		if JwtKey == nil {
+			JwtKey = key
+		}
 		JwtKeyMu.Unlock()
 		log.Warn("Using random JWT key (no jwt_secret found in database)")
 	}
@@ -145,7 +152,6 @@ func RotateJwtKey(ctx context.Context, newKey []byte) error {
 	oldKey := JwtKey
 	JwtPrevKey = oldKey
 	JwtKey = newKey
-	JwtKeyRotationAt = time.Now()
 	JwtKeyMu.Unlock()
 
 	if settingsStore != nil {
@@ -178,6 +184,7 @@ func ValidateToken(tokenString string) (*Claims, error) {
 
 	// If validation fails with the primary key, try the previous key (rotation window).
 	if err != nil && prevKey != nil {
+		primaryErr := err
 		claims = &Claims{}
 		token, err = jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
 			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
@@ -185,6 +192,11 @@ func ValidateToken(tokenString string) (*Claims, error) {
 			}
 			return prevKey, nil
 		}, jwt.WithIssuer("runic"), jwt.WithAudience("runic"))
+		// If the rotation-window attempt also failed, surface both errors so
+		// operators can tell that the primary key was tried first.
+		if err != nil {
+			err = fmt.Errorf("%w (primary key error: %v)", err, primaryErr)
+		}
 	}
 
 	if err != nil {
@@ -192,7 +204,15 @@ func ValidateToken(tokenString string) (*Claims, error) {
 	}
 
 	if !token.Valid {
-		return nil, jwt.ErrSignatureInvalid
+		// The token parsed without an error but the parser reports it as
+		// invalid (e.g. expired or not-yet-valid). Return a wrapped error
+		// carrying the parser's reason so callers can inspect it; do NOT
+		// synthesize jwt.ErrSignatureInvalid, which would be misleading for
+		// non-signature failures like expiry.
+		if err != nil {
+			return nil, fmt.Errorf("token not valid: %w", err)
+		}
+		return nil, errors.New("token reported as invalid by parser")
 	}
 
 	return claims, nil
@@ -259,11 +279,12 @@ func Middleware(next http.Handler) http.Handler {
 
 		claims, err := ValidateToken(tokenStr)
 		if err != nil || claims == nil {
+			log.WarnContext(r.Context(), "JWT verification failed", "error", err)
 			writeUnauthorizedJSON(w, "Unauthorized")
 			return
 		}
 
-		revCtx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		revCtx, cancel := context.WithTimeout(r.Context(), constants.RevocationCheckTimeout)
 		defer cancel()
 		if IsRevoked(revCtx, claims.UniqueID) {
 			writeUnauthorizedJSON(w, "Unauthorized: token revoked")

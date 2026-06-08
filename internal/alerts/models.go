@@ -2,8 +2,12 @@
 package alerts
 
 import (
+	"runic/internal/common"
 	"runic/internal/models"
 )
+
+// PeerHostnameLookup is the shared type for hostname resolution by peer ID.
+type PeerHostnameLookup = common.PeerHostnameLookup
 
 // Type aliases for backward compatibility.
 // The canonical definitions live in runic/internal/models.

@@ -5,10 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"os"
 
 	"runic/internal/common"
+	"runic/internal/common/log"
 	"runic/internal/models"
 )
 
@@ -32,18 +32,18 @@ func SendHeartbeat(ctx context.Context, client common.HTTPClient, controlPlaneUR
 	}
 	defer func() {
 		if cErr := resp.Body.Close(); cErr != nil {
-			slog.Warn("failed to close body", "error", cErr)
+			log.Warn("failed to close body", "error", cErr)
 		}
 	}()
 
 	var result map[string]interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		slog.Warn("failed to decode heartbeat response", "error", err)
+		log.Warn("failed to decode heartbeat response", "error", err)
 		return nil
 	}
 
 	if status, ok := result["status"]; ok {
-		slog.Debug("heartbeat response", "status", status)
+		log.Debug("heartbeat response", "status", status)
 	}
 
 	return nil

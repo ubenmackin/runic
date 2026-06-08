@@ -1,6 +1,7 @@
 package peers
 
 import (
+	"context"
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
@@ -18,18 +19,15 @@ import (
 
 // Rate limiters for rotation endpoints
 var (
-	rotateKeyRateLimiter       = middleware.NewRateLimiter(10, time.Minute) // 10 requests per minute per IP
-	confirmRotationRateLimiter = middleware.NewRateLimiter(20, time.Minute) // 20 requests per minute per IP
+	rotateKeyRateLimiter       = middleware.NewRateLimiter(10, time.Minute)
+	confirmRotationRateLimiter = middleware.NewRateLimiter(20, time.Minute)
 )
 
-// StopRotationRateLimiters stops the background cleanup goroutines for the
-// package-level rate limiters. Call during graceful shutdown to prevent goroutine leaks.
 func StopRotationRateLimiters() {
 	rotateKeyRateLimiter.Stop()
 	confirmRotationRateLimiter.Stop()
 }
 
-// The token is a 32-byte random value, hex-encoded (64 chars).
 func generateRotationToken() (string, error) {
 	bytes := make([]byte, 32)
 	if _, err := rand.Read(bytes); err != nil {
@@ -42,8 +40,6 @@ func generateHMACKey() (string, error) {
 	return runiccommon.GenerateHMACKey()
 }
 
-// parseSQLiteDatetime tries to parse a datetime string from SQLite (CURRENT_TIMESTAMP format "2006-01-02 15:04:05")
-// and also accepts RFC3339 format for compatibility.
 func parseSQLiteDatetime(s string) (time.Time, error) {
 	t, err := time.Parse("2006-01-02 15:04:05", s)
 	if err == nil {
@@ -52,16 +48,14 @@ func parseSQLiteDatetime(s string) (time.Time, error) {
 	return time.Parse(time.RFC3339, s)
 }
 
-// Handles both "host-<hostname>" and bare "<hostname>" formats.
 func parseHostID(hostID string) string {
 	hostname := hostID
-	if len(hostname) > 5 && hostname[:5] == "host-" {
+	if len(hostname) > 5 && hostID[:5] == "host-" {
 		hostname = hostname[5:]
 	}
 	return hostname
 }
 
-// RotatePeerKey initiates an HMAC key rotation for a peer. POST /api/v1/peers/:id/rotate-key
 func (h *Handler) RotatePeerKey(w http.ResponseWriter, r *http.Request) {
 	peerID, err := common.ParseIDParam(r, "id")
 	if err != nil {
@@ -95,7 +89,6 @@ func (h *Handler) RotatePeerKey(w http.ResponseWriter, r *http.Request) {
 		common.RespondError(w, http.StatusInternalServerError, "failed to generate HMAC key")
 		return
 	}
-
 	token, err := generateRotationToken()
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "failed to generate rotation token")
@@ -108,7 +101,6 @@ func (h *Handler) RotatePeerKey(w http.ResponseWriter, r *http.Request) {
 			common.RespondError(w, http.StatusInternalServerError, "failed to query peer rotation state")
 			return
 		}
-
 		if lastRotatedAt.Valid {
 			rotationTime, parseErr := parseSQLiteDatetime(lastRotatedAt.String)
 			if parseErr == nil && time.Since(rotationTime) < 5*time.Minute {
@@ -145,94 +137,86 @@ func (h *Handler) RotatePeerKey(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// AgentRotateKey handles agent-initiated key rotation. POST /api/v1/agent/rotate-key
-// The agent sends its host_id and rotation token.
-// The token is consumed (set to NULL) atomically with key retrieval.
-// This endpoint is PUBLIC - authentication is via the rotation token itself.
+func (h *Handler) consumeRotationToken(ctx context.Context, hostname, token string) (int, string, bool, error) {
+	var peerID64 int64
+	var newHMACKey string
+	var lastRotatedAt sql.NullString
+	err := store.RunInTx(ctx, h.beginner, func(tx *sql.Tx) error {
+		qerr := tx.QueryRowContext(ctx, `			SELECT id, hmac_key, hmac_key_last_rotated_at FROM peers
+			WHERE hostname = ? AND hmac_key_rotation_token = ?
+		`, hostname, token).Scan(&peerID64, &newHMACKey, &lastRotatedAt)
+		if qerr != nil {
+			return qerr
+		}
+		if lastRotatedAt.Valid {
+			rotationTime, parseErr := parseSQLiteDatetime(lastRotatedAt.String)
+			if parseErr != nil || time.Since(rotationTime) > 5*time.Minute {
+				return common.NewHTTPError(http.StatusUnauthorized, "expired rotation token")
+			}
+		}
+		if cerr := h.Store.ConsumeRotationTokenByIDTx(ctx, tx, int(peerID64)); cerr != nil {
+			return cerr
+		}
+		slog.Info("Agent retrieved new HMAC key",
+			"peer_id", peerID64,
+			"hostname", hostname,
+			"action", "retrieve_key",
+		)
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, "", false, common.NewHTTPError(http.StatusUnauthorized, "invalid rotation token")
+		}
+		var httpErr *common.HTTPError
+		if errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusUnauthorized {
+			if clearErr := h.Store.ClearRotationToken(ctx, int(peerID64)); clearErr != nil {
+				slog.Warn("failed to clear expired rotation token", "error", clearErr)
+			}
+			return int(peerID64), "", true, err
+		}
+		return 0, "", false, err
+	}
+	return int(peerID64), newHMACKey, false, nil
+}
+
 func (h *Handler) AgentRotateKey(w http.ResponseWriter, r *http.Request) {
-	// Limit request body size to prevent slowloris attacks
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB limit
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 
 	var input struct {
 		HostID        string `json:"host_id"`
 		RotationToken string `json:"rotation_token"`
 	}
-
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		common.RespondError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
-
 	if rotateKeyRateLimiter.Check(common.GetClientIP(r)) != nil {
 		common.RespondError(w, http.StatusTooManyRequests, "rate limit exceeded")
 		return
 	}
-
 	if input.HostID == "" || input.RotationToken == "" {
 		common.RespondError(w, http.StatusBadRequest, "host_id and rotation_token are required")
 		return
 	}
 
 	hostname := parseHostID(input.HostID)
-
-	var peerID int64
-	var newHMACKey string
-
-	// Atomic operation: validate token AND retrieve key AND consume token
-	err := store.RunInTx(r.Context(), h.beginner, func(tx *sql.Tx) error {
-		var lastRotatedAt sql.NullString
-		err := tx.QueryRowContext(r.Context(), `
-			SELECT id, hmac_key, hmac_key_last_rotated_at FROM peers
-			WHERE hostname = ? AND hmac_key_rotation_token = ?
-		`, hostname, input.RotationToken).Scan(&peerID, &newHMACKey, &lastRotatedAt)
-
-		if err != nil {
-			return err
-		}
-
-		if lastRotatedAt.Valid {
-			rotationTime, parseErr := parseSQLiteDatetime(lastRotatedAt.String)
-			if parseErr != nil || time.Since(rotationTime) > 5*time.Minute {
-				// Clear expired token in a separate, immediately-committed transaction
-				// so the cleanup is not rolled back when we return the error.
-				if execErr := h.Store.ClearRotationToken(r.Context(), int(peerID)); execErr != nil {
-					slog.Warn("failed to clear expired rotation token", "error", execErr)
-				}
-				return common.NewHTTPError(http.StatusUnauthorized, "expired rotation token")
-			}
-		}
-
-		// Consume the token using the already-known peerID — no redundant SELECT
-		if err := h.Store.ConsumeRotationTokenByIDTx(r.Context(), tx, int(peerID)); err != nil {
-			return err
-		}
-
-		slog.Info("Agent retrieved new HMAC key",
-			"peer_id", peerID,
-			"hostname", hostname,
-			"action", "retrieve_key",
-		)
-
-		// Store the key in a response header so we can send it after commit
-		w.Header().Set("X-New-HMAC-Key", newHMACKey)
-		return nil
-	})
-
+	_, newHMACKey, expired, err := h.consumeRotationToken(r.Context(), hostname, input.RotationToken)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			common.RespondError(w, http.StatusUnauthorized, "invalid rotation token")
-			return
-		}
-		if httpErr, ok := err.(*common.HTTPError); ok {
+		var httpErr *common.HTTPError
+		if errors.As(err, &httpErr) {
 			common.RespondError(w, httpErr.StatusCode, httpErr.Message)
 			return
 		}
 		common.RespondError(w, http.StatusInternalServerError, "failed to process rotation")
 		return
 	}
+	if expired {
+		common.RespondError(w, http.StatusUnauthorized, "expired rotation token")
+		return
+	}
 
-	newHMACKey = w.Header().Get("X-New-HMAC-Key")
-	w.Header().Del("X-New-HMAC-Key")
+	w.Header().Set("X-New-HMAC-Key", newHMACKey)
 
 	common.RespondJSON(w, http.StatusOK, map[string]interface{}{
 		"new_hmac_key": newHMACKey,
@@ -240,16 +224,13 @@ func (h *Handler) AgentRotateKey(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// AgentConfirmRotation confirms completion of a key rotation. POST /api/v1/agent/confirm-rotation
-// Requires the rotation token as proof of legitimate rotation.
 func (h *Handler) AgentConfirmRotation(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB limit
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 
 	var input struct {
 		HostID        string `json:"host_id"`
-		RotationToken string `json:"rotation_token"` // Required only if rotation token still exists (not yet consumed)
+		RotationToken string `json:"rotation_token"`
 	}
-
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		var maxErr *http.MaxBytesError
 		if errors.As(err, &maxErr) {
@@ -259,19 +240,16 @@ func (h *Handler) AgentConfirmRotation(w http.ResponseWriter, r *http.Request) {
 		common.RespondError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
-
 	if confirmRotationRateLimiter.Check(common.GetClientIP(r)) != nil {
 		common.RespondError(w, http.StatusTooManyRequests, "rate limit exceeded")
 		return
 	}
-
 	if input.HostID == "" {
 		common.RespondError(w, http.StatusBadRequest, "host_id is required")
 		return
 	}
 
 	hostname := parseHostID(input.HostID)
-
 	rotationToken, _, err := h.Store.GetPeerRotationState(r.Context(), hostname)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -281,15 +259,12 @@ func (h *Handler) AgentConfirmRotation(w http.ResponseWriter, r *http.Request) {
 		common.RespondError(w, http.StatusInternalServerError, "failed to query peer")
 		return
 	}
-
 	if rotationToken == "" {
-		// Token already consumed - check if rotation was recent
 		_, lastRotatedAt, err := h.Store.GetPeerIDAndLastRotatedAt(r.Context(), hostname)
 		if err != nil {
 			common.RespondError(w, http.StatusInternalServerError, "failed to query peer")
 			return
 		}
-
 		if lastRotatedAt.Valid {
 			rotationTime, parseErr := parseSQLiteDatetime(lastRotatedAt.String)
 			if parseErr == nil && time.Since(rotationTime) < 10*time.Minute {
@@ -300,35 +275,27 @@ func (h *Handler) AgentConfirmRotation(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-
 		common.RespondError(w, http.StatusBadRequest, "no rotation in progress")
 		return
 	}
-
-	// Token still exists - agent hasn't called rotate-key yet, or is retrying
 	if input.RotationToken == "" {
 		common.RespondError(w, http.StatusBadRequest, "rotation_token is required")
 		return
 	}
 	if rotationToken != input.RotationToken {
-		slog.Warn("Invalid rotation token provided to confirm-rotation",
-			"hostname", hostname,
-		)
+		slog.Warn("Invalid rotation token provided to confirm-rotation", "hostname", hostname)
 		common.RespondError(w, http.StatusUnauthorized, "invalid rotation token")
 		return
 	}
-
 	err = h.Store.ConfirmRotation(r.Context(), hostname)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "failed to confirm rotation")
 		return
 	}
-
 	slog.Info("Agent confirmed HMAC key rotation",
 		"hostname", hostname,
 		"action", "confirm_rotation",
 	)
-
 	common.RespondJSON(w, http.StatusOK, map[string]string{
 		"status":  "confirmed",
 		"message": "Key rotation completed successfully",

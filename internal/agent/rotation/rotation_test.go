@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -302,18 +303,17 @@ func TestCheckAndRotate_ConfirmFailsNonFatal(t *testing.T) {
 
 	manager := NewManager(configPath, server.Client(), server.URL, "host-test-peer")
 
-	// Confirm-rotation failure should NOT cause an error (non-fatal)
-	newKey, err := manager.CheckAndRotate(context.Background(), cfg.HMACKey, cfg.Token)
-	if err != nil {
-		t.Fatalf("CheckAndRotate() error = %v (confirm-rotation failure should be non-fatal)", err)
+	// Confirm-rotation failure IS now fatal (error state)
+	_, err := manager.CheckAndRotate(context.Background(), cfg.HMACKey, cfg.Token)
+	if err == nil {
+		t.Fatal("CheckAndRotate() expected error when confirm-rotation fails")
+	}
+	if !strings.Contains(err.Error(), "confirm rotation") {
+		t.Errorf("CheckAndRotate() error = %v, want 'confirm rotation'", err)
 	}
 
-	if manager.GetState() != StateConfirmed {
-		t.Errorf("CheckAndRotate() state = %v, want %v", manager.GetState(), StateConfirmed)
-	}
-
-	if newKey != "new-hmac-key-abcdef123456789012345678901234" {
-		t.Errorf("CheckAndRotate() newKey = %s, want new-hmac-key-abcdef123456789012345678901234", newKey)
+	if manager.GetState() != StateFailed {
+		t.Errorf("CheckAndRotate() state = %v, want %v", manager.GetState(), StateFailed)
 	}
 }
 

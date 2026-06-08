@@ -2,8 +2,9 @@
 package iptparse
 
 type ParsedChain struct {
-	Name  string       // e.g., "INPUT", "OUTPUT", "DOCKER-USER"
-	Rules []ParsedRule // rules in order
+	Name     string       // e.g., "INPUT", "OUTPUT", "DOCKER-USER"
+	Rules    []ParsedRule // rules in order
+	Warnings []string     // non-fatal parse warnings collected while processing this chain
 }
 
 type ParsedRule struct {
@@ -25,6 +26,7 @@ type ParsedRule struct {
 	SkipReason      string      // why it can't be mapped (if !IsClean)
 	Comment         string      // -m comment --comment value
 	PktType         string      // -m pkttype --pkt-type value
+	Warnings        []string    // per-rule non-fatal warnings (unknown tokens, incomplete matches, etc.)
 }
 
 type IpsetMatch struct {

@@ -286,7 +286,10 @@ func (m *PeerMonitor) triggerPeerOfflineAlert(ctx context.Context, peerID int, i
 
 	m.logger.Info("peer went offline", "peer_id", peerID, "hostname", info.hostname)
 
-	if m.service == nil {
+	m.mu.RLock()
+	svc := m.service
+	m.mu.RUnlock()
+	if svc == nil {
 		return
 	}
 
@@ -303,7 +306,7 @@ func (m *PeerMonitor) triggerPeerOfflineAlert(ctx context.Context, peerID int, i
 		m.logger.Warn("hostname was sanitized in offline alert", "peer_id", peerID)
 	}
 
-	if err := m.service.TriggerAlert(ctx, &AlertEvent{
+	if err := svc.TriggerAlert(ctx, &AlertEvent{
 		Type:     AlertTypePeerOffline,
 		PeerID:   peerID,
 		PeerName: sanitizedHostname,
@@ -335,7 +338,10 @@ func (m *PeerMonitor) triggerPeerOnlineAlert(ctx context.Context, peerID int, in
 		return
 	}
 
-	if m.service == nil {
+	m.mu.RLock()
+	svc := m.service
+	m.mu.RUnlock()
+	if svc == nil {
 		return
 	}
 
@@ -345,7 +351,7 @@ func (m *PeerMonitor) triggerPeerOnlineAlert(ctx context.Context, peerID int, in
 		m.logger.Warn("hostname was sanitized in online alert", "peer_id", peerID)
 	}
 
-	if err := m.service.TriggerAlert(ctx, &AlertEvent{
+	if err := svc.TriggerAlert(ctx, &AlertEvent{
 		Type:     AlertTypePeerOnline,
 		PeerID:   peerID,
 		PeerName: sanitizedHostname,

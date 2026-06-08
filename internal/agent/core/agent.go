@@ -9,11 +9,11 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -32,13 +32,6 @@ import (
 
 var Version = "dev"
 
-type RealCommandRunner struct{}
-
-func (r *RealCommandRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, name, args...)
-	return cmd.CombinedOutput()
-}
-
 type Agent struct {
 	config          *identity.Config
 	configMu        sync.RWMutex // protects config for concurrent read/write across goroutines
@@ -52,8 +45,8 @@ type Agent struct {
 	cmdRunner       firewall.CommandRunner
 	cachePath       string
 	backupPath      string
-	exitFunc        func(int) // for testing; defaults to os.Exit
-	bootPullDone    bool      // tracks whether a fresh bundle pull was done during initialization
+	exitFunc        func(int)   // for testing; defaults to os.Exit
+	bootPullDone    atomic.Bool // tracks whether a fresh bundle pull was done during initialization
 }
 
 func New(configPath, controlPlaneURL string) *Agent {
@@ -80,7 +73,7 @@ func New(configPath, controlPlaneURL string) *Agent {
 		version:    Version,
 	}
 
-	agent.cmdRunner = &RealCommandRunner{}
+	agent.cmdRunner = &firewall.RealCommandRunner{}
 	agent.exitFunc = os.Exit
 	agent.cachePath = "/etc/runic-agent/cached-bundle.rules"
 	agent.backupPath = "/etc/runic-agent/iptables-backup.rules"
@@ -145,10 +138,10 @@ func (a *Agent) initialize(ctx context.Context) error {
 	}
 
 	bootPullDone, _ := a.applyBootBundle(ctx)
-	a.bootPullDone = bootPullDone
+	a.bootPullDone.Store(bootPullDone)
 
 	cfg = a.getConfig()
-	a.shipper = transport.NewShipper(a.httpClient, cfg.ControlPlaneURL, cfg.Token, cfg.HostID, cfg.LogPath)
+	a.shipper = transport.NewShipper(a.httpClient, cfg.ControlPlaneURL, cfg.Token, cfg.HostID, cfg.LogPath, a.version)
 
 	return nil
 }
@@ -158,6 +151,10 @@ func (a *Agent) initialize(ctx context.Context) error {
 func (a *Agent) startLoops(ctx context.Context) error {
 	g, gCtx := errgroup.WithContext(ctx)
 
+	// errgroup wrappers return nil because heartbeatLoop, pollLoop, and
+	// rotationCheckLoop run indefinitely (until ctx is canceled) and never
+	// return a non-nil error. Returning nil here ensures the errgroup does
+	// not cancel sibling goroutines on expected context cancellation.
 	g.Go(func() error {
 		a.heartbeatLoop(gCtx)
 		return nil
@@ -197,14 +194,7 @@ func (a *Agent) disableSystemServices(ctx context.Context) error {
 
 // registerIfNeeded registers the agent with the control plane if credentials are missing.
 func (a *Agent) registerIfNeeded(ctx context.Context) error {
-	cfg := a.getConfig()
-	if cfg.NeedsRegistration() {
-		log.Info("No credentials found, registering with control plane")
-		if err := a.register(ctx); err != nil {
-			return fmt.Errorf("registration failed: %w", err)
-		}
-	}
-	return nil
+	return a.register(ctx, false)
 }
 
 func (a *Agent) backupIptables(ctx context.Context) error {
@@ -288,12 +278,6 @@ func (a *Agent) loadConfig() error {
 func (a *Agent) saveConfig() error {
 	a.configMu.RLock()
 	defer a.configMu.RUnlock()
-	return identity.SaveConfig(a.configPath, a.config)
-}
-
-// saveConfigLocked saves the config without acquiring the mutex.
-// The caller must already hold configMu (or the write lock via register).
-func (a *Agent) saveConfigLocked() error {
 	return identity.SaveConfig(a.configPath, a.config)
 }
 
@@ -400,7 +384,7 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 				log.Error("Heartbeat failed", "error", err)
 				if errors.Is(err, common.ErrUnauthorized) {
 					log.Warn("Received 401 on heartbeat, triggering re-registration")
-					if regErr := a.safeRegister(ctx); regErr != nil {
+					if regErr := a.register(ctx, true); regErr != nil {
 						log.Error("Re-registration failed", "error", regErr)
 					}
 				}
@@ -428,7 +412,7 @@ func (a *Agent) pollLoop(ctx context.Context) {
 	ticker := time.NewTicker(time.Duration(cfg.PullIntervalSec) * time.Second)
 	defer ticker.Stop()
 
-	if !a.bootPullDone {
+	if !a.bootPullDone.Load() {
 		if err := a.pullBundle(ctx); err != nil {
 			log.Error("Initial bundle pull failed", "error", err)
 		}
@@ -443,7 +427,7 @@ func (a *Agent) pollLoop(ctx context.Context) {
 				log.Error("Bundle poll failed", "error", err)
 				if errors.Is(err, common.ErrUnauthorized) {
 					log.Warn("Received 401 on bundle poll, triggering re-registration")
-					if regErr := a.safeRegister(ctx); regErr != nil {
+					if regErr := a.register(ctx, true); regErr != nil {
 						log.Error("Re-registration failed", "error", regErr)
 					}
 				}
@@ -480,21 +464,38 @@ func (a *Agent) confirmApply(ctx context.Context, version string) error {
 	return transport.ConfirmApply(ctx, a.httpClient, cfg.ControlPlaneURL, cfg.HostID, cfg.Token, a.version, version)
 }
 
-func (a *Agent) register(ctx context.Context) error {
-	// identity.Register mutates cfg (HostID, Token, etc.), so we must
-	// hold the write lock while it runs to prevent data races with
-	// concurrent readers in heartbeatLoop, pollLoop, etc.
-	a.configMu.Lock()
-	defer a.configMu.Unlock()
-	return identity.Register(ctx, a.httpClient, a.config, a.version, a.saveConfigLocked, a.detectIPStrings())
-}
-
-// thundering herd when multiple loops detect 401 errors simultaneously.
-func (a *Agent) safeRegister(ctx context.Context) error {
+// register performs agent registration. When force is true, it always attempts
+// registration; when false, it only registers if credentials are missing.
+// The regMu prevents thundering herd when multiple loops detect 401 simultaneously.
+func (a *Agent) register(ctx context.Context, force bool) error {
 	a.regMu.Lock()
 	defer a.regMu.Unlock()
-	log.Info("Attempting re-registration (mutex acquired)")
-	return a.register(ctx)
+
+	if !force {
+		cfg := a.getConfig()
+		if !cfg.NeedsRegistration() {
+			return nil
+		}
+	}
+
+	log.Info("Attempting registration", "force", force)
+
+	// Snapshot config under lock, release, perform HTTP, re-acquire.
+	a.configMu.RLock()
+	cfg := *a.config // shallow copy — HostID/Token are strings (immutable)
+	a.configMu.RUnlock()
+
+	if err := identity.Register(ctx, a.httpClient, &cfg, a.version, func() error {
+		return identity.SaveConfig(a.configPath, &cfg)
+	}, a.detectIPStrings()); err != nil {
+		return err
+	}
+
+	// Swap the new config under write lock.
+	a.configMu.Lock()
+	*a.config = cfg
+	a.configMu.Unlock()
+	return nil
 }
 
 func (a *Agent) isControlPlaneReachable(ctx context.Context) bool {
@@ -607,7 +608,7 @@ func (a *Agent) listenSSE(ctx context.Context) error {
 		if err != nil {
 			if errors.Is(err, common.ErrUnauthorized) {
 				log.Warn("Received 401 on SSE connection, triggering re-registration")
-				if regErr := a.safeRegister(ctx); regErr != nil {
+				if regErr := a.register(ctx, true); regErr != nil {
 					log.Error("Re-registration failed", "error", regErr)
 				}
 				// After re-registration, continue the loop to reconnect with new token
@@ -655,16 +656,22 @@ func (a *Agent) handleUpdateAgent(ctx context.Context, controlPlaneURL string) {
 		updateCtx, cancel := context.WithCancel(ctx)
 		defer cancel()
 
-		done := make(chan struct{})
+		// Buffer the result channel so the inner goroutine never blocks,
+		// even if the outer select picks ctx.Done() first.
+		updateResult := make(chan error, 1)
 		go func() {
-			if err := performUpdate(updateCtx, a.httpClient, parsedURL.String()); err != nil {
-				log.Error("Agent self-update failed", "error", err)
-			}
-			close(done)
+			updateResult <- performUpdate(updateCtx, a.httpClient, parsedURL.String())
 		}()
 
 		select {
-		case <-done:
+		case err := <-updateResult:
+			if err != nil {
+				// Update failed — do NOT exit the process. The agent stays
+				// running so the operator can investigate and retry via a
+				// subsequent update_agent event.
+				log.Error("Agent self-update failed, not exiting for restart", "error", err)
+				return
+			}
 			log.Info("Agent update applied, exiting for restart in 2s")
 			time.Sleep(2 * time.Second)
 			a.exitFunc(0)
@@ -690,7 +697,7 @@ func (a *Agent) HandleUpdateAgentSync(controlPlaneURL string) error {
 	return a.handleUpdateAgentSync(context.Background(), controlPlaneURL)
 }
 
-func (a *Agent) handleUpdateAgentSync(_ context.Context, controlPlaneURL string) error {
+func (a *Agent) handleUpdateAgentSync(ctx context.Context, controlPlaneURL string) error {
 	log.Info("Starting agent self-update (synchronous)", "control_plane_url", controlPlaneURL)
 
 	parsedURL, err := url.Parse(controlPlaneURL)
@@ -698,7 +705,6 @@ func (a *Agent) handleUpdateAgentSync(_ context.Context, controlPlaneURL string)
 		return fmt.Errorf("invalid control plane URL: %s", controlPlaneURL)
 	}
 
-	ctx := context.Background()
 	if err := performUpdate(ctx, a.httpClient, parsedURL.String()); err != nil {
 		return fmt.Errorf("agent self-update failed: %w", err)
 	}

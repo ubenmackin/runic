@@ -372,19 +372,19 @@ func TestCreatePeer(t *testing.T) {
 			name:     "create peer - empty hostname",
 			body:     `{"hostname":"","ip_address":"10.0.0.1","agent_key":"key"}`,
 			wantCode: http.StatusBadRequest,
-			wantErr:  "hostname must be",
+			wantErr:  "invalid hostname",
 		},
 		{
 			name:     "create peer - hostname too long",
 			body:     `{"hostname":"` + strings.Repeat("a", 254) + `","ip_address":"10.0.0.1","agent_key":"key"}`,
 			wantCode: http.StatusBadRequest,
-			wantErr:  "hostname must be",
+			wantErr:  "invalid hostname",
 		},
 		{
 			name:     "create peer - invalid hostname chars",
 			body:     `{"hostname":"test_peer!","ip_address":"10.0.0.1","agent_key":"key"}`,
 			wantCode: http.StatusBadRequest,
-			wantErr:  "hostname must be",
+			wantErr:  "invalid hostname",
 		},
 		{
 			name:     "create peer - invalid IP address",
@@ -2010,7 +2010,7 @@ func TestDeletePeerIP(t *testing.T) {
 				// No peers
 			},
 			wantCode: http.StatusNotFound,
-			wantErr:  "peer not found",
+			wantErr:  "peer IP not found",
 		},
 		{
 			name:   "delete peer IP - IP not found",
@@ -2069,7 +2069,7 @@ func TestDeletePeerIP(t *testing.T) {
 				db.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, source_ip, action, priority, enabled) VALUES (?, ?, 'peer', ?, ?, 'peer', ?, 'ACCEPT', 100, 1)`, "test-policy", 1, 1, 2, "10.0.0.2")
 			},
 			wantCode: http.StatusConflict,
-			wantErr:  "cannot delete IP: referenced by 1 policy/policies",
+			wantErr:  "cannot delete IP: referenced by one or more policies",
 		},
 		{
 			name:   "delete peer IP - referenced by policy as target_ip",
@@ -2084,7 +2084,7 @@ func TestDeletePeerIP(t *testing.T) {
 				db.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, target_ip, action, priority, enabled) VALUES (?, ?, 'peer', ?, ?, 'peer', ?, 'ACCEPT', 100, 1)`, "test-policy", 2, 1, 1, "10.0.0.2")
 			},
 			wantCode: http.StatusConflict,
-			wantErr:  "cannot delete IP: referenced by 1 policy/policies",
+			wantErr:  "cannot delete IP: referenced by one or more policies",
 		},
 		{
 			name:   "delete peer IP - not referenced by any policy succeeds",

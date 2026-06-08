@@ -228,6 +228,14 @@ func (g *DigestGenerator) checkAndSendDigests() {
 			digestParsed.Hour(), digestParsed.Minute(), 0, 0, tz)
 
 		// Allow a ±1 minute tolerance for the time comparison.
+		//
+		// NOTE: During DST "fall-back" transitions (e.g., 02:00 → 01:00), the
+		// same clock time repeats. time.ParseInLocation picks the first occurrence
+		// (before the transition), which means the digest may fire twice within
+		// the same real-time hour. This is a known edge case with negligible
+		// impact — the duplicate is rate-limited by hasDigestBeenSentToday.
+		// During DST "spring-forward" transitions, the target time is skipped;
+		// the digest silently fires one hour late (the next tick).
 		diff := userNow.Sub(digestTarget)
 		if diff < -1*time.Minute || diff > 1*time.Minute {
 			continue

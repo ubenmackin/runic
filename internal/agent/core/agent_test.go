@@ -341,7 +341,7 @@ func TestRegisterCallsIdentity(t *testing.T) {
 	agent.config.HostID = ""
 	agent.config.Token = ""
 
-	err := agent.register(context.Background())
+	err := agent.register(context.Background(), true)
 	if err != nil {
 		t.Fatalf("register() error = %v", err)
 	}
@@ -358,12 +358,12 @@ func TestSafeRegisterAcquiresMutex(t *testing.T) {
 
 	agent := New(configPath, "http://localhost:8080")
 
-	// Test that safeRegister can be called without panic
+	// Test that register can be called without panic
 	// (will fail registration but we verify mutex is present)
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
-	_ = agent.safeRegister(ctx)
+	_ = agent.register(ctx, true)
 }
 
 func TestIsControlPlaneReachableTrue(t *testing.T) {
@@ -1089,7 +1089,7 @@ func TestAgentDefaultPaths(t *testing.T) {
 		t.Errorf("backupPath = %s, want /etc/runic-agent/iptables-backup.rules", agent.backupPath)
 	}
 	if agent.cmdRunner == nil {
-		t.Error("cmdRunner is nil, expected RealCommandRunner")
+		t.Error("cmdRunner is nil, expected a CommandRunner implementation")
 	}
 }
 
@@ -1804,7 +1804,7 @@ func TestPollLoopSkipsDuplicatePull(t *testing.T) {
 	defer cancel()
 
 	// When bootPullDone=true, pollLoop should NOT call pullBundle immediately
-	agent.bootPullDone = true
+	agent.bootPullDone.Store(true)
 	go agent.pollLoop(ctx)
 
 	// Wait for context to expire

@@ -35,7 +35,10 @@ type Handler struct {
 	beginner     db.Beginner
 	Compiler     *engine.Compiler
 	SSEHub       *events.SSEHub
-	PushWorker   *common.PushWorker
+	// PushWorker is a concrete type rather than an interface because all callers
+	// (PushAllRules, PushCurrentRules) depend on its Enqueue method directly.
+	// A future refactor could extract an interface for testability.
+	PushWorker *common.PushWorker
 }
 
 func NewHandler(peerStore *store.PeerStore, groupStore *store.GroupStore, policyStore *store.PolicyStore, serviceStore *store.ServiceStore, pendingStore *store.PendingStore, beginner db.Beginner, compiler *engine.Compiler, sseHub *events.SSEHub, pushWorker *common.PushWorker) *Handler {
@@ -64,6 +67,24 @@ func setupSSEHeaders(w http.ResponseWriter) http.Flusher {
 		return nil
 	}
 	return flusher
+}
+
+// buildPendingChangeDetails converts store-level pending changes into API response details.
+func (h *Handler) buildPendingChangeDetails(ctx context.Context, changes []models.PendingChange) []pendingChangeDetail {
+	details := make([]pendingChangeDetail, len(changes))
+	for i, c := range changes {
+		details[i] = pendingChangeDetail{
+			ID:            c.ID,
+			ChangeType:    c.ChangeType,
+			ChangeID:      c.ChangeID,
+			ChangeAction:  c.ChangeAction,
+			ChangeSummary: c.ChangeSummary,
+			CreatedAt:     commonutil.FormatSQLiteDatetime(c.CreatedAt),
+		}
+		entityName, _ := h.lookupEntityName(ctx, c.ChangeType, c.ChangeID)
+		details[i].EntityName = entityName
+	}
+	return details
 }
 
 // Returns ("Unknown", nil) for unrecognized change types.
@@ -128,19 +149,7 @@ func (h *Handler) ListPendingChanges(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		details := make([]pendingChangeDetail, len(changes))
-		for i, c := range changes {
-			details[i] = pendingChangeDetail{
-				ID:            c.ID,
-				ChangeType:    c.ChangeType,
-				ChangeID:      c.ChangeID,
-				ChangeAction:  c.ChangeAction,
-				ChangeSummary: c.ChangeSummary,
-				CreatedAt:     commonutil.FormatSQLiteDatetime(c.CreatedAt),
-			}
-			entityName, _ := h.lookupEntityName(ctx, c.ChangeType, c.ChangeID)
-			details[i].EntityName = entityName
-		}
+		details := h.buildPendingChangeDetails(ctx, changes)
 
 		groups = append(groups, peerChangeGroup{
 			PeerID:       peerID,
@@ -169,8 +178,15 @@ type ApplyEntityRequest struct {
 func (h *Handler) RollbackPendingChanges(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB limit
+
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			common.RespondError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return
+		}
 		common.RespondError(w, http.StatusBadRequest, "failed to read request body")
 		return
 	}
@@ -243,19 +259,7 @@ func (h *Handler) GetPeerPendingChanges(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	details := make([]pendingChangeDetail, len(changes))
-	for i, c := range changes {
-		details[i] = pendingChangeDetail{
-			ID:            c.ID,
-			ChangeType:    c.ChangeType,
-			ChangeID:      c.ChangeID,
-			ChangeAction:  c.ChangeAction,
-			ChangeSummary: c.ChangeSummary,
-			CreatedAt:     commonutil.FormatSQLiteDatetime(c.CreatedAt),
-		}
-		entityName, _ := h.lookupEntityName(ctx, c.ChangeType, c.ChangeID)
-		details[i].EntityName = entityName
-	}
+	details := h.buildPendingChangeDetails(ctx, changes)
 
 	common.RespondJSON(w, http.StatusOK, map[string]interface{}{
 		"peer_id":    peerID,
@@ -759,7 +763,14 @@ func (h *Handler) HandlePushJobSSE(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Stream events until client disconnects or job completes
-	ctx := r.Context()
+	streamSSEEvents(r.Context(), w, flusher, ch, true)
+}
+
+// streamSSEEvents reads from an SSE channel and writes each event to the
+// ResponseWriter, flushing after every write. It returns when the context is
+// canceled, the channel is closed, or (if stopOnComplete is true) a complete
+// event is received.
+func streamSSEEvents(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, ch <-chan string, stopOnComplete bool) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -769,14 +780,17 @@ func (h *Handler) HandlePushJobSSE(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if _, err := fmt.Fprint(w, event); err != nil {
-				log.WarnContext(r.Context(), "Failed to write SSE event", "error", err)
+				log.WarnContext(ctx, "Failed to write SSE event", "error", err)
+				if stopOnComplete {
+					return
+				}
 			}
 			flusher.Flush()
-
-			// SSE format: "event: {eventType}\ndata: {jsonPayload}\n\n"
-			eventType := parseSSEEventType(event)
-			if eventType == "complete" {
-				return
+			if stopOnComplete {
+				eventType := parseSSEEventType(event)
+				if eventType == "complete" {
+					return
+				}
 			}
 		}
 	}
@@ -857,20 +871,5 @@ func (h *Handler) HandleFrontendSSE(w http.ResponseWriter, r *http.Request) {
 	flusher.Flush()
 
 	// Stream events until client disconnects
-	ctx := r.Context()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case event, ok := <-ch:
-			if !ok {
-				return
-			}
-			if _, err := fmt.Fprint(w, event); err != nil {
-				log.WarnContext(r.Context(), "Failed to write SSE event", "error", err)
-				return
-			}
-			flusher.Flush()
-		}
-	}
+	streamSSEEvents(r.Context(), w, flusher, ch, false)
 }

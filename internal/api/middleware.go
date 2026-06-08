@@ -1,42 +1,22 @@
 package api
 
 // =============================================================================
-// RATE LIMITING STRATEGY
+// HTTP MIDDLEWARES
 // =============================================================================
 //
-// This file implements rate limiting using a SLIDING WINDOW algorithm.
-// The implementation is in the 'ratelimit.go' file in this package.
+// This file hosts the API-level middlewares (panic recovery, request ID,
+// security headers, CORS, CSP, request logging, etc.) plus the
+// RequireRefreshCookie middleware.
 //
-// Algorithm: Sliding Window
-// ----------------
-// - Each client IP maintains a sliding window of request timestamps
-// - Requests are allowed if the count of requests within the window < limit
-// - Old timestamps are filtered out on each check (O(n) where n = requests in window)
-// - Background goroutine cleans up stale entries every 5 minutes to prevent memory leaks
+// Per-endpoint rate limiting lives in internal/api/middleware/ratelimit.go.
+// Per-IP rate limiters are configured in api.go and applied to specific
+// routes via the .Middleware(...) helper. The per-endpoint limits are:
 //
-// Configuration:
-// ----------------
-// Rate limiters are created in api.go with the following limits:
-//   - Login: 5 requests per minute (prevents brute force attacks)
-//   - Register: 10 requests per minute (prevents spam registration)
-//   - Refresh token: 10 requests per minute
-//   - Logout: 10 requests per minute
-//   - Downloads: 10 requests per minute (prevents bandwidth abuse)
-//
-// Covered Endpoints:
-// ----------------
-// All protected endpoints use rate limiting:
-//   - POST /api/v1/auth/login
-//   - POST /api/v1/agent/register
-//   - POST /api/v1/auth/refresh
-//   - POST /api/v1/auth/logout
-//   - GET /downloads/{filename}
-//
-// Future Improvements:
-// ----------------
-// - Consider token bucket algorithm for burst handling
-// - Consider Redis-backed rate limiter for multi-instance deployments
-// - Add rate limit headers (X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset)
+//   - Login:           5 req/min   (brute-force defense)
+//   - Register:       10 req/min
+//   - Refresh token:  10 req/min
+//   - Logout:         10 req/min
+//   - Downloads:      10 req/min
 //
 // =============================================================================
 
@@ -262,6 +242,16 @@ func RequestLogger() mux.MiddlewareFunc {
 	}
 }
 
+// devCORSAllowedOrigins is the explicit allowlist of dev origins permitted
+// when GO_ENV=development. Reflecting an arbitrary Origin while sending
+// Access-Control-Allow-Credentials: true is a well-known browser security
+// pitfall (any malicious site can drive authenticated cross-site requests),
+// so even in dev we restrict to the local Vite dev server ports.
+var devCORSAllowedOrigins = map[string]bool{
+	"http://localhost:5173": true,
+	"http://127.0.0.1:5173": true,
+}
+
 // CORS returns a middleware that handles Cross-Origin Resource Sharing headers.
 // This is necessary for proper handling of cross-origin requests from the frontend.
 // The middleware:
@@ -282,8 +272,9 @@ func CORS() mux.MiddlewareFunc {
 
 	if originConfig == "" {
 		if os.Getenv("GO_ENV") == "development" {
-			// In dev mode, allow requests from common Vite dev server ports
-			// The actual origin will be set dynamically based on Origin header
+			// In dev mode, allow requests from the local Vite dev server. The
+			// "*" sentinel here means "look up the request's Origin in the
+			// devCORSAllowedOrigins allowlist", NOT "reflect any origin".
 			originConfig = "*"
 		}
 	}
@@ -299,9 +290,11 @@ func CORS() mux.MiddlewareFunc {
 			originToAllow := ""
 			switch originConfig {
 			case "*":
-				// In wildcard mode (dev), reflect the request origin
-				// This allows any origin but maintains credential support
-				if origin != "" {
+				// In dev mode, only allow origins in the explicit allowlist.
+				// This preserves credentialed CORS for the local Vite dev
+				// server while preventing other sites from making
+				// credentialed requests to the API.
+				if devCORSAllowedOrigins[origin] {
 					originToAllow = origin
 				}
 			case "":
@@ -338,11 +331,7 @@ func RequireRefreshCookie() mux.MiddlewareFunc {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			cookie, err := r.Cookie("runic_refresh_token")
 			if err != nil || cookie.Value == "" {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusUnauthorized)
-				if _, writeErr := w.Write([]byte(`{"error": "Unauthorized"}`)); writeErr != nil {
-					log.Error("failed to write unauthorized response", "error", writeErr)
-				}
+				common.RespondError(w, http.StatusUnauthorized, "Unauthorized")
 				return
 			}
 			next.ServeHTTP(w, r)

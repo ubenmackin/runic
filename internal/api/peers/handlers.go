@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"regexp"
 	"slices"
 	"strings"
 
@@ -40,9 +39,6 @@ type Handler struct {
 func NewHandler(peerStore *store.PeerStore, beginner db.Beginner, compiler *engine.Compiler, sseHub events.NotifyUpdateAgenter, settingsStore SettingsStore) *Handler {
 	return &Handler{Store: peerStore, beginner: beginner, Compiler: compiler, SSEHub: sseHub, SettingsStore: settingsStore}
 }
-
-// must start and end with alphanumeric; no consecutive dots allowed.
-var hostnameRegex = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?)*$`)
 
 var validOSTypes = []string{
 	"debian", "ubuntu", "rhel", "arch", "opensuse", "raspbian", "linux",
@@ -110,8 +106,8 @@ func (h *Handler) CreatePeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if input.Hostname == "" || len(input.Hostname) > 253 || !hostnameRegex.MatchString(input.Hostname) {
-		common.RespondError(w, http.StatusBadRequest, "hostname must be 1-253 characters, alphanumeric with hyphens and dots only")
+	if err := common.ValidateHostname(input.Hostname); err != nil {
+		common.RespondError(w, http.StatusBadRequest, "invalid hostname")
 		return
 	}
 
@@ -483,55 +479,29 @@ func (h *Handler) DeletePeerIP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err = h.Store.GetPeerByID(r.Context(), peerID)
+	ip, err := h.Store.GetPeerIP(r.Context(), ipID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			common.RespondError(w, http.StatusNotFound, "peer not found")
+			common.RespondError(w, http.StatusNotFound, "peer IP not found")
 			return
 		}
-		common.RespondError(w, http.StatusInternalServerError, "failed to query peer")
+		common.RespondError(w, http.StatusInternalServerError, "failed to query peer IP")
 		return
 	}
 
-	peerIPs, err := h.Store.ListPeerIPs(r.Context(), peerID)
-	if err != nil {
-		common.RespondError(w, http.StatusInternalServerError, "failed to query peer IPs")
+	if ip.PeerID != peerID {
+		common.RespondError(w, http.StatusNotFound, "peer IP not found for this peer")
 		return
 	}
 
-	var targetIP *store.PeerIPView
-	for i := range peerIPs {
-		if peerIPs[i].ID == ipID {
-			targetIP = &peerIPs[i]
-			break
-		}
-	}
-
-	if targetIP == nil {
-		common.RespondError(w, http.StatusNotFound, "peer IP not found")
-		return
-	}
-
-	// Cannot delete primary IP
-	if targetIP.IsPrimary {
+	if ip.IsPrimary {
 		common.RespondError(w, http.StatusBadRequest, "cannot delete primary IP address")
 		return
 	}
 
-	policyCount, err := h.Store.CountPolicyRefsForPeerIP(r.Context(), peerID, targetIP.IPAddress)
-	if err != nil {
-		common.RespondError(w, http.StatusInternalServerError, "failed to check policy references")
-		return
-	}
-	if policyCount > 0 {
-		common.RespondError(w, http.StatusConflict, fmt.Sprintf("cannot delete IP: referenced by %d policy/policies", policyCount))
-		return
-	}
-
-	err = h.Store.DeletePeerIP(r.Context(), ipID)
-	if err != nil {
+	if err := h.Store.DeletePeerIPIfOrphan(r.Context(), ipID, peerID, ip.IPAddress); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			common.RespondError(w, http.StatusNotFound, "peer IP not found")
+			common.RespondError(w, http.StatusConflict, "cannot delete IP: referenced by one or more policies")
 			return
 		}
 		common.RespondError(w, http.StatusInternalServerError, "failed to delete peer IP")
@@ -591,7 +561,6 @@ func (h *Handler) RegisterReadRoutes(r *mux.Router) {
 	r.HandleFunc("/by-hostname", h.GetPeerByHostname).Methods("GET")
 	r.HandleFunc("/{id:[0-9]+}", h.GetPeer).Methods("GET")
 	r.HandleFunc("/{id:[0-9]+}/bundle", h.GetPeerBundle).Methods("GET")
-	r.HandleFunc("/{id:[0-9]+}/ips", h.GetPeerIPs).Methods("GET")
 }
 
 func (h *Handler) RegisterRoutes(r *mux.Router) {

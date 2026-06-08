@@ -50,7 +50,9 @@ type Client struct {
 	conn         *websocket.Conn
 	send         chan []byte
 	filter       LogFilter
-	filterPeerID int // -1 means no filter
+	filterPeerID int // -1 means no filter; parsed once from filter.PeerID at construction
+
+	closeSendOnce sync.Once // ensures client.send is closed exactly once
 }
 
 type LogFilter struct {
@@ -81,7 +83,7 @@ func (h *Hub) Run(ctx context.Context) {
 			h.mu.Lock()
 			if _, ok := h.clients[client]; ok {
 				delete(h.clients, client)
-				close(client.send)
+				client.closeSendOnce.Do(func() { close(client.send) })
 			}
 			h.mu.Unlock()
 
@@ -91,7 +93,7 @@ func (h *Hub) Run(ctx context.Context) {
 				select {
 				case client.send <- message:
 				default:
-					close(client.send)
+					client.closeSendOnce.Do(func() { close(client.send) })
 					delete(h.clients, client)
 				}
 			}
@@ -103,14 +105,21 @@ func (h *Hub) Run(ctx context.Context) {
 	}
 }
 
+// Broadcast sends a log event to all connected clients that match the event's filter.
+// NOTE: Unlike Hub.Run's broadcast channel case (which evicts slow consumers),
+// this method silently drops messages for slow consumers without evicting them.
+// This matches the SSEHub behavior in events/hub.go (NotifyPushJobProgress etc.)
+// which also drops messages silently. Both approaches are intentional — the direct
+// Broadcast method is called from a hot path (firewall log ingestion) where eviction
+// would add latency, while Run's broadcast channel is used for internal hub messaging.
 func (h *Hub) Broadcast(event *models.LogEvent) {
 	data, err := json.Marshal(event)
 	if err != nil {
 		runiclog.Error("Failed to marshal log event", "error", err)
 		return
 	}
-	h.mu.RLock()
-	defer h.mu.RUnlock()
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	for client := range h.clients {
 		if client.matchesFilter(event) {
 			select {
@@ -149,7 +158,14 @@ func (c *Client) readPump() {
 			runiclog.Warn("close err", "err", err)
 		}
 	}()
+	// ReadLimit(512) limits the maximum size of a control message (pong, etc.)
+	// to 512 bytes. We only read control frames from clients (no data messages),
+	// so this is a generous limit that prevents memory exhaustion from oversized frames.
 	c.conn.SetReadLimit(512)
+	// The initial read deadline is set once here; the PongHandler below
+	// resets it on every received pong, keeping the connection alive as long
+	// as the client sends pings. This is functionally correct — if the client
+	// doesn't send pings, the connection times out after 60s of read inactivity.
 	if err := c.conn.SetReadDeadline(time.Now().Add(60 * time.Second)); err != nil {
 		runiclog.Warn("err", "err", err)
 	}

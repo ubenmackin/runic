@@ -4,6 +4,7 @@ package firewall
 import (
 	"context"
 	"fmt"
+	"os/exec"
 
 	"runic/internal/common/log"
 )
@@ -11,6 +12,15 @@ import (
 // CommandRunner is the interface for executing shell commands.
 type CommandRunner interface {
 	Run(ctx context.Context, name string, args ...string) ([]byte, error)
+}
+
+// RealCommandRunner executes shell commands using os/exec.
+// It is the production implementation of CommandRunner.
+type RealCommandRunner struct{}
+
+func (r *RealCommandRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	return cmd.CombinedOutput()
 }
 
 // DumpRules dumps the current firewall rules, trying iptables-save first

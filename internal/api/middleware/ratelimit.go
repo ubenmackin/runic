@@ -2,15 +2,14 @@
 package middleware
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
 	"runic/internal/api/common"
 	"runic/internal/common/constants"
-	"runic/internal/common/log"
 )
 
 // A RateLimiter provides sliding-window rate limiting per client IP.
@@ -65,16 +64,20 @@ func (rl *RateLimiter) Check(remoteAddr string) error {
 
 // Middleware returns an HTTP middleware that enforces the rate limit.
 // It uses the client's IP address as the rate limit key.
-// If the rate limit is exceeded, it responds with HTTP 429 Too Many Requests.
+// If the rate limit is exceeded, it responds with HTTP 429 Too Many Requests
+// and a Retry-After header (in whole seconds) equal to the configured window.
 func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ip := rl.getIP(r)
 		if err := rl.Check(ip); err != nil {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusTooManyRequests)
-			if err := json.NewEncoder(w).Encode(map[string]string{"error": "rate limit exceeded"}); err != nil {
-				log.Warn("Failed to encode rate limit error", "error", err)
+			// RFC 7231 §7.1.3: Retry-After in delta-seconds. Round up so the
+			// client doesn't immediately retry on a sub-second remainder.
+			retryAfter := int(rl.window / time.Second)
+			if retryAfter < 1 {
+				retryAfter = 1
 			}
+			w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
+			common.RespondError(w, http.StatusTooManyRequests, "rate limit exceeded")
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -104,8 +107,15 @@ func (rl *RateLimiter) cleanup() {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 
+	// Drop entries that have been idle for the full sliding window. If the
+	// window is very small we still keep at least a 1-minute floor so a
+	// long-lived RateLimiter doesn't hammer the cleanup path for clients
+	// that just missed the limit.
 	now := time.Now()
-	cutoff := now.Add(-5 * time.Minute)
+	cutoff := now.Add(-rl.window)
+	if rl.window < time.Minute {
+		cutoff = now.Add(-time.Minute)
+	}
 
 	for ip, requests := range rl.requests {
 		validRequests := []time.Time{}

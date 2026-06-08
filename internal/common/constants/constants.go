@@ -11,6 +11,15 @@ const (
 	// made by the agent to the control plane.
 	HTTPClientTimeout = 30 * time.Second
 
+	// HandlerTimeout is the default per-request handler deadline applied by
+	// common.WithHandlerTimeout when the incoming context has no shorter
+	// deadline of its own.
+	HandlerTimeout = 5 * time.Second
+
+	// RevocationCheckTimeout caps how long the auth middleware will wait
+	// for the token-revocation store to answer during request handling.
+	RevocationCheckTimeout = 2 * time.Second
+
 	// SmokeTestTimeout is the deadline for the post-apply smoke test that
 	// verifies connectivity after a rule bundle change.
 	SmokeTestTimeout = 10 * time.Second
@@ -71,4 +80,8 @@ const (
 	// WebSocketPingInterval is how often the server sends WebSocket ping
 	// frames to keep connections alive through intermediaries.
 	WebSocketPingInterval = 54 * time.Second
+
+	// ReadyHandlerTimeout caps how long the /ready endpoint will wait for
+	// the database Ping before reporting "not ready".
+	ReadyHandlerTimeout = 2 * time.Second
 )

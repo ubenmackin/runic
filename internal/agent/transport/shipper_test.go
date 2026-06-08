@@ -275,7 +275,7 @@ func TestNewShipper(t *testing.T) {
 	hostID := "host-123"
 	logPath := "/var/log/kern.log"
 
-	shipper := NewShipper(client, controlPlaneURL, token, hostID, logPath)
+	shipper := NewShipper(client, controlPlaneURL, token, hostID, logPath, "1.0.0")
 
 	if shipper.client != client {
 		t.Error("expected client to be set")
@@ -303,7 +303,7 @@ func TestNewShipper(t *testing.T) {
 }
 
 func TestShipper_Run_FileNotExists(t *testing.T) {
-	shipper := NewShipper(&http.Client{}, "http://localhost", "token", "host1", "/nonexistent/path/log.log")
+	shipper := NewShipper(&http.Client{}, "http://localhost", "token", "host1", "/nonexistent/path/log.log", "1.0.0")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -321,7 +321,7 @@ func TestShipper_Ship_Success(t *testing.T) {
 	}))
 	defer server.Close()
 
-	shipper := NewShipper(server.Client(), server.URL, "test-token", "host-123", "/var/log/kern.log")
+	shipper := NewShipper(server.Client(), server.URL, "test-token", "host-123", "/var/log/kern.log", "1.0.0")
 
 	batch := []LogEvent{
 		{
@@ -373,7 +373,7 @@ func TestShipper_Ship_HTTPError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	shipper := NewShipper(server.Client(), server.URL, "test-token", "host-123", "/var/log/kern.log")
+	shipper := NewShipper(server.Client(), server.URL, "test-token", "host-123", "/var/log/kern.log", "1.0.0")
 
 	batch := []LogEvent{
 		{
@@ -432,7 +432,7 @@ func TestShipper_BatchSizeLimit(t *testing.T) {
 	}))
 	defer server.Close()
 
-	shipper := NewShipper(server.Client(), server.URL, "test-token", "host-123", "/var/log/kern.log")
+	shipper := NewShipper(server.Client(), server.URL, "test-token", "host-123", "/var/log/kern.log", "1.0.0")
 
 	batch := make([]LogEvent, 100)
 	for i := 0; i < 100; i++ {
@@ -488,7 +488,7 @@ func TestShipper_BatchInterval(t *testing.T) {
 	}))
 	defer server.Close()
 
-	shipper := NewShipper(server.Client(), server.URL, "test-token", "host-123", "/var/log/kern.log")
+	shipper := NewShipper(server.Client(), server.URL, "test-token", "host-123", "/var/log/kern.log", "1.0.0")
 
 	// Test that ship method handles empty batch
 	ctx := context.Background()
@@ -550,7 +550,7 @@ Jan 15 12:00:01 hostname kernel: Another message`
 		t.Fatalf("failed to create temp file: %v", err)
 	}
 
-	shipper := NewShipper(&http.Client{}, "http://localhost", "token", "host1", tmpFile)
+	shipper := NewShipper(&http.Client{}, "http://localhost", "token", "host1", tmpFile, "1.0.0")
 
 	// Now append the RUNIC line to the file (simulating new log entry)
 	f, err := os.OpenFile(tmpFile, os.O_APPEND|os.O_WRONLY, 0644)

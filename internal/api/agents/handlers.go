@@ -182,6 +182,70 @@ func (h *Handler) AgentAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+func (h *Handler) registerNewPeer(ctx context.Context, input *models.AgentRegisterRequest, w http.ResponseWriter) (int, string, string, error) {
+	if input.RegistrationToken == "" {
+		return 0, "", "", common.NewHTTPError(http.StatusUnauthorized, "registration token required")
+	}
+
+	consumed, err := h.ConsumeRegistrationToken(ctx, input.RegistrationToken, input.Hostname)
+	if err != nil {
+		return 0, "", "", fmt.Errorf("consume token: %w", err)
+	}
+	if !consumed {
+		return 0, "", "", common.NewHTTPError(http.StatusUnauthorized, "invalid registration token")
+	}
+
+	hmacKey, err := GenerateHMACKey()
+	if err != nil {
+		return 0, "", "", fmt.Errorf("generate HMAC key: %w", err)
+	}
+	agentToken, err := generateAgentToken(ctx, h.DashboardStore, input.Hostname)
+	if err != nil {
+		return 0, "", "", fmt.Errorf("generate agent token: %w", err)
+	}
+	agentKey, err := generateAgentKey()
+	if err != nil {
+		return 0, "", "", fmt.Errorf("generate agent key: %w", err)
+	}
+
+	peerID, err := h.PeerStore.RegisterPeer(ctx, input.Hostname, input.IP, input.OSType, input.Arch, input.HasDocker, input.HasIPSet, agentKey, agentToken, hmacKey)
+	if err != nil {
+		return 0, "", "", fmt.Errorf("register peer: %w", err)
+	}
+
+	if len(input.AllIPs) > 0 {
+		if err := h.PeerStore.UpsertPeerIPs(ctx, int(peerID), input.AllIPs, input.IP); err != nil {
+			runiclog.Warn("Failed to upsert peer IPs during registration", "error", err, "peer_id", peerID)
+		}
+	}
+
+	return int(peerID), agentToken, hmacKey, nil
+}
+
+func (h *Handler) reRegisterExistingPeer(ctx context.Context, input *models.AgentRegisterRequest, existingID int) (string, string, error) {
+	newToken, err := generateAgentToken(ctx, h.DashboardStore, input.Hostname)
+	if err != nil {
+		return "", "", fmt.Errorf("generate agent token: %w", err)
+	}
+
+	existingHMACKey, err := h.PeerStore.GetPeerHMACKey(ctx, existingID)
+	if err != nil {
+		return "", "", fmt.Errorf("fetch existing HMAC key: %w", err)
+	}
+
+	if err := h.PeerStore.UpdatePeerReRegistration(ctx, existingID, newToken, input.AgentVersion, input.HasDocker, input.HasIPSet); err != nil {
+		return "", "", fmt.Errorf("update peer re-registration: %w", err)
+	}
+
+	if len(input.AllIPs) > 0 {
+		if err := h.PeerStore.UpsertPeerIPs(ctx, existingID, input.AllIPs, input.IP); err != nil {
+			runiclog.Warn("Failed to upsert peer IPs during re-registration", "error", err, "peer_id", existingID)
+		}
+	}
+
+	return newToken, existingHMACKey, nil
+}
+
 func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB limit
 
@@ -197,26 +261,6 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Sanitize user input to prevent injection attacks.
-	//
-	// Defense-in-Depth Strategy: We use two layers of sanitization:
-	//
-	// 1. ENTRY POINT (here): Remove control characters (CR, LF, NUL, TAB, etc.)
-	//    - This prevents header injection attacks (e.g., email header injection via
-	//      embedded newlines that could add malicious headers like "Bcc: attacker@evil.com")
-	//    - Control characters are removed here because they can never be legitimate in
-	//      hostname/IP fields and pose systemic risks regardless of output format
-	//    - We use SanitizeAlertInput which does NOT escape HTML chars (<, >, &) because
-	//      these may be legitimate in hostnames and escaping should happen at output time
-	//
-	// 2. OUTPUT TIME (email generation): HTML escaping via htmlEscape
-	//    - HTML special characters are escaped at email generation time to prevent XSS
-	//    - This is done at output time rather than entry point because:
-	//      a) The same data may be used in non-HTML contexts (logs, CLI, JSON APIs)
-	//      b) Proper escaping depends on the output context (HTML, JSON, plain text)
-	//      c) Early escaping could corrupt legitimate data or cause double-encoding
-	//
-	// This layered approach ensures each sanitization happens at the appropriate layer
 	sanitizedHostname, modified := alerts.SanitizeAlertInput(input.Hostname, 255)
 	if modified {
 		runiclog.Warn("hostname was sanitized during registration", "original_length", len(input.Hostname), "sanitized_length", len(sanitizedHostname))
@@ -236,62 +280,22 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
-	var existingID int
 	existingID, _, err := h.PeerStore.FindPeerByHostname(ctx, input.Hostname)
 
 	if errors.Is(err, sql.ErrNoRows) {
-		// New server — require valid registration token
-		if input.RegistrationToken == "" {
-			common.RespondError(w, http.StatusUnauthorized, "registration token required")
-			return
-		}
-
-		// Atomic consume: validates AND consumes in single query
-		consumed, err := h.ConsumeRegistrationToken(ctx, input.RegistrationToken, input.Hostname)
+		_, agentToken, hmacKey, err := h.registerNewPeer(ctx, &input, w)
 		if err != nil {
-			runiclog.Error("Failed to consume registration token", "error", err)
-			common.InternalError(w)
-			return
-		}
-		if !consumed {
-			common.RespondError(w, http.StatusUnauthorized, "invalid registration token")
-			return
-		}
-
-		hmacKey, err := GenerateHMACKey()
-		if err != nil {
-			runiclog.Error("Failed to generate HMAC key", "error", err)
-			common.InternalError(w)
-			return
-		}
-		agentToken, err := generateAgentToken(ctx, h.DashboardStore, input.Hostname)
-		if err != nil {
-			runiclog.Error("Failed to generate agent token error", "error", err)
-			common.InternalError(w)
-			return
-		}
-		agentKey, err := generateAgentKey()
-		if err != nil {
-			runiclog.Error("Failed to generate agent key", "error", err)
-			common.InternalError(w)
-			return
-		}
-
-		peerID, err := h.PeerStore.RegisterPeer(ctx, input.Hostname, input.IP, input.OSType, input.Arch, input.HasDocker, input.HasIPSet, agentKey, agentToken, hmacKey)
-		if err != nil {
-			runiclog.Error("Failed to create server error", "error", err)
-			common.InternalError(w)
-			return
-		}
-
-		if len(input.AllIPs) > 0 {
-			if err := h.PeerStore.UpsertPeerIPs(ctx, int(peerID), input.AllIPs, input.IP); err != nil {
-				runiclog.Warn("Failed to upsert peer IPs during registration", "error", err, "peer_id", peerID)
+			var httpErr *common.HTTPError
+			if errors.As(err, &httpErr) {
+				common.RespondError(w, httpErr.StatusCode, httpErr.Message)
+				return
 			}
+			runiclog.Error("Failed to register new peer", "error", err)
+			common.InternalError(w)
+			return
 		}
 
 		hostID := fmt.Sprintf("host-%s", input.Hostname)
-
 		common.RespondJSON(w, http.StatusCreated, map[string]interface{}{
 			"host_id":                hostID,
 			"token":                  agentToken,
@@ -300,15 +304,12 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 			"hmac_key":               hmacKey,
 		})
 
-		// Trigger new_peer alert for newly registered peer
 		if h.AlertService != nil {
-			// Sanitize hostname before using it in alert content (subject/body/metadata).
 			safeHostname, _ := alerts.SanitizeAlertInput(input.Hostname, 0)
-			var newPeerID int
-			if newPeerID, err = h.PeerStore.GetPeerIDByHostname(ctx, input.Hostname); err == nil {
+			if peerID, getPeerErr := h.PeerStore.GetPeerIDByHostname(ctx, input.Hostname); getPeerErr == nil {
 				if err := h.AlertService.TriggerAlert(ctx, &alerts.AlertEvent{
 					Type:     alerts.AlertTypeNewPeer,
-					PeerID:   newPeerID,
+					PeerID:   peerID,
 					PeerName: safeHostname,
 					Subject:  fmt.Sprintf("New Peer Registered: %s", safeHostname),
 					Metadata: map[string]interface{}{
@@ -316,14 +317,12 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 						"ip_address":    input.IP,
 						"os_type":       input.OSType,
 						"agent_version": input.AgentVersion,
-						"registered_by": input.RegistrationToken,
 					},
 				}); err != nil {
 					runiclog.Error("failed to trigger new peer alert", "error", err, "hostname", input.Hostname)
 				}
 			}
 		}
-
 		return
 	} else if err != nil {
 		runiclog.Error("Database error checking hostname error", "error", err)
@@ -331,36 +330,14 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Existing server — always generate fresh token (handles token expiration)
-	// Re-registration does NOT require a registration token
+	newToken, existingHMACKey, err := h.reRegisterExistingPeer(ctx, &input, existingID)
+	if err != nil {
+		runiclog.Error("Failed to re-register existing peer", "error", err)
+		common.InternalError(w)
+		return
+	}
+
 	hostID := fmt.Sprintf("host-%s", input.Hostname)
-
-	newToken, err := generateAgentToken(ctx, h.DashboardStore, input.Hostname)
-	if err != nil {
-		runiclog.Error("Failed to generate agent token error", "error", err)
-		common.InternalError(w)
-		return
-	}
-
-	existingHMACKey, err := h.PeerStore.GetPeerHMACKey(ctx, existingID)
-	if err != nil {
-		runiclog.Error("Failed to fetch existing HMAC key", "error", err, "peer_id", existingID)
-		common.InternalError(w)
-		return
-	}
-
-	if err := h.PeerStore.UpdatePeerReRegistration(ctx, existingID, newToken, input.AgentVersion, input.HasDocker, input.HasIPSet); err != nil {
-		runiclog.Error("Failed to update peer token", "error", err, "peer_id", existingID)
-		common.InternalError(w)
-		return
-	}
-
-	if len(input.AllIPs) > 0 {
-		if err := h.PeerStore.UpsertPeerIPs(ctx, existingID, input.AllIPs, input.IP); err != nil {
-			runiclog.Warn("Failed to upsert peer IPs during re-registration", "error", err, "peer_id", existingID)
-		}
-	}
-
 	common.RespondJSON(w, http.StatusOK, map[string]interface{}{
 		"host_id":                hostID,
 		"token":                  newToken,
@@ -553,18 +530,11 @@ func (h *Handler) ConfirmBundleApplied(w http.ResponseWriter, r *http.Request) {
 
 	// Wrap both DB calls in a transaction to prevent partial state on crash
 	err := store.RunInTx(r.Context(), h.beginner, func(tx *sql.Tx) error {
-		// UpdateBundleAppliedAt and UpdatePeerBundleVersion need to be atomic.
-		// Since PeerStore methods use s.db directly, we use the raw tx ExecContext.
-		// This avoids duplicating the store methods while keeping the writes atomic.
-		if _, execErr := tx.ExecContext(r.Context(),
-			`UPDATE rule_bundles SET applied_at = ?, first_applied_at = COALESCE(first_applied_at, ?) WHERE peer_id = ? AND version = ?`,
-			appliedAt, appliedAt, serverID, input.Version); execErr != nil {
-			return fmt.Errorf("update bundle applied_at: %w", execErr)
+		if err := h.PeerStore.UpdateBundleAppliedAtTx(r.Context(), tx, serverID, input.Version, appliedAt); err != nil {
+			return fmt.Errorf("update bundle applied_at: %w", err)
 		}
-		if _, execErr := tx.ExecContext(r.Context(),
-			`UPDATE peers SET bundle_version = ? WHERE id = ?`,
-			input.Version, serverID); execErr != nil {
-			return fmt.Errorf("update peer bundle version: %w", execErr)
+		if err := h.PeerStore.UpdatePeerBundleVersionTx(r.Context(), tx, serverID, input.Version); err != nil {
+			return fmt.Errorf("update peer bundle version: %w", err)
 		}
 		return nil
 	})

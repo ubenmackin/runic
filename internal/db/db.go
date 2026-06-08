@@ -52,6 +52,13 @@ var allowedTables = map[string]bool{
 	"peer_ips":                      true,
 }
 
+// IsAllowedTable reports whether the given table name is in the migration
+// safelist. This is the exported version of the safelist, used by callers
+// that need to validate table names before composing dynamic SQL.
+func IsAllowedTable(table string) bool {
+	return allowedTables[table]
+}
+
 // Database wraps *sql.DB. The global DB variable is kept for backward compatibility,
 // but new code should prefer passing *Database explicitly.
 type Database struct {
@@ -131,11 +138,10 @@ func InitDB(dataSourceName string) (*sql.DB, error) {
 	return database.DB, nil
 }
 
-// withTx executes a function within a database transaction.
-// It handles BeginTx, deferred rollback (with warning on failure),
-// and commit automatically. The committed flag ensures rollback is
-// only called if commit hasn't succeeded.
-func withTx(ctx context.Context, db Beginner, fn func(context.Context, *sql.Tx) error) (err error) {
+// RunInTx is the canonical transaction helper. It begins a transaction,
+// runs fn, and commits on success or rolls back on error/failure. Rollback
+// errors that are not sql.ErrTxDone are logged at warn level.
+func RunInTx(ctx context.Context, db Beginner, fn func(ctx context.Context, tx *sql.Tx) error) (err error) {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
@@ -159,4 +165,11 @@ func withTx(ctx context.Context, db Beginner, fn func(context.Context, *sql.Tx) 
 	}
 	committed = true
 	return nil
+}
+
+// withTx is an internal alias for RunInTx, kept for the convenience of
+// package-internal callers that prefer the unexported name. New code should
+// call db.RunInTx directly.
+func withTx(ctx context.Context, db Beginner, fn func(context.Context, *sql.Tx) error) (err error) {
+	return RunInTx(ctx, db, fn)
 }

@@ -86,6 +86,7 @@ func main() {
 
 	if *versionFlag {
 		version.PrintVersion("runic-server", version.Version)
+		return
 	}
 
 	logLevel := os.Getenv("LOG_LEVEL")

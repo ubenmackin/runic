@@ -36,7 +36,11 @@ func (s *AlertStore) ListAlertHistory(ctx context.Context, filter *models.AlertH
 		offset = 0
 	}
 
-	// Build sort clause
+	// SAFETY: ORDER BY clause is constructed from a strict allow-list map.
+	// Filter.SortBy and Filter.SortDir are validated against the map below
+	// before being concatenated into the query. Default values are used
+	// when an unknown key is provided, so an attacker-controlled value
+	// cannot inject SQL via these fields.
 	allowedSortKeys := map[string]string{
 		"created_at":    "h.created_at",
 		"alert_type":    "h.alert_type",

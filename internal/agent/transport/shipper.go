@@ -34,9 +34,10 @@ type Shipper struct {
 	hostID          string
 	logPath         string
 	lines           chan string
+	version         string
 }
 
-func NewShipper(client *http.Client, controlPlaneURL, token, hostID, logPath string) *Shipper {
+func NewShipper(client *http.Client, controlPlaneURL, token, hostID, logPath, version string) *Shipper {
 	return &Shipper{
 		client:          client,
 		controlPlaneURL: controlPlaneURL,
@@ -44,6 +45,7 @@ func NewShipper(client *http.Client, controlPlaneURL, token, hostID, logPath str
 		hostID:          hostID,
 		logPath:         logPath,
 		lines:           make(chan string, 100),
+		version:         version,
 	}
 }
 
@@ -71,8 +73,13 @@ func (s *Shipper) Run(ctx context.Context) error {
 			if ev, err := ParseLogLine(line); err == nil {
 				batch = append(batch, ev)
 				if len(batch) >= 100 {
-					s.ship(ctx, batch)
-					batch = nil
+					select {
+					case <-ctx.Done():
+						// Context canceled, drain remaining batch on shutdown path
+					default:
+						s.ship(ctx, batch)
+						batch = nil
+					}
 				}
 			}
 
@@ -120,6 +127,20 @@ func (s *Shipper) tail(ctx context.Context, path string) (<-chan string, <-chan 
 		}
 
 		scanner := bufio.NewScanner(f)
+		// Make scanner available for poll-based reads; we use an intermediate
+		// buffered channel from a single goroutine so Scanner.Scan does not
+		// block the main select loop.
+		scanResult := make(chan bool, 1)
+		go func() {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case scanResult <- scanner.Scan():
+				}
+			}
+		}()
+
 		for {
 			select {
 			case <-ctx.Done():
@@ -127,17 +148,11 @@ func (s *Shipper) tail(ctx context.Context, path string) (<-chan string, <-chan 
 			default:
 			}
 
-			// Use a non-blocking scan with a timeout to avoid indefinite blocking.
-			scanDone := make(chan bool, 1)
-			go func() {
-				scanDone <- scanner.Scan()
-			}()
-
 			var scanned bool
 			select {
 			case <-ctx.Done():
 				return
-			case scanned = <-scanDone:
+			case scanned = <-scanResult:
 			}
 
 			if !scanned {
@@ -205,16 +220,10 @@ func ParseLogLine(line string) (LogEvent, error) {
 	switch {
 	case strings.Contains(line, "[RUNIC-DROP-I]"):
 		ev.Action = "DROP"
-		// Direction from prefix: I = INPUT
-		if ev.Direction == "" {
-			ev.Direction = "IN"
-		}
+		ev.Direction = "IN"
 	case strings.Contains(line, "[RUNIC-DROP-O]"):
 		ev.Action = "DROP"
-		// Direction from prefix: O = OUTPUT
-		if ev.Direction == "" {
-			ev.Direction = "OUT"
-		}
+		ev.Direction = "OUT"
 	case strings.Contains(line, "[RUNIC-ACCEPT]"):
 		ev.Action = "ACCEPT"
 	}
@@ -309,7 +318,11 @@ func (s *Shipper) ship(ctx context.Context, batch []LogEvent) {
 			}
 		}
 
-		resp, err := common.DoJSONRequest(ctx, s.client, "POST", url, reqBody, s.token, "runic-agent")
+		userAgent := "runic-agent"
+		if s.version != "" {
+			userAgent = "runic-agent/" + s.version
+		}
+		resp, err := common.DoJSONRequest(ctx, s.client, "POST", url, reqBody, s.token, userAgent)
 		if err != nil {
 			// Do not retry on 401 (unauthorized — re-registration needed).
 			if common.IsUnauthorized(err) {

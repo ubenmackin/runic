@@ -29,7 +29,11 @@ func execUpdate(ctx context.Context, q db.Querier, query string, notFoundErr err
 
 // softDelete marks an entity as pending-delete in the specified table.
 // Returns notFoundErr if the entity does not exist or is already soft-deleted.
+// Returns an error if the table is not in the db allowedTables safelist.
 func softDelete(ctx context.Context, q db.Querier, table string, id int, notFoundErr error) error {
+	if !db.IsAllowedTable(table) {
+		return fmt.Errorf("softDelete: table %q not in safelist", table)
+	}
 	query := fmt.Sprintf("UPDATE %s SET is_pending_delete = 1 WHERE id = ? AND is_pending_delete = 0", table)
 	return execUpdate(ctx, q, query, notFoundErr, id)
 }
@@ -70,26 +74,13 @@ func queryRows[T any](ctx context.Context, q db.Querier, query string, args []in
 	return ic.EnsureSlice(results), nil
 }
 
-// RunInTx executes a function within a database transaction, beginning the transaction, rolling back on error, and committing on success.
+// RunInTx is a thin shim over db.RunInTx that adapts the (ctx, tx) callback
+// signature to (tx). The canonical helper lives in internal/db to ensure
+// all packages share the same transaction lifecycle and rollback error
+// handling. Kept for backward compatibility with the (tx) signature used
+// throughout internal/api and internal/store.
 func RunInTx(ctx context.Context, database db.Beginner, fn func(tx *sql.Tx) error) error {
-	tx, err := database.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin tx: %w", err)
-	}
-
-	// Always defer a rollback. If the transaction was already committed,
-	// Rollback returns sql.ErrTxDone and we ignore it.
-	defer func() {
-		_ = tx.Rollback()
-	}()
-
-	if err := fn(tx); err != nil {
-		return err
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit tx: %w", err)
-	}
-
-	return nil
+	return db.RunInTx(ctx, database, func(ctx context.Context, tx *sql.Tx) error {
+		return fn(tx)
+	})
 }

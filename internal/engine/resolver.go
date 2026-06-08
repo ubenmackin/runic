@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 
+	"runic/internal/common/log"
 	"runic/internal/db"
 	"runic/internal/resolve"
 )
@@ -93,7 +94,7 @@ func (r *Resolver) ResolveSpecialTarget(ctx context.Context, specialID int, peer
 		}
 		defer func() {
 			if cErr := rows.Close(); cErr != nil {
-				fmt.Printf("close err: %v\n", cErr)
+				log.WarnContext(ctx, "close rows", "error", cErr)
 			}
 		}()
 		peers := make([]string, 0)
@@ -132,7 +133,7 @@ func (r *Resolver) ResolveGroup(ctx context.Context, groupID int) ([]string, err
 	}
 	defer func() {
 		if cErr := rows.Close(); cErr != nil {
-			fmt.Printf("close err: %v\n", cErr)
+			log.WarnContext(ctx, "close rows", "error", cErr)
 		}
 	}()
 
@@ -179,12 +180,25 @@ func (r *Resolver) ResolveGroup(ctx context.Context, groupID int) ([]string, err
 
 var ValidPortsRe = regexp.MustCompile(`^\d+([,:]\d+)*$`)
 
+// ValidatePorts returns nil if ports is empty or a syntactically valid
+// comma/colon separated list of port numbers. The "1000:2000:3000" form
+// (three colons) is rejected because iptables only supports a single
+// start:end range per token; multi-colon strings would silently be treated
+// as a literal port name and either fail to load or match nothing.
 func ValidatePorts(ports string) error {
 	if ports == "" {
 		return nil
 	}
 	if !ValidPortsRe.MatchString(ports) {
 		return fmt.Errorf("invalid ports %q: must be digits separated by commas or colons", ports)
+	}
+	// Reject malformed ranges: a colon token must contain exactly two
+	// numeric parts. We split on "," and re-check each segment; a segment
+	// with more than one colon is structurally invalid.
+	for _, seg := range strings.Split(ports, ",") {
+		if c := strings.Count(seg, ":"); c > 1 {
+			return fmt.Errorf("invalid ports %q: port range %q has more than one colon", ports, seg)
+		}
 	}
 	return nil
 }
@@ -254,8 +268,10 @@ func ValidateIPSetName(fullName string) error {
 }
 
 // Rules: lowercase, replace all non-alphanumeric characters (except underscore) with underscore,
-// collapse multiple underscores into one, trim leading/trailing underscores.
-// The Linux kernel limits ipset names to 32 characters including any prefix like "runic_group_".
+// collapse multiple underscores into one, enforce the Linux 32-character ipset name limit
+// (truncating from the right), then trim leading/trailing underscores so a cut on an underscore
+// is cleaned up before the name is returned. The Linux kernel limits ipset names to 32
+// characters including any prefix like "runic_group_".
 func sanitizeForIpset(name string) string {
 	name = strings.ToLower(name)
 	var b strings.Builder
@@ -270,14 +286,18 @@ func sanitizeForIpset(name string) string {
 		}
 	}
 	result := b.String()
-	result = strings.Trim(result, "_")
 
 	// Enforce 32-character Linux kernel ipset name limit.
 	// The "runic_group_" prefix takes 12 characters, leaving 20 for the group name.
-	// Truncate from the right to preserve the most meaningful part.
+	// Truncate from the right to preserve the most meaningful part. Truncation is
+	// applied BEFORE the final trim so that a cut on an underscore gets cleaned up.
 	if len(result) > 20 {
 		result = result[:20]
 	}
+
+	// Trim AFTER truncation so any trailing underscore introduced by the slice
+	// is removed (e.g., "group_a_very_long_name" → "group_a_very_long" → "group_a_very_long").
+	result = strings.Trim(result, "_")
 
 	return result
 }
@@ -301,7 +321,7 @@ func (r *Resolver) resolveGroupForIpset(ctx context.Context, groupID int) ([]Ips
 	}
 	defer func() {
 		if cErr := rows.Close(); cErr != nil {
-			fmt.Printf("close err: %v\n", cErr)
+			log.WarnContext(ctx, "close rows", "error", cErr)
 		}
 	}()
 

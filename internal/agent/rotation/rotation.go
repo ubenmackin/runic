@@ -118,8 +118,11 @@ func (m *Manager) CheckAndRotate(ctx context.Context, currentHMACKey, currentTok
 	}
 
 	if err := m.confirmRotation(ctx, currentToken); err != nil {
-		log.Warn("Failed to confirm rotation with control plane", "error", err)
-		// Don't fail here - the key is already usable
+		m.mu.Lock()
+		m.state = StateFailed
+		m.mu.Unlock()
+		log.Error("Failed to confirm rotation with control plane", "error", err)
+		return "", fmt.Errorf("confirm rotation: %w", err)
 	}
 
 	m.mu.Lock()

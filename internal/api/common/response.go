@@ -51,5 +51,5 @@ func (rw *ResponseRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	if hj, ok := rw.ResponseWriter.(http.Hijacker); ok {
 		return hj.Hijack()
 	}
-	return nil, nil, fmt.Errorf("ResponseRecorder: underlying ResponseWriter does not implement http.Hijacker")
+	return nil, nil, fmt.Errorf("%w: ResponseRecorder.underlying ResponseWriter does not implement http.Hijacker", http.ErrNotSupported)
 }

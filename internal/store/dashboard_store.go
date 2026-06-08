@@ -176,15 +176,17 @@ func (s *DashboardStore) ConsumeRegistrationToken(ctx context.Context, token, ho
 }
 
 func (s *DashboardStore) GetPeerAndPolicyCounts(ctx context.Context) (totalPeers, manualPeers, onlinePeers, totalPolicies int, err error) {
-	query := fmt.Sprintf(`
+	// Compute the online threshold timestamp in Go and pass as a parameter
+	// to avoid string-interpolating the threshold value into the SQL query.
+	onlineCutoff := time.Now().UTC().Add(-constants.OfflineThreshold).Format("2006-01-02 15:04:05")
+	query := `
 SELECT
 	(SELECT COUNT(*) FROM peers) as total_peers,
 	(SELECT COUNT(*) FROM peers WHERE is_manual = 1) as manual_peers,
-(SELECT COUNT(*) FROM peers WHERE is_manual = 0 AND last_heartbeat > datetime('now', '-%d seconds')) as online_peers,
-		(SELECT COUNT(*) FROM policies WHERE enabled = 1) as total_policies`,
-		int(constants.OfflineThreshold.Seconds()))
+(SELECT COUNT(*) FROM peers WHERE is_manual = 0 AND last_heartbeat > ?) as online_peers,
+		(SELECT COUNT(*) FROM policies WHERE enabled = 1) as total_policies`
 
-	err = s.db.QueryRowContext(ctx, query).Scan(&totalPeers, &manualPeers, &onlinePeers, &totalPolicies)
+	err = s.db.QueryRowContext(ctx, query, onlineCutoff).Scan(&totalPeers, &manualPeers, &onlinePeers, &totalPolicies)
 	if err != nil {
 		return 0, 0, 0, 0, fmt.Errorf("query peer and policy counts: %w", err)
 	}

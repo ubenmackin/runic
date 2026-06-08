@@ -386,41 +386,44 @@ func migrateSchema(ctx context.Context, database *sql.DB) error {
 	if !hasSpecialTargets {
 		log.Info("Migration: creating special_targets table")
 
-		_, err = database.ExecContext(ctx, `
-			CREATE TABLE special_targets (
-				id INTEGER PRIMARY KEY,
-				name TEXT UNIQUE NOT NULL,
-				display_name TEXT NOT NULL,
-				description TEXT,
-				address TEXT NOT NULL
-			)
-		`)
-		if err != nil {
-			return fmt.Errorf("failed to create special_targets table: %w", err)
-		}
-
-		// Seed the special targets
-		specialTargets := []struct {
-			Name        string
-			DisplayName string
-			Description string
-			Address     string
-		}{
-			{"__subnet_broadcast__", "Subnet Broadcast", "The broadcast address for the peer's local subnet (e.g., 10.100.5.255 for 10.100.5.0/24). Computed dynamically from each peer's IP and CIDR. Used as a policy Source to accept incoming broadcast traffic, or as a Target to send broadcasts.", "computed"},
-			{"__limited_broadcast__", "Limited Broadcast", "The limited broadcast address 255.255.255.255. Reaches all hosts on the local network segment regardless of subnet configuration. Used as a Source to accept broadcast traffic.", "255.255.255.255"},
-			{"__all_hosts__", "All Hosts (IGMP)", "The all-hosts multicast address 224.0.0.1. Used by IGMP to reach every host on the local subnet. When used as a Source, accepts multicast traffic destined for all hosts.", "224.0.0.1"},
-			{"__mdns__", "mDNS", "The mDNS multicast address 224.0.0.251. Used for local network service discovery (.local hostnames). When used as a Target with the mDNS service, enables multicast DNS resolution.", "224.0.0.251"},
-			{"__igmpv3__", "IGMPv3", "The IGMPv3 routers multicast address 224.0.0.22. Used by hosts to report multicast group membership to routers. When used as a Target, enables IGMPv3 membership reporting.", "224.0.0.22"},
-		}
-
-		for _, st := range specialTargets {
-			_, err = database.ExecContext(ctx,
-				"INSERT INTO special_targets (name, display_name, description, address) VALUES (?, ?, ?, ?)",
-				st.Name, st.DisplayName, st.Description, st.Address,
-			)
-			if err != nil {
-				return fmt.Errorf("failed to seed special_target %s: %w", st.Name, err)
+		if err := withTx(ctx, database, func(ctx context.Context, tx *sql.Tx) error {
+			if _, err := tx.ExecContext(ctx, `
+				CREATE TABLE special_targets (
+					id INTEGER PRIMARY KEY,
+					name TEXT UNIQUE NOT NULL,
+					display_name TEXT NOT NULL,
+					description TEXT,
+					address TEXT NOT NULL
+				)
+			`); err != nil {
+				return fmt.Errorf("failed to create special_targets table: %w", err)
 			}
+
+			// Seed the special targets
+			specialTargets := []struct {
+				Name        string
+				DisplayName string
+				Description string
+				Address     string
+			}{
+				{"__subnet_broadcast__", "Subnet Broadcast", "The broadcast address for the peer's local subnet (e.g., 10.100.5.255 for 10.100.5.0/24). Computed dynamically from each peer's IP and CIDR. Used as a policy Source to accept incoming broadcast traffic, or as a Target to send broadcasts.", "computed"},
+				{"__limited_broadcast__", "Limited Broadcast", "The limited broadcast address 255.255.255.255. Reaches all hosts on the local network segment regardless of subnet configuration. Used as a Source to accept broadcast traffic.", "255.255.255.255"},
+				{"__all_hosts__", "All Hosts (IGMP)", "The all-hosts multicast address 224.0.0.1. Used by IGMP to reach every host on the local subnet. When used as a Source, accepts multicast traffic destined for all hosts.", "224.0.0.1"},
+				{"__mdns__", "mDNS", "The mDNS multicast address 224.0.0.251. Used for local network service discovery (.local hostnames). When used as a Target with the mDNS service, enables multicast DNS resolution.", "224.0.0.251"},
+				{"__igmpv3__", "IGMPv3", "The IGMPv3 routers multicast address 224.0.0.22. Used by hosts to report multicast group membership to routers. When used as a Target, enables IGMPv3 membership reporting.", "224.0.0.22"},
+			}
+
+			for _, st := range specialTargets {
+				if _, err := tx.ExecContext(ctx,
+					"INSERT INTO special_targets (name, display_name, description, address) VALUES (?, ?, ?, ?)",
+					st.Name, st.DisplayName, st.Description, st.Address,
+				); err != nil {
+					return fmt.Errorf("failed to seed special_target %s: %w", st.Name, err)
+				}
+			}
+			return nil
+		}); err != nil {
+			return err
 		}
 
 		log.Info("Migration: created and seeded special_targets table")
@@ -523,13 +526,16 @@ func migrateSchema(ctx context.Context, database *sql.DB) error {
 
 	// Migration: Delete the broken "any" system group
 	log.Info("Migration: deleting broken any system group")
-	_, err = database.ExecContext(ctx, "DELETE FROM group_members WHERE group_id IN (SELECT id FROM groups WHERE name = 'any')")
-	if err != nil {
-		return fmt.Errorf("failed to delete group_members for 'any' group: %w", err)
-	}
-	_, err = database.ExecContext(ctx, "DELETE FROM groups WHERE name = 'any'")
-	if err != nil {
-		return fmt.Errorf("failed to delete 'any' group: %w", err)
+	if err := withTx(ctx, database, func(ctx context.Context, tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM group_members WHERE group_id IN (SELECT id FROM groups WHERE name = 'any')"); err != nil {
+			return fmt.Errorf("failed to delete group_members for 'any' group: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, "DELETE FROM groups WHERE name = 'any'"); err != nil {
+			return fmt.Errorf("failed to delete 'any' group: %w", err)
+		}
+		return nil
+	}); err != nil {
+		return err
 	}
 	log.Info("Migration: deleted broken any system group")
 
@@ -1239,12 +1245,11 @@ SELECT id, ip_address, 1 FROM peers
 			return fmt.Errorf("failed to insert latest_agent_version: %w", err)
 		}
 		log.Info("Migration: added latest_agent_version to system_config")
-	}
-
-	// Always sync latest_agent_version with the build-time agent version
-	_, err = database.ExecContext(ctx, "UPDATE system_config SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = 'latest_agent_version'", version.AgentVersion)
-	if err != nil {
-		return fmt.Errorf("failed to sync latest_agent_version: %w", err)
+		// Sync latest_agent_version with the build-time agent version on first insertion
+		_, err = database.ExecContext(ctx, "UPDATE system_config SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = 'latest_agent_version'", version.AgentVersion)
+		if err != nil {
+			return fmt.Errorf("failed to sync latest_agent_version: %w", err)
+		}
 	}
 
 	// Migration: Add first_applied_at column to rule_bundles

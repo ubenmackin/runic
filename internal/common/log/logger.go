@@ -9,6 +9,9 @@ import (
 	"sync"
 )
 
+// envProduction is the ENV value that selects JSON-formatted log output.
+const envProduction = "production"
+
 // mu protects the logger variable for concurrent access.
 var mu sync.RWMutex
 
@@ -40,7 +43,7 @@ func Init(level string, output io.Writer) {
 	var newLogger *slog.Logger
 	// Determine output format based on environment
 	// JSON format for production, text format for development
-	if os.Getenv("ENV") == "production" {
+	if os.Getenv("ENV") == envProduction {
 		handler := slog.NewJSONHandler(output, opts)
 		newLogger = slog.New(handler)
 	} else {
@@ -50,8 +53,11 @@ func Init(level string, output io.Writer) {
 
 	mu.Lock()
 	logger = newLogger
-	mu.Unlock()
+	// Update slog's package-level default inside the same critical section
+	// so concurrent callers of L() / package-level slog functions see a
+	// consistent view of the configured logger.
 	slog.SetDefault(newLogger)
+	mu.Unlock()
 }
 
 func L() *slog.Logger {

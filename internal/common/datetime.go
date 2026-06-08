@@ -2,6 +2,8 @@ package common
 
 import (
 	"time"
+
+	"runic/internal/common/log"
 )
 
 // FormatSQLiteDatetime converts a SQLite datetime string
@@ -9,7 +11,8 @@ import (
 // datetime('now') produce UTC times without timezone info, so the parsed time
 // is treated as UTC. If the string is empty, it returns an empty string.
 // If the input is already in RFC 3339 format, it is returned unchanged.
-// If parsing fails for both formats, the original string is returned unchanged.
+// If parsing fails for both formats, the original string is returned unchanged
+// (and a warning is logged so the bad data is visible during investigation).
 func FormatSQLiteDatetime(s string) string {
 	if s == "" {
 		return ""
@@ -22,6 +25,8 @@ func FormatSQLiteDatetime(s string) string {
 	if _, err := time.Parse(time.RFC3339, s); err == nil {
 		return s
 	}
-	// Unable to parse — return original string unchanged
+	// Unable to parse — log a warning and return the original string
+	// unchanged so callers downstream don't lose data.
+	log.Warn("FormatSQLiteDatetime: unable to parse timestamp, returning as-is", "input", s)
 	return s
 }

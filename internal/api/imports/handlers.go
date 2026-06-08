@@ -37,6 +37,10 @@ type ImportStore interface {
 	CreateSession(ctx context.Context, peerID int64, rawBackup, rawIpsets string) (*importer.ImportSession, error)
 	GetSession(ctx context.Context, sessionID int64) (*importer.ImportSession, error)
 	UpdateSessionStatus(ctx context.Context, sessionID int64, status string) error
+	// ApplySession takes *common.ChangeWorker to allow the store layer to queue
+	// peer recompilations after applying the import session. This is a concrete
+	// type rather than an interface because the store's applier directly calls
+	// methods on ChangeWorker. A future refactor could extract an interface.
 	ApplySession(ctx context.Context, sessionID int64, changeWorker *common.ChangeWorker) (*importer.ApplyResult, error)
 	DeleteSession(ctx context.Context, sessionID int64) error
 }
@@ -397,19 +401,33 @@ func (h *Handler) ApplySession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.Store.UpdateSessionStatus(r.Context(), sessionID, "reviewing"); err != nil {
-		common.RespondError(w, http.StatusInternalServerError, "database error")
+	ctx := r.Context()
+
+	// Check current session status before transitioning
+	session, err := h.Store.GetSession(ctx, sessionID)
+	if err != nil {
+		common.RespondError(w, http.StatusNotFound, "session not found")
+		return
+	}
+	if session.Status != "parsed" && session.Status != "pending" {
+		common.RespondError(w, http.StatusBadRequest, fmt.Sprintf("session cannot be applied in state: %s", session.Status))
 		return
 	}
 
-	// Count approved rules
-	approvedCount, err := h.Store.CountApprovedRules(r.Context(), sessionID)
+	// F8: count approved rules BEFORE updating status — only transition to
+	// "reviewing" if there are approved rules to apply.
+	approvedCount, err := h.Store.CountApprovedRules(ctx, sessionID)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "database error")
 		return
 	}
 	if approvedCount == 0 {
 		common.RespondError(w, http.StatusBadRequest, "no approved rules to apply")
+		return
+	}
+
+	if err := h.Store.UpdateSessionStatus(ctx, sessionID, "reviewing"); err != nil {
+		common.RespondError(w, http.StatusInternalServerError, "database error")
 		return
 	}
 

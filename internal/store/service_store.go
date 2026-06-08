@@ -50,27 +50,20 @@ func (s *ServiceStore) GetService(ctx context.Context, serviceID int) (models.Se
 // Returns a *common.DeleteConstraintError with the full list of policies using the service.
 func (s *ServiceStore) CheckDeleteConstraints(ctx context.Context, serviceID int) error {
 	// Query ALL policies that use the service
-	rows, err := s.db.QueryContext(ctx,
+	policies, err := queryRows(ctx, s.db,
 		`SELECT id, name FROM policies WHERE service_id = ? AND is_pending_delete = 0`,
-		serviceID,
+		[]interface{}{serviceID},
+		"policy usage",
+		func(rows *sql.Rows) (common.PolicyRef, error) {
+			var p common.PolicyRef
+			if err := rows.Scan(&p.ID, &p.Name); err != nil {
+				return p, err
+			}
+			return p, nil
+		},
 	)
 	if err != nil {
-		return fmt.Errorf("failed to check policy usage: %w", err)
-	}
-
-	var policies []common.PolicyRef
-	for rows.Next() {
-		var p common.PolicyRef
-		if err := rows.Scan(&p.ID, &p.Name); err != nil {
-			if closeErr := rows.Close(); closeErr != nil {
-				return fmt.Errorf("failed to scan policy: %v, close error: %w", err, closeErr)
-			}
-			return fmt.Errorf("failed to scan policy: %w", err)
-		}
-		policies = append(policies, p)
-	}
-	if closeErr := rows.Close(); closeErr != nil {
-		return fmt.Errorf("failed to close rows: %w", closeErr)
+		return err
 	}
 
 	if len(policies) > 0 {

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	ic "runic/internal/common"
+	"runic/internal/common/log"
 	"runic/internal/db"
 	"runic/internal/models"
 )
@@ -80,7 +81,18 @@ func (s *LogsStore) ListLogs(ctx context.Context, filter *LogFilter, limit, offs
 		whereClause = "WHERE " + strings.Join(conditions, " AND ")
 	}
 
-	// Query logs
+	// Count query first (same filters, no limit/offset). Running this
+	// before the paginated data query keeps the contract simple and
+	// matches what callers expect from the response.
+	countQuery := `SELECT COUNT(*) FROM firewall_logs ` + whereClause
+	var total int
+	if err := s.logsDB.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+		return nil, fmt.Errorf("count firewall logs: %w", err)
+	}
+
+	// Query logs (data query). Must include the same WHERE clause as the
+	// COUNT query above so that args (filter values + limit + offset) line
+	// up with the placeholders in the SQL.
 	queryArgs := append([]interface{}{}, args...)
 	queryArgs = append(queryArgs, limit, offset)
 	query := `SELECT id, peer_id, peer_hostname, timestamp, event_type,
@@ -95,8 +107,8 @@ func (s *LogsStore) ListLogs(ctx context.Context, filter *LogFilter, limit, offs
 		return nil, fmt.Errorf("query firewall logs: %w", err)
 	}
 	defer func() {
-		if cErr := rows.Close(); cErr != nil {
-			_ = cErr
+		if cerr := rows.Close(); cerr != nil {
+			log.WarnContext(ctx, "failed to close rows", "error", cerr)
 		}
 	}()
 
@@ -139,14 +151,6 @@ func (s *LogsStore) ListLogs(ctx context.Context, filter *LogFilter, limit, offs
 	}
 
 	logsData = ic.EnsureSlice(logsData)
-
-	// Count query (same filters, no limit/offset)
-	countQuery := `SELECT COUNT(*) FROM firewall_logs ` + whereClause
-	countArgs := args
-	var total int
-	if err := s.logsDB.QueryRowContext(ctx, countQuery, countArgs...).Scan(&total); err != nil {
-		return nil, fmt.Errorf("count firewall logs: %w", err)
-	}
 
 	return &ListLogsResult{Logs: logsData, Total: total}, nil
 }

@@ -19,15 +19,17 @@ func RollbackSnapshots(ctx context.Context, database DB) error {
 		if err != nil {
 			return fmt.Errorf("query snapshots: %w", err)
 		}
+		defer func() {
+			if cerr := rows.Close(); cerr != nil {
+				log.WarnContext(ctx, "failed to close rows", "error", cerr)
+			}
+		}()
 
 		var snapshots []models.ChangeSnapshot
 		for rows.Next() {
 			var s models.ChangeSnapshot
 			var data sql.NullString
 			if err := rows.Scan(&s.ID, &s.EntityType, &s.EntityID, &s.Action, &data); err != nil {
-				if cErr := rows.Close(); cErr != nil {
-					log.WarnContext(ctx, "failed to close rows after scan error", "error", cErr)
-				}
 				return fmt.Errorf("scan snapshot: %w", err)
 			}
 			if data.Valid {
@@ -35,14 +37,22 @@ func RollbackSnapshots(ctx context.Context, database DB) error {
 			}
 			snapshots = append(snapshots, s)
 		}
-		if err := rows.Close(); err != nil {
-			log.WarnContext(ctx, "failed to close rows", "error", err)
-		}
 		if err := rows.Err(); err != nil {
 			return fmt.Errorf("rows error: %w", err)
 		}
 
 		for _, s := range snapshots {
+			// CRITICAL: For "create" rollbacks, verify that the entity can be
+			// safely removed before deletion. If a peer was added to a group,
+			// or a group is referenced by a policy, the rollback would violate
+			// referential integrity. Aborting here leaves the snapshot in place
+			// and prevents cascading data loss.
+			if s.Action == "create" {
+				if err := checkCreateRollbackConstraints(ctx, tx, s.EntityType, s.EntityID); err != nil {
+					return fmt.Errorf("rollback %s %s %d: %w", s.Action, s.EntityType, s.EntityID, err)
+				}
+			}
+
 			var rollbackErr error
 			if s.Action == "create" {
 				rollbackErr = rollbackCreateEntity(ctx, tx, s.EntityType, s.EntityID)
@@ -105,6 +115,8 @@ func RollbackEntitySnapshot(ctx context.Context, database DB, entityType string,
 			if err := rollbackUpdateDeleteEntity(ctx, tx, entityType, entityID, action, snapshotData.String); err != nil {
 				return err
 			}
+		default:
+			return fmt.Errorf("unknown snapshot action %q for %s %d", action, entityType, entityID)
 		}
 
 		// Clear pending changes for this entity

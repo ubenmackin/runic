@@ -4,7 +4,6 @@ package api
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"net/http"
 	"time"
 
@@ -30,6 +29,7 @@ import (
 	"runic/internal/api/settings"
 	"runic/internal/api/users"
 	"runic/internal/auth"
+	"runic/internal/common/constants"
 	"runic/internal/common/log"
 	"runic/internal/common/version"
 	"runic/internal/crypto"
@@ -193,8 +193,8 @@ func (a *API) RegisterRoutes(r *mux.Router, downloadsDir string) {
 	a.LogoutRateLimiter = middleware.NewRateLimiter(10, time.Minute)
 	a.DownloadRateLimiter = middleware.NewRateLimiter(10, time.Minute)
 
-	apiRouter.HandleFunc("/setup", a.Auth.HandleSetup).Methods("GET")
-	apiRouter.HandleFunc("/setup", a.Auth.HandleSetup).Methods("POST")
+	apiRouter.HandleFunc("/setup", a.Auth.HandleSetupGET).Methods("GET")
+	apiRouter.HandleFunc("/setup", a.Auth.HandleSetupPOST).Methods("POST")
 
 	apiRouter.Handle("/auth/login", a.LoginRateLimiter.Middleware(http.HandlerFunc(a.Auth.HandleLoginPOST))).Methods("POST")
 
@@ -235,15 +235,12 @@ func (a *API) RegisterRoutes(r *mux.Router, downloadsDir string) {
 	protected.HandleFunc("/pending-changes/{peerId:[0-9]+}", a.Pending.GetPeerPendingChanges).Methods("GET")
 
 	protected.HandleFunc("/info", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(map[string]interface{}{
+		common.RespondJSON(w, http.StatusOK, map[string]interface{}{
 			"version":              version.Version,
 			"commit":               version.Commit,
 			"built_at":             version.BuiltAt,
 			"latest_agent_version": version.AgentVersion,
-		}); err != nil {
-			log.Warn("Failed to encode version info", "error", err)
-		}
+		})
 	}).Methods("GET")
 
 	admin := protected.PathPrefix("").Subrouter()
@@ -325,11 +322,7 @@ func (a *API) RegisterRoutes(r *mux.Router, downloadsDir string) {
 	// Catch-all for unmatched API routes - returns 404 instead of falling through to SPA
 	// This must be registered last so it only catches truly unmatched routes
 	apiRouter.PathPrefix("/").HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusNotFound)
-		if err := json.NewEncoder(w).Encode(map[string]string{"error": "API endpoint not found"}); err != nil {
-			log.Warn("Failed to encode error", "err", err)
-		}
+		common.RespondError(w, http.StatusNotFound, "API endpoint not found")
 	})
 
 	// Downloads route (public - for agent binary downloads)
@@ -341,14 +334,11 @@ func (a *API) RegisterRoutes(r *mux.Router, downloadsDir string) {
 	// Handle /api/v1 root path (not matched by PathPrefix subrouter)
 	// Returns API info instead of falling through to SPA
 	r.HandleFunc("/api/v1", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(map[string]string{
+		common.RespondJSON(w, http.StatusOK, map[string]string{
 			"status":  "ok",
 			"version": "v1",
 			"message": "Runic API",
-		}); err != nil {
-			log.Warn("Failed to encode api info", "err", err)
-		}
+		})
 	}).Methods("GET")
 }
 
@@ -386,29 +376,23 @@ func (a *API) Stop() {
 }
 
 func HealthHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(map[string]string{"status": "healthy"}); err != nil {
-		log.Warn("Failed to encode health", "err", err)
-	}
+	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "healthy"})
 }
 
 func ReadyHandler(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		ctx, cancel := context.WithTimeout(r.Context(), constants.ReadyHandlerTimeout)
 		defer cancel()
 
 		if err := db.PingContext(ctx); err != nil {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			if encErr := json.NewEncoder(w).Encode(map[string]string{"status": "not_ready", "error": "database unavailable"}); encErr != nil {
-				log.Warn("Failed to encode not_ready", "error", encErr)
-			}
+			common.RespondJSON(w, http.StatusServiceUnavailable, map[string]string{
+				"status": "not_ready",
+				"error":  "database unavailable",
+			})
 			return
 		}
 
-		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(map[string]string{"status": "ready"}); err != nil {
-			log.Warn("Failed to encode ready", "error", err)
-		}
+		common.RespondJSON(w, http.StatusOK, map[string]string{"status": "ready"})
 	}
 }
 

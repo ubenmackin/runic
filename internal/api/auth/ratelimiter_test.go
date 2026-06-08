@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -17,7 +18,7 @@ func TestCheckAndRecordFailure_NoLockout(t *testing.T) {
 
 	// Record 4 failures (below maxFailedAttempts=5), should all return nil
 	for i := 0; i < 4; i++ {
-		err := CheckAndRecordFailure(username, remoteAddr)
+		err := CheckAndRecordFailure(context.Background(), username, remoteAddr)
 		if err != nil {
 			t.Fatalf("iteration %d: expected nil error, got %v", i+1, err)
 		}
@@ -48,7 +49,7 @@ func TestCheckAndRecordFailure_TriggersLockout(t *testing.T) {
 
 	// Record 5 failures, 5th should still return nil but set lockout
 	for i := 0; i < 5; i++ {
-		err := CheckAndRecordFailure(username, remoteAddr)
+		err := CheckAndRecordFailure(context.Background(), username, remoteAddr)
 		if err != nil {
 			t.Fatalf("iteration %d: expected nil error, got %v", i+1, err)
 		}
@@ -82,11 +83,11 @@ func TestCheckAndRecordFailure_LockedOut(t *testing.T) {
 
 	// Record 5 failures to trigger lockout
 	for i := 0; i < 5; i++ {
-		_ = CheckAndRecordFailure(username, remoteAddr)
+		_ = CheckAndRecordFailure(context.Background(), username, remoteAddr)
 	}
 
 	// 6th attempt should return error
-	err := CheckAndRecordFailure(username, remoteAddr)
+	err := CheckAndRecordFailure(context.Background(), username, remoteAddr)
 	if err == nil {
 		t.Fatal("expected error for locked account, got nil")
 	}
@@ -113,7 +114,7 @@ func TestRecordSuccess_ClearsEntry(t *testing.T) {
 
 	// Record 3 failures (below lockout threshold)
 	for i := 0; i < 3; i++ {
-		_ = CheckAndRecordFailure(username, remoteAddr)
+		_ = CheckAndRecordFailure(context.Background(), username, remoteAddr)
 	}
 
 	// Verify entry exists
@@ -134,7 +135,7 @@ func TestRecordSuccess_ClearsEntry(t *testing.T) {
 	rateLimitMutex.Unlock()
 
 	// Should be able to login again without lockout
-	err := CheckAndRecordFailure(username, remoteAddr)
+	err := CheckAndRecordFailure(context.Background(), username, remoteAddr)
 	if err != nil {
 		t.Errorf("expected nil error after clearing entry, got %v", err)
 	}
@@ -223,7 +224,7 @@ func TestConcurrentAccess(t *testing.T) {
 	for i := 0; i < goroutines; i++ {
 		go func(iteration int) {
 			defer wg.Done()
-			_ = CheckAndRecordFailure(username, remoteAddr)
+			_ = CheckAndRecordFailure(context.Background(), username, remoteAddr)
 		}(i)
 	}
 	wg.Wait()
@@ -281,11 +282,11 @@ func TestCheckAndRecordFailure_DifferentUsers(t *testing.T) {
 
 	// User A gets 5 failures (lockout)
 	for i := 0; i < 5; i++ {
-		CheckAndRecordFailure("userA", remoteAddr)
+		CheckAndRecordFailure(context.Background(), "userA", remoteAddr)
 	}
 
 	// User B should still be able to login (different user)
-	err := CheckAndRecordFailure("userB", remoteAddr)
+	err := CheckAndRecordFailure(context.Background(), "userB", remoteAddr)
 	if err != nil {
 		t.Errorf("expected nil error for different user, got %v", err)
 	}
@@ -314,7 +315,7 @@ func TestCheckAndRecordFailure_LockoutDuration(t *testing.T) {
 	before := time.Now()
 	// Record 5 failures to trigger lockout
 	for i := 0; i < 5; i++ {
-		CheckAndRecordFailure(username, remoteAddr)
+		CheckAndRecordFailure(context.Background(), username, remoteAddr)
 	}
 	after := time.Now()
 

@@ -3,6 +3,7 @@ package systemd
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -27,64 +28,68 @@ func IsServiceInstalled() bool {
 	return false
 }
 
-// RestartService restarts the named systemd service.
-// The caller must have root privileges.
-func RestartService(name string) error {
+// runSystemctl is the shared helper for the four public service-management
+// functions. It enforces the root-privilege requirement, executes
+// `systemctl <verb> <noun>`, and surfaces a wrapped error including the
+// combined stdout/stderr output on failure. The provided context is
+// attached to the command so callers can apply timeouts and cancellation.
+func runSystemctl(ctx context.Context, verb, noun string) error {
 	if os.Geteuid() != 0 {
-		return fmt.Errorf("must be run as root to restart service (use sudo)")
+		return fmt.Errorf("must be run as root to %s service (use sudo)", verb)
 	}
 
-	cmd := exec.Command("systemctl", "restart", name)
+	var cmd *exec.Cmd
+	if noun == "" {
+		cmd = exec.CommandContext(ctx, "systemctl", verb)
+	} else {
+		cmd = exec.CommandContext(ctx, "systemctl", verb, noun)
+	}
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%w: %s", err, string(output))
 	}
 	return nil
+}
+
+// ctxOrBackground returns the first non-nil context in ctxs, or
+// context.Background() if ctxs is empty. Used by the variadic-ctx wrappers
+// below to keep the original positional signatures working while still
+// letting new callers opt in to context propagation.
+func ctxOrBackground(ctxs []context.Context) context.Context {
+	for _, c := range ctxs {
+		if c != nil {
+			return c
+		}
+	}
+	return context.Background()
+}
+
+// RestartService restarts the named systemd service.
+// The caller must have root privileges. An optional context may be passed as
+// the second argument to enable cancellation and timeouts.
+func RestartService(name string, ctx ...context.Context) error {
+	return runSystemctl(ctxOrBackground(ctx), "restart", name)
 }
 
 // StopService stops the named systemd service.
-// The caller must have root privileges.
-func StopService(name string) error {
-	if os.Geteuid() != 0 {
-		return fmt.Errorf("must be run as root to stop service (use sudo)")
-	}
-
-	cmd := exec.Command("systemctl", "stop", name)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("%w: %s", err, string(output))
-	}
-	return nil
+// The caller must have root privileges. An optional context may be passed as
+// the second argument to enable cancellation and timeouts.
+func StopService(name string, ctx ...context.Context) error {
+	return runSystemctl(ctxOrBackground(ctx), "stop", name)
 }
 
-// DisableService disables the named systemd service so it no longer starts on boot.
-// The caller must have root privileges.
-func DisableService(name string) error {
-	if os.Geteuid() != 0 {
-		return fmt.Errorf("must be run as root to disable service (use sudo)")
-	}
-
-	cmd := exec.Command("systemctl", "disable", name)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("%w: %s", err, string(output))
-	}
-	return nil
+// DisableService disables the named systemd service so it no longer starts on
+// boot. The caller must have root privileges. An optional context may be
+// passed as the second argument to enable cancellation and timeouts.
+func DisableService(name string, ctx ...context.Context) error {
+	return runSystemctl(ctxOrBackground(ctx), "disable", name)
 }
 
-// DaemonReload runs systemctl daemon-reload to reload systemd manager configuration.
-// The caller must have root privileges.
-func DaemonReload() error {
-	if os.Geteuid() != 0 {
-		return fmt.Errorf("must be run as root to reload systemd (use sudo)")
-	}
-
-	cmd := exec.Command("systemctl", "daemon-reload")
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("%w: %s", err, string(output))
-	}
-	return nil
+// DaemonReload runs systemctl daemon-reload to reload systemd manager
+// configuration. The caller must have root privileges. An optional context
+// may be passed as the only argument to enable cancellation and timeouts.
+func DaemonReload(ctx ...context.Context) error {
+	return runSystemctl(ctxOrBackground(ctx), "daemon-reload", "")
 }
 
 // PromptRestart checks if the runic-agent systemd service is installed, prompts
@@ -111,7 +116,10 @@ func PromptRestart() {
 
 	input = strings.TrimSpace(strings.ToLower(input))
 	if input == "y" || input == "yes" {
-		if err := RestartService("runic-agent"); err != nil {
+		// Use Background for the interactive restart prompt: there is no
+		// upstream context to propagate, and the user expects the operation
+		// to run to completion or surface its own error.
+		if err := RestartService("runic-agent", context.Background()); err != nil {
 			fmt.Printf("Failed to restart service: %v\n", err)
 			fmt.Println("Restart manually with: sudo systemctl restart runic-agent")
 		} else {

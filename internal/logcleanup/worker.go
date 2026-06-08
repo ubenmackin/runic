@@ -16,6 +16,7 @@ type Worker struct {
 	db       *sql.DB
 	logsDB   *sql.DB
 	interval time.Duration
+	cancel   context.CancelFunc
 }
 
 func NewWorker(db *sql.DB, logsDB *sql.DB) *Worker {
@@ -26,7 +27,19 @@ func NewWorker(db *sql.DB, logsDB *sql.DB) *Worker {
 	}
 }
 
+// Stop signals the worker to stop. It cancels the context passed to Start(),
+// which causes the periodic loop to exit.
+func (w *Worker) Stop() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.cancel != nil {
+		w.cancel()
+		w.cancel = nil
+	}
+}
+
 func (w *Worker) Start(ctx context.Context) {
+	ctx, w.cancel = context.WithCancel(ctx)
 	// Run once immediately on startup (protected by recover so goroutine still starts)
 	func() {
 		defer func() {

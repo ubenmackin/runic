@@ -462,6 +462,9 @@ func TestCancelSession_StoreError(t *testing.T) {
 
 func TestApplySession_Success(t *testing.T) {
 	store := &mockImportStore{
+		getSessionFn: func(_ context.Context, sessionID int64) (*importer.ImportSession, error) {
+			return &importer.ImportSession{ID: 1, PeerID: 10, Status: "parsed"}, nil
+		},
 		updateSessionStatusFn: func(_ context.Context, _ int64, status string) error {
 			assert.Equal(t, "reviewing", status)
 			return nil
@@ -506,6 +509,9 @@ func TestApplySession_InvalidSessionID(t *testing.T) {
 
 func TestApplySession_NoApprovedRules(t *testing.T) {
 	store := &mockImportStore{
+		getSessionFn: func(_ context.Context, sessionID int64) (*importer.ImportSession, error) {
+			return &importer.ImportSession{ID: 1, PeerID: 10, Status: "parsed"}, nil
+		},
 		updateSessionStatusFn: func(_ context.Context, _ int64, _ string) error { return nil },
 		countApprovedRulesFn:  func(_ context.Context, _ int64) (int, error) { return 0, nil },
 	}
@@ -524,6 +530,9 @@ func TestApplySession_NoApprovedRules(t *testing.T) {
 
 func TestApplySession_ApplyStoreError(t *testing.T) {
 	store := &mockImportStore{
+		getSessionFn: func(_ context.Context, sessionID int64) (*importer.ImportSession, error) {
+			return &importer.ImportSession{ID: 1, PeerID: 10, Status: "parsed"}, nil
+		},
 		updateSessionStatusFn: func(_ context.Context, _ int64, _ string) error { return nil },
 		countApprovedRulesFn:  func(_ context.Context, _ int64) (int, error) { return 1, nil },
 		applySessionFn: func(_ context.Context, _ int64, _ *common.ChangeWorker) (*importer.ApplyResult, error) {

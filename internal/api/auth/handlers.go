@@ -24,6 +24,20 @@ import (
 	"runic/internal/store"
 )
 
+// maxRequestBodyBytes caps the size of request bodies decoded from JSON. 1 MiB
+// is comfortably above the largest legitimate auth payload (a username +
+// password is typically <100 bytes) and well below the limit at which
+// pathological clients can pin server resources.
+const maxRequestBodyBytes = 1 << 20
+
+// credentialsRequest is the request body shared by the setup and login
+// endpoints. Both endpoints accept only a username and password, so a single
+// type avoids a redundant pair of structurally identical structs.
+type credentialsRequest struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
 var (
 	isProduction   bool
 	isProductionMu sync.Once
@@ -61,14 +75,19 @@ func getIsProduction() bool {
 }
 
 func setAuthCookies(w http.ResponseWriter, access, refresh string) {
+	// The access token cookie uses SameSite=Strict to defend against CSRF on
+	// state-changing API requests. The refresh token cookie keeps SameSite=Lax
+	// because the refresh endpoint is reachable cross-tab and the refresh
+	// token is opaque (no JWT claims) — a full double-submit / token-binding
+	// scheme is out of scope here.
 	http.SetCookie(w, &http.Cookie{
 		Name:     "runic_access_token",
 		Value:    access,
 		Path:     "/",
 		HttpOnly: true,
 		Secure:   getIsProduction(),
-		SameSite: http.SameSiteLaxMode,
-		MaxAge:   900, // 15 minutes
+		SameSite: http.SameSiteStrictMode,
+		MaxAge:   AccessTokenCookieMaxAge,
 	})
 	http.SetCookie(w, &http.Cookie{
 		Name:     "runic_refresh_token",
@@ -77,7 +96,7 @@ func setAuthCookies(w http.ResponseWriter, access, refresh string) {
 		HttpOnly: true,
 		Secure:   getIsProduction(),
 		SameSite: http.SameSiteLaxMode,
-		MaxAge:   604800, // 7 days
+		MaxAge:   RefreshTokenCookieMaxAge,
 	})
 }
 
@@ -88,7 +107,7 @@ func clearAuthCookies(w http.ResponseWriter) {
 		Path:     "/",
 		HttpOnly: true,
 		Secure:   getIsProduction(),
-		SameSite: http.SameSiteLaxMode,
+		SameSite: http.SameSiteStrictMode,
 		MaxAge:   -1,
 	})
 	http.SetCookie(w, &http.Cookie{
@@ -100,27 +119,6 @@ func clearAuthCookies(w http.ResponseWriter) {
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   -1,
 	})
-}
-
-type setupRequest struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
-}
-
-type loginRequest struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
-}
-
-func (h *Handler) HandleSetup(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodGet:
-		h.HandleSetupGET(w, r)
-	case http.MethodPost:
-		h.HandleSetupPOST(w, r)
-	default:
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-	}
 }
 
 // HandleSetupGET handles the setup check. Returns {"needs_setup": true} if no users exist, false otherwise.
@@ -162,13 +160,25 @@ func (h *Handler) HandleSetupPOST(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var body setupRequest
+	// Bound the request body to defend against slow-loris / memory-exhaustion
+	// attacks where an attacker streams a huge payload. The reader will return
+	// an error from Decode once the cap is hit.
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
+
+	var body credentialsRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		common.RespondError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
 	if body.Username == "" || body.Password == "" {
 		common.RespondError(w, http.StatusBadRequest, "username and password are required")
+		return
+	}
+	// bcrypt silently truncates input above 72 bytes; rejecting explicitly is
+	// cheaper and avoids a misleading hash that does not match the password
+	// the user actually submitted.
+	if len(body.Password) > 72 {
+		common.RespondError(w, http.StatusBadRequest, "password must be 72 bytes or fewer")
 		return
 	}
 
@@ -226,7 +236,11 @@ func (h *Handler) HandleLoginPOST(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var body loginRequest
+	// Bound the request body to defend against slow-loris / memory-exhaustion
+	// attacks. See HandleSetupPOST for details.
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
+
+	var body credentialsRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		common.RespondError(w, http.StatusBadRequest, "invalid JSON")
 		return
@@ -235,9 +249,16 @@ func (h *Handler) HandleLoginPOST(w http.ResponseWriter, r *http.Request) {
 		common.RespondError(w, http.StatusBadRequest, "username and password are required")
 		return
 	}
+	// bcrypt silently truncates input above 72 bytes; rejecting explicitly
+	// avoids both a misleading hash and an attacker burning CPU on a huge
+	// payload before we ever call bcrypt.
+	if len(body.Password) > 72 {
+		common.RespondError(w, http.StatusBadRequest, "password must be 72 bytes or fewer")
+		return
+	}
 
 	// Rate limit check
-	if err := CheckAndRecordFailure(body.Username, common.GetClientIP(r)); err != nil {
+	if err := CheckAndRecordFailure(r.Context(), body.Username, common.GetClientIP(r)); err != nil {
 		common.RespondError(w, http.StatusTooManyRequests, err.Error())
 		return
 	}
@@ -271,6 +292,11 @@ func (h *Handler) HandleLoginPOST(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) HandleLogoutPOST(w http.ResponseWriter, r *http.Request) {
+	// Apply the standard handler timeout so a slow revocation store cannot
+	// keep the request open indefinitely.
+	ctx, cancel := runiccommon.WithHandlerTimeout(r.Context())
+	defer cancel()
+
 	// The auth.Middleware has already validated the token and populated the context.
 	// Use context values instead of re-parsing the JWT.
 	uniqueID := auth.UniqueIDFromContext(r.Context())
@@ -282,9 +308,9 @@ func (h *Handler) HandleLogoutPOST(w http.ResponseWriter, r *http.Request) {
 	// Revoke the access token using its stored unique_id.
 	// We use the token's original expiry as the TTL for the revocation entry.
 	// Since we don't have the original expiry from context, we use the default
-	// access token lifetime (15 minutes) as a safe upper bound.
-	expiresAt := time.Now().Add(15 * time.Minute)
-	if err := h.TokenStore.RevokeToken(r.Context(), uniqueID, expiresAt, "access"); err != nil {
+	// access token lifetime (1 hour) as a safe upper bound.
+	expiresAt := time.Now().Add(AccessTokenTTL)
+	if err := h.TokenStore.RevokeToken(ctx, uniqueID, expiresAt, "access"); err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "Failed to revoke token")
 		return
 	}
@@ -292,8 +318,8 @@ func (h *Handler) HandleLogoutPOST(w http.ResponseWriter, r *http.Request) {
 	// Also revoke the refresh token if present
 	if refreshCookie, err := r.Cookie("runic_refresh_token"); err == nil && refreshCookie.Value != "" {
 		if refreshClaims, err := auth.ValidateToken(refreshCookie.Value); err == nil && refreshClaims != nil {
-			if err := h.TokenStore.RevokeToken(r.Context(), refreshClaims.UniqueID, refreshClaims.ExpiresAt.Time, "refresh"); err != nil {
-				log.WarnContext(r.Context(), "failed to revoke refresh token on logout", "error", err)
+			if err := h.TokenStore.RevokeToken(ctx, refreshClaims.UniqueID, refreshClaims.ExpiresAt.Time, "refresh"); err != nil {
+				log.WarnContext(ctx, "failed to revoke refresh token on logout", "error", err)
 			}
 		}
 	}
@@ -317,6 +343,11 @@ func (h *Handler) HandleRefreshPOST(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Apply the standard handler timeout so a slow revocation lookup cannot
+	// stall the request.
+	ctx, cancel := runiccommon.WithHandlerTimeout(r.Context())
+	defer cancel()
+
 	cookie, err := r.Cookie("runic_refresh_token")
 	if err != nil || cookie.Value == "" {
 		common.RespondError(w, http.StatusUnauthorized, "Unauthorized")
@@ -330,12 +361,12 @@ func (h *Handler) HandleRefreshPOST(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if revoked, err := h.TokenStore.IsTokenRevoked(r.Context(), claims.UniqueID); err != nil || revoked {
+	if revoked, err := h.TokenStore.IsTokenRevoked(ctx, claims.UniqueID); err != nil || revoked {
 		common.RespondError(w, http.StatusUnauthorized, "Token has been revoked")
 		return
 	}
 
-	accessToken, refreshToken, err := h.GenerateTokenPair(r.Context(), claims.Username)
+	accessToken, refreshToken, err := h.GenerateTokenPair(ctx, claims.Username)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "failed to generate tokens")
 		return
@@ -345,12 +376,12 @@ func (h *Handler) HandleRefreshPOST(w http.ResponseWriter, r *http.Request) {
 	// If revoking the old token fails, we still issue the new tokens to avoid
 	// disrupting the user's session, but we log at CRITICAL level so operators
 	// are aware that an old refresh token remains valid.
-	if err := h.TokenStore.RevokeToken(r.Context(), claims.UniqueID, claims.ExpiresAt.Time, "refresh"); err != nil {
-		log.ErrorContext(r.Context(), "CRITICAL: failed to revoke old refresh token during rotation; the old token remains valid", "error", err)
+	if err := h.TokenStore.RevokeToken(ctx, claims.UniqueID, claims.ExpiresAt.Time, "refresh"); err != nil {
+		log.ErrorContext(ctx, "CRITICAL: failed to revoke old refresh token during rotation; the old token remains valid", "error", err)
 		// Continue anyway - the new tokens are still valid
 	}
 
-	log.InfoContext(r.Context(), "token refreshed", "username", claims.Username)
+	log.InfoContext(ctx, "token refreshed", "username", claims.Username)
 
 	setAuthCookies(w, accessToken, refreshToken)
 	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "ok"})

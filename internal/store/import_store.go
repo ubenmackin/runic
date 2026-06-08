@@ -336,6 +336,9 @@ func (s *ImportStore) executeUpdate(ctx context.Context, tableName string, updat
 	if len(updates) == 0 {
 		return errors.New("no fields to update")
 	}
+	if !db.IsAllowedTable(tableName) {
+		return fmt.Errorf("executeUpdate: table %q not in safelist", tableName)
+	}
 	args = append(args, sessionID, entityID)
 	query := fmt.Sprintf("UPDATE %s SET %s WHERE session_id = ? AND id = ?", tableName, strings.Join(updates, ", "))
 	_, err := s.db.ExecContext(ctx, query, args...)

@@ -450,16 +450,25 @@ func TestRollbackSnapshots_BulkRollback(t *testing.T) {
 	assert.Equal(t, 0, count, "All pending changes should be deleted")
 }
 
-func TestRollbackSnapshots_ReverseOrder(t *testing.T) {
+// TestRollbackSnapshots_BlockedByFKReferences verifies the safety check
+// introduced in F-21. Although RollbackSnapshots processes snapshots in
+// ORDER BY id DESC (newest first), a child entity can still hold an FK to
+// a parent whose snapshot was created later (e.g. a policy created AFTER
+// its group, so the group's snapshot has a lower id and is processed
+// first). The pre-flight constraint check in RollbackSnapshots must
+// therefore refuse to delete the parent and surface ErrConstraintViolation
+// rather than cascading data loss. This is the correct, safe behavior.
+func TestRollbackSnapshots_BlockedByFKReferences(t *testing.T) {
 	database, cleanup := SetupTestDB(t)
 	defer cleanup()
 	ctx := context.Background()
 
-	// Setup: Create snapshots in order 1, 2, 3
-	// We'll track the order by using policies that depend on each other
-	// Policy 1 references group 1
-	// Policy 2 references policy 1's service (simulated)
-
+	// Setup: build a full stack (group <- service <- policy) and record
+	// create-snapshots in the order policy, service, group. Because the
+	// group snapshot has the lowest id, RollbackSnapshots will reach it
+	// first in DESC order, while the policy that references it is still
+	// present. The pre-flight check must catch this and abort the whole
+	// transaction (no partial deletes, no orphan FKs).
 	result, err := database.ExecContext(ctx,
 		"INSERT INTO groups (name) VALUES (?)", "group1")
 	require.NoError(t, err)
@@ -481,46 +490,51 @@ func TestRollbackSnapshots_ReverseOrder(t *testing.T) {
 	policyID, err := result.LastInsertId()
 	require.NoError(t, err)
 
-	// (This simulates creating a full stack: group -> service -> policy)
+	// Create-snapshots recorded in the order: policy, service, group.
+	// Their snapshot ids will follow insertion order, so DESC processing
+	// hits the group first while the policy is still alive.
 	err = CreateSnapshot(ctx, database, "policy", int(policyID), "create", "")
 	require.NoError(t, err)
-
 	err = CreateSnapshot(ctx, database, "service", int(serviceID), "create", "")
 	require.NoError(t, err)
-
 	err = CreateSnapshot(ctx, database, "group", int(groupID), "create", "")
 	require.NoError(t, err)
 
-	// RollbackSnapshots processes in ORDER BY id DESC, so the service
-	// gets deleted before the policy that references it. Disable FK
-	// enforcement temporarily to match the original test environment.
-	_, err = database.ExecContext(ctx, "PRAGMA foreign_keys=OFF")
-	require.NoError(t, err)
+	// FK enforcement stays ON. The constraint check inside
+	// RollbackSnapshots must refuse the rollback on its own.
 	err = RollbackSnapshots(ctx, database)
-	require.NoError(t, err, "RollbackSnapshots should succeed with reverse order")
 
-	// Assert: all entities are deleted
+	// Assert: a constraint-violation error is returned, wrapped with the
+	// package's sentinel value so callers can match on it.
+	require.Error(t, err, "RollbackSnapshots must refuse to violate FK constraints")
+	assert.True(t, errors.Is(err, ErrConstraintViolation),
+		"Error should wrap ErrConstraintViolation, got: %v", err)
+	assert.Contains(t, err.Error(), "rollback blocked",
+		"Error message should mention 'rollback blocked'")
+
+	// Assert: NO entities were deleted (the transaction was rolled back).
 	var count int
 	err = database.QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM groups WHERE id = ?", groupID).Scan(&count)
 	require.NoError(t, err)
-	assert.Equal(t, 0, count, "Group should be deleted")
+	assert.Equal(t, 1, count, "Group must still exist after blocked rollback")
 
 	err = database.QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM services WHERE id = ?", serviceID).Scan(&count)
 	require.NoError(t, err)
-	assert.Equal(t, 0, count, "Service should be deleted")
+	assert.Equal(t, 1, count, "Service must still exist after blocked rollback")
 
 	err = database.QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM policies WHERE id = ?", policyID).Scan(&count)
 	require.NoError(t, err)
-	assert.Equal(t, 0, count, "Policy should be deleted")
+	assert.Equal(t, 1, count, "Policy must still exist after blocked rollback")
 
-	// Assert: all snapshots deleted
+	// Assert: all snapshots are preserved (the user can retry once the
+	// blocking entity is removed manually).
 	err = database.QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM change_snapshots").Scan(&count)
 	require.NoError(t, err)
-	assert.Equal(t, 0, count, "All snapshots should be deleted")
+	assert.Equal(t, 3, count, "All snapshots must remain after blocked rollback")
 }
 
 func TestRollbackCreateEntity_Group(t *testing.T) {

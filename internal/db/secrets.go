@@ -9,8 +9,8 @@ import (
 )
 
 // migrateEnvToDB reads secrets from the RUNIC_ENV_PATH file and stores them in the database.
-// It only uses Querier interface methods (ExecContext), but is currently called with *sql.DB
-// from initialization code. TODO: update callers to pass Querier implementation.
+// It accepts a Querier (which *sql.DB satisfies) and is invoked during initialization
+// with the underlying *sql.DB handle.
 func migrateEnvToDB(ctx context.Context, database Querier) error {
 	envPath := os.Getenv("RUNIC_ENV_PATH")
 	if envPath == "" {

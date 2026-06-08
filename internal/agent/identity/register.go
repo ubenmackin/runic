@@ -98,6 +98,10 @@ func detectKernelVersion() string {
 	return strings.TrimSpace(string(data))
 }
 
+// detectDocker checks for the Docker socket.
+// NOTE: This duplicates detectDocker in internal/agent/apply/applier.go.
+// Both are kept separate to avoid a cross-package dependency on a shared
+// utility; the duplication is small and acceptable.
 func detectDocker() bool {
 	fi, err := os.Stat("/var/run/docker.sock")
 	if err != nil {

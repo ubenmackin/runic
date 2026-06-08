@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -175,6 +174,11 @@ func resolveControlPlaneURL(cliFlag configFlag) string {
 	return os.Getenv("RUNIC_CONTROL_PLANE_URL")
 }
 
+// handleConfigMode updates individual config fields from CLI flags.
+// NOTE: This round-trips the config through LoadConfig/SaveConfig, which
+// means fields not represented in the JSON schema (computed or ephemeral)
+// are lost on save. This is acceptable for config-mode usage since those
+// fields are re-derived at agent startup.
 func handleConfigMode(configPath string, enableOnBoot, enableRulesBundle, disableSystemIPTables, controlPlaneURL, logPath, pullInterval configFlag) error {
 	cfg, err := identity.LoadConfig(configPath)
 	if err != nil {
@@ -262,14 +266,8 @@ func handleConfigMode(configPath string, enableOnBoot, enableRulesBundle, disabl
 	return nil
 }
 
-// It performs both JSON marshaling check and field-level validation.
+// perform field-level validation on the config.
 func validateConfig(cfg *identity.Config) error {
-	_, err := json.Marshal(cfg)
-	if err != nil {
-		return fmt.Errorf("config is not valid JSON: %w", err)
-	}
-
-	// Perform field-level validation
 	if err := cfg.Validate(); err != nil {
 		return fmt.Errorf("config validation failed: %w", err)
 	}

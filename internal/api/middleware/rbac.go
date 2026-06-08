@@ -1,13 +1,12 @@
 package middleware
 
 import (
-	"encoding/json"
 	"net/http"
 
 	"github.com/gorilla/mux"
 
+	"runic/internal/api/common"
 	"runic/internal/auth"
-	"runic/internal/common/log"
 )
 
 // RequireRole returns a middleware that restricts access to users with the specified roles.
@@ -24,11 +23,7 @@ func RequireRole(roles ...string) mux.MiddlewareFunc {
 					return
 				}
 			}
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusForbidden)
-			if err := json.NewEncoder(w).Encode(map[string]string{"error": "forbidden"}); err != nil {
-				log.Warn("Failed to encode forbidden error", "error", err)
-			}
+			common.RespondError(w, http.StatusForbidden, "forbidden")
 		})
 	}
 }

@@ -194,15 +194,21 @@ func ParseSession(ctx context.Context, database db.DB, sessionID int64) error {
 	ipRows, err := database.QueryContext(ctx, "SELECT ip_address FROM peer_ips WHERE peer_id = ? ORDER BY is_primary DESC, id ASC", session.PeerID)
 	if err != nil {
 		log.Warn("Failed to query peer IPs for resolver", "peer_id", session.PeerID, "error", err)
-	}
-	for ipRows.Next() {
-		var ip string
-		if ipRows.Scan(&ip) == nil {
-			peerIPs = append(peerIPs, resolve.NormalizeIP(ip))
+	} else {
+		defer func() {
+			if cErr := ipRows.Close(); cErr != nil {
+				log.Warn("Error closing ipRows", "error", cErr)
+			}
+		}()
+		for ipRows.Next() {
+			var ip string
+			if ipRows.Scan(&ip) == nil {
+				peerIPs = append(peerIPs, resolve.NormalizeIP(ip))
+			}
 		}
-	}
-	if cErr := ipRows.Close(); cErr != nil {
-		log.Warn("Error closing ipRows", "error", cErr)
+		if err := ipRows.Err(); err != nil {
+			log.Warn("Error iterating ipRows", "error", err)
+		}
 	}
 
 	// If no peer_ips found, fall back to the peer's primary IP

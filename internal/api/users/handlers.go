@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -78,6 +79,39 @@ type CreateUserRequest struct {
 	Role     string `json:"role"`
 }
 
+func validateCreateUserRequest(req *CreateUserRequest) error {
+	req.Username = strings.TrimSpace(req.Username)
+	if req.Username == "" {
+		return common.NewHTTPError(http.StatusBadRequest, "Username is required")
+	}
+	if req.Password == "" {
+		return common.NewHTTPError(http.StatusBadRequest, "Password is required")
+	}
+	if len(req.Password) < 8 {
+		return common.NewHTTPError(http.StatusBadRequest, "Password must be at least 8 characters")
+	}
+	req.Role = strings.TrimSpace(req.Role)
+	if req.Role == "" {
+		req.Role = "viewer"
+	}
+	if req.Role != "admin" && req.Role != "editor" && req.Role != "viewer" {
+		return common.NewHTTPError(http.StatusBadRequest, "Role must be 'admin', 'editor', or 'viewer'")
+	}
+	callerRole := auth.RoleFromContext(context.Background())
+	if callerRole != "admin" && (req.Role == "admin" || req.Role == "editor") {
+		return common.NewHTTPError(http.StatusForbidden, "Only admins can create admin or editor users")
+	}
+	return nil
+}
+
+func hashPassword(password string) (string, error) {
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), 12)
+	if err != nil {
+		return "", fmt.Errorf("failed to hash password: %w", err)
+	}
+	return string(hash), nil
+}
+
 func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := runiccommon.WithHandlerTimeout(r.Context())
 	defer cancel()
@@ -95,37 +129,17 @@ func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	req.Username = strings.TrimSpace(req.Username)
-	if req.Username == "" {
-		common.RespondError(w, http.StatusBadRequest, "Username is required")
+	if err := validateCreateUserRequest(&req); err != nil {
+		var httpErr *common.HTTPError
+		if errors.As(err, &httpErr) {
+			common.RespondError(w, httpErr.StatusCode, httpErr.Message)
+			return
+		}
+		common.RespondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	req.Email = strings.TrimSpace(req.Email)
-
-	if req.Password == "" {
-		common.RespondError(w, http.StatusBadRequest, "Password is required")
-		return
-	}
-	if len(req.Password) < 8 {
-		common.RespondError(w, http.StatusBadRequest, "Password must be at least 8 characters")
-		return
-	}
-
-	req.Role = strings.TrimSpace(req.Role)
-	if req.Role == "" {
-		req.Role = "viewer"
-	}
-	if req.Role != "admin" && req.Role != "editor" && req.Role != "viewer" {
-		common.RespondError(w, http.StatusBadRequest, "Role must be 'admin', 'editor', or 'viewer'")
-		return
-	}
-
-	callerRole := auth.RoleFromContext(r.Context())
-	if callerRole != "admin" && (req.Role == "admin" || req.Role == "editor") {
-		common.RespondError(w, http.StatusForbidden, "Only admins can create admin or editor users")
-		return
-	}
 
 	exists, err := h.Store.UserExists(ctx, req.Username)
 	if err != nil {
@@ -138,14 +152,14 @@ func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), 12)
+	hash, err := hashPassword(req.Password)
 	if err != nil {
 		log.ErrorContext(r.Context(), "failed to hash password", "error", err)
 		common.InternalError(w)
 		return
 	}
 
-	id, err := h.Store.CreateUser(ctx, nil, req.Username, string(hash), req.Email, req.Role)
+	id, err := h.Store.CreateUser(ctx, nil, req.Username, hash, req.Email, req.Role)
 	if err != nil {
 		log.ErrorContext(r.Context(), "failed to create user", "error", err)
 		common.InternalError(w)

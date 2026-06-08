@@ -21,9 +21,9 @@ func Version(content string) string {
 func DeriveHMACKey(rawKey string, purpose string, versionNumber int) []byte {
 	salt := []byte(purpose)
 	info := []byte(fmt.Sprintf("runic-%s-v%d", purpose, versionNumber))
-	hkdf := hkdf.New(sha256.New, []byte(rawKey), salt, info)
+	reader := hkdf.New(sha256.New, []byte(rawKey), salt, info)
 	derived := make([]byte, 32)
-	if _, err := hkdf.Read(derived); err != nil {
+	if _, err := reader.Read(derived); err != nil {
 		// Fall back to SHA256 of raw key if HKDF fails (should never happen)
 		h := sha256.Sum256([]byte(rawKey))
 		return h[:]
@@ -31,12 +31,12 @@ func DeriveHMACKey(rawKey string, purpose string, versionNumber int) []byte {
 	return derived
 }
 
+// Sign is a thin wrapper that signs content with version number 0.
+// It is kept for backwards compatibility with callers that don't track
+// explicit bundle versions (e.g. legacy tests in internal/agent/apply).
+// New code should call SignWithVersion directly.
 func Sign(content string, key string) string {
-	derivedKey := DeriveHMACKey(key, "rule-bundle", 0)
-	payload := fmt.Sprintf("%d:%s", 0, content)
-	mac := hmac.New(sha256.New, derivedKey)
-	mac.Write([]byte(payload))
-	return hex.EncodeToString(mac.Sum(nil))
+	return SignWithVersion(content, key, 0)
 }
 
 func SignWithVersion(content string, key string, versionNumber int) string {
@@ -47,9 +47,11 @@ func SignWithVersion(content string, key string, versionNumber int) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
+// Verify is a thin wrapper that defers to VerifyWithVersion. The two had
+// identical bodies historically; consolidating them removes the duplicate
+// signature computation site.
 func Verify(content string, key string, signature string, versionNumber int) bool {
-	expected := SignWithVersion(content, key, versionNumber)
-	return hmac.Equal([]byte(expected), []byte(signature))
+	return VerifyWithVersion(content, key, signature, versionNumber)
 }
 
 func VerifyWithVersion(content string, key string, signature string, versionNumber int) bool {

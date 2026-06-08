@@ -1,4 +1,5 @@
-// Package agent provides core device functionality.
+// Package agent is a backward-compatibility shim that re-exports types
+// from core and identity. New code should import those packages directly.
 package agent
 
 import (

@@ -12,26 +12,27 @@ import (
 	"time"
 )
 
+// PeerRow is the canonical row representation of a peer in the database.
+// Fields that mirror nullable DB columns use sql.Null* types so that Scan
+// works for both populated and empty values. The previously dead fields
+// (HasIPSet, HMACKey, Description, HMACKeyRotationToken, HMACKeyLastRotatedAt)
+// were removed because peerRowColumns never reads them; their values are
+// only used by ListPeers via local scan variables that flow into PeerView.
 type PeerRow struct {
-	ID                   int
-	Hostname             string
-	IPAddress            string
-	OSType               string
-	Arch                 string
-	HasDocker            bool
-	HasIPSet             sql.NullBool
-	AgentKey             string
-	AgentToken           sql.NullString
-	AgentVersion         sql.NullString
-	HMACKey              string
-	HMACKeyRotationToken sql.NullString
-	HMACKeyLastRotatedAt sql.NullString
-	IsManual             bool
-	BundleVersion        sql.NullString
-	LastHeartbeat        sql.NullTime
-	Status               string
-	Description          sql.NullString
-	CreatedAt            time.Time
+	ID            int
+	Hostname      string
+	IPAddress     string
+	OSType        string
+	Arch          string
+	HasDocker     bool
+	AgentKey      string
+	AgentToken    sql.NullString
+	AgentVersion  sql.NullString
+	IsManual      bool
+	BundleVersion sql.NullString
+	LastHeartbeat sql.NullTime
+	Status        string
+	CreatedAt     time.Time
 }
 
 type GroupRow struct {
@@ -136,7 +137,11 @@ type PendingChange struct {
 	ChangeID      int    `json:"change_id"`
 	ChangeAction  string `json:"change_action"` // create, update, delete
 	ChangeSummary string `json:"change_summary"`
-	CreatedAt     string `json:"created_at"`
+	// CreatedAt is stored as a string here on purpose: the API layer
+	// (api/pending/handlers.go) feeds it through common.FormatSQLiteDatetime
+	// which expects a string. Changing the type to time.Time would require
+	// editing the out-of-scope API handlers, so the string form is preserved.
+	CreatedAt string `json:"created_at"`
 }
 
 type PendingBundlePreview struct {

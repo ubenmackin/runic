@@ -232,16 +232,13 @@ func (s *SMTPSender) sendWithTLS(addr string, auth smtp.Auth, from string, to []
 		}
 	} else {
 		// Standard SMTP with optional STARTTLS (ports 25, 587, etc.)
+		// NOTE: smtpConn.Close() (deferred below) is the sole owner of the
+		// underlying connection — no separate conn.Close() defer is needed.
 		var err error
 		conn, err := smtp.Dial(addr)
 		if err != nil {
 			return fmt.Errorf("failed to connect to SMTP server: %w", err)
 		}
-		defer func() {
-			if err := conn.Close(); err != nil {
-				s.logger.Debug("failed to close SMTP connection", "error", err)
-			}
-		}()
 
 		smtpConn = conn
 

@@ -1,3 +1,9 @@
+// Package common provides structural / format validators. The functions here
+// answer questions of the form "does this string look like a hostname?",
+// "is this a valid IP or CIDR?", "is this a valid resource name?" — they
+// are pure syntactic checks with no knowledge of the application's domain
+// enums. For domain-specific checks (e.g. "is this a valid entity type
+// like 'peer' / 'group' / 'special'?"), see validation.go.
 package common
 
 import (

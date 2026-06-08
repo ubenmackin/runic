@@ -27,7 +27,9 @@
 //     b) Proper escaping depends on the output context (HTML vs. JSON vs. plain text)
 //     c) Early escaping could corrupt legitimate data or cause double-encoding issues
 //
-// which applies both control character removal and HTML escaping.
+// SanitizeAlertInput performs entry-point sanitization (control character removal
+// and length truncation). HTML escaping is handled separately at output time by
+// htmlEscape in the email template layer — see the defense-in-depth strategy above.
 package alerts
 
 import (

@@ -180,6 +180,11 @@ func (s *Scheduler) checkRule(ctx context.Context, rule *models.AlertRule) error
 		"rule_name", rule.Name,
 		"alert_type", rule.AlertType)
 
+	// NOTE: ProcessAlert is called synchronously here inside the scheduler's
+	// check loop. This blocks the evaluation of subsequent rules until the
+	// alert creation and email send complete. If alert processing latency
+	// becomes a concern, this should be moved to the AlertProcessor's async
+	// channel (QueueAlert) instead.
 	if s.processor != nil {
 		if err := s.processor.ProcessAlert(ctx, event, rule); err != nil {
 			return fmt.Errorf("failed to process alert for rule %d: %w", rule.ID, err)
