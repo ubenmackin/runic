@@ -402,8 +402,16 @@ func TestHandleLogoutPOST_NoCookie(t *testing.T) {
 
 	h.HandleLogoutPOST(w, r)
 
-	if w.Code != http.StatusUnauthorized {
-		t.Errorf("expected status %d, got %d", http.StatusUnauthorized, w.Code)
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d", http.StatusOK, w.Code)
+	}
+
+	var response map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+	if response["status"] != "logged_out" {
+		t.Errorf("expected status 'logged_out', got %q", response["status"])
 	}
 }
 
@@ -420,8 +428,16 @@ func TestHandleLogoutPOST_InvalidToken(t *testing.T) {
 
 	h.HandleLogoutPOST(w, r)
 
-	if w.Code != http.StatusUnauthorized {
-		t.Errorf("expected status %d, got %d", http.StatusUnauthorized, w.Code)
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d", http.StatusOK, w.Code)
+	}
+
+	var response map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+	if response["status"] != "logged_out" {
+		t.Errorf("expected status 'logged_out', got %q", response["status"])
 	}
 }
 
@@ -481,8 +497,16 @@ func TestHandleLogoutPOST_InvalidBearerToken(t *testing.T) {
 
 	h.HandleLogoutPOST(w, r)
 
-	if w.Code != http.StatusUnauthorized {
-		t.Errorf("expected status %d, got %d", http.StatusUnauthorized, w.Code)
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d", http.StatusOK, w.Code)
+	}
+
+	var response map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+	if response["status"] != "logged_out" {
+		t.Errorf("expected status 'logged_out', got %q", response["status"])
 	}
 }
 
@@ -499,8 +523,16 @@ func TestHandleLogoutPOST_MissingBearerPrefix(t *testing.T) {
 
 	h.HandleLogoutPOST(w, r)
 
-	if w.Code != http.StatusUnauthorized {
-		t.Errorf("expected status %d, got %d", http.StatusUnauthorized, w.Code)
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d", http.StatusOK, w.Code)
+	}
+
+	var response map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+	if response["status"] != "logged_out" {
+		t.Errorf("expected status 'logged_out', got %q", response["status"])
 	}
 }
 

@@ -301,7 +301,11 @@ func (h *Handler) HandleLogoutPOST(w http.ResponseWriter, r *http.Request) {
 	// Use context values instead of re-parsing the JWT.
 	uniqueID := auth.UniqueIDFromContext(r.Context())
 	if uniqueID == "" {
-		common.RespondError(w, http.StatusUnauthorized, "Unauthorized")
+		// No valid token in context — treat logout as an idempotent no-op.
+		// Clear any stale auth cookies and return success so clients never
+		// enter a refresh loop via this endpoint.
+		clearAuthCookies(w)
+		common.RespondJSON(w, http.StatusOK, map[string]string{"status": "logged_out"})
 		return
 	}
 
