@@ -31,6 +31,7 @@ func downloadBinary(ctx context.Context, client *http.Client, controlPlaneURL, a
 		return nil, fmt.Errorf("download binary: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 		if closeErr := resp.Body.Close(); closeErr != nil {
 			log.Warn("Failed to close response body", "error", closeErr)
 		}

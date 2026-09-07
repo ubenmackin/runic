@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -82,12 +83,15 @@ func New(configPath, controlPlaneURL string) *Agent {
 }
 
 // getConfig returns a snapshot of the current config for read-only access.
-// It acquires a read lock so that concurrent goroutines can read safely
-// while updateConfig holds the write lock.
-func (a *Agent) getConfig() *identity.Config {
+// It copies the config under a read lock so callers hold an isolated value
+// that remains safe after the lock is released.
+func (a *Agent) getConfig() identity.Config {
 	a.configMu.RLock()
 	defer a.configMu.RUnlock()
-	return a.config
+	if a.config == nil {
+		return identity.Config{}
+	}
+	return *a.config
 }
 
 // updateConfig acquires the write lock and applies fn to the config.
@@ -96,12 +100,15 @@ func (a *Agent) getConfig() *identity.Config {
 func (a *Agent) updateConfig(fn func(*identity.Config)) {
 	a.configMu.Lock()
 	defer a.configMu.Unlock()
+	if a.config == nil {
+		return
+	}
 	fn(a.config)
 }
 
 func (a *Agent) Run(ctx context.Context) error {
 	if err := a.initialize(ctx); err != nil {
-		return err
+		return fmt.Errorf("initialize: %w", err)
 	}
 	return a.startLoops(ctx)
 }
@@ -115,7 +122,7 @@ func (a *Agent) initialize(ctx context.Context) error {
 	}
 
 	if err := a.validateConfig(); err != nil {
-		return err
+		return fmt.Errorf("validate config: %w", err)
 	}
 
 	cfg := a.getConfig()
@@ -127,7 +134,7 @@ func (a *Agent) initialize(ctx context.Context) error {
 	}
 
 	if err := a.registerIfNeeded(ctx); err != nil {
-		return err
+		return fmt.Errorf("register if needed: %w", err)
 	}
 
 	cfg = a.getConfig()
@@ -194,7 +201,10 @@ func (a *Agent) disableSystemServices(ctx context.Context) error {
 
 // registerIfNeeded registers the agent with the control plane if credentials are missing.
 func (a *Agent) registerIfNeeded(ctx context.Context) error {
-	return a.register(ctx, false)
+	if err := a.register(ctx, false); err != nil {
+		return fmt.Errorf("register: %w", err)
+	}
+	return nil
 }
 
 func (a *Agent) backupIptables(ctx context.Context) error {
@@ -210,7 +220,7 @@ func (a *Agent) backupIptables(ctx context.Context) error {
 
 	out, err := firewall.DumpRules(ctx, a.cmdRunner)
 	if err != nil {
-		return err
+		return fmt.Errorf("dump rules: %w", err)
 	}
 
 	if err := os.WriteFile(a.backupPath, []byte(out), 0600); err != nil {
@@ -255,7 +265,7 @@ func (a *Agent) applyBootBundle(ctx context.Context) (bool, error) {
 func (a *Agent) loadConfig() error {
 	cfg, err := identity.LoadConfig(a.configPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("load config: %w", err)
 	}
 
 	a.configMu.Lock()
@@ -271,14 +281,23 @@ func (a *Agent) loadConfig() error {
 		}
 	}
 
-	*a.config = *cfg
+	if a.config == nil {
+		a.config = cfg
+	} else {
+		*a.config = *cfg
+	}
 	return nil
 }
 
 func (a *Agent) saveConfig() error {
 	a.configMu.RLock()
-	defer a.configMu.RUnlock()
-	return identity.SaveConfig(a.configPath, a.config)
+	if a.config == nil {
+		a.configMu.RUnlock()
+		return fmt.Errorf("save config: no config loaded")
+	}
+	snapshot := *a.config
+	a.configMu.RUnlock()
+	return identity.SaveConfig(a.configPath, &snapshot)
 }
 
 // DisableSystemIPTablesIfConfigured disables system iptables if the DisableSystemManagedIPTables config option is set to true.
@@ -480,20 +499,22 @@ func (a *Agent) register(ctx context.Context, force bool) error {
 
 	log.Info("Attempting registration", "force", force)
 
-	// Snapshot config under lock, release, perform HTTP, re-acquire.
-	a.configMu.RLock()
-	cfg := *a.config // shallow copy — HostID/Token are strings (immutable)
-	a.configMu.RUnlock()
+	// Snapshot config, release, perform HTTP, re-acquire.
+	cfg := a.getConfig()
 
 	if err := identity.Register(ctx, a.httpClient, &cfg, a.version, func() error {
 		return identity.SaveConfig(a.configPath, &cfg)
 	}, a.detectIPStrings()); err != nil {
-		return err
+		return fmt.Errorf("register agent: %w", err)
 	}
 
 	// Swap the new config under write lock.
 	a.configMu.Lock()
-	*a.config = cfg
+	if a.config == nil {
+		a.config = &cfg
+	} else {
+		*a.config = cfg
+	}
 	a.configMu.Unlock()
 	return nil
 }
@@ -513,6 +534,7 @@ func (a *Agent) isControlPlaneReachable(ctx context.Context) bool {
 		return false
 	}
 	defer func() {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 		if cErr := resp.Body.Close(); cErr != nil {
 			log.Warn("close err", "err", cErr)
 		}
@@ -636,6 +658,60 @@ func (a *Agent) handleFetchBackup(ctx context.Context) {
 	}
 }
 
+// validateUpdateURL checks that the update URL is well-formed, pins its host
+// to the configured control plane host, and requires https except for
+// loopback test hosts.
+func validateUpdateURL(updateURL, configuredURL string) (string, error) {
+	parsed, err := url.Parse(updateURL)
+	if err != nil {
+		return "", fmt.Errorf("invalid control plane URL %q: %w", updateURL, err)
+	}
+	if parsed.Host == "" {
+		return "", fmt.Errorf("invalid control plane URL %q: missing host", updateURL)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", fmt.Errorf("invalid control plane URL %q: scheme must be http or https", updateURL)
+	}
+	hostname := parsed.Hostname()
+	isLoopback := hostname == "localhost" || hostname == "127.0.0.1" || hostname == "::1"
+	if !isLoopback && parsed.Scheme != "https" {
+		return "", fmt.Errorf("invalid control plane URL %q: scheme must be https", updateURL)
+	}
+	if configuredURL != "" {
+		configured, err := url.Parse(configuredURL)
+		if err != nil {
+			return "", fmt.Errorf("invalid configured control plane URL %q: %w", configuredURL, err)
+		}
+		if configured.Host == "" {
+			return "", fmt.Errorf("invalid configured control plane URL %q: missing host", configuredURL)
+		}
+		if !strings.EqualFold(parsed.Hostname(), configured.Hostname()) {
+			return "", fmt.Errorf("invalid control plane URL %q: host %q does not match configured host %q", updateURL, parsed.Hostname(), configured.Hostname())
+		}
+		if effectiveUpdateURLPort(parsed) != effectiveUpdateURLPort(configured) {
+			return "", fmt.Errorf("invalid control plane URL %q: port %q does not match configured port %q", updateURL, parsed.Port(), configured.Port())
+		}
+	}
+	return parsed.String(), nil
+}
+
+// effectiveUpdateURLPort returns the explicit port if present, otherwise the
+// default port for the URL scheme (80 for http, 443 for https) so that
+// URLs with implicit default ports compare equal to URLs with explicit ones.
+func effectiveUpdateURLPort(u *url.URL) string {
+	if p := u.Port(); p != "" {
+		return p
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "http":
+		return "80"
+	case "https":
+		return "443"
+	default:
+		return ""
+	}
+}
+
 // handleUpdateAgent performs an in-process self-update. It downloads the new
 // binary via HTTP and applies it in-place using selfupdate.Apply, then exits
 // the process so the service manager can restart with the new binary.
@@ -646,38 +722,38 @@ func (a *Agent) handleFetchBackup(ctx context.Context) {
 func (a *Agent) handleUpdateAgent(ctx context.Context, controlPlaneURL string) {
 	log.Info("Starting agent self-update", "control_plane_url", controlPlaneURL)
 
-	parsedURL, err := url.Parse(controlPlaneURL)
-	if err != nil || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") {
+	cfg := a.getConfig()
+	normalizedURL, err := validateUpdateURL(controlPlaneURL, cfg.ControlPlaneURL)
+	if err != nil {
 		log.Error("Invalid control plane URL received in update_agent event", "url", controlPlaneURL, "error", err)
 		return
 	}
 
 	go func() {
-		updateCtx, cancel := context.WithCancel(ctx)
-		defer cancel()
-
-		// Buffer the result channel so the inner goroutine never blocks,
-		// even if the outer select picks ctx.Done() first.
-		updateResult := make(chan error, 1)
-		go func() {
-			updateResult <- performUpdate(updateCtx, a.httpClient, parsedURL.String())
-		}()
-
+		detachedCtx := context.WithoutCancel(ctx)
+		if err := performUpdate(detachedCtx, a.httpClient, normalizedURL); err != nil {
+			// Update failed — do NOT exit the process. The agent stays
+			// running so the operator can investigate and retry via a
+			// subsequent update_agent event.
+			log.Error("Agent self-update failed, not exiting for restart", "error", err)
+			return
+		}
 		select {
-		case err := <-updateResult:
-			if err != nil {
-				// Update failed — do NOT exit the process. The agent stays
-				// running so the operator can investigate and retry via a
-				// subsequent update_agent event.
-				log.Error("Agent self-update failed, not exiting for restart", "error", err)
-				return
-			}
-			log.Info("Agent update applied, exiting for restart in 2s")
-			time.Sleep(2 * time.Second)
-			a.exitFunc(0)
 		case <-ctx.Done():
 			log.Info("Agent shutting down, skipping exit after update")
+			return
+		default:
 		}
+		log.Info("Agent update applied, exiting for restart in 2s")
+		timer := time.NewTimer(2 * time.Second)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			log.Info("Agent shutting down, skipping exit after update")
+			return
+		case <-timer.C:
+		}
+		a.exitFunc(0)
 	}()
 }
 
@@ -700,12 +776,13 @@ func (a *Agent) HandleUpdateAgentSync(controlPlaneURL string) error {
 func (a *Agent) handleUpdateAgentSync(ctx context.Context, controlPlaneURL string) error {
 	log.Info("Starting agent self-update (synchronous)", "control_plane_url", controlPlaneURL)
 
-	parsedURL, err := url.Parse(controlPlaneURL)
-	if err != nil || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") {
-		return fmt.Errorf("invalid control plane URL: %s", controlPlaneURL)
+	cfg := a.getConfig()
+	normalizedURL, err := validateUpdateURL(controlPlaneURL, cfg.ControlPlaneURL)
+	if err != nil {
+		return fmt.Errorf("validate update URL: %w", err)
 	}
 
-	if err := performUpdate(ctx, a.httpClient, parsedURL.String()); err != nil {
+	if err := performUpdate(ctx, a.httpClient, normalizedURL); err != nil {
 		return fmt.Errorf("agent self-update failed: %w", err)
 	}
 

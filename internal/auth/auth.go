@@ -2,6 +2,7 @@
 package auth
 
 import (
+	"container/list"
 	"context"
 	"crypto/rand"
 	"database/sql"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"golang.org/x/sync/singleflight"
 
 	"runic/internal/common/constants"
 	"runic/internal/common/log"
@@ -55,9 +57,88 @@ const (
 	TokenTypeRefresh = "refresh"
 )
 
+// revocationCacheTTL bounds how long a positive revocation lookup is cached.
+// Negative results (revoked=false) are never cached so a token revoked via
+// the database, a direct store write, or a peer instance is observed on the
+// next request instead of being accepted for up to the TTL.
+const revocationCacheTTL = 30 * time.Second
+
+// maxRevocationCacheEntries bounds the number of cached revocations so the
+// cache cannot grow without limit.
+const maxRevocationCacheEntries = 10000
+
+type revocationCacheEntry struct {
+	revoked   bool
+	expiresAt time.Time
+}
+
+type revocationCacheItem struct {
+	key   string
+	entry revocationCacheEntry
+}
+
+var (
+	revocationCacheMu sync.Mutex
+	revocationCache   = make(map[string]*list.Element)
+	revocationLRU     = list.New()
+	// revocationFlight deduplicates concurrent revocation DB lookups for the
+	// same token so a burst of cache misses does not thundering-herd the DB.
+	revocationFlight singleflight.Group
+)
+
+func revocationCacheGet(key string) (revocationCacheEntry, bool) {
+	revocationCacheMu.Lock()
+	defer revocationCacheMu.Unlock()
+	elem, ok := revocationCache[key]
+	if !ok {
+		return revocationCacheEntry{}, false
+	}
+	item, ok := elem.Value.(revocationCacheItem)
+	if !ok {
+		revocationLRU.Remove(elem)
+		delete(revocationCache, key)
+		return revocationCacheEntry{}, false
+	}
+	if time.Now().After(item.entry.expiresAt) {
+		revocationLRU.Remove(elem)
+		delete(revocationCache, key)
+		return revocationCacheEntry{}, false
+	}
+	revocationLRU.MoveToFront(elem)
+	return item.entry, true
+}
+
+func revocationCacheAdd(key string, entry revocationCacheEntry) {
+	revocationCacheMu.Lock()
+	defer revocationCacheMu.Unlock()
+	if elem, ok := revocationCache[key]; ok {
+		elem.Value = revocationCacheItem{key: key, entry: entry}
+		revocationLRU.MoveToFront(elem)
+		return
+	}
+	if revocationLRU.Len() >= maxRevocationCacheEntries {
+		if back := revocationLRU.Back(); back != nil {
+			if item, ok := back.Value.(revocationCacheItem); ok {
+				delete(revocationCache, item.key)
+			}
+			revocationLRU.Remove(back)
+		}
+	}
+	elem := revocationLRU.PushFront(revocationCacheItem{key: key, entry: entry})
+	revocationCache[key] = elem
+}
+
+func clearRevocationCache() {
+	revocationCacheMu.Lock()
+	defer revocationCacheMu.Unlock()
+	revocationCache = make(map[string]*list.Element)
+	revocationLRU.Init()
+}
+
 // SetTokenStore sets the TokenStore used for token revocation operations.
 func SetTokenStore(ts *store.TokenStore) {
 	tokenStore = ts
+	clearRevocationCache()
 }
 
 // SetSettingsStore sets the SettingsStore used for persisting JWT key rotation.
@@ -200,18 +281,10 @@ func ValidateToken(tokenString string) (*Claims, error) {
 	}
 
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("validate token: %w", err)
 	}
 
 	if !token.Valid {
-		// The token parsed without an error but the parser reports it as
-		// invalid (e.g. expired or not-yet-valid). Return a wrapped error
-		// carrying the parser's reason so callers can inspect it; do NOT
-		// synthesize jwt.ErrSignatureInvalid, which would be misleading for
-		// non-signature failures like expiry.
-		if err != nil {
-			return nil, fmt.Errorf("token not valid: %w", err)
-		}
 		return nil, errors.New("token reported as invalid by parser")
 	}
 
@@ -224,7 +297,11 @@ func RevokeToken(ctx context.Context, uniqueID string, expiresAt time.Time, toke
 	if tokenStore == nil {
 		return fmt.Errorf("auth token store not initialized")
 	}
-	return tokenStore.RevokeToken(ctx, uniqueID, expiresAt, tokenType)
+	if err := tokenStore.RevokeToken(ctx, uniqueID, expiresAt, tokenType); err != nil {
+		return fmt.Errorf("revoke token: %w", err)
+	}
+	revocationCacheAdd(uniqueID, revocationCacheEntry{revoked: true, expiresAt: time.Now().Add(revocationCacheTTL)})
+	return nil
 }
 
 func IsRevoked(ctx context.Context, uniqueID string) bool {
@@ -233,10 +310,25 @@ func IsRevoked(ctx context.Context, uniqueID string) bool {
 		// Assume revoked to be safe rather than silently allowing potentially revoked tokens.
 		return true
 	}
-	revoked, err := tokenStore.IsTokenRevoked(ctx, uniqueID)
+	if entry, ok := revocationCacheGet(uniqueID); ok {
+		return entry.revoked
+	}
+	v, err, _ := revocationFlight.Do(uniqueID, func() (interface{}, error) {
+		lookupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), constants.RevocationCheckTimeout)
+		defer cancel()
+		return tokenStore.IsTokenRevoked(lookupCtx, uniqueID)
+	})
 	if err != nil {
 		log.WarnContext(ctx, "failed to check token revocation, assuming revoked", "error", err)
 		return true
+	}
+	revoked, ok := v.(bool)
+	if !ok {
+		log.WarnContext(ctx, "unexpected revocation lookup result, assuming revoked")
+		return true
+	}
+	if revoked {
+		revocationCacheAdd(uniqueID, revocationCacheEntry{revoked: true, expiresAt: time.Now().Add(revocationCacheTTL)})
 	}
 	return revoked
 }
@@ -246,7 +338,11 @@ func CleanupExpiredTokens(ctx context.Context) error {
 	if tokenStore == nil {
 		return nil
 	}
-	return tokenStore.CleanupExpiredTokens(ctx)
+	if err := tokenStore.CleanupExpiredTokens(ctx); err != nil {
+		return fmt.Errorf("cleanup expired tokens: %w", err)
+	}
+	clearRevocationCache()
+	return nil
 }
 
 // --- Middleware ---

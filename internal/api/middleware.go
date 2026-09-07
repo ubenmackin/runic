@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"regexp"
 	"runtime/debug"
 	"strings"
 	"time"
@@ -40,10 +41,23 @@ import (
 
 const RequestIDHeader = "X-Request-ID"
 
+// requestIDPattern constrains client-supplied request IDs to safe characters
+// so header injection and log forgery via crafted IDs is not possible.
+var requestIDPattern = regexp.MustCompile(`^[A-Za-z0-9\-_]{1,64}$`)
+
+func isValidRequestID(s string) bool {
+	return requestIDPattern.MatchString(s)
+}
+
 const CSPHeader = "Content-Security-Policy"
 
 // CSPNonceHeader is the HTTP header name for the CSP nonce. This can be used by frontend code to access the nonce if needed.
 const CSPNonceHeader = "X-CSP-Nonce"
+
+// contextKey is the private key type for API-level context values.
+// It is intentionally distinct from agents.contextKey so hub keys and
+// CSP nonce keys cannot collide across packages.
+type contextKey string
 
 const CSPNonceKey contextKey = "csp-nonce"
 
@@ -107,7 +121,7 @@ func RequestID() mux.MiddlewareFunc {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			requestID := r.Header.Get(RequestIDHeader)
 
-			if requestID == "" {
+			if requestID == "" || !isValidRequestID(requestID) {
 				requestID = generateRequestID()
 			}
 
@@ -279,8 +293,8 @@ func CORS() mux.MiddlewareFunc {
 		}
 	}
 
-	allowedMethods := "GET, POST, PUT, DELETE, OPTIONS"
-	allowedHeaders := "Content-Type, Authorization, X-Request-ID"
+	allowedMethods := "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+	allowedHeaders := "Content-Type, Authorization, X-Request-ID, X-CSRF-Token"
 	maxAge := "86400" // 24 hours - cache preflight response
 
 	return func(next http.Handler) http.Handler {

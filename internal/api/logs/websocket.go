@@ -3,11 +3,11 @@ package logs
 import (
 	"context"
 	"encoding/json"
-	"math/rand"
 	"net"
 	"net/http"
 	"net/url"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"runic/internal/common/constants"
@@ -37,12 +37,25 @@ var upgrader = websocket.Upgrader{
 	},
 }
 
+// Hub streams log events to WebSocket clients with a slow-consumer policy:
+// messages for slow consumers are dropped without evicting them and counted
+// in DroppedCount. Both the Run broadcast-channel path and the direct
+// Broadcast method drop (never evict), matching the SSEHub trySend behavior.
+// Drops are sampled to the log (1% of drops) via a counter to avoid log
+// storms without requiring a seeded RNG.
 type Hub struct {
 	clients    map[*Client]bool
 	broadcast  chan []byte
 	register   chan *Client
 	unregister chan *Client
 	mu         sync.RWMutex
+	// sendMu serializes channel sends against closes so a sender holding
+	// a copied client reference never races with a concurrent close.
+	// The client map is copied under mu, then the send or close proceeds
+	// under sendMu. Sends hold RLock (allowing concurrent sends) while
+	// closes hold Lock.
+	sendMu  sync.RWMutex
+	dropped atomic.Uint64
 }
 
 type Client struct {
@@ -66,9 +79,14 @@ func NewHub() *Hub {
 	return &Hub{
 		clients:    make(map[*Client]bool),
 		broadcast:  make(chan []byte, 256),
-		register:   make(chan *Client),
-		unregister: make(chan *Client),
+		register:   make(chan *Client, 64),
+		unregister: make(chan *Client, 64),
 	}
+}
+
+// DroppedCount reports the number of log events dropped for slow consumers.
+func (h *Hub) DroppedCount() uint64 {
+	return h.dropped.Load()
 }
 
 func (h *Hub) Run(ctx context.Context) {
@@ -81,23 +99,32 @@ func (h *Hub) Run(ctx context.Context) {
 
 		case client := <-h.unregister:
 			h.mu.Lock()
-			if _, ok := h.clients[client]; ok {
+			_, ok := h.clients[client]
+			if ok {
 				delete(h.clients, client)
-				client.closeSendOnce.Do(func() { close(client.send) })
 			}
 			h.mu.Unlock()
+			if ok {
+				h.sendMu.Lock()
+				client.closeSendOnce.Do(func() { close(client.send) })
+				h.sendMu.Unlock()
+			}
 
 		case message := <-h.broadcast:
-			h.mu.Lock()
+			h.mu.RLock()
+			clients := make([]*Client, 0, len(h.clients))
 			for client := range h.clients {
-				select {
-				case client.send <- message:
-				default:
-					client.closeSendOnce.Do(func() { close(client.send) })
-					delete(h.clients, client)
+				clients = append(clients, client)
+			}
+			h.mu.RUnlock()
+			for _, client := range clients {
+				if !h.sendToClient(client, message) {
+					if h.dropped.Add(1)%100 == 1 {
+						runiclog.Warn("dropping log event for slow client",
+							"peer_id_filter", client.filter.PeerID)
+					}
 				}
 			}
-			h.mu.Unlock()
 
 		case <-ctx.Done():
 			return
@@ -106,32 +133,74 @@ func (h *Hub) Run(ctx context.Context) {
 }
 
 // Broadcast sends a log event to all connected clients that match the event's filter.
-// NOTE: Unlike Hub.Run's broadcast channel case (which evicts slow consumers),
-// this method silently drops messages for slow consumers without evicting them.
+// The client set is copied under RLock so slow consumers never block
+// registration, unregistration, or other broadcasters. Messages for slow
+// consumers are dropped without evicting them and counted in DroppedCount.
 // This matches the SSEHub behavior in events/hub.go (NotifyPushJobProgress etc.)
-// which also drops messages silently. Both approaches are intentional — the direct
-// Broadcast method is called from a hot path (firewall log ingestion) where eviction
-// would add latency, while Run's broadcast channel is used for internal hub messaging.
+// which also drops messages silently, and matches the Run broadcast channel
+// path which likewise drops without evicting.
 func (h *Hub) Broadcast(event *models.LogEvent) {
 	data, err := json.Marshal(event)
 	if err != nil {
 		runiclog.Error("Failed to marshal log event", "error", err)
 		return
 	}
-	h.mu.Lock()
-	defer h.mu.Unlock()
+	h.mu.RLock()
+	clients := make([]*Client, 0, len(h.clients))
 	for client := range h.clients {
-		if client.matchesFilter(event) {
-			select {
-			case client.send <- data:
-			default:
-				if rand.Float64() < 0.01 { // 1% sample to avoid log storms
-					runiclog.Warn("dropping log event for slow client",
-						"peer_id_filter", client.filter.PeerID)
-				}
+		clients = append(clients, client)
+	}
+	h.mu.RUnlock()
+	for _, client := range clients {
+		if !client.matchesFilter(event) {
+			continue
+		}
+		if !h.sendToClient(client, data) {
+			if h.dropped.Add(1)%100 == 1 { // 1% sample to avoid log storms
+				runiclog.Warn("dropping log event for slow client",
+					"peer_id_filter", client.filter.PeerID)
 			}
 		}
 	}
+}
+
+// sendToClient performs a non-blocking send to a single client, serialized
+// against concurrent closes via sendMu. It reports whether the message was
+// delivered. A send on a concurrently closed channel panics; the panic is
+// recovered and reported as undelivered.
+func (h *Hub) sendToClient(client *Client, message []byte) (sent bool) {
+	h.sendMu.RLock()
+	defer h.sendMu.RUnlock()
+	defer func() {
+		if recover() != nil {
+			sent = false
+		}
+	}()
+	select {
+	case client.send <- message:
+		return true
+	default:
+		return false
+	}
+}
+
+// evict removes a client from the hub and closes its send channel.
+// The map mutation happens under mu; the close happens under sendMu.Lock
+// so it is serialized against concurrent sends. It is used for explicit
+// disconnects and as a non-blocking fallback when the unregister channel
+// cannot be used (for example, when Run has already exited). Slow consumers
+// are never evicted; their messages are dropped instead (see Hub policy).
+func (h *Hub) evict(client *Client) {
+	h.mu.Lock()
+	if _, ok := h.clients[client]; !ok {
+		h.mu.Unlock()
+		return
+	}
+	delete(h.clients, client)
+	h.mu.Unlock()
+	h.sendMu.Lock()
+	client.closeSendOnce.Do(func() { close(client.send) })
+	h.sendMu.Unlock()
 }
 
 func (c *Client) matchesFilter(ev *models.LogEvent) bool {
@@ -153,7 +222,11 @@ func (c *Client) matchesFilter(ev *models.LogEvent) bool {
 
 func (c *Client) readPump() {
 	defer func() {
-		c.hub.unregister <- c
+		select {
+		case c.hub.unregister <- c:
+		default:
+			c.hub.evict(c)
+		}
 		if err := c.conn.Close(); err != nil {
 			runiclog.Warn("close err", "err", err)
 		}

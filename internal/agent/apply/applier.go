@@ -4,6 +4,7 @@ package apply
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -161,7 +162,7 @@ func smokeTest(ctx context.Context, controlPlaneURL, token, version string) erro
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
-		return err
+		return fmt.Errorf("create smoke test request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("User-Agent", "runic-agent/"+version)
@@ -171,8 +172,9 @@ func smokeTest(ctx context.Context, controlPlaneURL, token, version string) erro
 		return fmt.Errorf("smoke test request failed: %w", err)
 	}
 	defer func() {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 		if err := resp.Body.Close(); err != nil {
-			log.Warn("close err", "err", err)
+			log.Warn("Failed to close response body", "error", err)
 		}
 	}()
 

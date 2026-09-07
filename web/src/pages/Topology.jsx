@@ -54,7 +54,11 @@ function useGroupMembers(groupIds) {
           try {
             const members = await api.get(`/groups/${gid}/members`, signal)
             results[gid] = members || []
-          } catch {
+          } catch (err) {
+            if (err?.name === 'AbortError' || signal?.aborted) {
+              results[gid] = []
+              return
+            }
             results[gid] = []
           }
         })

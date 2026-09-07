@@ -3,6 +3,7 @@ package transport
 import (
 	"context"
 	"fmt"
+	"io"
 
 	"runic/internal/common"
 	"runic/internal/common/log"
@@ -25,6 +26,7 @@ func PostBackup(ctx context.Context, client common.HTTPClient, controlPlaneURL, 
 	if err != nil {
 		return fmt.Errorf("post backup: %w", err)
 	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 	_ = resp.Body.Close()
 
 	log.Info("Backup posted to control plane", "host_id", hostID)

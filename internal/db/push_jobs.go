@@ -41,7 +41,7 @@ func CreatePushJobPeersT(ctx context.Context, database DB, jobID string, peers [
 	ID       int
 	Hostname string
 }) error {
-	return withTx(ctx, database, func(ctx context.Context, tx *sql.Tx) error {
+	return RunInTx(ctx, database, func(ctx context.Context, tx *sql.Tx) error {
 		stmt, err := tx.PrepareContext(ctx, `
 			INSERT INTO push_job_peers (job_id, peer_id, peer_hostname, status)
 			VALUES (?, ?, ?, 'pending')

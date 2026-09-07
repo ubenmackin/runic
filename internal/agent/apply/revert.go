@@ -101,10 +101,12 @@ func scheduleRevert(backup string, delay time.Duration, controlPlaneURL, token, 
 	revertCtx, cancel := context.WithCancel(context.Background())
 
 	go func() {
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
 		select {
 		case <-revertCtx.Done():
 			return
-		case <-time.After(delay):
+		case <-timer.C:
 			log.Warn("Auto-revert triggered, restoring previous rules", "delay", delay)
 			if err := revertRules(backup); err != nil {
 				log.Error("Auto-revert failed", "error", err)

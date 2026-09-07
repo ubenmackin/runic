@@ -105,12 +105,15 @@ func (m *PeerMonitor) run() {
 		if i < maxRetries-1 {
 			backoff := time.Duration(1<<i) * time.Second
 			m.logger.Info("retrying peer state load", "backoff", backoff)
+			timer := time.NewTimer(backoff)
 			select {
-			case <-time.After(backoff):
+			case <-timer.C:
 				continue
 			case <-m.ctx.Done():
+				timer.Stop()
 				return
 			case <-m.stopCh:
+				timer.Stop()
 				return
 			}
 		}

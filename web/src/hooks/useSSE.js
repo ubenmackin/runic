@@ -60,6 +60,9 @@ export function useSSE({ enabled = true, onPendingChangeAdded } = {}) {
 
     logger.log(`SSE reconnecting in ${delay}ms (attempt ${reconnectAttemptsRef.current})`)
 
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current)
+    }
     reconnectTimeoutRef.current = setTimeout(() => {
       if (mountedRef.current && enabled && connectRef.current) {
         connectRef.current()
@@ -117,18 +120,16 @@ export function useSSE({ enabled = true, onPendingChangeAdded } = {}) {
     })
 
     es.onerror = () => {
-      if (es.readyState === EventSource.CLOSED) {
-        setConnected(false)
-        logger.log('SSE connection closed')
-
-        if (mountedRef.current && enabled) {
-          scheduleReconnect()
-        }
-      }
+      es.close()
+      setConnected(false)
+      logger.log('SSE connection closed')
+      scheduleReconnect()
     }
   }, [enabled, queryClient, scheduleReconnect])
 
-  connectRef.current = connect
+  useEffect(() => {
+    connectRef.current = connect
+  }, [connect])
 
   useEffect(() => {
     mountedRef.current = true

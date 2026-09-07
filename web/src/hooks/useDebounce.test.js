@@ -51,7 +51,7 @@ describe('useDebounce', () => {
     expect(result.current).toBe('fourth')
   })
 
-  test('uses default delay of 400ms', () => {
+  test('uses default delay of 300ms', () => {
     const { result, rerender } = renderHook(
       ({ value }) => useDebounce(value),
       { initialProps: { value: 'initial' } }
@@ -63,7 +63,7 @@ describe('useDebounce', () => {
 
     // Before default delay
     act(() => {
-      vi.advanceTimersByTime(399)
+      vi.advanceTimersByTime(299)
     })
     expect(result.current).toBe('initial')
 

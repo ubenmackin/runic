@@ -371,15 +371,6 @@ func (h *Handler) ApplyPeerPendingBundle(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Begin transaction for atomic operations
-	tx, err := h.beginner.BeginTx(ctx, nil)
-	if err != nil {
-		log.ErrorContext(ctx, "failed to begin transaction", "error", err)
-		common.InternalError(w)
-		return
-	}
-	defer func() { _ = tx.Rollback() }()
-
 	bundle, err := h.Compiler.CompileAndStore(ctx, peerID)
 	if err != nil {
 		log.ErrorContext(ctx, "failed to compile and store bundle for peer", "peer_id", peerID, "error", err)
@@ -387,21 +378,19 @@ func (h *Handler) ApplyPeerPendingBundle(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Clear pending changes for this peer (MUST succeed)
-	if err := h.PendingStore.ClearPendingChangesForPeerTx(ctx, tx, peerID); err != nil {
-		log.ErrorContext(ctx, "failed to clear pending changes for peer", "peer_id", peerID, "error", err)
-		common.InternalError(w)
-		return
-	}
-
-	if err := h.PendingStore.DeletePendingBundlePreviewTx(ctx, tx, peerID); err != nil {
-		log.ErrorContext(ctx, "failed to delete pending bundle preview", "error", err)
-		common.InternalError(w)
-		return
-	}
-
-	if err := tx.Commit(); err != nil {
-		log.ErrorContext(ctx, "failed to commit transaction", "error", err)
+	// Clear pending state in a short transaction. CompileAndStore performs
+	// independent DB work in its own transaction, so it must not run while
+	// this transaction is held open.
+	if err := store.RunInTx(ctx, h.beginner, func(tx *sql.Tx) error {
+		if err := h.PendingStore.ClearPendingChangesForPeerTx(ctx, tx, peerID); err != nil {
+			return fmt.Errorf("failed to clear pending changes: %w", err)
+		}
+		if err := h.PendingStore.DeletePendingBundlePreviewTx(ctx, tx, peerID); err != nil {
+			return fmt.Errorf("failed to delete pending bundle preview: %w", err)
+		}
+		return nil
+	}); err != nil {
+		log.ErrorContext(ctx, "failed to clear pending state for peer", "peer_id", peerID, "error", err)
 		common.InternalError(w)
 		return
 	}
@@ -640,7 +629,11 @@ func (h *Handler) PushAllRules(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.PushWorker.Enqueue(jobID)
+	if err := h.PushWorker.Enqueue(jobID); err != nil {
+		log.ErrorContext(ctx, "push worker queue full", "error", err, "job_id", jobID)
+		common.RespondError(w, http.StatusServiceUnavailable, "push worker queue full, retry later")
+		return
+	}
 
 	log.InfoContext(ctx, "push job created", "job_id", jobID, "total_peers", len(allPeers))
 
@@ -698,7 +691,11 @@ func (h *Handler) PushCurrentRules(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.PushWorker.Enqueue(jobID)
+	if err := h.PushWorker.Enqueue(jobID); err != nil {
+		log.ErrorContext(ctx, "push worker queue full", "error", err, "job_id", jobID)
+		common.RespondError(w, http.StatusServiceUnavailable, "push worker queue full, retry later")
+		return
+	}
 
 	log.InfoContext(ctx, "push current rules job created", "job_id", jobID, "peer_id", peerID, "hostname", hostname)
 
@@ -781,9 +778,7 @@ func streamSSEEvents(ctx context.Context, w http.ResponseWriter, flusher http.Fl
 			}
 			if _, err := fmt.Fprint(w, event); err != nil {
 				log.WarnContext(ctx, "Failed to write SSE event", "error", err)
-				if stopOnComplete {
-					return
-				}
+				return
 			}
 			flusher.Flush()
 			if stopOnComplete {
@@ -817,16 +812,15 @@ func (h *Handler) applyBundleForPeer(ctx context.Context, peerID int) error {
 		return fmt.Errorf("compiler not available")
 	}
 
-	var bundle models.RuleBundleRow
-	err = store.RunInTx(ctx, h.beginner, func(tx *sql.Tx) error {
-		// Compile and store
-		b, compileErr := h.Compiler.CompileAndStore(ctx, peerID)
-		if compileErr != nil {
-			return fmt.Errorf("compile failed: %w", compileErr)
-		}
-		bundle = b
+	bundle, err := h.Compiler.CompileAndStore(ctx, peerID)
+	if err != nil {
+		return fmt.Errorf("compile failed: %w", err)
+	}
 
-		// Clear pending changes (MUST succeed)
+	// Clear pending state in a short transaction. CompileAndStore performs
+	// independent DB work in its own transaction, so it must not run while
+	// this transaction is held open.
+	err = store.RunInTx(ctx, h.beginner, func(tx *sql.Tx) error {
 		if err := h.PendingStore.ClearPendingChangesForPeerTx(ctx, tx, peerID); err != nil {
 			return fmt.Errorf("failed to clear pending changes: %w", err)
 		}

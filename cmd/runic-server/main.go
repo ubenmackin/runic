@@ -116,7 +116,7 @@ func main() {
 
 	port := os.Getenv("RUNIC_PORT")
 	if port == "" {
-		port = "60443"
+		port = constants.DefaultControlPlanePort
 	}
 	portNum := 0
 	if _, err := fmt.Sscanf(port, "%d", &portNum); err != nil || portNum < 1 || portNum > 65535 {

@@ -14,7 +14,7 @@ import (
 var ErrConstraintViolation = errors.New("rollback blocked by constraint violation")
 
 func RollbackSnapshots(ctx context.Context, database DB) error {
-	return withTx(ctx, database, func(ctx context.Context, tx *sql.Tx) error {
+	return RunInTx(ctx, database, func(ctx context.Context, tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, "SELECT id, entity_type, entity_id, action, snapshot_data FROM change_snapshots ORDER BY id DESC")
 		if err != nil {
 			return fmt.Errorf("query snapshots: %w", err)
@@ -83,7 +83,7 @@ func RollbackSnapshots(ctx context.Context, database DB) error {
 
 // RollbackEntitySnapshot restores an entity from its snapshot. Returns ErrConstraintViolation if the rollback would violate referential integrity.
 func RollbackEntitySnapshot(ctx context.Context, database DB, entityType string, entityID int) error {
-	return withTx(ctx, database, func(ctx context.Context, tx *sql.Tx) error {
+	return RunInTx(ctx, database, func(ctx context.Context, tx *sql.Tx) error {
 		var snapshotID int
 		var action string
 		var snapshotData sql.NullString
@@ -244,7 +244,7 @@ func rollbackUpdateDeleteEntity(ctx context.Context, tx Querier, entityType stri
 }
 
 func CleanupAfterApplyAll(ctx context.Context, database DB) error {
-	return withTx(ctx, database, func(ctx context.Context, tx *sql.Tx) error {
+	return RunInTx(ctx, database, func(ctx context.Context, tx *sql.Tx) error {
 		// Hard delete soft deleted entities
 		_, err := tx.ExecContext(ctx, "DELETE FROM group_members WHERE group_id IN (SELECT id FROM groups WHERE is_pending_delete = 1)")
 		if err != nil {

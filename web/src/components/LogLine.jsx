@@ -1,7 +1,9 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, memo } from 'react'
 import { ChevronDown, ChevronRight, Wand2 } from 'lucide-react'
 
-export default function LogLine({ log, expanded, onToggle, onCraftPolicy, canEdit }) {
+// Memoized so high-frequency live streams only re-render rows whose log
+// object actually changed instead of the whole list on every message.
+function LogLine({ log, expanded, onToggle, onCraftPolicy, canEdit }) {
   const isControlled = expanded !== undefined
   const [isExpanded, setIsExpanded] = useState(false)
   const showExpanded = isControlled ? expanded : isExpanded
@@ -110,3 +112,5 @@ export default function LogLine({ log, expanded, onToggle, onCraftPolicy, canEdi
   </div>
   )
 }
+
+export default memo(LogLine)

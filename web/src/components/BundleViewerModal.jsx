@@ -24,21 +24,31 @@ export default function BundleViewerModal({
   // Fetch bundle data when modal opens
   useEffect(() => {
     if (!isOpen || !peerId) return
+    const controller = new AbortController();
     setBundleLoading(true)
     setBundleContent('')
     setBundleData(null)
     setShowDiffView(true)
     const endpoint = viewingPendingRules ? `/peers/${peerId}/bundle?include_pending=true` : `/peers/${peerId}/bundle`
-    api.get(endpoint)
+    api.get(endpoint, controller.signal)
       .then(data => {
+        if (controller.signal.aborted) return
         setBundleContent(data.rules)
         setBundleData(data)
       })
       .catch(err => {
+        if (controller.signal.aborted || err?.name === 'AbortError') return
         setBundleContent(`# Error: ${err.message}`)
         setBundleData(null)
       })
-      .finally(() => setBundleLoading(false))
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setBundleLoading(false)
+        }
+      })
+    return () => {
+      controller.abort()
+    }
   }, [isOpen, peerId, viewingPendingRules])
 
   const handleCopy = async () => {

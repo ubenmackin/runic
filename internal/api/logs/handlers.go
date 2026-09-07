@@ -99,7 +99,12 @@ func MakeLogsStreamHandler(hub *Hub, tokenStore TokenRevoker) http.HandlerFunc {
 			}
 		}
 
-		client.hub.register <- client
+		select {
+		case client.hub.register <- client:
+		case <-r.Context().Done():
+			_ = conn.Close()
+			return
+		}
 
 		go client.writePump()
 		go client.readPump()

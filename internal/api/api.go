@@ -132,17 +132,10 @@ func NewAPI(db *sql.DB, compiler *engine.Compiler, logsDB *sql.DB, logsDBPath st
 	}
 }
 
-type contextKey string
-
-const apiContextKey contextKey = "api"
-
 func apiMiddleware(a *API) mux.MiddlewareFunc {
-	// TODO: Narrow the context value to only expose specific dependencies
-	// instead of the entire *API struct. See TASK-004 finding M-2 for details.
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ctx := context.WithValue(r.Context(), apiContextKey, a)
-			ctx = agents.WithHubs(ctx, a.SSEHub, a.LogHub)
+			ctx := agents.WithHubs(r.Context(), a.SSEHub, a.LogHub)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}

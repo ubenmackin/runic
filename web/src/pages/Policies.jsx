@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
+import { useState, useCallback, useRef, useEffect, useMemo, memo } from 'react'
 import { useLocation } from 'react-router-dom'
 import { useFilterPersistence } from '../hooks/useFilterPersistence'
 import { useTableSort } from '../hooks/useTableSort'
@@ -19,19 +19,7 @@ import PageHeader from '../components/PageHeader'
 import PolicyTable from '../components/PolicyTable'
 import PolicyFormModal from '../components/PolicyFormModal'
 import { parseCompositePeerValue } from '../utils/peerUtils'
-
-// Special targets - predefined network addresses for broadcast/multicast
-const SPECIAL_TARGETS = {
-  SUBNET_BROADCAST: { id: 1, name: '__subnet_broadcast__', label: 'Subnet Broadcast' },
-  LIMITED_BROADCAST: { id: 2, name: '__limited_broadcast__', label: 'Limited Broadcast' },
-  ALL_HOSTS: { id: 3, name: '__all_hosts__', label: 'All Hosts (IGMP)' },
-  MDNS: { id: 4, name: '__mdns__', label: 'mDNS' },
-  LOOPBACK: { id: 5, name: '__loopback__', label: 'Loopback' },
-  ANY_IP: { id: 6, name: '__any_ip__', label: 'Any IP (0.0.0.0/0)' },
-  ALL_PEERS: { id: 7, name: '__all_peers__', label: 'All Peers' },
-  IGMPV3: { id: 8, name: '__igmpv3__', label: 'IGMPv3' },
-  INTERNET: { id: 9, name: '__internet__', label: 'Internet (all non-private)' },
-}
+import { toListArray, mapWrappedList } from '../utils/listUtils'
 
 const SYSTEM_RULES = [
   { type: 'accept', title: 'Loopback', description: 'Local loopback interface (lo) traffic is always accepted (both INPUT and OUTPUT).' },
@@ -41,92 +29,44 @@ const SYSTEM_RULES = [
   { type: 'deny', title: 'Default Deny + Logging', description: 'All unmatched INPUT traffic is logged with prefix "[RUNIC-DROP-I]" and OUTPUT traffic with "[RUNIC-DROP-O]", then dropped.' },
 ]
 
-export default function Policies() {
-  const qc = useQueryClient()
-  const { showToast } = useToastContext()
-  const { canEdit } = useAuth()
-  const location = useLocation()
-  const { modalOpen, setModalOpen, editItem: editPolicy, setEditItem: setEditPolicy, form: formData, setForm: setFormData, setFormForEdit, handleOpenAdd, handleCancel } = useCrudModal({
-    name: '',
-    description: '',
-    source_id: '',
-    source_type: 'group',
-    source_ip: '',
-    service_id: '',
-    target_id: '',
-    target_type: 'peer',
-    target_ip: '',
-    action: 'ACCEPT',
-    priority: 100,
-    enabled: true,
-    target_scope: 'both',
-    direction: 'both'
-  })
-  const [deleteTarget, setDeleteTarget] = useState(null)
-  const { value: showDisabled, setValue: setShowDisabled } = useFilterPersistence('policies', 'showDisabled', false)
-  const [preview, setPreview] = useState(null)
-  const [previewStale, setPreviewStale] = useState(false)
-  const [previewLoading, setPreviewLoading] = useState(false)
-  const [formErrors, setFormErrors] = useState({})
-  const [activeTab, setActiveTab] = useState('setup')
-  const [showSystemRules, setShowSystemRules] = useState(false)
-  const [showDescription, setShowDescription] = useState(false)
+const POLICY_DEFAULT_FORM = {
+  name: '',
+  description: '',
+  source_id: '',
+  source_type: 'group',
+  source_ip: '',
+  service_id: '',
+  target_id: '',
+  target_type: 'peer',
+  target_ip: '',
+  action: 'ACCEPT',
+  priority: 100,
+  enabled: true,
+  target_scope: 'both',
+  direction: 'both'
+}
 
-  const [showPendingDeletes, setShowPendingDeletes] = useState(false)
-
-  const { sortConfig, handleSort } = useTableSort('policies', { key: 'priority', direction: 'asc' })
-
-  const [isManualRefreshing, setIsManualRefreshing] = useState(false)
-
-  const openAdd = useCallback(() => {
-    setFormErrors({})
-    setPreview(null)
-    setPreviewStale(false)
-    setActiveTab('setup')
-    setShowDescription(false)
-    handleOpenAdd()
-  }, [handleOpenAdd])
-  const openEdit = (p) => {
-    setEditPolicy(p);
-    // Build composite source/target values for multi-IP peers.
-    // For multi-IP peers, use composite value like "peer:5:10.20.10.20"
-    // so the SearchableSelect can find the matching option in the dropdown.
-    // For single-IP peers, use plain numeric ID and keep source_ip/target_ip separate.
-    const sourcePeer = p.source_type === 'peer' ? peers?.find(pr => pr.id === p.source_id) : null
-    const targetPeer = p.target_type === 'peer' ? peers?.find(pr => pr.id === p.target_id) : null
-    const isSourceMultiIP = sourcePeer && sourcePeer.ips && sourcePeer.ips.length > 1
-    const isTargetMultiIP = targetPeer && targetPeer.ips && targetPeer.ips.length > 1
-    setFormForEdit({
-      ...p,
-      source_id: isSourceMultiIP && p.source_ip
-        ? `peer:${p.source_id}:${p.source_ip}`
-        : p.source_id,
-      target_id: isTargetMultiIP && p.target_ip
-        ? `peer:${p.target_id}:${p.target_ip}`
-        : p.target_id,
-    });
-    setFormErrors({});
-    setPreview(null);
-    setPreviewStale(false);
-    setActiveTab('setup');
-    setShowDescription(!!p.description);
-    setModalOpen(true)
+// Build a String(id) -> item map for O(1) lookups. Guards non-array shapes
+// so a paginated or wrapped payload cannot crash the page.
+function buildByIdMap(list) {
+  const map = new Map()
+  for (const item of toListArray(list)) {
+    if (item && item.id !== null && item.id !== undefined) {
+      map.set(String(item.id), item)
+    }
   }
-  const closeModal = () => {
-    handleCancel();
-    setPreview(null)
-  }
+  return map
+}
 
+// Memoized table so list filtering and form edits do not re-render rows
+// unless the visible page or its lookup callbacks actually change.
+const MemoizedPolicyTable = memo(PolicyTable)
+
+function usePoliciesData() {
   const { data: policies, isLoading, refetch } = useQuery({
     queryKey: QUERY_KEYS.policies(),
     queryFn: ({ signal }) => api.get('/policies', signal),
   })
-
-  const handleManualRefresh = useCallback(async () => {
-    setIsManualRefreshing(true)
-    await refetch()
-    setIsManualRefreshing(false)
-  }, [refetch])
 
   const { data: peers } = useQuery({
     queryKey: QUERY_KEYS.peers(),
@@ -148,13 +88,122 @@ export default function Policies() {
     queryFn: ({ signal }) => api.get('/policies/special-targets', signal),
   })
 
-  const isIGMPService = formData.service_id && services?.find(s => s.id === formData.service_id)?.name?.toUpperCase() === 'IGMP'
+  const [isManualRefreshing, setIsManualRefreshing] = useState(false)
 
-  const isVRRPService = formData.service_id && services?.find(s => s.id === formData.service_id)?.name?.toUpperCase() === 'VRRP'
+  const handleManualRefresh = useCallback(async () => {
+    setIsManualRefreshing(true)
+    try {
+      await refetch()
+    } finally {
+      setIsManualRefreshing(false)
+    }
+  }, [refetch])
 
+  const peerById = useMemo(() => buildByIdMap(peers), [peers])
+  const groupById = useMemo(() => buildByIdMap(groups), [groups])
+  const serviceById = useMemo(() => buildByIdMap(services), [services])
+  const specialTargetById = useMemo(() => buildByIdMap(specialTargets), [specialTargets])
+
+  const getEntityName = useCallback((type, id, ip) => {
+    if (id === null || id === undefined || id === '') return ''
+    if (typeof id === 'number' && Number.isNaN(id)) return ''
+    if (type === 'peer') {
+      const peer = peerById.get(String(id))
+      const hostname = peer?.hostname || String(id)
+      if (ip) return `${hostname} (${ip})`
+      return String(hostname)
+    }
+    if (type === 'group') return String(groupById.get(String(id))?.name ?? id)
+    if (type === 'special') return String(specialTargetById.get(String(id))?.display_name ?? id)
+    return String(id)
+  }, [peerById, groupById, specialTargetById])
+
+  const getServiceName = useCallback((id) => {
+    if (id === null || id === undefined || id === '') return ''
+    if (typeof id === 'number' && Number.isNaN(id)) return ''
+    return String(serviceById.get(String(id))?.name ?? id)
+  }, [serviceById])
+
+  return {
+    policies,
+    peers,
+    groups,
+    services,
+    specialTargets,
+    isLoading,
+    isManualRefreshing,
+    handleManualRefresh,
+    peerById,
+    groupById,
+    serviceById,
+    specialTargetById,
+    getEntityName,
+    getServiceName,
+  }
+}
+
+function usePolicyForm({ peerById, serviceById, specialTargets, showToast }) {
+  const { modalOpen, setModalOpen, editItem: editPolicy, setEditItem: setEditPolicy, form: formData, setForm: setFormData, setFormForEdit, handleOpenAdd, handleCancel } = useCrudModal(POLICY_DEFAULT_FORM)
+  const [deleteTarget, setDeleteTarget] = useState(null)
+  const [preview, setPreview] = useState(null)
+  const [previewStale, setPreviewStale] = useState(false)
+  const [previewLoading, setPreviewLoading] = useState(false)
+  // Tracks the in-flight preview request so a newer preview can cancel it.
+  // Without this, a slow earlier response can overwrite a newer one.
+  const previewControllerRef = useRef(null)
+  const [formErrors, setFormErrors] = useState({})
+  const [activeTab, setActiveTab] = useState('setup')
+  const [showDescription, setShowDescription] = useState(false)
+
+  const serviceName = formData.service_id !== '' && formData.service_id !== null && formData.service_id !== undefined
+    ? serviceById.get(String(formData.service_id))?.name
+    : undefined
+  const upperServiceName = typeof serviceName === 'string' ? serviceName.toUpperCase() : ''
+  const isIGMPService = upperServiceName === 'IGMP'
+  const isVRRPService = upperServiceName === 'VRRP'
   const isSpecialService = isIGMPService || isVRRPService
 
+  const openAdd = useCallback(() => {
+    setFormErrors({})
+    setPreview(null)
+    setPreviewStale(false)
+    setActiveTab('setup')
+    setShowDescription(false)
+    handleOpenAdd()
+  }, [handleOpenAdd])
 
+  const openEdit = useCallback((p) => {
+    setEditPolicy(p)
+    // Build composite source/target values for multi-IP peers.
+    // For multi-IP peers, use composite value like "peer:5:10.20.10.20"
+    // so the SearchableSelect can find the matching option in the dropdown.
+    // For single-IP peers, use plain numeric ID and keep source_ip/target_ip separate.
+    const sourcePeer = p.source_type === 'peer' ? peerById.get(String(p.source_id)) : null
+    const targetPeer = p.target_type === 'peer' ? peerById.get(String(p.target_id)) : null
+    const isSourceMultiIP = sourcePeer && sourcePeer.ips && sourcePeer.ips.length > 1
+    const isTargetMultiIP = targetPeer && targetPeer.ips && targetPeer.ips.length > 1
+    setFormForEdit({
+      ...p,
+      source_id: isSourceMultiIP && p.source_ip
+        ? `peer:${p.source_id}:${p.source_ip}`
+        : p.source_id,
+      target_id: isTargetMultiIP && p.target_ip
+        ? `peer:${p.target_id}:${p.target_ip}`
+        : p.target_id,
+    })
+    setFormErrors({})
+    setPreview(null)
+    setPreviewStale(false)
+    setActiveTab('setup')
+    setShowDescription(!!p.description)
+    setModalOpen(true)
+  }, [peerById, setEditPolicy, setFormForEdit, setModalOpen])
+
+  const closeModal = useCallback(() => {
+    handleCancel()
+    previewControllerRef.current?.abort()
+    setPreview(null)
+  }, [handleCancel])
 
   const { createMutation, updateMutation, deleteMutation } = useCrudMutations({
     apiPath: '/policies',
@@ -167,25 +216,10 @@ export default function Policies() {
     showToast,
   })
 
-  const toggleMutation = useMutation({
-    mutationFn: ({ id, enabled }) => api.patch(`/policies/${id}`, { enabled }),
-    onMutate: async ({ id, enabled }) => {
-      await qc.cancelQueries({ queryKey: QUERY_KEYS.policies() })
-      const prev = qc.getQueryData(QUERY_KEYS.policies())
-      qc.setQueryData(QUERY_KEYS.policies(), old => old?.map(p => p.id === id ? { ...p, enabled } : p))
-      return { prev }
-    },
-    onError: (err, vars, ctx) => qc.setQueryData(QUERY_KEYS.policies(), ctx.prev),
-    onSettled: () => {
-      qc.invalidateQueries({ queryKey: QUERY_KEYS.policies() })
-      qc.invalidateQueries({ queryKey: ['pending-changes'] })
-    },
-  })
-
-  const handleSubmit = (e) => {
+  const handleSubmit = useCallback((e) => {
     e.preventDefault()
     // Parse composite peer values to extract plain IDs and IP addresses
-    let submitData = { ...formData }
+    const submitData = { ...formData }
     // Handle source_id - check for composite value first
     const sourceParsed = parseCompositePeerValue(formData.source_id)
     if (sourceParsed) {
@@ -204,9 +238,12 @@ export default function Policies() {
       // Plain numeric ID — preserve existing target_ip from form (set during edit)
       submitData.target_ip = formData.target_type === 'peer' ? (formData.target_ip || '') : ''
     }
+    if (typeof submitData.priority === 'number' && Number.isNaN(submitData.priority)) {
+      submitData.priority = POLICY_DEFAULT_FORM.priority
+    }
     if (editPolicy) updateMutation.mutate({ id: editPolicy.id, data: submitData })
     else createMutation.mutate(submitData)
-  }
+  }, [formData, editPolicy, createMutation, updateMutation])
 
   const fetchPreview = useCallback(async () => {
     // IGMP and VRRP don't require source_id
@@ -227,6 +264,10 @@ export default function Policies() {
     const previewTargetIp = targetParsed
       ? targetParsed.ip
       : (formData.target_type === 'peer' ? (formData.target_ip || '') : '')
+    // Cancel any in-flight preview so only the latest request can settle.
+    previewControllerRef.current?.abort()
+    const controller = new AbortController()
+    previewControllerRef.current = controller
     setPreviewLoading(true)
     try {
       const data = await api.post('/policies/preview', {
@@ -239,28 +280,38 @@ export default function Policies() {
         target_ip: previewTargetIp || undefined,
         direction: formData.direction,
         target_scope: formData.target_scope
-      })
+      }, controller.signal)
+      // A newer preview started while this one was in flight; ignore it.
+      if (controller.signal.aborted) return
       setPreview(data)
       setPreviewStale(false)
       setFormErrors({})
     } catch (err) {
+      // Ignore cancellations from a superseded preview request.
+      if (controller.signal.aborted) return
       setFormErrors({ _general: err.message })
       setPreviewStale(false)
     } finally {
-      setPreviewLoading(false)
+      // Only the latest request may clear the loading state.
+      if (previewControllerRef.current === controller) {
+        setPreviewLoading(false)
+      }
     }
   }, [formData, isSpecialService])
 
-  const initialFormRender = useRef(true);
+  // Abort any in-flight preview when the page unmounts.
+  useEffect(() => () => previewControllerRef.current?.abort(), [])
+
+  const initialFormRender = useRef(true)
 
   // Mark preview stale whenever form data changes
   useEffect(() => {
     if (initialFormRender.current) {
-      initialFormRender.current = false;
-      return;
+      initialFormRender.current = false
+      return
     }
-    setPreviewStale(true);
-  }, [formData]);
+    setPreviewStale(true)
+  }, [formData])
 
   // Auto-fetch preview when switching to Preview tab
   useEffect(() => {
@@ -269,34 +320,125 @@ export default function Policies() {
     }
   }, [activeTab, previewStale, previewLoading, fetchPreview])
 
-  // Auto-set source to "All Hosts (IGMP)" when IGMP/VRRP service is selected
+  // Auto-set source to "All Hosts (IGMP)" when IGMP/VRRP service is selected.
+  // The id comes from the special-targets query so hardcoded ids cannot drift.
+  const allHostsId = useMemo(
+    () => toListArray(specialTargets).find((t) => t.name === '__all_hosts__')?.id,
+    [specialTargets]
+  )
   useEffect(() => {
-    if (modalOpen && isSpecialService && !formData.source_id) {
-      setFormData(d => ({ ...d, source_id: SPECIAL_TARGETS.ALL_HOSTS.id, source_type: 'special', source_ip: '' }))
+    if (modalOpen && isSpecialService && !formData.source_id && allHostsId !== undefined) {
+      setFormData(d => ({ ...d, source_id: allHostsId, source_type: 'special', source_ip: '' }))
     }
-  }, [modalOpen, isSpecialService, formData.source_id, setFormData])
+  }, [modalOpen, isSpecialService, formData.source_id, allHostsId, setFormData])
 
-  const getEntityName = useCallback((type, id, ip) => {
-    if (type === 'peer') {
-      const peer = peers?.find(p => p.id === id)
-      const hostname = peer?.hostname || id
-      if (ip) return `${hostname} (${ip})`
-      return hostname
-    }
-    if (type === 'group') return groups?.find(g => g.id === id)?.name || id
-    if (type === 'special') return specialTargets?.find(s => s.id === id)?.display_name || id
-    return id
-  }, [peers, groups, specialTargets])
-  const getServiceName = useCallback((id) => services?.find(s => s.id === id)?.name || id, [services])
+  return {
+    modalOpen,
+    editPolicy,
+    formData,
+    setFormData,
+    formErrors,
+    setFormErrors,
+    preview,
+    previewStale,
+    previewLoading,
+    activeTab,
+    setActiveTab,
+    showDescription,
+    setShowDescription,
+    isSpecialService,
+    deleteTarget,
+    setDeleteTarget,
+    openAdd,
+    openEdit,
+    closeModal,
+    handleSubmit,
+    fetchPreview,
+    createMutation,
+    updateMutation,
+    deleteMutation,
+  }
+}
+
+export default function Policies() {
+  const qc = useQueryClient()
+  const { showToast } = useToastContext()
+  const { canEdit } = useAuth()
+  const location = useLocation()
+
+  const {
+    policies,
+    peers,
+    groups,
+    services,
+    specialTargets,
+    isLoading,
+    isManualRefreshing,
+    handleManualRefresh,
+    peerById,
+    serviceById,
+    getEntityName,
+    getServiceName,
+  } = usePoliciesData()
+
+  const {
+    modalOpen,
+    editPolicy,
+    formData,
+    setFormData,
+    formErrors,
+    setFormErrors,
+    preview,
+    previewStale,
+    previewLoading,
+    activeTab,
+    setActiveTab,
+    showDescription,
+    setShowDescription,
+    deleteTarget,
+    setDeleteTarget,
+    openAdd,
+    openEdit,
+    closeModal,
+    handleSubmit,
+    fetchPreview,
+    deleteMutation,
+  } = usePolicyForm({ peerById, serviceById, specialTargets, showToast })
+
+  const { value: showDisabled, setValue: setShowDisabled } = useFilterPersistence('policies', 'showDisabled', false)
+  const [showSystemRules, setShowSystemRules] = useState(false)
+
+  const [showPendingDeletes, setShowPendingDeletes] = useState(false)
+
+  const { sortConfig, handleSort } = useTableSort('policies', { key: 'priority', direction: 'asc' })
+
+  const toggleMutation = useMutation({
+    mutationFn: ({ id, enabled }) => api.patch(`/policies/${id}`, { enabled }),
+    onMutate: async ({ id, enabled }) => {
+      await qc.cancelQueries({ queryKey: QUERY_KEYS.policies() })
+      const prev = qc.getQueryData(QUERY_KEYS.policies())
+      qc.setQueryData(QUERY_KEYS.policies(), old =>
+        mapWrappedList(old, (list) => list.map(p => String(p.id) === String(id) ? { ...p, enabled } : p))
+      )
+      return { prev }
+    },
+    onError: (err, vars, ctx) => {
+      if (ctx?.prev !== undefined) qc.setQueryData(QUERY_KEYS.policies(), ctx.prev)
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: QUERY_KEYS.policies() })
+      qc.invalidateQueries({ queryKey: ['pending-changes'] })
+    },
+  })
 
   const [searchTerm, setSearchTerm] = useState('')
 
-  const preFilteredPolicies = (policies || []).filter(p => {
+  const preFilteredPolicies = useMemo(() => toListArray(policies).filter(p => {
     if (!showDisabled && !p.enabled) return false
     // Filter by pending delete status
     if (!showPendingDeletes && p.is_pending_delete) return false
     return true
-  })
+  }), [policies, showDisabled, showPendingDeletes])
 
   const processedPolicies = useTableFilter(preFilteredPolicies, searchTerm, sortConfig, {
     filterFn: (p, term) => {
@@ -352,6 +494,30 @@ export default function Policies() {
     />
 
   )), [showDisabled, setShowDisabled])
+
+  const policyTableElement = useMemo(() => (
+    <MemoizedPolicyTable
+      policies={policies}
+      paginatedPolicies={paginatedPolicies}
+      sortConfig={sortConfig}
+      onSort={handleSort}
+      onEdit={openEdit}
+      onDelete={(p) => setDeleteTarget(p)}
+      canEdit={canEdit}
+      searchTerm={searchTerm}
+      showPendingDeletes={showPendingDeletes}
+      setShowPendingDeletes={setShowPendingDeletes}
+      toggleMutation={toggleMutation}
+      getEntityName={getEntityName}
+      getServiceName={getServiceName}
+      openAdd={openAdd}
+      showingRange={policiesShowingRange}
+      page={policiesPage}
+      totalPages={totalPages}
+      onPageChange={setPoliciesPage}
+      totalItems={policiesTotal}
+    />
+  ), [policies, paginatedPolicies, sortConfig, handleSort, openEdit, canEdit, searchTerm, showPendingDeletes, toggleMutation, getEntityName, getServiceName, openAdd, policiesShowingRange, policiesPage, totalPages, setPoliciesPage, policiesTotal, setDeleteTarget])
 
   if (isLoading) return <TableSkeleton rows={3} columns={7} />
 
@@ -444,50 +610,30 @@ export default function Policies() {
         )}
       </SearchFilterPanel>
 
-<PolicyTable
-  policies={policies}
-  paginatedPolicies={paginatedPolicies}
-  sortConfig={sortConfig}
-  onSort={handleSort}
-  onEdit={openEdit}
-  onDelete={(p) => setDeleteTarget(p)}
-  canEdit={canEdit}
-  searchTerm={searchTerm}
-  showPendingDeletes={showPendingDeletes}
-  setShowPendingDeletes={setShowPendingDeletes}
-  toggleMutation={toggleMutation}
-  getEntityName={getEntityName}
-  getServiceName={getServiceName}
-  openAdd={openAdd}
-  showingRange={policiesShowingRange}
-  page={policiesPage}
-  totalPages={totalPages}
-  onPageChange={setPoliciesPage}
-  totalItems={policiesTotal}
-/>
+      {policyTableElement}
 
-<PolicyFormModal
-  isOpen={modalOpen}
-  onClose={closeModal}
-  editItem={editPolicy}
-  peerList={peers}
-  serviceList={services}
-  groupList={groups}
-  specialTargetList={specialTargets}
-  formData={formData}
-  setFormData={setFormData}
-  formErrors={formErrors}
-  setFormErrors={setFormErrors}
-  activeTab={activeTab}
-  setActiveTab={setActiveTab}
-  showDescription={showDescription}
-  setShowDescription={setShowDescription}
-  preview={preview}
-  previewStale={previewStale}
-  previewLoading={previewLoading}
-  onSubmit={handleSubmit}
-  onPreview={fetchPreview}
-/>
+      <PolicyFormModal
+        isOpen={modalOpen}
+        onClose={closeModal}
+        editItem={editPolicy}
+        peerList={peers}
+        serviceList={services}
+        groupList={groups}
+        specialTargetList={specialTargets}
+        formData={formData}
+        setFormData={setFormData}
+        formErrors={formErrors}
+        setFormErrors={setFormErrors}
+        activeTab={activeTab}
+        setActiveTab={setActiveTab}
+        showDescription={showDescription}
+        setShowDescription={setShowDescription}
+        preview={preview}
+        previewStale={previewStale}
+        previewLoading={previewLoading}
+        onSubmit={handleSubmit}
+        onPreview={fetchPreview}
+      />
 
       {deleteTarget && (
         <ConfirmModal

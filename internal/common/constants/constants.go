@@ -59,6 +59,14 @@ const (
 	OfflineThreshold = 90 * time.Second
 )
 
+// Network defaults shared by the server bootstrap and the policy compiler.
+const (
+	// DefaultControlPlanePort is the default HTTPS port for control plane
+	// communication. The server listens on this port and the compiler emits
+	// allow rules for it, so both must stay in sync through this constant.
+	DefaultControlPlanePort = "60443"
+)
+
 // Cleanup intervals control periodic background maintenance tasks.
 const (
 	// RateLimitCleanupInterval is how often expired rate-limit entries

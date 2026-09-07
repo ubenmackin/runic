@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"runtime"
@@ -27,7 +28,7 @@ func Register(ctx context.Context, client common.HTTPClient, cfg *Config, versio
 		osType = "linux"
 	}
 	kernel := detectKernelVersion()
-	hasDocker := detectDocker()
+	hasDocker := common.DetectDockerSocket()
 	ip := detectLocalIP()
 
 	hasIPSet := common.DetectIPSet()
@@ -54,6 +55,7 @@ func Register(ctx context.Context, client common.HTTPClient, cfg *Config, versio
 		return fmt.Errorf("registration request failed: %w", err)
 	}
 	defer func() {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 		if cErr := resp.Body.Close(); cErr != nil {
 			log.Warn("Failed to close response body", "error", cErr)
 		}
@@ -96,18 +98,6 @@ func detectKernelVersion() string {
 	}
 
 	return strings.TrimSpace(string(data))
-}
-
-// detectDocker checks for the Docker socket.
-// NOTE: This duplicates detectDocker in internal/agent/apply/applier.go.
-// Both are kept separate to avoid a cross-package dependency on a shared
-// utility; the duplication is small and acceptable.
-func detectDocker() bool {
-	fi, err := os.Stat("/var/run/docker.sock")
-	if err != nil {
-		return false
-	}
-	return fi.Mode()&os.ModeSocket != 0
 }
 
 func detectLocalIP() string {

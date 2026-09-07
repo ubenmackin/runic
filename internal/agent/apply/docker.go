@@ -5,6 +5,8 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+
+	"runic/internal/common"
 )
 
 var (
@@ -14,6 +16,10 @@ var (
 
 func hasDocker() bool {
 	hasDockerOnce.Do(func() {
+		if common.DetectDockerSocket() {
+			hasDockerCached = true
+			return
+		}
 		_, err := exec.LookPath("docker")
 		if err != nil {
 			hasDockerCached = false

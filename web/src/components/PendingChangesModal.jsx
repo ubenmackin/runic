@@ -28,36 +28,51 @@ export default function PendingChangesModal({ peerId, peerHostname, onClose, onA
   useFocusTrap(modalRef, true)
 
   useEffect(() => {
+    const controller = new AbortController();
     const fetchChanges = async () => {
       setLoading(true)
       setError(null)
       try {
-      const data = await api.get(`/pending-changes/${peerId}`)
-      setChanges(data.changes || [])
-    } catch (err) {
-      setError(err.message)
+        const data = await api.get(`/pending-changes/${peerId}`, controller.signal)
+        if (controller.signal.aborted) return
+        setChanges(data.changes || [])
+      } catch (err) {
+        if (controller.signal.aborted || err?.name === 'AbortError') return
+        setError(err.message)
       } finally {
-        setLoading(false)
+        if (!controller.signal.aborted) {
+          setLoading(false)
+        }
       }
     }
     fetchChanges()
+    return () => {
+      controller.abort()
+    }
   }, [peerId])
 
   useEffect(() => {
+    const controller = new AbortController();
     const fetchDeployedRules = async () => {
       setDeployedRulesLoading(true)
       try {
-        const data = await api.get(`/peers/${peerId}/bundle`)
+        const data = await api.get(`/peers/${peerId}/bundle`, controller.signal)
+        if (controller.signal.aborted) return
         setDeployedRules(data.rules || '')
       } catch (err) {
+        if (controller.signal.aborted || err?.name === 'AbortError') return
         showToast(`Failed to fetch deployed rules: ${err.message}`, 'error')
       } finally {
-        setDeployedRulesLoading(false)
+        if (!controller.signal.aborted) {
+          setDeployedRulesLoading(false)
+        }
       }
     }
     fetchDeployedRules()
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [peerId])
+    return () => {
+      controller.abort()
+    }
+  }, [peerId, showToast])
 
   // Track the last changes reference we triggered preview for
   const lastChangesRef = useRef(null)

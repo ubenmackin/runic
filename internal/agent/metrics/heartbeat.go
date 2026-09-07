@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 
 	"runic/internal/common"
@@ -31,6 +32,7 @@ func SendHeartbeat(ctx context.Context, client common.HTTPClient, controlPlaneUR
 		return fmt.Errorf("heartbeat failed: %w", err)
 	}
 	defer func() {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 		if cErr := resp.Body.Close(); cErr != nil {
 			log.Warn("failed to close body", "error", cErr)
 		}
