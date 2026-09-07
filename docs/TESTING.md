@@ -1116,6 +1116,66 @@ func TestCreatePeer(t *testing.T) {
 | Model | `internal/alerts/models_test.go` | Validation, enum checking |
 | Rate Limiter | `internal/api/auth/setupratelimiter_test.go` | Concurrency, time-based tests |
 | Store | `internal/store/store_test.go` | Database operations |
+| Migration | `internal/db/migrations_test.go` | Old-CHECK rebuild, idempotence, recovery retry |
+
+### Production Recovery: agent_updated Migration Runbook
+
+Databases created before the `agent_updated` alert type carry a restrictive
+`CHECK(alert_type IN (...))` on `alert_rules` without `agent_updated`. Startup
+widens that CHECK with a table rebuild and seeds one default
+`Agent Updated` rule. The rebuild runs in a single transaction that defers
+foreign-key enforcement, copies rows preserving `id`, renames the table,
+rebuilds indexes, runs `foreign_key_check` before commit, and restores
+enforcement.
+
+Why no manual repair is needed: a failure aborts pre-commit and rolls back,
+so the database is left in its original pre-migration state with `alert_rules`
+and `alert_history` intact. The fix is to deploy the fixed binary and restart;
+the next startup retries the same migration and converges.
+
+Operator steps:
+
+```bash
+# 1. Deploy the fixed binary, then restart the control plane.
+sudo systemctl restart runic-server
+
+# 2. Watch for the migration success markers.
+journalctl -u runic-server --since "5 min ago" --no-pager | grep -i "agent_updated"
+
+# 3. Confirm the check was widened and the seed is present exactly once.
+sqlite3 /opt/runic/data/runic.db "SELECT sql FROM sqlite_master WHERE type='table' AND name='alert_rules';"
+sqlite3 /opt/runic/data/runic.db "SELECT COUNT(*) FROM alert_rules WHERE alert_type='agent_updated';"
+# want: 1
+
+# 4. Confirm referential integrity is clean.
+sqlite3 /opt/runic/data/runic.db "PRAGMA foreign_key_check;"
+# want: no rows
+```
+
+Expected `journalctl` markers:
+
+```text
+Migration: adding agent_updated to alert_rules CHECK constraint
+Migration: successfully added agent_updated to alert_rules CHECK constraint
+Migration: seeded default agent_updated alert rule
+```
+
+Only the first successful startup seeds the row; later restarts log nothing
+new for this migration because the `agent_updated` row already exists and the
+CHECK already contains the new type (idempotent and re-runnable).
+
+Scope and non-goals verified by `TestMigrateAgentUpdatedProductionRecoveryRetry`
+in `internal/db/migrations_test.go` (old CHECK plus history rows, three
+retries plus the startup path, zero data loss, stable rule ids, seed present
+exactly once, `foreign_key_check` empty):
+
+- `logs.db` is untouched; the migration only opens the main database.
+- `firewall_logs` in the main database is not read or written by this
+  migration; seeded log rows survive byte-for-byte.
+- `alert_history` rows are never deleted or rewritten; rule ids stay stable so
+  existing `rule_id` references keep resolving.
+- No alerts are resent on restart: history `status` values are preserved and no
+  new history rows are inserted by the migration.
 
 ---
 

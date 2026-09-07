@@ -5,12 +5,14 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
+	"strings"
+	"sync"
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
 )
 
-// while preserving existing data.
 func TestMigrateSchemaAddsMissingColumns(t *testing.T) {
 	database, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
@@ -455,4 +457,775 @@ func TestMigrateSchemaSkipsMissingImportRulesTable(t *testing.T) {
 	if importRulesExists {
 		t.Error("import_rules table should not exist after migration (migrations only add columns, not tables)")
 	}
+}
+
+func downgradeAlertRulesForTest(t *testing.T, ctx context.Context, database *sql.DB, checkClause string) {
+	t.Helper()
+	if _, err := database.ExecContext(ctx, "PRAGMA foreign_keys=OFF"); err != nil {
+		t.Fatalf("Failed to disable foreign keys: %v", err)
+	}
+	if _, err := database.ExecContext(ctx, "DROP TABLE IF EXISTS alert_rules"); err != nil {
+		t.Fatalf("Failed to drop alert_rules: %v", err)
+	}
+	createSQL := fmt.Sprintf(`CREATE TABLE alert_rules (
+id INTEGER PRIMARY KEY AUTOINCREMENT,
+name TEXT NOT NULL,
+alert_type TEXT NOT NULL %s,
+enabled BOOLEAN NOT NULL DEFAULT 1,
+threshold_value INTEGER,
+threshold_window_minutes INTEGER,
+peer_id TEXT,
+throttle_minutes INTEGER NOT NULL DEFAULT 5,
+created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)`, checkClause)
+	if _, err := database.ExecContext(ctx, createSQL); err != nil {
+		t.Fatalf("Failed to create legacy alert_rules: %v", err)
+	}
+	if _, err := database.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_alert_rules_type_enabled ON alert_rules(alert_type, enabled)"); err != nil {
+		t.Fatalf("Failed to create legacy index: %v", err)
+	}
+	if _, err := database.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_alert_rules_peer_id ON alert_rules(peer_id)"); err != nil {
+		t.Fatalf("Failed to create legacy index: %v", err)
+	}
+	if _, err := database.ExecContext(ctx, "PRAGMA foreign_keys=ON"); err != nil {
+		t.Fatalf("Failed to re-enable foreign keys: %v", err)
+	}
+}
+
+func assertForeignKeyCheckEmpty(t *testing.T, ctx context.Context, database *sql.DB) {
+	t.Helper()
+	rows, err := database.QueryContext(ctx, "PRAGMA foreign_key_check")
+	if err != nil {
+		t.Fatalf("PRAGMA foreign_key_check failed: %v", err)
+	}
+	defer rows.Close()
+	count := 0
+	for rows.Next() {
+		var fkTable sql.NullString
+		var fkRowID sql.NullInt64
+		var fkRefTable sql.NullString
+		var fkIndex sql.NullInt64
+		if err := rows.Scan(&fkTable, &fkRowID, &fkRefTable, &fkIndex); err != nil {
+			t.Fatalf("Failed to scan foreign_key_check: %v", err)
+		}
+		count++
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("Failed to iterate foreign_key_check: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("foreign_key_check found %d violation(s), want 0", count)
+	}
+}
+
+func TestMigrateAgentUpdatedCheckWithEnforcedFKs(t *testing.T) {
+	database, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("Failed to open in-memory database: %v", err)
+	}
+	defer database.Close()
+	database.SetMaxOpenConns(1)
+	database.SetMaxIdleConns(1)
+
+	if _, err := database.Exec("PRAGMA foreign_keys=ON"); err != nil {
+		t.Fatalf("Failed to enable foreign keys: %v", err)
+	}
+
+	ctx := context.Background()
+
+	if _, err := database.ExecContext(ctx, Schema()); err != nil {
+		t.Fatalf("Failed to create full schema: %v", err)
+	}
+
+	downgradeAlertRulesForTest(t, ctx, database, "CHECK(alert_type IN ('peer_offline', 'bundle_failed', 'blocked_spike', 'peer_online', 'new_peer', 'bundle_deployed'))")
+
+	var legacySQL string
+	if err := database.QueryRowContext(ctx, "SELECT sql FROM sqlite_master WHERE type='table' AND name='alert_rules'").Scan(&legacySQL); err != nil {
+		t.Fatalf("Failed to read legacy alert_rules SQL: %v", err)
+	}
+	if strings.Contains(legacySQL, "agent_updated") {
+		t.Fatalf("Legacy alert_rules SQL should not contain agent_updated")
+	}
+
+	var fkEnabled int
+	if err := database.QueryRowContext(ctx, "PRAGMA foreign_keys").Scan(&fkEnabled); err != nil {
+		t.Fatalf("Failed to check foreign_keys pragma: %v", err)
+	}
+	if fkEnabled != 1 {
+		t.Fatalf("foreign_keys pragma = %d, want 1", fkEnabled)
+	}
+
+	ruleIDs := make(map[string]int64)
+	seedRules := []struct {
+		name      string
+		alertType string
+	}{
+		{"Peer Offline", "peer_offline"},
+		{"Bundle Failed", "bundle_failed"},
+		{"Blocked Spike", "blocked_spike"},
+	}
+	for _, r := range seedRules {
+		res, err := database.ExecContext(ctx,
+			"INSERT INTO alert_rules (name, alert_type, enabled, threshold_value, threshold_window_minutes, throttle_minutes) VALUES (?, ?, 1, 0, 5, 15)",
+			r.name, r.alertType)
+		if err != nil {
+			t.Fatalf("Failed to seed alert_rule %s: %v", r.alertType, err)
+		}
+		id, err := res.LastInsertId()
+		if err != nil {
+			t.Fatalf("Failed to get rule id: %v", err)
+		}
+		ruleIDs[r.alertType] = id
+	}
+
+	type historySeed struct {
+		ruleType  string
+		alertType string
+		severity  string
+		subject   string
+		message   string
+		status    string
+	}
+	historySeeds := []historySeed{
+		{"peer_offline", "peer_offline", "warning", "peer offline subject", "peer offline message", "sent"},
+		{"bundle_failed", "bundle_failed", "critical", "bundle failed subject", "bundle failed message", "sent"},
+		{"peer_offline", "peer_offline", "info", "peer offline second", "second message", "pending"},
+	}
+	type historyRow struct {
+		id      int64
+		ruleID  int64
+		subject string
+	}
+	var historyBefore []historyRow
+	for _, h := range historySeeds {
+		ruleID, ok := ruleIDs[h.ruleType]
+		if !ok {
+			t.Fatalf("Missing rule id for %s", h.ruleType)
+		}
+		res, err := database.ExecContext(ctx,
+			"INSERT INTO alert_history (rule_id, alert_type, severity, subject, message, status) VALUES (?, ?, ?, ?, ?, ?)",
+			ruleID, h.alertType, h.severity, h.subject, h.message, h.status)
+		if err != nil {
+			t.Fatalf("Failed to seed alert_history: %v", err)
+		}
+		hid, err := res.LastInsertId()
+		if err != nil {
+			t.Fatalf("Failed to get history id: %v", err)
+		}
+		historyBefore = append(historyBefore, historyRow{id: hid, ruleID: ruleID, subject: h.subject})
+	}
+
+	if err := migrateSchema(ctx, database); err != nil {
+		t.Fatalf("First migrateSchema failed: %v", err)
+	}
+	if err := migrateSchema(ctx, database); err != nil {
+		t.Fatalf("Second migrateSchema (idempotence) failed: %v", err)
+	}
+	if err := createSchema(ctx, database); err != nil {
+		t.Fatalf("createSchema (startup path) failed: %v", err)
+	}
+
+	var widenedSQL string
+	if err := database.QueryRowContext(ctx, "SELECT sql FROM sqlite_master WHERE type='table' AND name='alert_rules'").Scan(&widenedSQL); err != nil {
+		t.Fatalf("Failed to read widened alert_rules SQL: %v", err)
+	}
+	if !strings.Contains(widenedSQL, "agent_updated") {
+		t.Errorf("Widened alert_rules SQL should contain agent_updated, got: %s", widenedSQL)
+	}
+
+	for _, idx := range []string{"idx_alert_rules_type_enabled", "idx_alert_rules_peer_id"} {
+		var exists bool
+		if err := database.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='index' AND name=?", idx).Scan(&exists); err != nil {
+			t.Fatalf("Failed to check index %s: %v", idx, err)
+		}
+		if !exists {
+			t.Errorf("Expected index %s to exist after rebuild", idx)
+		}
+	}
+
+	for alertType, wantID := range ruleIDs {
+		var gotID int64
+		if err := database.QueryRowContext(ctx, "SELECT id FROM alert_rules WHERE alert_type=? AND name IS NOT NULL ORDER BY id LIMIT 1", alertType).Scan(&gotID); err != nil {
+			t.Errorf("Failed to query preserved rule %s: %v", alertType, err)
+			continue
+		}
+		if gotID != wantID {
+			t.Errorf("Rule %s id = %d, want stable id %d", alertType, gotID, wantID)
+		}
+	}
+
+	rows, err := database.QueryContext(ctx, "SELECT id, rule_id, subject FROM alert_history ORDER BY id")
+	if err != nil {
+		t.Fatalf("Failed to query alert_history after migration: %v", err)
+	}
+	var historyAfter []historyRow
+	for rows.Next() {
+		var hr historyRow
+		if err := rows.Scan(&hr.id, &hr.ruleID, &hr.subject); err != nil {
+			rows.Close()
+			t.Fatalf("Failed to scan alert_history: %v", err)
+		}
+		historyAfter = append(historyAfter, hr)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		t.Fatalf("Failed to iterate alert_history: %v", err)
+	}
+	rows.Close()
+	if len(historyAfter) != len(historyBefore) {
+		t.Fatalf("alert_history count = %d, want %d (rows must be preserved)", len(historyAfter), len(historyBefore))
+	}
+	for i := range historyBefore {
+		if historyAfter[i].id != historyBefore[i].id {
+			t.Errorf("history row %d id = %d, want %d", i, historyAfter[i].id, historyBefore[i].id)
+		}
+		if historyAfter[i].ruleID != historyBefore[i].ruleID {
+			t.Errorf("history row %d rule_id = %d, want %d", i, historyAfter[i].ruleID, historyBefore[i].ruleID)
+		}
+		if historyAfter[i].subject != historyBefore[i].subject {
+			t.Errorf("history row %d subject = %q, want %q", i, historyAfter[i].subject, historyBefore[i].subject)
+		}
+		var parentID int64
+		if err := database.QueryRowContext(ctx, "SELECT id FROM alert_rules WHERE id=?", historyAfter[i].ruleID).Scan(&parentID); err != nil {
+			t.Errorf("History row %d references missing rule %d: %v", historyAfter[i].id, historyAfter[i].ruleID, err)
+		}
+	}
+
+	assertForeignKeyCheckEmpty(t, ctx, database)
+
+	var seededCount int
+	if err := database.QueryRowContext(ctx, "SELECT COUNT(*) FROM alert_rules WHERE alert_type='agent_updated'").Scan(&seededCount); err != nil {
+		t.Fatalf("Failed to count agent_updated rules: %v", err)
+	}
+	if seededCount != 1 {
+		t.Errorf("agent_updated rule count = %d, want 1 seeded row", seededCount)
+	}
+
+	if _, err := database.ExecContext(ctx,
+		"INSERT INTO alert_rules (name, alert_type, enabled, threshold_value, threshold_window_minutes, throttle_minutes) VALUES (?, 'agent_updated', 1, 0, 5, 15)",
+		"Agent Updated Probe"); err != nil {
+		t.Fatalf("agent_updated insert failed after migration: %v", err)
+	}
+	assertForeignKeyCheckEmpty(t, ctx, database)
+}
+
+func TestMigrateAgentUpdatedEmptyRules(t *testing.T) {
+	database, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("Failed to open in-memory database: %v", err)
+	}
+	defer database.Close()
+	database.SetMaxOpenConns(1)
+	database.SetMaxIdleConns(1)
+
+	if _, err := database.Exec("PRAGMA foreign_keys=ON"); err != nil {
+		t.Fatalf("Failed to enable foreign keys: %v", err)
+	}
+
+	ctx := context.Background()
+
+	if _, err := database.ExecContext(ctx, Schema()); err != nil {
+		t.Fatalf("Failed to create full schema: %v", err)
+	}
+
+	downgradeAlertRulesForTest(t, ctx, database, "CHECK(alert_type IN ('peer_offline', 'bundle_failed', 'blocked_spike', 'peer_online', 'new_peer', 'bundle_deployed'))")
+
+	if _, err := database.ExecContext(ctx, "DELETE FROM alert_rules"); err != nil {
+		t.Fatalf("Failed to clear alert_rules: %v", err)
+	}
+
+	if err := migrateSchema(ctx, database); err != nil {
+		t.Fatalf("First migrateSchema on empty alert_rules failed: %v", err)
+	}
+	if err := migrateSchema(ctx, database); err != nil {
+		t.Fatalf("Second migrateSchema (idempotence) on empty alert_rules failed: %v", err)
+	}
+	if err := createSchema(ctx, database); err != nil {
+		t.Fatalf("createSchema (startup path) failed: %v", err)
+	}
+
+	var widenedSQL string
+	if err := database.QueryRowContext(ctx, "SELECT sql FROM sqlite_master WHERE type='table' AND name='alert_rules'").Scan(&widenedSQL); err != nil {
+		t.Fatalf("Failed to read alert_rules SQL: %v", err)
+	}
+	if !strings.Contains(widenedSQL, "agent_updated") {
+		t.Errorf("Widened alert_rules SQL should contain agent_updated")
+	}
+
+	var seededCount int
+	if err := database.QueryRowContext(ctx, "SELECT COUNT(*) FROM alert_rules WHERE alert_type='agent_updated'").Scan(&seededCount); err != nil {
+		t.Fatalf("Failed to count agent_updated rules: %v", err)
+	}
+	if seededCount != 1 {
+		t.Errorf("agent_updated rule count on empty start = %d, want 1 seeded row", seededCount)
+	}
+
+	if _, err := database.ExecContext(ctx,
+		"INSERT INTO alert_rules (name, alert_type, enabled, threshold_value, threshold_window_minutes, throttle_minutes) VALUES ('Empty Probe', 'agent_updated', 1, 0, 5, 15)"); err != nil {
+		t.Fatalf("agent_updated insert on empty-start DB failed: %v", err)
+	}
+	assertForeignKeyCheckEmpty(t, ctx, database)
+}
+
+func TestMigrateAgentUpdatedLegacyVariants(t *testing.T) {
+	legacyChecks := []struct {
+		name  string
+		check string
+	}{
+		{
+			"standard",
+			"CHECK(alert_type IN ('peer_offline', 'bundle_failed', 'blocked_spike', 'peer_online', 'new_peer', 'bundle_deployed'))",
+		},
+		{
+			"compact",
+			"CHECK(alert_type IN('peer_offline','bundle_failed','blocked_spike','peer_online','new_peer','bundle_deployed'))",
+		},
+	}
+	for _, tc := range legacyChecks {
+		t.Run(tc.name, func(t *testing.T) {
+			database, err := sql.Open("sqlite3", ":memory:")
+			if err != nil {
+				t.Fatalf("Failed to open in-memory database: %v", err)
+			}
+			defer database.Close()
+			database.SetMaxOpenConns(1)
+			database.SetMaxIdleConns(1)
+
+			if _, err := database.Exec("PRAGMA foreign_keys=ON"); err != nil {
+				t.Fatalf("Failed to enable foreign keys: %v", err)
+			}
+
+			ctx := context.Background()
+
+			if _, err := database.ExecContext(ctx, Schema()); err != nil {
+				t.Fatalf("Failed to create full schema: %v", err)
+			}
+
+			downgradeAlertRulesForTest(t, ctx, database, tc.check)
+
+			res, err := database.ExecContext(ctx,
+				"INSERT INTO alert_rules (name, alert_type, enabled, threshold_value, threshold_window_minutes, throttle_minutes) VALUES ('Peer Offline', 'peer_offline', 1, 0, 5, 15)")
+			if err != nil {
+				t.Fatalf("Failed to seed legacy rule: %v", err)
+			}
+			ruleID, err := res.LastInsertId()
+			if err != nil {
+				t.Fatalf("Failed to get rule id: %v", err)
+			}
+			res, err = database.ExecContext(ctx,
+				"INSERT INTO alert_history (rule_id, alert_type, severity, subject, message, status) VALUES (?, 'peer_offline', 'warning', 'variant subject', 'variant message', 'sent')",
+				ruleID)
+			if err != nil {
+				t.Fatalf("Failed to seed alert_history: %v", err)
+			}
+			historyID, err := res.LastInsertId()
+			if err != nil {
+				t.Fatalf("Failed to get history id: %v", err)
+			}
+
+			if err := migrateSchema(ctx, database); err != nil {
+				t.Fatalf("First migrateSchema failed: %v", err)
+			}
+			if err := migrateSchema(ctx, database); err != nil {
+				t.Fatalf("Second migrateSchema (idempotence) failed: %v", err)
+			}
+			if err := createSchema(ctx, database); err != nil {
+				t.Fatalf("createSchema (startup path) failed: %v", err)
+			}
+
+			var widenedSQL string
+			if err := database.QueryRowContext(ctx, "SELECT sql FROM sqlite_master WHERE type='table' AND name='alert_rules'").Scan(&widenedSQL); err != nil {
+				t.Fatalf("Failed to read alert_rules SQL: %v", err)
+			}
+			if !strings.Contains(widenedSQL, "agent_updated") {
+				t.Errorf("Widened SQL should contain agent_updated for variant %s", tc.name)
+			}
+
+			var gotRuleID int64
+			if err := database.QueryRowContext(ctx, "SELECT id FROM alert_rules WHERE alert_type='peer_offline'").Scan(&gotRuleID); err != nil {
+				t.Fatalf("Failed to query preserved rule: %v", err)
+			}
+			if gotRuleID != ruleID {
+				t.Errorf("Rule id = %d, want stable id %d", gotRuleID, ruleID)
+			}
+
+			var gotHistoryRuleID int64
+			if err := database.QueryRowContext(ctx, "SELECT rule_id FROM alert_history WHERE id=?", historyID).Scan(&gotHistoryRuleID); err != nil {
+				t.Fatalf("Failed to query preserved history: %v", err)
+			}
+			if gotHistoryRuleID != ruleID {
+				t.Errorf("History rule_id = %d, want %d", gotHistoryRuleID, ruleID)
+			}
+
+			assertForeignKeyCheckEmpty(t, ctx, database)
+
+			if _, err := database.ExecContext(ctx,
+				"INSERT INTO alert_rules (name, alert_type, enabled, threshold_value, threshold_window_minutes, throttle_minutes) VALUES ('Variant Probe', 'agent_updated', 1, 0, 5, 15)"); err != nil {
+				t.Fatalf("agent_updated insert failed for variant %s: %v", tc.name, err)
+			}
+		})
+	}
+}
+
+func TestMigrateAgentUpdatedConcurrentInit(t *testing.T) {
+	f, err := os.CreateTemp("", "runic-agent-updated-concurrent-*.db")
+	if err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+	dbPath := f.Name()
+	if err := f.Close(); err != nil {
+		t.Logf("Failed to close temp file: %v", err)
+	}
+	defer os.Remove(dbPath)
+
+	dsn := dbPath + "?_foreign_keys=1&_busy_timeout=5000&_journal_mode=WAL&_synchronous=NORMAL"
+	database, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer database.Close()
+	database.SetMaxOpenConns(1)
+	database.SetMaxIdleConns(1)
+
+	ctx := context.Background()
+
+	if _, err := database.ExecContext(ctx, Schema()); err != nil {
+		t.Fatalf("Failed to create full schema: %v", err)
+	}
+
+	downgradeAlertRulesForTest(t, ctx, database, "CHECK(alert_type IN ('peer_offline', 'bundle_failed', 'blocked_spike', 'peer_online', 'new_peer', 'bundle_deployed'))")
+
+	res, err := database.ExecContext(ctx,
+		"INSERT INTO alert_rules (name, alert_type, enabled, threshold_value, threshold_window_minutes, throttle_minutes) VALUES ('Peer Offline', 'peer_offline', 1, 0, 5, 15)")
+	if err != nil {
+		t.Fatalf("Failed to seed rule: %v", err)
+	}
+	ruleID, err := res.LastInsertId()
+	if err != nil {
+		t.Fatalf("Failed to get rule id: %v", err)
+	}
+	res, err = database.ExecContext(ctx,
+		"INSERT INTO alert_history (rule_id, alert_type, severity, subject, message, status) VALUES (?, 'peer_offline', 'warning', 'concurrent subject', 'concurrent message', 'sent')",
+		ruleID)
+	if err != nil {
+		t.Fatalf("Failed to seed history: %v", err)
+	}
+	historyID, err := res.LastInsertId()
+	if err != nil {
+		t.Fatalf("Failed to get history id: %v", err)
+	}
+
+	if err := migrateSchema(ctx, database); err != nil {
+		t.Fatalf("Initial migrateSchema failed: %v", err)
+	}
+
+	database.SetMaxOpenConns(5)
+	database.SetMaxIdleConns(5)
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, 8)
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := migrateSchema(ctx, database); err != nil {
+				errCh <- err
+				return
+			}
+			if err := createSchema(ctx, database); err != nil {
+				errCh <- err
+			}
+		}()
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		t.Fatalf("Concurrent migrateSchema failed: %v", err)
+	}
+
+	var gotRuleID int64
+	if err := database.QueryRowContext(ctx, "SELECT id FROM alert_rules WHERE id=?", ruleID).Scan(&gotRuleID); err != nil {
+		t.Fatalf("Seeded rule missing after concurrent init: %v", err)
+	}
+	var gotHistoryRuleID int64
+	if err := database.QueryRowContext(ctx, "SELECT rule_id FROM alert_history WHERE id=?", historyID).Scan(&gotHistoryRuleID); err != nil {
+		t.Fatalf("Seeded history missing after concurrent init: %v", err)
+	}
+	if gotHistoryRuleID != ruleID {
+		t.Errorf("History rule_id = %d, want %d after concurrent init", gotHistoryRuleID, ruleID)
+	}
+	assertForeignKeyCheckEmpty(t, ctx, database)
+
+	if _, err := database.ExecContext(ctx,
+		"INSERT INTO alert_rules (name, alert_type, enabled, threshold_value, threshold_window_minutes, throttle_minutes) VALUES ('Concurrent Probe', 'agent_updated', 1, 0, 5, 15)"); err != nil {
+		t.Fatalf("agent_updated insert after concurrent init failed: %v", err)
+	}
+}
+
+// TestMigrateAgentUpdatedProductionRecoveryRetry verifies that a database left
+// in the pre-migration state converges on retry: the old CHECK schema with
+// existing history rows migrates cleanly across repeated runs with zero data
+// loss and the default Agent Updated rule seeded exactly once.
+func TestMigrateAgentUpdatedProductionRecoveryRetry(t *testing.T) {
+	database, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("Failed to open in-memory database: %v", err)
+	}
+	defer database.Close()
+	database.SetMaxOpenConns(1)
+	database.SetMaxIdleConns(1)
+
+	if _, err := database.Exec("PRAGMA foreign_keys=ON"); err != nil {
+		t.Fatalf("Failed to enable foreign keys: %v", err)
+	}
+
+	ctx := context.Background()
+
+	if _, err := database.ExecContext(ctx, Schema()); err != nil {
+		t.Fatalf("Failed to create full schema: %v", err)
+	}
+
+	// Downgrade to the old CHECK without agent_updated. This is the exact
+	// post-rollback state: a failed rebuild rolls back pre-commit, so the
+	// retry starts from the old schema with all rows intact.
+	downgradeAlertRulesForTest(t, ctx, database, "CHECK(alert_type IN ('peer_offline', 'bundle_failed', 'blocked_spike', 'peer_online', 'new_peer', 'bundle_deployed'))")
+
+	var legacySQL string
+	if err := database.QueryRowContext(ctx, "SELECT sql FROM sqlite_master WHERE type='table' AND name='alert_rules'").Scan(&legacySQL); err != nil {
+		t.Fatalf("Failed to read legacy alert_rules SQL: %v", err)
+	}
+	if strings.Contains(legacySQL, "agent_updated") {
+		t.Fatalf("Legacy alert_rules SQL should not contain agent_updated")
+	}
+
+	ruleIDs := make(map[string]int64)
+	seedRules := []struct {
+		name      string
+		alertType string
+	}{
+		{"Peer Offline", "peer_offline"},
+		{"Bundle Failed", "bundle_failed"},
+		{"Blocked Spike", "blocked_spike"},
+	}
+	for _, r := range seedRules {
+		res, err := database.ExecContext(ctx,
+			"INSERT INTO alert_rules (name, alert_type, enabled, threshold_value, threshold_window_minutes, throttle_minutes) VALUES (?, ?, 1, 0, 5, 15)",
+			r.name, r.alertType)
+		if err != nil {
+			t.Fatalf("Failed to seed alert_rule %s: %v", r.alertType, err)
+		}
+		id, err := res.LastInsertId()
+		if err != nil {
+			t.Fatalf("Failed to get rule id: %v", err)
+		}
+		ruleIDs[r.alertType] = id
+	}
+
+	type recoveryHistorySeed struct {
+		ruleType  string
+		alertType string
+		severity  string
+		subject   string
+		message   string
+		status    string
+	}
+	historySeeds := []recoveryHistorySeed{
+		{"peer_offline", "peer_offline", "warning", "recovery offline subject", "recovery offline message", "sent"},
+		{"bundle_failed", "bundle_failed", "critical", "recovery failed subject", "recovery failed message", "sent"},
+		{"peer_offline", "peer_offline", "info", "recovery offline second", "recovery second message", "pending"},
+	}
+	type recoveryHistoryRow struct {
+		id        int64
+		ruleID    int64
+		alertType string
+		severity  string
+		subject   string
+		message   string
+		status    string
+	}
+	var historyBefore []recoveryHistoryRow
+	for _, h := range historySeeds {
+		ruleID, ok := ruleIDs[h.ruleType]
+		if !ok {
+			t.Fatalf("Missing rule id for %s", h.ruleType)
+		}
+		res, err := database.ExecContext(ctx,
+			"INSERT INTO alert_history (rule_id, alert_type, severity, subject, message, status) VALUES (?, ?, ?, ?, ?, ?)",
+			ruleID, h.alertType, h.severity, h.subject, h.message, h.status)
+		if err != nil {
+			t.Fatalf("Failed to seed alert_history: %v", err)
+		}
+		hid, err := res.LastInsertId()
+		if err != nil {
+			t.Fatalf("Failed to get history id: %v", err)
+		}
+		historyBefore = append(historyBefore, recoveryHistoryRow{id: hid, ruleID: ruleID, alertType: h.alertType, severity: h.severity, subject: h.subject, message: h.message, status: h.status})
+	}
+
+	res, err := database.ExecContext(ctx,
+		"INSERT INTO peers (hostname, ip_address, hmac_key, agent_key) VALUES (?, ?, ?, ?)",
+		"recovery-peer", "192.168.1.50", "recovery-hmac", "recovery-agent-key")
+	if err != nil {
+		t.Fatalf("Failed to seed peer: %v", err)
+	}
+	peerID, err := res.LastInsertId()
+	if err != nil {
+		t.Fatalf("Failed to get peer id: %v", err)
+	}
+	res, err = database.ExecContext(ctx,
+		"INSERT INTO firewall_logs (peer_id, timestamp, src_ip, dst_ip, protocol, action) VALUES (?, '2026-01-02 00:00:00', '10.0.0.1', '10.0.0.2', 'tcp', 'DROP')",
+		peerID)
+	if err != nil {
+		t.Fatalf("Failed to seed firewall_logs: %v", err)
+	}
+	firewallLogID, err := res.LastInsertId()
+	if err != nil {
+		t.Fatalf("Failed to get firewall_logs id: %v", err)
+	}
+
+	logsDB, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("Failed to open logs database: %v", err)
+	}
+	defer logsDB.Close()
+	logsDB.SetMaxOpenConns(1)
+	logsDB.SetMaxIdleConns(1)
+	if _, err := logsDB.ExecContext(ctx, LogsDBSchema()); err != nil {
+		t.Fatalf("Failed to create logs schema: %v", err)
+	}
+	if _, err := logsDB.ExecContext(ctx,
+		"INSERT INTO firewall_logs (timestamp, peer_id, peer_hostname, event_type, source_ip, dest_ip, protocol, action) VALUES ('2026-01-02 00:00:00', 1, 'recovery-peer', 'IN', '10.0.0.1', '10.0.0.2', 'tcp', 'DROP')"); err != nil {
+		t.Fatalf("Failed to seed logs database: %v", err)
+	}
+	var logsBefore int
+	if err := logsDB.QueryRowContext(ctx, "SELECT COUNT(*) FROM firewall_logs").Scan(&logsBefore); err != nil {
+		t.Fatalf("Failed to count logs rows before migration: %v", err)
+	}
+	if logsBefore != 1 {
+		t.Fatalf("logs rows before = %d, want 1", logsBefore)
+	}
+
+	// Retry sequence: first run converges from the rolled-back state, the
+	// following runs prove idempotence across restarts.
+	if err := migrateSchema(ctx, database); err != nil {
+		t.Fatalf("First migrateSchema (recovery) failed: %v", err)
+	}
+	if err := migrateSchema(ctx, database); err != nil {
+		t.Fatalf("Second migrateSchema (retry) failed: %v", err)
+	}
+	if err := migrateSchema(ctx, database); err != nil {
+		t.Fatalf("Third migrateSchema (retry) failed: %v", err)
+	}
+	if err := createSchema(ctx, database); err != nil {
+		t.Fatalf("createSchema (startup path) failed: %v", err)
+	}
+
+	var widenedSQL string
+	if err := database.QueryRowContext(ctx, "SELECT sql FROM sqlite_master WHERE type='table' AND name='alert_rules'").Scan(&widenedSQL); err != nil {
+		t.Fatalf("Failed to read widened alert_rules SQL: %v", err)
+	}
+	if !strings.Contains(widenedSQL, "agent_updated") {
+		t.Errorf("Widened alert_rules SQL should contain agent_updated, got: %s", widenedSQL)
+	}
+
+	for _, idx := range []string{"idx_alert_rules_type_enabled", "idx_alert_rules_peer_id"} {
+		var exists bool
+		if err := database.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='index' AND name=?", idx).Scan(&exists); err != nil {
+			t.Fatalf("Failed to check index %s: %v", idx, err)
+		}
+		if !exists {
+			t.Errorf("Expected index %s to exist after recovery", idx)
+		}
+	}
+
+	for alertType, wantID := range ruleIDs {
+		var gotID int64
+		if err := database.QueryRowContext(ctx, "SELECT id FROM alert_rules WHERE alert_type=? ORDER BY id LIMIT 1", alertType).Scan(&gotID); err != nil {
+			t.Errorf("Failed to query preserved rule %s: %v", alertType, err)
+			continue
+		}
+		if gotID != wantID {
+			t.Errorf("Rule %s id = %d, want stable id %d", alertType, gotID, wantID)
+		}
+	}
+
+	rows, err := database.QueryContext(ctx, "SELECT id, rule_id, alert_type, severity, subject, message, status FROM alert_history ORDER BY id")
+	if err != nil {
+		t.Fatalf("Failed to query alert_history after recovery: %v", err)
+	}
+	var historyAfter []recoveryHistoryRow
+	for rows.Next() {
+		var hr recoveryHistoryRow
+		if err := rows.Scan(&hr.id, &hr.ruleID, &hr.alertType, &hr.severity, &hr.subject, &hr.message, &hr.status); err != nil {
+			rows.Close()
+			t.Fatalf("Failed to scan alert_history: %v", err)
+		}
+		historyAfter = append(historyAfter, hr)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		t.Fatalf("Failed to iterate alert_history: %v", err)
+	}
+	rows.Close()
+	if len(historyAfter) != len(historyBefore) {
+		t.Fatalf("alert_history count = %d, want %d (zero data loss, no resend)", len(historyAfter), len(historyBefore))
+	}
+	for i := range historyBefore {
+		if historyAfter[i] != historyBefore[i] {
+			t.Errorf("history row %d = %+v, want %+v", i, historyAfter[i], historyBefore[i])
+		}
+		var parentID int64
+		if err := database.QueryRowContext(ctx, "SELECT id FROM alert_rules WHERE id=?", historyAfter[i].ruleID).Scan(&parentID); err != nil {
+			t.Errorf("History row %d references missing rule %d: %v", historyAfter[i].id, historyAfter[i].ruleID, err)
+		}
+	}
+
+	assertForeignKeyCheckEmpty(t, ctx, database)
+
+	var seededCount int
+	if err := database.QueryRowContext(ctx, "SELECT COUNT(*) FROM alert_rules WHERE alert_type='agent_updated'").Scan(&seededCount); err != nil {
+		t.Fatalf("Failed to count agent_updated rules: %v", err)
+	}
+	if seededCount != 1 {
+		t.Errorf("agent_updated rule count = %d, want exactly 1 seeded row after retries", seededCount)
+	}
+
+	var firewallCount int
+	if err := database.QueryRowContext(ctx, "SELECT COUNT(*) FROM firewall_logs").Scan(&firewallCount); err != nil {
+		t.Fatalf("Failed to count firewall_logs after recovery: %v", err)
+	}
+	if firewallCount != 1 {
+		t.Errorf("firewall_logs count = %d, want 1 (migration must not touch firewall_logs)", firewallCount)
+	}
+	var gotLogPeerID int64
+	var gotTimestamp, gotSrcIP, gotDstIP, gotProtocol, gotAction string
+	if err := database.QueryRowContext(ctx, "SELECT peer_id, timestamp, src_ip, dst_ip, protocol, action FROM firewall_logs WHERE id=?", firewallLogID).Scan(&gotLogPeerID, &gotTimestamp, &gotSrcIP, &gotDstIP, &gotProtocol, &gotAction); err != nil {
+		t.Errorf("Failed to query preserved firewall_logs row: %v", err)
+	} else {
+		if gotLogPeerID != peerID {
+			t.Errorf("firewall_logs peer_id = %d, want %d", gotLogPeerID, peerID)
+		}
+		if gotTimestamp == "" {
+			t.Errorf("firewall_logs timestamp is empty, want preserved value")
+		}
+		if gotSrcIP != "10.0.0.1" || gotDstIP != "10.0.0.2" || gotProtocol != "tcp" || gotAction != "DROP" {
+			t.Errorf("firewall_logs row changed: src=%q dst=%q proto=%q action=%q", gotSrcIP, gotDstIP, gotProtocol, gotAction)
+		}
+	}
+
+	var logsAfter int
+	if err := logsDB.QueryRowContext(ctx, "SELECT COUNT(*) FROM firewall_logs").Scan(&logsAfter); err != nil {
+		t.Fatalf("Failed to count logs rows after migration: %v", err)
+	}
+	if logsAfter != logsBefore {
+		t.Errorf("logs database rows = %d, want %d (logs database must stay untouched)", logsAfter, logsBefore)
+	}
+
+	if _, err := database.ExecContext(ctx,
+		"INSERT INTO alert_rules (name, alert_type, enabled, threshold_value, threshold_window_minutes, throttle_minutes) VALUES (?, 'agent_updated', 1, 0, 5, 15)",
+		"Recovery Probe"); err != nil {
+		t.Fatalf("agent_updated insert failed after recovery: %v", err)
+	}
+	assertForeignKeyCheckEmpty(t, ctx, database)
 }
