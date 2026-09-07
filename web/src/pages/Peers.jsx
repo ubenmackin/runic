@@ -10,6 +10,7 @@ import { useCrudModal } from '../hooks/useCrudModal'
 import { useToastContext } from '../hooks/ToastContext'
 import { formatRelativeTime } from '../utils/formatTime.js'
 import { isAgentOutdated } from '../utils/version'
+import { logger } from '../utils/logger'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 import { useTableFilter } from '../hooks/useTableFilter'
 import { useFilterPersistence } from '../hooks/useFilterPersistence'
@@ -223,6 +224,10 @@ const [pushLoading, setPushLoading] = useState(false)
 const [updateAgentTarget, setUpdateAgentTarget] = useState(null)
 const [updateAgentLoading, setUpdateAgentLoading] = useState(false)
 
+// Update All Agents state
+const [updateAllConfirmOpen, setUpdateAllConfirmOpen] = useState(false)
+const [updateAllLoading, setUpdateAllLoading] = useState(false)
+
 const handleUpdateAgent = useCallback((peer) => {
 	setUpdateAgentTarget(peer)
 }, [])
@@ -258,7 +263,7 @@ const handleUpdateAgent = useCallback((peer) => {
     onPendingChangeAdded: (peerId) => {
       // Optional: Show toast notification when pending changes are added
       // The hook automatically invalidates queries, so UI will refresh
-      console.log('Pending change added for peer:', peerId)
+      logger.log('Pending change added for peer:', peerId)
     },
   })
 
@@ -584,8 +589,35 @@ const handleSubmit = (e) => {
 		else createMutation.mutate(formData)
 	}
 
-	// Calculate peers with pending changes
-	const peersWithPendingChanges = peers?.filter(p => p.pending_changes_count > 0).length || 0
+  // Calculate peers with pending changes
+  const peersWithPendingChanges = peers?.filter(p => p.pending_changes_count > 0).length || 0
+  const agentPeerCount = useMemo(() => peers?.filter(p => !p.is_manual).length || 0, [peers])
+
+  const handleUpdateAllConfirm = async () => {
+    setUpdateAllLoading(true)
+    try {
+      const res = await api.post('/peers/update-agents')
+      if (res?.status === 'no_peers') {
+        showToast('No agent peers to update', 'info')
+      } else {
+        const sent = res?.sent ?? 0
+        const total = res?.total_peers ?? res?.total ?? 0
+        const notConnected = res?.not_connected || []
+        if (notConnected.length > 0) {
+          showToast(`Update sent to ${sent} of ${total} agents. Offline: ${notConnected.join(', ')}`, 'success')
+        } else {
+          showToast(`Update sent to ${sent} of ${total} agents`, 'success')
+        }
+      }
+      qc.invalidateQueries({ queryKey: QUERY_KEYS.peers() })
+      qc.invalidateQueries({ queryKey: QUERY_KEYS.info() })
+      setUpdateAllConfirmOpen(false)
+    } catch (err) {
+      showToast(`Failed to send update to all agents: ${err.message}`, 'error')
+    } finally {
+      setUpdateAllLoading(false)
+    }
+  }
 
   const handleApplyAll = async () => {
     setApplyAllLoading(true)
@@ -739,6 +771,25 @@ const handleSubmit = (e) => {
 	<RefreshCw className={`w-4 h-4 ${isManualRefreshing ? 'animate-spin' : ''}`} />
 	Refresh
 	</button>
+	{canEdit && agentPeerCount > 0 && (
+	<button
+	onClick={() => setUpdateAllConfirmOpen(true)}
+	disabled={updateAllLoading}
+	className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 dark:text-amber-primary bg-white dark:bg-charcoal-dark border border-gray-300 dark:border-gray-border rounded-none hover:bg-gray-50 dark:hover:bg-charcoal-darkest disabled:opacity-50"
+	>
+	{updateAllLoading ? (
+	<>
+	<RefreshCw className="w-4 h-4 animate-spin" />
+	Updating...
+	</>
+	) : (
+	<>
+	<ArrowUpCircle className="w-4 h-4" />
+	Update All
+	</>
+	)}
+	</button>
+	)}
 	{canEdit && (
 	<button onClick={openAddModal} className="flex items-center gap-2 px-4 py-2 bg-purple-active hover:bg-purple-600 text-white text-sm font-bold uppercase rounded-none border border-purple-active/20 shadow-[0_0_15px_rgba(159,79,248,0.2)] transition-all">
 	<Plus className="w-4 h-4" /> New Peer
@@ -1091,6 +1142,18 @@ title={groups.slice(maxVisible).join(', ')}
 	onCancel={() => setUpdateAgentTarget(null)}
 	confirmText="Update"
 	loading={updateAgentLoading}
+/>
+)}
+
+{/* Update All Agents Confirmation Modal */}
+{updateAllConfirmOpen && (
+<ConfirmModal
+	title="Update All Agents"
+	message={`Send update command to all ${agentPeerCount} agent(s)? Offline agents will be skipped and update automatically when they reconnect.`}
+	onConfirm={handleUpdateAllConfirm}
+	onCancel={() => setUpdateAllConfirmOpen(false)}
+	confirmText="Update All"
+	loading={updateAllLoading}
 />
 )}
 

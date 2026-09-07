@@ -323,7 +323,8 @@ func main() {
 	// Start background goroutines AFTER the server has started listening
 	go startOfflineDetector(ctx, database)
 	tokenStore := store.NewTokenStore(database)
-	go startTokenCleanup(ctx, tokenStore)
+	patStore := store.NewUserTokenStore(database)
+	go startTokenCleanup(ctx, tokenStore, patStore)
 
 	// Wait for shutdown signal OR server failure
 	select {
@@ -400,7 +401,7 @@ func startOfflineDetector(ctx context.Context, database *sql.DB) {
 	}
 }
 
-func startTokenCleanup(ctx context.Context, ts *store.TokenStore) {
+func startTokenCleanup(ctx context.Context, ts *store.TokenStore, pats *store.UserTokenStore) {
 	ticker := time.NewTicker(constants.OfflineCleanupInterval)
 	defer ticker.Stop()
 
@@ -412,6 +413,11 @@ func startTokenCleanup(ctx context.Context, ts *store.TokenStore) {
 		case <-ticker.C:
 			if err := ts.CleanupExpiredTokens(ctx); err != nil {
 				runiclog.Warn("Token cleanup error", "error", err)
+			}
+			if pats != nil {
+				if err := pats.CleanupExpiredTokens(ctx); err != nil {
+					runiclog.Warn("PAT cleanup error", "error", err)
+				}
 			}
 		}
 	}

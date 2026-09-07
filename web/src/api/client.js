@@ -158,8 +158,17 @@ export const testSMTP = () => api.post('/settings/smtp/test')
 export const getNotificationPrefs = (signal) => api.get('/users/me/notification-preferences', signal)
 export const updateNotificationPrefs = (data) => api.put('/users/me/notification-preferences', data)
 
+export const listMyTokens = (signal) => api.get('/users/me/tokens', signal)
+export const createMyToken = (data) => api.post('/users/me/tokens', data)
+export const revokeMyToken = (id) => api.delete(`/users/me/tokens/${id}`)
+export const listUserTokens = (userId, signal) => api.get(`/users/${userId}/tokens`, signal)
+export const createUserToken = (userId, data) => api.post(`/users/${userId}/tokens`, data)
+export const revokeUserToken = (userId, tokenId) => api.delete(`/users/${userId}/tokens/${tokenId}`)
+
 export const QUERY_KEYS = {
   users: () => ['users'],
+  userTokens: () => ['user-tokens'],
+  userTokensFor: (userId) => ['user-tokens', userId],
   peers: () => ['peers'],
   peer: (id) => ['peers', id],
   peerIps: (id) => ['peers', id, 'ips'],

@@ -209,11 +209,14 @@ func (w *PushWorker) processJob(ctx context.Context, jobID string) {
 		if ferr != nil {
 			runiclog.Error("Failed to finalize push job on complete", "error", ferr)
 		}
+		// total_peers is canonical; total is a deprecated alias kept for
+		// backward compatibility.
 		w.notifyProgress(jobID, "complete", map[string]interface{}{
-			"status":  "completed",
-			"total":   0,
-			"success": 0,
-			"failed":  0,
+			"status":      "completed",
+			"total_peers": 0,
+			"total":       0,
+			"success":     0,
+			"failed":      0,
 		})
 		return
 	}
@@ -237,12 +240,13 @@ func (w *PushWorker) processJob(ctx context.Context, jobID string) {
 		}
 
 		w.notifyProgress(jobID, "progress", map[string]interface{}{
-			"peer_id":   peer.PeerID,
-			"hostname":  peer.Hostname,
-			"status":    "processing",
-			"total":     total,
-			"succeeded": succeeded,
-			"failed":    failed,
+			"peer_id":     peer.PeerID,
+			"hostname":    peer.Hostname,
+			"status":      "processing",
+			"total_peers": total,
+			"total":       total,
+			"succeeded":   succeeded,
+			"failed":      failed,
 		})
 
 		bundle, err := w.compiler.CompileAndStore(jobCtx, peer.PeerID)
@@ -253,12 +257,13 @@ func (w *PushWorker) processJob(ctx context.Context, jobID string) {
 			}
 			runiclog.Error("PushWorker: failed to compile for peer", "peer_id", peer.PeerID, "hostname", peer.Hostname, "error", err)
 			w.notifyProgress(jobID, "peer_failed", map[string]interface{}{
-				"peer_id":   peer.PeerID,
-				"hostname":  peer.Hostname,
-				"error":     err.Error(),
-				"total":     total,
-				"succeeded": succeeded,
-				"failed":    failed,
+				"peer_id":     peer.PeerID,
+				"hostname":    peer.Hostname,
+				"error":       err.Error(),
+				"total_peers": total,
+				"total":       total,
+				"succeeded":   succeeded,
+				"failed":      failed,
 			})
 
 			w.triggerAlert(jobCtx, &models.AlertEvent{
@@ -287,12 +292,13 @@ func (w *PushWorker) processJob(ctx context.Context, jobID string) {
 			}
 			runiclog.Error("PushWorker: SSE delivery failed for peer", "peer_id", peer.PeerID, "hostname", peer.Hostname)
 			w.notifyProgress(jobID, "peer_failed", map[string]interface{}{
-				"peer_id":   peer.PeerID,
-				"hostname":  peer.Hostname,
-				"error":     "SSE delivery failed: agent not connected",
-				"total":     total,
-				"succeeded": succeeded,
-				"failed":    failed,
+				"peer_id":     peer.PeerID,
+				"hostname":    peer.Hostname,
+				"error":       "SSE delivery failed: agent not connected",
+				"total_peers": total,
+				"total":       total,
+				"succeeded":   succeeded,
+				"failed":      failed,
 			})
 
 			w.triggerAlert(jobCtx, &models.AlertEvent{
@@ -317,12 +323,13 @@ func (w *PushWorker) processJob(ctx context.Context, jobID string) {
 
 		succeeded++
 		w.notifyProgress(jobID, "peer_success", map[string]interface{}{
-			"peer_id":   peer.PeerID,
-			"hostname":  peer.Hostname,
-			"version":   bundle.Version,
-			"total":     total,
-			"succeeded": succeeded,
-			"failed":    failed,
+			"peer_id":     peer.PeerID,
+			"hostname":    peer.Hostname,
+			"version":     bundle.Version,
+			"total_peers": total,
+			"total":       total,
+			"succeeded":   succeeded,
+			"failed":      failed,
 		})
 
 		w.triggerAlert(jobCtx, &models.AlertEvent{
@@ -354,10 +361,11 @@ func (w *PushWorker) processJob(ctx context.Context, jobID string) {
 	runiclog.Info("PushWorker: job finished", "job_id", jobID, "status", finalStatus, "total", total, "succeeded", succeeded, "failed", failed)
 
 	w.notifyProgress(jobID, "complete", map[string]interface{}{
-		"status":    finalStatus,
-		"total":     total,
-		"succeeded": succeeded,
-		"failed":    failed,
+		"status":      finalStatus,
+		"total_peers": total,
+		"total":       total,
+		"succeeded":   succeeded,
+		"failed":      failed,
 	})
 }
 

@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Lock, Trash2, Plus, Shield, Key, Database, HardDrive, Bell, FileKey, ScrollText, Mail, Eye, EyeOff, Send, Loader } from 'lucide-react'
+import { Lock, Trash2, Plus, Shield, Key, Database, HardDrive, Bell, FileKey, ScrollText, Mail, Eye, EyeOff, Send, Loader, Copy, CheckCircle } from 'lucide-react'
 import { api, QUERY_KEYS, getSMTPConfig, updateSMTPConfig, testSMTP, getNotificationPrefs, updateNotificationPrefs, getAlertRules } from '../api/client'
 import { useToastContext } from '../hooks/ToastContext'
 import { useFocusTrap } from '../hooks/useFocusTrap'
@@ -22,6 +22,53 @@ import {
   getAlertRulesSummary,
 } from '../utils/settingsSummary'
 
+function MyTokensPanel({ tokens, loading, onRevoke, showLastUsed = true }) {
+  if (loading) {
+    return <p className="text-sm text-gray-500 dark:text-amber-muted text-center py-6">Loading tokens...</p>
+  }
+  if (!tokens.length) {
+    return <p className="text-sm text-gray-500 dark:text-amber-muted text-center py-6">No API tokens yet. Create one to get started.</p>
+  }
+  return (
+    <div className="overflow-x-auto border border-gray-200 dark:border-gray-border">
+      <table className="w-full text-sm">
+        <thead className="bg-gray-50 dark:bg-charcoal-darkest border-b border-gray-200 dark:border-gray-border">
+          <tr>
+            <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider">Name</th>
+            <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider">Token</th>
+            <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider">Expires</th>
+            {showLastUsed && (
+              <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider">Last Used</th>
+            )}
+            <th className="text-left px-4 py-1 font-medium text-slate-500 text-[10px] uppercase tracking-wider">Actions</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-gray-200 dark:divide-gray-border">
+          {tokens.map((tok) => (
+            <tr key={tok.id}>
+              <td className="px-4 py-1 font-sans font-bold text-gray-900 dark:text-light-neutral">{tok.name}</td>
+              <td className="px-4 py-1 font-mono text-gray-600 dark:text-amber-primary">{tok.display || `${tok.prefix}...`}</td>
+              <td className="px-4 py-1 font-mono text-gray-600 dark:text-amber-primary text-xs">{tok.expires_at || 'Never'}</td>
+              {showLastUsed && (
+                <td className="px-4 py-1 font-mono text-gray-600 dark:text-amber-primary text-xs">{tok.last_used_at || '—'}</td>
+              )}
+              <td className="px-4 py-1">
+                <button
+                  onClick={() => onRevoke(tok)}
+                  className="p-1.5 hover:bg-gray-100 dark:hover:bg-charcoal-darkest rounded-none"
+                  title="Revoke token"
+                >
+                  <Trash2 className="w-4 h-4 text-red-500" />
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
 export default function Settings() {
   const qc = useQueryClient()
   const { showToast } = useToastContext()
@@ -34,8 +81,16 @@ export default function Settings() {
   const [customDays, setCustomDays] = useState('')
   const [useCustomRetention, setUseCustomRetention] = useState(false)
   const [showClearLogsModal, setShowClearLogsModal] = useState(false)
+  const [showMyTokenCreateModal, setShowMyTokenCreateModal] = useState(false)
+  const [myTokenName, setMyTokenName] = useState('')
+  const [myTokenExpiryDays, setMyTokenExpiryDays] = useState('30')
+  const [myCreatedToken, setMyCreatedToken] = useState(null)
+  const [myRevokeTarget, setMyRevokeTarget] = useState(null)
   const deleteModalRef = useRef(null)
   const createModalRef = useRef(null)
+  const myTokenCreateModalRef = useRef(null)
+  const myTokenCreatedModalRef = useRef(null)
+  const myTokenRevokeModalRef = useRef(null)
 
   // Controlled expanded states for jump-to-section functionality
   const [emailExpanded, setEmailExpanded] = useState(undefined)
@@ -71,6 +126,66 @@ export default function Settings() {
 }
   useFocusTrap(deleteModalRef, showDeleteModal !== null)
   useFocusTrap(createModalRef, showCreateModal !== null)
+  useFocusTrap(myTokenCreateModalRef, showMyTokenCreateModal)
+  useFocusTrap(myTokenCreatedModalRef, !!myCreatedToken)
+  useFocusTrap(myTokenRevokeModalRef, !!myRevokeTarget)
+
+  const { data: myTokensData, isLoading: myTokensLoading } = useQuery({
+    queryKey: QUERY_KEYS.userTokens(),
+    queryFn: ({ signal }) => api.get('/users/me/tokens', signal),
+  })
+  const myTokenList = Array.isArray(myTokensData) ? myTokensData : myTokensData?.tokens ?? myTokensData?.items ?? []
+
+  const createMyTokenMutation = useMutation({
+    mutationFn: (payload) => api.post('/users/me/tokens', payload),
+    onSuccess: (data) => {
+      setMyCreatedToken(data)
+      setShowMyTokenCreateModal(false)
+      setMyTokenName('')
+      setMyTokenExpiryDays('30')
+      qc.invalidateQueries({ queryKey: QUERY_KEYS.userTokens() })
+      showToast('API token created', 'success')
+    },
+    onError: (err) => showToast(err.message, 'error'),
+  })
+
+  const revokeMyTokenMutation = useMutation({
+    mutationFn: (tokenId) => api.delete(`/users/me/tokens/${tokenId}`),
+    onSuccess: () => {
+      setMyRevokeTarget(null)
+      qc.invalidateQueries({ queryKey: QUERY_KEYS.userTokens() })
+      showToast('API token revoked', 'success')
+    },
+    onError: (err) => showToast(err.message, 'error'),
+  })
+
+  const handleCreateMyToken = (e) => {
+    e.preventDefault()
+    const name = myTokenName.trim()
+    if (!name) {
+      showToast('Token name is required', 'error')
+      return
+    }
+    if (name.length > 100) {
+      showToast('Token name must be 100 characters or fewer', 'error')
+      return
+    }
+    const days = parseInt(myTokenExpiryDays, 10)
+    if (Number.isNaN(days) || days < 0 || days > 365) {
+      showToast('Expiry must be between 0 and 365 days', 'error')
+      return
+    }
+    createMyTokenMutation.mutate({ name, expires_in_days: days })
+  }
+
+  const copyMyTokenToClipboard = async (text) => {
+    try {
+      await navigator.clipboard.writeText(text)
+      showToast('Copied to clipboard', 'success')
+    } catch {
+      showToast('Failed to copy to clipboard', 'error')
+    }
+  }
 
   const { data: keys, isLoading } = useQuery({
     queryKey: QUERY_KEYS.setupKeys(),
@@ -391,6 +506,20 @@ const getKeyData = (keyType) => {
           <FileKey className="w-5 h-5" />
           Keys
         </button>
+            <button
+              role="tab"
+              aria-selected={activeTab === 'tokens'}
+              aria-controls="tokens-tab-content"
+              onClick={() => setActiveTab('tokens')}
+              className={`flex items-center gap-3 px-6 py-4 text-base font-medium transition-colors ${
+                activeTab === 'tokens'
+                  ? 'border-b-[3px] border-purple-active text-purple-active font-semibold'
+                  : 'border-b-2 border-transparent text-gray-600 dark:text-amber-muted hover:text-gray-900 dark:hover:text-light-neutral hover:bg-gray-50 dark:hover:bg-charcoal-darkest/50'
+              }`}
+            >
+          <Key className="w-5 h-5" />
+          API Tokens
+        </button>
       </div>
         </div>
         )}
@@ -417,6 +546,30 @@ const getKeyData = (keyType) => {
               onDigestChange={handleDigestChange}
               onUnifiedTimezoneChange={handleUnifiedTimezoneChange}
             />
+            </CollapsibleSection>
+
+            <CollapsibleSection
+              title="API Tokens"
+              icon={<Key className="w-5 h-5 text-purple-500" />}
+              storageKey="settings_collapsed_api_tokens"
+              defaultExpanded={true}
+              summary={myTokenList.length ? `${myTokenList.length} token${myTokenList.length !== 1 ? 's' : ''}` : 'No tokens'}
+            >
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <p className="text-sm text-gray-600 dark:text-amber-muted">
+                    Personal access tokens for automation. The full token is shown only once at creation.
+                  </p>
+                  <button
+                    onClick={() => setShowMyTokenCreateModal(true)}
+                    className="inline-flex items-center gap-2 px-4 py-2 text-sm bg-purple-active hover:bg-purple-600 text-white rounded-none border border-purple-active/20 shadow-[0_0_15px_rgba(159,79,248,0.2)] transition-all shrink-0 ml-4"
+                  >
+                    <Plus className="w-4 h-4" />
+                    Create Token
+                  </button>
+                </div>
+                <MyTokensPanel tokens={myTokenList} loading={myTokensLoading} onRevoke={setMyRevokeTarget} showLastUsed={false} />
+              </div>
             </CollapsibleSection>
 
             <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none">
@@ -865,6 +1018,33 @@ id="notifications-section"
       </div>
       )}
 
+          {activeTab === 'tokens' && (
+            <div id="tokens-tab-content" role="tabpanel" className="space-y-6">
+              <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none">
+                <div className="p-6">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-3">
+                      <Key className="w-5 h-5 text-purple-500" />
+                      <h2 className="text-lg font-semibold text-gray-900 dark:text-light-neutral">My API Tokens</h2>
+                    </div>
+                    <button
+                      onClick={() => setShowMyTokenCreateModal(true)}
+                      className="inline-flex items-center gap-2 px-3 py-2 text-sm bg-purple-active hover:bg-purple-600 text-white rounded-none border border-purple-active/20 shadow-[0_0_15px_rgba(159,79,248,0.2)] transition-all"
+                    >
+                      <Plus className="w-4 h-4" />
+                      Create Token
+                    </button>
+                  </div>
+                  <p className="text-gray-600 dark:text-amber-muted text-sm mb-4">
+                    Personal access tokens for automation. Tokens are shown masked; the full token is displayed only once at creation.
+                    To manage another user&apos;s tokens (e.g. llm_agent), use the Users page.
+                  </p>
+                  <MyTokensPanel tokens={myTokenList} loading={myTokensLoading} onRevoke={setMyRevokeTarget} showLastUsed />
+                </div>
+              </div>
+            </div>
+          )}
+
       {showDeleteModal && (
             <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
               <div ref={deleteModalRef} className="bg-white dark:bg-charcoal-dark rounded-none p-6 max-w-md w-full mx-4">
@@ -943,6 +1123,143 @@ id="notifications-section"
                     className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-none disabled:opacity-50"
                   >
                     {clearLogsMutation.isPending ? 'Clearing...' : 'Clear All Logs'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {showMyTokenCreateModal && (
+            <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" role="dialog" aria-modal="true" tabIndex="-1" autoFocus onKeyDown={(e) => { if (e.key === 'Escape') { setShowMyTokenCreateModal(false) } }}>
+              <div ref={myTokenCreateModalRef} className="bg-white dark:bg-charcoal-dark rounded-none p-6 max-w-md w-full mx-4">
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
+                  Create API Token
+                </h3>
+                <p className="text-gray-600 dark:text-amber-muted mb-4 text-sm">
+                  Create a personal access token for automation. The full token is shown only once.
+                </p>
+                <form onSubmit={handleCreateMyToken} className="space-y-4">
+                  <div>
+                    <label htmlFor="myTokenName" className="block text-sm font-medium text-gray-700 dark:text-amber-muted mb-1">
+                      Name <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      id="myTokenName"
+                      type="text"
+                      required
+                      maxLength={100}
+                      value={myTokenName}
+                      onChange={(e) => setMyTokenName(e.target.value)}
+                      placeholder="e.g. ci-runner"
+                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral placeholder-gray-400 dark:placeholder-amber-muted focus:outline-none focus:ring-2 focus:ring-purple-active"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="myTokenExpiry" className="block text-sm font-medium text-gray-700 dark:text-amber-muted mb-1">
+                      Expiry
+                    </label>
+                    <select
+                      id="myTokenExpiry"
+                      value={myTokenExpiryDays}
+                      onChange={(e) => setMyTokenExpiryDays(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-border rounded-none bg-white dark:bg-charcoal-darkest text-gray-900 dark:text-light-neutral focus:outline-none focus:ring-2 focus:ring-purple-active"
+                    >
+                      <option value="0">Never expires</option>
+                      <option value="7">7 days</option>
+                      <option value="30">30 days</option>
+                      <option value="90">90 days</option>
+                      <option value="365">365 days</option>
+                    </select>
+                  </div>
+                  <div className="flex gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setShowMyTokenCreateModal(false)}
+                      className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-border rounded-none text-gray-700 dark:text-amber-primary hover:bg-gray-50 dark:hover:bg-charcoal-darkest"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={createMyTokenMutation.isPending}
+                      className="flex-1 px-4 py-2 bg-purple-active hover:bg-purple-600 text-white rounded-none disabled:opacity-50 border border-purple-active/20 shadow-[0_0_15px_rgba(159,79,248,0.2)] transition-all"
+                    >
+                      {createMyTokenMutation.isPending ? 'Creating...' : 'Create'}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {myCreatedToken && (
+            <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" role="dialog" aria-modal="true" tabIndex="-1" autoFocus onKeyDown={(e) => { if (e.key === 'Escape') { setMyCreatedToken(null) } }}>
+              <div ref={myTokenCreatedModalRef} className="bg-white dark:bg-charcoal-dark rounded-none p-6 max-w-lg w-full mx-4">
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+                  API Token Created
+                </h3>
+                <div className="space-y-4">
+                  <div className="flex items-center gap-3 text-green-600 dark:text-green-400">
+                    <CheckCircle className="w-6 h-6" />
+                    <span className="font-medium">Token created successfully</span>
+                  </div>
+                  <div className="p-3 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-none">
+                    <p className="text-sm text-yellow-800 dark:text-yellow-300 font-medium">
+                      Copy this token now — it will never be shown again!
+                    </p>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-amber-muted mb-1">
+                      Full Token
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <div className="flex-1 p-3 bg-gray-100 dark:bg-charcoal-darkest rounded font-mono text-sm text-gray-700 dark:text-amber-primary break-all">
+                        {myCreatedToken.full_token}
+                      </div>
+                      <button
+                        onClick={() => copyMyTokenToClipboard(myCreatedToken.full_token)}
+                        className="p-2 bg-blue-600 hover:bg-blue-700 text-white rounded-none shrink-0"
+                        title="Copy to clipboard"
+                      >
+                        <Copy className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                <div className="mt-6">
+                  <button
+                    onClick={() => setMyCreatedToken(null)}
+                    className="w-full px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-none"
+                  >
+                    Done
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {myRevokeTarget && (
+            <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" role="dialog" aria-modal="true" tabIndex="-1" autoFocus onKeyDown={(e) => { if (e.key === 'Escape') { setMyRevokeTarget(null) } }}>
+              <div ref={myTokenRevokeModalRef} className="bg-white dark:bg-charcoal-dark rounded-none p-6 max-w-md w-full mx-4">
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
+                  Revoke API Token?
+                </h3>
+                <p className="text-gray-600 dark:text-amber-muted mb-6">
+                  This will immediately revoke token &quot;{myRevokeTarget.name}&quot;. Any automation using it will stop working. This action cannot be undone.
+                </p>
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => setMyRevokeTarget(null)}
+                    className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-border rounded-none text-gray-700 dark:text-amber-primary hover:bg-gray-50 dark:hover:bg-charcoal-darkest"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => revokeMyTokenMutation.mutate(myRevokeTarget.id)}
+                    disabled={revokeMyTokenMutation.isPending}
+                    className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-none disabled:opacity-50"
+                  >
+                    {revokeMyTokenMutation.isPending ? 'Revoking...' : 'Revoke'}
                   </button>
                 </div>
               </div>

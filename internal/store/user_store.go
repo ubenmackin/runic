@@ -118,9 +118,16 @@ func (s *UserStore) CountUsersTx(ctx context.Context, q db.Querier) (int, error)
 }
 
 // CreateUser inserts a new user. passwordHash must already be a bcrypt hash.
+// The email is normalized (trimmed, lower-cased) via common.NormalizeEmail
+// and rejected with common.ErrInvalidEmail when non-empty but malformed, so
+// direct store callers get the same guarantees as the API handler layer.
 func (s *UserStore) CreateUser(ctx context.Context, q db.Querier, username, passwordHash, email, role string) (int64, error) {
 	if q == nil {
 		q = s.db
+	}
+	email = common.NormalizeEmail(email)
+	if email != "" && !common.ValidateEmail(email) {
+		return 0, fmt.Errorf("create user %w: %q", common.ErrInvalidEmail, email)
 	}
 	result, err := q.ExecContext(ctx,
 		"INSERT INTO users (username, password_hash, email, role) VALUES (?, ?, ?, ?)",
@@ -143,13 +150,23 @@ type UpdateUserFields struct {
 }
 
 // UpdateUser updates a user by ID. Returns sql.ErrNoRows if no row was affected.
+// A non-empty email is normalized (trimmed, lower-cased) and validated; a
+// malformed address fails with common.ErrInvalidEmail. A whitespace-only
+// address normalizes to empty and is treated as no update, matching the
+// empty-means-untouched convention for the other fields.
 func (s *UserStore) UpdateUser(ctx context.Context, id int, fields UpdateUserFields) error {
 	var setClauses []string
 	var args []interface{}
 
 	if fields.Email != "" {
-		setClauses = append(setClauses, "email = ?")
-		args = append(args, fields.Email)
+		fields.Email = common.NormalizeEmail(fields.Email)
+		if fields.Email != "" {
+			if !common.ValidateEmail(fields.Email) {
+				return fmt.Errorf("update user %w: %q", common.ErrInvalidEmail, fields.Email)
+			}
+			setClauses = append(setClauses, "email = ?")
+			args = append(args, fields.Email)
+		}
 	}
 	if fields.Role != "" {
 		setClauses = append(setClauses, "role = ?")

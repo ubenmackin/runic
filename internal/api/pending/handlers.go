@@ -467,8 +467,15 @@ func (h *Handler) ApplyEntityPendingChanges(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB limit
+
 	var req ApplyEntityRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			common.RespondError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return
+		}
 		common.RespondError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
@@ -587,7 +594,8 @@ func (h *Handler) ApplyEntityPendingChanges(w http.ResponseWriter, r *http.Reque
 // PushAllRules pushes compiled rules to all agent-based peers.
 // The PushWorker processes the job in the background.
 func (h *Handler) PushAllRules(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	ctx, cancel := commonutil.WithHandlerTimeout(r.Context())
+	defer cancel()
 
 	allPeers, err := h.PeerStore.ListAgentBasedPeers(ctx)
 	if err != nil {
@@ -604,9 +612,14 @@ func (h *Handler) PushAllRules(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jobID := fmt.Sprintf("job_%d", time.Now().UnixNano())
+	jobID, err := common.GeneratePushJobID()
+	if err != nil {
+		log.ErrorContext(ctx, "failed to generate push job ID", "error", err)
+		common.InternalError(w)
+		return
+	}
 
-	initiatedBy := auth.UsernameFromContext(r.Context())
+	initiatedBy := auth.UsernameFromContext(ctx)
 	if err := h.PendingStore.CreatePushJob(ctx, jobID, initiatedBy, len(allPeers)); err != nil {
 		log.ErrorContext(ctx, "failed to create push job", "error", err)
 		common.InternalError(w)
@@ -625,12 +638,18 @@ func (h *Handler) PushAllRules(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := h.PendingStore.CreatePushJobPeers(ctx, jobID, peers); err != nil {
 		log.ErrorContext(ctx, "failed to create push job peers", "error", err)
+		if ferr := h.PendingStore.FinalizePushJobWithCounts(ctx, jobID, 0, len(allPeers)); ferr != nil {
+			log.WarnContext(ctx, "failed to finalize orphaned push job", "error", ferr, "job_id", jobID)
+		}
 		common.InternalError(w)
 		return
 	}
 
 	if err := h.PushWorker.Enqueue(jobID); err != nil {
 		log.ErrorContext(ctx, "push worker queue full", "error", err, "job_id", jobID)
+		if ferr := h.PendingStore.FinalizePushJobWithCounts(ctx, jobID, 0, len(allPeers)); ferr != nil {
+			log.WarnContext(ctx, "failed to finalize orphaned push job", "error", ferr, "job_id", jobID)
+		}
 		common.RespondError(w, http.StatusServiceUnavailable, "push worker queue full, retry later")
 		return
 	}
@@ -653,7 +672,8 @@ func (h *Handler) PushCurrentRules(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx := r.Context()
+	ctx, cancel := commonutil.WithHandlerTimeout(r.Context())
+	defer cancel()
 
 	hostname, agentVersion, isManual, err := h.PeerStore.GetPeerWithAgentVersion(ctx, peerID)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -672,9 +692,14 @@ func (h *Handler) PushCurrentRules(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jobID := fmt.Sprintf("job_%d", time.Now().UnixNano())
+	jobID, err := common.GeneratePushJobID()
+	if err != nil {
+		log.ErrorContext(ctx, "failed to generate push job ID", "error", err)
+		common.InternalError(w)
+		return
+	}
 
-	initiatedBy := auth.UsernameFromContext(r.Context())
+	initiatedBy := auth.UsernameFromContext(ctx)
 	if err := h.PendingStore.CreatePushJob(ctx, jobID, initiatedBy, 1); err != nil {
 		log.ErrorContext(ctx, "failed to create push job", "error", err)
 		common.InternalError(w)
@@ -687,12 +712,18 @@ func (h *Handler) PushCurrentRules(w http.ResponseWriter, r *http.Request) {
 	}{{ID: peerID, Hostname: hostname}}
 	if err := h.PendingStore.CreatePushJobPeers(ctx, jobID, peers); err != nil {
 		log.ErrorContext(ctx, "failed to create push job peers", "error", err)
+		if ferr := h.PendingStore.FinalizePushJobWithCounts(ctx, jobID, 0, 1); ferr != nil {
+			log.WarnContext(ctx, "failed to finalize orphaned push job", "error", ferr, "job_id", jobID)
+		}
 		common.InternalError(w)
 		return
 	}
 
 	if err := h.PushWorker.Enqueue(jobID); err != nil {
 		log.ErrorContext(ctx, "push worker queue full", "error", err, "job_id", jobID)
+		if ferr := h.PendingStore.FinalizePushJobWithCounts(ctx, jobID, 0, 1); ferr != nil {
+			log.WarnContext(ctx, "failed to finalize orphaned push job", "error", ferr, "job_id", jobID)
+		}
 		common.RespondError(w, http.StatusServiceUnavailable, "push worker queue full, retry later")
 		return
 	}
@@ -740,13 +771,16 @@ func (h *Handler) HandlePushJobSSE(w http.ResponseWriter, r *http.Request) {
 	// Send initial state
 	job, peers, err := h.PendingStore.GetPushJobWithPeers(r.Context(), jobID)
 	if err == nil {
+		// total_peers is canonical; total is a deprecated alias kept for
+		// backward compatibility.
 		initialData := map[string]interface{}{
-			"job_id":    job.ID,
-			"status":    job.Status,
-			"total":     job.TotalPeers,
-			"succeeded": job.Succeeded,
-			"failed":    job.Failed,
-			"peers":     peers,
+			"job_id":      job.ID,
+			"status":      job.Status,
+			"total_peers": job.TotalPeers,
+			"total":       job.TotalPeers,
+			"succeeded":   job.Succeeded,
+			"failed":      job.Failed,
+			"peers":       peers,
 		}
 		data, err := json.Marshal(initialData)
 		if err != nil {

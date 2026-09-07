@@ -10,6 +10,7 @@ import (
 	"github.com/minio/selfupdate"
 
 	"runic/internal/common/log"
+	"runic/internal/common/version"
 )
 
 // UpdateBinaryPath is the default agent binary location.
@@ -24,7 +25,7 @@ func downloadBinary(ctx context.Context, client *http.Client, controlPlaneURL, a
 	if err != nil {
 		return nil, fmt.Errorf("create download request: %w", err)
 	}
-	req.Header.Set("User-Agent", "runic-agent/"+Version)
+	req.Header.Set("User-Agent", "runic-agent/"+version.AgentVersion)
 
 	resp, err := client.Do(req)
 	if err != nil {

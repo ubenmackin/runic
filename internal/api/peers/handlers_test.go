@@ -1950,7 +1950,7 @@ func TestAddPeerIP(t *testing.T) {
 				if pip.PeerID == 0 {
 					t.Error("expected non-zero peer_id")
 				}
-				// ID is 0 when constructed directly (no re-query) — T007-#2
+				// ID is 0 when constructed directly (no re-query)
 			}
 
 			if tt.verifyIP != nil {

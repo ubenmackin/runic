@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import ReactDOM from 'react-dom'
 import { X, CheckCircle, AlertCircle, Loader2 } from 'lucide-react'
+import { logger } from '../utils/logger'
 
 export default function PushJobModal({ jobId, onClose }) {
   const [jobStatus, setJobStatus] = useState('connecting') // connecting, running, completed, completed_with_errors, failed
@@ -30,7 +31,7 @@ export default function PushJobModal({ jobId, onClose }) {
     es.addEventListener('init', (e) => {
       try {
         const data = JSON.parse(e.data)
-        setTotal(data.total || 0)
+        setTotal(data.total_peers ?? data.total ?? 0)
         setSucceeded(data.succeeded || 0)
         setFailed(data.failed || 0)
         setJobStatus(data.status === 'running' ? 'running' : data.status || 'connecting')
@@ -42,14 +43,14 @@ export default function PushJobModal({ jobId, onClose }) {
           setPeers(peerMap)
         }
       } catch (err) {
-        console.error('Failed to parse init event:', err)
+        logger.error('Failed to parse init event:', err)
       }
     })
 
     es.addEventListener('progress', (e) => {
       try {
         const data = JSON.parse(e.data)
-        setTotal(data.total || 0)
+        setTotal(data.total_peers ?? data.total ?? 0)
         setSucceeded(data.succeeded || 0)
         setFailed(data.failed || 0)
         if (data.peer_id) {
@@ -59,7 +60,7 @@ export default function PushJobModal({ jobId, onClose }) {
           }))
         }
       } catch (err) {
-        console.error('Failed to parse progress event:', err)
+        logger.error('Failed to parse progress event:', err)
       }
     })
 
@@ -68,13 +69,13 @@ export default function PushJobModal({ jobId, onClose }) {
         const data = JSON.parse(e.data)
         setSucceeded(data.succeeded || 0)
         setFailed(data.failed || 0)
-        setTotal(data.total || 0)
+        setTotal(data.total_peers ?? data.total ?? 0)
         setPeers(prev => ({
           ...prev,
           [data.peer_id]: { hostname: data.hostname, status: 'notified', error: null }
         }))
       } catch (err) {
-        console.error('Failed to parse peer_success event:', err)
+        logger.error('Failed to parse peer_success event:', err)
       }
     })
 
@@ -83,13 +84,13 @@ export default function PushJobModal({ jobId, onClose }) {
         const data = JSON.parse(e.data)
         setSucceeded(data.succeeded || 0)
         setFailed(data.failed || 0)
-        setTotal(data.total || 0)
+        setTotal(data.total_peers ?? data.total ?? 0)
         setPeers(prev => ({
           ...prev,
           [data.peer_id]: { hostname: data.hostname, status: 'failed', error: data.error }
         }))
       } catch (err) {
-        console.error('Failed to parse peer_failed event:', err)
+        logger.error('Failed to parse peer_failed event:', err)
       }
     })
 
@@ -99,21 +100,21 @@ export default function PushJobModal({ jobId, onClose }) {
         setJobStatus(data.status || 'completed')
         setSucceeded(data.succeeded || 0)
         setFailed(data.failed || 0)
-        setTotal(data.total || 0)
+        setTotal(data.total_peers ?? data.total ?? 0)
         // Auto-close after 3 seconds
         const timer = setTimeout(() => {
           handleClose()
         }, 3000)
         autoCloseTimerRef.current = timer
       } catch (err) {
-        console.error('Failed to parse complete event:', err)
+        logger.error('Failed to parse complete event:', err)
       }
     })
 
     es.onerror = () => {
       // SSE auto-reconnects; only log if connection is permanently closed
       if (es.readyState === EventSource.CLOSED) {
-        console.log('SSE connection closed for job', jobId)
+        logger.log('SSE connection closed for job', jobId)
       }
       // Otherwise, EventSource is reconnecting automatically — no action needed
     }

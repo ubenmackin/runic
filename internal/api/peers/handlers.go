@@ -17,6 +17,8 @@ import (
 	"runic/internal/api/agents"
 	"runic/internal/api/common"
 	"runic/internal/api/events"
+	"runic/internal/auth"
+	runiccommon "runic/internal/common"
 	"runic/internal/common/log"
 	"runic/internal/db"
 	"runic/internal/engine"
@@ -29,11 +31,16 @@ type SettingsStore interface {
 }
 
 type Handler struct {
-	Store         *store.PeerStore
-	beginner      db.Beginner
-	Compiler      *engine.Compiler
-	SSEHub        events.NotifyUpdateAgenter
-	SettingsStore SettingsStore
+	Store          *store.PeerStore
+	beginner       db.Beginner
+	Compiler       *engine.Compiler
+	SSEHub         events.NotifyUpdateAgenter
+	SettingsStore  SettingsStore
+	DashboardStore *store.DashboardStore
+	// PendingStore is optional and enables push-job audit rows for bulk
+	// fan-out (UpdateAllAgents). When nil, the fan-out still runs but no
+	// job record is created. Set post-construction like DashboardStore.
+	PendingStore *store.PendingStore
 }
 
 func NewHandler(peerStore *store.PeerStore, beginner db.Beginner, compiler *engine.Compiler, sseHub events.NotifyUpdateAgenter, settingsStore SettingsStore) *Handler {
@@ -399,7 +406,7 @@ func (h *Handler) GetPeerIPs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// ListPeerIPs returns an empty slice for non-existent peers — no need for
-	// a separate existence check (T007-#3).
+	// a separate existence check.
 	peerIPs, err := h.Store.ListPeerIPs(r.Context(), id)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "failed to query peer IPs")
@@ -438,7 +445,7 @@ func (h *Handler) AddPeerIP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Single query: ListPeerIPs handles both existence verification (empty = no peer)
-	// and duplicate IP detection (T007-#2).
+	// and duplicate IP detection.
 	existingIPs, err := h.Store.ListPeerIPs(r.Context(), id)
 	if err != nil {
 		common.RespondError(w, http.StatusInternalServerError, "failed to check duplicate IP")
@@ -458,7 +465,7 @@ func (h *Handler) AddPeerIP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Return the known inserted data directly instead of re-querying (T007-#2).
+	// Return the known inserted data directly instead of re-querying.
 	common.RespondJSON(w, http.StatusCreated, store.PeerIPView{
 		PeerID:    id,
 		IPAddress: input.IPAddress,
@@ -518,7 +525,8 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 		common.RespondError(w, http.StatusBadRequest, "invalid peer ID")
 		return
 	}
-	ctx := r.Context()
+	ctx, cancel := runiccommon.WithHandlerTimeout(r.Context())
+	defer cancel()
 
 	peer, err := h.Store.GetPeerByID(ctx, peerID)
 	if err != nil {
@@ -547,11 +555,166 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 	hostID := fmt.Sprintf("host-%s", peer.Hostname)
 	delivered := h.SSEHub.NotifyUpdateAgent(hostID, instanceURL)
 	if !delivered {
+		log.Debug("UpdateAgent: agent not connected, skipping log", "host_id", hostID)
 		common.RespondJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "agent_not_connected"})
 		return
 	}
+	if h.DashboardStore != nil {
+		initiatedBy := auth.UsernameFromContext(ctx)
+		if err := h.DashboardStore.InsertAgentUpdateLog(ctx, fmt.Sprintf("%d", peerID), peer.Hostname, initiatedBy, instanceURL, ""); err != nil {
+			log.WarnContext(ctx, "failed to insert agent update log", "error", err, "peer_id", peerID)
+		}
+	}
 	log.Info("UpdateAgent: update sent via SSE", "host_id", hostID)
 	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "update_sent"})
+}
+
+// UpdateAllAgents triggers a self-update for all agent-based peers. POST /api/v1/peers/update-agents
+//
+// Bulk fan-out follows the pending-changes/push-all template: the run is
+// recorded as a push job (CreatePushJob + CreatePushJobPeers) with per-peer
+// outcomes and finalized with counts, so delivery is auditable and retryable
+// via the existing push-job APIs. Unlike bundle pushes, agent self-updates
+// are synchronous SSE notifications and must NOT be enqueued on the
+// PushWorker: the worker compiles rule bundles and sends bundle-updated
+// events, so enqueueing here would spuriously recompile and repush bundles
+// to every peer. The job is therefore finalized inline once the fan-out
+// completes, and the endpoint reports 200/status completed (never
+// 202/queued, which is reserved for enqueued background jobs). The response
+// keeps the delivery detail clients rely on (sent/not_connected) alongside
+// the push-all keys; job_id is only present when a push-job row was created.
+func (h *Handler) UpdateAllAgents(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := runiccommon.WithHandlerTimeout(r.Context())
+	defer cancel()
+
+	allPeers, err := h.Store.ListAgentBasedPeers(ctx)
+	if err != nil {
+		log.ErrorContext(ctx, "failed to query agent-based peers", "error", err)
+		common.RespondError(w, http.StatusInternalServerError, "failed to query peers")
+		return
+	}
+
+	if len(allPeers) == 0 {
+		// total_peers is canonical; total is a deprecated alias kept for
+		// backward compatibility.
+		common.RespondJSON(w, http.StatusOK, map[string]interface{}{
+			"status":        "no_peers",
+			"total_peers":   0,
+			"total":         0,
+			"sent":          0,
+			"not_connected": []string{},
+		})
+		return
+	}
+
+	instanceURL, err := h.SettingsStore.GetSystemConfig(ctx, "instance_url")
+	if err != nil || instanceURL == "" {
+		common.RespondError(w, http.StatusBadRequest, "instance URL not configured — set it in Settings to enable agent updates")
+		return
+	}
+
+	if h.SSEHub == nil {
+		common.RespondError(w, http.StatusInternalServerError, "SSE hub not available")
+		return
+	}
+
+	initiatedBy := auth.UsernameFromContext(ctx)
+
+	// Open the audit job before fanning out, mirroring PushAllRules.
+	// No job row exists when PendingStore is nil, so only mint a job ID
+	// when the run will actually be tracked.
+	trackJob := h.PendingStore != nil
+	jobID := ""
+	if trackJob {
+		generatedID, genErr := common.GeneratePushJobID()
+		if genErr != nil {
+			log.ErrorContext(ctx, "failed to generate push job ID", "error", genErr)
+			common.InternalError(w)
+			return
+		}
+		jobID = generatedID
+		if err := h.PendingStore.CreatePushJob(ctx, jobID, initiatedBy, len(allPeers)); err != nil {
+			log.ErrorContext(ctx, "failed to create push job", "error", err)
+			common.InternalError(w)
+			return
+		}
+		peers := make([]struct {
+			ID       int
+			Hostname string
+		}, len(allPeers))
+		for i := range allPeers {
+			peers[i] = struct {
+				ID       int
+				Hostname string
+			}{ID: allPeers[i].ID, Hostname: allPeers[i].Hostname}
+		}
+		if err := h.PendingStore.CreatePushJobPeers(ctx, jobID, peers); err != nil {
+			log.ErrorContext(ctx, "failed to create push job peers", "error", err)
+			// The job row from CreatePushJob already exists — finalize it as
+			// failed so no orphan 'pending' job is left behind for the
+			// push-job SSE/poll APIs to surface.
+			if ferr := h.PendingStore.FinalizePushJobWithCounts(ctx, jobID, 0, len(allPeers)); ferr != nil {
+				log.WarnContext(ctx, "failed to finalize orphaned push job", "error", ferr, "job_id", jobID)
+			}
+			common.InternalError(w)
+			return
+		}
+	}
+
+	notConnected := []string{}
+	sent := 0
+	for i := range allPeers {
+		p := &allPeers[i]
+		hostID := fmt.Sprintf("host-%s", p.Hostname)
+		if h.SSEHub.NotifyUpdateAgent(hostID, instanceURL) {
+			sent++
+			if trackJob {
+				if err := h.PendingStore.UpdatePushJobPeerStatus(ctx, jobID, p.ID, "notified", ""); err != nil {
+					log.WarnContext(ctx, "failed to update push job peer status", "error", err, "job_id", jobID, "peer_id", p.ID)
+				}
+			}
+			if h.DashboardStore != nil {
+				if err := h.DashboardStore.InsertAgentUpdateLog(ctx, fmt.Sprintf("%d", p.ID), p.Hostname, initiatedBy, instanceURL, ""); err != nil {
+					log.WarnContext(ctx, "failed to insert agent update log", "error", err, "peer_id", p.ID)
+				}
+			}
+			log.Info("UpdateAllAgents: update sent via SSE", "host_id", hostID)
+		} else {
+			if trackJob {
+				if err := h.PendingStore.UpdatePushJobPeerStatus(ctx, jobID, p.ID, "failed", "agent not connected"); err != nil {
+					log.WarnContext(ctx, "failed to update push job peer status", "error", err, "job_id", jobID, "peer_id", p.ID)
+				}
+			}
+			log.Debug("UpdateAllAgents: agent not connected, skipping log", "host_id", hostID)
+			notConnected = append(notConnected, p.Hostname)
+		}
+	}
+
+	if trackJob {
+		if err := h.PendingStore.FinalizePushJobWithCounts(ctx, jobID, sent, len(notConnected)); err != nil {
+			log.WarnContext(ctx, "failed to finalize push job", "error", err, "job_id", jobID)
+		}
+	}
+
+	// The fan-out above already completed inline, so report it as completed
+	// with 200. Only include job_id when a push-job row actually exists.
+	// total_peers is canonical (matching push-all); total is a deprecated
+	// alias kept for backward compatibility.
+	response := map[string]interface{}{
+		"status":        "completed",
+		"total_peers":   len(allPeers),
+		"total":         len(allPeers),
+		"sent":          sent,
+		"not_connected": notConnected,
+	}
+	if trackJob {
+		response["job_id"] = jobID
+		log.InfoContext(ctx, "update-all agents completed", "job_id", jobID, "total", len(allPeers), "sent", sent, "not_connected", len(notConnected), "initiated_by", initiatedBy)
+	} else {
+		log.InfoContext(ctx, "update-all agents completed", "total", len(allPeers), "sent", sent, "not_connected", len(notConnected), "initiated_by", initiatedBy)
+	}
+
+	common.RespondJSON(w, http.StatusOK, response)
 }
 
 // RegisterReadRoutes registers read-only (GET) routes for the viewer role.

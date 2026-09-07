@@ -233,4 +233,79 @@ describe('Users Page', () => {
       expect(mockShowToast).toHaveBeenCalledWith('Please enter a valid email address', 'error')
     })
   })
+
+  test('renders users from object-shape payload', async () => {
+    apiClient.api.get.mockResolvedValue({ users: mockUsers, total: 3, page: 1, per_page: 50 })
+    renderWithProviders(<Users />)
+    expect(await screen.findByText('admin@example.com')).toBeInTheDocument()
+    expect(screen.getAllByText(/^editor$/).length).toBeGreaterThan(0)
+    expect(screen.queryByText('No users found. Create your first user to get started.')).not.toBeInTheDocument()
+  })
+
+  test('renders users from array-shape payload (backward compat)', async () => {
+    apiClient.api.get.mockResolvedValue(mockUsers)
+    renderWithProviders(<Users />)
+    expect(await screen.findByText('admin@example.com')).toBeInTheDocument()
+    expect(screen.getAllByText(/^viewer$/).length).toBeGreaterThan(0)
+    expect(screen.queryByText('No users found. Create your first user to get started.')).not.toBeInTheDocument()
+  })
+
+  test('shows empty state for empty object-shape payload', async () => {
+    apiClient.api.get.mockResolvedValue({ users: [], total: 0, page: 1, per_page: 50 })
+    renderWithProviders(<Users />)
+    expect(await screen.findByText('No users found. Create your first user to get started.')).toBeInTheDocument()
+  })
+
+  test('shows new user after create refetch (object shape)', async () => {
+    const user = userEvent.setup()
+    const initial = [{ id: 1, username: 'admin', email: 'admin@example.com', role: 'admin' }]
+    const afterCreate = [
+      ...initial,
+      { id: 2, username: 'newuser', email: 'newuser@example.com', role: 'viewer' },
+    ]
+    apiClient.api.get
+      .mockResolvedValueOnce({ users: initial, total: 1, page: 1, per_page: 50 })
+      .mockResolvedValue({ users: afterCreate, total: 2, page: 1, per_page: 50 })
+    apiClient.api.post.mockResolvedValue({ id: 2, username: 'newuser', email: 'newuser@example.com', role: 'viewer' })
+
+    renderWithProviders(<Users />)
+    expect((await screen.findAllByText('admin')).length).toBeGreaterThan(0)
+    expect(screen.queryByText('newuser')).not.toBeInTheDocument()
+
+    await user.click(screen.getByText('Create User'))
+    await screen.findByRole('dialog')
+
+    await user.type(document.querySelector('#username'), 'newuser')
+    await user.type(document.querySelector('#password'), 'password123')
+    await user.type(document.querySelector('#confirmPassword'), 'password123')
+    await user.type(document.querySelector('#email'), 'newuser@example.com')
+    await user.click(screen.getAllByRole('button').find(b => b.textContent === 'Create'))
+
+    expect(apiClient.api.post).toHaveBeenCalledWith('/users', {
+      username: 'newuser', password: 'password123', email: 'newuser@example.com', role: 'viewer',
+    })
+
+    // Invalidation refetches the list; the new row appears instead of the empty state
+    expect(await screen.findByText('newuser')).toBeInTheDocument()
+    expect(screen.queryByText('No users found. Create your first user to get started.')).not.toBeInTheDocument()
+  })
+
+  test('shows error (not empty state) when viewer gets 403', async () => {
+    const forbidden = new Error('Request failed with status 403: Forbidden')
+    forbidden.status = 403
+    apiClient.api.get.mockRejectedValue(forbidden)
+    useAuthStore.setState({ role: 'viewer' })
+    renderWithProviders(<Users />)
+    expect(await screen.findByText('Failed to load users')).toBeInTheDocument()
+    expect(screen.queryByText('No users found. Create your first user to get started.')).not.toBeInTheDocument()
+  })
+
+  test('ignores pagination fields and falls back for missing email/role', async () => {
+    apiClient.api.get.mockResolvedValue({ users: [{ id: 9, username: 'nofields' }], total: 1, page: 2, per_page: 50 })
+    renderWithProviders(<Users />)
+    expect(await screen.findByText('nofields')).toBeInTheDocument()
+    expect(screen.getByText('—')).toBeInTheDocument()
+    expect(screen.getByText('viewer')).toBeInTheDocument()
+    expect(screen.queryByText('No users found. Create your first user to get started.')).not.toBeInTheDocument()
+  })
 })

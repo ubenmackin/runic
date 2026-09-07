@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -20,6 +21,7 @@ import (
 	"runic/internal/alerts"
 	"runic/internal/api/common"
 	"runic/internal/auth"
+	runiccommon "runic/internal/common"
 	"runic/internal/common/constants"
 	runiclog "runic/internal/common/log"
 	"runic/internal/db"
@@ -57,14 +59,62 @@ type LogEvent struct {
 var validActions = []string{"ACCEPT", "DROP", "REJECT"}
 var validDirections = []string{"IN", "OUT"}
 
+var validProtocols = []string{"tcp", "udp", "icmp", "icmpv6", "sctp", "dccp", "udplite", "esp", "ah", "gre", "igmp"}
+
+// maxRawLineBytes caps the stored raw log line at 4KB to bound DB row size.
+const maxRawLineBytes = 4096
+
+// maxLogEventsPerRequest caps the number of log events accepted per SubmitLogs
+// request so a single 1MB body cannot trigger unbounded inserts and broadcasts.
+const maxLogEventsPerRequest = 1000
+
+// maxVersionLen caps version strings (agent version, bundle version) stored
+// directly in the peers table.
+const maxVersionLen = 255
+
+// maxLoggedIPLen caps the length of an IP value included in log fields so a
+// malformed 1MB string cannot bloat logs.
+const maxLoggedIPLen = 64
+
+// maxLoggedReasonLen caps the length of a validation reason included in log
+// fields so unbounded input cannot bloat logs.
+const maxLoggedReasonLen = 256
+
+// truncateForLog bounds a value included in structured log fields. It returns
+// s unchanged when it fits, otherwise the first maxLen bytes.
+func truncateForLog(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen]
+}
+
+// validateAllIPs rejects the request when any entry fails to parse as an IP
+// address. The first invalid entry is reported with a truncated value so the
+// response and logs stay bounded. Callers map the returned error to 400.
+func validateAllIPs(ips []string) error {
+	for _, ip := range ips {
+		if net.ParseIP(ip) == nil {
+			return fmt.Errorf("invalid IP address in all_ips: %q", truncateForLog(ip, maxLoggedIPLen))
+		}
+	}
+	return nil
+}
+
 // Validate validates the LogEvent. Empty optional fields are allowed, but if present they must be valid.
 // Returns (true, "") if valid, or (false, reason) if invalid.
 func (e *LogEvent) Validate() (bool, string) {
+	if e.Timestamp != "" && !isValidLogTimestamp(e.Timestamp) {
+		return false, fmt.Sprintf("invalid timestamp: %s", e.Timestamp)
+	}
 	if e.SrcIP != "" && net.ParseIP(e.SrcIP) == nil {
 		return false, fmt.Sprintf("invalid src_ip: %s", e.SrcIP)
 	}
 	if e.DstIP != "" && net.ParseIP(e.DstIP) == nil {
 		return false, fmt.Sprintf("invalid dst_ip: %s", e.DstIP)
+	}
+	if e.Protocol != "" && !slices.Contains(validProtocols, strings.ToLower(e.Protocol)) {
+		return false, fmt.Sprintf("invalid protocol: %s", e.Protocol)
 	}
 	if e.SrcPort < 0 || e.SrcPort > 65535 {
 		return false, fmt.Sprintf("src_port out of range: %d", e.SrcPort)
@@ -78,7 +128,46 @@ func (e *LogEvent) Validate() (bool, string) {
 	if e.Direction != "" && !slices.Contains(validDirections, e.Direction) {
 		return false, fmt.Sprintf("invalid direction: %s", e.Direction)
 	}
+	if len(e.RawLine) > maxRawLineBytes {
+		return false, fmt.Sprintf("raw_line too large: %d bytes (max %d)", len(e.RawLine), maxRawLineBytes)
+	}
 	return true, ""
+}
+
+// isValidLogTimestamp reports whether ts parses as RFC3339 (with or without
+// fractional seconds), a SQLite datetime ("2006-01-02 15:04:05"), or a
+// date-only value ("2006-01-02").
+func isValidLogTimestamp(ts string) bool {
+	if _, err := time.Parse(time.RFC3339Nano, ts); err == nil {
+		return true
+	}
+	if _, err := time.Parse(time.RFC3339, ts); err == nil {
+		return true
+	}
+	if _, err := time.Parse("2006-01-02 15:04:05", ts); err == nil {
+		return true
+	}
+	if _, err := time.Parse("2006-01-02", ts); err == nil {
+		return true
+	}
+	return false
+}
+
+// filterValidIPs returns only the entries that parse as IP addresses, logging
+// and skipping invalid values so a single malformed entry cannot poison the
+// peer_ips table. Callers must run validateAllIPs first when the blueprint
+// requires a 400 on invalid entries; this filter remains as a best-effort
+// backstop. Logged values are truncated to keep logs bounded.
+func filterValidIPs(ips []string) []string {
+	valid := make([]string, 0, len(ips))
+	for _, ip := range ips {
+		if net.ParseIP(ip) == nil {
+			runiclog.Warn("Skipping invalid peer IP", "ip", truncateForLog(ip, maxLoggedIPLen))
+			continue
+		}
+		valid = append(valid, ip)
+	}
+	return valid
 }
 
 type SSEBroadcaster interface {
@@ -127,6 +216,12 @@ func (h *Handler) AgentAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
+		if h.DashboardStore == nil {
+			runiclog.Error("JWT secret store unavailable")
+			common.InternalError(w)
+			return
+		}
+
 		secretStr, err := h.DashboardStore.GetSecret(r.Context(), "agent_jwt_secret")
 		if err != nil {
 			runiclog.Error("JWT secret not configured", "error", err)
@@ -165,15 +260,27 @@ func (h *Handler) AgentAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		// Check token revocation via jti (unique token ID)
-		if jti, ok := claims["jti"].(string); ok && jti != "" && h.TokenStore != nil {
-			revoked, checkErr := h.TokenStore.IsTokenRevoked(r.Context(), jti)
-			if checkErr != nil {
-				runiclog.Error("failed to check token revocation", "error", checkErr)
-			} else if revoked {
-				common.RespondError(w, http.StatusUnauthorized, "token has been revoked")
-				return
-			}
+		// Check token revocation via jti (unique token ID). Fail closed to match
+		// the convention in internal/auth/auth.go:IsRevoked and
+		// internal/api/logs/handlers.go:65: a missing jti, a missing store,
+		// or a lookup error must reject the request rather than skip the check.
+		jti, ok := claims["jti"].(string)
+		if !ok || jti == "" || h.TokenStore == nil {
+			runiclog.Error("agent token missing revocation identifier or token store unavailable")
+			common.RespondError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		revCtx, cancel := context.WithTimeout(r.Context(), constants.RevocationCheckTimeout)
+		defer cancel()
+		revoked, checkErr := h.TokenStore.IsTokenRevoked(revCtx, jti)
+		if checkErr != nil {
+			runiclog.Error("failed to check token revocation", "error", checkErr)
+			common.RespondError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		if revoked {
+			common.RespondError(w, http.StatusUnauthorized, "token has been revoked")
+			return
 		}
 
 		// Use typed context key to prevent collisions
@@ -185,6 +292,10 @@ func (h *Handler) AgentAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 func (h *Handler) registerNewPeer(ctx context.Context, input *models.AgentRegisterRequest, w http.ResponseWriter) (int, string, string, error) {
 	if input.RegistrationToken == "" {
 		return 0, "", "", common.NewHTTPError(http.StatusUnauthorized, "registration token required")
+	}
+
+	if err := validateAllIPs(input.AllIPs); err != nil {
+		return 0, "", "", common.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
 	consumed, err := h.ConsumeRegistrationToken(ctx, input.RegistrationToken, input.Hostname)
@@ -214,8 +325,10 @@ func (h *Handler) registerNewPeer(ctx context.Context, input *models.AgentRegist
 	}
 
 	if len(input.AllIPs) > 0 {
-		if err := h.PeerStore.UpsertPeerIPs(ctx, int(peerID), input.AllIPs, input.IP); err != nil {
-			runiclog.Warn("Failed to upsert peer IPs during registration", "error", err, "peer_id", peerID)
+		if validIPs := filterValidIPs(input.AllIPs); len(validIPs) > 0 {
+			if err := h.PeerStore.UpsertPeerIPs(ctx, int(peerID), validIPs, input.IP); err != nil {
+				runiclog.Warn("Failed to upsert peer IPs during registration", "error", err, "peer_id", peerID)
+			}
 		}
 	}
 
@@ -223,6 +336,10 @@ func (h *Handler) registerNewPeer(ctx context.Context, input *models.AgentRegist
 }
 
 func (h *Handler) reRegisterExistingPeer(ctx context.Context, input *models.AgentRegisterRequest, existingID int) (string, string, error) {
+	if err := validateAllIPs(input.AllIPs); err != nil {
+		return "", "", common.NewHTTPError(http.StatusBadRequest, err.Error())
+	}
+
 	newToken, err := generateAgentToken(ctx, h.DashboardStore, input.Hostname)
 	if err != nil {
 		return "", "", fmt.Errorf("generate agent token: %w", err)
@@ -238,8 +355,10 @@ func (h *Handler) reRegisterExistingPeer(ctx context.Context, input *models.Agen
 	}
 
 	if len(input.AllIPs) > 0 {
-		if err := h.PeerStore.UpsertPeerIPs(ctx, existingID, input.AllIPs, input.IP); err != nil {
-			runiclog.Warn("Failed to upsert peer IPs during re-registration", "error", err, "peer_id", existingID)
+		if validIPs := filterValidIPs(input.AllIPs); len(validIPs) > 0 {
+			if err := h.PeerStore.UpsertPeerIPs(ctx, existingID, validIPs, input.IP); err != nil {
+				runiclog.Warn("Failed to upsert peer IPs during re-registration", "error", err, "peer_id", existingID)
+			}
 		}
 	}
 
@@ -275,6 +394,11 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 
 	if input.Hostname == "" {
 		common.RespondError(w, http.StatusBadRequest, "hostname required")
+		return
+	}
+
+	if input.IP != "" && net.ParseIP(input.IP) == nil {
+		common.RespondError(w, http.StatusBadRequest, "invalid IP address")
 		return
 	}
 
@@ -332,6 +456,11 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 
 	newToken, existingHMACKey, err := h.reRegisterExistingPeer(ctx, &input, existingID)
 	if err != nil {
+		var httpErr *common.HTTPError
+		if errors.As(err, &httpErr) {
+			common.RespondError(w, httpErr.StatusCode, httpErr.Message)
+			return
+		}
 		runiclog.Error("Failed to re-register existing peer", "error", err)
 		common.InternalError(w)
 		return
@@ -400,18 +529,70 @@ func (h *Handler) Heartbeat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		runiclog.Warn("Heartbeat: failed to decode body, continuing with partial data", "error", err)
-		// Continue anyway — agent_version and bundle_version may be empty
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			common.RespondError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return
+		}
+		common.RespondError(w, http.StatusBadRequest, "invalid JSON")
+		return
 	}
 
-	if err := h.PeerStore.UpdatePeerHeartbeat(r.Context(), serverID, input.AgentVersion, input.BundleVersionApplied, input.HasIPSet); err != nil {
-		runiclog.Error("Failed to update heartbeat error", "error", err)
+	if len(input.AgentVersion) > maxVersionLen {
+		common.RespondError(w, http.StatusBadRequest, fmt.Sprintf("agent_version too large: %d bytes (max %d)", len(input.AgentVersion), maxVersionLen))
+		return
+	}
+	if len(input.BundleVersionApplied) > maxVersionLen {
+		common.RespondError(w, http.StatusBadRequest, fmt.Sprintf("bundle_version_applied too large: %d bytes (max %d)", len(input.BundleVersionApplied), maxVersionLen))
+		return
+	}
+	if err := validateAllIPs(input.AllIPs); err != nil {
+		common.RespondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Best-effort: record the heartbeat and capture the previously stored
+	// agent version in a single transaction so concurrent heartbeats cannot
+	// interleave a separate pre-read and update (TOCTOU). Failures here must
+	// not fail the heartbeat itself.
+	ctx, cancel := runiccommon.WithHandlerTimeout(r.Context())
+	defer cancel()
+
+	prevHostname := ""
+	prevVersion := ""
+	prevKnown := false
+	var heartbeatErr error
+	if hostname, ver, known, err := h.PeerStore.UpdatePeerHeartbeatWithPrev(ctx, serverID, input.AgentVersion, input.BundleVersionApplied, input.HasIPSet); err != nil {
+		heartbeatErr = err
+		runiclog.Error("Failed to update heartbeat error", "error", heartbeatErr)
+	} else {
+		prevHostname = hostname
+		if ver.Valid {
+			prevVersion = ver.String
+		}
+		prevKnown = known
+	}
+
+	// Record agent version changes only (no duplicate spam): when the
+	// reported version is non-empty, differs from the stored value, and both
+	// the pre-read and the heartbeat update succeeded.
+	// alert_history is intentionally untouched.
+	if prevKnown && heartbeatErr == nil && input.AgentVersion != "" && input.AgentVersion != prevVersion && h.DashboardStore != nil {
+		detail := fmt.Sprintf("agent version changed from %q to %q", prevVersion, input.AgentVersion)
+		if prevVersion == "" {
+			detail = fmt.Sprintf("agent version reported as %q", input.AgentVersion)
+		}
+		if err := h.DashboardStore.InsertAgentUpdateLog(ctx, fmt.Sprintf("%d", serverID), prevHostname, "agent", "", detail); err != nil {
+			runiclog.Warn("Heartbeat: failed to insert agent version log", "error", err, "peer_id", serverID)
+		}
 	}
 
 	if len(input.AllIPs) > 0 {
-		if primaryIP, err := h.PeerStore.GetPeerPrimaryIP(r.Context(), serverID); err == nil {
-			if _, err := h.PeerStore.SyncPeerIPs(r.Context(), serverID, input.AllIPs, primaryIP); err != nil {
-				runiclog.Warn("Failed to sync peer IPs during heartbeat", "error", err, "peer_id", serverID)
+		if validIPs := filterValidIPs(input.AllIPs); len(validIPs) > 0 {
+			if primaryIP, err := h.PeerStore.GetPeerPrimaryIP(ctx, serverID); err == nil {
+				if _, err := h.PeerStore.SyncPeerIPs(ctx, serverID, validIPs, primaryIP); err != nil {
+					runiclog.Warn("Failed to sync peer IPs during heartbeat", "error", err, "peer_id", serverID)
+				}
 			}
 		}
 	}
@@ -443,7 +624,17 @@ func (h *Handler) SubmitLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	peerHostname, err := h.PeerStore.GetPeerHostname(r.Context(), serverID)
+	if len(input.Events) > maxLogEventsPerRequest {
+		common.RespondError(w, http.StatusBadRequest, fmt.Sprintf("too many events: %d (max %d)", len(input.Events), maxLogEventsPerRequest))
+		return
+	}
+
+	// Bound the DB section so a stalled logs database cannot hold the
+	// handler (and its 1MB body) open indefinitely.
+	ctx, cancel := runiccommon.WithHandlerTimeout(r.Context())
+	defer cancel()
+
+	peerHostname, err := h.PeerStore.GetPeerHostname(ctx, serverID)
 	if err != nil {
 		runiclog.Error("Failed to lookup peer hostname", "error", err, "peer_id", serverID)
 		// Continue with empty hostname - better to insert logs than fail completely
@@ -456,17 +647,17 @@ func (h *Handler) SubmitLogs(w http.ResponseWriter, r *http.Request) {
 	for i := range input.Events {
 		ev := &input.Events[i]
 		if valid, reason := ev.Validate(); !valid {
-			runiclog.Warn("Skipping invalid log event", "reason", reason)
+			runiclog.Warn("Skipping invalid log event", "reason", truncateForLog(reason, maxLoggedReasonLen))
 			skipped++
 			continue
 		}
 
 		// Note: Logs DB schema uses different column names than main DB
-		err := h.DashboardStore.InsertFirewallLog(r.Context(), &store.FirewallLogEntry{
+		err := h.DashboardStore.InsertFirewallLog(ctx, &store.FirewallLogEntry{
 			PeerID:       fmt.Sprintf("%d", serverID),
 			PeerHostname: peerHostname,
 			Timestamp:    ev.Timestamp,
-			Direction:    ev.Direction,
+			EventType:    ev.Direction,
 			SrcIP:        ev.SrcIP,
 			DstIP:        ev.DstIP,
 			Protocol:     ev.Protocol,
@@ -523,17 +714,28 @@ func (h *Handler) ConfirmBundleApplied(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if strings.TrimSpace(input.Version) == "" {
+		common.RespondError(w, http.StatusBadRequest, "version required")
+		return
+	}
+	if len(input.Version) > maxVersionLen {
+		common.RespondError(w, http.StatusBadRequest, fmt.Sprintf("version too large: %d bytes (max %d)", len(input.Version), maxVersionLen))
+		return
+	}
+
 	appliedAt := input.AppliedAt
 	if appliedAt == "" {
 		appliedAt = time.Now().UTC().Format(time.RFC3339)
 	}
 
 	// Wrap both DB calls in a transaction to prevent partial state on crash
-	err := store.RunInTx(r.Context(), h.beginner, func(tx *sql.Tx) error {
-		if err := h.PeerStore.UpdateBundleAppliedAtTx(r.Context(), tx, serverID, input.Version, appliedAt); err != nil {
+	ctx, cancel := runiccommon.WithHandlerTimeout(r.Context())
+	defer cancel()
+	err := store.RunInTx(ctx, h.beginner, func(tx *sql.Tx) error {
+		if err := h.PeerStore.UpdateBundleAppliedAtTx(ctx, tx, serverID, input.Version, appliedAt); err != nil {
 			return fmt.Errorf("update bundle applied_at: %w", err)
 		}
-		if err := h.PeerStore.UpdatePeerBundleVersionTx(r.Context(), tx, serverID, input.Version); err != nil {
+		if err := h.PeerStore.UpdatePeerBundleVersionTx(ctx, tx, serverID, input.Version); err != nil {
 			return fmt.Errorf("update peer bundle version: %w", err)
 		}
 		return nil

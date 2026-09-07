@@ -30,7 +30,7 @@ func NewKeyStore(database db.Querier) (*KeyStore, error) {
 }
 
 // ListKeyStatuses returns the existence status of all specified keys in a single query.
-// Returns a map of dbKey → exists. This replaces the per-type N+1 query pattern (T007-#5).
+// Returns a map of dbKey → exists. This replaces the per-type N+1 query pattern.
 func (s *KeyStore) ListKeyStatuses(ctx context.Context, dbKeys []string) (map[string]bool, error) {
 	configs, err := s.settings.GetSystemConfigs(ctx, dbKeys)
 	if err != nil {

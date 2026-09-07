@@ -823,7 +823,8 @@ build_agent_binaries() {
 
 	cd "$SOURCE_DIR" || { log ERROR "Source directory not found"; exit 1; }
 
-	log INFO "Building runic-agent binaries via Makefile..."
+	expected_agent_version=$(cat .agent-version 2>/dev/null || echo "dev")
+	log INFO "Building runic-agent version $expected_agent_version binaries via Makefile..."
 
     # Check if npm is installed (required for web frontend build)
     if ! check_command npm; then
@@ -837,6 +838,33 @@ build_agent_binaries() {
 
 # Build agents via Makefile (single source of truth for build commands)
 	make agents 2>&1 | tee -a "$LOG_FILE" || { log ERROR "Agent build failed. Check $LOG_FILE for details."; exit 1; }
+
+	# Regression guard: verify each built agent binary reports the expected version.
+	# Runs dist/runic-agent-*/-version and fails the build if the expected version
+	# string is missing, so a version-lying agent never ships silently.
+	for agent_binary in dist/runic-agent-linux-*; do
+		[ -f "$agent_binary" ] || continue
+		chmod +x "$agent_binary" 2>/dev/null || true
+		agent_version_output=$("$agent_binary" -version 2>&1) || {
+			# Cross-arch binaries cannot exec on this host; fall back to an
+			# embedded-string check for the ldflags-injected version.
+			if echo "$agent_version_output" | grep -qi "cannot execute\|exec format"; then
+				if ! grep -a -F -q "$expected_agent_version" "$agent_binary"; then
+					log ERROR "Version mismatch (embedded string) in $agent_binary: expected $expected_agent_version"
+					exit 1
+				fi
+				log INFO "Verified $agent_binary contains version $expected_agent_version (embedded string, cross-arch)"
+				continue
+			fi
+			log ERROR "Failed to run $agent_binary -version for verification: $agent_version_output"
+			exit 1
+		}
+		if ! echo "$agent_version_output" | grep -F -q "$expected_agent_version"; then
+			log ERROR "Version mismatch in $agent_binary -version: expected $expected_agent_version, got: $agent_version_output"
+			exit 1
+		fi
+		log INFO "Verified $agent_binary -version contains $expected_agent_version"
+	done
 
 	# Copy agent binaries to install directory (atomic replace to avoid ETXTBSY on running binary)
 	local AGENT_TMP
