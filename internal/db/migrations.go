@@ -44,6 +44,9 @@ func addColumnIfMissing(ctx context.Context, database *sql.DB, table, column, de
 	}
 	if !exists {
 		if _, err := database.ExecContext(ctx, fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, definition)); err != nil {
+			if strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+				return nil
+			}
 			return fmt.Errorf("add column %s.%s: %w", table, column, err)
 		}
 		log.Info("Migration: added column", "column", column, "table", table)
@@ -254,10 +257,13 @@ func migrateSchema(ctx context.Context, database *sql.DB) error {
 		return err
 	}
 
-	// Migration: Add docker_only and direction columns to policies table
-	if err := addColumnIfMissing(ctx, database, "policies", "docker_only", "BOOLEAN NOT NULL DEFAULT 0"); err != nil {
-		return err
-	}
+	// Migration: Add direction column to policies table.
+	// docker_only is legacy and was dropped after the target_scope migration,
+	// so it must not be re-added on modern databases. Re-adding it
+	// unconditionally causes ADD/DROP churn on every startup and races under
+	// concurrent init with duplicate column errors. Legacy databases that still
+	// need the polymorphic or target_scope migration get docker_only ensured
+	// just in time in those blocks below.
 	if err := addColumnIfMissing(ctx, database, "policies", "direction", "TEXT NOT NULL DEFAULT 'both'"); err != nil {
 		return err
 	}
@@ -334,6 +340,9 @@ func migrateSchema(ctx context.Context, database *sql.DB) error {
 	var hasPolymorphic bool
 	err = database.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM pragma_table_info('policies') WHERE name='source_type'").Scan(&hasPolymorphic)
 	if err == nil && !hasPolymorphic {
+		if err := addColumnIfMissing(ctx, database, "policies", "docker_only", "BOOLEAN NOT NULL DEFAULT 0"); err != nil {
+			return err
+		}
 		log.Info("Migration: upgrading policies to polymorphic sources and targets")
 		if err := RunInTx(ctx, database, func(ctx context.Context, tx *sql.Tx) error {
 			if _, err := tx.ExecContext(ctx, `CREATE TABLE policies_poly (
@@ -1482,6 +1491,32 @@ SELECT id, ip_address, 1 FROM peers
 		if strings.Contains(alertRulesTableSQL, "alert_type") && !strings.Contains(alertRulesTableSQL, "agent_updated") {
 			log.Info("Migration: adding agent_updated to alert_rules CHECK constraint")
 			if err := RunInTx(ctx, database, func(ctx context.Context, tx *sql.Tx) error {
+				if _, err := tx.ExecContext(ctx, "PRAGMA defer_foreign_keys=ON"); err != nil {
+					return fmt.Errorf("defer foreign keys: %w", err)
+				}
+				var hasAlertHistory bool
+				if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='alert_history'").Scan(&hasAlertHistory); err != nil {
+					return fmt.Errorf("check alert_history table: %w", err)
+				}
+				detached := false
+				if hasAlertHistory {
+					var hasRuleID bool
+					if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM pragma_table_info('alert_history') WHERE name='rule_id'").Scan(&hasRuleID); err != nil {
+						return fmt.Errorf("check alert_history.rule_id: %w", err)
+					}
+					if hasRuleID {
+						if _, err := tx.ExecContext(ctx, "DROP TABLE IF EXISTS temp._alert_history_rule_backup"); err != nil {
+							return fmt.Errorf("drop stale backup: %w", err)
+						}
+						if _, err := tx.ExecContext(ctx, "CREATE TEMP TABLE _alert_history_rule_backup AS SELECT id, rule_id FROM alert_history"); err != nil {
+							return fmt.Errorf("backup alert_history refs: %w", err)
+						}
+						if _, err := tx.ExecContext(ctx, "UPDATE alert_history SET rule_id = NULL WHERE rule_id IS NOT NULL"); err != nil {
+							return fmt.Errorf("detach alert_history refs: %w", err)
+						}
+						detached = true
+					}
+				}
 				if _, err := tx.ExecContext(ctx, `CREATE TABLE alert_rules_new (
 id INTEGER PRIMARY KEY AUTOINCREMENT,
 name TEXT NOT NULL,
@@ -1496,7 +1531,7 @@ updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 )`); err != nil {
 					return fmt.Errorf("create alert_rules_new: %w", err)
 				}
-				if _, err := tx.ExecContext(ctx, `INSERT INTO alert_rules_new SELECT * FROM alert_rules`); err != nil {
+				if _, err := tx.ExecContext(ctx, `INSERT INTO alert_rules_new (id, name, alert_type, enabled, threshold_value, threshold_window_minutes, peer_id, throttle_minutes, created_at, updated_at) SELECT id, name, alert_type, enabled, threshold_value, threshold_window_minutes, peer_id, throttle_minutes, created_at, updated_at FROM alert_rules`); err != nil {
 					return fmt.Errorf("copy alert_rules data: %w", err)
 				}
 				if _, err := tx.ExecContext(ctx, "DROP TABLE alert_rules"); err != nil {
@@ -1510,6 +1545,40 @@ updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 				}
 				if _, err := tx.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_alert_rules_peer_id ON alert_rules(peer_id)"); err != nil {
 					return fmt.Errorf("create idx_alert_rules_peer_id: %w", err)
+				}
+				if detached {
+					if _, err := tx.ExecContext(ctx, "UPDATE alert_history SET rule_id = (SELECT rule_id FROM temp._alert_history_rule_backup WHERE temp._alert_history_rule_backup.id = alert_history.id) WHERE id IN (SELECT id FROM temp._alert_history_rule_backup WHERE rule_id IS NOT NULL)"); err != nil {
+						return fmt.Errorf("restore alert_history refs: %w", err)
+					}
+					if _, err := tx.ExecContext(ctx, "DROP TABLE IF EXISTS temp._alert_history_rule_backup"); err != nil {
+						return fmt.Errorf("drop backup: %w", err)
+					}
+				}
+				fkRows, err := tx.QueryContext(ctx, "PRAGMA foreign_key_check")
+				if err != nil {
+					return fmt.Errorf("foreign_key_check: %w", err)
+				}
+				violationCount := 0
+				for fkRows.Next() {
+					var fkTable sql.NullString
+					var fkRowID sql.NullInt64
+					var fkRefTable sql.NullString
+					var fkIndex sql.NullInt64
+					if err := fkRows.Scan(&fkTable, &fkRowID, &fkRefTable, &fkIndex); err != nil {
+						_ = fkRows.Close()
+						return fmt.Errorf("scan foreign_key_check: %w", err)
+					}
+					violationCount++
+				}
+				if err := fkRows.Err(); err != nil {
+					_ = fkRows.Close()
+					return fmt.Errorf("iterate foreign_key_check: %w", err)
+				}
+				if err := fkRows.Close(); err != nil {
+					return fmt.Errorf("close foreign_key_check rows: %w", err)
+				}
+				if violationCount > 0 {
+					return fmt.Errorf("foreign_key_check found %d violation(s) after alert_rules rebuild", violationCount)
 				}
 				return nil
 			}); err != nil {
@@ -1525,7 +1594,7 @@ updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		}
 		if !hasAgentUpdatedRule {
 			log.Info("Migration: seeding default agent_updated alert rule")
-			if _, err := database.ExecContext(ctx, `INSERT INTO alert_rules (name, alert_type, enabled, threshold_value, threshold_window_minutes, throttle_minutes) VALUES ('Agent Updated', 'agent_updated', 1, 0, 5, 15)`); err != nil {
+			if _, err := database.ExecContext(ctx, `INSERT INTO alert_rules (name, alert_type, enabled, threshold_value, threshold_window_minutes, throttle_minutes) SELECT 'Agent Updated', 'agent_updated', 1, 0, 5, 15 WHERE NOT EXISTS (SELECT 1 FROM alert_rules WHERE alert_type = 'agent_updated')`); err != nil {
 				return fmt.Errorf("failed to seed agent_updated alert rule: %w", err)
 			}
 			log.Info("Migration: seeded default agent_updated alert rule")
