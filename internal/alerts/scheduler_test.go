@@ -238,3 +238,42 @@ func TestScheduler_isThrottled_NoThrottle(t *testing.T) {
 		t.Error("expected no throttling for rule with ThrottleMinutes=0")
 	}
 }
+
+// Regression: the seeded Peer Online and New Peer rules must not fail
+// scheduler evaluation with "unknown alert type". They are direct-trigger
+// only, so the scheduler skips them silently and records no history while
+// the enabled rules stay in place.
+func TestScheduler_CheckDirectTriggerRules_NoError(t *testing.T) {
+	database, cleanup := setupSchedulerTestDB(t)
+	defer cleanup()
+
+	s := newTestScheduler(t, database)
+	ctx := context.Background()
+
+	seeded := []struct {
+		name      string
+		alertType AlertType
+	}{
+		{"Peer Online", AlertTypePeerOnline},
+		{"New Peer", AlertTypeNewPeer},
+	}
+	for _, seed := range seeded {
+		t.Run(seed.name, func(t *testing.T) {
+			rule := &AlertRule{
+				Name:                   seed.name,
+				AlertType:              seed.alertType,
+				Enabled:                true,
+				ThresholdWindowMinutes: 5,
+				ThrottleMinutes:        15,
+			}
+			createTestAlertRule(t, database, rule)
+
+			if err := s.CheckRule(ctx, uint64(rule.ID)); err != nil {
+				t.Fatalf("expected no error checking %q rule, got %v", seed.name, err)
+			}
+			if got := countAlertHistory(t, database); got != 0 {
+				t.Errorf("expected scheduler to record no history for direct-trigger rule %q, got %d entries", seed.name, got)
+			}
+		})
+	}
+}

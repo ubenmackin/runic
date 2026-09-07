@@ -16,6 +16,13 @@ const (
 	// deadline of its own.
 	HandlerTimeout = 5 * time.Second
 
+	// UpdateFanoutAuditTimeout bounds detached audit and alert writes during
+	// bulk agent-update fan-out (UpdateAllAgents). The fan-out runs under
+	// HandlerTimeout, but push-job peer-status writes and agent_updated
+	// alerts must complete even after the request context is canceled, so
+	// they run on a detached context bounded by this timeout.
+	UpdateFanoutAuditTimeout = 10 * time.Second
+
 	// RevocationCheckTimeout caps how long the auth middleware will wait
 	// for the token-revocation store to answer during request handling.
 	RevocationCheckTimeout = 2 * time.Second

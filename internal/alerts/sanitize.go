@@ -34,6 +34,8 @@ package alerts
 
 import (
 	"strings"
+
+	"runic/internal/common"
 )
 
 const DefaultMaxHostnameLength = 255
@@ -67,26 +69,9 @@ func SanitizeAlertInput(input string, maxLen int) (string, bool) {
 
 	if maxLen > 0 && len(sanitized) > maxLen {
 		modified = true
-		// Safe truncation that doesn't break UTF-8 sequences
-		sanitized = truncateString(sanitized, maxLen)
+		// Rune-safe truncation shared with the agent and API layers.
+		sanitized = common.TruncateString(sanitized, maxLen)
 	}
 
 	return sanitized, modified
-}
-
-// multi-byte UTF-8 sequences.
-func truncateString(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-
-	for maxLen > 0 {
-		if s[maxLen-1] < 0x80 || s[maxLen-1] >= 0xC0 {
-			// ASCII character or start of a multi-byte sequence
-			break
-		}
-		maxLen--
-	}
-
-	return s[:maxLen]
 }

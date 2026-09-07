@@ -231,7 +231,7 @@ func (m *PeerMonitor) checkPeers() {
 	}
 
 	onlineRows, err := m.database.QueryContext(ctx, `
-		SELECT id, hostname, last_heartbeat
+		SELECT id, hostname, ip_address, last_heartbeat
 		FROM peers
 		WHERE is_manual = 0 AND last_heartbeat >= ?
 	`, cutoff)
@@ -249,11 +249,16 @@ func (m *PeerMonitor) checkPeers() {
 	for onlineRows.Next() {
 		var id int
 		var hostname string
+		var ipAddress sql.NullString
 		var lastHeartbeat time.Time
-		if err := onlineRows.Scan(&id, &hostname, &lastHeartbeat); err != nil {
+		if err := onlineRows.Scan(&id, &hostname, &ipAddress, &lastHeartbeat); err != nil {
 			continue
 		}
-		currentOnline[id] = peerInfo{hostname: hostname, lastHeartbeat: lastHeartbeat}
+		info := peerInfo{hostname: hostname, lastHeartbeat: lastHeartbeat}
+		if ipAddress.Valid {
+			info.ipAddress = ipAddress.String
+		}
+		currentOnline[id] = info
 	}
 
 	for peerID := range previousStates {
@@ -328,11 +333,19 @@ func (m *PeerMonitor) triggerPeerOfflineAlert(ctx context.Context, peerID int, i
 }
 
 func (m *PeerMonitor) triggerPeerOnlineAlert(ctx context.Context, peerID int, info peerInfo, wasOffline PeerStatus) {
-	m.logger.Info("peer came online", "peer_id", peerID, "hostname", info.hostname)
+	m.logger.Info("peer came online", "peer_id", peerID, "hostname", info.hostname, "previous_status", string(wasOffline))
 
 	m.mu.Lock()
 	delete(m.offlineAlertSent, peerID)
 	m.mu.Unlock()
+
+	// Only alert on genuine offline-to-online transitions. The caller guards
+	// on previous state, but re-check here so direct callers cannot emit
+	// spurious online alerts for peers that were never offline.
+	if wasOffline != PeerStatusOffline {
+		m.logger.Debug("skipping peer online alert: peer was not offline", "peer_id", peerID, "previous_status", string(wasOffline))
+		return
+	}
 
 	// Suppress online alerts during grace period to prevent false positives
 	// when the server restarts and peers were already online

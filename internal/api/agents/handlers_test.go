@@ -245,12 +245,61 @@ func TestRegisterAgent(t *testing.T) {
 			},
 		},
 		{
-			name: "existing peer re-registration - no token required",
+			name: "existing peer re-registration without auth is rejected",
 			setup: func(t *testing.T, db *sql.DB) {
 				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, status) VALUES (?, ?, ?, ?, ?)`,
 					"existing-agent", "10.0.0.1", "existing-key", "existing-hmac", "offline")
 			},
 			reqBody:  `{"hostname": "existing-agent"}`,
+			wantCode: http.StatusUnauthorized,
+			checkResp: func(t *testing.T, w *httptest.ResponseRecorder) {
+				var resp map[string]interface{}
+				if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+					t.Fatalf("failed to decode response: %v", err)
+				}
+				if resp["error"] != "registration token required" {
+					t.Errorf("expected 'registration token required', got %v", resp["error"])
+				}
+				if _, ok := resp["hmac_key"]; ok {
+					t.Error("unauthenticated response must not disclose hmac_key")
+				}
+				if _, ok := resp["token"]; ok {
+					t.Error("unauthenticated response must not disclose token")
+				}
+			},
+		},
+		{
+			name: "existing peer re-registration with invalid token is rejected",
+			setup: func(t *testing.T, db *sql.DB) {
+				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, status) VALUES (?, ?, ?, ?, ?)`,
+					"existing-agent", "10.0.0.1", "existing-key", "existing-hmac", "offline")
+				db.Exec(`INSERT INTO registration_tokens (token, description) VALUES (?, ?)`,
+					"valid-token-123", "test token")
+			},
+			reqBody:  `{"hostname": "existing-agent", "registration_token": "wrong-token"}`,
+			wantCode: http.StatusUnauthorized,
+			checkResp: func(t *testing.T, w *httptest.ResponseRecorder) {
+				var resp map[string]interface{}
+				if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+					t.Fatalf("failed to decode response: %v", err)
+				}
+				if resp["error"] != "invalid registration token" {
+					t.Errorf("expected 'invalid registration token', got %v", resp["error"])
+				}
+				if _, ok := resp["hmac_key"]; ok {
+					t.Error("unauthenticated response must not disclose hmac_key")
+				}
+			},
+		},
+		{
+			name: "existing peer re-registration with fresh token succeeds",
+			setup: func(t *testing.T, db *sql.DB) {
+				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, status) VALUES (?, ?, ?, ?, ?)`,
+					"existing-agent", "10.0.0.1", "existing-key", "existing-hmac", "offline")
+				db.Exec(`INSERT INTO registration_tokens (token, description) VALUES (?, ?)`,
+					"fresh-token-for-rereg", "test token")
+			},
+			reqBody:  `{"hostname": "existing-agent", "registration_token": "fresh-token-for-rereg"}`,
 			wantCode: http.StatusOK,
 			checkResp: func(t *testing.T, w *httptest.ResponseRecorder) {
 				var resp map[string]interface{}
@@ -262,6 +311,9 @@ func TestRegisterAgent(t *testing.T) {
 				}
 				if resp["hmac_key"] != "existing-hmac" {
 					t.Errorf("expected hmac_key 'existing-hmac', got %v", resp["hmac_key"])
+				}
+				if resp["token"] == nil || resp["token"] == "" {
+					t.Error("expected non-empty token")
 				}
 			},
 		},
@@ -291,6 +343,347 @@ func TestRegisterAgent(t *testing.T) {
 				tt.checkResp(t, w)
 			}
 		})
+	}
+}
+
+func newAgentTestHandler(db *sql.DB) *Handler {
+	return NewHandler(store.NewPeerStore(db), store.NewDashboardStore(db, db), nil, store.NewImportStore(db, store.NewPeerStore(db), store.NewGroupStore(db), store.NewServiceStore(db)), store.NewTokenStore(db), db)
+}
+
+func doRegisterRequest(t *testing.T, handler *Handler, body string, headers map[string]string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest("POST", "/api/v1/agent/register", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	w := httptest.NewRecorder()
+	handler.RegisterAgent(w, req)
+	return w
+}
+
+func computeReRegistrationHMACProof(t *testing.T, hmacKey, hostname string, timestamp int64) string {
+	t.Helper()
+	mac := hmac.New(sha256.New, []byte(hmacKey))
+	fmt.Fprintf(mac, "runic-re-register:%s:%d", hostname, timestamp)
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// TestReRegistrationBearerProof verifies that a currently-valid agent JWT for
+// the same host authorizes re-registration, while wrong-subject and expired
+// tokens do not.
+func TestReRegistrationBearerProof(t *testing.T) {
+	t.Run("valid bearer authorizes without registration token", func(t *testing.T) {
+		db, cleanup := testutil.SetupTestDBWithSecret(t)
+		defer cleanup()
+		handler := newAgentTestHandler(db)
+
+		token := generateValidAgentToken(t, db, "bearer-host")
+		if _, err := db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, agent_token, hmac_key, status) VALUES (?, ?, ?, ?, ?, ?)`,
+			"bearer-host", "10.0.0.1", "agent-key-1", token, "hmac-secret-1", "offline"); err != nil {
+			t.Fatalf("insert peer: %v", err)
+		}
+
+		w := doRegisterRequest(t, handler, `{"hostname": "bearer-host"}`,
+			map[string]string{"Authorization": "Bearer " + token})
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+		var resp map[string]interface{}
+		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		if resp["hmac_key"] != "hmac-secret-1" {
+			t.Errorf("expected existing hmac_key, got %v", resp["hmac_key"])
+		}
+		if resp["token"] == nil || resp["token"] == "" || resp["token"] == token {
+			t.Errorf("expected a fresh rotated token, got %v", resp["token"])
+		}
+	})
+
+	t.Run("bearer for wrong host is rejected", func(t *testing.T) {
+		db, cleanup := testutil.SetupTestDBWithSecret(t)
+		defer cleanup()
+		handler := newAgentTestHandler(db)
+
+		tokenForOther := generateValidAgentToken(t, db, "other-host")
+		if _, err := db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, status) VALUES (?, ?, ?, ?, ?)`,
+			"victim-host", "10.0.0.2", "agent-key-2", "hmac-secret-2", "offline"); err != nil {
+			t.Fatalf("insert peer: %v", err)
+		}
+
+		w := doRegisterRequest(t, handler, `{"hostname": "victim-host"}`,
+			map[string]string{"Authorization": "Bearer " + tokenForOther})
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401, got %d: %s", w.Code, w.Body.String())
+		}
+		if strings.Contains(w.Body.String(), "hmac-secret-2") {
+			t.Error("rejected response must not disclose hmac_key")
+		}
+	})
+
+	t.Run("expired bearer is rejected", func(t *testing.T) {
+		db, cleanup := testutil.SetupTestDBWithSecret(t)
+		defer cleanup()
+		handler := newAgentTestHandler(db)
+
+		secretStr := "test-secret-key-for-agent-jwt-256-bits!!"
+		expired := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+			"sub":  "host-expired-host",
+			"type": "agent",
+			"jti":  "expired-jti-123",
+			"iat":  time.Now().Add(-72 * time.Hour).Unix(),
+			"exp":  time.Now().Add(-time.Hour).Unix(),
+		})
+		expiredStr, err := expired.SignedString([]byte(secretStr))
+		if err != nil {
+			t.Fatalf("sign expired token: %v", err)
+		}
+		if _, err := db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, agent_token, hmac_key, status) VALUES (?, ?, ?, ?, ?, ?)`,
+			"expired-host", "10.0.0.3", "agent-key-3", expiredStr, "hmac-secret-3", "offline"); err != nil {
+			t.Fatalf("insert peer: %v", err)
+		}
+
+		w := doRegisterRequest(t, handler, `{"hostname": "expired-host"}`,
+			map[string]string{"Authorization": "Bearer " + expiredStr})
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401 for expired bearer, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+}
+
+// TestReRegistrationHMACProof verifies HMAC proof-of-possession authorizes
+// re-registration without disclosing the key to unauthenticated callers.
+func TestReRegistrationHMACProof(t *testing.T) {
+	t.Run("valid hmac proof authorizes", func(t *testing.T) {
+		db, cleanup := testutil.SetupTestDBWithSecret(t)
+		defer cleanup()
+		handler := newAgentTestHandler(db)
+
+		hmacKey, err := GenerateHMACKey()
+		if err != nil {
+			t.Fatalf("generate hmac key: %v", err)
+		}
+		if _, err := db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, status) VALUES (?, ?, ?, ?, ?)`,
+			"hmac-host", "10.0.0.1", "agent-key-1", hmacKey, "offline"); err != nil {
+			t.Fatalf("insert peer: %v", err)
+		}
+
+		ts := time.Now().Unix()
+		sig := computeReRegistrationHMACProof(t, hmacKey, "hmac-host", ts)
+		body := fmt.Sprintf(`{"hostname": "hmac-host", "hmac_proof_timestamp": %d, "hmac_proof_signature": %q}`, ts, sig)
+		w := doRegisterRequest(t, handler, body, nil)
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+		var resp map[string]interface{}
+		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		if resp["hmac_key"] != hmacKey {
+			t.Errorf("expected existing hmac_key, got %v", resp["hmac_key"])
+		}
+	})
+
+	t.Run("stale hmac proof is rejected", func(t *testing.T) {
+		db, cleanup := testutil.SetupTestDBWithSecret(t)
+		defer cleanup()
+		handler := newAgentTestHandler(db)
+
+		hmacKey, err := GenerateHMACKey()
+		if err != nil {
+			t.Fatalf("generate hmac key: %v", err)
+		}
+		if _, err := db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, status) VALUES (?, ?, ?, ?, ?)`,
+			"hmac-host", "10.0.0.1", "agent-key-1", hmacKey, "offline"); err != nil {
+			t.Fatalf("insert peer: %v", err)
+		}
+
+		ts := time.Now().Add(-time.Hour).Unix()
+		sig := computeReRegistrationHMACProof(t, hmacKey, "hmac-host", ts)
+		body := fmt.Sprintf(`{"hostname": "hmac-host", "hmac_proof_timestamp": %d, "hmac_proof_signature": %q}`, ts, sig)
+		w := doRegisterRequest(t, handler, body, nil)
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401 for stale proof, got %d: %s", w.Code, w.Body.String())
+		}
+		if strings.Contains(w.Body.String(), hmacKey) {
+			t.Error("rejected response must not disclose hmac_key")
+		}
+	})
+
+	t.Run("wrong hmac proof is rejected", func(t *testing.T) {
+		db, cleanup := testutil.SetupTestDBWithSecret(t)
+		defer cleanup()
+		handler := newAgentTestHandler(db)
+
+		hmacKey, err := GenerateHMACKey()
+		if err != nil {
+			t.Fatalf("generate hmac key: %v", err)
+		}
+		if _, err := db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, status) VALUES (?, ?, ?, ?, ?)`,
+			"hmac-host", "10.0.0.1", "agent-key-1", hmacKey, "offline"); err != nil {
+			t.Fatalf("insert peer: %v", err)
+		}
+
+		ts := time.Now().Unix()
+		sig := computeReRegistrationHMACProof(t, "wrong-key", "hmac-host", ts)
+		body := fmt.Sprintf(`{"hostname": "hmac-host", "hmac_proof_timestamp": %d, "hmac_proof_signature": %q}`, ts, sig)
+		w := doRegisterRequest(t, handler, body, nil)
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401 for wrong proof, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+}
+
+// TestReRegistrationAgentKeyProof verifies stored agent_key authorizes
+// re-registration while a wrong key does not.
+func TestReRegistrationAgentKeyProof(t *testing.T) {
+	t.Run("valid agent_key authorizes", func(t *testing.T) {
+		db, cleanup := testutil.SetupTestDBWithSecret(t)
+		defer cleanup()
+		handler := newAgentTestHandler(db)
+
+		if _, err := db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, status) VALUES (?, ?, ?, ?, ?)`,
+			"key-host", "10.0.0.1", "agent-key-correct", "hmac-secret-1", "offline"); err != nil {
+			t.Fatalf("insert peer: %v", err)
+		}
+
+		w := doRegisterRequest(t, handler, `{"hostname": "key-host", "agent_key": "agent-key-correct"}`, nil)
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("wrong agent_key is rejected", func(t *testing.T) {
+		db, cleanup := testutil.SetupTestDBWithSecret(t)
+		defer cleanup()
+		handler := newAgentTestHandler(db)
+
+		if _, err := db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, status) VALUES (?, ?, ?, ?, ?)`,
+			"key-host", "10.0.0.1", "agent-key-correct", "hmac-secret-1", "offline"); err != nil {
+			t.Fatalf("insert peer: %v", err)
+		}
+
+		w := doRegisterRequest(t, handler, `{"hostname": "key-host", "agent_key": "agent-key-correcX"}`, nil)
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401, got %d: %s", w.Code, w.Body.String())
+		}
+		if strings.Contains(w.Body.String(), "hmac-secret-1") {
+			t.Error("rejected response must not disclose hmac_key")
+		}
+	})
+}
+
+// TestReRegistrationOracleClosure verifies unknown and known hostnames return
+// identical status codes and messages for unauthenticated callers.
+func TestReRegistrationOracleClosure(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want string
+	}{
+		{name: "no token", body: `{"hostname": "%s"}`, want: "registration token required"},
+		{name: "invalid token", body: `{"hostname": "%s", "registration_token": "nope"}`, want: "invalid registration token"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			db, cleanup := testutil.SetupTestDBWithSecret(t)
+			defer cleanup()
+			handler := newAgentTestHandler(db)
+
+			if _, err := db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, status) VALUES (?, ?, ?, ?, ?)`,
+				"known-host", "10.0.0.1", "k", "hmac-known", "offline"); err != nil {
+				t.Fatalf("insert peer: %v", err)
+			}
+
+			wKnown := doRegisterRequest(t, handler, fmt.Sprintf(tc.body, "known-host"), nil)
+			wUnknown := doRegisterRequest(t, handler, fmt.Sprintf(tc.body, "unknown-host-xyz"), nil)
+
+			if wKnown.Code != http.StatusUnauthorized || wUnknown.Code != http.StatusUnauthorized {
+				t.Fatalf("expected 401/401, got %d/%d: %s / %s", wKnown.Code, wUnknown.Code, wKnown.Body.String(), wUnknown.Body.String())
+			}
+			var knownResp, unknownResp map[string]string
+			if err := json.NewDecoder(wKnown.Body).Decode(&knownResp); err != nil {
+				t.Fatalf("decode known: %v", err)
+			}
+			if err := json.NewDecoder(wUnknown.Body).Decode(&unknownResp); err != nil {
+				t.Fatalf("decode unknown: %v", err)
+			}
+			if knownResp["error"] != tc.want || unknownResp["error"] != tc.want {
+				t.Errorf("expected identical %q, got known=%q unknown=%q", tc.want, knownResp["error"], unknownResp["error"])
+			}
+			if knownResp["error"] != unknownResp["error"] {
+				t.Errorf("oracle: messages differ: %q vs %q", knownResp["error"], unknownResp["error"])
+			}
+			for _, body := range []string{wKnown.Body.String(), wUnknown.Body.String()} {
+				if strings.Contains(body, "hmac") {
+					t.Errorf("401 must not contain hmac material: %s", body)
+				}
+			}
+		})
+	}
+}
+
+// TestReRegistrationRevokesOldJTI verifies the superseded agent JWT jti is
+// revoked so it cannot be reused after rotation.
+func TestReRegistrationRevokesOldJTI(t *testing.T) {
+	db, cleanup := testutil.SetupTestDBWithSecret(t)
+	defer cleanup()
+	handler := newAgentTestHandler(db)
+
+	oldToken := generateValidAgentToken(t, db, "rotate-host")
+	if _, err := db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, agent_token, hmac_key, status) VALUES (?, ?, ?, ?, ?, ?)`,
+		"rotate-host", "10.0.0.1", "agent-key-1", oldToken, "hmac-secret-1", "offline"); err != nil {
+		t.Fatalf("insert peer: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO registration_tokens (token, description) VALUES (?, ?)`,
+		"rotate-fresh-token", "test token"); err != nil {
+		t.Fatalf("insert token: %v", err)
+	}
+
+	w := doRegisterRequest(t, handler, `{"hostname": "rotate-host", "registration_token": "rotate-fresh-token"}`, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	newToken, _ := resp["token"].(string)
+	if newToken == "" || newToken == oldToken {
+		t.Fatalf("expected fresh rotated token, got %v", resp["token"])
+	}
+
+	parser := jwt.NewParser(jwt.WithoutClaimsValidation())
+	parsed, _, err := parser.ParseUnverified(oldToken, jwt.MapClaims{})
+	if err != nil {
+		t.Fatalf("parse old token: %v", err)
+	}
+	oldJTI, _ := parsed.Claims.(jwt.MapClaims)["jti"].(string)
+	if oldJTI == "" {
+		t.Fatal("old token missing jti")
+	}
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM revoked_tokens WHERE unique_id = ?`, oldJTI).Scan(&count); err != nil {
+		t.Fatalf("query revoked_tokens: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected old jti revoked (count=1), got %d", count)
+	}
+
+	parsedNew, _, err := parser.ParseUnverified(newToken, jwt.MapClaims{})
+	if err != nil {
+		t.Fatalf("parse new token: %v", err)
+	}
+	newJTI, _ := parsedNew.Claims.(jwt.MapClaims)["jti"].(string)
+	if newJTI == "" {
+		t.Fatal("new token missing jti")
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM revoked_tokens WHERE unique_id = ?`, newJTI).Scan(&count); err != nil {
+		t.Fatalf("query revoked_tokens for new jti: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("new jti must not be revoked, got count=%d", count)
 	}
 }
 
@@ -675,6 +1068,96 @@ func TestHeartbeat(t *testing.T) {
 				tt.checkResp(t, w)
 			}
 		})
+	}
+}
+
+func TestHeartbeatWithLastUpdateError(t *testing.T) {
+	db, logsDB, cleanup := testutil.SetupTestDBWithSecretAndLogs(t)
+	defer cleanup()
+
+	_, err := db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)`,
+		"test-agent", "10.0.0.1", "agent-key-test", "test-hmac")
+	if err != nil {
+		t.Fatalf("insert peer: %v", err)
+	}
+
+	req := makeAuthRequest(t, db, "POST", "/api/v1/agents/heartbeat",
+		`{"bundle_version_applied": "v1.0.0", "agent_version": "1.0.0", "last_update_error": "download returned status 503"}`, "test-agent")
+	w := httptest.NewRecorder()
+
+	handler := NewHandler(store.NewPeerStore(db), store.NewDashboardStore(db, logsDB), nil, store.NewImportStore(db, store.NewPeerStore(db), store.NewGroupStore(db), store.NewServiceStore(db)), store.NewTokenStore(db), db)
+
+	handler.AgentAuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		handler.Heartbeat(w, r)
+	}).ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var count int
+	if err := logsDB.QueryRow(`SELECT COUNT(*) FROM firewall_logs WHERE event_type = 'agent_update'`).Scan(&count); err != nil {
+		t.Fatalf("query firewall logs: %v", err)
+	}
+	// Logs vs Alerts boundary: Heartbeat reports version changes and
+	// last_update_error via structured logs only. firewall_logs stores
+	// firewall traffic (IN/OUT), so no agent_update lifecycle rows are expected.
+	if count != 0 {
+		t.Errorf("expected 0 agent_update rows (log-only heartbeat), got %d", count)
+	}
+
+	// last_update_error must be accepted without failing the heartbeat and
+	// the reported agent version must still be persisted (version-change
+	// detection is log-only and writes no firewall_logs rows).
+	var stored string
+	if err := db.QueryRow(`SELECT agent_version FROM peers WHERE hostname = ?`, "test-agent").Scan(&stored); err != nil {
+		t.Fatalf("query agent version: %v", err)
+	}
+	if stored != "1.0.0" {
+		t.Errorf("stored agent_version = %q, want 1.0.0", stored)
+	}
+}
+
+func TestHeartbeatRecordsVersionChange(t *testing.T) {
+	db, logsDB, cleanup := testutil.SetupTestDBWithSecretAndLogs(t)
+	defer cleanup()
+
+	_, err := db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, agent_version) VALUES (?, ?, ?, ?, ?)`,
+		"test-agent", "10.0.0.1", "agent-key-test", "test-hmac", "v1.0.0")
+	if err != nil {
+		t.Fatalf("insert peer: %v", err)
+	}
+
+	req := makeAuthRequest(t, db, "POST", "/api/v1/agents/heartbeat",
+		`{"bundle_version_applied": "v1.0.0", "agent_version": "v1.0.1"}`, "test-agent")
+	w := httptest.NewRecorder()
+
+	handler := NewHandler(store.NewPeerStore(db), store.NewDashboardStore(db, logsDB), nil, store.NewImportStore(db, store.NewPeerStore(db), store.NewGroupStore(db), store.NewServiceStore(db)), store.NewTokenStore(db), db)
+
+	handler.AgentAuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		handler.Heartbeat(w, r)
+	}).ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var stored string
+	if err := db.QueryRow(`SELECT agent_version FROM peers WHERE hostname = ?`, "test-agent").Scan(&stored); err != nil {
+		t.Fatalf("query agent version: %v", err)
+	}
+	if stored != "v1.0.1" {
+		t.Errorf("stored agent_version = %q, want v1.0.1", stored)
+	}
+
+	var count int
+	if err := logsDB.QueryRow(`SELECT COUNT(*) FROM firewall_logs WHERE event_type = 'agent_update'`).Scan(&count); err != nil {
+		t.Fatalf("query firewall logs: %v", err)
+	}
+	// Logs vs Alerts boundary: version changes are logged only (Info) and
+	// never written to firewall_logs, which stores firewall traffic only.
+	if count != 0 {
+		t.Errorf("expected 0 agent_update rows (log-only version change), got %d", count)
 	}
 }
 
@@ -1314,9 +1797,49 @@ func TestLogEventValidate(t *testing.T) {
 			wantOk: true,
 		},
 		{
+			name: "valid action - LOG_DROP",
+			event: LogEvent{
+				Action: "LOG_DROP",
+			},
+			wantOk: true,
+		},
+		{
 			name: "valid direction - OUT",
 			event: LogEvent{
 				Direction: "OUT",
+			},
+			wantOk: true,
+		},
+		{
+			name: "valid direction - FWD",
+			event: LogEvent{
+				Direction: "FWD",
+			},
+			wantOk: true,
+		},
+		{
+			name: "valid protocol - vrrp",
+			event: LogEvent{
+				Protocol: "vrrp",
+			},
+			wantOk: true,
+		},
+		{
+			name: "valid protocol - vrrp uppercase",
+			event: LogEvent{
+				Protocol: "VRRP",
+			},
+			wantOk: true,
+		},
+		{
+			name: "valid forwarded VRRP LOG_DROP event",
+			event: LogEvent{
+				Timestamp: "2024-01-01T00:00:00Z",
+				Direction: "FWD",
+				SrcIP:     "192.168.1.1",
+				DstIP:     "224.0.0.18",
+				Protocol:  "vrrp",
+				Action:    "LOG_DROP",
 			},
 			wantOk: true,
 		},
@@ -1334,6 +1857,18 @@ func TestLogEventValidate(t *testing.T) {
 				t.Errorf("expected ok=%v, got %v", tt.wantOk, ok)
 			}
 		})
+	}
+}
+
+func TestTruncateForLogRuneSafe(t *testing.T) {
+	if got := truncateForLog("a\xC3\xA9", 2); got != "a" {
+		t.Errorf("truncateForLog(aé, 2) = %q, want %q", got, "a")
+	}
+	if got := truncateForLog("hello", 10); got != "hello" {
+		t.Errorf("truncateForLog(hello, 10) = %q, want %q", got, "hello")
+	}
+	if got := truncateForLog("hello world", 5); got != "hello" {
+		t.Errorf("truncateForLog(hello world, 5) = %q, want %q", got, "hello")
 	}
 }
 

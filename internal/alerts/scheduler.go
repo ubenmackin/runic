@@ -212,19 +212,27 @@ func (s *Scheduler) getEnabledRules(ctx context.Context) ([]models.AlertRule, er
 	return enabledRules, nil
 }
 
+// isRuleThrottled is the single shared throttle check used by both scheduled
+// checks and direct TriggerAlert calls so per-rule ThrottleMinutes is enforced
+// uniformly. It returns (false, nil) when throttling is disabled and returns
+// the store error so callers can fail-open with a warning.
+func isRuleThrottled(ctx context.Context, alertStore *store.AlertStore, rule *models.AlertRule) (bool, error) {
+	if rule == nil || rule.ThrottleMinutes <= 0 {
+		return false, nil
+	}
+	if alertStore == nil {
+		return false, nil
+	}
+	cutoff := time.Now().Add(-rule.GetThrottleDuration())
+	return alertStore.IsAlertThrottled(ctx, rule.ID, cutoff)
+}
+
 // Returns true if the alert should be throttled (skipped).
 func (s *Scheduler) isThrottled(ctx context.Context, rule *models.AlertRule) bool {
-	if rule.ThrottleMinutes <= 0 {
-		return false
-	}
-
-	cutoff := time.Now().Add(-rule.GetThrottleDuration())
-
-	throttled, err := s.alertStore.IsAlertThrottled(ctx, rule.ID, cutoff)
+	throttled, err := isRuleThrottled(ctx, s.alertStore, rule)
 	if err != nil {
 		s.logger.Warn("failed to check throttled status", "error", err)
 		return false
 	}
-
 	return throttled
 }

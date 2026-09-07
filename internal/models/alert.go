@@ -25,6 +25,7 @@ const (
 	AlertTypePeerOnline     AlertType = "peer_online"
 	AlertTypeNewPeer        AlertType = "new_peer"
 	AlertTypeBundleDeployed AlertType = "bundle_deployed"
+	AlertTypeAgentUpdated   AlertType = "agent_updated"
 )
 
 type Severity string
@@ -86,7 +87,7 @@ func (at AlertType) String() string {
 
 func (at AlertType) IsValid() bool {
 	switch at {
-	case AlertTypePeerOffline, AlertTypeBundleFailed, AlertTypeBlockedSpike, AlertTypePeerOnline, AlertTypeNewPeer, AlertTypeBundleDeployed:
+	case AlertTypePeerOffline, AlertTypeBundleFailed, AlertTypeBlockedSpike, AlertTypePeerOnline, AlertTypeNewPeer, AlertTypeBundleDeployed, AlertTypeAgentUpdated:
 		return true
 	default:
 		return false
@@ -119,6 +120,8 @@ func (at AlertType) DefaultSeverity() Severity {
 	case AlertTypeNewPeer:
 		return SeverityInfo
 	case AlertTypeBundleDeployed:
+		return SeverityInfo
+	case AlertTypeAgentUpdated:
 		return SeverityInfo
 	default:
 		return SeverityInfo

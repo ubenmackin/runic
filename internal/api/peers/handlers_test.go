@@ -6,12 +6,28 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"runic/internal/api/events"
 	"runic/internal/store"
 	"runic/internal/testutil"
 )
+
+// stageTestBinaries creates a temp downloads dir with the canonical staged
+// binaries so update handlers pass the fail-closed staged check.
+func stageTestBinaries(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	for _, name := range []string{"runic-agent-amd64", "runic-agent-arm", "runic-agent-arm64"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("test"), 0644); err != nil {
+			t.Fatalf("failed to stage test binary %s: %v", name, err)
+		}
+	}
+	return dir
+}
 
 // testSettingsStore implements SettingsStore for tests by reading directly from the test DB.
 type testSettingsStore struct {
@@ -2224,6 +2240,7 @@ func TestUpdateAgent(t *testing.T) {
 		defer cleanup()
 
 		handler := NewHandler(store.NewPeerStore(database), database, nil, nil, &testSettingsStore{db: database})
+		handler.DownloadsDir = stageTestBinaries(t)
 
 		database.Exec(`INSERT INTO peers (hostname, ip_address, is_manual, agent_key, hmac_key) VALUES (?, ?, 0, ?, ?)`, "agent-peer", "10.0.0.3", "key2", "hmackey2")
 
@@ -2243,24 +2260,25 @@ func TestUpdateAgent(t *testing.T) {
 
 type mockUpdateAgent struct {
 	called          bool
-	delivered       bool
+	outcome         events.UpdateAgentOutcome
 	hostID          string
 	controlPlaneURL string
 }
 
-func (m *mockUpdateAgent) NotifyUpdateAgent(hostID, url string) bool {
+func (m *mockUpdateAgent) NotifyUpdateAgent(hostID, url string) events.UpdateAgentOutcome {
 	m.called = true
 	m.hostID = hostID
 	m.controlPlaneURL = url
-	return m.delivered
+	return m.outcome
 }
 
 func TestUpdateAgentSuccess(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	mock := &mockUpdateAgent{delivered: true}
+	mock := &mockUpdateAgent{outcome: events.UpdateAgentSent}
 	handler := NewHandler(store.NewPeerStore(database), database, nil, mock, &testSettingsStore{db: database})
+	handler.DownloadsDir = stageTestBinaries(t)
 
 	database.Exec(`INSERT INTO peers (hostname, ip_address, is_manual, agent_key, hmac_key) VALUES (?, ?, 0, ?, ?)`, "agent-peer", "10.0.0.5", "key5", "hmackey5")
 
@@ -2280,8 +2298,8 @@ func TestUpdateAgentSuccess(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
-	if resp["status"] != "update_sent" {
-		t.Errorf("expected status 'update_sent', got %q", resp["status"])
+	if resp["status"] != "sent" {
+		t.Errorf("expected status 'sent', got %q", resp["status"])
 	}
 
 	if !mock.called {
@@ -2299,8 +2317,9 @@ func TestUpdateAgentNotConnected(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	mock := &mockUpdateAgent{delivered: false}
+	mock := &mockUpdateAgent{outcome: events.UpdateAgentNotConnected}
 	handler := NewHandler(store.NewPeerStore(database), database, nil, mock, &testSettingsStore{db: database})
+	handler.DownloadsDir = stageTestBinaries(t)
 
 	database.Exec(`INSERT INTO peers (hostname, ip_address, is_manual, agent_key, hmac_key) VALUES (?, ?, 0, ?, ?)`, "agent-peer", "10.0.0.5", "key5", "hmackey5")
 	database.Exec(`INSERT INTO system_config (key, value) VALUES ('instance_url', 'https://runic.example.com')`)
@@ -2319,8 +2338,8 @@ func TestUpdateAgentNotConnected(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
-	if resp["status"] != "agent_not_connected" {
-		t.Errorf("expected status 'agent_not_connected', got %q", resp["status"])
+	if resp["status"] != "not_connected" {
+		t.Errorf("expected status 'not_connected', got %q", resp["status"])
 	}
 
 	if !mock.called {
@@ -2332,8 +2351,9 @@ func TestUpdateAgentChannelFull(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 
-	mock := &mockUpdateAgent{delivered: false}
+	mock := &mockUpdateAgent{outcome: events.UpdateAgentChannelFull}
 	handler := NewHandler(store.NewPeerStore(database), database, nil, mock, &testSettingsStore{db: database})
+	handler.DownloadsDir = stageTestBinaries(t)
 
 	database.Exec(`INSERT INTO peers (hostname, ip_address, is_manual, agent_key, hmac_key) VALUES (?, ?, 0, ?, ?)`, "agent-peer", "10.0.0.6", "key6", "hmackey6")
 	database.Exec(`INSERT INTO system_config (key, value) VALUES ('instance_url', 'https://runic.example.com')`)
@@ -2352,11 +2372,144 @@ func TestUpdateAgentChannelFull(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
-	if resp["status"] != "agent_not_connected" {
-		t.Errorf("expected status 'agent_not_connected', got %q", resp["status"])
+	if resp["status"] != "channel_full" {
+		t.Errorf("expected status 'channel_full', got %q", resp["status"])
 	}
 
 	if !mock.called {
 		t.Error("expected NotifyUpdateAgent to be called")
 	}
+}
+
+func TestUpdateAllAgents_ChannelFullDistinctFromNotConnected(t *testing.T) {
+	setupTwoPeers := func(t *testing.T, db *sql.DB) {
+		t.Helper()
+		if _, err := db.Exec(`INSERT INTO peers (hostname, ip_address, is_manual, agent_key, hmac_key) VALUES (?, ?, 0, ?, ?)`, "peer-a", "10.0.0.11", "key-a", "hmac-a"); err != nil {
+			t.Fatalf("failed to insert peer-a: %v", err)
+		}
+		if _, err := db.Exec(`INSERT INTO peers (hostname, ip_address, is_manual, agent_key, hmac_key) VALUES (?, ?, 0, ?, ?)`, "peer-b", "10.0.0.12", "key-b", "hmac-b"); err != nil {
+			t.Fatalf("failed to insert peer-b: %v", err)
+		}
+		if _, err := db.Exec(`INSERT INTO system_config (key, value) VALUES ('instance_url', 'https://runic.example.com')`); err != nil {
+			t.Fatalf("failed to insert instance_url: %v", err)
+		}
+	}
+	decodeBulk := func(t *testing.T, w *httptest.ResponseRecorder) map[string]interface{} {
+		t.Helper()
+		var resp map[string]interface{}
+		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+			t.Fatalf("failed to decode bulk response: %v", err)
+		}
+		return resp
+	}
+	asStringSlice := func(t *testing.T, resp map[string]interface{}, key string) []string {
+		t.Helper()
+		raw, ok := resp[key]
+		if !ok {
+			t.Fatalf("expected key %q in bulk response, got %v", key, resp)
+		}
+		arr, ok := raw.([]interface{})
+		if !ok {
+			t.Fatalf("expected key %q to be a list, got %T", key, raw)
+		}
+		out := make([]string, 0, len(arr))
+		for _, v := range arr {
+			s, ok := v.(string)
+			if !ok {
+				t.Fatalf("expected string in %q, got %T", key, v)
+			}
+			out = append(out, s)
+		}
+		return out
+	}
+
+	t.Run("not_connected maps to not_connected", func(t *testing.T) {
+		database, cleanup := testutil.SetupTestDB(t)
+		defer cleanup()
+		setupTwoPeers(t, database)
+
+		mock := &mockUpdateAgent{outcome: events.UpdateAgentNotConnected}
+		handler := NewHandler(store.NewPeerStore(database), database, nil, mock, &testSettingsStore{db: database})
+		handler.DownloadsDir = stageTestBinaries(t)
+
+		req := httptest.NewRequest("POST", "/api/v1/peers/update-agents", nil)
+		w := httptest.NewRecorder()
+		handler.UpdateAllAgents(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+		resp := decodeBulk(t, w)
+		if resp["status"] != "completed" {
+			t.Errorf("expected status completed, got %v", resp["status"])
+		}
+		notConnected := asStringSlice(t, resp, "not_connected")
+		if len(notConnected) != 2 {
+			t.Errorf("expected 2 not_connected, got %v", notConnected)
+		}
+		channelFull := asStringSlice(t, resp, "channel_full")
+		if len(channelFull) != 0 {
+			t.Errorf("expected empty channel_full, got %v", channelFull)
+		}
+		canceled := asStringSlice(t, resp, "canceled")
+		if len(canceled) != 0 {
+			t.Errorf("expected empty canceled, got %v", canceled)
+		}
+		if !mock.called {
+			t.Error("expected NotifyUpdateAgent to be called")
+		}
+	})
+
+	t.Run("channel_full maps to channel_full not not_connected", func(t *testing.T) {
+		database, cleanup := testutil.SetupTestDB(t)
+		defer cleanup()
+		setupTwoPeers(t, database)
+
+		mock := &mockUpdateAgent{outcome: events.UpdateAgentChannelFull}
+		handler := NewHandler(store.NewPeerStore(database), database, nil, mock, &testSettingsStore{db: database})
+		handler.DownloadsDir = stageTestBinaries(t)
+
+		req := httptest.NewRequest("POST", "/api/v1/peers/update-agents", nil)
+		w := httptest.NewRecorder()
+		handler.UpdateAllAgents(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+		resp := decodeBulk(t, w)
+		channelFull := asStringSlice(t, resp, "channel_full")
+		if len(channelFull) != 2 {
+			t.Errorf("expected 2 channel_full, got %v", channelFull)
+		}
+		notConnected := asStringSlice(t, resp, "not_connected")
+		if len(notConnected) != 0 {
+			t.Errorf("expected empty not_connected when backpressure, got %v", notConnected)
+		}
+		canceled := asStringSlice(t, resp, "canceled")
+		if len(canceled) != 0 {
+			t.Errorf("expected empty canceled, got %v", canceled)
+		}
+	})
+
+	t.Run("sent peers still report sent", func(t *testing.T) {
+		database, cleanup := testutil.SetupTestDB(t)
+		defer cleanup()
+		setupTwoPeers(t, database)
+
+		mock := &mockUpdateAgent{outcome: events.UpdateAgentSent}
+		handler := NewHandler(store.NewPeerStore(database), database, nil, mock, &testSettingsStore{db: database})
+		handler.DownloadsDir = stageTestBinaries(t)
+
+		req := httptest.NewRequest("POST", "/api/v1/peers/update-agents", nil)
+		w := httptest.NewRecorder()
+		handler.UpdateAllAgents(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+		resp := decodeBulk(t, w)
+		if sent, ok := resp["sent"].(float64); !ok || int(sent) != 2 {
+			t.Errorf("expected sent=2, got %v", resp["sent"])
+		}
+	})
 }

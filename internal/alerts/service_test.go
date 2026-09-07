@@ -149,6 +149,70 @@ func TestTriggerAlert_Basic(t *testing.T) {
 	_ = service
 }
 
+// Direct-trigger events still need a valid type plus an enabled rule to
+// produce history. Peer online and new peer alerts bypass the scheduler and
+// are recorded via ProcessAlert; a missing SMTP sender must not prevent the
+// history entry.
+func TestProcessAlert_PeerOnlineAndNewPeerDirectTrigger(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	setupTestAlertTables(t, database)
+
+	createTestUser(t, database, "admin", "admin@test.com", "admin")
+
+	databaseWrapper := db.New(database)
+	alertStore := store.NewAlertStore(databaseWrapper)
+	userStore := store.NewUserStore(databaseWrapper)
+	processor := NewAlertProcessor(alertStore, userStore, nil)
+
+	ctx := context.Background()
+	cases := []struct {
+		name      string
+		alertType AlertType
+	}{
+		{"Peer Online", AlertTypePeerOnline},
+		{"New Peer", AlertTypeNewPeer},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rule := &AlertRule{
+				Name:            tc.name + " Rule",
+				AlertType:       tc.alertType,
+				Enabled:         true,
+				ThrottleMinutes: 15,
+			}
+			createTestAlertRule(t, database, rule)
+
+			event := &AlertEvent{
+				Type:      tc.alertType,
+				PeerID:    1,
+				PeerName:  "test-peer",
+				Timestamp: time.Now(),
+				Subject:   tc.name,
+				Message:   tc.name + " direct trigger",
+			}
+			if err := processor.ProcessAlert(ctx, event, rule); err != nil {
+				t.Fatalf("expected direct-trigger alert to be processed, got %v", err)
+			}
+
+			history := getAlertHistoryByRuleID(t, database, rule.ID)
+			if len(history) != 1 {
+				t.Fatalf("expected 1 alert history entry, got %d", len(history))
+			}
+			if history[0].AlertType != tc.alertType {
+				t.Errorf("expected alert type %s, got %s", tc.alertType, history[0].AlertType)
+			}
+			if history[0].Severity != SeverityInfo {
+				t.Errorf("expected severity %s, got %s", SeverityInfo, history[0].Severity)
+			}
+			if history[0].Status != AlertStatusSent {
+				t.Errorf("expected status %s, got %s", AlertStatusSent, history[0].Status)
+			}
+		})
+	}
+}
+
 func TestTriggerAlert_Throttled(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
@@ -204,6 +268,28 @@ func TestTriggerAlert_Throttled(t *testing.T) {
 		t.Errorf("expected 1 alert history entry, got %d", len(allHistory))
 	}
 
+	// Direct-trigger path must enforce the same throttle as the scheduler:
+	// Service.TriggerAlert skips creating duplicate history while returning
+	// nil so bulk fan-out callers still report the trigger as sent.
+	service := NewService(databaseWrapper, alertStore, userStore)
+	if err := service.Initialize(); err != nil {
+		t.Fatalf("failed to initialize service: %v", err)
+	}
+	throttledEvent := &AlertEvent{
+		Type:      AlertTypePeerOffline,
+		PeerID:    1,
+		PeerName:  "test-peer",
+		Timestamp: time.Now(),
+		Subject:   "Peer offline",
+		Message:   "Throttled direct trigger",
+	}
+	if err := service.TriggerAlert(ctx, throttledEvent); err != nil {
+		t.Fatalf("throttled TriggerAlert should return nil, got: %v", err)
+	}
+	if got := countAlertHistory(t, database); got != 1 {
+		t.Errorf("expected throttled TriggerAlert to create no new history, got %d total entries", got)
+	}
+
 	// Test that after throttle duration passes, throttling is released
 	// We can't actually wait 60 minutes, so we delete the history to simulate
 	// the throttle window passing
@@ -215,7 +301,63 @@ func TestTriggerAlert_Throttled(t *testing.T) {
 		t.Error("expected alert to not be throttled after history cleared")
 	}
 
+	// After the throttle window passes, the direct trigger should fire again.
+	if err := service.TriggerAlert(ctx, throttledEvent); err != nil {
+		t.Fatalf("unthrottled TriggerAlert should return nil, got: %v", err)
+	}
+	if got := countAlertHistory(t, database); got != 1 {
+		t.Errorf("expected unthrottled TriggerAlert to create 1 history entry, got %d", got)
+	}
+
 	_ = processor
+}
+
+func TestTriggerAlert_BulkFanOutThrottled(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	setupTestAlertTables(t, database)
+
+	createTestUser(t, database, "admin", "admin@test.com", "admin")
+
+	rule := &AlertRule{
+		Name:            "Agent Updated Rule",
+		AlertType:       AlertTypeAgentUpdated,
+		Enabled:         true,
+		ThrottleMinutes: 15,
+	}
+	createTestAlertRule(t, database, rule)
+
+	databaseWrapper := db.New(database)
+	alertStore := store.NewAlertStore(databaseWrapper)
+	userStore := store.NewUserStore(databaseWrapper)
+	ctx := context.Background()
+
+	service := NewService(databaseWrapper, alertStore, userStore)
+	if err := service.Initialize(); err != nil {
+		t.Fatalf("failed to initialize service: %v", err)
+	}
+
+	// Simulate bulk fan-out: sequential direct triggers for distinct peers
+	// against the same global rule. Only the first should create history;
+	// the rest must be throttled without errors.
+	for peerID := 1; peerID <= 5; peerID++ {
+		event := &AlertEvent{
+			Type:      AlertTypeAgentUpdated,
+			PeerID:    peerID,
+			PeerName:  "peer-" + strconv.Itoa(peerID),
+			Timestamp: time.Now(),
+			Subject:   "Agent updated",
+			Message:   "Bulk fan-out trigger",
+		}
+		if err := service.TriggerAlert(ctx, event); err != nil {
+			t.Fatalf("bulk TriggerAlert for peer %d should return nil, got: %v", peerID, err)
+		}
+	}
+
+	if got := countAlertHistory(t, database); got != 1 {
+		t.Errorf("expected bulk fan-out to create 1 history entry under throttle, got %d", got)
+	}
 }
 
 func TestTriggerAlert_QuietHours(t *testing.T) {

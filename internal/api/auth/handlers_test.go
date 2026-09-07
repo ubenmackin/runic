@@ -387,6 +387,146 @@ func TestHandleLoginPOST_InvalidJSON(t *testing.T) {
 	}
 }
 
+func TestHandleLoginPOST_XFFRotationStillLocked(t *testing.T) {
+	ResetRateLimitStore()
+	db, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	setupTestJWT(t, db)
+
+	hash, err := bcrypt.GenerateFromPassword([]byte("correct-password"), 12)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)", "xfflockuser", string(hash), "admin"); err != nil {
+		t.Fatal(err)
+	}
+
+	h := newTestHandler(db)
+	remoteAddr := "203.0.113.20:12345"
+	spoofed := []string{
+		"198.51.100.1",
+		"198.51.100.2",
+		"198.51.100.3",
+		"198.51.100.4",
+		"198.51.100.5",
+	}
+
+	// Five failed guesses with a fresh spoofed X-Forwarded-For each time must
+	// still share one username:RemoteAddrIP bucket: all return 401 (failure
+	// recorded), never bypassed.
+	for i, xff := range spoofed {
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login",
+			strings.NewReader(`{"username":"xfflockuser","password":"wrongpassword"}`))
+		r.RemoteAddr = remoteAddr
+		r.Header.Set("X-Forwarded-For", xff)
+		w := httptest.NewRecorder()
+		h.HandleLoginPOST(w, r)
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d with spoofed XFF %q: got status %d, want %d", i+1, xff, w.Code, http.StatusUnauthorized)
+		}
+	}
+
+	// Sixth guess with yet another spoofed XFF must be locked (429), proving
+	// header rotation did not yield a fresh bucket.
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login",
+		strings.NewReader(`{"username":"xfflockuser","password":"wrongpassword"}`))
+	r.RemoteAddr = remoteAddr
+	r.Header.Set("X-Forwarded-For", "198.51.100.99")
+	w := httptest.NewRecorder()
+	h.HandleLoginPOST(w, r)
+	if w.Code != http.StatusTooManyRequests {
+		t.Errorf("6th attempt with rotated XFF: got status %d, want %d (XFF rotation bypassed account lockout)", w.Code, http.StatusTooManyRequests)
+	}
+}
+
+func TestHandleLoginPOST_XRealIPRotationStillLocked(t *testing.T) {
+	ResetRateLimitStore()
+	db, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	setupTestJWT(t, db)
+
+	hash, err := bcrypt.GenerateFromPassword([]byte("correct-password"), 12)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)", "xrealipuser", string(hash), "admin"); err != nil {
+		t.Fatal(err)
+	}
+
+	h := newTestHandler(db)
+	remoteAddr := "203.0.113.21:12345"
+
+	for i, realIP := range []string{"198.51.100.11", "198.51.100.12", "198.51.100.13", "198.51.100.14", "198.51.100.15"} {
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login",
+			strings.NewReader(`{"username":"xrealipuser","password":"wrongpassword"}`))
+		r.RemoteAddr = remoteAddr
+		r.Header.Set("X-Real-IP", realIP)
+		w := httptest.NewRecorder()
+		h.HandleLoginPOST(w, r)
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d with spoofed X-Real-IP %q: got status %d, want %d", i+1, realIP, w.Code, http.StatusUnauthorized)
+		}
+	}
+
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login",
+		strings.NewReader(`{"username":"xrealipuser","password":"wrongpassword"}`))
+	r.RemoteAddr = remoteAddr
+	r.Header.Set("X-Real-IP", "198.51.100.99")
+	w := httptest.NewRecorder()
+	h.HandleLoginPOST(w, r)
+	if w.Code != http.StatusTooManyRequests {
+		t.Errorf("6th attempt with rotated X-Real-IP: got status %d, want %d", w.Code, http.StatusTooManyRequests)
+	}
+}
+
+func TestHandleLoginPOST_SameIPDifferentPortsShareLockout(t *testing.T) {
+	ResetRateLimitStore()
+	db, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	setupTestJWT(t, db)
+
+	hash, err := bcrypt.GenerateFromPassword([]byte("correct-password"), 12)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)", "portshareuser", string(hash), "admin"); err != nil {
+		t.Fatal(err)
+	}
+
+	h := newTestHandler(db)
+	// Same IP with different ephemeral ports must share one lockout bucket so
+	// opening a fresh TCP connection per guess does not bypass it.
+	ports := []string{
+		"203.0.113.22:1001",
+		"203.0.113.22:1002",
+		"203.0.113.22:1003",
+		"203.0.113.22:1004",
+		"203.0.113.22:1005",
+	}
+	for i, remoteAddr := range ports {
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login",
+			strings.NewReader(`{"username":"portshareuser","password":"wrongpassword"}`))
+		r.RemoteAddr = remoteAddr
+		w := httptest.NewRecorder()
+		h.HandleLoginPOST(w, r)
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d from %q: got status %d, want %d", i+1, remoteAddr, w.Code, http.StatusUnauthorized)
+		}
+	}
+
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login",
+		strings.NewReader(`{"username":"portshareuser","password":"wrongpassword"}`))
+	r.RemoteAddr = "203.0.113.22:1006"
+	w := httptest.NewRecorder()
+	h.HandleLoginPOST(w, r)
+	if w.Code != http.StatusTooManyRequests {
+		t.Errorf("6th attempt from same IP new port: got status %d, want %d", w.Code, http.StatusTooManyRequests)
+	}
+}
+
 // =============================================================================
 // =============================================================================
 

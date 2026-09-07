@@ -389,3 +389,134 @@ func TestMiddlewareDifferentIPs(t *testing.T) {
 		t.Errorf("first request for IP 2: got status %d, want %d", rr2.Code, http.StatusOK)
 	}
 }
+
+func TestStrictMiddlewareIgnoresSpoofedXFF(t *testing.T) {
+	rl := NewRateLimiter(5, time.Minute)
+	defer rl.Stop()
+
+	handler := rl.StrictMiddleware(okHandler())
+
+	// Same TCP peer rotating X-Forwarded-For per request must still share one
+	// bucket: the first 5 succeed, the 6th with a fresh spoofed header is 429.
+	remoteAddr := "203.0.113.10:12345"
+	spoofed := []string{
+		"198.51.100.1",
+		"198.51.100.2",
+		"198.51.100.3",
+		"198.51.100.4",
+		"198.51.100.5",
+	}
+	for i, xff := range spoofed {
+		req := httptest.NewRequest("POST", "/api/v1/auth/login", nil)
+		req.RemoteAddr = remoteAddr
+		req.Header.Set("X-Forwarded-For", xff)
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("request %d with spoofed XFF %q: got status %d, want %d", i+1, xff, rr.Code, http.StatusOK)
+		}
+	}
+
+	// 6th request with yet another spoofed XFF must still be limited.
+	req := httptest.NewRequest("POST", "/api/v1/auth/login", nil)
+	req.RemoteAddr = remoteAddr
+	req.Header.Set("X-Forwarded-For", "198.51.100.99")
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusTooManyRequests {
+		t.Errorf("6th request with rotated XFF: got status %d, want %d (XFF rotation bypassed StrictMiddleware)", rr.Code, http.StatusTooManyRequests)
+	}
+}
+
+func TestStrictMiddlewareIgnoresSpoofedXRealIP(t *testing.T) {
+	rl := NewRateLimiter(2, time.Minute)
+	defer rl.Stop()
+
+	handler := rl.StrictMiddleware(okHandler())
+	remoteAddr := "203.0.113.11:12345"
+
+	for i, realIP := range []string{"198.51.100.21", "198.51.100.22"} {
+		req := httptest.NewRequest("POST", "/api/v1/auth/login", nil)
+		req.RemoteAddr = remoteAddr
+		req.Header.Set("X-Real-IP", realIP)
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("request %d with spoofed X-Real-IP %q: got status %d, want %d", i+1, realIP, rr.Code, http.StatusOK)
+		}
+	}
+
+	req := httptest.NewRequest("POST", "/api/v1/auth/login", nil)
+	req.RemoteAddr = remoteAddr
+	req.Header.Set("X-Real-IP", "198.51.100.99")
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusTooManyRequests {
+		t.Errorf("3rd request with rotated X-Real-IP: got status %d, want %d", rr.Code, http.StatusTooManyRequests)
+	}
+}
+
+func TestStrictMiddlewareStripsPort(t *testing.T) {
+	rl := NewRateLimiter(2, time.Minute)
+	defer rl.Stop()
+
+	handler := rl.StrictMiddleware(okHandler())
+
+	// Same IP with different ephemeral source ports shares one bucket, so a
+	// new TCP connection per guess does not bypass the limit.
+	for i, remoteAddr := range []string{"203.0.113.12:1001", "203.0.113.12:1002"} {
+		req := httptest.NewRequest("POST", "/api/v1/auth/login", nil)
+		req.RemoteAddr = remoteAddr
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("request %d from %q: got status %d, want %d", i+1, remoteAddr, rr.Code, http.StatusOK)
+		}
+	}
+
+	req := httptest.NewRequest("POST", "/api/v1/auth/login", nil)
+	req.RemoteAddr = "203.0.113.12:1003"
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusTooManyRequests {
+		t.Errorf("3rd request from same IP new port: got status %d, want %d", rr.Code, http.StatusTooManyRequests)
+	}
+
+	// A different IP is unaffected.
+	req2 := httptest.NewRequest("POST", "/api/v1/auth/login", nil)
+	req2.RemoteAddr = "203.0.113.13:1001"
+	rr2 := httptest.NewRecorder()
+	handler.ServeHTTP(rr2, req2)
+	if rr2.Code != http.StatusOK {
+		t.Errorf("first request from different IP: got status %d, want %d", rr2.Code, http.StatusOK)
+	}
+}
+
+func TestMiddlewarePreservesProxyBucketing(t *testing.T) {
+	// The legacy proxy-compatible Middleware intentionally keys on
+	// X-Forwarded-For so deployments behind a reverse proxy keep per-client
+	// buckets. Non-auth endpoints (downloads, etc.) keep this behavior.
+	rl := NewRateLimiter(1, time.Minute)
+	defer rl.Stop()
+
+	handler := rl.Middleware(okHandler())
+
+	req := httptest.NewRequest("GET", "/test", nil)
+	req.RemoteAddr = "10.0.0.1:12345"
+	req.Header.Set("X-Forwarded-For", "203.0.113.50")
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("first request: got status %d, want %d", rr.Code, http.StatusOK)
+	}
+
+	// Same XFF from a different egress connection shares the bucket.
+	req2 := httptest.NewRequest("GET", "/test", nil)
+	req2.RemoteAddr = "10.0.0.1:54321"
+	req2.Header.Set("X-Forwarded-For", "203.0.113.50")
+	rr2 := httptest.NewRecorder()
+	handler.ServeHTTP(rr2, req2)
+	if rr2.Code != http.StatusTooManyRequests {
+		t.Errorf("second request with same XFF: got status %d, want %d", rr2.Code, http.StatusTooManyRequests)
+	}
+}

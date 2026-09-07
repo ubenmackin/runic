@@ -8,7 +8,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -47,6 +46,32 @@ type Agent struct {
 	backupPath      string
 	exitFunc        func(int)   // for testing; defaults to os.Exit
 	bootPullDone    atomic.Bool // tracks whether a fresh bundle pull was done during initialization
+	updateRunning   atomic.Bool // singleflight for self-update; only one performUpdate may run at a time
+	lastUpdateErrMu sync.RWMutex
+	lastUpdateErr   string // last self-update failure reason, reported on the next heartbeat
+}
+
+// maxLastUpdateErrLen caps the stored self-update failure reason so a long
+// server response cannot grow memory or heartbeat payloads without bound.
+const maxLastUpdateErrLen = 1024
+
+// setLastUpdateError records the last self-update failure reason for
+// reporting on the next heartbeat. An empty message clears the stored error.
+func (a *Agent) setLastUpdateError(msg string) {
+	if len(msg) > maxLastUpdateErrLen {
+		msg = common.TruncateString(msg, maxLastUpdateErrLen)
+	}
+	a.lastUpdateErrMu.Lock()
+	defer a.lastUpdateErrMu.Unlock()
+	a.lastUpdateErr = msg
+}
+
+// getLastUpdateError returns the stored self-update failure reason, or empty
+// when the last update succeeded or no update has been attempted.
+func (a *Agent) getLastUpdateError() string {
+	a.lastUpdateErrMu.RLock()
+	defer a.lastUpdateErrMu.RUnlock()
+	return a.lastUpdateErr
 }
 
 func New(configPath, controlPlaneURL string) *Agent {
@@ -422,7 +447,7 @@ func (a *Agent) detectIPStrings() []string {
 
 func (a *Agent) sendHeartbeat(ctx context.Context) error {
 	cfg := a.getConfig()
-	return metrics.SendHeartbeat(ctx, a.httpClient, cfg.ControlPlaneURL, cfg.HostID, cfg.CurrentBundleVer, cfg.Token, a.version, a.detectIPStrings())
+	return metrics.SendHeartbeat(ctx, a.httpClient, cfg.ControlPlaneURL, cfg.HostID, cfg.CurrentBundleVer, cfg.Token, a.version, a.detectIPStrings(), a.getLastUpdateError())
 }
 
 func (a *Agent) pollLoop(ctx context.Context) {
@@ -659,105 +684,72 @@ func (a *Agent) handleFetchBackup(ctx context.Context) {
 
 // validateUpdateURL checks that the update URL is well-formed, pins its host
 // to the configured control plane host, and requires https except for
-// loopback test hosts.
+// loopback test hosts. It delegates to the canonical transport validator so
+// host/port pinning stays in one place.
 func validateUpdateURL(updateURL, configuredURL string) (string, error) {
-	parsed, err := url.Parse(updateURL)
-	if err != nil {
-		return "", fmt.Errorf("invalid control plane URL %q: %w", updateURL, err)
-	}
-	if parsed.Host == "" {
-		return "", fmt.Errorf("invalid control plane URL %q: missing host", updateURL)
-	}
-	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return "", fmt.Errorf("invalid control plane URL %q: scheme must be http or https", updateURL)
-	}
-	hostname := parsed.Hostname()
-	isLoopback := hostname == "localhost" || hostname == "127.0.0.1" || hostname == "::1"
-	if !isLoopback && parsed.Scheme != "https" {
-		return "", fmt.Errorf("invalid control plane URL %q: scheme must be https", updateURL)
-	}
-	if configuredURL != "" {
-		configured, err := url.Parse(configuredURL)
-		if err != nil {
-			return "", fmt.Errorf("invalid configured control plane URL %q: %w", configuredURL, err)
-		}
-		if configured.Host == "" {
-			return "", fmt.Errorf("invalid configured control plane URL %q: missing host", configuredURL)
-		}
-		if !strings.EqualFold(parsed.Hostname(), configured.Hostname()) {
-			return "", fmt.Errorf("invalid control plane URL %q: host %q does not match configured host %q", updateURL, parsed.Hostname(), configured.Hostname())
-		}
-		if effectiveUpdateURLPort(parsed) != effectiveUpdateURLPort(configured) {
-			return "", fmt.Errorf("invalid control plane URL %q: port %q does not match configured port %q", updateURL, parsed.Port(), configured.Port())
-		}
-	}
-	return parsed.String(), nil
-}
-
-// effectiveUpdateURLPort returns the explicit port if present, otherwise the
-// default port for the URL scheme (80 for http, 443 for https) so that
-// URLs with implicit default ports compare equal to URLs with explicit ones.
-func effectiveUpdateURLPort(u *url.URL) string {
-	if p := u.Port(); p != "" {
-		return p
-	}
-	switch strings.ToLower(u.Scheme) {
-	case "http":
-		return "80"
-	case "https":
-		return "443"
-	default:
-		return ""
-	}
+	return transport.ValidateUpdateURL(updateURL, configuredURL)
 }
 
 // handleUpdateAgent performs an in-process self-update. It downloads the new
 // binary via HTTP and applies it in-place using selfupdate.Apply, then exits
 // the process so the service manager can restart with the new binary.
 //
-// The update runs in a goroutine because the caller (SSE event handler) must
-// not block. After a successful apply, the agent waits 2 seconds for the SSE
-// acknowledgment to be sent, then calls exitFunc(0) (os.Exit in production).
+// The whole update runs synchronously on the caller's goroutine under the
+// SSE callback guard, on a context detached from the SSE stream so a
+// canceled or reconnected stream cannot interrupt the download or suppress
+// the restart. Exit decisions never read the stream context. Running
+// synchronously (never spawning a detached goroutine and returning) is what
+// keeps the transport sseCallbackGuard's running flag held until the update
+// completes; returning early would release the guard while performUpdate is
+// still racing on the binary file. An agent-level singleflight
+// (updateRunning) additionally serializes concurrent events across SSE
+// reconnects and CLI triggers: duplicates while an update is in flight are
+// skipped so parallel performUpdate calls and double exitFunc calls cannot
+// happen. After a successful apply, the agent waits 2 seconds for the SSE
+// acknowledgment to flush, then calls exitFunc(0) (os.Exit in production)
+// for a systemd restart. Failures are recorded for reporting on the next
+// heartbeat; the agent stays running so the operator can retry via a later
+// event.
 func (a *Agent) handleUpdateAgent(ctx context.Context, controlPlaneURL string) {
-	log.Info("Starting agent self-update", "control_plane_url", controlPlaneURL)
+	detachedCtx := context.WithoutCancel(ctx)
+	beforeVersion := a.version
+	log.Info("Starting agent self-update", "control_plane_url", controlPlaneURL, "current_version", beforeVersion)
 
 	cfg := a.getConfig()
 	normalizedURL, err := validateUpdateURL(controlPlaneURL, cfg.ControlPlaneURL)
 	if err != nil {
 		log.Error("Invalid control plane URL received in update_agent event", "url", controlPlaneURL, "error", err)
+		a.setLastUpdateError(fmt.Sprintf("validate update URL: %v", err))
 		return
 	}
 
-	go func() {
-		detachedCtx := context.WithoutCancel(ctx)
-		if err := performUpdate(detachedCtx, a.httpClient, normalizedURL); err != nil {
-			// Update failed — do NOT exit the process. The agent stays
-			// running so the operator can investigate and retry via a
-			// subsequent update_agent event.
-			log.Error("Agent self-update failed, not exiting for restart", "error", err)
-			return
-		}
-		select {
-		case <-ctx.Done():
-			log.Info("Agent shutting down, skipping exit after update")
-			return
-		default:
-		}
-		log.Info("Agent update applied, exiting for restart in 2s")
-		timer := time.NewTimer(2 * time.Second)
-		defer timer.Stop()
-		select {
-		case <-ctx.Done():
-			log.Info("Agent shutting down, skipping exit after update")
-			return
-		case <-timer.C:
-		}
-		a.exitFunc(0)
-	}()
+	if !a.updateRunning.CompareAndSwap(false, true) {
+		log.Warn("Agent self-update already in progress, skipping duplicate update_agent event")
+		return
+	}
+	defer a.updateRunning.Store(false)
+
+	if err := performUpdate(detachedCtx, a.httpClient, normalizedURL); err != nil {
+		// Update failed — do NOT exit the process. The agent stays
+		// running so the operator can investigate and retry via a
+		// subsequent update_agent event. The reason is reported back
+		// on the next heartbeat instead of failing silently.
+		log.Error("Agent self-update failed, not exiting for restart", "error", err, "current_version", beforeVersion)
+		a.setLastUpdateError(err.Error())
+		return
+	}
+	a.setLastUpdateError("")
+	log.Info("Agent update applied, exiting for restart in 2s", "previous_version", beforeVersion)
+	timer := time.NewTimer(2 * time.Second)
+	defer timer.Stop()
+	<-timer.C
+	a.exitFunc(0)
 }
 
 // HandleUpdateAgent triggers the agent self-update process. It is the public
 // equivalent of handleUpdateAgent, exposed for CLI and integration test use.
+// It runs synchronously under the same update singleflight as the SSE path,
+// so concurrent triggers cannot run parallel updates.
 func (a *Agent) HandleUpdateAgent(controlPlaneURL string) {
 	a.handleUpdateAgent(context.Background(), controlPlaneURL)
 }
@@ -767,25 +759,36 @@ func (a *Agent) HandleUpdateAgent(controlPlaneURL string) {
 // On success, it calls exitFunc(0) to exit the process for restart.
 // This is intended for CLI use (e.g., `runic-agent -update`) where the caller
 // needs to know whether the update succeeded. For SSE-triggered updates,
-// use HandleUpdateAgent (async) instead.
+// use HandleUpdateAgent instead. Both paths share the same update
+// singleflight, so a CLI trigger while an SSE update is in flight (or vice
+// versa) fails fast instead of running parallel updates.
 func (a *Agent) HandleUpdateAgentSync(controlPlaneURL string) error {
 	return a.handleUpdateAgentSync(context.Background(), controlPlaneURL)
 }
 
 func (a *Agent) handleUpdateAgentSync(ctx context.Context, controlPlaneURL string) error {
-	log.Info("Starting agent self-update (synchronous)", "control_plane_url", controlPlaneURL)
+	beforeVersion := a.version
+	log.Info("Starting agent self-update (synchronous)", "control_plane_url", controlPlaneURL, "current_version", beforeVersion)
 
 	cfg := a.getConfig()
 	normalizedURL, err := validateUpdateURL(controlPlaneURL, cfg.ControlPlaneURL)
 	if err != nil {
+		a.setLastUpdateError(fmt.Sprintf("validate update URL: %v", err))
 		return fmt.Errorf("validate update URL: %w", err)
 	}
 
+	if !a.updateRunning.CompareAndSwap(false, true) {
+		return fmt.Errorf("agent self-update already in progress")
+	}
+	defer a.updateRunning.Store(false)
+
 	if err := performUpdate(ctx, a.httpClient, normalizedURL); err != nil {
+		a.setLastUpdateError(err.Error())
 		return fmt.Errorf("agent self-update failed: %w", err)
 	}
 
-	log.Info("Agent update applied successfully, exiting for restart")
+	a.setLastUpdateError("")
+	log.Info("Agent update applied successfully, exiting for restart", "previous_version", beforeVersion)
 	a.exitFunc(0)
 	return nil
 }

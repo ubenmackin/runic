@@ -421,6 +421,10 @@ func (s *SMTPSender) generateAlertSubject(event *AlertEvent) string {
 		detail = fmt.Sprintf("Bundle Failed: %s", event.PeerName)
 	case AlertTypeBlockedSpike:
 		detail = fmt.Sprintf("Blocked Traffic Spike: %d events", event.Value)
+	case AlertTypeBundleDeployed:
+		detail = fmt.Sprintf("Bundle Deployed: %s", event.PeerName)
+	case AlertTypeAgentUpdated:
+		detail = fmt.Sprintf("Agent Updated: %s", event.PeerName)
 	default:
 		detail = fmt.Sprintf("Alert: %s", event.Type)
 	}
@@ -514,6 +518,35 @@ func (s *SMTPSender) generateAlertHTML(event *AlertEvent, instanceURL string) st
 			detailsTable.WriteString(renderTDRow("Threshold", s.htmlEscape(threshold), ""))
 		}
 		detailsTable.WriteString(renderTDRow("Alert Type", s.htmlEscape(string(event.Type)), ""))
+
+	case AlertTypeAgentUpdated:
+		detailsTable.WriteString(renderTDRow("Peer", fmt.Sprintf("%s (ID: %d)", s.htmlEscape(event.PeerName), event.PeerID), ""))
+		if initiatedBy := getMetaString("initiated_by"); initiatedBy != "" {
+			detailsTable.WriteString(renderTDRow("Initiated By", s.htmlEscape(initiatedBy), ""))
+		}
+		if instanceURL := getMetaString("instance_url"); instanceURL != "" {
+			detailsTable.WriteString(renderTDRow("Instance URL", s.htmlEscape(instanceURL), ""))
+		}
+		if scope := getMetaString("job_scope"); scope != "" {
+			detailsTable.WriteString(renderTDRow("Scope", s.htmlEscape(scope), ""))
+		}
+
+	case AlertTypeBundleDeployed:
+		detailsTable.WriteString(renderTDRow("Peer", fmt.Sprintf("%s (ID: %d)", s.htmlEscape(event.PeerName), event.PeerID), ""))
+		if bundleVersion := getMetaString("bundle_version"); bundleVersion != "" {
+			detailsTable.WriteString(renderTDRow("Bundle Version", s.htmlEscape(bundleVersion), ""))
+		} else if bundleVersion := getMetaString("version"); bundleVersion != "" {
+			detailsTable.WriteString(renderTDRow("Bundle Version", s.htmlEscape(bundleVersion), ""))
+		}
+		if jobID := getMetaString("job_id"); jobID != "" {
+			detailsTable.WriteString(renderTDRow("Job ID", s.htmlEscape(jobID), ""))
+		}
+		if lastAppliedAt := getMetaString("last_applied_at"); lastAppliedAt != "" {
+			detailsTable.WriteString(renderTDRow("Last Applied", s.htmlEscape(lastAppliedAt), ""))
+		}
+		if firstAppliedAt := getMetaString("first_applied_at"); firstAppliedAt != "" {
+			detailsTable.WriteString(renderTDRow("First Applied", s.htmlEscape(firstAppliedAt), ""))
+		}
 	}
 
 	detailsTable.WriteString(renderTDRow("Timestamp", event.Timestamp.Format(time.RFC1123), textDim))

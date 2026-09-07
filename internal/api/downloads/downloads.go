@@ -6,19 +6,40 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"runic/internal/common/arch"
 )
 
-// Any filename not in this list will be rejected with a 404 Not Found.
-var allowedFiles = map[string]bool{
-	"runic-agent-amd64":   true,
-	"runic-agent-arm":     true,
-	"runic-agent-arm64":   true,
-	"runic-agent-armv6":   true,
-	"runic-agent.service": true,
-}
+// RequiredAgentBinaries lists the per-arch agent binaries that a server
+// deploy must rebuild and stage into downloadsDir before an update fan-out
+// may honestly report sent. A stale downloads dir (for example after a
+// version bump without re-staging) makes agents 404 on download while the
+// server already reported sent, which is the silent failure behind bulk
+// Update All downloading nothing. Call MissingBinaries before fanning out
+// and report failed_validation instead of sent when any entry is absent.
+// Canonical set lives in arch.UpdateArchs; this var is derived from it so
+// the freshness check can never drift from the agent updater.
+var RequiredAgentBinaries = arch.RequiredAgentBinaries()
 
 func isAllowedFile(filename string) bool {
-	return allowedFiles[filename]
+	return arch.IsServableFile(filename)
+}
+
+// MissingBinaries reports which of RequiredAgentBinaries are absent from
+// downloadsDir (missing file or directory in its place). It returns nil
+// when every required binary is staged and ready to serve.
+func MissingBinaries(downloadsDir string) []string {
+	if downloadsDir == "" {
+		return append([]string(nil), RequiredAgentBinaries...)
+	}
+	var missing []string
+	for _, name := range RequiredAgentBinaries {
+		info, err := os.Stat(filepath.Join(downloadsDir, name))
+		if err != nil || info.IsDir() {
+			missing = append(missing, name)
+		}
+	}
+	return missing
 }
 
 // Handler returns an HTTP handler for serving whitelisted download files.

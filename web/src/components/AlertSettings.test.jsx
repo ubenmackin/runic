@@ -119,6 +119,7 @@ describe('AlertSettings', () => {
         expect(screen.getByText('Peer Online')).toBeInTheDocument()
         expect(screen.getByText('Blocked Traffic Spike')).toBeInTheDocument()
         expect(screen.getByText('New Peer Registered')).toBeInTheDocument()
+        expect(screen.getByText('Agent Updated')).toBeInTheDocument()
       })
     })
 
@@ -146,7 +147,7 @@ describe('AlertSettings', () => {
 
       await waitFor(() => {
         const switches = screen.getAllByRole('switch')
-        expect(switches.length).toBe(6)
+        expect(switches.length).toBe(7)
       })
     })
   })
@@ -162,7 +163,7 @@ describe('AlertSettings', () => {
       render(<AlertSettings />, { wrapper })
 
       await waitFor(() => {
-        expect(screen.getAllByRole('switch').length).toBe(6)
+        expect(screen.getAllByRole('switch').length).toBe(7)
       })
 
       const switches = screen.getAllByRole('switch')
@@ -183,7 +184,7 @@ describe('AlertSettings', () => {
 
       await waitFor(() => {
         const numberInputs = screen.getAllByRole('spinbutton')
-        expect(numberInputs.length).toBe(6)
+        expect(numberInputs.length).toBe(7)
       })
     })
 
@@ -197,7 +198,7 @@ describe('AlertSettings', () => {
       render(<AlertSettings />, { wrapper })
 
       await waitFor(() => {
-        expect(screen.getAllByRole('spinbutton').length).toBe(6)
+        expect(screen.getAllByRole('spinbutton').length).toBe(7)
       })
 
       const firstInput = screen.getAllByRole('spinbutton')[0]
@@ -220,10 +221,10 @@ describe('AlertSettings', () => {
 
       await waitFor(() => {
         const selects = screen.getAllByRole('combobox')
-        // 6 rows × 3 selects each (window, throttle, peer_override) = 18
-        expect(selects.length).toBe(18)
+        // 7 rows × 3 selects each (window, throttle, peer_override) = 21
+        expect(selects.length).toBe(21)
         // "All Peers" should appear in Peer Override selects (one per row)
-        expect(screen.getAllByText('All Peers').length).toBe(6)
+        expect(screen.getAllByText('All Peers').length).toBe(7)
         // Peer hostnames should be in dropdowns
         expect(screen.getAllByText('peer-1').length).toBeGreaterThan(0)
         expect(screen.getAllByText('peer-2').length).toBeGreaterThan(0)
@@ -259,7 +260,7 @@ describe('AlertSettings', () => {
       render(<AlertSettings />, { wrapper })
 
       await waitFor(() => {
-        expect(screen.getAllByRole('switch').length).toBe(6)
+        expect(screen.getAllByRole('switch').length).toBe(7)
       })
 
       const switches = screen.getAllByRole('switch')

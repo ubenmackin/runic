@@ -398,8 +398,13 @@ func (h *Handler) ApplyPeerPendingBundle(w http.ResponseWriter, r *http.Request)
 	// Best-effort cleanup (outside transaction)
 	_ = h.PendingStore.CleanupIfComplete(ctx) // best-effort cleanup
 
-	// Notify via SSE (use hostname as the host_id for SSE)
-	if !h.SSEHub.NotifyBundleUpdated("host-"+hostname, bundle.Version) {
+	// Notify via SSE (use hostname as the host_id for SSE).
+	// ChannelFull (retryable backpressure) is distinct from NotConnected.
+	switch h.SSEHub.NotifyBundleUpdated("host-"+hostname, bundle.Version) {
+	case events.UpdateAgentSent:
+	case events.UpdateAgentChannelFull:
+		log.Warn("NotifyBundleUpdated failed: agent channel full (backpressure, retryable) after applying pending bundle", "host_id", "host-"+hostname)
+	default:
 		log.Warn("NotifyBundleUpdated failed: agent not connected after applying pending bundle", "host_id", "host-"+hostname)
 	}
 
@@ -565,7 +570,11 @@ func (h *Handler) ApplyEntityPendingChanges(w http.ResponseWriter, r *http.Reque
 			bundleVersion = bundle.Version
 			hostname, hostnameErr := h.PeerStore.GetPeerHostname(ctx, peerID)
 			if hostnameErr == nil && hostname != "" {
-				if !h.SSEHub.NotifyBundleUpdated("host-"+hostname, bundle.Version) {
+				switch h.SSEHub.NotifyBundleUpdated("host-"+hostname, bundle.Version) {
+				case events.UpdateAgentSent:
+				case events.UpdateAgentChannelFull:
+					log.Warn("NotifyBundleUpdated failed: agent channel full (backpressure, retryable) after applying pending bundle", "host_id", "host-"+hostname)
+				default:
 					log.Warn("NotifyBundleUpdated failed: agent not connected after applying pending bundle", "host_id", "host-"+hostname)
 				}
 			}
@@ -869,8 +878,13 @@ func (h *Handler) applyBundleForPeer(ctx context.Context, peerID int) error {
 		return err
 	}
 
-	// Notify via SSE
-	if !h.SSEHub.NotifyBundleUpdated("host-"+hostname, bundle.Version) {
+	// Notify via SSE. ChannelFull (retryable backpressure) is distinct
+	// from NotConnected and must not be reported as not connected.
+	switch h.SSEHub.NotifyBundleUpdated("host-"+hostname, bundle.Version) {
+	case events.UpdateAgentSent:
+	case events.UpdateAgentChannelFull:
+		log.Warn("NotifyBundleUpdated failed: agent channel full (backpressure, retryable) after applying pending bundle", "host_id", "host-"+hostname)
+	default:
 		log.Warn("NotifyBundleUpdated failed: agent not connected after applying pending bundle", "host_id", "host-"+hostname)
 	}
 

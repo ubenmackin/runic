@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -516,5 +517,136 @@ func TestUpdateBundleAppliedAt_COALESCE(t *testing.T) {
 	if storedAppliedAt.Time.Unix() != reAppliedTime.Unix() {
 		t.Errorf("expected applied_at to be %v, got %v",
 			reAppliedTime, storedAppliedAt.Time)
+	}
+}
+
+// Peer online, new peer, and agent updated rules are direct-trigger only: the
+// scheduler must skip them without reporting "unknown alert type". Peer online
+// transitions fire via PeerMonitor, new peer registrations via the agent
+// registration handler, and agent updates via the peers handler; all go
+// through Service.TriggerAlert. The scheduler has no condition to evaluate
+// for these types.
+func TestEvaluateRule_DirectTriggerTypesSkipped(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	databaseWrapper := db.New(database)
+	evaluator := NewConditionEvaluator(databaseWrapper, databaseWrapper, newTestHostnameLookup(database))
+
+	directTriggerTypes := []AlertType{AlertTypePeerOnline, AlertTypeNewPeer, AlertTypeAgentUpdated}
+	for _, alertType := range directTriggerTypes {
+		t.Run(string(alertType), func(t *testing.T) {
+			rule := &AlertRule{
+				Name:                   "Direct trigger rule",
+				AlertType:              alertType,
+				Enabled:                true,
+				ThresholdWindowMinutes: 5,
+				ThrottleMinutes:        15,
+			}
+
+			triggered, event, err := evaluator.EvaluateRule(ctx, rule)
+			if err != nil {
+				t.Fatalf("expected no error for direct-trigger type %s, got %v", alertType, err)
+			}
+			if triggered {
+				t.Errorf("expected triggered=false for direct-trigger type %s", alertType)
+			}
+			if event != nil {
+				t.Errorf("expected nil event for direct-trigger type %s", alertType)
+			}
+		})
+	}
+}
+
+// A disabled direct-trigger rule must be skipped before type dispatch.
+func TestEvaluateRule_DisabledDirectTriggerRuleSkipped(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	databaseWrapper := db.New(database)
+	evaluator := NewConditionEvaluator(databaseWrapper, databaseWrapper, newTestHostnameLookup(database))
+
+	rule := &AlertRule{
+		Name:                   "Disabled Peer Online",
+		AlertType:              AlertTypePeerOnline,
+		Enabled:                false,
+		ThresholdWindowMinutes: 5,
+		ThrottleMinutes:        15,
+	}
+
+	triggered, event, err := evaluator.EvaluateRule(ctx, rule)
+	if err != nil {
+		t.Fatalf("expected no error for disabled rule, got %v", err)
+	}
+	if triggered {
+		t.Error("expected triggered=false for disabled rule")
+	}
+	if event != nil {
+		t.Error("expected nil event for disabled rule")
+	}
+}
+
+// Unknown alert types must still surface an evaluation error so misconfigured
+// rules stay visible in scheduler logs instead of failing silently.
+func TestEvaluateRule_UnknownTypeError(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	databaseWrapper := db.New(database)
+	evaluator := NewConditionEvaluator(databaseWrapper, databaseWrapper, newTestHostnameLookup(database))
+
+	rule := &AlertRule{
+		Name:                   "Bogus rule",
+		AlertType:              AlertType("bogus_type"),
+		Enabled:                true,
+		ThresholdWindowMinutes: 5,
+		ThrottleMinutes:        15,
+	}
+
+	triggered, _, err := evaluator.EvaluateRule(ctx, rule)
+	if err == nil {
+		t.Fatal("expected error for unknown alert type, got nil")
+	}
+	if !strings.Contains(err.Error(), "unknown alert type") {
+		t.Errorf("expected unknown alert type error, got %v", err)
+	}
+	if triggered {
+		t.Error("expected triggered=false when evaluation errors")
+	}
+}
+
+// Scheduler-evaluated types must evaluate without "unknown alert type" errors
+// even when tables are empty (they report not-triggered).
+func TestEvaluateRule_ScheduledTypesEvaluateWithoutError(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	databaseWrapper := db.New(database)
+	evaluator := NewConditionEvaluator(databaseWrapper, databaseWrapper, newTestHostnameLookup(database))
+
+	scheduledTypes := []AlertType{AlertTypePeerOffline, AlertTypeBundleFailed, AlertTypeBlockedSpike, AlertTypeBundleDeployed}
+	for _, alertType := range scheduledTypes {
+		t.Run(string(alertType), func(t *testing.T) {
+			rule := &AlertRule{
+				Name:                   "Scheduled rule",
+				AlertType:              alertType,
+				Enabled:                true,
+				ThresholdValue:         5,
+				ThresholdWindowMinutes: 5,
+				ThrottleMinutes:        15,
+			}
+
+			triggered, _, err := evaluator.EvaluateRule(ctx, rule)
+			if err != nil {
+				t.Fatalf("expected no error for scheduled type %s with empty tables, got %v", alertType, err)
+			}
+			if triggered {
+				t.Errorf("expected triggered=false for scheduled type %s with empty tables", alertType)
+			}
+		})
 	}
 }

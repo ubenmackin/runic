@@ -118,12 +118,16 @@ func (h *Handler) InitiateImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Trigger the agent to fetch and POST its backup via SSE
+	// Trigger the agent to fetch and POST its backup via SSE.
+	// ChannelFull (retryable backpressure) is distinct from NotConnected.
 	hostID := fmt.Sprintf("host-%s", hostname)
 	if h.SSEHub != nil {
-		if h.SSEHub.NotifyFetchBackup(hostID) {
+		switch h.SSEHub.NotifyFetchBackup(hostID) {
+		case events.UpdateAgentSent:
 			runiclog.Info("Sent fetch_backup SSE event to agent", "host_id", hostID, "peer_id", peerID)
-		} else {
+		case events.UpdateAgentChannelFull:
+			runiclog.Warn("NotifyFetchBackup failed: agent channel full (backpressure, retryable)", "host_id", hostID)
+		default:
 			runiclog.Warn("NotifyFetchBackup failed: agent not connected", "host_id", hostID)
 		}
 	}

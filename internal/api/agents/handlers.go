@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
@@ -56,10 +57,10 @@ type LogEvent struct {
 	RawLine   string `json:"raw_line"`
 }
 
-var validActions = []string{"ACCEPT", "DROP", "REJECT"}
-var validDirections = []string{"IN", "OUT"}
+var validActions = []string{"ACCEPT", "DROP", "REJECT", "LOG_DROP"}
+var validDirections = []string{"IN", "OUT", "FWD"}
 
-var validProtocols = []string{"tcp", "udp", "icmp", "icmpv6", "sctp", "dccp", "udplite", "esp", "ah", "gre", "igmp"}
+var validProtocols = []string{"tcp", "udp", "icmp", "icmpv6", "sctp", "dccp", "udplite", "esp", "ah", "gre", "igmp", "vrrp"}
 
 // maxRawLineBytes caps the stored raw log line at 4KB to bound DB row size.
 const maxRawLineBytes = 4096
@@ -81,12 +82,11 @@ const maxLoggedIPLen = 64
 const maxLoggedReasonLen = 256
 
 // truncateForLog bounds a value included in structured log fields. It returns
-// s unchanged when it fits, otherwise the first maxLen bytes.
+// s unchanged when it fits, otherwise a rune-safe truncation to maxLen bytes
+// via the shared common.TruncateString helper so multi-byte UTF-8 sequences
+// are never split.
 func truncateForLog(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen]
+	return runiccommon.TruncateString(s, maxLen)
 }
 
 // validateAllIPs rejects the request when any entry fails to parse as an IP
@@ -335,6 +335,169 @@ func (h *Handler) registerNewPeer(ctx context.Context, input *models.AgentRegist
 	return int(peerID), agentToken, hmacKey, nil
 }
 
+// reRegistrationHMACProofSkew bounds the timestamp skew accepted for HMAC
+// re-registration proofs so a captured proof cannot be replayed indefinitely.
+const reRegistrationHMACProofSkew = 5 * time.Minute
+
+// reRegistrationHMACProofMessage builds the exact message the agent HMACs
+// with its stored HMAC key to prove possession without disclosing the key.
+func reRegistrationHMACProofMessage(hostname string, timestamp int64) string {
+	return fmt.Sprintf("runic-re-register:%s:%d", hostname, timestamp)
+}
+
+// authorizeReRegistration reports whether the caller may re-register the
+// existing peer. A fresh single-use registration token (consumed on success)
+// or proof of possession of a stored secret authorizes: a currently-valid
+// agent JWT for the same host (Authorization header), the stored agent_key,
+// or an HMAC proof with the stored HMAC key. It returns (authorized, method,
+// error); error is non-nil only for internal failures. Authentication
+// failures return (false, "", nil) so the caller can respond with the same
+// generic 401 used for unknown hostnames, closing the existence oracle.
+// No secret material is ever logged.
+func (h *Handler) authorizeReRegistration(ctx context.Context, r *http.Request, input *models.AgentRegisterRequest, existingID int, hostname string) (bool, string, error) {
+	if input.RegistrationToken != "" {
+		consumed, err := h.ConsumeRegistrationToken(ctx, input.RegistrationToken, hostname)
+		if err != nil {
+			return false, "", fmt.Errorf("consume token: %w", err)
+		}
+		if consumed {
+			return true, "registration_token", nil
+		}
+		// Invalid token: fall through to try other proofs before failing, so
+		// a valid proof alongside a stale token still authorizes.
+	}
+	if h.verifyBearerReRegistrationProof(ctx, r, hostname) {
+		return true, "bearer", nil
+	}
+	if input.AgentKey != "" {
+		ok, err := h.verifyAgentKeyProof(ctx, input.AgentKey, existingID)
+		if err != nil {
+			return false, "", err
+		}
+		if ok {
+			return true, "agent_key", nil
+		}
+	}
+	if input.HMACProofSignature != "" && input.HMACProofTimestamp != 0 {
+		ok, err := h.verifyHMACReRegistrationProof(ctx, input, hostname, existingID)
+		if err != nil {
+			return false, "", err
+		}
+		if ok {
+			return true, "hmac_proof", nil
+		}
+	}
+	return false, "", nil
+}
+
+// verifyBearerReRegistrationProof checks the Authorization header for a
+// currently-valid agent JWT scoped to hostname. Expired, wrong-subject,
+// wrong-type, missing-jti, revoked, or unverifiable tokens are rejected so a
+// stolen expired token cannot be exchanged for a fresh one. Fail-closed: any
+// store error or missing store denies this method without blocking others.
+func (h *Handler) verifyBearerReRegistrationProof(ctx context.Context, r *http.Request, hostname string) bool {
+	tokenString := auth.ExtractBearerToken(r.Header.Get("Authorization"))
+	if tokenString == "" {
+		return false
+	}
+	if h.DashboardStore == nil || h.TokenStore == nil {
+		return false
+	}
+	secretStr, err := h.DashboardStore.GetSecret(ctx, "agent_jwt_secret")
+	if err != nil || secretStr == "" {
+		return false
+	}
+	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method")
+		}
+		return []byte(secretStr), nil
+	})
+	if err != nil || !token.Valid {
+		return false
+	}
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		return false
+	}
+	if typ, ok := claims["type"].(string); !ok || typ != "agent" {
+		return false
+	}
+	sub, ok := claims["sub"].(string)
+	if !ok || sub != fmt.Sprintf("host-%s", hostname) {
+		return false
+	}
+	jti, ok := claims["jti"].(string)
+	if !ok || jti == "" {
+		return false
+	}
+	revCtx, cancel := context.WithTimeout(ctx, constants.RevocationCheckTimeout)
+	defer cancel()
+	revoked, err := h.TokenStore.IsTokenRevoked(revCtx, jti)
+	if err != nil || revoked {
+		return false
+	}
+	return true
+}
+
+// verifyAgentKeyProof compares the presented agent_key against the stored
+// value in constant time. Empty stored keys never match.
+func (h *Handler) verifyAgentKeyProof(ctx context.Context, presented string, peerID int) (bool, error) {
+	if presented == "" {
+		return false, nil
+	}
+	peer, err := h.PeerStore.GetPeerByID(ctx, peerID)
+	if err != nil {
+		return false, fmt.Errorf("lookup peer for agent_key proof: %w", err)
+	}
+	if peer.AgentKey == "" {
+		return false, nil
+	}
+	if len(presented) != len(peer.AgentKey) {
+		return false, nil
+	}
+	if subtle.ConstantTimeCompare([]byte(presented), []byte(peer.AgentKey)) != 1 {
+		return false, nil
+	}
+	return true, nil
+}
+
+// verifyHMACReRegistrationProof verifies hex(HMAC-SHA256(stored HMAC key,
+// "runic-re-register:<hostname>:<timestamp>")) with a bounded skew window.
+// Hex decoding uses hmac.Equal for constant-time comparison. Timestamps
+// outside the skew, empty stored keys, and undecodable signatures fail.
+func (h *Handler) verifyHMACReRegistrationProof(ctx context.Context, input *models.AgentRegisterRequest, hostname string, peerID int) (bool, error) {
+	ts := input.HMACProofTimestamp
+	sig := input.HMACProofSignature
+	if ts == 0 || sig == "" {
+		return false, nil
+	}
+	now := time.Now().Unix()
+	skew := int64(reRegistrationHMACProofSkew.Seconds())
+	if ts < now-skew || ts > now+skew {
+		return false, nil
+	}
+	storedKey, err := h.PeerStore.GetPeerHMACKey(ctx, peerID)
+	if err != nil {
+		return false, fmt.Errorf("fetch HMAC key for proof: %w", err)
+	}
+	if storedKey == "" {
+		return false, nil
+	}
+	mac := hmac.New(sha256.New, []byte(storedKey))
+	mac.Write([]byte(reRegistrationHMACProofMessage(hostname, ts)))
+	expected := hex.EncodeToString(mac.Sum(nil))
+	sigBytes, err1 := hex.DecodeString(sig)
+	expBytes, err2 := hex.DecodeString(expected)
+	if err1 != nil || err2 != nil {
+		return false, nil
+	}
+	if !hmac.Equal(sigBytes, expBytes) {
+		return false, nil
+	}
+	return true, nil
+}
+
 func (h *Handler) reRegisterExistingPeer(ctx context.Context, input *models.AgentRegisterRequest, existingID int) (string, string, error) {
 	if err := validateAllIPs(input.AllIPs); err != nil {
 		return "", "", common.NewHTTPError(http.StatusBadRequest, err.Error())
@@ -402,7 +565,10 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx := r.Context()
+	// Bound the DB section so a stalled database cannot hold the handler (and
+	// its 1MB body) open indefinitely.
+	ctx, cancel := runiccommon.WithHandlerTimeout(r.Context())
+	defer cancel()
 
 	existingID, _, err := h.PeerStore.FindPeerByHostname(ctx, input.Hostname)
 
@@ -453,6 +619,30 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 		common.InternalError(w)
 		return
 	}
+
+	// Existing host: require a fresh single-use registration token or proof
+	// of possession (valid agent JWT, stored agent_key, or HMAC proof). The
+	// HMAC key is only returned to authorized callers; unauthenticated
+	// callers use the authenticated rotation flow instead.
+	authorized, method, err := h.authorizeReRegistration(ctx, r, &input, existingID, input.Hostname)
+	if err != nil {
+		runiclog.Error("Failed to authorize re-registration", "error", err)
+		common.InternalError(w)
+		return
+	}
+	if !authorized {
+		// Close the hostname-existence oracle: identical 401 messages to the
+		// new-peer path for the same token presence, never revealing whether
+		// the hostname exists and never disclosing key material.
+		if input.RegistrationToken == "" {
+			common.RespondError(w, http.StatusUnauthorized, "registration token required")
+		} else {
+			common.RespondError(w, http.StatusUnauthorized, "invalid registration token")
+		}
+		return
+	}
+
+	runiclog.Info("Agent re-registration authorized", "hostname", input.Hostname, "peer_id", existingID, "method", method)
 
 	newToken, existingHMACKey, err := h.reRegisterExistingPeer(ctx, &input, existingID)
 	if err != nil {
@@ -526,6 +716,7 @@ func (h *Handler) Heartbeat(w http.ResponseWriter, r *http.Request) {
 		AgentVersion         string   `json:"agent_version"`
 		HasIPSet             *bool    `json:"has_ipset"`
 		AllIPs               []string `json:"all_ips"`
+		LastUpdateError      string   `json:"last_update_error"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
@@ -546,6 +737,9 @@ func (h *Handler) Heartbeat(w http.ResponseWriter, r *http.Request) {
 		common.RespondError(w, http.StatusBadRequest, fmt.Sprintf("bundle_version_applied too large: %d bytes (max %d)", len(input.BundleVersionApplied), maxVersionLen))
 		return
 	}
+	// last_update_error is truncated for logging so an oversized value cannot
+	// bloat logs or fail the heartbeat itself.
+	lastUpdateErr := truncateForLog(input.LastUpdateError, 1024)
 	if err := validateAllIPs(input.AllIPs); err != nil {
 		common.RespondError(w, http.StatusBadRequest, err.Error())
 		return
@@ -575,16 +769,16 @@ func (h *Handler) Heartbeat(w http.ResponseWriter, r *http.Request) {
 
 	// Record agent version changes only (no duplicate spam): when the
 	// reported version is non-empty, differs from the stored value, and both
-	// the pre-read and the heartbeat update succeeded.
-	// alert_history is intentionally untouched.
-	if prevKnown && heartbeatErr == nil && input.AgentVersion != "" && input.AgentVersion != prevVersion && h.DashboardStore != nil {
-		detail := fmt.Sprintf("agent version changed from %q to %q", prevVersion, input.AgentVersion)
-		if prevVersion == "" {
-			detail = fmt.Sprintf("agent version reported as %q", input.AgentVersion)
-		}
-		if err := h.DashboardStore.InsertAgentUpdateLog(ctx, fmt.Sprintf("%d", serverID), prevHostname, "agent", "", detail); err != nil {
-			runiclog.Warn("Heartbeat: failed to insert agent version log", "error", err, "peer_id", serverID)
-		}
+	// the pre-read and the heartbeat update succeeded. This is the
+	// confirmation signal for agent self-update fan-out. firewall_logs is
+	// firewall traffic only (IN/OUT); Runic activity lives in alert_history,
+	// so version changes are logged only and never written to firewall_logs.
+	if prevKnown && heartbeatErr == nil && input.AgentVersion != "" && input.AgentVersion != prevVersion {
+		runiclog.Info("Heartbeat: agent version change recorded", "peer_id", serverID, "hostname", prevHostname, "previous_version", prevVersion, "agent_version", input.AgentVersion)
+	}
+
+	if lastUpdateErr != "" {
+		runiclog.Warn("Heartbeat: agent reported last update error", "peer_id", serverID, "hostname", prevHostname, "error", lastUpdateErr)
 	}
 
 	if len(input.AllIPs) > 0 {

@@ -1025,7 +1025,7 @@ CREATE TABLE change_snapshots (
 CREATE TABLE alert_rules (
 id INTEGER PRIMARY KEY AUTOINCREMENT,
 name TEXT NOT NULL,
-alert_type TEXT NOT NULL CHECK(alert_type IN ('peer_offline', 'bundle_failed', 'blocked_spike', 'peer_online', 'new_peer', 'bundle_deployed')),
+alert_type TEXT NOT NULL CHECK(alert_type IN ('peer_offline', 'bundle_failed', 'blocked_spike', 'peer_online', 'new_peer', 'bundle_deployed', 'agent_updated')),
 enabled BOOLEAN NOT NULL DEFAULT 1,
 threshold_value INTEGER,
 threshold_window_minutes INTEGER,
@@ -1057,7 +1057,8 @@ INSERT INTO alert_rules (name, alert_type, enabled, threshold_value, threshold_w
 ('Bundle Deployed', 'bundle_deployed', 1, 0, 5, 5),
 ('Bundle Failed', 'bundle_failed', 1, 0, 5, 5),
 ('Blocked Traffic Spike', 'blocked_spike', 1, 100, 5, 15),
-('New Peer', 'new_peer', 1, 0, 5, 30)
+('New Peer', 'new_peer', 1, 0, 5, 30),
+('Agent Updated', 'agent_updated', 1, 0, 5, 15)
 `)
 		if err != nil {
 			return fmt.Errorf("failed to seed default alert rules: %w", err)
@@ -1470,6 +1471,65 @@ SELECT id, ip_address, 1 FROM peers
 			return fmt.Errorf("failed to create idx_user_api_tokens_prefix index: %w", err)
 		}
 		log.Info("Migration: created user_api_tokens table")
+	}
+
+	// Migration: Add 'agent_updated' to alert_rules CHECK constraint and seed
+	// the default rule. Existing databases created before agent_updated have a
+	// restrictive CHECK that rejects the new alert type.
+	var alertRulesTableSQL string
+	arRow := database.QueryRowContext(ctx, "SELECT sql FROM sqlite_master WHERE type='table' AND name='alert_rules'")
+	if err := arRow.Scan(&alertRulesTableSQL); err == nil {
+		if strings.Contains(alertRulesTableSQL, "alert_type") && !strings.Contains(alertRulesTableSQL, "agent_updated") {
+			log.Info("Migration: adding agent_updated to alert_rules CHECK constraint")
+			if err := RunInTx(ctx, database, func(ctx context.Context, tx *sql.Tx) error {
+				if _, err := tx.ExecContext(ctx, `CREATE TABLE alert_rules_new (
+id INTEGER PRIMARY KEY AUTOINCREMENT,
+name TEXT NOT NULL,
+alert_type TEXT NOT NULL CHECK(alert_type IN ('peer_offline', 'bundle_failed', 'blocked_spike', 'peer_online', 'new_peer', 'bundle_deployed', 'agent_updated')),
+enabled BOOLEAN NOT NULL DEFAULT 1,
+threshold_value INTEGER,
+threshold_window_minutes INTEGER,
+peer_id TEXT,
+throttle_minutes INTEGER NOT NULL DEFAULT 5,
+created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)`); err != nil {
+					return fmt.Errorf("create alert_rules_new: %w", err)
+				}
+				if _, err := tx.ExecContext(ctx, `INSERT INTO alert_rules_new SELECT * FROM alert_rules`); err != nil {
+					return fmt.Errorf("copy alert_rules data: %w", err)
+				}
+				if _, err := tx.ExecContext(ctx, "DROP TABLE alert_rules"); err != nil {
+					return fmt.Errorf("drop old alert_rules: %w", err)
+				}
+				if _, err := tx.ExecContext(ctx, "ALTER TABLE alert_rules_new RENAME TO alert_rules"); err != nil {
+					return fmt.Errorf("rename alert_rules_new: %w", err)
+				}
+				if _, err := tx.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_alert_rules_type_enabled ON alert_rules(alert_type, enabled)"); err != nil {
+					return fmt.Errorf("create idx_alert_rules_type_enabled: %w", err)
+				}
+				if _, err := tx.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_alert_rules_peer_id ON alert_rules(peer_id)"); err != nil {
+					return fmt.Errorf("create idx_alert_rules_peer_id: %w", err)
+				}
+				return nil
+			}); err != nil {
+				return err
+			}
+			log.Info("Migration: successfully added agent_updated to alert_rules CHECK constraint")
+		}
+	}
+	if hasAlertRules {
+		var hasAgentUpdatedRule bool
+		if err := database.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM alert_rules WHERE alert_type = 'agent_updated'").Scan(&hasAgentUpdatedRule); err != nil {
+			return fmt.Errorf("failed to check for agent_updated rule: %w", err)
+		}
+		if !hasAgentUpdatedRule {
+			log.Info("Migration: seeding default agent_updated alert rule")
+			if _, err := database.ExecContext(ctx, `INSERT INTO alert_rules (name, alert_type, enabled, threshold_value, threshold_window_minutes, throttle_minutes) VALUES ('Agent Updated', 'agent_updated', 1, 0, 5, 15)`); err != nil {
+				return fmt.Errorf("failed to seed agent_updated alert rule: %w", err)
+			}
+			log.Info("Migration: seeded default agent_updated alert rule")
+		}
 	}
 
 	return nil

@@ -11,15 +11,22 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/gorilla/mux"
 
+	"runic/internal/agent/transport"
+	"runic/internal/alerts"
 	"runic/internal/api/agents"
 	"runic/internal/api/common"
+	"runic/internal/api/downloads"
 	"runic/internal/api/events"
 	"runic/internal/auth"
 	runiccommon "runic/internal/common"
+	sharedarch "runic/internal/common/arch"
+	"runic/internal/common/constants"
 	"runic/internal/common/log"
+	"runic/internal/common/version"
 	"runic/internal/db"
 	"runic/internal/engine"
 	"runic/internal/store"
@@ -41,6 +48,18 @@ type Handler struct {
 	// fan-out (UpdateAllAgents). When nil, the fan-out still runs but no
 	// job record is created. Set post-construction like DashboardStore.
 	PendingStore *store.PendingStore
+	// AlertService is optional and records agent-update activity in
+	// alert_history via TriggerAlert. When nil, update requests still
+	// succeed but no alert history is recorded. Set post-construction
+	// like DashboardStore.
+	AlertService *alerts.Service
+	// DownloadsDir is the staged agent-binary directory served by
+	// /downloads. UpdateAgent and UpdateAllAgents verify all required
+	// arch binaries are present before reporting sent; a stale dir yields
+	// failed_validation instead of a dishonest sent. An empty dir is
+	// fail-closed (treated as all-missing) so a miswired deploy cannot
+	// report sent. Set by API.RegisterRoutes from the downloadsDir arg.
+	DownloadsDir string
 }
 
 func NewHandler(peerStore *store.PeerStore, beginner db.Beginner, compiler *engine.Compiler, sseHub events.NotifyUpdateAgenter, settingsStore SettingsStore) *Handler {
@@ -52,7 +71,10 @@ var validOSTypes = []string{
 	"armbian", "ios", "ipados", "macos", "tvos", "windows", "other",
 }
 
-var validArchs = []string{"amd64", "arm64", "arm", "armv6", "other"}
+// validArchs aliases the canonical peer arch set in internal/common/arch
+// (shared with the agent updater and the /downloads freshness check) so
+// peer validation can never drift from what the updater can serve.
+var validArchs = sharedarch.ValidPeerArchs
 
 type peerByIPResponse struct {
 	ID        int    `json:"id"`
@@ -518,7 +540,115 @@ func (h *Handler) DeletePeerIP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// updateAllStaggerDelay spaces bulk SSE notifications so a 21-wide fan-out
+// does not hit /downloads as a single burst. Only peers that actually need
+// the update are notified (up-to-date peers are skipped via agent_version),
+// and each successful notify sleeps this delay before the next send. The
+// agent download path already retries 429/5xx with backoff honoring
+// Retry-After, so the stagger plus the raised download limiter (60/min)
+// keeps the burst under the ceiling while staying well inside the handler
+// timeout (21 * 50ms ~= 1s).
+const updateAllStaggerDelay = 50 * time.Millisecond
+
+// isAgentUpToDate reports whether a heartbeat agent_version already matches
+// the server's latest_agent_version. Empty, unknown, or dev builds never
+// count as up-to-date so the fan-out fails open and notifies.
+func isAgentUpToDate(agentVersion, latest string) bool {
+	agentVersion = strings.TrimSpace(agentVersion)
+	latest = strings.TrimSpace(latest)
+	if agentVersion == "" || latest == "" {
+		return false
+	}
+	if latest == "dev" {
+		return false
+	}
+	return agentVersion == latest
+}
+
+// isUpdateEligibleArch reports whether a peer arch can self-update. Empty
+// arch fails open (unknown legacy peer, notify) so only an explicit
+// unsupported arch (armv6, other, or any value outside the canonical
+// updater set) is ineligible.
+func isUpdateEligibleArch(peerArch string) bool {
+	if strings.TrimSpace(peerArch) == "" {
+		return true
+	}
+	return sharedarch.IsUpdateSupportedArch(peerArch)
+}
+
+// unsupportedArchReason describes why a peer arch cannot self-update. The
+// canonical supported set lives in internal/common/arch.
+func unsupportedArchReason(peerArch string) string {
+	return fmt.Sprintf("unsupported architecture %q: no agent binary servable (supported: %s)", peerArch, strings.Join(sharedarch.UpdateArchs, ", "))
+}
+
+// hasMoreSendCandidates reports whether any peer after index i still needs
+// an update notification (not already up-to-date and arch-eligible). Used
+// to avoid a needless stagger sleep when a sent peer is followed only by
+// trailing skips or unsupported-arch peers that will never send.
+func hasMoreSendCandidates(allPeers []store.PeerView, i int, latest string) bool {
+	for j := i + 1; j < len(allPeers); j++ {
+		if isAgentUpToDate(allPeers[j].AgentVersion, latest) {
+			continue
+		}
+		if !isUpdateEligibleArch(allPeers[j].Arch) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+// stagedBinariesMissing returns the required agent binaries absent from the
+// staged downloads dir, or nil when everything is staged. An empty dir is
+// fail-closed (MissingBinaries reports all-missing) so a miswired empty
+// dir never reports sent dishonestly.
+func (h *Handler) stagedBinariesMissing() []string {
+	if h == nil {
+		return nil
+	}
+	return downloads.MissingBinaries(h.DownloadsDir)
+}
+
+// recordUpdateAllPeerOutcome maps the rich fan-out outcome to the
+// push_job_peers CHECK-constrained status so audit rows keep working:
+// sent -> notified, not_connected/channel_full/failed_validation/canceled
+// -> failed with the reason preserved in error_message.
+// skipped_up_to_date stays pending
+// with the skip reason in error_message: the CHECK has no skipped status
+// and applied carries bundle-applied semantics, so skips are tracked
+// separately in the response and excluded from succeeded counts rather
+// than recorded as applied. Agent-update jobs use agent_-prefixed IDs so
+// the bundle_failed evaluator (which ignores agent_ jobs) never counts
+// not_connected/channel_full/failed_validation/canceled as bundle
+// failures. Failures to write the audit row only warn.
+func (h *Handler) recordUpdateAllPeerOutcome(ctx context.Context, jobID string, trackJob bool, peerID int, outcome, detail string) {
+	if !trackJob {
+		return
+	}
+	var status string
+	switch outcome {
+	case "sent":
+		status = "notified"
+		detail = ""
+	case "skipped_up_to_date":
+		status = "pending"
+	case "not_connected", "channel_full", "failed_validation", "canceled":
+		status = "failed"
+	default:
+		status = "failed"
+	}
+	if err := h.PendingStore.UpdatePushJobPeerStatus(ctx, jobID, peerID, status, detail); err != nil {
+		log.WarnContext(ctx, "failed to update push job peer status", "error", err, "job_id", jobID, "peer_id", peerID)
+	}
+}
+
 // UpdateAgent triggers a self-update for a peer's agent. POST /api/v1/peers/{id}/update-agent
+//
+// The status key is canonical with events.UpdateAgentOutcome.String():
+// sent, not_connected, channel_full, skipped_up_to_date, failed_validation.
+// Previous keys update_sent and agent_not_connected are deprecated aliases
+// for sent and not_connected and are no longer returned.
 func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 	peerID, err := common.ParseIDParam(r, "id")
 	if err != nil {
@@ -547,26 +677,59 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 		common.RespondError(w, http.StatusBadRequest, "instance URL not configured — set it in Settings to enable agent updates")
 		return
 	}
+	// Version-skip first: an already-current peer needs no download, so a
+	// stale downloads dir, unsupported arch, or malformed instance_url must
+	// not turn an honest skip into failed_validation.
+	if peer.AgentVersion.Valid && isAgentUpToDate(peer.AgentVersion.String, version.AgentVersion) {
+		log.InfoContext(ctx, "UpdateAgent: peer already up to date, skipping notify", "peer_id", peerID, "hostname", peer.Hostname, "agent_version", peer.AgentVersion.String, "latest_agent_version", version.AgentVersion)
+		common.RespondJSON(w, http.StatusOK, map[string]string{"status": "skipped_up_to_date", "hostname": peer.Hostname, "agent_version": peer.AgentVersion.String, "latest_agent_version": version.AgentVersion})
+		return
+	}
+	// Per-peer arch gate: armv6/other peers have no servable self-update
+	// binary (GOARCH never reports armv6, other is never servable), so
+	// reporting sent would 404 on download. Empty arch fails open (unknown
+	// legacy peer, notify) to preserve existing behavior.
+	if !isUpdateEligibleArch(peer.Arch) {
+		reason := unsupportedArchReason(peer.Arch)
+		log.WarnContext(ctx, "UpdateAgent: unsupported peer arch, refusing to notify", "peer_id", peerID, "arch", peer.Arch, "reason", reason)
+		common.RespondJSON(w, http.StatusBadRequest, map[string]string{"status": "failed_validation", "reason": reason})
+		return
+	}
+	if err := transport.ValidateUpdateURLShape(instanceURL); err != nil {
+		log.WarnContext(ctx, "UpdateAgent: invalid instance URL, refusing to notify", "instance_url", instanceURL, "peer_id", peerID, "reason", err.Error())
+		common.RespondJSON(w, http.StatusBadRequest, map[string]string{"status": "failed_validation", "reason": err.Error()})
+		return
+	}
+	if missing := h.stagedBinariesMissing(); len(missing) > 0 {
+		log.WarnContext(ctx, "UpdateAgent: agent binaries missing from downloads dir, refusing to report sent", "peer_id", peerID, "missing", strings.Join(missing, ","), "downloads_dir", h.DownloadsDir)
+		common.RespondJSON(w, http.StatusServiceUnavailable, map[string]interface{}{"status": "failed_validation", "reason": "agent binaries not staged: " + strings.Join(missing, ", ")})
+		return
+	}
 
 	if h.SSEHub == nil {
 		common.RespondError(w, http.StatusInternalServerError, "SSE hub not available")
 		return
 	}
 	hostID := fmt.Sprintf("host-%s", peer.Hostname)
-	delivered := h.SSEHub.NotifyUpdateAgent(hostID, instanceURL)
-	if !delivered {
-		log.Debug("UpdateAgent: agent not connected, skipping log", "host_id", hostID)
-		common.RespondJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "agent_not_connected"})
+	switch h.SSEHub.NotifyUpdateAgent(hostID, instanceURL) {
+	case events.UpdateAgentChannelFull:
+		log.Debug("UpdateAgent: agent channel full (backpressure, retryable)", "host_id", hostID)
+		common.RespondJSON(w, http.StatusServiceUnavailable, map[string]string{"status": events.UpdateAgentChannelFull.String()})
+		return
+	case events.UpdateAgentSent:
+		// Delivered below.
+	default:
+		log.Debug("UpdateAgent: agent not connected", "host_id", hostID)
+		common.RespondJSON(w, http.StatusServiceUnavailable, map[string]string{"status": events.UpdateAgentNotConnected.String()})
 		return
 	}
-	if h.DashboardStore != nil {
-		initiatedBy := auth.UsernameFromContext(ctx)
-		if err := h.DashboardStore.InsertAgentUpdateLog(ctx, fmt.Sprintf("%d", peerID), peer.Hostname, initiatedBy, instanceURL, ""); err != nil {
-			log.WarnContext(ctx, "failed to insert agent update log", "error", err, "peer_id", peerID)
-		}
-	}
-	log.Info("UpdateAgent: update sent via SSE", "host_id", hostID)
-	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "update_sent"})
+	// Alert on a detached bounded context so a handler deadline firing
+	// after the SSE send cannot cancel the alert history write.
+	alertCtx, alertCancel := context.WithTimeout(context.WithoutCancel(ctx), constants.UpdateFanoutAuditTimeout)
+	h.triggerAgentUpdatedAlert(alertCtx, peerID, peer.Hostname, auth.UsernameFromContext(ctx), instanceURL, "single", "")
+	alertCancel()
+	log.InfoContext(ctx, "UpdateAgent: update sent via SSE", "host_id", hostID)
+	common.RespondJSON(w, http.StatusOK, map[string]string{"status": events.UpdateAgentSent.String()})
 }
 
 // UpdateAllAgents triggers a self-update for all agent-based peers. POST /api/v1/peers/update-agents
@@ -581,8 +744,26 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 // to every peer. The job is therefore finalized inline once the fan-out
 // completes, and the endpoint reports 200/status completed (never
 // 202/queued, which is reserved for enqueued background jobs). The response
-// keeps the delivery detail clients rely on (sent/not_connected) alongside
-// the push-all keys; job_id is only present when a push-job row was created.
+// keeps the delivery detail clients rely on (sent/not_connected/channel_full)
+// alongside the push-all keys; job_id is only present when a push-job row
+// was created.
+//
+// Wide-fleet safety: ListAgentBasedPeers already excludes manual peers. The
+// fan-out stays inline SSE but spreads successful notifications by
+// updateAllStaggerDelay so a 21-wide burst plus agent 429/5xx retries with
+// backoff stays under the raised /downloads limiter (60/min, Retry-After
+// honored agent-side). Peers already at latest_agent_version (heartbeat
+// agent_version) are skipped without notifying and reported as
+// skipped_up_to_date (skipped is an alias); malformed instance_url, a stale
+// downloads dir, or an unsupported peer arch (armv6/other, which have no
+// servable self-update binary) yields failed_validation instead of a
+// dishonest sent. Only sent peers trigger agent_updated alerts, preserving
+// alert semantics.
+// A connected client whose SSE channel is full is reported as channel_full
+// (retryable backpressure), never as not_connected. Push-job audit and alert
+// writes run on a detached bounded context so a 5s handler deadline firing
+// mid-fan-out cannot cancel them; peers never reached before the deadline
+// are marked canceled (failed, not pending) so counts add up.
 func (h *Handler) UpdateAllAgents(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := runiccommon.WithHandlerTimeout(r.Context())
 	defer cancel()
@@ -596,13 +777,19 @@ func (h *Handler) UpdateAllAgents(w http.ResponseWriter, r *http.Request) {
 
 	if len(allPeers) == 0 {
 		// total_peers is canonical; total is a deprecated alias kept for
-		// backward compatibility.
+		// backward compatibility. New outcome keys are always present (as
+		// empty lists) so clients can rely on a stable schema.
 		common.RespondJSON(w, http.StatusOK, map[string]interface{}{
-			"status":        "no_peers",
-			"total_peers":   0,
-			"total":         0,
-			"sent":          0,
-			"not_connected": []string{},
+			"status":             "no_peers",
+			"total_peers":        0,
+			"total":              0,
+			"sent":               0,
+			"not_connected":      []string{},
+			"channel_full":       []string{},
+			"skipped":            []string{},
+			"skipped_up_to_date": []string{},
+			"failed_validation":  []string{},
+			"canceled":           []string{},
 		})
 		return
 	}
@@ -620,6 +807,30 @@ func (h *Handler) UpdateAllAgents(w http.ResponseWriter, r *http.Request) {
 
 	initiatedBy := auth.UsernameFromContext(ctx)
 
+	// Global pre-validation: a malformed instance_url or a stale downloads
+	// dir must never be reported as sent. Both are fanned out as per-peer
+	// failed_validation so the response stays honest and the push-job audit
+	// records failures instead of phantom successes.
+	var globalValidationErr error
+	if err := transport.ValidateUpdateURLShape(instanceURL); err != nil {
+		log.WarnContext(ctx, "UpdateAllAgents: invalid instance URL, reporting failed_validation", "instance_url", instanceURL, "reason", err.Error())
+		globalValidationErr = err
+	}
+	if globalValidationErr == nil {
+		if missing := h.stagedBinariesMissing(); len(missing) > 0 {
+			log.WarnContext(ctx, "UpdateAllAgents: agent binaries missing from downloads dir, reporting failed_validation", "missing", strings.Join(missing, ","), "downloads_dir", h.DownloadsDir)
+			globalValidationErr = fmt.Errorf("agent binaries not staged: %s", strings.Join(missing, ", "))
+		}
+	}
+
+	latestAgentVersion := version.AgentVersion
+
+	// Detached audit context: push-job peer-status writes and the final
+	// finalize must complete even after the 5s handler deadline fires
+	// mid-fan-out. Bounded so shutdown cannot hang indefinitely.
+	auditCtx, auditCancel := context.WithTimeout(context.WithoutCancel(ctx), constants.UpdateFanoutAuditTimeout)
+	defer auditCancel()
+
 	// Open the audit job before fanning out, mirroring PushAllRules.
 	// No job row exists when PendingStore is nil, so only mint a job ID
 	// when the run will actually be tracked.
@@ -632,8 +843,10 @@ func (h *Handler) UpdateAllAgents(w http.ResponseWriter, r *http.Request) {
 			common.InternalError(w)
 			return
 		}
-		jobID = generatedID
-		if err := h.PendingStore.CreatePushJob(ctx, jobID, initiatedBy, len(allPeers)); err != nil {
+		// Agent-update runs reuse push_jobs for audit but must not pollute
+		// bundle_failed: the evaluator ignores agent_-prefixed job IDs.
+		jobID = "agent_" + strings.TrimPrefix(generatedID, "job_")
+		if err := h.PendingStore.CreatePushJob(auditCtx, jobID, initiatedBy, len(allPeers)); err != nil {
 			log.ErrorContext(ctx, "failed to create push job", "error", err)
 			common.InternalError(w)
 			return
@@ -648,12 +861,12 @@ func (h *Handler) UpdateAllAgents(w http.ResponseWriter, r *http.Request) {
 				Hostname string
 			}{ID: allPeers[i].ID, Hostname: allPeers[i].Hostname}
 		}
-		if err := h.PendingStore.CreatePushJobPeers(ctx, jobID, peers); err != nil {
+		if err := h.PendingStore.CreatePushJobPeers(auditCtx, jobID, peers); err != nil {
 			log.ErrorContext(ctx, "failed to create push job peers", "error", err)
 			// The job row from CreatePushJob already exists — finalize it as
 			// failed so no orphan 'pending' job is left behind for the
 			// push-job SSE/poll APIs to surface.
-			if ferr := h.PendingStore.FinalizePushJobWithCounts(ctx, jobID, 0, len(allPeers)); ferr != nil {
+			if ferr := h.PendingStore.FinalizePushJobWithCounts(auditCtx, jobID, 0, len(allPeers)); ferr != nil {
 				log.WarnContext(ctx, "failed to finalize orphaned push job", "error", ferr, "job_id", jobID)
 			}
 			common.InternalError(w)
@@ -662,36 +875,120 @@ func (h *Handler) UpdateAllAgents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	notConnected := []string{}
+	channelFull := []string{}
+	skippedUpToDate := []string{}
+	failedValidation := []string{}
+	canceled := []string{}
 	sent := 0
+	handled := make([]bool, len(allPeers))
+	canceledFanout := false
+fanout:
 	for i := range allPeers {
+		select {
+		case <-ctx.Done():
+			log.WarnContext(ctx, "UpdateAllAgents: context canceled, aborting fan-out", "sent", sent, "peer_index", i)
+			canceledFanout = true
+			break fanout
+		default:
+		}
 		p := &allPeers[i]
 		hostID := fmt.Sprintf("host-%s", p.Hostname)
-		if h.SSEHub.NotifyUpdateAgent(hostID, instanceURL) {
+		// Version-skip: ListAgentBasedPeers already carries the heartbeat
+		// agent_version, so no per-peer lookup is needed. Skipped peers
+		// need no download, so they skip even when the per-peer arch or
+		// global validation (instance_url, staged binaries) would
+		// otherwise fail. Empty versions fail open (notify).
+		if isAgentUpToDate(p.AgentVersion, latestAgentVersion) {
+			skippedUpToDate = append(skippedUpToDate, p.Hostname)
+			h.recordUpdateAllPeerOutcome(auditCtx, jobID, trackJob, p.ID, "skipped_up_to_date", fmt.Sprintf("skipped: already up to date (%s)", p.AgentVersion))
+			log.InfoContext(ctx, "UpdateAllAgents: peer already up to date, skipping notify", "host_id", hostID, "agent_version", p.AgentVersion, "latest_agent_version", latestAgentVersion)
+			handled[i] = true
+			continue
+		}
+		// Per-peer arch gate: armv6/other peers have no servable
+		// self-update binary, so notifying would report sent then 404 on
+		// download. Empty arch fails open (unknown legacy peer, notify).
+		if !isUpdateEligibleArch(p.Arch) {
+			reason := unsupportedArchReason(p.Arch)
+			failedValidation = append(failedValidation, p.Hostname)
+			h.recordUpdateAllPeerOutcome(auditCtx, jobID, trackJob, p.ID, "failed_validation", reason)
+			log.WarnContext(ctx, "UpdateAllAgents: skipping notify due to unsupported arch", "host_id", hostID, "arch", p.Arch, "reason", reason)
+			handled[i] = true
+			continue
+		}
+		if globalValidationErr != nil {
+			failedValidation = append(failedValidation, p.Hostname)
+			h.recordUpdateAllPeerOutcome(auditCtx, jobID, trackJob, p.ID, "failed_validation", globalValidationErr.Error())
+			log.WarnContext(ctx, "UpdateAllAgents: skipping notify due to failed validation", "host_id", hostID, "reason", globalValidationErr.Error())
+			handled[i] = true
+			continue
+		}
+		switch h.SSEHub.NotifyUpdateAgent(hostID, instanceURL) {
+		case events.UpdateAgentSent:
 			sent++
-			if trackJob {
-				if err := h.PendingStore.UpdatePushJobPeerStatus(ctx, jobID, p.ID, "notified", ""); err != nil {
-					log.WarnContext(ctx, "failed to update push job peer status", "error", err, "job_id", jobID, "peer_id", p.ID)
+			h.recordUpdateAllPeerOutcome(auditCtx, jobID, trackJob, p.ID, "sent", "")
+			// Alert on a fresh detached bounded context per peer so one
+			// slow SMTP/DB write neither inherits the handler deadline
+			// nor consumes the shared audit deadline.
+			alertCtx, alertCancel := context.WithTimeout(context.WithoutCancel(ctx), constants.UpdateFanoutAuditTimeout)
+			h.triggerAgentUpdatedAlert(alertCtx, p.ID, p.Hostname, initiatedBy, instanceURL, "update-all", jobID)
+			alertCancel()
+			log.InfoContext(ctx, "UpdateAllAgents: update sent via SSE", "host_id", hostID)
+			handled[i] = true
+			// Stagger only successful sends: skipped, unsupported-arch,
+			// and not-connected peers download nothing, so only sent
+			// peers pressure /downloads. Sleep only when more send
+			// candidates remain and honor ctx cancellation while
+			// staggering. The timer is stopped on cancellation so
+			// repeated fan-outs cannot leak unreclaimable timers.
+			if hasMoreSendCandidates(allPeers, i, latestAgentVersion) {
+				stagger := time.NewTimer(updateAllStaggerDelay)
+				select {
+				case <-ctx.Done():
+					stagger.Stop()
+					log.WarnContext(ctx, "UpdateAllAgents: context canceled during stagger, aborting fan-out", "sent", sent, "host_id", hostID)
+					canceledFanout = true
+					break fanout
+				case <-stagger.C:
 				}
 			}
-			if h.DashboardStore != nil {
-				if err := h.DashboardStore.InsertAgentUpdateLog(ctx, fmt.Sprintf("%d", p.ID), p.Hostname, initiatedBy, instanceURL, ""); err != nil {
-					log.WarnContext(ctx, "failed to insert agent update log", "error", err, "peer_id", p.ID)
-				}
-			}
-			log.Info("UpdateAllAgents: update sent via SSE", "host_id", hostID)
-		} else {
-			if trackJob {
-				if err := h.PendingStore.UpdatePushJobPeerStatus(ctx, jobID, p.ID, "failed", "agent not connected"); err != nil {
-					log.WarnContext(ctx, "failed to update push job peer status", "error", err, "job_id", jobID, "peer_id", p.ID)
-				}
-			}
-			log.Debug("UpdateAllAgents: agent not connected, skipping log", "host_id", hostID)
+		case events.UpdateAgentChannelFull:
+			channelFull = append(channelFull, p.Hostname)
+			h.recordUpdateAllPeerOutcome(auditCtx, jobID, trackJob, p.ID, "channel_full", "agent channel full (backpressure, retryable)")
+			log.Debug("UpdateAllAgents: agent channel full (backpressure, retryable)", "host_id", hostID)
+			handled[i] = true
+		default:
+			h.recordUpdateAllPeerOutcome(auditCtx, jobID, trackJob, p.ID, "not_connected", "agent not connected")
+			log.Debug("UpdateAllAgents: agent not connected", "host_id", hostID)
 			notConnected = append(notConnected, p.Hostname)
+			handled[i] = true
 		}
 	}
 
+	// On handler timeout, peers never reached must not stay pending on a
+	// finalized job with no retry. Mark each unprocessed peer canceled
+	// (failed, not pending) on the detached audit context so counts add up.
+	if canceledFanout || ctx.Err() != nil {
+		for i := range allPeers {
+			if handled[i] {
+				continue
+			}
+			p := &allPeers[i]
+			canceled = append(canceled, p.Hostname)
+			h.recordUpdateAllPeerOutcome(auditCtx, jobID, trackJob, p.ID, "canceled", "handler timeout before notify (canceled)")
+			log.WarnContext(ctx, "UpdateAllAgents: marking unprocessed peer canceled on timeout", "host_id", fmt.Sprintf("host-%s", p.Hostname), "peer_id", p.ID)
+		}
+	}
+
+	// Skipped peers are tracked separately in the response and stay pending
+	// in the audit (never applied); only actual sends count as succeeded.
+	// Channel-full, canceled, not-connected, and failed-validation all
+	// count as failed so succeeded+failed+canceled bookkeeping matches the
+	// non-skipped peers.
+	succeeded := sent
+	failed := len(notConnected) + len(failedValidation) + len(channelFull) + len(canceled)
 	if trackJob {
-		if err := h.PendingStore.FinalizePushJobWithCounts(ctx, jobID, sent, len(notConnected)); err != nil {
+		if err := h.PendingStore.FinalizePushJobWithCounts(auditCtx, jobID, succeeded, failed); err != nil {
 			log.WarnContext(ctx, "failed to finalize push job", "error", err, "job_id", jobID)
 		}
 	}
@@ -699,22 +996,82 @@ func (h *Handler) UpdateAllAgents(w http.ResponseWriter, r *http.Request) {
 	// The fan-out above already completed inline, so report it as completed
 	// with 200. Only include job_id when a push-job row actually exists.
 	// total_peers is canonical (matching push-all); total is a deprecated
-	// alias kept for backward compatibility.
+	// alias kept for backward compatibility. skipped is an alias for
+	// skipped_up_to_date; both are always present for schema stability.
+	// channel_full and canceled are always present (as empty lists when no
+	// backpressure or timeout occurred) so clients can rely on a stable
+	// schema.
+	if notConnected == nil {
+		notConnected = []string{}
+	}
+	if channelFull == nil {
+		channelFull = []string{}
+	}
+	if skippedUpToDate == nil {
+		skippedUpToDate = []string{}
+	}
+	if failedValidation == nil {
+		failedValidation = []string{}
+	}
+	if canceled == nil {
+		canceled = []string{}
+	}
 	response := map[string]interface{}{
-		"status":        "completed",
-		"total_peers":   len(allPeers),
-		"total":         len(allPeers),
-		"sent":          sent,
-		"not_connected": notConnected,
+		"status":             "completed",
+		"total_peers":        len(allPeers),
+		"total":              len(allPeers),
+		"sent":               sent,
+		"not_connected":      notConnected,
+		"channel_full":       channelFull,
+		"skipped":            skippedUpToDate,
+		"skipped_up_to_date": skippedUpToDate,
+		"failed_validation":  failedValidation,
+		"canceled":           canceled,
 	}
 	if trackJob {
 		response["job_id"] = jobID
-		log.InfoContext(ctx, "update-all agents completed", "job_id", jobID, "total", len(allPeers), "sent", sent, "not_connected", len(notConnected), "initiated_by", initiatedBy)
+		log.InfoContext(ctx, "update-all agents completed", "job_id", jobID, "total", len(allPeers), "sent", sent, "skipped_up_to_date", len(skippedUpToDate), "not_connected", len(notConnected), "channel_full", len(channelFull), "failed_validation", len(failedValidation), "canceled", len(canceled), "initiated_by", initiatedBy)
 	} else {
-		log.InfoContext(ctx, "update-all agents completed", "total", len(allPeers), "sent", sent, "not_connected", len(notConnected), "initiated_by", initiatedBy)
+		log.InfoContext(ctx, "update-all agents completed", "total", len(allPeers), "sent", sent, "skipped_up_to_date", len(skippedUpToDate), "not_connected", len(notConnected), "channel_full", len(channelFull), "failed_validation", len(failedValidation), "canceled", len(canceled), "initiated_by", initiatedBy)
 	}
 
 	common.RespondJSON(w, http.StatusOK, response)
+}
+
+// triggerAgentUpdatedAlert records a delivered agent update as an alert.
+// It is best-effort: a nil AlertService skips silently, and trigger failures
+// only log a warning so the update request itself never fails. When no enabled
+// agent_updated rule exists the alert pipeline records no history.
+func (h *Handler) triggerAgentUpdatedAlert(ctx context.Context, peerID int, hostname, initiatedBy, instanceURL, scope, jobID string) {
+	if h.AlertService == nil {
+		return
+	}
+	if initiatedBy == "" {
+		initiatedBy = "unknown"
+	}
+	safeHostname, _ := alerts.SanitizeAlertInput(hostname, 0)
+	safeInitiatedBy, _ := alerts.SanitizeAlertInput(initiatedBy, 0)
+	metadata := map[string]interface{}{
+		"hostname":     safeHostname,
+		"initiated_by": safeInitiatedBy,
+		"instance_url": instanceURL,
+		"job_scope":    scope,
+	}
+	if jobID != "" {
+		metadata["job_id"] = jobID
+	}
+	event := &alerts.AlertEvent{
+		Type:      alerts.AlertTypeAgentUpdated,
+		PeerID:    peerID,
+		PeerName:  safeHostname,
+		Timestamp: time.Now(),
+		Subject:   fmt.Sprintf("Agent update sent to %s", safeHostname),
+		Message:   fmt.Sprintf("Agent update notification delivered to peer %s (initiated by %s)", safeHostname, safeInitiatedBy),
+		Metadata:  metadata,
+	}
+	if err := h.AlertService.TriggerAlert(ctx, event); err != nil {
+		log.WarnContext(ctx, "failed to trigger agent updated alert", "error", err, "peer_id", peerID)
+	}
 }
 
 // RegisterReadRoutes registers read-only (GET) routes for the viewer role.

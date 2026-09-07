@@ -135,7 +135,7 @@ The middleware chain is layered as follows (outermost first):
 6. **RBAC middleware** — Role-based access: admin, editor, viewer (applied per subrouter)
 7. **CORS** — Applied to `/api/v1` subrouter; configurable origin via `CORS_ORIGIN` env var
 8. **CSP** — Per-request nonce-based Content-Security-Policy (SPA routes)
-9. **Rate limiters** — Per-endpoint: login (5/min), register/refresh/logout/downloads (10/min)
+9. **Rate limiters** — Per-endpoint: login (5/min), register/refresh/logout (10/min), downloads (60/min)
 
 #### Authentication Model
 
@@ -306,7 +306,7 @@ With standard prologue (loopback, ICMP, established/related) and epilogue (loggi
 ### Alert System (`internal/alerts/`)
 
 The alert system monitors firewall events and peer status:
-- **Rule types**: peer_offline, bundle_failed, blocked_spike, peer_online, new_peer, bundle_deployed
+- **Rule types**: peer_offline, bundle_failed, blocked_spike, peer_online, new_peer, bundle_deployed, agent_updated
 - **Delivery**: SMTP email with configurable SMTP settings (password encrypted at rest)
 - **Digest mode**: Aggregated daily/weekly digests
 - **Throttling**: Per-rule throttle window to prevent alert storms

@@ -771,8 +771,11 @@ func TestSSEHub_NotifyUpdateAgent_ReturnsTrueWhenRegistered(t *testing.T) {
 	ch := hub.Register("host1")
 
 	got := hub.NotifyUpdateAgent("host1", "https://example.com")
-	if !got {
-		t.Error("NotifyUpdateAgent expected true for registered host, got false")
+	if got != UpdateAgentSent {
+		t.Errorf("NotifyUpdateAgent expected UpdateAgentSent for registered host, got %v", got)
+	}
+	if !got.Sent() {
+		t.Error("NotifyUpdateAgent Sent() expected true for registered host, got false")
 	}
 
 	// Verify the message format sent to the channel
@@ -791,8 +794,44 @@ func TestSSEHub_NotifyUpdateAgent_ReturnsFalseWhenNotRegistered(t *testing.T) {
 	hub := NewSSEHub()
 
 	got := hub.NotifyUpdateAgent("nonexistent", "https://example.com")
-	if got {
-		t.Error("NotifyUpdateAgent expected false for unregistered host, got true")
+	if got != UpdateAgentNotConnected {
+		t.Errorf("NotifyUpdateAgent expected UpdateAgentNotConnected for unregistered host, got %v", got)
+	}
+	if got.Sent() {
+		t.Error("NotifyUpdateAgent Sent() expected false for unregistered host, got true")
+	}
+}
+
+func TestSSEHub_NotifyUpdateAgent_DistinguishesChannelFullFromNotConnected(t *testing.T) {
+	hub := NewSSEHub()
+	ch := hub.Register("host1")
+
+	// Fill the channel buffer (capacity 4)
+	for i := 0; i < 4; i++ {
+		select {
+		case ch <- "filler":
+		default:
+			t.Fatal("channel should not be full yet")
+		}
+	}
+
+	got := hub.NotifyUpdateAgent("host1", "https://example.com")
+	if got != UpdateAgentChannelFull {
+		t.Errorf("NotifyUpdateAgent expected UpdateAgentChannelFull when channel is full, got %v", got)
+	}
+	if got == UpdateAgentNotConnected {
+		t.Error("NotifyUpdateAgent must not report a connected-but-full client as not_connected")
+	}
+	if got.Sent() {
+		t.Error("NotifyUpdateAgent Sent() expected false when channel is full, got true")
+	}
+
+	missing := hub.NotifyUpdateAgent("nonexistent", "https://example.com")
+	if missing != UpdateAgentNotConnected {
+		t.Errorf("NotifyUpdateAgent expected UpdateAgentNotConnected for missing client, got %v", missing)
+	}
+	if missing == UpdateAgentChannelFull {
+		t.Error("NotifyUpdateAgent must not report a missing client as channel_full")
 	}
 }
 
@@ -810,8 +849,20 @@ func TestSSEHub_NotifyUpdateAgent_ReturnsFalseWhenChannelFull(t *testing.T) {
 	}
 
 	got := hub.NotifyUpdateAgent("host1", "https://example.com")
-	if got {
-		t.Error("NotifyUpdateAgent expected false when channel is full, got true")
+	if got.Sent() {
+		t.Error("NotifyUpdateAgent expected non-sent outcome when channel is full, got sent")
+	}
+}
+
+func TestSSEHub_NotifyUpdateAgent_OutcomeStrings(t *testing.T) {
+	if UpdateAgentSent.String() != "sent" {
+		t.Errorf("expected sent, got %q", UpdateAgentSent.String())
+	}
+	if UpdateAgentNotConnected.String() != "not_connected" {
+		t.Errorf("expected not_connected, got %q", UpdateAgentNotConnected.String())
+	}
+	if UpdateAgentChannelFull.String() != "channel_full" {
+		t.Errorf("expected channel_full, got %q", UpdateAgentChannelFull.String())
 	}
 }
 
@@ -823,8 +874,11 @@ func TestSSEHub_NotifyBundleUpdated_ReturnsTrueWhenRegistered(t *testing.T) {
 	ch := hub.Register("host1")
 
 	got := hub.NotifyBundleUpdated("host1", "v1.2.3")
-	if !got {
-		t.Error("NotifyBundleUpdated expected true for registered host, got false")
+	if got != UpdateAgentSent {
+		t.Errorf("NotifyBundleUpdated expected UpdateAgentSent for registered host, got %v", got)
+	}
+	if !got.Sent() {
+		t.Error("NotifyBundleUpdated Sent() expected true for registered host, got false")
 	}
 
 	// Verify the message format sent to the channel
@@ -843,8 +897,11 @@ func TestSSEHub_NotifyBundleUpdated_ReturnsFalseWhenNotRegistered(t *testing.T) 
 	hub := NewSSEHub()
 
 	got := hub.NotifyBundleUpdated("nonexistent", "v1.0.0")
-	if got {
-		t.Error("NotifyBundleUpdated expected false for unregistered host, got true")
+	if got != UpdateAgentNotConnected {
+		t.Errorf("NotifyBundleUpdated expected UpdateAgentNotConnected for unregistered host, got %v", got)
+	}
+	if got.Sent() {
+		t.Error("NotifyBundleUpdated Sent() expected false for unregistered host, got true")
 	}
 }
 
@@ -862,8 +919,14 @@ func TestSSEHub_NotifyBundleUpdated_ReturnsFalseWhenChannelFull(t *testing.T) {
 	}
 
 	got := hub.NotifyBundleUpdated("host1", "v1.0.0")
-	if got {
-		t.Error("NotifyBundleUpdated expected false when channel is full, got true")
+	if got != UpdateAgentChannelFull {
+		t.Errorf("NotifyBundleUpdated expected UpdateAgentChannelFull when channel is full, got %v", got)
+	}
+	if got == UpdateAgentNotConnected {
+		t.Error("NotifyBundleUpdated must not report a connected-but-full client as not_connected")
+	}
+	if got.Sent() {
+		t.Error("NotifyBundleUpdated Sent() expected false when channel is full, got true")
 	}
 }
 
@@ -875,8 +938,11 @@ func TestSSEHub_NotifyFetchBackup_ReturnsTrueWhenRegistered(t *testing.T) {
 	ch := hub.Register("host1")
 
 	got := hub.NotifyFetchBackup("host1")
-	if !got {
-		t.Error("NotifyFetchBackup expected true for registered host, got false")
+	if got != UpdateAgentSent {
+		t.Errorf("NotifyFetchBackup expected UpdateAgentSent for registered host, got %v", got)
+	}
+	if !got.Sent() {
+		t.Error("NotifyFetchBackup Sent() expected true for registered host, got false")
 	}
 
 	// Verify the message format sent to the channel
@@ -895,8 +961,11 @@ func TestSSEHub_NotifyFetchBackup_ReturnsFalseWhenNotRegistered(t *testing.T) {
 	hub := NewSSEHub()
 
 	got := hub.NotifyFetchBackup("nonexistent")
-	if got {
-		t.Error("NotifyFetchBackup expected false for unregistered host, got true")
+	if got != UpdateAgentNotConnected {
+		t.Errorf("NotifyFetchBackup expected UpdateAgentNotConnected for unregistered host, got %v", got)
+	}
+	if got.Sent() {
+		t.Error("NotifyFetchBackup Sent() expected false for unregistered host, got true")
 	}
 }
 
@@ -914,8 +983,14 @@ func TestSSEHub_NotifyFetchBackup_ReturnsFalseWhenChannelFull(t *testing.T) {
 	}
 
 	got := hub.NotifyFetchBackup("host1")
-	if got {
-		t.Error("NotifyFetchBackup expected false when channel is full, got true")
+	if got != UpdateAgentChannelFull {
+		t.Errorf("NotifyFetchBackup expected UpdateAgentChannelFull when channel is full, got %v", got)
+	}
+	if got == UpdateAgentNotConnected {
+		t.Error("NotifyFetchBackup must not report a connected-but-full client as not_connected")
+	}
+	if got.Sent() {
+		t.Error("NotifyFetchBackup Sent() expected false when channel is full, got true")
 	}
 }
 
@@ -934,28 +1009,28 @@ func TestSSEHub_RegisterThenUnregister_NotifyReturnsFalse(t *testing.T) {
 
 	// Before unregister, notify should succeed
 	got := hub.NotifyUpdateAgent("host1", "https://example.com")
-	if !got {
-		t.Error("expected NotifyUpdateAgent to return true before unregister, got false")
+	if got != UpdateAgentSent {
+		t.Errorf("expected NotifyUpdateAgent to return UpdateAgentSent before unregister, got %v", got)
 	}
 
 	// Unregister the client
 	hub.Unregister("host1")
 
-	// After unregister, notify should return false
+	// After unregister, notify should return not-connected (not channel-full)
 	got = hub.NotifyUpdateAgent("host1", "https://example.com")
-	if got {
-		t.Error("expected NotifyUpdateAgent to return false after unregister, got true")
+	if got != UpdateAgentNotConnected {
+		t.Errorf("expected NotifyUpdateAgent to return UpdateAgentNotConnected after unregister, got %v", got)
 	}
 
 	// Also verify for NotifyBundleUpdated
 	got = hub.NotifyBundleUpdated("host1", "v1.0")
-	if got {
-		t.Error("expected NotifyBundleUpdated to return false after unregister, got true")
+	if got != UpdateAgentNotConnected {
+		t.Errorf("expected NotifyBundleUpdated to return UpdateAgentNotConnected after unregister, got %v", got)
 	}
 
 	// And NotifyFetchBackup
 	got = hub.NotifyFetchBackup("host1")
-	if got {
-		t.Error("expected NotifyFetchBackup to return false after unregister, got true")
+	if got != UpdateAgentNotConnected {
+		t.Errorf("expected NotifyFetchBackup to return UpdateAgentNotConnected after unregister, got %v", got)
 	}
 }

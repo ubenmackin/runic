@@ -63,12 +63,50 @@ func (rl *RateLimiter) Check(remoteAddr string) error {
 }
 
 // Middleware returns an HTTP middleware that enforces the rate limit.
-// It uses the client's IP address as the rate limit key.
+// It uses the client's IP address as the rate limit key via common.GetClientIP,
+// which trusts X-Forwarded-For/X-Real-IP for reverse-proxy compatibility.
 // If the rate limit is exceeded, it responds with HTTP 429 Too Many Requests
 // and a Retry-After header (in whole seconds) equal to the configured window.
+//
+// WARNING: because GetClientIP trusts attacker-controlled proxy headers, this
+// middleware is bypassable by X-Forwarded-For rotation when the server is
+// directly exposed. Do NOT use it for security-sensitive auth endpoints
+// (login, setup, refresh, logout, register); use StrictMiddleware there.
 func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ip := rl.getIP(r)
+		if err := rl.Check(ip); err != nil {
+			// RFC 7231 §7.1.3: Retry-After in delta-seconds. Round up so the
+			// client doesn't immediately retry on a sub-second remainder.
+			retryAfter := int(rl.window / time.Second)
+			if retryAfter < 1 {
+				retryAfter = 1
+			}
+			w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
+			common.RespondError(w, http.StatusTooManyRequests, "rate limit exceeded")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// StrictMiddleware returns an HTTP middleware that enforces the rate limit
+// keyed on common.RemoteAddrIP (the TCP peer IP with any port stripped),
+// ignoring X-Forwarded-For and X-Real-IP entirely. Use this for
+// security-sensitive auth endpoints (login, setup-adjacent limiters,
+// refresh, logout, register) where those headers are attacker-controlled on
+// direct exposure and rotating them per request would otherwise yield a fresh
+// bucket every time and bypass both the per-IP sliding window and the
+// per-username+per-IP account lockout. Keying on RemoteAddr is spoof-proof at
+// the TCP layer; the trade-off is that clients behind a shared reverse proxy
+// share one bucket, which is acceptable for rare auth operations (5-10/min).
+// Pair with stripSpoofableProxyHeaders at the route level (see internal/api)
+// so downstream handlers that still call common.GetClientIP for logging also
+// observe the true peer address. Behavior is otherwise identical to
+// Middleware (429 + Retry-After on excess).
+func (rl *RateLimiter) StrictMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ip := common.RemoteAddrIP(r)
 		if err := rl.Check(ip); err != nil {
 			// RFC 7231 §7.1.3: Retry-After in delta-seconds. Round up so the
 			// client doesn't immediately retry on a sub-second remainder.

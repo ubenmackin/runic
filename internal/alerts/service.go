@@ -453,6 +453,11 @@ func (s *Service) loadSMTPConfig(ctx context.Context) (*SMTPConfig, error) {
 
 // TriggerAlert triggers an immediate alert for the given event. This is useful for immediate alerts outside the scheduled checks.
 // It evaluates the event against matching rules and processes it if triggered.
+// Per-rule ThrottleMinutes is enforced with the same shared check as the
+// scheduler, so direct-trigger agent_updated/peer_online/new_peer alerts do
+// not bypass throttling. Throttled rules are skipped without creating
+// duplicate history; TriggerAlert still returns nil so bulk fan-out callers
+// report the trigger as sent.
 func (s *Service) TriggerAlert(ctx context.Context, event *AlertEvent) error {
 	s.mu.RLock()
 	evaluator := s.evaluator
@@ -460,7 +465,7 @@ func (s *Service) TriggerAlert(ctx context.Context, event *AlertEvent) error {
 	alertStore := s.alertStore
 	s.mu.RUnlock()
 
-	if evaluator == nil {
+	if evaluator == nil || alertStore == nil {
 		return fmt.Errorf("alert service not initialized")
 	}
 
@@ -477,6 +482,14 @@ func (s *Service) TriggerAlert(ctx context.Context, event *AlertEvent) error {
 			continue
 		}
 
+		if s.isThrottled(ctx, rule) {
+			s.logger.Debug("alert throttled, skipping direct trigger",
+				"rule_id", rule.ID,
+				"rule_name", rule.Name,
+				"throttle_minutes", rule.ThrottleMinutes)
+			continue
+		}
+
 		if processor != nil {
 			if err := processor.ProcessAlert(ctx, event, rule); err != nil {
 				s.logger.Error("failed to process alert", "error", err, "rule_id", rule.ID)
@@ -486,6 +499,24 @@ func (s *Service) TriggerAlert(ctx context.Context, event *AlertEvent) error {
 	}
 
 	return lastErr
+}
+
+// isThrottled reports whether the rule is within its throttle window, using
+// the same shared check as Scheduler.isThrottled. Fail-open on store errors.
+func (s *Service) isThrottled(ctx context.Context, rule *AlertRule) bool {
+	s.mu.RLock()
+	alertStore := s.alertStore
+	logger := s.logger
+	s.mu.RUnlock()
+
+	throttled, err := isRuleThrottled(ctx, alertStore, rule)
+	if err != nil {
+		if logger != nil {
+			logger.Warn("failed to check throttled status", "error", err)
+		}
+		return false
+	}
+	return throttled
 }
 
 // CheckRuleNow checks a specific rule immediately. This is useful for testing rules or forcing a re-evaluation.

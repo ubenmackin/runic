@@ -111,6 +111,10 @@ func NewAPI(db *sql.DB, compiler *engine.Compiler, logsDB *sql.DB, logsDBPath st
 	peersHandler := peers.NewHandler(peerStore, db, compiler, sseHub, settingsStore)
 	peersHandler.DashboardStore = dashboardStore
 	peersHandler.PendingStore = pendingStore
+	peersHandler.AlertService = alertService
+	if _, err := dashboardStore.PurgeAgentUpdateLogs(context.Background()); err != nil {
+		log.Warn("Failed to purge legacy agent update logs (firewall_logs will retain agent_update rows)", "error", err)
+	}
 	userTokenStore := store.NewUserTokenStore(db)
 	// Wire PAT authentication so `Bearer runic_pat_*` credentials issued below
 	// authenticate through the shared auth middleware with live role lookup.
@@ -151,6 +155,39 @@ func apiMiddleware(a *API) mux.MiddlewareFunc {
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+// stripSpoofableProxyHeaders removes attacker-controlled proxy headers before
+// security-sensitive auth rate limiters run, so downstream handlers that still
+// call common.GetClientIP for logging observe the true TCP peer instead of a
+// spoofed X-Forwarded-For value. The StrictMiddleware limiters paired with
+// this wrapper key on common.RemoteAddrIP (ignoring those headers entirely),
+// so X-Forwarded-For/X-Real-IP rotation cannot yield a fresh bucket per guess
+// and bypass the login sliding window or the per-username+per-IP account
+// lockout. Sharing one bucket per egress IP behind a legitimate proxy is
+// acceptable for rare auth operations (5-10/min). See common.RemoteAddrIP
+// and the trust warning on common.GetClientIP.
+func stripSpoofableProxyHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Header.Del("X-Forwarded-For")
+		r.Header.Del("X-Real-IP")
+		next.ServeHTTP(w, r)
+	})
+}
+
+// stripSpoofableProxyHeadersForRegister removes attacker-controlled proxy
+// headers before the register rate limiter runs, so the limiter keys on
+// RemoteAddr (via common.GetClientIP fallback) instead of a spoofable
+// X-Forwarded-For value. Without this, a direct-exposure attacker could rotate
+// the header per request to bypass the 10/min per-IP limit and brute-force
+// hostnames or burn single-use tokens. Registration is rare, so sharing one
+// bucket per egress IP behind a legitimate proxy is acceptable. See
+// common.RemoteAddrIP and the trust warning on common.GetClientIP.
+//
+// Deprecated: prefer stripSpoofableProxyHeaders (identical behavior) for new
+// auth routes; kept as a thin alias so existing call sites keep compiling.
+func stripSpoofableProxyHeadersForRegister(next http.Handler) http.Handler {
+	return stripSpoofableProxyHeaders(next)
 }
 
 // Start launches background lifecycle goroutines (workers, log hub, cleanup).
@@ -196,26 +233,49 @@ func (a *API) RegisterRoutes(r *mux.Router, downloadsDir string) {
 	a.RegisterRateLimiter = middleware.NewRateLimiter(10, time.Minute)
 	a.RefreshRateLimiter = middleware.NewRateLimiter(10, time.Minute)
 	a.LogoutRateLimiter = middleware.NewRateLimiter(10, time.Minute)
-	a.DownloadRateLimiter = middleware.NewRateLimiter(10, time.Minute)
+	// Agent binary downloads burst to fleet width on Update All (21-way in
+	// production) plus agent-side 429/5xx retries with backoff. A 10/min
+	// limiter turns that burst into 429s that retries must then absorb, so
+	// downloads get headroom while login/token minting stay tight. The
+	// bulk fan-out additionally staggers SSE notifications (see
+	// peers.Handler.UpdateAllAgents) and skips up-to-date peers so the
+	// burst rarely reaches this ceiling.
+	a.DownloadRateLimiter = middleware.NewRateLimiter(60, time.Minute)
 	// PAT creation is rate-limited like login to bound credential minting.
 	a.TokenRateLimiter = middleware.NewRateLimiter(5, time.Minute)
 
-	apiRouter.HandleFunc("/setup", a.Auth.HandleSetupGET).Methods("GET")
-	apiRouter.HandleFunc("/setup", a.Auth.HandleSetupPOST).Methods("POST")
+	apiRouter.Handle("/setup", stripSpoofableProxyHeaders(http.HandlerFunc(a.Auth.HandleSetupGET))).Methods("GET")
+	apiRouter.Handle("/setup", stripSpoofableProxyHeaders(http.HandlerFunc(a.Auth.HandleSetupPOST))).Methods("POST")
 
-	apiRouter.Handle("/auth/login", a.LoginRateLimiter.Middleware(http.HandlerFunc(a.Auth.HandleLoginPOST))).Methods("POST")
+	// Login is brute-force sensitive: the 5/min sliding-window limiter and the
+	// 5-attempt/15-minute per-username+per-IP lockout (see
+	// auth.CheckAndRecordFailure) both key on common.RemoteAddrIP, and
+	// spoofable proxy headers are stripped first so rotating X-Forwarded-For
+	// per guess cannot yield a fresh bucket. The StrictMiddleware limiter
+	// ignores those headers even without stripping (defense in depth); the
+	// strip additionally keeps request logs truthful.
+	apiRouter.Handle("/auth/login", stripSpoofableProxyHeaders(a.LoginRateLimiter.StrictMiddleware(http.HandlerFunc(a.Auth.HandleLoginPOST)))).Methods("POST")
 
 	// Token refresh (public - uses refresh token, not access token)
-	// Protected by cookie presence check + IP rate limiting
-	apiRouter.Handle("/auth/refresh", RequireRefreshCookie()(a.RefreshRateLimiter.Middleware(http.HandlerFunc(a.Auth.HandleRefreshPOST)))).Methods("POST")
+	// Protected by cookie presence check + IP rate limiting keyed on
+	// RemoteAddrIP so header rotation cannot bypass the 10/min limit.
+	apiRouter.Handle("/auth/refresh", RequireRefreshCookie()(stripSpoofableProxyHeaders(a.RefreshRateLimiter.StrictMiddleware(http.HandlerFunc(a.Auth.HandleRefreshPOST))))).Methods("POST")
 
-	apiRouter.Handle("/agent/register", a.RegisterRateLimiter.Middleware(http.HandlerFunc(a.Agents.RegisterAgent))).Methods("POST")
+	// Agent registration stays public (new peers hold no JWT yet) but the
+	// handler requires a fresh single-use token or proof of possession for
+	// existing hosts, and the limiter is keyed on RemoteAddrIP (spoofable
+	// proxy headers stripped above) so X-Forwarded-For rotation cannot
+	// bypass it.
+	apiRouter.Handle("/agent/register", stripSpoofableProxyHeadersForRegister(a.RegisterRateLimiter.StrictMiddleware(http.HandlerFunc(a.Agents.RegisterAgent)))).Methods("POST")
 
 	// Protected routes (require JWT authentication)
 	protected := apiRouter.NewRoute().Subrouter()
 	protected.Use(auth.Middleware)
 
-	protected.Handle("/auth/logout", a.LogoutRateLimiter.Middleware(http.HandlerFunc(a.Auth.HandleLogoutPOST))).Methods("POST")
+	// Logout is authenticated so brute force is out of scope, but it stays
+	// rate-limited on RemoteAddrIP for abuse bounding with the same
+	// header-stripping hardening as the other auth endpoints.
+	protected.Handle("/auth/logout", stripSpoofableProxyHeaders(a.LogoutRateLimiter.StrictMiddleware(http.HandlerFunc(a.Auth.HandleLogoutPOST)))).Methods("POST")
 
 	authViewer := protected.PathPrefix("/auth").Subrouter()
 	a.Auth.RegisterRoutes(authViewer)
@@ -342,10 +402,17 @@ func (a *API) RegisterRoutes(r *mux.Router, downloadsDir string) {
 	apiRouter.HandleFunc("/agent/events/{host_id}", a.Agents.AgentAuthMiddleware(a.Agents.MakeHandleSSEventsHandler(a.SSEHub))).Methods("GET")
 	apiRouter.HandleFunc("/agent/test-key", a.Agents.AgentAuthMiddleware(a.Agents.AgentTestKey)).Methods("POST")
 
-	// Agent key rotation (public - authenticated via rotation token)
+	// Agent key rotation (rotate-key/confirm-rotation are public - authenticated via rotation token; check-rotation above stays JWT-authenticated). The
+	// handlers enforce per-IP sliding windows keyed on common.RemoteAddrIP
+	// (10/min rotate-key, 20/min confirm-rotation), ignoring
+	// X-Forwarded-For/X-Real-IP so header rotation cannot yield a fresh
+	// bucket per guess and brute-force rotation tokens on direct exposure
+	// (same keying principle as middleware.StrictMiddleware). Spoofable
+	// proxy headers are stripped first so downstream logging via
+	// common.GetClientIP observes the true TCP peer.
 	apiRouter.HandleFunc("/agent/check-rotation", a.Agents.AgentAuthMiddleware(a.Agents.AgentCheckRotation)).Methods("GET")
-	apiRouter.HandleFunc("/agent/rotate-key", a.Peers.AgentRotateKey).Methods("POST")
-	apiRouter.HandleFunc("/agent/confirm-rotation", a.Peers.AgentConfirmRotation).Methods("POST")
+	apiRouter.Handle("/agent/rotate-key", stripSpoofableProxyHeaders(http.HandlerFunc(a.Peers.AgentRotateKey))).Methods("POST")
+	apiRouter.Handle("/agent/confirm-rotation", stripSpoofableProxyHeaders(http.HandlerFunc(a.Peers.AgentConfirmRotation))).Methods("POST")
 
 	// Catch-all for unmatched API routes - returns 404 instead of falling through to SPA
 	// This must be registered last so it only catches truly unmatched routes
@@ -355,9 +422,22 @@ func (a *API) RegisterRoutes(r *mux.Router, downloadsDir string) {
 
 	// Downloads route (public - for agent binary downloads)
 	// Must be registered before SPA catch-all handler (in main.go)
-	// Rate limited to 10 requests per minute to prevent abuse
-	downloadsHandler := a.DownloadRateLimiter.Middleware(downloads.Handler(downloadsDir))
+	// Rate limited to 60 requests per minute per IP: wide enough for a
+	// staggered 21-way Update All burst plus backoff retries, tight enough
+	// to bound abuse. The 429 path returns Retry-After, which the agent
+	// download path honors with retry/backoff. The limiter uses
+	// StrictMiddleware keyed on common.RemoteAddrIP with spoofable proxy
+	// headers stripped first, so rotating X-Forwarded-For per request
+	// cannot yield a fresh bucket and defeat the 60/min burst protection.
+	downloadsHandler := stripSpoofableProxyHeaders(a.DownloadRateLimiter.StrictMiddleware(downloads.Handler(downloadsDir)))
 	r.Handle("/downloads/{filename}", downloadsHandler).Methods("GET")
+
+	// Share the staged-binary directory with the peers handler so bulk
+	// agent updates can refuse to report sent when the deploy left the
+	// downloads dir stale (missing arch binaries).
+	if a.Peers != nil {
+		a.Peers.DownloadsDir = downloadsDir
+	}
 
 	// Handle /api/v1 root path (not matched by PathPrefix subrouter)
 	// Returns API info instead of falling through to SPA

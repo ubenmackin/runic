@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -26,6 +27,13 @@ import (
 // spawned before the old ones finish. The guard ensures at most one invocation
 // of each callback is running at a time, skipping additional launches and
 // canceling any in-flight work via context cancellation.
+//
+// The guard only covers the lifetime of fn: fn must run synchronously and
+// must not spawn a detached goroutine and return, or running is cleared
+// while the background work is still racing. The update_agent callback in
+// particular must hold the guard until performUpdate completes (the agent
+// core runs it synchronously and enforces its own singleflight as the
+// authoritative cross-reconnect guard).
 type sseCallbackGuard struct {
 	running  atomic.Bool
 	cancelMu sync.Mutex
@@ -33,7 +41,10 @@ type sseCallbackGuard struct {
 }
 
 // tryStart attempts to start a guarded goroutine. It returns false (and does
-// nothing) if a previous invocation is still running.
+// nothing) if a previous invocation is still running. The caller must pass a
+// synchronous fn: the guard is held (running=true) only until fn returns, so
+// an fn that detaches background work and returns immediately releases the
+// guard early and defeats deduplication.
 func (g *sseCallbackGuard) tryStart(ctx context.Context, fn func(context.Context)) bool {
 	g.cancelMu.Lock()
 	defer g.cancelMu.Unlock()
@@ -165,6 +176,116 @@ func ListenSSE(ctx context.Context, client common.HTTPClient, controlPlaneURL, h
 	}
 }
 
+// EffectiveUpdateURLPort returns the explicit port if present, otherwise the
+// default port for the URL scheme (80 for http, 443 for https) so that URLs
+// with implicit default ports compare equal to URLs with explicit ones. It
+// is the single canonical helper shared by the agent core validator and the
+// SSE mismatch warn path.
+func EffectiveUpdateURLPort(u *url.URL) string {
+	if p := u.Port(); p != "" {
+		return p
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "http":
+		return "80"
+	case "https":
+		return "443"
+	default:
+		return ""
+	}
+}
+
+// hostPortMismatchReason compares the host and effective port of two parsed
+// URLs and returns a human-readable reason when they differ. It returns ""
+// when they match. Both ValidateUpdateURL and UpdateURLMismatchReason share
+// this helper so host/port pinning cannot drift between the enforcing and
+// warn paths.
+func hostPortMismatchReason(event, configured *url.URL) string {
+	if !strings.EqualFold(event.Hostname(), configured.Hostname()) {
+		return fmt.Sprintf("host %q does not match configured host %q", event.Hostname(), configured.Hostname())
+	}
+	if EffectiveUpdateURLPort(event) != EffectiveUpdateURLPort(configured) {
+		return fmt.Sprintf("port %q does not match configured port %q", event.Port(), configured.Port())
+	}
+	return ""
+}
+
+// UpdateURLMismatchReason compares the update_agent event URL against the
+// configured control plane URL and returns a human-readable reason when the
+// host or effective port differs. It returns "" when they match or when
+// either URL is unparseable (the agent's authoritative ValidateUpdateURL
+// reports those cases via last_update_error on the next heartbeat).
+func UpdateURLMismatchReason(eventURL, configuredURL string) string {
+	event, err := url.Parse(strings.TrimSpace(eventURL))
+	if err != nil || event.Host == "" {
+		return ""
+	}
+	configured, err := url.Parse(strings.TrimSpace(configuredURL))
+	if err != nil || configured.Host == "" {
+		return ""
+	}
+	return hostPortMismatchReason(event, configured)
+}
+
+// validateUpdateURLShape checks that a parsed control plane URL is
+// well-formed, pins its host to be present, requires http/https, and requires
+// https except for loopback test hosts. It is shared by ValidateUpdateURL so
+// scheme/host enforcement stays in one place.
+func validateUpdateURLShape(parsed *url.URL, raw string) error {
+	if parsed.Host == "" {
+		return fmt.Errorf("invalid control plane URL %q: missing host", raw)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return fmt.Errorf("invalid control plane URL %q: scheme must be http or https", raw)
+	}
+	hostname := parsed.Hostname()
+	isLoopback := hostname == "localhost" || hostname == "127.0.0.1" || hostname == "::1"
+	if !isLoopback && parsed.Scheme != "https" {
+		return fmt.Errorf("invalid control plane URL %q: scheme must be https", raw)
+	}
+	return nil
+}
+
+// ValidateUpdateURLShape checks that raw is a well-formed control plane URL:
+// host present, scheme http/https, https required except for loopback test
+// hosts. It is the single canonical shape validator shared by the agent
+// (via ValidateUpdateURL) and the server bulk fan-out, so scheme/host
+// enforcement cannot drift between the two.
+func ValidateUpdateURLShape(raw string) error {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("invalid control plane URL %q: %w", raw, err)
+	}
+	return validateUpdateURLShape(parsed, raw)
+}
+
+// ValidateUpdateURL checks that the update URL is well-formed, pins its host
+// to the configured control plane host, and requires https except for
+// loopback test hosts. It shares host/port pinning with
+// UpdateURLMismatchReason via hostPortMismatchReason.
+func ValidateUpdateURL(updateURL, configuredURL string) (string, error) {
+	parsed, err := url.Parse(updateURL)
+	if err != nil {
+		return "", fmt.Errorf("invalid control plane URL %q: %w", updateURL, err)
+	}
+	if err := validateUpdateURLShape(parsed, updateURL); err != nil {
+		return "", err
+	}
+	if configuredURL != "" {
+		configured, err := url.Parse(configuredURL)
+		if err != nil {
+			return "", fmt.Errorf("invalid configured control plane URL %q: %w", configuredURL, err)
+		}
+		if configured.Host == "" {
+			return "", fmt.Errorf("invalid configured control plane URL %q: missing host", configuredURL)
+		}
+		if reason := hostPortMismatchReason(parsed, configured); reason != "" {
+			return "", fmt.Errorf("invalid control plane URL %q: %s", updateURL, reason)
+		}
+	}
+	return parsed.String(), nil
+}
+
 func connectSSE(ctx context.Context, client common.HTTPClient, controlPlaneURL, hostID, token, version string, onBundleUpdate func(context.Context), onFetchBackup func(context.Context), onUpdateAgent func(context.Context, string)) error {
 	url := fmt.Sprintf("%s/api/v1/agent/events/%s", controlPlaneURL, hostID)
 
@@ -231,14 +352,44 @@ func connectSSE(ctx context.Context, client common.HTTPClient, controlPlaneURL, 
 			log.Info("SSE: update_agent received, starting self-update")
 			prevEvent = "update_agent"
 		case strings.HasPrefix(line, "data:") && prevEvent == "update_agent":
+			raw := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 			var data struct {
 				ControlPlaneURL string `json:"control_plane_url"`
 			}
-			if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &data); err == nil {
-				updateGuard.tryStart(ctx, func(sseCtx context.Context) {
-					onUpdateAgent(sseCtx, data.ControlPlaneURL)
-				})
+			if err := json.Unmarshal([]byte(raw), &data); err != nil {
+				log.Warn("SSE: update_agent data unparseable, skipping update", "error", err)
+				prevEvent = ""
+				continue
 			}
+			if strings.TrimSpace(data.ControlPlaneURL) == "" {
+				log.Warn("SSE: update_agent missing control_plane_url, skipping update", "configured_url", controlPlaneURL)
+				prevEvent = ""
+				continue
+			}
+			// Surface an instance_url vs configured ControlPlaneURL
+			// host/port mismatch here with both URLs and the reason.
+			// The agent's authoritative ValidateUpdateURL still enforces
+			// the pin and records last_update_error for the next
+			// heartbeat; this warn makes the silent skip observable at
+			// receive time with no download success or failure lines.
+			if reason := UpdateURLMismatchReason(data.ControlPlaneURL, controlPlaneURL); reason != "" {
+				log.Warn("SSE: update_agent control plane URL mismatch, update will be rejected by validation", "event_url", data.ControlPlaneURL, "configured_url", controlPlaneURL, "reason", reason)
+			}
+			// Agent self-update fan-out stays inline SSE (never the bundle
+			// PushWorker). The callback receives a detached context so a
+			// stream reconnect cannot cancel an in-flight update; the
+			// agent detaches again internally before downloading and
+			// restarting. Downloads retry 429/5xx and transport errors
+			// with backoff honoring Retry-After (see core.downloadBinary),
+			// so a staggered burst that still hits the limiter recovers
+			// without operator action. onUpdateAgent must run synchronously
+			// (no detached goroutine that outlives the return) so this
+			// guard stays held until the update completes; the agent core
+			// additionally singleflights concurrent triggers.
+			eventURL := data.ControlPlaneURL
+			updateGuard.tryStart(ctx, func(sseCtx context.Context) {
+				onUpdateAgent(context.WithoutCancel(sseCtx), eventURL)
+			})
 			prevEvent = "" // Reset after processing data
 		case strings.HasPrefix(line, "data:"):
 			// Data line for other events - just reset prevEvent

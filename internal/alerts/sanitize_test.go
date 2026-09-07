@@ -4,6 +4,8 @@ package alerts
 import (
 	"strings"
 	"testing"
+
+	"runic/internal/common"
 )
 
 // are properly sanitized. Note: SanitizeAlertInput removes control characters but
@@ -331,7 +333,7 @@ func TestSanitizeAlertInput_LengthTruncation(t *testing.T) {
 	}
 }
 
-// Note: The current truncateString implementation has limitations with UTF-8 boundaries.
+// Truncation is rune-safe via the shared common.TruncateString helper.
 func TestSanitizeAlertInput_UTF8Truncation(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -381,6 +383,13 @@ func TestSanitizeAlertInput_UTF8Truncation(t *testing.T) {
 			maxLen:      10, // More than needed
 			wantResult:  "日本語",
 			wantChanged: false,
+		},
+		{
+			name:        "rune-safe truncation of leading-byte split",
+			input:       "a\xC3\xA9",
+			maxLen:      2,
+			wantResult:  "a",
+			wantChanged: true,
 		},
 	}
 
@@ -785,13 +794,25 @@ func TestTruncateString(t *testing.T) {
 			maxLen:     9, // 3 chars * 3 bytes each
 			wantResult: "日本語",
 		},
+		{
+			name:       "rune-safe truncation never splits multi-byte sequence",
+			input:      "a\xC3\xA9",
+			maxLen:     2,
+			wantResult: "a",
+		},
+		{
+			name:       "rune-safe truncation of CJK at rune boundary",
+			input:      "日本語",
+			maxLen:     8,
+			wantResult: "日本",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotResult := truncateString(tt.input, tt.maxLen)
+			gotResult := common.TruncateString(tt.input, tt.maxLen)
 			if gotResult != tt.wantResult {
-				t.Errorf("truncateString() = %q, want %q", gotResult, tt.wantResult)
+				t.Errorf("TruncateString() = %q, want %q", gotResult, tt.wantResult)
 			}
 		})
 	}
