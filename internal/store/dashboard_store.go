@@ -4,10 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	ic "runic/internal/common"
 	"runic/internal/common/constants"
+	"runic/internal/common/log"
 	"runic/internal/db"
 	"runic/internal/importer"
 	"runic/internal/models"
@@ -38,19 +40,39 @@ func (s *DashboardStore) GetSecret(ctx context.Context, key string) (string, err
 	return value, nil
 }
 
+// Firewall event types and actions for synthetic lifecycle events stored in
+// firewall_logs. Firewall traffic uses event_type IN/OUT with action
+// ACCEPT/DROP/REJECT; lifecycle events use a distinct event_type so the Logs
+// UI can filter them without affecting DROP-based dashboard statistics.
+const (
+	// FirewallEventAgentUpdate marks agent self-update lifecycle events
+	// (operator-triggered update notifications and agent version changes).
+	FirewallEventAgentUpdate = "agent_update"
+	// FirewallActionInfo marks informational lifecycle events. Dashboard
+	// blocked-traffic queries filter on action='DROP', so info rows are
+	// excluded from those counts by construction.
+	FirewallActionInfo = "info"
+)
+
 // FirewallLogEntry represents a single firewall log event to be inserted.
+// EventType maps to the event_type column (IN/OUT for firewall traffic,
+// agent_update for lifecycle events). Direction is a deprecated alias kept
+// for backward compatibility; EventType takes precedence when both are set.
 type FirewallLogEntry struct {
 	PeerID       string
 	PeerHostname string
 	Timestamp    string
-	Direction    string
-	SrcIP        string
-	DstIP        string
-	Protocol     string
-	SrcPort      int
-	DstPort      int
-	Action       string
-	RawLine      string
+	EventType    string
+	// Direction is deprecated: use EventType instead. It is still honored
+	// as a fallback so older callers keep working.
+	Direction string
+	SrcIP     string
+	DstIP     string
+	Protocol  string
+	SrcPort   int
+	DstPort   int
+	Action    string
+	RawLine   string
 }
 
 // InsertFirewallLog inserts a single firewall log entry into the logs database.
@@ -58,16 +80,53 @@ func (s *DashboardStore) InsertFirewallLog(ctx context.Context, entry *FirewallL
 	if s.logsDB == nil {
 		return fmt.Errorf("logs database not configured")
 	}
+	eventType := entry.EventType
+	if eventType == "" {
+		eventType = entry.Direction
+	}
 	_, err := s.logsDB.ExecContext(ctx,
 		`INSERT INTO firewall_logs (peer_id, peer_hostname, timestamp, event_type, source_ip, dest_ip, protocol, source_port, dest_port, action, details)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		entry.PeerID, entry.PeerHostname, entry.Timestamp, entry.Direction,
+		entry.PeerID, entry.PeerHostname, entry.Timestamp, eventType,
 		entry.SrcIP, entry.DstIP, entry.Protocol, entry.SrcPort, entry.DstPort,
 		entry.Action, entry.RawLine)
 	if err != nil {
 		return fmt.Errorf("insert firewall log: %w", err)
 	}
 	return nil
+}
+
+// InsertAgentUpdateLog records an agent-update lifecycle event in firewall_logs
+// so it surfaces in the Logs UI alongside firewall traffic. It is best-effort:
+// callers must not fail the originating request when persistence fails, and
+// log only a warning. Unlike the earlier silent no-op, an unconfigured
+// logsDB now returns an error so callers can detect the misconfiguration.
+// The row uses event_type agent_update with action info, leaving DROP-based
+// dashboard statistics and the log retention worker (timestamp-ordered deletes)
+// unaffected. alert_history is intentionally untouched.
+func (s *DashboardStore) InsertAgentUpdateLog(ctx context.Context, peerID, hostname, initiatedBy, instanceURL, detail string) error {
+	if s == nil || s.logsDB == nil {
+		log.WarnContext(ctx, "agent update log dropped: logs database not configured", "peer_id", peerID, "hostname", hostname)
+		return fmt.Errorf("insert agent update log: logs database not configured")
+	}
+	if initiatedBy == "" {
+		initiatedBy = "unknown"
+	}
+	parts := []string{fmt.Sprintf("initiated_by=%s", initiatedBy)}
+	if instanceURL != "" {
+		parts = append(parts, fmt.Sprintf("control_plane_url=%s", instanceURL))
+	}
+	if detail != "" {
+		parts = append(parts, detail)
+	}
+	return s.InsertFirewallLog(ctx, &FirewallLogEntry{
+		PeerID:       peerID,
+		PeerHostname: hostname,
+		Timestamp:    time.Now().UTC().Format("2006-01-02 15:04:05"),
+		EventType:    FirewallEventAgentUpdate,
+		Action:       FirewallActionInfo,
+		RawLine:      strings.Join(parts, "; "),
+	})
 }
 
 // ParseBackupSession parses an import session's raw backup data. It requires

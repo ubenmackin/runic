@@ -28,10 +28,9 @@ import (
 	"runic/internal/common"
 	"runic/internal/common/constants"
 	"runic/internal/common/log"
+	"runic/internal/common/version"
 	"runic/internal/models"
 )
-
-var Version = "dev"
 
 type Agent struct {
 	config          *identity.Config
@@ -71,7 +70,7 @@ func New(configPath, controlPlaneURL string) *Agent {
 		configPath: configPath,
 		httpClient: httpClient,
 		sseClient:  sseClient,
-		version:    Version,
+		version:    version.AgentVersion,
 	}
 
 	agent.cmdRunner = &firewall.RealCommandRunner{}

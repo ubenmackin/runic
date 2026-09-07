@@ -722,12 +722,13 @@ func TestStartTokenCleanup_ContextCancellation(t *testing.T) {
 	defer cleanup()
 
 	tokenStore := store.NewTokenStore(database)
+	patStore := store.NewUserTokenStore(database)
 
 	detectorCtx, cancel := context.WithCancel(context.Background())
 
 	done := make(chan struct{})
 	go func() {
-		startTokenCleanup(detectorCtx, tokenStore)
+		startTokenCleanup(detectorCtx, tokenStore, patStore)
 		close(done)
 	}()
 

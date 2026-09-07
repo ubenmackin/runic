@@ -10,6 +10,8 @@ import (
 
 	"runic/internal/api/common"
 	"runic/internal/auth"
+	runiccommon "runic/internal/common"
+	"runic/internal/common/constants"
 	runiclog "runic/internal/common/log"
 	"runic/internal/store"
 )
@@ -51,17 +53,33 @@ func MakeLogsStreamHandler(hub *Hub, tokenStore TokenRevoker) http.HandlerFunc {
 				}
 			}
 		}
-		if tokenStr == "" {
+		if tokenStr == "" && auth.ExtractBearerToken(r.Header.Get("Authorization")) == "" {
 			http.Error(w, `{"error": "unauthorized"}`, http.StatusUnauthorized)
 			return
 		}
-		claims, err := auth.ValidateToken(tokenStr)
-		if err != nil || claims == nil {
-			http.Error(w, `{"error": "unauthorized"}`, http.StatusUnauthorized)
-			return
+		// Authenticate through the shared auth core, mirroring auth.Middleware:
+		// JWT first (with revocation enforcement), then PAT fallback so
+		// `Bearer runic_pat_*` credentials work here exactly as they do on
+		// GET /logs. PATs are only accepted via the Authorization header
+		// (never cookies), matching auth.Middleware parity. A JWT-shaped
+		// token never passes the PAT prefix check, so the fallback cannot
+		// weaken JWT verification.
+		authenticated := false
+		if claims, err := auth.ValidateToken(tokenStr); err == nil && claims != nil && tokenStore != nil {
+			revCtx, cancel := context.WithTimeout(r.Context(), constants.RevocationCheckTimeout)
+			revoked, err := tokenStore.IsTokenRevoked(revCtx, claims.UniqueID)
+			cancel()
+			if err != nil || revoked {
+				http.Error(w, `{"error": "unauthorized"}`, http.StatusUnauthorized)
+				return
+			}
+			authenticated = true
+		} else if patToken := auth.ExtractBearerToken(r.Header.Get("Authorization")); patToken != "" {
+			if _, _, _, ok := auth.AuthenticatePATToken(r, patToken); ok {
+				authenticated = true
+			}
 		}
-
-		if revoked, err := tokenStore.IsTokenRevoked(r.Context(), claims.UniqueID); err != nil || revoked {
+		if !authenticated {
 			http.Error(w, `{"error": "unauthorized"}`, http.StatusUnauthorized)
 			return
 		}
@@ -118,6 +136,7 @@ func (h *Handler) GetLogs(w http.ResponseWriter, r *http.Request) {
 	srcIP := r.URL.Query().Get("src_ip")
 	dstPort := r.URL.Query().Get("dst_port")
 	action := r.URL.Query().Get("action")
+	eventType := r.URL.Query().Get("event_type")
 	fromStr := r.URL.Query().Get("from")
 	toStr := r.URL.Query().Get("to")
 	limitStr := r.URL.Query().Get("limit")
@@ -151,13 +170,19 @@ func (h *Handler) GetLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	filter := store.LogFilter{
-		PeerID:  peerID,
-		SrcIP:   srcIP,
-		DstPort: dstPort,
-		Action:  action,
-		From:    fromTime,
-		To:      toTime,
+		PeerID:    peerID,
+		SrcIP:     srcIP,
+		DstPort:   dstPort,
+		Action:    action,
+		EventType: eventType,
+		From:      fromTime,
+		To:        toTime,
 	}
+
+	// Bound the DB section so a stalled logs database cannot hold the
+	// handler open indefinitely.
+	ctx, cancel := runiccommon.WithHandlerTimeout(r.Context())
+	defer cancel()
 
 	result, err := h.Store.ListLogs(ctx, &filter, limit, offset)
 	if err != nil {

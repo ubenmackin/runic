@@ -331,6 +331,21 @@ func (s *PendingStore) GetPushJobWithPeers(ctx context.Context, jobID string) (P
 	return job, ic.EnsureSlice(peers), nil
 }
 
+// UpdatePushJobPeerStatus marks a peer's delivery status within a push job.
+// It delegates to the shared db helper so bulk fan-out handlers outside the
+// pending package can record per-peer outcomes against the same audit rows.
+func (s *PendingStore) UpdatePushJobPeerStatus(ctx context.Context, jobID string, peerID int, status string, errMsg string) error {
+	return db.UpdatePushJobPeerStatus(ctx, s.db, jobID, peerID, status, errMsg)
+}
+
+// FinalizePushJobWithCounts marks a push job completed with explicit
+// success/failure counts. It delegates to the shared db helper so bulk
+// fan-out handlers outside the pending package close the audit rows they
+// opened with CreatePushJob.
+func (s *PendingStore) FinalizePushJobWithCounts(ctx context.Context, jobID string, succeeded, failed int) error {
+	return db.FinalizePushJobWithCounts(ctx, s.db, jobID, succeeded, failed)
+}
+
 // cleanupAfterApplyAll hard deletes soft-deleted entities and clears change snapshots.
 func (s *PendingStore) cleanupAfterApplyAll(ctx context.Context) error {
 	tx, err := s.db.BeginTx(ctx, nil)

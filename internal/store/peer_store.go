@@ -19,6 +19,15 @@ const peerRowColumns = `id, hostname, ip_address, os_type, arch, has_docker, age
 
 const ruleBundleRowColumns = `id, peer_id, version, version_number, rules_content, hmac, created_at, applied_at, first_applied_at`
 
+// updatePeerHeartbeatSQL is the shared heartbeat UPDATE used by both
+// UpdatePeerHeartbeat and UpdatePeerHeartbeatWithPrev.
+const updatePeerHeartbeatSQL = `UPDATE peers SET last_heartbeat = CURRENT_TIMESTAMP, status = 'online', agent_version = ?, bundle_version = ?, has_ipset = ? WHERE id = ?`
+
+// countPolicyRefsForPeerIPSQL counts policy references to a peer IP on both
+// the source and target sides. Shared by DeletePeerIPIfOrphan,
+// CountPolicyRefsForPeerIP, and SyncPeerIPs.
+const countPolicyRefsForPeerIPSQL = `SELECT COUNT(*) FROM policies WHERE (source_id = ? AND source_ip = ?) OR (target_id = ? AND target_ip = ?)`
+
 type PeerIPView struct {
 	ID        int    `json:"id"`
 	PeerID    int    `json:"peer_id"`
@@ -370,15 +379,24 @@ func (s *PeerStore) GetPeerIP(ctx context.Context, ipID int) (*PeerIPView, error
 	return &pip, nil
 }
 
+// countPolicyRefsForPeerIP returns the number of policies referencing a peer
+// IP as either source_ip or target_ip. Callers wrap the error with their own
+// context.
+func (s *PeerStore) countPolicyRefsForPeerIP(ctx context.Context, peerID int, ip string) (int, error) {
+	var refCount int
+	err := s.db.QueryRowContext(ctx, countPolicyRefsForPeerIPSQL,
+		peerID, ip, peerID, ip).Scan(&refCount)
+	if err != nil {
+		return 0, err
+	}
+	return refCount, nil
+}
+
 // DeletePeerIPIfOrphan deletes a peer_ip by id, but only when it is not
 // referenced by any policy (as source_ip or target_ip).  Returns sql.ErrNoRows
 // if the row does not exist or if policy references block the delete.
 func (s *PeerStore) DeletePeerIPIfOrphan(ctx context.Context, ipID int, peerID int, ipAddress string) error {
-	var refCount int
-	err := s.db.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM policies WHERE (source_id = ? AND source_ip = ?) OR (target_id = ? AND target_ip = ?)",
-		peerID, ipAddress, peerID, ipAddress,
-	).Scan(&refCount)
+	refCount, err := s.countPolicyRefsForPeerIP(ctx, peerID, ipAddress)
 	if err != nil {
 		return fmt.Errorf("count policy refs: %w", err)
 	}
@@ -416,10 +434,7 @@ func (s *PeerStore) DeletePeerIP(ctx context.Context, ipID int) error {
 
 // CountPolicyRefsForPeerIP counts policy references for a peer IP. This checks both source and target sides of policies.
 func (s *PeerStore) CountPolicyRefsForPeerIP(ctx context.Context, peerID int, ip string) (int, error) {
-	var count int
-	err := s.db.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM policies WHERE (source_id = ? AND source_ip = ?) OR (target_id = ? AND target_ip = ?)",
-		peerID, ip, peerID, ip).Scan(&count)
+	count, err := s.countPolicyRefsForPeerIP(ctx, peerID, ip)
 	if err != nil {
 		return 0, fmt.Errorf("count policy refs for peer IP: %w", err)
 	}
@@ -493,10 +508,7 @@ func (s *PeerStore) SyncPeerIPs(ctx context.Context, peerID int, ips []string, p
 		if reportedSet[entry.IP] {
 			continue
 		}
-		var refCount int
-		err := s.db.QueryRowContext(ctx,
-			"SELECT COUNT(*) FROM policies WHERE (source_id = ? AND source_ip = ?) OR (target_id = ? AND target_ip = ?)",
-			peerID, entry.IP, peerID, entry.IP).Scan(&refCount)
+		refCount, err := s.countPolicyRefsForPeerIP(ctx, peerID, entry.IP)
 		if err != nil {
 			log.Warn("Failed to check policy references for stale peer IP", "error", err, "peer_id", peerID, "ip", entry.IP)
 			continue
@@ -531,13 +543,47 @@ func (s *PeerStore) SyncPeerIPs(ctx context.Context, peerID int, ips []string, p
 }
 
 func (s *PeerStore) UpdatePeerHeartbeat(ctx context.Context, peerID int, agentVersion, bundleVersion string, hasIPSet *bool) error {
-	_, err := s.db.ExecContext(ctx,
-		`UPDATE peers SET last_heartbeat = CURRENT_TIMESTAMP, status = 'online', agent_version = ?, bundle_version = ?, has_ipset = ? WHERE id = ?`,
+	_, err := s.db.ExecContext(ctx, updatePeerHeartbeatSQL,
 		agentVersion, bundleVersion, hasIPSet, peerID)
 	if err != nil {
 		return fmt.Errorf("update peer heartbeat: %w", err)
 	}
 	return nil
+}
+
+// UpdatePeerHeartbeatWithPrev records a heartbeat and returns the previously
+// stored hostname and agent version in a single transaction, so concurrent
+// heartbeats cannot interleave a separate pre-read and update (TOCTOU) and
+// the hot path issues one round trip instead of two. The pre-read is
+// best-effort: when it fails, known is false and the heartbeat update still
+// proceeds, so a read failure never fails the heartbeat itself. Callers log
+// a version-change event only when known is true, the update succeeded, and
+// the reported version is non-empty and differs from the previous value.
+func (s *PeerStore) UpdatePeerHeartbeatWithPrev(ctx context.Context, peerID int, agentVersion, bundleVersion string, hasIPSet *bool) (hostname string, prevVersion sql.NullString, known bool, err error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", sql.NullString{}, false, fmt.Errorf("begin heartbeat tx: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	known = true
+	if err := tx.QueryRowContext(ctx, "SELECT hostname, agent_version FROM peers WHERE id = ?", peerID).Scan(&hostname, &prevVersion); err != nil {
+		known = false
+	}
+	if _, err := tx.ExecContext(ctx, updatePeerHeartbeatSQL,
+		agentVersion, bundleVersion, hasIPSet, peerID); err != nil {
+		return "", sql.NullString{}, false, fmt.Errorf("update peer heartbeat: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return "", sql.NullString{}, false, fmt.Errorf("commit heartbeat tx: %w", err)
+	}
+	committed = true
+	return hostname, prevVersion, known, nil
 }
 
 func (s *PeerStore) GetPeerRotationState(ctx context.Context, hostname string) (rotationToken, hmacKey string, err error) {
@@ -657,7 +703,7 @@ func (s *PeerStore) getPendingBundleInfo(ctx context.Context, peerID int) (rules
 }
 
 // GetPeerBundleWithDeployed returns both the pending (latest) and deployed bundle data
-// in a single call, avoiding the double-query pattern (T007-#1).
+// in a single call, avoiding the double-query pattern.
 // Returns pendingData, deployedData, pendingVersion, pendingVersionNumber, pendingHMAC, deployedVersion, error.
 func (s *PeerStore) GetPeerBundleWithDeployed(ctx context.Context, peerID int) (pendingData, deployedData, version, hmac, deployedVersion string, versionNumber int, err error) {
 	pendingData, version, hmac, deployedVersion, versionNumber, err = s.getPendingBundleInfo(ctx, peerID)

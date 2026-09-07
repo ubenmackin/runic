@@ -111,6 +111,7 @@ peer_id INTEGER NOT NULL,
 peer_hostname TEXT,
 timestamp DATETIME NOT NULL,
 direction TEXT,
+event_type TEXT,
 src_ip TEXT NOT NULL,
 dst_ip TEXT NOT NULL,
 protocol TEXT NOT NULL,
@@ -164,6 +165,26 @@ CREATE TABLE IF NOT EXISTS registration_tokens (
     is_revoked INTEGER DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_reg_tokens_active ON registration_tokens(used_at, is_revoked);
+
+-- User API tokens (PATs) for programmatic access. Only the SHA256 hex digest
+-- of the token is persisted; the raw token is shown once at creation time.
+-- Deleting a user cascades to their tokens. PATs are independent of the JWT
+-- signing key so jwt_secret rotation never invalidates them.
+CREATE TABLE IF NOT EXISTS user_api_tokens (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT NOT NULL DEFAULT '',
+    token_hash TEXT NOT NULL UNIQUE,
+    prefix TEXT NOT NULL DEFAULT '',
+    expires_at DATETIME,
+    last_used_at DATETIME,
+    is_revoked INTEGER NOT NULL DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_user_api_tokens_user_id ON user_api_tokens(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_api_tokens_hash ON user_api_tokens(token_hash);
+CREATE INDEX IF NOT EXISTS idx_user_api_tokens_prefix ON user_api_tokens(prefix);
 
 -- System configuration table for storing control plane settings
 CREATE TABLE IF NOT EXISTS system_config (

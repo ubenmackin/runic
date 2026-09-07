@@ -11,11 +11,13 @@ import (
 	"github.com/gorilla/mux"
 
 	"runic/internal/api/common"
+	runiccommon "runic/internal/common"
 	runiclog "runic/internal/common/log"
 )
 
 // GenerateRegistrationToken handles POST /api/v1/registration-tokens
 func (h *Handler) GenerateRegistrationToken(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB limit
 	var input struct {
 		Description string `json:"description"`
 	}
@@ -87,8 +89,5 @@ func (h *Handler) ConsumeRegistrationToken(ctx context.Context, token, hostname 
 }
 
 func maskToken(token string) string {
-	if len(token) <= 12 {
-		return "****"
-	}
-	return token[:8] + "..." + token[len(token)-4:]
+	return runiccommon.MaskToken(token)
 }

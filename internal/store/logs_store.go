@@ -24,12 +24,13 @@ func NewLogsStore(logsDB db.Querier) *LogsStore {
 
 // LogFilter holds optional filter criteria for log queries.
 type LogFilter struct {
-	PeerID  string
-	SrcIP   string
-	DstPort string
-	Action  string
-	From    string
-	To      string
+	PeerID    string
+	SrcIP     string
+	DstPort   string
+	Action    string
+	EventType string
+	From      string
+	To        string
 }
 
 // ListLogsResult holds the result of a paginated log query.
@@ -66,6 +67,10 @@ func (s *LogsStore) ListLogs(ctx context.Context, filter *LogFilter, limit, offs
 	if filter.Action != "" {
 		conditions = append(conditions, "action = ?")
 		args = append(args, strings.ToUpper(filter.Action))
+	}
+	if filter.EventType != "" {
+		conditions = append(conditions, "event_type = ?")
+		args = append(args, filter.EventType)
 	}
 	if filter.From != "" {
 		conditions = append(conditions, "timestamp >= ?")

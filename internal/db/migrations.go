@@ -643,6 +643,29 @@ func migrateSchema(ctx context.Context, database *sql.DB) error {
 		return fmt.Errorf("failed to check for firewall_logs table: %w", err)
 	}
 	if hasFirewallLogsTable {
+		if err := addColumnIfMissing(ctx, database, "firewall_logs", "event_type", "TEXT"); err != nil {
+			return err
+		}
+		// Backfill event_type from direction for rows predating the event_type column.
+		// Idempotent: only rows with event_type IS NULL are touched.
+		hasDirection, err := columnExists(ctx, database, "firewall_logs", "direction")
+		if err != nil {
+			return err
+		}
+		if hasDirection {
+			var needsBackfill bool
+			err = database.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM firewall_logs WHERE event_type IS NULL AND direction IS NOT NULL").Scan(&needsBackfill)
+			if err != nil {
+				return fmt.Errorf("failed to check for firewall_logs event_type backfill: %w", err)
+			}
+			if needsBackfill {
+				log.Info("Migration: backfilling firewall_logs event_type from direction")
+				if _, err := database.ExecContext(ctx, "UPDATE firewall_logs SET event_type = direction WHERE event_type IS NULL AND direction IS NOT NULL"); err != nil {
+					return fmt.Errorf("failed to backfill firewall_logs event_type: %w", err)
+				}
+				log.Info("Migration: backfilled firewall_logs event_type from direction")
+			}
+		}
 		var hasActionTimestampIdx bool
 		err = database.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='index' AND name='idx_firewall_logs_action_timestamp'").Scan(&hasActionTimestampIdx)
 		if err != nil {
@@ -1405,6 +1428,48 @@ SELECT id, ip_address, 1 FROM peers
 			return err
 		}
 		log.Info("Migration: successfully fixed import_sessions CHECK constraint spelling")
+	}
+
+	// Migration: Create user_api_tokens table for personal access tokens (PATs).
+	// Only the SHA256 hex digest is persisted; the raw token is shown once at
+	// creation. Deleting a user cascades to their tokens via the FK.
+	var hasUserAPITokens bool
+	err = database.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='user_api_tokens'").Scan(&hasUserAPITokens)
+	if err != nil {
+		return fmt.Errorf("failed to check for user_api_tokens table: %w", err)
+	}
+	if !hasUserAPITokens {
+		log.Info("Migration: creating user_api_tokens table")
+		_, err = database.ExecContext(ctx, `
+			CREATE TABLE user_api_tokens (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+				name TEXT NOT NULL DEFAULT '',
+				token_hash TEXT NOT NULL UNIQUE,
+				prefix TEXT NOT NULL DEFAULT '',
+				expires_at DATETIME,
+				last_used_at DATETIME,
+				is_revoked INTEGER NOT NULL DEFAULT 0,
+				created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+				FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+			)
+		`)
+		if err != nil {
+			return fmt.Errorf("failed to create user_api_tokens table: %w", err)
+		}
+		_, err = database.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_user_api_tokens_user_id ON user_api_tokens(user_id)")
+		if err != nil {
+			return fmt.Errorf("failed to create idx_user_api_tokens_user_id index: %w", err)
+		}
+		_, err = database.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_user_api_tokens_hash ON user_api_tokens(token_hash)")
+		if err != nil {
+			return fmt.Errorf("failed to create idx_user_api_tokens_hash index: %w", err)
+		}
+		_, err = database.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_user_api_tokens_prefix ON user_api_tokens(prefix)")
+		if err != nil {
+			return fmt.Errorf("failed to create idx_user_api_tokens_prefix index: %w", err)
+		}
+		log.Info("Migration: created user_api_tokens table")
 	}
 
 	return nil

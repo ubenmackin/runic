@@ -51,26 +51,28 @@ type API struct {
 	ChangeWorker *common.ChangeWorker
 	PushWorker   *common.PushWorker
 
-	Peers     *peers.Handler
-	Agents    *agents.Handler
-	Auth      *authhandlers.Handler
-	Groups    *groups.Handler
-	Policies  *policies.Handler
-	Services  *services.Handler
-	Imports   *imports.Handler
-	Logs      *logs.Handler
-	Users     *users.Handler
-	Keys      *keys.Handler
-	Pending   *pending.Handler
-	Dashboard *dashboard.Handler
-	Settings  *settings.Handler
-	Alerts    *alerthandlers.Handler
+	Peers      *peers.Handler
+	Agents     *agents.Handler
+	Auth       *authhandlers.Handler
+	Groups     *groups.Handler
+	Policies   *policies.Handler
+	Services   *services.Handler
+	Imports    *imports.Handler
+	Logs       *logs.Handler
+	Users      *users.Handler
+	UserTokens *users.TokenHandler
+	Keys       *keys.Handler
+	Pending    *pending.Handler
+	Dashboard  *dashboard.Handler
+	Settings   *settings.Handler
+	Alerts     *alerthandlers.Handler
 
 	LoginRateLimiter    *middleware.RateLimiter
 	RegisterRateLimiter *middleware.RateLimiter
 	RefreshRateLimiter  *middleware.RateLimiter
 	DownloadRateLimiter *middleware.RateLimiter
 	LogoutRateLimiter   *middleware.RateLimiter
+	TokenRateLimiter    *middleware.RateLimiter
 
 	logCleanupWorker *logcleanup.Worker
 	logCleanupCancel context.CancelFunc
@@ -105,6 +107,15 @@ func NewAPI(db *sql.DB, compiler *engine.Compiler, logsDB *sql.DB, logsDBPath st
 		return nil
 	}
 	logsStore := store.NewLogsStore(logsDB)
+	pendingStore := store.NewPendingStore(db)
+	peersHandler := peers.NewHandler(peerStore, db, compiler, sseHub, settingsStore)
+	peersHandler.DashboardStore = dashboardStore
+	peersHandler.PendingStore = pendingStore
+	userTokenStore := store.NewUserTokenStore(db)
+	// Wire PAT authentication so `Bearer runic_pat_*` credentials issued below
+	// authenticate through the shared auth middleware with live role lookup.
+	auth.SetPATStore(userTokenStore)
+	auth.SetPATUserStore(userStore)
 	return &API{
 		Compiler:     compiler,
 		DB:           db,
@@ -115,7 +126,7 @@ func NewAPI(db *sql.DB, compiler *engine.Compiler, logsDB *sql.DB, logsDBPath st
 		LogHub:       logs.NewHub(),
 		ChangeWorker: changeWorker,
 		PushWorker:   pushWorker,
-		Peers:        peers.NewHandler(peerStore, db, compiler, sseHub, settingsStore),
+		Peers:        peersHandler,
 		Agents:       agents.NewHandler(peerStore, dashboardStore, alertService, importStore, store.NewTokenStore(db), db),
 		Auth:         authhandlers.NewHandler(userStore, store.NewTokenStore(db), db),
 		Groups:       groups.NewHandler(db, compiler, changeWorker, groupStore, peerStore),
@@ -124,8 +135,9 @@ func NewAPI(db *sql.DB, compiler *engine.Compiler, logsDB *sql.DB, logsDBPath st
 		Imports:      imports.NewHandler(importStore, sseHub, changeWorker),
 		Logs:         logs.NewHandler(logsStore, store.NewTokenStore(db)),
 		Users:        users.NewHandler(userStore),
+		UserTokens:   users.NewTokenHandler(userTokenStore, userStore),
 		Keys:         keys.NewHandler(keyStore),
-		Pending:      pending.NewHandler(peerStore, groupStore, policyStore, serviceStore, store.NewPendingStore(db), db, compiler, sseHub, pushWorker),
+		Pending:      pending.NewHandler(peerStore, groupStore, policyStore, serviceStore, pendingStore, db, compiler, sseHub, pushWorker),
 		Dashboard:    dashboard.NewHandler(dashboardStore),
 		Settings:     settings.NewHandler(settingsStore, logsDBPath),
 		Alerts:       alerthandlers.NewHandler(alertStore, alertService, encryptor, userStore),
@@ -185,6 +197,8 @@ func (a *API) RegisterRoutes(r *mux.Router, downloadsDir string) {
 	a.RefreshRateLimiter = middleware.NewRateLimiter(10, time.Minute)
 	a.LogoutRateLimiter = middleware.NewRateLimiter(10, time.Minute)
 	a.DownloadRateLimiter = middleware.NewRateLimiter(10, time.Minute)
+	// PAT creation is rate-limited like login to bound credential minting.
+	a.TokenRateLimiter = middleware.NewRateLimiter(5, time.Minute)
 
 	apiRouter.HandleFunc("/setup", a.Auth.HandleSetupGET).Methods("GET")
 	apiRouter.HandleFunc("/setup", a.Auth.HandleSetupPOST).Methods("POST")
@@ -236,12 +250,32 @@ func (a *API) RegisterRoutes(r *mux.Router, downloadsDir string) {
 		})
 	}).Methods("GET")
 
+	// User API tokens (PATs), self-service on the protected subrouter so any
+	// role may manage its own tokens. Creation is rate-limited like login and
+	// request bodies are capped at 1MB inside the handler.
+	if a.UserTokens != nil {
+		protected.HandleFunc("/users/me/tokens", a.UserTokens.ListTokens).Methods("GET")
+		protected.Handle("/users/me/tokens", a.TokenRateLimiter.Middleware(http.HandlerFunc(a.UserTokens.CreateToken))).Methods("POST")
+		protected.HandleFunc("/users/me/tokens/{id:[0-9]+}", a.UserTokens.RevokeToken).Methods("DELETE")
+		// Legacy aliases without the /me/ segment (same self semantics).
+		protected.HandleFunc("/users/tokens", a.UserTokens.ListTokens).Methods("GET")
+		protected.Handle("/users/tokens", a.TokenRateLimiter.Middleware(http.HandlerFunc(a.UserTokens.CreateToken))).Methods("POST")
+		protected.HandleFunc("/users/tokens/{token_id:[0-9]+}", a.UserTokens.RevokeToken).Methods("DELETE")
+	}
+
 	admin := protected.PathPrefix("").Subrouter()
 	admin.Use(middleware.RequireRole("admin"))
 
 	admin.HandleFunc("/users", a.Users.CreateUser).Methods("POST")
 	admin.HandleFunc("/users/{id:[0-9]+}", a.Users.UpdateUser).Methods("PUT")
 	admin.HandleFunc("/users/{id:[0-9]+}", a.Users.DeleteUser).Methods("DELETE")
+
+	// Admin equivalents for managing another user's tokens (e.g. llm_agent).
+	if a.UserTokens != nil {
+		admin.HandleFunc("/users/{id:[0-9]+}/tokens", a.UserTokens.ListTokens).Methods("GET")
+		admin.Handle("/users/{id:[0-9]+}/tokens", a.TokenRateLimiter.Middleware(http.HandlerFunc(a.UserTokens.CreateToken))).Methods("POST")
+		admin.HandleFunc("/users/{id:[0-9]+}/tokens/{token_id:[0-9]+}", a.UserTokens.RevokeToken).Methods("DELETE")
+	}
 
 	admin.HandleFunc("/setup-keys", a.Keys.ListKeys).Methods("GET")
 	admin.HandleFunc("/setup-keys/{type}", a.Keys.CreateKey).Methods("POST")
@@ -274,6 +308,7 @@ func (a *API) RegisterRoutes(r *mux.Router, downloadsDir string) {
 	peersEditor := editor.PathPrefix("/peers").Subrouter()
 	a.Peers.RegisterRoutes(peersEditor)
 	editor.HandleFunc("/peers/{id:[0-9]+}/update-agent", a.Peers.UpdateAgent).Methods("POST")
+	editor.HandleFunc("/peers/update-agents", a.Peers.UpdateAllAgents).Methods("POST")
 
 	groupsEditor := editor.PathPrefix("/groups").Subrouter()
 	a.Groups.RegisterRoutes(groupsEditor)
@@ -362,6 +397,9 @@ func (a *API) Stop() {
 	}
 	if a.LogoutRateLimiter != nil {
 		a.LogoutRateLimiter.Stop()
+	}
+	if a.TokenRateLimiter != nil {
+		a.TokenRateLimiter.Stop()
 	}
 	authhandlers.StopCleanup()
 	authhandlers.StopSetupRateLimit()

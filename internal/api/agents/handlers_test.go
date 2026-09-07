@@ -23,9 +23,14 @@ import (
 
 func generateValidAgentToken(t *testing.T, db *sql.DB, hostname string) string {
 	secretStr := "test-secret-key-for-agent-jwt-256-bits!!"
+	jti, err := generateUniqueID()
+	if err != nil {
+		t.Fatalf("failed to generate jti: %v", err)
+	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"sub":  fmt.Sprintf("host-%s", hostname),
 		"type": "agent",
+		"jti":  jti,
 		"iat":  time.Now().Unix(),
 		"exp":  time.Now().Add(72 * time.Hour).Unix(),
 	})
@@ -367,16 +372,14 @@ func TestRegisterAgent_MaliciousInput(t *testing.T) {
 				db.Exec(`INSERT INTO registration_tokens (token, description) VALUES (?, ?)`, "valid-token-ip-1", "test token")
 			},
 			reqBody:  `{"hostname": "safe-hostname", "ip": "<img src=x onerror=alert(1)>", "registration_token": "valid-token-ip-1"}`,
-			wantCode: http.StatusCreated,
+			wantCode: http.StatusBadRequest,
 			checkDB: func(t *testing.T, db *sql.DB) {
-				var ipAddress string
-				err := db.QueryRow("SELECT ip_address FROM peers WHERE hostname = 'safe-hostname'").Scan(&ipAddress)
-				if err != nil {
-					t.Errorf("expected peer to be created: %v", err)
+				var count int
+				if err := db.QueryRow("SELECT COUNT(*) FROM peers WHERE hostname = 'safe-hostname'").Scan(&count); err != nil {
+					t.Fatalf("failed to query peers: %v", err)
 				}
-				// The IP address should be stored as-is (sanitization strips control chars)
-				if containsAny(ipAddress, "\r\n") {
-					t.Errorf("IP address contains control characters: %q", ipAddress)
+				if count != 0 {
+					t.Errorf("expected peer to be rejected for invalid IP, but found %d peers", count)
 				}
 			},
 		},
@@ -386,16 +389,14 @@ func TestRegisterAgent_MaliciousInput(t *testing.T) {
 				db.Exec(`INSERT INTO registration_tokens (token, description) VALUES (?, ?)`, "valid-token-ip-crlf", "test token")
 			},
 			reqBody:  `{"hostname": "test-server", "ip": "10.0.0.1\r\nX-Injected: header", "registration_token": "valid-token-ip-crlf"}`,
-			wantCode: http.StatusCreated,
+			wantCode: http.StatusBadRequest,
 			checkDB: func(t *testing.T, db *sql.DB) {
-				var ipAddress string
-				err := db.QueryRow("SELECT ip_address FROM peers WHERE hostname = 'test-server'").Scan(&ipAddress)
-				if err != nil {
-					t.Errorf("expected peer to be created: %v", err)
+				var count int
+				if err := db.QueryRow("SELECT COUNT(*) FROM peers WHERE hostname = 'test-server'").Scan(&count); err != nil {
+					t.Fatalf("failed to query peers: %v", err)
 				}
-				// CR/LF should be stripped from IP
-				if containsAny(ipAddress, "\r\n") {
-					t.Errorf("IP address contains control characters: %q", ipAddress)
+				if count != 0 {
+					t.Errorf("expected peer to be rejected for invalid IP, but found %d peers", count)
 				}
 			},
 		},
@@ -624,19 +625,28 @@ func TestHeartbeat(t *testing.T) {
 			},
 		},
 		{
-			name: "invalid JSON - continues anyway",
+			name: "invalid JSON - returns 400",
 			setup: func(t *testing.T, db *sql.DB) {
 				db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)`,
 					"test-agent2", "10.0.0.2", "agent-key-test2", "test-hmac2")
 			},
 			reqBody:  `{invalid json}`,
-			wantCode: http.StatusOK,
+			wantCode: http.StatusBadRequest,
+			checkResp: func(t *testing.T, w *httptest.ResponseRecorder) {
+				var resp map[string]string
+				if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+					t.Fatalf("failed to decode response: %v", err)
+				}
+				if !strings.Contains(resp["error"], "invalid JSON") {
+					t.Errorf("expected invalid JSON error, got %v", resp["error"])
+				}
+			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			db, cleanup := testutil.SetupTestDBWithSecret(t)
+			db, logsDB, cleanup := testutil.SetupTestDBWithSecretAndLogs(t)
 			defer cleanup()
 
 			if tt.setup != nil {
@@ -651,7 +661,7 @@ func TestHeartbeat(t *testing.T) {
 			req := makeAuthRequest(t, db, "POST", "/api/v1/agents/heartbeat", tt.reqBody, peer)
 			w := httptest.NewRecorder()
 
-			handler := NewHandler(store.NewPeerStore(db), store.NewDashboardStore(db, db), nil, store.NewImportStore(db, store.NewPeerStore(db), store.NewGroupStore(db), store.NewServiceStore(db)), store.NewTokenStore(db), db)
+			handler := NewHandler(store.NewPeerStore(db), store.NewDashboardStore(db, logsDB), nil, store.NewImportStore(db, store.NewPeerStore(db), store.NewGroupStore(db), store.NewServiceStore(db)), store.NewTokenStore(db), db)
 
 			handler.AgentAuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
 				handler.Heartbeat(w, r)

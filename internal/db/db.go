@@ -38,6 +38,7 @@ var allowedTables = map[string]bool{
 	"special_targets":               true,
 	"system_config":                 true,
 	"registration_tokens":           true,
+	"user_api_tokens":               true,
 	"pending_changes":               true,
 	"pending_bundle_previews":       true,
 	"change_snapshots":              true,

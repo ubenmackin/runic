@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"regexp"
 	"strconv"
 	"strings"
 
@@ -41,8 +40,6 @@ type Handler struct {
 func NewHandler(s UserStore) *Handler {
 	return &Handler{Store: s}
 }
-
-var emailRegex = regexp.MustCompile(`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`)
 
 func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := runiccommon.WithHandlerTimeout(r.Context())
@@ -79,7 +76,7 @@ type CreateUserRequest struct {
 	Role     string `json:"role"`
 }
 
-func validateCreateUserRequest(req *CreateUserRequest) error {
+func validateCreateUserRequest(ctx context.Context, req *CreateUserRequest) error {
 	req.Username = strings.TrimSpace(req.Username)
 	if req.Username == "" {
 		return common.NewHTTPError(http.StatusBadRequest, "Username is required")
@@ -97,7 +94,7 @@ func validateCreateUserRequest(req *CreateUserRequest) error {
 	if req.Role != "admin" && req.Role != "editor" && req.Role != "viewer" {
 		return common.NewHTTPError(http.StatusBadRequest, "Role must be 'admin', 'editor', or 'viewer'")
 	}
-	callerRole := auth.RoleFromContext(context.Background())
+	callerRole := auth.RoleFromContext(ctx)
 	if callerRole != "admin" && (req.Role == "admin" || req.Role == "editor") {
 		return common.NewHTTPError(http.StatusForbidden, "Only admins can create admin or editor users")
 	}
@@ -129,7 +126,7 @@ func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := validateCreateUserRequest(&req); err != nil {
+	if err := validateCreateUserRequest(r.Context(), &req); err != nil {
 		var httpErr *common.HTTPError
 		if errors.As(err, &httpErr) {
 			common.RespondError(w, httpErr.StatusCode, httpErr.Message)
@@ -139,7 +136,11 @@ func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	req.Email = strings.TrimSpace(req.Email)
+	req.Email = runiccommon.NormalizeEmail(req.Email)
+	if req.Email != "" && !runiccommon.ValidateEmail(req.Email) {
+		common.RespondError(w, http.StatusBadRequest, "Invalid email format")
+		return
+	}
 
 	exists, err := h.Store.UserExists(ctx, req.Username)
 	if err != nil {
@@ -161,6 +162,10 @@ func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 
 	id, err := h.Store.CreateUser(ctx, nil, req.Username, hash, req.Email, req.Role)
 	if err != nil {
+		if errors.Is(err, runiccommon.ErrInvalidEmail) {
+			common.RespondError(w, http.StatusBadRequest, "Invalid email format")
+			return
+		}
 		log.ErrorContext(r.Context(), "failed to create user", "error", err)
 		common.InternalError(w)
 		return
@@ -257,8 +262,8 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	req.Email = strings.TrimSpace(req.Email)
-	if req.Email != "" && !emailRegex.MatchString(req.Email) {
+	req.Email = runiccommon.NormalizeEmail(req.Email)
+	if req.Email != "" && !runiccommon.ValidateEmail(req.Email) {
 		common.RespondError(w, http.StatusBadRequest, "Invalid email format")
 		return
 	}
@@ -302,6 +307,10 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	if err := h.Store.UpdateUser(ctx, id, fields); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			common.RespondError(w, http.StatusNotFound, "User not found")
+			return
+		}
+		if errors.Is(err, runiccommon.ErrInvalidEmail) {
+			common.RespondError(w, http.StatusBadRequest, "Invalid email format")
 			return
 		}
 		log.ErrorContext(r.Context(), "failed to update user", "error", err)

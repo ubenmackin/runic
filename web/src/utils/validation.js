@@ -95,11 +95,11 @@ export function isValidCIDR(value) {
   return prefixNum >= 0 && prefixNum <= 32
 }
 
-/** Validate an email address */
+/** Validate an email address (mirrors backend canonical pattern in internal/common/email.go: local part, "@", domain, dot, 2+ letter TLD) */
 export function isValidEmail(value) {
   if (typeof value !== 'string') return false
   if (!value) return false
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+  const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/
   return emailRegex.test(value)
 }
 
