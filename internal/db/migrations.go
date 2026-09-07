@@ -1508,6 +1508,15 @@ SELECT id, ip_address, 1 FROM peers
 						if _, err := tx.ExecContext(ctx, "DROP TABLE IF EXISTS temp._alert_history_rule_backup"); err != nil {
 							return fmt.Errorf("drop stale backup: %w", err)
 						}
+						quarantineRes, err := tx.ExecContext(ctx, "UPDATE alert_history SET rule_id = NULL WHERE rule_id IS NOT NULL AND rule_id NOT IN (SELECT id FROM alert_rules)")
+						if err != nil {
+							return fmt.Errorf("quarantine orphan alert_history refs: %w", err)
+						}
+						if quarantined, err := quarantineRes.RowsAffected(); err == nil {
+							log.WarnContext(ctx, "Migration: quarantined orphan alert_history refs (rule_id set to NULL)", "quarantined_count", quarantined)
+						} else {
+							log.WarnContext(ctx, "Migration: quarantined orphan alert_history refs (rule_id set to NULL)", "quarantined_count", "unknown")
+						}
 						if _, err := tx.ExecContext(ctx, "CREATE TEMP TABLE _alert_history_rule_backup AS SELECT id, rule_id FROM alert_history"); err != nil {
 							return fmt.Errorf("backup alert_history refs: %w", err)
 						}
@@ -1568,7 +1577,9 @@ updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 						_ = fkRows.Close()
 						return fmt.Errorf("scan foreign_key_check: %w", err)
 					}
-					violationCount++
+					if (fkTable.Valid && fkTable.String == "alert_history") || (fkRefTable.Valid && fkRefTable.String == "alert_rules") {
+						violationCount++
+					}
 				}
 				if err := fkRows.Err(); err != nil {
 					_ = fkRows.Close()
