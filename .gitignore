@@ -116,3 +116,5 @@ findings/
 *.db
 *.sqlite
 *.sqlite3
+
+scratch/

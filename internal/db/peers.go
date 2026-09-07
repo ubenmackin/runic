@@ -22,7 +22,7 @@ func GetPeer(ctx context.Context, database Querier, peerID int) (models.PeerRow,
 
 func SaveBundle(ctx context.Context, database Beginner, params models.CreateBundleParams) (models.RuleBundleRow, error) {
 	var bundle models.RuleBundleRow
-	err := withTx(ctx, database, func(ctx context.Context, tx *sql.Tx) error {
+	err := RunInTx(ctx, database, func(ctx context.Context, tx *sql.Tx) error {
 		result, err := tx.ExecContext(ctx,
 			`INSERT INTO rule_bundles (peer_id, version, version_number, rules_content, hmac) VALUES (?, ?, ?, ?, ?)`,
 			params.PeerID, params.Version, params.VersionNumber, params.RulesContent, params.HMAC)

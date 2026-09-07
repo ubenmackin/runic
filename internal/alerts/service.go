@@ -367,10 +367,13 @@ func (s *Service) Stop() error {
 		close(done)
 	}()
 
+	timer := time.NewTimer(30 * time.Second)
+	defer timer.Stop()
+
 	select {
 	case <-done:
 		s.logger.Info("alert service stopped successfully")
-	case <-time.After(30 * time.Second):
+	case <-timer.C:
 		s.logger.Warn("alert service stop timeout, some components may not have shut down cleanly")
 	}
 

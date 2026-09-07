@@ -103,7 +103,7 @@ func migrateSchema(ctx context.Context, database *sql.DB) error {
 	if hasServersTable {
 		log.Info("Migration: renaming servers to peers")
 
-		if err := withTx(ctx, database, func(ctx context.Context, tx *sql.Tx) error {
+		if err := RunInTx(ctx, database, func(ctx context.Context, tx *sql.Tx) error {
 			// 1. Rename servers table to peers
 			if _, err := tx.ExecContext(ctx, "ALTER TABLE servers RENAME TO peers"); err != nil {
 				return fmt.Errorf("failed to rename servers to peers: %w", err)
@@ -292,7 +292,7 @@ func migrateSchema(ctx context.Context, database *sql.DB) error {
 	if hasOldGroupMembersSchema {
 		log.Info("Migration: restructuring group_members table to peer-based schema")
 
-		if err := withTx(ctx, database, func(ctx context.Context, tx *sql.Tx) error {
+		if err := RunInTx(ctx, database, func(ctx context.Context, tx *sql.Tx) error {
 			// 1. Drop existing group_members table
 			if _, err := tx.ExecContext(ctx, "DROP TABLE group_members"); err != nil {
 				return fmt.Errorf("failed to drop group_members table: %w", err)
@@ -335,7 +335,7 @@ func migrateSchema(ctx context.Context, database *sql.DB) error {
 	err = database.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM pragma_table_info('policies') WHERE name='source_type'").Scan(&hasPolymorphic)
 	if err == nil && !hasPolymorphic {
 		log.Info("Migration: upgrading policies to polymorphic sources and targets")
-		if err := withTx(ctx, database, func(ctx context.Context, tx *sql.Tx) error {
+		if err := RunInTx(ctx, database, func(ctx context.Context, tx *sql.Tx) error {
 			if _, err := tx.ExecContext(ctx, `CREATE TABLE policies_poly (
 				id INTEGER PRIMARY KEY AUTOINCREMENT,
 				name TEXT NOT NULL,
@@ -386,7 +386,7 @@ func migrateSchema(ctx context.Context, database *sql.DB) error {
 	if !hasSpecialTargets {
 		log.Info("Migration: creating special_targets table")
 
-		if err := withTx(ctx, database, func(ctx context.Context, tx *sql.Tx) error {
+		if err := RunInTx(ctx, database, func(ctx context.Context, tx *sql.Tx) error {
 			if _, err := tx.ExecContext(ctx, `
 				CREATE TABLE special_targets (
 					id INTEGER PRIMARY KEY,
@@ -526,7 +526,7 @@ func migrateSchema(ctx context.Context, database *sql.DB) error {
 
 	// Migration: Delete the broken "any" system group
 	log.Info("Migration: deleting broken any system group")
-	if err := withTx(ctx, database, func(ctx context.Context, tx *sql.Tx) error {
+	if err := RunInTx(ctx, database, func(ctx context.Context, tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, "DELETE FROM group_members WHERE group_id IN (SELECT id FROM groups WHERE name = 'any')"); err != nil {
 			return fmt.Errorf("failed to delete group_members for 'any' group: %w", err)
 		}
@@ -718,7 +718,7 @@ func migrateSchema(ctx context.Context, database *sql.DB) error {
 	}
 	if !hasVersionNumberColumn {
 		log.Info("Migration: adding version_number column to rule_bundles")
-		if err := withTx(ctx, database, func(ctx context.Context, tx *sql.Tx) error {
+		if err := RunInTx(ctx, database, func(ctx context.Context, tx *sql.Tx) error {
 			if _, err := tx.ExecContext(ctx, `CREATE TABLE rule_bundles_v2 (
 				id INTEGER PRIMARY KEY AUTOINCREMENT,
 				peer_id INTEGER NOT NULL,
@@ -882,7 +882,7 @@ CREATE TABLE change_snapshots (
 	}
 	if !changeSnapshotsHasPeer {
 		log.Info("Migration: adding 'peer' entity type to change_snapshots CHECK constraint")
-		if err := withTx(ctx, database, func(ctx context.Context, tx *sql.Tx) error {
+		if err := RunInTx(ctx, database, func(ctx context.Context, tx *sql.Tx) error {
 			if _, err := tx.ExecContext(ctx, `CREATE TABLE change_snapshots_new (
 				id INTEGER PRIMARY KEY AUTOINCREMENT,
 				entity_type TEXT NOT NULL CHECK (entity_type IN ('group', 'service', 'policy', 'peer')),
@@ -1286,7 +1286,7 @@ SELECT id, ip_address, 1 FROM peers
 	}
 	if pendingChangesHasRestrictiveCheck {
 		log.Info("Migration: removing restrictive CHECK on pending_changes.change_type to allow 'peer'")
-		if err := withTx(ctx, database, func(ctx context.Context, tx *sql.Tx) error {
+		if err := RunInTx(ctx, database, func(ctx context.Context, tx *sql.Tx) error {
 			if _, err := tx.ExecContext(ctx, `CREATE TABLE pending_changes_new (
 				id INTEGER PRIMARY KEY AUTOINCREMENT,
 				peer_id INTEGER NOT NULL REFERENCES peers(id) ON DELETE CASCADE,
@@ -1331,7 +1331,7 @@ SELECT id, ip_address, 1 FROM peers
 	}
 	if pushJobsHasOldCheck {
 		log.Info("Migration: fixing push_jobs CHECK constraint from 'cancelled' to 'canceled'")
-		if err := withTx(ctx, database, func(ctx context.Context, tx *sql.Tx) error {
+		if err := RunInTx(ctx, database, func(ctx context.Context, tx *sql.Tx) error {
 			if _, err := tx.ExecContext(ctx, `CREATE TABLE push_jobs_new (
 				id TEXT PRIMARY KEY,
 				initiated_by TEXT,
@@ -1372,7 +1372,7 @@ SELECT id, ip_address, 1 FROM peers
 	}
 	if importSessionsHasOldCheck {
 		log.Info("Migration: fixing import_sessions CHECK constraint from 'cancelled' to 'canceled'")
-		if err := withTx(ctx, database, func(ctx context.Context, tx *sql.Tx) error {
+		if err := RunInTx(ctx, database, func(ctx context.Context, tx *sql.Tx) error {
 			if _, err := tx.ExecContext(ctx, `CREATE TABLE import_sessions_new (
 				id INTEGER PRIMARY KEY AUTOINCREMENT,
 				peer_id INTEGER NOT NULL REFERENCES peers(id) ON DELETE CASCADE,

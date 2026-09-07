@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"runic/internal/common/log"
@@ -28,19 +29,30 @@ func (r *Resolver) ResolveEntity(ctx context.Context, entityType string, entityI
 		if err := r.db.QueryRowContext(ctx, "SELECT ip_address FROM peers WHERE id = ?", entityID).Scan(&ipAddress); err != nil {
 			return nil, fmt.Errorf("resolve peer %d: %w", entityID, err)
 		}
-		if strings.Contains(ipAddress, "/") {
-			if _, _, err := net.ParseCIDR(ipAddress); err != nil {
-				return nil, fmt.Errorf("invalid CIDR in peer %d: %s", entityID, ipAddress)
-			}
-			return []string{ipAddress}, nil
+		cidr, err := normalizePeerCIDR(ipAddress, entityID)
+		if err != nil {
+			return nil, fmt.Errorf("normalize peer %d: %w", entityID, err)
 		}
-		if net.ParseIP(ipAddress) == nil {
-			return nil, fmt.Errorf("invalid IP in peer %d: %s", entityID, ipAddress)
-		}
-		return []string{ipAddress + "/32"}, nil
+		return []string{cidr}, nil
 	}
 
 	return r.ResolveGroup(ctx, entityID)
+}
+
+// normalizePeerCIDR validates a peer IP or CIDR and returns it in CIDR
+// notation, appending /32 to bare IPs. It centralizes the validation used
+// by entity and group resolution so the three call sites cannot diverge.
+func normalizePeerCIDR(ipAddress string, peerID int) (string, error) {
+	if strings.Contains(ipAddress, "/") {
+		if _, _, err := net.ParseCIDR(ipAddress); err != nil {
+			return "", fmt.Errorf("invalid CIDR in peer %d: %s: %w", peerID, ipAddress, err)
+		}
+		return ipAddress, nil
+	}
+	if net.ParseIP(ipAddress) == nil {
+		return "", fmt.Errorf("invalid IP in peer %d: %s", peerID, ipAddress)
+	}
+	return ipAddress + "/32", nil
 }
 
 // ResolveSpecialTarget resolves a special target to IP addresses. Special targets are predefined network addresses like broadcast and multicast.
@@ -148,31 +160,18 @@ func (r *Resolver) ResolveGroup(ctx context.Context, groupID int) ([]string, err
 			return nil, fmt.Errorf("scan group member: %w", err)
 		}
 
-		// The peer's ip_address is either a single IP or a CIDR notation
-		if strings.Contains(ipAddress, "/") {
-			// CIDR notation
-			if _, _, err := net.ParseCIDR(ipAddress); err != nil {
-				return nil, fmt.Errorf("invalid CIDR in peer %d: %s", peerID, ipAddress)
-			}
-			if !seen[ipAddress] {
-				seen[ipAddress] = true
-				results = append(results, ipAddress)
-			}
-		} else {
-			// Single IP - convert to /32 CIDR
-			if net.ParseIP(ipAddress) == nil {
-				return nil, fmt.Errorf("invalid IP in peer %d: %s", peerID, ipAddress)
-			}
-			cidr := ipAddress + "/32"
-			if !seen[cidr] {
-				seen[cidr] = true
-				results = append(results, cidr)
-			}
+		cidr, err := normalizePeerCIDR(ipAddress, peerID)
+		if err != nil {
+			return nil, fmt.Errorf("normalize group member %d: %w", peerID, err)
+		}
+		if !seen[cidr] {
+			seen[cidr] = true
+			results = append(results, cidr)
 		}
 	}
 
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("iterate group members: %w", err)
 	}
 
 	return results, nil
@@ -180,11 +179,12 @@ func (r *Resolver) ResolveGroup(ctx context.Context, groupID int) ([]string, err
 
 var ValidPortsRe = regexp.MustCompile(`^\d+([,:]\d+)*$`)
 
-// ValidatePorts returns nil if ports is empty or a syntactically valid
-// comma/colon separated list of port numbers. The "1000:2000:3000" form
-// (three colons) is rejected because iptables only supports a single
-// start:end range per token; multi-colon strings would silently be treated
-// as a literal port name and either fail to load or match nothing.
+// ValidatePorts returns nil if ports is empty or a valid comma-separated
+// list of ports and port ranges. Each port must be in 1-65535 and each
+// range a:b must satisfy a <= b. The "1000:2000:3000" form (three colons)
+// is rejected because iptables only supports a single start:end range per
+// token; multi-colon strings would silently be treated as a literal port
+// name and either fail to load or match nothing.
 func ValidatePorts(ports string) error {
 	if ports == "" {
 		return nil
@@ -199,6 +199,41 @@ func ValidatePorts(ports string) error {
 		if c := strings.Count(seg, ":"); c > 1 {
 			return fmt.Errorf("invalid ports %q: port range %q has more than one colon", ports, seg)
 		}
+		if err := validatePortSegment(ports, seg); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validatePortSegment checks a single comma-separated token: either a single
+// port or an a:b range. Ports must be in 1-65535 and ranges must satisfy
+// a <= b.
+func validatePortSegment(ports, seg string) error {
+	if strings.Contains(seg, ":") {
+		parts := strings.SplitN(seg, ":", 2)
+		lo, err := strconv.Atoi(parts[0])
+		if err != nil {
+			return fmt.Errorf("invalid ports %q: invalid port %q: %w", ports, parts[0], err)
+		}
+		hi, err := strconv.Atoi(parts[1])
+		if err != nil {
+			return fmt.Errorf("invalid ports %q: invalid port %q: %w", ports, parts[1], err)
+		}
+		if lo < 1 || lo > 65535 || hi < 1 || hi > 65535 {
+			return fmt.Errorf("invalid ports %q: port range %q out of range 1-65535", ports, seg)
+		}
+		if lo > hi {
+			return fmt.Errorf("invalid ports %q: port range %q start greater than end", ports, seg)
+		}
+		return nil
+	}
+	p, err := strconv.Atoi(seg)
+	if err != nil {
+		return fmt.Errorf("invalid ports %q: invalid port %q: %w", ports, seg, err)
+	}
+	if p < 1 || p > 65535 {
+		return fmt.Errorf("invalid ports %q: port %q out of range 1-65535", ports, seg)
 	}
 	return nil
 }
@@ -343,11 +378,11 @@ func (r *Resolver) resolveGroupForIpset(ctx context.Context, groupID int) ([]Ips
 		isCIDR := strings.Contains(ipAddress, "/")
 		if isCIDR {
 			if _, _, err := net.ParseCIDR(ipAddress); err != nil {
-				return nil, false, fmt.Errorf("invalid CIDR in peer %d: %s", groupID, ipAddress)
+				return nil, false, fmt.Errorf("invalid CIDR in group %d: %s: %w", groupID, ipAddress, err)
 			}
 			hasCIDR = true
 		} else if net.ParseIP(ipAddress) == nil {
-			return nil, false, fmt.Errorf("invalid IP in peer: %s", ipAddress)
+			return nil, false, fmt.Errorf("invalid IP in group %d: %s", groupID, ipAddress)
 		}
 
 		members = append(members, IpsetMember{
@@ -357,7 +392,7 @@ func (r *Resolver) resolveGroupForIpset(ctx context.Context, groupID int) ([]Ips
 	}
 
 	if err := rows.Err(); err != nil {
-		return nil, false, err
+		return nil, false, fmt.Errorf("iterate group members for ipset: %w", err)
 	}
 
 	return members, hasCIDR, nil

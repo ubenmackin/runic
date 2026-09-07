@@ -3,7 +3,7 @@
 #
 # This script must be run on a Linux system with systemd (not macOS).
 # It verifies the full self-update flow: build, install a "stale" version,
-# trigger the -update flag (added in TASK-002), and verify the in-process
+# trigger the -update flag, and verify the in-process
 # download, atomic swap, and agent exit for systemd restart.
 #
 # Usage:
@@ -194,12 +194,12 @@ if [[ ! -x "$TEST_BINARY" ]]; then
 fi
 log_pass "Built runic-agent successfully"
 
-# Verify the binary responds to -update flag (added in TASK-002)
+# Verify the binary responds to -update flag
 UPDATE_HELP="$(timeout 5 "$TEST_BINARY" -h 2>&1 || true)"
 if echo "$UPDATE_HELP" | grep -q -- "-update"; then
     log_pass "Binary supports -update flag"
 else
-    log_fail "Binary does not support -update flag (expected from TASK-002)"
+    log_fail "Binary does not support -update flag"
     exit 1
 fi
 

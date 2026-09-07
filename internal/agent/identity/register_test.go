@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"runic/internal/common"
 	"runic/internal/models"
 )
 
@@ -257,19 +258,19 @@ func TestDetectKernelVersionReturnsEmptyOnError(t *testing.T) {
 }
 
 func TestDetectDockerReturnsTrueForSocket(t *testing.T) {
-	// detectDocker checks /var/run/docker.sock
+	// common.DetectDockerSocket checks /var/run/docker.sock
 	// We can't easily test this without modifying the source or running as root
 	// Verify the function doesn't panic and returns a boolean
-	result := detectDocker()
+	result := common.DetectDockerSocket()
 	if result != true && result != false {
-		t.Errorf("detectDocker returned invalid value: %v", result)
+		t.Errorf("DetectDockerSocket returned invalid value: %v", result)
 	}
 }
 
 func TestDetectDockerReturnsFalseWhenFileDoesntExist(t *testing.T) {
 	// The function checks /var/run/docker.sock
 	// If it doesn't exist, returns false
-	result := detectDocker()
+	result := common.DetectDockerSocket()
 	// Result depends on actual system state - if docker is not installed, should be false
 	_ = result
 }

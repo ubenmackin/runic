@@ -5,7 +5,6 @@ package api
 
 import (
 	"bytes"
-	"context"
 	"database/sql"
 	"encoding/json"
 	"io"
@@ -146,9 +145,6 @@ func TestCreatePeer(t *testing.T) {
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
 
-			ctx := context.WithValue(req.Context(), apiContextKey, api)
-			req = req.WithContext(ctx)
-
 			handler := http.HandlerFunc(api.Peers.CreatePeer)
 			handler(w, req)
 
@@ -236,9 +232,6 @@ func TestCompilePeer(t *testing.T) {
 
 			// Mock gorilla/mux vars
 			req = testutil.MuxVars(req, map[string]string{"id": tt.peerID})
-
-			ctx := context.WithValue(req.Context(), apiContextKey, api)
-			req = req.WithContext(ctx)
 
 			handler := http.HandlerFunc(api.Peers.CompilePeer)
 			handler(w, req)
@@ -429,9 +422,6 @@ func TestCreatePolicy(t *testing.T) {
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
 
-			ctx := context.WithValue(req.Context(), apiContextKey, api)
-			req = req.WithContext(ctx)
-
 			handler := http.HandlerFunc(api.Policies.CreatePolicy)
 			handler(w, req)
 
@@ -613,9 +603,6 @@ func TestUpdatePolicy(t *testing.T) {
 
 			// Mock gorilla/mux vars
 			req = testutil.MuxVars(req, map[string]string{"id": tt.policyID})
-
-			ctx := context.WithValue(req.Context(), apiContextKey, api)
-			req = req.WithContext(ctx)
 
 			handler := http.HandlerFunc(api.Policies.UpdatePolicy)
 			handler(w, req)
@@ -1052,9 +1039,6 @@ func TestJSONDecoding(t *testing.T) {
 				req.Header.Set("Content-Type", "application/json")
 			}
 			w := httptest.NewRecorder()
-
-			ctx := context.WithValue(req.Context(), apiContextKey, api)
-			req = req.WithContext(ctx)
 
 			api.Peers.CreatePeer(w, req)
 

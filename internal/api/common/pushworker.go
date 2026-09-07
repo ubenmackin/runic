@@ -4,10 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
 
 	runiclog "runic/internal/common/log"
 	"runic/internal/db"
@@ -24,6 +27,24 @@ type AlertTrigger interface {
 // DefaultPushWorkerQueueSize is the default buffer size for the push worker's job queue.
 const DefaultPushWorkerQueueSize = 100
 
+// ErrPushQueueFull is returned when a push job cannot be queued because the
+// worker queue is full. Callers should translate it to a 503 so clients can
+// retry with backoff instead of assuming the job was accepted.
+var ErrPushQueueFull = errors.New("push worker queue full")
+
+var pushQueueDepth = prometheus.NewGauge(prometheus.GaugeOpts{
+	Name: "runic_push_queue_depth",
+	Help: "Current depth of the push worker job queue",
+})
+
+func init() {
+	if err := prometheus.Register(pushQueueDepth); err != nil {
+		if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
+			runiclog.Warn("Failed to register push queue depth metric", "error", err)
+		}
+	}
+}
+
 type PushWorker struct {
 	db           *sql.DB
 	compiler     *engine.Compiler
@@ -37,6 +58,16 @@ type PushWorker struct {
 	startOnce sync.Once
 	stopOnce  sync.Once
 	started   atomic.Bool
+	closed    atomic.Bool
+	closeMu   sync.RWMutex
+}
+
+// finalizeCtx returns a detached context for final DB writes that must
+// succeed even when the job context has been canceled (shutdown or timeout).
+// The detached context carries values but not cancellation, bounded by a
+// short timeout so shutdown cannot hang indefinitely.
+func finalizeCtx(parent context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(parent), 15*time.Second)
 }
 
 func NewPushWorker(database *sql.DB, compiler *engine.Compiler, alertService AlertTrigger, sseHub interface {
@@ -67,6 +98,7 @@ func (w *PushWorker) Start(ctx context.Context) {
 					if !ok {
 						return // channel closed, exit cleanly
 					}
+					pushQueueDepth.Set(float64(len(w.workCh)))
 					w.processJob(ctx, jobID)
 				}
 			}
@@ -74,25 +106,70 @@ func (w *PushWorker) Start(ctx context.Context) {
 	})
 }
 
-// Enqueue submits a job ID to the work queue. It is non-blocking: if the queue is full,
-// the job is dropped and a warning is logged rather than blocking the caller.
-func (w *PushWorker) Enqueue(jobID string) {
+// QueueDepth reports the current number of jobs waiting in the work queue.
+func (w *PushWorker) QueueDepth() int {
+	if w == nil {
+		return 0
+	}
+	return len(w.workCh)
+}
+
+// QueueCapacity reports the maximum number of jobs the work queue can hold.
+func (w *PushWorker) QueueCapacity() int {
+	if w == nil {
+		return 0
+	}
+	return cap(w.workCh)
+}
+
+// Enqueue submits a job ID to the work queue. It is non-blocking: if the queue
+// is full it returns an error so callers can signal backpressure instead of
+// silently dropping the job. It never panics: sends are serialized against
+// Stop's close via closeMu, guarded by the closed flag, with recover as a
+// final guard against a send-on-closed race.
+func (w *PushWorker) Enqueue(jobID string) (err error) {
+	if w == nil {
+		return fmt.Errorf("enqueue push job %s: %w", jobID, ErrPushQueueFull)
+	}
+	if w.closed.Load() {
+		return fmt.Errorf("enqueue push job %s: push worker stopped: %w", jobID, ErrPushQueueFull)
+	}
+	w.closeMu.RLock()
+	defer w.closeMu.RUnlock()
+	defer func() {
+		if recover() != nil {
+			runiclog.Warn("PushWorker enqueue on closed channel, dropping job", "job_id", jobID)
+			err = fmt.Errorf("enqueue push job %s: push worker stopped: %w", jobID, ErrPushQueueFull)
+		}
+	}()
+	if w.closed.Load() {
+		return fmt.Errorf("enqueue push job %s: push worker stopped: %w", jobID, ErrPushQueueFull)
+	}
 	select {
 	case w.workCh <- jobID:
+		pushQueueDepth.Set(float64(len(w.workCh)))
+		return nil
 	default:
 		runiclog.Warn("PushWorker queue full, dropping job", "job_id", jobID)
+		return fmt.Errorf("enqueue push job %s: %w", jobID, ErrPushQueueFull)
 	}
 }
 
 func (w *PushWorker) Stop() {
 	w.stopOnce.Do(func() {
 		if !w.started.Load() {
+			w.closed.Store(true)
 			return
 		}
+		w.closeMu.Lock()
+		w.closed.Store(true)
 		close(w.workCh)
+		w.closeMu.Unlock()
+		timer := time.NewTimer(30 * time.Second)
+		defer timer.Stop()
 		select {
 		case <-w.done:
-		case <-time.After(30 * time.Second):
+		case <-timer.C:
 			runiclog.Warn("PushWorker.Stop() timed out after 30s")
 		}
 	})
@@ -126,8 +203,11 @@ func (w *PushWorker) processJob(ctx context.Context, jobID string) {
 
 	total := len(peers)
 	if total == 0 {
-		if err := db.FinalizePushJob(jobCtx, w.db, jobID); err != nil {
-			runiclog.Error("Failed to finalize push job on complete", "error", err)
+		fctx, fcancel := finalizeCtx(ctx)
+		ferr := db.FinalizePushJob(fctx, w.db, jobID)
+		fcancel()
+		if ferr != nil {
+			runiclog.Error("Failed to finalize push job on complete", "error", ferr)
 		}
 		w.notifyProgress(jobID, "complete", map[string]interface{}{
 			"status":  "completed",
@@ -149,7 +229,9 @@ func (w *PushWorker) processJob(ctx context.Context, jobID string) {
 		case <-jobCtx.Done():
 			runiclog.Warn("PushWorker: job context canceled, aborting",
 				"job_id", jobID, "error", jobCtx.Err())
-			_ = db.FinalizePushJobWithCounts(jobCtx, w.db, jobID, succeeded, failed)
+			fctx, fcancel := finalizeCtx(ctx)
+			_ = db.FinalizePushJobWithCounts(fctx, w.db, jobID, succeeded, failed)
+			fcancel()
 			return
 		default:
 		}
@@ -256,10 +338,13 @@ func (w *PushWorker) processJob(ctx context.Context, jobID string) {
 		})
 	}
 
-	// Finalize job with counts in a single atomic update
-	if err := db.FinalizePushJobWithCounts(jobCtx, w.db, jobID, succeeded, failed); err != nil {
+	// Finalize job with counts in a single atomic update. Uses a detached
+	// context so the write succeeds even if the job context was canceled.
+	fctx, fcancel := finalizeCtx(ctx)
+	if err := db.FinalizePushJobWithCounts(fctx, w.db, jobID, succeeded, failed); err != nil {
 		runiclog.Error("Failed to finalize push job with counts", "error", err)
 	}
+	fcancel()
 
 	finalStatus := "completed"
 	if failed > 0 {

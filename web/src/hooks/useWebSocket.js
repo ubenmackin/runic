@@ -1,4 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
+import { logger } from '../utils/logger'
 
 /**
  * Hook for WebSocket connections with exponential backoff reconnection.
@@ -16,6 +17,7 @@ import { useEffect, useRef, useCallback, useState } from 'react'
 export function useWebSocket({ url, enabled = true, maxRetries = 10, baseDelay = 1000, maxDelay = 30000, onMessage, onOpen }) {
   const [connected, setConnected] = useState(false)
   const [error, setError] = useState(null)
+  const [retryCount, setRetryCount] = useState(0)
   const wsRef = useRef(null)
   const retryCountRef = useRef(0)
   const retryTimeoutRef = useRef(null)
@@ -37,7 +39,12 @@ export function useWebSocket({ url, enabled = true, maxRetries = 10, baseDelay =
 
     // Clean up existing connection
     if (wsRef.current) {
+      wsRef.current.onclose = null
+      wsRef.current.onerror = null
+      wsRef.current.onopen = null
+      wsRef.current.onmessage = null
       wsRef.current.close()
+      wsRef.current = null
     }
 
     try {
@@ -47,6 +54,7 @@ export function useWebSocket({ url, enabled = true, maxRetries = 10, baseDelay =
       ws.onopen = () => {
         if (!mountedRef.current) return
         retryCountRef.current = 0
+        setRetryCount(0)
         setConnected(true)
         setError(null)
         onOpenRef.current?.()
@@ -64,6 +72,7 @@ export function useWebSocket({ url, enabled = true, maxRetries = 10, baseDelay =
         if (retryCountRef.current < maxRetries) {
           const delay = Math.min(baseDelay * Math.pow(2, retryCountRef.current), maxDelay)
           retryCountRef.current++
+          setRetryCount(retryCountRef.current)
           retryTimeoutRef.current = setTimeout(() => {
             if (mountedRef.current && enabled && connectRef.current) {
               connectRef.current()
@@ -74,7 +83,8 @@ export function useWebSocket({ url, enabled = true, maxRetries = 10, baseDelay =
         }
       }
 
-      ws.onerror = () => {
+      ws.onerror = (event) => {
+        logger.error('WebSocket error:', event)
         // onclose will handle reconnection
       }
     } catch (err) {
@@ -107,7 +117,7 @@ export function useWebSocket({ url, enabled = true, maxRetries = 10, baseDelay =
     }
   }, [enabled, connect])
 
-  return { connected, error, retryCount: retryCountRef.current }
+  return { connected, error, retryCount }
 }
 
 export default useWebSocket

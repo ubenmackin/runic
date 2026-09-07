@@ -1,6 +1,21 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../api/client'
 import { logger } from '../utils/logger'
+import { mapWrappedList } from '../utils/listUtils'
+
+// Normalize an entity id for optimistic-update comparison. Numeric and
+// string forms of the same id compare equal, while null, undefined, empty
+// strings and NaN never match so a bad id cannot clobber the cache.
+function normalizeCrudId(id) {
+  if (id === null || id === undefined) return null
+  if (typeof id === 'number') {
+    if (!Number.isInteger(id)) return null
+    return String(id)
+  }
+  const str = String(id).trim()
+  if (!str) return null
+  return str
+}
 
 /**
  * Generic CRUD mutations with optimistic updates.
@@ -43,23 +58,36 @@ export function useCrudMutations({
     },
   })
 
+  const idsEqual = (a, b) => {
+    const normA = normalizeCrudId(typeof a === 'object' && a !== null ? getId(a) : a)
+    const normB = normalizeCrudId(b)
+    if (normA === null || normB === null) return false
+    return normA === normB
+  }
+
+  const mapCachedList = (old, mapFn, queryKeyForLog) => {
+    const next = mapWrappedList(old, mapFn)
+    if (next === old) {
+      logger.warn(`useCrudMutations: expected array for queryKey ${JSON.stringify(queryKeyForLog)}, got ${Array.isArray(old) ? 'array' : typeof old}`)
+    }
+    return next
+  }
+
   const updateMutation = useMutation({
     mutationFn: ({ id, data }) => api.put(`${apiPath}/${id}`, data),
     onMutate: async ({ id, data }) => {
       await qc.cancelQueries({ queryKey })
       await Promise.all(additionalInvalidations.map(key => qc.cancelQueries({ queryKey: key })))
       const previousData = qc.getQueryData(queryKey)
-      qc.setQueryData(queryKey, old => {
-        if (!Array.isArray(old)) {
-          logger.warn(`useCrudMutations: expected array for queryKey ${JSON.stringify(queryKey)}, got ${typeof old}`)
-          return old
-        }
-        return old.map(item => getId(item) === id ? { ...item, ...data } : item)
-      })
+      qc.setQueryData(queryKey, old => mapCachedList(old,
+        (list) => list.map(item => idsEqual(item, id) ? { ...item, ...data } : item),
+        queryKey))
       return { previousData }
     },
     onError: (err, vars, context) => {
-      qc.setQueryData(queryKey, context?.previousData)
+      if (context?.previousData !== undefined) {
+        qc.setQueryData(queryKey, context.previousData)
+      }
       setFormErrors?.({ _general: err.message })
     },
     onSettled: () => {
@@ -75,17 +103,15 @@ export function useCrudMutations({
       await qc.cancelQueries({ queryKey })
       await Promise.all(additionalInvalidations.map(key => qc.cancelQueries({ queryKey: key })))
       const previousData = qc.getQueryData(queryKey)
-      qc.setQueryData(queryKey, old => {
-        if (!Array.isArray(old)) {
-          logger.warn(`useCrudMutations: expected array for queryKey ${JSON.stringify(queryKey)}, got ${typeof old}`)
-          return old
-        }
-        return old.filter(item => getId(item) !== id)
-      })
+      qc.setQueryData(queryKey, old => mapCachedList(old,
+        (list) => list.filter(item => !idsEqual(item, id)),
+        queryKey))
       return { previousData }
     },
     onError: (err, id, context) => {
-      qc.setQueryData(queryKey, context?.previousData)
+      if (context?.previousData !== undefined) {
+        qc.setQueryData(queryKey, context.previousData)
+      }
       showToast?.(err.message, 'error')
     },
     onSettled: () => {

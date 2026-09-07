@@ -73,19 +73,18 @@ func (s *Shipper) Run(ctx context.Context) error {
 			if ev, err := ParseLogLine(line); err == nil {
 				batch = append(batch, ev)
 				if len(batch) >= 100 {
-					select {
-					case <-ctx.Done():
-						// Context canceled, drain remaining batch on shutdown path
-					default:
-						s.ship(ctx, batch)
-						batch = nil
-					}
+					shipCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+					s.ship(shipCtx, batch)
+					cancel()
+					batch = nil
 				}
 			}
 
 		case <-ticker.C:
 			if len(batch) > 0 {
-				s.ship(ctx, batch)
+				shipCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+				s.ship(shipCtx, batch)
+				cancel()
 				batch = nil
 			}
 
@@ -127,19 +126,7 @@ func (s *Shipper) tail(ctx context.Context, path string) (<-chan string, <-chan 
 		}
 
 		scanner := bufio.NewScanner(f)
-		// Make scanner available for poll-based reads; we use an intermediate
-		// buffered channel from a single goroutine so Scanner.Scan does not
-		// block the main select loop.
-		scanResult := make(chan bool, 1)
-		go func() {
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case scanResult <- scanner.Scan():
-				}
-			}
-		}()
+		scanner.Buffer(make([]byte, 1<<20), 1<<20)
 
 		for {
 			select {
@@ -148,14 +135,7 @@ func (s *Shipper) tail(ctx context.Context, path string) (<-chan string, <-chan 
 			default:
 			}
 
-			var scanned bool
-			select {
-			case <-ctx.Done():
-				return
-			case scanned = <-scanResult:
-			}
-
-			if !scanned {
+			if !scanner.Scan() {
 				if err := scanner.Err(); err != nil {
 					log.Error("Scan error", "error", err)
 				}
@@ -176,23 +156,27 @@ func (s *Shipper) tail(ctx context.Context, path string) (<-chan string, <-chan 
 						f = newFile
 						if _, err := f.Seek(0, io.SeekEnd); err != nil {
 							log.Error("Seek failed after reopen", "error", err)
-							if cErr := f.Close(); cErr != nil {
-								log.Warn("Failed to close file", "error", cErr)
+							if cerr := f.Close(); cerr != nil {
+								log.Warn("Failed to close file", "error", cerr)
 							}
 							return
 						}
 						scanner = bufio.NewScanner(f)
+						scanner.Buffer(make([]byte, 1<<20), 1<<20)
 					} else if stat.Size() > pos {
 						if _, err := f.Seek(pos, io.SeekStart); err != nil {
 							log.Warn("Failed to seek to last position", "error", err)
 						}
 						scanner = bufio.NewScanner(f)
+						scanner.Buffer(make([]byte, 1<<20), 1<<20)
 					}
 				}
+				timer := time.NewTimer(constants.LogTailSleepInterval)
 				select {
 				case <-ctx.Done():
+					timer.Stop()
 					return
-				case <-time.After(constants.LogTailSleepInterval):
+				case <-timer.C:
 				}
 				continue
 			}
@@ -310,11 +294,13 @@ func (s *Shipper) ship(ctx context.Context, batch []LogEvent) {
 			delay := baseDelay * (1 << (attempt - 1)) // 1s, 2s, 4s
 			log.Warn("Retrying failed log shipment", "count", len(batch),
 				"attempt", attempt, "next_retry_ms", delay.Milliseconds())
+			timer := time.NewTimer(delay)
 			select {
 			case <-ctx.Done():
+				timer.Stop()
 				log.Warn("Log shipment canceled during retry backoff", "count", len(batch), "error", ctx.Err())
 				return
-			case <-time.After(delay):
+			case <-timer.C:
 			}
 		}
 
@@ -337,6 +323,7 @@ func (s *Shipper) ship(ctx context.Context, batch []LogEvent) {
 		}
 
 		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 			_ = resp.Body.Close()
 			// Retry on server errors (5xx), drop on client errors (4xx).
 			if resp.StatusCode >= 500 && attempt < maxRetries {
@@ -346,6 +333,7 @@ func (s *Shipper) ship(ctx context.Context, batch []LogEvent) {
 			return
 		}
 
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 		_ = resp.Body.Close()
 		return // success
 	}

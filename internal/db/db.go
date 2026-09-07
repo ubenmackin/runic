@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"runic/internal/common/log"
 
@@ -50,6 +51,8 @@ var allowedTables = map[string]bool{
 	"import_peer_mappings":          true,
 	"import_service_mappings":       true,
 	"peer_ips":                      true,
+	"push_jobs":                     true,
+	"push_job_peers":                true,
 }
 
 // IsAllowedTable reports whether the given table name is in the migration
@@ -59,8 +62,11 @@ func IsAllowedTable(table string) bool {
 	return allowedTables[table]
 }
 
-// Database wraps *sql.DB. The global DB variable is kept for backward compatibility,
-// but new code should prefer passing *Database explicitly.
+// Database wraps *sql.DB via embedding so the full *sql.DB surface
+// (Query/Exec/BeginTx/Ping/Close/Stats/Prepare/PrepareContext/Begin/Conn/Driver
+// and connection-pool tuning) is promoted automatically. The global DB variable
+// is kept for backward compatibility, but new code should prefer passing
+// *Database explicitly.
 type Database struct {
 	*sql.DB
 }
@@ -73,25 +79,104 @@ func (d *Database) UnderlyingDB() *sql.DB {
 	return d.DB
 }
 
+// isMemoryDSN reports whether the DSN refers to an in-memory SQLite database.
+func isMemoryDSN(dataSourceName string) bool {
+	return dataSourceName == ":memory:" || strings.HasPrefix(dataSourceName, "file::memory:")
+}
+
+// sqliteDSNWithPragmas appends journal mode, busy timeout, synchronous mode,
+// and foreign key enforcement to the SQLite DSN so pooled connections inherit
+// them before any PRAGMA runs. This avoids SQLITE_BUSY errors under burst
+// concurrency when several writers race before the first Exec.
+// Existing query keys are preserved and never duplicated; go-sqlite3 expects
+// _foreign_keys as 0/1. Bare ":memory:" is rewritten to a shared-cache URI so
+// pooled connections share a single database.
+func sqliteDSNWithPragmas(dataSourceName string) string {
+	base := dataSourceName
+	rawQuery := ""
+	if dataSourceName == ":memory:" {
+		base = "file::memory:"
+	} else if cutBase, cutQuery, ok := strings.Cut(dataSourceName, "?"); ok {
+		base = cutBase
+		rawQuery = cutQuery
+	}
+
+	isMem := isMemoryDSN(dataSourceName)
+
+	var pairs []string
+	seen := make(map[string]bool)
+	if rawQuery != "" {
+		for _, part := range strings.Split(rawQuery, "&") {
+			if part == "" {
+				continue
+			}
+			key := part
+			if eq := strings.Index(part, "="); eq != -1 {
+				key = part[:eq]
+			}
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			pairs = append(pairs, part)
+		}
+	}
+
+	if isMem && !seen["cache"] {
+		pairs = append(pairs, "cache=shared")
+		seen["cache"] = true
+	}
+
+	defaults := []string{
+		"_journal_mode=WAL",
+		"_busy_timeout=5000",
+		"_synchronous=NORMAL",
+		"_foreign_keys=1",
+	}
+	for _, d := range defaults {
+		key := d
+		if eq := strings.Index(d, "="); eq != -1 {
+			key = d[:eq]
+		}
+		if !seen[key] {
+			pairs = append(pairs, d)
+			seen[key] = true
+		}
+	}
+
+	if len(pairs) == 0 {
+		return base
+	}
+	return base + "?" + strings.Join(pairs, "&")
+}
+
 func InitDB(dataSourceName string) (*sql.DB, error) {
 	if dbPath := os.Getenv("RUNIC_DB_PATH"); dbPath != "" {
 		dataSourceName = dbPath
 		log.Info("Using database path from RUNIC_DB_PATH", "path", dataSourceName)
 	}
 
+	dataSourceName = sqliteDSNWithPragmas(dataSourceName)
+
 	sqlDB, err := sql.Open("sqlite3", dataSourceName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
-	sqlDB.SetMaxOpenConns(1) // SQLite is single-writer
-	sqlDB.SetMaxIdleConns(1)
+	if isMemoryDSN(dataSourceName) {
+		sqlDB.SetMaxOpenConns(1)
+		sqlDB.SetMaxIdleConns(1)
+	} else {
+		sqlDB.SetMaxOpenConns(10)
+		sqlDB.SetMaxIdleConns(5)
+	}
 
 	if err = sqlDB.Ping(); err != nil {
 		return nil, fmt.Errorf("failed to ping database: %w", err)
 	}
 
-	// Enable WAL mode and foreign keys
+	// Enable WAL mode, foreign keys, busy timeout, and synchronous mode.
+	// WAL is kept for concurrent read/write performance.
 	if _, err := sqlDB.Exec("PRAGMA journal_mode=WAL"); err != nil {
 		log.Warn("Failed to set WAL mode", "error", err)
 	}
@@ -100,6 +185,9 @@ func InitDB(dataSourceName string) (*sql.DB, error) {
 	}
 	if _, err := sqlDB.Exec("PRAGMA busy_timeout=5000"); err != nil {
 		log.Warn("Failed to set busy timeout", "error", err)
+	}
+	if _, err := sqlDB.Exec("PRAGMA synchronous=NORMAL"); err != nil {
+		log.Warn("Failed to set synchronous mode", "error", err)
 	}
 
 	database := New(sqlDB)
@@ -165,11 +253,4 @@ func RunInTx(ctx context.Context, db Beginner, fn func(ctx context.Context, tx *
 	}
 	committed = true
 	return nil
-}
-
-// withTx is an internal alias for RunInTx, kept for the convenience of
-// package-internal callers that prefer the unexported name. New code should
-// call db.RunInTx directly.
-func withTx(ctx context.Context, db Beginner, fn func(context.Context, *sql.Tx) error) (err error) {
-	return RunInTx(ctx, db, fn)
 }

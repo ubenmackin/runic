@@ -27,16 +27,26 @@ async function refreshTokenOnce() {
   }
 
   isRefreshing = true
+
+  const headers = { 'Content-Type': 'application/json' }
+  const csrfToken = getCSRFToken()
+  if (csrfToken) {
+    headers['X-CSRF-Token'] = csrfToken
+  }
+
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT)
+
   refreshPromise = fetch(BASE + '/auth/refresh', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
+    credentials: 'include',
     body: JSON.stringify({}),
-  }).then(res => {
+    signal: controller.signal,
+  }).finally(() => {
+    clearTimeout(timeoutId)
     isRefreshing = false
-    return res
-  }).catch(err => {
-    isRefreshing = false
-    throw err
+    refreshPromise = null
   })
 
   return refreshPromise
@@ -55,12 +65,25 @@ async function request(method, path, body, retry = true, signal = null) {
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT)
 
+  let onCallerAbort = null
+  const cleanupAbortListener = () => {
+    if (signal && onCallerAbort) {
+      signal.removeEventListener('abort', onCallerAbort)
+      onCallerAbort = null
+    }
+  }
+  const cleanupRequest = () => {
+    clearTimeout(timeoutId)
+    cleanupAbortListener()
+  }
+
   if (signal) {
     // If the caller signal is already aborted, abort immediately
     if (signal.aborted) {
       controller.abort(signal.reason)
     } else {
-      signal.addEventListener('abort', () => controller.abort(signal.reason), { once: true })
+      onCallerAbort = () => controller.abort(signal.reason)
+      signal.addEventListener('abort', onCallerAbort)
     }
   }
 
@@ -78,11 +101,11 @@ async function request(method, path, body, retry = true, signal = null) {
     if (res.status === 401 && retry) {
       const refreshed = await refreshTokenOnce()
       if (refreshed.ok) {
-        clearTimeout(timeoutId)
-        return request(method, path, body, false)
+        cleanupRequest()
+        return request(method, path, body, false, signal)
       } else {
         if (authFailureCallback) authFailureCallback()
-        clearTimeout(timeoutId)
+        cleanupRequest()
         throw new Error('Session expired. Please log in again.')
       }
     }
@@ -93,17 +116,18 @@ async function request(method, path, body, retry = true, signal = null) {
       const error = new Error(message || 'Request failed')
       error.status = res.status
       error.data = err
-      clearTimeout(timeoutId)
+      cleanupRequest()
       throw error
     }
 
-    clearTimeout(timeoutId)
+    cleanupRequest()
     if (res.status === 204) return null
     const json = await res.json()
     return json.data ?? json
   } catch (err) {
-    clearTimeout(timeoutId)
+    cleanupRequest()
     if (err.name === 'AbortError') {
+      if (signal?.aborted) throw err
       const error = new Error('Request timed out')
       error.status = 408
       throw error

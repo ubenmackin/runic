@@ -100,9 +100,11 @@ func (w *ChangeWorker) Stop() {
 			return
 		}
 		close(w.workCh)
+		timer := time.NewTimer(10 * time.Second)
+		defer timer.Stop()
 		select {
 		case <-w.done:
-		case <-time.After(10 * time.Second):
+		case <-timer.C:
 			runiclog.Warn("ChangeWorker.Stop() timed out after 10s")
 		}
 	})

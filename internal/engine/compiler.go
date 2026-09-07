@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"runic/internal/common"
+	"runic/internal/common/constants"
 	"runic/internal/common/log"
 	"runic/internal/db"
 	"runic/internal/models"
@@ -44,6 +45,14 @@ const (
 	DirBackward = "backward"
 )
 
+// Protocol and scope values that share the literal "both" with direction
+// but are semantically distinct. Separate constants prevent accidental
+// coupling between direction, protocol, and scope comparisons.
+const (
+	ProtoBoth = "both"
+	ScopeBoth = "both"
+)
+
 // Policy action values stored in the policies.action column.
 const (
 	ActionAccept  = "ACCEPT"
@@ -63,6 +72,10 @@ const (
 	ipsetPrivateRanges = "runic_private_ranges"
 	ipsetGroupPrefix   = "runic_group_"
 )
+
+// DefaultControlPlanePort aliases the shared default control plane port so
+// compiler callers can reference it without importing the constants package.
+const DefaultControlPlanePort = constants.DefaultControlPlanePort
 
 func isMulticastSpecialID(id int) bool {
 	return id == resolve.SpecialIDAllHosts || id == resolve.SpecialIDmDNS || id == resolve.SpecialIDIGMPv3
@@ -222,54 +235,42 @@ func (rw *ruleWriter) newline() {
 	rw.buf.WriteString("\n")
 }
 
-// writeRaw appends a pre-formatted iptables rule (or comment) line verbatim.
-// It exists so writeStandardRules (and any other hand-rolled rule emitter) can
-// stay on the same emission path as accept/drop/logDrop, preserving any future
-// post-processing (e.g., rule counting, deduplication) that might be added to
-// the ruleWriter layer.
-func (rw *ruleWriter) writeRaw(line string) {
-	rw.buf.WriteString(line)
-	if !strings.HasSuffix(line, "\n") {
-		rw.buf.WriteString("\n")
-	}
-}
-
 func (rw *ruleWriter) writeStandardRules(hasDocker bool, controlPlanePort string) {
 	// loopback
-	rw.writeRaw("# --- Standard: loopback ---")
-	rw.writeRaw("-A INPUT -i lo -j ACCEPT")
-	rw.writeRaw("-A OUTPUT -o lo -j ACCEPT")
-	rw.writeRaw("")
+	rw.buf.WriteString("# --- Standard: loopback ---\n")
+	rw.buf.WriteString("-A INPUT -i lo -j ACCEPT\n")
+	rw.buf.WriteString("-A OUTPUT -o lo -j ACCEPT\n")
+	rw.newline()
 
 	// ICMP RELATED
-	rw.writeRaw("# --- Standard: ICMP RELATED ---")
-	rw.writeRaw("-A INPUT -p icmp -m conntrack --ctstate RELATED -j ACCEPT")
-	rw.writeRaw("-A OUTPUT -p icmp -m conntrack --ctstate RELATED -j ACCEPT")
-	rw.writeRaw("")
+	rw.buf.WriteString("# --- Standard: ICMP RELATED ---\n")
+	rw.buf.WriteString("-A INPUT -p icmp -m conntrack --ctstate RELATED -j ACCEPT\n")
+	rw.buf.WriteString("-A OUTPUT -p icmp -m conntrack --ctstate RELATED -j ACCEPT\n")
+	rw.newline()
 
 	// INVALID
-	rw.writeRaw("# --- Standard: INVALID packet drop ---")
-	rw.writeRaw("-A INPUT -m conntrack --ctstate INVALID -j DROP")
-	rw.writeRaw("-A OUTPUT -m conntrack --ctstate INVALID -j DROP")
-	rw.writeRaw("")
+	rw.buf.WriteString("# --- Standard: INVALID packet drop ---\n")
+	rw.buf.WriteString("-A INPUT -m conntrack --ctstate INVALID -j DROP\n")
+	rw.buf.WriteString("-A OUTPUT -m conntrack --ctstate INVALID -j DROP\n")
+	rw.newline()
 
 	// Control Plane Communication
 	if controlPlanePort != "" {
-		rw.writeRaw("# --- Standard: Control Plane Communication ---")
+		rw.buf.WriteString("# --- Standard: Control Plane Communication ---\n")
 		fmt.Fprintf(rw.buf, "# Allows agent to communicate with control plane on port %s\n", controlPlanePort)
-		rw.writeRaw(fmt.Sprintf("-A INPUT -p tcp --dport %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT", controlPlanePort))
-		rw.writeRaw(fmt.Sprintf("-A OUTPUT -p tcp --sport %s -m conntrack --ctstate ESTABLISHED -j ACCEPT", controlPlanePort))
-		rw.writeRaw(fmt.Sprintf("-A OUTPUT -p tcp --dport %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT", controlPlanePort))
-		rw.writeRaw(fmt.Sprintf("-A INPUT -p tcp --sport %s -m conntrack --ctstate ESTABLISHED -j ACCEPT", controlPlanePort))
-		rw.writeRaw("")
+		fmt.Fprintf(rw.buf, "-A INPUT -p tcp --dport %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", controlPlanePort)
+		fmt.Fprintf(rw.buf, "-A OUTPUT -p tcp --sport %s -m conntrack --ctstate ESTABLISHED -j ACCEPT\n", controlPlanePort)
+		fmt.Fprintf(rw.buf, "-A OUTPUT -p tcp --dport %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT\n", controlPlanePort)
+		fmt.Fprintf(rw.buf, "-A INPUT -p tcp --sport %s -m conntrack --ctstate ESTABLISHED -j ACCEPT\n", controlPlanePort)
+		rw.newline()
 	}
 
 	// Docker standard rules
 	if hasDocker {
-		rw.writeRaw("# --- Docker: Standard rules for DOCKER-USER ---")
-		rw.writeRaw("-A DOCKER-USER -p icmp -m conntrack --ctstate RELATED -j ACCEPT")
-		rw.writeRaw("-A DOCKER-USER -m conntrack --ctstate INVALID -j DROP")
-		rw.writeRaw("")
+		rw.buf.WriteString("# --- Docker: Standard rules for DOCKER-USER ---\n")
+		rw.buf.WriteString("-A DOCKER-USER -p icmp -m conntrack --ctstate RELATED -j ACCEPT\n")
+		rw.buf.WriteString("-A DOCKER-USER -m conntrack --ctstate INVALID -j DROP\n")
+		rw.newline()
 	}
 }
 
@@ -346,7 +347,7 @@ func (c *Compiler) loadApplicablePolicies(ctx context.Context, peerID int) ([]po
 		policies = append(policies, p)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, fmt.Errorf("iterate policies: %w", err)
 	}
 
 	groupIDToName := make(map[int]string)
@@ -425,7 +426,7 @@ func (c *Compiler) preloadRequiredServices(ctx context.Context, policies []polic
 			services[sid] = s
 		}
 		if err := rows.Err(); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("iterate services: %w", err)
 		}
 	}
 	return services, nil
@@ -493,8 +494,11 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 	// Load control plane port up-front (was previously a hidden side-effect inside generateIptablesPayload)
 	var controlPlanePort string
 	if err := c.db.QueryRowContext(ctx, "SELECT value FROM system_config WHERE key = 'control_plane_port'").Scan(&controlPlanePort); err != nil {
-		log.WarnContext(ctx, "Failed to load control_plane_port, using default 8080", "error", err)
-		controlPlanePort = "8080"
+		log.WarnContext(ctx, "Failed to load control_plane_port, using default "+DefaultControlPlanePort, "error", err)
+		controlPlanePort = DefaultControlPlanePort
+	}
+	if controlPlanePort == "" {
+		controlPlanePort = DefaultControlPlanePort
 	}
 
 	return c.generateIptablesPayload(ctx, hostname, ipAddress, hasDocker, hasIPSet, policies, services, ipsets, groupIDToIpsetName, controlPlanePort)
@@ -518,7 +522,7 @@ func (c *Compiler) generateIptablesPayload(
 	c.writeFilterTableHeader(&buf, hasDocker)
 	rw.writeStandardRules(hasDocker, controlPlanePort)
 
-	if err := c.writePolicySection(ctx, &buf, rw, policies, services, ipsets, groupIDToIpsetName, hasDocker, hasIPSet, ipAddress); err != nil {
+	if err := c.writePolicySection(ctx, &buf, rw, policies, services, groupIDToIpsetName, hasDocker, hasIPSet, ipAddress); err != nil {
 		return "", err
 	}
 
@@ -587,7 +591,6 @@ func (c *Compiler) writePolicySection(
 	rw *ruleWriter,
 	policies []policyInfo,
 	services map[int]ServiceInfo,
-	ipsets []ipsetData,
 	groupIDToIpsetName map[int]string,
 	hasDocker bool,
 	hasIPSet bool,
@@ -632,7 +635,7 @@ func (c *Compiler) writeSinglePolicy(
 	var portClauses []PortClause
 	isBroadcastService := serviceName == systemServiceSubnetBroadcast || serviceName == systemServiceLimitedBroadcast
 	isIGMPorVRRP := strings.EqualFold(serviceName, systemServiceIGMP) || strings.EqualFold(serviceName, systemServiceVRRP)
-	if serviceName != systemServiceMulticast && !isBroadcastService && !isIGMPorVRRP {
+	if !strings.EqualFold(serviceName, systemServiceMulticast) && !isBroadcastService && !isIGMPorVRRP {
 		var err error
 		portClauses, err = ExpandPorts(ports, sourcePorts, protocol)
 		if err != nil {
@@ -731,7 +734,7 @@ func (c *Compiler) writeTargetSection(
 			c.writeBroadcastRule(rw, pol.Action, pol.TargetScope, hasDocker, cidr, protocol)
 		}
 	case useIpset:
-		if serviceName == systemServiceMulticast {
+		if strings.EqualFold(serviceName, systemServiceMulticast) {
 			c.writeMulticastRule(rw, pol.Action, pol.TargetScope, hasDocker)
 		} else {
 			rules, err := c.writeRules(pol, portClauses, true, ipsetName, nil, ipAddress, writeToHost, writeToDocker, noConntrack, "target", false)
@@ -747,7 +750,7 @@ func (c *Compiler) writeTargetSection(
 		if err != nil {
 			return fmt.Errorf("resolve source for policy %s: %w", pol.Name, err)
 		}
-		if serviceName == systemServiceMulticast {
+		if strings.EqualFold(serviceName, systemServiceMulticast) {
 			c.writeMulticastRule(rw, pol.Action, pol.TargetScope, hasDocker)
 		} else {
 			rules, err := c.writeRules(pol, portClauses, false, "", cidrs, ipAddress, writeToHost, writeToDocker, noConntrack, "target", false)
@@ -795,7 +798,7 @@ func (c *Compiler) writeSourceSection(
 
 	switch {
 	case useIpset:
-		if serviceName == systemServiceMulticast {
+		if strings.EqualFold(serviceName, systemServiceMulticast) {
 			isMulticastTarget := pol.TargetType == "special" && isMulticastSpecialID(pol.TargetID)
 			if isMulticastTarget && pol.Action == "ACCEPT" {
 				if writeToHost {
@@ -829,7 +832,7 @@ func (c *Compiler) writeSourceSection(
 		if err != nil {
 			return fmt.Errorf("resolve target for policy %s: %w", pol.Name, err)
 		}
-		if serviceName == systemServiceMulticast {
+		if strings.EqualFold(serviceName, systemServiceMulticast) {
 			isMulticastTarget := pol.TargetType == "special" && isMulticastSpecialID(pol.TargetID)
 			if isMulticastTarget && pol.Action == "ACCEPT" {
 				if writeToHost {
@@ -856,9 +859,9 @@ func (c *Compiler) writeSourceSection(
 // writeLoggingSection writes the final logging and default deny rules.
 func (c *Compiler) writeLoggingSection(buf *strings.Builder, hasDocker bool) {
 	buf.WriteString("# --- Logging and default deny ---\n")
-	buf.WriteString("-A INPUT -j LOG --log-prefix \"[RUNIC-DROP-I] \" --log-level 4\n")
+	fmt.Fprintf(buf, "-A INPUT -j LOG --log-prefix %q --log-level 4\n", dropPrefixFor(ChainInput))
 	buf.WriteString("-A INPUT -j DROP\n")
-	buf.WriteString("-A OUTPUT -j LOG --log-prefix \"[RUNIC-DROP-O] \" --log-level 4\n")
+	fmt.Fprintf(buf, "-A OUTPUT -j LOG --log-prefix %q --log-level 4\n", dropPrefixFor(ChainOutput))
 	buf.WriteString("-A OUTPUT -j DROP\n")
 
 	if hasDocker {
@@ -918,12 +921,7 @@ func (c *Compiler) writeMulticastRule(rw *ruleWriter, action string, targetScope
 func (c *Compiler) writeBroadcastRule(rw *ruleWriter, action string, targetScope string, hasDocker bool, broadcastAddr string, protocol string) {
 	writeToHost, writeToDocker := c.scopeFlags(targetScope, hasDocker)
 
-	// Default to udp when the service protocol is empty or "both" — broadcast
-	// system services in this codebase use UDP, and treating "both" as udp
-	// matches the historical hardcoded behavior.
-	if protocol == "" || strings.EqualFold(protocol, "both") {
-		protocol = "udp"
-	}
+	protocol = normalizeBroadcastProto(protocol)
 
 	if writeToHost {
 		// Accept broadcast traffic destined for the broadcast address
@@ -935,8 +933,8 @@ func (c *Compiler) writeBroadcastRule(rw *ruleWriter, action string, targetScope
 }
 
 func (c *Compiler) scopeFlags(targetScope string, hasDocker bool) (writeToHost, writeToDocker bool) {
-	writeToHost = targetScope == "host" || targetScope == "both"
-	writeToDocker = hasDocker && (targetScope == "docker" || targetScope == "both")
+	writeToHost = targetScope == "host" || targetScope == ScopeBoth
+	writeToDocker = hasDocker && (targetScope == "docker" || targetScope == ScopeBoth)
 	return
 }
 
@@ -980,7 +978,7 @@ func (c *Compiler) writeRules(
 	if pol.Action == ActionAccept {
 		return c.buildAcceptRules(pol, portClauses, useIpset, ipsetName, cidrs, ipAddress, writeToHost, writeToDocker, noConntrack, ruleDir, isMulticastTarget)
 	}
-	return c.buildLogDropRules(pol, portClauses, useIpset, ipsetName, cidrs, ipAddress, writeToHost, writeToDocker, noConntrack, ruleDir)
+	return c.buildLogDropRules(pol, portClauses, useIpset, ipsetName, cidrs, ipAddress, writeToHost, writeToDocker, ruleDir)
 }
 
 // buildAcceptRules emits the iptables ACCEPT rules for a single policy's port clauses.
@@ -999,7 +997,7 @@ func (c *Compiler) buildAcceptRules(
 	isMulticastTarget bool,
 ) ([]string, error) {
 	var rules []string
-	privateIpsetMatch := "-m set ! --match-set " + ipsetPrivateRanges + " dst"
+	privateIpsetMatch := privateIpsetDstMatch()
 
 	for _, pc := range portClauses {
 		// Build port matches depending on direction
@@ -1053,7 +1051,7 @@ func (c *Compiler) buildAcceptRules(
 				case ruleDirInternet:
 					rules = append(rules,
 						fmt.Sprintf("-A OUTPUT -p %s %s %s %s -j %s", pc.Protocol, privateIpsetMatch, primaryPortMatch, conntrackFull, pol.Action),
-						fmt.Sprintf("-A INPUT -p %s %s %s %s -j ACCEPT", pc.Protocol, "-m set ! --match-set "+ipsetPrivateRanges+" src", returnPortMatch, conntrackFull),
+						fmt.Sprintf("-A INPUT -p %s %s %s %s -j ACCEPT", pc.Protocol, privateIpsetSrcMatch(), returnPortMatch, conntrackFull),
 					)
 				}
 			}
@@ -1084,9 +1082,7 @@ func (c *Compiler) buildAcceptRules(
 							fmt.Sprintf("-A INPUT -s %s -p %s %s %s -j %s", cidr, pc.Protocol, primaryPortMatch, conntrackFull, pol.Action),
 							fmt.Sprintf("-A OUTPUT -d %s -p %s %s %s -j ACCEPT", cidr, pc.Protocol, returnPortMatch, conntrackFull),
 						)
-					case ruleDirSource:
-						rules = append(rules, fmt.Sprintf("-A OUTPUT -d %s -p %s %s %s -j %s", cidr, pc.Protocol, primaryPortMatch, conntrackFull, pol.Action))
-					case ruleDirInternet:
+					case ruleDirSource, ruleDirInternet:
 						rules = append(rules, fmt.Sprintf("-A OUTPUT -d %s -p %s %s %s -j %s", cidr, pc.Protocol, primaryPortMatch, conntrackFull, pol.Action))
 					}
 				}
@@ -1094,9 +1090,7 @@ func (c *Compiler) buildAcceptRules(
 					switch ruleDir {
 					case ruleDirTarget:
 						rules = append(rules, fmt.Sprintf("-A DOCKER-USER -s %s -p %s %s %s -j %s", cidr, pc.Protocol, primaryPortMatch, conntrackFull, pol.Action))
-					case ruleDirSource:
-						rules = append(rules, fmt.Sprintf("-A DOCKER-USER -d %s -p %s %s %s -j %s", cidr, pc.Protocol, primaryPortMatch, conntrackFull, pol.Action))
-					case ruleDirInternet:
+					case ruleDirSource, ruleDirInternet:
 						rules = append(rules, fmt.Sprintf("-A DOCKER-USER -d %s -p %s %s %s -j %s", cidr, pc.Protocol, primaryPortMatch, conntrackFull, pol.Action))
 					}
 				}
@@ -1125,11 +1119,10 @@ func (c *Compiler) buildLogDropRules(
 	cidrs []string,
 	ipAddress string,
 	writeToHost, writeToDocker bool,
-	noConntrack bool,
 	ruleDir string,
 ) ([]string, error) {
 	var rules []string
-	privateIpsetMatch := "-m set ! --match-set " + ipsetPrivateRanges + " dst"
+	privateIpsetMatch := privateIpsetDstMatch()
 
 	for _, pc := range portClauses {
 		if useIpset {
@@ -1164,9 +1157,7 @@ func (c *Compiler) buildLogDropRules(
 					switch ruleDir {
 					case ruleDirTarget:
 						rules = append(rules, c.logDropRule(pol.Action, ChainInput, fmt.Sprintf("-s %s -p %s %s", cidr, pc.Protocol, pc.PortMatch))...)
-					case ruleDirSource:
-						rules = append(rules, c.logDropRule(pol.Action, ChainOutput, fmt.Sprintf("-d %s -p %s %s", cidr, pc.Protocol, pc.PortMatch))...)
-					case ruleDirInternet:
+					case ruleDirSource, ruleDirInternet:
 						rules = append(rules, c.logDropRule(pol.Action, ChainOutput, fmt.Sprintf("-d %s -p %s %s", cidr, pc.Protocol, pc.PortMatch))...)
 					}
 				}
@@ -1174,17 +1165,25 @@ func (c *Compiler) buildLogDropRules(
 					switch ruleDir {
 					case ruleDirTarget:
 						rules = append(rules, c.logDropRule(pol.Action, ChainDockerUser, fmt.Sprintf("-s %s -p %s %s", cidr, pc.Protocol, pc.PortMatch))...)
-					case ruleDirSource:
-						rules = append(rules, c.logDropRule(pol.Action, ChainDockerUser, fmt.Sprintf("-d %s -p %s %s", cidr, pc.Protocol, pc.PortMatch))...)
-					case ruleDirInternet:
+					case ruleDirSource, ruleDirInternet:
 						rules = append(rules, c.logDropRule(pol.Action, ChainDockerUser, fmt.Sprintf("-d %s -p %s %s", cidr, pc.Protocol, pc.PortMatch))...)
 					}
 				}
 			}
 		}
-		_ = noConntrack // retained for symmetry with buildAcceptRules; LOG_DROP rules do not emit conntrack clauses.
 	}
 	return rules, nil
+}
+
+// privateIpsetDstMatch returns the ipset negation match for internet-bound
+// OUTPUT rules, and privateIpsetSrcMatch the INPUT return-path variant.
+// Hoisted so buildAcceptRules and buildLogDropRules share one definition.
+func privateIpsetDstMatch() string {
+	return "-m set ! --match-set " + ipsetPrivateRanges + " dst"
+}
+
+func privateIpsetSrcMatch() string {
+	return "-m set ! --match-set " + ipsetPrivateRanges + " src"
 }
 
 // filterSelfReferencingCIDRs returns cidrs with any entries equal to the peer's
@@ -1239,7 +1238,7 @@ func (c *Compiler) loadPreviewInputs(ctx context.Context, peerID, serviceID int,
 		st.direction = DirBoth
 	}
 	if st.targetScope == "" {
-		st.targetScope = DirBoth
+		st.targetScope = ScopeBoth
 	}
 
 	if peerID != 0 {
@@ -1265,7 +1264,7 @@ func (c *Compiler) loadPreviewInputs(ctx context.Context, peerID, serviceID int,
 
 	// Skip port expansion for special services that don't use ports.
 	isIGMPorVRRP := strings.EqualFold(st.serviceName, systemServiceIGMP) || strings.EqualFold(st.serviceName, systemServiceVRRP)
-	if st.serviceName != systemServiceMulticast && !isIGMPorVRRP {
+	if !strings.EqualFold(st.serviceName, systemServiceMulticast) && !isIGMPorVRRP {
 		clauses, err := ExpandPorts(ports, sourcePorts, st.protocol)
 		if err != nil {
 			return previewState{}, fmt.Errorf("expand ports: %w", err)
@@ -1293,32 +1292,69 @@ func (c *Compiler) resolvePreviewSourcesAndTargets(ctx context.Context, st *prev
 }
 
 // previewAppendRules is a small helper that calls writeRules and appends the
-// result to rules, eliminating the local-shadowing `writeRules, err := ...`
-// pattern that previously appeared 8 times in PreviewCompile.
-func (c *Compiler) previewAppendRules(rules []string, st *previewState, pol *policyInfo, portClauses []PortClause, cidrs []string, isMulticastTarget bool, ruleDir string) ([]string, error) {
-	generated, err := c.writeRules(pol, portClauses, false, "", cidrs, st.ipAddress, true, false, st.noConntrack, ruleDir, isMulticastTarget)
+// result to rules. writeToHost/writeToDocker select the host or DOCKER-USER
+// chains so host and docker preview sections share one call path.
+func (c *Compiler) previewAppendRules(rules []string, st *previewState, pol *policyInfo, portClauses []PortClause, cidrs []string, isMulticastTarget bool, ruleDir string, writeToHost, writeToDocker bool) ([]string, error) {
+	generated, err := c.writeRules(pol, portClauses, false, "", cidrs, st.ipAddress, writeToHost, writeToDocker, st.noConntrack, ruleDir, isMulticastTarget)
 	if err != nil {
 		return nil, err
 	}
 	return append(rules, generated...), nil
 }
 
+// isPreviewSpecialService reports whether the service skips port handling
+// and renders fixed IGMP/VRRP rules in previews.
+func isPreviewSpecialService(serviceName string) bool {
+	return strings.EqualFold(serviceName, systemServiceIGMP) || strings.EqualFold(serviceName, systemServiceVRRP)
+}
+
+// normalizeBroadcastProto normalizes the broadcast protocol, defaulting to udp
+// when the service protocol is empty or "both" — broadcast system services
+// in this codebase use UDP, and treating "both" as udp matches the historical
+// hardcoded behavior.
+func normalizeBroadcastProto(protocol string) string {
+	if protocol == "" || strings.EqualFold(protocol, ProtoBoth) {
+		return "udp"
+	}
+	return protocol
+}
+
 // previewHostForward renders the "Source → Target" rules that target the host
 // chains (INPUT/OUTPUT) when targetScope is "host" or "both". It handles IGMP,
 // VRRP, multicast, internet, and the regular peer/group case.
 func (c *Compiler) previewHostForward(st *previewState, sourceType string, targetType string, targetID int) ([]string, error) {
-	if st.targetScope != "host" && st.targetScope != "both" {
+	return c.previewForward(st, targetType, targetID, ChainInput, "# Forward (Source → Target)", true, false, "host")
+}
+
+// previewDockerForward is the DOCKER-USER equivalent of previewHostForward.
+func (c *Compiler) previewDockerForward(st *previewState, sourceType string, targetType string, targetID int) ([]string, error) {
+	return c.previewForward(st, targetType, targetID, ChainDockerUser, "# Docker: DOCKER-USER chain rules", false, true, "docker")
+}
+
+// previewForward renders forward (Source → Target) rules for either the host
+// or docker chains. wantScope selects which targetScope values render.
+func (c *Compiler) previewForward(st *previewState, targetType string, targetID int, chain, header string, writeToHost, writeToDocker bool, wantScope string) ([]string, error) {
+	if st.targetScope != wantScope && st.targetScope != ScopeBoth {
 		return nil, nil
 	}
 
-	// IG-002/VRRP-002: short-circuit before any CIDR iteration.
+	// Short-circuit before any CIDR iteration.
 	switch {
 	case strings.EqualFold(st.serviceName, systemServiceIGMP):
+		if chain == ChainDockerUser {
+			return []string{
+				"-A DOCKER-USER -d 224.0.0.1/32 -p igmp -j ACCEPT",
+				"-A DOCKER-USER -d 224.0.0.22/32 -p igmp -j ACCEPT",
+			}, nil
+		}
 		return []string{
 			"-A INPUT -d 224.0.0.1/32 -p igmp -j ACCEPT",
 			"-A OUTPUT -d 224.0.0.22/32 -p igmp -j ACCEPT",
 		}, nil
 	case strings.EqualFold(st.serviceName, systemServiceVRRP):
+		if chain == ChainDockerUser {
+			return []string{"-A DOCKER-USER -d 224.0.0.18/32 -p vrrp -j ACCEPT"}, nil
+		}
 		return []string{"-A OUTPUT -d 224.0.0.18/32 -p vrrp -j ACCEPT"}, nil
 	}
 
@@ -1326,22 +1362,26 @@ func (c *Compiler) previewHostForward(st *previewState, sourceType string, targe
 		return nil, nil
 	}
 
-	rules := []string{"# Forward (Source → Target)"}
+	rules := []string{header}
 
-	// MC-012: Multicast special targets as Destination receive via pkttype
+	// Multicast special targets as Destination receive via pkttype
 	// matching rather than per-CIDR output rules. Emit the rule once, outside
 	// the CIDR loop, since the same `224.0.0.0/4` block covers all members.
-	if st.serviceName == systemServiceMulticast && targetType == "special" && isMulticastSpecialID(targetID) {
-		rules = append(rules, "-A OUTPUT -d 224.0.0.0/4 -m pkttype --pkt-type multicast -j ACCEPT")
+	if strings.EqualFold(st.serviceName, systemServiceMulticast) && targetType == "special" && isMulticastSpecialID(targetID) {
+		if chain == ChainDockerUser {
+			rules = append(rules, "-A DOCKER-USER -d 224.0.0.0/4 -m pkttype --pkt-type multicast -j ACCEPT")
+		} else {
+			rules = append(rules, "-A OUTPUT -d 224.0.0.0/4 -m pkttype --pkt-type multicast -j ACCEPT")
+		}
 		return rules, nil
 	}
 
 	// Use writeSourceRules for forward direction (egress)
 	if st.isInternetTarget {
-		return c.previewAppendRules(rules, st, st.pol, st.portClauses, nil, false, ruleDirInternet)
+		return c.previewAppendRules(rules, st, st.pol, st.portClauses, nil, false, ruleDirInternet, writeToHost, writeToDocker)
 	}
 	isMulticastTarget := targetType == "special" && isMulticastSpecialID(targetID)
-	return c.previewAppendRules(rules, st, st.pol, st.portClauses, st.targetCIDRs, isMulticastTarget, ruleDirSource)
+	return c.previewAppendRules(rules, st, st.pol, st.portClauses, st.targetCIDRs, isMulticastTarget, ruleDirSource, writeToHost, writeToDocker)
 }
 
 // previewHostBackward renders the "Target → Source" rules that target the host
@@ -1349,135 +1389,60 @@ func (c *Compiler) previewHostForward(st *previewState, sourceType string, targe
 // "both" or "backward". It handles multicast/broadcast sources, plus the
 // regular peer/group case.
 func (c *Compiler) previewHostBackward(st *previewState, sourceType string, sourceID int) ([]string, error) {
-	if st.targetScope != "host" && st.targetScope != "both" {
+	return c.previewBackward(st, sourceType, sourceID, ChainInput, true, false, "host", true)
+}
+
+// previewDockerBackward is the DOCKER-USER equivalent of previewHostBackward.
+func (c *Compiler) previewDockerBackward(st *previewState, sourceType string, sourceID int) ([]string, error) {
+	return c.previewBackward(st, sourceType, sourceID, ChainDockerUser, false, true, "docker", false)
+}
+
+// previewBackward renders backward (Target → Source) rules for either chain.
+// withHeader controls whether the "# Backward" header is emitted; the docker
+// path historically omits it for generated sections.
+func (c *Compiler) previewBackward(st *previewState, sourceType string, sourceID int, chain string, writeToHost, writeToDocker bool, wantScope string, withHeader bool) ([]string, error) {
+	if st.targetScope != wantScope && st.targetScope != ScopeBoth {
 		return nil, nil
 	}
-	// IG-002/VRRP-002: skip backward — already rendered in the forward section.
-	if strings.EqualFold(st.serviceName, systemServiceIGMP) || strings.EqualFold(st.serviceName, systemServiceVRRP) {
+	// Skip backward — already rendered in the forward section.
+	if isPreviewSpecialService(st.serviceName) {
 		return nil, nil
 	}
 	if st.direction != "both" && st.direction != "backward" {
 		return nil, nil
 	}
 
-	// MC-009 / BC-003: Multicast / broadcast special sources indicate receiving
+	// Multicast / broadcast special sources indicate receiving
 	// traffic via pkttype matching (-d 224.0.0.0/4 multicast) or destination-
 	// address matching for broadcast.
 	isMulticastSource := sourceType == "special" && isMulticastSpecialID(sourceID)
 	isBroadcastSource := sourceType == "special" && isBroadcastSpecialID(sourceID)
 
-	rules := []string{"# Backward (Target → Source)"}
+	var rules []string
+	if withHeader {
+		rules = []string{"# Backward (Target → Source)"}
+	}
 
 	switch {
 	case isMulticastSource:
-		if st.serviceName == systemServiceMulticast {
+		if strings.EqualFold(st.serviceName, systemServiceMulticast) {
+			if chain == ChainDockerUser {
+				return []string{"-A DOCKER-USER -m pkttype --pkt-type multicast -j ACCEPT"}, nil
+			}
 			return append(rules, "-A INPUT -m pkttype --pkt-type multicast -j ACCEPT"), nil
 		}
-		return c.previewAppendRules(rules, st, st.pol, st.portClauses, st.sourceCIDRs, false, ruleDirTarget)
+		return c.previewAppendRules(rules, st, st.pol, st.portClauses, st.sourceCIDRs, false, ruleDirTarget, writeToHost, writeToDocker)
 	case isBroadcastSource:
 		// Broadcast traffic: -d match against the broadcast address. The
 		// protocol is read from the service in scope and falls back to "udp"
 		// when empty or "both" (matching the historical hardcoded behavior).
-		proto := st.protocol
-		if proto == "" || strings.EqualFold(proto, DirBoth) {
-			proto = "udp"
-		}
+		proto := normalizeBroadcastProto(st.protocol)
 		for _, sourceCIDR := range st.sourceCIDRs {
-			rules = append(rules, fmt.Sprintf("-A INPUT -d %s -p %s -j ACCEPT", sourceCIDR, proto))
+			rules = append(rules, fmt.Sprintf("-A %s -d %s -p %s -j ACCEPT", chain, sourceCIDR, proto))
 		}
 		return rules, nil
 	default:
-		return c.previewAppendRules(rules, st, st.pol, st.portClauses, st.sourceCIDRs, false, ruleDirTarget)
-	}
-}
-
-// previewDockerForward is the DOCKER-USER equivalent of previewHostForward.
-// The structure mirrors the host path; only the writeToHost/writeToDocker
-// flags passed to writeRules differ (writeToHost=false, writeToDocker=true).
-func (c *Compiler) previewDockerForward(st *previewState, sourceType string, targetType string, targetID int) ([]string, error) {
-	if st.targetScope != "docker" && st.targetScope != "both" {
-		return nil, nil
-	}
-
-	switch {
-	case strings.EqualFold(st.serviceName, systemServiceIGMP):
-		return []string{
-			"-A DOCKER-USER -d 224.0.0.1/32 -p igmp -j ACCEPT",
-			"-A DOCKER-USER -d 224.0.0.22/32 -p igmp -j ACCEPT",
-		}, nil
-	case strings.EqualFold(st.serviceName, systemServiceVRRP):
-		return []string{"-A DOCKER-USER -d 224.0.0.18/32 -p vrrp -j ACCEPT"}, nil
-	}
-
-	if st.direction != "both" && st.direction != "forward" {
-		return nil, nil
-	}
-
-	rules := []string{"# Docker: DOCKER-USER chain rules"}
-
-	// MC-012: Multicast special targets get a single pkttype rule (same as host).
-	if st.serviceName == systemServiceMulticast && targetType == "special" && isMulticastSpecialID(targetID) {
-		rules = append(rules, "-A DOCKER-USER -d 224.0.0.0/4 -m pkttype --pkt-type multicast -j ACCEPT")
-		return rules, nil
-	}
-
-	// Use writeSourceRules for Docker forward direction (egress to Docker)
-	if st.isInternetTarget {
-		generated, err := c.writeRules(st.pol, st.portClauses, false, "", nil, st.ipAddress, false, true, st.noConntrack, ruleDirInternet, false)
-		if err != nil {
-			return nil, err
-		}
-		return append(rules, generated...), nil
-	}
-	isMulticastTarget := targetType == "special" && isMulticastSpecialID(targetID)
-	generated, err := c.writeRules(st.pol, st.portClauses, false, "", st.targetCIDRs, st.ipAddress, false, true, st.noConntrack, ruleDirSource, isMulticastTarget)
-	if err != nil {
-		return nil, err
-	}
-	return append(rules, generated...), nil
-}
-
-// previewDockerBackward is the DOCKER-USER equivalent of previewHostBackward.
-func (c *Compiler) previewDockerBackward(st *previewState, sourceType string, sourceID int) ([]string, error) {
-	if st.targetScope != "docker" && st.targetScope != "both" {
-		return nil, nil
-	}
-	if strings.EqualFold(st.serviceName, systemServiceIGMP) || strings.EqualFold(st.serviceName, systemServiceVRRP) {
-		return nil, nil
-	}
-	if st.direction != "both" && st.direction != "backward" {
-		return nil, nil
-	}
-
-	isMulticastSource := sourceType == "special" && isMulticastSpecialID(sourceID)
-	isBroadcastSource := sourceType == "special" && isBroadcastSpecialID(sourceID)
-
-	switch {
-	case isMulticastSource:
-		if st.serviceName == systemServiceMulticast {
-			return []string{"-A DOCKER-USER -m pkttype --pkt-type multicast -j ACCEPT"}, nil
-		}
-		generated, err := c.writeRules(st.pol, st.portClauses, false, "", st.sourceCIDRs, st.ipAddress, false, true, st.noConntrack, ruleDirTarget, false)
-		if err != nil {
-			return nil, err
-		}
-		return generated, nil
-	case isBroadcastSource:
-		proto := st.protocol
-		if proto == "" || strings.EqualFold(proto, DirBoth) {
-			proto = "udp"
-		}
-		var rules []string
-		for _, sourceCIDR := range st.sourceCIDRs {
-			rules = append(rules, fmt.Sprintf("-A DOCKER-USER -d %s -p %s -j ACCEPT", sourceCIDR, proto))
-		}
-		return rules, nil
-	default:
-		generated, err := c.writeRules(st.pol, st.portClauses, false, "", st.sourceCIDRs, st.ipAddress, false, true, st.noConntrack, ruleDirTarget, false)
-		if err != nil {
-			return nil, err
-		}
-		return generated, nil
+		return c.previewAppendRules(rules, st, st.pol, st.portClauses, st.sourceCIDRs, false, ruleDirTarget, writeToHost, writeToDocker)
 	}
 }
 
@@ -1603,12 +1568,12 @@ func (c *Compiler) findPoliciesByGroup(ctx context.Context, groupID int) ([]int,
 	for rows.Next() {
 		var id int
 		if err := rows.Scan(&id); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("scan policy id: %w", err)
 		}
 		policyIDs = append(policyIDs, id)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("iterate policies by group: %w", err)
 	}
 	return policyIDs, nil
 }

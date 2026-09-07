@@ -56,8 +56,9 @@ func LogsDBSchema() string {
 //   - *sql.DB: The initialized database connection
 //   - error: Any error that occurred during initialization
 func InitLogsDB(path string) (*sql.DB, error) {
-	// Build connection string with WAL mode and busy timeout
-	dataSourceName := fmt.Sprintf("%s?_journal_mode=WAL&_busy_timeout=5000", path)
+	// Build connection string with WAL mode and busy timeout via the shared
+	// helper so query parameters are preserved and never duplicated.
+	dataSourceName := sqliteDSNWithPragmas(path)
 
 	sqlDB, err := sql.Open("sqlite3", dataSourceName)
 	if err != nil {
@@ -155,7 +156,7 @@ func MigrateLogsFromMainDB(ctx context.Context, mainDB, logsDB *sql.DB) (int64, 
 	// Use ATTACH DATABASE to enable cross-database queries
 	// Begin transaction on main DB to ensure atomicity
 	var rowsMigrated int64
-	err = withTx(ctx, mainDB, func(ctx context.Context, tx *sql.Tx) error {
+	err = RunInTx(ctx, mainDB, func(ctx context.Context, tx *sql.Tx) error {
 		// Attach logs database
 		if _, err := tx.ExecContext(ctx, fmt.Sprintf("ATTACH DATABASE '%s' AS logs_db", logsDBPath)); err != nil {
 			return fmt.Errorf("failed to attach logs database: %w", err)

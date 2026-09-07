@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"sync"
 	"time"
@@ -144,9 +145,10 @@ func (m *Manager) checkRotationPending(ctx context.Context, token string) (strin
 				return "", nil
 			}
 		}
-		return "", err
+		return "", fmt.Errorf("check rotation pending: %w", err)
 	}
 	defer func() {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 		if err := resp.Body.Close(); err != nil {
 			log.Warn("Failed to close response body", "error", err)
 		}
@@ -161,7 +163,7 @@ func (m *Manager) checkRotationPending(ctx context.Context, token string) (strin
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", err
+		return "", fmt.Errorf("decode rotation check response: %w", err)
 	}
 
 	return result.RotationToken, nil
@@ -180,6 +182,7 @@ func (m *Manager) retrieveNewKey(ctx context.Context, rotationToken string, auth
 		return "", fmt.Errorf("retrieve new key: %w", err)
 	}
 	defer func() {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 		if cErr := resp.Body.Close(); cErr != nil {
 			log.Warn("close body failed", "error", cErr)
 		}
@@ -190,7 +193,7 @@ func (m *Manager) retrieveNewKey(ctx context.Context, rotationToken string, auth
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", err
+		return "", fmt.Errorf("decode rotate key response: %w", err)
 	}
 
 	if result.NewHMACKey == "" {
@@ -219,6 +222,7 @@ func (m *Manager) testNewKey(ctx context.Context, key string, token string) erro
 		return fmt.Errorf("key test failed: %w", err)
 	}
 	defer func() {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 		if cErr := resp.Body.Close(); cErr != nil {
 			log.Warn("close body failed", "error", cErr)
 		}
@@ -239,6 +243,7 @@ func (m *Manager) confirmRotation(ctx context.Context, token string) error {
 		return fmt.Errorf("confirm rotation failed: %w", err)
 	}
 	defer func() {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 		if err := resp.Body.Close(); err != nil {
 			log.Warn("Failed to close response body", "error", err)
 		}

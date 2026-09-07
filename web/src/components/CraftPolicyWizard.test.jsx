@@ -367,6 +367,7 @@ describe("CraftPolicyWizard", () => {
         () => {
           expect(api.api.get).toHaveBeenCalledWith(
             "/peers/by-ip?ip=192.168.1.100",
+            expect.anything(),
           );
         },
         { timeout: 3000 },
@@ -632,6 +633,7 @@ describe("CraftPolicyWizard", () => {
       () => {
         expect(api.api.get).toHaveBeenCalledWith(
           "/services/by-port?port=0&protocol=icmp",
+          expect.anything(),
         );
       },
       { timeout: 3000 },
@@ -1646,6 +1648,7 @@ describe("CraftPolicyWizard", () => {
         () => {
           expect(api.api.get).toHaveBeenCalledWith(
             "/peers/by-ip?ip=10.20.30.40",
+            expect.anything(),
           );
         },
         { timeout: 3000 },
@@ -1688,6 +1691,7 @@ describe("CraftPolicyWizard", () => {
         () => {
           expect(api.api.get).toHaveBeenCalledWith(
             "/peers/by-ip?ip=50.60.70.80",
+            expect.anything(),
           );
         },
         { timeout: 3000 },
@@ -1724,6 +1728,7 @@ describe("CraftPolicyWizard", () => {
         () => {
           expect(api.api.get).toHaveBeenCalledWith(
             "/peers/by-ip?ip=10.20.30.40",
+            expect.anything(),
           );
         },
         { timeout: 3000 },
@@ -1749,9 +1754,9 @@ describe("CraftPolicyWizard", () => {
       expect(nextButton).toBeDisabled();
     });
 
-    // Tests for specific log entry from TASK-007
+    // Tests for specific log entry with OUT direction
     // Log: 2026-04-16T05:09:04.939461-07:00 ansible kernel: [RUNIC-DROP] IN= OUT=ens160 SRC=10.100.5.36 DST=91.189.92.23 LEN=52 TOS=0x00 PREC=0x00 TTL=64 ID=24 DF PROTO=TCP SPT=47182 DPT=80 WINDOW=3167 RES=0x00 ACK PSH FIN URGP=0
-    test("parses OUT direction from [RUNIC-DROP-O] prefix (TASK-003 fix)", async () => {
+    test("parses OUT direction from [RUNIC-DROP-O] prefix", async () => {
       // The raw_line contains [RUNIC-DROP] but no explicit direction suffix
       // The direction should be determined from the log format
       const mockLog = {
@@ -1800,7 +1805,7 @@ describe("CraftPolicyWizard", () => {
       );
     });
 
-    test("extracts port 80 (DPT) not 47182 (SPT) for OUT direction (TASK-001 fix)", async () => {
+    test("extracts port 80 (DPT) not 47182 (SPT) for OUT direction", async () => {
       const mockLog = {
         peer_id: 1,
         hostname: "ansible",
@@ -1849,13 +1854,14 @@ describe("CraftPolicyWizard", () => {
         () => {
           expect(api.api.get).toHaveBeenCalledWith(
             "/services/by-port?port=80&protocol=tcp",
+            expect.anything(),
           );
         },
         { timeout: 3000 },
       );
     });
 
-    test("extracts external IP 91.189.92.23 (dst_ip) for OUT direction (TASK-002 fix)", async () => {
+    test("extracts external IP 91.189.92.23 (dst_ip) for OUT direction", async () => {
       const mockLog = {
         peer_id: 1,
         hostname: "ansible",
@@ -1896,6 +1902,7 @@ describe("CraftPolicyWizard", () => {
         () => {
           expect(api.api.get).toHaveBeenCalledWith(
             "/peers/by-ip?ip=91.189.92.23",
+            expect.anything(),
           );
         },
         { timeout: 3000 },
@@ -1910,7 +1917,7 @@ describe("CraftPolicyWizard", () => {
       );
     });
 
-    test("uses src_ip for source peer lookup (TASK-002 fix)", async () => {
+    test("uses src_ip for source peer lookup", async () => {
       const mockLog = {
         peer_id: 1,
         hostname: "ansible",
@@ -1965,7 +1972,7 @@ describe("CraftPolicyWizard", () => {
       );
     });
 
-    test("displays direction as Forward for OUT in policy step (TASK-004/TASK-005)", async () => {
+    test("displays direction as Forward for OUT in policy step", async () => {
       const user = userEvent.setup();
       const mockLog = {
         peer_id: 1,
@@ -2032,17 +2039,17 @@ describe("CraftPolicyWizard", () => {
       expect(forwardArrow).toBeInTheDocument();
       expect(forwardArrow).toBeDisabled();
 
-      // Verify Action displays as ACCEPT badge (TASK-005)
+      // Verify Action displays as ACCEPT badge
       // There are multiple ACCEPT texts, so look for the badge with specific class
       expect(
         screen.getByText("ACCEPT", { selector: ".bg-green-100" }),
       ).toBeInTheDocument();
 
-      // Verify Target Scope displays as "Host + Docker" (TASK-005)
+      // Verify Target Scope displays as "Host + Docker"
       expect(screen.getByText("Host + Docker")).toBeInTheDocument();
     });
 
-    test("has Edit buttons for Source, Target, Service, and Direction in policy step (TASK-004)", async () => {
+    test("has Edit buttons for Source, Target, Service, and Direction in policy step", async () => {
       const user = userEvent.setup();
       const mockLog = {
         peer_id: 1,

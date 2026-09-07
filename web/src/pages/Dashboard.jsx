@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api, QUERY_KEYS } from '../api/client'
 import { REFETCH_INTERVALS } from '../constants'
@@ -11,11 +11,19 @@ import TopBlockedSources from '../components/TopBlockedSources'
 import { Server, Shield, AlertTriangle, Clock, UserPlus, Wifi, WifiOff } from 'lucide-react'
 import { usePendingChanges } from '../contexts/PendingChangesContext'
 import { useWebSocket } from '../hooks/useWebSocket'
+import { logger } from '../utils/logger'
 
 export default function Dashboard() {
   const [liveBlockedCount, setLiveBlockedCount] = useState(0)
   const [liveActivity, setLiveActivity] = useState([])
   const [topSourcesUpdates, setTopSourcesUpdates] = useState({})
+  // Full detail of live DROP events (timestamp + source IP) backing the
+  // aggregate counters above, capped so the tab cannot grow unbounded.
+  const liveEventsRef = useRef([])
+  // Newest event timestamp covered by the last dashboard snapshot. Live
+  // deltas at or below this watermark are already counted server-side.
+  const watermarkRef = useRef(null)
+  const MAX_LIVE_EVENTS = 1000
 
   const { data, isLoading } = useQuery({
     queryKey: QUERY_KEYS.dashboardStats(),
@@ -37,18 +45,42 @@ export default function Dashboard() {
 
   const { totalPendingCount } = usePendingChanges()
 
-  // Reset live state when query data refreshes
+  // Rebase live deltas against each fresh snapshot instead of clearing
+  // them: drop only the events the new server data already covers (by
+  // timestamp watermark) and keep newer ones, so live counts neither
+  // flicker to zero nor double-count on refetch.
   useEffect(() => {
-    if (data) {
-      setLiveBlockedCount(0)
-      setLiveActivity([])
-      setTopSourcesUpdates({})
+    if (!data) return
+    const activity = Array.isArray(data.recent_activity) ? data.recent_activity : []
+    const serverLatest = activity.reduce((latest, a) => {
+      const ts = new Date(a?.timestamp).getTime()
+      return Number.isFinite(ts) ? Math.max(latest, ts) : latest
+    }, 0)
+    // No real server timestamps (empty/invalid snapshot): leave the watermark
+    // unset so the first live DROP after the snapshot is kept, not dropped.
+    if (!serverLatest) {
+      watermarkRef.current = null
+      return
     }
+    watermarkRef.current = serverLatest
+    const remaining = liveEventsRef.current.filter(e => e.ts > serverLatest)
+    liveEventsRef.current = remaining
+    setLiveBlockedCount(remaining.length)
+    setLiveActivity(prev => prev.filter(a => {
+      const ts = new Date(a.timestamp).getTime()
+      return Number.isFinite(ts) && ts > serverLatest
+    }))
+    const rebuilt = {}
+    for (const e of remaining) {
+      if (e.ip) rebuilt[e.ip] = (rebuilt[e.ip] || 0) + 1
+    }
+    setTopSourcesUpdates(rebuilt)
   }, [data])
 
   // WebSocket connection for live blocked events
-  const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-  const wsUrl = `${wsProto}//${window.location.host}/api/v1/logs/stream?action=DROP`
+  const wsProto = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  const wsHost = typeof window !== 'undefined' ? window.location.host : ''
+  const wsUrl = `${wsProto}//${wsHost}/api/v1/logs/stream?action=DROP`
 
   const { connected: isWsConnected } = useWebSocket({
     url: wsUrl,
@@ -61,11 +93,19 @@ export default function Dashboard() {
         // Only process DROP events (should be filtered by server, but double-check)
         if (log.action !== 'DROP') return
 
+        const timestamp = log.timestamp || new Date().toISOString()
+        const ts = new Date(timestamp).getTime()
+        // Skip events the current snapshot already covers so a reconnect
+        // replay cannot double-count them.
+        if (watermarkRef.current != null && Number.isFinite(ts) && ts <= watermarkRef.current) return
+
+        liveEventsRef.current = [...liveEventsRef.current, { ts: Number.isFinite(ts) ? ts : Date.now(), ip: log.src_ip || '' }].slice(-MAX_LIVE_EVENTS)
+
         setLiveBlockedCount(prev => prev + 1)
 
         setLiveActivity(prev => {
           const newActivity = {
-            timestamp: log.timestamp || new Date().toISOString(),
+            timestamp,
             src_ip: log.src_ip,
             dst_ip: log.dst_ip,
             protocol: log.protocol,
@@ -82,7 +122,7 @@ export default function Dashboard() {
           }))
         }
       } catch (e) {
-        console.error('Failed to parse WebSocket message:', e)
+        logger.error('Failed to parse WebSocket message:', e)
       }
     },
   })
@@ -100,9 +140,20 @@ export default function Dashboard() {
     top_blocked_sources: []
   }
 
-  const combinedActivity = liveActivity.length > 0
-    ? liveActivity
-    : stats.recent_activity || []
+  const combinedActivity = useMemo(() => {
+    const serverActivity = stats.recent_activity || []
+    if (liveActivity.length === 0) return serverActivity
+    if (serverActivity.length === 0) return liveActivity
+    const seen = new Set()
+    const merged = []
+    for (const item of [...liveActivity, ...serverActivity]) {
+      const key = `${item?.timestamp}|${item?.src_ip}|${item?.dst_ip}|${item?.protocol}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      merged.push(item)
+    }
+    return merged
+  }, [liveActivity, stats.recent_activity])
 
   const topSources = useMemo(() => {
     const combined = [...(stats.top_blocked_sources || [])].map(source => ({

@@ -1,11 +1,12 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import { FileText, Play, Pause, Trash2, Wifi, WifiOff, X } from 'lucide-react'
 import { api, QUERY_KEYS } from '../api/client'
 import { useDebounce } from '../hooks/useDebounce'
 import { useAuth } from '../hooks/useAuth'
 import { useToastContext } from '../hooks/ToastContext'
 import { useWebSocket } from '../hooks/useWebSocket'
+import { logger } from '../utils/logger'
 import EmptyState from '../components/EmptyState'
 import TableSkeleton from '../components/TableSkeleton'
 import LogLine from '../components/LogLine'
@@ -28,11 +29,25 @@ export default function Logs() {
     offset: 0,
   })
 
-  const debouncedFilter = useDebounce(filter)
+  // Only free-text fields are debounced so selects, dates, limit and
+  // pagination apply immediately while typing stays quiet at 300ms.
+  const textFilter = useMemo(() => ({
+    src_ip: filter.src_ip,
+    dst_port: filter.dst_port,
+  }), [filter.src_ip, filter.dst_port])
+  const debouncedText = useDebounce(textFilter, 300)
+  const debouncedFilter = useMemo(() => ({
+    ...filter,
+    src_ip: debouncedText.src_ip,
+    dst_port: debouncedText.dst_port,
+  }), [filter, debouncedText])
 
   const [liveLogs, setLiveLogs] = useState([])
   const [isPaused, setIsPaused] = useState(false)
   const logsEndRef = useRef(null)
+  // Stick-to-bottom: auto-scroll only while the user is already pinned to
+  // the newest entries, so reading older lines is never yanked away.
+  const stickToBottomRef = useRef(true)
   const isPausedRef = useRef(false)
   const MAX_LIVE_LOGS = 500 // Maximum logs to keep in live mode memory
 
@@ -56,6 +71,9 @@ export default function Logs() {
     )}`, signal),
     enabled: mode === 'historical',
     refetchInterval: mode === 'historical' ? false : false,
+    // Keep the previous page visible while the next one loads so typing
+    // or paging does not flash an empty table.
+    placeholderData: keepPreviousData,
   })
 
   const { data: peers } = useQuery({
@@ -64,8 +82,9 @@ export default function Logs() {
   })
 
   // WebSocket connection for live logs
-  const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-  const wsUrl = `${wsProto}//${window.location.host}/api/v1/logs/stream`
+  const wsProto = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  const wsHost = typeof window !== 'undefined' ? window.location.host : ''
+  const wsUrl = `${wsProto}//${wsHost}/api/v1/logs/stream`
 
   const { connected: isConnected, retryCount } = useWebSocket({
     url: wsUrl,
@@ -75,12 +94,11 @@ export default function Logs() {
       if (isPausedRef.current) return
       try {
         const log = JSON.parse(event.data)
-        setLiveLogs(prev => {
-          const newLogs = [log, ...prev].slice(0, MAX_LIVE_LOGS)
-          return newLogs
-        })
+        // Append newest entries at the bottom so the stream reads top-down
+        // and the stick-to-bottom anchor stays valid.
+        setLiveLogs(prev => [...prev, log].slice(-MAX_LIVE_LOGS))
       } catch (e) {
-        console.error('Failed to parse log message:', e)
+        logger.error('Failed to parse log message:', e)
       }
     },
   })
@@ -93,13 +111,21 @@ export default function Logs() {
   }, [isPaused])
 
   useEffect(() => {
-    if (mode === 'live' && !isPaused) {
+    if (mode === 'live' && !isPaused && stickToBottomRef.current) {
       logsEndRef.current?.scrollIntoView({ behavior: 'smooth' })
     }
   }, [liveLogs, mode, isPaused])
 
+  const handleLiveScroll = useCallback((e) => {
+    const el = e.currentTarget
+    // Consider the view pinned when within a small threshold of the bottom.
+    stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40
+  }, [])
+
   const clearLiveLogs = useCallback(() => {
     setLiveLogs([])
+    // After clearing, the empty view is trivially pinned to the bottom.
+    stickToBottomRef.current = true
   }, [])
 
   return (
@@ -208,13 +234,12 @@ isPaused
                 <label className="text-xs font-medium text-gray-500 dark:text-amber-muted">Limit</label>
                 <select
                   value={filter.limit}
-                  onChange={e => setFilter(f => ({ ...f, limit: parseInt(e.target.value), offset: 0 }))}
+                  onChange={e => setFilter(f => ({ ...f, limit: Math.min(parseInt(e.target.value, 10) || 100, 200), offset: 0 }))}
                   className="px-3 py-2 border border-gray-300 dark:border-gray-border bg-white dark:bg-charcoal-dark text-gray-900 dark:text-light-neutral text-sm focus:ring-2 focus:ring-purple-active focus:border-purple-active rounded-none"
                 >
                   <option value={50}>50 rows</option>
                   <option value={100}>100 rows</option>
                   <option value={200}>200 rows</option>
-                  <option value={500}>500 rows</option>
                 </select>
               </div>
 
@@ -294,7 +319,7 @@ totalItems={data.total}
 
       {mode === 'live' && (
         <div className="bg-white dark:bg-charcoal-dark rounded-none shadow-none overflow-hidden">
-          <div className="overflow-y-auto max-h-[600px]">
+          <div onScroll={handleLiveScroll} className="overflow-y-auto max-h-[600px]">
             {!liveLogs.length ? (
               <div className="p-8 text-center text-gray-500 dark:text-amber-muted">
                 {isReconnecting ? 'Reconnecting...' :

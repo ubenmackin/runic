@@ -78,6 +78,7 @@ func PullBundle(ctx context.Context, client common.HTTPClient, controlPlaneURL, 
 		return fmt.Errorf("bundle fetch: %w", err)
 	}
 	defer func() {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 		if err := resp.Body.Close(); err != nil {
 			log.Warn("Failed to close response body", "error", err)
 		}
@@ -125,6 +126,7 @@ func ConfirmApply(ctx context.Context, client common.HTTPClient, controlPlaneURL
 		return fmt.Errorf("confirm apply: %w", err)
 	}
 	defer func() {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 		if err := resp.Body.Close(); err != nil {
 			log.Warn("Failed to close response body", "error", err)
 		}
@@ -181,14 +183,13 @@ func connectSSE(ctx context.Context, client common.HTTPClient, controlPlaneURL, 
 		return fmt.Errorf("SSE connection failed: %w", err)
 	}
 	defer func() {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 		if err := resp.Body.Close(); err != nil {
 			log.Warn("Failed to close response body", "error", err)
 		}
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		_, _ = io.Copy(io.Discard, resp.Body)
-		_ = resp.Body.Close()
 		return &common.HTTPStatusError{StatusCode: resp.StatusCode, Method: "GET", URL: url}
 	}
 

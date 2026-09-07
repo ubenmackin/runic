@@ -159,7 +159,7 @@ export default function CraftPolicyWizard({ log, onClose, onSuccess }) {
       return;
     }
 
-    let isMounted = true;
+    const controller = new AbortController();
 
     const fetchTargetPeerByIP = async () => {
       setTargetPeerLoading(true);
@@ -167,29 +167,28 @@ export default function CraftPolicyWizard({ log, onClose, onSuccess }) {
       try {
         const peer = await api.get(
           `/peers/by-ip?ip=${encodeURIComponent(externalIP)}`,
+          controller.signal,
         );
-        if (isMounted) {
-          setExistingTargetPeer(peer);
-          setCreateTargetPeerMode(false);
-        }
+        if (controller.signal.aborted) return;
+        setExistingTargetPeer(peer);
+        setCreateTargetPeerMode(false);
       } catch (err) {
-        if (isMounted) {
-          if (err.status === 404) {
-            setTargetPeerError({ message: "No peer found", status: 404 });
-            setCreateTargetPeerMode(true);
-            // Pre-fill hostname with a suggestion
-            setNewTargetPeer((prev) => ({
-              ...prev,
-              hostname: `peer-${externalIP.replace(/\./g, "-")}`,
-              ip_address: externalIP,
-            }));
-          } else {
-            setTargetPeerError({ message: err.message });
-          }
-          setExistingTargetPeer(null);
+        if (controller.signal.aborted || err?.name === "AbortError") return;
+        if (err.status === 404) {
+          setTargetPeerError({ message: "No peer found", status: 404 });
+          setCreateTargetPeerMode(true);
+          // Pre-fill hostname with a suggestion
+          setNewTargetPeer((prev) => ({
+            ...prev,
+            hostname: `peer-${externalIP.replace(/\./g, "-")}`,
+            ip_address: externalIP,
+          }));
+        } else {
+          setTargetPeerError({ message: err.message });
         }
+        setExistingTargetPeer(null);
       } finally {
-        if (isMounted) {
+        if (!controller.signal.aborted) {
           setTargetPeerLoading(false);
         }
       }
@@ -197,7 +196,7 @@ export default function CraftPolicyWizard({ log, onClose, onSuccess }) {
 
     fetchTargetPeerByIP();
     return () => {
-      isMounted = false;
+      controller.abort();
     };
   }, [externalIP]);
 
@@ -212,7 +211,7 @@ export default function CraftPolicyWizard({ log, onClose, onSuccess }) {
       return;
     }
 
-    let isMounted = true;
+    const controller = new AbortController();
 
     const fetchSourcePeer = async () => {
       setSourcePeerLoading(true);
@@ -225,44 +224,48 @@ export default function CraftPolicyWizard({ log, onClose, onSuccess }) {
             // Use dedicated /by-hostname endpoint for exact match lookup
             peer = await api.get(
               `/peers/by-hostname?hostname=${encodeURIComponent(sourceHostname)}`,
+              controller.signal,
             );
-          } catch {
-            // Try by IP if hostname lookup fails
+          } catch (err) {
+            if (controller.signal.aborted || err?.name === "AbortError") return;
+            // Only fall through to IP lookup on 404; surface other errors
+            if (err?.status !== 404) throw err;
           }
         }
         if (!peer && sourceIP) {
           try {
             peer = await api.get(
               `/peers/by-ip?ip=${encodeURIComponent(sourceIP)}`,
+              controller.signal,
             );
-          } catch {
-            // Peer not found
+          } catch (err) {
+            if (controller.signal.aborted || err?.name === "AbortError") return;
+            // Only treat 404 as "not found"; surface other errors
+            if (err?.status !== 404) throw err;
           }
         }
-        if (isMounted) {
-          if (peer) {
-            setExistingSourcePeer(peer);
-          } else {
-            // Create a placeholder for the local source peer (it might not exist in DB yet)
-            setExistingSourcePeer({
-              id: null,
-              hostname: sourceHostname || `local-${sourceIP}`,
-              ip_address: sourceIP,
-            });
-          }
-        }
-      } catch (err) {
-        if (isMounted) {
-          setSourcePeerError({ message: err.message });
-          // Still set a placeholder for the source peer
+        if (controller.signal.aborted) return;
+        if (peer) {
+          setExistingSourcePeer(peer);
+        } else {
+          // Create a placeholder for the local source peer (it might not exist in DB yet)
           setExistingSourcePeer({
             id: null,
             hostname: sourceHostname || `local-${sourceIP}`,
             ip_address: sourceIP,
           });
         }
+      } catch (err) {
+        if (controller.signal.aborted || err?.name === "AbortError") return;
+        setSourcePeerError({ message: err.message });
+        // Still set a placeholder for the source peer
+        setExistingSourcePeer({
+          id: null,
+          hostname: sourceHostname || `local-${sourceIP}`,
+          ip_address: sourceIP,
+        });
       } finally {
-        if (isMounted) {
+        if (!controller.signal.aborted) {
           setSourcePeerLoading(false);
         }
       }
@@ -270,20 +273,20 @@ export default function CraftPolicyWizard({ log, onClose, onSuccess }) {
 
     fetchSourcePeer();
     return () => {
-      isMounted = false;
+      controller.abort();
     };
   }, [log?.hostname, log?.src_ip]);
 
   // Fetch service by port/protocol when entering service step
   useEffect(() => {
     if (step !== "service") return;
-  if (!port && !protocol) {
-    setServiceLoading(false);
-    setServiceError({ message: "No port or protocol found in log" });
-    return;
-  }
+    if (!port && !protocol) {
+      setServiceLoading(false);
+      setServiceError({ message: "No port or protocol found in log" });
+      return;
+    }
 
-    let isMounted = true;
+    const controller = new AbortController();
 
     const fetchServiceByPort = async () => {
       setServiceLoading(true);
@@ -291,22 +294,21 @@ export default function CraftPolicyWizard({ log, onClose, onSuccess }) {
       try {
         const service = await api.get(
           `/services/by-port?port=${port}&protocol=${protocol}`,
+          controller.signal,
         );
-        if (isMounted) {
-          setExistingService(service);
-        }
+        if (controller.signal.aborted) return;
+        setExistingService(service);
       } catch (err) {
-        if (isMounted) {
-          if (err.status === 404) {
-            setServiceError({ message: "No service found", status: 404 });
-            setExistingService(null);
-          } else {
-            setServiceError({ message: err.message });
-            setExistingService(null);
-          }
+        if (controller.signal.aborted || err?.name === "AbortError") return;
+        if (err.status === 404) {
+          setServiceError({ message: "No service found", status: 404 });
+          setExistingService(null);
+        } else {
+          setServiceError({ message: err.message });
+          setExistingService(null);
         }
       } finally {
-        if (isMounted) {
+        if (!controller.signal.aborted) {
           setServiceLoading(false);
         }
       }
@@ -314,7 +316,7 @@ export default function CraftPolicyWizard({ log, onClose, onSuccess }) {
 
     fetchServiceByPort();
     return () => {
-      isMounted = false;
+      controller.abort();
     };
   }, [step, port, protocol]);
 
@@ -343,27 +345,25 @@ export default function CraftPolicyWizard({ log, onClose, onSuccess }) {
   useEffect(() => {
     if (step !== "policy") return;
 
-    let isMounted = true;
+    const controller = new AbortController();
     setPeersLoading(true);
 
     const fetchAllData = async () => {
       try {
         const [peersData, groupsData, servicesData] = await Promise.all([
-          api.get("/peers"),
-          api.get("/groups"),
-          api.get("/services"),
+          api.get("/peers", controller.signal),
+          api.get("/groups", controller.signal),
+          api.get("/services", controller.signal),
         ]);
-        if (isMounted) {
-          setAllPeers(peersData || []);
-          setAllGroups(groupsData || []);
-          setAllServices(servicesData || []);
-        }
+        if (controller.signal.aborted) return;
+        setAllPeers(peersData || []);
+        setAllGroups(groupsData || []);
+        setAllServices(servicesData || []);
       } catch (err) {
-        if (isMounted) {
-          logger.error("Failed to fetch peers/services:", err);
-        }
+        if (controller.signal.aborted || err?.name === "AbortError") return;
+        logger.error("Failed to fetch peers/services:", err);
       } finally {
-        if (isMounted) {
+        if (!controller.signal.aborted) {
           setPeersLoading(false);
         }
       }
@@ -371,7 +371,7 @@ export default function CraftPolicyWizard({ log, onClose, onSuccess }) {
 
     fetchAllData();
     return () => {
-      isMounted = false;
+      controller.abort();
     };
   }, [step]);
 

@@ -6,6 +6,8 @@ import (
 	"strings"
 )
 
+var malformedLineRe = regexp.MustCompile(`^[A-Z].*`)
+
 func validateRules(content string) error {
 	if strings.TrimSpace(content) == "" {
 		return fmt.Errorf("rules content is empty")
@@ -43,7 +45,6 @@ func validateRules(content string) error {
 
 	lines := strings.Split(content, "\n")
 	validLineCount := 0
-	malformedRegex := regexp.MustCompile(`^[A-Z].*`)
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
@@ -71,7 +72,7 @@ func validateRules(content string) error {
 			strings.HasPrefix(trimmed, "add ") {
 			validLineCount++
 		} else if len(trimmed) > 0 {
-			if !malformedRegex.MatchString(trimmed) {
+			if !malformedLineRe.MatchString(trimmed) {
 				maxLen := 50
 				if len(trimmed) < maxLen {
 					maxLen = len(trimmed)
