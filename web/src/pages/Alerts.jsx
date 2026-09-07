@@ -23,6 +23,7 @@ const ALERT_TYPES = [
   { value: 'peer_online', label: 'Peer Online' },
   { value: 'blocked_spike', label: 'Blocked Spike' },
   { value: 'new_peer', label: 'New Peer' },
+  { value: 'agent_updated', label: 'Agent Updated' },
 ]
 
 const SEVERITIES = [
@@ -55,6 +56,7 @@ function AlertTypeTag({ alertType }) {
     peer_online: 'border-blue-500 text-blue-700 dark:text-blue-400',
     blocked_spike: 'border-purple-500 text-purple-700 dark:text-purple-400',
     new_peer: 'border-cyan-500 text-cyan-700 dark:text-cyan-400',
+    agent_updated: 'border-teal-500 text-teal-700 dark:text-teal-400',
   }
   const colorClasses = colorConfig[alertType] || 'border-gray-500 text-gray-700 dark:text-gray-400'
   const displayText = alertType.toUpperCase()

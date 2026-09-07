@@ -13,6 +13,7 @@ const ALERT_TYPE_LABELS = {
   peer_online: 'Peer Online',
   blocked_spike: 'Blocked Traffic Spike',
   new_peer: 'New Peer Registered',
+  agent_updated: 'Agent Updated',
 }
 
 // Throttle options in minutes

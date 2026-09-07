@@ -455,6 +455,55 @@ func TestGetClientIP(t *testing.T) {
 	}
 }
 
+func TestRemoteAddrIP(t *testing.T) {
+	tests := []struct {
+		name       string
+		remoteAddr string
+		xff        string
+		realIP     string
+		want       string
+	}{
+		{
+			name:       "strips port from RemoteAddr",
+			remoteAddr: "192.0.2.1:12345",
+			want:       "192.0.2.1",
+		},
+		{
+			name:       "ignores spoofed X-Forwarded-For",
+			remoteAddr: "10.0.0.1:443",
+			xff:        "203.0.113.9",
+			want:       "10.0.0.1",
+		},
+		{
+			name:       "ignores spoofed X-Real-IP",
+			remoteAddr: "10.0.0.2:443",
+			realIP:     "198.51.100.9",
+			want:       "10.0.0.2",
+		},
+		{
+			name:       "bare IP without port passes through",
+			remoteAddr: "192.0.2.5",
+			want:       "192.0.2.5",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := httptest.NewRequest("GET", "/test", nil)
+			r.RemoteAddr = tt.remoteAddr
+			if tt.xff != "" {
+				r.Header.Set("X-Forwarded-For", tt.xff)
+			}
+			if tt.realIP != "" {
+				r.Header.Set("X-Real-IP", tt.realIP)
+			}
+			if got := RemoteAddrIP(r); got != tt.want {
+				t.Errorf("RemoteAddrIP() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestParseUintSafe(t *testing.T) {
 	tests := []struct {
 		name    string

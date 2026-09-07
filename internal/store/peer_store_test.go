@@ -194,3 +194,62 @@ func TestListPeersSyncStatus(t *testing.T) {
 		}
 	})
 }
+
+func TestUpdatePeerHeartbeatPreservesVersionOnEmpty(t *testing.T) {
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	d := store.db
+
+	result, err := d.ExecContext(ctx,
+		`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, agent_version, bundle_version, is_manual) VALUES (?, ?, ?, ?, ?, ?, 0)`,
+		"heartbeat-peer", "10.0.0.9", "agent-key-hb", "hmac-key-hb", "v1.0.0", "b1")
+	if err != nil {
+		t.Fatalf("insert peer: %v", err)
+	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		t.Fatalf("last insert id: %v", err)
+	}
+	peerID := int(id)
+
+	hostname, prev, known, err := store.UpdatePeerHeartbeatWithPrev(ctx, peerID, "", "", nil)
+	if err != nil {
+		t.Fatalf("heartbeat with empty versions: %v", err)
+	}
+	if !known {
+		t.Error("expected known=true")
+	}
+	if hostname != "heartbeat-peer" {
+		t.Errorf("hostname = %q, want heartbeat-peer", hostname)
+	}
+	if !prev.Valid || prev.String != "v1.0.0" {
+		t.Errorf("prev version = %+v, want v1.0.0", prev)
+	}
+	peer, err := store.GetPeerByID(ctx, peerID)
+	if err != nil {
+		t.Fatalf("get peer: %v", err)
+	}
+	if !peer.AgentVersion.Valid || peer.AgentVersion.String != "v1.0.0" {
+		t.Errorf("stored agent_version = %+v, want v1.0.0 preserved on empty heartbeat", peer.AgentVersion)
+	}
+
+	hostname, prev, known, err = store.UpdatePeerHeartbeatWithPrev(ctx, peerID, "v1.0.1", "b1", nil)
+	if err != nil {
+		t.Fatalf("heartbeat with new version: %v", err)
+	}
+	if !known || !prev.Valid || prev.String != "v1.0.0" {
+		t.Errorf("prev = %+v known=%v, want v1.0.0 for version-change confirmation", prev, known)
+	}
+	if hostname != "heartbeat-peer" {
+		t.Errorf("hostname = %q, want heartbeat-peer", hostname)
+	}
+	peer, err = store.GetPeerByID(ctx, peerID)
+	if err != nil {
+		t.Fatalf("get peer: %v", err)
+	}
+	if !peer.AgentVersion.Valid || peer.AgentVersion.String != "v1.0.1" {
+		t.Errorf("stored agent_version = %+v, want v1.0.1", peer.AgentVersion)
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -627,5 +628,97 @@ func TestFullRotationWorkflow(t *testing.T) {
 
 	if confirmRec.Code != http.StatusOK {
 		t.Errorf("AgentConfirmRotation() failed: %s", confirmRec.Body.String())
+	}
+}
+
+func TestAgentRotateKey_RateLimitIgnoresSpoofedXFF(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	rotateKeyRateLimiter.Reset()
+	defer rotateKeyRateLimiter.Reset()
+
+	h := NewHandler(store.NewPeerStore(database), database, nil, nil, &testSettingsStore{db: database})
+
+	// Same TCP peer rotating X-Forwarded-For/X-Real-IP per request must
+	// share one 10/min bucket keyed on RemoteAddrIP: the first 10 pass
+	// through to the handler (401 for the bogus token), the 11th with a
+	// fresh spoofed header is still 429.
+	remoteAddr := "203.0.113.40:12345"
+	for i := 0; i < 10; i++ {
+		body := map[string]string{
+			"host_id":        "host-test-peer",
+			"rotation_token": "wrong-token",
+		}
+		bodyBytes, _ := json.Marshal(body)
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/agent/rotate-key", bytes.NewReader(bodyBytes))
+		req.Header.Set("Content-Type", "application/json")
+		req.RemoteAddr = remoteAddr
+		req.Header.Set("X-Forwarded-For", fmt.Sprintf("198.51.100.%d", i+1))
+		req.Header.Set("X-Real-IP", fmt.Sprintf("192.0.2.%d", i+1))
+		rec := httptest.NewRecorder()
+		h.AgentRotateKey(rec, req)
+		if rec.Code == http.StatusTooManyRequests {
+			t.Fatalf("rate limited too early at request %d with rotated XFF", i+1)
+		}
+	}
+
+	body := map[string]string{
+		"host_id":        "host-test-peer",
+		"rotation_token": "wrong-token",
+	}
+	bodyBytes, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/agent/rotate-key", bytes.NewReader(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = remoteAddr
+	req.Header.Set("X-Forwarded-For", "198.51.100.99")
+	req.Header.Set("X-Real-IP", "192.0.2.99")
+	rec := httptest.NewRecorder()
+	h.AgentRotateKey(rec, req)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Errorf("expected 429 on 11th request with rotated XFF, got %d (XFF rotation bypassed rotate-key limiter)", rec.Code)
+	}
+}
+
+func TestAgentConfirmRotation_RateLimitIgnoresSpoofedXFF(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	confirmRotationRateLimiter.Reset()
+	defer confirmRotationRateLimiter.Reset()
+
+	h := NewHandler(store.NewPeerStore(database), database, nil, nil, &testSettingsStore{db: database})
+
+	// Same TCP peer rotating X-Forwarded-For/X-Real-IP per request must
+	// share one 20/min bucket keyed on RemoteAddrIP: the first 20 pass
+	// through to the handler (404 for the unknown host), the 21st with a
+	// fresh spoofed header is still 429.
+	remoteAddr := "203.0.113.41:12345"
+	for i := 0; i < 20; i++ {
+		body := map[string]string{"host_id": "host-nonexistent-peer"}
+		bodyBytes, _ := json.Marshal(body)
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/agent/confirm-rotation", bytes.NewReader(bodyBytes))
+		req.Header.Set("Content-Type", "application/json")
+		req.RemoteAddr = remoteAddr
+		req.Header.Set("X-Forwarded-For", fmt.Sprintf("198.51.100.%d", i+1))
+		req.Header.Set("X-Real-IP", fmt.Sprintf("192.0.2.%d", i+1))
+		rec := httptest.NewRecorder()
+		h.AgentConfirmRotation(rec, req)
+		if rec.Code == http.StatusTooManyRequests {
+			t.Fatalf("rate limited too early at request %d with rotated XFF", i+1)
+		}
+	}
+
+	body := map[string]string{"host_id": "host-nonexistent-peer"}
+	bodyBytes, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/agent/confirm-rotation", bytes.NewReader(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = remoteAddr
+	req.Header.Set("X-Forwarded-For", "198.51.100.99")
+	req.Header.Set("X-Real-IP", "192.0.2.99")
+	rec := httptest.NewRecorder()
+	h.AgentConfirmRotation(rec, req)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Errorf("expected 429 on 21st request with rotated XFF, got %d (XFF rotation bypassed confirm-rotation limiter)", rec.Code)
 	}
 }

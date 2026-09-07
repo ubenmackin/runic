@@ -579,6 +579,11 @@ func TestHandleUpdateAgent(t *testing.T) {
 		t.Cleanup(func() { UpdateBinaryPath = origUpdateBinaryPath })
 		UpdateBinaryPath = binaryPath
 
+		// Shorten retry backoff so all attempts finish within the wait below.
+		origDelays := updateRetryDelays
+		t.Cleanup(func() { updateRetryDelays = origDelays })
+		updateRetryDelays = []time.Duration{10 * time.Millisecond, 10 * time.Millisecond, 10 * time.Millisecond}
+
 		exitCh := make(chan int, 1)
 		agent := &Agent{
 			httpClient: server.Client(),
@@ -593,12 +598,11 @@ func TestHandleUpdateAgent(t *testing.T) {
 		agent.handleUpdateAgent(context.Background(), server.URL)
 
 		// Wait for either exitFunc to be called (shouldn't happen) or a timeout.
-		// Since the server returns 500 immediately, the goroutine should complete
-		// well within 2 seconds.
+		// Retries use short backoff above so the goroutine completes quickly.
 		select {
 		case <-exitCh:
 			t.Error("expected exitFunc NOT to be called on download failure")
-		case <-time.After(2 * time.Second):
+		case <-time.After(5 * time.Second):
 			// Expected: exitFunc was not called
 		}
 
@@ -607,6 +611,9 @@ func TestHandleUpdateAgent(t *testing.T) {
 		logOutput := logBuf.String()
 		if !strings.Contains(logOutput, "download") && !strings.Contains(logOutput, "update") {
 			t.Errorf("expected error log about download/update failure, got: %q", logOutput)
+		}
+		if got := agent.getLastUpdateError(); got == "" {
+			t.Error("expected last update error to be recorded for heartbeat reporting, got empty")
 		}
 	})
 

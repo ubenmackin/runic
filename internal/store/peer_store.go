@@ -6,6 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"time"
+
+	"github.com/golang-jwt/jwt/v5"
 
 	"runic/internal/api/common"
 	ic "runic/internal/common"
@@ -20,8 +23,10 @@ const peerRowColumns = `id, hostname, ip_address, os_type, arch, has_docker, age
 const ruleBundleRowColumns = `id, peer_id, version, version_number, rules_content, hmac, created_at, applied_at, first_applied_at`
 
 // updatePeerHeartbeatSQL is the shared heartbeat UPDATE used by both
-// UpdatePeerHeartbeat and UpdatePeerHeartbeatWithPrev.
-const updatePeerHeartbeatSQL = `UPDATE peers SET last_heartbeat = CURRENT_TIMESTAMP, status = 'online', agent_version = ?, bundle_version = ?, has_ipset = ? WHERE id = ?`
+// UpdatePeerHeartbeat and UpdatePeerHeartbeatWithPrev. Empty version strings
+// preserve the stored value so a heartbeat with a missing version cannot
+// erase the confirmation signal used to track agent self-updates.
+const updatePeerHeartbeatSQL = `UPDATE peers SET last_heartbeat = CURRENT_TIMESTAMP, status = 'online', agent_version = COALESCE(NULLIF(?, ''), agent_version), bundle_version = COALESCE(NULLIF(?, ''), bundle_version), has_ipset = ? WHERE id = ?`
 
 // countPolicyRefsForPeerIPSQL counts policy references to a peer IP on both
 // the source and target sides. Shared by DeletePeerIPIfOrphan,
@@ -900,8 +905,13 @@ func (s *PeerStore) GetPeerWithAgentVersion(ctx context.Context, peerID int) (ho
 }
 
 // ListAgentBasedPeers returns all non-manual (agent-based) peers, ordered by hostname.
+// agent_version is included so bulk fan-out can apply the version-skip
+// without an N+1 GetPeerWithAgentVersion lookup per peer. arch is included
+// so the update fan-out can reject unsupported arches (armv6/other, which
+// have no servable self-update binary) as failed_validation instead of a
+// dishonest sent that 404s on download.
 func (s *PeerStore) ListAgentBasedPeers(ctx context.Context) ([]PeerView, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT id, hostname FROM peers WHERE is_manual = 0 ORDER BY hostname")
+	rows, err := s.db.QueryContext(ctx, "SELECT id, hostname, COALESCE(agent_version, ''), COALESCE(arch, '') FROM peers WHERE is_manual = 0 ORDER BY hostname")
 	if err != nil {
 		return nil, fmt.Errorf("query agent-based peers: %w", err)
 	}
@@ -910,7 +920,7 @@ func (s *PeerStore) ListAgentBasedPeers(ctx context.Context) ([]PeerView, error)
 	var peers []PeerView
 	for rows.Next() {
 		var p PeerView
-		if err := rows.Scan(&p.ID, &p.Hostname); err != nil {
+		if err := rows.Scan(&p.ID, &p.Hostname, &p.AgentVersion, &p.Arch); err != nil {
 			return nil, fmt.Errorf("scan agent-based peer: %w", err)
 		}
 		peers = append(peers, p)
@@ -1017,12 +1027,79 @@ func (s *PeerStore) CheckPendingChangeExists(ctx context.Context, peerID int, ch
 	return true, nil
 }
 
-func (s *PeerStore) UpdatePeerReRegistration(ctx context.Context, peerID int, agentToken, agentVersion string, hasDocker bool, hasIPSet *bool) error {
-	_, err := s.db.ExecContext(ctx,
-		"UPDATE peers SET agent_token = ?, status = 'online', agent_version = ?, has_docker = ?, has_ipset = ? WHERE id = ?",
-		agentToken, agentVersion, hasDocker, hasIPSet, peerID)
+// extractSupersededAgentJTI extracts the jti and expiry of a superseded agent
+// JWT for revocation. It parses without signature verification because the
+// token value comes from our own peers table (not caller input); a missing,
+// empty, identical-to-new, or unparsable token yields no revocation. An
+// unparsable expiry falls back to now+72h to match the agent token lifetime.
+func extractSupersededAgentJTI(oldToken sql.NullString, newToken string) (string, time.Time) {
+	fallbackExp := time.Now().UTC().Add(72 * time.Hour)
+	if !oldToken.Valid || oldToken.String == "" || oldToken.String == newToken {
+		return "", fallbackExp
+	}
+	parser := jwt.NewParser(jwt.WithoutClaimsValidation())
+	parsed, _, err := parser.ParseUnverified(oldToken.String, jwt.MapClaims{})
 	if err != nil {
+		return "", fallbackExp
+	}
+	claims, ok := parsed.Claims.(jwt.MapClaims)
+	if !ok {
+		return "", fallbackExp
+	}
+	jti, _ := claims["jti"].(string)
+	if jti == "" {
+		return "", fallbackExp
+	}
+	exp := fallbackExp
+	switch v := claims["exp"].(type) {
+	case float64:
+		exp = time.Unix(int64(v), 0).UTC()
+	case int64:
+		exp = time.Unix(v, 0).UTC()
+	}
+	return jti, exp
+}
+
+// UpdatePeerReRegistration rotates the stored agent token for an existing
+// peer and revokes the superseded JWT jti so a stolen pre-rotation token
+// cannot remain valid alongside the new one. Revocation is best-effort and
+// atomic with the token overwrite: the old jti is inserted into
+// revoked_tokens (OR IGNORE for idempotency) in the same transaction.
+func (s *PeerStore) UpdatePeerReRegistration(ctx context.Context, peerID int, agentToken, agentVersion string, hasDocker bool, hasIPSet *bool) error {
+	var oldToken sql.NullString
+	if err := s.db.QueryRowContext(ctx, "SELECT agent_token FROM peers WHERE id = ?", peerID).Scan(&oldToken); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("fetch old agent token for revocation: %w", err)
+	}
+	oldJTI, oldExp := extractSupersededAgentJTI(oldToken, agentToken)
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin re-registration tx: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	if _, err := tx.ExecContext(ctx,
+		"UPDATE peers SET agent_token = ?, status = 'online', agent_version = ?, has_docker = ?, has_ipset = ? WHERE id = ?",
+		agentToken, agentVersion, hasDocker, hasIPSet, peerID); err != nil {
 		return fmt.Errorf("update peer re-registration: %w", err)
 	}
+
+	if oldJTI != "" {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT OR IGNORE INTO revoked_tokens (unique_id, expires_at, token_type) VALUES (?, ?, 'agent')`,
+			oldJTI, oldExp.UTC().Format(time.RFC3339)); err != nil {
+			return fmt.Errorf("revoke superseded agent token: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit re-registration tx: %w", err)
+	}
+	committed = true
 	return nil
 }

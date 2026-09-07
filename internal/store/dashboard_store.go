@@ -4,12 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"strings"
 	"time"
 
 	ic "runic/internal/common"
 	"runic/internal/common/constants"
-	"runic/internal/common/log"
 	"runic/internal/db"
 	"runic/internal/importer"
 	"runic/internal/models"
@@ -40,24 +38,34 @@ func (s *DashboardStore) GetSecret(ctx context.Context, key string) (string, err
 	return value, nil
 }
 
-// Firewall event types and actions for synthetic lifecycle events stored in
-// firewall_logs. Firewall traffic uses event_type IN/OUT with action
-// ACCEPT/DROP/REJECT; lifecycle events use a distinct event_type so the Logs
-// UI can filter them without affecting DROP-based dashboard statistics.
+// Firewall event types and actions.
+//
+// firewall_logs is firewall traffic only (event_type IN/OUT). Runic activity
+// lives in alert_history via AlertService.TriggerAlert.
+//
+// Deprecated: FirewallEventAgentUpdate and FirewallActionInfo describe the
+// legacy synthetic agent-update lifecycle rows in firewall_logs. No new rows
+// of this kind are written; use PurgeAgentUpdateLogs to remove existing ones.
 const (
-	// FirewallEventAgentUpdate marks agent self-update lifecycle events
-	// (operator-triggered update notifications and agent version changes).
+	// Deprecated: FirewallEventAgentUpdate marks legacy agent self-update
+	// lifecycle events. Retained for cleanup of existing rows only.
 	FirewallEventAgentUpdate = "agent_update"
-	// FirewallActionInfo marks informational lifecycle events. Dashboard
-	// blocked-traffic queries filter on action='DROP', so info rows are
-	// excluded from those counts by construction.
+	// Deprecated: FirewallActionInfo marks legacy informational lifecycle
+	// events. Retained for cleanup of existing rows only.
 	FirewallActionInfo = "info"
 )
 
+// BlockedTrafficFilter is the canonical filter for blocked firewall traffic.
+// It aliases models.DropActionFilter used by the alert evaluator and spike
+// detector so dashboard counts agree with spike detection. All dashboard
+// queries over firewall_logs must use this constant instead of hardcoding
+// action = 'DROP'.
+const BlockedTrafficFilter = models.DropActionFilter
+
 // FirewallLogEntry represents a single firewall log event to be inserted.
-// EventType maps to the event_type column (IN/OUT for firewall traffic,
-// agent_update for lifecycle events). Direction is a deprecated alias kept
-// for backward compatibility; EventType takes precedence when both are set.
+// EventType maps to the event_type column (IN/OUT for firewall traffic).
+// Direction is a deprecated alias kept for backward compatibility;
+// EventType takes precedence when both are set.
 type FirewallLogEntry struct {
 	PeerID       string
 	PeerHostname string
@@ -96,37 +104,54 @@ func (s *DashboardStore) InsertFirewallLog(ctx context.Context, entry *FirewallL
 	return nil
 }
 
-// InsertAgentUpdateLog records an agent-update lifecycle event in firewall_logs
-// so it surfaces in the Logs UI alongside firewall traffic. It is best-effort:
-// callers must not fail the originating request when persistence fails, and
-// log only a warning. Unlike the earlier silent no-op, an unconfigured
-// logsDB now returns an error so callers can detect the misconfiguration.
-// The row uses event_type agent_update with action info, leaving DROP-based
-// dashboard statistics and the log retention worker (timestamp-ordered deletes)
-// unaffected. alert_history is intentionally untouched.
-func (s *DashboardStore) InsertAgentUpdateLog(ctx context.Context, peerID, hostname, initiatedBy, instanceURL, detail string) error {
-	if s == nil || s.logsDB == nil {
-		log.WarnContext(ctx, "agent update log dropped: logs database not configured", "peer_id", peerID, "hostname", hostname)
-		return fmt.Errorf("insert agent update log: logs database not configured")
+// PurgeAgentUpdateLogs deletes legacy agent-update lifecycle rows
+// (event_type agent_update) from firewall_logs in both the logs database and
+// the legacy main-database copy. Missing tables are treated as already clean.
+// It returns the total number of rows deleted across both databases.
+func (s *DashboardStore) PurgeAgentUpdateLogs(ctx context.Context) (int64, error) {
+	var total int64
+	if s == nil {
+		return 0, nil
 	}
-	if initiatedBy == "" {
-		initiatedBy = "unknown"
+	if s.logsDB != nil {
+		n, err := deleteAgentUpdateRows(ctx, s.logsDB)
+		if err != nil {
+			return total, fmt.Errorf("purge agent update logs from logs DB: %w", err)
+		}
+		total += n
 	}
-	parts := []string{fmt.Sprintf("initiated_by=%s", initiatedBy)}
-	if instanceURL != "" {
-		parts = append(parts, fmt.Sprintf("control_plane_url=%s", instanceURL))
+	if s.db != nil {
+		n, err := deleteAgentUpdateRows(ctx, s.db)
+		if err != nil {
+			return total, fmt.Errorf("purge agent update logs from main DB: %w", err)
+		}
+		total += n
 	}
-	if detail != "" {
-		parts = append(parts, detail)
+	return total, nil
+}
+
+// deleteAgentUpdateRows removes firewall_logs rows with event_type agent_update.
+// A missing firewall_logs table means there is nothing to purge.
+func deleteAgentUpdateRows(ctx context.Context, q db.Querier) (int64, error) {
+	if q == nil {
+		return 0, nil
 	}
-	return s.InsertFirewallLog(ctx, &FirewallLogEntry{
-		PeerID:       peerID,
-		PeerHostname: hostname,
-		Timestamp:    time.Now().UTC().Format("2006-01-02 15:04:05"),
-		EventType:    FirewallEventAgentUpdate,
-		Action:       FirewallActionInfo,
-		RawLine:      strings.Join(parts, "; "),
-	})
+	var tableExists bool
+	if err := q.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='firewall_logs'").Scan(&tableExists); err != nil {
+		return 0, fmt.Errorf("check firewall_logs table: %w", err)
+	}
+	if !tableExists {
+		return 0, nil
+	}
+	result, err := q.ExecContext(ctx, "DELETE FROM firewall_logs WHERE event_type = ?", FirewallEventAgentUpdate)
+	if err != nil {
+		return 0, fmt.Errorf("delete agent update logs: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("rows affected: %w", err)
+	}
+	return affected, nil
 }
 
 // ParseBackupSession parses an import session's raw backup data. It requires
@@ -258,7 +283,7 @@ func (s *DashboardStore) GetBlockedCounts(ctx context.Context) (blockedLastHour,
 		COALESCE(SUM(CASE WHEN timestamp > datetime('now', '-1 hour') THEN 1 ELSE 0 END), 0) as blocked_last_hour,
 		COUNT(*) as blocked_last_24h
 		FROM firewall_logs
-		WHERE action = 'DROP' AND timestamp > datetime('now', '-24 hours')`
+		WHERE ` + BlockedTrafficFilter + ` AND timestamp > datetime('now', '-24 hours')`
 
 	err = s.logsDB.QueryRowContext(ctx, query).Scan(&blockedLastHour, &blockedLast24h)
 	if err != nil {
@@ -271,7 +296,7 @@ func (s *DashboardStore) GetRecentActivity(ctx context.Context, limit int) ([]mo
 	query := `
 		SELECT timestamp, source_ip, dest_ip, protocol, action, peer_hostname
 		FROM firewall_logs
-		WHERE action = 'DROP'
+		WHERE ` + BlockedTrafficFilter + `
 		ORDER BY timestamp DESC
 		LIMIT ?`
 
@@ -344,7 +369,7 @@ func (s *DashboardStore) GetTopBlockedSources(ctx context.Context, limit int) ([
 	query := `
 		SELECT source_ip, COUNT(*) as count
 		FROM firewall_logs
-		WHERE action = 'DROP' AND timestamp > datetime('now', '-24 hours')
+		WHERE ` + BlockedTrafficFilter + ` AND timestamp > datetime('now', '-24 hours')
 		GROUP BY source_ip
 		ORDER BY count DESC
 		LIMIT ?`

@@ -59,6 +59,22 @@ func (e *ConditionEvaluator) EvaluateRule(ctx context.Context, rule *AlertRule) 
 		event, err = e.evaluateBlockedSpike(ctx, rule)
 	case AlertTypeBundleDeployed:
 		event, err = e.evaluateBundleDeployed(ctx, rule)
+	case AlertTypeAgentUpdated:
+		// Direct-trigger only: operator-initiated agent update notifications
+		// are recorded via Service.TriggerAlert from the peers handler.
+		// There is no scheduled condition to evaluate.
+		return false, nil, nil
+	case AlertTypePeerOnline:
+		// Direct-trigger only: peer online transitions are detected by
+		// PeerMonitor.triggerPeerOnlineAlert, which applies grace-period
+		// suppression and offline-alert dedupe before calling
+		// Service.TriggerAlert. There is no scheduled condition to evaluate.
+		return false, nil, nil
+	case AlertTypeNewPeer:
+		// Direct-trigger only: new peer registrations are reported by the
+		// agent registration handler via Service.TriggerAlert at register
+		// time. There is no scheduled condition to evaluate.
+		return false, nil, nil
 	default:
 		return false, nil, fmt.Errorf("unknown alert type: %s", rule.AlertType)
 	}
@@ -206,12 +222,15 @@ func (e *ConditionEvaluator) evaluateBundleFailed(ctx context.Context, rule *Ale
 	window := time.Duration(rule.ThresholdWindowMinutes) * time.Minute
 	cutoff := time.Now().Add(-window)
 
+	// Agent-update fan-out reuses push_jobs for audit with agent_-prefixed
+	// job IDs; those rows must never count as bundle failures.
 	rows, err := e.database.QueryContext(ctx, `
 		SELECT DISTINCT pjp.peer_id, p.hostname, pjp.error_message
 		FROM push_job_peers pjp
 		JOIN push_jobs pj ON pjp.job_id = pj.id
 		JOIN peers p ON pjp.peer_id = p.id
 		WHERE pjp.status = 'failed'
+		AND pj.id NOT LIKE 'agent\_%' ESCAPE '\'
 		AND pj.created_at >= ?
 	`, cutoff)
 	if err != nil {
@@ -270,15 +289,11 @@ func (e *ConditionEvaluator) evaluateBundleFailed(ctx context.Context, rule *Ale
 
 func (e *ConditionEvaluator) checkBundleFailedByID(ctx context.Context, rule *AlertRule, peerID int) (*AlertEvent, error) {
 	window := time.Duration(rule.ThresholdWindowMinutes) * time.Minute
-	isFailed, err := e.CheckBundleFailed(ctx, peerID)
-	if err != nil {
-		return nil, err
-	}
 
-	if !isFailed {
-		return nil, nil
-	}
-
+	// Evaluate strictly within the rule window via countConsecutiveFailures,
+	// consistent with the global path. Do not gate on CheckBundleFailed's
+	// fixed 1h probe first: long-window rules would false-negative when the
+	// failures fall outside the last hour.
 	failCount, err := e.countConsecutiveFailures(ctx, peerID, window)
 	if err != nil {
 		return nil, err
@@ -321,6 +336,7 @@ func (e *ConditionEvaluator) countConsecutiveFailures(ctx context.Context, peerI
 		JOIN push_jobs pj ON pjp.job_id = pj.id
 		WHERE pjp.peer_id = ?
 		AND pjp.status = 'failed'
+		AND pj.id NOT LIKE 'agent\_%' ESCAPE '\'
 		AND pj.created_at >= ?
 	`, peerID, cutoff).Scan(&count)
 
@@ -453,7 +469,9 @@ func (e *ConditionEvaluator) CheckPeerOffline(ctx context.Context, peerID int) (
 	return true, duration
 }
 
-// CheckBundleFailed returns true if there are recent bundle failures.
+// CheckBundleFailed returns true if there are recent bundle failures within the
+// last hour. It is a convenience probe for direct callers; scheduled rule
+// evaluation uses the rule's ThresholdWindowMinutes via countConsecutiveFailures.
 func (e *ConditionEvaluator) CheckBundleFailed(ctx context.Context, peerID int) (bool, error) {
 
 	cutoff := time.Now().Add(-1 * time.Hour)
@@ -465,6 +483,7 @@ func (e *ConditionEvaluator) CheckBundleFailed(ctx context.Context, peerID int) 
 		JOIN push_jobs pj ON pjp.job_id = pj.id
 		WHERE pjp.peer_id = ?
 		AND pjp.status = 'failed'
+		AND pj.id NOT LIKE 'agent\_%' ESCAPE '\'
 		AND pj.created_at >= ?
 	`, peerID, cutoff).Scan(&failCount)
 

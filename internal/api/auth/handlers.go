@@ -128,8 +128,10 @@ func (h *Handler) HandleSetupGET(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Rate limit check based on IP to prevent enumeration
-	if err := CheckSetupGetRateLimit(common.GetClientIP(r)); err != nil {
+	// Rate limit check keyed on RemoteAddrIP (TCP peer, port-stripped),
+	// ignoring X-Forwarded-For/X-Real-IP so header rotation cannot bypass
+	// the per-IP limit on direct exposure. See common.RemoteAddrIP.
+	if err := CheckSetupGetRateLimit(common.RemoteAddrIP(r)); err != nil {
 		common.RespondError(w, http.StatusTooManyRequests, err.Error())
 		return
 	}
@@ -153,9 +155,11 @@ func (h *Handler) HandleSetupPOST(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Rate limit check based on IP to prevent enumeration/abuse
+	// Rate limit check keyed on RemoteAddrIP (TCP peer, port-stripped) to
+	// prevent enumeration/abuse. X-Forwarded-For/X-Real-IP are ignored so
+	// header rotation cannot bypass the limit on direct exposure.
 	// POST has a stricter limit than GET since it creates an admin user.
-	if err := CheckSetupPostRateLimit(common.GetClientIP(r)); err != nil {
+	if err := CheckSetupPostRateLimit(common.RemoteAddrIP(r)); err != nil {
 		common.RespondError(w, http.StatusTooManyRequests, err.Error())
 		return
 	}
@@ -219,7 +223,7 @@ func (h *Handler) HandleSetupPOST(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.InfoContext(r.Context(), "user created", "username", body.Username, "remote_addr", common.GetClientIP(r))
+	log.InfoContext(r.Context(), "user created", "username", body.Username, "remote_addr", common.RemoteAddrIP(r))
 
 	accessToken, refreshToken, err := h.GenerateTokenPair(ctx, body.Username)
 	if err != nil {
@@ -257,8 +261,12 @@ func (h *Handler) HandleLoginPOST(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Rate limit check
-	if err := CheckAndRecordFailure(r.Context(), body.Username, common.GetClientIP(r)); err != nil {
+	// Rate limit check keyed on the TCP peer IP (RemoteAddrIP, port-stripped)
+	// combined with the username inside CheckAndRecordFailure. Proxy headers
+	// are deliberately ignored so rotating X-Forwarded-For/X-Real-IP per
+	// guess cannot yield a fresh username:IP bucket and bypass the
+	// 5-attempt/15-minute lockout on direct exposure. See common.RemoteAddrIP.
+	if err := CheckAndRecordFailure(r.Context(), body.Username, common.RemoteAddrIP(r)); err != nil {
 		common.RespondError(w, http.StatusTooManyRequests, err.Error())
 		return
 	}
@@ -268,19 +276,19 @@ func (h *Handler) HandleLoginPOST(w http.ResponseWriter, r *http.Request) {
 
 	creds, err := h.UserStore.GetCredentials(ctx, body.Username)
 	if err != nil {
-		log.WarnContext(r.Context(), "login failed - unknown user", "username", body.Username, "remote_addr", common.GetClientIP(r))
+		log.WarnContext(r.Context(), "login failed - unknown user", "username", body.Username, "remote_addr", common.RemoteAddrIP(r))
 		common.RespondError(w, http.StatusUnauthorized, "Invalid credentials")
 		return
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(creds.PasswordHash), []byte(body.Password)); err != nil {
-		log.WarnContext(r.Context(), "login failed - invalid password", "username", body.Username, "remote_addr", common.GetClientIP(r))
+		log.WarnContext(r.Context(), "login failed - invalid password", "username", body.Username, "remote_addr", common.RemoteAddrIP(r))
 		common.RespondError(w, http.StatusUnauthorized, "Invalid credentials")
 		return
 	}
 
 	RecordSuccess(body.Username)
-	log.InfoContext(r.Context(), "user authenticated", "username", body.Username, "remote_addr", common.GetClientIP(r))
+	log.InfoContext(r.Context(), "user authenticated", "username", body.Username, "remote_addr", common.RemoteAddrIP(r))
 
 	accessToken, refreshToken, err := h.GenerateTokenPair(ctx, body.Username)
 	if err != nil {

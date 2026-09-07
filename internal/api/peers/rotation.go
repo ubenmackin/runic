@@ -191,7 +191,13 @@ func (h *Handler) AgentRotateKey(w http.ResponseWriter, r *http.Request) {
 		common.RespondError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
-	if rotateKeyRateLimiter.Check(common.GetClientIP(r)) != nil {
+	// Rate limit keyed on RemoteAddrIP (TCP peer, port-stripped),
+	// ignoring X-Forwarded-For/X-Real-IP so header rotation cannot yield
+	// a fresh bucket per guess and brute-force rotation tokens on direct
+	// exposure. See common.RemoteAddrIP and middleware.StrictMiddleware.
+	// Paired with stripSpoofableProxyHeaders at the route level (see
+	// internal/api) so logging also observes the true peer address.
+	if rotateKeyRateLimiter.Check(common.RemoteAddrIP(r)) != nil {
 		common.RespondError(w, http.StatusTooManyRequests, "rate limit exceeded")
 		return
 	}
@@ -240,7 +246,13 @@ func (h *Handler) AgentConfirmRotation(w http.ResponseWriter, r *http.Request) {
 		common.RespondError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
-	if confirmRotationRateLimiter.Check(common.GetClientIP(r)) != nil {
+	// Rate limit keyed on RemoteAddrIP (TCP peer, port-stripped),
+	// ignoring X-Forwarded-For/X-Real-IP so header rotation cannot yield
+	// a fresh bucket per guess and enumerate rotation tokens on direct
+	// exposure. See common.RemoteAddrIP and middleware.StrictMiddleware.
+	// Paired with stripSpoofableProxyHeaders at the route level (see
+	// internal/api) so logging also observes the true peer address.
+	if confirmRotationRateLimiter.Check(common.RemoteAddrIP(r)) != nil {
 		common.RespondError(w, http.StatusTooManyRequests, "rate limit exceeded")
 		return
 	}

@@ -13,10 +13,14 @@ import (
 	"runic/internal/models"
 )
 
-func SendHeartbeat(ctx context.Context, client common.HTTPClient, controlPlaneURL, hostID, bundleVersion, token, version string, allIPs []string) error {
+func SendHeartbeat(ctx context.Context, client common.HTTPClient, controlPlaneURL, hostID, bundleVersion, token, version string, allIPs []string, lastUpdateError ...string) error {
 	uptime := getUptime()
 	load := getLoad1m()
 
+	updateErr := ""
+	if len(lastUpdateError) > 0 {
+		updateErr = lastUpdateError[0]
+	}
 	body := models.HeartbeatRequest{
 		HostID:               hostID,
 		BundleVersionApplied: bundleVersion,
@@ -25,6 +29,7 @@ func SendHeartbeat(ctx context.Context, client common.HTTPClient, controlPlaneUR
 		AgentVersion:         version,
 		HasIPSet:             boolPtr(common.DetectIPSet()),
 		AllIPs:               allIPs,
+		LastUpdateError:      updateErr,
 	}
 
 	resp, err := common.DoJSONRequest(ctx, client, "POST", controlPlaneURL+"/api/v1/agent/heartbeat", body, token, "runic-agent/"+version)

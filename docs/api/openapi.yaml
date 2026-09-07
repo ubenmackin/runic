@@ -4545,7 +4545,7 @@ components:
           format: uint
         alert_type:
           type: string
-          enum: [peer_offline, bundle_failed, blocked_spike, peer_online, new_peer, bundle_deployed]
+          enum: [peer_offline, bundle_failed, blocked_spike, peer_online, new_peer, bundle_deployed, agent_updated]
         peer_id:
           type: integer
           nullable: true
@@ -4586,7 +4586,7 @@ components:
           maxLength: 255
         alert_type:
           type: string
-          enum: [peer_offline, bundle_failed, blocked_spike, peer_online, new_peer, bundle_deployed]
+          enum: [peer_offline, bundle_failed, blocked_spike, peer_online, new_peer, bundle_deployed, agent_updated]
         enabled:
           type: boolean
         threshold_value:
@@ -4620,7 +4620,7 @@ components:
           maxLength: 255
         alert_type:
           type: string
-          enum: [peer_offline, bundle_failed, blocked_spike, peer_online, new_peer, bundle_deployed]
+          enum: [peer_offline, bundle_failed, blocked_spike, peer_online, new_peer, bundle_deployed, agent_updated]
         enabled:
           type: boolean
           default: true
@@ -4648,7 +4648,7 @@ components:
           maxLength: 255
         alert_type:
           type: string
-          enum: [peer_offline, bundle_failed, blocked_spike, peer_online, new_peer, bundle_deployed]
+          enum: [peer_offline, bundle_failed, blocked_spike, peer_online, new_peer, bundle_deployed, agent_updated]
         enabled:
           type: boolean
         threshold_value:
@@ -4675,7 +4675,7 @@ components:
           format: uint
         alert_type:
           type: string
-          enum: [peer_offline, bundle_failed, blocked_spike, peer_online, new_peer, bundle_deployed]
+          enum: [peer_offline, bundle_failed, blocked_spike, peer_online, new_peer, bundle_deployed, agent_updated]
         peer_id:
           type: integer
           nullable: true

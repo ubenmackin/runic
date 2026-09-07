@@ -746,3 +746,57 @@ func TestConnectSSEConnectionErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateUpdateURLShape(t *testing.T) {
+	tests := []struct {
+		name    string
+		raw     string
+		wantErr bool
+	}{
+		{"https host passes", "https://runic.example.com", false},
+		{"https with port passes", "https://runic.example.com:60443", false},
+		{"http loopback passes", "http://localhost:60443", false},
+		{"http 127 loopback passes", "http://127.0.0.1:60443", false},
+		{"http ipv6 loopback passes", "http://[::1]:60443", false},
+		{"missing host fails", "https://", true},
+		{"empty fails", "", true},
+		{"unsupported scheme fails", "ftp://runic.example.com", true},
+		{"non-loopback http fails", "http://runic.example.com", true},
+		{"non-loopback http with port fails", "http://runic.example.com:80", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateUpdateURLShape(tt.raw)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateUpdateURLShape(%q) error = %v, wantErr %v", tt.raw, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateUpdateURLShape_MatchesValidateUpdateURL(t *testing.T) {
+	// The shape helper is the single canonical validator shared with the
+	// server fan-out: ValidateUpdateURL with an empty configured URL must
+	// agree with the shape-only check.
+	for _, raw := range []string{
+		"https://runic.example.com",
+		"http://localhost:60443",
+		"http://runic.example.com",
+		"https://",
+		"",
+	} {
+		shapeErr := ValidateUpdateURLShape(raw)
+		fullErrMsg := ""
+		if _, err := ValidateUpdateURL(raw, ""); err != nil {
+			fullErrMsg = err.Error()
+		}
+		shapeErrMsg := ""
+		if shapeErr != nil {
+			shapeErrMsg = shapeErr.Error()
+		}
+		if (shapeErr == nil) != (fullErrMsg == "") {
+			t.Errorf("mismatch for %q: shape err %q vs full err %q", raw, shapeErrMsg, fullErrMsg)
+		}
+	}
+}

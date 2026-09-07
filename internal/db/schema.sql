@@ -272,7 +272,7 @@ CREATE TABLE IF NOT EXISTS change_snapshots (
 CREATE TABLE IF NOT EXISTS alert_rules (
 id INTEGER PRIMARY KEY AUTOINCREMENT,
 name TEXT NOT NULL,
-alert_type TEXT NOT NULL CHECK(alert_type IN ('peer_offline', 'bundle_failed', 'blocked_spike', 'peer_online', 'new_peer', 'bundle_deployed')),
+alert_type TEXT NOT NULL CHECK(alert_type IN ('peer_offline', 'bundle_failed', 'blocked_spike', 'peer_online', 'new_peer', 'bundle_deployed', 'agent_updated')),
 enabled BOOLEAN NOT NULL DEFAULT 1,
 threshold_value INTEGER,
 threshold_window_minutes INTEGER,

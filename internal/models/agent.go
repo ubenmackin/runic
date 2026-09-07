@@ -11,6 +11,15 @@ type AgentRegisterRequest struct {
 	HasIPSet          *bool    `json:"has_ipset"`
 	RegistrationToken string   `json:"registration_token"`
 	AllIPs            []string `json:"all_ips"`
+	// AgentKey proves possession of the stored per-peer agent key when
+	// re-registering an existing host. Optional; compared in constant time.
+	AgentKey string `json:"agent_key,omitempty"`
+	// HMACProofTimestamp and HMACProofSignature prove possession of the
+	// stored HMAC key without disclosing it. Signature is hex(HMAC-SHA256(
+	// hmac_key, "runic-re-register:<hostname>:<timestamp>")) with timestamp
+	// as Unix seconds. The server rejects proofs outside a small skew window.
+	HMACProofTimestamp int64  `json:"hmac_proof_timestamp,omitempty"`
+	HMACProofSignature string `json:"hmac_proof_signature,omitempty"`
 }
 
 type AgentRegisterResponse struct {
@@ -29,6 +38,7 @@ type HeartbeatRequest struct {
 	AgentVersion         string   `json:"agent_version"`
 	HasIPSet             *bool    `json:"has_ipset"`
 	AllIPs               []string `json:"all_ips"`
+	LastUpdateError      string   `json:"last_update_error,omitempty"`
 }
 
 type BundleResponse struct {

@@ -12,6 +12,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
+	"runic/internal/api/events"
 	runiclog "runic/internal/common/log"
 	"runic/internal/db"
 	"runic/internal/engine"
@@ -50,7 +51,7 @@ type PushWorker struct {
 	compiler     *engine.Compiler
 	alertService AlertTrigger
 	sseHub       interface {
-		NotifyBundleUpdated(hostID string, version string) bool
+		NotifyBundleUpdated(hostID string, version string) events.UpdateAgentOutcome
 		NotifyPushJobProgress(jobID string, eventType string, payload string)
 	}
 	workCh    chan string
@@ -71,7 +72,7 @@ func finalizeCtx(parent context.Context) (context.Context, context.CancelFunc) {
 }
 
 func NewPushWorker(database *sql.DB, compiler *engine.Compiler, alertService AlertTrigger, sseHub interface {
-	NotifyBundleUpdated(hostID string, version string) bool
+	NotifyBundleUpdated(hostID string, version string) events.UpdateAgentOutcome
 	NotifyPushJobProgress(jobID string, eventType string, payload string)
 }) *PushWorker {
 	return &PushWorker{
@@ -285,7 +286,7 @@ func (w *PushWorker) processJob(ctx context.Context, jobID string) {
 		// Notify peer via SSE (reuse existing infrastructure)
 		delivered := w.sseHub.NotifyBundleUpdated("host-"+peer.Hostname, bundle.Version)
 
-		if !delivered {
+		if !delivered.Sent() {
 			failed++
 			if err := db.UpdatePushJobPeerStatus(jobCtx, w.db, jobID, peer.PeerID, "failed", "SSE delivery failed: agent not connected"); err != nil {
 				runiclog.Error("Failed to update push job peer status", "error", err)

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -203,6 +204,96 @@ func TestRateLimiters(t *testing.T) {
 	// Stop the API to cleanup rate limiter goroutines
 	a.Stop()
 }
+
+func TestLoginRateLimiterIgnoresSpoofedXFF(t *testing.T) {
+	db, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	compiler := engine.NewTestCompiler(db)
+
+	logsDB, logsCleanup := testutil.SetupTestLogsDB(t)
+	defer logsCleanup()
+
+	a := NewAPI(db, compiler, logsDB, ":memory:", nil, nil)
+	r := mux.NewRouter()
+	a.RegisterRoutes(r, "")
+
+	// Same TCP peer rotating X-Forwarded-For per request must still share one
+	// login bucket end to end (header stripping + StrictMiddleware): the
+	// first 5 pass through to the handler, the 6th with a fresh spoofed
+	// header is still 429.
+	remoteAddr := "203.0.113.30:12345"
+	spoofed := []string{
+		"198.51.100.1",
+		"198.51.100.2",
+		"198.51.100.3",
+		"198.51.100.4",
+		"198.51.100.5",
+	}
+	for i, xff := range spoofed {
+		req := httptest.NewRequest("POST", "/api/v1/auth/login", nil)
+		req.RemoteAddr = remoteAddr
+		req.Header.Set("X-Forwarded-For", xff)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code == http.StatusTooManyRequests {
+			t.Fatalf("Rate limited too early at request %d with spoofed XFF %q", i+1, xff)
+		}
+	}
+
+	req := httptest.NewRequest("POST", "/api/v1/auth/login", nil)
+	req.RemoteAddr = remoteAddr
+	req.Header.Set("X-Forwarded-For", "198.51.100.99")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusTooManyRequests {
+		t.Errorf("Expected 429 on 6th request with rotated XFF, got %d (XFF rotation bypassed login limiter)", w.Code)
+	}
+
+	a.Stop()
+}
+
+func TestDownloadsRateLimiterIgnoresSpoofedXFF(t *testing.T) {
+	db, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	compiler := engine.NewTestCompiler(db)
+
+	logsDB, logsCleanup := testutil.SetupTestLogsDB(t)
+	defer logsCleanup()
+
+	a := NewAPI(db, compiler, logsDB, ":memory:", nil, nil)
+	r := mux.NewRouter()
+	a.RegisterRoutes(r, t.TempDir())
+	defer a.Stop()
+
+	// Same TCP peer rotating X-Forwarded-For/X-Real-IP per request must
+	// still share one 60/min downloads bucket (StrictMiddleware keyed on
+	// RemoteAddrIP with spoofable headers stripped): the first 60 pass
+	// through to the handler (404 for the unstaged binary), the 61st with
+	// a fresh spoofed header is still 429.
+	remoteAddr := "203.0.113.50:12345"
+	for i := 0; i < 60; i++ {
+		req := httptest.NewRequest("GET", "/downloads/runic-agent-amd64", nil)
+		req.RemoteAddr = remoteAddr
+		req.Header.Set("X-Forwarded-For", fmt.Sprintf("198.51.100.%d", (i%250)+1))
+		req.Header.Set("X-Real-IP", fmt.Sprintf("192.0.2.%d", (i%250)+1))
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code == http.StatusTooManyRequests {
+			t.Fatalf("Rate limited too early at request %d with rotated XFF", i+1)
+		}
+	}
+
+	req := httptest.NewRequest("GET", "/downloads/runic-agent-amd64", nil)
+	req.RemoteAddr = remoteAddr
+	req.Header.Set("X-Forwarded-For", "198.51.100.99")
+	req.Header.Set("X-Real-IP", "192.0.2.99")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusTooManyRequests {
+		t.Errorf("Expected 429 on 61st request with rotated XFF, got %d (XFF rotation bypassed downloads limiter)", w.Code)
+	}
+}
+
 func TestRouterStop(t *testing.T) {
 	db, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()

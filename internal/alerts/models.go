@@ -41,6 +41,7 @@ const (
 	AlertTypePeerOnline     = models.AlertTypePeerOnline
 	AlertTypeNewPeer        = models.AlertTypeNewPeer
 	AlertTypeBundleDeployed = models.AlertTypeBundleDeployed
+	AlertTypeAgentUpdated   = models.AlertTypeAgentUpdated
 	SeverityInfo            = models.SeverityInfo
 	SeverityWarning         = models.SeverityWarning
 	SeverityCritical        = models.SeverityCritical

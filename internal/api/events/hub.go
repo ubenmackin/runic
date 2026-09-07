@@ -10,10 +10,42 @@ import (
 	runiclog "runic/internal/common/log"
 )
 
+// UpdateAgentOutcome distinguishes why an update_agent notification did or
+// did not reach the agent. NotConnected means no SSE client is registered
+// for the host; ChannelFull means a client is registered but its channel
+// was full (backpressure, retryable). Callers must not map ChannelFull to
+// not_connected.
+type UpdateAgentOutcome int
+
+const (
+	UpdateAgentSent UpdateAgentOutcome = iota
+	UpdateAgentNotConnected
+	UpdateAgentChannelFull
+)
+
+// String returns the stable per-peer outcome key for an UpdateAgentOutcome.
+func (o UpdateAgentOutcome) String() string {
+	switch o {
+	case UpdateAgentSent:
+		return "sent"
+	case UpdateAgentNotConnected:
+		return "not_connected"
+	case UpdateAgentChannelFull:
+		return "channel_full"
+	default:
+		return "unknown"
+	}
+}
+
+// Sent reports whether the notification was delivered.
+func (o UpdateAgentOutcome) Sent() bool {
+	return o == UpdateAgentSent
+}
+
 // A NotifyUpdateAgenter is an interface for notifying agents to self-update.
 // Defined here to avoid import cycles and DRY violations.
 type NotifyUpdateAgenter interface {
-	NotifyUpdateAgent(hostID string, controlPlaneURL string) bool
+	NotifyUpdateAgent(hostID string, controlPlaneURL string) UpdateAgentOutcome
 }
 
 type hostEntry struct {
@@ -101,7 +133,10 @@ func (h *SSEHub) closeHostEntry(entry *hostEntry) {
 	h.sendMu.Unlock()
 }
 
-func (h *SSEHub) NotifyBundleUpdated(hostID string, version string) (sent bool) {
+// NotifyBundleUpdated sends a bundle-updated event to the agent.
+// It distinguishes a missing client (NotConnected) from a connected client
+// whose channel is full (ChannelFull, retryable backpressure).
+func (h *SSEHub) NotifyBundleUpdated(hostID string, version string) (outcome UpdateAgentOutcome) {
 	h.mu.Lock()
 	entry, ok := h.clients[hostID]
 	if ok {
@@ -110,7 +145,7 @@ func (h *SSEHub) NotifyBundleUpdated(hostID string, version string) (sent bool) 
 	h.mu.Unlock()
 	if !ok {
 		runiclog.Warn("NotifyBundleUpdated: agent not connected", "host_id", hostID)
-		return false
+		return UpdateAgentNotConnected
 	}
 	ch := entry.ch
 	msg := fmt.Sprintf("event: bundle_updated\ndata: {\"version\":%q}\n\n", version)
@@ -123,7 +158,7 @@ func (h *SSEHub) NotifyBundleUpdated(hostID string, version string) (sent bool) 
 		if recover() != nil {
 			runiclog.Warn("NotifyBundleUpdated: client disconnected during send", "host_id", hostID)
 			h.dropped.Add(1)
-			sent = false
+			outcome = UpdateAgentNotConnected
 		}
 		h.mu.Lock()
 		entry.pending--
@@ -133,46 +168,81 @@ func (h *SSEHub) NotifyBundleUpdated(hostID string, version string) (sent bool) 
 	defer timer.Stop()
 	select {
 	case ch <- msg:
-		return true
+		return UpdateAgentSent
 	case <-timer.C:
-		runiclog.Warn("NotifyBundleUpdated: slow consumer, dropping update", "host_id", hostID)
 		h.dropped.Add(1)
-		return false
+		// Distinguish backpressure from a concurrent disconnect: when the
+		// client is still registered the drop is backpressure (retryable);
+		// when it is gone the send raced with an unregister.
+		h.mu.RLock()
+		_, stillRegistered := h.clients[hostID]
+		h.mu.RUnlock()
+		if !stillRegistered {
+			runiclog.Warn("NotifyBundleUpdated: agent disconnected during send", "host_id", hostID)
+			return UpdateAgentNotConnected
+		}
+		runiclog.Warn("NotifyBundleUpdated: slow consumer, dropping update", "host_id", hostID)
+		return UpdateAgentChannelFull
 	}
 }
 
-func (h *SSEHub) NotifyFetchBackup(hostID string) bool {
+// NotifyFetchBackup sends a fetch-backup event to the agent.
+// It distinguishes a missing client (NotConnected) from a connected client
+// whose channel is full (ChannelFull, retryable backpressure).
+func (h *SSEHub) NotifyFetchBackup(hostID string) UpdateAgentOutcome {
 	h.mu.RLock()
 	entry, ok := h.clients[hostID]
 	h.mu.RUnlock()
 	if !ok {
 		runiclog.Warn("NotifyFetchBackup: agent not connected", "host_id", hostID)
-		return false
+		return UpdateAgentNotConnected
 	}
 	msg := fmt.Sprintf("event: fetch_backup\ndata: {\"host_id\":%q}\n\n", hostID)
 	if !h.trySend(entry.ch, msg) {
+		// Distinguish backpressure from a concurrent disconnect: when the
+		// client is still registered the drop is backpressure (retryable);
+		// when it is gone the send raced with an unregister.
+		h.mu.RLock()
+		_, stillRegistered := h.clients[hostID]
+		h.mu.RUnlock()
+		if !stillRegistered {
+			runiclog.Warn("NotifyFetchBackup: agent disconnected during send", "host_id", hostID)
+			return UpdateAgentNotConnected
+		}
 		runiclog.Warn("NotifyFetchBackup: channel full, dropping update", "host_id", hostID)
-		return false
+		return UpdateAgentChannelFull
 	}
-	return true
+	return UpdateAgentSent
 }
 
 // NotifyUpdateAgent sends an update event to the agent, instructing it
 // to self-update by running the install script with the given control plane URL.
-func (h *SSEHub) NotifyUpdateAgent(hostID string, controlPlaneURL string) bool {
+// It distinguishes a missing client (NotConnected) from a connected client
+// whose channel is full (ChannelFull, retryable backpressure).
+func (h *SSEHub) NotifyUpdateAgent(hostID string, controlPlaneURL string) UpdateAgentOutcome {
 	h.mu.RLock()
 	entry, ok := h.clients[hostID]
 	h.mu.RUnlock()
 	if !ok {
 		runiclog.Warn("NotifyUpdateAgent: agent not connected", "host_id", hostID)
-		return false
+		return UpdateAgentNotConnected
 	}
 	msg := fmt.Sprintf("event: update_agent\ndata: {\"control_plane_url\":%q}\n\n", controlPlaneURL)
 	if !h.trySend(entry.ch, msg) {
+		// Distinguish backpressure from a concurrent disconnect: when the
+		// client is still registered the drop is backpressure (retryable);
+		// when it is gone the send raced with an unregister.
+		h.mu.RLock()
+		_, stillRegistered := h.clients[hostID]
+		h.mu.RUnlock()
+		if !stillRegistered {
+			runiclog.Warn("NotifyUpdateAgent: agent disconnected during send", "host_id", hostID)
+			return UpdateAgentNotConnected
+		}
 		runiclog.Warn("NotifyUpdateAgent: channel full, dropping update", "host_id", hostID)
-		return false
+		return UpdateAgentChannelFull
 	}
-	return true
+	return UpdateAgentSent
 }
 
 func (h *SSEHub) RegisterPushJob(jobID string) chan string {
