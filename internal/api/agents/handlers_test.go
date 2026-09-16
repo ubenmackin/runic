@@ -22,19 +22,9 @@ import (
 )
 
 func generateValidAgentToken(t *testing.T, db *sql.DB, hostname string) string {
-	secretStr := "test-secret-key-for-agent-jwt-256-bits!!"
-	jti, err := generateUniqueID()
-	if err != nil {
-		t.Fatalf("failed to generate jti: %v", err)
-	}
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"sub":  fmt.Sprintf("host-%s", hostname),
-		"type": "agent",
-		"jti":  jti,
-		"iat":  time.Now().Unix(),
-		"exp":  time.Now().Add(72 * time.Hour).Unix(),
-	})
-	tokenStr, err := token.SignedString([]byte(secretStr))
+	t.Helper()
+	ds := store.NewDashboardStore(db, db)
+	tokenStr, err := generateAgentToken(context.Background(), ds, hostname)
 	if err != nil {
 		t.Fatalf("failed to generate token: %v", err)
 	}
@@ -102,7 +92,7 @@ func TestAgentAuthMiddleware(t *testing.T) {
 		{
 			name: "valid JWT but wrong type claim",
 			authHeader: func() string {
-				secretStr := "test-secret-key-for-agent-jwt-256-bits!!"
+				secretStr := testutil.TestAgentJWTSecret
 				token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 					"sub":  "host-test-agent",
 					"type": "not-agent", // wrong type
@@ -117,7 +107,7 @@ func TestAgentAuthMiddleware(t *testing.T) {
 		{
 			name: "valid JWT but missing sub claim",
 			authHeader: func() string {
-				secretStr := "test-secret-key-for-agent-jwt-256-bits!!"
+				secretStr := testutil.TestAgentJWTSecret
 				token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 					"type": "agent",
 					"iat":  time.Now().Unix(),
@@ -365,7 +355,7 @@ func doRegisterRequest(t *testing.T, handler *Handler, body string, headers map[
 func computeReRegistrationHMACProof(t *testing.T, hmacKey, hostname string, timestamp int64) string {
 	t.Helper()
 	mac := hmac.New(sha256.New, []byte(hmacKey))
-	fmt.Fprintf(mac, "runic-re-register:%s:%d", hostname, timestamp)
+	mac.Write([]byte(models.ReRegistrationHMACProofMessage(hostname, timestamp)))
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
@@ -427,18 +417,7 @@ func TestReRegistrationBearerProof(t *testing.T) {
 		defer cleanup()
 		handler := newAgentTestHandler(db)
 
-		secretStr := "test-secret-key-for-agent-jwt-256-bits!!"
-		expired := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-			"sub":  "host-expired-host",
-			"type": "agent",
-			"jti":  "expired-jti-123",
-			"iat":  time.Now().Add(-72 * time.Hour).Unix(),
-			"exp":  time.Now().Add(-time.Hour).Unix(),
-		})
-		expiredStr, err := expired.SignedString([]byte(secretStr))
-		if err != nil {
-			t.Fatalf("sign expired token: %v", err)
-		}
+		expiredStr := generateExpiredAgentToken(t, "expired-host")
 		if _, err := db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, agent_token, hmac_key, status) VALUES (?, ?, ?, ?, ?, ?)`,
 			"expired-host", "10.0.0.3", "agent-key-3", expiredStr, "hmac-secret-3", "offline"); err != nil {
 			t.Fatalf("insert peer: %v", err)
@@ -684,6 +663,231 @@ func TestReRegistrationRevokesOldJTI(t *testing.T) {
 	}
 	if count != 0 {
 		t.Errorf("new jti must not be revoked, got count=%d", count)
+	}
+}
+
+// createPeerViaRegisterNewPeer bootstraps a peer through the production
+// registerNewPeer path so self-healing tests capture real generated
+// hmac_key/agent_key values instead of hand-inserted fixtures.
+func createPeerViaRegisterNewPeer(t *testing.T, db *sql.DB, handler *Handler, hostname, ip string) (peerID int, hmacKey, agentKey, initialToken string) {
+	t.Helper()
+	bootstrapToken := "bootstrap-" + hostname + "-token"
+	if _, err := db.Exec(`INSERT INTO registration_tokens (token, description) VALUES (?, ?)`, bootstrapToken, "bootstrap for "+hostname); err != nil {
+		t.Fatalf("insert bootstrap token: %v", err)
+	}
+	input := &models.AgentRegisterRequest{
+		Hostname:          hostname,
+		IP:                ip,
+		RegistrationToken: bootstrapToken,
+	}
+	w := httptest.NewRecorder()
+	id, token, hKey, aKey, err := handler.registerNewPeer(context.Background(), input, w)
+	if err != nil {
+		t.Fatalf("registerNewPeer: %v", err)
+	}
+	if hKey == "" || aKey == "" || token == "" {
+		t.Fatal("registerNewPeer must return non-empty token/hmac_key/agent_key")
+	}
+	return id, hKey, aKey, token
+}
+
+// generateExpiredAgentToken builds an expired agent JWT by reusing the
+// production buildAgentToken signer with an expired exp, so test tokens
+// cannot drift from the production claims format. The secret is the shared
+// testutil.TestAgentJWTSecret inserted by SetupTestDBWithSecret.
+func generateExpiredAgentToken(t *testing.T, hostname string) string {
+	t.Helper()
+	now := time.Now()
+	signed, err := buildAgentToken(testutil.TestAgentJWTSecret, hostname, now.Add(-72*time.Hour), now.Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("sign expired token: %v", err)
+	}
+	return signed
+}
+
+func tamperHexSignature(t *testing.T, sig string) string {
+	t.Helper()
+	if sig == "" {
+		t.Fatal("cannot tamper empty signature")
+	}
+	last := sig[len(sig)-1]
+	replacement := byte('0')
+	if last == '0' {
+		replacement = '1'
+	}
+	return sig[:len(sig)-1] + string(replacement)
+}
+
+// TestReRegistrationSelfHealingExpiredBearerHealsViaHMAC proves an expired
+// bearer heals without a manual token when only hostname/IP plus a fresh
+// HMAC proof is presented. The peer is created via registerNewPeer so the
+// captured keys are production-shaped.
+func TestReRegistrationSelfHealingExpiredBearerHealsViaHMAC(t *testing.T) {
+	db, cleanup := testutil.SetupTestDBWithSecret(t)
+	defer cleanup()
+	handler := newAgentTestHandler(db)
+
+	hostname := "heal-host"
+	ip := "10.0.0.9"
+	_, hmacKey, agentKey, _ := createPeerViaRegisterNewPeer(t, db, handler, hostname, ip)
+
+	expired := generateExpiredAgentToken(t, hostname)
+	ts := time.Now().Unix()
+	sig := computeReRegistrationHMACProof(t, hmacKey, hostname, ts)
+	body := fmt.Sprintf(`{"hostname": %q, "ip": %q, "hmac_proof_timestamp": %d, "hmac_proof_signature": %q}`, hostname, ip, ts, sig)
+	w := doRegisterRequest(t, handler, body, map[string]string{"Authorization": "Bearer " + expired})
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 healing expired bearer via HMAC, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	newToken, _ := resp["token"].(string)
+	if newToken == "" || newToken == expired {
+		t.Error("expected a fresh rotated token distinct from the expired bearer")
+	}
+	if resp["hmac_key"] != hmacKey {
+		t.Error("expected persisted hmac_key in heal response")
+	}
+	if resp["agent_key"] != agentKey {
+		t.Error("expected persisted agent_key bootstrapped via hmac_proof")
+	}
+	var storedHMAC, storedAgentKey, storedToken string
+	if err := db.QueryRow(`SELECT hmac_key, agent_key, agent_token FROM peers WHERE hostname = ?`, hostname).Scan(&storedHMAC, &storedAgentKey, &storedToken); err != nil {
+		t.Fatalf("query healed peer: %v", err)
+	}
+	if storedHMAC != hmacKey {
+		t.Error("expected HMACKey persisted after heal")
+	}
+	if storedAgentKey != agentKey {
+		t.Error("expected AgentKey persisted after heal")
+	}
+	if storedToken != newToken {
+		t.Error("expected rotated agent_token persisted after heal")
+	}
+}
+
+// TestReRegistrationHMACProofTamperedAndSkewRejected proves a tampered
+// signature and a proof outside the skew window cannot heal, even when an
+// expired bearer is presented alongside.
+func TestReRegistrationHMACProofTamperedAndSkewRejected(t *testing.T) {
+	t.Run("tampered signature is rejected", func(t *testing.T) {
+		db, cleanup := testutil.SetupTestDBWithSecret(t)
+		defer cleanup()
+		handler := newAgentTestHandler(db)
+
+		hostname := "tamper-host"
+		_, hmacKey, _, _ := createPeerViaRegisterNewPeer(t, db, handler, hostname, "10.0.0.11")
+		expired := generateExpiredAgentToken(t, hostname)
+		ts := time.Now().Unix()
+		sig := computeReRegistrationHMACProof(t, hmacKey, hostname, ts)
+		tampered := tamperHexSignature(t, sig)
+		body := fmt.Sprintf(`{"hostname": %q, "ip": "10.0.0.11", "hmac_proof_timestamp": %d, "hmac_proof_signature": %q}`, hostname, ts, tampered)
+		w := doRegisterRequest(t, handler, body, map[string]string{"Authorization": "Bearer " + expired})
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401 for tampered sig, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("timestamp outside skew is rejected", func(t *testing.T) {
+		db, cleanup := testutil.SetupTestDBWithSecret(t)
+		defer cleanup()
+		handler := newAgentTestHandler(db)
+
+		hostname := "skew-host"
+		_, hmacKey, _, _ := createPeerViaRegisterNewPeer(t, db, handler, hostname, "10.0.0.12")
+		expired := generateExpiredAgentToken(t, hostname)
+		ts := time.Now().Add(-10 * time.Minute).Unix()
+		sig := computeReRegistrationHMACProof(t, hmacKey, hostname, ts)
+		body := fmt.Sprintf(`{"hostname": %q, "ip": "10.0.0.12", "hmac_proof_timestamp": %d, "hmac_proof_signature": %q}`, hostname, ts, sig)
+		w := doRegisterRequest(t, handler, body, map[string]string{"Authorization": "Bearer " + expired})
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401 for ts=now-10m, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+}
+
+// TestReRegistrationAgentKeyHealsExpiredBearer proves the stored agent_key
+// alone heals an expired bearer without a manual registration token.
+func TestReRegistrationAgentKeyHealsExpiredBearer(t *testing.T) {
+	db, cleanup := testutil.SetupTestDBWithSecret(t)
+	defer cleanup()
+	handler := newAgentTestHandler(db)
+
+	hostname := "agentkey-heal-host"
+	ip := "10.0.0.13"
+	_, hmacKey, agentKey, _ := createPeerViaRegisterNewPeer(t, db, handler, hostname, ip)
+
+	expired := generateExpiredAgentToken(t, hostname)
+	body := fmt.Sprintf(`{"hostname": %q, "ip": %q, "agent_key": %q}`, hostname, ip, agentKey)
+	w := doRegisterRequest(t, handler, body, map[string]string{"Authorization": "Bearer " + expired})
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 healing via agent_key, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	newToken, _ := resp["token"].(string)
+	if newToken == "" || newToken == expired {
+		t.Error("expected a fresh rotated token distinct from the expired bearer")
+	}
+	if resp["hmac_key"] != hmacKey {
+		t.Error("expected persisted hmac_key in agent_key heal response")
+	}
+	var storedHMAC, storedAgentKey, storedToken string
+	if err := db.QueryRow(`SELECT hmac_key, agent_key, agent_token FROM peers WHERE hostname = ?`, hostname).Scan(&storedHMAC, &storedAgentKey, &storedToken); err != nil {
+		t.Fatalf("query healed peer: %v", err)
+	}
+	if storedHMAC != hmacKey {
+		t.Error("expected HMACKey persisted after agent_key heal")
+	}
+	if storedAgentKey != agentKey {
+		t.Error("expected AgentKey persisted after agent_key heal")
+	}
+	if storedToken != newToken {
+		t.Error("expected rotated agent_token persisted after agent_key heal")
+	}
+}
+
+// TestReRegistrationOracleClosureBadProofMatchesUnknown proves a known host
+// presenting a bad proof alongside a bad token returns the identical 401 as
+// an unknown host presenting the same bad token, closing the existence
+// oracle.
+func TestReRegistrationOracleClosureBadProofMatchesUnknown(t *testing.T) {
+	db, cleanup := testutil.SetupTestDBWithSecret(t)
+	defer cleanup()
+	handler := newAgentTestHandler(db)
+
+	_, hmacKey, _, _ := createPeerViaRegisterNewPeer(t, db, handler, "known-host", "10.0.0.14")
+	badToken := "bad-token-xyz"
+	ts := time.Now().Unix()
+	// Use a correct-length (64-char hex) tampered proof so the request
+	// exercises the full HMAC DB-lookup path instead of the len!=64 early return.
+	validSig := computeReRegistrationHMACProof(t, hmacKey, "known-host", ts)
+	badSig := tamperHexSignature(t, validSig)
+	knownBody := fmt.Sprintf(`{"hostname": "known-host", "ip": "10.0.0.14", "registration_token": %q, "hmac_proof_timestamp": %d, "hmac_proof_signature": %q}`, badToken, ts, badSig)
+	unknownBody := fmt.Sprintf(`{"hostname": "unknown-host-xyz", "ip": "10.0.0.99", "registration_token": %q}`, badToken)
+
+	wKnown := doRegisterRequest(t, handler, knownBody, nil)
+	wUnknown := doRegisterRequest(t, handler, unknownBody, nil)
+
+	if wKnown.Code != http.StatusUnauthorized || wUnknown.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401/401, got %d/%d: %s / %s", wKnown.Code, wUnknown.Code, wKnown.Body.String(), wUnknown.Body.String())
+	}
+	var knownResp, unknownResp map[string]string
+	if err := json.NewDecoder(wKnown.Body).Decode(&knownResp); err != nil {
+		t.Fatalf("decode known: %v", err)
+	}
+	if err := json.NewDecoder(wUnknown.Body).Decode(&unknownResp); err != nil {
+		t.Fatalf("decode unknown: %v", err)
+	}
+	if knownResp["error"] != "invalid registration token" || unknownResp["error"] != "invalid registration token" {
+		t.Errorf("expected identical invalid-token errors, got known=%q unknown=%q", knownResp["error"], unknownResp["error"])
+	}
+	if knownResp["error"] != unknownResp["error"] {
+		t.Errorf("oracle: messages differ: %q vs %q", knownResp["error"], unknownResp["error"])
 	}
 }
 

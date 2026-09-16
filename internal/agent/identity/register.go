@@ -2,6 +2,9 @@ package identity
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,11 +12,35 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"time"
 
 	"runic/internal/common"
 	"runic/internal/common/log"
 	"runic/internal/models"
 )
+
+// BuildHMACProof builds a re-registration proof of possession for the stored
+// HMAC key without disclosing the key itself. The message is built by the
+// shared models.ReRegistrationHMACProofMessage so proofs verify with the
+// server's verifyHMACReRegistrationProof. The timestamp is Unix seconds and
+// the signature is hex(HMAC-SHA256(hmacKey, message)).
+// The server rejects proofs outside a 5 minute skew window, so the host
+// clock must be NTP-synced or re-registration via HMAC proof fails.
+// Hostname must already be sanitized with models.SanitizeReRegistrationHostname
+// to match the server's sanitization (control-character strip, TrimSpace, 255
+// truncate) before lookup and verification, or verification fails. An empty
+// hmacKey returns zero values so callers can skip the proof (first boot or
+// new peer).
+func BuildHMACProof(hostname, hmacKey string) (int64, string) {
+	if hmacKey == "" {
+		return 0, ""
+	}
+	ts := time.Now().Unix()
+	msg := models.ReRegistrationHMACProofMessage(hostname, ts)
+	mac := hmac.New(sha256.New, []byte(hmacKey))
+	mac.Write([]byte(msg))
+	return ts, hex.EncodeToString(mac.Sum(nil))
+}
 
 // Register registers the agent with the control plane. It returns the updated config with credentials.
 func Register(ctx context.Context, client common.HTTPClient, cfg *Config, version string, saveFunc func() error, allIPs []string) error {
@@ -21,6 +48,12 @@ func Register(ctx context.Context, client common.HTTPClient, cfg *Config, versio
 	if err != nil {
 		hostname = "unknown"
 	}
+	// Sanitize identically to the server before lookup and proof verification
+	// so proofs over hostnames with spaces, control characters, or over-long
+	// values verify. The sanitized value is sent in the request body and used
+	// for the HMAC proof.
+	sanitizedHostname, _ := models.SanitizeReRegistrationHostname(hostname)
+	hostname = sanitizedHostname
 
 	osID, _ := DetectOS()
 	osType := NormalizeOS(osID)
@@ -49,6 +82,17 @@ func Register(ctx context.Context, client common.HTTPClient, cfg *Config, versio
 		body.RegistrationToken = cfg.RegistrationToken
 	}
 
+	if cfg.AgentKey != "" {
+		body.AgentKey = cfg.AgentKey
+	}
+
+	if cfg.HMACKey != "" {
+		if ts, sig := BuildHMACProof(hostname, cfg.HMACKey); ts != 0 && sig != "" {
+			body.HMACProofTimestamp = ts
+			body.HMACProofSignature = sig
+		}
+	}
+
 	url := cfg.ControlPlaneURL + "/api/v1/agent/register"
 	resp, err := common.DoJSONRequest(ctx, client, "POST", url, body, cfg.Token, "runic-agent")
 	if err != nil {
@@ -74,7 +118,12 @@ func Register(ctx context.Context, client common.HTTPClient, cfg *Config, versio
 	cfg.Token = regResp.Token
 	cfg.PullIntervalSec = regResp.PullInterval
 	cfg.CurrentBundleVer = regResp.CurrentBundleVer
-	cfg.HMACKey = regResp.HMACKey
+	if regResp.HMACKey != "" {
+		cfg.HMACKey = regResp.HMACKey
+	}
+	if regResp.AgentKey != "" {
+		cfg.AgentKey = regResp.AgentKey
+	}
 
 	cfg.RegistrationToken = ""
 

@@ -25,6 +25,7 @@ type Config struct {
 	LogPath                      string `json:"log_path"`
 	CurrentBundleVer             string `json:"current_bundle_version"`
 	HMACKey                      string `json:"hmac_key"`
+	AgentKey                     string `json:"agent_key,omitempty"`
 	ApplyOnBoot                  bool   `json:"apply_on_boot"`
 	ApplyRulesBundle             bool   `json:"apply_rules_bundle"`
 	RegistrationToken            string `json:"registration_token,omitempty"`

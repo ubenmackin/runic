@@ -289,39 +289,42 @@ func (h *Handler) AgentAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-func (h *Handler) registerNewPeer(ctx context.Context, input *models.AgentRegisterRequest, w http.ResponseWriter) (int, string, string, error) {
+func (h *Handler) registerNewPeer(ctx context.Context, input *models.AgentRegisterRequest, w http.ResponseWriter) (int, string, string, string, error) {
 	if input.RegistrationToken == "" {
-		return 0, "", "", common.NewHTTPError(http.StatusUnauthorized, "registration token required")
+		return 0, "", "", "", common.NewHTTPError(http.StatusUnauthorized, "registration token required")
+	}
+	if len(input.RegistrationToken) > registrationTokenMaxLen {
+		return 0, "", "", "", common.NewHTTPError(http.StatusUnauthorized, "invalid registration token")
 	}
 
 	if err := validateAllIPs(input.AllIPs); err != nil {
-		return 0, "", "", common.NewHTTPError(http.StatusBadRequest, err.Error())
+		return 0, "", "", "", common.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
 	consumed, err := h.ConsumeRegistrationToken(ctx, input.RegistrationToken, input.Hostname)
 	if err != nil {
-		return 0, "", "", fmt.Errorf("consume token: %w", err)
+		return 0, "", "", "", fmt.Errorf("consume token: %w", err)
 	}
 	if !consumed {
-		return 0, "", "", common.NewHTTPError(http.StatusUnauthorized, "invalid registration token")
+		return 0, "", "", "", common.NewHTTPError(http.StatusUnauthorized, "invalid registration token")
 	}
 
 	hmacKey, err := GenerateHMACKey()
 	if err != nil {
-		return 0, "", "", fmt.Errorf("generate HMAC key: %w", err)
+		return 0, "", "", "", fmt.Errorf("generate HMAC key: %w", err)
 	}
 	agentToken, err := generateAgentToken(ctx, h.DashboardStore, input.Hostname)
 	if err != nil {
-		return 0, "", "", fmt.Errorf("generate agent token: %w", err)
+		return 0, "", "", "", fmt.Errorf("generate agent token: %w", err)
 	}
 	agentKey, err := generateAgentKey()
 	if err != nil {
-		return 0, "", "", fmt.Errorf("generate agent key: %w", err)
+		return 0, "", "", "", fmt.Errorf("generate agent key: %w", err)
 	}
 
 	peerID, err := h.PeerStore.RegisterPeer(ctx, input.Hostname, input.IP, input.OSType, input.Arch, input.HasDocker, input.HasIPSet, agentKey, agentToken, hmacKey)
 	if err != nil {
-		return 0, "", "", fmt.Errorf("register peer: %w", err)
+		return 0, "", "", "", fmt.Errorf("register peer: %w", err)
 	}
 
 	if len(input.AllIPs) > 0 {
@@ -332,40 +335,45 @@ func (h *Handler) registerNewPeer(ctx context.Context, input *models.AgentRegist
 		}
 	}
 
-	return int(peerID), agentToken, hmacKey, nil
+	return int(peerID), agentToken, hmacKey, agentKey, nil
 }
 
 // reRegistrationHMACProofSkew bounds the timestamp skew accepted for HMAC
 // re-registration proofs so a captured proof cannot be replayed indefinitely.
 const reRegistrationHMACProofSkew = 5 * time.Minute
 
-// reRegistrationHMACProofMessage builds the exact message the agent HMACs
-// with its stored HMAC key to prove possession without disclosing the key.
-func reRegistrationHMACProofMessage(hostname string, timestamp int64) string {
-	return fmt.Sprintf("runic-re-register:%s:%d", hostname, timestamp)
-}
+// agentKeyMaxLen bounds presented agent_key values before DB lookup.
+// Production keys are fixed "agent-key-"+32 hex (42 chars); longer values
+// are definitely malformed and rejected without DB I/O so a 1MB body cannot
+// trigger GetPeerByID plus a large ConstantTimeCompare.
+const agentKeyMaxLen = 42
+
+// hmacProofSignatureLen is the hex-encoded HMAC-SHA256 length expected for
+// re-registration proofs. Malformed signatures are rejected before DB lookup
+// so a 1MB body cannot trigger GetPeerHMACKey plus large hex.DecodeString
+// work.
+const hmacProofSignatureLen = 64
+
+// registrationTokenMaxLen bounds presented registration_token values before
+// any DB I/O. Production tokens are 64 hex chars; longer values are
+// definitely malformed and rejected without a lookup so a 1MB body cannot
+// trigger peek/consume SELECT/UPDATE work, consistent with agentKeyMaxLen
+// and hmacProofSignatureLen.
+const registrationTokenMaxLen = 128
 
 // authorizeReRegistration reports whether the caller may re-register the
-// existing peer. A fresh single-use registration token (consumed on success)
-// or proof of possession of a stored secret authorizes: a currently-valid
-// agent JWT for the same host (Authorization header), the stored agent_key,
-// or an HMAC proof with the stored HMAC key. It returns (authorized, method,
-// error); error is non-nil only for internal failures. Authentication
-// failures return (false, "", nil) so the caller can respond with the same
-// generic 401 used for unknown hostnames, closing the existence oracle.
-// No secret material is ever logged.
+// existing peer. Non-destructive proofs are tried first (currently-valid
+// agent JWT, stored agent_key, HMAC proof) so a valid single-use registration
+// token is not wasted when another proof would suffice. A fresh single-use
+// registration token is tried last via a non-destructive peek; RegisterAgent
+// atomically claims the token with ConsumeRegistrationToken before running
+// the re-registration update, so a concurrent second use fails with 401 and
+// never reaches the update. It
+// returns (authorized, method, error); error is non-nil only for internal
+// failures. Authentication failures return (false, "", nil) so the caller can
+// respond with the same generic 401 used for unknown hostnames, closing the
+// existence oracle. No secret material is ever logged.
 func (h *Handler) authorizeReRegistration(ctx context.Context, r *http.Request, input *models.AgentRegisterRequest, existingID int, hostname string) (bool, string, error) {
-	if input.RegistrationToken != "" {
-		consumed, err := h.ConsumeRegistrationToken(ctx, input.RegistrationToken, hostname)
-		if err != nil {
-			return false, "", fmt.Errorf("consume token: %w", err)
-		}
-		if consumed {
-			return true, "registration_token", nil
-		}
-		// Invalid token: fall through to try other proofs before failing, so
-		// a valid proof alongside a stale token still authorizes.
-	}
 	if h.verifyBearerReRegistrationProof(ctx, r, hostname) {
 		return true, "bearer", nil
 	}
@@ -387,7 +395,42 @@ func (h *Handler) authorizeReRegistration(ctx context.Context, r *http.Request, 
 			return true, "hmac_proof", nil
 		}
 	}
+	if input.RegistrationToken != "" {
+		valid, err := h.peekRegistrationToken(ctx, input.RegistrationToken)
+		if err != nil {
+			return false, "", fmt.Errorf("peek registration token: %w", err)
+		}
+		if valid {
+			return true, "registration_token", nil
+		}
+		// Invalid token: fall through to return false so the caller emits
+		// the same 401 used for unknown hostnames.
+	}
 	return false, "", nil
+}
+
+// peekRegistrationToken reports whether a registration token appears usable
+// without consuming it. It delegates to DashboardStore.PeekRegistrationToken
+// which mirrors the WHERE clause of ConsumeRegistrationToken (unused,
+// unrevoked) so authorizeReRegistration can validate without burning the
+// single-use token; RegisterAgent atomically claims the token before the
+// re-registration update. Oversized values are rejected without DB I/O.
+// Fail-closed: store errors propagate as internal errors.
+func (h *Handler) peekRegistrationToken(ctx context.Context, token string) (bool, error) {
+	if token == "" {
+		return false, nil
+	}
+	if len(token) > registrationTokenMaxLen {
+		return false, nil
+	}
+	if h.DashboardStore == nil {
+		return false, fmt.Errorf("peek registration token: dashboard store unavailable")
+	}
+	valid, err := h.DashboardStore.PeekRegistrationToken(ctx, token)
+	if err != nil {
+		return false, err
+	}
+	return valid, nil
 }
 
 // verifyBearerReRegistrationProof checks the Authorization header for a
@@ -441,9 +484,14 @@ func (h *Handler) verifyBearerReRegistrationProof(ctx context.Context, r *http.R
 }
 
 // verifyAgentKeyProof compares the presented agent_key against the stored
-// value in constant time. Empty stored keys never match.
+// value in constant time. Empty stored keys never match. Oversized presented
+// values (production keys are fixed 42 chars) are rejected before DB lookup
+// so a 1MB body cannot trigger GetPeerByID plus a large ConstantTimeCompare.
 func (h *Handler) verifyAgentKeyProof(ctx context.Context, presented string, peerID int) (bool, error) {
 	if presented == "" {
+		return false, nil
+	}
+	if len(presented) > agentKeyMaxLen {
 		return false, nil
 	}
 	peer, err := h.PeerStore.GetPeerByID(ctx, peerID)
@@ -466,10 +514,20 @@ func (h *Handler) verifyAgentKeyProof(ctx context.Context, presented string, pee
 // "runic-re-register:<hostname>:<timestamp>")) with a bounded skew window.
 // Hex decoding uses hmac.Equal for constant-time comparison. Timestamps
 // outside the skew, empty stored keys, and undecodable signatures fail.
+// Malformed signatures (non-64-char or non-hex) are rejected before DB lookup
+// so a 1MB body cannot trigger GetPeerHMACKey plus large hex.DecodeString
+// work.
 func (h *Handler) verifyHMACReRegistrationProof(ctx context.Context, input *models.AgentRegisterRequest, hostname string, peerID int) (bool, error) {
 	ts := input.HMACProofTimestamp
 	sig := input.HMACProofSignature
 	if ts == 0 || sig == "" {
+		return false, nil
+	}
+	if len(sig) != hmacProofSignatureLen {
+		return false, nil
+	}
+	sigBytes, err := hex.DecodeString(sig)
+	if err != nil {
 		return false, nil
 	}
 	now := time.Now().Unix()
@@ -485,13 +543,8 @@ func (h *Handler) verifyHMACReRegistrationProof(ctx context.Context, input *mode
 		return false, nil
 	}
 	mac := hmac.New(sha256.New, []byte(storedKey))
-	mac.Write([]byte(reRegistrationHMACProofMessage(hostname, ts)))
-	expected := hex.EncodeToString(mac.Sum(nil))
-	sigBytes, err1 := hex.DecodeString(sig)
-	expBytes, err2 := hex.DecodeString(expected)
-	if err1 != nil || err2 != nil {
-		return false, nil
-	}
+	mac.Write([]byte(models.ReRegistrationHMACProofMessage(hostname, ts)))
+	expBytes := mac.Sum(nil)
 	if !hmac.Equal(sigBytes, expBytes) {
 		return false, nil
 	}
@@ -543,7 +596,7 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sanitizedHostname, modified := alerts.SanitizeAlertInput(input.Hostname, 255)
+	sanitizedHostname, modified := models.SanitizeReRegistrationHostname(input.Hostname)
 	if modified {
 		runiclog.Warn("hostname was sanitized during registration", "original_length", len(input.Hostname), "sanitized_length", len(sanitizedHostname))
 	}
@@ -573,7 +626,7 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 	existingID, _, err := h.PeerStore.FindPeerByHostname(ctx, input.Hostname)
 
 	if errors.Is(err, sql.ErrNoRows) {
-		_, agentToken, hmacKey, err := h.registerNewPeer(ctx, &input, w)
+		_, agentToken, hmacKey, agentKey, err := h.registerNewPeer(ctx, &input, w)
 		if err != nil {
 			var httpErr *common.HTTPError
 			if errors.As(err, &httpErr) {
@@ -592,6 +645,7 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 			"pull_interval_seconds":  86400,
 			"current_bundle_version": "",
 			"hmac_key":               hmacKey,
+			"agent_key":              agentKey,
 		})
 
 		if h.AlertService != nil {
@@ -620,10 +674,13 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Existing host: require a fresh single-use registration token or proof
-	// of possession (valid agent JWT, stored agent_key, or HMAC proof). The
-	// HMAC key is only returned to authorized callers; unauthenticated
-	// callers use the authenticated rotation flow instead.
+	// Existing host: require proof of possession (valid agent JWT, stored
+	// agent_key, or HMAC proof) or a fresh single-use registration token.
+	// Non-destructive proofs are tried first so a valid token presented
+	// alongside a valid proof is preserved; the token method atomically
+	// claims the token before the re-registration update below. The HMAC
+	// key is only returned to authorized callers; unauthenticated callers
+	// use the authenticated rotation flow instead.
 	authorized, method, err := h.authorizeReRegistration(ctx, r, &input, existingID, input.Hostname)
 	if err != nil {
 		runiclog.Error("Failed to authorize re-registration", "error", err)
@@ -644,6 +701,38 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 
 	runiclog.Info("Agent re-registration authorized", "hostname", input.Hostname, "peer_id", existingID, "method", method)
 
+	// Atomically claim the single-use registration token before the
+	// re-registration update so two concurrent requests with the same token
+	// cannot both succeed: ConsumeRegistrationToken is a single atomic
+	// UPDATE ... WHERE used_at IS NULL AND is_revoked = 0, so the second
+	// claim sees zero rows and fails with 401 without reaching the update.
+	// Validation runs before the claim so a 400 does not burn the token;
+	// a DB failure after a successful claim burns the token and surfaces
+	// as 500, requiring a fresh token. Non-destructive methods
+	// (bearer/agent_key/hmac_proof) never consume a token, so a valid token
+	// presented alongside a valid proof is preserved for future use.
+	if method == "registration_token" {
+		if len(input.RegistrationToken) > registrationTokenMaxLen {
+			common.RespondError(w, http.StatusUnauthorized, "invalid registration token")
+			return
+		}
+		if err := validateAllIPs(input.AllIPs); err != nil {
+			common.RespondError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		consumed, err := h.ConsumeRegistrationToken(ctx, input.RegistrationToken, input.Hostname)
+		if err != nil {
+			runiclog.Error("Failed to consume registration token before re-registration", "error", err, "peer_id", existingID)
+			common.InternalError(w)
+			return
+		}
+		if !consumed {
+			// Token revoked or concurrently consumed between peek and claim.
+			common.RespondError(w, http.StatusUnauthorized, "invalid registration token")
+			return
+		}
+	}
+
 	newToken, existingHMACKey, err := h.reRegisterExistingPeer(ctx, &input, existingID)
 	if err != nil {
 		var httpErr *common.HTTPError
@@ -657,13 +746,25 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	hostID := fmt.Sprintf("host-%s", input.Hostname)
-	common.RespondJSON(w, http.StatusOK, map[string]interface{}{
+	resp := map[string]interface{}{
 		"host_id":                hostID,
 		"token":                  newToken,
 		"pull_interval_seconds":  86400,
 		"current_bundle_version": "",
 		"hmac_key":               existingHMACKey,
-	})
+	}
+	// Bootstrap old fleet that never received an agent key: return the stored
+	// agent key only when authorized via HMAC proof or a fresh registration
+	// token, so a captured agent key alone cannot be exchanged for key
+	// disclosure and HMAC rotation can fall back to agent_key afterwards.
+	if method == "hmac_proof" || method == "registration_token" {
+		if peer, lookupErr := h.PeerStore.GetPeerByID(ctx, existingID); lookupErr != nil {
+			runiclog.Error("Failed to lookup stored agent key for re-registration bootstrap", "error", lookupErr, "peer_id", existingID)
+		} else if peer.AgentKey != "" {
+			resp["agent_key"] = peer.AgentKey
+		}
+	}
+	common.RespondJSON(w, http.StatusOK, resp)
 }
 
 func (h *Handler) GetBundle(w http.ResponseWriter, r *http.Request) {

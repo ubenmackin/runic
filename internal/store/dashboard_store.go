@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -239,6 +240,26 @@ func (s *DashboardStore) RevokeRegistrationToken(ctx context.Context, id string)
 		return false, fmt.Errorf("rows affected: %w", err)
 	}
 	return rowsAffected > 0, nil
+}
+
+// PeekRegistrationToken reports whether a registration token appears usable
+// without consuming it. It mirrors the WHERE clause of
+// ConsumeRegistrationToken (unused, unrevoked) so callers can validate
+// without burning the single-use token. Fail-closed: database errors
+// propagate as errors.
+func (s *DashboardStore) PeekRegistrationToken(ctx context.Context, token string) (bool, error) {
+	if token == "" {
+		return false, nil
+	}
+	var exists int
+	err := s.db.QueryRowContext(ctx, "SELECT 1 FROM registration_tokens WHERE token = ? AND used_at IS NULL AND is_revoked = 0 LIMIT 1", token).Scan(&exists)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("peek registration token: %w", err)
+	}
+	return true, nil
 }
 
 // ConsumeRegistrationToken atomically consumes a registration token.

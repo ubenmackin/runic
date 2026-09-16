@@ -2,13 +2,18 @@ package identity
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"runic/internal/common"
 	"runic/internal/models"
@@ -300,5 +305,280 @@ func TestDetectLocalIPSkipsLoopbackInterfaces(t *testing.T) {
 		if ip != nil && ip.IsLoopback() {
 			t.Errorf("detectLocalIP returned loopback address: %s", result)
 		}
+	}
+}
+
+func verifyReRegistrationHMACProofShape(t *testing.T, hmacKey, hostname string, ts int64, sig string) {
+	t.Helper()
+	if ts == 0 {
+		t.Fatal("expected non-zero hmac_proof_timestamp")
+	}
+	if sig == "" {
+		t.Fatal("expected non-empty hmac_proof_signature")
+	}
+	now := time.Now().Unix()
+	skew := int64((5 * time.Minute).Seconds())
+	if ts < now-skew || ts > now+skew {
+		t.Errorf("proof timestamp %d outside 5m skew window around now %d (host clock must be NTP-synced)", ts, now)
+	}
+	mac := hmac.New(sha256.New, []byte(hmacKey))
+	mac.Write([]byte(models.ReRegistrationHMACProofMessage(hostname, ts)))
+	expected := hex.EncodeToString(mac.Sum(nil))
+	sigBytes, err1 := hex.DecodeString(sig)
+	expBytes, err2 := hex.DecodeString(expected)
+	if err1 != nil || err2 != nil {
+		t.Fatalf("proof signature not hex-decodable: sigErr=%v expErr=%v", err1, err2)
+	}
+	if !hmac.Equal(sigBytes, expBytes) {
+		t.Error("proof signature does not match server verifier shape hex(HMAC-SHA256(key, \"runic-re-register:<hostname>:<timestamp>\"))")
+	}
+}
+
+func TestBuildHMACProofReturnsVerifiableSignature(t *testing.T) {
+	rawHostname, err := os.Hostname()
+	if err != nil {
+		rawHostname = "unknown"
+	}
+	// Mirror production Register sanitization (register.go:55-56) so the
+	// proof covers the sanitized hostname the server verifies.
+	hostname, _ := models.SanitizeReRegistrationHostname(rawHostname)
+	ts, sig := BuildHMACProof(hostname, "test-hmac-secret")
+	verifyReRegistrationHMACProofShape(t, "test-hmac-secret", hostname, ts, sig)
+}
+
+func TestBuildHMACProofEmptyKeyReturnsZero(t *testing.T) {
+	ts, sig := BuildHMACProof("any-host", "")
+	if ts != 0 || sig != "" {
+		t.Errorf("expected zero values for empty key, got ts=%d sig=%q", ts, sig)
+	}
+}
+
+func TestRegisterSendsHMACProofWhenKeyPresent(t *testing.T) {
+	var gotBody models.AgentRegisterRequest
+	var gotAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Errorf("failed to decode request body: %v", err)
+		}
+		resp := models.AgentRegisterResponse{
+			HostID:           "host-123",
+			Token:            "token-abc",
+			PullInterval:     3600,
+			CurrentBundleVer: "v1.0.0",
+			HMACKey:          "new-hmac-key",
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	cfg := &Config{
+		ControlPlaneURL:   server.URL,
+		HMACKey:           "stored-hmac-secret",
+		RegistrationToken: "reg-token-123",
+		Token:             "existing-bearer-token",
+	}
+
+	if err := Register(context.Background(), server.Client(), cfg, "v1.0.0", func() error { return nil }, nil); err != nil {
+		t.Fatalf("Register failed: %v", err)
+	}
+
+	if gotBody.Hostname == "" {
+		t.Fatal("expected hostname to be set")
+	}
+	verifyReRegistrationHMACProofShape(t, "stored-hmac-secret", gotBody.Hostname, gotBody.HMACProofTimestamp, gotBody.HMACProofSignature)
+	if gotBody.RegistrationToken != "reg-token-123" {
+		t.Errorf("expected RegistrationToken to still be sent alongside proof, got %q", gotBody.RegistrationToken)
+	}
+	if gotAuth != "Bearer existing-bearer-token" {
+		t.Errorf("expected bearer token to still be sent, got %q", gotAuth)
+	}
+}
+
+func TestRegisterSkipsHMACProofWhenKeyEmpty(t *testing.T) {
+	var gotBody models.AgentRegisterRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Errorf("failed to decode request body: %v", err)
+		}
+		resp := models.AgentRegisterResponse{
+			HostID:           "host-123",
+			Token:            "token-abc",
+			PullInterval:     3600,
+			CurrentBundleVer: "v1.0.0",
+			HMACKey:          "hmac-secret-key",
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	cfg := &Config{
+		ControlPlaneURL: server.URL,
+		HMACKey:         "",
+	}
+
+	if err := Register(context.Background(), server.Client(), cfg, "v1.0.0", func() error { return nil }, nil); err != nil {
+		t.Fatalf("Register failed: %v", err)
+	}
+
+	if gotBody.HMACProofTimestamp != 0 {
+		t.Errorf("expected no proof timestamp for empty key, got %d", gotBody.HMACProofTimestamp)
+	}
+	if gotBody.HMACProofSignature != "" {
+		t.Error("expected no proof signature for empty key (first boot/new peer)")
+	}
+}
+
+func TestRegisterSendsAgentKeyWhenSet(t *testing.T) {
+	var gotBody models.AgentRegisterRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Errorf("failed to decode request body: %v", err)
+		}
+		resp := models.AgentRegisterResponse{
+			HostID:           "host-123",
+			Token:            "token-abc",
+			PullInterval:     3600,
+			CurrentBundleVer: "v1.0.0",
+			HMACKey:          "new-hmac-key",
+			AgentKey:         "agent-key-sent",
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	cfg := &Config{
+		ControlPlaneURL: server.URL,
+		HMACKey:         "stored-hmac-secret",
+		AgentKey:        "agent-key-sent",
+		Token:           "existing-bearer-token",
+	}
+
+	if err := Register(context.Background(), server.Client(), cfg, "v1.0.0", func() error { return nil }, nil); err != nil {
+		t.Fatalf("Register failed: %v", err)
+	}
+
+	if gotBody.AgentKey != "agent-key-sent" {
+		t.Errorf("expected AgentKey to be sent when set, got %q", gotBody.AgentKey)
+	}
+	if gotBody.Hostname == "" {
+		t.Fatal("expected hostname to be set")
+	}
+	verifyReRegistrationHMACProofShape(t, "stored-hmac-secret", gotBody.Hostname, gotBody.HMACProofTimestamp, gotBody.HMACProofSignature)
+	if cfg.AgentKey != "agent-key-sent" {
+		t.Errorf("expected AgentKey persisted, got %q", cfg.AgentKey)
+	}
+	if cfg.HMACKey != "new-hmac-key" {
+		t.Errorf("expected HMACKey persisted, got %q", cfg.HMACKey)
+	}
+	if cfg.RegistrationToken != "" {
+		t.Errorf("expected RegistrationToken cleared, got %q", cfg.RegistrationToken)
+	}
+}
+
+func TestRegisterOmitsAgentKeyWhenEmpty(t *testing.T) {
+	var gotBody models.AgentRegisterRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Errorf("failed to decode request body: %v", err)
+		}
+		resp := models.AgentRegisterResponse{
+			HostID:           "host-123",
+			Token:            "token-abc",
+			PullInterval:     3600,
+			CurrentBundleVer: "v1.0.0",
+			HMACKey:          "hmac-secret-key",
+			AgentKey:         "agent-key-new",
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	cfg := &Config{
+		ControlPlaneURL: server.URL,
+		HMACKey:         "stored-hmac-secret",
+		AgentKey:        "",
+	}
+
+	if err := Register(context.Background(), server.Client(), cfg, "v1.0.0", func() error { return nil }, nil); err != nil {
+		t.Fatalf("Register failed: %v", err)
+	}
+
+	if gotBody.AgentKey != "" {
+		t.Errorf("expected empty AgentKey to be omitted, got %q", gotBody.AgentKey)
+	}
+	if cfg.AgentKey != "agent-key-new" {
+		t.Errorf("expected AgentKey persisted from response, got %q", cfg.AgentKey)
+	}
+}
+
+func TestRegisterHealsExpiredTokenWithoutManualToken(t *testing.T) {
+	var gotBody models.AgentRegisterRequest
+	var gotAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Errorf("failed to decode request body: %v", err)
+		}
+		if gotBody.RegistrationToken != "" {
+			t.Errorf("expected no manual registration token on heal path, got %q", gotBody.RegistrationToken)
+		}
+		resp := models.AgentRegisterResponse{
+			HostID:           "host-heal",
+			Token:            "fresh-token-xyz",
+			PullInterval:     3600,
+			CurrentBundleVer: "v1.0.0",
+			HMACKey:          "stored-hmac-secret",
+			AgentKey:         "agent-key-existing",
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	cfg := &Config{
+		ControlPlaneURL:   server.URL,
+		Token:             "expired-bearer-token",
+		HMACKey:           "stored-hmac-secret",
+		AgentKey:          "agent-key-existing",
+		RegistrationToken: "",
+	}
+
+	saveCalled := false
+	if err := Register(context.Background(), server.Client(), cfg, "v1.0.0", func() error {
+		saveCalled = true
+		return nil
+	}, nil); err != nil {
+		t.Fatalf("Register heal failed: %v", err)
+	}
+
+	if gotAuth != "Bearer expired-bearer-token" {
+		t.Errorf("expected expired bearer to still be sent, got %q", gotAuth)
+	}
+	if gotBody.Hostname == "" {
+		t.Fatal("expected hostname to be set on heal path")
+	}
+	if gotBody.AgentKey != "agent-key-existing" {
+		t.Errorf("expected AgentKey sent on heal path, got %q", gotBody.AgentKey)
+	}
+	verifyReRegistrationHMACProofShape(t, "stored-hmac-secret", gotBody.Hostname, gotBody.HMACProofTimestamp, gotBody.HMACProofSignature)
+	if !saveCalled {
+		t.Error("expected saveFunc to be called on heal success")
+	}
+	if cfg.Token != "fresh-token-xyz" {
+		t.Errorf("expected fresh token after heal, got %q", cfg.Token)
+	}
+	if cfg.HMACKey != "stored-hmac-secret" {
+		t.Errorf("expected HMACKey persisted after heal, got %q", cfg.HMACKey)
+	}
+	if cfg.AgentKey != "agent-key-existing" {
+		t.Errorf("expected AgentKey persisted after heal, got %q", cfg.AgentKey)
+	}
+	if cfg.RegistrationToken != "" {
+		t.Errorf("expected RegistrationToken cleared after heal, got %q", cfg.RegistrationToken)
 	}
 }

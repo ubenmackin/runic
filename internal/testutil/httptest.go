@@ -16,6 +16,11 @@ func MuxVars(r *http.Request, vars map[string]string) *http.Request {
 	return mux.SetURLVars(r, vars)
 }
 
+// TestAgentJWTSecret is the shared agent JWT secret for tests. It is inserted
+// into system_config by SetupTestDBWithSecret helpers and reused by handler
+// tests when signing tokens so the magic value lives in exactly one place.
+const TestAgentJWTSecret = "test-secret-key-for-agent-jwt-256-bits!!"
+
 // SetupTestDBWithSecret is required for tests that verify agent authentication.
 func SetupTestDBWithSecret(t *testing.T) (*sql.DB, func()) {
 	db, cleanup := SetupTestDB(t)
@@ -23,7 +28,7 @@ func SetupTestDBWithSecret(t *testing.T) (*sql.DB, func()) {
 	_, err := db.Exec(
 		"INSERT INTO system_config (key, value) VALUES (?, ?)",
 		"agent_jwt_secret",
-		"test-secret-key-for-agent-jwt-256-bits!!",
+		TestAgentJWTSecret,
 	)
 	if err != nil {
 		cleanup()
@@ -43,7 +48,7 @@ func SetupTestDBWithSecretAndLogs(t *testing.T) (*sql.DB, *sql.DB, func()) {
 	_, err := mainDB.Exec(
 		"INSERT INTO system_config (key, value) VALUES (?, ?)",
 		"agent_jwt_secret",
-		"test-secret-key-for-agent-jwt-256-bits!!",
+		TestAgentJWTSecret,
 	)
 	if err != nil {
 		logsCleanup()
