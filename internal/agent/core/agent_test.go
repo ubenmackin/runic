@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1821,5 +1822,140 @@ func TestPollLoopSkipsDuplicatePull(t *testing.T) {
 	// and the ticker interval is 86400 seconds so no ticker fires during 50ms
 	if pullCount != 0 {
 		t.Errorf("Expected 0 pulls with skipFirstPull=true, got %d", pullCount)
+	}
+}
+
+func TestThrottledRegisterCooldownSkipsSecondCall(t *testing.T) {
+	origCooldown := reRegisterCooldown
+	reRegisterCooldown = time.Minute
+	t.Cleanup(func() { reRegisterCooldown = origCooldown })
+
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.Path, "register") {
+			http.NotFound(w, r)
+			return
+		}
+		calls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"host_id": "new-host",
+			"token":   "new-token",
+		})
+	}))
+	defer server.Close()
+
+	cfg := helperConfig()
+	configPath := helperConfigPath(t, cfg)
+
+	agent := New(configPath, server.URL)
+	agent.config.ControlPlaneURL = server.URL
+	agent.config.HostID = "test-host"
+	agent.config.Token = "test-token"
+	agent.httpClient = server.Client()
+
+	ctx := context.Background()
+	skipped, err := agent.throttledRegister(ctx, true)
+	if err != nil {
+		t.Fatalf("first throttledRegister() error = %v", err)
+	}
+	if skipped {
+		t.Error("first throttledRegister() skipped = true, want false")
+	}
+	skipped2, err := agent.throttledRegister(ctx, true)
+	if err != nil {
+		t.Fatalf("second throttledRegister() error = %v", err)
+	}
+	if !skipped2 {
+		t.Error("second immediate throttledRegister() skipped = false, want true due to cooldown")
+	}
+	if got := calls.Load(); got != 1 {
+		t.Errorf("register calls = %d, want 1 (second call must not hit server)", got)
+	}
+}
+
+func TestSseReauthDelayExponentialAndRetryAfter(t *testing.T) {
+	origBase := sseReauthBaseDelay
+	origMax := sseReauthMaxDelay
+	sseReauthBaseDelay = 100 * time.Millisecond
+	sseReauthMaxDelay = 5 * time.Second
+	t.Cleanup(func() {
+		sseReauthBaseDelay = origBase
+		sseReauthMaxDelay = origMax
+	})
+
+	d1 := sseReauthDelay(1, 0, false)
+	d2 := sseReauthDelay(2, 0, false)
+	d3 := sseReauthDelay(3, 0, false)
+
+	if d1 < 100*time.Millisecond || d1 > 120*time.Millisecond {
+		t.Errorf("sseReauthDelay(1) = %v, want in [100ms,120ms]", d1)
+	}
+	if d2 < 200*time.Millisecond || d2 > 240*time.Millisecond {
+		t.Errorf("sseReauthDelay(2) = %v, want in [200ms,240ms]", d2)
+	}
+	if d3 < 400*time.Millisecond || d3 > 480*time.Millisecond {
+		t.Errorf("sseReauthDelay(3) = %v, want in [400ms,480ms]", d3)
+	}
+	if !(d2 > d1 && d3 > d2) {
+		t.Errorf("sseReauthDelay not exponential: d1=%v d2=%v d3=%v", d1, d2, d3)
+	}
+
+	dRetry := sseReauthDelay(1, 60*time.Second, true)
+	if dRetry < 60*time.Second {
+		t.Errorf("sseReauthDelay with RetryAfter 60s = %v, want >=60s", dRetry)
+	}
+
+	capped := sseReauthDelay(100, 0, false)
+	if capped < 5*time.Second || capped > 6*time.Second {
+		t.Errorf("sseReauthDelay(100) = %v, want capped near max [5s,6s]", capped)
+	}
+}
+
+func TestListenSSEHotLoopThrottled(t *testing.T) {
+	origCooldown := reRegisterCooldown
+	reRegisterCooldown = 150 * time.Millisecond
+	t.Cleanup(func() { reRegisterCooldown = origCooldown })
+	origBase := sseReauthBaseDelay
+	sseReauthBaseDelay = 10 * time.Millisecond
+	t.Cleanup(func() { sseReauthBaseDelay = origBase })
+	origMax := sseReauthMaxDelay
+	sseReauthMaxDelay = 50 * time.Millisecond
+	t.Cleanup(func() { sseReauthMaxDelay = origMax })
+
+	var registerCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "events") {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if strings.Contains(r.URL.Path, "register") {
+			registerCalls.Add(1)
+			w.Header().Set("Retry-After", "1")
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte("rate limited"))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	cfg := helperConfig()
+	configPath := helperConfigPath(t, cfg)
+
+	agent := New(configPath, server.URL)
+	agent.config.ControlPlaneURL = server.URL
+	agent.config.HostID = "test-host"
+	agent.config.Token = "test-token"
+	agent.httpClient = server.Client()
+	agent.sseClient = server.Client()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	_ = agent.listenSSE(ctx)
+
+	if got := registerCalls.Load(); got > 2 {
+		t.Errorf("register calls in 200ms window = %d, want <=2 (hot loop not throttled, want 1-2 not 8+)", got)
 	}
 }

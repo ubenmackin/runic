@@ -6,12 +6,12 @@ import (
 	"io"
 	"net/http"
 	"runtime"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/minio/selfupdate"
 
+	"runic/internal/common"
 	sharedarch "runic/internal/common/arch"
 	"runic/internal/common/log"
 	"runic/internal/common/version"
@@ -51,68 +51,11 @@ func isRetryableUpdateStatus(code int) bool {
 	return code >= 500 && code <= 599
 }
 
-// parseUpdateRetryAfter parses a Retry-After header value, which is either
-// delta-seconds or an HTTP date. It returns 0 when the header is missing,
-// unparseable, or in the past.
-func parseUpdateRetryAfter(header string) time.Duration {
-	header = strings.TrimSpace(header)
-	if header == "" {
-		return 0
-	}
-	if secs, err := strconv.Atoi(header); err == nil {
-		if secs < 0 {
-			return 0
-		}
-		return time.Duration(secs) * time.Second
-	}
-	if t, err := time.Parse(http.TimeFormat, header); err == nil {
-		d := time.Until(t)
-		if d < 0 {
-			return 0
-		}
-		return d
-	}
-	return 0
-}
-
-// parseUpdateRetryAfterPresent parses a Retry-After header value and reports
-// whether the header was present and parseable. A present header with value
-// "0" or a past date yields (0, true) so callers can honor it as an immediate
-// retry instead of falling back to exponential backoff. Missing or
-// unparseable headers yield (0, false).
-func parseUpdateRetryAfterPresent(header string) (time.Duration, bool) {
-	trimmed := strings.TrimSpace(header)
-	if trimmed == "" {
-		return 0, false
-	}
-	d := parseUpdateRetryAfter(trimmed)
-	if d != 0 {
-		return d, true
-	}
-	// d == 0: distinguish present-zero ("0", negative delta, past date)
-	// from unparseable input.
-	if _, err := strconv.Atoi(trimmed); err == nil {
-		return 0, true
-	}
-	if _, err := time.Parse(http.TimeFormat, trimmed); err == nil {
-		return 0, true
-	}
-	return 0, false
-}
-
 // sleepWithUpdateContext sleeps for d or returns early when ctx is done.
+// It delegates to the shared core sleepWithContext helper so the
+// timer+select logic stays in one place.
 func sleepWithUpdateContext(ctx context.Context, d time.Duration) error {
-	if d <= 0 {
-		return nil
-	}
-	timer := time.NewTimer(d)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
-	}
+	return sleepWithContext(ctx, d)
 }
 
 // countingReader wraps a download stream and counts bytes read so the update
@@ -161,7 +104,7 @@ func downloadBinary(ctx context.Context, client *http.Client, controlPlaneURL, a
 			if ctx.Err() != nil {
 				return nil, lastErr
 			}
-			delay := updateBackoffDelay(attempt)
+			delay := common.AddJitter(updateBackoffDelay(attempt))
 			log.Warn("Agent update download retryable, backing off", "attempt", attempt, "error", err, "delay", delay.String())
 			if err := sleepWithUpdateContext(ctx, delay); err != nil {
 				return nil, fmt.Errorf("download backoff interrupted: %w", err)
@@ -172,7 +115,7 @@ func downloadBinary(ctx context.Context, client *http.Client, controlPlaneURL, a
 			return resp.Body, nil
 		}
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
-		retryAfter, haveRetryAfter := parseUpdateRetryAfterPresent(resp.Header.Get("Retry-After"))
+		retryAfter, haveRetryAfter := common.ParseRetryAfterPresent(resp.Header.Get("Retry-After"))
 		if closeErr := resp.Body.Close(); closeErr != nil {
 			log.Warn("Failed to close response body", "error", closeErr)
 		}
@@ -181,9 +124,10 @@ func downloadBinary(ctx context.Context, client *http.Client, controlPlaneURL, a
 			return nil, lastErr
 		}
 		delay := retryAfter
-		if !haveRetryAfter {
+		if !haveRetryAfter || retryAfter <= 0 {
 			delay = updateBackoffDelay(attempt)
 		}
+		delay = common.AddJitter(delay)
 		log.Warn("Agent update download retryable, backing off", "attempt", attempt, "status", resp.StatusCode, "delay", delay.String())
 		if err := sleepWithUpdateContext(ctx, delay); err != nil {
 			return nil, fmt.Errorf("download backoff interrupted: %w", err)

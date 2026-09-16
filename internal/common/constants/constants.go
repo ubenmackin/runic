@@ -47,6 +47,15 @@ const (
 	// to reconnect a dropped SSE stream.
 	SSEReconnectDelay = 15 * time.Second
 
+	// SSEReauthMaxDelay caps the exponential SSE re-auth backoff.
+	SSEReauthMaxDelay = 5 * time.Minute
+
+	// ReRegisterCooldown is the minimum interval between agent
+	// re-registration attempts. Coincident 401s from heartbeat, poll,
+	// and SSE paths share this cooldown so a single credential expiry
+	// does not trigger a thundering herd of register calls.
+	ReRegisterCooldown = 60 * time.Second
+
 	// LogShipperBatchInterval is how often the log shipper flushes buffered
 	// log entries to the control plane.
 	LogShipperBatchInterval = 10 * time.Second

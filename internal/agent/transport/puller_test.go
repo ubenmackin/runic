@@ -3,6 +3,7 @@ package transport
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -798,5 +799,117 @@ func TestValidateUpdateURLShape_MatchesValidateUpdateURL(t *testing.T) {
 		if (shapeErr == nil) != (fullErrMsg == "") {
 			t.Errorf("mismatch for %q: shape err %q vs full err %q", raw, shapeErrMsg, fullErrMsg)
 		}
+	}
+}
+
+func TestConnectSSE401MapsToErrUnauthorized(t *testing.T) {
+	server := testServer(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	})
+	defer server.Close()
+
+	err := connectSSE(context.Background(), server.Client(), server.URL, "host123", "test-token", "1.0.0",
+		func(context.Context) {}, func(context.Context) {}, func(context.Context, string) {})
+	if err == nil {
+		t.Fatal("connectSSE() expected error for 401, got nil")
+	}
+	if !errors.Is(err, common.ErrUnauthorized) {
+		t.Errorf("errors.Is(err, ErrUnauthorized) = false, want true (err=%v)", err)
+	}
+	if !common.IsUnauthorized(err) {
+		t.Errorf("IsUnauthorized(err) = false, want true (err=%v)", err)
+	}
+	if common.IsRateLimited(err) {
+		t.Errorf("IsRateLimited(401 err) = true, want false")
+	}
+	var httpErr *common.HTTPStatusError
+	if !errors.As(err, &httpErr) {
+		t.Fatalf("error does not wrap *HTTPStatusError: %v", err)
+	}
+	if httpErr.StatusCode != http.StatusUnauthorized {
+		t.Errorf("StatusCode = %d, want 401", httpErr.StatusCode)
+	}
+}
+
+func TestConnectSSE401WithRetryAfterStillUnauthorized(t *testing.T) {
+	server := testServer(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "2")
+		w.WriteHeader(http.StatusUnauthorized)
+	})
+	defer server.Close()
+
+	err := connectSSE(context.Background(), server.Client(), server.URL, "host123", "test-token", "1.0.0",
+		func(context.Context) {}, func(context.Context) {}, func(context.Context, string) {})
+	if err == nil {
+		t.Fatal("connectSSE() expected error for 401, got nil")
+	}
+	if !errors.Is(err, common.ErrUnauthorized) {
+		t.Errorf("errors.Is(err, ErrUnauthorized) = false, want true (err=%v)", err)
+	}
+	if common.IsRateLimited(err) {
+		t.Errorf("IsRateLimited(401 with Retry-After) = true, want false")
+	}
+	var httpErr *common.HTTPStatusError
+	if !errors.As(err, &httpErr) {
+		t.Fatalf("error does not wrap *HTTPStatusError: %v", err)
+	}
+	if d, ok := common.RetryAfterOf(err); d != 2*time.Second || !ok {
+		t.Errorf("RetryAfterOf(401 with Retry-After:2) = (%v,%v), want (2s,true)", d, ok)
+	}
+}
+
+func TestListenSSE401ReturnsFastWithoutReconnectDelay(t *testing.T) {
+	server := testServer(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	})
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	err := ListenSSE(ctx, server.Client(), server.URL, "host123", "test-token", "1.0.0",
+		func(context.Context) {}, func(context.Context) {}, func(context.Context, string) {})
+	elapsed := time.Since(start)
+
+	if !errors.Is(err, common.ErrUnauthorized) {
+		t.Fatalf("ListenSSE() error = %v, want ErrUnauthorized", err)
+	}
+	if elapsed >= 1*time.Second {
+		t.Errorf("ListenSSE() 401 path took %v, want <1s (must not wait 15s reconnect delay)", elapsed)
+	}
+}
+
+func TestListenSSE503WaitsForReconnectDelay(t *testing.T) {
+	orig := sseReconnectDelay
+	sseReconnectDelay = 10 * time.Millisecond
+	t.Cleanup(func() { sseReconnectDelay = orig })
+
+	var calls atomic.Int32
+	server := testServer(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+	})
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	err := ListenSSE(ctx, server.Client(), server.URL, "host123", "test-token", "1.0.0",
+		func(context.Context) {}, func(context.Context) {}, func(context.Context, string) {})
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Log("ListenSSE() returned nil on timeout path (acceptable when ctx expires during reconnect wait)")
+	}
+	if got := calls.Load(); got < 2 {
+		t.Errorf("ListenSSE() 503 calls = %d, want >=2 (must retry after reconnect delay)", got)
+	}
+	if elapsed < sseReconnectDelay {
+		t.Errorf("ListenSSE() 503 elapsed = %v, want >= reconnect delay %v", elapsed, sseReconnectDelay)
+	}
+	if elapsed >= 5*time.Second {
+		t.Errorf("ListenSSE() 503 elapsed = %v, want fast test with shortened delay", elapsed)
 	}
 }
