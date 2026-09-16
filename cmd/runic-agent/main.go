@@ -435,7 +435,7 @@ func runSetupWizard(configPath string, defaultControlPlaneURL string) error {
 	logPath := promptLogPath(reader, cfg.LogPath)
 	disableSystemIPTables := promptYesNo(reader, "Disable system-managed iptables services", cfg.DisableSystemManagedIPTables)
 
-	// Preserve existing config values for host_id, token, hmac_key (already loaded)
+	// Preserve existing config values for host_id, token, hmac_key, agent_key (already loaded)
 	cfg.ControlPlaneURL = controlPlaneURL
 	cfg.ApplyOnBoot = applyOnBoot
 	cfg.ApplyRulesBundle = applyRulesBundle
