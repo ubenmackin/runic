@@ -40,16 +40,35 @@ type Agent struct {
 	version         string
 	shipper         *transport.Shipper
 	rotationManager *rotation.Manager
-	regMu           sync.Mutex // protects re-registration from concurrent calls
-	cmdRunner       firewall.CommandRunner
-	cachePath       string
-	backupPath      string
-	exitFunc        func(int)   // for testing; defaults to os.Exit
-	bootPullDone    atomic.Bool // tracks whether a fresh bundle pull was done during initialization
-	updateRunning   atomic.Bool // singleflight for self-update; only one performUpdate may run at a time
-	lastUpdateErrMu sync.RWMutex
-	lastUpdateErr   string // last self-update failure reason, reported on the next heartbeat
+	regMu           sync.Mutex // protects re-registration from concurrent calls and guards lastRegAttempt/sseAuthFailures/lastRetryAfter
+	lastRegAttempt  time.Time  // last re-registration attempt time for cooldown throttling
+	sseAuthFailures int        // consecutive SSE 401 failures for exponential backoff
+	// lastRetryAfter preserves the most recent parsed Retry-After hint from a
+	// failed registration so a later cooldown skip can still honor the 429
+	// delay instead of falling back to the base backoff.
+	lastRetryAfter    time.Duration // last Retry-After hint from failed registration
+	hasLastRetryAfter bool          // whether lastRetryAfter holds a present and parseable hint
+	cmdRunner         firewall.CommandRunner
+	cachePath         string
+	backupPath        string
+	exitFunc          func(int)   // for testing; defaults to os.Exit
+	bootPullDone      atomic.Bool // tracks whether a fresh bundle pull was done during initialization
+	updateRunning     atomic.Bool // singleflight for self-update; only one performUpdate may run at a time
+	lastUpdateErrMu   sync.RWMutex
+	lastUpdateErr     string // last self-update failure reason, reported on the next heartbeat
 }
+
+// reRegisterCooldown is the minimum interval between re-registration
+// attempts. It is a var (not const) so unit tests can shorten the wait.
+var reRegisterCooldown = constants.ReRegisterCooldown
+
+// sseReauthBaseDelay is the base delay for SSE 401 re-auth backoff.
+// It is a var (not const) so unit tests can shorten the wait.
+var sseReauthBaseDelay = constants.SSEReconnectDelay
+
+// sseReauthMaxDelay caps the exponential SSE re-auth backoff.
+// It is a var (not const) so unit tests can shorten the wait.
+var sseReauthMaxDelay = constants.SSEReauthMaxDelay
 
 // maxLastUpdateErrLen caps the stored self-update failure reason so a long
 // server response cannot grow memory or heartbeat payloads without bound.
@@ -426,9 +445,14 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 			if err := a.sendHeartbeat(ctx); err != nil {
 				log.Error("Heartbeat failed", "error", err)
 				if errors.Is(err, common.ErrUnauthorized) {
-					log.Warn("Received 401 on heartbeat, triggering re-registration")
-					if regErr := a.register(ctx, true); regErr != nil {
-						log.Error("Re-registration failed", "error", regErr)
+					skipped, regErr := a.throttledRegister(ctx, true)
+					if skipped {
+						log.Debug("Re-registration skipped, cooldown not expired after 401 on heartbeat")
+					} else {
+						log.Warn("Received 401 on heartbeat, triggering re-registration")
+						if regErr != nil {
+							log.Error("Re-registration failed", "error", regErr)
+						}
 					}
 				}
 			}
@@ -469,9 +493,14 @@ func (a *Agent) pollLoop(ctx context.Context) {
 			if err := a.pullBundle(ctx); err != nil {
 				log.Error("Bundle poll failed", "error", err)
 				if errors.Is(err, common.ErrUnauthorized) {
-					log.Warn("Received 401 on bundle poll, triggering re-registration")
-					if regErr := a.register(ctx, true); regErr != nil {
-						log.Error("Re-registration failed", "error", regErr)
+					skipped, regErr := a.throttledRegister(ctx, true)
+					if skipped {
+						log.Debug("Re-registration skipped, cooldown not expired after 401 on bundle poll")
+					} else {
+						log.Warn("Received 401 on bundle poll, triggering re-registration")
+						if regErr != nil {
+							log.Error("Re-registration failed", "error", regErr)
+						}
 					}
 				}
 			}
@@ -507,23 +536,11 @@ func (a *Agent) confirmApply(ctx context.Context, version string) error {
 	return transport.ConfirmApply(ctx, a.httpClient, cfg.ControlPlaneURL, cfg.HostID, cfg.Token, a.version, version)
 }
 
-// register performs agent registration. When force is true, it always attempts
-// registration; when false, it only registers if credentials are missing.
-// The regMu prevents thundering herd when multiple loops detect 401 simultaneously.
-func (a *Agent) register(ctx context.Context, force bool) error {
-	a.regMu.Lock()
-	defer a.regMu.Unlock()
-
-	if !force {
-		cfg := a.getConfig()
-		if !cfg.NeedsRegistration() {
-			return nil
-		}
-	}
-
-	log.Info("Attempting registration", "force", force)
-
-	// Snapshot config, release, perform HTTP, re-acquire.
+// doRegister performs the registration network I/O and swaps the new config
+// into place. It must be called without holding regMu; it uses configMu
+// internally for the swap. Both register and throttledRegister share this
+// helper so identity.Register + SaveConfig + config swap cannot drift.
+func (a *Agent) doRegister(ctx context.Context) error {
 	cfg := a.getConfig()
 
 	if err := identity.Register(ctx, a.httpClient, &cfg, a.version, func() error {
@@ -541,6 +558,152 @@ func (a *Agent) register(ctx context.Context, force bool) error {
 	}
 	a.configMu.Unlock()
 	return nil
+}
+
+// storeRetryAfterLocked records the Retry-After hint carried by err, or
+// clears any stored hint when err carries none (including nil on success).
+// It must be called with regMu held.
+func (a *Agent) storeRetryAfterLocked(err error) {
+	if retryAfter, ok := common.RetryAfterOf(err); ok {
+		a.lastRetryAfter = retryAfter
+		a.hasLastRetryAfter = true
+		return
+	}
+	// Latest attempt carried no hint; drop any stale hint so a later
+	// cooldown skip does not honor an outdated 429 delay.
+	a.lastRetryAfter = 0
+	a.hasLastRetryAfter = false
+}
+
+// register performs agent registration. When force is true, it always attempts
+// registration; when false, it only registers if credentials are missing.
+// It delegates to registerInner with the cooldown bypassed so the Register +
+// SaveConfig + config swap stays in one place. This startup path does not
+// consult the re-registration cooldown, but it publishes lastRegAttempt and
+// the Retry-After hint handling so a 401 shortly after startup still observes
+// the cooldown (see throttledRegister); use throttledRegister for
+// 401-triggered retries.
+func (a *Agent) register(ctx context.Context, force bool) error {
+	_, err := a.registerInner(ctx, force, true)
+	return err
+}
+
+// throttledRegister attempts registration unless a recent attempt is still
+// within reRegisterCooldown. It returns (true, nil) when the attempt was
+// skipped due to cooldown, (false, nil) on success or when no registration
+// was needed, and (false, err) when registration was attempted and failed.
+// It delegates to registerInner with the cooldown enforced; see registerInner
+// for the shared NeedsRegistration check, lastRegAttempt publish, doRegister,
+// and Retry-After handling. sseAuthFailures is intentionally NOT reset here
+// so heartbeat/poll-triggered registrations do not couple to SSE backoff;
+// the SSE loop resets its own counter after an SSE-triggered success (see
+// listenSSE), since all paths share the same refreshed token.
+func (a *Agent) throttledRegister(ctx context.Context, force bool) (bool, error) {
+	return a.registerInner(ctx, force, false)
+}
+
+// registerInner is the single shared registration helper for register and
+// throttledRegister so the NeedsRegistration check, lastRegAttempt publish,
+// doRegister + storeRetryAfterLocked cannot drift between paths. When
+// bypassCooldown is true the cooldown is not consulted but the attempt time
+// is still published before I/O; when false a recent attempt within
+// reRegisterCooldown skips with (true, nil). The cooldown check and
+// lastRegAttempt publish hold regMu only briefly; network I/O runs without
+// holding regMu so heartbeat/poll/SSE loops never block on sseAuthFailures
+// updates for up to HTTPClientTimeout. Every real attempt publishes
+// lastRegAttempt before I/O so concurrent 401s observe the cooldown and
+// skip. A failed attempt with a present Retry-After hint stores it so a
+// later cooldown skip can still honor the 429 delay. A successful attempt
+// clears the stored hint.
+func (a *Agent) registerInner(ctx context.Context, force bool, bypassCooldown bool) (bool, error) {
+	if !force {
+		cfg := a.getConfig()
+		if !cfg.NeedsRegistration() {
+			return false, nil
+		}
+	}
+
+	a.regMu.Lock()
+	if !bypassCooldown {
+		last := a.lastRegAttempt
+		var since time.Duration
+		shouldSkip := false
+		if !last.IsZero() {
+			since = time.Since(last)
+			if since < reRegisterCooldown {
+				shouldSkip = true
+			}
+		}
+		if shouldSkip {
+			cooldown := reRegisterCooldown
+			a.regMu.Unlock()
+			log.Debug("Skipping re-registration, cooldown not expired", "since", since.String(), "cooldown", cooldown.String())
+			return true, nil
+		}
+	}
+	// Publish the attempt time before I/O so coincident 401s observe the
+	// cooldown and skip instead of stampeding the control plane.
+	a.lastRegAttempt = time.Now()
+	a.regMu.Unlock()
+
+	log.Info("Attempting registration", "force", force)
+
+	err := a.doRegister(ctx)
+
+	a.regMu.Lock()
+	defer a.regMu.Unlock()
+	a.storeRetryAfterLocked(err)
+	if err != nil {
+		return false, err
+	}
+	return false, nil
+}
+
+// sseReauthDelay returns the backoff before the next SSE re-registration
+// retry. The delay grows exponentially as base*2^(failures-1) capped at
+// sseReauthMaxDelay, plus jitter (up to 10% of the delay capped at 1s).
+// A present Retry-After hint overrides the computed delay when larger,
+// plus its own jitter (up to 10% of the hint capped at 1s) so coincident
+// 429s do not retry in lockstep. Callers that skipped registration due to
+// cooldown must pass the stored lastRetryAfter hint directly (see
+// listenSSE) instead of synthesizing an error, or the 429 delay is lost.
+func sseReauthDelay(failures int, retryAfter time.Duration, hasHint bool) time.Duration {
+	if failures < 1 {
+		failures = 1
+	}
+	base := sseReauthBaseDelay
+	for i := 1; i < failures; i++ {
+		base *= 2
+		if base >= sseReauthMaxDelay {
+			base = sseReauthMaxDelay
+			break
+		}
+	}
+	if base > sseReauthMaxDelay {
+		base = sseReauthMaxDelay
+	}
+	if hasHint && retryAfter > base {
+		return common.AddJitter(retryAfter)
+	}
+	return common.AddJitter(base)
+}
+
+// sleepWithContext sleeps for d or returns early when ctx is done.
+// It is the single shared interruptible-sleep helper for the core package;
+// updater.sleepWithUpdateContext delegates here so the timer+select logic
+// stays in one place.
+func sleepWithContext(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func (a *Agent) isControlPlaneReachable(ctx context.Context) bool {
@@ -631,16 +794,23 @@ func (a *Agent) applyCachedBundle(ctx context.Context) error {
 	return nil
 }
 
-// It handles 401 Unauthorized responses by triggering re-registration.
+// listenSSE maintains the long-lived SSE connection.
+// transport.ListenSSE only returns 401 Unauthorized (credential expiry) or a
+// context error; non-401 stream drops reconnect internally. Each 401
+// increments sseAuthFailures, attempts throttled re-registration, and backs
+// off via sseReauthDelay. A successful SSE-triggered registration resets
+// sseAuthFailures so the next 401 starts at the base delay; registrations
+// triggered by heartbeat/poll paths do not reset it (see throttledRegister).
 func (a *Agent) listenSSE(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return nil
 		default:
 		}
 
 		cfg := a.getConfig()
+		start := time.Now()
 		err := transport.ListenSSE(ctx, a.sseClient, cfg.ControlPlaneURL, cfg.HostID, cfg.Token, a.version, func(sseCtx context.Context) {
 			if pullErr := a.pullBundle(sseCtx); pullErr != nil {
 				log.Error("SSE-triggered bundle pull failed", "error", pullErr)
@@ -651,21 +821,63 @@ func (a *Agent) listenSSE(ctx context.Context) error {
 			a.handleUpdateAgent(sseCtx, controlPlaneURL)
 		})
 
-		if err != nil {
-			if errors.Is(err, common.ErrUnauthorized) {
-				log.Warn("Received 401 on SSE connection, triggering re-registration")
-				if regErr := a.register(ctx, true); regErr != nil {
-					log.Error("Re-registration failed", "error", regErr)
-				}
-				// After re-registration, continue the loop to reconnect with new token
-				continue
-			}
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil
+		}
+		if !errors.Is(err, common.ErrUnauthorized) {
+			// Defensive: unreachable per the transport contract, which
+			// reconnects non-401 drops internally. Back off before
+			// reconnecting so a contract violation cannot hot-loop
+			// spamming Error and burning CPU.
+			log.Error("SSE listener returned unexpected error, reconnecting", "error", err)
+			if sleepErr := sleepWithContext(ctx, sseReauthBaseDelay); sleepErr != nil {
 				return nil
 			}
-			log.Error("SSE listener returned unexpected error, propagating to errgroup", "error", err)
-			return fmt.Errorf("SSE listener error: %w", err)
+			continue
 		}
+
+		elapsed := time.Since(start)
+		a.regMu.Lock()
+		if elapsed >= sseReauthMaxDelay {
+			// Long-lived connection: prior failures are stale.
+			a.sseAuthFailures = 0
+		}
+		a.sseAuthFailures++
+		failures := a.sseAuthFailures
+		a.regMu.Unlock()
+
+		skipped, regErr := a.throttledRegister(ctx, true)
+		var retryAfter time.Duration
+		var hasHint bool
+		switch {
+		case skipped:
+			// Cooldown skip carries no error, which would lose the last 429
+			// hint. Reuse the stored hint so this backoff still honors
+			// Retry-After instead of falling back to the base delay.
+			a.regMu.Lock()
+			retryAfter, hasHint = a.lastRetryAfter, a.hasLastRetryAfter
+			a.regMu.Unlock()
+		case regErr != nil:
+			retryAfter, hasHint = common.RetryAfterOf(regErr)
+		default:
+			// SSE-triggered registration succeeded with fresh credentials.
+			a.regMu.Lock()
+			a.sseAuthFailures = 0
+			a.regMu.Unlock()
+		}
+		delay := sseReauthDelay(failures, retryAfter, hasHint)
+		switch {
+		case !skipped && regErr == nil:
+			log.Info("SSE re-registration succeeded, backing off before reconnect", "attempt", failures, "delay", delay.String(), "sseError", err)
+		case skipped:
+			log.Warn("Received 401 on SSE connection, re-registration skipped (cooldown), backing off before retry", "attempt", failures, "delay", delay.String(), "sseError", err, "retryAfter", retryAfter.String(), "hasRetryAfter", hasHint)
+		default:
+			log.Warn("Received 401 on SSE connection, backing off before re-registration retry", "attempt", failures, "delay", delay.String(), "sseError", err, "error", regErr)
+		}
+		if sleepErr := sleepWithContext(ctx, delay); sleepErr != nil {
+			return nil
+		}
+		// After re-registration, continue the loop to reconnect with new token
 	}
 }
 

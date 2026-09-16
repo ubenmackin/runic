@@ -22,6 +22,10 @@ import (
 	"runic/internal/models"
 )
 
+// sseReconnectDelay is the back-off before retrying a dropped SSE stream.
+// It is a var (not const) so unit tests can shorten the wait.
+var sseReconnectDelay = constants.SSEReconnectDelay
+
 // sseCallbackGuard prevents concurrent execution of SSE callback goroutines.
 // When the SSE connection dies and reconnects, a new set of goroutines may be
 // spawned before the old ones finish. The guard ensures at most one invocation
@@ -100,7 +104,11 @@ func PullBundle(ctx context.Context, client common.HTTPClient, controlPlaneURL, 
 		return nil
 	case http.StatusOK:
 	default:
-		return &common.HTTPStatusError{StatusCode: resp.StatusCode, Method: "GET", URL: url}
+		httpErr := common.NewHTTPStatusErrorFromResponse(resp, "GET", url)
+		if httpErr.Body != "" {
+			return fmt.Errorf("bundle fetch failed: %w (body: %s)", httpErr, httpErr.Body)
+		}
+		return fmt.Errorf("bundle fetch failed: %w", httpErr)
 	}
 
 	var bundle models.BundleResponse
@@ -144,7 +152,11 @@ func ConfirmApply(ctx context.Context, client common.HTTPClient, controlPlaneURL
 	}()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
-		return &common.HTTPStatusError{StatusCode: resp.StatusCode, Method: "POST", URL: url}
+		httpErr := common.NewHTTPStatusErrorFromResponse(resp, "POST", url)
+		if httpErr.Body != "" {
+			return fmt.Errorf("confirm apply failed: %w (body: %s)", httpErr, httpErr.Body)
+		}
+		return fmt.Errorf("confirm apply failed: %w", httpErr)
 	}
 
 	return nil
@@ -160,12 +172,23 @@ func ListenSSE(ctx context.Context, client common.HTTPClient, controlPlaneURL, h
 		}
 
 		if err := connectSSE(ctx, client, controlPlaneURL, hostID, token, version, onBundleUpdate, onFetchBackup, onUpdateAgent); err != nil {
-			log.Warn("SSE connection lost, reconnecting", "error", err, "delay", "15s")
 			if errors.Is(err, common.ErrUnauthorized) {
-				log.Warn("Received 401 on SSE connection, signaling for re-registration")
+				log.Debug("SSE connection unauthorized, requesting re-registration", "error", err)
 				return err
 			}
-			reconnectTimer := time.NewTimer(constants.SSEReconnectDelay)
+			// Honor 429 Retry-After so a rate-limited reconnect does not
+			// retry in 15s against a longer server hint. The delay is the
+			// max of the default reconnect backoff and the hint plus
+			// jitter (see common.AddJitter) to avoid lockstep retries.
+			delay := sseReconnectDelay
+			if retryAfter, ok := common.RetryAfterOf(err); ok {
+				retryAfter = common.AddJitter(retryAfter)
+				if retryAfter > delay {
+					delay = retryAfter
+				}
+			}
+			log.Warn("SSE connection lost, reconnecting", "error", err, "delay", delay.String())
+			reconnectTimer := time.NewTimer(delay)
 			select {
 			case <-ctx.Done():
 				reconnectTimer.Stop()
@@ -311,7 +334,7 @@ func connectSSE(ctx context.Context, client common.HTTPClient, controlPlaneURL, 
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		return &common.HTTPStatusError{StatusCode: resp.StatusCode, Method: "GET", URL: url}
+		return common.NewHTTPStatusErrorFromResponse(resp, "GET", url)
 	}
 
 	reader := resp.Body

@@ -3,6 +3,7 @@ package common
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -297,5 +298,245 @@ func TestDoJSONRequest_2xxStatusCodes(t *testing.T) {
 			}
 			resp.Body.Close()
 		})
+	}
+}
+
+func TestDoJSONRequest_RetryAfterDeltaSeconds(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "2")
+		w.WriteHeader(http.StatusTooManyRequests)
+		w.Write([]byte("rate limited"))
+	}))
+	defer server.Close()
+
+	_, err := DoJSONRequest(context.Background(), server.Client(), "GET", server.URL, nil, "", "")
+	if err == nil {
+		t.Fatal("DoJSONRequest() expected error for 429, got nil")
+	}
+	var httpErr *HTTPStatusError
+	if !errors.As(err, &httpErr) {
+		t.Fatalf("DoJSONRequest() error does not wrap *HTTPStatusError: %v", err)
+	}
+	if httpErr.StatusCode != http.StatusTooManyRequests {
+		t.Errorf("StatusCode = %d, want 429", httpErr.StatusCode)
+	}
+	if httpErr.RetryAfter != 2*time.Second {
+		t.Errorf("RetryAfter = %v, want 2s", httpErr.RetryAfter)
+	}
+	if !httpErr.HasRetryAfter {
+		t.Errorf("HasRetryAfter = false, want true")
+	}
+	if httpErr.Body != "rate limited" {
+		t.Errorf("Body = %q, want %q", httpErr.Body, "rate limited")
+	}
+	if !IsRateLimited(err) {
+		t.Errorf("IsRateLimited() = false, want true")
+	}
+	if d, ok := RetryAfterOf(err); d != 2*time.Second || !ok {
+		t.Errorf("RetryAfterOf() = (%v,%v), want (2s,true)", d, ok)
+	}
+	if got := httpErr.Error(); got != fmt.Sprintf("HTTP 429 GET %s", server.URL) {
+		t.Errorf("Error() = %q, want stable format", got)
+	}
+}
+
+func TestDoJSONRequest_RetryAfterMissing(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		w.Write([]byte("slow down"))
+	}))
+	defer server.Close()
+
+	_, err := DoJSONRequest(context.Background(), server.Client(), "GET", server.URL, nil, "", "")
+	if err == nil {
+		t.Fatal("DoJSONRequest() expected error for 429, got nil")
+	}
+	if d, ok := RetryAfterOf(err); d != 0 || ok {
+		t.Errorf("RetryAfterOf() = (%v,%v), want (0,false)", d, ok)
+	}
+	if !IsRateLimited(err) {
+		t.Errorf("IsRateLimited() = false, want true")
+	}
+	var httpErr *HTTPStatusError
+	if !errors.As(err, &httpErr) {
+		t.Fatalf("error does not wrap *HTTPStatusError: %v", err)
+	}
+	if httpErr.HasRetryAfter {
+		t.Errorf("HasRetryAfter = true, want false for missing header")
+	}
+	if httpErr.Body != "slow down" {
+		t.Errorf("Body = %q, want %q", httpErr.Body, "slow down")
+	}
+}
+
+func TestDoJSONRequest_RetryAfterUnparseable(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "not-a-date")
+		w.WriteHeader(http.StatusTooManyRequests)
+		w.Write([]byte("slow down"))
+	}))
+	defer server.Close()
+
+	_, err := DoJSONRequest(context.Background(), server.Client(), "GET", server.URL, nil, "", "")
+	if err == nil {
+		t.Fatal("DoJSONRequest() expected error, got nil")
+	}
+	if d, ok := RetryAfterOf(err); d != 0 || ok {
+		t.Errorf("RetryAfterOf() = (%v,%v), want (0,false)", d, ok)
+	}
+}
+
+func TestDoJSONRequest_RetryAfterZeroAndNegative(t *testing.T) {
+	for _, hdr := range []string{"0", "-5"} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Retry-After", hdr)
+			w.WriteHeader(http.StatusTooManyRequests)
+			w.Write([]byte("slow down"))
+		}))
+
+		_, err := DoJSONRequest(context.Background(), server.Client(), "GET", server.URL, nil, "", "")
+		server.Close()
+		if err == nil {
+			t.Fatalf("DoJSONRequest() expected error for header %q, got nil", hdr)
+		}
+		if d, ok := RetryAfterOf(err); d != 0 || !ok {
+			t.Errorf("header %q: RetryAfterOf() = (%v,%v), want (0,true)", hdr, d, ok)
+		}
+	}
+}
+
+func TestDoJSONRequest_RetryAfterHTTPDate(t *testing.T) {
+	t.Run("future date yields positive duration", func(t *testing.T) {
+		future := time.Now().Add(5 * time.Second).UTC().Format(http.TimeFormat)
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Retry-After", future)
+			w.WriteHeader(http.StatusTooManyRequests)
+			w.Write([]byte("slow down"))
+		}))
+		defer server.Close()
+
+		_, err := DoJSONRequest(context.Background(), server.Client(), "GET", server.URL, nil, "", "")
+		if err == nil {
+			t.Fatal("DoJSONRequest() expected error, got nil")
+		}
+		d, ok := RetryAfterOf(err)
+		if !ok {
+			t.Fatalf("RetryAfterOf() ok = false, want true")
+		}
+		if d <= 0 || d > 6*time.Second {
+			t.Errorf("RetryAfterOf() = %v, want (0,6s]", d)
+		}
+	})
+
+	t.Run("past date yields (0,true)", func(t *testing.T) {
+		past := time.Now().Add(-time.Hour).UTC().Format(http.TimeFormat)
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Retry-After", past)
+			w.WriteHeader(http.StatusTooManyRequests)
+			w.Write([]byte("slow down"))
+		}))
+		defer server.Close()
+
+		_, err := DoJSONRequest(context.Background(), server.Client(), "GET", server.URL, nil, "", "")
+		if err == nil {
+			t.Fatal("DoJSONRequest() expected error, got nil")
+		}
+		if d, ok := RetryAfterOf(err); d != 0 || !ok {
+			t.Errorf("RetryAfterOf() = (%v,%v), want (0,true)", d, ok)
+		}
+	})
+}
+
+func TestDoJSONRequest_401CapturesRetryAfter(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "3")
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte("unauthorized"))
+	}))
+	defer server.Close()
+
+	_, err := DoJSONRequest(context.Background(), server.Client(), "GET", server.URL, nil, "", "")
+	if err == nil {
+		t.Fatal("DoJSONRequest() expected error for 401, got nil")
+	}
+	var httpErr *HTTPStatusError
+	if !errors.As(err, &httpErr) {
+		t.Fatalf("error does not wrap *HTTPStatusError: %v", err)
+	}
+	if httpErr.RetryAfter != 3*time.Second || !httpErr.HasRetryAfter {
+		t.Errorf("401 RetryAfter = (%v,%v), want (3s,true)", httpErr.RetryAfter, httpErr.HasRetryAfter)
+	}
+	if httpErr.Body != "unauthorized" {
+		t.Errorf("Body = %q, want %q", httpErr.Body, "unauthorized")
+	}
+	if !IsUnauthorized(err) {
+		t.Errorf("IsUnauthorized(401 with RetryAfter) = false, want true")
+	}
+	if IsRateLimited(err) {
+		t.Errorf("IsRateLimited(401) = true, want false")
+	}
+}
+
+func TestDoJSONRequest_403NotUnauthorized(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		w.Write([]byte("forbidden"))
+	}))
+	defer server.Close()
+
+	_, err := DoJSONRequest(context.Background(), server.Client(), "GET", server.URL, nil, "", "")
+	if err == nil {
+		t.Fatal("DoJSONRequest() expected error for 403, got nil")
+	}
+	if IsUnauthorized(err) {
+		t.Errorf("IsUnauthorized(403) = true, want false")
+	}
+	if IsRateLimited(err) {
+		t.Errorf("IsRateLimited(403) = true, want false")
+	}
+}
+
+func TestDoJSONRequest_BodyTruncated(t *testing.T) {
+	big := strings.Repeat("x", 8192)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(big))
+	}))
+	defer server.Close()
+
+	_, err := DoJSONRequest(context.Background(), server.Client(), "GET", server.URL, nil, "", "")
+	if err == nil {
+		t.Fatal("DoJSONRequest() expected error, got nil")
+	}
+	var httpErr *HTTPStatusError
+	if !errors.As(err, &httpErr) {
+		t.Fatalf("error does not wrap *HTTPStatusError: %v", err)
+	}
+	if len(httpErr.Body) > 4096 {
+		t.Errorf("Body length = %d, want <= 4096", len(httpErr.Body))
+	}
+}
+
+func TestParseRetryAfter(t *testing.T) {
+	if got := ParseRetryAfter(""); got != 0 {
+		t.Errorf("ParseRetryAfter(\"\") = %v, want 0", got)
+	}
+	if got := ParseRetryAfter("2"); got != 2*time.Second {
+		t.Errorf("ParseRetryAfter(\"2\") = %v, want 2s", got)
+	}
+	if got := ParseRetryAfter("0"); got != 0 {
+		t.Errorf("ParseRetryAfter(\"0\") = %v, want 0", got)
+	}
+	if got := ParseRetryAfter("not-a-date"); got != 0 {
+		t.Errorf("ParseRetryAfter(\"not-a-date\") = %v, want 0", got)
+	}
+	if d, ok := ParseRetryAfterPresent(""); d != 0 || ok {
+		t.Errorf("ParseRetryAfterPresent(\"\") = (%v,%v), want (0,false)", d, ok)
+	}
+	if d, ok := ParseRetryAfterPresent("not-a-date"); d != 0 || ok {
+		t.Errorf("ParseRetryAfterPresent(\"not-a-date\") = (%v,%v), want (0,false)", d, ok)
+	}
+	if d, ok := ParseRetryAfterPresent("0"); d != 0 || !ok {
+		t.Errorf("ParseRetryAfterPresent(\"0\") = (%v,%v), want (0,true)", d, ok)
 	}
 }

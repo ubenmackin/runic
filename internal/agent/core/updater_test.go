@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"runic/internal/agent/identity"
+	"runic/internal/common"
 	"runic/internal/common/log"
 	"runic/internal/common/version"
 )
@@ -66,20 +67,20 @@ func TestIsRetryableUpdateStatus(t *testing.T) {
 }
 
 func TestParseUpdateRetryAfter(t *testing.T) {
-	if got := parseUpdateRetryAfter(""); got != 0 {
+	if got := common.ParseRetryAfter(""); got != 0 {
 		t.Errorf("empty header = %v, want 0", got)
 	}
-	if got := parseUpdateRetryAfter("2"); got != 2*time.Second {
+	if got := common.ParseRetryAfter("2"); got != 2*time.Second {
 		t.Errorf("delta-seconds = %v, want 2s", got)
 	}
-	if got := parseUpdateRetryAfter("0"); got != 0 {
+	if got := common.ParseRetryAfter("0"); got != 0 {
 		t.Errorf("zero = %v, want 0", got)
 	}
-	if got := parseUpdateRetryAfter("not-a-date"); got != 0 {
+	if got := common.ParseRetryAfter("not-a-date"); got != 0 {
 		t.Errorf("invalid = %v, want 0", got)
 	}
 	future := time.Now().Add(5 * time.Second).UTC().Format(http.TimeFormat)
-	if got := parseUpdateRetryAfter(future); got <= 0 || got > 6*time.Second {
+	if got := common.ParseRetryAfter(future); got <= 0 || got > 6*time.Second {
 		t.Errorf("http-date future = %v, want ~5s", got)
 	}
 }
@@ -156,33 +157,73 @@ func TestDownloadBinary5xxRetryThenSuccess(t *testing.T) {
 func TestDownloadBinaryRetryAfterHonoredOverBackoff(t *testing.T) {
 	origDelays := updateRetryDelays
 	t.Cleanup(func() { updateRetryDelays = origDelays })
-	updateRetryDelays = []time.Duration{10 * time.Second}
 
-	var calls atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if calls.Add(1) == 1 {
-			w.Header().Set("Retry-After", "0")
-			w.WriteHeader(http.StatusServiceUnavailable)
-			return
+	t.Run("zero falls back to backoff", func(t *testing.T) {
+		backoff := 50 * time.Millisecond
+		updateRetryDelays = []time.Duration{backoff}
+
+		var calls atomic.Int32
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if calls.Add(1) == 1 {
+				w.Header().Set("Retry-After", "0")
+				w.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("ok"))
+		}))
+		defer server.Close()
+
+		start := time.Now()
+		body, err := downloadBinary(context.Background(), server.Client(), server.URL, "amd64")
+		elapsed := time.Since(start)
+		if err != nil {
+			t.Fatalf("downloadBinary() error = %v", err)
 		}
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
-	}))
-	defer server.Close()
+		_ = body.Close()
+		if got := calls.Load(); got != 2 {
+			t.Errorf("requests = %d, want 2", got)
+		}
+		if elapsed < backoff {
+			t.Errorf("retry took %v, want >= backoff %v (present-zero Retry-After:0 must fall back to backoff+jitter, not immediate retry)", elapsed, backoff)
+		}
+		if elapsed >= 5*time.Second {
+			t.Errorf("retry took %v, want fast test with ms backoff", elapsed)
+		}
+	})
 
-	start := time.Now()
-	body, err := downloadBinary(context.Background(), server.Client(), server.URL, "amd64")
-	elapsed := time.Since(start)
-	if err != nil {
-		t.Fatalf("downloadBinary() error = %v", err)
-	}
-	_ = body.Close()
-	if elapsed > 5*time.Second {
-		t.Errorf("retry took %v, want fast retry honoring Retry-After: 0 over 10s backoff", elapsed)
-	}
-	if got := calls.Load(); got != 2 {
-		t.Errorf("requests = %d, want 2", got)
-	}
+	t.Run("positive honored over backoff", func(t *testing.T) {
+		updateRetryDelays = []time.Duration{10 * time.Millisecond}
+
+		var calls atomic.Int32
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if calls.Add(1) == 1 {
+				w.Header().Set("Retry-After", "1")
+				w.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("ok"))
+		}))
+		defer server.Close()
+
+		start := time.Now()
+		body, err := downloadBinary(context.Background(), server.Client(), server.URL, "amd64")
+		elapsed := time.Since(start)
+		if err != nil {
+			t.Fatalf("downloadBinary() error = %v", err)
+		}
+		_ = body.Close()
+		if got := calls.Load(); got != 2 {
+			t.Errorf("requests = %d, want 2", got)
+		}
+		if elapsed < time.Second {
+			t.Errorf("retry took %v, want >= 1s honoring positive Retry-After over 10ms backoff", elapsed)
+		}
+		if elapsed >= 5*time.Second {
+			t.Errorf("retry took %v, want <5s (positive Retry-After:1 honored over backoff)", elapsed)
+		}
+	})
 }
 
 func TestDownloadBinaryNoRetryOn404(t *testing.T) {
