@@ -31,6 +31,7 @@ import (
 	"regexp"
 	"runtime/debug"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -212,6 +213,115 @@ func generateRequestID() string {
 	return hex.EncodeToString(b)
 }
 
+// slowRequestThreshold is the duration above which a completed request is
+// considered slow and escalated to INFO level. Declared as a var (not const)
+// so unit tests can override it to keep timing assertions fast.
+var slowRequestThreshold = 500 * time.Millisecond
+
+// registerAgentPath is the agent registration endpoint hammered by stale
+// agents stuck in a tight register loop.
+const registerAgentPath = "/api/v1/agent/register"
+
+// registerHammerSampleInterval is how often a repeated
+// POST /api/v1/agent/register 401/429 from the same client IP is logged at
+// INFO. Repeats inside the interval are downgraded to DEBUG so an old-agent
+// loop (e.g. host-plexvm 10.100.5.89 issuing ~10x POST /agent/register
+// 401->429 plus GET /events 401 per second) cannot fill disk before the
+// operator updates it. Declared as a var (not const) so unit tests can
+// override it to keep timing assertions fast.
+//
+// Durable fix is updating the plexvm agent to a backoff+HMAC build and
+// re-saving it if needed; this sampler only bounds log volume. It never
+// changes status codes or RegisterRateLimiter 10/min behavior.
+var registerHammerSampleInterval = 60 * time.Second
+
+// registerHammerMaxEntries caps the hammer sampler map so a distributed
+// key-spray cannot grow it without bound. Declared as a var (not const) so
+// unit tests can override it without waiting.
+var registerHammerMaxEntries = 1024
+
+// registerHammerLastLog records the last INFO-sampled time per
+// RemoteAddrIP+path+status key. A sync.Map keeps concurrent RequestLogger
+// completions race-safe without holding a lock across logging.
+var registerHammerLastLog sync.Map // map[string]time.Time
+
+// registerHammerKey builds the sampler key from the spoof-proof TCP peer IP
+// (common.RemoteAddrIP, matching RegisterRateLimiter keying), path, and
+// status so one hammering host cannot suppress another host's sampled log
+// and 401s do not suppress 429s (or vice versa).
+func registerHammerKey(remoteAddrIP, path string, status int) string {
+	return remoteAddrIP + "|" + path + "|" + fmt.Sprintf("%d", status)
+}
+
+// shouldSampleRegisterHammerLog reports whether a register 401/429 for key
+// should log at INFO (first per registerHammerSampleInterval) or be
+// downgraded to DEBUG. It stores now on a sampled call and opportunistically
+// evicts expired entries, enforcing registerHammerMaxEntries so the map
+// cannot grow without bound. It never blocks on ctx and performs no sleep,
+// so it is ctx-cancel safe.
+func shouldSampleRegisterHammerLog(key string, now time.Time) bool {
+	if v, ok := registerHammerLastLog.Load(key); ok {
+		if last, ok := v.(time.Time); ok {
+			if now.Sub(last) < registerHammerSampleInterval {
+				return false
+			}
+		}
+	}
+	registerHammerLastLog.Store(key, now)
+	cleanupRegisterHammerLogs(now)
+	return true
+}
+
+// cleanupRegisterHammerLogs evicts expired sampler entries and enforces the
+// entry cap. Expired entries (older than registerHammerSampleInterval) are
+// removed first; if the map is still over registerHammerMaxEntries (key
+// spray), arbitrary excess entries are dropped to bound memory.
+func cleanupRegisterHammerLogs(now time.Time) {
+	count := 0
+	registerHammerLastLog.Range(func(k, v any) bool {
+		ts, ok := v.(time.Time)
+		if !ok || now.Sub(ts) >= registerHammerSampleInterval {
+			registerHammerLastLog.Delete(k)
+			return true
+		}
+		count++
+		return true
+	})
+	if count <= registerHammerMaxEntries {
+		return
+	}
+	excess := count - registerHammerMaxEntries
+	registerHammerLastLog.Range(func(k, _ any) bool {
+		if excess <= 0 {
+			return false
+		}
+		registerHammerLastLog.Delete(k)
+		excess--
+		return true
+	})
+}
+
+// isNoisyRequestLoggerPath reports whether path is a high-frequency endpoint
+// whose successful responses stay at DEBUG to avoid log spam.
+func isNoisyRequestLoggerPath(path string) bool {
+	switch path {
+	case "/health", "/ready", "/metrics":
+		return true
+	}
+	for _, prefix := range []string{
+		"/api/v1/agent/heartbeat",
+		"/api/v1/agent/check-rotation",
+		"/api/v1/agent/events/",
+		"/api/v1/agent/bundle/",
+		"/api/v1/pending-changes",
+	} {
+		if strings.HasPrefix(path, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 // RequestLogger returns a middleware that logs each request's start and completion with duration.
 // It logs both the start of each request and the completion with duration.
 // This is useful for tracing redirect paths and debugging request flow.
@@ -224,34 +334,73 @@ func generateRequestID() string {
 //
 // The middleware uses structured logging via the runiclog package.
 // Logging errors are handled gracefully and never break the request.
+//
+// Start events always log at DEBUG. Completion events choose a level by
+// status: 5xx logs at ERROR, 4xx on non-noisy paths or slow requests logs
+// at INFO, slow successes log at INFO, and everything else (including
+// OPTIONS preflight, unwritten status, and noisy high-frequency paths)
+// logs at DEBUG. Repeated POST /api/v1/agent/register 401/429 from the same
+// IP are sampled (first per registerHammerSampleInterval at INFO, repeats at
+// DEBUG) so a stale-agent hammer cannot fill disk. Request IDs are not logged
+// as explicit fields because the logger injects request_id from the context.
 func RequestLogger() mux.MiddlewareFunc {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
 
 			ctx := r.Context()
-			requestID, _ := log.GetRequestID(ctx)
 
-			log.InfoContext(ctx, "request_started",
+			log.DebugContext(ctx, "request_started",
 				"method", r.Method,
 				"path", r.URL.Path,
 				"query", r.URL.RawQuery,
 				"remote_addr", r.RemoteAddr,
-				"request_id", requestID,
 			)
 
 			rw := common.NewResponseRecorder(w)
 			next.ServeHTTP(rw, r)
 			duration := time.Since(start)
 
-			log.InfoContext(ctx, "request_completed",
+			status := rw.StatusCode()
+			args := []any{
 				"method", r.Method,
 				"path", r.URL.Path,
 				"query", r.URL.RawQuery,
-				"status", rw.StatusCode(),
+				"remote_addr", r.RemoteAddr,
+				"status", status,
 				"duration_ms", duration.Milliseconds(),
-				"request_id", requestID,
-			)
+			}
+
+			if r.Method == http.MethodOptions || status == 0 {
+				log.DebugContext(ctx, "request_completed", args...)
+				return
+			}
+			if status >= 500 {
+				log.ErrorContext(ctx, "request_completed", args...)
+				return
+			}
+			if r.URL.Path == registerAgentPath && (status == http.StatusUnauthorized || status == http.StatusTooManyRequests) {
+				key := registerHammerKey(common.RemoteAddrIP(r), r.URL.Path, status)
+				if !shouldSampleRegisterHammerLog(key, time.Now()) {
+					log.DebugContext(ctx, "request_completed", args...)
+					return
+				}
+				log.InfoContext(ctx, "request_completed", args...)
+				return
+			}
+			if status >= 400 {
+				if !isNoisyRequestLoggerPath(r.URL.Path) || duration > slowRequestThreshold {
+					log.InfoContext(ctx, "request_completed", args...)
+					return
+				}
+				log.DebugContext(ctx, "request_completed", args...)
+				return
+			}
+			if duration > slowRequestThreshold {
+				log.InfoContext(ctx, "request_completed", args...)
+				return
+			}
+			log.DebugContext(ctx, "request_completed", args...)
 		})
 	}
 }

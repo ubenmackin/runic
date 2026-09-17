@@ -230,6 +230,12 @@ func (a *API) RegisterRoutes(r *mux.Router, downloadsDir string) {
 
 	// Per-endpoint rate limiters
 	a.LoginRateLimiter = middleware.NewRateLimiter(5, time.Minute)
+	// Register stays at 10/min: the hammer guard for stale-agent
+	// POST /agent/register 401/429 loops (e.g. host-plexvm old-agent retry
+	// storm) lives in RequestLogger log sampling only (first per 60s per IP
+	// at INFO, rest at DEBUG) and never changes this limit or status codes.
+	// Durable fix is updating the plexvm agent to a backoff+HMAC build and
+	// re-saving it if needed.
 	a.RegisterRateLimiter = middleware.NewRateLimiter(10, time.Minute)
 	a.RefreshRateLimiter = middleware.NewRateLimiter(10, time.Minute)
 	a.LogoutRateLimiter = middleware.NewRateLimiter(10, time.Minute)
