@@ -15,16 +15,39 @@ import (
 	"runic/internal/common/log"
 )
 
+// smtpHolder provides synchronized access to the cached SMTPSender shared
+// by AlertProcessor and DigestGenerator. Embedding avoids duplicating the
+// mutex-guarded Get/Set pair across both types.
+type smtpHolder struct {
+	mu     sync.RWMutex
+	sender *SMTPSender
+}
+
+// GetSMTPSender returns the current SMTP sender under read lock.
+func (h *smtpHolder) GetSMTPSender() *SMTPSender {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.sender
+}
+
+// SetSMTPSender swaps the SMTP sender under write lock so in-flight sends
+// never race with ReloadSMTPConfig.
+func (h *smtpHolder) SetSMTPSender(sender *SMTPSender) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.sender = sender
+}
+
 // AlertProcessor implements the Processor interface defined in scheduler.go.
 type AlertProcessor struct {
 	alertStore *store.AlertStore
 	userStore  *store.UserStore
-	smtp       *SMTPSender
-	logger     *slog.Logger
-	stopChan   chan struct{}
-	stopOnce   sync.Once
-	wg         sync.WaitGroup
-	alertChan  chan alertTask
+	smtpHolder
+	logger    *slog.Logger
+	stopChan  chan struct{}
+	stopOnce  sync.Once
+	wg        sync.WaitGroup
+	alertChan chan alertTask
 }
 
 type alertTask struct {
@@ -36,7 +59,7 @@ func NewAlertProcessor(alertStore *store.AlertStore, userStore *store.UserStore,
 	return &AlertProcessor{
 		alertStore: alertStore,
 		userStore:  userStore,
-		smtp:       smtp,
+		smtpHolder: smtpHolder{sender: smtp},
 		logger:     log.L().With("component", "alert_processor"),
 		stopChan:   make(chan struct{}),
 		alertChan:  make(chan alertTask, 100),
@@ -60,9 +83,10 @@ func (p *AlertProcessor) ProcessAlert(ctx context.Context, event *AlertEvent, ru
 		p.logger.Warn("failed to get admin emails", "error", err)
 		// Don't return error - we still want to track the alert
 	} else if len(emails) > 0 {
-		if p.smtp != nil && p.smtp.config.IsEnabled() {
+		sender := p.GetSMTPSender()
+		if sender != nil && sender.config.IsEnabled() {
 			for _, email := range emails {
-				if err := p.smtp.SendAlertEmail(email, event); err != nil {
+				if err := sender.SendAlertEmail(email, event); err != nil {
 					p.logger.Error("failed to send alert email", "email", email, "error", err)
 					p.updateHistoryStatus(ctx, history.ID, AlertStatusFailed, err.Error())
 					return fmt.Errorf("failed to send alert email to %s: %w", email, err)
@@ -239,6 +263,17 @@ func (s *Service) SetLogger(logger *slog.Logger) {
 //  4. Scheduler (depends on AlertStore, Evaluator, Processor)
 //  5. DigestGenerator (depends on AlertStore, SMTPSender)
 func (s *Service) Initialize() error {
+	s.mu.RLock()
+	if s.initialized {
+		s.mu.RUnlock()
+		return fmt.Errorf("alert service already initialized")
+	}
+	initCtx := s.ctx
+	s.mu.RUnlock()
+
+	// Load SMTP config outside Service.mu so DB I/O never blocks readers.
+	sender, smtpConfig, err := s.buildSMTPSender(initCtx)
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -248,13 +283,12 @@ func (s *Service) Initialize() error {
 
 	s.logger.Info("initializing alert service")
 
-	smtpConfig, err := s.loadSMTPConfig(s.ctx)
 	if err != nil {
 		s.logger.Warn("failed to load SMTP config, alerts will be disabled", "error", err)
 		disabledConfig := SMTPConfig{Enabled: false}
 		s.smtpSender = NewSMTPSender(&disabledConfig, s.encryptor, s.database)
 	} else {
-		s.smtpSender = NewSMTPSender(smtpConfig, s.encryptor, s.database)
+		s.smtpSender = sender
 		s.logger.Info("SMTP sender initialized",
 			"host", smtpConfig.Host,
 			"port", smtpConfig.Port,
@@ -416,6 +450,44 @@ func (s *Service) GetSMTPSender() *SMTPSender {
 	return s.smtpSender
 }
 
+// ReloadSMTPConfig reloads the SMTP configuration from the store and rebuilds
+// the cached SMTPSender so a just-saved config takes effect immediately
+// without requiring a restart. It is safe for concurrent use with sends:
+// the config load happens outside Service.mu and the sender swap propagates
+// via synchronized setters on the processor and digest generator.
+func (s *Service) ReloadSMTPConfig(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("failed to reload SMTP config: %w", err)
+	}
+
+	sender, cfg, err := s.buildSMTPSender(ctx)
+	if err != nil {
+		// buildSMTPSender already wraps load failures as "failed to load SMTP
+		// config: ..."; return directly to avoid the double prefix
+		// "failed to reload SMTP config: failed to load SMTP config: ..."
+		// while preserving the %w chain.
+		return err
+	}
+
+	s.mu.Lock()
+	s.smtpSender = sender
+	if s.processor != nil {
+		s.processor.SetSMTPSender(sender)
+	}
+	if s.digestGenerator != nil {
+		s.digestGenerator.SetSMTPSender(sender)
+	}
+	logger := s.logger
+	s.mu.Unlock()
+
+	logger.Info("SMTP sender reloaded",
+		"host", cfg.Host,
+		"port", cfg.Port,
+		"enabled", cfg.IsEnabled(),
+	)
+	return nil
+}
+
 func (s *Service) IsStarted() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -428,12 +500,33 @@ func (s *Service) IsInitialized() bool {
 	return s.initialized
 }
 
-func (s *Service) loadSMTPConfig(ctx context.Context) (*SMTPConfig, error) {
-	if s.alertStore == nil {
+// buildSMTPSender loads the SMTP config and constructs a sender without
+// holding Service.mu across DB I/O. All three dependencies (encryptor,
+// database, alertStore) are snapshotted under a single RLock so a concurrent
+// SetEncryptor cannot interleave to build a mixed-generation sender (old
+// encryptor + new store). DB I/O happens outside the lock via the snapshotted
+// alertStore so Initialize and ReloadSMTPConfig can share this helper.
+func (s *Service) buildSMTPSender(ctx context.Context) (*SMTPSender, *SMTPConfig, error) {
+	s.mu.RLock()
+	encryptor := s.encryptor
+	database := s.database
+	alertStore := s.alertStore
+	s.mu.RUnlock()
+
+	cfg, err := s.loadSMTPConfig(ctx, alertStore)
+	if err != nil {
+		return nil, nil, err
+	}
+	sender := NewSMTPSender(cfg, encryptor, database)
+	return sender, cfg, nil
+}
+
+func (s *Service) loadSMTPConfig(ctx context.Context, alertStore *store.AlertStore) (*SMTPConfig, error) {
+	if alertStore == nil {
 		return &SMTPConfig{Enabled: false}, fmt.Errorf("alert store not configured")
 	}
 
-	smtpConfigView, err := s.alertStore.GetSMTPConfig(ctx)
+	smtpConfigView, err := alertStore.GetSMTPConfig(ctx)
 	if err != nil {
 		return &SMTPConfig{Enabled: false}, fmt.Errorf("failed to load SMTP config: %w", err)
 	}

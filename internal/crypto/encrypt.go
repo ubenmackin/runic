@@ -19,7 +19,12 @@ const (
 	// keyLength is the length of the AES-256 key in bytes (256 bits = 32 bytes)
 	keyLength = 32
 
-	// saltLength is the length of the salt used in PBKDF2 key derivation
+	// saltLength is the length in bytes of the fresh random salt used only by
+	// the standalone Encrypt/Decrypt helpers (via GenerateSalt). Each
+	// standalone Encrypt call embeds a saltLength-byte salt as
+	// base64(salt || nonce || ciphertext). It does not apply to Encryptor,
+	// which derives its cached key with the fixed application salt
+	// encryptorFixedSalt below.
 	saltLength = 16
 
 	// nonceLength is the length of the GCM nonce (96 bits = 12 bytes)
@@ -29,6 +34,13 @@ const (
 	// Used as part of the minimum-length check on decoded ciphertext.
 	gcmTagSize = 16
 )
+
+// encryptorFixedSalt is the fixed application salt used for Encryptor key
+// derivation. It makes NewEncryptor deterministic: the same passphrase always
+// derives the same key, so ciphertexts remain decryptable across restarts.
+// It is 18 bytes long ("runic-encryptor-v1") and is separate from saltLength,
+// which applies only to the standalone Encrypt path's per-call random salts.
+const encryptorFixedSalt = "runic-encryptor-v1"
 
 // pbkdf2Iterations is the number of iterations for PBKDF2 key derivation.
 // Default is 600,000 as recommended by OWASP for PBKDF2-SHA256.
@@ -48,30 +60,35 @@ var (
 // derived key is cached at construction time so subsequent Encrypt / Decrypt
 // calls do not pay the PBKDF2 cost on every operation.
 //
+// Key derivation is deterministic: NewEncryptor derives the key from the
+// passphrase and the fixed application salt encryptorFixedSalt, so two
+// Encryptor instances created with the same passphrase — including across
+// process restarts — derive the same key and can decrypt each other's
+// ciphertexts. The nonce is still random per Encrypt call, so ciphertexts
+// for the same plaintext differ.
+//
 // Ciphertext format produced by Encryptor.Encrypt: base64(nonce || ciphertext).
 // This is intentionally different from the package-level Encrypt helper, which
-// embeds a per-call salt (see its doc comment).
+// produces self-contained base64(salt || nonce || ciphertext) with a fresh
+// random salt per call (see its doc comment).
 type Encryptor struct {
 	mu  sync.RWMutex
 	key []byte
 }
 
 // NewEncryptor creates a new Encryptor from a passphrase. The passphrase is
-// used to derive an AES-256 key with PBKDF2; the resulting key is cached and
-// reused for the lifetime of the Encryptor. The derivation salt is generated
-// once with crypto/rand and discarded after derivation — the derived key
-// alone is what the Encryptor retains.
+// used to derive an AES-256 key with PBKDF2 using the fixed application salt
+// encryptorFixedSalt; the resulting key is cached and reused for the lifetime
+// of the Encryptor. Derivation is deterministic, so the same passphrase always
+// yields the same key and ciphertexts remain decryptable across restarts.
+// Ciphertexts encrypted by the previous ephemeral-salt Encryptor used lost
+// random salts and remain undecryptable (re-save required).
 func NewEncryptor(passphrase string) (*Encryptor, error) {
 	if passphrase == "" {
 		return nil, ErrEmptyPassphrase
 	}
 
-	salt, err := GenerateSalt()
-	if err != nil {
-		return nil, err
-	}
-
-	key := deriveKey(passphrase, salt)
+	key := deriveKey(passphrase, []byte(encryptorFixedSalt))
 
 	return &Encryptor{key: key}, nil
 }

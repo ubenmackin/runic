@@ -44,18 +44,18 @@ type TimeRange struct {
 type DigestGenerator struct {
 	alertStore *store.AlertStore
 	database   db.Querier // Kept for utility functions like GetInstanceURL
-	smtp       *SMTPSender
-	encryptor  *crypto.Encryptor
-	logger     *slog.Logger
-	stopChan   chan struct{}
-	stopOnce   sync.Once
-	wg         sync.WaitGroup
+	smtpHolder
+	encryptor *crypto.Encryptor
+	logger    *slog.Logger
+	stopChan  chan struct{}
+	stopOnce  sync.Once
+	wg        sync.WaitGroup
 }
 
 func NewDigestGenerator(alertStore *store.AlertStore, smtp *SMTPSender, encryptor *crypto.Encryptor) *DigestGenerator {
 	return &DigestGenerator{
 		alertStore: alertStore,
-		smtp:       smtp,
+		smtpHolder: smtpHolder{sender: smtp},
 		encryptor:  encryptor,
 		logger:     log.L().With("component", "digest_generator"),
 		stopChan:   make(chan struct{}),
@@ -120,7 +120,8 @@ func (g *DigestGenerator) GenerateDigest(userID uint) (*AlertDigest, error) {
 }
 
 func (g *DigestGenerator) SendDigest(digest *AlertDigest, userEmail string) error {
-	if g.smtp == nil {
+	sender := g.GetSMTPSender()
+	if sender == nil {
 		return fmt.Errorf("SMTP sender not configured")
 	}
 
@@ -149,7 +150,7 @@ func (g *DigestGenerator) SendDigest(digest *AlertDigest, userEmail string) erro
 		subject = fmt.Sprintf("[Runic] Daily Digest - %s (No Alerts)", digest.DigestDate)
 	}
 
-	if err := g.smtp.SendHTML(userEmail, subject, htmlBody); err != nil {
+	if err := sender.SendHTML(userEmail, subject, htmlBody); err != nil {
 		return fmt.Errorf("failed to send digest email: %w", err)
 	}
 

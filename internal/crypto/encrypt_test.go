@@ -2,6 +2,8 @@ package crypto
 
 import (
 	"encoding/base64"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -138,8 +140,138 @@ func TestDecrypt_WrongPassphrase(t *testing.T) {
 	}
 
 	_, err = enc2.Decrypt(ciphertext)
-	if err != ErrDecryptionFailed {
-		t.Errorf("Decrypt() with wrong passphrase expected ErrDecryptionFailed, got %v", err)
+	if !errors.Is(err, ErrDecryptionFailed) {
+		t.Errorf("Decrypt() with wrong passphrase expected errors.Is(ErrDecryptionFailed), got %v", err)
+	}
+}
+
+func TestNewEncryptor_DeterministicAcrossInstances(t *testing.T) {
+	passphrase := "deterministic-passphrase"
+	plaintext := "cross-instance secret"
+
+	enc1, err := NewEncryptor(passphrase)
+	if err != nil {
+		t.Fatalf("NewEncryptor() returned unexpected error: %v", err)
+	}
+
+	enc2, err := NewEncryptor(passphrase)
+	if err != nil {
+		t.Fatalf("NewEncryptor() returned unexpected error: %v", err)
+	}
+
+	ciphertext, err := enc1.Encrypt(plaintext)
+	if err != nil {
+		t.Fatalf("Encrypt() returned unexpected error: %v", err)
+	}
+
+	decrypted, err := enc2.Decrypt(ciphertext)
+	if err != nil {
+		t.Fatalf("Decrypt() with second instance returned unexpected error: %v", err)
+	}
+	if decrypted != plaintext {
+		t.Errorf("Decrypt() with second instance returned %q, want %q", decrypted, plaintext)
+	}
+
+	// Reverse direction: encrypt with the second instance, decrypt with the first.
+	reverseCiphertext, err := enc2.Encrypt(plaintext)
+	if err != nil {
+		t.Fatalf("Encrypt() with second instance returned unexpected error: %v", err)
+	}
+
+	reverseDecrypted, err := enc1.Decrypt(reverseCiphertext)
+	if err != nil {
+		t.Fatalf("Decrypt() with first instance returned unexpected error: %v", err)
+	}
+	if reverseDecrypted != plaintext {
+		t.Errorf("Decrypt() with first instance returned %q, want %q", reverseDecrypted, plaintext)
+	}
+
+	// Nonce is still random per Encrypt, so ciphertexts for the same
+	// plaintext must differ even with a deterministic key.
+	if ciphertext == reverseCiphertext {
+		t.Error("Encrypt() with deterministic key produced identical ciphertexts, want unique nonces")
+	}
+
+	// Restart simulation: drop both instances and re-create from the same
+	// passphrase; previously produced ciphertexts must remain decryptable.
+	enc1 = nil
+	enc2 = nil
+
+	restarted, err := NewEncryptor(passphrase)
+	if err != nil {
+		t.Fatalf("NewEncryptor() after restart returned unexpected error: %v", err)
+	}
+
+	restartedDecrypted, err := restarted.Decrypt(ciphertext)
+	if err != nil {
+		t.Fatalf("Decrypt() after restart returned unexpected error: %v", err)
+	}
+	if restartedDecrypted != plaintext {
+		t.Errorf("Decrypt() after restart returned %q, want %q", restartedDecrypted, plaintext)
+	}
+}
+
+// TestEncryptorCrossInstance_100CyclesSecondInstanceDecrypts is a restart
+// stability regression test: ciphertexts produced by one Encryptor instance
+// must remain decryptable by a second instance created with the same
+// passphrase (simulating a process restart with a deterministic key).
+// It performs 100 encrypt/decrypt cycles across instances.
+func TestEncryptorCrossInstance_100CyclesSecondInstanceDecrypts(t *testing.T) {
+	passphrase := "cross-instance-100-cycle-passphrase"
+
+	enc1, err := NewEncryptor(passphrase)
+	if err != nil {
+		t.Fatalf("NewEncryptor() returned unexpected error: %v", err)
+	}
+
+	// Second instance with the same passphrase simulates a restarted process.
+	enc2, err := NewEncryptor(passphrase)
+	if err != nil {
+		t.Fatalf("NewEncryptor() second instance returned unexpected error: %v", err)
+	}
+
+	for i := 0; i < 100; i++ {
+		plaintext := fmt.Sprintf("cycle-secret-%03d", i)
+
+		ciphertext, err := enc1.Encrypt(plaintext)
+		if err != nil {
+			t.Fatalf("Encrypt() iteration %d returned unexpected error: %v", i, err)
+		}
+
+		decrypted, err := enc2.Decrypt(ciphertext)
+		if err != nil {
+			t.Fatalf("Decrypt() with second instance iteration %d returned unexpected error: %v", i, err)
+		}
+		if decrypted != plaintext {
+			t.Errorf("Decrypt() iteration %d returned %q, want %q", i, decrypted, plaintext)
+		}
+	}
+}
+
+// TestDecrypt_WrongPassphrase_ErrorsIs ensures a wrong passphrase surfaces as
+// ErrDecryptionFailed through errors.Is (surviving %w wrapping).
+func TestDecrypt_WrongPassphrase_ErrorsIs(t *testing.T) {
+	enc1, err := NewEncryptor("correct-passphrase-errors-is")
+	if err != nil {
+		t.Fatalf("NewEncryptor() returned unexpected error: %v", err)
+	}
+
+	ciphertext, err := enc1.Encrypt("secret message for errors.Is check")
+	if err != nil {
+		t.Fatalf("Encrypt() returned unexpected error: %v", err)
+	}
+
+	enc2, err := NewEncryptor("wrong-passphrase-errors-is")
+	if err != nil {
+		t.Fatalf("NewEncryptor() returned unexpected error: %v", err)
+	}
+
+	_, err = enc2.Decrypt(ciphertext)
+	if err == nil {
+		t.Fatal("Decrypt() with wrong passphrase expected error, got nil")
+	}
+	if !errors.Is(err, ErrDecryptionFailed) {
+		t.Errorf("Decrypt() with wrong passphrase expected errors.Is(ErrDecryptionFailed), got %v", err)
 	}
 }
 
@@ -240,8 +372,9 @@ func TestGenerateSalt(t *testing.T) {
 
 func TestGetSalt(t *testing.T) {
 	// Encryptor no longer exposes its derivation salt; the cached key is the
-	// sole state. The salt is generated internally by NewEncryptor and
-	// discarded after PBKDF2 derivation. This test is kept as a placeholder
+	// sole state. NewEncryptor derives its key deterministically with the
+	// fixed application salt encryptorFixedSalt ("runic-encryptor-v1"), so
+	// there is no per-instance random salt. This test is kept as a placeholder
 	// so future regressions that reintroduce an exposed salt continue to be
 	// flagged here.
 	t.Skip("Encryptor no longer exposes its derivation salt; see DeriveKey test for salt-based behavior.")

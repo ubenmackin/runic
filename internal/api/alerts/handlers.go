@@ -57,6 +57,17 @@ func NewHandler(alertStore AlertStore, alertService *alerts.Service, encryptor *
 	}
 }
 
+// UpdateSMTPConfigResponse is the response for updating SMTP configuration.
+// Warning is present only when settings were persisted but the live sender
+// reload failed; the saved values apply on restart in that case. It is
+// omitted on full success. The 200-with-optional-warning contract applies
+// only to UpdateSMTPConfig; TestSMTP returns 500 on reload failure so a
+// test cannot proceed without a reloaded sender.
+type UpdateSMTPConfigResponse struct {
+	Status  string `json:"status"`
+	Warning string `json:"warning,omitempty"`
+}
+
 func (h *Handler) ListAlerts(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
@@ -274,7 +285,15 @@ func (h *Handler) UpdateSMTPConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	if h.AlertService != nil {
+		if err := h.AlertService.ReloadSMTPConfig(ctx); err != nil {
+			log.ErrorContext(ctx, "Failed to reload SMTP sender", "error", err)
+			common.RespondJSON(w, http.StatusOK, UpdateSMTPConfigResponse{Status: "ok", Warning: "SMTP settings saved but live sender reload failed; changes apply on restart"})
+			return
+		}
+	}
+
+	common.RespondJSON(w, http.StatusOK, UpdateSMTPConfigResponse{Status: "ok"})
 }
 
 func (h *Handler) TestSMTP(w http.ResponseWriter, r *http.Request) {
@@ -300,6 +319,18 @@ func (h *Handler) TestSMTP(w http.ResponseWriter, r *http.Request) {
 
 	if h.AlertService == nil {
 		common.RespondError(w, http.StatusInternalServerError, "alert service not available")
+		return
+	}
+
+	// Reload from the store so an immediate test after save uses the new
+	// ciphertext instead of a stale cached sender. Unlike UpdateSMTPConfig,
+	// which returns 200 with an optional warning when settings were saved
+	// but the live reload failed, TestSMTP cannot proceed without a reloaded
+	// sender so reload failure is a 500 that preserves the underlying cause
+	// (including the actionable re-save hint from the decrypt layer).
+	if err := h.AlertService.ReloadSMTPConfig(ctx); err != nil {
+		log.ErrorContext(ctx, "Failed to reload SMTP sender", "error", err)
+		common.RespondError(w, http.StatusInternalServerError, "failed to reload SMTP sender: "+err.Error())
 		return
 	}
 
