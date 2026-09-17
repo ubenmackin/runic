@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"slices"
 	"strings"
@@ -140,7 +139,13 @@ func (h *Handler) CreatePeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if net.ParseIP(input.IPAddress) == nil {
+	// Peer ip_address contract: plain IP or CIDR range accepted (CIDR
+	// allowlisted so manual peers can represent subnets; bare IPs compile to
+	// /32 or /128 via normalizePeerCIDR). This is intentionally broader than
+	// agent interface addresses (plain-IP-only via ValidatePlainIP). /0
+	// allow-all is rejected here (400) via ValidatePeerCIDR — use __any_ip__
+	// instead — matching the store-layer fail-closed check.
+	if err := common.ValidatePeerCIDR(input.IPAddress); err != nil {
 		common.RespondError(w, http.StatusBadRequest, "invalid IP address")
 		return
 	}
@@ -162,7 +167,12 @@ func (h *Handler) CreatePeer(w http.ResponseWriter, r *http.Request) {
 
 	agentKey := input.AgentKey
 	if input.IsManual && agentKey == "" {
-		agentKey = "manual-" + input.Hostname + "-" + input.IPAddress
+		generatedKey, err := agents.GenerateHMACKey()
+		if err != nil {
+			common.RespondError(w, http.StatusInternalServerError, "failed to generate agent key")
+			return
+		}
+		agentKey = "manual-" + generatedKey
 	}
 
 	hmacKey, err := agents.GenerateHMACKey()
@@ -216,7 +226,9 @@ func (h *Handler) UpdatePeer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if input.IPAddress != "" {
-		if err := common.ValidateIPAddress(input.IPAddress); err != nil {
+		// Same peer ip_address contract as CreatePeer: plain-or-CIDR
+		// accepted, /0 rejected (400) via ValidatePeerCIDR.
+		if err := common.ValidatePeerCIDR(input.IPAddress); err != nil {
 			common.RespondError(w, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -461,7 +473,10 @@ func (h *Handler) AddPeerIP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if net.ParseIP(input.IPAddress) == nil {
+	// Peer peer_ips contract: same plain-or-CIDR, /0-rejected rule as the
+	// primary ip_address (ValidatePeerCIDR), not the plain-only agent
+	// interface rule. Stored values normalize to /32 or /128 at compile time.
+	if err := common.ValidatePeerCIDR(input.IPAddress); err != nil {
 		common.RespondError(w, http.StatusBadRequest, "invalid IP address")
 		return
 	}

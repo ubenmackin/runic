@@ -16,6 +16,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 
+	runiccommon "runic/internal/common"
 	"runic/internal/models"
 	"runic/internal/store"
 	"runic/internal/testutil"
@@ -2065,14 +2066,14 @@ func TestLogEventValidate(t *testing.T) {
 }
 
 func TestTruncateForLogRuneSafe(t *testing.T) {
-	if got := truncateForLog("a\xC3\xA9", 2); got != "a" {
-		t.Errorf("truncateForLog(aé, 2) = %q, want %q", got, "a")
+	if got := runiccommon.TruncateString("a\xC3\xA9", 2); got != "a" {
+		t.Errorf("TruncateString(aé, 2) = %q, want %q", got, "a")
 	}
-	if got := truncateForLog("hello", 10); got != "hello" {
-		t.Errorf("truncateForLog(hello, 10) = %q, want %q", got, "hello")
+	if got := runiccommon.TruncateString("hello", 10); got != "hello" {
+		t.Errorf("TruncateString(hello, 10) = %q, want %q", got, "hello")
 	}
-	if got := truncateForLog("hello world", 5); got != "hello" {
-		t.Errorf("truncateForLog(hello world, 5) = %q, want %q", got, "hello")
+	if got := runiccommon.TruncateString("hello world", 5); got != "hello" {
+		t.Errorf("TruncateString(hello world, 5) = %q, want %q", got, "hello")
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 type ipsetDef struct {
 	Name    string
 	Type    string
+	Family  string
 	Members []string
 }
 
@@ -43,8 +44,12 @@ func applyIpsets(ctx context.Context, rulesContent string) error {
 	}
 
 	for _, def := range ipsetDefs {
-		log.Info("Creating ipset", "name", def.Name, "type", def.Type, "family", "inet")
-		if err := runIpset(ctx, def.Name, def.Type, "inet"); err != nil {
+		family := def.Family
+		if family == "" {
+			family = "inet"
+		}
+		log.Info("Creating ipset", "name", def.Name, "type", def.Type, "family", family)
+		if err := runIpset(ctx, def.Name, def.Type, family); err != nil {
 			return fmt.Errorf("create ipset %s: %w", def.Name, err)
 		}
 
@@ -127,9 +132,22 @@ func parseIpsetDefs(section string) ([]ipsetDef, error) {
 			}
 			name := fields[1]
 			ipsetType := fields[2]
+			family := "inet"
+			if len(fields) > 3 {
+				switch {
+				case fields[3] != "family":
+					// Unknown trailing tokens are ignored for forward-compat;
+					// only the explicit "family <name>" clause sets the family.
+				case len(fields) < 5:
+					return nil, fmt.Errorf("malformed create line: %s", trimmed)
+				default:
+					family = fields[4]
+				}
+			}
 			defs[name] = &ipsetDef{
 				Name:    name,
 				Type:    ipsetType,
+				Family:  family,
 				Members: []string{},
 			}
 			order = append(order, name)

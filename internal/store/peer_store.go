@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"net"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -16,6 +15,7 @@ import (
 	"runic/internal/common/log"
 	"runic/internal/db"
 	"runic/internal/models"
+	"runic/internal/resolve"
 )
 
 const peerRowColumns = `id, hostname, ip_address, os_type, arch, has_docker, agent_key, agent_token, agent_version, is_manual, bundle_version, last_heartbeat, COALESCE(status, ''), created_at`
@@ -185,8 +185,16 @@ func (s *PeerStore) CreatePeer(ctx context.Context, hostname, ip, osType, arch, 
 	if hostname == "" {
 		return 0, errors.New("hostname is required")
 	}
-	if ip != "" && net.ParseIP(ip) == nil {
-		return 0, fmt.Errorf("invalid IP address: %q", ip)
+	// Peer ip_address contract: plain IP or CIDR range is accepted (CIDR
+	// allowlisted so manual peers can represent subnets; bare IPs normalize
+	// to /32 or /128 at compile time via normalizePeerCIDR). This is
+	// intentionally broader than agent interface addresses (register IP,
+	// all_ips, telemetry), which are plain-IP-only. /0 allow-all CIDRs are
+	// rejected via ValidatePeerCIDR — use __any_ip__ instead.
+	if ip != "" {
+		if err := resolve.ValidatePeerCIDR(ip); err != nil {
+			return 0, fmt.Errorf("invalid IP address %q: %w", ic.TruncateString(ip, resolve.MaxLoggedIPLen), err)
+		}
 	}
 	result, err := s.db.ExecContext(ctx,
 		`INSERT INTO peers (hostname, ip_address, os_type, arch, agent_key, hmac_key, has_docker, is_manual) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -221,6 +229,17 @@ func (s *PeerStore) UpdatePeer(ctx context.Context, id int, hostname, ip, osType
 		arch = existing.Arch
 	}
 	// hasDocker is a bool — we always use the input value (caller must pass the desired state)
+
+	// Fail closed: the merged IP is persisted to the peers row, so it must
+	// be re-validated here just like CreatePeer validates on insert.
+	// Otherwise an invalid IP merged from either the caller or the stored
+	// row would be written without any check. Same peer contract as
+	// CreatePeer: plain-or-CIDR accepted, /0 rejected.
+	if ip != "" {
+		if err := resolve.ValidatePeerCIDR(ip); err != nil {
+			return fmt.Errorf("invalid IP address %q: %w", ic.TruncateString(ip, resolve.MaxLoggedIPLen), err)
+		}
+	}
 
 	_, err = s.db.ExecContext(ctx,
 		"UPDATE peers SET hostname = ?, ip_address = ?, os_type = ?, arch = ?, has_docker = ?, description = ? WHERE id = ?",
@@ -355,6 +374,13 @@ func (s *PeerStore) ListPeerIPs(ctx context.Context, peerID int) ([]PeerIPView, 
 }
 
 func (s *PeerStore) AddPeerIP(ctx context.Context, peerID int, ip string, isPrimary bool) error {
+	// Fail closed: peer_ips rows feed policy resolution, so invalid input
+	// must be rejected before the insert rather than stored. Same peer
+	// contract as CreatePeer: plain-or-CIDR accepted, /0 rejected
+	// (use __any_ip__ for allow-all).
+	if err := resolve.ValidatePeerCIDR(ip); err != nil {
+		return fmt.Errorf("invalid IP address %q: %w", ic.TruncateString(ip, resolve.MaxLoggedIPLen), err)
+	}
 	isPrimaryInt := 0
 	if isPrimary {
 		isPrimaryInt = 1
@@ -448,7 +474,22 @@ func (s *PeerStore) CountPolicyRefsForPeerIP(ctx context.Context, peerID int, ip
 
 // UpsertPeerIPs inserts or ignores peer IPs. The primary IP gets is_primary = 1, all others get is_primary = 0.
 // Uses INSERT OR IGNORE for duplicate safety, then updates is_primary for the primary.
+// Peer contract (same as CreatePeer/AddPeerIP): plain-or-CIDR accepted,
+// /0 rejected. Agent all_ips callers pre-filter to plain-only upstream;
+// this store layer enforces the CIDR-capable peer side.
 func (s *PeerStore) UpsertPeerIPs(ctx context.Context, peerID int, ips []string, primaryIP string) error {
+	// Fail closed: validate every IP before any insert so an invalid entry
+	// cannot leave a partially upserted set behind.
+	for _, ip := range ips {
+		if err := resolve.ValidatePeerCIDR(ip); err != nil {
+			return fmt.Errorf("invalid IP address %q: %w", ic.TruncateString(ip, resolve.MaxLoggedIPLen), err)
+		}
+	}
+	if primaryIP != "" {
+		if err := resolve.ValidatePeerCIDR(primaryIP); err != nil {
+			return fmt.Errorf("invalid primary IP address %q: %w", ic.TruncateString(primaryIP, resolve.MaxLoggedIPLen), err)
+		}
+	}
 	for _, ip := range ips {
 		isPrimary := 0
 		if ip == primaryIP {
@@ -458,7 +499,7 @@ func (s *PeerStore) UpsertPeerIPs(ctx context.Context, peerID int, ips []string,
 			"INSERT OR IGNORE INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, ?)",
 			peerID, ip, isPrimary)
 		if err != nil {
-			return fmt.Errorf("insert peer IP %s: %w", ip, err)
+			return fmt.Errorf("insert peer IP %s: %w", ic.TruncateString(ip, resolve.MaxLoggedIPLen), err)
 		}
 
 		if isPrimary == 1 {
@@ -871,6 +912,16 @@ func (s *PeerStore) UpdateBundleAppliedAt(ctx context.Context, peerID int, versi
 }
 
 func (s *PeerStore) RegisterPeer(ctx context.Context, hostname, ip, osType, arch string, hasDocker bool, hasIPSet *bool, agentKey, agentToken, hmacKey string) (int64, error) {
+	// Fail closed: the IP is persisted to the peers row, so it must be
+	// validated here just like CreatePeer validates on insert. Agent
+	// registration presents a single interface address (plain-IP-only at
+	// the handler), but the stored peers.ip_address column keeps the
+	// CIDR-capable peer contract; /0 is rejected in both cases.
+	if ip != "" {
+		if err := resolve.ValidatePeerCIDR(ip); err != nil {
+			return 0, fmt.Errorf("invalid IP address %q: %w", ic.TruncateString(ip, resolve.MaxLoggedIPLen), err)
+		}
+	}
 	result, err := s.db.ExecContext(ctx,
 		`INSERT INTO peers (hostname, ip_address, os_type, arch, has_docker, has_ipset, agent_key, agent_token, hmac_key, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'online')`,
 		hostname, ip, osType, arch, hasDocker, hasIPSet, agentKey, agentToken, hmacKey)

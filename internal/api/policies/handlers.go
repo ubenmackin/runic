@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/gorilla/mux"
 
@@ -92,9 +93,6 @@ func validatePolicyInput(input *policyInput, isUpdate bool) error {
 			return common.NewHTTPError(http.StatusBadRequest, err.Error())
 		}
 	}
-	if len(input.Name) > 255 {
-		return common.NewHTTPError(http.StatusBadRequest, "policy name must not exceed 255 characters")
-	}
 
 	if !isUpdate {
 		if input.Name == "" || input.SourceID == 0 || input.SourceType == "" || input.ServiceID == 0 || input.TargetID == 0 || input.TargetType == "" {
@@ -112,11 +110,15 @@ func validatePolicyInput(input *policyInput, isUpdate bool) error {
 	if input.TargetType != "" && !common.IsValidEntityType(input.TargetType) {
 		return common.NewHTTPError(http.StatusBadRequest, "target_type must be one of: peer, group, special")
 	}
-	if input.SourceIP != nil && *input.SourceIP != "" && input.SourceType != "peer" {
-		return common.NewHTTPError(http.StatusBadRequest, "source_ip is only valid when source_type is peer")
+	var sourceIP, targetIP string
+	if input.SourceIP != nil {
+		sourceIP = *input.SourceIP
 	}
-	if input.TargetIP != nil && *input.TargetIP != "" && input.TargetType != "peer" {
-		return common.NewHTTPError(http.StatusBadRequest, "target_ip is only valid when target_type is peer")
+	if input.TargetIP != nil {
+		targetIP = *input.TargetIP
+	}
+	if err := common.ValidatePeerOverrideIPs(sourceIP, targetIP, input.SourceType, input.TargetType); err != nil {
+		return common.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 	if input.Direction == "" {
 		input.Direction = "both"
@@ -127,8 +129,14 @@ func validatePolicyInput(input *policyInput, isUpdate bool) error {
 	if input.TargetScope == "" {
 		input.TargetScope = "both"
 	}
-	if input.TargetScope != "both" && input.TargetScope != "host" && input.TargetScope != "docker" {
+	if !common.IsValidTargetScope(input.TargetScope) {
 		return common.NewHTTPError(http.StatusBadRequest, "target_scope must be one of: both, host, docker")
+	}
+	if input.Action == "" {
+		input.Action = "ACCEPT"
+	}
+	if !common.IsValidAction(input.Action) {
+		return common.NewHTTPError(http.StatusBadRequest, "action must be one of: ACCEPT, DROP, LOG_DROP")
 	}
 	return nil
 }
@@ -470,6 +478,87 @@ type PolicyPreviewRequest struct {
 	TargetScope string `json:"target_scope"`
 }
 
+// isPreviewValidationError reports whether a PreviewCompile error reflects
+// user-controlled input or fail-closed policy semantics (400) rather than an
+// internal failure (500). Validation and fail-closed failures carry the
+// engine.ErrPreviewValidation / engine.ErrPreviewFailClosed sentinels via
+// %w wrapping; unknown peer IDs surface as sql.ErrNoRows (wrapped with
+// engine.ErrPreviewValidation) through the peer loader or the resolver
+// chain. Anything else (DB outages, ipset wiring mistakes) stays
+// an internal error.
+func isPreviewValidationError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return true
+	}
+	if errors.Is(err, engine.ErrPreviewValidation) {
+		return true
+	}
+	if errors.Is(err, engine.ErrPreviewFailClosed) {
+		return true
+	}
+	return false
+}
+
+// sanitizePreviewError returns a user-facing message for PreviewCompile
+// validation/fail-closed failures. The full error (with sentinels) is logged
+// server-side; the client sees only the human cause without sentinel text
+// ("preview validation error", "preview fail-closed"), residual fail-closed
+// markers, or internal policy names. Callers must only invoke it after
+// isPreviewValidationError returns true so internal failures keep the generic
+// 500 message and the errors.Is mapping stays intact.
+func sanitizePreviewError(err error) string {
+	if errors.Is(err, engine.ErrPreviewFailClosed) {
+		lowered := strings.ToLower(err.Error())
+		if strings.Contains(lowered, "ingress") {
+			return "invalid preview request: ingress from internet cannot be previewed"
+		}
+		if strings.Contains(lowered, "ipv6") {
+			return "invalid preview request: internet target not supported for IPv6 peers"
+		}
+		return "invalid preview request: internet target requires ipset support"
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return "invalid preview request: referenced peer, group, service, or target does not exist"
+	}
+	msg := err.Error()
+	msg = strings.ReplaceAll(msg, engine.ErrPreviewValidation.Error(), "")
+	msg = strings.ReplaceAll(msg, engine.ErrPreviewFailClosed.Error(), "")
+	msg = strings.ReplaceAll(msg, ": fail-closed", "")
+	msg = strings.ReplaceAll(msg, "fail-closed", "")
+	msg = strings.TrimSpace(msg)
+	msg = strings.TrimSuffix(msg, ":")
+	msg = strings.TrimSpace(msg)
+	// Collapse spaced-colon artifacts left by sentinel removal (e.g.
+	// "foo: : bar" -> "foo: bar") without touching IPv6 "::" literals,
+	// which never contain spaces.
+	for strings.Contains(msg, ": :") {
+		msg = strings.ReplaceAll(msg, ": :", ":")
+	}
+	// Trim a single leading/trailing colon left by sentinel removal. Use
+	// prefix/suffix trimming (not a ": " cutset) so IPv6 literals like
+	// "::1" or "2001:db8::/32" are preserved.
+	msg = strings.TrimSpace(msg)
+	if strings.HasPrefix(msg, ":") && !strings.HasPrefix(msg, "::") {
+		msg = strings.TrimSpace(strings.TrimPrefix(msg, ":"))
+	}
+	msg = strings.TrimSpace(msg)
+	if strings.HasSuffix(msg, ":") && !strings.HasSuffix(msg, "::") {
+		msg = strings.TrimSpace(strings.TrimSuffix(msg, ":"))
+	}
+	msg = strings.TrimSpace(msg)
+	if msg == "" {
+		return "invalid preview request"
+	}
+	msg = strings.Join(strings.Fields(msg), " ")
+	if strings.HasPrefix(strings.ToLower(msg), "invalid preview request:") {
+		return msg
+	}
+	return "invalid preview request: " + msg
+}
+
 func (h *Handler) PolicyPreview(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB limit
 
@@ -494,12 +583,38 @@ func (h *Handler) PolicyPreview(w http.ResponseWriter, r *http.Request) {
 		req.Action = "ACCEPT"
 	}
 
+	if !common.IsValidEntityType(req.SourceType) {
+		common.RespondError(w, http.StatusBadRequest, "source_type must be one of: peer, group, special")
+		return
+	}
+	if !common.IsValidEntityType(req.TargetType) {
+		common.RespondError(w, http.StatusBadRequest, "target_type must be one of: peer, group, special")
+		return
+	}
+	if !common.IsValidDirection(req.Direction) {
+		common.RespondError(w, http.StatusBadRequest, "direction must be one of: both, forward, backward")
+		return
+	}
+	if !common.IsValidTargetScope(req.TargetScope) {
+		common.RespondError(w, http.StatusBadRequest, "target_scope must be one of: both, host, docker")
+		return
+	}
+	if !common.IsValidAction(req.Action) {
+		common.RespondError(w, http.StatusBadRequest, "action must be one of: ACCEPT, DROP, LOG_DROP")
+		return
+	}
+
 	if req.PeerID == 0 {
 		if req.SourceType == "peer" {
 			req.PeerID = req.SourceID
 		} else if req.TargetType == "peer" {
 			req.PeerID = req.TargetID
 		}
+	}
+
+	if err := common.ValidatePeerOverrideIPs(req.SourceIP, req.TargetIP, req.SourceType, req.TargetType); err != nil {
+		common.RespondError(w, http.StatusBadRequest, err.Error())
+		return
 	}
 
 	if h.Compiler == nil {
@@ -509,6 +624,11 @@ func (h *Handler) PolicyPreview(w http.ResponseWriter, r *http.Request) {
 
 	rules, err := h.Compiler.PreviewCompile(r.Context(), req.PeerID, req.SourceID, req.SourceType, req.SourceIP, req.TargetID, req.TargetType, req.TargetIP, req.ServiceID, req.Action, req.Direction, req.TargetScope)
 	if err != nil {
+		if isPreviewValidationError(err) {
+			log.ErrorContext(r.Context(), "preview validation failed", "error", err)
+			common.RespondError(w, http.StatusBadRequest, sanitizePreviewError(err))
+			return
+		}
 		log.ErrorContext(r.Context(), "failed to generate preview", "error", err)
 		common.InternalError(w)
 		return

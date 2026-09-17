@@ -11,6 +11,8 @@ import (
 	"net"
 	"regexp"
 	"strings"
+
+	"runic/internal/resolve"
 )
 
 // must start and end with alphanumeric; no consecutive dots allowed.
@@ -37,18 +39,41 @@ func ValidateHostname(h string) error {
 
 // ValidateIPAddress validates that the input is a valid IP address or CIDR notation.
 // Returns an error if the input is neither a valid IP nor a valid CIDR.
+// It delegates to resolve.ValidateIPOrCIDR so the two validators cannot diverge;
+// error strings and fail-closed semantics are defined once in internal/resolve.
+//
+// Contract note: this is the generic IP-or-CIDR check (accepts /0 for the
+// __any_ip__ path). Peer address fields (peers.ip_address, peer_ips,
+// policy overrides) must use ValidatePeerCIDR instead, which additionally
+// rejects /0 allow-all CIDRs. Agent interface addresses and telemetry must
+// use ValidatePlainIP (CIDR rejected).
 func ValidateIPAddress(ip string) error {
+	return resolve.ValidateIPOrCIDR(ip)
+}
+
+// ValidatePeerCIDR validates peer address fields: peers.ip_address,
+// peer_ips.ip_address, and policy source_ip/target_ip overrides. Plain IPs
+// and CIDR ranges are accepted (bare IPs normalize to /32 or /128 at
+// compile time), but /0 allow-all CIDRs are rejected — use the explicit
+// __any_ip__ special target for allow-all semantics. It delegates to
+// resolve.ValidatePeerCIDR so store, resolver, and API layers share one
+// definition and cannot diverge.
+func ValidatePeerCIDR(ip string) error {
+	return resolve.ValidatePeerCIDR(ip)
+}
+
+// ValidatePlainIP validates that the input is a plain IP address without CIDR
+// notation. Packet telemetry fields (log src_ip/dst_ip, agent-reported
+// interface addresses) must be plain IPs; CIDR ranges are rejected. Use
+// ValidatePeerCIDR for CIDR-capable peer fields (peers.ip_address,
+// peer_ips, policy overrides) and ValidateIPAddress only for generic
+// IP-or-CIDR checks where /0 is explicitly allowed.
+func ValidatePlainIP(ip string) error {
 	if ip == "" {
 		return fmt.Errorf("IP address is required")
 	}
-	// Try to parse as plain IP first
-	if net.ParseIP(ip) != nil {
-		return nil
-	}
-	// Try to parse as CIDR
-	_, _, err := net.ParseCIDR(ip)
-	if err != nil {
-		return fmt.Errorf("invalid IP address or CIDR notation")
+	if net.ParseIP(ip) == nil {
+		return fmt.Errorf("invalid IP address")
 	}
 	return nil
 }
