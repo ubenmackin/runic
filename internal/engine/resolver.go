@@ -177,11 +177,12 @@ func (r *Resolver) ResolveSpecialTarget(ctx context.Context, specialID int, peer
 		return peers, nil
 	case 8: // __igmpv3__
 		return []string{"224.0.0.22/32"}, nil
-	case 9: // __internet__ - return marker for compiler to handle with ipset negation.
-		// The marker is NOT a valid iptables address. Callers must translate it
-		// via the runic_private_ranges ipset path and must fail closed (return
-		// an error) when the target host has no ipset support, so the marker
-		// never reaches a "-d"/"-s" rule literal.
+	case 9: // __internet__ - return marker for compiler to handle via ipset vs fallback branching.
+		// The marker is NOT a valid iptables address. Callers translate it
+		// via runic_private_ranges when hasIPSet else the explicit 0.0.0.0/0
+		// four-negation fallback, failing closed only for
+		// ingress/IPv6/empty-IP/sentinel-leak, so the marker never reaches
+		// a "-d"/"-s" rule literal.
 		return []string{resolve.InternetSentinel}, nil
 	default:
 		return nil, fmt.Errorf("unknown special target ID: %d: %w", specialID, ErrPreviewValidation)

@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"strings"
 	"testing"
 
@@ -3163,7 +3164,67 @@ func TestPreviewCompileInternetForward(t *testing.T) {
 	}
 }
 
-func TestCompileInternetNoIpsetFailClosed(t *testing.T) {
+func TestPrivateFallbackCIDRsPinned(t *testing.T) {
+	want := []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8"}
+	if len(privateFallbackCIDRs) != len(want) {
+		t.Fatalf("privateFallbackCIDRs length = %d, want %d (%v)", len(privateFallbackCIDRs), len(want), privateFallbackCIDRs)
+	}
+	for i := range want {
+		if privateFallbackCIDRs[i] != want[i] {
+			t.Fatalf("privateFallbackCIDRs[%d] = %q, want %q (full: %v)", i, privateFallbackCIDRs[i], want[i], privateFallbackCIDRs)
+		}
+	}
+	dst := internetFallbackDstMatch()
+	src := internetFallbackSrcMatch()
+	for _, cidr := range privateFallbackCIDRs {
+		if !strings.Contains(dst, "! -d "+cidr) {
+			t.Errorf("fallback dst match %q missing exclusion for shared CIDR %q", dst, cidr)
+		}
+		if !strings.Contains(src, "! -s "+cidr) {
+			t.Errorf("fallback src match %q missing exclusion for shared CIDR %q", src, cidr)
+		}
+	}
+	if strings.Contains(dst, "runic_private_ranges") || strings.Contains(src, "runic_private_ranges") {
+		t.Errorf("fallback matches must not reference runic_private_ranges, got dst=%q src=%q", dst, src)
+	}
+}
+
+func assertNoIpsetFallback(t *testing.T, output string) {
+	t.Helper()
+	if !strings.Contains(output, "-A OUTPUT -d 0.0.0.0/0 ! -d 10.0.0.0/8 ! -d 172.16.0.0/12 ! -d 192.168.0.0/16 ! -d 127.0.0.0/8 -p tcp --dport 80") {
+		t.Errorf("expected OUTPUT fallback with -d 0.0.0.0/0 plus four ! -d exclusions, got:\n%s", output)
+	}
+	if !strings.Contains(output, "-A INPUT -s 0.0.0.0/0 ! -s 10.0.0.0/8 ! -s 172.16.0.0/12 ! -s 192.168.0.0/16 ! -s 127.0.0.0/8 -p tcp --sport 80") {
+		t.Errorf("expected INPUT return fallback with -s 0.0.0.0/0 plus four ! -s exclusions, got:\n%s", output)
+	}
+	if strings.Contains(output, "runic_private_ranges") {
+		t.Errorf("no-ipset fallback must not reference runic_private_ranges, got:\n%s", output)
+	}
+	if strings.Contains(output, "create runic_private_ranges") {
+		t.Errorf("no-ipset fallback must omit create runic_private_ranges, got:\n%s", output)
+	}
+	if strings.Contains(output, resolve.InternetSentinel) {
+		t.Errorf("should not emit literal "+resolve.InternetSentinel+" destination, got:\n%s", output)
+	}
+	if strings.Contains(output, "-d "+resolve.InternetSentinel) {
+		t.Errorf("should not emit literal -d "+resolve.InternetSentinel+" destination, got:\n%s", output)
+	}
+	if strings.Contains(output, "-s "+resolve.InternetSentinel) {
+		t.Errorf("should not emit literal -s "+resolve.InternetSentinel+" source, got:\n%s", output)
+	}
+}
+
+func TestCompileInternetNoIpsetAcceptFallbackWithPreview(t *testing.T) {
+	// Reconciled with the no-ipset fallback: IPv4 egress
+	// to Internet without ipset support no longer fails closed. It renders the
+	// explicit four-negation fallback anchored at 0.0.0.0/0 with no
+	// runic_private_ranges reference and no __internet__ literal.
+	// Fail-closed is retained only for ingress-from-internet
+	// (TestCompileInternetSourceFailClosed), IPv6 peers, and empty-IP peers.
+	// The assertions pin the fallback via assertNoIpsetFallback so this stays
+	// consistent with TestCompileInternetNoIpsetAcceptFallback and
+	// TestPreviewCompileInternetNoIpsetFallback. The hasIPSet=true ipset path
+	// (runic_private_ranges negation) remains covered by TestCompileInternetAccept.
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
 	if _, err := database.Exec("PRAGMA foreign_keys=OFF"); err != nil {
@@ -3188,21 +3249,29 @@ func TestCompileInternetNoIpsetFailClosed(t *testing.T) {
 
 	c := NewTestCompiler(database)
 	output, err := c.Compile(context.Background(), peerID)
-	if err == nil {
-		t.Fatalf("expected fail-closed error for to-Internet without ipset, got output:\n%s", output)
-	}
-	if strings.Contains(output, resolve.InternetSentinel) {
-		t.Errorf("should not emit literal "+resolve.InternetSentinel+" destination, got:\n%s", output)
-	}
-	if strings.Contains(output, "-d "+resolve.InternetSentinel) {
-		t.Errorf("should not emit literal -d "+resolve.InternetSentinel+" destination, got:\n%s", output)
+	if err != nil {
+		t.Fatalf("compile error: %v", err)
 	}
 
-	// Preview with the same non-ipset host context must fail closed too,
-	// matching the Compile gate (hasIPSet && isInternetTarget).
-	_, err = c.PreviewCompile(context.Background(), peerID, peerID, "peer", "", resolve.SpecialIDInternet, "special", "", serviceID, "ACCEPT", "forward", "host")
-	if err == nil {
-		t.Fatalf("expected fail-closed preview error for to-Internet without ipset")
+	assertNoIpsetFallback(t, output)
+
+	// Preview with the same non-ipset host context renders the same fallback
+	// instead of failing closed, matching the Compile fallback above.
+	rules, err := c.PreviewCompile(context.Background(), peerID, peerID, "peer", "", resolve.SpecialIDInternet, "special", "", serviceID, "ACCEPT", "forward", "host")
+	if err != nil {
+		t.Fatalf("PreviewCompile no-ipset failed: %v", err)
+	}
+	joined := strings.Join(rules, "\n")
+	if !strings.Contains(joined, "-A OUTPUT -d 0.0.0.0/0 ! -d 10.0.0.0/8 ! -d 172.16.0.0/12 ! -d 192.168.0.0/16 ! -d 127.0.0.0/8") {
+		t.Errorf("expected OUTPUT fallback in no-ipset preview, got: %v", rules)
+	}
+	if strings.Contains(joined, "runic_private_ranges") {
+		t.Errorf("no-ipset preview must not reference runic_private_ranges, got: %v", rules)
+	}
+	for _, rule := range rules {
+		if strings.Contains(rule, resolve.InternetSentinel) {
+			t.Errorf("no-ipset preview should not emit "+resolve.InternetSentinel+" literal, got: %s", rule)
+		}
 	}
 }
 
@@ -3265,6 +3334,408 @@ func TestPreviewInternetSourceFailClosed(t *testing.T) {
 	for _, rule := range rules {
 		if strings.Contains(rule, resolve.InternetSentinel) {
 			t.Errorf("preview should not emit "+resolve.InternetSentinel+" literal, got: %s", rule)
+		}
+	}
+}
+
+func TestCompileInternetNoIpsetAcceptFallback(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	if _, err := database.Exec("PRAGMA foreign_keys=OFF"); err != nil {
+		t.Fatalf("disable foreign keys: %v", err)
+	}
+
+	peerID := insertPeerWithIPSet(t, database, "internet-noipset-accept", "192.168.1.20", false, false)
+
+	serviceID := insertService(t, database, "http", "80", "tcp")
+	insertPolicyOpts(t, database, policyOpts{
+		name:       "allow-internet-http-noipset",
+		sourceType: "peer",
+		sourceID:   int64(peerID),
+		targetType: "special",
+		targetID:   int64(resolve.SpecialIDInternet),
+		serviceID:  int64(serviceID),
+		action:     "ACCEPT",
+		priority:   100,
+		enabled:    true,
+		direction:  "both",
+	})
+
+	c := NewTestCompiler(database)
+	output, err := c.Compile(context.Background(), peerID)
+	if err != nil {
+		t.Fatalf("compile error: %v", err)
+	}
+
+	assertNoIpsetFallback(t, output)
+}
+
+func TestCompileInternetNoIpsetLogDropFallback(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	if _, err := database.Exec("PRAGMA foreign_keys=OFF"); err != nil {
+		t.Fatalf("disable foreign keys: %v", err)
+	}
+
+	peerID := insertPeerWithIPSet(t, database, "internet-noipset-logdrop", "192.168.1.21", false, false)
+
+	serviceID := insertService(t, database, "http", "80", "tcp")
+	insertPolicyOpts(t, database, policyOpts{
+		name:       "block-internet-http-noipset",
+		sourceType: "peer",
+		sourceID:   int64(peerID),
+		targetType: "special",
+		targetID:   int64(resolve.SpecialIDInternet),
+		serviceID:  int64(serviceID),
+		action:     "LOG_DROP",
+		priority:   100,
+		enabled:    true,
+		direction:  "both",
+	})
+
+	c := NewTestCompiler(database)
+	output, err := c.Compile(context.Background(), peerID)
+	if err != nil {
+		t.Fatalf("compile error: %v", err)
+	}
+
+	if !strings.Contains(output, "RUNIC-DROP-O") {
+		t.Errorf("expected RUNIC-DROP-O log prefix for no-ipset LOG_DROP, got:\n%s", output)
+	}
+	if !strings.Contains(output, "-A OUTPUT -d 0.0.0.0/0 ! -d 10.0.0.0/8 ! -d 172.16.0.0/12 ! -d 192.168.0.0/16 ! -d 127.0.0.0/8 -p tcp --dport 80 -j LOG") {
+		t.Errorf("expected OUTPUT LOG rule with fallback dst negations, got:\n%s", output)
+	}
+	if !strings.Contains(output, "-A OUTPUT -d 0.0.0.0/0 ! -d 10.0.0.0/8 ! -d 172.16.0.0/12 ! -d 192.168.0.0/16 ! -d 127.0.0.0/8 -p tcp --dport 80 -j DROP") {
+		t.Errorf("expected OUTPUT DROP rule with fallback dst negations, got:\n%s", output)
+	}
+	if strings.Contains(output, "runic_private_ranges") {
+		t.Errorf("no-ipset fallback must not reference runic_private_ranges, got:\n%s", output)
+	}
+	if strings.Contains(output, resolve.InternetSentinel) {
+		t.Errorf("should not emit literal "+resolve.InternetSentinel+" destination, got:\n%s", output)
+	}
+}
+
+func TestCompileInternetNoIpsetDropFallback(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	if _, err := database.Exec("PRAGMA foreign_keys=OFF"); err != nil {
+		t.Fatalf("disable foreign keys: %v", err)
+	}
+
+	peerID := insertPeerWithIPSet(t, database, "internet-noipset-drop", "192.168.1.22", false, false)
+
+	serviceID := insertService(t, database, "ssh", "22", "tcp")
+	insertPolicyOpts(t, database, policyOpts{
+		name:       "block-internet-ssh-noipset",
+		sourceType: "peer",
+		sourceID:   int64(peerID),
+		targetType: "special",
+		targetID:   int64(resolve.SpecialIDInternet),
+		serviceID:  int64(serviceID),
+		action:     "DROP",
+		priority:   100,
+		enabled:    true,
+		direction:  "both",
+	})
+
+	c := NewTestCompiler(database)
+	output, err := c.Compile(context.Background(), peerID)
+	if err != nil {
+		t.Fatalf("compile error: %v", err)
+	}
+
+	if !strings.Contains(output, "-A OUTPUT -d 0.0.0.0/0 ! -d 10.0.0.0/8 ! -d 172.16.0.0/12 ! -d 192.168.0.0/16 ! -d 127.0.0.0/8 -p tcp --dport 22 -j DROP") {
+		t.Errorf("expected OUTPUT DROP rule with fallback dst negations, got:\n%s", output)
+	}
+	if strings.Contains(output, "runic_private_ranges") {
+		t.Errorf("no-ipset fallback must not reference runic_private_ranges, got:\n%s", output)
+	}
+	if strings.Contains(output, resolve.InternetSentinel) {
+		t.Errorf("should not emit literal "+resolve.InternetSentinel+" destination, got:\n%s", output)
+	}
+}
+
+func TestCompileInternetNoIpsetDockerFallback(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	if _, err := database.Exec("PRAGMA foreign_keys=OFF"); err != nil {
+		t.Fatalf("disable foreign keys: %v", err)
+	}
+
+	peerID := insertPeerWithIPSet(t, database, "internet-noipset-docker", "192.168.1.23", true, false)
+
+	serviceID := insertService(t, database, "http", "80", "tcp")
+	insertPolicyOpts(t, database, policyOpts{
+		name:       "allow-internet-docker-noipset",
+		sourceType: "peer",
+		sourceID:   int64(peerID),
+		targetType: "special",
+		targetID:   int64(resolve.SpecialIDInternet),
+		serviceID:  int64(serviceID),
+		action:     "ACCEPT",
+		priority:   100,
+		enabled:    true,
+		direction:  "both",
+	})
+
+	c := NewTestCompiler(database)
+	output, err := c.Compile(context.Background(), peerID)
+	if err != nil {
+		t.Fatalf("compile error: %v", err)
+	}
+
+	if !strings.Contains(output, "-A DOCKER-USER -d 0.0.0.0/0 ! -d 10.0.0.0/8 ! -d 172.16.0.0/12 ! -d 192.168.0.0/16 ! -d 127.0.0.0/8 -p tcp --dport 80") {
+		t.Errorf("expected DOCKER-USER fallback OUTPUT rule for no-ipset docker peer, got:\n%s", output)
+	}
+	if !strings.Contains(output, "-A OUTPUT -d 0.0.0.0/0 ! -d 10.0.0.0/8 ! -d 172.16.0.0/12 ! -d 192.168.0.0/16 ! -d 127.0.0.0/8 -p tcp --dport 80") {
+		t.Errorf("expected host OUTPUT fallback alongside DOCKER-USER fallback, got:\n%s", output)
+	}
+	if strings.Contains(output, "runic_private_ranges") {
+		t.Errorf("no-ipset fallback must not reference runic_private_ranges, got:\n%s", output)
+	}
+	if strings.Contains(output, resolve.InternetSentinel) {
+		t.Errorf("should not emit literal "+resolve.InternetSentinel+" destination, got:\n%s", output)
+	}
+}
+
+func TestPreviewCompileInternetNoIpsetFallback(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	if _, err := database.Exec("PRAGMA foreign_keys=OFF"); err != nil {
+		t.Fatalf("disable foreign keys: %v", err)
+	}
+
+	noIpsetPeer := insertPeerWithIPSet(t, database, "internet-preview-noipset", "192.168.1.30", false, false)
+	ipsetPeer := insertPeerWithIPSet(t, database, "internet-preview-ipset", "192.168.1.31", false, true)
+	serviceID := insertService(t, database, "http", "80", "tcp")
+
+	c := NewTestCompiler(database)
+
+	noIpsetRules, err := c.PreviewCompile(context.Background(), noIpsetPeer, noIpsetPeer, "peer", "", resolve.SpecialIDInternet, "special", "", serviceID, "ACCEPT", "forward", "host")
+	if err != nil {
+		t.Fatalf("PreviewCompile no-ipset failed: %v", err)
+	}
+	joinedNoIpset := strings.Join(noIpsetRules, "\n")
+	if !strings.Contains(joinedNoIpset, "-A OUTPUT -d 0.0.0.0/0 ! -d 10.0.0.0/8 ! -d 172.16.0.0/12 ! -d 192.168.0.0/16 ! -d 127.0.0.0/8") {
+		t.Errorf("expected OUTPUT fallback in no-ipset preview, got: %v", noIpsetRules)
+	}
+	if !strings.Contains(joinedNoIpset, "-A INPUT -s 0.0.0.0/0 ! -s 10.0.0.0/8 ! -s 172.16.0.0/12 ! -s 192.168.0.0/16 ! -s 127.0.0.0/8") {
+		t.Errorf("expected INPUT fallback in no-ipset preview, got: %v", noIpsetRules)
+	}
+	if strings.Contains(joinedNoIpset, "runic_private_ranges") {
+		t.Errorf("no-ipset preview must not reference runic_private_ranges, got: %v", noIpsetRules)
+	}
+	for _, rule := range noIpsetRules {
+		if strings.Contains(rule, resolve.InternetSentinel) {
+			t.Errorf("no-ipset preview should not emit "+resolve.InternetSentinel+" literal, got: %s", rule)
+		}
+	}
+
+	ipsetRules, err := c.PreviewCompile(context.Background(), ipsetPeer, ipsetPeer, "peer", "", resolve.SpecialIDInternet, "special", "", serviceID, "ACCEPT", "forward", "host")
+	if err != nil {
+		t.Fatalf("PreviewCompile ipset failed: %v", err)
+	}
+	joinedIpset := strings.Join(ipsetRules, "\n")
+	if !strings.Contains(joinedIpset, "-A OUTPUT -p tcp -m set ! --match-set runic_private_ranges dst --dport 80") {
+		t.Errorf("expected OUTPUT ipset-negation rule in ipset preview, got: %v", ipsetRules)
+	}
+	if !strings.Contains(joinedIpset, "-A INPUT -p tcp -m set ! --match-set runic_private_ranges src") {
+		t.Errorf("expected INPUT ipset-negation return rule in ipset preview, got: %v", ipsetRules)
+	}
+	if strings.Contains(joinedIpset, "-d 0.0.0.0/0") {
+		t.Errorf("ipset preview should not contain fallback -d 0.0.0.0/0, got: %v", ipsetRules)
+	}
+	for _, rule := range ipsetRules {
+		if strings.Contains(rule, resolve.InternetSentinel) {
+			t.Errorf("ipset preview should not emit "+resolve.InternetSentinel+" literal, got: %s", rule)
+		}
+	}
+}
+
+func TestCompileInternetIPv6FailClosed(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	if _, err := database.Exec("PRAGMA foreign_keys=OFF"); err != nil {
+		t.Fatalf("disable foreign keys: %v", err)
+	}
+
+	peerID := insertPeerWithIPSet(t, database, "internet-ipv6", "2001:db8::1", false, true)
+
+	serviceID := insertService(t, database, "http", "80", "tcp")
+	insertPolicyOpts(t, database, policyOpts{
+		name:       "allow-internet-ipv6",
+		sourceType: "peer",
+		sourceID:   int64(peerID),
+		targetType: "special",
+		targetID:   int64(resolve.SpecialIDInternet),
+		serviceID:  int64(serviceID),
+		action:     "ACCEPT",
+		priority:   100,
+		enabled:    true,
+		direction:  "forward",
+	})
+
+	c := NewTestCompiler(database)
+	output, err := c.Compile(context.Background(), peerID)
+	if err == nil {
+		t.Fatalf("expected fail-closed error for IPv6 internet egress, got output:\n%s", output)
+	}
+	if !errors.Is(err, ErrPreviewFailClosed) {
+		t.Errorf("expected error to wrap ErrPreviewFailClosed, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "allow-internet-ipv6") {
+		t.Errorf("expected error to carry policy name, got: %v", err)
+	}
+	if strings.Contains(output, resolve.InternetSentinel) {
+		t.Errorf("should not emit literal "+resolve.InternetSentinel+", got:\n%s", output)
+	}
+	if strings.Contains(output, "runic_private_ranges") {
+		t.Errorf("IPv6 fail-closed must not emit runic_private_ranges, got:\n%s", output)
+	}
+	if strings.Contains(output, "-d 0.0.0.0/0") {
+		t.Errorf("IPv6 fail-closed must not emit fallback -d 0.0.0.0/0, got:\n%s", output)
+	}
+}
+
+func TestCompileInternetEmptyIPFailClosed(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	if _, err := database.Exec("PRAGMA foreign_keys=OFF"); err != nil {
+		t.Fatalf("disable foreign keys: %v", err)
+	}
+
+	peerID := insertPeerWithIPSet(t, database, "internet-empty", "", false, true)
+
+	serviceID := insertService(t, database, "http", "80", "tcp")
+	insertPolicyOpts(t, database, policyOpts{
+		name:       "allow-internet-empty",
+		sourceType: "peer",
+		sourceID:   int64(peerID),
+		targetType: "special",
+		targetID:   int64(resolve.SpecialIDInternet),
+		serviceID:  int64(serviceID),
+		action:     "ACCEPT",
+		priority:   100,
+		enabled:    true,
+		direction:  "forward",
+	})
+
+	c := NewTestCompiler(database)
+	output, err := c.Compile(context.Background(), peerID)
+	if err == nil {
+		t.Fatalf("expected fail-closed error for empty-IP internet egress, got output:\n%s", output)
+	}
+	if !errors.Is(err, ErrPreviewFailClosed) {
+		t.Errorf("expected error to wrap ErrPreviewFailClosed, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "allow-internet-empty") {
+		t.Errorf("expected error to carry policy name, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "has_ipset=0") {
+		t.Errorf("empty-IP error must not claim has_ipset=0, got: %v", err)
+	}
+	if strings.Contains(output, resolve.InternetSentinel) {
+		t.Errorf("should not emit literal "+resolve.InternetSentinel+", got:\n%s", output)
+	}
+	if strings.Contains(output, "runic_private_ranges") {
+		t.Errorf("empty-IP fail-closed must not emit runic_private_ranges, got:\n%s", output)
+	}
+	if strings.Contains(output, "-d 0.0.0.0/0") {
+		t.Errorf("empty-IP fail-closed must not emit fallback -d 0.0.0.0/0, got:\n%s", output)
+	}
+}
+
+func TestPreviewInternetIPv6FailClosed(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	if _, err := database.Exec("PRAGMA foreign_keys=OFF"); err != nil {
+		t.Fatalf("disable foreign keys: %v", err)
+	}
+
+	peerID := insertPeerWithIPSet(t, database, "internet-ipv6-preview", "2001:db8::1", false, true)
+	sourcePeer := insertPeerWithIPSet(t, database, "internet-ipv6-source", "10.0.0.1", false, true)
+	serviceID := insertService(t, database, "http", "80", "tcp")
+
+	c := NewTestCompiler(database)
+	rules, err := c.PreviewCompile(context.Background(), peerID, sourcePeer, "peer", "", resolve.SpecialIDInternet, "special", "", serviceID, "ACCEPT", "forward", "host")
+	if err == nil {
+		t.Fatalf("expected fail-closed preview error for IPv6 internet egress, got rules: %v", rules)
+	}
+	if !errors.Is(err, ErrPreviewFailClosed) {
+		t.Errorf("expected preview error to wrap ErrPreviewFailClosed, got: %v", err)
+	}
+	joined := strings.Join(rules, "\n")
+	if strings.Contains(joined, resolve.InternetSentinel) {
+		t.Errorf("preview should not emit "+resolve.InternetSentinel+" literal, got: %v", rules)
+	}
+	if strings.Contains(joined, "runic_private_ranges") {
+		t.Errorf("IPv6 fail-closed preview must not emit runic_private_ranges, got: %v", rules)
+	}
+	if strings.Contains(joined, "-d 0.0.0.0/0") {
+		t.Errorf("IPv6 fail-closed preview must not emit fallback -d 0.0.0.0/0, got: %v", rules)
+	}
+}
+
+func TestPreviewInternetEmptyIPFailClosed(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	if _, err := database.Exec("PRAGMA foreign_keys=OFF"); err != nil {
+		t.Fatalf("disable foreign keys: %v", err)
+	}
+
+	peerID := insertPeerWithIPSet(t, database, "internet-empty-preview", "", false, true)
+	sourcePeer := insertPeerWithIPSet(t, database, "internet-empty-source", "10.0.0.2", false, true)
+	serviceID := insertService(t, database, "http", "80", "tcp")
+
+	c := NewTestCompiler(database)
+	rules, err := c.PreviewCompile(context.Background(), peerID, sourcePeer, "peer", "", resolve.SpecialIDInternet, "special", "", serviceID, "ACCEPT", "forward", "host")
+	if err == nil {
+		t.Fatalf("expected fail-closed preview error for empty-IP internet egress, got rules: %v", rules)
+	}
+	if !errors.Is(err, ErrPreviewFailClosed) {
+		t.Errorf("expected preview error to wrap ErrPreviewFailClosed, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "has_ipset=0") {
+		t.Errorf("empty-IP preview error must not claim has_ipset=0, got: %v", err)
+	}
+	joined := strings.Join(rules, "\n")
+	if strings.Contains(joined, resolve.InternetSentinel) {
+		t.Errorf("preview should not emit "+resolve.InternetSentinel+" literal, got: %v", rules)
+	}
+	if strings.Contains(joined, "runic_private_ranges") {
+		t.Errorf("empty-IP fail-closed preview must not emit runic_private_ranges, got: %v", rules)
+	}
+	if strings.Contains(joined, "-d 0.0.0.0/0") {
+		t.Errorf("empty-IP fail-closed preview must not emit fallback -d 0.0.0.0/0, got: %v", rules)
+	}
+}
+
+func TestPreviewInternetPeerZeroBypass(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	if _, err := database.Exec("PRAGMA foreign_keys=OFF"); err != nil {
+		t.Fatalf("disable foreign keys: %v", err)
+	}
+
+	sourcePeer := insertPeerWithIPSet(t, database, "internet-zero-source", "10.0.0.1", false, true)
+	serviceID := insertService(t, database, "http", "80", "tcp")
+
+	c := NewTestCompiler(database)
+	rules, err := c.PreviewCompile(context.Background(), 0, sourcePeer, "peer", "", resolve.SpecialIDInternet, "special", "", serviceID, "ACCEPT", "forward", "host")
+	if err != nil {
+		t.Fatalf("peerID 0 preview should keep canonical ipset form, got error: %v", err)
+	}
+	joined := strings.Join(rules, "\n")
+	if !strings.Contains(joined, "-A OUTPUT -p tcp -m set ! --match-set runic_private_ranges dst --dport 80") {
+		t.Errorf("expected canonical ipset-negation rule for peerID 0, got: %v", rules)
+	}
+	if strings.Contains(joined, "-d 0.0.0.0/0") {
+		t.Errorf("peerID 0 preview should not contain fallback -d 0.0.0.0/0, got: %v", rules)
+	}
+	for _, rule := range rules {
+		if strings.Contains(rule, resolve.InternetSentinel) {
+			t.Errorf("peerID 0 preview should not emit "+resolve.InternetSentinel+" literal, got: %s", rule)
 		}
 	}
 }
