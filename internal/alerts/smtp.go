@@ -9,7 +9,6 @@ import (
 	"html"
 	"log/slog"
 	"net/smtp"
-	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -275,15 +274,10 @@ func (s *SMTPSender) sendWithTLS(addr string, auth smtp.Auth, from string, to []
 	return s.smtpConversation(smtpConn, auth, from, to, msg)
 }
 
-// smtpConversation performs the standard SMTP conversation (Hello, Auth, Mail, Rcpt, Data, Write)
+// smtpConversation performs the standard SMTP conversation (Auth, Mail, Rcpt, Data)
 // on an already-connected *smtp.Client. This eliminates the 100-line code duplication between
 // the SMTPS and STARTTLS branches of sendWithTLS.
 func (s *SMTPSender) smtpConversation(client *smtp.Client, auth smtp.Auth, from string, to []string, msg []byte) error {
-	heloHostname := s.getHeloHostname()
-	if err := client.Hello(heloHostname); err != nil {
-		return fmt.Errorf("SMTP Hello (HELO) failed: %w", err)
-	}
-
 	if auth != nil {
 		if err := client.Auth(auth); err != nil {
 			return fmt.Errorf("SMTP authentication failed: %w", err)
@@ -316,21 +310,6 @@ func (s *SMTPSender) smtpConversation(client *smtp.Client, auth smtp.Auth, from 
 	}
 
 	return nil
-}
-
-// getHeloHostname returns the HELO/EHLO hostname to use in the SMTP conversation.
-// If config.HeloHostname is set, it is used. Otherwise, the system hostname is used.
-// If os.Hostname() also fails, "localhost" is returned as a safe default.
-func (s *SMTPSender) getHeloHostname() string {
-	if s.config.HeloHostname != "" {
-		return s.config.HeloHostname
-	}
-	hostname, err := os.Hostname()
-	if err != nil {
-		s.logger.Warn("failed to get system hostname for HELO, falling back to localhost", "error", err)
-		return "localhost"
-	}
-	return hostname
 }
 
 func (s *SMTPSender) sanitizeHeaderValue(value string) string {
