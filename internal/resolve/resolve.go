@@ -2,7 +2,10 @@
 // used by both the engine (compiler/resolver) and the importer.
 package resolve
 
-import "net"
+import (
+	"fmt"
+	"net"
+)
 
 // Special target IDs for multicast groups, broadcast, and other well-known addresses.
 const (
@@ -17,28 +20,165 @@ const (
 	SpecialIDInternet         = 9 // __internet__
 )
 
+// InternetSentinel is the marker returned for the internet special target.
+// It is NOT a valid iptables address. Callers must translate it via the
+// runic_private_ranges ipset path and must fail closed when the target host
+// has no ipset support, so the marker never reaches a "-d"/"-s" rule literal.
+const InternetSentinel = "__internet__"
+
+// IsValidDirection reports whether value is a known policy direction.
+//
+// These shared policy allowlists are the single source of truth for the
+// policy domain enums (entity type, direction, target scope, action).
+// Both internal/api/common (IsValidDirection, IsValidTargetScope,
+// IsValidEntityType, IsValidAction) and internal/engine (policy preview
+// validation) delegate to these functions so the two cannot diverge.
+// They live here (rather than in api/common) because api/common imports
+// engine (tracker/pushworker/recompile), so the engine cannot import it
+// without creating an import cycle.
+func IsValidDirection(value string) bool {
+	return value == "both" || value == "forward" || value == "backward"
+}
+
+// IsValidTargetScope reports whether value is a known policy target scope.
+func IsValidTargetScope(value string) bool {
+	return value == "both" || value == "host" || value == "docker"
+}
+
+// IsValidEntityType reports whether value is a known policy entity type.
+func IsValidEntityType(value string) bool {
+	return value == "peer" || value == "group" || value == "special"
+}
+
+// IsValidAction reports whether value is a known policy action.
+func IsValidAction(value string) bool {
+	return value == "ACCEPT" || value == "DROP" || value == "LOG_DROP"
+}
+
+// ValidateIPOrCIDR validates that s is a valid IP address or CIDR notation.
+// Validation is performed solely by net.ParseIP and net.ParseCIDR, which
+// already reject whitespace, shell metacharacters, zone identifiers, and any
+// other non-address input, so no separate denylist is maintained. Unknown or
+// malformed input fails closed with an error.
+//
+// Contract: this is the generic validator. It accepts 0.0.0.0/0 and ::/0
+// because the __any_ip__ special target legitimately compiles to 0.0.0.0/0.
+// Peer address fields (peers.ip_address, peer_ips.ip_address, policy
+// source_ip/target_ip overrides) must use ValidatePeerCIDR instead, which
+// rejects /0 so a single misconfigured peer cannot generate an allow-all
+// rule. Agent-reported interface addresses (register IP, all_ips, telemetry
+// src_ip/dst_ip) must use plain-IP validation only (no CIDR at all).
+func ValidateIPOrCIDR(s string) error {
+	if s == "" {
+		return fmt.Errorf("IP address is required")
+	}
+	if net.ParseIP(s) != nil {
+		return nil
+	}
+	if _, _, err := net.ParseCIDR(s); err != nil {
+		return fmt.Errorf("invalid IP address or CIDR notation")
+	}
+	return nil
+}
+
+// ValidatePeerCIDR validates peer address fields: peers.ip_address,
+// peer_ips.ip_address, and policy source_ip/target_ip overrides. These
+// fields accept a plain IP or a CIDR range (unlike agent interface
+// addresses, which are plain-IP-only), but must never accept an allow-all
+// /0 CIDR: a single peer with 0.0.0.0/0 or ::/0 would compile to
+// "-s 0.0.0.0/0"/"-d 0.0.0.0/0" (allow-all) fail-open. Callers needing
+// allow-all semantics must use the explicit __any_ip__ special target
+// instead. Bare IPs (no "/") normalize to a single host (/32 or /128) and
+// are never allow-all, so only CIDR forms are checked for prefix length.
+func ValidatePeerCIDR(s string) error {
+	if err := ValidateIPOrCIDR(s); err != nil {
+		return err
+	}
+	if containsByte(s, '/') {
+		_, ipNet, err := net.ParseCIDR(s)
+		if err != nil {
+			return fmt.Errorf("invalid IP address or CIDR notation")
+		}
+		if ones, _ := ipNet.Mask.Size(); ones == 0 {
+			return fmt.Errorf("CIDR prefix length /0 (allow-all) is not allowed for peer addresses; use the __any_ip__ special target instead")
+		}
+	}
+	return nil
+}
+
+// ValidateGroupCIDR validates group-member address fields: the ip_address of
+// peers referenced via group_members. Unlike ValidatePeerCIDR it permits
+// allow-all /0 CIDRs (0.0.0.0/0, ::/0): existing groups may contain a 0.0.0.0/0
+// manual peer to represent "any", and rejecting it at compile time would break
+// those policies. Peer address writes (peer_store Create/Update) and policy
+// source_ip/target_ip overrides stay strict via ValidatePeerCIDR, so new
+// allow-all peers must use the explicit __any_ip__ special target instead.
+func ValidateGroupCIDR(s string) error {
+	return ValidateIPOrCIDR(s)
+}
+
+// MaxLoggedIPLen caps the length of an IP value interpolated into errors or
+// log fields so a malformed multi-KB string cannot bloat logs or error
+// responses. Mirrors the agent handler's maxLoggedIPLen. Truncation itself
+// lives in internal/common.TruncateString, the single rune-safe truncator;
+// callers in engine and api truncate via that helper directly.
+const MaxLoggedIPLen = 64
+
 // NormalizeToCIDR ensures an IP string has a CIDR suffix.
 // If the string already contains a "/", it is returned as-is.
+// Bare IPv4 addresses get a "/32" suffix and bare IPv6 addresses get
+// a "/128" suffix so a single host is represented, not a range.
+// Callers that interpolate the result into iptables rule text must validate
+// the input first (ValidatePeerCIDR for peer/override fields, ValidateIPOrCIDR
+// for generic paths); this function performs no validation
+// beyond distinguishing IPv4 from IPv6 (unparseable input gets "/32").
 func NormalizeToCIDR(ip string) string {
 	if ip == "" {
 		return ip
 	}
-	for i := 0; i < len(ip); i++ {
-		if ip[i] == '/' {
-			return ip
-		}
+	if containsByte(ip, '/') {
+		return ip
+	}
+	if parsed := net.ParseIP(ip); parsed != nil && parsed.To4() == nil {
+		return ip + "/128"
 	}
 	return ip + "/32"
 }
 
-// NormalizeIP strips a "/32" CIDR suffix from an IP string.
-// Other CIDR suffixes (e.g., /24, /16) are preserved as they represent subnets.
+// NormalizeIP strips a host CIDR suffix from an IP string, per address family.
+// A "/32" suffix is stripped only for IPv4 hosts and a "/128" suffix only
+// for IPv6 hosts. Other suffixes (e.g., /24, /16, or an IPv6 /32 subnet such
+// as "2001:db8::/32") are preserved as they represent subnets, not hosts.
+// The address family is determined via net.ParseIP on the address portion;
+// unparseable input fails closed and is returned as-is so it never matches
+// a broadcast comparison by accident.
 func NormalizeIP(ip string) string {
-	n := len(ip)
-	if n >= 3 && ip[n-3:] == "/32" {
-		return ip[:n-3]
+	slash := -1
+	for i := len(ip) - 1; i >= 0; i-- {
+		if ip[i] == '/' {
+			slash = i
+			break
+		}
 	}
-	return ip
+	if slash == -1 {
+		return ip
+	}
+	suffix := ip[slash:]
+	addrPart := ip[:slash]
+	switch suffix {
+	case "/32":
+		if parsed := net.ParseIP(addrPart); parsed != nil && parsed.To4() != nil {
+			return addrPart
+		}
+		return ip
+	case "/128":
+		if parsed := net.ParseIP(addrPart); parsed != nil && parsed.To4() == nil {
+			return addrPart
+		}
+		return ip
+	default:
+		return ip
+	}
 }
 
 // ComputeSubnetBroadcast computes the subnet broadcast address for a peer IP.
@@ -118,7 +258,7 @@ func IsBroadcastDest(destIP string, chain string, peerIPs []string) int {
 	return IsSubnetBroadcastDest(destIP, peerIPs)
 }
 
-// --- internal helpers (no strings import needed at package level) ---
+// --- internal helpers ---
 
 func containsByte(s string, b byte) bool {
 	for i := 0; i < len(s); i++ {

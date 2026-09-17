@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"runic/internal/common"
 	"runic/internal/common/log"
 	"runic/internal/db"
 	"runic/internal/resolve"
@@ -39,56 +40,98 @@ func (r *Resolver) ResolveEntity(ctx context.Context, entityType string, entityI
 	return r.ResolveGroup(ctx, entityID)
 }
 
-// normalizePeerCIDR validates a peer IP or CIDR and returns it in CIDR
-// notation, appending /32 to bare IPs. It centralizes the validation used
-// by entity and group resolution so the three call sites cannot diverge.
-func normalizePeerCIDR(ipAddress string, peerID int) (string, error) {
-	if strings.Contains(ipAddress, "/") {
-		if _, _, err := net.ParseCIDR(ipAddress); err != nil {
-			return "", fmt.Errorf("invalid CIDR in peer %d: %s: %w", peerID, ipAddress, err)
+// normalizeCIDR validates an IP or CIDR with the given validator and returns
+// it in CIDR notation, appending /32 to bare IPv4 addresses and /128 to bare
+// IPv6 addresses. It is the single implementation behind both peer and
+// group-member normalization: callers pass resolve.ValidatePeerCIDR
+// (plain-or-CIDR, /0 rejected) for direct peer entity resolution so malformed
+// input and allow-all CIDRs fail closed, or resolve.ValidateGroupCIDR
+// (plain-or-CIDR, /0 permitted) for group members so existing groups
+// containing a 0.0.0.0/0 manual peer (any) still compile. Peer ip_address
+// fields are CIDR-capable by contract (unlike agent interface addresses,
+// which are plain-IP-only); see internal/api/common ValidatePlainIP vs
+// ValidatePeerCIDR. The CIDR-vs-bare branch selects the host suffix via "/"
+// presence and To4. Logged values are truncated via the shared
+// common.TruncateString helper to resolve.MaxLoggedIPLen so unbounded input
+// cannot bloat errors.
+func normalizeCIDR(ipAddress string, peerID int, validate func(string) error) (string, error) {
+	if err := validate(ipAddress); err != nil {
+		logged := common.TruncateString(ipAddress, resolve.MaxLoggedIPLen)
+		if strings.Contains(ipAddress, "/") {
+			return "", fmt.Errorf("invalid CIDR in peer %d: %s: %w: %w", peerID, logged, err, ErrPreviewValidation)
 		}
+		return "", fmt.Errorf("invalid IP in peer %d: %s: %w: %w", peerID, logged, err, ErrPreviewValidation)
+	}
+	if strings.Contains(ipAddress, "/") {
 		return ipAddress, nil
 	}
-	if net.ParseIP(ipAddress) == nil {
-		return "", fmt.Errorf("invalid IP in peer %d: %s", peerID, ipAddress)
+	if parsed := net.ParseIP(ipAddress); parsed != nil && parsed.To4() == nil {
+		return ipAddress + "/128", nil
 	}
 	return ipAddress + "/32", nil
+}
+
+// normalizePeerCIDR validates a peer IP or CIDR and returns it in CIDR
+// notation. It delegates to normalizeCIDR with resolve.ValidatePeerCIDR
+// (plain-or-CIDR, /0 rejected) so a single misconfigured peer cannot generate
+// an allow-all rule; callers needing allow-all must use __any_ip__.
+func normalizePeerCIDR(ipAddress string, peerID int) (string, error) {
+	return normalizeCIDR(ipAddress, peerID, resolve.ValidatePeerCIDR)
+}
+
+// normalizeGroupCIDR validates a group-member IP or CIDR and returns it in
+// CIDR notation. It delegates to normalizeCIDR with
+// resolve.ValidateGroupCIDR (plain-or-CIDR, /0 permitted) so existing groups
+// containing a 0.0.0.0/0 manual peer still compile; peer writes and policy
+// overrides stay strict via normalizePeerCIDR.
+func normalizeGroupCIDR(ipAddress string, peerID int) (string, error) {
+	return normalizeCIDR(ipAddress, peerID, resolve.ValidateGroupCIDR)
 }
 
 // ResolveSpecialTarget resolves a special target to IP addresses. Special targets are predefined network addresses like broadcast and multicast.
 func (r *Resolver) ResolveSpecialTarget(ctx context.Context, specialID int, peerIP string) ([]string, error) {
 	switch specialID {
-	case 1: // __subnet_broadcast__ - compute from peer IP
-		// Compute the subnet broadcast address from the peer IP.
-		// If the peer IP is a CIDR (e.g., "10.100.5.0/24"), use net.IPNet to
-		// calculate the correct broadcast for any prefix length (not just /24).
-		// If it is a bare IP, fall back to setting the last octet to 255
-		// (assumes /24, which is the common case for bare-IP peers).
+	case 1: // __subnet_broadcast__ - compute from peer IP via shared helper.
+		// Broadcast math lives in resolve.ComputeSubnetBroadcast (bare IP
+		// assumes /24, CIDR computes via net.IPNet for any prefix length) so
+		// the mask math is not duplicated here. This path only validates
+		// fail-closed (IPv4-only, malformed input rejected) and formats the
+		// result as a /32 CIDR. Bare-IP garbage like "foo.bar.baz.qux" is
+		// rejected by ValidatePeerCIDR before the helper is trusted, and
+		// IPv6 (bare or CIDR) fails closed as non-IPv4. Logged values are
+		// truncated via common.TruncateString so unbounded input cannot
+		// bloat errors.
 		if strings.Contains(peerIP, "/") {
-			ip, ipNet, err := net.ParseCIDR(peerIP)
+			ip, _, err := net.ParseCIDR(peerIP)
 			if err != nil {
-				return nil, fmt.Errorf("invalid CIDR for subnet broadcast: %s: %w", peerIP, err)
+				return nil, fmt.Errorf("invalid CIDR for subnet broadcast: %s: %w: %w", common.TruncateString(peerIP, resolve.MaxLoggedIPLen), err, ErrPreviewValidation)
 			}
 			if ip.To4() == nil {
-				return nil, fmt.Errorf("non-IPv4 address for subnet broadcast: %s", peerIP)
+				return nil, fmt.Errorf("non-IPv4 address for subnet broadcast: %s: %w", common.TruncateString(peerIP, resolve.MaxLoggedIPLen), ErrPreviewValidation)
 			}
-			// Compute broadcast: OR the network address with the inverted mask
-			mask := ipNet.Mask
-			broadcast := net.IP(make([]byte, 4))
-			for i := 0; i < 4; i++ {
-				broadcast[i] = ip.To4()[i] | ^mask[i]
+			broadcast := resolve.ComputeSubnetBroadcast(peerIP)
+			if broadcast == "" {
+				return nil, fmt.Errorf("invalid CIDR for subnet broadcast: %s: %w", common.TruncateString(peerIP, resolve.MaxLoggedIPLen), ErrPreviewValidation)
 			}
-			broadcastAddr := broadcast.String() + "/32"
-			return []string{broadcastAddr}, nil
+			if parsed := net.ParseIP(broadcast); parsed == nil || parsed.To4() == nil {
+				return nil, fmt.Errorf("non-IPv4 address for subnet broadcast: %s: %w", common.TruncateString(peerIP, resolve.MaxLoggedIPLen), ErrPreviewValidation)
+			}
+			return []string{broadcast + "/32"}, nil
 		}
-		// Bare IP — assume /24 subnet
-		parts := strings.Split(peerIP, ".")
-		if len(parts) != 4 {
-			return nil, fmt.Errorf("invalid IPv4 address for subnet broadcast: %s", peerIP)
+		if err := resolve.ValidatePeerCIDR(peerIP); err != nil {
+			return nil, fmt.Errorf("invalid IPv4 address for subnet broadcast: %s: %w: %w", common.TruncateString(peerIP, resolve.MaxLoggedIPLen), err, ErrPreviewValidation)
 		}
-		parts[3] = "255"
-		broadcastAddr := strings.Join(parts, ".") + "/32"
-		return []string{broadcastAddr}, nil
+		if parsed := net.ParseIP(peerIP); parsed == nil || parsed.To4() == nil {
+			return nil, fmt.Errorf("invalid IPv4 address for subnet broadcast: %s: %w", common.TruncateString(peerIP, resolve.MaxLoggedIPLen), ErrPreviewValidation)
+		}
+		broadcast := resolve.ComputeSubnetBroadcast(peerIP)
+		if broadcast == "" {
+			return nil, fmt.Errorf("invalid IPv4 address for subnet broadcast: %s: %w", common.TruncateString(peerIP, resolve.MaxLoggedIPLen), ErrPreviewValidation)
+		}
+		if parsed := net.ParseIP(broadcast); parsed == nil || parsed.To4() == nil {
+			return nil, fmt.Errorf("invalid IPv4 address for subnet broadcast: %s: %w", common.TruncateString(peerIP, resolve.MaxLoggedIPLen), ErrPreviewValidation)
+		}
+		return []string{broadcast + "/32"}, nil
 	case 2: // __limited_broadcast__
 		return []string{"255.255.255.255/32"}, nil
 	case 3: // __all_hosts__ (IGMP)
@@ -115,7 +158,17 @@ func (r *Resolver) ResolveSpecialTarget(ctx context.Context, specialID int, peer
 			if err := rows.Scan(&ip); err != nil {
 				return nil, fmt.Errorf("failed to scan peer IP: %w", err)
 			}
-			// Normalize to CIDR notation: append /32 if not already present
+			// Validate before normalizing: NormalizeToCIDR appends "/32" to
+			// unparseable input by design, so invalid DB values must fail
+			// closed here rather than propagate as "<bad>/32". ValidatePeerCIDR
+			// (not plain ValidateIPOrCIDR) so a stored /0 allow-all CIDR fails
+			// closed instead of expanding to every peer. Logged values are
+			// truncated so unbounded DB input cannot bloat errors.
+			if err := resolve.ValidatePeerCIDR(ip); err != nil {
+				return nil, fmt.Errorf("invalid peer IP %q for __all_peers__: %w: %w", common.TruncateString(ip, resolve.MaxLoggedIPLen), err, ErrPreviewValidation)
+			}
+			// Normalize to CIDR notation: append /32 to bare IPv4 and /128
+			// to bare IPv6 so a single host is represented, not a range.
 			peers = append(peers, resolve.NormalizeToCIDR(ip))
 		}
 		if err := rows.Err(); err != nil {
@@ -124,10 +177,14 @@ func (r *Resolver) ResolveSpecialTarget(ctx context.Context, specialID int, peer
 		return peers, nil
 	case 8: // __igmpv3__
 		return []string{"224.0.0.22/32"}, nil
-	case 9: // __internet__ - return marker for compiler to handle with ipset negation
-		return []string{"__internet__"}, nil
+	case 9: // __internet__ - return marker for compiler to handle with ipset negation.
+		// The marker is NOT a valid iptables address. Callers must translate it
+		// via the runic_private_ranges ipset path and must fail closed (return
+		// an error) when the target host has no ipset support, so the marker
+		// never reaches a "-d"/"-s" rule literal.
+		return []string{resolve.InternetSentinel}, nil
 	default:
-		return nil, fmt.Errorf("unknown special target ID: %d", specialID)
+		return nil, fmt.Errorf("unknown special target ID: %d: %w", specialID, ErrPreviewValidation)
 	}
 }
 
@@ -160,7 +217,7 @@ func (r *Resolver) ResolveGroup(ctx context.Context, groupID int) ([]string, err
 			return nil, fmt.Errorf("scan group member: %w", err)
 		}
 
-		cidr, err := normalizePeerCIDR(ipAddress, peerID)
+		cidr, err := normalizeGroupCIDR(ipAddress, peerID)
 		if err != nil {
 			return nil, fmt.Errorf("normalize group member %d: %w", peerID, err)
 		}
@@ -338,13 +395,15 @@ func sanitizeForIpset(name string) string {
 }
 
 type IpsetMember struct {
-	Address string // IP or CIDR
-	IsCIDR  bool   // true if Address contains a network prefix
+	Address string // normalized CIDR (bare IPv4 as /32, bare IPv6 as /128)
 }
 
-// It returns a slice of IpsetMember and a boolean indicating whether any member is a CIDR.
-// CIDR members require hash:net ipset type, while pure IP members use hash:ip.
-func (r *Resolver) resolveGroupForIpset(ctx context.Context, groupID int) ([]IpsetMember, bool, error) {
+// resolveGroupForIpset resolves a group to ipset members. All members are
+// normalized to CIDR notation (bare IPv4 as /32, bare IPv6 as /128), so every
+// group ipset uses hash:net, which holds both host (/32, /128) and subnet
+// entries. hash:ip is intentionally unused: a single set type avoids churn
+// when a group gains its first subnet member.
+func (r *Resolver) resolveGroupForIpset(ctx context.Context, groupID int) ([]IpsetMember, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT p.ip_address
 		FROM group_members gm
@@ -352,7 +411,7 @@ func (r *Resolver) resolveGroupForIpset(ctx context.Context, groupID int) ([]Ips
 		JOIN groups g ON gm.group_id = g.id
 		WHERE gm.group_id = ? AND g.is_pending_delete = 0`, groupID)
 	if err != nil {
-		return nil, false, fmt.Errorf("query group members for ipset: %w", err)
+		return nil, fmt.Errorf("query group members for ipset: %w", err)
 	}
 	defer func() {
 		if cErr := rows.Close(); cErr != nil {
@@ -361,39 +420,43 @@ func (r *Resolver) resolveGroupForIpset(ctx context.Context, groupID int) ([]Ips
 	}()
 
 	var members []IpsetMember
-	hasCIDR := false
 	seen := map[string]bool{}
 
 	for rows.Next() {
 		var ipAddress string
 		if err := rows.Scan(&ipAddress); err != nil {
-			return nil, false, fmt.Errorf("scan group member: %w", err)
+			return nil, fmt.Errorf("scan group member: %w", err)
 		}
 
-		if seen[ipAddress] {
+		// Validate first (fail closed on corrupt DB values): NormalizeToCIDR
+		// appends "/32" to unparseable input by design, so normalizing before
+		// validation would let "<bad>/32" through. ValidateGroupCIDR relies on
+		// net.ParseIP/net.ParseCIDR, which already reject malformed input,
+		// and permits /0 allow-all CIDRs so existing groups containing a
+		// 0.0.0.0/0 member still compile. Logged values are truncated so
+		// unbounded DB input cannot bloat errors.
+		if err := resolve.ValidateGroupCIDR(ipAddress); err != nil {
+			return nil, fmt.Errorf("invalid IP in group %d: %s: %w: %w", groupID, common.TruncateString(ipAddress, resolve.MaxLoggedIPLen), err, ErrPreviewValidation)
+		}
+
+		// Dedup and store the normalized CIDR so textually distinct but
+		// semantically identical members ("10.0.0.1" vs "10.0.0.1/32")
+		// collapse to a single ipset member, matching ResolveGroup.
+		// Bare IPv4 becomes /32 and bare IPv6 becomes /128.
+		dedupKey := resolve.NormalizeToCIDR(ipAddress)
+		if seen[dedupKey] {
 			continue
 		}
-		seen[ipAddress] = true
-
-		isCIDR := strings.Contains(ipAddress, "/")
-		if isCIDR {
-			if _, _, err := net.ParseCIDR(ipAddress); err != nil {
-				return nil, false, fmt.Errorf("invalid CIDR in group %d: %s: %w", groupID, ipAddress, err)
-			}
-			hasCIDR = true
-		} else if net.ParseIP(ipAddress) == nil {
-			return nil, false, fmt.Errorf("invalid IP in group %d: %s", groupID, ipAddress)
-		}
+		seen[dedupKey] = true
 
 		members = append(members, IpsetMember{
-			Address: ipAddress,
-			IsCIDR:  isCIDR,
+			Address: dedupKey,
 		})
 	}
 
 	if err := rows.Err(); err != nil {
-		return nil, false, fmt.Errorf("iterate group members for ipset: %w", err)
+		return nil, fmt.Errorf("iterate group members for ipset: %w", err)
 	}
 
-	return members, hasCIDR, nil
+	return members, nil
 }

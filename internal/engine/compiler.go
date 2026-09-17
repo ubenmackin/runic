@@ -60,11 +60,18 @@ const (
 	ActionLogDrop = "LOG_DROP"
 )
 
-// ruleDir discriminates the four rule-generation paths inside writeRules.
+// ruleDir discriminates the three rule-generation paths inside writeRules.
+// It is a distinct string type for readability only; it provides no
+// compile-time safety (untyped string constants are assignable to it and an
+// explicit ruleDir(s) conversion bypasses the typed constants entirely).
+// Enforcement is runtime-only: the builders reject any other value with an
+// unknown-ruleDir error. Callers must pass one of the typed constants below.
+type ruleDir string
+
 const (
-	ruleDirTarget   = "target"
-	ruleDirSource   = "source"
-	ruleDirInternet = "internet"
+	ruleDirTarget   ruleDir = "target"
+	ruleDirSource   ruleDir = "source"
+	ruleDirInternet ruleDir = "internet"
 )
 
 // Ipset name conventions.
@@ -72,6 +79,105 @@ const (
 	ipsetPrivateRanges = "runic_private_ranges"
 	ipsetGroupPrefix   = "runic_group_"
 )
+
+// ErrPreviewValidation marks PreviewCompile errors caused by user-controlled
+// input (bad action/entity/direction/scope, unknown or pending-delete
+// service, bad service ports, invalid IP overrides, unknown special
+// targets, unresolvable peers/groups, IP override on a non-peer entity).
+// The policies preview handler maps it to 400 via errors.Is. All other
+// PreviewCompile errors are internal (500). The Compile path wraps its
+// stored-policy invalid-action error with the same sentinel so both paths
+// map identically via errors.Is; Compile bundle handlers still surface it
+// as 500 because a stored invalid action indicates DB corruption
+// (internal), not direct user input. Internal wiring invariants (unknown
+// ruleDir, assertInternetIpset, invalid peer IP in the self-CIDR filter)
+// likewise wrap this sentinel so errors.Is works; Compile handlers surface
+// them as 500 (they map all Compile errors to 500).
+//
+// ErrPreviewFailClosed marks fail-closed policy semantics (internet without
+// ipset support, ingress-from-internet, sentinel leaks). The preview
+// handler maps it to 400. Both sentinels travel through %w wrapping so
+// errors.Is keeps working across the resolver chain.
+var (
+	ErrPreviewValidation = errors.New("preview validation error")
+	ErrPreviewFailClosed = errors.New("preview fail-closed")
+)
+
+// failClosedInternetErr returns the fail-closed error for egress-to-internet
+// policies that cannot be rendered without ipset support.
+func failClosedInternetErr(policyName string) error {
+	return fmt.Errorf("policy %s targets internet but peer lacks ipset support (has_ipset=0): fail-closed: %w", policyName, ErrPreviewFailClosed)
+}
+
+// failClosedIngressInternetErr returns the fail-closed error for
+// ingress-from-internet policies, which have no ipset semantics on the INPUT
+// path even when the peer has ipset support.
+func failClosedIngressInternetErr(policyName string) error {
+	return fmt.Errorf("policy %s has ingress-from-internet which has no ipset semantics: fail-closed: %w", policyName, ErrPreviewFailClosed)
+}
+
+// failClosedSentinelLeakErr returns the fail-closed error for a defensive
+// sentinel leak: the resolve.InternetSentinel marker reached the CIDR path
+// outside the ipset branch. This is distinct from failClosedInternetErr
+// (peer lacks ipset support) and by construction only triggers when the
+// ipset gates were bypassed.
+func failClosedSentinelLeakErr(policyName string) error {
+	return fmt.Errorf("policy %s resolved internet sentinel outside ipset path: fail-closed: %w", policyName, ErrPreviewFailClosed)
+}
+
+// failClosedInternetIPv6Err returns the fail-closed error for egress-to-internet
+// on an IPv6 peer. runic_private_ranges is IPv4-only (family inet with RFC1918
+// + loopback CIDRs), so its OUTPUT dst / INPUT src negation would let IPv6
+// internet traffic (including ULA fc00::/7, link-local fe80::/10, ::1/128)
+// bypass the policy. Fail closed until a separate ip6tables-restore bundle
+// with an inet6 private-ranges set exists.
+func failClosedInternetIPv6Err(policyName string) error {
+	return fmt.Errorf("policy %s targets internet from IPv6 peer: runic_private_ranges is IPv4-only: fail-closed: %w", policyName, ErrPreviewFailClosed)
+}
+
+// isIPv6Address reports whether s is an IPv6 literal or CIDR. IPv6 text always
+// contains ":", so a substring check suffices for normalized CIDRs (/128,
+// subnets) and bare addresses. Empty strings (preview without host context)
+// report false; that path already fails closed on hasIPSet=false.
+func isIPv6Address(s string) bool {
+	return strings.Contains(s, ":")
+}
+
+// isInternetSentinelCIDR reports whether a resolved CIDR carries the
+// resolve.InternetSentinel marker, either bare ("__internet__") or normalized
+// ("__internet__/32" via NormalizeToCIDR). The sentinel must never reach a
+// "-s"/"-d" rule literal.
+func isInternetSentinelCIDR(cidr string) bool {
+	return cidr == resolve.InternetSentinel || strings.HasPrefix(cidr, resolve.InternetSentinel+"/")
+}
+
+// Preview validation uses internal/resolve
+// (IsValidDirection, IsValidTargetScope, IsValidEntityType, IsValidAction),
+// the single source of truth shared with internal/api/common, called directly.
+// They live in resolve (rather than api/common) to avoid an import cycle:
+// internal/api/common imports internal/engine
+// (tracker/pushworker/recompile), so the engine cannot import it.
+
+// assertInternetIpset rejects any ipset wiring on the internet (ruleDir-only)
+// path to catch caller wiring mistakes. Both useIpset and ipsetName must be
+// unset (false,"") since the builders select the internet branch solely on
+// ruleDir and always emit the hardcoded runic_private_ranges negation matches.
+//
+// Internal wiring invariant: never triggered by user input (callers always
+// pass false,"" here by construction). Wraps ErrPreviewValidation so
+// errors.Is works across the call chain; Compile bundle handlers still
+// surface it as 500 (they map all Compile errors to 500), while
+// PreviewCompile maps it to 400 via isPreviewValidationError. By
+// construction this only fires on programmer error.
+func assertInternetIpset(useIpset bool, ipsetName string) error {
+	if useIpset {
+		return fmt.Errorf("internet ruleDir requires useIpset=false, got true: %w", ErrPreviewValidation)
+	}
+	if ipsetName != "" {
+		return fmt.Errorf("internet ruleDir requires empty ipsetName, got %q: %w", ipsetName, ErrPreviewValidation)
+	}
+	return nil
+}
 
 // DefaultControlPlanePort aliases the shared default control plane port so
 // compiler callers can reference it without importing the constants package.
@@ -276,15 +382,70 @@ func (rw *ruleWriter) writeStandardRules(hasDocker bool, controlPlanePort string
 
 // Compile produces a complete iptables-restore payload for the given peer.
 
+// scanBool converts a SQLite driver value to bool, accepting both the bool
+// representation (returned by some drivers/builds in tests) and the INTEGER
+// 0/1 representation (production mattn/go-sqlite3). NULL maps to false
+// (fail-closed for capability flags). []byte/string forms ("0"/"1",
+// "true"/"false") are parsed case-insensitively with surrounding whitespace
+// trimmed.
+func scanBool(v any) bool {
+	switch t := v.(type) {
+	case nil:
+		return false
+	case bool:
+		return t
+	case int:
+		return t != 0
+	case int8:
+		return t != 0
+	case int16:
+		return t != 0
+	case int32:
+		return t != 0
+	case int64:
+		return t != 0
+	case uint:
+		return t != 0
+	case uint8:
+		return t != 0
+	case uint16:
+		return t != 0
+	case uint32:
+		return t != 0
+	case uint64:
+		return t != 0
+	case float32:
+		return t != 0
+	case float64:
+		return t != 0
+	case []byte:
+		s := strings.TrimSpace(strings.ToLower(string(t)))
+		return s == "1" || s == "true" || s == "t" || s == "yes" || s == "y"
+	case string:
+		s := strings.TrimSpace(strings.ToLower(t))
+		return s == "1" || s == "true" || s == "t" || s == "yes" || s == "y"
+	default:
+		return false
+	}
+}
+
 // --- Compiler Sub-routines ---
 
 func (c *Compiler) loadPeerData(ctx context.Context, peerID int) (hostname string, ipAddress string, hasDocker bool, hasIPSet bool, err error) {
+	// SQLite stores BOOLEAN as INTEGER 0/1 (has_ipset is nullable, hence the
+	// COALESCE). The driver may return bool (tests) or int64 (prod), so scan
+	// into any and convert via scanBool instead of scanning directly into
+	// *bool or int, both of which are driver-fragile.
+	var hasDockerRaw, hasIPSetRaw any
 	err = c.db.QueryRowContext(ctx,
 		"SELECT hostname, ip_address, has_docker, COALESCE(has_ipset, 0) FROM peers WHERE id = ?", peerID,
-	).Scan(&hostname, &ipAddress, &hasDocker, &hasIPSet)
+	).Scan(&hostname, &ipAddress, &hasDockerRaw, &hasIPSetRaw)
 	if err != nil {
 		err = fmt.Errorf("load peer %d: %w", peerID, err)
+		return
 	}
+	hasDocker = scanBool(hasDockerRaw)
+	hasIPSet = scanBool(hasIPSetRaw)
 	return
 }
 
@@ -420,9 +581,14 @@ func (c *Compiler) preloadRequiredServices(ctx context.Context, policies []polic
 		for rows.Next() {
 			var sid int
 			var s ServiceInfo
-			if err := rows.Scan(&sid, &s.Name, &s.Ports, &s.SourcePorts, &s.Protocol, &s.NoConntrack); err != nil {
+			// SQLite stores BOOLEAN as INTEGER 0/1, but the driver may
+			// return bool (tests) or int64 (prod). Scan into any and
+			// convert via scanBool to accept both.
+			var noConntrackRaw any
+			if err := rows.Scan(&sid, &s.Name, &s.Ports, &s.SourcePorts, &s.Protocol, &noConntrackRaw); err != nil {
 				return nil, fmt.Errorf("scan service: %w", err)
 			}
+			s.NoConntrack = scanBool(noConntrackRaw)
 			services[sid] = s
 		}
 		if err := rows.Err(); err != nil {
@@ -434,7 +600,7 @@ func (c *Compiler) preloadRequiredServices(ctx context.Context, policies []polic
 
 type ipsetData struct {
 	Name    string // sanitized ipset name (e.g. runic_group_webservers)
-	SetType string // hash:ip or hash:net
+	SetType string // always hash:net: members are normalized CIDRs (/32, /128, subnets)
 	Members []string
 }
 
@@ -443,13 +609,9 @@ func (c *Compiler) resolveIPSetDefinitions(ctx context.Context, hasIPSet bool, g
 	groupIDToIpsetName := make(map[int]string)
 	if hasIPSet && len(groupOrder) > 0 {
 		for _, gid := range groupOrder {
-			members, hasCIDR, err := c.resolver.resolveGroupForIpset(ctx, gid)
+			members, err := c.resolver.resolveGroupForIpset(ctx, gid)
 			if err != nil {
 				return nil, nil, fmt.Errorf("resolve group %d for ipset: %w", gid, err)
-			}
-			setType := "hash:ip"
-			if hasCIDR {
-				setType = "hash:net"
 			}
 			sanitizedName := ipsetGroupPrefix + sanitizeForIpset(groupIDToName[gid])
 			if err := ValidateIPSetName(sanitizedName); err != nil {
@@ -459,9 +621,16 @@ func (c *Compiler) resolveIPSetDefinitions(ctx context.Context, hasIPSet bool, g
 			for _, m := range members {
 				addrs = append(addrs, m.Address)
 			}
+			// Fail closed here (in addition to writeIpsetDefinitions) so the
+			// error carries the group ID for debugging. IPv4-only: any IPv6
+			// member, including mixed v4+v6 groups, is rejected with
+			// ErrPreviewValidation until an ip6tables bundle exists.
+			if _, err := ipsetFamilyForMembers(addrs); err != nil {
+				return nil, nil, fmt.Errorf("resolve group %d (%q) for ipset: %w", gid, groupIDToName[gid], err)
+			}
 			ipsets = append(ipsets, ipsetData{
 				Name:    sanitizedName,
-				SetType: setType,
+				SetType: "hash:net",
 				Members: addrs,
 			})
 			groupIDToIpsetName[gid] = sanitizedName
@@ -518,7 +687,9 @@ func (c *Compiler) generateIptablesPayload(
 	rw := &ruleWriter{buf: &buf}
 
 	c.writePayloadHeader(&buf, hostname, policies, hasIPSet, ipsets)
-	c.writeIpsetDefinitions(&buf, hasIPSet, ipsets)
+	if err := c.writeIpsetDefinitions(&buf, hasIPSet, ipsets); err != nil {
+		return "", err
+	}
 	c.writeFilterTableHeader(&buf, hasDocker)
 	rw.writeStandardRules(hasDocker, controlPlanePort)
 
@@ -548,12 +719,61 @@ func (c *Compiler) writePayloadHeader(buf *strings.Builder, hostname string, pol
 	}
 }
 
+// ipsetFamilyForMembers selects the ipset address family for a group set.
+//
+// This bundle is IPv4-only (iptables-restore *filter): every group set is
+// created family inet. hash:net sets are single-family, so an inet6 member
+// would make the whole set unloadable (the agent creates sets family inet),
+// and a mixed v4+v6 group cannot be represented in one hash:net set at all.
+// Fail closed with ErrPreviewValidation on any IPv6 member, including mixed
+// groups, until a separate ip6tables-restore bundle exists. The
+// resolve.InternetSentinel marker (bare or normalized) is explicitly rejected
+// here: it carries no ":" so without the check it would classify as IPv4 and
+// return inet instead of failing closed.
+func ipsetFamilyForMembers(members []string) (string, error) {
+	hasV4 := false
+	hasV6 := false
+	var firstV6 string
+	for _, m := range members {
+		if isInternetSentinelCIDR(m) {
+			return "", fmt.Errorf("internet sentinel %q must use runic_private_ranges ipset path, not group ipsets: %w", m, ErrPreviewValidation)
+		}
+		if isIPv6Address(m) {
+			hasV6 = true
+			if firstV6 == "" {
+				firstV6 = m
+			}
+		} else {
+			hasV4 = true
+		}
+	}
+	switch {
+	case hasV4 && hasV6:
+		return "", fmt.Errorf("mixed IPv4/IPv6 group members (e.g. %q): hash:net is single-family, group ipsets are IPv4-only (family inet) until an ip6tables bundle exists: %w", firstV6, ErrPreviewValidation)
+	case hasV6:
+		return "", fmt.Errorf("IPv6 group member %q: group ipsets are IPv4-only (family inet) until an ip6tables bundle exists: %w", firstV6, ErrPreviewValidation)
+	default:
+		return "inet", nil
+	}
+}
+
 // writeIpsetDefinitions writes ipset create/add definitions (before *filter).
-func (c *Compiler) writeIpsetDefinitions(buf *strings.Builder, hasIPSet bool, ipsets []ipsetData) {
+//
+// IPv4-only: group sets are always family inet; any IPv6 member fails closed
+// with ErrPreviewValidation (see ipsetFamilyForMembers). runic_private_ranges
+// is IPv4-only (RFC1918 + loopback) family inet; egress-to-internet on IPv6
+// peers is rejected fail-closed in writeSourceSection/previewAppendRules
+// because the IPv6 internet (ULA fc00::/7, link-local fe80::/10, ::1/128)
+// would otherwise bypass the negation.
+func (c *Compiler) writeIpsetDefinitions(buf *strings.Builder, hasIPSet bool, ipsets []ipsetData) error {
 	if hasIPSet && len(ipsets) > 0 {
 		buf.WriteString("\n# --- Ipset Definitions ---\n")
 		for _, is := range ipsets {
-			fmt.Fprintf(buf, "create %s %s family inet\n", is.Name, is.SetType)
+			family, err := ipsetFamilyForMembers(is.Members)
+			if err != nil {
+				return fmt.Errorf("ipset %s: %w", is.Name, err)
+			}
+			fmt.Fprintf(buf, "create %s %s family %s\n", is.Name, is.SetType, family)
 			for _, member := range is.Members {
 				fmt.Fprintf(buf, "add %s %s\n", is.Name, member)
 			}
@@ -563,13 +783,14 @@ func (c *Compiler) writeIpsetDefinitions(buf *strings.Builder, hasIPSet bool, ip
 
 	privateCIDRs := []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8"}
 	if hasIPSet {
-		buf.WriteString("# --- Ipset: Private Ranges for __internet__ exclusion ---\n")
+		buf.WriteString("# --- Ipset: Private Ranges for __internet__ exclusion (IPv4-only) ---\n")
 		buf.WriteString("create runic_private_ranges hash:net family inet\n")
 		for _, cidr := range privateCIDRs {
 			fmt.Fprintf(buf, "add runic_private_ranges %s\n", cidr)
 		}
 		buf.WriteString("\n")
 	}
+	return nil
 }
 
 // writeFilterTableHeader writes the *filter table declaration and chain policies.
@@ -616,6 +837,13 @@ func (c *Compiler) writeSinglePolicy(
 	hasIPSet bool,
 	ipAddress string,
 ) error {
+	// Stored-policy invalid action indicates DB corruption, so Compile bundle
+	// handlers surface it as 500. It still wraps ErrPreviewValidation so the
+	// same user-controlled enum maps identically via errors.Is on both the
+	// Compile and PreviewCompile paths (preview maps it to 400).
+	if pol.Action != ActionAccept && pol.Action != ActionDrop && pol.Action != ActionLogDrop {
+		return fmt.Errorf("invalid action %q for policy %s: must be one of ACCEPT, DROP, LOG_DROP: %w", pol.Action, pol.Name, ErrPreviewValidation)
+	}
 	writeToHost, writeToDocker := c.scopeFlags(pol.TargetScope, hasDocker)
 
 	svc, ok := services[pol.ServiceID]
@@ -677,11 +905,26 @@ func (c *Compiler) writeSinglePolicy(
 // special target). It centralizes the special-case fallbacks for peer-with-IP and bare
 // special targets. entityType and entityID identify the entity; the optional overrideIP is
 // used for policies that pin a specific source or target IP (e.g., manual peer IPs).
+// Override contract: plain-or-CIDR accepted like peers.ip_address, /0
+// rejected (use __any_ip__ for allow-all). The override is validated with
+// resolve.ValidatePeerCIDR before NormalizeToCIDR per the NormalizeToCIDR
+// contract, so corrupt values fail closed instead of emitting "<bad>/32".
 func (c *Compiler) resolveEntityCIDRs(ctx context.Context, entityType string, entityID int, overrideIP string, ipAddress string) ([]string, error) {
+	// Defense: overrides only apply to peer entities. A non-peer entity with
+	// a non-empty override would otherwise silently ignore the override and
+	// compile against the entity's resolved CIDRs, hiding user error. Fail
+	// closed with ErrPreviewValidation (400 in preview; 500 in Compile where
+	// a stored override on a non-peer row indicates DB corruption).
+	if overrideIP != "" && entityType != "peer" {
+		return nil, fmt.Errorf("IP override %q for non-peer entity %q %d: overrides only apply to peer entities: %w", common.TruncateString(overrideIP, resolve.MaxLoggedIPLen), entityType, entityID, ErrPreviewValidation)
+	}
 	switch {
 	case entityType == "special":
 		return c.resolver.ResolveSpecialTarget(ctx, entityID, ipAddress)
 	case entityType == "peer" && overrideIP != "":
+		if err := resolve.ValidatePeerCIDR(overrideIP); err != nil {
+			return nil, fmt.Errorf("invalid IP override %q: %w: %w", common.TruncateString(overrideIP, resolve.MaxLoggedIPLen), err, ErrPreviewValidation)
+		}
 		return []string{resolve.NormalizeToCIDR(overrideIP)}, nil
 	default:
 		return c.resolver.ResolveEntity(ctx, entityType, entityID)
@@ -707,6 +950,13 @@ func (c *Compiler) writeTargetSection(
 		(isMulticastSpecialID(pol.TargetID) || isBroadcastSpecialID(pol.TargetID))
 	if !pol.IsTarget || (pol.Direction != "both" && pol.Direction != "backward") || isSpecialMulticastOrBroadcastTarget {
 		return nil
+	}
+
+	// Fail closed: ingress-from-internet has no ipset negation semantics on
+	// the INPUT path. The resolver would return the resolve.InternetSentinel
+	// marker, which must never reach a "-s" literal.
+	if pol.SourceType == "special" && pol.SourceID == resolve.SpecialIDInternet {
+		return failClosedIngressInternetErr(pol.Name)
 	}
 
 	sourceName := c.formatEntityName(ctx, pol.SourceType, pol.SourceID)
@@ -737,7 +987,7 @@ func (c *Compiler) writeTargetSection(
 		if strings.EqualFold(serviceName, systemServiceMulticast) {
 			c.writeMulticastRule(rw, pol.Action, pol.TargetScope, hasDocker)
 		} else {
-			rules, err := c.writeRules(pol, portClauses, true, ipsetName, nil, ipAddress, writeToHost, writeToDocker, noConntrack, "target", false)
+			rules, err := c.writeRules(pol, portClauses, true, ipsetName, nil, ipAddress, writeToHost, writeToDocker, noConntrack, ruleDirTarget, false)
 			if err != nil {
 				return err
 			}
@@ -753,7 +1003,7 @@ func (c *Compiler) writeTargetSection(
 		if strings.EqualFold(serviceName, systemServiceMulticast) {
 			c.writeMulticastRule(rw, pol.Action, pol.TargetScope, hasDocker)
 		} else {
-			rules, err := c.writeRules(pol, portClauses, false, "", cidrs, ipAddress, writeToHost, writeToDocker, noConntrack, "target", false)
+			rules, err := c.writeRules(pol, portClauses, false, "", cidrs, ipAddress, writeToHost, writeToDocker, noConntrack, ruleDirTarget, false)
 			if err != nil {
 				return err
 			}
@@ -783,10 +1033,31 @@ func (c *Compiler) writeSourceSection(
 		return nil
 	}
 
+	isInternetTarget := pol.TargetType == "special" && pol.TargetID == resolve.SpecialIDInternet
+	// Fail closed: to-Internet requires the runic_private_ranges ipset. Without
+	// ipset support the resolver's resolve.InternetSentinel marker would leak
+	// into a "-d" literal, which iptables-restore would reject (or worse, misinterpret).
+	// Return an error instead of emitting invalid rules.
+	// IPv4-only: runic_private_ranges holds only IPv4 private CIDRs (family
+	// inet), so an IPv6 peer would bypass the OUTPUT dst negation for IPv6
+	// internet destinations. Fail closed on IPv6 peers until an inet6
+	// private-ranges set with ip6tables rules exists.
+	// Empty peer IP (peers created without an address) is not IPv6
+	// (isIPv6Address("")==false) yet must not emit the IPv4 negation:
+	// fail closed via failClosedInternetErr.
+	if isInternetTarget && ipAddress == "" {
+		return failClosedInternetErr(pol.Name)
+	}
+	if isInternetTarget && isIPv6Address(ipAddress) {
+		return failClosedInternetIPv6Err(pol.Name)
+	}
+	if isInternetTarget && !hasIPSet {
+		return failClosedInternetErr(pol.Name)
+	}
+
 	targetName := c.formatEntityName(ctx, pol.TargetType, pol.TargetID)
 	fmt.Fprintf(buf, "# As Source (Egress to %s)\n", targetName)
 
-	isInternetTarget := pol.TargetType == "special" && pol.TargetID == resolve.SpecialIDInternet
 	useInternetIpset := hasIPSet && isInternetTarget
 
 	canUseIpset := hasIPSet && pol.TargetType == "group"
@@ -810,7 +1081,7 @@ func (c *Compiler) writeSourceSection(
 			}
 		} else {
 			isMulticastTarget := pol.TargetType == "special" && isMulticastSpecialID(pol.TargetID)
-			rules, err := c.writeRules(pol, portClauses, true, ipsetName, nil, ipAddress, writeToHost, writeToDocker, noConntrack, "source", isMulticastTarget)
+			rules, err := c.writeRules(pol, portClauses, true, ipsetName, nil, ipAddress, writeToHost, writeToDocker, noConntrack, ruleDirSource, isMulticastTarget)
 			if err != nil {
 				return err
 			}
@@ -819,8 +1090,10 @@ func (c *Compiler) writeSourceSection(
 			}
 		}
 	case useInternetIpset:
+		// ruleDir-only: keep useIpset/ipsetName unset so the builders take
+		// the internet branch purely on ruleDir (mirrors previewAppendRules).
 		isMulticastTarget := false
-		rules, err := c.writeRules(pol, portClauses, false, "", nil, ipAddress, writeToHost, writeToDocker, noConntrack, "internet", isMulticastTarget)
+		rules, err := c.writeRules(pol, portClauses, false, "", nil, ipAddress, writeToHost, writeToDocker, noConntrack, ruleDirInternet, isMulticastTarget)
 		if err != nil {
 			return err
 		}
@@ -831,6 +1104,17 @@ func (c *Compiler) writeSourceSection(
 		cidrs, err := c.resolveEntityCIDRs(ctx, pol.TargetType, pol.TargetID, pol.TargetIP, ipAddress)
 		if err != nil {
 			return fmt.Errorf("resolve target for policy %s: %w", pol.Name, err)
+		}
+		// Defense-in-depth (unreachable in normal flow): the resolve.InternetSentinel
+		// must only travel the ipset path above — when isInternetTarget && hasIPSet
+		// the useInternetIpset case is taken, and when !hasIPSet the fail-closed
+		// error returns above, so the CIDR path can never see the sentinel.
+		// If it ever does (e.g., a future caller bypasses those gates), refuse
+		// to emit "-d <sentinel>" rather than producing invalid iptables.
+		for _, cidr := range cidrs {
+			if isInternetSentinelCIDR(cidr) {
+				return failClosedSentinelLeakErr(pol.Name)
+			}
 		}
 		if strings.EqualFold(serviceName, systemServiceMulticast) {
 			isMulticastTarget := pol.TargetType == "special" && isMulticastSpecialID(pol.TargetID)
@@ -844,7 +1128,7 @@ func (c *Compiler) writeSourceSection(
 			}
 		} else {
 			isMulticastTarget := pol.TargetType == "special" && isMulticastSpecialID(pol.TargetID)
-			rules, err := c.writeRules(pol, portClauses, false, "", cidrs, ipAddress, writeToHost, writeToDocker, noConntrack, "source", isMulticastTarget)
+			rules, err := c.writeRules(pol, portClauses, false, "", cidrs, ipAddress, writeToHost, writeToDocker, noConntrack, ruleDirSource, isMulticastTarget)
 			if err != nil {
 				return err
 			}
@@ -960,7 +1244,16 @@ func (c *Compiler) logDropRule(action, chain, match string) []string {
 //
 //	"target" — rules are for ingress (INPUT matches source, OUTPUT is return traffic)
 //	"source" — rules are for egress (OUTPUT matches destination, INPUT is return traffic)
-//	"internet" — same as "source" but uses runic_private_ranges ipset negation
+//	"internet" — same as "source" but uses runic_private_ranges ipset negation.
+//	The internet path is selected solely by ruleDir; callers pass false,""
+//	for useIpset/ipsetName and the builders assert it while always emitting
+//	the hardcoded negation matches.
+//
+// Internal wiring errors (unknown ruleDir, assertInternetIpset) wrap
+// ErrPreviewValidation so errors.Is works; Compile bundle handlers still
+// surface them as 500 (they map all Compile errors to 500), while
+// PreviewCompile maps them to 400 via isPreviewValidationError. By
+// construction they only fire on programmer error, never on user input.
 //
 // isMulticastTarget when true adjusts INPUT return rule behavior for multicast targets.
 func (c *Compiler) writeRules(
@@ -972,7 +1265,7 @@ func (c *Compiler) writeRules(
 	ipAddress string,
 	writeToHost, writeToDocker bool,
 	noConntrack bool,
-	ruleDir string,
+	ruleDir ruleDir,
 	isMulticastTarget bool,
 ) ([]string, error) {
 	if pol.Action == ActionAccept {
@@ -983,7 +1276,13 @@ func (c *Compiler) writeRules(
 
 // buildAcceptRules emits the iptables ACCEPT rules for a single policy's port clauses.
 // It handles both the ipset and CIDR paths and the host/docker scopes. It also
-// emits the INPUT return-traffic rules for the "source" and "internet" directions.
+// emits the INPUT return-traffic rules for the "source" direction.
+//
+// Rule-direction contract: the "internet" path is selected solely by
+// ruleDir == ruleDirInternet and always uses the hardcoded
+// runic_private_ranges negation matches; callers pass false,"" for
+// useIpset/ipsetName and the builders assert it. The "target"/"source"
+// paths use useIpset/ipsetName for group ipsets and cidrs otherwise.
 func (c *Compiler) buildAcceptRules(
 	pol *policyInfo,
 	portClauses []PortClause,
@@ -993,11 +1292,14 @@ func (c *Compiler) buildAcceptRules(
 	ipAddress string,
 	writeToHost, writeToDocker bool,
 	noConntrack bool,
-	ruleDir string,
+	ruleDir ruleDir,
 	isMulticastTarget bool,
 ) ([]string, error) {
 	var rules []string
 	privateIpsetMatch := privateIpsetDstMatch()
+	if ruleDir != ruleDirTarget && ruleDir != ruleDirSource && ruleDir != ruleDirInternet {
+		return nil, fmt.Errorf("unknown ruleDir %q: %w", ruleDir, ErrPreviewValidation)
+	}
 
 	for _, pc := range portClauses {
 		// Build port matches depending on direction
@@ -1014,9 +1316,33 @@ func (c *Compiler) buildAcceptRules(
 			conntrackFull = ""
 		}
 
-		// For "source" direction, determine return CIDRs with multicast adjustments
+		// Internet path: gated solely on ruleDir. Emits the hardened
+		// runic_private_ranges negation (OUTPUT dst + INPUT src return +
+		// DOCKER-USER mirror) when either scope is enabled; with neither
+		// scope enabled no rules are emitted, matching the non-internet paths.
+		// useIpset/ipsetName are not consulted here; reject any set value to
+		// catch caller wiring mistakes (callers must pass false,"").
+		if ruleDir == ruleDirInternet {
+			if err := assertInternetIpset(useIpset, ipsetName); err != nil {
+				return nil, err
+			}
+			if writeToHost {
+				rules = append(rules,
+					fmt.Sprintf("-A OUTPUT -p %s %s %s %s -j %s", pc.Protocol, privateIpsetMatch, primaryPortMatch, conntrackFull, pol.Action),
+					fmt.Sprintf("-A INPUT -p %s %s %s %s -j ACCEPT", pc.Protocol, privateIpsetSrcMatch(), returnPortMatch, conntrackFull),
+				)
+			}
+			if writeToDocker {
+				rules = append(rules, fmt.Sprintf("-A DOCKER-USER -p %s %s %s %s -j %s", pc.Protocol, privateIpsetMatch, primaryPortMatch, conntrackFull, pol.Action))
+			}
+			continue
+		}
+
+		// For "source" direction, determine return CIDRs with multicast adjustments.
+		// Computed for source only; the internet path continues above and uses
+		// the private-ranges src negation instead of returnCIDRs.
 		var returnCIDRs []string
-		if ruleDir == ruleDirSource || ruleDir == ruleDirInternet {
+		if ruleDir == ruleDirSource {
 			if isMulticastTarget {
 				if noConntrack {
 					returnCIDRs = nil
@@ -1048,11 +1374,8 @@ func (c *Compiler) buildAcceptRules(
 						fmt.Sprintf("-A OUTPUT -p %s %s %s %s -j %s", pc.Protocol, ipsetMatchPrimary, primaryPortMatch, conntrackFull, pol.Action),
 						fmt.Sprintf("-A INPUT -p %s %s %s %s -j %s", pc.Protocol, ipsetMatchReturn, returnPortMatch, conntrackFull, pol.Action),
 					)
-				case ruleDirInternet:
-					rules = append(rules,
-						fmt.Sprintf("-A OUTPUT -p %s %s %s %s -j %s", pc.Protocol, privateIpsetMatch, primaryPortMatch, conntrackFull, pol.Action),
-						fmt.Sprintf("-A INPUT -p %s %s %s %s -j ACCEPT", pc.Protocol, privateIpsetSrcMatch(), returnPortMatch, conntrackFull),
-					)
+				default:
+					return nil, fmt.Errorf("unknown ruleDir %q: %w", ruleDir, ErrPreviewValidation)
 				}
 			}
 			if writeToDocker {
@@ -1061,8 +1384,8 @@ func (c *Compiler) buildAcceptRules(
 					rules = append(rules, fmt.Sprintf("-A DOCKER-USER -p %s %s %s %s -j %s", pc.Protocol, ipsetMatchPrimary, primaryPortMatch, conntrackFull, pol.Action))
 				case ruleDirSource:
 					rules = append(rules, fmt.Sprintf("-A DOCKER-USER -p %s %s %s %s -j %s", pc.Protocol, ipsetMatchPrimary, primaryPortMatch, conntrackFull, pol.Action))
-				case ruleDirInternet:
-					rules = append(rules, fmt.Sprintf("-A DOCKER-USER -p %s %s %s %s -j %s", pc.Protocol, privateIpsetMatch, primaryPortMatch, conntrackFull, pol.Action))
+				default:
+					return nil, fmt.Errorf("unknown ruleDir %q: %w", ruleDir, ErrPreviewValidation)
 				}
 			}
 		} else {
@@ -1072,7 +1395,11 @@ func (c *Compiler) buildAcceptRules(
 			// IP "10.0.0.1" has CIDR "10.0.0.1/32", so a source CIDR of
 			// "10.0.0.1/32" is self-referencing. A CIDR range like "10.0.0.0/24"
 			// is NOT self-referencing even if it contains the peer's IP.
-			filteredCidrs := filterSelfReferencingCIDRs(cidrs, ipAddress)
+			// Fail closed: invalid peer IP aborts compilation (no rules).
+			filteredCidrs, err := filterSelfReferencingCIDRs(cidrs, ipAddress)
+			if err != nil {
+				return nil, err
+			}
 
 			for _, cidr := range filteredCidrs {
 				if writeToHost {
@@ -1082,23 +1409,32 @@ func (c *Compiler) buildAcceptRules(
 							fmt.Sprintf("-A INPUT -s %s -p %s %s %s -j %s", cidr, pc.Protocol, primaryPortMatch, conntrackFull, pol.Action),
 							fmt.Sprintf("-A OUTPUT -d %s -p %s %s %s -j ACCEPT", cidr, pc.Protocol, returnPortMatch, conntrackFull),
 						)
-					case ruleDirSource, ruleDirInternet:
+					case ruleDirSource:
 						rules = append(rules, fmt.Sprintf("-A OUTPUT -d %s -p %s %s %s -j %s", cidr, pc.Protocol, primaryPortMatch, conntrackFull, pol.Action))
+					default:
+						return nil, fmt.Errorf("unknown ruleDir %q: %w", ruleDir, ErrPreviewValidation)
 					}
 				}
 				if writeToDocker {
 					switch ruleDir {
 					case ruleDirTarget:
 						rules = append(rules, fmt.Sprintf("-A DOCKER-USER -s %s -p %s %s %s -j %s", cidr, pc.Protocol, primaryPortMatch, conntrackFull, pol.Action))
-					case ruleDirSource, ruleDirInternet:
+					case ruleDirSource:
 						rules = append(rules, fmt.Sprintf("-A DOCKER-USER -d %s -p %s %s %s -j %s", cidr, pc.Protocol, primaryPortMatch, conntrackFull, pol.Action))
+					default:
+						return nil, fmt.Errorf("unknown ruleDir %q: %w", ruleDir, ErrPreviewValidation)
 					}
 				}
 			}
 
-			// Generate INPUT return rules for source/internet direction
-			if ruleDir == ruleDirSource || ruleDir == ruleDirInternet {
-				filteredReturnCidrs := filterSelfReferencingCIDRs(returnCIDRs, ipAddress)
+			// Generate INPUT return rules for source direction.
+			// (Internet never reaches the CIDR path; it returns above.)
+			// Fail closed: invalid peer IP aborts compilation (no rules).
+			if ruleDir == ruleDirSource {
+				filteredReturnCidrs, err := filterSelfReferencingCIDRs(returnCIDRs, ipAddress)
+				if err != nil {
+					return nil, err
+				}
 				for _, returnCidr := range filteredReturnCidrs {
 					rules = append(rules, fmt.Sprintf("-A INPUT -s %s -p %s %s %s -j ACCEPT", returnCidr, pc.Protocol, returnPortMatch, conntrackFull))
 				}
@@ -1111,6 +1447,11 @@ func (c *Compiler) buildAcceptRules(
 // buildLogDropRules emits LOG + DROP (or plain DROP) rules for a single policy's
 // port clauses. It mirrors the ipset/CIDR structure of buildAcceptRules but
 // omits the return-traffic block (rejected traffic is not echoed back).
+//
+// Rule-direction contract: the "internet" path is selected solely by
+// ruleDir == ruleDirInternet and always uses the hardcoded
+// runic_private_ranges negation match; callers pass false,"" for
+// useIpset/ipsetName and the builders assert it.
 func (c *Compiler) buildLogDropRules(
 	pol *policyInfo,
 	portClauses []PortClause,
@@ -1119,12 +1460,35 @@ func (c *Compiler) buildLogDropRules(
 	cidrs []string,
 	ipAddress string,
 	writeToHost, writeToDocker bool,
-	ruleDir string,
+	ruleDir ruleDir,
 ) ([]string, error) {
 	var rules []string
 	privateIpsetMatch := privateIpsetDstMatch()
+	if ruleDir != ruleDirTarget && ruleDir != ruleDirSource && ruleDir != ruleDirInternet {
+		return nil, fmt.Errorf("unknown ruleDir %q: %w", ruleDir, ErrPreviewValidation)
+	}
 
 	for _, pc := range portClauses {
+		// Internet path: gated solely on ruleDir. Emits the hardened
+		// OUTPUT + DOCKER-USER negation matches (LOG/DROP via logDropRule)
+		// when either scope is enabled; with neither scope enabled no rules
+		// are emitted, matching the non-internet paths. useIpset/ipsetName
+		// are not consulted here; reject any set value to catch caller
+		// wiring mistakes (callers must pass false,"").
+		if ruleDir == ruleDirInternet {
+			if err := assertInternetIpset(useIpset, ipsetName); err != nil {
+				return nil, err
+			}
+			if writeToHost {
+				match := fmt.Sprintf("-p %s %s %s", pc.Protocol, privateIpsetMatch, pc.PortMatch)
+				rules = append(rules, c.logDropRule(pol.Action, ChainOutput, match)...)
+			}
+			if writeToDocker {
+				match := fmt.Sprintf("-p %s %s %s", pc.Protocol, privateIpsetMatch, pc.PortMatch)
+				rules = append(rules, c.logDropRule(pol.Action, ChainDockerUser, match)...)
+			}
+			continue
+		}
 		if useIpset {
 			ipsetMatchPrimary := fmt.Sprintf("-m set --match-set %s src", ipsetName)
 			if ruleDir == ruleDirSource {
@@ -1134,39 +1498,41 @@ func (c *Compiler) buildLogDropRules(
 
 			if writeToHost {
 				chain := ChainInput
-				if ruleDir == ruleDirSource || ruleDir == ruleDirInternet {
+				if ruleDir == ruleDirSource {
 					chain = ChainOutput
 				}
 				match := fmt.Sprintf("-p %s %s %s", pc.Protocol, ipsetMatchPrimary, pc.PortMatch)
-				if ruleDir == ruleDirInternet {
-					match = fmt.Sprintf("-p %s %s %s", pc.Protocol, privateIpsetMatch, pc.PortMatch)
-				}
 				rules = append(rules, c.logDropRule(pol.Action, chain, match)...)
 			}
 			if writeToDocker {
 				match := fmt.Sprintf("-p %s %s %s", pc.Protocol, ipsetMatchPrimary, pc.PortMatch)
-				if ruleDir == ruleDirInternet {
-					match = fmt.Sprintf("-p %s %s %s", pc.Protocol, privateIpsetMatch, pc.PortMatch)
-				}
 				rules = append(rules, c.logDropRule(pol.Action, ChainDockerUser, match)...)
 			}
 		} else {
-			filteredCidrs := filterSelfReferencingCIDRs(cidrs, ipAddress)
+			// Fail closed: invalid peer IP aborts compilation (no rules).
+			filteredCidrs, err := filterSelfReferencingCIDRs(cidrs, ipAddress)
+			if err != nil {
+				return nil, err
+			}
 			for _, cidr := range filteredCidrs {
 				if writeToHost {
 					switch ruleDir {
 					case ruleDirTarget:
 						rules = append(rules, c.logDropRule(pol.Action, ChainInput, fmt.Sprintf("-s %s -p %s %s", cidr, pc.Protocol, pc.PortMatch))...)
-					case ruleDirSource, ruleDirInternet:
+					case ruleDirSource:
 						rules = append(rules, c.logDropRule(pol.Action, ChainOutput, fmt.Sprintf("-d %s -p %s %s", cidr, pc.Protocol, pc.PortMatch))...)
+					default:
+						return nil, fmt.Errorf("unknown ruleDir %q: %w", ruleDir, ErrPreviewValidation)
 					}
 				}
 				if writeToDocker {
 					switch ruleDir {
 					case ruleDirTarget:
 						rules = append(rules, c.logDropRule(pol.Action, ChainDockerUser, fmt.Sprintf("-s %s -p %s %s", cidr, pc.Protocol, pc.PortMatch))...)
-					case ruleDirSource, ruleDirInternet:
+					case ruleDirSource:
 						rules = append(rules, c.logDropRule(pol.Action, ChainDockerUser, fmt.Sprintf("-d %s -p %s %s", cidr, pc.Protocol, pc.PortMatch))...)
+					default:
+						return nil, fmt.Errorf("unknown ruleDir %q: %w", ruleDir, ErrPreviewValidation)
 					}
 				}
 			}
@@ -1190,7 +1556,28 @@ func privateIpsetSrcMatch() string {
 // own normalized CIDR (e.g., "10.0.0.1/32") removed. Peer-to-self traffic is
 // not relevant for firewall rules and would otherwise generate matching rules
 // that block loopback-shaped connections.
-func filterSelfReferencingCIDRs(cidrs []string, ipAddress string) []string {
+//
+// NormalizeToCIDR performs no validation by contract (unparseable input gets
+// "/32"), so the peer IP is validated with resolve.ValidatePeerCIDR first
+// per its contract. A corrupt or /0 peer IP yields no reliable self CIDR;
+// fail closed by returning an error (no rules) rather than returning cidrs
+// unfiltered (which would emit extra INPUT -s ACCEPT rules, more permissive)
+// or filtering against a garbage "<bad>/32" peerCIDR that would silently
+// disable the filter. An empty peer IP means no host context (preview without
+// a peer, or a peer row with no address): there is no self CIDR to exclude,
+// so return cidrs unfiltered with no error. Internet targets with an empty
+// peer IP still fail closed via the explicit empty-IP gates in
+// writeSourceSection/previewAppendRules/previewForward. Callers propagate
+// the error, aborting compilation. Wraps ErrPreviewValidation so errors.Is
+// works; Compile bundle handlers still surface it as 500 (stored corrupt IP
+// is DB corruption), while PreviewCompile maps it to 400.
+func filterSelfReferencingCIDRs(cidrs []string, ipAddress string) ([]string, error) {
+	if ipAddress == "" {
+		return cidrs, nil
+	}
+	if err := resolve.ValidatePeerCIDR(ipAddress); err != nil {
+		return nil, fmt.Errorf("invalid peer IP %q: %w: %w", common.TruncateString(ipAddress, resolve.MaxLoggedIPLen), err, ErrPreviewValidation)
+	}
 	peerCIDR := resolve.NormalizeToCIDR(ipAddress)
 	filtered := make([]string, 0, len(cidrs))
 	for _, cidr := range cidrs {
@@ -1198,7 +1585,7 @@ func filterSelfReferencingCIDRs(cidrs []string, ipAddress string) []string {
 			filtered = append(filtered, cidr)
 		}
 	}
-	return filtered
+	return filtered, nil
 }
 
 // previewState aggregates the inputs and resolved CIDRs that PreviewCompile needs
@@ -1209,6 +1596,7 @@ func filterSelfReferencingCIDRs(cidrs []string, ipAddress string) []string {
 type previewState struct {
 	// Resolved inputs
 	ipAddress        string
+	hasIPSet         bool
 	serviceName      string
 	protocol         string
 	noConntrack      bool
@@ -1242,32 +1630,56 @@ func (c *Compiler) loadPreviewInputs(ctx context.Context, peerID, serviceID int,
 	}
 
 	if peerID != 0 {
+		// Thread hasIPSet so the preview gates the internet path identically
+		// to writeSourceSection (hasIPSet && isInternetTarget). Without this,
+		// the preview would show ipset-negation rules for hosts that cannot
+		// apply them. Single round-trip for both peer inputs.
+		// Unknown peer IDs fail closed as validation errors (400 via
+		// ErrPreviewValidation-wrapped sql.ErrNoRows); other DB failures
+		// are internal (500) so a DB outage never yields a 200 with
+		// wrong rules.
+		// SQLite stores BOOLEAN as INTEGER 0/1 (has_ipset is nullable,
+		// hence the COALESCE), but the driver may return bool (tests) or
+		// int64 (prod). Scan into any and convert via scanBool.
+		var hasIPSetRaw any
 		if err := c.db.QueryRowContext(ctx,
-			"SELECT ip_address FROM peers WHERE id = ?", peerID,
-		).Scan(&st.ipAddress); err != nil && !errors.Is(err, sql.ErrNoRows) {
-			// Log but don't fail - IP is optional for preview
-			log.WarnContext(ctx, "Failed to load peer IP for preview", "error", err)
+			"SELECT ip_address, COALESCE(has_ipset, 0) FROM peers WHERE id = ?", peerID,
+		).Scan(&st.ipAddress, &hasIPSetRaw); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return previewState{}, fmt.Errorf("unknown peer %d: %w: %w", peerID, sql.ErrNoRows, ErrPreviewValidation)
+			}
+			return previewState{}, fmt.Errorf("load peer: %w", err)
 		}
+		st.hasIPSet = scanBool(hasIPSetRaw)
+	} else {
+		// No host context: fail closed (hasIPSet=false) so internet previews
+		// fail identically to Compile on has_ipset=0 instead of showing
+		// hardened runic_private_ranges negation with no host to apply it.
+		st.hasIPSet = false
 	}
 
 	// Load service - MC-011: Include no_conntrack column
+	// SQLite stores BOOLEAN as INTEGER 0/1, but the driver may return bool
+	// (tests) or int64 (prod). Scan into any and convert via scanBool.
 	var ports, sourcePorts string
+	var noConntrackRaw any
 	err := c.db.QueryRowContext(ctx,
 		"SELECT name, ports, source_ports, protocol, COALESCE(no_conntrack, 0) FROM services WHERE id = ? AND is_pending_delete = 0", serviceID,
-	).Scan(&st.serviceName, &ports, &sourcePorts, &st.protocol, &st.noConntrack)
+	).Scan(&st.serviceName, &ports, &sourcePorts, &st.protocol, &noConntrackRaw)
 	if errors.Is(err, sql.ErrNoRows) {
-		return previewState{}, fmt.Errorf("service %d is pending delete or does not exist", serviceID)
+		return previewState{}, fmt.Errorf("service %d is pending delete or does not exist: %w", serviceID, ErrPreviewValidation)
 	}
 	if err != nil {
 		return previewState{}, fmt.Errorf("load service: %w", err)
 	}
+	st.noConntrack = scanBool(noConntrackRaw)
 
 	// Skip port expansion for special services that don't use ports.
 	isIGMPorVRRP := strings.EqualFold(st.serviceName, systemServiceIGMP) || strings.EqualFold(st.serviceName, systemServiceVRRP)
 	if !strings.EqualFold(st.serviceName, systemServiceMulticast) && !isIGMPorVRRP {
 		clauses, err := ExpandPorts(ports, sourcePorts, st.protocol)
 		if err != nil {
-			return previewState{}, fmt.Errorf("expand ports: %w", err)
+			return previewState{}, fmt.Errorf("expand ports: %w: %w", err, ErrPreviewValidation)
 		}
 		st.portClauses = clauses
 	}
@@ -1293,9 +1705,44 @@ func (c *Compiler) resolvePreviewSourcesAndTargets(ctx context.Context, st *prev
 
 // previewAppendRules is a small helper that calls writeRules and appends the
 // result to rules. writeToHost/writeToDocker select the host or DOCKER-USER
-// chains so host and docker preview sections share one call path.
-func (c *Compiler) previewAppendRules(rules []string, st *previewState, pol *policyInfo, portClauses []PortClause, cidrs []string, isMulticastTarget bool, ruleDir string, writeToHost, writeToDocker bool) ([]string, error) {
-	generated, err := c.writeRules(pol, portClauses, false, "", cidrs, st.ipAddress, writeToHost, writeToDocker, st.noConntrack, ruleDir, isMulticastTarget)
+// chains so host and docker preview sections share one call path. Internet
+// targets use ipset semantics (runic_private_ranges negation, IPv4-only) so
+// the preview matches the Compile path in writeSourceSection, including the
+// fail-closed behavior when the preview peer lacks ipset support or is an
+// IPv6 peer. The internet path is selected solely by ruleDir; callers pass
+// false,"" for useIpset/ipsetName and the builders assert it, so this helper
+// always passes false,"" and lets ruleDir drive the negation match.
+func (c *Compiler) previewAppendRules(rules []string, st *previewState, pol *policyInfo, portClauses []PortClause, cidrs []string, isMulticastTarget bool, ruleDir ruleDir, writeToHost, writeToDocker bool) ([]string, error) {
+	useIpset := false
+	ipsetName := ""
+	if ruleDir == ruleDirInternet {
+		// Mirror writeSourceSection gates: empty peer IP fails closed (it is
+		// not IPv6, yet must not emit the IPv4 negation).
+		if st.ipAddress == "" {
+			return nil, failClosedInternetErr("preview")
+		}
+		if isIPv6Address(st.ipAddress) {
+			return nil, failClosedInternetIPv6Err("preview")
+		}
+		if !st.hasIPSet {
+			return nil, failClosedInternetErr("preview")
+		}
+		// ruleDir-only: keep useIpset/ipsetName unset so the builders take
+		// the internet branch purely on ruleDir.
+	} else {
+		// Defense-in-depth: the sentinel (bare or normalized via
+		// NormalizeToCIDR, e.g. "__internet__/32") must never reach a
+		// "-s"/"-d" literal on the CIDR path.
+		for _, cidr := range cidrs {
+			if isInternetSentinelCIDR(cidr) {
+				if ruleDir == ruleDirTarget {
+					return nil, failClosedIngressInternetErr("preview")
+				}
+				return nil, failClosedInternetErr("preview")
+			}
+		}
+	}
+	generated, err := c.writeRules(pol, portClauses, useIpset, ipsetName, cidrs, st.ipAddress, writeToHost, writeToDocker, st.noConntrack, ruleDir, isMulticastTarget)
 	if err != nil {
 		return nil, err
 	}
@@ -1322,12 +1769,12 @@ func normalizeBroadcastProto(protocol string) string {
 // previewHostForward renders the "Source → Target" rules that target the host
 // chains (INPUT/OUTPUT) when targetScope is "host" or "both". It handles IGMP,
 // VRRP, multicast, internet, and the regular peer/group case.
-func (c *Compiler) previewHostForward(st *previewState, sourceType string, targetType string, targetID int) ([]string, error) {
+func (c *Compiler) previewHostForward(st *previewState, targetType string, targetID int) ([]string, error) {
 	return c.previewForward(st, targetType, targetID, ChainInput, "# Forward (Source → Target)", true, false, "host")
 }
 
 // previewDockerForward is the DOCKER-USER equivalent of previewHostForward.
-func (c *Compiler) previewDockerForward(st *previewState, sourceType string, targetType string, targetID int) ([]string, error) {
+func (c *Compiler) previewDockerForward(st *previewState, targetType string, targetID int) ([]string, error) {
 	return c.previewForward(st, targetType, targetID, ChainDockerUser, "# Docker: DOCKER-USER chain rules", false, true, "docker")
 }
 
@@ -1376,9 +1823,24 @@ func (c *Compiler) previewForward(st *previewState, targetType string, targetID 
 		return rules, nil
 	}
 
-	// Use writeSourceRules for forward direction (egress)
-	if st.isInternetTarget {
+	// Use writeSourceRules for forward direction (egress). Gate the internet
+	// path identically to writeSourceSection (hasIPSet && isInternetTarget) so
+	// the preview never shows ipset-negation rules for hosts that fail closed
+	// at Compile time. IPv4-only: IPv6 peers fail closed like Compile because
+	// runic_private_ranges cannot cover IPv6 internet destinations. Empty peer
+	// IP fails closed like Compile (it is not IPv6 yet must not emit the IPv4
+	// negation).
+	if st.isInternetTarget && st.ipAddress == "" {
+		return nil, failClosedInternetErr("preview")
+	}
+	if st.isInternetTarget && isIPv6Address(st.ipAddress) {
+		return nil, failClosedInternetIPv6Err("preview")
+	}
+	if st.isInternetTarget && st.hasIPSet {
 		return c.previewAppendRules(rules, st, st.pol, st.portClauses, nil, false, ruleDirInternet, writeToHost, writeToDocker)
+	}
+	if st.isInternetTarget && !st.hasIPSet {
+		return nil, failClosedInternetErr("preview")
 	}
 	isMulticastTarget := targetType == "special" && isMulticastSpecialID(targetID)
 	return c.previewAppendRules(rules, st, st.pol, st.portClauses, st.targetCIDRs, isMulticastTarget, ruleDirSource, writeToHost, writeToDocker)
@@ -1412,6 +1874,14 @@ func (c *Compiler) previewBackward(st *previewState, sourceType string, sourceID
 		return nil, nil
 	}
 
+	// Fail closed: ingress-from-internet has no preview semantics either,
+	// matching the Compile gate in writeTargetSection. The resolver would
+	// return the resolve.InternetSentinel marker, which must never reach a "-s"
+	// literal via the default branch below.
+	if sourceType == "special" && sourceID == resolve.SpecialIDInternet {
+		return nil, failClosedIngressInternetErr("preview")
+	}
+
 	// Multicast / broadcast special sources indicate receiving
 	// traffic via pkttype matching (-d 224.0.0.0/4 multicast) or destination-
 	// address matching for broadcast.
@@ -1436,6 +1906,13 @@ func (c *Compiler) previewBackward(st *previewState, sourceType string, sourceID
 		// Broadcast traffic: -d match against the broadcast address. The
 		// protocol is read from the service in scope and falls back to "udp"
 		// when empty or "both" (matching the historical hardcoded behavior).
+		// Defense-in-depth: refuse to emit a sentinel-derived "-d" literal
+		// (bare or normalized) on this direct CIDR path.
+		for _, cidr := range st.sourceCIDRs {
+			if isInternetSentinelCIDR(cidr) {
+				return nil, failClosedIngressInternetErr("preview")
+			}
+		}
 		proto := normalizeBroadcastProto(st.protocol)
 		for _, sourceCIDR := range st.sourceCIDRs {
 			rules = append(rules, fmt.Sprintf("-A %s -d %s -p %s -j ACCEPT", chain, sourceCIDR, proto))
@@ -1449,6 +1926,21 @@ func (c *Compiler) previewBackward(st *previewState, sourceType string, sourceID
 // PreviewCompile generates iptables rules for a single policy. Unlike Compile(), this is policy-centric: it resolves both source and target entities
 // and generates rules based on direction, showing the complete picture across all hosts.
 func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sourceType string, sourceIP string, targetID int, targetType string, targetIP string, serviceID int, action, direction string, targetScope string) ([]string, error) {
+	if !resolve.IsValidAction(action) {
+		return nil, fmt.Errorf("invalid action %q: must be one of ACCEPT, DROP, LOG_DROP: %w", action, ErrPreviewValidation)
+	}
+	if !resolve.IsValidEntityType(sourceType) {
+		return nil, fmt.Errorf("invalid source_type %q: must be one of peer, group, special: %w", sourceType, ErrPreviewValidation)
+	}
+	if !resolve.IsValidEntityType(targetType) {
+		return nil, fmt.Errorf("invalid target_type %q: must be one of peer, group, special: %w", targetType, ErrPreviewValidation)
+	}
+	if direction != "" && !resolve.IsValidDirection(direction) {
+		return nil, fmt.Errorf("invalid direction %q: must be one of both, forward, backward: %w", direction, ErrPreviewValidation)
+	}
+	if targetScope != "" && !resolve.IsValidTargetScope(targetScope) {
+		return nil, fmt.Errorf("invalid target_scope %q: must be one of both, host, docker: %w", targetScope, ErrPreviewValidation)
+	}
 	st, err := c.loadPreviewInputs(ctx, peerID, serviceID, direction, targetScope)
 	if err != nil {
 		return nil, err
@@ -1460,9 +1952,9 @@ func (c *Compiler) PreviewCompile(ctx context.Context, peerID, sourceID int, sou
 
 	var rules []string
 	for _, section := range []func() ([]string, error){
-		func() ([]string, error) { return c.previewHostForward(&st, sourceType, targetType, targetID) },
+		func() ([]string, error) { return c.previewHostForward(&st, targetType, targetID) },
 		func() ([]string, error) { return c.previewHostBackward(&st, sourceType, sourceID) },
-		func() ([]string, error) { return c.previewDockerForward(&st, sourceType, targetType, targetID) },
+		func() ([]string, error) { return c.previewDockerForward(&st, targetType, targetID) },
 		func() ([]string, error) { return c.previewDockerBackward(&st, sourceType, sourceID) },
 	} {
 		more, err := section()

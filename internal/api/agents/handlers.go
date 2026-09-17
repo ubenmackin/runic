@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"slices"
 	"strings"
@@ -81,36 +80,35 @@ const maxLoggedIPLen = 64
 // fields so unbounded input cannot bloat logs.
 const maxLoggedReasonLen = 256
 
-// truncateForLog bounds a value included in structured log fields. It returns
-// s unchanged when it fits, otherwise a rune-safe truncation to maxLen bytes
-// via the shared common.TruncateString helper so multi-byte UTF-8 sequences
-// are never split.
-func truncateForLog(s string, maxLen int) string {
-	return runiccommon.TruncateString(s, maxLen)
-}
-
-// validateAllIPs rejects the request when any entry fails to parse as an IP
-// address. The first invalid entry is reported with a truncated value so the
-// response and logs stay bounded. Callers map the returned error to 400.
+// validateAllIPs rejects the request when any entry fails the shared
+// plain-IP validation. Agent-reported interface addresses (register IP,
+// all_ips, heartbeat all_ips) must be plain IPs; CIDR ranges are rejected.
+// This is intentionally stricter than peer address fields
+// (peers.ip_address, peer_ips, policy overrides), which accept plain-or-CIDR
+// via ValidatePeerCIDR. The first invalid entry is reported with
+// a truncated value so the response and logs stay bounded. Callers map the
+// returned error to 400.
 func validateAllIPs(ips []string) error {
 	for _, ip := range ips {
-		if net.ParseIP(ip) == nil {
-			return fmt.Errorf("invalid IP address in all_ips: %q", truncateForLog(ip, maxLoggedIPLen))
+		if err := common.ValidatePlainIP(ip); err != nil {
+			return fmt.Errorf("invalid IP address in all_ips: %q", runiccommon.TruncateString(ip, maxLoggedIPLen))
 		}
 	}
 	return nil
 }
 
 // Validate validates the LogEvent. Empty optional fields are allowed, but if present they must be valid.
-// Returns (true, "") if valid, or (false, reason) if invalid.
+// Packet telemetry addresses (src_ip/dst_ip) are plain-IP-only via
+// ValidatePlainIP (CIDR rejected), unlike CIDR-capable peer fields via
+// ValidatePeerCIDR. Returns (true, "") if valid, or (false, reason) if invalid.
 func (e *LogEvent) Validate() (bool, string) {
 	if e.Timestamp != "" && !isValidLogTimestamp(e.Timestamp) {
 		return false, fmt.Sprintf("invalid timestamp: %s", e.Timestamp)
 	}
-	if e.SrcIP != "" && net.ParseIP(e.SrcIP) == nil {
+	if e.SrcIP != "" && common.ValidatePlainIP(e.SrcIP) != nil {
 		return false, fmt.Sprintf("invalid src_ip: %s", e.SrcIP)
 	}
-	if e.DstIP != "" && net.ParseIP(e.DstIP) == nil {
+	if e.DstIP != "" && common.ValidatePlainIP(e.DstIP) != nil {
 		return false, fmt.Sprintf("invalid dst_ip: %s", e.DstIP)
 	}
 	if e.Protocol != "" && !slices.Contains(validProtocols, strings.ToLower(e.Protocol)) {
@@ -153,16 +151,19 @@ func isValidLogTimestamp(ts string) bool {
 	return false
 }
 
-// filterValidIPs returns only the entries that parse as IP addresses, logging
-// and skipping invalid values so a single malformed entry cannot poison the
-// peer_ips table. Callers must run validateAllIPs first when the blueprint
-// requires a 400 on invalid entries; this filter remains as a best-effort
-// backstop. Logged values are truncated to keep logs bounded.
+// filterValidIPs returns only the entries that pass the shared plain-IP
+// validation, logging and skipping invalid values so a single malformed
+// entry cannot poison the peer_ips table. Agent interface addresses are
+// plain-IP-only (CIDR rejected), unlike CIDR-capable peer fields enforced
+// via ValidatePeerCIDR in the store. Callers must run validateAllIPs
+// first when the blueprint requires a 400 on invalid entries; this filter
+// remains as a best-effort backstop. Logged values are truncated to keep
+// logs bounded.
 func filterValidIPs(ips []string) []string {
 	valid := make([]string, 0, len(ips))
 	for _, ip := range ips {
-		if net.ParseIP(ip) == nil {
-			runiclog.Warn("Skipping invalid peer IP", "ip", truncateForLog(ip, maxLoggedIPLen))
+		if common.ValidatePlainIP(ip) != nil {
+			runiclog.Warn("Skipping invalid peer IP", "ip", runiccommon.TruncateString(ip, maxLoggedIPLen))
 			continue
 		}
 		valid = append(valid, ip)
@@ -613,7 +614,11 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if input.IP != "" && net.ParseIP(input.IP) == nil {
+	// Agent register IP contract: single interface address, plain-IP-only
+	// (CIDR rejected via ValidatePlainIP). Manual peer ip_address fields
+	// accept plain-or-CIDR via ValidatePeerCIDR; agent telemetry must never
+	// carry ranges.
+	if input.IP != "" && common.ValidatePlainIP(input.IP) != nil {
 		common.RespondError(w, http.StatusBadRequest, "invalid IP address")
 		return
 	}
@@ -840,7 +845,7 @@ func (h *Handler) Heartbeat(w http.ResponseWriter, r *http.Request) {
 	}
 	// last_update_error is truncated for logging so an oversized value cannot
 	// bloat logs or fail the heartbeat itself.
-	lastUpdateErr := truncateForLog(input.LastUpdateError, 1024)
+	lastUpdateErr := runiccommon.TruncateString(input.LastUpdateError, 1024)
 	if err := validateAllIPs(input.AllIPs); err != nil {
 		common.RespondError(w, http.StatusBadRequest, err.Error())
 		return
@@ -942,7 +947,7 @@ func (h *Handler) SubmitLogs(w http.ResponseWriter, r *http.Request) {
 	for i := range input.Events {
 		ev := &input.Events[i]
 		if valid, reason := ev.Validate(); !valid {
-			runiclog.Warn("Skipping invalid log event", "reason", truncateForLog(reason, maxLoggedReasonLen))
+			runiclog.Warn("Skipping invalid log event", "reason", runiccommon.TruncateString(reason, maxLoggedReasonLen))
 			skipped++
 			continue
 		}

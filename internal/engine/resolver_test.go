@@ -50,7 +50,7 @@ func TestResolveEntityPeer(t *testing.T) {
 			},
 			entityType:  "peer",
 			entityID:    3,
-			expectCIDRs: []string{"::1/32"}, // Note: code adds /32 for all IPs, even IPv6
+			expectCIDRs: []string{"::1/128"}, // Bare IPv6 is a single host (/128)
 			expectError: false,
 		},
 		{

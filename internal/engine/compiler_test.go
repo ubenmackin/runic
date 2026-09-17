@@ -8,19 +8,28 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
+	"runic/internal/resolve"
 	"runic/internal/testutil"
 )
 
-func insertPeer(t *testing.T, database *sql.DB, hostname, ip string, hasDocker bool) int {
+func insertPeerWithIPSet(t *testing.T, database *sql.DB, hostname, ip string, hasDocker, hasIPSet bool) int {
 	t.Helper()
 	result, err := database.Exec(
-		`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker) VALUES (?, ?, ?, ?, ?)`,
-		hostname, ip, "key-"+hostname, "test-hmac-key", hasDocker)
+		`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_docker, has_ipset) VALUES (?, ?, ?, ?, ?, ?)`,
+		hostname, ip, "key-"+hostname, "test-hmac-key", hasDocker, hasIPSet)
 	if err != nil {
 		t.Fatalf("insert peer: %v", err)
 	}
-	id, _ := result.LastInsertId()
+	id, err := result.LastInsertId()
+	if err != nil {
+		t.Fatalf("insert peer last insert id: %v", err)
+	}
 	return int(id)
+}
+
+func insertPeer(t *testing.T, database *sql.DB, hostname, ip string, hasDocker bool) int {
+	t.Helper()
+	return insertPeerWithIPSet(t, database, hostname, ip, hasDocker, false)
 }
 
 func insertGroup(t *testing.T, database *sql.DB, name string) int {
@@ -29,7 +38,10 @@ func insertGroup(t *testing.T, database *sql.DB, name string) int {
 	if err != nil {
 		t.Fatalf("insert group: %v", err)
 	}
-	id, _ := result.LastInsertId()
+	id, err := result.LastInsertId()
+	if err != nil {
+		t.Fatalf("insert group last insert id: %v", err)
+	}
 	return int(id)
 }
 
@@ -51,7 +63,10 @@ func insertManualPeer(t *testing.T, database *sql.DB, ipOrCIDR string) int {
 	if err != nil {
 		t.Fatalf("insert manual peer: %v", err)
 	}
-	id, _ := result.LastInsertId()
+	id, err := result.LastInsertId()
+	if err != nil {
+		t.Fatalf("insert manual peer last insert id: %v", err)
+	}
 	return int(id)
 }
 
@@ -63,7 +78,10 @@ func insertService(t *testing.T, database *sql.DB, name, ports, protocol string)
 	if err != nil {
 		t.Fatalf("insert service: %v", err)
 	}
-	id, _ := result.LastInsertId()
+	id, err := result.LastInsertId()
+	if err != nil {
+		t.Fatalf("insert service last insert id: %v", err)
+	}
 	return int(id)
 }
 
@@ -113,7 +131,10 @@ func insertPolicyOpts(t *testing.T, database *sql.DB, opts policyOpts) int {
 	if err != nil {
 		t.Fatalf("insert policy: %v", err)
 	}
-	id, _ := result.LastInsertId()
+	id, err := result.LastInsertId()
+	if err != nil {
+		t.Fatalf("insert policy last insert id: %v", err)
+	}
 	return int(id)
 }
 
@@ -2927,6 +2948,323 @@ func TestPreviewCompileWithTargetIP(t *testing.T) {
 	for _, rule := range rules {
 		if strings.Contains(rule, "-d 10.0.0.2/32") {
 			t.Errorf("should NOT use peer's primary IP when target_ip is set, got: %s", rule)
+		}
+	}
+}
+
+func TestCompileInternetAccept(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	if _, err := database.Exec("PRAGMA foreign_keys=OFF"); err != nil {
+		t.Fatalf("disable foreign keys: %v", err)
+	}
+
+	peerID := insertPeerWithIPSet(t, database, "internet-peer", "192.168.1.10", false, true)
+
+	serviceID := insertService(t, database, "http", "80", "tcp")
+	insertPolicyOpts(t, database, policyOpts{
+		name:       "allow-internet-http",
+		sourceType: "peer",
+		sourceID:   int64(peerID),
+		targetType: "special",
+		targetID:   int64(resolve.SpecialIDInternet),
+		serviceID:  int64(serviceID),
+		action:     "ACCEPT",
+		priority:   100,
+		enabled:    true,
+		direction:  "both",
+	})
+
+	c := NewTestCompiler(database)
+	output, err := c.Compile(context.Background(), peerID)
+	if err != nil {
+		t.Fatalf("compile error: %v", err)
+	}
+
+	if !strings.Contains(output, "create runic_private_ranges") {
+		t.Errorf("expected runic_private_ranges ipset header, got:\n%s", output)
+	}
+	if !strings.Contains(output, "-A OUTPUT -p tcp -m set ! --match-set runic_private_ranges dst --dport 80") {
+		t.Errorf("expected OUTPUT ipset-negation rule for to-Internet, got:\n%s", output)
+	}
+	if !strings.Contains(output, "-A INPUT -p tcp -m set ! --match-set runic_private_ranges src") {
+		t.Errorf("expected INPUT ipset-negation return rule for to-Internet, got:\n%s", output)
+	}
+	if strings.Contains(output, "-d "+resolve.InternetSentinel) {
+		t.Errorf("should not emit literal -d "+resolve.InternetSentinel+" destination, got:\n%s", output)
+	}
+}
+
+func TestCompileInternetLogDrop(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	if _, err := database.Exec("PRAGMA foreign_keys=OFF"); err != nil {
+		t.Fatalf("disable foreign keys: %v", err)
+	}
+
+	peerID := insertPeerWithIPSet(t, database, "internet-logdrop", "192.168.1.11", false, true)
+
+	serviceID := insertService(t, database, "http", "80", "tcp")
+	insertPolicyOpts(t, database, policyOpts{
+		name:       "block-internet-http",
+		sourceType: "peer",
+		sourceID:   int64(peerID),
+		targetType: "special",
+		targetID:   int64(resolve.SpecialIDInternet),
+		serviceID:  int64(serviceID),
+		action:     "LOG_DROP",
+		priority:   100,
+		enabled:    true,
+		direction:  "both",
+	})
+
+	c := NewTestCompiler(database)
+	output, err := c.Compile(context.Background(), peerID)
+	if err != nil {
+		t.Fatalf("compile error: %v", err)
+	}
+
+	if !strings.Contains(output, "-A OUTPUT -p tcp -m set ! --match-set runic_private_ranges dst --dport 80 -j LOG") {
+		t.Errorf("expected OUTPUT LOG rule with ipset-negation match, got:\n%s", output)
+	}
+	if !strings.Contains(output, "RUNIC-DROP-O") {
+		t.Errorf("expected RUNIC-DROP-O log prefix for to-Internet LOG_DROP, got:\n%s", output)
+	}
+	if !strings.Contains(output, "-A OUTPUT -p tcp -m set ! --match-set runic_private_ranges dst --dport 80 -j DROP") {
+		t.Errorf("expected OUTPUT DROP rule with ipset-negation match, got:\n%s", output)
+	}
+	if strings.Contains(output, "-d "+resolve.InternetSentinel) {
+		t.Errorf("should not emit literal -d "+resolve.InternetSentinel+" destination, got:\n%s", output)
+	}
+}
+
+func TestCompileInternetDrop(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	if _, err := database.Exec("PRAGMA foreign_keys=OFF"); err != nil {
+		t.Fatalf("disable foreign keys: %v", err)
+	}
+
+	peerID := insertPeerWithIPSet(t, database, "internet-drop", "192.168.1.12", false, true)
+
+	serviceID := insertService(t, database, "ssh", "22", "tcp")
+	insertPolicyOpts(t, database, policyOpts{
+		name:       "block-internet-ssh",
+		sourceType: "peer",
+		sourceID:   int64(peerID),
+		targetType: "special",
+		targetID:   int64(resolve.SpecialIDInternet),
+		serviceID:  int64(serviceID),
+		action:     "DROP",
+		priority:   100,
+		enabled:    true,
+		direction:  "both",
+	})
+
+	c := NewTestCompiler(database)
+	output, err := c.Compile(context.Background(), peerID)
+	if err != nil {
+		t.Fatalf("compile error: %v", err)
+	}
+
+	if !strings.Contains(output, "-A OUTPUT -p tcp -m set ! --match-set runic_private_ranges dst --dport 22 -j DROP") {
+		t.Errorf("expected OUTPUT DROP rule with ipset-negation match, got:\n%s", output)
+	}
+	if strings.Contains(output, "-d "+resolve.InternetSentinel) {
+		t.Errorf("should not emit literal -d "+resolve.InternetSentinel+" destination, got:\n%s", output)
+	}
+}
+
+func TestCompileInternetDockerPeer(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	if _, err := database.Exec("PRAGMA foreign_keys=OFF"); err != nil {
+		t.Fatalf("disable foreign keys: %v", err)
+	}
+
+	peerID := insertPeerWithIPSet(t, database, "internet-docker", "192.168.1.13", true, true)
+
+	serviceID := insertService(t, database, "http", "80", "tcp")
+	insertPolicyOpts(t, database, policyOpts{
+		name:       "allow-internet-docker",
+		sourceType: "peer",
+		sourceID:   int64(peerID),
+		targetType: "special",
+		targetID:   int64(resolve.SpecialIDInternet),
+		serviceID:  int64(serviceID),
+		action:     "ACCEPT",
+		priority:   100,
+		enabled:    true,
+		direction:  "both",
+	})
+
+	c := NewTestCompiler(database)
+	output, err := c.Compile(context.Background(), peerID)
+	if err != nil {
+		t.Fatalf("compile error: %v", err)
+	}
+
+	if !strings.Contains(output, "-A DOCKER-USER -p tcp -m set ! --match-set runic_private_ranges dst --dport 80") {
+		t.Errorf("expected DOCKER-USER ipset-negation rule for to-Internet, got:\n%s", output)
+	}
+	if strings.Contains(output, "-d "+resolve.InternetSentinel) {
+		t.Errorf("should not emit literal -d "+resolve.InternetSentinel+" destination, got:\n%s", output)
+	}
+}
+
+func TestPreviewCompileInternetForward(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	if _, err := database.Exec("PRAGMA foreign_keys=OFF"); err != nil {
+		t.Fatalf("disable foreign keys: %v", err)
+	}
+
+	sourcePeer := insertPeer(t, database, "internet-source", "10.0.0.1", false)
+	previewHostPeer := insertPeerWithIPSet(t, database, "internet-preview-host", "192.168.1.14", false, true)
+	previewDockerPeer := insertPeerWithIPSet(t, database, "internet-preview-docker", "192.168.1.15", true, true)
+	serviceID := insertService(t, database, "http", "80", "tcp")
+
+	c := NewTestCompiler(database)
+
+	hostRules, err := c.PreviewCompile(context.Background(), previewHostPeer, sourcePeer, "peer", "", resolve.SpecialIDInternet, "special", "", serviceID, "ACCEPT", "forward", "host")
+	if err != nil {
+		t.Fatalf("PreviewCompile host failed: %v", err)
+	}
+
+	foundHostOutput := false
+	for _, rule := range hostRules {
+		if strings.Contains(rule, "-A OUTPUT -p tcp -m set ! --match-set runic_private_ranges dst --dport 80") {
+			foundHostOutput = true
+		}
+		if strings.Contains(rule, resolve.InternetSentinel) {
+			t.Errorf("host preview should not emit "+resolve.InternetSentinel+" literal, got: %s", rule)
+		}
+	}
+	if !foundHostOutput {
+		t.Errorf("expected OUTPUT ipset-negation rule in host preview, got: %v", hostRules)
+	}
+
+	dockerRules, err := c.PreviewCompile(context.Background(), previewDockerPeer, sourcePeer, "peer", "", resolve.SpecialIDInternet, "special", "", serviceID, "ACCEPT", "forward", "docker")
+	if err != nil {
+		t.Fatalf("PreviewCompile docker failed: %v", err)
+	}
+
+	foundDockerOutput := false
+	for _, rule := range dockerRules {
+		if strings.Contains(rule, "-A DOCKER-USER -p tcp -m set ! --match-set runic_private_ranges dst --dport 80") {
+			foundDockerOutput = true
+		}
+		if strings.Contains(rule, resolve.InternetSentinel) {
+			t.Errorf("docker preview should not emit "+resolve.InternetSentinel+" literal, got: %s", rule)
+		}
+	}
+	if !foundDockerOutput {
+		t.Errorf("expected DOCKER-USER ipset-negation rule in docker preview, got: %v", dockerRules)
+	}
+}
+
+func TestCompileInternetNoIpsetFailClosed(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	if _, err := database.Exec("PRAGMA foreign_keys=OFF"); err != nil {
+		t.Fatalf("disable foreign keys: %v", err)
+	}
+
+	peerID := insertPeerWithIPSet(t, database, "internet-noipset", "192.168.1.20", false, false)
+
+	serviceID := insertService(t, database, "http", "80", "tcp")
+	insertPolicyOpts(t, database, policyOpts{
+		name:       "allow-internet-http-noipset",
+		sourceType: "peer",
+		sourceID:   int64(peerID),
+		targetType: "special",
+		targetID:   int64(resolve.SpecialIDInternet),
+		serviceID:  int64(serviceID),
+		action:     "ACCEPT",
+		priority:   100,
+		enabled:    true,
+		direction:  "both",
+	})
+
+	c := NewTestCompiler(database)
+	output, err := c.Compile(context.Background(), peerID)
+	if err == nil {
+		t.Fatalf("expected fail-closed error for to-Internet without ipset, got output:\n%s", output)
+	}
+	if strings.Contains(output, resolve.InternetSentinel) {
+		t.Errorf("should not emit literal "+resolve.InternetSentinel+" destination, got:\n%s", output)
+	}
+	if strings.Contains(output, "-d "+resolve.InternetSentinel) {
+		t.Errorf("should not emit literal -d "+resolve.InternetSentinel+" destination, got:\n%s", output)
+	}
+
+	// Preview with the same non-ipset host context must fail closed too,
+	// matching the Compile gate (hasIPSet && isInternetTarget).
+	_, err = c.PreviewCompile(context.Background(), peerID, peerID, "peer", "", resolve.SpecialIDInternet, "special", "", serviceID, "ACCEPT", "forward", "host")
+	if err == nil {
+		t.Fatalf("expected fail-closed preview error for to-Internet without ipset")
+	}
+}
+
+func TestCompileInternetSourceFailClosed(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	if _, err := database.Exec("PRAGMA foreign_keys=OFF"); err != nil {
+		t.Fatalf("disable foreign keys: %v", err)
+	}
+
+	// Ingress-from-internet has no ipset negation semantics, so it must fail
+	// closed even on hosts with ipset support.
+	peerID := insertPeerWithIPSet(t, database, "internet-source-target", "192.168.1.21", false, true)
+
+	serviceID := insertService(t, database, "http", "80", "tcp")
+	insertPolicyOpts(t, database, policyOpts{
+		name:       "allow-from-internet-http",
+		sourceType: "special",
+		sourceID:   int64(resolve.SpecialIDInternet),
+		targetType: "peer",
+		targetID:   int64(peerID),
+		serviceID:  int64(serviceID),
+		action:     "ACCEPT",
+		priority:   100,
+		enabled:    true,
+		direction:  "both",
+	})
+
+	c := NewTestCompiler(database)
+	output, err := c.Compile(context.Background(), peerID)
+	if err == nil {
+		t.Fatalf("expected fail-closed error for ingress-from-internet, got output:\n%s", output)
+	}
+	if strings.Contains(output, resolve.InternetSentinel) {
+		t.Errorf("should not emit literal "+resolve.InternetSentinel+" source, got:\n%s", output)
+	}
+	if strings.Contains(output, "-s "+resolve.InternetSentinel) {
+		t.Errorf("should not emit literal -s "+resolve.InternetSentinel+" source, got:\n%s", output)
+	}
+}
+
+func TestPreviewInternetSourceFailClosed(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	if _, err := database.Exec("PRAGMA foreign_keys=OFF"); err != nil {
+		t.Fatalf("disable foreign keys: %v", err)
+	}
+
+	targetPeer := insertPeer(t, database, "internet-source-preview-target", "10.0.0.9", false)
+	serviceID := insertService(t, database, "http", "80", "tcp")
+
+	c := NewTestCompiler(database)
+
+	// Backward preview with an internet source must fail closed, matching the
+	// Compile gate in writeTargetSection, and must never emit the sentinel.
+	rules, err := c.PreviewCompile(context.Background(), 0, resolve.SpecialIDInternet, "special", "", targetPeer, "peer", "", serviceID, "ACCEPT", "backward", "host")
+	if err == nil {
+		t.Fatalf("expected fail-closed preview error for ingress-from-internet, got rules: %v", rules)
+	}
+	for _, rule := range rules {
+		if strings.Contains(rule, resolve.InternetSentinel) {
+			t.Errorf("preview should not emit "+resolve.InternetSentinel+" literal, got: %s", rule)
 		}
 	}
 }
