@@ -80,6 +80,21 @@ const (
 	ipsetGroupPrefix   = "runic_group_"
 )
 
+// privateFallbackCIDRs is the single source of truth for the IPv4 private
+// ranges excluded from internet egress. It backs both the
+// runic_private_ranges ipset definitions in writeIpsetDefinitions and the
+// explicit four-negation fallback matches in internetFallbackDstMatch and
+// internetFallbackSrcMatch, so the two cannot diverge. Must not be mutated:
+// frozen as an array and read via privateFallbackCIDRList which returns a
+// copy, so concurrent Compile/PreviewCompile readers never share mutable state.
+var privateFallbackCIDRs = [4]string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8"}
+
+// privateFallbackCIDRList returns a copy of privateFallbackCIDRs so callers
+// cannot mutate the shared table.
+func privateFallbackCIDRList() []string {
+	return append([]string(nil), privateFallbackCIDRs[:]...)
+}
+
 // ErrPreviewValidation marks PreviewCompile errors caused by user-controlled
 // input (bad action/entity/direction/scope, unknown or pending-delete
 // service, bad service ports, invalid IP overrides, unknown special
@@ -103,10 +118,12 @@ var (
 	ErrPreviewFailClosed = errors.New("preview fail-closed")
 )
 
-// failClosedInternetErr returns the fail-closed error for egress-to-internet
-// policies that cannot be rendered without ipset support.
-func failClosedInternetErr(policyName string) error {
-	return fmt.Errorf("policy %s targets internet but peer lacks ipset support (has_ipset=0): fail-closed: %w", policyName, ErrPreviewFailClosed)
+// failClosedEmptyIPErr returns the fail-closed error for egress-to-internet
+// on a peer with no IP address. It carries the policy name and reports the
+// empty-IP reason (not has_ipset=0) so peers with ipset support are not
+// misreported when they have no host address to validate.
+func failClosedEmptyIPErr(policyName string) error {
+	return fmt.Errorf("policy %s targets internet but peer has empty IP: fail-closed: %w", policyName, ErrPreviewFailClosed)
 }
 
 // failClosedIngressInternetErr returns the fail-closed error for
@@ -118,11 +135,11 @@ func failClosedIngressInternetErr(policyName string) error {
 
 // failClosedSentinelLeakErr returns the fail-closed error for a defensive
 // sentinel leak: the resolve.InternetSentinel marker reached the CIDR path
-// outside the ipset branch. This is distinct from failClosedInternetErr
-// (peer lacks ipset support) and by construction only triggers when the
-// ipset gates were bypassed.
+// outside the internet path. Both the ipset and fallback branches are valid
+// internet paths; this by construction only triggers on a CIDR-path wiring
+// mistake when the internet gates were bypassed.
 func failClosedSentinelLeakErr(policyName string) error {
-	return fmt.Errorf("policy %s resolved internet sentinel outside ipset path: fail-closed: %w", policyName, ErrPreviewFailClosed)
+	return fmt.Errorf("policy %s resolved internet sentinel outside internet path: fail-closed: %w", policyName, ErrPreviewFailClosed)
 }
 
 // failClosedInternetIPv6Err returns the fail-closed error for egress-to-internet
@@ -137,8 +154,8 @@ func failClosedInternetIPv6Err(policyName string) error {
 
 // isIPv6Address reports whether s is an IPv6 literal or CIDR. IPv6 text always
 // contains ":", so a substring check suffices for normalized CIDRs (/128,
-// subnets) and bare addresses. Empty strings (preview without host context)
-// report false; that path already fails closed on hasIPSet=false.
+// subnets) and bare addresses. Empty strings report false; empty-IP peers
+// fail closed via explicit gates except peerID 0 which keeps canonical ipset form.
 func isIPv6Address(s string) bool {
 	return strings.Contains(s, ":")
 }
@@ -149,6 +166,27 @@ func isIPv6Address(s string) bool {
 // "-s"/"-d" rule literal.
 func isInternetSentinelCIDR(cidr string) bool {
 	return cidr == resolve.InternetSentinel || strings.HasPrefix(cidr, resolve.InternetSentinel+"/")
+}
+
+// checkInternetPeer validates the host context for egress-to-internet
+// rendering. It fails closed on empty-IP peers via failClosedEmptyIPErr and
+// on IPv6 peers via failClosedInternetIPv6Err, bypassing the gates for
+// peerID 0 which keeps the canonical ipset form with no host to validate.
+// The ipset vs fallback branch selection remains with the callers
+// (writeSourceSection and previewForward select the fallback when !hasIPSet,
+// previewAppendRules is ipset-only defense and never sees user-facing
+// no-ipset, which goes via buildInternetFallbackRules).
+func checkInternetPeer(ipAddress string, peerID int, policyName string) error {
+	if peerID == 0 {
+		return nil
+	}
+	if ipAddress == "" {
+		return failClosedEmptyIPErr(policyName)
+	}
+	if isIPv6Address(ipAddress) {
+		return failClosedInternetIPv6Err(policyName)
+	}
+	return nil
 }
 
 // Preview validation uses internal/resolve
@@ -162,6 +200,8 @@ func isInternetSentinelCIDR(cidr string) bool {
 // path to catch caller wiring mistakes. Both useIpset and ipsetName must be
 // unset (false,"") since the builders select the internet branch solely on
 // ruleDir and always emit the hardcoded runic_private_ranges negation matches.
+// This assertion applies only to the ipset internet branch; the no-ipset
+// fallback emits no ipset reference by construction and never calls this helper.
 //
 // Internal wiring invariant: never triggered by user input (callers always
 // pass false,"" here by construction). Wraps ErrPreviewValidation so
@@ -670,11 +710,12 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 		controlPlanePort = DefaultControlPlanePort
 	}
 
-	return c.generateIptablesPayload(ctx, hostname, ipAddress, hasDocker, hasIPSet, policies, services, ipsets, groupIDToIpsetName, controlPlanePort)
+	return c.generateIptablesPayload(ctx, peerID, hostname, ipAddress, hasDocker, hasIPSet, policies, services, ipsets, groupIDToIpsetName, controlPlanePort)
 }
 
 func (c *Compiler) generateIptablesPayload(
 	ctx context.Context,
+	peerID int,
 	hostname, ipAddress string,
 	hasDocker, hasIPSet bool,
 	policies []policyInfo,
@@ -693,7 +734,7 @@ func (c *Compiler) generateIptablesPayload(
 	c.writeFilterTableHeader(&buf, hasDocker)
 	rw.writeStandardRules(hasDocker, controlPlanePort)
 
-	if err := c.writePolicySection(ctx, &buf, rw, policies, services, groupIDToIpsetName, hasDocker, hasIPSet, ipAddress); err != nil {
+	if err := c.writePolicySection(ctx, &buf, rw, peerID, policies, services, groupIDToIpsetName, hasDocker, hasIPSet, ipAddress); err != nil {
 		return "", err
 	}
 
@@ -781,7 +822,7 @@ func (c *Compiler) writeIpsetDefinitions(buf *strings.Builder, hasIPSet bool, ip
 		}
 	}
 
-	privateCIDRs := []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8"}
+	privateCIDRs := privateFallbackCIDRList()
 	if hasIPSet {
 		buf.WriteString("# --- Ipset: Private Ranges for __internet__ exclusion (IPv4-only) ---\n")
 		buf.WriteString("create runic_private_ranges hash:net family inet\n")
@@ -810,6 +851,7 @@ func (c *Compiler) writePolicySection(
 	ctx context.Context,
 	buf *strings.Builder,
 	rw *ruleWriter,
+	peerID int,
 	policies []policyInfo,
 	services map[int]ServiceInfo,
 	groupIDToIpsetName map[int]string,
@@ -818,7 +860,7 @@ func (c *Compiler) writePolicySection(
 	ipAddress string,
 ) error {
 	for i := range policies {
-		if err := c.writeSinglePolicy(ctx, buf, rw, &policies[i], services, groupIDToIpsetName, hasDocker, hasIPSet, ipAddress); err != nil {
+		if err := c.writeSinglePolicy(ctx, buf, rw, peerID, &policies[i], services, groupIDToIpsetName, hasDocker, hasIPSet, ipAddress); err != nil {
 			return err
 		}
 	}
@@ -830,6 +872,7 @@ func (c *Compiler) writeSinglePolicy(
 	ctx context.Context,
 	buf *strings.Builder,
 	rw *ruleWriter,
+	peerID int,
 	pol *policyInfo,
 	services map[int]ServiceInfo,
 	groupIDToIpsetName map[int]string,
@@ -893,7 +936,7 @@ func (c *Compiler) writeSinglePolicy(
 	}
 
 	// Process as SOURCE (Egress traffic)
-	if err := c.writeSourceSection(ctx, buf, rw, pol, portClauses, serviceName, groupIDToIpsetName, hasDocker, hasIPSet, ipAddress, writeToHost, writeToDocker, noConntrack); err != nil {
+	if err := c.writeSourceSection(ctx, buf, rw, peerID, pol, portClauses, serviceName, groupIDToIpsetName, hasDocker, hasIPSet, ipAddress, writeToHost, writeToDocker, noConntrack); err != nil {
 		return err
 	}
 
@@ -1020,6 +1063,7 @@ func (c *Compiler) writeSourceSection(
 	ctx context.Context,
 	buf *strings.Builder,
 	rw *ruleWriter,
+	peerID int,
 	pol *policyInfo,
 	portClauses []PortClause,
 	serviceName string,
@@ -1034,31 +1078,24 @@ func (c *Compiler) writeSourceSection(
 	}
 
 	isInternetTarget := pol.TargetType == "special" && pol.TargetID == resolve.SpecialIDInternet
-	// Fail closed: to-Internet requires the runic_private_ranges ipset. Without
-	// ipset support the resolver's resolve.InternetSentinel marker would leak
-	// into a "-d" literal, which iptables-restore would reject (or worse, misinterpret).
-	// Return an error instead of emitting invalid rules.
-	// IPv4-only: runic_private_ranges holds only IPv4 private CIDRs (family
-	// inet), so an IPv6 peer would bypass the OUTPUT dst negation for IPv6
-	// internet destinations. Fail closed on IPv6 peers until an inet6
-	// private-ranges set with ip6tables rules exists.
-	// Empty peer IP (peers created without an address) is not IPv6
-	// (isIPv6Address("")==false) yet must not emit the IPv4 negation:
-	// fail closed via failClosedInternetErr.
-	if isInternetTarget && ipAddress == "" {
-		return failClosedInternetErr(pol.Name)
-	}
-	if isInternetTarget && isIPv6Address(ipAddress) {
-		return failClosedInternetIPv6Err(pol.Name)
-	}
-	if isInternetTarget && !hasIPSet {
-		return failClosedInternetErr(pol.Name)
+	// Internet targets share the host-context gate via checkInternetPeer:
+	// peers with ipset support use the hardened runic_private_ranges
+	// negation, while peers without ipset support render the explicit
+	// four-negation fallback (anchored at 0.0.0.0/0) so the resolver's
+	// resolve.InternetSentinel marker never leaks into a "-d" literal.
+	// IPv4-only: both the ipset and the fallback negations cover only IPv4
+	// private CIDRs, so an IPv6 peer would bypass the OUTPUT dst negation
+	// for IPv6 internet destinations. Fail closed on IPv6 peers until an
+	// inet6 private-ranges set with ip6tables rules exists. Empty peer IP
+	// fails closed via the shared helper.
+	if isInternetTarget {
+		if err := checkInternetPeer(ipAddress, peerID, pol.Name); err != nil {
+			return err
+		}
 	}
 
 	targetName := c.formatEntityName(ctx, pol.TargetType, pol.TargetID)
 	fmt.Fprintf(buf, "# As Source (Egress to %s)\n", targetName)
-
-	useInternetIpset := hasIPSet && isInternetTarget
 
 	canUseIpset := hasIPSet && pol.TargetType == "group"
 	var ipsetName string
@@ -1089,16 +1126,24 @@ func (c *Compiler) writeSourceSection(
 				buf.WriteString(rule + "\n")
 			}
 		}
-	case useInternetIpset:
-		// ruleDir-only: keep useIpset/ipsetName unset so the builders take
-		// the internet branch purely on ruleDir (mirrors previewAppendRules).
-		isMulticastTarget := false
-		rules, err := c.writeRules(pol, portClauses, false, "", nil, ipAddress, writeToHost, writeToDocker, noConntrack, ruleDirInternet, isMulticastTarget)
-		if err != nil {
-			return err
-		}
-		for _, rule := range rules {
-			buf.WriteString(rule + "\n")
+	case isInternetTarget:
+		if hasIPSet {
+			// ruleDir-only: keep useIpset/ipsetName unset so the builders take
+			// the internet branch purely on ruleDir (mirrors previewAppendRules).
+			isMulticastTarget := false
+			rules, err := c.writeRules(pol, portClauses, false, "", nil, ipAddress, writeToHost, writeToDocker, noConntrack, ruleDirInternet, isMulticastTarget)
+			if err != nil {
+				return err
+			}
+			for _, rule := range rules {
+				buf.WriteString(rule + "\n")
+			}
+		} else {
+			// No-ipset fallback: explicit four-negation match anchored at
+			// 0.0.0.0/0. Emits no runic_private_ranges reference.
+			for _, rule := range c.buildInternetFallbackRules(pol, portClauses, writeToHost, writeToDocker, noConntrack) {
+				buf.WriteString(rule + "\n")
+			}
 		}
 	default:
 		cidrs, err := c.resolveEntityCIDRs(ctx, pol.TargetType, pol.TargetID, pol.TargetIP, ipAddress)
@@ -1106,9 +1151,10 @@ func (c *Compiler) writeSourceSection(
 			return fmt.Errorf("resolve target for policy %s: %w", pol.Name, err)
 		}
 		// Defense-in-depth (unreachable in normal flow): the resolve.InternetSentinel
-		// must only travel the ipset path above — when isInternetTarget && hasIPSet
-		// the useInternetIpset case is taken, and when !hasIPSet the fail-closed
-		// error returns above, so the CIDR path can never see the sentinel.
+		// must only travel the internet path above — when isInternetTarget the
+		// isInternetTarget case is taken (ipset negation when hasIPSet, the
+		// four-negation fallback otherwise), so the CIDR path can never see
+		// the sentinel.
 		// If it ever does (e.g., a future caller bypasses those gates), refuse
 		// to emit "-d <sentinel>" rather than producing invalid iptables.
 		for _, cidr := range cidrs {
@@ -1245,6 +1291,8 @@ func (c *Compiler) logDropRule(action, chain, match string) []string {
 //	"target" — rules are for ingress (INPUT matches source, OUTPUT is return traffic)
 //	"source" — rules are for egress (OUTPUT matches destination, INPUT is return traffic)
 //	"internet" — same as "source" but uses runic_private_ranges ipset negation.
+//	Internet via writeRules is ipset-only; no-ipset fallback bypasses
+//	writeRules via buildInternetFallbackRules.
 //	The internet path is selected solely by ruleDir; callers pass false,""
 //	for useIpset/ipsetName and the builders assert it while always emitting
 //	the hardcoded negation matches.
@@ -1268,6 +1316,19 @@ func (c *Compiler) writeRules(
 	ruleDir ruleDir,
 	isMulticastTarget bool,
 ) ([]string, error) {
+	// Fail-closed marker guard: the resolve.InternetSentinel marker (bare or
+	// normalized) must never reach a "-s"/"-d" literal. Internet targets use
+	// the ruleDirInternet ipset/fallback paths with nil cidrs; any sentinel
+	// on the CIDR path indicates a caller wiring mistake.
+	for _, cidr := range cidrs {
+		if isInternetSentinelCIDR(cidr) {
+			policyName := "preview"
+			if pol != nil && pol.Name != "" {
+				policyName = pol.Name
+			}
+			return nil, failClosedSentinelLeakErr(policyName)
+		}
+	}
 	if pol.Action == ActionAccept {
 		return c.buildAcceptRules(pol, portClauses, useIpset, ipsetName, cidrs, ipAddress, writeToHost, writeToDocker, noConntrack, ruleDir, isMulticastTarget)
 	}
@@ -1302,19 +1363,9 @@ func (c *Compiler) buildAcceptRules(
 	}
 
 	for _, pc := range portClauses {
-		// Build port matches depending on direction
-		var primaryPortMatch, returnPortMatch string
-		primaryPortMatch = pc.PortMatch
-		if pc.SrcPortMatch != "" {
-			primaryPortMatch = pc.SrcPortMatch + " " + primaryPortMatch
-		}
-		returnPortMatch = invertPortMatch(pc.PortMatch, pc.SrcPortMatch)
+		primaryPortMatch, returnPortMatch := splitPortMatches(pc)
 
-		// Build conntrack part based on noConntrack flag
-		conntrackFull := "-m conntrack --ctstate NEW,ESTABLISHED"
-		if noConntrack {
-			conntrackFull = ""
-		}
+		conntrackFull := conntrackMatch(noConntrack)
 
 		// Internet path: gated solely on ruleDir. Emits the hardened
 		// runic_private_ranges negation (OUTPUT dst + INPUT src return +
@@ -1322,18 +1373,20 @@ func (c *Compiler) buildAcceptRules(
 		// scope enabled no rules are emitted, matching the non-internet paths.
 		// useIpset/ipsetName are not consulted here; reject any set value to
 		// catch caller wiring mistakes (callers must pass false,"").
+		// Fragments join via joinRuleParts like the no-ipset fallback so
+		// empty port or conntrack segments never emit double spaces.
 		if ruleDir == ruleDirInternet {
 			if err := assertInternetIpset(useIpset, ipsetName); err != nil {
 				return nil, err
 			}
 			if writeToHost {
 				rules = append(rules,
-					fmt.Sprintf("-A OUTPUT -p %s %s %s %s -j %s", pc.Protocol, privateIpsetMatch, primaryPortMatch, conntrackFull, pol.Action),
-					fmt.Sprintf("-A INPUT -p %s %s %s %s -j ACCEPT", pc.Protocol, privateIpsetSrcMatch(), returnPortMatch, conntrackFull),
+					joinRuleParts("-A OUTPUT", "-p", pc.Protocol, privateIpsetMatch, primaryPortMatch, conntrackFull, "-j", pol.Action),
+					joinRuleParts("-A INPUT", "-p", pc.Protocol, privateIpsetSrcMatch(), returnPortMatch, conntrackFull, "-j", "ACCEPT"),
 				)
 			}
 			if writeToDocker {
-				rules = append(rules, fmt.Sprintf("-A DOCKER-USER -p %s %s %s %s -j %s", pc.Protocol, privateIpsetMatch, primaryPortMatch, conntrackFull, pol.Action))
+				rules = append(rules, joinRuleParts("-A DOCKER-USER", "-p", pc.Protocol, privateIpsetMatch, primaryPortMatch, conntrackFull, "-j", pol.Action))
 			}
 			continue
 		}
@@ -1480,11 +1533,11 @@ func (c *Compiler) buildLogDropRules(
 				return nil, err
 			}
 			if writeToHost {
-				match := fmt.Sprintf("-p %s %s %s", pc.Protocol, privateIpsetMatch, pc.PortMatch)
+				match := joinRuleParts("-p", pc.Protocol, privateIpsetMatch, pc.PortMatch)
 				rules = append(rules, c.logDropRule(pol.Action, ChainOutput, match)...)
 			}
 			if writeToDocker {
-				match := fmt.Sprintf("-p %s %s %s", pc.Protocol, privateIpsetMatch, pc.PortMatch)
+				match := joinRuleParts("-p", pc.Protocol, privateIpsetMatch, pc.PortMatch)
 				rules = append(rules, c.logDropRule(pol.Action, ChainDockerUser, match)...)
 			}
 			continue
@@ -1552,6 +1605,114 @@ func privateIpsetSrcMatch() string {
 	return "-m set ! --match-set " + ipsetPrivateRanges + " src"
 }
 
+// internetFallbackMatch returns the no-ipset Internet fallback match for the
+// given address flag ("-d" for OUTPUT/DOCKER-USER, "-s" for INPUT return):
+// anchored at 0.0.0.0/0 with explicit RFC1918+loopback negations from
+// privateFallbackCIDRs. Single helper so the dst/src forms cannot diverge.
+func internetFallbackMatch(flag string) string {
+	parts := []string{flag + " 0.0.0.0/0"}
+	for _, cidr := range privateFallbackCIDRList() {
+		parts = append(parts, "! "+flag+" "+cidr)
+	}
+	return strings.Join(parts, " ")
+}
+
+// internetFallbackDstMatch returns the no-ipset Internet fallback match for
+// OUTPUT and DOCKER-USER rules: anchored at 0.0.0.0/0 with four explicit
+// RFC1918+loopback negations. It mirrors the runic_private_ranges CIDRs via
+// privateFallbackCIDRs without referencing the ipset, so peers without
+// ipset support can still express egress-to-internet.
+func internetFallbackDstMatch() string {
+	return internetFallbackMatch("-d")
+}
+
+// internetFallbackSrcMatch returns the no-ipset Internet fallback match for
+// INPUT return rules: the ! -s equivalents of internetFallbackDstMatch,
+// anchored at 0.0.0.0/0.
+func internetFallbackSrcMatch() string {
+	return internetFallbackMatch("-s")
+}
+
+// joinRuleParts joins non-empty rule fragments with single spaces so empty
+// port or conntrack segments never emit double spaces.
+func joinRuleParts(parts ...string) string {
+	nonEmpty := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p != "" {
+			nonEmpty = append(nonEmpty, p)
+		}
+	}
+	return strings.Join(nonEmpty, " ")
+}
+
+// splitPortMatches derives the primary (OUTPUT) and return (INPUT) port
+// matches for one PortClause. Shared by buildAcceptRules and
+// buildInternetFallbackRules so the two cannot diverge.
+func splitPortMatches(pc PortClause) (primary, ret string) {
+	primary = pc.PortMatch
+	if pc.SrcPortMatch != "" {
+		primary = pc.SrcPortMatch + " " + primary
+	}
+	ret = invertPortMatch(pc.PortMatch, pc.SrcPortMatch)
+	return primary, ret
+}
+
+// conntrackMatch returns the conntrack match for ACCEPT rules, or "" when
+// noConntrack disables it. Shared by buildAcceptRules and
+// buildInternetFallbackRules so the two cannot diverge.
+func conntrackMatch(noConntrack bool) string {
+	if noConntrack {
+		return ""
+	}
+	return "-m conntrack --ctstate NEW,ESTABLISHED"
+}
+
+// buildInternetFallbackRules renders egress-to-internet for peers without
+// ipset support using the explicit four-negation fallback anchored at
+// 0.0.0.0/0. It mirrors the ipset internet path shape exactly: ACCEPT uses
+// primaryPortMatch (PortMatch plus SrcPortMatch) on OUTPUT with the
+// invertPortMatch-derived returnPortMatch on the INPUT return, while
+// DROP/LOG_DROP uses PortMatch only like the ipset path; noConntrack
+// (ACCEPT includes the conntrack match unless disabled; DROP/LOG_DROP omits
+// conntrack like the ipset path), writeToHost/writeToDocker scope selection
+// (with neither scope enabled no rules are emitted), and pol.Action (ACCEPT
+// gets OUTPUT plus the INPUT return; DROP/LOG_DROP are OUTPUT-only via
+// logDropRule). Rule fragments are joined via joinRuleParts so empty port or
+// conntrack segments never emit double spaces. It emits no
+// runic_private_ranges reference.
+func (c *Compiler) buildInternetFallbackRules(pol *policyInfo, portClauses []PortClause, writeToHost, writeToDocker bool, noConntrack bool) []string {
+	var rules []string
+	dstMatch := internetFallbackDstMatch()
+	srcMatch := internetFallbackSrcMatch()
+	for _, pc := range portClauses {
+		primaryPortMatch, returnPortMatch := splitPortMatches(pc)
+
+		conntrackFull := conntrackMatch(noConntrack)
+
+		if pol.Action == ActionAccept {
+			if writeToHost {
+				rules = append(rules,
+					joinRuleParts("-A OUTPUT", dstMatch, "-p", pc.Protocol, primaryPortMatch, conntrackFull, "-j", pol.Action),
+					joinRuleParts("-A INPUT", srcMatch, "-p", pc.Protocol, returnPortMatch, conntrackFull, "-j ACCEPT"),
+				)
+			}
+			if writeToDocker {
+				rules = append(rules, joinRuleParts("-A DOCKER-USER", dstMatch, "-p", pc.Protocol, primaryPortMatch, conntrackFull, "-j", pol.Action))
+			}
+		} else {
+			if writeToHost {
+				match := joinRuleParts(dstMatch, "-p", pc.Protocol, pc.PortMatch)
+				rules = append(rules, c.logDropRule(pol.Action, ChainOutput, match)...)
+			}
+			if writeToDocker {
+				match := joinRuleParts(dstMatch, "-p", pc.Protocol, pc.PortMatch)
+				rules = append(rules, c.logDropRule(pol.Action, ChainDockerUser, match)...)
+			}
+		}
+	}
+	return rules
+}
+
 // filterSelfReferencingCIDRs returns cidrs with any entries equal to the peer's
 // own normalized CIDR (e.g., "10.0.0.1/32") removed. Peer-to-self traffic is
 // not relevant for firewall rules and would otherwise generate matching rules
@@ -1597,6 +1758,7 @@ type previewState struct {
 	// Resolved inputs
 	ipAddress        string
 	hasIPSet         bool
+	peerID           int
 	serviceName      string
 	protocol         string
 	noConntrack      bool
@@ -1619,6 +1781,7 @@ type previewState struct {
 // (multicast, IGMP, VRRP) port-skip logic.
 func (c *Compiler) loadPreviewInputs(ctx context.Context, peerID, serviceID int, direction, targetScope string) (previewState, error) {
 	st := previewState{
+		peerID:      peerID,
 		direction:   direction,
 		targetScope: targetScope,
 	}
@@ -1652,10 +1815,11 @@ func (c *Compiler) loadPreviewInputs(ctx context.Context, peerID, serviceID int,
 		}
 		st.hasIPSet = scanBool(hasIPSetRaw)
 	} else {
-		// No host context: fail closed (hasIPSet=false) so internet previews
-		// fail identically to Compile on has_ipset=0 instead of showing
-		// hardened runic_private_ranges negation with no host to apply it.
-		st.hasIPSet = false
+		// No peer context: keep the canonical ipset form (hasIPSet=true) so
+		// internet previews render the hardened runic_private_ranges
+		// negation. Empty-IP/IPv6 gates are bypassed for peerID 0 via
+		// st.peerID in previewForward/previewAppendRules.
+		st.hasIPSet = true
 	}
 
 	// Load service - MC-011: Include no_conntrack column
@@ -1708,37 +1872,38 @@ func (c *Compiler) resolvePreviewSourcesAndTargets(ctx context.Context, st *prev
 // chains so host and docker preview sections share one call path. Internet
 // targets use ipset semantics (runic_private_ranges negation, IPv4-only) so
 // the preview matches the Compile path in writeSourceSection, including the
-// fail-closed behavior when the preview peer lacks ipset support or is an
-// IPv6 peer. The internet path is selected solely by ruleDir; callers pass
-// false,"" for useIpset/ipsetName and the builders assert it, so this helper
-// always passes false,"" and lets ruleDir drive the negation match.
+// fail-closed behavior for empty-IP/IPv6 peers via checkInternetPeer.
+// No-ipset fallback is handled in previewForward via
+// buildInternetFallbackRules; this helper is ipset-only defense. PeerID 0
+// (no peer context) keeps the canonical ipset form and bypasses the gates
+// via checkInternetPeer. The internet path is selected solely by
+// ruleDir; callers pass false,"" for useIpset/ipsetName and the builders
+// assert it, so this helper always passes false,"" and lets ruleDir drive
+// the negation match.
 func (c *Compiler) previewAppendRules(rules []string, st *previewState, pol *policyInfo, portClauses []PortClause, cidrs []string, isMulticastTarget bool, ruleDir ruleDir, writeToHost, writeToDocker bool) ([]string, error) {
 	useIpset := false
 	ipsetName := ""
 	if ruleDir == ruleDirInternet {
-		// Mirror writeSourceSection gates: empty peer IP fails closed (it is
-		// not IPv6, yet must not emit the IPv4 negation).
-		if st.ipAddress == "" {
-			return nil, failClosedInternetErr("preview")
+		if err := checkInternetPeer(st.ipAddress, st.peerID, "preview"); err != nil {
+			return nil, err
 		}
-		if isIPv6Address(st.ipAddress) {
-			return nil, failClosedInternetIPv6Err("preview")
-		}
-		if !st.hasIPSet {
-			return nil, failClosedInternetErr("preview")
+		// Defense: user-facing no-ipset goes via buildInternetFallbackRules
+		// in previewForward; reaching here with !hasIPSet indicates a caller
+		// wiring mistake, not a user-facing fail-closed.
+		if st.peerID != 0 && !st.hasIPSet {
+			return nil, fmt.Errorf("preview internet without ipset must use fallback (peer %d): programmer error: %w", st.peerID, ErrPreviewValidation)
 		}
 		// ruleDir-only: keep useIpset/ipsetName unset so the builders take
 		// the internet branch purely on ruleDir.
 	} else {
 		// Defense-in-depth: the sentinel (bare or normalized via
 		// NormalizeToCIDR, e.g. "__internet__/32") must never reach a
-		// "-s"/"-d" literal on the CIDR path.
+		// "-s"/"-d" literal on the CIDR path. Unify with the writeRules
+		// guard on failClosedSentinelLeakErr; ingress/internet errors stay
+		// with the pre-resolution semantic gates.
 		for _, cidr := range cidrs {
 			if isInternetSentinelCIDR(cidr) {
-				if ruleDir == ruleDirTarget {
-					return nil, failClosedIngressInternetErr("preview")
-				}
-				return nil, failClosedInternetErr("preview")
+				return nil, failClosedSentinelLeakErr("preview")
 			}
 		}
 	}
@@ -1824,23 +1989,26 @@ func (c *Compiler) previewForward(st *previewState, targetType string, targetID 
 	}
 
 	// Use writeSourceRules for forward direction (egress). Gate the internet
-	// path identically to writeSourceSection (hasIPSet && isInternetTarget) so
-	// the preview never shows ipset-negation rules for hosts that fail closed
-	// at Compile time. IPv4-only: IPv6 peers fail closed like Compile because
+	// path identically to writeSourceSection via checkInternetPeer: peers with
+	// ipset support use the hardened runic_private_ranges negation, while
+	// peers without ipset support render the explicit four-negation fallback
+	// anchored at 0.0.0.0/0. PeerID 0 (no peer context) keeps the canonical
+	// ipset form. IPv4-only: IPv6 peers fail closed like Compile because
 	// runic_private_ranges cannot cover IPv6 internet destinations. Empty peer
-	// IP fails closed like Compile (it is not IPv6 yet must not emit the IPv4
-	// negation).
-	if st.isInternetTarget && st.ipAddress == "" {
-		return nil, failClosedInternetErr("preview")
-	}
-	if st.isInternetTarget && isIPv6Address(st.ipAddress) {
-		return nil, failClosedInternetIPv6Err("preview")
-	}
-	if st.isInternetTarget && st.hasIPSet {
-		return c.previewAppendRules(rules, st, st.pol, st.portClauses, nil, false, ruleDirInternet, writeToHost, writeToDocker)
-	}
-	if st.isInternetTarget && !st.hasIPSet {
-		return nil, failClosedInternetErr("preview")
+	// IP fails closed like Compile; skipped for peerID 0 which has no host
+	// to validate via checkInternetPeer.
+	if st.isInternetTarget {
+		if err := checkInternetPeer(st.ipAddress, st.peerID, "preview"); err != nil {
+			return nil, err
+		}
+		if st.peerID == 0 || st.hasIPSet {
+			return c.previewAppendRules(rules, st, st.pol, st.portClauses, nil, false, ruleDirInternet, writeToHost, writeToDocker)
+		}
+		// No-ipset fallback: explicit four-negation match anchored at
+		// 0.0.0.0/0, mirroring writeSourceSection. Emits no
+		// runic_private_ranges reference. Shared by host and docker via
+		// this function through previewHostForward/previewDockerForward.
+		return append(rules, c.buildInternetFallbackRules(st.pol, st.portClauses, writeToHost, writeToDocker, st.noConntrack)...), nil
 	}
 	isMulticastTarget := targetType == "special" && isMulticastSpecialID(targetID)
 	return c.previewAppendRules(rules, st, st.pol, st.portClauses, st.targetCIDRs, isMulticastTarget, ruleDirSource, writeToHost, writeToDocker)

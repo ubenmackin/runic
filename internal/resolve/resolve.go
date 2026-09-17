@@ -21,9 +21,10 @@ const (
 )
 
 // InternetSentinel is the marker returned for the internet special target.
-// It is NOT a valid iptables address. Callers must translate it via the
-// runic_private_ranges ipset path and must fail closed when the target host
-// has no ipset support, so the marker never reaches a "-d"/"-s" rule literal.
+// It is NOT a valid iptables address. Callers must translate it via
+// runic_private_ranges when hasIPSet else explicit 0.0.0.0/0 + four
+// !-d/!-s fallback; fail closed only for ingress/IPv6/empty-IP/sentinel-leak,
+// so the marker never reaches a "-d"/"-s" rule literal.
 const InternetSentinel = "__internet__"
 
 // IsValidDirection reports whether value is a known policy direction.
