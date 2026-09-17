@@ -2,10 +2,13 @@
 package alerts
 
 import (
+	"bufio"
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -2474,5 +2477,235 @@ func TestSMTPSender_TamperedCorrupt_ResaveHint(t *testing.T) {
 				t.Errorf("expected actionable re-save hint containing %q in error, got %q", "save", err.Error())
 			}
 		})
+	}
+}
+
+// TestSend_HandshakeWithoutDoubleHello verifies the SMTP conversation performs
+// exactly one EHLO (issued lazily by the stdlib) followed by
+// AUTH -> MAIL -> RCPT -> DATA with no second HELO/EHLO.
+//
+// It spins up a loopback-only TCP stub (127.0.0.1, ephemeral port) so the test
+// never dials a real network. The stub advertises STARTTLS to prove the client
+// handles the STARTTLS extension query without attempting TLS when
+// UseTLS=false and UseSMTPS=false. A successful Send proves the existing
+// send-success path still passes, and any error is asserted to never contain
+// the stdlib "Hello called after other methods" string that the old explicit
+// Hello-after-Extension sequence used to trigger.
+func TestSend_HandshakeWithoutDoubleHello(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	enc, err := crypto.NewEncryptor("handshake-no-double-helo-passphrase-!!!")
+	if err != nil {
+		t.Fatalf("failed to create encryptor: %v", err)
+	}
+	encryptedPassword, err := enc.Encrypt("testpass")
+	if err != nil {
+		t.Fatalf("failed to encrypt smtp password: %v", err)
+	}
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to start loopback SMTP stub: %v", err)
+	}
+	defer ln.Close()
+	stubPort := ln.Addr().(*net.TCPAddr).Port
+	stubHost := "127.0.0.1"
+
+	var mu sync.Mutex
+	var verbs []string
+	var rawCommands []string
+	var messageData strings.Builder
+	sawSTARTTLS := false
+	done := make(chan struct{})
+
+	recordVerb := func(raw string) string {
+		verb := strings.ToUpper(strings.SplitN(strings.TrimSpace(raw), " ", 2)[0])
+		mu.Lock()
+		rawCommands = append(rawCommands, raw)
+		verbs = append(verbs, verb)
+		mu.Unlock()
+		return verb
+	}
+
+	go func() {
+		defer close(done)
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		reader := bufio.NewReader(conn)
+		writer := bufio.NewWriter(conn)
+		if _, err := writer.WriteString("220 fake ESMTP ready\r\n"); err != nil {
+			return
+		}
+		if err := writer.Flush(); err != nil {
+			return
+		}
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				return
+			}
+			trimmed := strings.TrimRight(line, "\r\n")
+			verb := recordVerb(trimmed)
+			upper := strings.ToUpper(trimmed)
+			switch verb {
+			case "EHLO", "HELO":
+				arg := "client"
+				if parts := strings.SplitN(trimmed, " ", 2); len(parts) == 2 && strings.TrimSpace(parts[1]) != "" {
+					arg = strings.TrimSpace(parts[1])
+				}
+				// Advertise STARTTLS (plus AUTH) so the stub exercises the
+				// STARTTLS extension query path without requiring TLS.
+				_, _ = writer.WriteString("250-fake greets " + arg + "\r\n250-8BITMIME\r\n250-STARTTLS\r\n250-AUTH PLAIN LOGIN\r\n250 OK\r\n")
+			case "STARTTLS":
+				mu.Lock()
+				sawSTARTTLS = true
+				mu.Unlock()
+				_, _ = writer.WriteString("220 Ready to start TLS\r\n")
+			case "AUTH":
+				// PLAIN arrives as a single line ("AUTH PLAIN <b64>").
+				// LOGIN without an initial response needs a challenge round-trip.
+				if upper == "AUTH LOGIN" {
+					_, _ = writer.WriteString("334 VXNlcm5hbWU6\r\n")
+					if err := writer.Flush(); err != nil {
+						return
+					}
+					if _, err := reader.ReadString('\n'); err != nil {
+						return
+					}
+					_, _ = writer.WriteString("334 UGFzc3dvcmQ6\r\n")
+					if err := writer.Flush(); err != nil {
+						return
+					}
+					if _, err := reader.ReadString('\n'); err != nil {
+						return
+					}
+					_, _ = writer.WriteString("235 Authentication successful\r\n")
+				} else {
+					_, _ = writer.WriteString("235 Authentication successful\r\n")
+				}
+			case "MAIL", "RCPT", "RSET", "NOOP":
+				_, _ = writer.WriteString("250 OK\r\n")
+			case "DATA":
+				_, _ = writer.WriteString("354 End data with <CR><LF>.<CR><LF>\r\n")
+				if err := writer.Flush(); err != nil {
+					return
+				}
+				var data strings.Builder
+				for {
+					dataLine, err := reader.ReadString('\n')
+					if err != nil {
+						return
+					}
+					if strings.TrimRight(dataLine, "\r\n") == "." {
+						break
+					}
+					data.WriteString(dataLine)
+				}
+				mu.Lock()
+				messageData.WriteString(data.String())
+				mu.Unlock()
+				_, _ = writer.WriteString("250 OK: queued\r\n")
+			case "QUIT":
+				_, _ = writer.WriteString("221 Bye\r\n")
+				_ = writer.Flush()
+				return
+			default:
+				_, _ = writer.WriteString("502 unimplemented\r\n")
+			}
+			if err := writer.Flush(); err != nil {
+				return
+			}
+		}
+	}()
+
+	sender := NewSMTPSender(&SMTPConfig{
+		Host:        stubHost,
+		Port:        stubPort,
+		Username:    "testuser",
+		Password:    encryptedPassword,
+		FromAddress: "alerts@example.com",
+		Enabled:     true,
+		UseTLS:      false,
+		UseSMTPS:    false,
+	}, enc, database)
+
+	sendErr := sender.Send("recipient@example.com", "Handshake check", "hello body")
+
+	// Wait for the stub to finish (client Close terminates the connection).
+	// Timer+select keeps the test fast and prevents hangs without sleeping.
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		mu.Lock()
+		soFar := append([]string(nil), rawCommands...)
+		mu.Unlock()
+		t.Fatalf("timed out waiting for SMTP stub to finish; commands so far: %v", soFar)
+	}
+
+	mu.Lock()
+	gotVerbs := append([]string(nil), verbs...)
+	gotRaw := append([]string(nil), rawCommands...)
+	gotData := messageData.String()
+	gotSTARTTLS := sawSTARTTLS
+	mu.Unlock()
+
+	if sendErr != nil {
+		if strings.Contains(sendErr.Error(), "Hello called after other methods") {
+			t.Fatalf("Send failed with double-HELO symptom: %v (conversation: %v)", sendErr, gotRaw)
+		}
+		t.Fatalf("Send with UseTLS=false UseSMTPS=false failed: %v (conversation: %v)", sendErr, gotRaw)
+	}
+
+	// The stub must see the STARTTLS advertisement query path without the
+	// client attempting STARTTLS when UseTLS=false.
+	if gotSTARTTLS {
+		t.Errorf("client sent STARTTLS even though UseTLS=false; commands: %v", gotRaw)
+	}
+
+	ehloCount := 0
+	heloCount := 0
+	var handshake []string
+	for _, v := range gotVerbs {
+		switch v {
+		case "EHLO":
+			ehloCount++
+			handshake = append(handshake, v)
+		case "HELO":
+			heloCount++
+			handshake = append(handshake, v)
+		case "AUTH", "MAIL", "RCPT", "DATA":
+			handshake = append(handshake, v)
+		}
+	}
+
+	if ehloCount+heloCount != 1 {
+		t.Errorf("expected exactly one EHLO/HELO (by stdlib only), got EHLO=%d HELO=%d full conversation: %v", ehloCount, heloCount, gotRaw)
+	}
+	if ehloCount != 1 {
+		t.Errorf("expected exactly one EHLO, got %d (HELO=%d) full conversation: %v", ehloCount, heloCount, gotRaw)
+	}
+	if heloCount != 0 {
+		t.Errorf("expected no HELO fallback, got %d full conversation: %v", heloCount, gotRaw)
+	}
+
+	wantHandshake := []string{"EHLO", "AUTH", "MAIL", "RCPT", "DATA"}
+	if len(handshake) != len(wantHandshake) {
+		t.Fatalf("handshake = %v, want %v (full conversation: %v)", handshake, wantHandshake, gotRaw)
+	}
+	for i := range wantHandshake {
+		if handshake[i] != wantHandshake[i] {
+			t.Fatalf("handshake = %v, want %v (full conversation: %v)", handshake, wantHandshake, gotRaw)
+		}
+	}
+
+	if !strings.Contains(gotData, "Handshake check") {
+		t.Errorf("stub did not receive message Subject; data snippet: %q", extractSnippet(gotData, "Subject", 80))
+	}
+	if !strings.Contains(gotData, "hello body") {
+		t.Errorf("stub did not receive message body; data: %q", gotData)
 	}
 }
