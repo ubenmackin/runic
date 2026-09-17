@@ -812,7 +812,7 @@ func TestSendDigest_EmptyEmail(t *testing.T) {
 	}, nil, nil)
 
 	gen := &DigestGenerator{
-		smtp: smtp,
+		smtpHolder: smtpHolder{sender: smtp},
 	}
 
 	err := gen.SendDigest(digest, "")
@@ -838,7 +838,7 @@ func TestSendDigest_InvalidSummary(t *testing.T) {
 	}, nil, nil)
 
 	gen := &DigestGenerator{
-		smtp: smtp,
+		smtpHolder: smtpHolder{sender: smtp},
 	}
 
 	err := gen.SendDigest(digest, "user@test.com")
@@ -864,7 +864,7 @@ func TestSendDigest_NilDatabaseNoPanic(t *testing.T) {
 	}, nil, nil)
 
 	gen := &DigestGenerator{
-		smtp: smtp,
+		smtpHolder: smtpHolder{sender: smtp},
 		// database is nil - should not panic
 	}
 

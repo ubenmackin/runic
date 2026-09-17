@@ -12,6 +12,7 @@ import (
 	"runic/internal/alerts"
 	"runic/internal/auth"
 	"runic/internal/crypto"
+	"runic/internal/db"
 	"runic/internal/store"
 	"runic/internal/testutil"
 )
@@ -1161,3 +1162,187 @@ func TestListAlertsWithFiltering(t *testing.T) {
 		})
 	}
 }
+
+// TestUpdateSMTPConfig_RestartSimulatedDecrypt is a restart stability
+// regression test. It seeds smtp_password via the handler encryptor, then
+// simulates a process restart by dropping the original Encryptor and
+// creating a second NewEncryptor with the same passphrase. The stored value
+// must decrypt with the restarted instance. New saves after the simulated
+// restart must also survive a further restart.
+func TestUpdateSMTPConfig_RestartSimulatedDecrypt(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	passphrase := "restart-stability-passphrase-32bytes!!"
+	enc1, err := crypto.NewEncryptor(passphrase)
+	if err != nil {
+		t.Fatalf("failed to create encryptor: %v", err)
+	}
+
+	handler := newTestHandler(database, nil, enc1)
+	body := `{"host":"smtp.example.com","port":587,"username":"restart-user","password":"restart-secret-v1","use_tls":true,"from_address":"alerts@example.com","enabled":true}`
+	req := httptest.NewRequest("PUT", "/api/v1/settings/smtp", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	handler.UpdateSMTPConfig(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, w.Code, w.Body.String())
+	}
+
+	var stored string
+	if err := database.QueryRow("SELECT value FROM system_config WHERE key = 'smtp_password'").Scan(&stored); err != nil {
+		t.Fatalf("failed to query smtp_password: %v", err)
+	}
+	if stored == "restart-secret-v1" {
+		t.Fatal("password should be encrypted, not stored in plaintext")
+	}
+	if stored == "" {
+		t.Fatal("expected smtp_password to be stored")
+	}
+
+	// Simulate restart: drop enc1/handler, re-create from the same passphrase.
+	// Do not assert old ephemeral ciphertexts decrypt (they cannot); only new
+	// saves must survive the simulated restart.
+	restarted, err := crypto.NewEncryptor(passphrase)
+	if err != nil {
+		t.Fatalf("failed to create restarted encryptor: %v", err)
+	}
+	decrypted, err := restarted.Decrypt(stored)
+	if err != nil {
+		t.Fatalf("restarted decryptor failed to decrypt stored password: %v", err)
+	}
+	if decrypted != "restart-secret-v1" {
+		t.Errorf("expected restarted decryptor to yield %q, got %q", "restart-secret-v1", decrypted)
+	}
+
+	// New saves after restart must also survive a further restart.
+	handler2 := newTestHandler(database, nil, restarted)
+	body2 := `{"host":"smtp.example.com","port":587,"username":"restart-user","password":"restart-secret-v2","use_tls":true,"from_address":"alerts@example.com","enabled":true}`
+	req2 := httptest.NewRequest("PUT", "/api/v1/settings/smtp", strings.NewReader(body2))
+	req2.Header.Set("Content-Type", "application/json")
+	w2 := httptest.NewRecorder()
+	handler2.UpdateSMTPConfig(w2, req2)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("expected status %d on second save, got %d: %s", http.StatusOK, w2.Code, w2.Body.String())
+	}
+
+	var stored2 string
+	if err := database.QueryRow("SELECT value FROM system_config WHERE key = 'smtp_password'").Scan(&stored2); err != nil {
+		t.Fatalf("failed to query smtp_password after second save: %v", err)
+	}
+
+	restarted2, err := crypto.NewEncryptor(passphrase)
+	if err != nil {
+		t.Fatalf("failed to create second restarted encryptor: %v", err)
+	}
+	decrypted2, err := restarted2.Decrypt(stored2)
+	if err != nil {
+		t.Fatalf("second restarted decryptor failed to decrypt: %v", err)
+	}
+	if decrypted2 != "restart-secret-v2" {
+		t.Errorf("expected second restarted decryptor to yield %q, got %q", "restart-secret-v2", decrypted2)
+	}
+}
+
+// TestUpdateSMTPConfig_StaleSenderRefreshesAfterUpdate guards the stale-sender
+// regression: after UpdateSMTPConfig stores a new password, the live sender
+// that TestSMTP uses must reflect the new value, not a cached old one. The
+// handler is constructed with a real alerts.Service so UpdateSMTPConfig
+// exercises the ReloadSMTPConfig path (not the nil-service skip path), then
+// the test asserts the live sender was swapped and the stored ciphertext
+// decrypts to the new value (failing on the old value).
+func TestUpdateSMTPConfig_StaleSenderRefreshesAfterUpdate(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	passphrase := "stale-sender-passphrase-32bytes-long!"
+	enc, err := crypto.NewEncryptor(passphrase)
+	if err != nil {
+		t.Fatalf("failed to create encryptor: %v", err)
+	}
+
+	databaseWrapper := db.New(database)
+	alertStore := store.NewAlertStore(databaseWrapper)
+	userStore := store.NewUserStore(databaseWrapper)
+	svc := alerts.NewService(databaseWrapper, alertStore, userStore)
+	svc.SetEncryptor(enc)
+	if err := svc.Initialize(); err != nil {
+		t.Fatalf("failed to initialize alert service: %v", err)
+	}
+
+	handler := newTestHandler(database, svc, enc)
+	if handler.AlertService == nil {
+		t.Fatal("expected handler to have non-nil AlertService to exercise reload path")
+	}
+
+	seedBody := `{"host":"smtp.example.com","port":587,"username":"stale-user","password":"old-password-value","use_tls":true,"from_address":"alerts@example.com","enabled":true}`
+	seedReq := httptest.NewRequest("PUT", "/api/v1/settings/smtp", strings.NewReader(seedBody))
+	seedReq.Header.Set("Content-Type", "application/json")
+	seedW := httptest.NewRecorder()
+	handler.UpdateSMTPConfig(seedW, seedReq)
+	if seedW.Code != http.StatusOK {
+		t.Fatalf("seed UpdateSMTPConfig expected %d, got %d: %s", http.StatusOK, seedW.Code, seedW.Body.String())
+	}
+	oldSender := handler.AlertService.GetSMTPSender()
+	if oldSender == nil {
+		t.Fatal("expected live sender after seed UpdateSMTPConfig")
+	}
+
+	newBody := `{"host":"smtp.example.com","port":587,"username":"stale-user","password":"new-password-value-updated","use_tls":true,"from_address":"alerts@example.com","enabled":true}`
+	req := httptest.NewRequest("PUT", "/api/v1/settings/smtp", strings.NewReader(newBody))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	handler.UpdateSMTPConfig(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("UpdateSMTPConfig expected %d, got %d: %s", http.StatusOK, w.Code, w.Body.String())
+	}
+	var updateResp UpdateSMTPConfigResponse
+	if err := json.NewDecoder(w.Body).Decode(&updateResp); err != nil {
+		t.Fatalf("failed to decode UpdateSMTPConfig response: %v", err)
+	}
+	if updateResp.Status != "ok" {
+		t.Errorf("expected UpdateSMTPConfig status %q, got %q", "ok", updateResp.Status)
+	}
+	if updateResp.Warning != "" {
+		t.Errorf("expected no warning on successful live reload, got %q", updateResp.Warning)
+	}
+
+	// Reload must have swapped the live sender instead of leaving the stale
+	// cached instance in place.
+	newSender := handler.AlertService.GetSMTPSender()
+	if newSender == nil {
+		t.Fatal("expected live sender after second UpdateSMTPConfig")
+	}
+	if newSender == oldSender {
+		t.Error("live sender was not refreshed; UpdateSMTPConfig must reload the sender so TestSMTP sees the new value immediately")
+	}
+
+	// The live sender is rebuilt from the stored ciphertext, so decrypting
+	// the stored value verifies what the reloaded TestSMTP sender decrypts.
+	// A stale sender holding the old ciphertext would decrypt to the old
+	// password instead.
+	var stored string
+	if err := database.QueryRow("SELECT value FROM system_config WHERE key = 'smtp_password'").Scan(&stored); err != nil {
+		t.Fatalf("failed to query smtp_password: %v", err)
+	}
+
+	fresh, err := crypto.NewEncryptor(passphrase)
+	if err != nil {
+		t.Fatalf("failed to create fresh encryptor: %v", err)
+	}
+	decrypted, err := fresh.Decrypt(stored)
+	if err != nil {
+		t.Fatalf("fresh sender decryptor failed to decrypt new value: %v", err)
+	}
+	if decrypted != "new-password-value-updated" {
+		t.Errorf("expected TestSMTP sender to decrypt new value %q, got %q", "new-password-value-updated", decrypted)
+	}
+	if decrypted == "old-password-value" {
+		t.Error("sender decrypted stale old password; UpdateSMTPConfig must make the new value visible to TestSMTP immediately")
+	}
+}
+
+// Note: decrypt-hint coverage for tampered/corrupt smtp_password ciphertexts
+// lives as the single canonical test in internal/alerts/smtp_test.go
+// (TestSMTPSender_TamperedCorrupt_ResaveHint) to avoid cross-package
+// duplication; see item 3.

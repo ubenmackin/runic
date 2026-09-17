@@ -2975,7 +2975,13 @@ paths:
       tags:
       - Alerts
       summary: Update SMTP configuration
-      description: Updates the SMTP configuration. Requires admin role.
+      description: |
+        Updates the SMTP configuration. Requires admin role.
+        Returns 200 with `status: ok` on success. When settings were persisted
+        but the live sender reload failed, returns 200 with `status: ok` plus
+        an optional `warning` (changes apply on restart). The 200-with-warning
+        contract applies only to this endpoint; test SMTP reports reload
+        failures as 500 with the underlying cause.
       operationId: updateSMTPConfig
       requestBody:
         required: true
@@ -2985,15 +2991,11 @@ paths:
               $ref: '#/components/schemas/SMTPConfig'
       responses:
         '200':
-          description: SMTP configuration updated
+          description: SMTP configuration updated (warning present only when live reload failed)
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  message:
-                    type: string
-                    example: "smtp updated"
+                $ref: '#/components/schemas/UpdateSMTPConfigResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -3010,19 +3012,20 @@ paths:
       tags:
       - Alerts
       summary: Test SMTP configuration
-      description: Sends a test email using the current SMTP configuration. Requires admin role.
+      description: |
+        Sends a test email using the current SMTP configuration. Requires admin role.
+        Reloads the sender from the store first so a test immediately after save
+        uses the new ciphertext. Unlike update SMTP (200 with optional warning
+        when the live reload failed), reload failure here is a 500 that includes
+        the underlying cause.
       operationId: testSMTP
       responses:
         '200':
-          description: Test email sent
+          description: Test email result (success false when send failed)
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  message:
-                    type: string
-                    example: "test email sent"
+                $ref: '#/components/schemas/TestEmailResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -4759,6 +4762,19 @@ components:
           maxLength: 255
         enabled:
           type: boolean
+
+    UpdateSMTPConfigResponse:
+      type: object
+      required:
+      - status
+      properties:
+        status:
+          type: string
+          example: "ok"
+        warning:
+          type: string
+          description: Present only when settings were saved but the live sender reload failed; changes apply on restart
+          example: "SMTP settings saved but live sender reload failed; changes apply on restart"
 
     NotificationPreferences:
       type: object

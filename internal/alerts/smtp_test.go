@@ -2,10 +2,15 @@
 package alerts
 
 import (
+	"encoding/base64"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
+
+	"runic/internal/crypto"
+	"runic/internal/testutil"
 )
 
 // control characters to prevent email header injection attacks.
@@ -2397,6 +2402,76 @@ func TestSendAlertEmail_DefenseInDepthVerification(t *testing.T) {
 				if strings.Contains(html, dontWant) {
 					t.Errorf("generateAlertHTML() should not contain %q", dontWant)
 				}
+			}
+		})
+	}
+}
+
+// TestSMTPSender_TamperedCorrupt_ResaveHint is the single canonical
+// decrypt-hint test for tampered or corrupt smtp_password ciphertexts. It
+// verifies the failure surfaces an actionable re-save hint while still
+// matching errors.Is(crypto.ErrDecryptionFailed). Decrypt failures return
+// before any network dial, so this test performs no network I/O and no sleeps.
+func TestSMTPSender_TamperedCorrupt_ResaveHint(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	passphrase := "service-tamper-hint-passphrase-!!!"
+	enc, err := crypto.NewEncryptor(passphrase)
+	if err != nil {
+		t.Fatalf("failed to create encryptor: %v", err)
+	}
+
+	valid, err := enc.Encrypt("valid-smtp-password")
+	if err != nil {
+		t.Fatalf("failed to encrypt valid password: %v", err)
+	}
+	raw, err := base64.StdEncoding.DecodeString(valid)
+	if err != nil {
+		t.Fatalf("failed to decode valid ciphertext: %v", err)
+	}
+	tamperedRaw := make([]byte, len(raw))
+	copy(tamperedRaw, raw)
+	tamperedRaw[len(tamperedRaw)-1] ^= 0x01
+	tampered := base64.StdEncoding.EncodeToString(tamperedRaw)
+
+	corrupt := base64.StdEncoding.EncodeToString(make([]byte, 32))
+
+	cases := []struct {
+		name       string
+		ciphertext string
+	}{
+		{"tampered ciphertext", tampered},
+		{"corrupt ciphertext", corrupt},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sender := NewSMTPSender(&SMTPConfig{
+				Host:        "smtp.example.com",
+				Port:        587,
+				FromAddress: "alerts@example.com",
+				Enabled:     true,
+				Password:    tc.ciphertext,
+			}, enc, database)
+
+			event := &AlertEvent{
+				Type:      AlertTypePeerOffline,
+				PeerName:  "test-peer",
+				PeerID:    1,
+				Timestamp: time.Now(),
+				Subject:   "hint check",
+				Message:   "tamper hint check",
+			}
+			err := sender.SendAlertEmail("test@example.com", event)
+			if err == nil {
+				t.Fatal("expected decrypt error for bad ciphertext, got nil")
+			}
+			if !errors.Is(err, crypto.ErrDecryptionFailed) {
+				t.Errorf("expected errors.Is(ErrDecryptionFailed), got %v", err)
+			}
+			if !strings.Contains(strings.ToLower(err.Error()), "save") {
+				t.Errorf("expected actionable re-save hint containing %q in error, got %q", "save", err.Error())
 			}
 		})
 	}

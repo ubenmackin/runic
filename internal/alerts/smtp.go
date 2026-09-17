@@ -48,7 +48,10 @@ var (
 	dangerousMetaRegex = regexp.MustCompile(`(?i)<meta[^>]+http-equiv\s*=\s*["']?refresh["']?[^>]*>`)
 )
 
-// Default SMTP retry constants.
+// Default SMTP retry settings. Declared as consts (not vars) so concurrent
+// sends read them without synchronization and `go test -race` stays clean.
+// Do not convert back to mutable globals for test stubbing; inject failures
+// via the SMTP conversation path instead of mutating shared retry tuning.
 const (
 	smtpMaxRetries  = 3
 	smtpBaseBackoff = 1 * time.Second
@@ -137,11 +140,18 @@ func (s *SMTPSender) sendEmail(to, subject, body, contentType string) error {
 	}
 
 	password := s.config.Password
-	if s.encryptor != nil && s.config.Password != "" {
+	if s.config.Password != "" && s.encryptor == nil {
+		s.logger.Error("SMTP password is configured but encryptor is not available",
+			"smtp_host", s.config.Host,
+			"smtp_port", s.config.Port,
+		)
+		return fmt.Errorf("encryption not available — re-save SMTP password in Settings after configuring encryption")
+	}
+	if s.config.Password != "" && s.encryptor != nil {
 		decrypted, err := s.encryptor.Decrypt(s.config.Password)
 		if err != nil {
 			s.logger.Error("failed to decrypt SMTP password", "error", err)
-			return fmt.Errorf("failed to decrypt SMTP password: %w", err)
+			return fmt.Errorf("failed to decrypt SMTP password (re-save SMTP password in Settings): %w", err)
 		}
 		password = decrypted
 	}
