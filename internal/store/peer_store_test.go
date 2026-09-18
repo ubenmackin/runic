@@ -334,3 +334,78 @@ func TestUpdatePeerHeartbeatPreservesVersionOnEmpty(t *testing.T) {
 		t.Errorf("stored agent_version = %+v, want v1.0.1", peer.AgentVersion)
 	}
 }
+
+// TestUpdatePeerHeartbeatPreservesHasIPSetOnNil is a regression test for the
+// smoke-heartbeat NULLing bug: UpdatePeerHeartbeatWithPrev with nil has_ipset
+// (smoke POST "{}" and tolerated-EOF empty heartbeats) must preserve the
+// stored has_ipset via COALESCE(?, has_ipset) instead of overwriting it with
+// NULL, while explicit true/false reports still update the column.
+func TestUpdatePeerHeartbeatPreservesHasIPSetOnNil(t *testing.T) {
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	d := store.db
+
+	result, err := d.ExecContext(ctx,
+		`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, agent_version, bundle_version, has_ipset, is_manual) VALUES (?, ?, ?, ?, ?, ?, ?, 0)`,
+		"ipset-peer", "10.0.0.10", "agent-key-ipset", "hmac-key-ipset", "v1.0.0", "b1", true)
+	if err != nil {
+		t.Fatalf("insert peer: %v", err)
+	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		t.Fatalf("last insert id: %v", err)
+	}
+	peerID := int(id)
+
+	readHasIPSet := func() int {
+		t.Helper()
+		var v int
+		if err := d.QueryRowContext(ctx, `SELECT COALESCE(has_ipset, -1) FROM peers WHERE id = ?`, peerID).Scan(&v); err != nil {
+			t.Fatalf("query has_ipset: %v", err)
+		}
+		return v
+	}
+
+	if got := readHasIPSet(); got != 1 {
+		t.Fatalf("initial has_ipset = %d, want 1", got)
+	}
+
+	if _, _, _, err := store.UpdatePeerHeartbeatWithPrev(ctx, peerID, "", "", nil); err != nil {
+		t.Fatalf("heartbeat with nil has_ipset: %v", err)
+	}
+	if got := readHasIPSet(); got != 1 {
+		t.Errorf("has_ipset after nil heartbeat = %d, want 1 preserved", got)
+	}
+
+	if err := store.UpdatePeerHeartbeat(ctx, peerID, "", "", nil); err != nil {
+		t.Fatalf("UpdatePeerHeartbeat with nil has_ipset: %v", err)
+	}
+	if got := readHasIPSet(); got != 1 {
+		t.Errorf("has_ipset after nil UpdatePeerHeartbeat = %d, want 1 preserved", got)
+	}
+
+	hasFalse := false
+	if _, _, _, err := store.UpdatePeerHeartbeatWithPrev(ctx, peerID, "", "", &hasFalse); err != nil {
+		t.Fatalf("heartbeat with explicit false: %v", err)
+	}
+	if got := readHasIPSet(); got != 0 {
+		t.Errorf("has_ipset after explicit false = %d, want 0", got)
+	}
+
+	if _, _, _, err := store.UpdatePeerHeartbeatWithPrev(ctx, peerID, "", "", nil); err != nil {
+		t.Fatalf("heartbeat with nil after false: %v", err)
+	}
+	if got := readHasIPSet(); got != 0 {
+		t.Errorf("has_ipset after nil following false = %d, want 0 preserved", got)
+	}
+
+	hasTrue := true
+	if _, _, _, err := store.UpdatePeerHeartbeatWithPrev(ctx, peerID, "", "", &hasTrue); err != nil {
+		t.Fatalf("heartbeat with explicit true: %v", err)
+	}
+	if got := readHasIPSet(); got != 1 {
+		t.Errorf("has_ipset after explicit true = %d, want 1", got)
+	}
+}

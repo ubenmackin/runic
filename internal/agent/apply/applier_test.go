@@ -2,7 +2,9 @@ package apply
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1642,4 +1644,135 @@ COMMIT
 			}
 		})
 	}
+}
+
+// TestSmokeTestSuccessPath is a regression test for the smoke-test versus
+// heartbeat contract: the smoke test must POST an explicit empty JSON body
+// with Authorization, User-Agent, and Content-Type headers, and a 200
+// heartbeat means OUTPUT connectivity is intact.
+func TestSmokeTestSuccessPath(t *testing.T) {
+	var gotMethod, gotAuth, gotUA, gotCT, gotBody string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotAuth = r.Header.Get("Authorization")
+		gotUA = r.Header.Get("User-Agent")
+		gotCT = r.Header.Get("Content-Type")
+		body, _ := io.ReadAll(r.Body)
+		gotBody = string(body)
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintln(w, `{"status":"ok"}`)
+	}))
+	defer server.Close()
+
+	if err := smokeTest(context.Background(), server.URL, "test-token", "1.2.3"); err != nil {
+		t.Fatalf("smokeTest failed: %v", err)
+	}
+	if gotMethod != http.MethodPost {
+		t.Errorf("expected POST, got %q", gotMethod)
+	}
+	if gotAuth != "Bearer test-token" {
+		t.Errorf("expected Authorization 'Bearer test-token', got %q", gotAuth)
+	}
+	if gotUA != "runic-agent/1.2.3" {
+		t.Errorf("expected User-Agent 'runic-agent/1.2.3', got %q", gotUA)
+	}
+	if gotCT != "application/json" {
+		t.Errorf("expected Content-Type 'application/json', got %q", gotCT)
+	}
+	if gotBody != "{}" {
+		t.Errorf("expected empty JSON body %q, got %q", "{}", gotBody)
+	}
+}
+
+// TestSmokeTestBadRequestDoesNotRevert proves the smoke-test distinction: a
+// network error (or non-400 status) means OUTPUT may be broken and must
+// revert, while a 400 means the control plane rejected the payload
+// (application bug) and is log-only without reverting.
+func TestSmokeTestBadRequestDoesNotRevert(t *testing.T) {
+	t.Run("400 maps to smokeBadRequestError", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprintln(w, `{"error":"invalid JSON"}`)
+		}))
+		defer server.Close()
+
+		err := smokeTest(context.Background(), server.URL, "tok", "1.0.0")
+		if err == nil {
+			t.Fatal("expected error for 400, got nil")
+		}
+		var badReq *smokeBadRequestError
+		if !errors.As(err, &badReq) {
+			t.Fatalf("expected *smokeBadRequestError, got %T: %v", err, err)
+		}
+	})
+
+	t.Run("network error is not a bad-request error", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}))
+		url := server.URL
+		server.Close()
+
+		err := smokeTest(context.Background(), url, "tok", "1.0.0")
+		if err == nil {
+			t.Fatal("expected network error, got nil")
+		}
+		var badReq *smokeBadRequestError
+		if errors.As(err, &badReq) {
+			t.Errorf("network error must not be *smokeBadRequestError, got %v", err)
+		}
+	})
+
+	t.Run("ApplyBundle with 400 smoke succeeds without revert", func(t *testing.T) {
+		_, cleanup := setupMockEnvironment(t, "success")
+		defer cleanup()
+
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/v1/agent/heartbeat" {
+				if r.Method != http.MethodPost {
+					t.Errorf("expected smoke POST, got %q", r.Method)
+				}
+				w.WriteHeader(http.StatusBadRequest)
+				fmt.Fprintln(w, `{"error":"invalid JSON"}`)
+				return
+			}
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer server.Close()
+
+		bundle := models.BundleResponse{
+			Version: "smoke-400-test-v1",
+			Rules: `*filter
+:INPUT DROP [0:0]
+:OUTPUT DROP [0:0]
+:FORWARD DROP [0:0]
+-A INPUT -i lo -j ACCEPT
+-A OUTPUT -o lo -j ACCEPT
+-A INPUT -p icmp -j ACCEPT
+-A OUTPUT -p icmp -j ACCEPT
+-A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+-A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+-A INPUT -j LOG --log-prefix "[RUNIC-DROP-I] " --log-level 4
+-A INPUT -j DROP
+-A OUTPUT -j LOG --log-prefix "[RUNIC-DROP-O] " --log-level 4
+-A OUTPUT -j DROP
+COMMIT
+`,
+		}
+		hmacKey := "test-hmac-key"
+		bundle.HMAC = engine.Sign(bundle.Rules, hmacKey)
+
+		confirmCalled := false
+		confirmFunc := func(ctx context.Context, version string) error {
+			confirmCalled = true
+			return nil
+		}
+
+		if err := ApplyBundle(context.Background(), bundle, hmacKey, server.URL, "test-token", "1.0.0", confirmFunc); err != nil {
+			t.Fatalf("ApplyBundle with 400 smoke must succeed without revert, got: %v", err)
+		}
+		if !confirmCalled {
+			t.Error("confirm should be called on the 400 log-only path")
+		}
+	})
 }

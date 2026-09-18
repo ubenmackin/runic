@@ -64,6 +64,13 @@ func (e *ConditionEvaluator) EvaluateRule(ctx context.Context, rule *AlertRule) 
 		// are recorded via Service.TriggerAlert from the peers handler.
 		// There is no scheduled condition to evaluate.
 		return false, nil, nil
+	case AlertTypeBundleNotified:
+		// Direct-trigger only: SSE-notified (not yet agent-confirmed)
+		// bundles are recorded via Service.TriggerAlert from the PushWorker.
+		// Confirmation (AlertTypeBundleDeployed) is evaluated on the
+		// rule_bundles.first_applied_at schedule below. There is no
+		// scheduled condition for notified.
+		return false, nil, nil
 	case AlertTypePeerOnline:
 		// Direct-trigger only: peer online transitions are detected by
 		// PeerMonitor.triggerPeerOnlineAlert, which applies grace-period

@@ -12,7 +12,7 @@ import (
 
 	"runic/internal/common/log"
 
-	_ "github.com/mattn/go-sqlite3"
+	"github.com/mattn/go-sqlite3"
 )
 
 //go:embed schema.sql
@@ -149,6 +149,68 @@ func sqliteDSNWithPragmas(dataSourceName string) string {
 		return base
 	}
 	return base + "?" + strings.Join(pairs, "&")
+}
+
+// BusyRetryAttempts bounds SQLITE_BUSY retry loops on hot write paths
+// (heartbeat, SyncPeerIPs). The SQLite busy_timeout=5000 configured in
+// sqliteDSNWithPragmas and via PRAGMA busy_timeout=5000 already absorbs
+// brief contention inside the driver; the outer retry handles residual
+// database-is-locked failures after that timeout expires. Callers sleep with
+// exponential backoff between attempts and fail open after exhausting them.
+// Retry budget: each attempt can block up to 5s in busy_timeout, so 3
+// attempts span up to ~15s plus backoff. Callers must provide a fresh 15s
+// detached context per operation (heartbeatFinalizeCtx, mirroring PushWorker
+// finalizeCtx) so the third attempt is not cut short and sequential
+// SyncPeerIPs statements do not starve on one shared deadline.
+const BusyRetryAttempts = 3
+
+// isBusySQLiteError reports whether a Code/ExtendedCode pair is SQLite
+// busy/lock contention. It checks the primary Code (SQLITE_BUSY/SQLITE_LOCKED)
+// and the ExtendedCode (SQLITE_BUSY_RECOVERY/SNAPSHOT/TIMEOUT,
+// SQLITE_LOCKED_SHAREDCACHE) following the sqlite3 ExtendedCode pattern used
+// for constraint errors elsewhere. The primary-byte mask keeps future
+// SQLITE_BUSY_*/LOCKED_* variants matching even without a named constant.
+func isBusySQLiteError(code sqlite3.ErrNo, ext sqlite3.ErrNoExtended) bool {
+	if code == sqlite3.ErrBusy || code == sqlite3.ErrLocked {
+		return true
+	}
+	if ext == sqlite3.ErrBusyRecovery || ext == sqlite3.ErrBusySnapshot || ext == sqlite3.ErrLockedSharedCache {
+		return true
+	}
+	if ext == sqlite3.ErrBusy.Extend(3) {
+		return true
+	}
+	if sqlite3.ErrNo(int(ext)&0xFF) == sqlite3.ErrBusy || sqlite3.ErrNo(int(ext)&0xFF) == sqlite3.ErrLocked {
+		return true
+	}
+	return false
+}
+
+// IsBusyError reports whether err is SQLite busy/lock contention
+// (SQLITE_BUSY/SQLITE_LOCKED, "database is locked"). It checks both Code and
+// ExtendedCode and matches both sqlite3.Error and *sqlite3.Error forms, with
+// a message fallback so wrapped driver errors still match.
+func IsBusyError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var sqliteErr sqlite3.Error
+	if errors.As(err, &sqliteErr) {
+		if isBusySQLiteError(sqliteErr.Code, sqliteErr.ExtendedCode) {
+			return true
+		}
+	}
+	var sqlitePtr *sqlite3.Error
+	if errors.As(err, &sqlitePtr) && sqlitePtr != nil {
+		if isBusySQLiteError(sqlitePtr.Code, sqlitePtr.ExtendedCode) {
+			return true
+		}
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "database is locked") ||
+		strings.Contains(msg, "database table is locked") ||
+		strings.Contains(msg, "database is busy") ||
+		strings.Contains(msg, "SQLITE_BUSY")
 }
 
 func InitDB(dataSourceName string) (*sql.DB, error) {

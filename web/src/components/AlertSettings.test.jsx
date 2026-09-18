@@ -114,6 +114,7 @@ describe('AlertSettings', () => {
 
       await waitFor(() => {
         expect(screen.getByText('Bundle Deployed')).toBeInTheDocument()
+        expect(screen.getByText('Bundle Notified')).toBeInTheDocument()
         expect(screen.getByText('Bundle Failed')).toBeInTheDocument()
         expect(screen.getByText('Peer Offline')).toBeInTheDocument()
         expect(screen.getByText('Peer Online')).toBeInTheDocument()
@@ -147,7 +148,7 @@ describe('AlertSettings', () => {
 
       await waitFor(() => {
         const switches = screen.getAllByRole('switch')
-        expect(switches.length).toBe(7)
+        expect(switches.length).toBe(8)
       })
     })
   })
@@ -163,11 +164,13 @@ describe('AlertSettings', () => {
       render(<AlertSettings />, { wrapper })
 
       await waitFor(() => {
-        expect(screen.getAllByRole('switch').length).toBe(7)
+        expect(screen.getAllByRole('switch').length).toBe(8)
       })
 
-      const switches = screen.getAllByRole('switch')
-      await user.click(switches[1]) // Toggle bundle_failed from false to true
+      // With 8 rows, index 1 is bundle_notified (no seed rule in sample data).
+      // Target bundle_failed by accessible name so the toggle maps to a real rule.
+      const bundleFailedToggle = screen.getByRole('switch', { name: 'Bundle Failed' })
+      await user.click(bundleFailedToggle)
 
       await waitFor(() => {
         expect(api.updateAlertRule).toHaveBeenCalled()
@@ -184,7 +187,7 @@ describe('AlertSettings', () => {
 
       await waitFor(() => {
         const numberInputs = screen.getAllByRole('spinbutton')
-        expect(numberInputs.length).toBe(7)
+        expect(numberInputs.length).toBe(8)
       })
     })
 
@@ -198,7 +201,7 @@ describe('AlertSettings', () => {
       render(<AlertSettings />, { wrapper })
 
       await waitFor(() => {
-        expect(screen.getAllByRole('spinbutton').length).toBe(7)
+        expect(screen.getAllByRole('spinbutton').length).toBe(8)
       })
 
       const firstInput = screen.getAllByRole('spinbutton')[0]
@@ -221,10 +224,10 @@ describe('AlertSettings', () => {
 
       await waitFor(() => {
         const selects = screen.getAllByRole('combobox')
-        // 7 rows × 3 selects each (window, throttle, peer_override) = 21
-        expect(selects.length).toBe(21)
+        // 8 rows × 3 selects each (window, throttle, peer_override) = 24
+        expect(selects.length).toBe(24)
         // "All Peers" should appear in Peer Override selects (one per row)
-        expect(screen.getAllByText('All Peers').length).toBe(7)
+        expect(screen.getAllByText('All Peers').length).toBe(8)
         // Peer hostnames should be in dropdowns
         expect(screen.getAllByText('peer-1').length).toBeGreaterThan(0)
         expect(screen.getAllByText('peer-2').length).toBeGreaterThan(0)
@@ -260,7 +263,7 @@ describe('AlertSettings', () => {
       render(<AlertSettings />, { wrapper })
 
       await waitFor(() => {
-        expect(screen.getAllByRole('switch').length).toBe(7)
+        expect(screen.getAllByRole('switch').length).toBe(8)
       })
 
       const switches = screen.getAllByRole('switch')

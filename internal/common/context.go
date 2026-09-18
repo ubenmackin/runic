@@ -8,6 +8,20 @@ import (
 	"runic/internal/common/constants"
 )
 
+// DetachedTimeout returns a detached context for must-succeed writes that
+// must survive parent cancellation (handler timeout, client disconnect, or
+// worker shutdown). The detached context carries values but not
+// cancellation, bounded by the given timeout so shutdown cannot hang
+// indefinitely. A nil parent is treated as context.Background(). Each
+// sequential operation must call DetachedTimeout separately so it gets a
+// fresh full budget instead of sharing one deadline.
+func DetachedTimeout(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	return context.WithTimeout(context.WithoutCancel(parent), timeout)
+}
+
 // WithHandlerTimeout returns a context with a HandlerTimeout deadline. If the
 // parent context already has a deadline at least as far in the future as
 // HandlerTimeout, the parent is returned unchanged and the returned cancel

@@ -23,6 +23,18 @@ const (
 	// they run on a detached context bounded by this timeout.
 	UpdateFanoutAuditTimeout = 10 * time.Second
 
+	// DetachedFinalizeTimeout bounds detached must-succeed writes that must
+	// survive handler timeout or client disconnect (PushWorker finalizeCtx
+	// and heartbeatFinalizeCtx). The 5s handler deadline races the 5s
+	// SQLite busy_timeout, so final writes run detached (values without
+	// cancellation) bounded by this timeout. Retry budget: each Exec can
+	// block up to 5s in busy_timeout and retries up to db.BusyRetryAttempts
+	// (3) with backoff, so one operation spans up to ~15s. Each operation
+	// (heartbeat UPDATE, SyncPeerIPs, push-job finalize) gets a fresh
+	// detached context with this full budget so sequential statements
+	// cannot starve on a single shared deadline.
+	DetachedFinalizeTimeout = 15 * time.Second
+
 	// RevocationCheckTimeout caps how long the auth middleware will wait
 	// for the token-revocation store to answer during request handling.
 	RevocationCheckTimeout = 2 * time.Second

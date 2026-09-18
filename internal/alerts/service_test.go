@@ -627,6 +627,11 @@ func TestSeverityAssignment(t *testing.T) {
 			alertType:    AlertTypeBundleDeployed,
 			wantSeverity: SeverityInfo,
 		},
+		{
+			name:         "bundle_notified defaults to info",
+			alertType:    AlertTypeBundleNotified,
+			wantSeverity: SeverityInfo,
+		},
 	}
 
 	for _, tt := range tests {

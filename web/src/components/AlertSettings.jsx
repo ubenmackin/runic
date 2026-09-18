@@ -8,6 +8,7 @@ import ToggleSwitch from './ToggleSwitch'
 // Human-readable alert type labels
 const ALERT_TYPE_LABELS = {
   bundle_deployed: 'Bundle Deployed',
+  bundle_notified: 'Bundle Notified',
   bundle_failed: 'Bundle Failed',
   peer_offline: 'Peer Offline',
   peer_online: 'Peer Online',

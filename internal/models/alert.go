@@ -26,6 +26,14 @@ const (
 	AlertTypeNewPeer        AlertType = "new_peer"
 	AlertTypeBundleDeployed AlertType = "bundle_deployed"
 	AlertTypeAgentUpdated   AlertType = "agent_updated"
+	// AlertTypeBundleNotified fires when a bundle is SSE-notified to an
+	// agent (PushWorker) but not yet agent-confirmed. It must render
+	// distinctly from AlertTypeBundleDeployed, which is reserved for
+	// agent-confirmed applies (ConfirmBundleApplied /
+	// rule_bundles.first_applied_at via the scheduled evaluator), so
+	// Type-based consumers (rules/digest/UI) never present a notify as
+	// deployed.
+	AlertTypeBundleNotified AlertType = "bundle_notified"
 )
 
 type Severity string
@@ -87,7 +95,7 @@ func (at AlertType) String() string {
 
 func (at AlertType) IsValid() bool {
 	switch at {
-	case AlertTypePeerOffline, AlertTypeBundleFailed, AlertTypeBlockedSpike, AlertTypePeerOnline, AlertTypeNewPeer, AlertTypeBundleDeployed, AlertTypeAgentUpdated:
+	case AlertTypePeerOffline, AlertTypeBundleFailed, AlertTypeBlockedSpike, AlertTypePeerOnline, AlertTypeNewPeer, AlertTypeBundleDeployed, AlertTypeAgentUpdated, AlertTypeBundleNotified:
 		return true
 	default:
 		return false
@@ -122,6 +130,8 @@ func (at AlertType) DefaultSeverity() Severity {
 	case AlertTypeBundleDeployed:
 		return SeverityInfo
 	case AlertTypeAgentUpdated:
+		return SeverityInfo
+	case AlertTypeBundleNotified:
 		return SeverityInfo
 	default:
 		return SeverityInfo
