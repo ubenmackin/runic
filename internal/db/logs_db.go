@@ -8,8 +8,6 @@ import (
 	"strings"
 
 	"runic/internal/common/log"
-
-	_ "github.com/mattn/go-sqlite3"
 )
 
 const logsDBSchema = `

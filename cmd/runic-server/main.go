@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	_ "github.com/mattn/go-sqlite3"
 
 	"runic/internal/alerts"
 	"runic/internal/api"

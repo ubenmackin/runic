@@ -4,6 +4,8 @@ package db
 
 import (
 	"database/sql"
+	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -194,5 +196,59 @@ func TestSchemaNotEmpty(t *testing.T) {
 		if !strings.Contains(schema, table) {
 			t.Errorf("Schema missing table: %s", table)
 		}
+	}
+}
+
+// busyCodeError is a cgo-free stand-in for the cgo driver error. It carries
+// SQLite result codes as plain ints via the sqliteCoder interface so the
+// code-based IsBusyError path is testable with CGO_ENABLED=0.
+type busyCodeError struct {
+	code int
+	ext  int
+	msg  string
+}
+
+func (e busyCodeError) Error() string { return e.msg }
+func (e busyCodeError) Code() int     { return e.code }
+func (e busyCodeError) ExtendedCode() int {
+	return e.ext
+}
+
+func TestIsBusyError(t *testing.T) {
+	busyCode := busyCodeError{code: 5, ext: 261, msg: "code-only busy without message match"}
+	wrappedBusyCode := fmt.Errorf("update peer heartbeat: %w", busyCodeError{code: 6, ext: 262, msg: "code-only locked"})
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"database is locked", errors.New("database is locked"), true},
+		{"database is locked uppercase", errors.New("DATABASE IS LOCKED"), true},
+		{"database table is locked", errors.New("database table is locked"), true},
+		{"database is busy", errors.New("database is busy"), true},
+		{"sqlite busy uppercase", errors.New("SQLITE_BUSY: database is locked"), true},
+		{"sqlite locked", errors.New("SQLITE_LOCKED: table is locked"), true},
+		{"busy recovery", errors.New("sqlite3: busy recovery, database is locked"), true},
+		{"busy snapshot", errors.New("sqlite3: busy snapshot"), true},
+		{"wrapped locked string", fmt.Errorf("update peer heartbeat: %w", errors.New("database is locked")), true},
+		{"wrapped busy string", fmt.Errorf("insert peer IP: %w", errors.New("database is busy")), true},
+		{"code-only busy", busyCode, true},
+		{"wrapped code-only locked", wrappedBusyCode, true},
+		{"extended snapshot code-only", busyCodeError{code: 0, ext: 517, msg: "unrelated message"}, true},
+		{"extended timeout code-only", busyCodeError{code: 0, ext: 773, msg: "unrelated message"}, true},
+		{"primary mask future variant", busyCodeError{code: 0, ext: 5 | (9 << 8), msg: "unrelated message"}, true},
+		{"non-busy unique", errors.New("UNIQUE constraint failed: users.username"), false},
+		{"non-busy foreign key", errors.New("FOREIGN KEY constraint failed"), false},
+		{"non-busy generic", errors.New("something else went wrong"), false},
+		{"non-busy code", busyCodeError{code: 19, ext: 2067, msg: "UNIQUE constraint failed"}, false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := IsBusyError(tc.err); got != tc.want {
+				t.Errorf("IsBusyError(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
 	}
 }
