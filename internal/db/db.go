@@ -11,8 +11,6 @@ import (
 	"strings"
 
 	"runic/internal/common/log"
-
-	"github.com/mattn/go-sqlite3"
 )
 
 //go:embed schema.sql
@@ -164,23 +162,52 @@ func sqliteDSNWithPragmas(dataSourceName string) string {
 // SyncPeerIPs statements do not starve on one shared deadline.
 const BusyRetryAttempts = 3
 
+// SQLite primary result codes for busy/lock contention, mirrored as plain
+// ints so internal/db stays compilable with CGO_ENABLED=0 without naming the
+// cgo driver types. Values match http://www.sqlite.org/rescode.html and the
+// mattn/go-sqlite3 ErrBusy/ErrLocked constants (5/6).
+const (
+	sqliteBusy   = 5
+	sqliteLocked = 6
+)
+
+// SQLite extended busy/lock codes: base | (extension << 8). These mirror
+// mattn/go-sqlite3 ErrBusyRecovery (5|(1<<8)), ErrBusySnapshot (5|(2<<8)),
+// ErrBusy timeout (5|(3<<8)), and ErrLockedSharedCache (6|(1<<8)) without
+// importing the driver types.
+const (
+	sqliteBusyRecovery      = 261 // 5 | (1<<8)
+	sqliteBusySnapshot      = 517 // 5 | (2<<8)
+	sqliteBusyTimeout       = 773 // 5 | (3<<8)
+	sqliteLockedSharedCache = 262 // 6 | (1<<8)
+)
+
+// sqliteCoder exposes SQLite result codes as plain ints without importing
+// the cgo driver types. It keeps internal/db compilable with CGO_ENABLED=0
+// (no sqlite driver is imported here; the driver is registered server-side
+// only). Real cgo driver errors are caught by the message fallback in
+// IsBusyError; this interface preserves code-based detection for wrapped
+// test doubles and any error carrying SQLite codes as ints.
+type sqliteCoder interface {
+	error
+	Code() int
+	ExtendedCode() int
+}
+
 // isBusySQLiteError reports whether a Code/ExtendedCode pair is SQLite
 // busy/lock contention. It checks the primary Code (SQLITE_BUSY/SQLITE_LOCKED)
 // and the ExtendedCode (SQLITE_BUSY_RECOVERY/SNAPSHOT/TIMEOUT,
 // SQLITE_LOCKED_SHAREDCACHE) following the sqlite3 ExtendedCode pattern used
 // for constraint errors elsewhere. The primary-byte mask keeps future
 // SQLITE_BUSY_*/LOCKED_* variants matching even without a named constant.
-func isBusySQLiteError(code sqlite3.ErrNo, ext sqlite3.ErrNoExtended) bool {
-	if code == sqlite3.ErrBusy || code == sqlite3.ErrLocked {
+func isBusySQLiteError(code int, ext int) bool {
+	if code == sqliteBusy || code == sqliteLocked {
 		return true
 	}
-	if ext == sqlite3.ErrBusyRecovery || ext == sqlite3.ErrBusySnapshot || ext == sqlite3.ErrLockedSharedCache {
+	if ext == sqliteBusyRecovery || ext == sqliteBusySnapshot || ext == sqliteBusyTimeout || ext == sqliteLockedSharedCache {
 		return true
 	}
-	if ext == sqlite3.ErrBusy.Extend(3) {
-		return true
-	}
-	if sqlite3.ErrNo(int(ext)&0xFF) == sqlite3.ErrBusy || sqlite3.ErrNo(int(ext)&0xFF) == sqlite3.ErrLocked {
+	if ext&0xFF == sqliteBusy || ext&0xFF == sqliteLocked {
 		return true
 	}
 	return false
@@ -188,29 +215,30 @@ func isBusySQLiteError(code sqlite3.ErrNo, ext sqlite3.ErrNoExtended) bool {
 
 // IsBusyError reports whether err is SQLite busy/lock contention
 // (SQLITE_BUSY/SQLITE_LOCKED, "database is locked"). It checks both Code and
-// ExtendedCode and matches both sqlite3.Error and *sqlite3.Error forms, with
-// a message fallback so wrapped driver errors still match.
+// ExtendedCode via errors.As unwrapping to any error exposing them as ints,
+// with a lowercased message fallback so wrapped driver errors still match.
 func IsBusyError(err error) bool {
 	if err == nil {
 		return false
 	}
-	var sqliteErr sqlite3.Error
-	if errors.As(err, &sqliteErr) {
-		if isBusySQLiteError(sqliteErr.Code, sqliteErr.ExtendedCode) {
+	var coder sqliteCoder
+	if errors.As(err, &coder) {
+		if isBusySQLiteError(coder.Code(), coder.ExtendedCode()) {
 			return true
 		}
 	}
-	var sqlitePtr *sqlite3.Error
-	if errors.As(err, &sqlitePtr) && sqlitePtr != nil {
-		if isBusySQLiteError(sqlitePtr.Code, sqlitePtr.ExtendedCode) {
-			return true
-		}
-	}
-	msg := err.Error()
-	return strings.Contains(msg, "database is locked") ||
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "database is locked") ||
 		strings.Contains(msg, "database table is locked") ||
 		strings.Contains(msg, "database is busy") ||
-		strings.Contains(msg, "SQLITE_BUSY")
+		strings.Contains(msg, "sqlite_busy") ||
+		strings.Contains(msg, "sqlite_locked") {
+		return true
+	}
+	// Recovery/snapshot variants are scoped to sqlite-qualified messages so
+	// unrelated errors mentioning "busy recovery" do not false-positive.
+	return strings.Contains(msg, "sqlite") &&
+		(strings.Contains(msg, "busy recovery") || strings.Contains(msg, "busy snapshot"))
 }
 
 func InitDB(dataSourceName string) (*sql.DB, error) {
