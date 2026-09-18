@@ -6,6 +6,35 @@
 // Peers list pending counts. Push delivery stays agent-only: PushAllRules (via
 // ListAgentBasedPeers) and PushCurrentRules keep the is_manual=0 filter because
 // manual peers have no agent to receive a push.
+//
+// Push versus Apply lifecycle (read before modifying either path):
+//
+//   - Apply (Approve) = CompileAndStore + clear pending_changes + delete
+//     preview + CleanupIfComplete + SSE notify. ApplyPeerPendingBundle,
+//     ApplyEntityPendingChanges, and applyBundleForPeer (used by
+//     ApplyAllPendingBundles) all follow compile-then-clear: the bundle is
+//     stored first (advancing rule_bundles.version_number), then pending rows
+//     and the preview are deleted, then CleanupIfComplete runs. Only Apply
+//     clears the pending signal.
+//   - Push = CompileAndStore + Enqueue + SSE notify, never clear. PushAllRules
+//     and PushCurrentRules only create a push job and Enqueue it; the
+//     PushWorker's processJob compiles/stores (advancing version_number) and
+//     sends SSE. Neither the handler nor the worker deletes pending_changes,
+//     previews, or snapshots, and neither updates peers.bundle_version or
+//     rule_bundles.applied_at.
+//   - Notified versus confirmed: a push-job "succeeded"/"notified" count and
+//     the terminal "complete"/"completed_with_errors" status mean SSE
+//     delivered (agent notified). "Confirmed" (agent applied) happens only via
+//     ConfirmBundleApplied, which updates peers.bundle_version and
+//     rule_bundles.applied_at. UI copy must render notified distinctly from
+//     confirmed.
+//   - ListPeers sync_status explains Approve-then-Push-still-pending:
+//     sync_status is "pending" when pending_changes > 0, else "pending_sync"
+//     when the latest rule_bundles version differs from peers.bundle_version
+//     (or applied_at IS NULL), else "synced". Push never clears pending, so a
+//     peer with pending rows stays "pending" after Push. Apply clears pending
+//     but stores a new bundle the agent has not confirmed yet, so the peer
+//     moves to "pending_sync" until ConfirmBundleApplied flips it to "synced".
 package pending
 
 import (
@@ -375,7 +404,15 @@ func (h *Handler) PreviewPeerPendingBundle(w http.ResponseWriter, r *http.Reques
 	})
 }
 
-// ApplyPeerPendingBundle compiles and stores a bundle for a peer, clears pending changes, and triggers SSE notification.
+// ApplyPeerPendingBundle is the Apply (Approve) path for a single peer.
+//
+// Lifecycle: CompileAndStore (advances rule_bundles.version_number) THEN, in a
+// detached tx, ClearPendingChangesForPeerTx + DeletePendingBundlePreviewTx,
+// then best-effort CleanupIfComplete, then best-effort SSE notify. Only Apply
+// clears the pending signal. The SSE notify means notified, not confirmed:
+// confirmed happens only via ConfirmBundleApplied (peers.bundle_version +
+// rule_bundles.applied_at). After Apply the peer is pending_sync in ListPeers
+// (pending cleared, latest version != bundle_version) until the agent confirms.
 func (h *Handler) ApplyPeerPendingBundle(w http.ResponseWriter, r *http.Request) {
 	peerID, err := common.ParseIDParam(r, "peerId")
 	if err != nil {
@@ -512,10 +549,13 @@ func (h *Handler) ApplyAllPendingBundles(w http.ResponseWriter, r *http.Request)
 
 // ApplyEntityPendingChanges applies all pending changes for a specific entity type on a peer.
 //
-// It compiles and stores the new bundle with current state (compile-then-clear,
-// mirroring ApplyPeerPendingBundle), deletes the pending change record and snapshot
-// in a single transaction, notifies via SSE that the bundle is updated, and regenerates
-// the bundle preview if other pending changes remain.
+// Apply (Approve) lifecycle (compile-then-clear, mirroring
+// ApplyPeerPendingBundle): CompileAndStore first (advancing
+// rule_bundles.version_number), then in a single tx delete the snapshot +
+// pending row, count remaining, and regenerate or delete the preview, then
+// best-effort SSE notify (notified, not confirmed), then CleanupIfComplete when
+// no rows remain for the peer. A compile failure fails the request with the
+// DB-driven pending signal intact instead of 500ing after the signal is gone.
 //
 // Compile-then-clear (mirroring ApplyPeerPendingBundle): the bundle is stored
 // BEFORE the pending row + snapshot are deleted, so a compile failure fails
@@ -701,10 +741,22 @@ func (h *Handler) ApplyEntityPendingChanges(w http.ResponseWriter, r *http.Reque
 	common.RespondJSON(w, http.StatusOK, response)
 }
 
-// PushAllRules pushes compiled rules to all agent-based peers.
+// PushAllRules is the Push path for all agent-based peers (Approve-then-Push
+// still pending is expected — see below).
+//
 // Manual peers are excluded by design (via ListAgentBasedPeers): pending
 // visibility includes manual peers, but push delivery is agent-only.
 // The PushWorker processes the job in the background.
+//
+// Push lifecycle (never clears): this handler only creates the push job rows
+// and Enqueues the job. The worker runs CompileAndStore (advancing
+// rule_bundles.version_number) + SSE notify per peer. Neither this handler nor
+// the worker deletes pending_changes, previews, or snapshots, and neither
+// updates peers.bundle_version or rule_bundles.applied_at — only
+// ConfirmBundleApplied confirms. A peer with pending rows therefore stays
+// ListPeers sync_status "pending" (pending_changes > 0) after Push; a peer
+// with no pending rows but an unconfirmed bundle stays "pending_sync"
+// (latest version != bundle_version) until the agent confirms.
 func (h *Handler) PushAllRules(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := commonutil.WithHandlerTimeout(r.Context())
 	defer cancel()
@@ -775,10 +827,20 @@ func (h *Handler) PushAllRules(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// PushCurrentRules pushes the current compiled rules to a specific peer.
+// PushCurrentRules is the Push path for a single peer (never clears pending).
+//
 // Manual peers are rejected by design: pending visibility includes manual
 // peers, but push delivery is agent-only since manual peers have no agent.
 // The peer must be agent-based (is_manual = false).
+//
+// Push lifecycle (never clears): this handler only creates the push job rows
+// and Enqueues the job. The worker runs CompileAndStore (advancing
+// rule_bundles.version_number) + SSE notify. Neither this handler nor the
+// worker deletes pending_changes, previews, or snapshots, and neither updates
+// peers.bundle_version or rule_bundles.applied_at — only ConfirmBundleApplied
+// confirms. ListPeers stays "pending" while pending_changes > 0, and
+// "pending_sync" while the latest version != bundle_version, so a Push without
+// a prior Apply leaves the peer "pending" by design.
 func (h *Handler) PushCurrentRules(w http.ResponseWriter, r *http.Request) {
 	peerID, err := common.ParseIDParam(r, "peerId")
 	if err != nil {
@@ -892,14 +954,18 @@ func (h *Handler) HandlePushJobSSE(w http.ResponseWriter, r *http.Request) {
 		log.ErrorContext(r.Context(), "failed to get push job with peers", "job_id", jobID, "error", err)
 	} else {
 		// total_peers is canonical; total is a deprecated alias kept for
-		// backward compatibility. succeeded is canonical; success is a
-		// deprecated alias kept for backward compatibility so existing SSE
-		// consumers keep working.
+		// backward compatibility. notified is canonical (SSE delivered, not
+		// agent-confirmed); succeeded and success are deprecated aliases for
+		// notified kept for backward compatibility so existing SSE consumers
+		// keep working. Terminal status stays complete/completed_with_errors
+		// (notified counts); confirmed is only via ConfirmBundleApplied
+		// (peers.bundle_version + rule_bundles.applied_at).
 		initialData := map[string]any{
 			"job_id":      job.ID,
 			"status":      job.Status,
 			"total_peers": job.TotalPeers,
 			"total":       job.TotalPeers,
+			"notified":    job.Succeeded,
 			"succeeded":   job.Succeeded,
 			"success":     job.Succeeded,
 			"failed":      job.Failed,
@@ -958,7 +1024,14 @@ func parseSSEEventType(event string) string {
 	return ""
 }
 
-// applyBundleForPeer compiles and stores a bundle for a peer, clears pending changes, and notifies via SSE.
+// applyBundleForPeer is the Apply (Approve) helper for ApplyAllPendingBundles.
+//
+// Apply lifecycle: CompileAndStore (advancing rule_bundles.version_number)
+// THEN ClearPendingChangesForPeerTx + DeletePendingBundlePreviewTx, then
+// best-effort SSE notify (notified, not confirmed). CleanupIfComplete runs once
+// in ApplyAllPendingBundles after the fan-out, not per peer. Push paths
+// (PushAllRules/PushCurrentRules + PushWorker.processJob) must never call this
+// helper and must never clear pending state.
 //
 // Partial-apply contract: every stage (hostname lookup, compile, tx clear)
 // runs on a detached timeout derived from WithoutCancel, so a client

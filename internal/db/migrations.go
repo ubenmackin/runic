@@ -1034,7 +1034,7 @@ CREATE TABLE change_snapshots (
 CREATE TABLE alert_rules (
 id INTEGER PRIMARY KEY AUTOINCREMENT,
 name TEXT NOT NULL,
-alert_type TEXT NOT NULL CHECK(alert_type IN ('peer_offline', 'bundle_failed', 'blocked_spike', 'peer_online', 'new_peer', 'bundle_deployed', 'agent_updated')),
+alert_type TEXT NOT NULL CHECK(alert_type IN ('peer_offline', 'bundle_failed', 'blocked_spike', 'peer_online', 'new_peer', 'bundle_deployed', 'agent_updated', 'bundle_notified')),
 enabled BOOLEAN NOT NULL DEFAULT 1,
 threshold_value INTEGER,
 threshold_window_minutes INTEGER,
@@ -1064,6 +1064,7 @@ INSERT INTO alert_rules (name, alert_type, enabled, threshold_value, threshold_w
 ('Peer Offline', 'peer_offline', 1, 0, 5, 15),
 ('Peer Online', 'peer_online', 1, 0, 5, 15),
 ('Bundle Deployed', 'bundle_deployed', 1, 0, 5, 5),
+('Bundle Notified', 'bundle_notified', 1, 0, 5, 5),
 ('Bundle Failed', 'bundle_failed', 1, 0, 5, 5),
 ('Blocked Traffic Spike', 'blocked_spike', 1, 100, 5, 15),
 ('New Peer', 'new_peer', 1, 0, 5, 30),
@@ -1529,7 +1530,7 @@ SELECT id, ip_address, 1 FROM peers
 				if _, err := tx.ExecContext(ctx, `CREATE TABLE alert_rules_new (
 id INTEGER PRIMARY KEY AUTOINCREMENT,
 name TEXT NOT NULL,
-alert_type TEXT NOT NULL CHECK(alert_type IN ('peer_offline', 'bundle_failed', 'blocked_spike', 'peer_online', 'new_peer', 'bundle_deployed', 'agent_updated')),
+alert_type TEXT NOT NULL CHECK(alert_type IN ('peer_offline', 'bundle_failed', 'blocked_spike', 'peer_online', 'new_peer', 'bundle_deployed', 'agent_updated', 'bundle_notified')),
 enabled BOOLEAN NOT NULL DEFAULT 1,
 threshold_value INTEGER,
 threshold_window_minutes INTEGER,
@@ -1609,6 +1610,139 @@ updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 				return fmt.Errorf("failed to seed agent_updated alert rule: %w", err)
 			}
 			log.Info("Migration: seeded default agent_updated alert rule")
+		}
+	}
+
+	// Migration: Add 'bundle_notified' to alert_rules CHECK constraint and seed
+	// the default rule. PushWorker SSE-notify alerts use bundle_notified so
+	// Type-based consumers (rules/digest/UI) never group a notify as a
+	// deployed/confirmed bundle (AlertTypeBundleDeployed stays reserved for
+	// ConfirmBundleApplied / rule_bundles.first_applied_at). Existing
+	// databases at the 7-type CHECK (with agent_updated) have a restrictive
+	// CHECK that rejects the new alert type. Re-read the table SQL here (the
+	// agent_updated rebuild above may have already widened it).
+	if err := database.QueryRowContext(ctx, "SELECT sql FROM sqlite_master WHERE type='table' AND name='alert_rules'").Scan(&alertRulesTableSQL); err == nil {
+		if strings.Contains(alertRulesTableSQL, "alert_type") && !strings.Contains(alertRulesTableSQL, "bundle_notified") {
+			log.Info("Migration: adding bundle_notified to alert_rules CHECK constraint")
+			if err := RunInTx(ctx, database, func(ctx context.Context, tx *sql.Tx) error {
+				if _, err := tx.ExecContext(ctx, "PRAGMA defer_foreign_keys=ON"); err != nil {
+					return fmt.Errorf("defer foreign keys: %w", err)
+				}
+				var hasAlertHistory bool
+				if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='alert_history'").Scan(&hasAlertHistory); err != nil {
+					return fmt.Errorf("check alert_history table: %w", err)
+				}
+				detached := false
+				if hasAlertHistory {
+					var hasRuleID bool
+					if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM pragma_table_info('alert_history') WHERE name='rule_id'").Scan(&hasRuleID); err != nil {
+						return fmt.Errorf("check alert_history.rule_id: %w", err)
+					}
+					if hasRuleID {
+						if _, err := tx.ExecContext(ctx, "DROP TABLE IF EXISTS temp._alert_history_rule_backup"); err != nil {
+							return fmt.Errorf("drop stale backup: %w", err)
+						}
+						quarantineRes, err := tx.ExecContext(ctx, "UPDATE alert_history SET rule_id = NULL WHERE rule_id IS NOT NULL AND rule_id NOT IN (SELECT id FROM alert_rules)")
+						if err != nil {
+							return fmt.Errorf("quarantine orphan alert_history refs: %w", err)
+						}
+						if quarantined, err := quarantineRes.RowsAffected(); err == nil {
+							log.WarnContext(ctx, "Migration: quarantined orphan alert_history refs (rule_id set to NULL)", "quarantined_count", quarantined)
+						} else {
+							log.WarnContext(ctx, "Migration: quarantined orphan alert_history refs (rule_id set to NULL)", "quarantined_count", "unknown")
+						}
+						if _, err := tx.ExecContext(ctx, "CREATE TEMP TABLE _alert_history_rule_backup AS SELECT id, rule_id FROM alert_history"); err != nil {
+							return fmt.Errorf("backup alert_history refs: %w", err)
+						}
+						if _, err := tx.ExecContext(ctx, "UPDATE alert_history SET rule_id = NULL WHERE rule_id IS NOT NULL"); err != nil {
+							return fmt.Errorf("detach alert_history refs: %w", err)
+						}
+						detached = true
+					}
+				}
+				if _, err := tx.ExecContext(ctx, `CREATE TABLE alert_rules_new (
+id INTEGER PRIMARY KEY AUTOINCREMENT,
+name TEXT NOT NULL,
+alert_type TEXT NOT NULL CHECK(alert_type IN ('peer_offline', 'bundle_failed', 'blocked_spike', 'peer_online', 'new_peer', 'bundle_deployed', 'agent_updated', 'bundle_notified')),
+enabled BOOLEAN NOT NULL DEFAULT 1,
+threshold_value INTEGER,
+threshold_window_minutes INTEGER,
+peer_id TEXT,
+throttle_minutes INTEGER NOT NULL DEFAULT 5,
+created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)`); err != nil {
+					return fmt.Errorf("create alert_rules_new: %w", err)
+				}
+				if _, err := tx.ExecContext(ctx, `INSERT INTO alert_rules_new (id, name, alert_type, enabled, threshold_value, threshold_window_minutes, peer_id, throttle_minutes, created_at, updated_at) SELECT id, name, alert_type, enabled, threshold_value, threshold_window_minutes, peer_id, throttle_minutes, created_at, updated_at FROM alert_rules`); err != nil {
+					return fmt.Errorf("copy alert_rules data: %w", err)
+				}
+				if _, err := tx.ExecContext(ctx, "DROP TABLE alert_rules"); err != nil {
+					return fmt.Errorf("drop old alert_rules: %w", err)
+				}
+				if _, err := tx.ExecContext(ctx, "ALTER TABLE alert_rules_new RENAME TO alert_rules"); err != nil {
+					return fmt.Errorf("rename alert_rules_new: %w", err)
+				}
+				if _, err := tx.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_alert_rules_type_enabled ON alert_rules(alert_type, enabled)"); err != nil {
+					return fmt.Errorf("create idx_alert_rules_type_enabled: %w", err)
+				}
+				if _, err := tx.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_alert_rules_peer_id ON alert_rules(peer_id)"); err != nil {
+					return fmt.Errorf("create idx_alert_rules_peer_id: %w", err)
+				}
+				if detached {
+					if _, err := tx.ExecContext(ctx, "UPDATE alert_history SET rule_id = (SELECT rule_id FROM temp._alert_history_rule_backup WHERE temp._alert_history_rule_backup.id = alert_history.id) WHERE id IN (SELECT id FROM temp._alert_history_rule_backup WHERE rule_id IS NOT NULL)"); err != nil {
+						return fmt.Errorf("restore alert_history refs: %w", err)
+					}
+					if _, err := tx.ExecContext(ctx, "DROP TABLE IF EXISTS temp._alert_history_rule_backup"); err != nil {
+						return fmt.Errorf("drop backup: %w", err)
+					}
+				}
+				fkRows, err := tx.QueryContext(ctx, "PRAGMA foreign_key_check")
+				if err != nil {
+					return fmt.Errorf("foreign_key_check: %w", err)
+				}
+				violationCount := 0
+				for fkRows.Next() {
+					var fkTable sql.NullString
+					var fkRowID sql.NullInt64
+					var fkRefTable sql.NullString
+					var fkIndex sql.NullInt64
+					if err := fkRows.Scan(&fkTable, &fkRowID, &fkRefTable, &fkIndex); err != nil {
+						_ = fkRows.Close()
+						return fmt.Errorf("scan foreign_key_check: %w", err)
+					}
+					if (fkTable.Valid && fkTable.String == "alert_history") || (fkRefTable.Valid && fkRefTable.String == "alert_rules") {
+						violationCount++
+					}
+				}
+				if err := fkRows.Err(); err != nil {
+					_ = fkRows.Close()
+					return fmt.Errorf("iterate foreign_key_check: %w", err)
+				}
+				if err := fkRows.Close(); err != nil {
+					return fmt.Errorf("close foreign_key_check rows: %w", err)
+				}
+				if violationCount > 0 {
+					return fmt.Errorf("foreign_key_check found %d violation(s) after alert_rules rebuild", violationCount)
+				}
+				return nil
+			}); err != nil {
+				return err
+			}
+			log.Info("Migration: successfully added bundle_notified to alert_rules CHECK constraint")
+		}
+	}
+	if hasAlertRules {
+		var hasBundleNotifiedRule bool
+		if err := database.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM alert_rules WHERE alert_type = 'bundle_notified'").Scan(&hasBundleNotifiedRule); err != nil {
+			return fmt.Errorf("failed to check for bundle_notified rule: %w", err)
+		}
+		if !hasBundleNotifiedRule {
+			log.Info("Migration: seeding default bundle_notified alert rule")
+			if _, err := database.ExecContext(ctx, `INSERT INTO alert_rules (name, alert_type, enabled, threshold_value, threshold_window_minutes, throttle_minutes) SELECT 'Bundle Notified', 'bundle_notified', 1, 0, 5, 5 WHERE NOT EXISTS (SELECT 1 FROM alert_rules WHERE alert_type = 'bundle_notified')`); err != nil {
+				return fmt.Errorf("failed to seed bundle_notified alert rule: %w", err)
+			}
+			log.Info("Migration: seeded default bundle_notified alert rule")
 		}
 	}
 

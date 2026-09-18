@@ -1366,6 +1366,168 @@ func TestHeartbeatRecordsVersionChange(t *testing.T) {
 	}
 }
 
+// TestHeartbeatEmptyBody is a regression test for the smoke-test versus
+// heartbeat contract: an empty body (agent smoke test with no payload) must
+// return 200 with zero-value input, while non-empty bad JSON still returns
+// 400 and maxVersionLen/validateAllIPs enforcement still applies.
+func TestHeartbeatEmptyBody(t *testing.T) {
+	setupPeer := func(t *testing.T, db *sql.DB) {
+		t.Helper()
+		if _, err := db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)`,
+			"test-agent", "10.0.0.1", "agent-key-test", "test-hmac"); err != nil {
+			t.Fatalf("insert peer: %v", err)
+		}
+	}
+
+	doHeartbeat := func(t *testing.T, db *sql.DB, logsDB *sql.DB, method, body string, useNilBody bool) *httptest.ResponseRecorder {
+		t.Helper()
+		var req *http.Request
+		if useNilBody {
+			req = httptest.NewRequest(method, "/api/v1/agent/heartbeat", nil)
+			req.Header.Set("Authorization", "Bearer "+generateValidAgentToken(t, db, "test-agent"))
+		} else {
+			req = makeAuthRequest(t, db, method, "/api/v1/agent/heartbeat", body, "test-agent")
+		}
+		w := httptest.NewRecorder()
+		handler := NewHandler(store.NewPeerStore(db), store.NewDashboardStore(db, logsDB), nil, store.NewImportStore(db, store.NewPeerStore(db), store.NewGroupStore(db), store.NewServiceStore(db)), store.NewTokenStore(db), db)
+		handler.AgentAuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
+			handler.Heartbeat(w, r)
+		}).ServeHTTP(w, req)
+		return w
+	}
+
+	checkOK := func(t *testing.T, w *httptest.ResponseRecorder) {
+		t.Helper()
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+		var resp map[string]string
+		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		if resp["status"] != "ok" {
+			t.Errorf("expected status 'ok', got %v", resp["status"])
+		}
+	}
+
+	t.Run("empty string body POST returns 200", func(t *testing.T) {
+		db, logsDB, cleanup := testutil.SetupTestDBWithSecretAndLogs(t)
+		defer cleanup()
+		setupPeer(t, db)
+		checkOK(t, doHeartbeat(t, db, logsDB, "POST", "", false))
+	})
+
+	t.Run("nil body POST returns 200", func(t *testing.T) {
+		db, logsDB, cleanup := testutil.SetupTestDBWithSecretAndLogs(t)
+		defer cleanup()
+		setupPeer(t, db)
+		checkOK(t, doHeartbeat(t, db, logsDB, "POST", "", true))
+	})
+
+	t.Run("empty body GET returns 200 (compat)", func(t *testing.T) {
+		db, logsDB, cleanup := testutil.SetupTestDBWithSecretAndLogs(t)
+		defer cleanup()
+		setupPeer(t, db)
+		checkOK(t, doHeartbeat(t, db, logsDB, "GET", "", false))
+	})
+
+	t.Run("empty JSON object returns 200", func(t *testing.T) {
+		db, logsDB, cleanup := testutil.SetupTestDBWithSecretAndLogs(t)
+		defer cleanup()
+		setupPeer(t, db)
+		checkOK(t, doHeartbeat(t, db, logsDB, "POST", "{}", false))
+	})
+
+	t.Run("non-empty bad JSON still returns 400", func(t *testing.T) {
+		db, logsDB, cleanup := testutil.SetupTestDBWithSecretAndLogs(t)
+		defer cleanup()
+		setupPeer(t, db)
+		w := doHeartbeat(t, db, logsDB, "POST", "{invalid json}", false)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("oversized agent_version still returns 400", func(t *testing.T) {
+		db, logsDB, cleanup := testutil.SetupTestDBWithSecretAndLogs(t)
+		defer cleanup()
+		setupPeer(t, db)
+		body := fmt.Sprintf(`{"agent_version": %q}`, strings.Repeat("a", maxVersionLen+1))
+		w := doHeartbeat(t, db, logsDB, "POST", body, false)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 for oversized agent_version, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("invalid all_ips still returns 400", func(t *testing.T) {
+		db, logsDB, cleanup := testutil.SetupTestDBWithSecretAndLogs(t)
+		defer cleanup()
+		setupPeer(t, db)
+		w := doHeartbeat(t, db, logsDB, "POST", `{"all_ips": ["not-an-ip"]}`, false)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 for invalid all_ips, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+}
+
+// TestHeartbeatPreservesHasIPSetOnEmptyObject is a regression test for the
+// smoke-heartbeat NULLing bug: POST "{}" (agent ApplyBundle smoke test) and
+// empty-body heartbeats report HasIPSet=nil and must preserve the stored
+// has_ipset via COALESCE(?, has_ipset) instead of overwriting it with NULL.
+func TestHeartbeatPreservesHasIPSetOnEmptyObject(t *testing.T) {
+	db, logsDB, cleanup := testutil.SetupTestDBWithSecretAndLogs(t)
+	defer cleanup()
+
+	if _, err := db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, has_ipset) VALUES (?, ?, ?, ?, ?)`,
+		"test-agent", "10.0.0.1", "agent-key-test", "test-hmac", true); err != nil {
+		t.Fatalf("insert peer: %v", err)
+	}
+
+	readHasIPSet := func() int {
+		t.Helper()
+		var v int
+		if err := db.QueryRow(`SELECT COALESCE(has_ipset, -1) FROM peers WHERE hostname = ?`, "test-agent").Scan(&v); err != nil {
+			t.Fatalf("query has_ipset: %v", err)
+		}
+		return v
+	}
+
+	if got := readHasIPSet(); got != 1 {
+		t.Fatalf("initial has_ipset = %d, want 1", got)
+	}
+
+	doHeartbeat := func(method, body string, useNilBody bool) *httptest.ResponseRecorder {
+		t.Helper()
+		var req *http.Request
+		if useNilBody {
+			req = httptest.NewRequest(method, "/api/v1/agent/heartbeat", nil)
+			req.Header.Set("Authorization", "Bearer "+generateValidAgentToken(t, db, "test-agent"))
+		} else {
+			req = makeAuthRequest(t, db, method, "/api/v1/agent/heartbeat", body, "test-agent")
+		}
+		w := httptest.NewRecorder()
+		handler := NewHandler(store.NewPeerStore(db), store.NewDashboardStore(db, logsDB), nil, store.NewImportStore(db, store.NewPeerStore(db), store.NewGroupStore(db), store.NewServiceStore(db)), store.NewTokenStore(db), db)
+		handler.AgentAuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
+			handler.Heartbeat(w, r)
+		}).ServeHTTP(w, req)
+		return w
+	}
+
+	if w := doHeartbeat("POST", "{}", false); w.Code != http.StatusOK {
+		t.Fatalf("POST {} heartbeat: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if got := readHasIPSet(); got != 1 {
+		t.Errorf("has_ipset after POST {} = %d, want 1 preserved", got)
+	}
+
+	if w := doHeartbeat("POST", "", true); w.Code != http.StatusOK {
+		t.Fatalf("nil body heartbeat: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if got := readHasIPSet(); got != 1 {
+		t.Errorf("has_ipset after empty heartbeat = %d, want 1 preserved", got)
+	}
+}
+
 // =============================================================================
 // =============================================================================
 

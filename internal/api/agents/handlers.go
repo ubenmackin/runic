@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"slices"
 	"strings"
@@ -169,6 +170,21 @@ func filterValidIPs(ips []string) []string {
 		valid = append(valid, ip)
 	}
 	return valid
+}
+
+// heartbeatFinalizeCtx returns a detached context for must-succeed heartbeat
+// writes that must survive handler timeout or client disconnect. The 5s
+// handler deadline races the 5s SQLite busy_timeout, so the final heartbeat
+// UPDATE and SyncPeerIPs run detached (values without cancellation) bounded
+// by constants.DetachedFinalizeTimeout, shared with PushWorker finalizeCtx
+// via common.FinalizeCtxWithTimeout. Retry budget: each Exec can block up
+// to 5s in busy_timeout and retries up to db.BusyRetryAttempts (3) with
+// backoff, so one operation spans up to ~15s. The 15s bound allows a full
+// retry cycle; heartbeat and IP sync each get a fresh detached context so
+// the sequential SyncPeerIPs statements cannot starve on a single shared
+// deadline.
+func heartbeatFinalizeCtx(parent context.Context) (context.Context, context.CancelFunc) {
+	return common.FinalizeCtxWithTimeout(parent, constants.DetachedFinalizeTimeout)
 }
 
 type SSEBroadcaster interface {
@@ -826,13 +842,18 @@ func (h *Handler) Heartbeat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		var maxErr *http.MaxBytesError
-		if errors.As(err, &maxErr) {
-			common.RespondError(w, http.StatusRequestEntityTooLarge, "request body too large")
+		if errors.Is(err, io.EOF) {
+			// Empty body (e.g., agent smoke test with no payload): treat as
+			// zero-value input. Length and IP validation below still applies.
+		} else {
+			var maxErr *http.MaxBytesError
+			if errors.As(err, &maxErr) {
+				common.RespondError(w, http.StatusRequestEntityTooLarge, "request body too large")
+				return
+			}
+			common.RespondError(w, http.StatusBadRequest, "invalid JSON")
 			return
 		}
-		common.RespondError(w, http.StatusBadRequest, "invalid JSON")
-		return
 	}
 
 	if len(input.AgentVersion) > maxVersionLen {
@@ -852,25 +873,45 @@ func (h *Handler) Heartbeat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Best-effort: record the heartbeat and capture the previously stored
-	// agent version in a single transaction so concurrent heartbeats cannot
-	// interleave a separate pre-read and update (TOCTOU). Failures here must
-	// not fail the heartbeat itself.
+	// agent version. The store pre-reads outside any transaction and issues a
+	// single auto-commit UPDATE with SQLITE_BUSY retry, so concurrent writers
+	// (OfflineDetector UPDATE peers, SaveBundle INSERT) never meet a
+	// lock-upgrade deadlock. Failures here must not fail the heartbeat itself:
+	// the handler always answers 200 and the applied bundle version is either
+	// recorded via COALESCE(NULLIF) or explicitly logged with peer_id below.
 	ctx, cancel := runiccommon.WithHandlerTimeout(r.Context())
 	defer cancel()
+	// Detached must-succeed write contexts: the 5s handler deadline races the
+	// 5s SQLite busy_timeout, so the final heartbeat UPDATE and SyncPeerIPs
+	// run detached from request cancellation with their own 15s bounds. Each
+	// gets a fresh heartbeatFinalizeCtx (one full BusyRetryAttempts cycle of
+	// up to ~15s) so heartbeat contention cannot starve IP sync on a single
+	// shared deadline. A nil HasIPSet preserves the stored has_ipset via
+	// COALESCE(?, has_ipset), so smoke (POST "{}") and empty heartbeats
+	// cannot erase ipset capability.
+	writeCtx, writeCancel := heartbeatFinalizeCtx(ctx)
+	defer writeCancel()
 
 	prevHostname := ""
 	prevVersion := ""
 	prevKnown := false
 	var heartbeatErr error
-	if hostname, ver, known, err := h.PeerStore.UpdatePeerHeartbeatWithPrev(ctx, serverID, input.AgentVersion, input.BundleVersionApplied, input.HasIPSet); err != nil {
+	if hostname, ver, known, err := h.PeerStore.UpdatePeerHeartbeatWithPrev(writeCtx, serverID, input.AgentVersion, input.BundleVersionApplied, input.HasIPSet); err != nil {
 		heartbeatErr = err
-		runiclog.Error("failed to update heartbeat error", "error", heartbeatErr)
+		runiclog.Error("failed to update heartbeat", "error", heartbeatErr, "peer_id", serverID, "bundle_version_applied", input.BundleVersionApplied)
 	} else {
 		prevHostname = hostname
 		if ver.Valid {
 			prevVersion = ver.String
 		}
 		prevKnown = known
+		// The applied bundle version is recorded via COALESCE(NULLIF): an
+		// empty report preserves the stored value. Log the applied value at
+		// debug scope with peer_id when the write succeeds so a missing
+		// confirmation is auditable without failing the heartbeat.
+		if input.BundleVersionApplied != "" {
+			runiclog.Debug("heartbeat: bundle version applied recorded", "peer_id", serverID, "bundle_version_applied", input.BundleVersionApplied)
+		}
 	}
 
 	// Record agent version changes only (no duplicate spam): when the
@@ -889,8 +930,14 @@ func (h *Handler) Heartbeat(w http.ResponseWriter, r *http.Request) {
 
 	if len(input.AllIPs) > 0 {
 		if validIPs := filterValidIPs(input.AllIPs); len(validIPs) > 0 {
-			if primaryIP, err := h.PeerStore.GetPeerPrimaryIP(ctx, serverID); err == nil {
-				if _, err := h.PeerStore.SyncPeerIPs(ctx, serverID, validIPs, primaryIP); err != nil {
+			// Fresh budget for IP sync: a new detached context so the
+			// multi-statement SyncPeerIPs (each statement retries busy) does
+			// not share the heartbeat UPDATE deadline. Best-effort:
+			// failures only warn and never fail the heartbeat.
+			syncCtx, syncCancel := heartbeatFinalizeCtx(ctx)
+			defer syncCancel()
+			if primaryIP, err := h.PeerStore.GetPeerPrimaryIP(syncCtx, serverID); err == nil {
+				if _, err := h.PeerStore.SyncPeerIPs(syncCtx, serverID, validIPs, primaryIP); err != nil {
 					runiclog.Warn("failed to sync peer IPs during heartbeat", "error", err, "peer_id", serverID)
 				}
 			}

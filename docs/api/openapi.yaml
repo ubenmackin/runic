@@ -4670,7 +4670,7 @@ components:
           format: uint
         alert_type:
           type: string
-          enum: [peer_offline, bundle_failed, blocked_spike, peer_online, new_peer, bundle_deployed, agent_updated]
+          enum: [peer_offline, bundle_failed, blocked_spike, peer_online, new_peer, bundle_deployed, agent_updated, bundle_notified]
         peer_id:
           type: integer
           nullable: true
@@ -4711,7 +4711,7 @@ components:
           maxLength: 255
         alert_type:
           type: string
-          enum: [peer_offline, bundle_failed, blocked_spike, peer_online, new_peer, bundle_deployed, agent_updated]
+          enum: [peer_offline, bundle_failed, blocked_spike, peer_online, new_peer, bundle_deployed, agent_updated, bundle_notified]
         enabled:
           type: boolean
         threshold_value:
@@ -4745,7 +4745,7 @@ components:
           maxLength: 255
         alert_type:
           type: string
-          enum: [peer_offline, bundle_failed, blocked_spike, peer_online, new_peer, bundle_deployed, agent_updated]
+          enum: [peer_offline, bundle_failed, blocked_spike, peer_online, new_peer, bundle_deployed, agent_updated, bundle_notified]
         enabled:
           type: boolean
           default: true
@@ -4773,7 +4773,7 @@ components:
           maxLength: 255
         alert_type:
           type: string
-          enum: [peer_offline, bundle_failed, blocked_spike, peer_online, new_peer, bundle_deployed, agent_updated]
+          enum: [peer_offline, bundle_failed, blocked_spike, peer_online, new_peer, bundle_deployed, agent_updated, bundle_notified]
         enabled:
           type: boolean
         threshold_value:
@@ -4800,7 +4800,7 @@ components:
           format: uint
         alert_type:
           type: string
-          enum: [peer_offline, bundle_failed, blocked_spike, peer_online, new_peer, bundle_deployed, agent_updated]
+          enum: [peer_offline, bundle_failed, blocked_spike, peer_online, new_peer, bundle_deployed, agent_updated, bundle_notified]
         peer_id:
           type: integer
           nullable: true

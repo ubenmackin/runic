@@ -12,6 +12,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"runic/internal/change"
+	runiccommon "runic/internal/common"
+	"runic/internal/common/constants"
 	runiclog "runic/internal/common/log"
 	"runic/internal/db"
 	"runic/internal/engine"
@@ -70,15 +72,25 @@ type PushWorker struct {
 	closeMu sync.RWMutex
 }
 
+// FinalizeCtxWithTimeout returns a detached context for must-succeed writes
+// that must survive parent cancellation, bounded by the given timeout. It is
+// the shared helper for PushWorker finalizeCtx and agent heartbeatFinalizeCtx
+// so the detached pattern (values without cancellation) stays in one place;
+// callers parameterize the budget via constants (e.g.
+// constants.DetachedFinalizeTimeout) and must request a fresh context per
+// sequential operation so statements cannot starve on a shared deadline.
+func FinalizeCtxWithTimeout(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	return runiccommon.DetachedTimeout(parent, timeout)
+}
+
 // finalizeCtx returns a detached context for final DB writes that must
 // succeed even when the job context has been canceled (shutdown or timeout).
-// The detached context carries values but not cancellation, bounded by a
-// short timeout so shutdown cannot hang indefinitely.
+// The detached context carries values but not cancellation, bounded by
+// constants.DetachedFinalizeTimeout so shutdown cannot hang indefinitely.
+// Retry budget: each Exec can block up to 5s in busy_timeout and retries up
+// to db.BusyRetryAttempts (3), so one finalize spans up to ~15s.
 func finalizeCtx(parent context.Context) (context.Context, context.CancelFunc) {
-	if parent == nil {
-		parent = context.Background()
-	}
-	return context.WithTimeout(context.WithoutCancel(parent), 15*time.Second)
+	return FinalizeCtxWithTimeout(parent, constants.DetachedFinalizeTimeout)
 }
 
 func NewPushWorker(database *sql.DB, compiler *engine.Compiler, alertService AlertTrigger, sseHub BundleNotifier) *PushWorker {
@@ -298,6 +310,21 @@ func (w *PushWorker) triggerAlert(ctx context.Context, event *models.AlertEvent)
 	}
 }
 
+// processJob is the Push path worker (never clears pending).
+//
+// Push lifecycle: per peer CompileAndStore (advancing
+// rule_bundles.version_number) + SSE NotifyBundleUpdated. This function never
+// deletes pending_changes, previews, or snapshots, and never updates
+// peers.bundle_version or rule_bundles.applied_at — only Apply
+// (ApplyPeerPendingBundle/ApplyEntityPendingChanges/applyBundleForPeer) clears
+// pending, and only ConfirmBundleApplied confirms (peers.bundle_version +
+// rule_bundles.applied_at). Per-peer push_job_peers status "notified" and the
+// "notified" counter mean SSE delivered, not agent-confirmed; the terminal job
+// status stays "complete"/"completed_with_errors" (notified counts) and UI
+// copy must render notified distinctly from confirmed. ListPeers stays
+// "pending" while pending_changes > 0 and "pending_sync" while the latest
+// version != bundle_version, so a Push without a prior Apply leaves the peer
+// "pending" by design.
 func (w *PushWorker) processJob(ctx context.Context, jobID string) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -316,10 +343,15 @@ func (w *PushWorker) processJob(ctx context.Context, jobID string) {
 				runiclog.Error("pushworker: failed to mark job failed", "job_id", jobID, "error", err)
 			}
 			fcancel()
+			// notified is canonical (SSE delivered, not agent-confirmed);
+			// succeeded/success are deprecated aliases for notified kept for
+			// backward compatibility. Terminal status stays failed here;
+			// confirmed is only via ConfirmBundleApplied.
 			w.notifyProgress(jobID, "complete", map[string]any{
 				"status":      "failed",
 				"total_peers": 0,
 				"total":       0,
+				"notified":    0,
 				"succeeded":   0,
 				"success":     0,
 				"failed":      1,
@@ -342,6 +374,7 @@ func (w *PushWorker) processJob(ctx context.Context, jobID string) {
 			"status":      "failed",
 			"total_peers": 0,
 			"total":       0,
+			"notified":    0,
 			"succeeded":   0,
 			"success":     0,
 			"failed":      1,
@@ -363,13 +396,15 @@ func (w *PushWorker) processJob(ctx context.Context, jobID string) {
 			runiclog.Error("failed to finalize push job on complete", "error", ferr)
 		}
 		// total_peers is canonical; total is a deprecated alias kept for
-		// backward compatibility. succeeded is canonical; success is a
-		// deprecated alias kept for backward compatibility so existing SSE
-		// consumers keep working.
+		// backward compatibility. notified is canonical (SSE delivered, not
+		// agent-confirmed); succeeded/success are deprecated aliases for
+		// notified kept for backward compatibility so existing SSE consumers
+		// keep working.
 		w.notifyProgress(jobID, "complete", map[string]any{
 			"status":      "completed",
 			"total_peers": 0,
 			"total":       0,
+			"notified":    0,
 			"succeeded":   0,
 			"success":     0,
 			"failed":      0,
@@ -379,7 +414,11 @@ func (w *PushWorker) processJob(ctx context.Context, jobID string) {
 
 	runiclog.Info("pushworker: processing job", "job_id", jobID, "initiated_by", job.InitiatedBy, "total_peers", total)
 
-	succeeded := 0
+	// notified counts SSE-delivered peers (per-peer status "notified"), not
+	// agent-confirmed peers. Confirmed happens only via ConfirmBundleApplied
+	// (peers.bundle_version + rule_bundles.applied_at). The succeeded_count
+	// column stores this notified count for backward compatibility.
+	notified := 0
 	failed := 0
 
 	for _, peer := range peers {
@@ -389,7 +428,7 @@ func (w *PushWorker) processJob(ctx context.Context, jobID string) {
 			runiclog.Warn("pushworker: job context canceled, aborting",
 				"job_id", jobID, "error", jobCtx.Err())
 			fctx, fcancel := finalizeCtx(ctx)
-			_ = db.FinalizePushJobWithCounts(fctx, w.db, jobID, succeeded, failed)
+			_ = db.FinalizePushJobWithCounts(fctx, w.db, jobID, notified, failed)
 			fcancel()
 			return
 		default:
@@ -401,7 +440,8 @@ func (w *PushWorker) processJob(ctx context.Context, jobID string) {
 			"status":      "processing",
 			"total_peers": total,
 			"total":       total,
-			"succeeded":   succeeded,
+			"notified":    notified,
+			"succeeded":   notified,
 			"failed":      failed,
 		})
 
@@ -418,7 +458,8 @@ func (w *PushWorker) processJob(ctx context.Context, jobID string) {
 				"error":       err.Error(),
 				"total_peers": total,
 				"total":       total,
-				"succeeded":   succeeded,
+				"notified":    notified,
+				"succeeded":   notified,
 				"failed":      failed,
 			})
 
@@ -453,7 +494,8 @@ func (w *PushWorker) processJob(ctx context.Context, jobID string) {
 				"error":       "SSE delivery failed: agent not connected",
 				"total_peers": total,
 				"total":       total,
-				"succeeded":   succeeded,
+				"notified":    notified,
+				"succeeded":   notified,
 				"failed":      failed,
 			})
 
@@ -473,26 +515,41 @@ func (w *PushWorker) processJob(ctx context.Context, jobID string) {
 			continue
 		}
 
+		// Per-peer status "notified" means SSE delivered, not agent-confirmed.
+		// Confirmed happens only via ConfirmBundleApplied (peers.bundle_version
+		// + rule_bundles.applied_at). The peer_success event name and the
+		// succeeded/success payload keys are deprecated aliases for notified
+		// kept so existing SSE consumers keep working; new UI copy must read
+		// notified and render it distinctly from confirmed.
 		if err := db.UpdatePushJobPeerStatus(jobCtx, w.db, jobID, peer.PeerID, "notified", ""); err != nil {
 			runiclog.Error("failed to update push job peer status", "error", err)
 		}
 
-		succeeded++
+		notified++
 		w.notifyProgress(jobID, "peer_success", map[string]any{
 			"peer_id":     peer.PeerID,
 			"hostname":    peer.Hostname,
 			"version":     bundle.Version,
 			"total_peers": total,
 			"total":       total,
-			"succeeded":   succeeded,
+			"notified":    notified,
+			"succeeded":   notified,
 			"failed":      failed,
 		})
 
+		// Notified, not confirmed: the agent has been told a new bundle
+		// exists via SSE but has not yet applied it. Confirmation arrives
+		// only via ConfirmBundleApplied (peers.bundle_version +
+		// rule_bundles.applied_at, surfaced via AlertTypeBundleDeployed).
+		// This path uses AlertTypeBundleNotified so Type-based consumers
+		// (rules/digest/UI) never group or render an SSE notify as a
+		// deployed/confirmed bundle.
 		w.triggerAlert(jobCtx, &models.AlertEvent{
-			Type:     models.AlertTypeBundleDeployed,
+			Type:     models.AlertTypeBundleNotified,
 			PeerID:   peer.PeerID,
 			PeerName: peer.Hostname,
-			Subject:  fmt.Sprintf("Bundle deployed: %s", peer.Hostname),
+			Subject:  fmt.Sprintf("Bundle notified: %s", peer.Hostname),
+			Message:  "Bundle notification sent via SSE; awaiting agent confirmation",
 			Metadata: map[string]any{
 				"hostname": peer.Hostname,
 				"version":  bundle.Version,
@@ -503,8 +560,11 @@ func (w *PushWorker) processJob(ctx context.Context, jobID string) {
 
 	// Finalize job with counts in a single atomic update. Uses a detached
 	// context so the write succeeds even if the job context was canceled.
+	// notified is stored in succeeded_count for backward compatibility; the
+	// terminal status stays complete/completed_with_errors (notified counts),
+	// never confirmed — confirmed is only via ConfirmBundleApplied.
 	fctx, fcancel := finalizeCtx(ctx)
-	if err := db.FinalizePushJobWithCounts(fctx, w.db, jobID, succeeded, failed); err != nil {
+	if err := db.FinalizePushJobWithCounts(fctx, w.db, jobID, notified, failed); err != nil {
 		runiclog.Error("failed to finalize push job with counts", "error", err)
 	}
 	fcancel()
@@ -514,14 +574,15 @@ func (w *PushWorker) processJob(ctx context.Context, jobID string) {
 		finalStatus = "completed_with_errors"
 	}
 
-	runiclog.Info("pushworker: job finished", "job_id", jobID, "status", finalStatus, "total", total, "succeeded", succeeded, "failed", failed)
+	runiclog.Info("pushworker: job finished", "job_id", jobID, "status", finalStatus, "total", total, "notified", notified, "succeeded", notified, "failed", failed)
 
 	w.notifyProgress(jobID, "complete", map[string]any{
 		"status":      finalStatus,
 		"total_peers": total,
 		"total":       total,
-		"succeeded":   succeeded,
-		"success":     succeeded,
+		"notified":    notified,
+		"succeeded":   notified,
+		"success":     notified,
 		"failed":      failed,
 	})
 }

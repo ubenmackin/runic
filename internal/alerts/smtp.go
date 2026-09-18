@@ -412,6 +412,8 @@ func (s *SMTPSender) generateAlertSubject(event *AlertEvent) string {
 		detail = fmt.Sprintf("Blocked Traffic Spike: %d events", event.Value)
 	case AlertTypeBundleDeployed:
 		detail = fmt.Sprintf("Bundle Deployed: %s", event.PeerName)
+	case AlertTypeBundleNotified:
+		detail = fmt.Sprintf("Bundle Notified: %s", event.PeerName)
 	case AlertTypeAgentUpdated:
 		detail = fmt.Sprintf("Agent Updated: %s", event.PeerName)
 	default:
@@ -535,6 +537,21 @@ func (s *SMTPSender) generateAlertHTML(event *AlertEvent, instanceURL string) st
 		}
 		if firstAppliedAt := getMetaString("first_applied_at"); firstAppliedAt != "" {
 			detailsTable.WriteString(renderTDRow("First Applied", s.htmlEscape(firstAppliedAt), ""))
+		}
+
+	case AlertTypeBundleNotified:
+		// Notified, not confirmed: SSE delivered, awaiting agent
+		// confirmation via ConfirmBundleApplied. Rendered distinctly from
+		// BundleDeployed (no applied timestamps; notify carries version +
+		// job only).
+		detailsTable.WriteString(renderTDRow("Peer", fmt.Sprintf("%s (ID: %d)", s.htmlEscape(event.PeerName), event.PeerID), ""))
+		if bundleVersion := getMetaString("bundle_version"); bundleVersion != "" {
+			detailsTable.WriteString(renderTDRow("Bundle Version", s.htmlEscape(bundleVersion), ""))
+		} else if bundleVersion := getMetaString("version"); bundleVersion != "" {
+			detailsTable.WriteString(renderTDRow("Bundle Version", s.htmlEscape(bundleVersion), ""))
+		}
+		if jobID := getMetaString("job_id"); jobID != "" {
+			detailsTable.WriteString(renderTDRow("Job ID", s.htmlEscape(jobID), ""))
 		}
 	}
 

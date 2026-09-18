@@ -32,13 +32,65 @@ var ErrPeerIPReferenced = errors.New("peer IP is referenced by policies")
 // updatePeerHeartbeatSQL is the shared heartbeat UPDATE used by both
 // UpdatePeerHeartbeat and UpdatePeerHeartbeatWithPrev. Empty version strings
 // preserve the stored value so a heartbeat with a missing version cannot
-// erase the confirmation signal used to track agent self-updates.
-const updatePeerHeartbeatSQL = `UPDATE peers SET last_heartbeat = CURRENT_TIMESTAMP, status = 'online', agent_version = COALESCE(NULLIF(?, ''), agent_version), bundle_version = COALESCE(NULLIF(?, ''), bundle_version), has_ipset = ? WHERE id = ?`
+// erase the confirmation signal used to track agent self-updates. A nil
+// has_ipset preserves the stored value via COALESCE(?, has_ipset) so smoke
+// (POST "{}") and tolerated-EOF empty heartbeats that report HasIPSet=nil
+// cannot erase ipset capability and break compile fallback. database/sql
+// binds a nil *bool as NULL (COALESCE keeps the column) and dereferences a
+// non-nil *bool to its bool value for storage.
+const updatePeerHeartbeatSQL = `UPDATE peers SET last_heartbeat = CURRENT_TIMESTAMP, status = 'online', agent_version = COALESCE(NULLIF(?, ''), agent_version), bundle_version = COALESCE(NULLIF(?, ''), bundle_version), has_ipset = COALESCE(?, has_ipset) WHERE id = ?`
 
 // countPolicyRefsForPeerIPSQL counts policy references to a peer IP on both
 // the source and target sides. Shared by DeletePeerIPIfOrphan,
 // CountPolicyRefsForPeerIP, and SyncPeerIPs.
 const countPolicyRefsForPeerIPSQL = `SELECT COUNT(*) FROM policies WHERE (source_id = ? AND source_ip = ?) OR (target_id = ? AND target_ip = ?)`
+
+// heartbeatBusyBaseDelay is the base backoff between SQLITE_BUSY retries on
+// hot heartbeat/SyncPeerIPs writes. The driver-level busy_timeout=5000
+// (sqliteDSNWithPragmas plus PRAGMA busy_timeout=5000) already absorbs brief
+// contention; this outer backoff spaces the up-to-BusyRetryAttempts attempts
+// after that timeout expires. Retry budget: each Exec can block up to 5s in
+// busy_timeout, so BusyRetryAttempts=3 spans up to ~15s plus backoff. Callers
+// must run each operation on a detached context of at least 15s
+// (heartbeatFinalizeCtx, mirroring PushWorker finalizeCtx) so the third
+// attempt is not cut short, and must not share one deadline sequentially
+// across heartbeat plus multi-statement SyncPeerIPs without accounting for
+// the multiplied budget.
+const heartbeatBusyBaseDelay = 25 * time.Millisecond
+
+// execBusyRetry runs a single-statement write, retrying SQLITE_BUSY/LOCKED
+// contention with exponential backoff up to db.BusyRetryAttempts. Non-busy
+// errors fail fast without retry. The backoff sleep honors ctx so a timed-out
+// caller stops retrying instead of sleeping past its deadline. Each attempt
+// can block up to the 5s busy_timeout inside the driver, so a full retry
+// cycle needs a ~15s caller budget; heartbeat callers provide a fresh 15s
+// detached context per operation (heartbeat update, then IP sync) so the
+// sequential SyncPeerIPs statements cannot starve on a single shared
+// deadline.
+func (s *PeerStore) execBusyRetry(ctx context.Context, query string, args ...any) error {
+	var lastErr error
+	for attempt := 0; attempt < db.BusyRetryAttempts; attempt++ {
+		if attempt > 0 {
+			backoff := heartbeatBusyBaseDelay * time.Duration(1<<(attempt-1))
+			select {
+			case <-ctx.Done():
+				if lastErr != nil {
+					return lastErr
+				}
+				return ctx.Err()
+			case <-time.After(backoff):
+			}
+		}
+		if _, err := s.db.ExecContext(ctx, query, args...); err == nil {
+			return nil
+		} else if !db.IsBusyError(err) {
+			return err
+		} else {
+			lastErr = err
+		}
+	}
+	return lastErr
+}
 
 type PeerIPView struct {
 	ID        int    `json:"id"`
@@ -541,18 +593,16 @@ func (s *PeerStore) UpsertPeerIPs(ctx context.Context, peerID int, ips []string,
 		if ip == primaryIP {
 			isPrimary = 1
 		}
-		_, err := s.db.ExecContext(ctx,
+		if err := s.execBusyRetry(ctx,
 			"INSERT OR IGNORE INTO peer_ips (peer_id, ip_address, is_primary) VALUES (?, ?, ?)",
-			peerID, ip, isPrimary)
-		if err != nil {
+			peerID, ip, isPrimary); err != nil {
 			return fmt.Errorf("insert peer IP %s: %w", ic.TruncateString(ip, resolve.MaxLoggedIPLen), err)
 		}
 
 		if isPrimary == 1 {
-			_, err := s.db.ExecContext(ctx,
+			if err := s.execBusyRetry(ctx,
 				"UPDATE peer_ips SET is_primary = 1 WHERE peer_id = ? AND ip_address = ?",
-				peerID, ip)
-			if err != nil {
+				peerID, ip); err != nil {
 				log.WarnContext(ctx, "failed to update is_primary flag", "error", err, "peer_id", peerID, "ip", ip)
 			}
 		}
@@ -616,24 +666,24 @@ func (s *PeerStore) SyncPeerIPs(ctx context.Context, peerID int, ips []string, p
 			log.WarnContext(ctx, "skipping deletion of stale peer IP: referenced by active policies", "peer_id", peerID, "ip", entry.IP, "policy_count", refCount)
 			continue
 		}
-		_, err = s.db.ExecContext(ctx, "DELETE FROM peer_ips WHERE peer_id = ? AND ip_address = ?", peerID, entry.IP)
-		if err != nil {
+		if err := s.execBusyRetry(ctx, "DELETE FROM peer_ips WHERE peer_id = ? AND ip_address = ?", peerID, entry.IP); err != nil {
 			log.WarnContext(ctx, "failed to delete stale peer IP", "error", err, "peer_id", peerID, "ip", entry.IP)
 			continue
 		}
 		deletedIDs = append(deletedIDs, entry.ID)
 	}
 
-	// Ensure only the primary IP has is_primary = 1
-	_, err = s.db.ExecContext(ctx, "UPDATE peer_ips SET is_primary = 0 WHERE peer_id = ?", peerID)
-	if err != nil {
+	// Ensure only the primary IP has is_primary = 1. Each statement retries
+	// SQLITE_BUSY with backoff so a concurrent OfflineDetector UPDATE peers
+	// or bundle INSERT does not drop the primary flag; failures stay
+	// best-effort warn-and-continue so SyncPeerIPs never fails the heartbeat.
+	if err := s.execBusyRetry(ctx, "UPDATE peer_ips SET is_primary = 0 WHERE peer_id = ?", peerID); err != nil {
 		log.WarnContext(ctx, "failed to reset is_primary flags", "error", err, "peer_id", peerID)
 	}
 	if primaryIP != "" {
-		_, err = s.db.ExecContext(ctx,
+		if err := s.execBusyRetry(ctx,
 			"UPDATE peer_ips SET is_primary = 1 WHERE peer_id = ? AND ip_address = ?",
-			peerID, primaryIP)
-		if err != nil {
+			peerID, primaryIP); err != nil {
 			log.WarnContext(ctx, "failed to set primary IP flag", "error", err, "peer_id", peerID, "ip", primaryIP)
 		}
 	}
@@ -642,46 +692,39 @@ func (s *PeerStore) SyncPeerIPs(ctx context.Context, peerID int, ips []string, p
 }
 
 func (s *PeerStore) UpdatePeerHeartbeat(ctx context.Context, peerID int, agentVersion, bundleVersion string, hasIPSet *bool) error {
-	_, err := s.db.ExecContext(ctx, updatePeerHeartbeatSQL,
-		agentVersion, bundleVersion, hasIPSet, peerID)
-	if err != nil {
+	if err := s.execBusyRetry(ctx, updatePeerHeartbeatSQL,
+		agentVersion, bundleVersion, hasIPSet, peerID); err != nil {
 		return fmt.Errorf("update peer heartbeat: %w", err)
 	}
 	return nil
 }
 
 // UpdatePeerHeartbeatWithPrev records a heartbeat and returns the previously
-// stored hostname and agent version in a single transaction, so concurrent
-// heartbeats cannot interleave a separate pre-read and update (TOCTOU) and
-// the hot path issues one round trip instead of two. The pre-read is
-// best-effort: when it fails, known is false and the heartbeat update still
-// proceeds, so a read failure never fails the heartbeat itself. Callers log
-// a version-change event only when known is true, the update succeeded, and
-// the reported version is non-empty and differs from the previous value.
+// stored hostname and agent version without holding a read-to-write
+// transaction. The pre-read runs outside any transaction and the heartbeat is
+// a single auto-commit UPDATE with SQLITE_BUSY retry, so concurrent writers
+// (OfflineDetector UPDATE peers, SaveBundle INSERT, SyncPeerIPs) never meet a
+// lock-upgrade deadlock and only contend on the brief write lock already
+// covered by busy_timeout=5000 plus the outer retry. Empty version strings
+// preserve the stored value via COALESCE(NULLIF) so a missing version cannot
+// erase the confirmation signal. A nil has_ipset preserves the stored value
+// via COALESCE(?, has_ipset) so smoke and empty heartbeats cannot erase
+// ipset capability. The pre-read is best-effort: when it fails,
+// known is false and the heartbeat update still proceeds, so a read failure
+// never fails the heartbeat itself. Callers log a version-change event only
+// when known is true, the update succeeded, and the reported version is
+// non-empty and differs from the previous value.
 func (s *PeerStore) UpdatePeerHeartbeatWithPrev(ctx context.Context, peerID int, agentVersion, bundleVersion string, hasIPSet *bool) (hostname string, prevVersion sql.NullString, known bool, err error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return "", sql.NullString{}, false, fmt.Errorf("begin heartbeat tx: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback()
-		}
-	}()
-
 	known = true
-	if err := tx.QueryRowContext(ctx, "SELECT hostname, agent_version FROM peers WHERE id = ?", peerID).Scan(&hostname, &prevVersion); err != nil {
+	if err := s.db.QueryRowContext(ctx, "SELECT hostname, agent_version FROM peers WHERE id = ?", peerID).Scan(&hostname, &prevVersion); err != nil {
 		known = false
+		hostname = ""
+		prevVersion = sql.NullString{}
 	}
-	if _, err := tx.ExecContext(ctx, updatePeerHeartbeatSQL,
+	if err := s.execBusyRetry(ctx, updatePeerHeartbeatSQL,
 		agentVersion, bundleVersion, hasIPSet, peerID); err != nil {
 		return "", sql.NullString{}, false, fmt.Errorf("update peer heartbeat: %w", err)
 	}
-	if err := tx.Commit(); err != nil {
-		return "", sql.NullString{}, false, fmt.Errorf("commit heartbeat tx: %w", err)
-	}
-	committed = true
 	return hostname, prevVersion, known, nil
 }
 

@@ -3,6 +3,7 @@ package apply
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -22,6 +23,22 @@ const (
 	// are written so that a crash mid-apply does not lose the backup.
 	LocalBackupPath = "/etc/runic-agent/pre-apply-backup.rules"
 )
+
+// smokeBadRequestError reports a 4xx from the heartbeat smoke test. Any 4xx
+// (400 payload rejected, 401 expired/ invalid token, 403 forbidden, 405, 413,
+// 429, etc.) proves OUTPUT connectivity: the packet left the host, reached
+// the control plane, and drew an application-layer response. Reverting on a
+// 4xx would discard good rules due to a credential or application issue, so
+// the caller logs it without reverting. Revert is reserved for network
+// errors, timeouts, and 5xx/unexpected statuses where OUTPUT may genuinely be
+// broken.
+type smokeBadRequestError struct {
+	status int
+}
+
+func (e *smokeBadRequestError) Error() string {
+	return fmt.Sprintf("smoke test returned status %d", e.status)
+}
 
 // IsNftFormat returns true when the content looks like nftables ruleset
 // (starts with "table" rather than containing "*filter").
@@ -103,14 +120,22 @@ func ApplyBundle(ctx context.Context, bundle models.BundleResponse, hmacKey, con
 	}
 
 	if err := smokeTest(ctx, controlPlaneURL, token, version); err != nil {
-		log.Warn("Smoke test failed after apply, reverting", "error", err)
-		if revertErr := revertRules(backup); revertErr != nil {
-			log.Error("Revert failed", "error", revertErr)
+		var badReq *smokeBadRequestError
+		if errors.As(err, &badReq) {
+			// 4xx means the control plane answered at the application layer
+			// (payload rejected, expired token, forbidden, etc.), which proves
+			// OUTPUT connectivity. Log and continue without reverting.
+			log.Warn("Smoke test returned client error (application-layer response proves OUTPUT connectivity, not reverting)", "status", badReq.status, "error", err)
 		} else {
-			log.Info("Rules reverted successfully")
+			log.Warn("Smoke test failed after apply, reverting", "error", err)
+			if revertErr := revertRules(backup); revertErr != nil {
+				log.Error("Revert failed", "error", revertErr)
+			} else {
+				log.Info("Rules reverted successfully")
+			}
+			revertCancel()
+			return fmt.Errorf("smoke test failed, reverted: %w", err)
 		}
-		revertCancel()
-		return fmt.Errorf("smoke test failed, reverted: %w", err)
 	}
 
 	revertCancel()
@@ -160,12 +185,17 @@ func smokeTest(ctx context.Context, controlPlaneURL, token, version string) erro
 
 	url := fmt.Sprintf("%s/api/v1/agent/heartbeat", controlPlaneURL)
 
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	// POST with an explicit empty JSON body: GET with a body is unusual and
+	// some intermediaries drop it, while an empty body without Content-Type
+	// risks a 400 from strict JSON handlers. The server keeps the GET route
+	// for compatibility.
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader("{}"))
 	if err != nil {
 		return fmt.Errorf("create smoke test request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("User-Agent", "runic-agent/"+version)
+	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -178,9 +208,11 @@ func smokeTest(ctx context.Context, controlPlaneURL, token, version string) erro
 		}
 	}()
 
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("smoke test returned status %d", resp.StatusCode)
+	if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
+		return nil
 	}
-
-	return nil
+	if resp.StatusCode >= http.StatusBadRequest && resp.StatusCode < http.StatusInternalServerError {
+		return &smokeBadRequestError{status: resp.StatusCode}
+	}
+	return fmt.Errorf("smoke test returned status %d", resp.StatusCode)
 }

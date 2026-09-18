@@ -463,6 +463,9 @@ func (g *DigestGenerator) generateDigestHTML(digest *AlertDigest, summary *Diges
 			case AlertTypeBundleDeployed:
 				typeColor = "#22c55e"
 				typeIcon = "&#x1F4E6;"
+			case AlertTypeBundleNotified:
+				typeColor = "#38bdf8"
+				typeIcon = "&#x1F4E3;"
 			case AlertTypeAgentUpdated:
 				typeColor = "#14b8a6"
 				typeIcon = "&#x1F504;"
@@ -685,6 +688,8 @@ func formatAlertType(alertType AlertType) string {
 		return "Blocked Traffic Spike"
 	case AlertTypeBundleDeployed:
 		return "Bundle Deployed"
+	case AlertTypeBundleNotified:
+		return "Bundle Notified"
 	case AlertTypeAgentUpdated:
 		return "Agent Updated"
 	default:

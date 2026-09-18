@@ -18,6 +18,7 @@ import KebabMenu from '../components/KebabMenu'
 
 const ALERT_TYPES = [
   { value: 'bundle_deployed', label: 'Bundle Deployed' },
+  { value: 'bundle_notified', label: 'Bundle Notified' },
   { value: 'bundle_failed', label: 'Bundle Failed' },
   { value: 'peer_offline', label: 'Peer Offline' },
   { value: 'peer_online', label: 'Peer Online' },
@@ -51,6 +52,7 @@ function SeverityIcon({ severity }) {
 function AlertTypeTag({ alertType }) {
   const colorConfig = {
     bundle_deployed: 'border-green-500 text-green-700 dark:text-green-400',
+    bundle_notified: 'border-sky-500 text-sky-700 dark:text-sky-400',
     bundle_failed: 'border-red-500 text-red-700 dark:text-red-400',
     peer_offline: 'border-orange-500 text-orange-700 dark:text-orange-400',
     peer_online: 'border-blue-500 text-blue-700 dark:text-blue-400',

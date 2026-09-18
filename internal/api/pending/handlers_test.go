@@ -1361,3 +1361,296 @@ func TestPolicyCRUD_ManualAndAgentPeersHaveVisiblePending(t *testing.T) {
 		t.Errorf("manual-peer missing from pending listing after delete: %s", w.Body.String())
 	}
 }
+
+// TestPushDoesNotClearPendingChanges documents and enforces the Push side of
+// the Push-versus-Apply lifecycle: PushCurrentRules (and PushAllRules via the
+// same worker) only create a push job + Enqueue + (in the worker)
+// CompileAndStore + SSE notify, and must never delete pending_changes,
+// previews, or snapshots, nor update peers.bundle_version or
+// rule_bundles.applied_at.
+//
+// After Push + a worker-equivalent CompileAndStore, ListPeers must stay
+// sync_status "pending" (pending_changes > 0 takes precedence over
+// pending_sync), which is why Approve-then-Push-still-pending is expected when
+// the Apply step was skipped.
+func TestPushDoesNotClearPendingChanges(t *testing.T) {
+	db, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	if _, err := db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, is_manual) VALUES (?, ?, ?, ?, 0)`,
+		"peer-one", "10.0.0.1", "key1", "hmac1"); err != nil {
+		t.Fatalf("insert peer: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group"); err != nil {
+		t.Fatalf("insert group: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`, "web", "80", "tcp"); err != nil {
+		t.Fatalf("insert service: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO pending_changes (peer_id, change_type, change_id, change_action, change_summary) VALUES (?, ?, ?, ?, ?)`,
+		1, "policy", 1, "create", "Add policy"); err != nil {
+		t.Fatalf("insert pending change: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO pending_bundle_previews (peer_id, rules_content, diff_content, version_hash) VALUES (?, ?, ?, ?)`,
+		1, "old-content", "old-diff", "v0"); err != nil {
+		t.Fatalf("insert preview: %v", err)
+	}
+
+	compiler := engine.NewTestCompiler(db)
+	sseHub := events.NewSSEHub()
+	pushWorker := common.NewPushWorker(db, nil, nil, sseHub)
+	handler := newTestHandler(db, compiler, sseHub, pushWorker)
+	peerStore := store.NewPeerStore(db)
+
+	var pendingBefore int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pending_changes WHERE peer_id = ?`, 1).Scan(&pendingBefore); err != nil {
+		t.Fatalf("count pending before: %v", err)
+	}
+	if pendingBefore != 1 {
+		t.Fatalf("pending before = %d, want 1", pendingBefore)
+	}
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/pending/push/1", nil)
+	r = muxVars(r, map[string]string{"peerId": "1"})
+	handler.PushCurrentRules(w, r)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("PushCurrentRules status=%d, want %d: %s", w.Code, http.StatusAccepted, w.Body.String())
+	}
+
+	var pendingAfterPush int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pending_changes WHERE peer_id = ?`, 1).Scan(&pendingAfterPush); err != nil {
+		t.Fatalf("count pending after push: %v", err)
+	}
+	if pendingAfterPush != 1 {
+		t.Errorf("Push must never clear pending_changes: before=%d after=%d, want 1", pendingBefore, pendingAfterPush)
+	}
+	var previewAfterPush int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pending_bundle_previews WHERE peer_id = ?`, 1).Scan(&previewAfterPush); err != nil {
+		t.Fatalf("count preview after push: %v", err)
+	}
+	if previewAfterPush != 1 {
+		t.Errorf("Push must never clear previews: got %d, want 1", previewAfterPush)
+	}
+
+	// Simulate what the PushWorker does: CompileAndStore + SSE notify, still
+	// without clearing. CompileAndStore advances rule_bundles.version_number
+	// but must leave pending rows, previews, and bundle_version untouched.
+	if _, err := compiler.CompileAndStore(ctx, 1); err != nil {
+		t.Fatalf("worker-equivalent CompileAndStore: %v", err)
+	}
+	var pendingAfterCompile int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pending_changes WHERE peer_id = ?`, 1).Scan(&pendingAfterCompile); err != nil {
+		t.Fatalf("count pending after compile: %v", err)
+	}
+	if pendingAfterCompile != 1 {
+		t.Errorf("Push worker CompileAndStore must not clear pending_changes: got %d, want 1", pendingAfterCompile)
+	}
+	var previewAfterCompile int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pending_bundle_previews WHERE peer_id = ?`, 1).Scan(&previewAfterCompile); err != nil {
+		t.Fatalf("count preview after compile: %v", err)
+	}
+	if previewAfterCompile != 1 {
+		t.Errorf("Push worker CompileAndStore must not clear previews: got %d, want 1", previewAfterCompile)
+	}
+	var bundleVersion sql.NullString
+	if err := db.QueryRowContext(ctx, `SELECT bundle_version FROM peers WHERE id = ?`, 1).Scan(&bundleVersion); err != nil {
+		t.Fatalf("query bundle_version: %v", err)
+	}
+	if bundleVersion.Valid && bundleVersion.String != "" {
+		t.Errorf("Push must never confirm: peers.bundle_version=%q, want empty (confirmed only via ConfirmBundleApplied)", bundleVersion.String)
+	}
+
+	peers, err := peerStore.ListPeers(ctx)
+	if err != nil {
+		t.Fatalf("ListPeers: %v", err)
+	}
+	if len(peers) != 1 {
+		t.Fatalf("ListPeers len=%d, want 1", len(peers))
+	}
+	if peers[0].SyncStatus != "pending" {
+		t.Errorf("sync_status=%q after Push with pending rows, want %q (pending_changes>0 takes precedence over pending_sync)", peers[0].SyncStatus, "pending")
+	}
+	if peers[0].PendingChangesCount != 1 {
+		t.Errorf("pending_changes_count=%d, want 1", peers[0].PendingChangesCount)
+	}
+}
+
+// TestApplyClearsPendingWithVersionAdvance documents and enforces the Apply
+// (Approve) side of the Push-versus-Apply lifecycle:
+// ApplyPeerPendingBundle runs CompileAndStore (advancing
+// rule_bundles.version_number) THEN clears pending_changes + preview +
+// CleanupIfComplete, then SSE-notifies (notified, not confirmed). After Apply
+// the peer is ListPeers "pending_sync" (no pending rows, latest version !=
+// bundle_version) until ConfirmBundleApplied (peers.bundle_version +
+// rule_bundles.applied_at) flips it to "synced".
+func TestApplyClearsPendingWithVersionAdvance(t *testing.T) {
+	db, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	if _, err := db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, is_manual) VALUES (?, ?, ?, ?, 0)`,
+		"peer-one", "10.0.0.1", "key1", "hmac1"); err != nil {
+		t.Fatalf("insert peer: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, is_manual) VALUES (?, ?, ?, ?, 1)`,
+		"10.0.0.99", "10.0.0.99", "key-src", "hmac-src"); err != nil {
+		t.Fatalf("insert source peer: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO groups (name) VALUES (?)`, "test-group"); err != nil {
+		t.Fatalf("insert group: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO group_members (group_id, peer_id) VALUES (?, ?)`, 1, 2); err != nil {
+		t.Fatalf("insert group member: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`, "web80", "80", "tcp"); err != nil {
+		t.Fatalf("insert service80: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled, direction, target_scope)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"policy-80", 1, "group", 1, 1, "peer", "ACCEPT", 100, 1, "both", "both"); err != nil {
+		t.Fatalf("insert policy-80: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO pending_changes (peer_id, change_type, change_id, change_action, change_summary) VALUES (?, ?, ?, ?, ?)`,
+		1, "policy", 1, "create", "Add policy-80"); err != nil {
+		t.Fatalf("insert pending change: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO pending_bundle_previews (peer_id, rules_content, diff_content, version_hash) VALUES (?, ?, ?, ?)`,
+		1, "old-content", "old-diff", "v0"); err != nil {
+		t.Fatalf("insert preview: %v", err)
+	}
+
+	compiler := engine.NewTestCompiler(db)
+	sseHub := events.NewSSEHub()
+	handler := newTestHandler(db, compiler, sseHub, nil)
+	peerStore := store.NewPeerStore(db)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/pending/apply/1", nil)
+	r = muxVars(r, map[string]string{"peerId": "1"})
+	handler.ApplyPeerPendingBundle(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("first Apply status=%d, want %d: %s", w.Code, http.StatusOK, w.Body.String())
+	}
+
+	var pendingAfter int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pending_changes WHERE peer_id = ?`, 1).Scan(&pendingAfter); err != nil {
+		t.Fatalf("count pending after apply: %v", err)
+	}
+	if pendingAfter != 0 {
+		t.Errorf("Apply must clear pending_changes: got %d, want 0", pendingAfter)
+	}
+	var previewAfter int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pending_bundle_previews WHERE peer_id = ?`, 1).Scan(&previewAfter); err != nil {
+		t.Fatalf("count preview after apply: %v", err)
+	}
+	if previewAfter != 0 {
+		t.Errorf("Apply must delete preview: got %d, want 0", previewAfter)
+	}
+	var versionNumber1 int
+	var version1 string
+	if err := db.QueryRowContext(ctx, `SELECT version, version_number FROM rule_bundles WHERE peer_id = ? ORDER BY version_number DESC LIMIT 1`, 1).Scan(&version1, &versionNumber1); err != nil {
+		t.Fatalf("query first bundle: %v", err)
+	}
+	if versionNumber1 != 1 {
+		t.Errorf("first Apply version_number=%d, want 1", versionNumber1)
+	}
+	if version1 == "" {
+		t.Errorf("first Apply version empty, want non-empty hash")
+	}
+
+	// Apply notifies but never confirms: bundle_version stays empty until
+	// ConfirmBundleApplied, so ListPeers must report pending_sync.
+	var bundleVersion sql.NullString
+	if err := db.QueryRowContext(ctx, `SELECT bundle_version FROM peers WHERE id = ?`, 1).Scan(&bundleVersion); err != nil {
+		t.Fatalf("query bundle_version: %v", err)
+	}
+	if bundleVersion.Valid && bundleVersion.String != "" {
+		t.Errorf("Apply must not confirm: peers.bundle_version=%q, want empty", bundleVersion.String)
+	}
+	peers, err := peerStore.ListPeers(ctx)
+	if err != nil {
+		t.Fatalf("ListPeers after apply: %v", err)
+	}
+	if len(peers) != 2 {
+		t.Fatalf("ListPeers len=%d, want 2", len(peers))
+	}
+	byHost := map[string]store.PeerView{}
+	for _, p := range peers {
+		byHost[p.Hostname] = p
+	}
+	if got := byHost["peer-one"].SyncStatus; got != "pending_sync" {
+		t.Errorf("sync_status after Apply=%q, want %q (cleared pending, unconfirmed bundle)", got, "pending_sync")
+	}
+
+	// Second Apply with different content must advance the version number.
+	if _, err := db.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`, "web443", "443", "tcp"); err != nil {
+		t.Fatalf("insert service443: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO policies (name, source_id, source_type, service_id, target_id, target_type, action, priority, enabled, direction, target_scope)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"policy-443", 1, "group", 2, 1, "peer", "ACCEPT", 200, 1, "both", "both"); err != nil {
+		t.Fatalf("insert policy-443: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO pending_changes (peer_id, change_type, change_id, change_action, change_summary) VALUES (?, ?, ?, ?, ?)`,
+		1, "policy", 2, "create", "Add policy-443"); err != nil {
+		t.Fatalf("insert second pending change: %v", err)
+	}
+
+	w = httptest.NewRecorder()
+	r = httptest.NewRequest(http.MethodPost, "/api/v1/pending/apply/1", nil)
+	r = muxVars(r, map[string]string{"peerId": "1"})
+	handler.ApplyPeerPendingBundle(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("second Apply status=%d, want %d: %s", w.Code, http.StatusOK, w.Body.String())
+	}
+	var versionNumber2 int
+	var version2 string
+	if err := db.QueryRowContext(ctx, `SELECT version, version_number FROM rule_bundles WHERE peer_id = ? ORDER BY version_number DESC LIMIT 1`, 1).Scan(&version2, &versionNumber2); err != nil {
+		t.Fatalf("query second bundle: %v", err)
+	}
+	if versionNumber2 != 2 {
+		t.Errorf("second Apply version_number=%d, want 2 (version advance)", versionNumber2)
+	}
+	if version2 == version1 {
+		t.Errorf("second Apply version=%q, want different from first %q", version2, version1)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pending_changes WHERE peer_id = ?`, 1).Scan(&pendingAfter); err != nil {
+		t.Fatalf("count pending after second apply: %v", err)
+	}
+	if pendingAfter != 0 {
+		t.Errorf("second Apply must clear pending_changes: got %d, want 0", pendingAfter)
+	}
+
+	// ListPeers orders the latest bundle by created_at DESC. Both Applies run
+	// within the same second in CI, so bump the second bundle's created_at to
+	// guarantee it is the deterministic latest for the pending_sync/synced
+	// assertions below.
+	if _, err := db.Exec(`UPDATE rule_bundles SET created_at = datetime('now', '+1 minute') WHERE peer_id = ? AND version = ?`, 1, version2); err != nil {
+		t.Fatalf("bump second bundle created_at: %v", err)
+	}
+
+	// Confirmed only via ConfirmBundleApplied (peers.bundle_version +
+	// rule_bundles.applied_at): simulate the agent confirmation and expect
+	// ListPeers to flip from pending_sync to synced.
+	if _, err := db.Exec(`UPDATE rule_bundles SET applied_at = CURRENT_TIMESTAMP, first_applied_at = CURRENT_TIMESTAMP WHERE peer_id = ? AND version = ?`, 1, version2); err != nil {
+		t.Fatalf("set applied_at: %v", err)
+	}
+	if _, err := db.Exec(`UPDATE peers SET bundle_version = ? WHERE id = ?`, version2, 1); err != nil {
+		t.Fatalf("set bundle_version: %v", err)
+	}
+	peers, err = peerStore.ListPeers(ctx)
+	if err != nil {
+		t.Fatalf("ListPeers after confirm: %v", err)
+	}
+	byHost = map[string]store.PeerView{}
+	for _, p := range peers {
+		byHost[p.Hostname] = p
+	}
+	if got := byHost["peer-one"].SyncStatus; got != "synced" {
+		t.Errorf("sync_status after ConfirmBundleApplied=%q, want %q", got, "synced")
+	}
+}

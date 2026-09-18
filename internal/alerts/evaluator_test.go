@@ -520,12 +520,13 @@ func TestUpdateBundleAppliedAt_COALESCE(t *testing.T) {
 	}
 }
 
-// Peer online, new peer, and agent updated rules are direct-trigger only: the
-// scheduler must skip them without reporting "unknown alert type". Peer online
-// transitions fire via PeerMonitor, new peer registrations via the agent
-// registration handler, and agent updates via the peers handler; all go
-// through Service.TriggerAlert. The scheduler has no condition to evaluate
-// for these types.
+// Peer online, new peer, agent updated, and bundle notified rules are
+// direct-trigger only: the scheduler must skip them without reporting
+// "unknown alert type". Peer online transitions fire via PeerMonitor, new
+// peer registrations via the agent registration handler, agent updates via
+// the peers handler, and bundle notified via the PushWorker; all go through
+// Service.TriggerAlert. The scheduler has no condition to evaluate for
+// these types (bundle deployed stays scheduled for confirmed applies).
 func TestEvaluateRule_DirectTriggerTypesSkipped(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
@@ -534,7 +535,7 @@ func TestEvaluateRule_DirectTriggerTypesSkipped(t *testing.T) {
 	databaseWrapper := db.New(database)
 	evaluator := NewConditionEvaluator(databaseWrapper, databaseWrapper, newTestHostnameLookup(database))
 
-	directTriggerTypes := []AlertType{AlertTypePeerOnline, AlertTypeNewPeer, AlertTypeAgentUpdated}
+	directTriggerTypes := []AlertType{AlertTypePeerOnline, AlertTypeNewPeer, AlertTypeAgentUpdated, AlertTypeBundleNotified}
 	for _, alertType := range directTriggerTypes {
 		t.Run(string(alertType), func(t *testing.T) {
 			rule := &AlertRule{
