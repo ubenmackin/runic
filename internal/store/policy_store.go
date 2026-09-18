@@ -8,8 +8,8 @@ import (
 	"errors"
 	"fmt"
 
-	"runic/internal/api/common"
 	ic "runic/internal/common"
+	"runic/internal/common/log"
 	"runic/internal/db"
 	"runic/internal/models"
 )
@@ -19,6 +19,7 @@ const policyRowColumns = `id, name, COALESCE(description, ''), source_id, source
 var ErrPolicyNotFound = errors.New("policy not found")
 
 type PolicyStore struct {
+	PeerChangeSupport
 	db db.DB
 }
 
@@ -45,7 +46,11 @@ func (s *PolicyStore) ListPolicies(ctx context.Context) ([]models.PolicyRow, err
 	if err != nil {
 		return nil, fmt.Errorf("query policies: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() {
+		if cerr := rows.Close(); cerr != nil {
+			log.WarnContext(ctx, "failed to close rows", "error", cerr)
+		}
+	}()
 
 	var policies []models.PolicyRow
 	for rows.Next() {
@@ -167,18 +172,32 @@ func (s *PolicyStore) Snapshot(ctx context.Context, action string, policyID int)
 	return db.CreateSnapshot(ctx, s.db, "policy", policyID, action, string(bytes))
 }
 
+// SnapshotTx creates a snapshot of a policy within a transaction (groups
+// pattern). The snapshot and the subsequent mutation commit atomically, so a
+// failed mutation cannot leave an orphan snapshot that blocks the true
+// first-change snapshot (INSERT OR IGNORE first-wins).
+func (s *PolicyStore) SnapshotTx(ctx context.Context, tx *sql.Tx, action string, policyID int) error {
+	if action == "create" {
+		return db.CreateSnapshot(ctx, tx, "policy", policyID, action, "")
+	}
+
+	p, err := s.GetPolicyTx(ctx, tx, policyID)
+	if err != nil {
+		return fmt.Errorf("get policy: %w", err)
+	}
+
+	bytes, err := json.Marshal(p)
+	if err != nil {
+		return fmt.Errorf("marshal snapshot: %w", err)
+	}
+
+	return db.CreateSnapshot(ctx, tx, "policy", policyID, action, string(bytes))
+}
+
 // CheckDeleteConstraints checks whether a policy can be safely deleted.
 // Currently policies have no foreign-key–style constraints, so this always returns nil.
 func (s *PolicyStore) CheckDeleteConstraints(ctx context.Context, policyID int) error {
 	return nil
-}
-
-// QueuePeerChange enqueues a peer change notification for the given peer IDs via the ChangeWorker.
-func (s *PolicyStore) QueuePeerChange(ctx context.Context, changeWorker *common.ChangeWorker, peerIDs []int, changeType, changeAction string, changeID int, summary string) {
-	if changeWorker == nil || len(peerIDs) == 0 {
-		return
-	}
-	changeWorker.QueuePeerChange(ctx, peerIDs, changeType, changeAction, changeID, summary)
 }
 
 func (s *PolicyStore) ListSpecialTargets(ctx context.Context) ([]models.SpecialTargetRow, error) {
@@ -186,7 +205,11 @@ func (s *PolicyStore) ListSpecialTargets(ctx context.Context) ([]models.SpecialT
 	if err != nil {
 		return nil, fmt.Errorf("query special targets: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() {
+		if cerr := rows.Close(); cerr != nil {
+			log.WarnContext(ctx, "failed to close rows", "error", cerr)
+		}
+	}()
 
 	var targets []models.SpecialTargetRow
 	for rows.Next() {

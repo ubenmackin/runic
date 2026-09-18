@@ -74,7 +74,7 @@ func resolveRules(ctx context.Context, database db.Querier, sessionID int64, pee
 	}
 	defer func() {
 		if cErr := rows.Close(); cErr != nil {
-			log.Warn("Error closing resolver rows", "error", cErr)
+			log.Warn("error closing resolver rows", "error", cErr)
 		}
 	}()
 
@@ -101,7 +101,7 @@ func resolveRules(ctx context.Context, database db.Querier, sessionID int64, pee
 		rules = append(rules, r)
 	}
 	if cErr := rows.Close(); cErr != nil {
-		log.Warn("Error closing resolver rows after iteration", "error", cErr)
+		log.Warn("error closing resolver rows after iteration", "error", cErr)
 	}
 
 	// Re-parse each rule to get source/target/service info
@@ -116,7 +116,7 @@ func resolveRules(ctx context.Context, database db.Querier, sessionID int64, pee
 		// the peer is receiving multicast packets, not sending them)
 		if isMulticastPktType(pr, r.Chain) {
 			if err := resolveMulticastRule(ctx, database, r.ID, peerID); err != nil {
-				log.Warn("Failed to resolve multicast rule", "rule_id", r.ID, "error", err)
+				log.Warn("failed to resolve multicast rule", "rule_id", r.ID, "error", err)
 			}
 			continue
 		}
@@ -126,7 +126,7 @@ func resolveRules(ctx context.Context, database db.Querier, sessionID int64, pee
 		// orphan the policy from the peer in the compiler.
 		if isIGMPProtocol(pr, r.Chain) {
 			if err := resolveIGMPRule(ctx, database, r.ID, peerID); err != nil {
-				log.Warn("Failed to resolve IGMP rule", "rule_id", r.ID, "error", err)
+				log.Warn("failed to resolve IGMP rule", "rule_id", r.ID, "error", err)
 			}
 			continue
 		}
@@ -135,7 +135,7 @@ func resolveRules(ctx context.Context, database db.Querier, sessionID int64, pee
 		// broadcast destination IPs are not resolved as target endpoints.
 		if broadcastSpecialID := resolve.IsBroadcastDest(pr.DestIP, r.Chain, peerIPs); broadcastSpecialID != 0 {
 			if err := resolveBroadcastRule(ctx, database, sessionID, r.ID, peerID, int64(broadcastSpecialID), pr); err != nil {
-				log.Warn("Failed to resolve broadcast rule", "rule_id", r.ID, "error", err)
+				log.Warn("failed to resolve broadcast rule", "rule_id", r.ID, "error", err)
 			}
 			continue
 		}
@@ -203,7 +203,7 @@ func resolveRules(ctx context.Context, database db.Querier, sessionID int64, pee
 			r.ID,
 		)
 		if err != nil {
-			log.Warn("Failed to update rule mapping", "rule_id", r.ID, "error", err)
+			log.Warn("failed to update rule mapping", "rule_id", r.ID, "error", err)
 		}
 	}
 
@@ -343,7 +343,7 @@ func resolveIpsetEndpoint(ctx context.Context, database db.Querier, sessionID in
 				}
 			}
 			if cErr := memberRows.Close(); cErr != nil {
-				log.Warn("Error closing memberRows", "error", cErr)
+				log.Warn("error closing memberRows", "error", cErr)
 			}
 		}
 
@@ -490,7 +490,7 @@ func resolveService(ctx context.Context, database db.Querier, sessionID int64, r
 		sessionID, serviceName, port, protocol,
 	)
 	if err != nil {
-		log.Warn("Failed to create staging service", "port", port, "protocol", protocol, "error", err)
+		log.Warn("failed to create staging service", "port", port, "protocol", protocol, "error", err)
 		return 0, 0
 	}
 	stagingID, _ := result.LastInsertId()
@@ -666,7 +666,7 @@ func resolveBroadcastRule(ctx context.Context, database db.Querier, sessionID in
 		// (e.g., DHCP port 67) rather than the generic broadcast system service
 		serviceID, _ = resolveService(ctx, database, sessionID, rule)
 		if serviceID == 0 {
-			log.Warn("Broadcast rule with specific port failed to resolve service", "rule_id", ruleID, "port", rule.DestPort, "protocol", rule.Protocol)
+			log.Warn("broadcast rule with specific port failed to resolve service", "rule_id", ruleID, "port", rule.DestPort, "protocol", rule.Protocol)
 		}
 	} else {
 		// No specific port — resolve to the appropriate broadcast system service

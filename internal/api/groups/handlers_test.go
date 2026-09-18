@@ -2,6 +2,7 @@ package groups
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -19,6 +20,44 @@ import (
 
 func muxVars(r *http.Request, vars map[string]string) *http.Request {
 	return mux.SetURLVars(r, vars)
+}
+
+// newTestHandlerWithWorker builds a Handler with a real compiler and a
+// change worker so fail-closed queue paths succeed durably in tests. The
+// worker is stopped before return so QueueGroupChange/QueuePeerChange take
+// the synchronous fallback path and persist pending_changes rows before the
+// handler returns. Tests therefore assert real DB rows (no async race, no
+// sleep) instead of 2xx with zero rows, which would validate a lost signal.
+func newTestHandlerWithWorker(database *sql.DB) *Handler {
+	compiler := engine.NewTestCompiler(database)
+	changeWorker := common.NewChangeWorker(nil, database) // nil sseHub for tests
+	// Stopped worker => synchronous fallback: queue calls persist rows
+	// inline and return any error, so handlers fail closed in tests exactly
+	// as in production when the worker is unavailable.
+	changeWorker.Stop()
+	return NewHandler(database, compiler, changeWorker, store.NewGroupStore(database), store.NewPeerStore(database))
+}
+
+// waitForPendingRows polls pending_changes until the count query returns want
+// or the timeout expires. It is used by tests that run a real background
+// worker (async path) so they assert durable rows instead of sleeping a fixed
+// interval and hoping the worker finished.
+func waitForPendingRows(t *testing.T, database *sql.DB, query string, args []any, want int, timeout time.Duration) int {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		var count int
+		if err := database.QueryRow(query, args...).Scan(&count); err != nil {
+			t.Fatalf("failed to query pending_changes: %v", err)
+		}
+		if count == want {
+			return count
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for pending rows: want %d, got %d (query %q)", want, count, query)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 // =============================================================================
@@ -443,7 +482,7 @@ func TestDeleteGroup_NotInUse_Success(t *testing.T) {
 	w := httptest.NewRecorder()
 	req = muxVars(req, map[string]string{"id": "1"})
 
-	h := NewHandler(database, nil, nil, store.NewGroupStore(database), store.NewPeerStore(database))
+	h := newTestHandlerWithWorker(database)
 	h.DeleteGroup(w, req)
 
 	// Should return 204 No Content
@@ -486,7 +525,7 @@ func TestDeleteGroup_Success(t *testing.T) {
 
 	req = muxVars(req, map[string]string{"id": "1"})
 
-	h := NewHandler(database, nil, nil, store.NewGroupStore(database), store.NewPeerStore(database))
+	h := newTestHandlerWithWorker(database)
 	h.DeleteGroup(w, req)
 
 	if w.Code != http.StatusNoContent {
@@ -616,8 +655,7 @@ func TestAddGroupMember(t *testing.T) {
 
 			req = muxVars(req, map[string]string{"id": tt.groupID})
 
-			// Pass nil for compiler since async recompile doesn't affect test result
-			h := NewHandler(database, nil, nil, store.NewGroupStore(database), store.NewPeerStore(database))
+			h := newTestHandlerWithWorker(database)
 			handler := http.HandlerFunc(h.AddGroupMember)
 			handler(w, req)
 
@@ -651,20 +689,28 @@ func TestAddGroupMember_Duplicate(t *testing.T) {
 		"peer1", "10.0.0.1", "key1", "hmac1")
 	database.Exec(`INSERT INTO group_members (group_id, peer_id) VALUES (?, ?)`, 1, 1)
 
-	// Try to add the same peer again (should succeed due to INSERT OR IGNORE)
+	// Try to add the same peer again (INSERT OR IGNORE duplicate maps to 409)
 	req := httptest.NewRequest("POST", "/api/v1/groups/1/members", strings.NewReader(`{"peer_id": 1}`))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
 	req = muxVars(req, map[string]string{"id": "1"})
 
-	h := NewHandler(database, nil, nil, store.NewGroupStore(database), store.NewPeerStore(database))
+	h := newTestHandlerWithWorker(database)
 	handler := http.HandlerFunc(h.AddGroupMember)
 	handler(w, req)
 
-	// Should return Created (201) due to INSERT OR IGNORE
-	if w.Code != http.StatusCreated {
-		t.Errorf("expected status %d, got %d: %s", http.StatusCreated, w.Code, w.Body.String())
+	// INSERT OR IGNORE duplicate maps to 409 peer already in group
+	if w.Code != http.StatusConflict {
+		t.Errorf("expected status %d, got %d: %s", http.StatusConflict, w.Code, w.Body.String())
+	}
+
+	var resp map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode error response: %v", err)
+	}
+	if !strings.Contains(resp["error"], "peer already in group") {
+		t.Errorf("expected error containing %q, got %q", "peer already in group", resp["error"])
 	}
 
 	// Verify only one entry exists
@@ -723,6 +769,17 @@ func TestRemoveGroupMember(t *testing.T) {
 				if count != 1 {
 					t.Error("expected peer2 to still be in group")
 				}
+				// Removed-peer fan-out: the removed peer is no longer a
+				// member so group resolution cannot include it, yet its
+				// bundle is stale. The handler queues an explicit peer
+				// change, so a pending row must exist for peer 1.
+				err = database.QueryRow("SELECT COUNT(*) FROM pending_changes WHERE peer_id = 1 AND change_type = 'group' AND change_id = 1").Scan(&count)
+				if err != nil {
+					t.Fatalf("failed to check pending_changes for removed peer: %v", err)
+				}
+				if count != 1 {
+					t.Errorf("expected 1 pending change for removed peer, got %d", count)
+				}
 			},
 		},
 		{
@@ -741,7 +798,7 @@ func TestRemoveGroupMember(t *testing.T) {
 			// Note: route uses groupId and peerId params (not id and memberId)
 			req = muxVars(req, map[string]string{"groupId": tt.groupID, "peerId": tt.peerID})
 
-			h := NewHandler(database, nil, nil, store.NewGroupStore(database), store.NewPeerStore(database))
+			h := newTestHandlerWithWorker(database)
 			handler := http.HandlerFunc(h.DeleteGroupMember)
 			handler(w, req)
 
@@ -967,7 +1024,7 @@ func TestCreateGroup(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h := NewHandler(database, nil, nil, store.NewGroupStore(database), store.NewPeerStore(database))
+			h := newTestHandlerWithWorker(database)
 			req := httptest.NewRequest("POST", "/api/v1/groups", strings.NewReader(tt.body))
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
@@ -1102,7 +1159,7 @@ func TestUpdateGroup(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h := NewHandler(database, nil, nil, store.NewGroupStore(database), store.NewPeerStore(database))
+			h := newTestHandlerWithWorker(database)
 			req := httptest.NewRequest("PUT", "/api/v1/groups/"+tt.groupID, strings.NewReader(tt.body))
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
@@ -1288,22 +1345,13 @@ func TestUpdateGroup_DescriptionOnly(t *testing.T) {
 		t.Errorf("expected status %d, got %d: %s", http.StatusOK, w.Code, w.Body.String())
 	}
 
-	// Wait for async processing
-	time.Sleep(100 * time.Millisecond)
-
-	// Verify pending change was queued
-	var count int
-	err := database.QueryRow("SELECT COUNT(*) FROM pending_changes WHERE change_type = 'group' AND change_id = 1").Scan(&count)
-	if err != nil {
-		t.Fatalf("failed to query pending_changes: %v", err)
-	}
-	if count != 1 {
-		t.Errorf("expected 1 pending change, got %d", count)
-	}
+	// Real background worker: poll for the durable row instead of sleeping
+	// a fixed interval, so the test asserts the pending signal landed.
+	waitForPendingRows(t, database, "SELECT COUNT(*) FROM pending_changes WHERE change_type = 'group' AND change_id = 1", nil, 1, 5*time.Second)
 
 	// Verify the description was updated
 	var desc string
-	err = database.QueryRow("SELECT description FROM groups WHERE id = 1").Scan(&desc)
+	err := database.QueryRow("SELECT description FROM groups WHERE id = 1").Scan(&desc)
 	if err != nil {
 		t.Fatalf("failed to query group: %v", err)
 	}
@@ -1574,7 +1622,7 @@ func TestUpdateGroup_EmptyName(t *testing.T) {
 
 	database.Exec(`INSERT INTO groups (name, description) VALUES (?, ?)`, "test-group", "original")
 
-	h := NewHandler(database, nil, nil, store.NewGroupStore(database), store.NewPeerStore(database))
+	h := newTestHandlerWithWorker(database)
 	req := httptest.NewRequest("PUT", "/api/v1/groups/1", strings.NewReader(`{"name": "", "description": "updated"}`))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()

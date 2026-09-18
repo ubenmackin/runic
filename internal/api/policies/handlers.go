@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gorilla/mux"
 
@@ -33,9 +34,10 @@ type PolicyStore interface {
 	SoftDeletePolicy(ctx context.Context, id int) error
 	SoftDeletePolicyTx(ctx context.Context, tx *sql.Tx, id int) error
 	Snapshot(ctx context.Context, action string, policyID int) error
+	SnapshotTx(ctx context.Context, tx *sql.Tx, action string, policyID int) error
 	ListSpecialTargets(ctx context.Context) ([]models.SpecialTargetRow, error)
 	CheckDeleteConstraints(ctx context.Context, policyID int) error
-	QueuePeerChange(ctx context.Context, changeWorker *common.ChangeWorker, peerIDs []int, changeType, changeAction string, changeID int, summary string)
+	QueuePeerChange(ctx context.Context, changeWorker *common.ChangeWorker, peerIDs []int, changeType, changeAction string, changeID int, summary string) error
 }
 
 type Handler struct {
@@ -247,18 +249,58 @@ func (h *Handler) CreatePolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	common.SnapshotOrLog(r.Context(), "policy", int(id), "create", func() error {
+	// Fail closed on snapshot failure: without a snapshot there is no
+	// rollback path, so do not ack success with a lost snapshot.
+	if err := common.SnapshotOrLog(r.Context(), "policy", int(id), "create", func() error {
 		return h.Store.Snapshot(r.Context(), "create", int(id))
-	})
+	}); err != nil {
+		log.ErrorContext(r.Context(), "failed to create snapshot for policy", "policy_id", id, "error", err)
+		common.RespondError(w, http.StatusInternalServerError, "policy created but snapshot incomplete; manual recompile required")
+		return
+	}
 
 	var affectedPeers []int
-	if h.Compiler != nil {
-		affectedPeers, err = h.Compiler.GetAffectedPeersByPolicy(r.Context(), int(id))
-		if err != nil {
-			log.ErrorContext(r.Context(), "Failed to get affected peers", "policy_id", id, "error", err)
-		}
+	if h.Compiler == nil {
+		// Fail closed: without a compiler no affected-peer resolution is
+		// possible, and queueing an empty fan-out would ack 201 with zero
+		// pending_changes rows, losing the DB pending signal.
+		log.ErrorContext(r.Context(), "compiler not available; failing policy create to preserve pending signal", "policy_id", id)
+		common.RespondError(w, http.StatusInternalServerError, "policy created but pending signal incomplete; manual recompile required")
+		return
 	}
-	h.Store.QueuePeerChange(r.Context(), h.ChangeWorker, affectedPeers, "policy", "create", int(id), fmt.Sprintf("Policy '%s' created", input.Name))
+	// Detach from the request context so a client disconnect cannot
+	// cancel the resolution and lose pending rows. Fail the request on
+	// resolution error: the mutation already succeeded, so acking
+	// success with zero fan-out would lose the DB pending signal.
+	resolveErr := func() error {
+		resolveCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 10*time.Second)
+		defer cancel()
+		var err error
+		affectedPeers, err = h.Compiler.GetAffectedPeersByPolicy(resolveCtx, int(id))
+		return err
+	}()
+	if resolveErr != nil {
+		// The policy row above is already persisted, so even
+		// sql.ErrNoRows (a concurrent delete of a referenced entity
+		// between Create and resolve) must not surface as 404: the
+		// row exists and a 404 would invite a duplicate-create retry.
+		// Fail-closed pending fan-out contract (unified across groups,
+		// services, and policies; see docs/api/openapi.yaml): fail the
+		// request with 500 so clients uniformly detect the lost pending
+		// signal instead of receiving 201 with zero pending_changes rows.
+		// For POST, list policies before retrying to avoid creating a
+		// duplicate. There are no resolved peers to enqueue as a retry, so
+		// log the lost signal explicitly for operator recompile.
+		log.ErrorContext(r.Context(), "failed to get affected peers", "policy_id", id, "error", resolveErr)
+		log.ErrorContext(r.Context(), "policy created but pending signal lost; manual recompile required", "policy_id", id)
+		common.RespondError(w, http.StatusInternalServerError, "policy created but pending signal incomplete; manual recompile required")
+		return
+	}
+	if err := h.Store.QueuePeerChange(r.Context(), h.ChangeWorker, affectedPeers, "policy", "create", int(id), fmt.Sprintf("Policy '%s' created", input.Name)); err != nil {
+		log.ErrorContext(r.Context(), "failed to queue peer change", "policy_id", id, "error", err)
+		common.RespondError(w, http.StatusInternalServerError, "policy created but pending signal incomplete; manual recompile required")
+		return
+	}
 
 	common.RespondJSON(w, http.StatusCreated, map[string]int64{"id": id})
 }
@@ -286,22 +328,46 @@ func (h *Handler) GetPolicy(w http.ResponseWriter, r *http.Request) {
 	common.RespondJSON(w, http.StatusOK, resp)
 }
 
-func (h *Handler) buildAndPersistPolicyUpdate(ctx context.Context, id int, input *policyInput, p *models.PolicyRow) ([]int, error) {
-	var oldPeers []int
-	var err error
-	if h.Compiler != nil {
-		oldPeers, err = h.Compiler.GetAffectedPeersByPolicy(ctx, id)
-		if err != nil {
-			log.ErrorContext(ctx, "Failed to get old affected peers for policy", "policy_id", id, "error", err)
-			oldPeers = nil
+func (h *Handler) buildAndPersistPolicyUpdate(ctx context.Context, id int, p *models.PolicyRow) ([]int, error) {
+	// Check policy existence first so a missing policy returns 404 before
+	// affected-peer resolution can surface sql.ErrNoRows as a 500.
+	if _, err := h.Store.GetPolicy(ctx, id); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, common.NewHTTPError(http.StatusNotFound, "policy not found")
 		}
+		return nil, fmt.Errorf("failed to query policy: %w", err)
+	}
+	var oldPeers []int
+	// Fail closed when the compiler is unavailable: skipping resolution
+	// would persist a change with zero fan-out and lose the DB pending
+	// signal. Resolve before the mutation so a resolution failure fails
+	// fast without persisting a change that would have no fan-out.
+	if h.Compiler == nil {
+		return nil, fmt.Errorf("resolve old affected peers for policy %d: compiler not available", id)
+	}
+	// Detach from the request context so a client disconnect cannot
+	// cancel the resolution and lose pending rows. Resolve before the
+	// mutation so a resolution failure fails fast without persisting a
+	// change that would have no fan-out.
+	resolveErr := func() error {
+		resolveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		var err error
+		oldPeers, err = h.Compiler.GetAffectedPeersByPolicy(resolveCtx, id)
+		return err
+	}()
+	if resolveErr != nil {
+		return nil, fmt.Errorf("resolve old affected peers for policy %d: %w", id, resolveErr)
 	}
 
-	common.SnapshotOrLog(ctx, "policy", id, "update", func() error {
-		return h.Store.Snapshot(ctx, "update", id)
-	})
-
-	err = store.RunInTx(ctx, h.beginner, func(tx *sql.Tx) error {
+	// Snapshot inside the transaction (groups pattern): the snapshot and the
+	// update commit atomically, so a failed update cannot leave an orphan
+	// snapshot that blocks the true first-change snapshot (INSERT OR IGNORE
+	// first-wins). A snapshot failure rolls back the whole tx (fail closed).
+	err := db.RunInTx(ctx, h.beginner, func(ctx context.Context, tx *sql.Tx) error {
+		if err := h.Store.SnapshotTx(ctx, tx, "update", id); err != nil {
+			return fmt.Errorf("snapshot: %w", err)
+		}
 		if err := h.Store.UpdatePolicyTx(ctx, tx, p); err != nil {
 			if errors.Is(err, store.ErrPolicyNotFound) {
 				return common.NewHTTPError(http.StatusNotFound, "policy not found")
@@ -315,15 +381,49 @@ func (h *Handler) buildAndPersistPolicyUpdate(ctx context.Context, id int, input
 	}
 
 	var newPeers []int
-	if h.Compiler != nil {
-		newPeers, err = h.Compiler.GetAffectedPeersByPolicy(ctx, id)
-		if err != nil {
-			log.ErrorContext(ctx, "Failed to get new affected peers for policy", "policy_id", id, "error", err)
-			newPeers = nil
+	// Fail closed when the compiler is unavailable: the mutation above
+	// already succeeded, so skipping resolution would ack success with zero
+	// fan-out and lose the DB pending signal. The failure propagates as an
+	// error (the caller fails the request) rather than acking success. It
+	// must never surface as 404: the policy exists. Queue the pre-mutation
+	// peers as a fallback so the persisted change keeps at least a partial
+	// pending signal.
+	if h.Compiler == nil {
+		log.ErrorContext(ctx, "compiler not available for new affected peers, falling back to old peers", "policy_id", id)
+		var fallbackQueueErr error
+		if len(oldPeers) > 0 {
+			if qerr := h.Store.QueuePeerChange(ctx, h.ChangeWorker, oldPeers, "policy", "update", id, fmt.Sprintf("Policy %d updated (fallback fan-out)", id)); qerr != nil {
+				log.ErrorContext(ctx, "failed to queue fallback peer change", "policy_id", id, "error", qerr)
+				fallbackQueueErr = qerr
+			}
 		}
+		return nil, errors.Join(fallbackQueueErr, fmt.Errorf("resolve new affected peers for policy %d: compiler not available", id))
+	}
+	// The mutation above already succeeded, so a resolution failure must
+	// propagate as an error (the caller fails the request) rather than
+	// acking success with zero fan-out. It must never surface as 404:
+	// the policy exists. Queue the pre-mutation peers as a fallback so
+	// the persisted change keeps at least a partial pending signal.
+	resolveErr = func() error {
+		resolveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		var err error
+		newPeers, err = h.Compiler.GetAffectedPeersByPolicy(resolveCtx, id)
+		return err
+	}()
+	if resolveErr != nil {
+		log.ErrorContext(ctx, "failed to resolve new affected peers, falling back to old peers", "policy_id", id, "error", resolveErr)
+		var fallbackQueueErr error
+		if len(oldPeers) > 0 {
+			if qerr := h.Store.QueuePeerChange(ctx, h.ChangeWorker, oldPeers, "policy", "update", id, fmt.Sprintf("Policy %d updated (fallback fan-out)", id)); qerr != nil {
+				log.ErrorContext(ctx, "failed to queue fallback peer change", "policy_id", id, "error", qerr)
+				fallbackQueueErr = qerr
+			}
+		}
+		return nil, errors.Join(fallbackQueueErr, fmt.Errorf("resolve new affected peers for policy %d: %w", id, resolveErr))
 	}
 
-	allPeers := common.MergePeerIDs(oldPeers, newPeers)
+	allPeers := ic.MergePeerIDs(oldPeers, newPeers)
 	return allPeers, nil
 }
 
@@ -347,6 +447,82 @@ func (h *Handler) UpdatePolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validate the name upfront so a missing name maps to 400 even when the
+	// policy does not exist (preserves existing 400-before-404 ordering).
+	if input.Name == "" {
+		common.RespondError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+
+	// First-pass validation on a copy (without mutating the original) so
+	// malformed explicit fields (bad direction, bad types, etc.) still map
+	// to 400 before the existence check below maps to 404. The copy is
+	// needed because validate mutates defaults (ACCEPT/both) which would
+	// otherwise mask omitted fields before the merge.
+	tmp := input
+	if err := validatePolicyInput(&tmp, true); err != nil {
+		var httpErr *common.HTTPError
+		if errors.As(err, &httpErr) {
+			common.RespondError(w, httpErr.StatusCode, httpErr.Message)
+			return
+		}
+		common.RespondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Read-modify-write merge: PUT is a full-object replace in principle,
+	// but existing clients send partial objects (e.g. only name/action).
+	// Plain int/string zero values cannot distinguish "omitted" from
+	// "explicit zero", and persisting zeros corrupts FKs (service_id=0).
+	// Merge omitted (zero) fields from the existing row so a partial PUT
+	// like {"name":"x"} preserves IDs/types instead of persisting zeros.
+	existing, err := h.Store.GetPolicy(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			common.RespondError(w, http.StatusNotFound, "policy not found")
+		} else {
+			log.ErrorContext(r.Context(), "failed to query policy", "error", err)
+			common.InternalError(w)
+		}
+		return
+	}
+	if input.SourceID == 0 {
+		input.SourceID = existing.SourceID
+	}
+	if input.SourceType == "" {
+		input.SourceType = existing.SourceType
+	}
+	if input.ServiceID == 0 {
+		input.ServiceID = existing.ServiceID
+	}
+	if input.TargetID == 0 {
+		input.TargetID = existing.TargetID
+	}
+	if input.TargetType == "" {
+		input.TargetType = existing.TargetType
+	}
+	if input.Description == "" {
+		input.Description = existing.Description
+	}
+	if input.Action == "" {
+		input.Action = existing.Action
+	}
+	if input.Priority == 0 {
+		input.Priority = existing.Priority
+	}
+	if input.TargetScope == "" {
+		input.TargetScope = existing.TargetScope
+	}
+	if input.Direction == "" {
+		input.Direction = existing.Direction
+	}
+	if input.SourceIP == nil {
+		input.SourceIP = existing.SourceIP
+	}
+	if input.TargetIP == nil {
+		input.TargetIP = existing.TargetIP
+	}
+
 	if err := validatePolicyInput(&input, true); err != nil {
 		var httpErr *common.HTTPError
 		if errors.As(err, &httpErr) {
@@ -357,7 +533,7 @@ func (h *Handler) UpdatePolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	enabled := true
+	enabled := existing.Enabled
 	if input.Enabled != nil {
 		enabled = *input.Enabled
 	}
@@ -387,19 +563,28 @@ func (h *Handler) UpdatePolicy(w http.ResponseWriter, r *http.Request) {
 		Direction:   input.Direction,
 	}
 
-	allPeers, err := h.buildAndPersistPolicyUpdate(r.Context(), id, &input, &p)
+	allPeers, err := h.buildAndPersistPolicyUpdate(r.Context(), id, &p)
 	if err != nil {
 		var httpErr *common.HTTPError
 		if errors.As(err, &httpErr) {
 			common.RespondError(w, httpErr.StatusCode, httpErr.Message)
 			return
 		}
+		// Post-mutation resolution failures must never map to 404: the
+		// mutation already succeeded so the resource exists. All
+		// pre-mutation 404s arrive as *common.HTTPError above.
 		log.ErrorContext(r.Context(), "failed to update policy", "error", err)
-		common.InternalError(w)
+		common.RespondError(w, http.StatusInternalServerError, "policy updated but pending signal incomplete; manual recompile required")
 		return
 	}
 
-	h.Store.QueuePeerChange(r.Context(), h.ChangeWorker, allPeers, "policy", "update", id, fmt.Sprintf("Policy '%s' updated", input.Name))
+	// Fail closed on synchronous queue failures: acking 200 after the
+	// fallback dropped the change would lose the DB pending signal.
+	if err := h.Store.QueuePeerChange(r.Context(), h.ChangeWorker, allPeers, "policy", "update", id, fmt.Sprintf("Policy '%s' updated", input.Name)); err != nil {
+		log.ErrorContext(r.Context(), "failed to queue peer change", "policy_id", id, "error", err)
+		common.RespondError(w, http.StatusInternalServerError, "policy updated but pending signal incomplete; manual recompile required")
+		return
+	}
 
 	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
@@ -411,15 +596,8 @@ func (h *Handler) DeletePolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var oldPeers []int
-	if h.Compiler != nil {
-		oldPeers, err = h.Compiler.GetAffectedPeersByPolicy(r.Context(), id)
-		if err != nil {
-			log.ErrorContext(r.Context(), "Failed to get old affected peers for policy", "policy_id", id, "error", err)
-			oldPeers = nil
-		}
-	}
-
+	// Check policy existence first so a missing policy returns 404 before
+	// affected-peer resolution can surface sql.ErrNoRows as a 500.
 	policyName, err := h.Store.GetPolicyName(r.Context(), id)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -431,15 +609,42 @@ func (h *Handler) DeletePolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Take snapshot outside the transaction — snapshots are idempotent (INSERT OR IGNORE)
-	// and don't need to be atomically consistent with the delete. Keeping them
-	// outside the tx reduces write lock hold time.
-	common.SnapshotOrLog(r.Context(), "policy", id, "delete", func() error {
-		return h.Store.Snapshot(r.Context(), "delete", id)
-	})
+	var oldPeers []int
+	// Fail closed when the compiler is unavailable: skipping resolution
+	// would delete a policy with zero fan-out and lose the DB pending
+	// signal. Resolve before the mutation so a resolution failure fails
+	// fast without deleting a policy that would then have no fan-out.
+	if h.Compiler == nil {
+		log.ErrorContext(r.Context(), "compiler not available; failing policy delete to preserve pending signal", "policy_id", id)
+		common.RespondError(w, http.StatusInternalServerError, "failed to resolve affected peers; manual recompile required")
+		return
+	}
+	// Detach from the request context so a client disconnect cannot
+	// cancel the resolution and lose pending rows. Resolve before the
+	// mutation so a resolution failure fails fast without deleting a
+	// policy that would then have no fan-out.
+	resolveErr := func() error {
+		resolveCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 10*time.Second)
+		defer cancel()
+		var err error
+		oldPeers, err = h.Compiler.GetAffectedPeersByPolicy(resolveCtx, id)
+		return err
+	}()
+	if resolveErr != nil {
+		log.ErrorContext(r.Context(), "failed to get old affected peers for policy", "policy_id", id, "error", resolveErr)
+		common.RespondError(w, http.StatusInternalServerError, "failed to resolve affected peers; manual recompile required")
+		return
+	}
 
-	err = store.RunInTx(r.Context(), h.beginner, func(tx *sql.Tx) error {
-		if err := h.Store.SoftDeletePolicyTx(r.Context(), tx, id); err != nil {
+	// Snapshot inside the transaction (groups pattern): the snapshot and the
+	// delete commit atomically, so a failed delete cannot leave an orphan
+	// snapshot that blocks the true first-change snapshot (INSERT OR IGNORE
+	// first-wins). A snapshot failure rolls back the whole tx (fail closed).
+	err = db.RunInTx(r.Context(), h.beginner, func(ctx context.Context, tx *sql.Tx) error {
+		if err := h.Store.SnapshotTx(ctx, tx, "delete", id); err != nil {
+			return fmt.Errorf("snapshot: %w", err)
+		}
+		if err := h.Store.SoftDeletePolicyTx(ctx, tx, id); err != nil {
 			if errors.Is(err, store.ErrPolicyNotFound) {
 				return common.NewHTTPError(http.StatusNotFound, "policy not found")
 			}
@@ -459,7 +664,13 @@ func (h *Handler) DeletePolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.Store.QueuePeerChange(r.Context(), h.ChangeWorker, oldPeers, "policy", "delete", id, fmt.Sprintf("Policy '%s' deleted", policyName))
+	// Fail closed on synchronous queue failures: acking 204 after the
+	// fallback dropped the change would lose the DB pending signal.
+	if err := h.Store.QueuePeerChange(r.Context(), h.ChangeWorker, oldPeers, "policy", "delete", id, fmt.Sprintf("Policy '%s' deleted", policyName)); err != nil {
+		log.ErrorContext(r.Context(), "failed to queue peer change", "policy_id", id, "error", err)
+		common.RespondError(w, http.StatusInternalServerError, "policy deleted but pending signal incomplete; manual recompile required")
+		return
+	}
 
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -678,15 +889,40 @@ func (h *Handler) PatchPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Take snapshot outside the transaction — snapshots are idempotent (INSERT OR IGNORE)
-	// and don't need to be atomically consistent with the patch. Keeping them
-	// outside the tx reduces write lock hold time.
-	common.SnapshotOrLog(r.Context(), "policy", id, "update", func() error {
-		return h.Store.Snapshot(r.Context(), "update", id)
-	})
+	// Resolve pre-mutation peers before the patch so a post-mutation
+	// resolution failure can fall back to them (mirrors UpdatePolicy via
+	// buildAndPersistPolicyUpdate). Detach from the request context so a
+	// client disconnect cannot cancel the resolution and lose pending rows.
+	// Fail closed when the compiler is unavailable: skipping resolution
+	// would patch a policy with zero fan-out and lose the DB pending signal.
+	var oldPeers []int
+	if h.Compiler == nil {
+		log.ErrorContext(r.Context(), "compiler not available; failing policy patch to preserve pending signal", "policy_id", id)
+		common.RespondError(w, http.StatusInternalServerError, "failed to resolve affected peers; manual recompile required")
+		return
+	}
+	resolveErr := func() error {
+		resolveCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 10*time.Second)
+		defer cancel()
+		var err error
+		oldPeers, err = h.Compiler.GetAffectedPeersByPolicy(resolveCtx, id)
+		return err
+	}()
+	if resolveErr != nil {
+		log.ErrorContext(r.Context(), "failed to get old affected peers for policy", "policy_id", id, "error", resolveErr)
+		common.RespondError(w, http.StatusInternalServerError, "failed to resolve affected peers; manual recompile required")
+		return
+	}
 
-	err = store.RunInTx(r.Context(), h.beginner, func(tx *sql.Tx) error {
-		if err := h.Store.PatchPolicyEnabledTx(r.Context(), tx, id, *input.Enabled); err != nil {
+	// Snapshot inside the transaction (groups pattern): the snapshot and the
+	// patch commit atomically, so a failed patch cannot leave an orphan
+	// snapshot that blocks the true first-change snapshot (INSERT OR IGNORE
+	// first-wins). A snapshot failure rolls back the whole tx (fail closed).
+	err = db.RunInTx(r.Context(), h.beginner, func(ctx context.Context, tx *sql.Tx) error {
+		if err := h.Store.SnapshotTx(ctx, tx, "update", id); err != nil {
+			return fmt.Errorf("snapshot: %w", err)
+		}
+		if err := h.Store.PatchPolicyEnabledTx(ctx, tx, id, *input.Enabled); err != nil {
 			if errors.Is(err, store.ErrPolicyNotFound) {
 				return common.NewHTTPError(http.StatusNotFound, "policy not found")
 			}
@@ -706,18 +942,48 @@ func (h *Handler) PatchPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var affectedPeers []int
-	if h.Compiler != nil {
-		affectedPeers, err = h.Compiler.GetAffectedPeersByPolicy(r.Context(), id)
-		if err != nil {
-			log.ErrorContext(r.Context(), "Failed to get affected peers", "policy_id", id, "error", err)
-		}
-	}
+	var newPeers []int
 	enabledStr := "enabled"
 	if !*input.Enabled {
 		enabledStr = "disabled"
 	}
-	h.Store.QueuePeerChange(r.Context(), h.ChangeWorker, affectedPeers, "policy", "update", id, fmt.Sprintf("Policy '%s' %s", policyName, enabledStr))
+	// Detach from the request context so a client disconnect cannot
+	// cancel the resolution and lose pending rows. The patch above
+	// already succeeded, so a resolution failure must fail the request
+	// rather than ack success with zero fan-out. It must never surface
+	// as 404: the policy exists. Queue the pre-mutation peers as a
+	// fallback so the persisted change keeps at least a partial
+	// pending signal (mirrors buildAndPersistPolicyUpdate).
+	resolveErr = func() error {
+		resolveCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 10*time.Second)
+		defer cancel()
+		var err error
+		newPeers, err = h.Compiler.GetAffectedPeersByPolicy(resolveCtx, id)
+		return err
+	}()
+	if resolveErr != nil {
+		log.ErrorContext(r.Context(), "failed to resolve new affected peers, falling back to old peers", "policy_id", id, "error", resolveErr)
+		var fallbackQueueErr error
+		if len(oldPeers) > 0 {
+			if qerr := h.Store.QueuePeerChange(r.Context(), h.ChangeWorker, oldPeers, "policy", "update", id, fmt.Sprintf("Policy '%s' %s (fallback fan-out)", policyName, enabledStr)); qerr != nil {
+				log.ErrorContext(r.Context(), "failed to queue fallback peer change", "policy_id", id, "error", qerr)
+				fallbackQueueErr = qerr
+			}
+		}
+		if joined := errors.Join(fallbackQueueErr, resolveErr); joined != nil {
+			log.ErrorContext(r.Context(), "policy patch fan-out failed", "policy_id", id, "error", joined)
+		}
+		common.RespondError(w, http.StatusInternalServerError, "policy updated but pending signal incomplete; manual recompile required")
+		return
+	}
+	affectedPeers := ic.MergePeerIDs(oldPeers, newPeers)
+	// Fail closed on synchronous queue failures: acking 200 after the
+	// fallback dropped the change would lose the DB pending signal.
+	if err := h.Store.QueuePeerChange(r.Context(), h.ChangeWorker, affectedPeers, "policy", "update", id, fmt.Sprintf("Policy '%s' %s", policyName, enabledStr)); err != nil {
+		log.ErrorContext(r.Context(), "failed to queue peer change", "policy_id", id, "error", err)
+		common.RespondError(w, http.StatusInternalServerError, "policy updated but pending signal incomplete; manual recompile required")
+		return
+	}
 	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
 

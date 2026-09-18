@@ -947,7 +947,7 @@ func TestDeletePeer(t *testing.T) {
 				// No setup needed - peer doesn't exist
 			},
 			wantCode: http.StatusNotFound,
-			wantErr:  "Peer not found",
+			wantErr:  "peer not found",
 		},
 		{
 			name:   "invalid peer ID",
@@ -985,25 +985,17 @@ func TestDeletePeer(t *testing.T) {
 			}
 
 			if tt.wantErr != "" {
-				// Try to decode as map with policies (new format) or simple map (old format)
-				var respInterface map[string]interface{}
-				if decodeErr := json.NewDecoder(w.Body).Decode(&respInterface); decodeErr == nil {
-					// New format with policies
-					if errMsg, ok := respInterface["error"].(string); ok {
-						if strings.Contains(errMsg, tt.wantErr) {
-							// Success - error message contains expected string
-							return
-						}
-					}
-				}
-
-				// Fall back to trying simple string map
-				var resp map[string]string
-				if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+				// Decode once from buffered bytes (handles both the plain
+				// {"error": ...} shape and the 409 {"error": ..., "policies": ...}
+				// shape). Decoding twice from w.Body would consume the buffer
+				// and EOF on the second decode, masking casing mismatches.
+				var resp map[string]interface{}
+				if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 					t.Fatalf("failed to decode error response: %v", err)
 				}
-				if !strings.Contains(resp["error"], tt.wantErr) {
-					t.Errorf("expected error containing %q, got %q", tt.wantErr, resp["error"])
+				errMsg, _ := resp["error"].(string)
+				if !strings.Contains(errMsg, tt.wantErr) {
+					t.Errorf("expected error containing %q, got %q", tt.wantErr, errMsg)
 				}
 			}
 

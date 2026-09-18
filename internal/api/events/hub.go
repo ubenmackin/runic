@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"runic/internal/change"
 	runiclog "runic/internal/common/log"
 )
 
@@ -15,32 +16,17 @@ import (
 // for the host; ChannelFull means a client is registered but its channel
 // was full (backpressure, retryable). Callers must not map ChannelFull to
 // not_connected.
-type UpdateAgentOutcome int
+//
+// This is an alias for change.NotifyOutcome so the low-level change package
+// (BundleNotifier) and the SSE hub share one definition without the change
+// package importing the API layer.
+type UpdateAgentOutcome = change.NotifyOutcome
 
 const (
-	UpdateAgentSent UpdateAgentOutcome = iota
-	UpdateAgentNotConnected
-	UpdateAgentChannelFull
+	UpdateAgentSent         = change.NotifySent
+	UpdateAgentNotConnected = change.NotifyNotConnected
+	UpdateAgentChannelFull  = change.NotifyChannelFull
 )
-
-// String returns the stable per-peer outcome key for an UpdateAgentOutcome.
-func (o UpdateAgentOutcome) String() string {
-	switch o {
-	case UpdateAgentSent:
-		return "sent"
-	case UpdateAgentNotConnected:
-		return "not_connected"
-	case UpdateAgentChannelFull:
-		return "channel_full"
-	default:
-		return "unknown"
-	}
-}
-
-// Sent reports whether the notification was delivered.
-func (o UpdateAgentOutcome) Sent() bool {
-	return o == UpdateAgentSent
-}
 
 // A NotifyUpdateAgenter is an interface for notifying agents to self-update.
 // Defined here to avoid import cycles and DRY violations.
@@ -144,7 +130,7 @@ func (h *SSEHub) NotifyBundleUpdated(hostID string, version string) (outcome Upd
 	}
 	h.mu.Unlock()
 	if !ok {
-		runiclog.Warn("NotifyBundleUpdated: agent not connected", "host_id", hostID)
+		runiclog.Warn("notifyBundleUpdated: agent not connected", "host_id", hostID)
 		return UpdateAgentNotConnected
 	}
 	ch := entry.ch
@@ -156,7 +142,7 @@ func (h *SSEHub) NotifyBundleUpdated(hostID string, version string) (outcome Upd
 	// final guard and reports a concurrent disconnect as a drop.
 	defer func() {
 		if recover() != nil {
-			runiclog.Warn("NotifyBundleUpdated: client disconnected during send", "host_id", hostID)
+			runiclog.Warn("notifyBundleUpdated: client disconnected during send", "host_id", hostID)
 			h.dropped.Add(1)
 			outcome = UpdateAgentNotConnected
 		}
@@ -178,10 +164,10 @@ func (h *SSEHub) NotifyBundleUpdated(hostID string, version string) (outcome Upd
 		_, stillRegistered := h.clients[hostID]
 		h.mu.RUnlock()
 		if !stillRegistered {
-			runiclog.Warn("NotifyBundleUpdated: agent disconnected during send", "host_id", hostID)
+			runiclog.Warn("notifyBundleUpdated: agent disconnected during send", "host_id", hostID)
 			return UpdateAgentNotConnected
 		}
-		runiclog.Warn("NotifyBundleUpdated: slow consumer, dropping update", "host_id", hostID)
+		runiclog.Warn("notifyBundleUpdated: slow consumer, dropping update", "host_id", hostID)
 		return UpdateAgentChannelFull
 	}
 }
@@ -194,7 +180,7 @@ func (h *SSEHub) NotifyFetchBackup(hostID string) UpdateAgentOutcome {
 	entry, ok := h.clients[hostID]
 	h.mu.RUnlock()
 	if !ok {
-		runiclog.Warn("NotifyFetchBackup: agent not connected", "host_id", hostID)
+		runiclog.Warn("notifyFetchBackup: agent not connected", "host_id", hostID)
 		return UpdateAgentNotConnected
 	}
 	msg := fmt.Sprintf("event: fetch_backup\ndata: {\"host_id\":%q}\n\n", hostID)
@@ -206,10 +192,10 @@ func (h *SSEHub) NotifyFetchBackup(hostID string) UpdateAgentOutcome {
 		_, stillRegistered := h.clients[hostID]
 		h.mu.RUnlock()
 		if !stillRegistered {
-			runiclog.Warn("NotifyFetchBackup: agent disconnected during send", "host_id", hostID)
+			runiclog.Warn("notifyFetchBackup: agent disconnected during send", "host_id", hostID)
 			return UpdateAgentNotConnected
 		}
-		runiclog.Warn("NotifyFetchBackup: channel full, dropping update", "host_id", hostID)
+		runiclog.Warn("notifyFetchBackup: channel full, dropping update", "host_id", hostID)
 		return UpdateAgentChannelFull
 	}
 	return UpdateAgentSent
@@ -224,7 +210,7 @@ func (h *SSEHub) NotifyUpdateAgent(hostID string, controlPlaneURL string) Update
 	entry, ok := h.clients[hostID]
 	h.mu.RUnlock()
 	if !ok {
-		runiclog.Warn("NotifyUpdateAgent: agent not connected", "host_id", hostID)
+		runiclog.Warn("notifyUpdateAgent: agent not connected", "host_id", hostID)
 		return UpdateAgentNotConnected
 	}
 	msg := fmt.Sprintf("event: update_agent\ndata: {\"control_plane_url\":%q}\n\n", controlPlaneURL)
@@ -236,10 +222,10 @@ func (h *SSEHub) NotifyUpdateAgent(hostID string, controlPlaneURL string) Update
 		_, stillRegistered := h.clients[hostID]
 		h.mu.RUnlock()
 		if !stillRegistered {
-			runiclog.Warn("NotifyUpdateAgent: agent disconnected during send", "host_id", hostID)
+			runiclog.Warn("notifyUpdateAgent: agent disconnected during send", "host_id", hostID)
 			return UpdateAgentNotConnected
 		}
-		runiclog.Warn("NotifyUpdateAgent: channel full, dropping update", "host_id", hostID)
+		runiclog.Warn("notifyUpdateAgent: channel full, dropping update", "host_id", hostID)
 		return UpdateAgentChannelFull
 	}
 	return UpdateAgentSent

@@ -8,8 +8,9 @@ import (
 	"errors"
 	"fmt"
 
-	"runic/internal/api/common"
+	"runic/internal/change"
 	ic "runic/internal/common"
+	"runic/internal/common/log"
 	"runic/internal/db"
 	"runic/internal/engine"
 	"runic/internal/models"
@@ -81,7 +82,11 @@ func (s *GroupStore) ListGroups(ctx context.Context) ([]GroupWithCounts, error) 
 	if err != nil {
 		return nil, fmt.Errorf("query groups: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() {
+		if cerr := rows.Close(); cerr != nil {
+			log.WarnContext(ctx, "failed to close rows", "error", cerr)
+		}
+	}()
 
 	var groupsData []GroupWithCounts
 	for rows.Next() {
@@ -127,14 +132,6 @@ func (s *GroupStore) GetGroupTx(ctx context.Context, q db.Querier, id int) (mode
 	return g, nil
 }
 
-// GetGroupSQLTx is part of the api/groups handler interface. The
-// implementation is identical to GetGroupTx, but the method name
-// explicitly states the *sql.Tx parameter type. Kept for backward
-// compatibility with the handler interface.
-func (s *GroupStore) GetGroupSQLTx(ctx context.Context, tx *sql.Tx, id int) (models.GroupRow, error) {
-	return s.GetGroupTx(ctx, tx, id)
-}
-
 func (s *GroupStore) UpdateGroup(ctx context.Context, id int, name, description string) error {
 	return execUpdate(ctx, s.db,
 		"UPDATE groups SET name = COALESCE(NULLIF(?, ''), name), description = ? WHERE id = ? AND is_pending_delete = 0",
@@ -177,7 +174,11 @@ func (s *GroupStore) ListGroupMembers(ctx context.Context, id int) ([]PeerInGrou
 	if err != nil {
 		return nil, fmt.Errorf("query members: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() {
+		if cerr := rows.Close(); cerr != nil {
+			log.WarnContext(ctx, "failed to close rows", "error", cerr)
+		}
+	}()
 
 	var peers []PeerInGroup
 	for rows.Next() {
@@ -194,11 +195,24 @@ func (s *GroupStore) ListGroupMembers(ctx context.Context, id int) ([]PeerInGrou
 }
 
 func (s *GroupStore) AddGroupMember(ctx context.Context, groupID, peerID int) (int64, error) {
-	result, err := s.db.ExecContext(ctx, "INSERT OR IGNORE INTO group_members (group_id, peer_id) VALUES (?, ?)", groupID, peerID)
+	return addGroupMember(ctx, s.db, groupID, peerID)
+}
+
+func addGroupMember(ctx context.Context, q db.Querier, groupID, peerID int) (int64, error) {
+	result, err := q.ExecContext(ctx, "INSERT OR IGNORE INTO group_members (group_id, peer_id) VALUES (?, ?)", groupID, peerID)
 	if err != nil {
 		return 0, fmt.Errorf("insert member: %w", err)
 	}
-	// Note: When INSERT OR IGNORE silently skips a duplicate row, LastInsertId() returns 0.
+	// INSERT OR IGNORE skips duplicates without error. LastInsertId is
+	// unreliable for ignored rows (it may return a prior id), so detect
+	// duplicates via RowsAffected: 0 means the membership already exists.
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("get rows affected: %w", err)
+	}
+	if affected == 0 {
+		return 0, nil
+	}
 	id, err := result.LastInsertId()
 	if err != nil {
 		return 0, fmt.Errorf("get insert id: %w", err)
@@ -206,12 +220,33 @@ func (s *GroupStore) AddGroupMember(ctx context.Context, groupID, peerID int) (i
 	return id, nil
 }
 
-func (s *GroupStore) DeleteGroupMember(ctx context.Context, groupID, peerID int) error {
-	_, err := s.db.ExecContext(ctx, "DELETE FROM group_members WHERE group_id = ? AND peer_id = ?", groupID, peerID)
+func (s *GroupStore) DeleteGroupMember(ctx context.Context, groupID, peerID int) (bool, error) {
+	return deleteGroupMember(ctx, s.db, groupID, peerID)
+}
+
+// AddGroupMemberTx inserts a group membership within a transaction so the
+// pre-mutation snapshot and the insert commit atomically (no orphan
+// snapshot on insert failure).
+func (s *GroupStore) AddGroupMemberTx(ctx context.Context, tx *sql.Tx, groupID, peerID int) (int64, error) {
+	return addGroupMember(ctx, tx, groupID, peerID)
+}
+
+// DeleteGroupMemberTx deletes a group membership within a transaction so
+// the pre-mutation snapshot and the delete commit atomically.
+func (s *GroupStore) DeleteGroupMemberTx(ctx context.Context, tx *sql.Tx, groupID, peerID int) (bool, error) {
+	return deleteGroupMember(ctx, tx, groupID, peerID)
+}
+
+func deleteGroupMember(ctx context.Context, q db.Querier, groupID, peerID int) (bool, error) {
+	res, err := q.ExecContext(ctx, "DELETE FROM group_members WHERE group_id = ? AND peer_id = ?", groupID, peerID)
 	if err != nil {
-		return fmt.Errorf("delete member: %w", err)
+		return false, fmt.Errorf("delete member: %w", err)
 	}
-	return nil
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("delete member rows affected: %w", err)
+	}
+	return n > 0, nil
 }
 
 // Snapshot creates a snapshot of a group and its members.
@@ -222,6 +257,11 @@ func (s *GroupStore) Snapshot(ctx context.Context, action string, groupID int) e
 
 	grp, err := s.GetGroupTx(ctx, s.db, groupID)
 	if err != nil {
+		// Normalize a concurrent delete (TOCTOU) to the sentinel so
+		// handlers map it to 404 instead of 500 via sql.ErrNoRows.
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrGroupNotFound
+		}
 		return fmt.Errorf("get group: %w", err)
 	}
 
@@ -250,6 +290,11 @@ func (s *GroupStore) SnapshotTx(ctx context.Context, tx *sql.Tx, action string, 
 
 	grp, err := s.GetGroupTx(ctx, tx, groupID)
 	if err != nil {
+		// Normalize a concurrent delete (TOCTOU) to the sentinel so
+		// handlers map it to 404 instead of 500 via sql.ErrNoRows.
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrGroupNotFound
+		}
 		return fmt.Errorf("get group: %w", err)
 	}
 
@@ -272,16 +317,24 @@ func (s *GroupStore) SnapshotTx(ctx context.Context, tx *sql.Tx, action string, 
 
 // CheckDeleteConstraints checks whether a group can be safely deleted.
 // It checks if the group is used as a source or target in any policy.
-// Returns a *common.DeleteConstraintError with the full list of policies using the group.
+// Returns a *change.DeleteConstraintError with the full list of policies using the group.
 func (s *GroupStore) CheckDeleteConstraints(ctx context.Context, groupID int) error {
+	return s.CheckDeleteConstraintsTx(ctx, s.db, groupID)
+}
+
+// CheckDeleteConstraintsTx is the transactional variant of
+// CheckDeleteConstraints. Delete handlers re-check constraints inside the
+// snapshot+delete transaction so a policy created between the pre-check and
+// the commit cannot leave a constrained group soft-deleted.
+func (s *GroupStore) CheckDeleteConstraintsTx(ctx context.Context, q db.Querier, groupID int) error {
 	// Query ALL policies that use the group (as source or target)
-	policies, err := queryRows(ctx, s.db,
+	policies, err := queryRows(ctx, q,
 		`SELECT id, name FROM policies
-		WHERE ((source_type='group' AND source_id=?) OR (target_type='group' AND target_id=?)) AND is_pending_delete = 0`,
-		[]interface{}{groupID, groupID},
+		WHERE ((source_type='group' AND source_id=?) OR (target_type='group' AND target_id=?)) AND is_pending_delete = 0 ORDER BY id ASC`,
+		[]any{groupID, groupID},
 		"policy usage",
-		func(rows *sql.Rows) (common.PolicyRef, error) {
-			var p common.PolicyRef
+		func(rows *sql.Rows) (change.PolicyRef, error) {
+			var p change.PolicyRef
 			if err := rows.Scan(&p.ID, &p.Name); err != nil {
 				return p, err
 			}
@@ -293,7 +346,7 @@ func (s *GroupStore) CheckDeleteConstraints(ctx context.Context, groupID int) er
 	}
 
 	if len(policies) > 0 {
-		return &common.DeleteConstraintError{
+		return &change.DeleteConstraintError{
 			Message:  "Cannot delete group: it is in use by policies",
 			Policies: policies,
 		}
@@ -303,9 +356,13 @@ func (s *GroupStore) CheckDeleteConstraints(ctx context.Context, groupID int) er
 }
 
 // QueueGroupChange enqueues a group change notification via the ChangeWorker.
-func (s *GroupStore) QueueGroupChange(ctx context.Context, changeWorker *common.ChangeWorker, compiler *engine.Compiler, groupID int, changeAction string, summary string) {
+// Synchronous queue failures (nil worker, stopped/full fallback errors) are
+// returned so handlers fail the request instead of acking success with a
+// lost signal; nil means the change was accepted for background persistence.
+func (s *GroupStore) QueueGroupChange(ctx context.Context, changeWorker *change.ChangeWorker, compiler *engine.Compiler, groupID int, changeAction string, summary string) error {
 	if changeWorker == nil {
-		return
+		log.WarnContext(ctx, "dropping group change: change worker is nil", "group_id", groupID, "change_action", changeAction)
+		return fmt.Errorf("cannot queue group %d %s: change worker is nil", groupID, changeAction)
 	}
-	changeWorker.QueueGroupChange(ctx, compiler, groupID, changeAction, summary)
+	return changeWorker.QueueGroupChange(ctx, compiler, groupID, changeAction, summary)
 }

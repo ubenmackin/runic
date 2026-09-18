@@ -48,19 +48,24 @@ func setupTestDB(t *testing.T) (*PeerStore, func()) {
 	return store, cleanup
 }
 
-func getSyncStatus(t *testing.T, store *PeerStore, ctx context.Context, peerID int) string {
+func findPeerByID(t *testing.T, s *PeerStore, ctx context.Context, peerID int) PeerView {
 	t.Helper()
-	peers, err := store.ListPeers(ctx)
+	peers, err := s.ListPeers(ctx)
 	if err != nil {
 		t.Fatalf("ListPeers failed: %v", err)
 	}
 	for _, p := range peers {
 		if p.ID == peerID {
-			return p.SyncStatus
+			return p
 		}
 	}
 	t.Fatalf("peer %d not found in ListPeers results", peerID)
-	return ""
+	return PeerView{}
+}
+
+func getSyncStatus(t *testing.T, s *PeerStore, ctx context.Context, peerID int) string {
+	t.Helper()
+	return findPeerByID(t, s, ctx, peerID).SyncStatus
 }
 
 func TestListPeersSyncStatus(t *testing.T) {
@@ -193,6 +198,82 @@ func TestListPeersSyncStatus(t *testing.T) {
 			t.Errorf("expected sync_status='pending_sync' (agent heartbeats but never confirms new bundle), got '%s'", status)
 		}
 	})
+}
+
+// TestListPeers_ManualPeerPendingVisibility documents the decision that manual
+// peers show pending changes. Pending rows are queued for every affected peer
+// (including manual peers), so ListPeers must surface pending_changes_count
+// and sync_status=pending for manual servers. Push delivery stays agent-only
+// (see ListAgentBasedPeers), but visibility must not filter manual peers.
+func TestListPeers_ManualPeerPendingVisibility(t *testing.T) {
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	d := store.db
+
+	insertPeer := func(hostname, ip string, isManual int) int {
+		t.Helper()
+		result, err := d.ExecContext(ctx,
+			`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, is_manual) VALUES (?, ?, ?, ?, ?)`,
+			hostname, ip, "agent-key-"+hostname, "hmac-key-"+hostname, isManual)
+		if err != nil {
+			t.Fatalf("insert peer %s: %v", hostname, err)
+		}
+		id, err := result.LastInsertId()
+		if err != nil {
+			t.Fatalf("last insert id %s: %v", hostname, err)
+		}
+		return int(id)
+	}
+
+	agentID := insertPeer("agent-peer", "10.0.0.1", 0)
+	manualID := insertPeer("manual-peer", "10.0.0.2", 1)
+	cleanID := insertPeer("clean-peer", "10.0.0.3", 0)
+
+	for _, peerID := range []int{agentID, manualID} {
+		if _, err := d.ExecContext(ctx,
+			`INSERT INTO pending_changes (peer_id, change_type, change_id, change_action, change_summary) VALUES (?, ?, ?, ?, ?)`,
+			peerID, "policy", 1, "create", "test change"); err != nil {
+			t.Fatalf("insert pending change for peer %d: %v", peerID, err)
+		}
+	}
+
+	agent := findPeerByID(t, store, ctx, agentID)
+	if agent.PendingChangesCount != 1 {
+		t.Errorf("agent pending_changes_count = %d, want 1", agent.PendingChangesCount)
+	}
+	if agent.SyncStatus != "pending" {
+		t.Errorf("agent sync_status = %q, want pending", agent.SyncStatus)
+	}
+	if !agent.HasPendingChanges {
+		t.Error("agent HasPendingChanges = false, want true")
+	}
+
+	manual := findPeerByID(t, store, ctx, manualID)
+	if manual.PendingChangesCount != 1 {
+		t.Errorf("manual pending_changes_count = %d, want 1", manual.PendingChangesCount)
+	}
+	if manual.SyncStatus != "pending" {
+		t.Errorf("manual sync_status = %q, want pending", manual.SyncStatus)
+	}
+	if !manual.HasPendingChanges {
+		t.Error("manual HasPendingChanges = false, want true")
+	}
+	if !manual.IsManual {
+		t.Error("manual IsManual = false, want true")
+	}
+
+	clean := findPeerByID(t, store, ctx, cleanID)
+	if clean.PendingChangesCount != 0 {
+		t.Errorf("clean pending_changes_count = %d, want 0", clean.PendingChangesCount)
+	}
+	if clean.SyncStatus != "synced" {
+		t.Errorf("clean sync_status = %q, want synced", clean.SyncStatus)
+	}
+	if clean.HasPendingChanges {
+		t.Error("clean HasPendingChanges = true, want false")
+	}
 }
 
 func TestUpdatePeerHeartbeatPreservesVersionOnEmpty(t *testing.T) {

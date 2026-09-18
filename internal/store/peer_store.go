@@ -5,11 +5,12 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 
-	"runic/internal/api/common"
+	"runic/internal/change"
 	ic "runic/internal/common"
 	"runic/internal/common/constants"
 	"runic/internal/common/log"
@@ -21,6 +22,12 @@ import (
 const peerRowColumns = `id, hostname, ip_address, os_type, arch, has_docker, agent_key, agent_token, agent_version, is_manual, bundle_version, last_heartbeat, COALESCE(status, ''), created_at`
 
 const ruleBundleRowColumns = `id, peer_id, version, version_number, rules_content, hmac, created_at, applied_at, first_applied_at`
+
+// ErrPeerIPReferenced is returned by DeletePeerIPIfOrphan when the peer IP
+// is still referenced by one or more policies. It is distinct from
+// sql.ErrNoRows (row does not exist) so callers can map the two cases to
+// 409 Conflict vs 404 Not Found respectively.
+var ErrPeerIPReferenced = errors.New("peer IP is referenced by policies")
 
 // updatePeerHeartbeatSQL is the shared heartbeat UPDATE used by both
 // UpdatePeerHeartbeat and UpdatePeerHeartbeatWithPrev. Empty version strings
@@ -73,14 +80,27 @@ func NewPeerStore(database db.DB) *PeerStore {
 
 // ListPeers returns all peers. It uses a two-query approach: first fetches peers with a complex join, then
 // fetches all peer IPs and joins them in Go.
+//
+// Manual-peer pending visibility: pending_changes rows are queued for every
+// affected peer (including manual peers) because GetAffectedPeersByPolicy does
+// not filter by is_manual and the compiler generates bundles for manual peers
+// too. ListPeers therefore counts pending changes for all peers so policy
+// edits targeting manual servers stay visible in the Peers UI instead of being
+// silently invisible. Agent delivery stays agent-only: ListAgentBasedPeers and
+// PushCurrentRules keep the is_manual=0 filter because manual peers have no
+// agent to receive a push.
 func (s *PeerStore) ListPeers(ctx context.Context) ([]PeerView, error) {
+	// Offline threshold is a bound parameter, not interpolated SQL: the
+	// modifier (e.g. "-30 seconds") is passed as an argument to
+	// datetime('now', ?) so no fmt.Sprintf ever runs in the query path.
+	offlineModifier := "-" + strconv.Itoa(int(constants.OfflineThreshold.Seconds())) + " seconds"
 	query := `
 SELECT p.id, p.hostname, p.ip_address, p.os_type, p.arch, p.has_docker, p.is_manual,
 COALESCE(p.agent_version, '') as agent_version,
 COALESCE(p.last_heartbeat, '') as last_heartbeat,
 CASE
 WHEN p.last_heartbeat IS NULL THEN 'pending'
-WHEN p.last_heartbeat < ` + fmt.Sprintf("datetime('now', '-%d seconds')", int(constants.OfflineThreshold.Seconds())) + ` THEN 'offline'
+WHEN p.last_heartbeat < datetime('now', ?) THEN 'offline'
 ELSE COALESCE(p.status, 'online')
 END as status,
 COALESCE(p.bundle_version, '') as bundle_version,
@@ -88,9 +108,9 @@ COALESCE((SELECT rb.version_number FROM rule_bundles rb WHERE rb.peer_id = p.id 
 COALESCE(GROUP_CONCAT(g.name, ','), '') as groups,
 COALESCE(p.description, '') as description,
 COALESCE(p.hmac_key_last_rotated_at, '') as hmac_key_last_rotated_at,
-(SELECT COUNT(*) FROM pending_changes pc JOIN peers p2 ON pc.peer_id = p2.id WHERE pc.peer_id = p.id AND p2.is_manual = 0) as pending_changes_count,
+(SELECT COUNT(*) FROM pending_changes pc WHERE pc.peer_id = p.id) as pending_changes_count,
 	CASE
-		WHEN (SELECT COUNT(*) FROM pending_changes pc JOIN peers p2 ON pc.peer_id = p2.id WHERE pc.peer_id = p.id AND p2.is_manual = 0) > 0 THEN 'pending'
+		WHEN (SELECT COUNT(*) FROM pending_changes pc WHERE pc.peer_id = p.id) > 0 THEN 'pending'
 		WHEN (SELECT rb.version FROM rule_bundles rb WHERE rb.peer_id = p.id ORDER BY rb.created_at DESC LIMIT 1) IS NOT NULL
 		AND (
 			(SELECT rb.applied_at FROM rule_bundles rb WHERE rb.peer_id = p.id ORDER BY rb.created_at DESC LIMIT 1) IS NULL
@@ -104,11 +124,15 @@ LEFT JOIN groups g ON gm.group_id = g.id
 GROUP BY p.id
 ORDER BY p.hostname ASC`
 
-	rows, err := s.db.QueryContext(ctx, query)
+	rows, err := s.db.QueryContext(ctx, query, offlineModifier)
 	if err != nil {
 		return nil, fmt.Errorf("query peers: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() {
+		if cerr := rows.Close(); cerr != nil {
+			log.WarnContext(ctx, "failed to close rows", "error", cerr)
+		}
+	}()
 
 	var peers []PeerView
 	for rows.Next() {
@@ -156,19 +180,29 @@ ORDER BY p.hostname ASC`
 		// Non-fatal: return peers without IPs
 		return ic.EnsureSlice(peers), nil
 	}
-	defer func() { _ = ipRows.Close() }()
+	defer func() {
+		if cerr := ipRows.Close(); cerr != nil {
+			log.WarnContext(ctx, "failed to close rows", "error", cerr)
+		}
+	}()
 
 	// Build a map of peer_id -> []PeerIPView
+	// Row-scan contract (unified with queryRows and the engine fan-out
+	// lookups): fail-fast. A single corrupt peer_ips row aborts ListPeers
+	// instead of being skipped, so corruption can never silently drop
+	// addresses from the response.
 	ipMap := make(map[int][]PeerIPView)
 	for ipRows.Next() {
 		var pip PeerIPView
 		var isPrimary int
 		if err := ipRows.Scan(&pip.ID, &pip.PeerID, &pip.IPAddress, &isPrimary); err != nil {
-			log.WarnContext(ctx, "failed to scan peer_ip", "error", err)
-			continue
+			return nil, fmt.Errorf("scan peer_ip: %w", err)
 		}
 		pip.IsPrimary = isPrimary == 1
 		ipMap[pip.PeerID] = append(ipMap[pip.PeerID], pip)
+	}
+	if err := ipRows.Err(); err != nil {
+		return nil, fmt.Errorf("rows error peer_ips: %w", err)
 	}
 
 	// Attach IPs to each peer
@@ -252,7 +286,14 @@ func (s *PeerStore) UpdatePeer(ctx context.Context, id int, hostname, ip, osType
 
 // DeletePeer deletes a peer and all its associated data in a single transaction.
 func (s *PeerStore) DeletePeer(ctx context.Context, id int) error {
-	return RunInTx(ctx, s.db, func(tx *sql.Tx) error {
+	return db.RunInTx(ctx, s.db, func(ctx context.Context, tx *sql.Tx) error {
+		// Re-check constraints inside the Tx: the handler pre-check above
+		// is a fast 409, but a policy created between that check and the
+		// commit must still block the delete instead of leaving a
+		// constrained peer deleted (TOCTOU, mirroring groups/services).
+		if err := s.CheckDeleteConstraintsTx(ctx, tx, id); err != nil {
+			return err
+		}
 		if _, err := tx.ExecContext(ctx, "DELETE FROM group_members WHERE peer_id = ?", id); err != nil {
 			return fmt.Errorf("cleanup group_members: %w", err)
 		}
@@ -355,7 +396,11 @@ func (s *PeerStore) ListPeerIPs(ctx context.Context, peerID int) ([]PeerIPView, 
 	if err != nil {
 		return nil, fmt.Errorf("query peer IPs: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() {
+		if cerr := rows.Close(); cerr != nil {
+			log.WarnContext(ctx, "failed to close rows", "error", cerr)
+		}
+	}()
 
 	var ips []PeerIPView
 	for rows.Next() {
@@ -424,15 +469,16 @@ func (s *PeerStore) countPolicyRefsForPeerIP(ctx context.Context, peerID int, ip
 }
 
 // DeletePeerIPIfOrphan deletes a peer_ip by id, but only when it is not
-// referenced by any policy (as source_ip or target_ip).  Returns sql.ErrNoRows
-// if the row does not exist or if policy references block the delete.
+// referenced by any policy (as source_ip or target_ip). Returns
+// ErrPeerIPReferenced if policy references block the delete, or
+// sql.ErrNoRows if the row does not exist.
 func (s *PeerStore) DeletePeerIPIfOrphan(ctx context.Context, ipID int, peerID int, ipAddress string) error {
 	refCount, err := s.countPolicyRefsForPeerIP(ctx, peerID, ipAddress)
 	if err != nil {
 		return fmt.Errorf("count policy refs: %w", err)
 	}
 	if refCount > 0 {
-		return fmt.Errorf("peer IP %d is referenced by %d policy/policies: %w", ipID, refCount, sql.ErrNoRows)
+		return fmt.Errorf("peer IP %d is referenced by %d policy/policies: %w", ipID, refCount, ErrPeerIPReferenced)
 	}
 	result, err := s.db.ExecContext(ctx, "DELETE FROM peer_ips WHERE id = ?", ipID)
 	if err != nil {
@@ -507,7 +553,7 @@ func (s *PeerStore) UpsertPeerIPs(ctx context.Context, peerID int, ips []string,
 				"UPDATE peer_ips SET is_primary = 1 WHERE peer_id = ? AND ip_address = ?",
 				peerID, ip)
 			if err != nil {
-				log.Warn("Failed to update is_primary flag", "error", err, "peer_id", peerID, "ip", ip)
+				log.WarnContext(ctx, "failed to update is_primary flag", "error", err, "peer_id", peerID, "ip", ip)
 			}
 		}
 	}
@@ -534,7 +580,11 @@ func (s *PeerStore) SyncPeerIPs(ctx context.Context, peerID int, ips []string, p
 	if err != nil {
 		return nil, fmt.Errorf("query existing peer IPs: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() {
+		if cerr := rows.Close(); cerr != nil {
+			log.WarnContext(ctx, "failed to close rows", "error", cerr)
+		}
+	}()
 
 	type ipEntry struct {
 		ID int64
@@ -544,9 +594,12 @@ func (s *PeerStore) SyncPeerIPs(ctx context.Context, peerID int, ips []string, p
 	for rows.Next() {
 		var entry ipEntry
 		if err := rows.Scan(&entry.ID, &entry.IP); err != nil {
-			continue
+			return nil, fmt.Errorf("scan peer IP: %w", err)
 		}
 		existingIPs = append(existingIPs, entry)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows error: %w", err)
 	}
 
 	var deletedIDs []int64
@@ -556,16 +609,16 @@ func (s *PeerStore) SyncPeerIPs(ctx context.Context, peerID int, ips []string, p
 		}
 		refCount, err := s.countPolicyRefsForPeerIP(ctx, peerID, entry.IP)
 		if err != nil {
-			log.Warn("Failed to check policy references for stale peer IP", "error", err, "peer_id", peerID, "ip", entry.IP)
+			log.WarnContext(ctx, "failed to check policy references for stale peer IP", "error", err, "peer_id", peerID, "ip", entry.IP)
 			continue
 		}
 		if refCount > 0 {
-			log.Warn("Skipping deletion of stale peer IP: referenced by active policies", "peer_id", peerID, "ip", entry.IP, "policy_count", refCount)
+			log.WarnContext(ctx, "skipping deletion of stale peer IP: referenced by active policies", "peer_id", peerID, "ip", entry.IP, "policy_count", refCount)
 			continue
 		}
 		_, err = s.db.ExecContext(ctx, "DELETE FROM peer_ips WHERE peer_id = ? AND ip_address = ?", peerID, entry.IP)
 		if err != nil {
-			log.Warn("Failed to delete stale peer IP", "error", err, "peer_id", peerID, "ip", entry.IP)
+			log.WarnContext(ctx, "failed to delete stale peer IP", "error", err, "peer_id", peerID, "ip", entry.IP)
 			continue
 		}
 		deletedIDs = append(deletedIDs, entry.ID)
@@ -574,14 +627,14 @@ func (s *PeerStore) SyncPeerIPs(ctx context.Context, peerID int, ips []string, p
 	// Ensure only the primary IP has is_primary = 1
 	_, err = s.db.ExecContext(ctx, "UPDATE peer_ips SET is_primary = 0 WHERE peer_id = ?", peerID)
 	if err != nil {
-		log.Warn("Failed to reset is_primary flags", "error", err, "peer_id", peerID)
+		log.WarnContext(ctx, "failed to reset is_primary flags", "error", err, "peer_id", peerID)
 	}
 	if primaryIP != "" {
 		_, err = s.db.ExecContext(ctx,
 			"UPDATE peer_ips SET is_primary = 1 WHERE peer_id = ? AND ip_address = ?",
 			peerID, primaryIP)
 		if err != nil {
-			log.Warn("Failed to set primary IP flag", "error", err, "peer_id", peerID, "ip", primaryIP)
+			log.WarnContext(ctx, "failed to set primary IP flag", "error", err, "peer_id", peerID, "ip", primaryIP)
 		}
 	}
 
@@ -961,12 +1014,20 @@ func (s *PeerStore) GetPeerWithAgentVersion(ctx context.Context, peerID int) (ho
 // so the update fan-out can reject unsupported arches (armv6/other, which
 // have no servable self-update binary) as failed_validation instead of a
 // dishonest sent that 404s on download.
+// The is_manual=0 filter is intentional and is the only place (along with
+// PushCurrentRules) where manual peers are excluded: pending visibility
+// includes manual peers, but push delivery is agent-only since manual peers
+// have no agent to receive the bundle.
 func (s *PeerStore) ListAgentBasedPeers(ctx context.Context) ([]PeerView, error) {
 	rows, err := s.db.QueryContext(ctx, "SELECT id, hostname, COALESCE(agent_version, ''), COALESCE(arch, '') FROM peers WHERE is_manual = 0 ORDER BY hostname")
 	if err != nil {
 		return nil, fmt.Errorf("query agent-based peers: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() {
+		if cerr := rows.Close(); cerr != nil {
+			log.WarnContext(ctx, "failed to close rows", "error", cerr)
+		}
+	}()
 
 	var peers []PeerView
 	for rows.Next() {
@@ -986,50 +1047,56 @@ func (s *PeerStore) ListAgentBasedPeers(ctx context.Context) ([]PeerView, error)
 // It checks:
 // 1. If the peer is explicitly a target_id (and type='peer') or source_id (and type='peer')
 // 2. If the peer is in a group that is used by a policy
-// Returns a *common.DeleteConstraintError containing all policies that reference the peer.
+// Returns a *change.DeleteConstraintError containing all policies that reference the peer.
 func (s *PeerStore) CheckDeleteConstraints(ctx context.Context, peerID int) error {
-	var policies []common.PolicyRef
+	return s.CheckDeleteConstraintsTx(ctx, s.db, peerID)
+}
 
+// CheckDeleteConstraintsTx is the transactional variant of
+// CheckDeleteConstraints. Delete handlers re-check constraints inside the
+// delete transaction so a policy created between the pre-check and the
+// commit cannot leave a constrained peer deleted.
+func (s *PeerStore) CheckDeleteConstraintsTx(ctx context.Context, q db.Querier, peerID int) error {
 	// Check direct peer references in policies
-	rows, err := s.db.QueryContext(ctx,
+	policies, err := queryRows(ctx, q,
 		`SELECT id, name FROM policies
-		WHERE ((target_type='peer' AND target_id=?) OR (source_type='peer' AND source_id=?)) AND is_pending_delete = 0`,
-		peerID, peerID,
+		WHERE ((target_type='peer' AND target_id=?) OR (source_type='peer' AND source_id=?)) AND is_pending_delete = 0 ORDER BY id ASC`,
+		[]any{peerID, peerID},
+		"peer policies",
+		func(rows *sql.Rows) (change.PolicyRef, error) {
+			var ref change.PolicyRef
+			if err := rows.Scan(&ref.ID, &ref.Name); err != nil {
+				return ref, err
+			}
+			return ref, nil
+		},
 	)
 	if err != nil {
 		return fmt.Errorf("failed to query peer policies: %w", err)
 	}
-	for rows.Next() {
-		var ref common.PolicyRef
-		if scanErr := rows.Scan(&ref.ID, &ref.Name); scanErr == nil {
-			policies = append(policies, ref)
-		}
-	}
-	if closeErr := rows.Close(); closeErr != nil {
-		return fmt.Errorf("failed to close rows: %w", closeErr)
-	}
 
 	// Check peer via group references in policies
-	rows, err = s.db.QueryContext(ctx, `
+	groupPolicies, err := queryRows(ctx, q, `
 		SELECT DISTINCT p.id, p.name FROM policies p
 		JOIN group_members gm ON (gm.group_id = p.source_id AND p.source_type='group') OR (gm.group_id = p.target_id AND p.target_type='group')
-		WHERE gm.peer_id = ? AND p.is_pending_delete = 0
-	`, peerID)
+		WHERE gm.peer_id = ? AND p.is_pending_delete = 0 ORDER BY p.id ASC
+	`, []any{peerID},
+		"group policies",
+		func(rows *sql.Rows) (change.PolicyRef, error) {
+			var ref change.PolicyRef
+			if err := rows.Scan(&ref.ID, &ref.Name); err != nil {
+				return ref, err
+			}
+			return ref, nil
+		},
+	)
 	if err != nil {
 		return fmt.Errorf("failed to query group policies: %w", err)
 	}
-	for rows.Next() {
-		var ref common.PolicyRef
-		if scanErr := rows.Scan(&ref.ID, &ref.Name); scanErr == nil {
-			policies = append(policies, ref)
-		}
-	}
-	if closeErr := rows.Close(); closeErr != nil {
-		return fmt.Errorf("failed to close rows: %w", closeErr)
-	}
+	policies = append(policies, groupPolicies...)
 
 	if len(policies) > 0 {
-		return &common.DeleteConstraintError{
+		return &change.DeleteConstraintError{
 			Message:  "cannot delete peer — it is in use by one or more policies",
 			Policies: policies,
 		}

@@ -196,7 +196,7 @@ func (h *Handler) HandleSetupPOST(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := store.RunInTx(ctx, h.DBBeginner, func(tx *sql.Tx) error {
+	if err := db.RunInTx(ctx, h.DBBeginner, func(ctx context.Context, tx *sql.Tx) error {
 		count, countErr := h.UserStore.CountUsersTx(ctx, tx)
 		if countErr != nil {
 			return countErr

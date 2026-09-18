@@ -3739,3 +3739,286 @@ func TestPreviewInternetPeerZeroBypass(t *testing.T) {
 		}
 	}
 }
+
+func affectedPeersSet(ids []int) map[int]bool {
+	set := make(map[int]bool, len(ids))
+	for _, id := range ids {
+		set[id] = true
+	}
+	return set
+}
+
+func assertAffectedPeers(t *testing.T, got []int, want []int) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("affected peers length mismatch: got %v, want %v", got, want)
+	}
+	gotSet := affectedPeersSet(got)
+	for _, id := range want {
+		if !gotSet[id] {
+			t.Fatalf("affected peers mismatch: got %v, want %v", got, want)
+		}
+	}
+}
+
+func TestGetAffectedPeersByPolicyPeerGroup(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	if _, err := database.Exec("PRAGMA foreign_keys=OFF"); err != nil {
+		t.Fatalf("disable foreign keys: %v", err)
+	}
+
+	peerA := insertPeer(t, database, "affected-peer-a", "10.0.0.1", false)
+	peerB := insertPeer(t, database, "affected-peer-b", "10.0.0.2", false)
+	peerC := insertPeer(t, database, "affected-peer-c", "10.0.0.3", false)
+	groupID := insertGroup(t, database, "affected-group")
+	insertGroupMember(t, database, groupID, peerB)
+	insertGroupMember(t, database, groupID, peerC)
+	serviceID := insertService(t, database, "affected-svc", "80", "tcp")
+	policyID := insertPolicyOpts(t, database, policyOpts{
+		name:       "peer-to-group",
+		sourceType: "peer",
+		sourceID:   int64(peerA),
+		serviceID:  int64(serviceID),
+		targetType: "group",
+		targetID:   int64(groupID),
+		action:     "ACCEPT",
+		priority:   100,
+		enabled:    true,
+	})
+
+	c := NewTestCompiler(database)
+	got, err := c.GetAffectedPeersByPolicy(context.Background(), policyID)
+	if err != nil {
+		t.Fatalf("GetAffectedPeersByPolicy: %v", err)
+	}
+	assertAffectedPeers(t, got, []int{peerA, peerB, peerC})
+}
+
+func TestGetAffectedPeersByPolicyPeerSpecial(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	if _, err := database.Exec("PRAGMA foreign_keys=OFF"); err != nil {
+		t.Fatalf("disable foreign keys: %v", err)
+	}
+
+	peerA := insertPeer(t, database, "peer-special-a", "10.0.0.11", false)
+	peerB := insertPeer(t, database, "peer-special-b", "10.0.0.12", false)
+	serviceID := insertService(t, database, "peer-special-svc", "80", "tcp")
+	policyID := insertPolicyOpts(t, database, policyOpts{
+		name:       "peer-to-anyip",
+		sourceType: "peer",
+		sourceID:   int64(peerA),
+		serviceID:  int64(serviceID),
+		targetType: "special",
+		targetID:   int64(resolve.SpecialIDAnyIP),
+		action:     "ACCEPT",
+		priority:   100,
+		enabled:    true,
+	})
+
+	c := NewTestCompiler(database)
+	got, err := c.GetAffectedPeersByPolicy(context.Background(), policyID)
+	if err != nil {
+		t.Fatalf("GetAffectedPeersByPolicy: %v", err)
+	}
+	assertAffectedPeers(t, got, []int{peerA})
+	if affectedPeersSet(got)[peerB] {
+		t.Fatalf("unrelated peer %d must not be affected, got %v", peerB, got)
+	}
+}
+
+func TestGetAffectedPeersByPolicyGroupSpecial(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	if _, err := database.Exec("PRAGMA foreign_keys=OFF"); err != nil {
+		t.Fatalf("disable foreign keys: %v", err)
+	}
+
+	peerA := insertPeer(t, database, "group-special-a", "10.0.0.21", false)
+	peerB := insertPeer(t, database, "group-special-b", "10.0.0.22", false)
+	peerC := insertPeer(t, database, "group-special-c", "10.0.0.23", false)
+	groupID := insertGroup(t, database, "group-special-group")
+	insertGroupMember(t, database, groupID, peerA)
+	insertGroupMember(t, database, groupID, peerB)
+	serviceID := insertService(t, database, "group-special-svc", "80", "tcp")
+	policyID := insertPolicyOpts(t, database, policyOpts{
+		name:       "group-to-internet",
+		sourceType: "group",
+		sourceID:   int64(groupID),
+		serviceID:  int64(serviceID),
+		targetType: "special",
+		targetID:   int64(resolve.SpecialIDInternet),
+		action:     "ACCEPT",
+		priority:   100,
+		enabled:    true,
+	})
+
+	c := NewTestCompiler(database)
+	got, err := c.GetAffectedPeersByPolicy(context.Background(), policyID)
+	if err != nil {
+		t.Fatalf("GetAffectedPeersByPolicy: %v", err)
+	}
+	assertAffectedPeers(t, got, []int{peerA, peerB})
+	if affectedPeersSet(got)[peerC] {
+		t.Fatalf("unrelated peer %d must not be affected, got %v", peerC, got)
+	}
+}
+
+func TestGetAffectedPeersByPolicySpecialPeer(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	if _, err := database.Exec("PRAGMA foreign_keys=OFF"); err != nil {
+		t.Fatalf("disable foreign keys: %v", err)
+	}
+
+	peerA := insertPeer(t, database, "special-peer-a", "10.0.0.31", false)
+	peerB := insertPeer(t, database, "special-peer-b", "10.0.0.32", false)
+	serviceID := insertService(t, database, "special-peer-svc", "80", "tcp")
+	policyID := insertPolicyOpts(t, database, policyOpts{
+		name:       "anyip-to-peer",
+		sourceType: "special",
+		sourceID:   int64(resolve.SpecialIDAnyIP),
+		serviceID:  int64(serviceID),
+		targetType: "peer",
+		targetID:   int64(peerA),
+		action:     "ACCEPT",
+		priority:   100,
+		enabled:    true,
+	})
+
+	c := NewTestCompiler(database)
+	got, err := c.GetAffectedPeersByPolicy(context.Background(), policyID)
+	if err != nil {
+		t.Fatalf("GetAffectedPeersByPolicy: %v", err)
+	}
+	assertAffectedPeers(t, got, []int{peerA})
+	if affectedPeersSet(got)[peerB] {
+		t.Fatalf("unrelated peer %d must not be affected, got %v", peerB, got)
+	}
+}
+
+func TestGetAffectedPeersByPolicySpecialGroup(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	if _, err := database.Exec("PRAGMA foreign_keys=OFF"); err != nil {
+		t.Fatalf("disable foreign keys: %v", err)
+	}
+
+	peerA := insertPeer(t, database, "special-group-a", "10.0.0.41", false)
+	peerB := insertPeer(t, database, "special-group-b", "10.0.0.42", false)
+	peerC := insertPeer(t, database, "special-group-c", "10.0.0.43", false)
+	groupID := insertGroup(t, database, "special-group-group")
+	insertGroupMember(t, database, groupID, peerA)
+	insertGroupMember(t, database, groupID, peerB)
+	serviceID := insertService(t, database, "special-group-svc", "80", "tcp")
+	policyID := insertPolicyOpts(t, database, policyOpts{
+		name:       "internet-to-group",
+		sourceType: "special",
+		sourceID:   int64(resolve.SpecialIDInternet),
+		serviceID:  int64(serviceID),
+		targetType: "group",
+		targetID:   int64(groupID),
+		action:     "ACCEPT",
+		priority:   100,
+		enabled:    true,
+	})
+
+	c := NewTestCompiler(database)
+	got, err := c.GetAffectedPeersByPolicy(context.Background(), policyID)
+	if err != nil {
+		t.Fatalf("GetAffectedPeersByPolicy: %v", err)
+	}
+	assertAffectedPeers(t, got, []int{peerA, peerB})
+	if affectedPeersSet(got)[peerC] {
+		t.Fatalf("unrelated peer %d must not be affected, got %v", peerC, got)
+	}
+}
+
+func TestGetAffectedPeersByPolicyAllPeers(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	if _, err := database.Exec("PRAGMA foreign_keys=OFF"); err != nil {
+		t.Fatalf("disable foreign keys: %v", err)
+	}
+
+	peerA := insertPeer(t, database, "allpeers-a", "10.0.0.51", false)
+	peerB := insertPeer(t, database, "allpeers-b", "10.0.0.52", false)
+	peerC := insertPeer(t, database, "allpeers-c", "10.0.0.53", false)
+	allPeers := []int{peerA, peerB, peerC}
+	groupID := insertGroup(t, database, "allpeers-group")
+	insertGroupMember(t, database, groupID, peerA)
+	insertGroupMember(t, database, groupID, peerB)
+	serviceID := insertService(t, database, "allpeers-svc", "80", "tcp")
+	c := NewTestCompiler(database)
+	ctx := context.Background()
+
+	cases := []struct {
+		name       string
+		sourceType string
+		sourceID   int
+		targetType string
+		targetID   int
+		want       []int
+	}{
+		{name: "allpeers-source-to-peer", sourceType: "special", sourceID: resolve.SpecialIDAllPeers, targetType: "peer", targetID: peerC, want: allPeers},
+		{name: "peer-source-to-allpeers", sourceType: "peer", sourceID: peerA, targetType: "special", targetID: resolve.SpecialIDAllPeers, want: allPeers},
+		{name: "allpeers-source-to-group", sourceType: "special", sourceID: resolve.SpecialIDAllPeers, targetType: "group", targetID: groupID, want: allPeers},
+		{name: "group-source-to-allpeers", sourceType: "group", sourceID: groupID, targetType: "special", targetID: resolve.SpecialIDAllPeers, want: allPeers},
+		{name: "allpeers-to-internet", sourceType: "special", sourceID: resolve.SpecialIDAllPeers, targetType: "special", targetID: resolve.SpecialIDInternet, want: allPeers},
+		{name: "anyip-to-allpeers", sourceType: "special", sourceID: resolve.SpecialIDAnyIP, targetType: "special", targetID: resolve.SpecialIDAllPeers, want: allPeers},
+		{name: "allpeers-to-allpeers", sourceType: "special", sourceID: resolve.SpecialIDAllPeers, targetType: "special", targetID: resolve.SpecialIDAllPeers, want: allPeers},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			policyID := insertPolicyOpts(t, database, policyOpts{
+				name:       tc.name,
+				sourceType: tc.sourceType,
+				sourceID:   int64(tc.sourceID),
+				serviceID:  int64(serviceID),
+				targetType: tc.targetType,
+				targetID:   int64(tc.targetID),
+				action:     "ACCEPT",
+				priority:   100,
+				enabled:    true,
+			})
+			got, err := c.GetAffectedPeersByPolicy(ctx, policyID)
+			if err != nil {
+				t.Fatalf("GetAffectedPeersByPolicy %s: %v", tc.name, err)
+			}
+			assertAffectedPeers(t, got, tc.want)
+		})
+	}
+}
+
+func TestGetAffectedPeersByPolicySpecialSpecialNoFanout(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	if _, err := database.Exec("PRAGMA foreign_keys=OFF"); err != nil {
+		t.Fatalf("disable foreign keys: %v", err)
+	}
+
+	insertPeer(t, database, "nospecial-a", "10.0.0.61", false)
+	serviceID := insertService(t, database, "nospecial-svc", "80", "tcp")
+	policyID := insertPolicyOpts(t, database, policyOpts{
+		name:       "anyip-to-internet",
+		sourceType: "special",
+		sourceID:   int64(resolve.SpecialIDAnyIP),
+		serviceID:  int64(serviceID),
+		targetType: "special",
+		targetID:   int64(resolve.SpecialIDInternet),
+		action:     "ACCEPT",
+		priority:   100,
+		enabled:    true,
+	})
+
+	c := NewTestCompiler(database)
+	got, err := c.GetAffectedPeersByPolicy(context.Background(), policyID)
+	if err != nil {
+		t.Fatalf("GetAffectedPeersByPolicy: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("anyip-to-internet must affect no peers, got %v", got)
+	}
+}

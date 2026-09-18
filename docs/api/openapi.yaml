@@ -25,6 +25,36 @@ info:
     - 404: Not Found - Resource not found
     - 409: Conflict - Resource in use
     - 500: Internal Server Error
+    
+    ## Pending Fan-out Contract (fail-closed)
+    Mutations to groups, services, policies, and group membership persist first
+    and then queue DB-driven pending-change fan-out for every affected peer.
+    When the mutation is persisted but the fan-out cannot be queued or resolved
+    (missing change worker/compiler, affected-peer resolution failure, or
+    synchronous queue failure), the endpoint returns `500` with a
+    `pending signal incomplete; manual recompile required` message instead of
+    `2xx`, so clients uniformly detect the lost pending signal. Affected peers
+    may show a partial pending signal when some peers were queued before the
+    failure; the operator must recompile the missing peers.
+
+    Importer `POST /import-sessions/{session_id}/apply` is fail-closed the same
+    way: the session transaction commits first, then each created
+    peer/group/service/policy fans out to its affected peers (policy
+    source/target expansion, group members plus referencing policies, service
+    using policies) plus the importing peer as a conservative superset. A nil
+    change worker or any synchronous queue failure returns `500 failed to apply
+    import session` instead of `200 applied` with a lost signal.
+
+    Policy `PATCH /policies/{id}` (enable/disable) resolves pre- and
+    post-mutation affected peers; on post-mutation resolution failure it queues
+    the pre-mutation peers as a fallback fan-out and still returns `500 failed
+    to resolve affected peers`, joining any fallback queue error server-side so
+    the persisted patch never acks success with zero fan-out.
+    
+    Clients must treat this `500` as "the mutation may have succeeded":
+    - `POST` (create) endpoints: list the collection before retrying to avoid
+      creating a duplicate.
+    - `PUT`/`PATCH`/`DELETE` endpoints: retrying the same request is safe.
   version: 1.0.0
   contact:
     name: Runic Support
@@ -653,7 +683,10 @@ paths:
       tags:
         - Groups
       summary: Create a new group
-      description: Creates a new group.
+      description: |
+        Creates a new group. Fail-closed pending fan-out applies: returns 500
+        with a manual-recompile message when the group persists but pending
+        fan-out fails (see Pending Fan-out Contract).
       operationId: createGroup
       requestBody:
         required: true
@@ -717,7 +750,10 @@ paths:
       tags:
         - Groups
       summary: Update group
-      description: Updates an existing group.
+      description: |
+        Updates an existing group. Fail-closed pending fan-out applies: returns
+        500 with a manual-recompile message when the update persists but pending
+        fan-out fails (see Pending Fan-out Contract).
       operationId: updateGroup
       parameters:
         - name: id
@@ -757,7 +793,10 @@ paths:
       tags:
         - Groups
       summary: Delete group
-      description: Deletes a group.
+      description: |
+        Deletes a group. Fail-closed pending fan-out applies: returns 500 with
+        a manual-recompile message when the delete persists but pending fan-out
+        fails (see Pending Fan-out Contract).
       operationId: deleteGroup
       parameters:
         - name: id
@@ -825,7 +864,10 @@ paths:
       tags:
         - Groups
       summary: Add member to group
-      description: Adds a peer to a group.
+      description: |
+        Adds a peer to a group. Fail-closed pending fan-out applies: returns
+        500 with a manual-recompile message when the membership persists but
+        pending fan-out fails (see Pending Fan-out Contract).
       operationId: addGroupMember
       parameters:
         - name: id
@@ -874,7 +916,10 @@ paths:
       tags:
         - Groups
       summary: Remove member from group
-      description: Removes a peer from a group.
+      description: |
+        Removes a peer from a group. Fail-closed pending fan-out applies:
+        returns 500 with a manual-recompile message when the removal persists
+        but pending fan-out fails (see Pending Fan-out Contract).
       operationId: removeGroupMember
       parameters:
         - name: id
@@ -938,7 +983,10 @@ paths:
       tags:
         - Services
       summary: Create a new service
-      description: Creates a new service.
+      description: |
+        Creates a new service. Fail-closed pending fan-out applies: returns 500
+        with a manual-recompile message when the service persists but pending
+        fan-out fails (see Pending Fan-out Contract).
       operationId: createService
       requestBody:
         required: true
@@ -1042,7 +1090,10 @@ paths:
       tags:
         - Services
       summary: Update service
-      description: Updates an existing service.
+      description: |
+        Updates an existing service. Fail-closed pending fan-out applies:
+        returns 500 with a manual-recompile message when the update persists
+        but pending fan-out fails (see Pending Fan-out Contract).
       operationId: updateService
       parameters:
         - name: id
@@ -1082,7 +1133,10 @@ paths:
       tags:
         - Services
       summary: Delete service
-      description: Deletes a service.
+      description: |
+        Deletes a service. Success returns 204 No Content; a fan-out failure
+        after the delete persisted returns 500 with a manual-recompile message
+        (see Pending Fan-out Contract).
       operationId: deleteService
       parameters:
         - name: id
@@ -1140,7 +1194,10 @@ paths:
       tags:
         - Policies
       summary: Create a new policy
-      description: Creates a new firewall policy.
+      description: |
+        Creates a new firewall policy. Fail-closed pending fan-out applies:
+        returns 500 with a manual-recompile message when the policy persists
+        but pending fan-out fails (see Pending Fan-out Contract).
       operationId: createPolicy
       requestBody:
         required: true
@@ -1266,7 +1323,10 @@ paths:
       tags:
         - Policies
       summary: Update policy
-      description: Updates an existing policy.
+      description: |
+        Updates an existing policy. Fail-closed pending fan-out applies:
+        returns 500 with a manual-recompile message when the update persists
+        but pending fan-out fails (see Pending Fan-out Contract).
       operationId: updatePolicy
       parameters:
         - name: id
@@ -1306,7 +1366,11 @@ paths:
       tags:
       - Policies
       summary: Partially update policy
-      description: Partially updates an existing policy. Only specified fields are modified.
+      description: |
+        Partially updates an existing policy. Only specified fields are
+        modified. Fail-closed pending fan-out applies: returns 500 with a
+        manual-recompile message when the patch persists but pending fan-out
+        fails (see Pending Fan-out Contract).
       operationId: patchPolicy
       parameters:
       - name: id
@@ -1346,7 +1410,10 @@ paths:
       tags:
       - Policies
       summary: Delete policy
-      description: Deletes a policy.
+      description: |
+        Deletes a policy. Fail-closed pending fan-out applies: returns 500
+        with a manual-recompile message when the delete persists but pending
+        fan-out fails (see Pending Fan-out Contract).
       operationId: deletePolicy
       parameters:
         - name: id
@@ -1787,19 +1854,20 @@ paths:
             schema:
               type: object
               required:
-              - change_type
-              - change_id
-              - change_action
+              - entity_type
+              - entity_id
               properties:
-                change_type:
+                entity_type:
                   type: string
-                  description: Type of entity (policy, service, group, peer)
-                change_id:
+                  description: Type of entity (group, policy, service, peer)
+                  enum:
+                  - group
+                  - policy
+                  - service
+                  - peer
+                entity_id:
                   type: integer
                   format: int64
-                change_action:
-                  type: string
-                  description: Action (create, update, delete)
       responses:
         '200':
           description: Entity changes applied
@@ -3140,7 +3208,7 @@ paths:
       security:
       - BearerAuth: []
 
-  /import-sessions/{id}:
+  /import-sessions/{session_id}:
     get:
       tags:
       - Imports
@@ -3148,7 +3216,7 @@ paths:
       description: Returns the status and details of an import session. Requires editor role.
       operationId: getImportSession
       parameters:
-      - name: id
+      - name: session_id
         in: path
         required: true
         schema:
@@ -3170,7 +3238,7 @@ paths:
       security:
       - BearerAuth: []
 
-  /import-sessions/{id}/rules:
+  /import-sessions/{session_id}/rules:
     get:
       tags:
       - Imports
@@ -3178,7 +3246,7 @@ paths:
       description: Returns the parsed rules from an import session. Requires editor role.
       operationId: getImportRules
       parameters:
-      - name: id
+      - name: session_id
         in: path
         required: true
         schema:
@@ -3202,7 +3270,7 @@ paths:
       security:
       - BearerAuth: []
 
-  /import-sessions/{id}/groups:
+  /import-sessions/{session_id}/groups:
     get:
       tags:
       - Imports
@@ -3210,7 +3278,7 @@ paths:
       description: Returns the groups discovered during import. Requires editor role.
       operationId: getImportGroups
       parameters:
-      - name: id
+      - name: session_id
         in: path
         required: true
         schema:
@@ -3233,7 +3301,7 @@ paths:
       security:
       - BearerAuth: []
 
-  /import-sessions/{id}/peers:
+  /import-sessions/{session_id}/peers:
     get:
       tags:
       - Imports
@@ -3241,7 +3309,7 @@ paths:
       description: Returns the peers discovered during import. Requires editor role.
       operationId: getImportPeers
       parameters:
-      - name: id
+      - name: session_id
         in: path
         required: true
         schema:
@@ -3264,7 +3332,7 @@ paths:
       security:
       - BearerAuth: []
 
-  /import-sessions/{id}/services:
+  /import-sessions/{session_id}/services:
     get:
       tags:
       - Imports
@@ -3272,7 +3340,7 @@ paths:
       description: Returns the services discovered during import. Requires editor role.
       operationId: getImportServices
       parameters:
-      - name: id
+      - name: session_id
         in: path
         required: true
         schema:
@@ -3295,7 +3363,7 @@ paths:
       security:
       - BearerAuth: []
 
-  /import-sessions/{id}/skipped:
+  /import-sessions/{session_id}/skipped:
     get:
       tags:
       - Imports
@@ -3303,7 +3371,7 @@ paths:
       description: Returns the rules that were skipped during import. Requires editor role.
       operationId: getImportSkippedRules
       parameters:
-      - name: id
+      - name: session_id
         in: path
         required: true
         schema:
@@ -3326,7 +3394,61 @@ paths:
       security:
       - BearerAuth: []
 
-  /import-sessions/{id}/rules/{rule_id}:
+  /import-sessions/{session_id}/apply:
+    post:
+      tags:
+      - Imports
+      summary: Apply import session
+      description: |
+        Applies an import session, creating peers, groups, services, and policies from approved rules. Requires editor role.
+        Fail-closed: the session transaction commits first, then each created peer/group/service/policy fans out to its affected peers (policy source/target expansion, group members plus referencing policies, service using policies) plus the importing peer as a conservative superset. A nil change worker or any synchronous queue failure returns 500 instead of 200 with a lost signal.
+      operationId: applyImportSession
+      parameters:
+      - name: session_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+      responses:
+        '200':
+          description: Import session applied
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "applied"
+                  policies_created:
+                    type: integer
+                  groups_created:
+                    type: integer
+                  peers_created:
+                    type: integer
+                  services_created:
+                    type: integer
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          description: Internal server error — including fail-closed pending signal incomplete; manual recompile required when the session committed but fan-out could not be queued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "failed to apply import session"
+      security:
+      - BearerAuth: []
+
+  /import-sessions/{session_id}/rules/{rule_id}:
     put:
       tags:
       - Imports
@@ -3334,7 +3456,7 @@ paths:
       description: Updates a parsed rule in an import session. Requires editor role.
       operationId: updateImportRule
       parameters:
-      - name: id
+      - name: session_id
         in: path
         required: true
         schema:
@@ -3368,7 +3490,7 @@ paths:
       security:
       - BearerAuth: []
 
-  /import-sessions/{id}/groups/{group_id}:
+  /import-sessions/{session_id}/groups/{group_id}:
     put:
       tags:
       - Imports
@@ -3376,7 +3498,7 @@ paths:
       description: Updates a group mapping in an import session. Requires editor role.
       operationId: updateImportGroup
       parameters:
-      - name: id
+      - name: session_id
         in: path
         required: true
         schema:
@@ -3410,7 +3532,7 @@ paths:
       security:
       - BearerAuth: []
 
-  /import-sessions/{id}/peers/{peer_id}:
+  /import-sessions/{session_id}/peers/{peer_id}:
     put:
       tags:
       - Imports
@@ -3418,7 +3540,7 @@ paths:
       description: Updates a peer mapping in an import session. Requires editor role.
       operationId: updateImportPeer
       parameters:
-      - name: id
+      - name: session_id
         in: path
         required: true
         schema:

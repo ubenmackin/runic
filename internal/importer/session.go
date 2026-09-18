@@ -98,7 +98,7 @@ func ParseSession(ctx context.Context, database db.DB, sessionID int64) error {
 	defer func() {
 		if !committed {
 			if rErr := tx.Rollback(); rErr != nil {
-				log.Warn("Rollback failed", "error", rErr)
+				log.Warn("rollback failed", "error", rErr)
 			}
 		}
 	}()
@@ -193,11 +193,11 @@ func ParseSession(ctx context.Context, database db.DB, sessionID int64) error {
 	var peerIPs []string
 	ipRows, err := database.QueryContext(ctx, "SELECT ip_address FROM peer_ips WHERE peer_id = ? ORDER BY is_primary DESC, id ASC", session.PeerID)
 	if err != nil {
-		log.Warn("Failed to query peer IPs for resolver", "peer_id", session.PeerID, "error", err)
+		log.Warn("failed to query peer IPs for resolver", "peer_id", session.PeerID, "error", err)
 	} else {
 		defer func() {
 			if cErr := ipRows.Close(); cErr != nil {
-				log.Warn("Error closing ipRows", "error", cErr)
+				log.Warn("error closing ipRows", "error", cErr)
 			}
 		}()
 		for ipRows.Next() {
@@ -207,7 +207,7 @@ func ParseSession(ctx context.Context, database db.DB, sessionID int64) error {
 			}
 		}
 		if err := ipRows.Err(); err != nil {
-			log.Warn("Error iterating ipRows", "error", err)
+			log.Warn("error iterating ipRows", "error", err)
 		}
 	}
 
@@ -222,7 +222,7 @@ func ParseSession(ctx context.Context, database db.DB, sessionID int64) error {
 
 	// Now run the resolver to map IPs/ports/ipsets to Runic entities
 	if err := resolveRules(ctx, database, sessionID, session.PeerID, peerIPs, session.RawIpsets); err != nil {
-		log.Warn("Resolver completed with errors", "session_id", sessionID, "error", err)
+		log.Warn("resolver completed with errors", "session_id", sessionID, "error", err)
 		// Don't fail the whole parse — partial resolution is OK
 	}
 
@@ -247,7 +247,7 @@ func CleanupStaleSessions(ctx context.Context, database db.DB, maxAge time.Durat
 		return fmt.Errorf("cleanup stale sessions: %w", err)
 	}
 	rows, _ := result.RowsAffected()
-	log.Info("Cleaned up stale import sessions", "removed", rows)
+	log.Info("cleaned up stale import sessions", "removed", rows)
 	return nil
 }
 

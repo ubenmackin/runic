@@ -7,12 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"runic/internal/api/events"
+	"runic/internal/change"
 	runiclog "runic/internal/common/log"
 	"runic/internal/db"
 	"runic/internal/engine"
@@ -24,6 +23,13 @@ import (
 type AlertTrigger interface {
 	TriggerAlert(ctx context.Context, event *models.AlertEvent) error
 }
+
+// BundleNotifier is an alias for change.BundleNotifier so existing API
+// callers keep importing internal/api/common. The definition lives in the
+// low-level internal/change package (with its NotifyOutcome result type) so
+// the store layer and the SSE hub share one definition without the change
+// package importing the API layer.
+type BundleNotifier = change.BundleNotifier
 
 // DefaultPushWorkerQueueSize is the default buffer size for the push worker's job queue.
 const DefaultPushWorkerQueueSize = 100
@@ -40,8 +46,9 @@ var pushQueueDepth = prometheus.NewGauge(prometheus.GaugeOpts{
 
 func init() {
 	if err := prometheus.Register(pushQueueDepth); err != nil {
-		if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
-			runiclog.Warn("Failed to register push queue depth metric", "error", err)
+		var already prometheus.AlreadyRegisteredError
+		if !errors.As(err, &already) {
+			runiclog.Warn("failed to register push queue depth metric", "error", err)
 		}
 	}
 }
@@ -50,17 +57,17 @@ type PushWorker struct {
 	db           *sql.DB
 	compiler     *engine.Compiler
 	alertService AlertTrigger
-	sseHub       interface {
-		NotifyBundleUpdated(hostID string, version string) events.UpdateAgentOutcome
-		NotifyPushJobProgress(jobID string, eventType string, payload string)
-	}
-	workCh    chan string
-	done      chan struct{}
-	startOnce sync.Once
-	stopOnce  sync.Once
-	started   atomic.Bool
-	closed    atomic.Bool
-	closeMu   sync.RWMutex
+	sseHub       BundleNotifier
+	workCh       chan string
+	done         chan struct{}
+	startOnce    sync.Once
+	stopOnce     sync.Once
+	// started and closed are plain bools guarded by closeMu. A single
+	// mutex-guarded primitive pair serializes Start/Stop/Enqueue against
+	// close(workCh); no atomic is needed alongside the mutex.
+	started bool
+	closed  bool
+	closeMu sync.RWMutex
 }
 
 // finalizeCtx returns a detached context for final DB writes that must
@@ -68,13 +75,13 @@ type PushWorker struct {
 // The detached context carries values but not cancellation, bounded by a
 // short timeout so shutdown cannot hang indefinitely.
 func finalizeCtx(parent context.Context) (context.Context, context.CancelFunc) {
+	if parent == nil {
+		parent = context.Background()
+	}
 	return context.WithTimeout(context.WithoutCancel(parent), 15*time.Second)
 }
 
-func NewPushWorker(database *sql.DB, compiler *engine.Compiler, alertService AlertTrigger, sseHub interface {
-	NotifyBundleUpdated(hostID string, version string) events.UpdateAgentOutcome
-	NotifyPushJobProgress(jobID string, eventType string, payload string)
-}) *PushWorker {
+func NewPushWorker(database *sql.DB, compiler *engine.Compiler, alertService AlertTrigger, sseHub BundleNotifier) *PushWorker {
 	return &PushWorker{
 		db:           database,
 		compiler:     compiler,
@@ -86,20 +93,72 @@ func NewPushWorker(database *sql.DB, compiler *engine.Compiler, alertService Ale
 }
 
 // Start starts the push worker goroutine. Call once during application startup.
+// Single-use only: Start after Stop silently no-ops and the worker cannot be
+// restarted (startOnce is consumed on the first Start). Create a new
+// PushWorker to restart.
+// It tolerates a zero-value PushWorker by lazily initializing the channels
+// under the mutex, so Start on PushWorker{} never blocks on a nil channel.
 func (w *PushWorker) Start(ctx context.Context) {
+	if w == nil {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	w.startOnce.Do(func() {
-		w.started.Store(true)
+		// Store started under the mutex so Stop's started check (which holds
+		// the same mutex) is serialized with this store. Respect closed so a
+		// prior Stop prevents launching a goroutine that would block forever.
+		w.closeMu.Lock()
+		if w.workCh == nil {
+			w.workCh = make(chan string, DefaultPushWorkerQueueSize)
+		}
+		if w.done == nil {
+			w.done = make(chan struct{})
+		}
+		if w.closed {
+			w.closeMu.Unlock()
+			return
+		}
+		if w.started {
+			w.closeMu.Unlock()
+			return
+		}
+		w.started = true
+		workCh := w.workCh
+		done := w.done
+		w.closeMu.Unlock()
 		go func() {
-			defer close(w.done)
+			defer close(done)
 			for {
 				select {
 				case <-ctx.Done():
-					return
-				case jobID, ok := <-w.workCh:
+					// Drain buffered jobs before exiting so an
+					// enqueue-then-cancel race never leaves a 202-acked job
+					// buffered forever. Drained jobs run through processJob
+					// (which marks terminal state via a detached context),
+					// so they fail visibly instead of stalling as queued.
+					// The drain uses a detached context: ctx is already Done
+					// here, so passing it to processJob would instantly cancel
+					// its 5-minute timeout and finalize writes.
+					drainCtx := context.WithoutCancel(ctx)
+					for {
+						select {
+						case jobID, ok := <-workCh:
+							if !ok {
+								return
+							}
+							pushQueueDepth.Set(float64(len(workCh)))
+							w.processJob(drainCtx, jobID)
+						default:
+							return
+						}
+					}
+				case jobID, ok := <-workCh:
 					if !ok {
 						return // channel closed, exit cleanly
 					}
-					pushQueueDepth.Set(float64(len(w.workCh)))
+					pushQueueDepth.Set(float64(len(workCh)))
 					w.processJob(ctx, jobID)
 				}
 			}
@@ -108,16 +167,28 @@ func (w *PushWorker) Start(ctx context.Context) {
 }
 
 // QueueDepth reports the current number of jobs waiting in the work queue.
+// It tolerates a zero-value worker with a nil channel.
 func (w *PushWorker) QueueDepth() int {
 	if w == nil {
+		return 0
+	}
+	w.closeMu.RLock()
+	defer w.closeMu.RUnlock()
+	if w.workCh == nil {
 		return 0
 	}
 	return len(w.workCh)
 }
 
 // QueueCapacity reports the maximum number of jobs the work queue can hold.
+// It tolerates a zero-value worker with a nil channel.
 func (w *PushWorker) QueueCapacity() int {
 	if w == nil {
+		return 0
+	}
+	w.closeMu.RLock()
+	defer w.closeMu.RUnlock()
+	if w.workCh == nil {
 		return 0
 	}
 	return cap(w.workCh)
@@ -127,51 +198,88 @@ func (w *PushWorker) QueueCapacity() int {
 // is full it returns an error so callers can signal backpressure instead of
 // silently dropping the job. It never panics: sends are serialized against
 // Stop's close via closeMu, guarded by the closed flag, with recover as a
-// final guard against a send-on-closed race.
+// final guard against a send-on-closed race. A zero-value worker with a nil
+// channel fails closed with ErrPushQueueFull instead of panicking. A worker
+// whose Start context was canceled has exited (done closed) without Stop
+// setting closed, so Enqueue also fails closed on done-closed instead of
+// buffering a job that is never processed and letting the handler ack 202.
 func (w *PushWorker) Enqueue(jobID string) (err error) {
 	if w == nil {
 		return fmt.Errorf("enqueue push job %s: %w", jobID, ErrPushQueueFull)
-	}
-	if w.closed.Load() {
-		return fmt.Errorf("enqueue push job %s: push worker stopped: %w", jobID, ErrPushQueueFull)
 	}
 	w.closeMu.RLock()
 	defer w.closeMu.RUnlock()
 	defer func() {
 		if recover() != nil {
-			runiclog.Warn("PushWorker enqueue on closed channel, dropping job", "job_id", jobID)
+			runiclog.Warn("pushworker: enqueue on closed channel, dropping job", "job_id", jobID)
 			err = fmt.Errorf("enqueue push job %s: push worker stopped: %w", jobID, ErrPushQueueFull)
 		}
 	}()
-	if w.closed.Load() {
+	if w.closed {
 		return fmt.Errorf("enqueue push job %s: push worker stopped: %w", jobID, ErrPushQueueFull)
+	}
+	if w.workCh == nil {
+		runiclog.Warn("pushworker: enqueue on nil channel, dropping job", "job_id", jobID)
+		return fmt.Errorf("enqueue push job %s: push worker stopped: %w", jobID, ErrPushQueueFull)
+	}
+	if w.done != nil {
+		select {
+		case <-w.done:
+			return fmt.Errorf("enqueue push job %s: push worker stopped: %w", jobID, ErrPushQueueFull)
+		default:
+		}
 	}
 	select {
 	case w.workCh <- jobID:
 		pushQueueDepth.Set(float64(len(w.workCh)))
 		return nil
 	default:
-		runiclog.Warn("PushWorker queue full, dropping job", "job_id", jobID)
+		runiclog.Warn("pushworker: queue full, dropping job", "job_id", jobID)
 		return fmt.Errorf("enqueue push job %s: %w", jobID, ErrPushQueueFull)
 	}
 }
 
 func (w *PushWorker) Stop() {
+	if w == nil {
+		return
+	}
+	// Start and Stop are safe for concurrent use. The started check and the
+	// close below are serialized under the same write lock (inside stopOnce)
+	// so a concurrent Start cannot slip between the check and the close and
+	// leak its goroutine.
 	w.stopOnce.Do(func() {
-		if !w.started.Load() {
-			w.closed.Store(true)
+		// Mark closed and close workCh under the write lock. Enqueuers hold
+		// RLock across their non-blocking send, so this close cannot race
+		// with a send and no recover is needed beyond the existing guard.
+		// A nil workCh (zero-value worker that was marked started without
+		// Start) is skipped so close(nil) never panics. When never started,
+		// only mark closed so a concurrent or later Start observes it and
+		// does not leak a goroutine; there is no worker to wait for.
+		w.closeMu.Lock()
+		if w.closed {
+			w.closeMu.Unlock()
 			return
 		}
-		w.closeMu.Lock()
-		w.closed.Store(true)
-		close(w.workCh)
+		if !w.started {
+			w.closed = true
+			w.closeMu.Unlock()
+			return
+		}
+		w.closed = true
+		if w.workCh != nil {
+			close(w.workCh)
+		}
+		done := w.done
 		w.closeMu.Unlock()
+		if done == nil {
+			return
+		}
 		timer := time.NewTimer(30 * time.Second)
 		defer timer.Stop()
 		select {
-		case <-w.done:
+		case <-done:
 		case <-timer.C:
-			runiclog.Warn("PushWorker.Stop() timed out after 30s")
+			runiclog.Warn("pushworker: stop timed out after 30s")
 		}
 	})
 }
@@ -179,8 +287,11 @@ func (w *PushWorker) Stop() {
 // triggerAlert is a helper that fires an alert through the alert service if one is configured.
 // It handles the nil check and error logging in a single place, reducing call-site duplication.
 func (w *PushWorker) triggerAlert(ctx context.Context, event *models.AlertEvent) {
-	if w.alertService == nil {
+	if w == nil || w.alertService == nil || event == nil {
 		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	if err := w.alertService.TriggerAlert(ctx, event); err != nil {
 		runiclog.Warn("failed to trigger alert", "error", err, "alert_type", event.Type)
@@ -188,17 +299,58 @@ func (w *PushWorker) triggerAlert(ctx context.Context, event *models.AlertEvent)
 }
 
 func (w *PushWorker) processJob(ctx context.Context, jobID string) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	// NewPushWorker(db, nil, nil, hub) is constructible, so fail closed on
+	// nil receiver, nil DB, nil compiler, or nil hub instead of panicking
+	// on dereference (mirrors ChangeWorker.process* fail-closed behavior).
+	// The failure is terminal for the job: log with the job ID and move the
+	// row out of queued/running via a detached context so it never stalls
+	// forever.
+	if w == nil || w.db == nil || w.compiler == nil || w.sseHub == nil {
+		runiclog.Error("pushworker: missing worker dependencies, failing job", "job_id", jobID)
+		if w != nil && w.db != nil {
+			fctx, fcancel := finalizeCtx(ctx)
+			if err := db.UpdatePushJobStatus(fctx, w.db, jobID, "failed"); err != nil {
+				runiclog.Error("pushworker: failed to mark job failed", "job_id", jobID, "error", err)
+			}
+			fcancel()
+			w.notifyProgress(jobID, "complete", map[string]any{
+				"status":      "failed",
+				"total_peers": 0,
+				"total":       0,
+				"succeeded":   0,
+				"success":     0,
+				"failed":      1,
+			})
+		}
+		return
+	}
 	jobCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
 	job, peers, err := db.GetPushJobWithPeers(jobCtx, w.db, jobID)
 	if err != nil {
-		runiclog.Error("PushWorker: failed to load job", "job_id", jobID, "error", err)
+		runiclog.Error("pushworker: failed to load job", "job_id", jobID, "error", err)
+		fctx, fcancel := finalizeCtx(ctx)
+		if ferr := db.UpdatePushJobStatus(fctx, w.db, jobID, "failed"); ferr != nil {
+			runiclog.Error("pushworker: failed to mark job failed", "job_id", jobID, "error", ferr)
+		}
+		fcancel()
+		w.notifyProgress(jobID, "complete", map[string]any{
+			"status":      "failed",
+			"total_peers": 0,
+			"total":       0,
+			"succeeded":   0,
+			"success":     0,
+			"failed":      1,
+		})
 		return
 	}
 
 	if err := db.UpdatePushJobStatus(jobCtx, w.db, jobID, "running"); err != nil {
-		runiclog.Error("PushWorker: failed to update job status to running", "job_id", jobID, "error", err)
+		runiclog.Error("pushworker: failed to update job status to running", "job_id", jobID, "error", err)
 		// Continue processing - this is non-fatal
 	}
 
@@ -208,21 +360,24 @@ func (w *PushWorker) processJob(ctx context.Context, jobID string) {
 		ferr := db.FinalizePushJob(fctx, w.db, jobID)
 		fcancel()
 		if ferr != nil {
-			runiclog.Error("Failed to finalize push job on complete", "error", ferr)
+			runiclog.Error("failed to finalize push job on complete", "error", ferr)
 		}
 		// total_peers is canonical; total is a deprecated alias kept for
-		// backward compatibility.
-		w.notifyProgress(jobID, "complete", map[string]interface{}{
+		// backward compatibility. succeeded is canonical; success is a
+		// deprecated alias kept for backward compatibility so existing SSE
+		// consumers keep working.
+		w.notifyProgress(jobID, "complete", map[string]any{
 			"status":      "completed",
 			"total_peers": 0,
 			"total":       0,
+			"succeeded":   0,
 			"success":     0,
 			"failed":      0,
 		})
 		return
 	}
 
-	runiclog.Info("PushWorker: processing job", "job_id", jobID, "initiated_by", job.InitiatedBy, "total_peers", total)
+	runiclog.Info("pushworker: processing job", "job_id", jobID, "initiated_by", job.InitiatedBy, "total_peers", total)
 
 	succeeded := 0
 	failed := 0
@@ -231,7 +386,7 @@ func (w *PushWorker) processJob(ctx context.Context, jobID string) {
 		// Check context before each peer — abort on shutdown
 		select {
 		case <-jobCtx.Done():
-			runiclog.Warn("PushWorker: job context canceled, aborting",
+			runiclog.Warn("pushworker: job context canceled, aborting",
 				"job_id", jobID, "error", jobCtx.Err())
 			fctx, fcancel := finalizeCtx(ctx)
 			_ = db.FinalizePushJobWithCounts(fctx, w.db, jobID, succeeded, failed)
@@ -240,7 +395,7 @@ func (w *PushWorker) processJob(ctx context.Context, jobID string) {
 		default:
 		}
 
-		w.notifyProgress(jobID, "progress", map[string]interface{}{
+		w.notifyProgress(jobID, "progress", map[string]any{
 			"peer_id":     peer.PeerID,
 			"hostname":    peer.Hostname,
 			"status":      "processing",
@@ -254,10 +409,10 @@ func (w *PushWorker) processJob(ctx context.Context, jobID string) {
 		if err != nil {
 			failed++
 			if err := db.UpdatePushJobPeerStatus(jobCtx, w.db, jobID, peer.PeerID, "failed", err.Error()); err != nil {
-				runiclog.Error("Failed to update push job peer status", "error", err)
+				runiclog.Error("failed to update push job peer status", "error", err)
 			}
-			runiclog.Error("PushWorker: failed to compile for peer", "peer_id", peer.PeerID, "hostname", peer.Hostname, "error", err)
-			w.notifyProgress(jobID, "peer_failed", map[string]interface{}{
+			runiclog.Error("pushworker: failed to compile for peer", "peer_id", peer.PeerID, "hostname", peer.Hostname, "error", err)
+			w.notifyProgress(jobID, "peer_failed", map[string]any{
 				"peer_id":     peer.PeerID,
 				"hostname":    peer.Hostname,
 				"error":       err.Error(),
@@ -273,7 +428,7 @@ func (w *PushWorker) processJob(ctx context.Context, jobID string) {
 				PeerName: peer.Hostname,
 				Subject:  fmt.Sprintf("Bundle deployment failed: %s", peer.Hostname),
 				Message:  err.Error(),
-				Metadata: map[string]interface{}{
+				Metadata: map[string]any{
 					"hostname": peer.Hostname,
 					"job_id":   jobID,
 					"error":    err.Error(),
@@ -289,10 +444,10 @@ func (w *PushWorker) processJob(ctx context.Context, jobID string) {
 		if !delivered.Sent() {
 			failed++
 			if err := db.UpdatePushJobPeerStatus(jobCtx, w.db, jobID, peer.PeerID, "failed", "SSE delivery failed: agent not connected"); err != nil {
-				runiclog.Error("Failed to update push job peer status", "error", err)
+				runiclog.Error("failed to update push job peer status", "error", err)
 			}
-			runiclog.Error("PushWorker: SSE delivery failed for peer", "peer_id", peer.PeerID, "hostname", peer.Hostname)
-			w.notifyProgress(jobID, "peer_failed", map[string]interface{}{
+			runiclog.Error("pushworker: SSE delivery failed for peer", "peer_id", peer.PeerID, "hostname", peer.Hostname)
+			w.notifyProgress(jobID, "peer_failed", map[string]any{
 				"peer_id":     peer.PeerID,
 				"hostname":    peer.Hostname,
 				"error":       "SSE delivery failed: agent not connected",
@@ -308,7 +463,7 @@ func (w *PushWorker) processJob(ctx context.Context, jobID string) {
 				PeerName: peer.Hostname,
 				Subject:  fmt.Sprintf("Bundle delivery failed: %s", peer.Hostname),
 				Message:  "SSE delivery failed: agent not connected",
-				Metadata: map[string]interface{}{
+				Metadata: map[string]any{
 					"hostname": peer.Hostname,
 					"version":  bundle.Version,
 					"job_id":   jobID,
@@ -319,11 +474,11 @@ func (w *PushWorker) processJob(ctx context.Context, jobID string) {
 		}
 
 		if err := db.UpdatePushJobPeerStatus(jobCtx, w.db, jobID, peer.PeerID, "notified", ""); err != nil {
-			runiclog.Error("Failed to update push job peer status", "error", err)
+			runiclog.Error("failed to update push job peer status", "error", err)
 		}
 
 		succeeded++
-		w.notifyProgress(jobID, "peer_success", map[string]interface{}{
+		w.notifyProgress(jobID, "peer_success", map[string]any{
 			"peer_id":     peer.PeerID,
 			"hostname":    peer.Hostname,
 			"version":     bundle.Version,
@@ -338,7 +493,7 @@ func (w *PushWorker) processJob(ctx context.Context, jobID string) {
 			PeerID:   peer.PeerID,
 			PeerName: peer.Hostname,
 			Subject:  fmt.Sprintf("Bundle deployed: %s", peer.Hostname),
-			Metadata: map[string]interface{}{
+			Metadata: map[string]any{
 				"hostname": peer.Hostname,
 				"version":  bundle.Version,
 				"job_id":   jobID,
@@ -350,7 +505,7 @@ func (w *PushWorker) processJob(ctx context.Context, jobID string) {
 	// context so the write succeeds even if the job context was canceled.
 	fctx, fcancel := finalizeCtx(ctx)
 	if err := db.FinalizePushJobWithCounts(fctx, w.db, jobID, succeeded, failed); err != nil {
-		runiclog.Error("Failed to finalize push job with counts", "error", err)
+		runiclog.Error("failed to finalize push job with counts", "error", err)
 	}
 	fcancel()
 
@@ -359,21 +514,25 @@ func (w *PushWorker) processJob(ctx context.Context, jobID string) {
 		finalStatus = "completed_with_errors"
 	}
 
-	runiclog.Info("PushWorker: job finished", "job_id", jobID, "status", finalStatus, "total", total, "succeeded", succeeded, "failed", failed)
+	runiclog.Info("pushworker: job finished", "job_id", jobID, "status", finalStatus, "total", total, "succeeded", succeeded, "failed", failed)
 
-	w.notifyProgress(jobID, "complete", map[string]interface{}{
+	w.notifyProgress(jobID, "complete", map[string]any{
 		"status":      finalStatus,
 		"total_peers": total,
 		"total":       total,
 		"succeeded":   succeeded,
+		"success":     succeeded,
 		"failed":      failed,
 	})
 }
 
-func (w *PushWorker) notifyProgress(jobID, eventType string, payload interface{}) {
+func (w *PushWorker) notifyProgress(jobID, eventType string, payload any) {
+	if w == nil || w.sseHub == nil {
+		return
+	}
 	data, err := json.Marshal(payload)
 	if err != nil {
-		runiclog.Error("PushWorker: failed to marshal progress payload", "error", err)
+		runiclog.Error("pushworker: failed to marshal progress payload", "error", err)
 		return
 	}
 	w.sseHub.NotifyPushJobProgress(jobID, eventType, string(data))
