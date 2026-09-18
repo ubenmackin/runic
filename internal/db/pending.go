@@ -9,10 +9,19 @@ import (
 )
 
 func AddPendingChange(ctx context.Context, database Querier, peerID int, changeType, changeAction string, changeID int, summary string) error {
+	// Single-source idempotent enqueue: a single INSERT ... WHERE NOT EXISTS
+	// so concurrent callers cannot create duplicate pending rows. The dedup
+	// predicate (peer_id, change_type, change_id, change_action) lives here;
+	// internal/change delegates via queueChangeForPeer instead of
+	// duplicating the SQL.
 	_, err := database.ExecContext(ctx,
 		`INSERT INTO pending_changes (peer_id, change_type, change_id, change_action, change_summary)
-		VALUES (?, ?, ?, ?, ?)`,
-		peerID, changeType, changeID, changeAction, summary)
+		SELECT ?, ?, ?, ?, ?
+		WHERE NOT EXISTS (
+			SELECT 1 FROM pending_changes
+			WHERE peer_id = ? AND change_type = ? AND change_id = ? AND change_action = ?
+		)`,
+		peerID, changeType, changeID, changeAction, summary, peerID, changeType, changeID, changeAction)
 	return err
 }
 
@@ -46,9 +55,16 @@ func ClearPendingChangesForPeer(ctx context.Context, database Querier, peerID in
 	return err
 }
 
-// GetPeersWithPendingChanges returns IDs of peers with pending changes. Excludes manual peers (is_manual = 1) since they cannot receive rule bundles.
+// GetPeersWithPendingChanges returns IDs of peers with pending changes.
+// Manual peers are included: pending rows are queued for every affected peer
+// (including manual peers) and the Peers UI surfaces pending counts for manual
+// servers so policy edits targeting them stay visible. Push delivery stays
+// agent-only (see ListAgentBasedPeers and PushCurrentRules, which keep the
+// is_manual=0 filter); this listing intentionally has no is_manual filter.
+// The JOIN on peers excludes orphan pending rows whose peer was removed
+// without cleanup, so callers only see peers that still exist.
 func GetPeersWithPendingChanges(ctx context.Context, database Querier) ([]int, error) {
-	rows, err := database.QueryContext(ctx, "SELECT DISTINCT pc.peer_id FROM pending_changes pc JOIN peers p ON pc.peer_id = p.id WHERE p.is_manual = 0")
+	rows, err := database.QueryContext(ctx, "SELECT DISTINCT pc.peer_id FROM pending_changes pc JOIN peers p ON pc.peer_id = p.id ORDER BY pc.peer_id ASC")
 	if err != nil {
 		return nil, err
 	}

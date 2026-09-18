@@ -279,9 +279,12 @@ func TestGroupStore_AddAndDeleteGroupMember(t *testing.T) {
 	}
 
 	// Delete member
-	err = store.DeleteGroupMember(ctx, int(groupID), int(peerID))
+	deleted, err := store.DeleteGroupMember(ctx, int(groupID), int(peerID))
 	if err != nil {
 		t.Fatalf("DeleteGroupMember failed: %v", err)
+	}
+	if !deleted {
+		t.Error("expected DeleteGroupMember to report deleted=true")
 	}
 
 	members, err = store.ListGroupMembers(ctx, int(groupID))

@@ -85,7 +85,7 @@ type API struct {
 func NewAPI(db *sql.DB, compiler *engine.Compiler, logsDB *sql.DB, logsDBPath string, alertService *alerts.Service, encryptor *crypto.Encryptor) *API {
 	// Migration: Copy existing firewall_logs to logs DB if needed
 	if _, err := dbpkg.MigrateLogsFromMainDB(context.Background(), db, logsDB); err != nil {
-		log.Warn("Log migration failed (existing logs will remain in main DB)", "error", err)
+		log.Warn("log migration failed (existing logs will remain in main DB)", "error", err)
 	}
 
 	sseHub := events.NewSSEHub()
@@ -103,7 +103,7 @@ func NewAPI(db *sql.DB, compiler *engine.Compiler, logsDB *sql.DB, logsDBPath st
 	keyStore, err := store.NewKeyStore(db)
 	if err != nil {
 		// db is guaranteed non-nil when NewAPI is called; this should never happen.
-		log.Error("Failed to create key store", "error", err)
+		log.Error("failed to create key store", "error", err)
 		return nil
 	}
 	logsStore := store.NewLogsStore(logsDB)
@@ -113,7 +113,7 @@ func NewAPI(db *sql.DB, compiler *engine.Compiler, logsDB *sql.DB, logsDBPath st
 	peersHandler.PendingStore = pendingStore
 	peersHandler.AlertService = alertService
 	if _, err := dashboardStore.PurgeAgentUpdateLogs(context.Background()); err != nil {
-		log.Warn("Failed to purge legacy agent update logs (firewall_logs will retain agent_update rows)", "error", err)
+		log.Warn("failed to purge legacy agent update logs (firewall_logs will retain agent_update rows)", "error", err)
 	}
 	userTokenStore := store.NewUserTokenStore(db)
 	// Wire PAT authentication so `Bearer runic_pat_*` credentials issued below

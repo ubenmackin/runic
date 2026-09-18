@@ -1,15 +1,18 @@
 package pending
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
 	"runic/internal/api/common"
 	"runic/internal/api/events"
+	policiesapi "runic/internal/api/policies"
 	"runic/internal/engine"
 	"runic/internal/store"
 	"runic/internal/testutil"
@@ -1118,5 +1121,243 @@ func TestPushAllRules_ExcludesManualPeers(t *testing.T) {
 	}
 	if peerID != 1 {
 		t.Errorf("expected peer_id 1 (agent-peer), got %d", peerID)
+	}
+}
+
+// TestListPendingChanges_IncludesManualPeers documents that pending visibility
+// includes manual peers. Pending rows queued for a manual server must appear in
+// the pending listing alongside agent peers; only push delivery stays
+// agent-only.
+func TestListPendingChanges_IncludesManualPeers(t *testing.T) {
+	db, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	if _, err := db.Exec("INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, is_manual) VALUES (?, ?, ?, ?, ?)",
+		"agent-peer", "10.0.0.1", "key1", "hmac1", 0); err != nil {
+		t.Fatalf("insert agent peer: %v", err)
+	}
+	if _, err := db.Exec("INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, is_manual) VALUES (?, ?, ?, ?, ?)",
+		"manual-peer", "10.0.0.2", "key2", "hmac2", 1); err != nil {
+		t.Fatalf("insert manual peer: %v", err)
+	}
+
+	if _, err := db.Exec("INSERT INTO pending_changes (peer_id, change_type, change_id, change_action, change_summary) VALUES (?, ?, ?, ?, ?)",
+		1, "policy", 1, "create", "Add policy for agent"); err != nil {
+		t.Fatalf("insert pending change for agent peer: %v", err)
+	}
+	if _, err := db.Exec("INSERT INTO pending_changes (peer_id, change_type, change_id, change_action, change_summary) VALUES (?, ?, ?, ?, ?)",
+		2, "policy", 1, "create", "Add policy for manual"); err != nil {
+		t.Fatalf("insert pending change for manual peer: %v", err)
+	}
+
+	handler := newTestHandler(db, nil, nil, nil)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/pending", nil)
+
+	handler.ListPendingChanges(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, w.Code)
+	}
+
+	var groups []peerChangeGroup
+	if err := json.Unmarshal(w.Body.Bytes(), &groups); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+
+	if len(groups) != 2 {
+		t.Fatalf("expected 2 groups (agent + manual), got %d: %s", len(groups), w.Body.String())
+	}
+
+	byHost := map[string]peerChangeGroup{}
+	for _, g := range groups {
+		byHost[g.Hostname] = g
+	}
+	for _, want := range []string{"agent-peer", "manual-peer"} {
+		g, ok := byHost[want]
+		if !ok {
+			t.Errorf("expected pending group for %q, got %v", want, byHost)
+			continue
+		}
+		if g.ChangesCount != 1 {
+			t.Errorf("%s changes_count = %d, want 1", want, g.ChangesCount)
+		}
+	}
+
+	// Per-peer endpoint must also serve the manual peer's rows.
+	w = httptest.NewRecorder()
+	r = httptest.NewRequest(http.MethodGet, "/api/v1/pending/peers/2", nil)
+	r = muxVars(r, map[string]string{"peerId": "2"})
+	handler.GetPeerPendingChanges(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, w.Code)
+	}
+	var single map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &single); err != nil {
+		t.Fatalf("failed to unmarshal per-peer response: %v", err)
+	}
+	changes, _ := single["changes"].([]interface{})
+	if len(changes) != 1 {
+		t.Errorf("expected 1 change for manual peer, got %d", len(changes))
+	}
+}
+
+// TestPolicyCRUD_ManualAndAgentPeersHaveVisiblePending exercises policy CRUD
+// through the policies handler with a live ChangeWorker and asserts that
+// pending rows are created for both the agent and the manual peer, and that
+// those rows are visible via the pending listing and the peers list counts.
+// Push remains agent-only (covered by TestPushAllRules_ExcludesManualPeers).
+func TestPolicyCRUD_ManualAndAgentPeersHaveVisiblePending(t *testing.T) {
+	db, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	res, err := db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, is_manual) VALUES (?, ?, ?, ?, ?)`,
+		"agent-peer", "10.0.0.1", "key1", "hmac1", 0)
+	if err != nil {
+		t.Fatalf("insert agent peer: %v", err)
+	}
+	agent64, _ := res.LastInsertId()
+	agentID := int(agent64)
+
+	res, err = db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, is_manual) VALUES (?, ?, ?, ?, ?)`,
+		"manual-peer", "10.0.0.2", "key2", "hmac2", 1)
+	if err != nil {
+		t.Fatalf("insert manual peer: %v", err)
+	}
+	manual64, _ := res.LastInsertId()
+	manualID := int(manual64)
+
+	res, err = db.Exec(`INSERT INTO services (name, ports, protocol) VALUES (?, ?, ?)`, "web", "8080", "tcp")
+	if err != nil {
+		t.Fatalf("insert service: %v", err)
+	}
+	svc64, _ := res.LastInsertId()
+	serviceID := int(svc64)
+
+	compiler := engine.NewTestCompiler(db)
+	changeWorker := common.NewChangeWorker(nil, db)
+	changeWorker.Start(context.Background())
+	defer changeWorker.Stop()
+
+	policyHandler := policiesapi.NewHandler(db, compiler, changeWorker, store.NewPolicyStore(db))
+	pendingHandler := newTestHandler(db, compiler, nil, nil)
+	peerStore := store.NewPeerStore(db)
+
+	containsBoth := func(ids []int) bool {
+		found := map[int]bool{}
+		for _, id := range ids {
+			found[id] = true
+		}
+		return found[agentID] && found[manualID]
+	}
+
+	// CREATE peer -> peer policy covering the agent source and manual target.
+	createBody := `{"name": "manual-visibility-policy", "source_id": ` + strconv.Itoa(agentID) + `, "source_type": "peer", "service_id": ` + strconv.Itoa(serviceID) + `, "target_id": ` + strconv.Itoa(manualID) + `, "target_type": "peer"}`
+	req := httptest.NewRequest(http.MethodPost, "/policies", strings.NewReader(createBody))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	policyHandler.CreatePolicy(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreatePolicy status=%d body=%s", w.Code, w.Body.String())
+	}
+	var created map[string]int64
+	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
+		t.Fatalf("unmarshal create response: %v: %s", err, w.Body.String())
+	}
+	policyID := int(created["id"])
+	if policyID == 0 {
+		t.Fatalf("expected non-zero policy id: %s", w.Body.String())
+	}
+
+	testutil.WaitForPendingRows(t, db, policyID, "create", 2)
+	if got := testutil.PendingPeerIDs(t, db, policyID, "create"); !containsBoth(got) {
+		t.Fatalf("create pending peers=%v, want both agent=%d and manual=%d", got, agentID, manualID)
+	}
+
+	// Pending listing must include both peers after create.
+	w = httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/pending", nil)
+	pendingHandler.ListPendingChanges(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ListPendingChanges status=%d", w.Code)
+	}
+	var groups []peerChangeGroup
+	if err := json.Unmarshal(w.Body.Bytes(), &groups); err != nil {
+		t.Fatalf("unmarshal pending groups: %v", err)
+	}
+	if len(groups) != 2 {
+		t.Fatalf("expected 2 pending groups after create, got %d: %s", len(groups), w.Body.String())
+	}
+
+	// Peers list counts must be visible for both peers after create.
+	peers, err := peerStore.ListPeers(ctx)
+	if err != nil {
+		t.Fatalf("ListPeers failed: %v", err)
+	}
+	byID := map[int]store.PeerView{}
+	for _, p := range peers {
+		byID[p.ID] = p
+	}
+	for _, id := range []int{agentID, manualID} {
+		p, ok := byID[id]
+		if !ok {
+			t.Fatalf("peer %d missing from ListPeers", id)
+		}
+		if p.PendingChangesCount == 0 {
+			t.Errorf("peer %d pending_changes_count = 0, want >0 after create", id)
+		}
+		if p.SyncStatus != "pending" {
+			t.Errorf("peer %d sync_status = %q, want pending after create", id, p.SyncStatus)
+		}
+	}
+
+	// UPDATE the policy and expect a second set of rows for both peers.
+	updateBody := `{"name": "manual-visibility-policy", "source_id": ` + strconv.Itoa(agentID) + `, "source_type": "peer", "service_id": ` + strconv.Itoa(serviceID) + `, "target_id": ` + strconv.Itoa(manualID) + `, "target_type": "peer", "action": "DROP", "priority": 200}`
+	req = httptest.NewRequest(http.MethodPut, "/policies/"+strconv.Itoa(policyID), strings.NewReader(updateBody))
+	req.Header.Set("Content-Type", "application/json")
+	req = muxVars(req, map[string]string{"id": strconv.Itoa(policyID)})
+	w = httptest.NewRecorder()
+	policyHandler.UpdatePolicy(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("UpdatePolicy status=%d body=%s", w.Code, w.Body.String())
+	}
+	testutil.WaitForPendingRows(t, db, policyID, "update", 2)
+	if got := testutil.PendingPeerIDs(t, db, policyID, "update"); !containsBoth(got) {
+		t.Fatalf("update pending peers=%v, want both agent=%d and manual=%d", got, agentID, manualID)
+	}
+
+	// DELETE the policy and expect delete rows for both peers.
+	req = httptest.NewRequest(http.MethodDelete, "/policies/"+strconv.Itoa(policyID), nil)
+	req = muxVars(req, map[string]string{"id": strconv.Itoa(policyID)})
+	w = httptest.NewRecorder()
+	policyHandler.DeletePolicy(w, req)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("DeletePolicy status=%d body=%s", w.Code, w.Body.String())
+	}
+	testutil.WaitForPendingRows(t, db, policyID, "delete", 2)
+	if got := testutil.PendingPeerIDs(t, db, policyID, "delete"); !containsBoth(got) {
+		t.Fatalf("delete pending peers=%v, want both agent=%d and manual=%d", got, agentID, manualID)
+	}
+
+	// Pending listing must still include the manual peer after delete.
+	w = httptest.NewRecorder()
+	r = httptest.NewRequest(http.MethodGet, "/api/v1/pending", nil)
+	pendingHandler.ListPendingChanges(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ListPendingChanges after delete status=%d", w.Code)
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &groups); err != nil {
+		t.Fatalf("unmarshal pending groups after delete: %v", err)
+	}
+	seenManual := false
+	for _, g := range groups {
+		if g.Hostname == "manual-peer" {
+			seenManual = true
+		}
+	}
+	if !seenManual {
+		t.Errorf("manual-peer missing from pending listing after delete: %s", w.Body.String())
 	}
 }

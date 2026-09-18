@@ -121,8 +121,26 @@ The API is organized by domain, split into handler packages:
 - `keys/` — Setup keys management (SMTP passwords, etc.)
 - `events/` — SSE hub for agent push notifications
 - `downloads/` — Agent binary download endpoint
-- `common/` — Shared helpers: response encoding, error handling, change/push workers, validation
+- `common/` — Shared helpers: response encoding, error handling, validation, and
+  thin aliases (`change_aliases.go`, `tracker.go`) for the change/push workers.
+  The implementations live in `internal/change/` (change worker, notifiers) so
+  `internal/store` can fan out without importing the API layer. `api/common`
+  does not own change logic.
 - `middleware/` — Reusable Gorilla Mux middlewares (rate limiting, RBAC)
+
+#### Pending-Change Signal (DB-driven, fail-closed)
+
+Mutations (groups/services/policies/membership/imports) persist first, then
+queue DB-driven `pending_changes` fan-out for every affected peer. The queue
+path uses a detached context (`context.WithoutCancel`) with per-stage timeouts
+so a client disconnect cannot cancel the fan-out after the mutation is durable.
+A synchronous queue failure (nil/stopped/full worker, resolution failure) fails
+the request with `500 pending signal incomplete; manual recompile required`
+instead of acking `2xx` with zero rows. The background `ChangeWorker`
+(`internal/change/change_worker.go`) persists rows via idempotent
+`INSERT ... WHERE NOT EXISTS` and fans out SSE; import apply (`ApplySession`)
+is fail-closed the same way, and policy PATCH queues the pre-mutation peers as
+a fallback so the persisted change keeps at least a partial signal.
 
 #### Middleware Stack
 
@@ -335,6 +353,21 @@ Shared packages:
 - `datetime.go` — SQLite datetime formatting
 - `ensure.go` — Path/directory creation helpers
 - `system.go` — OS-level detection (firewalld, ufw, nftables)
+- `peerids.go` — Single-source `MergePeerIDs` (dedup + sorted) for peer fan-out;
+  shared by the engine compiler and the change worker to avoid duplication
+- `lookups.go` — `PeerHostnameLookup` contract for hostname resolution without
+  database dependencies in leaf packages
+
+### Change Layer (`internal/change/`)
+
+Low-level pending-change fan-out below `internal/api` in the dependency graph:
+- `change_worker.go` — Detached-context background worker; idempotent
+  `INSERT ... WHERE NOT EXISTS` persistence plus SSE fan-out
+- `notifiers.go` — `PendingChangeNotifier` / `BundleNotifier` and
+  `NotifyOutcome` shared by the workers and the SSE hub without import cycles
+- `constraints.go` — Delete-constraint errors shared by stores and handlers
+- Both `internal/store` and `internal/api/...` import it; it only depends on
+  leaf packages (`internal/engine`, `internal/db`, `internal/common`)
 
 ### Importer (`internal/importer/`)
 
@@ -343,7 +376,9 @@ The import workflow allows users to migrate existing iptables rules into the pol
 2. Parser (`internal/iptparse/`) parses raw rules into structured format
 3. Staging tables store parsed rules, group mappings, peer mappings, service mappings
 4. Users review and map imported rules to existing or new policies/groups/services
-5. Apply creates the policies and triggers bundle recompilation
+5. Apply creates the policies and triggers bundle recompilation via per-entity
+   multi-peer fan-out (each created peer/group/service/policy resolves its
+   affected peers; fail-closed on queue errors like groups/services/policies)
 
 ### Security Architecture
 
@@ -358,6 +393,17 @@ The import workflow allows users to migrate existing iptables rules into the pol
 9. **Encrypted secrets** — SMTP passwords encrypted with AES-256-GCM, key stored in database
 10. **Security headers** — HSTS, X-Frame-Options: DENY, X-Content-Type-Options: nosniff, etc.
 11. **CORS** — Explicit allowlist; no wildcard reflection in production
+
+## Accepted Risks
+
+| Advisory | Dependency | Severity | Status | Mitigation |
+|---|---|---|---|---|
+| GO-2026-5932 | golang.org/x/crypto v0.56.0 (`openpgp`) | Medium | Accepted risk — no fixed version published | Vulnerable `openpgp` subpackages kept unimported; only `bcrypt`, `hkdf`, `pbkdf2` used |
+
+1. **GO-2026-5932 (`golang.org/x/crypto/openpgp`)** — Accepted risk. `govulncheck` reports the `openpgp` module as unmaintained and unsafe, with no fixed version available as of 2026-09-17, so the finding cannot be remediated by upgrade yet.
+2. **Exposure** — None in practice. The vulnerable `openpgp` subpackages (`armor`, `packet`, `clearsign`, `elgamal`, `s2k`) are unimported anywhere in the codebase (verified via `grep` over `*.go`). The only `golang.org/x/crypto` imports in use are `bcrypt` (password hashing in `internal/api/auth/handlers.go` and `internal/api/users/handlers.go`), `hkdf` (bundle signing in `internal/engine/signer.go`), and `pbkdf2` (secret encryption in `internal/crypto/encrypt.go`).
+3. **Waiver** — The inline waiver on the `golang.org/x/crypto v0.56.0` require directive in `go.mod` records this decision at the dependency site; this section is the durable ARCHITECTURE.md-documented accepted risk that the inline comment alone does not provide.
+4. **Monitor and upgrade** — Monitor upstream `golang.org/x/crypto` releases. When a fixed version is published past the affected range, upgrade the `go.mod` directive and remove this accepted-risk entry.
 
 ---
 
@@ -379,7 +425,7 @@ internal/
     agents/              — Agent-facing endpoints
     alerts/              — Alert rule/history/notification endpoints
     auth/                — Authentication endpoints + rate limiting
-    common/              — Shared API utilities (response, errors, workers)
+    common/              — Shared API utilities (response, errors, validation, change_aliases)
     dashboard/           — Dashboard statistics endpoints
     downloads/           — Agent binary download
     events/              — SSE hub
@@ -396,7 +442,8 @@ internal/
     users/               — User management endpoints
   alerts/                — Alert rule engine, evaluator, SMTP, spike detector, scheduler, digest
   auth/                  — JWT utilities, middleware, token management
-  common/                — Shared utilities (log, crypto, HTTP, errors, system, etc.)
+  change/                — Pending-change worker, notifiers, delete constraints (below api; owns fan-out)
+  common/                — Shared utilities (log, crypto, HTTP, errors, system, peerids, lookups, etc.)
   crypto/                — AES-256-GCM encryptor
   db/                    — Database initialization, migrations, queries
   engine/                — Policy compiler, resolver, signer
@@ -423,3 +470,4 @@ AGENT_DOCS/              — Agent-facing documentation
 | Date | Entry |
 |---|---|
 | 2026-07-12 | Initial architecture document created from project analysis. Captures the complete two-component (server + agent) architecture, engine compiler pipeline, store layer, alert system, security model, and data model for the Runic firewall policy management system. |
+| 2026-09-17 | Documented GO-2026-5932 (`golang.org/x/crypto/openpgp`, no fixed version) as an accepted risk: `openpgp` subpackages verified unimported (only `bcrypt`/`hkdf`/`pbkdf2` used); references the `go.mod` waiver; upgrade when upstream publishes a fix. |

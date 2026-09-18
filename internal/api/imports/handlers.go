@@ -113,7 +113,7 @@ func (h *Handler) InitiateImport(w http.ResponseWriter, r *http.Request) {
 
 	session, err := h.Store.CreateSession(r.Context(), peerID, "", "")
 	if err != nil {
-		runiclog.Error("Failed to create import session", "error", err, "peer_id", peerID)
+		runiclog.Error("failed to create import session", "error", err, "peer_id", peerID)
 		common.RespondError(w, http.StatusInternalServerError, "failed to create import session")
 		return
 	}
@@ -124,11 +124,11 @@ func (h *Handler) InitiateImport(w http.ResponseWriter, r *http.Request) {
 	if h.SSEHub != nil {
 		switch h.SSEHub.NotifyFetchBackup(hostID) {
 		case events.UpdateAgentSent:
-			runiclog.Info("Sent fetch_backup SSE event to agent", "host_id", hostID, "peer_id", peerID)
+			runiclog.Info("sent fetch_backup SSE event to agent", "host_id", hostID, "peer_id", peerID)
 		case events.UpdateAgentChannelFull:
-			runiclog.Warn("NotifyFetchBackup failed: agent channel full (backpressure, retryable)", "host_id", hostID)
+			runiclog.Warn("notifyFetchBackup failed: agent channel full (backpressure, retryable)", "host_id", hostID)
 		default:
-			runiclog.Warn("NotifyFetchBackup failed: agent not connected", "host_id", hostID)
+			runiclog.Warn("notifyFetchBackup failed: agent not connected", "host_id", hostID)
 		}
 	}
 
@@ -180,7 +180,7 @@ func (h *Handler) GetRules(w http.ResponseWriter, r *http.Request) {
 
 	rules, err := h.Store.GetRules(r.Context(), sessionID)
 	if err != nil {
-		runiclog.Error("Failed to get rules", "error", err)
+		runiclog.Error("failed to get rules", "error", err)
 		common.RespondError(w, http.StatusInternalServerError, "database error")
 		return
 	}
@@ -196,7 +196,7 @@ func (h *Handler) GetGroups(w http.ResponseWriter, r *http.Request) {
 
 	groups, err := h.Store.GetGroups(r.Context(), sessionID)
 	if err != nil {
-		runiclog.Error("Failed to get groups", "error", err)
+		runiclog.Error("failed to get groups", "error", err)
 		common.RespondError(w, http.StatusInternalServerError, "database error")
 		return
 	}
@@ -212,7 +212,7 @@ func (h *Handler) GetPeers(w http.ResponseWriter, r *http.Request) {
 
 	peers, err := h.Store.GetPeers(r.Context(), sessionID)
 	if err != nil {
-		runiclog.Error("Failed to get peers", "error", err)
+		runiclog.Error("failed to get peers", "error", err)
 		common.RespondError(w, http.StatusInternalServerError, "database error")
 		return
 	}
@@ -228,7 +228,7 @@ func (h *Handler) GetServices(w http.ResponseWriter, r *http.Request) {
 
 	services, err := h.Store.GetServices(r.Context(), sessionID)
 	if err != nil {
-		runiclog.Error("Failed to get services", "error", err)
+		runiclog.Error("failed to get services", "error", err)
 		common.RespondError(w, http.StatusInternalServerError, "database error")
 		return
 	}
@@ -244,7 +244,7 @@ func (h *Handler) GetSkippedRules(w http.ResponseWriter, r *http.Request) {
 
 	skipped, err := h.Store.GetSkippedRules(r.Context(), sessionID)
 	if err != nil {
-		runiclog.Error("Failed to get skipped rules", "error", err)
+		runiclog.Error("failed to get skipped rules", "error", err)
 		common.RespondError(w, http.StatusInternalServerError, "database error")
 		return
 	}
@@ -283,7 +283,7 @@ func (h *Handler) UpdateRule(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.Store.UpdateRule(r.Context(), sessionID, ruleID, input.Status, input.PolicyName, input.SourceIP, input.TargetIP, input.Enabled); err != nil {
-		runiclog.Warn("UpdateRule failed", "error", err)
+		runiclog.Warn("updateRule failed", "error", err)
 		common.RespondError(w, http.StatusInternalServerError, "database error")
 		return
 	}
@@ -319,7 +319,7 @@ func (h *Handler) UpdateGroup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.Store.UpdateGroup(r.Context(), sessionID, groupID, input.Status, input.ExistingGroupID); err != nil {
-		runiclog.Warn("UpdateGroup failed", "error", err)
+		runiclog.Warn("updateGroup failed", "error", err)
 		common.RespondError(w, http.StatusInternalServerError, "database error")
 		return
 	}
@@ -355,7 +355,7 @@ func (h *Handler) UpdatePeer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.Store.UpdatePeer(r.Context(), sessionID, peerID, input.Status, input.ExistingPeerID); err != nil {
-		runiclog.Warn("UpdatePeer failed", "error", err)
+		runiclog.Warn("updatePeer failed", "error", err)
 		common.RespondError(w, http.StatusInternalServerError, "database error")
 		return
 	}
@@ -391,7 +391,7 @@ func (h *Handler) UpdateService(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.Store.UpdateService(r.Context(), sessionID, serviceID, input.Status, input.ExistingServiceID); err != nil {
-		runiclog.Warn("UpdateService failed", "error", err)
+		runiclog.Warn("updateService failed", "error", err)
 		common.RespondError(w, http.StatusInternalServerError, "database error")
 		return
 	}
@@ -437,7 +437,7 @@ func (h *Handler) ApplySession(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.Store.ApplySession(r.Context(), sessionID, h.ChangeWorker)
 	if err != nil {
-		runiclog.Error("Failed to apply import session", "error", err, "session_id", sessionID)
+		runiclog.Error("failed to apply import session", "error", err, "session_id", sessionID)
 		common.RespondError(w, http.StatusInternalServerError, "failed to apply import session")
 		return
 	}

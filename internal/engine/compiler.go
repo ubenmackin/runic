@@ -532,7 +532,7 @@ func (c *Compiler) loadApplicablePolicies(ctx context.Context, peerID int) ([]po
 	}
 	defer func() {
 		if err := rows.Close(); err != nil {
-			log.Warn("close err", "err", err)
+			log.WarnContext(ctx, "failed to close rows", "error", err)
 		}
 	}()
 
@@ -588,10 +588,10 @@ type ServiceInfo struct {
 }
 
 func (c *Compiler) preloadRequiredServices(ctx context.Context, policies []policyInfo) (map[int]ServiceInfo, error) {
-	serviceIDs := make(map[int]bool)
+	serviceIDs := make(map[int]struct{})
 	for i := range policies {
 		p := &policies[i]
-		serviceIDs[p.ServiceID] = true
+		serviceIDs[p.ServiceID] = struct{}{}
 	}
 	services := make(map[int]ServiceInfo)
 	if len(serviceIDs) > 0 {
@@ -614,7 +614,7 @@ func (c *Compiler) preloadRequiredServices(ctx context.Context, policies []polic
 		}
 		defer func() {
 			if err := rows.Close(); err != nil {
-				log.Warn("close err", "err", err)
+				log.WarnContext(ctx, "failed to close rows", "error", err)
 			}
 		}()
 
@@ -703,7 +703,7 @@ func (c *Compiler) Compile(ctx context.Context, peerID int) (string, error) {
 	// Load control plane port up-front (was previously a hidden side-effect inside generateIptablesPayload)
 	var controlPlanePort string
 	if err := c.db.QueryRowContext(ctx, "SELECT value FROM system_config WHERE key = 'control_plane_port'").Scan(&controlPlanePort); err != nil {
-		log.WarnContext(ctx, "Failed to load control_plane_port, using default "+DefaultControlPlanePort, "error", err)
+		log.WarnContext(ctx, "failed to load control_plane_port, using default "+DefaultControlPlanePort, "error", err)
 		controlPlanePort = DefaultControlPlanePort
 	}
 	if controlPlanePort == "" {
@@ -2175,52 +2175,154 @@ func (c *Compiler) CompileAndStore(ctx context.Context, peerID int) (models.Rule
 }
 
 func (c *Compiler) RecompileAffectedPeers(ctx context.Context, groupID int) error {
+	if c == nil || c.db == nil {
+		return fmt.Errorf("recompile affected peers for group %d: compiler or db is nil", groupID)
+	}
 	// Collect all transitively related groups. When a peer is added to a group,
 	// it also affects any other group that shares peers with this group (transitive
 	// membership via overlapping group membership). We find all groups that share
 	// at least one peer with the given group, then recompile all affected peers
 	// for the entire set of related groups.
-	allGroupIDs := c.collectTransitiveGroupIDs(ctx, groupID)
+	// Detach from the caller's context so cancellation does not expire the
+	// fan-out mid-loop. Each stage below gets its own timeout (mirroring
+	// processGroupChange) so a large fan-out cannot expire mid-loop and
+	// leave half-recompiled peers.
+	base := ctx
+	if base == nil {
+		base = context.Background()
+	} else {
+		base = context.WithoutCancel(base)
+	}
+	transCtx, transCancel := context.WithTimeout(base, 5*time.Second)
+	allGroupIDs, transErr := c.collectTransitiveGroupIDs(transCtx, groupID)
+	transCancel()
 
 	// Collect all affected peer IDs from policies referencing any related group.
-	peerSet := make(map[int]bool)
+	// Deduplicate policy IDs across groups and resolve them with the batched
+	// helper so the fan-out is a single engine call instead of an N+1 loop.
+	// Peer dedup uses the shared common.MergePeerIDs helper (leaf
+	// internal/common, no cycle) so the engine and the change worker share
+	// one map-dedup+sort implementation.
+	policySeen := make(map[int]struct{})
+	var allPolicyIDs []int
+	// Per-group continue: one bad group must not drop the policies of the
+	// other groups, mirroring the per-policy continue+errors.Join semantics
+	// of GetAffectedPeersByPolicies. A transitive traversal failure joins
+	// here so callers never see silent success with missing groups.
+	var groupErr error
+	if transErr != nil {
+		groupErr = errors.Join(groupErr, transErr)
+	}
 	for _, gid := range allGroupIDs {
-		policyIDs, err := c.findPoliciesByGroup(ctx, gid)
+		groupCtx, groupCancel := context.WithTimeout(base, 5*time.Second)
+		policyIDs, err := c.findPoliciesByGroup(groupCtx, gid)
+		groupCancel()
 		if err != nil {
-			return err
+			groupErr = errors.Join(groupErr, fmt.Errorf("group %d: %w", gid, err))
+			continue
 		}
-
 		for _, pid := range policyIDs {
-			affected, err := c.GetAffectedPeersByPolicy(ctx, pid)
-			if err != nil {
-				log.ErrorContext(ctx, "Failed to get affected peers for recompile", "policy_id", pid, "error", err)
-				continue
-			}
-			for _, peerID := range affected {
-				peerSet[peerID] = true
+			if _, ok := policySeen[pid]; !ok {
+				policySeen[pid] = struct{}{}
+				allPolicyIDs = append(allPolicyIDs, pid)
 			}
 		}
 	}
-
-	for peerID := range peerSet {
-		if _, err := c.CompileAndStore(ctx, peerID); err != nil {
-			return fmt.Errorf("recompile peer %d: %w", peerID, err)
+	var resolveErr error
+	var peerSlices [][]int
+	if len(allPolicyIDs) > 0 {
+		resolveCtx, resolveCancel := context.WithTimeout(base, 10*time.Second)
+		affectedByPolicy, err := c.GetAffectedPeersByPolicies(resolveCtx, allPolicyIDs)
+		resolveCancel()
+		// Merge partial results even when err != nil: per-policy continue
+		// semantics mean one bad policy must not drop the peers of the
+		// good policies.
+		for _, affected := range affectedByPolicy {
+			peerSlices = append(peerSlices, affected)
 		}
+		sortedPeerIDs := common.MergePeerIDs(peerSlices...)
+		if err != nil {
+			// Do not silently succeed with whatever resolved. If no peers
+			// resolved, fail fast; otherwise recompile the resolved peers
+			// below in deterministic order and then report the partial
+			// failure so callers never see silent success with zero fan-out.
+			// A legitimate empty-group resolution (nil error, zero peers)
+			// skips this branch and succeeds with zero fan-out below.
+			if len(sortedPeerIDs) == 0 {
+				return fmt.Errorf("get affected peers for recompile: %w", errors.Join(groupErr, err))
+			}
+			log.ErrorContext(base, "partial failure getting affected peers for recompile", "error", err)
+			// Remember the resolution error to return after compiling the
+			// resolved peers.
+			resolveErr = err
+		}
+		// Compile in sorted order for deterministic behavior;
+		// MergePeerIDs already sorts, matching the fan-out elsewhere.
+		for _, peerID := range sortedPeerIDs {
+			// Each compile gets its own timeout so a large fan-out cannot
+			// expire mid-loop and leave half-recompiled peers.
+			compileCtx, compileCancel := context.WithTimeout(base, 10*time.Second)
+			_, err := c.CompileAndStore(compileCtx, peerID)
+			compileCancel()
+			if err != nil {
+				compileErr := fmt.Errorf("recompile peer %d: %w", peerID, err)
+				if joined := errors.Join(groupErr, resolveErr); joined != nil {
+					return errors.Join(joined, compileErr)
+				}
+				return compileErr
+			}
+		}
+	} else if groupErr != nil {
+		// No policies resolved because every group lookup failed: fail
+		// instead of reporting success with zero fan-out. A legitimate
+		// empty result (no policies reference the groups, nil error)
+		// succeeds with zero fan-out below instead of erroring.
+		return fmt.Errorf("find policies for recompile: %w", groupErr)
+	}
+	// Report partial group/policy failures after compiling the resolved peers
+	// so callers never see silent success with missing fan-out.
+	if joined := errors.Join(groupErr, resolveErr); joined != nil {
+		if resolveErr != nil {
+			return fmt.Errorf("get affected peers for recompile: %w", joined)
+		}
+		return fmt.Errorf("find policies for recompile: %w", joined)
 	}
 	return nil
 }
 
-// findPoliciesByGroup returns IDs of enabled, non-deleted policies that reference
+// FindPoliciesByGroup returns IDs of non-deleted policies that reference
+// the given group as either source or target. It is the exported single-sourced
+// helper for group fan-out; the change worker calls it instead of duplicating
+// the predicate so the source/target predicate lives in exactly one place.
+func (c *Compiler) FindPoliciesByGroup(ctx context.Context, groupID int) ([]int, error) {
+	return c.findPoliciesByGroup(ctx, groupID)
+}
+
+// findPoliciesByGroup returns IDs of non-deleted policies that reference
 // the given group as either source or target.
+//
+// Conservative superset: intentionally includes disabled policies, mirroring
+// GetAffectedPeersByPolicy (which ignores the enabled flag) and
+// store.FindPoliciesUsingService, so disable fan-out still resolves the
+// previously-affected peers. Over-marking (an extra pending signal) is safe;
+// under-marking would lose the DB pending signal.
+//
+// Row-scan contract (unified with store.queryRows and queryPeerIDs):
+// fail-fast. A single corrupt row aborts the lookup instead of being
+// skipped, so one bad row can never silently drop policies from fan-out
+// resolution and lose the DB pending signal.
 func (c *Compiler) findPoliciesByGroup(ctx context.Context, groupID int) ([]int, error) {
+	if c == nil || c.db == nil {
+		return nil, fmt.Errorf("find policies by group %d: compiler or db is nil", groupID)
+	}
 	rows, err := c.db.QueryContext(ctx,
-		`SELECT DISTINCT id FROM policies WHERE is_pending_delete = 0 AND ((source_type = 'group' AND source_id = ?) OR (target_type = 'group' AND target_id = ?)) AND enabled = 1`, groupID, groupID)
+		`SELECT DISTINCT id FROM policies WHERE is_pending_delete = 0 AND ((source_type = 'group' AND source_id = ?) OR (target_type = 'group' AND target_id = ?)) ORDER BY id ASC`, groupID, groupID)
 	if err != nil {
 		return nil, fmt.Errorf("find affected policies for group %d: %w", groupID, err)
 	}
 	defer func() {
 		if err := rows.Close(); err != nil {
-			log.Warn("close err", "err", err)
+			log.WarnContext(ctx, "failed to close rows", "error", err)
 		}
 	}()
 
@@ -2228,7 +2330,7 @@ func (c *Compiler) findPoliciesByGroup(ctx context.Context, groupID int) ([]int,
 	for rows.Next() {
 		var id int
 		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("scan policy id: %w", err)
+			return nil, fmt.Errorf("scan policy id by group %d: %w", groupID, err)
 		}
 		policyIDs = append(policyIDs, id)
 	}
@@ -2242,156 +2344,335 @@ func (c *Compiler) findPoliciesByGroup(ctx context.Context, groupID int) ([]int,
 // the given group through shared peer membership. For example, if groupA and
 // groupB both contain peer 42, then changes to groupA also affect groupB.
 // This returns the original groupID along with all transitively related groups.
-func (c *Compiler) collectTransitiveGroupIDs(ctx context.Context, groupID int) []int {
-	visited := make(map[int]bool)
+// A non-nil error signals partial traversal failure; the returned IDs are
+// still usable but callers must not report silent success with missing fan-out.
+func (c *Compiler) collectTransitiveGroupIDs(ctx context.Context, groupID int) ([]int, error) {
+	if c == nil || c.db == nil {
+		return nil, fmt.Errorf("collect transitive group IDs for group %d: compiler or db is nil", groupID)
+	}
+	visited := make(map[int]struct{})
 	var result []int
+	var walkErr error
 
 	var walk func(gid int)
 	walk = func(gid int) {
-		if visited[gid] {
+		if _, ok := visited[gid]; ok {
 			return
 		}
-		visited[gid] = true
+		visited[gid] = struct{}{}
 		result = append(result, gid)
 
 		// Find all groups that share at least one peer with this group.
+		// ORDER BY keeps the walk deterministic so downstream policy/error
+		// order does not depend on SQLite row order.
 		rows, err := c.db.QueryContext(ctx, `
 			SELECT DISTINCT gm2.group_id
 			FROM group_members gm1
 			JOIN group_members gm2 ON gm1.peer_id = gm2.peer_id AND gm2.group_id != gm1.group_id
 			JOIN groups g ON gm2.group_id = g.id
-			WHERE gm1.group_id = ? AND g.is_pending_delete = 0`, gid)
+			WHERE gm1.group_id = ? AND g.is_pending_delete = 0
+			ORDER BY gm2.group_id ASC`, gid)
 		if err != nil {
-			log.WarnContext(ctx, "Failed to find transitive groups", "group_id", gid, "error", err)
+			log.ErrorContext(ctx, "failed to find transitive groups", "group_id", gid, "error", err)
+			walkErr = errors.Join(walkErr, fmt.Errorf("transitive groups for group %d: %w", gid, err))
 			return
 		}
-		defer func() {
-			if cErr := rows.Close(); cErr != nil {
-				log.Warn("close err", "err", cErr)
-			}
-		}()
-
+		// Collect related IDs first, then close the cursor before recursing.
+		// The cursor must not stay open across walk(relatedGID): each
+		// recursion level would otherwise hold its SQLite cursor/lock until
+		// the full unwind, stacking N open cursors on a transitive chain.
+		var related []int
 		for rows.Next() {
 			var relatedGID int
 			if err := rows.Scan(&relatedGID); err != nil {
-				log.WarnContext(ctx, "Failed to scan related group", "error", err)
+				log.WarnContext(ctx, "failed to scan related group", "error", err)
+				walkErr = errors.Join(walkErr, fmt.Errorf("transitive groups scan for group %d: %w", gid, err))
 				continue
 			}
-			walk(relatedGID)
+			related = append(related, relatedGID)
 		}
 		if err := rows.Err(); err != nil {
-			log.WarnContext(ctx, "Rows iteration error", "error", err)
+			log.ErrorContext(ctx, "rows iteration error", "group_id", gid, "error", err)
+			walkErr = errors.Join(walkErr, fmt.Errorf("transitive groups iteration for group %d: %w", gid, err))
+		}
+		if cerr := rows.Close(); cerr != nil {
+			log.WarnContext(ctx, "failed to close rows", "error", cerr)
+		}
+		for _, relatedGID := range related {
+			walk(relatedGID)
 		}
 	}
 
 	walk(groupID)
-	return result
+	return result, walkErr
+}
+
+// peerExists reports whether a peer row exists. sql.ErrNoRows from the scan
+// maps to (false, nil); other DB errors are returned.
+func (c *Compiler) peerExists(ctx context.Context, peerID int) (bool, error) {
+	if c == nil || c.db == nil {
+		return false, fmt.Errorf("verify peer %d: compiler or db is nil", peerID)
+	}
+	var id int
+	if err := c.db.QueryRowContext(ctx, "SELECT id FROM peers WHERE id = ?", peerID).Scan(&id); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, fmt.Errorf("verify peer %d: %w", peerID, err)
+	}
+	return true, nil
+}
+
+// groupExists reports whether a non-deleted group row exists. sql.ErrNoRows
+// from the scan maps to (false, nil); other DB errors are returned. Mirrors
+// peerExists so a missing or soft-deleted group surfaces as sql.ErrNoRows
+// instead of silent success with zero fan-out.
+func (c *Compiler) groupExists(ctx context.Context, groupID int) (bool, error) {
+	if c == nil || c.db == nil {
+		return false, fmt.Errorf("verify group %d: compiler or db is nil", groupID)
+	}
+	var id int
+	if err := c.db.QueryRowContext(ctx, "SELECT id FROM groups WHERE id = ? AND is_pending_delete = 0", groupID).Scan(&id); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, fmt.Errorf("verify group %d: %w", groupID, err)
+	}
+	return true, nil
+}
+
+// queryPeerIDs runs a peer-ID SELECT and returns the scanned IDs. It
+// centralizes the Query/scan/rows.Err/Close handling (defer Close) so the
+// group-member and all-peers lookups share one implementation instead of
+// hand-rolling cursors.
+//
+// Row-scan contract (unified with store.queryRows): fail-fast. A single
+// corrupt row aborts the whole lookup with an error instead of being
+// skipped, so one bad row can never silently drop peers from fan-out
+// resolution and lose the DB pending signal.
+func (c *Compiler) queryPeerIDs(ctx context.Context, errLabel string, query string, args ...any) ([]int, error) {
+	if c == nil || c.db == nil {
+		return nil, fmt.Errorf("%s: compiler or db is nil", errLabel)
+	}
+	rows, err := c.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", errLabel, err)
+	}
+	defer func() {
+		if err := rows.Close(); err != nil {
+			log.WarnContext(ctx, "failed to close rows", "error", err)
+		}
+	}()
+	var ids []int
+	for rows.Next() {
+		var id int
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("%s: scan peer id: %w", errLabel, err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("%s: %w", errLabel, err)
+	}
+	return ids, nil
+}
+
+// groupMemberPeers returns the IDs of peers that are members of the given
+// non-deleted group. It is the single shared helper for the source-group and
+// target-group member lookups in GetAffectedPeersByPolicy so the SELECT,
+// scan, and rows.Err/Close handling live in exactly one place.
+func (c *Compiler) groupMemberPeers(ctx context.Context, groupID int) ([]int, error) {
+	if c == nil || c.db == nil {
+		return nil, fmt.Errorf("query group %d members: compiler or db is nil", groupID)
+	}
+	// JOIN peers so orphan group_members rows for deleted peers never yield
+	// dead IDs that would fail the downstream INSERT pending_changes FK
+	// after the handler already reported success. Direct peer refs are
+	// verified via peerExists; expanded members are verified here.
+	peers, err := c.queryPeerIDs(ctx, fmt.Sprintf("query group %d members", groupID), `
+		SELECT DISTINCT gm.peer_id
+		FROM group_members gm
+		JOIN groups g ON gm.group_id = g.id
+		JOIN peers p ON p.id = gm.peer_id
+		WHERE gm.group_id = ? AND g.is_pending_delete = 0
+	`, groupID)
+	if err != nil {
+		return nil, err
+	}
+	return peers, nil
 }
 
 // GetAffectedPeersByPolicy returns peer IDs affected by a policy. It finds any peer present in either the source or target of the policy.
+//
+// Documented architecture decision: this function is intentionally a
+// conservative superset of loadApplicablePolicies, not an exact mirror.
+// Over-marking (an extra pending signal) is safe; under-marking would lose
+// the DB pending signal. The compiler remains the source of truth for rule
+// applicability; this function only determines which peers need a pending
+// signal. The two intentional divergences are:
+//   - enabled flag: ignored here even though loadApplicablePolicies filters
+//     on enabled=1. Disabling a policy is itself a change that must fan out
+//     to the previously-affected peers, and the post-update resolution for a
+//     disable would find zero peers if it mirrored the enabled filter.
+//   - specials: conservative over-mark relative to loadApplicablePolicies
+//     (see below).
 func (c *Compiler) GetAffectedPeersByPolicy(ctx context.Context, policyID int) ([]int, error) {
+	if c == nil || c.db == nil {
+		return nil, fmt.Errorf("get affected peers for policy %d: compiler or db is nil", policyID)
+	}
 	var srcType, tgtType string
 	var srcID, tgtID int
 	if err := c.db.QueryRowContext(ctx, "SELECT source_type, source_id, target_type, target_id FROM policies WHERE id = ? AND is_pending_delete = 0", policyID).Scan(&srcType, &srcID, &tgtType, &tgtID); err != nil {
 		return nil, fmt.Errorf("get policy abstract: %w", err)
 	}
 
-	peers := make(map[int]bool)
+	// Peer dedup uses the shared common.MergePeerIDs helper (leaf
+	// internal/common, no cycle) so the engine and the change worker share
+	// one map-dedup+sort implementation.
+	var idSlices [][]int
 
 	// Process source - handle peer, group, and special types
 	// Note: Even if source is special, we still check target for peer/group
 	switch srcType {
 	case "peer":
-		peers[srcID] = true
-	case "group":
-		rows, err := c.db.QueryContext(ctx, `
-			SELECT DISTINCT gm.peer_id
-			FROM group_members gm
-			JOIN groups g ON gm.group_id = g.id
-			WHERE gm.group_id = ? AND g.is_pending_delete = 0
-		`, srcID)
+		// Verify the peer exists synchronously. Blindly marking a
+		// deleted/invalid peer would return success here and fail later on
+		// the async INSERT FK, after the handler already responded.
+		exists, err := c.peerExists(ctx, srcID)
 		if err != nil {
-			return nil, fmt.Errorf("query source group members for policy %d: %w", policyID, err)
+			return nil, fmt.Errorf("verify source peer for policy %d: %w", policyID, err)
 		}
-		defer func() {
-			if err := rows.Close(); err != nil {
-				log.Warn("close err", "err", err)
-			}
-		}()
-		for rows.Next() {
-			var p int
-			if err := rows.Scan(&p); err != nil {
-				log.WarnContext(ctx, "Failed to scan peer from group", "error", err)
-				continue
-			}
-			peers[p] = true
+		if !exists {
+			return nil, fmt.Errorf("source peer %d for policy %d: %w", srcID, policyID, sql.ErrNoRows)
 		}
-		if err := rows.Err(); err != nil {
-			log.ErrorContext(ctx, "rows iteration error in GetAffectedPeersByPolicy (source group)", "policy_id", policyID, "error", err)
+		idSlices = append(idSlices, []int{srcID})
+	case "group":
+		// Verify the group exists synchronously, mirroring the peer path.
+		// A missing or soft-deleted group must surface sql.ErrNoRows
+		// instead of succeeding with zero fan-out.
+		exists, err := c.groupExists(ctx, srcID)
+		if err != nil {
+			return nil, fmt.Errorf("verify source group for policy %d: %w", policyID, err)
 		}
+		if !exists {
+			return nil, fmt.Errorf("source group %d for policy %d: %w", srcID, policyID, sql.ErrNoRows)
+		}
+		members, err := c.groupMemberPeers(ctx, srcID)
+		if err != nil {
+			return nil, fmt.Errorf("source group members for policy %d: %w", policyID, err)
+		}
+		idSlices = append(idSlices, members)
 	}
 
 	// Process target - handle peer, group, and special types
 	// Note: Even if target is special, we still check source for peer/group
 	switch tgtType {
 	case "peer":
-		peers[tgtID] = true
-	case "group":
-		rows, err := c.db.QueryContext(ctx, `
-			SELECT DISTINCT gm.peer_id
-			FROM group_members gm
-			JOIN groups g ON gm.group_id = g.id
-			WHERE gm.group_id = ? AND g.is_pending_delete = 0
-		`, tgtID)
+		// Verify the peer exists synchronously (see the source case above:
+		// an unverified ID fails the async INSERT FK after success).
+		exists, err := c.peerExists(ctx, tgtID)
 		if err != nil {
-			return nil, fmt.Errorf("query target group members for policy %d: %w", policyID, err)
+			return nil, fmt.Errorf("verify target peer for policy %d: %w", policyID, err)
 		}
-		defer func() {
-			if err := rows.Close(); err != nil {
-				log.Warn("close err", "err", err)
-			}
-		}()
-		for rows.Next() {
-			var p int
-			if err := rows.Scan(&p); err != nil {
-				log.WarnContext(ctx, "Failed to scan peer from target group", "error", err)
-				continue
-			}
-			peers[p] = true
+		if !exists {
+			return nil, fmt.Errorf("target peer %d for policy %d: %w", tgtID, policyID, sql.ErrNoRows)
 		}
-		if err := rows.Err(); err != nil {
-			log.ErrorContext(ctx, "rows iteration error in GetAffectedPeersByPolicy (target group)", "policy_id", policyID, "error", err)
+		idSlices = append(idSlices, []int{tgtID})
+	case "group":
+		// Verify the group exists synchronously (see the source case above:
+		// an unverified ID would succeed here with zero fan-out).
+		exists, err := c.groupExists(ctx, tgtID)
+		if err != nil {
+			return nil, fmt.Errorf("verify target group for policy %d: %w", policyID, err)
 		}
+		if !exists {
+			return nil, fmt.Errorf("target group %d for policy %d: %w", tgtID, policyID, sql.ErrNoRows)
+		}
+		members, err := c.groupMemberPeers(ctx, tgtID)
+		if err != nil {
+			return nil, fmt.Errorf("target group members for policy %d: %w", policyID, err)
+		}
+		idSlices = append(idSlices, members)
 	}
 
-	var peerList []int
-	for id := range peers {
-		peerList = append(peerList, id)
+	// Special-target handling is intentionally conservative (over-marks) relative
+	// to loadApplicablePolicies, per the architecture decision documented on
+	// GetAffectedPeersByPolicy (conservative superset, not exact mirror).
+	// That loader excludes source specials
+	// SubnetBroadcast, LimitedBroadcast, AllHosts, mDNS, IGMPv3 from
+	// source-side applicability only (IsSource=0 via NOT IN), while the same
+	// peer still matches as a target (IsTarget=1) and still gets ingress rules
+	// via the broadcast/multicast paths in writeTargetSection. Fanning out to
+	// the opposite-side group/peer members is therefore required even for
+	// those excluded source specials (e.g. source __subnet_broadcast__ with a
+	// group target must still signal the group members). Over-marking is safe
+	// (an extra pending signal); under-marking would lose the DB pending
+	// signal. This documents the conservative choice instead of claiming an
+	// exact mirror.
+	// - SpecialIDAllPeers on either side fans out to all non-deleted peers.
+	//   Peers have no soft-delete flag, so every row in peers is non-deleted;
+	//   this mirrors Resolver.ResolveSpecialTarget for __all_peers__ which
+	//   selects all peer IPs without filtering.
+	// - SpecialIDAnyIP / SpecialIDInternet as source affect only the opposite
+	//   side peer(s) (no fan-out here; the opposite side was already added).
+	// - Other specials as target with group/peer source affect the source
+	//   side (already covered above).
+	if (srcType == "special" && srcID == resolve.SpecialIDAllPeers) ||
+		(tgtType == "special" && tgtID == resolve.SpecialIDAllPeers) {
+		// ORDER BY id keeps the fan-out deterministic before the final
+		// sort; every row in peers (including manual peers, which have no
+		// soft-delete flag) is intentionally included, mirroring
+		// Resolver.ResolveSpecialTarget for __all_peers__.
+		allPeers, err := c.queryPeerIDs(ctx, fmt.Sprintf("query all peers for policy %d", policyID), `SELECT id FROM peers ORDER BY id`)
+		if err != nil {
+			return nil, fmt.Errorf("query all peers for policy %d: %w", policyID, err)
+		}
+		idSlices = append(idSlices, allPeers)
 	}
-	return peerList, nil
+
+	return common.MergePeerIDs(idSlices...), nil
 }
 
 // GetAffectedPeersByPolicies returns a map of policyID -> affected peer IDs for
 // each input policy. It is a thin batched wrapper over GetAffectedPeersByPolicy.
 //
-// NOTE: this is a stopgap. It still issues one SQL query per policy, so the
-// caller does N queries (one per policy) followed by a merge step. The
-// duplication vs. the per-policy call is zero in number of queries, but the
-// benefit is centralized error handling and a single returned shape, which
-// makes it easier to swap in a single batched SQL query later without
-// touching every call site. Once the engine grows a real
-// "find affected peers for these policies" query (one query with
-// "policies.id IN (...)"), update the body to use it.
+// TODO(engine-batched-fanout): this still issues one SQL query set per policy
+// (N+1: one GetAffectedPeersByPolicy per policy ID), so a group touching P
+// policies costs P sequential policy resolutions plus the merge step.
+// The wrapper centralizes error handling and the return shape so call sites
+// stay stable, but the real fix is a single batched query with
+// "WHERE policies.id IN (...)" that loads all policy rows at once and then
+// resolves group members / peer targets in bulk. Benchmark before/after with
+// a group fanning out to 50+ policies (measure wall time and query count via
+// test DB query logging); the batched form should issue O(1) policy-row
+// queries instead of O(P).
+//
+// Error semantics are per-policy continue: one bad policy does not drop the
+// peers of the other policies. Successfully resolved policies are returned
+// in the map alongside an aggregated error (via errors.Join) covering the
+// failed policies. Callers must merge the partial map even when err != nil.
 func (c *Compiler) GetAffectedPeersByPolicies(ctx context.Context, policyIDs []int) (map[int][]int, error) {
-	result := make(map[int][]int, len(policyIDs))
+	// Dedup inputs so duplicate policy IDs do not cause duplicate SQL
+	// queries (mirrors RecompilePeersForGroup's policySeen dedup).
+	seen := make(map[int]struct{}, len(policyIDs))
+	uniqueIDs := make([]int, 0, len(policyIDs))
 	for _, pid := range policyIDs {
+		if _, ok := seen[pid]; !ok {
+			seen[pid] = struct{}{}
+			uniqueIDs = append(uniqueIDs, pid)
+		}
+	}
+	result := make(map[int][]int, len(uniqueIDs))
+	var errs []error
+	for _, pid := range uniqueIDs {
 		peers, err := c.GetAffectedPeersByPolicy(ctx, pid)
 		if err != nil {
-			return nil, err
+			errs = append(errs, fmt.Errorf("policy %d: %w", pid, err))
+			continue
 		}
 		result[pid] = peers
 	}
-	return result, nil
+	return result, errors.Join(errs...)
 }
 
 // invertPortMatch swaps destination port flags with source port flags.

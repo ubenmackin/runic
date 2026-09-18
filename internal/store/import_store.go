@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"strings"
 
-	apicommon "runic/internal/api/common"
+	"runic/internal/change"
 	"runic/internal/common"
 	"runic/internal/db"
 	"runic/internal/importer"
@@ -513,7 +513,7 @@ func (s *ImportStore) CountApprovedRules(ctx context.Context, sessionID int64) (
 func (s *ImportStore) SubmitBackupSession(ctx context.Context, peerID int64, iptablesBackup, ipsetList string) (int64, error) {
 	var sessionID int64
 
-	err := RunInTx(ctx, s.db, func(tx *sql.Tx) error {
+	err := db.RunInTx(ctx, s.db, func(ctx context.Context, tx *sql.Tx) error {
 		var existingID int64
 		var existingStatus string
 		err := tx.QueryRowContext(ctx, "SELECT id, status FROM import_sessions WHERE peer_id = ? AND status IN ('pending','parsed','reviewing')", peerID).Scan(&existingID, &existingStatus)
@@ -604,7 +604,7 @@ func (s *ImportStore) UpdateSessionStatus(ctx context.Context, sessionID int64, 
 }
 
 // ApplySession applies the import session, creating peers, groups, services, and policies.
-func (s *ImportStore) ApplySession(ctx context.Context, sessionID int64, changeWorker *apicommon.ChangeWorker) (*importer.ApplyResult, error) {
+func (s *ImportStore) ApplySession(ctx context.Context, sessionID int64, changeWorker *change.ChangeWorker) (*importer.ApplyResult, error) {
 	result, err := importer.ApplySession(ctx, s.db, sessionID, changeWorker)
 	if err != nil {
 		return nil, fmt.Errorf("apply session: %w", err)

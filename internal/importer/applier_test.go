@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"runic/internal/api/common"
+	"runic/internal/change"
 	"runic/internal/db"
 	"runic/internal/testutil"
 
@@ -93,8 +93,14 @@ func TestApplySession_CreatesSnapshots(t *testing.T) {
 
 	sessionID, _, _, _, _ := setupImportSession(t, database)
 
+	// Stopped worker => synchronous fallback: queue calls persist
+	// pending_changes rows inline before ApplySession returns (no async
+	// race, no sleep). Fail-closed production logic requires non-nil worker.
+	changeWorker := change.NewChangeWorker(nil, database)
+	changeWorker.Stop()
+
 	ctx := context.Background()
-	result, err := ApplySession(ctx, database, sessionID, nil)
+	result, err := ApplySession(ctx, database, sessionID, changeWorker)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -140,7 +146,7 @@ func TestApplySession_PendingChangesWithRealEntityIDs(t *testing.T) {
 	sessionID, _, _, _, _ := setupImportSession(t, database)
 
 	// Create and start a real ChangeWorker
-	changeWorker := common.NewChangeWorker(nil, database)
+	changeWorker := change.NewChangeWorker(nil, database)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	changeWorker.Start(ctx)
@@ -161,17 +167,26 @@ func TestApplySession_PendingChangesWithRealEntityIDs(t *testing.T) {
 	defer rows.Close()
 
 	var count int
+	peerSet := make(map[int]struct{})
 	for rows.Next() {
 		var peerID, changeID int
 		var changeType, changeAction string
 		require.NoError(t, rows.Scan(&peerID, &changeType, &changeID, &changeAction))
 		count++
+		peerSet[peerID] = struct{}{}
 
 		// Verify the change_id is a real entity ID (not 0)
 		assert.NotZero(t, changeID, "change_id should be a real entity ID, not 0 (type=%s)", changeType)
 		assert.Equal(t, "create", changeAction, "change_action should be 'create'")
 	}
-	assert.Equal(t, 4, count, "should have 4 pending changes (peer, group, service, policy)")
+	// Multi-peer fan-out: each created entity fans out to its affected peers
+	// plus the importing peer as a conservative superset (see ApplySession).
+	// The fixture creates 1 peer, 1 group, 1 service, and 1 policy referencing
+	// the new peer/group, so every entity resolves to the new peer plus the
+	// importing peer: 4 entities × 2 peers = 8 rows. Both peers must appear;
+	// queuing only the session peer would under-mark the new peer.
+	assert.Equal(t, 8, count, "should have 8 pending changes (4 entities × importing peer + new peer)")
+	assert.Equal(t, 2, len(peerSet), "pending changes must fan out to both the importing peer and the new peer")
 }
 
 func TestApplySession_PeerIPsCreated(t *testing.T) {
@@ -181,8 +196,14 @@ func TestApplySession_PeerIPsCreated(t *testing.T) {
 
 	sessionID, _, _, _, _ := setupImportSession(t, database)
 
+	// Stopped worker => synchronous fallback: queue calls persist
+	// pending_changes rows inline before ApplySession returns (no async
+	// race, no sleep). Fail-closed production logic requires non-nil worker.
+	changeWorker := change.NewChangeWorker(nil, database)
+	changeWorker.Stop()
+
 	ctx := context.Background()
-	result, err := ApplySession(ctx, database, sessionID, nil)
+	result, err := ApplySession(ctx, database, sessionID, changeWorker)
 	require.NoError(t, err)
 	assert.Equal(t, 1, result.PeersCreated, "should create 1 peer")
 
@@ -215,8 +236,14 @@ func TestApplySession_RollbackDeletesImportedEntities(t *testing.T) {
 
 	sessionID, _, _, _, _ := setupImportSession(t, database)
 
+	// Stopped worker => synchronous fallback: queue calls persist
+	// pending_changes rows inline before ApplySession returns (no async
+	// race, no sleep). Fail-closed production logic requires non-nil worker.
+	changeWorker := change.NewChangeWorker(nil, database)
+	changeWorker.Stop()
+
 	ctx := context.Background()
-	result, err := ApplySession(ctx, database, sessionID, nil)
+	result, err := ApplySession(ctx, database, sessionID, changeWorker)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -271,7 +298,7 @@ func TestApplySession_RollbackEntitySnapshotForPolicy(t *testing.T) {
 	sessionID, importingPeerID, _, _, _ := setupImportSession(t, database)
 
 	// Use a real ChangeWorker so pending_changes are created
-	changeWorker := common.NewChangeWorker(nil, database)
+	changeWorker := change.NewChangeWorker(nil, database)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	changeWorker.Start(ctx)
@@ -291,13 +318,14 @@ func TestApplySession_RollbackEntitySnapshotForPolicy(t *testing.T) {
 		"SELECT id FROM policies WHERE name = 'test-policy'").Scan(&policyID)
 	require.NoError(t, err, "imported policy should exist")
 
-	// Verify the policy's pending change exists
+	// Verify the policy's pending change exists (multi-peer fan-out: one row
+	// per affected peer, so the importing peer plus the new peer = 2 rows).
 	var pendingCount int
 	err = database.QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM pending_changes WHERE change_type = 'policy' AND change_id = ?",
 		policyID).Scan(&pendingCount)
 	require.NoError(t, err)
-	assert.Equal(t, 1, pendingCount, "pending change for the policy should exist")
+	assert.Equal(t, 2, pendingCount, "pending changes for the policy should fan out to both peers")
 
 	// Verify the policy's snapshot exists
 	var snapshotCount int

@@ -163,7 +163,7 @@ func filterValidIPs(ips []string) []string {
 	valid := make([]string, 0, len(ips))
 	for _, ip := range ips {
 		if common.ValidatePlainIP(ip) != nil {
-			runiclog.Warn("Skipping invalid peer IP", "ip", runiccommon.TruncateString(ip, maxLoggedIPLen))
+			runiclog.Warn("skipping invalid peer IP", "ip", runiccommon.TruncateString(ip, maxLoggedIPLen))
 			continue
 		}
 		valid = append(valid, ip)
@@ -218,14 +218,14 @@ func (h *Handler) AgentAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		}
 
 		if h.DashboardStore == nil {
-			runiclog.Error("JWT secret store unavailable")
+			runiclog.Error("jwt secret store unavailable")
 			common.InternalError(w)
 			return
 		}
 
 		secretStr, err := h.DashboardStore.GetSecret(r.Context(), "agent_jwt_secret")
 		if err != nil {
-			runiclog.Error("JWT secret not configured", "error", err)
+			runiclog.Error("jwt secret not configured", "error", err)
 			common.InternalError(w)
 			return
 		}
@@ -331,7 +331,7 @@ func (h *Handler) registerNewPeer(ctx context.Context, input *models.AgentRegist
 	if len(input.AllIPs) > 0 {
 		if validIPs := filterValidIPs(input.AllIPs); len(validIPs) > 0 {
 			if err := h.PeerStore.UpsertPeerIPs(ctx, int(peerID), validIPs, input.IP); err != nil {
-				runiclog.Warn("Failed to upsert peer IPs during registration", "error", err, "peer_id", peerID)
+				runiclog.Warn("failed to upsert peer IPs during registration", "error", err, "peer_id", peerID)
 			}
 		}
 	}
@@ -574,7 +574,7 @@ func (h *Handler) reRegisterExistingPeer(ctx context.Context, input *models.Agen
 	if len(input.AllIPs) > 0 {
 		if validIPs := filterValidIPs(input.AllIPs); len(validIPs) > 0 {
 			if err := h.PeerStore.UpsertPeerIPs(ctx, existingID, validIPs, input.IP); err != nil {
-				runiclog.Warn("Failed to upsert peer IPs during re-registration", "error", err, "peer_id", existingID)
+				runiclog.Warn("failed to upsert peer IPs during re-registration", "error", err, "peer_id", existingID)
 			}
 		}
 	}
@@ -638,7 +638,7 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 				common.RespondError(w, httpErr.StatusCode, httpErr.Message)
 				return
 			}
-			runiclog.Error("Failed to register new peer", "error", err)
+			runiclog.Error("failed to register new peer", "error", err)
 			common.InternalError(w)
 			return
 		}
@@ -674,7 +674,7 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	} else if err != nil {
-		runiclog.Error("Database error checking hostname error", "error", err)
+		runiclog.Error("database error checking hostname error", "error", err)
 		common.InternalError(w)
 		return
 	}
@@ -688,7 +688,7 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 	// use the authenticated rotation flow instead.
 	authorized, method, err := h.authorizeReRegistration(ctx, r, &input, existingID, input.Hostname)
 	if err != nil {
-		runiclog.Error("Failed to authorize re-registration", "error", err)
+		runiclog.Error("failed to authorize re-registration", "error", err)
 		common.InternalError(w)
 		return
 	}
@@ -704,7 +704,7 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	runiclog.Info("Agent re-registration authorized", "hostname", input.Hostname, "peer_id", existingID, "method", method)
+	runiclog.Info("agent re-registration authorized", "hostname", input.Hostname, "peer_id", existingID, "method", method)
 
 	// Atomically claim the single-use registration token before the
 	// re-registration update so two concurrent requests with the same token
@@ -727,7 +727,7 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 		}
 		consumed, err := h.ConsumeRegistrationToken(ctx, input.RegistrationToken, input.Hostname)
 		if err != nil {
-			runiclog.Error("Failed to consume registration token before re-registration", "error", err, "peer_id", existingID)
+			runiclog.Error("failed to consume registration token before re-registration", "error", err, "peer_id", existingID)
 			common.InternalError(w)
 			return
 		}
@@ -745,7 +745,7 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 			common.RespondError(w, httpErr.StatusCode, httpErr.Message)
 			return
 		}
-		runiclog.Error("Failed to re-register existing peer", "error", err)
+		runiclog.Error("failed to re-register existing peer", "error", err)
 		common.InternalError(w)
 		return
 	}
@@ -764,7 +764,7 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 	// disclosure and HMAC rotation can fall back to agent_key afterwards.
 	if method == "hmac_proof" || method == "registration_token" {
 		if peer, lookupErr := h.PeerStore.GetPeerByID(ctx, existingID); lookupErr != nil {
-			runiclog.Error("Failed to lookup stored agent key for re-registration bootstrap", "error", lookupErr, "peer_id", existingID)
+			runiclog.Error("failed to lookup stored agent key for re-registration bootstrap", "error", lookupErr, "peer_id", existingID)
 		} else if peer.AgentKey != "" {
 			resp["agent_key"] = peer.AgentKey
 		}
@@ -787,7 +787,7 @@ func (h *Handler) GetBundle(w http.ResponseWriter, r *http.Request) {
 		common.RespondError(w, http.StatusNotFound, "no bundle found")
 		return
 	} else if err != nil {
-		runiclog.Error("Failed to fetch bundle error", "error", err)
+		runiclog.Error("failed to fetch bundle error", "error", err)
 		common.InternalError(w)
 		return
 	}
@@ -864,7 +864,7 @@ func (h *Handler) Heartbeat(w http.ResponseWriter, r *http.Request) {
 	var heartbeatErr error
 	if hostname, ver, known, err := h.PeerStore.UpdatePeerHeartbeatWithPrev(ctx, serverID, input.AgentVersion, input.BundleVersionApplied, input.HasIPSet); err != nil {
 		heartbeatErr = err
-		runiclog.Error("Failed to update heartbeat error", "error", heartbeatErr)
+		runiclog.Error("failed to update heartbeat error", "error", heartbeatErr)
 	} else {
 		prevHostname = hostname
 		if ver.Valid {
@@ -880,18 +880,18 @@ func (h *Handler) Heartbeat(w http.ResponseWriter, r *http.Request) {
 	// firewall traffic only (IN/OUT); Runic activity lives in alert_history,
 	// so version changes are logged only and never written to firewall_logs.
 	if prevKnown && heartbeatErr == nil && input.AgentVersion != "" && input.AgentVersion != prevVersion {
-		runiclog.Info("Heartbeat: agent version change recorded", "peer_id", serverID, "hostname", prevHostname, "previous_version", prevVersion, "agent_version", input.AgentVersion)
+		runiclog.Info("heartbeat: agent version change recorded", "peer_id", serverID, "hostname", prevHostname, "previous_version", prevVersion, "agent_version", input.AgentVersion)
 	}
 
 	if lastUpdateErr != "" {
-		runiclog.Warn("Heartbeat: agent reported last update error", "peer_id", serverID, "hostname", prevHostname, "error", lastUpdateErr)
+		runiclog.Warn("heartbeat: agent reported last update error", "peer_id", serverID, "hostname", prevHostname, "error", lastUpdateErr)
 	}
 
 	if len(input.AllIPs) > 0 {
 		if validIPs := filterValidIPs(input.AllIPs); len(validIPs) > 0 {
 			if primaryIP, err := h.PeerStore.GetPeerPrimaryIP(ctx, serverID); err == nil {
 				if _, err := h.PeerStore.SyncPeerIPs(ctx, serverID, validIPs, primaryIP); err != nil {
-					runiclog.Warn("Failed to sync peer IPs during heartbeat", "error", err, "peer_id", serverID)
+					runiclog.Warn("failed to sync peer IPs during heartbeat", "error", err, "peer_id", serverID)
 				}
 			}
 		}
@@ -936,7 +936,7 @@ func (h *Handler) SubmitLogs(w http.ResponseWriter, r *http.Request) {
 
 	peerHostname, err := h.PeerStore.GetPeerHostname(ctx, serverID)
 	if err != nil {
-		runiclog.Error("Failed to lookup peer hostname", "error", err, "peer_id", serverID)
+		runiclog.Error("failed to lookup peer hostname", "error", err, "peer_id", serverID)
 		// Continue with empty hostname - better to insert logs than fail completely
 		peerHostname = ""
 	}
@@ -947,7 +947,7 @@ func (h *Handler) SubmitLogs(w http.ResponseWriter, r *http.Request) {
 	for i := range input.Events {
 		ev := &input.Events[i]
 		if valid, reason := ev.Validate(); !valid {
-			runiclog.Warn("Skipping invalid log event", "reason", runiccommon.TruncateString(reason, maxLoggedReasonLen))
+			runiclog.Warn("skipping invalid log event", "reason", runiccommon.TruncateString(reason, maxLoggedReasonLen))
 			skipped++
 			continue
 		}
@@ -967,7 +967,7 @@ func (h *Handler) SubmitLogs(w http.ResponseWriter, r *http.Request) {
 			RawLine:      ev.RawLine,
 		})
 		if err != nil {
-			runiclog.Error("Failed to insert log event", "error", err)
+			runiclog.Error("failed to insert log event", "error", err)
 			skipped++
 			continue
 		}
@@ -1031,7 +1031,7 @@ func (h *Handler) ConfirmBundleApplied(w http.ResponseWriter, r *http.Request) {
 	// Wrap both DB calls in a transaction to prevent partial state on crash
 	ctx, cancel := runiccommon.WithHandlerTimeout(r.Context())
 	defer cancel()
-	err := store.RunInTx(ctx, h.beginner, func(tx *sql.Tx) error {
+	err := db.RunInTx(ctx, h.beginner, func(ctx context.Context, tx *sql.Tx) error {
 		if err := h.PeerStore.UpdateBundleAppliedAtTx(ctx, tx, serverID, input.Version, appliedAt); err != nil {
 			return fmt.Errorf("update bundle applied_at: %w", err)
 		}
@@ -1041,7 +1041,7 @@ func (h *Handler) ConfirmBundleApplied(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 	if err != nil {
-		runiclog.Error("Failed to confirm bundle apply in transaction", "error", err)
+		runiclog.Error("failed to confirm bundle apply in transaction", "error", err)
 		common.InternalError(w)
 		return
 	}
@@ -1054,7 +1054,7 @@ func (h *Handler) MakeHandleSSEventsHandler(hub SSEBroadcaster) http.HandlerFunc
 	return func(w http.ResponseWriter, r *http.Request) {
 		hostID, _, ok := h.getHostIDFromContext(w, r)
 		if !ok {
-			runiclog.Error("MakeHandleSSEventsHandler: failed to get host_id from context")
+			runiclog.Error("makeHandleSSEventsHandler: failed to get host_id from context")
 			return
 		}
 
@@ -1121,7 +1121,7 @@ func (h *Handler) AgentCheckRotation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		runiclog.Error("Failed to check rotation token error", "error", err)
+		runiclog.Error("failed to check rotation token error", "error", err)
 		common.RespondError(w, http.StatusInternalServerError, "database error")
 		return
 	}
@@ -1179,7 +1179,7 @@ func (h *Handler) SubmitBackup(w http.ResponseWriter, r *http.Request) {
 	// This runs outside the transaction to avoid holding locks during parsing.
 	if err := h.DashboardStore.ParseBackupSession(ctx, sessionID); err != nil {
 		// Log the error but still return 200 — the data is saved, user can retry parse
-		runiclog.Warn("ParseSession failed after backup submit", "error", err, "session_id", sessionID, "peer_id", serverID)
+		runiclog.Warn("parseSession failed after backup submit", "error", err, "session_id", sessionID, "peer_id", serverID)
 	}
 
 	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -1216,7 +1216,7 @@ func (h *Handler) AgentTestKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		runiclog.Error("Failed to get HMAC key error", "error", err)
+		runiclog.Error("failed to get HMAC key error", "error", err)
 		common.RespondError(w, http.StatusInternalServerError, "database error")
 		return
 	}

@@ -2,6 +2,7 @@
 package metrics
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
@@ -126,8 +127,9 @@ func NewMetrics(registerer prometheus.Registerer) *Metrics {
 		m.runicActiveConnections,
 	} {
 		if err := registerer.Register(c); err != nil {
-			if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
-				log.Warn("Failed to register metric", "error", err)
+			var already prometheus.AlreadyRegisteredError
+			if !errors.As(err, &already) {
+				log.Warn("failed to register metric", "error", err)
 			}
 		}
 	}

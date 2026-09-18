@@ -9,8 +9,9 @@ import (
 	"strconv"
 	"strings"
 
-	"runic/internal/api/common"
+	"runic/internal/change"
 	ic "runic/internal/common"
+	"runic/internal/common/log"
 	"runic/internal/db"
 	"runic/internal/models"
 )
@@ -20,6 +21,7 @@ const serviceRowColumns = `id, name, ports, COALESCE(source_ports, ''), protocol
 var ErrServiceNotFound = errors.New("service not found")
 
 type ServiceStore struct {
+	PeerChangeSupport
 	db db.DB
 }
 
@@ -47,15 +49,23 @@ func (s *ServiceStore) GetService(ctx context.Context, serviceID int) (models.Se
 
 // CheckDeleteConstraints checks whether a service can be safely deleted.
 // It checks if the service is used in any policy (as service_id).
-// Returns a *common.DeleteConstraintError with the full list of policies using the service.
+// Returns a *change.DeleteConstraintError with the full list of policies using the service.
 func (s *ServiceStore) CheckDeleteConstraints(ctx context.Context, serviceID int) error {
+	return s.CheckDeleteConstraintsTx(ctx, s.db, serviceID)
+}
+
+// CheckDeleteConstraintsTx is the transactional variant of
+// CheckDeleteConstraints. Delete handlers re-check constraints inside the
+// snapshot+delete transaction so a policy created between the pre-check and
+// the commit cannot leave a constrained service soft-deleted.
+func (s *ServiceStore) CheckDeleteConstraintsTx(ctx context.Context, q db.Querier, serviceID int) error {
 	// Query ALL policies that use the service
-	policies, err := queryRows(ctx, s.db,
-		`SELECT id, name FROM policies WHERE service_id = ? AND is_pending_delete = 0`,
-		[]interface{}{serviceID},
+	policies, err := queryRows(ctx, q,
+		`SELECT id, name FROM policies WHERE service_id = ? AND is_pending_delete = 0 ORDER BY id ASC`,
+		[]any{serviceID},
 		"policy usage",
-		func(rows *sql.Rows) (common.PolicyRef, error) {
-			var p common.PolicyRef
+		func(rows *sql.Rows) (change.PolicyRef, error) {
+			var p change.PolicyRef
 			if err := rows.Scan(&p.ID, &p.Name); err != nil {
 				return p, err
 			}
@@ -67,7 +77,7 @@ func (s *ServiceStore) CheckDeleteConstraints(ctx context.Context, serviceID int
 	}
 
 	if len(policies) > 0 {
-		return &common.DeleteConstraintError{
+		return &change.DeleteConstraintError{
 			Message:  "Cannot delete service: it is in use by policies",
 			Policies: policies,
 		}
@@ -76,21 +86,17 @@ func (s *ServiceStore) CheckDeleteConstraints(ctx context.Context, serviceID int
 	return nil
 }
 
-// QueuePeerChange enqueues a peer change notification for the given peer IDs.
-func (s *ServiceStore) QueuePeerChange(ctx context.Context, changeWorker *common.ChangeWorker, peerIDs []int, changeType, changeAction string, changeID int, summary string) {
-	if changeWorker == nil || len(peerIDs) == 0 {
-		return
-	}
-	changeWorker.QueuePeerChange(ctx, peerIDs, changeType, changeAction, changeID, summary)
-}
-
 func (s *ServiceStore) ListServices(ctx context.Context) ([]models.ServiceRow, error) {
 	rows, err := s.db.QueryContext(ctx,
-		"SELECT "+serviceRowColumns+" FROM services WHERE is_pending_delete = 0")
+		"SELECT "+serviceRowColumns+" FROM services WHERE is_pending_delete = 0 ORDER BY name ASC, id ASC")
 	if err != nil {
 		return nil, fmt.Errorf("query services: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() {
+		if cerr := rows.Close(); cerr != nil {
+			log.WarnContext(ctx, "failed to close rows", "error", cerr)
+		}
+	}()
 
 	var services []models.ServiceRow
 	for rows.Next() {
@@ -175,22 +181,15 @@ func validatePortList(portList string) error {
 func (s *ServiceStore) UpdateService(ctx context.Context, id int, name, ports, sourcePorts, protocol, description string, directionHint int) error {
 	return execUpdate(ctx, s.db,
 		`UPDATE services SET name = ?, ports = ?, source_ports = ?, protocol = ?, description = ?, direction_hint = ?
-		WHERE id = ?`, ErrServiceNotFound, name, ports, sourcePorts, protocol, description, directionHint, id)
+		WHERE id = ? AND is_pending_delete = 0`, ErrServiceNotFound, name, ports, sourcePorts, protocol, description, directionHint, id)
 }
 
 func (s *ServiceStore) SoftDeleteService(ctx context.Context, id int) error {
-	res, err := s.db.ExecContext(ctx, "UPDATE services SET is_pending_delete = 1 WHERE id = ?", id)
-	if err != nil {
-		return fmt.Errorf("soft delete service: %w", err)
-	}
-	affected, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if affected == 0 {
-		return ErrServiceNotFound
-	}
-	return nil
+	return softDelete(ctx, s.db, "services", id, ErrServiceNotFound)
+}
+
+func (s *ServiceStore) SoftDeleteServiceTx(ctx context.Context, tx *sql.Tx, id int) error {
+	return softDelete(ctx, tx, "services", id, ErrServiceNotFound)
 }
 
 func (s *ServiceStore) GetServiceByPort(ctx context.Context, port, protocol string) ([]models.ServiceRow, error) {
@@ -241,6 +240,11 @@ func (s *ServiceStore) SnapshotService(ctx context.Context, serviceID int, actio
 
 	svc, err := db.GetService(ctx, s.db, serviceID)
 	if err != nil {
+		// Normalize a concurrent delete (TOCTOU) to the sentinel so
+		// handlers map it to 404 instead of 500 via sql.ErrNoRows.
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrServiceNotFound
+		}
 		return fmt.Errorf("get service: %w", err)
 	}
 
@@ -260,6 +264,11 @@ func (s *ServiceStore) SnapshotServiceTx(ctx context.Context, tx *sql.Tx, servic
 
 	svc, err := db.GetService(ctx, tx, serviceID)
 	if err != nil {
+		// Normalize a concurrent delete (TOCTOU) to the sentinel so
+		// handlers map it to 404 instead of 500 via sql.ErrNoRows.
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrServiceNotFound
+		}
 		return fmt.Errorf("get service: %w", err)
 	}
 
@@ -275,29 +284,17 @@ func (s *ServiceStore) SnapshotServiceTx(ctx context.Context, tx *sql.Tx, servic
 func (s *ServiceStore) UpdateServiceTx(ctx context.Context, tx *sql.Tx, id int, name, ports, sourcePorts, protocol, description string, directionHint int) error {
 	return execUpdate(ctx, tx,
 		`UPDATE services SET name = ?, ports = ?, source_ports = ?, protocol = ?, description = ?, direction_hint = ?
-		WHERE id = ?`, ErrServiceNotFound, name, ports, sourcePorts, protocol, description, directionHint, id)
+		WHERE id = ? AND is_pending_delete = 0`, ErrServiceNotFound, name, ports, sourcePorts, protocol, description, directionHint, id)
 }
 
 func (s *ServiceStore) FindPoliciesUsingService(ctx context.Context, serviceID int) ([]int, error) {
-	rows, err := s.db.QueryContext(ctx, `
-	SELECT DISTINCT id FROM policies
-	WHERE service_id = ? AND enabled = 1
-	`, serviceID)
+	// Single shared helper for service fan-out (also used by the importer
+	// and the services handler path): the SELECT WHERE service_id=? AND
+	// is_pending_delete=0 predicate lives in db.FindPolicyIDsByService so
+	// the three call sites cannot diverge.
+	ids, err := db.FindPolicyIDsByService(ctx, s.db, serviceID)
 	if err != nil {
-		return nil, fmt.Errorf("query policies for service: %w", err)
+		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-
-	var policyIDs []int
-	for rows.Next() {
-		var policyID int
-		if err := rows.Scan(&policyID); err != nil {
-			return nil, fmt.Errorf("scan policy id: %w", err)
-		}
-		policyIDs = append(policyIDs, policyID)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("rows error: %w", err)
-	}
-	return ic.EnsureSlice(policyIDs), nil
+	return ic.EnsureSlice(ids), nil
 }

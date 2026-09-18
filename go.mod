@@ -15,7 +15,7 @@ require (
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/client_model v0.6.2
 	github.com/stretchr/testify v1.11.1
-	golang.org/x/crypto v0.56.0 // GO-2026-5932: openpgp not imported (bcrypt/hkdf/pbkdf2 only); no fixed version upstream.
+	golang.org/x/crypto v0.56.0 // GO-2026-5932 waiver: golang.org/x/crypto/openpgp (armor, packet, clearsign, elgamal, s2k) is unimported — only bcrypt, hkdf, pbkdf2 are used; advisory affects all versions with no fixed version as of 2026-09-17; monitor upstream and upgrade when a fix is published.
 	golang.org/x/sync v0.20.0
 	golang.org/x/term v0.45.0
 )

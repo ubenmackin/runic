@@ -14,7 +14,7 @@ import (
 	"runic/internal/api/common"
 	"runic/internal/api/middleware"
 	runiccommon "runic/internal/common"
-	"runic/internal/store"
+	"runic/internal/db"
 )
 
 // Rate limiters for rotation endpoints
@@ -141,7 +141,7 @@ func (h *Handler) consumeRotationToken(ctx context.Context, hostname, token stri
 	var peerID64 int64
 	var newHMACKey string
 	var lastRotatedAt sql.NullString
-	err := store.RunInTx(ctx, h.beginner, func(tx *sql.Tx) error {
+	err := db.RunInTx(ctx, h.beginner, func(ctx context.Context, tx *sql.Tx) error {
 		qerr := tx.QueryRowContext(ctx, `			SELECT id, hmac_key, hmac_key_last_rotated_at FROM peers
 			WHERE hostname = ? AND hmac_key_rotation_token = ?
 		`, hostname, token).Scan(&peerID64, &newHMACKey, &lastRotatedAt)

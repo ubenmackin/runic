@@ -23,19 +23,19 @@ func (h *Handler) GenerateRegistrationToken(w http.ResponseWriter, r *http.Reque
 	}
 	// Ignore decode errors — description is optional
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		runiclog.Debug("Failed to decode token description", "error", err)
+		runiclog.Debug("failed to decode token description", "error", err)
 	}
 
 	tokenBytes := make([]byte, 32)
 	if _, err := rand.Read(tokenBytes); err != nil {
-		runiclog.Error("Failed to generate token", "error", err)
+		runiclog.Error("failed to generate token", "error", err)
 		common.RespondError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 	token := hex.EncodeToString(tokenBytes)
 
 	if err := h.DashboardStore.GenerateRegistrationToken(r.Context(), token, input.Description); err != nil {
-		runiclog.Error("Failed to store token", "error", err)
+		runiclog.Error("failed to store token", "error", err)
 		common.RespondError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
@@ -50,7 +50,7 @@ func (h *Handler) GenerateRegistrationToken(w http.ResponseWriter, r *http.Reque
 func (h *Handler) ListRegistrationTokens(w http.ResponseWriter, r *http.Request) {
 	tokens, err := h.DashboardStore.ListRegistrationTokens(r.Context())
 	if err != nil {
-		runiclog.Error("Failed to list tokens", "error", err)
+		runiclog.Error("failed to list tokens", "error", err)
 		common.RespondError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
@@ -69,7 +69,7 @@ func (h *Handler) RevokeRegistrationToken(w http.ResponseWriter, r *http.Request
 
 	revoked, err := h.DashboardStore.RevokeRegistrationToken(r.Context(), id)
 	if err != nil {
-		runiclog.Error("Failed to revoke token", "error", err)
+		runiclog.Error("failed to revoke token", "error", err)
 		common.RespondError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}

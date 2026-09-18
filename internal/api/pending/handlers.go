@@ -1,10 +1,19 @@
 // Package pending provides API pending handlers.
+//
+// Manual-peer pending visibility: pending changes are tracked and surfaced for
+// every affected peer, including manual peers. Policy edits that target manual
+// servers remain visible via ListPendingChanges, GetPeerPendingChanges, and the
+// Peers list pending counts. Push delivery stays agent-only: PushAllRules (via
+// ListAgentBasedPeers) and PushCurrentRules keep the is_manual=0 filter because
+// manual peers have no agent to receive a push.
 package pending
 
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -122,7 +131,16 @@ type pendingChangeDetail struct {
 }
 
 func (h *Handler) ListPendingChanges(w http.ResponseWriter, r *http.Request) {
+	// Includes manual peers by design: GetPeersWithPendingChanges has no
+	// is_manual filter so policy edits targeting manual servers stay visible.
+	// Push paths remain agent-only (see PushAllRules/PushCurrentRules).
 	ctx := r.Context()
+
+	if h.PendingStore == nil || h.PeerStore == nil {
+		log.ErrorContext(ctx, "pending or peer store not available")
+		common.InternalError(w)
+		return
+	}
 
 	peerIDs, err := h.PendingStore.GetPeersWithPendingChanges(ctx)
 	if err != nil {
@@ -140,6 +158,7 @@ func (h *Handler) ListPendingChanges(w http.ResponseWriter, r *http.Request) {
 	for _, peerID := range peerIDs {
 		hostname, ipAddress, err := h.PeerStore.GetPeerWithIP(ctx, peerID)
 		if err != nil {
+			log.WarnContext(ctx, "failed to get peer with IP, skipping peer", "peer_id", peerID, "error", err)
 			continue // skip peers that no longer exist
 		}
 
@@ -212,7 +231,7 @@ func (h *Handler) RollbackPendingChanges(w http.ResponseWriter, r *http.Request)
 		}
 
 		if err := h.PendingStore.DeleteAllPendingBundlePreviews(ctx); err != nil {
-			log.WarnContext(ctx, "Failed to delete old previews", "error", err)
+			log.WarnContext(ctx, "failed to delete old previews", "error", err)
 		}
 
 		common.RespondJSON(w, http.StatusOK, map[string]string{"status": "rolled_back"})
@@ -226,7 +245,7 @@ func (h *Handler) RollbackPendingChanges(w http.ResponseWriter, r *http.Request)
 	}
 
 	if err := h.PendingStore.DeleteAllPendingBundlePreviews(ctx); err != nil {
-		log.WarnContext(ctx, "Failed to delete old previews", "error", err)
+		log.WarnContext(ctx, "failed to delete old previews", "error", err)
 	}
 
 	common.RespondJSON(w, http.StatusOK, map[string]string{"status": "rolled_back"})
@@ -261,7 +280,7 @@ func (h *Handler) GetPeerPendingChanges(w http.ResponseWriter, r *http.Request) 
 
 	details := h.buildPendingChangeDetails(ctx, changes)
 
-	common.RespondJSON(w, http.StatusOK, map[string]interface{}{
+	common.RespondJSON(w, http.StatusOK, map[string]any{
 		"peer_id":    peerID,
 		"hostname":   hostname,
 		"ip_address": ipAddress,
@@ -295,7 +314,12 @@ func (h *Handler) PreviewPeerPendingBundle(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	content, err := h.Compiler.Compile(ctx, peerID)
+	// Detach from the request context so a client disconnect cannot cancel
+	// the compile and leave half-cleared pending state. Bounded so a
+	// stalled compile cannot hold the handler indefinitely.
+	compileCtx, compileCancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	content, err := h.Compiler.Compile(compileCtx, peerID)
+	compileCancel()
 	if err != nil {
 		log.ErrorContext(ctx, "failed to compile bundle for peer", "peer_id", peerID, "error", err)
 		common.InternalError(w)
@@ -304,10 +328,16 @@ func (h *Handler) PreviewPeerPendingBundle(w http.ResponseWriter, r *http.Reques
 
 	version := engine.Version(content)
 
+	// All post-compile DB reads/writes run on a detached timeout so a client
+	// disconnect cannot cancel the diff or preview-write tx after the compile
+	// already succeeded.
+	dbCtx, dbCancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer dbCancel()
+
 	var currentContent string
 	var currentVersion string
 	var currentVersionNumber int
-	currentContent, currentVersion, currentVersionNumber, err = h.PeerStore.GetLatestBundleForPeer(ctx, peerID)
+	currentContent, currentVersion, currentVersionNumber, err = h.PeerStore.GetLatestBundleForPeer(dbCtx, peerID)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		log.WarnContext(ctx, "failed to get current bundle for diff", "error", err)
 	}
@@ -318,7 +348,7 @@ func (h *Handler) PreviewPeerPendingBundle(w http.ResponseWriter, r *http.Reques
 	}
 
 	// Compute new version number (same logic as compiler)
-	versionNumber, err := h.PeerStore.GetNextBundleVersionNumber(ctx, peerID)
+	versionNumber, err := h.PeerStore.GetNextBundleVersionNumber(dbCtx, peerID)
 	if err != nil {
 		log.WarnContext(ctx, "failed to compute version number", "error", err)
 		versionNumber = 0
@@ -326,14 +356,14 @@ func (h *Handler) PreviewPeerPendingBundle(w http.ResponseWriter, r *http.Reques
 
 	diffContent := generateDiff(currentContent, content)
 
-	err = h.PendingStore.SavePendingBundlePreview(ctx, peerID, content, diffContent, version)
+	err = h.PendingStore.SavePendingBundlePreview(dbCtx, peerID, content, diffContent, version)
 	if err != nil {
 		log.ErrorContext(ctx, "failed to save bundle preview", "error", err)
 		common.InternalError(w)
 		return
 	}
 
-	common.RespondJSON(w, http.StatusOK, map[string]interface{}{
+	common.RespondJSON(w, http.StatusOK, map[string]any{
 		"version":                version,
 		"current_version":        currentVersion,
 		"new_version":            version,
@@ -371,7 +401,12 @@ func (h *Handler) ApplyPeerPendingBundle(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	bundle, err := h.Compiler.CompileAndStore(ctx, peerID)
+	// Detach from the request context so a client disconnect cannot cancel
+	// the compile and leave half-cleared pending state. Bounded so a
+	// stalled compile cannot hold the handler indefinitely.
+	compileCtx, compileCancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	bundle, err := h.Compiler.CompileAndStore(compileCtx, peerID)
+	compileCancel()
 	if err != nil {
 		log.ErrorContext(ctx, "failed to compile and store bundle for peer", "peer_id", peerID, "error", err)
 		common.InternalError(w)
@@ -380,8 +415,11 @@ func (h *Handler) ApplyPeerPendingBundle(w http.ResponseWriter, r *http.Request)
 
 	// Clear pending state in a short transaction. CompileAndStore performs
 	// independent DB work in its own transaction, so it must not run while
-	// this transaction is held open.
-	if err := store.RunInTx(ctx, h.beginner, func(tx *sql.Tx) error {
+	// this transaction is held open. The tx runs on a detached timeout so a
+	// client disconnect cannot cancel the clear after the bundle was stored.
+	dbCtx, dbCancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer dbCancel()
+	if err := db.RunInTx(dbCtx, h.beginner, func(ctx context.Context, tx *sql.Tx) error {
 		if err := h.PendingStore.ClearPendingChangesForPeerTx(ctx, tx, peerID); err != nil {
 			return fmt.Errorf("failed to clear pending changes: %w", err)
 		}
@@ -396,19 +434,23 @@ func (h *Handler) ApplyPeerPendingBundle(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Best-effort cleanup (outside transaction)
-	_ = h.PendingStore.CleanupIfComplete(ctx) // best-effort cleanup
+	_ = h.PendingStore.CleanupIfComplete(dbCtx) // best-effort cleanup
 
 	// Notify via SSE (use hostname as the host_id for SSE).
 	// ChannelFull (retryable backpressure) is distinct from NotConnected.
-	switch h.SSEHub.NotifyBundleUpdated("host-"+hostname, bundle.Version) {
-	case events.UpdateAgentSent:
-	case events.UpdateAgentChannelFull:
-		log.Warn("NotifyBundleUpdated failed: agent channel full (backpressure, retryable) after applying pending bundle", "host_id", "host-"+hostname)
-	default:
-		log.Warn("NotifyBundleUpdated failed: agent not connected after applying pending bundle", "host_id", "host-"+hostname)
+	if h.SSEHub != nil {
+		switch h.SSEHub.NotifyBundleUpdated("host-"+hostname, bundle.Version) {
+		case events.UpdateAgentSent:
+		case events.UpdateAgentChannelFull:
+			log.WarnContext(ctx, "notifyBundleUpdated failed: agent channel full (backpressure, retryable) after applying pending bundle", "host_id", "host-"+hostname)
+		default:
+			log.WarnContext(ctx, "notifyBundleUpdated failed: agent not connected after applying pending bundle", "host_id", "host-"+hostname)
+		}
+	} else {
+		log.WarnContext(ctx, "notifyBundleUpdated skipped: SSE hub not available (agent not connected)", "host_id", "host-"+hostname)
 	}
 
-	common.RespondJSON(w, http.StatusOK, map[string]interface{}{
+	common.RespondJSON(w, http.StatusOK, map[string]any{
 		"status":  "applied",
 		"version": bundle.Version,
 	})
@@ -425,13 +467,19 @@ func (h *Handler) ApplyAllPendingBundles(w http.ResponseWriter, r *http.Request)
 	}
 
 	if len(peerIDs) == 0 {
-		common.RespondJSON(w, http.StatusOK, map[string]interface{}{
+		common.RespondJSON(w, http.StatusOK, map[string]any{
 			"status":  "no_pending_changes",
 			"applied": 0,
 		})
 		return
 	}
 
+	// Partial-apply contract (see applyBundleForPeer): each peer is applied
+	// independently on a detached context, so a client disconnect or a
+	// single-peer failure cannot cancel the remaining peers. The 200
+	// response reports applied/total plus per-peer errors; a non-empty
+	// errors list means partial success and the caller must retry the
+	// failed peers.
 	applied := 0
 	var applyErrors []string
 	for _, peerID := range peerIDs {
@@ -442,11 +490,15 @@ func (h *Handler) ApplyAllPendingBundles(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	if err := h.PendingStore.CleanupIfComplete(ctx); err != nil {
-		log.WarnContext(ctx, "Failed to cleanup after apply all", "error", err)
+	// Detached cleanup so a client disconnect after the fan-out cannot
+	// cancel the snapshot cleanup.
+	cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	if err := h.PendingStore.CleanupIfComplete(cleanupCtx); err != nil {
+		log.WarnContext(ctx, "failed to cleanup after apply all", "error", err)
 	}
+	cleanupCancel()
 
-	resp := map[string]interface{}{
+	resp := map[string]any{
 		"status":  "completed",
 		"applied": applied,
 		"total":   len(peerIDs),
@@ -459,12 +511,16 @@ func (h *Handler) ApplyAllPendingBundles(w http.ResponseWriter, r *http.Request)
 }
 
 // ApplyEntityPendingChanges applies all pending changes for a specific entity type on a peer.
-// It:
-// 1. Deletes the pending change record and snapshot
-// 2. Commits the transaction
-// 3. Compiles and stores the new bundle with current state
-// 4. Notifies via SSE that bundle is updated
-// 5. If other pending changes remain, regenerates the bundle preview
+//
+// It compiles and stores the new bundle with current state (compile-then-clear,
+// mirroring ApplyPeerPendingBundle), deletes the pending change record and snapshot
+// in a single transaction, notifies via SSE that the bundle is updated, and regenerates
+// the bundle preview if other pending changes remain.
+//
+// Compile-then-clear (mirroring ApplyPeerPendingBundle): the bundle is stored
+// BEFORE the pending row + snapshot are deleted, so a compile failure fails
+// the request with the DB-driven pending signal intact instead of returning
+// 500 after the signal is already gone.
 func (h *Handler) ApplyEntityPendingChanges(w http.ResponseWriter, r *http.Request) {
 	peerID, err := common.ParseIDParam(r, "peerId")
 	if err != nil {
@@ -509,9 +565,72 @@ func (h *Handler) ApplyEntityPendingChanges(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	// Fail closed when the compiler is unavailable: proceeding would delete
+	// the snapshot and pending row, clear the preview, and return applied
+	// with no bundle, losing the pending signal.
+	if h.Compiler == nil {
+		log.ErrorContext(ctx, "compiler not available; failing entity apply to preserve pending signal", "peer_id", peerID, "entity_type", req.EntityType, "entity_id", req.EntityID)
+		common.RespondError(w, http.StatusInternalServerError, "compiler not available")
+		return
+	}
+
+	// Read the current (pre-apply) bundle outside the write transaction so
+	// the post-apply preview diff can be derived from the stored bundle
+	// without a second compile. The tx below only does
+	// delete/snapshot/count/preview-write. Detached from the request context
+	// so a client disconnect cannot cancel the read after the detach point.
+	// A missing bundle (sql.ErrNoRows) means empty current content; any
+	// other error fails the request so a transient DB failure cannot
+	// silently generate a wrong diff. The cancel is explicit (not deferred)
+	// so the timer is released before the compile+tx below instead of being
+	// held until handler return.
+	var currentContent string
+	bundleCtx, bundleCancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	content, _, _, bundleErr := h.PeerStore.GetLatestBundleForPeer(bundleCtx, peerID)
+	bundleCancel()
+	if bundleErr != nil {
+		if errors.Is(bundleErr, sql.ErrNoRows) {
+			currentContent = ""
+		} else {
+			log.ErrorContext(ctx, "failed to read current bundle for diff", "peer_id", peerID, "error", bundleErr)
+			common.RespondError(w, http.StatusInternalServerError, "failed to read current bundle")
+			return
+		}
+	} else {
+		currentContent = content
+	}
+
+	// Compile-then-clear: store the bundle BEFORE deleting the pending row +
+	// snapshot, so a compile failure fails the request with the DB-driven
+	// pending signal intact instead of 500ing after the signal is gone.
+	// Detached from the request context so a client disconnect cannot cancel
+	// the compile and leave half-cleared pending state. Bounded so a
+	// stalled compile cannot hold the handler indefinitely. A single
+	// CompileAndStore serves both the apply and the remaining-changes
+	// preview below: the preview content, diff, and version are derived
+	// from the stored bundle instead of running a second Compile, which
+	// would observe the same pre-delete state and waste a full compile.
+	compileCtx, compileCancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	bundle, compErr := h.Compiler.CompileAndStore(compileCtx, peerID)
+	compileCancel()
+	if compErr != nil {
+		log.ErrorContext(ctx, "failed to compile and store bundle", "peer_id", peerID, "error", compErr)
+		common.RespondError(w, http.StatusInternalServerError, "failed to compile bundle")
+		return
+	}
+	previewContent := bundle.RulesContent
+	previewVersion := bundle.Version
+	previewDiff := generateDiff(currentContent, bundle.RulesContent)
+
+	// All post-compile DB work (delete/count/preview-write tx plus the
+	// hostname read and cleanup below) runs on a detached timeout so a
+	// client disconnect cannot cancel the tx after the bundle was stored.
+	dbCtx, dbCancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer dbCancel()
+
 	// Run all transactional operations within a single transaction
 	var remainingCount int
-	err = store.RunInTx(ctx, h.beginner, func(tx *sql.Tx) error {
+	err = db.RunInTx(dbCtx, h.beginner, func(ctx context.Context, tx *sql.Tx) error {
 		if err := h.PendingStore.DeleteSnapshotTx(ctx, tx, req.EntityType, req.EntityID); err != nil {
 			return fmt.Errorf("delete snapshot: %w", err)
 		}
@@ -526,30 +645,17 @@ func (h *Handler) ApplyEntityPendingChanges(w http.ResponseWriter, r *http.Reque
 		}
 		remainingCount = count
 
-		// If other changes remain, regenerate the bundle preview
-		if remainingCount > 0 && h.Compiler != nil {
-			content, compileErr := h.Compiler.Compile(ctx, peerID)
-			if compileErr != nil {
-				log.WarnContext(ctx, "failed to compile bundle preview for remaining changes", "error", compileErr)
-				// Don't fail - just skip preview generation
-			} else {
-				version := engine.Version(content)
-
-				var currentContent string
-				currentContent, _, _, bundleErr := h.PeerStore.GetLatestBundleForPeer(ctx, peerID)
-				if bundleErr != nil {
-					// No existing bundle or error — use empty values
-					currentContent = ""
-				}
-
-				diffContent := generateDiff(currentContent, content)
-				if err := h.PendingStore.SavePendingBundlePreviewTx(ctx, tx, peerID, content, diffContent, version); err != nil {
-					log.WarnContext(ctx, "failed to save bundle preview", "error", err)
-				}
+		// If other changes remain, regenerate the bundle preview using the
+		// precompiled content above. No compile or preview reads run here.
+		if remainingCount > 0 {
+			if err := h.PendingStore.SavePendingBundlePreviewTx(ctx, tx, peerID, previewContent, previewDiff, previewVersion); err != nil {
+				log.WarnContext(ctx, "failed to save bundle preview", "error", err)
 			}
 		} else {
 			// No more pending changes, delete the preview
-			_ = h.PendingStore.DeletePendingBundlePreviewTx(ctx, tx, peerID)
+			if err := h.PendingStore.DeletePendingBundlePreviewTx(ctx, tx, peerID); err != nil {
+				log.WarnContext(ctx, "failed to delete pending bundle preview", "error", err)
+			}
 		}
 
 		return nil
@@ -560,33 +666,28 @@ func (h *Handler) ApplyEntityPendingChanges(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	var bundleVersion string
-	if h.Compiler != nil {
-		bundle, compErr := h.Compiler.CompileAndStore(ctx, peerID)
-		if compErr != nil {
-			log.WarnContext(ctx, "failed to compile and store bundle", "error", compErr)
-			// Don't fail - the pending change is still cleared
-		} else {
-			bundleVersion = bundle.Version
-			hostname, hostnameErr := h.PeerStore.GetPeerHostname(ctx, peerID)
-			if hostnameErr == nil && hostname != "" {
-				switch h.SSEHub.NotifyBundleUpdated("host-"+hostname, bundle.Version) {
-				case events.UpdateAgentSent:
-				case events.UpdateAgentChannelFull:
-					log.Warn("NotifyBundleUpdated failed: agent channel full (backpressure, retryable) after applying pending bundle", "host_id", "host-"+hostname)
-				default:
-					log.Warn("NotifyBundleUpdated failed: agent not connected after applying pending bundle", "host_id", "host-"+hostname)
-				}
+	bundleVersion := bundle.Version
+	hostname, hostnameErr := h.PeerStore.GetPeerHostname(dbCtx, peerID)
+	if hostnameErr == nil && hostname != "" {
+		if h.SSEHub != nil {
+			switch h.SSEHub.NotifyBundleUpdated("host-"+hostname, bundle.Version) {
+			case events.UpdateAgentSent:
+			case events.UpdateAgentChannelFull:
+				log.WarnContext(ctx, "notifyBundleUpdated failed: agent channel full (backpressure, retryable) after applying pending bundle", "host_id", "host-"+hostname)
+			default:
+				log.WarnContext(ctx, "notifyBundleUpdated failed: agent not connected after applying pending bundle", "host_id", "host-"+hostname)
 			}
+		} else {
+			log.WarnContext(ctx, "notifyBundleUpdated skipped: SSE hub not available (agent not connected)", "host_id", "host-"+hostname)
 		}
 	}
 
 	// If no pending changes remain for this peer, clean up snapshots
 	if remainingCount == 0 {
-		_ = h.PendingStore.CleanupIfComplete(ctx)
+		_ = h.PendingStore.CleanupIfComplete(dbCtx)
 	}
 
-	response := map[string]interface{}{
+	response := map[string]any{
 		"status":            "applied",
 		"peer_id":           peerID,
 		"entity_type":       req.EntityType,
@@ -601,6 +702,8 @@ func (h *Handler) ApplyEntityPendingChanges(w http.ResponseWriter, r *http.Reque
 }
 
 // PushAllRules pushes compiled rules to all agent-based peers.
+// Manual peers are excluded by design (via ListAgentBasedPeers): pending
+// visibility includes manual peers, but push delivery is agent-only.
 // The PushWorker processes the job in the background.
 func (h *Handler) PushAllRules(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := commonutil.WithHandlerTimeout(r.Context())
@@ -614,7 +717,7 @@ func (h *Handler) PushAllRules(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if len(allPeers) == 0 {
-		common.RespondJSON(w, http.StatusOK, map[string]interface{}{
+		common.RespondJSON(w, http.StatusOK, map[string]any{
 			"status": "no_peers",
 			"pushed": 0,
 		})
@@ -665,7 +768,7 @@ func (h *Handler) PushAllRules(w http.ResponseWriter, r *http.Request) {
 
 	log.InfoContext(ctx, "push job created", "job_id", jobID, "total_peers", len(allPeers))
 
-	common.RespondJSON(w, http.StatusAccepted, map[string]interface{}{
+	common.RespondJSON(w, http.StatusAccepted, map[string]any{
 		"job_id":      jobID,
 		"status":      "queued",
 		"total_peers": len(allPeers),
@@ -673,7 +776,9 @@ func (h *Handler) PushAllRules(w http.ResponseWriter, r *http.Request) {
 }
 
 // PushCurrentRules pushes the current compiled rules to a specific peer.
-// The peer must be agent-based (has agent_version or is_manual = false).
+// Manual peers are rejected by design: pending visibility includes manual
+// peers, but push delivery is agent-only since manual peers have no agent.
+// The peer must be agent-based (is_manual = false).
 func (h *Handler) PushCurrentRules(w http.ResponseWriter, r *http.Request) {
 	peerID, err := common.ParseIDParam(r, "peerId")
 	if err != nil {
@@ -684,7 +789,7 @@ func (h *Handler) PushCurrentRules(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := commonutil.WithHandlerTimeout(r.Context())
 	defer cancel()
 
-	hostname, agentVersion, isManual, err := h.PeerStore.GetPeerWithAgentVersion(ctx, peerID)
+	hostname, _, isManual, err := h.PeerStore.GetPeerWithAgentVersion(ctx, peerID)
 	if errors.Is(err, sql.ErrNoRows) {
 		common.RespondError(w, http.StatusNotFound, "peer not found")
 		return
@@ -695,8 +800,12 @@ func (h *Handler) PushCurrentRules(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	isAgentBased := agentVersion.Valid || !isManual
-	if !isAgentBased {
+	// Push delivery is agent-only: reject manual peers outright. A manual
+	// peer with a non-NULL empty agent_version ('') must not pass, and
+	// requiring a non-empty agent_version would wrongly exclude non-manual
+	// peers that have not yet reported a version, so gate on isManual to
+	// stay consistent with ListAgentBasedPeers (is_manual=0).
+	if isManual {
 		common.RespondError(w, http.StatusBadRequest, "peer is not agent-based (manual peer)")
 		return
 	}
@@ -739,7 +848,7 @@ func (h *Handler) PushCurrentRules(w http.ResponseWriter, r *http.Request) {
 
 	log.InfoContext(ctx, "push current rules job created", "job_id", jobID, "peer_id", peerID, "hostname", hostname)
 
-	common.RespondJSON(w, http.StatusAccepted, map[string]interface{}{
+	common.RespondJSON(w, http.StatusAccepted, map[string]any{
 		"job_id":      jobID,
 		"status":      "queued",
 		"peer_id":     peerID,
@@ -779,15 +888,20 @@ func (h *Handler) HandlePushJobSSE(w http.ResponseWriter, r *http.Request) {
 
 	// Send initial state
 	job, peers, err := h.PendingStore.GetPushJobWithPeers(r.Context(), jobID)
-	if err == nil {
+	if err != nil {
+		log.ErrorContext(r.Context(), "failed to get push job with peers", "job_id", jobID, "error", err)
+	} else {
 		// total_peers is canonical; total is a deprecated alias kept for
-		// backward compatibility.
-		initialData := map[string]interface{}{
+		// backward compatibility. succeeded is canonical; success is a
+		// deprecated alias kept for backward compatibility so existing SSE
+		// consumers keep working.
+		initialData := map[string]any{
 			"job_id":      job.ID,
 			"status":      job.Status,
 			"total_peers": job.TotalPeers,
 			"total":       job.TotalPeers,
 			"succeeded":   job.Succeeded,
+			"success":     job.Succeeded,
 			"failed":      job.Failed,
 			"peers":       peers,
 		}
@@ -797,7 +911,7 @@ func (h *Handler) HandlePushJobSSE(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if _, err := fmt.Fprintf(w, "event: init\ndata: %s\n\n", data); err != nil {
-			log.WarnContext(r.Context(), "Failed to write SSE init", "error", err)
+			log.WarnContext(r.Context(), "failed to write SSE init", "error", err)
 		}
 		flusher.Flush()
 	}
@@ -820,7 +934,7 @@ func streamSSEEvents(ctx context.Context, w http.ResponseWriter, flusher http.Fl
 				return
 			}
 			if _, err := fmt.Fprint(w, event); err != nil {
-				log.WarnContext(ctx, "Failed to write SSE event", "error", err)
+				log.WarnContext(ctx, "failed to write SSE event", "error", err)
 				return
 			}
 			flusher.Flush()
@@ -845,8 +959,21 @@ func parseSSEEventType(event string) string {
 }
 
 // applyBundleForPeer compiles and stores a bundle for a peer, clears pending changes, and notifies via SSE.
+//
+// Partial-apply contract: every stage (hostname lookup, compile, tx clear)
+// runs on a detached timeout derived from WithoutCancel, so a client
+// disconnect cannot cancel the per-peer work mid-flight and leave a
+// half-cleared peer. ApplyAllPendingBundles aggregates per-peer results and
+// returns 200 with applied/total plus an errors list when some peers fail;
+// callers must treat a 200 with non-empty errors as partial success and
+// retry the failed peers.
 func (h *Handler) applyBundleForPeer(ctx context.Context, peerID int) error {
-	hostname, err := h.PeerStore.GetPeerHostname(ctx, peerID)
+	// Detached hostname lookup: the outer request context may be canceled
+	// by a client disconnect, which must not turn a healthy peer into
+	// "peer not found" after the compile below already ran.
+	hostnameCtx, hostnameCancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	hostname, err := h.PeerStore.GetPeerHostname(hostnameCtx, peerID)
+	hostnameCancel()
 	if err != nil {
 		return fmt.Errorf("peer not found: %w", err)
 	}
@@ -855,15 +982,23 @@ func (h *Handler) applyBundleForPeer(ctx context.Context, peerID int) error {
 		return fmt.Errorf("compiler not available")
 	}
 
-	bundle, err := h.Compiler.CompileAndStore(ctx, peerID)
+	// Detach from the request context so a client disconnect cannot cancel
+	// the compile and leave half-cleared pending state. Bounded so a
+	// stalled compile cannot hold the apply-all fan-out indefinitely.
+	compileCtx, compileCancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	bundle, err := h.Compiler.CompileAndStore(compileCtx, peerID)
+	compileCancel()
 	if err != nil {
 		return fmt.Errorf("compile failed: %w", err)
 	}
 
 	// Clear pending state in a short transaction. CompileAndStore performs
 	// independent DB work in its own transaction, so it must not run while
-	// this transaction is held open.
-	err = store.RunInTx(ctx, h.beginner, func(tx *sql.Tx) error {
+	// this transaction is held open. The tx runs on a detached timeout so a
+	// client disconnect cannot cancel the clear after the bundle was stored.
+	dbCtx, dbCancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer dbCancel()
+	err = db.RunInTx(dbCtx, h.beginner, func(ctx context.Context, tx *sql.Tx) error {
 		if err := h.PendingStore.ClearPendingChangesForPeerTx(ctx, tx, peerID); err != nil {
 			return fmt.Errorf("failed to clear pending changes: %w", err)
 		}
@@ -880,12 +1015,16 @@ func (h *Handler) applyBundleForPeer(ctx context.Context, peerID int) error {
 
 	// Notify via SSE. ChannelFull (retryable backpressure) is distinct
 	// from NotConnected and must not be reported as not connected.
-	switch h.SSEHub.NotifyBundleUpdated("host-"+hostname, bundle.Version) {
-	case events.UpdateAgentSent:
-	case events.UpdateAgentChannelFull:
-		log.Warn("NotifyBundleUpdated failed: agent channel full (backpressure, retryable) after applying pending bundle", "host_id", "host-"+hostname)
-	default:
-		log.Warn("NotifyBundleUpdated failed: agent not connected after applying pending bundle", "host_id", "host-"+hostname)
+	if h.SSEHub != nil {
+		switch h.SSEHub.NotifyBundleUpdated("host-"+hostname, bundle.Version) {
+		case events.UpdateAgentSent:
+		case events.UpdateAgentChannelFull:
+			log.WarnContext(ctx, "notifyBundleUpdated failed: agent channel full (backpressure, retryable) after applying pending bundle", "host_id", "host-"+hostname)
+		default:
+			log.WarnContext(ctx, "notifyBundleUpdated failed: agent not connected after applying pending bundle", "host_id", "host-"+hostname)
+		}
+	} else {
+		log.WarnContext(ctx, "notifyBundleUpdated skipped: SSE hub not available (agent not connected)", "host_id", "host-"+hostname)
 	}
 
 	return nil
@@ -893,7 +1032,16 @@ func (h *Handler) applyBundleForPeer(ctx context.Context, peerID int) error {
 
 // HandleFrontendSSE handles Server-Sent Events for frontend clients. This endpoint is used for notifications like pending_change_added events.
 func (h *Handler) HandleFrontendSSE(w http.ResponseWriter, r *http.Request) {
-	clientID := fmt.Sprintf("frontend-%d", time.Now().UnixNano())
+	// Unpredictable, collision-resistant client ID: 8 random bytes (hex) plus
+	// nanosecond timestamp. UnixNano alone is predictable and can collide
+	// under concurrent connects.
+	var randBytes [8]byte
+	if _, err := rand.Read(randBytes[:]); err != nil {
+		log.ErrorContext(r.Context(), "failed to generate random client ID suffix", "error", err)
+		common.InternalError(w)
+		return
+	}
+	clientID := fmt.Sprintf("frontend-%d-%s", time.Now().UnixNano(), hex.EncodeToString(randBytes[:]))
 
 	flusher := setupSSEHeaders(w)
 	if flusher == nil {
@@ -907,7 +1055,7 @@ func (h *Handler) HandleFrontendSSE(w http.ResponseWriter, r *http.Request) {
 
 	// Send initial connection event
 	if _, err := fmt.Fprint(w, "event: connected\ndata: {\"status\":\"connected\"}\n\n"); err != nil {
-		log.WarnContext(r.Context(), "Failed to write SSE connected event", "error", err)
+		log.WarnContext(r.Context(), "failed to write SSE connected event", "error", err)
 		return
 	}
 	flusher.Flush()

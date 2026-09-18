@@ -299,8 +299,8 @@ func (h *Handler) DeletePeer(w http.ResponseWriter, r *http.Request) {
 
 	err = h.Store.CheckDeleteConstraints(r.Context(), peerID)
 	if err != nil {
-		constraintErr, ok := err.(*common.DeleteConstraintError)
-		if ok {
+		var constraintErr *common.DeleteConstraintError
+		if errors.As(err, &constraintErr) {
 			common.RespondJSON(w, http.StatusConflict, constraintErr.ToResponse())
 			return
 		}
@@ -310,11 +310,19 @@ func (h *Handler) DeletePeer(w http.ResponseWriter, r *http.Request) {
 
 	err = h.Store.DeletePeer(r.Context(), peerID)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			common.RespondError(w, http.StatusNotFound, "Peer not found")
+		// The store re-checks constraints inside the delete transaction
+		// (TOCTOU): a policy created between the pre-check above and the
+		// commit surfaces here and maps to 409 like the pre-check.
+		var constraintErr *common.DeleteConstraintError
+		if errors.As(err, &constraintErr) {
+			common.RespondJSON(w, http.StatusConflict, constraintErr.ToResponse())
 			return
 		}
-		common.RespondError(w, http.StatusInternalServerError, "Failed to delete peer")
+		if errors.Is(err, sql.ErrNoRows) {
+			common.RespondError(w, http.StatusNotFound, "peer not found")
+			return
+		}
+		common.RespondError(w, http.StatusInternalServerError, "failed to delete peer")
 		return
 	}
 
@@ -544,8 +552,12 @@ func (h *Handler) DeletePeerIP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.Store.DeletePeerIPIfOrphan(r.Context(), ipID, peerID, ip.IPAddress); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
+		if errors.Is(err, store.ErrPeerIPReferenced) {
 			common.RespondError(w, http.StatusConflict, "cannot delete IP: referenced by one or more policies")
+			return
+		}
+		if errors.Is(err, sql.ErrNoRows) {
+			common.RespondError(w, http.StatusNotFound, "peer IP not found")
 			return
 		}
 		common.RespondError(w, http.StatusInternalServerError, "failed to delete peer IP")
