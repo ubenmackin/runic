@@ -87,8 +87,8 @@ BINARY_URL="${CONTROL_PLANE_URL}/downloads/runic-agent-${AGENT_ARCH}"
 
 # Create log directory early so that the exec redirect captures ALL subsequent
 # output (including timestamped step entries) to update.log.
-mkdir -p /var/log/runic
-chmod 755 /var/log/runic
+mkdir -p -m 755 /var/log/runic || exit 1
+chmod 755 /var/log/runic || exit 1
 exec > >(tee -a "$LOG_FILE") 2>&1
 
 # Download binary and service file to temp files FIRST, before stopping the
@@ -99,7 +99,7 @@ exec > >(tee -a "$LOG_FILE") 2>&1
 echo "Downloading runic-agent for ${AGENT_ARCH}..."
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Step: Downloading binary from $BINARY_URL"
 curl -fsSL -o "$TMP_BINARY" "$BINARY_URL"
-chmod +x "$TMP_BINARY"
+chmod +x "$TMP_BINARY" || { echo "Error: Failed to make binary executable"; rm -f "$TMP_BINARY"; exit 1; }
 
 # Verify download succeeded
 if [ ! -s "$TMP_BINARY" ]; then
@@ -135,12 +135,82 @@ TMP_BINARY=""
 TMP_SERVICE=""
 
 # Create config directory if it doesn't exist
-mkdir -p /etc/runic-agent
-chmod 700 /etc/runic-agent
+# Use -m 700 so the directory is never world-readable in the window between
+# mkdir (default 0755 under a 022 umask) and chmod.
+mkdir -p -m 700 /etc/runic-agent || exit 1
+chmod 700 /etc/runic-agent || exit 1
+
+# Create writable cache and backup directories for bundle cache and
+# pre-apply backups (see systemd ReadWritePaths).
+mkdir -p -m 700 /var/cache/runic-agent /var/backups/runic-agent || exit 1
+chmod 700 /var/cache/runic-agent /var/backups/runic-agent || exit 1
+
+# Migrate a single legacy persistent file from /etc/runic-agent (pre-/var
+# layout) when the new location is missing. The copy goes to a temp file
+# followed by mv -n so a concurrent agent-created primary (agent uses O_EXCL)
+# is never truncated, and a failed copy leaves only the temp behind (removed
+# here) so the next run retries instead of seeing a partial new file.
+migrate_legacy_file() {
+    local _old="$1"
+    local _new="$2"
+    local _label="$3"
+    local _tmp
+    if [ ! -f "$_new" ] && [ -f "$_old" ]; then
+        if [ -d "$_new" ]; then
+            echo "Warning: Skipping legacy ${_label} migration, new path is a directory: ${_new}"
+            return 1
+        fi
+        echo "Migrating legacy ${_label} to ${_new}..."
+        _tmp="$(mktemp "$(dirname "$_new")/.migrate.XXXXXX")" || return 1
+        if ! cp -p "$_old" "$_tmp"; then
+            echo "Warning: Failed to migrate ${_label}, will retry on next run"
+            rm -f "$_tmp"
+            return 1
+        fi
+        if ! chmod 600 "$_tmp"; then
+            echo "Warning: Failed to secure migrated ${_label}, will retry on next run"
+            rm -f "$_tmp"
+            return 1
+        fi
+        if ! mv -n "$_tmp" "$_new"; then
+            echo "Warning: Failed to migrate ${_label}, will retry on next run"
+            rm -f "$_tmp"
+            return 1
+        fi
+        if [ -f "$_tmp" ]; then
+            # mv -n exits 0 without moving when $_new already exists
+            # (concurrent agent O_EXCL winner), leaving $_tmp behind. This
+            # invocation installed nothing, so only remove the legacy file
+            # when its content already matches the winner; otherwise keep
+            # it instead of discarding content that was never copied.
+            if cmp -s "$_old" "$_new" 2>/dev/null; then
+                rm -f "$_old"
+            else
+                echo "Warning: ${_label} already present, keeping legacy file for next run"
+            fi
+            rm -f "$_tmp"
+            return 0
+        fi
+        if [ -f "$_new" ]; then
+            rm -f "$_old"
+        else
+            return 1
+        fi
+    fi
+}
+
+# Migrate legacy persistent files from /etc/runic-agent (pre-/var layout)
+# when the new location is missing. Without this, upgrades orphan the
+# cached bundle and crash-recovery backups. Each migration copies forward
+# then removes the legacy file so a stale duplicate does not remain under
+# /etc (mirrors CacheBundle legacy cleanup in internal/agent/apply).
+migrate_legacy_file /etc/runic-agent/cached-bundle.rules /var/cache/runic-agent/cached-bundle.rules "cached bundle" || true
+migrate_legacy_file /etc/runic-agent/pre-apply-backup.rules /var/backups/runic-agent/pre-apply-backup.rules "pre-apply backup" || true
+migrate_legacy_file /etc/runic-agent/iptables-backup.rules /var/backups/runic-agent/iptables-backup.rules "iptables backup" || true
 
 # Create empty firewall.log file (agent expects it to exist on startup)
 touch /var/log/runic/firewall.log
-chmod 644 /var/log/runic/firewall.log
+chmod 644 /var/log/runic/firewall.log || exit 1
 
 # Set appropriate ownership for log directory and file (distro-aware)
 # Uses detect_os() for consistency with the rest of the script
@@ -276,7 +346,7 @@ EOF
 }
 EOF
     fi
-    chmod 600 /etc/runic-agent/config.json
+    chmod 600 /etc/runic-agent/config.json || exit 1
 else
     echo "Preserving existing config (credentials retained)"
     # Migrate: Add missing config options for existing installs

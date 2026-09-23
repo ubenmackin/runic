@@ -907,12 +907,42 @@ COMMIT
 					t.Error("confirm function was not called")
 				}
 
-				// Verify bundle was cached
-				cachedPath := filepath.Join(tmpDir, "cached-bundle.rules")
-				if _, err := os.Stat(cachedPath); os.IsNotExist(err) {
-					// Note: CacheBundle writes to /etc/runic-agent/cached-bundle.rules
-					// In test environment, this may fail due to permissions
-					// That's acceptable - we just verify no error on apply
+				// Verify the cache payload round-trips via a temp override.
+				// ApplyBundle caches to CachedBundlePath (/var/...), which
+				// tests must not touch, so assert the real write path
+				// through CacheBundleToPath instead of a vacuous stat.
+				tmpCache := filepath.Join(tmpDir, "cached-bundle.rules")
+				if err := CacheBundleToPath(tt.bundle.Rules, tmpCache); err != nil {
+					t.Fatalf("CacheBundleToPath() error = %v", err)
+				}
+				data, err := os.ReadFile(tmpCache)
+				if err != nil {
+					t.Fatalf("read cached bundle: %v", err)
+				}
+				if string(data) != tt.bundle.Rules {
+					t.Error("cached bundle content mismatch")
+				}
+
+				// Exercise the CacheBundle production path (write +
+				// legacy cleanup) via the injectable cacheBundle helper
+				// with temp-dir overrides so /var/... is never touched.
+				tmpProdCache := filepath.Join(tmpDir, "prod-cached-bundle.rules")
+				tmpLegacy := filepath.Join(tmpDir, "legacy-cached-bundle.rules")
+				if err := os.WriteFile(tmpLegacy, []byte("stale-legacy"), 0600); err != nil {
+					t.Fatalf("write temp legacy file: %v", err)
+				}
+				if err := cacheBundle(tt.bundle.Rules, tmpProdCache, tmpLegacy); err != nil {
+					t.Fatalf("cacheBundle() error = %v", err)
+				}
+				prodData, err := os.ReadFile(tmpProdCache)
+				if err != nil {
+					t.Fatalf("read production cache: %v", err)
+				}
+				if string(prodData) != tt.bundle.Rules {
+					t.Error("production cache content mismatch")
+				}
+				if _, err := os.Stat(tmpLegacy); !os.IsNotExist(err) {
+					t.Error("cacheBundle did not remove legacy file")
 				}
 			}
 		})

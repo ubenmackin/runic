@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -296,10 +297,6 @@ func TestNewShipper(t *testing.T) {
 	if shipper.logPath != logPath {
 		t.Errorf("expected logPath %q, got %q", logPath, shipper.logPath)
 	}
-
-	if shipper.lines == nil {
-		t.Error("expected lines channel to be initialized")
-	}
 }
 
 func TestShipper_Run_FileNotExists(t *testing.T) {
@@ -582,5 +579,143 @@ Jan 15 12:00:01 hostname kernel: Another message`
 		if !strings.Contains(runicLines[0], "[RUNIC-DROP-I]") && !strings.Contains(runicLines[0], "[RUNIC-DROP-O]") {
 			t.Errorf("expected RUNIC-DROP-I or RUNIC-DROP-O line, got %q", runicLines[0])
 		}
+	}
+}
+
+func TestShipper_SetCredentialsUpdatesBearer(t *testing.T) {
+	var mu sync.Mutex
+	var authHeaders []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		authHeaders = append(authHeaders, r.Header.Get("Authorization"))
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	shipper := NewShipper(server.Client(), server.URL, "old-token", "host-123", "/var/log/kern.log", "1.0.0")
+
+	batch := []LogEvent{
+		{
+			Timestamp: "Jan 15 12:00:00",
+			Action:    "DROP",
+			SrcIP:     "192.168.1.100",
+			DstIP:     "192.168.1.1",
+			Protocol:  "tcp",
+		},
+	}
+
+	ctx := context.Background()
+	shipper.ship(ctx, batch)
+	mu.Lock()
+	headers := append([]string(nil), authHeaders...)
+	mu.Unlock()
+	if len(headers) != 1 {
+		t.Fatalf("expected 1 request, got %d", len(headers))
+	}
+	if headers[0] != "Bearer old-token" {
+		t.Errorf("expected Bearer old-token, got %q", headers[0])
+	}
+
+	shipper.SetCredentials(server.URL, "new-token", "host-123")
+	shipper.ship(ctx, batch)
+	mu.Lock()
+	headers = append([]string(nil), authHeaders...)
+	mu.Unlock()
+	if len(headers) != 2 {
+		t.Fatalf("expected 2 requests, got %d", len(headers))
+	}
+	if headers[1] != "Bearer new-token" {
+		t.Errorf("expected Bearer new-token after SetCredentials, got %q", headers[1])
+	}
+}
+
+func TestShipper_SetCredentialsUpdatesTokenAndHostID(t *testing.T) {
+	var mu sync.Mutex
+	var authHeaders []string
+	var hostIDs []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth := r.Header.Get("Authorization")
+		var body map[string]interface{}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		mu.Lock()
+		authHeaders = append(authHeaders, auth)
+		if hostID, ok := body["host_id"].(string); ok {
+			hostIDs = append(hostIDs, hostID)
+		}
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	shipper := NewShipper(server.Client(), server.URL, "old-token", "host-old", "/var/log/kern.log", "1.0.0")
+
+	batch := []LogEvent{
+		{
+			Timestamp: "Jan 15 12:00:00",
+			Action:    "DROP",
+			SrcIP:     "192.168.1.100",
+		},
+	}
+
+	ctx := context.Background()
+	shipper.ship(ctx, batch)
+
+	shipper.SetCredentials(server.URL, "new-token", "host-new")
+	shipper.ship(ctx, batch)
+
+	mu.Lock()
+	headers := append([]string(nil), authHeaders...)
+	ids := append([]string(nil), hostIDs...)
+	mu.Unlock()
+	if len(headers) != 2 {
+		t.Fatalf("expected 2 requests, got %d", len(headers))
+	}
+	if headers[1] != "Bearer new-token" {
+		t.Errorf("expected Bearer new-token after SetCredentials, got %q", headers[1])
+	}
+	if len(ids) != 2 {
+		t.Fatalf("expected 2 host_id values, got %d", len(ids))
+	}
+	if ids[1] != "host-new" {
+		t.Errorf("expected host_id host-new after SetCredentials, got %q", ids[1])
+	}
+}
+
+func TestShipper_SetCredentialsUpdatesControlPlaneURL(t *testing.T) {
+	var mu sync.Mutex
+	var server1Hits, server2Hits int
+	server1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		server1Hits++
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server1.Close()
+	server2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		server2Hits++
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server2.Close()
+
+	shipper := NewShipper(server1.Client(), server1.URL, "tok", "host-1", "/var/log/kern.log", "1.0.0")
+	batch := []LogEvent{{Timestamp: "Jan 15 12:00:00", Action: "DROP", SrcIP: "192.168.1.100"}}
+	ctx := context.Background()
+	shipper.ship(ctx, batch)
+	mu.Lock()
+	if server1Hits != 1 || server2Hits != 0 {
+		mu.Unlock()
+		t.Fatalf("before refresh hits = %d/%d, want 1/0", server1Hits, server2Hits)
+	}
+	mu.Unlock()
+
+	shipper.SetCredentials(server2.URL, "tok", "host-1")
+	shipper.ship(ctx, batch)
+	mu.Lock()
+	defer mu.Unlock()
+	if server1Hits != 1 || server2Hits != 1 {
+		t.Errorf("after refresh hits = %d/%d, want 1/1 (stale URL persists without refresh)", server1Hits, server2Hits)
 	}
 }

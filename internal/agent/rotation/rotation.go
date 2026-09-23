@@ -30,24 +30,18 @@ const (
 )
 
 type Manager struct {
-	mu              sync.RWMutex
-	configPath      string
-	httpClient      *http.Client
-	controlPlaneURL string
-	hostID          string
-	state           RotationState
-	oldKey          string
-	newKey          string
-	lastRotation    time.Time
+	mu           sync.RWMutex
+	httpClient   *http.Client
+	state        RotationState
+	oldKey       string
+	newKey       string
+	lastRotation time.Time
 }
 
-func NewManager(configPath string, httpClient *http.Client, controlPlaneURL string, hostID string) *Manager {
+func NewManager(httpClient *http.Client) *Manager {
 	return &Manager{
-		configPath:      configPath,
-		httpClient:      httpClient,
-		controlPlaneURL: controlPlaneURL,
-		hostID:          hostID,
-		state:           StateIdle,
+		httpClient: httpClient,
+		state:      StateIdle,
 	}
 }
 
@@ -64,11 +58,15 @@ func (m *Manager) GetLastRotation() time.Time {
 }
 
 // CheckAndRotate checks for pending key rotation and rotates the HMAC key if needed.
-// The currentHMACKey and currentToken are passed in by the caller (Agent) so that
-// the Manager does not hold an aliased pointer to the Agent's config, avoiding
-// data races between the two components. The new key is returned to the caller
-// for atomic persistence under the Agent's own configMu.
-func (m *Manager) CheckAndRotate(ctx context.Context, currentHMACKey, currentToken string) (newKey string, err error) {
+// The currentHMACKey, currentToken, controlPlaneURL, and hostID are passed in
+// by the caller (Agent) from a single getConfig snapshot so all credentials
+// come from the same generation; the Manager must not mix a caller-supplied
+// token with URL/hostID snapshotted separately under mu, which would tear
+// across a concurrent re-registration. The Manager does not hold an aliased
+// pointer to the Agent's config, avoiding data races between the two
+// components. The new key is returned to the caller for atomic persistence
+// under the Agent's own configMu.
+func (m *Manager) CheckAndRotate(ctx context.Context, currentHMACKey, currentToken, controlPlaneURL, hostID string) (newKey string, err error) {
 	m.mu.Lock()
 	if m.state == StateRotating || m.state == StateTesting {
 		m.mu.Unlock()
@@ -79,10 +77,12 @@ func (m *Manager) CheckAndRotate(ctx context.Context, currentHMACKey, currentTok
 	m.oldKey = currentHMACKey
 	m.mu.Unlock()
 
-	rotationToken, err := m.checkRotationPending(ctx, currentToken)
+	rotationToken, err := m.checkRotationPending(ctx, currentToken, controlPlaneURL)
 	if err != nil {
 		m.mu.Lock()
 		m.state = StateFailed
+		m.oldKey = ""
+		m.newKey = ""
 		m.mu.Unlock()
 		return "", fmt.Errorf("check rotation pending: %w", err)
 	}
@@ -90,16 +90,20 @@ func (m *Manager) CheckAndRotate(ctx context.Context, currentHMACKey, currentTok
 	if rotationToken == "" {
 		m.mu.Lock()
 		m.state = StateIdle
+		m.oldKey = ""
+		m.newKey = ""
 		m.mu.Unlock()
 		return "", nil
 	}
 
 	log.Info("Key rotation detected, starting rotation process")
 
-	newKey, err = m.retrieveNewKey(ctx, rotationToken, currentToken)
+	newKey, err = m.retrieveNewKey(ctx, rotationToken, currentToken, controlPlaneURL, hostID)
 	if err != nil {
 		m.mu.Lock()
 		m.state = StateFailed
+		m.oldKey = ""
+		m.newKey = ""
 		m.mu.Unlock()
 		log.Error("Failed to retrieve new key, keeping old key", "error", err)
 		return "", fmt.Errorf("retrieve new key: %w", err)
@@ -110,17 +114,21 @@ func (m *Manager) CheckAndRotate(ctx context.Context, currentHMACKey, currentTok
 	m.state = StateTesting
 	m.mu.Unlock()
 
-	if err := m.testNewKey(ctx, newKey, currentToken); err != nil {
+	if err := m.testNewKey(ctx, newKey, currentToken, controlPlaneURL, hostID); err != nil {
 		m.mu.Lock()
 		m.state = StateFallback
+		// Drop the untested key; oldKey remains the fallback key.
+		m.newKey = ""
 		m.mu.Unlock()
 		log.Error("New key test failed, falling back to old key", "error", err)
 		return "", fmt.Errorf("test new key: %w", err)
 	}
 
-	if err := m.confirmRotation(ctx, currentToken); err != nil {
+	if err := m.confirmRotation(ctx, currentToken, controlPlaneURL, hostID); err != nil {
 		m.mu.Lock()
 		m.state = StateFailed
+		m.oldKey = ""
+		m.newKey = ""
 		m.mu.Unlock()
 		log.Error("Failed to confirm rotation with control plane", "error", err)
 		return "", fmt.Errorf("confirm rotation: %w", err)
@@ -135,8 +143,8 @@ func (m *Manager) CheckAndRotate(ctx context.Context, currentHMACKey, currentTok
 	return newKey, nil
 }
 
-func (m *Manager) checkRotationPending(ctx context.Context, token string) (string, error) {
-	url := fmt.Sprintf("%s/api/v1/agent/check-rotation", m.controlPlaneURL)
+func (m *Manager) checkRotationPending(ctx context.Context, token, controlPlaneURL string) (string, error) {
+	url := fmt.Sprintf("%s/api/v1/agent/check-rotation", controlPlaneURL)
 	resp, err := common.DoJSONRequest(ctx, m.httpClient, "GET", url, nil, token, "runic-agent")
 	if err != nil {
 		var httpErr *common.HTTPStatusError
@@ -169,11 +177,11 @@ func (m *Manager) checkRotationPending(ctx context.Context, token string) (strin
 	return result.RotationToken, nil
 }
 
-func (m *Manager) retrieveNewKey(ctx context.Context, rotationToken string, authToken string) (string, error) {
-	url := fmt.Sprintf("%s/api/v1/agent/rotate-key", m.controlPlaneURL)
+func (m *Manager) retrieveNewKey(ctx context.Context, rotationToken string, authToken string, controlPlaneURL, hostID string) (string, error) {
+	url := fmt.Sprintf("%s/api/v1/agent/rotate-key", controlPlaneURL)
 
 	body := map[string]string{
-		"host_id":        m.hostID,
+		"host_id":        hostID,
 		"rotation_token": rotationToken,
 	}
 
@@ -184,7 +192,7 @@ func (m *Manager) retrieveNewKey(ctx context.Context, rotationToken string, auth
 	defer func() {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 		if cErr := resp.Body.Close(); cErr != nil {
-			log.Warn("close body failed", "error", cErr)
+			log.Warn("Failed to close response body", "error", cErr)
 		}
 	}()
 
@@ -203,16 +211,16 @@ func (m *Manager) retrieveNewKey(ctx context.Context, rotationToken string, auth
 	return result.NewHMACKey, nil
 }
 
-func (m *Manager) testNewKey(ctx context.Context, key string, token string) error {
+func (m *Manager) testNewKey(ctx context.Context, key string, token string, controlPlaneURL, hostID string) error {
 	testMessage := fmt.Sprintf("test-%d", time.Now().UnixNano())
 	mac := hmac.New(sha256.New, []byte(key))
 	mac.Write([]byte(testMessage))
 	signature := hex.EncodeToString(mac.Sum(nil))
 
-	url := fmt.Sprintf("%s/api/v1/agent/test-key", m.controlPlaneURL)
+	url := fmt.Sprintf("%s/api/v1/agent/test-key", controlPlaneURL)
 
 	body := map[string]string{
-		"host_id":   m.hostID,
+		"host_id":   hostID,
 		"message":   testMessage,
 		"signature": signature,
 	}
@@ -224,18 +232,18 @@ func (m *Manager) testNewKey(ctx context.Context, key string, token string) erro
 	defer func() {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 		if cErr := resp.Body.Close(); cErr != nil {
-			log.Warn("close body failed", "error", cErr)
+			log.Warn("Failed to close response body", "error", cErr)
 		}
 	}()
 
 	return nil
 }
 
-func (m *Manager) confirmRotation(ctx context.Context, token string) error {
-	url := fmt.Sprintf("%s/api/v1/agent/confirm-rotation", m.controlPlaneURL)
+func (m *Manager) confirmRotation(ctx context.Context, token string, controlPlaneURL, hostID string) error {
+	url := fmt.Sprintf("%s/api/v1/agent/confirm-rotation", controlPlaneURL)
 
 	body := map[string]string{
-		"host_id": m.hostID,
+		"host_id": hostID,
 	}
 
 	resp, err := common.DoJSONRequest(ctx, m.httpClient, "POST", url, body, token, "runic-agent")

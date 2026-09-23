@@ -9,11 +9,11 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -119,8 +119,8 @@ func New(configPath, controlPlaneURL string) *Agent {
 
 	agent.cmdRunner = &firewall.RealCommandRunner{}
 	agent.exitFunc = os.Exit
-	agent.cachePath = "/etc/runic-agent/cached-bundle.rules"
-	agent.backupPath = "/etc/runic-agent/iptables-backup.rules"
+	agent.cachePath = apply.CachedBundlePath
+	agent.backupPath = apply.StartupBackupPath
 
 	return agent
 }
@@ -180,8 +180,12 @@ func (a *Agent) initialize(ctx context.Context) error {
 		return fmt.Errorf("register if needed: %w", err)
 	}
 
-	cfg = a.getConfig()
-	a.rotationManager = rotation.NewManager(a.configPath, a.httpClient, cfg.ControlPlaneURL, cfg.HostID)
+	a.rotationManager = rotation.NewManager(a.httpClient)
+
+	// Upgrade migration: copy legacy /etc/runic-agent persistent files to
+	// their /var successors when the new path is missing so crash-recovery
+	// state is not orphaned. Fallback reads cover any file missed here.
+	apply.MigrateLegacyFiles()
 
 	if err := a.backupIptables(ctx); err != nil {
 		log.Warn("Failed to backup iptables", "error", err)
@@ -250,15 +254,52 @@ func (a *Agent) registerIfNeeded(ctx context.Context) error {
 	return nil
 }
 
+// ensureBackupMigrated migrates the legacy /etc/runic-agent boot backup
+// forward when the agent uses the default /var path and the new file is
+// missing. It reports true when the caller should skip a fresh dump
+// (migrated successfully or primary already exists), false when a fresh
+// dump is needed. A directory at the new path (syscall.EISDIR from
+// MigrateLegacyFile) is distinct from an existing file and returns false so
+// the caller attempts a fresh dump instead of skipping. It shares the
+// MigrateLegacyFile primitive with the MigrateLegacyFiles startup path,
+// adding the isDefaultBackupPath guard plus the EISDIR-vs-Exist mapping and
+// WARN so a custom backupPath or directory case takes a fresh dump instead
+// of skipping.
+func (a *Agent) ensureBackupMigrated() bool {
+	if !isDefaultBackupPath(a.backupPath) {
+		return false
+	}
+	err := apply.MigrateLegacyFile(apply.LegacyStartupBackupPath, a.backupPath)
+	switch {
+	case err == nil:
+		return true
+	case errors.Is(err, syscall.EISDIR):
+		log.Warn("Legacy backup migration skipped, new path is a directory, taking fresh backup", "path", a.backupPath, "error", err)
+		return false
+	case os.IsExist(err):
+		return true
+	case !os.IsNotExist(err):
+		log.Warn("Legacy backup migration failed, taking fresh backup", "error", err)
+	}
+	return false
+}
+
 func (a *Agent) backupIptables(ctx context.Context) error {
-	if _, err := os.Stat(a.backupPath); err == nil {
+	if fi, err := os.Stat(a.backupPath); err == nil {
+		if fi.IsDir() {
+			return fmt.Errorf("backup path is a directory: %s", a.backupPath)
+		}
 		log.Info("Firewall backup already exists, skipping")
 		return nil
+	} else if !os.IsNotExist(err) {
+		log.Warn("Failed to stat backup path, attempting backup", "path", a.backupPath, "error", err)
 	}
 
-	dir := filepath.Dir(a.backupPath)
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return fmt.Errorf("create backup dir: %w", err)
+	// Upgrade migration: a pre-/var install left its boot backup under
+	// /etc/runic-agent. If the new path is missing but the legacy file
+	// exists, migrate it forward instead of dumping fresh rules.
+	if a.ensureBackupMigrated() {
+		return nil
 	}
 
 	out, err := firewall.DumpRules(ctx, a.cmdRunner)
@@ -266,7 +307,7 @@ func (a *Agent) backupIptables(ctx context.Context) error {
 		return fmt.Errorf("dump rules: %w", err)
 	}
 
-	if err := os.WriteFile(a.backupPath, []byte(out), 0600); err != nil {
+	if err := apply.WriteFileAtomic(a.backupPath, []byte(out), 0600); err != nil {
 		return fmt.Errorf("write backup: %w", err)
 	}
 
@@ -536,6 +577,35 @@ func (a *Agent) confirmApply(ctx context.Context, version string) error {
 	return transport.ConfirmApply(ctx, a.httpClient, cfg.ControlPlaneURL, cfg.HostID, cfg.Token, a.version, version)
 }
 
+// refreshDependentClients pushes fresh in-memory credentials to long-lived
+// clients that snapshot credentials at construction time (the log shipper).
+// The caller passes the authoritative just-swapped config value through so
+// the refresh cannot interleave with a concurrent updateConfig between the
+// swap and a re-read. Heartbeat, pull, rotation, and SSE paths read the
+// current config via getConfig on each call and already observe the swapped
+// config; this hook covers clients that hold their own copies. It is a
+// no-op when the shipper is nil (pre-initialize, unit tests), and the token
+// refresh stays in one place.
+func (a *Agent) refreshDependentClients(cfg *identity.Config) {
+	if a.shipper != nil {
+		a.shipper.SetCredentials(cfg.ControlPlaneURL, cfg.Token, cfg.HostID)
+	}
+}
+
+// swapConfig replaces the in-memory config under write lock. Both the
+// persist-failure path and the success path in doRegister share this helper
+// so the swap cannot drift.
+func (a *Agent) swapConfig(cfg *identity.Config) {
+	a.configMu.Lock()
+	defer a.configMu.Unlock()
+	if a.config == nil {
+		cp := *cfg
+		a.config = &cp
+	} else {
+		*a.config = *cfg
+	}
+}
+
 // doRegister performs the registration network I/O and swaps the new config
 // into place. It must be called without holding regMu; it uses configMu
 // internally for the swap. Both register and throttledRegister share this
@@ -546,17 +616,25 @@ func (a *Agent) doRegister(ctx context.Context) error {
 	if err := identity.Register(ctx, a.httpClient, &cfg, a.version, func() error {
 		return identity.SaveConfig(a.configPath, &cfg)
 	}, a.detectIPStrings()); err != nil {
+		if errors.Is(err, identity.ErrPersistAfterRegister) {
+			// Registration succeeded server-side but persisting the config
+			// failed (e.g. read-only /etc/runic-agent/config.json). The
+			// mutated copy already holds the fresh HostID, Token, HMACKey,
+			// AgentKey with RegistrationToken cleared, so retain it
+			// in-memory under write lock; persist failure is non-fatal.
+			// Returning nil keeps heartbeatLoop from logging
+			// "Re-registration failed" and breaks the permanent 401 loop.
+			a.swapConfig(&cfg)
+			log.Warn("Failed to persist config after registration, continuing with in-memory credentials", "path", a.configPath, "error", err)
+			a.refreshDependentClients(&cfg)
+			return nil
+		}
 		return fmt.Errorf("register agent: %w", err)
 	}
 
 	// Swap the new config under write lock.
-	a.configMu.Lock()
-	if a.config == nil {
-		a.config = &cfg
-	} else {
-		*a.config = cfg
-	}
-	a.configMu.Unlock()
+	a.swapConfig(&cfg)
+	a.refreshDependentClients(&cfg)
 	return nil
 }
 
@@ -723,7 +801,7 @@ func (a *Agent) isControlPlaneReachable(ctx context.Context) bool {
 	defer func() {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 		if cErr := resp.Body.Close(); cErr != nil {
-			log.Warn("close err", "err", cErr)
+			log.Warn("Failed to close heartbeat response body", "url", url, "error", cErr)
 		}
 	}()
 	return resp.StatusCode == http.StatusOK
@@ -735,7 +813,7 @@ func (a *Agent) applyCachedBundle(ctx context.Context) error {
 		log.Info("apply_rules_bundle disabled, skipping cached bundle application")
 		return nil
 	}
-	data, err := os.ReadFile(a.cachePath)
+	data, err := a.readCachedBundle()
 	if err != nil {
 		if os.IsNotExist(err) {
 			log.Info("No cached bundle found, skipping apply-on-boot")
@@ -756,8 +834,8 @@ func (a *Agent) applyCachedBundle(ctx context.Context) error {
 	}
 	tmpPath := tmpFile.Name()
 	defer func() {
-		if err := os.Remove(tmpPath); err != nil {
-			log.Warn("remove err", "err", err)
+		if err := os.Remove(tmpPath); err != nil && !os.IsNotExist(err) {
+			log.Warn("Failed to remove temp file", "path", tmpPath, "error", err)
 		}
 	}()
 
@@ -1005,8 +1083,31 @@ func (a *Agent) handleUpdateAgentSync(ctx context.Context, controlPlaneURL strin
 	return nil
 }
 
+// isCanonicalPath reports whether configured equals the canonical default
+// path after cleaning. Cleaning handles trailing slashes and dot segments
+// while still respecting test overrides: custom temp-dir paths never equal
+// the /var defaults so legacy fallback stays disabled for them. It
+// delegates to the single shared apply.IsCanonicalPath helper so the
+// canonical-path check cannot drift between packages.
+func isCanonicalPath(configured, canonical string) bool {
+	return apply.IsCanonicalPath(configured, canonical)
+}
+
+// isDefaultBackupPath reports whether p is the default startup-backup path.
+func isDefaultBackupPath(p string) bool {
+	return isCanonicalPath(p, apply.StartupBackupPath)
+}
+
+// readCachedBundle reads the cached bundle from the configured cachePath,
+// falling back to the legacy /etc/runic-agent location when the agent still
+// uses the default /var path. A fallback hit migrates the content forward
+// so the next boot hits the primary location.
+func (a *Agent) readCachedBundle() ([]byte, error) {
+	return apply.ReadFileWithFallback(a.cachePath, apply.LegacyCachedBundlePath)
+}
+
 func (a *Agent) readBackup() (string, error) {
-	data, err := os.ReadFile(a.backupPath)
+	data, err := apply.ReadFileWithFallback(a.backupPath, apply.LegacyStartupBackupPath)
 	if err != nil {
 		return "", fmt.Errorf("read backup: %w", err)
 	}
@@ -1032,8 +1133,11 @@ func (a *Agent) rotationCheckLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			// Snapshot all credentials from a single getConfig generation so
+			// the rotation request cannot mix a fresh token with a stale
+			// URL/hostID (or vice versa) across a concurrent re-registration.
 			cfg := a.getConfig()
-			newKey, err := a.rotationManager.CheckAndRotate(ctx, cfg.HMACKey, cfg.Token)
+			newKey, err := a.rotationManager.CheckAndRotate(ctx, cfg.HMACKey, cfg.Token, cfg.ControlPlaneURL, cfg.HostID)
 			if err != nil {
 				log.Warn("Key rotation check failed", "error", err)
 				continue

@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -24,25 +22,8 @@ func helperConfig() *identity.Config {
 	}
 }
 
-func helperConfigPath(t *testing.T, cfg *identity.Config) string {
-	t.Helper()
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.json")
-	data, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		t.Fatalf("failed to marshal config: %v", err)
-	}
-	if err := os.WriteFile(path, data, 0600); err != nil {
-		t.Fatalf("failed to write config: %v", err)
-	}
-	return path
-}
-
 func TestNewManager(t *testing.T) {
-	cfg := helperConfig()
-	configPath := helperConfigPath(t, cfg)
-
-	manager := NewManager(configPath, &http.Client{}, "http://localhost:8080", "host-test-peer")
+	manager := NewManager(&http.Client{})
 
 	if manager == nil {
 		t.Fatal("NewManager() returned nil")
@@ -50,10 +31,6 @@ func TestNewManager(t *testing.T) {
 
 	if manager.state != StateIdle {
 		t.Errorf("NewManager() state = %v, want %v", manager.state, StateIdle)
-	}
-
-	if manager.hostID != "host-test-peer" {
-		t.Errorf("NewManager() hostID = %s, want host-test-peer", manager.hostID)
 	}
 }
 
@@ -69,11 +46,9 @@ func TestCheckAndRotate_NoRotationPending(t *testing.T) {
 
 	cfg := helperConfig()
 	cfg.ControlPlaneURL = server.URL
-	configPath := helperConfigPath(t, cfg)
+	manager := NewManager(server.Client())
 
-	manager := NewManager(configPath, server.Client(), server.URL, "host-test-peer")
-
-	newKey, err := manager.CheckAndRotate(context.Background(), cfg.HMACKey, cfg.Token)
+	newKey, err := manager.CheckAndRotate(context.Background(), cfg.HMACKey, cfg.Token, cfg.ControlPlaneURL, cfg.HostID)
 	if err != nil {
 		t.Fatalf("CheckAndRotate() error = %v", err)
 	}
@@ -98,11 +73,9 @@ func TestCheckAndRotate_NoRotationPending_NotFound(t *testing.T) {
 
 	cfg := helperConfig()
 	cfg.ControlPlaneURL = server.URL
-	configPath := helperConfigPath(t, cfg)
+	manager := NewManager(server.Client())
 
-	manager := NewManager(configPath, server.Client(), server.URL, "host-test-peer")
-
-	newKey, err := manager.CheckAndRotate(context.Background(), cfg.HMACKey, cfg.Token)
+	newKey, err := manager.CheckAndRotate(context.Background(), cfg.HMACKey, cfg.Token, cfg.ControlPlaneURL, cfg.HostID)
 	if err != nil {
 		t.Fatalf("CheckAndRotate() error = %v", err)
 	}
@@ -155,11 +128,9 @@ func TestCheckAndRotate_RotationSuccess(t *testing.T) {
 	cfg := helperConfig()
 	cfg.ControlPlaneURL = server.URL
 	cfg.HMACKey = "old-hmac-key-12345678901234567890123456789012"
-	configPath := helperConfigPath(t, cfg)
+	manager := NewManager(server.Client())
 
-	manager := NewManager(configPath, server.Client(), server.URL, "host-test-peer")
-
-	newKey, err := manager.CheckAndRotate(context.Background(), cfg.HMACKey, cfg.Token)
+	newKey, err := manager.CheckAndRotate(context.Background(), cfg.HMACKey, cfg.Token, cfg.ControlPlaneURL, cfg.HostID)
 	if err != nil {
 		t.Fatalf("CheckAndRotate() error = %v", err)
 	}
@@ -206,11 +177,9 @@ func TestCheckAndRotate_TokenExpired(t *testing.T) {
 
 	cfg := helperConfig()
 	cfg.ControlPlaneURL = server.URL
-	configPath := helperConfigPath(t, cfg)
+	manager := NewManager(server.Client())
 
-	manager := NewManager(configPath, server.Client(), server.URL, "host-test-peer")
-
-	_, err := manager.CheckAndRotate(context.Background(), cfg.HMACKey, cfg.Token)
+	_, err := manager.CheckAndRotate(context.Background(), cfg.HMACKey, cfg.Token, cfg.ControlPlaneURL, cfg.HostID)
 	if err == nil {
 		t.Error("CheckAndRotate() should have failed with expired token")
 	}
@@ -251,11 +220,9 @@ func TestCheckAndRotate_KeyTestFails(t *testing.T) {
 
 	cfg := helperConfig()
 	cfg.ControlPlaneURL = server.URL
-	configPath := helperConfigPath(t, cfg)
+	manager := NewManager(server.Client())
 
-	manager := NewManager(configPath, server.Client(), server.URL, "host-test-peer")
-
-	_, err := manager.CheckAndRotate(context.Background(), cfg.HMACKey, cfg.Token)
+	_, err := manager.CheckAndRotate(context.Background(), cfg.HMACKey, cfg.Token, cfg.ControlPlaneURL, cfg.HostID)
 	if err == nil {
 		t.Error("CheckAndRotate() should have failed when key test fails")
 	}
@@ -299,12 +266,10 @@ func TestCheckAndRotate_ConfirmFailsNonFatal(t *testing.T) {
 
 	cfg := helperConfig()
 	cfg.ControlPlaneURL = server.URL
-	configPath := helperConfigPath(t, cfg)
-
-	manager := NewManager(configPath, server.Client(), server.URL, "host-test-peer")
+	manager := NewManager(server.Client())
 
 	// Confirm-rotation failure IS now fatal (error state)
-	_, err := manager.CheckAndRotate(context.Background(), cfg.HMACKey, cfg.Token)
+	_, err := manager.CheckAndRotate(context.Background(), cfg.HMACKey, cfg.Token, cfg.ControlPlaneURL, cfg.HostID)
 	if err == nil {
 		t.Fatal("CheckAndRotate() expected error when confirm-rotation fails")
 	}
@@ -325,16 +290,14 @@ func TestCheckAndRotate_SkipsInProgress(t *testing.T) {
 
 	cfg := helperConfig()
 	cfg.ControlPlaneURL = server.URL
-	configPath := helperConfigPath(t, cfg)
-
-	manager := NewManager(configPath, server.Client(), server.URL, "host-test-peer")
+	manager := NewManager(server.Client())
 
 	// Manually set state to rotating
 	manager.mu.Lock()
 	manager.state = StateRotating
 	manager.mu.Unlock()
 
-	newKey, err := manager.CheckAndRotate(context.Background(), cfg.HMACKey, cfg.Token)
+	newKey, err := manager.CheckAndRotate(context.Background(), cfg.HMACKey, cfg.Token, cfg.ControlPlaneURL, cfg.HostID)
 	if err != nil {
 		t.Fatalf("CheckAndRotate() error = %v", err)
 	}
@@ -356,16 +319,14 @@ func TestCheckAndRotate_SkipsTesting(t *testing.T) {
 
 	cfg := helperConfig()
 	cfg.ControlPlaneURL = server.URL
-	configPath := helperConfigPath(t, cfg)
-
-	manager := NewManager(configPath, server.Client(), server.URL, "host-test-peer")
+	manager := NewManager(server.Client())
 
 	// Manually set state to testing
 	manager.mu.Lock()
 	manager.state = StateTesting
 	manager.mu.Unlock()
 
-	newKey, err := manager.CheckAndRotate(context.Background(), cfg.HMACKey, cfg.Token)
+	newKey, err := manager.CheckAndRotate(context.Background(), cfg.HMACKey, cfg.Token, cfg.ControlPlaneURL, cfg.HostID)
 	if err != nil {
 		t.Fatalf("CheckAndRotate() error = %v", err)
 	}
@@ -401,11 +362,9 @@ func TestCheckAndRotate_EmptyKeyFromServer(t *testing.T) {
 
 	cfg := helperConfig()
 	cfg.ControlPlaneURL = server.URL
-	configPath := helperConfigPath(t, cfg)
+	manager := NewManager(server.Client())
 
-	manager := NewManager(configPath, server.Client(), server.URL, "host-test-peer")
-
-	_, err := manager.CheckAndRotate(context.Background(), cfg.HMACKey, cfg.Token)
+	_, err := manager.CheckAndRotate(context.Background(), cfg.HMACKey, cfg.Token, cfg.ControlPlaneURL, cfg.HostID)
 	if err == nil {
 		t.Error("CheckAndRotate() should have failed with empty key")
 	}
@@ -429,20 +388,16 @@ func TestCheckAndRotate_UnexpectedStatusCode(t *testing.T) {
 
 	cfg := helperConfig()
 	cfg.ControlPlaneURL = server.URL
-	configPath := helperConfigPath(t, cfg)
+	manager := NewManager(server.Client())
 
-	manager := NewManager(configPath, server.Client(), server.URL, "host-test-peer")
-
-	_, err := manager.CheckAndRotate(context.Background(), cfg.HMACKey, cfg.Token)
+	_, err := manager.CheckAndRotate(context.Background(), cfg.HMACKey, cfg.Token, cfg.ControlPlaneURL, cfg.HostID)
 	if err == nil {
 		t.Error("CheckAndRotate() should have failed with unexpected status code")
 	}
 }
 
 func TestGetState(t *testing.T) {
-	configPath := helperConfigPath(t, helperConfig())
-
-	manager := NewManager(configPath, &http.Client{}, "http://localhost:8080", "host-test-peer")
+	manager := NewManager(&http.Client{})
 
 	// Test initial state
 	if manager.GetState() != StateIdle {
@@ -460,9 +415,7 @@ func TestGetState(t *testing.T) {
 }
 
 func TestGetLastRotation(t *testing.T) {
-	configPath := helperConfigPath(t, helperConfig())
-
-	manager := NewManager(configPath, &http.Client{}, "http://localhost:8080", "host-test-peer")
+	manager := NewManager(&http.Client{})
 
 	// Initially should be zero
 	if !manager.GetLastRotation().IsZero() {
@@ -511,11 +464,9 @@ func TestCheckAndRotate_CheckRotationReturnsInvalidJSON(t *testing.T) {
 
 	cfg := helperConfig()
 	cfg.ControlPlaneURL = server.URL
-	configPath := helperConfigPath(t, cfg)
+	manager := NewManager(server.Client())
 
-	manager := NewManager(configPath, server.Client(), server.URL, "host-test-peer")
-
-	_, err := manager.CheckAndRotate(context.Background(), cfg.HMACKey, cfg.Token)
+	_, err := manager.CheckAndRotate(context.Background(), cfg.HMACKey, cfg.Token, cfg.ControlPlaneURL, cfg.HostID)
 	if err == nil {
 		t.Error("CheckAndRotate() should have failed with invalid JSON response")
 	}
@@ -542,11 +493,9 @@ func TestCheckAndRotate_RotateKeyReturnsInvalidJSON(t *testing.T) {
 
 	cfg := helperConfig()
 	cfg.ControlPlaneURL = server.URL
-	configPath := helperConfigPath(t, cfg)
+	manager := NewManager(server.Client())
 
-	manager := NewManager(configPath, server.Client(), server.URL, "host-test-peer")
-
-	_, err := manager.CheckAndRotate(context.Background(), cfg.HMACKey, cfg.Token)
+	_, err := manager.CheckAndRotate(context.Background(), cfg.HMACKey, cfg.Token, cfg.ControlPlaneURL, cfg.HostID)
 	if err == nil {
 		t.Error("CheckAndRotate() should have failed with invalid JSON from rotate-key")
 	}
@@ -554,4 +503,89 @@ func TestCheckAndRotate_RotateKeyReturnsInvalidJSON(t *testing.T) {
 	if manager.GetState() != StateFailed {
 		t.Errorf("CheckAndRotate() state = %v, want %v", manager.GetState(), StateFailed)
 	}
+}
+
+func TestCheckAndRotate_Concurrent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/agent/check-rotation":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"rotation_token": "concurrent-token",
+			})
+		case "/api/v1/agent/rotate-key":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"new_hmac_key": "new-hmac-key-concurrent-12345678901234",
+			})
+		case "/api/v1/agent/test-key":
+			w.WriteHeader(http.StatusOK)
+		case "/api/v1/agent/confirm-rotation":
+			w.WriteHeader(http.StatusOK)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	cfg := helperConfig()
+	cfg.ControlPlaneURL = server.URL
+	manager := NewManager(server.Client())
+
+	var wg sync.WaitGroup
+	var errMu sync.Mutex
+	var errs []error
+	var successCount int
+	var skipCount int
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			newKey, err := manager.CheckAndRotate(context.Background(), cfg.HMACKey, cfg.Token, cfg.ControlPlaneURL, cfg.HostID)
+			errMu.Lock()
+			defer errMu.Unlock()
+			if err != nil {
+				errs = append(errs, err)
+				return
+			}
+			// Record terminal outcomes: empty means skipped (already in
+			// progress) or no rotation; non-empty means a rotation won.
+			// Either is valid under concurrency; what matters is no panic,
+			// no unexpected error, and at least one successful rotation.
+			if newKey != "" {
+				successCount++
+			} else {
+				skipCount++
+			}
+		}()
+	}
+	wg.Wait()
+
+	// The concurrent run must not panic and must end in a defined rotation
+	// state.
+	state := manager.GetState()
+	switch state {
+	case StateIdle, StateRotating, StateTesting, StateConfirmed, StateFailed, StateFallback:
+	default:
+		t.Fatalf("concurrent CheckAndRotate ended in invalid state %q", state)
+	}
+	errMu.Lock()
+	nErrs := len(errs)
+	nSuccess := successCount
+	nSkip := skipCount
+	errDetails := make([]string, 0, nErrs)
+	for _, err := range errs {
+		errDetails = append(errDetails, err.Error())
+	}
+	errMu.Unlock()
+	if nErrs != 0 {
+		t.Fatalf("concurrent rotation returned %d unexpected errors: %v", nErrs, errDetails)
+	}
+	if nSuccess == 0 {
+		t.Errorf("concurrent rotation had no successful rotation (successes=0 skips=%d); at least one winner is expected", nSkip)
+	}
+	if nSuccess+nSkip != 20 {
+		t.Errorf("concurrent rotation outcome count = %d, want 20 (successes=%d skips=%d errors=%d)", nSuccess+nSkip, nSuccess, nSkip, nErrs)
+	}
+	t.Logf("concurrent rotation finished state=%s successes=%d skips=%d errors=%d", state, nSuccess, nSkip, nErrs)
 }

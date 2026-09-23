@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -18,6 +19,11 @@ import (
 	"runic/internal/common/log"
 	"runic/internal/models"
 )
+
+// ErrPersistAfterRegister marks a failure to persist config after a
+// successful registration. Credentials are already mutated on cfg when this
+// error is returned, so callers may retain them in-memory.
+var ErrPersistAfterRegister = errors.New("save config after registration")
 
 // BuildHMACProof builds a re-registration proof of possession for the stored
 // HMAC key without disclosing the key itself. The message is built by the
@@ -128,7 +134,7 @@ func Register(ctx context.Context, client common.HTTPClient, cfg *Config, versio
 	cfg.RegistrationToken = ""
 
 	if err := saveFunc(); err != nil {
-		return fmt.Errorf("save config after registration: %w", err)
+		return fmt.Errorf("%w: %w", ErrPersistAfterRegister, err)
 	}
 
 	log.Info("Registered with Runic control plane", "hostname", hostname, "host_id", regResp.HostID)

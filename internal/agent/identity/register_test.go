@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -580,5 +581,108 @@ func TestRegisterHealsExpiredTokenWithoutManualToken(t *testing.T) {
 	}
 	if cfg.RegistrationToken != "" {
 		t.Errorf("expected RegistrationToken cleared after heal, got %q", cfg.RegistrationToken)
+	}
+}
+
+func TestRegisterSaveFailureStillMutatesConfig(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" || r.URL.Path != "/api/v1/agent/register" {
+			http.NotFound(w, r)
+			return
+		}
+		resp := models.AgentRegisterResponse{
+			HostID:           "fresh-host-save-fail",
+			Token:            "fresh-token-save-fail",
+			PullInterval:     3600,
+			CurrentBundleVer: "v1.0.0",
+			HMACKey:          "fresh-hmac-save-fail",
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	cfg := &Config{
+		ControlPlaneURL: server.URL,
+		HostID:          "stale-host",
+		Token:           "stale-token",
+	}
+
+	// os.ErrPermission models a read-only config file/dir without new deps.
+	err := Register(context.Background(), server.Client(), cfg, "v1.0.0", func() error {
+		return os.ErrPermission
+	}, nil)
+	if err == nil {
+		t.Fatal("expected save-wrapped error for failing saveFunc, got nil")
+	}
+	if !errors.Is(err, ErrPersistAfterRegister) {
+		t.Errorf("expected error to match ErrPersistAfterRegister, got: %v", err)
+	}
+	if !errors.Is(err, os.ErrPermission) {
+		t.Errorf("expected error chain to preserve os.ErrPermission via %%w, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "save config after registration") {
+		t.Errorf("expected error to wrap persist failure, got: %v", err)
+	}
+
+	// Credentials are mutated before save, so the caller can retain them
+	// in-memory despite the error.
+	if cfg.HostID != "fresh-host-save-fail" {
+		t.Errorf("expected HostID 'fresh-host-save-fail' despite save failure, got '%s'", cfg.HostID)
+	}
+	if cfg.Token != "fresh-token-save-fail" {
+		t.Errorf("expected Token 'fresh-token-save-fail' despite save failure, got '%s'", cfg.Token)
+	}
+}
+
+// persistCauseError is a distinct cause type so errors.As can prove the
+// %w chain preserves the save failure cause, not just the sentinel.
+type persistCauseError struct{ msg string }
+
+func (e *persistCauseError) Error() string { return e.msg }
+
+func TestRegisterSaveFailurePreservesCauseChain(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" || r.URL.Path != "/api/v1/agent/register" {
+			http.NotFound(w, r)
+			return
+		}
+		resp := models.AgentRegisterResponse{
+			HostID:           "fresh-host-cause-chain",
+			Token:            "fresh-token-cause-chain",
+			PullInterval:     3600,
+			CurrentBundleVer: "v1.0.0",
+			HMACKey:          "fresh-hmac-cause-chain",
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	cfg := &Config{
+		ControlPlaneURL: server.URL,
+		HostID:          "stale-host",
+		Token:           "stale-token",
+	}
+
+	cause := &persistCauseError{msg: "read-only filesystem"}
+	err := Register(context.Background(), server.Client(), cfg, "v1.0.0", func() error {
+		return cause
+	}, nil)
+	if err == nil {
+		t.Fatal("expected save-wrapped error for failing saveFunc, got nil")
+	}
+	if !errors.Is(err, ErrPersistAfterRegister) {
+		t.Errorf("expected error to match ErrPersistAfterRegister, got: %v", err)
+	}
+	var got *persistCauseError
+	if !errors.As(err, &got) {
+		t.Fatalf("expected errors.As to retrieve persist cause, got: %v", err)
+	}
+	if got != cause {
+		t.Errorf("expected cause pointer %p, got %p", cause, got)
+	}
+	if !strings.Contains(err.Error(), "read-only filesystem") {
+		t.Errorf("expected error to preserve cause message via %%w, got: %v", err)
 	}
 }
