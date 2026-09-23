@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"runic/internal/common"
@@ -28,13 +29,16 @@ type LogEvent struct {
 }
 
 type Shipper struct {
-	client          *http.Client
+	// Immutable after NewShipper: safe to read without holding mu.
+	client  *http.Client
+	logPath string
+	version string
+	// Guarded by mu: refresh via SetCredentials, snapshot under RLock.
 	controlPlaneURL string
 	token           string
 	hostID          string
-	logPath         string
-	lines           chan string
-	version         string
+	// mu guards controlPlaneURL, token, and hostID for credential refresh.
+	mu sync.RWMutex
 }
 
 func NewShipper(client *http.Client, controlPlaneURL, token, hostID, logPath, version string) *Shipper {
@@ -44,13 +48,32 @@ func NewShipper(client *http.Client, controlPlaneURL, token, hostID, logPath, ve
 		token:           token,
 		hostID:          hostID,
 		logPath:         logPath,
-		lines:           make(chan string, 100),
 		version:         version,
 	}
 }
 
+// SetCredentials refreshes the control plane URL, bearer token, and host
+// ID used for log shipment. It is safe for concurrent use with ship; ship
+// snapshots all three fields under a read lock. Called after
+// re-registration when the control plane issues fresh credentials (and when
+// the control plane URL moves). This is the single credential-refresh entry
+// point; callers needing only a token refresh pass the current URL and host
+// ID through unchanged so token-store logic stays in one place under one
+// lock.
+func (s *Shipper) SetCredentials(controlPlaneURL, token, hostID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.controlPlaneURL = controlPlaneURL
+	s.token = token
+	s.hostID = hostID
+}
+
 func (s *Shipper) Run(ctx context.Context) error {
-	log.Info("Starting log shipper", "logPath", s.logPath, "controlPlaneURL", s.controlPlaneURL, "hostID", s.hostID)
+	s.mu.RLock()
+	hostID := s.hostID
+	controlPlaneURL := s.controlPlaneURL
+	s.mu.RUnlock()
+	log.Info("Starting log shipper", "logPath", s.logPath, "controlPlaneURL", controlPlaneURL, "hostID", hostID)
 	tailedLines, tailDone := s.tail(ctx, s.logPath)
 
 	var batch []LogEvent
@@ -278,10 +301,22 @@ func (s *Shipper) ship(ctx context.Context, batch []LogEvent) {
 		return
 	}
 
-	url := s.controlPlaneURL + "/api/v1/agent/logs"
+	s.mu.RLock()
+	token := s.token
+	hostID := s.hostID
+	controlPlaneURL := s.controlPlaneURL
+	s.mu.RUnlock()
+	// logPath and version are immutable after NewShipper (see Shipper), so
+	// they are read without holding mu. controlPlaneURL, token, and hostID
+	// above are the single per-call snapshot: retries below reuse it and
+	// never re-read mu, so a concurrent SetCredentials cannot mix
+	// credentials mid-batch.
+	version := s.version
+
+	url := controlPlaneURL + "/api/v1/agent/logs"
 
 	reqBody := map[string]interface{}{
-		"host_id": s.hostID,
+		"host_id": hostID,
 		"events":  batch,
 	}
 
@@ -305,10 +340,10 @@ func (s *Shipper) ship(ctx context.Context, batch []LogEvent) {
 		}
 
 		userAgent := "runic-agent"
-		if s.version != "" {
-			userAgent = "runic-agent/" + s.version
+		if version != "" {
+			userAgent = "runic-agent/" + version
 		}
-		resp, err := common.DoJSONRequest(ctx, s.client, "POST", url, reqBody, s.token, userAgent)
+		resp, err := common.DoJSONRequest(ctx, s.client, "POST", url, reqBody, token, userAgent)
 		if err != nil {
 			// Do not retry on 401 (unauthorized — re-registration needed).
 			if common.IsUnauthorized(err) {

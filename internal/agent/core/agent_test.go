@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"runic/internal/agent/apply"
 	"runic/internal/agent/identity"
 	"runic/internal/common/log"
 	"runic/internal/models"
@@ -1090,11 +1091,11 @@ func TestAgentDefaultPaths(t *testing.T) {
 
 	agent := New(configPath, "http://localhost:8080")
 
-	if agent.cachePath != "/etc/runic-agent/cached-bundle.rules" {
-		t.Errorf("cachePath = %s, want /etc/runic-agent/cached-bundle.rules", agent.cachePath)
+	if agent.cachePath != apply.CachedBundlePath {
+		t.Errorf("cachePath = %s, want %s", agent.cachePath, apply.CachedBundlePath)
 	}
-	if agent.backupPath != "/etc/runic-agent/iptables-backup.rules" {
-		t.Errorf("backupPath = %s, want /etc/runic-agent/iptables-backup.rules", agent.backupPath)
+	if agent.backupPath != apply.StartupBackupPath {
+		t.Errorf("backupPath = %s, want %s", agent.backupPath, apply.StartupBackupPath)
 	}
 	if agent.cmdRunner == nil {
 		t.Error("cmdRunner is nil, expected a CommandRunner implementation")
@@ -1272,6 +1273,50 @@ func TestConfigNeedsRegistration(t *testing.T) {
 			gotReg := cfg.NeedsRegistration()
 			if gotReg != tt.wantReg {
 				t.Errorf("NeedsRegistration() = %v, want %v", gotReg, tt.wantReg)
+			}
+
+			// Exercise the production Agent path (registerInner with
+			// force=false, cooldown bypassed) so the table asserts real
+			// attempt behavior, not just the isolated predicate. The
+			// cooldown-skip path (bypassCooldown=false) is covered by
+			// TestThrottledRegisterCooldownSkipsSecondCall.
+			var calls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				if !strings.Contains(r.URL.Path, "register") {
+					http.NotFound(w, r)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(map[string]string{
+					"host_id": "registered-host-id",
+					"token":   "registered-token",
+				})
+			}))
+			t.Cleanup(server.Close)
+
+			agentCfg := helperConfig()
+			configPath := helperConfigPath(t, agentCfg)
+			agent := New(configPath, server.URL)
+			agent.config.HostID = tt.hostID
+			agent.config.Token = tt.token
+			agent.config.ControlPlaneURL = server.URL
+			agent.httpClient = server.Client()
+
+			_, err := agent.registerInner(context.Background(), false, true)
+			if err != nil {
+				t.Fatalf("registerInner(force=false) error = %v, want nil", err)
+			}
+			if !tt.wantReg && calls.Load() != 0 {
+				t.Errorf("registerInner with credentials hit server %d times, want 0 (must skip I/O)", calls.Load())
+			}
+			if tt.wantReg {
+				if calls.Load() != 1 {
+					t.Errorf("registerInner missing credentials hit server %d times, want 1 (must attempt registration)", calls.Load())
+				}
+				if got := agent.getConfig(); got.HostID != "registered-host-id" {
+					t.Errorf("registerInner HostID = %q, want registered-host-id (must swap fresh credentials)", got.HostID)
+				}
 			}
 		})
 	}
@@ -1957,5 +2002,165 @@ func TestListenSSEHotLoopThrottled(t *testing.T) {
 
 	if got := registerCalls.Load(); got > 2 {
 		t.Errorf("register calls in 200ms window = %d, want <=2 (hot loop not throttled, want 1-2 not 8+)", got)
+	}
+}
+
+func TestDoRegisterRetainsCredentialsOnPersistFailure(t *testing.T) {
+	tests := []struct {
+		name     string
+		hostID   string
+		token    string
+		hmacKey  string
+		agentKey string
+	}{
+		{
+			name:     "retains full credentials",
+			hostID:   "fresh-host-id",
+			token:    "fresh-token-abc123",
+			hmacKey:  "fresh-hmac-key-12345678901234567890123456",
+			agentKey: "fresh-agent-key",
+		},
+		{
+			name:     "keeps token",
+			hostID:   "fresh-host-keep",
+			token:    "fresh-token-keep123",
+			hmacKey:  "fresh-hmac-keep-1234567890123456789012",
+			agentKey: "fresh-agent-key-keep",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != "POST" || !strings.Contains(r.URL.Path, "/api/v1/agent/register") {
+					http.NotFound(w, r)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{
+					"host_id":                tt.hostID,
+					"token":                  tt.token,
+					"pull_interval_seconds":  86400,
+					"current_bundle_version": "",
+					"hmac_key":               tt.hmacKey,
+					"agent_key":              tt.agentKey,
+				})
+			}))
+			defer server.Close()
+
+			// Use a directory as configPath so identity.SaveConfig fails
+			// with "is a directory" (reliable even when running as root,
+			// unlike read-only permission bits).
+			failingPath := t.TempDir()
+			before, err := os.ReadDir(failingPath)
+			if err != nil {
+				t.Fatalf("failed to list failing dir: %v", err)
+			}
+
+			agent := New(failingPath, server.URL)
+			agent.config.ControlPlaneURL = server.URL
+			agent.config.HostID = "stale-host"
+			agent.config.Token = "stale-token"
+			agent.config.HMACKey = "stale-hmac-key"
+			agent.config.AgentKey = "stale-agent-key"
+			agent.config.RegistrationToken = "one-time-token"
+			agent.httpClient = server.Client()
+
+			if err := agent.doRegister(context.Background()); err != nil {
+				t.Fatalf("doRegister() error = %v, want nil (persist failure must not fail registration)", err)
+			}
+
+			got := agent.getConfig()
+			if got.Token != tt.token {
+				t.Errorf("getConfig Token = %q, want %q (in-memory credentials must be retained)", got.Token, tt.token)
+			}
+			if got.HostID != tt.hostID {
+				t.Errorf("getConfig HostID = %q, want %q", got.HostID, tt.hostID)
+			}
+			if got.HMACKey != tt.hmacKey {
+				t.Errorf("getConfig HMACKey = %q, want fresh hmac key", got.HMACKey)
+			}
+			if got.AgentKey != tt.agentKey {
+				t.Errorf("getConfig AgentKey = %q, want %q", got.AgentKey, tt.agentKey)
+			}
+			if got.RegistrationToken != "" {
+				t.Errorf("getConfig RegistrationToken = %q, want empty (must be cleared after use)", got.RegistrationToken)
+			}
+
+			// The failed persist must not have overwritten anything on
+			// disk: the dir must still hold exactly what it held before.
+			after, err := os.ReadDir(failingPath)
+			if err != nil {
+				t.Fatalf("failed to list failing dir after doRegister: %v", err)
+			}
+			if len(after) != len(before) {
+				t.Errorf("failing dir entries before = %d, after = %d, want unchanged (file must not be overwritten)", len(before), len(after))
+			}
+			if info, err := os.Stat(failingPath); err != nil || !info.IsDir() {
+				t.Errorf("failingPath stat = %v, want still a directory (no config file written over it)", failingPath)
+			}
+		})
+	}
+}
+
+func TestThrottledRegisterRecoversAfterPersistFailure(t *testing.T) {
+	var authMu sync.Mutex
+	var gotHeartbeatAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/api/v1/agent/register"):
+			if r.Method != "POST" {
+				http.NotFound(w, r)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"host_id":                "fresh-host-recover",
+				"token":                  "fresh-token-recover123",
+				"pull_interval_seconds":  86400,
+				"current_bundle_version": "",
+				"hmac_key":               "fresh-hmac-recover-12345678901234567890",
+				"agent_key":              "fresh-agent-key-recover",
+			})
+		case strings.Contains(r.URL.Path, "/api/v1/agent/heartbeat"):
+			authMu.Lock()
+			gotHeartbeatAuth = r.Header.Get("Authorization")
+			authMu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	// Directory-as-configPath guarantees the persist fails even as root.
+	failingPath := t.TempDir()
+
+	agent := New(failingPath, server.URL)
+	agent.config.ControlPlaneURL = server.URL
+	agent.config.HostID = "stale-host"
+	agent.config.Token = "stale-token"
+	agent.config.HMACKey = "stale-hmac-key"
+	agent.config.AgentKey = "stale-agent-key"
+	agent.httpClient = server.Client()
+	agent.cmdRunner = &mockCommandRunner{}
+
+	// First doRegister: persist fails but in-memory credentials must swap.
+	if err := agent.doRegister(context.Background()); err != nil {
+		t.Fatalf("doRegister() error = %v, want nil (persist failure must succeed in-memory)", err)
+	}
+	if got := agent.getConfig(); got.Token != "fresh-token-recover123" {
+		t.Fatalf("getConfig Token = %q, want fresh-token-recover123 after persist failure", got.Token)
+	}
+
+	// Subsequent heartbeat must use the fresh in-memory token and succeed.
+	if err := agent.sendHeartbeat(context.Background()); err != nil {
+		t.Fatalf("sendHeartbeat() error = %v, want nil with fresh token after persist failure", err)
+	}
+	authMu.Lock()
+	gotAuth := gotHeartbeatAuth
+	authMu.Unlock()
+	if gotAuth != "Bearer fresh-token-recover123" {
+		t.Errorf("heartbeat Authorization = %q, want Bearer fresh-token-recover123", gotAuth)
 	}
 }

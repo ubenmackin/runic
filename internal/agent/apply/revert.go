@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -33,7 +32,7 @@ func revertRules(backup string) error {
 	}
 
 	defer func() {
-		if err := os.Remove(tmpPath); err != nil {
+		if err := os.Remove(tmpPath); err != nil && !os.IsNotExist(err) {
 			log.Warn("Failed to remove temp file", "path", tmpPath, "error", err)
 		}
 	}()
@@ -67,23 +66,26 @@ func dumpCurrentRules() (string, error) {
 }
 
 // persistBackup writes the backup content to a persistent file so crash
-// recovery can still restore rules.
+// recovery can still restore rules. The write is atomic (temp + rename via
+// WriteFileAtomic, shared with the bundle cache and boot backup) so a crash
+// mid-write never leaves a partial file that blocks future migrations.
 func persistBackup(content string) error {
-	dir := filepath.Dir(LocalBackupPath)
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return fmt.Errorf("create backup dir: %w", err)
-	}
-	if err := os.WriteFile(LocalBackupPath, []byte(content), 0600); err != nil {
+	if err := WriteFileAtomic(LocalBackupPath, []byte(content), 0600); err != nil {
 		return fmt.Errorf("write backup: %w", err)
 	}
 	log.Info("Backup persisted for crash recovery", "path", LocalBackupPath)
+	// Best-effort legacy cleanup so a migrated install does not leave a
+	// stale duplicate under /etc/runic-agent.
+	removeLegacyFile(LegacyLocalBackupPath)
 	return nil
 }
 
 // readPersistedBackup reads the backup file from disk; returns empty string
-// and nil error if no backup exists.
+// and nil error if no backup exists. It falls back to the legacy
+// /etc/runic-agent path when the new path is missing so upgrades do not
+// lose crash-recovery state, migrating the content forward on a hit.
 func readPersistedBackup() (string, error) {
-	data, err := os.ReadFile(LocalBackupPath)
+	data, err := ReadFileWithFallback(LocalBackupPath, LegacyLocalBackupPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return "", nil
