@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gorilla/mux"
+
 	"runic/internal/api/events"
 	"runic/internal/store"
 	"runic/internal/testutil"
@@ -330,6 +332,58 @@ func TestGetPeer(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestGetPeer_DoesNotLeakAgentCredentials is the regression test for the
+// peer-detail credential disclosure: GET /api/v1/peers/{id} is readable by
+// the viewer role, so neither agent_key nor the long-lived agent JWT may
+// appear in the response (a viewer could replay agent_key at
+// /api/v1/agent/register to mint a fresh agent token). Both the raw body and
+// the decoded keys are checked so a future rename or struct embedding cannot
+// silently reintroduce the leak.
+func TestGetPeer_DoesNotLeakAgentCredentials(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	const (
+		agentKey = "agent-key-must-not-leak"
+		agentJWT = "agent-jwt-must-not-leak"
+	)
+	if _, err := database.Exec(
+		`INSERT INTO peers (hostname, ip_address, agent_key, agent_token, hmac_key) VALUES (?, ?, ?, ?, ?)`,
+		"secret-peer", "10.0.0.1", agentKey, agentJWT, "hmac1",
+	); err != nil {
+		t.Fatalf("failed to insert peer: %v", err)
+	}
+
+	req := httptest.NewRequest("GET", "/api/v1/peers/1", nil)
+	req = muxVars(req, map[string]string{"id": "1"})
+	w := httptest.NewRecorder()
+
+	handler := NewHandler(store.NewPeerStore(database), database, nil, nil, &testSettingsStore{db: database})
+	handler.GetPeer(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, w.Code, w.Body.String())
+	}
+
+	body := w.Body.String()
+	if strings.Contains(body, agentKey) {
+		t.Errorf("response leaked agent key value: %s", body)
+	}
+	if strings.Contains(body, agentJWT) {
+		t.Errorf("response leaked agent token value: %s", body)
+	}
+
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	for _, key := range []string{"AgentKey", "agent_key", "AgentToken", "agent_token"} {
+		if _, ok := resp[key]; ok {
+			t.Errorf("response must not contain %q, got: %v", key, resp)
+		}
 	}
 }
 
@@ -2504,4 +2558,24 @@ func TestUpdateAllAgents_ChannelFullDistinctFromNotConnected(t *testing.T) {
 			t.Errorf("expected sent=2, got %v", resp["sent"])
 		}
 	})
+}
+
+// TestRegisterRoutes_DoesNotExposeEditorRotateKey proves the editor-facing
+// route set does not expose key rotation; the admin-only route is registered
+// separately in the API router.
+func TestRegisterRoutes_DoesNotExposeEditorRotateKey(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	handler := NewHandler(store.NewPeerStore(database), database, nil, nil, &testSettingsStore{db: database})
+	router := mux.NewRouter()
+	handler.RegisterRoutes(router)
+
+	req := httptest.NewRequest(http.MethodPost, "/1/rotate-key", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("editor route set must not route rotate-key, got status %d: %s", w.Code, w.Body.String())
+	}
 }

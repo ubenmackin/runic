@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	runiccommon "runic/internal/common"
 	"runic/internal/testutil"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -54,7 +55,7 @@ func TestWorker_Start(t *testing.T) {
 			t.Fatalf("Failed to insert config: %v", err)
 		}
 
-		oldDate := time.Now().AddDate(0, 0, -35).Format("2006-01-02 15:04:05")
+		oldDate := runiccommon.FirewallTimestampCutoff(time.Now().AddDate(0, 0, -35))
 		_, err = logsDB.Exec(
 			"INSERT INTO firewall_logs (timestamp, peer_id, source_ip, dest_ip, protocol, action) VALUES (?, 'peer-1', '10.0.0.1', '10.0.0.2', 'tcp', 'ACCEPT')",
 			oldDate,
@@ -107,7 +108,7 @@ func TestWorker_runCleanup(t *testing.T) {
 
 		// Don't set log_retention_days - should use default of 30 days
 
-		oldDate := time.Now().AddDate(0, 0, -35).Format("2006-01-02 15:04:05")
+		oldDate := runiccommon.FirewallTimestampCutoff(time.Now().AddDate(0, 0, -35))
 		_, err := logsDB.Exec(
 			"INSERT INTO firewall_logs (timestamp, peer_id, source_ip, dest_ip, protocol, action) VALUES (?, 'peer-1', '10.0.0.1', '10.0.0.2', 'tcp', 'ACCEPT')",
 			oldDate,
@@ -116,7 +117,7 @@ func TestWorker_runCleanup(t *testing.T) {
 			t.Fatalf("Failed to insert old log: %v", err)
 		}
 
-		recentDate := time.Now().AddDate(0, 0, -5).Format("2006-01-02 15:04:05")
+		recentDate := runiccommon.FirewallTimestampCutoff(time.Now().AddDate(0, 0, -5))
 		_, err = logsDB.Exec(
 			"INSERT INTO firewall_logs (timestamp, peer_id, source_ip, dest_ip, protocol, action) VALUES (?, 'peer-1', '10.0.0.1', '10.0.0.2', 'tcp', 'ACCEPT')",
 			recentDate,
@@ -148,7 +149,7 @@ func TestWorker_runCleanup(t *testing.T) {
 			t.Fatalf("Failed to insert config: %v", err)
 		}
 
-		oldDate := time.Now().AddDate(0, 0, -100).Format("2006-01-02 15:04:05")
+		oldDate := runiccommon.FirewallTimestampCutoff(time.Now().AddDate(0, 0, -100))
 		_, err = logsDB.Exec(
 			"INSERT INTO firewall_logs (timestamp, peer_id, source_ip, dest_ip, protocol, action) VALUES (?, 'peer-1', '10.0.0.1', '10.0.0.2', 'tcp', 'ACCEPT')",
 			oldDate,
@@ -180,7 +181,7 @@ func TestWorker_runCleanup(t *testing.T) {
 			t.Fatalf("Failed to insert config: %v", err)
 		}
 
-		oldDate := time.Now().AddDate(0, 0, -100).Format("2006-01-02 15:04:05")
+		oldDate := runiccommon.FirewallTimestampCutoff(time.Now().AddDate(0, 0, -100))
 		_, err = logsDB.Exec(
 			"INSERT INTO firewall_logs (timestamp, peer_id, source_ip, dest_ip, protocol, action) VALUES (?, 'peer-1', '10.0.0.1', '10.0.0.2', 'tcp', 'ACCEPT')",
 			oldDate,
@@ -224,7 +225,7 @@ func TestWorker_runCleanup(t *testing.T) {
 		}
 
 		for _, tc := range tests {
-			date := time.Now().AddDate(0, 0, -tc.daysAgo).Format("2006-01-02 15:04:05")
+			date := runiccommon.FirewallTimestampCutoff(time.Now().AddDate(0, 0, -tc.daysAgo))
 			_, err := logsDB.Exec(
 				"INSERT INTO firewall_logs (timestamp, peer_id, source_ip, dest_ip, protocol, action) VALUES (?, ?, '10.0.0.1', '10.0.0.2', 'tcp', 'ACCEPT')",
 				date, fmt.Sprintf("peer-%d", tc.daysAgo),
@@ -255,6 +256,56 @@ func TestWorker_runCleanup(t *testing.T) {
 		}
 	})
 
+	t.Run("legacy RFC3339 row is not deleted", func(t *testing.T) {
+		mainDB, logsDB, cleanup := setupTestDatabases(t)
+		defer cleanup()
+
+		_, err := mainDB.Exec("INSERT INTO system_config (key, value) VALUES ('log_retention_days', '30')")
+		if err != nil {
+			t.Fatalf("Failed to insert config: %v", err)
+		}
+
+		// Canonical row outside the retention window.
+		expired := runiccommon.FirewallTimestampCutoff(time.Now().AddDate(0, 0, -40))
+		_, err = logsDB.Exec(
+			"INSERT INTO firewall_logs (timestamp, peer_id, source_ip, dest_ip, protocol, action) VALUES (?, 'peer-expired', '10.0.0.1', '10.0.0.2', 'tcp', 'ACCEPT')",
+			expired,
+		)
+		if err != nil {
+			t.Fatalf("Failed to insert expired log: %v", err)
+		}
+
+		// Legacy RFC3339 rows are normalized by the startup migration, not by
+		// retention; an in-window legacy row must survive cleanup unchanged.
+		legacy := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
+		_, err = logsDB.Exec(
+			"INSERT INTO firewall_logs (timestamp, peer_id, source_ip, dest_ip, protocol, action) VALUES (?, 'peer-legacy', '10.0.0.1', '10.0.0.2', 'tcp', 'ACCEPT')",
+			legacy,
+		)
+		if err != nil {
+			t.Fatalf("Failed to insert legacy log: %v", err)
+		}
+
+		worker := NewWorker(mainDB, logsDB)
+		worker.runCleanup(context.Background())
+
+		var count int
+		if err := logsDB.QueryRow("SELECT COUNT(*) FROM firewall_logs").Scan(&count); err != nil {
+			t.Fatalf("Failed to count logs: %v", err)
+		}
+		if count != 1 {
+			t.Errorf("Expected only the legacy log to remain, got %d", count)
+		}
+
+		var peerID string
+		if err := logsDB.QueryRow("SELECT peer_id FROM firewall_logs").Scan(&peerID); err != nil {
+			t.Fatalf("Failed to get remaining peer_id: %v", err)
+		}
+		if peerID != "peer-legacy" {
+			t.Errorf("Expected legacy row to remain, got %q", peerID)
+		}
+	})
+
 	t.Run("batch deletion 1000 at a time", func(t *testing.T) {
 		mainDB, logsDB, cleanup := setupTestDatabases(t)
 		defer cleanup()
@@ -266,7 +317,7 @@ func TestWorker_runCleanup(t *testing.T) {
 
 		batchSize := 1000
 		totalLogs := 2500
-		oldDate := time.Now().AddDate(0, 0, -5).Format("2006-01-02 15:04:05")
+		oldDate := runiccommon.FirewallTimestampCutoff(time.Now().AddDate(0, 0, -5))
 
 		for i := 0; i < totalLogs; i++ {
 			_, err := logsDB.Exec(
@@ -384,7 +435,7 @@ func TestWorker_CustomRetention(t *testing.T) {
 				t.Fatalf("Failed to insert config: %v", err)
 			}
 
-			date := time.Now().AddDate(0, 0, -tc.logsDaysAgo).Format("2006-01-02 15:04:05")
+			date := runiccommon.FirewallTimestampCutoff(time.Now().AddDate(0, 0, -tc.logsDaysAgo))
 			_, err = logsDB.Exec(
 				"INSERT INTO firewall_logs (timestamp, peer_id, source_ip, dest_ip, protocol, action) VALUES (?, 'peer-1', '10.0.0.1', '10.0.0.2', 'tcp', 'ACCEPT')",
 				date,
@@ -421,8 +472,8 @@ func TestWorker_Integration(t *testing.T) {
 		t.Fatalf("Failed to insert config: %v", err)
 	}
 
-	oldDate := time.Now().AddDate(0, 0, -30).Format("2006-01-02 15:04:05")
-	recentDate := time.Now().AddDate(0, 0, -3).Format("2006-01-02 15:04:05")
+	oldDate := runiccommon.FirewallTimestampCutoff(time.Now().AddDate(0, 0, -30))
+	recentDate := runiccommon.FirewallTimestampCutoff(time.Now().AddDate(0, 0, -3))
 
 	_, err = logsDB.Exec(
 		"INSERT INTO firewall_logs (timestamp, peer_id, source_ip, dest_ip, protocol, action) VALUES (?, 'peer-old', '10.0.0.1', '10.0.0.2', 'tcp', 'ACCEPT')",

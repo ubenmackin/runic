@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -722,6 +723,36 @@ func TestSanitizeForIpset(t *testing.T) {
 				t.Errorf("sanitizeForIpset(%q) = %q, want %q", tt.input, result, tt.expected)
 			}
 		})
+	}
+}
+
+func TestResolveIPSetDefinitions_RejectsDuplicateSanitizedNames(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	memberPeerID := insertPeerWithIPSet(t, database, "group-member", "10.0.0.1", false, true)
+	groupID := insertGroup(t, database, "office")
+	insertGroupMember(t, database, groupID, memberPeerID)
+
+	// Distinct groups with names that sanitize to the same segment still get
+	// distinct ipset names because the group ID is part of the name.
+	collisionA := ipsetGroupName(1, "office-team-alpha-longname")
+	collisionB := ipsetGroupName(2, "office-team-alpha-longname")
+	if collisionA == collisionB {
+		t.Fatalf("ipset names for distinct groups collided: %q", collisionA)
+	}
+
+	c := NewTestCompiler(database)
+	_, _, err := c.resolveIPSetDefinitions(context.Background(), true,
+		[]int{groupID, groupID}, map[int]string{groupID: "office"})
+	if err == nil {
+		t.Fatal("expected duplicate ipset name error, got nil")
+	}
+	if !errors.Is(err, ErrPreviewValidation) {
+		t.Fatalf("expected ErrPreviewValidation, got %v", err)
+	}
+	if !containsString(err.Error(), "duplicate ipset name") {
+		t.Fatalf("expected duplicate ipset name error, got %v", err)
 	}
 }
 

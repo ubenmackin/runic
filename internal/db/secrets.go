@@ -8,10 +8,65 @@ import (
 	"strings"
 )
 
-// migrateEnvToDB reads secrets from the RUNIC_ENV_PATH file and stores them in the database.
+// JWTSecretsSeedMarker is the system_config key recording that JWT signing-key
+// seeding already happened once. It must never be deleted: without it, a
+// deleted signing key would be re-seeded from the environment on the next boot
+// and every token signed with the revoked key would validate again.
+const JWTSecretsSeedMarker = "jwt_secrets_seeded"
+
+// JWTSecretsSeeded reports whether the one-time JWT signing-key seeding marker
+// exists.
+func JWTSecretsSeeded(ctx context.Context, database Querier) (bool, error) {
+	var seeded bool
+	err := database.QueryRowContext(ctx,
+		"SELECT COUNT(*) > 0 FROM system_config WHERE key = ?", JWTSecretsSeedMarker).Scan(&seeded)
+	if err != nil {
+		return false, fmt.Errorf("check %s marker: %w", JWTSecretsSeedMarker, err)
+	}
+	return seeded, nil
+}
+
+// MarkJWTSecretsSeeded records the one-time JWT signing-key seeding marker.
+// The insert is idempotent and preserves an existing marker.
+func MarkJWTSecretsSeeded(ctx context.Context, database Querier) error {
+	_, err := database.ExecContext(ctx,
+		"INSERT INTO system_config (key, value, updated_at) VALUES (?, '1', CURRENT_TIMESTAMP) ON CONFLICT(key) DO NOTHING",
+		JWTSecretsSeedMarker)
+	if err != nil {
+		return fmt.Errorf("mark %s: %w", JWTSecretsSeedMarker, err)
+	}
+	return nil
+}
+
+// seedJWTSecrets seeds JWT signing keys from the RUNIC_ENV_PATH file exactly
+// once per database. It only fills keys that are absent and never runs after
+// the one-time marker exists, so a stale .env file can neither replace a
+// rotated key nor resurrect a deleted one. Persisted keys or a provisioned
+// database mean bootstrap already happened (for example installer-seeded
+// keys), so those record the marker instead of seeding.
 // It accepts a Querier (which *sql.DB satisfies) and is invoked during initialization
 // with the underlying *sql.DB handle.
-func migrateEnvToDB(ctx context.Context, database Querier) error {
+func seedJWTSecrets(ctx context.Context, database Querier) error {
+	markerPresent, err := JWTSecretsSeeded(ctx, database)
+	if err != nil {
+		return err
+	}
+	if markerPresent {
+		return nil
+	}
+
+	persisted, err := jwtSecretsPersisted(ctx, database)
+	if err != nil {
+		return err
+	}
+	provisioned, err := databaseProvisioned(ctx, database)
+	if err != nil {
+		return err
+	}
+	if persisted || provisioned {
+		return MarkJWTSecretsSeeded(ctx, database)
+	}
+
 	envPath := os.Getenv("RUNIC_ENV_PATH")
 	if envPath == "" {
 		envPath = "/opt/runic/.env"
@@ -20,7 +75,7 @@ func migrateEnvToDB(ctx context.Context, database Querier) error {
 	data, err := os.ReadFile(envPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			// No .env file, nothing to migrate
+			// No .env file, nothing to seed
 			return nil
 		}
 		return fmt.Errorf("failed to read env file: %w", err)
@@ -32,6 +87,7 @@ func migrateEnvToDB(ctx context.Context, database Querier) error {
 		"RUNIC_AGENT_JWT_SECRET": "agent_jwt_secret",
 	}
 
+	seeded := false
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -43,18 +99,45 @@ func migrateEnvToDB(ctx context.Context, database Querier) error {
 				value := strings.TrimPrefix(line, prefix)
 				if value != "" {
 					_, err := database.ExecContext(ctx,
-						"INSERT INTO system_config (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP) ON CONFLICT(key) DO UPDATE SET value = ?, updated_at = CURRENT_TIMESTAMP",
-						dbKey, value, value,
+						"INSERT INTO system_config (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP) ON CONFLICT(key) DO NOTHING",
+						dbKey, value,
 					)
 					if err != nil {
 						return fmt.Errorf("failed to migrate %s: %w", envKey, err)
 					}
+					seeded = true
 				}
 			}
 		}
 	}
 
-	return nil
+	if !seeded {
+		return nil
+	}
+	return MarkJWTSecretsSeeded(ctx, database)
+}
+
+// jwtSecretsPersisted reports whether either JWT signing key already exists.
+func jwtSecretsPersisted(ctx context.Context, database Querier) (bool, error) {
+	var persisted bool
+	err := database.QueryRowContext(ctx,
+		"SELECT COUNT(*) > 0 FROM system_config WHERE key IN ('jwt_secret', 'agent_jwt_secret')").Scan(&persisted)
+	if err != nil {
+		return false, fmt.Errorf("check persisted JWT secrets: %w", err)
+	}
+	return persisted, nil
+}
+
+// databaseProvisioned reports whether the database already holds a user. A
+// provisioned database has completed setup, so environment seeding must not
+// run for it even when its signing keys were deleted.
+func databaseProvisioned(ctx context.Context, database Querier) (bool, error) {
+	var provisioned bool
+	err := database.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM users").Scan(&provisioned)
+	if err != nil {
+		return false, fmt.Errorf("check provisioned database: %w", err)
+	}
+	return provisioned, nil
 }
 
 // SQLite doesn't support ALTER TABLE ADD CONSTRAINT, so we recreate tables.
@@ -114,13 +197,16 @@ func addDBConstraints(ctx context.Context, database *sql.DB) error {
 			password_hash TEXT NOT NULL,
 			email TEXT DEFAULT '',
 			role TEXT NOT NULL DEFAULT 'viewer' CHECK(role IN ('admin', 'editor', 'viewer')),
+			token_version INTEGER NOT NULL DEFAULT 1,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		)
 	`); err != nil {
 		return fmt.Errorf("create users_new: %w", err)
 	}
 	// Migrate existing roles: first user -> admin, rest -> viewer
-	// Also map old 'user' role to 'viewer'
+	// Also map old 'user' role to 'viewer'. token_version is preserved from
+	// the pre-recreation table (migrateSchema runs before this function and
+	// has already added the column when the table predates it).
 	if _, err := database.ExecContext(ctx, `
 		INSERT INTO users_new 
 		SELECT id, username, password_hash, email, 
@@ -129,6 +215,7 @@ func addDBConstraints(ctx context.Context, database *sql.DB) error {
 				   WHEN role = 'admin' THEN 'admin'
 				   ELSE 'viewer'
 			   END,
+			   token_version,
 			   created_at 
 		FROM users
 	`); err != nil {

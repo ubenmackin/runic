@@ -173,6 +173,142 @@ func TestAgentAuthMiddleware(t *testing.T) {
 	}
 }
 
+// TestAgentAuthMiddlewareRejectsManualPeer verifies a structurally valid agent
+// JWT cannot be used for a manual peer: manual peers have no agent and every
+// agent endpoint must reject them.
+func TestAgentAuthMiddlewareRejectsManualPeer(t *testing.T) {
+	db, cleanup := testutil.SetupTestDBWithSecret(t)
+	defer cleanup()
+
+	if _, err := db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, is_manual) VALUES (?, ?, ?, ?, 1)`,
+		"manual-agent", "10.0.0.5", "manual-key", "manual-hmac"); err != nil {
+		t.Fatalf("insert manual peer: %v", err)
+	}
+
+	req := makeAuthRequest(t, db, "GET", "/api/v1/agent/heartbeat", "", "manual-agent")
+	w := httptest.NewRecorder()
+
+	handler := newAgentTestHandler(db)
+	nextCalled := false
+	handler.AgentAuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		nextCalled = true
+		w.WriteHeader(http.StatusOK)
+	}).ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401 for manual peer, got %d: %s", w.Code, w.Body.String())
+	}
+	if nextCalled {
+		t.Error("manual peer must not reach the agent handler")
+	}
+}
+
+// TestRegisterAgentRejectsManualPeerReRegistration verifies every
+// re-registration proof path is rejected for is_manual=1 peers without
+// rotating or disclosing their stored credentials.
+func TestRegisterAgentRejectsManualPeerReRegistration(t *testing.T) {
+	const (
+		hostname = "manual-host"
+		agentKey = "manual-agent-key"
+		hmacKey  = "manual-hmac-key"
+	)
+
+	setupPeer := func(t *testing.T, db *sql.DB) {
+		t.Helper()
+		if _, err := db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, is_manual, status) VALUES (?, ?, ?, ?, 1, 'offline')`,
+			hostname, "10.0.0.1", agentKey, hmacKey); err != nil {
+			t.Fatalf("insert manual peer: %v", err)
+		}
+	}
+
+	checkRejected := func(t *testing.T, db *sql.DB, w *httptest.ResponseRecorder) {
+		t.Helper()
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401, got %d: %s", w.Code, w.Body.String())
+		}
+		var resp map[string]interface{}
+		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		for _, field := range []string{"token", "hmac_key", "agent_key"} {
+			if _, ok := resp[field]; ok {
+				t.Errorf("manual peer rejection must not return %s", field)
+			}
+		}
+
+		var storedHMAC, storedAgentKey string
+		var storedToken sql.NullString
+		if err := db.QueryRow(`SELECT hmac_key, agent_key, agent_token FROM peers WHERE hostname = ?`, hostname).
+			Scan(&storedHMAC, &storedAgentKey, &storedToken); err != nil {
+			t.Fatalf("query peer credentials: %v", err)
+		}
+		if storedHMAC != hmacKey || storedAgentKey != agentKey {
+			t.Error("manual peer credentials must not be rotated by a rejected re-registration")
+		}
+		if storedToken.Valid {
+			t.Errorf("manual peer agent_token must stay NULL, got %q", storedToken.String)
+		}
+	}
+
+	t.Run("agent_key proof", func(t *testing.T) {
+		db, cleanup := testutil.SetupTestDBWithSecret(t)
+		defer cleanup()
+		setupPeer(t, db)
+
+		w := doRegisterRequest(t, newAgentTestHandler(db),
+			fmt.Sprintf(`{"hostname": %q, "agent_key": %q}`, hostname, agentKey), nil)
+		checkRejected(t, db, w)
+	})
+
+	t.Run("hmac proof", func(t *testing.T) {
+		db, cleanup := testutil.SetupTestDBWithSecret(t)
+		defer cleanup()
+		setupPeer(t, db)
+
+		ts := time.Now().Unix()
+		sig := computeReRegistrationHMACProof(t, hmacKey, hostname, ts)
+		body := fmt.Sprintf(`{"hostname": %q, "hmac_proof_timestamp": %d, "hmac_proof_signature": %q}`, hostname, ts, sig)
+		w := doRegisterRequest(t, newAgentTestHandler(db), body, nil)
+		checkRejected(t, db, w)
+	})
+
+	t.Run("bearer proof", func(t *testing.T) {
+		db, cleanup := testutil.SetupTestDBWithSecret(t)
+		defer cleanup()
+		setupPeer(t, db)
+
+		token := generateValidAgentToken(t, db, hostname)
+		w := doRegisterRequest(t, newAgentTestHandler(db),
+			fmt.Sprintf(`{"hostname": %q}`, hostname),
+			map[string]string{"Authorization": "Bearer " + token})
+		checkRejected(t, db, w)
+	})
+
+	t.Run("registration token", func(t *testing.T) {
+		db, cleanup := testutil.SetupTestDBWithSecret(t)
+		defer cleanup()
+		setupPeer(t, db)
+
+		const registrationToken = "manual-peer-fresh-token"
+		if _, err := db.Exec(`INSERT INTO registration_tokens (token, description) VALUES (?, ?)`,
+			registrationToken, "manual peer re-registration"); err != nil {
+			t.Fatalf("insert registration token: %v", err)
+		}
+
+		w := doRegisterRequest(t, newAgentTestHandler(db),
+			fmt.Sprintf(`{"hostname": %q, "registration_token": %q}`, hostname, registrationToken), nil)
+		checkRejected(t, db, w)
+
+		var usedAt sql.NullString
+		if err := db.QueryRow(`SELECT used_at FROM registration_tokens WHERE token = ?`, registrationToken).Scan(&usedAt); err != nil {
+			t.Fatalf("query registration token: %v", err)
+		}
+		if usedAt.Valid {
+			t.Error("rejected manual re-registration must not consume the registration token")
+		}
+	})
+}
+
 // =============================================================================
 // =============================================================================
 
@@ -751,8 +887,8 @@ func TestReRegistrationSelfHealingExpiredBearerHealsViaHMAC(t *testing.T) {
 	if resp["hmac_key"] != hmacKey {
 		t.Error("expected persisted hmac_key in heal response")
 	}
-	if resp["agent_key"] != agentKey {
-		t.Error("expected persisted agent_key bootstrapped via hmac_proof")
+	if _, ok := resp["agent_key"]; ok {
+		t.Error("hmac_proof heal response must not disclose agent_key")
 	}
 	var storedHMAC, storedAgentKey, storedToken string
 	if err := db.QueryRow(`SELECT hmac_key, agent_key, agent_token FROM peers WHERE hostname = ?`, hostname).Scan(&storedHMAC, &storedAgentKey, &storedToken); err != nil {
@@ -766,6 +902,51 @@ func TestReRegistrationSelfHealingExpiredBearerHealsViaHMAC(t *testing.T) {
 	}
 	if storedToken != newToken {
 		t.Error("expected rotated agent_token persisted after heal")
+	}
+}
+
+// TestReRegistrationHMACProofDoesNotReturnAgentKey proves the HMAC-proof
+// re-registration path authorizes and rotates the agent token without
+// disclosing the longer-lived stored agent_key.
+func TestReRegistrationHMACProofDoesNotReturnAgentKey(t *testing.T) {
+	db, cleanup := testutil.SetupTestDBWithSecret(t)
+	defer cleanup()
+	handler := newAgentTestHandler(db)
+
+	hostname := "hmac-no-agent-key-host"
+	ip := "10.0.0.15"
+	_, hmacKey, agentKey, _ := createPeerViaRegisterNewPeer(t, db, handler, hostname, ip)
+
+	ts := time.Now().Unix()
+	sig := computeReRegistrationHMACProof(t, hmacKey, hostname, ts)
+	body := fmt.Sprintf(`{"hostname": %q, "ip": %q, "hmac_proof_timestamp": %d, "hmac_proof_signature": %q}`, hostname, ip, ts, sig)
+	w := doRegisterRequest(t, handler, body, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for hmac proof, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if _, ok := resp["agent_key"]; ok {
+		t.Error("hmac_proof response must not disclose agent_key")
+	}
+	if resp["hmac_key"] != hmacKey {
+		t.Errorf("expected hmac_key %q, got %v", hmacKey, resp["hmac_key"])
+	}
+	if token, _ := resp["token"].(string); token == "" {
+		t.Error("expected a rotated agent token")
+	}
+
+	// Only the response field is suppressed; the stored agent key is preserved
+	// for the single-use registration-token bootstrap path.
+	var storedAgentKey string
+	if err := db.QueryRow(`SELECT agent_key FROM peers WHERE hostname = ?`, hostname).Scan(&storedAgentKey); err != nil {
+		t.Fatalf("query stored agent key: %v", err)
+	}
+	if storedAgentKey != agentKey {
+		t.Errorf("stored agent_key changed to %q", storedAgentKey)
 	}
 }
 
@@ -1646,6 +1827,141 @@ func TestSubmitLogs(t *testing.T) {
 	}
 }
 
+// TestSubmitLogsStoresCanonicalTimestamp proves the ingestion path persists the
+// canonical UTC "YYYY-MM-DD HH:MM:SS" form: a fractional RFC3339 offset value
+// is stored as the equivalent UTC instant with fractional seconds dropped.
+func TestSubmitLogsStoresCanonicalTimestamp(t *testing.T) {
+	db, logsDB, cleanup := testutil.SetupTestDBWithSecretAndLogs(t)
+	defer cleanup()
+
+	if _, err := db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)`,
+		"test-agent", "10.0.0.1", "agent-key-test", "test-hmac"); err != nil {
+		t.Fatalf("insert peer: %v", err)
+	}
+
+	req := makeAuthRequest(t, db, "POST", "/api/v1/agents/logs",
+		`{"events": [{"timestamp": "2026-11-25T19:40:01.5-07:00", "direction": "IN", "src_ip": "192.168.1.1", "dst_ip": "10.0.0.1", "protocol": "tcp", "action": "ACCEPT"}]}`,
+		"test-agent")
+	w := httptest.NewRecorder()
+
+	handler := NewHandler(store.NewPeerStore(db), store.NewDashboardStore(db, logsDB), nil, store.NewImportStore(db, store.NewPeerStore(db), store.NewGroupStore(db), store.NewServiceStore(db)), store.NewTokenStore(db), db)
+
+	handler.AgentAuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		handler.SubmitLogs(w, r)
+	}).ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if int(resp["accepted"].(float64)) != 1 {
+		t.Errorf("expected accepted=1, got %v", resp["accepted"])
+	}
+
+	// The sqlite3 driver parses DATETIME-declared columns into time.Time, which
+	// database/sql renders as RFC3339 when scanned into a string. CAST forces
+	// the stored TEXT representation so this asserts the on-disk canonical form.
+	var stored string
+	if err := logsDB.QueryRow(`SELECT CAST(timestamp AS TEXT) FROM firewall_logs`).Scan(&stored); err != nil {
+		t.Fatalf("query stored timestamp: %v", err)
+	}
+	if stored != "2026-11-26 02:40:01" {
+		t.Errorf("stored timestamp = %q, want %q", stored, "2026-11-26 02:40:01")
+	}
+}
+
+// TestSubmitLogsBroadcastsNormalizedTimestamp proves the live WebSocket event
+// carries the event's normalized UTC instant and peer hostname rather than the
+// zero time, which live clients would render as year 1 and watermark logic
+// would discard.
+func TestSubmitLogsBroadcastsNormalizedTimestamp(t *testing.T) {
+	db, logsDB, cleanup := testutil.SetupTestDBWithSecretAndLogs(t)
+	defer cleanup()
+
+	if _, err := db.Exec(`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key) VALUES (?, ?, ?, ?)`,
+		"test-agent", "10.0.0.1", "agent-key-test", "test-hmac"); err != nil {
+		t.Fatalf("insert peer: %v", err)
+	}
+
+	mockHub := &mockLogBroadcaster{}
+
+	req := makeAuthRequest(t, db, "POST", "/api/v1/agents/logs",
+		`{"events": [{"timestamp": "2026-11-25T19:40:01.5-07:00", "direction": "IN", "src_ip": "192.168.1.1", "dst_ip": "10.0.0.1", "protocol": "tcp", "action": "ACCEPT"}]}`,
+		"test-agent")
+	req = req.WithContext(WithHubs(req.Context(), &mockSSEBroadcaster{}, mockHub))
+	w := httptest.NewRecorder()
+
+	handler := NewHandler(store.NewPeerStore(db), store.NewDashboardStore(db, logsDB), nil, store.NewImportStore(db, store.NewPeerStore(db), store.NewGroupStore(db), store.NewServiceStore(db)), store.NewTokenStore(db), db)
+
+	handler.AgentAuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		handler.SubmitLogs(w, r)
+	}).ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if len(mockHub.events) != 1 {
+		t.Fatalf("expected 1 broadcast event, got %d", len(mockHub.events))
+	}
+
+	wantTimestamp := time.Date(2026, time.November, 26, 2, 40, 1, 0, time.UTC)
+	event := mockHub.events[0]
+	if !event.Timestamp.Equal(wantTimestamp) {
+		t.Errorf("broadcast timestamp = %v, want %v", event.Timestamp, wantTimestamp)
+	}
+	if event.PeerHostname != "test-agent" {
+		t.Errorf("broadcast peer hostname = %q, want %q", event.PeerHostname, "test-agent")
+	}
+}
+
+// TestInsertFirewallLogRejectsInvalidTimestamp proves the store rejects a
+// timestamp it cannot canonicalize without inserting a row, while a canonical
+// value is stored unchanged.
+func TestInsertFirewallLogRejectsInvalidTimestamp(t *testing.T) {
+	logsDB, cleanup := testutil.SetupTestLogsDB(t)
+	defer cleanup()
+
+	dashboardStore := store.NewDashboardStore(nil, logsDB)
+
+	err := dashboardStore.InsertFirewallLog(context.Background(), &store.FirewallLogEntry{
+		PeerID:    "1",
+		Timestamp: "not-a-time",
+	})
+	if err == nil {
+		t.Fatal("expected error for invalid timestamp")
+	}
+
+	var count int
+	if err := logsDB.QueryRow(`SELECT COUNT(*) FROM firewall_logs`).Scan(&count); err != nil {
+		t.Fatalf("query row count: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("expected no rows after invalid timestamp, got %d", count)
+	}
+
+	canonical := "2026-11-26 02:40:01"
+	if err := dashboardStore.InsertFirewallLog(context.Background(), &store.FirewallLogEntry{
+		PeerID:    "1",
+		Timestamp: canonical,
+	}); err != nil {
+		t.Fatalf("insert canonical timestamp: %v", err)
+	}
+
+	// CAST bypasses the driver's DATETIME-to-time.Time readback, which would
+	// otherwise render the stored TEXT value as RFC3339.
+	var stored string
+	if err := logsDB.QueryRow(`SELECT CAST(timestamp AS TEXT) FROM firewall_logs`).Scan(&stored); err != nil {
+		t.Fatalf("query stored timestamp: %v", err)
+	}
+	if stored != canonical {
+		t.Errorf("stored timestamp = %q, want %q", stored, canonical)
+	}
+}
+
 // =============================================================================
 // =============================================================================
 
@@ -2090,6 +2406,42 @@ func TestLogEventValidate(t *testing.T) {
 				Action:    "ACCEPT",
 				SrcPort:   12345,
 				DstPort:   22,
+			},
+			wantOk: true,
+		},
+		{
+			name: "valid RFC3339 timestamp with offset",
+			event: LogEvent{
+				Timestamp: "2026-11-25T19:40:01-07:00",
+			},
+			wantOk: true,
+		},
+		{
+			name: "valid SQLite datetime timestamp",
+			event: LogEvent{
+				Timestamp: "2026-11-25 19:40:01",
+			},
+			wantOk: true,
+		},
+		{
+			name: "valid traditional syslog timestamp",
+			event: LogEvent{
+				Timestamp: "Nov 25 19:40:01",
+			},
+			wantOk: true,
+		},
+		{
+			name: "invalid timestamp",
+			event: LogEvent{
+				Timestamp: "not-a-time",
+			},
+			wantOk: false,
+		},
+		{
+			name: "empty timestamp remains valid",
+			event: LogEvent{
+				Direction: "IN",
+				Action:    "DROP",
 			},
 			wantOk: true,
 		},
@@ -2975,6 +3327,12 @@ func (m *mockSSEBroadcaster) Register(hostID string) chan string {
 
 func (m *mockSSEBroadcaster) Unregister(hostID string) {}
 
-type mockLogBroadcaster struct{}
+// mockLogBroadcaster records broadcast events so tests can assert on the
+// payload delivered to live WebSocket clients.
+type mockLogBroadcaster struct {
+	events []*models.LogEvent
+}
 
-func (m *mockLogBroadcaster) Broadcast(event *models.LogEvent) {}
+func (m *mockLogBroadcaster) Broadcast(event *models.LogEvent) {
+	m.events = append(m.events, event)
+}

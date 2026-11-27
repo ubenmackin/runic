@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"os"
 	"testing"
 
@@ -407,5 +408,136 @@ func TestUpdatePeerHeartbeatPreservesHasIPSetOnNil(t *testing.T) {
 	}
 	if got := readHasIPSet(); got != 1 {
 		t.Errorf("has_ipset after explicit true = %d, want 1", got)
+	}
+}
+
+// TestGetPeerAuthStatusByHostname verifies the agent-auth lookup exposes the
+// is_manual flag used to reject manual peers at agent endpoints, and still
+// distinguishes a missing peer via sql.ErrNoRows.
+func TestGetPeerAuthStatusByHostname(t *testing.T) {
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	d := store.db
+
+	agentRes, err := d.ExecContext(ctx,
+		`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, is_manual) VALUES (?, ?, ?, ?, 0)`,
+		"agent-peer", "10.0.0.1", "agent-key-1", "hmac-key-1")
+	if err != nil {
+		t.Fatalf("insert agent peer: %v", err)
+	}
+	agentID, err := agentRes.LastInsertId()
+	if err != nil {
+		t.Fatalf("agent peer id: %v", err)
+	}
+
+	manualRes, err := d.ExecContext(ctx,
+		`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, is_manual) VALUES (?, ?, ?, ?, 1)`,
+		"manual-peer", "10.0.0.2", "manual-key-1", "manual-hmac-1")
+	if err != nil {
+		t.Fatalf("insert manual peer: %v", err)
+	}
+	manualID, err := manualRes.LastInsertId()
+	if err != nil {
+		t.Fatalf("manual peer id: %v", err)
+	}
+
+	gotID, isManual, err := store.GetPeerAuthStatusByHostname(ctx, "agent-peer")
+	if err != nil {
+		t.Fatalf("agent lookup: %v", err)
+	}
+	if gotID != int(agentID) || isManual {
+		t.Errorf("agent lookup = (%d, %v), want (%d, false)", gotID, isManual, agentID)
+	}
+
+	gotID, isManual, err = store.GetPeerAuthStatusByHostname(ctx, "manual-peer")
+	if err != nil {
+		t.Fatalf("manual lookup: %v", err)
+	}
+	if gotID != int(manualID) || !isManual {
+		t.Errorf("manual lookup = (%d, %v), want (%d, true)", gotID, isManual, manualID)
+	}
+
+	if _, _, err := store.GetPeerAuthStatusByHostname(ctx, "missing-peer"); !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("missing lookup error = %v, want sql.ErrNoRows", err)
+	}
+}
+
+// TestGetPeerHMACKeyRejectsManualPeer verifies manual peers never expose HMAC
+// key material through the agent-credential accessor.
+func TestGetPeerHMACKeyRejectsManualPeer(t *testing.T) {
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	d := store.db
+
+	res, err := d.ExecContext(ctx,
+		`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, is_manual) VALUES (?, ?, ?, ?, 1)`,
+		"manual-peer", "10.0.0.2", "manual-key-1", "manual-hmac-1")
+	if err != nil {
+		t.Fatalf("insert manual peer: %v", err)
+	}
+	manualID, err := res.LastInsertId()
+	if err != nil {
+		t.Fatalf("manual peer id: %v", err)
+	}
+
+	if _, err := store.GetPeerHMACKey(ctx, int(manualID)); !errors.Is(err, ErrPeerIsManual) {
+		t.Errorf("manual GetPeerHMACKey error = %v, want ErrPeerIsManual", err)
+	}
+
+	res, err = d.ExecContext(ctx,
+		`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, is_manual) VALUES (?, ?, ?, ?, 0)`,
+		"agent-peer", "10.0.0.3", "agent-key-1", "agent-hmac-1")
+	if err != nil {
+		t.Fatalf("insert agent peer: %v", err)
+	}
+	agentID, err := res.LastInsertId()
+	if err != nil {
+		t.Fatalf("agent peer id: %v", err)
+	}
+
+	key, err := store.GetPeerHMACKey(ctx, int(agentID))
+	if err != nil {
+		t.Fatalf("agent GetPeerHMACKey: %v", err)
+	}
+	if key != "agent-hmac-1" {
+		t.Errorf("agent HMAC key = %q, want agent-hmac-1", key)
+	}
+}
+
+// TestUpdatePeerReRegistrationRejectsManualPeer verifies the store refuses to
+// rotate agent credentials for a manual peer even if a caller bypasses the
+// handler-level guard.
+func TestUpdatePeerReRegistrationRejectsManualPeer(t *testing.T) {
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	d := store.db
+
+	res, err := d.ExecContext(ctx,
+		`INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, agent_token, is_manual, status) VALUES (?, ?, ?, ?, ?, 1, 'offline')`,
+		"manual-peer", "10.0.0.2", "manual-key-1", "manual-hmac-1", "old-token")
+	if err != nil {
+		t.Fatalf("insert manual peer: %v", err)
+	}
+	manualID, err := res.LastInsertId()
+	if err != nil {
+		t.Fatalf("manual peer id: %v", err)
+	}
+
+	if err := store.UpdatePeerReRegistration(ctx, int(manualID), "new-token", "", false, nil); !errors.Is(err, ErrPeerIsManual) {
+		t.Errorf("manual re-registration error = %v, want ErrPeerIsManual", err)
+	}
+
+	var storedToken string
+	if err := d.QueryRowContext(ctx, `SELECT agent_token FROM peers WHERE id = ?`, manualID).Scan(&storedToken); err != nil {
+		t.Fatalf("query agent_token: %v", err)
+	}
+	if storedToken != "old-token" {
+		t.Errorf("manual peer agent_token = %q, want unchanged old-token", storedToken)
 	}
 }

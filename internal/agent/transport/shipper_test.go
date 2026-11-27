@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"runic/internal/common"
 )
 
 func TestParseLogLine_RunicDrop(t *testing.T) {
@@ -76,6 +78,54 @@ func TestParseLogLine_SyslogTimestamp(t *testing.T) {
 	expectedTimestamp := "Jan 15 14:30:45"
 	if ev.Timestamp != expectedTimestamp {
 		t.Errorf("expected timestamp %q, got %q", expectedTimestamp, ev.Timestamp)
+	}
+}
+
+func TestParseLogLine_SyslogTimestampSpacePaddedDay(t *testing.T) {
+	tests := []struct {
+		name     string
+		line     string
+		expected string
+	}{
+		{
+			name:     "RFC3164 space-padded single-digit day",
+			line:     `Jan  5 12:00:00 hostname kernel: [RUNIC-DROP-I] SRC=192.168.1.100 DST=192.168.1.1 PROTO=TCP`,
+			expected: "Jan  5 12:00:00",
+		},
+		{
+			name:     "single-space single-digit day",
+			line:     `Jan 5 12:00:00 hostname kernel: [RUNIC-DROP-I] SRC=192.168.1.100 DST=192.168.1.1 PROTO=TCP`,
+			expected: "Jan  5 12:00:00",
+		},
+		{
+			name:     "zero-padded single-digit day",
+			line:     `Jan 05 12:00:00 hostname kernel: [RUNIC-DROP-I] SRC=192.168.1.100 DST=192.168.1.1 PROTO=TCP`,
+			expected: "Jan 05 12:00:00",
+		},
+		{
+			name:     "bare RFC3164 prefix",
+			line:     `Jan  5 12:00:00`,
+			expected: "Jan  5 12:00:00",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ev, err := ParseLogLine(tt.line)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if ev.Timestamp != tt.expected {
+				t.Errorf("expected timestamp %q, got %q", tt.expected, ev.Timestamp)
+			}
+
+			// The prefix must be accepted by the shared owner so SubmitLogs
+			// does not drop traditional-syslog events on days 1-9.
+			if _, err := common.NormalizeFirewallTimestamp(ev.Timestamp, time.Now()); err != nil {
+				t.Errorf("expected timestamp %q to normalize, got error: %v", ev.Timestamp, err)
+			}
+		})
 	}
 }
 

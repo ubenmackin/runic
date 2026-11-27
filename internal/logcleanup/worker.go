@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	runiccommon "runic/internal/common"
 	"runic/internal/common/log"
 )
 
@@ -96,7 +97,10 @@ func (w *Worker) runCleanup(ctx context.Context) {
 		return
 	}
 
-	cutoff := time.Now().AddDate(0, 0, -retentionDays).Format("2006-01-02 15:04:05")
+	// The cutoff must share the canonical UTC layout of stored timestamps so
+	// SQLite's TEXT comparison deletes only rows older than the retention
+	// window.
+	cutoff := runiccommon.FirewallTimestampCutoff(time.Now().AddDate(0, 0, -retentionDays))
 
 	totalDeleted := 0
 	batchSize := 1000

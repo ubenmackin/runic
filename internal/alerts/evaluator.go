@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"time"
 
+	runiccommon "runic/internal/common"
 	"runic/internal/common/log"
 	"runic/internal/db"
 )
@@ -365,7 +366,7 @@ func (e *ConditionEvaluator) evaluateBlockedSpike(ctx context.Context, rule *Ale
 	}
 
 	window := time.Duration(rule.ThresholdWindowMinutes) * time.Minute
-	cutoff := time.Now().Add(-window)
+	cutoff := runiccommon.FirewallTimestampCutoff(time.Now().Add(-window))
 
 	rows, err := e.logsDB.QueryContext(ctx, `
 		SELECT DISTINCT peer_id
@@ -521,9 +522,9 @@ func (e *ConditionEvaluator) CheckBlockedSpike(ctx context.Context, peerID int, 
 
 	window := time.Duration(windowMinutes) * time.Minute
 	now := time.Now()
-	recentStart := now.Add(-window)
-	previousStart := now.Add(-2 * window)
-	previousEnd := now.Add(-window)
+	recentStart := runiccommon.FirewallTimestampCutoff(now.Add(-window))
+	previousStart := runiccommon.FirewallTimestampCutoff(now.Add(-2 * window))
+	previousEnd := runiccommon.FirewallTimestampCutoff(now.Add(-window))
 
 	var recentCount int
 	err := e.logsDB.QueryRowContext(ctx, `

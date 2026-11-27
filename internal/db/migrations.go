@@ -83,6 +83,13 @@ func migrateSchema(ctx context.Context, database *sql.DB) error {
 	if err := addColumnIfMissing(ctx, database, "users", "role", "TEXT NOT NULL DEFAULT 'viewer'"); err != nil {
 		return err
 	}
+	// Migration: Per-user session version. Bumped on password change so tokens
+	// minted under the previous credential epoch stop authenticating. Existing
+	// users start at version 1; tokens issued before this column existed carry
+	// no version claim and are treated as legacy (see internal/auth).
+	if err := addColumnIfMissing(ctx, database, "users", "token_version", "INTEGER NOT NULL DEFAULT 1"); err != nil {
+		return err
+	}
 
 	// Migration: Add token_type column to revoked_tokens
 	var hasRevokedTokensTable bool

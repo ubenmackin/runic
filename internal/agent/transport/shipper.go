@@ -235,14 +235,19 @@ func ParseLogLine(line string) (LogEvent, error) {
 		ev.Action = "ACCEPT"
 	}
 
-	// Syslog Format: "Jan 1 12:00:00 hostname kernel: [RUNIC-DROP] ..."
+	// Syslog Format: "Jan  5 12:00:00 hostname kernel: [RUNIC-DROP] ..."
+	// RFC3164 space-pads single-digit days, so splitting on single spaces
+	// yields an empty day field and drops the time. Rebuild the prefix from
+	// the first three non-empty tokens, padding the day to two characters;
+	// common.NormalizeFirewallTimestamp parses it with "Jan _2 15:04:05" and
+	// rejects a bare "Jan  5" (no time).
 	// ISO Format: "2026-03-31T15:48:14.402322-07:00 hostname kernel: [RUNIC-DROP] ..."
-	parts := strings.SplitN(line, " ", 5)
-	if len(parts) >= 4 {
-		if strings.Contains(parts[0], "T") && strings.Contains(parts[0], ":") {
-			ev.Timestamp = parts[0]
+	fields := strings.Fields(line)
+	if len(fields) >= 3 {
+		if strings.Contains(fields[0], "T") && strings.Contains(fields[0], ":") {
+			ev.Timestamp = fields[0]
 		} else {
-			ev.Timestamp = fmt.Sprintf("%s %s %s", parts[0], parts[1], parts[2])
+			ev.Timestamp = fmt.Sprintf("%s %2s %s", fields[0], fields[1], fields[2])
 		}
 	}
 

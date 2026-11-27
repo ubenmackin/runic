@@ -6,19 +6,24 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"database/sql"
 	"encoding/pem"
 	"fmt"
 	"math/big"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
+
 	"runic/internal/api"
+	"runic/internal/auth"
 	"runic/internal/common/constants"
 	runicdb "runic/internal/db"
 	"runic/internal/store"
@@ -542,6 +547,28 @@ func TestSetCacheHeadersMultipleCalls(t *testing.T) {
 	}
 }
 
+// TestHTTPServerTimeoutsConfigured verifies the control-plane listener has
+// bounded handshake/read/idle deadlines while leaving WriteTimeout disabled
+// for SSE and WebSocket streams.
+func TestHTTPServerTimeoutsConfigured(t *testing.T) {
+	t.Parallel()
+
+	srv := newHTTPServer(":0", http.NotFoundHandler(), &tls.Config{MinVersion: tls.VersionTLS12})
+
+	if srv.ReadHeaderTimeout <= 0 || srv.ReadHeaderTimeout > 30*time.Second {
+		t.Errorf("ReadHeaderTimeout = %v, want a positive value no greater than 30s", srv.ReadHeaderTimeout)
+	}
+	if srv.ReadTimeout <= 0 || srv.ReadTimeout > 5*time.Minute {
+		t.Errorf("ReadTimeout = %v, want a positive value no greater than 5m", srv.ReadTimeout)
+	}
+	if srv.IdleTimeout <= 0 || srv.IdleTimeout > 5*time.Minute {
+		t.Errorf("IdleTimeout = %v, want a positive value no greater than 5m", srv.IdleTimeout)
+	}
+	if srv.WriteTimeout != 0 {
+		t.Errorf("WriteTimeout = %v, want 0 so SSE and WebSocket streams are not severed", srv.WriteTimeout)
+	}
+}
+
 // generateTestCertAndKey generates a test certificate and RSA private key
 func generateTestCertAndKey() ([]byte, []byte, error) {
 	// Generate RSA private key
@@ -825,4 +852,212 @@ func setupTestMainDB(t *testing.T) (*sql.DB, func()) {
 		os.Remove(dbPath)
 	}
 	return database, cleanup
+}
+
+// resetAuthGlobals clears the process-global auth state so startup tests do
+// not leak a signing key or settings store into other tests.
+func resetAuthGlobals() {
+	auth.SetSettingsStore(nil)
+	auth.JwtKeyMu.Lock()
+	auth.JwtKey = nil
+	auth.JwtPrevKey = nil
+	auth.JwtKeyMu.Unlock()
+}
+
+func TestInitializeAuth_FailsClosedWithoutPersistedKey(t *testing.T) {
+	database, cleanup := setupTestMainDB(t)
+	defer cleanup()
+	t.Setenv("RUNIC_JWT_SECRET", "")
+
+	resetAuthGlobals()
+	t.Cleanup(resetAuthGlobals)
+
+	settings := store.NewSettingsStore(database, nil)
+	if err := initializeAuth(context.Background(), database, settings); err == nil {
+		t.Fatal("initializeAuth() expected error when jwt_secret is missing")
+	}
+
+	auth.JwtKeyMu.RLock()
+	keyLen := len(auth.JwtKey)
+	auth.JwtKeyMu.RUnlock()
+	if keyLen != 0 {
+		t.Errorf("expected no signing key after failed startup, got %d bytes", keyLen)
+	}
+}
+
+func TestInitializeAuth_LoadsKeyAndRejectsEmptyKeyTokenForgery(t *testing.T) {
+	database, cleanup := setupTestMainDB(t)
+	defer cleanup()
+	t.Setenv("RUNIC_JWT_SECRET", "")
+
+	resetAuthGlobals()
+	t.Cleanup(resetAuthGlobals)
+
+	const persistedKey = "persisted-startup-signing-key-0123456789"
+	settings := store.NewSettingsStore(database, nil)
+	if err := settings.SetSystemConfig(context.Background(), "jwt_secret", persistedKey); err != nil {
+		t.Fatalf("seed jwt_secret: %v", err)
+	}
+	if err := initializeAuth(context.Background(), database, settings); err != nil {
+		t.Fatalf("initializeAuth() failed: %v", err)
+	}
+
+	auth.JwtKeyMu.RLock()
+	gotKey := string(auth.JwtKey)
+	auth.JwtKeyMu.RUnlock()
+	if gotKey == "" {
+		t.Fatal("expected non-empty JWT signing key after startup")
+	}
+	if gotKey != persistedKey {
+		t.Errorf("loaded JWT signing key = %q, want %q", gotKey, persistedKey)
+	}
+
+	forged := jwt.NewWithClaims(jwt.SigningMethodHS256, auth.Claims{
+		Username:  "admin",
+		UniqueID:  "forged-admin",
+		Role:      "admin",
+		TokenType: auth.TokenTypeAccess,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			Issuer:    "runic",
+			Audience:  jwt.ClaimStrings{"runic"},
+		},
+	})
+	forgedToken, err := forged.SignedString([]byte{})
+	if err != nil {
+		t.Fatalf("sign forged token: %v", err)
+	}
+	if _, err := auth.ValidateToken(forgedToken); err == nil {
+		t.Fatal("ValidateToken accepted an HS256 token signed with an empty key")
+	}
+
+	// initializeAuth must also wire the settings store so later rotations
+	// persist through auth.RotateJwtKey.
+	const rotatedKey = "post-startup-rotated-signing-key-0123456789"
+	if err := auth.RotateJwtKey(context.Background(), []byte(rotatedKey)); err != nil {
+		t.Fatalf("RotateJwtKey() failed: %v", err)
+	}
+	storedKey, err := settings.GetSystemConfig(context.Background(), "jwt_secret")
+	if err != nil {
+		t.Fatalf("read rotated jwt_secret: %v", err)
+	}
+	if storedKey != rotatedKey {
+		t.Errorf("persisted jwt_secret = %q, want %q", storedKey, rotatedKey)
+	}
+}
+
+func TestInitializeAuth_BootstrapsFromEnv(t *testing.T) {
+	database, cleanup := setupTestMainDB(t)
+	defer cleanup()
+
+	const bootstrapKey = "installer-bootstrap-signing-key-0123456789"
+	t.Setenv("RUNIC_JWT_SECRET", bootstrapKey)
+	resetAuthGlobals()
+	t.Cleanup(resetAuthGlobals)
+
+	settings := store.NewSettingsStore(database, nil)
+	if err := initializeAuth(context.Background(), database, settings); err != nil {
+		t.Fatalf("initializeAuth() bootstrap failed: %v", err)
+	}
+
+	auth.JwtKeyMu.RLock()
+	gotKey := string(auth.JwtKey)
+	auth.JwtKeyMu.RUnlock()
+	if gotKey != bootstrapKey {
+		t.Errorf("loaded JWT signing key = %q, want %q", gotKey, bootstrapKey)
+	}
+	storedKey, err := settings.GetSystemConfig(context.Background(), "jwt_secret")
+	if err != nil {
+		t.Fatalf("read bootstrapped jwt_secret: %v", err)
+	}
+	if storedKey != bootstrapKey {
+		t.Errorf("persisted jwt_secret = %q, want %q", storedKey, bootstrapKey)
+	}
+}
+
+func TestInitializeAuth_FailsAfterKeyDeletionWithEnvSet(t *testing.T) {
+	dbFile, err := os.CreateTemp("", "runic-main-auth-*.db")
+	if err != nil {
+		t.Fatalf("create temp database: %v", err)
+	}
+	dbPath := dbFile.Name()
+	dbFile.Close()
+	defer os.Remove(dbPath)
+
+	envFile, err := os.CreateTemp("", "runic-main-auth-*.env")
+	if err != nil {
+		t.Fatalf("create temp env file: %v", err)
+	}
+	defer os.Remove(envFile.Name())
+
+	const preDeletionKey = "pre-deletion-signing-key-0123456789"
+	envContent := "RUNIC_JWT_SECRET=" + preDeletionKey + "\nRUNIC_AGENT_JWT_SECRET=pre-deletion-agent-key-0123456789\n"
+	if _, err := envFile.WriteString(envContent); err != nil {
+		envFile.Close()
+		t.Fatalf("write temp env file: %v", err)
+	}
+	if err := envFile.Close(); err != nil {
+		t.Fatalf("close temp env file: %v", err)
+	}
+
+	t.Setenv("RUNIC_ENV_PATH", envFile.Name())
+	t.Setenv("RUNIC_JWT_SECRET", preDeletionKey)
+	resetAuthGlobals()
+	t.Cleanup(resetAuthGlobals)
+
+	database, err := runicdb.InitDB(dbPath)
+	if err != nil {
+		t.Fatalf("first InitDB: %v", err)
+	}
+	settings := store.NewSettingsStore(database, nil)
+	if err := initializeAuth(context.Background(), database, settings); err != nil {
+		database.Close()
+		t.Fatalf("first initializeAuth: %v", err)
+	}
+
+	preDeletionToken, err := auth.GenerateToken("admin", "admin", auth.TokenTypeAccess, time.Hour)
+	if err != nil {
+		database.Close()
+		t.Fatalf("GenerateToken: %v", err)
+	}
+	if _, err := auth.ValidateToken(preDeletionToken); err != nil {
+		database.Close()
+		t.Fatalf("pre-deletion token should validate: %v", err)
+	}
+
+	// Simulate key deletion: drop the persisted keys and clear the in-memory
+	// pair, leaving the one-time bootstrap marker untouched.
+	if _, err := database.Exec("DELETE FROM system_config WHERE key IN ('jwt_secret', 'agent_jwt_secret')"); err != nil {
+		database.Close()
+		t.Fatalf("delete signing keys: %v", err)
+	}
+	var marker bool
+	if err := database.QueryRow("SELECT COUNT(*) > 0 FROM system_config WHERE key = ?", runicdb.JWTSecretsSeedMarker).Scan(&marker); err != nil {
+		database.Close()
+		t.Fatalf("read bootstrap marker: %v", err)
+	}
+	if !marker {
+		database.Close()
+		t.Fatal("bootstrap marker should exist before the restart")
+	}
+	resetAuthGlobals()
+	if err := database.Close(); err != nil {
+		t.Fatalf("close database: %v", err)
+	}
+
+	// Restart with the deleted key still present in the environment: boot must
+	// fail closed instead of re-seeding the revoked key.
+	restartedDB, err := runicdb.InitDB(dbPath)
+	if err != nil {
+		t.Fatalf("second InitDB: %v", err)
+	}
+	defer restartedDB.Close()
+	restartedSettings := store.NewSettingsStore(restartedDB, nil)
+	if err := initializeAuth(context.Background(), restartedDB, restartedSettings); err == nil {
+		t.Fatal("initializeAuth() must fail when a deleted signing key is still present in the environment")
+	}
+	if _, err := auth.ValidateToken(preDeletionToken); err == nil {
+		t.Fatal("pre-deletion token must stay invalid after the restart")
+	}
 }

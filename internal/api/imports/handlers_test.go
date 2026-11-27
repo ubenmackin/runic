@@ -795,6 +795,62 @@ func TestUpdateRule_InvalidStatus(t *testing.T) {
 	assert.Equal(t, "invalid status value", errResp["error"])
 }
 
+func TestImportPolicyNameRejectsControlCharacters(t *testing.T) {
+	cases := []struct {
+		name       string
+		policyName string
+	}{
+		{name: "newline directive injection", policyName: "legit\n-A INPUT -j ACCEPT"},
+		{name: "carriage return", policyName: "legit\r-A INPUT -j ACCEPT"},
+		{name: "null byte", policyName: "legit\x00name"},
+		{name: "tab", policyName: "legit\tname"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			called := false
+			store := &mockImportStore{
+				updateRuleFn: func(_ context.Context, _, _ int64, _, _, _, _ *string, _ *bool) error {
+					called = true
+					return nil
+				},
+			}
+			h := newHandler(store)
+
+			body, err := json.Marshal(map[string]string{"policy_name": tc.policyName})
+			require.NoError(t, err)
+			req := httptest.NewRequest(http.MethodPut, "/import-sessions/1/rules/10", bytes.NewReader(body))
+			req = mux.SetURLVars(req, map[string]string{"session_id": "1", "rule_id": "10"})
+			w := httptest.NewRecorder()
+			h.UpdateRule(w, req)
+
+			assert.Equal(t, http.StatusBadRequest, w.Code)
+			assert.False(t, called, "store must not persist a rejected policy name")
+		})
+	}
+
+	t.Run("valid policy name is accepted", func(t *testing.T) {
+		var capturedPolicyName *string
+		store := &mockImportStore{
+			updateRuleFn: func(_ context.Context, _, _ int64, _, policyName, _, _ *string, _ *bool) error {
+				capturedPolicyName = policyName
+				return nil
+			},
+		}
+		h := newHandler(store)
+
+		body := `{"policy_name":"Imported-INPUT-tcp-443-ACCEPT"}`
+		req := httptest.NewRequest(http.MethodPut, "/import-sessions/1/rules/10", bytes.NewBufferString(body))
+		req = mux.SetURLVars(req, map[string]string{"session_id": "1", "rule_id": "10"})
+		w := httptest.NewRecorder()
+		h.UpdateRule(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		require.NotNil(t, capturedPolicyName)
+		assert.Equal(t, "Imported-INPUT-tcp-443-ACCEPT", *capturedPolicyName)
+	})
+}
+
 func TestUpdateRule_StoreError(t *testing.T) {
 	store := &mockImportStore{
 		updateRuleFn: func(_ context.Context, _, _ int64, _, _, _, _ *string, _ *bool) error {

@@ -1,6 +1,25 @@
 import { useState, useMemo, memo } from 'react'
 import { ChevronDown, ChevronRight, Wand2 } from 'lucide-react'
 
+function padTwo(value) {
+  return String(value).padStart(2, '0')
+}
+
+// API timestamps are RFC3339 UTC; Date's local getters shift the instant into
+// the viewer's timezone so the displayed wall clock matches their experience.
+function formatLogTimestamp(value) {
+  if (!value) return '—'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '—'
+  const yyyy = date.getFullYear()
+  const mm = padTwo(date.getMonth() + 1)
+  const dd = padTwo(date.getDate())
+  const hh = padTwo(date.getHours())
+  const mi = padTwo(date.getMinutes())
+  const ss = padTwo(date.getSeconds())
+  return `${yyyy}-${mm}-${dd} ${hh}:${mi}:${ss}`
+}
+
 // Memoized so high-frequency live streams only re-render rows whose log
 // object actually changed instead of the whole list on every message.
 function LogLine({ log, expanded, onToggle, onCraftPolicy, canEdit }) {
@@ -52,7 +71,7 @@ function LogLine({ log, expanded, onToggle, onCraftPolicy, canEdit }) {
         )}
 
         <span className="text-gray-500 dark:text-amber-muted w-36 whitespace-nowrap">
-          {log.timestamp?.replace('T', ' ').slice(0, 19) || '—'}
+          {formatLogTimestamp(log.timestamp)}
         </span>
 
         <span className={`px-1.5 py-0.5 rounded-none text-xs font-medium ${actionColor}`}>

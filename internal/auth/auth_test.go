@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"runic/internal/store"
 	"runic/internal/testutil"
 	"strings"
@@ -12,6 +13,15 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 )
+
+// TestMain seeds a non-empty signing key so tests that exercise token
+// generation and validation do not depend on the production startup path.
+func TestMain(m *testing.M) {
+	JwtKeyMu.Lock()
+	JwtKey = []byte("auth-package-test-signing-key-0123456789")
+	JwtKeyMu.Unlock()
+	os.Exit(m.Run())
+}
 
 func TestGenerateToken(t *testing.T) {
 	tests := []struct {
@@ -773,29 +783,55 @@ func TestInitJwtKey(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
+	settings := store.NewSettingsStore(db, nil)
 
-	t.Run("random fallback", func(t *testing.T) {
-		err := InitJwtKey(ctx, db)
-		if err != nil {
-			t.Fatalf("InitJwtKey failed: %v", err)
+	JwtKeyMu.RLock()
+	origKey := JwtKey
+	origPrevKey := JwtPrevKey
+	JwtKeyMu.RUnlock()
+	defer func() {
+		JwtKeyMu.Lock()
+		JwtKey = origKey
+		JwtPrevKey = origPrevKey
+		JwtKeyMu.Unlock()
+	}()
+
+	resetKeys := func() {
+		JwtKeyMu.Lock()
+		JwtKey = nil
+		JwtPrevKey = nil
+		JwtKeyMu.Unlock()
+	}
+
+	t.Run("missing persisted key fails closed", func(t *testing.T) {
+		resetKeys()
+		if err := InitJwtKey(ctx, db); err == nil {
+			t.Fatal("InitJwtKey() expected error for missing jwt_secret")
 		}
 		JwtKeyMu.RLock()
 		defer JwtKeyMu.RUnlock()
-		if len(JwtKey) != 32 {
-			t.Errorf("expected 32 byte random key, got %d", len(JwtKey))
+		if JwtKey != nil {
+			t.Errorf("expected no signing key after failed init, got %q", JwtKey)
+		}
+	})
+
+	t.Run("empty persisted key fails closed", func(t *testing.T) {
+		if err := settings.SetSystemConfig(ctx, "jwt_secret", ""); err != nil {
+			t.Fatal(err)
+		}
+		resetKeys()
+		if err := InitJwtKey(ctx, db); err == nil {
+			t.Fatal("InitJwtKey() expected error for empty jwt_secret")
 		}
 	})
 
 	t.Run("from database", func(t *testing.T) {
 		expectedSecret := "dedicated-test-secret-123456789012"
-		settings := store.NewSettingsStore(db, nil)
-		err := settings.SetSystemConfig(ctx, "jwt_secret", expectedSecret)
-		if err != nil {
+		if err := settings.SetSystemConfig(ctx, "jwt_secret", expectedSecret); err != nil {
 			t.Fatal(err)
 		}
-
-		err = InitJwtKey(ctx, db)
-		if err != nil {
+		resetKeys()
+		if err := InitJwtKey(ctx, db); err != nil {
 			t.Fatalf("InitJwtKey failed: %v", err)
 		}
 		JwtKeyMu.RLock()
@@ -804,6 +840,114 @@ func TestInitJwtKey(t *testing.T) {
 			t.Errorf("expected secret %q, got %q", expectedSecret, string(JwtKey))
 		}
 	})
+}
+
+// TestInitJwtKeyRejectsForgedEmptyKeyToken is the startup regression: after a
+// persisted key is loaded, an HS256 token signed with an empty key (the
+// forgery enabled by an uninitialized JwtKey) must be rejected.
+func TestInitJwtKeyRejectsForgedEmptyKeyToken(t *testing.T) {
+	db, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	settings := store.NewSettingsStore(db, nil)
+	const persistedSecret = "startup-signing-key-for-empty-forgery-test"
+	if err := settings.SetSystemConfig(ctx, "jwt_secret", persistedSecret); err != nil {
+		t.Fatal(err)
+	}
+
+	JwtKeyMu.Lock()
+	origKey := JwtKey
+	origPrevKey := JwtPrevKey
+	JwtKey = nil
+	JwtPrevKey = nil
+	JwtKeyMu.Unlock()
+	defer func() {
+		JwtKeyMu.Lock()
+		JwtKey = origKey
+		JwtPrevKey = origPrevKey
+		JwtKeyMu.Unlock()
+	}()
+
+	if err := InitJwtKey(ctx, db); err != nil {
+		t.Fatalf("InitJwtKey failed: %v", err)
+	}
+
+	JwtKeyMu.RLock()
+	keyLen := len(JwtKey)
+	JwtKeyMu.RUnlock()
+	if keyLen == 0 {
+		t.Fatal("expected non-empty signing key after startup initialization")
+	}
+
+	forged := jwt.NewWithClaims(jwt.SigningMethodHS256, Claims{
+		Username:  "admin",
+		UniqueID:  "forged-admin",
+		Role:      "admin",
+		TokenType: TokenTypeAccess,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			Issuer:    "runic",
+			Audience:  jwt.ClaimStrings{"runic"},
+		},
+	})
+	forgedToken, err := forged.SignedString([]byte{})
+	if err != nil {
+		t.Fatalf("sign forged token: %v", err)
+	}
+
+	if _, err := ValidateToken(forgedToken); err == nil {
+		t.Fatal("ValidateToken accepted an HS256 token signed with an empty key")
+	}
+}
+
+func TestClearJwtPrevKeyRejectsPreRotationToken(t *testing.T) {
+	db, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	settings := store.NewSettingsStore(db, nil)
+	SetSettingsStore(settings)
+	defer SetSettingsStore(nil)
+
+	const originalSecret = "pre-rotation-secret-for-clear-prev-test"
+	if err := settings.SetSystemConfig(ctx, "jwt_secret", originalSecret); err != nil {
+		t.Fatal(err)
+	}
+	JwtKeyMu.Lock()
+	origKey := JwtKey
+	origPrevKey := JwtPrevKey
+	JwtKey = nil
+	JwtPrevKey = nil
+	JwtKeyMu.Unlock()
+	defer func() {
+		JwtKeyMu.Lock()
+		JwtKey = origKey
+		JwtPrevKey = origPrevKey
+		JwtKeyMu.Unlock()
+	}()
+
+	if err := InitJwtKey(ctx, db); err != nil {
+		t.Fatalf("InitJwtKey failed: %v", err)
+	}
+	preRotationToken, err := GenerateToken("alice", "admin", TokenTypeAccess, time.Hour)
+	if err != nil {
+		t.Fatalf("GenerateToken failed: %v", err)
+	}
+
+	if err := RotateJwtKey(ctx, []byte("new-rotation-secret-for-clear-prev-test")); err != nil {
+		t.Fatalf("RotateJwtKey failed: %v", err)
+	}
+	if _, err := ValidateToken(preRotationToken); err != nil {
+		t.Fatalf("expected pre-rotation token to validate during rotation window: %v", err)
+	}
+	if err := ClearJwtPrevKey(ctx); err != nil {
+		t.Fatalf("ClearJwtPrevKey failed: %v", err)
+	}
+	if _, err := ValidateToken(preRotationToken); err == nil {
+		t.Fatal("expected pre-rotation token to be rejected after ClearJwtPrevKey")
+	}
 }
 
 func TestTokenRevocation(t *testing.T) {
@@ -901,6 +1045,60 @@ func TestMiddlewareCookie(t *testing.T) {
 			t.Errorf("expected 401 for revoked token, got %d", w.Code)
 		}
 	})
+}
+
+func TestMiddlewareRejectsNonAccessTokenTypes(t *testing.T) {
+	db, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	SetTokenStore(store.NewTokenStore(db))
+
+	tests := []struct {
+		name      string
+		tokenType string
+	}{
+		{"refresh token", TokenTypeRefresh},
+		{"empty token type", ""},
+		{"unknown token type", "session"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			token, err := GenerateToken("testuser", "viewer", tt.tokenType, 1*time.Hour)
+			if err != nil {
+				t.Fatalf("failed to generate token: %v", err)
+			}
+
+			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				t.Errorf("handler must not run for a %s", tt.name)
+				w.WriteHeader(http.StatusOK)
+			})
+			mw := Middleware(handler)
+
+			t.Run("bearer header", func(t *testing.T) {
+				req := httptest.NewRequest("GET", "/test", nil)
+				req.Header.Set("Authorization", "Bearer "+token)
+				w := httptest.NewRecorder()
+
+				mw.ServeHTTP(w, req)
+
+				if w.Code != http.StatusUnauthorized {
+					t.Errorf("expected status %d, got %d: %s", http.StatusUnauthorized, w.Code, w.Body.String())
+				}
+			})
+
+			t.Run("access cookie", func(t *testing.T) {
+				req := httptest.NewRequest("GET", "/test", nil)
+				req.AddCookie(&http.Cookie{Name: "runic_access_token", Value: token})
+				w := httptest.NewRecorder()
+
+				mw.ServeHTTP(w, req)
+
+				if w.Code != http.StatusUnauthorized {
+					t.Errorf("expected status %d, got %d: %s", http.StatusUnauthorized, w.Code, w.Body.String())
+				}
+			})
+		})
+	}
 }
 
 func TestContextHelpers(t *testing.T) {

@@ -13,6 +13,7 @@ import (
 
 	"runic/internal/api/common"
 	"runic/internal/api/middleware"
+	"runic/internal/auth"
 	runiccommon "runic/internal/common"
 	"runic/internal/db"
 )
@@ -57,6 +58,15 @@ func parseHostID(hostID string) string {
 }
 
 func (h *Handler) RotatePeerKey(w http.ResponseWriter, r *http.Request) {
+	// Rotation is admin-only: the replacement HMAC key can be exchanged for an
+	// agent token through the HMAC-proof re-registration path, so an editor
+	// must never receive new key material. The route is also registered on the
+	// admin subrouter; this check keeps the handler safe if that changes.
+	if auth.RoleFromContext(r.Context()) != "admin" {
+		common.RespondError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+
 	peerID, err := common.ParseIDParam(r, "id")
 	if err != nil {
 		common.RespondError(w, http.StatusBadRequest, "invalid peer ID")
@@ -70,6 +80,13 @@ func (h *Handler) RotatePeerKey(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		common.RespondError(w, http.StatusInternalServerError, "failed to query peer")
+		return
+	}
+	// Manual peers have no agent to consume the replacement key, and the
+	// admin response carries HMAC material that must never be issued for
+	// them.
+	if peer.IsManual {
+		common.RespondError(w, http.StatusBadRequest, "cannot rotate keys for a manual peer")
 		return
 	}
 
@@ -207,6 +224,19 @@ func (h *Handler) AgentRotateKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	hostname := parseHostID(input.HostID)
+	// Manual peers have no agent and must never receive HMAC material. Answer
+	// with the same generic rejection as an unknown token so the endpoint does
+	// not disclose which hostnames are manual.
+	peer, err := h.Store.GetPeerByHostname(r.Context(), hostname)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		common.RespondError(w, http.StatusInternalServerError, "failed to query peer")
+		return
+	}
+	if err == nil && peer.IsManual {
+		common.RespondError(w, http.StatusUnauthorized, "invalid rotation token")
+		return
+	}
+
 	_, newHMACKey, expired, err := h.consumeRotationToken(r.Context(), hostname, input.RotationToken)
 	if err != nil {
 		var httpErr *common.HTTPError
@@ -262,6 +292,22 @@ func (h *Handler) AgentConfirmRotation(w http.ResponseWriter, r *http.Request) {
 	}
 
 	hostname := parseHostID(input.HostID)
+	// Manual peers have no agent and must never complete a rotation. Reject
+	// with the same unauthorized response as an invalid rotation token.
+	peer, err := h.Store.GetPeerByHostname(r.Context(), hostname)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			common.RespondError(w, http.StatusNotFound, "peer not found")
+			return
+		}
+		common.RespondError(w, http.StatusInternalServerError, "failed to query peer")
+		return
+	}
+	if peer.IsManual {
+		common.RespondError(w, http.StatusUnauthorized, "invalid rotation token")
+		return
+	}
+
 	rotationToken, _, err := h.Store.GetPeerRotationState(r.Context(), hostname)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

@@ -23,6 +23,9 @@ func NewLogsStore(logsDB db.Querier) *LogsStore {
 }
 
 // LogFilter holds optional filter criteria for log queries.
+// From and To are canonical UTC YYYY-MM-DD HH:MM:SS strings produced by
+// common.FirewallTimestampCutoff so they compare correctly with the stored
+// firewall_logs.timestamp layout.
 type LogFilter struct {
 	PeerID    string
 	SrcIP     string

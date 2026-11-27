@@ -85,18 +85,26 @@ type FirewallLogEntry struct {
 }
 
 // InsertFirewallLog inserts a single firewall log entry into the logs database.
+// The timestamp is normalized to canonical UTC (common.FirewallTimestampLayout)
+// at this persistence boundary so every row is comparable with the TEXT window
+// bounds used by alert, dashboard, filter, and retention queries; unparseable
+// or empty timestamps are rejected rather than stored.
 func (s *DashboardStore) InsertFirewallLog(ctx context.Context, entry *FirewallLogEntry) error {
 	if s.logsDB == nil {
 		return fmt.Errorf("logs database not configured")
+	}
+	normalized, err := ic.NormalizeFirewallTimestamp(entry.Timestamp, time.Now())
+	if err != nil {
+		return fmt.Errorf("normalize firewall log timestamp: %w", err)
 	}
 	eventType := entry.EventType
 	if eventType == "" {
 		eventType = entry.Direction
 	}
-	_, err := s.logsDB.ExecContext(ctx,
+	_, err = s.logsDB.ExecContext(ctx,
 		`INSERT INTO firewall_logs (peer_id, peer_hostname, timestamp, event_type, source_ip, dest_ip, protocol, source_port, dest_port, action, details)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		entry.PeerID, entry.PeerHostname, entry.Timestamp, eventType,
+		entry.PeerID, entry.PeerHostname, normalized, eventType,
 		entry.SrcIP, entry.DstIP, entry.Protocol, entry.SrcPort, entry.DstPort,
 		entry.Action, entry.RawLine)
 	if err != nil {
@@ -299,14 +307,19 @@ SELECT
 }
 
 func (s *DashboardStore) GetBlockedCounts(ctx context.Context) (blockedLastHour, blockedLast24h int, err error) {
+	// Bound both windows with canonical UTC cutoffs so the TEXT comparisons
+	// match the stored timestamp layout.
+	now := time.Now()
+	hourAgo := ic.FirewallTimestampCutoff(now.Add(-time.Hour))
+	dayAgo := ic.FirewallTimestampCutoff(now.Add(-24 * time.Hour))
 	query := `
 		SELECT
-		COALESCE(SUM(CASE WHEN timestamp > datetime('now', '-1 hour') THEN 1 ELSE 0 END), 0) as blocked_last_hour,
+		COALESCE(SUM(CASE WHEN timestamp > ? THEN 1 ELSE 0 END), 0) as blocked_last_hour,
 		COUNT(*) as blocked_last_24h
 		FROM firewall_logs
-		WHERE ` + BlockedTrafficFilter + ` AND timestamp > datetime('now', '-24 hours')`
+		WHERE ` + BlockedTrafficFilter + ` AND timestamp > ?`
 
-	err = s.logsDB.QueryRowContext(ctx, query).Scan(&blockedLastHour, &blockedLast24h)
+	err = s.logsDB.QueryRowContext(ctx, query, hourAgo, dayAgo).Scan(&blockedLastHour, &blockedLast24h)
 	if err != nil {
 		return 0, 0, fmt.Errorf("query blocked counts: %w", err)
 	}
@@ -387,15 +400,17 @@ func (s *DashboardStore) GetPeerHealth(ctx context.Context) ([]models.PeerHealth
 }
 
 func (s *DashboardStore) GetTopBlockedSources(ctx context.Context, limit int) ([]models.BlockedIP, error) {
+	// Canonical UTC bound keeps the TEXT comparison aligned with stored timestamps.
+	cutoff := ic.FirewallTimestampCutoff(time.Now().Add(-24 * time.Hour))
 	query := `
 		SELECT source_ip, COUNT(*) as count
 		FROM firewall_logs
-		WHERE ` + BlockedTrafficFilter + ` AND timestamp > datetime('now', '-24 hours')
+		WHERE ` + BlockedTrafficFilter + ` AND timestamp > ?
 		GROUP BY source_ip
 		ORDER BY count DESC
 		LIMIT ?`
 
-	rows, err := s.logsDB.QueryContext(ctx, query, limit)
+	rows, err := s.logsDB.QueryContext(ctx, query, cutoff, limit)
 	if err != nil {
 		return nil, fmt.Errorf("query top blocked sources: %w", err)
 	}

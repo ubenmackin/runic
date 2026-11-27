@@ -252,16 +252,21 @@ func (s *SMTPSender) sendWithTLS(addr string, auth smtp.Auth, from string, to []
 		smtpConn = conn
 
 		if s.config.UseTLS {
-			if ok, _ := conn.Extension("STARTTLS"); ok {
-				tlsConfig := &tls.Config{
-					InsecureSkipVerify: false,
-					ServerName:         s.config.Host,
-				}
-				if err := conn.StartTLS(tlsConfig); err != nil {
-					return fmt.Errorf("STARTTLS failed: %w", err)
-				}
-				s.logger.Debug("STARTTLS enabled for SMTP connection")
+			if ok, _ := conn.Extension("STARTTLS"); !ok {
+				// Fail closed: an on-path attacker can strip the STARTTLS
+				// advertisement, so a configured TLS requirement must never
+				// silently downgrade to plaintext.
+				_ = conn.Close()
+				return fmt.Errorf("SMTP server %s does not advertise STARTTLS but TLS is required", s.config.Host)
 			}
+			tlsConfig := &tls.Config{
+				InsecureSkipVerify: false,
+				ServerName:         s.config.Host,
+			}
+			if err := conn.StartTLS(tlsConfig); err != nil {
+				return fmt.Errorf("STARTTLS failed: %w", err)
+			}
+			s.logger.Debug("STARTTLS enabled for SMTP connection")
 		}
 	}
 

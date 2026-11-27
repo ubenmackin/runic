@@ -101,7 +101,7 @@ func TestAddDBConstraints_PreservesExistingData(t *testing.T) {
 	assert.Equal(t, 1, userCount, "Existing user should be preserved")
 }
 
-func TestMigrateEnvToDB_NoEnvFile(t *testing.T) {
+func TestSeedJWTSecrets_NoEnvFile(t *testing.T) {
 	database, cleanup := SetupTestDB(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -110,11 +110,11 @@ func TestMigrateEnvToDB_NoEnvFile(t *testing.T) {
 	os.Setenv("RUNIC_ENV_PATH", "/tmp/runic-nonexistent-env-file-.env")
 	defer os.Unsetenv("RUNIC_ENV_PATH")
 
-	err := migrateEnvToDB(ctx, database)
-	assert.NoError(t, err, "migrateEnvToDB should succeed with no .env file")
+	err := seedJWTSecrets(ctx, database)
+	assert.NoError(t, err, "seedJWTSecrets should succeed with no .env file")
 }
 
-func TestMigrateEnvToDB_WithEnvFile(t *testing.T) {
+func TestSeedJWTSecrets_WithEnvFile(t *testing.T) {
 	database, cleanup := SetupTestDB(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -132,8 +132,8 @@ func TestMigrateEnvToDB_WithEnvFile(t *testing.T) {
 	os.Setenv("RUNIC_ENV_PATH", f.Name())
 	defer os.Unsetenv("RUNIC_ENV_PATH")
 
-	err = migrateEnvToDB(ctx, database)
-	require.NoError(t, err, "migrateEnvToDB should succeed")
+	err = seedJWTSecrets(ctx, database)
+	require.NoError(t, err, "seedJWTSecrets should succeed")
 
 	// Verify secrets were stored
 	var jwtSecret string
@@ -147,7 +147,47 @@ func TestMigrateEnvToDB_WithEnvFile(t *testing.T) {
 	assert.Equal(t, "my-agent-secret", agentSecret, "Agent JWT secret should be migrated")
 }
 
-func TestMigrateEnvToDB_EmptyValuesSkipped(t *testing.T) {
+func TestSeedJWTSecrets_DoesNotOverwritePersistedJwtSecret(t *testing.T) {
+	database, cleanup := SetupTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Keys persisted by initialization or rotation are authoritative.
+	const persistedJWT = "persisted-rotated-jwt-secret"
+	const persistedAgent = "persisted-rotated-agent-jwt-secret"
+	_, err := database.ExecContext(ctx,
+		"INSERT INTO system_config (key, value) VALUES ('jwt_secret', ?), ('agent_jwt_secret', ?)",
+		persistedJWT, persistedAgent)
+	require.NoError(t, err)
+
+	// A stale .env file still holds the pre-rotation values; a restart must
+	// not resurrect them over the persisted keys.
+	envContent := "RUNIC_JWT_SECRET=stale-jwt-secret\nRUNIC_AGENT_JWT_SECRET=stale-agent-secret\n"
+	f, err := os.CreateTemp("", "runic-test-env-stale-*.env")
+	require.NoError(t, err)
+	defer os.Remove(f.Name())
+
+	_, err = f.WriteString(envContent)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	t.Setenv("RUNIC_ENV_PATH", f.Name())
+
+	err = seedJWTSecrets(ctx, database)
+	require.NoError(t, err, "seedJWTSecrets should succeed")
+
+	var jwtSecret string
+	err = database.QueryRowContext(ctx, "SELECT value FROM system_config WHERE key = ?", "jwt_secret").Scan(&jwtSecret)
+	require.NoError(t, err)
+	assert.Equal(t, persistedJWT, jwtSecret, "stale .env must not overwrite the persisted JWT secret")
+
+	var agentSecret string
+	err = database.QueryRowContext(ctx, "SELECT value FROM system_config WHERE key = ?", "agent_jwt_secret").Scan(&agentSecret)
+	require.NoError(t, err)
+	assert.Equal(t, persistedAgent, agentSecret, "stale .env must not overwrite the persisted agent JWT secret")
+}
+
+func TestSeedJWTSecrets_EmptyValuesSkipped(t *testing.T) {
 	database, cleanup := SetupTestDB(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -165,12 +205,57 @@ func TestMigrateEnvToDB_EmptyValuesSkipped(t *testing.T) {
 	os.Setenv("RUNIC_ENV_PATH", f.Name())
 	defer os.Unsetenv("RUNIC_ENV_PATH")
 
-	err = migrateEnvToDB(ctx, database)
-	require.NoError(t, err, "migrateEnvToDB should succeed")
+	err = seedJWTSecrets(ctx, database)
+	require.NoError(t, err, "seedJWTSecrets should succeed")
 
 	// Empty values should NOT be inserted
 	var count int
 	err = database.QueryRowContext(ctx, "SELECT COUNT(*) FROM system_config WHERE key = ?", "jwt_secret").Scan(&count)
 	require.NoError(t, err)
 	assert.Equal(t, 0, count, "Empty values should not be migrated")
+}
+
+func TestSeedJWTSecrets_RefusesReseedAfterDeletion(t *testing.T) {
+	database, cleanup := SetupTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	envContent := "RUNIC_JWT_SECRET=bootstrap-jwt-secret\nRUNIC_AGENT_JWT_SECRET=bootstrap-agent-secret\n"
+	f, err := os.CreateTemp("", "runic-test-env-reseed-*.env")
+	require.NoError(t, err)
+	defer os.Remove(f.Name())
+
+	_, err = f.WriteString(envContent)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	t.Setenv("RUNIC_ENV_PATH", f.Name())
+
+	// First boot seeds both keys and records the one-time marker.
+	require.NoError(t, seedJWTSecrets(ctx, database))
+
+	var marker bool
+	err = database.QueryRowContext(ctx,
+		"SELECT COUNT(*) > 0 FROM system_config WHERE key = ?", JWTSecretsSeedMarker).Scan(&marker)
+	require.NoError(t, err)
+	require.True(t, marker, "bootstrap marker should be recorded after the first seed")
+
+	// Key deletion removes the persisted keys but must leave the marker.
+	_, err = database.ExecContext(ctx, "DELETE FROM system_config WHERE key IN ('jwt_secret', 'agent_jwt_secret')")
+	require.NoError(t, err)
+
+	// A restart with the same .env must not resurrect the deleted keys.
+	require.NoError(t, seedJWTSecrets(ctx, database))
+
+	for _, key := range []string{"jwt_secret", "agent_jwt_secret"} {
+		var keyCount int
+		err = database.QueryRowContext(ctx, "SELECT COUNT(*) FROM system_config WHERE key = ?", key).Scan(&keyCount)
+		require.NoError(t, err)
+		assert.Zero(t, keyCount, "%s must not be re-seeded after deletion", key)
+	}
+
+	err = database.QueryRowContext(ctx,
+		"SELECT COUNT(*) > 0 FROM system_config WHERE key = ?", JWTSecretsSeedMarker).Scan(&marker)
+	require.NoError(t, err)
+	assert.True(t, marker, "key deletion must not clear the bootstrap marker")
 }

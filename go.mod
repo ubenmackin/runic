@@ -1,23 +1,20 @@
 module runic
 
-go 1.26.5
+go 1.27.4
 
 require (
 	github.com/golang-jwt/jwt/v5 v5.3.1
+	github.com/gorilla/mux v1.8.1
+	github.com/gorilla/websocket v1.5.4-0.20240701034025-d67f41855da4
 	github.com/mattn/go-sqlite3 v1.14.41
-)
-
-require github.com/gorilla/mux v1.8.1
-
-require (
-	github.com/gorilla/websocket v1.5.3
 	github.com/minio/selfupdate v0.6.0
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/client_model v0.6.2
 	github.com/stretchr/testify v1.11.1
-	golang.org/x/crypto v0.56.0 // GO-2026-5932 waiver: golang.org/x/crypto/openpgp (armor, packet, clearsign, elgamal, s2k) is unimported — only bcrypt, hkdf, pbkdf2 are used; advisory affects all versions with no fixed version as of 2026-09-17; monitor upstream and upgrade when a fix is published.
+	golang.org/x/crypto v0.58.1-0.20261009181718-2f1f834330b2
+	golang.org/x/net v0.62.0
 	golang.org/x/sync v0.20.0
-	golang.org/x/term v0.45.0
+	golang.org/x/term v0.47.0
 )
 
 require (
@@ -31,8 +28,7 @@ require (
 	github.com/prometheus/common v0.66.1 // indirect
 	github.com/prometheus/procfs v0.16.1 // indirect
 	go.yaml.in/yaml/v2 v2.4.2 // indirect
-	golang.org/x/net v0.57.0
-	golang.org/x/sys v0.47.0 // indirect
+	golang.org/x/sys v0.49.0 // indirect
 	google.golang.org/protobuf v1.36.8 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

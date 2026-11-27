@@ -1064,6 +1064,74 @@ COMMIT
 	}
 }
 
+// TestApplyBundle_RestoreFailureKeepsWatchdog proves a failed bundle restore
+// immediately restores the backup and, when that revert also fails, leaves the
+// auto-revert watchdog armed instead of canceling the host's last safety net.
+func TestApplyBundle_RestoreFailureKeepsWatchdog(t *testing.T) {
+	tmpDir, cleanup := setupMockEnvironment(t, "fail-restore")
+	defer cleanup()
+
+	var scheduled, canceled bool
+	origScheduleFunc := scheduleRevertFn
+	scheduleRevertFn = func(string, time.Duration, string, string, string) context.CancelFunc {
+		scheduled = true
+		return func() { canceled = true }
+	}
+	t.Cleanup(func() { scheduleRevertFn = origScheduleFunc })
+
+	bundle := models.BundleResponse{
+		Version: "restore-failure-v1",
+		Rules: `*filter
+:INPUT DROP [0:0]
+:OUTPUT DROP [0:0]
+:FORWARD DROP [0:0]
+-A INPUT -i lo -j ACCEPT
+-A OUTPUT -o lo -j ACCEPT
+-A INPUT -p icmp -j ACCEPT
+-A OUTPUT -p icmp -j ACCEPT
+-A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+-A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+-A INPUT -j LOG --log-prefix "[RUNIC-DROP-I] " --log-level 4
+-A INPUT -j DROP
+-A OUTPUT -j LOG --log-prefix "[RUNIC-DROP-O] " --log-level 4
+-A OUTPUT -j DROP
+COMMIT
+`,
+	}
+	hmacKey := "test-hmac-key"
+	bundle.HMAC = engine.Sign(bundle.Rules, hmacKey)
+
+	err := ApplyBundle(context.Background(), bundle, hmacKey, "http://127.0.0.1:1", "test-token", "1.0.0", nil)
+	if err == nil {
+		t.Fatal("expected rule restore error, got nil")
+	}
+	if !strings.Contains(err.Error(), "rule restore failed") {
+		t.Fatalf("expected rule restore error, got %v", err)
+	}
+	if !scheduled {
+		t.Fatal("auto-revert watchdog was not scheduled")
+	}
+	if canceled {
+		t.Fatal("auto-revert watchdog was canceled even though the restore failed")
+	}
+
+	// The failed restore must trigger an immediate revert attempt using the
+	// pre-apply backup: apply restore + revert restore = two invocations.
+	argsData, err := os.ReadFile(filepath.Join(tmpDir, "iptables-restore.args"))
+	if err != nil {
+		t.Fatalf("read iptables-restore args: %v", err)
+	}
+	invocations := 0
+	for _, line := range strings.Split(string(argsData), "\n") {
+		if strings.TrimSpace(line) != "" {
+			invocations++
+		}
+	}
+	if invocations < 2 {
+		t.Fatalf("expected an immediate revert attempt after failed restore, got %d iptables-restore invocation(s): %q", invocations, string(argsData))
+	}
+}
+
 // The behavior parameter controls what the mock does:
 // - "success": all commands succeed
 // - "fail-restore": iptables-restore returns exit code 1

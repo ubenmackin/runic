@@ -2,12 +2,14 @@ package auth
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"time"
 
 	"runic/internal/api/common"
 	"runic/internal/auth"
 	"runic/internal/common/log"
+	"runic/internal/models"
 )
 
 // Token TTL constants.
@@ -27,25 +29,58 @@ const (
 	RefreshTokenCookieMaxAge = int((7 * 24 * time.Hour) / time.Second)
 )
 
+// RefreshTokenCookieName is the refresh token cookie read by both the refresh
+// and logout handlers.
+const RefreshTokenCookieName = "runic_refresh_token"
+
+// RefreshTokenCookiePath scopes the refresh token cookie to the whole auth
+// surface. Browsers only send a cookie to endpoints under its Path, and
+// logout must receive the refresh token to revoke its jti, so the scope must
+// cover both /api/v1/auth/refresh and /api/v1/auth/logout.
+const RefreshTokenCookiePath = "/api/v1/auth"
+
+// legacyRefreshTokenCookiePath is the narrower path used before the refresh
+// cookie was widened to the whole auth surface. Browsers key cookies by name
+// and path, so they can hold the old cookie alongside the current one; every
+// cookie write expires this path and refresh/logout scan past its value.
+const legacyRefreshTokenCookiePath = "/api/v1/auth/refresh"
+
+// API route suffixes for the endpoints that consume the refresh token. They
+// live beside RefreshTokenCookiePath so the cookie scope cannot drift away
+// from the routes it must cover.
+const (
+	RefreshRoutePath = "/auth/refresh"
+	LogoutRoutePath  = "/auth/logout"
+)
+
 type TokenResponse struct {
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token"`
 }
 
+// GenerateTokenPair mints an access/refresh pair for an existing user. It
+// fails closed when the user cannot be loaded: issuing a token without a live
+// user row (or with a guessed role) would keep deleted users authenticated and
+// would detach tokens from the user's token_version epoch.
 func (h *Handler) GenerateTokenPair(ctx context.Context, username string) (accessToken string, refreshToken string, err error) {
-	// token generation always succeeds even if the DB is temporarily unavailable.
-	role := "viewer"
-	if user, lookupErr := h.UserStore.GetUserByUsername(ctx, username); lookupErr == nil {
-		role = user.Role
-	} else {
-		log.WarnContext(ctx, "failed to look up role, defaulting to viewer", "username", username, "error", lookupErr)
+	user, err := h.UserStore.GetUserByUsername(ctx, username)
+	if err != nil {
+		log.WarnContext(ctx, "failed to load user for token generation", "username", username, "error", err)
+		return "", "", fmt.Errorf("load user %q for token generation: %w", username, err)
 	}
+	return h.generateTokenPairForUser(&user)
+}
 
-	accessToken, err = auth.GenerateToken(username, role, auth.TokenTypeAccess, AccessTokenTTL)
+// generateTokenPairForUser mints tokens bound to the user's live role and
+// token_version. Callers that already resolved the user (login, refresh) use
+// this to avoid a redundant lookup and to keep role/version consistent with
+// the row they validated.
+func (h *Handler) generateTokenPairForUser(user *models.UserRow) (accessToken string, refreshToken string, err error) {
+	accessToken, err = auth.GenerateTokenWithVersion(user.Username, user.Role, auth.TokenTypeAccess, user.TokenVersion, AccessTokenTTL)
 	if err != nil {
 		return "", "", err
 	}
-	refreshToken, err = auth.GenerateToken(username, role, auth.TokenTypeRefresh, RefreshTokenTTL)
+	refreshToken, err = auth.GenerateTokenWithVersion(user.Username, user.Role, auth.TokenTypeRefresh, user.TokenVersion, RefreshTokenTTL)
 	if err != nil {
 		return "", "", err
 	}

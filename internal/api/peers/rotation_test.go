@@ -11,9 +11,16 @@ import (
 	"testing"
 	"time"
 
+	"runic/internal/auth"
 	"runic/internal/store"
 	"runic/internal/testutil"
 )
+
+// withRole attaches the auth context that the RBAC middleware normally
+// populates, so handler-level role checks can be exercised directly.
+func withRole(r *http.Request, role string) *http.Request {
+	return r.WithContext(auth.SetContextForTest(r.Context(), role, role+"user", role+"-unique-id"))
+}
 
 func TestGenerateRotationToken(t *testing.T) {
 	token, err := generateRotationToken()
@@ -71,6 +78,7 @@ func TestRotatePeerKey_Success(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/peers/1/rotate-key", nil)
 	req = muxVars(req, map[string]string{"id": "1"})
+	req = withRole(req, "admin")
 	rec := httptest.NewRecorder()
 
 	h.RotatePeerKey(rec, req)
@@ -129,6 +137,7 @@ func TestRotatePeerKey_NonExistentPeer(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/peers/999/rotate-key", nil)
 	req = muxVars(req, map[string]string{"id": "999"})
+	req = withRole(req, "admin")
 	rec := httptest.NewRecorder()
 
 	h.RotatePeerKey(rec, req)
@@ -146,12 +155,103 @@ func TestRotatePeerKey_InvalidID(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/peers/invalid/rotate-key", nil)
 	req = muxVars(req, map[string]string{"id": "invalid"})
+	req = withRole(req, "admin")
 	rec := httptest.NewRecorder()
 
 	h.RotatePeerKey(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("RotatePeerKey() status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestRotatePeerKey_RejectsEditor(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	_, err := database.Exec(`
+		INSERT INTO peers (hostname, ip_address, agent_key, hmac_key)
+		VALUES ('test-peer', '10.0.0.1', 'test-key', 'old-hmac-key')
+	`)
+	if err != nil {
+		t.Fatalf("failed to insert test peer: %v", err)
+	}
+
+	h := NewHandler(store.NewPeerStore(database), database, nil, nil, &testSettingsStore{db: database})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/peers/1/rotate-key", nil)
+	req = muxVars(req, map[string]string{"id": "1"})
+	req = withRole(req, "editor")
+	rec := httptest.NewRecorder()
+
+	h.RotatePeerKey(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("RotatePeerKey() status = %d, want %d: %s", rec.Code, http.StatusForbidden, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "new_hmac_key") {
+		t.Error("editor response must not disclose new_hmac_key")
+	}
+
+	var storedKey string
+	var storedToken sql.NullString
+	var rotatedAt sql.NullString
+	err = database.QueryRow(
+		"SELECT hmac_key, hmac_key_rotation_token, hmac_key_last_rotated_at FROM peers WHERE id = 1",
+	).Scan(&storedKey, &storedToken, &rotatedAt)
+	if err != nil {
+		t.Fatalf("failed to query peer after rejected rotation: %v", err)
+	}
+	if storedKey != "old-hmac-key" {
+		t.Errorf("editor rotation changed the stored HMAC key to %q", storedKey)
+	}
+	if storedToken.Valid || rotatedAt.Valid {
+		t.Error("editor rotation must not start a rotation")
+	}
+}
+
+func TestRotatePeerKey_RejectsManualPeer(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	_, err := database.Exec(`
+		INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, is_manual)
+		VALUES ('manual-peer', '10.0.0.1', 'test-key', 'old-hmac-key', 1)
+	`)
+	if err != nil {
+		t.Fatalf("failed to insert manual peer: %v", err)
+	}
+
+	h := NewHandler(store.NewPeerStore(database), database, nil, nil, &testSettingsStore{db: database})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/peers/1/rotate-key", nil)
+	req = muxVars(req, map[string]string{"id": "1"})
+	req = withRole(req, "admin")
+	rec := httptest.NewRecorder()
+
+	h.RotatePeerKey(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("RotatePeerKey() status = %d, want %d: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "new_hmac_key") {
+		t.Error("manual peer response must not disclose new_hmac_key")
+	}
+
+	var storedKey string
+	var storedToken sql.NullString
+	var rotatedAt sql.NullString
+	err = database.QueryRow(
+		"SELECT hmac_key, hmac_key_rotation_token, hmac_key_last_rotated_at FROM peers WHERE id = 1",
+	).Scan(&storedKey, &storedToken, &rotatedAt)
+	if err != nil {
+		t.Fatalf("failed to query peer after rejected rotation: %v", err)
+	}
+	if storedKey != "old-hmac-key" {
+		t.Errorf("manual peer rotation changed the stored HMAC key to %q", storedKey)
+	}
+	if storedToken.Valid || rotatedAt.Valid {
+		t.Error("manual peer rotation must not start a rotation")
 	}
 }
 
@@ -302,6 +402,52 @@ func TestAgentRotateKey_NoToken(t *testing.T) {
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("AgentRotateKey() status = %d, want %d: %s", rec.Code, http.StatusUnauthorized, rec.Body.String())
+	}
+}
+
+func TestAgentRotateKey_RejectsManualPeer(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	rotationTime := time.Now().UTC().Format(time.RFC3339)
+	_, err := database.Exec(`
+		INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, hmac_key_rotation_token, hmac_key_last_rotated_at, is_manual)
+		VALUES ('manual-peer', '10.0.0.1', 'test-key', 'secret-hmac-key', 'valid-rotation-token', ?, 1)
+	`, rotationTime)
+	if err != nil {
+		t.Fatalf("failed to insert manual peer: %v", err)
+	}
+
+	body := map[string]string{
+		"host_id":        "host-manual-peer",
+		"rotation_token": "valid-rotation-token",
+	}
+	bodyBytes, _ := json.Marshal(body)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/agent/rotate-key", bytes.NewReader(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "203.0.113.60:12345"
+	rec := httptest.NewRecorder()
+
+	h := NewHandler(store.NewPeerStore(database), database, nil, nil, &testSettingsStore{db: database})
+	h.AgentRotateKey(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("AgentRotateKey() status = %d, want %d: %s", rec.Code, http.StatusUnauthorized, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "secret-hmac-key") {
+		t.Error("manual peer response must not disclose HMAC material")
+	}
+	if got := rec.Header().Get("X-New-HMAC-Key"); got != "" {
+		t.Errorf("manual peer response must not set X-New-HMAC-Key, got %q", got)
+	}
+
+	var storedToken sql.NullString
+	if err := database.QueryRow("SELECT hmac_key_rotation_token FROM peers WHERE hostname = 'manual-peer'").Scan(&storedToken); err != nil {
+		t.Fatalf("failed to query rotation token: %v", err)
+	}
+	if !storedToken.Valid || storedToken.String != "valid-rotation-token" {
+		t.Error("manual peer rotation token must not be consumed")
 	}
 }
 
@@ -489,6 +635,52 @@ func TestAgentConfirmRotation_MissingHostID(t *testing.T) {
 	}
 }
 
+func TestAgentConfirmRotation_RejectsManualPeer(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+
+	rotationTime := time.Now().UTC().Add(-1 * time.Minute).Format(time.RFC3339)
+	_, err := database.Exec(`
+		INSERT INTO peers (hostname, ip_address, agent_key, hmac_key, hmac_key_rotation_token, hmac_key_last_rotated_at, is_manual)
+		VALUES ('manual-peer', '10.0.0.1', 'test-key', 'secret-hmac-key', 'valid-rotation-token', ?, 1)
+	`, rotationTime)
+	if err != nil {
+		t.Fatalf("failed to insert manual peer: %v", err)
+	}
+
+	body := map[string]string{
+		"host_id":        "host-manual-peer",
+		"rotation_token": "valid-rotation-token",
+	}
+	bodyBytes, _ := json.Marshal(body)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/agent/confirm-rotation", bytes.NewReader(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "203.0.113.61:12345"
+	rec := httptest.NewRecorder()
+
+	h := NewHandler(store.NewPeerStore(database), database, nil, nil, &testSettingsStore{db: database})
+	h.AgentConfirmRotation(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("AgentConfirmRotation() status = %d, want %d: %s", rec.Code, http.StatusUnauthorized, rec.Body.String())
+	}
+
+	var storedToken sql.NullString
+	var rotatedAt sql.NullString
+	if err := database.QueryRow(
+		"SELECT hmac_key_rotation_token, hmac_key_last_rotated_at FROM peers WHERE hostname = 'manual-peer'",
+	).Scan(&storedToken, &rotatedAt); err != nil {
+		t.Fatalf("failed to query peer after rejected confirmation: %v", err)
+	}
+	if !storedToken.Valid || storedToken.String != "valid-rotation-token" {
+		t.Error("manual peer rotation token must not be consumed")
+	}
+	if !rotatedAt.Valid || rotatedAt.String != rotationTime {
+		t.Errorf("manual peer confirmation changed hmac_key_last_rotated_at to %q", rotatedAt.String)
+	}
+}
+
 func TestConcurrentRotation(t *testing.T) {
 	database, cleanup := testutil.SetupTestDB(t)
 	defer cleanup()
@@ -568,6 +760,7 @@ func TestFullRotationWorkflow(t *testing.T) {
 	// Step 2: Admin initiates rotation
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/peers/1/rotate-key", nil)
 	req = muxVars(req, map[string]string{"id": "1"})
+	req = withRole(req, "admin")
 	rec := httptest.NewRecorder()
 	h.RotatePeerKey(rec, req)
 

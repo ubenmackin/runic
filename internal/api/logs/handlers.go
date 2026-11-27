@@ -63,9 +63,11 @@ func MakeLogsStreamHandler(hub *Hub, tokenStore TokenRevoker) http.HandlerFunc {
 		// GET /logs. PATs are only accepted via the Authorization header
 		// (never cookies), matching auth.Middleware parity. A JWT-shaped
 		// token never passes the PAT prefix check, so the fallback cannot
-		// weaken JWT verification.
+		// weaken JWT verification. Only access tokens authenticate the
+		// stream: a refresh token (or an empty/unknown token type) falls
+		// through to the PAT check and is rejected.
 		authenticated := false
-		if claims, err := auth.ValidateToken(tokenStr); err == nil && claims != nil && tokenStore != nil {
+		if claims, err := auth.ValidateToken(tokenStr); err == nil && claims != nil && claims.TokenType == auth.TokenTypeAccess && tokenStore != nil {
 			revCtx, cancel := context.WithTimeout(r.Context(), constants.RevocationCheckTimeout)
 			revoked, err := tokenStore.IsTokenRevoked(revCtx, claims.UniqueID)
 			cancel()
@@ -156,14 +158,14 @@ func (h *Handler) GetLogs(w http.ResponseWriter, r *http.Request) {
 	var fromTime, toTime string
 	if fromStr != "" {
 		if t, err := time.Parse(time.RFC3339, fromStr); err == nil {
-			fromTime = t.Format(time.RFC3339)
+			fromTime = runiccommon.FirewallTimestampCutoff(t)
 		} else {
 			runiclog.WarnContext(ctx, "Invalid 'from' time parameter, ignoring", "from", fromStr, "error", err)
 		}
 	}
 	if toStr != "" {
 		if t, err := time.Parse(time.RFC3339, toStr); err == nil {
-			toTime = t.Format(time.RFC3339)
+			toTime = runiccommon.FirewallTimestampCutoff(t)
 		} else {
 			runiclog.WarnContext(ctx, "Invalid 'to' time parameter, ignoring", "to", toStr, "error", err)
 		}

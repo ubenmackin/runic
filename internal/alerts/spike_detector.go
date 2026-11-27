@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	runiccommon "runic/internal/common"
 	"runic/internal/common/log"
 	"runic/internal/db"
 )
@@ -191,7 +192,7 @@ func (d *SpikeDetector) checkForSpike() {
 	lastAlert := d.lastAlert
 	d.mu.RUnlock()
 
-	cutoff := time.Now().Add(-time.Duration(windowMinutes) * time.Minute)
+	cutoff := runiccommon.FirewallTimestampCutoff(time.Now().Add(-time.Duration(windowMinutes) * time.Minute))
 
 	var count int
 	err := d.logsDB.QueryRowContext(ctx, `
@@ -271,7 +272,7 @@ func (d *SpikeDetector) getTopBlockedIPs(ctx context.Context) []topBlockedIP {
 	windowMinutes := d.windowMinutes
 	d.mu.RUnlock()
 
-	cutoff := time.Now().Add(-time.Duration(windowMinutes) * time.Minute)
+	cutoff := runiccommon.FirewallTimestampCutoff(time.Now().Add(-time.Duration(windowMinutes) * time.Minute))
 
 	rows, err := d.logsDB.QueryContext(ctx, `
 		SELECT source_ip, COUNT(*) as cnt
@@ -313,7 +314,7 @@ func (d *SpikeDetector) getAffectedPeers(ctx context.Context) []string {
 	windowMinutes := d.windowMinutes
 	d.mu.RUnlock()
 
-	cutoff := time.Now().Add(-time.Duration(windowMinutes) * time.Minute)
+	cutoff := runiccommon.FirewallTimestampCutoff(time.Now().Add(-time.Duration(windowMinutes) * time.Minute))
 
 	// Step 1: Get distinct peer_ids from firewall_logs (logs DB)
 	peerRows, err := d.logsDB.QueryContext(ctx, `

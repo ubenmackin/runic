@@ -93,11 +93,14 @@ The server bootstrap follows this sequence:
 1. Parse flags and environment variables (TLS cert/key, port, DB paths)
 2. Validate TLS certificates
 3. Initialize the main database (`runic.db`) and logs database (`logs.db`)
-4. Instantiate store layer, engine compiler, alert service, encryptor
-5. Create the Gorilla Mux router and register all API routes
-6. Start background goroutines (change worker, push worker, log cleanup, offline detector, token cleanup)
-7. Start the HTTPS listener with modern TLS config (TLS 1.2+, AEAD cipher suites, P-256/X25519 curves)
-8. Wait for shutdown signal, then run graceful shutdown sequence
+4. Run the mandatory logs-database startup migration sequence under a bounded timeout, before any alert engine
+   starts: `MigrateLogsDB` (legacy `firewall_logs` relocation from the main DB followed by canonical-UTC
+   timestamp backfill, see Database Layer). A failure in either stage aborts boot.
+5. Instantiate store layer, engine compiler, alert service, encryptor
+6. Create the Gorilla Mux router and register all API routes
+7. Start background goroutines (change worker, push worker, log cleanup, offline detector, token cleanup)
+8. Start the HTTPS listener with modern TLS config (TLS 1.2+, AEAD cipher suites, P-256/X25519 curves)
+9. Wait for shutdown signal, then run graceful shutdown sequence
 
 #### API Layer (`internal/api/`)
 
@@ -279,6 +282,36 @@ Each domain has a dedicated store that wraps SQL queries and provides typed meth
 
 Store methods that modify data follow a snapshot-then-modify pattern for rollback support. The `transaction.go` file provides generic helpers for common SQL patterns.
 
+#### Firewall Log Timestamp Contract (canonical UTC)
+
+`firewall_logs.timestamp` is a DATETIME column compared as TEXT by every window query, so it has exactly one
+canonical representation: UTC `YYYY-MM-DD HH:MM:SS` (`common.FirewallTimestampLayout`). SQLite compares TEXT
+bytewise, so mixing RFC3339 `T` separators, timezone offsets, fractional seconds, or traditional syslog prefixes
+with space-separated query bounds silently breaks every time-window query (alerts stop aging out, retention stops
+deleting, dashboard windows over-count).
+
+- **Owners** — `common.NormalizeFirewallTimestamp(raw, now)` converts RFC3339, SQLite datetime, date-only, and
+  traditional syslog (`Jan _2 15:04:05`, year inferred from the control-plane clock with Dec/Jan rollover) into
+  the canonical form. `common.FirewallTimestampCutoff(t)` formats every SQL comparison bound. No call site
+  re-implements parsing or formatting.
+- **Ingestion** — Agent log submission (`internal/api/agents`) validates and normalizes each event;
+  `DashboardStore.InsertFirewallLog` normalizes again and rejects unparseable values. Empty and over-64-byte
+  timestamps are dropped. Fractional seconds are truncated.
+- **Backfill** — `db.MigrateLogsDB` runs at startup from `cmd/runic-server/main.go`, before the alert service
+  starts, as one fail-closed sequence: `db.MigrateLogsFromMainDB` relocates legacy rows, then
+  `db.MigrateFirewallLogTimestamps` rewrites parseable legacy rows with SQLite
+  `strftime('%Y-%m-%d %H:%M:%S', timestamp)` (which understands `T`, offsets, `Z`, and date-only), deletes rows
+  whose timestamp cannot be parsed (they can never be windowed, ordered, filtered, or retention-deleted), and
+  records completion in the logs DB `PRAGMA user_version` so later startups skip the full-table scan. The gate is
+  invalidated before a legacy relocation that can copy rows (the main-DB table exists and holds rows), on
+  relocation failure, and when rows were copied, so it can never suppress normalization of unnormalized data. The
+  empty `firewall_logs` table that `createSchema` recreates in the main DB on every boot is not legacy data and
+  does not reset the gate; otherwise every restart would re-run the full-table scan.
+- **Consumers** — Alert evaluators, spike detection, dashboard last-hour/last-24h counts, log `from`/`to`
+  filters, and retention cleanup all bind cutoffs produced by `common.FirewallTimestampCutoff`.
+- **API/UI** — Log timestamps serialize as RFC3339 UTC (`time.Time`); the Logs page converts them to the
+  viewer's local wall-clock time for display.
+
 ### Data Model
 
 #### Core Abstraction
@@ -324,13 +357,17 @@ With standard prologue (loopback, ICMP, established/related) and epilogue (loggi
 ### Alert System (`internal/alerts/`)
 
 The alert system monitors firewall events and peer status:
-- **Rule types**: peer_offline, bundle_failed, blocked_spike, peer_online, new_peer, bundle_deployed, agent_updated
+- **Rule types**: peer_offline, bundle_failed, blocked_spike, peer_online, new_peer, bundle_deployed, agent_updated, bundle_notified
 - **Delivery**: SMTP email with configurable SMTP settings (password encrypted at rest)
 - **Digest mode**: Aggregated daily/weekly digests
-- **Throttling**: Per-rule throttle window to prevent alert storms
+- **Throttling**: Per-rule throttle window enforced through `alert_history` records (statuses pending/sent)
 - **Notification preferences**: Per-user quiet hours, enabled alert types
-- **Scheduling**: Cron-like scheduler for digest timing
-- **Spike detector**: Detects unusual increases in dropped traffic using configurable thresholds
+- **Scheduling**: One-minute scheduler for rule evaluation and digest timing
+- **Blocked-spike detection**: Two engines share the enabled `blocked_spike` rule. The scheduled
+  `ConditionEvaluator` compares the recent window against the previous equal-length window (percentage increase
+  against `threshold_value`); `SpikeDetector` compares the recent window's absolute blocked count against
+  `threshold_value` and keeps its own in-memory last-alert time. Both read `firewall_logs` through the canonical
+  timestamp contract so window bounds are exact UTC instants.
 
 ### Metrics (`internal/metrics/`)
 
@@ -350,7 +387,8 @@ Shared packages:
 - `crypto.go` — AES-256-GCM encryption for sensitive data
 - `errors.go` — Standard error types (`ErrUnauthorized`, `HTTPStatusError`)
 - `http.go` — HTTP client helpers (`DoJSONRequest`)
-- `datetime.go` — SQLite datetime formatting
+- `datetime.go` — SQLite datetime formatting plus the firewall timestamp owners
+  `NormalizeFirewallTimestamp` and `FirewallTimestampCutoff`
 - `ensure.go` — Path/directory creation helpers
 - `system.go` — OS-level detection (firewalld, ufw, nftables)
 - `peerids.go` — Single-source `MergePeerIDs` (dedup + sorted) for peer fan-out;
@@ -396,14 +434,9 @@ The import workflow allows users to migrate existing iptables rules into the pol
 
 ## Accepted Risks
 
-| Advisory | Dependency | Severity | Status | Mitigation |
-|---|---|---|---|---|
-| GO-2026-5932 | golang.org/x/crypto v0.56.0 (`openpgp`) | Medium | Accepted risk — no fixed version published | Vulnerable `openpgp` subpackages kept unimported; only `bcrypt`, `hkdf`, `pbkdf2` used |
-
-1. **GO-2026-5932 (`golang.org/x/crypto/openpgp`)** — Accepted risk. `govulncheck` reports the `openpgp` module as unmaintained and unsafe, with no fixed version available as of 2026-09-17, so the finding cannot be remediated by upgrade yet.
-2. **Exposure** — None in practice. The vulnerable `openpgp` subpackages (`armor`, `packet`, `clearsign`, `elgamal`, `s2k`) are unimported anywhere in the codebase (verified via `grep` over `*.go`). The only `golang.org/x/crypto` imports in use are `bcrypt` (password hashing in `internal/api/auth/handlers.go` and `internal/api/users/handlers.go`), `hkdf` (bundle signing in `internal/engine/signer.go`), and `pbkdf2` (secret encryption in `internal/crypto/encrypt.go`).
-3. **Waiver** — The inline waiver on the `golang.org/x/crypto v0.56.0` require directive in `go.mod` records this decision at the dependency site; this section is the durable ARCHITECTURE.md-documented accepted risk that the inline comment alone does not provide.
-4. **Monitor and upgrade** — Monitor upstream `golang.org/x/crypto` releases. When a fixed version is published past the affected range, upgrade the `go.mod` directive and remove this accepted-risk entry.
+None currently accepted. GO-2026-5932 (`golang.org/x/crypto/openpgp`) was remediated on 2026-11-25 by upgrading
+`golang.org/x/crypto` from `v0.56.0` to the fixed `v0.58.1-0.20261009181718-2f1f834330b2`, and the corresponding
+waiver comment was removed from `go.mod`.
 
 ---
 
@@ -443,7 +476,7 @@ internal/
   alerts/                — Alert rule engine, evaluator, SMTP, spike detector, scheduler, digest
   auth/                  — JWT utilities, middleware, token management
   change/                — Pending-change worker, notifiers, delete constraints (below api; owns fan-out)
-  common/                — Shared utilities (log, crypto, HTTP, errors, system, peerids, lookups, etc.)
+  common/                — Shared utilities (log, crypto, HTTP, errors, system, peerids, lookups, datetime, etc.)
   crypto/                — AES-256-GCM encryptor
   db/                    — Database initialization, migrations, queries
   engine/                — Policy compiler, resolver, signer
@@ -471,3 +504,7 @@ AGENT_DOCS/              — Agent-facing documentation
 |---|---|
 | 2026-07-12 | Initial architecture document created from project analysis. Captures the complete two-component (server + agent) architecture, engine compiler pipeline, store layer, alert system, security model, and data model for the Runic firewall policy management system. |
 | 2026-09-17 | Documented GO-2026-5932 (`golang.org/x/crypto/openpgp`, no fixed version) as an accepted risk: `openpgp` subpackages verified unimported (only `bcrypt`/`hkdf`/`pbkdf2` used); references the `go.mod` waiver; upgrade when upstream publishes a fix. |
+| 2026-11-25 | Added the firewall log timestamp contract: `firewall_logs.timestamp` is canonical UTC `YYYY-MM-DD HH:MM:SS`; ingestion normalization, a gated startup backfill (`MigrateFirewallLogTimestamps`) before alert engines start, and canonical UTC query bounds for alerts, dashboard windows, log filters, and retention. |
+| 2026-11-25 | Remediated GO-2026-5932 by upgrading `golang.org/x/crypto` to the fixed `v0.58.1-0.20261009181718-2f1f834330b2` and removing the stale `go.mod` waiver; the Accepted Risks entry is closed. |
+| 2026-11-26 | Made the startup logs migration one fail-closed sequence (`db.MigrateLogsDB`): boot aborts when legacy relocation or timestamp normalization fails, and the logs DB `PRAGMA user_version` gate is invalidated whenever legacy rows may be copied so normalization can never be permanently suppressed. |
+| 2026-11-26 | Fixed the logs DB backfill gate so the empty main-DB `firewall_logs` table recreated by `createSchema` on every boot no longer resets `PRAGMA user_version`; later startups skip the full-table timestamp scan unless the legacy table actually holds rows. Added a restart regression test. |

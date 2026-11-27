@@ -54,6 +54,7 @@ func LogsDBSchema() string {
 //   - *sql.DB: The initialized database connection
 //   - error: Any error that occurred during initialization
 func InitLogsDB(path string) (*sql.DB, error) {
+	dbPath := sqliteFilePath(path)
 	// Build connection string with WAL mode and busy timeout via the shared
 	// helper so query parameters are preserved and never duplicated.
 	dataSourceName := sqliteDSNWithPragmas(path)
@@ -70,6 +71,12 @@ func InitLogsDB(path string) (*sql.DB, error) {
 		return nil, fmt.Errorf("failed to ping logs database: %w", err)
 	}
 
+	// Restrict the database before the schema write creates any WAL/SHM
+	// sidecars so logs are never readable by other local users.
+	if err := secureSQLiteFiles(dbPath); err != nil {
+		return nil, fmt.Errorf("secure logs database files: %w", err)
+	}
+
 	// Enable WAL mode for better concurrent performance
 	if _, err := sqlDB.Exec("PRAGMA journal_mode=WAL"); err != nil {
 		log.Warn("Failed to set WAL mode for logs database", "error", err)
@@ -84,8 +91,54 @@ func InitLogsDB(path string) (*sql.DB, error) {
 		return nil, fmt.Errorf("failed to create logs database schema: %w", err)
 	}
 
+	// The schema write above may have created WAL/SHM sidecars; restrict
+	// those as well.
+	if err := secureSQLiteFiles(dbPath); err != nil {
+		return nil, fmt.Errorf("secure logs database files: %w", err)
+	}
+
 	log.Info("Logs database connection established", "path", path)
 	return sqlDB, nil
+}
+
+// hasLegacyFirewallLogsTable reports whether the main DB still contains the
+// legacy firewall_logs table that the relocation stage copies from.
+func hasLegacyFirewallLogsTable(ctx context.Context, mainDB *sql.DB) (bool, error) {
+	var tableExists bool
+	if err := mainDB.QueryRowContext(ctx,
+		"SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='firewall_logs'",
+	).Scan(&tableExists); err != nil {
+		return false, fmt.Errorf("failed to check for firewall_logs table: %w", err)
+	}
+	return tableExists, nil
+}
+
+// legacyFirewallLogsRowsCheck is the advisory legacy-row pre-check used by
+// MigrateLogsDB. It is a variable so tests can simulate an inconclusive
+// pre-check (for example a transient main-DB read failure) followed by a
+// successful empty relocation without corrupting a real database.
+var legacyFirewallLogsRowsCheck = hasLegacyFirewallLogsRows
+
+// hasLegacyFirewallLogsRows reports whether the legacy firewall_logs table in
+// the main DB holds rows that the relocation stage would copy.
+//
+// The main schema still creates an empty firewall_logs table on every startup,
+// so the table's mere presence is not evidence of legacy data: only rows can
+// carry pre-normalization timestamps that the backfill would need to rewrite.
+func hasLegacyFirewallLogsRows(ctx context.Context, mainDB *sql.DB) (bool, error) {
+	tableExists, err := hasLegacyFirewallLogsTable(ctx, mainDB)
+	if err != nil {
+		return false, err
+	}
+	if !tableExists {
+		return false, nil
+	}
+
+	var hasRows bool
+	if err := mainDB.QueryRowContext(ctx, "SELECT COUNT(*) > 0 FROM firewall_logs").Scan(&hasRows); err != nil {
+		return false, fmt.Errorf("failed to count legacy firewall_logs rows: %w", err)
+	}
+	return hasRows, nil
 }
 
 // MigrateLogsFromMainDB migrates firewall_logs from the main DB to the logs DB. This function should be called after both databases are initialized.
@@ -104,12 +157,9 @@ func InitLogsDB(path string) (*sql.DB, error) {
 //   - int64: Number of rows migrated
 //   - error: Any error that occurred during migration
 func MigrateLogsFromMainDB(ctx context.Context, mainDB, logsDB *sql.DB) (int64, error) {
-	var tableExists bool
-	err := mainDB.QueryRowContext(ctx,
-		"SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='firewall_logs'",
-	).Scan(&tableExists)
+	tableExists, err := hasLegacyFirewallLogsTable(ctx, mainDB)
 	if err != nil {
-		return 0, fmt.Errorf("failed to check for firewall_logs table: %w", err)
+		return 0, err
 	}
 
 	if !tableExists {
@@ -331,4 +381,147 @@ func migrateLogsWithoutAttach(ctx context.Context, mainDB, logsDB *sql.DB) (int6
 
 	log.Info("Migration: successfully migrated firewall_logs using row-by-row approach", "rows_migrated", count)
 	return count, nil
+}
+
+// MigrateFirewallLogTimestamps rewrites legacy firewall_logs.timestamp values
+// into the canonical UTC "YYYY-MM-DD HH:MM:SS" layout and removes rows whose
+// timestamp cannot be parsed.
+//
+// SQLite strftime parses RFC3339 values (including the T separator, timezone
+// offsets, a trailing Z, and fractional seconds) and date-only values into UTC.
+// Rows that fail to parse can never be windowed, ordered, filtered, or
+// retention-deleted, so they are removed rather than left to poison every later
+// query. The logs DB PRAGMA user_version gate records completion so subsequent
+// startups skip the full-table scan; MigrateLogsDB coordinates that gate with
+// the legacy main-DB relocation.
+//
+// It returns the number of rows rewritten and the number of rows deleted. A nil
+// logsDB is an error.
+func MigrateFirewallLogTimestamps(ctx context.Context, logsDB *sql.DB) (normalized int64, deleted int64, err error) {
+	if logsDB == nil {
+		return 0, 0, fmt.Errorf("logs database is nil")
+	}
+
+	var userVersion int
+	if err := logsDB.QueryRowContext(ctx, "PRAGMA user_version").Scan(&userVersion); err != nil {
+		return 0, 0, fmt.Errorf("failed to read logs database user_version: %w", err)
+	}
+	if userVersion >= 1 {
+		return 0, 0, nil
+	}
+
+	err = RunInTx(ctx, logsDB, func(ctx context.Context, tx *sql.Tx) error {
+		updateResult, updateErr := tx.ExecContext(ctx, `
+			UPDATE firewall_logs SET timestamp = strftime('%Y-%m-%d %H:%M:%S', timestamp)
+			WHERE strftime('%Y-%m-%d %H:%M:%S', timestamp) IS NOT NULL
+			AND timestamp <> strftime('%Y-%m-%d %H:%M:%S', timestamp)
+		`)
+		if updateErr != nil {
+			return fmt.Errorf("failed to normalize firewall log timestamps: %w", updateErr)
+		}
+		normalized, updateErr = updateResult.RowsAffected()
+		if updateErr != nil {
+			return fmt.Errorf("failed to count normalized firewall log rows: %w", updateErr)
+		}
+
+		deleteResult, deleteErr := tx.ExecContext(ctx,
+			"DELETE FROM firewall_logs WHERE strftime('%Y-%m-%d %H:%M:%S', timestamp) IS NULL")
+		if deleteErr != nil {
+			return fmt.Errorf("failed to delete unparseable firewall log rows: %w", deleteErr)
+		}
+		deleted, deleteErr = deleteResult.RowsAffected()
+		if deleteErr != nil {
+			return fmt.Errorf("failed to count deleted firewall log rows: %w", deleteErr)
+		}
+
+		if _, pragmaErr := tx.ExecContext(ctx, "PRAGMA user_version = 1"); pragmaErr != nil {
+			return fmt.Errorf("failed to record firewall log timestamp migration: %w", pragmaErr)
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, 0, err
+	}
+
+	return normalized, deleted, nil
+}
+
+// MigrateLogsDB runs the mandatory logs database startup migration sequence.
+//
+// It relocates legacy firewall_logs rows from the main database and then
+// normalizes every timestamp to the canonical UTC layout. Both stages are
+// fail-closed so callers can refuse to start alert engines against partially
+// migrated data.
+//
+// The PRAGMA user_version completion gate is only valid once both stages have
+// succeeded. The gate is invalidated before relocation can copy legacy rows
+// (i.e. when the main-DB table exists and holds rows), when the advisory
+// pre-check is inconclusive, on relocation failure, and again when rows were
+// copied, so a marker left by an earlier partial run can never suppress the
+// rewrite of legacy timestamps. The empty schema-created firewall_logs table
+// that InitDB recreates on every boot is not legacy data, so its presence alone
+// leaves the gate intact and later startups skip the full-table timestamp scan.
+func MigrateLogsDB(ctx context.Context, mainDB, logsDB *sql.DB) (migrated, normalized, deleted int64, err error) {
+	if mainDB == nil {
+		return 0, 0, 0, fmt.Errorf("main database is nil")
+	}
+	if logsDB == nil {
+		return 0, 0, 0, fmt.Errorf("logs database is nil")
+	}
+
+	// Invalidate the gate before the relocation can copy rows so a crash
+	// between stages cannot leave freshly copied rows behind a completed
+	// marker. Only rows can carry pre-normalization timestamps, so an empty
+	// schema-created firewall_logs table must not reset the gate: doing so
+	// would re-run the full-table scan on every restart. The check is
+	// advisory, but its failure is not ignorable: relocation may still
+	// succeed with zero rows (for example when the legacy table was already
+	// dropped), which would leave a stale completion marker suppressing
+	// normalization of unnormalized data. An inconclusive pre-check therefore
+	// invalidates the gate too, and failing to invalidate it aborts boot.
+	legacyHasRows, checkErr := legacyFirewallLogsRowsCheck(ctx, mainDB)
+	if checkErr != nil {
+		log.WarnContext(ctx, "Could not pre-check legacy firewall_logs rows; invalidating timestamp migration gate", "error", checkErr)
+	}
+	if checkErr != nil || legacyHasRows {
+		if gateErr := clearFirewallLogTimestampGate(ctx, logsDB); gateErr != nil {
+			return 0, 0, 0, fmt.Errorf("failed to invalidate firewall log timestamp migration gate: %w", gateErr)
+		}
+	}
+
+	migrated, err = MigrateLogsFromMainDB(ctx, mainDB, logsDB)
+	if err != nil {
+		// The main DB may still hold legacy rows with pre-normalization
+		// timestamps, so a completion marker must not survive this failure.
+		if gateErr := clearFirewallLogTimestampGate(ctx, logsDB); gateErr != nil {
+			log.WarnContext(ctx, "Failed to clear firewall log timestamp migration gate", "error", gateErr)
+		}
+		return 0, 0, 0, fmt.Errorf("failed to migrate firewall logs from main database: %w", err)
+	}
+
+	if migrated > 0 {
+		// Backstop for the advisory pre-check above: copied rows may carry
+		// pre-normalization timestamps, so the gate must not skip the rewrite
+		// that follows.
+		if gateErr := clearFirewallLogTimestampGate(ctx, logsDB); gateErr != nil {
+			return migrated, 0, 0, fmt.Errorf("failed to invalidate firewall log timestamp migration gate: %w", gateErr)
+		}
+	}
+
+	normalized, deleted, err = MigrateFirewallLogTimestamps(ctx, logsDB)
+	if err != nil {
+		return migrated, 0, 0, fmt.Errorf("failed to migrate firewall log timestamps: %w", err)
+	}
+
+	return migrated, normalized, deleted, nil
+}
+
+// clearFirewallLogTimestampGate resets the logs DB PRAGMA user_version marker
+// so the next normalization pass rewrites every row instead of trusting a
+// completion marker recorded by an earlier, incomplete migration sequence.
+func clearFirewallLogTimestampGate(ctx context.Context, logsDB *sql.DB) error {
+	if _, err := logsDB.ExecContext(ctx, "PRAGMA user_version = 0"); err != nil {
+		return fmt.Errorf("failed to clear logs database user_version: %w", err)
+	}
+	return nil
 }

@@ -82,6 +82,29 @@ type peerByIPResponse struct {
 	IsManual  bool   `json:"is_manual"`
 }
 
+// peerDetailResponse is the explicit, sanitized representation returned by
+// GET /api/v1/peers/{id}. It mirrors models.PeerRow's serialized shape minus
+// AgentKey and AgentToken: both are server-side credentials, and this route
+// is readable by the viewer role, so returning the raw row would hand a
+// viewer the agent key (replayable at /api/v1/agent/register to mint a fresh
+// agent JWT) and the long-lived agent JWT itself. models.PeerRow also tags
+// both fields json:"-" as defense in depth, but the DTO keeps this route
+// independent of future model additions.
+type peerDetailResponse struct {
+	ID            int
+	Hostname      string
+	IPAddress     string
+	OSType        string
+	Arch          string
+	HasDocker     bool
+	AgentVersion  sql.NullString
+	IsManual      bool
+	BundleVersion sql.NullString
+	LastHeartbeat sql.NullTime
+	Status        string
+	CreatedAt     time.Time
+}
+
 func (h *Handler) GetPeers(w http.ResponseWriter, r *http.Request) {
 	peers, err := h.Store.ListPeers(r.Context())
 	if err != nil {
@@ -109,7 +132,20 @@ func (h *Handler) GetPeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	common.RespondJSON(w, http.StatusOK, peer)
+	common.RespondJSON(w, http.StatusOK, peerDetailResponse{
+		ID:            peer.ID,
+		Hostname:      peer.Hostname,
+		IPAddress:     peer.IPAddress,
+		OSType:        peer.OSType,
+		Arch:          peer.Arch,
+		HasDocker:     peer.HasDocker,
+		AgentVersion:  peer.AgentVersion,
+		IsManual:      peer.IsManual,
+		BundleVersion: peer.BundleVersion,
+		LastHeartbeat: peer.LastHeartbeat,
+		Status:        peer.Status,
+		CreatedAt:     peer.CreatedAt,
+	})
 }
 
 func (h *Handler) CreatePeer(w http.ResponseWriter, r *http.Request) {
@@ -1120,7 +1156,6 @@ func (h *Handler) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/{id:[0-9]+}", h.DeletePeer).Methods("DELETE")
 	r.HandleFunc("/{id:[0-9]+}/bundle", h.GetPeerBundle).Methods("GET")
 	r.HandleFunc("/{id:[0-9]+}/compile", h.CompilePeer).Methods("POST")
-	r.HandleFunc("/{id:[0-9]+}/rotate-key", h.RotatePeerKey).Methods("POST")
 	r.HandleFunc("/{id:[0-9]+}/ips", h.GetPeerIPs).Methods("GET")
 	r.HandleFunc("/{id:[0-9]+}/ips", h.AddPeerIP).Methods("POST")
 	r.HandleFunc("/{id:[0-9]+}/ips/{ip_id:[0-9]+}", h.DeletePeerIP).Methods("DELETE")

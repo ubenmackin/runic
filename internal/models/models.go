@@ -18,6 +18,12 @@ import (
 // (HasIPSet, HMACKey, Description, HMACKeyRotationToken, HMACKeyLastRotatedAt)
 // were removed because peerRowColumns never reads them; their values are
 // only used by ListPeers via local scan variables that flow into PeerView.
+//
+// AgentKey and AgentToken are server-side credentials: AgentKey proves
+// possession of the stored per-peer key at /api/v1/agent/register and
+// AgentToken is the long-lived agent JWT. Both are tagged json:"-" so the raw
+// row can never be serialized to an API client (defense in depth on top of
+// the peers handlers' explicit sanitized detail DTO).
 type PeerRow struct {
 	ID            int
 	Hostname      string
@@ -25,8 +31,8 @@ type PeerRow struct {
 	OSType        string
 	Arch          string
 	HasDocker     bool
-	AgentKey      string
-	AgentToken    sql.NullString
+	AgentKey      string         `json:"-"`
+	AgentToken    sql.NullString `json:"-"`
 	AgentVersion  sql.NullString
 	IsManual      bool
 	BundleVersion sql.NullString
@@ -99,12 +105,16 @@ type RuleBundleRow struct {
 }
 
 // UserRow intentionally omits the password_hash field from JSON serialization.
+// TokenVersion is the user's live session epoch: user tokens embed the version
+// they were minted under and are rejected once the stored value differs.
+// It is server-side state, so it is excluded from API JSON like credentials.
 type UserRow struct {
-	ID        int       `json:"id"`
-	Username  string    `json:"username"`
-	Email     string    `json:"email"`
-	Role      string    `json:"role"`
-	CreatedAt time.Time `json:"created_at"`
+	ID           int       `json:"id"`
+	Username     string    `json:"username"`
+	Email        string    `json:"email"`
+	Role         string    `json:"role"`
+	TokenVersion int       `json:"-"`
+	CreatedAt    time.Time `json:"created_at"`
 }
 
 // UserCredentials is returned only by UserStore.GetCredentials and must never be serialized to JSON.

@@ -336,6 +336,13 @@ validate_runic_port() {
 # Storing Secrets in Database
 # ============================================================================
 
+# sql_literal escapes a value for a single-quoted SQL string. The secret is
+# fed to sqlite3 over stdin so it never appears in the process listing.
+sql_literal() {
+    local escaped=${1//\'/\'\'}
+    printf '%s' "$escaped"
+}
+
 generate_secrets() {
     log INFO "Generating secrets..."
     
@@ -402,17 +409,23 @@ store_secrets_in_db() {
     
     # Store jwt_secret in database
     log INFO "Storing jwt_secret in system_config..."
-    sqlite3 "$db_path" "INSERT OR REPLACE INTO system_config (key, value) VALUES ('jwt_secret', '$JWT_SECRET');" 2>> "$LOG_FILE" || {
+    if ! sqlite3 "$db_path" 2>> "$LOG_FILE" <<SQL
+INSERT OR REPLACE INTO system_config (key, value) VALUES ('jwt_secret', '$(sql_literal "$JWT_SECRET")');
+SQL
+    then
         log ERROR "Failed to store jwt_secret in system_config"
         exit 1
-    }
+    fi
     
     # Store agent_jwt_secret in database
     log INFO "Storing agent_jwt_secret in system_config..."
-    sqlite3 "$db_path" "INSERT OR REPLACE INTO system_config (key, value) VALUES ('agent_jwt_secret', '$AGENT_JWT_SECRET');" 2>> "$LOG_FILE" || {
+    if ! sqlite3 "$db_path" 2>> "$LOG_FILE" <<SQL
+INSERT OR REPLACE INTO system_config (key, value) VALUES ('agent_jwt_secret', '$(sql_literal "$AGENT_JWT_SECRET")');
+SQL
+    then
         log ERROR "Failed to store agent_jwt_secret in system_config"
         exit 1
-    }
+    fi
     
     log SUCCESS "Secrets stored in database successfully"
 }
@@ -557,10 +570,10 @@ install_dependencies() {
 		curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
 		apt-get install -y -qq nodejs >> "$LOG_FILE" 2>&1
 
-		# Install Go 1.25+ from official source
+		# Install Go 1.27.4 from official source
 		# Remove Ubuntu system golang-go package to avoid PATH conflicts
 		apt-get remove -y golang-go >> "$LOG_FILE" 2>&1
-		GO_VERSION="1.25.8"
+		GO_VERSION="1.27.4"
 		GO_TAR="go${GO_VERSION}.linux-amd64.tar.gz"
 		GO_URL="https://go.dev/dl/${GO_TAR}"
 		log INFO "Installing Go ${GO_VERSION} from official source..."
@@ -575,10 +588,10 @@ install_dependencies() {
 		export PATH=/usr/local/go/bin:$PATH
 		# Verify Go installation
 		go version || { log ERROR "Go installation failed"; exit 1; }
-		# Verify Go version is 1.25.x
+		# Verify Go version is 1.27.x
 		INSTALLED_GO_VERSION=$(go version | awk '{print $3}')
-		if [[ "$INSTALLED_GO_VERSION" != go1.25* ]]; then
-			log ERROR "Go version mismatch: expected go1.25.x, got $INSTALLED_GO_VERSION"
+		if [[ "$INSTALLED_GO_VERSION" != go1.27* ]]; then
+			log ERROR "Go version mismatch: expected go1.27.x, got $INSTALLED_GO_VERSION"
 			exit 1
 		fi
 		log INFO "Verified Go version: $INSTALLED_GO_VERSION"
@@ -600,8 +613,8 @@ install_dependencies() {
 			nodejs20 \
 			npm20 >> "$LOG_FILE" 2>&1
 
-		# Install Go 1.25+ from official source (same as Debian section)
-		GO_VERSION="1.25.8"
+		# Install Go 1.27.4 from official source (same as Debian section)
+		GO_VERSION="1.27.4"
 		GO_TAR="go${GO_VERSION}.linux-amd64.tar.gz"
 		GO_URL="https://go.dev/dl/${GO_TAR}"
 		log INFO "Installing Go ${GO_VERSION} from official source..."
@@ -677,6 +690,12 @@ setup_directories() {
     
     if ! mkdir -p "$DATA_DIR"; then
         log ERROR "Failed to create data directory: $DATA_DIR"
+        exit 1
+    fi
+    # The database stores plaintext JWT and agent signing keys; keep the
+    # directory owner-only instead of inheriting the installer's umask.
+    if ! chmod 700 "$DATA_DIR"; then
+        log ERROR "Failed to restrict data directory permissions: $DATA_DIR"
         exit 1
     fi
     
@@ -932,6 +951,19 @@ create_system_user() {
     log SUCCESS "Ownership set to runic:runic"
 }
 
+# restrict_database_permissions forces the database and any WAL/SHM sidecars
+# to owner-only permissions. SQLite creates these files with the process umask,
+# which would otherwise leave plaintext signing keys readable by local users.
+restrict_database_permissions() {
+    local db_file
+    for db_file in "$@"; do
+        if [ -f "$db_file" ] && ! chmod 600 "$db_file"; then
+            log ERROR "Failed to restrict database permissions: $db_file"
+            exit 1
+        fi
+    done
+}
+
 initialize_database() {
     log_section "Initializing Database"
     
@@ -951,9 +983,17 @@ initialize_database() {
                 log INFO "Recreating DATA_DIR: $DATA_DIR"
                 mkdir -p "$DATA_DIR"
                 chown runic:runic "$DATA_DIR" 2>/dev/null || true
+                chmod 700 "$DATA_DIR" || { log ERROR "Failed to restrict data directory permissions"; exit 1; }
             fi
         else
             log INFO "Using existing database"
+            restrict_database_permissions \
+                "$DATA_DIR/runic.db" \
+                "$DATA_DIR/runic.db-wal" \
+                "$DATA_DIR/runic.db-shm" \
+                "$LOGS_DB_PATH" \
+                "${LOGS_DB_PATH}-wal" \
+                "${LOGS_DB_PATH}-shm"
             return 0
         fi
     fi
@@ -1003,6 +1043,13 @@ initialize_database() {
             exit 1
         fi
         chown -f runic:runic "$DATA_DIR"/runic.db-* 2>/dev/null || true
+        restrict_database_permissions \
+            "$DATA_DIR/runic.db" \
+            "$DATA_DIR/runic.db-wal" \
+            "$DATA_DIR/runic.db-shm" \
+            "$LOGS_DB_PATH" \
+            "${LOGS_DB_PATH}-wal" \
+            "${LOGS_DB_PATH}-shm"
 	log SUCCESS "Database initialized at $DATA_DIR/runic.db"
 
 	# Store control plane port in system_config
@@ -1077,6 +1124,7 @@ Environment=RUNIC_PORT=$RUNIC_PORT
 Environment=RUNIC_DOWNLOADS_DIR=$INSTALL_DIR/downloads
 
 # Security hardening
+UMask=0077
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectHome=yes

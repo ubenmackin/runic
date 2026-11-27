@@ -29,6 +29,11 @@ const ruleBundleRowColumns = `id, peer_id, version, version_number, rules_conten
 // 409 Conflict vs 404 Not Found respectively.
 var ErrPeerIPReferenced = errors.New("peer IP is referenced by policies")
 
+// ErrPeerIsManual is returned when an agent-credential operation targets a
+// manual peer (is_manual=1). Manual peers have no agent, so they must never
+// receive or exercise agent credentials.
+var ErrPeerIsManual = errors.New("peer is manual")
+
 // updatePeerHeartbeatSQL is the shared heartbeat UPDATE used by both
 // UpdatePeerHeartbeat and UpdatePeerHeartbeatWithPrev. Empty version strings
 // preserve the stored value so a heartbeat with a missing version cannot
@@ -952,9 +957,15 @@ func (s *PeerStore) GetPeerPrimaryIP(ctx context.Context, peerID int) (string, e
 
 func (s *PeerStore) GetPeerHMACKey(ctx context.Context, peerID int) (string, error) {
 	var hmacKey string
-	err := s.db.QueryRowContext(ctx, "SELECT hmac_key FROM peers WHERE id = ?", peerID).Scan(&hmacKey)
+	var isManual bool
+	err := s.db.QueryRowContext(ctx, "SELECT hmac_key, is_manual FROM peers WHERE id = ?", peerID).Scan(&hmacKey, &isManual)
 	if err != nil {
 		return "", fmt.Errorf("get peer HMAC key: %w", err)
+	}
+	// Manual peers have no agent. Never disclose their HMAC key material
+	// through an agent-credential path.
+	if isManual {
+		return "", ErrPeerIsManual
 	}
 	return hmacKey, nil
 }
@@ -984,6 +995,19 @@ func (s *PeerStore) GetPeerIDByHostname(ctx context.Context, hostname string) (i
 		return 0, fmt.Errorf("get peer ID by hostname: %w", err)
 	}
 	return id, nil
+}
+
+// GetPeerAuthStatusByHostname returns the peer ID and manual flag used by
+// agent authentication decisions. Manual peers (is_manual=1) have no agent
+// and must be rejected by agent endpoints and re-registration proofs. It
+// returns sql.ErrNoRows (wrapped) when no peer matches so callers can
+// distinguish a missing peer from a lookup failure.
+func (s *PeerStore) GetPeerAuthStatusByHostname(ctx context.Context, hostname string) (peerID int, isManual bool, err error) {
+	err = s.db.QueryRowContext(ctx, "SELECT id, is_manual FROM peers WHERE hostname = ?", hostname).Scan(&peerID, &isManual)
+	if err != nil {
+		return 0, false, fmt.Errorf("get peer auth status by hostname: %w", err)
+	}
+	return peerID, isManual, nil
 }
 
 // GetLatestBundle returns the most recent rule bundle for a peer. Returns sql.ErrNoRows if no bundle is found.
@@ -1228,8 +1252,18 @@ func extractSupersededAgentJTI(oldToken sql.NullString, newToken string) (string
 // revoked_tokens (OR IGNORE for idempotency) in the same transaction.
 func (s *PeerStore) UpdatePeerReRegistration(ctx context.Context, peerID int, agentToken, agentVersion string, hasDocker bool, hasIPSet *bool) error {
 	var oldToken sql.NullString
-	if err := s.db.QueryRowContext(ctx, "SELECT agent_token FROM peers WHERE id = ?", peerID).Scan(&oldToken); err != nil && !errors.Is(err, sql.ErrNoRows) {
+	var isManual bool
+	err := s.db.QueryRowContext(ctx, "SELECT agent_token, is_manual FROM peers WHERE id = ?", peerID).Scan(&oldToken, &isManual)
+	if errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("fetch old agent token for revocation: %w", err)
+	}
+	if err != nil {
+		return fmt.Errorf("fetch old agent token for revocation: %w", err)
+	}
+	// Manual peers have no agent. Refuse to rotate or mint agent credentials
+	// for them even if a caller skips the handler-level rejection.
+	if isManual {
+		return ErrPeerIsManual
 	}
 	oldJTI, oldExp := extractSupersededAgentJTI(oldToken, agentToken)
 

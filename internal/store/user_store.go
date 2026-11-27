@@ -28,7 +28,7 @@ func (s *UserStore) ListUsers(ctx context.Context, page, perPage int) ([]models.
 
 	offset := (page - 1) * perPage
 	rows, err := s.db.QueryContext(ctx,
-		"SELECT id, username, COALESCE(email, ''), role, created_at FROM users ORDER BY id LIMIT ? OFFSET ?",
+		"SELECT id, username, COALESCE(email, ''), role, token_version, created_at FROM users ORDER BY id LIMIT ? OFFSET ?",
 		perPage, offset)
 	if err != nil {
 		return nil, 0, fmt.Errorf("query users: %w", err)
@@ -38,7 +38,7 @@ func (s *UserStore) ListUsers(ctx context.Context, page, perPage int) ([]models.
 	var users []models.UserRow
 	for rows.Next() {
 		var u models.UserRow
-		if err := rows.Scan(&u.ID, &u.Username, &u.Email, &u.Role, &u.CreatedAt); err != nil {
+		if err := rows.Scan(&u.ID, &u.Username, &u.Email, &u.Role, &u.TokenVersion, &u.CreatedAt); err != nil {
 			return nil, 0, fmt.Errorf("scan user: %w", err)
 		}
 		users = append(users, u)
@@ -52,8 +52,8 @@ func (s *UserStore) ListUsers(ctx context.Context, page, perPage int) ([]models.
 func (s *UserStore) GetUserByID(ctx context.Context, id int) (models.UserRow, error) {
 	var u models.UserRow
 	err := s.db.QueryRowContext(ctx,
-		"SELECT id, username, COALESCE(email, ''), role, created_at FROM users WHERE id = ?", id,
-	).Scan(&u.ID, &u.Username, &u.Email, &u.Role, &u.CreatedAt)
+		"SELECT id, username, COALESCE(email, ''), role, token_version, created_at FROM users WHERE id = ?", id,
+	).Scan(&u.ID, &u.Username, &u.Email, &u.Role, &u.TokenVersion, &u.CreatedAt)
 	if err != nil {
 		return u, fmt.Errorf("query user by id: %w", err)
 	}
@@ -63,8 +63,8 @@ func (s *UserStore) GetUserByID(ctx context.Context, id int) (models.UserRow, er
 func (s *UserStore) GetUserByUsername(ctx context.Context, username string) (models.UserRow, error) {
 	var u models.UserRow
 	err := s.db.QueryRowContext(ctx,
-		"SELECT id, username, COALESCE(email, ''), role, created_at FROM users WHERE username = ?", username,
-	).Scan(&u.ID, &u.Username, &u.Email, &u.Role, &u.CreatedAt)
+		"SELECT id, username, COALESCE(email, ''), role, token_version, created_at FROM users WHERE username = ?", username,
+	).Scan(&u.ID, &u.Username, &u.Email, &u.Role, &u.TokenVersion, &u.CreatedAt)
 	if err != nil {
 		return u, fmt.Errorf("query user by username: %w", err)
 	}
@@ -154,6 +154,10 @@ type UpdateUserFields struct {
 // malformed address fails with common.ErrInvalidEmail. A whitespace-only
 // address normalizes to empty and is treated as no update, matching the
 // empty-means-untouched convention for the other fields.
+//
+// When PasswordHash is set, token_version is incremented in the same statement
+// so every access/refresh token minted under the previous password epoch stops
+// authenticating atomically with the credential change.
 func (s *UserStore) UpdateUser(ctx context.Context, id int, fields UpdateUserFields) error {
 	var setClauses []string
 	var args []interface{}
@@ -173,7 +177,9 @@ func (s *UserStore) UpdateUser(ctx context.Context, id int, fields UpdateUserFie
 		args = append(args, fields.Role)
 	}
 	if fields.PasswordHash != "" {
-		setClauses = append(setClauses, "password_hash = ?")
+		setClauses = append(setClauses,
+			"password_hash = ?",
+			"token_version = token_version + 1")
 		args = append(args, fields.PasswordHash)
 	}
 
@@ -199,6 +205,10 @@ func (s *UserStore) UpdateUser(ctx context.Context, id int, fields UpdateUserFie
 }
 
 // DeleteUser deletes a user by ID. Returns sql.ErrNoRows if no row was affected.
+// Removing the row revokes all of the user's sessions: the auth middleware and
+// refresh handler resolve the live user before honoring a token, so tokens for
+// a deleted username are rejected (access tokens for users who never had the
+// token_version column are bounded by their short TTL).
 func (s *UserStore) DeleteUser(ctx context.Context, id int) error {
 	result, err := s.db.ExecContext(ctx, "DELETE FROM users WHERE id = ?", id)
 	if err != nil {

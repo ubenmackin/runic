@@ -1,7 +1,8 @@
 /**
  * Validates if a port number is in the valid range (1-65535).
- * Requires a full-string digit match so values like "22abc", "22.5",
- * "0x16" or " 22 " are rejected instead of being parsed leniently.
+ * Surrounding whitespace is trimmed first, then a full-string digit match
+ * rejects values like "22abc", "22.5", and "0x16" instead of being parsed
+ * leniently.
  * @param {string|number} port - The port value to validate
  * @returns {boolean} True if the port is valid, false otherwise
  */

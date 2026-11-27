@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"time"
 
+	apicommon "runic/internal/api/common"
 	"runic/internal/change"
 	ic "runic/internal/common"
 	"runic/internal/common/log"
@@ -28,6 +29,28 @@ type createdEntity struct {
 	entityType string
 	entityID   int
 	summary    string
+}
+
+// validImportedServiceProtocols mirrors the user-defined service protocol
+// allowlist enforced by the services API. Imported service mappings become
+// user-defined rows, so system-only protocols must not enter through import.
+var validImportedServiceProtocols = map[string]bool{
+	"tcp":  true,
+	"udp":  true,
+	"both": true,
+}
+
+// validateImportedService rejects malformed protocols and ports before a
+// staged service mapping is inserted, so an edited import row cannot smuggle
+// directives into a compiled and signed bundle.
+func validateImportedService(protocol, ports, sourcePorts string) error {
+	if !validImportedServiceProtocols[protocol] {
+		return fmt.Errorf("invalid protocol %q: must be tcp, udp, or both", protocol)
+	}
+	if err := engine.ValidatePorts(ports); err != nil {
+		return err
+	}
+	return engine.ValidatePorts(sourcePorts)
 }
 
 // ApplySession creates manual peers, groups, services, and policies from the import session.
@@ -167,7 +190,15 @@ func ApplySession(ctx context.Context, database db.DB, sessionID int64, changeWo
 	}
 
 	for _, pm := range peerMappings {
-		agentKey := fmt.Sprintf("imported-%s", pm.IP)
+		// Imported peers are manual and have no agent, but agent_key is
+		// NOT NULL UNIQUE. Never derive it from public peer data
+		// (hostname/IP): a predictable value would let anyone holding it
+		// pass the agent re-registration proof and mint an agent JWT.
+		// Use the shared crypto/rand-backed key generator instead.
+		agentKey, err := ic.GenerateHMACKey()
+		if err != nil {
+			return nil, fmt.Errorf("generate agent key for imported peer %s: %w", pm.IP, err)
+		}
 		res, err := tx.ExecContext(ctx,
 			"INSERT INTO peers (hostname, ip_address, is_manual, agent_key, hmac_key, status) VALUES (?, ?, 1, ?, '', 'offline')",
 			pm.Hostname, pm.IP, agentKey,
@@ -397,6 +428,9 @@ func ApplySession(ctx context.Context, database db.DB, sessionID int64, changeWo
 		if dirHint == "" {
 			dirHint = "inbound"
 		}
+		if err := validateImportedService(sm.Protocol, sm.Ports, sm.SourcePorts); err != nil {
+			return nil, fmt.Errorf("invalid service mapping %d (%s): %w", sm.StagingID, sm.Name, err)
+		}
 		res, err := tx.ExecContext(ctx,
 			"INSERT INTO services (name, ports, source_ports, protocol, direction_hint) VALUES (?, ?, ?, ?, ?)",
 			sm.Name, sm.Ports, sm.SourcePorts, sm.Protocol, dirHint,
@@ -490,6 +524,16 @@ func ApplySession(ctx context.Context, database db.DB, sessionID int64, changeWo
 		if realSourceID == 0 || realTargetID == 0 {
 			log.Warn("skipping rule with unresolved IDs", "rule_id", ruleID)
 			continue
+		}
+
+		// Imported policy names are written into signed bundle comments by the
+		// compiler. Enforce the normal policy-name allowlist at the apply
+		// boundary as a final guard before the row exists.
+		if err := apicommon.ValidateName(policyName); err != nil {
+			if cErr := ruleRows.Close(); cErr != nil {
+				log.Warn("error closing ruleRows after policy name validation failure", "error", cErr)
+			}
+			return nil, fmt.Errorf("invalid policy name for rule %d: %w", ruleID, err)
 		}
 
 		// Normalize source_ip/target_ip: pass nil when invalid so SQL stores NULL

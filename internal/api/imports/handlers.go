@@ -282,6 +282,17 @@ func (h *Handler) UpdateRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Policy names flow into signed bundle comments at compile time, so they
+	// must obey the same naming rules as the policy API. Without this check a
+	// name containing newlines can break out of the comment and inject raw
+	// iptables directives into a signed bundle.
+	if input.PolicyName != nil {
+		if err := common.ValidateName(*input.PolicyName); err != nil {
+			common.RespondError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+
 	if err := h.Store.UpdateRule(r.Context(), sessionID, ruleID, input.Status, input.PolicyName, input.SourceIP, input.TargetIP, input.Enabled); err != nil {
 		runiclog.Warn("updateRule failed", "error", err)
 		common.RespondError(w, http.StatusInternalServerError, "database error")

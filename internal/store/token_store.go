@@ -18,8 +18,10 @@ func NewTokenStore(database db.Querier) *TokenStore {
 	return &TokenStore{db: database}
 }
 
-// RevokeToken inserts a token revocation entry. Uses INSERT OR IGNORE to
-// handle duplicate revocations gracefully.
+// RevokeToken inserts a token revocation entry. Callers must pass the revoked
+// token's own expiry so the entry outlives the token; a shorter TTL would let
+// the periodic cleanup drop the revocation while the token is still valid.
+// Uses INSERT OR IGNORE to handle duplicate revocations gracefully.
 func (s *TokenStore) RevokeToken(ctx context.Context, uniqueID string, expiresAt time.Time, tokenType string) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT OR IGNORE INTO revoked_tokens (unique_id, expires_at, token_type) VALUES (?, ?, ?)`,

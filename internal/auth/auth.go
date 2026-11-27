@@ -48,8 +48,8 @@ var (
 	// until the rotation window expires.
 	JwtPrevKey []byte
 
-	// authStoresMu guards tokenStore, settingsStore, patStore, and
-	// patUserLookup. Setters take the write lock while readers take the
+	// authStoresMu guards tokenStore, settingsStore, patStore, patUserLookup,
+	// and sessionUserLookup. Setters take the write lock while readers take the
 	// read lock so concurrent Middleware/authenticatePAT/IsRevoked requests
 	// cannot race with wiring.
 	authStoresMu sync.RWMutex
@@ -66,6 +66,12 @@ var (
 	// PAT authentication is disabled and the middleware falls through to 401.
 	patStore      patTokenStore
 	patUserLookup patUserStore
+
+	// sessionUserLookup resolves the live user record (including TokenVersion)
+	// for user JWT session checks. It is nil until wired via
+	// SetSessionUserStore; tokens that carry a token version fail closed while
+	// it is nil because their revocation status cannot be verified.
+	sessionUserLookup sessionUserStore
 )
 
 // patTokenPrefix marks a Bearer token as a personal access token. PATs bypass
@@ -81,6 +87,12 @@ type patTokenStore interface {
 // patUserStore is the subset of *store.UserStore used for live role lookup.
 type patUserStore interface {
 	GetUserByID(ctx context.Context, id int) (models.UserRow, error)
+}
+
+// sessionUserStore is the subset of *store.UserStore used to resolve the live
+// per-user token version for session revocation checks.
+type sessionUserStore interface {
+	GetUserByUsername(ctx context.Context, username string) (models.UserRow, error)
 }
 
 // Token type constants used for access vs refresh token differentiation.
@@ -198,6 +210,16 @@ func SetPATUserStore(s patUserStore) {
 	authStoresMu.Unlock()
 }
 
+// SetSessionUserStore sets the store used to resolve the live user token
+// version on each authenticated request. Until set, tokens that carry a
+// non-zero token version are rejected (fail closed) because their session
+// epoch cannot be verified.
+func SetSessionUserStore(s sessionUserStore) {
+	authStoresMu.Lock()
+	sessionUserLookup = s
+	authStoresMu.Unlock()
+}
+
 // patUniqueID returns the context unique ID for a PAT row ID. PATs carry no
 // JWT claims, so the row ID namespaced with the "pat:" prefix identifies the
 // credential in request context, logs, and the revocation cache.
@@ -294,43 +316,36 @@ func AuthenticatePATToken(r *http.Request, rawToken string) (string, string, str
 	return authenticatePAT(cloned)
 }
 
-// InitJwtKey initializes the JWT key. Must be called after database initialization.
+// InitJwtKey initializes the JWT key from the persisted jwt_secret. Must be
+// called after database initialization. It fails closed when the key is
+// missing or unreadable: running with an empty signing key would let anyone
+// forge HS256 tokens with an empty key.
 func InitJwtKey(ctx context.Context, database db.Querier) error {
 	settings := store.NewSettingsStore(database, nil)
 	secret, err := settings.GetSystemConfig(ctx, "jwt_secret")
-	if err == nil && secret != "" {
-		JwtKeyMu.Lock()
-		JwtKey = []byte(secret)
-		JwtKeyMu.Unlock()
-	} else if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		log.Warn("Failed to query jwt_secret from database", "error", err)
+	if err != nil {
+		return fmt.Errorf("load jwt_secret: %w", err)
+	}
+	if secret == "" {
+		return errors.New("load jwt_secret: persisted signing key is empty")
 	}
 
-	// Load the previous key if it exists (from a prior rotation).
-	prevSecret, err := settings.GetSystemConfig(ctx, "jwt_prev_secret")
-	if err == nil && prevSecret != "" {
-		JwtKeyMu.Lock()
+	// Load the previous key if it exists (from a prior rotation). Any read
+	// failure other than "no previous key" is fatal for the same reason as the
+	// primary key.
+	prevSecret, prevErr := settings.GetSystemConfig(ctx, "jwt_prev_secret")
+	if prevErr != nil && !errors.Is(prevErr, sql.ErrNoRows) {
+		return fmt.Errorf("load jwt_prev_secret: %w", prevErr)
+	}
+
+	JwtKeyMu.Lock()
+	JwtKey = []byte(secret)
+	if prevSecret != "" {
 		JwtPrevKey = []byte(prevSecret)
-		JwtKeyMu.Unlock()
+	} else {
+		JwtPrevKey = nil
 	}
-
-	JwtKeyMu.RLock()
-	needsNewKey := JwtKey == nil
-	JwtKeyMu.RUnlock()
-	if needsNewKey {
-		key := make([]byte, 32)
-		if _, err := rand.Read(key); err != nil {
-			return fmt.Errorf("failed to generate random JWT key: %w", err)
-		}
-		JwtKeyMu.Lock()
-		// Re-check under the write lock: another goroutine may have populated
-		// JwtKey while we were deriving a random one. If so, discard ours.
-		if JwtKey == nil {
-			JwtKey = key
-		}
-		JwtKeyMu.Unlock()
-		log.Warn("Using random JWT key (no jwt_secret found in database)")
-	}
+	JwtKeyMu.Unlock()
 	return nil
 }
 
@@ -339,10 +354,27 @@ type Claims struct {
 	UniqueID  string `json:"unique_id"`
 	Role      string `json:"role"`
 	TokenType string `json:"token_type"`
+	// TokenVersion is the user's token_version at mint time. A zero value
+	// means the token predates session versioning (legacy) and is honored
+	// only until it expires; any non-zero value is checked against the live
+	// user row on every request so password changes and deletions revoke it.
+	TokenVersion int `json:"token_version,omitempty"`
 	jwt.RegisteredClaims
 }
 
+// GenerateToken mints a legacy (version-less) token. New user sessions must be
+// minted with GenerateTokenWithVersion so they participate in session
+// revocation; this wrapper exists for callers that only need a structurally
+// valid JWT (tests, short-lived internal probes).
 func GenerateToken(username string, role string, tokenType string, duration time.Duration) (string, error) {
+	return GenerateTokenWithVersion(username, role, tokenType, 0, duration)
+}
+
+// GenerateTokenWithVersion mints a token bound to the user's current
+// token_version. The auth middleware and refresh handler compare the embedded
+// version with the live user row, so bumping the version (password change) or
+// removing the row (deletion) invalidates every outstanding token.
+func GenerateTokenWithVersion(username string, role string, tokenType string, tokenVersion int, duration time.Duration) (string, error) {
 	now := time.Now()
 	expirationTime := now.Add(duration)
 
@@ -353,10 +385,11 @@ func GenerateToken(username string, role string, tokenType string, duration time
 	uniqueID := hex.EncodeToString(uniqueBytes)
 
 	claims := &Claims{
-		Username:  username,
-		UniqueID:  uniqueID,
-		Role:      role,
-		TokenType: tokenType,
+		Username:     username,
+		UniqueID:     uniqueID,
+		Role:         role,
+		TokenType:    tokenType,
+		TokenVersion: tokenVersion,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expirationTime),
 			IssuedAt:  jwt.NewNumericDate(now),
@@ -375,7 +408,9 @@ func GenerateToken(username string, role string, tokenType string, duration time
 // the previous key so that tokens signed before the rotation remain valid
 // for verification during the overlapping rotation window.
 // Both the new key and the old key are persisted to the database via the
-// settings store so they survive a restart.
+// settings store so they survive a restart. Callers that must invalidate
+// issued tokens immediately (operator key replacement) call ClearJwtPrevKey
+// after a successful rotation.
 func RotateJwtKey(ctx context.Context, newKey []byte) error {
 	JwtKeyMu.Lock()
 	oldKey := JwtKey
@@ -399,12 +434,36 @@ func RotateJwtKey(ctx context.Context, newKey []byte) error {
 	return nil
 }
 
+// ClearJwtPrevKey removes the previous signing key from memory and from the
+// database so tokens signed before an operator-initiated key replacement are
+// rejected immediately instead of being accepted through the rotation window.
+func ClearJwtPrevKey(ctx context.Context) error {
+	JwtKeyMu.Lock()
+	JwtPrevKey = nil
+	JwtKeyMu.Unlock()
+
+	authStoresMu.RLock()
+	ss := settingsStore
+	authStoresMu.RUnlock()
+	if ss == nil {
+		return nil
+	}
+	if err := ss.DeleteSystemConfig(ctx, "jwt_prev_secret"); err != nil {
+		return fmt.Errorf("failed to delete previous JWT key: %w", err)
+	}
+	return nil
+}
+
 func ValidateToken(tokenString string) (*Claims, error) {
 	claims := &Claims{}
 	JwtKeyMu.RLock()
 	key := JwtKey
 	prevKey := JwtPrevKey
 	JwtKeyMu.RUnlock()
+
+	if len(key) == 0 {
+		return nil, errors.New("validate token: JWT signing key is not initialized")
+	}
 
 	token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
 		// Verify the signing algorithm to prevent algorithm confusion attacks.
@@ -415,7 +474,7 @@ func ValidateToken(tokenString string) (*Claims, error) {
 	}, jwt.WithIssuer("runic"), jwt.WithAudience("runic"))
 
 	// If validation fails with the primary key, try the previous key (rotation window).
-	if err != nil && prevKey != nil {
+	if err != nil && len(prevKey) > 0 {
 		primaryErr := err
 		claims = &Claims{}
 		token, err = jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
@@ -534,11 +593,22 @@ func Middleware(next http.Handler) http.Handler {
 		}
 
 		claims, err := ValidateToken(tokenStr)
+		// Only access tokens may authenticate protected requests. A refresh
+		// token (or a token with an empty/unknown type) must never be usable as
+		// a bearer or access-cookie credential; treat it as a failed JWT so the
+		// PAT fallback below still applies to genuine PAT headers.
+		if err == nil && claims != nil && claims.TokenType != TokenTypeAccess {
+			err = fmt.Errorf("unexpected token type %q", claims.TokenType)
+		}
 		if err == nil && claims != nil {
 			revCtx, cancel := context.WithTimeout(r.Context(), constants.RevocationCheckTimeout)
 			defer cancel()
 			if IsRevoked(revCtx, claims.UniqueID) {
 				writeUnauthorizedJSON(w, "Unauthorized: token revoked")
+				return
+			}
+			if !sessionVersionValid(revCtx, claims) {
+				writeUnauthorizedJSON(w, "Unauthorized: session invalid")
 				return
 			}
 
@@ -567,6 +637,31 @@ func Middleware(next http.Handler) http.Handler {
 		}
 		writeUnauthorizedJSON(w, "Unauthorized")
 	})
+}
+
+// sessionVersionValid reports whether a validated JWT is still bound to the
+// live user's token version. Version-less tokens (claims.TokenVersion == 0)
+// predate session versioning and are accepted for backwards compatibility
+// until they expire; they can never be refreshed, because the refresh handler
+// requires an exact version match. Versioned tokens fail closed when the user
+// lookup store is unwired, the user no longer exists (deleted account), or the
+// stored version differs (password changed).
+func sessionVersionValid(ctx context.Context, claims *Claims) bool {
+	if claims.TokenVersion == 0 {
+		return true
+	}
+	authStoresMu.RLock()
+	us := sessionUserLookup
+	authStoresMu.RUnlock()
+	if us == nil {
+		log.WarnContext(ctx, "session token version cannot be verified: user store not wired")
+		return false
+	}
+	user, err := us.GetUserByUsername(ctx, claims.Username)
+	if err != nil {
+		return false
+	}
+	return user.TokenVersion == claims.TokenVersion
 }
 
 func UsernameFromContext(ctx context.Context) string {

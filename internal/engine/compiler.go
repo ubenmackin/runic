@@ -6,8 +6,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"runic/internal/common"
 	"runic/internal/common/constants"
@@ -639,24 +641,46 @@ func (c *Compiler) preloadRequiredServices(ctx context.Context, policies []polic
 }
 
 type ipsetData struct {
-	Name    string // sanitized ipset name (e.g. runic_group_webservers)
+	Name    string // sanitized ipset name (e.g. runic_group_webservers_7)
 	SetType string // always hash:net: members are normalized CIDRs (/32, /128, subnets)
 	Members []string
+}
+
+// ipsetGroupName builds a collision-free ipset name for a group. Group names
+// are sanitized and truncated, so distinct names can collapse to the same
+// value; the group ID suffix keeps them distinct. The kernel limits ipset
+// names to 32 characters, so the sanitized segment is truncated to leave room
+// for the prefix and suffix.
+func ipsetGroupName(groupID int, groupName string) string {
+	suffix := "_" + strconv.Itoa(groupID)
+	maxNameLen := 32 - len(ipsetGroupPrefix) - len(suffix)
+	if maxNameLen < 0 {
+		maxNameLen = 0
+	}
+	return ipsetGroupPrefix + sanitizeForIpset(groupName, maxNameLen) + suffix
 }
 
 func (c *Compiler) resolveIPSetDefinitions(ctx context.Context, hasIPSet bool, groupOrder []int, groupIDToName map[int]string) ([]ipsetData, map[int]string, error) {
 	var ipsets []ipsetData
 	groupIDToIpsetName := make(map[int]string)
 	if hasIPSet && len(groupOrder) > 0 {
+		seenNames := make(map[string]int, len(groupOrder))
 		for _, gid := range groupOrder {
 			members, err := c.resolver.resolveGroupForIpset(ctx, gid)
 			if err != nil {
 				return nil, nil, fmt.Errorf("resolve group %d for ipset: %w", gid, err)
 			}
-			sanitizedName := ipsetGroupPrefix + sanitizeForIpset(groupIDToName[gid])
+			sanitizedName := ipsetGroupName(gid, groupIDToName[gid])
 			if err := ValidateIPSetName(sanitizedName); err != nil {
 				return nil, nil, fmt.Errorf("group %d (%q): %w", gid, groupIDToName[gid], err)
 			}
+			// Defense in depth: a duplicate name would make the agent replace
+			// the earlier definition and compile one group's policy against
+			// another group's members.
+			if prevGID, exists := seenNames[sanitizedName]; exists {
+				return nil, nil, fmt.Errorf("duplicate ipset name %q for groups %d and %d: %w", sanitizedName, prevGID, gid, ErrPreviewValidation)
+			}
+			seenNames[sanitizedName] = gid
 			var addrs []string
 			for _, m := range members {
 				addrs = append(addrs, m.Address)
@@ -867,6 +891,20 @@ func (c *Compiler) writePolicySection(
 	return nil
 }
 
+// sanitizePolicyCommentName replaces control characters (including CR/LF) in a
+// policy name with spaces before it is embedded in a bundle comment. Names are
+// validated at the API and import-apply boundaries; this is defense in depth so
+// a stored name that bypassed validation cannot terminate the comment and
+// inject raw iptables directives into a bundle the server then signs.
+func sanitizePolicyCommentName(name string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, name)
+}
+
 // writeSinglePolicy generates iptables rules for a single policy.
 func (c *Compiler) writeSinglePolicy(
 	ctx context.Context,
@@ -914,7 +952,7 @@ func (c *Compiler) writeSinglePolicy(
 		}
 	}
 
-	fmt.Fprintf(buf, "# --- Policy: %s ---\n", pol.Name)
+	fmt.Fprintf(buf, "# --- Policy: %s ---\n", sanitizePolicyCommentName(pol.Name))
 
 	// IG-001: Special IGMP handling - skip normal source/target resolution
 	// VRRP-001: Special VRRP handling - skip normal source/target resolution

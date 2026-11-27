@@ -229,6 +229,12 @@ func TestPATMiddleware_TouchLastUsed(t *testing.T) {
 func TestPATMiddleware_JWTRotationKeepsPAT(t *testing.T) {
 	ts, _, db, cleanup := setupPATTestDB(t)
 	defer cleanup()
+	const jwtSecret = "pat-rotation-jwt-secret-for-test-0123456789"
+	if _, err := db.Exec(
+		"INSERT OR REPLACE INTO system_config (key, value) VALUES ('jwt_secret', ?)", jwtSecret,
+	); err != nil {
+		t.Fatalf("seed jwt_secret: %v", err)
+	}
 	if err := InitJwtKey(context.Background(), db); err != nil {
 		t.Fatalf("InitJwtKey: %v", err)
 	}

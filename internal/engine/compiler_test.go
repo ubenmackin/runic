@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -2344,28 +2345,31 @@ func TestIPSetOutputRuleDirection(t *testing.T) {
 		t.Fatalf("compile error: %v", err)
 	}
 
+	// The group ID suffix keeps sanitized group names collision-free.
+	ipsetName := fmt.Sprintf("runic_group_management_%d", groupID)
+
 	// Verify ipset is created for the group
-	if !strings.Contains(output, "create runic_group_management") {
+	if !strings.Contains(output, "create "+ipsetName) {
 		t.Errorf("expected ipset creation for management group, got:\\n%s", output)
 	}
 
 	// Verify INPUT rule uses `--match-set <ipset> src`
 	// When the peer is the TARGET, incoming packets come FROM the ipset members
-	inputMatchSrc := "--match-set runic_group_management src"
+	inputMatchSrc := "--match-set " + ipsetName + " src"
 	if !strings.Contains(output, "-A INPUT") || !strings.Contains(output, inputMatchSrc) {
-		t.Errorf("expected INPUT rule with --match-set runic_group_management src, got:\\n%s", output)
+		t.Errorf("expected INPUT rule with --match-set %s src, got:\\n%s", ipsetName, output)
 	}
 
 	// Verify OUTPUT rule uses `--match-set <ipset> dst`
 	// When the peer is the TARGET, outgoing response packets go TO the ipset members
-	outputMatchDst := "--match-set runic_group_management dst"
+	outputMatchDst := "--match-set " + ipsetName + " dst"
 	if !strings.Contains(output, "-A OUTPUT") || !strings.Contains(output, outputMatchDst) {
-		t.Errorf("expected OUTPUT rule with --match-set runic_group_management dst, got:\\n%s", output)
+		t.Errorf("expected OUTPUT rule with --match-set %s dst, got:\\n%s", ipsetName, output)
 	}
 
-	// Verify that we do NOT have the buggy `--match-set runic_group_management src` in OUTPUT
+	// Verify that we do NOT have the buggy `--match-set <ipset> src` in OUTPUT
 	// This is the critical check - OUTPUT should use dst, NOT src
-	buggyOutputMatchSrc := "-A OUTPUT -p tcp -m set --match-set runic_group_management src"
+	buggyOutputMatchSrc := "-A OUTPUT -p tcp -m set --match-set " + ipsetName + " src"
 	if strings.Contains(output, buggyOutputMatchSrc) {
 		t.Errorf("OUTPUT rule incorrectly uses 'src' match direction (should be 'dst'), got:\\n%s", output)
 	}
@@ -4020,5 +4024,39 @@ func TestGetAffectedPeersByPolicySpecialSpecialNoFanout(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Fatalf("anyip-to-internet must affect no peers, got %v", got)
+	}
+}
+
+// TestCompileSanitizesPolicyNameCommentInjection proves a stored policy name
+// containing newlines and raw iptables directives cannot escape the bundle
+// comment and inject rules into the signed bundle.
+func TestCompileSanitizesPolicyNameCommentInjection(t *testing.T) {
+	database, cleanup := testutil.SetupTestDB(t)
+	defer cleanup()
+	database.Exec("PRAGMA foreign_keys=OFF")
+
+	peerID := insertPeer(t, database, "comment-injection-peer", "192.168.10.10", false)
+	groupID := insertGroup(t, database, "comment-injection-group")
+	manualPeerID := insertManualPeer(t, database, "10.10.10.10")
+	insertGroupMember(t, database, groupID, manualPeerID)
+	serviceID := insertService(t, database, "https", "443", "tcp")
+
+	insertPolicy(t, database, "legit\n-A INPUT -j RUNICINJECTED\n*nat\nCOMMIT",
+		groupID, serviceID, peerID, "ACCEPT", 100, true)
+
+	c := NewTestCompiler(database)
+	output, err := c.Compile(context.Background(), peerID)
+	if err != nil {
+		t.Fatalf("compile error: %v", err)
+	}
+
+	if strings.Contains(output, "\n-A INPUT -j RUNICINJECTED") {
+		t.Errorf("policy name broke out of the bundle comment:\n%s", output)
+	}
+	if strings.Contains(output, "\n*nat") {
+		t.Errorf("policy name injected a raw iptables table section:\n%s", output)
+	}
+	if !strings.Contains(output, "# --- Policy: legit -A INPUT -j RUNICINJECTED *nat COMMIT ---") {
+		t.Errorf("expected sanitized policy comment, got:\n%s", output)
 	}
 }

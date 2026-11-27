@@ -132,6 +132,9 @@ func parseIpsetDefs(section string) ([]ipsetDef, error) {
 			}
 			name := fields[1]
 			ipsetType := fields[2]
+			if _, exists := defs[name]; exists {
+				return nil, fmt.Errorf("duplicate create for ipset %s", name)
+			}
 			family := "inet"
 			if len(fields) > 3 {
 				switch {
